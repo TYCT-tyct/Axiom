@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"axiom/internal/accounts"
+	"axiom/internal/payments"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
@@ -18,6 +19,7 @@ import (
 type consoleAPI struct {
 	version  string
 	accounts *accounts.Service
+	payments *payments.Payments
 	db       *pg.DB
 }
 
@@ -102,6 +104,18 @@ func publicRoutes(api consoleapi.StrictServerInterface, g *guard, frontend *webu
 		return consoleapi.HandlerWithOptions(console, consoleapi.StdHTTPServerOptions{BaseRouter: m.mux, ErrorHandlerFunc: invalidRequest})
 	})
 	return servedRoutes(apiHandler, frontend.Secured, frontend.Public())
+}
+
+// withModelCalls puts the model API in front of the public listener's routes: /v1 and /api/v1, the same calls under
+// OpenRouter's prefix, for every method the gateway answers. They are mounted outside Compress because the gateway
+// writes its answers itself, streams and keep-alives included, and decides when they are flushed, and outside the
+// console's prefix so that no API's 404 answers a call. Only the public listener gets them: the admin one is behind a guard no model client has a session for.
+func withModelCalls(routes http.Handler, calls http.Handler) http.Handler {
+	mount := http.NewServeMux()
+	mount.Handle("/v1/", calls)
+	mount.Handle("/api/v1/", calls)
+	mount.Handle("/", routes)
+	return mount
 }
 
 // invalidRequest answers a request the generated code could not read. The guard has checked the request against the

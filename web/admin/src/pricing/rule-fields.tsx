@@ -155,7 +155,7 @@ function ReferenceFields({ method }: { method?: Method }) {
       <SelectField
         label={t("pricing.method.conversion")}
         name="currency_conversion"
-        defaultValue={method?.currency_conversion ?? "exchange"}
+        defaultValue={method?.currency_conversion ?? "face"}
       >
         <option value="exchange">{t("pricing.method.exchange")}</option>
         <option value="face">{t("pricing.method.face")}</option>
@@ -168,14 +168,14 @@ function ReferenceFields({ method }: { method?: Method }) {
 // own.
 function MethodFields({ method }: { method?: Method }) {
   const { t } = useTranslation();
-  const [kind, setKind] = useState<Method["kind"]>(method?.kind ?? "cost_plus");
+  const [kind, setKind] = useState<Method["kind"]>(method?.kind ?? "reference_multiplier");
   return (
     <>
       <SelectField
         label={t("pricing.rule.method")}
         name="method_kind"
         value={kind}
-        onChange={(event) => setKind(methodKinds.find((k) => k === event.target.value) ?? "cost_plus")}
+        onChange={(event) => setKind(methodKinds.find((k) => k === event.target.value) ?? "reference_multiplier")}
       >
         {methodKinds.map((value) => (
           <option key={value} value={value}>
@@ -192,10 +192,16 @@ function MethodFields({ method }: { method?: Method }) {
 
 function ConstraintFields({ constraints }: { constraints?: Rule["constraints"] }) {
   const { t } = useTranslation();
+  const stored = Object.values(constraints ?? {}).some((value) => value !== undefined);
   return (
-    <fieldset className="min-w-0 space-y-3">
+    <fieldset disabled className="min-w-0 space-y-3">
       <legend className="mb-1 text-ui font-medium text-t2">{t("pricing.constraints.title")}</legend>
       <p className="text-label text-t4">{t("pricing.constraints.hint")}</p>
+      {stored ? (
+        <p role="status" className="text-label text-warn">
+          {t("pricing.constraints.stored")}
+        </p>
+      ) : null}
       <div className="grid gap-4 sm:grid-cols-3">
         <TextField
           label={t("pricing.constraints.minMargin")}

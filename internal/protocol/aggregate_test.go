@@ -22,6 +22,8 @@ type aggregated struct {
 	status int
 	err    error // what ended the reading, nil at the upstream's normal end
 	r      *protocol.Relay
+	// left is what the node's budget had left when the body was returned, before the relay was released.
+	left int64
 }
 
 // settledFinal and unsettled are the settlements a failure may have: one that was written, and none.
@@ -61,6 +63,9 @@ func aggregate(t testing.TB, client, upstream protocol.Format, src io.Reader, me
 		}
 	}
 	res.status = res.r.Status()
+	res.left = mem.Left()
+	res.r.Release()
+	res.r.Release() // a second call gives nothing back again
 	_, err := res.r.Next()
 	if again := append(res.r.Finish(settled(protocol.Usage{})), res.r.Fail(protocol.Error{}, nil)...); len(again) > 0 ||
 		!errors.Is(err, protocol.ErrTerminated) || res.r.Status() != res.status {
@@ -249,7 +254,7 @@ var failures = [...]func(*testing.T, aggregated, map[string]any) any{
 		if got.status != http.StatusOK || choice["finish_reason"] != "error" || obj(choice["message"])["content"] != "Hi" {
 			t.Errorf("status %d:\n%s", got.status, got.body)
 		}
-		if e := obj(m["error"]); e["code"] != 502.0 || obj(e["metadata"])["error_type"] != "upstream_error" || e["message"] != "upstream failed" {
+		if e := obj(m["error"]); e["code"] != "upstream_error" || e["type"] != "api_error" || obj(e["metadata"])["error_type"] != "upstream_error" || e["message"] != "upstream failed" {
 			t.Errorf("error %v", e)
 		}
 		return m["usage"]

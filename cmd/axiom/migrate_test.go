@@ -12,6 +12,7 @@ import (
 // and starts once migrate has run, so both go through the one module list. Migrate grants roles cluster-wide, so
 // this test does not run in parallel.
 func TestMigrateBringsWhatServeChecks(t *testing.T) {
+	t.Parallel()
 	database := pgtest.New(t)
 	if _, err := openDatabase(t.Context(), database.App, 10*time.Second); err == nil ||
 		!strings.Contains(err.Error(), "(run axiom migrate first)") {

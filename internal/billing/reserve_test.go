@@ -1,7 +1,6 @@
 package billing
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -11,7 +10,6 @@ import (
 	"uuid"
 
 	"axiom/internal/platform"
-	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -53,7 +51,6 @@ func newBank(t *testing.T, balance, floor int64, config Config) *bank {
 	if config == (Config{}) {
 		config = Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour}
 	}
-	config.CorrectionWindow = cmp.Or(config.CorrectionWindow, time.Hour)
 	b.supplies = newSupplies()
 	if b.billing, err = Start(t.Context(), app, b.platform, config, b.supplies); err != nil {
 		t.Fatal(err)
@@ -70,18 +67,7 @@ func newBank(t *testing.T, balance, floor int64, config Config) *bank {
 }
 
 // credit adds amount to the account as a gift, through the ledger, in the platform scope.
-func (b *bank) credit(amount int64) {
-	b.t.Helper()
-	a := b.admitted
-	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
-		return AddCredit(b.t.Context(), tx, Credit{
-			ID: uuid.NewV7(), Site: a.Site, Account: a.Account, Amount: amount,
-			Actor: audit.System("billing.test"), Reason: "test credit",
-		})
-	}); err != nil {
-		b.t.Fatal(err)
-	}
-}
+func (b *bank) credit(amount int64) { b.creditBatch(amount, nil) }
 
 // sql runs statements as the superuser, for what the application may not do, such as crediting a balance.
 func (b *bank) sql(statements ...string) {
@@ -114,10 +100,9 @@ func (b *bank) reserve(a Admitted, amount int64) (*Hold, error) {
 // are the sums of the pending amounts, and the balance never passes its floor.
 func (b *bank) consistent() {
 	b.t.Helper()
-	// What a reservation still holds: all of it while pending or awaiting a supplier record, the rest of an estimate
-	// until its window ends; and what it charged, which its windows have spent.
-	const held = `CASE r.state WHEN 'pending' THEN r.amount WHEN 'cleanup_pending' THEN r.amount
-		WHEN 'estimated' THEN greatest(r.amount - r.charged, 0) ELSE 0 END`
+	// What a reservation still holds: all of a pending one, since only settlement or cleanup ends it; and what it
+	// charged, which its windows have spent.
+	const held = `CASE r.state WHEN 'pending' THEN r.amount ELSE 0 END`
 	const window = `((r.workspace_id, r.workspace_window) = (s.subject, s.window_start)
 		OR (r.key_id, r.key_window) = (s.subject, s.window_start))`
 	for name, query := range map[string]string{
@@ -125,7 +110,7 @@ func (b *bank) consistent() {
 		"windows": `SELECT count(*) FROM billing.spend s WHERE s.reserved <> coalesce((SELECT sum(` + held + `)
 			FROM billing.reservations r WHERE ` + window + `), 0)
 			OR s.spent <> coalesce((SELECT sum(r.charged) FROM billing.reservations r WHERE ` + window + `), 0)`,
-		"floor": `SELECT count(*) FROM billing.balances WHERE balance - reserved < floor`,
+		"floor": `SELECT count(*) FROM billing.balances WHERE balance - frozen - reserved < floor`,
 	} {
 		if n := b.count(query); n != 0 {
 			b.t.Errorf("%s inconsistent: %d", name, n)

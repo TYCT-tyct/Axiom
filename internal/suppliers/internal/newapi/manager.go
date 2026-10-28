@@ -31,7 +31,6 @@ func errMissing(what string) error {
 	return fmt.Errorf("%w: the answer has no %s", adapter.ErrUnrecognised, what)
 }
 
-// listing is the position as the module keeps it, opaque bytes of this adapter's own.
 func listing(p any) adapter.Listing {
 	b, err := jsonx.MarshalCanonical(p)
 	if err != nil {
@@ -108,7 +107,6 @@ type keysProgress struct {
 	Keys  []adapter.KeyState `json:"keys"`
 }
 
-// decodeKeys reads a position; a position this version does not read begins the listing again.
 func decodeKeys(raw adapter.Listing) keysProgress {
 	if len(raw) == 0 {
 		return keysProgress{V: 1, Page: 1}
@@ -133,9 +131,6 @@ func (m *manager) Keys(ctx context.Context, from adapter.Listing) (adapter.Page[
 	}
 }
 
-// keysPage reads the page the position points at into it. more is true when the page was read and the listing has
-// pages after it; otherwise the page answers, either with the whole listing (Done) or with the position it reached when
-// the supplier's limits stopped it.
 func (m *manager) keysPage(ctx context.Context, p *keysProgress) (page adapter.Page[adapter.KeyState], more bool, err error) {
 	if p.Page > maxPages {
 		return page, false, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
@@ -166,7 +161,6 @@ func (m *manager) keysPage(ctx context.Context, p *keysProgress) (page adapter.P
 	return page, true, nil
 }
 
-// keyRefs is the set of the keys read so far, which takes out the one a page repeats.
 func keyRefs(keys []adapter.KeyState) map[adapter.KeyRef]bool {
 	seen := make(map[adapter.KeyRef]bool, len(keys))
 	for _, k := range keys {

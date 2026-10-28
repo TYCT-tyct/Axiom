@@ -60,7 +60,7 @@ func TestSuccessWithoutItsMembersIsNotAnEmptyResult(t *testing.T) {
 		"offer":   func(m adapter.Manager) error { _, err := readOffer(t, m); return err },
 		"key":     func(m adapter.Manager) error { _, err := m.KeySecret(t.Context(), "2"); return err },
 		"scan": func(m adapter.Manager) error {
-			_, _, err := m.Charges(t.Context(), m.(adapter.Rescanner).Rescan(epoch.Add(-time.Hour)))
+			_, _, err := m.Charges(t.Context(), lateScan(t))
 			return err
 		},
 	}
@@ -157,9 +157,8 @@ func TestOfferLargerThanOneRateWindowFinishes(t *testing.T) {
 	t.Parallel()
 	clk := &clock{t: epoch}
 	srv := limited(clk, manyGroups(29))
-	m := managerAt(t, srv, login(t, epoch.Add(24*time.Hour)), clk)
 	page, waits := readPaged(t, clk, func(from adapter.Listing) (adapter.Page[adapter.Group], error) {
-		return m.Offer(t.Context(), from)
+		return managerAt(t, srv, login(t, epoch.Add(24*time.Hour)), clk).Offer(t.Context(), from)
 	})
 	if len(page.Items) != 29 || waits == 0 {
 		t.Fatalf("Offer finished with %d groups after %d waits; want 29 groups after waiting for the next window", len(page.Items), waits)
@@ -198,9 +197,8 @@ func TestKeyListingLargerThanOneRateWindowFinishes(t *testing.T) {
 		return adapter.Response{Status: 200, Body: []byte(fmt.Sprintf(`{"code":0,"data":{"items":[%s],"total":%d,"pages":%d}}`,
 			strings.Join(keys, ","), total, pages))}
 	})
-	m := managerAt(t, srv, login(t, epoch.Add(24*time.Hour)), clk)
 	page, waits := readPaged(t, clk, func(from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
-		return m.Keys(t.Context(), from)
+		return managerAt(t, srv, login(t, epoch.Add(24*time.Hour)), clk).Keys(t.Context(), from)
 	})
 	if len(page.Items) != total || served != pages || waits == 0 {
 		t.Errorf("Keys = %d keys, %d pages read, %d waits; want %d keys from %d pages read once each", len(page.Items), served, waits, total, pages)
@@ -258,20 +256,9 @@ func (healthyOthers) Keys(context.Context, adapter.Listing) (adapter.Page[adapte
 	return adapter.Page[adapter.KeyState]{Done: true}, nil
 }
 
-func (h healthyOthers) Rescan(since time.Time) adapter.ScanState {
-	return h.Manager.(adapter.Rescanner).Rescan(since)
-}
-
-type hooks struct{}
-
-func (hooks) InFlight(context.Context) (int, error) { return 0, nil }
-func (hooks) DeleteSecrets(context.Context) error   { return nil }
-
-// TestEngineDrivesTheAdapterAndAMovedRecordIsFound: the real adapter runs under the real engine. A first round only
-// marks the start; a quarter of an hour later the records in the window are stored once each, however often they are read. A removal
-// then reads once more after the grace period, from before it began, so a record that was created before the first
-// final read and appeared during the wait is stored too, though its day is before the adapter's own next window.
-func TestEngineDrivesTheAdapterAndAMovedRecordIsFound(t *testing.T) {
+// TestEngineDrivesTheAdapter: the real adapter runs under the real engine. A first round only marks the start; a quarter
+// of an hour later the records in the window are stored once each, however often they are read.
+func TestEngineDrivesTheAdapter(t *testing.T) {
 	t.Parallel()
 	clk := &clock{t: time.Date(2026, 10, 15, 0, 10, 0, 0, time.UTC)}
 	sup := &usageSupplier{clk: clk}
@@ -284,7 +271,6 @@ func TestEngineDrivesTheAdapterAndAMovedRecordIsFound(t *testing.T) {
 		}{ref, at(created), at(visible)})
 	}
 	add("client:early", "2026-10-15T00:12:00Z", "2026-10-15T00:12:00Z")
-	add("client:late", "2026-10-14T23:59:00Z", "2026-10-15T01:00:00Z") // created before midnight, appears 35 minutes after the removal began
 	srv := newServer(func(r adapter.Request) (adapter.Response, error) { return sup.answer(r), nil })
 	m := healthyOthers{managerAt(t, srv, login(t, clk.t.Add(24*time.Hour)), clk)}
 	store := syncertest.New()
@@ -300,16 +286,6 @@ func TestEngineDrivesTheAdapterAndAMovedRecordIsFound(t *testing.T) {
 	if _, ok := store.Charges["client:early"]; !ok || len(store.Charges) != 1 || store.State().ScanOpen {
 		t.Fatalf("after the first pass: %d charges, scan open %v", len(store.Charges), store.State().ScanOpen)
 	}
-	if done, err := e.Remove(t.Context(), hooks{}); done || err != nil {
-		t.Fatalf("Remove = %v, %v; want it to wait out the grace period", done, err)
-	}
-	clk.advance(36 * time.Minute) // 01:01: the grace period is over; the late record has appeared
-	if done, err := e.Remove(t.Context(), hooks{}); !done || err != nil {
-		t.Fatalf("Remove = %v, %v", done, err)
-	}
-	if _, ok := store.Charges["client:late"]; !ok {
-		t.Errorf("the record that appeared during the wait was not read: %d charges", len(store.Charges))
-	}
 }
 
 func mustTime(t *testing.T, s string) time.Time {
@@ -319,4 +295,18 @@ func mustTime(t *testing.T, s string) time.Time {
 		t.Fatal(err)
 	}
 	return v
+}
+
+// lateScan is the position of a pass under way over the hour before epoch, which makes the next Charges ask the supplier.
+func lateScan(t testing.TB) adapter.ScanState {
+	t.Helper()
+	s := scanState{
+		V: 1, Watermark: epoch.Unix(), LastLate: epoch.Unix(), LateEnd: epoch.Unix(),
+		Pass: &pass{Late: true, Start: epoch.Add(-time.Hour).Unix(), End: epoch.Add(-lag).Unix(), Page: 1},
+	}
+	b, err := s.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

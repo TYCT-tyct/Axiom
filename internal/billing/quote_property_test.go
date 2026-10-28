@@ -103,7 +103,11 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 	for _, it := range toolItems {
 		c.e.Model.MaxUses[it] = n() % 4
 		if r.IntN(2) == 0 {
-			c.d.ServerTools = append(c.d.ServerTools, ServerTool{Item: it, MaxUses: n() % 4})
+			uses := n() % 4
+			if uses == 0 && c.e.Model.MaxUses[it] == 0 {
+				uses = 1 // a tool with no limit of its own, on a model with no default, is refused (ErrUnbounded), not quoted
+			}
+			c.d.ServerTools = append(c.d.ServerTools, ServerTool{Item: it, MaxUses: uses})
 		}
 	}
 	for _, it := range []catalog.Item{cacheWrite, cacheWrite1h} {
@@ -114,12 +118,11 @@ func randomQuoteCase(tb testing.TB, r *rand.Rand, limit int64) quoteCase {
 	if r.IntN(2) == 0 {
 		c.e.Model.Reports.Add(catalog.ItemCacheRead)
 	}
-	if strings.Contains(c.json, "priority") && r.IntN(2) == 0 {
-		c.d.ServiceTiers.Add(catalog.ServiceTierPriority)
-	}
-	c.s = Segments{Output: max(n()%1000, 1), Overshoot: time.Duration(r.Int64N(int64(5 * time.Second)))}
+	c.e.Model.OpenAIUsage = r.IntN(2) == 0
+	drawTiers(&c, r)
+	c.s = Segments{Output: max(n()%1000, 1), Overshoot: time.Duration(r.Int64N(int64(5*time.Second)) + 1)} // both above 0, or the entry is refused
 	if limit == math.MaxInt64 {
-		c.s.Overshoot = time.Duration(n()) // so overshoot × speed can pass math.MaxInt64
+		c.s.Overshoot = time.Duration(max(n(), 1)) // so overshoot × speed can pass math.MaxInt64
 	}
 	return c
 }
@@ -190,7 +193,7 @@ func (c quoteCase) call(tb testing.TB, r *rand.Rand) *big.Rat {
 		counts[r.IntN(len(counts))][catalog.Item(it)] += upTo(n)
 	}
 	st := catalog.ServiceTierStandard
-	if c.d.ServiceTiers.Has(catalog.ServiceTierPriority) && r.IntN(2) == 0 {
+	if c.servedAt().Has(catalog.ServiceTierPriority) && r.IntN(2) == 0 {
 		st = catalog.ServiceTierPriority
 	}
 	total := new(big.Rat)
@@ -206,6 +209,30 @@ func (c quoteCase) call(tb testing.TB, r *rand.Rand) *big.Rat {
 		total.Add(total, cost.Rat())
 	}
 	return total
+}
+
+// drawTiers lets the request allow priority, and the endpoint be offered at standard alone, at priority alone (the
+// quote still prices standard) or at both, when the schedule has a priority tier.
+func drawTiers(c *quoteCase, r *rand.Rand) {
+	if !strings.Contains(c.json, "priority") {
+		return
+	}
+	if r.IntN(2) == 0 {
+		c.d.ServiceTiers.Add(catalog.ServiceTierPriority)
+	}
+	if r.IntN(2) == 0 {
+		c.e.Model.ServiceTiers = [...]catalog.ServiceTierSet{
+			1 << catalog.ServiceTierStandard, 1 << catalog.ServiceTierPriority, 1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierPriority,
+		}[r.IntN(3)]
+	}
+}
+
+// servedAt is the tiers a call can be served at: the request's, within the endpoint's when it is known.
+func (c quoteCase) servedAt() catalog.ServiceTierSet {
+	if c.e.Model.ServiceTiers == 0 {
+		return c.d.ServiceTiers
+	}
+	return c.d.ServiceTiers & c.e.Model.ServiceTiers
 }
 
 // prompts draws each sampling's prompt, the first up to the request's bound and the others up to the context length,
@@ -225,7 +252,11 @@ func (c quoteCase) prompts(samplings int64, upTo func(int64) int64) []map[catalo
 	if c.e.Model.FilePages > 0 && c.e.Model.PageTokens > 0 {
 		file = c.e.Model.FilePages * c.e.Model.PageTokens
 	}
-	first := min(window, c.d.TextBytes+c.d.Images*c.e.Model.ImageTokens+c.d.Documents*file)
+	image := window // an image of unknown size may fill the context
+	if c.e.Model.ImageTokens > 0 {
+		image = c.e.Model.ImageTokens
+	}
+	first := min(window, c.d.TextBytes+c.d.Images*image+c.d.Documents*file)
 	counts := make([]map[catalog.Item]int64, samplings)
 	for j := range counts {
 		counts[j] = map[catalog.Item]int64{}
@@ -243,6 +274,14 @@ func (c quoteCase) prompts(samplings int64, upTo func(int64) int64) []map[catalo
 	return counts
 }
 
+// imageBound is what one image may take: the model's bound, or the whole context when it has none.
+func (c quoteCase) imageBound() *big.Int {
+	if c.e.Model.ImageTokens > 0 {
+		return big.NewInt(c.e.Model.ImageTokens)
+	}
+	return big.NewInt(c.e.Model.ContextLength)
+}
+
 // reference is the quote computed in math/big from the prices Ceiling gives, and whether every count is below
 // math.MaxInt64.
 func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
@@ -253,30 +292,20 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 	if c.e.Model.FilePages > 0 && c.e.Model.PageTokens > 0 {
 		file = new(big.Int).Mul(b(c.e.Model.FilePages), b(c.e.Model.PageTokens))
 	}
-	first := new(big.Int).Add(b(c.d.TextBytes), new(big.Int).Mul(b(c.d.Images), b(c.e.Model.ImageTokens)))
+	first := new(big.Int).Add(b(c.d.TextBytes), new(big.Int).Mul(b(c.d.Images), c.imageBound()))
 	first.Add(first, new(big.Int).Mul(b(c.d.Documents), file))
 	if first.Cmp(window) > 0 {
 		first = window
 	}
 	uses, samplings := c.referenceUses()
-	tiers := c.d.ServiceTiers
+	tiers := c.servedAt()
 	tiers.Add(catalog.ServiceTierStandard)
-	inputs := c.d.InputItems
-	inputs.Add(in)
-	if c.e.Model.Reports.Has(catalog.ItemCacheRead) {
-		inputs.Add(catalog.ItemCacheRead)
-	}
+	inputs := c.inputItems()
 	longest := first.Int64()
 	if samplings.Cmp(b(1)) > 0 || uses[webSearch] != nil {
 		longest = c.e.Model.ContextLength
 	}
-	price := func(items catalog.ItemSet, length int64) *big.Rat {
-		p, ok := c.e.Price.Ceiling(items, tiers, length)
-		if !ok {
-			tb.Fatalf("no price for %v", items)
-		}
-		return p.Mul(1).Rat()
-	}
+	price := func(items catalog.ItemSet, length int64) *big.Rat { return c.ceilingRate(tb, items, tiers, length) }
 	total, counts := new(big.Rat), []*big.Int(nil)
 	term := func(p *big.Rat, n *big.Int) {
 		total.Add(total, new(big.Rat).Mul(p, new(big.Rat).SetInt(n)))
@@ -294,6 +323,39 @@ func (c quoteCase) reference(tb testing.TB) (*big.Rat, bool) {
 		fits = fits && n.Cmp(b(math.MaxInt64)) < 0
 	}
 	return total, fits
+}
+
+// inputItems are the items an entry's input may be billed as: what the request may produce, a cache read the model
+// reports, and for an OpenAI call also the images, and the cache writes and audio the model reports.
+func (c quoteCase) inputItems() catalog.ItemSet {
+	inputs := c.d.InputItems
+	inputs.Add(in)
+	if c.e.Model.Reports.Has(catalog.ItemCacheRead) {
+		inputs.Add(catalog.ItemCacheRead)
+	}
+	if c.e.Model.OpenAIUsage {
+		inputs |= c.e.Model.Reports&(1<<cacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
+	}
+	return inputs
+}
+
+// ceilingRate is the dearest price of the items; an OpenAI call that may read and write the cache adds their two
+// dearest prices, as the same cached tokens may be billed as both, if that is dearer.
+func (c quoteCase) ceilingRate(tb testing.TB, items catalog.ItemSet, tiers catalog.ServiceTierSet, length int64) *big.Rat {
+	tb.Helper()
+	p, ok := c.e.Price.Ceiling(items, tiers, length)
+	if !ok {
+		tb.Fatalf("no price for %v", items)
+	}
+	rate := p.Rat()
+	if c.e.Model.OpenAIUsage && items.Has(catalog.ItemCacheRead) && items.Has(cacheWrite) {
+		read, _ := c.e.Price.Ceiling(1<<catalog.ItemCacheRead, tiers, length)
+		write, _ := c.e.Price.Ceiling(1<<cacheWrite, tiers, length)
+		if combined := new(big.Rat).Add(read.Rat(), write.Rat()); combined.Cmp(rate) > 0 {
+			rate = combined
+		}
+	}
+	return rate
 }
 
 func (c quoteCase) referenceUses() (map[catalog.Item]*big.Int, *big.Int) {

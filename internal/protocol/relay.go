@@ -205,8 +205,13 @@ var chatConversions = [...]relayFormat{
 	Responses: {newResponsesToChat, relayFormats[Responses].limit, true},
 }
 
-// NewRelay returns a Relay that reads the upstream stream body. Only a client of the upstream's format is relayed
-// yet; for others the first step fails.
+var fromChatConversions = [...]relayFormat{
+	Messages:  {newChatToMessages, relayFormats[Chat].limit, true},
+	Responses: {newChatToResponses, relayFormats[Chat].limit, true},
+}
+
+// NewRelay reads the upstream stream in its own format or converts between Chat and Messages/Responses.
+// Unsupported pairs fail on their first step.
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay {
 	r := &Relay{o: o, client: client, held: meterMemory} // within the base allowance, so nothing is drawn yet
 	switch {
@@ -214,6 +219,8 @@ func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOp
 		r.format = &relayFormats[upstream]
 	case client == Chat && int(upstream) < len(chatConversions) && chatConversions[upstream].newUpstream != nil:
 		r.format = &chatConversions[upstream]
+	case upstream == Chat && int(client) < len(fromChatConversions) && fromChatConversions[client].newUpstream != nil:
+		r.format = &fromChatConversions[client]
 	default:
 		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported", upstream, client)
 		return r
@@ -280,6 +287,9 @@ func (r *Relay) event(data []byte) (Step, error) {
 
 // route writes or holds an event by its role.
 func (r *Relay) route(e event, data []byte) (Step, error) {
+	if e.framed {
+		return r.writeBatch(e.role, data)
+	}
 	switch e.role {
 	case heartbeat:
 		return r.heartbeat(e.name, data)
@@ -303,6 +313,19 @@ func (r *Relay) route(e event, data []byte) (Step, error) {
 		return r.write(StepCommit, e.name, data)
 	}
 	return r.write(StepData, e.name, data)
+}
+
+// writeBatch routes the complete client events produced from one upstream chunk.
+func (r *Relay) writeBatch(role role, data []byte) (Step, error) {
+	kind := StepData
+	if role == content && !r.committed {
+		r.committed, kind = true, StepCommit
+	}
+	step, err := r.writeRaw(kind, data)
+	if !r.committed {
+		step = Step{Kind: StepBuffered}
+	}
+	return step, err
 }
 
 // edit returns e's data with its edits applied, in a buffer the relay reuses.
@@ -456,8 +479,10 @@ func (r *Relay) charge(n int) error {
 	return nil
 }
 
-// release gives back what the relay drew on the node's budget, at its end: its buffers go with it.
-func (r *Relay) release() {
+// Release gives back what the relay drew on the node's budget, at its end: its buffers go with it. Finish and Fail
+// call it, but for a relay that aggregates, whose body is those buffers: the gateway holds the budget until the body
+// is written and calls Release then. Further calls do nothing.
+func (r *Relay) Release() {
 	if r.charged > 0 {
 		r.o.Memory.left.Add(r.charged)
 		r.charged = 0
@@ -499,7 +524,7 @@ func (r *Relay) Usage() Usage { return r.meter.result() }
 // cost of f, or for a format whose usage event the relay writes, one with the usage and cost of f, the events without
 // content that followed it, and the upstream's last event. It returns nil unless Next returned StepUpstreamDone and no
 // ending was written. Like Fail, it builds the ending from bytes already charged and then gives them all back, so it
-// charges nothing.
+// charges nothing; a relay that aggregates keeps them charged until Release, for the body it returned.
 func (r *Relay) Finish(f Final) []byte {
 	if r.state != upstreamDone {
 		return nil
@@ -522,7 +547,7 @@ func (r *Relay) Finish(f Final) []byte {
 		return r.finishAggregate(out, f)
 	}
 	r.state = ended
-	r.release()
+	r.Release()
 	return out
 }
 
@@ -549,6 +574,7 @@ func reply(u Usage) catalog.Usage {
 
 // Fail returns an error ending with the usage and cost of f, or, when f is nil because the settlement was not
 // written, with the usage reported so far and no cost. It returns nil once an ending was written.
+// A relay that aggregates keeps its charge past Fail too (Release).
 func (r *Relay) Fail(e Error, f *Final) []byte {
 	if r.state == ended {
 		return nil
@@ -565,7 +591,9 @@ func (r *Relay) Fail(e Error, f *Final) []byte {
 		out = r.up.failure(r.endOut(), e, reply(u), cost(f))
 	}
 	r.state = ended
-	r.release()
+	if r.agg == nil {
+		r.Release()
+	}
 	return out
 }
 

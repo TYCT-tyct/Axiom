@@ -1,7 +1,7 @@
 package routing
 
-// Scope is what a failed attempt says is at fault. It mirrors the scopes of suppliers' Failure, in the same order, until
-// suppliers exports that type: the call site converts one to the other.
+// Scope is what a failed attempt says is at fault. It lists the scopes of suppliers' Failure; gateway maps one to the
+// other by name.
 type Scope uint8
 
 // The scopes.
@@ -23,7 +23,7 @@ type Action uint8
 // The actions.
 const (
 	NextEntry       Action = iota // the next entry of the plan
-	OtherCredential               // the same endpoint with another credential or egress
+	OtherCredential               // the same endpoint with another credential
 	ReturnToClient                // the same on any endpoint: give the client the error
 )
 
@@ -31,15 +31,16 @@ const (
 // the scope the adapter gives: a malformed request is the request's own; a limit, an overload, a timeout, a context that
 // is too long, a refusal by moderation or a missing model is the endpoint's, the group's or the supplier's, so the next
 // entry may do; a key that is refused or used up is the credential's, and another credential of the endpoint may do; an
-// unreachable route is the egress's, which the supplier module changes with the credential. Once the first byte of the
+// unreachable route is the egress's: changing only the credential cannot fix it, and every endpoint has one egress
+// (direct), so the next entry may do. Once the first byte of the
 // reply has gone to the client nothing is retried, and Decide is not asked.
 func Decide(f Failure) Action {
 	switch f.Scope {
 	case ScopeRequest:
 		return ReturnToClient
-	case ScopeCredential, ScopeEgress:
+	case ScopeCredential:
 		return OtherCredential
-	case ScopeEndpoint, ScopeGroup, ScopeSupplier:
+	case ScopeEgress, ScopeEndpoint, ScopeGroup, ScopeSupplier:
 		return NextEntry
 	}
 	return NextEntry

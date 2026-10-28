@@ -110,24 +110,6 @@ test.describe("the model catalog", () => {
     expect(state.models[0]?.status).toBe("draft");
   });
 
-  test("a change made against an older revision is refused, and the next try is against the new one", async ({
-    page,
-  }) => {
-    const state = await open(page, model1);
-    await expect(h1(page, "openai/model-1")).toBeVisible();
-    await press(page, "models.spec.edit").click();
-    // someone else changed the model after this page read it
-    const model = state.models[0];
-    if (model) {
-      model.rev += 1;
-    }
-    await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(/刚在别处被改过/);
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(done(page)).toBeVisible();
-    expect(model?.rev).toBe(5);
-  });
-
   test("a price version is published against the current one, and a stale one is refused", async ({ page }) => {
     const state = await open(page, model1);
     await expect(page.getByRole("cell", { name: /^3\D/ }).first()).toBeVisible();
@@ -136,12 +118,21 @@ test.describe("the model catalog", () => {
     await dialog(page).getByLabel(words("models.price.evidence")).fill("new price page");
     // a version published by someone else in the meantime
     const row = state.models[0]?.prices[0];
-    if (row) {
+    if (row?.schedule) {
       row.id = uuid(6, 999);
+      row.schedule = { ...row.schedule, rates: { ...row.schedule.rates, input: "0.000005" } };
     }
     await send(page, "vendor cut prices");
-    await expect(dialog(page).getByRole("alert")).toHaveText(/刚在别处被改过/);
-    await dialog(page).locator("button[type=submit]").click();
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("change.stale"));
+    expect(state.models[0]?.prices[0]?.schedule?.rates.input).toBe("0.000005");
+    // the form is filled again from the version now current, and only then can it be published over it
+    await dialog(page)
+      .getByRole("button", { name: zhText("change.reload") })
+      .click();
+    await expect(dialog(page).getByLabel(inputRate, { exact: true })).toHaveValue("5");
+    await dialog(page).getByLabel(inputRate, { exact: true }).fill("4");
+    await dialog(page).getByLabel(words("models.price.evidence")).fill("new price page");
+    await send(page, "vendor cut prices");
     await expect(done(page)).toBeVisible();
     await close(page);
     await expect(page.getByRole("cell", { name: /^4\D/ }).first()).toBeVisible();
@@ -200,7 +191,7 @@ test.describe("pricing", () => {
     await press(page, "pricing.rule.new").click();
     await dialog(page).getByLabel(words("pricing.rule.target")).selectOption("author");
     await dialog(page).getByLabel(words("pricing.rule.targetId")).selectOption("openai");
-    await dialog(page).getByLabel(words("pricing.method.ratio")).fill("0.5");
+    await dialog(page).getByLabel(words("pricing.method.multiplier")).fill("1.5");
     await dialog(page)
       .getByRole("button", { name: zhText("pricing.rule.previewRun") })
       .click();
@@ -209,11 +200,11 @@ test.describe("pricing", () => {
         .getByRole("cell", { name: /33\.33%/ })
         .first(),
     ).toBeVisible();
-    await send(page, "openai at cost plus 50%");
+    await send(page, "openai at 1.5 times the reference price");
     await expect(done(page)).toBeVisible();
     expect(state.rules.at(-1)).toMatchObject({
       target: { kind: "author", id: "openai" },
-      method: { kind: "cost_plus", markup_ratio: "0.5" },
+      method: { kind: "reference_multiplier", multiplier: "1.5", currency_conversion: "face" },
     });
     await close(page);
     await expect(page.getByRole("row")).toHaveCount(5);
@@ -222,10 +213,10 @@ test.describe("pricing", () => {
   test("a rule for a target and audience that has one is refused, and a bad ratio is told", async ({ page }) => {
     await open(page, "/pricing");
     await press(page, "pricing.rule.new").click();
-    await dialog(page).getByLabel(words("pricing.method.ratio")).fill("twenty");
+    await dialog(page).getByLabel(words("pricing.method.multiplier")).fill("twenty");
     await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("pricing.rule.invalid.ratio"));
-    await dialog(page).getByLabel(words("pricing.method.ratio")).fill("0.2");
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("pricing.rule.invalid.multiplier"));
+    await dialog(page).getByLabel(words("pricing.method.multiplier")).fill("1.2");
     await dialog(page).locator("button[type=submit]").click();
     await expect(dialog(page).getByRole("alert")).toHaveText(/和现有的冲突/);
   });
@@ -237,15 +228,47 @@ test.describe("pricing", () => {
       .first()
       .click();
     await dialog(page).getByLabel(words("pricing.rule.enabled")).uncheck();
+    // someone else changed the rule after this dialog read it
     const rule = state.rules[0];
     if (rule) {
       rule.rev += 1;
     }
     await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(/刚在别处被改过/);
-    await dialog(page).locator("button[type=submit]").click();
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("change.stale"));
+    expect(rule?.enabled).toBe(true);
+    await dialog(page)
+      .getByRole("button", { name: zhText("change.reload") })
+      .click();
+    await expect(dialog(page).getByLabel(words("pricing.rule.enabled"))).toBeChecked();
+    await dialog(page).getByLabel(words("pricing.rule.enabled")).uncheck();
+    await send(page);
     await expect(done(page)).toBeVisible();
     expect(state.rules.find((r) => !r.enabled && r.target.kind === "model")?.rev).toBe(3);
+  });
+
+  test("limits are not applied yet: the inputs are disabled, a stored limit is told, and saving clears it", async ({
+    page,
+  }) => {
+    const state = await open(page, "/pricing");
+    await press(page, "pricing.rule.new").click();
+    for (const key of ["minMargin", "refMin", "refMax"]) {
+      await expect(dialog(page).getByLabel(words(`pricing.constraints.${key}`))).toBeDisabled();
+    }
+    await expect(dialog(page).getByText(zhText("pricing.constraints.stored"))).toHaveCount(0);
+    await close(page);
+
+    await page
+      .getByRole("button", { name: /修改“.*”规则/ })
+      .first()
+      .click();
+    await expect(dialog(page).getByLabel(words("pricing.constraints.minMargin"))).toBeDisabled();
+    await expect(dialog(page).getByText(zhText("pricing.constraints.stored"))).toBeVisible();
+    const sent = page.waitForRequest((request) => request.method() === "PUT");
+    await dialog(page).getByLabel(words("pricing.rule.enabled")).uncheck();
+    await send(page);
+    expect((await sent).postDataJSON().rule.constraints).toEqual({});
+    await expect(done(page)).toBeVisible();
+    expect(state.rules[0]?.constraints).toEqual({});
   });
 
   test("the preview prices chosen models for a tier and says what it cannot price", async ({ page }) => {

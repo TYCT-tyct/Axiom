@@ -39,8 +39,9 @@ const (
 
 // event is one upstream event as the relay sees it.
 type event struct {
-	role role
-	name string
+	role   role
+	framed bool // a conversion may expand one upstream chunk into several complete SSE events
+	name   string
 	// data is what the client gets in place of the event, but for edits, replacements in place ordered by position;
 	// for an ending, usageAt is where its usage object closes, or -1 without one. withheld, when set, is an event to
 	// withhold besides, such as the finish signals Chat splits from a chunk that also carries content.
@@ -54,10 +55,11 @@ type event struct {
 	ends              bool // an ending that is also the normal end, as Responses' response.completed is
 }
 
-// edit replaces data[from:to] with with.
+// edit replaces data[from:to] with with, then echo: a value of the event itself, copied again.
 type edit struct {
 	from, to int
 	with     string
+	echo     []byte
 }
 
 // eventReader is what the readers of the three formats share: one decoder for every event, read in place, and the
@@ -77,6 +79,9 @@ type eventReader struct {
 	// converting is set for a reader whose events are converted to another format: nothing of the upstream's
 	// identity reaches the client, so there is nothing to rewrite.
 	converting bool
+	// errClass and code are the fault the event's error names by its class and by its code, FaultNone when it names
+	// none; the error event's failure is made of them.
+	errClass, code Fault
 }
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
@@ -96,6 +101,7 @@ func (s *eventReader) start(data []byte) {
 		s.dec.Reset(&s.src)
 	}
 	s.e = event{role: passive, data: data, usageAt: -1, edits: s.e.edits[:0]}
+	s.errClass, s.code = FaultNone, FaultNone
 }
 
 func (s *eventReader) dropBuffers() {
@@ -146,12 +152,17 @@ func (s *eventReader) replace(with string) error {
 
 // edit replaces the n bytes just read with with.
 func (s *eventReader) edit(n int, with string) error {
+	to := int(s.dec.InputOffset())
+	return s.editEcho(to-n, to, with, nil)
+}
+
+// editEcho replaces data[from:to] with with and then the bytes of echo, which lie in the event.
+func (s *eventReader) editEcho(from, to int, with string, echo []byte) error {
 	var err error
 	if s.e.edits, err = sse.Grow(s.e.edits, 1, s.charge); err != nil {
 		return err
 	}
-	to := int(s.dec.InputOffset())
-	s.e.edits = append(s.e.edits, edit{to - n, to, with})
+	s.e.edits = append(s.e.edits, edit{from, to, with, echo})
 	return nil
 }
 
@@ -170,7 +181,7 @@ func (s *eventReader) rewrite(rules formatRules) (event, error) {
 		return event{}, err
 	}
 	p := &s.rw
-	p.body, p.out, p.at, p.usageAt = data, s.buf[:0], 0, -1
+	p.body, p.out, p.at, p.usageAt, p.ending = data, s.buf[:0], 0, -1, s.e.role == ending
 	if p.dec == nil {
 		p.dec = jsontext.NewDecoder(bytes.NewBuffer(data))
 	} else {
@@ -216,7 +227,7 @@ func walk[S any](r *reader, s S, fields map[string]func(S) error) error {
 func editedSize(e *event) int {
 	n := len(e.data)
 	for _, ed := range e.edits {
-		n += len(ed.with) - (ed.to - ed.from)
+		n += len(ed.with) + len(ed.echo) - (ed.to - ed.from)
 	}
 	return n
 }
@@ -225,7 +236,7 @@ func editedSize(e *event) int {
 func edited(dst, data []byte, e *event) []byte {
 	at := 0
 	for _, ed := range e.edits {
-		dst = append(append(dst, data[at:ed.from]...), ed.with...)
+		dst = append(append(append(dst, data[at:ed.from]...), ed.with...), ed.echo...)
 		at = ed.to
 	}
 	return append(dst, data[at:]...)
@@ -265,10 +276,15 @@ func unquotedLen(v jsontext.Value) int64 {
 	return n
 }
 
-// usage copies a usage object's members the format defines and drops the rest, such as a relay's cost, and null,
-// marking where the object closes (docs/domains/gateway.md「用量与费用」).
+// usage copies a usage object's members the format defines and drops the rest, such as a relay's cost, marking where
+// the object closes (docs/domains/gateway.md「用量与费用」). A null usage is kept, as OpenAI writes it in the events
+// before the response ends (response.created); the ending's is dropped, since the settlement writes the usage object
+// there and a second member of the name would be a duplicate.
 func (p *rewriter) usage() error {
 	if ok, err := p.open('{', "an object"); !ok {
+		if err == nil && !p.ending {
+			return nil
+		}
 		p.at = p.offset()
 		return err
 	}

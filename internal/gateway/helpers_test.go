@@ -46,7 +46,7 @@ func countFinished(ps []*pending) (n int) {
 
 func countRefused(ps []*pending) (n int) {
 	for _, p := range ps {
-		if p.finished() && errors.Is(p.err, ErrRateLimited) {
+		if p.finished() && errors.Is(p.err, errAccountGate) {
 			n++
 		}
 	}

@@ -33,52 +33,19 @@ func keyList(total *int) func(adapter.Request) adapter.Response {
 	}
 }
 
-// TestAKeyListingThatChangedUnderItsPositionBeginsAgain: a key removed while a listing was stopped moves its pages
-// forward, so going on from the stored page would skip one. The position is given up and the listing is read again whole;
-// the keys that are gone do not come back with it.
-func TestAKeyListingThatChangedUnderItsPositionBeginsAgain(t *testing.T) {
+func TestAKeyListingResumesAcrossManagers(t *testing.T) {
 	t.Parallel()
-	total, asked := 250, []int{}
-	limited := true
-	serve := keyList(&total)
-	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
-		page, err := keyPageOf(r.Path)
-		if err != nil {
-			return adapter.Response{}, err
-		}
-		asked = append(asked, page)
-		if limited && page == 2 {
-			return adapter.Response{}, adapter.Blocked{Until: epoch.Add(time.Minute)}
-		}
-		return serve(r), nil
-	})
-	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
-	first, err := m.Keys(t.Context(), nil)
-	if err != nil || first.Done || len(first.Next) == 0 {
-		t.Fatalf("the read the limits stopped: done %v, position %q, %v; want a position to go on from", first.Done, first.Next, err)
-	}
-
-	limited, total = false, 150 // a hundred keys went away
-	page, err := m.Keys(t.Context(), first.Next)
-	if err != nil || !page.Done || len(page.Items) != total {
-		t.Fatalf("after the listing changed: done %v, %d keys, %v; want the %d it holds now", page.Done, len(page.Items), err, total)
-	}
-	if want := []int{1, 2, 2, 1, 2}; !slices.Equal(asked, want) {
-		t.Errorf("the pages asked for were %v, want %v: the listing began again", asked, want)
-	}
-	for i, k := range page.Items {
-		if k.Ref != adapter.KeyRef(strconv.Itoa(i+1)) {
-			t.Fatalf("key %d is %q, want the keys the listing holds now, none skipped", i+1, k.Ref)
-		}
+	for _, shrink := range []bool{false, true} {
+		t.Run(fmt.Sprint(shrink), func(t *testing.T) {
+			t.Parallel()
+			resumeKeys(t, shrink)
+		})
 	}
 }
 
-// TestALimitedReadAnswersWithItsPosition: a read that the supplier's limits refuse answers with the page it reached and
-// the moment to go on; the read made then reads that page, so no page is skipped and none is read twice.
-func TestALimitedReadAnswersWithItsPosition(t *testing.T) {
-	t.Parallel()
-	total, asked := 250, []int{}
-	limited := true
+func resumeKeys(t *testing.T, shrink bool) {
+	t.Helper()
+	total, asked, limited := 250, []int{}, true
 	serve := keyList(&total)
 	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
 		page, err := keyPageOf(r.Path)
@@ -91,20 +58,40 @@ func TestALimitedReadAnswersWithItsPosition(t *testing.T) {
 		}
 		return serve(r), nil
 	})
-	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
-	first, err := m.Keys(t.Context(), nil)
-	if err != nil || first.Done || len(first.Next) == 0 || !first.Until.Equal(epoch.Add(time.Minute)) {
-		t.Fatalf("the read the limits stopped: done %v, position %q, until %v, %v; want a position and the moment",
-			first.Done, first.Next, first.Until, err)
+	openManager := func() adapter.Manager { return manager0(t, srv, login(t, epoch.Add(24*time.Hour))) }
+	until := epoch.Add(time.Minute)
+	first, err := openManager().Keys(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-
+	if first.Done || len(first.Next) == 0 || !first.Until.Equal(until) {
+		t.Fatalf("no resumable position: %+v", first)
+	}
 	limited = false
-	page, err := m.Keys(t.Context(), first.Next)
-	if err != nil || !page.Done || len(page.Items) != total {
-		t.Fatalf("after the limits reopened: done %v, %d keys, %v; want the %d keys it read on to", page.Done, len(page.Items), err, total)
+	want := []int{1, 2, 2, 3}
+	if shrink {
+		total = 150
+		want = []int{1, 2, 2, 1, 2}
 	}
-	if want := []int{1, 2, 2, 3}; !slices.Equal(asked, want) {
-		t.Errorf("the pages asked for were %v, want %v: the page the limits stopped is the one read again", asked, want)
+	page, err := openManager().Keys(t.Context(), first.Next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertKeyListing(t, page, total)
+	if !slices.Equal(asked, want) {
+		t.Fatalf("pages %v, want %v", asked, want)
+	}
+}
+
+func assertKeyListing(t *testing.T, page adapter.Page[adapter.KeyState], total int) {
+	t.Helper()
+	if !page.Done || len(page.Next) != 0 || len(page.Items) != total {
+		t.Fatalf("incomplete listing: done %v, %d keys, position %q", page.Done, len(page.Items), page.Next)
+	}
+	for i, k := range page.Items {
+		if k.Ref != adapter.KeyRef(strconv.Itoa(i+1)) {
+			t.Fatalf("key %d: %q", i+1, k.Ref)
+		}
 	}
 }
 
@@ -128,31 +115,6 @@ func TestThePositionOfAListingHoldsNoKeyText(t *testing.T) {
 	}
 	if strings.Contains(string(page.Next), "placeholder-key") {
 		t.Errorf("the position of the offer holds a key's text: %s", page.Next)
-	}
-}
-
-// TestAPositionThatHoldsANumberIsReadAgain: the ids of the groups a pass read go into its position and come back out of
-// it. A number kept as the text it was written in is written as a string, so reading it back has to take the quotes off:
-// otherwise every resumed pass finds groups whose ids differ from the ones it read, and begins the pass again.
-func TestAPositionThatHoldsANumberIsReadAgain(t *testing.T) {
-	t.Parallel()
-	read := func(r adapter.Request) adapter.Response { return manyGroups(3)(r) }
-	groups, err := open[[]groupDTO](read(adapter.Request{Path: "/api/v1/groups/available"}))
-	if err != nil || len(groups) != 3 {
-		t.Fatalf("%d groups, %v; want the three the supplier lists", len(groups), err)
-	}
-	p := offerProgress{V: 1, Groups: groups, Overrides: map[string]number{"1": "2"}, Page: 1, Keys: map[number]number{"1": "7"}}
-
-	back := decodeOffer(listing(p))
-	if back.V != 1 {
-		t.Fatalf("the position was not read again: %s", listing(p))
-	}
-	if !sameGroups(back.Groups, p.Groups) {
-		t.Errorf("the groups of the position are %v, want the ones it was written with %v: a resumed pass would begin again",
-			back.Groups, p.Groups)
-	}
-	if back.Keys["1"] != "7" || back.Overrides["1"] != "2" {
-		t.Errorf("the position's keys are %v and its multipliers %v, want the ones it was written with", back.Keys, back.Overrides)
 	}
 }
 

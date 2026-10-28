@@ -46,9 +46,9 @@ func TestServeChecksTheDatabaseBeforeListening(t *testing.T) {
 	})
 	for name, ops := range map[string]string{"free addresses": addrs[1], "an address that is taken": taken.Addr().String()} {
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-		err := serve(ctx, []string{
+		err := serveForTest(ctx, []string{
 			"AXIOM_PUBLIC_ADDR=" + addrs[0], "AXIOM_PROBES_ADDR=" + ops, "AXIOM_DATABASE_URL=" + database.Superuser,
-			"AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+			"AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 		},
 			slog.New(slog.DiscardHandler))
 		cancel()
@@ -97,6 +97,7 @@ func TestMigrateConfiguration(t *testing.T) {
 // TestMigrateRuns: with valid settings migrate brings the database up and, as the database is already current, finds
 // nothing to do, and one against a server that never answers ends within the connect timeout.
 func TestMigrateRuns(t *testing.T) {
+	t.Parallel()
 	database := pgtest.New(t, modules()...)
 	if err := migrate(t.Context(), []string{"AXIOM_MIGRATE_DATABASE_URL=" + database.Migrator, "AXIOM_MIGRATE_TIMEOUT=2m", "AXIOM_MIGRATE_CONNECT_TIMEOUT=5s"}); err != nil {
 		t.Fatal(err)

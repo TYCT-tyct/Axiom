@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -15,42 +16,63 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers"
 )
 
-// supplies is the Suppliers double: it keeps what billing records and serves a journal the test writes.
+// supplies is the Suppliers double: it keeps what billing records of the attempts, the requests it recorded as lost
+// with their routes, and how often it was told a request ended.
 type supplies struct {
 	mu       sync.Mutex
-	attempts map[uuid.UUID][]AttemptRecord
-	journal  map[uuid.UUID]JournalAttempt
-	lost     map[uuid.UUID]bool // true while lost, false once resolved
-	ended    map[uuid.UUID]int  // how many times each request was told to have ended
+	attempts map[uuid.UUID][]suppliers.AttemptRecord
+	lost     map[uuid.UUID][]uuid.UUID // the route of each request recorded lost
+	resolved map[uuid.UUID]bool        // the requests a late settlement resolved
+	ended    map[uuid.UUID]int         // how many times each request was told to have ended
+	stuck    chan struct{}             // when set, recording a lost request waits for it to close or the context to end
+	failLost map[uuid.UUID]error       // the requests whose recording as lost fails, with the error
 }
 
 func newSupplies() *supplies {
 	return &supplies{
-		attempts: map[uuid.UUID][]AttemptRecord{}, journal: map[uuid.UUID]JournalAttempt{}, lost: map[uuid.UUID]bool{},
-		ended: map[uuid.UUID]int{},
+		attempts: map[uuid.UUID][]suppliers.AttemptRecord{}, lost: map[uuid.UUID][]uuid.UUID{},
+		resolved: map[uuid.UUID]bool{}, ended: map[uuid.UUID]int{},
 	}
 }
 
-func (s *supplies) RecordAttempts(_ context.Context, _ pg.Tx, id uuid.UUID, attempts []AttemptRecord) error {
+func (s *supplies) RecordAttempts(_ context.Context, _ pg.Tx, attempts []suppliers.AttemptRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.attempts[id] = append(s.attempts[id], attempts...)
+	for _, a := range attempts {
+		s.attempts[uuid.UUID(a.Request)] = append(s.attempts[uuid.UUID(a.Request)], a)
+	}
 	return nil
 }
 
-func (s *supplies) CommittedAttempt(_ context.Context, _ pg.Tx, id uuid.UUID) (JournalAttempt, bool, error) {
+func (s *supplies) RecordLostRequest(ctx context.Context, _ pg.Tx, id, _, _ uuid.UUID, route []uuid.UUID) error {
+	if s.stuck != nil {
+		select {
+		case <-s.stuck:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	j, ok := s.journal[id]
-	return j, ok, nil
+	if err := s.failLost[id]; err != nil {
+		return err
+	}
+	s.lost[id] = route
+	return nil
 }
 
-func (s *supplies) RecordLostRequest(_ context.Context, _ pg.Tx, id uuid.UUID) error {
+func (s *supplies) ResolveLostRequest(_ context.Context, _ pg.Tx, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.lost[id] = true
+	if _, lost := s.lost[id]; !lost {
+		// The real one fails on a request that was never recorded as lost (suppliers' ResolveLostRequest writes no row
+		// and reports it), so the double fails too, rather than hiding the bug.
+		return fmt.Errorf("no lost request %s to resolve", id)
+	}
+	s.resolved[id] = true
 	return nil
 }
 
@@ -64,11 +86,12 @@ func (s *supplies) EndRequest(_ context.Context, _ pg.Tx, id, _, _ uuid.UUID, at
 	return nil
 }
 
-func (s *supplies) ResolveLostRequest(_ context.Context, _ pg.Tx, id uuid.UUID) error {
+// lostNow is whether the request is recorded lost and no late settlement has resolved it.
+func (s *supplies) lostNow(id uuid.UUID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.lost[id] = false
-	return nil
+	_, lost := s.lost[id]
+	return lost && !s.resolved[id]
 }
 
 // metered is a route entry priced in billionths: a token of input or output 1, a web search 10; its output limit 100,
@@ -78,7 +101,7 @@ func metered(tb testing.TB) Quotable {
 	return Quotable{
 		Price: mustSchedule(tb, `{"v":1,"currency":"USD",
 			"rates":{"input":"0.000000001","output":"0.000000001","web_search":"0.00000001"}}`),
-		Model: Model{ContextLength: 1e12}, MaxOutput: 100,
+		Model: Model{ContextLength: 1e12}, MaxOutput: 100, Endpoint: uuid.NewV7(),
 	}
 }
 
@@ -124,36 +147,36 @@ func used(tb testing.TB, input, output, searches int64, estimated ...catalog.Ite
 	return Segment{Usage: u, Reported: reported}
 }
 
-func outcome(result Result, finish FinishReason, cancelled bool, segments ...Segment) Outcome {
-	return Outcome{Cancelled: cancelled, Attempts: []AttemptResult{{Seq: 1, Cost: 7, Costed: true, Segments: segments, Result: result, Finish: finish}}}
+func outcome(result Result, finish FinishReason, segments ...Segment) Outcome {
+	return Outcome{Attempts: []AttemptResult{{Seq: 1, Cost: 7, Segments: segments, Result: result, Finish: finish}}}
 }
 
 // TestSettleWaivers pins the table of docs/domains/billing.md「免单规则」 at 50 input, 20 output and one search (80):
-// what is charged, and when the daily cap stops a waiver.
+// what is charged. Only the three rules decide, with no limit on how many calls an account has waived.
 func TestSettleWaivers(t *testing.T) {
 	full, zero := used(t, 50, 20, 1), used(t, 50, 0, 1)
 	for _, tc := range []struct {
 		name string
 		o    Outcome
-		cap  int64
 		want int64
 	}{
-		{"delivered and finished", outcome(Committed, FinishStop, false, full), 1000, 80},
-		{"aggregated", outcome(Aggregated, FinishStop, false, full), 1000, 80},
-		{"delivered, no output, no finish: only the search", outcome(Committed, FinishNone, false, zero), 1000, 10},
-		{"delivered, no output, an error finish", outcome(Committed, FinishError, false, zero), 1000, 10},
-		{"delivered, no output, a stop finish is not waived", outcome(Committed, FinishStop, false, zero), 1000, 60},
-		{"cancelled is never waived", outcome(Committed, FinishNone, true, zero), 1000, 60},
-		{"cancelled before any content", outcome(Unknown, FinishNone, true, full), 1000, 80},
-		{"unknown: model usage free, the search charged", outcome(Unknown, FinishNone, false, full), 1000, 10},
-		{"failed before commit", outcome(FailedBeforeCommit, FinishError, false, full), 1000, 10},
-		{"not executed", outcome(NotExecuted, FinishNone, false), 1000, 0},
-		{"unknown past the daily cap", outcome(Unknown, FinishNone, false, full), 6, 80},
-		{"no reported usage past the cap is not a zero output", outcome(Unknown, FinishNone, false, used(t, 50, 0, 1, in, catalog.ItemOutput, webSearch)), 6, 60},
-		{"input reported, output not: not a zero output", outcome(Unknown, FinishNone, false, used(t, 50, 0, 1, catalog.ItemOutput)), 6, 60},
+		{"delivered and finished", outcome(Committed, FinishStop, full), 80},
+		{"aggregated", outcome(Aggregated, FinishStop, full), 80},
+		{"delivered, no output, no finish: only the search", outcome(Committed, FinishNone, zero), 10},
+		{"delivered, no output, an error finish", outcome(Committed, FinishError, zero), 10},
+		{"delivered, no output, a stop finish is not waived", outcome(Committed, FinishStop, zero), 60},
+		{"cancelled is never waived", outcome(Committed, FinishCancelled, zero), 60},
+		{"cancelled before any content", outcome(Unknown, FinishCancelled, full), 80},
+		{"unknown: model usage free, the search charged", outcome(Unknown, FinishNone, full), 10},
+		{"failed before commit", outcome(FailedBeforeCommit, FinishError, full), 10},
+		// The client leaving after the failure is not in the outcome: the charged attempt failed, so it is waived.
+		{"failed with nothing delivered, the client left after", outcome(Unknown, FinishError, full), 10},
+		{"not executed", outcome(NotExecuted, FinishNone), 0},
+		{"no reported usage is not a zero output", outcome(Committed, FinishNone, used(t, 50, 0, 1, in, catalog.ItemOutput, webSearch)), 60},
+		{"input reported, output not: not a zero output", outcome(Committed, FinishNone, used(t, 50, 0, 1, catalog.ItemOutput)), 60},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, WaiverCap: tc.cap})
+			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 			f, err := b.billing.Settle(t.Context(), b.hold(1000), tc.o)
 			if err != nil || f.Charged != platform.AmountExact(tc.want) {
 				t.Fatalf("Settle = %+v, %v; want %d charged", f, err, tc.want)
@@ -163,51 +186,43 @@ func TestSettleWaivers(t *testing.T) {
 	}
 }
 
-// TestWaiverCapCountsCosts: the daily cap adds up the waived calls' costs, so the call that would take it past the cap
-// is charged by the zero-output waiver alone; an attempt whose cost is not all known counts at what its usage sells
-// for (80 here), which the 保本线 keeps at or above its cost.
-func TestWaiverCapCountsCosts(t *testing.T) {
-	full := used(t, 50, 20, 1)
-	waived := func(cost int64, costed bool) Outcome {
-		return Outcome{Attempts: []AttemptResult{{Seq: 1, Cost: cost, Costed: costed, Segments: []Segment{full}, Result: Unknown}}}
+// TestWaiversHaveNoCap: a hundred zero-output calls in a row are all free, and nothing counts them: the daily cap is
+// gone, so nothing is kept of them but the books' own entries (docs/domains/billing.md「免单规则」).
+func TestWaiversHaveNoCap(t *testing.T) {
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
+	for i := range 100 {
+		f, err := b.billing.Settle(t.Context(), b.hold(1000), outcome(Committed, FinishNone, used(t, 50, 0, 0)))
+		if err != nil || f.Charged != (platform.Exact{}) {
+			t.Fatalf("call %d: Settle = %+v, %v; want nothing charged", i, f, err)
+		}
 	}
-	// two is a call whose first attempt cost 7, known, and whose last cost is not known: the cap must count 7 + the
-	// last one's sale price.
-	two := Outcome{Attempts: []AttemptResult{
-		{Seq: 1, Cost: 7, Costed: true},
-		{Seq: 2, Segments: []Segment{full}, Result: Unknown},
-	}}
-	for _, tc := range []struct {
-		name  string
-		cap   int64
-		calls []Outcome
-		want  []int64
-	}{
-		{"costs under the cap are waived", 14, []Outcome{waived(7, true), waived(7, true)}, []int64{10, 10}},
-		{"the call past the cap is charged", 13, []Outcome{waived(7, true), waived(7, true)}, []int64{10, 80}},
-		{"a cost not known counts its sale price", 79, []Outcome{waived(7, false)}, []int64{80}},
-		{"a sale price within the cap is waived", 80, []Outcome{waived(7, false)}, []int64{10}},
-		{"a known part above the sale price counts as itself", 99, []Outcome{waived(100, false)}, []int64{80}},
-		{"a known cost and an unknown one add up", 86, []Outcome{two}, []int64{80}},
-		{"a known cost and an unknown one within the cap", 87, []Outcome{two}, []int64{10}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, WaiverCap: tc.cap})
-			for i, o := range tc.calls {
-				f, err := b.billing.Settle(t.Context(), b.hold(1000), o)
-				if err != nil || f.Charged != platform.AmountExact(tc.want[i]) {
-					t.Fatalf("call %d: Settle = %+v, %v; want %d charged", i, f, err, tc.want[i])
-				}
-			}
-			b.balanced()
-		})
+	if n := b.count("SELECT balance FROM billing.balances"); n != 10_000 {
+		t.Errorf("balance %d after a hundred free calls, want 10000", n)
 	}
+	b.balanced()
+}
+
+// TestACancelledCallStillLeavesTheSuppliersRow: cancelling is not free for the platform, so a cancelled call's attempt is
+// written to suppliers with the cost billing booked for it, whatever the user is charged (docs/domains/billing.md「客户端断开」).
+func TestACancelledCallStillLeavesTheSuppliersRow(t *testing.T) {
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
+	h := b.hold(1000)
+	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishCancelled, used(t, 50, 20, 0))); err != nil {
+		t.Fatal(err)
+	}
+	if rows := b.supplies.attempts[h.id]; len(rows) != 1 || rows[0].Seq != 1 {
+		t.Errorf("suppliers got %+v for the cancelled call, want its one attempt", rows)
+	}
+	if n := b.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'supplier_cost'"); n != 7 {
+		t.Errorf("the books hold the attempt at %d, want 7: its cost whether or not the user is charged", n)
+	}
+	b.balanced()
 }
 
 // balanced runs the reconciliation and the floor check.
 func (b *bank) balanced() {
 	b.t.Helper()
-	problems, err := b.billing.Reconcile(b.t.Context())
+	problems, err := Reconcile(b.t.Context(), b.app, b.platform)
 	if err != nil || len(problems) != 0 {
 		b.t.Errorf("Reconcile = %v, %v", problems, err)
 	}
@@ -222,7 +237,7 @@ func (b *bank) balanced() {
 func TestSettleOnce(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{})
 	h := b.hold(1000)
-	o := outcome(Committed, FinishStop, false, used(t, 50, 20, 1))
+	o := outcome(Committed, FinishStop, used(t, 50, 20, 1))
 	for range 3 {
 		if f, err := b.billing.Settle(t.Context(), h, o); err != nil || f.Charged != platform.AmountExact(80) {
 			t.Fatalf("Settle = %+v, %v", f, err)
@@ -242,108 +257,95 @@ func TestSettleOnce(t *testing.T) {
 func TestSettleFloor(t *testing.T) {
 	b := newBank(t, 2000, -100, Config{})
 	other, h := b.hold(500), b.hold(1000) // 600 and 1100 reserved; 2100 may be spent
-	f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, used(t, 5000, 0, 0)))
+	f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 5000, 0, 0)))
 	if err != nil || f.Charged != platform.AmountExact(1500) {
 		t.Fatalf("Settle = %+v, %v; want 2000 + 100 - 600 = 1500 charged", f, err)
 	}
 	if n := b.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'platform_borne'"); n != 3500 {
 		t.Errorf("the platform bore %d, want 3500", n)
 	}
-	if _, err := b.billing.Settle(t.Context(), other, outcome(Committed, FinishStop, false, used(t, 500, 100, 0))); err != nil {
+	if _, err := b.billing.Settle(t.Context(), other, outcome(Committed, FinishStop, used(t, 500, 100, 0))); err != nil {
 		t.Fatal(err)
 	}
 	b.balanced()
 }
 
-// TestCorrect: an estimate is replaced once per revision, in any order of delivery, the makeup capped by what the
-// reservation still holds; after the window only the cost follows the record.
-func TestCorrect(t *testing.T) {
-	b := newBank(t, 10_000, 0, Config{})
-	h := b.hold(1000)
-	f, err := b.billing.Settle(t.Context(), h, outcome(Unknown, FinishNone, true, used(t, 300, 20, 0, in)))
-	if err != nil || !f.Estimated || f.Charged != platform.AmountExact(320) {
-		t.Fatalf("Settle = %+v, %v; want 320 estimated", f, err)
-	}
-	usage := func(input int64) []catalog.Usage { return []catalog.Usage{used(t, input, 20, 0).Usage} }
-	for _, c := range []struct {
-		revision      int64
-		input, charge int64
-	}{
-		{2, 900, 920},
-		{1, 100, 920},   // older: ignored
-		{2, 100, 920},   // the same again: ignored
-		{3, 5000, 1100}, // past the hold of 1100: capped, the platform bears 3920
-	} {
-		if err := b.billing.Correct(t.Context(), Correction{Request: h.id, Seq: 1, Revision: c.revision, Usage: usage(c.input), Cost: 9}); err != nil {
-			t.Fatal(err)
-		}
-		if n := b.count("SELECT charged FROM billing.reservations"); n != c.charge {
-			t.Errorf("revision %d: charged %d, want %d", c.revision, n, c.charge)
-		}
-		b.balanced()
-	}
-	if s := b.state(); s != "estimated" {
-		t.Errorf("the corrected reservation is %s, want estimated until its window ends", s)
-	}
-}
-
-// TestCleanup: a call no Settle ended is a lost request unless the journal shows a committed attempt with a key;
-// a late Settle then charges by the full outcome against what cleanup did.
+// TestCleanup: a call no Settle ended is a lost request, with the route it was frozen with, and its reservation goes
+// back uncharged: nothing can bring its usage afterwards. A late Settle then charges by the full outcome against what
+// cleanup did, and resolves the lost request.
 func TestCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		journal bool
-		correct bool
 		late    int64 // the late Settle's usage
 		state   string
 		charged int64
 		lost    bool
 	}{
-		{"lost, settled late", false, false, 300, "settled", 300, false},
-		{"lost, settled late past the floor", false, false, 30_000, "settled", 10_000, false},
-		{"journal, corrected, settled late for more", true, true, 700, "settled", 700, false},
-		{"journal, never corrected", true, false, 0, "cleanup_released", 0, true},
+		{"settled late", 300, "settled", 300, false},
+		{"settled late past the floor", 30_000, "settled", 10_000, false},
+		{"never settled", 0, "cleanup_released", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, CorrectionWindow: time.Hour})
-			h := b.hold(1000)
-			b.takenOver(h, tc.journal, tc.correct)
+			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
+			q := metered(t)
+			h := b.holdOn(q, 1000)
+			b.takenOver(h)
+			if route := b.supplies.lost[h.id]; len(route) != 1 || route[0] != q.Endpoint {
+				t.Errorf("the lost request's route %v, want the one endpoint the reservation holds", route)
+			}
 			if tc.late > 0 {
-				if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, used(t, tc.late, 0, 0))); err != nil {
+				if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, tc.late, 0, 0))); err != nil {
 					t.Fatal(err)
 				}
 			}
-			state := b.state()
-			if charged := b.count("SELECT charged FROM billing.reservations"); state != tc.state || charged != tc.charged || b.supplies.lost[h.id] != tc.lost {
-				t.Errorf("%s charged %d, lost %v; want %s, %d, %v", state, charged, b.supplies.lost[h.id], tc.state, tc.charged, tc.lost)
-			}
+			b.wantReservation(h, tc.state, tc.charged, tc.lost)
 			b.balanced()
 		})
 	}
 }
 
-// takenOver lets cleanup take h over, with a committed attempt in the journal or none; a supplier record then
-// corrects it, or its correction window runs out.
-func (b *bank) takenOver(h *Hold, journal, correct bool) {
+// TestALostRequestsRouteLeavesOutTheEntriesAdmissionDropped: the reservation marks an entry it dropped for its quote with
+// the zero id, and no charge can come from the endpoint of an entry that was never to be called, so the route suppliers
+// is given has only the kept ones, in order.
+func TestALostRequestsRouteLeavesOutTheEntriesAdmissionDropped(t *testing.T) {
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
+	first, dropped, last := metered(t), metered(t), metered(t)
+	dropped.MaxOutput = 1e9 // a quote far beyond the balance
+	var h *Hold
+	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
+		h, _, err = b.billing.Reserve(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 1000}, []Quotable{first, dropped, last})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.takenOver(h)
+	if route, want := b.supplies.lost[h.id], []uuid.UUID{first.Endpoint, last.Endpoint}; !slices.Equal(route, want) {
+		t.Errorf("the lost request's route is %v, want the kept entries %v", route, want)
+	}
+}
+
+// wantReservation checks what the reservation of h came to: its state, what it charged, and whether its request is
+// still lost.
+func (b *bank) wantReservation(h *Hold, state string, charged int64, lost bool) {
 	b.t.Helper()
-	if journal {
-		b.supplies.journal[h.id] = JournalAttempt{Seq: 1, Key: "client:abc"}
+	gotState, gotCharged, gotLost := b.state(), b.count("SELECT charged FROM billing.reservations"), b.supplies.lostNow(h.id)
+	if gotState != state || gotCharged != charged || gotLost != lost {
+		b.t.Errorf("%s charged %d, lost %v; want %s, %d, %v", gotState, gotCharged, gotLost, state, charged, lost)
 	}
+}
+
+// takenOver lets cleanup take h over: the reservation goes back uncharged, and the request is recorded as lost.
+func (b *bank) takenOver(h *Hold) {
+	b.t.Helper()
 	b.cleanup()
-	if want := map[bool]string{true: "cleanup_pending", false: "cleanup_released"}[journal]; b.state() != want {
-		b.t.Fatalf("after cleanup: %s, want %s", b.state(), want)
+	if s := b.state(); s != "cleanup_released" {
+		b.t.Fatalf("after cleanup: %s, want cleanup_released", s)
 	}
-	switch {
-	case correct:
-		if err := b.billing.Correct(b.t.Context(), Correction{Request: h.id, Seq: 1, Revision: 1, Usage: []catalog.Usage{used(b.t, 400, 0, 0).Usage}, Cost: 9}); err != nil {
-			b.t.Fatal(err)
-		}
-		if n := b.count("SELECT charged FROM billing.reservations WHERE state = 'cleanup_settled'"); n != 400 {
-			b.t.Fatalf("the supplier record charged %d, want 400", n)
-		}
-	case journal:
-		b.closeWindow(h)
-		b.cleanup()
+	if n := b.count("SELECT charged FROM billing.reservations"); n != 0 {
+		b.t.Fatalf("cleanup charged %d, want nothing", n)
+	}
+	if !b.supplies.lostNow(h.id) {
+		b.t.Fatal("cleanup did not record the request as lost")
 	}
 }
 
@@ -353,14 +355,6 @@ func (b *bank) cleanup() {
 	if _, err := b.billing.Cleanup(b.t.Context(), 100); err != nil {
 		b.t.Fatal(err)
 	}
-}
-
-// closeWindow moves h's correction window into the past, so a test that needs the window to have ended says so
-// instead of sleeping a while and hoping a loaded machine got there: the window is the database's clock, not the
-// test's.
-func (b *bank) closeWindow(h *Hold) {
-	b.t.Helper()
-	b.sql(fmt.Sprintf("UPDATE billing.reservations SET correct_by = clock_timestamp() - interval '1 second' WHERE request_id = '%s'", h.id))
 }
 
 // state is the state of the one reservation.
@@ -398,21 +392,21 @@ func TestCreditOnce(t *testing.T) {
 	b.balanced()
 }
 
-// TestLedgerProperty drives random sequences of credits, reservations, settlements with retries, crashes left to
-// cleanup, and corrections in any order, some with usage only a fallback price or the cost covers, and checks after every step that every transaction balances, the balance
-// equals its book, the counters equal the pending holds and the floor holds.
+// TestLedgerProperty drives random sequences of credits, gifts and payments in the site's currency and another, some of
+// them expiring, reservations, settlements with retries
+// and crashes left to cleanup, some with usage only a fallback price covers, write-offs of expired credit, and checks
+// after every step that every transaction balances, the balance equals its book, the counters equal the pending holds,
+// the floor holds, and the credit batches fund exactly the balance without any being over-spent.
 func TestLedgerProperty(t *testing.T) {
 	for seed := range uint64(3) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
-			b := fallbackBank(t, 5000, -500, Config{
-				HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: 20 * time.Millisecond,
-				CorrectionWindow: 20 * time.Millisecond, WaiverCap: 50,
-			})
+			b := fallbackBank(t, 5000, -500, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: 20 * time.Millisecond})
 			var holds []*Hold
 			for range 40 {
 				b.step(r, &holds)
 				b.balanced()
+				b.replayed(b.admitted.Account)
 			}
 		})
 	}
@@ -420,11 +414,12 @@ func TestLedgerProperty(t *testing.T) {
 
 func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 	b.t.Helper()
-	ctx := b.t.Context()
 	pick := func() *Hold { return (*holds)[r.IntN(len(*holds))] }
-	switch n := r.IntN(6); {
+	switch n := r.IntN(8); {
 	case n == 0:
-		b.credit(r.Int64N(2000) + 1)
+		b.randomCredit(r, r.Int64N(2000)+1, []*time.Time{nil, longAgo, farAhead}[r.IntN(3)])
+	case n == 6 || n == 7:
+		b.expire()
 	case n == 1 || len(*holds) == 0:
 		if h, err := b.tryHold(r.Int64N(1500)); err == nil {
 			*holds = append(*holds, h)
@@ -433,18 +428,9 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 		}
 	case n == 2: // settle, or settle again
 		b.settleRandom(r, pick())
-	case n == 3:
-		if err := b.billing.Correct(ctx, Correction{
-			Request: pick().id, Seq: 1, Revision: r.Int64N(4) + 1,
-			Usage: []catalog.Usage{maybeUnknown(b.t, r, used(b.t, r.Int64N(3000), r.Int64N(200), 0)).Usage}, Cost: r.Int64N(5000),
-		}); err != nil && !errors.Is(err, ErrNotRecorded) { // a record before its attempt is recorded applies nothing
-			b.t.Fatal(err)
-		}
-	default: // a crash: what was left pending goes to cleanup, a journal sometimes showing a committed attempt,
-		// sometimes after a correction window has run out
-		if r.IntN(2) == 0 {
-			b.supplies.journal[pick().id] = JournalAttempt{Seq: 1, Key: "client:k"}
-		}
+	case n == 3: // a retry of a settlement already made
+		b.settleRandom(r, pick())
+	default: // a crash: what was left pending goes to cleanup, which records the request as lost
 		time.Sleep(time.Duration(r.IntN(2)) * 25 * time.Millisecond)
 		b.cleanup()
 	}
@@ -453,7 +439,7 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 func (b *bank) settleRandom(r *rand.Rand, h *Hold) {
 	b.t.Helper()
 	results := []Result{Committed, Aggregated, FailedBeforeCommit, Unknown, NotExecuted}
-	o := outcome(results[r.IntN(len(results))], FinishReason(r.IntN(9)), r.IntN(4) == 0, //nolint:gosec // G115: below 9
+	o := outcome(results[r.IntN(len(results))], FinishReason(r.IntN(9)), //nolint:gosec // G115: below 9
 		maybeUnknown(b.t, r, used(b.t, r.Int64N(2000), r.Int64N(200), r.Int64N(3), []catalog.Item{in}[:r.IntN(2)]...)))
 	if _, err := b.billing.Settle(b.t.Context(), h, o); err != nil {
 		b.t.Fatal(err)
@@ -482,7 +468,7 @@ func maybeUnknown(tb testing.TB, r *rand.Rand, s Segment) Segment {
 // scope reads them.
 func TestLedgerScope(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{})
-	if _, err := b.billing.Settle(t.Context(), b.hold(100), outcome(Committed, FinishStop, false, used(t, 50, 20, 0))); err != nil {
+	if _, err := b.billing.Settle(t.Context(), b.hold(100), outcome(Committed, FinishStop, used(t, 50, 20, 0))); err != nil {
 		t.Fatal(err)
 	}
 	var n int64
@@ -500,7 +486,7 @@ func TestSettleBalanceExtremes(t *testing.T) {
 	b := newBank(t, 10_000, 0, Config{})
 	h := b.hold(100)
 	b.sql(fmt.Sprintf("UPDATE billing.balances SET balance = %d, floor = -1", int64(math.MaxInt64)))
-	if f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, false, used(t, 50, 20, 0))); err != nil || f.Charged != platform.AmountExact(70) {
+	if f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 50, 20, 0))); err != nil || f.Charged != platform.AmountExact(70) {
 		t.Errorf("Settle = %+v, %v; want 70 charged", f, err)
 	}
 }

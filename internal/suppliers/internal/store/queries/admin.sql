@@ -30,8 +30,23 @@ SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, 
 FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: ListCredentialsOf :many
-SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency
+SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
 FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
+
+-- name: ListEndpointsOf :many
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled
+FROM suppliers.endpoints WHERE supplier_id = @supplier_id ORDER BY upstream_name, id;
+
+-- name: GetCredentialOf :many
+-- One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
+SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
+FROM suppliers.credentials WHERE supplier_id = @supplier_id AND id = @id;
+
+-- name: SetCredentialLimits :execrows
+-- What the admin set: the calls the key serves at once, and the account minute ceiling for selecting it. The count itself is each
+-- node's own, in memory (internal/suppliers/README.md「并发与速率」).
+UPDATE suppliers.credentials SET max_concurrency = @max_concurrency, requests_per_minute = @requests_per_minute
+WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: LockSupplierForChange :many
 -- The supplier's turn: its changes are applied one after the other, each against the state the one before left.
@@ -48,6 +63,15 @@ UPDATE suppliers.suppliers SET config_gen = config_gen + 1 WHERE id = @id;
 -- name: ReplaceSupplierLogin :exec
 UPDATE suppliers.supplier_logins SET kind = @kind, ciphertext = @ciphertext, nonce = @nonce, wrapped_dek = @wrapped_dek,
     key_version = @key_version, version = version + 1, expires_at = sqlc.narg(expires_at)
+WHERE supplier_id = @supplier_id;
+
+-- name: DeleteSupplierLogin :exec
+-- Removing a supplier: the sealed login goes. Nothing refers to the row.
+DELETE FROM suppliers.supplier_logins WHERE supplier_id = @supplier_id;
+
+-- name: EraseCredentialsOf :exec
+-- Removing a supplier: the sealed keys go, and the rows stay, because attempts that were made with them point at the row.
+UPDATE suppliers.credentials SET ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL, status = 'erased'
 WHERE supplier_id = @supplier_id;
 
 -- name: InsertUnitValue :exec

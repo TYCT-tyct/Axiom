@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go: an ID is decoded only to match it
 	"strconv"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 )
 
@@ -19,12 +20,12 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 		return nil, &NotSupported{Reason: "a reasoning budget has no Responses counterpart"}
 	}
 	out := appendQuoted(append([]byte(nil), `{"model":`...), t.Model)
-	out, err := input(append(out, `,"input":[`...), c, t.CacheBreakpoints)
+	out, err := input(append(out, `,"input":[`...), c, t.CacheBreakpoints == catalog.ClaimYes)
 	if err != nil {
 		return nil, err
 	}
 	out = append(out, `],"store":false`...)
-	if t.EncryptedReasoning {
+	if t.EncryptedReasoning == catalog.ClaimYes {
 		out = append(out, `,"include":["`+encrypted+`"]`...)
 	}
 	for _, write := range []func([]byte, *canon) ([]byte, error){responsesTools, responsesChoice, responsesText} {
@@ -143,16 +144,16 @@ func appendBreakpoint(out []byte, p canonPart, breakpoints bool) []byte {
 func inputPart(out []byte, p canonPart, breakpoints bool) ([]byte, error) {
 	switch {
 	case p.Type == "text":
-		out = append(append(out, `{"type":"input_text","text":`...), p.Text...)
+		out = append(append(out, responsesTextHead...), p.Text...)
 		return append(appendBreakpoint(out, p, breakpoints), '}'), nil
 	case p.Type == "image_url" && p.ImageURL != nil:
-		out = appendQuoted(append(out, `{"type":"input_image","image_url":`...), p.ImageURL.URL)
+		out = appendQuoted(append(out, responsesImageHead...), p.ImageURL.URL)
 		if p.ImageURL.Detail != "" {
 			out = appendQuoted(append(out, `,"detail":`...), p.ImageURL.Detail)
 		}
 		return append(out, '}'), nil
 	case p.Type == "file" && p.File != nil && p.File.FileData != nil:
-		out = appendQuoted(append(out, `{"type":"input_file","file_data":`...), *p.File.FileData)
+		out = appendQuoted(append(out, responsesFileHead...), *p.File.FileData)
 		if !isNull(p.File.Filename) {
 			out = append(append(out, `,"filename":`...), p.File.Filename...)
 		}
@@ -194,7 +195,7 @@ func outputText(msg canonMessage, breakpoints bool) ([]byte, error) {
 	for _, p := range msg.Parts {
 		switch {
 		case p.Type == "refusal":
-			text = append(append(append(commaAfter(text, 0), `{"type":"refusal","refusal":`...), p.Text...), '}')
+			text = append(append(append(commaAfter(text, 0), responsesRefusalHead...), p.Text...), '}')
 		case p.Type != "text":
 			return nil, &NotSupported{Reason: "a " + p.Type + " part in an assistant message"}
 		case string(p.Text) == `""`:

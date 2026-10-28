@@ -99,7 +99,7 @@ func TestConvertMessages(t *testing.T) {
 				textBlockAt(2, "hi") + thinkingBlock(3, "b", "S2") +
 				startBlock(4, `{"type":"redacted_thinking","data":"R2"}`) + stopBlock(4) + stopWith("end_turn"),
 			map[string]string{
-				"0/role": "assistant", "0/content": "hi", "0/reasoning": "ab", "0/finish_reason": "stop",
+				"0/role": "assistant", "0/content": "hi", "0/reasoning": "ab", "0/reasoning_content": "ab", "0/finish_reason": "stop",
 				"0/reasoning_details": `[map[format:anthropic-claude-v1 index:0 text:a type:reasoning.text]]` +
 					`[map[format:anthropic-claude-v1 index:0 signature:S1 text: type:reasoning.text]]` +
 					`[map[data:R1 format:anthropic-claude-v1 index:1 type:reasoning.encrypted]]` +

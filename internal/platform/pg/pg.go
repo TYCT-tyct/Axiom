@@ -14,81 +14,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 )
-
-// DB is the runtime connection pool, logged in as a role that row-level security binds (Check verifies it).
-type DB struct {
-	pool   *pgxpool.Pool
-	tracer trace.Tracer
-}
-
-// Option adjusts Open.
-type Option func(*DB)
-
-// WithTracerProvider makes every transaction a span, a child of the span in the context it was given. The span
-// carries no statement and no error text, which may quote data.
-func WithTracerProvider(tp trace.TracerProvider) Option {
-	return func(db *DB) { db.tracer = tp.Tracer("axiom/pg") }
-}
-
-// The variables that hold the connection strings: errors name them, so the code that reads them and the code that
-// reports on them agree on one spelling.
-const (
-	DatabaseURLVar        = "AXIOM_DATABASE_URL"
-	MigrateDatabaseURLVar = "AXIOM_MIGRATE_DATABASE_URL"
-)
-
-// PoolSize is how many connections the process keeps open at most (platform README「连接池」). It follows the gateway's
-// gate for database work rather than the machine's cores, so pgx's default does not decide it.
-const PoolSize = 64
-
-// errNotDatabaseURL is what both parse failures report: pgxpool parses the string again and then checks the pool_*
-// parameters, so a string pgx accepted can still fail there, and neither error may quote the string, which holds a
-// password.
-var errNotDatabaseURL = errors.New(DatabaseURLVar + ": not a PostgreSQL connection string")
-
-// Open connects to url, AXIOM_DATABASE_URL. Errors name the variable but not its value, which holds a password.
-func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
-	// pgxpool removes pool_max_conns from the config it parses, so ask pgx, which keeps the parameter, whether the
-	// connection string sizes the pool itself: a deployment that says so owns the number.
-	conn, err := pgx.ParseConfig(url)
-	if err != nil {
-		return nil, errNotDatabaseURL
-	}
-	config, err := pgxpool.ParseConfig(url)
-	if err != nil {
-		return nil, errNotDatabaseURL
-	}
-	if _, set := conn.RuntimeParams["pool_max_conns"]; !set {
-		config.MaxConns = PoolSize
-	}
-	// pgx accepts any duration here, then starts a ticker with it in a goroutine, which panics on one that is not
-	// positive. It is the only pool parameter that fails this way: pgx refuses the other bad values while parsing,
-	// or reads them as "never" or "at every check".
-	if config.HealthCheckPeriod <= 0 {
-		return nil, errors.New(DatabaseURLVar + ": pool_health_check_period must be positive")
-	}
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		return nil, fmt.Errorf("connect to the database: %w", err)
-	}
-	db := &DB{pool: pool, tracer: noop.NewTracerProvider().Tracer("axiom/pg")}
-	for _, opt := range opts {
-		opt(db)
-	}
-	return db, nil
-}
-
-// Close waits for borrowed connections to come back and closes the pool.
-func (db *DB) Close() { db.pool.Close() }
-
-// MaxConns is the pool's ceiling: how many connections it may open at once, not how many are open now.
-func (db *DB) MaxConns() int32 { return db.pool.Stat().MaxConns() }
 
 // ErrNoRows is what a Row's Scan returns when its query found no row, for the modules that must tell "none" from a
 // failure; they may not import pgx.
@@ -108,6 +37,9 @@ func SQLState(err error) string {
 type Scope struct {
 	platform        bool
 	sites, accounts []uuid.UUID
+	// home is the site of an account scope's account, whose public configuration it reads (platform.sees_site); the
+	// zero UUID is none. It widens nothing else: the account's rows are still only its own.
+	home uuid.UUID
 }
 
 // PlatformScope is every row. Only cmd/ builds it, for the modules that maintain platform and public data; a lint rule
@@ -117,7 +49,7 @@ func PlatformScope() Scope { return Scope{platform: true} }
 // NewScope builds any scope, for tests in any module. Production code gets the platform scope from PlatformScope and
 // tenant scopes from authorization; the same lint rule refuses NewScope outside tests.
 func NewScope(platform bool, sites, accounts []uuid.UUID) Scope {
-	return Scope{platform, sites, accounts}
+	return Scope{platform: platform, sites: sites, accounts: accounts}
 }
 
 // SiteScope is the rows of one site. Only internal/accounts builds it, after authorization; the lint rule refuses it
@@ -127,6 +59,13 @@ func SiteScope(site uuid.UUID) Scope { return Scope{sites: []uuid.UUID{site}} }
 // AccountScope is the rows of one account. Only internal/accounts builds it, after authorization or for the account a
 // registration creates; the lint rule refuses it elsewhere.
 func AccountScope(account uuid.UUID) Scope { return Scope{accounts: []uuid.UUID{account}} }
+
+// AccountScopeIn is AccountScope that also reads the public configuration of the account's site, such as the payment
+// methods its top-up page lists (docs/security.md「租户隔离」). The site comes from the authorization that found the
+// account, never from a row the account can write; like AccountScope, only internal/accounts builds it.
+func AccountScopeIn(site, account uuid.UUID) Scope {
+	return Scope{accounts: []uuid.UUID{account}, home: site}
+}
 
 // Tx is a transaction whose scope is already set.
 type Tx struct{ tx pgx.Tx }
@@ -226,9 +165,9 @@ func (r rows) TypeMap() *pgtype.Map                         { return r.inner.Typ
 // Conn is nil, which pgx allows for rows that do not come from a connection.
 func (rows) Conn() *pgx.Conn { return nil }
 
-// setScope sets the three settings the platform schema's scope functions read, local to the transaction.
+// setScope sets the four settings the platform schema's scope functions read, local to the transaction.
 const setScope = `SELECT set_config('axiom.scope_platform', $1, true), set_config('axiom.scope_sites', $2, true),
-	set_config('axiom.scope_accounts', $3, true)`
+	set_config('axiom.scope_accounts', $3, true), set_config('axiom.scope_home', $4, true)`
 
 // Tx runs fn in a transaction limited to scope and commits if fn returns nil. An error, a panic or a cancelled
 // context rolls it back, and pgx drops a connection whose state is unknown instead of returning it to the pool.
@@ -263,16 +202,29 @@ func (db *DB) begin(ctx context.Context, options pgx.TxOptions, scope Scope, fn 
 		}
 		span.End()
 	}()
-	return pgx.BeginTxFunc(ctx, db.pool, options, func(tx pgx.Tx) error {
-		platform := ""
-		if scope.platform {
-			platform = "on"
-		}
-		if _, err := tx.Exec(ctx, setScope, platform, uuidArray(scope.sites), uuidArray(scope.accounts)); err != nil {
+	pool := db.pool
+	if ctx.Value(completionKey{}) == true {
+		pool = db.completion
+	}
+	return pgx.BeginTxFunc(ctx, pool, options, func(tx pgx.Tx) error {
+		if err := applyScope(ctx, tx, scope); err != nil {
 			return fmt.Errorf("set the scope: %w", err)
 		}
 		return fn(Tx{tx})
 	})
+}
+
+// applyScope sets the settings of scope in tx; it is the one place that writes them.
+func applyScope(ctx context.Context, tx pgx.Tx, scope Scope) error {
+	platform, home := "", ""
+	if scope.platform {
+		platform = "on"
+	}
+	if scope.home != (uuid.UUID{}) {
+		home = scope.home.String()
+	}
+	_, err := tx.Exec(ctx, setScope, platform, uuidArray(scope.sites), uuidArray(scope.accounts), home)
+	return err
 }
 
 // uuidArray writes ids as a PostgreSQL array literal; no ids is the empty string, which in_scope reads as none.
@@ -303,4 +255,25 @@ func Duplicate(err error) (constraint string, ok bool) {
 func IsDataError(err error) bool {
 	code := SQLState(err)
 	return strings.HasPrefix(code, "22") || strings.HasPrefix(code, "23")
+}
+
+// Unavailable reports whether err says the database cannot be reached or is not taking connections now: a failed
+// connection, a connection exception (SQLSTATE class 08), a server shutting down or starting (57P01 to 57P03), or one
+// out of connections (53300). The reason is a fixed text, not err's own: pgx names the host, user and database in a
+// connection error, and a secret may sit in any of them (see redactConnect). A caller that tells a database outage
+// from a bug does so by this, without importing pgx.
+func Unavailable(err error) (reason string, ok bool) {
+	if errors.As(err, new(*pgconn.ConnectError)) {
+		return "cannot connect to the database", true
+	}
+	code := SQLState(err)
+	switch {
+	case strings.HasPrefix(code, "08"):
+		return "the connection to the database failed (SQLSTATE " + code + ")", true
+	case code == "57P01", code == "57P02", code == "57P03":
+		return "the database is shutting down or starting (SQLSTATE " + code + ")", true
+	case code == "53300":
+		return "the database has no connection left (SQLSTATE " + code + ")", true
+	}
+	return "", false
 }

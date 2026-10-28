@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -38,6 +40,9 @@ func checkStream(t *testing.T, h *harness) {
 	t.Helper()
 	if h.w.status != http.StatusOK || h.w.header.Get("Content-Type") != "text/event-stream; charset=utf-8" {
 		t.Fatalf("status %d, headers %v", h.w.status, h.w.header)
+	}
+	if got := h.w.header.Get("X-Accel-Buffering"); got != "no" {
+		t.Errorf("X-Accel-Buffering is %q: an nginx in front would buffer the stream", got)
 	}
 	body := h.w.body()
 	for _, want := range []string{`"text": "Hello"`, `"text": "!"`, h.call.ID.String(), `"model": "claude-opus-5-5"`, `"cost":0.003703701,"cost_currency":"USD"`} {
@@ -66,7 +71,7 @@ func checkSettlementBeforeTheEnding(t *testing.T, s settlement) {
 
 func checkCommittedAttempt(t *testing.T, e billing.Outcome) {
 	t.Helper()
-	if len(e.Attempts) != 1 || e.Cancelled {
+	if len(e.Attempts) != 1 {
 		t.Fatalf("ending %+v", e)
 	}
 	a := e.Attempts[0]
@@ -76,8 +81,9 @@ func checkCommittedAttempt(t *testing.T, e billing.Outcome) {
 	}
 }
 
-// TestTheUpstreamGetsTheEndpointsRequest: the model is the endpoint's name, the client's session and user identifiers
-// are replaced by derived ones, and the whitelisted headers go with it.
+// TestTheUpstreamGetsTheEndpointsRequest: the model is the endpoint's name, the client's session and user identifiers are
+// replaced by derived ones — the metadata.user_id of an Anthropic call by the structure the session is read out of — and
+// the whitelisted headers go with it.
 func TestTheUpstreamGetsTheEndpointsRequest(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) {
@@ -90,20 +96,15 @@ func TestTheUpstreamGetsTheEndpointsRequest(t *testing.T) {
 		}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
 		h.run()
+		account := uuid.UUID(h.call.caller.AccountID())
 		call := h.up.endpoint(1).calls[0]
-		body := string(call.Body)
-		if !strings.Contains(body, `"model":"up-1"`) || strings.Contains(body, "client-secret-user") || !strings.Contains(body, `"user_id":"`) {
-			t.Errorf("the request upstream: %s", body)
+		body, want := string(call.Body), `"user_id":"{\"device_id\":\"`+h.exec.deviceID(account)+`\",\"account_uuid\":\"\",`+
+			`\"session_id\":\"`+h.exec.identity(account)("client-secret-user")+`\"}"`
+		if !strings.Contains(body, `"model":"up-1"`) || strings.Contains(body, "client-secret-user") || !strings.Contains(body, want) {
+			t.Errorf("the request upstream:\n%s\nwant it to hold %s", body, want)
 		}
 		if call.Format != protocol.Messages || call.Header.Get("Anthropic-Beta") != "beta-1" {
 			t.Errorf("format %d, headers %v", call.Format, call.Header)
-		}
-		var ids []string
-		for _, part := range strings.Split(body, `"user_id":"`)[1:] {
-			ids = append(ids, part[:strings.Index(part, `"`)])
-		}
-		if len(ids) != 1 || len(ids[0]) != 32 {
-			t.Errorf("the derived identifier: %v", ids)
 		}
 	})
 }
@@ -123,7 +124,7 @@ func TestFailuresMoveTheCallAsRoutingDecides(t *testing.T) {
 		{"a group's too", routing.ScopeGroup, false, [3]int{1, 1, 0}, 200, billing.Unknown},
 		{"a supplier's too", routing.ScopeSupplier, true, [3]int{1, 1, 0}, 200, billing.NotExecuted},
 		{"a credential's tries the entry again", routing.ScopeCredential, true, [3]int{2, 0, 0}, 200, billing.NotExecuted},
-		{"the route to it likewise", routing.ScopeEgress, true, [3]int{2, 0, 0}, 200, billing.NotExecuted},
+		{"the only egress failing moves to the next entry", routing.ScopeEgress, true, [3]int{1, 1, 0}, 200, billing.NotExecuted},
 		{"the request's own is the client's", routing.ScopeRequest, true, [3]int{1, 0, 0}, 400, billing.NotExecuted},
 	}
 	for _, tc := range cases {
@@ -138,6 +139,39 @@ func TestFailuresMoveTheCallAsRoutingDecides(t *testing.T) {
 			}
 			if first := h.ended().outcome.Attempts[0]; first.Result != tc.result {
 				t.Errorf("%s: the first attempt's result %d", tc.name, first.Result)
+			}
+		})
+	}
+}
+
+// TestARefusedRequestIsAnsweredInTheUpstreamsWords: when the supplier refuses the request itself, the client reads what
+// the supplier said of it (Claude Code recovers from the text), in the shell of its format; with nothing said, the
+// error is ours.
+func TestARefusedRequestIsAnsweredInTheUpstreamsWords(t *testing.T) {
+	messages := protocol.Messages
+	said := &protocol.Rejection{Message: "max_tokens: Input should be greater than 0", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value"}
+	for _, tc := range []struct {
+		name      string
+		client    protocol.Format
+		rejection *protocol.Rejection
+		want      []string
+	}{
+		{"Chat", protocol.Chat, said, []string{`"message":"max_tokens: Input should be greater than 0"`, `"param":"max_tokens"`, `"code":"invalid_value"`, `"error_type":"invalid_request"`}},
+		{"Messages", protocol.Messages, said, []string{`"message":"max_tokens: Input should be greater than 0"`, `"error_type":"invalid_request"`}},
+		{"nothing said", protocol.Chat, nil, []string{`"message":"The request is not valid."`, `"code":"invalid_request"`}},
+	} {
+		run(t, func(t *testing.T, ctx context.Context) {
+			h := newHarness(t, ctx, options{client: tc.client, upstream: &messages})
+			f := failing(routing.ScopeRequest, true, suppliers.Failure{Rejection: tc.rejection})
+			h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) { return nil, f }}
+			h.run()
+			if h.w.status != http.StatusBadRequest {
+				t.Errorf("%s: status %d:\n%s", tc.name, h.w.status, h.w.body())
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(h.w.body(), want) {
+					t.Errorf("%s: no %s in %s", tc.name, want, h.w.body())
+				}
 			}
 		})
 	}
@@ -202,14 +236,15 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 		status     int
 		retryAfter string
 		reason     routing.Reason
+		refused    map[string]int64
 	}{
-		{"all taken", options{entries: 2, noSlot: []int{1, 2}}, 429, "1", routing.Full},
-		{"an endpoint the suppliers do not hold", options{entries: 1, mutate: func(c *Call) { c.Plan.Entries[0].Endpoint = ep(77) }}, 503, "1", routing.Full},
+		{"all taken", options{entries: 2, noSlot: []int{1, 2}}, 429, "1", routing.Full, map[string]int64{"credentials_busy": 1}},
+		{"an endpoint the suppliers do not hold", options{entries: 1, mutate: func(c *Call) { c.Plan.Entries[0].Endpoint = ep(77) }}, 503, "1", routing.Full, nil},
 		{"no endpoint can express it", options{entries: 2, mutate: func(c *Call) {
 			for i := range c.Plan.Entries {
-				c.Plan.Entries[i].Target.Format = protocol.Chat // a Messages request is not converted to Chat
+				c.Plan.Entries[i].Target.Format = protocol.Responses // Messages is not converted to Responses
 			}
-		}}, 400, "", routing.FormatNotServed},
+		}}, 400, "", routing.FormatNotServed, nil},
 	}
 	for _, tc := range cases {
 		run(t, func(t *testing.T, ctx context.Context) {
@@ -221,6 +256,7 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 			if s := h.ended(); len(s.outcome.Attempts) != 0 {
 				t.Errorf("%s: %d attempts", tc.name, len(s.outcome.Attempts))
 			}
+			wantRefused(t, h.refused(), tc.refused)
 			excluded := h.call.Plan.Record.Excluded
 			if len(excluded) == 0 || excluded[0].Reason != tc.reason {
 				t.Errorf("%s: the route's record: %+v", tc.name, excluded)
@@ -229,9 +265,30 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 	}
 }
 
+// TestAnUnsetSpecKeyIsTheOperatorsToKnow: when no endpoint can take the request because the spec of its model leaves a
+// key out, the client is told the model does not support the parameter yet, and the log, which the operator reads, names
+// the key.
+func TestAnUnsetSpecKeyIsTheOperatorsToKnow(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		var logs bytes.Buffer
+		messages := protocol.Messages
+		h := newHarness(t, ctx, options{client: protocol.Chat, upstream: &messages, logs: &logs, mutate: func(c *Call) {
+			c.Body = []byte(`{"model":"m","messages":[{"role":"user","content":"Hi"}],"top_p":0.5,"stream":true}`)
+		}})
+		h.run()
+		body := h.w.body()
+		if h.w.status != 400 || !strings.Contains(body, "does not support top_p other than the default yet") || strings.Contains(body, "spec") {
+			t.Errorf("the client got %d: %s", h.w.status, body)
+		}
+		if !strings.Contains(logs.String(), "default_sampling_only") {
+			t.Errorf("the log does not name the key: %s", logs.String())
+		}
+	})
+}
+
 func TestAMixOfReasonsForPassingOverEntries(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) { c.Plan.Entries[1].Target.Format = protocol.Chat }})
+		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) { c.Plan.Entries[1].Target.Format = protocol.Responses }})
 		h.run()
 		if h.w.status != 429 { // a credential may be free in a second; the other entry will not ever do
 			t.Errorf("status %d\n%s", h.w.status, h.w.body())
@@ -273,53 +330,6 @@ func TestRetriesSpendTheSuppliersBudget(t *testing.T) {
 	}
 }
 
-// TestEveryAttemptIsJournalledWhenBoundAndAnswered: the journal learns of an attempt when it is bound and when the
-// response headers arrive, and once more when its content is first handed to the client; a failed attempt never says
-// committed.
-func TestEveryAttemptIsJournalledWhenBoundAndAnswered(t *testing.T) {
-	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{entries: 2})
-		h.up.eps[uuidOf(ep(1))].script = []scripted{failure(routing.ScopeEndpoint, false)}
-		h.up.eps[uuidOf(ep(2))].script = []scripted{whole(h)}
-		h.run()
-		type row struct {
-			seq       platform.AttemptSeq
-			committed bool
-		}
-		var got []row
-		for _, e := range h.up.journal {
-			if e.Request != platform.RequestID(h.call.ID) || e.Site == nil || e.Account == nil {
-				t.Fatalf("an entry without the request or the tenant: %+v", e)
-			}
-			got = append(got, row{e.Seq, e.Committed})
-		}
-		want := []row{{1, false}, {1, false}, {2, false}, {2, false}, {2, true}}
-		if len(got) != len(want) {
-			t.Fatalf("journal %v, want %v", got, want)
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("journal %v, want %v", got, want)
-			}
-		}
-	})
-}
-
-// TestJournalLearnsOfTheCommitBeforeTheClientDoes: a crash after the first write must leave the cleanup the attempt that
-// was committed, so the journal entry comes first.
-func TestJournalLearnsOfTheCommitBeforeTheClientDoes(t *testing.T) {
-	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{})
-		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
-		h.run()
-		for i, e := range h.up.journal {
-			if e.Committed && h.up.writes[i] != 0 {
-				t.Errorf("the commit was journalled after %d writes", h.up.writes[i])
-			}
-		}
-	})
-}
-
 // TestAttemptsAreBoundToTheEntriesTheReservationKept: the route is cut to the entries the reservation covers, and an
 // attempt is bound to the position its entry had in the route that was quoted.
 func TestAttemptsAreBoundToTheEntriesTheReservationKept(t *testing.T) {
@@ -359,14 +369,14 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	limits, err := New(DefaultConfig())
+	limits, err := New(DefaultConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	full := ExecDeps{
 		Router: router, Upstreams: &fakeUpstreams{}, Limits: limits, Memory: protocol.NewMemory(1), Logger: slog.New(slog.DiscardHandler),
 		Ledger: &fakeLedger{}, Costs: fakeCosts{known: true}, Alive: func() bool { return true },
-		IdentitySecret: []byte("0123456789abcdef"),
+		IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
 	}
 	if _, err := NewExecutor(full); err != nil {
 		t.Fatal(err)
@@ -377,6 +387,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 		"logger": func(d *ExecDeps) { d.Logger = nil }, "ledger": func(d *ExecDeps) { d.Ledger = nil },
 		"costs": func(d *ExecDeps) { d.Costs = nil },
 		"alive": func(d *ExecDeps) { d.Alive = nil }, "secret": func(d *ExecDeps) { d.IdentitySecret = []byte("short") },
+		"quality": func(d *ExecDeps) { d.Quality = nil },
 	} {
 		d := full
 		missing(&d)
@@ -387,7 +398,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 }
 
 // TestTheSuppliersServiceIsUpstreams: what the service does not give comes back as an error and no connection, not as a
-// connection that is nil inside, and the journal is the service's.
+// connection that is nil inside.
 func TestTheSuppliersServiceIsUpstreams(t *testing.T) {
 	t.Parallel()
 	svc, err := suppliers.New(suppliers.Config{})
@@ -397,9 +408,5 @@ func TestTheSuppliersServiceIsUpstreams(t *testing.T) {
 	up := NewUpstreams(svc)
 	if conn, err := up.Acquire(uuid.New()); conn != nil || !errors.Is(err, suppliers.ErrNoEndpoint) {
 		t.Errorf("an endpoint it does not have: %v, %v", conn, err)
-	}
-	up.Journal(suppliers.JournalEntry{Request: platform.RequestID(uuid.New()), Seq: 1})
-	if svc.JournalBuffered() != 1 {
-		t.Error("the entry did not reach the service's journal")
 	}
 }

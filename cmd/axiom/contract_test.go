@@ -13,12 +13,13 @@ import (
 	"axiom/internal/accounts"
 )
 
-// TestContractRules: the rules the program enforces are the ones the contract declares: all 18 operations, with the
+// TestContractRules: the rules the program enforces are the ones the contract declares: all 23 operations, with the
 // level and permission each names, and whether it changes data.
 func TestContractRules(t *testing.T) {
+	t.Parallel()
 	c := loadedContract(t)
-	if len(c.byPattern) != 18 {
-		t.Errorf("%d operations, want 18", len(c.byPattern))
+	if len(c.byPattern) != 23 {
+		t.Errorf("%d operations, want 23", len(c.byPattern))
 	}
 	manage, view := mustPermission(t, "api_keys.manage"), mustPermission(t, "api_keys.view")
 	cases := []struct {
@@ -71,6 +72,7 @@ func mustPermissionPtr(t testing.TB, name string) *accounts.Permission {
 // TestContractThePrograminCannotEnforceIsRefused: a contract with an operation the program cannot enforce stops the
 // start, whatever the mistake: it does not serve it unprotected.
 func TestContractTheProgramCannotEnforceIsRefused(t *testing.T) {
+	t.Parallel()
 	file, err := os.ReadFile("../../api/console.yaml") // the contract's source; the program has it only generated into Go
 	if err != nil {
 		t.Fatal(err)
@@ -116,6 +118,7 @@ func request(t *testing.T, method, target, body string) *http.Request {
 // lengths, patterns, enums, ranges, required members, types; each failure names the part of the request and the rule,
 // never the value.
 func TestContractValidation(t *testing.T) {
+	t.Parallel()
 	c := loadedContract(t)
 	const secretValue = "planted-secret-value"
 	long := func(n int) string { return strings.Repeat("a", n) }
@@ -172,6 +175,7 @@ func TestContractValidation(t *testing.T) {
 // TestContractAcceptsWhatItAllows: requests at the edges of the schemas pass, and members the contract does not name are
 // ignored, not refused: a newer page may send more than this program knows.
 func TestContractAcceptsWhatItAllows(t *testing.T) {
+	t.Parallel()
 	c := loadedContract(t)
 	long := func(n int) string { return strings.Repeat("a", n) }
 	for _, tc := range []struct{ pattern, target, body string }{

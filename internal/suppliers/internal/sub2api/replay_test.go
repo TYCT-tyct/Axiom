@@ -199,47 +199,23 @@ func manager0(t testing.TB, srv *server, st *store) adapter.Manager {
 	return m
 }
 
-// readKeys reads the whole keys listing over as many reads as it takes, each from the position the one before gave, as
-// the module does.
-func readKeys(t testing.TB, m adapter.Manager) ([]adapter.KeyState, error) {
-	t.Helper()
-	var from adapter.Listing
-	for range maxPages + 1 {
-		page, err := m.Keys(t.Context(), from)
-		if err != nil {
-			return nil, err
-		}
-		if page.Done {
-			return page.Items, nil
-		}
-		if len(page.Next) == 0 {
-			t.Fatal("a read that did not end the listing gave no position to go on from")
-		}
-		from = page.Next
-	}
-	t.Fatal("the keys listing did not end")
-	return nil, nil
-}
-
-// readOffer reads the whole offer the same way.
+// These fixtures fit in one window; interruption is a test failure.
 func readOffer(t testing.TB, m adapter.Manager) ([]adapter.Group, error) {
 	t.Helper()
-	var from adapter.Listing
-	for range maxPages + 1 {
-		page, err := m.Offer(t.Context(), from)
-		if err != nil {
-			return nil, err
-		}
-		if page.Done {
-			return page.Items, nil
-		}
-		if len(page.Next) == 0 {
-			t.Fatal("a read that did not end the offer gave no position to go on from")
-		}
-		from = page.Next
+	page, err := m.Offer(t.Context(), nil)
+	if err == nil && !page.Done {
+		t.Fatal("the offer did not end")
 	}
-	t.Fatal("the offer did not end")
-	return nil, nil
+	return page.Items, err
+}
+
+func readKeys(t testing.TB, m adapter.Manager) ([]adapter.KeyState, error) {
+	t.Helper()
+	page, err := m.Keys(t.Context(), nil)
+	if err == nil && !page.Done {
+		t.Fatal("the keys listing did not end")
+	}
+	return page.Items, err
 }
 
 // readPaged reads a listing over as many reads as its bucket allows: a read the bucket stopped is given again after the

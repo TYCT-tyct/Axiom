@@ -3,6 +3,7 @@ package secret
 import (
 	"bufio"
 	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -17,21 +18,37 @@ const keyFileVariable = "AXIOM_MASTER_KEY_FILE"
 
 // Keyring is immutable after Load so encryption and decryption can share it across goroutines.
 type Keyring struct {
-	keys   map[uint32]cipher.AEAD
-	latest uint32
+	keys         map[uint32]cipher.AEAD
+	latest       uint32
+	fingerprints map[uint32][32]byte
 }
 
-// Load validates the entire file before publishing a usable keyring, so configuration errors stop startup.
+// Load validates the entire file and uses its legacy highest write version. A database-backed node must use
+// Rotation.Check before sealing: the database's active version overrides this legacy default.
 func Load(path string) (*Keyring, error) {
 	keys, latest, err := readKeyFile(keyFileVariable, path)
 	if err != nil {
 		return nil, err
 	}
-	ring := &Keyring{keys: make(map[uint32]cipher.AEAD, len(keys)), latest: latest}
+	ring := &Keyring{keys: make(map[uint32]cipher.AEAD, len(keys)), latest: latest, fingerprints: make(map[uint32][32]byte, len(keys))}
 	for version, key := range keys {
 		ring.keys[version] = newGCM(key[:])
+		ring.fingerprints[version] = sha256.Sum256(key[:])
 	}
 	return ring, nil
+}
+
+// LoadSecret reads the file variable names, in the keyring's format and with its protection, and returns the newest
+// key: the one a secret a node derives everything from is made of, where the derivation must not change with a stored
+// version (the gateway's identity secret). Rotating it changes every value derived from it, which is why it is a file
+// of its own rather than one of the keyring's.
+func LoadSecret(variable, path string) ([]byte, error) {
+	keys, latest, err := readKeyFile(variable, path)
+	if err != nil {
+		return nil, err
+	}
+	key := keys[latest]
+	return key[:], nil
 }
 
 // readKeyFile reads a protected file of version:base64 lines, each a 32-byte key, and returns the keys by version

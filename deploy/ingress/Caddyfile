@@ -1,0 +1,118 @@
+# The production edge (deploy/compose.edge.yaml): TLS, HTTP/2, and the source restrictions of the listeners that are not
+# for everyone. The runbook is docs/ops/backup-restore.md「生产入口」.
+#
+# Every hostname and every range comes from the environment, so this file is the same in every deployment. An empty
+# hostname is a parse error at start, which is the right way round: the edge serves nothing rather than something
+# unexpected. The issuer is named as a module rather than as `tls {$X}`: that form with an empty value leaves a bare `tls`,
+# which Caddy rejects — and an empty value is exactly what a deployment with public certificates used to pass. Caddy gets
+# and renews those certificates itself over the ACME HTTP challenge (port 80 must reach this container) and keeps its
+# account key in its data volume; `docker compose logs caddy` is where a failed challenge says why. A deployment with no
+# public DNS — the rehearsal, a lab — sets AXIOM_EDGE_TLS_ISSUER=internal and gets the same sites under Caddy's own CA (see
+# the volume it keeps that in).
+#
+# The console and the model API are two hostnames, not one: a domain in accounts.site_domains belongs to one surface,
+# and the program refuses the other surface's paths under it (the console's guard answers 404, the gateway 401). Both
+# sites reverse_proxy with the request as it arrived, so the Host header the program resolves the site by is the one the
+# client sent.
+#
+# Indented with spaces like the rest of the repository, which `caddy fmt` would rewrite to tabs: it warns about that once
+# at start and loads the file as it is. Nothing else in the file departs from what `caddy fmt` produces.
+#
+# What is deliberately absent:
+#  - No flush_interval and no response buffering: Caddy flushes a text/event-stream response on every write and passes it
+#    on as it arrives, and it cancels the upstream request when the client disconnects, which is what a stopped generation
+#    needs. A negative flush_interval would keep the call running after the client is gone.
+#  - No encode: compressing text/* buffers an event stream and delays every token.
+#  - No trusted_proxies: this is the first hop, so incoming X-Forwarded-* values are ignored and the headers are set from
+#    the connection's peer. With a CDN in front, add the CDN's ranges to `servers > trusted_proxies`, set
+#    `trusted_proxies_strict`, and close port 443 to everything else; otherwise the program believes any client that
+#    sends its own X-Forwarded-For.
+#  - No total write deadline: a long answer is not a fault, and the program bounds each call itself.
+{
+  servers {
+    # TCP only: the published ports are TCP, so advertising HTTP/3 would cost the first UDP round trip for nothing.
+    protocols h1 h2
+    timeouts {
+      # A header that never arrives is slowloris. A body slower than this is not an upload the program would accept
+      # either: its own body timeout is two minutes.
+      read_header 10s
+      read_body 2m
+      # The default closes a response that wrote nothing for a minute. A generation can pause longer than that between
+      # tokens, and the program's per-call deadline is what bounds a stuck one.
+      write_idle 1h
+    }
+  }
+}
+
+# The console hostname: the site's pages, the console and its API. `issuer acme`, the default, is Caddy getting public
+# certificates by itself; AXIOM_EDGE_TLS_ISSUER=internal makes its own CA, which is what a deployment with no public DNS
+# uses.
+{$AXIOM_EDGE_CONSOLE_HOST} {
+  tls {
+    issuer {$AXIOM_EDGE_TLS_ISSUER:acme}
+  }
+
+  # The program is served over https from here, so tell browsers not to try http again. Without includeSubDomains: only
+  # this host is known to be https.
+  header Strict-Transport-Security "max-age=31536000"
+
+  # The admin app and its API answer on the admin hostname below; through this one they do not exist.
+  @adminAPI path /api/admin/v1/*
+  handle @adminAPI {
+    respond 404
+  }
+
+  # The console and its API answer the configured ranges only, open by default: a private deployment can keep the console
+  # off the public internet while the site's pages stay reachable.
+  @consoleOff {
+    path /console/* /api/console/v1/*
+    not remote_ip {$AXIOM_EDGE_CONSOLE_ALLOW_CIDRS:0.0.0.0/0 ::/0}
+  }
+  handle @consoleOff {
+    respond 403
+  }
+
+  handle {
+    # The Host header is passed through unchanged, which the program needs: it resolves the site, and the surface, by it.
+    reverse_proxy axiom:8080
+  }
+}
+
+# The API hostname: the site's model API, which streams. A domain belongs to one surface, so this is a domain of its own
+# in the site's registration (axiom site init --api); under it the program answers the console's paths with 404 and the
+# model API with 401 until a key is given.
+{$AXIOM_EDGE_API_HOST} {
+  tls {
+    issuer {$AXIOM_EDGE_TLS_ISSUER:acme}
+  }
+
+  header Strict-Transport-Security "max-age=31536000"
+
+  @adminAPI path /api/admin/v1/*
+  handle @adminAPI {
+    respond 404
+  }
+
+  handle {
+    reverse_proxy axiom:8080
+  }
+}
+
+# The admin hostname, answering 403 everywhere but the configured ranges. Their default is this machine alone, so a
+# forgotten variable closes the listener instead of publishing it.
+{$AXIOM_EDGE_ADMIN_HOST} {
+  tls {
+    issuer {$AXIOM_EDGE_TLS_ISSUER:acme}
+  }
+
+  header Strict-Transport-Security "max-age=31536000"
+
+  @offSite not remote_ip {$AXIOM_EDGE_ADMIN_ALLOW_CIDRS:127.0.0.1/32 ::1/128}
+  handle @offSite {
+    respond 403
+  }
+
+  handle {
+    reverse_proxy axiom:8082
+  }
+}

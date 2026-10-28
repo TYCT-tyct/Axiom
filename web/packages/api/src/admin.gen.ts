@@ -198,6 +198,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/sites/{site_id}/key-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's limits on the keys of an account
+         * @description The limits the site sets itself and what they come to over the defaults in code. An account without limits of its own is held to these.
+         */
+        get: operations["getSiteKeyLimits"];
+        /**
+         * Set a site's limits on the keys of an account
+         * @description Replaces the limits the site sets itself: a limit left out falls back to the default in code. These are not part of the site's settings (`updateSiteSettings`), so that request, which replaces those whole, leaves them as they are. A request outside the bounds `KeyLimits` states is a 400. A node applies the change at once if it served the request, and the others when they reload the sites, within 30 seconds; the change is audited.
+         */
+        put: operations["updateSiteKeyLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tiers": {
         parameters: {
             query?: never;
@@ -255,6 +281,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/accounts/{account_id}/key-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set an account's own limits on its keys
+         * @description Replaces the limits of the account itself: a limit left out is the site's. The account's limits are in `AccountDetail`. A request outside the bounds `KeyLimits` states is a 400. The change is audited, and a key being made meets the limits whole, the new or the old. Lowering a limit below what the account holds deletes no key: the account only cannot make more.
+         */
+        put: operations["updateAccountKeyLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/accounts/{account_id}/credit-grants": {
         parameters: {
             query?: never;
@@ -266,7 +312,7 @@ export interface paths {
         put?: never;
         /**
          * Give an account credit
-         * @description Adds a gift to the account: a credit batch from the source "gift", recorded in the ledger as a gift expense and audited with the reason. The amount is positive and within the limit for one grant (the money limits of the control plane, docs/domains/operations.md), else 422. A batch given an `expires_at` expires then, and what is left of it is written off; without one it does not expire. Only gifts exist in M1; credit that was paid for offline comes with the payments design.
+         * @description Adds credit to the account: a credit batch, its ledger entries and an audit entry with the reason and the source (docs/domains/billing.md「额度批次」). The source `gift` (the default) gives `amount` in the site's currency, recorded as a gift expense. The source `offline_payment` records money an administrator received outside the payment channels: `payment` says how much, in which currency, and where it was received; the ledger books it as a top-up (cash, the user's balance, and across currencies the exchange gain or loss), and the credit is what was paid at the current reference exchange rate (none in the site's own currency), rounded down. The credit is positive and within the limit for one grant (the money limits of the control plane, docs/domains/operations.md), else 422; so is a payment that is not whole minor units of its currency, in a currency with no reference rate to the site's, or a gift with a `payment` or a payment with an `amount`. A batch given an `expires_at` expires then, and what is left of it is written off; without one it does not expire.
          */
         post: operations["grantCredit"];
         delete?: never;
@@ -321,6 +367,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/suppliers/endpoint-tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test one of a supplier's endpoints with a real generation
+         * @description Calls the endpoint as a request would, in the format given, streamed, with the output capped at 16 tokens and no reasoning asked for, and reads the whole answer, never cutting it short: a supplier that ignores a disconnect bills the generation anyway. The call's cost is booked at a definite upper bound, in the supplier's own unit, with a test flag and no tenant: the platform pays it, nothing is reserved and no ledger is settled. The estimate is never compared with the supplier's charge, so no test can move the endpoint's cost state.
+         *
+         *     `passed`: a 2xx answer read to its normal end. `failed`: a failure the endpoint is at fault for. `inconclusive`: anything else — the test's own deadline, the key, the route, the supplier's balance, a rate limit, or the request itself — says nothing about the endpoint.
+         *
+         *     Limits: 10 a minute per session, because each test is a generation the platform pays for.
+         */
+        post: operations["testSupplierEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/suppliers/{supplier_id}": {
         parameters: {
             query?: never;
@@ -331,8 +401,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * One supplier with its groups and keys
-         * @description The supplier, its groups with their ratios, the keys bound to groups, and the keys the supplier lists that are bound to none. Read from what the sync last stored, not from the supplier, so it is cheap.
+         * One supplier with its groups, keys and endpoints
+         * @description The supplier, its groups with their ratios, the keys bound to groups, the keys the supplier lists that are bound to none, and its endpoints, by upstream name. Read from what the sync last stored, not from the supplier, so it is cheap.
          */
         get: operations["getSupplier"];
         put?: never;
@@ -373,8 +443,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Start removing a supplier
-         * @description Takes the supplier out of the snapshot, waits for its calls in flight, reads its charge records to the end and deletes its credentials, in steps that can be repeated (docs: internal/suppliers README「同步」). It answers at once with the supplier in `removing`; it ends `removed`. Axiom does not write to the supplier in M1, so the keys it made there are listed for a person to revoke. Sending it again while removing returns the supplier as it is.
+         * Remove a supplier
+         * @description Takes the supplier out of routing at once and ends it `removed`, in one transaction: its login is deleted, the sealed key of each credential is cleared and the credential becomes `erased` (the row stays, because calls made with it point at it). Calls in flight end with the key they hold. Axiom does not write to the supplier in M1, so the keys it used there are not revoked: the credentials stay listed as `erased` with their `upstream_key_ref`, for a person to revoke at the supplier, and the audit entry records how many (`keys_to_revoke_count`). Sending it again returns the supplier as it is.
          */
         post: operations["removeSupplier"];
         delete?: never;
@@ -457,6 +527,26 @@ export interface paths {
          * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected.
          */
         post: operations["bindSupplierKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a credential's concurrency and account RPM ceiling
+         * @description Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys and endpoints, in this node's memory. A credential is eligible while that shared count is below its configured ceiling; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later; concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
+         */
+        put: operations["setSupplierCredentialLimits"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -687,6 +777,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/pricing/exchange-rates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List current manual exchange rates */
+        get: operations["listExchangeRates"];
+        put?: never;
+        /**
+         * Append a manual exchange rate
+         * @description One base buys numerator/denominator quote. Both directions share a normalized history. Every write must be within 10^-6 to 10^6. Ordinary adjustments may differ at most fivefold; correction bypasses only that relative check and requires an audited reason. The first value requires kind initial and expected_version 0; without a trusted reference a reversed first value cannot be detected automatically. A stale expected version returns 409. The range and the fivefold limit are rules on the numerator and denominator together, so their 422 points at the whole body (an empty pointer).
+         */
+        post: operations["setExchangeRate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/pricing/exchange-rates/{base}/{quote}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a pair's immutable history */
+        get: operations["exchangeRateHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/pricing/rules": {
         parameters: {
             query?: never;
@@ -702,7 +830,7 @@ export interface paths {
         put?: never;
         /**
          * Add a pricing rule
-         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices follow the rules automatically; the break-even floor always applies and raises a price a rule would set below it. What a rule would do is shown by `previewPricing` first.
+         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). This release prices everyone alike, so the audience can only be `all`: a rule for one account or one tier is refused (422, pointing at `/rule/audience/kind`). It prices a model, an author or everything, by the reference price times a multiplier read as the site's currency (`currency_conversion` `face`) or by a fixed price list: a rule for an endpoint, group, supplier or source type, a `cost_plus` method, or an `exchange` conversion would not be applied, so it is refused too (422, pointing at `/rule/target/kind`, `/rule/method/kind` or `/rule/method/currency_conversion`). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices follow the rules automatically. This release applies no break-even floor (docs/domains/billing.md「定价」): a rule's price is the price. What a rule would do is shown by `previewPricing` first.
          */
         post: operations["createPricingRule"];
         delete?: never;
@@ -721,7 +849,7 @@ export interface paths {
         get?: never;
         /**
          * Change a pricing rule
-         * @description Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`. A rule is never deleted, so the history stays: disable it. Changes of price follow the rules' own limits on the size of a change (docs/domains/operations.md「风险分级与审批」).
+         * @description Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`. A rule is never deleted, so the history stays: disable it. The audience can only be `all` in this release, and the target and method only what a rule can price (422, as for creating a rule). Changes of price follow the rules' own limits on the size of a change (docs/domains/operations.md「风险分级与审批」).
          */
         put: operations["updatePricingRule"];
         post?: never;
@@ -755,6 +883,36 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ExchangeRateInput: {
+            base: string;
+            quote: string;
+            /** @description Positive integer at most 10^18 */
+            numerator: string;
+            /** @description Positive integer at most 10^18 */
+            denominator: string;
+            /** Format: int64 */
+            expected_version: number;
+            kind: string;
+            reason: string;
+        };
+        ExchangeRate: {
+            id: components["schemas"]["Uuid"];
+            base: string;
+            quote: string;
+            numerator: string;
+            denominator: string;
+            /** Format: int64 */
+            version: number;
+            source: string;
+            kind: string;
+            reason: string;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ExchangeRateList: {
+            data: components["schemas"]["ExchangeRate"][];
+        };
         /** @description The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response. */
         Error: {
             error: components["schemas"]["ErrorDetail"];
@@ -775,7 +933,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
         Money: {
             /** @example 1500000000 */
@@ -906,6 +1064,25 @@ export interface components {
             settings: components["schemas"]["SiteSettings"];
             reason: components["schemas"]["Reason"];
         };
+        /** @description Limits on the call keys of an account: how many it may hold that are not deleted (`max_keys`), and how many it may make in an hour, deleted ones too (`creations_per_hour`). A limit that is absent is not set, and the level above applies: the site's for an account, the default in code for a site. Each is from 1 to 10,000. */
+        KeyLimits: {
+            max_keys?: number;
+            creations_per_hour?: number;
+        };
+        EffectiveKeyLimits: {
+            max_keys: number;
+            creations_per_hour: number;
+        };
+        KeyLimitsView: {
+            /** @description The limits set at this level. */
+            limits: components["schemas"]["KeyLimits"];
+            /** @description What applies here, `limits` over the level above. */
+            effective: components["schemas"]["EffectiveKeyLimits"];
+        };
+        KeyLimitsUpdate: {
+            limits: components["schemas"]["KeyLimits"];
+            reason: components["schemas"]["Reason"];
+        };
         UserSummary: {
             id: components["schemas"]["UserId"];
             account_id: components["schemas"]["AccountId"];
@@ -937,11 +1114,15 @@ export interface components {
                 email: string;
             };
             balance: components["schemas"]["Balance"];
+            key_limits: components["schemas"]["KeyLimitsView"];
             /** Format: date-time */
             created_at: string;
         };
+        /** @description A gift needs `amount`, in the site's currency; an offline payment needs `payment` instead. */
         CreditGrantRequest: {
-            amount: components["schemas"]["Money"];
+            source?: components["schemas"]["CreditSource"];
+            amount?: components["schemas"]["Money"];
+            payment?: components["schemas"]["OfflinePayment"];
             /**
              * Format: date-time
              * @description UTC, in the future. Absent: the credit does not expire.
@@ -949,10 +1130,25 @@ export interface components {
             expires_at?: string;
             reason: components["schemas"]["Reason"];
         };
+        /**
+         * @description Where the credit comes from. Absent in a request: gift.
+         * @enum {string}
+         */
+        CreditSource: "gift" | "offline_payment";
+        /** @description Money received outside the payment channels. `amount` is what was paid, in its own currency, one an exchange rate can be kept for, and in whole minor units of it. */
+        OfflinePayment: {
+            amount: components["schemas"]["Money"];
+            /** @description Where it was received, such as a bank account. */
+            channel: string;
+        };
+        /** @description `amount` is the credit, in the site's currency. An offline payment has `payment`, and `exchange_rate` when it was converted from another currency. */
         CreditGrant: {
             id: components["schemas"]["Uuid"];
             account_id: components["schemas"]["AccountId"];
+            source: components["schemas"]["CreditSource"];
             amount: components["schemas"]["Money"];
+            payment?: components["schemas"]["OfflinePayment"];
+            exchange_rate?: components["schemas"]["ExchangeRate"];
             /** Format: date-time */
             expires_at?: string;
             /** Format: date-time */
@@ -960,7 +1156,7 @@ export interface components {
             balance_after: components["schemas"]["Balance"];
         };
         /**
-         * @description `connecting`: not yet read; `active`: syncing and routable; `low_balance`: syncing, balance under the alert line; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on purpose; `removing` and `removed`: see `removeSupplier`.
+         * @description `connecting`: not yet read; `active`: syncing, and routable while its balance is above zero; `low_balance`: syncing, balance under the alert line, routable on the same condition; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on purpose; `removed`: see `removeSupplier`; `removing` is only what a removal of an earlier version left behind, and removing again ends it.
          * @enum {string}
          */
         SupplierStatus: "connecting" | "active" | "low_balance" | "needs_attention" | "paused" | "removing" | "removed";
@@ -1026,7 +1222,7 @@ export interface components {
             kind: string;
             origin: string;
             upstream_account: string;
-            /** @description The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it. */
+            /** @description The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it. It must be the site's currency or one the manual exchange rates support (USD, CNY, EUR, GBP, JPY, HKD, SGD, AUD, CAD, CHF), else 422 pointing at this member: a supplier in any other would have no rate to convert its costs with. */
             settlement_currency: string;
             login: components["schemas"]["SupplierLogin"];
             reason: components["schemas"]["Reason"];
@@ -1070,12 +1266,21 @@ export interface components {
             group_id: components["schemas"]["Uuid"];
             upstream_key_ref: string;
             /** @enum {string} */
-            status: "binding" | "active" | "upstream_disabled" | "quota_exhausted" | "expired" | "disabled";
+            status: "binding" | "active" | "upstream_disabled" | "quota_exhausted" | "expired" | "disabled" | "erased";
             /** Format: date-time */
             cooldown_until?: string;
             /** Format: date-time */
             expires_at?: string;
             max_concurrency: number;
+            /** @description The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling. */
+            requests_per_minute?: number;
+        };
+        CredentialLimits: {
+            /** @description The calls the key has in flight at once. A new binding starts at 4. */
+            max_concurrency: number;
+            /** @description Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling. */
+            requests_per_minute?: number | null;
+            reason: components["schemas"]["Reason"];
         };
         /** @description A key the supplier lists that Axiom has not bound to a group. */
         UpstreamKey: {
@@ -1085,10 +1290,23 @@ export interface components {
             /** @enum {string} */
             status: "active" | "disabled" | "quota_exhausted" | "expired";
         };
+        /** @description One model in one of the supplier's groups, as the sync projected it: what testSupplierEndpoint is given. Only an enabled endpoint whose cost is `known` can be called, and so tested. */
+        SupplierEndpoint: {
+            id: components["schemas"]["Uuid"];
+            group_id: components["schemas"]["Uuid"];
+            model_id: components["schemas"]["Uuid"];
+            /** @description The model's name at the supplier. */
+            upstream_name: string;
+            formats: components["schemas"]["ModelFormat"][];
+            /** @enum {string} */
+            cost_state: "known" | "unknown" | "conflict";
+            enabled: boolean;
+        };
         SupplierDetail: {
             supplier: components["schemas"]["Supplier"];
             groups: components["schemas"]["SupplierGroup"][];
             credentials: components["schemas"]["SupplierCredential"][];
+            endpoints: components["schemas"]["SupplierEndpoint"][];
             unbound_keys: components["schemas"]["UpstreamKey"][];
         };
         BindKey: {
@@ -1098,6 +1316,56 @@ export interface components {
         };
         /** @enum {string} */
         ModelFormat: "messages" | "responses" | "chat";
+        EndpointTestRequest: {
+            endpoint_id: components["schemas"]["Uuid"];
+            /** @description The format to test it in; it must be one the endpoint serves. */
+            format: components["schemas"]["ModelFormat"];
+            reason: components["schemas"]["Reason"];
+        };
+        /**
+         * @description `passed`: a 2xx read to its normal end. `failed`: a failure the endpoint is at fault for, or a stream that broke. `inconclusive`: another scope's failure, something the supplier refused, or the test's own limit — nothing the endpoint can be judged by.
+         * @enum {string}
+         */
+        EndpointTestOutcome: "passed" | "failed" | "inconclusive";
+        /**
+         * @description Why the test did not pass. `timeout` and `memory` are the test's own limits, not the supplier's.
+         * @enum {string}
+         */
+        EndpointTestCause: "timeout" | "memory" | "stream_broken" | "upstream_error" | "overloaded" | "rate_limited" | "context_too_long" | "content_rejected" | "bad_request" | "model_not_found" | "not_permitted" | "credential_rejected" | "credential_quota_exhausted" | "supplier_balance_low" | "transport" | "tool_input" | "unknown";
+        EndpointTestProblem: {
+            cause: components["schemas"]["EndpointTestCause"];
+            /**
+             * @description Whose fault it is: the endpoint's, the key's, the group's, the supplier's, the request's, or the route to the supplier. Absent when the test's own limit ended it.
+             * @enum {string}
+             */
+            scope?: "request" | "egress" | "endpoint" | "credential" | "group" | "supplier";
+        };
+        EndpointTest: {
+            /** @description The platform's own ID of the test, which its cost row and its audit entry are keyed by. */
+            request_id: components["schemas"]["Uuid"];
+            endpoint_id: components["schemas"]["Uuid"];
+            model_id: components["schemas"]["Uuid"];
+            /** @description The model's name at the supplier, which the call sent. */
+            upstream_model: string;
+            format: components["schemas"]["ModelFormat"];
+            outcome: components["schemas"]["EndpointTestOutcome"];
+            problem?: components["schemas"]["EndpointTestProblem"];
+            /** @description The supplier's HTTP status; 0 when it answered nothing. */
+            upstream_status?: number;
+            /** @description The supplier's own ID of the call, when it gave one: the key its charge carries. */
+            upstream_request_id?: string;
+            /** @description Absent when no content came. */
+            first_token_ms?: number;
+            /** @description The whole test: waiting for the answer and reading it. */
+            total_ms: number;
+            /** @description Zero when the supplier is known not to have executed the call; otherwise the highest price of the prompt's tokens and of the 16-token cap over every reachable context band, in the supplier's unit. A definite upper bound, never what the supplier reported. */
+            estimated_native: components["schemas"]["Decimal"];
+            /**
+             * @description The unit the supplier counts its balance in, which the estimate is in.
+             * @enum {string}
+             */
+            native_unit: "quota" | "usd";
+        };
         PendingMapping: {
             supplier_id: components["schemas"]["Uuid"];
             group_id: components["schemas"]["Uuid"];
@@ -1322,13 +1590,13 @@ export interface components {
             kind: "endpoint" | "group" | "supplier" | "model" | "author" | "source_type" | "all";
             id?: string;
         };
-        /** @description Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. */
+        /** @description Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. This release accepts only `all` (422 for the others, pointing at `/rule/audience/kind`) and the listing can show the other two only for rules a later release wrote. */
         PricingAudience: {
             /** @enum {string} */
             kind: "account" | "tier" | "all";
             id?: string;
         };
-        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency. `fixed`: `schedule` is the price. The members of the other kinds must be absent. */
+        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the reference price is already in that currency: this release has no exchange rate, so a reference price in another currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be absent. */
         PricingMethod: {
             /** @enum {string} */
             kind: "cost_plus" | "reference_multiplier" | "fixed";
@@ -1340,7 +1608,7 @@ export interface components {
             currency_conversion?: "exchange" | "face";
             schedule?: components["schemas"]["PriceSchedule"];
         };
-        /** @description Limits on the price a rule sets, as ratios. `min_margin_ratio` raises the break-even floor's profit margin for what the rule prices; the floor itself always applies. `reference_min_ratio` and `reference_max_ratio` keep the price between those multiples of the reference price. */
+        /** @description Limits on the price a rule sets, as ratios. This release does not apply them: a request that carries any member (`min_margin_ratio`, `reference_min_ratio`, `reference_max_ratio`) is refused as 422 with the field pointer `/rule/constraints/<member>`, so send `{}`. A stored rule that still has one is not priced, and saving it without constraints clears them (#234). */
         PricingConstraints: {
             min_margin_ratio?: components["schemas"]["Decimal"];
             reference_min_ratio?: components["schemas"]["Decimal"];
@@ -1384,7 +1652,7 @@ export interface components {
             tier_id?: components["schemas"]["TierId"];
             /** @description Show what this account pays: its tier, and the rules written for the account itself. Not with `tier_id` (400). */
             account_id?: components["schemas"]["AccountId"];
-            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only. */
+            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only; its audience can only be `all` in this release (422, pointing at `/rule/audience/kind`). The site holds one rule for each target and audience, and the stored one would price the models, so a rule that would sit beside another stored rule with the same target and audience is refused: a rule to add, because it would be a second rule for them (409, as creating the rule is), and a replacement, because it would collide with a stored rule other than `replaces_rule_id` (422, pointing at `/replaces_rule_id`). */
             rule?: components["schemas"]["PricingRuleInput"];
             replaces_rule_id?: components["schemas"]["Uuid"];
         };
@@ -1394,7 +1662,7 @@ export interface components {
             /** @description The endpoint this row prices. Absent for a model with no endpoint, which has the one row. */
             endpoint_id?: components["schemas"]["Uuid"];
             /**
-             * @description `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
+             * @description `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule sets a price for the model by a way of pricing this release has, so the model has no sale price at all: its reference price is never sold in its place.
              * @enum {string}
              */
             status: "priced" | "cost_unknown" | "below_floor" | "unpriced";
@@ -1445,7 +1713,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `stale_revision`, `idempotency_key_reused`). */
+        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`, `idempotency_key_reused`). */
         Conflict: {
             headers: {
                 [name: string]: unknown;
@@ -1774,6 +2042,68 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    getSiteKeyLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The limits */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyLimitsView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteKeyLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyLimitsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The limits as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyLimitsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listTiers: {
         parameters: {
             query?: {
@@ -1855,6 +2185,42 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateAccountKeyLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyLimitsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The limits as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyLimitsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };
@@ -1989,6 +2355,41 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    testSupplierEndpoint: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EndpointTestRequest"];
+            };
+        };
+        responses: {
+            /** @description What the test found, and what it was booked at. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EndpointTest"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getSupplier: {
         parameters: {
             query?: never;
@@ -2069,8 +2470,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Removing. */
-            202: {
+            /** @description The supplier, `removed`. */
+            200: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                     [name: string]: unknown;
@@ -2217,6 +2618,44 @@ export interface operations {
         responses: {
             /** @description Binding. */
             201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSupplierCredentialLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                credential_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialLimits"];
+            };
+        };
+        responses: {
+            /** @description The credential as changed */
+            200: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                     [name: string]: unknown;
@@ -2635,6 +3074,94 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    listExchangeRates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One current version per normalized pair */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeRateList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setExchangeRate: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExchangeRateInput"];
+            };
+        };
+        responses: {
+            /** @description The appended normalized version */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeRate"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    exchangeRateHistory: {
+        parameters: {
+            query?: {
+                /** @description The version to continue from, exclusive; omit it to start from the newest. */
+                before_version?: number;
+            };
+            header?: never;
+            path: {
+                base: string;
+                quote: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description At most 100 versions newest first; use the last version as before_version to continue */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExchangeRateList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listPricingRules: {
         parameters: {
             query?: never;
@@ -2755,6 +3282,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };

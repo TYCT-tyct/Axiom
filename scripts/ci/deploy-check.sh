@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI's deployment checks (ci.yml, job build): deploy this tree with `just up`, check the node runs it, upgrade a
+# CI's deployment checks (ci.yml, job deploy): deploy this tree with `just up`, check the node runs it, upgrade a
 # deployment from before the migration administrator in place, and always tear down with the database.
 #
 # The job owns its compose project, image tag and volumes, named from RUNNER_NAME and its workspace path
@@ -20,7 +20,7 @@ export DEPLOY_PORT= DEPLOY_ADMIN_PORT=
 
 compose() { docker compose -f deploy/compose.yaml "$@"; }
 
-# No 45-second graceful stop in CI (the compose file's local default): a short one finishes before the runner kills the
+# No 90-second graceful stop in CI (the compose file's default): a short one finishes before the runner kills the
 # step, and `down` by project name works before deploy/.env exists.
 down() { docker compose --project-name "$COMPOSE_PROJECT_NAME" down --volumes --timeout 5; }
 

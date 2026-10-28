@@ -10,6 +10,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 )
 
@@ -22,6 +23,7 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	relay := protocol.NewRelay(s.c.Format, a.entry.Target.Format, body, uc, protocol.RelayOptions{
 		ID: s.c.ID.String(), Model: s.c.Request.Model, Created: s.start.Unix(), Memory: s.x.Memory, Aggregate: s.aggregate,
 	})
+	s.live = relay
 	idleFor := s.x.Limits.cfg.IdleTimeout
 	idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
 	defer idle.Stop()
@@ -31,7 +33,7 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	// Once the upstream is no longer read, a write that blocks lets it generate nothing more on the call's account.
 	defer s.setWriteFor(s.x.Limits.cfg.WriteTimeout)
 	for {
-		st, err := relay.Next()
+		st, err := a.next(relay)
 		if err != nil {
 			return a.broke(ctx, relay, err)
 		}
@@ -59,24 +61,39 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	}
 }
 
-// commit is the first content: from here the status is 200 and nothing is retried (I4). The journal learns of it
-// before the client does, so that a crash after the first write still leaves the cleanup the attempt to settle by. A
-// client that is gone gets nothing, and the attempt, if it goes on, is not committed. A client that wants no stream is
-// written to once, at the end: its status is not fixed here, so an attempt that fails may still be given up on (I4).
+// next reads the relay's next step, dating the upstream's first content and its end or failure as they are read: the
+// meter may then wait for an extension, which is the gateway's time, not the upstream's (quality's measurements).
+func (a *attempt) next(relay *protocol.Relay) (protocol.Step, error) {
+	st, err := relay.Next()
+	switch {
+	case err != nil, st.Kind == protocol.StepUpstreamDone:
+		a.obs.Ended = time.Now()
+	case st.Kind == protocol.StepCommit:
+		a.obs.FirstToken = time.Now()
+	}
+	return st, err
+}
+
+// commit is the first content: from here the status is 200 and nothing is retried (I4). A client that is gone gets
+// nothing, and the attempt, if it goes on, is not committed. A client that wants no stream is written to once, at the
+// end: its status is not fixed here, so an attempt that fails may still be given up on (I4).
 func (s *session) commit(a *attempt, out []byte) {
 	a.content = true
+	s.state = a.state // the attempt answers the call: its upstream's state is the one that goes with the answer
 	if s.isGone() {
 		return
 	}
+	a.obs.Delivered = true
 	if s.aggregate {
 		return
 	}
-	s.journal(a, true)
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	h := s.w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
 	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Accel-Buffering", "no") // an nginx in front would otherwise hold the events back until its buffer fills
+	s.relayState()
 	s.w.WriteHeader(http.StatusOK)
 	if !s.put(out) {
 		return
@@ -166,6 +183,7 @@ func (s *session) respond(status int, body []byte) {
 	s.started = true
 	h := s.w.Header()
 	h.Set("Content-Type", "application/json")
+	s.relayState()
 	s.w.WriteHeader(status)
 	until := time.Now().Add(max(s.writeFor, time.Duration(int64(len(body))*int64(time.Second)/respondRate)))
 	for b := body; len(b) > 0; {
@@ -193,12 +211,15 @@ const (
 
 // answer writes the error a call that forwarded nothing ends with, in the client's own format, with what was charged
 // anyway when the settlement says so.
-func (s *session) answer(e ended, fin *protocol.Final) {
+func (s *session) answer(ctx context.Context, e ended, fin *protocol.Final) {
 	status, body := protocol.RenderError(s.c.Format, e.err, fin)
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if s.gone || s.started || s.req.Context().Err() != nil {
 		return
+	}
+	if status == http.StatusTooManyRequests { // the only 429 a call ends in after its admission: no credential had a slot
+		s.x.Limits.refused(ctx, errCredentialsBusy)
 	}
 	h := s.w.Header()
 	h.Set("Content-Type", "application/json")
@@ -245,6 +266,7 @@ func (s *session) isStarted() bool {
 // is ended where it is.
 func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (step, ended) {
 	s := a.s
+	a.obs.Cut, a.obs.Fault = cutOf(ctx), protocol.FaultOf(err)
 	if failed, ok := errors.AsType[*extendFailed](context.Cause(ctx)); ok {
 		return a.truncate(relay, cut(failed.err))
 	}
@@ -260,7 +282,7 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 		return over, ended{relay: relay, err: e}
 	}
 	rec.Result = billing.FailedBeforeCommit
-	drop(relay)
+	s.drop(relay)
 	return s.unanswered(a, e, again)
 }
 
@@ -306,13 +328,13 @@ func (s *session) brokeAggregate(a *attempt, relay *protocol.Relay, e protocol.E
 	rec := &s.ends[a.i]
 	rec.Result = billing.FailedBeforeCommit
 	if !again { // the client is gone, the call is out of road or the reservation failed: the error alone answers it
-		drop(relay)
+		s.drop(relay)
 		return s.unanswered(a, e, false)
 	}
 	if a.content {
 		s.keep(relay) // it answers the call if no entry is left, and nothing else of it reaches the client
 	} else {
-		drop(relay)
+		s.drop(relay)
 	}
 	return s.unanswered(a, e, true)
 }
@@ -350,17 +372,18 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 	s := a.s
 	rec := &s.ends[a.i]
 	a.usage = relay.Usage()
+	a.obs.Done, a.obs.Empty = true, !a.content
 	if s.aggregate {
 		rec.Finish = billing.FinishStop
 		switch {
 		case s.isGone():
 			rec.Result, rec.Finish = billing.FailedBeforeCommit, billing.FinishCancelled
-			drop(relay)
+			s.drop(relay)
 			s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 			return over, ended{}
 		case !a.content: // a 200 with nothing in it is a failure: the next entry answers
 			rec.Result = billing.FailedBeforeCommit
-			drop(relay)
+			s.drop(relay)
 			s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
 			return nextEntry, ended{}
 		}
@@ -377,7 +400,7 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 		return over, ended{relay: relay, done: true}
 	}
 	rec.Result = billing.FailedBeforeCommit
-	drop(relay)
+	s.drop(relay)
 	if s.isGone() {
 		rec.Finish = billing.FinishCancelled
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
@@ -394,6 +417,7 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 	s := a.s
 	a.cancel(errCut)
+	a.obs.Cut = quality.Ours
 	rec := &s.ends[a.i]
 	a.usage, rec.Finish = relay.Usage(), billing.FinishTruncated
 	s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
@@ -403,7 +427,7 @@ func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 		return over, e
 	}
 	rec.Result = billing.FailedBeforeCommit
-	drop(relay)
+	s.drop(relay)
 	if s.isGone() {
 		return over, ended{}
 	}
@@ -411,5 +435,11 @@ func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 }
 
 // drop lets go of a relay whose stream is not going to be used: its ending is written for nobody, which gives back
-// what it held of the node's memory.
-func drop(relay *protocol.Relay) { relay.Fail(protocol.Error{Type: protocol.UpstreamFailed}, nil) }
+// what it held of the node's memory, and the session lets go of the relay itself. A panic before that leaves it in live.
+func (s *session) drop(relay *protocol.Relay) {
+	relay.Fail(protocol.Error{Type: protocol.UpstreamFailed}, nil)
+	relay.Release() // an aggregate relay keeps its budget past Fail for a body that will not be written
+	if s.live == relay {
+		s.live = nil
+	}
+}

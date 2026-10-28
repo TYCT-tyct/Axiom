@@ -1,5 +1,7 @@
-# Project checks; the base checks are in workflow.yml. Every job here is a check the ruleset protecting main
-# requires (manage.py protect reads this file), so keep the names, and add or rename jobs only as the skill says.
+# Project checks; the base checks are in workflow.yml. The ruleset protecting main requires the `build` job below, the
+# aggregator of the parts that do the work; the parts themselves are not required checks. Keep that name. Note that
+# manage.py protect reads this file and requires every job in it, so it is not run while the ruleset is hand-edited (like
+# `merge-train`, see .github/project-workflow.toml).
 name: ci
 
 on:
@@ -9,6 +11,19 @@ on:
     types: [opened, synchronize, reopened, ready_for_review] # ready_for_review: a draft gets its first build when it is marked ready
   push:
     branches: [main]
+  # The merge train (train.yml, scripts/train.py) builds each train branch here. GITHUB_TOKEN's pushes start no workflow,
+  # so it dispatches this one: with base, the train is checked like a pull request from base, its PRs' whole change
+  # deciding what runs; without base (after a train lands on main), like a push to main.
+  workflow_dispatch:
+    inputs:
+      base:
+        description: the commit a train branch was assembled on
+        type: string
+        default: ""
+      gate_stress:
+        description: "web-only diagnostic (four admin scenes x50); use main or a throwaway branch with its own commit, never a PR head (build fails)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,94 +33,250 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # What a pull request or a train is checked against; empty on main, which runs everything
+  BASE: ${{ github.event.pull_request.base.sha || inputs.base }}
+
 jobs:
-  build:
-    # A draft cannot merge, so it does not hold a build runner; marking it ready starts the build that counts.
+  # One cheap job decides what the others skip, so a Markdown-only change starts no job that would only stop again, and
+  # the deploy and benchmark rules diff the base once. A Markdown-only PR or train runs `just md-checks` only; main, and
+  # every other PR or train, runs the checks below, with the benchmark comparison and the deployment check on a train or
+  # main alone.
+  changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    # The heavy job has its own runner pool (RUNS_ON_HEAVY) so the seconds-long checks on RUNS_ON never queue behind it
-    runs-on: ${{ fromJSON(vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
-    env:
-      # Pinned with the release's own checksum (SHA256SUMS), so a swapped download fails.
-      JUST_VERSION: "1.58.0"
-      JUST_SHA256: "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d"
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
+    outputs:
+      docs_only: ${{ steps.decide.outputs.docs_only }}
+      deploy: ${{ steps.decide.outputs.deploy }}
+      bench: ${{ steps.decide.outputs.bench }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
-          fetch-depth: 0 # the benchmark comparison checks out the base commit
-      # A Markdown-only PR runs the cheap checks that read Markdown (`just md-checks`) and skips web, deploy-check and
-      # the benchmark comparison; main, and every other PR, runs everything.
-      - id: changes
-        if: github.event_name == 'pull_request'
+          fetch-depth: 0 # the diff needs the merge base
+      # Exit 10 is the only "not needed" (scripts/ci_skips.py); every other outcome runs the check, so a failed diff
+      # never hides a regression. Without a base (main) everything runs.
+      - id: decide
         run: |
-          if python3 scripts/ci_skips.py md-only "$BASE"; then
-            echo "docs_only=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          docs_only=false; deploy=true; bench=true
+          if [ -n "$BASE" ]; then
+            if python3 scripts/ci_skips.py md-only "$BASE"; then
+              docs_only=true; deploy=false; bench=false
+            else
+              status=0
+              python3 scripts/ci_skips.py deploy-needed "$BASE" || status=$?
+              if [ "$status" -eq 10 ]; then
+                echo "deploy-check skipped: only files outside the container changed between $BASE and HEAD"
+                deploy=false
+              else
+                [ "$status" -eq 0 ] || echo "deploy-needed check exited $status; running deploy-check"
+              fi
+              status=0
+              python3 scripts/ci_skips.py bench-needed "$BASE" || status=$?
+              if [ "$status" -eq 10 ]; then
+                echo "bench-compare skipped: only Markdown or web/ changed between $BASE and HEAD"
+                bench=false
+              else
+                [ "$status" -eq 0 ] || echo "bench-needed check exited $status; running bench-compare"
+              fi
+            fi
           fi
+          printf 'docs_only=%s\ndeploy=%s\nbench=%s\n' "$docs_only" "$deploy" "$bench" >> "$GITHUB_OUTPUT"
+
+  # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
+  # `just check` adds over `check-ci` (`docs`, `secrets`): workflow.yml does not run for the commits a train merges, and
+  # two PRs whose docs pass alone can break a link together.
+  static:
+    needs: changes
+    if: needs.changes.result == 'success' && !inputs.gate_stress
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    permissions:
+      contents: read
+      issues: read # the issues the flaky list names
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the migrations check reads the base commit
+      - uses: ./.github/actions/setup
+        with:
+          node: ${{ needs.changes.outputs.docs_only != 'true' }}
+      # Each known-flaky test names an open issue; once the issue closes the entry must go (CONTRIBUTING.md「合并队列」)
+      - run: python3 scripts/train.py flaky-check
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          # A self-hosted host keeps Go's build and module caches (and pnpm's store) on its own disk between jobs, so saving them to the
-          # Actions cache only costs time (13 minutes for a 68 GB build cache) and restoring them overwrites the
-          # directories other jobs on the host are using
-          cache: ${{ runner.environment == 'github-hosted' }}
-          cache-dependency-path: "**/go.sum"
-      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0; the version is web/package.json's packageManager
-        with:
-          package_json_file: web/package.json
-          # Not the default ~/setup-pnpm: runners sharing a host share a home, and two jobs installing pnpm into one
-          # directory at once leave it broken
-          dest: ${{ runner.temp }}/setup-pnpm
-      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: web/.node-version
-          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }} # as for Go above
-          cache-dependency-path: web/pnpm-lock.yaml
-      # Only the headless Chromium the end-to-end tests run in, with the system libraries it needs on a hosted runner.
-      # A self-hosted host has the browser's system libraries installed once; installing them per job would take the
-      # host's apt lock from parallel jobs at once
-      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
-        run: pnpm --dir web install --frozen-lockfile && pnpm --dir web exec playwright install $DEPS --only-shell chromium
-        env:
-          DEPS: ${{ runner.environment == 'github-hosted' && '--with-deps' || '' }}
-      - run: |
-          curl -sSfL --retry 3 -o "$RUNNER_TEMP/just.tar.gz" "https://github.com/casey/just/releases/download/$JUST_VERSION/just-$JUST_VERSION-x86_64-unknown-linux-musl.tar.gz"
-          echo "$JUST_SHA256  $RUNNER_TEMP/just.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$RUNNER_TEMP" just
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      # The Markdown readers: docs tests (including the PR template), tools/checkmodules and the pg module table.
-      - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only == 'true'
-        run: just md-checks
-      # The tests stay cacheable; bench-once runs every benchmark under -race on PRs too, and bench-compare below still
-      # compares allocations without -race.
-      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
-        run: just check-all
-      # The deployment checks below start the stack on this host with the job's own compose project, image tag, volumes
-      # and kernel-picked host ports, and tear it down however the step ends (scripts/ci/deploy-check.sh), so jobs on
-      # runners sharing a host neither collide nor wait for each other. Without a turn to wait for, three `just up` of
-      # at most 5 minutes each, the checks and the teardown fit.
-      - if: github.event_name == 'push' || steps.changes.outputs.docs_only != 'true'
-        run: bash scripts/ci/deploy-check.sh
-        timeout-minutes: 40
-      - if: github.event_name == 'pull_request'
+          GH_TOKEN: ${{ github.token }}
+      # A train adds `secrets`, which workflow.yml runs for a PR but nothing dispatches for a train.
+      - if: needs.changes.outputs.docs_only == 'true'
+        run: just md-checks ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
+      - if: needs.changes.outputs.docs_only != 'true' && github.event_name == 'pull_request'
+        run: just script-tests check-static
+      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+        run: just docs check-static secrets
+      # A PR or train is checked like a pull request from its base: merged migrations never change. Main has no base.
+      - if: env.BASE != ''
         run: just migrations "$BASE"
+
+  # The Go tests only. `just test` depends on `web-embed`, the frontend the program embeds, so this job installs pnpm and
+  # Node like the web job; the build is cached by content on the host (scripts/web_cache.py), as it was in the one job.
+  go-test:
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the frontend's version stamp comes from this tree's history
+      - uses: ./.github/actions/setup
+      - run: just test
+
+  # The frontend's checks and its end-to-end tests. `just web` builds the frontend the program embeds before serving it
+  # to the tests. Only execution is isolated: setup and private caches stay with the runner.
+  web:
+    needs: changes
+    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.docs_only != 'true')
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the frontend's version stamp comes from this tree's history
+      - uses: ./.github/actions/setup
+      # Chromium aborts connecting sockets when other jobs change host interface addresses (#363). Keep the browser
+      # and serveweb in one private network namespace, matching web/package.json's Playwright version.
+      # Start Docker here so mounts and --user use the selected runner's paths and UID, including on another host.
+      - name: Run web in its network namespace
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-      # A Markdown-only or web/-only change cannot move a Go allocation; every other change, testdata, *.sql and test
-      # files included, runs the comparison. Exit 10 is the only "not needed"; every other outcome runs it.
-      - if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
+          WEB_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
+          GATE_STRESS: ${{ inputs.gate_stress || false }}
         run: |
-          status=0
-          python3 scripts/ci_skips.py bench-needed "$BASE" || status=$?
-          if [ "$status" -eq 10 ]; then
-            echo "bench-compare skipped: only Markdown or web/ changed between $BASE and HEAD"
-          else
-            [ "$status" -eq 0 ] || echo "bench-needed check exited $status; running bench-compare"
-            just bench-compare "$BASE"
+          go_cache=$(go env GOCACHE)
+          module_cache=$(go env GOMODCACHE)
+          pnpm_store=$(pnpm --dir web store path)
+          web_cache="${AXIOM_CACHE_DIR:-$(dirname "$go_cache")/_webcache}"
+          mkdir -p "$go_cache" "$module_cache" "$web_cache"
+          id
+          stat -c '%u:%g %n' "$go_cache" "$web_cache"
+          # The shared 80-core budget / eight runners allows ten cores each; eight leaves room for host-side setup.
+          # A private cgroup namespace lets Node count this quota, rather than the parent's 80 cores.
+          name="axiom-web-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker create --name "$name" \
+            --cpus 8 --cgroup-parent=axiom-ci.slice --cgroupns=private --user "$(id -u):$(id -g)" \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --workdir "$GITHUB_WORKSPACE" \
+            --volume "$RUNNER_TEMP:$RUNNER_TEMP" --volume "$RUNNER_TOOL_CACHE:$RUNNER_TOOL_CACHE:ro" \
+            --volume "$go_cache:$go_cache" --volume "$module_cache:$module_cache" \
+            --volume "$pnpm_store:$pnpm_store" \
+            --volume "$web_cache:/ci/axiom" \
+            --env PATH --env CI --env GATE_STRESS --env HOME=/tmp/axiom-web-home \
+            --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
+            --env npm_config_store_dir="$(dirname "$pnpm_store")" \
+            "$WEB_IMAGE" bash -e -c '
+              mkdir -p "$HOME"
+              git config --global --add safe.directory "$PWD"
+              cat /proc/self/cgroup
+              cat /sys/fs/cgroup/cpu.max
+              id
+              cpus=$(node -p "require(\"node:os\").availableParallelism()")
+              echo "Node availableParallelism=$cpus"
+              test "$cpus" -le 8
+              if [ "$GATE_STRESS" = true ]; then
+                gate=(e2e/gate.spec.ts -g "admin (price-publish|supplier-connect-details|account|model-name) ")
+                pnpm --dir web exec playwright test "${gate[@]}" --list
+              fi
+              just web
+              if [ "$GATE_STRESS" = true ]; then
+                AXIOM_VERSION=$(just axiom-version)
+                export AXIOM_VERSION
+                pnpm --dir web exec playwright test "${gate[@]}" \
+                  --repeat-each=50 --max-failures=1 --reporter=line
+              fi
+            '
+          docker start "$name"
+          pid=$(docker inspect --format '{{.State.Pid}}' "$name")
+          if [ "$pid" -eq 0 ]; then
+            docker logs "$name"
+            echo 'web container exited before cgroup verification' >&2
+            exit 1
           fi
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
+          # /proc/self/cgroup inside is namespace-relative (0::/); the host PID reveals the actual shared ancestry.
+          cat "/proc/$pid/cgroup"
+          grep -q '/axiom.slice/axiom-ci.slice/' "/proc/$pid/cgroup"
+          cat /sys/fs/cgroup/axiom.slice/axiom-ci.slice/{cpu.max,memory.high,memory.max}
+          docker logs --follow "$name"
+          exit "$(docker wait "$name")"
+      # A later checkout removes test-results on self-hosted runners; keep the failed page and its network evidence.
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
+        with:
+          name: web-test-results
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+      # Cancellation can stop the Docker client before the test process; remove only this attempt's container.
+      - if: always()
+        run: |
+          name="axiom-web-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if docker container inspect "$name" > /dev/null 2>&1; then docker rm --force "$name"; fi
+
+  # A train or main only: a PR's change cannot move a benchmark's allocation count without the train catching it, and
+  # the comparison is 4-5 minutes of the PR's wall. On main every benchmark runs once under -race (`bench-once`); a
+  # train compares allocations against its base, with the existing skip rule.
+  bench:
+    needs: changes
+    if: >-
+      github.event_name != 'pull_request' &&
+      !inputs.gate_stress &&
+      needs.changes.result == 'success' &&
+      needs.changes.outputs.bench == 'true'
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the comparison checks out the base commit
+      - uses: ./.github/actions/setup
+      - if: env.BASE == ''
+        run: just bench-once
+      - if: env.BASE != ''
+        run: just bench-compare "$BASE"
+
+  # A train or main only, as for the benchmark: a deployment regression is caught by the train, which ejects the PR that
+  # broke it (scripts/train.py). The skip rule is the one ci.yml always had: only files clearly outside the container.
+  deploy:
+    needs: changes
+    if: >-
+      github.event_name != 'pull_request' &&
+      !inputs.gate_stress &&
+      needs.changes.result == 'success' &&
+      needs.changes.outputs.deploy == 'true'
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # `just up` stamps the image with this tree's history
+      - uses: ./.github/actions/setup
+      - run: bash scripts/ci/deploy-check.sh
+        timeout-minutes: 40
+
+  # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
+  # check counts as passed on GitHub; a part that was skipped (a Markdown-only change, a PR's bench and deploy) is fine.
+  build:
+    # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
+    name: build
+    needs: [changes, static, go-test, web, bench, deploy]
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      # GitHub accepts a skipped required check, so diagnostics must fail this check rather than skip it.
+      - if: inputs.gate_stress
+        run: |
+          echo "gate-stress is a diagnostic; run the full build to satisfy the required check"
+          exit 1
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "a job this build needs failed or was cancelled"
+          exit 1
+      - run: echo "every job this build needs passed or was skipped"
+
+  gate-stress:
+    name: gate-stress
+    needs: [changes, web]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.gate_stress
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - run: test '${{ needs.changes.result }}' = success && test '${{ needs.web.result }}' = success

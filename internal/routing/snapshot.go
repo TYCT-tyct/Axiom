@@ -83,6 +83,7 @@ func (o Owner) visibleTo(a Admission) bool {
 // Endpoint is one supplier group serving one model, as the snapshot holds it: what routing filters and ranks by.
 // suppliers, quality and billing supply the values when the snapshot is built.
 type Endpoint struct {
+	Exchange platform.ExchangeRate
 	ID       EndpointID
 	Supplier SupplierID
 	Model    catalog.ModelID
@@ -228,10 +229,11 @@ type Snapshot struct {
 // live state, which outlives the snapshot.
 type candidate struct {
 	Endpoint
-	model        billing.Model // what billing reads of the endpoint's model, for the input bound
-	blend        float64       // input plus output base rate, as a number; only for weighting
-	cacheCheaper bool          // reading the cache costs less than input, which is when sticking pays
-	state        *epState
+	model         billing.Model // what billing reads of the endpoint's model, for the input bound
+	blend         float64       // input plus output base rate, as a number; only for weighting
+	cacheCheaper  bool          // reading the cache costs less than input, which is when sticking pays
+	state         *epState
+	supplierPause *cooldown
 }
 
 // NewSnapshot groups the endpoints by model and checks them: an endpoint twice, or a preset twice, is a mistake in
@@ -277,9 +279,9 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 	if e.ServiceTiers == 0 {
 		return nil, fmt.Errorf("routing snapshot: endpoint %s offers no service tier", uuid.UUID(e.ID))
 	}
-	c := &candidate{Endpoint: e, state: r.state.of(e.ID), model: billing.Model{
+	c := &candidate{Endpoint: e, state: r.state.of(e.ID), supplierPause: r.state.supplier(e.Supplier), model: billing.Model{
 		ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages,
-		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports,
+		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports, ServiceTiers: e.ServiceTiers,
 	}}
 	if e.Price.Version == (uuid.UUID{}) {
 		return c, nil

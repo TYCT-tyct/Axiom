@@ -21,7 +21,7 @@ export default {
     endpoint: "某个端点",
     source_type: "某类来源",
   },
-  audience: { all: "所有人", tier: "某个等级", account: "某个账户" },
+  audience: { all: "所有人", tier: "某个等级（暂不可用）", account: "某个账户（暂不可用）" },
   describe: {
     markup: "成本加价 {{percent}}%",
     margin: "毛利率 {{percent}}%",
@@ -60,7 +60,6 @@ export default {
       audience: "请指明规则的人群。",
       ratio: "加价或毛利率要写成十进制数，例如 0.2 表示 20%。",
       multiplier: "倍数要写成十进制数，例如 1.1。",
-      constraint: "限制要写成十进制数，或留空。",
     },
   },
   method: {
@@ -80,7 +79,8 @@ export default {
   },
   constraints: {
     title: "限制",
-    hint: "都可以留空。比率写成小数：0.1 表示 10%。保本线永远有效。",
+    hint: "本版本不执行这些限制（见 #234），暂时不能填写。保本线永远有效。",
+    stored: "此规则带着限制，因此它命中的模型现在不卖；保存时会清除这些限制。",
     minMargin: "最低毛利率",
     refMin: "不低于参考价的",
     refMax: "不高于参考价的",

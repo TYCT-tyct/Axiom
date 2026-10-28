@@ -114,9 +114,8 @@ func TestAListingLongerThanARateWindowFinishes(t *testing.T) {
 		}
 		return answer(200, `{"success":true,"data":{"total":9050,"items":[`+trimComma(items)+`]}}`), nil
 	})
-	m := open(t, keys, t0)
 	page, waits := readPaged(t, clk, func(from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
-		return m.Keys(t.Context(), from)
+		return open(t, keys, clk.now()).Keys(t.Context(), from)
 	})
 	if len(page.Items) != 9050 || *served != 91 || waits == 0 {
 		t.Errorf("%d keys from %d requests with %d waits, want 9050 from 91 with a wait", len(page.Items), *served, waits)
@@ -136,9 +135,8 @@ func TestAListingLongerThanARateWindowFinishes(t *testing.T) {
 		}
 		return answer(200, `{"success":true,"data":["m"]}`), nil
 	})
-	om := open(t, offer, t0)
 	groups, _ := readPaged(t, clk, func(from adapter.Listing) (adapter.Page[adapter.Group], error) {
-		return om.Offer(t.Context(), from)
+		return open(t, offer, clk.now()).Offer(t.Context(), from)
 	})
 	// 120 model reads, the groups and the prices, and one read of the groups per resume: the position names the groups
 	// it was read over, so a pass that goes on checks they are still the supplier's before it goes on reading them.

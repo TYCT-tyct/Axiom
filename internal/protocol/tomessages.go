@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strconv"
 
-	"axiom/internal/platform/jsonx"
+	"axiom/internal/catalog"
 )
 
 // toMessages writes a Chat request as an Anthropic Messages request (Anthropic《Messages API reference》, read
@@ -29,7 +29,10 @@ func toMessages(c *canon, t Target, w Rewrites) ([]byte, error) {
 		out = append(out, `,"stream":true`...)
 	}
 	if c.User != nil {
-		out = appendQuoted(append(out, `,"metadata":{"user_id":`...), w.Identity(*c.User))
+		out, err = appendMetadataUserID(append(out, `,"metadata":{"user_id":`...), w, *c.User)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, '}')
 	}
 	return append(out, '}'), nil
@@ -81,13 +84,21 @@ func (m *messagesWriter) check() error {
 func (m *messagesWriter) checkThinking() error {
 	m.effort = m.c.effort()
 	m.thinkingOn = m.effort != "" && m.effort != "none"
-	switch {
-	case !m.thinkingOn:
+	if !m.thinkingOn {
 		return nil
-	case m.t.Thinking == ThinkingAdaptive:
-		return m.checkAdaptive()
 	}
-	return m.checkManual()
+	switch m.t.Thinking {
+	case catalog.ThinkingAdaptive:
+		return m.checkAdaptive()
+	case catalog.ThinkingManual:
+		return m.checkManual()
+	case catalog.ThinkingNone:
+		return &NotSupported{Reason: "the model does not think"}
+	case catalog.ThinkingUnset:
+	}
+	// Not one of the two ways to ask is the model's: guessing one is a request the upstream refuses, or a budget it
+	// was never asked to spend.
+	return unspecified("reasoning", "how the model is asked to think (thinking)")
 }
 
 func isSystem(role string) bool { return role == "system" || role == "developer" }
@@ -229,12 +240,16 @@ func (m *messagesWriter) midSystem(out []byte, msgs []canonMessage, i int) ([]by
 		next = msgs[i+1].Role
 	}
 	switch {
-	case !m.t.MidSystem:
+	case m.t.MidSystem == catalog.ClaimNo:
 		return nil, &NotSupported{Reason: "the model takes no system message after the conversation started"}
+	case m.t.MidSystem == catalog.ClaimUnset:
+		return nil, unspecified("a system message after the conversation started", "whether the model takes one (mid_system)")
 	case prev != "user" && prev != "tool", next != "" && next != "assistant":
 		return nil, &NotSupported{Reason: "a system message where Anthropic does not allow one"}
-	case prev == "tool" && m.t.UntrustedSystemAfterTools:
+	case prev == "tool" && m.t.UntrustedSystemAfterTools == catalog.ClaimYes:
 		return nil, &NotSupported{Reason: "the model does not trust a system message right after tool results"}
+	case prev == "tool" && m.t.UntrustedSystemAfterTools == catalog.ClaimUnset:
+		return nil, unspecified("a system message right after tool results", "whether the model trusts one (untrusted_system_after_tools)")
 	}
 	return turn(out, "system", msgs[i])
 }
@@ -330,7 +345,7 @@ func block(out []byte, p canonPart, textOnly bool) ([]byte, error) {
 	var err error
 	switch {
 	case p.Type == "text", p.Type == "refusal": // a refusal is text the assistant said: Anthropic's own come as text
-		out = append(append(out, `{"type":"text","text":`...), p.Text...)
+		out = append(append(out, messagesTextHead...), p.Text...)
 	case textOnly:
 		return nil, &NotSupported{Reason: "a " + p.Type + " part where Messages takes text only"}
 	case p.Type == "image_url" && p.ImageURL != nil:
@@ -355,7 +370,7 @@ func imageBlock(out []byte, p canonPart) ([]byte, error) {
 	if p.ImageURL.Detail == "low" {
 		return nil, &NotSupported{Reason: "image detail low has no Messages counterpart"}
 	}
-	out = append(out, `{"type":"image","source":`...)
+	out = append(out, messagesImageHead...)
 	if media, data, ok := dataURL(p.ImageURL.URL); ok {
 		out = appendQuoted(append(out, `{"type":"base64","media_type":`...), media)
 		out = appendQuoted(append(out, `,"data":`...), data)
@@ -371,7 +386,7 @@ func documentBlock(out []byte, fileData string) ([]byte, error) {
 	if !ok || media != "application/pdf" {
 		return nil, &NotSupported{Reason: "a file that is not PDF data"}
 	}
-	out = append(out, `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":`...)
+	out = append(out, messagesFileHead...)
 	return append(appendQuoted(out, data), '}'), nil
 }
 
@@ -420,51 +435,10 @@ func messagesTool(out []byte, tool canonTool) ([]byte, error) {
 	return append(out, '}'), nil
 }
 
-// toolChoice maps tool_choice and parallel_tool_calls. Anthropic refuses a forced choice while thinking, and Claude
-// 5.5 models refuse one at all.
-func (m *messagesWriter) toolChoice(out []byte) ([]byte, error) {
-	choice, forced, err := messagesChoice(m.c.ToolChoice)
-	if err != nil {
-		return nil, err
-	}
-	if forced && (m.thinkingOn || m.t.DefaultSamplingOnly) {
-		return nil, &NotSupported{Reason: "a forced tool choice the model refuses"}
-	}
-	parallelOff := m.c.ParallelToolCalls != nil && !*m.c.ParallelToolCalls
-	if isNull(m.c.ToolChoice) && !parallelOff || len(m.c.Tools) == 0 {
-		return out, nil
-	}
-	if parallelOff {
-		choice += `,"disable_parallel_tool_use":true`
-	}
-	return append(append(append(out, `,"tool_choice":`...), choice...), '}'), nil
-}
-
-// messagesChoice is tool_choice in Messages' terms, but its closing brace, and whether it forces a tool.
-func messagesChoice(v jsontext.Value) (choice string, forced bool, err error) {
-	switch {
-	case isNull(v), string(v) == `"auto"`:
-		return `{"type":"auto"`, false, nil
-	case string(v) == `"none"`:
-		return `{"type":"none"`, false, nil
-	case string(v) == `"required"`:
-		return `{"type":"any"`, true, nil
-	}
-	var named struct {
-		Function struct {
-			Name jsontext.Value `json:"name"`
-		} `json:"function"`
-	}
-	if err := jsonx.Unmarshal(v, &named); err != nil || isNull(named.Function.Name) {
-		return "", false, &NotSupported{Reason: "a tool_choice Messages cannot express"}
-	}
-	return `{"type":"tool","name":` + string(named.Function.Name), true, nil
-}
-
 // thinking writes the thinking setting and output_config: the effort of an adaptive model, and the schema of a
 // structured reply.
 func (m *messagesWriter) thinking(out []byte) ([]byte, error) {
-	adaptive := m.thinkingOn && m.t.Thinking == ThinkingAdaptive
+	adaptive := m.thinkingOn && m.t.Thinking == catalog.ThinkingAdaptive
 	switch {
 	case adaptive:
 		out = append(out, `,"thinking":{"type":"adaptive"}`...)
@@ -503,6 +477,32 @@ func (m *messagesWriter) replyFormat() (string, error) {
 	return `"format":{"type":"json_schema","schema":` + string(f.JSONSchema.Schema) + `}`, nil
 }
 
+// samplingRefusal is why the model cannot take what, a sampling other than the default, nil when it can: thinking
+// refuses it, a model whose spec says it takes the default only refuses it, and a spec that says nothing leaves a
+// request the upstream may refuse.
+func (m *messagesWriter) samplingRefusal(what string) error {
+	switch {
+	case m.thinkingOn || m.t.DefaultSamplingOnly == catalog.ClaimYes:
+		return &NotSupported{Reason: what + ", which the model refuses"}
+	case m.t.DefaultSamplingOnly == catalog.ClaimUnset:
+		return unspecified(what, "whether the model takes it (default_sampling_only)")
+	}
+	return nil
+}
+
+// forcedRefusal is why the model cannot take a tool choice that forces a call, nil when it can: thinking refuses it,
+// and so does a model whose spec says it takes none.
+func (m *messagesWriter) forcedRefusal() error {
+	const what = "a forced tool choice"
+	switch {
+	case m.thinkingOn || m.t.ForcedToolChoice == catalog.ClaimNo:
+		return &NotSupported{Reason: what + ", which the model refuses"}
+	case m.t.ForcedToolChoice == catalog.ClaimUnset:
+		return unspecified(what, "whether the model takes it (forced_tool_choice)")
+	}
+	return nil
+}
+
 // sampling writes temperature, top_p, stop sequences and the service tier. A value other than the default is refused
 // where the model or thinking refuses it, and one outside Anthropic's 0 to 1.
 func (m *messagesWriter) sampling(out []byte) ([]byte, error) {
@@ -514,8 +514,8 @@ func (m *messagesWriter) sampling(out []byte) ([]byte, error) {
 		if numberIs(s.v, 1) {
 			continue
 		}
-		if m.t.DefaultSamplingOnly || m.thinkingOn {
-			return nil, &NotSupported{Reason: s.name + " other than the default, which the model refuses"}
+		if err := m.samplingRefusal(s.name + " other than the default"); err != nil {
+			return nil, err
 		}
 		if f, err := strconv.ParseFloat(string(s.v), 64); err != nil || f > 1 || f < 0 {
 			return nil, &NotSupported{Reason: s.name + " outside 0 to 1"}

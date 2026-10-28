@@ -40,18 +40,22 @@ var messages = map[string]string{
 	"overloaded":           "The service is busy; retry shortly.",
 	"model_not_found":      "The model does not exist or is not available to this key.",
 	"no_endpoint":          "No endpoint can serve this request.",
+	"not_found":            "The path is not part of this API.",
+	"method_not_allowed":   "The method is not allowed on this path.",
 	"invalid_request":      "The request is not valid.",
 	"request_too_large":    "The request body is larger than the limit.",
 	"timeout":              "The request body was not received in time.",
 	"generation_not_found": "No call with this ID is visible to this key.",
 }
 
-// errorTypes are the Messages `type` of a status; Chat's `type` uses the same words.
+// errorTypes are the Messages `type` of a status; Chat's `type` uses the same words (protocol's errorTypes, which the
+// same errors answered after an attempt are written with: TestARefusalIsAnErrorOfProtocol).
 var errorTypes = map[int]string{
 	http.StatusBadRequest: "invalid_request_error", http.StatusUnauthorized: "authentication_error",
 	http.StatusPaymentRequired: "billing_error", http.StatusNotFound: "not_found_error",
 	http.StatusRequestTimeout: "timeout_error", http.StatusRequestEntityTooLarge: "request_too_large",
 	http.StatusTooManyRequests: "rate_limit_error", http.StatusServiceUnavailable: "overloaded_error",
+	http.StatusMethodNotAllowed: "invalid_request_error",
 }
 
 // maxRetryAfter is the longest Retry-After sent: Claude Code does not retry after more than 60 seconds.
@@ -73,7 +77,7 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 		detail["type"], detail["message"] = typ, message
 		body = map[string]any{"type": "error", "error": detail}
 	} else {
-		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "code": r.Status, "metadata": detail}}
+		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "param": "", "code": r.Code, "metadata": detail}}
 	}
 	out, _ := jsonx.MarshalCanonical(body) //nolint:errcheck // a map of strings and numbers always encodes
 	h := w.Header()
@@ -91,7 +95,7 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 // refusal says how a failure of the admission path is answered, and whether it is one the gateway expected. An
 // unexpected one is answered as the node being busy, which is what a database that does not answer looks like to a
 // client, and the caller logs it.
-func refusal(err error) (r *Refusal, expected bool) {
+func refusal(f protocol.Format, err error) (r *Refusal, expected bool) {
 	if r, ok := errors.AsType[*Refusal](err); ok {
 		return r, true
 	}
@@ -108,11 +112,45 @@ func refusal(err error) (r *Refusal, expected bool) {
 		return errNoModel, true
 	case errors.Is(err, protocol.ErrInvalid):
 		return invalid(strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": ")), true
+	case errors.Is(err, billing.ErrUnbounded):
+		return unbounded(f, err), true
 	case errors.Is(err, accounts.ErrStale), errors.Is(err, catalog.ErrStale), errors.Is(err, routing.ErrStale),
 		errors.Is(err, billing.ErrTerminated), errors.Is(err, errCommitUnknown), errors.Is(err, context.DeadlineExceeded):
 		return ErrOverloaded, true // the node cannot serve now; the first request that finds it so is not a bug
 	}
 	return ErrOverloaded, false
+}
+
+// toolNames are what a client calls a server tool in each format, which is not the catalog's name for its item: the
+// refusal is read by the client, who looks for that word in its request. Chat has no code tool, and its search is the
+// web_search_options field.
+var toolNames = map[protocol.Format]map[catalog.Item]string{
+	protocol.Messages:  {catalog.ItemWebSearch: "the web_search tool", catalog.ItemCodeExecution: "the code_execution tool"},
+	protocol.Responses: {catalog.ItemWebSearch: "the web_search tool", catalog.ItemCodeExecution: "the code_interpreter tool"},
+	protocol.Chat:      {catalog.ItemWebSearch: "the web_search_options setting"},
+}
+
+// unbounded tells a client what to do about a server tool it enabled without a limit on its uses: write the limit where
+// the format has a field for it (Messages' web_search has max_uses, Responses has max_tool_calls), and where it has none
+// (Chat's search, Messages' code_execution) say the tool is not supported yet in that format: no request there can be
+// served, so asking for a limit would send the client looking for a field that does not exist. A tool this cannot name
+// is "a server tool".
+func unbounded(f protocol.Format, err error) *Refusal {
+	var item catalog.Item
+	name := "a server tool"
+	if u, ok := errors.AsType[*billing.UnboundedError](err); ok {
+		item = u.Item
+		if n, ok := toolNames[f][item]; ok {
+			name = n
+		}
+	}
+	switch {
+	case f == protocol.Responses:
+		return invalid(name + " is enabled without a limit on its uses, and this model has no default one: set max_tool_calls")
+	case f == protocol.Messages && item == catalog.ItemWebSearch:
+		return invalid(name + " is enabled without a limit on its uses, and this model has no default one: set max_uses on the tool")
+	}
+	return invalid(name + " is not supported yet in this format for this model, which has no default limit on its uses")
 }
 
 var limitSources = map[billing.Source]string{

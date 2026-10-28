@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"axiom/internal/catalog"
@@ -61,12 +63,15 @@ var catalogOperations = map[string]operation{
 	},
 }
 
-// catalogCommand runs `axiom catalog <operation> <file>`, `axiom catalog sync` or `axiom catalog check` in the platform
-// scope against AXIOM_DATABASE_URL. The platform scope is built here, in cmd/, and nowhere a request can reach. The
+// catalogCommand runs `axiom catalog <operation> <file>`, `axiom catalog sync`, `axiom catalog check` or `axiom catalog
+// apply-dialect [--apply] <file>` in the platform scope against AXIOM_DATABASE_URL. The platform scope is built here, in cmd/, and nowhere a request can reach. The
 // actor is the command itself until the operator's identity is defined (Issue #23).
 func catalogCommand(ctx context.Context, environ, args []string, out io.Writer) error {
-	usage := fmt.Errorf("usage: axiom catalog sync | check | <operation> <file>; operations: %v", slices.Sorted(maps.Keys(catalogOperations)))
+	usage := fmt.Errorf("usage: axiom catalog sync | check | apply-dialect [--apply] <file> | <operation> <file>; operations: %v",
+		slices.Sorted(maps.Keys(catalogOperations)))
 	switch {
+	case len(args) > 1 && args[0] == "apply-dialect":
+		return dialectCommand(ctx, environ, args[1:], out)
 	case len(args) == 1 && args[0] == "sync":
 		return withCatalog(ctx, environ, func(c *catalog.Catalog, f *catalog.Fetcher) error { return syncCommand(ctx, c, f, out) })
 	case len(args) == 1 && args[0] == "check":
@@ -91,15 +96,53 @@ func catalogCommand(ctx context.Context, environ, args []string, out io.Writer) 
 	})
 }
 
+// dialectCommand is `apply-dialect [--apply] <file>`: it writes the dialect file's keys into the specs of the models it
+// names, through the audited UpdateSpec, and prints a line for each model. Without --apply it writes nothing and shows
+// what it would, which is the way to run it first. It fails when any model failed.
+func dialectCommand(ctx context.Context, environ, args []string, out io.Writer) error {
+	apply := args[0] == "--apply"
+	if apply {
+		args = args[1:]
+	}
+	if len(args) != 1 {
+		return errors.New("usage: axiom catalog apply-dialect [--apply] <file>")
+	}
+	data, err := os.ReadFile(args[0]) //nolint:gosec // the operator names the dialect file on their own machine
+	if err != nil {
+		return err
+	}
+	file, err := catalog.ParseDialectFile(data)
+	if err != nil {
+		return err
+	}
+	return withCatalog(ctx, environ, func(c *catalog.Catalog, _ *catalog.Fetcher) error {
+		failed := 0
+		reason := "set the dialect keys the vendors' documents give (" + filepath.Base(args[0]) + ")"
+		for _, r := range c.ApplyDialects(ctx, audit.System("catalog.cli"), file, reason, apply) {
+			if r.Outcome == catalog.DialectFailed {
+				failed++
+			}
+			if err := writeLine(out, map[string]any{"kind": "dialect", "applied": apply, "result": r}); err != nil {
+				return err
+			}
+		}
+		if failed > 0 {
+			return fmt.Errorf("%d models failed", failed)
+		}
+		return nil
+	})
+}
+
 // withCatalog opens the catalog on the database and a fetcher for the datasets, and closes them after do.
 func withCatalog(ctx context.Context, environ []string, do func(*catalog.Catalog, *catalog.Fetcher) error) error {
 	env := config.New(environ)
 	databaseURL := env.Required(pg.DatabaseURLVar)
 	startupTimeout := env.Duration(startupTimeoutVar, defaultStartupTimeout)
+	reserve := env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)
 	if err := env.Problems(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
-	db, err := openDatabase(ctx, databaseURL, startupTimeout)
+	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithCompletionReserve(reserve))
 	if err != nil {
 		return err
 	}

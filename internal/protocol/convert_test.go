@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
@@ -71,23 +72,34 @@ func convertBody(to protocol.Format, body string, change func(*protocol.Target))
 	if err != nil {
 		return nil, err
 	}
-	target := protocol.Target{Format: to, Model: "up", MidSystem: true}
+	target := claudeLike(to)
 	if to == protocol.Messages { // which requires a cap; for Responses it is the gateway's to give (TestPrepareOutputCap)
 		target.MaxOutput = 4096
 	}
 	if change != nil {
 		change(&target)
 	}
-	u, err := protocol.Prepare(&r, []byte(body), target, protocol.Rewrites{Identity: derive})
+	u, err := protocol.Prepare(&r, []byte(body), target, rewrites())
 	return u.Body, err
 }
 
-func manual(t *protocol.Target)         { t.Thinking = protocol.ThinkingManual }
-func breakpoints(t *protocol.Target)    { t.CacheBreakpoints = true }
-func defaultsOnly(t *protocol.Target)   { t.DefaultSamplingOnly = true }
-func noMidSystem(t *protocol.Target)    { t.MidSystem = false }
-func untrustedAfter(t *protocol.Target) { t.UntrustedSystemAfterTools = true }
-func encrypting(t *protocol.Target)     { t.EncryptedReasoning = true }
+// claudeLike is an endpoint whose spec says the whole of its dialect, as for a Claude model that thinks adaptively: nothing
+// is left unset, since an unset claim is refused where the request needs it (TestAnUnsetClaimIsNeverAnAnswer).
+func claudeLike(to protocol.Format) protocol.Target {
+	return protocol.Target{
+		Format: to, Model: "up", Thinking: catalog.ThinkingAdaptive, MidSystem: catalog.ClaimYes,
+		UntrustedSystemAfterTools: catalog.ClaimNo, DefaultSamplingOnly: catalog.ClaimNo, ForcedToolChoice: catalog.ClaimYes,
+		CacheBreakpoints: catalog.ClaimNo, EncryptedReasoning: catalog.ClaimNo,
+	}
+}
+
+func manual(t *protocol.Target)         { t.Thinking = catalog.ThinkingManual }
+func breakpoints(t *protocol.Target)    { t.CacheBreakpoints = catalog.ClaimYes }
+func defaultsOnly(t *protocol.Target)   { t.DefaultSamplingOnly = catalog.ClaimYes }
+func noForcedTool(t *protocol.Target)   { t.ForcedToolChoice = catalog.ClaimNo }
+func noMidSystem(t *protocol.Target)    { t.MidSystem = catalog.ClaimNo }
+func untrustedAfter(t *protocol.Target) { t.UntrustedSystemAfterTools = catalog.ClaimYes }
+func encrypting(t *protocol.Target)     { t.EncryptedReasoning = catalog.ClaimYes }
 func streaming(t *protocol.Target)      { t.Streams = true }
 func encryptingStream(t *protocol.Target) {
 	encrypting(t)
@@ -163,9 +175,33 @@ func TestConvertToMessages(t *testing.T) {
 			"a named tool", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"function","function":{"name":"f"}}`), nil,
 			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"tool","name":"f"}}`,
 		},
+		{
+			"an escaped auto", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"\u0061uto"`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"auto"}}`,
+		},
+		{
+			"an escaped required", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"requir\u0065d"`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"any"}}`,
+		},
+		{
+			"an escaped none", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"\u006eone"`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"none"}}`,
+		},
+		{
+			"a named tool in escaped spelling", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"\u0066unction":{"name":"\u0066"}}`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"tool","name":"f"}}`,
+		},
 		{"a strict schema outside the subset", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object","properties":{"a":{"type":"integer","minimum":1}},"additionalProperties":false},"strict":true}}]`), nil, "unsupported"},
+		{
+			"the default modalities in escaped spelling", chatBody(`"messages":[` + userHi + `],"modalities":["te\u0078t"]`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`,
+		},
+		{
+			"the default modalities over two lines", chatBody(`"messages":[` + userHi + `],"modalities":[` + "\n" + `"text"]`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`,
+		},
 		{"a forced tool while thinking", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required","reasoning_effort":"high"`), nil, "unsupported"},
-		{"a forced tool the model refuses", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`), defaultsOnly, "unsupported"},
+		{"a forced tool the model refuses", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`), noForcedTool, "unsupported"},
 		{
 			"adaptive effort", chatBody(`"messages":[` + userHi + `],"reasoning":{"effort":"high"}`), nil,
 			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`,
@@ -213,7 +249,7 @@ func TestConvertToMessages(t *testing.T) {
 		{"a member not converted", chatBody(`"messages":[` + userHi + `],"prediction":{"type":"content","content":"x"}`), nil, "unsupported"},
 		{
 			"identity, routing and tier", chatBody(`"messages":[` + userHi + `],"user":"u1","prompt_cache_key":"k","provider":{"order":["x"]},"service_tier":"default"`), nil,
-			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"service_tier":"standard_only","metadata":{"user_id":"h(u1)"}}`,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"service_tier":"standard_only","metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"h(u1)\"}"}}`,
 		},
 		{"priority", chatBody(`"messages":[` + userHi + `],"service_tier":"priority"`), nil, "unsupported"},
 		{"verbosity", chatBody(`"messages":[` + userHi + `],"verbosity":"low"`), nil, "unsupported"},
@@ -475,8 +511,9 @@ func FuzzConvert(f *testing.F) {
 		if err != nil {
 			return
 		}
-		u, err := protocol.Prepare(&r, body, protocol.Target{Format: to, Model: "up", MaxOutput: 4096, MidSystem: true},
-			protocol.Rewrites{Identity: derive})
+		target := claudeLike(to)
+		target.MaxOutput = 4096
+		u, err := protocol.Prepare(&r, body, target, rewrites())
 		ns, _ := errors.AsType[*protocol.NotSupported](err)
 		switch {
 		case ns != nil, errors.Is(err, protocol.ErrInvalid):

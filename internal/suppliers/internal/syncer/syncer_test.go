@@ -40,16 +40,7 @@ func newStore() *memStore { return &memStore{charges: map[adapter.ChargeRef]adap
 func (s *memStore) Load(context.Context) (State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := s.state.clone()
-	// The real store reads whether the removal's alert was sent from the stored event, not from the state (State.
-	// CatchUpNotified is not stored): a reload in a test must forget what the state object held.
-	st.CatchUpNotified = false
-	for _, e := range s.events {
-		if e.Kind == RemovalSlow {
-			st.CatchUpNotified = true
-		}
-	}
-	return st, nil
+	return s.state.clone(), nil
 }
 
 func (s *memStore) Commit(_ context.Context, expect int64, c Commit) error {
@@ -122,9 +113,7 @@ func (m *supplier) Charges(_ context.Context, scan adapter.ScanState) (adapter.C
 	return m.charges(scan)
 }
 
-// healthy is a supplier whose answers never change and whose listings fit in one read. Its Done page says nothing about
-// how far it read, like an adapter that never went through the contract test (#109); a test that runs a removal says
-// where it read with scanThrough.
+// healthy is a supplier whose answers never change and whose listings fit in one read.
 func healthy() *supplier {
 	return &supplier{
 		account: func() (adapter.Account, error) {
@@ -148,14 +137,6 @@ func healthy() *supplier {
 func engine(m adapter.Manager) (*Engine, *memStore, *clock) {
 	st, clk := newStore(), &clock{t: t0}
 	return New(st, m, Defaults(), clk.now), st, clk
-}
-
-// scanThrough makes the supplier report how far it read on every Done page, as the contract requires: up to the test's
-// clock, so a removal finds it caught up.
-func scanThrough(m *supplier, clk *clock) {
-	m.charges = func(adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
-		return adapter.ChargePage{Done: true, Through: clk.now()}, adapter.ScanState(`{"v":1}`), nil
-	}
 }
 
 func round(t *testing.T, e *Engine) {
@@ -511,34 +492,5 @@ func TestBalanceLowIsSentOnceUntilItRecovers(t *testing.T) {
 	round(t, e)
 	if st.count(BalanceLow) != 2 {
 		t.Errorf("BalanceLow sent %d times after a recovery and a new drop, want 2", st.count(BalanceLow))
-	}
-}
-
-// TestEndpointIsRoutableOnlyWhenEveryConditionHolds flips each condition in turn.
-func TestEndpointIsRoutableOnlyWhenEveryConditionHolds(t *testing.T) {
-	t.Parallel()
-	ok := EndpointFacts{Normal: true, Wallet: true, Balance: "10", Reserve: "1", GroupSelected: true, Mapped: true, CostKnown: true, UsableCredentials: 1}
-	if r := ok.Check(); r != Routable {
-		t.Fatalf("all conditions hold but %q", r)
-	}
-	for want, mutate := range map[Reason]func(*EndpointFacts){
-		SupplierStopped:  func(f *EndpointFacts) { f.Normal = false },
-		NotWallet:        func(f *EndpointFacts) { f.Wallet = false },
-		NoBalance:        func(f *EndpointFacts) { f.Balance = "1" },
-		GroupNotSelected: func(f *EndpointFacts) { f.GroupSelected = false },
-		Unmapped:         func(f *EndpointFacts) { f.Mapped = false },
-		CostUnknown:      func(f *EndpointFacts) { f.CostKnown = false },
-		NoUsableKey:      func(f *EndpointFacts) { f.UsableCredentials = 0 },
-	} {
-		f := ok
-		mutate(&f)
-		if got := f.Check(); got != want {
-			t.Errorf("with %q failing, Check = %q", want, got)
-		}
-	}
-	negative := ok
-	negative.Balance = "-13"
-	if negative.Check() != NoBalance {
-		t.Error("an overdrawn supplier is routable")
 	}
 }

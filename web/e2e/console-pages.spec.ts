@@ -89,6 +89,25 @@ test.describe("signing in", () => {
     expect(new URL(page.url()).pathname).toBe("/console/keys");
   });
 
+  test("a visitor whose page is still loading when the session answers is sent to sign in once", async ({ page }) => {
+    await mockConsole(page);
+    // The page's code is held until the sign-in page shows, so the session answers before the router has shown its
+    // first page, as on a busy machine. A gate that read the address its own redirect made would redirect again,
+    // forever, and the page would never answer.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/console/assets/keys-*.js", async (route) => {
+      await held;
+      await route.fallback();
+    });
+    await page.goto("/console/keys", { waitUntil: "commit" });
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    expect(new URL(page.url()).search).toBe("?next=%2Fkeys");
+    release();
+    await signIn(page);
+    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+  });
+
   test("an address to return to that leaves the app is dropped", async ({ page }) => {
     await mockConsole(page);
     await page.goto("/console/sign-in?next=//evil.example/");
@@ -271,6 +290,34 @@ test.describe("API keys", () => {
     await expect(secret).toBeVisible();
     const text = await secret.locator("code").innerText();
     expect(text).toMatch(/^sk-ax-v1-x{45}\d{4}$/);
+    // The guide sends every client to the site's API domain, taken from its own site config, and carries the key while
+    // this dialog is open: three request formats, then the three clients the docs name.
+    const snippets = secret.locator("pre");
+    await expect(snippets).toHaveCount(6);
+    await expect(snippets.nth(0)).toContainText("https://api.example.com/v1/chat/completions");
+    await expect(snippets.nth(1)).toContainText("https://api.example.com/v1/responses");
+    await expect(snippets.nth(2)).toContainText("https://api.example.com/v1/messages");
+    await expect(snippets.nth(3)).toContainText("export ANTHROPIC_BASE_URL=https://api.example.com");
+    await expect(snippets.nth(3)).toContainText(`export ANTHROPIC_AUTH_TOKEN=${text}`);
+    await expect(snippets.nth(4)).toContainText('base_url = "https://api.example.com/v1"');
+    await expect(snippets.nth(4)).toContainText('env_key = "AXIOM_API_KEY"');
+    await expect(snippets.nth(5)).toHaveText("https://api.example.com/v1");
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    const copyNames = [
+      "OpenAI Chat Completions",
+      "OpenAI Responses",
+      "Anthropic Messages",
+      "Claude Code",
+      "Codex",
+      "Cursor",
+    ];
+    for (const [index, name] of copyNames.entries()) {
+      const copy = secret.getByRole("button", { name: `复制 ${name}`, exact: true });
+      await copy.focus();
+      await copy.press(index % 2 === 0 ? "Enter" : "Space");
+      const expected = await snippets.nth(index).innerText();
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+    }
     // Escape and a click outside do not close it; the user is the one to say the key is saved.
     await page.keyboard.press("Escape");
     await expect(secret).toBeVisible();

@@ -60,19 +60,6 @@ func TestParseFallbacks(t *testing.T) {
 	}
 }
 
-// TestByCost: cost × markup rounds up once, to the billionth, and saturates rather than wraps.
-func TestByCost(t *testing.T) {
-	f := mustFallbacks(t, `{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.05","web_search":"0.025"}}`)
-	for cost, want := range map[int64]int64{0: 0, 1: 2, 5: 6, 7: 9, 100: 120, math.MaxInt64: math.MaxInt64} {
-		if got := f.byCost(cost); got != want {
-			t.Errorf("byCost(%d) = %d, want %d", cost, got, want)
-		}
-	}
-	if got := mustFallbacks(t, testFallbacks).byCost(3); got != 5 {
-		t.Errorf("1.5 × 3 = %d, want 5", got)
-	}
-}
-
 // TestUses: an unknown value counts its uses, rounded up and bounded; anything else is one use.
 func TestUses(t *testing.T) {
 	for v, want := range map[string]int64{
@@ -86,8 +73,8 @@ func TestUses(t *testing.T) {
 }
 
 // TestPriceSegmentsFallbacks pins every fallback price at input and output 1 a token, 50 input and 20 output (70):
-// unknown tokens at the highest token price, unknown uses at the dearest per-use default, both estimated; a waiver
-// keeps the uses and drops the tokens; a free model's unknown tokens are free with it, but its uses are not.
+// unknown tokens at the highest token price, unknown uses at the dearest per-use default, both estimated; a cached
+// modality intersection is recorded and free; a waiver keeps the uses and drops the tokens; a free model's unknown tokens are free with it, but its uses are not.
 func TestPriceSegmentsFallbacks(t *testing.T) {
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"},
 		"service_tiers":{"priority":{"rates":{"input":"0.000000003","output":"0.000000002"}}}}`)
@@ -105,6 +92,8 @@ func TestPriceSegmentsFallbacks(t *testing.T) {
 		{"a fraction of a use rounds up", s, "usage.server_tool_use.web_fetch_requests", "1.2", false, 70 + 100},
 		{"a service tier is one use", s, "usage.service_tier", `"scale"`, false, 70 + 50},
 		{"tokens past the bound are uses", s, "usage.new_thing_tokens", "20000000000", false, 70 + 50*1e10},
+		{"a cached intersection member costs nothing", s, "usage.input_tokens_details.cached_tokens_details.video_tokens", "800", false, 70},
+		{"a cached intersection member in Chat", s, "usage.prompt_tokens_details.cached_tokens_details.video_tokens", "800", true, 0},
 		{"waived: the tokens go", s, "usage.new_thing_tokens", "30", true, 0},
 		{"waived: the uses stay", s, "usage.server_tool_use.web_fetch_requests", "2", true, 100},
 		{"a free model's tokens", free, "usage.new_thing_tokens", "30", false, 0},
@@ -112,6 +101,43 @@ func TestPriceSegmentsFallbacks(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, err := priceSegments(tc.s, f, []Segment{unknown(t, 50, tc.field, tc.value)}, tc.waived)
+			if err != nil || p.price != tc.want || !p.estimated {
+				t.Errorf("priceSegments = %+v, %v; want %d estimated", p, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestPriceSegmentsPricesATierTheListLacks: a schedule that prices the standard tier only still charges a call its
+// upstream served at priority, which it prices nowhere, at the fallback prices: tokens at the highest token price
+// anywhere in the schedule and the search at its site's default, marked estimated; a waiver keeps the search alone; and
+// each sampling is charged, not only the last, which search is what makes several of
+// (docs/domains/billing.md「定价」: 上游报告了列表之外的等级，那次调用的各项按兜底价收并标暂估).
+func TestPriceSegmentsPricesATierTheListLacks(t *testing.T) {
+	f := mustFallbacks(t, testFallbacks)
+	s := mustSchedule(t, `{"v":1,"currency":"USD",
+		"rates":{"input":"0.000000001","output":"0.000000001","web_search":"0.00000001"}}`).Fill(f.perUse)
+	usage := func(counts map[catalog.Item]int64) Segment {
+		t.Helper()
+		u, err := catalog.NewUsage(counts, catalog.ServiceTierPriority, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
+	}
+	tokens := usage(map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 1})
+	for _, tc := range []struct {
+		name     string
+		waived   bool
+		segments []Segment
+		want     int64
+	}{
+		{"tokens at the highest token price, the search at its default", false, []Segment{tokens}, 70 + 20},
+		{"waived: the tokens go, the search stays", true, []Segment{tokens}, 20},
+		{"two samplings, each charged", false, []Segment{usage(map[catalog.Item]int64{in: 50}), tokens}, 50 + 90},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := priceSegments(s, f, tc.segments, tc.waived)
 			if err != nil || p.price != tc.want || !p.estimated {
 				t.Errorf("priceSegments = %+v, %v; want %d estimated", p, err, tc.want)
 			}

@@ -97,8 +97,8 @@ func checkCompactRequest(t *testing.T, h *harness) {
 	}
 }
 
-// checkCompactSettlement: one attempt whose reply reached the client, settled before the write and journalled before it,
-// charged for the usage the reply reported.
+// checkCompactSettlement: one attempt whose reply reached the client, settled before the write, charged for the usage
+// the reply reported.
 func checkCompactSettlement(t *testing.T, h *harness) {
 	t.Helper()
 	s := h.ended()
@@ -106,7 +106,7 @@ func checkCompactSettlement(t *testing.T, h *harness) {
 		t.Errorf("the reply was written before the settlement:\n%s", s.body)
 	}
 	a := s.outcome.Attempts
-	if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop || s.outcome.Cancelled {
+	if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop {
 		t.Fatalf("ending %+v", s.outcome)
 	}
 	u := a[0].Segments[0]
@@ -122,9 +122,6 @@ func checkCompactSettlement(t *testing.T, h *harness) {
 		if got := u.Usage.Count(it.item); got != it.want || !u.Reported.Has(it.item) {
 			t.Errorf("%s is %d (reported %t), want %d", it.item, got, u.Reported.Has(it.item), it.want)
 		}
-	}
-	if n := len(h.up.journal); n == 0 || !h.up.journal[n-1].Committed {
-		t.Errorf("the journal does not say the reply reached the client: %+v", h.up.journal)
 	}
 }
 
@@ -212,7 +209,8 @@ func TestACompactReplyHoldsAtMostTheCap(t *testing.T) {
 		{"exactly the cap", compactLimit, true},
 		{"a byte past it", compactLimit + 1, false},
 	} {
-		body, held, err := readWhole(memory, io.LimitReader(zero{}, c.size), idle, time.Hour)
+		var held int64
+		body, err := readWhole(memory, io.LimitReader(zero{}, c.size), idle, time.Hour, &held)
 		if c.reply && (err != nil || int64(len(body)) != c.size) {
 			t.Errorf("%s: %d bytes, error %v", c.name, len(body), err)
 		}
@@ -279,7 +277,7 @@ func TestACompactReplyReadForAClientThatLeft(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts
-		if !s.outcome.Cancelled || len(a) != 1 || a[0].Result != billing.FailedBeforeCommit || a[0].Finish != billing.FinishCancelled {
+		if len(a) != 1 || a[0].Result != billing.FailedBeforeCommit || a[0].Finish != billing.FinishCancelled {
 			t.Errorf("ending %+v", s.outcome)
 		}
 		if a[0].Segments[0].Usage.Count(catalog.ItemInput) != 60 {
@@ -328,7 +326,7 @@ func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts
-		if s.outcome.Cancelled || len(a) != 1 || a[0].Result != billing.Aggregated {
+		if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish == billing.FinishCancelled {
 			t.Errorf("ending %+v", s.outcome)
 		}
 		if got := a[0].Segments[0].Usage.Count(catalog.ItemInput); got != 60 {
@@ -352,7 +350,7 @@ func TestAClientThatStopsReadingAWholeReply(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts
-		if s.outcome.Cancelled || len(a) != 1 || a[0].Result != billing.Aggregated {
+		if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish == billing.FinishCancelled {
 			t.Errorf("ending %+v", s.outcome)
 		}
 		if got := a[0].Segments[0].Usage.Count(catalog.ItemOutput); got != 6 {

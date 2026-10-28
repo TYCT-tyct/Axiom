@@ -1,10 +1,8 @@
 package gateway
 
 import (
-	"errors"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -169,6 +167,7 @@ func TestSlots(t *testing.T) {
 	if resp, body := r.message(accounts[0], "acme/beta"); resp.StatusCode != http.StatusOK {
 		t.Errorf("after the calls ended: %d %s", resp.StatusCode, body)
 	}
+	wantRefused(t, r.refused(), map[string]int64{"account_in_flight": 1})
 }
 
 // TestIPLimits: a client address may have only so many requests in flight, however it spells itself with proxy
@@ -195,6 +194,7 @@ func TestIPLimits(t *testing.T) {
 		}
 	}, func() (reply, string) { return r.message(a, "acme/beta") }, func() (reply, string) { return r.message(c, "acme/beta") })
 	r.idle(1 << 30)
+	wantRefused(t, r.refused(), map[string]int64{"ip_in_flight": 1})
 }
 
 // TestIPKey: IPv4 addresses count one by one, IPv6 by their /64, and a v4 address in v6 clothes is the v4 address.
@@ -214,61 +214,6 @@ func TestIPKey(t *testing.T) {
 
 // quietly closes what a test is done with; there is nobody to tell about a failure.
 func quietly(c io.Closer) { c.Close() } //nolint:errcheck,gosec // the test is over with it
-
-// TestConnectionLimit: a client address that holds its share of connections has the next one closed as it is
-// accepted; closing one makes room.
-func TestConnectionLimit(t *testing.T) {
-	t.Parallel()
-	cfg := DefaultConfig()
-	cfg.IPConnections = 2
-	bp, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	limited := bp.LimitConnections(ln)
-	t.Cleanup(func() { quietly(limited) })
-	accepted := make(chan net.Conn, 4)
-	go func() {
-		for {
-			c, err := limited.Accept()
-			if err != nil {
-				return
-			}
-			accepted <- c
-		}
-	}()
-	dial := func() net.Conn {
-		c, err := new(net.Dialer).DialContext(t.Context(), "tcp", ln.Addr().String())
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { quietly(c) })
-		return c
-	}
-	dial()
-	dial()
-	third := dial()
-	one := <-accepted
-	<-accepted
-	if err := third.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := third.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Errorf("the third connection was not closed: %v", err)
-	}
-	quietly(one)
-	dial()
-	select {
-	case c := <-accepted:
-		quietly(c)
-	case <-time.After(5 * time.Second):
-		t.Error("a connection was not accepted after one closed")
-	}
-}
 
 // TestBodyLimits: a body over the limit is 413 by its announced length or as it comes, one that is cut short is 400
 // and one too slow 408, a body the node has no memory for is 503, and every byte charged is given back.
@@ -429,8 +374,8 @@ func TestAlternateModels(t *testing.T) {
 	}
 }
 
-// TestForwardedHeaders: only the protocol's own headers go upstream, as they were written; the client's credentials
-// and the headers that name its tooling do not.
+// TestForwardedHeaders: the client's headers that a protocol may forward are kept as it wrote them, to be derived per
+// attempt (headers.go); its credentials and the headers that name its tooling are dropped.
 func TestForwardedHeaders(t *testing.T) {
 	t.Parallel()
 	in := http.Header{
@@ -438,10 +383,14 @@ func TestForwardedHeaders(t *testing.T) {
 		"Http-Referer": {"https://app.example"}, "X-Title": {"app"}, "Cookie": {"a=b"}, "Content-Type": {"application/json"},
 		"Anthropic-Beta":    {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
 		"Anthropic-Version": {"2023-06-01"},
+		"session_id":        {"s"}, "conversation_id": {"c"}, "x-codex-turn-state": {"t"},
 	}
 	want := http.Header{
-		"Anthropic-Beta":    {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
-		"Anthropic-Version": {"2023-06-01"},
+		"Anthropic-Beta":     {"context-1m-2026-01-01,something-new-2027-02-02", "another"},
+		"Anthropic-Version":  {"2023-06-01"},
+		"Session_id":         {"s"},
+		"Conversation_id":    {"c"},
+		"X-Codex-Turn-State": {"t"},
 	}
 	if diff := cmp.Diff(want, forwardable(in)); diff != "" {
 		t.Errorf("forwarded headers (-want +got):\n%s", diff)
@@ -463,11 +412,11 @@ func (m listedModel) complete() bool {
 	return m.Object == "model" && m.Type == "model" && m.OwnedBy != "" && m.DisplayName != "" && m.CreatedAt != "" && m.Created != nil
 }
 
-// listIDs reads the model list at path and returns the IDs, checking every model carries the members OpenAI's and
-// Anthropic's clients read.
-func (r *rig) listIDs(a account, path string) []string {
+// listIDs reads GET /v1/models and returns the IDs, checking every model carries the members OpenAI's and Anthropic's
+// clients read.
+func (r *rig) listIDs(a account) []string {
 	r.t.Helper()
-	resp, body := r.do(http.MethodGet, path, a.key, nil)
+	resp, body := r.do(http.MethodGet, "/v1/models", a.key, nil)
 	var list struct {
 		Object  string        `json:"object"`
 		HasMore bool          `json:"has_more"`
@@ -490,24 +439,29 @@ func (r *rig) listIDs(a account, path string) []string {
 	return ids
 }
 
-// TestModelList: the list names every model by the name the catalog gives it and by its maker's own where that
-// resolves, in the members of OpenAI's and of Anthropic's, and follows the catalog.
+// TestModelList: the list names every model that has an endpoint by the name the catalog gives it and by its maker's own
+// where that resolves, in the members of OpenAI's and of Anthropic's, and follows the catalog. Under /api/v1 the same
+// models are OpenRouter's objects, one entry each under the catalog's name.
 func TestModelList(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
-	want := []string{"acme/alpha", "acme/beta", "anthropic/claude-test", "claude-test"}
-	for _, path := range []string{"/v1/models", "/api/v1/models"} {
-		if diff := cmp.Diff(want, r.listIDs(a, path)); diff != "" {
-			t.Errorf("%s (-want +got):\n%s", path, diff)
-		}
+	if diff := cmp.Diff([]string{"acme/alpha", "acme/beta", "anthropic/claude-live", "claude-live"}, r.listIDs(a)); diff != "" {
+		t.Errorf("/v1/models (-want +got):\n%s", diff)
 	}
-	r.model("acme/gamma")
+	if diff := cmp.Diff([]string{"acme/alpha", "acme/beta", "anthropic/claude-live"}, r.orIDs(a)); diff != "" {
+		t.Errorf("/api/v1/models (-want +got):\n%s", diff)
+	}
+	gamma := r.model("acme/gamma")
 	if err := r.catalog.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.listIDs(a, "/v1/models"); len(got) != 5 {
-		t.Errorf("after a model was listed: %v", got)
+	r.attachEndpoint(gamma)
+	if got := r.listIDs(a); len(got) != 5 {
+		t.Errorf("after a model was listed and given an endpoint: %v", got)
+	}
+	if got := r.orIDs(a); len(got) != 4 {
+		t.Errorf("after a model was listed and given an endpoint: %v", got)
 	}
 	resp, body := r.do(http.MethodGet, "/v1/models", "", nil, "Anthropic-Version", "2023-06-01")
 	if code, typ := errorOf(t, body); resp.StatusCode != http.StatusUnauthorized || code != "authentication" || typ != "authentication_error" {

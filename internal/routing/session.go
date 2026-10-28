@@ -2,9 +2,7 @@ package routing
 
 import (
 	"bytes"
-	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json/jsontext" //nolint:depguard // jsonx has no token-by-token reader; the prefix is cut mid-value, which only a token reader handles
 	"sync"
 	"time"
@@ -149,15 +147,6 @@ func metadataUser(dec *jsontext.Decoder) (user string, ok bool) {
 	return user, ok && err == nil
 }
 
-// Upstream is the opaque identifier passed to the upstream in place of the client's session value: derived with the
-// account-side secret, so tenants that all send "default" do not meet at the upstream, and the client's own value is
-// not revealed. The same session always gets the same identifier.
-func (k SessionKey) Upstream(secret []byte) string {
-	mac := hmac.New(sha256.New, secret)
-	mac.Write(k[:])
-	return hex.EncodeToString(mac.Sum(nil)[:16])
-}
-
 const stickyShards = 16
 
 // sticky remembers which endpoint a session last used. Losing an entry only makes the next request choose again; it
@@ -227,10 +216,15 @@ func (r *Router) Stuck(k SessionKey) (EndpointID, bool) { return r.sticky.get(k,
 // the preset sets none). A fallback that succeeds moves the session to the endpoint that served it.
 func (r *Router) Stick(k SessionKey, ep EndpointID, ttl time.Duration) {
 	now := r.cfg.Now()
+	r.sticky.put(k, ep, now.Add(r.stickyTTL(ttl)), now)
+}
+
+// stickyTTL is how long a binding lasts: the preset's, or the router's default when it sets none.
+func (r *Router) stickyTTL(ttl time.Duration) time.Duration {
 	if ttl <= 0 {
-		ttl = r.cfg.StickyTTL
+		return r.cfg.StickyTTL
 	}
-	r.sticky.put(k, ep, now.Add(ttl), now)
+	return ttl
 }
 
 // Forget drops the session's entry: the client says the context was compacted, so the cache it stuck for is gone.

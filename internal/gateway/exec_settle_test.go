@@ -29,14 +29,9 @@ func (h *harness) isReleased() bool {
 	}
 }
 
-func (h *harness) settledCalls() int {
-	h.up.mu.Lock()
-	defer h.up.mu.Unlock()
-	return h.up.settled
-}
-
 // TestASettlementIsRetriedUntilItIsWritten: the same outcome each time, so a try that committed with its
-// acknowledgement lost costs nothing more; the ending carries the cost of the one written, and the journal is told.
+// acknowledgement lost costs nothing more; the ending carries the cost of the one written, and the call gives its slots
+// back once it is written.
 func TestASettlementIsRetriedUntilItIsWritten(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{
@@ -57,8 +52,8 @@ func TestASettlementIsRetriedUntilItIsWritten(t *testing.T) {
 		h.mu.Lock()
 		tries := len(h.settlements)
 		h.mu.Unlock()
-		if tries != 3 || h.settledCalls() != 1 {
-			t.Errorf("%d tries, the journal told %d times", tries, h.settledCalls())
+		if tries != 3 || !h.isReleased() {
+			t.Errorf("%d tries, released %v", tries, h.isReleased())
 		}
 	})
 }
@@ -79,20 +74,20 @@ func TestASettlementNotWrittenInTimeGoesOnInTheBackground(t *testing.T) {
 		if h.elapsed() != h.cfg.SettleRetry || !strings.Contains(h.w.body(), `"billing_pending":true`) || strings.Contains(h.w.body(), `"cost"`) {
 			t.Fatalf("after %v:\n%s", h.elapsed(), h.w.body())
 		}
-		if h.isReleased() || h.settledCalls() != 0 {
+		if h.isReleased() {
 			t.Fatal("the call gave its slots back before its settlement was written")
 		}
 		<-h.released
-		if h.elapsed() < time.Minute || h.settledCalls() != 1 {
-			t.Errorf("released after %v, the journal told %d times", h.elapsed(), h.settledCalls())
+		if h.elapsed() < time.Minute {
+			t.Errorf("released after %v, before the settlement could be written", h.elapsed())
 		}
 		h.check()
 	})
 }
 
-// TestASettlementThatCannotBeWrittenIsTheCleanups: one billing refuses for good is not retried, and one retried in
-// vain is given up when SettleBackground is over; either way the slots go only once the journal has written what
-// the cleanup settles the call by.
+// TestASettlementThatCannotBeWrittenIsTheCleanups: one billing refuses for good is not retried and its slots go at once,
+// since nothing else will write it; one retried in vain is given up when SettleBackground is over, and its slots go then.
+// Either way nothing more is written, and the cleanup settles the reservation by recording the request lost.
 func TestASettlementThatCannotBeWrittenIsTheCleanups(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -105,25 +100,20 @@ func TestASettlementThatCannotBeWrittenIsTheCleanups(t *testing.T) {
 		{"the database down", io.ErrUnexpectedEOF, func(n int) bool { return n > 10 }, 10*time.Second + time.Minute},
 	} {
 		run(t, func(t *testing.T, ctx context.Context) {
-			flushed := make(chan struct{})
-			h := newHarness(t, ctx, options{settleErr: tc.err, flushed: flushed, config: func(c *Config) { c.SettleBackground = time.Minute }})
+			h := newHarness(t, ctx, options{settleErr: tc.err, config: func(c *Config) { c.SettleBackground = time.Minute }})
 			h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
 			<-h.start()
 			time.Sleep(2 * time.Minute)
-			if h.isReleased() {
-				t.Fatalf("%s: the slots went before the journal was written", tc.name)
-			}
 			h.mu.Lock()
 			n, last := len(h.settlements), h.settlements[len(h.settlements)-1].at.Sub(h.started)
 			h.mu.Unlock()
 			if !tc.tries(n) || last != tc.took {
 				t.Errorf("%s: %d tries, the last after %v", tc.name, n, last)
 			}
-			close(flushed)
-			h.check()
-			if h.settledCalls() != 0 {
-				t.Errorf("%s: the journal was told a settlement was written", tc.name)
+			if !h.isReleased() {
+				t.Errorf("%s: the slots are still held, and nothing will write the reservation", tc.name)
 			}
+			h.check()
 		})
 	}
 }
@@ -150,7 +140,7 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 		h.check()
 	})
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{settleErr: io.ErrUnexpectedEOF, flushed: make(chan struct{})})
+		h := newHarness(t, ctx, options{settleErr: io.ErrUnexpectedEOF})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
 		<-h.start()
 		stop, cancel := context.WithTimeout(ctx, time.Second)
@@ -187,6 +177,18 @@ func TestWhatIsCharged(t *testing.T) {
 	})
 }
 
+// checkNotExecuted: an attempt known not to have run used nothing and cost nothing, and its supplier row says so as a
+// complete estimate of nothing.
+func checkNotExecuted(t *testing.T, a billing.AttemptResult) {
+	t.Helper()
+	if a.Result != billing.NotExecuted || a.Segments != nil || a.Cost != 0 {
+		t.Errorf("not executed: %+v", a)
+	}
+	if a.Estimate.Flag != suppliers.CostComplete || a.Estimate.Native != (platform.Exact{}) {
+		t.Errorf("not executed: the supplier's row is %+v, want complete and nothing: it is known to have cost nothing", a.Estimate)
+	}
+}
+
 func checkCharged(t *testing.T, h *harness) {
 	t.Helper()
 	a := h.ended().outcome.Attempts
@@ -194,10 +196,7 @@ func checkCharged(t *testing.T, h *harness) {
 		t.Fatalf("attempts %+v", a)
 	}
 	input := estimatedInput(t, h, 1)
-	checkCosted(t, a)
-	if a[0].Result != billing.NotExecuted || a[0].Segments != nil || a[0].Cost != 0 {
-		t.Errorf("not executed: %+v", a[0])
-	}
+	checkNotExecuted(t, a[0])
 	if a[1].Result != billing.Unknown || !usageIs(a[1].Segments, input, 0, 0) || a[1].Cost != 70 {
 		t.Errorf("unknown: %+v", a[1])
 	}
@@ -206,28 +205,19 @@ func checkCharged(t *testing.T, h *harness) {
 	}
 }
 
-// checkCosted: every attempt's cost is known, the one known not to have run as well as those priced.
-func checkCosted(t *testing.T, a []billing.AttemptResult) {
-	t.Helper()
-	for _, at := range a {
-		if !at.Costed {
-			t.Errorf("attempt %d: its cost is not known", at.Seq)
-		}
-	}
-}
-
-// TestACostThatIsNotKnown: a cost that leaves something out, or a pricing that failed, reaches billing as not known,
-// with whatever cost came back: the waiver cap then counts the attempt at its sale price
-// (docs/domains/billing.md「免单规则」). A failure is never a known cost, whatever the implementation says.
+// TestACostThatIsNotKnown: a cost that leaves something out, or a pricing that failed, is booked as the cost that came
+// back, and an error is logged. Nothing corrects it in M1: the cost is the platform's, and the charge to the user never
+// rests on it. A failure is never a cost the platform knows: the supplier's row of it is flagged unpriced, not complete.
 func TestACostThatIsNotKnown(t *testing.T) {
 	errPricing := errors.New("the cost schedule could not be read")
 	for _, tc := range []struct {
-		name string
-		o    options
-		cost int64
+		name     string
+		o        options
+		cost     int64
+		unpriced bool // the supplier's row must say so
 	}{
-		{"a cost that leaves something out", options{cost: 70, costNotKnown: true}, 70},
-		{"a pricing that failed", options{cost: 70, costErr: errPricing}, 70},
+		{"a cost that leaves something out", options{cost: 70, costNotKnown: true}, 70, false},
+		{"a pricing that failed", options{cost: 70, costErr: errPricing}, 70, true},
 	} {
 		run(t, func(t *testing.T, ctx context.Context) {
 			h := newHarness(t, ctx, tc.o)
@@ -237,8 +227,11 @@ func TestACostThatIsNotKnown(t *testing.T) {
 			if len(a) != 1 {
 				t.Fatalf("%s: attempts %+v", tc.name, a)
 			}
-			if a[0].Costed || a[0].Cost != tc.cost {
-				t.Errorf("%s: cost %d, known %v; want %d, not known", tc.name, a[0].Cost, a[0].Costed, tc.cost)
+			if a[0].Cost != tc.cost {
+				t.Errorf("%s: cost %d, want %d", tc.name, a[0].Cost, tc.cost)
+			}
+			if tc.unpriced && a[0].Estimate.Flag != suppliers.CostUnpriced {
+				t.Errorf("%s: the supplier's row is flagged %q, want unpriced: a failure is not a cost known to be zero", tc.name, a[0].Estimate.Flag)
 			}
 		})
 	}
@@ -327,6 +320,98 @@ func TestEstimated(t *testing.T) {
 				t.Errorf("%s: %s is %d, want %d", tc.name, it, n, tc.want[it])
 			}
 		}
+	}
+}
+
+// TestAnEstimateOfImagesAndFiles: an input the upstream did not report is charged for an image at 1600 tokens and a file
+// at 4096 beside the text at 4 bytes a token, not at the whole context the reservation had to allow for them; a bound the
+// model's data gives that is below those holds, so does the window, and a report of the input, in whole or by its cache
+// part, is not estimated over.
+func TestAnEstimateOfImagesAndFiles(t *testing.T) {
+	t.Parallel()
+	const in, cached = catalog.ItemInput, catalog.ItemCacheRead
+	reported := func(it catalog.Item, n int64) protocol.Usage {
+		u, err := catalog.NewUsage(map[catalog.Item]int64{it: n}, catalog.ServiceTierStandard, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return protocol.Usage{Segments: []protocol.Segment{{Usage: u, Reported: 1 << it}}}
+	}
+	demand := billing.Demand{TextBytes: 4001, Images: 1, Documents: 1} // 1001 tokens of text
+	for _, tc := range []struct {
+		name  string
+		usage protocol.Usage
+		model billing.Model
+		want  int64
+	}{
+		{"a model whose images and files have no known size", protocol.Usage{}, billing.Model{ContextLength: 200000}, 1001 + 1600 + 4096},
+		{"an image bound below the estimate", protocol.Usage{}, billing.Model{ContextLength: 200000, ImageTokens: 500}, 1001 + 500 + 4096},
+		{"a file bound below the estimate", protocol.Usage{}, billing.Model{ContextLength: 200000, PageTokens: 100, FilePages: 2}, 1001 + 1600 + 200},
+		{"a small window", protocol.Usage{}, billing.Model{ContextLength: 4000}, 4000},
+		{"the input reported", reported(in, 12), billing.Model{ContextLength: 200000}, 12},
+		{"the cached part of the input reported", reported(cached, 12), billing.Model{ContextLength: 200000}, 0},
+	} {
+		got := estimated(tc.usage, protocol.Progress{}, demand, tc.model, math.MaxInt64)
+		if n := got[0].Usage.Count(in); n != tc.want {
+			t.Errorf("%s: the input is %d, want %d", tc.name, n, tc.want)
+		}
+	}
+}
+
+// TestAnEstimateOfCountedText: the input an upstream did not report is the request's own text counted in the tokens of
+// the endpoint's model family where that family publishes a tokenizer, not its bytes at 4 a token; a family without one
+// keeps the rule, the count is held to the window, and a reported input is never estimated over.
+func TestAnEstimateOfCountedText(t *testing.T) {
+	t.Parallel()
+	const in = catalog.ItemInput
+	body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"` +
+		strings.Repeat("今天天气很好，我们一起去公园散步。", 500) + `"}]}`)
+	req, err := protocol.Inspect(protocol.Messages, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := (req.TextBytes + billing.InputBytesPerToken - 1) / billing.InputBytesPerToken
+	d := billing.Demand{TextBytes: req.TextBytes}
+	cl100k := billing.Model{ContextLength: 100000}
+	counted, err := textTokens(body, d, billing.TokenizerCl100k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted <= rule {
+		t.Errorf("counted %d, no more than the bytes rule's %d, on text the rule undercounts", counted, rule)
+	}
+	for _, tc := range []struct {
+		name  string
+		model billing.Model
+		tok   billing.Tokenizer
+		want  int64
+	}{
+		{"cl100k's own count", cl100k, billing.TokenizerCl100k, counted},
+		{"a window below the count", billing.Model{ContextLength: 3000}, billing.TokenizerCl100k, 3000},
+		{"a family with no tokenizer", billing.Model{ContextLength: 100000}, billing.TokenizerNone, rule},
+	} {
+		d := d
+		d.TextTokens, err = textTokens(body, d, tc.tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.tok == billing.TokenizerNone && d.TextTokens != 0 {
+			t.Errorf("%s: counted %d with no tokenizer", tc.name, d.TextTokens)
+		}
+		got := estimated(protocol.Usage{}, protocol.Progress{}, d, tc.model, math.MaxInt64)
+		if n := got[0].Usage.Count(in); n != tc.want {
+			t.Errorf("%s: the input is %d, want %d", tc.name, n, tc.want)
+		}
+	}
+	// A reported input is kept, whatever the count says it could have been.
+	d.TextTokens = counted
+	u, err := catalog.NewUsage(map[catalog.Item]int64{in: 12}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reported := protocol.Usage{Segments: []protocol.Segment{{Usage: u, Reported: 1 << in}}}
+	if n := estimated(reported, protocol.Progress{}, d, cl100k, math.MaxInt64)[0].Usage.Count(in); n != 12 {
+		t.Errorf("the reported input of 12 was estimated over: %d", n)
 	}
 }
 

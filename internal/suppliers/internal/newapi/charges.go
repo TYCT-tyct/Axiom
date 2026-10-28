@@ -262,20 +262,3 @@ func funding(o otherInfo) adapter.Funding {
 	}
 	return adapter.FundingOther
 }
-
-var _ adapter.Rescanner = (*manager)(nil)
-
-// Rescan begins a late pass over [since, now), for a removal that reads the last records after the grace period: it
-// reads that stretch again whatever the passes the adapter schedules would do next.
-func (m *manager) Rescan(since time.Time) adapter.ScanState {
-	now := m.now()
-	s := scanState{
-		V: 1, Watermark: now.Unix(), Span: int64(initialSpan / time.Second), LastLate: now.Unix(), LateEnd: now.Unix(),
-		Pass: &pass{Late: true, Start: since.Unix(), End: now.Add(-lag).Unix(), Page: 1},
-	}
-	state, err := s.encode()
-	if err != nil {
-		panic(err) // integers and booleans always encode
-	}
-	return state
-}

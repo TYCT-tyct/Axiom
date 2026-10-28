@@ -17,7 +17,7 @@ import (
 func (p *Pool) inUse() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.used
+	return p.classes[Admission].used + p.classes[Completion].used
 }
 
 // waitFor polls until cond holds, or fails.
@@ -141,6 +141,7 @@ func TestQueueLimits(t *testing.T) {
 	if r.limits.Queue.queued() != 0 || r.count(allRows) != 0 || len(r.calls()) != 0 {
 		t.Errorf("%d still queued, %d reservation rows, %d calls", r.limits.Queue.queued(), r.count(allRows), len(r.calls()))
 	}
+	wantRefused(t, r.refused(), map[string]int64{"queue_key_full": 1, "queue_wait": 2})
 	r.idle(1 << 30)
 }
 

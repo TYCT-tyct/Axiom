@@ -13,17 +13,19 @@ import (
 // TestServeAdminListener: a node given AXIOM_ADMIN_ADDR serves the admin's API there and only there, behind the guard,
 // and logs the address; the public listener has no admin routes and the admin listener has no console routes.
 func TestServeAdminListener(t *testing.T) {
+	t.Parallel()
 	environ := func(extra ...string) []string {
 		return append([]string{
 			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
 			"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+			"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 		}, extra...)
 	}
 	start := func(extra ...string) (adminAddr, publicAddr string, stop func()) {
 		logs := make(records, 16)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- serve(ctx, environ(extra...), slog.New(slog.NewJSONHandler(logs, nil))) }()
+		go func() { done <- serveForTest(ctx, environ(extra...), slog.New(slog.NewJSONHandler(logs, nil))) }()
 		addrs := servingAddrs(t, logs, done)
 		return addrs.Admin, addrs.Public, func() {
 			cancel()

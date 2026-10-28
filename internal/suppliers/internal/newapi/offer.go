@@ -52,7 +52,6 @@ type builtGroup struct {
 	Models            []string
 }
 
-// decodeOffer reads a position; a position this version does not read begins the listing again.
 func decodeOffer(raw adapter.Listing) offerProgress {
 	if len(raw) == 0 {
 		return offerProgress{}
@@ -86,8 +85,6 @@ func (m *manager) Offer(ctx context.Context, from adapter.Listing) (adapter.Page
 	}
 }
 
-// offerStart is the position a read begins from: the one given, unless the supplier's groups are no longer the ones it
-// was read over, and a new pass's where none was given.
 func (m *manager) offerStart(ctx context.Context, from adapter.Listing) (offerProgress, error) {
 	p := decodeOffer(from)
 	if p.V == 0 {
@@ -103,9 +100,6 @@ func (m *manager) offerStart(ctx context.Context, from adapter.Listing) (offerPr
 	return p, nil
 }
 
-// offerPage reads the models of the group the position points at into it. more is true when the listing has groups
-// after it; otherwise the page answers, either with the whole offer (Done) or with the position it reached when the
-// supplier's limits stopped it.
 func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter.Page[adapter.Group], more bool, err error) {
 	if p.Next == len(p.Names) {
 		groups, err := p.offer()
@@ -136,7 +130,6 @@ func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter
 	return page, true, nil
 }
 
-// startOffer reads what the whole pass works from: the groups (read here when the caller has none) and the prices.
 func (m *manager) startOffer(ctx context.Context, groups map[string]groupEntry) (offerProgress, error) {
 	var err error
 	if groups == nil {
@@ -156,7 +149,6 @@ func (m *manager) startOffer(ctx context.Context, groups map[string]groupEntry) 
 	return offerProgress{V: 1, Groups: groups, Names: sortedKeys(groups), Prices: pricing.Data}, nil
 }
 
-// offer is the offer of the pass: the groups it built, their models priced from the prices it began with.
 func (p offerProgress) offer() ([]adapter.Group, error) {
 	prices := make(map[string]priceEntry, len(p.Prices))
 	for _, e := range p.Prices {
@@ -177,7 +169,6 @@ func (p offerProgress) offer() ([]adapter.Group, error) {
 	return groups, nil
 }
 
-// groupsNow reads the groups of the account, as they stand.
 func (m *manager) groupsNow(ctx context.Context) (map[string]groupEntry, error) {
 	var groups struct {
 		Data map[string]groupEntry `json:"data"`

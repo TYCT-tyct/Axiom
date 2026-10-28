@@ -45,13 +45,15 @@ func (fakeQuirks) ChargeRef(h http.Header) (adapter.ChargeRef, bool) {
 	return adapter.ChargeRef(v), v != ""
 }
 
-// Classify: 401 the key is refused, 403 its allowance is used up, 429 it is asked to wait, 5xx the supplier failed.
+// Classify: 400 the request is refused, 401 the key is refused, 403 its allowance is used up, 429 it is asked to wait, 5xx the supplier failed.
 func (fakeQuirks) Classify(status int, _ http.Header, _ []byte) adapter.Failure {
 	switch status {
 	case 401:
 		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeCredential, Cause: adapter.CredentialRejected{}}
 	case 403:
 		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeCredential, Cause: adapter.CredentialQuotaExhausted{}}
+	case 400:
+		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	case 429:
 		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeCredential, Cause: adapter.RateLimited{RetryAfter: 3 * time.Second}}
 	case 500:
@@ -70,6 +72,7 @@ type world struct {
 	supplier, group, credential, endpoint, sc uuid.UUID
 	svc                                       *Service
 	clock                                     *testClock
+	second                                    bool // seed makes the second supplier
 }
 
 type testClock struct {
@@ -91,7 +94,9 @@ func (c *testClock) advance(d time.Duration) {
 
 var platformScope = pg.PlatformScope()
 
-const scheduleJSON = `{"v":1,"currency":"XXX","rates":{"input":"0.075","output":"0.3"}}`
+// scheduleJSON is a cost schedule in the canonical form catalog.Schedule writes back, so a test can compare a schedule
+// read from the database with it as text.
+const scheduleJSON = `{"currency":"XXX","rates":{"input":"0.075","output":"0.3"},"v":1}`
 
 func newKeys(t *testing.T) *secret.Keyring {
 	t.Helper()
@@ -142,7 +147,7 @@ func (w *world) seed(ctx context.Context, tx pg.Tx, maxConcurrency int32) (err e
 	version := int64(sealed.KeyVersion)
 	if w.supplier, err = q.InsertSupplier(ctx, tx, store.InsertSupplierParams{
 		OwnerScope: "platform", Name: "s", Kind: "fake",
-		Origin: "https://fake.example", UpstreamAccount: "me", NativeUnit: "quota", SettlementCurrency: "USD", MgmtEgressID: "direct",
+		Origin: w.origin(), UpstreamAccount: "me", NativeUnit: "quota", SettlementCurrency: "USD", MgmtEgressID: "direct",
 	}); err != nil {
 		return err
 	}
@@ -171,14 +176,29 @@ func (w *world) seed(ctx context.Context, tx pg.Tx, maxConcurrency int32) (err e
 	if err = q.SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: w.endpoint, CostScheduleID: &w.sc}); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, "UPDATE suppliers.suppliers SET status = 'active' WHERE id = $1", w.supplier); err != nil {
+	if _, err = tx.Exec(ctx, "UPDATE suppliers.suppliers SET status = 'active', balance_native = 100 WHERE id = $1", w.supplier); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, 2, 'test', 'seed')", w.supplier); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, "UPDATE suppliers.supplier_groups SET selected = true, codename = 'maple' WHERE id = $1", w.group)
+	_, err = tx.Exec(ctx, "UPDATE suppliers.supplier_groups SET selected = true, codename = $2 WHERE id = $1", w.group, w.codename())
 	return err
+}
+
+// origin and codename are the first supplier's; a second one (addSupplier) gets its own, which the tables keep unique.
+func (w *world) origin() string {
+	if w.second {
+		return "https://second.example"
+	}
+	return "https://fake.example"
+}
+
+func (w *world) codename() string {
+	if w.second {
+		return "birch"
+	}
+	return "maple"
 }
 
 // tx runs fn in a platform transaction and fails the test on its error.
@@ -206,6 +226,38 @@ func (w *world) insertValue(v string) error {
 		_, err := tx.Exec(w.t.Context(), "INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, $2::numeric, 'test', 'bad')", w.supplier, v)
 		return err
 	})
+}
+
+// perMinute sets a credential's per-minute limit and reloads, as the admin's change and the node's next Reload do.
+func (w *world) perMinute(credential uuid.UUID, n int32) {
+	w.t.Helper()
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, "UPDATE suppliers.credentials SET requests_per_minute = $1 WHERE id = $2", n, credential)
+		return err
+	})
+	if err := w.svc.Reload(w.t.Context()); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// anotherKey binds another key of the same group, as the sync does, and returns its id: a second credential of the
+// endpoint, which the least busy of the two is chosen among.
+func (w *world) anotherKey(maxConcurrency int32) uuid.UUID {
+	w.t.Helper()
+	id := uuid.NewV7()
+	sealed := w.keys.Seal(secret.New("sk-second-key"), secret.Location{Table: "suppliers.credentials", RowID: id.String(), Purpose: "key"})
+	version := int64(sealed.KeyVersion)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		return store.New().InsertCredential(ctx, tx, store.InsertCredentialParams{
+			ID: id, SupplierID: w.supplier, SupplierGroupID: w.group, UpstreamKeyRef: id.String(),
+			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,
+			Status: "active", MaxConcurrency: maxConcurrency,
+		})
+	})
+	if err := w.svc.Reload(w.t.Context()); err != nil {
+		w.t.Fatal(err)
+	}
+	return id
 }
 
 // pointAt makes the endpoint's calls go to a test server instead of the supplier's address.

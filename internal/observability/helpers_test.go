@@ -42,8 +42,8 @@ func accountScope(accounts ...uuid.UUID) pg.Scope { return pg.NewScope(false, ni
 func record(account uuid.UUID, at time.Time) CallRecord {
 	return CallRecord{
 		ID: uuid.NewV7(), At: at, Site: uuid.NewV7(), Account: account, Workspace: uuid.NewV7(), Key: uuid.NewV7(),
-		IP: netip.MustParseAddr("203.0.113.7"), ClientApp: "claude-code", Class: "chat", Language: "en", UsedTools: true,
-		Model: "claude-opus",
+		IP: netip.MustParseAddr("203.0.113.7"), ClientApp: "claude-code", SessionID: "session-1", SubagentID: "agent-1",
+		Class: "chat", Language: "en", UsedTools: true, HasImage: true, HasFile: true, Model: "claude-opus",
 		Attempts: []AttemptRecord{
 			{
 				Seq: 1, Endpoint: uuid.NewV7(), Supplier: uuid.NewV7(), SourceClass: "relay", Egress: "direct",
@@ -55,11 +55,12 @@ func record(account uuid.UUID, at time.Time) CallRecord {
 				FinishedAt: at.Add(900 * time.Millisecond), FirstToken: 300 * time.Millisecond,
 			},
 		},
-		Route:  []byte(`{"preset":"p1"}`),
-		Ledger: []uuid.UUID{uuid.NewV7()}, Usage: map[catalog.Item]int64{catalog.ItemInput: 120, catalog.ItemOutput: 30},
+		Route:       []byte(`{"preset":"p1"}`),
+		Usage:       map[catalog.Item]int64{catalog.ItemInput: 120, catalog.ItemOutput: 30},
 		ServiceTier: catalog.ServiceTierStandard, PriceNano: 5_000_000, CostNano: 3_000_000,
-		Currency: mustCurrency("USD"), Latency: 1200 * time.Millisecond, FirstToken: 300 * time.Millisecond,
-		EndUser: HashEndUser([]byte("site-key"), "user-1"), FinishReason: "stop", ConsentVersion: "2026-10", TrainingAllowed: true,
+		Currency: mustCurrency("USD"), Free: true, Latency: 1200 * time.Millisecond, FirstToken: 300 * time.Millisecond,
+		FinishReason: "stop", ErrorKind: "upstream_error",
+		EndUser: HashEndUser([]byte("site-key"), "user-1"), ConsentVersion: "2026-10", TrainingAllowed: true,
 	}
 }
 

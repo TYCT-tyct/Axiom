@@ -60,10 +60,6 @@ func TestFilters(t *testing.T) {
 			nil, nil, routing.FormatNotServed, true,
 		},
 		{
-			"a Chat request where only Chat is spoken", func(e *routing.Endpoint) { e.Native = routing.Of(protocol.Chat); e.Served = routing.Of(protocol.Chat) },
-			func(in *routing.Input) { in.Req.Format = protocol.Chat }, nil, routing.FormatNotServed, true,
-		},
-		{
 			// The gateway reads every answer as a stream but the compact call's, whose answer arrives whole.
 			"an endpoint that cannot stream", func(e *routing.Endpoint) { e.Streams = false },
 			nil, nil, routing.FormatNotServed, true,
@@ -319,6 +315,12 @@ func TestSegmentable(t *testing.T) {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
+	// With no segment size configured, which is M1's, every entry is reserved whole: a segment of 0 tokens would
+	// reserve no output at all.
+	h := newHarness(t, routing.Config{}, openPreset(), endpoint(t, 1, func(*routing.Endpoint) {}))
+	if h.plan(input()).Entries[0].Segmentable {
+		t.Error("an entry is segmentable though no segment size is configured")
+	}
 }
 
 // TestWait: when every endpoint that passed is full the answer is a wait, not a refusal; a full endpoint beside one
@@ -348,6 +350,25 @@ func TestWait(t *testing.T) {
 	}
 }
 
+// TestServes: a model is served when the snapshot has an endpoint for it, whatever state the endpoint is in right now,
+// and however old the snapshot is; a model without one, or a router without a snapshot, serves nothing.
+func TestServes(t *testing.T) {
+	t.Parallel()
+	if mustRouter(t).Serves(model) {
+		t.Error("a router without a snapshot serves a model")
+	}
+	h := newHarness(t, routing.Config{}, openPreset(),
+		endpoint(t, 1, func(e *routing.Endpoint) { e.Enabled, e.BreakerOpen, e.MaxConcurrent = false, true, 1 }))
+	h.r.Begin(ep(1))
+	h.now = t0.Add(time.Hour) // far past MaxStale: Plan refuses, the list still knows the route
+	if _, _, err := h.r.Plan(input()); !errors.Is(err, routing.ErrStale) {
+		t.Fatalf("a snapshot an hour old: %v, want ErrStale", err)
+	}
+	if !h.r.Serves(model) || h.r.Serves(other) {
+		t.Errorf("served: model %v, other %v; want true, false", h.r.Serves(model), h.r.Serves(other))
+	}
+}
+
 // TestNoEndpointPermanence: a mix of permanent and temporary reasons is temporary, since waiting may cure it.
 func TestNoEndpointPermanence(t *testing.T) {
 	t.Parallel()
@@ -367,9 +388,15 @@ func TestSnapshotStaleness(t *testing.T) {
 	h.plan(input())
 	h.now = t0.Add(30 * time.Second)
 	h.plan(input()) // at the limit
+	if !h.r.Fresh() {
+		t.Error("at the limit: Fresh is false, but Plan uses the snapshot")
+	}
 	h.now = t0.Add(30*time.Second + time.Nanosecond)
 	if _, _, err := h.r.Plan(input()); !errors.Is(err, routing.ErrStale) {
 		t.Errorf("past the limit: %v", err)
+	}
+	if h.r.Fresh() {
+		t.Error("past the limit: Fresh is true, but Plan refuses the snapshot")
 	}
 	old, err := h.r.NewSnapshot(t0.Add(-time.Hour), nil, []routing.Preset{openPreset()})
 	if err != nil {
@@ -386,6 +413,9 @@ func TestSnapshotStaleness(t *testing.T) {
 	empty := mustRouter(t)
 	if _, _, err := empty.Plan(input()); !errors.Is(err, routing.ErrStale) {
 		t.Errorf("no snapshot: %v", err)
+	}
+	if empty.Fresh() {
+		t.Error("no snapshot: Fresh is true")
 	}
 }
 
@@ -409,8 +439,8 @@ func TestSnapshotRejectsBadData(t *testing.T) {
 }
 
 // TestEntryTellsHowToCallTheEndpoint: an entry carries the supplier and the endpoint's target, with the format the
-// request is called in — its own when the endpoint serves it, or the one a Chat request is converted to, which is always
-// a conversion since M1 rewrites no Chat request (docs/domains/gateway.md「转发规则」) — and whether the endpoint
+// request is called in — its own when the endpoint serves it, for a Chat request also when the endpoint speaks Chat, else the
+// one it is converted to (docs/domains/gateway.md「转发规则」) — and whether the endpoint
 // streams, which every endpoint of a call read as a stream must. The compact call's answer arrives whole, so it is the
 // one request an endpoint that does not stream can serve.
 func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
@@ -424,7 +454,9 @@ func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 		want       protocol.Format
 	}{
 		{"its own format", protocol.Messages, routing.Of(protocol.Messages, protocol.Chat), true, false, protocol.Messages},
-		{"chat to an endpoint that speaks both", protocol.Chat, routing.Of(protocol.Messages, protocol.Chat), true, false, protocol.Messages},
+		{"chat to an endpoint that speaks both", protocol.Chat, routing.Of(protocol.Messages, protocol.Chat), true, false, protocol.Chat},
+		{"chat to chat", protocol.Chat, routing.Of(protocol.Chat), true, false, protocol.Chat},
+		{"chat prefers its own format", protocol.Chat, routing.Of(protocol.Responses, protocol.Messages, protocol.Chat), true, false, protocol.Chat},
 		{"chat to messages", protocol.Chat, routing.Of(protocol.Messages), true, false, protocol.Messages},
 		{"chat to responses", protocol.Chat, routing.Of(protocol.Responses), true, false, protocol.Responses},
 		{"chat prefers messages", protocol.Chat, routing.Of(protocol.Responses, protocol.Messages), true, false, protocol.Messages},
@@ -433,14 +465,18 @@ func TestEntryTellsHowToCallTheEndpoint(t *testing.T) {
 	for _, c := range cases {
 		e := endpoint(t, 1, func(e *routing.Endpoint) {
 			e.Native, e.Served, e.Streams = c.native, routing.Of(protocol.Chat)|c.native, c.streams
-			e.Target = protocol.Target{Model: "upstream-name", EncryptedReasoning: true, Format: protocol.Responses}
+			e.Target = protocol.Target{Model: "upstream-name", EncryptedReasoning: catalog.ClaimYes, Format: protocol.Responses}
 		})
 		in := input()
 		in.Req.Format, in.NoSegments = c.client, c.noSegments
 		entry := newHarness(t, routing.Config{}, openPreset(), e).plan(in).Entries[0]
-		if entry.Target.Format != c.want || entry.Target.Model != "upstream-name" || !entry.Target.EncryptedReasoning ||
+		if entry.Target.Format != c.want || entry.Target.Model != "upstream-name" || entry.Target.EncryptedReasoning != catalog.ClaimYes ||
 			entry.Target.Streams != c.streams || entry.Supplier != sup(1) {
 			t.Errorf("%s: supplier %v, target %+v, want format %d streaming %t", c.name, entry.Supplier, entry.Target, c.want, c.streams)
+		}
+		// The reply's usage follows the call format: only an OpenAI call reserves for cache reads and writes that overlap.
+		if want := c.want != protocol.Messages; entry.Limits.OpenAIUsage != want {
+			t.Errorf("%s: OpenAIUsage = %t, want %t", c.name, entry.Limits.OpenAIUsage, want)
 		}
 	}
 }

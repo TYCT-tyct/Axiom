@@ -1,10 +1,10 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: events are read token by token, in place
 	"fmt"
 	"slices"
-	"strings"
 
 	"axiom/internal/platform/jsonx"
 )
@@ -217,20 +217,28 @@ func (a *messagesAggregate) startBlock() error {
 	return a.openBlock(&special)
 }
 
-// blockType writes the block's type, and takes the kind of block from it.
+// blockType writes the block's type, and takes the kind of block from it: the type the client is sent is the one it
+// spells, escapes and all, so an escaped type names the same kind of block (README.md「非流式聚合」). A type that is null
+// names no kind, and is written as it came.
 func (a *messagesAggregate) blockType() error {
 	v, err := a.value()
 	if err != nil {
 		return err
 	}
 	a.cur.kind = otherBlock
-	switch name := string(v); {
-	case name == `"text"`:
-		a.cur.kind = textBlock
-	case name == `"thinking"`:
-		a.cur.kind = thinkingBlock
-	case strings.HasSuffix(name, `tool_use"`):
-		a.cur.kind = toolBlock
+	if len(v) > 0 && v[0] == '"' {
+		name, err := a.unquote(v)
+		if err != nil {
+			return err
+		}
+		switch {
+		case string(name) == "text":
+			a.cur.kind = textBlock
+		case string(name) == "thinking":
+			a.cur.kind = thinkingBlock
+		case bytes.HasSuffix(name, []byte("tool_use")): // server tools use it too
+			a.cur.kind = toolBlock
+		}
 	}
 	a.out = append(a.quoted(comma(a.out)), v...)
 	return nil
@@ -389,7 +397,7 @@ func (a *messagesAggregate) closeBlock() error {
 			a.out = append(comma(a.out), `"input":{}`...)
 		} else if b.deltas {
 			if err := jsonx.Validate(a.out[b.input:]); err != nil {
-				return fmt.Errorf("%w: a tool's input is not JSON: %w", ErrUpstream, err)
+				return &faultError{fault: FaultToolInput, detail: "a tool's input is not JSON: " + err.Error()}
 			}
 		}
 	case otherBlock, redactedBlock, signatureDelta, inputDelta:

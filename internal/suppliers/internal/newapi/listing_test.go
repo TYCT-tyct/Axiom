@@ -26,49 +26,19 @@ func keyList(total *int) func(adapter.Request) (adapter.Response, error) {
 	}
 }
 
-// TestAKeyListingThatChangedUnderItsPositionBeginsAgain: a key removed while a listing was stopped moves its pages
-// forward, so going on from the stored page would skip one. The position is given up and the listing is read again whole;
-// the keys that are gone do not come back with it.
-func TestAKeyListingThatChangedUnderItsPositionBeginsAgain(t *testing.T) {
+func TestAKeyListingResumesAcrossManagers(t *testing.T) {
 	t.Parallel()
-	total, asked := 250, []int{}
-	limited := true
-	serve := keyList(&total)
-	client := funcClient(func(r adapter.Request) (adapter.Response, error) {
-		page := pageOf(t, r)
-		asked = append(asked, page)
-		if limited && page == 2 {
-			return adapter.Response{}, adapter.Blocked{Until: t0.Add(time.Minute)}
-		}
-		return serve(r)
-	})
-	m := open(t, client, t0)
-	first, err := m.Keys(t.Context(), nil)
-	if err != nil || first.Done || len(first.Next) == 0 {
-		t.Fatalf("the read the limits stopped: done %v, position %q, %v; want a position to go on from", first.Done, first.Next, err)
-	}
-
-	limited, total = false, 150 // a hundred keys went away
-	page, err := m.Keys(t.Context(), first.Next)
-	if err != nil || !page.Done || len(page.Items) != total {
-		t.Fatalf("after the listing changed: done %v, %d keys, %v; want the %d it holds now", page.Done, len(page.Items), err, total)
-	}
-	if want := []int{1, 2, 2, 1, 2}; !slices.Equal(asked, want) {
-		t.Errorf("the pages asked for were %v, want %v: the listing began again", asked, want)
-	}
-	for i, k := range page.Items {
-		if k.Ref != adapter.KeyRef(strconv.Itoa(i+1)) {
-			t.Fatalf("key %d is %q, want the keys the listing holds now, none skipped", i+1, k.Ref)
-		}
+	for _, shrink := range []bool{false, true} {
+		t.Run(fmt.Sprint(shrink), func(t *testing.T) {
+			t.Parallel()
+			resumeKeys(t, shrink)
+		})
 	}
 }
 
-// TestALimitedReadAnswersWithItsPosition: a read that the supplier's limits refuse answers with the page it reached and
-// the moment to go on; the read made then reads that page, so no page is skipped and none is read twice.
-func TestALimitedReadAnswersWithItsPosition(t *testing.T) {
-	t.Parallel()
-	total, asked := 250, []int{}
-	limited := true
+func resumeKeys(t *testing.T, shrink bool) {
+	t.Helper()
+	total, asked, limited := 250, []int{}, true
 	serve := keyList(&total)
 	client := funcClient(func(r adapter.Request) (adapter.Response, error) {
 		page := pageOf(t, r)
@@ -78,20 +48,40 @@ func TestALimitedReadAnswersWithItsPosition(t *testing.T) {
 		}
 		return serve(r)
 	})
-	m := open(t, client, t0)
-	first, err := m.Keys(t.Context(), nil)
-	if err != nil || first.Done || len(first.Next) == 0 || !first.Until.Equal(t0.Add(time.Minute)) {
-		t.Fatalf("the read the limits stopped: done %v, position %q, until %v, %v; want a position and the moment",
-			first.Done, first.Next, first.Until, err)
+	openManager := func() adapter.Manager { return open(t, client, t0) }
+	until := t0.Add(time.Minute)
+	first, err := openManager().Keys(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-
+	if first.Done || len(first.Next) == 0 || !first.Until.Equal(until) {
+		t.Fatalf("no resumable position: %+v", first)
+	}
 	limited = false
-	page, err := m.Keys(t.Context(), first.Next)
-	if err != nil || !page.Done || len(page.Items) != total {
-		t.Fatalf("after the limits reopened: done %v, %d keys, %v; want the %d keys it read on to", page.Done, len(page.Items), err, total)
+	want := []int{1, 2, 2, 3}
+	if shrink {
+		total = 150
+		want = []int{1, 2, 2, 1, 2}
 	}
-	if want := []int{1, 2, 2, 3}; !slices.Equal(asked, want) {
-		t.Errorf("the pages asked for were %v, want %v: the page the limits stopped is the one read again", asked, want)
+	page, err := openManager().Keys(t.Context(), first.Next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertKeyListing(t, page, total)
+	if !slices.Equal(asked, want) {
+		t.Fatalf("pages %v, want %v", asked, want)
+	}
+}
+
+func assertKeyListing(t *testing.T, page adapter.Page[adapter.KeyState], total int) {
+	t.Helper()
+	if !page.Done || len(page.Next) != 0 || len(page.Items) != total {
+		t.Fatalf("incomplete listing: done %v, %d keys, position %q", page.Done, len(page.Items), page.Next)
+	}
+	for i, k := range page.Items {
+		if k.Ref != adapter.KeyRef(strconv.Itoa(i+1)) {
+			t.Fatalf("key %d: %q", i+1, k.Ref)
+		}
 	}
 }
 

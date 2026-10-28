@@ -21,6 +21,78 @@ func (q *Queries) BumpConfigGen(ctx context.Context, db DBTX, id uuid.UUID) erro
 	return err
 }
 
+const deleteSupplierLogin = `-- name: DeleteSupplierLogin :exec
+DELETE FROM suppliers.supplier_logins WHERE supplier_id = $1
+`
+
+// Removing a supplier: the sealed login goes. Nothing refers to the row.
+func (q *Queries) DeleteSupplierLogin(ctx context.Context, db DBTX, supplierID uuid.UUID) error {
+	_, err := db.Exec(ctx, deleteSupplierLogin, supplierID)
+	return err
+}
+
+const eraseCredentialsOf = `-- name: EraseCredentialsOf :exec
+UPDATE suppliers.credentials SET ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL, status = 'erased'
+WHERE supplier_id = $1
+`
+
+// Removing a supplier: the sealed keys go, and the rows stay, because attempts that were made with them point at the row.
+func (q *Queries) EraseCredentialsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) error {
+	_, err := db.Exec(ctx, eraseCredentialsOf, supplierID)
+	return err
+}
+
+const getCredentialOf = `-- name: GetCredentialOf :many
+SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
+FROM suppliers.credentials WHERE supplier_id = $1 AND id = $2
+`
+
+type GetCredentialOfParams struct {
+	SupplierID uuid.UUID
+	ID         uuid.UUID
+}
+
+type GetCredentialOfRow struct {
+	ID                uuid.UUID
+	SupplierGroupID   uuid.UUID
+	UpstreamKeyRef    string
+	Status            string
+	CooldownUntil     *time.Time
+	ExpiresAt         *time.Time
+	MaxConcurrency    int32
+	RequestsPerMinute *int32
+}
+
+// One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
+func (q *Queries) GetCredentialOf(ctx context.Context, db DBTX, arg GetCredentialOfParams) ([]GetCredentialOfRow, error) {
+	rows, err := db.Query(ctx, getCredentialOf, arg.SupplierID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCredentialOfRow
+	for rows.Next() {
+		var i GetCredentialOfRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SupplierGroupID,
+			&i.UpstreamKeyRef,
+			&i.Status,
+			&i.CooldownUntil,
+			&i.ExpiresAt,
+			&i.MaxConcurrency,
+			&i.RequestsPerMinute,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getGroupOf = `-- name: GetGroupOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
 FROM suppliers.supplier_groups WHERE supplier_id = $1 AND id = $2
@@ -205,18 +277,19 @@ func (q *Queries) InsertUnitValue(ctx context.Context, db DBTX, arg InsertUnitVa
 }
 
 const listCredentialsOf = `-- name: ListCredentialsOf :many
-SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency
+SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
 FROM suppliers.credentials WHERE supplier_id = $1 ORDER BY id
 `
 
 type ListCredentialsOfRow struct {
-	ID              uuid.UUID
-	SupplierGroupID uuid.UUID
-	UpstreamKeyRef  string
-	Status          string
-	CooldownUntil   *time.Time
-	ExpiresAt       *time.Time
-	MaxConcurrency  int32
+	ID                uuid.UUID
+	SupplierGroupID   uuid.UUID
+	UpstreamKeyRef    string
+	Status            string
+	CooldownUntil     *time.Time
+	ExpiresAt         *time.Time
+	MaxConcurrency    int32
+	RequestsPerMinute *int32
 }
 
 func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListCredentialsOfRow, error) {
@@ -236,6 +309,50 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 			&i.CooldownUntil,
 			&i.ExpiresAt,
 			&i.MaxConcurrency,
+			&i.RequestsPerMinute,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEndpointsOf = `-- name: ListEndpointsOf :many
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled
+FROM suppliers.endpoints WHERE supplier_id = $1 ORDER BY upstream_name, id
+`
+
+type ListEndpointsOfRow struct {
+	ID              uuid.UUID
+	SupplierGroupID uuid.UUID
+	ModelID         uuid.UUID
+	UpstreamName    string
+	Formats         []string
+	CostState       string
+	Enabled         bool
+}
+
+func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListEndpointsOfRow, error) {
+	rows, err := db.Query(ctx, listEndpointsOf, supplierID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEndpointsOfRow
+	for rows.Next() {
+		var i ListEndpointsOfRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SupplierGroupID,
+			&i.ModelID,
+			&i.UpstreamName,
+			&i.Formats,
+			&i.CostState,
+			&i.Enabled,
 		); err != nil {
 			return nil, err
 		}
@@ -568,6 +685,33 @@ type SelectGroupParams struct {
 func (q *Queries) SelectGroup(ctx context.Context, db DBTX, arg SelectGroupParams) error {
 	_, err := db.Exec(ctx, selectGroup, arg.Selected, arg.Codename, arg.ID)
 	return err
+}
+
+const setCredentialLimits = `-- name: SetCredentialLimits :execrows
+UPDATE suppliers.credentials SET max_concurrency = $1, requests_per_minute = $2
+WHERE supplier_id = $3 AND id = $4
+`
+
+type SetCredentialLimitsParams struct {
+	MaxConcurrency    int32
+	RequestsPerMinute *int32
+	SupplierID        uuid.UUID
+	ID                uuid.UUID
+}
+
+// What the admin set: the calls the key serves at once, and the account minute ceiling for selecting it. The count itself is each
+// node's own, in memory (internal/suppliers/README.md「并发与速率」).
+func (q *Queries) SetCredentialLimits(ctx context.Context, db DBTX, arg SetCredentialLimitsParams) (int64, error) {
+	result, err := db.Exec(ctx, setCredentialLimits,
+		arg.MaxConcurrency,
+		arg.RequestsPerMinute,
+		arg.SupplierID,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setSupplierStatusBumpingConfigGen = `-- name: SetSupplierStatusBumpingConfigGen :exec

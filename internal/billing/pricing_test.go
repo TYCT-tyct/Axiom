@@ -3,6 +3,7 @@ package billing
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -30,6 +31,12 @@ const (
 
 func plus(markup string) Method { return Method{Kind: "cost_plus", MarkupRatio: &markup} }
 
+// faced is the multiplier of a reference price read as the site's currency: the way, besides a fixed price, that M1 sets
+// a price.
+func faced(multiplier string) Method {
+	return Method{Kind: "reference_multiplier", Multiplier: &multiplier, CurrencyConversion: "face"}
+}
+
 // rule is a valid rule of the method for the target and everyone.
 func rule(target Selector, m Method) RuleInput {
 	return RuleInput{Enabled: true, Target: target, Audience: Selector{Kind: "all"}, Method: m}
@@ -45,39 +52,46 @@ func TestRuleChecks(t *testing.T) {
 		in    RuleInput
 		field string
 	}{
-		"cost plus a markup":              {rule(all, plus("0.25")), ""},
-		"cost plus a margin and fixed":    {rule(all, Method{Kind: "cost_plus", MarginRatio: ratio("0.2"), FixedMarkup: jsonx.Raw(`{"output":"0.000001"}`)}), ""},
-		"a multiplier by exchange":        {rule(all, multiplier("1.5")), ""},
-		"a multiplier at face":            {rule(all, Method{Kind: "reference_multiplier", Multiplier: ratio("2"), CurrencyConversion: "face"}), ""},
-		"a fixed price":                   {rule(all, Method{Kind: "fixed", Schedule: jsonx.Raw(fixedUS)}), ""},
-		"an endpoint of a UUID":           {rule(Selector{Kind: "endpoint", ID: model}, plus("0")), ""},
-		"an author":                       {rule(Selector{Kind: "author", ID: "acme"}, plus("0")), ""},
-		"a tier":                          {RuleInput{Target: all, Audience: Selector{Kind: "tier", ID: tierID}, Method: plus("1")}, ""},
-		"an account":                      {RuleInput{Target: all, Audience: Selector{Kind: "account", ID: acctID}, Method: plus("1")}, ""},
-		"a kind that prices nothing":      {rule(Selector{Kind: "planet"}, plus("0")), "target/kind"},
-		"all with an ID":                  {rule(Selector{Kind: "all", ID: "x"}, plus("0")), "target/id"},
-		"a model without an ID":           {rule(Selector{Kind: "model"}, plus("0")), "target/id"},
-		"a model of an upper case ID":     {rule(Selector{Kind: "model", ID: "0198C0A8-0000-7000-8000-000000000001"}, plus("0")), "target/id"},
-		"an author that is no slug":       {rule(Selector{Kind: "author", ID: "Acme"}, plus("0")), "target/id"},
-		"an audience that is none":        {RuleInput{Target: all, Audience: Selector{Kind: "crowd"}, Method: plus("0")}, "audience/kind"},
-		"a tier ID that is an account's":  {RuleInput{Target: all, Audience: Selector{Kind: "tier", ID: acctID}, Method: plus("0")}, "audience/id"},
-		"everyone with an ID":             {RuleInput{Target: all, Audience: Selector{Kind: "all", ID: tierID}, Method: plus("0")}, "audience/id"},
-		"a method that is none":           {rule(all, Method{Kind: "free"}), "method/kind"},
-		"a markup and a margin":           {rule(all, Method{Kind: "cost_plus", MarkupRatio: ratio("1"), MarginRatio: ratio("0.5")}), "method"},
-		"neither markup nor margin":       {rule(all, Method{Kind: "cost_plus"}), "method"},
-		"a negative markup":               {rule(all, plus("-0.1")), "method/markup_ratio"},
-		"a markup that is no decimal":     {rule(all, plus("1/2")), "method/markup_ratio"},
-		"a margin of one":                 {rule(all, Method{Kind: "cost_plus", MarginRatio: ratio("1")}), "method/margin_ratio"},
-		"cost plus with a multiplier":     {rule(all, Method{Kind: "cost_plus", MarkupRatio: ratio("1"), Multiplier: ratio("2")}), "method"},
-		"fixed markup that is no prices":  {rule(all, Method{Kind: "cost_plus", MarkupRatio: ratio("1"), FixedMarkup: jsonx.Raw(`{"input":"-1"}`)}), "method/fixed_markup"},
-		"a multiplier of nothing":         {rule(all, multiplier("0")), "method/multiplier"},
-		"a multiplier left out":           {rule(all, Method{Kind: "reference_multiplier"}), "method/multiplier"},
-		"a multiplier with a markup":      {rule(all, Method{Kind: "reference_multiplier", Multiplier: ratio("2"), MarkupRatio: ratio("1")}), "method"},
-		"a conversion that is none":       {rule(all, Method{Kind: "reference_multiplier", Multiplier: ratio("2"), CurrencyConversion: "magic"}), "method/currency_conversion"},
-		"a fixed price without prices":    {rule(all, Method{Kind: "fixed"}), "method/schedule"},
-		"a fixed price with a markup":     {rule(all, Method{Kind: "fixed", Schedule: jsonx.Raw(fixedUS), MarkupRatio: ratio("1")}), "method/schedule"},
-		"a fixed price that is no prices": {rule(all, Method{Kind: "fixed", Schedule: jsonx.Raw(`{"v":1}`)}), "method/schedule"},
-		"a fixed price in another money":  {rule(all, Method{Kind: "fixed", Schedule: jsonx.Raw(`{"v":1,"currency":"CNY","rates":{"input":"1"}}`)}), "method/schedule/currency"},
+		// M1 prices a model, an author or everything, by a multiplier at face or a fixed price. What it would accept and then
+		// not apply is refused, as a rule for one account is.
+		"cost plus a markup, which needs the supplier's cost": {rule(all, plus("0.25")), "method/kind"},
+		"cost plus a margin and fixed":                        {rule(all, Method{Kind: "cost_plus", MarginRatio: ratio("0.2"), FixedMarkup: jsonx.Raw(`{"output":"0.000001"}`)}), "method/kind"},
+		"a multiplier by exchange, which needs a rate":        {rule(all, Method{Kind: "reference_multiplier", Multiplier: ratio("1.5"), CurrencyConversion: "exchange"}), "method/currency_conversion"},
+		"a multiplier with no conversion named":               {rule(all, multiplier("1.5")), "method/currency_conversion"},
+		"a multiplier at face":                                {rule(all, Method{Kind: "reference_multiplier", Multiplier: ratio("2"), CurrencyConversion: "face"}), ""},
+		"a fixed price":                                       {rule(all, Method{Kind: "fixed", Schedule: jsonx.Raw(fixedUS)}), ""},
+		"a model":                                             {rule(Selector{Kind: "model", ID: model}, faced("1")), ""},
+		"an author":                                           {rule(Selector{Kind: "author", ID: "acme"}, faced("1")), ""},
+		"an endpoint of a UUID":                               {rule(Selector{Kind: "endpoint", ID: model}, faced("1")), "target/kind"},
+		"a group":                                             {rule(Selector{Kind: "group", ID: model}, faced("1")), "target/kind"},
+		"a supplier":                                          {rule(Selector{Kind: "supplier", ID: model}, faced("1")), "target/kind"},
+		"a source type":                                       {rule(Selector{Kind: "source_type", ID: "relay"}, faced("1")), "target/kind"},
+		"an endpoint that is no UUID":                         {rule(Selector{Kind: "endpoint", ID: "x"}, faced("1")), "target/id"},
+		"a tier, which waits for a later release":             {RuleInput{Target: all, Audience: Selector{Kind: "tier", ID: tierID}, Method: faced("1")}, "audience/kind"},
+		"an account, which waits for a later release":         {RuleInput{Target: all, Audience: Selector{Kind: "account", ID: acctID}, Method: faced("1")}, "audience/kind"},
+		"a kind that prices nothing":                          {rule(Selector{Kind: "planet"}, plus("0")), "target/kind"},
+		"all with an ID":                                      {rule(Selector{Kind: "all", ID: "x"}, plus("0")), "target/id"},
+		"a model without an ID":                               {rule(Selector{Kind: "model"}, plus("0")), "target/id"},
+		"a model of an upper case ID":                         {rule(Selector{Kind: "model", ID: "0198C0A8-0000-7000-8000-000000000001"}, plus("0")), "target/id"},
+		"an author that is no slug":                           {rule(Selector{Kind: "author", ID: "Acme"}, plus("0")), "target/id"},
+		"an audience that is none":                            {RuleInput{Target: all, Audience: Selector{Kind: "crowd"}, Method: plus("0")}, "audience/kind"},
+		"everyone with an ID":                                 {RuleInput{Target: all, Audience: Selector{Kind: "all", ID: tierID}, Method: plus("0")}, "audience/id"},
+		"a method that is none":                               {rule(all, Method{Kind: "free"}), "method/kind"},
+		"a markup and a margin":                               {rule(all, Method{Kind: "cost_plus", MarkupRatio: ratio("1"), MarginRatio: ratio("0.5")}), "method"},
+		"neither markup nor margin":                           {rule(all, Method{Kind: "cost_plus"}), "method"},
+		"a negative markup":                                   {rule(all, plus("-0.1")), "method/markup_ratio"},
+		"a markup that is no decimal":                         {rule(all, plus("1/2")), "method/markup_ratio"},
+		"a margin of one":                                     {rule(all, Method{Kind: "cost_plus", MarginRatio: ratio("1")}), "method/margin_ratio"},
+		"cost plus with a multiplier":                         {rule(all, Method{Kind: "cost_plus", MarkupRatio: ratio("1"), Multiplier: ratio("2")}), "method"},
+		"fixed markup that is no prices":                      {rule(all, Method{Kind: "cost_plus", MarkupRatio: ratio("1"), FixedMarkup: jsonx.Raw(`{"input":"-1"}`)}), "method/fixed_markup"},
+		"a multiplier of nothing":                             {rule(all, multiplier("0")), "method/multiplier"},
+		"a multiplier left out":                               {rule(all, Method{Kind: "reference_multiplier"}), "method/multiplier"},
+		"a multiplier with a markup":                          {rule(all, Method{Kind: "reference_multiplier", Multiplier: ratio("2"), MarkupRatio: ratio("1")}), "method"},
+		"a conversion that is none":                           {rule(all, Method{Kind: "reference_multiplier", Multiplier: ratio("2"), CurrencyConversion: "magic"}), "method/currency_conversion"},
+		"a fixed price without prices":                        {rule(all, Method{Kind: "fixed"}), "method/schedule"},
+		"a fixed price with a markup":                         {rule(all, Method{Kind: "fixed", Schedule: jsonx.Raw(fixedUS), MarkupRatio: ratio("1")}), "method/schedule"},
+		"a fixed price that is no prices":                     {rule(all, Method{Kind: "fixed", Schedule: jsonx.Raw(`{"v":1}`)}), "method/schedule"},
+		"a fixed price in another money":                      {rule(all, Method{Kind: "fixed", Schedule: jsonx.Raw(`{"v":1,"currency":"CNY","rates":{"input":"1"}}`)}), "method/schedule/currency"},
 	} {
 		err := c.in.Check(usd)
 		if refusal, ok := errors.AsType[*RuleError](err); c.field == "" && err != nil || c.field != "" && (!ok || refusal.Field != c.field) {
@@ -86,7 +100,8 @@ func TestRuleChecks(t *testing.T) {
 	}
 }
 
-// TestConstraintChecks: the limits a rule puts on its price are ratios that make sense together.
+// TestConstraintChecks: no constraint is applied by this release, so a rule that carries one is refused, naming the
+// member; a rule with none passes.
 func TestConstraintChecks(t *testing.T) {
 	t.Parallel()
 	r := func(s string) *string { return &s }
@@ -94,18 +109,27 @@ func TestConstraintChecks(t *testing.T) {
 		c     Constraints
 		field string
 	}{
-		"none":                          {Constraints{}, ""},
-		"a margin and a band":           {Constraints{MinMarginRatio: r("0.1"), ReferenceMinRatio: r("0.5"), ReferenceMaxRatio: r("3")}, ""},
-		"a band of one price":           {Constraints{ReferenceMinRatio: r("1"), ReferenceMaxRatio: r("1")}, ""},
-		"a margin of one":               {Constraints{MinMarginRatio: r("1")}, "constraints/min_margin_ratio"},
-		"a margin that is not a number": {Constraints{MinMarginRatio: r("x")}, "constraints/min_margin_ratio"},
-		"a floor of nothing":            {Constraints{ReferenceMinRatio: r("0")}, "constraints/reference_min_ratio"},
-		"a ceiling of nothing":          {Constraints{ReferenceMaxRatio: r("0")}, "constraints/reference_min_ratio"},
-		"a band turned around":          {Constraints{ReferenceMinRatio: r("2"), ReferenceMaxRatio: r("1")}, "constraints/reference_min_ratio"},
+		"none":                {Constraints{}, ""},
+		"a minimum margin":    {Constraints{MinMarginRatio: r("0.1")}, "constraints/min_margin_ratio"},
+		"a reference floor":   {Constraints{ReferenceMinRatio: r("0.5")}, "constraints/reference_min_ratio"},
+		"a reference ceiling": {Constraints{ReferenceMaxRatio: r("3")}, "constraints/reference_max_ratio"},
+		"a margin and a band": {
+			Constraints{MinMarginRatio: r("0.1"), ReferenceMinRatio: r("0.5"), ReferenceMaxRatio: r("3")},
+			"constraints/min_margin_ratio",
+		},
 	} {
-		err := RuleInput{Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: plus("0"), Constraints: c.c}.Check(usd)
-		if refusal, ok := errors.AsType[*RuleError](err); c.field == "" && err != nil || c.field != "" && (!ok || refusal.Field != c.field) {
+		err := RuleInput{Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: faced("1"), Constraints: c.c}.Check(usd)
+		refusal, ok := errors.AsType[*RuleError](err)
+		if c.field == "" {
+			if err != nil {
+				t.Errorf("%s: %v, want no refusal", name, err)
+			}
+			continue
+		}
+		if !ok || refusal.Field != c.field {
 			t.Errorf("%s: %v, want a refusal of %q", name, err, c.field)
+		} else if !strings.Contains(refusal.Reason, "not supported yet") {
+			t.Errorf("%s: the refusal %q does not say the constraint is not supported yet", name, refusal.Reason)
 		}
 	}
 }
@@ -140,6 +164,25 @@ func (r rules) create(in RuleInput) (Rule, error) {
 		return err
 	})
 	return made, err
+}
+
+// store writes a rule straight into the table, as a release that lets an administrator make a rule for one account or
+// one tier will have it: CreateRule refuses those now.
+func (r rules) store(in RuleInput) {
+	r.t.Helper()
+	method, err := jsonx.MarshalCanonical(in.Method)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if err := r.tx(func(tx pg.Tx) error {
+		_, err := tx.Exec(r.t.Context(), `INSERT INTO billing.pricing_rules
+			(id, site_id, enabled, target_kind, target_id, audience_kind, audience_id, method, constraints)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, '{}'::jsonb)`,
+			uuid.NewV7(), r.site, in.Enabled, in.Target.Kind, in.Target.ID, in.Audience.Kind, in.Audience.ID, method)
+		return err
+	}); err != nil {
+		r.t.Fatal(err)
+	}
 }
 
 func (r rules) update(id uuid.UUID, rev int64, in RuleInput) (Rule, error) {
@@ -181,15 +224,19 @@ func TestRulesAreTriedMostSpecificFirst(t *testing.T) {
 	r := newRules(t)
 	tier := Selector{Kind: "tier", ID: tierID}
 	for _, in := range []RuleInput{
-		rule(Selector{Kind: "all"}, plus("1")),
-		{Enabled: true, Target: Selector{Kind: "model", ID: model}, Audience: Selector{Kind: "all"}, Method: plus("1")},
-		{Enabled: true, Target: Selector{Kind: "model", ID: model}, Audience: tier, Method: plus("1")},
-		{Enabled: false, Target: Selector{Kind: "endpoint", ID: model}, Audience: Selector{Kind: "account", ID: acctID}, Method: plus("1")},
-		{Enabled: true, Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}, Method: plus("1")},
+		rule(Selector{Kind: "all"}, faced("1")),
+		{Enabled: true, Target: Selector{Kind: "model", ID: model}, Audience: Selector{Kind: "all"}, Method: faced("1")},
+		{Enabled: true, Target: Selector{Kind: "model", ID: model}, Audience: tier, Method: faced("1")},
+		{Enabled: false, Target: Selector{Kind: "endpoint", ID: model}, Audience: Selector{Kind: "account", ID: acctID}, Method: faced("1")},
+		{Enabled: true, Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}, Method: faced("1")},
 	} {
-		if _, err := r.create(in); err != nil {
-			t.Fatal(err)
+		if in.Audience.Kind == "all" {
+			if _, err := r.create(in); err != nil {
+				t.Fatal(err)
+			}
+			continue
 		}
+		r.store(in) // CreateRule refuses the audiences of a later release; the order they will be tried in is already fixed
 	}
 	var order []string
 	for _, rule := range r.list() {
@@ -206,17 +253,17 @@ func TestRulesAreTriedMostSpecificFirst(t *testing.T) {
 func TestRuleChanges(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)
-	first, err := r.create(rule(Selector{Kind: "all"}, plus("1")))
+	first, err := r.create(rule(Selector{Kind: "all"}, faced("1")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	disabled := rule(Selector{Kind: "all"}, plus("2"))
+	disabled := rule(Selector{Kind: "all"}, faced("2"))
 	disabled.Enabled = false
 	changed, err := r.update(first.ID, 0, disabled)
 	if err != nil || changed.Rev != first.Rev+1 || changed.Enabled {
 		t.Fatalf("a change: %+v %v", changed, err)
 	}
-	if again, err := r.update(first.ID, 1, rule(Selector{Kind: "all"}, plus("3"))); err != nil || again.Rev != 2 || !again.Enabled {
+	if again, err := r.update(first.ID, 1, rule(Selector{Kind: "all"}, faced("3"))); err != nil || again.Rev != 2 || !again.Enabled {
 		t.Errorf("a change as of the new rev: %+v %v", again, err)
 	}
 	if _, err := r.update(first.ID, 0, disabled); !errors.Is(err, ErrStaleRule) {
@@ -232,21 +279,21 @@ func TestRuleChanges(t *testing.T) {
 func TestRulesAreUniqueByTargetAndAudience(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)
-	if _, err := r.create(rule(Selector{Kind: "all"}, plus("2"))); err != nil {
+	if _, err := r.create(rule(Selector{Kind: "all"}, faced("2"))); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.create(rule(Selector{Kind: "all"}, plus("3"))); !errors.Is(err, ErrRuleExists) {
+	if _, err := r.create(rule(Selector{Kind: "all"}, faced("3"))); !errors.Is(err, ErrRuleExists) {
 		t.Errorf("a second rule of one target and audience: %v", err)
 	}
-	other, err := r.create(rule(Selector{Kind: "author", ID: "acme"}, plus("1")))
+	other, err := r.create(rule(Selector{Kind: "author", ID: "acme"}, faced("1")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.update(other.ID, 0, rule(Selector{Kind: "all"}, plus("1"))); !errors.Is(err, ErrRuleExists) {
+	if _, err := r.update(other.ID, 0, rule(Selector{Kind: "all"}, faced("1"))); !errors.Is(err, ErrRuleExists) {
 		t.Errorf("a change into another rule's target and audience: %v", err)
 	}
 	got := r.list()
-	if len(got) != 2 || *got[0].Method.MarkupRatio != "1" || got[0].Target.Kind != "author" || got[0].Rev != 0 || *got[1].Method.MarkupRatio != "2" {
+	if len(got) != 2 || *got[0].Method.Multiplier != "1" || got[0].Target.Kind != "author" || got[0].Rev != 0 || *got[1].Method.Multiplier != "2" {
 		t.Errorf("the rules after the refusals: %+v", got)
 	}
 }
@@ -256,20 +303,20 @@ func TestRulesAreUniqueByTargetAndAudience(t *testing.T) {
 func TestRuleHistoryAndAudit(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)
-	made, err := r.create(rule(Selector{Kind: "all"}, plus("1")))
+	made, err := r.create(rule(Selector{Kind: "all"}, faced("1")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.update(made.ID, 0, rule(Selector{Kind: "all"}, plus("2"))); err != nil {
+	if _, err := r.update(made.ID, 0, rule(Selector{Kind: "all"}, faced("2"))); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = r.update(made.ID, 0, rule(Selector{Kind: "all"}, plus("9"))) //nolint:errcheck // refused; the count below shows nothing was kept
+	_, _ = r.update(made.ID, 0, rule(Selector{Kind: "all"}, faced("9"))) //nolint:errcheck // refused; the count below shows nothing was kept
 	if versions, entries := r.count("billing.pricing_rule_versions"), r.count("platform.audit_log"); versions != 2 || entries != 2 {
 		t.Errorf("%d versions and %d audit entries, want 2 and 2", versions, entries)
 	}
 	var latest, actor string
 	if err := r.tx(func(tx pg.Tx) error {
-		return tx.QueryRow(r.t.Context(), `SELECT body->'method'->>'markup_ratio', actor || '|' || reason FROM billing.pricing_rule_versions
+		return tx.QueryRow(r.t.Context(), `SELECT body->'method'->>'multiplier', actor || '|' || reason FROM billing.pricing_rule_versions
 			WHERE rule_id = $1 AND rev = 1`, made.ID).Scan(&latest, &actor)
 	}); err != nil || latest != "2" || actor != "system:billing.test|changed" {
 		t.Errorf("the second version: %q %q %v", latest, actor, err)

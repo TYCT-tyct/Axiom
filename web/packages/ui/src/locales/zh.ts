@@ -13,6 +13,7 @@ const codes = {
   conflict: "内容和现有的冲突，刷新后再试。",
   email_taken: "这个邮箱已经注册过了。",
   name_taken: "这个名称已经有了，换一个。",
+  too_many_keys: "这个账户的 API key 已达本站允许的数量，先删除一把再建。",
   stale_revision: "这一项刚在别处被改过，刷新后再试。",
   idempotency_key_reused: "请求重复了，刷新后再试。",
   invalid_invite: "邀请码无效，或本站目前不接受邀请码注册。",

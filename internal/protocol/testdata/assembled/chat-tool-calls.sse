@@ -1,0 +1,18 @@
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","system_fingerprint":"fp_3d5141a69a","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","system_fingerprint":"fp_3d5141a69a","choices":[{"index":0,"delta":{"content":"Let me check."},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","system_fingerprint":"fp_3d5141a69a","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_00_Kq3vT9","type":"function","function":{"name":"get_weather","arguments":""}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","system_fingerprint":"fp_3d5141a69a","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"{\"loc"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","system_fingerprint":"fp_3d5141a69a","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"ation\": \"Par"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","system_fingerprint":"fp_3d5141a69a","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"is\"}"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","system_fingerprint":"fp_3d5141a69a","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_01_Zb8mW2","type":"function","function":{"name":"get_time","arguments":"{}"}}]},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1760000000,"model":"deepseek-chat","system_fingerprint":"fp_3d5141a69a","choices":[{"index":0,"delta":{"content":""},"logprobs":null,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160,"prompt_tokens_details":{"cached_tokens":64},"prompt_cache_hit_tokens":64,"prompt_cache_miss_tokens":56}}
+
+data: [DONE]
+

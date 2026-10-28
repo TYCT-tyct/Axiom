@@ -258,6 +258,10 @@ func TestRelayUsage(t *testing.T) {
 			want: counts{catalog.ItemInput: 5, catalog.ItemCacheRead: 6, catalog.ItemOutput: 7},
 		},
 		{
+			name: "Messages input excludes caches", usage: `{"input_tokens":100,"cache_read_input_tokens":80,"cache_creation_input_tokens":80}`,
+			want: counts{catalog.ItemInput: 100, catalog.ItemCacheRead: 80, catalog.ItemCacheWrite: 80, catalog.ItemCacheWrite1h: 0},
+		},
+		{
 			name: "cache write breakdown", usage: `{"cache_creation_input_tokens":30,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":20}}`,
 			want: counts{catalog.ItemCacheWrite: 10, catalog.ItemCacheWrite1h: 20},
 		},

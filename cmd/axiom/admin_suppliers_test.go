@@ -48,17 +48,18 @@ func (f supplierFixture) connect() adminapi.Supplier {
 }
 
 // group makes a group of the supplier the way the sync does and returns its ID.
-func (f supplierFixture) group(supplier, ref string, present bool) string {
+func (f supplierFixture) group(supplier, ref string) string {
 	f.t.Helper()
 	id := uuid.NewV7().String()
 	f.run(fmt.Sprintf(`INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, present)
-		VALUES ('%s', '%s', '%s', 'Group %s', 1.5, %v)`, id, supplier, ref, ref, present))
+		VALUES ('%s', '%s', '%s', 'Group %s', 1.5, true)`, id, supplier, ref, ref))
 	return id
 }
 
 // TestCreateSupplier: a supplier is connected `connecting`, with its origin as stored, and is listed and read back; the
 // login is nowhere in what comes back, in the audit entry or in the database as written.
 func TestCreateSupplier(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	made := f.connect()
 	want := adminapi.Supplier{
@@ -74,6 +75,10 @@ func TestCreateSupplier(t *testing.T) {
 	decode(t, rec, &detail)
 	if diff := cmp.Diff(want, detail.Supplier); diff != "" || len(detail.Groups) != 0 || len(detail.Credentials) != 0 || len(detail.UnboundKeys) != 0 {
 		t.Errorf("getSupplier (-want +got):\n%s", diff)
+	}
+	// The contract requires the list: a supplier with no endpoints answers an empty one, which decodes as non-nil.
+	if detail.Endpoints == nil || len(detail.Endpoints) != 0 {
+		t.Errorf("getSupplier's endpoints: %#v, want an empty list", detail.Endpoints)
 	}
 	rec = f.do(http.MethodGet, "/suppliers", "", as(f.s))
 	expectAdmin(t, "listSuppliers", rec, http.StatusOK, "")
@@ -94,6 +99,7 @@ func TestCreateSupplier(t *testing.T) {
 // TestCreateSupplierKeys: the same request again, after a lost response, connects nothing more and answers the same;
 // the key of another request is refused; the same origin and account under a new key is a conflict.
 func TestCreateSupplierKeys(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	key := newKey()
 	rec := f.change(f.s, http.MethodPost, "/suppliers", createBody, key)
@@ -122,6 +128,7 @@ func TestCreateSupplierKeys(t *testing.T) {
 // TestCreateSupplierRefusals: an origin the outbound client refuses, a kind that cannot be connected, and a login of
 // members the kind does not take are refused, each as the contract says, and nothing is made.
 func TestCreateSupplierRefusals(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	for name, c := range map[string]struct {
 		change func(string) string
@@ -135,6 +142,8 @@ func TestCreateSupplierRefusals(t *testing.T) {
 		"a member the kind lacks":     {func(b string) string { return strings.Replace(b, `"pat-secret"`, `"x","password":"pw"`, 1) }, 400, codeInvalidRequest, "/login/password"},
 		"a login without its token":   {func(b string) string { return strings.Replace(b, `{"access_token":"pat-secret"}`, `{}`, 1) }, 400, codeInvalidRequest, "/login/access_token"},
 		"a currency that is none":     {func(b string) string { return strings.Replace(b, `"USD"`, `"usd"`, 1) }, 400, codeInvalidRequest, ""},
+		"a currency no rate covers":   {func(b string) string { return strings.Replace(b, `"USD"`, `"KRW"`, 1) }, 422, codeUnprocessable, "/settlement_currency"},
+		"the placeholder currency":    {func(b string) string { return strings.Replace(b, `"USD"`, `"XXX"`, 1) }, 422, codeUnprocessable, "/settlement_currency"},
 		"an origin with a path":       {func(b string) string { return strings.Replace(b, publicOrigin, publicOrigin+"/x", 1) }, 400, codeInvalidRequest, ""},
 		"an origin that is not https": {func(b string) string { return strings.Replace(b, publicOrigin, "http://8.8.8.8", 1) }, 400, codeInvalidRequest, ""},
 	} {
@@ -153,8 +162,9 @@ func TestCreateSupplierRefusals(t *testing.T) {
 }
 
 // TestSupplierLifecycle: a supplier in use is paused and resumed, its unit value confirmed, its login replaced and
-// removal started, each answered with the supplier and audited once; a change the status does not allow is a conflict.
+// removed, each answered with the supplier and audited once; a change the status does not allow is a conflict.
 func TestSupplierLifecycle(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	made := f.connect()
 	path := "/suppliers/" + made.Id
@@ -182,8 +192,8 @@ func TestSupplierLifecycle(t *testing.T) {
 		t.Errorf("the status after a new login: %s", s.Status)
 	}
 	rec := f.change(f.s, http.MethodPost, path+"/removal", `{"reason":"done with it"}`, newKey())
-	expectAdmin(t, "removeSupplier", rec, http.StatusAccepted, "")
-	expectAdmin(t, "pausing a supplier being removed", f.change(f.s, http.MethodPut, path+"/status", `{"status":"paused","reason":"r"}`, newKey()),
+	expectAdmin(t, "removeSupplier", rec, http.StatusOK, "")
+	expectAdmin(t, "pausing a removed supplier", f.change(f.s, http.MethodPut, path+"/status", `{"status":"paused","reason":"r"}`, newKey()),
 		http.StatusConflict, codeConflict)
 	for _, action := range []string{"supplier.pause", "supplier.resume", "supplier.unit_value", "supplier.replace_login", "supplier.remove"} {
 		if f.auditCount(action) != "1" {
@@ -198,6 +208,7 @@ func TestSupplierLifecycle(t *testing.T) {
 // TestSupplierNotFound: an ID that is none, one that is not written the way the API writes it, and one the platform
 // lacks, are the same 404 in a path.
 func TestSupplierNotFound(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	for _, id := range []string{uuid.NewV7().String(), "not-an-id", strings.ToUpper(uuid.NewV7().String())} {
 		expectAdmin(t, "getSupplier "+id, f.do(http.MethodGet, "/suppliers/"+id, "", as(f.s)), http.StatusNotFound, codeNotFound)
@@ -208,6 +219,7 @@ func TestSupplierNotFound(t *testing.T) {
 // TestDetectSupplier: an address the outbound client refuses is a 422 and no probe is made; a session may ask ten times
 // a minute and the eleventh is a 429 that says when to come back.
 func TestDetectSupplier(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	post := func() *httptest.ResponseRecorder {
 		return f.do(http.MethodPost, "/suppliers/detections", `{"origin":"https://10.0.0.1"}`, as(f.s))
@@ -224,6 +236,7 @@ func TestDetectSupplier(t *testing.T) {
 
 // TestWindowLimiter: n requests of a key in a window, the next refused with the time to wait, and the window slides.
 func TestWindowLimiter(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	l := newWindowLimiter(2, time.Minute, func() time.Time { return now })
 	a, b := uuid.NewV7(), uuid.NewV7()
@@ -255,6 +268,7 @@ func TestWindowLimiter(t *testing.T) {
 // TestCreateSupplierRetryAfterTheNetworkChanged: a connection that went through is answered again to its retry, though
 // the site's address would be refused now; a new request for it is refused.
 func TestCreateSupplierRetryAfterTheNetworkChanged(t *testing.T) {
+	t.Parallel()
 	c := newCommandLine(t)
 	if _, err := c.site(siteArgs...); err != nil {
 		t.Fatal(err)
@@ -275,4 +289,13 @@ func TestCreateSupplierRetryAfterTheNetworkChanged(t *testing.T) {
 	}
 	expectAdmin(t, "a new request", f.change(f.s, http.MethodPost, "/suppliers", strings.Replace(body, "ops", "other", 1), newKey()),
 		http.StatusUnprocessableEntity, codeUnprocessable)
+}
+
+// TestCreateSupplierInACurrencyTheRatesCover: a supplier paid in a currency with exchange rates to the site's is
+// connected, which is what the refusals above keep the others from being.
+func TestCreateSupplierInACurrencyTheRatesCover(t *testing.T) {
+	t.Parallel()
+	f := newSupplierFixture(t)
+	rec := f.change(f.s, http.MethodPost, "/suppliers", strings.Replace(createBody, `"USD"`, `"CNY"`, 1), newKey())
+	expectAdmin(t, "createSupplier in CNY", rec, http.StatusCreated, "")
 }

@@ -8,9 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,9 +16,9 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/secret"
@@ -30,52 +28,6 @@ import (
 )
 
 var platform = pg.NewScope(true, nil, nil)
-
-// paging is a fake paged listing of the supplier: how many pages it has, the page whose read the limits refuse (once,
-// for as long as they stay shut) and the pages served.
-type paging struct {
-	mu     sync.Mutex
-	pages  int
-	stopAt int           // the page whose read is refused, once; 0 for none
-	wait   time.Duration // how long from now the limits stay shut
-	served []int
-}
-
-// read serves one read of the listing from the position in from: the page it read, the position after it, whether that
-// ends the listing, and when the limits reopen if they refused the read.
-func (p *paging) read(from adapter.Listing) (page int, next adapter.Listing, done bool, until time.Time) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	pos := struct {
-		Page int `json:"page"`
-	}{Page: 1}
-	if len(from) > 0 {
-		if err := jsonx.Unmarshal(from, &pos); err != nil {
-			panic(err) // the test's own position
-		}
-	}
-	encode := func() adapter.Listing {
-		b, err := jsonx.MarshalCanonical(pos)
-		if err != nil {
-			panic(err) // a page number always encodes
-		}
-		return b
-	}
-	if pos.Page == p.stopAt {
-		p.stopAt = 0
-		return 0, encode(), false, time.Now().Add(p.wait)
-	}
-	p.served = append(p.served, pos.Page)
-	pos.Page++
-	return pos.Page - 1, encode(), pos.Page > p.pages, time.Time{}
-}
-
-// readPages is the pages the listing served, in order.
-func (p *paging) readPages() []int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return slices.Clone(p.served)
-}
 
 // system is the made-up supplier system the tests sync: its manager answers as its fields say, and counts the calls.
 type system struct {
@@ -90,14 +42,14 @@ type system struct {
 	keysFinished atomic.Int32
 	// holdOpen, if set, makes the first Open end at the supplier's limits for as long as it says, as a login the
 	// supplier answers with a wait does; the next goes through.
-	holdOpen time.Duration
+	holdOpen time.Time
 }
 
 func (*system) Kind() adapter.Kind            { return "fake" }
 func (*system) Buckets() []adapter.BucketSpec { return nil }
 func (s *system) Open(context.Context, adapter.Client, adapter.LoginStore) (adapter.Manager, error) {
-	if s.opens.Add(1) == 1 && s.holdOpen > 0 {
-		return nil, adapter.Blocked{Until: time.Now().Add(s.holdOpen)}
+	if s.opens.Add(1) == 1 && !s.holdOpen.IsZero() {
+		return nil, adapter.Blocked{Until: s.holdOpen}
 	}
 	if s.openErr != nil {
 		return nil, s.openErr
@@ -115,37 +67,24 @@ func (m *manager) Account(context.Context) (adapter.Account, error) {
 }
 
 func (m *manager) Offer(_ context.Context, from adapter.Listing) (adapter.Page[adapter.Group], error) {
-	var groups []adapter.Group
-	for {
-		page, next, done, until := m.s.offer.read(from)
-		if !until.IsZero() {
-			return adapter.Page[adapter.Group]{Next: next, Until: until}, nil
-		}
-		groups = append(groups, adapter.Group{
-			Ref: fmt.Sprint(page), Name: "g", Ratio: "1", Facts: adapter.GroupFacts(`{}`),
-			Models: []adapter.Model{{UpstreamName: "m"}},
-		})
-		if done {
-			return adapter.Page[adapter.Group]{Done: true, Items: groups}, nil
-		}
-		from = next
+	items, next, done, until := m.s.offer.read(from)
+	out := adapter.Page[adapter.Group]{Next: next, Done: done, Until: until}
+	for _, page := range items {
+		out.Items = append(out.Items, adapter.Group{Ref: fmt.Sprint(page), Name: "g", Ratio: "1", Facts: adapter.GroupFacts(`{}`), Models: []adapter.Model{{UpstreamName: "m"}}})
 	}
+	return out, nil
 }
 
 func (m *manager) Keys(_ context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
-	var keys []adapter.KeyState
-	for {
-		page, next, done, until := m.s.keys.read(from)
-		if !until.IsZero() {
-			return adapter.Page[adapter.KeyState]{Next: next, Until: until}, nil
-		}
-		keys = append(keys, adapter.KeyState{Ref: adapter.KeyRef(fmt.Sprint(page)), Status: adapter.KeyActive})
-		if done {
-			m.s.keysFinished.Add(1)
-			return adapter.Page[adapter.KeyState]{Done: true, Items: keys}, nil
-		}
-		from = next
+	items, next, done, until := m.s.keys.read(from)
+	out := adapter.Page[adapter.KeyState]{Next: next, Done: done, Until: until}
+	for _, page := range items {
+		out.Items = append(out.Items, adapter.KeyState{Ref: adapter.KeyRef(fmt.Sprint(page)), Status: adapter.KeyActive})
 	}
+	if done {
+		m.s.keysFinished.Add(1)
+	}
+	return out, nil
 }
 
 func (*manager) KeySecret(context.Context, adapter.KeyRef) (secret.Secret, error) {
@@ -176,6 +115,7 @@ type cluster struct {
 	keys     *secret.Keyring
 	reader   *pg.DB // one pool for all the reads of a test, which polls
 	supplier uuid.UUID
+	now      func() time.Time
 }
 
 func newCluster(t *testing.T, s *system) *cluster {
@@ -188,7 +128,11 @@ func newCluster(t *testing.T, s *system) *cluster {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &cluster{t: t, database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}), system: s, keys: keys}
+	c := &cluster{
+		t: t, system: s, keys: keys, now: time.Now,
+		// The projection maps a listing's upstream names by the catalog, so the supplier's database has one.
+		database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}, catalog.Migrations),
+	}
 	c.reader = c.open()
 	c.supplier = c.addSupplier("fake.example", "connecting")
 	return c
@@ -246,7 +190,7 @@ func (c *cluster) node(holder string, sweepEvery time.Duration) *node {
 	q := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil)
 	cfg := Config{
 		DB: db, Scope: platform, Keys: c.keys, Egress: egress.NewForTesting(egresstest.Loopback(c.t)), Queue: q, Registry: reg,
-		Holder: holder, SweepEvery: sweepEvery, Now: time.Now, Logger: slog.New(slog.DiscardHandler),
+		Holder: holder, SweepEvery: sweepEvery, Now: c.now, Logger: slog.New(slog.DiscardHandler),
 	}
 	s, err := New(cfg)
 	if err != nil {
@@ -316,7 +260,7 @@ func (c *cluster) enqueued(db *pg.DB) (ids []string) {
 }
 
 // TestADueSupplierIsSyncedByTheQueue: a supplier that was never synced is found by the sweep, enqueued, and a round of
-// the engine runs over its adapter: its state is stored, and its balance and status are written on the supplier. Once
+// the engine runs over its adapter: its state is stored, and its balance and status are written on the supplier, enough for routing to take it. Once
 // done it is not due, so no second round follows.
 func TestADueSupplierIsSyncedByTheQueue(t *testing.T) {
 	t.Parallel()
@@ -332,6 +276,13 @@ func TestADueSupplierIsSyncedByTheQueue(t *testing.T) {
 	c.row("SELECT balance_native::text, status FROM suppliers.suppliers WHERE id = $1", &balance, &status)
 	if balance != "100" || status != "active" {
 		t.Errorf("the supplier after its first round: balance %q, status %q, want 100 and active", balance, status)
+	}
+	// What ListRoutable asks of a supplier (the balance above zero, in use): a supplier whose first round left no balance
+	// would stay out of routing without any error. TestOnlyAFundedSupplierIsRoutable is the other half, that it asks.
+	var funded bool
+	c.row("SELECT balance_native > 0 AND status IN ('active', 'low_balance') FROM suppliers.suppliers WHERE id = $1", &funded)
+	if !funded {
+		t.Error("the first round left the supplier out of what routing takes")
 	}
 	time.Sleep(time.Second) // ten sweeps: the supplier is not due again for a minute
 	if got := s.accounts.Load(); got != 1 {
@@ -541,8 +492,10 @@ func TestAQueuedJobOfASupplierNoLongerSyncedDoesNothing(t *testing.T) {
 // when they reopen, so the round after it reads the balance.
 func TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen(t *testing.T) {
 	t.Parallel()
-	s := &system{account: healthy(), holdOpen: 300 * time.Millisecond}
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	s := &system{account: healthy(), holdOpen: now.Add(time.Minute)}
 	c := newCluster(t, s)
+	c.now = func() time.Time { return now }
 	if err := c.node("a", time.Hour).s.sync(t.Context(), c.supplier); err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +506,7 @@ func TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen(t *testing.T) {
 		t.Errorf("the balance was read %d times by a round whose open the limits refused, want it left for the round they reopen in", s.accounts.Load())
 	}
 
-	time.Sleep(400 * time.Millisecond) // the limits reopen
+	now = s.holdOpen
 	if err := c.node("b", time.Hour).s.sync(t.Context(), c.supplier); err != nil {
 		t.Fatal(err)
 	}

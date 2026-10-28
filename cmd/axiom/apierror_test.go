@@ -14,10 +14,11 @@ import (
 // contracts give, so a code a client does not know is never sent and none the contract names is unreachable by
 // mistake.
 func TestErrorCodesAreTheContractsCodes(t *testing.T) {
+	t.Parallel()
 	ours := []string{}
 	for _, c := range []errorCode{
 		codeInvalidRequest, codeUnauthenticated, codeWrongLogin, codeInvalidCode, codeForbidden, codeMfaRequired,
-		codeOriginRejected, codeNotFound, codeConflict, codeEmailTaken, codeNameTaken, codeStaleRevision, codeIdempotencyReuse,
+		codeOriginRejected, codeNotFound, codeConflict, codeEmailTaken, codeNameTaken, codeTooManyKeys, codeStaleRevision, codeIdempotencyReuse,
 		codeInvalidInvite, codeWeakPassword, codeNotReady, codeUnprocessable, codeRateLimited, codeInternal,
 		codeNotImplemented, codeUnavailable,
 	} {

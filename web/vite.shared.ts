@@ -40,8 +40,9 @@ export const contentSecurityPolicy = [
   "frame-ancestors 'none'",
 ].join("; ");
 
-// The program from `just up` answers the API, so the dev server talks to a real one.
-const api = { "/api": "http://127.0.0.1:8080" };
+// The program from `just up` answers the API, so the dev server talks to a real one: on the public listener, or for the
+// admin, which is served only on its own listener, on that one (AXIOM_ADMIN_ADDR's default).
+const publicApi = "http://127.0.0.1:8080";
 
 // themeScript serves theme.js to every app and loads it at the start of <head>: a classic script, so it runs before the
 // first paint, from the page's own origin, because the policy above forbids inline scripts. Vite bundles only module
@@ -85,10 +86,12 @@ export function appConfig({
   port,
   base = "/",
   mounts = {},
+  api = publicApi,
 }: {
   port: number;
   base?: string;
   mounts?: Record<string, number>;
+  api?: string;
 }): UserConfig {
   const forward = Object.fromEntries(
     Object.entries(mounts).map(([path, to]) => [path, { target: `http://localhost:${to}`, ws: true }]),
@@ -111,7 +114,7 @@ export function appConfig({
     server: {
       port,
       strictPort: true,
-      proxy: { ...api, ...forward },
+      proxy: { "/api": api, ...forward },
     },
   });
 }

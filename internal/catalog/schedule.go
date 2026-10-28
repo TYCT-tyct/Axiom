@@ -3,7 +3,9 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"slices"
+	"strings"
 
 	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
@@ -124,7 +126,7 @@ func (w *contextTiersJSON) parseBasis() (basis ItemSet, err error) {
 	if basis == 0 || len(w.Tiers) == 0 {
 		return 0, errors.New("want a basis and at least one tier")
 	}
-	if basis&^inputSide != 0 {
+	if basis&^InputSide != 0 {
 		return 0, errors.New("basis: only input-side items count")
 	}
 	return basis, nil
@@ -133,7 +135,7 @@ func (w *contextTiersJSON) parseBasis() (basis ItemSet, err error) {
 // parseServiceTier refuses thresholds that differ from the standard tier's: a service tier that left out the
 // long-context tier would price long requests at its base prices.
 func parseServiceTier(name string, w levelJSON, standardAbove []int64) (st ServiceTier, l level, err error) {
-	if st, err = lookup[ServiceTier](serviceTierNames[:], name); err != nil {
+	if st, err = ParseServiceTier(name); err != nil {
 		return st, l, err
 	}
 	if st == ServiceTierStandard {
@@ -187,6 +189,7 @@ func parseRates(m map[string]string) (r rates, err error) {
 	return r, nil
 }
 
+// parseSet reads a list of names into a set.
 func parseSet[T ~uint8](names, list []string) (s set[T], err error) {
 	for _, name := range list {
 		v, err := lookup[T](names, name)
@@ -207,6 +210,75 @@ func lookup[T ~uint8](names []string, name string) (T, error) {
 		return 0, fmt.Errorf("unknown name %q", name)
 	}
 	return T(i), nil
+}
+
+// priceUnits is the finest price a schedule holds: a UnitPrice counts 10⁻¹⁵ of a currency unit.
+const priceUnits = 1_000_000_000_000_000
+
+// Scaled is every price times multiplier, in currency: a sale price, which is a reference price times the site's
+// multiplier (docs/domains/billing.md「定价」), or a supplier's cost plan in its own unit ("XXX"). Each price is rounded
+// up at priceUnits, once: a multiplier is usually no finite decimal, and a price left too low is the mistake to avoid.
+// An item without a price stays without one.
+func (s Schedule) Scaled(multiplier string, currency platform.Currency) (Schedule, error) {
+	m, ok := new(big.Rat).SetString(multiplier)
+	if !ok || m.Sign() < 0 {
+		return Schedule{}, fmt.Errorf("price schedule: %q is not a multiplier", multiplier)
+	}
+	out := s
+	out.currency = currency
+	for st := range numServiceTiers {
+		if !s.offered.Has(st) {
+			continue
+		}
+		l, err := s.levels[st].scaled(m)
+		if err != nil {
+			return Schedule{}, err
+		}
+		out.levels[st] = l
+	}
+	return out, nil
+}
+
+func (l *level) scaled(m *big.Rat) (out level, err error) {
+	if out.base, err = l.base.scaled(m); err != nil {
+		return level{}, err
+	}
+	out.tiers = make([]rates, len(l.tiers))
+	for i, r := range l.tiers {
+		if out.tiers[i], err = r.scaled(m); err != nil {
+			return level{}, err
+		}
+	}
+	return out, nil
+}
+
+func (r rates) scaled(m *big.Rat) (rates, error) {
+	for it := range NumItems {
+		if !r.priced.Has(it) {
+			continue
+		}
+		p, err := scaledUnitPrice(r.price[it], m)
+		if err != nil {
+			return rates{}, err
+		}
+		r.price[it] = p
+	}
+	return r, nil
+}
+
+// scaledUnitPrice is p × m rounded up at priceUnits. A price past 1000 leaves the range a price has, which ParseUnitPrice
+// reports: a multiplier that large is a mistake, not a price.
+func scaledUnitPrice(p platform.UnitPrice, m *big.Rat) (platform.UnitPrice, error) {
+	product := new(big.Rat).Mul(p.Rat(), m)
+	units := new(big.Int).Mul(product.Num(), big.NewInt(priceUnits))
+	var remainder big.Int
+	units.QuoRem(units, product.Denom(), &remainder)
+	if remainder.Sign() != 0 {
+		units.Add(units, big.NewInt(1))
+	}
+	text := new(big.Rat).SetFrac(units, big.NewInt(priceUnits)).FloatString(15) // exact: the fraction is in priceUnits
+	text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
+	return platform.ParseUnitPrice(text)
 }
 
 // MarshalJSON writes the canonical form (jsonx.MarshalCanonical): prices in UnitPrice's canonical text, lists in

@@ -18,6 +18,7 @@ import (
 // TestShutdownDrainsPublicFirst: with a request in flight on the public listener, shutdown reports not ready while
 // the probes still answer, lets the request finish, and only then stops the probes.
 func TestShutdownDrainsPublicFirst(t *testing.T) {
+	t.Parallel()
 	logger := slog.New(slog.DiscardHandler)
 	started, release := make(chan struct{}), make(chan struct{})
 	slow := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -79,6 +80,7 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 // TestShutdownEndsRequestsPastTheLimit: a request still holding a database connection when the limit runs out is
 // ended, so the pool closes and the node stops within about the limit instead of waiting for the request.
 func TestShutdownEndsRequestsPastTheLimit(t *testing.T) {
+	t.Parallel()
 	db, err := pg.Open(t.Context(), pgtest.New(t, modules()...).App)
 	if err != nil {
 		t.Fatal(err)

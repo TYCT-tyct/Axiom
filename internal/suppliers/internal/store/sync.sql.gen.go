@@ -79,6 +79,26 @@ func (q *Queries) CommitSyncState(ctx context.Context, db DBTX, arg CommitSyncSt
 	return result.RowsAffected(), nil
 }
 
+const ensureSyncState = `-- name: EnsureSyncState :exec
+INSERT INTO suppliers.sync_states (supplier_id, next_due)
+SELECT id, $1 FROM suppliers.suppliers WHERE id = $2
+ON CONFLICT (supplier_id) DO NOTHING
+`
+
+type EnsureSyncStateParams struct {
+	Now        time.Time
+	SupplierID uuid.UUID
+}
+
+// Makes the state of a supplier that has never taken a lease, holding its key until the transaction ends: a first take
+// inserts the same key, so it waits here and reads the state this transaction leaves instead of writing one over it.
+// A supplier that is not there makes no row, and the read that follows then reports it. next_due is the caller's time;
+// the reset that follows writes it again.
+func (q *Queries) EnsureSyncState(ctx context.Context, db DBTX, arg EnsureSyncStateParams) error {
+	_, err := db.Exec(ctx, ensureSyncState, arg.Now, arg.SupplierID)
+	return err
+}
+
 const getSupplierForSync = `-- name: GetSupplierForSync :one
 SELECT id, kind, origin, mgmt_egress_id, status, config_gen FROM suppliers.suppliers WHERE id = $1
 `
@@ -211,22 +231,49 @@ func (q *Queries) ListSyncDue(ctx context.Context, db DBTX, arg ListSyncDueParam
 }
 
 const lockSupplier = `-- name: LockSupplier :one
-SELECT status, status_reason, config_gen FROM suppliers.suppliers WHERE id = $1 FOR NO KEY UPDATE
+SELECT status, status_reason, config_gen, native_unit FROM suppliers.suppliers WHERE id = $1 FOR NO KEY UPDATE
 `
 
 type LockSupplierRow struct {
 	Status       string
 	StatusReason *string
 	ConfigGen    int64
+	NativeUnit   string
 }
 
-// The supplier's status, which the engine's state is projected onto, and its configuration generation, held until the
-// transaction ends: a change of the configuration waits for it. FOR NO KEY UPDATE, as an UPDATE of these columns takes,
-// so that rows that refer to the supplier can still be written.
+// The supplier's status, which the engine's state is projected onto, its configuration generation, and the native unit
+// its cost schedules are in, held until the transaction ends: a change of the configuration waits for it. FOR NO KEY
+// UPDATE, as an UPDATE of these columns takes, so that rows that refer to the supplier can still be written.
 func (q *Queries) LockSupplier(ctx context.Context, db DBTX, id uuid.UUID) (LockSupplierRow, error) {
 	row := db.QueryRow(ctx, lockSupplier, id)
 	var i LockSupplierRow
-	err := row.Scan(&i.Status, &i.StatusReason, &i.ConfigGen)
+	err := row.Scan(
+		&i.Status,
+		&i.StatusReason,
+		&i.ConfigGen,
+		&i.NativeUnit,
+	)
+	return i, err
+}
+
+const lockSyncState = `-- name: LockSyncState :one
+SELECT version, format, state FROM suppliers.sync_states WHERE supplier_id = $1 FOR UPDATE
+`
+
+type LockSyncStateRow struct {
+	Version int64
+	Format  int16
+	State   []byte
+}
+
+// The state of a supplier and the version it is stored at, held until the transaction ends. A person's change of the
+// credentials reads it so — after EnsureSyncState has made it if the supplier never synced — before it takes the
+// supplier's row: a step takes the two rows in that order as well (HoldSyncLease, then LockSupplier), and the other
+// order would close a cycle of waits between the two.
+func (q *Queries) LockSyncState(ctx context.Context, db DBTX, supplierID uuid.UUID) (LockSyncStateRow, error) {
+	row := db.QueryRow(ctx, lockSyncState, supplierID)
+	var i LockSyncStateRow
+	err := row.Scan(&i.Version, &i.Format, &i.State)
 	return i, err
 }
 
@@ -242,6 +289,33 @@ type ReleaseSyncLeaseParams struct {
 
 func (q *Queries) ReleaseSyncLease(ctx context.Context, db DBTX, arg ReleaseSyncLeaseParams) error {
 	_, err := db.Exec(ctx, releaseSyncLease, arg.SupplierID, arg.LeaseFence)
+	return err
+}
+
+const resetSyncState = `-- name: ResetSyncState :exec
+UPDATE suppliers.sync_states
+SET version = $1, state = $2, next_due = $3, lease_holder = NULL, lease_until = NULL,
+    lease_fence = lease_fence + 1
+WHERE supplier_id = $4
+`
+
+type ResetSyncStateParams struct {
+	Version    int64
+	State      []byte
+	NextDue    time.Time
+	SupplierID uuid.UUID
+}
+
+// Puts the state of a supplier back in service with the one the caller made of it, and lets the lease go with its fence
+// raised, so that a node that held the lease writes neither a step nor a refreshed login. version is given for the same
+// reason: what a step began with is now behind the state. next_due is the caller's time — the supplier is due at once.
+func (q *Queries) ResetSyncState(ctx context.Context, db DBTX, arg ResetSyncStateParams) error {
+	_, err := db.Exec(ctx, resetSyncState,
+		arg.Version,
+		arg.State,
+		arg.NextDue,
+		arg.SupplierID,
+	)
 	return err
 }
 

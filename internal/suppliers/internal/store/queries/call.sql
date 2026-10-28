@@ -8,12 +8,15 @@ UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = @cost_sc
 WHERE id = @id;
 
 -- name: ListRoutable :many
--- Every credential that can serve an endpoint: the supplier in use with a unit value confirmed, the group chosen, the
--- endpoint enabled with a cost known, and a key that is bound. The unit value is the latest the person gave. Expiry and
--- cooldown are judged by the clock when a credential is picked.
-SELECT e.id AS endpoint_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.settlement_currency,
-    v.id AS unit_value_id, v.value::text AS unit_value,
+-- Every credential that can serve an endpoint: the supplier in use with a balance above zero and a unit value
+-- confirmed, the group chosen, the endpoint enabled with a cost known, and a key that is bound. A supplier whose balance
+-- was never read is out, as one without a confirmed unit value is. The unit value is the latest the person gave. Expiry and
+-- cooldown are judged by the clock when a credential is picked. upstream_name is the model's name at the supplier, as a
+-- call must send it; model_id is the catalog model the snapshot of routing names it by.
+SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.owner_scope,
+    s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
+    c.requests_per_minute,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id = e.supplier_id
@@ -21,42 +24,44 @@ JOIN LATERAL (SELECT u.id, u.value FROM suppliers.unit_values u WHERE u.supplier
 JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id AND g.selected AND g.present
 JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active' AND c.ciphertext IS NOT NULL
 JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
-WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance')
+WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance') AND s.balance_native > 0
 ORDER BY e.id, c.id;
-
--- name: ListJournal :many
-SELECT request_id, attempt_seq, site_id, account_id, supplier_id, credential_id, endpoint_id, cost_schedule_id, priced_at,
-    charge_ref, committed
-FROM suppliers.attempt_journal WHERE request_id = @request_id ORDER BY attempt_seq;
-
--- name: PurgeJournal :execrows
--- The journal of the requests that ended before the time given, which billing told us ended. Having attempt costs does not
--- end a request: cleanup writes them while the request waits to be corrected. A request not told to have ended keeps
--- its rows however old, since they are what cleanup recovers it from.
-DELETE FROM suppliers.attempt_journal j
-USING suppliers.ended_requests e
-WHERE e.request_id = j.request_id AND e.ended_at < @before;
 
 -- name: InsertEndedRequest :exec
 INSERT INTO suppliers.ended_requests (request_id, site_id, account_id, ended_at)
 VALUES (@request_id, @site_id, @account_id, @ended_at)
 ON CONFLICT (request_id) DO NOTHING;
 
+-- name: EnabledSupplierCurrencies :many
+-- Include enabled suppliers without a routable endpoint: configuration problems must be visible before a call.
+SELECT id, settlement_currency FROM suppliers.suppliers WHERE status IN ('active', 'low_balance');
+
 -- name: InsertLostRequest :exec
 INSERT INTO suppliers.lost_requests (request_id, site_id, account_id, route_endpoint_ids)
 VALUES (@request_id, @site_id, @account_id, @route_endpoint_ids)
 ON CONFLICT (request_id) DO NOTHING;
 
--- name: InsertLostRequestResolution :exec
-INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
-VALUES (@request_id, @site_id, @account_id)
-ON CONFLICT (request_id) DO NOTHING;
+-- The resolution is the lost request's own tenant, read from it rather than given again: a second copy could disagree.
+-- Resolving again changes nothing. It returns how many lost requests the id names, so that a request never recorded as
+-- lost, which has nothing to resolve and writes no row, is told from one resolved already.
+-- name: InsertLostRequestResolution :one
+WITH lost AS (
+    SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = @request_id
+), resolved AS (
+    INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
+    SELECT request_id, site_id, account_id FROM lost
+    ON CONFLICT (request_id) DO NOTHING
+)
+SELECT count(*)::int AS named FROM lost;
 
 -- name: MatchCharges :many
 -- Matches every charge not yet matched to the one attempt that has its key. A key two attempts share matches neither:
 -- which one it belongs to is not known. The attempt is claimed first, and a charge is attributed only to an attempt
 -- this statement claimed, so two matchers at once cannot give one attempt two charges or one charge two attempts. A
--- charge held or assigned before is moved to the attempt, and the old attribution is cleared in the same update.
+-- charge held or assigned before is moved to the attempt, and the old attribution is cleared in the same update. A test
+-- generation's row is matched like any other, so the supplier's charge for a probe is attributed and never held for a
+-- person; its flag is returned, because the estimate of a probe is an upper bound and judging the endpoint by it would
+-- say nothing (H-I9).
 WITH pairs AS (
     SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq
     FROM suppliers.charge_records cr
@@ -70,14 +75,14 @@ WITH pairs AS (
     UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
     FROM pairs p
     WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.charge_record_id IS NULL
-    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.estimated_native, ac.cost_flag
+    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.estimated_native, ac.cost_flag, ac.test
 )
 UPDATE suppliers.charge_records cr SET state = 'matched', attribution = 'attempt', attempt_request_id = claimed.request_id,
     attempt_seq = claimed.attempt_seq, lost_request_id = NULL, revision = cr.revision + 1
 FROM claimed
 WHERE cr.id = claimed.charge_id AND cr.state <> 'matched'
 RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native, claimed.estimated_native, claimed.cost_flag,
-    claimed.endpoint_id, claimed.request_id, claimed.attempt_seq,
+    claimed.endpoint_id, claimed.request_id, claimed.attempt_seq, claimed.test,
     (SELECT s.native_unit FROM suppliers.suppliers s WHERE s.id = cr.supplier_id) AS native_unit;
 
 -- name: HoldOverdueCharges :many
@@ -122,8 +127,10 @@ WHERE id = @id AND cost_state = 'known';
 
 -- name: ListUnmatchedAttempts :many
 -- One batch of the attempts waiting past the grace, in a fixed order, after the position of the last one given before.
+-- A test generation is not one: whether the supplier bills a probe at all is nothing a person can chase, and its cost is
+-- the platform's own (H-I9).
 SELECT request_id, attempt_seq, charge_ref, finished_at FROM suppliers.attempt_costs
-WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < @before
+WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < @before AND NOT test
     AND (finished_at, request_id, attempt_seq) > (@after_at::timestamptz, @after_request::uuid, @after_seq::smallint)
 ORDER BY finished_at, request_id, attempt_seq
 LIMIT @batch::int;

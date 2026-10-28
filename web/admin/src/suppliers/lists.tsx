@@ -2,17 +2,24 @@ import type { AdminSchemas } from "@axiom/api";
 import { Button, EmptyState, Table, Td, useFormat } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { Code, Head, mainCell, State, Time } from "../parts";
+import { endpointState } from "./endpoint-test";
 import type { Open } from "./open";
 
 type OnOpen = ((open: Open) => void) | undefined;
 
-function Empty({ what }: { what: "groups" | "credentials" | "unbound" }) {
+function Empty({ what }: { what: "groups" | "credentials" | "unbound" | "endpoints" | "endpoints.unavailable" }) {
   const { t } = useTranslation();
   return (
     <EmptyState compact title={t(`suppliers.${what}.empty.title`)}>
       {t(`suppliers.${what}.empty.body`)}
     </EmptyState>
   );
+}
+
+// The name a group goes by in a list of its keys or endpoints: the code name once it has one.
+function groupName(groups: AdminSchemas["SupplierGroup"][], id: string) {
+  const group = groups.find((candidate) => candidate.id === id);
+  return group?.codename ?? group?.name ?? id;
 }
 
 // The groups the supplier lists, with the ratio it charges for each. Choosing one gives it its code name and makes its
@@ -78,6 +85,7 @@ const credentialTones = {
   quota_exhausted: "warn",
   expired: "bad",
   disabled: "warn",
+  erased: "neutral",
 } as const satisfies Record<AdminSchemas["SupplierCredential"]["status"], "neutral" | "good" | "warn" | "bad">;
 
 // The keys bound to groups: what Axiom sends each group's calls with.
@@ -106,7 +114,6 @@ export function Credentials({
       />
       <tbody>
         {credentials.map((credential) => {
-          const group = groups.find((candidate) => candidate.id === credential.group_id);
           return (
             <tr key={credential.id}>
               <Td className="max-w-48">
@@ -114,7 +121,7 @@ export function Credentials({
                   <Code>{credential.upstream_key_ref}</Code>
                 </p>
               </Td>
-              <Td className="max-w-48 truncate">{group?.codename ?? group?.name ?? credential.group_id}</Td>
+              <Td className="max-w-48 truncate">{groupName(groups, credential.group_id)}</Td>
               <Td>
                 <State tone={credentialTones[credential.status]}>
                   {t(`suppliers.credentials.state.${credential.status}`)}
@@ -177,5 +184,108 @@ export function UnboundKeys({ keys, onOpen }: { keys: AdminSchemas["UpstreamKey"
         ))}
       </tbody>
     </Table>
+  );
+}
+
+const endpointTones = {
+  off: "neutral",
+  unknown: "warn",
+  conflict: "bad",
+  ready: "good",
+} as const satisfies Record<ReturnType<typeof endpointState>, "neutral" | "good" | "warn" | "bad">;
+
+// The supplier's endpoints, one per model of a group, by upstream name: what a person tests. Only one that may be called
+// offers the test; the state says why another does not. Two groups can offer the same model at different costs, so the
+// group is always shown with the name (under it where its column is hidden) and is part of the button's name. None from
+// the server is a node of an earlier release (SupplierView).
+export function Endpoints({
+  endpoints,
+  groups,
+  onOpen,
+}: {
+  endpoints: AdminSchemas["SupplierEndpoint"][] | undefined;
+  groups: AdminSchemas["SupplierGroup"][];
+  onOpen: OnOpen;
+}) {
+  const { t } = useTranslation();
+  if (endpoints === undefined) {
+    return <Empty what="endpoints.unavailable" />;
+  }
+  if (endpoints.length === 0) {
+    return <Empty what="endpoints" />;
+  }
+  return (
+    <Table label={t("suppliers.endpoints.title")}>
+      <Head
+        cols={[
+          [t("suppliers.endpoints.model")],
+          [t("suppliers.endpoints.group"), "hidden md:table-cell"],
+          [t("suppliers.endpoints.formats"), "hidden lg:table-cell"],
+          [t("suppliers.col.status"), "whitespace-nowrap"],
+        ]}
+        action={onOpen !== undefined}
+      />
+      <tbody>
+        {endpoints.map((endpoint) => (
+          <EndpointRow
+            key={endpoint.id}
+            endpoint={endpoint}
+            group={groupName(groups, endpoint.group_id)}
+            onOpen={onOpen}
+          />
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
+function EndpointRow({
+  endpoint,
+  group,
+  onOpen,
+}: {
+  endpoint: AdminSchemas["SupplierEndpoint"];
+  group: string;
+  onOpen: OnOpen;
+}) {
+  const { t } = useTranslation();
+  const state = endpointState(endpoint);
+  return (
+    <tr>
+      <Td className={mainCell}>
+        <p className="truncate" title={endpoint.upstream_name}>
+          <Code>{endpoint.upstream_name}</Code>
+        </p>
+        <p className="truncate text-label text-t3 md:hidden" title={group}>
+          {group}
+        </p>
+      </Td>
+      <Td className="hidden max-w-48 truncate md:table-cell">{group}</Td>
+      <Td className="hidden lg:table-cell">
+        <div className="flex flex-wrap gap-1">
+          {endpoint.formats.map((format) => (
+            <span key={format} className="rounded-xs bg-s3 px-1.5 py-0.5 text-label text-t2">
+              {t(`suppliers.test.format_${format}`)}
+            </span>
+          ))}
+        </div>
+      </Td>
+      <Td className="whitespace-nowrap">
+        <State tone={endpointTones[state]}>{t(`suppliers.endpoints.state.${state}`)}</State>
+      </Td>
+      {onOpen ? (
+        <Td className="whitespace-nowrap">
+          {state === "ready" ? (
+            <Button
+              size="sm"
+              aria-label={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
+              onClick={() => onOpen({ kind: "test", endpoint, group })}
+            >
+              {t("suppliers.test.open")}
+            </Button>
+          ) : null}
+        </Td>
+      ) : null}
+    </tr>
   );
 }

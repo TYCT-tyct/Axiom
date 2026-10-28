@@ -102,19 +102,23 @@ func TestMainExitCodes(t *testing.T) {
 // TestSecondSignalEndsTheNodeAtOnce: the first signal starts a graceful shutdown, which waits for the request in
 // flight; the second signal ends the process at once instead of waiting out the shutdown timeout.
 func TestSecondSignalEndsTheNodeAtOnce(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows cannot send os.Interrupt to another process")
 	}
 	c := withOwner(t)
-	free, freed, watcher := holdForShutdown(t, c)
-	defer free()
 
 	p := startAxiom(t, []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_DATABASE_URL=" + c.database.App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 		"AXIOM_SHUTDOWN_TIMEOUT=1m", // long enough that only the second signal can explain a quick exit
 	}, "serve")
 	serving := p.until(t, "serving")
+	// The lock comes after the node serves: its startup check reads every envelope store, users among them, so a table
+	// locked before it would stop the node rather than give it a request to wait for.
+	free, freed, watcher := holdForShutdown(t, c)
+	defer free()
 	cancel, answered := waitForSignIn(t, serving.Public, watcher)
 
 	stopTheNode(t, p)

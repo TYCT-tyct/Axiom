@@ -25,7 +25,7 @@ FOR KEY SHARE;
 INSERT INTO billing.balances (account_id, site_id, floor) VALUES (@account_id, @site_id, @floor);
 
 -- name: LockBalance :one
-SELECT balance, floor, reserved FROM billing.balances WHERE account_id = @account_id FOR UPDATE;
+SELECT balance, floor, reserved, frozen FROM billing.balances WHERE account_id = @account_id FOR UPDATE;
 
 -- Run after LockBalance, so it starts after the lock and its snapshot holds every change committed before it.
 -- Counters are kept per UTC day; a limit counts the days of its window that holds day, its UTC day, week or month,
@@ -44,14 +44,16 @@ SELECT
             AND s.window_start < billing.window_to(@key_reset::text, d.day)), 0)::bigint AS key_used
 FROM d;
 
--- One statement writes the reservation and its three counters.
+-- One statement writes the reservation and its three counters. prices, fallbacks, models and endpoints are by route
+-- index, the zero UUID for a dropped entry: endpoints are what cleanup hands suppliers as the route of a request whose
+-- node was lost.
 -- name: InsertReservation :exec
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
-        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models)
+        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates)
     VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
         @workspace_window, @key_window, 1, @amount, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @lifetime_seconds::float8),
-        @prices::text[], @fallbacks::text[], @models::uuid[])
+        @prices::text[], @fallbacks::text[], @models::uuid[], @endpoints::uuid[], @exchange_rates::jsonb)
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + @amount WHERE b.account_id = @account_id
 )

@@ -94,20 +94,6 @@ func finish(s scanState, now time.Time) scanState {
 	return s
 }
 
-// Rescan begins a late pass over [since, now), for a removal that reads the last records after the grace period.
-func (m *manager) Rescan(since time.Time) adapter.ScanState {
-	now := m.s.now()
-	s := scanState{
-		V: 1, Watermark: now.Unix(), LastLate: now.Unix(), LateEnd: now.Unix(),
-		Pass: &pass{Late: true, Start: since.Unix(), End: now.Add(-lag).Unix(), Page: 1},
-	}
-	b, err := s.encode()
-	if err != nil {
-		panic(err) // integers and booleans always encode
-	}
-	return b
-}
-
 // Charges reads one page of the pass under way, or starts the next pass. The state it returns is the one to keep with
 // the page's records; on an error it is the state it was given, so nothing is skipped.
 func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {

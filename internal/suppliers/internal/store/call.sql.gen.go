@@ -95,6 +95,36 @@ func (q *Queries) DelistEndpoint(ctx context.Context, db DBTX, id uuid.UUID) (in
 	return result.RowsAffected(), nil
 }
 
+const enabledSupplierCurrencies = `-- name: EnabledSupplierCurrencies :many
+SELECT id, settlement_currency FROM suppliers.suppliers WHERE status IN ('active', 'low_balance')
+`
+
+type EnabledSupplierCurrenciesRow struct {
+	ID                 uuid.UUID
+	SettlementCurrency string
+}
+
+// Include enabled suppliers without a routable endpoint: configuration problems must be visible before a call.
+func (q *Queries) EnabledSupplierCurrencies(ctx context.Context, db DBTX) ([]EnabledSupplierCurrenciesRow, error) {
+	rows, err := db.Query(ctx, enabledSupplierCurrencies)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EnabledSupplierCurrenciesRow
+	for rows.Next() {
+		var i EnabledSupplierCurrenciesRow
+		if err := rows.Scan(&i.ID, &i.SettlementCurrency); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const holdOverdueCharges = `-- name: HoldOverdueCharges :many
 WITH due AS (
     SELECT c.id FROM suppliers.charge_records c
@@ -233,79 +263,32 @@ func (q *Queries) InsertLostRequest(ctx context.Context, db DBTX, arg InsertLost
 	return err
 }
 
-const insertLostRequestResolution = `-- name: InsertLostRequestResolution :exec
-INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
-VALUES ($1, $2, $3)
-ON CONFLICT (request_id) DO NOTHING
+const insertLostRequestResolution = `-- name: InsertLostRequestResolution :one
+WITH lost AS (
+    SELECT l.request_id, l.site_id, l.account_id FROM suppliers.lost_requests l WHERE l.request_id = $1
+), resolved AS (
+    INSERT INTO suppliers.lost_request_resolutions (request_id, site_id, account_id)
+    SELECT request_id, site_id, account_id FROM lost
+    ON CONFLICT (request_id) DO NOTHING
+)
+SELECT count(*)::int AS named FROM lost
 `
 
-type InsertLostRequestResolutionParams struct {
-	RequestID uuid.UUID
-	SiteID    uuid.UUID
-	AccountID uuid.UUID
-}
-
-func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, arg InsertLostRequestResolutionParams) error {
-	_, err := db.Exec(ctx, insertLostRequestResolution, arg.RequestID, arg.SiteID, arg.AccountID)
-	return err
-}
-
-const listJournal = `-- name: ListJournal :many
-SELECT request_id, attempt_seq, site_id, account_id, supplier_id, credential_id, endpoint_id, cost_schedule_id, priced_at,
-    charge_ref, committed
-FROM suppliers.attempt_journal WHERE request_id = $1 ORDER BY attempt_seq
-`
-
-type ListJournalRow struct {
-	RequestID      uuid.UUID
-	AttemptSeq     int16
-	SiteID         *uuid.UUID
-	AccountID      *uuid.UUID
-	SupplierID     uuid.UUID
-	CredentialID   uuid.UUID
-	EndpointID     uuid.UUID
-	CostScheduleID uuid.UUID
-	PricedAt       time.Time
-	ChargeRef      *string
-	Committed      bool
-}
-
-func (q *Queries) ListJournal(ctx context.Context, db DBTX, requestID uuid.UUID) ([]ListJournalRow, error) {
-	rows, err := db.Query(ctx, listJournal, requestID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListJournalRow
-	for rows.Next() {
-		var i ListJournalRow
-		if err := rows.Scan(
-			&i.RequestID,
-			&i.AttemptSeq,
-			&i.SiteID,
-			&i.AccountID,
-			&i.SupplierID,
-			&i.CredentialID,
-			&i.EndpointID,
-			&i.CostScheduleID,
-			&i.PricedAt,
-			&i.ChargeRef,
-			&i.Committed,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+// The resolution is the lost request's own tenant, read from it rather than given again: a second copy could disagree.
+// Resolving again changes nothing. It returns how many lost requests the id names, so that a request never recorded as
+// lost, which has nothing to resolve and writes no row, is told from one resolved already.
+func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requestID uuid.UUID) (int32, error) {
+	row := db.QueryRow(ctx, insertLostRequestResolution, requestID)
+	var named int32
+	err := row.Scan(&named)
+	return named, err
 }
 
 const listRoutable = `-- name: ListRoutable :many
-SELECT e.id AS endpoint_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.settlement_currency,
-    v.id AS unit_value_id, v.value::text AS unit_value,
+SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.owner_scope,
+    s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
+    c.requests_per_minute,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id = e.supplier_id
@@ -313,17 +296,20 @@ JOIN LATERAL (SELECT u.id, u.value FROM suppliers.unit_values u WHERE u.supplier
 JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id AND g.selected AND g.present
 JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active' AND c.ciphertext IS NOT NULL
 JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
-WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance')
+WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance') AND s.balance_native > 0
 ORDER BY e.id, c.id
 `
 
 type ListRoutableRow struct {
 	EndpointID         uuid.UUID
+	UpstreamName       string
+	ModelID            uuid.UUID
 	Formats            []string
 	SupplierID         uuid.UUID
 	Kind               string
 	Origin             string
 	NativeUnit         string
+	OwnerScope         string
 	SettlementCurrency string
 	UnitValueID        uuid.UUID
 	UnitValue          string
@@ -334,13 +320,16 @@ type ListRoutableRow struct {
 	KeyVersion         *int64
 	MaxConcurrency     int32
 	ExpiresAt          *time.Time
+	RequestsPerMinute  *int32
 	CostScheduleID     uuid.UUID
 	Schedule           []byte
 }
 
-// Every credential that can serve an endpoint: the supplier in use with a unit value confirmed, the group chosen, the
-// endpoint enabled with a cost known, and a key that is bound. The unit value is the latest the person gave. Expiry and
-// cooldown are judged by the clock when a credential is picked.
+// Every credential that can serve an endpoint: the supplier in use with a balance above zero and a unit value
+// confirmed, the group chosen, the endpoint enabled with a cost known, and a key that is bound. A supplier whose balance
+// was never read is out, as one without a confirmed unit value is. The unit value is the latest the person gave. Expiry and
+// cooldown are judged by the clock when a credential is picked. upstream_name is the model's name at the supplier, as a
+// call must send it; model_id is the catalog model the snapshot of routing names it by.
 func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow, error) {
 	rows, err := db.Query(ctx, listRoutable)
 	if err != nil {
@@ -352,11 +341,14 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 		var i ListRoutableRow
 		if err := rows.Scan(
 			&i.EndpointID,
+			&i.UpstreamName,
+			&i.ModelID,
 			&i.Formats,
 			&i.SupplierID,
 			&i.Kind,
 			&i.Origin,
 			&i.NativeUnit,
+			&i.OwnerScope,
 			&i.SettlementCurrency,
 			&i.UnitValueID,
 			&i.UnitValue,
@@ -367,6 +359,7 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 			&i.KeyVersion,
 			&i.MaxConcurrency,
 			&i.ExpiresAt,
+			&i.RequestsPerMinute,
 			&i.CostScheduleID,
 			&i.Schedule,
 		); err != nil {
@@ -382,7 +375,7 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 
 const listUnmatchedAttempts = `-- name: ListUnmatchedAttempts :many
 SELECT request_id, attempt_seq, charge_ref, finished_at FROM suppliers.attempt_costs
-WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < $1
+WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < $1 AND NOT test
     AND (finished_at, request_id, attempt_seq) > ($2::timestamptz, $3::uuid, $4::smallint)
 ORDER BY finished_at, request_id, attempt_seq
 LIMIT $5::int
@@ -404,6 +397,8 @@ type ListUnmatchedAttemptsRow struct {
 }
 
 // One batch of the attempts waiting past the grace, in a fixed order, after the position of the last one given before.
+// A test generation is not one: whether the supplier bills a probe at all is nothing a person can chase, and its cost is
+// the platform's own (H-I9).
 func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUnmatchedAttemptsParams) ([]ListUnmatchedAttemptsRow, error) {
 	rows, err := db.Query(ctx, listUnmatchedAttempts,
 		arg.Before,
@@ -449,14 +444,14 @@ WITH pairs AS (
     UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
     FROM pairs p
     WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.charge_record_id IS NULL
-    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.estimated_native, ac.cost_flag
+    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.estimated_native, ac.cost_flag, ac.test
 )
 UPDATE suppliers.charge_records cr SET state = 'matched', attribution = 'attempt', attempt_request_id = claimed.request_id,
     attempt_seq = claimed.attempt_seq, lost_request_id = NULL, revision = cr.revision + 1
 FROM claimed
 WHERE cr.id = claimed.charge_id AND cr.state <> 'matched'
 RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native, claimed.estimated_native, claimed.cost_flag,
-    claimed.endpoint_id, claimed.request_id, claimed.attempt_seq,
+    claimed.endpoint_id, claimed.request_id, claimed.attempt_seq, claimed.test,
     (SELECT s.native_unit FROM suppliers.suppliers s WHERE s.id = cr.supplier_id) AS native_unit
 `
 
@@ -469,13 +464,17 @@ type MatchChargesRow struct {
 	EndpointID      uuid.UUID
 	RequestID       uuid.UUID
 	AttemptSeq      int16
+	Test            bool
 	NativeUnit      string
 }
 
 // Matches every charge not yet matched to the one attempt that has its key. A key two attempts share matches neither:
 // which one it belongs to is not known. The attempt is claimed first, and a charge is attributed only to an attempt
 // this statement claimed, so two matchers at once cannot give one attempt two charges or one charge two attempts. A
-// charge held or assigned before is moved to the attempt, and the old attribution is cleared in the same update.
+// charge held or assigned before is moved to the attempt, and the old attribution is cleared in the same update. A test
+// generation's row is matched like any other, so the supplier's charge for a probe is attributed and never held for a
+// person; its flag is returned, because the estimate of a probe is an upper bound and judging the endpoint by it would
+// say nothing (H-I9).
 func (q *Queries) MatchCharges(ctx context.Context, db DBTX, batch int32) ([]MatchChargesRow, error) {
 	rows, err := db.Query(ctx, matchCharges, batch)
 	if err != nil {
@@ -494,6 +493,7 @@ func (q *Queries) MatchCharges(ctx context.Context, db DBTX, batch int32) ([]Mat
 			&i.EndpointID,
 			&i.RequestID,
 			&i.AttemptSeq,
+			&i.Test,
 			&i.NativeUnit,
 		); err != nil {
 			return nil, err
@@ -515,23 +515,6 @@ WHERE id = $1 AND status IN ('connecting', 'active', 'low_balance')
 // routed to until a person looks at it.
 func (q *Queries) PauseSupplierForFunding(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {
 	result, err := db.Exec(ctx, pauseSupplierForFunding, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const purgeJournal = `-- name: PurgeJournal :execrows
-DELETE FROM suppliers.attempt_journal j
-USING suppliers.ended_requests e
-WHERE e.request_id = j.request_id AND e.ended_at < $1
-`
-
-// The journal of the requests that ended before the time given, which billing told us ended. Having attempt costs does not
-// end a request: cleanup writes them while the request waits to be corrected. A request not told to have ended keeps
-// its rows however old, since they are what cleanup recovers it from.
-func (q *Queries) PurgeJournal(ctx context.Context, db DBTX, before time.Time) (int64, error) {
-	result, err := db.Exec(ctx, purgeJournal, before)
 	if err != nil {
 		return 0, err
 	}

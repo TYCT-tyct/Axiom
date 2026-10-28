@@ -3,10 +3,8 @@ package sub2api
 import (
 	"fmt"
 	"math/big"
-	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/suppliers/internal/adapter"
@@ -123,15 +121,6 @@ func codeName(code string) string {
 		return "no known code"
 	}
 	return code
-}
-
-// retryAfter reads a Retry-After in seconds; a date, a negative number or nothing is zero.
-func retryAfter(h http.Header) time.Duration {
-	n, err := strconv.Atoi(h.Get("Retry-After"))
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return time.Duration(n) * time.Second
 }
 
 // page is sub2api's {items, total, page, page_size, pages} list.

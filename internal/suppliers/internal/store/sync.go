@@ -29,16 +29,6 @@ func InsertSyncEvents(ctx context.Context, db DBTX, supplier uuid.UUID, version 
 	return err
 }
 
-const syncEventExists = `SELECT EXISTS (SELECT 1 FROM suppliers.sync_events WHERE supplier_id = $1 AND kind = $2)`
-
-// HasSyncEvent reports whether a step of this supplier's sync wrote an event of this kind. An event is never changed or
-// removed, so this is how a supplier's past is read back when the state does not store it.
-func HasSyncEvent(ctx context.Context, db DBTX, supplier uuid.UUID, kind string) (bool, error) {
-	var exists bool
-	err := db.QueryRow(ctx, syncEventExists, supplier, kind).Scan(&exists)
-	return exists, err
-}
-
 // SyncPlanRow is a version of a cost plan.
 type SyncPlanRow struct{ Endpoint, Fingerprint, Schedule, Basis string }
 
@@ -57,6 +47,45 @@ func InsertSyncPlans(ctx context.Context, db DBTX, supplier uuid.UUID, version i
 	}
 	_, err := db.Exec(ctx, insertSyncPlans, supplier, version, endpoint, fingerprint, schedule, basis)
 	return err
+}
+
+// PlanVersion is one version of a cost plan as it was stored: the endpoint as the supplier names it, its fingerprint,
+// and the schedule itself.
+type PlanVersion struct{ Endpoint, Fingerprint, Schedule, Basis string }
+
+// planVersions reads one row per version asked for. DISTINCT ON keeps the newest row of a version that is stored more
+// than once: the same schedule confirmed by a person and then published by the supplier has one fingerprint and two
+// bases, and which one is read back must not depend on the order the rows come in.
+const planVersions = `
+SELECT DISTINCT ON (p.endpoint, p.fingerprint) p.endpoint, p.fingerprint, p.schedule::text, p.basis
+FROM suppliers.sync_plans p
+JOIN unnest($2::text[], $3::text[]) AS k (endpoint, fingerprint)
+    ON k.endpoint = p.endpoint AND k.fingerprint = p.fingerprint
+WHERE p.supplier_id = $1
+ORDER BY p.endpoint, p.fingerprint, p.version DESC, p.seq DESC`
+
+// PlanVersions reads the schedules of the named versions of a supplier's cost plans. The projection writes a
+// cost_schedules row from them: the engine keeps only the fingerprints of the plans in force, and a model mapped after
+// its plan was worked out must still find it.
+func PlanVersions(ctx context.Context, db DBTX, supplier uuid.UUID, keys []PlanVersion) ([]PlanVersion, error) {
+	endpoint, fingerprint := make([]string, len(keys)), make([]string, len(keys))
+	for i, k := range keys {
+		endpoint[i], fingerprint[i] = k.Endpoint, k.Fingerprint
+	}
+	rows, err := db.Query(ctx, planVersions, supplier, endpoint, fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanVersion
+	for rows.Next() {
+		var p PlanVersion
+		if err := rows.Scan(&p.Endpoint, &p.Fingerprint, &p.Schedule, &p.Basis); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // RateBucket is the count of one bucket: Scope is whom the supplier counts for.

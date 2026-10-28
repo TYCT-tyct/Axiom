@@ -6,9 +6,14 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
-# Run every check the CI build job runs, except one run of each benchmark: `check-all` adds those, and CI runs it on
-# every pull request and main push
-check: docs modules adapters-removable scope api tidy generated lint deadcode test vuln secrets web
+# Run every check CI runs, except one run of each benchmark and the deployment check: `check-all` adds the benchmarks.
+# This is the local pre-push gate, so it keeps `secrets` and `docs`, which a PR build leaves to workflow.yml (see
+# `check-ci`)
+check: docs check-static test secrets web
+
+# The checks that need no run of a test suite: CI's static job adds `script-tests` on a PR, and `docs` (which includes
+# `script-tests`) plus `secrets` on a train or main
+check-static: modules adapters-removable artifacts scope api tidy generated lint deadcode vuln
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -61,6 +66,12 @@ adapters-removable:
 api:
     go run -C tools ./checkapi ..
 
+# No build output, binary or file over 1 MB is committed: the files the branch adds or changes, and the untracked ones a
+# `git add` would take, are checked by size, by suffix and for a NUL byte (every file on main, and without origin/main);
+# scripts/check_artifacts.py holds the rules and the allowlist of what the tree keeps on purpose
+artifacts:
+    {{ python }} {{ quote(justfile_directory() / "scripts/check_artifacts.py") }}
+
 # Only internal/platform/pg sets the tenant scope or switches the role, in Go and SQL, tests and migrations included;
 # scripts/check_scope.py holds the rule and its reasons
 scope:
@@ -86,17 +97,38 @@ test: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 ./...
     go test -C tools -race ./...
 
-# Every benchmark compiles and runs once, with the race detector. CI runs this on pull requests and main pushes;
-# bench-compare still compares allocations on PRs, without -race.
+# Focused remote verification for callback transactions and their mutation proofs (#309).
+payments-test:
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 5m ./internal/payments
+    go test -race -p=2 ./internal/platform/clientip
+    go test -race -p=2 -run '^TestPaymentCallbacksBypassOnlyConsoleAuthentication$' ./cmd/axiom
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 10m ./cmd/axiom -run 'TestTopUp|TestPaymentMethods|TestReplay|TestOrder|TestIPLimitsOnOrders|TestReturn|TestARefusal|TestRefusal|TestContractRules'
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 5m ./internal/accounts -run 'TestOrigin|TestAuthorizedScope'
+
+# Every benchmark compiles and runs once, with the race detector. CI runs this on main pushes; a train runs bench-compare
+# instead, which compares allocations without -race. A pull request runs neither.
 bench-once: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 -run '^$' -bench . -benchtime 1x ./...
+
+# The load test of docs/performance.md「怎么验证」: 5000 streams, a burst and a mass cancel, megabyte requests, a hot account,
+# a cold-key flood and two database outages, on the shared PostgreSQL cluster, about 12 minutes at scale 1 and heavy on the
+# machine (without the race detector, which it would slow beyond meaning). It is not part of `check`; run it on the CI
+# server, never beside other work: bash ~/axiom-ops/remote-check.sh <worktree> load. A scale below 1 shrinks the counts and
+# the times to try it on a small machine, and `only` (a pattern such as ^1_) runs the scenarios whose names match. Prints the results table last.
+load scale="1" only="": web-embed
+    AXIOM_LOAD_SCALE={{ scale }} go run ./internal/platform/pgtest/cmd/withcluster go test -tags load -count=1 -timeout 35m -run '^TestLoad$/{{ only }}' -v ./cmd/axiom
 
 # Every check, including one run of each benchmark under the race detector
 check-all: check bench-once
 
-# The checks that read Markdown: the docs tests (including the pull request template), module boundaries, and the pg
-# module table. A Markdown-only PR runs this instead of the full build.
-md-checks: docs modules
+# What a pull request's build runs: `check` without `secrets` and the workflow half of `docs`, which workflow.yml's
+# required `secrets` and `docs` jobs already run on it, so they would run twice per build. `script-tests` is the half of
+# `docs` workflow.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
+check-ci: script-tests check-static test web
+
+# The checks a Markdown-only pull request runs instead of the full build: the docs tests (including the pull request
+# template), module boundaries, the pg module table, and the size and binary rule, which a document must pass too.
+md-checks: docs modules artifacts
     go test ./internal/platform/pg -run '^TestModuleOrderFollowsArchitecture$'
 
 # Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the
@@ -110,6 +142,26 @@ record format scenario request:
 # processor per binary, so another job's load cannot move its allocation count (tools/benchgate, docs/performance.md).
 bench-compare base:
     go run -C tools ./benchgate .. {{ quote(base) }}
+
+# Send the same requests to Axiom and to the official new-api image, both served by one fake upstream that replays the
+# protocol samples, and fail on any difference docs/domains/gateway.md「与 new-api 的有意差异」 does not explain. It pulls
+# an image and starts a container, so it is not part of `check`; run it on the CI server: remote-check.sh <worktree> diff
+diff: web-embed
+    go run ./internal/platform/pgtest/cmd/withcluster go test -tags diff -count=1 -timeout 15m -v -run '^(TestAxiomMatchesNewAPIOnTheWire|TestDiffHarness.*)$' ./cmd/axiom
+
+# Show what writing deploy/catalog/dialects.json into the models of the database AXIOM_DATABASE_URL names would change, and
+# change nothing (docs/ops/release.md). Run it before catalog-dialect-apply.
+catalog-dialect-plan:
+    go run ./cmd/axiom catalog apply-dialect deploy/catalog/dialects.json
+
+# Write deploy/catalog/dialects.json into those models through the catalog's audited spec update; a second run changes nothing
+catalog-dialect-apply:
+    go run ./cmd/axiom catalog apply-dialect --apply deploy/catalog/dialects.json
+
+# The catalog's acceptance check against AXIOM_DATABASE_URL, read-only: every model has what a release needs of it
+# (internal/catalog/README.md「第一版验收的检查」); fails when it finds any problem
+catalog-check:
+    go run ./cmd/axiom catalog check
 
 compose := "docker compose -f deploy/compose.yaml"
 
@@ -130,6 +182,13 @@ up: web-embed
 down *flags:
     docker compose --project-name "${COMPOSE_PROJECT_NAME:-axiom}" down {{ flags }}
 
+# Rehearse the backup and the restore end to end: its own compose project, a local S3 server instead of the bucket, the
+# database and the key ring wiped and restored from a set, and what came back compared with what was there
+# (docs/ops/backup-restore.md「恢复演练」). It removes everything it creates, volumes included, and never touches a
+# deployment or a real bucket: about ten minutes, one run at a time on a machine.
+backup-rehearsal:
+    bash scripts/ops/rehearse.sh
+
 # Merged migrations never change: against the base commit, files under migrations/ may only be added (a rename
 # counts as a deletion). A git failure, such as a missing base or a shallow clone without the merge base, fails the
 # check: an empty list from a failed diff would pass it.
@@ -148,10 +207,13 @@ secrets:
     git rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' > /dev/null || { echo "origin/main is missing, so the branch cannot be scanned: run git fetch origin main"; exit 1; }
     go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner --log-opts=origin/main..HEAD .
 
-docs:
-    {{ python }} -m unittest discover -s scripts
+docs: script-tests
     {{ python }} -m unittest discover -s scripts/workflow
     {{ python }} scripts/workflow/check_docs.py
+
+# This repository's own script tests (scripts/test_*.py)
+script-tests:
+    {{ python }} -m unittest discover -s scripts
 
 # Install the frontend's dependencies exactly as web/pnpm-lock.yaml pins them; dependencies' install scripts never run
 web-install:
@@ -198,7 +260,3 @@ web: web-embed
     {{ web }} test
     {{ web }} budget
     version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py e2e --version "$version" -- {{ web }} e2e
-
-# The suppliers module's tests only, for a change that touches it (throwaway, never pushed).
-test-suppliers:
-    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 ./internal/suppliers/...

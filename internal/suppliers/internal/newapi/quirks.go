@@ -2,9 +2,6 @@ package newapi
 
 import (
 	"net/http"
-	"strconv"
-	"strings"
-	"time"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
@@ -102,19 +99,10 @@ func ownFailure(status int, code string) (adapter.Failure, bool) {
 // channel's upstream or new-api's status mapping of a channel error may answer 429 after the request was run, so it
 // stays unknown and the cost is estimated and reconciled.
 func rateLimited(h http.Header) adapter.Failure {
-	return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{RetryAfter: retryAfter(h.Get("Retry-After"))}}
+	return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{RetryAfter: adapter.RetryAfter(h)}}
 }
 
 // refused is a failure by which new-api says it refused before running the request.
 func refused(scope adapter.Scope, cause adapter.Cause) adapter.Failure {
 	return adapter.Failure{Executed: adapter.NotExecuted, Scope: scope, Cause: cause}
-}
-
-// retryAfter reads the seconds form; a date, a negative or an unreadable value is no wait stated.
-func retryAfter(v string) time.Duration {
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil || n < 0 {
-		return 0
-	}
-	return time.Duration(n) * time.Second
 }

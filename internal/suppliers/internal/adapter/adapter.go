@@ -198,8 +198,7 @@ type Charge struct {
 // ChargePage is one page of charges and whether the pass has reached its end. A pass may cover less than the time up
 // to now (an adapter reads a backlog window by window), so Done does not say how far the records are read: Through
 // does. On a Done page it is the time before which every record has been read, and every adapter reports it (the
-// contract in adaptertest). A removal reads on until Through reaches the moment it began; a page that leaves it out
-// leaves the removal reading, rather than taking a backlog for read.
+// contract in adaptertest), so that whoever reads the records to a moment does not take a backlog for read.
 type ChargePage struct {
 	Charges []Charge
 	Done    bool

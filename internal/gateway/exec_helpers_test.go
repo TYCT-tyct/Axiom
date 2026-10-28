@@ -20,6 +20,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -138,13 +139,9 @@ func late(waits time.Duration, then scripted) scripted {
 // fakeUpstreams are the endpoints a test gives credentials to, each with a script of answers, one per attempt (the
 // last repeats).
 type fakeUpstreams struct {
-	mu      sync.Mutex
-	eps     map[uuid.UUID]*fakeEndpoint
-	journal []suppliers.JournalEntry
-	writes  []int // how many writes the client had had when each journal entry was made
-	client  *clientWriter
-	settled int           // calls of Settled
-	flushed chan struct{} // what JournalFlushed returns; closed unless a test holds it
+	mu     sync.Mutex
+	eps    map[uuid.UUID]*fakeEndpoint
+	client *clientWriter
 	// beforeAcquire acts when an attempt asks for a credential of the endpoint, before it gets one: a test's way to
 	// have the client leave between two attempts.
 	beforeAcquire func(id suppliers.EndpointID)
@@ -154,9 +151,22 @@ type fakeEndpoint struct {
 	script []scripted
 	policy suppliers.CallPolicy
 	noSlot bool
+	// receipt is what the attempts of this endpoint leave, as a real one from suppliers does; the zero value is a
+	// receipt with nothing known, which prices every attempt at nothing. receipts, when set, is one per attempt, the
+	// last repeating: a supplier's receipts differ in its own id of each attempt.
+	receipt  suppliers.AttemptReceipt
+	receipts []suppliers.AttemptReceipt
 
 	acquired, sends, done int
 	calls                 []suppliers.Call
+}
+
+// receiptOf is the receipt the nth attempt on the endpoint leaves.
+func (e *fakeEndpoint) receiptOf(n int) suppliers.AttemptReceipt {
+	if len(e.receipts) == 0 {
+		return e.receipt
+	}
+	return e.receipts[min(n, len(e.receipts)-1)]
 }
 
 func (u *fakeUpstreams) endpoint(n int) *fakeEndpoint {
@@ -179,23 +189,8 @@ func (u *fakeUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
 		return nil, suppliers.ErrNoSlot
 	}
 	e.acquired++
-	return &fakeConn{u: u, e: e}, nil
+	return &fakeConn{u: u, e: e, nth: e.acquired - 1}, nil
 }
-
-func (u *fakeUpstreams) Journal(e suppliers.JournalEntry) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.journal = append(u.journal, e)
-	u.writes = append(u.writes, u.client.wrote())
-}
-
-func (u *fakeUpstreams) Settled(platform.RequestID) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.settled++
-}
-
-func (u *fakeUpstreams) JournalFlushed(platform.RequestID) <-chan struct{} { return u.flushed }
 
 // outstanding is how many credentials are held.
 func (u *fakeUpstreams) outstanding() (n int) {
@@ -210,6 +205,7 @@ func (u *fakeUpstreams) outstanding() (n int) {
 type fakeConn struct {
 	u    *fakeUpstreams
 	e    *fakeEndpoint
+	nth  int // which attempt of the endpoint this is, from 0
 	once sync.Once
 }
 
@@ -222,15 +218,14 @@ func (c *fakeConn) Send(ctx context.Context, call suppliers.Call) (*http.Respons
 	c.u.mu.Unlock()
 	return next(ctx)
 }
-func (c *fakeConn) Policy() suppliers.CallPolicy    { return c.e.policy }
-func (*fakeConn) Receipt() suppliers.AttemptReceipt { return suppliers.AttemptReceipt{} }
+func (c *fakeConn) Policy() suppliers.CallPolicy { return c.e.policy }
 func (c *fakeConn) Done() suppliers.AttemptReceipt {
 	c.once.Do(func() {
 		c.u.mu.Lock()
 		c.e.done++
 		c.u.mu.Unlock()
 	})
-	return suppliers.AttemptReceipt{}
+	return c.e.receiptOf(c.nth)
 }
 
 // clientWriter is the client of a call: it keeps what it is given with the time each write was made, and can be made
@@ -244,6 +239,7 @@ type clientWriter struct {
 	failFrom int       // writes from this one on fail; 0 never
 	stall    bool      // a write waits for its deadline and then fails, as one to a client that does not read
 	rate     int64     // bytes a second the client reads at; 0 as fast as it is given
+	onWrite  func()    // called at the start of every write, as a client that reads when it likes
 	deadlns  int
 }
 
@@ -265,6 +261,9 @@ func (w *clientWriter) WriteHeader(status int) {
 }
 
 func (w *clientWriter) Write(b []byte) (int, error) {
+	if w.onWrite != nil {
+		w.onWrite()
+	}
 	w.mu.Lock()
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -341,18 +340,19 @@ type options struct {
 	settleErr    error               // every settlement fails with it
 	settle       func(try int) error // the error of each settlement, from 1, when settleErr is nil
 	extend       func(ctx context.Context, r billing.ExtendRequest) error
-	segmentable  bool          // the entries are reserved by segment of 40 output tokens
-	cost         int64         // of every attempt
-	costNotKnown bool          // whether Costs says the cost leaves something out
-	costErr      error         // the error Costs fails with
-	flushed      chan struct{} // the journal's flush; closed when nil
-	stream       *bool         // the request's stream member; true when nil
+	segmentable  bool  // the entries are reserved by segment of 40 output tokens
+	cost         int64 // of every attempt
+	costNotKnown bool  // whether Costs says the cost leaves something out
+	costErr      error // the error Costs fails with
+	stream       *bool // the request's stream member; true when nil
 	supplier     func(n int) int
 	alive        func() bool
 	mutate       func(*Call)
 	noSlot       []int
-	memory       int64  // the node's budget; memorySize when zero
-	price        string // the entries' price schedule; cheap when empty
+	memory       int64            // the node's budget; memorySize when zero
+	price        string           // the entries' price schedule; cheap when empty
+	logs         *bytes.Buffer    // the node's log, discarded when nil
+	health       *quality.Monitor // what the attempts tell; a new one when nil
 }
 
 type harness struct {
@@ -368,6 +368,8 @@ type harness struct {
 	client  context.CancelFunc
 	events  []string
 	cfg     Config
+	refused func() map[string]int64 // the 429s counted so far, by reason
+	health  *quality.Monitor        // what the attempts told quality
 	started time.Time
 
 	mu          sync.Mutex
@@ -391,12 +393,11 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	}
 	all, _ := sample(t, upstream)
 	_, request := sample(t, client)
-	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{})}
-	h.up = &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: h.w, flushed: o.flushed}
-	if h.up.flushed == nil {
-		h.up.flushed = make(chan struct{})
-		close(h.up.flushed)
+	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{}), health: o.health}
+	if h.health == nil {
+		h.health = quality.New(nil)
 	}
+	h.up = &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: h.w}
 	h.cfg = DefaultConfig()
 	if o.config != nil {
 		o.config(&h.cfg)
@@ -405,7 +406,9 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if h.router, err = routing.New(o.routing); err != nil {
 		t.Fatal(err)
 	}
-	limits, err := New(h.cfg)
+	meter, refused := countingMeter(ctx, t)
+	h.refused = refused
+	limits, err := New(h.cfg, meter.Meter("test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,10 +418,14 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if alive == nil {
 		alive = func() bool { return true }
 	}
+	logger := slog.New(slog.DiscardHandler)
+	if o.logs != nil {
+		logger = slog.New(slog.NewTextHandler(o.logs, nil))
+	}
 	h.exec, err = NewExecutor(ExecDeps{
-		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: slog.New(slog.DiscardHandler),
+		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
 		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
-		Alive: alive, IdentitySecret: []byte("0123456789abcdef"),
+		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -527,15 +534,21 @@ func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outc
 	return l.o.final, nil
 }
 
-// fakeCosts is what Costs answers the tests: a cost, whether that is all of it, and an error to fail with.
+// fakeCosts is what Costs answers the tests: a cost, whether that is all of it, and an error to fail with. The native
+// amount, which the settlement writes to suppliers, is the same figure in the supplier's own unit, so a test can see it
+// where the attempt rows go. On an error it returns the figure with a zero AttemptCost, a state the real Credits never
+// reaches (it returns 0 with its error); what that pins is that the executor books the amount that comes back.
 type fakeCosts struct {
 	cost  int64
 	known bool
 	err   error
 }
 
-func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, platform.Currency) (int64, bool, error) {
-	return c.cost, c.known, c.err
+func (c fakeCosts) Credits(suppliers.AttemptReceipt, []catalog.Usage, platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
+	if c.err != nil {
+		return suppliers.AttemptCost{}, c.cost, c.known, c.err // the figure still comes: the executor books it whatever the error
+	}
+	return suppliers.AttemptCost{Native: platform.AmountExact(c.cost), Flag: suppliers.CostComplete}, c.cost, c.known, nil
 }
 
 // run runs the call to its end, in the bubble, and checks what holds however it ended: settled once, nothing held, no
@@ -562,8 +575,8 @@ func (h *harness) start() <-chan struct{} {
 }
 
 // check waits for the call to give its slots back, which may be after Run returns, and checks what holds however it
-// ended: every try of the settlement had the same outcome, at most one was written, nothing is held, and no memory is
-// left charged.
+// ended: every try of the settlement had the same outcome, at most one was written, nothing is held, and the node's
+// memory is back to the byte, neither left charged nor given back twice.
 func (h *harness) check() {
 	h.t.Helper()
 	<-h.released
@@ -585,10 +598,9 @@ func (h *harness) check() {
 	if held := h.up.outstanding(); held != 0 {
 		h.t.Errorf("%d credentials still held", held)
 	}
-	if !h.memory.Charge(h.budget) {
-		h.t.Error("the node's memory budget was not given back whole")
+	if got := left(h.memory); got != h.budget {
+		h.t.Errorf("the node's memory budget has %d left of %d: not given back whole, or given back twice", got, h.budget)
 	}
-	h.memory.Refund(h.budget)
 }
 
 // ended is the last try of the settlement, or fails.

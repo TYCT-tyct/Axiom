@@ -9,7 +9,7 @@ Managed by project-workflow: changed only by upgrades.
 Values arrive through the environment, never the command line, so a title or description cannot inject shell.
 The review check reads the first lines the review method asks reviewers and authors to write. With one account shared by
 the owner and the AI, it proves that a review of this commit, or of an earlier one carrying the same change, was recorded
-and answered, not who wrote it.
+and answered, or that the author answered a review without blocking findings for the commits pushed after it; not who wrote it.
 """
 
 import functools
@@ -49,13 +49,20 @@ TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}  # on a public repository anyone m
 EXEMPT = {"dependabot[bot]"}  # version bumps: their titles and descriptions are generated and cannot be corrected
 
 
+def title_warnings(title, author):
+    """Length only warns: a longer title costs a truncated line in git log, less than another round of the check."""
+    if author in EXEMPT or len(title) <= TITLE_CHARS:
+        return []
+    return [f"title is {len(title)} characters, over {TITLE_CHARS}: git log and GitHub cut it; shorten it unless it reads worse"]
+
+
 def describe(title, body, author, template):
     if author in EXEMPT:
         return []
     problems = []
-    if len(title) > TITLE_CHARS or not TITLE.match(title):
+    if not TITLE.match(title):
         problems.append(f"title {title!r}: write type(scope): summary — type one of {', '.join(TYPES)}, lowercase start, "
-                        f"no trailing period, at most {TITLE_CHARS} characters")
+                        "no trailing period")
     for match in CLOSING.finditer(body):
         if not LINE_START.fullmatch(body, body.rfind("\n", 0, match.start()) + 1, match.start()):
             problems.append(f"description: {match.group(0)!r}: a closing keyword may only start a line, in code and comments too "
@@ -156,8 +163,9 @@ def change(base, commit):
     return [line for line in diff.split(b"\n") if not line.startswith((b"index ", b"@@"))]
 
 
-def review(head, body, author, comments, allow_waiver=True, same_change=lambda commit: False):
-    """same_change(commit) says whether an earlier commit carries the same change as head, so a review of it still holds."""
+def review(head, body, author, comments, allow_waiver=True, same_change=lambda commit: False, ancestor=lambda commit, later: False):
+    """same_change(commit) says whether an earlier commit carries the same change as head, so a review of it still holds;
+    ancestor(commit, later) whether commit is later or in its history."""
     if author in EXEMPT:
         return []
     first = [(comment["body"].strip().splitlines() or [""])[0] for comment in comments if comment.get("author_association") in TRUSTED]
@@ -165,19 +173,32 @@ def review(head, body, author, comments, allow_waiver=True, same_change=lambda c
     if not reviews:  # later commits that only merged the base branch in keep the latest review of the same change
         reviews = next(([(index, match)] for index, line in reversed(list(enumerate(first)))
                         if (match := REVIEW.match(line)) and same_change(match.group(1))), [])
-    if not reviews:  # a waiver stands only where no review of this commit was recorded, so it cannot overrule one
-        if WAIVER.search(COMMENT.sub("", body)):
+    if not reviews:
+        # After a review without blocking findings, the author's answer naming the head records the commits pushed since,
+        # such as fixes for its should-fix findings or a merge of the base with conflicts: only blocking ones need another look
+        last = None  # the review of the newest commit in head's history, of one commit the latest posted: never a review
+        for index, line in enumerate(first):  # of another PR's commit, nor of an older commit posted after a blocking one
+            if (match := REVIEW.match(line)) and ancestor(match.group(1), head) and (last is None or ancestor(last[1].group(1), match.group(1))):
+                last = (index, match)
+        clean = last is not None and not int(last[1].group(2))
+        if clean and any((match := RESPONSE.match(line)) and (head.startswith(match.group(1)) or same_change(match.group(1)))
+                         for line in first[last[0] + 1:]):
+            return []
+        if WAIVER.search(COMMENT.sub("", body)):  # a waiver stands only where no review of this commit was recorded
             if allow_waiver:
                 return []
             return [f"this project does not accept 免评审 ([review] waiver = false in {CONFIG}): get an independent review of {head[:7]}"]
+        answer = (f"; or, when the commits since {last[1].group(1)[:7]} only address its review or merge the base in, answer that "
+                  f"review in a comment whose first line is 作者回应 · 提交 {head[:7]}") if clean else ""
         return [f"no independent review of {head[:7]}: a reviewer other than the author, on a different model, posts the full "
                 f"review in a comment whose first line is 独立评审 · 提交 {head[:7]} · <model> · 只读 · 阻断 <n> · 应修 <n> · 细节 <n> "
-                "(open findings by grade); then rerun this check"]
+                f"(open findings by grade){answer}; then rerun this check"]
     index, latest = reviews[-1]
     reviewed = latest.group(1)
     if int(latest.group(2)):
         return [f"the review of {reviewed[:7]} has {latest.group(2)} blocking findings: fix them, then have the new commit reviewed"]
-    answered = any((match := RESPONSE.match(line)) and (reviewed.startswith(match.group(1)) or match.group(1).startswith(reviewed))
+    answered = any((match := RESPONSE.match(line)) and (reviewed.startswith(match.group(1)) or match.group(1).startswith(reviewed)
+                                                         or head.startswith(match.group(1)))
                    for line in first[index + 1:])
     if int(latest.group(3)) and not answered:
         return [f"answer the review of {reviewed[:7]} in a comment whose first line is 作者回应 · 提交 {reviewed[:7]}"]
@@ -188,6 +209,8 @@ def main():
     env = lambda name: os.environ.get(name, "")
     if sys.argv[1:] == ["describe"]:
         problems = describe(env("PR_TITLE"), env("PR_BODY"), env("PR_AUTHOR"), TEMPLATE.read_text(encoding="utf-8-sig"))
+        for warning in title_warnings(env("PR_TITLE"), env("PR_AUTHOR")):
+            print(f"::warning::{warning}" if env("GITHUB_ACTIONS") == "true" else f"warning: {warning}")
         if env("PR_AUTHOR") not in EXEMPT:  # a failed request is a problem, so an outage fails the check instead of passing it
             # body_html is GitHub's own rendering: that is what a reader sees, so the acceptance boxes are read from it
             gh = lambda *args: subprocess.run(["gh", *args], capture_output=True, check=True).stdout
@@ -203,8 +226,10 @@ def main():
         base = f"origin/{env('BASE_REF')}"
         mine = functools.cache(lambda: change(base, env("PR_HEAD")))  # only needed when no review names the head
         same_change = lambda commit: mine() is not None and change(base, commit) == mine()
+        # exit 0 only when it is; a commit git does not have (a review posted to the wrong PR) is not
+        ancestor = lambda commit, later: subprocess.run(["git", "merge-base", "--is-ancestor", commit, later], capture_output=True).returncode == 0
         problems = review(env("PR_HEAD"), env("PR_BODY"), env("PR_AUTHOR"), [json.loads(line) for line in sys.stdin if line.strip()],
-                          waiver_allowed(ROOT), same_change)
+                          waiver_allowed(ROOT), same_change, ancestor)
     else:
         sys.exit("usage: check_pr.py describe | review")
     for problem in problems:

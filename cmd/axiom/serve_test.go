@@ -15,22 +15,27 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/observability"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/platform/telemetry"
 )
 
 // TestServe runs a node on free ports: it reports ready and answers the console's API through the public listener,
 // and once the context ends it shuts down and stops listening.
 func TestServe(t *testing.T) {
+	t.Parallel()
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
 		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 	}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
+	go func() { done <- serveForTest(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
 	addrs := servingAddrs(t, logs, done)
+	awaitRecord(t, logs, done, "ready") // /readyz turns 200 on a goroutine of its own, after "serving"
 
 	for _, path := range []string{"/livez", "/readyz"} {
 		if resp, err := get(t, "http://"+addrs.Ops+path); err != nil || resp.StatusCode != http.StatusOK {
@@ -132,6 +137,7 @@ func checkMetrics(t *testing.T, addrs addresses) {
 // TestServeRejectsBadConfiguration: the node does not start, names every wrong variable or the database problem, and
 // quotes no value.
 func TestServeRejectsBadConfiguration(t *testing.T) {
+	t.Parallel()
 	database := pgtest.New(t, modules()...)
 	orphaned := pgtest.New(t, modules()...)
 	if err := pgtest.Run(t.Context(), orphaned.Superuser, `INSERT INTO suppliers.suppliers (owner_scope, name, kind,
@@ -191,8 +197,9 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		// Free ports unless the case sets its own, so a node that wrongly starts takes no fixed port.
 		environ := append([]string{
 			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+			"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 		}, c.environ...)
-		err := serve(ctx, environ, slog.New(slog.DiscardHandler))
+		err := serveForTest(ctx, environ, slog.New(slog.DiscardHandler))
 		cancel()
 		if err == nil {
 			t.Fatalf("%s: the node started", c.name)
@@ -210,7 +217,7 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 }
 
 // records receives log records: the JSON handler writes each record with a single Write. Once the buffer is full,
-// records are dropped rather than blocking the node: the test reads only up to "serving", the first record.
+// records are dropped rather than blocking the node: the tests read only up to "serving" and "ready", the first records.
 type records chan []byte
 
 func (r records) Write(p []byte) (int, error) {
@@ -260,6 +267,14 @@ type addresses struct {
 // servingAddrs reads log records until the node reports the addresses it listens on.
 func servingAddrs(t *testing.T, logs records, done <-chan error) addresses {
 	t.Helper()
+	return awaitRecord(t, logs, done, "serving")
+}
+
+// awaitRecord reads log records until the node logs msg. The node logs "ready" after it has set the probes' readiness.
+func awaitRecord(t *testing.T, logs records, done <-chan error, msg string) addresses {
+	t.Helper()
+	timeout := time.NewTimer(10 * time.Second) // one deadline: other records must not extend it
+	defer timeout.Stop()
 	for {
 		select {
 		case line := <-logs:
@@ -267,13 +282,13 @@ func servingAddrs(t *testing.T, logs records, done <-chan error) addresses {
 			if err := json.Unmarshal(line, &record); err != nil {
 				t.Fatalf("log record %q: %v", line, err)
 			}
-			if record.Msg == "serving" {
+			if record.Msg == msg {
 				return record
 			}
 		case err := <-done:
-			t.Fatalf("the node stopped before serving: %v", err)
-		case <-time.After(10 * time.Second):
-			t.Fatal("the node did not start")
+			t.Fatalf("the node stopped before logging %q: %v", msg, err)
+		case <-timeout.C:
+			t.Fatalf("the node did not log %q", msg)
 		}
 	}
 }
@@ -312,6 +327,7 @@ func getAccepting(t *testing.T, url, accept string) (response, error) {
 // TestStartupTimeoutCoversTheFallbackCheck: a node whose check of the fallback prices waits on a lock fails within
 // AXIOM_STARTUP_TIMEOUT, as one whose database does not answer, instead of hanging before its listeners open.
 func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
+	t.Parallel()
 	database := pgtest.New(t, modules()...)
 	admin, err := pg.Open(t.Context(), database.Superuser)
 	if err != nil {
@@ -333,9 +349,10 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_STARTUP_TIMEOUT=1s",
 		"AXIOM_DATABASE_URL=" + database.App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 	}
 	served := make(chan error, 1)
-	go func() { served <- serve(t.Context(), environ, slog.New(slog.DiscardHandler)) }()
+	go func() { served <- serveForTest(t.Context(), environ, slog.New(slog.DiscardHandler)) }()
 	select {
 	case err := <-served:
 		if !errors.Is(err, errNoAnswer) {
@@ -351,8 +368,10 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 }
 
 // TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken
-// address, closes it on the way out, so no writer goroutine outlives serve.
+// address, closes it on the way out, so the writer has exited when serve returns. The test holds the Recorder that
+// this call created, so no other node's writer, parallel or earlier, can change the outcome.
 func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
+	t.Parallel()
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -360,18 +379,22 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	defer taken.Close() //nolint:errcheck // a test listener
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'),
-		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
+		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
 	}
-	if err := serve(t.Context(), environ, slog.New(slog.DiscardHandler)); err == nil {
+	var recorder *observability.Recorder
+	record := func(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) *observability.Recorder {
+		recorder = startRecorder(ctx, db, tel, logger)
+		return recorder
+	}
+	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil); err == nil {
 		t.Fatal("the node started on a taken address")
 	}
-	buf := make([]byte, 1<<20)
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if !strings.Contains(string(buf[:runtime.Stack(buf, true)]), "observability.(*Recorder).writer") {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the call-record writer is still running after serve returned")
-		}
+	if recorder == nil {
+		t.Fatal("the node failed before it started the recorder")
+	}
+	select {
+	case <-recorder.Done():
+	default:
+		t.Fatal("the call-record writer is still running after serve returned")
 	}
 }

@@ -33,14 +33,16 @@ function grantCredit({ body, params, state }: Ctx<"/api/admin/v1/accounts/{accou
   if (!account) {
     return fail(404, "not_found");
   }
-  const amount = BigInt(body.amount.amount);
-  const past = body.expires_at !== undefined && new Date(body.expires_at).getTime() <= Date.now();
-  if (amount <= 0n || amount > grantLimit || body.amount.currency !== account.balance.balance.currency || past) {
+  // An offline payment buys what it was paid in the site's currency; the mock keeps no exchange rates.
+  const credit = body.source === "offline_payment" ? body.payment?.amount : body.amount;
+  const { currency } = account.balance.balance;
+  const amount = BigInt(credit?.amount ?? "0");
+  const expires = body.expires_at !== undefined; // refused: nothing writes off an expired batch yet
+  if (amount <= 0n || amount > grantLimit || credit?.currency !== currency || expires) {
     return fail(422, "unprocessable");
   }
   const balance = BigInt(account.balance.balance.amount) + amount;
   const available = BigInt(account.balance.available.amount) + amount;
-  const { currency } = body.amount;
   account.balance = {
     ...account.balance,
     balance: { amount: String(balance), currency },
@@ -51,8 +53,9 @@ function grantCredit({ body, params, state }: Ctx<"/api/admin/v1/accounts/{accou
     json: {
       id: `00000000-0000-4000-8000-${String(state.stored.size).padStart(12, "0")}`,
       account_id: account.id,
-      amount: body.amount,
-      expires_at: body.expires_at,
+      source: body.source ?? "gift",
+      amount: { amount: String(amount), currency },
+      payment: body.payment,
       created_at: new Date().toISOString(),
       balance_after: account.balance,
     },
@@ -71,6 +74,40 @@ function putSettings({ body, params, state }: Ctx<"/api/admin/v1/sites/{site_id}
   return ok(state.settings);
 }
 
+function getSiteKeyLimits({ params, state }: Ctx<"/api/admin/v1/sites/{site_id}/key-limits", "get">) {
+  return params.site_id === state.siteId ? ok(state.keyLimits) : fail(404, "not_found");
+}
+
+// What a level without limits of its own falls back to: the site's, here the defaults of the usual platform.
+const inherited = { max_keys: 100, creations_per_hour: 50 };
+
+function bounded(limits: { max_keys?: number; creations_per_hour?: number }) {
+  return Object.values(limits).every((n) => Number.isInteger(n) && n >= 1 && n <= 10_000);
+}
+
+function putSiteKeyLimits({ body, params, state }: Ctx<"/api/admin/v1/sites/{site_id}/key-limits", "put">) {
+  if (params.site_id !== state.siteId) {
+    return fail(404, "not_found");
+  }
+  if (!bounded(body.limits)) {
+    return fail(400, "invalid_request");
+  }
+  state.keyLimits = { limits: body.limits, effective: { ...inherited, ...body.limits } };
+  return ok(state.keyLimits);
+}
+
+function putAccountKeyLimits({ body, params, state }: Ctx<"/api/admin/v1/accounts/{account_id}/key-limits", "put">) {
+  const account = state.accounts.get(params.account_id ?? "");
+  if (!account) {
+    return fail(404, "not_found");
+  }
+  if (!bounded(body.limits)) {
+    return fail(400, "invalid_request");
+  }
+  account.key_limits = { limits: body.limits, effective: { ...state.keyLimits.effective, ...body.limits } };
+  return ok(account.key_limits);
+}
+
 const handlers: Handler<AdminState>[] = [
   route("get", `${base}/version`, none, ({ state }) => ok({ version: state.version })),
   route("post", `${base}/auth/sign-in`, none, signIn),
@@ -82,9 +119,12 @@ const handlers: Handler<AdminState>[] = [
   route("post", `${base}/auth/recovery-codes`, { level: "mfa" }, regenerate),
   route("get", `${base}/sites/{site_id}/settings`, reads("sites.manage"), getSettings),
   route("put", `${base}/sites/{site_id}/settings`, changes("sites.manage"), putSettings),
+  route("get", `${base}/sites/{site_id}/key-limits`, reads("sites.manage"), getSiteKeyLimits),
+  route("put", `${base}/sites/{site_id}/key-limits`, changes("sites.manage"), putSiteKeyLimits),
   route("get", `${base}/tiers`, reads("users.view"), ({ state }) => ok({ data: state.tiers })),
   route("get", `${base}/users`, reads("users.view"), listUsers),
   route("get", `${base}/accounts/{account_id}`, reads("users.view"), getAccount),
+  route("put", `${base}/accounts/{account_id}/key-limits`, changes("sites.manage"), putAccountKeyLimits),
   route("post", `${base}/accounts/{account_id}/credit-grants`, changes("credits.grant"), grantCredit),
   ...supplyHandlers,
   ...catalogHandlers,

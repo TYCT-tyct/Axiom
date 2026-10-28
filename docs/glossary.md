@@ -91,14 +91,14 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 能力 | capability | 请求用到、端点可能不支持的功能，如工具、图片、PDF、推理；路由只留下支持请求全部能力的端点 |
 | 调用格式 | format | 模型调用接口的写法：OpenAI Chat、OpenAI Responses、Anthropic Messages |
 | 依据 | basis | 一个属性值的出处 |
-| 来源 | upstream_kind | 端点的上游从哪来；类别是后台数据 |
+| 来源 | `source_class` | 端点的上游从哪来；类别是后台数据，M1 只写 `relay` |
 | 指纹 | fingerprint | 识别来源的规则，如响应头、消息 ID 格式、用量特征 |
 | 检测 | probe | 我们主动发给端点的测试请求，见[端点评估](domains/quality.md) |
 | 同步 | sync | 通过适配器拉取供应商的模型、分组、价格和余额 |
 | 适配器 | adapter | 对接某一类供应商系统的插件，分管理面和调用面，见[供应商](domains/suppliers.md) |
 | 声明式适配器 | declarative_adapter | 用后台配置而不是代码描述的适配器，用于只是接口路径和字段名不同的自研中转站 |
-| 回退路线 | route_plan | 路由为一个请求排好的端点顺序，预留前定死，见[路由](domains/routing.md) |
-| 会话粘性 | session_affinity | 同一会话优先走上一次的端点，以提高缓存命中 |
+| 回退路线 | `routing.Plan`（调用记录的 `route` 列） | 路由为一个请求排好的端点顺序，预留前定死，见[路由](domains/routing.md) |
+| 会话粘性 | `routing.SessionKey`、`Sticky` | 同一会话优先走上一次的端点，以提高缓存命中 |
 | 预设 | preset | 服务端保存的命名配置，第一版只含端点的筛选和排序规则，可挂在 API key 上；与 OpenRouter 的 Presets 是同一个概念，以后可以扩展到模型参数 |
 | 请求 / 尝试 | request / attempt | 用户的一次调用，保存下来就是调用记录 / 对上游的一次调用 |
 | 请求 ID / 调用编号 | request_id（`platform.RequestID`） | 服务端为每个请求生成的唯一编号，对用户叫调用编号；放在 `X-Request-ID` 和 `X-Generation-Id` 两个响应头里（同一个值）和响应体的 `id` 里，日志、账本、调用记录和出错提示都用它 |
@@ -110,22 +110,22 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 预留 | reservation | 调用上游前和转发中按段从余额里挂起的金额，结算时过账、多余的释放；单独存放，不是账本分录，见[计费的「预留与结算」](domains/billing.md#预留与结算) |
 | 持有者 | holder | 一个核心进程每次启动时的身份，它准入的预留挂在它名下；心跳停了就被回收，名下挂起的预留由清理收尾。每笔预留另有截止时间，见[计费的「持有者与截止时间」](domains/billing.md#持有者与截止时间) |
 | 对账键 | reconciliation key | 上游在响应头里给出的对方请求号，凭它查供应商的逐笔扣费记录，见[计费的「供应商成本」](domains/billing.md#供应商成本) |
-| 对账日志 | attempt journal | 请求进行中每次尝试的对账键和是否已提交，每个节点每秒批量写一次，供崩溃后的清理使用，见[供应商的「适配器」](domains/suppliers.md#适配器管理面和调用面) |
+| 丢失的请求 | lost request | 崩溃或超过截止时间仍没结算的请求：清理释放预留时记一行，带这条请求冻结的路线，因为上游可能收过钱，见[计费的「持有者与截止时间」](domains/billing.md#持有者与截止时间) |
 | 准入 | admission | 调用上游之前的一个事务：先核对 key 能否使用、读出预设和等级并路由，再检查限额并预留第一段，见[计费的「预留与结算」](domains/billing.md#预留与结算) |
-| 在途预留 | reservation（pending） | 一个账户还没释放的预留合计，含暂估结算后留待校正的部分；可用余额 = 余额 − 在途预留 |
-| 余额底线 | balance_floor | 余额允许到达的最低值，默认 0；低于它的账户拒绝新请求，充值后自动恢复 |
-| 暂估费用 | provisional_charge | 用量来自我们的估算而不是上游报告的费用，按供应商记录校正后定死 |
+| 在途预留 | reservation（pending） | 一个账户还没释放的预留合计；可用余额 = 余额 − 在途预留 |
+| 余额底线 | `floor` | 余额允许到达的最低值，默认 0；余额不够新请求的预留时拒绝新请求，充值后自动恢复 |
+| 暂估费用 | `estimated` | 收费建立在估算上的费用：用量来自我们的估算而不是上游报告，或某一项按兜底价收，标着暂估；M1 不按供应商记录校正 |
 | 资金来源 | funding_source | 调用的钱从哪扣：M1 只有余额钱包，M2 加订阅 |
 | 额度 | credit | 站点的记账单位：1 额度 = 1 个单位的站点记账货币 |
 | 额度批次 | credit_grant | 一次额度进账（充值、赠送、兑换、调整），可单独设过期时间 |
 | 成本计划 | cost_schedule | 适配器为端点生成的"用量 → 成本"计算表 |
-| 价格版本 | price_version | 一次发布的全部售价及其成本，请求开始时锁定 |
+| 价格版本 | `PriceRef.Version` | 请求开始时锁定的那一版售价，见[计费的「定价」](domains/billing.md#定价)；M1 的版本号是规则、修订和参考价行的摘要，发布动作与成本参与见 [#234](https://github.com/TYCT-tyct/Axiom/issues/234)（M2） |
 | 汇率 | fx_rate | 两种货币之间的换算值，交易时锁定 |
 | 币种 | currency（`platform.Currency`） | 一种货币，用三个大写字母的代码表示，如 USD、CNY |
 | 单价 | unit_price（`platform.UnitPrice`） | 每个计费单位（每个 token 或每次）的价格，十进制定点数，最多 15 位小数，见[计费的「钱的表示」](domains/billing.md#钱的表示) |
 | 精确金额 | exact（`platform.Exact`） | 单价乘用量得到的未取整金额，单位与单价相同；记账前转成金额时才取整一次，见[计费的「钱的表示」](domains/billing.md#钱的表示) |
 | 金额 | amount | 记账用的钱数，最小单位是十亿分之一额度；由精确金额向上取整得到 |
-| 免单 | waiver | 符合条件时不向用户收费，上游成本记为损失 |
+| 免单 | waiver | 符合条件时不向用户收费，上游成本记为损失；只由三条规则决定，没有上限 |
 | 操作者 | actor | 做出改动的一方：管理员、站长、成员、管理 key、运营 agent、系统任务 |
 | 审计日志 | audit_log | 谁在何时对什么做了什么改动，只追加；所有模块写同一张表，见[平台的「审计日志」](../internal/platform/README.md#审计日志) |
 | 权限 | permission | 一件具体能做的事，由代码定义 |
@@ -137,10 +137,12 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 入口 | ingress | 节点角色之一 |
 | 核心 | core | 节点角色之一 |
 | 运维 | ops | 节点角色之一，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
-| 公网监听 / 管理监听 / 探针监听 | public / admin / probes | 节点上的三个 HTTP 监听：模型调用、控制台和支付回调 / 只在核心上的管理后台（管理接口、运营接口和来源限制随管理接口落地，[Issue #171](https://github.com/TYCT-tyct/Axiom/issues/171)） / 只答健康检查，默认只听本机。见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
+| 公网监听 / 管理监听 / 探针监听 | public / admin / probes | 节点上的三个 HTTP 监听：模型调用、官网、控制台和支付回调 / 管理后台和管理接口 / 健康检查和指标。各自提供什么、谁能访问，见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
 | 审批策略 | approval_policy | 一类运营操作需要怎样的审批，是后台数据，见[运营](domains/operations.md) |
 | 受控导出 | data_export | 由负责人发起、经两步验证并留审计的数据导出，是取用对话内容的唯一方式，见[记录与告警](domains/observability.md) |
-| 收款渠道 | payment_channel | 充值用的收款插件，如支付宝、Stripe、USDT，见[支付](domains/payments.md) |
+| 收款渠道 | payment_channel（代码里 `payments.Kind`） | 一种收款协议的插件，如易支付、Stripe、支付宝官方；USDT 经易支付兼容的网关接入，见[支付的「收款渠道」](domains/payments.md#收款渠道) |
+| 商户账户 | merchant | 站点在某个收款渠道上配置的一个收款账号（商户号、密钥、网关地址），一个渠道可以有多个；二级站点用站长自己的 |
+| 付款方式 | payment_method | 用户充值时选的一项，如支付宝、微信、`usdt.tron`；一个商户账户可以支持多种 |
 | 订单 | order | 一次充值，记录充值金额、付款币种、渠道、手续费和锁定的汇率，见[支付](domains/payments.md#订单) |
 | 通知渠道 | notification_channel | 发送告警、审批、摘要的插件，如 Telegram、飞书、邮件、电话 |
 | 出口 | egress | 向上游发请求的位置：承担出口职责的节点，或外部代理 |

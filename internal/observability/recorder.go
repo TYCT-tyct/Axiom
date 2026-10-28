@@ -215,6 +215,10 @@ func (r *Recorder) Close(ctx context.Context) error {
 	return nil
 }
 
+// Done is closed once the writer goroutine has exited, which Close waits for before it returns. A test reads it to
+// know that the Recorder it was given left nothing running.
+func (r *Recorder) Done() <-chan struct{} { return r.done }
+
 // writer collects batches off the queue and writes them one at a time, in order.
 func (r *Recorder) writer(ctx context.Context) {
 	defer close(r.done)

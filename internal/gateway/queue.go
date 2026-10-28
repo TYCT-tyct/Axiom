@@ -28,9 +28,9 @@ func (q *Queue) Epoch() uint64 {
 	return q.unclaimed
 }
 
-// Wait queues key until a slot is released, and returns nil when the caller should retry. It returns ErrRateLimited
-// when the queue or the key's share of it is full or deadline has passed, and parent's error when parent ends; in
-// every error case the caller leaves no trace in the queue. The deadline is the caller's, one for all the waits of a
+// Wait queues key until a slot is released, and returns nil when the caller should retry. It returns a 429 refusal
+// (errQueueFull, errQueueKeyFull or errQueueWait) when the queue or the key's share of it is full or deadline has passed,
+// and parent's error when parent ends; in every error case the caller leaves no trace in the queue. The deadline is the caller's, one for all the waits of a
 // request: a request woken for a slot that another request then takes waits again, and the limit is on the whole.
 //
 // epoch closes a lost wake-up: a slot released between the caller's look at the load and its place in the queue
@@ -41,16 +41,20 @@ func (q *Queue) Wait(parent context.Context, key string, epoch uint64, deadline 
 		return err // before the fast paths: a client that has gone is not told to retry or that the queue is full
 	}
 	if !time.Now().Before(deadline) {
-		return ErrRateLimited // before the epoch too: a release elsewhere must not let a call whose time is spent retry for ever
+		return errQueueWait // before the epoch too: a release elsewhere must not let a call whose time is spent retry for ever
 	}
 	q.mu.Lock()
 	if q.unclaimed != epoch {
 		q.mu.Unlock()
 		return nil
 	}
-	if q.waiting.len() >= q.max || q.waiting.countKey(key) >= q.perKey {
+	if q.waiting.len() >= q.max {
 		q.mu.Unlock()
-		return ErrRateLimited
+		return errQueueFull
+	}
+	if q.waiting.countKey(key) >= q.perKey {
+		q.mu.Unlock()
+		return errQueueKeyFull
 	}
 	wt := q.waiting.push(key)
 	q.mu.Unlock()
@@ -58,11 +62,11 @@ func (q *Queue) Wait(parent context.Context, key string, epoch uint64, deadline 
 	ctx, cancel := context.WithDeadline(parent, deadline)
 	defer cancel()
 	if !wt.park(ctx, &q.mu) {
-		return expired(parent)
+		return expired(parent, errQueueWait)
 	}
 	if ctx.Err() != nil {
 		q.Wake() // granted just as it gave up: the slot is still free, so pass the wake on
-		return expired(parent)
+		return expired(parent, errQueueWait)
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -73,6 +74,20 @@ func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]
 	return items, nil
 }
 
+const countKeys = `-- name: CountKeys :one
+SELECT count(*) FROM accounts.api_keys
+WHERE account_id = $1 AND kind = 'call' AND deleted_at IS NULL
+`
+
+// The call keys the account holds that are not deleted: what the limit of keys held bounds. Read in the account's turn
+// (LockAccount), so it counts every key an insert before this one made.
+func (q *Queries) CountKeys(ctx context.Context, db DBTX, accountID uuid.UUID) (int64, error) {
+	row := db.QueryRow(ctx, countKeys, accountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const defaultWorkspace = `-- name: DefaultWorkspace :many
 SELECT id FROM accounts.workspaces WHERE account_id = $1 AND is_default
 `
@@ -127,37 +142,8 @@ func (q *Queries) DeleteKey(ctx context.Context, db DBTX, id uuid.UUID) ([]Delet
 	return items, nil
 }
 
-const disableKey = `-- name: DisableKey :many
-UPDATE accounts.api_keys SET status = 'disabled' WHERE id = $1 AND status = 'active' RETURNING site_id, account_id
-`
-
-type DisableKeyRow struct {
-	SiteID    uuid.UUID
-	AccountID uuid.UUID
-}
-
-func (q *Queries) DisableKey(ctx context.Context, db DBTX, id uuid.UUID) ([]DisableKeyRow, error) {
-	rows, err := db.Query(ctx, disableKey, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []DisableKeyRow
-	for rows.Next() {
-		var i DisableKeyRow
-		if err := rows.Scan(&i.SiteID, &i.AccountID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const getKey = `-- name: GetKey :many
-SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, name, prefix, last4, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys WHERE id = $1 AND kind = 'call' AND deleted_at IS NULL
 `
 
@@ -167,6 +153,7 @@ type GetKeyRow struct {
 	Name        string
 	Prefix      string
 	Last4       string
+	CreatedAt   pgtype.Timestamptz
 	ExpiresAt   *time.Time
 	Status      string
 	SpendLimit  *int64
@@ -190,6 +177,7 @@ func (q *Queries) GetKey(ctx context.Context, db DBTX, id uuid.UUID) ([]GetKeyRo
 			&i.Name,
 			&i.Prefix,
 			&i.Last4,
+			&i.CreatedAt,
 			&i.ExpiresAt,
 			&i.Status,
 			&i.SpendLimit,
@@ -234,9 +222,9 @@ func (q *Queries) GetKeyInfo(ctx context.Context, db DBTX, id uuid.UUID) (GetKey
 
 const insertKey = `-- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
-    secret_version, created_by, expires_at, status, spend_limit, limit_reset, models, ip_allow)
+    secret_version, created_by, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow)
 VALUES ($1, $2, $3, $4, 'call', $5, $6, $7, $8, $9,
-    $10, $11, 'active', $12, $13, $14, $15)
+    $10, statement_timestamp(), $11, 'active', $12, $13, $14, $15)
 `
 
 type InsertKeyParams struct {
@@ -342,7 +330,7 @@ func (q *Queries) ListAccountWorkspaces(ctx context.Context, db DBTX, accountID 
 }
 
 const listKeys = `-- name: ListKeys :many
-SELECT id, workspace_id, name, prefix, last4, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, name, prefix, last4, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys
 WHERE account_id = $1 AND kind = 'call' AND deleted_at IS NULL AND id < $2
 ORDER BY id DESC
@@ -361,6 +349,7 @@ type ListKeysRow struct {
 	Name        string
 	Prefix      string
 	Last4       string
+	CreatedAt   pgtype.Timestamptz
 	ExpiresAt   *time.Time
 	Status      string
 	SpendLimit  *int64
@@ -385,6 +374,7 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 			&i.Name,
 			&i.Prefix,
 			&i.Last4,
+			&i.CreatedAt,
 			&i.ExpiresAt,
 			&i.Status,
 			&i.SpendLimit,
@@ -402,11 +392,97 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 	return items, nil
 }
 
-const updateKey = `-- name: UpdateKey :many
+const lockAccount = `-- name: LockAccount :one
+SELECT max_keys, key_creations_per_hour FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
+`
+
+type LockAccountRow struct {
+	MaxKeys             *int32
+	KeyCreationsPerHour *int32
+}
+
+// Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
+// second one's count sees the first: a count read before the insert without this lock would let both through. The
+// account's own limits come with it.
+func (q *Queries) LockAccount(ctx context.Context, db DBTX, id uuid.UUID) (LockAccountRow, error) {
+	row := db.QueryRow(ctx, lockAccount, id)
+	var i LockAccountRow
+	err := row.Scan(&i.MaxKeys, &i.KeyCreationsPerHour)
+	return i, err
+}
+
+const lockKey = `-- name: LockKey :one
+SELECT site_id, account_id, name, status, spend_limit, limit_reset, models, ip_allow
+FROM accounts.api_keys WHERE id = $1 AND kind = 'call' AND deleted_at IS NULL
+FOR UPDATE
+`
+
+type LockKeyRow struct {
+	SiteID     uuid.UUID
+	AccountID  uuid.UUID
+	Name       string
+	Status     string
+	SpendLimit *int64
+	LimitReset *string
+	Models     []string
+	IpAllow    []netip.Prefix
+}
+
+// The settings a change leaves behind, read in the key's row's turn in the transaction that writes: the audit entry
+// names what this change replaced, and not what a change made at the same moment did.
+func (q *Queries) LockKey(ctx context.Context, db DBTX, id uuid.UUID) (LockKeyRow, error) {
+	row := db.QueryRow(ctx, lockKey, id)
+	var i LockKeyRow
+	err := row.Scan(
+		&i.SiteID,
+		&i.AccountID,
+		&i.Name,
+		&i.Status,
+		&i.SpendLimit,
+		&i.LimitReset,
+		&i.Models,
+		&i.IpAllow,
+	)
+	return i, err
+}
+
+const recentKeys = `-- name: RecentKeys :one
+WITH recent AS (
+    SELECT created_at FROM accounts.api_keys
+    WHERE account_id = $3 AND kind = 'call'
+        AND created_at > statement_timestamp() - make_interval(secs => $1::bigint)
+)
+SELECT (SELECT count(*) FROM recent)::bigint AS made,
+    coalesce((SELECT extract(epoch FROM created_at + make_interval(secs => $1::bigint) - statement_timestamp())::float8
+        FROM recent ORDER BY created_at OFFSET greatest((SELECT count(*) FROM recent) - $2::bigint, 0) LIMIT 1), 0)::float8 AS wait_seconds
+`
+
+type RecentKeysParams struct {
+	WindowSeconds int64
+	MaxMade       int64
+	AccountID     uuid.UUID
+}
+
+type RecentKeysRow struct {
+	Made        int64
+	WaitSeconds float64
+}
+
+// How many call keys the account made in the last window, deleted ones too, and how long until a place is free under a
+// limit of max_made: until the key that must age out for the count to fall below it is a window old (0 while the
+// count is below the limit, when it is not asked). The time is the database's, taken once per statement, after the
+// account's turn was won, and so is the time a key is stamped with (InsertKey): one clock for every node.
+func (q *Queries) RecentKeys(ctx context.Context, db DBTX, arg RecentKeysParams) (RecentKeysRow, error) {
+	row := db.QueryRow(ctx, recentKeys, arg.WindowSeconds, arg.MaxMade, arg.AccountID)
+	var i RecentKeysRow
+	err := row.Scan(&i.Made, &i.WaitSeconds)
+	return i, err
+}
+
+const updateKey = `-- name: UpdateKey :exec
 UPDATE accounts.api_keys SET name = $1, status = $2, spend_limit = $3, limit_reset = $4,
     models = $5, ip_allow = $6
 WHERE id = $7 AND kind = 'call'
-RETURNING site_id, account_id
 `
 
 type UpdateKeyParams struct {
@@ -419,14 +495,10 @@ type UpdateKeyParams struct {
 	ID         uuid.UUID
 }
 
-type UpdateKeyRow struct {
-	SiteID    uuid.UUID
-	AccountID uuid.UUID
-}
-
-// Every setting a user may change, replaced whole; the expiry is not among them.
-func (q *Queries) UpdateKey(ctx context.Context, db DBTX, arg UpdateKeyParams) ([]UpdateKeyRow, error) {
-	rows, err := db.Query(ctx, updateKey,
+// Every setting a user may change, replaced whole; the expiry is not among them. The caller holds the key's turn
+// (LockKey) and has read the settings this replaces.
+func (q *Queries) UpdateKey(ctx context.Context, db DBTX, arg UpdateKeyParams) error {
+	_, err := db.Exec(ctx, updateKey,
 		arg.Name,
 		arg.Status,
 		arg.SpendLimit,
@@ -435,20 +507,5 @@ func (q *Queries) UpdateKey(ctx context.Context, db DBTX, arg UpdateKeyParams) (
 		arg.IpAllow,
 		arg.ID,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []UpdateKeyRow
-	for rows.Next() {
-		var i UpdateKeyRow
-		if err := rows.Scan(&i.SiteID, &i.AccountID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return err
 }

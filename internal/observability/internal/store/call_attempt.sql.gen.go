@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"time"
 )
 
 const insertCallAttempts = `-- name: InsertCallAttempts :execrows
@@ -29,4 +30,72 @@ func (q *Queries) InsertCallAttempts(ctx context.Context, db DBTX, rows []byte) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const listTraceAttempts = `-- name: ListTraceAttempts :many
+SELECT request_id::text AS request_id, at, attempt_seq, site_id::text AS site_id, account_id::text AS account_id,
+    endpoint_id::text AS endpoint_id, supplier_id::text AS supplier_id, source_class, egress, outcome, error_kind,
+    started_at, finished_at, first_token_ms
+FROM observability.call_attempt
+WHERE request_id = ($1::text)::uuid AND at = $2
+ORDER BY attempt_seq
+`
+
+type ListTraceAttemptsParams struct {
+	RequestID string
+	At        time.Time
+}
+
+type ListTraceAttemptsRow struct {
+	RequestID    string
+	At           time.Time
+	AttemptSeq   int16
+	SiteID       string
+	AccountID    string
+	EndpointID   string
+	SupplierID   string
+	SourceClass  string
+	Egress       string
+	Outcome      string
+	ErrorKind    string
+	StartedAt    time.Time
+	FinishedAt   time.Time
+	FirstTokenMs int32
+}
+
+// Every attempt of a call, in the order they were made (README.md「追溯」). The call's start is given so only its month
+// partition is read, though the primary key's request_id prefix would find the rows without it.
+func (q *Queries) ListTraceAttempts(ctx context.Context, db DBTX, arg ListTraceAttemptsParams) ([]ListTraceAttemptsRow, error) {
+	rows, err := db.Query(ctx, listTraceAttempts, arg.RequestID, arg.At)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTraceAttemptsRow
+	for rows.Next() {
+		var i ListTraceAttemptsRow
+		if err := rows.Scan(
+			&i.RequestID,
+			&i.At,
+			&i.AttemptSeq,
+			&i.SiteID,
+			&i.AccountID,
+			&i.EndpointID,
+			&i.SupplierID,
+			&i.SourceClass,
+			&i.Egress,
+			&i.Outcome,
+			&i.ErrorKind,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.FirstTokenMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

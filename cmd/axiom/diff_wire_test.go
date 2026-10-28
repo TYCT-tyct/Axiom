@@ -1,0 +1,181 @@
+//go:build diff
+
+package main
+
+import (
+	"fmt"
+	"io"
+	"maps"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+	"uuid"
+
+	"axiom/internal/catalog"
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
+)
+
+// TestAxiomMatchesNewAPIOnTheWire sends the same requests to Axiom and to the official new-api image and diffs what
+// comes back: status, headers, JSON bodies, server-sent events. Both are served by one fake upstream that replays the
+// protocol samples, each model using the same upstream format on both sides, including client format conversion.
+// A difference must be explained by a rule (diff_rules_test.go) or
+// the case fails, and so must a rule that explains nothing. `just diff` runs it; it is not part of `just check`, which
+// would pull an image and start a container for every run.
+func TestAxiomMatchesNewAPIOnTheWire(t *testing.T) {
+	up := newDiffUpstream(t)
+	api := startNewAPI(t, up)
+	w, n := newDiffNode(t, up)
+	rules := diffRules()
+	for _, c := range diffCases() {
+		t.Run(c.name, func(t *testing.T) {
+			w, n := w, n
+			if c.failsUpstream() { // routing pauses an endpoint whose upstream failed, so each such case has a node of its own
+				w, n = newDiffNode(t, up)
+			}
+			theirs := send(t, api.base, "", orKey(c.key, api.key), c)
+			theirs.body = newAPIRequestID.ReplaceAll(theirs.body, nil)
+			ours := send(t, "http://"+n.Public, "api.main.example", orKey(c.key, w.richKey), c)
+			for _, d := range compareReplies(theirs, ours) {
+				explainOrFail(t, rules, c.name, d)
+			}
+			if err := reasoningNamesAgree(ours); err != nil {
+				t.Errorf("Axiom: %v", err)
+			}
+		})
+	}
+	for _, r := range rules {
+		t.Logf("%d intended differences for %q: %s", r.hits, r.path, r.reason)
+		if r.hits == 0 {
+			t.Errorf("the rule for %q explains no difference: remove it", r.path)
+		}
+	}
+}
+
+// newAPIRequestID is the " (request id: ...)" new-api ends every message of its errors with. It is its own request id,
+// which Axiom does not copy (the request id header is a difference of its own), so it is taken out of the words.
+var newAPIRequestID = regexp.MustCompile(`\s*\(request id: [^)]*\)`)
+
+func orKey(override, key string) string {
+	if override != "" {
+		return override
+	}
+	return key
+}
+
+// explainOrFail counts intended differences and reports only failures; rule summaries keep large runs readable.
+func explainOrFail(t *testing.T, rules []*diffRule, name string, d difference) {
+	t.Helper()
+	if explain(rules, name, d) != nil {
+		return
+	}
+	line := fmt.Sprintf("%s: new-api %s, Axiom %s", d.at, d.newAPI, d.axiom)
+	t.Errorf("%s [unexplained]", line)
+}
+
+// send posts a case to a gateway; host, when set, is the Host header a gateway that serves by domain needs.
+func send(t *testing.T, base, host, key string, c diffCase) reply {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+c.path, strings.NewReader(c.body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "" {
+		req.Host = host
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	for i := 0; i+1 < len(c.headers); i += 2 {
+		req.Header.Set(c.headers[i], c.headers[i+1])
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // a test client
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reply{resp.StatusCode, resp.Header, body}
+}
+
+// newDiffNode starts a node that serves the callpath world's Claude model by Messages, its GPT model by Responses and a
+// DeepSeek-like model by Chat, from the fake upstream, each sold at one and a half times its reference price.
+func newDiffNode(t *testing.T, up *diffUpstream) (*callWorld, runningNode) {
+	t.Helper()
+	w := newCallWorld(t)
+	w.addChatModel()
+	w.declareAbilities()
+	// The endpoints call the upstream by the names their clients use, the way a gateway in front of one upstream does.
+	if err := pgtest.Run(t.Context(), w.database.Superuser,
+		"UPDATE suppliers.suppliers SET origin = '"+up.server.URL+"'",
+		"UPDATE suppliers.endpoints SET upstream_name = 'claude-opus-5-5' WHERE upstream_name = 'up-claude'",
+		"UPDATE suppliers.endpoints SET upstream_name = 'gpt-6-astra' WHERE upstream_name = 'up-gpt'"); err != nil {
+		t.Fatal(err)
+	}
+	n := w.start()
+	w.price()
+	waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
+	return w, n
+}
+
+// chatSlug is the model the Chat endpoint serves, as a supplier's DeepSeek or Qwen channel does.
+const chatSlug = "deepseek/deepseek-v4-chat"
+
+// addChatModel lists a model that only an endpoint of the Chat format serves, on the supplier the world has, and gives it
+// that endpoint, called by the name the clients use as the other two are.
+func (w *callWorld) addChatModel() {
+	w.t.Helper()
+	cat, err := catalog.Open(w.db, pg.PlatformScope(), catalog.Config{MaxStale: time.Hour})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	model := w.listModel(cat, chatSlug, "deepseek-v4-chat")
+	w.models = maps.Clone(w.models) // the fixture's map is every test's
+	w.models[chatSlug] = model
+	supplier, group := uuid.MustParse(w.text("SELECT id::text FROM suppliers.suppliers")), uuid.MustParse(w.text("SELECT id::text FROM suppliers.supplier_groups"))
+	if err := w.db.Tx(w.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		for _, s := range endpointStatements(supplier, group, model, "deepseek-v4-chat", "chat") {
+			if _, err := tx.Exec(w.t.Context(), s.sql, s.args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// declareAbilities makes the two models able to take a picture and to reason, which the callpath world's do not say:
+// a request that needs an ability its model lacks is not routed.
+func (w *callWorld) declareAbilities() {
+	w.t.Helper()
+	cat, err := catalog.Open(w.db, pg.PlatformScope(), catalog.Config{MaxStale: time.Hour})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	spec := strings.Replace(servedSpec, `"abilities":["tools","web_search","reasoning"]`, `"abilities":["tools","images","documents","reasoning","web_search"]`, 1)
+	if spec == servedSpec {
+		w.t.Fatal("the callpath world's abilities are not what the differential test replaces")
+	}
+	for _, slug := range []string{"anthropic/claude-opus-5-5", "openai/gpt-6-astra", chatSlug} {
+		id := w.models[slug]
+		rev, err := strconv.ParseInt(w.query("SELECT rev::text FROM catalog.model WHERE id = $1", id), 10, 64)
+		if err != nil {
+			w.t.Fatal(err)
+		}
+		op := catalog.Op{Actor: audit.System("diff.test"), Key: uuid.NewV7(), Reason: "abilities of the differential test"}
+		if _, err := cat.UpdateSpec(w.t.Context(), catalog.UpdateSpecRequest{
+			Op:    op,
+			Model: catalog.ModelID(id), Rev: rev, Spec: jsonx.Raw(spec),
+		}); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+}

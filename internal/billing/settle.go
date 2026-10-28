@@ -12,52 +12,44 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers"
 )
 
-// Suppliers is what billing needs of suppliers, written in billing's transaction: a request's attempts, lost requests
-// and the end of a request, after which suppliers may purge its reconciliation journal; and reading that journal.
-// cmd/ adapts suppliers' functions to it; tests use a double.
+// Suppliers is what billing needs of suppliers, written in billing's transaction: a request's attempts with what each
+// cost and the key its charge reconciles by, a lost request with the route it was frozen with, the resolution of one,
+// and the end of a request. cmd/ adapts suppliers' functions to it; tests use a double.
 type Suppliers interface {
-	RecordAttempts(ctx context.Context, tx pg.Tx, request uuid.UUID, attempts []AttemptRecord) error
-	// CommittedAttempt is the attempt the journal marks committed, with its reconciliation key, if any.
-	CommittedAttempt(ctx context.Context, tx pg.Tx, request uuid.UUID) (JournalAttempt, bool, error)
-	RecordLostRequest(ctx context.Context, tx pg.Tx, request uuid.UUID) error
+	RecordAttempts(ctx context.Context, tx pg.Tx, attempts []suppliers.AttemptRecord) error
+	// RecordLostRequest notes a request whose node was lost, with the route it was frozen with: the endpoints a charge
+	// of it would be from, in route order.
+	RecordLostRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, route []uuid.UUID) error
 	ResolveLostRequest(ctx context.Context, tx pg.Tx, request uuid.UUID) error
 	// EndRequest records that the request reached a terminal state at the database's time at.
 	EndRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, at time.Time) error
 }
 
-// AttemptRecord is one attempt as suppliers stores it; Usage is nil when cleanup wrote it from the journal.
-type AttemptRecord struct {
-	Seq, Entry int
-	Key        string
-	Usage      []catalog.Usage
-}
-
-// JournalAttempt is a committed attempt as the journal recorded it.
-type JournalAttempt struct {
-	Seq, Entry int
-	Key        string
-}
-
-// Outcome is how a call ended: its attempts in order, of which the last is charged, and whether the client cancelled.
+// Outcome is how a call ended: its attempts in order, of which the last is charged. A call whose client left has the
+// leaving in the charged attempt's Finish (FinishCancelled), not here: an attempt that failed before the client left is
+// judged by how it failed. A call with no attempt is one that never reached an upstream.
 type Outcome struct {
-	Attempts  []AttemptResult
-	Cancelled bool
+	Attempts []AttemptResult
 }
 
-// AttemptResult is one attempt: the route entry it bound, its reconciliation key, its cost to the platform in
-// billionths of a credit (suppliers' Cost estimates it) and whether that cost is all of it, its usage by sampling, and
-// how it ended. Costed false is a cost that leaves something out, or nothing known: the zero value, so a forgotten
-// cost never lets a waiver count less than it should.
+// AttemptResult is one attempt: the route entry it bound, its cost to the platform in billionths of a credit
+// (suppliers' Cost estimates it), its usage by sampling, how it ended, and the supplier's side of it, which billing
+// writes with the cost.
 type AttemptResult struct {
+	CostKnown  bool
 	Seq, Entry int
-	Key        string
 	Cost       int64
-	Costed     bool
 	Segments   []Segment
 	Result     Result
 	Finish     FinishReason
+	// Receipt, Estimate and FinishedAt are what suppliers stores of the attempt: the schedule, endpoint and credential
+	// that priced it with the supplier's own charge reference, its cost in the supplier's unit, and when it ended.
+	Receipt    suppliers.AttemptReceipt
+	Estimate   suppliers.AttemptCost
+	FinishedAt time.Time
 }
 
 // Segment is the usage of one sampling and which of its items the upstream reported; the rest were estimated.
@@ -96,19 +88,18 @@ const (
 )
 
 // Final is what the call ends with: the charged attempt's usage, what the user was charged (capped at the floor) and
-// whether any of it was estimated.
+// whether any of it was estimated or waived.
 type Final struct {
+	// Profit is nil if any attempt's converted cost is unknown, or the difference cannot fit an amount.
+	Profit    *int64
 	Segments  []Segment
 	Charged   platform.Exact
 	Estimated bool
+	Waived    bool // the waiver rules made the call free of its model usage; per-use items may still be charged
 }
 
 // ErrNoAttempt is an outcome whose last attempt names no kept entry: nothing can price it.
 var ErrNoAttempt = errors.New("billing: the outcome names no attempt on a kept entry")
-
-// ErrNotRecorded is a supplier record with usage nothing prices, of an attempt no Settle or cleanup has recorded yet:
-// the model to note it against is not known, so Correct applies nothing, for the caller to retry.
-var ErrNotRecorded = errors.New("billing: the record's attempt is not recorded yet")
 
 // Settle charges the call's last attempt and ends its reservation, in one transaction of the admission's scope
 // (README.md「结算与账本」): under the balance row lock, the attempts and their costs, the charge by 免单规则 capped at
@@ -119,30 +110,42 @@ var ErrNotRecorded = errors.New("billing: the record's attempt is not recorded y
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err error) {
 	a := h.admitted
 	var seen []UnknownItem
+	var owed, charged int64
 	err = b.db.Tx(ctx, a.Scope, func(tx pg.Tx) error {
 		c, err := b.lock(ctx, tx, h.id, a.Account)
 		if err != nil {
 			return err
 		}
 		f, err = c.settle(ctx, tx, o)
-		seen = c.seen
+		seen, owed, charged = c.seen, c.owed, c.charged
 		return err
 	})
 	if err == nil {
 		b.alert(seen)
+		b.bear(ctx, h.id, owed, charged)
 	}
 	return f, err
 }
 
-// settle branches on what the reservation became (README.md「预留的状态」).
+// settle branches on what the reservation became (README.md「预留的状态」). A cleanup's states are not among the
+// ones that answer with what they stored: cleanup charged nothing, so the usage a late Settle brings is still to be
+// charged, and that is what late does.
 func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error) {
 	switch c.row.State {
-	case "settled", "estimated", "released":
+	case "settled", "released":
 		return c.stored()
 	}
 	if len(o.Attempts) == 0 {
-		if c.row.State == "pending" {
-			return Final{}, c.release(ctx, tx, "released", c.row.Amount)
+		switch c.row.State {
+		case "pending":
+			c.costKnown = true // nothing ran, so the cost is a known 0 and so is the profit
+			return Final{Profit: c.profit()}, c.release(ctx, tx, "released", c.row.Amount)
+		case "cleanup_released":
+			// The call never reached an upstream after all, so nothing can be charged to it: cleanup's record of it as
+			// lost is answered, and no charge a supplier reports later is looked for in it.
+			if err := c.b.suppliers.ResolveLostRequest(ctx, tx, c.id); err != nil {
+				return Final{}, fmt.Errorf("billing: resolve the lost request: %w", err)
+			}
 		}
 		return c.stored() // cleanup has it, and a Settle with nothing to price has nothing to add
 	}
@@ -150,62 +153,62 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 		return Final{}, err
 	}
 	last := o.Attempts[len(o.Attempts)-1]
-	if c.row.State == "cleanup_released" {
+	if c.row.State == "cleanup_released" { // the usage arrived after all: the request is no longer lost
 		if err := c.b.suppliers.ResolveLostRequest(ctx, tx, c.id); err != nil {
 			return Final{}, fmt.Errorf("billing: resolve the lost request: %w", err)
 		}
 	}
-	p, err := c.price(ctx, tx, o, last)
+	p, err := c.price(last)
 	if err == nil {
 		err = c.noteAttempts(ctx, tx, o)
 	}
 	if err != nil {
 		return Final{}, err
 	}
-	if c.row.State == "pending" || c.row.State == "cleanup_pending" { // held: amount is still reserved
+	if c.row.State == "pending" { // held: amount is still reserved
 		err = c.end(ctx, tx, p, last)
 	} else { // cleanup_settled or cleanup_released: replace what cleanup charged, at revision -1
 		err = c.late(ctx, tx, p, last)
 	}
-	return Final{Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated}, err
+	return Final{Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated, Waived: p.waived, Profit: c.profit()}, err
 }
 
-// recordAttempts books each attempt's cost, unless a supplier record has set it already (a correction can arrive
-// before a late Settle), writes the attempts to suppliers and keeps their entries for the reservation.
+// recordAttempts books each attempt's cost and writes the attempts to suppliers, in this transaction: the row of an
+// attempt and the ledger's cost of it are both there or neither. The entries the attempts bound are kept on the
+// reservation, for the next settlement to restore.
 func (c *locked) recordAttempts(ctx context.Context, tx pg.Tx, o Outcome) error {
-	records := make([]AttemptRecord, len(o.Attempts))
+	c.costKnown = true
+	records := make([]suppliers.AttemptRecord, len(o.Attempts))
 	for i, at := range o.Attempts {
-		records[i] = AttemptRecord{Seq: at.Seq, Entry: at.Entry, Key: at.Key, Usage: usages(at.Segments)}
-		seq := *int32p(at.Seq)
-		corrected, err := queries.Corrected(ctx, tx, CorrectedParams{RequestID: c.id, AttemptSeq: seq})
-		if err != nil {
-			return fmt.Errorf("billing: read the attempt's corrections: %w", err)
-		}
-		if corrected {
-			continue
+		c.costKnown = c.costKnown && at.CostKnown
+		c.cost = sum(c.cost, platform.AmountExact(at.Cost))
+		records[i] = suppliers.AttemptRecord{
+			Request: platform.RequestID(c.id), Seq: platform.AttemptSeq(at.Seq), //nolint:gosec // at most platform.MaxAttempts
+			Site: &c.row.SiteID, Account: &c.row.AccountID,
+			Receipt: at.Receipt, Usage: usages(at.Segments), Cost: at.Estimate, FinishedAt: at.FinishedAt,
 		}
 		e := c.event("attempt_cost", 0)
-		e.seq = seq
-		if _, err := post(ctx, tx, e, line{bookSupplierCost, at.Cost}, line{bookSupplierPrepaid, -at.Cost}); err != nil {
+		e.seq = *int32p(at.Seq)
+		if _, err := post(ctx, tx, e, line{bookSupplierCost, at.Cost, siteCredits}, line{bookSupplierPrepaid, -at.Cost, siteCredits}); err != nil {
 			return err
 		}
 	}
-	if err := c.b.suppliers.RecordAttempts(ctx, tx, c.id, records); err != nil {
+	if err := c.b.suppliers.RecordAttempts(ctx, tx, records); err != nil {
 		return fmt.Errorf("billing: record the attempts: %w", err)
 	}
-	c.entries = attemptEntries(records)
+	c.entries = attemptEntries(o.Attempts)
 	return nil
 }
 
-// attemptEntries is attempt_entries: the entry each attempt bound, by attempt number from 1, -1 for a number not
-// among records.
-func attemptEntries(records []AttemptRecord) []int32 {
+// attemptEntries is attempt_entries: the entry each attempt bound, by attempt number from 1, -1 for a number not among
+// attempts.
+func attemptEntries(attempts []AttemptResult) []int32 {
 	var entries []int32
-	for _, r := range records {
-		for len(entries) < r.Seq {
+	for _, at := range attempts {
+		for len(entries) < at.Seq {
 			entries = append(entries, -1)
 		}
-		entries[r.Seq-1] = *int32p(r.Entry)
+		entries[at.Seq-1] = *int32p(at.Entry)
 	}
 	return entries
 }
@@ -217,9 +220,9 @@ type priced struct {
 	estimated, waived bool
 }
 
-// price applies 免单规则 to the outcome at the locked price of the last attempt's entry. A waivable call is waived
-// while the account's daily cap allows its cost.
-func (c *locked) price(ctx context.Context, tx pg.Tx, o Outcome, last AttemptResult) (priced, error) {
+// price applies 免单规则 to the outcome at the locked price of the last attempt's entry. A waivable call is waived, with
+// no limit on how many an account may have: the rules are what decides, and nothing else.
+func (c *locked) price(last AttemptResult) (priced, error) {
 	if last.Result == NotExecuted {
 		return priced{}, nil
 	}
@@ -227,60 +230,22 @@ func (c *locked) price(ctx context.Context, tx pg.Tx, o Outcome, last AttemptRes
 	if err != nil {
 		return priced{}, err
 	}
-	waived := false
-	if waivable(o, last) {
-		cost, err := c.waiverCost(o)
-		if err != nil {
-			return priced{}, err
-		}
-		_, err = queries.AddWaiver(ctx, tx, AddWaiverParams{AccountID: c.row.AccountID, SiteID: c.row.SiteID, Cost: cost, Cap: c.b.config.WaiverCap})
-		switch {
-		case errors.Is(err, pg.ErrNoRows): // over the cap: charged by the zero-output waiver alone
-			waived = zeroOutput(last)
-		case err != nil:
-			return priced{}, fmt.Errorf("billing: count the waiver: %w", err)
-		default:
-			waived = true
-		}
-	}
+	waived := waivable(last)
 	p, err := priceSegments(s, f, last.Segments, waived)
 	p.waived = waived
 	return p, err
 }
 
-// waiverCost is what waiving the call costs the platform, as the daily cap counts it: each attempt's cost, or, for one
-// whose cost is not all known, what its usage sells for at its entry's locked price: the revenue the waiver gives up,
-// which the 保本线 will also make an upper bound of the cost once it is enforced across currencies
-// (docs/domains/billing.md「免单规则」).
-func (c *locked) waiverCost(o Outcome) (int64, error) {
-	var cost int64
-	for _, at := range o.Attempts {
-		if at.Costed {
-			cost = add(cost, at.Cost)
-			continue
-		}
-		s, f, err := c.pricing(at.Entry)
-		if err != nil {
-			return 0, err
-		}
-		p, err := priceSegments(s, f, at.Segments, false)
-		if err != nil {
-			return 0, err
-		}
-		cost = add(cost, max(p.price, at.Cost))
-	}
-	return cost, nil
-}
-
-// waivable: a call the platform may not charge for its model usage. A cancelled call never is; one whose content
-// never reached the client is; one that did is only when the upstream reported no output and an empty or error
-// finish (the zero-output waiver).
-func waivable(o Outcome, last AttemptResult) bool {
+// waivable: an attempt the platform may not charge for its model usage. One that ended because the client left never
+// is, whether or not anything was delivered; the judgement is of the charged attempt, so an attempt that failed first
+// and was followed by the client leaving is judged by its failure. One whose content never reached the client is; one
+// that did is only when the upstream reported no output and an empty or error finish (the zero-output waiver).
+func waivable(last AttemptResult) bool {
 	delivered := last.Result == Committed || last.Result == Aggregated
-	return !o.Cancelled && (!delivered || zeroOutput(last))
+	return last.Finish != FinishCancelled && (!delivered || zeroOutput(last))
 }
 
-// zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning
+// zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning and images
 // adds up to zero, and the finish was empty or an error. An output count the upstream never reported is a default
 // zero, not a reported one, so it proves nothing.
 func zeroOutput(last AttemptResult) bool {
@@ -289,19 +254,23 @@ func zeroOutput(last AttemptResult) bool {
 		if !s.Reported.Has(catalog.ItemOutput) {
 			return false
 		}
-		output += s.Usage.OutputTotal()
+		// Image delivery is output even if the text count is zero. Audio retains its existing waiver policy.
+		output += s.Usage.Count(catalog.ItemOutput) + s.Usage.Count(catalog.ItemReasoning) + s.Usage.Count(catalog.ItemImageOut)
 	}
 	return len(last.Segments) > 0 && output == 0 && (last.Finish == FinishNone || last.Finish == FinishError)
 }
 
-// perUseItems are the items charged even when a call is waived (「按次计费的项目照常收费」).
+// perUseItems are the items charged even when a call is waived (「按次计费的项目照常收费」), the ones a fallback row must
+// price for every currency (parseFallbacks), and the ones the listing gate leaves out because admission fills them in
+// (Unpriced). Adding an item here adds it to all three.
 const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution
 
 // priceSegments prices each sampling at its own band, sums them exactly and rounds up once; perUseOnly charges only
 // the per-use items, still at the band the whole sampling falls in, as the cost of the sampling less its cost without
 // them. s is the schedule admission filled with the per-use defaults. Charged items with usage the upstream did not
 // report or the schedule cannot price, or any usage protocol could not map, make the charge estimated; usage protocol
-// could not map is charged at its fallback price (docs/domains/billing.md「价目表缺项」).
+// could not map, and an item the schedule prices nowhere, are charged at their fallback prices
+// (docs/domains/billing.md「价目表缺项」).
 func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOnly bool) (priced, error) {
 	var p priced
 	total := platform.Exact{}
@@ -313,6 +282,9 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 		cost, missing, err := segmentCost(s, seg.Usage, perUseOnly)
 		if err == nil {
 			cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), perUseOnly)
+		}
+		if err == nil {
+			cost, err = addMissing(s, f, cost, seg.Usage, missing, charged)
 		}
 		if err == nil {
 			total, err = total.Add(cost)
@@ -356,6 +328,34 @@ func addFallbacks(s catalog.Schedule, f fallbacks, cost platform.Exact, unknown 
 	return cost, nil
 }
 
+// addMissing adds to cost the fallback price of each charged item the schedule prices nowhere, which Cost leaves out of
+// its total rather than failing: an upstream that reports a service tier no price list has, or a price list that leaves
+// an item out, is charged at the fallback prices instead of nothing (docs/domains/billing.md「价目表缺项」). A token is
+// charged at tokenPrice, the highest price of a token anywhere; a per-use item at its default, the price admission would
+// have filled in every tier the schedule offers. Only items with usage are in missing, and charged is what a waiver
+// leaves chargeable.
+func addMissing(s catalog.Schedule, f fallbacks, cost platform.Exact, u catalog.Usage, missing, charged catalog.ItemSet) (platform.Exact, error) {
+	charged &= missing // nothing short of it: the schedule priced what it could and it was all priced
+	if charged == 0 {
+		return cost, nil
+	}
+	tokens := tokenPrice(s)
+	for it := range catalog.NumItems {
+		if !charged.Has(it) {
+			continue
+		}
+		rate := tokens
+		if perUseItems.Has(it) {
+			rate = f.perUse[it]
+		}
+		var err error
+		if cost, err = cost.Add(rate.Mul(u.Count(it))); err != nil {
+			return platform.Exact{}, err
+		}
+	}
+	return cost, nil
+}
+
 // tokenItems are the items counted in tokens.
 const tokenItems = ^perUseItems
 
@@ -380,7 +380,7 @@ func costWithout(s catalog.Schedule, u catalog.Usage, items catalog.ItemSet) (pl
 			counts[it] = u.Count(it)
 		}
 	}
-	rest, err := catalog.NewUsage(counts, u.ServiceTier(), nil)
+	rest, err := u.Recount(counts, nil)
 	if err != nil {
 		return platform.Exact{}, err
 	}
@@ -456,10 +456,11 @@ func usages(segments []Segment) []catalog.Usage {
 // storedSegment is a segment as final_usage stores it: each item's count in item order, the service tier, the
 // reported items and the usage protocol could not map.
 type storedSegment struct {
-	Counts   []int64                `json:"counts"`
-	Tier     catalog.ServiceTier    `json:"tier"`
-	Reported catalog.ItemSet        `json:"reported"`
-	Unknown  []catalog.UnknownUsage `json:"unknown,omitzero"`
+	Counts        []int64                `json:"counts"`
+	Tier          catalog.ServiceTier    `json:"tier"`
+	Reported      catalog.ItemSet        `json:"reported"`
+	Unknown       []catalog.UnknownUsage `json:"unknown,omitzero"`
+	PhysicalInput *int64                 `json:"physical_input,omitzero"`
 }
 
 // encodeUsage is the segments as final_usage stores them, so a retried Settle returns the Final the first one gave.
@@ -471,6 +472,9 @@ func encodeUsage(segments []Segment) ([]byte, error) {
 			counts[it] = s.Usage.Count(it)
 		}
 		stored[i] = storedSegment{Counts: counts, Tier: s.Usage.ServiceTier(), Reported: s.Reported, Unknown: s.Usage.Unknown()}
+		if n, ok := s.Usage.PhysicalInput(); ok {
+			stored[i].PhysicalInput = &n
+		}
 	}
 	b, err := jsonx.MarshalCanonical(stored)
 	if err != nil {
@@ -491,6 +495,9 @@ func decodeUsage(b []byte) ([]Segment, error) {
 			counts[catalog.Item(it)] = n
 		}
 		u, err := catalog.NewUsage(counts, s.Tier, s.Unknown)
+		if err == nil && s.PhysicalInput != nil {
+			u, err = u.WithPhysicalInput(*s.PhysicalInput)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("billing: read the stored usage: %w", err)
 		}
@@ -501,28 +508,46 @@ func decodeUsage(b []byte) ([]Segment, error) {
 
 // locked is one reservation under its balance row lock, with what is charged once a branch has run.
 type locked struct {
-	b       *Billing
-	id      uuid.UUID
-	row     LockReservationRow
-	balance LockBalanceRow
-	charged int64
-	seen    []UnknownItem // unknown items first seen in this transaction
-	entries []int32       // the attempts' entries to write, nil to keep the recorded ones
+	cost      platform.Exact
+	costKnown bool
+	b         *Billing
+	id        uuid.UUID
+	row       LockReservationRow
+	balance   LockBalanceRow
+	charged   int64
+	owed      int64         // what this transaction's charge asked for before the floor capped it; 0 when it charged nothing
+	seen      []UnknownItem // unknown items first seen in this transaction
+	entries   []int32       // the attempts' entries to write, nil to keep the recorded ones
 }
 
 // stored is the Final the reservation holds.
 func (c *locked) stored() (Final, error) {
 	segments, err := decodeUsage(c.row.FinalUsage)
-	return Final{Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated}, err
+	return Final{Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived, Profit: c.row.Profit}, err
+}
+
+func (c *locked) profit() *int64 {
+	if !c.costKnown {
+		return nil
+	}
+	difference := sum(platform.AmountExact(c.charged), c.cost.Neg())
+	if difference.Cmp(platform.AmountExact(math.MinInt64)) < 0 || difference.Cmp(platform.AmountExact(math.MaxInt64)) > 0 {
+		return nil
+	}
+	n := difference.CeilAmount()
+	return &n
 }
 
 // cap is what may be charged without passing the floor, keeping every other reservation covered: the balance less
-// the floor, less what is reserved apart from what this reservation still holds. It is computed exactly, as Reserve's
-// headroom is, and clamped to what an amount can hold.
-func (c *locked) cap(held int64) int64 {
-	b := c.balance
+// the floor and frozen credit, less what is reserved apart from what this reservation still holds. Like Reserve,
+// it computes headroom exactly and clamps it to what an amount can hold.
+func (c *locked) cap(held int64) int64 { return room(c.balance, held) }
+
+// room is how far the balance may fall while covering frozen credit and reservations other than held. Charges use
+// the floor; refunds and expiry use zero, so they cannot put the account in debt.
+func room(b LockBalanceRow, held int64) int64 {
 	left := sum(platform.AmountExact(b.Balance), platform.AmountExact(b.Floor).Neg(), platform.AmountExact(b.Reserved).Neg(),
-		platform.AmountExact(held))
+		platform.AmountExact(b.Frozen).Neg(), platform.AmountExact(held))
 	if left.Cmp(platform.Exact{}) < 0 {
 		return 0
 	}
@@ -543,11 +568,12 @@ func (c *locked) event(kind string, revision int64) event {
 	return event{site: c.row.SiteID, account: c.row.AccountID, kind: kind, request: c.id, revision: revision}
 }
 
-// end settles a held reservation: price capped at the floor, the platform bearing the rest. An estimated charge keeps
-// what is left of the reservation for the correction window; otherwise it is released.
+// end settles a held reservation: price capped at the floor, the platform bearing the rest, and the rest of the
+// reservation given back at once. An estimated charge is released like any other: nothing may correct it later, so
+// holding part of the reservation for a record that will not come would only shrink what the account may spend.
 func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult) error {
 	held := c.row.Amount - c.row.Charged
-	c.charged = min(p.price, c.cap(held))
+	c.owed, c.charged = p.price, min(p.price, c.cap(held))
 	if _, err := post(ctx, tx, c.event("settle", 0), charge(p.price, c.charged)...); err != nil {
 		return err
 	}
@@ -555,12 +581,7 @@ func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult
 	if err != nil {
 		return err
 	}
-	keep := int64(0)
-	if p.estimated {
-		w.state, keep = "estimated", max(c.row.Amount-c.charged, 0)
-		w.holdSeconds = c.b.config.CorrectionWindow.Seconds()
-	}
-	if err := c.move(ctx, tx, keep-held, c.charged); err != nil {
+	if err := c.move(ctx, tx, -held, c.charged); err != nil {
 		return err
 	}
 	return c.write(ctx, tx, w)
@@ -568,7 +589,7 @@ func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult
 
 // late replaces what cleanup charged with what the full outcome charges: a refund, or a makeup capped at the floor.
 func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResult) error {
-	c.charged = min(p.price, add(c.row.Charged, c.cap(0)))
+	c.owed, c.charged = p.price, min(p.price, add(c.row.Charged, c.cap(0)))
 	if _, err := post(ctx, tx, c.event("reverse", lateRevision), reversal(c.row.Price, c.row.Charged)...); err != nil {
 		return err
 	}
@@ -610,7 +631,6 @@ type written struct {
 	price             int64
 	waived, estimated bool
 	usage             []byte
-	holdSeconds       float64 // positive opens the correction window
 }
 
 // result is what a charge for the last attempt writes.
@@ -630,16 +650,16 @@ func (c *locked) kept(state string) written {
 	}
 }
 
-// terminal are the states nothing but a late Settle moves on from: suppliers may let the journal go.
+// terminal are the states nothing but a late Settle moves on from: suppliers may let the request's records go.
 var terminal = map[string]bool{"settled": true, "released": true, "cleanup_settled": true, "cleanup_released": true}
 
 // write records w on the reservation, and the end of the request when its state is terminal, at the same moment of
 // the database's clock.
 func (c *locked) write(ctx context.Context, tx pg.Tx, w written) error {
 	at, err := queries.EndReservation(ctx, tx, EndReservationParams{
+		Profit:    c.profit(),
 		RequestID: c.id, State: w.state, ChargedSeq: w.seq, Entry: w.entry, Charged: c.charged, Price: w.price,
-		Waived: w.waived, Estimated: w.estimated, FinalUsage: w.usage, HoldSeconds: w.holdSeconds,
-		AttemptEntries: c.entries,
+		Waived: w.waived, Estimated: w.estimated, FinalUsage: w.usage, AttemptEntries: c.entries,
 	})
 	if err != nil {
 		return fmt.Errorf("billing: end the reservation: %w", err)

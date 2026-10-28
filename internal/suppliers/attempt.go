@@ -21,6 +21,20 @@ import (
 // whether the supplier ran the request (Executed).
 type Failure = adapter.Failure
 
+// Scope is what a failure says is at fault, and so what to stop using; the constants are the adapter's, named here for
+// gateway, which maps them one by one to routing's.
+type Scope = adapter.Scope
+
+// The scopes of a Failure.
+const (
+	ScopeRequest    = adapter.ScopeRequest
+	ScopeEgress     = adapter.ScopeEgress
+	ScopeEndpoint   = adapter.ScopeEndpoint
+	ScopeCredential = adapter.ScopeCredential
+	ScopeGroup      = adapter.ScopeGroup
+	ScopeSupplier   = adapter.ScopeSupplier
+)
+
 // CallPolicy is how calls to an endpoint behave: whether they stream and whether the supplier stops when we do.
 type CallPolicy = adapter.CallPolicy
 
@@ -39,17 +53,21 @@ type Call struct {
 // value it is costed at and the row that value came from, and the supplier's own id of the request once a response
 // header gave it. Billing passes it back unread; its fields are not for anyone else.
 type AttemptReceipt struct {
+	exchange                                 platform.ExchangeRate
 	supplier, credential, endpoint, schedule uuid.UUID
 	unitValueID                              uuid.UUID
 	ref                                      string
+	status                                   int
 	pricedAt                                 time.Time
 	currency                                 platform.Currency  // the supplier's settlement currency
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
 }
 
-// Key is the supplier's own id of the request, which reconciliation matches its charge records by; empty when no
-// response gave one.
-func (r AttemptReceipt) Key() string { return r.ref }
+// WithExchange attaches the reservation's basis, never the supplier snapshot's current rate.
+func (r AttemptReceipt) WithExchange(rate platform.ExchangeRate) AttemptReceipt {
+	r.exchange = rate
+	return r
+}
 
 // wire is the path and, for Anthropic's format, the version header every system takes the same way. The key goes in
 // Authorization: Bearer, which new-api and sub2api both accept on all three.
@@ -76,28 +94,34 @@ type Attempt struct {
 	cred   *credential
 	priced time.Time
 
-	mu   sync.Mutex
-	ref  string
-	once sync.Once
+	mu     sync.Mutex
+	ref    string
+	status int
+	once   sync.Once
 }
 
-// Acquire takes a slot on the endpoint's least busy credential that is neither resting nor expired, by compare and
-// swap on its in-flight count, in memory. It returns ErrNoEndpoint or ErrNoSlot when there is none, and gateway moves
-// on to its next entry: that is not an attempt. The slot is held until Done.
+// Acquire takes a slot on the endpoint's least busy credential that is neither resting nor expired and whose minute
+// admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint or ErrNoSlot
+// when there is none, and gateway moves on to its next entry: that is not an attempt. The slot is held until Done.
 func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 	ep, ok := s.snap.Load().endpoints[id]
 	if !ok {
 		return nil, ErrNoEndpoint
 	}
 	now := s.now()
-	for range 8 { // another caller may take the slot between looking and swapping
+	for range 8 { // another caller may take the slot or the minute's last request between looking and swapping
 		best, n := leastBusy(ep, now)
 		if best == nil {
 			return nil, ErrNoSlot
 		}
-		if best.rt.inflight.CompareAndSwap(n, n+1) { // n is below the limit, and the swap only succeeds if it is still n
-			return &Attempt{s: s, ep: ep, cred: best, priced: now}, nil
+		if !best.rt.inflight.CompareAndSwap(n, n+1) { // n is below the limit, and the swap only succeeds if it is still n
+			continue
 		}
+		if !best.rt.requests.take(now, best.perMinute) {
+			best.rt.inflight.Add(-1) // no request was made: the slot goes back, and another credential is tried
+			continue
+		}
+		return &Attempt{s: s, ep: ep, cred: best, priced: now}, nil
 	}
 	return nil, ErrNoSlot
 }
@@ -105,9 +129,13 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 // leastBusy is the credential with the lowest share of its limit in use among those that may be picked now, with the
 // count of attempts it was found with.
 func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
+	if len(ep.creds) == 0 {
+		return nil, 0
+	}
+	used := ep.creds[0].rt.requests.count(now)
 	var bestLoad float64
 	for _, c := range ep.creds {
-		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() {
+		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || (c.perMinute != 0 && used >= c.perMinute) {
 			continue
 		}
 		n := c.rt.inflight.Load()
@@ -125,22 +153,49 @@ func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
 // value is unknown, and the cost is then estimated (README.md「调用面」).
 const NotExecuted = adapter.NotExecuted
 
-// RateLimited is the Cause of a supplier's answer that there were too many requests, which routing weighs the endpoint
-// down for. gateway cannot name the adapter's own types, so the two it needs are named here.
-type RateLimited = adapter.RateLimited
+// The causes of a Failure. gateway and quality cannot name the adapter's own types, so they are named here: gateway
+// weighs an endpoint down for RateLimited, and quality judges an endpoint's health by every cause
+// (docs/domains/quality.md「什么算一次失败」). Each is the adapter's type of the same name.
+type (
+	// RateLimited is adapter.RateLimited.
+	RateLimited = adapter.RateLimited
+	// Overloaded is adapter.Overloaded.
+	Overloaded = adapter.Overloaded
+	// UpstreamError is adapter.UpstreamError.
+	UpstreamError = adapter.UpstreamError
+	// SupplierBalanceLow is adapter.SupplierBalanceLow.
+	SupplierBalanceLow = adapter.SupplierBalanceLow
+	// CredentialQuotaExhausted is adapter.CredentialQuotaExhausted.
+	CredentialQuotaExhausted = adapter.CredentialQuotaExhausted
+	// CredentialRejected is adapter.CredentialRejected.
+	CredentialRejected = adapter.CredentialRejected
+	// NotPermitted is adapter.NotPermitted.
+	NotPermitted = adapter.NotPermitted
+	// ContextTooLong is adapter.ContextTooLong.
+	ContextTooLong = adapter.ContextTooLong
+	// BadRequest is adapter.BadRequest.
+	BadRequest = adapter.BadRequest
+	// ContentRejected is adapter.ContentRejected.
+	ContentRejected = adapter.ContentRejected
+	// ModelNotFound is adapter.ModelNotFound.
+	ModelNotFound = adapter.ModelNotFound
+	// Unknown is adapter.Unknown.
+	Unknown = adapter.Unknown
+	// Transport is adapter.Transport.
+	Transport = adapter.Transport
+)
 
 // Policy is how this attempt's endpoint behaves: the adapter's default, over which quality's measurement of
 // cancellation stands.
 func (a *Attempt) Policy() CallPolicy { return a.s.policy(a.ep) }
 
-// Receipt is what the attempt has so far. Done gives the final one; this is for the journal, which records an attempt
-// while it runs.
-func (a *Attempt) Receipt() AttemptReceipt {
+// receipt is what the attempt has so far; Done gives it out once the attempt is over.
+func (a *Attempt) receipt() AttemptReceipt {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return AttemptReceipt{
 		supplier: a.ep.supplier, credential: a.cred.id, endpoint: a.ep.id, schedule: a.ep.schedule,
-		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue,
+		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue, status: a.status,
 	}
 }
 
@@ -149,7 +204,7 @@ func (a *Attempt) Receipt() AttemptReceipt {
 // request and finishing it can both call it.
 func (a *Attempt) Done() AttemptReceipt {
 	a.once.Do(func() { a.cred.rt.inflight.Add(-1) })
-	return a.Receipt()
+	return a.receipt()
 }
 
 // Send posts the call to the supplier. A response in the 2xx range is returned for the caller to read and close.
@@ -187,22 +242,26 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	if err != nil {
 		return nil, transportFailure(wrote.Load())
 	}
-	a.noteRef(resp.Header)
+	a.noteResponse(resp.StatusCode, resp.Header)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp, nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody)) //nolint:errcheck // a body that fails to read is classified by what was read
 	_ = resp.Body.Close()                                          //nolint:errcheck // nothing more to learn
 	f := a.ep.quirks.Classify(resp.StatusCode, resp.Header, body)
+	if f.Scope == adapter.ScopeRequest {
+		f.Rejection = rejectionOf(body, a.ep.origin, a.cred.key.Reveal())
+	}
 	a.rest(f)
 	return nil, &f
 }
 
-func (a *Attempt) noteRef(h http.Header) {
+func (a *Attempt) noteResponse(status int, h http.Header) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.status = status
 	if ref, ok := a.ep.quirks.ChargeRef(h); ok {
-		a.mu.Lock()
 		a.ref = string(ref)
-		a.mu.Unlock()
 	}
 }
 

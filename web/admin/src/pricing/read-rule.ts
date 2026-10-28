@@ -2,7 +2,7 @@ import { isProblem, type Problem } from "../change";
 import { type Invalid, readSchedule } from "../models/price-fields";
 import type { Rule } from "./rule-fields";
 
-type Words = Record<"target" | "audience" | "ratio" | "multiplier" | "constraint", string> & Invalid;
+type Words = Record<"target" | "audience" | "ratio" | "multiplier", string> & Invalid;
 
 const decimal = /^(0|[1-9]\d{0,17})(\.\d{1,15})?$/;
 
@@ -46,34 +46,20 @@ function readMethod(
   if (kind === "reference_multiplier") {
     const multiplier = (values.multiplier ?? "").trim();
     return decimal.test(multiplier)
-      ? { kind, multiplier, currency_conversion: values.currency_conversion === "face" ? "face" : "exchange" }
+      ? { kind, multiplier, currency_conversion: values.currency_conversion === "exchange" ? "exchange" : "face" }
       : { problem: words.multiplier };
   }
   const schedule = readSchedule(values, existing?.schedule, words);
   return isProblem(schedule) ? schedule : { kind: "fixed", schedule };
 }
 
-function readConstraints(values: Record<string, string>, words: Words): Rule["constraints"] | Problem {
-  const constraints: Record<string, string> = {};
-  for (const name of ["min_margin_ratio", "reference_min_ratio", "reference_max_ratio"]) {
-    const typed = (values[name] ?? "").trim();
-    if (typed !== "" && !decimal.test(typed)) {
-      return { problem: words.constraint };
-    }
-    if (typed !== "") {
-      constraints[name] = typed;
-    }
-  }
-  return constraints;
-}
-
-// readRule makes the rule from the typed fields, or says what is wrong with them. Every ratio is decimal text.
+// readRule makes the rule from the typed fields, or says what is wrong with them. Every ratio is decimal text. It never
+// carries constraints: this release does not apply them (#234), so the server refuses any, and saving clears a stored one.
 export function readRule(values: Record<string, string>, words: Words, existing?: Rule): Rule | Problem {
   const target = readTarget(values, words);
   const audience = readAudience(values, words);
   const method = readMethod(values, words, existing?.method);
-  const constraints = readConstraints(values, words);
-  for (const part of [target, audience, method, constraints]) {
+  for (const part of [target, audience, method]) {
     if (isProblem(part)) {
       return part;
     }
@@ -83,6 +69,6 @@ export function readRule(values: Record<string, string>, words: Words, existing?
     target: target as Rule["target"],
     audience: audience as Rule["audience"],
     method: method as Rule["method"],
-    constraints: constraints as Rule["constraints"],
+    constraints: {},
   };
 }

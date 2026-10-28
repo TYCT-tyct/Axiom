@@ -7,8 +7,8 @@ import (
 	"slices"
 )
 
-// Item is a billing item. Items never overlap, so a token is counted under exactly one of them; protocol maps each
-// upstream format's usage onto them as README.md「计费项与用量」 tabulates.
+// Item is a billing quantity. OpenAI cache reads and writes may overlap; physical prompt length is kept separately.
+// protocol maps each upstream format's usage as README.md「计费项与用量」 tabulates.
 type Item uint8
 
 // The billing items, in the order stored lists name them: the input side, then the output side, then counts.
@@ -53,6 +53,14 @@ var serviceTierNames = [numServiceTiers]string{"standard", "flex", "priority", "
 
 func (st ServiceTier) String() string { return serviceTierNames[st] }
 
+// ParseItem returns the item a stored name denotes: the inverse of Item.String.
+func ParseItem(name string) (Item, error) { return lookup[Item](itemNames[:], name) }
+
+// ParseServiceTier returns the service tier a stored name denotes: the inverse of ServiceTier.String.
+func ParseServiceTier(name string) (ServiceTier, error) {
+	return lookup[ServiceTier](serviceTierNames[:], name)
+}
+
 // ItemSet is a set of billing items.
 type ItemSet = set[Item]
 
@@ -72,9 +80,13 @@ func (s set[T]) Has(v T) bool { return s&(1<<v) != 0 }
 // Add puts v in the set.
 func (s *set[T]) Add(v T) { *s |= 1 << v }
 
-// inputSide are the items a prompt is made of, the only ones a context tier's threshold may add up.
-const inputSide ItemSet = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 1<<ItemCacheWrite1h | 1<<ItemAudioIn |
+// InputSide are the items a prompt is made of, the only ones a context tier's threshold may add up. They are also the
+// items an upstream reports before the reply starts.
+const InputSide ItemSet = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 1<<ItemCacheWrite1h | 1<<ItemAudioIn |
 	1<<ItemImageIn
+
+// OutputSide are the token items a reply is made of, which an upstream's output total adds up (Usage.OutputTotal).
+const OutputSide ItemSet = 1<<ItemOutput | 1<<ItemReasoning | 1<<ItemAudioOut | 1<<ItemImageOut
 
 // maxCount bounds every count, so a tier's sum of up to NumItems counts stays far inside int64.
 const maxCount = 1e10
@@ -83,9 +95,11 @@ const maxCount = 1e10
 // reported that protocol could not map. Its fields are unexported so that NewUsage, which bounds them, is the only way
 // to make one, and so that a Usage never changes once made.
 type Usage struct {
-	q           [NumItems]int64
-	serviceTier ServiceTier
-	unknown     []UnknownUsage
+	q                [NumItems]int64
+	serviceTier      ServiceTier
+	unknown          []UnknownUsage
+	physicalInput    int64
+	hasPhysicalInput bool
 }
 
 // UnknownUsage is a non-zero usage field the item table does not map, or a service tier value protocol does not
@@ -122,9 +136,43 @@ func (u Usage) Count(it Item) int64 { return u.q[it] }
 // Unknown returns what the upstream reported that protocol could not map, for billing to price at its fallback prices.
 func (u Usage) Unknown() []UnknownUsage { return slices.Clone(u.unknown) }
 
-// OutputTotal is the output the zero-output waiver reads, output plus reasoning (docs/domains/billing.md「免单规则」):
-// a reply that only reasoned is not an empty reply.
-func (u Usage) OutputTotal() int64 { return u.q[ItemOutput] + u.q[ItemReasoning] }
+// OutputTotal is the billable output token count used by reservation metering. Output items are disjoint.
+func (u Usage) OutputTotal() int64 {
+	return u.q[ItemOutput] + u.q[ItemReasoning] + u.q[ItemAudioOut] + u.q[ItemImageOut]
+}
+
+// PhysicalInput returns the upstream prompt total and its presence; an explicit zero is not an absent total.
+func (u Usage) PhysicalInput() (int64, bool) { return u.physicalInput, u.hasPhysicalInput }
+
+// WithPhysicalInput keeps the physical prompt length independently of potentially overlapping billing quantities.
+func (u Usage) WithPhysicalInput(n int64) (Usage, error) {
+	if n < 0 || n > maxCount {
+		return Usage{}, fmt.Errorf("usage: physical input is %d, want 0 to 10¹⁰", n)
+	}
+	u.physicalInput, u.hasPhysicalInput = n, true
+	return u, nil
+}
+
+// Recount replaces billed quantities without losing the physical prompt used by context bands and client echoes.
+func (u Usage) Recount(counts map[Item]int64, unknown []UnknownUsage) (Usage, error) {
+	v, err := NewUsage(counts, u.serviceTier, unknown)
+	v.physicalInput, v.hasPhysicalInput = u.physicalInput, u.hasPhysicalInput
+	return v, err
+}
+
+// InputTotal is the client's prompt total, falling back to disjoint quantities for formats without a physical total.
+func (u Usage) InputTotal() int64 {
+	if u.hasPhysicalInput {
+		return u.physicalInput
+	}
+	var total int64
+	for it := range NumItems {
+		if InputSide.Has(it) {
+			total += u.q[it]
+		}
+	}
+	return total
+}
 
 // ServiceTier is the service tier that served the request.
 func (u Usage) ServiceTier() ServiceTier { return u.serviceTier }

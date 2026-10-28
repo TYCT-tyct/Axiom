@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 )
 
 // Official prices per token from the vendors' pricing pages, 2026-10-14: Claude Haiku 5.5 ($0.10 / $0.50 per million
@@ -43,6 +44,15 @@ func mustParse(tb testing.TB, s string) catalog.Schedule {
 		tb.Fatal(err)
 	}
 	return schedule
+}
+
+func mustCurrency(tb testing.TB, code string) platform.Currency {
+	tb.Helper()
+	c, err := platform.ParseCurrency(code)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return c
 }
 
 // Equal schedules must be equal bytes: stored schedules are compared and deduplicated byte for byte.
@@ -150,5 +160,40 @@ func TestParseScheduleRejects(t *testing.T) {
 		if _, err := catalog.ParseSchedule([]byte(text)); err == nil {
 			t.Errorf("%s: ParseSchedule(%s) succeeded, want an error", name, text)
 		}
+	}
+}
+
+// TestScheduleScaled: every price, in every tier and service tier, is multiplied; the currency becomes the one asked for;
+// an item without a price stays without one; and a price that does not divide at the finest price a schedule holds is
+// rounded up by less than one place.
+func TestScheduleScaled(t *testing.T) {
+	t.Parallel()
+	cny, usd := mustCurrency(t, "CNY"), mustCurrency(t, "USD")
+	scaled, err := mustParse(t, haiku).Scaled("1.2", cny)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"context_tiers":{"basis":["input","cache_read","cache_write","cache_write_1h"],"method":"whole",` +
+		`"tiers":[{"above":100000,"rates":{"cache_read":"0.00000006","cache_write":"0.00000075",` +
+		`"cache_write_1h":"0.0000012","input":"0.0000006","output":"0.000003"}}]},"currency":"CNY",` +
+		`"rates":{"cache_read":"0.000000012","cache_write":"0.00000015",` +
+		`"cache_write_1h":"0.00000024","input":"0.00000012","output":"0.0000006","web_search":"0.012"},"v":1}`
+	got, err := scaled.MarshalJSON()
+	if err != nil || string(got) != want {
+		t.Errorf("Scaled =\n%s, %v; want\n%s", got, err, want)
+	}
+	// 1 × 1/3 has no finite decimal form: the finest place, up.
+	tiny, err := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"1"}}`).Scaled("0.3333333333333333333", usd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := tiny.MarshalJSON(); err != nil || !strings.Contains(string(b), `"input":"0.333333333333334"`) {
+		t.Errorf("1 × 0.333… = %s, %v; want the price rounded up at 10⁻¹⁵", b, err)
+	}
+	if _, err := mustParse(t, haiku).Scaled("-1", usd); err == nil {
+		t.Error("a negative multiplier was taken")
+	}
+	if _, err := mustParse(t, haiku).Scaled("1000000", usd); err == nil {
+		t.Error("a price past 1000 was taken")
 	}
 }

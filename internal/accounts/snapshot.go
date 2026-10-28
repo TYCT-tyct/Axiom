@@ -34,10 +34,18 @@ type Site struct {
 	Registration string // invite or closed
 	// Currency is the site's accounting currency, which the amounts its API shows are in.
 	Currency platform.Currency
+	// DefaultTier is the tier the site puts a new account in, its first unless an operator changed it.
+	DefaultTier TierID
 	// NewKeyDailyLimit is the daily spend limit a new key gets, in billionths of a credit.
 	NewKeyDailyLimit int64
-	sessions         map[Surface]lifetime
-	limits           limits
+	// MaxKeysPerAccount and KeyCreationsPerHour bound an account's call keys: how many it may hold that are not
+	// deleted, and how many it may make in an hour.
+	MaxKeysPerAccount, KeyCreationsPerHour int
+	// APIBase is the origin a key's calls go to, where the site registers an API domain: the console tells the user
+	// where to point a client rather than trusting the Host of the request (README.md「快照」).
+	APIBase  string
+	sessions map[Surface]lifetime
+	limits   limits
 }
 
 // lifetime is how long a session lasts: idle since its last request, and at most from its start.
@@ -49,8 +57,13 @@ func (l lifetime) seconds() (maxAge, idle int64) {
 }
 
 // The defaults of a site that sets none: 10 credits a day for a new key; console sessions idle out after 7 days and
-// last at most 30, admin sessions 30 minutes and 12 hours.
-const defaultNewKeyDailyLimit = 10_000_000_000
+// last at most 30, admin sessions 30 minutes and 12 hours; 100 call keys an account may hold and 50 it may make in an
+// hour, room for the integrations and the rotation a customer runs and far from the rate a script makes keys at.
+const (
+	defaultNewKeyDailyLimit    = 10_000_000_000
+	defaultMaxKeysPerAccount   = 100
+	defaultKeyCreationsPerHour = 50
+)
 
 var defaultLifetimes = map[Surface]lifetime{
 	Console: {7 * 24 * time.Hour, 30 * 24 * time.Hour},
@@ -141,7 +154,7 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 	for _, r := range sites {
 		site := Site{
 			ID: SiteID(r.ID), Main: r.IsMain, Name: r.Name, KeyPrefix: r.KeyPrefix, Registration: r.Registration,
-			NewKeyDailyLimit: defaultNewKeyDailyLimit,
+			DefaultTier: TierID(r.DefaultTierID), NewKeyDailyLimit: defaultNewKeyDailyLimit,
 			sessions: map[Surface]lifetime{
 				Console: {seconds(r.ConsoleIdleSeconds, defaultLifetimes[Console].idle), seconds(r.ConsoleMaxAgeSeconds, defaultLifetimes[Console].max)},
 				Admin:   {seconds(r.AdminIdleSeconds, defaultLifetimes[Admin].idle), seconds(r.AdminMaxAgeSeconds, defaultLifetimes[Admin].max)},
@@ -155,6 +168,8 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		if r.NewKeyDailyLimit != nil {
 			site.NewKeyDailyLimit = *r.NewKeyDailyLimit
 		}
+		site.MaxKeysPerAccount = setting(r.MaxKeysPerAccount, defaultMaxKeysPerAccount)
+		site.KeyCreationsPerHour = setting(r.KeyCreationsPerHour, defaultKeyCreationsPerHour)
 		site.limits = limits{
 			ipBurst: setting(r.IpAttemptBurst, defaultLimits.ipBurst), ipPerMinute: setting(r.IpAttemptsPerMinute, defaultLimits.ipPerMinute),
 			emailFailures: setting(r.EmailSignInFailures, defaultLimits.emailFailures), codeFailures: setting(r.UserCodeFailures, defaultLimits.codeFailures),
@@ -166,9 +181,7 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, r := range domains {
-		next.domains[r.Domain] = domain{SiteID(r.SiteID), Surface(r.Surface), r.Origin}
-	}
+	readDomains(next, domains)
 	roles, err := s.queries.ListRoles(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -184,6 +197,29 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		}
 	}
 	return next, nil
+}
+
+// readDomains indexes the site domains by host, and records each site's API base: the origin of its API domain, the
+// host a key's calls are made to, which the console shows the user instead of a URL built from the request's Host
+// (README.md「快照」). Prefer HTTPS to avoid sending a key in cleartext when both schemes are registered. Break ties by
+// origin so the query's unordered results cannot change the address between reloads.
+func readDomains(next *snapshot, domains []ListSiteDomainsRow) {
+	for _, r := range domains {
+		next.domains[r.Domain] = domain{SiteID(r.SiteID), Surface(r.Surface), r.Origin}
+		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == API &&
+			preferAPIOrigin(r.Origin, site.APIBase) {
+			site.APIBase = r.Origin
+			next.sites[site.ID] = site
+		}
+	}
+}
+
+func preferAPIOrigin(candidate, current string) bool {
+	secure, currentSecure := strings.HasPrefix(candidate, "https://"), strings.HasPrefix(current, "https://")
+	if secure != currentSecure {
+		return secure
+	}
+	return current == "" || candidate < current
 }
 
 // seconds is a session length in seconds as a duration, or fallback when it is unset (0).
@@ -210,6 +246,13 @@ func (s *Service) SiteForHost(host string) (Site, Surface, error) {
 		return Site{}, "", err
 	}
 	return snap.sites[d.site], d.surface, nil
+}
+
+// Origin is the origin registered for the request's Host: where a page of that domain lives, which a link the server
+// builds for it (a payment's return address) must start with, never the Host or Origin header as the request wrote it.
+func (s *Service) Origin(host string) (string, error) {
+	d, _, err := s.domain(host)
+	return d.origin, err
 }
 
 // domain is host's registered domain in a snapshot fresh enough to use.

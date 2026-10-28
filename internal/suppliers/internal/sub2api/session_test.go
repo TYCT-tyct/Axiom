@@ -227,7 +227,7 @@ func TestFailuresCarryNoSupplierText(t *testing.T) {
 			func() error { _, err := m.Keys(t.Context(), nil); return err },
 			func() error { _, err := m.Offer(t.Context(), nil); return err },
 			func() error {
-				_, _, err := m.Charges(t.Context(), m.(adapter.Rescanner).Rescan(epoch.Add(-time.Hour)))
+				_, _, err := m.Charges(t.Context(), lateScan(t))
 				return err
 			},
 		} {

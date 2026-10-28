@@ -12,12 +12,15 @@ type Catalog interface {
 type Mapping struct {
 	Model catalog.ModelID
 	// Mapped is set when the name stands for a listed model. An endpoint of a name that is not mapped is not made, and
-	// never reaches routing (EndpointFacts.Mapped); the name waits in the queue of names to map.
+	// never reaches routing; the name waits in the queue of names to map.
 	Mapped bool
 	// Unverified is set when the name is only a candidate: the catalog says it is not evidence of the version, because
 	// the vendor may have moved it to a newer one. The endpoint is made but must pass the authenticity check before the
 	// mapping is confirmed (docs/domains/suppliers.md「供应商别名与待映射」).
 	Unverified bool
+	// Why is why the name is not mapped, Routable when it is: the catalog does not know the name, or knows the model
+	// and it is not on sale. It is written with the endpoint the name loses, so a person reading the row sees why.
+	Why Reason
 }
 
 // MapUpstream maps an upstream name by the first two steps of docs/domains/suppliers.md「供应商别名与待映射」: the
@@ -35,12 +38,16 @@ func MapUpstream(snap Catalog, alias *catalog.ModelID, name string) Mapping {
 	default:
 		rec, ok := snap.Recognize(name)
 		if !ok {
-			return Mapping{}
+			return Mapping{Why: Unmapped}
 		}
 		m.Model, m.Unverified = rec.Model, !rec.Exact
 	}
-	if model, ok := snap.Model(m.Model); !ok || model.Status != catalog.StatusListed {
-		return Mapping{}
+	model, ok := snap.Model(m.Model)
+	switch {
+	case !ok:
+		return Mapping{Why: Unmapped}
+	case model.Status != catalog.StatusListed:
+		return Mapping{Why: NotListed}
 	}
 	m.Mapped = true
 	return m

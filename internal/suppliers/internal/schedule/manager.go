@@ -13,10 +13,7 @@ import (
 // (the account is rejected, the supplier is down): by failing inside a task it is recorded as the task's failure, with
 // the backoff or the stop that goes with it, instead of ending the round before the engine has seen it. One login a
 // round, not one for each task. A refusal for want of allowance (adapter.ErrBucketsFull) is not kept: it asked nothing
-// of the supplier, and the tasks of the round after it must be able to open again then.
-//
-// It does not forward adapter.Rescanner, which a removal asks the Manager for; a removal opens the adapter before it
-// begins.
+// of the supplier, and later tasks of the round may open it when allowance is available.
 type openOnUse struct {
 	open    func() (adapter.Manager, error)
 	opened  bool

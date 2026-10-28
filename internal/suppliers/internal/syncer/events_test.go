@@ -53,7 +53,7 @@ func TestRoutingRelevantCatalogChangesAreEvents(t *testing.T) {
 	}
 }
 
-// TestBalanceAndFundingChangesAreEvents: a balance that rises over the reserve, or falls under it, and a change of
+// TestBalanceAndFundingChangesAreEvents: a balance that rises above zero, or falls to it, and a change of
 // where calls are paid from, are routing facts and each makes an event; a repeat makes none.
 func TestBalanceAndFundingChangesAreEvents(t *testing.T) {
 	t.Parallel()
@@ -76,40 +76,7 @@ func TestBalanceAndFundingChangesAreEvents(t *testing.T) {
 	step("100", adapter.FundingWallet, BalanceCrossed, BalanceRecovered)
 	step("100", adapter.FundingOther, FundingChanged)
 	step("100", adapter.FundingOther)
-	step("0.5", adapter.FundingOther, BalanceCrossed, BalanceLow)
-}
-
-// rescanning is a supplier that can be told to read again from a time.
-type rescanning struct {
-	*supplier
-	since []time.Time
-}
-
-func (r *rescanning) Rescan(since time.Time) adapter.ScanState {
-	r.since = append(r.since, since)
-	return adapter.ScanState(`{"rescan":true}`)
-}
-
-// TestRemovalReadsAgainFromBeforeTheGracePeriod: the second read of a removal starts from the time the removal began less
-// the grace period, not from where the adapter would go on, so a record that appears late within the grace period is
-// within it.
-func TestRemovalReadsAgainFromBeforeTheGracePeriod(t *testing.T) {
-	t.Parallel()
-	r := &rescanning{supplier: healthy()}
-	var seen []string
-	e, _, clk := engine(r)
-	r.charges = func(scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
-		seen = append(seen, string(scan))
-		return adapter.ChargePage{Done: true, Through: clk.now()}, scan, nil
-	}
-	started := clk.now()
-	removeAll(t, e, clk, &hooks{})
-	if len(r.since) != 1 || !r.since[0].Equal(started.Add(-30*time.Minute)) {
-		t.Errorf("rescanned from %v, want %v (the removal began, less the grace period)", r.since, started.Add(-30*time.Minute))
-	}
-	if !slices.Contains(seen, `{"rescan":true}`) {
-		t.Errorf("the rescan position was not the one read from: %v", seen)
-	}
+	step("0", adapter.FundingOther, BalanceCrossed, BalanceLow)
 }
 
 // TestEveryEventKindHasAName: events are stored and delivered under their names, so a kind without one would be written
@@ -117,14 +84,14 @@ func TestRemovalReadsAgainFromBeforeTheGracePeriod(t *testing.T) {
 func TestEveryEventKindHasAName(t *testing.T) {
 	t.Parallel()
 	seen := map[string]bool{}
-	for k := GroupAdded; k <= RemovalSlow; k++ {
+	for k := GroupAdded; k <= BalanceRecovered; k++ {
 		name := k.String()
 		if name == "" || seen[name] {
 			t.Errorf("kind %d is named %q, which is empty or another's", k, name)
 		}
 		seen[name] = true
 	}
-	if len(kindNames) != int(RemovalSlow)+1 {
-		t.Errorf("%d names for %d kinds", len(kindNames), int(RemovalSlow)+1)
+	if len(kindNames) != int(BalanceRecovered)+1 {
+		t.Errorf("%d names for %d kinds", len(kindNames), int(BalanceRecovered)+1)
 	}
 }

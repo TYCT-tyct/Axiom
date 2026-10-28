@@ -13,6 +13,7 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/reconcile"
 )
 
 // A request id of each system's own form: new-api's is the id it prints in X-Oneapi-Request-Id; sub2api's is "client:"
@@ -36,7 +37,7 @@ func (w *world) charge(ref, amount string, at time.Time) adapter.Charge {
 func (w *world) ingest(charges ...adapter.Charge) (nonWallet int) {
 	w.t.Helper()
 	w.tx(func(ctx context.Context, tx pg.Tx) (err error) {
-		nonWallet, err = RecordCharges(ctx, tx, w.supplier, charges)
+		nonWallet, err = reconcile.Ingest(ctx, tx, w.supplier, charges)
 		return err
 	})
 	return nonWallet

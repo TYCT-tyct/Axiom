@@ -177,7 +177,7 @@ func TestAggregateChat(t *testing.T) {
 				"index": 0.0, "logprobs": map[string]any{"content": []any{map[string]any{"token": "a"}}, "refusal": nil},
 				"finish_reason": "stop",
 				"message": map[string]any{
-					"role": "assistant", "content": "a\"bc", "refusal": "no", "reasoning": "th",
+					"role": "assistant", "content": "a\"bc", "refusal": "no", "reasoning": "th", "reasoning_content": "th",
 					"annotations": []any{map[string]any{"type": "url_citation", "url_citation": map[string]any{"url": "u"}}},
 					"reasoning_details": []any{
 						map[string]any{"type": "reasoning.text", "text": "think", "signature": "S", "format": "f", "index": 0.0},
@@ -355,6 +355,53 @@ func TestAggregateResponsesTypes(t *testing.T) {
 	}
 }
 
+// TestAggregateMessagesTypes: a block's type counts as the type it spells, escapes included, so a delta of that kind
+// is the block's own; the type reaches the reply as the upstream wrote it, and one that is null names no kind of block
+// and is written as it came (README.md「非流式聚合」).
+func TestAggregateMessagesTypes(t *testing.T) {
+	head := messageStart(`{"input_tokens":3}`)
+	tail := messageDelta(`{"output_tokens":2}`) + messageStop
+	for _, c := range []struct {
+		name   string
+		stream string
+		want   map[string]any
+	}{
+		{
+			"an escaped text type",
+			head + startBlock(0, `{"type":"te\u0078t","text":""}`) + deltaOf(0, `{"type":"text_delta","text":"Hi"}`) + stopBlock(0) + tail,
+			map[string]any{"type": "text", "text": "Hi"},
+		},
+		{
+			"an escaped thinking type",
+			head + startBlock(0, `{"type":"think\u0069ng","thinking":"","signature":""}`) +
+				deltaOf(0, `{"type":"thinking_delta","thinking":"hm"}`) + deltaOf(0, `{"type":"signature_delta","signature":"S"}`) + stopBlock(0) + tail,
+			map[string]any{"type": "thinking", "thinking": "hm", "signature": "S"},
+		},
+		{
+			"an escaped tool use type",
+			head + startBlock(0, `{"type":"tool_\u0075se","id":"t","name":"f","input":{}}`) + input(0, `{\"q\":1}`) + stopBlock(0) + tail,
+			map[string]any{"type": "tool_use", "id": "t", "name": "f", "input": map[string]any{"q": 1.0}},
+		},
+		{
+			"an escaped server tool use type",
+			head + startBlock(0, `{"type":"server_tool_\u0075se","id":"s","name":"web_search","input":{}}`) + input(0, `{\"query\":\"q\"}`) + stopBlock(0) + tail,
+			map[string]any{"type": "server_tool_use", "id": "s", "name": "web_search", "input": map[string]any{"query": "q"}},
+		},
+		{
+			"a type that is null",
+			head + startBlock(0, `{"type":null,"text":"x"}`) + stopBlock(0) + tail,
+			map[string]any{"type": nil, "text": "x"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			content := objects(aggregateAll(t, protocol.Messages, c.stream)["content"])
+			if len(content) != 1 || !cmp.Equal(content[0], c.want) {
+				t.Errorf("content %v, want %v", content, c.want)
+			}
+		})
+	}
+}
+
 // finishOnly is a Chat stream of n choices that only finish, per chunk of them.
 func finishOnly(n, per int) string {
 	var s strings.Builder
@@ -409,5 +456,22 @@ func TestAggregateChatHeld(t *testing.T) {
 				t.Errorf("the node's budget is %d after the reply, was %d", mem.Left(), node)
 			}
 		})
+	}
+}
+
+// TestAggregateChatKeepsTheCallIdentity: DashScope and DeepSeek write "id":"" and "name":"" on the fragments of a call
+// after the first, which carry only arguments; the call keeps the id and name it started with (sub2api drops the same
+// filler, openai_gateway_cc_tool_call_identity.go).
+func TestAggregateChatKeepsTheCallIdentity(t *testing.T) {
+	stream := chatChunk(`[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_1","type":"function",`+
+		`"function":{"name":"get","arguments":""}}]},"finish_reason":null}]`) +
+		chatChunk(`[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"","function":{"name":"","arguments":"{\"a\""}}]},"finish_reason":null}]`) +
+		chatChunk(`[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":":1}"}}]},"finish_reason":null}]`) +
+		chatChunk(`[{"index":0,"delta":{},"finish_reason":"tool_calls"}]`) + chatDone
+	got := aggregateAll(t, protocol.Chat, stream)
+	calls := listOf(obj(obj(listOf(got["choices"])[0])["message"])["tool_calls"])
+	want := []any{map[string]any{"id": "call_1", "type": "function", "function": map[string]any{"name": "get", "arguments": `{"a":1}`}}}
+	if diff := cmp.Diff(want, calls); diff != "" {
+		t.Errorf("tool calls (-want +got):\n%s", diff)
 	}
 }

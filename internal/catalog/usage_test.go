@@ -26,6 +26,26 @@ func TestNewUsage(t *testing.T) {
 	}
 }
 
+// The stored names round-trip: every value parses back from its String, and an unknown name is an error.
+func TestParseNames(t *testing.T) {
+	for item := range catalog.NumItems {
+		if got, err := catalog.ParseItem(item.String()); err != nil || got != item {
+			t.Errorf("ParseItem(%q) = %v, %v; want %v", item.String(), got, err, item)
+		}
+	}
+	for tier := catalog.ServiceTierStandard; tier <= catalog.ServiceTierFast; tier++ {
+		if got, err := catalog.ParseServiceTier(tier.String()); err != nil || got != tier {
+			t.Errorf("ParseServiceTier(%q) = %v, %v; want %v", tier.String(), got, err, tier)
+		}
+	}
+	if got, err := catalog.ParseItem("no_such_item"); err == nil {
+		t.Errorf("ParseItem of an unknown name = %v, want an error", got)
+	}
+	if got, err := catalog.ParseServiceTier("no_such_tier"); err == nil {
+		t.Errorf("ParseServiceTier of an unknown name = %v, want an error", got)
+	}
+}
+
 // Usage the item table does not map, and a service tier value protocol does not recognise, reach billing as they were
 // reported instead of being dropped or guessed (README.md「计费项与用量」); a Usage does not change once made.
 func TestUsageUnknown(t *testing.T) {

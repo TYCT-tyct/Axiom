@@ -8,6 +8,7 @@ import (
 	"uuid"
 
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -46,8 +47,8 @@ type Hold struct {
 	keyWindow       time.Time
 }
 
-// lockedPrices are the kept entries' schedules in canonical JSON by route index, "" for a dropped entry: settlement,
-// cleanup and corrections price usage with them, whichever process runs them.
+// lockedPrices are the kept entries' schedules in canonical JSON by route index, "" for a dropped entry: settlement and
+// cleanup price usage with them, whichever process runs them.
 func lockedPrices(q []Quotable, kept []int) ([]string, error) {
 	prices := make([]string, len(q))
 	for _, i := range kept {
@@ -103,12 +104,19 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		return nil, nil, err
 	}
 	locked, models := make([]string, len(q)), make([]uuid.UUID, len(q))
+	endpoints := make([]uuid.UUID, len(q))
 	for _, i := range r.Kept {
-		locked[i], models[i] = fallbacks[i], uuid.UUID(q[i].Model.ID)
+		locked[i], models[i], endpoints[i] = fallbacks[i], uuid.UUID(q[i].Model.ID), q[i].Endpoint
 	}
 	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
+	rates := frozenRates(q, r.Kept)
+	rateJSON, err := jsonx.MarshalCanonical(rates)
+	if err != nil {
+		return nil, nil, fmt.Errorf("billing: freeze exchange rates: %w", err)
+	}
 	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
-		Prices: prices, Fallbacks: locked, Models: models,
+		ExchangeRates: rateJSON,
+		Prices:        prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
 		LifetimeSeconds: b.config.Lifetime.Seconds(),
@@ -116,6 +124,21 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		return nil, nil, fmt.Errorf("billing: write the reservation: %w", err)
 	}
 	return h, r.Kept, nil
+}
+
+// frozenRates keeps missing pairs too, so an absent rate cannot be filled with a later configuration.
+func frozenRates(q []Quotable, kept []int) []platform.ExchangeRate {
+	rates := []platform.ExchangeRate{}
+	seen := map[[2]string]bool{}
+	for _, i := range kept {
+		r := q[i].Exchange
+		pair := [2]string{r.Base, r.Quote}
+		if r.Base != "" && !seen[pair] {
+			rates = append(rates, r)
+			seen[pair] = true
+		}
+	}
+	return rates
 }
 
 // Extend makes h's reservation cover the cumulative target r.Target, in a transaction of its own (README.md「追加与结算」):
@@ -248,7 +271,7 @@ func (a Admitted) usage(ctx context.Context, tx pg.Tx, day *time.Time) (ReadUsag
 	return u, nil
 }
 
-// available is what each source still allows: the balance less its reservations down to the floor, and each limit
+// available is what each source still allows: the balance less its reservations and freezes down to the floor, and each limit
 // less what its window has spent and holds reserved. Exact, so no combination of stored values can wrap.
 func (a Admitted) available(balance LockBalanceRow, workspaceUsed, keyUsed int64) []Available {
 	left := func(have int64, less ...int64) platform.Exact {
@@ -258,7 +281,7 @@ func (a Admitted) available(balance LockBalanceRow, workspaceUsed, keyUsed int64
 		}
 		return e
 	}
-	avail := []Available{{SourceBalance, left(balance.Balance, balance.Reserved, balance.Floor)}}
+	avail := []Available{{SourceBalance, left(balance.Balance, balance.Reserved, balance.Frozen, balance.Floor)}}
 	if a.WorkspaceBudget != nil {
 		avail = append(avail, Available{SourceWorkspace, left(a.WorkspaceBudget.Amount, workspaceUsed)})
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/payments"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
@@ -46,17 +47,14 @@ type consoleFixture struct {
 	routes http.Handler
 	clock  *testClock
 	logs   *bytes.Buffer
+	// pay is the payments module behind the top-up operations, with the one channel kind a test has: gateway.
+	pay     *payments.Payments
+	gateway *fakeGateway
 }
 
 func newConsoleFixture(t *testing.T) consoleFixture {
 	t.Helper()
-	c := newCommandLine(t)
-	if _, err := c.site(siteArgs...); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.user(ownerPassword+"\n", "create", "--email", ownerEmail); err != nil {
-		t.Fatal(err)
-	}
+	c, _ := ownerFixture.get(t, buildOwnerDatabase)
 	return startNode(c, &testClock{now: time.Now()}, 0)
 }
 
@@ -74,10 +72,17 @@ func startNode(c commandLine, clock *testClock, deadline time.Duration) consoleF
 	if err := svc.Load(c.t.Context(), slog.New(slog.DiscardHandler)); err != nil {
 		c.t.Fatal(err)
 	}
+	gateway := new(fakeGateway)
+	pay, err := payments.Open(payments.Config{
+		DB: c.db, Platform: pg.PlatformScope(), Keyring: masterKeys(c.t), Plugins: []payments.Plugin{gatewayPlugin{gateway}},
+	})
+	if err != nil {
+		c.t.Fatal(err)
+	}
 	logs := new(bytes.Buffer)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	routes := publicRoutes(consoleAPI{version: "test", accounts: svc, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
-	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs}
+	routes := publicRoutes(consoleAPI{version: "test", accounts: svc, payments: pay, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
+	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, pay: pay, gateway: gateway}
 }
 
 // restarted is a new node on the same database, as the reload loop would make the old one after 30 seconds: it sees

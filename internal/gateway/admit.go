@@ -11,7 +11,6 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/pg"
-	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
 
@@ -41,8 +40,10 @@ func (h *Handler) admit(ctx context.Context, c *Call) error {
 			deadline = time.Now().Add(h.Limits.cfg.QueueWait)
 		}
 		if err := h.Limits.Queue.Wait(ctx, keyKey(c.caller), epoch, deadline); err != nil {
-			if errors.Is(err, ErrRateLimited) {
-				return &Refusal{Status: ErrRateLimited.Status, Code: ErrRateLimited.Code, RetryAfter: seconds(wait.after)}
+			if limit, ok := errors.AsType[*Refusal](err); ok {
+				full := *limit
+				full.RetryAfter = seconds(wait.after)
+				return &full
 			}
 			return err
 		}
@@ -53,15 +54,13 @@ func (h *Handler) admit(ctx context.Context, c *Call) error {
 func seconds(d time.Duration) int { return max(1, int((d+time.Second-1)/time.Second)) }
 
 func (h *Handler) admitOnce(ctx context.Context, c *Call) error {
-	ctx, cancel := context.WithTimeout(ctx, h.Limits.cfg.AdmissionBudget)
-	defer cancel()
-	release, err := h.Limits.Funds.Admit(ctx, accountKey(c.caller))
+	ctx, release, err := h.Limits.Funds.Admit(ctx, accountKey(c.caller))
 	if err != nil {
 		return err
 	}
 	defer release()
 	reserved := false
-	err = h.admitTx(ctx, c.caller, accounts.AdmitRequest{Domain: c.host, ClientIP: c.ip}, func(tx pg.Tx, a accounts.Admission) error {
+	err = h.admitDB(ctx, c.caller, accounts.AdmitRequest{Domain: c.host, ClientIP: c.ip}, func(tx pg.Tx, a accounts.Admission) error {
 		if err := h.reserve(ctx, tx, a, c); err != nil {
 			return err
 		}
@@ -81,13 +80,12 @@ func (h *Handler) admitOnce(ctx context.Context, c *Call) error {
 // or the request is refused 402.
 func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c *Call) error {
 	if c.rate > h.Limits.cfg.KeyRate {
-		return ErrRateLimited
+		return errKeyRate
 	}
-	plan, wait, err := h.Router.Plan(routing.Input{
+	plan, wait, err := h.Models.plan(h.Router, routing.Input{
 		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,
-		// M1 converts a Chat client's request to a Messages or Responses endpoint and nothing else: a request of another
-		// format is served only by an endpoint that speaks it (docs/domains/gateway.md「转发规则」).
-		NativeOnly: c.Format != protocol.Chat,
+		// Compaction has no Chat counterpart; generation can use the protocol conversions.
+		NativeOnly: c.Compact,
 		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full.
 		NoSegments: c.Compact,
 	})
@@ -97,6 +95,7 @@ func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c
 	if err != nil {
 		return err
 	}
+	h.outage.recovered(depRouting)
 	admitted := billingAdmitted(a, c)
 	hold, kept, err := h.Billing.Reserve(ctx, tx, admitted, c.ID, routing.DemandOf(&c.Request), quotables(plan.Entries))
 	if err != nil {
@@ -148,7 +147,11 @@ func limitOf(amount int64, reset string, ok bool) *billing.Limit {
 func quotables(entries []routing.Entry) []billing.Quotable {
 	q := make([]billing.Quotable, len(entries))
 	for i, e := range entries {
-		q[i] = billing.Quotable{Price: e.Price.Schedule, Model: e.Limits, MaxOutput: e.MaxOutput, Segmentable: e.Segmentable}
+		q[i] = billing.Quotable{
+			Exchange: e.Exchange,
+			Price:    e.Price.Schedule, Model: e.Limits, MaxOutput: e.MaxOutput, Segmentable: e.Segmentable,
+			Endpoint: uuid.UUID(e.Endpoint),
+		}
 	}
 	return q
 }
@@ -186,7 +189,7 @@ func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
 		return err
 	}
 	defer release()
-	return h.Billing.SettleOrphan(ctx, c.Admitted, c.ID)
+	return h.Billing.SettleOrphan(pg.CompletionContext(ctx), c.Admitted, c.ID)
 }
 
 // Drain waits for the settlements still running in the background, until ctx ends; then it stops them, and what is

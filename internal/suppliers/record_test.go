@@ -16,6 +16,17 @@ var (
 	insufficientPrivilege  = "42501"
 )
 
+func newRequest() platform.RequestID { return platform.RequestID(uuid.NewV7()) }
+
+// receipt is what an attempt of this world comes back with: its supplier, credential, endpoint and schedule, the
+// supplier's charge reference and when it was priced.
+func (w *world) receipt(ref string) AttemptReceipt {
+	return AttemptReceipt{
+		supplier: w.supplier, credential: w.credential, endpoint: w.endpoint, schedule: w.sc,
+		ref: ref, pricedAt: w.clock.now(),
+	}
+}
+
 func usageOf100x50(t *testing.T) []catalog.Usage {
 	t.Helper()
 	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 100, catalog.ItemOutput: 50}, catalog.ServiceTierStandard, nil)
@@ -46,6 +57,44 @@ func (w *world) count(sql string, args ...any) (n int) {
 	w.t.Helper()
 	w.tx(func(ctx context.Context, tx pg.Tx) error { return tx.QueryRow(ctx, sql, args...).Scan(&n) })
 	return n
+}
+
+// A stored attempt shows the prompt the upstream reported beside the items: 100 prompt tokens that are 80 cache reads and
+// 80 cache writes would otherwise read as 160 input.
+func TestUsageOfKeepsPhysicalInput(t *testing.T) {
+	t.Parallel()
+	overlap, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, catalog.ItemCacheWrite: 80}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := overlap.WithPhysicalInput(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero, err := overlap.Recount(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zero, err = zero.WithPhysicalInput(0); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		segments []catalog.Usage
+		want     string
+	}{
+		{"one sampling", []catalog.Usage{physical}, `{"items":{"cache_read":80,"cache_write":80},"physical_input":100,"tier":"standard","unknown":[]}`},
+		{"two samplings add up", []catalog.Usage{physical, physical}, `{"items":{"cache_read":160,"cache_write":160},"physical_input":200,"tier":"standard","unknown":[]}`},
+		{"no total reported", []catalog.Usage{overlap}, `{"items":{"cache_read":80,"cache_write":80},"tier":"standard","unknown":[]}`},
+		{"an explicit zero is not absent", []catalog.Usage{zero}, `{"items":{},"physical_input":0,"tier":"standard","unknown":[]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := usageOf(tc.segments)
+			if err != nil || string(got) != tc.want {
+				t.Errorf("usageOf = %s, %v; want %s", got, err, tc.want)
+			}
+		})
+	}
 }
 
 // TestRecordingAttemptsIsOneStatementAndRepeatable: a request's attempts are written together with their cost and key;
@@ -136,7 +185,7 @@ func TestLostRequestsAreOnlyEverAdded(t *testing.T) {
 		}
 	}
 	for range 2 {
-		if err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return ResolveLostRequest(t.Context(), tx, id, siteA, accountA) }); err != nil {
+		if err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return ResolveLostRequest(t.Context(), tx, id) }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -159,5 +208,20 @@ func TestLostRequestsAreOnlyEverAdded(t *testing.T) {
 	})
 	if pg.SQLState(err) != insufficientPrivilege {
 		t.Errorf("another tenant's lost request: %v, want row-level security to refuse", err)
+	}
+}
+
+// TestOnlyALostRequestCanBeResolved: a resolution takes its tenant from the lost request, so one for a request never
+// recorded as lost writes nothing, and says so rather than reporting a resolution that is not there.
+func TestOnlyALostRequestCanBeResolved(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	own := pg.NewScope(false, []uuid.UUID{siteA}, nil)
+	err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return ResolveLostRequest(t.Context(), tx, newRequest()) })
+	if err == nil {
+		t.Error("resolving a request that was never recorded as lost succeeded, want an error")
+	}
+	if n := w.count("SELECT count(*) FROM suppliers.lost_request_resolutions"); n != 0 {
+		t.Errorf("%d resolutions written for a request that was never lost", n)
 	}
 }

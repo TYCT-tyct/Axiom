@@ -165,6 +165,12 @@ func newSupplierServer(t *testing.T) *supplierServer {
 			rw.WriteHeader(http.StatusUnauthorized)
 		case "failed":
 			rw.WriteHeader(http.StatusInternalServerError)
+		case "rejected":
+			rw.WriteHeader(http.StatusBadRequest)
+			_, _ = rw.Write([]byte(`{"error":{"message":"max_tokens must be above 0 (Bearer sk-test-key, see https://relay.example/docs) (request id: 2026)","type":"invalid_request_error","param":"max_tokens","code":"invalid_value"}}`)) //nolint:errcheck // a test server
+		case "rejected-without-words":
+			rw.WriteHeader(http.StatusBadRequest)
+			_, _ = rw.Write([]byte(`<html>Bad Request</html>`)) //nolint:errcheck // a test server
 		default:
 			rw.Header().Set("X-Ref", "ref-1")
 			_, _ = rw.Write([]byte("ok")) //nolint:errcheck // a test server
@@ -302,6 +308,30 @@ func TestSendDecidesWhetherTheSupplierRanTheRequest(t *testing.T) {
 	}
 }
 
+// TestARefusedRequestKeepsWhatTheSupplierSaidOfIt: for a request the supplier refuses, the failure carries the error
+// object's words without what names the supplier (its address, its request id, the key it was called with); a body that
+// says nothing, and the failures of any other scope, carry none.
+func TestARefusedRequestKeepsWhatTheSupplierSaidOfIt(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 4)
+	server := newSupplierServer(t)
+	w.pointAt(server.URL)
+	want := &protocol.Rejection{Message: "max_tokens must be above 0 (Bearer [hidden], see [address])", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value"}
+	for _, c := range []struct {
+		name, body string
+		want       *protocol.Rejection
+	}{
+		{"words", "rejected", want},
+		{"no words", "rejected-without-words", nil},
+		{"another scope", "failed", nil},
+	} {
+		_, f, _ := w.send(protocol.Chat, c.body)
+		if f == nil || cmp.Diff(c.want, f.Rejection) != "" {
+			t.Errorf("%s: %+v, want %+v", c.name, f, c.want)
+		}
+	}
+}
+
 // TestMeasuredCancellationReplacesTheDefault: an endpoint behaves as its adapter says until quality has measured it.
 func TestMeasuredCancellationReplacesTheDefault(t *testing.T) {
 	t.Parallel()
@@ -424,7 +454,7 @@ func TestCallsDoNotWaitForAReload(t *testing.T) {
 			return
 		}
 		_ = a.Policy()
-		if _, err := w.svc.Cost(a.Receipt(), nil); err != nil {
+		if _, err := w.svc.Cost(a.receipt(), nil); err != nil {
 			t.Error(err)
 		}
 		w.svc.SetMeasuredCancels(w.endpoint, true)
@@ -454,7 +484,7 @@ func TestReloadingWhileCallsRunIsSafe(t *testing.T) {
 				}
 				if a, err := w.svc.Acquire(w.endpoint); err == nil {
 					_ = a.Policy()
-					_, _ = w.svc.Cost(a.Receipt(), nil) //nolint:errcheck // the point is that it runs
+					_, _ = w.svc.Cost(a.receipt(), nil) //nolint:errcheck // the point is that it runs
 					a.Done()
 				}
 			}

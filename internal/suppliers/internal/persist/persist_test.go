@@ -14,6 +14,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -54,6 +55,7 @@ type cluster struct {
 	database pgtest.Database
 	keys     *secret.Keyring
 	clock    *clock
+	catalog  *catalog.Catalog
 	supplier uuid.UUID
 }
 
@@ -67,7 +69,15 @@ func newCluster(t *testing.T) *cluster {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &cluster{t: t, database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}), keys: keys, clock: &clock{t: t0}}
+	c := &cluster{
+		t: t, keys: keys, clock: &clock{t: t0},
+		database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}, catalog.Migrations),
+	}
+	cat, err := catalog.Open(c.open(), platform, catalog.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.catalog = cat
 	db := c.open()
 	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		var err error
@@ -102,7 +112,9 @@ func (c *cluster) open() *pg.DB {
 
 func (c *cluster) node(holder string) *persist.Node {
 	c.t.Helper()
-	n, err := persist.New(persist.Config{DB: c.open(), Scope: platform, Keys: c.keys, Holder: holder, LeaseTTL: ttl, Now: c.clock.now})
+	n, err := persist.New(persist.Config{
+		DB: c.open(), Scope: platform, Keys: c.keys, Holder: holder, LeaseTTL: ttl, Now: c.clock.now, Catalog: c.catalog,
+	})
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -219,10 +231,13 @@ func TestAListingPositionIsKeptForAnotherNodeAndOnlyInItsGeneration(t *testing.T
 		t.Fatal(err)
 	}
 	state, listing := c.stored()
-	if strings.Contains(state, "OfferAt") || strings.Contains(state, "KeysAt") || !strings.Contains(listing, `"offer"`) || !strings.Contains(listing, `"keys"`) {
+	if strings.Contains(state, "OfferAt") || strings.Contains(state, "KeysAt") {
 		t.Errorf("the state holds a listing position (%s), or the column does not hold it (%s)", state, listing)
 	}
 
+	if !strings.Contains(listing, `"keys"`) {
+		t.Fatal("no keys position stored")
+	}
 	// Another node reads the positions as the node before wrote them.
 	c.clock.advance(ttl + time.Second)
 	st, err := c.acquire(c.node("b")).Store().Load(t.Context())
@@ -243,26 +258,27 @@ func TestAListingPositionIsKeptForAnotherNodeAndOnlyInItsGeneration(t *testing.T
 	}
 }
 
-// TestAListingThatEndedLeavesNoPosition: the reads that end the two listings clear their positions, and the column is
-// empty again, rather than keeping empty positions the encoder wrote for a position it was given as nil.
-func TestAListingThatEndedLeavesNoPosition(t *testing.T) {
+func TestAnOldNodeCommitInvalidatesListingPositions(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t)
-	kept := stateAt(1)
-	kept.OfferAt, kept.KeysAt = adapter.Listing(`{"page":2}`), adapter.Listing(`{"page":3}`)
-	if err := c.acquire(c.node("a")).Store().Commit(t.Context(), 0, syncer.Commit{State: kept}); err != nil {
+	session := c.acquire(c.node("new"))
+	st := stateAt(1)
+	st.KeysAt = adapter.Listing(`{"page":2}`)
+	if err := session.Store().Commit(t.Context(), 0, syncer.Commit{State: st}); err != nil {
 		t.Fatal(err)
 	}
-	c.clock.advance(ttl + time.Second)
-	if err := c.acquire(c.node("a")).Store().Commit(t.Context(), 1, syncer.Commit{State: stateAt(2)}); err != nil {
+	if err := c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), "UPDATE suppliers.sync_states SET version = version + 1 WHERE supplier_id = $1", c.supplier)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, listing := c.stored(); listing != "" {
-		t.Errorf("the column after both listings ended: %s, want none", listing)
+	loaded, err := session.Store().Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
-	c.clock.advance(ttl + time.Second)
-	if st, err := c.acquire(c.node("b")).Store().Load(t.Context()); err != nil || st.OfferAt != nil || st.KeysAt != nil {
-		t.Errorf("the positions another node read: %q, %q, %v; want none", st.OfferAt, st.KeysAt, err)
+	if len(loaded.KeysAt) != 0 {
+		t.Fatalf("resumed an old position after a legacy commit: %q", loaded.KeysAt)
 	}
 }
 
@@ -345,36 +361,6 @@ func TestAStepIsStoredWholeOrNotAtAll(t *testing.T) {
 	})
 	if err != nil || balance != "42" || status != "active" {
 		t.Errorf("the supplier after the step: balance %q, status %q, %v; want 42 and active", balance, status, err)
-	}
-}
-
-// TestLoadDerivesTheRemovalAlert: whether the catch-up alert was sent is not in the state (an older node refuses a member
-// it does not name), so Load reads it back from the removal_slow event the alert wrote. A removal that has not alerted
-// loads with it clear.
-func TestLoadDerivesTheRemovalAlert(t *testing.T) {
-	t.Parallel()
-	c := newCluster(t)
-	s := c.acquire(c.node("a"))
-	removal := func(version int64, alerted bool) syncer.Commit {
-		st := stateAt(version)
-		st.Removal, st.RemovalAt = syncer.StepFinalScan, t0
-		commit := syncer.Commit{State: st}
-		if alerted {
-			commit.Events = []syncer.Event{{Kind: syncer.RemovalSlow, Why: "the charge records are still being read"}}
-		}
-		return commit
-	}
-	if err := s.Store().Commit(t.Context(), 0, removal(1, false)); err != nil {
-		t.Fatal(err)
-	}
-	if st, err := s.Store().Load(t.Context()); err != nil || st.CatchUpNotified {
-		t.Fatalf("the state before the alert: %+v, %v; want it not alerted", st, err)
-	}
-	if err := s.Store().Commit(t.Context(), 1, removal(2, true)); err != nil {
-		t.Fatal(err)
-	}
-	if st, err := s.Store().Load(t.Context()); err != nil || !st.CatchUpNotified {
-		t.Errorf("the state after the alert: %+v, %v; want it alerted", st, err)
 	}
 }
 

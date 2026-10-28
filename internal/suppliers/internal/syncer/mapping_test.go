@@ -52,21 +52,16 @@ func TestMapUpstream(t *testing.T) {
 		"undated name is a candidate": {nil, "claude-sonnet-4-5", Mapping{Model: id(1), Mapped: true, Unverified: true}},
 		"alias":                       {&alias, "sonnet:free", Mapping{Model: id(1), Mapped: true}},
 		"alias beats recognition":     {&alias, "gpt-3", Mapping{Model: id(1), Mapped: true}},
-		"unknown name":                {nil, "mystery-model", Mapping{}},
-		"suffix":                      {nil, "claude-sonnet-4-5:free", Mapping{}},
-		"retired model":               {nil, "gpt-3", Mapping{}},
-		"alias to a retired model":    {&retired, "x", Mapping{}},
-		"alias to a missing model":    {&unknown, "x", Mapping{}},
+		"unknown name":                {nil, "mystery-model", Mapping{Why: Unmapped}},
+		"suffix":                      {nil, "claude-sonnet-4-5:free", Mapping{Why: Unmapped}},
+		"retired model":               {nil, "gpt-3", Mapping{Why: NotListed}},
+		"alias to a retired model":    {&retired, "x", Mapping{Why: NotListed}},
+		"alias to a missing model":    {&unknown, "x", Mapping{Why: Unmapped}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if got := MapUpstream(c, tc.alias, tc.name); got != tc.want {
 				t.Errorf("MapUpstream(%q) = %+v, want %+v", tc.name, got, tc.want)
-			}
-			// what is not mapped is not routable
-			facts := EndpointFacts{Normal: true, Wallet: true, Balance: "10", Reserve: "1", GroupSelected: true, Mapped: MapUpstream(c, tc.alias, tc.name).Mapped, CostKnown: true, UsableCredentials: 1}
-			if got, want := facts.Check(), map[bool]Reason{true: Routable, false: Unmapped}[tc.want.Mapped]; got != want {
-				t.Errorf("Check = %q, want %q", got, want)
 			}
 		})
 	}

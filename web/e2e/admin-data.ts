@@ -11,6 +11,7 @@ export type Schemas = components["schemas"];
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
   settings: Schemas["SiteSettingsView"];
+  keyLimits: Schemas["KeyLimitsView"];
   tiers: Schemas["TierRef"][];
   users: Schemas["UserSummary"][];
   accounts: Map<string, Schemas["AccountDetail"]>;
@@ -80,6 +81,7 @@ function anAccount(user: Schemas["UserSummary"], over: Partial<Schemas["AccountD
       available: nano("11750000000"),
       spent_this_month: nano("3141592653"),
     },
+    key_limits: { limits: {}, effective: { max_keys: 100, creations_per_hour: 50 } },
     created_at: user.created_at,
     ...over,
   } satisfies Schemas["AccountDetail"];
@@ -118,6 +120,29 @@ function aGroup(supplier: number, n: number, over: Partial<Schemas["SupplierGrou
   };
 }
 
+// The endpoints of a supplier's groups, by upstream name as the server lists them. The name decides what a test of it
+// finds (admin-supply.ts); both groups offer gpt-test-mini, at their own cost; the last two cannot be called, so they
+// offer no test.
+function endpoints(supplier: number, groups: Schemas["SupplierGroup"][]): Schemas["SupplierEndpoint"][] {
+  const rows = [
+    ["broken-stream-model", 0, ["chat"], "known", true],
+    ["gpt-test-mini", 0, ["messages", "responses", "chat"], "known", true],
+    ["gpt-test-mini", 1, ["chat"], "known", true],
+    ["rate-limited-model", 0, ["messages"], "known", true],
+    ["retired-model", 0, ["chat"], "known", false],
+    ["unpriced-model", 0, ["responses"], "unknown", true],
+  ] as const;
+  return rows.map(([name, group, formats, cost_state, enabled], i) => ({
+    id: uuid(9, supplier * 100 + i),
+    group_id: groups[group]?.id ?? "",
+    model_id: uuid(5, rows.findIndex(([other]) => other === name) + 1),
+    upstream_name: name,
+    formats: [...formats],
+    cost_state,
+    enabled,
+  }));
+}
+
 function aDetail(n: number, over: Partial<Schemas["Supplier"]> = {}): Schemas["SupplierDetail"] {
   const supplier = aSupplier(n, over);
   const groups = [aGroup(n, 1), aGroup(n, 2)];
@@ -134,6 +159,7 @@ function aDetail(n: number, over: Partial<Schemas["Supplier"]> = {}): Schemas["S
       },
     ],
     unbound_keys: [{ ref: `key-${n}-b`, group_ref: "group-2", status: "active" }],
+    endpoints: endpoints(n, groups),
   };
 }
 
@@ -224,7 +250,7 @@ function rules(): Schemas["PricingRule"][] {
       enabled: true,
       target: { kind: "model", id: uuid(5, 1) },
       audience: { kind: "tier", id: tierId(2) },
-      method: { kind: "cost_plus", margin_ratio: "0.3" },
+      method: { kind: "reference_multiplier", multiplier: "1.3", currency_conversion: "face" },
       constraints: { min_margin_ratio: "0.1" },
     },
     {
@@ -233,7 +259,7 @@ function rules(): Schemas["PricingRule"][] {
       enabled: true,
       target: { kind: "author", id: "anthropic" },
       audience: { kind: "all" },
-      method: { kind: "reference_multiplier", multiplier: "1.1", currency_conversion: "exchange" },
+      method: { kind: "reference_multiplier", multiplier: "1.1", currency_conversion: "face" },
     },
     {
       ...base,
@@ -241,7 +267,7 @@ function rules(): Schemas["PricingRule"][] {
       enabled: false,
       target: { kind: "all" },
       audience: { kind: "all" },
-      method: { kind: "cost_plus", markup_ratio: "0.2" },
+      method: { kind: "reference_multiplier", multiplier: "1.2", currency_conversion: "face" },
     },
   ];
 }
@@ -262,6 +288,7 @@ export function usualState(): AdminState {
         new_key_daily_limit: usd("10"),
       },
     },
+    keyLimits: { limits: { max_keys: 20 }, effective: { max_keys: 20, creations_per_hour: 50 } },
     tiers,
     users,
     accounts: new Map([own, ...users].map((user) => [user.account_id, anAccount(user)])),
@@ -314,6 +341,23 @@ export function worstState(): AdminState {
     }),
     ...range(60).map((n) => aDetail(n + 1)),
   ];
+  const [worst] = state.suppliers;
+  if (worst) {
+    const [first, ...rest] = worst.endpoints;
+    worst.endpoints = [
+      ...(first ? [{ ...first, upstream_name: long("an-upstream-model-name-", 200) }] : []),
+      ...rest,
+      ...range(150).map((n) => ({
+        id: uuid(9, 10_000 + n),
+        group_id: worst.groups[0]?.id ?? "",
+        model_id: uuid(5, 1),
+        upstream_name: `model-${n}`,
+        formats: ["messages" as const, "responses" as const, "chat" as const],
+        cost_state: "known" as const,
+        enabled: true,
+      })),
+    ];
+  }
   const slug = `${long("a-vendor-with-a-long-name", 40).replace(/-$/, "a")}/${long("model-name-", 99)}@${long("v", 39)}`;
   state.models = [
     aModel(1, { slug: slug as Schemas["ModelSlug"], names: [{ name: long("alias-", 200), visibility: "internal" }] }),

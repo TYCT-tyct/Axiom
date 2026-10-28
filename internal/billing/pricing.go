@@ -43,6 +43,19 @@ type Selector struct {
 	ID   string `json:"id,omitempty"`
 }
 
+// Prices reports whether the rule prices for an account of a tier: a rule for an account prices that account alone, one
+// for a tier accounts of that tier, and one for all, everyone. A zero account or tier stands for an audience that has
+// none, so only a rule for all prices it. It is what a pricing preview asks to keep the rules of the audience it shows.
+func (s Selector) Prices(account accounts.AccountID, tier accounts.TierID) bool {
+	switch s.Kind {
+	case "account":
+		return account != accounts.AccountID{} && s.ID == account.TypeID()
+	case "tier":
+		return tier != accounts.TierID{} && s.ID == tier.TypeID()
+	}
+	return true
+}
+
 // Method is how a rule sets the price. Which members a kind uses is checked by Check; the others are absent.
 type Method struct {
 	Kind               string    `json:"kind"`
@@ -54,7 +67,8 @@ type Method struct {
 	Schedule           jsonx.Raw `json:"schedule,omitempty"`
 }
 
-// Constraints are limits on the price a rule sets, as ratios.
+// Constraints are limits on the price a rule sets, as ratios. This release does not apply them (#234): Check refuses a
+// rule that carries one, and a stored one refuses to price the models it matches (Sell).
 type Constraints struct {
 	MinMarginRatio    *string `json:"min_margin_ratio,omitempty"`
 	ReferenceMinRatio *string `json:"reference_min_ratio,omitempty"`
@@ -90,6 +104,10 @@ var (
 	audienceKinds = []string{"account", "tier", "all"}
 )
 
+// honouredTargets are the targets a rule prices in M1 (sale.go pricesModel): the others are chosen per endpoint, which
+// the routing snapshot does not have yet.
+var honouredTargets = []string{"model", "author", "all"}
+
 // Check reports the first part of the rule that breaks a rule of rules. currency is the site's: a fixed price is in it.
 func (in RuleInput) Check(currency platform.Currency) error {
 	if err := checkTarget(in.Target); err != nil {
@@ -123,27 +141,27 @@ func checkTarget(t Selector) error {
 	if !valid {
 		return &RuleError{"target/id", "is not the ID of a " + t.Kind + ", and is absent only for all"}
 	}
+	if !slices.Contains(honouredTargets, t.Kind) {
+		return &RuleError{"target/kind", "can only be a model, an author or all in this release: a rule for an endpoint, group, supplier or source type would be accepted and then not applied"}
+	}
 	return nil
 }
 
+// checkAudience: M1 sells every model at one price list, because a routing snapshot is one per node and so is the
+// price it locks, so a rule for one account or one tier is refused rather than accepted and then not applied
+// (docs/domains/billing.md「定价」). The selector stays in the stored form and the ordering of Rules, which is what
+// those rules will use when a snapshot can be per audience.
 func checkAudience(a Selector) error {
-	var err error
 	switch a.Kind {
 	case "all":
 		if a.ID != "" {
-			err = errors.New("all has no ID")
+			return &RuleError{"audience/id", "is absent for all"}
 		}
-	case "account":
-		_, err = accounts.ParseAccountID(a.ID)
-	case "tier":
-		_, err = accounts.ParseTierID(a.ID)
-	default:
-		return &RuleError{"audience/kind", "is not an audience a rule prices for"}
+		return nil
+	case "account", "tier":
+		return &RuleError{"audience/kind", "can only be all in this release: a rule for one account or one tier comes later"}
 	}
-	if err != nil {
-		return &RuleError{"audience/id", "is not the ID of a " + a.Kind + ", and is absent only for all"}
-	}
-	return nil
+	return &RuleError{"audience/kind", "is not an audience a rule prices for"}
 }
 
 // ratio reads a decimal member; ok is false for an absent one.
@@ -158,12 +176,24 @@ func ratio(field string, v *string) (r *big.Rat, ok bool, err error) {
 	return r, true, nil
 }
 
+// check refuses what is not a price, and, for M1, a way that sets none: the sale price of cost_plus needs a supplier's
+// cost, and a multiplier read through an exchange rate needs one, neither of which this release has (sale.go Sell), so
+// they are refused, like a rule for one account, rather than accepted and then left to the next rule.
 func (m Method) check(currency platform.Currency) error {
 	switch m.Kind {
 	case "cost_plus":
-		return m.checkCostPlus()
+		if err := m.checkCostPlus(); err != nil {
+			return err
+		}
+		return &RuleError{"method/kind", "cannot be cost_plus in this release: it needs the supplier's cost to price from"}
 	case "reference_multiplier":
-		return m.checkMultiplier()
+		if err := m.checkMultiplier(); err != nil {
+			return err
+		}
+		if m.CurrencyConversion != "face" {
+			return &RuleError{"method/currency_conversion", "can only be face in this release: exchange sale pricing needs reference selection and price versions"}
+		}
+		return nil
 	case "fixed":
 		return m.checkFixed(currency)
 	}
@@ -192,7 +222,10 @@ func (m Method) checkCostPlus() error {
 	return nil
 }
 
-// A reference multiplier has a multiplier above 0 and a way of reading the reference price's currency.
+// A reference multiplier has a multiplier above 0 and a way of reading the reference price's currency. It has no upper
+// bound: whether a multiplier takes a price past what a unit price holds depends on the reference price of each model
+// the rule applies to, which Check does not see (the catalog's prices are). Such a model then gets no sale price and
+// the reason is logged, rather than the rule being refused here or the whole site's prices failing (sale.go).
 func (m Method) checkMultiplier() error {
 	multiplier, ok, err := ratio("method/multiplier", m.Multiplier)
 	switch {
@@ -216,6 +249,11 @@ func (m Method) checkFixed(currency platform.Currency) error {
 	return checkSchedule(m.Schedule, currency)
 }
 
+// SameForEveryModel reports whether the rule's price does not read the model's reference price, so that it is the same
+// wherever it applies. Only a fixed price is: the ways that read the reference price differ by model, and with it their sale prices and
+// versions (sale.go).
+func (m Method) SameForEveryModel() bool { return m.Kind == "fixed" }
+
 // checkSchedule refuses a fixed price that is no price list of the catalog's form, or is in another currency than the
 // site's.
 func checkSchedule(raw jsonx.Raw, currency platform.Currency) error {
@@ -237,26 +275,21 @@ func checkRates(rates jsonx.Raw) error {
 	return nil
 }
 
+// check refuses every member of a constraint: the sale price does not apply constraints in this release
+// (docs/domains/billing.md「定价」, #234), so accepting one would store a limit no price obeys. Every way of saving or
+// previewing a rule runs Check; a rule stored with one refuses to price instead (Sell).
 func (c Constraints) check() error {
-	margin, hasMargin, err := ratio("constraints/min_margin_ratio", c.MinMarginRatio)
-	if err != nil {
-		return err
-	}
-	low, hasLow, err := ratio("constraints/reference_min_ratio", c.ReferenceMinRatio)
-	if err != nil {
-		return err
-	}
-	high, hasHigh, err := ratio("constraints/reference_max_ratio", c.ReferenceMaxRatio)
-	if err != nil {
-		return err
-	}
-	switch {
-	case hasMargin && margin.Cmp(big.NewRat(1, 1)) >= 0:
-		return &RuleError{"constraints/min_margin_ratio", "is below 1"}
-	case hasLow && low.Sign() <= 0, hasHigh && high.Sign() <= 0:
-		return &RuleError{"constraints/reference_min_ratio", "and reference_max_ratio are greater than 0"}
-	case hasLow && hasHigh && low.Cmp(high) > 0:
-		return &RuleError{"constraints/reference_min_ratio", "is at most reference_max_ratio"}
+	for _, m := range []struct {
+		field string
+		set   *string
+	}{
+		{"constraints/min_margin_ratio", c.MinMarginRatio},
+		{"constraints/reference_min_ratio", c.ReferenceMinRatio},
+		{"constraints/reference_max_ratio", c.ReferenceMaxRatio},
+	} {
+		if m.set != nil {
+			return &RuleError{m.field, "is not supported yet: the sale price does not apply it"}
+		}
 	}
 	return nil
 }
@@ -296,9 +329,27 @@ func Rules(ctx context.Context, tx pg.Tx, site uuid.UUID) ([]Rule, error) {
 		if c := slices.Compare(sa[:], sb[:]); c != 0 {
 			return c
 		}
-		return slices.Compare(a.ID[:], b.ID[:])
+		return slices.Compare(a.ID[:], b.ID[:]) // a rule of each target and audience at most, so this is a total order
 	})
 	return rules, nil
+}
+
+// Place is rules with r among them, in the order they are tried: a rule not stored yet, which a pricing preview asks
+// about. It goes after the rules it ties with, so a rule that is no more specific than those there never displaces one;
+// an ID of its own, which only a stored rule has, does not decide where it goes.
+func Place(r Rule, rules []Rule) []Rule {
+	s := r.specificity()
+	i := slices.IndexFunc(rules, func(o Rule) bool {
+		at := o.specificity()
+		return slices.Compare(at[:], s[:]) > 0
+	})
+	if i < 0 {
+		i = len(rules)
+	}
+	out := make([]Rule, 0, len(rules)+1)
+	out = append(out, rules[:i]...)
+	out = append(append(out, r), rules[i:]...)
+	return out
 }
 
 // CreateRule adds a rule to the site. The change is recorded as the rule's first version and in the audit log.

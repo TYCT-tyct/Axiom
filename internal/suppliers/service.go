@@ -6,16 +6,22 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 	"uuid"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
+	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/registry"
 	"axiom/internal/suppliers/internal/store"
@@ -24,10 +30,22 @@ import (
 // EndpointID names an endpoint: a group's model at a supplier.
 type EndpointID = uuid.UUID
 
+// Routable is an endpoint as a routing snapshot needs it: the catalog model it serves, the name a call must send
+// upstream, the formats it speaks, the cost schedule it is priced by — already scaled by its group's ratio — and what
+// its supplier does with a stream (internal/suppliers/README.md「调用面」).
+type Routable struct {
+	Currency            platform.Currency
+	ID, Supplier, Model uuid.UUID
+	Upstream            string
+	Formats             []protocol.Format
+	Schedule            catalog.Schedule
+	Streams, Cancels    bool
+}
+
 // Config is what a node needs to call suppliers.
 type Config struct {
 	DB *pg.DB
-	// Scope sees every supplier and the journal: the platform scope, which only cmd/ may build.
+	// Scope sees every supplier: the platform scope, which only cmd/ may build.
 	Scope  pg.Scope
 	Keys   *secret.Keyring
 	Egress *egress.Client
@@ -35,39 +53,40 @@ type Config struct {
 	Registry *registry.Registry
 	// Clock is the time; nil is time.Now. Credentials expire and cool down by it, not by a change in the database.
 	Clock func() time.Time
-	// FlushEvery is how often the journal is written; nil is a second.
-	FlushEvery time.Duration
-	// FlushTimeout is how long one write of the journal may take before it is given up and tried again; nil is 10 seconds.
-	FlushTimeout time.Duration
-	// Logger gets the failures of the journal's writes; nil is slog.Default.
-	Logger *slog.Logger
 	// CredentialCooldown is how long a credential the supplier refused rests; QuotaCooldown is how long one whose
 	// allowance is used up rests when the supplier does not say when it returns.
 	CredentialCooldown, QuotaCooldown time.Duration
+	// MaxStale is how long the snapshot may go without a successful Reload before Routable refuses it; zero is 30
+	// seconds, as the catalog's. A supplier disabled or removed while Reload keeps failing stops being routed to then.
+	MaxStale time.Duration
+	// Logger is told of the suppliers a Reload leaves out; nil is slog.Default.
+	Logger *slog.Logger
+	// Meter is where the count of those suppliers goes; nil for none.
+	Meter metric.Meter
 }
 
 // Service is the call side of the suppliers module in one node: the endpoints it can call, the state of their
-// credentials, the journal of attempts, and the schedules costs are read from. It does not read the database to pick a
-// credential or to price an attempt.
+// credentials, and the schedules costs are read from. It does not read the database to pick a credential or to price an
+// attempt.
 type Service struct {
-	cfg      Config
-	registry *registry.Registry
-	now      func() time.Time
+	cfg        Config
+	registry   *registry.Registry
+	now        func() time.Time
+	unloadable metric.Int64Counter
 
 	// The snapshot and the schedules are built apart from the calls and published whole; a call reads them with one
 	// atomic load and no lock. A receipt may name a schedule that is no longer an endpoint's, so schedules only grow.
 	snap      atomic.Pointer[snapshot]
 	schedules atomic.Pointer[map[uuid.UUID]*catalog.Schedule]
 	reloadMu  sync.Mutex // one Reload at a time; no call takes it
-	// What outlives a snapshot: the in-flight count and rest of a credential must not reset when the snapshot is rebuilt
-	// while calls run. Each lock is held for a lookup, never while anything is parsed or decrypted.
+	// What outlives a snapshot: credential slots and rest, and the account's minute, must not reset
+	// when the snapshot is rebuilt while calls run. Each lock is held for a lookup, never while anything is parsed or
+	// decrypted.
 	runtimeMu sync.Mutex
 	runtime   map[uuid.UUID]*credRuntime
+	minutes   map[uuid.UUID]*minuteRuntime
 	cancelsMu sync.RWMutex
 	cancels   map[EndpointID]bool // measured by quality: whether the supplier stops when the client does
-
-	journal   *journal
-	writeRows func(context.Context, []store.JournalRow) error // set by tests to make a write fail
 }
 
 // New makes a service with no endpoints; Reload fills it.
@@ -82,24 +101,28 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
-	if cfg.FlushEvery <= 0 {
-		cfg.FlushEvery = time.Second
-	}
 	if cfg.CredentialCooldown <= 0 {
 		cfg.CredentialCooldown = 5 * time.Minute
 	}
 	if cfg.QuotaCooldown <= 0 {
 		cfg.QuotaCooldown = 15 * time.Minute
 	}
-	if cfg.FlushTimeout <= 0 {
-		cfg.FlushTimeout = 10 * time.Second
+	if cfg.MaxStale <= 0 {
+		cfg.MaxStale = 30 * time.Second
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.Meter == nil {
+		cfg.Meter = noop.NewMeterProvider().Meter("suppliers")
+	}
+	counter, err := cfg.Meter.Int64Counter(unloadableMetric, metric.WithDescription("Suppliers a reload left out of the snapshot because their data could not be loaded, by supplier."))
+	if err != nil {
+		return nil, fmt.Errorf("meter: %w", err)
+	}
 	s := &Service{
-		cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{},
-		cancels: map[EndpointID]bool{}, journal: newJournal(),
+		unloadable: counter, cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{}, cancels: map[EndpointID]bool{},
+		minutes: map[uuid.UUID]*minuteRuntime{},
 	}
 	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{}})
 	s.schedules.Store(&map[uuid.UUID]*catalog.Schedule{})
@@ -110,37 +133,105 @@ func New(cfg Config) (*Service, error) {
 type credRuntime struct {
 	inflight atomic.Int32
 	restUnix atomic.Int64 // unix nanoseconds until which the credential is not picked
+	requests *minuteRuntime
+}
+
+type minuteRuntime struct {
+	// The check and increment share a lock so concurrent callers cannot spend the last request twice.
+	mu    sync.Mutex
+	start time.Time
+	used  int32
+}
+
+// minute is the window a per-minute limit is counted over.
+const minute = time.Minute
+
+// count is a hint shared by an endpoint's credentials; take still decides admission under the lock.
+func (rt *minuteRuntime) count(now time.Time) int32 {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if !now.Before(rt.start.Add(minute)) {
+		return 0
+	}
+	return rt.used
+}
+
+// take counts one request at now, and says whether it was below the limit; a credential without one takes every
+// request. The count and the check are one step under mu, so two callers cannot both take the last request of a minute
+// (README.md「并发与速率」). A request counted here is not given back: it may have reached the supplier, whose own count
+// it is in.
+func (rt *minuteRuntime) take(now time.Time, limit int32) bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.used == 0 || !now.Before(rt.start.Add(minute)) {
+		rt.start, rt.used = now, 0
+	}
+	if limit != 0 && rt.used >= limit {
+		return false
+	}
+	// Unlimited keys still consume their account's quota. Saturation preserves every possible int4 ceiling.
+	if rt.used < maxLimit {
+		rt.used++
+	}
+	return true
+}
+
+// ceiling is a per-minute limit as the snapshot holds it: a column with no value is no ceiling of Axiom's, which is
+// zero here.
+func ceiling(n *int32) int32 {
+	if n == nil {
+		return 0
+	}
+	return *n
 }
 
 // endpoint is what is needed to call one endpoint, and to turn its costs into money: what a unit of its supplier's
 // balance is worth in the supplier's settlement currency, and the row that gave the value.
 type endpoint struct {
 	id, supplier, schedule uuid.UUID
+	model                  uuid.UUID
+	upstream               string
+	formats                []protocol.Format
 	unitValueID            uuid.UUID
 	origin                 string
 	quirks                 adapter.CallQuirks
 	creds                  []*credential
 	currency               platform.Currency
 	unitValue              platform.UnitPrice
+	// nativeUnit is the unit the supplier counts its balance in, which its prices and its charges are in: what a test's
+	// estimate is read as.
+	nativeUnit string
+	ownerScope string
 }
 
 type credential struct {
-	id      uuid.UUID
-	key     secret.Secret
-	max     int32
-	expires *time.Time
-	rt      *credRuntime
+	id        uuid.UUID
+	key       secret.Secret
+	max       int32
+	perMinute int32 // account RPM ceiling for selecting this credential, 0 for none
+	expires   *time.Time
+	rt        *credRuntime
 }
 
-type snapshot struct{ endpoints map[EndpointID]*endpoint }
+// snapshot is the endpoints one Reload built. confirmed is when that Reload began reading the database, so the state it
+// shows is never older than that; it is zero until the first Reload succeeds.
+type snapshot struct {
+	endpoints map[EndpointID]*endpoint
+	confirmed time.Time
+}
 
-// Reload rebuilds the snapshot from the database, decrypting the keys of the credentials in this node's memory. A key
-// that does not open, or a supplier of a kind with no adapter, fails the reload and leaves the old snapshot in place:
-// it is a configuration to fix, and half a snapshot would route around it silently. The new snapshot is built on its
-// own, with no lock the calls use, and replaces the old one in a single step.
+// Reload rebuilds the snapshot from the database, decrypting the keys of the credentials in this node's memory. A
+// supplier whose rows cannot be loaded (a key that does not open, a kind with no adapter, a schedule that does not parse)
+// is left out of this node's snapshot whole, logged and counted (unloadableEvent, unloadableMetric); every other supplier
+// loads as usual, so one bad row does not take the node down. Nothing is written to the database: the cause may be this
+// node's alone (a key version only it lacks), and a status written from a reload could overwrite what an administrator
+// just fixed. A Reload that fails altogether (the database cannot be read) leaves the old snapshot
+// and its confirmation time in place, and Routable refuses the snapshot once that time is older than MaxStale. The new
+// snapshot is built on its own, with no lock the calls use, and replaces the old one in a single step.
 func (s *Service) Reload(ctx context.Context) error {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
+	asked := s.now()
 	var rows []store.ListRoutableRow
 	err := s.cfg.DB.ReadTx(ctx, s.cfg.Scope, func(tx pg.Tx) (err error) {
 		rows, err = store.New().ListRoutable(ctx, tx)
@@ -149,22 +240,72 @@ func (s *Service) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read the endpoints: %w", err)
 	}
-	next := &snapshot{endpoints: map[EndpointID]*endpoint{}}
+	next := &snapshot{endpoints: map[EndpointID]*endpoint{}, confirmed: asked}
 	schedules := maps.Clone(*s.schedules.Load())
+	unloadable := map[uuid.UUID]error{}
 	for _, r := range rows {
-		ep, err := s.endpointOf(next, schedules, r)
-		if err != nil {
-			return err
+		if _, left := unloadable[r.SupplierID]; left {
+			continue
 		}
-		c, err := s.credentialOf(r)
-		if err != nil {
-			return err
+		if err := s.load(next, schedules, r); err != nil {
+			unloadable[r.SupplierID] = err
 		}
-		ep.creds = append(ep.creds, c)
+	}
+	for id, ep := range next.endpoints {
+		if _, left := unloadable[ep.supplier]; left {
+			delete(next.endpoints, id)
+		}
 	}
 	s.schedules.Store(&schedules) // first: the snapshot must never name a schedule the map lacks
 	s.snap.Store(next)
+	s.report(ctx, unloadable)
 	return nil
+}
+
+// load adds the endpoint a row belongs to, if it is not in next yet, and the row's credential to it.
+func (s *Service) load(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule, r store.ListRoutableRow) error {
+	ep, err := s.endpointOf(next, schedules, r)
+	if err != nil {
+		return err
+	}
+	c, err := s.credentialOf(r)
+	if err != nil {
+		return err
+	}
+	ep.creds = append(ep.creds, c)
+	return nil
+}
+
+// report tells each supplier a Reload left out, for alerting: the error log carries a stable event name, and the counter
+// rises by one per Reload that leaves the supplier out, so an alert watches a rise.
+func (s *Service) report(ctx context.Context, unloadable map[uuid.UUID]error) {
+	for id, cause := range unloadable {
+		s.cfg.Logger.Error("suppliers: a supplier could not be loaded and is left out of this node's snapshot",
+			"event", unloadableEvent, "supplier", id, "err", cause)
+		s.unloadable.Add(ctx, 1, metric.WithAttributes(attribute.String("supplier", id.String())))
+	}
+}
+
+// Routable returns the snapshot's endpoints in id order: those ListRoutable holds, which are the endpoints a call may be
+// routed to. A Reload replaces the set whole, so a caller that builds a routing snapshot from this sees one moment of
+// the database, never half of a reload. It returns ErrStale when no Reload has succeeded within MaxStale: the endpoints a
+// node cannot confirm are not ones it keeps calling.
+func (s *Service) Routable() ([]Routable, error) {
+	snap, schedules := s.snap.Load(), *s.schedules.Load() // the snapshot first: it never names a schedule the map lacks
+	if s.now().Sub(snap.confirmed) > s.cfg.MaxStale {
+		return nil, ErrStale
+	}
+	out := make([]Routable, 0, len(snap.endpoints))
+	for _, ep := range snap.endpoints {
+		policy := s.policy(ep)
+		out = append(out, Routable{
+			Currency: ep.currency,
+			ID:       ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Formats: slices.Clone(ep.formats),
+			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
+		})
+	}
+	slices.SortFunc(out, func(a, b Routable) int { return a.ID.Compare(b.ID) })
+	return out, nil
 }
 
 func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule, r store.ListRoutableRow) (*endpoint, error) {
@@ -182,6 +323,10 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		}
 		schedules[r.CostScheduleID] = &sched
 	}
+	formats, err := store.ParseFormats(r.Formats)
+	if err != nil {
+		return nil, fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
+	}
 	currency, err := platform.ParseCurrency(r.SettlementCurrency)
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %s: its supplier's settlement currency: %w", r.EndpointID, err)
@@ -191,8 +336,9 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		return nil, fmt.Errorf("endpoint %s: its supplier's unit value %q is not above 0 and at most 1000 with at most 15 decimals", r.EndpointID, r.UnitValue)
 	}
 	ep := &endpoint{
-		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, origin: r.Origin, quirks: a.Calls(),
-		currency: currency, unitValue: value, unitValueID: r.UnitValueID,
+		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName,
+		formats: formats, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
+		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope,
 	}
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil
@@ -210,16 +356,26 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 	if err != nil {
 		return nil, fmt.Errorf("credential %s: its key does not open: %w", r.CredentialID, err)
 	}
-	return &credential{id: r.CredentialID, key: key, max: r.MaxConcurrency, expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID)}, nil
+	return &credential{
+		id: r.CredentialID, key: key, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
+		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, r.SupplierID),
+	}, nil
 }
 
 // runtimeOf is the running state of a credential, made when it is first seen and kept after.
-func (s *Service) runtimeOf(id uuid.UUID) *credRuntime {
+func (s *Service) runtimeOf(id, supplier uuid.UUID) *credRuntime {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	rt, ok := s.runtime[id]
 	if !ok {
-		rt = &credRuntime{}
+		// new-api middleware/model-rate-limit.go (206e0fa5) and sub2api repository/user_rpm_cache.go (8f2cbb53)
+		// count upstream accounts; another key of the same supplier must not create another quota.
+		requests := s.minutes[supplier]
+		if requests == nil {
+			requests = &minuteRuntime{}
+			s.minutes[supplier] = requests
+		}
+		rt = &credRuntime{requests: requests}
 		s.runtime[id] = rt
 	}
 	return rt
@@ -249,4 +405,13 @@ func (s *Service) policy(ep *endpoint) adapter.CallPolicy {
 var (
 	ErrNoEndpoint = errors.New("suppliers: the endpoint is not in the snapshot")
 	ErrNoSlot     = errors.New("suppliers: no credential of the endpoint has a free slot")
+	// ErrStale is the snapshot's: no Reload has confirmed it within MaxStale.
+	ErrStale = errors.New("suppliers: the snapshot has not been confirmed lately")
+)
+
+const (
+	// unloadableEvent is the stable name of the error log for a supplier left out of the snapshot, as the queue's
+	// discarded jobs have theirs (internal/platform/pg/queue.go).
+	unloadableEvent  = "suppliers.unloadable"
+	unloadableMetric = "axiom.suppliers.unloadable"
 )

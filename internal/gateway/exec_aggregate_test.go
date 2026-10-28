@@ -82,21 +82,15 @@ func checkReply(t *testing.T, h *harness, name string, shape []string) {
 	checkAggregateSettlement(t, h, name)
 }
 
-// checkAggregateSettlement: one attempt whose content reached the client (billing.Aggregated), settled before the write
-// and journalled before it.
+// checkAggregateSettlement: one attempt whose content reached the client (billing.Aggregated), settled before the write.
 func checkAggregateSettlement(t *testing.T, h *harness, name string) {
 	t.Helper()
 	s := h.ended()
 	if s.body != "" {
 		t.Errorf("%s: something was written before the settlement:\n%s", name, s.body)
 	}
-	if a := s.outcome.Attempts; len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop || s.outcome.Cancelled {
+	if a := s.outcome.Attempts; len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish != billing.FinishStop {
 		t.Errorf("%s: ending %+v", name, s.outcome)
-	}
-	for i, e := range h.up.journal {
-		if e.Committed && h.up.writes[i] != 0 {
-			t.Errorf("%s: the commit was journalled after %d writes", name, h.up.writes[i])
-		}
 	}
 }
 
@@ -142,7 +136,8 @@ func TestAnAggregateKeptForAClientThatLeftIsLetGo(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts
-		if !s.outcome.Cancelled || len(a) != 1 || a[0].Result != billing.FailedBeforeCommit {
+		// The attempt failed before the client left: it is judged by how it failed, not by the leaving.
+		if len(a) != 1 || a[0].Result != billing.FailedBeforeCommit || a[0].Finish != billing.FinishError {
 			t.Errorf("ending %+v", s.outcome)
 		}
 	})
@@ -248,6 +243,54 @@ func TestAnAggregatePastTheCapIsRefusedWithoutAnotherEntry(t *testing.T) {
 	})
 }
 
+// TestAnAggregatedBodyHoldsTheNodesBudgetWhileItIsWritten: the body is the relay's buffers, so the budget they were
+// charged against stays drawn for as long as the body is being written, to a slow reader or to one that leaves
+// halfway, and goes back whole afterwards (the harness checks that it does, once). A budget given back before the
+// write would let more large replies wait on slow readers than the node has memory for.
+func TestAnAggregatedBodyHoldsTheNodesBudgetWhileItIsWritten(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		leavesAt int // the write after which the client leaves; 0 reads to the end
+	}{{"read to the end", 0}, {"client leaves", 2}} {
+		t.Run(c.name, func(t *testing.T) {
+			run(t, func(t *testing.T, ctx context.Context) {
+				writes, loose := writeSlowlyAndCountLooseBudget(t, ctx, c.leavesAt)
+				if writes < 2 || loose != 0 {
+					t.Errorf("the budget was short of the body in %d of %d writes", loose, writes)
+				}
+				if c.leavesAt > 0 && writes > c.leavesAt+1 {
+					t.Errorf("a client that left was written to until write %d", writes)
+				}
+			})
+		})
+	}
+}
+
+// writeSlowlyAndCountLooseBudget answers a call with a 1 MiB aggregated body to a client that reads 1 MiB a second, and
+// leaves at write leavesAt when that is not 0. It returns the writes the client was given and how many of them began
+// with less of the budget drawn than the body takes, less the stream's base allowance.
+func writeSlowlyAndCountLooseBudget(t *testing.T, ctx context.Context, leavesAt int) (writes, loose int) {
+	no := false
+	h := newHarness(t, ctx, options{stream: &no})
+	beats := []beat{h.feed(evStart, evBlock)}
+	for range 4 {
+		beats = append(beats, beat{data: text(256 << 10)})
+	}
+	h.up.eps[uuidOf(ep(1))].script = []scripted{serve(append(beats, h.feed(evBlockStop, evMsgDelta, evMsgStop))...)}
+	const body = 4 * 256 << 10
+	h.w.rate = 1 << 20
+	h.w.onWrite = func() {
+		if writes++; left(h.memory) > h.budget-(body-64<<10) {
+			loose++
+		}
+		if writes == leavesAt {
+			h.client()
+		}
+	}
+	h.run()
+	return writes, loose
+}
+
 // TestAClientThatLeavesWhileItsReplyIsAggregated: the disconnect rules are a stream's (docs/domains/gateway.md
 // 「用量与费用」): an endpoint that passes cancellation on is stopped at once with what it had made charged, one that
 // does not is read to its end, and nothing is written to the client that left.
@@ -283,7 +326,7 @@ func TestAClientThatLeavesWhileItsReplyIsAggregated(t *testing.T) {
 			s := h.ended()
 			a := s.outcome.Attempts[0]
 			u := a.Segments[0]
-			if !s.outcome.Cancelled || a.Result != billing.FailedBeforeCommit || a.Finish != billing.FinishCancelled ||
+			if a.Result != billing.FailedBeforeCommit || a.Finish != billing.FinishCancelled ||
 				u.Usage.OutputTotal() != c.output || u.Reported.Has(catalog.ItemOutput) != c.reported {
 				t.Errorf("%s: ending %+v, usage %+v", c.name, s.outcome, u)
 			}

@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -72,14 +73,19 @@ func (l *flakyLedger) Settle(ctx context.Context, h *billing.Hold, o billing.Out
 func withExecutor(r *rig, ledger *flakyLedger) *fakeUpstreams {
 	r.t.Helper()
 	ledger.Billing = r.billing
-	up := &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: newClientWriter(), flushed: make(chan struct{})}
-	close(up.flushed)
+	return withCosts(r, ledger, fakeCosts{cost: 1000, known: true})
+}
+
+// withCosts is withExecutor with the executor's Costs given: a fixed answer, or the production suppliers service.
+func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
+	r.t.Helper()
+	up := &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: newClientWriter()}
 	for _, e := range r.endpoints {
 		up.eps[uuid.UUID(e.ID)] = &fakeEndpoint{policy: suppliers.CallPolicy{Streams: true, Cancels: true}}
 	}
 	exec, err := NewExecutor(ExecDeps{
 		Router: r.router, Upstreams: up, Limits: r.limits, Memory: r.memory, Logger: slog.New(slog.NewTextHandler(logWriter{r.t}, nil)),
-		Ledger: ledger, Costs: fakeCosts{cost: 1000, known: true}, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"),
+		Ledger: ledger, Costs: costs, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
 	})
 	if err != nil {
 		r.t.Fatal(err)
@@ -239,11 +245,10 @@ func (r *rig) funded(amount int64) account {
 	return a
 }
 
-// heldByAccount counts the balances whose reserved is not what their reservations still hold: all of a pending one,
-// and the rest of an estimate until its correction window ends (billing's own tests hold the same).
+// heldByAccount counts the balances whose reserved is not what their reservations still hold: all of a pending one
+// (billing's own tests hold the same).
 const heldByAccount = `SELECT count(*) FROM billing.balances b WHERE b.reserved <> coalesce((SELECT sum(CASE r.state
-	WHEN 'pending' THEN r.amount WHEN 'cleanup_pending' THEN r.amount WHEN 'estimated' THEN greatest(r.amount - r.charged, 0)
-	ELSE 0 END) FROM billing.reservations r WHERE r.account_id = b.account_id), 0)`
+	WHEN 'pending' THEN r.amount ELSE 0 END) FROM billing.reservations r WHERE r.account_id = b.account_id), 0)`
 
 // ledgerBalanced: nothing is pending, what the balances hold is what the reservations do, no balance passed its floor,
 // the ledger reconciles, and no call was charged twice.
@@ -258,11 +263,65 @@ func (r *rig) ledgerBalanced() {
 	if n := r.count("SELECT count(*) FROM billing.balances WHERE balance - reserved < floor"); n != 0 {
 		r.t.Errorf("%d balances passed their floor", n)
 	}
-	problems, err := r.billing.Reconcile(r.t.Context())
+	problems, err := billing.Reconcile(r.t.Context(), r.db, platformScope)
 	if err != nil || len(problems) > 0 {
 		r.t.Errorf("reconcile: %v %q", err, problems)
 	}
 	if n := r.count("SELECT count(*) FROM (SELECT request_id FROM billing.transactions WHERE kind = 'settle' GROUP BY request_id HAVING count(*) > 1) twice"); n != 0 {
 		r.t.Errorf("%d calls charged more than once", n)
 	}
+}
+
+// TestAFailureIsNotChargedForModelUsageBecauseTheClientLeftAfterIt: the first attempt fails with nothing delivered, and the
+// client leaves before the second can start. The charged attempt is the failed one, so the call is judged by how it failed,
+// not by the leaving: its model usage is waived and the account is charged nothing (docs/domains/billing.md「免单规则」).
+func TestAFailureIsNotChargedForModelUsageBecauseTheClientLeftAfterIt(t *testing.T) {
+	t.Parallel()
+	r := ledgerRig(t)
+	up := withExecutor(r, &flakyLedger{})
+	a := r.funded(1e12)
+	first, second := uuid.UUID(r.endpoints["alpha-1"].ID), uuid.UUID(r.endpoints["alpha-2"].ID)
+	up.eps[first].script = []scripted{failure(routing.ScopeEndpoint, false)}
+	up.eps[second].noSlot = true // the second entry is passed over, as the client leaves as it is asked for
+	ctx, leave := context.WithCancel(t.Context())
+	defer leave()
+	up.beforeAcquire = func(id suppliers.EndpointID) {
+		if id == second {
+			leave()
+			// The server learns the client is gone from its connection, a moment after the client closes it: the call
+			// must have heard before it concludes, or this tests nothing.
+			r.mu.Lock()
+			served := r.clientGone
+			r.mu.Unlock()
+			select {
+			case <-served:
+			case <-time.After(30 * time.Second):
+				t.Error("the server never saw the client leave")
+			}
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.server.URL+"/v1/messages", strings.NewReader(messageBody("acme/alpha")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host, req.Header = apiHost, http.Header{"Authorization": {"Bearer " + a.key}}
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		status := resp.StatusCode
+		if err := resp.Body.Close(); err != nil {
+			t.Error(err)
+		}
+		t.Fatalf("the client was answered with %d: it was to have left", status)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for r.count("SELECT count(*) FROM billing.reservations WHERE state = 'settled'") != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the call was never settled")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	r.exec.Drain(t.Context(), time.Minute)
+	if n := r.count("SELECT count(*) FROM billing.reservations WHERE state = 'settled' AND waived AND charged = 0"); n != 1 {
+		t.Errorf("%d reservations settled as waived and charged nothing, want the one: the client left after the failure", n)
+	}
+	r.ledgerBalanced()
 }

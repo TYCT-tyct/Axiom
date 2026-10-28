@@ -15,7 +15,7 @@ type need struct {
 	req    *protocol.Request
 	preset *Preset
 	over   *Override
-	tokens int64                  // an estimate of the input, in tokens; see Config.BytesPerToken
+	tokens int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
 	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
 	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
 	now    time.Time
@@ -27,7 +27,7 @@ type need struct {
 func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	now := r.cfg.Now()
 	snap := r.snap.Load()
-	if snap == nil || now.Sub(snap.built) > r.cfg.MaxStale {
+	if snap == nil || !r.fresh(snap, now) {
 		return Plan{}, nil, ErrStale
 	}
 	preset, ok := snap.presets[in.Admission.Preset]
@@ -36,7 +36,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	n := &need{
 		in: &in, req: in.Req, preset: &preset, over: &in.Override, now: now,
-		tokens: in.Req.TextBytes / r.cfg.BytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
+		tokens: in.Req.TextBytes / billing.InputBytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
@@ -69,7 +69,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	return Plan{
 		Entries: entries, MaxAttempts: attempts,
-		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), Record: rec,
+		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), StickyTTL: preset.StickyTTL, Record: rec,
 	}, nil, nil
 }
 
@@ -131,9 +131,10 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 func (r *Router) entry(c *candidate, n *need) Entry {
 	out, _ := c.outputLimit(n.req, n.tokens)
 	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry
-	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments).
+	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments), and
+	// every entry while no segment size is configured: a segment of 0 tokens would reserve no output at all.
 	segmentable := !n.in.NoSegments && c.Streams && c.Cancels && c.ReasoningVisible.Has(n.req.Format) && !n.req.HidesReasoning &&
-		c.OutputSpeed > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
+		c.OutputSpeed > 0 && r.cfg.FirstSegment > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
 	target := c.Target
 	format, _ := c.callFormat(n)
 	target.Format = format
@@ -141,16 +142,18 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	if c.MaxOutput > 0 {       // a model whose limit is unknown has no default to send: the upstream's own applies
 		target.MaxOutput = out
 	}
+	limits := c.model
+	limits.OpenAIUsage = format != protocol.Messages // the call format decides whose usage semantics the reply has
 	return Entry{
-		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: c.model, MaxOutput: out,
+		Exchange: c.Exchange,
+		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: limits, MaxOutput: out,
 		Segmentable: segmentable,
 	}
 }
 
 // callFormat is the format the endpoint is called in for the request, and whether it can serve it at all. A request of
-// the endpoint's own format is called in it, or in one protocol converts it to. A Chat request is only ever converted:
-// M1 rewrites no Chat request for an endpoint of its own format, so it is called in the first format the endpoint
-// speaks that protocol converts a Chat request to, Messages before Responses (docs/domains/gateway.md「转发规则」).
+// the endpoint's own format is called in it. Otherwise Messages/Responses use Chat;
+// Chat uses Messages before Responses (docs/domains/gateway.md「转发规则」).
 // NativeOnly says only the request's own format will do.
 func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	f := n.req.Format
@@ -158,9 +161,15 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 		return f, c.Native.Has(f)
 	}
 	if f != protocol.Chat {
+		if c.Native.Has(f) {
+			return f, true
+		}
+		if c.Served.Has(f) && c.Native.Has(protocol.Chat) {
+			return protocol.Chat, true
+		}
 		return f, c.Served.Has(f)
 	}
-	for _, g := range [...]protocol.Format{protocol.Messages, protocol.Responses} {
+	for _, g := range [...]protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		if c.Native.Has(g) {
 			return g, true
 		}
@@ -189,6 +198,8 @@ func check(c *candidate, n *need) (reason Reason, visible bool) {
 		return NoPrice, true
 	case c.UnknownItem:
 		return UnknownItem, true
+	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
+		return CoolingDown, true
 	case c.full():
 		return Full, true
 	}
@@ -211,7 +222,7 @@ func (c *candidate) unavailable() Reason {
 }
 
 // unfit is what the request needs and the endpoint lacks. The input is an estimate of its tokens from the body's bytes
-// (Config.BytesPerToken), so an endpoint is left out only when the request surely does not fit; one that turns out too
+// (billing.InputBytesPerToken), so an endpoint is left out only when the request surely does not fit; one that turns out too
 // small answers with a context error, which falls back to the next entry.
 func (c *candidate) unfit(n *need) Reason {
 	switch {

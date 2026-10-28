@@ -23,9 +23,10 @@ func (f supplierFixture) send(method, path, body string, status int, v any) {
 // TestSelectGroupAndBindKey: a group is selected and gets its code name, which stays when it is unselected; a key is
 // bound to a selected group once; a group that is not selected, one the supplier lacks, and a key bound twice are refused.
 func TestSelectGroupAndBindKey(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	supplier := f.connect().Id
-	group, idle := f.group(supplier, "1", true), f.group(supplier, "2", true)
+	group, idle := f.group(supplier, "1"), f.group(supplier, "2")
 	base := "/suppliers/" + supplier
 	var chosen, off adminapi.SupplierGroup
 	f.send(http.MethodPut, base+"/groups/"+group, `{"selected":true,"reason":"r"}`, http.StatusOK, &chosen)
@@ -99,9 +100,10 @@ func (f supplierFixture) pendingNames(query string) ([]string, int) {
 // TestMapSupplierModel: the queue lists the names no model is mapped to, oldest first, in pages that follow each other;
 // an alias takes a name out of it; a model the catalog lacks or has retired, and a name already mapped, are refused.
 func TestMapSupplierModel(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	supplier := f.connect().Id
-	group := f.group(supplier, "1", true)
+	group := f.group(supplier, "1")
 	for i, name := range []string{"oldest", "middle", "newest"} {
 		f.run(fmt.Sprintf(`INSERT INTO suppliers.supplier_models (supplier_id, supplier_group_id, upstream_name, formats, first_seen_at)
 			VALUES ('%s', '%s', '%s', '{chat}', now() - interval '%d hours')`, supplier, group, name, 3-i))
@@ -136,6 +138,7 @@ func TestMapSupplierModel(t *testing.T) {
 // TestMappingRetryAfterTheModelRetires: a mapping that went through is answered again to its retry, though its model has
 // been retired since; a new request for the retired model is still refused.
 func TestMappingRetryAfterTheModelRetires(t *testing.T) {
+	t.Parallel()
 	f := newSupplierFixture(t)
 	supplier := f.connect().Id
 	catalog := catalogFixture(f)

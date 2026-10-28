@@ -2,11 +2,13 @@ package persist
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers/internal/adapter"
@@ -22,47 +24,37 @@ const format = 1
 // never is the next_due of a supplier no round is due for: one the engine does not poll.
 var never = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// listings is what the state keeps beside itself, in the sync_states.listing column: how far the two paged listings got,
-// and the configuration generation they were read in. A member the state gained would be one a node of the version
-// before refuses (jsonx.UnmarshalKnown), so it is a column of its own, read leniently: a position this version does not
-// know is dropped and its listing begins again, which costs reads, not keys.
+// listings keeps resumable reads outside the strictly decoded state for rolling releases.
+// Version invalidates positions when an older node commits without updating this column.
 type listings struct {
-	Gen   int64           `json:"gen"`
-	Offer adapter.Listing `json:"offer"`
-	Keys  adapter.Listing `json:"keys"`
+	Version int64           `json:"version"`
+	Gen     int64           `json:"gen"`
+	Offer   adapter.Listing `json:"offer"`
+	Keys    adapter.Listing `json:"keys"`
 }
 
-// encodeListings is the column's value, or nothing while neither listing is under way. A position with nothing in it is
-// one that is not under way: the encoder writes an absent []byte as an empty string rather than as null, and reads it
-// back as an empty one, so a listing that ended would otherwise leave an empty position in the column for good (position).
 func encodeListings(gen int64, st syncer.State) ([]byte, error) {
 	if len(st.OfferAt) == 0 && len(st.KeysAt) == 0 {
 		return nil, nil
 	}
-	return jsonx.MarshalCanonical(listings{Gen: gen, Offer: st.OfferAt, Keys: st.KeysAt})
+	return jsonx.MarshalCanonical(listings{Version: st.Version, Gen: gen, Offer: st.OfferAt, Keys: st.KeysAt})
 }
 
-// decodeListings reads the column: where the two listings got, or nothing when it holds a position this version does
-// not read, or one read in another configuration generation (the credentials were replaced, the supplier was paused, a
-// removal began). Either way the listing begins again, which costs reads, not keys.
-func decodeListings(row []byte, gen int64) (offer, keys adapter.Listing) {
+func decodeListings(row []byte, gen, version int64) (offer, keys adapter.Listing) {
 	if len(row) == 0 {
 		return nil, nil
 	}
 	var l listings
-	if jsonx.Unmarshal(row, &l) != nil || l.Gen != gen {
+	if jsonx.Unmarshal(row, &l) != nil || l.Gen != gen || l.Version != version {
 		return nil, nil
 	}
-	return position(l.Offer), position(l.Keys)
-}
-
-// position is a stored position, or nothing when the column holds none: an absent one is read back as an empty string,
-// and the engine and the adapters treat an empty position as none, so it is given to them as none.
-func position(p adapter.Listing) adapter.Listing {
-	if len(p) == 0 {
-		return nil
+	if len(l.Offer) == 0 {
+		l.Offer = nil
 	}
-	return p
+	if len(l.Keys) == 0 {
+		l.Keys = nil
+	}
+	return l.Offer, l.Keys
 }
 
 type stateStore struct{ s *Session }
@@ -75,24 +67,11 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 		if err != nil {
 			return err
 		}
-		if row.Format != format {
-			return fmt.Errorf("the state is stored in format %d, which this program does not read", row.Format)
+		out, err = decode(row.Version, row.Format, row.State)
+		if err != nil {
+			return err
 		}
-		if err := jsonx.UnmarshalKnown(row.State, &out); err != nil {
-			return fmt.Errorf("decode the state: %w", err)
-		}
-		out.Version = row.Version
-		out.OfferAt, out.KeysAt = decodeListings(row.Listing, st.s.Supplier.ConfigGen)
-		if out.Removal == syncer.StepFinalScan {
-			// The state does not store whether the removal's alert was sent (an older node would refuse that member),
-			// so it is read back from the event the alert wrote. Only the first read of a removal alerts, so the rest
-			// of the polling path does not pay for this read.
-			alerted, err := store.HasSyncEvent(ctx, tx, st.s.Supplier.ID, syncer.RemovalSlow.String())
-			if err != nil {
-				return fmt.Errorf("read whether the removal has alerted: %w", err)
-			}
-			out.CatchUpNotified = alerted
-		}
+		out.OfferAt, out.KeysAt = decodeListings(row.Listing, st.s.Supplier.ConfigGen, row.Version)
 		return nil
 	})
 	if err != nil {
@@ -101,11 +80,73 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 	return out, nil
 }
 
+// decode reads a stored state as this program keeps it. Its version is the row's, which the state's own member is not
+// read for: the row is what a Commit names.
+func decode(version int64, storedFormat int16, raw []byte) (syncer.State, error) {
+	if storedFormat != format {
+		return syncer.State{}, fmt.Errorf("the state is stored in format %d, which this program does not read", storedFormat)
+	}
+	var out syncer.State
+	if err := jsonx.UnmarshalKnown(raw, &out); err != nil {
+		return syncer.State{}, fmt.Errorf("decode the state: %w", err)
+	}
+	out.Version = version
+	return out, nil
+}
+
+// Wake resumes polling in the transaction that replaces the login, fencing out the old lease holder. It keeps the
+// charge position to avoid rescanning history, and LastOK so commits still project the stored listing (readsListing).
+//
+// It ensures and locks the state row before the caller locks the supplier, matching hold's lock order. Without the
+// insert, an initial sync could create and stop the state between this read and the caller's supplier lock.
+func Wake(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
+	q := store.New()
+	if err := q.EnsureSyncState(ctx, tx, store.EnsureSyncStateParams{SupplierID: id, Now: now}); err != nil {
+		return fmt.Errorf("persist: make the state of supplier %s: %w", id, err)
+	}
+	row, err := q.LockSyncState(ctx, tx, id)
+	if errors.Is(err, pg.ErrNoRows) {
+		// No supplier to wake: the caller's own read of it reports that, as it did before there was a state to wake.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("persist: lock the state of supplier %s: %w", id, err)
+	}
+	woken, err := decode(row.Version, row.Format, row.State)
+	if err != nil {
+		return fmt.Errorf("persist: read the state of supplier %s: %w", id, err)
+	}
+	woken.Version++
+	woken.Status, woken.Reason = syncer.Normal, ""
+	for i, t := range woken.Tasks {
+		woken.Tasks[i] = syncer.TaskState{LastOK: t.LastOK}
+	}
+	encoded, err := jsonx.MarshalCanonical(woken)
+	if err != nil {
+		return fmt.Errorf("persist: encode the state of supplier %s: %w", id, err)
+	}
+	err = q.ResetSyncState(ctx, tx, store.ResetSyncStateParams{
+		SupplierID: id, Version: woken.Version, State: encoded, NextDue: now,
+	})
+	if err != nil {
+		return fmt.Errorf("persist: store the state of supplier %s: %w", id, err)
+	}
+	return nil
+}
+
 // Commit implements syncer.Store: the state, the events and plans the step produced, the charge records it read, and the
-// projection of the state onto the supplier, in one transaction that holds only if the lease is still the session's, the
-// supplier's credentials are still the generation it was taken in, and the stored version is expect. Otherwise nothing
-// of the step is written, and the error is syncer.ErrFenced.
+// projection of the state onto the supplier and its listing, in one transaction that holds only if the lease is still the
+// session's, the supplier's credentials are still the generation it was taken in, and the stored version is expect.
+// Otherwise nothing of the step is written, and the error is syncer.ErrFenced.
 func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) error {
+	var snap *catalog.Snapshot
+	if readsListing(c.State) {
+		// Read before the transaction opens, so that a step never waits for a second connection while it holds a lease.
+		var err error
+		if snap, err = st.snapshot(ctx); err != nil {
+			return err
+		}
+	}
 	encoded, err := jsonx.MarshalCanonical(c.State)
 	if err != nil {
 		return fmt.Errorf("persist: encode the state: %w", err)
@@ -132,7 +173,7 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		if changed == 0 {
 			return syncer.ErrFenced
 		}
-		return writeStep(ctx, tx, id, c, cur)
+		return writeStep(ctx, tx, id, c, cur, snap, now)
 	})
 	if err != nil {
 		return fmt.Errorf("persist: commit version %d of supplier %s: %w", c.State.Version, id, err)
@@ -140,8 +181,30 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 	return nil
 }
 
+// readsListing reports whether the state has a listing to project. Until a round has read one — the catalog task has
+// succeeded at least once — there is nothing to write: the tables hold what a person, or an earlier round, put there,
+// and the groups a state does not name are not gone, they were never looked at.
+func readsListing(st syncer.State) bool { return !st.Tasks[syncer.TaskCatalog].LastOK.IsZero() }
+
+// snapshot is the catalog as the projection maps upstream names by. A snapshot the catalog has not loaded yet, or one
+// older than its staleness limit, is loaded here, and the rest of a round uses the copy in memory.
+func (st stateStore) snapshot(ctx context.Context) (*catalog.Snapshot, error) {
+	cat := st.s.node.cfg.Catalog
+	if snap, err := cat.Current(); err == nil {
+		return snap, nil
+	}
+	if err := cat.Refresh(ctx); err != nil {
+		return nil, fmt.Errorf("persist: read the catalog: %w", err)
+	}
+	snap, err := cat.Current()
+	if err != nil {
+		return nil, fmt.Errorf("persist: read the catalog: %w", err)
+	}
+	return snap, nil
+}
+
 // writeStep writes what a step produced next to its state.
-func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow) error {
+func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow, snap *catalog.Snapshot, now time.Time) error {
 	if len(c.Events) > 0 {
 		rows := make([]store.SyncEventRow, len(c.Events))
 		for i, e := range c.Events {
@@ -163,7 +226,15 @@ func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur
 	if _, err := reconcile.Ingest(ctx, tx, id, c.Charges); err != nil {
 		return fmt.Errorf("write the charge records: %w", err)
 	}
-	return project(ctx, tx, id, c.State, cur)
+	if err := projectSupplier(ctx, tx, id, c.State, cur); err != nil {
+		return err
+	}
+	if snap == nil {
+		// No listing was read, so there is none to project: the supplier's tables are left as a person or an earlier round
+		// left them.
+		return nil
+	}
+	return projectListing(ctx, tx, id, c.State, cur, snap, now)
 }
 
 // nextDue is when the supplier next needs a round: the earliest time one of its tasks may run, or never while the
@@ -188,10 +259,10 @@ func latest(a, b time.Time) time.Time {
 	return a
 }
 
-// project writes onto the supplier what routing and the back office read of the engine's state: the balance last seen
-// and the status. A supplier a person paused stays paused, a removal is not undone, and an engine that is polling again
-// brings back only a supplier that was still connecting or running. cur is the supplier as the step locked it.
-func project(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State, cur store.LockSupplierRow) error {
+// projectSupplier writes onto the supplier what routing and the back office read of the engine's state: the balance last
+// seen and the status. A supplier a person paused stays paused, a removal is not undone, and an engine that is polling
+// again brings back only a supplier that was still connecting or running. cur is the supplier as the step locked it.
+func projectSupplier(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State, cur store.LockSupplierRow) error {
 	q := store.New()
 	if !st.BalanceAt.IsZero() {
 		at := st.BalanceAt

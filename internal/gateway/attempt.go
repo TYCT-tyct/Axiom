@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"uuid"
@@ -11,6 +12,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -26,7 +28,8 @@ var (
 // skips is why entries were passed over without an attempt (internal/gateway/README.md「尝试」).
 type skips struct {
 	noSlot, noEndpoint bool
-	unsupported        string // the first reason an endpoint could not express the request
+	unsupported        string               // the first reason an endpoint could not express the request
+	failedSuppliers    []routing.SupplierID // stay excluded for this request even after their pause ends
 }
 
 // step is what the attempt loop does after an entry.
@@ -101,6 +104,11 @@ func (s *session) exhausted() ended {
 // retry its supplier's budget does not allow. Only an attempt counts.
 func (s *session) try(ctx context.Context, i int) (step, ended) {
 	entry := s.c.Plan.Entries[i]
+	if slices.Contains(s.skips.failedSuppliers, entry.Supplier) || s.x.Router.Blocked(entry) {
+		s.skips.noEndpoint = true
+		s.exclude(entry, routing.CoolingDown)
+		return nextEntry, ended{}
+	}
 	conn, err := s.x.Upstreams.Acquire(uuid.UUID(entry.Endpoint))
 	if err != nil {
 		s.skips.noSlot = s.skips.noSlot || errors.Is(err, suppliers.ErrNoSlot)
@@ -115,10 +123,7 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 	}
 	if unsupported, ok := errors.AsType[*protocol.NotSupported](err); ok {
 		conn.Done()
-		if s.skips.unsupported == "" {
-			s.skips.unsupported = unsupported.Reason
-		}
-		s.exclude(entry, routing.FormatNotServed)
+		s.skipUnsupported(entry, unsupported)
 		return nextEntry, ended{}
 	} else if err != nil {
 		conn.Done()
@@ -135,6 +140,19 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 	return s.attempt(ctx, i, entry, conn, up, held)
 }
 
+// skipUnsupported passes over an endpoint that cannot express the request. The first reason is what the client is told
+// when no entry is left; why, when it is a key the model's spec lacks, goes to the log and no further.
+func (s *session) skipUnsupported(entry routing.Entry, unsupported *protocol.NotSupported) {
+	if unsupported.Detail != "" {
+		s.logger.Warn("an endpoint cannot take the request: its model spec lacks a key", "detail", unsupported.Detail,
+			"supplier", entry.Supplier, "endpoint", entry.Endpoint)
+	}
+	if s.skips.unsupported == "" {
+		s.skips.unsupported = unsupported.Reason
+	}
+	s.exclude(entry, routing.FormatNotServed)
+}
+
 // prepare makes the request ready for an endpoint within the node's memory budget. What Prepare may hold at once is
 // charged before it allocates (a charge made after would be an allocation already done), and what stays, the capacity
 // of the request as this endpoint takes it, which is a copy of the body, is all that remains charged: held, which the
@@ -142,7 +160,8 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 // not a generation: its body is rewritten by the members that must not go upstream as they are (the endpoint's model
 // name, the identifiers, the routing parameters) and nothing else (protocol's Target.Compact).
 func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64, err error) {
-	w := protocol.Rewrites{Identity: s.x.identity(uuid.UUID(s.c.caller.AccountID()))}
+	account := uuid.UUID(s.c.caller.AccountID())
+	w := protocol.Rewrites{Identity: s.x.identity(account), Device: s.x.deviceID(account)}
 	target := entry.Target
 	target.Compact = s.c.Compact
 	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, target, w)
@@ -192,11 +211,14 @@ type attempt struct {
 	unhook  func() bool // of the node's shutdown, which cancels the attempt
 
 	content bool              // the upstream sent content: the commit point came
+	state   string            // the turn state the upstream set, passed on with the answer (headers.go)
 	usage   protocol.Usage    // what the stream reported, once it is over
 	seen    protocol.Progress // what the relay had seen last
 
 	asked   billing.ExtendRequest
 	landing chan error // the outcome of the extension asked for, nil when none is in flight
+
+	obs quality.Observation // how it ended, as quality is told when it closes
 }
 
 // bind fixes the attempt's identity before anything is sent: its number, and the entry whose price the reservation
@@ -205,7 +227,9 @@ type attempt struct {
 func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Conn) (*attempt, context.Context) {
 	kept := s.c.Hold.Kept[i]
 	a := &attempt{s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept)}
+	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
 	s.ends = append(s.ends, billing.AttemptResult{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown})
+	s.tries = append(s.tries, try{entry: entry, started: a.obs.Sent})
 	s.currency = entry.Price.Schedule.Currency()
 	s.last = a
 	policy := conn.Policy()
@@ -215,31 +239,53 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	a.unhook = context.AfterFunc(s.x.shutdown, func() { a.cancel(errShutdown) })
 	s.x.Router.Begin(entry.Endpoint)
 	s.setCancel(a.cancel, policy.Cancels)
-	s.journal(a, false)
 	return a, ctx
 }
 
 // close ends the attempt: its upstream is cancelled if it still runs, the credential's slot and the endpoint's count
-// are given back, and what billing takes of it is made from its usage and the receipt, which has the supplier's
-// request id.
-func (a *attempt) close() {
+// are given back, what billing takes of it is made from its usage and the receipt, which has the supplier's request
+// id, and quality is told how it ended. ctx is the attempt's, by then cancelled, which only quality's counters read.
+func (a *attempt) close(ctx context.Context) {
 	a.s.setCancel(nil, false)
 	a.unhook()
 	a.cancel(nil)
 	a.release()
-	a.result(a.conn.Done())
+	receipt := a.conn.Done()
 	a.s.x.Router.End(a.entry.Endpoint)
+	a.result(receipt)
+	a.observe(ctx)
 }
 
-// journal appends the attempt to the reconciliation journal: when it is bound, when the supplier's request id came,
-// and when its content was first handed to the client.
-func (s *session) journal(a *attempt, committed bool) {
-	site, account := uuid.UUID(s.c.site.ID), uuid.UUID(s.c.caller.AccountID())
-	s.x.Upstreams.Journal(suppliers.JournalEntry{
-		Request: platform.RequestID(s.c.ID), Seq: platform.AttemptSeq(s.ends[a.i].Seq), //nolint:gosec // at most platform.MaxAttempts
-		Site: &site, Account: &account,
-		Receipt: a.conn.Receipt(), Committed: committed,
-	})
+// observe tells quality how the attempt ended, once, as it closes, with the input it was estimated at and the output
+// it is charged for (docs/domains/quality.md「什么算一次失败」).
+func (a *attempt) observe(ctx context.Context) {
+	s, o := a.s, &a.obs
+	o.Gone = s.isGone()
+	if o.Ended.IsZero() { // cut by us before the upstream said it was done
+		o.Ended = time.Now()
+	}
+	r := &s.c.Request
+	o.InputTokens = billing.InputEstimate(billing.Demand{TextBytes: r.TextBytes, Images: r.Images, Documents: r.Documents}, a.entry.Limits)
+	for _, seg := range s.ends[a.i].Segments {
+		o.OutputTokens += seg.Usage.OutputTotal()
+	}
+	s.x.Quality.Observe(ctx, *o)
+}
+
+// cutOf is why the gateway cancelled an attempt, read from its context: not at all, one of the two waits quality
+// judges, or anything else, which is the call's own end (its deadline, the node's shutdown, an extension refused, the
+// client leaving, which quality tells by Gone).
+func cutOf(ctx context.Context) quality.Cut {
+	cause := context.Cause(ctx)
+	switch {
+	case ctx.Err() == nil:
+		return quality.NotCut
+	case errors.Is(cause, errHeaderWait):
+		return quality.HeaderWait
+	case errors.Is(cause, errIdle):
+		return quality.Idle
+	}
+	return quality.Ours
 }
 
 // attempt runs one try: send, and either a failure to decide on or an answer to read, a stream for a client relayed, a
@@ -247,34 +293,35 @@ func (s *session) journal(a *attempt, committed bool) {
 func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn Conn, up protocol.Upstream, held int64) (step, ended) {
 	s.let() // another attempt answers the call: the reply kept before it is not part of it
 	a, ctx := s.bind(ctx, i, entry, conn)
-	defer a.close()
+	defer a.close(ctx)
 	resp, fail := a.send(ctx, up, held)
 	if fail != nil {
+		a.obs.Failure, a.obs.Cut, a.obs.Ended = fail, cutOf(ctx), time.Now()
 		return s.failed(a, fail)
 	}
 	defer resp.Body.Close() //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
+	a.state = strings.TrimSpace(resp.Header.Get(stateHeader))
 	if s.c.Compact {
 		return a.pass(ctx, resp)
 	}
 	return a.stream(ctx, resp.Body, up.Usage)
 }
 
-// send posts the request, within the wait for the response headers, and journals the attempt again when they come: that
-// is when the supplier's request id is known. The prepared body, held in the node's budget, is given back as soon as it
-// has been sent. The compact endpoint is the one whose reply is not a stream: it gets a longer wait for its headers, and
-// its own path (docs/domains/gateway.md「路径与格式」).
+// send posts the request, within the wait for the response headers, which is when the supplier's request id comes. The
+// prepared body, held in the node's budget, is given back as soon as it has been sent. The compact endpoint is the one
+// whose reply is not a stream: it gets a longer wait for its headers, and its own path (docs/domains/gateway.md
+// 「路径与格式」).
 func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*http.Response, *suppliers.Failure) {
 	s := a.s
 	defer s.x.Memory.Refund(held)
 	waitFor := s.x.Limits.cfg.HeaderWait
-	call := suppliers.Call{Format: a.entry.Target.Format, Body: up.Body, Header: s.c.Header}
+	call := suppliers.Call{Format: a.entry.Target.Format, Body: up.Body, Header: a.upstreamHeader()}
 	if s.c.Compact {
 		waitFor, call.Compact = s.x.Limits.cfg.CompactHeaderWait, true
 	}
 	wait := time.AfterFunc(waitFor, func() { a.cancel(errHeaderWait) })
 	resp, fail := a.conn.Send(ctx, call)
 	wait.Stop() // at once: a late firing would cancel the stream the headers began
-	s.journal(a, false)
 	return resp, fail
 }
 
@@ -283,21 +330,51 @@ func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*
 // next entry, or give the client the error.
 func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	s.ends[a.i].Result = billing.Unknown
+	if s.isGone() { // the client left while the request was out: the failure is the cancel's, and cancelling is never free
+		s.ends[a.i].Finish = billing.FinishCancelled
+	}
 	if f.Executed == suppliers.NotExecuted {
 		s.ends[a.i].Result = billing.NotExecuted
 	}
-	if _, ok := f.Cause.(suppliers.RateLimited); ok {
+	scope := routingScope(f.Scope)
+	limit, limited := f.Cause.(suppliers.RateLimited)
+	if limited || scope == routing.ScopeSupplier {
+		s.x.Router.Block(a.entry, scope, limit.RetryAfter)
+	}
+	if limited {
 		s.x.Router.Throttled(a.entry.Endpoint)
 	}
-	scope := routing.Scope(f.Scope)
+	if scope == routing.ScopeSupplier {
+		s.skips.failedSuppliers = append(s.skips.failedSuppliers, a.entry.Supplier)
+	}
 	next := routing.Decide(routing.Failure{Scope: scope})
 	s.record(a, true, scope, next)
 	switch next {
-	case routing.ReturnToClient: // the supplier's own words are not kept in a Failure, so the client gets ours
-		return over, ended{err: protocol.Error{Type: protocol.InvalidRequest}}
+	case routing.ReturnToClient: // the request itself is refused: the client gets what the supplier said of it, cleaned of its name
+		return over, ended{err: protocol.Error{Type: protocol.InvalidRequest, Rejection: f.Rejection}}
 	case routing.OtherCredential:
 		return sameEntry, ended{}
 	case routing.NextEntry:
 	}
 	return nextEntry, ended{}
+}
+
+// routingScope is the scope routing decides by for the scope an adapter classified a failure with. The two types list
+// the same scopes, but each in its own module's order, so they are matched by name rather than by number.
+func routingScope(s suppliers.Scope) routing.Scope {
+	switch s {
+	case suppliers.ScopeRequest:
+		return routing.ScopeRequest
+	case suppliers.ScopeEgress:
+		return routing.ScopeEgress
+	case suppliers.ScopeEndpoint:
+		return routing.ScopeEndpoint
+	case suppliers.ScopeCredential:
+		return routing.ScopeCredential
+	case suppliers.ScopeGroup:
+		return routing.ScopeGroup
+	case suppliers.ScopeSupplier:
+		return routing.ScopeSupplier
+	}
+	panic("gateway: a failure scope routing does not have")
 }

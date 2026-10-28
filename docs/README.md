@@ -8,18 +8,26 @@
 |---|---|---|
 | Axiom 是什么 | [README.md](../README.md) | 第一次接触项目的人 |
 | 产品需求：做什么、给谁、和 OpenRouter 有何不同、售卖形式、端点属性、范围与待定问题 | [product.md](product.md) | 设计或开发任何功能之前 |
+| 与 OpenRouter 的能力对照：OpenRouter 的每个接口和行为、Axiom 现状、参考实现位置、缺口与归属 | [openrouter-parity.md](openrouter-parity.md) | 设计或改动任何对外接口、兼容行为之前；排 M2/M3 的先后时 |
 | 术语与核心概念：统一叫法、代码命名、概念之间的关系 | [glossary.md](glossary.md) | 写文档、写代码、给东西起名之前 |
 | 总体架构：模块划分、部署拓扑、调用链路、技术选型、工程原则、底线指标 | [architecture.md](architecture.md) | 新建模块、跨模块改动、选依赖、做部署之前 |
 | 性能：延迟预算、调用路径的规则、后台与数据、规模与扩展、基准测试与压测 | [performance.md](performance.md) | 改动调用路径、流式转发、格式转换或大表查询之前；压测和扩容之前 |
 | 安全：威胁模型、安全基线、租户隔离、防滥用、账户安全、密钥管理、安全开发流程 | [security.md](security.md) | 改动鉴权、计费、出站请求或任何安全相关的代码之前 |
 | 前端与设计：页面清单、验收门槛、可用性任务、前端性能指标、设计原则、主题与自由度、视觉方向 | [frontend.md](frontend.md) | 做任何页面、组件、主题或站点外观配置之前；调整前端性能预算之前 |
 | 账户与租户：登录、账户、工作区、授权、API key、等级、站点配置、给用户的邮件、配置链 | [domains/accounts.md](domains/accounts.md) | 改动 `accounts` 模块或涉及登录、权限、key 之前 |
-| 计费：钱的表示、汇率、资金来源、额度批次、供应商成本、定价、预留与结算、用量来源与暂估、免单、账本 | [domains/billing.md](domains/billing.md) | 改动 `billing` 模块或任何涉及钱的逻辑之前 |
+| 计费：钱的表示、汇率、资金来源、额度批次、供应商成本、定价与售价、预留与结算、用量来源与暂估、免单、账本 | [domains/billing.md](domains/billing.md) | 改动 `billing` 模块或任何涉及钱的逻辑之前 |
 | 计费在调用路径上的代码接口：预留、计量、追加、结算、持有者与截止时间、预留的状态、写入的数据 | [internal/billing/README.md](../internal/billing/README.md) | 实现或调用 `billing` 的预留与结算之前 |
 | 模型目录：标准 ID、公开与内部名字、名字解析、生命周期、规格与参考价的来源、价目表结构 | [domains/catalog.md](domains/catalog.md) | 改动 `catalog` 模块或涉及模型名字、官方价格之前 |
+| 账户在代码里怎么认出、准入和授权：站点快照、会话、key、准入事务、公开接口 | [internal/accounts/README.md](../internal/accounts/README.md) | 实现或调用 `accounts` 之前 |
+| 模型目录在代码里怎么加载、同步和发布快照：参考价、名字解析、价目表 | [internal/catalog/README.md](../internal/catalog/README.md) | 实现或调用 `catalog` 之前 |
+| 三种调用格式的转换与透传：解析、转换、流式读写、用量 | [internal/protocol/README.md](../internal/protocol/README.md) | 实现或调用 `protocol` 之前 |
+| 平台层：监听与接口约定、日志与遥测、数据库访问、加密、前端文件、配置 | [internal/platform/README.md](../internal/platform/README.md) | 改动 `platform`、`cmd/axiom` 的组装或任何跨模块的基础设施之前 |
+| 多个核心节点共用的计数与粘性：Valkey 里放什么、客户端与连接、键、期限与熔断、每种用途的兜底与恢复、部署、测试、PR 拆分 | [internal/platform/kv/README.md](../internal/platform/kv/README.md) | 改动限流、登录防爆破、会话粘性，或部署 Valkey 之前 |
+| 前端工程：目录、开发命令、共享包、性能预算、测试 | [web/README.md](../web/README.md) | 改动 `web/` 之前 |
 | 供应商：适配器、接入流程、供应商别名与待映射、凭证、同步、号池 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
-| 供应商在调用路径上的代码接口：挑凭证、发请求、记尝试、对账日志 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
+| 供应商在调用路径上的代码接口：挑凭证、发请求、记尝试 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
 | 端点评估：检测、线上观测、外部评测、属性合并、熔断 | [domains/quality.md](domains/quality.md) | 改动 `quality` 模块或新增检测项之前 |
+| 端点评估在调用路径上的代码接口：判定表、`Observe`、健康度与实测的延迟和吞吐 | [internal/quality/README.md](../internal/quality/README.md) | 实现或调用 `quality` 之前，或改动尝试的结束路径之前 |
 | 路由：候选与过滤、排序策略、会话粘性、回退与重试、容量感知 | [domains/routing.md](domains/routing.md) | 改动 `routing` 模块或调整路由策略之前 |
 | 路由在调用路径上的代码接口：会话标识、回退路线、换不换端点 | [internal/routing/README.md](../internal/routing/README.md) | 实现或调用 `routing` 的路由接口之前 |
 | 接入与对外接口：路径与格式、转发规则、用量与费用、错误、路由参数、对接接口、会话状态、版本 | [domains/gateway.md](domains/gateway.md) | 改动 `gateway` 模块、对外接口或兼容行为之前 |
@@ -27,7 +35,11 @@
 | 运营：分工、agent 的组成与模型来源、运营接口、风险分级与审批、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
 | 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |
 | 调用记录在代码里怎么写与读：表、有界队列与背压、批量写与重试、用户读自己的记录、分区 | [internal/observability/README.md](../internal/observability/README.md) | 实现或调用 `observability` 的调用记录之前 |
-| 支付：收款渠道、充值流程、加密货币、手续费、退款与拒付、防欺诈、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
+| 支付：收款渠道与商户账户、订单状态、金额与汇率、手续费、回调与到账、补单、加密货币、退款与拒付、防欺诈、对账、后台配置、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
+| 支付在代码里的接口：渠道接口、billing 要提供的函数、不变量、表与行级安全、事务与任务、PR 拆分 | [internal/payments/README.md](../internal/payments/README.md) | 实现或调用 `payments`、写新的收款渠道插件之前 |
+| 合并队列：怎么排队、出队，标签的含义，列车怎么构建、找出元凶、落地和恢复，失败的列车怎么看，不稳定测试清单 | [ops/merge-train.md](ops/merge-train.md) | 给 PR 加 `queue` 之前；列车失败或卡住时 |
+| 备份与恢复：一次备份包含什么、加密与收件人、上传与保留、单实例、空白环境恢复、恢复演练、生产入口 | [ops/backup-restore.md](ops/backup-restore.md) | 配置或检查备份、恢复一台机器、改生产入口之前 |
+| 发布前：目录规格要补全（请求写法的键怎么写进库、怎么检查），发布前的其他确认 | [ops/release.md](ops/release.md) | 发布或部署之前 |
 | 错题：已经发生、还没转成检查或规则的问题，以及上次复盘的日期 | [lessons.md](lessons.md) | 复盘时；评审发现同类问题再次出现时 |
 | 通用开发规则：谁拍板、一次改动的流程、文档、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
 | 本项目的补充和例外：负责人、谁拍板的补充、产品设计基线、一个 PR 的流程、评审、代码质量标准、检查清单、质量审计、里程碑收尾、发布 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 同上 |

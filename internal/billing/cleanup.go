@@ -2,54 +2,126 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"uuid"
 
-	"axiom/internal/catalog"
 	"axiom/internal/platform/pg"
 )
 
-// Cleanup takes over what no Settle will end (README.md「持有者与截止时间」「预留的状态」), up to max reservations,
-// each in a transaction of its own under its balance row lock, and returns how many it changed. A pending
-// reservation past its deadline or under a reaped holder becomes cleanup_pending when the journal shows a committed
-// attempt with a reconciliation key, keeping its reservation for the supplier record, or else cleanup_released, a lost
-// request; a held state past its correction window releases what it holds.
+// Cleanup takes over what no Settle will end (README.md「持有者与截止时间」「预留的状态」), trying at most max
+// reservations from the start of the due set, and returns how many it changed. See cleanFrom for the rules.
 func (b *Billing) Cleanup(ctx context.Context, max int32) (changed int, err error) {
-	var due []DueReservationsRow
-	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
-		due, err = queries.DueReservations(ctx, tx, max)
-		return err
-	})
-	if err != nil {
-		return 0, fmt.Errorf("billing: find what cleanup owns: %w", err)
-	}
-	for _, d := range due {
-		if err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) error { return b.clean(ctx, tx, d.RequestID, d.AccountID) }); err != nil {
-			return changed, fmt.Errorf("billing: clean up %s: %w", d.RequestID, err)
-		}
-		changed++
-	}
-	return changed, nil
+	changed, _, _, err = b.cleanFrom(ctx, uuid.UUID{}, max)
+	return changed, err
 }
 
-func (b *Billing) clean(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) error {
+// reportedFailures caps the failures one cleanFrom call keeps in its error; the rest are only counted.
+const reportedFailures = 5
+
+// cleanFrom tries at most budget due reservations in request order, those after the request id after, each in a
+// transaction of its own under its balance row lock, and returns how many it changed. A pending reservation past its
+// deadline or under a reaped holder is released: nothing can bring its usage later, so nothing is charged, and the
+// request is left with suppliers as a lost one, with its route. One that fails does not stop the rest: it counts as an
+// attempt, and its error is joined into the one returned (the first reportedFailures, then a count).
+//
+// The budget bounds the work of a call, failures included. next is where the following call must start: a cursor that
+// moves forward past the failures, so a backlog of reservations that always fail, which stay first in line, cannot hold
+// back the ones behind them; done says the scan reached the end of the due set, and next is then the start again. A
+// reservation at rank r among the due ones past the cursor is reached within ceil(r/budget) calls. A call cut short by
+// ctx returns its error, done false and the count so far.
+func (b *Billing) cleanFrom(ctx context.Context, after uuid.UUID, budget int32) (changed int, next uuid.UUID, done bool, err error) {
+	var report failureReport
+	next = after
+	for left := budget; left > 0; {
+		if ctx.Err() != nil {
+			report.add(fmt.Errorf("billing: cleanup stopped: %w", context.Cause(ctx)))
+			break
+		}
+		var due []DueReservationsRow
+		if err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
+			due, err = queries.DueReservations(ctx, tx, DueReservationsParams{After: next, Max: left})
+			return err
+		}); err != nil {
+			report.add(fmt.Errorf("billing: find what cleanup owns: %w", err))
+			break
+		}
+		n, last := b.cleanPage(ctx, due, &report)
+		changed += n
+		if last != (uuid.UUID{}) {
+			next = last
+		}
+		if len(due) < int(left) && ctx.Err() == nil { // a short page held the end of the due set
+			return changed, uuid.UUID{}, true, report.err()
+		}
+		left -= int32(min(len(due), int(left))) //nolint:gosec // at most left, which is an int32
+	}
+	return changed, next, false, report.err()
+}
+
+// cleanPage takes over the reservations of a page until ctx ends, and returns how many it changed and the last request
+// it tried (the zero id when none).
+func (b *Billing) cleanPage(ctx context.Context, due []DueReservationsRow, report *failureReport) (changed int, last uuid.UUID) {
+	for _, d := range due {
+		if ctx.Err() != nil {
+			break // cleanFrom reports it
+		}
+		last = d.RequestID
+		if err := b.cleanOne(ctx, d); err != nil {
+			report.add(fmt.Errorf("billing: clean up %s: %w", d.RequestID, err))
+		} else {
+			changed++
+		}
+	}
+	return changed, last
+}
+
+// failureReport keeps the first reportedFailures errors and counts the rest.
+type failureReport struct {
+	kept   []error
+	others int
+}
+
+func (r *failureReport) add(err error) {
+	if len(r.kept) < reportedFailures {
+		r.kept = append(r.kept, err)
+	} else {
+		r.others++
+	}
+}
+
+func (r *failureReport) err() error {
+	if r.others > 0 {
+		return errors.Join(append(r.kept, fmt.Errorf("billing: %d more failures not shown", r.others))...)
+	}
+	return errors.Join(r.kept...)
+}
+
+// cleanOne takes over one due reservation in a transaction of its own, and logs what it released.
+func (b *Billing) cleanOne(ctx context.Context, d DueReservationsRow) error {
+	var released int64
+	err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) (err error) {
+		released, err = b.clean(ctx, tx, d.RequestID, d.AccountID)
+		return err
+	})
+	if err == nil && released > 0 {
+		b.logger.Warn("billing: cleanup released a reservation no settlement came for; any usage of the call is the platform's",
+			"request", d.RequestID.String(), "released", released)
+	}
+	return err
+}
+
+// clean takes over one reservation, and returns how much it released, 0 when a Settle got there first.
+func (b *Billing) clean(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) (released int64, err error) {
 	c, err := b.lock(ctx, tx, id, accountID)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	switch r := c.row; {
-	case r.State == "pending":
-		return c.takeOver(ctx, tx)
-	case r.State == "estimated" && r.CorrectionClosed: // the estimate stands; release what it held
-		return c.release(ctx, tx, "settled", r.Amount-r.Charged)
-	case r.State == "cleanup_pending" && r.CorrectionClosed: // no supplier record within the hour
-		if err := c.b.suppliers.RecordLostRequest(ctx, tx, id); err != nil {
-			return err
-		}
-		return c.release(ctx, tx, "cleanup_released", r.Amount)
+	if c.row.State != "pending" {
+		return 0, nil // a Settle got there first
 	}
-	return nil // a Settle got there first
+	return c.row.Amount, c.takeOver(ctx, tx)
 }
 
 // lock locks the account's balance row and reads the reservation under it.
@@ -65,190 +137,14 @@ func (b *Billing) lock(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) (
 	return &locked{b: b, id: id, row: r, balance: balance, charged: r.Charged}, nil
 }
 
-// takeOver ends a pending reservation no Settle will: only an attempt the journal marks committed, with a key to
-// match the supplier's record, is charged, later, at the record's usage; every other is a lost request.
+// takeOver ends a pending reservation no Settle will: the request is recorded as lost, with the route it was frozen
+// with, so that a charge the supplier reports later can be matched to it. Nothing can bring the call's usage
+// afterwards, so the whole reservation goes back and nothing is charged.
 func (c *locked) takeOver(ctx context.Context, tx pg.Tx) error {
-	j, committed, err := c.b.suppliers.CommittedAttempt(ctx, tx, c.id)
-	if err != nil {
-		return fmt.Errorf("billing: read the journal: %w", err)
-	}
-	if !committed || j.Key == "" {
-		if err := c.b.suppliers.RecordLostRequest(ctx, tx, c.id); err != nil {
-			return err
-		}
-		return c.release(ctx, tx, "cleanup_released", c.row.Amount)
-	}
-	records := []AttemptRecord{{Seq: j.Seq, Entry: j.Entry, Key: j.Key}}
-	if err := c.b.suppliers.RecordAttempts(ctx, tx, c.id, records); err != nil {
+	// The reservation marks an entry that was dropped at admission with the zero id; no charge can come from it.
+	route := slices.DeleteFunc(slices.Clone(c.row.Endpoints), func(id uuid.UUID) bool { return id == uuid.UUID{} })
+	if err := c.b.suppliers.RecordLostRequest(ctx, tx, c.id, c.row.SiteID, c.row.AccountID, route); err != nil {
 		return err
 	}
-	c.entries = attemptEntries(records)
-	w := c.kept("cleanup_pending")
-	w.seq, w.entry, w.estimated, w.holdSeconds = int32p(j.Seq), int32p(j.Entry), true, c.b.config.CorrectionWindow.Seconds()
-	return c.write(ctx, tx, w)
-}
-
-// Correction is a supplier record that fixes an attempt's usage and cost (ChargeSettled): Revision orders the
-// record's versions for its attempt, Usage is by sampling, all reported, and Cost is the attempt's cost in
-// billionths of a credit.
-type Correction struct {
-	Request  uuid.UUID
-	Seq      int
-	Revision int64
-	Usage    []catalog.Usage
-	Cost     int64
-}
-
-// Correct applies c once (README.md「结算与账本」): only a revision newer than the last one applied to its attempt
-// changes anything, in any state. The attempt's cost always follows the record. The user's charge follows it only for
-// the charged attempt, within the correction window: an estimate is replaced, keeping its waiver, the makeup capped by
-// what the reservation still holds; a cleaned-up call is charged at the record's usage and locked price. A record with
-// usage nothing prices is charged at its cost × the locked markup instead. A revision counts as applied only once
-// every field of it nothing prices is noted against its attempt's model: a record with any, before Settle or cleanup
-// recorded its attempt, is ErrNotRecorded and applies nothing. That, or a database error, fails it, for the caller to
-// retry.
-func (b *Billing) Correct(ctx context.Context, c Correction) error {
-	if c.Cost < 0 {
-		return fmt.Errorf("billing: correct %s: a cost of %d", c.Request, c.Cost)
-	}
-	var seen []UnknownItem
-	err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
-		accountID, err := queries.ReservationAccount(ctx, tx, c.Request)
-		if err != nil {
-			return err
-		}
-		l, err := b.lock(ctx, tx, c.Request, accountID)
-		if err != nil {
-			return err
-		}
-		n, err := queries.ApplyRevision(ctx, tx, ApplyRevisionParams{
-			RequestID: c.Request, AttemptSeq: *int32p(c.Seq), SiteID: l.row.SiteID, AccountID: l.row.AccountID, Revision: c.Revision,
-		})
-		if err != nil || n == 0 { // n == 0: applied already, or older than the one applied
-			return err
-		}
-		if err := l.adjustCost(ctx, tx, c); err != nil {
-			return err
-		}
-		err = l.recharge(ctx, tx, c)
-		seen = l.seen
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("billing: correct %s: %w", c.Request, err)
-	}
-	b.alert(seen)
-	return nil
-}
-
-// adjustCost moves the attempt's cost to the record's: whatever was booked before, an estimate or an older record,
-// the cost entries of the attempt then add up to k.Cost.
-func (c *locked) adjustCost(ctx context.Context, tx pg.Tx, k Correction) error {
-	seq := *int32p(k.Seq)
-	recorded, err := queries.AttemptCost(ctx, tx, AttemptCostParams{RequestID: c.id, AttemptSeq: seq})
-	if err != nil {
-		return err
-	}
-	e := c.event("cost_adjust", k.Revision)
-	e.seq = seq
-	_, err = post(ctx, tx, e, line{bookSupplierCost, k.Cost - recorded}, line{bookSupplierPrepaid, recorded - k.Cost})
-	return err
-}
-
-// charges: the record is of the attempt the user is charged for, whose entry prices it.
-func (c *locked) charges(k Correction) bool {
-	r := c.row
-	return r.ChargedSeq != nil && int(*r.ChargedSeq) == k.Seq && r.Entry != nil
-}
-
-// recharges: a record changes the user's charge only for the charged attempt of a reservation still held, within
-// its correction window.
-func (c *locked) recharges(k Correction) bool {
-	r := c.row
-	held := r.State == "estimated" || r.State == "cleanup_pending"
-	return held && !r.CorrectionClosed && c.charges(k)
-}
-
-// recharge replaces an estimated or cleaned-up charge with the record's: the reservation's hold pays the makeup, which
-// therefore never passes the floor; past the hold the platform bears it. A charge by cost, for usage nothing prices,
-// may also take what the account has free above its floor (「价目表缺项」: the reservation and the available balance).
-// An estimate keeps holding the rest until its window ends, for a later revision; a cleaned-up call releases it.
-// Whatever the attempt and the window, the record's unknown fields are noted against the model of the attempt's
-// entry (noteRecord).
-func (c *locked) recharge(ctx context.Context, tx pg.Tx, k Correction) error {
-	r := c.row
-	segments, err := c.noteRecord(ctx, tx, k)
-	if err != nil || !c.recharges(k) {
-		return err
-	}
-	p, byCost, err := c.priceRecord(segments, k.Cost)
-	if err != nil {
-		return err
-	}
-	usage, err := encodeUsage(segments)
-	if err != nil {
-		return err
-	}
-	hold := max(r.Amount-r.Charged, 0)
-	limit := hold
-	if byCost {
-		limit = c.cap(hold)
-	}
-	c.charged = min(p.price, add(r.Charged, limit))
-	if _, err := post(ctx, tx, c.event("reverse", k.Revision), reversal(r.Price, r.Charged)...); err != nil {
-		return err
-	}
-	if _, err := post(ctx, tx, c.event("settle", k.Revision), charge(p.price, c.charged)...); err != nil {
-		return err
-	}
-	w := c.kept("cleanup_settled")
-	w.price, w.estimated, w.usage = p.price, p.estimated, usage
-	keep := int64(0)
-	if r.State == "estimated" {
-		w.state, keep = "estimated", max(r.Amount-c.charged, 0)
-	}
-	if err := c.move(ctx, tx, keep-hold, c.charged-r.Charged); err != nil {
-		return err
-	}
-	return c.write(ctx, tx, w)
-}
-
-// noteRecord is the record's usage by sampling, all of it reported, whose unknown fields it notes against the model of
-// the attempt's entry. A record with any, of an attempt attempt_entries does not have yet, is ErrNotRecorded: its
-// transaction rolls back, the revision with it, so the redelivery notes them once Settle or cleanup has recorded the
-// attempt.
-func (c *locked) noteRecord(ctx context.Context, tx pg.Tx, k Correction) ([]Segment, error) {
-	segments := make([]Segment, len(k.Usage))
-	for i, u := range k.Usage {
-		segments[i] = Segment{Usage: u, Reported: ^catalog.ItemSet(0)}
-	}
-	if !anyUnknown(segments) {
-		return segments, nil
-	}
-	entries := c.row.AttemptEntries
-	if k.Seq < 1 || k.Seq > len(entries) || entries[k.Seq-1] < 0 {
-		return nil, ErrNotRecorded
-	}
-	return segments, c.noteUnknown(ctx, tx, int(entries[k.Seq-1]), segments)
-}
-
-// priceRecord prices the record's usage, all of it reported, at the charged entry's locked price, keeping the waiver.
-// Usage protocol could not map has no price but a fallback, which need not cover what the supplier charged, so a
-// record with any is charged its cost × the locked markup, byCost, without pricing the fallbacks it does not charge;
-// a waived call keeps its waiver instead, charging only the per-use items and the unknown uses at their fallback
-// prices, since the cost is mostly model usage.
-func (c *locked) priceRecord(segments []Segment, cost int64) (p priced, byCost bool, err error) {
-	s, f, err := c.pricing(int(*c.row.Entry))
-	if err != nil {
-		return priced{}, false, err
-	}
-	if anyUnknown(segments) && !c.row.Waived {
-		return priced{price: f.byCost(cost), estimated: true}, true, nil
-	}
-	p, err = priceSegments(s, f, segments, c.row.Waived)
-	return p, false, err
-}
-
-func anyUnknown(segments []Segment) bool {
-	return slices.ContainsFunc(segments, func(seg Segment) bool { return len(seg.Usage.Unknown()) > 0 })
+	return c.release(ctx, tx, "cleanup_released", c.row.Amount)
 }

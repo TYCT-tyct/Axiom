@@ -70,6 +70,9 @@ type Model struct {
 	Rev          int64
 	spec         string // the baseline's JSON, kept as a string so no caller can change what a snapshot holds
 	reportable   Reportable
+	serving      Serving
+	serves       bool // the spec declares everything Serving reads
+	dialect      Dialect
 }
 
 // Spec is a copy of the baseline's JSON.
@@ -77,6 +80,123 @@ func (m Model) Spec() []byte { return []byte(m.spec) }
 
 // Reportable is what the upstream may report for the model, from its spec, for the listing gate.
 func (m Model) Reportable() Reportable { return m.reportable }
+
+// Ability is a feature a model has that a request may need: what protocol's Capabilities are the bits of. The names are
+// the spec's, and protocol turns them into its bits when a routing snapshot is built (README.md「规格」).
+type Ability uint8
+
+// The abilities, in the order stored spec lists name them.
+const (
+	AbilityTools Ability = iota
+	AbilityImages
+	AbilityDocuments
+	AbilityReasoning
+	AbilityPromptCache
+	AbilityStructuredOutput
+	AbilityWebSearch
+	AbilityCodeExecution
+	NumAbilities
+)
+
+// abilityNames are the abilities' names in a spec, so they never change.
+var abilityNames = [NumAbilities]string{
+	"tools", "images", "documents", "reasoning", "prompt_cache", "structured_output", "web_search", "code_execution",
+}
+
+func (a Ability) String() string { return abilityNames[a] }
+
+// ParseAbility returns the ability a spec's name denotes: the inverse of Ability.String.
+func ParseAbility(name string) (Ability, error) { return lookup[Ability](abilityNames[:], name) }
+
+// AbilitySet is a set of abilities.
+type AbilitySet = set[Ability]
+
+// A seventeenth ability would have no bit, as with the items.
+var _ [16 - NumAbilities]struct{}
+
+// Serving is what an endpoint of a model must offer before routing sends requests to it (docs/domains/routing.md
+// 「一个请求的路由步骤」). It is read from the model's spec, never guessed: a spec that does not declare these says
+// nothing about them, which is not the same as saying they are zero.
+type Serving struct {
+	Context   int64 // the most tokens a request may take, input plus output
+	MaxOutput int64 // the model's output limit, also its default
+	Streams   bool  // the vendor streams the model's replies
+	Abilities AbilitySet
+}
+
+// Serving reads the spec keys an endpoint needs. ok is false unless the spec declares all of them: an endpoint whose
+// model does not say how much it takes must not be routed to, and a plausible default would make it routable with the
+// wrong limit. It is all of them or none, so a caller that ignores ok cannot act on half a reading.
+func (m Model) Serving() (Serving, bool) {
+	if !m.serves {
+		return Serving{}, false
+	}
+	return m.serving, true
+}
+
+// Claim is what a spec says of a yes-or-no matter: nothing, no, or yes. Absent and false are different claims, so the
+// zero value is that the spec says nothing, which a caller must not take for a no (nor a yes).
+type Claim uint8
+
+// The claims.
+const (
+	ClaimUnset Claim = iota
+	ClaimNo
+	ClaimYes
+)
+
+func claimOf(b *bool) Claim {
+	switch {
+	case b == nil:
+		return ClaimUnset
+	case *b:
+		return ClaimYes
+	}
+	return ClaimNo
+}
+
+// Thinking is how a spec says a model is asked to reason, as protocol's conversions need it (internal/protocol/README.md
+// 「跨格式转换」).
+type Thinking uint8
+
+// The ways to ask. ThinkingNone is a model that does not think, which is a claim; unset is a spec that says nothing.
+const (
+	ThinkingUnset Thinking = iota
+	ThinkingNone
+	// ThinkingAdaptive asks with thinking.type adaptive and output_config.effort.
+	ThinkingAdaptive
+	// ThinkingManual asks with a thinking budget, budget_tokens, which the newer models refuse.
+	ThinkingManual
+)
+
+// thinkingByName are the thinking modes' names in a spec, so they never change.
+var thinkingByName = map[string]Thinking{"none": ThinkingNone, "adaptive": ThinkingAdaptive, "manual": ThinkingManual}
+
+// Dialect is how a request to the model is written: what a conversion or a same-format rewrite needs of the model beyond
+// what it can take in (Serving). Each key is optional and independent: a spec that leaves one out has not said no, so
+// what a caller does with ClaimUnset is its own to decide, and never a default for the model.
+type Dialect struct {
+	// Thinking is the spec's "thinking": "adaptive", "manual" or "none".
+	Thinking Thinking
+	// EncryptedReasoning is "encrypted_reasoning": the model returns its reasoning encrypted on request.
+	EncryptedReasoning Claim
+	// MidSystem is "mid_system": the model takes a system message after the conversation has started.
+	MidSystem Claim
+	// UntrustedSystemAfterTools is "untrusted_system_after_tools": the model reads a system message right after tool
+	// results as text it may not trust.
+	UntrustedSystemAfterTools Claim
+	// DefaultSamplingOnly is "default_sampling_only": the model refuses a temperature or top_p other than the default.
+	DefaultSamplingOnly Claim
+	// ForcedToolChoice is "forced_tool_choice": the model takes a tool choice that forces a call, when it is not
+	// thinking. The vendor decides this apart from sampling (Claude Haiku 5.5 refuses the one and takes the other).
+	ForcedToolChoice Claim
+	// CacheBreakpoints is "cache_breakpoints": the model takes explicit cache breakpoints.
+	CacheBreakpoints Claim
+}
+
+// Dialect reads the spec keys that say how requests to the model are written. Unlike Serving it needs no ok: a key the
+// spec leaves out is unset, and each field says so on its own.
+func (m Model) Dialect() Dialect { return m.dialect }
 
 // ReferencePrice is the current reference price of a model in one currency.
 type ReferencePrice struct {

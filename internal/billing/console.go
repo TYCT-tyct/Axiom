@@ -3,16 +3,23 @@ package billing
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"uuid"
 
 	"axiom/internal/platform/pg"
 )
 
 // BalanceView is an account's money as the console shows it, in billionths of a credit: what a call is admitted by.
-// Available is Balance less Reserved; a call is admitted while Available less Floor covers its reservation.
+// Available is Balance less Reserved and Frozen; a call is admitted while Available less Floor covers its reservation.
 type BalanceView struct {
-	Balance, Reserved, Floor int64
-	SpentThisMonth           int64
+	Balance, Reserved, Frozen, Floor int64
+	SpentThisMonth                   int64
+}
+
+// Available is exact even when reservations, freezes and debt together exceed a signed ledger amount.
+func (v BalanceView) Available() *big.Int {
+	left := new(big.Int).Sub(big.NewInt(v.Balance), big.NewInt(v.Reserved))
+	return left.Sub(left, big.NewInt(v.Frozen))
 }
 
 // ReadBalance is account's money, read in tx, which must hold the account's scope. workspaces are the account's
@@ -24,7 +31,7 @@ func ReadBalance(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []
 	}
 	var view BalanceView
 	if len(rows) > 0 {
-		view = BalanceView{Balance: rows[0].Balance, Reserved: rows[0].Reserved, Floor: rows[0].Floor}
+		view = BalanceView{Balance: rows[0].Balance, Reserved: rows[0].Reserved, Floor: rows[0].Floor, Frozen: rows[0].Frozen}
 	}
 	if view.SpentThisMonth, err = queries.SpentThisMonth(ctx, tx, workspaces); err != nil {
 		return BalanceView{}, fmt.Errorf("billing: read the month's spending: %w", err)

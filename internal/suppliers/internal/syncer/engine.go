@@ -38,16 +38,8 @@ type Settings struct {
 	Jitter func(time.Duration) time.Duration
 	// MaxPages bounds the pages of charge records one round reads; the pass continues in the next.
 	MaxPages int
-	// LowBalance is the balance under which BalanceLow is sent; Reserve is held back from a routable balance.
-	LowBalance, Reserve adapter.Amount
-	// DrainLimit and Grace are the waits of a removal: for attempts in flight, and for late charge records.
-	DrainLimit, Grace time.Duration
-	// CatchUp is how close to the removal's start Through must come: an adapter keeps a short distance from the present.
-	CatchUp time.Duration
-	// CatchUpAlert is how long a removal may spend catching up on the charge records before it sends an alert. The read
-	// has no bound of its own and a large backlog is read window by window, so without this a removal would wait quietly.
-	// It is measured from RemovalAt, so a removal that waits for attempts in flight first includes that wait (DrainLimit).
-	CatchUpAlert time.Duration
+	// LowBalance is the balance under which BalanceLow is sent.
+	LowBalance adapter.Amount
 }
 
 // Defaults are the design's values.
@@ -56,8 +48,7 @@ func Defaults() Settings {
 		Interval:    [numTasks]time.Duration{time.Minute, 5 * time.Minute, 5 * time.Minute, 2 * time.Minute},
 		BackoffBase: time.Minute, BackoffMax: 30 * time.Minute,
 		MaxPages:   50,
-		LowBalance: "5", Reserve: "1", DrainLimit: 5 * time.Minute, Grace: 30 * time.Minute, CatchUp: 2 * time.Minute,
-		CatchUpAlert: 30 * time.Minute,
+		LowBalance: "5",
 	}
 }
 
@@ -117,19 +108,18 @@ func (e *Engine) step(ctx context.Context, st *State, t Task) error {
 	}
 	c := fresh(st)
 	err := runners[t](e, ctx, st, &c)
-	if err != nil {
+	if err != nil && !errors.Is(err, adapter.ErrBucketsFull) {
 		c = fresh(st) // a failed step writes nothing of what it had read
 	}
 	e.settle(&c, t, err, now)
 	return e.commit(ctx, st, &c)
 }
 
-// runners are the tasks, in the order of Task. The charge scan and the two listings read st as well, because they commit
-// what they read one read at a time.
+// runners are the tasks, in the order of Task. The charge scan reads st as well, because it commits page by page.
 var runners = [numTasks]func(e *Engine, ctx context.Context, st *State, c *Commit) error{
 	TaskBalance: func(e *Engine, ctx context.Context, _ *State, c *Commit) error { return e.balance(ctx, c) },
-	TaskCatalog: (*Engine).catalog,
-	TaskKeys:    (*Engine).keys,
+	TaskCatalog: func(e *Engine, ctx context.Context, _ *State, c *Commit) error { return e.catalog(ctx, c) },
+	TaskKeys:    func(e *Engine, ctx context.Context, _ *State, c *Commit) error { return e.keys(ctx, c) },
 	TaskCharges: (*Engine).scan,
 }
 
@@ -191,7 +181,7 @@ func (e *Engine) balance(ctx context.Context, c *Commit) error {
 		if s.Funding != acc.Funding {
 			c.Events = append(c.Events, Event{Kind: FundingChanged, Old: fundingName(s.Funding), New: fundingName(acc.Funding)})
 		}
-		if was, now := rat(s.Balance).Cmp(rat(e.set.Reserve)) > 0, rat(acc.Balance).Cmp(rat(e.set.Reserve)) > 0; was != now {
+		if was, now := rat(s.Balance).Sign() > 0, rat(acc.Balance).Sign() > 0; was != now {
 			c.Events = append(c.Events, Event{Kind: BalanceCrossed, Old: string(s.Balance), New: string(acc.Balance), Why: map[bool]string{true: "above", false: "below"}[now]})
 		}
 	}
@@ -217,14 +207,18 @@ func fundingName(f adapter.Funding) string {
 // keys reads the keys listing. A read is stored with the position it reached, also when the supplier's limits stopped
 // it, so the next round goes on from there; the read that ends the listing holds every key, and what changed since the
 // last complete one is an event.
-func (e *Engine) keys(ctx context.Context, st *State, c *Commit) error {
+func (e *Engine) keys(ctx context.Context, c *Commit) error {
 	page, err := e.mgr.Keys(ctx, c.State.KeysAt)
 	if err != nil {
 		return err
 	}
 	c.State.KeysAt = page.Next
 	if !page.Done {
-		return e.keep(ctx, st, c, page.Until)
+		until := page.Until
+		if until.IsZero() {
+			until = e.now()
+		}
+		return adapter.Blocked{Until: until}
 	}
 	keys := page.Items
 	old := make(map[adapter.KeyRef]adapter.KeyState, len(c.State.Keys))
@@ -243,19 +237,6 @@ func (e *Engine) keys(ctx context.Context, st *State, c *Commit) error {
 	slices.SortFunc(keys, func(a, b adapter.KeyState) int { return cmpStr(string(a.Ref), string(b.Ref)) })
 	c.State.Keys = keys
 	return nil
-}
-
-// keep stores a listing's position with the read that reached it and, when the supplier's limits stopped that read,
-// answers the step with the time they reopen: the task is due again then, with no failure counted and no worker held.
-// A read the adapter stopped for a reason of its own leaves the task due at its interval, when the listing goes on.
-func (e *Engine) keep(ctx context.Context, st *State, c *Commit, until time.Time) error {
-	if err := e.commit(ctx, st, c); err != nil {
-		return err
-	}
-	if until.IsZero() {
-		return nil
-	}
-	return adapter.Blocked{Until: until}
 }
 
 func statusName(present bool, s adapter.KeyStatus) string {
@@ -278,14 +259,18 @@ func cmpStr(a, b string) int {
 // catalog reads the offer, compares it with the one before, and writes the differences as events, with a new version of
 // each cost plan that changed. The same answer twice changes nothing. Like the keys, a read is stored with the position
 // it reached, so a listing the supplier's limits stopped goes on in the next round.
-func (e *Engine) catalog(ctx context.Context, st *State, c *Commit) error {
+func (e *Engine) catalog(ctx context.Context, c *Commit) error {
 	page, err := e.mgr.Offer(ctx, c.State.OfferAt)
 	if err != nil {
 		return err
 	}
 	c.State.OfferAt = page.Next
 	if !page.Done {
-		return e.keep(ctx, st, c, page.Until)
+		until := page.Until
+		if until.IsZero() {
+			until = e.now()
+		}
+		return adapter.Blocked{Until: until}
 	}
 	prev := make(map[string]GroupSnap, len(c.State.Groups))
 	for _, g := range c.State.Groups {
@@ -339,7 +324,7 @@ func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string
 // the supplier published, else a person's confirmed base scaled by the group's ratio, else nothing. kept is the
 // fingerprint to keep when nothing new can be worked out (a model that was not read this time).
 func plan(c *Commit, g adapter.Group, m adapter.Model, kept string, plans map[string]string) (string, error) {
-	key := g.Ref + "/" + m.UpstreamName
+	key := PlanKey(g.Ref, m.UpstreamName)
 	var schedule catalog.Schedule
 	var basis string
 	switch base, confirmed := c.State.Confirmed[m.UpstreamName]; {

@@ -111,18 +111,25 @@ func TestQuoteEntryModel(t *testing.T) {
 		Model:     Model{ContextLength: 1000, Reports: 1<<in | 1<<catalog.ItemCacheRead | 1<<catalog.ItemOutput},
 		MaxOutput: 1,
 	}
+	standardOnly := entry(t, false, 3)
+	standardOnly.Model.ServiceTiers = 1 << catalog.ServiceTierStandard
 	for _, tc := range []struct {
 		name string
 		d    Demand
 		e    Quotable
 		want string
 	}{
+		{
+			"a request that may be served at priority, to an endpoint that offers standard only: 80 at 1 + 500 at 10",
+			Demand{TextBytes: 80, ServiceTiers: 1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierPriority},
+			standardOnly, "5080",
+		},
 		{"a file without a page limit: 1000 at 4 + 500 at 20", Demand{Documents: 1}, noPageLimit, "14000"},
 		{"cache reads dearer than input: 80 at 2 + 1", Demand{TextBytes: 80}, dearCache, "161"},
 		{
-			"web search listed with no uses may still search, so output at the context's band: 80 + 500 at 20",
-			Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch}}},
-			entry(t, false, 0), "10080",
+			"web search with a limit of its own on a model with no default: 80 + 1000 at 4 + 100 + 500 at 20",
+			Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}},
+			entry(t, false, 0), "14180",
 		},
 	} {
 		got, err := quoteEntry(tc.d, tc.e, segments)
@@ -135,6 +142,8 @@ func TestQuoteEntryModel(t *testing.T) {
 func TestQuoteEntryRefuses(t *testing.T) {
 	noContext := entry(t, false, 3)
 	noContext.Model.ContextLength = 0
+	noCodeDefault := entry(t, false, 3)
+	noCodeDefault.Model.MaxUses = map[catalog.Item]int64{webSearch: 3}
 	hugeOutput := entry(t, true, 3)
 	hugeOutput.MaxOutput = math.MaxInt64/2 + 1
 	for _, tc := range []struct {
@@ -149,6 +158,8 @@ func TestQuoteEntryRefuses(t *testing.T) {
 			Demand{ServiceTiers: 1 << catalog.ServiceTierPriority, ServerTools: []ServerTool{{Item: webSearch}}},
 			entry(t, false, 3),
 		},
+		{"a search with no limit of its own, on a model with no default", Demand{ServerTools: []ServerTool{{Item: webSearch}}}, entry(t, false, 0)},
+		{"a code execution with no limit of its own, on a model with none by default", Demand{ServerTools: []ServerTool{{Item: codeExec}}}, noCodeDefault},
 		{"a model without a context length", Demand{}, noContext},
 		{"an output limit past int64 behind a small first segment", Demand{Choices: 2}, hugeOutput},
 	} {
@@ -242,5 +253,53 @@ func BenchmarkQuote(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// TestQuoteRefusesAToolWithNoBound: a server tool the request enables without a limit, on a model with no default
+// maximum, has no upper cost and so no reservation: Quote refuses it with ErrUnbounded, naming the tool, however the
+// route's other entries quote. The same request with a limit of its own, or on a model with a default, is quoted.
+func TestQuoteRefusesAToolWithNoBound(t *testing.T) {
+	d := func(max int64) Demand {
+		return Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch, MaxUses: max}}}
+	}
+	unbounded, bounded := entry(t, false, 0), entry(t, false, 3)
+	avail := []Available{{SourceBalance, amount(t, 1e9)}}
+	for _, tc := range []struct {
+		name   string
+		d      Demand
+		route  []Quotable
+		wantOK bool
+	}{
+		{"no limit, no default", d(0), []Quotable{unbounded}, false},
+		{"no limit, no default on the second entry", d(0), []Quotable{bounded, unbounded}, false},
+		{"a limit of its own", d(2), []Quotable{unbounded}, true},
+		{"the model's default", d(0), []Quotable{bounded}, true},
+	} {
+		_, err := Quote(tc.d, tc.route, segments, avail)
+		if tc.wantOK != (err == nil) || (!tc.wantOK && !errors.Is(err, ErrUnbounded)) {
+			t.Errorf("%s: Quote = %v, want success %v (ErrUnbounded when refused)", tc.name, err, tc.wantOK)
+		}
+	}
+}
+
+// TestQuoteEntryNeedsSegments: a segmentable entry with no segment size or no overshoot configured is refused, not
+// quoted with a segment of 0 tokens, which reserves no output; the same entry whole needs neither.
+func TestQuoteEntryNeedsSegments(t *testing.T) {
+	d := Demand{TextBytes: 80}
+	for name, s := range map[string]Segments{
+		"no segment size": {Overshoot: time.Second},
+		"no overshoot":    {Output: 40},
+		"neither":         {},
+	} {
+		if got, err := quoteEntry(d, entry(t, true, 3), s); !errors.Is(err, errNoSegments) {
+			t.Errorf("%s: quote = %s, %v; want errNoSegments", name, units(t, got.amount), err)
+		}
+		if _, err := Quote(d, []Quotable{entry(t, true, 3)}, s, nil); !errors.Is(err, errNoSegments) {
+			t.Errorf("%s: Quote = %v; want errNoSegments", name, err)
+		}
+	}
+	if got, err := quoteEntry(d, entry(t, false, 3), Segments{}); err != nil || units(t, got.amount) != "5080" {
+		t.Errorf("a whole entry with no segments: quote = %s, %v; want 5080", units(t, got.amount), err)
 	}
 }

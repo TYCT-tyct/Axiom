@@ -33,9 +33,8 @@ func countRateKey(c accounts.Caller) string { return "count:" + keyKey(c) }
 // address's limit, the key, the account's slot, the body's memory, the key's rate), then asks the database only whether
 // the key may be used and may use the model. Nothing is reserved, charged or recorded.
 func (h *Handler) countTokens(w http.ResponseWriter, r *http.Request) {
-	release, err := h.Limits.IPCalls.Acquire(ipKey(clientIP(r)), h.Limits.cfg.IPInFlight)
-	if err != nil {
-		h.fail(w, r, protocol.Messages, err)
+	release, ok := h.ipSlot(w, r, protocol.Messages)
+	if !ok {
 		return
 	}
 	defer release()
@@ -51,7 +50,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if r.Header.Get("Upgrade") != "" {
 		return 0, errUpgrade
 	}
-	_, caller, err := h.authenticate(r)
+	site, caller, err := h.authenticate(r)
 	if err != nil {
 		return 0, err
 	}
@@ -70,14 +69,18 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if h.Limits.Rate.Count(countRateKey(caller)) > h.Limits.cfg.CountRate {
-		return 0, ErrRateLimited
+	if h.countRate(r.Context(), site.ID, countDimension, countRateKey(caller), keyHex(caller)) > h.Limits.cfg.CountRate {
+		return 0, errCountRate
 	}
-	snap, err := h.Catalog.Current()
+	snap, err := h.currentCatalog()
 	if err != nil {
 		return 0, err
 	}
-	model, err := snap.ResolvePublic(req.Model)
+	_, names, err := readRouting(&req) // a count refuses what the call would
+	if err != nil {
+		return 0, err
+	}
+	model, err := snap.ResolvePublic(names.primary)
 	if err != nil {
 		return 0, err
 	}

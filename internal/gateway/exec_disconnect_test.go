@@ -29,7 +29,7 @@ func TestAClientThatGoesBeforeAnythingWasSentCostsNothing(t *testing.T) {
 		h.client()
 		h.run()
 		s := h.ended()
-		if len(s.outcome.Attempts) != 0 || !s.outcome.Cancelled || h.up.endpoint(1).acquired != 0 || h.w.wrote() != 0 || h.w.status != 0 {
+		if len(s.outcome.Attempts) != 0 || h.up.endpoint(1).acquired != 0 || h.w.wrote() != 0 || h.w.status != 0 {
 			t.Errorf("ending %+v, %d acquired, %d writes, status %d", s.outcome, h.up.endpoint(1).acquired, h.w.wrote(), h.w.status)
 		}
 	})
@@ -51,7 +51,7 @@ func TestAClientThatGoesFromAnEndpointThatPassesCancellationOn(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts[0]
-		if !s.outcome.Cancelled || a.Result != billing.Committed || a.Finish != billing.FinishCancelled || len(a.Segments) != 1 {
+		if a.Result != billing.Committed || a.Finish != billing.FinishCancelled || len(a.Segments) != 1 {
 			t.Errorf("ending %+v", s.outcome)
 		}
 		// Charged by the usage so far: the input as reported, the output it never reported by what was read (5 bytes at 3
@@ -62,6 +62,50 @@ func TestAClientThatGoesFromAnEndpointThatPassesCancellationOn(t *testing.T) {
 		}
 		if strings.Contains(h.w.body(), "event: error") || h.w.wrote() != 1 {
 			t.Errorf("something was written to a client that had gone (%d writes):\n%s", h.w.wrote(), h.w.body())
+		}
+	})
+}
+
+// TestAClientThatGoesWhileTheRequestIsOutIsACancelNotAFailure: the request is written and the response headers are awaited
+// when the client leaves, so the attempt's context is cancelled and the transport fails. That failure is the leaving's: the
+// attempt ends as cancelled, which is never waived, not as a failure with nothing delivered, which is.
+func TestAClientThatGoesWhileTheRequestIsOutIsACancelNotAFailure(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{policy: suppliers.CallPolicy{Streams: true, Cancels: true}})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{late(time.Hour, whole(h))}
+		done := h.start()
+		time.Sleep(time.Second)
+		h.client()
+		<-done
+		h.check()
+		a := h.ended().outcome.Attempts
+		if len(a) != 1 || a[0].Result != billing.Unknown || a[0].Finish != billing.FinishCancelled {
+			t.Errorf("attempts %+v, want one whose result is unknown and whose finish is cancelled", a)
+		}
+	})
+}
+
+// TestACancelledStreamThatReportedNoInputIsEstimatedBySizeNotWindow: a Responses stream reports its input only in the
+// completed event, so one cancelled before it has none, and an image or a file in the request must not make that input the
+// whole context the reservation allowed for them: the settlement carries the text, 1600 tokens an image and 4096 a file.
+func TestACancelledStreamThatReportedNoInputIsEstimatedBySizeNotWindow(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{
+			client: protocol.Responses, policy: suppliers.CallPolicy{Streams: true, Cancels: true},
+			mutate: func(c *Call) { c.Request.TextBytes, c.Request.Images, c.Request.Documents = 4000, 1, 1 },
+		})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(0, 1, 2, 3, 4))} // up to the first text
+		done := h.start()
+		time.Sleep(time.Second)
+		h.client()
+		<-done
+		h.check()
+		a := h.ended().outcome.Attempts[0]
+		if a.Finish != billing.FinishCancelled || len(a.Segments) != 1 || a.Segments[0].Reported.Has(catalog.ItemInput) {
+			t.Fatalf("attempt %+v, want a cancelled one that reported no input", a)
+		}
+		if got, want := a.Segments[0].Usage.Count(catalog.ItemInput), int64(4000/4+1600+4096); got != want {
+			t.Errorf("the input is %d, want the text, an image and a file: %d", got, want)
 		}
 	})
 }
@@ -84,7 +128,7 @@ func TestAClientThatGoesFromAnEndpointThatDoesNot(t *testing.T) {
 		}
 		s := h.ended()
 		a := s.outcome.Attempts[0]
-		if !s.outcome.Cancelled || a.Result != billing.Committed || a.Segments[0].Usage.OutputTotal() != 15 {
+		if a.Result != billing.Committed || a.Segments[0].Usage.OutputTotal() != 15 {
 			t.Errorf("ending %+v", s.outcome)
 		}
 		if h.w.wrote() != 1 || strings.Contains(s.body, "message_stop") {
@@ -93,8 +137,8 @@ func TestAClientThatGoesFromAnEndpointThatDoesNot(t *testing.T) {
 	})
 }
 
-// TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel: nothing was delivered, so the attempt is no commit
-// (the journal never says so), and it is read to the end for its usage, not written.
+// TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel: nothing was delivered, so the attempt is no
+// commit, and it is read to the end for its usage, not written.
 func TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
@@ -107,11 +151,6 @@ func TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel(t *te
 		a := h.ended().outcome.Attempts[0]
 		if h.w.status != 0 || h.w.wrote() != 0 || a.Result != billing.FailedBeforeCommit || a.Segments[0].Usage.OutputTotal() != 15 {
 			t.Errorf("status %d, %d writes, attempt %+v", h.w.status, h.w.wrote(), a)
-		}
-		for _, e := range h.up.journal {
-			if e.Committed {
-				t.Error("the journal says content was handed to a client that was gone")
-			}
 		}
 	})
 }
@@ -130,7 +169,7 @@ func TestAnEndpointThatDoesNotCancelIsStillStoppedByTheIdleTimeout(t *testing.T)
 		if got := h.elapsed(); got != h.cfg.IdleTimeout { // counted from the last thing the upstream said
 			t.Errorf("the call took %v", got)
 		}
-		if s := h.ended(); !s.outcome.Cancelled || s.outcome.Attempts[0].Finish != billing.FinishCancelled {
+		if s := h.ended(); s.outcome.Attempts[0].Finish != billing.FinishCancelled {
 			t.Errorf("ending %+v", s.outcome)
 		}
 	})
@@ -157,7 +196,7 @@ func TestAWriteThatFailsMeansTheClientIsGone(t *testing.T) {
 			if h.w.wrote() != 1 || h.elapsed() != tc.took {
 				t.Errorf("%s: %d writes, took %v", tc.name, h.w.wrote(), h.elapsed())
 			}
-			if !h.ended().outcome.Cancelled {
+			if a := h.ended().outcome.Attempts; len(a) == 0 || a[len(a)-1].Finish != billing.FinishCancelled {
 				t.Errorf("%s: a client that does not read was settled as one that stayed", tc.name)
 			}
 		})
@@ -178,7 +217,7 @@ func TestAClientThatDoesNotTakeAWriteInTimeIsGone(t *testing.T) {
 		if got := h.elapsed(); got != h.cfg.WriteTimeout {
 			t.Errorf("the call took %v", got)
 		}
-		if s := h.ended(); !s.outcome.Cancelled || s.outcome.Attempts[0].Result != billing.FailedBeforeCommit {
+		if s := h.ended(); s.outcome.Attempts[0].Finish != billing.FinishCancelled || s.outcome.Attempts[0].Result != billing.FailedBeforeCommit {
 			t.Errorf("ending %+v", s.outcome)
 		}
 	})
@@ -300,7 +339,7 @@ func TestAClientThatLeavesARealConnection(t *testing.T) {
 	<-over
 	h.check()
 	s := h.ended()
-	if a := s.outcome.Attempts[0]; !s.outcome.Cancelled || a.Result != billing.Committed || a.Finish != billing.FinishCancelled {
+	if a := s.outcome.Attempts[0]; a.Result != billing.Committed || a.Finish != billing.FinishCancelled {
 		t.Errorf("ending %+v", s.outcome)
 	}
 }

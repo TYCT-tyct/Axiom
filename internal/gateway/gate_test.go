@@ -38,8 +38,8 @@ func TestGateAdmissionGivesUpAfterTheWait(t *testing.T) {
 		time.Sleep(199 * time.Millisecond)
 		admission.mustWait(t)
 		time.Sleep(time.Millisecond)
-		if !admission.finished() || !errors.Is(admission.err, ErrRateLimited) {
-			t.Fatalf("after 200ms: finished=%v err=%v, want ErrRateLimited", admission.finished(), admission.err)
+		if !admission.finished() || !errors.Is(admission.err, errAccountGate) {
+			t.Fatalf("after 200ms: finished=%v err=%v, want errAccountGate", admission.finished(), admission.err)
 		}
 
 		// The waiter left no trace: when the holder goes, the next caller gets the gate at once and the account is
@@ -63,8 +63,8 @@ func TestGateCompletionKeepsWaitingAndClientCancelIsNotARefusal(t *testing.T) {
 		admission := start(func() (func(), error) { return g.enter(clientCtx, "a", Admission) })
 
 		time.Sleep(time.Minute)
-		if admission.finished() == false || !errors.Is(admission.err, ErrRateLimited) {
-			t.Fatalf("admission: finished=%v err=%v, want ErrRateLimited", admission.finished(), admission.err)
+		if admission.finished() == false || !errors.Is(admission.err, errAccountGate) {
+			t.Fatalf("admission: finished=%v err=%v, want errAccountGate", admission.finished(), admission.err)
 		}
 		completion.mustWait(t)
 

@@ -92,7 +92,7 @@ func TestCost(t *testing.T) {
 	}
 }
 
-// reasoning falls back to output; nothing else falls back. Cost prices what it can and reports the rest, so billing
+// Reasoning and images fall back to the ordinary side price. Cost prices what it can and reports the rest, so billing
 // can price the missing items at its fallback prices instead of losing the priced part (README.md「上架门槛与缺项」). In
 // particular a cache write OpenAI reports against a schedule without a write price is reported, not priced as input.
 func TestCostMissing(t *testing.T) {
@@ -113,7 +113,7 @@ func TestCostMissing(t *testing.T) {
 		{inputOnly, counts{in: 5, cacheWrite: 1}, "5", []catalog.Item{cacheWrite}},
 		{inputOnly, counts{in: 5, cacheWrite1h: 1}, "5", []catalog.Item{cacheWrite1h}},
 		{inputOnly, counts{in: 5, audioIn: 1}, "5", []catalog.Item{audioIn}},
-		{inputOnly, counts{in: 5, imageIn: 1}, "5", []catalog.Item{imageIn}},
+		{inputOnly, counts{in: 5, imageIn: 1}, "6", nil},
 		{inputOnly, counts{in: 5, out: 1}, "5", []catalog.Item{out}},
 		{inputOnly, counts{in: 5, reasoning: 1}, "5", []catalog.Item{reasoning}},
 		{inputOnly, counts{in: 5, audioOut: 1}, "5", []catalog.Item{audioOut}},

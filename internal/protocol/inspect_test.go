@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -210,6 +211,10 @@ var inspectCases = []struct {
 		func(r *protocol.Request) { r.Model, r.ServiceTiers = "m", standard },
 	},
 	{
+		"chat legacy functions", protocol.Chat, `{"model":"m","functions":[{"name":"f","parameters":{"type":"object"}}],"function_call":"auto"}`,
+		func(r *protocol.Request) { r.Model, r.Needs = "m", protocol.Tools },
+	},
+	{
 		"chat reasoning disabled, null members", protocol.Chat, `{"model":"m","reasoning":{"enabled":false},
 		"stream":null,"messages":null,"tools":[{"type":null}],"max_tokens":null,"service_tier":null}`,
 		func(r *protocol.Request) { r.Model, r.Needs = "m", protocol.Tools },
@@ -361,6 +366,7 @@ func FuzzInspect(f *testing.F) {
 		if r.TextBytes < 0 || r.TextBytes > int64(len(body)) {
 			t.Fatalf("TextBytes %d of a %d-byte body", r.TextBytes, len(body))
 		}
+		checkTextBytes(t, body, r.TextBytes)
 	})
 }
 
@@ -424,7 +430,7 @@ func TestAllocs(t *testing.T) {
 			_, err := protocol.Inspect(f, b)
 			return err
 		}},
-		{"Prepare", protocol.Chat, prepareInspected()},
+		{"Prepare", protocol.Format(len(turns)), prepareInspected()},
 	} {
 		for f := range c.formats {
 			for _, lead := range []string{"", wideTurn} {
@@ -452,7 +458,7 @@ func prepareInspected() func(protocol.Format, []byte) error {
 			}
 			seen[&b[0]] = r
 		}
-		_, err := protocol.Prepare(&r, b, protocol.Target{Format: f, Model: "up", EncryptedReasoning: true}, protocol.Rewrites{Identity: derive})
+		_, err := protocol.Prepare(&r, b, protocol.Target{Format: f, Model: "up", EncryptedReasoning: catalog.ClaimYes}, protocol.Rewrites{Identity: derive})
 		return err
 	}
 }
@@ -499,4 +505,39 @@ func BenchmarkInspect(b *testing.B) {
 			})
 		}
 	}
+}
+
+// TestAnInvalidBodyIsDescribedInOurWords: what the client reads of a body that cannot be read is a sentence of ours
+// (a decoder's text names offsets and Go types), and a value of the wrong type is named by its JSON pointer.
+func TestAnInvalidBodyIsDescribedInOurWords(t *testing.T) {
+	leaks := []string{"jsontext", "json:", "Go struct", "canon", "offset"}
+	for _, c := range []struct {
+		name, body, want string
+		inspect          bool // the fault is met by Inspect, otherwise by the conversion to another format
+	}{
+		{"cut short", `{"model":`, "Invalid request: invalid JSON request body", true},
+		{"data after the body", `{"model":"m"} {}`, "data after the request", true},
+		{"invalid UTF-8", "{\"model\":\"\xff\"}", "Invalid request: invalid JSON request body", true},
+		{"no model", `{"stream":true}`, "model is missing", true},
+		{"a role of the wrong type", `{"model":"m","messages":[{"role":1,"content":"x"}]}`, "the value at /messages/0/role is not of a type this member takes", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var err error
+			if c.inspect {
+				_, err = protocol.Inspect(protocol.Chat, []byte(c.body))
+			} else {
+				_, err = convertBody(protocol.Messages, c.body, nil)
+			}
+			if !errors.Is(err, protocol.ErrInvalid) {
+				t.Fatalf("got %v, want ErrInvalid", err)
+			}
+			if got := strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": "); got != c.want || containsAny(got, leaks) {
+				t.Errorf("the client reads %q, want %q without any of %q", got, c.want, leaks)
+			}
+		})
+	}
+}
+
+func containsAny(s string, words []string) bool {
+	return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(s, w) })
 }

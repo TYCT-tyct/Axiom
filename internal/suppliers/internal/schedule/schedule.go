@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -53,8 +54,7 @@ type Config struct {
 	Registry *registry.Registry
 	// Holder names this node in the leases it takes.
 	Holder string
-	// SweepEvery is how often suppliers that are due are looked for; a supplier is synced at most this long after a
-	// round of it falls due.
+	// SweepEvery is how often suppliers that are due are looked for. Queue capacity decides when they start.
 	SweepEvery time.Duration
 	Now        func() time.Time
 	Logger     *slog.Logger
@@ -70,9 +70,11 @@ type SyncArgs struct {
 func (SyncArgs) Kind() string { return "suppliers.sync" }
 
 // InsertOpts implements river.JobArgsWithInsertOpts. A job that fails is not retried by the queue: the sweep makes a new
-// one when the supplier is due again, which is when its backoff says.
+// one when the supplier is due again, which is when its backoff says. A round waits on the syncs queue only for other
+// rounds.
 func (SyncArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{
+		Queue:       pg.QueueSyncs,
 		MaxAttempts: 1,
 		UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
 			rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable,
@@ -87,6 +89,9 @@ type SweepArgs struct{}
 // Kind implements river.JobArgs.
 func (SweepArgs) Kind() string { return "suppliers.sync_sweep" }
 
+// InsertOpts implements river.JobArgsWithInsertOpts: the sweep is a sync job too, and waits with the rounds it enqueues.
+func (SweepArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{Queue: pg.QueueSyncs} }
+
 // Schedule is the syncing of the suppliers on one node.
 type Schedule struct {
 	cfg      Config
@@ -96,14 +101,17 @@ type Schedule struct {
 
 // New adds the workers and the periodic sweep to the queue, before it starts.
 func New(cfg Config) (*Schedule, error) {
-	if cfg.DB == nil || cfg.Keys == nil || cfg.Egress == nil || cfg.Queue == nil || cfg.Registry == nil || cfg.Now == nil || cfg.Logger == nil {
-		return nil, errors.New("schedule: a database, keys, an egress client, a queue, adapters, a clock and a logger are required")
+	if err := cfg.check(); err != nil {
+		return nil, err
 	}
-	if cfg.SweepEvery <= 0 {
-		return nil, errors.New("schedule: the sweep needs a positive interval")
+	// The projection maps a supplier's upstream names by the catalog, and the snapshot it holds is refreshed when it has
+	// gone stale, so no poller of its own is started here.
+	cat, err := catalog.Open(cfg.DB, cfg.Scope, catalog.Config{Logger: cfg.Logger})
+	if err != nil {
+		return nil, err
 	}
 	node, err := persist.New(persist.Config{
-		DB: cfg.DB, Scope: cfg.Scope, Keys: cfg.Keys, Holder: cfg.Holder, LeaseTTL: leaseTTL, Now: cfg.Now,
+		DB: cfg.DB, Scope: cfg.Scope, Keys: cfg.Keys, Holder: cfg.Holder, LeaseTTL: leaseTTL, Now: cfg.Now, Catalog: cat,
 	})
 	if err != nil {
 		return nil, err
@@ -117,6 +125,17 @@ func New(cfg Config) (*Schedule, error) {
 	}
 	cfg.Queue.Every(cfg.SweepEvery, func() river.JobArgs { return SweepArgs{} })
 	return s, nil
+}
+
+// check reports what a node must be given to sync at all, before anything is opened.
+func (cfg Config) check() error {
+	if cfg.DB == nil || cfg.Keys == nil || cfg.Egress == nil || cfg.Queue == nil || cfg.Registry == nil || cfg.Now == nil || cfg.Logger == nil {
+		return errors.New("schedule: a database, keys, an egress client, a queue, adapters, a clock and a logger are required")
+	}
+	if cfg.SweepEvery <= 0 {
+		return errors.New("schedule: the sweep needs a positive interval")
+	}
+	return nil
 }
 
 // settings are the engine's defaults, with the backoff spread by a tenth so that suppliers that failed together do not
@@ -157,7 +176,7 @@ func (s *Schedule) sweep(ctx context.Context) error {
 // status that is synced (it was paused or removed after its job was queued) is left alone, and a round whose lease was
 // taken over has stored nothing: none of these is a failure. A task the supplier's limits stopped ends with the round,
 // its listing's position kept in the supplier's state and the task due when they reopen: the next job of the sweep goes
-// on from there, where waiting here would hold a worker of the queue (a node runs ten).
+// on from there, where waiting here would hold a worker of the queue (four workers per node on the syncs queue).
 func (s *Schedule) sync(ctx context.Context, id uuid.UUID) error {
 	session, err := s.node.Acquire(ctx, id)
 	if errors.Is(err, persist.ErrLeaseHeld) {

@@ -124,6 +124,156 @@ func (e ContextTiersMethod) Valid() bool {
 	}
 }
 
+// Defines values for CreditSource.
+const (
+	CreditSourceGift           CreditSource = "gift"
+	CreditSourceOfflinePayment CreditSource = "offline_payment"
+)
+
+// Valid indicates whether the value is a known member of the CreditSource enum.
+func (e CreditSource) Valid() bool {
+	switch e {
+	case CreditSourceGift:
+		return true
+	case CreditSourceOfflinePayment:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EndpointTestNativeUnit.
+const (
+	EndpointTestNativeUnitQuota EndpointTestNativeUnit = "quota"
+	EndpointTestNativeUnitUsd   EndpointTestNativeUnit = "usd"
+)
+
+// Valid indicates whether the value is a known member of the EndpointTestNativeUnit enum.
+func (e EndpointTestNativeUnit) Valid() bool {
+	switch e {
+	case EndpointTestNativeUnitQuota:
+		return true
+	case EndpointTestNativeUnitUsd:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EndpointTestCause.
+const (
+	EndpointTestCauseBadRequest               EndpointTestCause = "bad_request"
+	EndpointTestCauseContentRejected          EndpointTestCause = "content_rejected"
+	EndpointTestCauseContextTooLong           EndpointTestCause = "context_too_long"
+	EndpointTestCauseCredentialQuotaExhausted EndpointTestCause = "credential_quota_exhausted"
+	EndpointTestCauseCredentialRejected       EndpointTestCause = "credential_rejected"
+	EndpointTestCauseMemory                   EndpointTestCause = "memory"
+	EndpointTestCauseModelNotFound            EndpointTestCause = "model_not_found"
+	EndpointTestCauseNotPermitted             EndpointTestCause = "not_permitted"
+	EndpointTestCauseOverloaded               EndpointTestCause = "overloaded"
+	EndpointTestCauseRateLimited              EndpointTestCause = "rate_limited"
+	EndpointTestCauseStreamBroken             EndpointTestCause = "stream_broken"
+	EndpointTestCauseSupplierBalanceLow       EndpointTestCause = "supplier_balance_low"
+	EndpointTestCauseTimeout                  EndpointTestCause = "timeout"
+	EndpointTestCauseToolInput                EndpointTestCause = "tool_input"
+	EndpointTestCauseTransport                EndpointTestCause = "transport"
+	EndpointTestCauseUnknown                  EndpointTestCause = "unknown"
+	EndpointTestCauseUpstreamError            EndpointTestCause = "upstream_error"
+)
+
+// Valid indicates whether the value is a known member of the EndpointTestCause enum.
+func (e EndpointTestCause) Valid() bool {
+	switch e {
+	case EndpointTestCauseBadRequest:
+		return true
+	case EndpointTestCauseContentRejected:
+		return true
+	case EndpointTestCauseContextTooLong:
+		return true
+	case EndpointTestCauseCredentialQuotaExhausted:
+		return true
+	case EndpointTestCauseCredentialRejected:
+		return true
+	case EndpointTestCauseMemory:
+		return true
+	case EndpointTestCauseModelNotFound:
+		return true
+	case EndpointTestCauseNotPermitted:
+		return true
+	case EndpointTestCauseOverloaded:
+		return true
+	case EndpointTestCauseRateLimited:
+		return true
+	case EndpointTestCauseStreamBroken:
+		return true
+	case EndpointTestCauseSupplierBalanceLow:
+		return true
+	case EndpointTestCauseTimeout:
+		return true
+	case EndpointTestCauseToolInput:
+		return true
+	case EndpointTestCauseTransport:
+		return true
+	case EndpointTestCauseUnknown:
+		return true
+	case EndpointTestCauseUpstreamError:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EndpointTestOutcome.
+const (
+	Failed       EndpointTestOutcome = "failed"
+	Inconclusive EndpointTestOutcome = "inconclusive"
+	Passed       EndpointTestOutcome = "passed"
+)
+
+// Valid indicates whether the value is a known member of the EndpointTestOutcome enum.
+func (e EndpointTestOutcome) Valid() bool {
+	switch e {
+	case Failed:
+		return true
+	case Inconclusive:
+		return true
+	case Passed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EndpointTestProblemScope.
+const (
+	EndpointTestProblemScopeCredential EndpointTestProblemScope = "credential"
+	EndpointTestProblemScopeEgress     EndpointTestProblemScope = "egress"
+	EndpointTestProblemScopeEndpoint   EndpointTestProblemScope = "endpoint"
+	EndpointTestProblemScopeGroup      EndpointTestProblemScope = "group"
+	EndpointTestProblemScopeRequest    EndpointTestProblemScope = "request"
+	EndpointTestProblemScopeSupplier   EndpointTestProblemScope = "supplier"
+)
+
+// Valid indicates whether the value is a known member of the EndpointTestProblemScope enum.
+func (e EndpointTestProblemScope) Valid() bool {
+	switch e {
+	case EndpointTestProblemScopeCredential:
+		return true
+	case EndpointTestProblemScopeEgress:
+		return true
+	case EndpointTestProblemScopeEndpoint:
+		return true
+	case EndpointTestProblemScopeGroup:
+		return true
+	case EndpointTestProblemScopeRequest:
+		return true
+	case EndpointTestProblemScopeSupplier:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorCode.
 const (
 	ErrorCodeConflict             ErrorCode = "conflict"
@@ -143,6 +293,7 @@ const (
 	ErrorCodeOriginRejected       ErrorCode = "origin_rejected"
 	ErrorCodeRateLimited          ErrorCode = "rate_limited"
 	ErrorCodeStaleRevision        ErrorCode = "stale_revision"
+	ErrorCodeTooManyKeys          ErrorCode = "too_many_keys"
 	ErrorCodeUnauthenticated      ErrorCode = "unauthenticated"
 	ErrorCodeUnavailable          ErrorCode = "unavailable"
 	ErrorCodeUnprocessable        ErrorCode = "unprocessable"
@@ -185,6 +336,8 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeRateLimited:
 		return true
 	case ErrorCodeStaleRevision:
+		return true
+	case ErrorCodeTooManyKeys:
 		return true
 	case ErrorCodeUnauthenticated:
 		return true
@@ -561,16 +714,16 @@ func (e SessionLevel) Valid() bool {
 
 // Defines values for SupplierNativeUnit.
 const (
-	Quota SupplierNativeUnit = "quota"
-	Usd   SupplierNativeUnit = "usd"
+	SupplierNativeUnitQuota SupplierNativeUnit = "quota"
+	SupplierNativeUnitUsd   SupplierNativeUnit = "usd"
 )
 
 // Valid indicates whether the value is a known member of the SupplierNativeUnit enum.
 func (e SupplierNativeUnit) Valid() bool {
 	switch e {
-	case Quota:
+	case SupplierNativeUnitQuota:
 		return true
-	case Usd:
+	case SupplierNativeUnitUsd:
 		return true
 	default:
 		return false
@@ -582,6 +735,7 @@ const (
 	SupplierCredentialStatusActive           SupplierCredentialStatus = "active"
 	SupplierCredentialStatusBinding          SupplierCredentialStatus = "binding"
 	SupplierCredentialStatusDisabled         SupplierCredentialStatus = "disabled"
+	SupplierCredentialStatusErased           SupplierCredentialStatus = "erased"
 	SupplierCredentialStatusExpired          SupplierCredentialStatus = "expired"
 	SupplierCredentialStatusQuotaExhausted   SupplierCredentialStatus = "quota_exhausted"
 	SupplierCredentialStatusUpstreamDisabled SupplierCredentialStatus = "upstream_disabled"
@@ -596,11 +750,34 @@ func (e SupplierCredentialStatus) Valid() bool {
 		return true
 	case SupplierCredentialStatusDisabled:
 		return true
+	case SupplierCredentialStatusErased:
+		return true
 	case SupplierCredentialStatusExpired:
 		return true
 	case SupplierCredentialStatusQuotaExhausted:
 		return true
 	case SupplierCredentialStatusUpstreamDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupplierEndpointCostState.
+const (
+	SupplierEndpointCostStateConflict SupplierEndpointCostState = "conflict"
+	SupplierEndpointCostStateKnown    SupplierEndpointCostState = "known"
+	SupplierEndpointCostStateUnknown  SupplierEndpointCostState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SupplierEndpointCostState enum.
+func (e SupplierEndpointCostState) Valid() bool {
+	switch e {
+	case SupplierEndpointCostStateConflict:
+		return true
+	case SupplierEndpointCostStateKnown:
+		return true
+	case SupplierEndpointCostStateUnknown:
 		return true
 	default:
 		return false
@@ -725,10 +902,11 @@ type AccountDetail struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// Id An account's ID (TypeID).
-	Id    AccountId         `json:"id"`
-	Kind  AccountDetailKind `json:"kind"`
-	Name  string            `json:"name"`
-	Owner struct {
+	Id        AccountId         `json:"id"`
+	KeyLimits KeyLimitsView     `json:"key_limits"`
+	Kind      AccountDetailKind `json:"kind"`
+	Name      string            `json:"name"`
+	Owner     struct {
 		Email string `json:"email"`
 
 		// Id A user's ID (TypeID).
@@ -824,7 +1002,19 @@ type ContextTiers struct {
 // ContextTiersMethod defines model for ContextTiers.Method.
 type ContextTiersMethod string
 
-// CreditGrant defines model for CreditGrant.
+// CredentialLimits defines model for CredentialLimits.
+type CredentialLimits struct {
+	// MaxConcurrency The calls the key has in flight at once. A new binding starts at 4.
+	MaxConcurrency int `json:"max_concurrency"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// RequestsPerMinute Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling.
+	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+}
+
+// CreditGrant `amount` is the credit, in the site's currency. An offline payment has `payment`, and `exchange_rate` when it was converted from another currency.
 type CreditGrant struct {
 	// AccountId An account's ID (TypeID).
 	AccountId AccountId `json:"account_id"`
@@ -833,25 +1023,41 @@ type CreditGrant struct {
 	Amount Money `json:"amount"`
 
 	// BalanceAfter An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls settled for the current UTC calendar month.
-	BalanceAfter Balance    `json:"balance_after"`
-	CreatedAt    time.Time  `json:"created_at"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	BalanceAfter Balance       `json:"balance_after"`
+	CreatedAt    time.Time     `json:"created_at"`
+	ExchangeRate *ExchangeRate `json:"exchange_rate,omitempty"`
+	ExpiresAt    *time.Time    `json:"expires_at,omitempty"`
 
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	Id Uuid `json:"id"`
+
+	// Payment Money received outside the payment channels. `amount` is what was paid, in its own currency, one an exchange rate can be kept for, and in whole minor units of it.
+	Payment *OfflinePayment `json:"payment,omitempty"`
+
+	// Source Where the credit comes from. Absent in a request: gift.
+	Source CreditSource `json:"source"`
 }
 
-// CreditGrantRequest defines model for CreditGrantRequest.
+// CreditGrantRequest A gift needs `amount`, in the site's currency; an offline payment needs `payment` instead.
 type CreditGrantRequest struct {
 	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
-	Amount Money `json:"amount"`
+	Amount *Money `json:"amount,omitempty"`
 
 	// ExpiresAt UTC, in the future. Absent: the credit does not expire.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 
+	// Payment Money received outside the payment channels. `amount` is what was paid, in its own currency, one an exchange rate can be kept for, and in whole minor units of it.
+	Payment *OfflinePayment `json:"payment,omitempty"`
+
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
+
+	// Source Where the credit comes from. Absent in a request: gift.
+	Source *CreditSource `json:"source,omitempty"`
 }
+
+// CreditSource Where the credit comes from. Absent in a request: gift.
+type CreditSource string
 
 // Decimal An exact decimal number in text, never a JSON number, so no digit is lost on the way.
 type Decimal = string
@@ -874,6 +1080,83 @@ type Detection struct {
 // DetectionRequest defines model for DetectionRequest.
 type DetectionRequest struct {
 	Origin string `json:"origin"`
+}
+
+// EffectiveKeyLimits defines model for EffectiveKeyLimits.
+type EffectiveKeyLimits struct {
+	CreationsPerHour int `json:"creations_per_hour"`
+	MaxKeys          int `json:"max_keys"`
+}
+
+// EndpointTest defines model for EndpointTest.
+type EndpointTest struct {
+	// EndpointId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	EndpointId Uuid `json:"endpoint_id"`
+
+	// EstimatedNative Zero when the supplier is known not to have executed the call; otherwise the highest price of the prompt's tokens and of the 16-token cap over every reachable context band, in the supplier's unit. A definite upper bound, never what the supplier reported.
+	EstimatedNative Decimal `json:"estimated_native"`
+
+	// FirstTokenMs Absent when no content came.
+	FirstTokenMs *int        `json:"first_token_ms,omitempty"`
+	Format       ModelFormat `json:"format"`
+
+	// ModelId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	ModelId Uuid `json:"model_id"`
+
+	// NativeUnit The unit the supplier counts its balance in, which the estimate is in.
+	NativeUnit EndpointTestNativeUnit `json:"native_unit"`
+
+	// Outcome `passed`: a 2xx read to its normal end. `failed`: a failure the endpoint is at fault for, or a stream that broke. `inconclusive`: another scope's failure, something the supplier refused, or the test's own limit — nothing the endpoint can be judged by.
+	Outcome EndpointTestOutcome  `json:"outcome"`
+	Problem *EndpointTestProblem `json:"problem,omitempty"`
+
+	// RequestId The platform's own ID of the test, which its cost row and its audit entry are keyed by.
+	RequestId Uuid `json:"request_id"`
+
+	// TotalMs The whole test: waiting for the answer and reading it.
+	TotalMs int `json:"total_ms"`
+
+	// UpstreamModel The model's name at the supplier, which the call sent.
+	UpstreamModel string `json:"upstream_model"`
+
+	// UpstreamRequestId The supplier's own ID of the call, when it gave one: the key its charge carries.
+	UpstreamRequestId *string `json:"upstream_request_id,omitempty"`
+
+	// UpstreamStatus The supplier's HTTP status; 0 when it answered nothing.
+	UpstreamStatus *int `json:"upstream_status,omitempty"`
+}
+
+// EndpointTestNativeUnit The unit the supplier counts its balance in, which the estimate is in.
+type EndpointTestNativeUnit string
+
+// EndpointTestCause Why the test did not pass. `timeout` and `memory` are the test's own limits, not the supplier's.
+type EndpointTestCause string
+
+// EndpointTestOutcome `passed`: a 2xx read to its normal end. `failed`: a failure the endpoint is at fault for, or a stream that broke. `inconclusive`: another scope's failure, something the supplier refused, or the test's own limit — nothing the endpoint can be judged by.
+type EndpointTestOutcome string
+
+// EndpointTestProblem defines model for EndpointTestProblem.
+type EndpointTestProblem struct {
+	// Cause Why the test did not pass. `timeout` and `memory` are the test's own limits, not the supplier's.
+	Cause EndpointTestCause `json:"cause"`
+
+	// Scope Whose fault it is: the endpoint's, the key's, the group's, the supplier's, the request's, or the route to the supplier. Absent when the test's own limit ended it.
+	Scope *EndpointTestProblemScope `json:"scope,omitempty"`
+}
+
+// EndpointTestProblemScope Whose fault it is: the endpoint's, the key's, the group's, the supplier's, the request's, or the route to the supplier. Absent when the test's own limit ended it.
+type EndpointTestProblemScope string
+
+// EndpointTestRequest defines model for EndpointTestRequest.
+type EndpointTestRequest struct {
+	// EndpointId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	EndpointId Uuid `json:"endpoint_id"`
+
+	// Format The format to test it in; it must be one the endpoint serves.
+	Format ModelFormat `json:"format"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
 }
 
 // Error The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
@@ -906,6 +1189,43 @@ type ErrorField struct {
 // Evidence What supports a price (a page excerpt, a dataset entry), kept as the person entered it.
 type Evidence map[string]interface{}
 
+// ExchangeRate defines model for ExchangeRate.
+type ExchangeRate struct {
+	Base        string    `json:"base"`
+	CreatedAt   time.Time `json:"created_at"`
+	CreatedBy   string    `json:"created_by"`
+	Denominator string    `json:"denominator"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id        Uuid   `json:"id"`
+	Kind      string `json:"kind"`
+	Numerator string `json:"numerator"`
+	Quote     string `json:"quote"`
+	Reason    string `json:"reason"`
+	Source    string `json:"source"`
+	Version   int64  `json:"version"`
+}
+
+// ExchangeRateInput defines model for ExchangeRateInput.
+type ExchangeRateInput struct {
+	Base string `json:"base"`
+
+	// Denominator Positive integer at most 10^18
+	Denominator     string `json:"denominator"`
+	ExpectedVersion int64  `json:"expected_version"`
+	Kind            string `json:"kind"`
+
+	// Numerator Positive integer at most 10^18
+	Numerator string `json:"numerator"`
+	Quote     string `json:"quote"`
+	Reason    string `json:"reason"`
+}
+
+// ExchangeRateList defines model for ExchangeRateList.
+type ExchangeRateList struct {
+	Data []ExchangeRate `json:"data"`
+}
+
 // FactorChange A changed factor ends every other session of the user and every unused recovery code, and issues this device a new `mfa` session: the cookie of the response replaces the old one.
 type FactorChange struct {
 	CsrfToken string `json:"csrf_token"`
@@ -919,6 +1239,30 @@ type GroupSelection struct {
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason   Reason `json:"reason"`
 	Selected bool   `json:"selected"`
+}
+
+// KeyLimits Limits on the call keys of an account: how many it may hold that are not deleted (`max_keys`), and how many it may make in an hour, deleted ones too (`creations_per_hour`). A limit that is absent is not set, and the level above applies: the site's for an account, the default in code for a site. Each is from 1 to 10,000.
+type KeyLimits struct {
+	CreationsPerHour *int `json:"creations_per_hour,omitempty"`
+	MaxKeys          *int `json:"max_keys,omitempty"`
+}
+
+// KeyLimitsUpdate defines model for KeyLimitsUpdate.
+type KeyLimitsUpdate struct {
+	// Limits Limits on the call keys of an account: how many it may hold that are not deleted (`max_keys`), and how many it may make in an hour, deleted ones too (`creations_per_hour`). A limit that is absent is not set, and the level above applies: the site's for an account, the default in code for a site. Each is from 1 to 10,000.
+	Limits KeyLimits `json:"limits"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// KeyLimitsView defines model for KeyLimitsView.
+type KeyLimitsView struct {
+	// Effective What applies here, `limits` over the level above.
+	Effective EffectiveKeyLimits `json:"effective"`
+
+	// Limits The limits set at this level.
+	Limits KeyLimits `json:"limits"`
 }
 
 // LoginField defines model for LoginField.
@@ -1086,6 +1430,15 @@ type NameAdd struct {
 // NameAddVisibility defines model for NameAdd.Visibility.
 type NameAddVisibility string
 
+// OfflinePayment Money received outside the payment channels. `amount` is what was paid, in its own currency, one an exchange rate can be kept for, and in whole minor units of it.
+type OfflinePayment struct {
+	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	Amount Money `json:"amount"`
+
+	// Channel Where it was received, such as a bank account.
+	Channel string `json:"channel"`
+}
+
 // PendingMapping defines model for PendingMapping.
 type PendingMapping struct {
 	Formats       []ModelFormat `json:"formats"`
@@ -1166,7 +1519,7 @@ type PriceSourceSelect struct {
 // PriceSourceSelectSource defines model for PriceSourceSelect.Source.
 type PriceSourceSelectSource string
 
-// PricingAudience Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`.
+// PricingAudience Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. This release accepts only `all` (422 for the others, pointing at `/rule/audience/kind`) and the listing can show the other two only for rules a later release wrote.
 type PricingAudience struct {
 	Id   *string             `json:"id,omitempty"`
 	Kind PricingAudienceKind `json:"kind"`
@@ -1175,7 +1528,7 @@ type PricingAudience struct {
 // PricingAudienceKind defines model for PricingAudience.Kind.
 type PricingAudienceKind string
 
-// PricingConstraints Limits on the price a rule sets, as ratios. `min_margin_ratio` raises the break-even floor's profit margin for what the rule prices; the floor itself always applies. `reference_min_ratio` and `reference_max_ratio` keep the price between those multiples of the reference price.
+// PricingConstraints Limits on the price a rule sets, as ratios. This release does not apply them: a request that carries any member (`min_margin_ratio`, `reference_min_ratio`, `reference_max_ratio`) is refused as 422 with the field pointer `/rule/constraints/<member>`, so send `{}`. A stored rule that still has one is not priced, and saving it without constraints clears them (#234).
 type PricingConstraints struct {
 	// MinMarginRatio An exact decimal number in text, never a JSON number, so no digit is lost on the way.
 	MinMarginRatio *Decimal `json:"min_margin_ratio,omitempty"`
@@ -1187,7 +1540,7 @@ type PricingConstraints struct {
 	ReferenceMinRatio *Decimal `json:"reference_min_ratio,omitempty"`
 }
 
-// PricingMethod How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency. `fixed`: `schedule` is the price. The members of the other kinds must be absent.
+// PricingMethod How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the reference price is already in that currency: this release has no exchange rate, so a reference price in another currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be absent.
 type PricingMethod struct {
 	CurrencyConversion *PricingMethodCurrencyConversion `json:"currency_conversion,omitempty"`
 
@@ -1228,7 +1581,7 @@ type PricingPreviewRequest struct {
 	// ReplacesRuleId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	ReplacesRuleId *Uuid `json:"replaces_rule_id,omitempty"`
 
-	// Rule A rule to add, or to put in place of `replaces_rule_id`, for this preview only.
+	// Rule A rule to add, or to put in place of `replaces_rule_id`, for this preview only; its audience can only be `all` in this release (422, pointing at `/rule/audience/kind`). The site holds one rule for each target and audience, and the stored one would price the models, so a rule that would sit beside another stored rule with the same target and audience is refused: a rule to add, because it would be a second rule for them (409, as creating the rule is), and a replacement, because it would collide with a stored rule other than `replaces_rule_id` (422, pointing at `/replaces_rule_id`).
 	Rule *PricingRuleInput `json:"rule,omitempty"`
 
 	// TierId The tier whose price to show. Absent, and without `account_id`: the site's default tier. Not with `account_id`.
@@ -1255,26 +1608,26 @@ type PricingPreviewRow struct {
 	// Slug `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it.
 	Slug ModelSlug `json:"slug"`
 
-	// Status `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
+	// Status `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule sets a price for the model by a way of pricing this release has, so the model has no sale price at all: its reference price is never sold in its place.
 	Status PricingPreviewRowStatus `json:"status"`
 }
 
-// PricingPreviewRowStatus `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule applies and the model has no reference price to fall back on.
+// PricingPreviewRowStatus `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule sets a price for the model by a way of pricing this release has, so the model has no sale price at all: its reference price is never sold in its place.
 type PricingPreviewRowStatus string
 
 // PricingRule defines model for PricingRule.
 type PricingRule struct {
-	// Audience Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`.
+	// Audience Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. This release accepts only `all` (422 for the others, pointing at `/rule/audience/kind`) and the listing can show the other two only for rules a later release wrote.
 	Audience PricingAudience `json:"audience"`
 
-	// Constraints Limits on the price a rule sets, as ratios. `min_margin_ratio` raises the break-even floor's profit margin for what the rule prices; the floor itself always applies. `reference_min_ratio` and `reference_max_ratio` keep the price between those multiples of the reference price.
+	// Constraints Limits on the price a rule sets, as ratios. This release does not apply them: a request that carries any member (`min_margin_ratio`, `reference_min_ratio`, `reference_max_ratio`) is refused as 422 with the field pointer `/rule/constraints/<member>`, so send `{}`. A stored rule that still has one is not priced, and saving it without constraints clears them (#234).
 	Constraints PricingConstraints `json:"constraints"`
 	Enabled     bool               `json:"enabled"`
 
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	Id Uuid `json:"id"`
 
-	// Method How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency. `fixed`: `schedule` is the price. The members of the other kinds must be absent.
+	// Method How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the reference price is already in that currency: this release has no exchange rate, so a reference price in another currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be absent.
 	Method PricingMethod `json:"method"`
 	Rev    int64         `json:"rev"`
 
@@ -1292,14 +1645,14 @@ type PricingRuleCreate struct {
 
 // PricingRuleInput defines model for PricingRuleInput.
 type PricingRuleInput struct {
-	// Audience Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`.
+	// Audience Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. This release accepts only `all` (422 for the others, pointing at `/rule/audience/kind`) and the listing can show the other two only for rules a later release wrote.
 	Audience PricingAudience `json:"audience"`
 
-	// Constraints Limits on the price a rule sets, as ratios. `min_margin_ratio` raises the break-even floor's profit margin for what the rule prices; the floor itself always applies. `reference_min_ratio` and `reference_max_ratio` keep the price between those multiples of the reference price.
+	// Constraints Limits on the price a rule sets, as ratios. This release does not apply them: a request that carries any member (`min_margin_ratio`, `reference_min_ratio`, `reference_max_ratio`) is refused as 422 with the field pointer `/rule/constraints/<member>`, so send `{}`. A stored rule that still has one is not priced, and saving it without constraints clears them (#234).
 	Constraints PricingConstraints `json:"constraints"`
 	Enabled     bool               `json:"enabled"`
 
-	// Method How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency. `fixed`: `schedule` is the price. The members of the other kinds must be absent.
+	// Method How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the reference price is already in that currency: this release has no exchange rate, so a reference price in another currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be absent.
 	Method PricingMethod `json:"method"`
 
 	// Target What a rule prices, from the most specific to the widest: an endpoint, a supplier group, a supplier, a model, a model author, a source type, or everything. `id` is that thing's ID (a model author's slug), and absent for `all`.
@@ -1534,7 +1887,7 @@ type Supplier struct {
 	Origin             string `json:"origin"`
 	SettlementCurrency string `json:"settlement_currency"`
 
-	// Status `connecting`: not yet read; `active`: syncing and routable; `low_balance`: syncing, balance under the alert line; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on purpose; `removing` and `removed`: see `removeSupplier`.
+	// Status `connecting`: not yet read; `active`: syncing, and routable while its balance is above zero; `low_balance`: syncing, balance under the alert line, routable on the same condition; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on purpose; `removed`: see `removeSupplier`; `removing` is only what a removal of an earlier version left behind, and removing again ends it.
 	Status       SupplierStatus `json:"status"`
 	StatusReason *string        `json:"status_reason,omitempty"`
 
@@ -1563,7 +1916,7 @@ type SupplierCreate struct {
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 
-	// SettlementCurrency The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it.
+	// SettlementCurrency The currency Axiom pays this supplier in, such as CNY or USD. The adapter cannot tell it from the supplier's unit, so the person says it; it is fixed, and the unit value is always in it. It must be the site's currency or one the manual exchange rates support (USD, CNY, EUR, GBP, JPY, HKD, SGD, AUD, CAD, CHF), else 422 pointing at this member: a supplier in any other would have no rate to convert its costs with.
 	SettlementCurrency string `json:"settlement_currency"`
 	UpstreamAccount    string `json:"upstream_account"`
 }
@@ -1577,10 +1930,13 @@ type SupplierCredential struct {
 	GroupId Uuid `json:"group_id"`
 
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
-	Id             Uuid                     `json:"id"`
-	MaxConcurrency int                      `json:"max_concurrency"`
-	Status         SupplierCredentialStatus `json:"status"`
-	UpstreamKeyRef string                   `json:"upstream_key_ref"`
+	Id             Uuid `json:"id"`
+	MaxConcurrency int  `json:"max_concurrency"`
+
+	// RequestsPerMinute The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling.
+	RequestsPerMinute *int                     `json:"requests_per_minute,omitempty"`
+	Status            SupplierCredentialStatus `json:"status"`
+	UpstreamKeyRef    string                   `json:"upstream_key_ref"`
 }
 
 // SupplierCredentialStatus defines model for SupplierCredential.Status.
@@ -1589,10 +1945,33 @@ type SupplierCredentialStatus string
 // SupplierDetail defines model for SupplierDetail.
 type SupplierDetail struct {
 	Credentials []SupplierCredential `json:"credentials"`
+	Endpoints   []SupplierEndpoint   `json:"endpoints"`
 	Groups      []SupplierGroup      `json:"groups"`
 	Supplier    Supplier             `json:"supplier"`
 	UnboundKeys []UpstreamKey        `json:"unbound_keys"`
 }
+
+// SupplierEndpoint One model in one of the supplier's groups, as the sync projected it: what testSupplierEndpoint is given. Only an enabled endpoint whose cost is `known` can be called, and so tested.
+type SupplierEndpoint struct {
+	CostState SupplierEndpointCostState `json:"cost_state"`
+	Enabled   bool                      `json:"enabled"`
+	Formats   []ModelFormat             `json:"formats"`
+
+	// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GroupId Uuid `json:"group_id"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// ModelId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	ModelId Uuid `json:"model_id"`
+
+	// UpstreamName The model's name at the supplier.
+	UpstreamName string `json:"upstream_name"`
+}
+
+// SupplierEndpointCostState defines model for SupplierEndpoint.CostState.
+type SupplierEndpointCostState string
 
 // SupplierGroup defines model for SupplierGroup.
 type SupplierGroup struct {
@@ -1645,7 +2024,7 @@ type SupplierLoginUpdate struct {
 	Reason Reason `json:"reason"`
 }
 
-// SupplierStatus `connecting`: not yet read; `active`: syncing and routable; `low_balance`: syncing, balance under the alert line; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on purpose; `removing` and `removed`: see `removeSupplier`.
+// SupplierStatus `connecting`: not yet read; `active`: syncing, and routable while its balance is above zero; `low_balance`: syncing, balance under the alert line, routable on the same condition; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on purpose; `removed`: see `removeSupplier`; `removing` is only what a removal of an earlier version left behind, and removing again ends it.
 type SupplierStatus string
 
 // SupplierStatusUpdate defines model for SupplierStatusUpdate.
@@ -1799,6 +2178,12 @@ type GrantCreditParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// UpdateAccountKeyLimitsParams defines parameters for UpdateAccountKeyLimits.
+type UpdateAccountKeyLimitsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SaveAuthorParams defines parameters for SaveAuthor.
 type SaveAuthorParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -1865,6 +2250,18 @@ type ListPendingMappingsParams struct {
 	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// SetExchangeRateParams defines parameters for SetExchangeRate.
+type SetExchangeRateParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ExchangeRateHistoryParams defines parameters for ExchangeRateHistory.
+type ExchangeRateHistoryParams struct {
+	// BeforeVersion The version to continue from, exclusive; omit it to start from the newest.
+	BeforeVersion *int64 `form:"before_version,omitempty" json:"before_version,omitempty"`
+}
+
 // CreatePricingRuleParams defines parameters for CreatePricingRule.
 type CreatePricingRuleParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -1873,6 +2270,12 @@ type CreatePricingRuleParams struct {
 
 // UpdatePricingRuleParams defines parameters for UpdatePricingRule.
 type UpdatePricingRuleParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateSiteKeyLimitsParams defines parameters for UpdateSiteKeyLimits.
+type UpdateSiteKeyLimitsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -1900,8 +2303,20 @@ type CreateSupplierParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// TestSupplierEndpointParams defines parameters for TestSupplierEndpoint.
+type TestSupplierEndpointParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // BindSupplierKeyParams defines parameters for BindSupplierKey.
 type BindSupplierKeyParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetSupplierCredentialLimitsParams defines parameters for SetSupplierCredentialLimits.
+type SetSupplierCredentialLimitsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -1963,6 +2378,9 @@ type ListUsersParams struct {
 // GrantCreditJSONRequestBody defines body for GrantCredit for application/json ContentType.
 type GrantCreditJSONRequestBody = CreditGrantRequest
 
+// UpdateAccountKeyLimitsJSONRequestBody defines body for UpdateAccountKeyLimits for application/json ContentType.
+type UpdateAccountKeyLimitsJSONRequestBody = KeyLimitsUpdate
+
 // VerifyMfaJSONRequestBody defines body for VerifyMfa for application/json ContentType.
 type VerifyMfaJSONRequestBody = MfaRequest
 
@@ -1996,6 +2414,9 @@ type UpdateModelSpecJSONRequestBody = SpecUpdate
 // SetModelStatusJSONRequestBody defines body for SetModelStatus for application/json ContentType.
 type SetModelStatusJSONRequestBody = ModelStatusUpdate
 
+// SetExchangeRateJSONRequestBody defines body for SetExchangeRate for application/json ContentType.
+type SetExchangeRateJSONRequestBody = ExchangeRateInput
+
 // PreviewPricingJSONRequestBody defines body for PreviewPricing for application/json ContentType.
 type PreviewPricingJSONRequestBody = PricingPreviewRequest
 
@@ -2004,6 +2425,9 @@ type CreatePricingRuleJSONRequestBody = PricingRuleCreate
 
 // UpdatePricingRuleJSONRequestBody defines body for UpdatePricingRule for application/json ContentType.
 type UpdatePricingRuleJSONRequestBody = PricingRuleUpdate
+
+// UpdateSiteKeyLimitsJSONRequestBody defines body for UpdateSiteKeyLimits for application/json ContentType.
+type UpdateSiteKeyLimitsJSONRequestBody = KeyLimitsUpdate
 
 // UpdateSiteSettingsJSONRequestBody defines body for UpdateSiteSettings for application/json ContentType.
 type UpdateSiteSettingsJSONRequestBody = SiteSettingsUpdate
@@ -2014,8 +2438,14 @@ type CreateSupplierJSONRequestBody = SupplierCreate
 // DetectSupplierJSONRequestBody defines body for DetectSupplier for application/json ContentType.
 type DetectSupplierJSONRequestBody = DetectionRequest
 
+// TestSupplierEndpointJSONRequestBody defines body for TestSupplierEndpoint for application/json ContentType.
+type TestSupplierEndpointJSONRequestBody = EndpointTestRequest
+
 // BindSupplierKeyJSONRequestBody defines body for BindSupplierKey for application/json ContentType.
 type BindSupplierKeyJSONRequestBody = BindKey
+
+// SetSupplierCredentialLimitsJSONRequestBody defines body for SetSupplierCredentialLimits for application/json ContentType.
+type SetSupplierCredentialLimitsJSONRequestBody = CredentialLimits
 
 // SelectSupplierGroupJSONRequestBody defines body for SelectSupplierGroup for application/json ContentType.
 type SelectSupplierGroupJSONRequestBody = GroupSelection
@@ -2126,6 +2556,9 @@ type ServerInterface interface {
 	// GrantCredit Give an account credit
 	// (POST /api/admin/v1/accounts/{account_id}/credit-grants)
 	GrantCredit(w http.ResponseWriter, r *http.Request, accountId AccountId, params GrantCreditParams)
+	// UpdateAccountKeyLimits Set an account's own limits on its keys
+	// (PUT /api/admin/v1/accounts/{account_id}/key-limits)
+	UpdateAccountKeyLimits(w http.ResponseWriter, r *http.Request, accountId AccountId, params UpdateAccountKeyLimitsParams)
 	// VerifyMfa Pass two-step verification
 	// (POST /api/admin/v1/auth/mfa)
 	VerifyMfa(w http.ResponseWriter, r *http.Request)
@@ -2177,6 +2610,15 @@ type ServerInterface interface {
 	// ListPendingMappings Upstream model names that map to no model
 	// (GET /api/admin/v1/pending-mappings)
 	ListPendingMappings(w http.ResponseWriter, r *http.Request, params ListPendingMappingsParams)
+	// ListExchangeRates List current manual exchange rates
+	// (GET /api/admin/v1/pricing/exchange-rates)
+	ListExchangeRates(w http.ResponseWriter, r *http.Request)
+	// SetExchangeRate Append a manual exchange rate
+	// (POST /api/admin/v1/pricing/exchange-rates)
+	SetExchangeRate(w http.ResponseWriter, r *http.Request, params SetExchangeRateParams)
+	// ExchangeRateHistory Read a pair's immutable history
+	// (GET /api/admin/v1/pricing/exchange-rates/{base}/{quote})
+	ExchangeRateHistory(w http.ResponseWriter, r *http.Request, base string, quote string, params ExchangeRateHistoryParams)
 	// PreviewPricing Preview prices and margins
 	// (POST /api/admin/v1/pricing/previews)
 	PreviewPricing(w http.ResponseWriter, r *http.Request)
@@ -2192,6 +2634,12 @@ type ServerInterface interface {
 	// GetSession The current session
 	// (GET /api/admin/v1/session)
 	GetSession(w http.ResponseWriter, r *http.Request)
+	// GetSiteKeyLimits A site's limits on the keys of an account
+	// (GET /api/admin/v1/sites/{site_id}/key-limits)
+	GetSiteKeyLimits(w http.ResponseWriter, r *http.Request, siteId SiteId)
+	// UpdateSiteKeyLimits Set a site's limits on the keys of an account
+	// (PUT /api/admin/v1/sites/{site_id}/key-limits)
+	UpdateSiteKeyLimits(w http.ResponseWriter, r *http.Request, siteId SiteId, params UpdateSiteKeyLimitsParams)
 	// GetSiteSettings A site's session and key settings
 	// (GET /api/admin/v1/sites/{site_id}/settings)
 	GetSiteSettings(w http.ResponseWriter, r *http.Request, siteId SiteId)
@@ -2207,12 +2655,18 @@ type ServerInterface interface {
 	// DetectSupplier Find out what system a site runs
 	// (POST /api/admin/v1/suppliers/detections)
 	DetectSupplier(w http.ResponseWriter, r *http.Request)
-	// GetSupplier One supplier with its groups and keys
+	// TestSupplierEndpoint Test one of a supplier's endpoints with a real generation
+	// (POST /api/admin/v1/suppliers/endpoint-tests)
+	TestSupplierEndpoint(w http.ResponseWriter, r *http.Request, params TestSupplierEndpointParams)
+	// GetSupplier One supplier with its groups, keys and endpoints
 	// (GET /api/admin/v1/suppliers/{supplier_id})
 	GetSupplier(w http.ResponseWriter, r *http.Request, supplierId Uuid)
 	// BindSupplierKey Use one of the supplier's keys for a group
 	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials)
 	BindSupplierKey(w http.ResponseWriter, r *http.Request, supplierId Uuid, params BindSupplierKeyParams)
+	// SetSupplierCredentialLimits Set a credential's concurrency and account RPM ceiling
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits)
+	SetSupplierCredentialLimits(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params SetSupplierCredentialLimitsParams)
 	// SelectSupplierGroup Choose whether a supplier's group is used
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/groups/{group_id})
 	SelectSupplierGroup(w http.ResponseWriter, r *http.Request, supplierId Uuid, groupId Uuid, params SelectSupplierGroupParams)
@@ -2222,7 +2676,7 @@ type ServerInterface interface {
 	// MapSupplierModel Map an upstream model name to a model
 	// (POST /api/admin/v1/suppliers/{supplier_id}/model-mappings)
 	MapSupplierModel(w http.ResponseWriter, r *http.Request, supplierId Uuid, params MapSupplierModelParams)
-	// RemoveSupplier Start removing a supplier
+	// RemoveSupplier Remove a supplier
 	// (POST /api/admin/v1/suppliers/{supplier_id}/removal)
 	RemoveSupplier(w http.ResponseWriter, r *http.Request, supplierId Uuid, params RemoveSupplierParams)
 	// SetSupplierStatus Pause or resume a supplier
@@ -2322,6 +2776,60 @@ func (siw *ServerInterfaceWrapper) GrantCredit(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GrantCredit(w, r, accountId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateAccountKeyLimits operation middleware
+func (siw *ServerInterfaceWrapper) UpdateAccountKeyLimits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "account_id" -------------
+	var accountId AccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "account_id", r.PathValue("account_id"), &accountId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "account_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateAccountKeyLimitsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateAccountKeyLimits(w, r, accountId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2968,6 +3476,116 @@ func (siw *ServerInterfaceWrapper) ListPendingMappings(w http.ResponseWriter, r 
 	handler.ServeHTTP(w, r)
 }
 
+// ListExchangeRates operation middleware
+func (siw *ServerInterfaceWrapper) ListExchangeRates(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListExchangeRates(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetExchangeRate operation middleware
+func (siw *ServerInterfaceWrapper) SetExchangeRate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetExchangeRateParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetExchangeRate(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ExchangeRateHistory operation middleware
+func (siw *ServerInterfaceWrapper) ExchangeRateHistory(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "base" -------------
+	var base string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "base", r.PathValue("base"), &base, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "base", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "quote" -------------
+	var quote string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "quote", r.PathValue("quote"), &quote, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "quote", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ExchangeRateHistoryParams
+
+	// ------------- Optional query parameter "before_version" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "before_version", r.URL.Query(), &params.BeforeVersion, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "before_version"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "before_version", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ExchangeRateHistory(w, r, base, quote, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PreviewPricing operation middleware
 func (siw *ServerInterfaceWrapper) PreviewPricing(w http.ResponseWriter, r *http.Request) {
 
@@ -3100,6 +3718,86 @@ func (siw *ServerInterfaceWrapper) GetSession(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSiteKeyLimits operation middleware
+func (siw *ServerInterfaceWrapper) GetSiteKeyLimits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "site_id" -------------
+	var siteId SiteId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "site_id", r.PathValue("site_id"), &siteId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSiteKeyLimits(w, r, siteId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateSiteKeyLimits operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSiteKeyLimits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "site_id" -------------
+	var siteId SiteId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "site_id", r.PathValue("site_id"), &siteId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateSiteKeyLimitsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateSiteKeyLimits(w, r, siteId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3307,6 +4005,51 @@ func (siw *ServerInterfaceWrapper) DetectSupplier(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// TestSupplierEndpoint operation middleware
+func (siw *ServerInterfaceWrapper) TestSupplierEndpoint(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params TestSupplierEndpointParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.TestSupplierEndpoint(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetSupplier operation middleware
 func (siw *ServerInterfaceWrapper) GetSupplier(w http.ResponseWriter, r *http.Request) {
 
@@ -3378,6 +4121,69 @@ func (siw *ServerInterfaceWrapper) BindSupplierKey(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.BindSupplierKey(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetSupplierCredentialLimits operation middleware
+func (siw *ServerInterfaceWrapper) SetSupplierCredentialLimits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "credential_id" -------------
+	var credentialId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "credential_id", r.PathValue("credential_id"), &credentialId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "credential_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetSupplierCredentialLimitsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetSupplierCredentialLimits(w, r, supplierId, credentialId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3969,13 +4775,17 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/auth/recovery-codes", wrapper.RegenerateRecoveryCodes)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/settings", wrapper.GetSiteSettings)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/settings", wrapper.UpdateSiteSettings)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/key-limits", wrapper.GetSiteKeyLimits)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/key-limits", wrapper.UpdateSiteKeyLimits)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/tiers", wrapper.ListTiers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/users", wrapper.ListUsers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}", wrapper.GetAccount)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}/key-limits", wrapper.UpdateAccountKeyLimits)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}/credit-grants", wrapper.GrantCredit)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers", wrapper.ListSuppliers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers", wrapper.CreateSupplier)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/detections", wrapper.DetectSupplier)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/endpoint-tests", wrapper.TestSupplierEndpoint)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}", wrapper.GetSupplier)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/status", wrapper.SetSupplierStatus)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/removal", wrapper.RemoveSupplier)
@@ -3983,6 +4793,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/unit-value", wrapper.ConfirmSupplierUnitValue)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/groups/{group_id}", wrapper.SelectSupplierGroup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials", wrapper.BindSupplierKey)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits", wrapper.SetSupplierCredentialLimits)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/pending-mappings", wrapper.ListPendingMappings)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/model-mappings", wrapper.MapSupplierModel)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/authors", wrapper.ListAuthors)
@@ -3995,6 +4806,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/models/{model_id}/status", wrapper.SetModelStatus)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/models/{model_id}/prices", wrapper.PublishReferencePrice)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/models/{model_id}/price-source", wrapper.SelectPriceSource)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/pricing/exchange-rates", wrapper.ListExchangeRates)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/pricing/exchange-rates", wrapper.SetExchangeRate)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/pricing/exchange-rates/{base}/{quote}", wrapper.ExchangeRateHistory)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/pricing/rules", wrapper.ListPricingRules)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/pricing/rules", wrapper.CreatePricingRule)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/pricing/rules/{rule_id}", wrapper.UpdatePricingRule)
@@ -4231,6 +5045,127 @@ type GrantCreditdefaultJSONResponse struct {
 }
 
 func (response GrantCreditdefaultJSONResponse) VisitGrantCreditResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountKeyLimitsRequestObject struct {
+	AccountId AccountId `json:"account_id"`
+	Params    UpdateAccountKeyLimitsParams
+	Body      *UpdateAccountKeyLimitsJSONRequestBody
+}
+
+type UpdateAccountKeyLimitsResponseObject interface {
+	VisitUpdateAccountKeyLimitsResponse(w http.ResponseWriter) error
+}
+
+type UpdateAccountKeyLimits200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type UpdateAccountKeyLimits200JSONResponse struct {
+	Body    KeyLimitsView
+	Headers UpdateAccountKeyLimits200ResponseHeaders
+}
+
+func (response UpdateAccountKeyLimits200JSONResponse) VisitUpdateAccountKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountKeyLimits400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateAccountKeyLimits400JSONResponse) VisitUpdateAccountKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountKeyLimits401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response UpdateAccountKeyLimits401JSONResponse) VisitUpdateAccountKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountKeyLimits403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateAccountKeyLimits403JSONResponse) VisitUpdateAccountKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountKeyLimits404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateAccountKeyLimits404JSONResponse) VisitUpdateAccountKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountKeyLimits409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateAccountKeyLimits409JSONResponse) VisitUpdateAccountKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountKeyLimitsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateAccountKeyLimitsdefaultJSONResponse) VisitUpdateAccountKeyLimitsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -6015,6 +6950,289 @@ func (response ListPendingMappingsdefaultJSONResponse) VisitListPendingMappingsR
 	return err
 }
 
+type ListExchangeRatesRequestObject struct {
+}
+
+type ListExchangeRatesResponseObject interface {
+	VisitListExchangeRatesResponse(w http.ResponseWriter) error
+}
+
+type ListExchangeRates200JSONResponse ExchangeRateList
+
+func (response ListExchangeRates200JSONResponse) VisitListExchangeRatesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExchangeRates401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListExchangeRates401JSONResponse) VisitListExchangeRatesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExchangeRates403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListExchangeRates403JSONResponse) VisitListExchangeRatesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListExchangeRatesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListExchangeRatesdefaultJSONResponse) VisitListExchangeRatesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetExchangeRateRequestObject struct {
+	Params SetExchangeRateParams
+	Body   *SetExchangeRateJSONRequestBody
+}
+
+type SetExchangeRateResponseObject interface {
+	VisitSetExchangeRateResponse(w http.ResponseWriter) error
+}
+
+type SetExchangeRate201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetExchangeRate201JSONResponse struct {
+	Body    ExchangeRate
+	Headers SetExchangeRate201ResponseHeaders
+}
+
+func (response SetExchangeRate201JSONResponse) VisitSetExchangeRateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetExchangeRate400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetExchangeRate400JSONResponse) VisitSetExchangeRateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetExchangeRate401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetExchangeRate401JSONResponse) VisitSetExchangeRateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetExchangeRate403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetExchangeRate403JSONResponse) VisitSetExchangeRateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetExchangeRate409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetExchangeRate409JSONResponse) VisitSetExchangeRateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetExchangeRate422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response SetExchangeRate422JSONResponse) VisitSetExchangeRateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetExchangeRatedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetExchangeRatedefaultJSONResponse) VisitSetExchangeRateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ExchangeRateHistoryRequestObject struct {
+	Base   string `json:"base"`
+	Quote  string `json:"quote"`
+	Params ExchangeRateHistoryParams
+}
+
+type ExchangeRateHistoryResponseObject interface {
+	VisitExchangeRateHistoryResponse(w http.ResponseWriter) error
+}
+
+type ExchangeRateHistory200JSONResponse ExchangeRateList
+
+func (response ExchangeRateHistory200JSONResponse) VisitExchangeRateHistoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ExchangeRateHistory400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ExchangeRateHistory400JSONResponse) VisitExchangeRateHistoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ExchangeRateHistory401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ExchangeRateHistory401JSONResponse) VisitExchangeRateHistoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ExchangeRateHistory403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ExchangeRateHistory403JSONResponse) VisitExchangeRateHistoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ExchangeRateHistory422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response ExchangeRateHistory422JSONResponse) VisitExchangeRateHistoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ExchangeRateHistorydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ExchangeRateHistorydefaultJSONResponse) VisitExchangeRateHistoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PreviewPricingRequestObject struct {
 	Body *PreviewPricingJSONRequestBody
 }
@@ -6089,6 +7307,20 @@ func (response PreviewPricing404JSONResponse) VisitPreviewPricingResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PreviewPricing409JSONResponse struct{ ConflictJSONResponse }
+
+func (response PreviewPricing409JSONResponse) VisitPreviewPricingResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6486,6 +7718,208 @@ type GetSessiondefaultJSONResponse struct {
 }
 
 func (response GetSessiondefaultJSONResponse) VisitGetSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteKeyLimitsRequestObject struct {
+	SiteId SiteId `json:"site_id"`
+}
+
+type GetSiteKeyLimitsResponseObject interface {
+	VisitGetSiteKeyLimitsResponse(w http.ResponseWriter) error
+}
+
+type GetSiteKeyLimits200JSONResponse KeyLimitsView
+
+func (response GetSiteKeyLimits200JSONResponse) VisitGetSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteKeyLimits401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetSiteKeyLimits401JSONResponse) VisitGetSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteKeyLimits403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSiteKeyLimits403JSONResponse) VisitGetSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteKeyLimits404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSiteKeyLimits404JSONResponse) VisitGetSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteKeyLimitsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSiteKeyLimitsdefaultJSONResponse) VisitGetSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteKeyLimitsRequestObject struct {
+	SiteId SiteId `json:"site_id"`
+	Params UpdateSiteKeyLimitsParams
+	Body   *UpdateSiteKeyLimitsJSONRequestBody
+}
+
+type UpdateSiteKeyLimitsResponseObject interface {
+	VisitUpdateSiteKeyLimitsResponse(w http.ResponseWriter) error
+}
+
+type UpdateSiteKeyLimits200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type UpdateSiteKeyLimits200JSONResponse struct {
+	Body    KeyLimitsView
+	Headers UpdateSiteKeyLimits200ResponseHeaders
+}
+
+func (response UpdateSiteKeyLimits200JSONResponse) VisitUpdateSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteKeyLimits400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateSiteKeyLimits400JSONResponse) VisitUpdateSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteKeyLimits401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response UpdateSiteKeyLimits401JSONResponse) VisitUpdateSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteKeyLimits403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateSiteKeyLimits403JSONResponse) VisitUpdateSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteKeyLimits404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateSiteKeyLimits404JSONResponse) VisitUpdateSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteKeyLimits409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateSiteKeyLimits409JSONResponse) VisitUpdateSiteKeyLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteKeyLimitsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateSiteKeyLimitsdefaultJSONResponse) VisitUpdateSiteKeyLimitsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -7010,6 +8444,141 @@ func (response DetectSupplierdefaultJSONResponse) VisitDetectSupplierResponse(w 
 	return err
 }
 
+type TestSupplierEndpointRequestObject struct {
+	Params TestSupplierEndpointParams
+	Body   *TestSupplierEndpointJSONRequestBody
+}
+
+type TestSupplierEndpointResponseObject interface {
+	VisitTestSupplierEndpointResponse(w http.ResponseWriter) error
+}
+
+type TestSupplierEndpoint201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type TestSupplierEndpoint201JSONResponse struct {
+	Body    EndpointTest
+	Headers TestSupplierEndpoint201ResponseHeaders
+}
+
+func (response TestSupplierEndpoint201JSONResponse) VisitTestSupplierEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierEndpoint400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response TestSupplierEndpoint400JSONResponse) VisitTestSupplierEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierEndpoint401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response TestSupplierEndpoint401JSONResponse) VisitTestSupplierEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierEndpoint403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response TestSupplierEndpoint403JSONResponse) VisitTestSupplierEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierEndpoint409JSONResponse struct{ ConflictJSONResponse }
+
+func (response TestSupplierEndpoint409JSONResponse) VisitTestSupplierEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierEndpoint422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response TestSupplierEndpoint422JSONResponse) VisitTestSupplierEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierEndpoint429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response TestSupplierEndpoint429JSONResponse) VisitTestSupplierEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierEndpointdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response TestSupplierEndpointdefaultJSONResponse) VisitTestSupplierEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetSupplierRequestObject struct {
 	SupplierId Uuid `json:"supplier_id"`
 }
@@ -7215,6 +8784,142 @@ type BindSupplierKeydefaultJSONResponse struct {
 }
 
 func (response BindSupplierKeydefaultJSONResponse) VisitBindSupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialLimitsRequestObject struct {
+	SupplierId   Uuid `json:"supplier_id"`
+	CredentialId Uuid `json:"credential_id"`
+	Params       SetSupplierCredentialLimitsParams
+	Body         *SetSupplierCredentialLimitsJSONRequestBody
+}
+
+type SetSupplierCredentialLimitsResponseObject interface {
+	VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error
+}
+
+type SetSupplierCredentialLimits200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetSupplierCredentialLimits200JSONResponse struct {
+	Body    SupplierCredential
+	Headers SetSupplierCredentialLimits200ResponseHeaders
+}
+
+func (response SetSupplierCredentialLimits200JSONResponse) VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialLimits400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetSupplierCredentialLimits400JSONResponse) VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialLimits401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetSupplierCredentialLimits401JSONResponse) VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialLimits403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetSupplierCredentialLimits403JSONResponse) VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialLimits404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetSupplierCredentialLimits404JSONResponse) VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialLimits409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetSupplierCredentialLimits409JSONResponse) VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialLimits422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response SetSupplierCredentialLimits422JSONResponse) VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialLimitsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetSupplierCredentialLimitsdefaultJSONResponse) VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -7600,16 +9305,16 @@ type RemoveSupplierResponseObject interface {
 	VisitRemoveSupplierResponse(w http.ResponseWriter) error
 }
 
-type RemoveSupplier202ResponseHeaders struct {
+type RemoveSupplier200ResponseHeaders struct {
 	IdempotencyReplayed *bool
 }
 
-type RemoveSupplier202JSONResponse struct {
+type RemoveSupplier200JSONResponse struct {
 	Body    Supplier
-	Headers RemoveSupplier202ResponseHeaders
+	Headers RemoveSupplier200ResponseHeaders
 }
 
-func (response RemoveSupplier202JSONResponse) VisitRemoveSupplierResponse(w http.ResponseWriter) error {
+func (response RemoveSupplier200JSONResponse) VisitRemoveSupplierResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -7619,7 +9324,7 @@ func (response RemoveSupplier202JSONResponse) VisitRemoveSupplierResponse(w http
 	if response.Headers.IdempotencyReplayed != nil {
 		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
 	}
-	w.WriteHeader(202)
+	w.WriteHeader(200)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -8185,6 +9890,9 @@ type StrictServerInterface interface {
 	// GrantCredit Give an account credit
 	// (POST /api/admin/v1/accounts/{account_id}/credit-grants)
 	GrantCredit(ctx context.Context, request GrantCreditRequestObject) (GrantCreditResponseObject, error)
+	// UpdateAccountKeyLimits Set an account's own limits on its keys
+	// (PUT /api/admin/v1/accounts/{account_id}/key-limits)
+	UpdateAccountKeyLimits(ctx context.Context, request UpdateAccountKeyLimitsRequestObject) (UpdateAccountKeyLimitsResponseObject, error)
 	// VerifyMfa Pass two-step verification
 	// (POST /api/admin/v1/auth/mfa)
 	VerifyMfa(ctx context.Context, request VerifyMfaRequestObject) (VerifyMfaResponseObject, error)
@@ -8236,6 +9944,15 @@ type StrictServerInterface interface {
 	// ListPendingMappings Upstream model names that map to no model
 	// (GET /api/admin/v1/pending-mappings)
 	ListPendingMappings(ctx context.Context, request ListPendingMappingsRequestObject) (ListPendingMappingsResponseObject, error)
+	// ListExchangeRates List current manual exchange rates
+	// (GET /api/admin/v1/pricing/exchange-rates)
+	ListExchangeRates(ctx context.Context, request ListExchangeRatesRequestObject) (ListExchangeRatesResponseObject, error)
+	// SetExchangeRate Append a manual exchange rate
+	// (POST /api/admin/v1/pricing/exchange-rates)
+	SetExchangeRate(ctx context.Context, request SetExchangeRateRequestObject) (SetExchangeRateResponseObject, error)
+	// ExchangeRateHistory Read a pair's immutable history
+	// (GET /api/admin/v1/pricing/exchange-rates/{base}/{quote})
+	ExchangeRateHistory(ctx context.Context, request ExchangeRateHistoryRequestObject) (ExchangeRateHistoryResponseObject, error)
 	// PreviewPricing Preview prices and margins
 	// (POST /api/admin/v1/pricing/previews)
 	PreviewPricing(ctx context.Context, request PreviewPricingRequestObject) (PreviewPricingResponseObject, error)
@@ -8251,6 +9968,12 @@ type StrictServerInterface interface {
 	// GetSession The current session
 	// (GET /api/admin/v1/session)
 	GetSession(ctx context.Context, request GetSessionRequestObject) (GetSessionResponseObject, error)
+	// GetSiteKeyLimits A site's limits on the keys of an account
+	// (GET /api/admin/v1/sites/{site_id}/key-limits)
+	GetSiteKeyLimits(ctx context.Context, request GetSiteKeyLimitsRequestObject) (GetSiteKeyLimitsResponseObject, error)
+	// UpdateSiteKeyLimits Set a site's limits on the keys of an account
+	// (PUT /api/admin/v1/sites/{site_id}/key-limits)
+	UpdateSiteKeyLimits(ctx context.Context, request UpdateSiteKeyLimitsRequestObject) (UpdateSiteKeyLimitsResponseObject, error)
 	// GetSiteSettings A site's session and key settings
 	// (GET /api/admin/v1/sites/{site_id}/settings)
 	GetSiteSettings(ctx context.Context, request GetSiteSettingsRequestObject) (GetSiteSettingsResponseObject, error)
@@ -8266,12 +9989,18 @@ type StrictServerInterface interface {
 	// DetectSupplier Find out what system a site runs
 	// (POST /api/admin/v1/suppliers/detections)
 	DetectSupplier(ctx context.Context, request DetectSupplierRequestObject) (DetectSupplierResponseObject, error)
-	// GetSupplier One supplier with its groups and keys
+	// TestSupplierEndpoint Test one of a supplier's endpoints with a real generation
+	// (POST /api/admin/v1/suppliers/endpoint-tests)
+	TestSupplierEndpoint(ctx context.Context, request TestSupplierEndpointRequestObject) (TestSupplierEndpointResponseObject, error)
+	// GetSupplier One supplier with its groups, keys and endpoints
 	// (GET /api/admin/v1/suppliers/{supplier_id})
 	GetSupplier(ctx context.Context, request GetSupplierRequestObject) (GetSupplierResponseObject, error)
 	// BindSupplierKey Use one of the supplier's keys for a group
 	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials)
 	BindSupplierKey(ctx context.Context, request BindSupplierKeyRequestObject) (BindSupplierKeyResponseObject, error)
+	// SetSupplierCredentialLimits Set a credential's concurrency and account RPM ceiling
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits)
+	SetSupplierCredentialLimits(ctx context.Context, request SetSupplierCredentialLimitsRequestObject) (SetSupplierCredentialLimitsResponseObject, error)
 	// SelectSupplierGroup Choose whether a supplier's group is used
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/groups/{group_id})
 	SelectSupplierGroup(ctx context.Context, request SelectSupplierGroupRequestObject) (SelectSupplierGroupResponseObject, error)
@@ -8281,7 +10010,7 @@ type StrictServerInterface interface {
 	// MapSupplierModel Map an upstream model name to a model
 	// (POST /api/admin/v1/suppliers/{supplier_id}/model-mappings)
 	MapSupplierModel(ctx context.Context, request MapSupplierModelRequestObject) (MapSupplierModelResponseObject, error)
-	// RemoveSupplier Start removing a supplier
+	// RemoveSupplier Remove a supplier
 	// (POST /api/admin/v1/suppliers/{supplier_id}/removal)
 	RemoveSupplier(ctx context.Context, request RemoveSupplierRequestObject) (RemoveSupplierResponseObject, error)
 	// SetSupplierStatus Pause or resume a supplier
@@ -8393,6 +10122,40 @@ func (sh *strictHandler) GrantCredit(w http.ResponseWriter, r *http.Request, acc
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GrantCreditResponseObject); ok {
 		if err := validResponse.VisitGrantCreditResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateAccountKeyLimits operation middleware
+func (sh *strictHandler) UpdateAccountKeyLimits(w http.ResponseWriter, r *http.Request, accountId AccountId, params UpdateAccountKeyLimitsParams) {
+	var request UpdateAccountKeyLimitsRequestObject
+
+	request.AccountId = accountId
+	request.Params = params
+
+	var body UpdateAccountKeyLimitsJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateAccountKeyLimits(ctx, request.(UpdateAccountKeyLimitsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateAccountKeyLimits")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateAccountKeyLimitsResponseObject); ok {
+		if err := validResponse.VisitUpdateAccountKeyLimitsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -8911,6 +10674,91 @@ func (sh *strictHandler) ListPendingMappings(w http.ResponseWriter, r *http.Requ
 	}
 }
 
+// ListExchangeRates operation middleware
+func (sh *strictHandler) ListExchangeRates(w http.ResponseWriter, r *http.Request) {
+	var request ListExchangeRatesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListExchangeRates(ctx, request.(ListExchangeRatesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListExchangeRates")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListExchangeRatesResponseObject); ok {
+		if err := validResponse.VisitListExchangeRatesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetExchangeRate operation middleware
+func (sh *strictHandler) SetExchangeRate(w http.ResponseWriter, r *http.Request, params SetExchangeRateParams) {
+	var request SetExchangeRateRequestObject
+
+	request.Params = params
+
+	var body SetExchangeRateJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetExchangeRate(ctx, request.(SetExchangeRateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetExchangeRate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetExchangeRateResponseObject); ok {
+		if err := validResponse.VisitSetExchangeRateResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ExchangeRateHistory operation middleware
+func (sh *strictHandler) ExchangeRateHistory(w http.ResponseWriter, r *http.Request, base string, quote string, params ExchangeRateHistoryParams) {
+	var request ExchangeRateHistoryRequestObject
+
+	request.Base = base
+	request.Quote = quote
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ExchangeRateHistory(ctx, request.(ExchangeRateHistoryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ExchangeRateHistory")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ExchangeRateHistoryResponseObject); ok {
+		if err := validResponse.VisitExchangeRateHistoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // PreviewPricing operation middleware
 func (sh *strictHandler) PreviewPricing(w http.ResponseWriter, r *http.Request) {
 	var request PreviewPricingRequestObject
@@ -9050,6 +10898,66 @@ func (sh *strictHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetSessionResponseObject); ok {
 		if err := validResponse.VisitGetSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSiteKeyLimits operation middleware
+func (sh *strictHandler) GetSiteKeyLimits(w http.ResponseWriter, r *http.Request, siteId SiteId) {
+	var request GetSiteKeyLimitsRequestObject
+
+	request.SiteId = siteId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSiteKeyLimits(ctx, request.(GetSiteKeyLimitsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSiteKeyLimits")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSiteKeyLimitsResponseObject); ok {
+		if err := validResponse.VisitGetSiteKeyLimitsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateSiteKeyLimits operation middleware
+func (sh *strictHandler) UpdateSiteKeyLimits(w http.ResponseWriter, r *http.Request, siteId SiteId, params UpdateSiteKeyLimitsParams) {
+	var request UpdateSiteKeyLimitsRequestObject
+
+	request.SiteId = siteId
+	request.Params = params
+
+	var body UpdateSiteKeyLimitsJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateSiteKeyLimits(ctx, request.(UpdateSiteKeyLimitsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateSiteKeyLimits")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateSiteKeyLimitsResponseObject); ok {
+		if err := validResponse.VisitUpdateSiteKeyLimitsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -9207,6 +11115,39 @@ func (sh *strictHandler) DetectSupplier(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// TestSupplierEndpoint operation middleware
+func (sh *strictHandler) TestSupplierEndpoint(w http.ResponseWriter, r *http.Request, params TestSupplierEndpointParams) {
+	var request TestSupplierEndpointRequestObject
+
+	request.Params = params
+
+	var body TestSupplierEndpointJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.TestSupplierEndpoint(ctx, request.(TestSupplierEndpointRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "TestSupplierEndpoint")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(TestSupplierEndpointResponseObject); ok {
+		if err := validResponse.VisitTestSupplierEndpointResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetSupplier operation middleware
 func (sh *strictHandler) GetSupplier(w http.ResponseWriter, r *http.Request, supplierId Uuid) {
 	var request GetSupplierRequestObject
@@ -9260,6 +11201,41 @@ func (sh *strictHandler) BindSupplierKey(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(BindSupplierKeyResponseObject); ok {
 		if err := validResponse.VisitBindSupplierKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetSupplierCredentialLimits operation middleware
+func (sh *strictHandler) SetSupplierCredentialLimits(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params SetSupplierCredentialLimitsParams) {
+	var request SetSupplierCredentialLimitsRequestObject
+
+	request.SupplierId = supplierId
+	request.CredentialId = credentialId
+	request.Params = params
+
+	var body SetSupplierCredentialLimitsJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetSupplierCredentialLimits(ctx, request.(SetSupplierCredentialLimitsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetSupplierCredentialLimits")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetSupplierCredentialLimitsResponseObject); ok {
+		if err := validResponse.VisitSetSupplierCredentialLimitsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -9553,294 +11529,370 @@ func (sh *strictHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"7L3bjhxJliD2K4bQAJW56xl5Iau6KxODmaxkVQ81zSqKSXb3bhcn3DLcIsKaHmbeZuYZjOYm0A/CYgT0",
-	"LhYLCYJ29TLQbQVIA+hppFlAL/qT7emZnb8Qzjlm5uYRHresTJJV5GDQxQx3t8uxY+d+edMb6mmllVDO",
-	"9k7f9CaCF8LgPx8XYlppJ9Rw/kxUJZ+LAn4uhB0aWTmpVe+050wt2GwiFHMTaZkRttLKCiYtcxPBrNNG",
-	"FPBzXTqmR4wrJrgppTDMiF/Xwjo2k25CL/OpYMmsB38u5mdMaTeRasxm3LJCK8H4mEvV72U9O5yIKYc1",
-	"uXkleqe9K61LwVXv5ibrXQp3ofUrKZbX/HwimBIzZoW1Uis2xPcypg0u73UlYc0wlZtwx4Qq/GbofZga",
-	"1g5v9U4BAB1Lsc5INe7dwFIqbvhUOA/Wi9pYbZZX9fOJMALnUeK1YxUfA/i4cfYUf83h58EQv84BlPBj",
-	"ZcS11LXF1zNWq+GEq7Eo+uyxgzPQFf91DVtT5Zxd81IWbKRNA+2RLGFdGeOqYJxNeTnSZup3Ly3j7OHR",
-	"EWxYwhJ/XQsz72U9xaewR1pL6yCm/PVPhRq7Se/00+OTrDeVKvx9nC3BJktx7M/FfBko5+zFi8ePcL1D",
-	"XpbCsOFEayssbgMXqZxQhSgY7bzPLoUqAF/gm4BiiDILiPZKzDPGR04YxlmprYvImzEjXG0UnfpIGusC",
-	"BktlneAFgL/QMIt0zM3kUEQY0QVqgLSAz2txp+LOCQOj/MUvjw4+5wejl29+fHMQ//1wi38fn9z8Ua8L",
-	"1D+VU+mWIfxnesamXM2ZdGIKB46IN9FlYRl3bKqtW3X+JY6YbqAQI16Xrnf66VEGuCCn9bR3enJ0hJhA",
-	"fzV4AEc3FoYuSQA+3pEvePGMjg7+Gmo4Y/wnr6pSDjms/fBXFjbwJpn+j4wY9U57/8VhQ9MO6ak9/NIY",
-	"7adapgYBT6RNr4BhV0bwVwCUoVbWGS6VCzcPFmX40LG9XCq8WQM/Sr7f791kvQutRqUcvuUdDP2stsH2",
-	"YW2MUA6IiRNsLw+v5BnLxZTLcuD4K6HgTzjY5i/reCkGQGGA7MEvskHmwSsxHxhRW1H4DX/FZVkbcf/7",
-	"PVdzpt1EGDaiKU9ZDrhkFC9ztvfp0dE+7EW7gZxWpZgK5USBD44zhIiuhMEVsQm3TGk24aoA4jIXDj6t",
-	"Fb/msuRXpcDPHuz32Tn79OiIKXENNIgbIwWRhzAxE7DcTyxz4rUjeGhzJYtCqLeDAYGbTfkceCYrNLJk",
-	"Yh6VMFNJzwHH4Z9qnKVczYMCGI+1omBupg+sExW7FkaO/HrZXj4d8UGgYPk+Mk0Y5Rsjx1JlzO+TwRWH",
-	"ZxeXz75iTr8SOPHMaDVme7nGtwdG/EoMXUSgr7X7SteqeCvwMsjflGa2Hk6AvOvaDEXcj4fKJ5bZoa6A",
-	"+ygAjhWCSQfY0NCJx4+IeypWq1dKzxTyJa7sDFhLKV/BpQNsHMHm/F6fa/2Eq7mncvYtXBqG5JppL6k1",
-	"d0BaBreY1RXbyw13YoBvwrGcsRmXjuXPhDPzg3NgljmzYqhVYYErJNJi8gr8uZrJrWcEN1nvheK1mwjl",
-	"AALiLWDD19qLRuEqkIgkLbO1GfEEK4ZGFLAwXloUZpmVY3UgFeNGEHJn/sRH2qQYgXQ2Y9zfALhjM20K",
-	"L3YV0gKtKeAcDNvL6zYEkPJ6HpOsoPWzLoTHrBeqMnooLA751tnnTJQl8xfjqnaMM1OX8MaotsIymfJL",
-	"qa6lE7CNmeCvBgEouSfeRvBiniM5TnYESJlP4Y+xyJnlc8tmEzmc9FHI8cuF3ZwPh7pW7pFwXJbwQ2UA",
-	"550kEeOKl1wNxaZ9f+Ffu8l6QyPgNAYcQQl7hH/1Cu7EgZNTsSx1ZT1ZbJrAL/NxAa+/kkT9hIIL8ste",
-	"JYzVipe9rKfNmCv5Gzy73suOqUgoe7P8QM+UMMsAQJTs/GDzol9YYWDFN6k0+0v4MPPjNivUV0DkYVwr",
-	"nRhsHvxSOkHgsI672qYA4UMnrwHS4cp0gsJJYTbN8lwK80yMuvcQVuqh6g8mLsjPEECbRWRqIUkXCJrT",
-	"XlZ1FOP09BMLPGXv+bwSjx/tA51NFAM+HLoBSfuTX72aqurAXR/85uWbk8+65P6sd167ie44/oAuicZ2",
-	"7OX01Rpb1rNlPd6I0jjlJby5CF383EO1Ez746U+ldcsrLrhDMoWKynZr6N3EObgxfL60Hhxz9UIu+bW4",
-	"M9AZwT3JXbfwZ/TW4kI9Hvox1qzYn0+qSvKD3xwdfP7S//fg5Zuj7MHn3djyRUMV12DnVCsxZ1Ix6SyD",
-	"u/KJDU9BJyaFYzjvszyRo6Vlub8n7IAZYYW5FkV+BtoVL0t4zoupdE4UQNFLkXzNDtio1GD3GOprYSxO",
-	"TEMgQST7Re7fkVFzZUd9lttKKDcAfj6YauUm+MIMLDswr2VWOAfMNxhGgr704vkFvCFUwQ3DL/EqtlAh",
-	"rnDTsT4BkAGEt+Q78X3c09ZvB7Bu/cEicLb8cAE7G/oXFxBWniUw6piuC5O/kGUp1fixE9OU9ktV1a6X",
-	"9YZ8OBEoHcQ/ZkY60f5rcDzpZT1dO/qILg5gedbjdSH1QKr4T42vyCkfC/qZ/kk/z8TVwApuhjAeyFkD",
-	"8VoM65V8+AupCm/LauPK2Oi62oL/vahlsTu9yHp1ZZ0RfOo189ECiTrZSKIWDjWut2PotZToQitQgp97",
-	"LsyLQgK0ePk0gceIl1YsXacrfb3CYOskaFMgvwobDM6CXXErrTdd2XrKnGZTjWZUTnoOXNkoqknlPnvY",
-	"S2xRR8sqSNYz3ImN/OUZvrQIMlp/GGIDbOxG4CwaiHUpDoKsDfCwp6shUXEL0je8BkaJiREWjHqk8/tf",
-	"cZnMgHF/KMIoAtRXu0zqcIKt+W96h5eYcNabCjfRLVF3BrtbKc3ZZaS4dEYOXQl8CIQuMGiwqznL8Qxy",
-	"WP9WC02RdZO0QCCIqw9L6zxnIwrpfmK46pBkPK8c7Kgd8Cn8e1dOM+BBJ79HPYecJvaOdSOihF0CegLB",
-	"CJfWyhe3v+GMEmvzwlHtBvM2HNoI++L5RQZCEzoValcb0WfnV1YodxqNCxLsdoIMcTRWi4Cthed3ki8j",
-	"DNfQ9UdiKKe87BQOxWuwhRf0BlP19EoY3Kx47TJvNuXsv7z85mv/MGNWg/mtkGOJlgN0wWgCz4zPF9Se",
-	"gz/ZO/oXvzwGMRZk2TdH2fGPbvb3vv22T38fZ8ef3uz/SadQ+0g4MaSlLukU+EgUA5Aq/RtL34+F8ray",
-	"zsdBaV/mWbzglROG3Igj6Ww4cCLbSivBjBjqsZJocgW7o3R45EuzlBospiMpysJ2zzYVAFc0TOWXNXJK",
-	"81P4KidjFqyTKSEKe8bEtHJzWkUOv5PQjGvbmnLi2F/BgrooPJl4u1dKzxi37Py11FM2k2VJrmImXcZK",
-	"PUMju+2CxALe+mkW4NONvR4LVt71Zsmp2PTppy1EnDhX2dPDw1+eH/xzr1jtNf/uH7z8J8mT/T/ZOw34",
-	"uQI9u/fTtQEywXUC9EoXczh3uGbz4BXps9Q29/gRHLEnP/kvDjwUDh4/yhuvPdlzMzgZrfxo4eGyRCDC",
-	"gjYaDr0RbnGzNMDKvV7oYoUwOCw1XJhSWvTH+Q0zkM7hjuE/SKEEzzCgWuOvIz8xkh/OhqVEbwVcUGe4",
-	"siWKRLRzHAXGtiBXwt5AKwUlt2TSMbDsWu+wn4HQBBBqlJWWT7CX9RaMur0svpPYdNNfYfdI+70XKeul",
-	"vpde1lvwovSyXvQyoKri/Y/eJEd+PW98iX+0fXwwfaeLL1kXWW1RMUqMtn5ytNniZlMjdNZL3Qo4FjnN",
-	"/FeJm44AFTXGLnkwxagl7MjREh41/HjCV4ar4UQgXoOtoDns1JwsLftSjUtpJ8i40CRQ6rHFTwpxLUrA",
-	"/w7heOhRdeNNQJwGtX4FIf852LJZxY2zwdMcbvCV0a9Eyxed4QKX/M9bU3Bc0UoK7qHSFdTSvsYeU8P7",
-	"K+8zzbREdlfPk/UqjaiyDCeUJPxTJpXTbVDpYh6dNoDv5K3B+AX4ueJuwmJYzmYuE5axYZPXshDettOt",
-	"15EvbPHEuWO2rioNZ85ZZeRQsD0fiCFeD4WpHLiOwFZphWNCOTPfz9grUTmg1N6/a4FiwyqB4iEXn0qV",
-	"Tn7cseSv+NBpc4EksSv6xocTsRG+R6FQRBzJAR88Zh5V0X8Fd4XeqRU6FkHEiQSVTHXS2hod6NLCvYId",
-	"cySj4F/Ow7BeLsbwrOY2eF7l1Vbavy6LQIEXLqY1owH6nzvxKywNqW3HdTw+gmFR5CbukjHBhxMGJiYn",
-	"FHv9+vXrg/b/INudo0fQTsgbXM7ZRBjRupdLS1mreSbbWFp0Fyr+BGw3l6JcJffualuyOBTZFTuC7dKl",
-	"xlfX6hKJ8JgYAch3lPUSrsKHwEaSvY+MsJP4d/p4kGhfXYzjyYivlP2GnbLGOXv+zfOnJAjsfUa6it3H",
-	"QME2VrO9DkzIUIZFfJ/Mq4lQlsmx0kYU+ySboanUMCfADO0mYso4UH4wY9gJrxBhUifD5y0D3mfZNnS5",
-	"C/hPdCE6XKI8uoq29e5sr8ST2LG9/QiX+DWfii7OhCRyQBEbmwZ6Cu9e0qvh0+2X8UyMhAGajsN0rcWI",
-	"65bJYzsb4zZuNARBgLOtxHC7D+DFlu908yf06k3W81rwINr61n37M3r5C3y3241K3j6PV4n7tD3PwoES",
-	"TP2WA97Ek1uJzxdo/FnG6u+ALDtTyXs/1bs7IH82G07Cn8EaQo7L+8pjf0PJvZxke2lkZ9YbTlbRZhjm",
-	"Dvy+BK16OuVm3nVdkyDqZXL/dV2WwQRVcktB2ECEVV16Lx9JcOvpLi64PdVKyD3hVQVjfGdv0fZvTmHe",
-	"HUa23pa0wyfRX7QiKKWTWCTTLI6QLHoTJFdy+BSgvCy/GfVOf7nNbl52RTzhYIgnvJTcguI40qZtz0WP",
-	"Bgvb6t8G9Ld2AXaEKOzs/1t5BJvpwdd++o1xEydbxE2AaeJKltJ15Ad8A7J1VV+Vcoh6nmVDrtiVzxYo",
-	"QJKqrdfYY1AVvp5aIV5uAoWHQLKSlVsPARgLZolv66OjB0PihPhvcUg/IVTplzyjoO38T+mRp83+YePq",
-	"uxaq0IaN5TXaM8RZYjHNgkY45I6XekxmVRs0wkSY/PFJtkWUyOHC7/0BPvn885u9P+1+9ODzVXb4hpPt",
-	"pCA/937JUiqBiihYqjXGFiLw2N6QfHisxL1l8DMvJYyYsf/02/91P6MQQdTJdCUowFPpWcaqsiZwuZlG",
-	"cyL9BfYwMSNjeZ/lyHlyijFBlx8GHvpBr8jTGfInVIFiPWi0+Crpxf4qYXC2EaDqn8XljzWZpSwvBSmL",
-	"csSutKP1VkZYoVwGKrWCJ2i6X1Z0I3e8C/dsdLluNdgl7XelC3XFRYkC6sJVKQwfufyUWSEUXGC0b5Tc",
-	"gYiN8DljORyVKPLTALczlhvhMCb9lAFu6BFcfDzosdZFev9x/F7WozGQmuGXq+USWuqLqugUMHcl0rfU",
-	"GJZiIbdY/6LMF+RvErA3UfEgRr1lRfE7CexvRxn7nutW3SeuxHyNa5ccxCHqfV3IH75IDkWMj0cPDAKb",
-	"SRVdxOQYlorop1ZuggZvrcDDIps0Kz8w2yv00B4Wesqlsoee6Panxe9/+7t//Lf/1z/8u//6P//Vf/iH",
-	"//lvf//bf7Ufkh+RJ1yJIQdK0HI+s5muy4IZcJUwDBhhJ3/x6QO2R4zlczalReFS7H5wm10ZPbNkL14V",
-	"JSBec3BmgOnw0yP/fxs92T++2e9kmGHz7YFfXD5qjwgOx5dvHtxs9i42kRJh5C5UAOntvCjuTIDblUC2",
-	"Bb47FdvWEr2nlDm6UiUjsrKjDcurxh1MlhQSMNKtDN3fVQm8f1WtraV1hQh6oAdgbQb0HWj9Cyf3fuv9",
-	"yLOeAjbbSVdeihV3oqI+fhRdJnpGHm5IoQ/RzZ6kwUBFXYpPwhOg4WmQSosIh3RJaZ02c1Rpwc0szZTY",
-	"zWCYeJJ8KrCPZVz0GmQ9kbjL1nopw3u3scj57W0nR4SX4cPdxY/FmxJtaGHYZMvr6VBrMbsFiZ57/yGG",
-	"RvgzHnKllRxySszq0g73Ak09DA+efXn+6MmXv//t7/7uP/7NP/z7v/7Pf/UfgLOe0uiWVcK0FJ+M6YpW",
-	"yGbLYaro0JC/EaHMAECyFE4wK5DR+0FBWEfvWqpAeUejD+jFkgiq4Ibcfeyc3kHsJvVNaQ8Bn4EHq/N4",
-	"q0TG0gA7qSbCSLc8bId7HxXMQdSLtowotYtcvH1Yv/jFLyg4JVBVuIUa6E/JVVBam6id5C09I9mkv7Uk",
-	"sFtcc9bzZ9BseYcw7hG3bgelMc45KsXr23xXGamNFxd2+7ZLO71OpI7jlx1Jqu17fp2KU+tCv1Ni0VLj",
-	"wP837WU9XQlldE2BBno0kkOJITJTrupOcac1Jnl7uxnKmgPcTkpYx14CR6FrB8xGj+geR76B9xMuoecc",
-	"GVCE+BREoH6vA2K35y2Nm29F6RcEGWZ3E5ltiE9clsQlZ6iSAL2L/HHb8Bo6l+g5nEr1mD477nIjvhUj",
-	"whL2bYNmCwjvvXOBvRF+RZBv5GxSjc/rQorONLOfT/Q05Aw3XOEUz8Crm3QgTgqDET4YaYK8IJcUxuom",
-	"8V2glCZkOzx+lPkQVwqb4mWZd9jRigUN57OH2eqY3yYvdeg1K58ZysstIImjrIHTRYz06kBlrOdig9hK",
-	"l89Dzgpn0RCMUctgwZxKNZhyg+GC8FvODJfWB89glZMDtC9iztYnllVGj6Rj9AmCC8Pp4O3kbM7wB/yG",
-	"SWdFOWK8nEFKtk/U6YNZznvQB9NmcrSkJk/46/DklRBVsqEr4WYCpVBtBZvWpZNVKZLQOD8Evb58mov7",
-	"3nTBQog7HtTS8m739c5z36zGiCcxb2a5ik8DNYlJjX2WgzAxABt3fkqCxf/337O9Y/ZPWT7l5lVdeajv",
-	"wy8j+VoUA/o9h6sVvBFtvEkqILUHyfwMfwMz/Ke//LcLHy7PcUaWpXKOF1qPoh0+Ym0CRDp5KUxOzjU0",
-	"nUMKUxsDYIN58jIsSl0L48gXBF+K18RIYBqRbDOQ9wF9gSVv2B+zfMSH4JkxsGlum/pRSY6Dj9tv6VC0",
-	"1/yU5YHFROJEuMoWYvbhCcm6QBYsm9YQyCiSqPwFmXR5va1QKr/NXtaDHXRKD+lxbC0YLpK+iGO9FtbH",
-	"M+j5eTpXcMu7mSLeLp81i9r+o1uqkDuS+qfkcvqudpDWYM/07PYJ8AtDrcyPaqWybWe0SJLaliwXlxM9",
-	"C7xGRhMzq/jcnmLWNzF+DOH2zMjGaMyQwR2+Ip7UZ19rX2UQvXcDkBP2Hh4d7bd88tvb9WIgBX8dBDpv",
-	"BV0n31G06gBWvEsEQDABbAVZf2jP6lI8xmzpZQCfEwN3GpIjKEZas6pGYwEuESn74nLzrCmKU3nvKLji",
-	"+sFbuBMCgAL2eJXdCkYDI4INJN1pDKQNZik6fDhOMNXnDQLmpykl9joCDpdiQPJ+f+k2NLiwxZXQs64w",
-	"Uuu2h8MCyegEh1AFRp9700C2iuHAAsO7dxXlEsajcwfNjuS+aCFEG4t3YyN4lY4fBfvFxDNNTHbTs34X",
-	"2d9upZEody4WYiBsFFkBicExnDMI0iVJKGd8aLS1HS57tHKcMSXG3Mlr4f1DwH0hL9HeKngHpt/d7nh7",
-	"X+SCGx2PCi6FTyk48+KgL0nlb8sCelFNNMptUiFFkwR8H1gzEWVxxvIrUerZAJ/4kQxZkenOgqW5VoUw",
-	"nQoGyf+WJzKRVzzOqNqTX7nSRKxC2n+g+oRw3hi9KAE6zUZQT+SKD18xqtYaXUg4MOZGNYAAFbbZjM9d",
-	"wvc26m9JRJR3x/rTWEM9nnmCvuhRbzTiLQh8VKDJSJIqiVt8naqVSDWoklJHaP9OYYVRNdliCV6PubUh",
-	"w3EzFm7LyZ7Ty+jsKnZMbe9yvZMBJIAtLiZrTjEpEZAeT2sBG3BkVTjzzoaiLUXXttiwsG1D7ovNlp1m",
-	"iO8Pit8ScW+FggtwvQUObQD+XThTm9G+s/oAg7zbuKm7wX+88VvfgucRNTpS/VrWzYyNjJ56pmYds5UY",
-	"ypEcMp/QOJOFsO4U65JHuarxF1EccvpLFuSx+A9GIUL4EtpssTZrYzvF6uqp9ZR0LzX2Zejaw4DJvKzH",
-	"+96Vt7s5FQNGNtpTw2ZDjEESHx4ikVvBT7ixAQ77XW2vz7hb5y/p9Lo+j6a3SpgYv4TuhFTWbHncow01",
-	"OClLMXIYu+gFGxowJA4uE1MsYbWJOSvpogOiKXa1y1dJua3dP6PCXLf8Dkp47fRpuzjXLp/G2l+7f7Qr",
-	"PKWqdvzCFzHb5ZOm3NkuXyWlzrb/rMta/SyS9kUCOE/TlaX1VfSxUhdE7WEstKd9gK4O0u8XI9ePtog5",
-	"oxWsNFt9p1o5axjAM58UCmn+dudk0+BJjUmni+59DBj8bItAv5WpnwsJjd3VNfwyvFWZYj5XGdwllbtO",
-	"naPddurFqpTrQhV2CBamOKody1WlNt27MdUshkw1ajDYRQrDZyGbfSGWil7EZASolxwtLdIy66AuTupi",
-	"B0g7za5qifnu/buJVEKlJglhiK7dFnC7sCmN/E+4dwim6fmQjiRCI6PgkC5fwFJ0xm5BJ0sxOsuIjX6b",
-	"WArPRndOjIFD65o2hTBnvnYeyUPkSkm5Mre+hhLGe9xNtbnvVHpwddzJJRVTWGm736kG3YZ6Cuvqn/08",
-	"3I1QNAKrScgRk9HshOUisFkLuZZlAaZqORUgFk31dUxk2u6al1CxZXNQEK7mp/juDRXZSfTFpT34cDRf",
-	"7AIQgRPBphoZSSBLGo8S+y+sQM3mBZ/HlgKKsFVTvV0I/aKeBHthFU0sfggHAI1RlyJbTJ7Bv3kxlWqf",
-	"LPpgWQcOrA2bSOybEx39uD/f96DQrYoFhRiCYkJHlZaKQoa3S52LrAfT3E91cqxZBHLkcGUhKQ89gCm9",
-	"62uU+HwxjBVCOBgxltYJQ/S8v52hKJSzSJexfEMXvkR4ZElECWFxGzGzdkWQ5Nq1cW0NPVhRm7J9wRec",
-	"c8CDuGW/OIC2HgfP4a2AVP7sbUowsWRNZzW7lVbrVnsR37skNEsAbmrkeOKiIThewc5uJWi/TirIYEZK",
-	"5dtDhbuFy8Wsuxy/nT+BAjR8OBSVs3RHPmVTqWpP5iOPw8wWKhecLnqHLKwE1GvO6aeBiHXYEhb7t1RG",
-	"X4vilPaTwo4cfV1AYk5rauuS7/dZ7sEzgL+bFJ4DqUIEOZCgEcX7+E4gCeFr+hbEUdrVXOCHTt4vx+rx",
-	"anE9UoNWYb6HLS3gQcewcebFTz/bLRV6qS5N53lR34IOud776lYX9YcXdinqD1NdCuekGts1EwJZu+Zl",
-	"7WOrE2whX8orMadS6nCPLBsL7GyDX9Bxx6KQwU0TvKpSkX7CvoAUKnvaXCcJzAuNWg+OjjyG2LOUKX1i",
-	"G74O0uyDI1ZgzJgqcDGlBlnLNUNq9jm9ctawr8VBjk/YRNdm7SjHMAiNUXBZzkNHnJEn9K/EnFZ+hG9n",
-	"oGceHR1REliHDQbWMYBVDLyIMvDb9ehGVsmHD9r9zx4cddopaTQINQOjQtdAP/7s4TYDeShvXtjJp5+f",
-	"HO0y4rrF/ehHP/psq8GUmGFdQTwBKgm4fc35zjsXLsJd2ZltcrE29SkJcy8T+fBgrb04HeJn3eE/dOHs",
-	"9ppqe1kvO8vNJXXUjWB5WGwelFIkAf37AEbcTyc4koDpZR5wi3Shu4nd6krg6Vx+JYbvOEl8t3pC3YHd",
-	"G0v+hOLCK5sqDRRGUewQZBc+1FfUPmIna84tijh32Abm1onpJ5Y1LzKX1HAOk2TUMI5bdtw/6n8349XG",
-	"ytGfWNQGmzmVmPFKgjBn66sTXslFCyE/+E2ox/Hyn/xRdyHp2SCAO9pCdjiqWyYBE0oMgJeuUMVUSMUK",
-	"zi1UgEhA8QtmshXP8etaY8ZlbbujS5uCzk32dKjfDLDzv/aHetqppGBjmKlQbhCtYzsYMberEhAuU1Mo",
-	"gL4bNBRjaWQA1QBp9A7n1nw0mEjldvkypPYmBqPl80MZGTAThElAEl/cG+vnYrXvLbXmdsutWOB7aRVt",
-	"nOo+rrUROQH0q0ItwvXc9X6NN/uRWvXZv8Oteicly7NbiVQdN2mV62E497gDYb+hE6MnClI11PDi638G",
-	"CPfi8lGfJVQzGK0gr45J17jYkwRKwJloH/DuKGwmKN2ZN0hi1HoTagxfeN1I2pDngj2wdknC7LpLa5Ta",
-	"4y1LHGxxWbqvB2HrVuz+IpYp7/Jo6bLQMzXA6uj32zfkHivj8deQTZGi6LpupV1Fea4kWj7QgOdbFcaz",
-	"iD0LM+JcA/F6wmtfxIcgUWxqbdjV5GkLmrq+l1O0SC0CYB06rGqsmVaz37qC1DKKrSqYsfugWAu5azyb",
-	"yLHbDERc9AosHgC8HRIGPMj/XMw3RlQlYS5+v1mv3SCgtYR1J0Qb7/Q+B3bToRuSLQgbHScZAS4UPfQi",
-	"KfTZ9+5OapAfyj6HZi++cninhIxF3G5RJb0lHSK1pno9cXFsL/g6gElcxQF8yFMl+Ct04GHza7AQMe81",
-	"3O/MP96tuHF3AXsq37YM66/Ah9n4i+O2lMaFCZOUo8O9dTuWdk2BWlfIO6ENnrJ0qEntGgRNFvjiGtdR",
-	"o9Y0UeCjrSRLbKC3DsvvIOIxveDvceGYttDYfXvbMjf6qhj1lAiphjxpBOSLS+SxN04/baODvTnpM9wh",
-	"fherZ9TWe1QeHh2FiltWcKi6qRXjxshrXqL0RATBCFcbJYo++wqzRqx03srM7SvrU0kuzp8+v/iz85Xe",
-	"iozxKK3JsQqlMYyA7E7o4s80qInwDyqPie4Vm2at8ugUAWM37slRM1DFjAA7MJmPIYtkz2vZ+wz6pViW",
-	"p+XmoTV1qxy9z2teUZI+T7LW6CtaHKY80z2nSXkpr8UZ4+21Acj3lJgdgP5PqwmgADDjnDRg92Jh8gy8",
-	"7TARTSxUYbPV6+2zvIUNniBF/zAtD6bqsI0nYy6IuA+PPv+sgyesWMUOouQqH9FOXqEOVSc54Y5LF5LK",
-	"UrSw2t9DxKf0bH2WfCT76bnheSzEunUC62YTbVhlhLydavqdYuV20C9WFgQdaqWAPKkx5gQ5NhcO87HP",
-	"WE5SNlQLnStg63jHjK4dUF8oFNpYu5qXsmhPanKUeCmMY6WEcro5EscBd04oWER+yipNYbzW6aqCTv3Y",
-	"BSoSIxBoMpa3TDexOz0ULK04xLbkp3EArVhVm0pbgbVLp/oa9hcqI0CsC74tRPgzgClPLWANaFKNI9k0",
-	"spXWZlBZ9T2dwrzhnyuUjvYJ3ZmfZXV3d7/AXQqarkQvn2za4SWNdUFWuWXhhV3css/vRhyJrelvm3wR",
-	"BlhaxmaBNqTmrhRpV1rsOheiXXVBRXx2D4bF7mvBdAN82YqhEW77mNg2pV8Z/NPESHD7KsSfLdDhbt5A",
-	"C1psBX/y441oS9+1IiNWRuwCDC+F69Lkmvm7qxxhWBq9hJVWuRUPTjAZeoIpCZbqvxVAUM+Yr7YE8zFL",
-	"sXkOsyg7dbjayO6JtasgL+P08JC9ePbYy3X/1bPFKk+bQAPjd4GjiTzvwJkmByOkXaDVbo/iZl8JhXEw",
-	"8FdtRSzrGo2OekRhLd7fBwix0NgUS8pipnPoMH/8aXhIsQfxd4gcCNkgCzi7WAD2pKuT6b/4CxiiE60B",
-	"Bj8DS+RdkeLoS/iuidg/p2iqdg3fRGeMfhzLZtq4SdZR2y7vsFTmbA/NsSQ5SSplid0d98/YGO33vkbg",
-	"0dIpLKf503bXco3UZNOBaBAq0lLbg7IeVTDypEMrOqgx7DTjjYrc1ZhiG417QdsmKVzMQ/eJbkv9qNMu",
-	"sYb5bmWm3KJK2Gi998VHaXYAt7Yb+HJtd+PLL+yd8GUY5vvRWiZd6V11H79VW/A7ieJdiMheNlth+Jws",
-	"tolRoRG3wf5Vrei3lt429i0Py24ChaM863yiYzvktzmBzkOvZdFZwJ3IRpoj6tNGfaJoUrjRYHJqpMq1",
-	"rXlJ3UUOsJfdixePHyET7JDC+MHo5Zsf3xzEfz/c4t/HJ91X9mdNKEcbe5MYj64cTD02HKI4/Guo0MU6",
-	"YxyMIkidY4GvykiKMfBlxbhUABaqZeHfCuHg8MJPNHNal8MJvGgdn1Y+2jFMiH2Gdcn2gpOSs8qKutAH",
-	"4Q0UHygecjqVjkIYsUkgt5OM/dNCGjdHualW9IoTRUhB8Z0DfUgeiXB8CgplHBazXHDfZA8rocLmtOJG",
-	"NK1OqDcRzCF+XfNSUkeRJkrCQ+mof9Q/Ojg5Ovns+Oj44dHDhz86+fTgYcH5w08f/Hg05MON8lw4ri6E",
-	"bTU56OgDwl2MAacUZIntbsgxGwB+xvJRqbm3DiTtcShdpPmYVH1O3ou0HYjvxhxG6WZtVgxrI90cgsSm",
-	"TaT8CpZNMaefWAZx8kHyJCTy4dTZimhs1P/Hwvng79ybTfvsyzTDop2VBEwBPxxyY7BOSlhBlOPPWu1x",
-	"sbQcL63GL+aMK5Z/g67jnPAhpGD6Ru0h+QEawYY4YukIv2xtRnzoSzvnmN+k3AHw7VMKM6SNHf4KLCKE",
-	"vOdPH/uFKc0uvnl26fuOUxoVAJH+DprlaS9NOGhQjlfSe9Rsk+K08jRCFsDenzlXQd+ojF3CoYqMXfKp",
-	"AObwxz/lr7F7BPm4WKlDicx8MPgzbd0BEAwxkq/pWlH4ZFKNKQGUB520LJ84V50eHpZ6yMsJ1CEiMITA",
-	"eqBuCCOs2ogd8CmIGT7Gzs40mw6SMgI8BGjbOvb7RdDRLhvQ+YXjhR4EOC2B8AaTZUa6G4JwYF7wxDBl",
-	"ONjMX6gcIqkO8efD6+O8lWOEUrFQwgT0jVuFPHcrCwKex3Xm+BgNaWGMxJenARzksuDt1A1QoUWx4jbt",
-	"5a9p5weYRHPKMM0h2uEXkq6wRGT8onmYMz7Vauw5ItkM/NLY2HDlbP9b9a1a3OLyHaUNID6F69YCK3U3",
-	"yTZeo7iBhtDk6RXJ++ybBqlWgXoxUYcoAhj0kSA8bhrBH/y5AA2ME/sfTrRtOjNhozWDdAFos4SFF5Ff",
-	"neFFp/oHPluMCBqBgVzHRljIKYgMjG5/ewXPRFXyOeS2gJjsfSm19SNTrfemeiaA1e8MLmB3T3uPCJzl",
-	"pAfiYRxj6D/o7sMJN3zohLGBdHcnp7NzGOA6p0rugcTKppGYDaGkHlRkueaxt7YRvi6HxOxqWJqvVddu",
-	"zt+qvQpZ5r7sIazg6TeXzxlUxRRFg8GWj4SHV5LBSrYfHnw3TAnpJs0Vjf21AzPJf3HgbXcHjx95A/UF",
-	"H07EwQWJOmCTP0BDEpqmnXQoQpAaTIh9/vRx05mod9q7PsbgtUooXsneae9B/6j/gCTKCfLWFlE59FKz",
-	"PXzTyM83qDqT9SveOdAnez8R7jxGPcUm7xatGkgiYZaGQLZE8kZ0IW2MhPod9CQwiTQNT0/f9E6OjmJ2",
-	"MsUBLF5n+G2neXzkDRLtjtBhv/ebrPfw6HjVkHGNhy8UmOuEcrAmUdB3DzZ/95U2V7IohKIvHm7+4mvt",
-	"vgJrSO8m5gFsMQ2XZW1ESwjDo4w8/5cvAeg2qLu9b5pa4XSPkgDiXtZzfAy4gDoyWiZaLKJ32qOktWU2",
-	"0DvtUS9JLNQK69kCSw+HRhTSHRCfQHXGl4hcUNMKZG1jOXKRxNAop0AqcBB2xd1wkoQzEtn4tgdffdvL",
-	"sCW5KbDfFr5QigICSXgcWbyuhPItyZGCpXoDUUEfSUndvqRllbYSSyKGqpthbDn1hBfIPm6PEpKnWgmf",
-	"WhXrGgelqCq5EhlrtfJqxJ/+tNjPmCitYA9PToCs0YbBk6+QJyXeaeb/DeMrXxPUp6xRIZ2QVx6Kw+rR",
-	"6CyWDUVWlbQCocH6DPuJAqjA8OtbqDw5PgsHELvoVFySLKxHI1S1hnoqbAPLis+ngMisECDm9am7Q0qk",
-	"AGAXOOq7oFJZ96vNOg4T5osS4kuaVlj3hS7md0bSCAQIjeAhurm5WdzizRJRPb6PFXSRVHxAcWxeS4EB",
-	"u0STVRP5z1KIxk9wwodHR6u+bejgF7yIAHqvKfvDo883fwBOwVKSGeDhyck2e6mMHgqLxrm7YSCkv//y",
-	"ZbaalfyECF9kJ8NwYb8LE6FBbH/sUW6Jj9Rucgjfr2QWz1FwIw2mnc2OZW8xlzr3wi36ALVB3oACHuXt",
-	"nvtMeviLCnF0DQdDoIppfYos5onHxxCP5NXqDB835o59kHBnBtQmrO5PVijM5wF4OiemlWN7n6KLbGHa",
-	"jB2DFwcTevE5sN1Qca69EfAivbIY9NVnz6F3QChDgKQYXklyn0GnH05ACgfNANgKLs5Pi0ocddU4Derh",
-	"weOn7KoevhIuBe0yOf9ZKB3Qux8y+WTEdyKPdydztqpFdNDHy9Dh07tFVRtHFujmpXAHF4gwm6jlpXD+",
-	"xe8BjTzZguQ91/oJV3O/QPvWaNhTblfUx0jomD/lLkrWruXQSdGUVmIVIQvX9QDv4mqa9rU37izVQCN5",
-	"dwerD0mwuiz89bdOV0gnMPIrLR0CQcxoM4hVEYQqWmRgxGUpwkDEA9CKYV06SEOulinDM+ETSkWrNtw9",
-	"0YnO+nNvmWJ8heVALqj7yAollRhHQaGjH+nDu6QPT/grOo8WY7XbEYdbEgVv+l5NDS6Fa5fAIikD5Ba4",
-	"c17R6rT5juHT5To/e+3SQvvrC//02blivkC8z2wdaksDh3JE4K4DZ2BMI+TKzoRplErMP5wlFcNoIFQs",
-	"bZ99vdIaHH0qUBFQ6U4BhfugYS+dYIO6UgLlfPyU2Qk3ZM6O7iZyTZjGy7TCYn5VG+vYyREJYb7ykRe+",
-	"PDX0Y1IXUNrT3vERiADHsVQSVh4Dg+iMB+9T7MpifUZAqYevRLEPh0rWBEonOPncmz+fCWfmB+cjB0Gv",
-	"SNR9MRtuvAMqFJagD/x1sbE6zRIxpjJD90R72zWM3lcxDSPg4FDgcjRVgRYKOX0kyfdEklukFw4lSs50",
-	"keCaJVGhSyR4HUH1lYi7Keozca1fLdQVjNY50uDAfoYXExNggMLTtU8sbYEOd96sb2rXW0Lxhx3EnXBR",
-	"1+7uUO1t4c1bYclftt1727Firua3YcVOu+rQh/5uks5b1fjImxcaOq+I1WaX1GDaExkjXMam0XpxfLQg",
-	"dLA9qEepiC2joRl9YgRTcteFzlSp/N0UNUOD69DIK+/MTWXR3Jt3KSKZxIiJjoGaPs4KQ4EwiQwMEdIx",
-	"6yCLwzNNn4h1JcI6imbbISZn7+HR5/tnaWEBmMbUKpRQq0qN1mGfckZO/3Sc6RTmKqUSd6yMXDQh3hRS",
-	"fj+csCPs/z3TQb6kw/4wWN3uBtn3WF35SippJ3RbsXT87S0baQnP29FNG/MyOqnmE5+muZiLEWwQIT8C",
-	"+G3IkFjOzkD9AmIHWmEUv6qx2RlOoIIVA0bHPl/ta56HPv+hD1usnUoFQ5cJxRdiLFWbTNzTTW0m6bim",
-	"5wkv6f3w+Pyl48a9c1TWxiaxFAt0Enlz6CAD+mRZj/vsKzFjQul6PCFFVwNHhIj2DlSCwPtzP819xkbg",
-	"FDDZysAIv4jvGR6tNtwkbXlSc80Fd7zU4129UvTVyuAGmubwDSAAxt74liRdFM9FaIeEc/iKFP+Z9/CH",
-	"gCSgfYW04A/1hUXO6e20jIjtUDj4tTgP/X82+899f75bes5xHuq4+P64zv2q+LV429KVh/vaewayuOXX",
-	"GFr9gTrOdxS73p61l6twSOgYxlhn6e6MhEy54uMuboOB+KuZDRI0G7hMxgrDR2jNG5Y1RDVheNGva1Fj",
-	"xWffhRjiOylt5o/xfaxiDt8PKFI7Z1MIIgo6KHJc3RClbn5FK1lBWH5dCzNPKEvI2dnSk4vlV+kbJCZd",
-	"YzaNzW5FnzqX2YCkNe5OBQe3IH4XlJW2xZuo1vbuNWASgb1KJjhHiQWQwePl+05R7luWuGshItugFuF9",
-	"DUloEON8RY3JF3qWlHNfbYM8BBWG7zHLS+FjFb2kkYaUVwvXHFUuTHtB7wt9GISS/Nv66OjBkMbBf4tD",
-	"+gnXRr/kmfdK/Ck98sHM/mFT0cVnH1H1Ia06TKVUbvSJ72G4QGHeD9ECF0frfNvheASXjuv6CLDlgw7E",
-	"++HE1eFZhqZyb0vuOHwT+nXfrBRBnod0wQwVE+CdNos9JUJsSkcPPOz1GQtJoG8ZDMsTyNZQoh9SRJLy",
-	"WUnaV5qJ0yQsYiZOqL+xlOKwgn50qD5Jl/LbqT9U5PD+GfUqhYKw5IPOZyCMiNkMiJfkKwQEvHftf+kC",
-	"HeIKNqYzwFsxAJ/blEHCr9TOjX1NuzGiXTqUlBOsSkVX0GcxF0xpM+WlxAiwiZjjp7WSv64F40OjrWW8",
-	"LL1Uh9ZTvxIaHnUATOSaCq6i9ZRAvJfDmwO4eyrf9x4jzrAT4pBGAa/Nlc/mQi8TZoU0kWWhU2boggj5",
-	"9yh6XJHxlcSSKbsSI20wDQETy6JMc86McHBLEzqAqbJgC0W4LxOE86LAK/Q1ldJ8e0ThvbGGwM7Pi+Jt",
-	"m0I2E64mKQSxB4vWfEwm+GCTCTxSBKrja9++bQHoEPnGQdM7ttOaezmTjenEEyMdl45DhCQ0qi5KvYCt",
-	"E1XGQvNY28QE4KufWP9lkJp81S0vPEnP2ELbXJuW6JLIMbzLHrONkbxT98kgndHolJDVjknA+fssv+JW",
-	"xHqmzfCOaqCMWuO1pDlpnTbzLLCy2DdgBn9OoZX7nBVyFKRDXx7386VM3j57DHllaRYf6KF6NJJDycsc",
-	"WF8+5armpU91zonR5zEtN21c2ySeScNCiyI0pOMB+rQ1XZcFljQAfoYwao4VdtekH3dY27Emc9pE+INk",
-	"MgkACCLvIbvhNghQH7nMB8hlLiZaU2F5I9a0bW/I4zvjPpvVh1AxydsEA0H+JKHEVJkhhhQb4bUNzJrW",
-	"xlBZc3ghsC0/qGcDeazUoGdNem/gB6HtaWQFTX93Iv3UCLlge6FN5qizybtf7v5ZXEXKcdawiZy4Qx4V",
-	"iFTBSBmw5xKB+Oeg8mh1QD3KqeQSMgTPMWhbVN8m5QZpo/k2T2B7D09OfBw4PJ1NAM2wRfoVt9J6vpew",
-	"3GQsaBqBEYQhNGWA3wyGTWBelIy8HtRicLR9WiYyZwqRafhXIYYlN12a0VMSQ54F/EcS/gFzLw+P91lP",
-	"onMO8uNHNvYhsjGPppjvu2Rs5SzpYPXWmVdostmpMj1Lw5PhTZDH9IjsvxQUrEuioBRYHGoQk/XXM4pl",
-	"I5APPKbX4HGbWCJ9tE6WkRSyHGua+oI9TgpjvSrR1pYWwZuMRD+AKc2brJriHCxX2g2M4MW8IxuayhI3",
-	"jUY/SGqbdIP9qCR8pK7vFXX1VCrRD0AWxkI2vv3v26eqsSRvJ13NsZRgkYP7fyF2IBDBjIGD2MS6a2LG",
-	"xtyJUyz04+VDcr9xxUILKjblc2ZEpY0jl19qtUfBPDH9Z8H4tMSVtqGsmOhiU/k1WdhZlH9RModUD5S+",
-	"F2gtCUmh0BECXI3Ru4jMIo+dgQhcAUA1BkPUlkq+jrUuTlt+JMxb/bbnR/m2F4V4FRJfGu8MFc+DBNm5",
-	"z573vEuPGB1iVGj67AvtJvhtwgW7rEsuDYv6INlFAoCPXOMj13g/ZXK3pKWjj9ZJ83YCSH1S/8GUV5VU",
-	"Y7s2joOIWyh6bpEkEnWlYpw4F+TRlQVmMRgx1GMlfXk8pRkvJbeebGPE2JyNBSbkC1VUWioXy2jCj85w",
-	"sN/7YDWrpwKk/Cmn5m7TPvumLIR1FKEWiwZQPCv1w3hFhXS0KYTpDkx9SgB4Eva/XYSqBwGRyzsmj+9V",
-	"vGcbPJsDPxFFPuS4zxdRDMJbTVcG78iUV2B3VXopSCt0A9u17lm8iauiTHxn1sOKpLc19mFsMxOch3Xl",
-	"a/bSSq33dFmovjHSJkNlG+ysVYzyQGEt3GErQUYLfwZDJhWRgIvqNI4QylfsxSgcNH7Gno7oh6NsPsZL",
-	"rcQ+EEds/IKpdnpEqXfYgKEp1k8NmPBrKs0AT3L4O6dYAbaHNBYEdpAZc/qnsAN4ZyChlAlapbFKZhKF",
-	"ws0YaAmIbAipsMFPLO6rI9EQaZxBYqQ0Vj8jaHl0OU3UBWgJYV2YxJvQS8GtC+5co2dd1lg62qd00r37",
-	"s3NKNfZzvaMM5PYiVslVVXj8g5N73mMxxiuH5ISiyHDE4zSMLmDobiTOUzAicFkvLcTtMW4l0UMKsCEP",
-	"k3qzhEIF2oDYklGjK1DbJUgfjpuxiEIGqnDtF6DuL2qle9ThoSBaR440omKgsDkjRbFQqtc3VetPi9//",
-	"9nd/+Ot/93f/8W9+/9t/tb82H7SJdLCCBg5tVkLPBJhyhbRDsHkGb/Tu/67CPOsSSOmIfiis/3mSZeGd",
-	"icANjAf2HV6ElYkg5zhbaJPKsQyGv5V7hMf7GbLU2URP2V7A3P2MTfSM7U2Fm+hiP61MjaP42tN7Q62s",
-	"MxyY+r6vDtoKlqGCoP7ChJLYeDVCmQ+wXlAdaCzqcZoGafs8euSXffaUlj3SZYmO5CAQ8NrpKQccKMs5",
-	"2f+vjOCvDsS1UGxUam0YL2cAAcRfT5AMl6lrlhOggmADnmCYBoJnURRqPS80snQspAI1UKoWz82JNKxK",
-	"S0muwvuanJIs8d2kqKQw6lIvQGr7mKbyAzB4nBcF4y3KeGeEcbWJI5UHDt94If9mO4ejob5lRNKySM8y",
-	"RqQyYwlJ9AEjJEzkLQMt84Q5htUUohTOVyJxk+imJBfmKfM985AeXfi8fj3ytGuRJH7CgDB5Gh16Gsnf",
-	"COpR5wns3uoWAb//7e/+8X/61//4P/zvf/jLf/kPf/u//d3//a//8Nd/9ff/zf+DksgKV+RaqtZhXfZQ",
-	"/0FFfvj9vxvj8gaSGaSrjxbmDz14EW//26a5Sfu4Tu3r5xMSqWKp89htJK2mCJ7EQgPxRPMiSHwYra4V",
-	"KzXHHsCl4EY1JWE1SmmeAlIzOPjUG3E0WpvhYVNW3xd/2mtKMcLCmo52nj7jAl4JQaZn/2koqjcVU4hF",
-	"7MwqvIwVB++7UukqMhDO4jtcuntWmoJ/956rM1rpQADwTWJvDkOt27U+D18gN3ZotAKbm1pRjhrT4GKd",
-	"XDL4womGlobS0ZewNJ9A53FaEcoGD7RUoJ8NRTcySScuw6rvE6OSeX62xtgWIfjBppKeB6NL2uADOojb",
-	"5pgiMksndrXwA8pGMrtVWabYAvl2glZo6Qzb3CIejzYP8iddlFPGw9Z916gaYi+AcEPidQg89ycS60qz",
-	"L8GgjkNgOAhq9XB8luUpMuYYEBEyyJvmgElHxmkIljjqs8uJNi7tRoCeRTEaiaELkrISr10zTkhV8l+c",
-	"paGE0oYWX6uk4oX7+V4q++ka343ouit1YTz4Uz6KsPclwr6d6owCDGtvkWAuiwDR07qK538tZjGkwBe1",
-	"oRCskSyBlEhLzc+77euNJ/c+Kl2F0dNiV9+nYIKw/s1hBM05fcChBCky3XWowCoHwoVWSgxDqxD/EeOO",
-	"5dp31ICW/yHWc+Bd+Hnify81OLDzQjgxjPchZxb6O0pnqZsw5S7teV+9FbwEW1gIh3S1UdjG4rHzoZSW",
-	"YWuRoWjmiYuD2Ya0bLDGnyVFq+xcDWFBllHDDu5Lro+NriubAd3x7kpf2YL+fU1J0U6znA+dvIZSVRR5",
-	"kOPCB9w5QBvoILzQ7LOtMFYaBB/sPh8AQTSFgBn1h9gNL81JYCV3wnhlIVTw4EVhhLXxTew2j52ZjChg",
-	"Tby0FCIB+dkTbR1kyKXzhbl4iQGwzINOFEFu+pyWGGaSYEAS0FckNKjWtUPZLLRHKeUrEcSmcChecmmy",
-	"26TzeW8hmPXkZJXHJMDq7UtQ4jWfVt5rDA1JB1INhgq/TEV+JWYHvJLNbitEbsXmNVcZINw4beDmUxt5",
-	"CbAHkDrfdR/lXRgc7kTvtKfEjFeyl/XwDuEi8YMBfYCi/oFfYy9rPRw0jVx7p72To5MfHRwdHxwdPz86",
-	"OsX//+e9m8h2vqQh2MXXcAKIGr3T3sS5yp4eAsPs+0n6QzJccOt7CGFTE59fH1qdTHQTGI28TDhXiqlQ",
-	"bhCTik57F1//s17WWyQcvdOeruyfxun0FOljgH1ti0XY2/rqpBP2hS5LbuwS+BE8JPkrH8/OGVUCCDai",
-	"jqPw06w5i+2P4rOD46OD48+eH/04HAXAdGSEncTRTDPa8jm9uNx4Tnp6Vwf14vLRtgd1s6vg8m68i2H2",
-	"LpHjIjKOj/7FH4K5m44TtIyGidyd7LRZrzgkuUdqtSbY8qnRV6Got+eybmIw2KeDv4aU/MA+KyOvuaOY",
-	"aqmcMMhZaJxgGfEBIPAZL3gFRA/lrpH0bkoK60BRTToSx1Dc8m0NFEUyYoK7dBiMHcaJQd02ymYnR0dE",
-	"a5VmOcyTt7qsJG3PMGI0NqW9EkNeW0HRlBUAhWSDYI1BOcZNpCmw/Oh8WWB41JIy7yn68VE40ncU+Bjn",
-	"7yJgPw9OE4LfCBCn//5HP96KhLzvbVSwAxddLTu3Tky9tQNbFd0HIdouIDJ+dvgmSVxYX7IzvEgpfKQv",
-	"pTWR8A5ST0LSoohiOe3fbXwj+LSlsIUqUeAiMaL5UmFdz2eC+xZQjT8Q1ThuXezfonTS3qlZq9W+pPFw",
-	"InjV7UJJacU92zkeCcflygwwG8WSD7kOZ8SKmATgkc3bBe/J+LHZj9JK8fluZV63vZGHiRK/ppQPbLDp",
-	"iQodi7whwyW5WRKChE+j8omv2SbEMtxPadmVVEWwd3CCftD0w3DexfP4UUjH2MPLl9cKL+8Apsdeqy1T",
-	"xz4ZEppNYUk2mA6jJimrK95vcPuARSIQDYi6AtfM0jXHlZPJCOOjzuFtGJoIiVZD0VAf2k6o9WOxxFhn",
-	"eyapirBwsB28ZRR5b+KaAA44/rtR0S4irnRRzS8Idfof3UAfYCTTC5sW+01JExI/6kGJ1/1tq3xtGk7s",
-	"6/AN/ndtoOl5pEeeTI19bAnFkGBx271Y5hZrIjMrsF4PFZvwoMCPP7HQB7QQlLpGUpA3godJMAk3rQe9",
-	"H+uw+zy/KzHU0yRzr89eKPoci4PFVlS0XF8EwegaHxPDDhFScQurSl+Go/mJP7K3TW87JghH9oOh5ghb",
-	"AndUH9+in791wiukYEKlj1GqPxAXf1MsEwMyeUqn6ailBVJWvFsiHY363VWaBXrRfJFjbyVbILqh5hhQ",
-	"vRCxFNyN0fcA4ukLK4qmymXiIPsVUeV0sL0l/yKlPDflMY3G+CccOfXSLXoSsbpMdCUWPosAyfSCQM7Z",
-	"RI4nB0baV00HjXXpAr4TM4ZCMaGcmccsd5jf6SSF2/tEYSXRN7zMEHxIWQwPgLc+WAm8BYV3FKC1xmHS",
-	"Ng6ljneKpP4onH+/Cbi/i811ZWRvQNcDf5eelTYFR4m1VbZmbWs05WvPLGkPp00jiang2DpI2tixiMrv",
-	"e3HXhNKSs4kumzGIEMfiF9IBgUUiPePSkWYS+rcijkk3p5CKpGGJl62p4A2UAvPrjQljnpBDVbOZ0WqM",
-	"C5M2lGSm6AyK+vBfKr8zYzQUI7NDXWGdS9wrWV99CAgWYFPpd9zR+01MyBLRfsKrcOzbd076IRJs3L0v",
-	"kLOTh+j4XpbQRbThkSg+kubvN2l+wqt2ocVYYYhMt3dfVmhnqozdpXi5mhw/jzaE8F0wI+Bvild2ol2W",
-	"kE74r8/8gvR+OZ64EMqHjyaQmoteaVPYkF8gFJk7KM3Wv9kY15GyW0e2Cu5CAyojKgFYRtLvafSuN9tl",
-	"z748f/TkSyjW8W9+9/f/5/9CxTq2DlNE8FCQIsrOhfW/iQJyhNuGfeznFTaUDvPkOEYZoulLOrL8UO0E",
-	"kPx9rUqyiXnNgRr86leizy6pqBd8SNlvs4ksBQur8xGYC8fELVmVusR32MHqqL0PhA88Q2VnJw5w8lZE",
-	"9mf+XD/S/+95+gS22o639H2RxDfVGa54bZtCul2kP7UgW6crotdoTQE6Cm85XQ99hd8WJT+LIdrMCFtP",
-	"vWnkvJnD+cTKVFXNlgO5s4Q6Y7OoQJeZ9H5WfU1C9oSr4rRbJr4UbiFH40O3YrzL+rvbmjE+Wp9/KBTy",
-	"KYYTauNpwXtDImsl3UEMMe8kk8+jjfeTWD/cafZt75jB10Amr3jJ1VCwP8ZiXdN6OGFTrcT82x7bW11V",
-	"7u/+33//h7/9b//w3/3Lv//Lf/P3/+P/ARJriChdlvJ8KUuQtZ2m0YOdGaM/sVGUConqeQBlH5Y4wA0O",
-	"4DkWvMH0FZ/TGypxYTCH0rMzL9I3SSgosIL7kALMbJ99GeuHLhhtsEjOIu+gaBLu50PDCPZF6gr2uKBH",
-	"YfUvlHQ/g88+WGodIfCRUH8MAXmvo/vh3lJgqFYiUsaWmzGQSaoA7iZvh/S7tVnFVG3USWEiMZNOUCnG",
-	"4URrK4NFVy3U6iFuxguSj4N/7xO7tkRoZ27y8+685PZCH4VKJt7uEOuKwpidKcyx3sTu9SXujaA8X5Nk",
-	"DATFfeipxREI/vZIlxaFemF3vyK1beJrly4HPlx5OXA68Fwktfx9bW9YGMOCnmWf5WLKZTmojBjJ1zmb",
-	"8qaVMnagD1cLSmmbgyG3omD4SQgMJx+WYlIV4nX3JXlhOy/JnWJ+1j1eurvWoFP++qdCjd2kd3ry6cOs",
-	"N5Uq/H2c9dy8wtU4Q8b/71lNAAD45noAhEAfclsB264DcOdX1DdxXZsUMtTK6hL+O62w95N0jaHbD4C/",
-	"ccuualk6xikyRVMjU86MwMJtIRwm9PZOK2JR1aBKAK8z2sJXhahKPZ8K5RrrOKoKoER4xnj+9DFMrTQr",
-	"tRoLE8hDZxLIz/xm7xGvwxQrazMqBSu/jitJxNkLPpyIgwutnNFle0qh6imcv9IHmAvTe7lMAW7uABWX",
-	"uEU4Xk9jw/oro8eGT7tKtuE6/K9LEVaUeJ0xN4ONiArGlyMP6hg/tFAYrt8Qy8tY1G55aNeUDkq/kE50",
-	"vI4XKQtyVShej9nhYGaULhnihadCS1MG8TDz2VELKSxNOkLd1R0EfF0AS5LgptFXGxae1EJZCiGu3UTD",
-	"vKGABc2P42ZYoZ5WsdA5LYVLaCy0PPjTtIB52II0ocVCMoZ/s3fz8ub/HwA=",
+	"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",
+	"HLag69AqPRmD3+zdfHvz/w0A",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

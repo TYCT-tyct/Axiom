@@ -54,7 +54,7 @@ func wantTooManyRequests(t *testing.T, err error) {
 // the limit since it first queued is spent, not when the last wait is.
 func TestQueueLimitCoversAllTheWaitsOfACall(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		bp, err := New(DefaultConfig())
+		bp, err := New(DefaultConfig(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -80,7 +80,7 @@ func TestQueueLimitCoversAllTheWaitsOfACall(t *testing.T) {
 // with no more than the attempt that was under way.
 func TestQueueLimitHoldsWhenEveryAdmissionSeesARelease(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		bp, err := New(DefaultConfig())
+		bp, err := New(DefaultConfig(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
