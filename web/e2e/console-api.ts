@@ -81,6 +81,35 @@ function getCall({ params, state }: Ctx<"/api/console/v1/calls/{call_id}", "get"
   return call ? ({ status: 200, json: call } as const) : fail(404, "not_found");
 }
 
+function listStatement({ query, state }: Ctx<"/api/console/v1/statement", "get">) {
+  const page = paged(state.statement, query);
+  return page ? ({ status: 200, json: page } as const) : fail(400, "invalid_request");
+}
+
+// The export is a file, not JSON: the newest rows of the same statement under a header, as the server writes them.
+function exportStatement({ state }: Ctx<"/api/console/v1/statement.csv", "get">) {
+  const columns = (row: Schemas["StatementRow"]) => [
+    row.at,
+    row.kind,
+    row.amount.amount,
+    row.balance_after?.amount ?? "",
+    row.amount.currency,
+    row.reference,
+    row.frozen_change.amount,
+    row.frozen_after.amount,
+  ];
+  const lines = [
+    `at,kind,amount,balance_after,currency,reference,frozen_change,frozen_after`,
+    ...state.statement.map((row) => columns(row).join(",")),
+  ];
+  return {
+    status: 200,
+    json: undefined,
+    text: `${lines.join("\n")}\n`,
+    headers: { "Content-Disposition": `attachment; filename="statement-2026-10-14.csv"` },
+  } as const;
+}
+
 const handlers: Handler<MockState>[] = [
   route("get", `${base}/version`, none, ({ state }) => ok({ version: state.version })),
   route("get", `${base}/site`, none, ({ state }) => ok(state.site)),
@@ -99,6 +128,8 @@ const handlers: Handler<MockState>[] = [
   route("get", `${base}/balance`, { ...signedIn, permission: "balance.view" }, ({ state }) => ok(state.balance)),
   route("get", `${base}/calls`, { ...signedIn, permission: "calls.view" }, listCalls),
   route("get", `${base}/calls/{call_id}`, { ...signedIn, permission: "calls.view" }, getCall),
+  route("get", `${base}/statement`, { ...signedIn, permission: "balance.view" }, listStatement),
+  route("get", `${base}/statement.csv`, { ...signedIn, permission: "balance.view" }, exportStatement),
 ];
 
 export type { MockData };
@@ -112,3 +143,15 @@ export async function mockConsole(page: Page, data: MockData = "usual", over: Pa
 }
 
 export { signedInAs } from "./mock-auth.ts";
+
+// The server answering the same call, once, with a failure.
+export const failOnce = (page: Page, url: string) => {
+  let failed = false;
+  return page.route(url, (route) => {
+    if (failed) {
+      return route.fallback();
+    }
+    failed = true;
+    return route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } });
+  });
+};

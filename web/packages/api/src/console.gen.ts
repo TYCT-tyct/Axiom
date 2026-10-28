@@ -285,6 +285,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/statement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's credit statement
+         * @description Every credit event, newest first in ledger commit order: top-up, gift, call charge or reversal, expiry, refund freeze, unfreeze or completed refund. Corrections can create multiple events for one call. `reference` identifies the call for charges/reversals and the batch otherwise (the order ID for paid credit). Freezes change frozen credits but leave the total balance unchanged. No ledger entry, book or platform account appears. An event that commits while the pages are being read lands above the cursor and shifts none of the pages already read. Each page scans at most eight bounded candidate batches; zero-effect events are skipped. An empty `data` with a non-null `next_cursor` means continue through an empty segment, not end of history.
+         */
+        get: operations["listStatement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/statement.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's credit statement as a CSV file
+         * @description The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC), `kind`, `amount`, `balance_after` (empty where the row's balance after is null), `currency`, `reference`, `frozen_change`, `frozen_after`. All amounts are exact decimals in site credits. At most the newest 10 000 events are streamed in cursor pages using bounded memory. Empty continuation pages are traversed. A failure after output starts closes the connection rather than completing a truncated CSV. Older events remain accessible through `listStatement`.
+         */
+        get: operations["exportStatement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/calls": {
         parameters: {
             query?: never;
@@ -552,6 +592,35 @@ export interface components {
             floor: components["schemas"]["Money"];
             available: components["schemas"]["Money"];
             spent_this_month: components["schemas"]["Money"];
+        };
+        /**
+         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+         * @enum {string}
+         */
+        StatementKind: "top_up" | "gift" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
+        /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in, so the balance between two of them is not known. */
+        StatementRow: {
+            /** @description The row's own identity, to tell two rows apart; it names no ledger entry. */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When the movement was recorded.
+             */
+            at: string;
+            kind: components["schemas"]["StatementKind"];
+            amount: components["schemas"]["Money"];
+            balance_after: components["schemas"]["Money"] | null;
+            /** @description Signed change in credits frozen for refunds; zero for ordinary balance changes. */
+            frozen_change: components["schemas"]["Money"];
+            /** @description Credits frozen after this event; included in balance_after, unavailable for new spending. */
+            frozen_after: components["schemas"]["Money"];
+            /** @description The call ID for charges and reversals; otherwise the credit batch ID (the order ID for paid credit, or the offline credit ID). No payment credentials or internal account IDs are included. */
+            reference: string;
+        };
+        Statement: {
+            data: components["schemas"]["StatementRow"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
         };
         /** @description An API key's ID (TypeID). */
         KeyId: string;
@@ -1252,6 +1321,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Balance"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listStatement: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the statement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Statement"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    exportStatement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The statement, at most the newest 10 000 movements. */
+            200: {
+                headers: {
+                    /** @description An attachment named for its contents. */
+                    "Content-Disposition": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
                 };
             };
             401: components["responses"]["Unauthenticated"];

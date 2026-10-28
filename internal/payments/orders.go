@@ -360,15 +360,48 @@ func orderOf(r ReadOrderRow) (Order, error) {
 	}, nil
 }
 
+func paymentNotifyURL(returnURL string, merchant MerchantID) string {
+	// CreateOrder has already validated the server-provided return URL.
+	u, err := url.Parse(returnURL)
+	if err != nil {
+		panic(err)
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: NotifyPath + merchant.TypeID()}).String()
+}
+
+func (p *Payments) checkoutChannel(ctx context.Context, id MerchantID, method Method) (Channel, string, error) {
+	var ch Channel
+	var upstream string
+	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
+		var err error
+		ch, err = p.channel(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		methods, err := queries.ListMethods(ctx, tx, []uuid.UUID{uuid.UUID(id)})
+		if err != nil {
+			return err
+		}
+		for _, m := range methods {
+			if Method(m.Method) == method {
+				upstream = m.Upstream
+				return nil
+			}
+		}
+		return ErrNotFound
+	})
+	return ch, upstream, err
+}
+
 // checkout asks the order's channel for a checkout and stores what outlives the request. A channel that refuses, or a
 // link the browser must not follow, is ErrRefused; the order stays as it is for any other outcome.
 func (p *Payments) checkout(ctx context.Context, s pg.Scope, o *Order, r CreateOrder) (Checkout, error) {
-	ch, err := p.channelOf(ctx, o.MerchantID)
+	ch, upstream, err := p.checkoutChannel(ctx, o.MerchantID, o.Method)
 	if err != nil {
 		return Checkout{}, fmt.Errorf("%w: open the channel before creating an order: %w", ErrRefused, err)
 	}
 	c, err := ch.Create(ctx, CreateRequest{
-		Order: o.ID, Method: o.Method, Total: o.Total, Subject: "Top-up", ReturnURL: r.ReturnURL,
+		Order: o.ID, Method: o.Method, Upstream: upstream, Total: o.Total, Subject: "Top-up", ReturnURL: r.ReturnURL, NotifyURL: paymentNotifyURL(r.ReturnURL, o.MerchantID),
 		ClientIP: r.ClientIP, Mobile: r.Mobile,
 	})
 	if rejected, ok := errors.AsType[*Rejected](err); ok {

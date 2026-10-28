@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
 )
 
@@ -79,6 +80,31 @@ func TestRejectionOfIsBounded(t *testing.T) {
 	r := rejectionOf([]byte(`{"error":{"message":"`+long+`"}}`), "https://relay.example", "k")
 	if r == nil || len(r.Message) > maxRejectionText || r.Message == "" || strings.ContainsRune(r.Message, '\uFFFD') {
 		t.Errorf("a message of %d bytes", len(long))
+	}
+}
+
+// TestSanitizeCleansAStreamsWordsAsAnAnswers: an error event of a stream is cleaned by the same rules as a 4xx answer,
+// with the credential and the endpoint's address that only this layer holds (docs/domains/gateway.md「错误」).
+func TestSanitizeCleansAStreamsWordsAsAnAnswers(t *testing.T) {
+	t.Parallel()
+	const origin, key = "https://api.relay.example:8443", "sk-live-0123456789"
+	said := protocol.Rejection{
+		Message: "bad key " + key + " for api.relay.example (request id: 20261019)",
+		Type:    "new_api_error",
+		Param:   "max_tokens",
+		Code:    "invalid_value",
+	}
+	body := `{"error":{"message":"` + said.Message + `","type":"` + said.Type + `","param":"` + said.Param +
+		`","code":"` + said.Code + `"}}`
+	a := &Attempt{ep: &endpoint{origin: origin}, cred: &credential{key: secret.New(key)}}
+	if diff := cmp.Diff(rejectionOf([]byte(body), origin, key), a.Sanitize(said)); diff != "" {
+		t.Errorf("the stream's words differ from an answer's (-want +got):\n%s", diff)
+	}
+	if a.Sanitize(protocol.Rejection{}) != nil {
+		t.Error("an error with nothing left to say was passed on")
+	}
+	if a.Sanitize(protocol.Rejection{Message: " "}) != nil {
+		t.Error("an error whose words were all removed was passed on")
 	}
 }
 

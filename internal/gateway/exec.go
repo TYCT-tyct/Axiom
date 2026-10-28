@@ -27,6 +27,9 @@ type Conn interface {
 	Send(ctx context.Context, call suppliers.Call) (*http.Response, *suppliers.Failure)
 	Policy() suppliers.CallPolicy
 	Done() suppliers.AttemptReceipt
+	// Sanitize removes supplier identity using the same rules as HTTP rejections. Only suppliers knows the credential
+	// and origin; protocol bounds the raw fields before handing them over. nil means no message remains.
+	Sanitize(protocol.Rejection) *protocol.Rejection
 }
 
 // Upstreams is the call side of suppliers as the attempts use it. Acquire returns suppliers.ErrNoEndpoint or

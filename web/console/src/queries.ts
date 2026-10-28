@@ -23,6 +23,19 @@ function nextCursor(page: { next_cursor: string | null }) {
   return page.next_cursor ?? undefined;
 }
 
+export const statementQuery = infiniteQueryOptions({
+  queryKey: [accountKey, "statement"],
+  queryFn: ({ pageParam, signal }) =>
+    unwrap(
+      consoleApi.GET("/api/console/v1/statement", {
+        params: { query: { cursor: pageParam, limit: pageSize } },
+        signal,
+      }),
+    ),
+  initialPageParam: undefined as string | undefined,
+  getNextPageParam: nextCursor,
+});
+
 export const keysQuery = infiniteQueryOptions({
   queryKey: [accountKey, "keys"],
   queryFn: ({ pageParam, signal }) =>
