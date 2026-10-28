@@ -161,6 +161,9 @@ func Run(ctx context.Context, databaseURL string, statements ...string) error {
 // such an idle gap fails. Keeping the reaper longer than any gap closes the window. It is also how long a finished
 // run's containers outlive it, since the reaper removes them, so the value stays short. An explicit setting wins.
 func keepReaperAlive() error {
+	if os.Getenv("TESTCONTAINERS_RYUK_DISABLED") == "true" {
+		return nil
+	}
 	if os.Getenv("RYUK_RECONNECTION_TIMEOUT") != "" || os.Getenv("TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT") != "" {
 		return nil
 	}
@@ -183,9 +186,10 @@ func dockerHostFor(goos, current string) string {
 	return current
 }
 
-// connect points this binary at the cluster of the run, or starts one of its own, which Ryuk removes after the binary.
+// connect points this binary at the cluster of the run, or starts one of its own. Ryuk or CI label cleanup removes
+// that container after the binary exits.
 func connect(ctx context.Context) error {
-	connection := clusterURL()
+	connection := containertest.Untracked(ClusterEnv)
 	if connection == "" {
 		var err error
 		if connection, _, err = StartCluster(ctx); err != nil {
@@ -197,33 +201,11 @@ func connect(ctx context.Context) error {
 	return err
 }
 
-// clusterURL is ClusterEnv from the environment, read through os.Environ rather than os.Getenv on purpose: the go
-// command records every variable a test reads with os.Getenv in the key of the cached test result, and this URL names a
-// container that is new on every run. Read with os.Getenv, it would run tests whose code has not changed over and over;
-// the URL is not an input. Each test gets a database of its own from New, and the cluster's migrations come from the
-// test binary's embedded files, so a cached pass proves what a new run proves. A test that depends on cluster-wide
-// state unsets the variable first, as internal/platform/pg's TestMain does.
-func clusterURL() string {
-	return clusterURLIn(os.Environ())
-}
-
-// clusterURLIn returns the last value of ClusterEnv in env: withcluster appends its URL after os.Environ, so the last
-// entry is the one the command was given.
-func clusterURLIn(env []string) string {
-	prefix := ClusterEnv + "="
-	for _, entry := range slices.Backward(env) {
-		if value, ok := strings.CutPrefix(entry, prefix); ok {
-			return value
-		}
-	}
-	return ""
-}
-
 // StartCluster runs a PostgreSQL container and prepares it: the roles, and a template with every migration applied.
 // It returns the superuser's URL, to be passed in ClusterEnv, and the function that removes the container; a process
-// that dies without calling it leaves the container to Ryuk. Durability is off for speed; tests of durability,
-// migrations under load and performance run elsewhere with it on. max_connections is raised because every test
-// binary of a run shares the cluster, each with the pools of its parallel tests.
+// that dies without calling it leaves the container to Ryuk or CI label cleanup. Durability is off for speed; tests
+// of durability, migrations under load and performance run elsewhere with it on. max_connections is raised because
+// every test binary of a run shares the cluster, each with the pools of its parallel tests.
 func StartCluster(ctx context.Context) (string, func(context.Context) error, error) {
 	if err := keepReaperAlive(); err != nil {
 		return "", nil, err
@@ -235,7 +217,7 @@ func StartCluster(ctx context.Context) (string, func(context.Context) error, err
 	}
 	container, err := postgres.Run(ctx, "postgres:18.6-alpine",
 		postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.BasicWaitStrategies(),
-		containertest.WithCgroupParent(),
+		containertest.WithHostPolicy(),
 		testcontainers.WithCmdArgs("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off",
 			"-c", "max_connections=1000"))
 	if err != nil {

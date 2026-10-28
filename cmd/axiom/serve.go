@@ -185,6 +185,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
+	defer startAlerts(ctx, db, recorder, cfg.valkey.NodeID, cfg.shutdownTimeout, logger)()
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
@@ -403,6 +404,9 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 	}
 	recovery, err := accounts.RegisterPasswordRecovery(db, queue, mailer, pg.PlatformScope(), logger)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err = observability.RegisterAlerts(db, pg.PlatformScope(), queue, mailer); err != nil {
 		return nil, nil, err
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{

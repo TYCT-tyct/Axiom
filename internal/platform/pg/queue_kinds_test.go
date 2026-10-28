@@ -27,6 +27,8 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 		"billing.reconcile":               QueueMoney,
 		"catalog.sync":                    QueueSyncs,
 		"mail.send":                       QueueNotifications,
+		"mail.send_tracked":               QueueNotifications,
+		"observability.alerts":            QueueNotifications,
 		"payments.poll":                   QueueMoney,
 		"queue.discard_scan":              QueueArchive,
 		"suppliers.reconcile":             QueueMoney,
