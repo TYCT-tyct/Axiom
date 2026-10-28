@@ -49,22 +49,40 @@ func rejectionOf(body []byte, origin, key string) *protocol.Rejection {
 			Code    any    `json:"code"`
 		} `json:"error"`
 	}
-	if jsonx.Unmarshal(body, &e) != nil || e.Error.Message == "" {
+	if jsonx.Unmarshal(body, &e) != nil {
 		return nil
 	}
+	return cleanRejection(protocol.Rejection{
+		Message: e.Error.Message, Type: textOf(e.Error.Type), Param: textOf(e.Error.Param), Code: textOf(e.Error.Code),
+	}, origin, key)
+}
+
+// cleanRejection is what the client is told of a refusal: the members OpenAI's and Anthropic's shells share, with
+// whatever names the supplier taken out, and only the type and code a client can act on. nil when no words are left.
+func cleanRejection(r protocol.Rejection, origin, key string) *protocol.Rejection {
 	hosts := hostNames(origin)
 	clean := func(s string) string { return cleanText(s, key, hosts) }
-	r := &protocol.Rejection{Message: clean(e.Error.Message), Param: clean(textOf(e.Error.Param))}
-	if typ := textOf(e.Error.Type); knownTypes[typ] {
-		r.Type = typ
+	r.Message, r.Param = clean(r.Message), clean(r.Param)
+	if !knownTypes[r.Type] {
+		r.Type = ""
 	}
-	if code := textOf(e.Error.Code); !relayBrand.MatchString(code) {
-		r.Code = clean(code)
+	if relayBrand.MatchString(r.Code) {
+		r.Code = ""
+	} else {
+		r.Code = clean(r.Code)
 	}
 	if strings.TrimSpace(r.Message) == "" {
 		return nil
 	}
-	return r
+	return &r
+}
+
+// Sanitize takes the supplier's identity out of an error the upstream's stream carried, as rejectionOf does for a
+// refusal of the request's: the protocol reads an error's words bounded, and the credential, the addresses and the name
+// of the software behind the supplier are hidden here, where they are known (docs/domains/gateway.md「错误」). nil is a
+// refusal with nothing left to tell the client.
+func (a *Attempt) Sanitize(r protocol.Rejection) *protocol.Rejection {
+	return cleanRejection(r, a.ep.origin, a.cred.key.Reveal())
 }
 
 // textOf is a member that is a string, or a number written as one (an error code may be either), and "" for the rest.

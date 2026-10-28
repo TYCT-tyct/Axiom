@@ -41,7 +41,7 @@ type Plugin interface {
 	Open(c MerchantConfig) (Channel, error) // 校验并绑定一个商户账户；保存配置时也调用，不合法就拒绝保存
 }
 type MerchantConfig struct {
-	ID MerchantID; Currency platform.Currency; NotifyURL string
+	ID MerchantID; Currency platform.Currency
 	Settings []byte                    // 非密配置，规范 JSON，插件自己定义结构并严格解析；核心已核对它的哈希与密文里的一致
 	Secrets  map[string]secret.Secret  // 解封后的密钥，只在内存里；轮换期间含旧密钥，验签时新旧都试
 	Client   *egress.Client
@@ -57,7 +57,7 @@ type Channel interface {
 	QueryRefund(ctx context.Context, r RefundCall) (RefundState, error)
 	Ack(ok bool) (status int, body []byte) // 渠道要求的应答，sub2api handler/payment_webhook_handler.go:215-226；ok 只在事务提交后为真
 }
-type CreateRequest struct{ Order OrderID; Method Method; Total Money; Subject, ReturnURL string; ClientIP netip.Addr; Mobile bool } // ReturnURL 由控制台处理器按站点登记的 origin 生成（`accounts.Origin`），核心校验 https
+type CreateRequest struct{ Order OrderID; Method Method; Upstream string; Total Money; Subject, ReturnURL, NotifyURL string; ClientIP netip.Addr; Mobile bool } // ReturnURL 由控制台处理器按站点登记的 origin 生成（`accounts.Origin`），核心校验 https；NotifyURL 由核心按同一 origin 和 NotifyPath 生成
 type Checkout struct{ TradeNo, PayURL, QRCode, ClientSecret string } // 存库前去掉 NUL（sub2api payment_order.go:509-523）；ClientSecret 只交给浏览器，不存库
 type Callback struct{ Method string; RawQuery string; Body []byte; Header http.Header }
 type Notice struct{ Relevant, Success bool; Order, TradeNo string; Paid Money; Raw string }
@@ -71,8 +71,24 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 - **用能力集合而不是可选接口**：sub2api 用类型断言判断扩展接口（`payment_fulfillment.go:65-69`），能力随插件种类固定；易支付是否能查单、能退款取决于这家网关，是商户账户的配置，所以由 `Caps` 声明。调用没有声明的能力是程序错误，panic。
 - **`RefundKey`**：渠道把 `RefundCall.Refund` 当作退款单号，同一单号重发只退一次（Stripe 的幂等键、支付宝的 `out_request_no`、微信的 `out_refund_no`）。只有声明了它，结果未知的退款才能重发；易支付不声明。
 - **链接**：核心在存库和返回之前检查 `PayURL`、`QRCode` 里的链接，只放行 `https` 和 `alipays://`、`weixin://`、`wxp://`，以 `//` 开头的和其他协议当作 `*Rejected`。插件只负责把以单个 `/` 开头的相对链接按网关地址补全。
-- **金额**：`Notice.Paid`、`Payment.Paid` 由插件把网关的十进制文本精确解析成最小单位（`platform` 的币种表），位数超出就当作金额不符，交给核心比较；插件里不做容差。没有币种字段的渠道（易支付）填商户账户的币种。
+- **金额**：`Notice.Paid`、`Payment.Paid` 由插件把网关的十进制文本精确解析成最小单位。`Minor == 0` 表示缺失，`Minor == -1` 表示无效付款并转待处理；不做容差。没有币种字段的渠道填商户账户的币种。具体规则见[易支付配置与边界](#易支付配置与边界)。
 - **插件拿不到数据库**：只拿到配置、密钥和出站客户端；状态和钱都在核心里。插件的错误和日志不带请求的查询串和表单（易支付把密钥放在查询串里）。
+
+### 易支付配置与边界
+
+`EasyPay{}` 实现 `Plugin`，通过内部可选的 `normalizeSettings` 在身份比较和加密封装之前归一化配置，由公网回调与后台任务共用的插件清单登记。`Settings` 严格读取 `gateway`、`pid`、`mode`（`redirect` 或 `api`）、`sign_type`（省略即 `MD5`）、`cids`（本站方式到通道号的映射，可省略）、`query`、`close`、`refund`（省略即不支持）。`Secrets.key` 必填，轮换期间可同时提供 `old_key` 验签，其他密钥名拒绝保存；下单和查询只使用当前密钥。付款币种来自 `MerchantConfig.Currency`。示例：
+
+```json
+{"gateway":"https://pay.example.com","pid":"1001","mode":"api","cids":{"alipay":"2"},"query":true,"close":false,"refund":true}
+```
+
+付款方式映射只存于核心的 `MethodInput.Upstream`，下单时由核心读取并通过 `CreateRequest.Upstream` 传入。`Channel.Methods()` 返回 `nil` 表示协议允许管理员配置任意本站方式；返回非 `nil` 清单的插件仍受清单约束。网关地址保存前和绑定时去掉查询串、片段及三个 PHP 端点后缀，只接受无用户信息的 HTTPS 地址。`identitySettings` 只比较 `gateway`、`pid`、`sign_type`；订单在途时可以改付款方式、cid、下单模式和能力开关，网关、商户号、签名方式、币种和密钥仍受身份保护。所有设置仍整体参与密钥封装的哈希校验，不能通过库外编辑改变运行配置。
+
+`close` 仅用于明确支持 `api.php?act=close` 的网关，参数与查单一样同时发 URL 和表单。退款使用 `api.php?act=refund` 和表单；不声明 `RefundKey`、`QueryRefund` 或 `Statements`。退款只在有效的 2xx JSON 明确说“订单不存在”时切换订单标识，网络错误、非 2xx 或无法解析的响应不能触发第二次退款。
+
+插件只持有不可变的商户绑定，每次调用创建自己的参数表。核心按服务端生成的返回地址同源域名和唯一的 `NotifyPath` 生成 `CreateRequest.NotifyURL`，运行程序也用这个常量登记 GET/POST 路由，插件直接使用该地址。GET 只读查询串，POST 只读表单并拒绝非空查询串，重复字段一律拒绝；`Notice.Raw` 只写固定协议描述。响应 JSON 使用平台严格解析，字符串或数字标量以原文读取，避免经过浮点。
+
+只有缺失或空的金额文本用 `Minor == 0` 表示，仍由核心补查；非空金额的零值、格式非法、精度超限和整数溢出统一用 `Minor == -1` 表示，保留为无效付款并转待处理。不接受千分位、指数、分数或符号，也不将它们误报为验签失败。所有网关响应、解析和网络错误仅给出固定上下文及 HTTP 状态，不能回显网关返回的消息。
 
 ### billing 要提供的接口
 
@@ -145,7 +161,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
   返回地址（`CreateRequest.ReturnURL`）是控制台处理器用 `accounts.Origin`（请求的域名登记的 origin，不是请求头里的 Host 或 Origin）加控制台的挂载前缀和 `/balance`（`webui.ConsoleMount`，即 `/console/balance`）拼出来的，浏览器传不进来；origin 不是 https（本机开发的 `http://localhost`）时下单被拒，核心再检查一遍它是 https。订单 ID 在下单时才生成，所以地址里写不下它，页面靠订单接口取。幂等键是请求头的值，`(account_id, idem_key)` 唯一，指纹是（付款方式，额度），同键同请求返回原订单与已存的 checkout（没有 `ClientSecret`，它从不入库；与首次下单并发时 checkout 可能尚未保存），同键异请求返回 409。重放返回 nil 错误只表示找到了同一请求，不重放首次错误：处理器按 `State` 和 `Checkout` 映射应答，首次请求和重放走同一个函数（`cmd/axiom` 的 `placed`）：`failed`（首次是 `ErrRefused`）回 422，待支付且 checkout 已存回 201，待支付而 checkout 为空（首次结果未知返回 `ErrUnconfirmed` 并附订单，或另一个同键请求还在调用渠道）回 202 和这笔订单、不带支付链接，其余状态回 200 且不带支付链接；不能仅凭 err 为 nil 展示付款成功。每 IP 限额在账户检查之后、选商户账户之前占名额（被账户自己的限额或选不出商户账户拒绝的请求回滚，不占），重放在这之前已经返回，不占；窗口、默认值和计数方式见「数据」的 `ip_usage` 与「决策与理由」。
 - **取消**：账户范围的事务锁订单行 → 待支付变已取消 → 减回用量 → 事件；已取消的再取消就返回原订单、不重复关单。仅本次实际取消的，提交后请渠道关单（`Close`），不声明这个能力的跳过，失败只记日志：订单已经不能在本站付款，渠道那边还能付的由补单兜住。取消前不查单，避免渠道故障阻止本地取消；取消与已确认付款竞争时，由订单行锁决定先后；取消后渠道仍收到的钱由同一入账路径处理。
 - **过期**（`payments.poll` 的第 2 步）：每分钟一轮，按 `expires_at` 取一批已过有效期的待支付订单（最老的先，一轮 30 秒预算）→ 逐个锁行，状态仍是待支付就变已过期、减回用量、写事件 → 先提交本批全部过期事务，再逐个请渠道关单。每次关单（含打开配置）最多 5 秒，本轮超时过的商户不再关单；整个过程仍受 30 秒预算约束。网络阻塞不会占住本批其他订单的待支付名额或用量。失败的一个不挡后面的。本轮先用最多 10 秒查询待支付和补查窗口内的订单（未过期待支付优先，其次刚到期的待支付，最后晚付窗口；到期的待支付订单不受下次查询时间限制）；查到已付的同事务入账，后续过期步骤跳过。余下预算用于本地过期和关单。每次查询最多 5 秒，正常查询间隔从 30 秒翻倍至有效期内 10 分钟、过期后 1 小时；每单的用户核验独立限每分钟一次。商户间并发隔离和熔断由 E1-5 交付。
-- **回调**：可信代理经平台 `clientip` 解析，`Group` 将映射 IPv4 还原、IPv6 去 zone 后按 /64 归并；先按来源分组限每分钟 600 次 → 读配置（解密后的渠道缓存一分钟，修订变化立即失效）→ 仅为存在且配置可打开的商户按（商户账户，来源分组）限每分钟 120 次（两级合计最多 4096 桶，满时淘汰最久未访问的桶）→ `Verify` → 无锁预读，已入账的同商户、同订单、同网关单号且金额币种相同才跳过查单 → 最多 5 秒查单 → 入账事务 → 提交后 `Ack(true)`。事务内按商户身份共享咨询锁 → 订单行 → 余额行 → `merchant_usage` 行的顺序锁定（待处理跳过余额；下单只插入新订单，过期先订单后用量，不形成反向等待）；唯一网关单号冲突记待处理，不把确定差异变成无限重试。已付但金额非正或网关单号为空时同一期限内重查一次，仍空只记事件和警告、不改状态，后续完整回执可恢复；非法 UTF-8/NUL 的身份字段清理后只用于记录，已付进待处理。金额或币种不符只记待处理，已有待处理的订单不因重放自动恢复入账；人工结论由 E1-6b 交付。取消/过期/失败释放过用量的订单进入已付或待处理时，按创建日恢复用量一次。
+- **回调**：可信代理经平台 `clientip` 解析，`Group` 将映射 IPv4 还原、IPv6 去 zone 后按 /64 归并；先按来源分组限每分钟 600 次 → 读配置（解密后的渠道缓存一分钟，修订变化立即失效）→ 仅为存在且配置可打开的商户按（商户账户，来源分组）限每分钟 120 次（两级合计最多 4096 桶，满时淘汰最久未访问的桶）→ `Verify` → 无锁预读，已入账的同商户、同订单、同网关单号且金额币种相同才跳过查单 → 最多 5 秒查单 → 入账事务 → 提交后 `Ack(true)`。事务内按商户身份共享咨询锁 → 订单行 → 余额行 → `merchant_usage` 行的顺序锁定（待处理跳过余额；下单只插入新订单，过期先订单后用量，不形成反向等待）；唯一网关单号冲突记待处理，不把确定差异变成无限重试。已付但金额为缺失哨兵 0 或网关单号为空时同一期限内重查一次，仍空只记事件和警告、不改状态；金额为无效哨兵 -1 时直接待处理，后续完整回执不能自动清除差异；非法 UTF-8/NUL 的身份字段清理后只用于记录，已付进待处理。金额或币种不符只记待处理，已有待处理的订单不因重放自动恢复入账；人工结论由 E1-6b 交付。取消/过期/失败释放过用量的订单进入已付或待处理时，按创建日恢复用量一次。
 - **窗口不变量**：`order_windows` 视图（调用者权限与原表 RLS）统一商户身份保护、用户核验、队列发现和排期的可查条件与默认值；待支付始终保护，待处理另行保护，已过期/已取消/有网关单号的失败单保护到过期时间加 `max(宽限期, 自动入账期限, 补查窗口)`。默认宽限 300 秒，后两项共用 604800 秒；即使补查配置较短，也不能先释放可自动入账订单的商户身份。
 - **补单容量**：当前串行，每分钟最多查询 10 秒，按 200ms 往返约 72000 次/天；默认 30 分钟有效期约 7 次，加过期后 7 天约 168 次，持续未付订单约 410 笔/天即可占满查询预算（估算，不是吞吐承诺；5 秒超时一轮仅约 2 次）。待支付优先使用预算，晚付补查使用余量；E1-5 的每商户最多 2 个并发与熔断用于隔离慢网关并扩展容量，上线前须按真实延迟与未付量评估。
 - **入账**（回调、补单、"我已付款"、人工）：平台范围的一个事务，`SELECT … FOR UPDATE` 订单行 → 插入 `order_payments`（冲突写待处理记录）→ 条件转移 → `CreditPaid` → 事件；过期后到账的同时加回用量计数。事务里不做网络调用。
@@ -183,7 +199,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 |---|---|---|
 | E1-2a `feat(payments): configure merchant accounts and quote top-ups` | 表 `merchants`、`merchant_configs`、`merchant_methods`、`merchant_usage`、`settings` 和迁移；`Channel`、`Plugin`、`Caps`、登记、测试用的假渠道；商户账户的保存（校验、密钥与 `settings` 哈希的封装）；选商户账户与用量计数；手续费与汇率锁定（含 billing 的 `TopUpRate` 与充值缓冲）；`Options` | 总额复算与手续费反推的性质测试；比例超过 50%、额度乘汇率越界被拒；选商户账户的单笔、当天额度、全被过滤和查用量出错都拒绝；并发抢最后的当天额度只放行放得下的；直接改库里的网关地址后商户账户用不了；密钥不出现在日志和响应里；行级安全：账户范围读得到本站的付款方式和费率、读不到 `merchant_configs`，站长只看到本站的商户账户；站点 A 的账户范围读不到、改不了站点 B 的 `merchants` 与 `merchant_usage` 行（含 INSERT … ON CONFLICT 造行） |
 | E1-2a2 `feat(payments): manage merchant accounts in the admin API` | 管理接口的商户账户契约与处理器（列出、读取、创建、修改；密钥只写不读，响应只有非密配置），站点支付设置与充值缓冲的读写；从 E1-2a 拆出，它已接近 2000 行 | 契约测试；密钥不出现在响应和审计里；主站行只有平台范围能改；修订号过期 409、字段错误 422 带指针 |
-| E1-2b `feat(payments): take orders and cancel them before payment` | 表 `orders`、`order_events` 和 `settings` 的限额列与迁移；转移表；下单（账户咨询锁、待支付/取消/当天/首笔上限、链接检查、幂等键、校验服务端传入的 https 返回地址）、取消、不入账的过期（`payments.poll` 的第 2 步）与减回用量；有未完成订单时拒改商户身份字段 | 转移表的全部（从，到）组合；同键同请求返回同一订单（充值关闭后仍可重放）、同键异请求 409，同键并发只调用一次渠道；10 个并发下单只放行 3 个待支付，取消空出名额，取消 5 次后拒新单；当天上限与首笔上限，已付过的账户不再受首笔限制；`//`、`javascript:`、`data:`、相对链接被拒且订单失败、用量减回，NUL 被清掉；渠道答不上时订单留在待支付、用量不减、返回结果未知，写 checkout 的事务失败时不回成功（故障注入）；过期只发生一次、之后请渠道关单；取消与过期竞争只释放一次用量，跨 UTC 日释放创建日用量；有订单在途时改币种、设置、密钥被拒，改名可以；行级安全：账户只看到自己的订单与事件，也取消不了别人的 |
+| E1-2b `feat(payments): take orders and cancel them before payment` | 表 `orders`、`order_events` 和 `settings` 的限额列与迁移；转移表；下单（账户咨询锁、待支付/取消/当天/首笔上限、链接检查、幂等键、校验服务端传入的 https 返回地址）、取消、不入账的过期（`payments.poll` 的第 2 步）与减回用量；有未完成订单时拒改商户身份字段 | 转移表的全部（从，到）组合；同键同请求返回同一订单（充值关闭后仍可重放）、同键异请求 409，同键并发只调用一次渠道；10 个并发下单只放行 3 个待支付，取消空出名额，取消 5 次后拒新单；当天上限与首笔上限，已付过的账户不再受首笔限制；`//`、`javascript:`、`data:`、相对链接被拒且订单失败、用量减回，NUL 被清掉；渠道答不上时订单留在待支付、用量不减、返回结果未知，写 checkout 的事务失败时不回成功（故障注入）；过期只发生一次、之后请渠道关单；取消与过期竞争只释放一次用量，跨 UTC 日释放创建日用量；有订单在途时改币种、身份设置、密钥被拒，改名和非身份设置可以；行级安全：账户只看到自己的订单与事件，也取消不了别人的 |
 | E1-2c `feat(payments): credit orders from callbacks and queries` | 表 `order_payments`、`discrepancies` 和迁移；回调处理器（限流、配置缓存、无锁预读、查单金额为准、找不到订单与网关订单号冲突记待处理、提交后才应答）和入账；"我已付款"；过期前的查单与过期后到账（宽限期、到账汇率、自动入账期限）；补查窗口内已过期、已取消及有网关单号的失败订单的商户身份保护（[#390](https://github.com/TYCT-tyct/Axiom/issues/390)，真实渠道启用前完成） | 身份保护的窗口边界、关单失败/不支持与晚付；性质测试：重复、乱序、并发、丢失回调下批次恰好一个、账本平衡；金额不符、多笔付款、折算为 0 进待处理，币种不符不入账；通知与查单金额不同进待处理；验签通过找不到订单、网关订单号冲突都有待处理记录且不回 500；坏签名不写库；查单失败返回 502；提交失败时应答不是成功（故障注入）；宽限期内按锁定汇率、之后按到账汇率、超过期限进待处理，锁定的汇率列不变 |
 | E1-2d `feat(payments): expose the console order contract` | 控制台订单契约与处理器：按站点域名生成 https 返回地址，不收浏览器传入的返回地址；每 IP 下单/失败限流，默认每小时 20/10 次，计数故障不放行；按订单 `State` 与 `Checkout` 映射重放应答（#389 评审第 10 项） | IP 限流边界（20/21、10/11 次，同 /64 与映射 IPv4 归并，窗口到期重置）、十个账户同 IP 并发只放行限额、计数故障（表上的触发器）下单被拒且渠道没被问、失败计数故障时订单仍是待支付；服务器生成返回地址（请求带 `return_url` 被契约拒绝，渠道收到的是登记 origin 加 `/console/balance`，且该路径在公共路由上命中控制台页面）；失败单重放回 422、无 checkout 的待支付单（结果未知）重放回 202 且不带支付链接、已取消的回 200；同键并发只问一次渠道；CSRF、会话、别的账户的订单读/取消/核验一律 404、渠道不被问；`Retry-After` |
 | E1-3 `feat(payments): add the easypay protocol channel` | 易支付插件：配置项（[支付的「易支付协议插件」](../../docs/domains/payments.md#易支付协议插件)）、跳转与接口两种下单、验签、白名单、查单确认、关单、退款 | 按协议自写的签名向量；参数走私（下单参数里嵌 `trade_status`）被拒；多余参数、`pid` 不符被拒；GET 与 POST 回调；PHP 风格的字符串整数、明确失败码优先、回显订单号不符；相对支付链接补全、`//` 开头被拒；退款响应是 HTML、空、字符串 `code`；退款先按订单号、明确"订单不存在"才按网关订单号；全部经出站客户端，日志和链路里没有查询串；本机假网关的端到端 |

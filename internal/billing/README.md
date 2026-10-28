@@ -28,6 +28,9 @@ func (b *Billing) Alive() bool // 已实现：本地持有者检查，纯内存�
 func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor int64) error // 已实现：开户时建余额行；cmd/axiom 把它接成 accounts 的开户回调（底线 0）
 func ReadBalance(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []uuid.UUID) (BalanceView, error) // 已实现：控制台的余额
 func KeysUsed(ctx context.Context, tx pg.Tx, keys []KeyWindow) (map[uuid.UUID]int64, error) // 已实现：控制台的 key 剩余额度
+func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]StatementRow, *StatementCursor, error) // 已实现：控制台的额度流水，一页最新在前
+type StatementRow struct{ ID uuid.UUID; At time.Time; Kind StatementKind; Amount int64; Balance *int64; FrozenChange, Frozen int64; Reference uuid.UUID } // 已实现：Amount 正数是余额增加，Balance 是这笔之后的余额（序号之前的记录为 nil，见下文），都是十亿分之一额度；Reference 扣费和冲回是调用编号，其余是额度批次（付费批次为订单编号或线下记录编号）
+type StatementCursor struct{ Seq int64; At time.Time; ID uuid.UUID; Balance, Frozen int64 } // 已实现；String 与 ParseStatementCursor 是它的文本形式，控制台的游标就是它
 func ReadFunds(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []uuid.UUID) (Funds, error) // 已实现：余额行加这些工作区的累计 spent，不加锁；没有余额行全是 0；只读接口用
 func ReadKeyUsage(ctx context.Context, tx pg.Tx, key uuid.UUID, reset Reset) (KeyUsage, error) // 已实现：key 的累计和当前 UTC 日、周、月已收，以及上限窗口里的已收加预留；只读接口用
 type Admitted struct{ Scope pg.Scope; Site, Account, Workspace, Key uuid.UUID; WorkspaceBudget, KeyLimit *Limit } // 已实现；gateway 把 accounts.Admission 转成它（`billingAdmitted`），这一层转换是设计，不是临时
@@ -83,10 +86,15 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 ## 控制台的读取
 
-控制台的余额和 key 页读两个函数，都在账户范围的事务里，不加锁，几个字节旧一点无妨（页面不是准入）：
+控制台的余额、key 和额度流水页读下面几个函数，都在账户范围的事务里，不加锁，几个字节旧一点无妨（页面不是准入）：
 
-- `ReadBalance(ctx, tx, account, workspaces) BalanceView`：余额行的 `balance`、`reserved`、`frozen`、`floor`（没有余额行按全 0），以及 `SpentThisMonth`，即给定的这些工作区自本 UTC 月初起被收的 `spend.spent` 之和。按工作区加是因为每笔收费在 `spend` 里记两行（工作区一行、key 一行），不能全加；账户的工作区由 accounts 的 `AccountWorkspaces` 给出（含已删除的，它们的花费仍算）。按 `(subject, window_start)` 主键读，每个工作区一次索引范围扫描，与账本的大小无关。可用额度 = 余额 − 在途预留 − 退款冻结，由 `BalanceView.Available()` 以大整数精确计算，控制台和管理后台共用。
+- `ReadBalance(ctx, tx, account, workspaces) BalanceView`：余额行的 `balance`、`reserved`、`frozen`、`floor`（没有余额行按全 0），以及 `SpentThisMonth`，即给定的这些工作区自本 UTC 月初起被收的 `spend.spent` 之和。按工作区加是因为每笔收费在 `spend` 里记两行（工作区一行、key 一行），不能全加；账户的工作区由 accounts 的 `AccountWorkspaces` 给出（含已删除的，它们的花费仍算）。按 `(subject, window_start)` 主键读，每个工作区一次索引范围扫描，与账本的大小无关。余额页说明可用额度扣除预留与退款冻结，并提供到流水页的入口。可用额度 = 余额 − 在途预留 − 退款冻结，由 `BalanceView.Available()` 以大整数精确计算，控制台和管理后台共用。
 - `KeysUsed(ctx, tx, []KeyWindow) map[key]int64`：每把 key 在**自己重置周期**的当前窗口里已用的（花掉的加预留的），与准入检查上限用的是同一个数（`ReadUsage`），一条语句读完所有 key；控制台的 `limit_remaining` = 上限 − 已用，不低于 0。
+- `ListStatement(ctx, tx, StatementQuery) ([]StatementRow, *StatementCursor, error)`：额度流水，一页最新在前，一行是一笔余额或退款冻结事件，带这笔之后的总余额、冻结额与本次冻结额变动。只读 `user_balance` 分录与 `freeze`/`unfreeze` 事件：尝试成本、释放的调用预留不占行，别的账本和分录一个字节也不出，这就是「不暴露内部分录」。两类记录一条语句读完：有 `seq` 的按 `transactions_by_account_seq` 取一页，`seq` 为空的按 `transactions_legacy_by_account` 取一页，两个分支只按交易自身的字段过滤、排序并各自 LIMIT，合并后再 LIMIT 并 MATERIALIZED；此后才用 LATERAL 与 `entries_by_transaction` 聚合这些交易的余额分录。分录条件不得进入 LIMIT 里面，否则深页要先聚合整段前缀。读之前先 `SET LOCAL enable_sort = off`（`statementScansInOrder`）：`transactions` 的行级安全过滤条件被估成账户行数的一小部分（平台范围按默认的 0.5%；账户范围按该账户占全表的比例，与 `account_id = …` 重复相乘），优化器以为分支凑不满 LIMIT、有序扫描提前停不下来，就改用 bitmap scan 读完账户的整段历史再排序——3 万笔的账户首页读 1 054 个块，2.5 万笔深处的一页读 942 个（估计本身的问题见 #408）；抑制可替代的显式排序后（有别的计划能给出顺序时不排序，不改变结果），两个分支都是索引倒序扫描，到 LIMIT 即停，两页都约 416 个块。这个设置留到事务结束，与 observability 列表的 `plan_cache_mode` 同法，控制台读流水的事务不做别的查询。余额行在同一个快照里读（一条语句一个快照，页和它的起点才对得上）。`TestStatementReadsGrowWithThePage` 在 `ListStatement` 读过一页的事务里用 `EXPLAIN (ANALYZE, BUFFERS)` 守住两个分支都是索引倒序扫描、返回整页、块数随页走、不随历史走：有序号的账户在平台范围和 2 000 个其他账户旁的账户范围各测一次，全是序号之前记录的账户在它自己的范围测一次，与 `Movements` 守的是同一条。
+- **有界跳过**：索引页内只按账户和游标字段取交易，成本事件与免单等零余额、零冻结变动统一在 Go 中跳过；kind 过滤也不放进分支：免单多的长段里，有序扫描要读到凑满 LIMIT 为止，读的量就不再有界。每次列表最多读 8 轮，每轮最多 `PageSize + 1` 个候选（页上限 200），每轮游标都移过已检查的交易。长段免单历史可返回空 data 和非空 next_cursor，客户端必须继续游标，而不是当作账本结束；页面显示「这一段没有余额变动」和加载更多。CSV 同样跨过这种空页，逐页写给客户端并 flush，只保留一页与 CSV 的固定缓冲，最多导出 10 000 个事件；首次查询失败用普通 API 错误，已发送内容后失败关闭连接，避免把截断文件当作成功。
+- **种类**：`credit` 按批次的 `source` 分充值（`paid`）和赠送（`gift`），`settle` 是扣费，`expire` 是到期，`refund` 是已完成退款（扣总余额、减冻结额），`reverse` 是调用退费（加总余额），`freeze`/`unfreeze` 只加减冻结额、不动总余额。冻结/解冻的 revision 是批次同种事件的累计值，通过既有 `(request_id, attempt_seq, kind, revision)` 唯一索引找前一个值，作差得到本次金额；不把累计量当单笔金额。未知的余额变动种类报错，避免悄悄漏掉。
+- **游标带余额和冻结额**（`StatementCursor`）：它记这一页最后一行的位置**和下一行的余额、冻结额起点**，下一页从那里往回走，分别减去本行余额与冻结额变动，即上一笔事件之后的状态。不带余额的话，算第 n 行之后的余额得把它上面的分录全加起来，翻页就退化成扫全账本；余额与冻结额起点来自同一只读事务快照。伪造的游标只能挪用户自己那一列余额，读到别的账户的行也会被行级安全挡住；翻页期间新结算的调用序号更大、落在这页之上，已读的页不错位、行不重复（`TestStatementPagesAcrossNewMovements`）。
+- **序号之前的记录没有变动后余额**：`seq` 为空的记录排在最后，账户内按 `(created_at, id)` 从新到旧，这只是一个不变的顺序，不是入账顺序（迁移 00007：时钟会回拨，同一结算的两笔会落在同一微秒）。沿它倒推的余额可能是账户从未有过的数（先赠送 100、后扣 20 但时间戳早一小时，会读成赠送后 80、扣费后 −20），所以这些行的 `StatementRow.Balance` 为 nil，接口给 `null`、CSV 留空、页面显示「不可用」；金额照常给出，它们的合计仍与余额对得上。冻结额照常给出：退款冻结在序号之后才有，这些行都没动过它。有序号的行按提交顺序编号，余额照常给出（`TestStatementFromBeforeTheSequence` 覆盖时钟回拨和同一微秒）。
 
 ## 报价
 

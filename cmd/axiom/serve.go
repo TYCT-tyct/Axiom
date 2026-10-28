@@ -377,7 +377,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nodeRoutes{}, err
 	}
 	pay, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Proxies: p.cfg.trustedProxies,
+		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins, Proxies: p.cfg.trustedProxies,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
@@ -439,10 +439,9 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 		return nil, err
 	}
 	// Orders past their deadline expire every minute, on whichever node leads the queue
-	// (docs/domains/payments.md「补单与过期」). The module has no channel compiled in yet, so it is opened with none and the
-	// run only closes orders whose channel it can open.
+	// (docs/domains/payments.md「补单与过期」). Callbacks and polling register the same protocol plugins.
 	store, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger,
+		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger, Plugins: paymentPlugins,
 	})
 	if err != nil {
 		return nil, err
