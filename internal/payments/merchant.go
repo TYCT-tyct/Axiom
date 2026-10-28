@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	// ErrNotFound is a merchant the scope does not see.
+	// ErrNotFound is a merchant account or an order the scope does not see.
 	ErrNotFound = errors.New("payments: no such merchant account")
 	// ErrStale refuses a change decided against a superseded revision.
 	ErrStale = errors.New("payments: the merchant account changed since it was read")

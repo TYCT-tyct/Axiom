@@ -17,9 +17,10 @@ import (
 
 // Layout of the embedded files, as web/scripts/embed.ts writes it.
 const (
-	policyFile   = "content-security-policy.txt"
-	entry        = "index.html"
-	consoleMount = "/console"
+	policyFile = "content-security-policy.txt"
+	entry      = "index.html"
+	// ConsoleMount is where the console is served on the public listener; a link the server builds to a console page starts with it.
+	ConsoleMount = "/console"
 )
 
 // Frontend is the three apps. It is immutable once built, so one value serves any number of requests.
@@ -46,7 +47,7 @@ func New(root fs.FS) (*Frontend, error) {
 	for _, a := range []struct {
 		dir, mount string
 		into       **app
-	}{{"site", "", &f.site}, {"console", consoleMount, &f.console}, {"admin", "", &f.admin}} {
+	}{{"site", "", &f.site}, {"console", ConsoleMount, &f.console}, {"admin", "", &f.admin}} {
 		sub, err := fs.Sub(root, a.dir)
 		if err != nil {
 			return nil, err
@@ -62,9 +63,9 @@ func New(root fs.FS) (*Frontend, error) {
 // handler at all. Every answer carries the security headers, the redirect and the 405 of the routing included.
 func (f *Frontend) Public() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle(consoleMount+"/", f.console)
-	mux.HandleFunc(consoleMount, func(w http.ResponseWriter, r *http.Request) {
-		target := consoleMount + "/"
+	mux.Handle(ConsoleMount+"/", f.console)
+	mux.HandleFunc(ConsoleMount, func(w http.ResponseWriter, r *http.Request) {
+		target := ConsoleMount + "/"
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
 		}
