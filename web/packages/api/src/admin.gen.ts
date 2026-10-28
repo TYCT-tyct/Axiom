@@ -4,6 +4,75 @@
  */
 
 export interface paths {
+    "/api/admin/v1/alerts/configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read alert rules and email channels */
+        get: operations["getAlertConfiguration"];
+        /** Replace alert rules and email channels */
+        put: operations["setAlertConfiguration"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/alerts/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List alert incidents and delivery receipts */
+        get: operations["listAlertEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/alerts/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue a channel test with a delivery receipt */
+        post: operations["sendAlertTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/alerts/events/{event_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close an incident after operator investigation */
+        post: operations["resolveAlertEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/version": {
         parameters: {
             query?: never;
@@ -883,6 +952,82 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AlertConfiguration: {
+            /** Format: int64 */
+            rev?: number;
+            rules?: components["schemas"]["AlertRule"][];
+            channels?: components["schemas"]["AlertChannel"][];
+        };
+        AlertRule: {
+            id?: string;
+            kind?: string;
+            /** @enum {string} */
+            minimum_severity?: "info" | "warning" | "critical";
+            /** @default 1 */
+            threshold: number;
+            /** @default 0 */
+            duration_seconds: number;
+            /** @description Empty disables notification for this rule. */
+            channel?: string;
+            /** @default 0 */
+            quiet_start: number;
+            /** @default 0 */
+            quiet_end: number;
+            /** @default 0 */
+            repeat_seconds: number;
+        };
+        AlertChannel: {
+            id?: string;
+            /** Format: email */
+            email?: string;
+        };
+        AlertConfigurationRequest: {
+            /** Format: int64 */
+            rev: number;
+            rules: WithRequired<components["schemas"]["AlertRule"], "id" | "kind" | "minimum_severity" | "threshold" | "duration_seconds" | "channel" | "quiet_start" | "quiet_end" | "repeat_seconds">[];
+            channels: WithRequired<components["schemas"]["AlertChannel"], "id" | "email">[];
+            reason: components["schemas"]["Reason"];
+        };
+        AlertTestRequest: {
+            channel: string;
+            reason: components["schemas"]["Reason"];
+        };
+        AlertTestResult: {
+            id?: components["schemas"]["Uuid"];
+        };
+        AlertEventList: {
+            data?: components["schemas"]["AlertEvent"][];
+        };
+        AlertEvent: {
+            id?: components["schemas"]["Uuid"];
+            kind?: string;
+            key?: string;
+            severity?: string;
+            fields?: {
+                [key: string]: string;
+            };
+            /** Format: int64 */
+            occurrences?: number;
+            /** @enum {string} */
+            state?: "firing" | "delivered" | "resolved";
+            /** Format: date-time */
+            fired_at?: string;
+            /** Format: date-time */
+            resolved_at?: string;
+            receipts?: components["schemas"]["AlertReceipt"][];
+        };
+        AlertReceipt: {
+            id?: components["schemas"]["Uuid"];
+            rule_id?: string;
+            /** @description 0 is the first notification; -1 is recovery; positive values are repeats. */
+            sequence?: number;
+            /** @enum {string} */
+            state?: "pending" | "queued" | "delivered" | "failed";
+            /** Format: date-time */
+            at?: string;
+            /** Format: date-time */
+            delivered_at?: string;
+        };
         ExchangeRateInput: {
             base: string;
             quote: string;
@@ -1770,6 +1915,170 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getAlertConfiguration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The requested alert data or persisted operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertConfiguration"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setAlertConfiguration: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertConfigurationRequest"];
+            };
+        };
+        responses: {
+            /** @description The requested alert data or persisted operation. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertConfiguration"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listAlertEvents: {
+        parameters: {
+            query?: {
+                /** @description Return up to 100 events older than this ID. */
+                before?: components["schemas"]["Uuid"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The requested alert data or persisted operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertEventList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    sendAlertTest: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertTestRequest"];
+            };
+        };
+        responses: {
+            /** @description The requested alert data or persisted operation. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    resolveAlertEvent: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                event_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The requested alert data or persisted operation. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getVersion: {
         parameters: {
             query?: never;
@@ -3288,3 +3597,6 @@ export interface operations {
         };
     };
 }
+type WithRequired<T, K extends keyof T> = T & {
+    [P in K]-?: T[P];
+};

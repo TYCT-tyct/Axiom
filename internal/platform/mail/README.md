@@ -38,9 +38,9 @@
 
 ## 队列与重试
 
-任务种类 `mail.send`，`notifications` 队列，最多尝试 5 次：River 的默认退避约为 16 秒、81 秒、256 秒、625 秒（五次共约 16 分钟），覆盖服务商几分钟的故障；用完仍失败的任务被丢弃，由队列的扫描报告（`queue.job_discarded` 和 `axiom.pg.queue.discarded_jobs`，[observability 的「监控与告警」](../../../docs/domains/observability.md#监控与告警)）。
+普通任务种类 `mail.send`，`notifications` 队列，最多尝试 5 次：River 的默认退避约为 16 秒、81 秒、256 秒、625 秒（五次共约 16 分钟），覆盖服务商几分钟的故障；用完仍失败的任务被丢弃，由队列的扫描报告（`queue.job_discarded` 和 `axiom.pg.queue.discarded_jobs`，[observability 的「监控与告警」](../../../docs/domains/observability.md#监控与告警)）。
 
-邮件正文不进任务参数：River 的任务行不属于任何租户，没有策略覆盖，所以地址、主题和正文都存在 `platform.mail_outbox`，任务参数只有那一行的 id。这张表开了 `FORCE ROW LEVEL SECURITY`，策略是 `platform.in_scope(site_id, account_id)`：调用方在租户的事务里入队，`WITH CHECK` 挡住替别的租户写的可能，读取同样受它限制（[平台基础设施的「租户隔离」](../README.md#范围)）。
+邮件正文不进任务参数：River 的任务行不属于任何租户，没有策略覆盖，所以地址、主题和正文都存在 `platform.mail_outbox`，普通任务参数只有那一行的 id。这张表开了 `FORCE ROW LEVEL SECURITY`，策略是 `platform.in_scope(site_id, account_id)`：调用方在租户的事务里入队，`WITH CHECK` 挡住替别的租户写的可能，读取同样受它限制（[平台基础设施的「租户隔离」](../README.md#范围)）。
 
 工作进程手里只有 id，没有租户，所以先用 `platform.mail_tenant(id)` 查到这一行的 `site_id`、`account_id`，再在该租户的作用域里读正文——这个函数是 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用，只返回这两个租户列，而这个角色只被授予 `id`、`site_id`、`account_id` 三列（`id` 是函数按它匹配的那一列，不能少；与 accounts 模块的登录前查找同一套做法，见 [accounts 的迁移](../../accounts/migrations/00002_lookup.sql)）。`pg.TenantTx` 先以空作用域查一次，再换成查到的租户，`fn` 在其中运行。
 
@@ -68,7 +68,7 @@ Valkey 不可用（出错、期限到、熔断打开）时退回进程内的桶�
 | 不变量 | 靠什么保证 |
 |---|---|
 | 邮件不会明文发出 | 465 之外必须 STARTTLS，服务器不提供就失败；没有跳过校验的配置 |
-| 邮件内容不进入不属于任何租户的表 | 正文在 `platform.mail_outbox`，任务参数只有 id；表的策略是 `platform.in_scope`，别的站点和空作用域都读不到 |
+| 邮件内容不进入不属于任何租户的表 | 正文在 `platform.mail_outbox`，任务参数只有 outbox id（回执模式另有回执 id）；表的策略是 `platform.in_scope`，别的站点和空作用域都读不到 |
 | 一个租户不能替另一个租户入队 | 同一策略的 `WITH CHECK` 比较 `site_id`、`account_id`，租户从调用方的事务里来 |
 | 一封信一个任务 | `Enqueue` 在调用方的事务里插一行 outbox、一个 `mail.send`，参数是那一行的 id |
 | 同一收件人一分钟最多一封 | 有 Valkey 时每个规范化地址一个原子准入键，不可用时退回进程内 `limiter`；限流的任务 snooze，不耗尝试次数 |
@@ -86,3 +86,5 @@ Valkey 不可用（出错、期限到、熔断打开）时退回进程内的桶�
 | sub2api `email_service.go` | 587 默认；拨号 10 秒；TLS 1.2 起；每收件人一分钟冷却 | 进程内 channel 换成 River 队列；整次发送 30 秒统一期限；正文放租户表而不是任务参数 |
 
 测试用进程内的假 SMTP 服务器（成功、认证失败 535、六个步骤各自的 451/550、缺 STARTTLS、隐式 TLS、超时、对着可控连接的期限先后、信封地址的引号和转义），消息用 `testdata/` 里的 golden 文件逐字节比对，头部用「解析回来的值与写入的一致」检查，配置用表驱动，队列用 `pgtest` 对着真实的 PostgreSQL 跑（含另一个站点和空作用域读不到正文、替别的租户入队被拒、发不出的收件人和主题在入队时被拒、任务参数和 `errors` 列里都没有地址、主题和正文、被限流的任务 snooze 且不消耗尝试次数），`go test -update` 重写 golden。共享限流用 `kvtest` 的真实 Valkey 验证两个节点共同准入、大小写归一、并发准入只有一个成功、受控时钟推进（不等待墙钟）、发送失败后的重试仍占着间隔，以及 Valkey 不可用时退回各节点的桶。
+
+`EnqueueTracked` 另外接受调用方的回执 ID，使用独立的 `mail.send_tracked` 种类（同样五次重试和 notifications 队列），防止旧版本 worker 忽略回执。启动前设置 `Mailer.Receipt` 回调，SMTP 接受、永久拒绝或最后一次失败时写回持久结果；写回失败则重试，允许重复网络投递。救援丢弃的结果由 `Queue.OnDiscard` 补记。运维邮件使用保留的全零站点归属，真实站点的范围读不到；普通租户邮件的归属不变。回执 ID 可以进入 River，地址与正文仍只在 outbox。
