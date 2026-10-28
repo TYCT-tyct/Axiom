@@ -3,6 +3,7 @@ package catalog
 import (
 	"errors"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -72,11 +73,15 @@ type Model struct {
 	reportable   Reportable
 	serving      Serving
 	serves       bool // the spec declares everything Serving reads
+	toolUses     map[Item]int64
 	dialect      Dialect
 }
 
 // Spec is a copy of the baseline's JSON.
 func (m Model) Spec() []byte { return []byte(m.spec) }
+
+// ToolUses returns a copy of the spec's default server tool bounds, so a caller cannot change the snapshot.
+func (m Model) ToolUses() map[Item]int64 { return maps.Clone(m.toolUses) }
 
 // Reportable is what the upstream may report for the model, from its spec, for the listing gate.
 func (m Model) Reportable() Reportable { return m.reportable }

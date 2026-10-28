@@ -54,7 +54,7 @@ func checkImageCall(t *testing.T, s catalog.Schedule, reports catalog.ItemSet, t
 	if err != nil || missing != 0 {
 		t.Fatalf("cost: %v, missing %v", err, missing)
 	}
-	p, err := priceSegments(s, fallbacks{}, []Segment{{Usage: u, Reported: reports}}, false)
+	p, err := priceSegments(s, fallbacks{}, []Segment{{Usage: u, Reported: reports}}, false, 0)
 	if err != nil || p.estimated || p.price != cost.CeilAmount() {
 		t.Fatalf("sale %+v, cost %v, err %v", p, cost.Rat(), err)
 	}
@@ -149,7 +149,7 @@ func TestImageOutputIsDeliveredAndMetered(t *testing.T) {
 			if waivable(at) {
 				t.Fatalf("image-only reply waived: %+v", at)
 			}
-			p, err := priceSegments(s, fallbacks{}, at.Segments, waivable(at))
+			p, err := priceSegments(s, fallbacks{}, at.Segments, waivable(at), 0)
 			if err != nil || p.price != 200_000_000_000 || p.estimated {
 				t.Fatalf("price: %+v, %v", p, err)
 			}
