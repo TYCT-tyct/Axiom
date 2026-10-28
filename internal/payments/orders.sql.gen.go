@@ -13,6 +13,30 @@ import (
 	"uuid"
 )
 
+const addIPFailure = `-- name: AddIPFailure :exec
+INSERT INTO payments.ip_usage AS u (site_id, ip, window_start, orders, failures)
+VALUES ($1, $2::inet, transaction_timestamp(), 0, 1)
+ON CONFLICT (site_id, ip) DO UPDATE SET
+    window_start = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => $3::bigint)
+        THEN transaction_timestamp() ELSE u.window_start END,
+    orders = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => $3::bigint)
+        THEN 0 ELSE u.orders END,
+    failures = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => $3::bigint)
+        THEN 1 ELSE u.failures + 1 END
+`
+
+type AddIPFailureParams struct {
+	SiteID        uuid.UUID
+	Ip            netip.Addr
+	WindowSeconds int64
+}
+
+// An order of the IP group failed. Counted always, past the limit too: the limit refuses the next order, not this one.
+func (q *Queries) AddIPFailure(ctx context.Context, db DBTX, arg AddIPFailureParams) error {
+	_, err := db.Exec(ctx, addIPFailure, arg.SiteID, arg.Ip, arg.WindowSeconds)
+	return err
+}
+
 const expiringOrders = `-- name: ExpiringOrders :many
 SELECT id, merchant_id, trade_no FROM payments.orders
 WHERE state = 'pending' AND expires_at <= transaction_timestamp()
@@ -53,6 +77,33 @@ SELECT pg_advisory_xact_lock_shared($1::bigint)
 func (q *Queries) HoldMerchantIdentity(ctx context.Context, db DBTX, key int64) error {
 	_, err := db.Exec(ctx, holdMerchantIdentity, key)
 	return err
+}
+
+const iPUsage = `-- name: IPUsage :one
+SELECT u.orders, u.failures,
+    greatest(1, ceil(extract(epoch FROM u.window_start + make_interval(secs => $1::bigint) - transaction_timestamp())))::bigint AS wait_seconds
+FROM payments.ip_usage u WHERE u.site_id = $2 AND u.ip = $3::inet
+`
+
+type IPUsageParams struct {
+	WindowSeconds int64
+	SiteID        uuid.UUID
+	Ip            netip.Addr
+}
+
+type IPUsageRow struct {
+	Orders      int64
+	Failures    int64
+	WaitSeconds int64
+}
+
+// Read after TakeIPOrder took nothing, in the same transaction and so under the row lock: which limit is used up, and
+// how long until the window is over.
+func (q *Queries) IPUsage(ctx context.Context, db DBTX, arg IPUsageParams) (IPUsageRow, error) {
+	row := db.QueryRow(ctx, iPUsage, arg.WindowSeconds, arg.SiteID, arg.Ip)
+	var i IPUsageRow
+	err := row.Scan(&i.Orders, &i.Failures, &i.WaitSeconds)
+	return i, err
 }
 
 const insertOrder = `-- name: InsertOrder :one
@@ -484,6 +535,60 @@ func (q *Queries) SaveCheckout(ctx context.Context, db DBTX, arg SaveCheckoutPar
 			return nil, err
 		}
 		items = append(items, updated_at)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const takeIPOrder = `-- name: TakeIPOrder :many
+INSERT INTO payments.ip_usage AS u (site_id, ip, window_start, orders, failures)
+VALUES ($1, $2::inet, transaction_timestamp(), 1, 0)
+ON CONFLICT (site_id, ip) DO UPDATE SET
+    window_start = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => $3::bigint)
+        THEN transaction_timestamp() ELSE u.window_start END,
+    orders = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => $3::bigint)
+        THEN 1 ELSE u.orders + 1 END,
+    failures = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => $3::bigint)
+        THEN 0 ELSE u.failures END
+WHERE u.window_start <= transaction_timestamp() - make_interval(secs => $3::bigint)
+    OR (u.orders < $4::bigint AND u.failures < $5::bigint)
+RETURNING u.orders
+`
+
+type TakeIPOrderParams struct {
+	SiteID        uuid.UUID
+	Ip            netip.Addr
+	WindowSeconds int64
+	OrderLimit    int64
+	FailureLimit  int64
+}
+
+// The IP group's counters in a window of @window_seconds that opens with the first order or failure after the last one
+// ended. A window is over when the row's start is that far back, and the row then starts again from this event.
+// Takes one place of the group's orders if both counters are below their limits (or the window is over), locking the
+// row: concurrent orders from one IP wait here and re-check against what the one before them added. No row returned
+// means a limit is used up (IPUsage says which).
+func (q *Queries) TakeIPOrder(ctx context.Context, db DBTX, arg TakeIPOrderParams) ([]int64, error) {
+	rows, err := db.Query(ctx, takeIPOrder,
+		arg.SiteID,
+		arg.Ip,
+		arg.WindowSeconds,
+		arg.OrderLimit,
+		arg.FailureLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var orders int64
+		if err := rows.Scan(&orders); err != nil {
+			return nil, err
+		}
+		items = append(items, orders)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
