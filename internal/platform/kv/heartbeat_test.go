@@ -13,6 +13,7 @@ import (
 	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 // TestSecondNodeIsRefused: the heartbeat finds a second node that would reach the same database with the same N, which
@@ -237,7 +238,7 @@ func TestAStuckDatabaseDoesNotStopTheChecksOfValkey(t *testing.T) {
 	server := kvtest.New(t)
 	db := openDB(t)
 	scope := pg.PlatformScope()
-	seen, logs := newReadings(), &lockedBuffer{}
+	seen, logs := newReadings(), &telemetrytest.Buffer{}
 	cfg := server.Config(kvtest.Namespace())
 	client, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{
 		DB: db, Scope: scope, Meter: seen.meter, Logger: slog.New(slog.NewTextHandler(logs, nil)), HeartbeatTimeout: 200 * time.Millisecond,

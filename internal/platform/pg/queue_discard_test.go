@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 // stuck is a registered job kind whose running row the rescuer discards.
@@ -27,24 +27,6 @@ func (stuck) Kind() string { return "test.stuck" }
 type stuckWorker struct{ river.WorkerDefaults[stuck] }
 
 func (*stuckWorker) Work(context.Context, *river.Job[stuck]) error { return nil }
-
-// lockedBuffer collects logs written by the queue's goroutines.
-type lockedBuffer struct {
-	mu sync.Mutex
-	b  strings.Builder
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.b.Write(p)
-}
-
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.b.String()
-}
 
 // TestARescuedDiscardIsReportedOnce: River's rescuer discards a job whose last attempt's node died without calling a
 // worker or an error handler; the scan of the persisted state reports it, and a second scan reports nothing.
@@ -68,7 +50,7 @@ func TestARescuedDiscardIsReportedOnce(t *testing.T) {
 	}
 
 	reader := sdkmetric.NewManualReader()
-	logs := &lockedBuffer{}
+	logs := &telemetrytest.Buffer{}
 	q := newDiscardQueue(db, reader, logs)
 	river.AddWorker(q.Workers(), &stuckWorker{})
 	startDiscardQueue(t, q)
@@ -113,7 +95,7 @@ func TestAnOldDiscardIsReportedOnceAndCleanedAfterRestart(t *testing.T) {
 	}
 
 	first := sdkmetric.NewManualReader()
-	firstLogs := &lockedBuffer{}
+	firstLogs := &telemetrytest.Buffer{}
 	q1 := newDiscardQueue(db, first, firstLogs)
 	startDiscardQueue(t, q1)
 	if err := q1.ScanDiscarded(t.Context()); err != nil {
@@ -131,7 +113,7 @@ func TestAnOldDiscardIsReportedOnceAndCleanedAfterRestart(t *testing.T) {
 	stopDiscardQueue(t, q1)
 
 	second := sdkmetric.NewManualReader()
-	secondLogs := &lockedBuffer{}
+	secondLogs := &telemetrytest.Buffer{}
 	q2 := newDiscardQueue(db, second, secondLogs)
 	startDiscardQueue(t, q2)
 	if err := q2.ScanDiscarded(t.Context()); err != nil {
@@ -147,7 +129,7 @@ func TestAnOldDiscardIsReportedOnceAndCleanedAfterRestart(t *testing.T) {
 }
 
 // newDiscardQueue makes a queue whose logs and counter the test can read.
-func newDiscardQueue(db *pg.DB, reader *sdkmetric.ManualReader, logs *lockedBuffer) *pg.Queue {
+func newDiscardQueue(db *pg.DB, reader *sdkmetric.ManualReader, logs *telemetrytest.Buffer) *pg.Queue {
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
 	return db.NewQueue(logger, platform, sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"))
 }

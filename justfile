@@ -80,11 +80,11 @@ scope:
 # Every function is reachable from a program or a test: code nothing calls and nothing tests fails. Modules are built
 # bottom-up, so a module's tests call it before the modules above it do; the functions only tests reach are listed,
 # without failing, for the milestone's quality audit, by which time the program calls every module. Test-only
-# packages such as pgtest, egresstest, alloctest and suppliers' adaptertest, like net/http/httptest, are left out of
-# that list; egress.NewForTesting lives in egress itself, so it stays listed.
+# packages such as pgtest, egresstest, alloctest, telemetrytest and suppliers' adaptertest, like net/http/httptest,
+# are left out of that list; egress.NewForTesting lives in egress itself, so it stays listed.
 deadcode:
     out="$({{ tool }} deadcode -test ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
-    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]platform[/\\]alloctest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed -E 's/^(.+\.go):([0-9]+):[0-9]+: unreachable func: (.+)$/only tests reach: \3 (\1 line \2)/'
+    out="$({{ tool }} deadcode ./...)" || exit 1; listed="$(printf '%s\n' "$out" | grep -v -e '^$' -e '^internal[/\\]platform[/\\]pgtest[/\\]' -e '^internal[/\\]platform[/\\]egresstest[/\\]' -e '^internal[/\\]platform[/\\]alloctest[/\\]' -e '^internal[/\\]platform[/\\]telemetry[/\\]telemetrytest[/\\]' -e '^internal[/\\]suppliers[/\\]internal[/\\]adaptertest[/\\]')"; [ $? -le 1 ] || exit 1; [ -z "$listed" ] || printf '%s\n' "$listed" | sed -E 's/^(.+\.go):([0-9]+):[0-9]+: unreachable func: (.+)$/only tests reach: \3 (\1 line \2)/'
     cd tools && out="$(go tool deadcode ./...)" || exit 1; [ -z "$out" ] || { echo "$out"; exit 1; }
 
 # Tests with only the flags go test can cache, so a result is reused until the package or an input it read changes. The

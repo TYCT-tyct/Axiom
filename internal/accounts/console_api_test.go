@@ -3,11 +3,8 @@ package accounts_test
 import (
 	"errors"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"net/netip"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -18,6 +15,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 // accountScope is the scope of the signed-in user's own account.
@@ -324,20 +322,6 @@ func TestRefusalsThatGuessNothingAreNotCounted(t *testing.T) {
 	}
 }
 
-// scrapeMisses is the value of the key-cache miss counter in what the ops listener's /metrics handler serves, so the
-// name checked is the one an operator's scrape sees.
-func scrapeMisses(t *testing.T, tel *telemetry.Telemetry) string {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	tel.MetricsHandler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
-	for line := range strings.Lines(rec.Body.String()) {
-		if value, ok := strings.CutPrefix(line, "axiom_accounts_key_cache_misses_total "); ok {
-			return strings.TrimSpace(value)
-		}
-	}
-	return "absent from:\n" + rec.Body.String()
-}
-
 // TestKeyCacheMissesAreCounted: a lookup that goes to the database is counted, one answered from memory is not, and
 // the count reaches the scrape under its Prometheus name through the process's metrics base.
 func TestKeyCacheMissesAreCounted(t *testing.T) {
@@ -364,7 +348,8 @@ func TestKeyCacheMissesAreCounted(t *testing.T) {
 	if _, err := s.AuthenticateKey(t.Context(), accounts.SiteID(s1), accounts.NewKeyText("sk-ax-v1-")); !errors.Is(err, accounts.ErrUnknownKey) {
 		t.Fatal(err)
 	}
-	if misses := scrapeMisses(t, tel); misses != "2" {
+	// The name is the one an operator's scrape of the ops listener sees.
+	if misses := telemetrytest.Metric(t, tel, "axiom_accounts_key_cache_misses_total"); misses != "2" {
 		t.Errorf("the scrape counts %s misses for one known key looked up three times and one unknown, want 2", misses)
 	}
 }

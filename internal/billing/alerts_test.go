@@ -5,51 +5,16 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"uuid"
 
 	"axiom/internal/platform"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
-
-// logBuffer is a log the tests read, written by the goroutines that log.
-type logBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (l *logBuffer) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
-}
-
-func (l *logBuffer) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.String()
-}
-
-func (l *logBuffer) logger() *slog.Logger { return slog.New(slog.NewTextHandler(l, nil)) }
-
-// scrape is the value of a metric in the process's metrics text, or what the text was when it is absent.
-func scrape(t *testing.T, tel *telemetry.Telemetry, name string) string {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	tel.MetricsHandler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
-	for line := range strings.Lines(rec.Body.String()) {
-		if value, ok := strings.CutPrefix(line, name+" "); ok {
-			return strings.TrimSpace(value)
-		}
-	}
-	return "absent from:\n" + rec.Body.String()
-}
 
 // TestThePlatformBearingASettlementIsReported: a settlement the floor kept the account from paying in full (the case of
 // TestSettleFloor) is logged at error with the request, the price, what was charged and what the platform bore, and
@@ -59,9 +24,9 @@ func TestThePlatformBearingASettlementIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logs := &logBuffer{}
+	logs := &telemetrytest.Buffer{}
 	b := newBank(t, 2000, -100, Config{
-		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, Logger: logs.logger(), Meter: tel.Metrics.Meter("axiom/billing"),
+		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, Logger: logs.Logger(), Meter: tel.Metrics.Meter("axiom/billing"),
 	})
 	other, h := b.hold(500), b.hold(1000)
 	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 5000, 0, 0))); err != nil {
@@ -72,10 +37,10 @@ func TestThePlatformBearingASettlementIsReported(t *testing.T) {
 			t.Errorf("the log lacks %q:\n%s", want, logs.String())
 		}
 	}
-	if got := scrape(t, tel, "axiom_billing_platform_borne_total"); got != "1" {
+	if got := telemetrytest.Metric(t, tel, "axiom_billing_platform_borne_total"); got != "1" {
 		t.Errorf("the scrape counts %s settlements borne, want 1", got)
 	}
-	if got := scrape(t, tel, "axiom_billing_platform_borne_amount_total"); got != "3500" {
+	if got := telemetrytest.Metric(t, tel, "axiom_billing_platform_borne_amount_total"); got != "3500" {
 		t.Errorf("the scrape counts %s borne, want 3500", got)
 	}
 	if _, err := b.billing.Settle(t.Context(), other, outcome(Committed, FinishStop, used(t, 500, 100, 0))); err != nil {
@@ -90,8 +55,8 @@ func TestThePlatformBearingASettlementIsReported(t *testing.T) {
 // so the ones after it must still be taken over, the failure reported with the request; a sweep that can clean nothing
 // more ends rather than trying the same again.
 func TestCleanupGoesPastAReservationThatFails(t *testing.T) {
-	logs := &logBuffer{}
-	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, Logger: logs.logger()})
+	logs := &telemetrytest.Buffer{}
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, Logger: logs.Logger()})
 	holds := []*Hold{b.hold(1000), b.hold(1000)}
 	slices.SortFunc(holds, func(a, c *Hold) int { return bytes.Compare(a.id[:], c.id[:]) })
 	failing, healthy := holds[0], holds[1] // cleanup takes them in request order
@@ -196,8 +161,8 @@ func TestCleanupSaysWhenItWasCut(t *testing.T) {
 // TestCleanupReportsWhatItReleases: a reservation cleanup gives back without a settlement is logged with its amount,
 // because any usage of the call is the platform's.
 func TestCleanupReportsWhatItReleases(t *testing.T) {
-	logs := &logBuffer{}
-	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, Logger: logs.logger()})
+	logs := &telemetrytest.Buffer{}
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, Logger: logs.Logger()})
 	h := b.hold(1000)
 	b.takenOver(h)
 	for _, want := range []string{"level=WARN", "cleanup released", "request=" + h.id.String(), "released=1100"} {
@@ -241,10 +206,10 @@ func TestTheReconciliationReportsWhatItRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logs := &logBuffer{}
+	logs := &telemetrytest.Buffer{}
 	b := newBank(t, 10_000, 0, Config{})
 	r := &reconciler{
-		db: b.app, scope: b.platform, logger: logs.logger(),
+		db: b.app, scope: b.platform, logger: logs.Logger(),
 		problems: counter(tel.Metrics.Meter("axiom/billing"), "axiom.billing.reconcile.problems", "problems"),
 	}
 	if err := r.work(t.Context(), nil); err != nil || logs.String() != "" {
@@ -259,7 +224,7 @@ func TestTheReconciliationReportsWhatItRefuses(t *testing.T) {
 			t.Errorf("the log lacks %q:\n%s", want, logs.String())
 		}
 	}
-	if got := scrape(t, tel, "axiom_billing_reconcile_problems_total"); got != "1" {
+	if got := telemetrytest.Metric(t, tel, "axiom_billing_reconcile_problems_total"); got != "1" {
 		t.Errorf("the scrape counts %s problems, want 1", got)
 	}
 }
@@ -267,11 +232,11 @@ func TestTheReconciliationReportsWhatItRefuses(t *testing.T) {
 // TestTheReconciliationRunsOnTheQueue: registered on a queue, it runs when the queue starts, without anyone asking, and
 // reports from the worker the queue gives it.
 func TestTheReconciliationRunsOnTheQueue(t *testing.T) {
-	logs := &logBuffer{}
+	logs := &telemetrytest.Buffer{}
 	b := newBank(t, 10_000, 0, Config{})
 	id := b.unbalance()
 	q := b.app.NewQueue(slog.New(slog.DiscardHandler), b.platform, nil)
-	if err := RegisterReconcile(ReconcileConfig{DB: b.app, Scope: b.platform, Queue: q, Logger: logs.logger()}); err != nil {
+	if err := RegisterReconcile(ReconcileConfig{DB: b.app, Scope: b.platform, Queue: q, Logger: logs.Logger()}); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Start(t.Context()); err != nil {
