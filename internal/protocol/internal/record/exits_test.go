@@ -22,6 +22,7 @@ func TestErrorExitsRedactKeys(t *testing.T) {
 	getenv := func(string) string { return key }
 	for _, tc := range []struct{ name, format, scenario, root, request string }{
 		{"format", key, "s", "", ""},
+		{"key-shaped format", "sk-" + strings.Repeat("a", 24), "s", "", ""},
 		{"scenario", "chat", key + "!", "", ""},
 		{"root", "chat", "s", filepath.Join(t.TempDir(), key), ""},
 		{"request file", "chat", "s", t.TempDir(), filepath.Join(t.TempDir(), key)},
