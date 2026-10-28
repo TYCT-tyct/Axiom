@@ -8,15 +8,19 @@ import (
 )
 
 // rewrite is Prepare for an endpoint of the request's format.
-func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
+func rewrite(r *Request, body []byte, t Target, w Rewrites) ([]byte, error) {
+	f := r.Format
+	indexed := r.positions.ready && !replayCandidate(f, body)
 	rules := rulesFor(f, t)
 	if rules.members == nil {
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
 	}
 	var err error
-	body, err = replayBody(f, body, false)
-	if err != nil {
-		return nil, err
+	if !indexed {
+		body, err = replayBody(f, body, false)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if f == Responses {
 		w.History, err = replayHistory(w.History)
@@ -28,7 +32,13 @@ func rewrite(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	p := &rewriter{
 		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
 	}
-	if err := p.top(rules); err != nil {
+	var rewriteErr error
+	if indexed {
+		rewriteErr = p.indexedTop(&r.positions, rules)
+	} else {
+		rewriteErr = p.top(rules)
+	}
+	if err := rewriteErr; err != nil {
 		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
 			return nil, err
 		}

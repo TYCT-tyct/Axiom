@@ -121,7 +121,7 @@ func requestToChat(f Format, body []byte, t Target, w Rewrites) ([]byte, error) 
 	if err := checkNativeChat(chat); err != nil {
 		return nil, err
 	}
-	return rewrite(Chat, chat, t, w)
+	return rewrite(&Request{Format: Chat}, chat, t, w)
 }
 
 // checkNativeChat applies the shared Chat invariants to a constructed native request.

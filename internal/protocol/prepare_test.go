@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
@@ -280,7 +281,7 @@ func FuzzPrepare(f *testing.F) {
 		}
 		r.Model, r.Models, r.Provider, r.Previous, r.TextBytes = "up", nil, nil, "", r.TextBytes+int64(len(out)-len(body)) // models and provider are routing's, deleted
 		r = withSmallerCap(r, got)
-		if diff := cmp.Diff(r, got); diff != "" {
+		if diff := cmp.Diff(r, got, cmpopts.IgnoreUnexported(protocol.Request{})); diff != "" {
 			t.Fatalf("%s:\n%s", out, diff)
 		}
 	})

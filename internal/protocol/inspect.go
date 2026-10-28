@@ -76,8 +76,9 @@ type Request struct {
 	HidesReasoning bool
 	// Compacts is set when the request turns on server-side compaction, which samples the model a second time
 	// (docs/domains/billing.md「预留与结算」).
-	Compacts bool
-	Needs    Capabilities
+	Compacts  bool
+	Needs     Capabilities
+	positions requestPositions
 }
 
 // ErrInvalid reports a body Inspect cannot read: not strict JSON within jsonx's policy, or a member it reads with the
@@ -114,7 +115,7 @@ func Inspect(f Format, body []byte) (Request, error) {
 	g := &grammars[f]
 	s := scanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), g: g}
 	s.r = Request{Format: f, Choices: 1, TextBytes: int64(len(body)), InputItems: g.input}
-	if err := s.top(); err != nil {
+	if err := s.top(body); err != nil {
 		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
 	s.r.ServiceTiers = s.fast
@@ -172,12 +173,12 @@ type part struct {
 // fields maps an object's member names to their readers; other members are skipped.
 type fields map[string]func(*scanner) error
 
-func (s *scanner) top() error {
+func (s *scanner) top(body []byte) error {
 	if s.dec.PeekKind() != '{' {
 		s.name = []byte("the body")
 		return s.mismatch("an object")
 	}
-	if err := s.object(s.g.top); err != nil {
+	if err := s.topMembers(body); err != nil {
 		return err
 	}
 	if _, err := s.dec.ReadToken(); !errors.Is(err, io.EOF) {
