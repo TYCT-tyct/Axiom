@@ -138,15 +138,22 @@ type credRuntime struct {
 
 // minuteRuntime is the requests one upstream account made in the rolling minute, as this node counted them. It is a
 // ring of one-second buckets, each stamped with the second it counts: a bucket from before the window reads as zero,
-// so no timer clears anything and memory does not grow with the ceiling.
+// so no timer clears anything and memory does not grow with the ceiling. The clock is read while mu is held, so a caller
+// delayed between choosing a credential and taking its slot is counted at the second it actually enters, not at the
+// earlier time Acquire looked at.
 type minuteRuntime struct {
-	// The check and increment share a lock so concurrent callers cannot spend the last request twice.
+	// The check, the clock read and the increment share a lock so concurrent callers cannot spend the last request
+	// twice, or let an earlier caller write after a later one has moved the window.
 	mu      sync.Mutex
+	now     func() time.Time // the service's clock; nil is time.Now
+	started bool
+	epoch   time.Time // the first admission; bucket seconds are elapsed from it
+	last    int64     // the highest second taken, so a clock that goes back cannot reopen a bucket
 	buckets [rpmBuckets]rpmBucket
 }
 
-// rpmBucket is one second's requests. second is the unix second the count belongs to, so a slot reused by a later
-// second reads as empty without being cleared.
+// rpmBucket is one second's requests. second is the runtime's monotonic second the count belongs to, so a slot reused
+// by a later second reads as empty without being cleared.
 type rpmBucket struct {
 	second int64
 	count  int32
@@ -161,11 +168,29 @@ const rpmBuckets = 61
 // finite ceiling, and requests from unlimited credentials cannot overflow the count.
 const rpmBucketCount = MaxRequestsPerMinute
 
-// count is a hint shared by an endpoint's credentials; take still decides admission under the lock.
+// count is a hint shared by an endpoint's credentials; take still decides admission under the lock with a clock read
+// at that moment.
 func (rt *minuteRuntime) count(now time.Time) int64 {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	return rt.sum(now.Unix())
+	return rt.sum(rt.second(now))
+}
+
+// second is at in the runtime's monotonic seconds, never below the last second taken. It must be called with mu held.
+// time.Time.Sub uses the monotonic reading when the clock has one, so a wall-clock step back does not reopen a bucket.
+func (rt *minuteRuntime) second(at time.Time) int64 {
+	if !rt.started {
+		return 0
+	}
+	elapsed := at.Sub(rt.epoch)
+	if elapsed < 0 {
+		return rt.last
+	}
+	s := int64(elapsed / time.Second)
+	if s < rt.last {
+		return rt.last
+	}
+	return s
 }
 
 // sum is the requests in the buckets for [now-60, now]; buckets stamped with another second are zero.
@@ -179,14 +204,26 @@ func (rt *minuteRuntime) sum(now int64) int64 {
 	return n
 }
 
-// take counts one request at now, and says whether it was within the limit; a credential without one takes every
-// request. The sum and the increment are one step under mu, so two callers cannot both take the last request of a
-// window (README.md「并发与速率」). A request counted here is not given back: it may have reached the supplier, whose own
-// count it is in.
-func (rt *minuteRuntime) take(now time.Time, limit int32) bool {
+// take counts one request at the clock's current time, and says whether it was within the limit; a credential without
+// one takes every request. The clock read, sum and increment are one step under mu, so two callers cannot both take the
+// last request of a window, and a caller delayed after Acquire cannot count at an earlier second than one that already
+// took a request (README.md「并发与速率」). A request counted here is not given back: it may have reached the supplier,
+// whose own count it is in.
+func (rt *minuteRuntime) take(limit int32) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	second := now.Unix()
+	at := time.Now()
+	if rt.now != nil {
+		at = rt.now()
+	}
+	if !rt.started {
+		rt.started = true
+		rt.epoch = at
+	}
+	second := rt.second(at)
+	if second > rt.last {
+		rt.last = second
+	}
 	if limit != 0 && rt.sum(second)+1 > int64(limit) {
 		return false
 	}
@@ -201,16 +238,20 @@ func (rt *minuteRuntime) take(now time.Time, limit int32) bool {
 	return true
 }
 
-// bucketOf is the ring slot of a unix second. Go's remainder is negative before 1970, which only a test's clock is.
+// bucketOf is the ring slot of a monotonic second.
 func bucketOf(second int64) int {
 	return int((second%rpmBuckets + rpmBuckets) % rpmBuckets)
 }
 
 // ceiling is a per-minute limit as the snapshot holds it: a column with no value is no ceiling of Axiom's, which is
-// zero here.
+// zero here. A value above MaxRequestsPerMinute is an old node's write during a rolling release; the new code reads it
+// as the cap rather than letting the account exceed the bounded window.
 func ceiling(n *int32) int32 {
 	if n == nil {
 		return 0
+	}
+	if *n > MaxRequestsPerMinute {
+		return MaxRequestsPerMinute
 	}
 	return *n
 }
@@ -402,7 +443,7 @@ func (s *Service) runtimeOf(id, supplier uuid.UUID) *credRuntime {
 		// count upstream accounts; another key of the same supplier must not create another quota.
 		requests := s.minutes[supplier]
 		if requests == nil {
-			requests = &minuteRuntime{}
+			requests = &minuteRuntime{now: s.now}
 			s.minutes[supplier] = requests
 		}
 		rt = &credRuntime{requests: requests}

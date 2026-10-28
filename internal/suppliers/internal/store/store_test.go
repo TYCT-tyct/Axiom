@@ -463,6 +463,8 @@ func TestRowRules(t *testing.T) {
 	supplierSet := func(set string) string {
 		return fmt.Sprintf("UPDATE suppliers.suppliers SET %s WHERE id = '%s'", set, s)
 	}
+	// The upper bound is enforced by the new write path, not yet by a CHECK: an old node still running during the
+	// rolling release must be able to write above it, and the new code reads such a value as the cap.
 	cases := []struct {
 		name       string
 		statements []string
@@ -488,7 +490,7 @@ func TestRowRules(t *testing.T) {
 		{"a requests a minute of zero", []string{bound("0")}, checkViolation},
 		{"a requests a minute below zero", []string{bound("-1")}, checkViolation},
 		{"a requests a minute at the cap", []string{bound("100000")}, ""},
-		{"a requests a minute above the cap", []string{bound("100001")}, checkViolation},
+		{"a requests a minute above the cap from an old node", []string{bound("100001")}, ""},
 		{"a known cost with a schedule that does not exist", []string{endpoint(", cost_state, cost_schedule_id", ", 'known', gen_random_uuid()")}, foreignKeyViolation},
 		{"a known cost with its schedule", []string{
 			endpoint("", ""),

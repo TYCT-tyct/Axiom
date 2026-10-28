@@ -78,6 +78,20 @@ func TestSetLimits(t *testing.T) {
 	same(t, "the configuration generation", generation, a.generation())
 }
 
+// TestLimitsAboveTheCapReadAsTheCap: an old node can still write a higher value during a rolling release. The new code
+// must not treat it as unbounded, in the call path or in what the admin shows.
+func TestLimitsAboveTheCapReadAsTheCap(t *testing.T) {
+	t.Parallel()
+	over := int32(MaxRequestsPerMinute + 1)
+	if got := ceiling(&over); got != MaxRequestsPerMinute {
+		t.Errorf("the call path read %d, want the cap %d", got, MaxRequestsPerMinute)
+	}
+	shown := limited(&over)
+	if shown == nil || *shown != MaxRequestsPerMinute {
+		t.Errorf("the admin shows %v, want the cap %d", shown, MaxRequestsPerMinute)
+	}
+}
+
 // TestSetLimitsRefusals: a credential the supplier does not have, one of another supplier, a supplier on its way out,
 // and numbers the columns cannot hold are refused, and nothing is recorded.
 func TestSetLimitsRefusals(t *testing.T) {

@@ -107,6 +107,11 @@ func TestASpentWindowIsLeftToTheOtherKeys(t *testing.T) {
 	other.Done()
 }
 
+// runtimeAt is a window whose clock the test moves through now.
+func runtimeAt(now *time.Time) *minuteRuntime {
+	return &minuteRuntime{now: func() time.Time { return *now }}
+}
+
 // TestTheWindowEndsAtTheSixtiethSecond: a request still counts at exactly 60 seconds, and the window admits again at
 // the 61st, down to the sub-second part of a second in which it was made.
 func TestTheWindowEndsAtTheSixtiethSecond(t *testing.T) {
@@ -124,14 +129,59 @@ func TestTheWindowEndsAtTheSixtiethSecond(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			rt := &minuteRuntime{}
-			if !rt.take(base, 1) {
+			now := base
+			rt := runtimeAt(&now)
+			if !rt.take(1) {
 				t.Fatal("the first request was refused")
 			}
-			if got := rt.take(base.Add(c.at), 1); got != c.fits {
+			now = base.Add(c.at)
+			if got := rt.take(1); got != c.fits {
 				t.Fatalf("the next request fits: %v, want %v", got, c.fits)
 			}
 		})
+	}
+}
+
+// TestTheClockIsReadUnderTheAccountLock: take must not reuse the time Acquire saw before it chose a credential. Reading
+// the clock while holding the lock is what makes a caller that paused across a second see the later bucket, so it cannot
+// admit beside a request that already took the window.
+func TestTheClockIsReadUnderTheAccountLock(t *testing.T) {
+	t.Parallel()
+	base := time.Now()
+	rt := &minuteRuntime{}
+	rt.now = func() time.Time {
+		if rt.mu.TryLock() {
+			rt.mu.Unlock()
+			t.Error("the clock was read outside the account lock")
+		}
+		return base
+	}
+	if !rt.take(1) {
+		t.Fatal("the first request was refused")
+	}
+}
+
+// TestARollbackDoesNotReopenTheWindow: after a window has moved on, a clock that goes back must not make the old
+// buckets usable again. The runtime keeps its highest second, so a rollback can only under-admit.
+func TestARollbackDoesNotReopenTheWindow(t *testing.T) {
+	t.Parallel()
+	base := time.Now()
+	now := base
+	rt := runtimeAt(&now)
+	for range 2 {
+		if !rt.take(2) {
+			t.Fatal("the first window was refused within its ceiling")
+		}
+	}
+	now = base.Add(61 * time.Second)
+	for range 2 {
+		if !rt.take(2) {
+			t.Fatal("the next window was refused within its ceiling")
+		}
+	}
+	now = base.Add(30 * time.Second) // the clock goes back behind the second the window is on
+	if rt.take(2) {
+		t.Fatal("a rollback reopened a window that was already full")
 	}
 }
 
@@ -141,22 +191,25 @@ func TestABurstAtTheWindowEdgeIsBounded(t *testing.T) {
 	t.Parallel()
 	const limit = 5
 	base := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	rt := &minuteRuntime{}
+	now := base
+	rt := runtimeAt(&now)
 	for range limit {
-		if !rt.take(base, limit) {
+		if !rt.take(limit) {
 			t.Fatal("the first burst was refused within its ceiling")
 		}
 	}
 	for _, at := range []time.Duration{59 * time.Second, 60 * time.Second, 60*time.Second + 999*time.Millisecond} {
+		now = base.Add(at)
 		for range 20 {
-			if rt.take(base.Add(at), limit) {
+			if rt.take(limit) {
 				t.Fatalf("a burst %s later was admitted into the same window", at)
 			}
 		}
 	}
+	now = base.Add(61 * time.Second)
 	var admitted int
 	for range 20 {
-		if rt.take(base.Add(61*time.Second), limit) {
+		if rt.take(limit) {
 			admitted++
 		}
 	}
@@ -170,19 +223,21 @@ func TestABurstAtTheWindowEdgeIsBounded(t *testing.T) {
 func TestOneSecondSaturatesAtTheCeiling(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	rt := &minuteRuntime{}
+	now := base
+	rt := runtimeAt(&now)
 	for range MaxRequestsPerMinute + 1 {
-		if !rt.take(base, 0) {
+		if !rt.take(0) {
 			t.Fatal("an unlimited credential was refused")
 		}
 	}
 	if got := rt.count(base); got != MaxRequestsPerMinute {
 		t.Fatalf("a saturated second counted %d, want %d", got, MaxRequestsPerMinute)
 	}
-	if rt.take(base, MaxRequestsPerMinute) {
+	if rt.take(MaxRequestsPerMinute) {
 		t.Fatal("a saturated second admitted a request at the largest ceiling")
 	}
-	if !rt.take(base.Add(61*time.Second), MaxRequestsPerMinute) {
+	now = base.Add(61 * time.Second)
+	if !rt.take(MaxRequestsPerMinute) {
 		t.Fatal("the saturated second did not leave the window")
 	}
 }
@@ -190,10 +245,10 @@ func TestOneSecondSaturatesAtTheCeiling(t *testing.T) {
 // BenchmarkWindowTake is the admission step of Acquire: it must allocate nothing, since every call of the node's call
 // path takes it.
 func BenchmarkWindowTake(b *testing.B) {
-	rt := &minuteRuntime{}
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	rt := runtimeAt(&now)
 	b.ReportAllocs()
 	for b.Loop() {
-		rt.take(now, MaxRequestsPerMinute)
+		rt.take(MaxRequestsPerMinute)
 	}
 }

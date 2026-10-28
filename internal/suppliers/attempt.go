@@ -109,8 +109,8 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 	if !ok {
 		return nil, ErrNoEndpoint
 	}
-	now := s.now()
 	for range 8 { // another caller may take the slot or the window's last request between looking and swapping
+		now := s.now() // the credential may have rested or expired since the last look
 		best, n := leastBusy(ep, now)
 		if best == nil {
 			return nil, ErrNoSlot
@@ -118,7 +118,7 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 		if !best.rt.inflight.CompareAndSwap(n, n+1) { // n is below the limit, and the swap only succeeds if it is still n
 			continue
 		}
-		if !best.rt.requests.take(now, best.perMinute) {
+		if !best.rt.requests.take(best.perMinute) {
 			best.rt.inflight.Add(-1) // no request was made: the slot goes back, and another credential is tried
 			continue
 		}
