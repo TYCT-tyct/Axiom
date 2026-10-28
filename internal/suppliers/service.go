@@ -212,10 +212,11 @@ func (rt *minuteRuntime) sum(now int64) int64 {
 func (rt *minuteRuntime) take(limit int32) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	at := time.Now()
-	if rt.now != nil {
-		at = rt.now()
+	now := rt.now
+	if now == nil {
+		now = time.Now
 	}
+	at := now()
 	if !rt.started {
 		rt.started = true
 		rt.epoch = at
