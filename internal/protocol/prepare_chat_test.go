@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
@@ -193,7 +194,7 @@ func checkChatStreamSent(t *testing.T, r protocol.Request, body, sent []byte) {
 		t.Fatalf("%s: the cap sent is %d, the request read as %d and the call was quoted at 7", sent, got.MaxOutput, r.MaxOutput)
 	}
 	r.Stream, r.MaxOutput = true, got.MaxOutput
-	if diff := cmp.Diff(r, got); diff != "" {
+	if diff := cmp.Diff(r, got, cmpopts.IgnoreUnexported(protocol.Request{})); diff != "" {
 		t.Fatalf("%s:\n%s", sent, diff)
 	}
 }
