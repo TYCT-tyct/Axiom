@@ -53,13 +53,12 @@ const lateRevision = -1
 // balance against the wrong book.
 //
 // Every transaction of an account is numbered while its balance row lock is held, so the seqs of one account follow the
-// order they commit, which the allocation replays by and the unlocked replay bounds itself with (#361). A transaction
-// that moves the user's balance or freezes/unfreezes credit takes that lock in the statement that makes it, whether
-// or not the caller holds it already; other events rely on their callers holding it. Settlement, cleanup and expiry
-// lock the account before posting such events (putTransaction).
+// order they commit, which the allocation replays by and the unlocked replay bounds itself with (#361). Every event
+// takes the balance row lock before numbering, then writes its entries and balance change in the same statement.
+// Both writes depend on the newly inserted event, so an idempotency conflict changes neither.
 func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error) {
 	id := uuid.NewV7()
-	params := InsertEntriesParams{TransactionID: id, SiteID: e.site, AccountID: e.account}
+	params := PostLedgerParams{ID: id, SiteID: e.site, AccountID: e.account, Kind: e.kind, RequestID: e.request, AttemptSeq: e.seq, Revision: e.revision}
 	for _, x := range entries {
 		if x.amount == 0 {
 			continue
@@ -78,35 +77,11 @@ func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error)
 			panic(fmt.Sprintf("billing: the %s entries of %s sum to %d in %q", e.kind, e.request, sum, x.currency))
 		}
 	}
-	n, err := putTransaction(ctx, tx, e, id, params.UserDebit != 0 || e.kind == "freeze" || e.kind == "unfreeze")
-	if err != nil || n == 0 {
-		return false, wrapPost(e, err)
+	posted, err := queries.PostLedger(ctx, tx, params)
+	if err == nil && !posted.AccountExists {
+		err = errNoBalance
 	}
-	if len(params.Books) == 0 {
-		return true, nil
-	}
-	err = queries.InsertEntries(ctx, tx, params)
-	return err == nil, wrapPost(e, err)
-}
-
-// putTransaction inserts the transaction row; locked takes the balance row lock with it, and is set exactly when the
-// event moves the user's balance or freezes/unfreezes credit. Otherwise the caller must hold that lock, so the account's
-// transactions are numbered in the order they commit whichever of the two it takes (post). Of no row inserted, a
-// transaction that locks says whether the event was posted already or the account has no balance row to lock.
-func putTransaction(ctx context.Context, tx pg.Tx, e event, id uuid.UUID, locked bool) (int64, error) {
-	if !locked {
-		return queries.InsertTransaction(ctx, tx, InsertTransactionParams{
-			ID: id, SiteID: e.site, AccountID: e.account, Kind: e.kind, RequestID: e.request, AttemptSeq: e.seq, Revision: e.revision,
-		})
-	}
-	n, err := queries.InsertLockedTransaction(ctx, tx, InsertLockedTransactionParams{
-		ID: id, SiteID: e.site, AccountID: e.account, Kind: e.kind, RequestID: e.request, AttemptSeq: e.seq, Revision: e.revision,
-	})
-	if err != nil || n > 0 {
-		return n, err
-	}
-	_, err = lockAccount(ctx, tx, e.account)
-	return 0, err
+	return posted.Posted, wrapPost(e, err)
 }
 
 // sumIn is the sum of the entries in currency.

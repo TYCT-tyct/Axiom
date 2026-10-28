@@ -80,17 +80,10 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 	if err != nil {
 		return nil, nil, err
 	}
-	balance, err := lockAccount(ctx, tx, a.Account)
+	balance, usage, err := b.reserveSources(ctx, tx, a)
 	if errors.Is(err, errNoBalance) {
 		return nil, nil, &Insufficient{Source: SourceBalance} // nothing to reserve against, not even a zero price
 	} else if err != nil {
-		return nil, nil, err
-	}
-	if err := b.fence(ctx, tx); err != nil {
-		return nil, nil, err
-	}
-	usage, err := a.usage(ctx, tx, nil)
-	if err != nil {
 		return nil, nil, err
 	}
 	r, err := Quote(d, q, b.config.Segments, a.available(balance, usage.WorkspaceUsed, usage.KeyUsed))
