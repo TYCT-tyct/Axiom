@@ -228,6 +228,15 @@ func (c *fakeConn) Done() suppliers.AttemptReceipt {
 	return c.e.receiptOf(c.nth)
 }
 
+// Sanitize makes the test supplier's identity observable if the gateway skips sanitization.
+func (*fakeConn) Sanitize(r protocol.Rejection) *protocol.Rejection {
+	if r.Message == "" {
+		return nil
+	}
+	r.Message = strings.ReplaceAll(r.Message, "upstream-vendor", "[hidden]")
+	return &r
+}
+
 // clientWriter is the client of a call: it keeps what it is given with the time each write was made, and can be made
 // to stop reading, as a client does that has gone, or to take its time.
 type clientWriter struct {

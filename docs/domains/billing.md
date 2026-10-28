@@ -179,6 +179,7 @@
 
 - **优先用上游报告的用量**。上游报告的用量超出上限或自相矛盾（例如输入侧减出负数）时，视为没有报告，按下一条处理并告警。
 - **流断了、上游没报完或报告无效**：上游报告了的计费项一律保留，只估缺的项：输入按请求估（口径见下一条），输出按已转发的文本估，按次项目按已转发的事件计数；这次费用标为暂估。例如 Anthropic 断在 `message_start` 之后时，输入和缓存是准数、只估输出；断在它之前，或 OpenAI 的流没有输入用量时，输入也要估。new-api 对 Claude 流也是这样只补缺失的项（new-api 源码 `relay/channel/claude/relay-claude.go` 的 `HandleStreamFinalResponse`，2026-10）。
+- **失败帧里的用量也要先校验、再计量**：Anthropic 的 `error` 事件、Chat 的出错块、Responses 的 `response.failed` 或 `error` 事件里的 `usage`，通过与正常帧相同的校验后，它明确报告的项算最终值；未报告的输出只保留此前的下界、由计费层暂估，之前已确定的输入不失效。无效报告仍全部暂估，是否免单由下文的免单规则决定。Responses 在第一个失败事件结束尝试，不等待后续帧，以免延迟错误或覆盖它的语义；这与 sub2api 的先解析失败帧 usage 再报错一致，但不采用其特定 Codex 路径等待后续 `response.failed` 的策略（`backend/internal/service/openai_gateway_passthrough.go`，2026-10-28 查）。
 - **暂估**：上游报告的项照收，缺的项估出来，这次费用标为暂估，预留里没用掉的部分结算时一次释放。暂估就是这次收费，不按供应商记录重算用户费用（按记录重算的校正作业见 [#28](https://github.com/TYCT-tyct/Axiom/issues/28)，M1 没有生产者）：之后才到的记录只用于对账，不动这次收费。暂估本身用最好的估计：输入采用本地计数或比例估计，不用预留上界。当前：输入的文本按已确认模型族的分词器暂估（OpenAI 的 o200k_base、cl100k_base，见决策表）：只数解码字符串值，不数 JSON 键、外壳或不透明媒体/签名/加密数据；同一会话每族最多分词 256 KiB 原始字符串，普通字符串的余量按 4 字节估，未知族（含未确认编码的 GPT-6、Anthropic、Gemini 等）或计数失败也按 4 字节 1 个 token；每张图片按 1600 个 token、每个文件按 4096 个 token，模型数据里的单张图片或单个文件的上界更小时取上界（预留仍按上界，两者分开：暂估不能高过预留，预留不能低过用户可能花的）；输出按已读到的正文、推理和工具参数按 3 字节 1 个 token，不低于上游已报告的数；都向上取整，都不超过预留覆盖的上界。
 
 ### 客户端断开
@@ -255,7 +256,7 @@
 ### 用户看得到什么
 
 - 每次调用的明细：各项用量、单价、价格版本、用量来源、是否暂估。M1 不显示价格版本（它没有写进预留行和调用记录，见[定价](#定价)）。
-- 余额流水和低余额提醒（提醒的收件人、模板和站点品牌见[账户与租户的「给用户的邮件」](accounts.md#给用户的邮件)）。
+- 余额流水和低余额提醒（提醒的收件人、模板和站点品牌见[账户与租户的「给用户的邮件」](accounts.md#给用户的邮件)）。控制台的「额度流水」页按账本顺序列出每一笔余额或退款冻结事件——充值、赠送、调用扣费及退费、到期、退款冻结、解冻、退款完成——带每笔之后的总余额和冻结额；账本开始编号之前的记录只按时间排列、先后不能确定，不给变动后余额（显示「不可用」，CSV 留空）。冻结和解冻只改变冻结额，退款完成才扣总余额；在途调用预留不属于退款冻结。流水可以翻页，也可以导出 CSV（最新的 10 000 条）；只给用户自己这一本的金额，不给分录、账本名和任何内部账户。
 
 ### 自带货源的服务费
 
@@ -321,6 +322,7 @@
 | 分录带币种：现金和手续费收入按付款币种记，用户余额按记账货币记，每个币种各自平衡，汇兑损益在两边配平；付费批次记实付、手续费、币种、渠道和参考汇率版本 | 开发者按负责人委托决定（#309 E1-1，2026-10-19），实现的是已合并的支付设计（[payments 的「billing 要提供的接口」](../../internal/payments/README.md#billing-要提供的接口)）和上文「一张表」本来就写的按站点 × 货币分账。现金按实付原样入账，每个商户账户的现金分录之和能逐分对上渠道账单（支付的每日对账就这么对）；换算只有一次（入账额度向下取整），差额全部落在汇兑损益，每个币种分别求和就能证明平衡。改动小：`entries` 加一个可空的币种列（空 = 记账货币，存量不改写、不扫表），写入断言和每日自平改为按币种。否决：账本只用额度一个单位、现金按参考汇率折成额度入账、原币金额只记在批次上——10/71 这类汇率除不尽，现金分录要再取整一次，现金账永远对不上渠道的原币金额，对账要逐笔用批次上的汇率反算，也和已合并的支付设计相悖。参考实现都没有复式账本：new-api 把付款金额存在充值单上（`model/topup.go` 的 `Money float64`，入账额度 = 金额 × `QuotaPerUnit`），sub2api 在订单上存付款金额和币种、经兑换码给余额加额度（`service/payment_fulfillment.go`，折算在 `payment_amounts.go`，浮点），都只有一个币种（2026-10-19 查）；批次上存的就是它们订单上的这些信息，我们另把现金记进账本 |
 | 线下付款按当时的参考汇率折算、向下取整，不加充值缓冲；`CreditPaid` 只要求入账额度不超过按参考汇率折算的值 | 缓冲属于渠道订单的报价（随支付的 `TopUpRate`），线下付款没有报价，按参考价折算不让平台吃亏也不多收；带缓冲的渠道订单入账额度只会更少，同一个检查也放得过。这个上限保证按参考价看汇兑损益在入账时不为负 |
 | 定价规则的接口原样表达「对象、人群、方法、约束」四部分，方法是一个带 `kind` 的扁平对象；预览不存储 | 联合类型生成的 Go 代码要手写编解码，扁平对象由服务端按 `kind` 校验；保存前先预览各模型的售价（[定价](#定价)；利润要每端点的成本，随 M2 加入），所以预览是独立入口。否决的做法：`oneOf`：生成物难用；保存后再看结果：错价已经发布 |
+| 额度流水一行一笔余额或退款冻结事件，不按天汇总；游标记下位置以及下一行的余额、冻结额起点；权限沿用 `balance.view` | 按事件可逐笔与账本对上，调用更正会显示退费和重新扣费；付费批次的引用就是订单编号（线下入账为记录编号），调用扣费/退费引用请求编号。按天汇总会丢掉退款冻结过程，因此采用已有账户内提交序号索引，不另建汇总表或迁移。OpenRouter 的 [Activity 导出](https://openrouter.ai/docs/guides/administration/activity-export) 提供按模型、key、成员的用量汇总 CSV/PDF，[Support](https://openrouter.ai/support) 将余额与退款放在 Credits；Axiom 此处按事件展示，是为了对上本地账本和退款冻结，统计汇总留给用量页（2026-10-21 查）。new-api `controller/log.go`、`model/log.go` 的用户读取与流式导出限于本人，sub2api `backend/internal/handler/usage_handler.go` 及 `dto/mappers.go` 分用户和管理数据；Axiom 复用账户 RLS，只投影用户余额和冻结额，不序列化成本、内部账本或渠道信息。分支先 LIMIT 交易、再聚合分录；零变动在 Go 中按最多 8 轮跳过，空段返回继续游标。导出沿游标逐页发送，跨过空段，最多 10 000 个事件，内存只随单页和固定 CSV 缓冲增长；中途失败关闭下载连接。 |
 
 服务端工具的准入范围由完整计费映射决定：Messages 的 `web_fetch_*`、`mcp_servers` / `mcp_toolset`，Responses 的 `mcp`、`file_search`、`image_generation` 明确返回 400，不接受客户端给出的次数作为支持依据。fetch 虽无额外工具费，仍会重读上下文；MCP 涉及远端执行，file search 有调用及存储收费，image generation 的工具模型单独计价，现有 web search / code execution 两项不足以覆盖它们。相较把它们映射到已有项，拒绝能守住报价完整性，不给已发生的调用编造单价。来源均查于 2026-10-28：[Anthropic fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool)、[MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector)、[OpenAI MCP](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)、[file search](https://developers.openai.com/api/docs/guides/tools-file-search)、[image generation](https://developers.openai.com/api/docs/guides/tools-image-generation)。OpenRouter 的 [server tools](https://openrouter.ai/docs/guides/features/server-tools) 提供自己的工具循环及计量；Axiom 目前仅透传原生工具，不实现该循环。
 
