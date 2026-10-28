@@ -44,12 +44,12 @@ func openApp(t *testing.T, url string) *pg.DB {
 }
 
 // seedAboveCap makes a credential as an old node could have left it before 00011, above the cap.
-func seedAboveCap(t *testing.T, db *pg.DB) uuid.UUID {
+func seedAboveCap(t *testing.T, db *pg.DB, o owner) uuid.UUID {
 	t.Helper()
 	var supplier, group, credential uuid.UUID
 	if err := run(t, db, platform, func(ctx context.Context, tx pg.Tx) error {
 		var err error
-		if supplier, err = addSupplier(ctx, tx, owners["platform"]); err != nil {
+		if supplier, err = addSupplier(ctx, tx, o); err != nil {
 			return err
 		}
 		if group, err = addGroup(ctx, tx, supplier); err != nil {
@@ -98,7 +98,10 @@ func TestUpgradeClampsRequestsPerMinuteAboveTheCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := openApp(t, database.App)
-	credential := seedAboveCap(t, db)
+	credentials := make(map[string]uuid.UUID, len(owners))
+	for name, o := range owners {
+		credentials[name] = seedAboveCap(t, db, o)
+	}
 	db.Close()
 
 	if err := pg.Migrate(t.Context(), database.Migrator, pg.Module{Name: "suppliers", Migrations: store.Migrations()}); err != nil {
@@ -106,10 +109,14 @@ func TestUpgradeClampsRequestsPerMinuteAboveTheCap(t *testing.T) {
 	}
 	db = openApp(t, database.App)
 	defer db.Close()
-	if got := readLimit(t, db, credential); got == nil || *got != 100000 {
-		t.Fatalf("the upgrade left requests_per_minute at %v, want 100000", got)
-	}
-	if err := setLimit(t, db, credential, 100001); err != nil {
-		t.Fatalf("an old node's write above the cap failed during the rolling release: %v", err)
+	for name, credential := range credentials {
+		t.Run(name, func(t *testing.T) {
+			if got := readLimit(t, db, credential); got == nil || *got != 100000 {
+				t.Fatalf("the upgrade left requests_per_minute at %v, want 100000", got)
+			}
+			if err := setLimit(t, db, credential, 100001); err != nil {
+				t.Fatalf("an old node's write above the cap failed during the rolling release: %v", err)
+			}
+		})
 	}
 }

@@ -8,7 +8,6 @@
 -- write above the cap; the new code reads such a value as the cap. The CHECK that refuses new writes above the cap is
 -- a later migration, once old nodes no longer write (CONTRIBUTING.md「发布与缓存」).
 --
--- Migrations run as axiom_owner, which does not bypass the tables' forced RLS: the platform scope must be set in this
--- transaction for the UPDATE to see every supplier's credentials.
-SET LOCAL axiom.scope_platform = 'on';
+-- pg.Migrate supplies platform scope on its dedicated connections so this UPDATE sees every supplier's credentials
+-- through forced RLS; modules must not set their own tenant scope.
 UPDATE suppliers.credentials SET requests_per_minute = 100000 WHERE requests_per_minute > 100000;
