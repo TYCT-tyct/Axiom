@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	netmail "net/mail"
 	"slices"
@@ -89,7 +90,7 @@ func (w *queueWorld) job(t *testing.T) (state string, attempt int, args string) 
 	t.Helper()
 	err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT state::text, attempt, args::text FROM river.river_job
-			WHERE kind = $1 ORDER BY id DESC LIMIT 1`, jobKind).Scan(&state, &attempt, &args)
+			WHERE kind IN ($1,'mail.send_tracked') ORDER BY id DESC LIMIT 1`, jobKind).Scan(&state, &attempt, &args)
 	})
 	if err != nil {
 		t.Fatalf("read the mail job: %v", err)
@@ -104,7 +105,7 @@ func (w *queueWorld) jobErrors(t *testing.T) string {
 	var errs string
 	err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT coalesce(errors::text, '') FROM river.river_job
-			WHERE kind = $1 ORDER BY id DESC LIMIT 1`, jobKind).Scan(&errs)
+			WHERE kind IN ($1,'mail.send_tracked') ORDER BY id DESC LIMIT 1`, jobKind).Scan(&errs)
 	})
 	if err != nil {
 		t.Fatalf("read the mail job's recorded errors: %v", err)
@@ -422,5 +423,52 @@ func TestEnqueueRejectsInvalidMessage(t *testing.T) {
 				t.Errorf("an invalid message left %v in the outbox", got)
 			}
 		})
+	}
+}
+
+func TestTrackedMailReportsSMTPResult(t *testing.T) {
+	for _, code := range []int{0, 550} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) { checkTrackedMail(t, code) })
+	}
+}
+
+func checkTrackedMail(t *testing.T, code int) {
+	t.Helper()
+
+	w := newQueueWorld(t)
+	server := startTLSServer(t, func(s *fakeServer) {
+		if code != 0 {
+			s.rejectStep, s.rejectCode = "rcpt", code
+		}
+	})
+	mailer := w.register(t, server)
+	receipt := uuid.NewV7()
+	reported := make(chan bool, 1)
+	mailer.Receipt = func(_ context.Context, id uuid.UUID, sent bool) error {
+		if id != receipt {
+			return errors.New("wrong receipt")
+		}
+		reported <- sent
+		return nil
+	}
+	w.start(t)
+	if err := w.db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error { return mailer.EnqueueTracked(t.Context(), tx, Tenant{}, welcome, receipt) }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sent := <-reported:
+		if sent != (code == 0) {
+			t.Fatalf("sent=%v for SMTP %d", sent, code)
+		}
+	case <-t.Context().Done():
+		t.Fatal("no SMTP receipt")
+	}
+	if code == 0 {
+		w.waitForJob(t, "completed")
+	} else {
+		w.waitForJob(t, "cancelled")
+	}
+	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{uuid.NewV7()}, nil)); len(got) != 0 {
+		t.Fatal("site read platform mail")
 	}
 }
