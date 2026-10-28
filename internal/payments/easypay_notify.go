@@ -56,10 +56,7 @@ func (c *easyPayChannel) Verify(_ context.Context, cb Callback) (Notice, error) 
 	if v.Get("pid") != c.settings.PID {
 		return Notice{}, errors.New("easypay: merchant mismatch")
 	}
-	amount, err := easyPayMinor(v.Get("money"), digits(c.currency))
-	if err != nil {
-		return Notice{}, err
-	}
+	amount := easyPayMinor(v.Get("money"), digits(c.currency))
 	return Notice{Relevant: true, Success: v.Get("trade_status") == "TRADE_SUCCESS", Order: v.Get("out_trade_no"), TradeNo: v.Get("trade_no"), Paid: Money{Currency: c.currency, Minor: amount}, Raw: "easypay notification"}, nil
 }
 
@@ -101,17 +98,17 @@ func easyPayCallbackBody(cb Callback) (string, error) {
 }
 
 // -1 preserves a verified, unrepresentable amount for review; zero means settlement data is still missing.
-func easyPayMinor(text string, places int) (int64, error) {
+func easyPayMinor(text string, places int) int64 {
 	if text == "" {
-		return 0, nil
+		return 0
 	}
 	whole, fraction, err := easyPayDecimal(text)
 	if err != nil {
-		return 0, err
+		return -1
 	}
 	fraction = strings.TrimRight(fraction, "0")
 	if len(fraction) > places {
-		return -1, nil
+		return -1
 	}
 	whole = strings.TrimLeft(whole, "0")
 	if whole == "" {
@@ -119,16 +116,20 @@ func easyPayMinor(text string, places int) (int64, error) {
 	}
 	// Bound before concatenating or parsing a gateway-controlled integer.
 	if len(whole) > 19 {
-		return -1, nil
+		return -1
 	}
 	minorText := strings.TrimLeft(whole+fraction+strings.Repeat("0", places-len(fraction)), "0")
 	if minorText == "" {
-		return 0, nil
+		return -1
 	}
 	if len(minorText) > 19 || (len(minorText) == 19 && minorText > "9223372036854775807") {
-		return -1, nil
+		return -1
 	}
-	return strconv.ParseInt(minorText, 10, 64)
+	minor, err := strconv.ParseInt(minorText, 10, 64)
+	if err != nil {
+		return -1
+	}
+	return minor
 }
 
 func easyPayDecimal(text string) (string, string, error) {

@@ -3,6 +3,7 @@ package egress
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -295,4 +296,28 @@ func requestFailure(t *testing.T, client *Client, req *http.Request) error {
 		t.Fatal("request unexpectedly succeeded")
 	}
 	return err
+}
+
+func TestLoopbackTLSStillVerifiesCertificates(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer server.Close()
+	trusted := NewForTesting(egresstest.Loopback(t, server.Certificate()))
+	defer trusted.CloseIdleConnections()
+	response, err := trusted.Do(request(t, server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, response.Body)
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatal(response.StatusCode)
+	}
+	untrusted := NewForTesting(egresstest.Loopback(t))
+	defer untrusted.CloseIdleConnections()
+	if failure, ok := errors.AsType[*tls.CertificateVerificationError](requestFailure(t, untrusted, request(t, server.URL))); !ok || failure == nil {
+		t.Fatal("untrusted roots did not fail certificate verification")
+	}
+	wrongName := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
+	if failure, ok := errors.AsType[*tls.CertificateVerificationError](requestFailure(t, trusted, request(t, wrongName))); !ok || failure == nil {
+		t.Fatal("wrong hostname did not fail certificate verification")
+	}
 }

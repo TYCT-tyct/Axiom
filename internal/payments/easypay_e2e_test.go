@@ -17,8 +17,8 @@ import (
 )
 
 type easyPayGatewayOrder struct {
-	money, trade string
-	paid, closed bool
+	money, trade, upstream, cid, notify string
+	paid, closed                        bool
 }
 
 type easyPayGateway struct {
@@ -42,7 +42,7 @@ func (g *easyPayGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			g.t.Error("invalid gateway creation signature")
 		}
 		trade := "T-" + id
-		g.orders[id] = easyPayGatewayOrder{money: v.Get("money"), trade: trade}
+		g.orders[id] = easyPayGatewayOrder{money: v.Get("money"), trade: trade, upstream: v.Get("type"), cid: v.Get("cid"), notify: v.Get("notify_url")}
 		easyPayWrite(g.t, w, fmt.Sprintf(`{"code":"1","trade_no":%q,"payurl":"https://pay.example.com/checkout"}`, trade))
 		return
 	}
@@ -95,13 +95,17 @@ func (g *easyPayGateway) settle(id OrderID, money string) url.Values {
 func TestEasyPayLocalGatewayEndToEnd(t *testing.T) {
 	w := newTestWorld(t, EasyPay{})
 	gateway := &easyPayGateway{t: t, orders: map[string]easyPayGatewayOrder{}}
-	upstream := httptest.NewServer(gateway)
+	upstream := httptest.NewTLSServer(gateway)
 	t.Cleanup(upstream.Close)
-	cfg := easyPayConfig(t, upstream.URL+"/mapi.php?discard=normalization#fragment")
+	cfg := easyPayConfig(t, upstream.URL+"/mapi.php?discard=normalization#fragment", upstream.Certificate())
 	w.p.client = cfg.Client
 	w.open(w.siteA, RoundRobin)
 	in := w.input(w.siteA)
 	in.Kind = "easypay"
+	in.Settings = []byte(strings.ReplaceAll(string(cfg.Settings), "https://", "http://"))
+	if _, err := w.save(siteScope(w.siteA), in); !isField(err, "/settings") {
+		t.Fatalf("saved plaintext gateway: %v", err)
+	}
 	in.Settings = cfg.Settings
 	m := w.mustSave(siteScope(w.siteA), in)
 	easyPayNoSecrets(t, m.Settings, "mapi.php", "discard", "fragment")
@@ -111,8 +115,8 @@ func TestEasyPayLocalGatewayEndToEnd(t *testing.T) {
 		t.Fatal("equivalent gateway spelling changed sealed identity")
 	}
 	callbackMux := http.NewServeMux()
-	callbackMux.Handle("GET /api/payments/v1/notify/{merchant}", w.p.Notify())
-	callbackMux.Handle("POST /api/payments/v1/notify/{merchant}", w.p.Notify())
+	callbackMux.Handle("GET "+NotifyPath+"{merchant}", w.p.Notify())
+	callbackMux.Handle("POST "+NotifyPath+"{merchant}", w.p.Notify())
 	ingress := httptest.NewServer(callbackMux)
 	t.Cleanup(ingress.Close)
 
@@ -129,15 +133,17 @@ func TestEasyPayLocalGatewayEndToEnd(t *testing.T) {
 	if queries != 1 || w.count(w.p.platform, "SELECT count(*) FROM payments.order_payments") != 1 {
 		t.Fatal("callback replay queried or credited twice")
 	}
-	// A precision error remains a verified payment fact but never credits or waits forever for missing data.
-	invalid := w.mustPlace(yuan, "gateway-precision")
-	w.easyPayHTTPNotify(ingress.URL, o.MerchantID, http.MethodPost, gateway.settle(invalid.ID, "1.001"))
-	w.assertCredit(invalid, 0)
-	if state, _, _ := w.stored(invalid.ID); state != "review" {
-		t.Fatalf("precision overflow state %s, want review", state)
+	// Verified invalid amounts remain visible even when the confirmation query agrees with the callback.
+	for _, money := range []string{"1.001", "0.00", "1,000.00"} {
+		invalid := w.mustPlace(yuan, "gateway-invalid-"+money)
+		w.easyPayHTTPNotify(ingress.URL, o.MerchantID, http.MethodPost, gateway.settle(invalid.ID, money))
+		w.assertCredit(invalid, 0)
+		if state, _, _ := w.stored(invalid.ID); state != "review" {
+			t.Fatalf("invalid amount %s state %s", money, state)
+		}
 	}
-	if w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies") != 1 {
-		t.Fatal("precision overflow has no discrepancy")
+	if w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies") != 3 {
+		t.Fatal("invalid payment has no discrepancy")
 	}
 	w.easyPayCloseAndRefund(gateway, o)
 	w.easyPaySanitizedEvents()
@@ -162,25 +168,27 @@ func TestEasyPayInvalidAmountWithoutQueryGoesToReview(t *testing.T) {
 	in.Kind = "easypay"
 	in.Settings = raw
 	w.mustSave(siteScope(w.siteA), in)
-	for _, trade := range []string{"T-precision", ""} {
-		o := w.mustPlace(yuan, "invalid-without-query-"+trade)
-		v := callbackValues(o)
-		v.Set("trade_no", trade)
-		v.Set("money", "1.001")
-		v.Set("sign", epaySignature(v, theKey))
-		if response := w.callback(o.MerchantID, http.MethodGet, v); response.Code != http.StatusOK {
-			t.Fatal(response.Code, response.Body)
+	for _, money := range []string{"1.001", "0.00", "0.0000", "1,000.00", "1e3"} {
+		for _, trade := range []string{"T-precision", ""} {
+			o := w.mustPlace(yuan, "invalid-"+money+trade)
+			v := callbackValues(o)
+			v.Set("trade_no", trade)
+			v.Set("money", money)
+			v.Set("sign", epaySignature(v, theKey))
+			if response := w.callback(o.MerchantID, http.MethodGet, v); response.Code != http.StatusOK {
+				t.Fatal(response.Code, response.Body)
+			}
+			if state, _, _ := w.stored(o.ID); state != "review" {
+				t.Fatalf("invalid amount %s state %s", money, state)
+			}
+			w.assertCredit(o, 0)
 		}
-		if state, _, _ := w.stored(o.ID); state != "review" {
-			t.Fatalf("invalid amount state %s", state)
-		}
-		w.assertCredit(o, 0)
 	}
 }
 
 func (w *world) easyPayHTTPNotify(base string, merchant MerchantID, method string, values url.Values) {
 	w.t.Helper()
-	path := base + "/api/payments/v1/notify/" + merchant.TypeID()
+	path := base + NotifyPath + merchant.TypeID()
 	var body io.Reader
 	if method == http.MethodGet {
 		path += "?" + values.Encode()
@@ -235,4 +243,78 @@ func (w *world) easyPaySanitizedEvents() {
 		t.Fatal(err)
 	}
 	easyPayNoSecrets(t, raw, theKey, "sign=")
+}
+
+func TestEasyPayMethodChangesKeepTheMerchantIdentity(t *testing.T) {
+	w := newTestWorld(t, EasyPay{})
+	gateway := &easyPayGateway{t: t, orders: map[string]easyPayGatewayOrder{}}
+	server := httptest.NewTLSServer(gateway)
+	t.Cleanup(server.Close)
+	cfg := easyPayConfig(t, server.URL, server.Certificate())
+	w.p.client = cfg.Client
+	w.open(w.siteA, RoundRobin)
+	in := w.input(w.siteA)
+	in.Kind = "easypay"
+	in.Settings = cfg.Settings
+	in.Methods[0].Upstream = "ali"
+	merchant := w.mustSave(siteScope(w.siteA), in)
+	first := w.mustPlace(yuan, "mapping-first")
+	gateway.assertCreated(first.ID, "ali", "2", "https://console.example.com"+NotifyPath+first.MerchantID.TypeID())
+	var settings easyPaySettings
+	if err := jsonx.UnmarshalKnown(cfg.Settings, &settings); err != nil {
+		t.Fatal(err)
+	}
+	settings.CIDs["alipay"] = "9"
+	settings.Query, settings.Close, settings.Refund = false, false, false
+	in.ID, in.Rev, in.Secrets = MerchantID(merchant.ID), merchant.Rev, nil
+	in.Methods[0].Upstream = "ali_v2"
+	in.Methods = append(in.Methods, MethodInput{Method: "wxpay", Upstream: "wechat", Enabled: true})
+	in.Settings = easyPayJSON(t, settings)
+	merchant = w.mustSave(siteScope(w.siteA), in)
+	second := w.mustPlace(yuan, "mapping-second")
+	gateway.assertCreated(second.ID, "ali_v2", "9", "https://console.example.com"+NotifyPath+second.MerchantID.TypeID())
+	ch, err := w.channel(first.MerchantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.Caps() != 0 {
+		t.Fatal("operational capability change did not apply", ch.Caps())
+	}
+	in.Rev = merchant.Rev
+	settings.Mode = "redirect"
+	in.Settings = easyPayJSON(t, settings)
+	in.Methods = in.Methods[1:]
+	merchant = w.mustSave(siteScope(w.siteA), in)
+	if len(merchant.Methods) != 1 || merchant.Methods[0].Method != "wxpay" {
+		t.Fatal("could not remove a method with orders in flight")
+	}
+	in.Rev = merchant.Rev
+	w.easyPayIdentityEditsFail(in, settings)
+}
+
+func (g *easyPayGateway) assertCreated(id OrderID, upstream, cid, notify string) {
+	g.t.Helper()
+	g.mu.Lock()
+	order := g.orders[id.TypeID()]
+	g.mu.Unlock()
+	if diff := cmp.Diff([]string{upstream, cid, notify}, []string{order.upstream, order.cid, order.notify}); diff != "" {
+		g.t.Fatal(diff)
+	}
+}
+
+func (w *world) easyPayIdentityEditsFail(in MerchantInput, settings easyPaySettings) {
+	w.t.Helper()
+	for _, edit := range []func(*easyPaySettings){
+		func(s *easyPaySettings) { s.Gateway = "https://different.example.com" },
+		func(s *easyPaySettings) { s.PID = "other-merchant" },
+		func(s *easyPaySettings) { s.SignType = "other-signature" },
+	} {
+		changed := settings
+		edit(&changed)
+		candidate := in
+		candidate.Settings = easyPayJSON(w.t, changed)
+		if _, err := w.save(siteScope(w.siteA), candidate); !isField(err, "/settings") {
+			w.t.Fatalf("identity update with pending orders: %v", err)
+		}
+	}
 }

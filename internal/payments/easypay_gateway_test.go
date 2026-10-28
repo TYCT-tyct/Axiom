@@ -23,7 +23,7 @@ import (
 
 func easyPayServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
-	s := httptest.NewServer(handler)
+	s := httptest.NewTLSServer(handler)
 	t.Cleanup(s.Close)
 	return s
 }
@@ -83,9 +83,10 @@ func TestEasyPayRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.NotifyURL = "https://callbacks.example.com/notify"
+	request := easyPayRequest(t)
+	request.NotifyURL = "https://callbacks.example.com/notify"
 	c := easyPayOpen(t, cfg)
-	result, err := c.Create(t.Context(), easyPayRequest(t))
+	result, err := c.Create(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ func TestEasyPayRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Path != "/prefix/submit.php" || u.Query().Get("notify_url") != cfg.NotifyURL || u.Query().Get("sign") != epaySignature(u.Query(), theKey) || u.Query().Has("clientip") || result.TradeNo != "" {
+	if u.Path != "/prefix/submit.php" || u.Query().Get("notify_url") != request.NotifyURL || u.Query().Get("sign") != epaySignature(u.Query(), theKey) || u.Query().Has("clientip") || result.TradeNo != "" {
 		t.Fatal("wrong redirect parameters")
 	}
 }
@@ -113,10 +114,13 @@ func TestEasyPayQueryResponses(t *testing.T) {
 		{"wrong order", `{"code":1,"status":1,"out_trade_no":"different"}`, PayPending, 0, true},
 		{"wrong nested order", `{"code":1,"out_trade_no":"order","data":{"out_trade_no":"different"}}`, PayPending, 0, true},
 		{"status precedence", `{"code":1,"trade_status":"WAIT_BUYER_PAY","status":1,"money":"100.00"}`, PayPending, 10000, false},
-		{"top precedence", `{"status":"0","money":"0","data":{"status":"1","money":"100.00"}}`, PayPending, 0, false},
+		{"top precedence", `{"status":"0","money":"0","data":{"status":"1","money":"100.00"}}`, PayPending, -1, false},
 		{"precision", `{"status":1,"money":"100.001","trade_no":"T1"}`, PayPaid, -1, false},
+		{"zero amount", `{"status":1,"money":"0.00","trade_no":"T1"}`, PayPaid, -1, false},
+		{"formatted amount", `{"status":1,"money":"1,000.00","trade_no":"T1"}`, PayPaid, -1, false},
+		{"empty trade status", `{"trade_status":"","status":"1","money":"100.00","trade_no":"T1"}`, PayPaid, 10000, false},
 		{"missing amount", `{"status":1,"trade_no":"T1"}`, PayPaid, 0, false},
-		{"bad amount", `{"status":1,"money":"1e2"}`, PayPending, 0, true},
+		{"bad amount", `{"status":1,"money":"1e2"}`, PayPaid, -1, false},
 		{"fractional code", `{"code":1.1,"status":1}`, PayPending, 0, true},
 		{"duplicate code", `{"code":0,"code":1,"status":1}`, PayPending, 0, true},
 		{"bool code", `{"code":true,"status":1}`, PayPending, 0, true},
@@ -126,7 +130,7 @@ func TestEasyPayQueryResponses(t *testing.T) {
 			want := url.Values{"act": {"order"}, "pid": {"1001"}, "key": {theKey}, "out_trade_no": {"order"}}
 			response := easyPayAPIResponse{t: t, body: tc.body, form: want, query: want}
 			gateway := easyPayServer(t, response.ServeHTTP)
-			c := easyPayOpen(t, easyPayConfig(t, gateway.URL))
+			c := easyPayOpen(t, easyPayConfig(t, gateway.URL, gateway.Certificate()))
 			got, err := c.Query(t.Context(), "order", "ignored-trade")
 			if (err != nil) != tc.bad {
 				t.Fatalf("query error %v, want bad=%v", err, tc.bad)
@@ -168,7 +172,7 @@ func TestEasyPayRefundResponsesAndFallback(t *testing.T) {
 			r := RefundCall{Order: easyPayRequest(t).Order, TradeNo: "T1", Amount: Money{currency(t, "CNY"), 1234}}
 			response := easyPayRefundGateway{t: t, calls: &calls, order: r.Order, body: tc.body, status: tc.httpStatus}
 			gateway := easyPayServer(t, response.ServeHTTP)
-			got, err := easyPayOpen(t, easyPayConfig(t, gateway.URL)).Refund(t.Context(), r)
+			got, err := easyPayOpen(t, easyPayConfig(t, gateway.URL, gateway.Certificate())).Refund(t.Context(), r)
 			var rejected *Rejected
 			if diff := cmp.Diff([]bool{tc.success, tc.rejected}, []bool{err == nil, errors.As(err, &rejected)}); diff != "" {
 				t.Fatalf("%s: %v", diff, err)
@@ -211,8 +215,8 @@ func TestEasyPayEgressBoundsAndRedaction(t *testing.T) {
 			easyPayWrite(t, w, `{"code":"`+theKey+`"}`)
 		}
 	})
-	cfg := easyPayConfig(t, gateway.URL)
-	client := egress.NewForTesting(egresstest.Loopback(t), egress.WithTracerProvider(tp))
+	cfg := easyPayConfig(t, gateway.URL, gateway.Certificate())
+	client := egress.NewForTesting(egresstest.Loopback(t, gateway.Certificate()), egress.WithTracerProvider(tp))
 	t.Cleanup(client.CloseIdleConnections)
 	cfg.Client = client
 	c := easyPayOpen(t, cfg)
@@ -254,13 +258,15 @@ func TestEasyPayCreateRequest(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		want := url.Values{"pid": {"1001"}, "out_trade_no": {request.Order.TypeID()}, "money": {"123.45"}, "type": {"ali"}, "cid": {"2"}, "device": {"mobile"}, "clientip": {"203.0.113.7"}, "name": {request.Subject}, "return_url": {request.ReturnURL}, "notify_url": {"https://console.example.com/api/payments/v1/notify/" + cfg.ID.TypeID()}, "sign_type": {"MD5"}}
+		want := url.Values{"pid": {"1001"}, "out_trade_no": {request.Order.TypeID()}, "money": {"123.45"}, "type": {"ali"}, "cid": {"2"}, "device": {"mobile"}, "clientip": {"203.0.113.7"}, "name": {request.Subject}, "return_url": {request.ReturnURL}, "notify_url": {request.NotifyURL}, "sign_type": {"MD5"}}
 		want.Set("sign", epaySignature(want, theKey))
 		if diff := cmp.Diff(want, r.PostForm); diff != "" {
 			t.Error(diff)
 		}
 		easyPayWrite(t, w, `{"code":1,"trade_no":"T1","payurl":"https://pay.example.com/pay"}`)
 	})
+	cfg.Client = egress.NewForTesting(egresstest.Loopback(t, gateway.Certificate()))
+	t.Cleanup(cfg.Client.CloseIdleConnections)
 	cfg.Settings = []byte(strings.ReplaceAll(string(cfg.Settings), "https://pay.example.com", gateway.URL+"/prefix/submit.php?discard=x"))
 	result, err := easyPayOpen(t, cfg).Create(t.Context(), request)
 	if err != nil {
@@ -341,7 +347,7 @@ func TestEasyPayCloseResponses(t *testing.T) {
 		want := url.Values{"act": {"close"}, "pid": {"1001"}, "key": {theKey}, "out_trade_no": {order.TypeID()}}
 		response := easyPayAPIResponse{t: t, body: body, form: want, query: want}
 		gateway := easyPayServer(t, response.ServeHTTP)
-		err := easyPayOpen(t, easyPayConfig(t, gateway.URL)).Close(t.Context(), order, "ignored-trade")
+		err := easyPayOpen(t, easyPayConfig(t, gateway.URL, gateway.Certificate())).Close(t.Context(), order, "ignored-trade")
 		if (err == nil) != (body == `{"code":"1"}`) {
 			t.Fatal("close result", err)
 		}

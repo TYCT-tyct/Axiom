@@ -205,7 +205,7 @@ func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput,
 		return 0, &FieldError{"/kind", "cannot change"}
 	}
 	in.Site = r.SiteID
-	if err = checkIdentity(ctx, tx, r, *in, settings); err != nil {
+	if err = checkIdentity(ctx, tx, r, *in, settings, p.plugins[in.Kind]); err != nil {
 		return 0, err
 	}
 	if in.Secrets == nil {
@@ -219,7 +219,7 @@ func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput,
 // checkIdentity refuses a change of what a merchant account is while one of its orders is still in flight: the keys,
 // the gateway address and the currency it is paid in must keep working for that order, and the same account must be
 // what the callback and the query reach (docs/domains/payments.md「后台配置」).
-func checkIdentity(ctx context.Context, tx pg.Tx, stored LockMerchantRow, in MerchantInput, settings []byte) error {
+func checkIdentity(ctx context.Context, tx pg.Tx, stored LockMerchantRow, in MerchantInput, settings []byte, plugin Plugin) error {
 	open, err := queries.OpenMerchantOrders(ctx, tx, uuid.UUID(in.ID))
 	if err != nil {
 		return fmt.Errorf("payments: read the merchant account's orders in flight: %w", err)
@@ -227,11 +227,15 @@ func checkIdentity(ctx context.Context, tx pg.Tx, stored LockMerchantRow, in Mer
 	if !open {
 		return nil
 	}
+	same, err := sameSettingsIdentity(plugin, []byte(stored.Settings), settings)
+	if err != nil {
+		return err
+	}
 	var field string
 	switch {
 	case stored.Currency != in.Currency.String():
 		field = "/currency"
-	case stored.Settings != string(settings):
+	case !same:
 		field = "/settings"
 	case in.Secrets != nil:
 		field = "/secrets"
@@ -241,6 +245,21 @@ func checkIdentity(ctx context.Context, tx pg.Tx, stored LockMerchantRow, in Mer
 	return &FieldError{field, "cannot change while the merchant account has orders still in flight"}
 }
 
+func sameSettingsIdentity(plugin Plugin, before, after []byte) (bool, error) {
+	if identity, ok := plugin.(interface{ identitySettings([]byte) ([]byte, error) }); ok {
+		var err error
+		before, err = identity.identitySettings(before)
+		if err != nil {
+			return false, err
+		}
+		after, err = identity.identitySettings(after)
+		if err != nil {
+			return false, err
+		}
+	}
+	return string(before) == string(after), nil
+}
+
 // validate has the plugin open the configuration it would run with; every method must be one the channel offers.
 func (p *Payments) validate(plugin Plugin, in MerchantInput, settings []byte) error {
 	ch, err := plugin.Open(MerchantConfig{ID: in.ID, Currency: in.Currency, Settings: settings, Secrets: in.Secrets, Client: p.client})
@@ -248,7 +267,7 @@ func (p *Payments) validate(plugin Plugin, in MerchantInput, settings []byte) er
 		return &FieldError{"/settings", err.Error()}
 	}
 	for i, m := range in.Methods {
-		if !slices.Contains(ch.Methods(), m.Method) {
+		if methods := ch.Methods(); methods != nil && !slices.Contains(methods, m.Method) {
 			return &FieldError{fmt.Sprintf("/methods/%d/method", i), "is not offered by this channel"}
 		}
 	}

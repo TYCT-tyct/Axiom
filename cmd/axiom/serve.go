@@ -376,7 +376,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
 	pay, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: []payments.Plugin{payments.EasyPay{}}, Proxies: p.cfg.trustedProxies,
+		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins, Proxies: p.cfg.trustedProxies,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
@@ -436,7 +436,7 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 	// Orders past their deadline expire every minute, on whichever node leads the queue
 	// (docs/domains/payments.md「补单与过期」). Callbacks and polling register the same protocol plugins.
 	store, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger, Plugins: []payments.Plugin{payments.EasyPay{}},
+		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger, Plugins: paymentPlugins,
 	})
 	if err != nil {
 		return nil, err

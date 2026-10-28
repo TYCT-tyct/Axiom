@@ -46,9 +46,8 @@ type Plugin interface {
 
 // MerchantConfig is what a plugin gets of a merchant: never the database, so state and money stay in the core.
 type MerchantConfig struct {
-	ID        MerchantID
-	Currency  platform.Currency
-	NotifyURL string // the callback address on the site's domain; empty while a save is being validated
+	ID       MerchantID
+	Currency platform.Currency
 	// Settings is canonical JSON the plugin defines and parses strictly; the core has checked its hash against the one
 	// sealed with the secrets.
 	Settings []byte
@@ -60,7 +59,7 @@ type MerchantConfig struct {
 // may hold the merchant's key. An error that is not *Rejected means the outcome is unknown.
 type Channel interface {
 	Caps() Caps
-	Methods() []Method
+	Methods() []Method // nil permits any configured method; otherwise the list is exhaustive
 	Create(ctx context.Context, r CreateRequest) (Checkout, error)
 	Verify(ctx context.Context, c Callback) (Notice, error)
 	Query(ctx context.Context, outTradeNo, tradeNo string) (Payment, error)
@@ -70,13 +69,18 @@ type Channel interface {
 	Ack(ok bool) (status int, body []byte)
 }
 
-// CreateRequest asks the channel for a checkout; the core builds ReturnURL from the site's domain.
+// NotifyPath is shared by core URL generation and the running program's callback routes.
+const NotifyPath = "/api/payments/v1/notify/"
+
+// CreateRequest carries the merchant mapping and server-generated addresses to the channel.
 type CreateRequest struct {
 	Order     OrderID
 	Method    Method
+	Upstream  string // the configured merchant method mapping
 	Total     Money
 	Subject   string
 	ReturnURL string
+	NotifyURL string // built by the core from the server-provided site origin
 	ClientIP  netip.Addr
 	Mobile    bool
 }

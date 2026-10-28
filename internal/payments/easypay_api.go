@@ -142,10 +142,7 @@ func (c *easyPayChannel) payment(r easyPayOrderResponse, order string) (Payment,
 	if err != nil {
 		return Payment{}, err
 	}
-	amount, err := easyPayMinor(text, digits(c.currency))
-	if err != nil {
-		return Payment{}, err
-	}
+	amount := easyPayMinor(text, digits(c.currency))
 	state := PayPending
 	if paid {
 		state = PayPaid
@@ -158,15 +155,11 @@ func easyPayPaid(r easyPayOrderResponse) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	paid := status == "TRADE_SUCCESS"
-	if len(easyPayPick(r.TradeStatus, r.Data.TradeStatus)) == 0 || string(easyPayPick(r.TradeStatus, r.Data.TradeStatus)) == "null" {
-		status, err = easyPayScalar(easyPayPick(r.Status, r.Data.Status))
-		if err != nil {
-			return false, err
-		}
-		paid = status == "1"
+	if status != "" {
+		return status == "TRADE_SUCCESS", nil
 	}
-	return paid, nil
+	status, err = easyPayScalar(easyPayPick(r.Status, r.Data.Status))
+	return status == "1", err
 }
 
 func (c *easyPayChannel) Close(ctx context.Context, order OrderID, _ string) error {

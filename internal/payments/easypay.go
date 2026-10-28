@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 
 	"axiom/internal/platform"
@@ -31,30 +30,42 @@ func (EasyPay) normalizeSettings(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	s.Gateway = base
+	if s.SignType == "" {
+		s.SignType = "MD5"
+	}
 	return jsonx.MarshalCanonical(s)
 }
 
-type easyPayMethod struct {
-	Type string `json:"type"`
-	CID  string `json:"cid,omitempty"`
+// identitySettings keeps protocol identity fixed while allowing operational settings to change.
+func (EasyPay) identitySettings(raw []byte) ([]byte, error) {
+	var s easyPaySettings
+	if err := jsonx.UnmarshalKnown(raw, &s); err != nil {
+		return nil, errors.New("easypay: invalid identity settings")
+	}
+	if s.SignType == "" {
+		s.SignType = "MD5"
+	}
+	return jsonx.MarshalCanonical(struct {
+		Gateway  string
+		PID      string
+		SignType string
+	}{s.Gateway, s.PID, s.SignType})
 }
 
 type easyPaySettings struct {
-	Gateway  string                   `json:"gateway"`
-	PID      string                   `json:"pid"`
-	Mode     string                   `json:"mode"`
-	SignType string                   `json:"sign_type,omitempty"`
-	Methods  map[Method]easyPayMethod `json:"methods"`
-	Query    bool                     `json:"query,omitempty"`
-	Close    bool                     `json:"close,omitempty"`
-	Refund   bool                     `json:"refund,omitempty"`
+	Gateway  string            `json:"gateway"`
+	PID      string            `json:"pid"`
+	Mode     string            `json:"mode"`
+	SignType string            `json:"sign_type,omitempty"`
+	CIDs     map[Method]string `json:"cids,omitempty"`
+	Query    bool              `json:"query,omitempty"`
+	Close    bool              `json:"close,omitempty"`
+	Refund   bool              `json:"refund,omitempty"`
 }
 
 type easyPayChannel struct {
 	settings    easyPaySettings
-	merchant    MerchantID
 	currency    platform.Currency
-	notifyURL   string
 	key, oldKey secret.Secret
 	client      *egress.Client
 }
@@ -76,22 +87,21 @@ func (EasyPay) Open(c MerchantConfig) (Channel, error) {
 	if c.Client == nil || c.Currency == (platform.Currency{}) || c.Secrets["key"].Reveal() == "" {
 		return nil, errors.New("easypay: require client, currency and key")
 	}
-	if c.NotifyURL != "" && !easyPayHTTPS(c.NotifyURL) {
-		return nil, errors.New("easypay: invalid notify URL")
+	for name := range c.Secrets {
+		if name != "key" && name != "old_key" {
+			return nil, errors.New("easypay: unknown secret name")
+		}
 	}
-	return &easyPayChannel{settings: s, merchant: c.ID, currency: c.Currency, notifyURL: c.NotifyURL, key: c.Secrets["key"], oldKey: c.Secrets["old_key"], client: c.Client}, nil
+	return &easyPayChannel{settings: s, currency: c.Currency, key: c.Secrets["key"], oldKey: c.Secrets["old_key"], client: c.Client}, nil
 }
 
 func (s easyPaySettings) check() error {
 	if !easyPayToken(s.PID) || (s.Mode != "redirect" && s.Mode != "api") || (s.SignType != "" && s.SignType != "MD5") {
 		return errors.New("easypay: require pid, mode redirect/api and MD5 signing")
 	}
-	if len(s.Methods) == 0 {
-		return errors.New("easypay: require payment method mappings")
-	}
-	for method, m := range s.Methods {
-		if !easyPayToken(string(method)) || !easyPayToken(m.Type) || (m.CID != "" && !easyPayToken(m.CID)) {
-			return errors.New("easypay: invalid method mapping")
+	for method, cid := range s.CIDs {
+		if !easyPayToken(string(method)) || !easyPayToken(cid) {
+			return errors.New("easypay: invalid channel ID")
 		}
 	}
 	return nil
@@ -103,7 +113,7 @@ func easyPayToken(s string) bool {
 
 func easyPayBase(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Hostname() == "" || u.User != nil || u.Opaque != "" || (u.Scheme != "https" && u.Scheme != "http") {
+	if err != nil || u.Hostname() == "" || u.User != nil || u.Opaque != "" || u.Scheme != "https" {
 		return "", errors.New("easypay: invalid gateway URL")
 	}
 	u.RawQuery, u.Fragment, u.RawFragment, u.RawPath = "", "", "", ""
@@ -137,24 +147,13 @@ func (c *easyPayChannel) Caps() Caps {
 	return caps
 }
 
-func (c *easyPayChannel) Methods() []Method {
-	methods := make([]Method, 0, len(c.settings.Methods))
-	for method := range c.settings.Methods {
-		methods = append(methods, method)
-	}
-	slices.Sort(methods)
-	return methods
-}
+func (*easyPayChannel) Methods() []Method { return nil }
 
 func (c *easyPayChannel) Create(ctx context.Context, r CreateRequest) (Checkout, error) {
-	m, ok := c.settings.Methods[r.Method]
-	if !ok || r.Total.Currency != c.currency || r.Total.Minor <= 0 || !easyPayHTTPS(r.ReturnURL) {
+	if !easyPayToken(r.Upstream) || r.Total.Currency != c.currency || r.Total.Minor <= 0 || !easyPayHTTPS(r.ReturnURL) {
 		return Checkout{}, &Rejected{Code: "invalid_order", Message: "invalid method, amount or return URL"}
 	}
-	v, err := c.createParams(r, m)
-	if err != nil {
-		return Checkout{}, err
-	}
+	v := c.createParams(r)
 	if c.settings.Mode == "redirect" {
 		result := Checkout{PayURL: c.settings.Gateway + "/submit.php?" + v.Encode()}
 		return easyPayCheckout(result)
@@ -166,18 +165,10 @@ func (c *easyPayChannel) Create(ctx context.Context, r CreateRequest) (Checkout,
 	return c.createResponse(body, r.Mobile)
 }
 
-func (c *easyPayChannel) createParams(r CreateRequest, m easyPayMethod) (url.Values, error) {
-	notify := c.notifyURL
-	if notify == "" {
-		u, err := url.Parse(r.ReturnURL)
-		if err != nil {
-			return nil, errors.New("easypay: invalid return URL")
-		}
-		notify = (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/api/payments/v1/notify/" + c.merchant.TypeID()}).String()
-	}
-	v := url.Values{"pid": {c.settings.PID}, "type": {m.Type}, "out_trade_no": {r.Order.TypeID()}, "notify_url": {notify}, "return_url": {r.ReturnURL}, "name": {r.Subject}, "money": {easyPayFormat(r.Total)}}
-	if m.CID != "" {
-		v.Set("cid", m.CID)
+func (c *easyPayChannel) createParams(r CreateRequest) url.Values {
+	v := url.Values{"pid": {c.settings.PID}, "type": {r.Upstream}, "out_trade_no": {r.Order.TypeID()}, "notify_url": {r.NotifyURL}, "return_url": {r.ReturnURL}, "name": {r.Subject}, "money": {easyPayFormat(r.Total)}}
+	if cid := c.settings.CIDs[r.Method]; cid != "" {
+		v.Set("cid", cid)
 	}
 	if r.Mobile {
 		v.Set("device", "mobile")
@@ -187,7 +178,7 @@ func (c *easyPayChannel) createParams(r CreateRequest, m easyPayMethod) (url.Val
 	}
 	v.Set("sign", easyPaySign(v, c.key.Reveal()))
 	v.Set("sign_type", "MD5")
-	return v, nil
+	return v
 }
 
 func (c *easyPayChannel) createResponse(body []byte, mobile bool) (Checkout, error) {

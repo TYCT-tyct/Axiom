@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"crypto/x509"
 	"errors"
 	"net/http"
 	"net/netip"
@@ -15,14 +16,14 @@ import (
 	"axiom/internal/platform/secret"
 )
 
-func easyPayConfig(t *testing.T, gateway string) MerchantConfig {
+func easyPayConfig(t *testing.T, gateway string, certificates ...*x509.Certificate) MerchantConfig {
 	t.Helper()
-	s := easyPaySettings{Gateway: gateway, PID: "1001", Mode: "api", Methods: map[Method]easyPayMethod{"alipay": {Type: "ali", CID: "2"}, "wxpay": {Type: "wxpay"}}, Query: true, Close: true, Refund: true}
+	s := easyPaySettings{Gateway: gateway, PID: "1001", Mode: "api", CIDs: map[Method]string{"alipay": "2"}, Query: true, Close: true, Refund: true}
 	raw, err := jsonx.MarshalCanonical(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := egress.NewForTesting(egresstest.Loopback(t))
+	client := egress.NewForTesting(egresstest.Loopback(t, certificates...))
 	t.Cleanup(client.CloseIdleConnections)
 	return MerchantConfig{ID: MerchantID(uuid.NewV7()), Currency: currency(t, "CNY"), Settings: raw, Secrets: map[string]secret.Secret{"key": secret.New(theKey)}, Client: client}
 }
@@ -37,7 +38,7 @@ func easyPayOpen(t *testing.T, cfg MerchantConfig) Channel {
 }
 
 func easyPayRequest(t *testing.T) CreateRequest {
-	return CreateRequest{Order: OrderID(uuid.NewV7()), Method: "alipay", Total: Money{currency(t, "CNY"), 12345}, Subject: "Top-up & credits", ReturnURL: "https://console.example.com/topup?order=test", ClientIP: netip.MustParseAddr("203.0.113.7"), Mobile: true}
+	return CreateRequest{Order: OrderID(uuid.NewV7()), Method: "alipay", Upstream: "ali", NotifyURL: "https://callbacks.example.com/generated", Total: Money{currency(t, "CNY"), 12345}, Subject: "Top-up & credits", ReturnURL: "https://console.example.com/topup?order=test", ClientIP: netip.MustParseAddr("203.0.113.7"), Mobile: true}
 }
 
 func TestEasyPaySignatureVectors(t *testing.T) {
@@ -67,7 +68,7 @@ func TestEasyPaySignatureVectors(t *testing.T) {
 func TestEasyPayConfiguration(t *testing.T) {
 	cfg := easyPayConfig(t, "https://pay.example.com/prefix/MAPI.php/?key=discard#fragment")
 	c := easyPayOpen(t, cfg)
-	if (EasyPay{}).Kind() != "easypay" || c.(*easyPayChannel).settings.Gateway != "https://pay.example.com/prefix" || c.Caps() != CapQuery|CapClose|CapRefund || len(c.Methods()) != 2 {
+	if (EasyPay{}).Kind() != "easypay" || c.(*easyPayChannel).settings.Gateway != "https://pay.example.com/prefix" || c.Caps() != CapQuery|CapClose|CapRefund || c.Methods() != nil {
 		t.Fatalf("binding: %+v", c)
 	}
 	for name, edit := range map[string]func(*MerchantConfig, *easyPaySettings){
@@ -78,17 +79,13 @@ func TestEasyPayConfiguration(t *testing.T) {
 		"pid":                 func(_ *MerchantConfig, s *easyPaySettings) { s.PID = "1&x=2" },
 		"mode":                func(_ *MerchantConfig, s *easyPaySettings) { s.Mode = "popup" },
 		"signature":           func(_ *MerchantConfig, s *easyPaySettings) { s.SignType = "SHA256" },
-		"methods":             func(_ *MerchantConfig, s *easyPaySettings) { s.Methods = nil },
-		"upstream": func(_ *MerchantConfig, s *easyPaySettings) {
-			s.Methods["alipay"] = easyPayMethod{Type: "x&trade_status=TRADE_SUCCESS"}
-		},
-		"cid": func(_ *MerchantConfig, s *easyPaySettings) {
-			s.Methods["alipay"] = easyPayMethod{Type: "ali", CID: "1=x"}
-		},
-		"key":      func(c *MerchantConfig, _ *easyPaySettings) { c.Secrets = nil },
-		"currency": func(c *MerchantConfig, _ *easyPaySettings) { c.Currency = Money{}.Currency },
-		"client":   func(c *MerchantConfig, _ *easyPaySettings) { c.Client = nil },
-		"notify":   func(c *MerchantConfig, _ *easyPaySettings) { c.NotifyURL = "http://console.example.com/notify" },
+		"http gateway":        func(_ *MerchantConfig, s *easyPaySettings) { s.Gateway = "http://pay.example.com" },
+		"cid":                 func(_ *MerchantConfig, s *easyPaySettings) { s.CIDs["alipay"] = "1=x" },
+		"unknown secret":      func(c *MerchantConfig, _ *easyPaySettings) { c.Secrets["oldkey"] = secret.New("previous-test-key") },
+		"hyphenated secret":   func(c *MerchantConfig, _ *easyPaySettings) { c.Secrets["old-key"] = secret.New("previous-test-key") },
+		"key":                 func(c *MerchantConfig, _ *easyPaySettings) { c.Secrets = nil },
+		"currency":            func(c *MerchantConfig, _ *easyPaySettings) { c.Currency = Money{}.Currency },
+		"client":              func(c *MerchantConfig, _ *easyPaySettings) { c.Client = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := cfg
@@ -112,41 +109,42 @@ func TestEasyPayExactAmounts(t *testing.T) {
 	for _, tc := range []struct {
 		text, code string
 		want       int64
-		bad        bool
 	}{
-		{"100.0000", "CNY", 10000, false},
-		{"0.01", "CNY", 1, false},
-		{"0001.2000", "CNY", 120, false},
-		{"1.001", "CNY", -1, false},
-		{"92233720368547758.07", "CNY", 9223372036854775807, false},
-		{"92233720368547758.08", "CNY", -1, false},
-		{"999999999999999999999999", "CNY", -1, false},
-		{"0", "JPY", 0, false},
-		{"100.000", "JPY", 100, false},
-		{"1.1", "JPY", -1, false},
-		{"1.0010", "KWD", 1001, false},
-		{"1.0001", "KWD", -1, false},
-		{"", "CNY", 0, false},
-		{"1e2", "CNY", 0, true},
-		{"NaN", "CNY", 0, true},
-		{"-1", "CNY", 0, true},
-		{"+1", "CNY", 0, true},
-		{"1/2", "CNY", 0, true},
-		{".5", "CNY", 0, true},
-		{"1.", "CNY", 0, true},
-		{"1.2.3", "CNY", 0, true},
-		{"1 0", "CNY", 0, true},
+		{"100.0000", "CNY", 10000},
+		{"0.01", "CNY", 1},
+		{"0001.2000", "CNY", 120},
+		{"1.001", "CNY", -1},
+		{"92233720368547758.07", "CNY", 9223372036854775807},
+		{"92233720368547758.08", "CNY", -1},
+		{"999999999999999999999999", "CNY", -1},
+		{"0", "JPY", -1},
+		{"100.000", "JPY", 100},
+		{"1.1", "JPY", -1},
+		{"1.0010", "KWD", 1001},
+		{"1.0001", "KWD", -1},
+		{"", "CNY", 0},
+		{"0.00", "CNY", -1},
+		{"0.0000", "CNY", -1},
+		{"1,000.00", "CNY", -1},
+		{"1e3", "CNY", -1},
+		{"NaN", "CNY", -1},
+		{"-1", "CNY", -1},
+		{"+1", "CNY", -1},
+		{"1/2", "CNY", -1},
+		{".5", "CNY", -1},
+		{"1.", "CNY", -1},
+		{"1.2.3", "CNY", -1},
+		{"1 0", "CNY", -1},
 	} {
 		t.Run(tc.code+"/"+tc.text, func(t *testing.T) {
 			cur := currency(t, tc.code)
-			got, err := easyPayMinor(tc.text, digits(cur))
-			if (err != nil) != tc.bad || (!tc.bad && got != tc.want) {
-				t.Fatalf("amount %q = %d, %v; want %d bad=%v", tc.text, got, err, tc.want, tc.bad)
+			got := easyPayMinor(tc.text, digits(cur))
+			if got != tc.want {
+				t.Fatalf("amount %q = %d, want %d", tc.text, got, tc.want)
 			}
-			if got >= 0 && err == nil {
-				round, err := easyPayMinor(easyPayFormat(Money{cur, got}), digits(cur))
-				if err != nil || round != got {
-					t.Fatal("round-trip", round, err)
+			if got > 0 {
+				if round := easyPayMinor(easyPayFormat(Money{cur, got}), digits(cur)); round != got {
+					t.Fatal("round-trip", round)
 				}
 			}
 		})
@@ -194,7 +192,6 @@ func TestEasyPayCallbackSecurity(t *testing.T) {
 		},
 		"duplicate":       func(v url.Values) { v.Add("money", "100.00") },
 		"wrong sign type": func(v url.Values) { v.Set("sign_type", "SHA256") },
-		"invalid money":   func(v url.Values) { v.Set("money", "1e2"); v.Set("sign", epaySignature(v, theKey)) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := easyPayNoticeValues()
