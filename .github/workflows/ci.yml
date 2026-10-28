@@ -122,12 +122,25 @@ jobs:
     needs: changes
     if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
+      # Keep disabling Ryuk in the same job that supplies its replacement cleanup; runner .env owns the cgroup.
+      - name: Configure test container policy
+        run: |
+          echo "AXIOM_TEST_JOB=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB" >> "$GITHUB_ENV"
+          if [ -n "${AXIOM_TEST_CGROUP_PARENT:-}" ]; then
+            echo "TESTCONTAINERS_RYUK_DISABLED=true" >> "$GITHUB_ENV"
+          fi
+      - name: Clean test containers before tests
+        run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
       - run: just test
+      - name: Clean test containers after tests
+        if: always()
+        run: bash scripts/ci/clean-test-containers.sh
 
   # Keep frontend checks parallel to the browser suite; neither waits for the other's build.
   web:
