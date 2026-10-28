@@ -104,11 +104,13 @@ func queueConfigs() map[string]river.QueueConfig {
 // write that causes it, so the job exists if and only if that write does. A job runs at least once, so a worker must
 // tolerate a repeat.
 type Queue struct {
-	db        *DB
-	scope     Scope // the queue's own table; jobs carry no tenant's rows
-	logger    *slog.Logger
-	workers   *river.Workers
-	periodic  []*river.PeriodicJob
+	db       *DB
+	scope    Scope // the queue's own table; jobs carry no tenant's rows
+	logger   *slog.Logger
+	workers  *river.Workers
+	periodic []*river.PeriodicJob
+	// OnDiscard persists an observer's result with the claim; install before Start.
+	OnDiscard func(context.Context, Tx, string, []byte) error
 	discarded metric.Int64Counter
 	client    atomic.Pointer[river.Client[pgx.Tx]]
 }
@@ -238,41 +240,48 @@ func (q *Queue) workDiscardedScan(ctx context.Context, _ *river.Job[discardedSca
 // and reported before this cleanup removes it.
 func (q *Queue) scanDiscarded(ctx context.Context) error {
 	err := q.db.Tx(ctx, q.scope, func(tx Tx) error {
-		rows, err := tx.Query(ctx, `INSERT INTO platform.discarded_jobs (job_id, kind, attempt)
-			SELECT id, kind, attempt FROM river.river_job WHERE state = 'discarded'
-			ON CONFLICT (job_id) DO NOTHING
-			RETURNING job_id, kind, attempt`)
-		if err != nil {
-			return fmt.Errorf("claim discarded jobs: %w", err)
-		}
-		for rows.Next() {
-			var d discardedJob
-			if err := rows.Scan(&d.id, &d.kind, &d.attempt); err != nil {
-				rows.Close()
-				return fmt.Errorf("read a discarded job: %w", err)
-			}
-			q.reportDiscarded(ctx, d)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return fmt.Errorf("read discarded jobs: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM river.river_job j
-			WHERE j.state = 'discarded'
-				AND j.finalized_at < now() - make_interval(hours => $1)
-				AND EXISTS (SELECT FROM platform.discarded_jobs s WHERE s.job_id = j.id)`,
-			int32(discardedRetention.Hours())); err != nil {
-			return fmt.Errorf("delete reported discards: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM platform.discarded_jobs s
-			WHERE NOT EXISTS (SELECT FROM river.river_job j WHERE j.id = s.job_id)`); err != nil {
-			return fmt.Errorf("delete claims whose job is gone: %w", err)
-		}
-		return nil
+		return q.scanDiscardedTx(ctx, tx)
 	})
 	if err != nil {
 		return fmt.Errorf("scan discarded jobs: %w", err)
+	}
+	return nil
+}
+
+func (q *Queue) scanDiscardedTx(ctx context.Context, tx Tx) error {
+	rows, err := tx.Query(ctx, `INSERT INTO platform.discarded_jobs (job_id, kind, attempt)
+			SELECT id, kind, attempt FROM river.river_job WHERE state = 'discarded'
+			ON CONFLICT (job_id) DO NOTHING
+			RETURNING job_id, kind, attempt`)
+	if err != nil {
+		return fmt.Errorf("claim discarded jobs: %w", err)
+	}
+	for rows.Next() {
+		var d discardedJob
+		if err := rows.Scan(&d.id, &d.kind, &d.attempt); err != nil {
+			rows.Close()
+			return fmt.Errorf("read a discarded job: %w", err)
+		}
+		q.reportDiscarded(ctx, d)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return fmt.Errorf("read discarded jobs: %w", err)
+	}
+	if err := q.observeDiscards(ctx, tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM river.river_job j
+			WHERE j.state = 'discarded'
+				AND j.finalized_at < now() - make_interval(hours => $1)
+				AND EXISTS (SELECT FROM platform.discarded_jobs s WHERE s.job_id = j.id)`,
+		int32(discardedRetention.Hours())); err != nil {
+		return fmt.Errorf("delete reported discards: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM platform.discarded_jobs s
+			WHERE NOT EXISTS (SELECT FROM river.river_job j WHERE j.id = s.job_id)`); err != nil {
+		return fmt.Errorf("delete claims whose job is gone: %w", err)
 	}
 	return nil
 }
@@ -333,4 +342,43 @@ func newDiscardedCounter(meter metric.Meter) metric.Int64Counter {
 		panic(err) // the instrument name is a constant
 	}
 	return c
+}
+
+func (q *Queue) observeDiscards(ctx context.Context, tx Tx) error {
+	if q.OnDiscard == nil {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT s.job_id,s.kind,j.args FROM platform.discarded_jobs s JOIN river.river_job j ON j.id=s.job_id WHERE NOT s.notified FOR UPDATE OF s SKIP LOCKED`)
+	if err != nil {
+		return err
+	}
+	type notice struct {
+		id   int64
+		kind string
+		args []byte
+	}
+	var notices []notice
+	for rows.Next() {
+		var n notice
+		if err = rows.Scan(&n.id, &n.kind, &n.args); err != nil {
+			break
+		}
+		notices = append(notices, n)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, n := range notices {
+		if err = q.OnDiscard(ctx, tx, n.kind, n.args); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE platform.discarded_jobs SET notified=true WHERE job_id=$1`, n.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }

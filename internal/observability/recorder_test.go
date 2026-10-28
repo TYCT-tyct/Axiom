@@ -207,6 +207,9 @@ func TestFullQueueDropsWithoutBlocking(t *testing.T) {
 		t.Fatal("Enqueue blocked on a full queue")
 	}
 
+	if depth, lost := r.AlertSample(); depth != 3 || lost != 1 {
+		t.Fatalf("alert sample depth=%d lost=%d", depth, lost)
+	}
 	s.open()
 	err := r.Close(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "1 call records") || !strings.Contains(err.Error(), "2 attempts") {

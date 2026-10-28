@@ -21,10 +21,12 @@ import (
 func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
+		"mail.send_tracked":     QueueNotifications,
 		"billing.expire_credit": QueueMoney,
 		"billing.reconcile":     QueueMoney,
 		"catalog.sync":          QueueSyncs,
 		"mail.send":             QueueNotifications,
+		"observability.alerts":  QueueNotifications,
 		"payments.poll":         QueueMoney,
 		"queue.discard_scan":    QueueArchive,
 		"suppliers.reconcile":   QueueMoney,
