@@ -324,17 +324,21 @@ func TestCallbackPollAndVerifyRace(t *testing.T) {
 	go func() {
 		r := w.callback(o.MerchantID, http.MethodGet, callbackValues(o))
 		if r.Code != 200 {
+			if r.Code == http.StatusBadGateway {
+				done <- ErrQueryPaused
+				return
+			}
 			done <- fmt.Errorf("callback %d", r.Code)
 			return
 		}
 		done <- nil
 	}()
-	for range 3 {
+	for range 2 {
 		<-entered
 	}
 	close(release)
 	for range 3 {
-		if err := <-done; err != nil {
+		if err := <-done; err != nil && !errors.Is(err, ErrQueryPaused) {
 			t.Fatal(err)
 		}
 	}

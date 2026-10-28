@@ -440,13 +440,7 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 	}
 	// Orders past their deadline expire every minute, on whichever node leads the queue
 	// (docs/domains/payments.md「补单与过期」). Callbacks and polling register the same protocol plugins.
-	store, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger, Plugins: paymentPlugins,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if err = payments.RegisterPoll(payments.PollConfig{Payments: store, Queue: queue, Logger: logger}); err != nil {
+	if err = registerPaymentJobs(db, keys, exit, logger, queue); err != nil {
 		return nil, err
 	}
 	if err := queue.Start(ctx); err != nil {

@@ -40,7 +40,7 @@ type Config struct {
 	Keyring  *secret.Keyring
 	Client   *egress.Client // what channels reach their gateways through
 	Plugins  []Plugin       // one per kind, compiled in
-	Logger   *slog.Logger   // where alerts go; default slog.Default()
+	Logger   *slog.Logger   // diagnostics; durable alerts use platform signals; default slog.Default()
 	Proxies  []netip.Prefix // only these peers may supply a callback's source address
 }
 

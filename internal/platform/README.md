@@ -174,7 +174,9 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 | `sites.manage`（已有）、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
 | 管理 | `users.view`、`suppliers.view`、`catalog.view`、`pricing.view` | 否 |
 
-控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。管理接口的处理器补上了：`accounts` 的站点设置读写、等级、用户和账户的读取、八个管理权限（见 accounts 的「管理接口」）；`billing` 的 `ReadCredit`（赠送批次）；平台的幂等键（`idem`）；`catalog` 的模型和参考价的读取、定价规则；`suppliers` 的管理操作与待映射队列；`billing` 的定价试算（`previewPricing`，经 `billing.SalePrices` 算出售价，`cost` 与 `margin_ratio` 要每端点的成本，随 M2 的路由端点一起加入）。
+控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。
+
+管理接口的处理器补上了：支付待处理记录的列表、详情和标记已调查（`api/admin.yaml` 的 Payments），三者都由平台 `sites.manage` 与 MFA 守卫，标记只写调查说明，不移动资金；`accounts` 的站点设置读写、等级、用户和账户的读取、八个管理权限（见 accounts 的「管理接口」）；`billing` 的 `ReadCredit`（赠送批次）；平台的幂等键（`idem`）；`catalog` 的模型和参考价的读取、定价规则；`suppliers` 的管理操作与待映射队列；`billing` 的定价试算（`previewPricing`，经 `billing.SalePrices` 算出售价，`cost` 与 `margin_ratio` 要每端点的成本，随 M2 的路由端点一起加入）。
 
 M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）、审核项、声明式适配器、调用详情里的尝试与路由、额度批次与来源、预设、用量统计、站长的站点管理。
 

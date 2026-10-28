@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 	"uuid"
 
@@ -56,22 +57,37 @@ func queryPayment(ctx context.Context, ch Channel, order, trade string) (Payment
 }
 
 func (p *Payments) queryOrder(ctx context.Context, o Order) error {
-	ch, err := p.channelOf(ctx, o.MerchantID)
+	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
+	defer cancel()
+	token, err := p.acquireQuery(ctx, o.MerchantID)
 	if err != nil {
 		return err
 	}
-	if !ch.Caps().Has(CapQuery) {
-		return nil
-	}
-	paid, err := queryPayment(ctx, ch, o.ID.TypeID(), o.TradeNo)
+	return p.queryWithToken(ctx, o, token)
+}
+
+func (p *Payments) queryWithToken(ctx context.Context, o Order, token uuid.UUID) error {
+	ch, err := p.channelOf(ctx, o.MerchantID)
+	var paid Payment
 	if err != nil {
-		return fmt.Errorf("%w: query the order: %w", ErrUnconfirmed, err)
+		return errors.Join(err, p.finishQuery(ctx, o.MerchantID, token, queryUnknown))
 	}
-	return p.receive(ctx, confirmed{merchant: o.MerchantID, order: o.ID.TypeID(), payment: paid, source: "query"})
+	if !ch.Caps().Has(CapQuery) {
+		return p.finishQuery(ctx, o.MerchantID, token, queryUnused)
+	}
+	paid, err = p.completeQuery(ctx, ch, o.MerchantID, token, o.ID.TypeID(), o.TradeNo)
+	if err != nil {
+		return err
+	}
+	err = p.receive(ctx, confirmed{merchant: o.MerchantID, order: o.ID.TypeID(), payment: paid, source: "query"})
+	if incompletePayment(paid) {
+		return errors.Join(ErrUnconfirmed, err)
+	}
+	return err
 }
 
 func (p *Payments) queryPending(ctx context.Context) error {
-	var due []uuid.UUID
+	var due []QueryOrdersRow
 	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) {
 		due, err = queries.QueryOrders(ctx, tx, expireBatch)
 		return err
@@ -79,13 +95,22 @@ func (p *Payments) queryPending(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("payments: read orders to query: %w", err)
 	}
-	for _, id := range due {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		p.pollOrder(ctx, OrderID(id))
+	groups := make(map[MerchantID][]OrderID)
+	for _, r := range due {
+		groups[MerchantID(r.MerchantID)] = append(groups[MerchantID(r.MerchantID)], OrderID(r.ID))
 	}
-	return nil
+	var workers sync.WaitGroup
+	for _, ids := range groups {
+		for worker := range min(2, len(ids)) {
+			workers.Go(func() {
+				for i := worker; i < len(ids) && ctx.Err() == nil; i += 2 {
+					p.pollOrder(ctx, ids[i])
+				}
+			})
+		}
+	}
+	workers.Wait()
+	return ctx.Err()
 }
 
 // pollOrder logs its own failure: one order's query must not stop the round.
@@ -99,8 +124,15 @@ func (p *Payments) queryScheduled(ctx context.Context, id OrderID) error {
 	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
 	defer cancel()
 	var o Order
+	if err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) { o, err = loadOrder(ctx, tx, id); return err }); err != nil {
+		return err
+	}
+	token, err := p.acquireQuery(ctx, o.MerchantID)
+	if err != nil {
+		return err
+	}
 	var claimed int64
-	err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) (err error) {
+	err = p.db.Tx(ctx, p.platform, func(tx pg.Tx) (err error) {
 		claimed, err = queries.ScheduleQuery(ctx, tx, uuid.UUID(id))
 		if err != nil || claimed == 0 {
 			return err
@@ -109,7 +141,21 @@ func (p *Payments) queryScheduled(ctx context.Context, id OrderID) error {
 		return err
 	})
 	if err != nil || claimed == 0 {
-		return err
+		return errors.Join(err, p.finishQuery(ctx, o.MerchantID, token, queryUnused))
 	}
-	return p.queryOrder(ctx, o)
+	return p.queryWithToken(ctx, o, token)
+}
+
+func (p *Payments) completeQuery(ctx context.Context, ch Channel, merchant MerchantID, token uuid.UUID, order, trade string) (Payment, error) {
+	paid, err := queryPayment(ctx, ch, order, trade)
+	var rejected *Rejected
+	outcome := queryKnown
+	if (err != nil && !errors.As(err, &rejected)) || incompletePayment(paid) {
+		outcome = queryUnknown
+	}
+	finishErr := p.finishQuery(ctx, merchant, token, outcome)
+	if err != nil {
+		return paid, errors.Join(fmt.Errorf("%w: query the order: %w", ErrUnconfirmed, err), finishErr)
+	}
+	return paid, finishErr
 }

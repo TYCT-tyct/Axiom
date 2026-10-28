@@ -6,6 +6,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
+	"axiom/internal/payments"
 	"axiom/internal/platform/idem"
 	"axiom/internal/suppliers"
 )
@@ -13,6 +14,7 @@ import (
 // adminRefusals are the refusals the admin API's modules make beyond those the console's do (refusals), tried after
 // them. A message is English for logs and developers and never repeats what the client sent.
 var adminRefusals = []refusal{
+	{payments.ErrInvestigated, http.StatusConflict, codeConflict, "this record was already investigated; read its saved note"},
 	{observability.ErrAlertConfiguration, http.StatusUnprocessableEntity, codeUnprocessable, "the alert configuration is invalid"},
 	{observability.ErrAlertRevision, http.StatusConflict, codeStaleRevision, "the alert configuration changed since it was read"},
 	{idem.ErrReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another request"},

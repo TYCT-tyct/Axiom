@@ -140,7 +140,14 @@ func TestPollQueryRoundReturnsCancellation(t *testing.T) {
 	if err := w.p.queryPending(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled query round returned %v", err)
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("queried %d orders after cancellation", calls.Load())
+	before := calls.Load()
+	if before < 1 || before > 2 {
+		t.Fatalf("in-flight queries=%d", before)
+	}
+	if err := w.p.queryPending(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if calls.Load() != before {
+		t.Fatal("a new query started after cancellation")
 	}
 }

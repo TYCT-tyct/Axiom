@@ -29,7 +29,90 @@ tags:
   - {name: Catalog, description: "Authors, models, their names, specs and reference prices."}
   - {name: Pricing, description: "Pricing rules and their preview."}
   - {name: Alerts, description: "Platform operations alert rules, channels, incidents and receipts."}
+  - {name: Payments, description: "Payment discrepancies and investigation notes."}
 paths:
+  /api/admin/v1/payments/discrepancies:
+    get:
+      operationId: listPaymentDiscrepancies
+      tags: [Payments]
+      summary: List payment records awaiting or completing investigation
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: before, in: query, schema: {$ref: "#/components/schemas/Uuid"}, description: "Return up to 100 records older than this ID."}
+        - {name: state, in: query, schema: {type: string, enum: [open, resolved]}, description: "Omit to list both states. Resolved means investigated only."}
+      responses:
+        "200":
+          description: The persisted payment investigation record.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentDiscrepancyList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/discrepancies/{discrepancy_id}:
+    get:
+      operationId: getPaymentDiscrepancy
+      tags: [Payments]
+      summary: Read a payment discrepancy
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: discrepancy_id, in: path, required: true, schema: {$ref: "#/components/schemas/Uuid"}}
+      responses:
+        "200":
+          description: The persisted payment investigation record.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentDiscrepancy"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/discrepancies/{discrepancy_id}/investigate:
+    post:
+      operationId: investigatePaymentDiscrepancy
+      tags: [Payments]
+      summary: Mark investigated with a note without moving funds
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: discrepancy_id, in: path, required: true, schema: {$ref: "#/components/schemas/Uuid"}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "201":
+          description: The persisted payment investigation record.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentDiscrepancy"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/alerts/configuration:
     get:
       operationId: getAlertConfiguration
@@ -1909,6 +1992,30 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    OrderId: {type: string, pattern: '^ord_[0-9a-hjkmnp-tv-z]{26}$', description: "A top-up order's ID (TypeID), also the order number the payment channel sees."}
+    MerchantId: {type: string, pattern: '^mch_[0-9a-hjkmnp-tv-z]{26}$', description: "A merchant account's ID (TypeID)."}
+    PaymentDiscrepancy:
+      type: object
+      description: "All fields optional during rolling deployment. Resolved records contain an investigation note, not a financial resolution."
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        order_id: {$ref: "#/components/schemas/OrderId"}
+        merchant_id: {$ref: "#/components/schemas/MerchantId"}
+        kind: {type: string}
+        state: {type: string, enum: [open, resolved]}
+        detail: {type: object, additionalProperties: true}
+        created_at: {type: string, format: date-time}
+        investigated_by: {type: string}
+        investigated_at: {type: string, format: date-time}
+        note: {type: string}
+    PaymentDiscrepancyList:
+      type: object
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PaymentDiscrepancy"}
     AlertConfiguration:
       type: object
       properties:
