@@ -13,13 +13,22 @@ import (
 	"axiom/internal/accounts"
 )
 
-// TestContractRules: the rules the program enforces are the ones the contract declares: all 23 operations, with the
-// level and permission each names, and whether it changes data.
+// TestContractRules: the rules the program enforces are the ones the contract declares: every operation of
+// api/console.yaml, with the level and permission each names, and whether it changes data. The count comes from the
+// contract's source, so adding an operation needs no edit here and two PRs adding operations do not conflict.
 func TestContractRules(t *testing.T) {
 	t.Parallel()
 	c := loadedContract(t)
-	if len(c.byPattern) != 23 {
-		t.Errorf("%d operations, want 23", len(c.byPattern))
+	source, err := openapi3.NewLoader().LoadFromFile("../../api/console.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var declared int
+	for _, item := range source.Paths.Map() {
+		declared += len(item.Operations())
+	}
+	if len(c.byPattern) != declared {
+		t.Errorf("%d operations, want the %d of api/console.yaml", len(c.byPattern), declared)
 	}
 	manage, view := mustPermission(t, "api_keys.manage"), mustPermission(t, "api_keys.view")
 	cases := []struct {

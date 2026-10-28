@@ -38,6 +38,8 @@ var sessionOperations = []endpoint{
 	{http.MethodPut, someKey, `{"name":"k","disabled":false}`},
 	{http.MethodDelete, someKey, ""},
 	{http.MethodGet, "/balance", ""},
+	{http.MethodGet, "/statement", ""},
+	{http.MethodGet, "/statement.csv", ""},
 	{http.MethodGet, "/calls", ""},
 	{http.MethodGet, someCall, ""},
 }
@@ -177,6 +179,8 @@ func TestPermissionsAreCheckedEveryRequest(t *testing.T) {
 		{endpoint{http.MethodPut, someKey, `{"name":"k","disabled":false}`}, http.StatusForbidden},
 		{endpoint{http.MethodDelete, someKey, ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, "/balance", ""}, http.StatusForbidden},
+		{endpoint{http.MethodGet, "/statement", ""}, http.StatusForbidden},
+		{endpoint{http.MethodGet, "/statement.csv", ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, "/calls", ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, someCall, ""}, http.StatusForbidden},
 	} {
