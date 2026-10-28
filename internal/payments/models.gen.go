@@ -53,4 +53,6 @@ type PaymentsSetting struct {
 	GraceSeconds           *int64
 	AutoCreditSeconds      *int64
 	PostExpiryQuerySeconds *int64
+	IpOrderLimit           *int64
+	IpFailureLimit         *int64
 }

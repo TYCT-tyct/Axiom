@@ -86,3 +86,41 @@ SELECT EXISTS (
 SELECT id, merchant_id, trade_no FROM payments.orders
 WHERE state = 'pending' AND expires_at <= transaction_timestamp()
 ORDER BY expires_at, id LIMIT @batch;
+
+-- The IP group's counters in a window of @window_seconds that opens with the first order or failure after the last one
+-- ended. A window is over when the row's start is that far back, and the row then starts again from this event.
+-- Takes one place of the group's orders if both counters are below their limits (or the window is over), locking the
+-- row: concurrent orders from one IP wait here and re-check against what the one before them added. No row returned
+-- means a limit is used up (IPUsage says which).
+-- name: TakeIPOrder :many
+INSERT INTO payments.ip_usage AS u (site_id, ip, window_start, orders, failures)
+VALUES (@site_id, @ip::inet, transaction_timestamp(), 1, 0)
+ON CONFLICT (site_id, ip) DO UPDATE SET
+    window_start = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => @window_seconds::bigint)
+        THEN transaction_timestamp() ELSE u.window_start END,
+    orders = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => @window_seconds::bigint)
+        THEN 1 ELSE u.orders + 1 END,
+    failures = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => @window_seconds::bigint)
+        THEN 0 ELSE u.failures END
+WHERE u.window_start <= transaction_timestamp() - make_interval(secs => @window_seconds::bigint)
+    OR (u.orders < @order_limit::bigint AND u.failures < @failure_limit::bigint)
+RETURNING u.orders;
+
+-- Read after TakeIPOrder took nothing, in the same transaction and so under the row lock: which limit is used up, and
+-- how long until the window is over.
+-- name: IPUsage :one
+SELECT u.orders, u.failures,
+    greatest(1, ceil(extract(epoch FROM u.window_start + make_interval(secs => @window_seconds::bigint) - transaction_timestamp())))::bigint AS wait_seconds
+FROM payments.ip_usage u WHERE u.site_id = @site_id AND u.ip = @ip::inet;
+
+-- An order of the IP group failed. Counted always, past the limit too: the limit refuses the next order, not this one.
+-- name: AddIPFailure :exec
+INSERT INTO payments.ip_usage AS u (site_id, ip, window_start, orders, failures)
+VALUES (@site_id, @ip::inet, transaction_timestamp(), 0, 1)
+ON CONFLICT (site_id, ip) DO UPDATE SET
+    window_start = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => @window_seconds::bigint)
+        THEN transaction_timestamp() ELSE u.window_start END,
+    orders = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => @window_seconds::bigint)
+        THEN 0 ELSE u.orders END,
+    failures = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => @window_seconds::bigint)
+        THEN 1 ELSE u.failures + 1 END;

@@ -13,13 +13,13 @@ import (
 	"axiom/internal/accounts"
 )
 
-// TestContractRules: the rules the program enforces are the ones the contract declares: all 18 operations, with the
+// TestContractRules: the rules the program enforces are the ones the contract declares: all 23 operations, with the
 // level and permission each names, and whether it changes data.
 func TestContractRules(t *testing.T) {
 	t.Parallel()
 	c := loadedContract(t)
-	if len(c.byPattern) != 18 {
-		t.Errorf("%d operations, want 18", len(c.byPattern))
+	if len(c.byPattern) != 23 {
+		t.Errorf("%d operations, want 23", len(c.byPattern))
 	}
 	manage, view := mustPermission(t, "api_keys.manage"), mustPermission(t, "api_keys.view")
 	cases := []struct {
