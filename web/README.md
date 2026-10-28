@@ -51,7 +51,7 @@
 | 部署后旧页面加载不到新的代码块时自动刷新一次 | 路由的 `lazyRouteComponent`：只在打开页面时刷新，悬停或聚焦链接引起的预加载失败不刷新；同一个代码块在本标签页只刷新一次，再失败就显示 `PageFailedState`；会话存储不可用时不刷新，直接显示。端到端测试覆盖 |
 | 数字和时间按页面语言格式化，时间注明时区 | `packages/ui/src/format.ts` 的 `useFormat` |
 | 登录状态只由服务端说了算：页面启动时问 `getSession`，401 就是没登录（不是故障）；CSRF 令牌只放内存（Cookie 是 HttpOnly），每个改数据的请求自动带它和 JSON 内容类型，登录、第二步和改认证因素的响应换新令牌 | `@axiom/api` 的 `setCsrfToken` 与客户端中间件，`packages/app/src/session.tsx`；端到端的接口模拟按契约校验会话、等级、权限、CSRF、Origin，缺一个就拒绝 |
-| 会话中途失效（任何请求得到 `unauthenticated`）：清掉会话和账户的缓存，去登录页，登录后回到原来的页面；回去的地址只收本应用的路径 | `createQueryClient`（`packages/app/src/providers.tsx`）里 `QueryCache`/`MutationCache` 的 `onError`、`Gate`、`safeNext`；端到端测试覆盖 |
+| 会话中途失效（任何请求得到 `unauthenticated`）：清掉会话和账户的缓存，去登录页，登录后回到原来的页面（路径加查询）；只有登录流程的页面（登录、第二步、开启两步验证、注册）沿用它地址里经过校验的 `next`，受保护页面地址里的 `next` 是页面自己的参数；`next` 按浏览器的 URL 规则（含编码的 `..`）解析，只收落在本应用路径范围内的地址 | `createQueryClient`（`packages/app/src/providers.tsx`）里 `QueryCache`/`MutationCache` 的 `onError`、`Gate`、`safeNext`；`safeNext` 的单元测试和 `e2e/console-pages.spec.ts` |
 | 浏览器的会话由所有标签页共用：页面重新读到的会话换了用户或账户时，取消并清掉上一个账户加载的数据，页面从头开始（打开着的对话框和填了一半的表单不留）；同一账户的权限变了时页面保留（恢复码对话框不丢），但没人看的账户数据清掉、正在看的重新请求，失去权限的按「没有权限」显示；重新读会话失败时保留已有的会话，不把正在用的页面换成错误页 | `packages/app/src/session.tsx` 的 `sessionQuery`（比较前后会话的身份）、`Gate`（按身份重建、失败时保留）；端到端测试覆盖 |
 | 退出登录失败要说清：没有退出、原因、可以重试 | `packages/app/src/parts.tsx` 的 `SignOutError`，侧栏和第二步页都用；端到端测试覆盖 |
 | 失败只按契约的错误码翻译，服务端的英文 `message` 不给用户看；每个错误码都有译文 | `packages/ui/src/locales/zh.ts` 的 `satisfies Record<ErrorCode, string>`：契约加一个码，不写译文就编译不过 |

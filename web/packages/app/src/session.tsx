@@ -153,11 +153,26 @@ function stageOf(session: Session | null, requiresMfa: boolean): Stage {
   return requiresMfa && session.level !== "mfa" ? "enroll" : "member";
 }
 
-// A path of this app, to return to after signing in. Anything else, such as another site's address, is dropped: the
-// sign-in page must not be a way to send a visitor elsewhere, and a way back to a sign-in page would only loop.
-export function safeNext(value: unknown) {
-  const isGuestPage = /^\/(sign-in|mfa|register|enroll)(?![\w-])/;
-  return typeof value === "string" && /^\/(?![/\\])/.test(value) && !isGuestPage.test(value) ? value : undefined;
+// The origin the address is resolved against: only its being the same one for the base and for the target matters, so a
+// target that resolves elsewhere (`//host`, `\\host`, a scheme) is told apart without reading window.location.
+const origin = "http://app.invalid";
+const guestPage = /^\/(sign-in|mfa|register|enroll)(?![\w-])/;
+
+// A path of this app, to return to after signing in, as the browser would resolve it under the app's base: an encoded
+// or plain `..` that climbs out of the base, or an address of another origin, is dropped, and the way back is returned
+// in its resolved form. A sign-in page is dropped too: a way back to it would only loop. `base` is the app's, with the
+// trailing slash.
+export function safeNext(value: unknown, base = import.meta.env.BASE_URL) {
+  if (typeof value !== "string" || !value.startsWith("/")) {
+    return undefined;
+  }
+  const root = base.replace(/\/$/, "");
+  const target = new URL(root + value, origin);
+  const inApp = target.origin === origin && (target.pathname === root || target.pathname.startsWith(`${root}/`));
+  const path = target.pathname.slice(root.length) || "/";
+  // A path that begins with two slashes, as `/a/..//host` resolves to, would be read as another site's once the history
+  // puts the base (empty at the root) in front of it.
+  return inApp && /^\/(?![/\\])/.test(path) && !guestPage.test(path) ? path + target.search + target.hash : undefined;
 }
 
 // Replace moves to a path of this app. The history takes the app's base in front of the path, and no route is named, so
@@ -176,8 +191,10 @@ const guestPages = { guest: "/sign-in", pending: "/mfa", enroll: "/enroll" } as 
 // who arrived on a guest page goes on to where they were going. Where they were going is the page the gate turned them
 // away from, taken once: until the router has shown its first page, `here` is the address it is moving to, which this
 // redirect itself changes, so reading it again would put that address in `next`, redirect again, and never stop.
-function Redirect({ stage, here }: { stage: Stage; here: string }) {
-  const next = useSearch({ strict: false }).next;
+function Redirect({ stage, page, here }: { stage: Stage; page: Stage; here: string }) {
+  // Only a sign-in flow page validates its `next` (guestSearch); a protected page's is part of its own address.
+  const inherited = useSearch({ strict: false }).next;
+  const next = page === "member" ? undefined : inherited;
   const [from] = useState(here);
   if (stage === "member") {
     return <Replace path={next ?? "/"} />;
@@ -205,7 +222,7 @@ export function Gate({ stage, children }: { stage: Stage; children: ReactNode })
             {children}
           </SessionContext>
         ) : (
-          <Redirect stage={stageOf(data, requiresMfa)} here={here} />
+          <Redirect stage={stageOf(data, requiresMfa)} page={stage} here={here} />
         )
       }
     </DataState>
