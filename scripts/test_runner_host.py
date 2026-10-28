@@ -68,7 +68,7 @@ class BashDiscovery(unittest.TestCase):
 
 @unittest.skipUnless(BASH, "Bash from Git for Windows or PATH is unavailable")
 class RunnerLabels(unittest.TestCase):
-    def test_train_membership_is_decided_only_by_count(self):
+    def test_pool_membership_is_decided_only_by_count(self):
         # Execute only the pure label selector, never the host installer or its system/API commands.
         selector = shell_function("runner_labels")
         for count, labels, want in (
@@ -76,6 +76,7 @@ class RunnerLabels(unittest.TestCase):
             ("2", "axiom,axiom-temp", [True] * 2 + [False] * 6),
             ("0", "axiom,axiom-train,axiom-temp", [False] * 8),
             ("8", "axiom,axiom-train,axiom-temp", [True] * 8),
+            ("4", "axiom,axiom-pr,axiom-temp", [True] * 4 + [False] * 4),
         ):
             with self.subTest(count=count, labels=labels):
                 env = {**os.environ, "LABELS": labels}
@@ -90,7 +91,7 @@ class RunnerLabels(unittest.TestCase):
                 rows = [line.split(",") for line in result.stdout.splitlines()]
                 self.assertEqual(len(rows), 8)
                 for row, train in zip(rows, want):
-                    self.assertEqual(row, ["axiom", "axiom-temp"] + (["axiom-train"] if train else []))
+                    self.assertEqual(row, ["axiom", "axiom-temp", "axiom-train" if train else "axiom-pr"])
 
     def test_invalid_count_stops_before_host_changes(self):
         for count in ("-1", "four", "4.5", "99999999999999999999999999999"):

@@ -10,7 +10,7 @@
 #   scripts/ci/runner-host.sh remove    # then delete the runner registrations it prints on GitHub
 #
 # Settings, from the environment: RUNNERS (8), PREFIX (axiom-t: runners axiom-t1...), LABELS (axiom,axiom-temp),
-# TRAIN_RUNNERS (4: the first runners also get axiom-train; this label is managed separately from LABELS).
+# TRAIN_RUNNERS (4: the first runners also get axiom-train, the others axiom-pr; both are managed separately from LABELS).
 # install also needs GH_TOKEN with repository Administration write permission to reconcile existing runners' labels.
 # PROCS (6: GOMAXPROCS of each job), CPU_QUOTA (8000%: of the whole host), CPU_WEIGHT (20: against 100 for the host's
 # own services, so CI yields to them), MEMORY_HIGH (45G), MEMORY_MAX (50G). Docker must already be installed.
@@ -42,13 +42,16 @@ as_user() {
     env PATH="$node_bin:$toolcache/go/$go_version/x64/bin:/usr/bin:/bin" "$@"
 }
 
-runner_labels() { # number: exclude axiom-train from LABELS so only TRAIN_RUNNERS decides membership
+# number: the first TRAIN_RUNNERS runners serve trains only (axiom-train), the rest PR builds only (axiom-pr), so a
+# train's build never queues behind PR jobs (2026-10-28: a train build waited 30 min on four runners PR jobs held).
+# Both labels are excluded from LABELS so only TRAIN_RUNNERS decides membership.
+runner_labels() {
   local label result= items
   IFS=, read -ra items <<< "$labels"
   for label in "${items[@]}"; do
-    if [ "$label" != axiom-train ] && [ -n "$label" ]; then result+="${result:+,}$label"; fi
+    if [ "$label" != axiom-train ] && [ "$label" != axiom-pr ] && [ -n "$label" ]; then result+="${result:+,}$label"; fi
   done
-  if [ "$1" -le "$train_runners" ]; then result+="${result:+,}axiom-train"; fi
+  if [ "$1" -le "$train_runners" ]; then result+="${result:+,}axiom-train"; else result+="${result:+,}axiom-pr"; fi
   printf '%s\n' "$result"
 }
 
