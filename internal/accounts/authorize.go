@@ -104,7 +104,9 @@ func (s *Service) Authorize(ctx context.Context, p Principal, perm Permission, t
 			if t.platform {
 				return s.platform, nil
 			}
-			return pg.AccountScope(uuid.UUID(t.account)), nil
+			// The site is the one the session was issued at, which is where its account lives: it lets the scope read that
+			// site's public configuration and shared counters, such as the payment methods of its top-up page.
+			return pg.AccountScopeIn(uuid.UUID(p.site), uuid.UUID(t.account)), nil
 		}
 	}
 	return pg.Scope{}, ErrForbidden

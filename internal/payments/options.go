@@ -36,21 +36,25 @@ type settings struct {
 	cancelWindow     time.Duration
 	daily            *int64
 	first            int64
+	// The limits of one IP group (clientip.Group) on the site over ipWindow: orders placed, and orders that failed.
+	ipOrders, ipFailures int64
 }
 
 // The limits of a site that sets none (docs/domains/payments.md「后台配置」): 3 orders waiting, 5 cancellations an hour,
-// no daily limit, 100 credits for a first top-up.
+// no daily limit, 100 credits for a first top-up, and from one IP group 20 orders and 10 failed orders an hour.
 const (
-	defaultPending  = 3
-	defaultCancels  = 5
-	defaultFirstTop = 100 * creditScale
+	defaultPending    = 3
+	defaultCancels    = 5
+	defaultFirstTop   = 100 * creditScale
+	defaultIPOrders   = 20
+	defaultIPFailures = 10
 )
 
 func readSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (settings, error) {
 	rows, err := queries.SiteSettings(ctx, tx, site)
 	s := settings{
 		strategy: RoundRobin, pending: defaultPending, cancels: defaultCancels, cancelWindow: time.Hour,
-		first: defaultFirstTop,
+		first: defaultFirstTop, ipOrders: defaultIPOrders, ipFailures: defaultIPFailures,
 	}
 	if err != nil || len(rows) == 0 {
 		return s, err
@@ -76,6 +80,12 @@ func readSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (settings, erro
 	if r.FirstCredits != nil {
 		s.first = *r.FirstCredits
 	}
+	if r.IpOrderLimit != nil {
+		s.ipOrders = *r.IpOrderLimit
+	}
+	if r.IpFailureLimit != nil {
+		s.ipFailures = *r.IpFailureLimit
+	}
 	return s, nil
 }
 
@@ -96,7 +106,7 @@ func (s settings) admitsCounts(c OrderCountsRow, credits int64) error {
 	case c.Pending >= s.pending:
 		return ErrTooManyOrders
 	case c.Cancelled >= s.cancels:
-		return ErrTooManyCancels
+		return &Wait{ErrTooManyCancels, s.cancelWindow}
 	case s.daily != nil && credits > *s.daily-c.Daily:
 		return ErrDailyLimit
 	case c.Paid == 0 && credits > s.first:
