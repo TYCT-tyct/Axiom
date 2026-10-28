@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,6 +53,8 @@ func TestARescuedDiscardIsReportedOnce(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	logs := &telemetrytest.Buffer{}
 	q := newDiscardQueue(db, reader, logs)
+	var notices atomic.Int32
+	q.OnDiscard = func(context.Context, pg.Tx, string, []byte) error { notices.Add(1); return nil }
 	river.AddWorker(q.Workers(), &stuckWorker{})
 	startDiscardQueue(t, q)
 	eventually(t, "the rescuer to discard the stuck job", func() bool { return jobState(t, db, "test.stuck") == "discarded" })
@@ -67,6 +70,9 @@ func TestARescuedDiscardIsReportedOnce(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), fmt.Sprintf(`"job_id":%d`, id)) {
 		t.Errorf("the log does not name job %d: %s", id, logs.String())
+	}
+	if got := notices.Load(); got != 1 {
+		t.Errorf("persistent discard observer ran %d times; want 1", got)
 	}
 	if got := discardedJobs(t, reader)["test.stuck"]; got != 1 {
 		t.Errorf("the discard counter is %d for the job's kind, want 1", got)

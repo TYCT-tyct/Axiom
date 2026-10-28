@@ -1,0 +1,283 @@
+package observability
+
+import (
+	"context"
+	"errors"
+	"html"
+	"time"
+	"uuid"
+
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
+
+	"axiom/internal/platform/alert"
+	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/mail"
+	"axiom/internal/platform/pg"
+)
+
+type alertArgs struct{}
+
+func (alertArgs) Kind() string { return "observability.alerts" }
+func (alertArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: pg.QueueNotifications, MaxAttempts: 5, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled, rivertype.JobStatePending}}}
+}
+
+// RegisterAlerts registers the persistent signal consumer before the queue starts.
+func RegisterAlerts(db *pg.DB, scope pg.Scope, q *pg.Queue, m *mail.Mailer) error {
+	a := &alertWorker{db: db, scope: scope, mail: m, now: time.Now}
+	m.Receipt = a.mailReceipt
+	q.OnDiscard = func(ctx context.Context, tx pg.Tx, kind string, args []byte) error {
+		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "queue.discarded", Key: kind, Severity: "critical", Fields: map[string]string{"value": "1"}}); err != nil {
+			return err
+		}
+		if kind == "mail.send_tracked" {
+			var tracked struct {
+				Receipt uuid.UUID `json:"receipt"`
+			}
+			if err := jsonx.Unmarshal(args, &tracked); err != nil {
+				return err
+			}
+			if tracked.Receipt != uuid.Nil() {
+				if _, err := tx.Exec(ctx, `UPDATE observability.alert_receipts SET state='failed' WHERE id=$1 AND state<>'delivered'`, tracked.Receipt); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := river.AddWorkerSafely(q.Workers(), river.WorkFunc(a.work)); err != nil {
+		return err
+	}
+	q.Every(time.Minute, func() river.JobArgs { return alertArgs{} })
+	return nil
+}
+
+type alertWorker struct {
+	db    *pg.DB
+	scope pg.Scope
+	mail  *mail.Mailer
+	now   func() time.Time
+}
+
+func (a *alertWorker) work(ctx context.Context, _ *river.Job[alertArgs]) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	now := a.now().UTC()
+	if err := a.db.Tx(ctx, a.scope, func(tx pg.Tx) error {
+		return alert.Consume(ctx, tx, func(s alert.Signal) error { return applyAlert(ctx, tx, s, now) })
+	}); err != nil {
+		return err
+	}
+	return a.db.Tx(ctx, a.scope, func(tx pg.Tx) error {
+		if err := evaluateAlerts(ctx, tx, now); err != nil {
+			return err
+		}
+		if err := a.dispatch(ctx, tx, now); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM observability.alert_events WHERE id IN (
+ SELECT id FROM observability.alert_events WHERE resolved_at<$1 AND NOT pending_recovery ORDER BY resolved_at,id LIMIT 100)`, now.Add(-30*24*time.Hour))
+		return err
+	})
+}
+
+const alertEvaluation = `SELECT e.id,e.kind,e.key,e.severity,e.fields,e.occurrences,e.state,e.fired_at,e.resolved_at FROM observability.alert_events e
+ WHERE resolved_at IS NULL OR pending_recovery
+ ORDER BY checked_at,id LIMIT 100`
+
+func evaluateAlerts(ctx context.Context, tx pg.Tx, now time.Time) error {
+	c, err := readAlertConfiguration(ctx, tx, true)
+	if err != nil {
+		return err
+	}
+	events, err := readAlertEvents(ctx, tx, alertEvaluation)
+	if err != nil {
+		return err
+	}
+	channels := map[string]AlertChannel{}
+	for _, ch := range c.Channels {
+		channels[ch.ID] = ch
+	}
+	for _, e := range events {
+		if err = evaluateIncident(ctx, tx, e, c.Rules, channels, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func evaluateIncident(ctx context.Context, tx pg.Tx, e AlertEvent, rules []AlertRule, channels map[string]AlertChannel, now time.Time) error {
+	if e.ResolvedAt != nil {
+		if err := recoverAlerts(ctx, tx, e, now); err != nil {
+			return err
+		}
+	} else {
+		for _, r := range rules {
+			if ch, ok := channels[r.Channel]; ok && r.Kind == e.Kind {
+				if err := evaluateRule(ctx, tx, e, r, ch, now); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	_, err := tx.Exec(ctx, `UPDATE observability.alert_events e SET checked_at=$2,pending_recovery=resolved_at IS NOT NULL AND (
+ EXISTS(SELECT FROM observability.alert_receipts WHERE event_id=e.id AND state IN ('pending','queued')) OR
+ (e.kind<>'alert.test' AND EXISTS(SELECT FROM observability.alert_receipts r WHERE r.event_id=e.id AND r.sequence=0 AND
+ NOT EXISTS(SELECT FROM observability.alert_receipts recovery WHERE recovery.event_id=e.id AND recovery.rule_id=r.rule_id AND recovery.sequence=-1)))) WHERE id=$1`, e.ID, now)
+	return err
+}
+
+func evaluateRule(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule, ch AlertChannel, now time.Time) error {
+	breached, err := alertBreached(ctx, tx, e, r, now)
+	if err != nil || !breached {
+		return err
+	}
+	seq, ready, err := nextAlertSequence(ctx, tx, e.ID, r, now)
+	if err != nil || !ready {
+		return err
+	}
+	raw, err := jsonx.MarshalCanonical(ch)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO observability.alert_receipts(id,event_id,rule_id,sequence,channel,quiet_start,quiet_end,at)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(event_id,rule_id,sequence) DO NOTHING`, uuid.NewV7(), e.ID, r.ID, seq, raw, r.QuietStart, r.QuietEnd, now)
+	return err
+}
+
+func alertBreached(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule, now time.Time) (bool, error) {
+	if !eligibleAlert(e, r) {
+		_, err := tx.Exec(ctx, `DELETE FROM observability.alert_windows WHERE event_id=$1 AND rule_id=$2`, e.ID, r.ID)
+		return false, err
+	}
+	var since time.Time
+	err := tx.QueryRow(ctx, `INSERT INTO observability.alert_windows(event_id,rule_id,since) VALUES($1,$2,$3) ON CONFLICT(event_id,rule_id) DO UPDATE SET since=observability.alert_windows.since RETURNING since`, e.ID, r.ID, now).Scan(&since)
+	return now.Sub(since) >= time.Duration(r.DurationSeconds)*time.Second, err
+}
+
+func nextAlertSequence(ctx context.Context, tx pg.Tx, id uuid.UUID, r AlertRule, now time.Time) (int, bool, error) {
+	var last AlertReceipt
+	err := tx.QueryRow(ctx, `SELECT sequence,state,at,delivered_at FROM observability.alert_receipts WHERE event_id=$1 AND rule_id=$2 ORDER BY sequence DESC LIMIT 1`, id, r.ID).Scan(&last.Sequence, &last.State, &last.At, &last.DeliveredAt)
+	if errors.Is(err, pg.ErrNoRows) {
+		return 0, true, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	since := last.At
+	if last.DeliveredAt != nil {
+		since = *last.DeliveredAt
+	}
+	ready := r.RepeatSeconds > 0 && (last.State == "delivered" || last.State == "failed") && now.Sub(since) >= time.Duration(r.RepeatSeconds)*time.Second
+	return last.Sequence + 1, ready, nil
+}
+
+type alertDelivery struct {
+	id         uuid.UUID
+	ch         AlertChannel
+	start, end int
+	kind, key  string
+	severity   string
+	fields     []byte
+	seq        int
+}
+
+func pendingAlertDeliveries(ctx context.Context, tx pg.Tx, now time.Time) ([]alertDelivery, error) {
+	rows, err := tx.Query(ctx, `SELECT r.id,r.channel,r.quiet_start,r.quiet_end,e.kind,e.key,r.sequence,e.severity,e.fields FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id WHERE r.state='pending' AND r.not_before<=$1 ORDER BY r.at,r.id LIMIT 100 FOR UPDATE OF r SKIP LOCKED`, now)
+	if err != nil {
+		return nil, err
+	}
+	var deliveries []alertDelivery
+	for rows.Next() {
+		var d alertDelivery
+		var raw []byte
+		err = rows.Scan(&d.id, &raw, &d.start, &d.end, &d.kind, &d.key, &d.seq, &d.severity, &d.fields)
+		if err != nil {
+			break
+		}
+		if err = jsonx.Unmarshal(raw, &d.ch); err != nil {
+			break
+		}
+		deliveries = append(deliveries, d)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	return deliveries, nil
+}
+
+func (a *alertWorker) dispatch(ctx context.Context, tx pg.Tx, now time.Time) error {
+	deliveries, err := pendingAlertDeliveries(ctx, tx, now)
+	if err != nil {
+		return err
+	}
+	for _, d := range deliveries {
+		if err = a.dispatchOne(ctx, tx, now, d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *alertWorker) dispatchOne(ctx context.Context, tx pg.Tx, now time.Time, d alertDelivery) error {
+	var err error
+
+	if wait := alertQuiet(now, d.start, d.end); wait > 0 {
+		if _, err = tx.Exec(ctx, `UPDATE observability.alert_receipts SET not_before=$2 WHERE id=$1`, d.id, now.Add(wait)); err != nil {
+			return err
+		}
+		return nil
+	}
+	phase := "firing"
+	if d.seq == -1 {
+		phase = "resolved"
+	}
+	body := "Axiom alert " + phase + ": " + d.kind + " (" + d.key + ")\nSeverity: " + d.severity + "\nFields: " + string(d.fields) + "\nNotification: " + d.id.String()
+	msg := mail.Message{To: d.ch.Email, Subject: "Axiom alert " + phase, Text: body, HTML: "<pre>" + html.EscapeString(body) + "</pre>"}
+	if err = a.mail.EnqueueTracked(ctx, tx, mail.Tenant{}, msg, d.id); err != nil {
+		if !errors.Is(err, mail.ErrNotConfigured) && !errors.Is(err, mail.ErrInvalidMessage) {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE observability.alert_receipts SET state='failed' WHERE id=$1`, d.id); err != nil {
+			return err
+		}
+		return nil
+	}
+	if _, err = tx.Exec(ctx, `UPDATE observability.alert_receipts SET state='queued' WHERE id=$1`, d.id); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *alertWorker) mailReceipt(ctx context.Context, id uuid.UUID, delivered bool) error {
+	return a.db.Tx(ctx, a.scope, func(tx pg.Tx) error {
+		state := "failed"
+		if delivered {
+			state = "delivered"
+		}
+		_, err := tx.Exec(ctx, `UPDATE observability.alert_receipts SET state=$2,delivered_at=CASE WHEN $2='delivered' THEN $3::timestamptz ELSE NULL END WHERE id=$1 AND state<>'delivered'`, id, state, a.now().UTC())
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE observability.alert_events SET state='delivered' WHERE resolved_at IS NULL AND id=(SELECT event_id FROM observability.alert_receipts WHERE id=$1 AND sequence>=0 AND state='delivered')`, id)
+		return err
+	})
+}
+
+func recoverAlerts(ctx context.Context, tx pg.Tx, e AlertEvent, now time.Time) error {
+	if e.Kind == "alert.test" {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO observability.alert_receipts(id,event_id,rule_id,sequence,channel,quiet_start,quiet_end,at,state)
+ SELECT uuidv7(),event_id,rule_id,-1,channel,quiet_start,quiet_end,$2,CASE WHEN state='delivered' THEN 'pending' ELSE 'failed' END
+ FROM observability.alert_receipts r WHERE event_id=$1 AND sequence=0 AND state IN ('delivered','failed')
+ AND NOT EXISTS(SELECT FROM observability.alert_receipts pending WHERE pending.event_id=r.event_id AND pending.rule_id=r.rule_id AND pending.sequence>=0 AND pending.state IN ('pending','queued'))
+ ON CONFLICT(event_id,rule_id,sequence) DO NOTHING`, e.ID, now)
+	return err
+}
