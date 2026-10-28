@@ -3,6 +3,7 @@ package pgtest
 import (
 	"context"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -27,18 +28,6 @@ func TestDockerHostFor(t *testing.T) {
 		if got := dockerHostFor(c.goos, c.current); got != c.want {
 			t.Errorf("%s with %q: %q, want %q", c.goos, c.current, got, c.want)
 		}
-	}
-}
-
-// TestClusterURLIn: withcluster hands the run's cluster to every test binary by appending ClusterEnv to the
-// environment, so the last value is the run's; without one, the binary starts its own cluster.
-func TestClusterURLIn(t *testing.T) {
-	env := []string{"PATH=/bin", ClusterEnv + "=first", "HOME=/home", ClusterEnv + "=second"}
-	if got := clusterURLIn(env); got != "second" {
-		t.Errorf("clusterURLIn = %q, want the last value in %s", got, ClusterEnv)
-	}
-	if got := clusterURLIn([]string{"PATH=/bin"}); got != "" {
-		t.Errorf("clusterURLIn without %s = %q, want empty", ClusterEnv, got)
 	}
 }
 
@@ -98,5 +87,28 @@ func TestTemplatesAreBuiltUnderConcurrentBuilders(t *testing.T) {
 		if err != nil || built != "built" {
 			t.Errorf("template %s: built() is %q (%v), want the migration applied", name, built, err)
 		}
+	}
+}
+
+func TestKeepReaperAlive(t *testing.T) {
+	for _, c := range []struct{ name, disabled, legacy, current, want string }{
+		{"default", "", "", "", "2m"},
+		{"enabled", "false", "", "", "2m"},
+		{"disabled", "true", "", "", ""},
+		{"legacy override", "", "30s", "", ""},
+		{"current override", "", "", "45s", "45s"},
+		{"disabled override", "true", "", "45s", "45s"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("TESTCONTAINERS_RYUK_DISABLED", c.disabled)
+			t.Setenv("RYUK_RECONNECTION_TIMEOUT", c.legacy)
+			t.Setenv("TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT", c.current)
+			if err := keepReaperAlive(); err != nil {
+				t.Fatal(err)
+			}
+			if got := os.Getenv("TESTCONTAINERS_RYUK_RECONNECTION_TIMEOUT"); got != c.want {
+				t.Fatalf("reconnection timeout = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
