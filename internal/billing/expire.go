@@ -187,7 +187,7 @@ func (e *expirer) expire(ctx context.Context, account uuid.UUID) (written int64,
 }
 
 // deferred is the expired credit the cap kept from being written off: it goes in a later run, once what holds the
-// balance has gone (docs/domains/billing.md「额度批次」). Amount is in billionths of a credit; Batches counts the
+// balance has gone (docs/domains/billing.md「额度批次」). amount is in billionths of a credit; batches counts the
 // batches, one write-off each.
 type deferred struct {
 	amount  int64
