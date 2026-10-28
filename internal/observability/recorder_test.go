@@ -192,7 +192,7 @@ func TestFullQueueDropsWithoutBlocking(t *testing.T) {
 	r := recorderOf(s, Config{QueueSize: 2, BatchSize: 1, FlushInterval: time.Millisecond})
 	records := calls(6)
 	enqueueAll(t, r, records[:1])
-	eventually(t, "the writer to take the first record", func() bool { return len(r.queue) == 0 })
+	eventually(t, "the writer to take the first record", func() bool { depth, _ := r.AlertSample(); return len(r.queue) == 0 && depth == 1 })
 	enqueueAll(t, r, records[1:3]) // two fill the queue behind the stuck write
 	eventually(t, "the queue to fill", func() bool { return len(r.queue) == 2 })
 

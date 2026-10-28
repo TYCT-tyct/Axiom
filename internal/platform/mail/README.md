@@ -66,7 +66,7 @@
 | 不变量 | 靠什么保证 |
 |---|---|
 | 邮件不会明文发出 | 465 之外必须 STARTTLS，服务器不提供就失败；没有跳过校验的配置 |
-| 邮件内容不进入不属于任何租户的表 | 正文在 `platform.mail_outbox`，任务参数只有 id；表的策略是 `platform.in_scope`，别的站点和空作用域都读不到 |
+| 邮件内容不进入不属于任何租户的表 | 正文在 `platform.mail_outbox`，任务参数只有 outbox id（回执模式另有回执 id）；表的策略是 `platform.in_scope`，别的站点和空作用域都读不到 |
 | 一个租户不能替另一个租户入队 | 同一策略的 `WITH CHECK` 比较 `site_id`、`account_id`，租户从调用方的事务里来 |
 | 一封信一个任务 | `Enqueue` 在调用方的事务里插一行 outbox、一个 `mail.send`，参数是那一行的 id |
 | 同一收件人一分钟最多一封 | `limiter`；限流的任务 snooze，不耗尝试次数 |

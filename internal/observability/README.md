@@ -126,7 +126,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 ## 告警接口与不变量
 
-`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`Alerts` 注册 River 周期消费者，使用注入的时钟进行持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执。
+`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执。
 
 比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁只覆盖有界数据库批次，邮件网络请求在事务之外。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。
 
