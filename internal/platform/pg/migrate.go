@@ -94,7 +94,7 @@ GRANT axiom_owner TO CURRENT_USER WITH INHERIT FALSE, SET TRUE;
 GRANT axiom_lookup TO axiom_owner WITH INHERIT FALSE, SET TRUE;`
 
 // Migrate brings the database at adminURL, AXIOM_MIGRATE_DATABASE_URL, up to this program: platform's migrations,
-// then each module's, in moduleOrder. Migrations run as axiom_owner on one connection that holds goose's session
+// then each module's, in moduleOrder. Migrations run as axiom_owner in platform scope on one connection that holds goose's session
 // lock, so concurrent runs wait for each other, and a run that dies leaves the lock with its connection; the next run
 // continues from the recorded versions. Every lock is waited for at most about 5 seconds: a long transaction or
 // another run makes this one fail instead of queueing the application's queries behind it. A failed connection,
@@ -206,7 +206,9 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 		return err
 	}
 	db := sql.OpenDB(timedConnector{stdlib.GetConnector(*config, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
-		_, err := conn.Exec(ctx, "SET ROLE axiom_owner")
+		// These connections serve only migrations and close with this run. Platform scope lets data migrations see
+		// every tenant while retaining forced RLS; modules never set their own scope.
+		_, err := conn.Exec(ctx, "SET ROLE axiom_owner; SET axiom.scope_platform = 'on'")
 		return err
 	})), connectTimeout})
 	defer db.Close()                                                         //nolint:errcheck // closing a pool whose work is done reports nothing worth acting on
