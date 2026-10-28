@@ -63,27 +63,36 @@ type alertWorker struct {
 func (a *alertWorker) work(ctx context.Context, _ *river.Job[alertArgs]) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+
+	now := a.now().UTC()
+	if err := a.db.Tx(ctx, a.scope, func(tx pg.Tx) error {
+		return alert.Consume(ctx, tx, func(s alert.Signal) error { return applyAlert(ctx, tx, s, now) })
+	}); err != nil {
+		return err
+	}
 	return a.db.Tx(ctx, a.scope, func(tx pg.Tx) error {
-		now := a.now().UTC()
-		if err := alert.Consume(ctx, tx, func(s alert.Signal) error { return applyAlert(ctx, tx, s, now) }); err != nil {
-			return err
-		}
 		if err := evaluateAlerts(ctx, tx, now); err != nil {
 			return err
 		}
-		return a.dispatch(ctx, tx, now)
+		if err := a.dispatch(ctx, tx, now); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM observability.alert_events WHERE id IN (
+ SELECT id FROM observability.alert_events WHERE resolved_at<$1 AND NOT pending_recovery ORDER BY resolved_at,id LIMIT 100)`, now.Add(-30*24*time.Hour))
+		return err
 	})
 }
 
+const alertEvaluation = `SELECT e.id,e.kind,e.key,e.severity,e.fields,e.occurrences,e.state,e.fired_at,e.resolved_at FROM observability.alert_events e
+ WHERE resolved_at IS NULL OR pending_recovery
+ ORDER BY checked_at,id LIMIT 100`
+
 func evaluateAlerts(ctx context.Context, tx pg.Tx, now time.Time) error {
-	c, err := GetAlertConfiguration(ctx, tx)
+	c, err := readAlertConfiguration(ctx, tx, true)
 	if err != nil {
 		return err
 	}
-	events, err := readAlertEvents(ctx, tx, `SELECT e.id,e.kind,e.key,e.severity,e.fields,e.occurrences,e.state,e.fired_at,e.resolved_at FROM observability.alert_events e
- WHERE resolved_at IS NULL OR (e.kind<>'alert.test' AND EXISTS(SELECT FROM observability.alert_receipts r WHERE r.event_id=e.id AND r.sequence=0 AND r.state IN ('delivered','failed')
- AND NOT EXISTS(SELECT FROM observability.alert_receipts recovery WHERE recovery.event_id=e.id AND recovery.rule_id=r.rule_id AND recovery.sequence=-1)))
- ORDER BY checked_at,id LIMIT 100`)
+	events, err := readAlertEvents(ctx, tx, alertEvaluation)
 	if err != nil {
 		return err
 	}
@@ -113,7 +122,10 @@ func evaluateIncident(ctx context.Context, tx pg.Tx, e AlertEvent, rules []Alert
 			}
 		}
 	}
-	_, err := tx.Exec(ctx, `UPDATE observability.alert_events SET checked_at=$2 WHERE id=$1`, e.ID, now)
+	_, err := tx.Exec(ctx, `UPDATE observability.alert_events e SET checked_at=$2,pending_recovery=resolved_at IS NOT NULL AND (
+ EXISTS(SELECT FROM observability.alert_receipts WHERE event_id=e.id AND state IN ('pending','queued')) OR
+ (e.kind<>'alert.test' AND EXISTS(SELECT FROM observability.alert_receipts r WHERE r.event_id=e.id AND r.sequence=0 AND
+ NOT EXISTS(SELECT FROM observability.alert_receipts recovery WHERE recovery.event_id=e.id AND recovery.rule_id=r.rule_id AND recovery.sequence=-1)))) WHERE id=$1`, e.ID, now)
 	return err
 }
 
@@ -147,14 +159,18 @@ func alertBreached(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule, now
 
 func nextAlertSequence(ctx context.Context, tx pg.Tx, id uuid.UUID, r AlertRule, now time.Time) (int, bool, error) {
 	var last AlertReceipt
-	err := tx.QueryRow(ctx, `SELECT sequence,state,delivered_at FROM observability.alert_receipts WHERE event_id=$1 AND rule_id=$2 ORDER BY sequence DESC LIMIT 1`, id, r.ID).Scan(&last.Sequence, &last.State, &last.DeliveredAt)
+	err := tx.QueryRow(ctx, `SELECT sequence,state,at,delivered_at FROM observability.alert_receipts WHERE event_id=$1 AND rule_id=$2 ORDER BY sequence DESC LIMIT 1`, id, r.ID).Scan(&last.Sequence, &last.State, &last.At, &last.DeliveredAt)
 	if errors.Is(err, pg.ErrNoRows) {
 		return 0, true, nil
 	}
 	if err != nil {
 		return 0, false, err
 	}
-	ready := r.RepeatSeconds > 0 && last.State == "delivered" && now.Sub(*last.DeliveredAt) >= time.Duration(r.RepeatSeconds)*time.Second
+	since := last.At
+	if last.DeliveredAt != nil {
+		since = *last.DeliveredAt
+	}
+	ready := r.RepeatSeconds > 0 && (last.State == "delivered" || last.State == "failed") && now.Sub(since) >= time.Duration(r.RepeatSeconds)*time.Second
 	return last.Sequence + 1, ready, nil
 }
 
@@ -255,6 +271,9 @@ func (a *alertWorker) mailReceipt(ctx context.Context, id uuid.UUID, delivered b
 }
 
 func recoverAlerts(ctx context.Context, tx pg.Tx, e AlertEvent, now time.Time) error {
+	if e.Kind == "alert.test" {
+		return nil
+	}
 	_, err := tx.Exec(ctx, `INSERT INTO observability.alert_receipts(id,event_id,rule_id,sequence,channel,quiet_start,quiet_end,at,state)
  SELECT uuidv7(),event_id,rule_id,-1,channel,quiet_start,quiet_end,$2,CASE WHEN state='delivered' THEN 'pending' ELSE 'failed' END
  FROM observability.alert_receipts r WHERE event_id=$1 AND sequence=0 AND state IN ('delivered','failed')

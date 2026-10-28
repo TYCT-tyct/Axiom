@@ -73,10 +73,18 @@ var (
 
 // GetAlertConfiguration reads the platform's rules and channels in the caller's authorized scope.
 func GetAlertConfiguration(ctx context.Context, tx pg.Tx) (AlertConfiguration, error) {
+	return readAlertConfiguration(ctx, tx, false)
+}
+
+func readAlertConfiguration(ctx context.Context, tx pg.Tx, lock bool) (AlertConfiguration, error) {
 	var c AlertConfiguration
 	var raw []byte
 	var rev int64
-	err := tx.QueryRow(ctx, `SELECT rev,body FROM observability.alert_configuration WHERE singleton`).Scan(&rev, &raw)
+	query := `SELECT rev,body FROM observability.alert_configuration WHERE singleton`
+	if lock {
+		query += ` FOR SHARE`
+	}
+	err := tx.QueryRow(ctx, query).Scan(&rev, &raw)
 	if err == nil {
 		err = jsonx.Unmarshal(raw, &c)
 	}
@@ -87,9 +95,6 @@ func GetAlertConfiguration(ctx context.Context, tx pg.Tx) (AlertConfiguration, e
 // SetAlertConfiguration validates destinations and rejects a concurrent replacement.
 func SetAlertConfiguration(ctx context.Context, tx pg.Tx, c AlertConfiguration) error {
 	if err := validateAlertConfiguration(c); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(316005)`); err != nil {
 		return err
 	}
 	body, err := jsonx.MarshalCanonical(c)
@@ -173,7 +178,11 @@ func severity(s string) int {
 
 func applyAlert(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) error {
 	if s.Resolved {
-		_, err := tx.Exec(ctx, `UPDATE observability.alert_events SET resolved_at=$3,state='resolved' WHERE kind=$1 AND key=$2 AND resolved_at IS NULL`, s.Kind, s.Key, now)
+		_, err := tx.Exec(ctx, `UPDATE observability.alert_events SET resolved_at=$3,state='resolved',pending_recovery=true WHERE kind=$1 AND key=$2 AND resolved_at IS NULL`, s.Kind, s.Key, now)
+		return err
+	}
+	create, err := createAlert(ctx, tx, s)
+	if err != nil {
 		return err
 	}
 	fields, err := jsonx.MarshalCanonical(s.Fields)
@@ -181,8 +190,8 @@ func applyAlert(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) er
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO observability.alert_events(id,kind,key,severity,fields,state,fired_at)
- VALUES($1,$2,$3,$4,$5,'firing',$6) ON CONFLICT(kind,key) WHERE resolved_at IS NULL
- DO UPDATE SET severity=EXCLUDED.severity,fields=EXCLUDED.fields,occurrences=observability.alert_events.occurrences+1`, uuid.NewV7(), s.Kind, s.Key, s.Severity, fields, now)
+ SELECT $1,$2,$3,$4,$5,'firing',$6 WHERE $7 OR EXISTS(SELECT FROM observability.alert_events WHERE kind=$2 AND key=$3 AND resolved_at IS NULL) ON CONFLICT(kind,key) WHERE resolved_at IS NULL
+ DO UPDATE SET severity=EXCLUDED.severity,fields=EXCLUDED.fields,occurrences=observability.alert_events.occurrences+1`, uuid.NewV7(), s.Kind, s.Key, s.Severity, fields, now, create)
 	return err
 }
 
@@ -193,30 +202,56 @@ func ListAlertEvents(ctx context.Context, tx pg.Tx, before uuid.UUID) ([]AlertEv
 	if err != nil {
 		return nil, err
 	}
+	ids := make([]uuid.UUID, len(events))
+	for i, e := range events {
+		ids[i] = e.ID
+	}
+	receipts, err := alertReceipts(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for i := range events {
-		events[i].Receipts, err = alertReceipts(ctx, tx, events[i].ID)
-		if err != nil {
-			return nil, err
-		}
+		events[i].Receipts = receipts[events[i].ID]
 	}
 	return events, nil
 }
 
-func alertReceipts(ctx context.Context, tx pg.Tx, id uuid.UUID) ([]AlertReceipt, error) {
-	rows, err := tx.Query(ctx, `SELECT id,rule_id,sequence,state,at,delivered_at FROM (SELECT * FROM observability.alert_receipts WHERE event_id=$1 ORDER BY at DESC,id DESC LIMIT 100) recent ORDER BY at,id`, id)
+func alertReceipts(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID][]AlertReceipt, error) {
+	rows, err := tx.Query(ctx, `SELECT e.id,r.id,r.rule_id,r.sequence,r.state,r.at,r.delivered_at FROM unnest($1::uuid[]) e(id)
+ CROSS JOIN LATERAL (SELECT * FROM observability.alert_receipts WHERE event_id=e.id ORDER BY at DESC,id DESC LIMIT 100) r ORDER BY e.id,r.at,r.id`, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	receipts := []AlertReceipt{}
+	receipts := map[uuid.UUID][]AlertReceipt{}
+	for _, id := range ids {
+		receipts[id] = []AlertReceipt{}
+	}
 	for rows.Next() {
+		var id uuid.UUID
 		var r AlertReceipt
-		if err = rows.Scan(&r.ID, &r.RuleID, &r.Sequence, &r.State, &r.At, &r.DeliveredAt); err != nil {
+		if err = rows.Scan(&id, &r.ID, &r.RuleID, &r.Sequence, &r.State, &r.At, &r.DeliveredAt); err != nil {
 			return nil, err
 		}
-		receipts = append(receipts, r)
+		receipts[id] = append(receipts[id], r)
 	}
 	return receipts, rows.Err()
+}
+
+func createAlert(ctx context.Context, tx pg.Tx, s alert.Signal) (bool, error) {
+	if s.Kind != "observability.write_lag" {
+		return true, nil
+	}
+	c, err := GetAlertConfiguration(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range c.Rules {
+		if eligibleAlert(AlertEvent{Kind: s.Kind, Severity: s.Severity, Fields: s.Fields}, r) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func eligibleAlert(e AlertEvent, r AlertRule) bool {
@@ -233,7 +268,7 @@ func eligibleAlert(e AlertEvent, r AlertRule) bool {
 
 func alertQuiet(now time.Time, start, end int) time.Duration {
 	now = now.UTC()
-	minute := now.UTC().Hour()*60 + now.UTC().Minute()
+	minute := now.Hour()*60 + now.Minute()
 	quiet := start < end && minute >= start && minute < end || start > end && (minute >= start || minute < end)
 	if !quiet {
 		return 0
@@ -254,7 +289,7 @@ func SendAlertTest(ctx context.Context, tx pg.Tx, channel string, now time.Time)
 	for _, ch := range c.Channels {
 		if ch.ID == channel {
 			id := uuid.NewV7()
-			if _, err = tx.Exec(ctx, `INSERT INTO observability.alert_events(id,kind,key,severity,fields,state,fired_at,resolved_at) VALUES($1,'alert.test',$2,'info','{}','resolved',$3,$3)`, id, id.String(), now); err != nil {
+			if _, err = tx.Exec(ctx, `INSERT INTO observability.alert_events(id,kind,key,severity,fields,state,fired_at,resolved_at,pending_recovery) VALUES($1,'alert.test',$2,'info','{}','resolved',$3,$3,true)`, id, id.String(), now); err != nil {
 				return uuid.Nil(), err
 			}
 			raw, encodeErr := jsonx.MarshalCanonical(ch)
@@ -271,7 +306,7 @@ func SendAlertTest(ctx context.Context, tx pg.Tx, channel string, now time.Time)
 
 // ResolveAlertEvent lets operators close irreversible losses or incidents from a retired node.
 func ResolveAlertEvent(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
-	tag, err := tx.Exec(ctx, `UPDATE observability.alert_events SET resolved_at=coalesce(resolved_at,$2),state='resolved' WHERE id=$1`, id, now)
+	tag, err := tx.Exec(ctx, `UPDATE observability.alert_events SET resolved_at=coalesce(resolved_at,$2),state='resolved',pending_recovery=true WHERE id=$1`, id, now)
 	if err == nil && tag.RowsAffected() == 0 {
 		return pg.ErrNoRows
 	}

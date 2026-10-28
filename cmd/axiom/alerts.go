@@ -21,7 +21,7 @@ func sampleAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, sin
 		defer close(done)
 		timer := time.NewTicker(time.Minute)
 		defer timer.Stop()
-		var previous int64
+		var previous alertSample
 		for {
 			previous = collectAlerts(run, db, r, sink, node, previous, logger)
 			select {
@@ -34,18 +34,13 @@ func sampleAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, sin
 	return func() { cancel(); <-done }
 }
 
-func collectAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, sink alert.Sink, node string, previous int64, logger *slog.Logger) int64 {
+func collectAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, sink alert.Sink, node string, previous alertSample, logger *slog.Logger) alertSample {
 	depth, lost := r.AlertSample()
-	var err error
-	if depth > 0 {
-		err = sink.Raise("observability.write_lag", node, "warning", map[string]string{"value": strconv.Itoa(depth)})
-	} else {
-		err = sink.Resolve("observability.write_lag", node)
-	}
+	err := previous.writer(sink, node, depth)
 	if err != nil {
 		logger.ErrorContext(ctx, "reporting writer lag alert", "err", err)
 	}
-	if lost > previous {
+	if lost > previous.lost {
 		if err = sink.Raise("observability.records_lost", node, "critical", map[string]string{"value": strconv.FormatInt(lost, 10)}); err != nil {
 			logger.ErrorContext(ctx, "reporting lost records alert", "err", err)
 		}
@@ -63,7 +58,8 @@ func collectAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, si
 	if err != nil && ctx.Err() == nil {
 		logger.ErrorContext(ctx, "sampling settlement anomalies", "err", err)
 	}
-	return lost
+	previous.lost = lost
+	return previous
 }
 
 func startAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, node string, timeout time.Duration, logger *slog.Logger) func() {
@@ -73,8 +69,30 @@ func startAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, node
 		stop()
 		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
+		if depth, _ := r.AlertSample(); depth == 0 {
+			if err := signals.Resolve("observability.write_lag", node); err != nil {
+				logger.Error("resolving drained writer alert", "err", err)
+			}
+		}
 		if err := signals.Close(drain); err != nil {
 			logger.Error("closing alert signals", "err", err)
 		}
 	}
+}
+
+type alertSample struct {
+	lost int64
+	idle int
+}
+
+func (s *alertSample) writer(sink alert.Sink, node string, depth int) error {
+	if depth > 0 {
+		s.idle = 0
+		return sink.Raise("observability.write_lag", node, "warning", map[string]string{"value": strconv.Itoa(depth)})
+	}
+	s.idle = min(s.idle+1, 2)
+	if s.idle == 2 {
+		return sink.Resolve("observability.write_lag", node)
+	}
+	return nil
 }

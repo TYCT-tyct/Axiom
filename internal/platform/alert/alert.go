@@ -99,6 +99,8 @@ func validate(s Signal) error {
 	return nil
 }
 
+const signalLock = 316005
+
 // Persist is the durable boundary. Repeating id is harmless, including after an uncertain commit.
 // Producers and the consumer share this lock so identity allocation cannot overtake an uncommitted signal.
 func Persist(ctx context.Context, tx pg.Tx, id uuid.UUID, s Signal) error {
@@ -109,7 +111,7 @@ func Persist(ctx context.Context, tx pg.Tx, id uuid.UUID, s Signal) error {
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(316005)`); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, signalLock); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO platform.alert_signals(id,body) VALUES($1,$2) ON CONFLICT(id) DO NOTHING`, id, body)
@@ -118,7 +120,7 @@ func Persist(ctx context.Context, tx pg.Tx, id uuid.UUID, s Signal) error {
 
 // Consume atomically applies and removes at most 1000 signals in database arrival order.
 func Consume(ctx context.Context, tx pg.Tx, apply func(Signal) error) error {
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(316005)`); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, signalLock); err != nil {
 		return err
 	}
 	signals, err := readSignals(ctx, tx)
