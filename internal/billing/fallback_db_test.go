@@ -476,3 +476,59 @@ func TestStartChecksFallbacks(t *testing.T) {
 		})
 	}
 }
+
+func TestUnlistedModelTierBecomesAMissingItem(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		declared  bool
+		cleanup   bool
+		wantItems int
+	}{
+		{"undeclared even when priced", false, false, 1},
+		{"declared", true, false, 0},
+		{"late usage after cleanup", false, true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) { checkUnlistedModelTier(t, tc.declared, tc.cleanup, tc.wantItems) })
+	}
+}
+
+func checkUnlistedModelTier(t *testing.T, declared, cleanup bool, wantItems int) {
+	t.Helper()
+	logs := &logBuffer{}
+	cfg := fallbackBankConfig
+	cfg.Logger = logs.logger()
+	b := fallbackBank(t, 10_000, 0, cfg)
+	q := metered(t)
+	q.Model.ID = catalog.ModelID(uuid.NewV7())
+	q.Model.ServiceTiers = 1 << catalog.ServiceTierStandard
+	if declared {
+		q.Model.ServiceTiers.Add(catalog.ServiceTierPriority)
+	}
+	q.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"},"service_tiers":{"priority":{"rates":{"input":"0.000000002","output":"0.000000003"}}}}`)
+	h := b.holdOn(q, 1000)
+	if cleanup {
+		b.pastDeadline()
+		b.cleanup()
+	}
+	o := outcome(Committed, FinishStop, servedAt(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20}))
+	f := b.settleWith(h, o)
+	want := int64(210) // undeclared: 70 tokens at the highest token fallback, 3
+	if declared {
+		want = 160
+	}
+	if f.Charged != platform.AmountExact(want) || f.Estimated == declared {
+		t.Fatalf("Settle = %+v, want %d estimated=%t", f, want, !declared)
+	}
+	items := b.unknownItems()
+	if len(items) != wantItems {
+		t.Fatalf("unknown items = %+v", items)
+	}
+	if len(items) > 0 && (items[0].Model != q.Model.ID || items[0].Field != "service_tier.priority" || items[0].Request != h.id) {
+		t.Fatalf("missing tier = %+v", items)
+	}
+	b.settleWith(h, o)
+	if got := strings.Count(logs.String(), "an unknown billing item appeared"); got != wantItems {
+		t.Fatalf("got %d alerts, want %d", got, wantItems)
+	}
+	b.expect("settled", want)
+}

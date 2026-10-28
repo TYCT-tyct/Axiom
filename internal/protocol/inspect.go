@@ -163,11 +163,13 @@ type scanner struct {
 
 // part is the content part, tool or reasoning setting being read.
 type part struct {
-	kind        Capabilities
-	payload     int64 // the raw bytes of the data the part carries
-	binary      bool  // the payload is image or file data, not text
-	max         int64 // a server tool's max_uses
-	off, hidden bool  // reasoning turned off; reasoning left out of the stream
+	toolKind                 string // dual-mode Responses tools need an explicit client execution claim
+	localShell, clientSearch bool
+	kind                     Capabilities
+	payload                  int64 // the raw bytes of the data the part carries
+	binary                   bool  // the payload is image or file data, not text
+	max                      int64 // a server tool's max_uses
+	off, hidden              bool  // reasoning turned off; reasoning left out of the stream
 }
 
 // fields maps an object's member names to their readers; other members are skipped.
