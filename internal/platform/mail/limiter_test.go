@@ -227,3 +227,53 @@ func TestSendRetriesAfterFailure(t *testing.T) {
 		t.Error("the retry after the interval was still rate limited")
 	}
 }
+
+// TestSharedAdmissionSurvivesTheStoreGoingAway: an admission the shared store granted is also held in this node's
+// bucket, so a send or a failed send followed by an outage still waits out the interval. The local clock moves, not the
+// wall, and the retry is refused before it opens a connection.
+func TestSharedAdmissionSurvivesTheStoreGoingAway(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name   string
+		reject bool
+	}{
+		{"successful send", false},
+		{"failed send", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server := startTLSServer(t, func(s *fakeServer) {
+				if tt.reject {
+					s.rejectStep, s.rejectCode = "rcpt", 451
+				}
+			})
+			sd := server.openSender(t, Config{Host: "127.0.0.1", Port: 587})
+			clock := newStepClock()
+			sd.throttle = sharedThrottle(kvtest.New(t).Open(t, kv.Deps{Now: clientClock(clock)}), testMailKey(t))
+			sd.throttle.local.now = clock.Now
+
+			_, err := sd.Send(t.Context(), testMessage)
+			if tt.reject {
+				if err == nil || errors.Is(err, ErrRateLimited) {
+					t.Fatalf("first Send() error = %v; want the server's temporary refusal", err)
+				}
+			} else if err != nil {
+				t.Fatalf("first Send() error = %v", err)
+			}
+
+			// The store goes away between the send and the retry: the node must keep the shared admission it just made.
+			sd.throttle.cache = deadCache(t, clientClock(clock))
+			if _, err := sd.Send(t.Context(), testMessage); !errors.Is(err, ErrRateLimited) {
+				t.Fatalf("retry after the store went away: error = %v; want ErrRateLimited", err)
+			}
+			clock.Add(rateInterval - time.Second)
+			if _, err := sd.Send(t.Context(), testMessage); !errors.Is(err, ErrRateLimited) {
+				t.Errorf("retry inside the interval after the store went away: error = %v; want ErrRateLimited", err)
+			}
+			clock.Add(2 * time.Second)
+			if _, err := sd.Send(t.Context(), testMessage); errors.Is(err, ErrRateLimited) {
+				t.Error("the retry after the interval was still rate limited")
+			}
+		})
+	}
+}

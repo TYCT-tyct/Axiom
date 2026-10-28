@@ -272,6 +272,39 @@ func TestMailerSnoozesARecipientAnotherNodeAdmitted(t *testing.T) {
 	}
 }
 
+// TestMailerSnoozesAfterTheSharedStoreGoesAway: an admission made through the shared store is held locally; if the
+// store goes away before the next message, the worker snoozes instead of sending again, without spending an attempt.
+func TestMailerSnoozesAfterTheSharedStoreGoesAway(t *testing.T) {
+	t.Parallel()
+	w := newQueueWorld(t)
+	server := startTLSServer(t, nil)
+	shared := kvtest.New(t)
+	namespace := kvtest.Namespace()
+	mailer := w.registerWith(t, server, shared.OpenIn(t, namespace, kv.Deps{}), testMasterKey())
+	// A first message on this node is admitted through the shared store, which also records the interval locally.
+	if !mailer.sender.throttle.allow(t.Context(), welcome.To) {
+		t.Fatal("the recipient was already throttled")
+	}
+	// The store goes away before the queued message runs.
+	mailer.sender.throttle.cache = deadCache(t, time.Now)
+	w.start(t)
+
+	tenant := Tenant{Site: uuid.NewV7()}
+	w.enqueue(t, mailer, tenant, welcome)
+	attempt := w.waitForJob(t, "scheduled")
+	if attempt != 0 {
+		t.Errorf("the snoozed job holds attempt %d; want none spent", attempt)
+	}
+	if got := w.queued(t, pg.NewScope(false, []uuid.UUID{tenant.Site}, nil)); len(got) != 1 {
+		t.Errorf("the outbox holds %v; want the message kept for the snoozed retry", got)
+	}
+	select {
+	case got := <-server.messages:
+		t.Errorf("the server accepted %q while the recipient's shared admission was still cooling", got.payload)
+	default:
+	}
+}
+
 func TestMailerCancelsPermanentFailure(t *testing.T) {
 	t.Parallel()
 	w := newQueueWorld(t)

@@ -52,8 +52,8 @@ func modeFor(port int) tlsMode {
 	return startTLS
 }
 
-// sender delivers one message per SMTP session. It is safe for concurrent use: the throttle's fallback locks, and every
-// Send opens its own connection.
+// sender delivers one message per SMTP session. It is safe for concurrent use: the throttle serializes its decision, and
+// every Send opens its own connection.
 type sender struct {
 	cfg         Config
 	addr        string
