@@ -39,8 +39,9 @@ const (
 
 // event is one upstream event as the relay sees it.
 type event struct {
-	role role
-	name string
+	role   role
+	framed bool // a conversion may expand one upstream chunk into several complete SSE events
+	name   string
 	// data is what the client gets in place of the event, but for edits, replacements in place ordered by position;
 	// for an ending, usageAt is where its usage object closes, or -1 without one. withheld, when set, is an event to
 	// withhold besides, such as the finish signals Chat splits from a chunk that also carries content.

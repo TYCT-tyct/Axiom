@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/valkey-io/valkey-go"
 
@@ -15,8 +16,8 @@ import (
 	"axiom/internal/platform/kv/kvtest"
 )
 
-// TestACLAllowsWhatTheProgramSends: the deployed user runs every use of K1, and the keys it writes are under ax:*; a
-// NOPERM here means the compose ACL and the client disagree (README「权限」).
+// TestACLAllowsWhatTheProgramSends: the deployed user runs every use, and the keys it writes are under ax:*; a NOPERM
+// here means the compose ACL and the client disagree (README「权限」).
 func TestACLAllowsWhatTheProgramSends(t *testing.T) {
 	t.Parallel()
 	server := kvtest.New(t)
@@ -24,6 +25,14 @@ func TestACLAllowsWhatTheProgramSends(t *testing.T) {
 	client := server.Open(t, kv.Deps{})
 	if _, err := count(t, client, kv.NewScript(countScript), 100); err != nil {
 		t.Fatalf("run the count as the deployed user: %v", err)
+	}
+	key := client.Key(kv.StickySpace, uuid.UUID{}, "acl")
+	if _, err := client.Do(t.Context(), kv.StickyWrite, kv.Set(key, kv.Hex(uuid.UUID{}), time.Hour)); err != nil {
+		t.Fatalf("write a binding as the deployed user: %v", err)
+	}
+	values, err := client.Do(t.Context(), kv.Precheck, kv.Get(key), kv.Delete(key))
+	if err != nil || values[0].Missing() {
+		t.Fatalf("read and delete a binding as the deployed user: %v", err)
 	}
 	deployed := server.Client(t)
 	for name, cmd := range map[string]valkey.Completed{
@@ -71,7 +80,7 @@ func TestWrongPasswordRefusesTheStart(t *testing.T) {
 	server := kvtest.Own(t)
 	cfg := server.Config(kvtest.Namespace())
 	cfg.PasswordFile = writePassword(t, "wrong-password\n")
-	_, err := kv.Open(t.Context(), cfg, kv.Deps{})
+	_, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{}))
 	if err == nil {
 		t.Fatal("a client with the wrong password started")
 	}
@@ -92,7 +101,7 @@ func TestUnreachableStartsOnFallbacks(t *testing.T) {
 		Namespace: kvtest.Namespace(),
 	}
 	seen := newReadings()
-	client, err := kv.Open(t.Context(), cfg, kv.Deps{Meter: seen.meter})
+	client, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{Meter: seen.meter}))
 	if err != nil {
 		t.Fatalf("a node whose server is not there refused to start: %v", err)
 	}

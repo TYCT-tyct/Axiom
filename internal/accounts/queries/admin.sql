@@ -71,3 +71,26 @@ JOIN LATERAL (
     ORDER BY (r.name = 'owner') DESC, m.user_id
     LIMIT 1) o ON true
 WHERE a.id = @id;
+
+-- name: ReadSiteKeyLimits :one
+-- The site's own limits on the call keys of an account (a NULL is not set); no row means no such site.
+SELECT t.max_keys_per_account, t.key_creations_per_hour
+FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = @site_id;
+
+-- name: WriteSiteKeyLimits :exec
+-- Replaces the site's own limits on keys and leaves its other settings as they are, so the settings the admin API
+-- replaces whole cannot take these along.
+INSERT INTO accounts.site_settings (site_id, max_keys_per_account, key_creations_per_hour)
+VALUES (@site_id, sqlc.narg(max_keys)::integer, sqlc.narg(creations_per_hour)::integer)
+ON CONFLICT (site_id) DO UPDATE SET max_keys_per_account = excluded.max_keys_per_account,
+    key_creations_per_hour = excluded.key_creations_per_hour;
+
+-- name: ReadAccountKeyLimits :one
+-- The account's own limits and its site's, which it falls back to; no row means no such account.
+SELECT a.site_id, a.max_keys, a.key_creations_per_hour, t.max_keys_per_account AS site_max_keys,
+    t.key_creations_per_hour AS site_creations_per_hour
+FROM accounts.accounts a LEFT JOIN accounts.site_settings t ON t.site_id = a.site_id WHERE a.id = @account_id;
+
+-- name: WriteAccountKeyLimits :exec
+UPDATE accounts.accounts SET max_keys = sqlc.narg(max_keys)::integer, key_creations_per_hour = sqlc.narg(creations_per_hour)::integer
+WHERE id = @account_id;

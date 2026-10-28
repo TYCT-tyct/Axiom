@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -53,6 +54,7 @@ var refusals = []refusal{
 	{accounts.ErrBadEmail, http.StatusUnprocessableEntity, codeUnprocessable, "not an email address"},
 	{accounts.ErrEmailTaken, http.StatusConflict, codeEmailTaken, "the email is already registered"},
 	{accounts.ErrTOTPOn, http.StatusConflict, codeConflict, "two-step verification is already on"},
+	{accounts.ErrTooManyKeys, http.StatusConflict, codeTooManyKeys, "the account may not make another key"},
 	{accounts.ErrTooManyAttempts, http.StatusTooManyRequests, codeRateLimited, "too many attempts"},
 	{accounts.ErrBusy, http.StatusServiceUnavailable, codeUnavailable, "busy, try again shortly"},
 	{accounts.ErrStale, http.StatusServiceUnavailable, codeUnavailable, "temporarily unavailable"},
@@ -86,11 +88,30 @@ func failure(err error) *apiError {
 		}
 		apiErr := &apiError{status: r.status, code: r.code, message: r.message}
 		if tooMany, ok := errors.AsType[*accounts.TooManyAttempts](err); ok {
-			apiErr.retryAfter = max(1, int((tooMany.RetryAfter+time.Second-1)/time.Second))
+			apiErr.retryAfter = retrySeconds(tooMany.RetryAfter)
+		}
+		if keys, ok := errors.AsType[*accounts.TooManyKeys](err); ok {
+			tooManyKeys(apiErr, keys)
 		}
 		return apiErr
 	}
 	return nil
+}
+
+// retrySeconds is a wait as the whole seconds a Retry-After header holds, at least one.
+func retrySeconds(wait time.Duration) int {
+	return max(1, int((wait+time.Second-1)/time.Second))
+}
+
+// tooManyKeys says which limit a refused key met: the keys the account holds is a 409 that deleting a key lifts, and
+// the keys it made in the last hour a 429 that waiting lifts.
+func tooManyKeys(apiErr *apiError, keys *accounts.TooManyKeys) {
+	if keys.RetryAfter > 0 {
+		apiErr.status, apiErr.code, apiErr.retryAfter = http.StatusTooManyRequests, codeRateLimited, retrySeconds(keys.RetryAfter)
+		apiErr.message = fmt.Sprintf("the account made %d keys in the last hour, and the site allows %d", keys.Count, keys.Limit)
+		return
+	}
+	apiErr.message = fmt.Sprintf("the account holds %d keys, and the site allows %d", keys.Count, keys.Limit)
 }
 
 // respond answers err: with the contract's error body when it is a refusal, and otherwise, since it describes our

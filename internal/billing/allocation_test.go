@@ -149,7 +149,7 @@ func snapshot(a *allocation) (AllocationStateRow, []LiveBatchesRow) {
 		if b.remaining() > 0 {
 			rows = append(rows, LiveBatchesRow{
 				ID: b.id, SiteID: b.site, Source: b.source, ExpiresAt: b.expiresAt, Amount: b.amount,
-				Consumed: b.consumed, Expired: b.expired, OpenedSeq: b.opened.seq, OpenedAt: b.opened.at, OpenedID: b.opened.id,
+				Consumed: b.consumed, Expired: b.expired, FreezeTotal: b.freezeTotal, UnfreezeTotal: b.unfreezeTotal, Refunded: b.refunded, OpenedSeq: b.opened.seq, OpenedAt: b.opened.at, OpenedID: b.opened.id,
 			})
 		}
 	}
@@ -161,6 +161,7 @@ func pristine(rows []LiveBatchesRow) []LiveBatchesRow {
 	out := slices.Clone(rows)
 	for i := range out {
 		out[i].Consumed, out[i].Expired = 0, 0
+		out[i].FreezeTotal, out[i].UnfreezeTotal, out[i].Refunded = 0, 0, 0
 	}
 	return out
 }
@@ -179,21 +180,38 @@ func randomBatches(r *rand.Rand) []LiveBatchesRow {
 	return rows
 }
 
-// randomMovement is the next movement of a run: a credit of the next batch, a write-off of part of an open batch, or a charge.
+// randomMovement includes charges into debt while credit is frozen, followed by release or refund.
 func randomMovement(r *rand.Rand, live *allocation, rows []LiveBatchesRow, next *int, seq int64) movement {
-	switch n := r.IntN(10); {
-	case n < 2 && *next < len(rows):
+	n := r.IntN(10)
+	if n < 2 && *next < len(rows) {
 		k := keyAt(seq)
 		rows[*next].OpenedSeq, rows[*next].OpenedAt, rows[*next].OpenedID = k.seq, k.at, k.id
 		live.batches[rows[*next].ID].opened = k
 		*next++
 		return creditOf(rows[*next-1])
-	case n < 4 && len(live.open) > 0:
-		b := live.open[r.IntN(len(live.open))]
-		return movement{key: keyAt(seq), kind: "expire", request: b.id, debit: 1 + r.Int64N(b.remaining())}
+	}
+	if len(live.open) == 0 {
+		return settled(seq, "settle", 1+r.Int64N(120))
+	}
+	return randomBatchMovement(r, live.open[r.IntN(len(live.open))], n, seq)
+}
+
+func randomBatchMovement(r *rand.Rand, b *batchState, n int, seq int64) movement {
+	m := movement{key: keyAt(seq), request: b.id}
+	switch {
+	case n < 4 && b.available() > 0:
+		m.kind, m.debit = "expire", 1+r.Int64N(b.available())
+	case n < 6 && b.source == "paid" && b.available() > 0:
+		m.kind, m.revision = "freeze", b.freezeTotal+1+r.Int64N(b.available())
+	case n < 8 && b.frozen() > 0:
+		m.kind, m.revision = "unfreeze", b.unfreezeTotal+1+r.Int64N(b.frozen())
+	case n < 9 && b.frozen() > 0:
+		m.kind, m.debit = "refund", 1+r.Int64N(b.frozen())
+		m.revision = b.refunded + m.debit
 	default:
 		return settled(seq, "settle", 1+r.Int64N(120))
 	}
+	return m
 }
 
 // checkInvariants fails the test unless the allocation funds exactly the balance, no batch is over-spent, and debt is
@@ -204,18 +222,18 @@ func checkInvariants(t *testing.T, live *allocation, balance int64, m movement) 
 		t.Fatalf("after %+v the allocation funds %d of a balance of %d", m, live.funded(), balance)
 	}
 	for _, b := range live.batches {
-		if b.consumed < 0 || b.expired < 0 || b.consumed+b.expired > b.amount {
+		if b.consumed < 0 || b.expired < 0 || b.remaining() < b.frozen() || b.frozen() < 0 {
 			t.Fatalf("batch %+v over-spent", *b)
 		}
-	}
-	if live.unfunded > 0 && len(live.open) > 0 {
-		t.Fatalf("debt %d with %d batches open", live.unfunded, len(live.open))
+		if live.unfunded > 0 && b.opened.compare(live.at) <= 0 && b.available() > 0 {
+			t.Fatalf("debt %d with available batch %+v", live.unfunded, *b)
+		}
 	}
 }
 
 // TestReplayProperty: over random credits, charges and write-offs, the allocation always funds exactly the
-// balance, never over-spends a batch, and holds debt only while no batch holds anything; and replaying from nothing,
-// or resuming from what was stored at several points, ends where the live replay did.
+// balance, never over-spends or spends frozen credit, and holds debt only without available credit. A replay
+// from nothing or from every possible stored position ends where the live replay did. Events are always replayed in their ledger sequence.
 func TestReplayProperty(t *testing.T) {
 	for seed := range uint64(200) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
@@ -233,32 +251,26 @@ func TestReplayProperty(t *testing.T) {
 				log = append(log, m)
 				balance -= m.debit
 				checkInvariants(t, live, balance, m)
+				checkFrozenEvents(t, live, log)
 			}
-			checkReplays(t, r, rows, log, live)
+			checkReplays(t, rows, log, live)
 		})
 	}
 }
 
-// checkReplays replays log from nothing, and again with the state stored and loaded anew at three random points; each
-// must end where live did.
-func checkReplays(t *testing.T, r *rand.Rand, rows []LiveBatchesRow, log []movement, live *allocation) {
+// checkReplays compares a full replay and a resume from every possible position with the live state.
+func checkReplays(t *testing.T, rows []LiveBatchesRow, log []movement, live *allocation) {
 	t.Helper()
 	fresh := newAllocation(AllocationStateRow{}, pristine(rows))
-	resumed := newAllocation(AllocationStateRow{}, pristine(rows))
-	stops := []int{r.IntN(len(log)), r.IntN(len(log)), r.IntN(len(log))}
-	for i, m := range log {
-		if err := fresh.apply(m); err != nil {
-			t.Fatal(err)
-		}
-		if slices.Contains(stops, i) {
-			resumed = newAllocation(snapshot(resumed))
-		}
-		if err := resumed.apply(m); err != nil {
-			t.Fatal(err)
+	for i := 0; i <= len(log); i++ {
+		resumed := newAllocation(snapshot(fresh))
+		applyAll(t, resumed, log[i:]...)
+		sameAllocation(t, fmt.Sprintf("resumed at %d", i), resumed, live)
+		if i < len(log) {
+			applyAll(t, fresh, log[i])
 		}
 	}
 	sameAllocation(t, "from nothing", fresh, live)
-	sameAllocation(t, "resumed", resumed, live)
 }
 
 func sameAllocation(t *testing.T, name string, got, live *allocation) {
@@ -271,8 +283,8 @@ func sameAllocation(t *testing.T, name string, got, live *allocation) {
 		switch {
 		case !ok && b.remaining() != 0: // a batch that holds nothing is not loaded again
 			t.Errorf("%s: batch %s with %d left is gone", name, id, b.remaining())
-		case ok && (g.consumed != b.consumed || g.expired != b.expired):
-			t.Errorf("%s: batch %s consumed %d expired %d, live %d %d", name, id, g.consumed, g.expired, b.consumed, b.expired)
+		case ok && (g.consumed != b.consumed || g.expired != b.expired || g.freezeTotal != b.freezeTotal || g.unfreezeTotal != b.unfreezeTotal || g.refunded != b.refunded):
+			t.Errorf("%s: batch %s got %+v, live %+v", name, id, *g, *b)
 		}
 	}
 }

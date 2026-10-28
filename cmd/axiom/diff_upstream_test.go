@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // reads recorded samples; jsonx guards input from outside
 	"encoding/json/v2"       //nolint:depguard // reads recorded samples; jsonx guards input from outside
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,9 +18,9 @@ import (
 	"testing"
 )
 
-// diffUpstream is the one upstream both gateways call in the differential test: new-api through a tunnel into the
-// container, Axiom on loopback. It answers by the reply a request names (a "diff:<reply>" marker in its text, which both
-// gateways forward untouched), as a stream when the request asks for one and whole otherwise, with the model name the
+// diffUpstream is the one upstream both gateways call in the differential test: new-api through the Docker host
+// gateway in CI or a tunnel on developers' machines, Axiom on loopback. It answers by the reply a request names (a
+// "diff:<reply>" marker in its text, which both gateways forward untouched), as a stream when the request asks for one and whole otherwise, with the model name the
 // request used, like a real upstream. The streams are the recorded samples of internal/protocol/testdata; what has no
 // sample (a Chat tool call, the whole replies) is written below in the shape the official reference gives.
 type diffUpstream struct {
@@ -47,7 +48,22 @@ const newAPIChannelKey = "sk-newapi-channel-secret"
 func newDiffUpstream(t *testing.T) *diffUpstream {
 	t.Helper()
 	u := &diffUpstream{t: t, replies: diffReplies(t)}
-	u.server = httptest.NewServer(u)
+	u.server = httptest.NewUnstartedServer(u)
+	if os.Getenv("AXIOM_TEST_CGROUP_PARENT") != "" {
+		// The CI container reaches the host gateway, while Axiom's fixture URL stays on loopback for its egress policy.
+		// The synthetic fixture holds no real credentials or user data, but external requests can fail this CI run.
+		if err := u.server.Listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		var config net.ListenConfig
+		listener, err := config.Listen(t.Context(), "tcp4", "0.0.0.0:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.server.Listener = listener
+	}
+	u.server.Start()
+	u.server.URL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(u.server.Listener.Addr().(*net.TCPAddr).Port))
 	t.Cleanup(u.server.Close)
 	return u
 }
@@ -74,6 +90,11 @@ func (u *diffUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name := ""
 	if m := replyMarker.FindSubmatch(body); m != nil {
 		name = string(m[1])
+		if wire, _, _ := strings.Cut(name, "-"); wire != wireOf(r.URL.Path) {
+			u.t.Errorf("upstream received %s for %s fixture", r.URL.Path, name)
+			http.Error(w, "wrong upstream format", http.StatusBadRequest)
+			return
+		}
 	}
 	reply, ok := u.replies[name]
 	if !ok { // a request that carries no marker is one the upstream rejects

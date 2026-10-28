@@ -11,7 +11,6 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/pg"
-	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
 
@@ -83,11 +82,10 @@ func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c
 	if c.rate > h.Limits.cfg.KeyRate {
 		return errKeyRate
 	}
-	plan, wait, err := h.Router.Plan(routing.Input{
+	plan, wait, err := h.Models.plan(h.Router, routing.Input{
 		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,
-		// A Chat client's request goes to an endpoint that speaks Chat, or is converted to a Messages or Responses one; a
-		// request of another format is served only by an endpoint that speaks it (docs/domains/gateway.md「转发规则」).
-		NativeOnly: c.Format != protocol.Chat,
+		// Compaction has no Chat counterpart; generation can use the protocol conversions.
+		NativeOnly: c.Compact,
 		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full.
 		NoSegments: c.Compact,
 	})
@@ -191,7 +189,7 @@ func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
 		return err
 	}
 	defer release()
-	return h.Billing.SettleOrphan(ctx, c.Admitted, c.ID)
+	return h.Billing.SettleOrphan(pg.CompletionContext(ctx), c.Admitted, c.ID)
 }
 
 // Drain waits for the settlements still running in the background, until ctx ends; then it stops them, and what is

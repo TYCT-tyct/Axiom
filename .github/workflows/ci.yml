@@ -20,6 +20,10 @@ on:
         description: the commit a train branch was assembled on
         type: string
         default: ""
+      gate_stress:
+        description: "web-only diagnostic (four admin scenes x50); use main or a throwaway branch with its own commit, never a PR head (build fails)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -83,7 +87,7 @@ jobs:
   # two PRs whose docs pass alone can break a link together.
   static:
     needs: changes
-    if: needs.changes.result == 'success'
+    if: needs.changes.result == 'success' && !inputs.gate_stress
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: read
@@ -114,7 +118,7 @@ jobs:
   # Node like the web job; the build is cached by content on the host (scripts/web_cache.py), as it was in the one job.
   go-test:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,19 +128,91 @@ jobs:
       - run: just test
 
   # The frontend's checks and its end-to-end tests. `just web` builds the frontend the program embeds before serving it
-  # to the tests; that build is cached by content on the host, as in the other jobs.
+  # to the tests. Only execution is isolated: setup and private caches stay with the runner.
   web:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true'
+    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.docs_only != 'true')
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
       - uses: ./.github/actions/setup
+      # Chromium aborts connecting sockets when other jobs change host interface addresses (#363). Keep the browser
+      # and serveweb in one private network namespace, matching web/package.json's Playwright version.
+      # Start Docker here so mounts and --user use the selected runner's paths and UID, including on another host.
+      - name: Run web in its network namespace
+        env:
+          WEB_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
+          GATE_STRESS: ${{ inputs.gate_stress || false }}
+        run: |
+          go_cache=$(go env GOCACHE)
+          module_cache=$(go env GOMODCACHE)
+          pnpm_store=$(pnpm --dir web store path)
+          web_cache="${AXIOM_CACHE_DIR:-$(dirname "$go_cache")/_webcache}"
+          mkdir -p "$go_cache" "$module_cache" "$web_cache"
+          id
+          stat -c '%u:%g %n' "$go_cache" "$web_cache"
+          # The shared 80-core budget / eight runners allows ten cores each; eight leaves room for host-side setup.
+          # A private cgroup namespace lets Node count this quota, rather than the parent's 80 cores.
+          name="axiom-web-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker create --name "$name" \
+            --cpus 8 --cgroup-parent=axiom-ci.slice --cgroupns=private --user "$(id -u):$(id -g)" \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --workdir "$GITHUB_WORKSPACE" \
+            --volume "$RUNNER_TEMP:$RUNNER_TEMP" --volume "$RUNNER_TOOL_CACHE:$RUNNER_TOOL_CACHE:ro" \
+            --volume "$go_cache:$go_cache" --volume "$module_cache:$module_cache" \
+            --volume "$pnpm_store:$pnpm_store" \
+            --volume "$web_cache:/ci/axiom" \
+            --env PATH --env CI --env GATE_STRESS --env HOME=/tmp/axiom-web-home \
+            --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
+            --env npm_config_store_dir="$(dirname "$pnpm_store")" \
+            "$WEB_IMAGE" bash -e -c '
+              mkdir -p "$HOME"
+              git config --global --add safe.directory "$PWD"
+              cat /proc/self/cgroup
+              cat /sys/fs/cgroup/cpu.max
+              id
+              cpus=$(node -p "require(\"node:os\").availableParallelism()")
+              echo "Node availableParallelism=$cpus"
+              test "$cpus" -le 8
+              if [ "$GATE_STRESS" = true ]; then
+                gate=(e2e/gate.spec.ts -g "admin (price-publish|supplier-connect-details|account|model-name) ")
+                pnpm --dir web exec playwright test "${gate[@]}" --list
+              fi
+              just web
+              if [ "$GATE_STRESS" = true ]; then
+                AXIOM_VERSION=$(just axiom-version)
+                export AXIOM_VERSION
+                pnpm --dir web exec playwright test "${gate[@]}" \
+                  --repeat-each=50 --max-failures=1 --reporter=line
+              fi
+            '
+          docker start "$name"
+          pid=$(docker inspect --format '{{.State.Pid}}' "$name")
+          if [ "$pid" -eq 0 ]; then
+            docker logs "$name"
+            echo 'web container exited before cgroup verification' >&2
+            exit 1
+          fi
+          # /proc/self/cgroup inside is namespace-relative (0::/); the host PID reveals the actual shared ancestry.
+          cat "/proc/$pid/cgroup"
+          grep -q '/axiom.slice/axiom-ci.slice/' "/proc/$pid/cgroup"
+          cat /sys/fs/cgroup/axiom.slice/axiom-ci.slice/{cpu.max,memory.high,memory.max}
+          docker logs --follow "$name"
+          exit "$(docker wait "$name")"
+      # A later checkout removes test-results on self-hosted runners; keep the failed page and its network evidence.
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
-          playwright: "true"
-      - run: just web
+          name: web-test-results
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+      # Cancellation can stop the Docker client before the test process; remove only this attempt's container.
+      - if: always()
+        run: |
+          name="axiom-web-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if docker container inspect "$name" > /dev/null 2>&1; then docker rm --force "$name"; fi
 
   # A train or main only: a PR's change cannot move a benchmark's allocation count without the train catching it, and
   # the comparison is 4-5 minutes of the PR's wall. On main every benchmark runs once under -race (`bench-once`); a
@@ -145,6 +221,7 @@ jobs:
     needs: changes
     if: >-
       github.event_name != 'pull_request' &&
+      !inputs.gate_stress &&
       needs.changes.result == 'success' &&
       needs.changes.outputs.bench == 'true'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
@@ -164,6 +241,7 @@ jobs:
     needs: changes
     if: >-
       github.event_name != 'pull_request' &&
+      !inputs.gate_stress &&
       needs.changes.result == 'success' &&
       needs.changes.outputs.deploy == 'true'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
@@ -178,12 +256,27 @@ jobs:
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
   # check counts as passed on GitHub; a part that was skipped (a Markdown-only change, a PR's bench and deploy) is fine.
   build:
+    # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
+    name: build
     needs: [changes, static, go-test, web, bench, deploy]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
+      # GitHub accepts a skipped required check, so diagnostics must fail this check rather than skip it.
+      - if: inputs.gate_stress
+        run: |
+          echo "gate-stress is a diagnostic; run the full build to satisfy the required check"
+          exit 1
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
           echo "a job this build needs failed or was cancelled"
           exit 1
       - run: echo "every job this build needs passed or was skipped"
+
+  gate-stress:
+    name: gate-stress
+    needs: [changes, web]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.gate_stress
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - run: test '${{ needs.changes.result }}' = success && test '${{ needs.web.result }}' = success

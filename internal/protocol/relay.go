@@ -213,8 +213,13 @@ var chatConversions = [...]relayFormat{
 	Responses: {newResponsesToChat, relayFormats[Responses].limit, true, false},
 }
 
-// NewRelay returns a Relay that reads the upstream stream body. Only a client of the upstream's format is relayed
-// yet; for others the first step fails.
+var fromChatConversions = [...]relayFormat{
+	Messages:  {newChatToMessages, relayFormats[Chat].limit, true},
+	Responses: {newChatToResponses, relayFormats[Chat].limit, true},
+}
+
+// NewRelay reads the upstream stream in its own format or converts between Chat and Messages/Responses.
+// Unsupported pairs fail on their first step.
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay {
 	r := &Relay{o: o, client: client, held: meterMemory} // within the base allowance, so nothing is drawn yet
 	switch {
@@ -222,6 +227,8 @@ func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOp
 		r.format = &relayFormats[upstream]
 	case client == Chat && int(upstream) < len(chatConversions) && chatConversions[upstream].newUpstream != nil:
 		r.format = &chatConversions[upstream]
+	case upstream == Chat && int(client) < len(fromChatConversions) && fromChatConversions[client].newUpstream != nil:
+		r.format = &fromChatConversions[client]
 	default:
 		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported", upstream, client)
 		return r
@@ -305,6 +312,9 @@ func (r *Relay) event(data []byte) (Step, error) {
 
 // route writes or holds an event by its role.
 func (r *Relay) route(e event, data []byte) (Step, error) {
+	if e.framed {
+		return r.writeBatch(e.role, data)
+	}
 	switch e.role {
 	case heartbeat:
 		return r.heartbeat(e.name, data)
@@ -328,6 +338,19 @@ func (r *Relay) route(e event, data []byte) (Step, error) {
 		return r.write(StepCommit, e.name, data)
 	}
 	return r.write(StepData, e.name, data)
+}
+
+// writeBatch routes the complete client events produced from one upstream chunk.
+func (r *Relay) writeBatch(role role, data []byte) (Step, error) {
+	kind := StepData
+	if role == content && !r.committed {
+		r.committed, kind = true, StepCommit
+	}
+	step, err := r.writeRaw(kind, data)
+	if !r.committed {
+		step = Step{Kind: StepBuffered}
+	}
+	return step, err
 }
 
 // edit returns e's data with its edits applied, in a buffer the relay reuses.

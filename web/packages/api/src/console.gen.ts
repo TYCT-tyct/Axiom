@@ -229,7 +229,7 @@ export interface paths {
         put?: never;
         /**
          * Make an API key
-         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it.
+         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds, answered 409 `too_many_keys`, and the keys it makes in an hour, answered 429 with `Retry-After`; the message names the limit and how many the account has.
          */
         post: operations["createKey"];
         delete?: never;
@@ -349,7 +349,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
         Money: {
             /** @example 1500000000 */
@@ -461,6 +461,12 @@ export interface components {
              * @example sk-ax-v1-
              */
             key_prefix: string;
+            /**
+             * Format: uri
+             * @description Where a key's calls go: the origin of the site's API domain, which serves `/v1/...`. The console shows it to the user because the console's own host is a different one; it is never built from the request's Host. Absent when the site has no enabled API domain.
+             * @example https://api.example.com
+             */
+            api_base_url?: string;
             /**
              * @description `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
              * @enum {string}
@@ -609,7 +615,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `stale_revision`, `idempotency_key_reused`). */
+        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`, `idempotency_key_reused`). */
         Conflict: {
             headers: {
                 [name: string]: unknown;
@@ -978,6 +984,8 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];
         };
     };

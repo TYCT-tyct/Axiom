@@ -212,7 +212,7 @@ func TestSyncOrdersRoundsByTheDatabaseClock(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	f := catalog.NewTestFetcher(egress.NewForTesting(egresstest.Loopback(t)), map[catalog.PriceSource]string{catalog.SourceLiteLLM: srv.URL})
+	f := catalog.NewTestFetcher(t, egress.NewForTesting(egresstest.Loopback(t)), map[catalog.PriceSource]string{catalog.SourceLiteLLM: srv.URL})
 	fetched, err := s.c.Fetch(t.Context(), f, catalog.SourceLiteLLM)
 	if err != nil {
 		t.Fatal(err)

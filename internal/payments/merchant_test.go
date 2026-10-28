@@ -33,6 +33,7 @@ type world struct {
 	logs           *lockedBuffer
 	siteA, siteB   uuid.UUID
 	account, acctB uuid.UUID
+	user           uuid.UUID
 }
 
 type lockedBuffer struct {
@@ -49,6 +50,13 @@ func (l *lockedBuffer) String() string { l.mu.Lock(); defer l.mu.Unlock(); retur
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	return newTestWorld(t, fakePlugin{})
+}
+
+// newTestWorld is newWorld with a channel plugin of the test's own, for the tests that need to watch what a channel is
+// asked or to have it answer in a way of their choosing.
+func newTestWorld(t *testing.T, plugin Plugin) *world {
+	t.Helper()
 	d := pgtest.New(t, billing.Migrations(), Migrations())
 	db, err := pg.Open(t.Context(), d.App)
 	if err != nil {
@@ -57,12 +65,14 @@ func newWorld(t *testing.T) *world {
 	t.Cleanup(db.Close)
 	w := &world{
 		t: t, db: db, super: d.Superuser, logs: &lockedBuffer{},
-		siteA: uuid.NewV7(), siteB: uuid.NewV7(), account: uuid.NewV7(), acctB: uuid.NewV7(),
+		siteA: uuid.NewV7(), siteB: uuid.NewV7(), account: uuid.NewV7(), acctB: uuid.NewV7(), user: uuid.NewV7(),
 	}
 	w.exec(fmt.Sprintf("INSERT INTO platform.tenants VALUES ('%s','%[1]s'), ('%[1]s','%s'), ('%s','%[3]s'), ('%[3]s','%s')",
 		w.siteA, w.account, w.siteB, w.acctB))
+	w.exec(fmt.Sprintf("INSERT INTO billing.balances (site_id, account_id) VALUES ('%s','%s'), ('%s','%s')",
+		w.siteA, w.account, w.siteB, w.acctB))
 	w.p, err = Open(Config{
-		DB: db, Platform: pg.NewScope(true, nil, nil), Keyring: masterKey(t), Plugins: []Plugin{fakePlugin{}},
+		DB: db, Platform: pg.NewScope(true, nil, nil), Keyring: masterKey(t), Plugins: []Plugin{plugin},
 		Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
 	})
 	if err != nil {

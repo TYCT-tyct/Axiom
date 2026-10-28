@@ -4,12 +4,14 @@
 # hand failed 22 builds on a missing gcc, a pnpm installer that needs a newer Node than the system's, and Playwright
 # downloads timing out. Run as root from a checkout of this repository on the host; it holds no address or secret.
 #
-#   RUNNER_TOKEN=<token> scripts/ci/runner-host.sh install
+#   GH_TOKEN=<administration-write-token> RUNNER_TOKEN=<token> scripts/ci/runner-host.sh install
 #       token: gh api -X POST repos/TYCT-tyct/Axiom/actions/runners/registration-token --jq .token (valid one hour)
 #   scripts/ci/runner-host.sh check     # what install sets up is present and works; exits 1 naming what is not
 #   scripts/ci/runner-host.sh remove    # then delete the runner registrations it prints on GitHub
 #
 # Settings, from the environment: RUNNERS (8), PREFIX (axiom-t: runners axiom-t1...), LABELS (axiom,axiom-temp),
+# TRAIN_RUNNERS (4: the first runners also get axiom-train; this label is managed separately from LABELS).
+# install also needs GH_TOKEN with repository Administration write permission to reconcile existing runners' labels.
 # PROCS (6: GOMAXPROCS of each job), CPU_QUOTA (8000%: of the whole host), CPU_WEIGHT (20: against 100 for the host's
 # own services, so CI yields to them), MEMORY_HIGH (45G), MEMORY_MAX (50G). Docker must already be installed.
 set -euo pipefail
@@ -24,6 +26,8 @@ toolcache=/opt/hostedtoolcache
 slice=axiom-ci.slice
 parent_dropin=/etc/systemd/system/axiom.slice.d/axiom-ci.conf
 runners=${RUNNERS:-8} prefix=${PREFIX:-axiom-t} labels=${LABELS:-axiom,axiom-temp} procs=${PROCS:-6}
+train_runners=${TRAIN_RUNNERS:-4}
+[ "$train_runners" -ge 0 ] 2>/dev/null || { echo 'TRAIN_RUNNERS must be a nonnegative integer' >&2; exit 2; }
 cpu_weight=${CPU_WEIGHT:-20}
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -33,7 +37,27 @@ playwright_version=$(sed -n 's/.*"@playwright\/test": "\(.*\)".*/\1/p' "$root/we
 node_bin=$toolcache/node/$node_version/x64/bin
 
 service() { echo "actions.runner.TYCT-tyct-Axiom.$prefix$1.service"; }
-as_user() { sudo -u "$user" -H env PATH="$node_bin:$toolcache/go/$go_version/x64/bin:/usr/bin:/bin" "$@"; }
+as_user() {
+  sudo -u "$user" -H --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN \
+    env PATH="$node_bin:$toolcache/go/$go_version/x64/bin:/usr/bin:/bin" "$@"
+}
+
+runner_labels() { # number: exclude axiom-train from LABELS so only TRAIN_RUNNERS decides membership
+  local label result= items
+  IFS=, read -ra items <<< "$labels"
+  for label in "${items[@]}"; do
+    if [ "$label" != axiom-train ] && [ -n "$label" ]; then result+="${result:+,}$label"; fi
+  done
+  if [ "$1" -le "$train_runners" ]; then result+="${result:+,}axiom-train"; fi
+  printf '%s\n' "$result"
+}
+
+runner_api() { # method path [curl args]: empty path lists runners, /<id>/labels addresses their labels
+  # The shared host exposes argv to other users; only the pipe carries the Authorization value.
+  curl -fsSL --connect-timeout 10 --max-time 60 -X "$1" \
+    -H @<(printf 'Authorization: Bearer %s\n' "$GH_TOKEN") -H 'Accept: application/vnd.github+json' \
+    "https://api.github.com/repos/TYCT-tyct/Axiom/actions/runners$2" "${@:3}"
+}
 
 # download URL FILE SHA256: a swapped or truncated download fails the checksum
 download() {
@@ -92,7 +116,8 @@ EOF
 
 install_runner() { # number
   local name=$prefix$1 dir=$home/$prefix$1 tarball=$home/actions-runner-linux-x64-$runner_version.tar.gz
-  local unit restart=
+  local unit restart= desired id current
+  desired=$(runner_labels "$1")
   unit=$(service "$1")
   if [ ! -f "$tarball" ]; then
     local url=https://github.com/actions/runner/releases/download/v$runner_version/actions-runner-linux-x64-$runner_version.tar.gz
@@ -102,8 +127,15 @@ install_runner() { # number
   if [ ! -f "$dir/.runner" ]; then
     as_user mkdir -p "$dir"
     as_user tar -xzf "$tarball" -C "$dir"
-    (cd "$dir" && as_user ./config.sh --unattended --replace --url "$repo_url" --token "$RUNNER_TOKEN" \
-      --name "$name" --labels "$labels" --work _work)
+    # Runner.Listener consumes and clears this input variable; --token would expose it in argv.
+    (cd "$dir" && ACTIONS_RUNNER_INPUT_TOKEN="$RUNNER_TOKEN" as_user ./config.sh --unattended --replace --url "$repo_url" \
+      --name "$name" --labels "$desired" --work _work)
+  fi
+  id=$(jq -r .agentId "$dir/.runner")
+  current=$(runner_api GET "/$id/labels" | jq -r '[.labels[] | select(.type == "custom") | .name] | sort | join(",")')
+  if [ "$current" != "$(jq -nr --arg labels "$desired" '$labels | split(",") | sort | join(",")')" ]; then
+    runner_api PUT "/$id/labels" -H 'Content-Type: application/json' \
+      --data "$(jq -nc --arg labels "$desired" '{labels: ($labels | split(",") | map(select(length > 0)))}')" >/dev/null
   fi
   # Apart from the configuration, so a service install that failed after it is retried on the next run
   [ -f "/etc/systemd/system/$unit" ] || (cd "$dir" && ./svc.sh install "$user")
@@ -116,6 +148,7 @@ TMPDIR=$dir/_tmp
 PATH=$node_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 GOMAXPROCS=$procs
 GOCACHE=$dir/_gocache
+AXIOM_TEST_CGROUP_PARENT=$slice
 GOLANGCI_LINT_CACHE=$dir/_lintcache"; then
     chown "$user:" "$dir/.env"
     restart=1
@@ -129,6 +162,9 @@ GOLANGCI_LINT_CACHE=$dir/_lintcache"; then
 
 install() {
   [ -n "${RUNNER_TOKEN:-}" ] || { echo "RUNNER_TOKEN is not set; see the top of this script" >&2; exit 1; }
+  [ -n "${GH_TOKEN:-}" ] || { echo "GH_TOKEN is not set; existing runner labels need Administration write permission" >&2; exit 1; }
+  # Catch missing repository access before tool installation or creating an offline runner registration.
+  runner_api GET "" >/dev/null
   command -v docker >/dev/null || { echo "install docker first" >&2; exit 1; }
   # gcc and libc6-dev: go test -race needs cgo
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-upgrade gcc libc6-dev jq curl git sudo
@@ -162,6 +198,7 @@ check() {
     ok "$prefix$i runs in $slice" test "$(systemctl show "$(service "$i")" -p Slice --value)" = "$slice"
     ok "$prefix$i has GOMAXPROCS=$procs" grep -qx "GOMAXPROCS=$procs" "$home/$prefix$i/.env"
     ok "$prefix$i has its own GOCACHE" grep -qx "GOCACHE=$home/$prefix$i/_gocache" "$home/$prefix$i/.env"
+    ok "$prefix$i has AXIOM_TEST_CGROUP_PARENT=$slice" grep -qx "AXIOM_TEST_CGROUP_PARENT=$slice" "$home/$prefix$i/.env"
   done
   return "$failed"
 }
@@ -191,5 +228,5 @@ remove() {
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 case "${1:-}" in
   install | check | remove) "$1" ;;
-  *) sed -n '2,14p' "$0" | cut -c3- >&2; exit 2 ;;
+  *) sed -n '2,16p' "$0" | cut -c3- >&2; exit 2 ;;
 esac

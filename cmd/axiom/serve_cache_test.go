@@ -45,7 +45,7 @@ func TestServeWithTheSharedCache(t *testing.T) {
 		logs := make(records, 16)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- serve(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
+		go func() { done <- serveForTest(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
 		servingAddrs(t, logs, done)
 		if got := nodes(); got != 1 {
 			t.Fatalf("run %d: %d heartbeat rows while the node serves, want 1", run, got)
@@ -107,12 +107,12 @@ func secondIsRefused(t *testing.T, firstName, secondName, want string) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	first := make(chan error, 1)
-	go func() { first <- serve(ctx, named(firstName), slog.New(slog.NewJSONHandler(logs, nil))) }()
+	go func() { first <- serveForTest(ctx, named(firstName), slog.New(slog.NewJSONHandler(logs, nil))) }()
 	servingAddrs(t, logs, first)
 
 	second, stop := context.WithTimeout(t.Context(), 30*time.Second)
 	defer stop()
-	err := serve(second, named(secondName), slog.New(slog.DiscardHandler))
+	err := serveForTest(second, named(secondName), slog.New(slog.DiscardHandler))
 	if err == nil {
 		t.Fatal("a second node against N = 1 started")
 	}

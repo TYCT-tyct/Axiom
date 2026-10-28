@@ -144,11 +144,19 @@ func TestGetAccount(t *testing.T) {
 	zero := adminapi.Money{Amount: "0", Currency: "USD"}
 	want := adminapi.AccountDetail{
 		Id: account, SiteId: f.siteID(), Name: got.Name, Kind: "personal", Status: "active", Tier: got.Tier, CreatedAt: got.CreatedAt,
-		Balance: adminapi.Balance{Balance: zero, Reserved: zero, Floor: zero, Available: zero, SpentThisMonth: zero},
+		Balance:   adminapi.Balance{Balance: zero, Reserved: zero, Floor: zero, Available: zero, SpentThisMonth: zero},
+		KeyLimits: adminapi.KeyLimitsView{Effective: adminapi.EffectiveKeyLimits{MaxKeys: 100, CreationsPerHour: 50}},
 	}
 	want.Owner.Id, want.Owner.Email = f.userOf("alice@example.com"), "alice@example.com"
 	if diff := cmp.Diff(want, got); diff != "" || got.Tier.Name != "Default" || time.Since(got.CreatedAt) > time.Hour {
 		t.Errorf("the account (-want +got):\n%s", diff)
+	}
+	f.run("UPDATE billing.balances SET balance=100, reserved=20, frozen=30 WHERE account_id=(SELECT account_id FROM accounts.users WHERE email='alice@example.com')")
+	rec = f.do(http.MethodGet, "/accounts/"+account, "", as(s))
+	expectAdmin(t, "getAccount frozen", rec, http.StatusOK, "")
+	decode(t, rec, &got)
+	if got.Balance.Available.Amount != "50" || got.Balance.Balance.Amount != "100" {
+		t.Errorf("frozen admin balance: %+v", got.Balance)
 	}
 	for _, id := range []string{"acct_00000000000000000000000000", "acct_zzzzzzzzzzzzzzzzzzzzzzzzzz", f.userOf("alice@example.com"), "nonsense"} {
 		expectAdmin(t, "getAccount "+id, f.do(http.MethodGet, "/accounts/"+id, "", as(s)), http.StatusNotFound, codeNotFound)

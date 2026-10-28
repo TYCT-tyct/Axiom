@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -61,10 +60,10 @@ func (a adminAPI) ListUsers(ctx context.Context, request adminapi.ListUsersReque
 	return adminapi.ListUsers200JSONResponse(list), nil
 }
 
-// balanceBody is an account's money as the contract gives it. Available is the balance less what is reserved, which
+// balanceBody is an account's money as the contract gives it. Available is the balance less reservations and freezes, which
 // can leave 64 bits when the figures are at their limits; text does not.
 func balanceBody(v billing.BalanceView, currency platform.Currency) adminapi.Balance {
-	available := new(big.Int).Sub(big.NewInt(v.Balance), big.NewInt(v.Reserved))
+	available := v.Available()
 	return adminapi.Balance{
 		Balance: adminMoney(v.Balance, currency), Reserved: adminMoney(v.Reserved, currency), Floor: adminMoney(v.Floor, currency),
 		Available:      adminapi.Money{Amount: available.String(), Currency: currency.String()},
@@ -107,10 +106,16 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 	}
 	var account accounts.AccountDetail
 	var balance billing.BalanceView
+	var limits adminapi.KeyLimitsView
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
 		if account, err = a.accounts.Account(ctx, tx, id); err != nil {
 			return err
 		}
+		own, effective, err := a.accounts.AccountKeyLimits(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		limits = keyLimitsBody(own, effective)
 		balance, err = a.readBalance(ctx, tx, id)
 		return err
 	}); err != nil {
@@ -123,7 +128,7 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 	body := adminapi.AccountDetail{
 		Id: account.ID.TypeID(), SiteId: account.Site.TypeID(), Name: account.Name, Kind: adminapi.AccountDetailKind(account.Kind),
 		Status: adminapi.AccountDetailStatus(account.Status), Tier: tierRef(account.Tier), Balance: balanceBody(balance, currency),
-		CreatedAt: account.CreatedAt,
+		KeyLimits: limits, CreatedAt: account.CreatedAt,
 	}
 	body.Owner.Id, body.Owner.Email = account.Owner.ID.TypeID(), account.Owner.Email
 	return adminapi.GetAccount200JSONResponse(body), nil

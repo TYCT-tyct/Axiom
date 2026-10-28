@@ -8,6 +8,7 @@ import (
 	"uuid"
 
 	"axiom/internal/billing"
+	"axiom/internal/gateway"
 	"axiom/internal/platform/pg"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
@@ -29,7 +30,7 @@ func TestTheEndpointSourcePassesTheSnapshotsStaleness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := routeDeps(callDeps{}, router, upstreams, quality.New(nil), &atomic.Bool{})
+	deps := routeDeps(callDeps{}, router, upstreams, quality.New(nil), &atomic.Bool{}, nil, gateway.NewModelList())
 	if got, err := deps.Endpoints(t.Context()); !errors.Is(err, suppliers.ErrStale) || got != nil {
 		t.Errorf("the endpoint source = %v, %v; want no endpoint and suppliers.ErrStale", got, err)
 	}

@@ -74,6 +74,7 @@ func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
 	return adminapi.SupplierCredential{
 		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.SupplierCredentialStatus(c.Status),
 		CooldownUntil: c.CooldownUntil, ExpiresAt: c.ExpiresAt, MaxConcurrency: c.MaxConcurrency,
+		RequestsPerMinute: c.RequestsPerMinute,
 	}
 }
 
@@ -114,8 +115,8 @@ func (a adminAPI) ListSuppliers(ctx context.Context, request adminapi.ListSuppli
 	return adminapi.ListSuppliers200JSONResponse(list), nil
 }
 
-// GetSupplier reads one supplier with its groups and the keys bound to them, as the sync last stored them. The keys the
-// supplier lists that are bound to none are the sync's to say, and are not stored yet.
+// GetSupplier reads one supplier with its groups, the keys bound to them and its endpoints, as the sync last stored them.
+// The keys the supplier lists that are bound to none are the sync's to say, and are not stored yet.
 func (a adminAPI) GetSupplier(ctx context.Context, request adminapi.GetSupplierRequestObject) (adminapi.GetSupplierResponseObject, error) {
 	id, err := supplierIDOf(request.SupplierId)
 	if err != nil {
@@ -131,12 +132,16 @@ func (a adminAPI) GetSupplier(ctx context.Context, request adminapi.GetSupplierR
 	body := adminapi.SupplierDetail{
 		Supplier: supplierBody(detail.Supplier), Groups: make([]adminapi.SupplierGroup, len(detail.Groups)),
 		Credentials: make([]adminapi.SupplierCredential, len(detail.Credentials)), UnboundKeys: []adminapi.UpstreamKey{},
+		Endpoints: make([]adminapi.SupplierEndpoint, len(detail.Endpoints)),
 	}
 	for i, g := range detail.Groups {
 		body.Groups[i] = groupBody(g)
 	}
 	for i, c := range detail.Credentials {
 		body.Credentials[i] = credentialBody(c)
+	}
+	for i, e := range detail.Endpoints {
+		body.Endpoints[i] = endpointBody(e)
 	}
 	return adminapi.GetSupplier200JSONResponse(body), nil
 }
@@ -407,6 +412,29 @@ func (a adminAPI) BindSupplierKey(ctx context.Context, request adminapi.BindSupp
 	return adminapi.BindSupplierKey201JSONResponse{Body: bound, Headers: adminapi.BindSupplierKey201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
+// SetSupplierCredentialLimits sets the calls a credential serves at once and the requests its minute admits.
+func (a adminAPI) SetSupplierCredentialLimits(ctx context.Context, request adminapi.SetSupplierCredentialLimitsRequestObject) (adminapi.SetSupplierCredentialLimitsResponseObject, error) {
+	supplier, err := supplierIDOf(request.SupplierId)
+	if err != nil {
+		return nil, err
+	}
+	credential, err := supplierIDOf(request.CredentialId)
+	if err != nil {
+		return nil, suppliers.ErrNoCredential
+	}
+	b := request.Body
+	limits := suppliers.Limits{MaxConcurrency: b.MaxConcurrency, RequestsPerMinute: b.RequestsPerMinute}
+	changed, replayed, err := idempotently(ctx, a.db, "setSupplierCredentialLimits", request.Params.IdempotencyKey, []any{request.SupplierId, request.CredentialId, b},
+		func(tx pg.Tx) (adminapi.SupplierCredential, error) {
+			c, err := a.suppliers.SetLimits(ctx, tx, actor(ctx), supplier, credential, limits, b.Reason)
+			return credentialBody(c), err
+		})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetSupplierCredentialLimits200JSONResponse{Body: changed, Headers: adminapi.SetSupplierCredentialLimits200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
 // pendingCursor is where a page of the queue of names to map ended, in the cursor's own form.
 type pendingCursor struct {
 	Seen  time.Time `json:"s"`
@@ -451,10 +479,7 @@ func (a adminAPI) ListPendingMappings(ctx context.Context, request adminapi.List
 	for i, n := range names {
 		list.Data[i] = adminapi.PendingMapping{
 			SupplierId: n.Supplier.String(), GroupId: n.Group.String(), GroupCodename: text(n.GroupCodename), UpstreamName: n.UpstreamName,
-			Formats: make([]adminapi.ModelFormat, len(n.Formats)),
-		}
-		for j, f := range n.Formats {
-			list.Data[i].Formats[j] = adminapi.ModelFormat(f)
+			Formats: modelFormats(n.Formats),
 		}
 	}
 	if more {

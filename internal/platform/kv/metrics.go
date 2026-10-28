@@ -12,6 +12,7 @@ import (
 // come with the alerting output (#316).
 const (
 	callsMetric      = "axiom.kv.calls"
+	droppedMetric    = "axiom.kv.dropped"
 	durationMetric   = "axiom.kv.duration"
 	breakerMetric    = "axiom.kv.breaker_open"
 	memoryMetric     = "axiom.kv.memory_used_bytes"
@@ -24,6 +25,21 @@ const (
 // resultNames are the metric's result label, by outcome. The four the README lists are what a caller sees; a timeout is
 // an unavailable access, since the caller falls back either way.
 var resultNames = [outcomes]string{ok: "ok", unavailable: "unavailable", timedOut: "unavailable", failed: "error", skipped: "skipped"}
+
+// dropReason is why a sticky write was discarded before sending (README「指标与告警」).
+type dropReason string
+
+// The reasons for a discarded write, in the order the metrics prebuild their options.
+const (
+	dropQueue    dropReason = "queue"
+	dropMemory   dropReason = "memory"
+	dropAccount  dropReason = "account"
+	dropSlots    dropReason = "slots"
+	dropShutdown dropReason = "shutdown"
+)
+
+// dropReasons lists the bounded label set whose measurement options are built at startup.
+var dropReasons = [...]dropReason{dropQueue, dropMemory, dropAccount, dropSlots, dropShutdown}
 
 // metrics is the client's instruments, with the option slices built once: passing attributes one by one allocates a
 // slice on every access, and the precheck is on the first token's path (internal/gateway's BenchmarkPrecheck).
@@ -38,6 +54,8 @@ type metrics struct {
 	callOpts    [len(uses)][outcomes]metric.MeasurementOption
 	useOpts     [len(uses)]metric.MeasurementOption
 	useIndex    map[Use]int
+	dropped     metric.Int64Counter
+	dropOpts    map[dropReason]metric.MeasurementOption
 }
 
 // newMetrics builds the instruments, writing nowhere when meter is nil.
@@ -53,6 +71,11 @@ func newMetrics(meter metric.Meter) metrics {
 		skew:        must(meter.Float64Gauge(skewMetric, metric.WithDescription("Seconds the local clock is ahead of the server's."))),
 		nodes:       must(meter.Int64Gauge(nodesMetric, metric.WithDescription("Core nodes the heartbeat sees alive."))),
 		useIndex:    make(map[Use]int, len(uses)),
+		dropped:     must(meter.Int64Counter(droppedMetric, metric.WithDescription("Sticky writes discarded before sending."))),
+		dropOpts:    make(map[dropReason]metric.MeasurementOption, len(dropReasons)),
+	}
+	for _, reason := range dropReasons {
+		m.dropOpts[reason] = metric.WithAttributes(attribute.String("reason", string(reason)))
 	}
 	m.duration = must(meter.Float64Histogram(durationMetric,
 		metric.WithDescription("How long an access of the shared state took, including a timeout."),
@@ -66,6 +89,10 @@ func newMetrics(meter metric.Meter) metrics {
 		}
 	}
 	return m
+}
+
+func (m metrics) drop(ctx context.Context, reason dropReason, n int64) {
+	m.dropped.Add(ctx, n, m.dropOpts[reason])
 }
 
 // must is the instruments' error, which only a name that is not a constant can cause.

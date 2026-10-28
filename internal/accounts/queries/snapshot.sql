@@ -7,7 +7,7 @@ SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.curren
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
     t.ip_attempt_burst, t.ip_attempts_per_minute, t.email_sign_in_failures, t.user_code_failures,
-    t.challenge_code_attempts
+    t.challenge_code_attempts, t.max_keys_per_account, t.key_creations_per_hour
 FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id;
 
 -- name: ListSiteDomains :many

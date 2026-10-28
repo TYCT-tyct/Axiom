@@ -180,14 +180,18 @@ type session struct {
 	deadline time.Time // the longest the call may run
 	logger   *slog.Logger
 
-	ends     []billing.AttemptResult // the attempts made, in order; the last is the one charged
-	tries    []try                   // the same attempts as the call log needs them: their entry and when they began
-	currency platform.Currency       // of the last attempt's price, the site's until one is made
-	skips    skips
-	last     *attempt // the attempt in progress, or the last one made
+	ends       []billing.AttemptResult // the attempts made, in order; the last is the one charged
+	tries      []try                   // the same attempts as the call log needs them: their entry and when they began
+	currency   platform.Currency       // of the last attempt's price, the site's until one is made
+	skips      skips
+	last       *attempt        // the attempt in progress, or the last one made
+	textCounts [2]textEstimate // one count (or failure) per supported encoding for this session
 
 	aggregate bool            // the client wants one body: its stream is aggregated, and nothing is written before it is whole
 	part      *protocol.Relay // the aggregate reply of an attempt that generated content, kept for the answer
+	// state is the turn state the upstream of the attempt whose content answers the call set, which the client gets
+	// back with it: the upstream's own, which no attempt the call gave up on can put there (headers.go).
+	state string
 	// live is the relay the call must release however it ends, panic included: the one being read, then the one the
 	// call ends with. It is the backstop for a way out that skips the release; drop clears it once a relay is let go,
 	// so that a discarded relay's buffers are not kept reachable (and the budget they were charged against reused)
@@ -223,7 +227,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 // the ending is out.
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
-	s.stick()
+	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
 	o := billing.Outcome{Attempts: s.ends}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
@@ -258,8 +262,8 @@ func (s *session) conclude(ctx context.Context, e ended) {
 // stick moves the session to the endpoint of the charged attempt when that attempt delivered content and the session
 // was not already there (docs/domains/routing.md「会话粘性」). A call that delivered nothing writes nothing and forgets
 // nothing: the entry stays until its time is up or a later call succeeds elsewhere. It runs before the settlement and the
-// ending, so the client's next request, which can follow the ending at once, finds the entry; while the table is in the
-// process it is one map write, not worth a goroutine (a table in the cache is written from the background, README.md「并发、背压与共享状态」).
+// ending. The process table is updated immediately; the shared cache is offered a bounded background write, so the
+// next request may arrive before that binding is visible (README.md「并发、背压与共享状态」).
 func (s *session) stick() {
 	if len(s.ends) == 0 {
 		return
@@ -269,7 +273,11 @@ func (s *session) stick() {
 		return
 	}
 	if ep := s.tries[last].entry.Endpoint; ep != s.c.sticky {
-		s.x.Router.Stick(s.c.Session, ep, s.c.Plan.StickyTTL)
+		if cache := s.c.stickyCache; cache != nil {
+			cache.Later(uuid.UUID(s.c.caller.AccountID()), s.x.Router.StickyWrite(s.c.stickyKey, ep, s.c.Plan.StickyTTL))
+		} else {
+			s.x.Router.Stick(s.c.Session, ep, s.c.Plan.StickyTTL)
+		}
 	}
 }
 

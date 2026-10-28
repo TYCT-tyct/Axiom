@@ -40,6 +40,9 @@ type Deps struct {
 	Run      Run
 	Logger   *slog.Logger
 	Meter    metric.Meter // where the handler's counters go; nil for none
+	// Models is the model list in OpenRouter's shape, which the route builder fills with each snapshot it publishes: the
+	// handler serves it and reads no price of its own, so a client's estimate and a call's charge are one reading.
+	Models *ModelList
 	// Proxies are the reverse proxies whose X-Forwarded-For names the client (AXIOM_TRUSTED_PROXIES). None trusts no
 	// header, so a request is the address it came from.
 	Proxies []netip.Prefix
@@ -59,10 +62,15 @@ type Handler struct {
 	listings   atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
 }
 
+// complete reports whether every dependency is there.
+func (d Deps) complete() bool {
+	return d.Accounts != nil && d.Catalog != nil && d.Router != nil && d.Billing != nil && d.Limits != nil && d.Memory != nil &&
+		d.Run != nil && d.Logger != nil && d.Models != nil
+}
+
 // NewHandler checks the dependencies and builds the routes.
 func NewHandler(d Deps) (*Handler, error) {
-	if d.Accounts == nil || d.Catalog == nil || d.Router == nil || d.Billing == nil || d.Limits == nil || d.Memory == nil ||
-		d.Run == nil || d.Logger == nil {
+	if !d.complete() {
 		return nil, errors.New("gateway: the handler needs every dependency")
 	}
 	if !d.Accounts.GatesLookups() {
@@ -153,22 +161,24 @@ type Call struct {
 	Compact   bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
 	Request   protocol.Request
 	Body      []byte
-	Header    http.Header // the request headers that may go upstream
+	Header    http.Header // the client's values of the headers that may go upstream, which headers.go derives per attempt
 	Session   routing.SessionKey
 	Admission accounts.Admission
 	Admitted  billing.Admitted
 	Hold      *billing.Hold
 	Plan      routing.Plan
 
-	site   accounts.Site
-	caller accounts.Caller
-	host   string
-	ip     netip.Addr
-	snap   *catalog.Snapshot
-	models []catalog.ModelID
-	sticky routing.EndpointID
-	over   routing.Override // what the request's provider object narrows the route by
-	rate   int              // requests of the key in the rate window, counted before admission
+	site        accounts.Site
+	caller      accounts.Caller
+	host        string
+	ip          netip.Addr
+	snap        *catalog.Snapshot
+	models      []catalog.ModelID
+	sticky      routing.EndpointID
+	stickyCache *kv.Client
+	stickyKey   string
+	over        routing.Override // what the request's provider object narrows the route by
+	rate        int              // requests of the key in the rate window, counted before admission
 
 	mu       sync.Mutex
 	releases []func()
@@ -338,21 +348,6 @@ func keyKey(c accounts.Caller) string {
 	return string(id[:])
 }
 
-// forwarded are the request headers that go upstream; every other one is dropped, which includes the client's
-// credentials, x-axiom-*, x-claude-code-*, HTTP-Referer and X-Title (docs/domains/gateway.md「转发规则」). The values
-// are copied as they are: anthropic-beta is not filtered, because Claude Code's value changes with every version.
-var forwarded = []string{"Anthropic-Beta", "Anthropic-Version"}
-
-func forwardable(in http.Header) http.Header {
-	out := make(http.Header, len(forwarded))
-	for _, name := range forwarded {
-		if v := in.Values(name); len(v) > 0 {
-			out[name] = append([]string(nil), v...)
-		}
-	}
-	return out
-}
-
 // read reads the body and everything the request says: its summary, the models, its session and its count in the
 // rate window. Nothing here touches the database.
 func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
@@ -384,11 +379,8 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	}
 	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
 	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, body)
-	if r.Header.Get("X-Claude-Code-Context-Compacted") != "" { // the cache it stuck for is gone: choose afresh
-		h.Router.Forget(c.Session)
-	}
-	c.sticky, _ = h.Router.Stuck(c.Session)
-	c.rate = h.countRate(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller))
+	c.rate = h.precheck(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller),
+		c, r.Header.Get("X-Claude-Code-Context-Compacted") != "")
 	return nil
 }
 

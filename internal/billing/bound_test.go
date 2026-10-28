@@ -45,6 +45,8 @@ func TestInputEstimate(t *testing.T) {
 		bound    int64 // InputBound's first
 	}{
 		{"text only, a token begun is charged", Demand{TextBytes: 4001}, unknown, 1001, 4001},
+		{"text counted in the family's tokenizer", Demand{TextBytes: 4001, TextTokens: 1500}, unknown, 1500, 4001},
+		{"a count above the text's bytes is held to them", Demand{TextBytes: 4001, TextTokens: 9000}, unknown, 4001, 4001},
 		{"an image and a file of unknown size", Demand{TextBytes: 4000, Images: 1, Documents: 1}, unknown, 1000 + 1600 + 4096, 200000},
 		{"two images", Demand{Images: 2}, unknown, 3200, 200000},
 		{"a small window holds the estimate", Demand{TextBytes: 4000, Images: 1, Documents: 1}, Model{ContextLength: 4000}, 4000, 4000},
@@ -62,12 +64,16 @@ func TestInputEstimate(t *testing.T) {
 }
 
 // TestInputEstimateNeverExceedsTheBound: the reservation covers the first sampling at InputBound, so a charge on the
-// estimate is never above what was reserved, whatever the model's data and the request.
+// estimate is never above what was reserved, whatever the model's data and the request, and whatever the text was
+// counted at.
 func TestInputEstimateNeverExceedsTheBound(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // G404: test data, not a secret
 	for range 2000 {
 		c := randomQuoteCase(t, r, 1<<20)
+		// A count is a token for a byte or more, never above the text's bytes; the estimate holds the bound even for one
+		// that is not.
+		c.d.TextTokens = r.Int64N(c.d.TextBytes + 1000)
 		first, _ := InputBound(c.d, c.e.Model)
 		if est := InputEstimate(c.d, c.e.Model); est > first {
 			t.Fatalf("estimate %d above the bound %d: %+v", est, first, c)

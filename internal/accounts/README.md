@@ -27,15 +27,15 @@
 |---|---|---|---|---|
 | `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed；open 等人机验证）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变；`getSite` 也把它交给页面），`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
 | `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
-| `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值 | 站点 | 全部参数列 |
+| `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值。另有可空的 `max_keys_per_account`、`key_creations_per_hour`（站点的 key 限额，各 1 到 1 万，由 `/key-limits` 读改，不在站点设置的整体替换里） | 站点 | 全部参数列 |
 | `tiers` | `site_id`、`name` | `UNIQUE (site_id, id)` | 站点 | `name` |
 | `roles` | `name`、`permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`（M1 只经迁移） |
-| `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)`，它同时保证 `site_id` 是一个站点 | 账户 | `name`、`status`、`tier_id` |
+| `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id`，可空的 `max_keys`、`key_creations_per_hour`（账户自己的 key 限额，各 1 到 1 万，空表示用站点的） | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)`，它同时保证 `site_id` 是一个站点 | 账户 | `name`、`status`、`tier_id`、`max_keys`、`key_creations_per_hour` |
 | `workspaces` | `site_id`、`account_id`、`name`、`status`、`is_default`、`budget`、`budget_reset`、`deleted_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；部分唯一 `(account_id) WHERE is_default`；默认工作区的 `deleted_at` 为空；`budget_reset` 取 daily / weekly / monthly，空表示不重置的总额，有它就要有 `budget` | 账户 | `name`、`status`、`budget`、`budget_reset`、`deleted_at` |
 | `users` | `site_id`、`account_id`（个人账户）、`account_kind`（恒为 `personal` 的生成列）、`email`（规范化）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_ciphertext`、`totp_nonce`、`totp_wrapped_dek`、`totp_key_version`（`secret.Sealed` 的四个字段，同为空或同不为空）、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, account_id, id)`；`UNIQUE (account_id)`、`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`：个人账户只属于这一个用户，不能绑到企业账户上，两个登录身份不会共用一个账户范围；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、四个 `totp_` 密文列、`totp_last_step`、`mfa_enabled_at` |
 | `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`：个人账户的成员只能是它唯一的用户，所以不需要另加部分唯一索引；`role_id → roles` | 账户 | 无，也没有 `UPDATE` 策略（移除成员随企业账户加 `removed_at`） |
 | `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)`；部分唯一 `(user_id, role_id) WHERE revoked_at IS NULL`：一个用户同一角色只有一条有效授予 | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态） |
-| `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management，M1 只开放 call）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；`limit_reset` 同工作区的 `budget_reset` | 账户 | `name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
+| `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management，M1 只开放 call）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；`limit_reset` 同工作区的 `budget_reset` | 账户 | `name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
 
@@ -119,9 +119,12 @@
 - **满载排队不占数据库连接**：等待放在事务里，一个满载模型的排队请求每个都占着一条连接，能把连接池占满，别的模型的准入和结算都拿不到连接；在事务外等，排队的请求不占连接，醒来重新准入还顺带读到等待期间的停用和改动。重新准入的次数受路由的排队时间上限约束，到期返回 429。
 - **停用的 key 在准入之前能看到什么**：解析和名字解析在准入之前，所以停用的 key 仍可能收到请求格式类的错误（400、模型不存在），但不会调用上游、读不到租户数据、不产生费用。准入的拒绝不缓存：拒绝可能与请求有关（IP），缓存它会误拒同一把 key 的合法请求。
 - **防枚举只承诺到这里**：不存在、属于别的站点、停用、过期、删除、IP 不允许，状态码和正文完全相同。剩余的时间差：本站真实存在的 key 多一次准入查询；缓存命中与未命中不同。只有持有这把 key 的人能利用。
-- **key 的设置**（`KeySettings`）：名称、停用、花费上限（十亿分之一额度，空表示不限）、重置周期（空表示总额不重置，要有上限）、可用模型（空表示任意，空列表按空处理）、IP 白名单（`cidr`，主机位清零）。创建时不写上限就取站点的新 key 每日上限、按日重置；`UpdateKey` 整体替换，没写的就是不限制，所以页面把读到的设置连同修改送回；到期时间只能在创建时给。创建、整体替换、删除各记一条审计（`api_key.create`、`api_key.update`、`api_key.delete`），改成停用或重新启用也是 `update`。`Key.CreatedAt` 取自 UUIDv7 的 ID（前 48 位毫秒），不另存一列。输入的检查（币种、不为负、重置需要上限、地址能解析、到期在将来）在 `cmd/axiom` 的处理器里，进模块的设置已满足表的约束。
+- **key 的设置**（`KeySettings`）：名称、停用、花费上限（十亿分之一额度，空表示不限）、重置周期（空表示总额不重置，要有上限）、可用模型（空表示任意，空列表按空处理）、IP 白名单（`cidr`，主机位清零）。创建时不写上限就取站点的新 key 每日上限、按日重置；`UpdateKey` 整体替换，没写的就是不限制，所以页面把读到的设置连同修改送回；到期时间只能在创建时给。创建、整体替换、删除各记一条审计（`api_key.create`、`api_key.update`、`api_key.delete`），改成停用或重新启用也是 `update`。`Key.CreatedAt` 是库里盖的 `created_at`（建 key 的 `InsertKey` 里取 `statement_timestamp()`），小时频率限额用同一个时间。输入的检查（币种、不为负、重置需要上限、地址能解析、到期在将来）在 `cmd/axiom` 的处理器里，进模块的设置已满足表的约束。
+- **key 的数量与创建频率**：每个账户最多保有多少把未删除的调用 key，以及每小时最多创建多少把（已删除的也算），按三层取值：账户自己的（`accounts.max_keys`、`accounts.key_creations_per_hour`）盖过站点的（`site_settings.max_keys_per_account`、`key_creations_per_hour`），站点没设的用代码里的默认（100、50）；每个限额单独往上找，空表示没设。`CreateKey` 在插入前检查（`admitKey`），都在同一个事务里：先取账户行的 `FOR NO KEY UPDATE`（`LockAccount`，同时读出账户自己的限额；与引用账户行的外键互不阻塞），再数。两个请求同时建最后一把时后一个等前一个提交后数到它，所以不会都插进去。数量是 `CountKeys`（未删除的调用 key）。频率是 `RecentKeys`：这个账户一小时内建的调用 key 的真实数量，和要等多久才有空位。一小时按**库的时钟**判：`api_keys.created_at` 由 `InsertKey` 里的 `statement_timestamp()` 盖，窗口起点也在同一个语句里取 `statement_timestamp()`，两者都在取得账户锁之后，所以各节点自己的时钟差不影响（测试 `TestKeyCreationsIgnoreTheNodesClocks`）。因此不用 ID 里的时间：UUIDv7 是建 key 的节点按自己的时钟生成的。要等的时间是「使计数降到限额以下的那把 key」满一小时的时间，即按时间从旧到新数的第「数量 − 限额 + 1」把；限额调低后数量仍是真实的窗口数，不被截断。索引 `api_keys_made_by_account (account_id, created_at) WHERE kind = 'call'` 含已删除的 key，所以没建过 key 的账户只读到自己的几行，不随全站一小时内的建 key 数增长（`TestKeyCreationsUseTheIndex` 看执行计划）。两种拒绝都是 `*TooManyKeys`（`errors.Is(err, ErrTooManyKeys)` 成立，带生效的限额和数到的数量）；超频率的还带 `RetryAfter`。控制台接口据此写 409（`too_many_keys`）和 429（`rate_limited`，带 `Retry-After`），正文写明限额和数量。站点的限额取快照里的值，别的节点最久 30 秒后生效；账户的限额在建 key 的事务里读，立即生效。调低限额不会删掉已有的 key，超过的账户只是不能再建。
+- **key 限额的读改**（`SiteKeyLimits`/`SetSiteKeyLimits`，`AccountKeyLimits`/`SetAccountKeyLimits`）：站点的和账户的都经管理接口的 `/sites/{site_id}/key-limits`、`/accounts/{account_id}/key-limits` 整体替换（没写的就是没设），要 `sites.manage`、理由和幂等键，在持有对应行锁的事务里取旧值、写、记审计（`site_key_limits.update`、`account_key_limits.update`，`detail` 有 `before`、`after`）。站点的限额不放在站点设置里：站点设置的 `PUT` 整体替换，多出的字段会被没见过它们的旧页面当作「没设」抹掉；放在自己的接口里，`WriteSiteSettings` 不写这两列，旧请求碰不到它们（`TestKeyLimits` 用旧页面的请求格式验证）。
 - 创建 key 不做幂等键：提交后响应丢失，用户在列表里看到一把从未用过的 key，删掉即可，不为重试保存明文。
 - 创建、停用、删除 key 在调用方的事务里经 `audit.Record` 记审计（`api_key.create`、`api_key.update`、`api_key.delete`），与改动一起成败。条目带 key 所属的站点和账户；注册在创建账户的同一事务里经 `audit.RegisterAccount` 登记租户，所以账户范围里就能记（平台的「审计日志」）。登记表出现之前已有的站点和账户，由迁移 `00003_console.sql` 一次补登（平台的迁移先于本模块运行，那时登记表已建好且为空）；测试 `TestUpgradeRegistersExistingTenants` 从旧版本的库升级后对旧账户做这三种操作。
+- **`api_key.update` 记改了什么**：同一个事务里先用 `LockKey` 取这把 key 的旧值（`FOR UPDATE`，所以同时的另一处修改排在这一处之后，条目记的是它真正替换掉的值），再写，再记。`detail` 里 `changed` 是改了的设置名，`before`、`after` 是其中允许披露的那些改前改后的值：名称、是否停用、花费上限、重置周期；没改的项两边都没有。可用模型和 IP 白名单只出现在 `changed` 里：模型最多 256 个、每个 200 字，会超过条目 8 KiB 的上限（`00003_audit_log.sql`）；地址是日志不记的个人信息（平台的「审计日志」）。key 的文本和哈希从不进来，它们不是设置。
 - 以后的二级站点：`Admit` 的范围并上站长账户，同一事务里一起预留（见[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)「二级站点的请求」）。
 
 | 缓存 | 内容 | 容量与过期 |
@@ -135,6 +138,7 @@
 
 - 站点、域名、站点设置、角色各是一份不可变的值，用 `atomic.Pointer` 整体替换。只有一个后台循环重载：每 30 秒无条件重载一次（本进程写这些表的接口加入时，再加写后标记"需要重载"），覆盖别的节点和命令行的修改；循环串行，旧值不会覆盖新值。平台的变更通知（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）做好后也触发重载，30 秒的兜底仍保留：快照不决定能否访问，滞后只影响价格页和参数。
 - **快照不决定能否访问**：域名和站点的启用、注册策略在库里判定，平台授予每个请求读库。快照只用来预筛没登记的域名（快照里没有就直接拒，省一次查库）、匿名价格页和计价预览按站点默认等级（`Site.DefaultTier`）选规则、尝试上限等参数、角色的权限集合。
+- 站点快照还带着本站 API 域名的 origin（`Site.APIBase`，没有启用的 API 域名时为空；有多个时优先 HTTPS，同协议取 origin 最小的那个，快照每 30 秒重载，地址不能因此变来变去）：控制台用它告诉用户把客户端指向哪里（[API key](../../docs/domains/accounts.md#api-key)「接入地址」）。它只是给界面看的地址，和准入、计价无关。
 - 超过 90 秒（3 个周期）没有成功重载，所有请求返回 503，直到重载成功；启动时第一次加载失败就不启动。
 
 ## 注册、登录与会话
@@ -250,7 +254,7 @@
 ## 公开接口（草图）
 
 ```go
-func NewService(db *pg.DB, cfg Config) (*Service, error) // cfg: 平台范围、哈希密钥、时钟；New 是 sqlc 生成的
+func NewService(db *pg.DB, cfg Config) (*Service, error) // cfg: 平台范围、哈希密钥、时钟，以及共享的缓存与主密钥（登录键由它派生）；New 是 sqlc 生成的
 func (s *Service) Load(ctx context.Context, logger *slog.Logger) error // 站点、域名、设置、角色的快照；核对权限名；启动重载循环
 func (s *Service) SiteForHost(host string) (Site, Surface, error) // Host 原样（小写、非默认端口带端口）；ErrUnknownHost、ErrStale
 func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r KeyRequest) (CreatedKey, error)
@@ -281,7 +285,7 @@ func (p Principal) SessionID() SessionID // 认出主体的会话，管理接口
 func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, error)  // 邮箱、邀请码、级别、CSRF、到期、按级别过滤的权限名
 func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, after KeyID, limit int) ([]Key, bool, error) // 新的在前，按 ID 翻页
 func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error)
-func (s *Service) UpdateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, id KeyID, k KeySettings) (Key, error) // 整体替换，含重新启用
+func (s *Service) UpdateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, id KeyID, k KeySettings) (Key, error) // 整体替换，含重新启用；先取旧值，审计记改了什么
 func (s *Service) CheckOrigin(r *http.Request) error                         // 登录、注册等没有会话的改数据请求
 func (s *Service) Cookie(host string, issued Issued) (*http.Cookie, error)
 func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时让浏览器丢掉会话 Cookie
@@ -306,6 +310,10 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 | 登录的 CSRF 用精确 Origin + JSON + 会话令牌 | 不多一种登录前状态 | 预会话令牌：多一种状态；只靠 SameSite：同站的子域仍能发起 |
 | 注册用只覆盖新账户的范围 | 注册拿不到别人的数据 | 用站点范围包住注册：能读写全站用户 |
 | 安全参数默认值在代码，按站点的运行值在 `site_settings`，按节点的在环境变量 | 安全措施要能配置（[安全的「要求」](../../docs/security.md#要求)），M1 就能改 | 写死到以后：违反要求；通用配置链：M1 用不到它的分层合并 |
+| key 数上限在插入 key 的事务里、取账户行锁之后数 | 先数后插在并发下不安全：两个创建同时读到"还剩一个"就都插入；锁与插入在同一个事务里，计数必然看到前一个提交 | 唯一约束：每把 key 都不同，约束不上；进程内计数：多节点各数一份；先数后插（new-api `token.go:326`、sub2api `api_key_service.go:442` 都是这样）：并发下超上限 |
+| 小时频率按库盖的 `created_at` 和库的时钟数，含已删除的 key | 窗口起点和建 key 的时间要出自同一个时钟：UUIDv7 的时间是各节点自己生成的，慢两分钟的节点建的 key 会被别的节点早两分钟排出窗口，同一小时就能超限额；库只有一个时钟，且在取得账户锁之后取 | 数 ID 里的时间：各节点时钟不一，测试也只能手工造 ID；每节点令牌桶：限额乘上节点数；Valkey 计数：多一个依赖，而要数的 key 本来就在库里 |
+| key 限额分站点和账户两层，各自单独的接口，账户的盖过站点的 | 任务卡要求后台可按账户调整；站点的是该站点所有账户的缺省，账户上只记它与缺省不同的；站点的不放进整体替换的站点设置，免得旧页面的请求把它抹掉 | 只有站点一层：不能让一个账户比别的多或少；再加等级一层：等级现在没有设置项，要先有地方放 |
+| 审计里可用模型和 IP 白名单只记「变了」 | 模型最多 256 个、每个 200 字，写进 `detail` 会超过 8 KiB；地址是日志不记的个人信息 | 记全部值：条目可能写不进去，或把地址写进日志；记条数：说不清改成了什么 |
 | 恢复码和会话令牌只存 SHA-256，密码用 argon2id | 80 位和 256 位的随机串猜不中，快哈希就够；密码是人选的，要慢哈希 | 全部 argon2：每个请求认会话都要一次慢哈希 |
 | 对外 ID 只在 HTTP 边界转换 | 库里索引小，Go 里类型安全 | 库里存 TypeID：索引更大；对外用原始 UUID：看不出是什么 |
 | 每种 ID 各写 `TypeID` 和 `Parse…ID`，不用泛型 | 每种只多一个类型和两个短函数，类型名和报错直接是 `SiteID`；前缀在本模块，一眼能对上 | `ID[K]` 加每种一个标记类型：省不了几行，读的人要多绕一层 |

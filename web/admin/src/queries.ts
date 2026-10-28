@@ -44,6 +44,13 @@ export const accountQuery = (id: AdminSchemas["AccountId"]) =>
       unwrap(adminApi.GET(`${base}/accounts/{account_id}`, { params: { path: { account_id: id } }, signal })),
   });
 
+export const siteKeyLimitsQuery = (id: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-key-limits", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/key-limits`, { params: { path: { site_id: id } }, signal })),
+  });
+
 export const suppliersQuery = (status?: AdminSchemas["SupplierStatus"]) =>
   infiniteQueryOptions({
     queryKey: [accountKey, "suppliers", status ?? ""],
@@ -58,12 +65,18 @@ export const suppliersQuery = (status?: AdminSchemas["SupplierStatus"]) =>
     getNextPageParam: nextCursor,
   });
 
+// A supplier as a node of any release still running answers it. During a rolling release a node from before endpoints
+// were listed answers without them, which the page shows as not available rather than as none.
+export type SupplierView = Omit<AdminSchemas["SupplierDetail"], "endpoints"> & {
+  endpoints?: AdminSchemas["SupplierEndpoint"][];
+};
+
 // A supplier that is being connected changes by itself, as the sync works through it: the page asks again until it
 // settles.
 export const supplierQuery = (id: string) =>
   queryOptions({
     queryKey: [accountKey, "supplier", id],
-    queryFn: ({ signal }) =>
+    queryFn: ({ signal }): Promise<SupplierView> =>
       unwrap(adminApi.GET(`${base}/suppliers/{supplier_id}`, { params: { path: { supplier_id: id } }, signal })),
     refetchInterval: ({ state }) => {
       const status = state.data?.supplier.status;

@@ -141,7 +141,8 @@ func usedItems(u catalog.Usage) (items catalog.ItemSet) {
 }
 
 // AttemptRecord is a finished attempt, as billing hands it to RecordAttempts. Site and Account are the request's tenant,
-// nil for a request of the platform's own.
+// nil for a request of the platform's own. Test marks a test generation, whose estimate is a bound of our own choosing
+// (TestEndpoint): no tenant pays it, and reconciliation never judges it.
 type AttemptRecord struct {
 	Request       platform.RequestID
 	Seq           platform.AttemptSeq
@@ -150,6 +151,7 @@ type AttemptRecord struct {
 	Usage         []catalog.Usage
 	Cost          AttemptCost
 	FinishedAt    time.Time
+	Test          bool
 }
 
 // setBasis saves what the cost was computed from; an attempt without a rate or a conversion keeps those columns NULL.
@@ -189,7 +191,7 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 			RequestID: uuid.UUID(a.Request), AttemptSeq: int16(a.Seq), SiteID: a.Site, AccountID: a.Account,
 			SupplierID: a.Receipt.supplier, CredentialID: a.Receipt.credential, EndpointID: a.Receipt.endpoint,
 			ScheduleID: a.Receipt.schedule, Usage: usage, PricedAt: a.Receipt.pricedAt, FinishedAt: a.FinishedAt,
-			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate,
+			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate, Test: a.Test,
 		}
 		setBasis(&row, a)
 		if a.Receipt.ref != "" {

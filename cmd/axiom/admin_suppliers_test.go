@@ -48,11 +48,11 @@ func (f supplierFixture) connect() adminapi.Supplier {
 }
 
 // group makes a group of the supplier the way the sync does and returns its ID.
-func (f supplierFixture) group(supplier, ref string, present bool) string {
+func (f supplierFixture) group(supplier, ref string) string {
 	f.t.Helper()
 	id := uuid.NewV7().String()
 	f.run(fmt.Sprintf(`INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, present)
-		VALUES ('%s', '%s', '%s', 'Group %s', 1.5, %v)`, id, supplier, ref, ref, present))
+		VALUES ('%s', '%s', '%s', 'Group %s', 1.5, true)`, id, supplier, ref, ref))
 	return id
 }
 
@@ -75,6 +75,10 @@ func TestCreateSupplier(t *testing.T) {
 	decode(t, rec, &detail)
 	if diff := cmp.Diff(want, detail.Supplier); diff != "" || len(detail.Groups) != 0 || len(detail.Credentials) != 0 || len(detail.UnboundKeys) != 0 {
 		t.Errorf("getSupplier (-want +got):\n%s", diff)
+	}
+	// The contract requires the list: a supplier with no endpoints answers an empty one, which decodes as non-nil.
+	if detail.Endpoints == nil || len(detail.Endpoints) != 0 {
+		t.Errorf("getSupplier's endpoints: %#v, want an empty list", detail.Endpoints)
 	}
 	rec = f.do(http.MethodGet, "/suppliers", "", as(f.s))
 	expectAdmin(t, "listSuppliers", rec, http.StatusOK, "")

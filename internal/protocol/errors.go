@@ -157,7 +157,7 @@ func appendMessagesUsage(dst []byte, u catalog.Usage, cost string) []byte {
 	return fmt.Appendf(dst, `{"input_tokens":%d,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d,`+
 		`"cache_creation":{"ephemeral_5m_input_tokens":%d,"ephemeral_1h_input_tokens":%d},"output_tokens":%d,`+
 		`"server_tool_use":{"web_search_requests":%d}%s}`,
-		u.Count(catalog.ItemInput), u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h),
+		u.Count(catalog.ItemInput)+u.Count(catalog.ItemImageIn)+u.Count(catalog.ItemAudioIn), u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h),
 		u.Count(catalog.ItemCacheRead), u.Count(catalog.ItemCacheWrite), u.Count(catalog.ItemCacheWrite1h),
 		u.OutputTotal(), u.Count(catalog.ItemWebSearch), cost)
 }

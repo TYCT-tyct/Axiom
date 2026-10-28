@@ -79,7 +79,7 @@ func convertBody(to protocol.Format, body string, change func(*protocol.Target))
 	if change != nil {
 		change(&target)
 	}
-	u, err := protocol.Prepare(&r, []byte(body), target, protocol.Rewrites{Identity: derive})
+	u, err := protocol.Prepare(&r, []byte(body), target, rewrites())
 	return u.Body, err
 }
 
@@ -175,7 +175,31 @@ func TestConvertToMessages(t *testing.T) {
 			"a named tool", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"function","function":{"name":"f"}}`), nil,
 			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"tool","name":"f"}}`,
 		},
+		{
+			"an escaped auto", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"\u0061uto"`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"auto"}}`,
+		},
+		{
+			"an escaped required", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"requir\u0065d"`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"any"}}`,
+		},
+		{
+			"an escaped none", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"\u006eone"`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"none"}}`,
+		},
+		{
+			"a named tool in escaped spelling", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"\u0066unction":{"name":"\u0066"}}`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"tool","name":"f"}}`,
+		},
 		{"a strict schema outside the subset", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object","properties":{"a":{"type":"integer","minimum":1}},"additionalProperties":false},"strict":true}}]`), nil, "unsupported"},
+		{
+			"the default modalities in escaped spelling", chatBody(`"messages":[` + userHi + `],"modalities":["te\u0078t"]`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`,
+		},
+		{
+			"the default modalities over two lines", chatBody(`"messages":[` + userHi + `],"modalities":[` + "\n" + `"text"]`), nil,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`,
+		},
 		{"a forced tool while thinking", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required","reasoning_effort":"high"`), nil, "unsupported"},
 		{"a forced tool the model refuses", chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`), noForcedTool, "unsupported"},
 		{
@@ -225,7 +249,7 @@ func TestConvertToMessages(t *testing.T) {
 		{"a member not converted", chatBody(`"messages":[` + userHi + `],"prediction":{"type":"content","content":"x"}`), nil, "unsupported"},
 		{
 			"identity, routing and tier", chatBody(`"messages":[` + userHi + `],"user":"u1","prompt_cache_key":"k","provider":{"order":["x"]},"service_tier":"default"`), nil,
-			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"service_tier":"standard_only","metadata":{"user_id":"h(u1)"}}`,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"service_tier":"standard_only","metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"\",\"session_id\":\"h(u1)\"}"}}`,
 		},
 		{"priority", chatBody(`"messages":[` + userHi + `],"service_tier":"priority"`), nil, "unsupported"},
 		{"verbosity", chatBody(`"messages":[` + userHi + `],"verbosity":"low"`), nil, "unsupported"},
@@ -489,7 +513,7 @@ func FuzzConvert(f *testing.F) {
 		}
 		target := claudeLike(to)
 		target.MaxOutput = 4096
-		u, err := protocol.Prepare(&r, body, target, protocol.Rewrites{Identity: derive})
+		u, err := protocol.Prepare(&r, body, target, rewrites())
 		ns, _ := errors.AsType[*protocol.NotSupported](err)
 		switch {
 		case ns != nil, errors.Is(err, protocol.ErrInvalid):

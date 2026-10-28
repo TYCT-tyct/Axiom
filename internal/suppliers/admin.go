@@ -50,6 +50,10 @@ var (
 	ErrAliasExists = errors.New("suppliers: that name already has an alias in that scope")
 	// ErrUnitValue is a value that is not above 0 and at most 1000 with at most 15 decimals.
 	ErrUnitValue = errors.New("suppliers: a unit value is above 0 and at most 1000, with at most 15 decimals")
+	// ErrNoCredential is a credential the supplier does not have.
+	ErrNoCredential = errors.New("suppliers: the supplier has no such credential")
+	// ErrLimits is a concurrency that is not 1 to 2147483647, or a per-minute limit that is not that or none.
+	ErrLimits = errors.New("suppliers: concurrency is 1 to 2147483647, and requests a minute 1 to 2147483647 or none")
 )
 
 // LoginError is credentials that cannot make a login: the member that is wrong, and which rule it breaks.
@@ -202,13 +206,43 @@ type Credential struct {
 	CooldownUntil  *time.Time
 	ExpiresAt      *time.Time
 	MaxConcurrency int
+	// RequestsPerMinute is the account RPM ceiling for selecting this credential; nil adds no ceiling.
+	RequestsPerMinute *int
 }
 
-// Detail is a supplier with its groups and the keys bound to them, as the sync last stored them.
+// credentialOf is a credential as the admin shows it.
+func credentialOf(id, group uuid.UUID, ref, status string, cooldown, expires *time.Time, concurrency int32, perMinute *int32) Credential {
+	return Credential{
+		ID: id, Group: group, UpstreamKeyRef: ref, Status: status, CooldownUntil: cooldown, ExpiresAt: expires,
+		MaxConcurrency: int(concurrency), RequestsPerMinute: limited(perMinute),
+	}
+}
+
+// limited is a per-minute limit as the admin shows it: a column with no value is no ceiling of Axiom's, which stays no
+// value here.
+func limited(n *int32) *int {
+	if n == nil {
+		return nil
+	}
+	v := int(*n)
+	return &v
+}
+
+// Endpoint is one model in one of the supplier's groups, as the sync projected it: what a person picks to test.
+type Endpoint struct {
+	ID, Group, Model uuid.UUID
+	UpstreamName     string
+	Formats          []string
+	CostState        string
+	Enabled          bool
+}
+
+// Detail is a supplier with its groups, the keys bound to them and its endpoints, as the sync last stored them.
 type Detail struct {
 	Supplier    Supplier
 	Groups      []Group
 	Credentials []Credential
+	Endpoints   []Endpoint
 }
 
 func groupOf(id uuid.UUID, ref, name, ratio string, facts []byte, selected bool, codename *string, present bool) (Group, error) {
@@ -219,7 +253,7 @@ func groupOf(id uuid.UUID, ref, name, ratio string, facts []byte, selected bool,
 	return g, nil
 }
 
-// Supplier is one supplier with its groups and credentials; ErrNoSupplier when there is none.
+// Supplier is one supplier with its groups, credentials and endpoints; ErrNoSupplier when there is none.
 func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, error) {
 	summary, err := a.view(ctx, tx, id)
 	if err != nil {
@@ -243,9 +277,17 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, e
 		return Detail{}, fmt.Errorf("read the credentials: %w", err)
 	}
 	for _, c := range creds {
-		d.Credentials = append(d.Credentials, Credential{
-			ID: c.ID, Group: c.SupplierGroupID, UpstreamKeyRef: c.UpstreamKeyRef, Status: c.Status,
-			CooldownUntil: c.CooldownUntil, ExpiresAt: c.ExpiresAt, MaxConcurrency: int(c.MaxConcurrency),
+		d.Credentials = append(d.Credentials, credentialOf(
+			c.ID, c.SupplierGroupID, c.UpstreamKeyRef, c.Status, c.CooldownUntil, c.ExpiresAt, c.MaxConcurrency, c.RequestsPerMinute))
+	}
+	endpoints, err := q.ListEndpointsOf(ctx, tx, id)
+	if err != nil {
+		return Detail{}, fmt.Errorf("read the endpoints: %w", err)
+	}
+	for _, e := range endpoints {
+		d.Endpoints = append(d.Endpoints, Endpoint{
+			ID: e.ID, Group: e.SupplierGroupID, Model: e.ModelID, UpstreamName: e.UpstreamName, Formats: e.Formats,
+			CostState: e.CostState, Enabled: e.Enabled,
 		})
 	}
 	return d, nil

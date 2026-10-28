@@ -23,21 +23,29 @@ type adminAPI struct {
 	accounts *accounts.Service
 	catalog  *catalog.Catalog
 	db       *pg.DB
-	// suppliers is what the admin does with suppliers; detections limits how often a session may ask a third party's
-	// site what it runs.
-	logger     *slog.Logger
+	logger   *slog.Logger
+	// suppliers is what the admin does with suppliers; calls is the node's call path, which a test generation goes
+	// through, and detections and tests limit how often a session may ask a third party's site what it runs and may
+	// make it generate.
 	suppliers  *suppliers.Admin
+	calls      *suppliers.Service
 	detections *windowLimiter
+	tests      *windowLimiter
 }
 
-// detectionsPerMinute is how many times a session may run detectSupplier in a minute.
-const detectionsPerMinute = 10
+// detectionsPerMinute is how many times a session may run detectSupplier in a minute; testsPerMinute is the same for
+// testSupplierEndpoint, whose every request is a real generation the platform pays for.
+const (
+	detectionsPerMinute = 10
+	testsPerMinute      = 10
+)
 
 // newAdminAPI is the admin's handlers on the modules and the database of the node.
-func newAdminAPI(version string, a *accounts.Service, c *catalog.Catalog, s *suppliers.Admin, db *pg.DB, logger *slog.Logger) adminAPI {
+func newAdminAPI(version string, a *accounts.Service, c *catalog.Catalog, s *suppliers.Admin, calls *suppliers.Service, db *pg.DB, logger *slog.Logger) adminAPI {
 	return adminAPI{
-		version: version, accounts: a, catalog: c, suppliers: s, db: db, logger: logger,
+		version: version, accounts: a, catalog: c, suppliers: s, calls: calls, db: db, logger: logger,
 		detections: newWindowLimiter(detectionsPerMinute, time.Minute, time.Now),
+		tests:      newWindowLimiter(testsPerMinute, time.Minute, time.Now),
 	}
 }
 

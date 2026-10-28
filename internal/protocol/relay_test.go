@@ -389,7 +389,7 @@ func TestRelayFail(t *testing.T) {
 }
 
 func TestRelayUnsupported(t *testing.T) {
-	for _, pair := range [][2]protocol.Format{{protocol.Messages, protocol.Chat}, {protocol.Responses, protocol.Messages}} {
+	for _, pair := range [][2]protocol.Format{{protocol.Messages, protocol.Responses}, {protocol.Responses, protocol.Messages}} {
 		r := protocol.NewRelay(pair[0], pair[1], strings.NewReader(""), protocol.UsageContext{}, options)
 		if _, err := r.Next(); err == nil {
 			t.Errorf("relaying format %d to a client of format %d succeeded", pair[1], pair[0])

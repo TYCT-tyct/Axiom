@@ -39,6 +39,7 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 		return over, ended{}
 	}
+	s.state = a.state // as in commit: the reply is the answer, so its upstream's state goes with it (headers.go)
 	rec.Result, rec.Finish = billing.Aggregated, billing.FinishStop
 	s.record(a, false, 0, 0)
 	return over, ended{reply: body, status: resp.StatusCode}

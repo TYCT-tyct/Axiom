@@ -324,7 +324,8 @@ paths:
         Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key
         gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is
         stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused,
-        and the user deletes it.
+        and the user deletes it. The site may cap the keys an account holds, answered 409 `too_many_keys`, and the keys it
+        makes in an hour, answered 429 with `Retry-After`; the message names the limit and how many the account has.
       security:
         - session: []
           csrf: []
@@ -344,6 +345,8 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/keys/{key_id}:
     parameters:
@@ -563,7 +566,7 @@ components:
           schema: {$ref: "#/components/schemas/Error"}
     Conflict:
       description: >-
-        The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `stale_revision`,
+        The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`,
         `idempotency_key_reused`).
       content:
         application/json:
@@ -634,6 +637,7 @@ components:
         - conflict
         - email_taken
         - name_taken
+        - too_many_keys
         - stale_revision
         - idempotency_key_reused
         - invalid_invite
@@ -781,6 +785,14 @@ components:
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD, description: "The site's accounting currency, the one of every `Money` its API shows. It never changes."}
         logo_url: {type: string, description: "Absent when the site has no logo."}
         key_prefix: {type: string, example: sk-ax-v1-, description: "What the site's API keys start with."}
+        api_base_url:
+          type: string
+          format: uri
+          example: https://api.example.com
+          description: >-
+            Where a key's calls go: the origin of the site's API domain, which serves `/v1/...`. The console shows it
+            to the user because the console's own host is a different one; it is never built from the request's Host.
+            Absent when the site has no enabled API domain.
         registration:
           type: string
           enum: [invite, closed, open]
