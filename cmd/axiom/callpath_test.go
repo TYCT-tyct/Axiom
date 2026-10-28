@@ -10,6 +10,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/gateway"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -59,7 +60,9 @@ func TestTheCallPathIsWhatBillingWritesSuppliersThrough(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(5 * time.Millisecond) // past the reservation's deadline
+	if err := pgtest.Run(ctx, f.super, "UPDATE billing.reservations SET deadline = clock_timestamp() - interval '1 hour'"); err != nil {
+		t.Fatal(err)
+	}
 	if n, err := f.billing.Cleanup(ctx, 10); err != nil || n != 1 {
 		t.Fatalf("Cleanup = %d, %v; want the one reservation", n, err)
 	}

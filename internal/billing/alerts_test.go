@@ -61,7 +61,7 @@ func TestCleanupGoesPastAReservationThatFails(t *testing.T) {
 	slices.SortFunc(holds, func(a, c *Hold) int { return bytes.Compare(a.id[:], c.id[:]) })
 	failing, healthy := holds[0], holds[1] // cleanup takes them in request order
 	b.supplies.failLost = map[uuid.UUID]error{failing.id: errors.New("the supplier's side is broken")}
-	time.Sleep(5 * time.Millisecond) // past the reservations' deadline
+	b.pastDeadline()
 	n, err := b.billing.Cleanup(t.Context(), 100)
 	if n != 1 || err == nil || !strings.Contains(err.Error(), failing.id.String()) {
 		t.Fatalf("Cleanup = %d, %v; want one cleaned and the error naming the failing request", n, err)

@@ -269,7 +269,7 @@ func TestALateSettlementResolvesTheLostRequestInSuppliersTables(t *testing.T) {
 		t.Fatal("the settlement was never tried")
 	}
 
-	time.Sleep(200 * time.Millisecond) // past the reservation's deadline
+	r.sql("UPDATE billing.reservations SET deadline = clock_timestamp() - interval '1 hour'")
 	if n, err := r.billing.Cleanup(t.Context(), 10); err != nil || n != 1 {
 		t.Fatalf("Cleanup = %d, %v; want the one reservation", n, err)
 	}
