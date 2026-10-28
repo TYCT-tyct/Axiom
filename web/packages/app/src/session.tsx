@@ -167,7 +167,12 @@ export function safeNext(value: unknown, base = import.meta.env.BASE_URL) {
     return undefined;
   }
   const root = base.replace(/\/$/, "");
-  const target = new URL(root + value, origin);
+  let target: URL;
+  try {
+    target = new URL(root + value, origin);
+  } catch {
+    return undefined; // `//[` and the like do not parse
+  }
   const inApp = target.origin === origin && (target.pathname === root || target.pathname.startsWith(`${root}/`));
   const path = target.pathname.slice(root.length) || "/";
   // A path that begins with two slashes, as `/a/..//host` resolves to, would be read as another site's once the history

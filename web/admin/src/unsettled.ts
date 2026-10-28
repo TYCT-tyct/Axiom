@@ -12,9 +12,26 @@
 export type Unsettled = { key: string; request: () => Promise<unknown> };
 
 const held = new Map<string, Unsettled>();
+// The key of the try that was sent last for a scope. An answer that comes late from an earlier try, in a dialog that
+// has since been closed or given up, must not hold or drop what a later try left: only the owner's answers count.
+const owner = new Map<string, string>();
 
 export const unsettled = {
   get: (scope: string) => held.get(scope),
-  hold: (scope: string, change: Unsettled) => void held.set(scope, change),
-  drop: (scope: string) => void held.delete(scope),
+  // Sending a try makes it the owner.
+  own: (scope: string, key: string) => void owner.set(scope, key),
+  hold(scope: string, change: Unsettled) {
+    if (owner.get(scope) === change.key) {
+      held.set(scope, change);
+    }
+  },
+  // Dropping with a key is the answer of that try; without one it is the person giving up, which ends every try's say.
+  drop(scope: string, key?: string) {
+    if (key === undefined || owner.get(scope) === key) {
+      held.delete(scope);
+    }
+    if (key === undefined) {
+      owner.delete(scope);
+    }
+  },
 };

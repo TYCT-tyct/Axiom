@@ -85,15 +85,15 @@ function useChange<Out>(operation: string) {
       if (next.state === "unknown") {
         unsettled.hold(scope, { key: next.key, request: next.request });
       } else {
-        unsettled.drop(scope);
+        unsettled.drop(scope, from.key);
       }
       // Someone changed the thing since it was read: fetch what it is now, for the form to be filled from.
       if (next.state === "stale") {
         void refresh();
       }
     },
-    onSuccess: () => {
-      unsettled.drop(scope);
+    onSuccess: (_, { from }) => {
+      unsettled.drop(scope, from.key);
       return refresh();
     },
   });
@@ -108,7 +108,10 @@ function useChange<Out>(operation: string) {
     mutation,
     refresh,
     lost,
-    send: (from: Sendable<Call<Out>>, call: Call<Out>) => mutation.mutate({ from, call }),
+    send: (from: Sendable<Call<Out>>, call: Call<Out>) => {
+      unsettled.own(scope, from.key);
+      mutation.mutate({ from, call });
+    },
     restart,
   };
 }

@@ -11,6 +11,9 @@ const dots = [
   { value: "/../console/keys", want: "/keys" },
   { value: "/../sign-in", want: undefined },
   { value: "/keys/../sign-in?next=/x", want: undefined },
+  { value: "//", want: undefined },
+  { value: "//[", want: undefined },
+  { value: "//evil.example:bad", want: undefined },
 ];
 
 it.each([
@@ -38,4 +41,10 @@ it.each(dots)("under a base, the way back after signing in is $value → $want",
 it("under the root, a path that climbs out of it is the root", () => {
   expect(safeNext("/../keys", "/")).toBe("/keys");
   expect(safeNext("/%2e%2e//evil.example", "/")).toBeUndefined();
+});
+
+it("malformed addresses are dropped under the root too", () => {
+  for (const value of ["//", "//[", "//evil.example:bad", "/%2e%2e//["]) {
+    expect(safeNext(value, "/")).toBeUndefined();
+  }
 });
