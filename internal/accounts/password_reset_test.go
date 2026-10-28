@@ -37,7 +37,7 @@ func recoverySite(t *testing.T) recoveryWorld {
 	queue := x.db.NewQueue(logger, platform, nil)
 	mailer, err := axmail.Register(t.Context(), x.db, queue, axmail.Config{
 		Host: "localhost", Port: 1, From: mail.Address{Address: "no-reply@example.com"},
-	}, logger)
+	}, nil, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestPasswordResetDisabledAndUnavailable(t *testing.T) {
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM accounts.password_reset_requests"); got[0] != "0" {
 		t.Fatal("queue failure left request rows")
 	}
-	disabled, err := axmail.Register(t.Context(), x.db, x.queue, axmail.Config{}, slog.New(slog.DiscardHandler))
+	disabled, err := axmail.Register(t.Context(), x.db, x.queue, axmail.Config{}, nil, nil, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

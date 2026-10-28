@@ -20,7 +20,7 @@ func passwordConsole(t *testing.T) consoleFixture {
 	f := newConsoleFixture(t)
 	logger := slog.New(slog.DiscardHandler)
 	q := f.db.NewQueue(logger, pg.PlatformScope(), nil)
-	mailer, err := axmail.Register(t.Context(), f.db, q, axmail.Config{Host: "localhost", Port: 1, From: mail.Address{Address: "no-reply@example.com"}}, logger)
+	mailer, err := axmail.Register(t.Context(), f.db, q, axmail.Config{Host: "localhost", Port: 1, From: mail.Address{Address: "no-reply@example.com"}}, nil, nil, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
