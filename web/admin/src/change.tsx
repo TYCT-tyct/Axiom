@@ -1,16 +1,18 @@
-import { accountKey, readForm, useErrors } from "@axiom/app";
+import { accountKey, readForm, useErrors, useSession } from "@axiom/app";
 import { Button, Dialog, FormError, Icon, SubmitButton, TextAreaField, TextField } from "@axiom/ui";
 import { useIsFetching, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type Attempt, failed, opened, type Sendable } from "./attempt";
+import { unsettled } from "./unsettled";
 
 // A change is one write of the admin API, which the person does for a reason that goes to the audit log, and which the
 // server does at most once per Idempotency-Key (api/admin.yaml). ChangeDialog is the one way a page makes it: the
 // fields of the change, the reason, a button that says what it does (and, for a risky change, a name to type first),
 // and afterwards what happened, including when the answer is the stored result of an earlier try. When it cannot be
-// known whether a try was done, the form locks and only that request is sent again; when the thing changed since it was
-// read, nothing is sent until the form is filled again from what is current.
+// known whether a try was done, the form locks and only that request is sent again, also after the dialog was closed
+// and opened again or the person signed in again (unsettled.ts); when the thing changed since it was read, nothing is
+// sent until the form is filled again from what is current.
 
 // What a form says when it cannot make the request from what was typed.
 export type Problem = { problem: string };
@@ -22,6 +24,9 @@ type Context = { reason: string; key: string };
 
 type Props<Input, Out> = {
   title: string;
+  // What is being changed, the same each time its dialog opens, so an unsettled try is met again: the kind of change and
+  // the thing it is made to ("credit-grant:" + the account's id).
+  operation: string;
   intro?: ReactNode;
   action: string;
   danger?: boolean;
@@ -55,12 +60,20 @@ type Call<Out> = () => Promise<Sent<Out>>;
 const newKey = () => crypto.randomUUID();
 
 // One key per intended change, made when the dialog opens: pressing the button again, or sending after a lost
-// response, is the same change and not a second one (attempt.ts). A change that was done refreshes everything the admin
-// shows.
-function useChange<Out>() {
+// response, is the same change and not a second one (attempt.ts). A try that is unsettled is held outside the dialog
+// and found again when it opens, as the request that must be settled before anything else is sent. A change that was
+// done refreshes everything the admin shows.
+function useChange<Out>(operation: string) {
   const queryClient = useQueryClient();
+  const { user, account } = useSession();
+  const scope = `${user.id}/${account}/${operation}`;
   const refresh = () => queryClient.invalidateQueries({ queryKey: [accountKey] });
-  const [attempt, setAttempt] = useState<Attempt<Call<Out>>>(() => opened(newKey()));
+  const [carried] = useState(() => unsettled.get(scope));
+  const [attempt, setAttempt] = useState<Attempt<Call<Out>>>(() =>
+    carried ? { state: "unknown", key: carried.key, request: carried.request as Call<Out> } : opened(newKey()),
+  );
+  // Whether the form this try was typed in is gone: the dialog was opened again, and what is left is the request.
+  const [lost, setLost] = useState(carried !== undefined);
   const mutation = useMutation({
     // The variables hold what the person typed, a supplier's login among it. Nothing keeps them once the dialog is
     // gone: gcTime 0 drops the cache entry as soon as no dialog watches it.
@@ -69,22 +82,34 @@ function useChange<Out>() {
     onError: (error, { from, call }) => {
       const next = failed(from, call, error, newKey);
       setAttempt(next);
+      if (next.state === "unknown") {
+        unsettled.hold(scope, { key: next.key, request: next.request });
+      } else {
+        unsettled.drop(scope);
+      }
       // Someone changed the thing since it was read: fetch what it is now, for the form to be filled from.
       if (next.state === "stale") {
         void refresh();
       }
     },
-    onSuccess: refresh,
+    onSuccess: () => {
+      unsettled.drop(scope);
+      return refresh();
+    },
   });
+  const restart = () => {
+    unsettled.drop(scope);
+    mutation.reset();
+    setLost(false);
+    setAttempt(opened(newKey()));
+  };
   return {
     attempt,
     mutation,
     refresh,
+    lost,
     send: (from: Sendable<Call<Out>>, call: Call<Out>) => mutation.mutate({ from, call }),
-    restart: () => {
-      mutation.reset();
-      setAttempt(opened(newKey()));
-    },
+    restart,
   };
 }
 
@@ -100,7 +125,7 @@ export function useSnapshot<T>(live: T) {
 
 export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
   const { done, onClose, title, reload, verdict } = props;
-  const change = useChange<Out>();
+  const change = useChange<Out>(props.operation);
   // The form is made again when it is filled from what is current, so its fields take their new initial values.
   const [form, setForm] = useState(0);
   const { state } = change.attempt;
@@ -126,10 +151,56 @@ export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
         <Result replayed={change.mutation.data.replayed} verdict={verdict} onClose={close}>
           {done(change.mutation.data.data)}
         </Result>
+      ) : change.lost ? (
+        <UnsettledChange change={change} onClose={close} />
       ) : (
         <ChangeForm key={form} {...props} onClose={close} change={change} reload={refill} />
       )}
     </Dialog>
+  );
+}
+
+// What a dialog opened again shows for a try left unsettled: the form it was typed in is gone, and the request, which is
+// all that can be sent, is not shown as editable. The person sends it again or gives it up; anything else would make a
+// second change of what may be done already.
+function UnsettledChange<Out>({ change, onClose }: { change: Change<Out>; onClose: () => void }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const { attempt, mutation } = change;
+  if (attempt.state !== "unknown") {
+    return (
+      <div className="space-y-4">
+        <FormError>{t(attempt.state === "reused" ? "change.reused" : "change.stale")}</FormError>
+        <div className="flex justify-end pt-2">
+          <Button variant="primary" size="md" onClick={onClose}>
+            {t("change.close")}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <form
+      noValidate
+      className="space-y-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!mutation.isPending) {
+          change.send(attempt, attempt.request);
+        }
+      }}
+    >
+      <FormError>
+        {mutation.error ? <p>{errors.message(mutation.error)}</p> : null}
+        <p className="text-t2">{t("change.unsettled")}</p>
+      </FormError>
+      <div className="flex justify-end gap-2 pt-2">
+        <Button size="md" disabled={mutation.isPending} onClick={change.restart}>
+          {t("change.giveUp")}
+        </Button>
+        <SubmitButton pending={mutation.isPending}>{t("change.resend")}</SubmitButton>
+      </div>
+    </form>
   );
 }
 

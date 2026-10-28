@@ -20,6 +20,7 @@ export function CreditDialog({ account, onClose }: { account: AdminSchemas["Acco
   };
   return (
     <ChangeDialog
+      operation={`credit-grant:${account.id}`}
       title={t("users.credit.title", { email: account.owner.email })}
       intro={<p>{t("users.credit.intro")}</p>}
       action={t("users.credit.submit")}

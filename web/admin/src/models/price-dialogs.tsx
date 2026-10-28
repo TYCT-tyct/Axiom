@@ -39,6 +39,7 @@ export function PublishPriceDialog({
   };
   return (
     <ChangeDialog
+      operation={`model-price:${model.id}:${currency ?? ""}`}
       reload={reload}
       title={t("models.prices.publishTitle", { slug: model.slug })}
       intro={<p>{t("models.prices.publishIntro", { source: t(`models.source.${model.price_source}`) })}</p>}
@@ -84,6 +85,7 @@ export function SourceDialog({ model: live, onClose }: { model: Model; onClose: 
   };
   return (
     <ChangeDialog
+      operation={`model-price-source:${model.id}`}
       reload={reload}
       title={t("models.prices.sourceTitle", { slug: model.slug })}
       intro={

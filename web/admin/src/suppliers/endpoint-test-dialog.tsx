@@ -30,6 +30,7 @@ export function EndpointTestDialog({
   const { t } = useTranslation();
   return (
     <ChangeDialog
+      operation={`endpoint-test:${endpoint.id}`}
       title={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
       intro={<p>{t("suppliers.test.body")}</p>}
       action={t("suppliers.test.action")}

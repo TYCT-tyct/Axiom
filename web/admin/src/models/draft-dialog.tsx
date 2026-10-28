@@ -33,6 +33,7 @@ export function DraftDialog({ onClose }: { onClose: () => void }) {
   };
   return (
     <ChangeDialog
+      operation={"model-draft"}
       title={t("models.draft.title")}
       intro={<p>{t("models.draft.intro")}</p>}
       action={t("models.draft.action")}
