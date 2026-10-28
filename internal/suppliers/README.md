@@ -26,14 +26,14 @@ internal/suppliers/internal/
 
 ## 表
 
-schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）。迁移只增不改。
+schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）；`00011` 把每分钟请求限制在 100,000 以内（旧值更高时降到上界）。迁移只增不改。
 
 | 表 | 内容 | 键与约束 |
 |---|---|---|
 | `suppliers` | 归属（`owner_scope` 与 `site_id`、`account_id` 由 CHECK 保持一致）、`kind`、`origin`（`https://host[:port]`，小写）、`upstream_account`、原生单位与结算币种、管理出口、状态、`config_gen`、带符号的有限余额（`numeric` 的 NaN 和无穷被 CHECK 排除，倍率、阈值同样） | `UNIQUE (origin, upstream_account)` |
 | `supplier_logins` | 账号凭证：`kind` 加一份加密值（密文、nonce、包裹的数据密钥、主密钥版本），`version` 供比较后再写 | PK `supplier_id` |
 | `supplier_groups` | 上游的分组：`upstream_ref`、倍率、原始事实（jsonb）、是否选中、代号、是否仍存在 | `UNIQUE (supplier_id, upstream_ref)`、`UNIQUE (id, supplier_id)`、代号全局唯一且设定后不变 |
-| `credentials` | 调用凭证：对方的 key ID、加密的 key、状态、冷却、并发上限、每分钟请求上限、出口；状态为"绑定中"时还没读到 key，"已清除"（`erased`）时 key 已在移除时清空，行保留，因为用它做过的尝试指向这一行 | `UNIQUE (supplier_id, upstream_key_ref)` |
+| `credentials` | 调用凭证：对方的 key ID、加密的 key、状态、冷却、并发上限、每分钟请求上限（1 到 100,000，可空）、出口；状态为"绑定中"时还没读到 key，"已清除"（`erased`）时 key 已在移除时清空，行保留，因为用它做过的尝试指向这一行 | `UNIQUE (supplier_id, upstream_key_ref)` |
 | `supplier_models` | 分组里的上游模型名、映射到的目录模型（空为待映射）、格式、首次列出的时间（待映射队列按它排） | PK `(supplier_group_id, upstream_name)` |
 | `supplier_aliases` | 供应商别名，分组可空（整个供应商有效） | `UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)` |
 | `endpoints` | 分组 × 模型：格式、成本状态（已知 / 未知 / 冲突）、成本计划编号、是否启用 | `UNIQUE (supplier_group_id, model_id)`；成本状态为已知必有成本计划编号 |
@@ -182,7 +182,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | 被拒绝的账号不被再次调用，登录也只一次 | 登录失败和请求被拒都经引擎记为需处理，之后的扫描不再选它；测试数适配器的 `Open` 和请求次数 |
 | 不超过对方的限速，被限速时不丢进度 | `client.Limiter` 全部取到名额才发、429 封全部所占的桶；`Charges` 出错时返回原位置；扫描测试在小名额和 12,000 条记录下统计每个窗口的请求数 |
 | 多个节点从一个出口地址访问同一个供应商，合计不超过对方的限速 | `SharedLimiter` 在数据库里计数；测试让两个节点（各自的连接池）同时取同一个桶，合计只放行上限那么多，一个桶满时另一个桶不被扣，一个节点封桶另一个节点也被封 |
-| 一个凭证的调用不超过它的并发位和 Axiom 固定窗口的请求上限；任意 60 秒内最多 2×上限，严格不超需把 RPM 设为上游值的一半（向下取整） | `Acquire` 先比较交换占位，再在 `minuteRuntime` 的锁里查这一分钟的名额并加一（`take` 把检查和计数做成一步），拿不到就把占位还回去、换一个凭证；`leastBusy` 先跳过这一分钟已满的。测试：40 个 goroutine 抢 3 个名额，一分钟里正好 3 个成功，下一分钟仍能取到（占位没有被漏掉）；`TestNeverMoreRequestsThanTheMinuteWhoeverRaces`、`TestACredentialTakesOnlyItsMinute`、`TestAccountSharesMinuteAcrossCredentials`、`TestUnlimitedCredentialsConsumeSharedMinute` |
+| 一个凭证的调用不超过它的并发位和 Axiom 滑动窗口的请求上限；任意滚动 60 秒内不超过上限 | `Acquire` 先比较交换占位，再在 `minuteRuntime` 的锁里汇总 [now-60, now] 的 61 个一秒桶并加一（`take` 把检查和计数做成一步），拿不到就把占位还回去、换一个凭证；`leastBusy` 先跳过这个窗口已满的。测试：40 个 goroutine 抢 3 个名额，同一秒里正好 3 个成功，第 61 秒后仍能取到（占位没有被漏掉）；`TestNeverMoreRequestsThanTheWindowWhoeverRaces`、`TestACredentialTakesOnlyItsWindow`、`TestAccountSharesWindowAcrossCredentials`、`TestUnlimitedCredentialsConsumeSharedWindow`、`TestTheWindowEndsAtTheSixtiethSecond`、`TestABurstAtTheWindowEdgeIsBounded` |
 | 同一时刻只有一个节点写一个供应商的同步状态 | 租约加栅栏；测试让多个节点同时取租约只有一个成功，租约过期被接手后旧持有者的提交和登录令牌的写回都被拒绝且什么都没留下 |
 | 一步的状态、事件、成本计划、扣费记录同成同败 | 一个事务；测试让扣费记录被数据库拒绝，核对状态、事件、计划都没有留下 |
 | 同一份清单同步两次，分组、模型、端点、成本计划、别名一行都不写 | 投影先读同一事务里的行，一样就不写；测试用每行的 `xmin` 核对五张表，并核对事件数没变 |
@@ -262,13 +262,13 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 一个凭证有两个上限，都存在 `suppliers.credentials` 上，由管理接口一起设定（「管理接口」的 `SetLimits`）：
 
 - **并发**（`max_concurrency`，至少 1，新绑定是 4）：同一时刻在这把 key 上进行的调用数。同一上游账号下各 key 的并发上限之和应不超过上游账号并发；例如账号并发 5，两把 key 不能各设 4。账号级并发准入属于 [#313 E3-3](https://github.com/TYCT-tyct/Axiom/issues/313) 的后续工作，本次仍按凭证计数。
-- **每分钟请求**（`requests_per_minute`，可空）：上游账号这一分钟的请求数达到这个值时，不再选这把 key。空是不额外限制这把 key，默认不猜上游的额度；它发出的请求仍计入账号。
+- **每分钟请求**（`requests_per_minute`，可空，1 到 100,000）：上游账号在滚动 60 秒内的请求数达到这个值时，不再选这把 key。空是不额外限制这把 key，默认不猜上游的额度；它发出的请求仍计入账号。
 
 **RPM 按上游账号共用**：`suppliers` 的身份是来源加上游账号，同一供应商的全部 key、端点、模型和格式共用 `minuteRuntime`；不同供应商互不影响。new-api 的 `middleware/model-rate-limit.go`（206e0fa5）按用户（可再分组）计数，sub2api 的 `backend/internal/service/admin_service.go`（`UserRPMStatus`）与 `backend/internal/repository/user_rpm_cache.go`（8f2cbb53，2026-10-19）按用户（可再分组）计数，新增 key 不应凭空新增一份账号额度。适配器尚未提供上游分组限流的配置，因此 Axiom 保守地合并整个账号，不把分组额度误当作独立账号额度。
 
 共用一份上游额度的 key 应设相同 RPM。若设成不同值，各自按自己的上限与账号计数比较：例如 10 和 20，账号用了 10 次后只有后者还能接，合计到 20 后都停止；不是各发 10 和 20 次。未设上限的 key 仍可接请求，同时增加账号计数，免得有上限的 key 漏算它的调用。
 
-计数在节点内存里，由 `Acquire` 一次取得并发位和请求名额：`leastBusy` 每个端点只加锁读取一次账号分钟计数快照，各 key 按自己的上限比较，跳过冷却、过期、并发位已满或账号分钟额度已满的 key；比较交换占并发位后，在账号的锁里检查并增加 RPM。检查失败就还回并发位再挑，成功计入的请求不退，因为它可能已经到达上游。窗口固定一分钟，从首次请求起算，按受控时钟惰性重置，不使用计时器；计数饱和在最大 int4 上限，未设限 key 也不会把它加溢出。固定窗口在边界可突发：任意 60 秒内最多 2×上限。要严格不超过上游 RPM，需把配置值设为上游值的一半（向下取整）；多节点还需分别分配这份额度。滑动窗口与合理 RPM 上界（建议不超过 100,000）由 [#382](https://github.com/TYCT-tyct/Axiom/issues/382) 跟进。
+计数在节点内存里，由 `Acquire` 一次取得并发位和请求名额：`leastBusy` 每个端点只加锁读取一次账号窗口计数，各 key 按自己的上限比较，跳过冷却、过期、并发位已满或账号窗口已满的 key；比较交换占并发位后，在账号的锁里汇总 [now-60, now] 的 61 个一秒桶并加一。检查失败就还回并发位再挑，成功计入的请求不退，因为它可能已经到达上游。每个桶记着它属于哪一秒，过期的桶直接读作 0，不用计时器也不用清理；内存每个账号固定 61 个桶，与上限无关。任意滚动 60 秒都不会超过所选凭证的上限：按秒取整最多把不到一秒的旧请求仍算在窗口里，所以只会少放行，不会多放行。计数饱和在上限（100,000），未设限 key 也不会把它加溢出。管理接口和数据库都拒绝超过 100,000 的值。多节点还需分别分配这份额度。
 
 **RPM 不跨节点**：共享 RPM 计数随 Valkey 后续实现，进程重启清零。并发仍沿用 [gateway 的静态份额设计](../gateway/README.md#并发背压与共享状态)，本次不实现份额分配或共享槽位；当前单核心直接使用配置上限。`Reload` 每 5 秒载入新上限，保留在途调用和账号窗口；降低上限不取消已有调用。**TPM** 等有可信额度数据时再加，目前只有余额和 key 状态。
 
@@ -288,7 +288,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 | `ConfirmUnitValue` | 一单位余额值多少结算货币：大于 0、至多 1000、至多 15 位小数；只追加行，新的值从现在起生效，已算过的成本保留自己的 | `ErrUnitValue` |
 | `SelectGroup` | 选用或取消选用一个分组；第一次选用时给分组起代号（`g` 加 8 个 base32 字符），之后取消再选用不变 | `ErrNoGroup`、`ErrGroupGone`（选用已不在列表里的分组；取消不受限） |
 | `BindKey` | 把供应商上的一把 key 绑到已选用的分组：只记 key 的引用，状态 `binding`、没有密文，同步去读出并封存；默认最大并发 4、每分钟请求不限 | `ErrNoGroup`、`ErrGroupNotSelected`、`ErrKeyBound` |
-| `SetLimits` | 一个凭证同时服务几个并发、一分钟放几个请求：两者一起设定（PUT 省略 RPM 或传 null 都清除上限）、记一条审计（`credential.limits`，前后各值）；已经是这个数则不动、不记审计、不升代次——同步不写这两列，没有要作废的一轮 | `ErrNoCredential`（不是这家供应商的也算没有）、`ErrLimits`、`ErrStatusLocked`（凭证已擦除或供应商移除中、已移除） |
+| `SetLimits` | 一个凭证同时服务几个并发、一分钟放几个请求（RPM 为 1 到 100,000 或空）：两者一起设定（PUT 省略 RPM 或传 null 都清除上限）、记一条审计（`credential.limits`，前后各值）；已经是这个数则不动、不记审计、不升代次——同步不写这两列，没有要作废的一轮 | `ErrNoCredential`（不是这家供应商的也算没有）、`ErrLimits`、`ErrStatusLocked`（凭证已擦除或供应商移除中、已移除） |
 | `MapModel` | 别名：上游名字在一个分组或整个供应商里指向某个目录模型，建了不改，改错在更窄的范围再建一个；模型由调用方查过 | `ErrAliasExists`、`ErrNoGroup`、`ErrStatusLocked` |
 | `PendingMappings` | 还没有模型的上游名字，最早出现的在前（`first_seen_at`），被别名盖住的不出现，键集分页 | |
 
@@ -346,6 +346,6 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 | 成本行写进 billing 的结算事务，不另起一份「进行中尝试」的日志 | 一个事务里成或不成，所以「这次尝试花了多少钱、对账键是什么、哪个端点」与账本同一次提交；崩溃后剩下的是丢失的请求（带预留冻结的路线），不需要第二张表、第二个写入线程和第二个连接池名额 | 进程内日志每秒批量落库：多一条写入路径、一类连接名额，而它只把崩溃窗口缩小一点，仍无法自动确认崩溃前最后一次尝试的归属 |
 | 分组代号在第一次选用时随机生成，取消选用不收回 | 用户看到的是代号不是上游名字，换回来或重选不能让同一个分组换名字 | 由名字派生：名字泄露代号；每次选用重新生成：用户记下的代号失效 |
 | 检测成本、审计和幂等响应共用事务，生成期间保留幂等认领 | 同键并发请求在认领上等待，正常提交后重放同一答案；代价是外部 HTTP 期间（最多 45 秒）占用一个数据库连接并保留事务快照，生成后的回滚会丢失成本和认领、允许再次付费（见「成本行」）。每会话每分钟 10 次限制触发频率，不保证回滚后的付费至多一次 | 仅另开短事务补写成本不能阻止同键重试再次生成，原事务提交结果不明时也不能独立判定响应归属；彻底消除失败窗口需要持久化进行中的认领及恢复协议，不在本次 H1.5 中引入 |
-| 并发和每分钟请求上限按凭证存两列，管理接口一起设定，计数在各节点内存里 | 同一供应商账号的全部 key 和端点共用 RPM，配置上限按待选凭证应用（见「并发与速率」）；上限存在行上，`Reload` 随端点读进快照（5 秒内生效），调用路径仍是纯内存。窗口是固定一分钟、从这一分钟的第一个请求起算、惰性重置：没有计时器，也没有每次调用一次事务。一分钟用完的凭证与并发位用完的一样返回 `ErrNoSlot`，gateway 跳过条目，最终回 429 `rate_limited`（指标原因 `credentials_busy`）、`Retry-After: 1`（上限不超过一分钟）。代价：RPM 不跨节点，共享计数随 Valkey 后续实现；并发沿用静态份额设计；TPM 等有可信的额度数据时再加，现在只有余额和 key 状态 | 只靠 `client.Limiter` 的桶：那是同步和适配器自己的限速，调用量由用户的请求决定，因此拒绝用户是把计量和业务搞混；计数放数据库（`rate_buckets`，`SharedLimiter` 的做法）：每次调用一次事务，热路径上多一次往返；`golang.org/x/time/rate`：多一个依赖，其令牌补充口径也不等同于固定一分钟 |
+| 并发和每分钟请求上限按凭证存两列，管理接口一起设定，计数在各节点内存里 | 同一供应商账号的全部 key 和端点共用 RPM，配置上限按待选凭证应用（见「并发与速率」）；上限存在行上，`Reload` 随端点读进快照（5 秒内生效），调用路径仍是纯内存。窗口是 61 个按 unix 秒索引、各带秒标记的一秒桶：[now-60, now] 的合计就是滚动一分钟的计数，过期桶读作 0，所以没有计时器、没有清理、内存不随上限增长，也没有每次调用一次事务；任意滚动 60 秒不超过上限，代价是边界上最多少放行不到一秒的请求。窗口用完的凭证与并发位用完的一样返回 `ErrNoSlot`，gateway 跳过条目，最终回 429 `rate_limited`（指标原因 `credentials_busy`）、`Retry-After: 1`（上限不超过一分钟）。RPM 上界是 100,000，管理接口与数据库都拒绝更大的值，计数饱和在那里。代价：RPM 不跨节点，共享计数随 Valkey 后续实现；并发沿用静态份额设计；TPM 等有可信的额度数据时再加，现在只有余额和 key 状态 | 只靠 `client.Limiter` 的桶：那是同步和适配器自己的限速，调用量由用户的请求决定，因此拒绝用户是把计量和业务搞混；计数放数据库（`rate_buckets`，`SharedLimiter` 的做法）：每次调用一次事务，热路径上多一次往返；`golang.org/x/time/rate`：多一个依赖，其令牌补充口径也不等同于按秒计数的滚动窗口；保存每次请求的时间戳：内存随上限增长，未设限的 key 更会无限增长 |
 | RPM 计数按账号共用，上限仍按凭证设定 | 同一上游额度不会因新增 key 增加，仍可按 key 单独压低上限；共享额度的 key 应设相同值 | 上限存在 `suppliers` 上、凭证继承：无法按 key 单独压低 |
 | 新绑定的默认是并发 4、每分钟请求不限 | 绑定时对方允许几个并发还不知道，用保守值，免得一次打满对方；每分钟不设，因为限流值猜错会让本来能发的请求失败，不设只是没有额外的天花板 | 不设并发上限：新接入的供应商可能被打满；给每分钟一个默认数字：猜错就拒了本来能发的请求 |

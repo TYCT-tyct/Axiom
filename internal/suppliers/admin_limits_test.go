@@ -71,6 +71,10 @@ func TestSetLimits(t *testing.T) {
 	same(t, "the clearing recorded", "60|null", a.text(
 		`SELECT (detail->>'requests_per_minute_from') || '|' || coalesce(detail->>'requests_per_minute_to', 'null')
 		 FROM platform.audit_log WHERE action = 'credential.limits' ORDER BY id DESC LIMIT 1`))
+	largest := MaxRequestsPerMinute
+	atCap, err := a.limitsOf(id, bound.ID, Limits{MaxConcurrency: 8, RequestsPerMinute: &largest})
+	refuses(t, "the largest requests a minute", err, nil)
+	same(t, "the largest requests a minute", &largest, atCap.RequestsPerMinute)
 	same(t, "the configuration generation", generation, a.generation())
 }
 
@@ -100,6 +104,7 @@ func TestSetLimitsRefusals(t *testing.T) {
 		{"a concurrency the column cannot hold", Limits{MaxConcurrency: maxLimit + 1}},
 		{"no requests a minute", Limits{MaxConcurrency: 2, RequestsPerMinute: per(0)}},
 		{"a negative requests a minute", Limits{MaxConcurrency: 2, RequestsPerMinute: per(-1)}},
+		{"a requests a minute above the cap", Limits{MaxConcurrency: 2, RequestsPerMinute: per(MaxRequestsPerMinute + 1)}},
 		{"a requests a minute the column cannot hold", Limits{MaxConcurrency: 2, RequestsPerMinute: per(maxLimit + 1)}},
 	} {
 		_, err := a.limitsOf(id, bound.ID, c.limits)

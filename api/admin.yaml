@@ -977,10 +977,11 @@ paths:
       summary: Set a credential's concurrency and account RPM ceiling
       description: >-
         Concurrency is per credential. RPM counts all requests of the supplier's upstream account across its keys
-        and endpoints, in this node's memory. A credential is eligible while that shared count is below its configured
-        ceiling; null adds no RPM ceiling for this credential, but its requests still count for the account. Set the
-        same ceiling on keys that share an upstream allowance. RPM sharing across nodes comes with Valkey later;
-        concurrency retains the static per-core share design. A change reaches a node at its next reload, within seconds.
+        and endpoints in a rolling 60-second window, in this node's memory. A credential is eligible while that shared
+        count is below its configured ceiling, at most 100000; null adds no RPM ceiling for this credential, but its
+        requests still count for the account. Set the same ceiling on keys that share an upstream allowance. RPM
+        sharing across nodes comes with Valkey later; concurrency retains the static per-core share design. A change
+        reaches a node at its next reload, within seconds.
       security:
         - session: []
           csrf: []
@@ -2301,7 +2302,8 @@ components:
         requests_per_minute:
           type: integer
           minimum: 1
-          description: "The upstream account's RPM ceiling for selecting this credential; absent when Axiom adds no ceiling."
+          maximum: 100000
+          description: "The upstream account's rolling-minute RPM ceiling for selecting this credential; absent when Axiom adds no ceiling."
     CredentialLimits:
       type: object
       required: [max_concurrency, reason]
@@ -2314,9 +2316,9 @@ components:
         requests_per_minute:
           type: integer
           minimum: 1
-          maximum: 2147483647
+          maximum: 100000
           nullable: true
-          description: "Stop selecting this credential when the shared upstream account minute reaches this count; absent or null clears the ceiling."
+          description: "Stop selecting this credential when the shared upstream account's rolling-minute count reaches this; absent or null clears the ceiling. At most 100000."
         reason: {$ref: "#/components/schemas/Reason"}
     UpstreamKey:
       type: object

@@ -487,6 +487,8 @@ func TestRowRules(t *testing.T) {
 		{"a credential with no requests a minute", []string{bound("NULL")}, ""},
 		{"a requests a minute of zero", []string{bound("0")}, checkViolation},
 		{"a requests a minute below zero", []string{bound("-1")}, checkViolation},
+		{"a requests a minute at the cap", []string{bound("100000")}, ""},
+		{"a requests a minute above the cap", []string{bound("100001")}, checkViolation},
 		{"a known cost with a schedule that does not exist", []string{endpoint(", cost_state, cost_schedule_id", ", 'known', gen_random_uuid()")}, foreignKeyViolation},
 		{"a known cost with its schedule", []string{
 			endpoint("", ""),

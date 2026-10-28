@@ -52,8 +52,9 @@ var (
 	ErrUnitValue = errors.New("suppliers: a unit value is above 0 and at most 1000, with at most 15 decimals")
 	// ErrNoCredential is a credential the supplier does not have.
 	ErrNoCredential = errors.New("suppliers: the supplier has no such credential")
-	// ErrLimits is a concurrency that is not 1 to 2147483647, or a per-minute limit that is not that or none.
-	ErrLimits = errors.New("suppliers: concurrency is 1 to 2147483647, and requests a minute 1 to 2147483647 or none")
+	// ErrLimits is a concurrency that is not 1 to 2147483647, or a per-minute limit that is not 1 to
+	// MaxRequestsPerMinute or none.
+	ErrLimits = fmt.Errorf("suppliers: concurrency is 1 to 2147483647, and requests a minute 1 to %d or none", MaxRequestsPerMinute)
 )
 
 // LoginError is credentials that cannot make a login: the member that is wrong, and which rule it breaks.

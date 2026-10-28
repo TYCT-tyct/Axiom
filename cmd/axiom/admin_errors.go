@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 
 	"axiom/internal/billing"
@@ -54,7 +55,7 @@ var adminRefusals = []refusal{
 	{suppliers.ErrTestOwner, http.StatusUnprocessableEntity, codeUnprocessable, "only platform endpoints may be tested"},
 	{suppliers.ErrTestCost, http.StatusUnprocessableEntity, codeUnprocessable, "the endpoint has no complete price for a test generation"},
 	{suppliers.ErrNoFormat, http.StatusUnprocessableEntity, codeUnprocessable, "the endpoint does not serve that call format"},
-	{suppliers.ErrLimits, http.StatusUnprocessableEntity, codeUnprocessable, "concurrency is 1 to 2147483647, and requests a minute 1 to 2147483647 or none"},
+	{suppliers.ErrLimits, http.StatusUnprocessableEntity, codeUnprocessable, fmt.Sprintf("concurrency is 1 to 2147483647, and requests a minute 1 to %d or none", suppliers.MaxRequestsPerMinute)},
 }
 
 // unprocessable is a request that is well formed but that a rule refuses; message says which.
