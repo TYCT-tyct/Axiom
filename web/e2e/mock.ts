@@ -39,6 +39,7 @@ export type AuthState = {
 type Method = "get" | "post" | "put" | "delete";
 type Responses<P, K extends keyof P, M extends Method> = P[K] extends Record<M, { responses: infer R }> ? R : never;
 type JsonOf<R> = R extends { content: { "application/json": infer J } } ? J : undefined;
+type TextOf<R> = R extends { content: { "text/csv": infer T } } ? T : undefined;
 type Body<P, K extends keyof P, M extends Method> =
   P[K] extends Record<M, { requestBody: { content: { "application/json": infer B } } }> ? B : undefined;
 
@@ -46,6 +47,8 @@ type Reply<P, K extends keyof P, M extends Method> = {
   [S in keyof Responses<P, K, M> & number]: {
     status: S;
     json: JsonOf<Responses<P, K, M>[S]>;
+    // a reply that is a file rather than JSON: the contract's text/csv body
+    text?: TextOf<Responses<P, K, M>[S]>;
     headers?: Record<string, string>;
   };
 }[keyof Responses<P, K, M> & number];
@@ -66,7 +69,7 @@ export type Ctx<P, K extends keyof P, M extends Method, S> = {
   state: S;
 };
 
-type AnyReply = { status: number; json?: unknown; headers?: Record<string, string> };
+type AnyReply = { status: number; json?: unknown; text?: string; headers?: Record<string, string> };
 export type Handler<S> = {
   method: Method;
   pattern: RegExp;
@@ -201,6 +204,14 @@ function changeRefusal(
 
 export type MockData = "usual" | "empty" | "worst";
 
+// What a handler's reply is to Playwright: a file's bytes under the contract's content type, or JSON. Neither is cached.
+function answered(reply: AnyReply) {
+  const headers = { "Cache-Control": "no-store", ...reply.headers };
+  return reply.text === undefined
+    ? { status: reply.status, json: reply.json, headers }
+    : { status: reply.status, body: reply.text, contentType: "text/csv", headers };
+}
+
 // mockApi answers a surface's API for a page. The state is live: a test reads what the page did to it (state.log and
 // whatever the surface keeps) and sets up what it needs before navigating.
 export async function mockApi<S extends AuthState>(page: Page, base: string, handlers: Handler<S>[], state: S) {
@@ -240,11 +251,7 @@ export async function mockApi<S extends AuthState>(page: Page, base: string, han
       state.dropReplies -= 1;
       return route.abort("connectionreset");
     }
-    return route.fulfill({
-      status: reply.status,
-      json: reply.json,
-      headers: { "Cache-Control": "no-store", ...reply.headers },
-    });
+    return route.fulfill(answered(reply));
   });
   return state;
 }
