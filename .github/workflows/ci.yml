@@ -110,9 +110,10 @@ jobs:
         run: just script-tests check-static
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: just docs check-static secrets
-      # A PR or train is checked like a pull request from its base: merged migrations never change. Main has no base.
+      # A PR or train is checked like a pull request from its base: merged migrations never change, and a schema does not
+      # newly require a field that old nodes or pages lack during a rolling release. Main has no base.
       - if: env.BASE != ''
-        run: just migrations "$BASE"
+        run: just migrations "$BASE" && just api-compat "$BASE"
 
   # The Go tests only. `just test` depends on `web-embed`, the frontend the program embeds, so this job installs pnpm and
   # Node like the web job; the build is cached by content on the host (scripts/web_cache.py), as it was in the one job.
