@@ -377,7 +377,7 @@ func (a *Admin) BindKey(ctx context.Context, tx pg.Tx, actor audit.Actor, suppli
 	return Credential{ID: id, Group: group, UpstreamKeyRef: keyRef, Status: "binding", MaxConcurrency: defaultMaxConcurrency}, nil
 }
 
-// Limits are a credential's concurrency and its ceiling on the upstream account's shared minute in this node.
+// Limits are a credential's concurrency and its ceiling on the upstream account's shared rolling minute in this node.
 type Limits struct {
 	// MaxConcurrency is the calls in flight at once; at least one, or the key would serve nothing.
 	MaxConcurrency int
@@ -385,15 +385,20 @@ type Limits struct {
 	RequestsPerMinute *int
 }
 
-// maxLimit is the largest limit both columns can hold: they are int4, and a number above it would fail there.
+// maxLimit is the largest concurrency the int4 column can hold; a number above it would fail there.
 const maxLimit = math.MaxInt32
 
-// valid is whether the columns can hold these limits: concurrency 1 to 2³¹-1, and requests a minute the same or none.
+// MaxRequestsPerMinute is the largest per-minute ceiling a credential may have: finite so the rolling window's counts
+// and the memory of unlimited traffic stay bounded (issue #382).
+const MaxRequestsPerMinute = 100_000
+
+// valid is whether the columns can hold these limits: concurrency 1 to 2³¹-1, and requests a minute 1 to
+// MaxRequestsPerMinute or none.
 func (l Limits) valid() bool {
 	if l.MaxConcurrency < 1 || l.MaxConcurrency > maxLimit {
 		return false
 	}
-	return l.RequestsPerMinute == nil || *l.RequestsPerMinute >= 1 && *l.RequestsPerMinute <= maxLimit
+	return l.RequestsPerMinute == nil || *l.RequestsPerMinute >= 1 && *l.RequestsPerMinute <= MaxRequestsPerMinute
 }
 
 // SetLimits sets how much of a credential this node gives out, and records it. A credential already as asked changes
@@ -409,7 +414,7 @@ func (a *Admin) SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, supp
 	concurrency := int32(limits.MaxConcurrency) //nolint:gosec // valid checked it is 1 to 2³¹-1
 	var perMinute *int32
 	if limits.RequestsPerMinute != nil {
-		n := int32(*limits.RequestsPerMinute) //nolint:gosec // valid checked it is 1 to 2³¹-1
+		n := int32(*limits.RequestsPerMinute) //nolint:gosec // valid checked it is 1 to MaxRequestsPerMinute
 		perMinute = &n
 	}
 	q := store.New()

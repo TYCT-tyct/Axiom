@@ -52,8 +52,8 @@ func modeFor(port int) tlsMode {
 	return startTLS
 }
 
-// sender delivers one message per SMTP session. It is safe for concurrent use: the limiter locks, and every Send
-// opens its own connection.
+// sender delivers one message per SMTP session. It is safe for concurrent use: the throttle serializes its decision, and
+// every Send opens its own connection.
 type sender struct {
 	cfg         Config
 	addr        string
@@ -61,7 +61,7 @@ type sender struct {
 	roots       *x509.CertPool // nil is the system's trust store; tests inject their own server's
 	dialTimeout time.Duration
 	sendTimeout time.Duration
-	limiter     *limiter
+	throttle    *throttle
 	// dial opens the connection a session runs on. Tests replace it to control the socket: a real one cannot be made
 	// to fail on demand without a clock.
 	dial func(ctx context.Context) (net.Conn, error)
@@ -75,7 +75,7 @@ func newSender(cfg Config) *sender {
 		mode:        modeFor(cfg.Port),
 		dialTimeout: defaultDialTimeout,
 		sendTimeout: defaultSendTimeout,
-		limiter:     newLimiter(),
+		throttle:    newThrottle(),
 	}
 	s.dial = s.dialServer
 	return s
@@ -91,7 +91,7 @@ func (s *sender) Send(ctx context.Context, msg Message) (string, error) {
 	}
 	// The refusal carries no address: it reaches the caller, a log line and, through the job, a row no tenant policy
 	// covers, and every one of those already knows the recipient.
-	if !s.limiter.allow(to.Address) {
+	if !s.throttle.allow(ctx, to.Address) {
 		return "", ErrRateLimited
 	}
 	c := compose{
