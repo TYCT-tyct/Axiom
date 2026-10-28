@@ -2,9 +2,7 @@ package billing
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -13,21 +11,18 @@ import (
 // The three statements must remain separate: the counters' snapshot starts after the balance lock is granted,
 // even when another node held it. Sending them together saves round trips without moving that snapshot earlier.
 func (b *Billing) reserveSources(ctx context.Context, tx pg.Tx, a Admitted) (balance LockBalanceRow, usage ReadUsageRow, err error) {
+	p := a.usageParams(nil)
 	err = tx.Batch(ctx, []pg.Statement{
 		{SQL: lockBalance, Args: []any{a.Account}},
 		{SQL: fenceHolder, Args: []any{b.holder}},
-		{SQL: readUsage, Args: []any{a.Workspace, string(reset(a.WorkspaceBudget)), a.Key, string(reset(a.KeyLimit)), (*time.Time)(nil)}},
+		{SQL: readUsage, Args: []any{p.WorkspaceID, p.WorkspaceReset, p.KeyID, p.KeyReset, p.Day}},
 	}, func(batch pg.BatchResults) error {
-		if err = batch.QueryRow().Scan(&balance.Balance, &balance.Floor, &balance.Reserved, &balance.Frozen); errors.Is(err, pg.ErrNoRows) {
-			return errNoBalance
-		} else if err != nil {
-			return fmt.Errorf("billing: lock the balance: %w", err)
+		if err = balanceErr(batch.QueryRow().Scan(&balance.Balance, &balance.Floor, &balance.Reserved, &balance.Frozen)); err != nil {
+			return err
 		}
 		var holder uuid.UUID
-		if err = batch.QueryRow().Scan(&holder); errors.Is(err, pg.ErrNoRows) {
-			return ErrTerminated
-		} else if err != nil {
-			return fmt.Errorf("billing: fence the holder: %w", err)
+		if err = fenceErr(batch.QueryRow().Scan(&holder)); err != nil {
+			return err
 		}
 		if err = batch.QueryRow().Scan(&usage.Day, &usage.WorkspaceUsed, &usage.KeyUsed); err != nil {
 			return fmt.Errorf("billing: read the counters: %w", err)
@@ -43,10 +38,8 @@ func settlementRows(ctx context.Context, tx pg.Tx, id, account uuid.UUID) (balan
 		{SQL: lockBalance, Args: []any{account}},
 		{SQL: lockReservation, Args: []any{id}},
 	}, func(batch pg.BatchResults) error {
-		if err = batch.QueryRow().Scan(&balance.Balance, &balance.Floor, &balance.Reserved, &balance.Frozen); errors.Is(err, pg.ErrNoRows) {
-			return errNoBalance
-		} else if err != nil {
-			return fmt.Errorf("billing: lock the balance: %w", err)
+		if err = balanceErr(batch.QueryRow().Scan(&balance.Balance, &balance.Floor, &balance.Reserved, &balance.Frozen)); err != nil {
+			return err
 		}
 		err = batch.QueryRow().Scan(
 			&r.SiteID,

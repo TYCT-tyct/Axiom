@@ -156,6 +156,45 @@ func checkSettlementRetries(b *bank, holds []*Hold, o Outcome) {
 	}
 }
 
+// Admission, extension and settlement must agree on refusals when their source rows are missing.
+func TestFundsReadsShareRefusals(t *testing.T) {
+	b := newBank(t, 1e6, 0, Config{})
+	missing := b.admitted
+	missing.Account = uuid.NewV7()
+	b.billing.holder = uuid.NewV7()
+	for _, tc := range []struct {
+		name string
+		read func(pg.Tx) error
+		want error
+	}{
+		{"balance", func(tx pg.Tx) error {
+			_, err := lockAccount(t.Context(), tx, missing.Account)
+			return err
+		}, errNoBalance},
+		{"admission balance", func(tx pg.Tx) error {
+			_, _, err := b.billing.reserveSources(t.Context(), tx, missing)
+			return err
+		}, errNoBalance},
+		{"settlement balance", func(tx pg.Tx) error {
+			_, _, err := settlementRows(t.Context(), tx, uuid.NewV7(), missing.Account)
+			return err
+		}, errNoBalance},
+		{"holder", func(tx pg.Tx) error {
+			return b.billing.fence(t.Context(), tx)
+		}, ErrTerminated},
+		{"admission holder", func(tx pg.Tx) error {
+			_, _, err := b.billing.reserveSources(t.Context(), tx, b.admitted)
+			return err
+		}, ErrTerminated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := b.app.Tx(t.Context(), b.admitted.Scope, tc.read); !errors.Is(err, tc.want) {
+				t.Errorf("refusal = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
 // Distinct money, counter, window and result values catch positional mistakes that Go's identical scalar types cannot.
 func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 	b := newBank(t, 1e6, -29, Config{})

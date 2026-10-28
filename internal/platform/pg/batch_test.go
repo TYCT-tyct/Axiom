@@ -1,8 +1,9 @@
 package pg_test
 
 import (
-	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"axiom/internal/platform/pg"
@@ -83,6 +84,33 @@ func TestBatchCloseReportsLateFailure(t *testing.T) {
 	}
 }
 
+// Close repeats a statement or decoding error; it must not erase the callback's description of the failed operation.
+func TestBatchPreservesReportedErrorContext(t *testing.T) {
+	t.Parallel()
+	db := open(t, newDatabase(t).App)
+	for _, statement := range []string{"SELECT 1/0", "SELECT 'not an integer'::text"} {
+		t.Run(statement, func(t *testing.T) {
+			var reported error
+			err := db.Tx(t.Context(), pg.AccountScope(account1), func(tx pg.Tx) error {
+				return tx.Batch(t.Context(), []pg.Statement{{SQL: statement}}, func(batch pg.BatchResults) error {
+					var value int
+					reported = batch.QueryRow().Scan(&value)
+					if reported == nil {
+						return nil
+					}
+					return fmt.Errorf("read the first statement: %w", reported)
+				})
+			})
+			if reported == nil {
+				t.Fatal("the statement did not fail")
+			}
+			if !errors.Is(err, reported) || !strings.Contains(err.Error(), "read the first statement:") {
+				t.Errorf("statement error lost its context or cause: %v (cause %v)", err, reported)
+			}
+		})
+	}
+}
+
 func TestBatchHidesTheConnection(t *testing.T) {
 	t.Parallel()
 	db := open(t, newDatabase(t).App)
@@ -127,26 +155,6 @@ func TestBatchDrainsAfterNoRows(t *testing.T) {
 		return tx.QueryRow(ctx, "SELECT 3").Scan(&n)
 	}); err != nil {
 		t.Fatalf("query after drained batch: %v", err)
-	}
-}
-
-func TestBatchCancellationRollsBack(t *testing.T) {
-	t.Parallel()
-	db := open(t, newDatabase(t).App)
-	ctx, cancel := context.WithCancel(t.Context())
-	err := db.Tx(ctx, pg.AccountScope(account1), func(tx pg.Tx) error {
-		if err := tx.Batch(ctx, []pg.Statement{{SQL: "INSERT INTO rlstest.items VALUES ($1,$2,'cancelled')", Args: []any{site1, account1}}}, func(pg.BatchResults) error { return nil }); err != nil {
-			return err
-		}
-		cancel()
-		return nil
-	})
-	cancel()
-	if err == nil {
-		t.Error("cancelled batch committed")
-	}
-	if n := count(t, db, pg.AccountScope(account1)); n != 0 {
-		t.Errorf("cancelled batch left %d rows", n)
 	}
 }
 

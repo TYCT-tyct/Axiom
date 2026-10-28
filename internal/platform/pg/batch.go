@@ -2,6 +2,7 @@ package pg
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/jackc/pgx/v5"
@@ -26,8 +27,9 @@ type statementBatch struct {
 var statementBatches = sync.Pool{New: func() any { return new(statementBatch) }}
 
 // Batch sends statements together, reads their results through fn, then drains every remaining result even after an
-// error or panic. A database error found while draining takes precedence over a business refusal. The batch stays
-// in this scoped transaction with its original commit boundary. A row lock in an earlier statement is granted before
+// error or panic. A new database error found while draining takes precedence over a business refusal; a callback
+// that already wrapped that error keeps its context. The batch stays in this scoped transaction with its original
+// commit boundary. A row lock in an earlier statement is granted before
 // a later statement starts; merging them into one SQL query would not preserve that snapshot boundary.
 func (t Tx) Batch(ctx context.Context, statements []Statement, fn func(BatchResults) error) (err error) {
 	b := statementBatches.Get().(*statementBatch)
@@ -44,7 +46,7 @@ func (t Tx) Batch(ctx context.Context, statements []Statement, fn func(BatchResu
 	}
 	results := t.tx.SendBatch(ctx, &b.batch)
 	defer func() {
-		if closeErr := results.Close(); closeErr != nil {
+		if closeErr := results.Close(); closeErr != nil && !errors.Is(err, closeErr) {
 			err = closeErr
 		}
 		clear(b.queries)

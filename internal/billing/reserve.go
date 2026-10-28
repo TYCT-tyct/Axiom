@@ -244,24 +244,34 @@ var errNoBalance = errors.New("billing: the account has no balance row")
 // lockAccount locks the account's balance row, the one serialisation point of its money.
 func lockAccount(ctx context.Context, tx pg.Tx, account uuid.UUID) (LockBalanceRow, error) {
 	row, err := queries.LockBalance(ctx, tx, account)
+	return row, balanceErr(err)
+}
+
+func balanceErr(err error) error {
 	if errors.Is(err, pg.ErrNoRows) {
-		return row, errNoBalance
-	} else if err != nil {
-		return row, fmt.Errorf("billing: lock the balance: %w", err)
+		return errNoBalance
 	}
-	return row, nil
+	if err != nil {
+		return fmt.Errorf("billing: lock the balance: %w", err)
+	}
+	return nil
 }
 
 // usage reads what the workspace and the key have spent and hold reserved in the windows of their limits that hold
 // day, or today when day is nil.
 func (a Admitted) usage(ctx context.Context, tx pg.Tx, day *time.Time) (ReadUsageRow, error) {
-	u, err := queries.ReadUsage(ctx, tx, ReadUsageParams{
-		Day: day, WorkspaceID: a.Workspace, KeyID: a.Key, WorkspaceReset: string(reset(a.WorkspaceBudget)), KeyReset: string(reset(a.KeyLimit)),
-	})
+	u, err := queries.ReadUsage(ctx, tx, a.usageParams(day))
 	if err != nil {
 		return u, fmt.Errorf("billing: read the counters: %w", err)
 	}
 	return u, nil
+}
+
+func (a Admitted) usageParams(day *time.Time) ReadUsageParams {
+	return ReadUsageParams{
+		Day: day, WorkspaceID: a.Workspace, KeyID: a.Key,
+		WorkspaceReset: string(reset(a.WorkspaceBudget)), KeyReset: string(reset(a.KeyLimit)),
+	}
 }
 
 // available is what each source still allows: the balance less its reservations and freezes down to the floor, and each limit

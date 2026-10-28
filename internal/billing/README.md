@@ -127,7 +127,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 - 余额行是账户资金写入的唯一串行点（[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)），锁两个账户时的顺序也在那里。没有余额行的账户按余额 0 处理，行在开户时由本模块建。
 - 报价规则（每个条目自己报价、首段的组成、输入按采样次数的上界）同在那一节。采样次数和按次项目的最大次数在报价时逐条目算：请求没写某个服务端工具的最大次数，就取该条目模型在 catalog 里的默认值，所以跨模型路线的条目可以不同。报价的测试至少包括：请求没写工具的最大次数；路线里两个条目的模型默认次数不同；开启服务端压缩时采样次数乘 2。
-- 余额不足是正常结果（`*Insufficient`），不让事务出错。`TestReserveSeesCommitsBeforeItsLock`、`TestBatchedReserveFencesAfterTheBalanceLock` 分别守住计数快照和持有者检查在锁后；`TestBatchRowsMatchGeneratedQueries` 用不同的余额、底线、占用、冻结、窗口、限额重置周期和结算字段对照 sqlc 的逐条结果，防止批量参数或扫描顺序互换。
+- 余额不足是正常结果（`*Insufficient`），不让事务出错。`TestReserveSeesCommitsBeforeItsLock`、`TestBatchedReserveFencesAfterTheBalanceLock` 分别守住计数快照和持有者检查在锁后；批量与逐条路径共用余额缺行、持有者失效的错误映射，以及计数窗口的参数生成；`TestFundsReadsShareRefusals` 核对缺行时返回相同业务错误。`TestBatchRowsMatchGeneratedQueries` 用不同的余额、底线、占用、冻结、窗口、限额重置周期和结算字段对照 sqlc 的逐条结果，防止批量参数或扫描顺序互换。
 
 ## 数据
 
