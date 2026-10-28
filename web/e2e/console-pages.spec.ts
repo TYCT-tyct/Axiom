@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
-import { mockConsole, signedInAs } from "./console-api.ts";
+import { failOnce, mockConsole, signedInAs } from "./console-api.ts";
 import { goodInvite } from "./console-data.ts";
 import { knownEmail, knownPassword, limitedEmail, mfaEmail } from "./mock-auth.ts";
 
@@ -19,18 +19,6 @@ const main = (page: Page) => page.getByRole("main");
 // What a page does when its window comes back to the front, which is when it asks again for the session.
 const returnToWindow = (page: Page) =>
   page.evaluate(() => document.dispatchEvent(new Event("visibilitychange", { bubbles: true })));
-
-// The server answering the same call, once, with a failure.
-const failOnce = (page: Page, url: string) => {
-  let failed = false;
-  return page.route(url, (route) => {
-    if (failed) {
-      return route.fallback();
-    }
-    failed = true;
-    return route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } });
-  });
-};
 
 test.describe("signing in", () => {
   test("a wrong password says so, a right one opens the overview", async ({ page }) => {

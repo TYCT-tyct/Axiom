@@ -10,6 +10,7 @@ const nav = [
   { to: "/keys", label: "nav.keys", icon: "key", permission: "api_keys.view" },
   { to: "/calls", label: "nav.calls", icon: "list", permission: "calls.view" },
   { to: "/balance", label: "nav.balance", icon: "card", permission: "balance.view" },
+  { to: "/statement", label: "nav.statement", icon: "chart", permission: "balance.view" },
   { to: "/security", label: "nav.security", icon: "shield" },
 ] as const satisfies readonly { to: string; label: string; icon: IconName; permission?: string }[];
 

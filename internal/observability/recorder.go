@@ -60,8 +60,9 @@ type Recorder struct {
 
 	giveUp       context.CancelFunc // ends the writer's context: Close ran out of time waiting for the queue to drain
 	done         chan struct{}      // closed when the writer has exited
-	lost         atomic.Int64       // calls not written: dropped at Enqueue or given up on by the writer
-	lostAttempts atomic.Int64       // their attempts
+	inBatch      atomic.Int64
+	lost         atomic.Int64 // calls not written: dropped at Enqueue or given up on by the writer
+	lostAttempts atomic.Int64 // their attempts
 
 	written, attemptsWritten, retries, lostMetric, attemptsLostMetric metric.Int64Counter
 }
@@ -225,7 +226,9 @@ func (r *Recorder) writer(ctx context.Context) {
 	for {
 		batch, open := r.collect()
 		if len(batch) > 0 {
+			r.inBatch.Store(int64(len(batch)))
 			r.flush(ctx, batch)
+			r.inBatch.Store(0)
 		}
 		if !open {
 			return
@@ -323,4 +326,9 @@ func (r *Recorder) lose(ctx context.Context, q queued, reason string) {
 	r.lostAttempts.Add(int64(len(q.attempts)))
 	r.lostMetric.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reason)))
 	r.attemptsLostMetric.Add(ctx, int64(len(q.attempts)), metric.WithAttributes(attribute.String("reason", reason)))
+}
+
+// AlertSample reads bounded queue depth and cumulative losses without joining the writer's lock.
+func (r *Recorder) AlertSample() (int, int64) {
+	return len(r.queue) + int(r.inBatch.Load()), r.lost.Load()
 }

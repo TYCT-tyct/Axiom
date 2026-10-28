@@ -102,6 +102,8 @@ payments-test:
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 5m ./internal/payments
     go test -race -p=2 ./internal/platform/clientip
     go test -race -p=2 -run '^TestPaymentCallbacksBypassOnlyConsoleAuthentication$' ./cmd/axiom
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 10m ./cmd/axiom -run 'TestTopUp|TestPaymentMethods|TestReplay|TestOrder|TestIPLimitsOnOrders|TestReturn|TestARefusal|TestRefusal|TestContractRules'
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 5m ./internal/accounts -run 'TestOrigin|TestAuthorizedScope'
 
 # Every benchmark compiles and runs once, with the race detector. CI runs this on main pushes; a train runs bench-compare
 # instead, which compares allocations without -race. A pull request runs neither.
@@ -245,11 +247,8 @@ web-embed: web-build
 
 # The frontend's checks: types; lint, which also rejects text written into a page instead of the translation files
 # and functions too hard to follow; functions with too many paths or lines and files too long; unused files, exports
-# and dependencies; duplicated code; unit tests; the build within its size budget; and the end-to-end tests against
-# that build, served by the program's own server from the embedded copy, which are told the version it was stamped with.
-# A passing end-to-end run is reused when the hash of everything it checked (web/, api/, all Go code, go.mod/go.sum and
-# the test configuration) matches an earlier pass on this host; any Go change misses.
-web: web-embed
+# and dependencies; duplicated code; unit tests; and the build within its size budget. CI runs this beside web-e2e.
+web-checks: web-embed
     {{ web }} typecheck
     {{ web }} lint
     {{ web }} limits
@@ -257,4 +256,10 @@ web: web-embed
     {{ web }} duplicates
     {{ web }} test
     {{ web }} budget
-    version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py e2e --version "$version" -- {{ web }} e2e
+
+# Keep the shard index and count in the cached command: a partial pass cannot stand for any other shard or the suite.
+web-e2e shard="1/1": web-embed
+    version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py e2e --version "$version" -- {{ web }} e2e --shard={{ quote(shard) }}
+
+# The local entry point retains every check; the workflow schedules the two parts independently.
+web: web-checks web-e2e

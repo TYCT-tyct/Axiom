@@ -185,6 +185,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
+	defer startAlerts(ctx, db, recorder, cfg.valkey.NodeID, cfg.shutdownTimeout, logger)()
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
@@ -371,16 +372,16 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if err != nil {
 		return nodeRoutes{}, err
 	}
-	public := withModelCalls(
-		publicRoutes(consoleAPI{version: version(), accounts: service, db: db},
-			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
-		calls.handler)
 	pay, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Proxies: p.cfg.trustedProxies,
+		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins, Proxies: p.cfg.trustedProxies,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
 	}
+	public := withModelCalls(
+		publicRoutes(consoleAPI{version: version(), accounts: service, payments: pay, db: db},
+			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
+		calls.handler)
 	public = withPaymentCallbacks(public, pay.Notify())
 	admin := adminRoutes(newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger),
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
@@ -397,7 +398,11 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	// Outbound email rides the notifications queue. Registering here also reports at startup whether this node can
 	// send mail at all (docs/domains/accounts.md「给用户的邮件」).
-	if _, err := mail.Register(ctx, db, queue, smtp, logger); err != nil {
+	mailer, err := mail.Register(ctx, db, queue, smtp, logger)
+	if err != nil {
+		return nil, err
+	}
+	if err = observability.RegisterAlerts(db, pg.PlatformScope(), queue, mailer); err != nil {
 		return nil, err
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
@@ -434,10 +439,9 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 		return nil, err
 	}
 	// Orders past their deadline expire every minute, on whichever node leads the queue
-	// (docs/domains/payments.md「补单与过期」). The module has no channel compiled in yet, so it is opened with none and the
-	// run only closes orders whose channel it can open.
+	// (docs/domains/payments.md「补单与过期」). Callbacks and polling register the same protocol plugins.
 	store, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger,
+		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger, Plugins: paymentPlugins,
 	})
 	if err != nil {
 		return nil, err

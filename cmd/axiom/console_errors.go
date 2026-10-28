@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
 	"axiom/internal/observability"
+	"axiom/internal/payments"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pg"
 )
@@ -76,19 +78,22 @@ func failure(err error) *apiError {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errDeadline
 	}
-	if errors.Is(err, observability.ErrBadCursor) {
+	if errors.Is(err, observability.ErrBadCursor) || errors.Is(err, billing.ErrBadStatementCursor) {
 		return invalidField("cursor", "not a cursor this API gave out")
 	}
 	if errors.Is(err, accounts.ErrBadSecret) {
 		return invalidField("/secret", "not a TOTP secret this API gave out")
 	}
-	for _, r := range slices.Concat(refusals, adminRefusals) {
+	for _, r := range slices.Concat(refusals, adminRefusals, orderRefusals) {
 		if !errors.Is(err, r.target) {
 			continue
 		}
 		apiErr := &apiError{status: r.status, code: r.code, message: r.message}
 		if tooMany, ok := errors.AsType[*accounts.TooManyAttempts](err); ok {
 			apiErr.retryAfter = retrySeconds(tooMany.RetryAfter)
+		}
+		if wait, ok := errors.AsType[*payments.Wait](err); ok {
+			apiErr.retryAfter = retrySeconds(wait.After)
 		}
 		if keys, ok := errors.AsType[*accounts.TooManyKeys](err); ok {
 			tooManyKeys(apiErr, keys)
