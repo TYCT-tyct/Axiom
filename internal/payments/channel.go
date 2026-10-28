@@ -98,6 +98,7 @@ type Callback struct {
 }
 
 // Notice is a verified callback; an event that is not about a payment is Relevant false.
+// Paid.Minor is zero for missing settlement data, or -1 for a verified but unrepresentable amount requiring review.
 type Notice struct {
 	Relevant, Success bool
 	Order, TradeNo    string
@@ -115,7 +116,7 @@ const (
 	PayClosed
 )
 
-// Payment is what a query found.
+// Payment is what a query found; Paid.Minor uses the same missing/invalid distinction as Notice.
 type Payment struct {
 	State   PayState
 	TradeNo string

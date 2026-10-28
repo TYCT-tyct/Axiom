@@ -142,13 +142,9 @@ func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 	if !ok {
 		return Merchant{}, &FieldError{"/kind", "is not a channel this program has"}
 	}
-	var raw jsonx.Raw
-	if err := jsonx.Unmarshal(in.Settings, &raw); err != nil || raw.Kind() != '{' {
-		return Merchant{}, &FieldError{"/settings", "must be a JSON object"}
-	}
-	settings, err := jsonx.MarshalCanonical(raw)
+	settings, err := merchantSettings(plugin, in.Settings)
 	if err != nil {
-		return Merchant{}, &FieldError{"/settings", "must be a JSON object"}
+		return Merchant{}, &FieldError{"/settings", err.Error()}
 	}
 	created := in.ID == MerchantID{}
 	rev := int64(1)
@@ -167,6 +163,24 @@ func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 		return Merchant{}, err
 	}
 	return recordSave(ctx, tx, actor, in, created)
+}
+
+func merchantSettings(plugin Plugin, input []byte) ([]byte, error) {
+	var raw jsonx.Raw
+	if err := jsonx.Unmarshal(input, &raw); err != nil || raw.Kind() != '{' {
+		return nil, errors.New("must be a JSON object")
+	}
+	settings, err := jsonx.MarshalCanonical(raw)
+	if err != nil {
+		return nil, errors.New("must be a JSON object")
+	}
+	if normalizer, ok := plugin.(interface{ normalizeSettings([]byte) ([]byte, error) }); ok {
+		settings, err = normalizer.normalizeSettings(settings)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return settings, nil
 }
 
 // lockForSave locks the merchant, checks the revision, refuses a change of its identity while an order of it is still

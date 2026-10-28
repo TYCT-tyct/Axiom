@@ -71,6 +71,20 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 - **金额**：`Notice.Paid`、`Payment.Paid` 由插件把网关的十进制文本精确解析成最小单位（`platform` 的币种表），位数超出就当作金额不符，交给核心比较；插件里不做容差。没有币种字段的渠道（易支付）填商户账户的币种。
 - **插件拿不到数据库**：只拿到配置、密钥和出站客户端；状态和钱都在核心里。插件的错误和日志不带请求的查询串和表单（易支付把密钥放在查询串里）。
 
+### 易支付配置与边界
+
+`EasyPay{}` 实现 `Plugin`，通过内部可选的 `normalizeSettings` 在身份比较和加密封装之前归一化配置（避免让核心识别渠道种类），由公网回调与后台任务的两处 `payments.Open` 注册。`Settings` 严格读取 `gateway`、`pid`、`mode`（`redirect` 或 `api`）、`sign_type`（省略即 `MD5`，不接受其他值）、`methods`（本站方式到 `{type,cid}` 的映射）、`query`、`close`、`refund`（省略即不支持）。`Secrets.key` 必填，轮换期间可同时提供 `old_key` 验签；下单和查询只使用当前密钥。付款币种来自 `MerchantConfig.Currency`。示例：
+
+```json
+{"gateway":"https://pay.example.com","pid":"1001","mode":"api","methods":{"alipay":{"type":"alipay","cid":"2"},"usdt.tron":{"type":"usdt.tron"}},"query":true,"close":false,"refund":true}
+```
+
+网关地址保存前和绑定时去掉查询串、片段及末尾的三个 PHP 端点后缀；只接受无用户信息的 HTTP(S) 地址，生产出站地址策略仍由 `egress.Client` 强制执行。`close` 仅用于明确支持 `api.php?act=close` 的网关，参数与查单一样同时发 URL 和表单。退款使用 `api.php?act=refund` 和表单；不声明 `RefundKey`、`QueryRefund` 或 `Statements`，这些能力没有本插件可依赖的通用协议。退款只在有效的 2xx JSON 明确说“订单不存在”时切换订单标识，网络错误、非 2xx 或无法解析的响应不能触发第二次退款。
+
+插件只持有不可变的商户绑定，每次调用创建自己的参数表。优先使用 `MerchantConfig.NotifyURL`；核心未提供时，按服务端生成的 `CreateRequest.ReturnURL` 的同源地址加 `/api/payments/v1/notify/{merchant}` 生成回调地址，不增加可由浏览器控制的回调配置。GET 只读查询串，POST 只读表单并拒绝非空查询串，重复字段一律拒绝；`Notice.Raw` 只写固定协议描述，不保存签名或请求参数。响应 JSON 使用平台严格解析，字符串或数字标量以原文读取，避免经过浮点。
+
+金额缺失用 `Minor == 0` 表示，仍由核心补查；格式合法但精度超限或整数溢出用 `Minor == -1` 表示，核心将其视为无效付款并转待处理。与直接报错相比，这保留了已验签或已查单的付款事实；与舍入相比，不会把少付当成付清。非法十进制文本报错，不接受指数、分数或符号。所有网关响应、解析和网络错误仅给出固定上下文及 HTTP 状态，不能回显网关返回的消息（其中可能包含密钥）。
+
 ### billing 要提供的接口
 
 payments 引用 billing，在自己的事务里调用（[总体架构的规则 5](../../docs/architecture.md#模块边界规则)：数据的所有方提供接受调用方事务的函数）：
