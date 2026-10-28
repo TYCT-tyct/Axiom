@@ -97,7 +97,7 @@ export interface paths {
         put?: never;
         /**
          * Change the signed-in user's password
-         * @description Requires the current password. With TOTP enabled the session must have passed MFA; a pending session cannot change a password. Issues a replacement session at the same level, ends all other sessions and old recovery codes, invalidates reset tokens, audits the change and queues a localized notification atomically. Uses registration password validation and hashing; wrong current passwords spend the user failure bucket.
+         * @description Requires the current password. With TOTP enabled the session must have passed MFA; a pending session cannot change a password. Issues a replacement session at the same level, ends all other sessions and old recovery codes (returning replacements when TOTP is enabled), invalidates reset tokens, audits the change and queues a localized notification atomically. Uses registration password validation and hashing; wrong current passwords spend the user failure bucket.
          */
         post: operations["changePassword"];
         delete?: never;
@@ -1045,6 +1045,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         csrf_token?: string;
+                        /** @description Replacement recovery codes, returned only when TOTP is enabled. */
+                        recovery_codes?: string[];
                     };
                 };
             };

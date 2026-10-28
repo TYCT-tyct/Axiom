@@ -401,7 +401,7 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, keys *secret.Ke
 	if err != nil {
 		return nil, nil, err
 	}
-	recovery, err := accounts.RegisterPasswordRecovery(db, queue, mailer)
+	recovery, err := accounts.RegisterPasswordRecovery(db, queue, mailer, pg.PlatformScope(), logger)
 	if err != nil {
 		return nil, nil, err
 	}

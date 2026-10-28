@@ -144,7 +144,7 @@ paths:
       description: >-
         Requires the current password. With TOTP enabled the session must have passed MFA; a pending session
         cannot change a password. Issues a replacement session at the same level, ends all other sessions and
-        old recovery codes, invalidates reset tokens, audits the change and queues a localized notification atomically.
+        old recovery codes (returning replacements when TOTP is enabled), invalidates reset tokens, audits the change and queues a localized notification atomically.
         Uses registration password validation and hashing; wrong current passwords spend the user failure bucket.
       security:
         - session: []
@@ -175,6 +175,10 @@ paths:
                 additionalProperties: false
                 properties:
                   csrf_token: {type: string}
+                  recovery_codes:
+                    type: array
+                    items: {type: string}
+                    description: Replacement recovery codes, returned only when TOTP is enabled.
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}

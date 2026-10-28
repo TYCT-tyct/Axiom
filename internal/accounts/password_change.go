@@ -51,7 +51,7 @@ func (s *Service) RequestPasswordReset(ctx context.Context, r PasswordResetReque
 	hash, id := sha256.Sum256([]byte(email)), uuid.NewV7()
 	return s.db.Tx(ctx, pg.SiteScope(uuid.UUID(d.site)), func(tx pg.Tx) error {
 		if err := s.queries.RequestPasswordReset(ctx, tx, RequestPasswordResetParams{
-			SiteID: uuid.UUID(d.site), EmailHash: hash[:], ID: id, Email: &email, Language: passwordLanguage(r.Language),
+			SiteID: uuid.UUID(d.site), EmailHash: hash[:], ID: id, Email: &email, Domain: strings.ToLower(r.Host), Language: passwordLanguage(r.Language),
 		}); err != nil {
 			return err
 		}
@@ -144,18 +144,19 @@ type PasswordChange struct {
 }
 
 // ChangePassword rechecks the current password outside the user lock, then refuses any intervening factor change.
-func (s *Service) ChangePassword(ctx context.Context, p Principal, c PasswordChange) (Issued, error) {
+func (s *Service) ChangePassword(ctx context.Context, p Principal, c PasswordChange) (Issued, []string, error) {
 	if p.user == (UserID{}) || p.Pending() || p.surface != Console {
-		return Issued{}, ErrNoSession
+		return Issued{}, nil, ErrNoSession
 	}
 	if err := s.recoveryReady(); err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
 	if !passwordAllowed(c.NewPassword) {
-		return Issued{}, ErrWeakPassword
+		return Issued{}, nil, ErrWeakPassword
 	}
 	l := s.snapshot.Load().sites[p.site].limits
 	var issued Issued
+	var codes []string
 	err := failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
 		if err := s.checkPassword(ctx, p, c.CurrentPassword); err != nil {
 			return err
@@ -164,18 +165,19 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, c PasswordCha
 		if err := s.hash(ctx, func() { hash = hashPassword(c.NewPassword) }); err != nil {
 			return err
 		}
-		next, err := s.replacePassword(ctx, p, c, hash)
-		issued = next
+		var err error
+		issued, codes, err = s.replacePassword(ctx, p, c, hash)
 		return err
 	})
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
-	return issued, nil
+	return issued, codes, nil
 }
 
-func (s *Service) replacePassword(ctx context.Context, p Principal, c PasswordChange, hash string) (Issued, error) {
+func (s *Service) replacePassword(ctx context.Context, p Principal, c PasswordChange, hash string) (Issued, []string, error) {
 	var issued Issued
+	var codes []string
 	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
 		locked, err := s.lockUser(ctx, tx, uuid.UUID(p.user), p.factorVersion)
 		if err != nil {
@@ -187,6 +189,12 @@ func (s *Service) replacePassword(ctx context.Context, p Principal, c PasswordCh
 		if err := s.setPassword(ctx, tx, uuid.UUID(p.user), uuid.UUID(p.account), uuid.UUID(p.site), hash, c.Language); err != nil {
 			return err
 		}
+		if locked.Mfa {
+			codes, err = s.insertRecoveryCodes(ctx, tx, uuid.UUID(p.user), uuid.UUID(p.account), uuid.UUID(p.site), locked.FactorVersion+1)
+			if err != nil {
+				return err
+			}
+		}
 		issued, err = s.issue(ctx, tx, newSession{
 			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: s.snapshot.Load().sites[p.site], surface: Console,
 			level: p.level, factorVersion: locked.FactorVersion + 1, ip: c.ClientIP, userAgent: c.UserAgent,
@@ -194,20 +202,23 @@ func (s *Service) replacePassword(ctx context.Context, p Principal, c PasswordCh
 		return err
 	})
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
-	return issued, nil
+	return issued, codes, nil
 }
 
 func (s *Service) setPassword(ctx context.Context, tx pg.Tx, user, account, site uuid.UUID, hash, language string) error {
+	email, err := s.queries.PasswordRecipient(ctx, tx, user)
+	if err != nil {
+		return err
+	}
+	if !emailAllowed(email) {
+		return ErrBadEmail
+	}
 	if err := s.queries.SetPassword(ctx, tx, SetPasswordParams{ID: user, PasswordHash: hash}); err != nil {
 		return err
 	}
 	if err := audit.Record(ctx, tx, audit.Event{Actor: audit.User(user), Action: "user.password_set", Target: userTarget(site, account, user)}); err != nil {
-		return err
-	}
-	email, err := s.queries.PasswordRecipient(ctx, tx, user)
-	if err != nil {
 		return err
 	}
 	return s.recovery.mailer.Enqueue(ctx, tx, mail.Tenant{Site: site, Account: account},

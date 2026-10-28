@@ -399,7 +399,7 @@ func TestDefaultTierIsCheckedAtCommit(t *testing.T) {
 }
 
 // TestApplicationChangesOnlyUpdatableColumns: the application may update exactly the columns the README lists, and
-// delete nothing, in any scope; the database refuses the privilege, not just the rows.
+// delete nothing except expired password reset data; the other tables refuse the privilege, not just the rows.
 func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 	t.Parallel()
 	db, _ := open(t)
@@ -420,7 +420,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"api_keys":                {"name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
 		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
 		"recovery_codes":          {"used_at"},
-		"password_reset_requests": {"id", "email", "language", "expires_at"},
+		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
 		"password_reset_tokens":   {"used_at"},
 	}
 	// Generated columns are left out: the database refuses to set them before it looks at privileges.
@@ -433,6 +433,9 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		}
 	}
 	for table := range updatable {
+		if strings.HasPrefix(table, "password_reset_") {
+			continue
+		}
 		if _, err := exec(t, db, platform, "DELETE FROM accounts."+table+" WHERE false"); state(err) != "42501" {
 			t.Errorf("deleting from %s: %v, want permission denied", table, err)
 		}
@@ -482,7 +485,7 @@ func TestTerminalStatesAreFinal(t *testing.T) {
 }
 
 // TestOnePolicyPerCommand: every table has exactly one policy for everyone for each of SELECT, INSERT and UPDATE,
-// and none for DELETE or ALL; members, with nothing to update, has none for UPDATE. Permissive policies are OR-ed,
+// and none for ALL; only reset tables allow DELETE of expired rows. Members has none for UPDATE. Policies are OR-ed,
 // so a second UPDATE or a FOR ALL policy would let through what a terminal-state policy refuses.
 func TestOnePolicyPerCommand(t *testing.T) {
 	t.Parallel()
@@ -497,6 +500,9 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		"site_settings", "sites", "tiers", "users", "workspaces",
 	} {
 		commands := "INSERT, SELECT, UPDATE"
+		if strings.HasPrefix(table, "password_reset_") {
+			commands = "DELETE, INSERT, SELECT, UPDATE"
+		}
 		if table == "members" {
 			commands = "INSERT, SELECT"
 		}

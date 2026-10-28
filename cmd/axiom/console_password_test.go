@@ -24,11 +24,11 @@ func passwordConsole(t *testing.T) consoleFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovery, err := accounts.RegisterPasswordRecovery(f.db, q, mailer)
+	recovery, err := accounts.RegisterPasswordRecovery(f.db, q, mailer, pg.PlatformScope(), logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.run("INSERT INTO river.river_queue (name, paused_at) VALUES ('notifications', now()) ON CONFLICT (name) DO UPDATE SET paused_at = now()")
+	f.run("INSERT INTO river.river_queue (name, paused_at) VALUES ('notifications', now()), ('archive', now()) ON CONFLICT (name) DO UPDATE SET paused_at = now()")
 	if err := q.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -103,8 +103,8 @@ func TestConsoleResetPassword(t *testing.T) {
 	f := passwordConsole(t)
 	old := f.owner()
 	token := strings.Repeat("r", 43)
-	f.run(`INSERT INTO accounts.password_reset_requests (site_id,email_hash,id,email,language)
-        SELECT site_id,sha256(convert_to(email,'UTF8')),gen_random_uuid(),NULL,'en' FROM accounts.users WHERE email = '` + ownerEmail + `';
+	f.run(`INSERT INTO accounts.password_reset_requests (site_id,email_hash,id,email,domain,language)
+        SELECT site_id,sha256(convert_to(email,'UTF8')),gen_random_uuid(),NULL,'` + consoleHost + `','en' FROM accounts.users WHERE email = '` + ownerEmail + `';
         INSERT INTO accounts.password_reset_tokens (id,site_id,account_id,user_id,token_hash,factor_version,expires_at)
         SELECT r.id,u.site_id,u.account_id,u.id,sha256(convert_to('` + token + `','UTF8')),u.factor_version,r.expires_at
         FROM accounts.users u JOIN accounts.password_reset_requests r ON r.site_id = u.site_id WHERE u.email = '` + ownerEmail + `'`)
@@ -124,5 +124,29 @@ func TestPasswordResetEmailDisabled(t *testing.T) {
 	f := newConsoleFixture(t)
 	for _, email := range []string{ownerEmail, "unknown@example.com"} {
 		expect(t, "email unavailable", f.do(http.MethodPost, "/auth/password-reset", `{"email":"`+email+`"}`), http.StatusServiceUnavailable, consoleapi.ErrorCodeUnavailable)
+	}
+}
+
+func TestConsolePasswordLegacyInvalidEmail(t *testing.T) {
+	t.Parallel()
+	f := passwordConsole(t)
+	s := f.owner()
+	f.run("UPDATE accounts.users SET email = 'first,last@x.com' WHERE email = '" + ownerEmail + "'")
+	expect(t, "legacy invalid mailbox", f.do(http.MethodPost, "/password", `{"current_password":"`+ownerPassword+`","new_password":"a different horse battery"}`, as(s)), http.StatusUnprocessableEntity, consoleapi.ErrorCodeUnprocessable)
+	expect(t, "session unchanged", f.do(http.MethodGet, "/session", "", as(s)), http.StatusOK, "")
+}
+
+func TestConsolePasswordReturnsReplacementCodes(t *testing.T) {
+	t.Parallel()
+	f := passwordConsole(t)
+	_, s, _ := f.totpSetup(f.owner())
+	rec := f.do(http.MethodPost, "/password", `{"current_password":"`+ownerPassword+`","new_password":"a different horse battery"}`, as(s))
+	expect(t, "change with MFA", rec, http.StatusOK, "")
+	var result struct {
+		Codes *[]string `json:"recovery_codes"`
+	}
+	decode(t, rec, &result)
+	if result.Codes == nil || len(*result.Codes) != 10 {
+		t.Fatal("MFA password change did not return replacements")
 	}
 }

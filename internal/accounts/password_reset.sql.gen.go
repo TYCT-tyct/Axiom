@@ -72,7 +72,7 @@ func (q *Queries) InsertPasswordResetToken(ctx context.Context, db DBTX, arg Ins
 }
 
 const lockPasswordResetRequest = `-- name: LockPasswordResetRequest :many
-SELECT site_id, id, email, language, expires_at > clock_timestamp() AS unexpired
+SELECT site_id, id, email, domain, language, expires_at > clock_timestamp() AS unexpired
 FROM accounts.password_reset_requests WHERE id = $1 FOR UPDATE
 `
 
@@ -80,6 +80,7 @@ type LockPasswordResetRequestRow struct {
 	SiteID    uuid.UUID
 	ID        uuid.UUID
 	Email     *string
+	Domain    string
 	Language  string
 	Unexpired bool
 }
@@ -97,6 +98,7 @@ func (q *Queries) LockPasswordResetRequest(ctx context.Context, db DBTX, id uuid
 			&i.SiteID,
 			&i.ID,
 			&i.Email,
+			&i.Domain,
 			&i.Language,
 			&i.Unexpired,
 		); err != nil {
@@ -126,8 +128,13 @@ SELECT s.name, d.domain FROM accounts.sites s
 JOIN accounts.site_domains d ON d.site_id = s.id
 WHERE s.id = $1 AND s.status = 'active' AND d.surface = 'console' AND d.disabled_at IS NULL
     AND d.origin = 'https://' || d.domain
-ORDER BY d.domain LIMIT 1
+ORDER BY (d.domain = $2::text) DESC, d.domain LIMIT 1
 `
+
+type PasswordResetSiteParams struct {
+	SiteID uuid.UUID
+	Domain string
+}
 
 type PasswordResetSiteRow struct {
 	Name   string
@@ -135,8 +142,8 @@ type PasswordResetSiteRow struct {
 }
 
 // Match the console order return URL: use an enabled HTTPS console domain owned by the site.
-func (q *Queries) PasswordResetSite(ctx context.Context, db DBTX, siteID uuid.UUID) ([]PasswordResetSiteRow, error) {
-	rows, err := db.Query(ctx, passwordResetSite, siteID)
+func (q *Queries) PasswordResetSite(ctx context.Context, db DBTX, arg PasswordResetSiteParams) ([]PasswordResetSiteRow, error) {
+	rows, err := db.Query(ctx, passwordResetSite, arg.SiteID, arg.Domain)
 	if err != nil {
 		return nil, err
 	}
@@ -191,11 +198,33 @@ func (q *Queries) PasswordResetTenant(ctx context.Context, db DBTX, arg Password
 	return items, nil
 }
 
+const purgePasswordResetRequests = `-- name: PurgePasswordResetRequests :exec
+DELETE FROM accounts.password_reset_requests WHERE id IN (
+    SELECT id FROM accounts.password_reset_requests WHERE expires_at <= clock_timestamp() ORDER BY expires_at LIMIT 1000
+)
+`
+
+func (q *Queries) PurgePasswordResetRequests(ctx context.Context, db DBTX) error {
+	_, err := db.Exec(ctx, purgePasswordResetRequests)
+	return err
+}
+
+const purgePasswordResetTokens = `-- name: PurgePasswordResetTokens :exec
+DELETE FROM accounts.password_reset_tokens WHERE id IN (
+    SELECT id FROM accounts.password_reset_tokens WHERE expires_at <= clock_timestamp() ORDER BY expires_at LIMIT 1000
+)
+`
+
+func (q *Queries) PurgePasswordResetTokens(ctx context.Context, db DBTX) error {
+	_, err := db.Exec(ctx, purgePasswordResetTokens)
+	return err
+}
+
 const requestPasswordReset = `-- name: RequestPasswordReset :exec
-INSERT INTO accounts.password_reset_requests (site_id, email_hash, id, email, language)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO accounts.password_reset_requests (site_id, email_hash, id, email, domain, language)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (site_id, email_hash) DO UPDATE
-SET id = excluded.id, email = excluded.email, language = excluded.language, expires_at = excluded.expires_at
+SET id = excluded.id, email = excluded.email, domain = excluded.domain, language = excluded.language, expires_at = excluded.expires_at
 `
 
 type RequestPasswordResetParams struct {
@@ -203,6 +232,7 @@ type RequestPasswordResetParams struct {
 	EmailHash []byte
 	ID        uuid.UUID
 	Email     *string
+	Domain    string
 	Language  string
 }
 
@@ -212,13 +242,14 @@ func (q *Queries) RequestPasswordReset(ctx context.Context, db DBTX, arg Request
 		arg.EmailHash,
 		arg.ID,
 		arg.Email,
+		arg.Domain,
 		arg.Language,
 	)
 	return err
 }
 
 const resetUser = `-- name: ResetUser :many
-SELECT id, account_id, factor_version, status = 'active' AS active
+SELECT id, account_id
 FROM accounts.users WHERE site_id = $1 AND email = $2
 `
 
@@ -228,10 +259,8 @@ type ResetUserParams struct {
 }
 
 type ResetUserRow struct {
-	ID            uuid.UUID
-	AccountID     uuid.UUID
-	FactorVersion int64
-	Active        bool
+	ID        uuid.UUID
+	AccountID uuid.UUID
 }
 
 func (q *Queries) ResetUser(ctx context.Context, db DBTX, arg ResetUserParams) ([]ResetUserRow, error) {
@@ -243,12 +272,7 @@ func (q *Queries) ResetUser(ctx context.Context, db DBTX, arg ResetUserParams) (
 	var items []ResetUserRow
 	for rows.Next() {
 		var i ResetUserRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.AccountID,
-			&i.FactorVersion,
-			&i.Active,
-		); err != nil {
+		if err := rows.Scan(&i.ID, &i.AccountID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

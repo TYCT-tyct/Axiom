@@ -26,11 +26,11 @@ func TestChangePasswordEndsOtherSessionsAndTokens(t *testing.T) {
 		{"wrong password", changedPassword, accounts.ErrBadCredentials},
 		{password, "short", accounts.ErrWeakPassword},
 	} {
-		if _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: c.old, NewPassword: c.new}); !errors.Is(err, c.want) {
+		if _, _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: c.old, NewPassword: c.new}); !errors.Is(err, c.want) {
 			t.Fatalf("invalid change: %v", err)
 		}
 	}
-	issued, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword})
+	issued, _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestChangePasswordEndsOtherSessionsAndTokens(t *testing.T) {
 	if err := x.reset(t, console, token, password); !errors.Is(err, accounts.ErrInvalidReset) {
 		t.Fatalf("token survived password change: %v", err)
 	}
-	if _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: changedPassword, NewPassword: password}); !errors.Is(err, accounts.ErrBadCredentials) {
+	if _, _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: changedPassword, NewPassword: password}); !errors.Is(err, accounts.ErrBadCredentials) {
 		t.Fatalf("stale principal: %v", err)
 	}
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'user.password_set'"); got[0] != "1" {
@@ -65,14 +65,14 @@ func TestPasswordChangesPreserveMFA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword}); !errors.Is(err, accounts.ErrNoSession) {
+	if _, _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword}); !errors.Is(err, accounts.ErrNoSession) {
 		t.Fatalf("pending: %v", err)
 	}
 	p, err = x.principal(t, console, mfa)
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword})
+	issued, replacements, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +80,7 @@ func TestPasswordChangesPreserveMFA(t *testing.T) {
 	if err != nil || !p.Verified() {
 		t.Fatalf("replacement MFA: %v", err)
 	}
+	x.checkPasswordReplacementCodes(t, codes, replacements)
 	// Reset ends even the verified session, but leaves TOTP enabled and old recovery codes unusable.
 	if err := x.reset(t, console, x.token(t), password); err != nil {
 		t.Fatal(err)
@@ -120,7 +121,7 @@ func TestPasswordResetTenantAndTerminalPolicies(t *testing.T) {
 		t.Fatalf("revived token: %d, %v", n, err)
 	}
 	err := x.db.Tx(t.Context(), pg.NewScope(false, []uuid.UUID{s2}, nil), func(tx pg.Tx) error {
-		_, err := tx.Exec(t.Context(), "INSERT INTO accounts.password_reset_requests (site_id,email_hash,id,email,language) VALUES ($1,sha256('a'),$2,'a@example.com','en')", s1, uuid.NewV7())
+		_, err := tx.Exec(t.Context(), "INSERT INTO accounts.password_reset_requests (site_id,email_hash,id,email,domain,language) VALUES ($1,sha256('a'),$2,'a@example.com','main.example','en')", s1, uuid.NewV7())
 		return err
 	})
 	if err == nil {
@@ -150,7 +151,7 @@ func testPasswordRollback(t *testing.T, flow string) {
 	}
 	switch flow {
 	case "change outbox":
-		_, err = x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword})
+		_, _, err = x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword})
 	case "issuance outbox":
 		// Write the accepted request through SQL after the stopped queue refuses the public entry point.
 		id := uuid.NewV7()
@@ -195,10 +196,27 @@ func TestChangePasswordRequiresVerifiedMFASession(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := x.factorVersion(t)
-	if _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword}); !errors.Is(err, accounts.ErrForbidden) {
+	if _, _, err := x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword}); !errors.Is(err, accounts.ErrForbidden) {
 		t.Fatalf("password-level session with TOTP enabled: %v", err)
 	}
 	if got := x.factorVersion(t); got != before {
 		t.Fatal("MFA refusal changed password state")
+	}
+}
+
+func (x recoveryWorld) checkPasswordReplacementCodes(t *testing.T, codes, replacements []string) {
+	t.Helper()
+	if len(replacements) != 10 {
+		t.Fatalf("replacement recovery codes: %d", len(replacements))
+	}
+	challenge, err := x.s.SignIn(t.Context(), accounts.SignInRequest{Host: console, Email: x.email, Password: changedPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.verify(t, console, challenge, codes[0]); !errors.Is(err, accounts.ErrBadCode) {
+		t.Fatalf("old code survived change: %v", err)
+	}
+	if _, err := x.verify(t, console, challenge, replacements[0]); err != nil {
+		t.Fatalf("new code failed: %v", err)
 	}
 }

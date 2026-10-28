@@ -7,6 +7,7 @@ CREATE TABLE accounts.password_reset_requests (
     email_hash bytea NOT NULL CHECK (octet_length(email_hash) = 32),
     id uuid NOT NULL UNIQUE,
     email text,
+    domain text NOT NULL,
     language text NOT NULL CHECK (language IN ('zh', 'en')),
     expires_at timestamptz NOT NULL DEFAULT (now() + interval '30 minutes'),
     PRIMARY KEY (site_id, email_hash)
@@ -40,7 +41,7 @@ CREATE POLICY token_update ON accounts.password_reset_tokens FOR UPDATE
     USING (platform.in_scope(site_id, account_id) AND used_at IS NULL)
     WITH CHECK (platform.in_scope(site_id, account_id));
 GRANT SELECT, INSERT ON accounts.password_reset_requests, accounts.password_reset_tokens TO axiom_app;
-GRANT UPDATE (id, email, language, expires_at) ON accounts.password_reset_requests TO axiom_app;
+GRANT UPDATE (id, email, domain, language, expires_at) ON accounts.password_reset_requests TO axiom_app;
 GRANT UPDATE (used_at) ON accounts.password_reset_tokens TO axiom_app;
 
 -- This lookup reveals only a tenant for a secret on its own console site. Eligibility is checked again under locks.
@@ -76,3 +77,12 @@ GRANT EXECUTE ON FUNCTION accounts.password_reset_request_tenant TO axiom_app;
 GRANT CREATE ON SCHEMA accounts TO axiom_lookup;
 ALTER FUNCTION accounts.password_reset_request_tenant OWNER TO axiom_lookup;
 REVOKE CREATE ON SCHEMA accounts FROM axiom_lookup;
+
+-- Expired credentials carry no replay protection and no longer need to retain personal data.
+CREATE INDEX password_reset_requests_expiry ON accounts.password_reset_requests (expires_at);
+CREATE INDEX password_reset_tokens_expiry ON accounts.password_reset_tokens (expires_at);
+CREATE POLICY request_expiry ON accounts.password_reset_requests FOR DELETE
+    USING (platform.in_scope(site_id, NULL) AND expires_at <= clock_timestamp());
+CREATE POLICY token_expiry ON accounts.password_reset_tokens FOR DELETE
+    USING (platform.in_scope(site_id, account_id) AND expires_at <= clock_timestamp());
+GRANT DELETE ON accounts.password_reset_requests, accounts.password_reset_tokens TO axiom_app;

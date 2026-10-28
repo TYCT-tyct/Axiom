@@ -43,3 +43,6 @@ func (s *Service) UsePasswordRecovery(r *PasswordRecovery) { s.recovery = r }
 func (r *PasswordRecovery) ProcessPasswordReset(ctx context.Context, id uuid.UUID) error {
 	return r.process(ctx, passwordResetArgs{ID: id})
 }
+
+// PurgePasswordResets advances the expiry worker under explicit test control.
+func (r *PasswordRecovery) PurgePasswordResets(ctx context.Context) error { return r.purge(ctx) }

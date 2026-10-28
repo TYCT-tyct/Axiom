@@ -21,7 +21,7 @@
 
 - 主键 `id uuid`，由 Go 生成 UUIDv7。金额是 `bigint`，单位同[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)。`status` 取 `active` / `disabled`。
 - 类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。站点数据的表用 `site_id`、账户数据的表用 `(site_id, account_id)` 套 `platform.in_scope`；`sites` 自己用 `id` 当 `site_id`，`accounts` 用 `id` 当 `account_id`。
-- `axiom_app` 只对「可改的列」有 `UPDATE` 权限，任何表都没有 `DELETE` 权限。
+- `axiom_app` 只对「可改的列」有 `UPDATE` 权限，除密码找回请求和令牌到期清理外，没有 `DELETE` 权限。
 
 | 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
 |---|---|---|---|---|
@@ -38,7 +38,7 @@
 | `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management，M1 只开放 call）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；`limit_reset` 同工作区的 `budget_reset` | 账户 | `name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
-| `password_reset_requests` | `site_id`、`email_hash`、`id`、可空 `email`、`language`、`expires_at` | 主键 `(site_id, email_hash)`；唯一 `id`；摘要 32 字节；语言 zh/en | 站点 | `id`、`email`、`language`、`expires_at`（重发替换，处理后清除邮箱） |
+| `password_reset_requests` | `site_id`、`email_hash`、`id`、可空 `email`、`domain`、`language`、`expires_at` | 主键 `(site_id, email_hash)`；唯一 `id`；摘要 32 字节；语言 zh/en | 站点 | `id`、`email`、`domain`、`language`、`expires_at`（重发替换，处理后清除邮箱） |
 | `password_reset_tokens` | `id`、`site_id`、`account_id`、`user_id`、`token_hash`、`factor_version`、`expires_at`、`used_at` | `token_hash` 唯一、32 字节；`(site_id, account_id, user_id) → users` | 账户 | `used_at`（终态） |
 
 - **租户列直接存在行上**：账户数据的每张表都有 `site_id`、`account_id`，都不为空。被引用的父表有 `UNIQUE (site_id, id)` 一类的复合唯一键，子表用复合外键引用它，所以两列不可能与"key → 工作区 → 账户 → 站点"不一致；两列不在可改的列里，写入后不变。外键检查不受行级安全影响。理由见[账户与租户的「决策与理由」](../../docs/domains/accounts.md#决策与理由)。
@@ -154,7 +154,7 @@
 | 认证因素 | 开启 TOTP、重建恢复码 | 控制台改密码（已实现）；关闭或更换 TOTP 待实现，仍可经命令行 `reset-mfa` |
 | 会话管理 | 退出 | 设备列表、踢掉一台、退出全部 |
 
-- **注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。邮箱规范化（去空白、转小写）后须是 3 到 254 个可打印 ASCII 字符、`@` 两侧各有字符，否则 `ErrBadEmail`：表的约束（`lower()`、`LIKE`）在各地区设置下对非 ASCII 的判断不一定与 Go 一致，放进库再被拒会变成 500；国际化邮箱地址 M1 不支持。不用站点或平台范围包住注册。
+- **注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。邮箱规范化（去空白、转小写）后须是 3 到 254 个可打印 ASCII 字符、`@` 两侧各有字符，且必须通过 `net/mail.ParseAddress`、解析地址等于输入，否则 `ErrBadEmail`：表的约束（`lower()`、`LIKE`）在各地区设置下对非 ASCII 的判断不一定与 Go 一致，放进库再被拒会变成 500；国际化邮箱地址 M1 不支持。不用站点或平台范围包住注册。
 - **认证因素的一条规则**：`users.factor_version` 是密码、TOTP、恢复码这一组的版本。签发会话、消费一次性因素、修改因素的事务，先锁用户行 `SELECT … FROM users WHERE id = $u FOR UPDATE`（邮件重置先锁请求行，再锁用户；所有涉及请求的路径同序），在锁内核对用户启用和版本；修改因素的事务在同一把锁内把版本加一。会话有效 = 未撤销、未过期、未超空闲、用户启用、版本等于用户当前版本，每个请求读会话时同一条查询一起核对；恢复码只在版本相等且未用过时可用。
 - **密码登录**：argon2id，参数写进 PHC 串（M1 取 OWASP 的基线：19 MiB、2 遍、1 线程；以后提高参数，旧哈希照样能验）；密码 12 到 256 个字符；邮箱不存在也算一次假哈希。先在事务外读出哈希和版本并计算，再开签发事务，锁内版本没变且用户启用才签发。
 - **两步验证**：开了 TOTP 的用户密码通过后先拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口）。验证事务：锁用户行 → 核对待验证会话未撤销、未过期、版本相等、尝试次数未满 → 验码（TOTP 做 `totp_last_step < $step` 的条件更新，恢复码做条件消费，影响行数都必须为 1）→ 码不对只把尝试次数加一并提交（每个待验证会话的次数是站点的 `challenge_code_attempts`） → 码对就条件撤销待验证会话，签发新令牌、新 CSRF 令牌的 `mfa` 会话。用户行锁让一个挑战只换出一个会话。
@@ -164,15 +164,15 @@
 
 ### 邮件找回和改密码
 
-业务流程和取舍见[登录与会话](../../docs/domains/accounts.md#登录与会话)。`RegisterPasswordRecovery` 在队列启动前注册 `accounts.password_reset`（notifications 队列，最多 5 次）；`Config.Recovery` 把同一对象交给 HTTP 服务。SMTP 未配置时不注册签发 worker，避免取走其他节点能处理的任务；SMTP 未配置或没有接入时服务返回 `ErrBusy`，HTTP 映射 503。队列只携带请求 UUID，无个人信息或凭证。工作期限 15 秒；失败交给 River 的错误为固定文字，避免 SQL 值进入全局任务表；最终失败由平台现有告警暴露。
+业务流程和取舍见[登录与会话](../../docs/domains/accounts.md#登录与会话)。`RegisterPasswordRecovery` 在队列启动前注册 `accounts.password_reset`（notifications 队列，最多 5 次）；`Config.Recovery` 把同一对象交给 HTTP 服务。SMTP 未配置时不注册签发 worker，避免取走其他节点能处理的任务；SMTP 未配置或没有接入时服务返回 `ErrBusy`，HTTP 映射 503。队列只携带请求 UUID，无个人信息或凭证。工作期限 15 秒；错误日志 `accounts.password_reset.failed` 只记 job_id、attempt、类别和 SQLSTATE，原始错误及 detail 不进日志。交给 River 的错误仍为固定文字。没有 HTTPS 域名或历史邮箱不合法时提交清空邮箱并取消任务，临时故障由 River 重试、最终失败由现有告警暴露。
 
-迁移 00008：`password_reset_requests` 属站点范围，主键 `(site_id, email_hash)`，摘要为规范化邮箱的 SHA-256；`id` 是每次请求的新 UUIDv7，`email` 在处理后清空，`language` 为 zh/en，`expires_at` 为请求提交起 30 分钟。每个邮箱无条件 upsert 再入队，调用方路径不读用户。请求记录复用，所以没有终态策略；它的新 ID 同时阻止旧链接和旧任务生效。请求摘要与令牌记录保留，原始待处理邮箱只在 RLS 请求表，邮件正文只在 RLS outbox。
+迁移 00008：`password_reset_requests` 属站点范围，主键 `(site_id, email_hash)`，摘要为规范化邮箱的 SHA-256；`id` 是每次请求的新 UUIDv7，`email` 在处理后清空，`domain` 是请求时登记的控制台域名，`language` 为 zh/en，`expires_at` 为请求提交起 30 分钟。每个邮箱无条件 upsert 再入队，调用方路径不读用户。请求记录复用，所以没有终态策略；它的新 ID 同时阻止旧链接和旧任务生效。原始待处理邮箱只在 RLS 请求表，邮件正文只在 RLS outbox；`accounts.password_reset_cleanup` 在 archive 队列每分钟清理到期请求、摘要和令牌，每次每表最多 1000 行，15 秒超时。RLS 的 DELETE 策略仅允许删除范围内已过期行，保护有效凭证，过期无需保留来防重放；SMTP 关闭时仍注册清理任务。清理失败重试并留下分类日志。
 
-`password_reset_tokens` 属个人账户范围，复合外键 `(site_id, account_id, user_id)` 指用户；`id` 对应签发请求编号，唯一 `token_hash` 是 `randomToken` 生成的 256 位随机串的 SHA-256；只可更新 `used_at`，已消费的行策略不再允许更新。后台通过 `db.TenantTx` 和 `password_reset_request_tenant(id)` 定位请求的站点范围；登录前函数 `password_reset_tenant(domain, token_hash)` 由专用 `axiom_lookup` 持有，固定 search_path、撤销 PUBLIC 的执行权，只交出租户与令牌 ID，不判最终可用性。所有表强制 RLS，无 DELETE 授权。
+`password_reset_tokens` 属个人账户范围，复合外键 `(site_id, account_id, user_id)` 指用户；`id` 对应签发请求编号，唯一 `token_hash` 是 `randomToken` 生成的 256 位随机串的 SHA-256；只可更新 `used_at`，已消费的行策略不再允许更新。后台通过 `db.TenantTx` 和 `password_reset_request_tenant(id)` 定位请求的站点范围；登录前函数 `password_reset_tenant(domain, token_hash)` 由专用 `axiom_lookup` 持有，固定 search_path、撤销 PUBLIC 的执行权，只交出租户与令牌 ID，不判最终可用性。所有表强制 RLS，只有这两张新表授予受过期策略约束的 DELETE。
 
-后台与完成重置都按「请求行 → 用户行 → 令牌」加锁；重发只锁请求行，其他因素变化只锁用户行，避免锁顺序反转。后台先锁最新请求，检查未过期且尚未处理，查询本站当前启用的 HTTPS 控制台域名，再锁用户，按当前因素版本签发令牌；令牌、outbox、请求邮箱清除同事务。未知或停用用户只清除请求邮箱。事务提交后任务重试看到邮箱为空，直接结束。重置先在无范围事务里按秘密定位，再在站点范围内重锁请求与用户；条件消费要同时匹配令牌哈希、用户、因素版本、未用及库的实际时钟未到期，影响行数必须为 1。使用 `clock_timestamp()` 而不是事务开始时间，避免锁等待跨过期限后仍可消费。
+后台与完成重置都按「请求行 → 用户行 → 令牌」加锁；重发只锁请求行，其他因素变化只锁用户行，避免锁顺序反转。后台先锁最新请求，检查未过期且尚未处理，查询本站当前启用的 HTTPS 控制台域名，优先本次请求登记的域名，停用后才回退，再锁用户，按当前因素版本签发令牌；令牌、outbox、请求邮箱清除同事务。未知或停用用户只清除请求邮箱。事务提交后任务重试看到邮箱为空，直接结束。重置先在无范围事务里按秘密定位，再在站点范围内重锁请求与用户；条件消费要同时匹配令牌哈希、用户、因素版本、未用及库的实际时钟未到期，影响行数必须为 1。使用 `clock_timestamp()` 而不是事务开始时间，避免锁等待跨过期限后仍可消费。
 
-`RequestPasswordReset` 接收邮箱、语言、客户端 IP；`ResetPassword` 接收本站 host、令牌与新密码；`ChangePassword` 接收 Principal 和当前/新密码。新密码均复用 `passwordAllowed`、`hashPassword` 和并发哈希槽；慢哈希在锁外。改密码需要非 pending 控制台会话，TOTP 开启时须已验证 MFA；当前密码错误计用户失败桶。两种密码写入都调用已有 `SetPassword` 提升因素版本，写同一种 `user.password_set` 审计，并经 outbox 发送 `passwordMail` 通知，任一步失败整体回滚。重置不签发会话；改密码签发原等级的新会话，新 CSRF 在响应中为可选字段。TOTP 保持，旧会话、恢复码和重置令牌因版本变化失效。
+`RequestPasswordReset` 接收邮箱、语言、客户端 IP；`ResetPassword` 接收本站 host、令牌与新密码；`ChangePassword` 接收 Principal 和当前/新密码。新密码均复用 `passwordAllowed`、`hashPassword` 和并发哈希槽；慢哈希在锁外。改密码需要非 pending 控制台会话，TOTP 开启时须已验证 MFA；当前密码错误计用户失败桶。两种密码写入都调用已有 `SetPassword` 提升因素版本，写同一种 `user.password_set` 审计，并经 outbox 发送 `passwordMail` 通知，任一步失败整体回滚。重置不签发会话；改密码签发原等级的新会话，新 CSRF 和 MFA 用户补发的恢复码在响应中均为可选字段；`insertRecoveryCodes` 与因素变更共用。TOTP 保持，旧会话、恢复码和重置令牌因版本变化失效；邮件重置通知提醒登录后重新生成恢复码。历史无效邮箱返回 `ErrBadEmail`（422）并回滚，注册和找回使用相同的可解析邮箱边界校验。
 
 找回邮箱计数独立使用 `reset_email` 键及本地 `guards.resets`（复用可配置的 `email_sign_in_failures`，默认 15 分钟 10 次），不返还；IP 共用登录计数。共享键仍只含 HMAC、故障按节点分摊，算法复用 `takeAttempt`。测试见 `password_reset_test.go`、`password_change_test.go` 和控制台的 `console_password_test.go`：真实数据库、受控过期、显式后台推进，不用耗时阈值判断安全。
 

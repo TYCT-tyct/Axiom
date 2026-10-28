@@ -1,11 +1,11 @@
 -- name: RequestPasswordReset :exec
-INSERT INTO accounts.password_reset_requests (site_id, email_hash, id, email, language)
-VALUES (@site_id, @email_hash, @id, @email, @language)
+INSERT INTO accounts.password_reset_requests (site_id, email_hash, id, email, domain, language)
+VALUES (@site_id, @email_hash, @id, @email, @domain, @language)
 ON CONFLICT (site_id, email_hash) DO UPDATE
-SET id = excluded.id, email = excluded.email, language = excluded.language, expires_at = excluded.expires_at;
+SET id = excluded.id, email = excluded.email, domain = excluded.domain, language = excluded.language, expires_at = excluded.expires_at;
 
 -- name: LockPasswordResetRequest :many
-SELECT site_id, id, email, language, expires_at > clock_timestamp() AS unexpired
+SELECT site_id, id, email, domain, language, expires_at > clock_timestamp() AS unexpired
 FROM accounts.password_reset_requests WHERE id = @id FOR UPDATE;
 
 -- name: FinishPasswordResetRequest :exec
@@ -17,10 +17,10 @@ SELECT s.name, d.domain FROM accounts.sites s
 JOIN accounts.site_domains d ON d.site_id = s.id
 WHERE s.id = @site_id AND s.status = 'active' AND d.surface = 'console' AND d.disabled_at IS NULL
     AND d.origin = 'https://' || d.domain
-ORDER BY d.domain LIMIT 1;
+ORDER BY (d.domain = @domain::text) DESC, d.domain LIMIT 1;
 
 -- name: ResetUser :many
-SELECT id, account_id, factor_version, status = 'active' AS active
+SELECT id, account_id
 FROM accounts.users WHERE site_id = @site_id AND email = @email;
 
 -- name: InsertPasswordResetToken :exec
@@ -39,3 +39,13 @@ WHERE id = @id AND user_id = @user_id AND token_hash = @token_hash
 
 -- name: PasswordRecipient :one
 SELECT email FROM accounts.users WHERE id = @id;
+
+-- name: PurgePasswordResetTokens :exec
+DELETE FROM accounts.password_reset_tokens WHERE id IN (
+    SELECT id FROM accounts.password_reset_tokens WHERE expires_at <= clock_timestamp() ORDER BY expires_at LIMIT 1000
+);
+
+-- name: PurgePasswordResetRequests :exec
+DELETE FROM accounts.password_reset_requests WHERE id IN (
+    SELECT id FROM accounts.password_reset_requests WHERE expires_at <= clock_timestamp() ORDER BY expires_at LIMIT 1000
+);

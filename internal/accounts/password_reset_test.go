@@ -41,11 +41,11 @@ func recoverySite(t *testing.T) recoveryWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovery, err := accounts.RegisterPasswordRecovery(x.db, queue, mailer)
+	recovery, err := accounts.RegisterPasswordRecovery(x.db, queue, mailer, platform, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exec(t, x.db, platform, "INSERT INTO river.river_queue (name, paused_at) VALUES ('notifications', now()) ON CONFLICT (name) DO UPDATE SET paused_at = now()"); err != nil {
+	if _, err := exec(t, x.db, platform, "INSERT INTO river.river_queue (name, paused_at) VALUES ('notifications', now()), ('archive', now()) ON CONFLICT (name) DO UPDATE SET paused_at = now()"); err != nil {
 		t.Fatal(err)
 	}
 	if err := queue.Start(t.Context()); err != nil {
@@ -62,10 +62,14 @@ func recoverySite(t *testing.T) recoveryWorld {
 	return recoveryWorld{x, recovery, queue}
 }
 
-func (x recoveryWorld) requestReset(t *testing.T, email, language string) uuid.UUID {
+func (x recoveryWorld) requestReset(t *testing.T, email, language string, hosts ...string) uuid.UUID {
 	t.Helper()
+	host := console
+	if len(hosts) > 0 {
+		host = hosts[0]
+	}
 	if err := x.s.RequestPasswordReset(t.Context(), accounts.PasswordResetRequest{
-		Host: console, Email: email, Language: language, ClientIP: client,
+		Host: host, Email: email, Language: language, ClientIP: client,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +362,7 @@ func TestPasswordResetDisabledAndUnavailable(t *testing.T) {
 	}
 	// A separate queue avoids registering the recovery kind twice; no queue work is needed while SMTP is disabled.
 	queue := x.db.NewQueue(slog.New(slog.DiscardHandler), platform, nil)
-	recovery, err := accounts.RegisterPasswordRecovery(x.db, queue, disabled)
+	recovery, err := accounts.RegisterPasswordRecovery(x.db, queue, disabled, platform, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3662,6 +3662,9 @@ type ChangePassword200ResponseHeaders struct {
 type ChangePassword200JSONResponse struct {
 	Body struct {
 		CsrfToken *string `json:"csrf_token,omitempty"`
+
+		// RecoveryCodes Replacement recovery codes, returned only when TOTP is enabled.
+		RecoveryCodes *[]string `json:"recovery_codes,omitempty"`
 	}
 	Headers ChangePassword200ResponseHeaders
 }
@@ -5038,23 +5041,23 @@ var swaggerSpec = []string{
 	"aIF+nKUsc1e7jWhevMsgIVMZSmyDEpxTuiYTIxH2xSE5rsoy5Vxdtt/UdhogKLDadCQ+B0NHY826VKG5",
 	"DHbCx92G6hHb9PdHY6wBEU6qLdM0u0+jWqkcfhM2y/J9E1+UceHVUPMHPVcY+B4d8qYi1j8LS1vJ2U9Z",
 	"a3jirnoxkCCzJnbGLu+LssVFIDfVZkCS5aLG1T6qKAoxgJQ7GjLUN/Q4oHp9z794ctpTAic4T9hxFlcs",
-	"DRXuOaN9Tn5lek36xr/ANSFUqEbaqesHRMwW3bqkieAyWtIrFxdVdVwz1NXS05QEMKyNDOvBNiD6N1xB",
-	"tGn84u1cA46vuIRoq7rN4vbKpqdclb97zI4d87X5nCtRc4mdHjkIF3y/JUl50Rcf3OUw+XGrmnYbSXe3",
-	"81EKlY7v7PRv64R807vWDfVS6zgMYPt1IAchHCPhn0llgj89sxVHJoSyxiqHwsadXnx3ndDNzG9IfqvN",
-	"GRxfsIDE9gmQAk/Ycc5DBNdXXTqRIoNq1xr7lWt5U/YEGlxihWt8E7vi2GXLHxYI7tJWRQ7z1oX+tU/E",
-	"RKkoRSQEc3JXRpqXl8iqMTyzh/be2pWFAiY/tZxZVyu7VEwMWRk4b2QIywplJbFcFjqN6xlr+7zpREmE",
-	"hHew2ItXdUgFnJH4vrJenYQUFRQA0yj4At8PbrW180MZXHsRVb1ht/wTvpJY2LcLZWqvEBawT431F5gG",
-	"nIInLlyZrbzTuVpLH3AsbccuPHRy3nGsRW/OzguCwucMx1ucZnDqQcAHa3+1Qoi51EWhrfEzTOm2RonK",
-	"aB9m57033WERihfWaa+vyc82pdCBXGV6LguOVO9PzOXpb9VDmx6Ah+P6v07bz8Ph4zfU+3OcHN7iP7sj",
-	"HaV17ptyjl4htOLN1JjZ+GkQNAtNDcLVfPCnyYru0HCMVTecnTcwjVmmgThirEGbSt+XRhP1ENxQLwSD",
-	"vlzdGqmuCtJSXORK5BaoWFT8V2O4aWElWk4LJUvT2E0s5dDGHQPgVY5ssWKqaIamDRdnCO61e8I3bQ3j",
-	"oJC6bAO/GkqQzdXclqv9Xs/KeV2h7a5rO25CwHAXPwBX7jgZryPg3l01O8ft2G+vYRMgh0rJtRTHqXLY",
-	"UU9cqolFb8CKW+vVoHwS8wyg+RxHObV1mORlibGcBPMEua15Og2xo7w2iMkAI0sTGplCR8o0hDehqg+2",
-	"ttAAsqfbKJ8HcPoVK+jY4p0L4x6Pj/sBmRpo3x0Ua7+xuA3e24/htVsDVRan4g73fNKXCmI2nPB217qc",
-	"URflzdUM6PGmebCOCp7zAPidDCG0ks0s0KqfTDZIK0Nc5Iq7+MdZBCSVLoAYZqV18FZUgbA2tQL5q0uM",
-	"cVy19lG0Chd36QWf0Ev6DiEoTLEBiDjUMpxaW3ludbFsTxmMHqGzZV/vqZu7gLWuEMzr5/7a/VB2U3/b",
-	"V1N1S69kv06LR43gWrOZtXI1IYU6evhLyjG/PRYCZf7opbrE1Zb3Qh2l6NWnXJml++Jn1QrOrJb5owZx",
-	"IY+6bQaONxFEpJs3N/9vAA==",
+	"DRXuOaN9Tn5lek36xr/ANSFUqEbaqesHRMwW+VpGP3k4YC3RBBzzjtvSdcFSLL/MJUmVi0uwOq4w6mpZ",
+	"a0riGlZShtVj0xD9G6432rSJ8XaugSKsuOBoqxbO4vY6qKdcw797KY7d+LWxnetWc0GeHqkJF3y/BUx5",
+	"0Rcf3BMx+XFroHbbTne381HKmo7v7PRv75sckOSiLtnZG4KCuNhGqKSJf294dAeP3qch703vuW2o9FpH",
+	"kIDAUoegEKlg7P4zqanwp2dw45iKUJBZ5VCSudNF8K5T0ZltD8njtjn35AsW7diyAvLrCbv8eYjgtKuL",
+	"PlJMU+0UZI94LSnLnhCJS6zNjW9iPx+7bHnyAvFf2qrIYd66RYH2iZgoFSW3hDBU7idJ8/ISWamHZ/bQ",
+	"Ul074VA05qeWM+tqNZ3KoCETBreTDAFloSAmFvpCd3c9Y+1ZMJ34jpCqD74G8aoOBoEzEt9X1quTkFyD",
+	"omsahY3g+8EhuHZ+SJm0F1G9Hg4oeMJXEqspdqFM7c/C0vupsf4CE5hT8CGGK7OVdzpXa4kPjvWE2PmI",
+	"7tk7jhLpzTZ6QVD4nOF4i7sPTj2oJuCnqFYIMZe6KLQ1fobJ6NYoURntw+y896avLULxwjrt9TV5CKcU",
+	"9JCrTM9lwTH2/SnFPP2tGnTTvfBwXP/XaVh6OHz8hrqWjpPDWzx/d6Rdtc59U7bUK4RWvJkaMxsPE4Jm",
+	"oam1uZoP/jRZ0R2avLFeiLPzBqYxPzYQR4ySaFPp+9LFou6HGyqdYLiaq5s61fVMWiqXXIncAhWLyhZr",
+	"DJQtrESbb6FkaRqLj6Xs37jXAbzKMTlWTBXN0DQQ49zGvXY3+6YhYxzOUhec4FdD8bS5mttytd/rEzqv",
+	"a8vddVXKTQgY7uIH4ModpxF2BNy7q8PnuJH87dV3AuRQEbyWEjtVDnsBiks1sejHWHFTwBqUT2KeATSf",
+	"I0Cntg7wvCwxCpVgniC3NU+nlXeUkQfRJGAeaoI6U+ilmYbALDRSgJUwtK7s6ZPK5wGcfsWmBWxOzyV9",
+	"j8fH/YBMrb/vDoq131iWB+/tx/A3roEqi1Nxb34+6UsF0SZOeLtrRdGo//PmOgz0eNP2WEel2nkA/E6G",
+	"4F/JBqLJRJVkbEJaGSI6VyLX8FOc/0BS6QKIYVZaB29FtRNrIzGQv7o4GkeEax/F2XBZml7wCV2w7xCC",
+	"whQbgIiDRMOptZXnVv/N9pTBABN6cvZ1zbq5C1jrCsG8fu4M3g9lN/W3fdVgt3R59uu0eNQIrjWbWSu0",
+	"E5K/o4e/pOz426M4UOaPXqqLc215L1SAil59yjVlui9+Vq3gzGqZP2ptFzLA2wbseBNBRLp5c/P/BgA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

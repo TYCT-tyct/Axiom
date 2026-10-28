@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 	"uuid"
 
@@ -19,11 +20,17 @@ type PasswordRecovery struct {
 	db     *pg.DB
 	queue  *pg.Queue
 	mailer *mail.Mailer
+	scope  pg.Scope
+	logger *slog.Logger
 }
 
 // RegisterPasswordRecovery registers before the queue starts. A node without SMTP cannot take mail-dependent jobs.
-func RegisterPasswordRecovery(db *pg.DB, queue *pg.Queue, mailer *mail.Mailer) (*PasswordRecovery, error) {
-	r := &PasswordRecovery{db: db, queue: queue, mailer: mailer}
+func RegisterPasswordRecovery(db *pg.DB, queue *pg.Queue, mailer *mail.Mailer, scope pg.Scope, logger *slog.Logger) (*PasswordRecovery, error) {
+	r := &PasswordRecovery{db: db, queue: queue, mailer: mailer, scope: scope, logger: logger}
+	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(r.cleanup)); err != nil {
+		return nil, err
+	}
+	queue.Every(time.Minute, func() river.JobArgs { return passwordResetCleanupArgs{} })
 	if !mailer.Configured() {
 		return r, nil
 	}
@@ -43,12 +50,19 @@ func (passwordResetArgs) InsertOpts() river.InsertOpts {
 }
 
 // Errors recorded by River must not carry SQL values, addresses or tokens.
-var errPasswordResetJob = errors.New("accounts: password reset processing failed")
+var (
+	errPasswordResetJob = errors.New("accounts: password reset processing failed")
+	errNoResetDomain    = errors.New("accounts: no HTTPS console domain")
+)
 
 func (r *PasswordRecovery) work(ctx context.Context, job *river.Job[passwordResetArgs]) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := r.process(ctx, job.Args); err != nil {
+		r.logFailure(ctx, job.ID, job.Attempt, err)
+		if errors.Is(err, errNoResetDomain) || errors.Is(err, ErrBadEmail) {
+			return river.JobCancel(errPasswordResetJob)
+		}
 		return errPasswordResetJob
 	}
 	return nil
@@ -56,6 +70,7 @@ func (r *PasswordRecovery) work(ctx context.Context, job *river.Job[passwordRese
 
 func (r *PasswordRecovery) process(ctx context.Context, args passwordResetArgs) error {
 	q := New()
+	var permanent error
 	_, err := r.db.TenantTx(ctx, "accounts.password_reset_request_tenant", args.ID, func(tx pg.Tx) error {
 		requests, err := q.LockPasswordResetRequest(ctx, tx, args.ID)
 		if err != nil || len(requests) == 0 {
@@ -68,9 +83,17 @@ func (r *PasswordRecovery) process(ctx context.Context, args passwordResetArgs) 
 		if !request.Unexpired {
 			return q.FinishPasswordResetRequest(ctx, tx, args.ID)
 		}
-		return r.issueReset(ctx, tx, args, request)
+		err = r.issueReset(ctx, tx, args, request)
+		if errors.Is(err, errNoResetDomain) || errors.Is(err, ErrBadEmail) {
+			permanent = err
+			return q.FinishPasswordResetRequest(ctx, tx, args.ID)
+		}
+		return err
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return permanent
 }
 
 func (s *Service) recoveryReady() error {
@@ -85,18 +108,21 @@ func (s *Service) recoveryReady() error {
 
 func (r *PasswordRecovery) issueReset(ctx context.Context, tx pg.Tx, args passwordResetArgs, request LockPasswordResetRequestRow) error {
 	q := New()
-	sites, err := q.PasswordResetSite(ctx, tx, request.SiteID)
+	if !emailAllowed(*request.Email) {
+		return ErrBadEmail
+	}
+	sites, err := q.PasswordResetSite(ctx, tx, PasswordResetSiteParams{SiteID: request.SiteID, Domain: request.Domain})
 	if err != nil {
 		return err
 	}
 	if len(sites) == 0 {
-		return errors.New("accounts: no HTTPS console domain")
+		return errNoResetDomain
 	}
 	users, err := q.ResetUser(ctx, tx, ResetUserParams{SiteID: request.SiteID, Email: *request.Email})
 	if err != nil {
 		return err
 	}
-	if len(users) == 0 || !users[0].Active {
+	if len(users) == 0 {
 		return q.FinishPasswordResetRequest(ctx, tx, args.ID)
 	}
 	user := users[0]

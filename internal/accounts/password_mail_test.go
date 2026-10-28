@@ -20,6 +20,9 @@ func TestPasswordMailLanguagesAndEscaping(t *testing.T) {
 		if strings.Contains(m.HTML, "<b>Site</b>") || !strings.Contains(m.HTML, "&lt;b&gt;Site&lt;/b&gt;") {
 			t.Fatal("brand HTML injection")
 		}
+		if c.link == "" && !strings.Contains(m.Text, map[string]string{"zh": "恢复码已失效", "en": "recovery codes are invalid"}[c.language]) {
+			t.Fatal("missing recovery-code warning")
+		}
 		if c.link != "" && (!strings.Contains(m.HTML, c.link) || !strings.Contains(m.Text, "30")) {
 			t.Fatal("missing link or expiry")
 		}
