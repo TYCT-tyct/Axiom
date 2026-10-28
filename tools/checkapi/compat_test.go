@@ -35,6 +35,17 @@ func TestNewlyRequired(t *testing.T) {
 		},
 		{"a new schema may require its fields", withThing, nil},
 		{
+			"an allOf member added to an existing schema",
+			strings.Replace(base, "      required: [reason]\n      properties: {reason: {type: string}}",
+				"      required: [reason]\n      properties: {reason: {type: string}, note: {type: string}}\n      allOf: [{type: object, required: [note], properties: {note: {type: string}}}]", 1),
+			[]string{"console.yaml: Make: note is newly required; an old node omits it and an old page does not send it during a rolling release: keep it optional, or say why it is safe in x-axiom-newly-required"},
+		},
+		{
+			"a shared response's inline body",
+			strings.Replace(base, "          schema: {$ref: \"#/components/schemas/Error\"}", "          schema: {type: object, required: [code], properties: {error: {type: string}, code: {type: string}}}", 1),
+			nil, // checked against a base whose Failure body is inline too, below
+		},
+		{
 			"the reason is given",
 			strings.Replace(base, "    Page:\n      type: object\n", "    Page:\n      type: object\n      required: [next_cursor]\n      x-axiom-newly-required: {next_cursor: every node serves it since v1.4}\n", 1),
 			nil,
@@ -47,6 +58,19 @@ func TestNewlyRequired(t *testing.T) {
 				t.Error(diff)
 			}
 		})
+	}
+}
+
+// TestNewlyRequiredSharedBodies: a body in components.responses or components.requestBodies is compared like one
+// written in the operation.
+func TestNewlyRequiredSharedBodies(t *testing.T) {
+	failure := func(required string) string {
+		return strings.Replace(contract("console"), "          schema: {$ref: \"#/components/schemas/Error\"}",
+			"          schema: {type: object, "+required+"properties: {error: {type: string}, code: {type: string}}}", 1)
+	}
+	got := newlyRequired(map[string][]byte{"console.yaml": []byte(failure(""))}, map[string][]byte{"console.yaml": []byte(failure("required: [code], "))})
+	if len(got) != 1 || !strings.HasPrefix(got[0], "console.yaml: responses/Failure application/json: code is newly required") {
+		t.Errorf("got %q", got)
 	}
 }
 

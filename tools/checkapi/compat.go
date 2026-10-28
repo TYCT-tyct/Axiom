@@ -42,14 +42,31 @@ func compare(file string, before, after map[string]*openapi3.Schema) []string {
 			continue
 		}
 		reasons, _ := after[at].Extensions[reasonsExt].(map[string]any)
-		for _, field := range after[at].Required {
-			if !slices.Contains(was.Required, field) && reasons[field] == nil {
+		old := required(was, map[*openapi3.Schema]bool{})
+		for _, field := range required(after[at], map[*openapi3.Schema]bool{}) {
+			if !slices.Contains(old, field) && reasons[field] == nil {
 				problems = append(problems, fmt.Sprintf("%s: %s: %s is newly required; an old node omits it and an old page does "+
 					"not send it during a rolling release: keep it optional, or say why it is safe in %s", file, at, field, reasonsExt))
 			}
 		}
 	}
 	return problems
+}
+
+// required is what a value of s must carry: its own required properties and those of every allOf member, which
+// constrain the same value, so a member added to an existing schema can newly require a field too.
+func required(s *openapi3.Schema, seen map[*openapi3.Schema]bool) []string {
+	if seen[s] {
+		return nil
+	}
+	seen[s] = true
+	fields := slices.Clone(s.Required)
+	for _, member := range s.AllOf {
+		if member.Value != nil {
+			fields = append(fields, required(member.Value, seen)...)
+		}
+	}
+	return fields
 }
 
 // objects returns every schema of the contract by where it is: the component schemas by name, the bodies each
@@ -89,8 +106,8 @@ func nested(found map[string]*openapi3.Schema, at string, ref *openapi3.SchemaRe
 	}
 }
 
-// inlineBodies returns the request and response bodies' schemas the operations write in place, by operation, status
-// and media type.
+// inlineBodies returns the request and response bodies' schemas written in place: in the shared request bodies and
+// responses, by their names, and in the operations, by operation, status and media type.
 func inlineBodies(doc *openapi3.T) map[string]*openapi3.SchemaRef {
 	bodies := map[string]*openapi3.SchemaRef{}
 	add := func(at string, content openapi3.Content) {
@@ -98,16 +115,31 @@ func inlineBodies(doc *openapi3.T) map[string]*openapi3.SchemaRef {
 			bodies[at+" "+media] = m.Schema
 		}
 	}
-	for _, o := range operations(doc) {
-		where := o.method + " " + o.path
-		if body := o.op.RequestBody; body != nil && body.Ref == "" && body.Value != nil {
-			add(where+" request", body.Value.Content)
-		}
-		for status, response := range o.op.Responses.Map() {
-			if response.Ref == "" && response.Value != nil {
-				add(where+" "+status, response.Value.Content)
-			}
+	for name, body := range doc.Components.RequestBodies {
+		if body.Value != nil {
+			add("requestBodies/"+name, body.Value.Content)
 		}
 	}
+	for name, response := range doc.Components.Responses {
+		if response.Value != nil {
+			add("responses/"+name, response.Value.Content)
+		}
+	}
+	for _, o := range operations(doc) {
+		operationBodies(o, add)
+	}
 	return bodies
+}
+
+// operationBodies adds the bodies o writes in place; one it takes by $ref is added under the shared name.
+func operationBodies(o operation, add func(at string, content openapi3.Content)) {
+	where := o.method + " " + o.path
+	if body := o.op.RequestBody; body != nil && body.Ref == "" && body.Value != nil {
+		add(where+" request", body.Value.Content)
+	}
+	for status, response := range o.op.Responses.Map() {
+		if response.Ref == "" && response.Value != nil {
+			add(where+" "+status, response.Value.Content)
+		}
+	}
 }

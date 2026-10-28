@@ -75,9 +75,9 @@ api-compat base:
     git ls-tree --name-only {{ quote(base) }} api/ | grep '\.yaml$' | while read -r f; do git show {{ quote(base) }}:"$f" > "$old/${f#api/}"; done
     go run -C tools ./checkapi .. "$old"
 
-# Docs name only tests and Go declarations that exist (scripts/check_doc_names.py)
+# Docs name only tests and Go declarations that exist (tools/checkdocnames)
 doc-names:
-    {{ python }} scripts/check_doc_names.py
+    go run -C tools ./checkdocnames ..
 
 # No build output, binary or file over 1 MB is committed: the files the branch adds or changes, and the untracked ones a
 # `git add` would take, are checked by size, by suffix and for a NUL byte (every file on main, and without origin/main);
