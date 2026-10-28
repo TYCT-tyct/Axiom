@@ -123,8 +123,8 @@ var (
 	// ErrUnsafeLink is a checkout with a link the browser must not be sent to.
 	ErrUnsafeLink = errors.New("payments: the channel's link is not one this site accepts")
 
-	// errRefused marks the channel's definite refusal, the only outcome that fails an order.
-	errRefused = errors.New("payments: the channel refused the order")
+	// ErrRefused marks the channel's definite refusal, the only outcome that fails an order.
+	ErrRefused = errors.New("payments: the channel refused the order")
 )
 
 // CreateOrder asks for a top-up: what to buy, how to pay, and the key that makes the request happen once.
@@ -165,7 +165,10 @@ func (r CreateOrder) check() error {
 // the channel gave the first time is never stored, so a replay carries none. A channel that refuses the order fails it
 // and gives the merchant's daily reservation back; any other channel error leaves it waiting for payment and returns
 // ErrUnconfirmed, because the order may exist at the gateway. A replay reports stored State and Checkout rather than
-// the first error; callers must distinguish failed orders and pending orders without a checkout.
+// the first error; callers must distinguish failed orders and pending orders without a checkout. The order also
+// takes one of its IP group's places in the site's hourly limits (iplimit.go) in that first transaction, and a group at its
+// limit of orders or of failed orders is refused with a *Wait.
+// ErrRefused is exported so that a caller can answer a refused order alike for the request that made it and its replays.
 func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (Order, Checkout, error) {
 	if err := r.check(); err != nil {
 		return Order{}, Checkout{}, err
@@ -195,9 +198,9 @@ func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (
 	}
 	checkout, err := p.checkout(ctx, s, &order, r)
 	switch {
-	case errors.Is(err, errRefused):
+	case errors.Is(err, ErrRefused):
 		order.TradeNo = checkout.TradeNo
-		return order, Checkout{}, p.refuseOrder(ctx, s, order, err)
+		return order, Checkout{}, p.refuseOrder(ctx, s, order, r.ClientIP, err)
 	case err != nil:
 		return order, Checkout{}, fmt.Errorf("%w: %w", ErrUnconfirmed, err)
 	}
@@ -230,6 +233,9 @@ func (p *Payments) reserveOrder(ctx context.Context, s pg.Scope, r CreateOrder, 
 			return fmt.Errorf("payments: read the account's order counts: %w", err)
 		}
 		if err = m.settings.admitsCounts(counts, r.Credits); err != nil {
+			return err
+		}
+		if err = spendIPOrder(ctx, tx, uuid.UUID(r.Site.ID), r.ClientIP, m.settings); err != nil {
 			return err
 		}
 		choice, err := p.choose(ctx, tx, m, r.Method, r.Credits)
@@ -316,6 +322,13 @@ func readPlacedOrder(ctx context.Context, tx pg.Tx, r CreateOrder) (Order, bool,
 	return order, true, nil
 }
 
+// GetOrder reads an order the scope sees: the account's own on the console, so another account's is ErrNotFound.
+func (p *Payments) GetOrder(ctx context.Context, s pg.Scope, id OrderID) (Order, error) {
+	var o Order
+	err := p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) { o, err = loadOrder(ctx, tx, id); return err })
+	return o, err
+}
+
 // readOrder reads one order of the transaction's scope.
 func loadOrder(ctx context.Context, tx pg.Tx, id OrderID) (Order, error) {
 	rows, err := queries.ReadOrder(ctx, tx, uuid.UUID(id))
@@ -348,25 +361,25 @@ func orderOf(r ReadOrderRow) (Order, error) {
 }
 
 // checkout asks the order's channel for a checkout and stores what outlives the request. A channel that refuses, or a
-// link the browser must not follow, is errRefused; the order stays as it is for any other outcome.
+// link the browser must not follow, is ErrRefused; the order stays as it is for any other outcome.
 func (p *Payments) checkout(ctx context.Context, s pg.Scope, o *Order, r CreateOrder) (Checkout, error) {
 	ch, err := p.channelOf(ctx, o.MerchantID)
 	if err != nil {
-		return Checkout{}, fmt.Errorf("%w: open the channel before creating an order: %w", errRefused, err)
+		return Checkout{}, fmt.Errorf("%w: open the channel before creating an order: %w", ErrRefused, err)
 	}
 	c, err := ch.Create(ctx, CreateRequest{
 		Order: o.ID, Method: o.Method, Total: o.Total, Subject: "Top-up", ReturnURL: r.ReturnURL,
 		ClientIP: r.ClientIP, Mobile: r.Mobile,
 	})
 	if rejected, ok := errors.AsType[*Rejected](err); ok {
-		return Checkout{}, fmt.Errorf("%w: %s %s", errRefused, rejected.Code, rejected.Message)
+		return Checkout{}, fmt.Errorf("%w: %s %s", ErrRefused, rejected.Code, rejected.Message)
 	}
 	if err != nil {
 		return Checkout{}, err
 	}
 	c = c.withoutNUL()
 	if err = c.check(); err != nil {
-		return Checkout{TradeNo: c.TradeNo}, fmt.Errorf("%w: %w", errRefused, err)
+		return Checkout{TradeNo: c.TradeNo}, fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	stored, err := jsonx.MarshalCanonical(c.stored())
 	if err != nil {
@@ -394,18 +407,24 @@ func (p *Payments) checkout(ctx context.Context, s pg.Scope, o *Order, r CreateO
 	return c, nil
 }
 
-// refuseOrder fails an order the channel refused, in the caller's scope: an order that never had a checkout gives its
-// reservation of the merchant's daily limit back.
-func (p *Payments) refuseOrder(ctx context.Context, s pg.Scope, o Order, cause error) error {
+// refuseOrder fails an order the channel refused, in the caller's scope, and returns cause once that is committed:
+// an order that never had a checkout gives its reservation of the merchant's daily limit back.
+func (p *Payments) refuseOrder(ctx context.Context, s pg.Scope, o Order, ip netip.Addr, cause error) error {
 	err := p.db.Tx(ctx, s, func(tx pg.Tx) error {
 		locked, err := lockForChange(ctx, tx, o.ID)
 		if err != nil {
 			return err
 		}
+		if err = countIPFailure(ctx, tx, o.SiteID, ip); err != nil {
+			return err
+		}
 		return move(ctx, tx, locked, Failed, event{source: sourceUser, kind: kindReject, tradeNo: o.TradeNo, raw: cause.Error()})
 	})
 	if err != nil {
-		return errors.Join(cause, err)
+		// The refusal was not saved: the order is still waiting and its reservation held, so the caller must not tell the
+		// user it was refused. The cause is text only, so that this error is not ErrRefused; a retry with the same key
+		// finds the order as it is.
+		return fmt.Errorf("payments: save the refusal of order %s (%s): %w", o.ID.TypeID(), cause.Error(), err)
 	}
 	if errors.Is(cause, ErrUnsafeLink) {
 		p.closeOrder(ctx, o)

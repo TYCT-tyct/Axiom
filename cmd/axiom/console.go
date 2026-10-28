@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"axiom/internal/accounts"
+	"axiom/internal/payments"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
@@ -18,6 +19,7 @@ import (
 type consoleAPI struct {
 	version  string
 	accounts *accounts.Service
+	payments *payments.Payments
 	db       *pg.DB
 }
 
