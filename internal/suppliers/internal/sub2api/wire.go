@@ -15,14 +15,21 @@ import (
 // plain decimal an Amount is.
 type number string
 
-// UnmarshalJSON keeps the raw text; null is an absent number. A quoted number is read as the number it holds: a number
-// kept as text is written as a string, so a value that goes into a listing's position comes back out as the one it went
-// in as.
+// UnmarshalJSON keeps the raw text; null is an absent number.
 func (n *number) UnmarshalJSON(b []byte) error {
-	if s := string(b); s != "null" {
-		*n = number(strings.Trim(s, `"`))
+	*n = ""
+	if string(b) != "null" {
+		*n = number(b)
 	}
 	return nil
+}
+
+// MarshalJSON preserves the same numeric representation in a saved listing position.
+func (n number) MarshalJSON() ([]byte, error) {
+	if !n.present() {
+		return []byte("null"), nil
+	}
+	return []byte(n), nil
 }
 
 func (n number) present() bool { return n != "" }

@@ -214,11 +214,7 @@ func (e *Engine) keys(ctx context.Context, c *Commit) error {
 	}
 	c.State.KeysAt = page.Next
 	if !page.Done {
-		until := page.Until
-		if until.IsZero() {
-			until = e.now()
-		}
-		return adapter.Blocked{Until: until}
+		return adapter.Blocked{Until: page.Until}
 	}
 	keys := page.Items
 	old := make(map[adapter.KeyRef]adapter.KeyState, len(c.State.Keys))
@@ -266,11 +262,7 @@ func (e *Engine) catalog(ctx context.Context, c *Commit) error {
 	}
 	c.State.OfferAt = page.Next
 	if !page.Done {
-		until := page.Until
-		if until.IsZero() {
-			until = e.now()
-		}
-		return adapter.Blocked{Until: until}
+		return adapter.Blocked{Until: page.Until}
 	}
 	prev := make(map[string]GroupSnap, len(c.State.Groups))
 	for _, g := range c.State.Groups {

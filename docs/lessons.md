@@ -19,3 +19,9 @@
 证据：合并车 run 39439661276 的 go-test 失败（`internal/platform/kv/outage_test.go:347`：`the node stopped serving over a policy it only reports: valkey unavailable: context deadline exceeded`）；PR #372 的 `47f2d7e` CI 在同一文件第 174 行失败（`TestTimeoutReturnsAndTheBreakerRecovers`：`run the count: valkey unavailable: context deadline exceeded`）
 哪一层没拦住：PR #358 只在客户端构造函数里设置宽期限，直接调用 `kv.Open` 的路径漏过；超时测试虽用 `CLIENT PAUSE` 控制失败阶段，预热和恢复阶段仍要求真实网络在 20ms 内回复，测试和评审没有隔离这两种断言。待加的检查：测试中的直接 `kv.Open` 必须经过 `kvtest.Deps`；真实服务端的正常回复不得用生产期限断言，生产期限用受控服务端及虚拟时间验证。
 出现：2026-10-20
+
+## 供应商持久化说明在恢复旧分支时回退
+
+证据：PR #420 的 `5703a9b` 把 `suppliers/README.md` 的清单投影、登录唤醒、状态行先于供应商行的锁顺序说明替换成旧版，独立评审要求恢复；旧扣费写入接口的名字也混回文档，而当前实现是 `reconcile.Ingest`。
+哪一层没拦住：冲突解决后的自审只核对了新增位置协议，没有逐条检查同节原有的不变量；文档检查不核验「登录被替换时唤醒」这种正文引用。供应商模块此类合并应以 main 的持久化小节为底，核对投影、唤醒、锁顺序、状态格式、next_due 六项均保留，再加本次的位置协议；不能把旧分支的整段当冲突答案。
+出现：2026-10-28

@@ -112,7 +112,7 @@ type Listing []byte
 
 // Page is what one read of a paged listing got. Only the read that ends the listing (Done) holds items: it holds every
 // one the pass read, and no Next. A read that stops earlier holds the position to go on from in Next, and Until is when
-// the supplier's limits let the pass go on, or zero when the adapter stopped for a reason of its own.
+// the supplier's limits let the pass go on; an incomplete page always has a nonzero Until.
 type Page[T any] struct {
 	Items []T
 	Next  Listing

@@ -213,8 +213,9 @@ type offerProgress struct {
 	V         int               `json:"v"`
 	Groups    []groupDTO        `json:"groups"`
 	Overrides map[string]number `json:"overrides"`
+	Total     int               `json:"total"`
 	Page      int               `json:"page"` // the key page to read next, 0 once every key is read
-	Keys      map[number]number `json:"keys"` // group id -> the id of a key in it
+	Keys      map[string]number `json:"keys"` // group id -> the id of a key in it
 	Next      int               `json:"next"` // the group to read next
 	Built     []builtGroup      `json:"built"`
 }
@@ -283,25 +284,34 @@ func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter
 }
 
 func (m *manager) keyPageStep(ctx context.Context, p *offerProgress) (page adapter.Page[adapter.Group], more bool, err error) {
-	items, pages, _, err := m.keyPage(ctx, p.Page)
-	if err != nil {
-		return stopped(err, *p)
+	pos := keysProgress{V: 1, Page: p.Page, Total: p.Total}
+	for group, id := range p.Keys {
+		pos.Keys = append(pos.Keys, adapter.KeyState{Ref: adapter.KeyRef(id), GroupRef: group, Status: adapter.KeyActive})
 	}
-	for _, k := range items {
-		if _, seen := p.Keys[k.GroupID]; !seen && k.Status == "active" && k.Key != "" {
-			p.Keys[k.GroupID] = k.ID
+	keys, more, err := m.keysPage(ctx, &pos)
+	if err != nil {
+		return page, false, err
+	}
+	p.Page, p.Total = pos.Page, pos.Total
+	p.Keys = map[string]number{}
+	for _, k := range pos.Keys {
+		group := k.GroupRef
+		if _, seen := p.Keys[group]; !seen && k.Status == adapter.KeyActive {
+			p.Keys[group] = number(k.Ref)
 		}
 	}
-	if p.Page >= pages || len(items) == 0 {
+	if keys.Done {
 		p.Page, p.Next = 0, 0
 		return page, true, nil
 	}
-	p.Page++
+	if !more {
+		return adapter.Page[adapter.Group]{Next: listing(*p), Until: keys.Until}, false, nil
+	}
 	return page, true, nil
 }
 
 func (m *manager) groupStep(ctx context.Context, p *offerProgress) (page adapter.Page[adapter.Group], more bool, err error) {
-	key, found, err := m.groupKey(ctx, p.Keys[p.Groups[p.Next].ID])
+	key, found, err := m.groupKey(ctx, p.Keys[string(p.Groups[p.Next].ID)])
 	if err != nil {
 		return stopped(err, *p)
 	}
@@ -336,7 +346,7 @@ func (m *manager) startOffer(ctx context.Context, groups []groupDTO) (offerProgr
 	if err != nil {
 		return offerProgress{}, err
 	}
-	return offerProgress{V: 1, Groups: groups, Overrides: overrides, Page: 1, Keys: map[number]number{}}, nil
+	return offerProgress{V: 1, Groups: groups, Overrides: overrides, Page: 1, Keys: map[string]number{}}, nil
 }
 
 func (p offerProgress) offer() []adapter.Group {
