@@ -325,7 +325,8 @@ func (p *Payments) queryReconcileWorker(ctx context.Context, ids []uuid.UUID, of
 			err = p.queryOrder(ctx, o)
 		}
 		if err != nil {
-			if _, known := errors.AsType[*Rejected](err); !known {
+			rejected, _ := errors.AsType[*Rejected](err)
+			if rejected == nil {
 				return err
 			}
 			p.logger.Warn("payments: daily query refused", "order", OrderID(ids[i]).TypeID(), "error", err)
