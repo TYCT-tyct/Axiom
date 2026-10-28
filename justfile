@@ -115,6 +115,8 @@ payments-test:
     go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 5m ./internal/payments
     go test -race -p=2 ./internal/platform/clientip
     go test -race -p=2 -run '^TestPaymentCallbacksBypassOnlyConsoleAuthentication$' ./cmd/axiom
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 10m ./cmd/axiom -run 'TestTopUp|TestPaymentMethods|TestReplay|TestOrder|TestIPLimitsOnOrders|TestReturn|TestARefusal|TestRefusal|TestContractRules'
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=2 -timeout 5m ./internal/accounts -run 'TestOrigin|TestAuthorizedScope'
 
 # Every benchmark compiles and runs once, with the race detector. CI runs this on main pushes; a train runs bench-compare
 # instead, which compares allocations without -race. A pull request runs neither.
