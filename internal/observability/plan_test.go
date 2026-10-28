@@ -145,7 +145,8 @@ func nextCursor(t *testing.T, db *pg.DB, q OwnQuery) *Cursor {
 //   - no plan scans the table or the partition, and each reads the index range of the account (Index Cond on
 //     account_id);
 //   - unfiltered, the heavy account's page is an ordered index scan under the limit with no sort: it reads about one
-//     page however many calls the account has. This needs the order to be the index's, which the query's ORDER BY says
+//     page for the first and immediately following pages; deeper reads are checked separately. This needs the order
+//     to be the index's, which the query's ORDER BY says
 //     with qualified columns: a bare "id" is the output column id::text, which sorts as text and turns the plan into a
 //     bitmap scan of the whole range and a sort of it;
 //   - filtered by model or by application, a page is read from the filter's own index (account_id, model|client_app, at
@@ -153,8 +154,8 @@ func nextCursor(t *testing.T, db *pg.DB, q OwnQuery) *Cursor {
 //     matches (100 of 60,000), one that matches nothing reads an index page. Without these two indexes the sparse and the
 //     empty filter read the whole month's partition (7,059 buffers at 360,000 rows, growing with the table) and took
 //     35 to 100 ms;
-//   - for the light account (600 calls) the planner prefers a bitmap scan of the account's range and a top-N sort: all
-//     600 rows, bounded by the account's calls in the window.
+//   - for the light account (600 calls), an ordered scan or a bitmap scan of its range and a top-N sort are accepted:
+//     even the latter is bounded by the account's 600 calls in the window.
 func TestListPlansFollowTheIndexes(t *testing.T) {
 	t.Parallel()
 	db, database := openDBWithURL(t)
