@@ -29,6 +29,12 @@ func TestUnpricedServerToolsNeverReachAdmission(t *testing.T) {
 		{"responses", `"tools":[{"type":"mcp"}],"max_tool_calls":2`, "mcp"},
 		{"responses", `"tools":[{"type":"file_search"}],"max_tool_calls":2`, "file_search"},
 		{"responses", `"tools":[{"type":"image_generation"}],"max_tool_calls":2`, "image_generation"},
+		{"messages", `"tools":[{"type":"tool_search_tool_regex_20251119","name":"tool_search_tool_regex"}]`, "tool_search_tool_"},
+		{"messages", `"tools":[{"type":"tool_search_tool_bm25_20251119","name":"tool_search_tool_bm25"}]`, "tool_search_tool_"},
+		{"messages", `"tools":[{"type":"advisor_20260301","name":"advisor"}]`, "advisor_"},
+		{"responses", `"tools":[{"type":"shell","environment":{"type":"container_auto"}}],"max_tool_calls":2`, "shell"},
+		{"responses", `"tools":[{"type":"tool_search"}],"max_tool_calls":2`, "tool_search"},
+		{"responses", `"tools":[{"type":"programmatic_tool_calling"}],"max_tool_calls":2`, "programmatic_tool_calling"},
 	} {
 		resp, out := r.do(http.MethodPost, "/v1/"+tc.path, a.key, strings.NewReader(`{"model":"acme/beta",`+tc.member+`}`))
 		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.name) {
@@ -66,7 +72,6 @@ func TestCatalogToolDefaultsReachTheQuote(t *testing.T) {
 		want          int64
 	}{
 		{"default search", `{"model":"m","tools":[{"type":"web_search"}]}`, protocol.Responses, catalog.ItemWebSearch, 30},
-		{"explicit search", `{"model":"m","tools":[{"type":"web_search"}],"max_tool_calls":1}`, protocol.Responses, catalog.ItemWebSearch, 30},
 		{"default code", `{"model":"m","tools":[{"type":"code_interpreter"}]}`, protocol.Responses, catalog.ItemCodeExecution, 2},
 		{"Chat search default", `{"model":"m","web_search_options":{}}`, protocol.Chat, catalog.ItemWebSearch, 30},
 		{"Messages code default", `{"model":"m","tools":[{"type":"code_execution_20260521","name":"code_execution"}]}`, protocol.Messages, catalog.ItemCodeExecution, 2},

@@ -194,7 +194,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 服务端工具的默认上界来自 `catalog.Model.ToolUses()` 经路由带来的 `Model.MaxUses`，请求的 `MaxUses` 优先；缺两者仍为 `ErrUnbounded`。默认只表示管理员已确认的端点上界，不是报价阶段凭空限制上游。规格存储、修改方式和 30 次的 OpenRouter 来源见[目录模块](../catalog/README.md#数据)。
 
-`quote.tiers` 保存准入时模型的可报告档（比较时始终包含标准档），在 `Settle` 中与每次尝试的 `Usage.ServiceTier()` 比较，不随目录后来的修改漂移。真正带用量的结算始终带原来的 `Hold`，清理后的迟到结算也如此；清理自身和 `SettleOrphan` 没有上游用量，不需要重建这份声明。因此不新增数据库查询或迁移。`0` 表示调用者没有声明档位，保持兼容；生产路由总会提供模型的声明。已知但未声明档位的告警只走现有 missing-item 提交后路径，不作为一项新的使用量收费。
+`quote.tiers` 保存准入时模型的可报告档，收费与缺项记录共用 `undeclaredTier` 判定（比较时始终包含标准档），在 `Settle` 中与每次尝试的 `Usage.ServiceTier()` 比较，不随目录后来的修改漂移。真正带用量的结算始终带原来的 `Hold`，清理后的迟到结算也如此；清理自身和 `SettleOrphan` 没有上游用量，不需要重建这份声明。因此不新增数据库查询或迁移。`0` 表示调用者没有声明档位，保持兼容；生产路由总会提供模型的声明。已知但未声明档位的告警只走现有 missing-item 提交后路径，不作为一项新的使用量收费。
 
 ## 兜底价
 

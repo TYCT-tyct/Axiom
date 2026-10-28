@@ -40,7 +40,7 @@
 
 `Text(body, byteLimit, callback)` 顺序扫描已校验的请求，只回调解码后的字符串值，不计 JSON 键、外壳或数值；跳过 `data`、`file_data`、`image_url`、`url`、`signature`、`encrypted_content` 的不透明字符串，图片/文件仍由各自的估计覆盖，音频和隐藏上下文的精确估计仍待 #203。普通字符串最多解码 `byteLimit` 个原始字节，边界不切断 UTF-8、转义或代理对，余下普通字符串的原始字节数返回给字节比例兜底。回调借用复用的解码缓冲，不应保留它；返回 false 可停止。只有缺输入用量的结算使用此接口，不建立完整请求对象，也不声称还原供应商的消息框架 token。
 
-`Inspect` 在工具声明边界拒绝没有完整报价的服务端工具：Messages 的 `web_fetch_*`、非空顶层 `mcp_servers`、`mcp_toolset`，Responses 的 `mcp`、`file_search`、`image_generation`。写了 `max_uses` 或 `max_tool_calls` 也不能使它们受支持；返回 `ErrInvalid`，网关回 400 并点名工具。`mcp_servers: []` / null 不启用工具；客户端函数的 `name` 恰好相同不受影响。此前它们全部经同格式 `Prepare` 原样携带到上游（`TestPrepareCopiesNativeServerTools` 固定这个事实）；`Prepare` 保持字节改写职责，准入策略只在 `Inspect` 实现。支持项仍为 web search、code execution，次数缺省交给目录的 `max_uses`，没有默认由 billing 返回 `ErrUnbounded`。逐项依据、范围与日期见[计费决策](../../docs/domains/billing.md#决策与理由)。
+`Inspect` 在工具声明边界拒绝没有完整报价的服务端工具：Messages 的 `web_fetch_*`、非空顶层 `mcp_servers`、`mcp_toolset`、`tool_search_tool_*`、`advisor_*`，Responses 的 `mcp`、`file_search`、`image_generation`、`programmatic_tool_calling`，以及未显式声明客户端执行的 `shell` / `tool_search`；三种格式的 `openrouter:*` 工具声明也拒绝，因为该工具命名空间与循环未实现。写了 `max_uses` 或 `max_tool_calls` 也不能使它们受支持；返回 `ErrInvalid`，网关回 400 并点名工具。`mcp_servers: []` / null 不启用工具；客户端函数的 `name` 恰好相同不受影响。此前同格式改写将这些声明原样携带到上游；转发审计留在 PR 记录中。Responses 的 `shell` 只有 `environment.type:"local"` 按客户端工具处理，`tool_search` 只有 `execution:"client"` 按客户端工具处理；缺省或不认识的执行模式保守拒绝。成员顺序不影响判定，两类客户端声明不能互相替代（`TestInspectKeepsClientToolExecution`）。`Prepare` 保持字节改写职责，准入策略由 `Inspect` 执行。支持项仍为 web search、code execution，次数缺省交给目录的 `max_uses`，没有默认由 billing 返回 `ErrUnbounded`。逐项依据、范围与日期见[计费决策](../../docs/domains/billing.md#决策与理由)。
 
 ## 同格式改写
 

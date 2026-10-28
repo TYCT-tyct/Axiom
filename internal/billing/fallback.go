@@ -334,9 +334,9 @@ func (c *locked) noteUnknown(ctx context.Context, tx pg.Tx, entry int, segments 
 	if entry < 0 || entry >= len(c.row.Models) || entry >= len(c.row.Fallbacks) || c.row.Fallbacks[entry] == "" || entry >= len(c.quotes) {
 		return ErrNoAttempt
 	}
+	tiers := c.quotes[entry].tiers
 	for _, seg := range segments {
-		tiers := c.quotes[entry].tiers
-		if tiers != 0 && !(tiers | 1<<catalog.ServiceTierStandard).Has(seg.Usage.ServiceTier()) {
+		if undeclaredTier(tiers, seg.Usage.ServiceTier()) {
 			if err := c.noteField(ctx, tx, entry, "service_tier."+seg.Usage.ServiceTier().String()); err != nil {
 				return err
 			}
@@ -362,4 +362,10 @@ func (c *locked) noteField(ctx context.Context, tx pg.Tx, entry int, field strin
 		c.seen = append(c.seen, UnknownItem{Model: catalog.ModelID(model), Field: field, Request: c.id})
 	}
 	return nil
+}
+
+// Standard is always quotable; zero means the caller supplied no model tier declaration. Pricing and quarantine
+// must apply the same interpretation or an unexpected tier could keep serving under a narrowed reservation.
+func undeclaredTier(tiers catalog.ServiceTierSet, tier catalog.ServiceTier) bool {
+	return tiers != 0 && !(tiers | 1<<catalog.ServiceTierStandard).Has(tier)
 }

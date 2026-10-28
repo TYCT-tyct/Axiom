@@ -45,7 +45,7 @@ var grammars = [...]grammar{
 		},
 		tool:    fields{"type": (*scanner).toolType, "max_uses": (*scanner).maxUses, "cache_control": (*scanner).cacheControl},
 		parts:   map[string]Capabilities{"image": Images, "document": Documents},
-		servers: []serverTool{{"web_search_", WebSearch, false}, {"code_execution_", CodeExecution, false}, {"web_fetch_", 0, true}, {"mcp_toolset", 0, true}},
+		servers: []serverTool{{"web_search_", WebSearch, false}, {"code_execution_", CodeExecution, false}, {"web_fetch_", 0, true}, {"mcp_toolset", 0, true}, {"tool_search_tool_", 0, true}, {"advisor_", 0, true}, {"openrouter:", 0, true}},
 		tiers:   map[string]catalog.ServiceTierSet{"auto": 0, "standard_only": 1 << catalog.ServiceTierStandard},
 		input:   1 << catalog.ItemInput,
 		// compact_20260112 is the one that compacts; clear_tool_uses and clear_thinking only drop content.
@@ -63,9 +63,13 @@ var grammars = [...]grammar{
 			"type": (*scanner).partType, "content": (*scanner).result, "output": (*scanner).result,
 			"image_url": (*scanner).imageURL, "file_data": (*scanner).fileData,
 		},
-		tool:    fields{"type": (*scanner).toolType},
+		tool: fields{
+			"type":        (*scanner).toolType,
+			"execution":   func(s *scanner) (err error) { s.p.clientSearch, err = s.is("client"); return err },
+			"environment": func(s *scanner) error { return s.object(shellEnvironmentFields) },
+		},
 		parts:   map[string]Capabilities{"input_image": Images, "computer_screenshot": Images, "input_file": Documents},
-		servers: []serverTool{{"web_search", WebSearch, false}, {"code_interpreter", CodeExecution, false}, {"mcp", 0, true}, {"file_search", 0, true}, {"image_generation", 0, true}},
+		servers: []serverTool{{"web_search", WebSearch, false}, {"code_interpreter", CodeExecution, false}, {"mcp", 0, true}, {"file_search", 0, true}, {"image_generation", 0, true}, {"programmatic_tool_calling", 0, true}, {"openrouter:", 0, true}},
 		tiers:   openAITiers,
 		input:   openAIInput, compaction: "compaction",
 	},
@@ -82,9 +86,11 @@ var grammars = [...]grammar{
 			"image_url": func(s *scanner) error { return s.object(chatImageFields) },
 			"file":      func(s *scanner) error { return s.object(chatFileFields) },
 		},
-		parts: map[string]Capabilities{"image_url": Images, "file": Documents},
-		tiers: openAITiers,
-		input: openAIInput,
+		tool:    fields{"type": (*scanner).toolType},
+		servers: []serverTool{{"openrouter:", 0, true}},
+		parts:   map[string]Capabilities{"image_url": Images, "file": Documents},
+		tiers:   openAITiers,
+		input:   openAIInput,
 	},
 }
 
@@ -97,6 +103,8 @@ var (
 	// 《Prompt caching》, read 2026-10-14). Whether a model bills writes is its schedule's business.
 	openAIInput    = catalog.ItemSet(1<<catalog.ItemInput | 1<<catalog.ItemCacheWrite)
 	anthropicSpeed = map[string]catalog.ServiceTierSet{"standard": 0, "fast": 1 << catalog.ServiceTierFast}
+
+	shellEnvironmentFields = fields{"type": func(s *scanner) (err error) { s.p.localShell, err = s.is("local"); return err }}
 
 	sourceFields = fields{
 		"type": func(s *scanner) (err error) { s.p.binary, err = s.is("base64"); return err },
@@ -285,6 +293,10 @@ func (s *scanner) tool() error {
 	if err := s.object(s.g.tool); err != nil {
 		return err
 	}
+	switch {
+	case s.p.toolKind == "shell" && !s.p.localShell, s.p.toolKind == "tool_search" && !s.p.clientSearch:
+		return fmt.Errorf("the %s server tool is not supported yet", s.p.toolKind)
+	}
 	if s.p.kind&(WebSearch|CodeExecution) != 0 {
 		if err := s.addCalls(); err != nil {
 			return err
@@ -314,6 +326,14 @@ func (s *scanner) addCalls() error {
 
 func (s *scanner) toolType() error {
 	v, err := s.str()
+	if s.r.Format == Responses {
+		switch string(v) {
+		case "shell":
+			s.p.toolKind = "shell"
+		case "tool_search":
+			s.p.toolKind = "tool_search"
+		}
+	}
 	for _, t := range s.g.servers {
 		if hasPrefix(v, t.prefix) {
 			if t.unsupported {

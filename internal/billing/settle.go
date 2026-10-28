@@ -281,7 +281,7 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 	}
 	for _, seg := range segments {
 		cost, missing, err := segmentCost(s, seg.Usage, perUseOnly)
-		if tiers != 0 && !(tiers | 1<<catalog.ServiceTierStandard).Has(seg.Usage.ServiceTier()) {
+		if undeclaredTier(tiers, seg.Usage.ServiceTier()) {
 			cost, missing, err = platform.Exact{}, ^catalog.ItemSet(0), nil
 			p.estimated = true
 		}

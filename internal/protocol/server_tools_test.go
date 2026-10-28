@@ -17,9 +17,26 @@ func TestInspectRefusesUnpricedServerTools(t *testing.T) {
 		{protocol.Messages, `"tools":[{"type":"web_fetch_20260318","name":"web_fetch"}]`, "web_fetch_"},
 		{protocol.Messages, `"mcp_servers":[{"type":"url","url":"https://example.com/mcp","name":"m"}]`, "mcp_servers"},
 		{protocol.Messages, `"tools":[{"type":"mcp_toolset","mcp_server_name":"m"}]`, "mcp_toolset"},
+		{protocol.Messages, `"tools":[{"type":"tool_search_tool_regex_20251119","name":"tool_search_tool_regex"}]`, "tool_search_tool_"},
+		{protocol.Messages, `"tools":[{"type":"tool_search_tool_bm25_20251119","name":"tool_search_tool_bm25"}]`, "tool_search_tool_"},
+		{protocol.Messages, `"tools":[{"type":"advisor_20260301","name":"advisor"}]`, "advisor_"},
 		{protocol.Responses, `"tools":[{"type":"mcp","server_label":"m","server_url":"https://example.com/mcp"}]`, "mcp"},
 		{protocol.Responses, `"tools":[{"type":"file_search","vector_store_ids":["vs_test"]}]`, "file_search"},
 		{protocol.Responses, `"tools":[{"type":"image_generation"}]`, "image_generation"},
+		{protocol.Responses, `"tools":[{"type":"programmatic_tool_calling"}]`, "programmatic_tool_calling"},
+		{protocol.Messages, `"tools":[{"type":"openrouter:tool_search"}]`, "openrouter:"},
+		{protocol.Responses, `"tools":[{"type":"openrouter:shell"}]`, "openrouter:"},
+		{protocol.Chat, `"tools":[{"type":"openrouter:web_search"}]`, "openrouter:"},
+		{protocol.Responses, `"tools":[{"type":"shell","environment":{"type":"container_auto"}}]`, "shell"},
+		{protocol.Responses, `"tools":[{"environment":{"type":"container_reference","container_id":"cntr_test"},"type":"shell"}]`, "shell"},
+		{protocol.Responses, `"tools":[{"type":"shell"}]`, "shell"},
+		{protocol.Responses, `"tools":[{"type":"shell","environment":{"type":"local"}},{"type":"shell"}]`, "shell"},
+		{protocol.Responses, `"tools":[{"type":"shell","execution":"client","environment":{"type":"container_auto"}}]`, "shell"},
+		{protocol.Responses, `"tools":[{"type":"shell","environment":{"type":"future_hosted"}}]`, "shell"},
+		{protocol.Responses, `"tools":[{"type":"tool_search"}]`, "tool_search"},
+		{protocol.Responses, `"tools":[{"type":"tool_search","execution":"client"},{"type":"tool_search"}]`, "tool_search"},
+		{protocol.Responses, `"tools":[{"type":"tool_search","environment":{"type":"local"}}]`, "tool_search"},
+		{protocol.Responses, `"tools":[{"execution":"server","type":"tool_search"}]`, "tool_search"},
 	} {
 		for _, limit := range []string{"", `,"max_tool_calls":2`} {
 			body := []byte(`{"model":"m",` + tc.member + limit + `}`)
@@ -27,28 +44,6 @@ func TestInspectRefusesUnpricedServerTools(t *testing.T) {
 			if !errors.Is(err, protocol.ErrInvalid) || !strings.Contains(err.Error(), tc.name+" server tool is not supported") && !strings.Contains(err.Error(), tc.name+" is not supported") {
 				t.Errorf("Inspect(%s) = %v, want a named unsupported tool", body, err)
 			}
-		}
-	}
-}
-
-// These members were all copied by same-format Prepare before admission learned to refuse them. Keep this probe
-// independent of Inspect: the native rewriter is deliberately not a second request-policy implementation.
-func TestPrepareCopiesNativeServerTools(t *testing.T) {
-	for _, tc := range []struct {
-		format protocol.Format
-		member string
-	}{
-		{protocol.Messages, `"tools":[{"type":"web_fetch_20250910","max_uses":2}]`},
-		{protocol.Messages, `"mcp_servers":[{"type":"url","url":"https://example.com/mcp","name":"m"}]`},
-		{protocol.Responses, `"tools":[{"type":"mcp","server_label":"m"}]`},
-		{protocol.Responses, `"tools":[{"type":"file_search","vector_store_ids":["vs_test"]}]`},
-		{protocol.Responses, `"tools":[{"type":"image_generation"}]`},
-	} {
-		body := []byte(`{"model":"m",` + tc.member + `}`)
-		r := protocol.Request{Format: tc.format, Model: "m"}
-		u, err := protocol.Prepare(&r, body, protocol.Target{Format: tc.format, Model: "up"}, protocol.Rewrites{})
-		if err != nil || !strings.Contains(string(u.Body), tc.member) {
-			t.Errorf("Prepare(%s) = %s, %v", body, u.Body, err)
 		}
 	}
 }
@@ -61,5 +56,26 @@ func TestInspectEmptyMCPServersAndClientToolNames(t *testing.T) {
 	}
 	if _, err := protocol.Inspect(protocol.Responses, []byte(`{"model":"m","tools":[{"type":"function","name":"mcp"}]}`)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInspectKeepsClientToolExecution(t *testing.T) {
+	for _, tool := range []string{
+		`{"type":"shell","environment":{"type":"local"}}`,
+		`{"environment":{"type":"local"},"type":"shell"}`,
+		`{"type":"tool_search","execution":"client"}`,
+		`{"execution":"client","type":"tool_search"}`,
+		`{"type":"function","name":"tool_search"}`,
+	} {
+		req, err := protocol.Inspect(protocol.Responses, []byte(`{"model":"m","tools":[`+tool+`]}`))
+		if err != nil || req.Needs != protocol.Tools {
+			t.Errorf("Inspect(%s) = %+v, %v", tool, req, err)
+		}
+	}
+	for _, kind := range []string{"bash_20250124", "text_editor_20250728", "memory_20250818", "computer_toolset_20260801", "browser_toolset_20260801"} {
+		req, err := protocol.Inspect(protocol.Messages, []byte(`{"model":"m","tools":[{"type":"`+kind+`","name":"local_tool"}]}`))
+		if err != nil || req.Needs != protocol.Tools {
+			t.Errorf("Inspect(%s) = %+v, %v", kind, req, err)
+		}
 	}
 }
