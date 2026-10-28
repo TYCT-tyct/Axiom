@@ -210,6 +210,19 @@ class E2ECache(unittest.TestCase):
         self.assertEqual(out.getvalue().count("cache miss"), 2)
         self.assertEqual((self.repo.root / "ran.log").read_text(encoding="utf-8").count("e2e"), 2)
 
+    def test_shard_index_and_count_have_independent_passes(self):
+        command = [sys.executable, "-c", FAKE_E2E, str(self.repo.root)]
+        for shard in ("1/2", "2/2", "1/3", "1/1"):
+            with self.subTest(shard=shard), contextlib.redirect_stdout(io.StringIO()) as out:
+                args = [*command, "--shard=" + shard]
+                self.assertEqual(web_cache.e2e(self.repo.root, self.cache, "v1", args, "tools"), 0)
+                self.assertIn("cache miss", out.getvalue())
+                out.truncate(0)
+                out.seek(0)
+                self.assertEqual(web_cache.e2e(self.repo.root, self.cache, "v2", args, "tools"), 0)
+                self.assertIn("cache hit", out.getvalue())
+        self.assertEqual((self.repo.root / "ran.log").read_text(encoding="utf-8").count("e2e"), 4)
+
     def test_failure_is_not_cached(self):
         status, _ = self.e2e(exits=1)
         self.assertEqual(status, 1)
