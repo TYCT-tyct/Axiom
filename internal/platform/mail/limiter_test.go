@@ -49,9 +49,14 @@ func clientClock(c *stepClock) func() time.Time {
 // would put one recipient in two buckets.
 func testMasterKeys(t *testing.T) *secret.MasterKeys {
 	t.Helper()
+	return masterKeysFrom(t, "1:"+base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", mailKeyLen))))
+}
+
+// masterKeysFrom writes version:base64 lines to a protected file and loads them as one snapshot.
+func masterKeysFrom(t *testing.T, lines ...string) *secret.MasterKeys {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "master")
-	line := "1:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", mailKeyLen))) + "\n"
-	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	master, err := secret.LoadMaster(path)
@@ -69,6 +74,31 @@ func testMailKey(t *testing.T) [mailKeyLen]byte {
 		t.Fatal(err)
 	}
 	return key
+}
+
+func TestMailKeyUsesTheHighestDistributedVersion(t *testing.T) {
+	t.Helper()
+	key := func(fill byte) string {
+		return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string(fill), mailKeyLen)))
+	}
+	multi, err := deriveMailKey(masterKeysFrom(t, "1:"+key('a'), "7:"+key('b')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	highest, err := deriveMailKey(masterKeysFrom(t, "7:"+key('b')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowest, err := deriveMailKey(masterKeysFrom(t, "1:"+key('a')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if multi != highest {
+		t.Fatal("the mail key is not the highest distributed version's")
+	}
+	if multi == lowest {
+		t.Fatal("the mail key is the lowest version's")
+	}
 }
 
 func sharedThrottle(cache *kv.Client, key [mailKeyLen]byte) *throttle {
