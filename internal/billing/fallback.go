@@ -312,3 +312,54 @@ func ClearUnknownItem(ctx context.Context, tx pg.Tx, r ClearUnknownItemRequest) 
 		Reason: r.Reason, Detail: map[string]any{"field": r.Field},
 	})
 }
+
+// noteAttempts notes the unknown fields of every attempt that ran, not only the charged one: a model whose upstream
+// reported one leaves routing however its attempt ended. An attempt known not to have run used nothing.
+func (c *locked) noteAttempts(ctx context.Context, tx pg.Tx, o Outcome) error {
+	for _, at := range o.Attempts {
+		if at.Result == NotExecuted {
+			continue
+		}
+		if err := c.noteUnknown(ctx, tx, at.Entry, at.Segments); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// noteUnknown records each field of segments protocol could not map against the entry's model, whichever attempt
+// reported it. The first time the model shows a field it leaves routing (「价目表缺项」), and seen collects it for the
+// alert once the transaction commits.
+func (c *locked) noteUnknown(ctx context.Context, tx pg.Tx, entry int, segments []Segment) error {
+	if entry < 0 || entry >= len(c.row.Models) || entry >= len(c.row.Fallbacks) || c.row.Fallbacks[entry] == "" || entry >= len(c.quotes) {
+		return ErrNoAttempt
+	}
+	for _, seg := range segments {
+		tiers := c.quotes[entry].tiers
+		if tiers != 0 && !(tiers | 1<<catalog.ServiceTierStandard).Has(seg.Usage.ServiceTier()) {
+			if err := c.noteField(ctx, tx, entry, "service_tier."+seg.Usage.ServiceTier().String()); err != nil {
+				return err
+			}
+		}
+		for _, u := range seg.Usage.Unknown() {
+			if err := c.noteField(ctx, tx, entry, u.Field); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *locked) noteField(ctx context.Context, tx pg.Tx, entry int, field string) error {
+	model := c.row.Models[entry]
+	n, err := queries.NoteUnknownItem(ctx, tx, NoteUnknownItemParams{
+		ModelID: model, Field: field, RequestID: c.id, SiteID: c.row.SiteID, AccountID: c.row.AccountID,
+	})
+	if err != nil {
+		return fmt.Errorf("billing: note the unknown item %s: %w", field, err)
+	}
+	if n == 1 {
+		c.seen = append(c.seen, UnknownItem{Model: catalog.ModelID(model), Field: field, Request: c.id})
+	}
+	return nil
+}

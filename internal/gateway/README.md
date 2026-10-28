@@ -161,7 +161,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 - `ExecDeps.Quality` 是 `*quality.Monitor`，与 `RouteDeps.Quality` 是同一个：每次尝试在 `close` 里把它怎么结束的（`quality.Observation`：适配器的失败、流读失败的 `protocol.Fault`、`cutOf` 从 context 原因读出的超时或我们自己的原因、客户端是否已走、是否正常结束或 200 无正文、预估输入、结算用的输出 token、发出和首段内容的时刻）报一次，判定在 quality（[internal/quality/README.md](../quality/README.md)）。
 - 结尾的结束原因：`Relay` 不交出上游的 `stop_reason`，正常结束一律记 `FinishStop`；零输出免单要的“结束原因为空”因此只有出错的情形，protocol 补上后再接；零输出这条规则本身没有上限，连续多少次都按它免。
 
-**路由快照**由 `RouteDeps`（`route.go`）从供应商的端点、目录的规格、站点的售价组装，规则见[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)。`Build` 是纯映射（一次读完所有来源，没有售价或规格的模型整个排除并记一条带原因的日志），`Publish` 替换路由的快照并通知节点，`Run` 启动后每 5 秒重建一次。健康度、吞吐和首字延迟取 `RouteDeps.Quality`（`quality.Monitor.Measured`，重建时的值，没测过的吞吐和延迟为 0），质量和置信度是 1，都只在 `endpointOf` 这一处赋。每个端点的服务档是规格里的档加标准档，计费按端点实际提供的档报价（`billing.Model.ServiceTiers`），所以售价表只有标准档的模型也能接下没写档位的请求。
+**路由快照**由 `RouteDeps`（`route.go`）从供应商的端点、目录的规格、站点的售价组装，规则见[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)。`Build` 是纯映射（一次读完所有来源，没有售价或规格的模型整个排除并记一条带原因的日志），`Publish` 替换路由的快照并通知节点，`Run` 启动后每 5 秒重建一次。健康度、吞吐和首字延迟取 `RouteDeps.Quality`（`quality.Monitor.Measured`，重建时的值，没测过的吞吐和延迟为 0），质量和置信度是 1，都只在 `endpointOf` 这一处赋。服务端工具的默认次数从 `Model.ToolUses()` 拷入 `Endpoint.ToolUses`，报价经 `Entry.Limits.MaxUses` 读取；未声明档位的缺项同样经 `UnknownItems` 标记端点并由下一次快照排除。每个端点的服务档是规格里的档加标准档，计费按端点实际提供的档报价（`billing.Model.ServiceTiers`），所以售价表只有标准档的模型也能接下没写档位的请求。
 
 ## 计量、追加与结算
 

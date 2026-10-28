@@ -108,6 +108,7 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 
 // alert reports each unknown item seen for the first time: its model has left routing and needs an administrator.
 func (b *Billing) alert(seen []UnknownItem) {
+	// TODO(#316): deliver this committed missing-item signal through operator notifications.
 	for _, u := range seen {
 		b.logger.Error("billing: an unknown billing item appeared; the model takes no new requests until it is priced",
 			"model", u.Model.String(), "field", u.Field, "request", u.Request.String())
