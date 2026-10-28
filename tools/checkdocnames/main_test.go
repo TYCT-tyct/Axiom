@@ -28,6 +28,8 @@ func TestSettleOnce(t *testing.T) {
 }
 
 func BenchmarkSettle(b *testing.B) {}
+
+func (h *Hold) TestEndpoint() {}
 `
 
 func TestProblems(t *testing.T) {
@@ -47,6 +49,7 @@ func TestProblems(t *testing.T) {
 		{"renamed test", "`TestSettleTwice` covers it", 1},
 		{"prefix glob that matches", "`TestSettle*`", 0},
 		{"prefix glob that matches nothing", "`TestRefund*`", 1},
+		{"production code named like a test", "`TestEndpoint`", 0},
 		{"one of two benchmarks missing", "`BenchmarkSettle` and `BenchmarkRefund`", 1},
 		{"declared function", "`billing.Settle`", 0},
 		{"declared function with arguments", "`billing.Settle(ctx, id)`", 0},

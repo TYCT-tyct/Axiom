@@ -4,8 +4,10 @@
 // Docs that cite a test as the evidence for a rule, or a function as where a rule lives, rot silently when the code is
 // renamed: three blocking review findings in one batch (#371, #375, #377) were exactly that. Two forms are checked, the
 // ones that cannot be anything else:
-//   - a test, benchmark, fuzz or example name (`TestX`, `TestX/sub`, `BenchmarkY`) must be a function in some Go file;
-//     a trailing * (`TestDiffHarness*`) matches any function with that prefix
+//   - a test, benchmark, fuzz or example name (`TestX`, `TestX/sub`, `BenchmarkY`) must be declared in some Go file;
+//     a trailing * (`TestDiffHarness*`) matches any declaration with that prefix. Any declaration, not only functions:
+//     production code has exported names that start with Test (suppliers' Service.TestEndpoint, TestRequest), and a
+//     doc naming one of them cannot be told apart from a doc naming a test
 //   - `pkg.Name` with an exported Name, where pkg is the name of one of our Go packages, must be a package-level
 //     declaration of that package or a method of one of its types
 //
