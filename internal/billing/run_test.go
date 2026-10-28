@@ -5,6 +5,11 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"uuid"
+
+	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 // TestRunKeepsTheHolderAlive: the loop's heartbeat, at the period Start gives it when the configuration names none, is
@@ -113,4 +118,104 @@ func TestRunBeatsWhileTheCleanupIsStuck(t *testing.T) {
 		t.Errorf("the reservation is %s: the cleanup was not stuck, so the test proved nothing", b.state())
 	}
 	stop()
+}
+
+// TestHeartbeatBeatsWhileThePoolIsExhausted: a call holding every connection of the ordinary pool still lets a beat
+// through within its period, because the heartbeat has a connection of its own. The same beat on the pool waits for a
+// connection until its deadline, which is how a pool exhausted by calls delays a beat past the holder's TTL less the
+// margin, turns Alive false and answers 503 on the whole node (#217).
+func TestHeartbeatBeatsWhileThePoolIsExhausted(t *testing.T) {
+	database := pgtest.New(t, Migrations())
+	// One ordinary connection and one for the completion class, so the one can be held without the pool opening more.
+	app, err := pg.Open(t.Context(), database.App+"&pool_max_conns=2", pg.WithCompletionReserve(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	platform := pg.NewScope(true, nil, nil)
+	config := Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour}
+	b, err := Start(t.Context(), app, platform, config, newSupplies())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.conn.Close(t.Context())
+
+	held, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- app.Tx(t.Context(), platform, func(pg.Tx) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	defer func() {
+		close(release)
+		if err := <-done; err != nil {
+			t.Errorf("the transaction that held the pool: %v", err)
+		}
+	}()
+
+	beat, cancel := context.WithTimeout(t.Context(), b.config.Heartbeat)
+	defer cancel()
+	if err := b.Heartbeat(beat); err != nil {
+		t.Fatalf("the heartbeat waited for a pooled connection: %v", err)
+	}
+
+	pooled, cancelPooled := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancelPooled()
+	if err := app.Tx(pooled, platform, func(pg.Tx) error { return nil }); err == nil {
+		t.Fatal("a pooled transaction ran: the pool was not exhausted, so the test proved nothing")
+	}
+}
+
+// TestTheReapDoesNotTakeABeat: the heartbeat and the reap share their connection, so a reap that waits on the row of a
+// holder another node's write transaction still fences gives up after half a beat period; the beat that was waiting for
+// the connection lands inside its own period, and it is the beat, not the crossing of a deadline, that keeps Alive true.
+func TestTheReapDoesNotTakeABeat(t *testing.T) {
+	b := newBank(t, 0, 0, Config{HolderTTL: 6 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
+	// A holder of another node that is past its TTL and a reap's grace, and a transaction that fences it the way a write
+	// in flight on that node does: FOR UPDATE, which the reap takes, waits for FOR KEY SHARE.
+	other := uuid.NewV7()
+	b.sql("INSERT INTO billing.holders (id, expires_at) VALUES ('" + other.String() + "', clock_timestamp() - interval '2 hours')")
+	held, release := make(chan struct{}), make(chan struct{})
+	fenced := make(chan error, 1)
+	go func() {
+		fenced <- b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), "SELECT 1 FROM billing.holders WHERE id = $1 FOR KEY SHARE", other); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	reaped := make(chan error, 1)
+	go func() {
+		_, err := b.billing.Reap(t.Context())
+		reaped <- err
+	}()
+	// The reap holds the connection only once it is waiting in the database, which is the state whose cost to the beat
+	// this test is about.
+	for deadline := time.Now().Add(5 * time.Second); b.count(`SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND state = 'active' AND wait_event_type = 'Lock'`) == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the reap never waited on the fence, so the test proved nothing")
+		}
+	}
+
+	beat, cancel := context.WithTimeout(t.Context(), b.billing.config.Heartbeat)
+	defer cancel()
+	if err := b.billing.Heartbeat(beat); err != nil {
+		t.Fatalf("the heartbeat waited for the reap's lock: %v", err)
+	}
+	if err := <-reaped; err == nil {
+		t.Error("the reap succeeded while the row it must lock was fenced, so the test proved nothing")
+	}
+	close(release)
+	if err := <-fenced; err != nil {
+		t.Fatal(err)
+	}
 }

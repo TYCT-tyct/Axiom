@@ -453,7 +453,7 @@ func TestRefundStopsAtFrozenMismatch(t *testing.T) {
 			case "refund":
 				return SettleRefund(t.Context(), tx, Refund{Freeze: f})
 			default:
-				_, err := writeOffAccount(t.Context(), tx, f.Account, movementPage)
+				_, _, err := writeOffAccount(t.Context(), tx, f.Account, movementPage)
 				return err
 			}
 		})

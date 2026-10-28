@@ -60,7 +60,7 @@ func RegisterReconcile(cfg ReconcileConfig) error // 已实现：把自平登记
 func LedgerOf(ctx, tx pg.Tx, requestID uuid.UUID) ([]LedgerTransaction, error) // 已实现：一个请求的账本交易与分录，按请求 ID 读；只从运营或管理的处理器调用，事务须是平台范围
 type Suppliers interface{ RecordAttempts; RecordLostRequest; ResolveLostRequest; EndRequest } // 已实现，见「结算与账本」
 func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) error // 已实现：一个事务；数据库错误由调用方退避重试
-func (b *Billing) Run(ctx context.Context) error // 已实现：心跳、回收、截止时间清理
+func (b *Billing) Run(ctx context.Context) error // 已实现：心跳、回收（都在池外的一条专用连接上，见下文「持有者与截止时间」）、截止时间清理
 type Progress struct{ ContentBytes, PartialBytes, Searches int64; Reported catalog.Usage; Final catalog.ItemSet } // 已实现；gateway 从 protocol.Progress 复制；Final：已是最终值的已报告项
 type Segment struct{ Usage catalog.Usage; Reported catalog.ItemSet } // 已实现；Reported 之外有用量的项是估的
 type Outcome struct{ Attempts []AttemptResult } // 已实现；收费的是最后一个；客户端是否离开记在收费那次尝试的 Finish（Cancelled）里，不在这里
@@ -184,7 +184,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **重放**（`allocation.apply`）：逐笔：`credit` 开出批次并先还欠款；`expire` 从它指名的批次里扣掉作废额；其余借方为正是扣费，按「先到期、不过期的最后、同到期先赠送、再先进账」用批次的未冻结额度，不够的计入 `unfunded`；借方为负而不是 `credit` 的是冲回，**现在不分配**：重放停下这个账户、报错，由一轮计入失败指标（见 billing.md「额度批次」，要求写在 [#277](https://github.com/TYCT-tyct/Axiom/issues/277)）。结果只由账本决定：从头重放和接着上次存下的位置重放相同（`TestReplayProperty` 检查，每个种子从每一个位置续放，并随机包含冻结、解冻和退款）。
 - **不变量**：①重放到最新后，Σ（批次剩余）− `unfunded` = `balances.balance`；②每个批次已用 + 已作废 + 已退款 + 冻结中 ≤ 金额，冻结中不为负；③`unfunded` > 0 时没有批次还剩未冻结额度；④作废不超过 `room`（余额 − 在途预留 − 全部冻结，不用底线；与结算收费的上限 `cap` 同一个函数，只是底线取 0），所以作废之前准入的预留都还收得下，也不制造欠款；⑤作废幂等：一轮作废后批次剩余为 0 或被 `room` 卡住，再跑一轮没有可作废的就什么也不写；⑥同一单位的扣费只落在一个批次上：重放在账户锁内串行落定，结算不写批次；⑦重放到最新后 Σ（批次冻结中）= `balances.frozen`。
 - **一个账户的作废（`expirer.expire`）**：先在没有锁的短事务里，一页一个事务，把分配重放到接近最新（`advanceAllocation`，退款准备共用同一实现）：这样做是安全的，因为该账户的每一笔交易都在余额行锁内编号（「序号和重放的顺序」），序号顺序就是提交顺序，任何快照读到的页都是锁下所见的前缀；存的时候用读到时的位置做比较，别的事务先动了就丢掉这次的结果（`errStale`），从新位置继续预放。无锁重放先按账户的序号索引取当前可见的最大交易序号（没有则为 0），必须在读批次之前取：上界之内的交易在取上界时都已提交，之后在更晚的快照里读到的批次一定带着它们；上界之后提交的充值进不了任何一页，留给下一次重放连批次一起读。反过来先读批次再取上界，就会把读批次期间提交的充值算进上界，而它的批次不在已加载的集合里。然后读位置、读批次、再读一次位置；`Movements` 的每页只读到这个上界，所以不会读到入账却没加载它的批次（#361）。老交易没有序号，但上线后不会再新增，所以不需要另设上界；持锁路径不设快照上界，仍可重放自己新写的作废。位置变了也按 `errStale` 丢掉：批次的已用、已作废和三个冻结累计额只由存状态的那个事务写、同时推进位置，位置只前进，所以两次位置相同，读到的批次就是与这个位置一起存下的；否则重放会从比位置新的批次开始，别的事务刚用完的批次已不在加载的集合里，重放在它的入账（或已放不下的作废）上报错，而不是在存的时候被比较丢掉（#357）。然后在一个事务里锁余额行（`writeOffAccount`）：读状态和批次 → 重放到最新 → 核对不变量①、⑦（对不上就报错，什么也不作废）→ 按到期先后对每个到期的、仍有剩余的批次作废 min(剩余 − 冻结中, `room`)，记 `expire` 交易（借用户余额、贷 `credit_expired`；`request_id` 是批次 ID，版本号是作废前已作废的累计额）→ 再重放一次吃进自己写的交易 → 存下状态。到期的判断用数据库时钟。整个账户有 30 秒的预算，超了就失败。
-- **一轮（`expirer.run`）**：开始时读一次数据库时间和扫描的位置（`billing.expiry_cursor`），按账户 ID 分页取有到期批次的账户（部分索引 `credit_batches_due`，`expires_at` 用这一个时间做界），逐个账户作废；失败的账户计入 `axiom.billing.expire.failures`、记日志（一轮最多列 20 个）、继续下一个；一轮 5 分钟预算用完就把位置存下停下，扫到末尾位置归零。队列任务 `billing.expire_credit` 每分钟一次，只有队列的领导节点插入，同一时刻只有一个在排队或在跑；任务总是成功，原因见 billing.md「隔离与进度」。排障见 billing.md「排障」。
+- **一轮（`expirer.run`）**：开始时读一次数据库时间和扫描的位置（`billing.expiry_cursor`），按账户 ID 分页取有到期批次的账户（部分索引 `credit_batches_due`，`expires_at` 用这一个时间做界），逐个账户作废；失败的账户计入 `axiom.billing.expire.failures`、记日志（一轮最多列 20 个）、继续下一个；到期额度被上限（余额 − 在途预留 − 全部冻结）卡住、这一轮没能全部作废的，按批次计入 `axiom.billing.expire.deferred`、按金额（十亿分之一额度）计入 `axiom.billing.expire.deferred.amount`，留给后面几轮（`writeOffDue` 返回 `deferred`；读法与处理见 billing.md「排障」）；一轮 5 分钟预算用完就把位置存下停下，扫到末尾位置归零。队列任务 `billing.expire_credit` 每分钟一次，只有队列的领导节点插入，同一时刻只有一个在排队或在跑；任务总是成功，原因见 billing.md「隔离与进度」。排障见 billing.md「排障」。
 - **交易的分配**：付费批次的来源为 `paid`；`freeze`、`unfreeze`、`refund` 指定批次，其他动用户余额的交易按借方正负归为扣费或冲回；拒付随后续支付实现。
 - **冻结事件**：`freeze`、`unfreeze`、`refund` 都以批次 ID 为 `request_id`，版本号是写入后该批次这一类的累计额。三个累计额只增不减；超过 int64 上限时在写交易前报错，不能回绕复用版本号。`freeze`、`unfreeze` 没有分录，余额不动，但序号同样经 `InsertLockedTransaction` 在余额行锁内取。`apply` 按版本号与已存同类累计额的差值重放：冻结后扣费和作废只用剩余减冻结中；`refund` 的借方只从指名批次的冻结中扣；`unfreeze` 先用解冻额还 `unfunded`，剩下的恢复可用。三个累计额与已用、已作废同样只由重放存下；`balances.frozen` 由写事件的事务同步增减，准入、追加、结算直接从余额行读它，不等待重放。
 - **退款准备与冻结**：`Freeze{Account, Batch uuid.UUID; Amount int64}` 指定付费批次和请求冻结的额度（十亿分之一，必须为正）。**调用方必须在打开订单／退款事务、取得订单锁之前调用 `PrepareRefund(ctx, db, scope, Freeze) error`**：先检查批次归属和付费来源，再经共用的 `advanceAllocation` 一页一个短事务无锁预放；期限由调用方的 context 控制。`FreezeRefund(ctx, tx, Freeze) (int64, error)` 在平台范围事务里先读不变的批次元数据、核对归属和来源，再锁余额行、只补最近尾部、核对①和⑦，用取锁后的数据库时间排除到期批次。实际冻结 min(请求额, 批次未冻结剩余, max(0, 余额 − 在途预留 − 全部冻结))；底线不参与退款，没有额度返回 0。不在持锁事务里调用准备接口。
@@ -221,9 +221,9 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 **持有者**是进程每次启动生成的 UUID，一行 `(holder, expires_at, reaped_at)`；时间比较一律用取锁之后的 `clock_timestamp()`，不用事务开始时的 `now()`。默认值和它们之间的关系见 [gateway 的「超时与限额」](../gateway/README.md#超时与限额)。
 
 - **写入栅栏**：准入、追加在锁余额行之后，以 `FOR KEY SHARE` 读自己的持有者行，要求 `reaped_at IS NULL AND expires_at > clock_timestamp()`。
-- **实现**：`Start` 登记持有者，`Heartbeat`、`Reap` 在平台范围的事务里执行；`Run` 把心跳和清理放在各自的 goroutine 里，每次心跳有以心跳周期为限的期限；心跳"用连接池外的专用连接"还没有，`pg` 不交出连接，见 [Issue #217](https://github.com/TYCT-tyct/Axiom/issues/217)。
-- **心跳**：每 10s `UPDATE … SET expires_at = clock_timestamp() + TTL WHERE holder=$h AND reaped_at IS NULL`，不检查是否已过期：库短暂不可用后，没被回收的仍能续上。普通更新不与 `FOR KEY SHARE` 冲突。影响 0 行即已被回收：`Run` 返回 `ErrReaped`，节点退出重启、换新持有者。心跳和回收将来用连接池外的一条专用连接（#217），现在与调用共用连接池。
-- **回收**：清理先 `SELECT … FOR UPDATE` 持有者行（等在途的写事务结束、挡住新的），条件 `reaped_at IS NULL AND expires_at < clock_timestamp() − 宽限`，置 `reaped_at` 并提交；之后再逐个处理它名下的挂起预留，这时已不可能有新的。
+- **实现**：`Start` 登记持有者，并建一条池外的专用连接（`pg.DB.Dedicated`）交给持有者；`Heartbeat`、`Reap` 在平台范围的事务里执行，都走这条连接，各自的重试仍是下一次调用。`Run` 把心跳和清理放在各自的 goroutine 里，每次心跳有以心跳周期为限的期限（重连也算在内）；心跳与回收可能同时到达，连接一次只跑一个事务，后来的排队，不再开第二条连接。`Run` 结束时关掉它。
+- **心跳**：每 10s `UPDATE … SET expires_at = clock_timestamp() + TTL WHERE holder=$h AND reaped_at IS NULL`，不检查是否已过期：库短暂不可用后，没被回收的仍能续上。普通更新不与 `FOR KEY SHARE` 冲突。影响 0 行即已被回收：`Run` 返回 `ErrReaped`，节点退出重启、换新持有者。连接不在任何一个池里，所以被调用占满的池不会推迟一次心跳（#217）：这条连接上的任何失败都丢掉连接，下一次调用重新连，数据库重启或网络断开后下一拍就落在新会话上（`TestHeartbeatBeatsWhileThePoolIsExhausted`、`TestDedicatedReconnectsAfterItsSessionIsKilled`）。
+- **回收**：清理先 `SELECT … FOR UPDATE` 持有者行（等在途的写事务结束、挡住新的），条件 `reaped_at IS NULL AND expires_at < clock_timestamp() − 宽限`，置 `reaped_at` 并提交；之后再逐个处理它名下的挂起预留，这时已不可能有新的。这一次事务以半个心跳周期为限：它和心跳共用那条专用连接，等锁的回收不能占掉一拍；等不到锁就失败，30 秒后的下一轮再来，挂起的预留只是多等一轮（`TestTheReapDoesNotTakeABeat`）。
 - **截止时间**：每笔预留带 `deadline`（准入 + 单次调用最长 + 结算宽限）。过了截止时间仍挂起的，不论持有者是否活着都由清理处理（漏 `Settle`、永久性错误、panic）。节点身份只作诊断。
 
 ## 预留的状态
@@ -307,6 +307,8 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 | 售价是纯函数 `Sell`，倍率乘在 `catalog.Schedule` 上，进位一次 | 与报价同理：定价规则最多、最容易错，脱开数据库才能用表驱动逐条证明；乘在价目表上而不是乘在金额上，成本侧和售价侧用同一段代码（`Schedule.Scaled`），同一个倍率两边得到同一个数，保本线比较才有意义 | 在 `Settle` 里乘金额：每次尝试都要重算，进位的次数随尝试数变，成本与售价可能差一个最小单位 |
 | 没有规则就没有售价，`PreviewPricing` 显示 `unpriced` | 「缺价不猜」：悄悄按参考价卖等于让定价规则形同虚设，站长以为设了价其实没生效 | 回落参考价：管理面看不出规则没生效，账也按一个没人决定的价收 |
 | 写入栅栏同时要求 `reaped_at IS NULL` 和未过期 | 回收后心跳续不上，正常情况下被回收的必已过期；但数据库时钟回拨（如主备切换）会让过期时间重新落在未来，只看过期就会放行已回收的持有者 | 只看 `expires_at` |
+| 心跳与回收用池外的一条专用连接（`pg.Dedicated`），清理仍走普通池 | 一次心跳的期限是 TTL 的三分之一，等池里的连接就可能错过它，`Alive` 变假会让整个节点答 503；这条连接只服务心跳与回收，失败一次就换新连接，数据库重启后下一拍落在新会话上；两者共用一条，回收的事务因此以半个心跳周期为限，等锁的回收不能占掉一拍。清理是后台的批量工作，占普通池的时间换不来这个期限 | 从普通池借一条常驻连接：连接断了要重新从池里取，而池被占满时正是取不到的时候；清理也走专用连接：一轮 5 分钟会挡住心跳 |
+| 少作废的额度按批次和金额计数，不打账户、原因这类标签 | 上限是余额减在途预留和全部冻结，被卡住的是「到期但这一轮没作废」的额度，按批次和金额就够判断规模；账户数按调用记录和账本查，标签只会有增无减（platform 的遥测规则） | 按账户打标签：基数随账户数增长；拆成「在途预留」「冻结」两个原因：同一份额度两边都占着，分摊规则要另定，而处理动作相同，都是等它释放后再作废 |
 | 计数按 UTC 日存，限额按含某天的窗口求和；准入按今天，追加按预留那天；时间按数据库时钟、在锁后的读语句里算 | 追加归到预留那天，检查也必须在那天所在的窗口，否则跨过边界后看到的是空窗口、写进的是旧窗口，能一直越过限额；与栅栏同一个时钟，多节点的本地时钟不一致也落在同一天；限额改了重置周期也不会漏算 | 追加按当前窗口检查：跨边界后检查与归账错位；追加改记到当天：一个预留的占用散在几天里，结算要逐天释放；每个限额窗口一行：改周期后漏算 |
 | `Reserve` 接受 billing 自己的 `Admitted` | `Admitted` 只带预留要的字段和范围，范围仍只能由 accounts 构造后传入；gateway 把 `accounts.Admission` 转成它，billing 的测试可以直接构造 | 直接收 `accounts.Admission`：测试要先造出整个准入 |
 | 可回收的持有者 + 截止时间；写入的 `FOR KEY SHARE` 与回收的 `FOR UPDATE` 互斥 | 进程死了、活着但漏结算、库长时间不可用都有人收尾，回收前的能续上 | `expires_at > now()` 的节点租约：时间可能过时、清理与写入无互斥、库恢复后回收活着的进程 |

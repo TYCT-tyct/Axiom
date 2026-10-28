@@ -55,6 +55,9 @@ type Billing struct {
 	suppliers Suppliers
 	logger    *slog.Logger
 	beat      atomic.Int64 // unix nanoseconds of the last time the holder's expiry was known to be pushed out
+	// conn carries the heartbeat and the reap, outside both pools, so that calls holding every pooled connection
+	// cannot delay a beat past the holder's TTL less the margin (#217).
+	conn *pg.Dedicated
 	// borne counts the settlements the platform bore part of, and borneAmount what it bore, in billionths of a credit.
 	borne, borneAmount metric.Int64Counter
 }
@@ -81,7 +84,7 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 	}
 	b := &Billing{
 		db: db, platform: platform, holder: uuid.NewV7(), config: config, suppliers: s,
-		logger: cmp.Or(config.Logger, slog.Default()),
+		logger: cmp.Or(config.Logger, slog.Default()), conn: db.Dedicated(),
 	}
 	meter := config.Meter
 	if meter == nil {
@@ -137,10 +140,10 @@ func (b *Billing) bear(ctx context.Context, request uuid.UUID, price, charged in
 	b.borneAmount.Add(ctx, borne)
 }
 
-// Heartbeat extends the holder's life by the TTL from now, by the database's clock.
+// Heartbeat extends the holder's life by the TTL from now, by the database's clock, on the connection of its own.
 func (b *Billing) Heartbeat(ctx context.Context) error {
 	sent := time.Now() // before the write: the expiry it sets is at least this far out
-	err := b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
+	err := b.conn.Tx(ctx, b.platform, func(tx pg.Tx) error {
 		n, err := queries.Heartbeat(ctx, tx, HeartbeatParams{ID: b.holder, TtlSeconds: b.config.HolderTTL.Seconds()})
 		if err != nil {
 			return fmt.Errorf("billing: heartbeat: %w", err)
@@ -168,8 +171,14 @@ func (b *Billing) Alive() bool {
 // Reap marks every holder that expired more than the grace ago as reaped and returns how many. Its FOR UPDATE waits
 // for their fenced writes in flight to finish, so once it commits none of them can add or extend a reservation, and
 // cleanup sees all they committed.
+//
+// The transaction is given half a beat period: the reap shares the connection with the heartbeat (Billing.conn), so a
+// reap waiting on those writes must not take a beat with it. One that cannot get its locks by then fails and the next
+// sweep tries again, which costs the reservations one more round and nothing else.
 func (b *Billing) Reap(ctx context.Context) (reaped int, err error) {
-	err = b.db.Tx(ctx, b.platform, func(tx pg.Tx) error {
+	ctx, cancel := context.WithTimeout(ctx, b.config.Heartbeat/2)
+	defer cancel()
+	err = b.conn.Tx(ctx, b.platform, func(tx pg.Tx) error {
 		ids, err := queries.LockExpiredHolders(ctx, tx, b.config.ReapGrace.Seconds())
 		if err != nil || len(ids) == 0 {
 			return err
@@ -210,11 +219,13 @@ const (
 // is logged and retried on the next beat; meanwhile Alive turns false, which stops new attempts
 // (internal/gateway/README.md「尝试」).
 //
-// The heartbeat still shares the database pool with the calls; a connection of its own, which a pool exhausted by
-// calls cannot starve, is not done yet (see internal/billing/README.md「持有者」).
+// The heartbeat and the reap run on the connection of their own (Billing.conn), which the loop closes when it ends:
+// a pool exhausted by calls never delays a beat past the holder's TTL less the margin, which would turn Alive false
+// and answer 503 on the whole node (#217). The cleanup keeps to the pool, which is where its volume belongs.
 func (b *Billing) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer b.conn.Close(context.WithoutCancel(ctx))
 	reaped := make(chan error, 1)
 	var wg sync.WaitGroup
 	wg.Go(func() { reaped <- b.beats(ctx) })

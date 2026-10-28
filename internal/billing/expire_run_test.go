@@ -2,12 +2,14 @@ package billing
 
 import (
 	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/telemetry"
 )
 
 // accountWithCredit is another account with a batch of 10 that has expired.
@@ -94,7 +96,7 @@ func TestAdvanceRacesAReplayThatSpendsABatch(t *testing.T) {
 			if _, err := tx.Exec(t.Context(), "LOCK TABLE billing.credit_batches IN ACCESS EXCLUSIVE MODE"); err != nil {
 				return err
 			}
-			if _, err := writeOffAccount(t.Context(), tx, b.admitted.Account, movementPage); err != nil {
+			if _, _, err := writeOffAccount(t.Context(), tx, b.admitted.Account, movementPage); err != nil {
 				return err
 			}
 			close(saved)
@@ -224,5 +226,40 @@ func TestReplayPagesCrossTheirBoundary(t *testing.T) {
 				t.Errorf("%d expiry transactions, want 1", n)
 			}
 		})
+	}
+}
+
+// TestTheWriteOffHeldBackIsCounted: a due batch written off only in part, because a reservation still holds the balance,
+// is counted with what it left behind and how many batches it left; the next run, after the reservation settled, writes
+// that rest off and counts no deferral, so the counters read as postponed credit and not as a backlog that grew (#308).
+func TestTheWriteOffHeldBackIsCounted(t *testing.T) {
+	tel, err := telemetry.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newBank(t, 0, 0, Config{})
+	b.creditBatch(300, longAgo)
+	h := b.hold(100) // the call in flight holds 200 of the balance
+	e := newExpirer(b.app, b.platform, slog.New(slog.DiscardHandler), tel.Metrics.Meter("axiom/billing"))
+	if written, err := e.expire(t.Context(), b.admitted.Account); err != nil || written != 100 {
+		t.Fatalf("expire = %d, %v; want the 100 the reservation left", written, err)
+	}
+	if got := scrape(t, tel, "axiom_billing_expire_deferred_total"); got != "1" {
+		t.Errorf("the scrape counts %s deferred batches, want 1", got)
+	}
+	if got := scrape(t, tel, "axiom_billing_expire_deferred_amount_total"); got != "200" {
+		t.Errorf("the scrape counts %s deferred credit, want the 200 the reservation left", got)
+	}
+	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 150, 0, 0))); err != nil {
+		t.Fatal(err)
+	}
+	if written, err := e.expire(t.Context(), b.admitted.Account); err != nil || written != 50 {
+		t.Fatalf("expire after the settlement = %d, %v; want the 50 it held back", written, err)
+	}
+	if got := scrape(t, tel, "axiom_billing_expire_deferred_total"); got != "1" {
+		t.Errorf("the scrape counts %s deferred batches after the rest was written off, want still the 1", got)
+	}
+	if got := scrape(t, tel, "axiom_billing_expire_deferred_amount_total"); got != "200" {
+		t.Errorf("the scrape counts %s deferred credit after the rest was written off, want still the 200", got)
 	}
 }

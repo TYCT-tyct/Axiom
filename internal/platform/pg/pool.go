@@ -17,6 +17,8 @@ type DB struct {
 	completion *pgxpool.Pool
 	reserve    int
 	tracer     trace.Tracer
+	// config is how a connection of its own outside both pools logs in: the same URL, session settings and role.
+	config *pgx.ConnConfig
 }
 
 // Option adjusts Open.
@@ -66,6 +68,8 @@ func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Kept apart from both pool configs so that a connection of its own can be opened from the same settings later.
+	db.config = ordinary.ConnConfig.Copy()
 	pool, err := pgxpool.NewWithConfig(ctx, ordinary)
 	if err != nil {
 		return nil, fmt.Errorf("connect to the database: %w", err)

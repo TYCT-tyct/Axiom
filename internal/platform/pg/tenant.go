@@ -27,7 +27,7 @@ func (db *DB) TenantTx(ctx context.Context, lookup string, key uuid.UUID, fn fun
 	if err != nil {
 		return false, err
 	}
-	ctx, span := db.startSpan(ctx)
+	ctx, span := startSpan(ctx, db.tracer)
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, "transaction failed")
