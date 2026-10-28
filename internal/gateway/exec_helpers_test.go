@@ -158,7 +158,6 @@ type fakeEndpoint struct {
 	receipts []suppliers.AttemptReceipt
 
 	acquired, sends, done int
-	sanitized             int // calls to Sanitize
 	calls                 []suppliers.Call
 }
 
@@ -229,12 +228,8 @@ func (c *fakeConn) Done() suppliers.AttemptReceipt {
 	return c.e.receiptOf(c.nth)
 }
 
-// Sanitize hides the supplier's name the way the real one hides its origin and credential, and counts the calls: a test
-// that reads an upstream's words in the client's answer can tell that they went through here.
+// Sanitize makes the test supplier's identity observable if the gateway skips sanitization.
 func (c *fakeConn) Sanitize(r protocol.Rejection) *protocol.Rejection {
-	c.u.mu.Lock()
-	c.e.sanitized++
-	c.u.mu.Unlock()
 	if r.Message == "" {
 		return nil
 	}
