@@ -119,9 +119,11 @@ jobs:
 
   # The Go tests only. `just test` depends on `web-embed`, the frontend the program embeds, so this job installs pnpm and
   # Node like the web job; the build is cached by content on the host (scripts/web_cache.py), as it was in the one job.
+  # A pull request does not run it: the train runs it once for the batch, and finds the PR that broke it (2026-10-28,
+  # owner: 「能优化则优化吧。甚至跳过」 — every PR's tests ran twice, once alone and once in its train).
   go-test:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress
+    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 40
     steps:
@@ -158,11 +160,11 @@ jobs:
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
 
-  # Each shard keeps the same eight-core container and four-worker rule (#297/#363).
+  # Each shard keeps the same eight-core container and four-worker rule (#297/#363). Like go-test, not on a pull request.
   e2e:
     name: e2e (${{ matrix.shard }}/${{ inputs.gate_stress && 1 || 2 }})
     needs: changes
-    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.docs_only != 'true')
+    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request')
     strategy:
       fail-fast: false # finish the other shard and keep its evidence when one fails
       matrix:
@@ -261,8 +263,8 @@ jobs:
         run: |
           echo "a job this build needs failed or was cancelled"
           exit 1
-      # `needs.e2e.result` aggregates the whole matrix. Only Markdown-only builds may skip its shards.
-      - if: needs.changes.outputs.docs_only != 'true'
+      # `needs.e2e.result` aggregates the whole matrix. Only Markdown-only builds and pull requests may skip its shards.
+      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.e2e.result }}' = success
       - run: echo "every required job passed; only optional jobs were skipped"
 
