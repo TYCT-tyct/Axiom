@@ -12,7 +12,6 @@ import (
 )
 
 func TestCgroupParent(t *testing.T) {
-	t.Setenv("AXIOM_TEST_JOB", "")
 	for _, c := range []struct{ name, parent, want string }{
 		{"empty", "", "developer.slice"},
 		{"ci", "axiom-ci.slice", "axiom-ci.slice"},
@@ -80,11 +79,15 @@ func TestHostPolicyCacheInputs(t *testing.T) {
 		if req.Labels["axiom.ci.job"] != "cache-check" {
 			t.Fatalf("job label = %q", req.Labels["axiom.ci.job"])
 		}
+		if got := Untracked("AXIOM_UNTRACKED_CACHE_INPUT"); got != "untracked-check" {
+			t.Fatalf("untracked cache input = %q", got)
+		}
 		return
 	}
 	log := filepath.Join(t.TempDir(), "testlog")
 	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestHostPolicyCacheInputs$", "-test.testlogfile="+log) //nolint:gosec // re-execute this test binary with a test-owned log path
-	cmd.Env = append(os.Environ(), "AXIOM_HOST_POLICY_HELPER=true", "AXIOM_TEST_JOB=cache-check")
+	cmd.Env = append(os.Environ(), "AXIOM_HOST_POLICY_HELPER=true", "AXIOM_TEST_JOB=cache-check",
+		"AXIOM_UNTRACKED_CACHE_INPUT=untracked-check")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("helper: %v\n%s", err, output)
 	}
@@ -93,8 +96,10 @@ func TestHostPolicyCacheInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	inputs := string(data)
-	if strings.Contains(inputs, "getenv AXIOM_TEST_JOB\n") {
-		t.Fatalf("job identity entered the test cache key:\n%s", inputs)
+	for _, name := range []string{"AXIOM_TEST_JOB", "AXIOM_UNTRACKED_CACHE_INPUT"} {
+		if strings.Contains(inputs, "getenv "+name+"\n") {
+			t.Fatalf("%s entered the test cache key:\n%s", name, inputs)
+		}
 	}
 	if !strings.Contains(inputs, "getenv AXIOM_TEST_CGROUP_PARENT\n") {
 		t.Fatalf("missing control cache input:\n%s", inputs)
