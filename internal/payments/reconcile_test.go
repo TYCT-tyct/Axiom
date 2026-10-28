@@ -188,7 +188,12 @@ func testDailyDifference(t *testing.T, kind string) {
 	m := w.waiting()
 	o := w.mustPlace(yuan, "daily")
 	w.receive(receipt(o))
-	day := time.Now().UTC().Truncate(24 * time.Hour)
+	var day time.Time
+	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT date_trunc('day',created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' FROM billing.credit_batches WHERE id=$1`, uuid.UUID(o.ID)).Scan(&day)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := w.p.reconcileMerchant(t.Context(), m.ID, day); err != nil {
 		t.Fatal(err)
 	}
@@ -324,27 +329,38 @@ func (w *world) seedDifferences(merchant uuid.UUID) {
 }
 
 func TestDailyQueryFindsChangedPaidAndUnfinishedOrders(t *testing.T) {
-	var paid Order
+	var paid, already Order
 	var queried atomic.Int32
 	w := newTestWorld(t, fakePlugin{create: goodCheckout, query: func(_ context.Context, order, _ string) (Payment, error) {
 		queried.Add(1)
 		if order == paid.ID.TypeID() {
 			return receipt(paid).payment, nil
 		}
+		if order == already.ID.TypeID() {
+			return receipt(already).payment, nil
+		}
 		return Payment{State: PayPending}, nil
 	}})
 	m := w.waiting()
 	paid = w.mustPlace(yuan, "daily-lost")
 	w.mustPlace(yuan, "daily-pending")
-	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
-	// Daily fallback does not consume the poll backoff: even a next_query_at tomorrow is checked.
+	already = w.mustPlace(yuan, "daily-already-paid")
+	w.receive(receipt(already))
+	// Daily fallback checks changed terminal orders and does not consume the poll backoff.
 	w.exec("UPDATE payments.orders SET created_at=transaction_timestamp()-interval '1 day', updated_at=transaction_timestamp()-interval '1 day', next_query_at=transaction_timestamp()+interval '1 day'")
+	var day time.Time
+	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT date_trunc('day',updated_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' FROM payments.orders WHERE id=$1`, uuid.UUID(already.ID)).Scan(&day)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if next, err := w.p.reconcileQueries(t.Context(), m.ID, day, uuid.UUID{}); err != nil || next != (uuid.UUID{}) {
 		t.Fatal("daily queries", next, err)
 	}
 	w.assertCredit(paid, paid.Credits)
-	if queried.Load() != 2 {
-		t.Fatal("daily fallback skipped an order because of poll backoff")
+	w.assertCredit(already, already.Credits)
+	if queried.Load() != 3 {
+		t.Fatal("daily fallback skipped an unfinished or changed terminal order")
 	}
 }
 

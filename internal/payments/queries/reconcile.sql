@@ -13,8 +13,12 @@ WHERE merchant_id = @merchant_id AND paused_until <= transaction_timestamp()
     AND (first_until <= transaction_timestamp() OR second_until <= transaction_timestamp());
 
 -- name: LockQueryHealth :one
-SELECT failures, paused_until, first_token, second_token, transaction_timestamp()::timestamptz AS observed_at
-FROM payments.query_health WHERE merchant_id = @merchant_id FOR UPDATE;
+-- The policy clock must follow the state lock, so a lock wait cannot consume the pause.
+WITH locked AS MATERIALIZED (
+    SELECT failures, paused_until, first_token, second_token
+    FROM payments.query_health WHERE merchant_id = @merchant_id FOR UPDATE
+)
+SELECT locked.*, clock_timestamp()::timestamptz AS observed_at FROM locked;
 
 -- name: FinishQuery :exec
 UPDATE payments.query_health SET failures = @failures, paused_until = @paused_until,

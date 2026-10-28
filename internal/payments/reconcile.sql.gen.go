@@ -192,8 +192,11 @@ func (q *Queries) ListDiscrepancies(ctx context.Context, db DBTX, arg ListDiscre
 }
 
 const lockQueryHealth = `-- name: LockQueryHealth :one
-SELECT failures, paused_until, first_token, second_token, transaction_timestamp()::timestamptz AS observed_at
-FROM payments.query_health WHERE merchant_id = $1 FOR UPDATE
+WITH locked AS MATERIALIZED (
+    SELECT failures, paused_until, first_token, second_token
+    FROM payments.query_health WHERE merchant_id = $1 FOR UPDATE
+)
+SELECT locked.failures, locked.paused_until, locked.first_token, locked.second_token, clock_timestamp()::timestamptz AS observed_at FROM locked
 `
 
 type LockQueryHealthRow struct {
@@ -204,6 +207,7 @@ type LockQueryHealthRow struct {
 	ObservedAt  time.Time
 }
 
+// The policy clock must follow the state lock, so a lock wait cannot consume the pause.
 func (q *Queries) LockQueryHealth(ctx context.Context, db DBTX, merchantID uuid.UUID) (LockQueryHealthRow, error) {
 	row := db.QueryRow(ctx, lockQueryHealth, merchantID)
 	var i LockQueryHealthRow

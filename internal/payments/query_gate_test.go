@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -148,5 +149,34 @@ func TestInFlightSuccessCannotReopenPausedMerchant(t *testing.T) {
 	}
 	if w.count(w.p.platform, "SELECT count(*) FROM platform.alert_signals WHERE body->>'resolved'='true'") != 0 {
 		t.Fatal("old success resolved active pause")
+	}
+}
+
+func TestQueryHealthUsesTheClockAfterLocking(t *testing.T) {
+	w := newWorld(t)
+	m := w.waiting()
+	if _, err := w.p.acquireQuery(t.Context(), MerchantID(m.ID)); err != nil {
+		t.Fatal(err)
+	}
+	// The controlled clock returns a different value until this transaction owns the tuple lock (xmax).
+	w.exec(`CREATE FUNCTION payments.clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE AS $$
+ SELECT CASE WHEN h.xmax::text=pg_catalog.pg_current_xact_id()::text
+ THEN timestamptz '2000-01-01 12:00:00+00' ELSE timestamptz '1999-01-01 12:00:00+00' END
+ FROM payments.query_health h $$`)
+	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
+		if _, err := tx.Exec(t.Context(), "SET LOCAL search_path=payments,pg_catalog"); err != nil {
+			return err
+		}
+		health, err := queries.LockQueryHealth(t.Context(), tx, m.ID)
+		if err != nil {
+			return err
+		}
+		want := time.Date(2000, 1, 1, 12, 0, 0, 0, time.UTC)
+		if !health.ObservedAt.Equal(want) {
+			t.Fatal("query pause policy read the clock before its state lock", health.ObservedAt)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
