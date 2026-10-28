@@ -31,12 +31,14 @@ const (
 	StickyWrite Use = "sticky_write"
 	// Login is what a sign-in spends and gives back: the attempts before it.
 	Login Use = "login"
+	// Mail is a recipient's admission to a message: the cooldown that keeps one inbox from being filled.
+	Mail Use = "mail"
 	// check is the client's own reading of the server: the startup checks and the loop's measurements.
 	check Use = "check"
 )
 
 // uses is every Use, in the order the metrics prebuild their options.
-var uses = [...]Use{Precheck, Login, check, StickyWrite}
+var uses = [...]Use{Precheck, Login, Mail, check, StickyWrite}
 
 // Space is the purpose a key serves, its third field (README「键」).
 type Space string
@@ -46,6 +48,8 @@ const (
 	RateSpace Space = "rate"
 	// LoginSpace is an attempt before sign-in's.
 	LoginSpace Space = "login"
+	// MailSpace is a recipient's cooldown between messages.
+	MailSpace Space = "mail"
 )
 
 // StickySpace holds routing's session-to-endpoint bindings.
