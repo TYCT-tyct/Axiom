@@ -239,7 +239,7 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 	return i, err
 }
 
-const postLedger = `-- name: PostLedger :one
+const postLedger = `-- name: PostLedger :execrows
 WITH locked AS MATERIALIZED (
     SELECT 1 FROM billing.balances b WHERE b.account_id = $1 FOR UPDATE
 ), posted AS (
@@ -256,7 +256,7 @@ WITH locked AS MATERIALIZED (
     UPDATE billing.balances b SET balance = b.balance - $11
     WHERE b.account_id = $1 AND $11::bigint <> 0 AND EXISTS (SELECT 1 FROM posted)
 )
-SELECT EXISTS (SELECT 1 FROM posted) AS posted, EXISTS (SELECT 1 FROM locked) AS account_exists
+SELECT 1 FROM posted
 `
 
 type PostLedgerParams struct {
@@ -273,15 +273,11 @@ type PostLedgerParams struct {
 	UserDebit  int64
 }
 
-type PostLedgerRow struct {
-	Posted        bool
-	AccountExists bool
-}
-
 // Lock before allocating the transaction sequence. Every write depends on the inserted event, so a duplicate
 // changes neither entries nor balance. Entries in the site's own credits carry NULL currency.
-func (q *Queries) PostLedger(ctx context.Context, db DBTX, arg PostLedgerParams) (PostLedgerRow, error) {
-	row := db.QueryRow(ctx, postLedger,
+// The command tag distinguishes a new event from a duplicate without allocating a result row.
+func (q *Queries) PostLedger(ctx context.Context, db DBTX, arg PostLedgerParams) (int64, error) {
+	result, err := db.Exec(ctx, postLedger,
 		arg.AccountID,
 		arg.ID,
 		arg.SiteID,
@@ -294,9 +290,10 @@ func (q *Queries) PostLedger(ctx context.Context, db DBTX, arg PostLedgerParams)
 		arg.Currencies,
 		arg.UserDebit,
 	)
-	var i PostLedgerRow
-	err := row.Scan(&i.Posted, &i.AccountExists)
-	return i, err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const reservationAccount = `-- name: ReservationAccount :one

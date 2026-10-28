@@ -28,7 +28,7 @@ SET state = @state, charged_seq = coalesce(sqlc.narg(charged_seq), charged_seq),
 WHERE request_id = @request_id
 RETURNING clock_timestamp()::timestamptz AS ended_at;
 
--- name: PostLedger :one
+-- name: PostLedger :execrows
 -- Lock before allocating the transaction sequence. Every write depends on the inserted event, so a duplicate
 -- changes neither entries nor balance. Entries in the site's own credits carry NULL currency.
 WITH locked AS MATERIALIZED (
@@ -47,7 +47,8 @@ WITH locked AS MATERIALIZED (
     UPDATE billing.balances b SET balance = b.balance - @user_debit
     WHERE b.account_id = @account_id AND @user_debit::bigint <> 0 AND EXISTS (SELECT 1 FROM posted)
 )
-SELECT EXISTS (SELECT 1 FROM posted) AS posted, EXISTS (SELECT 1 FROM locked) AS account_exists;
+-- The command tag distinguishes a new event from a duplicate without allocating a result row.
+SELECT 1 FROM posted;
 
 -- name: AttemptCost :one
 SELECT coalesce(sum(e.amount), 0)::bigint FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id

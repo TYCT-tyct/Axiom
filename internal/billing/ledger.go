@@ -77,11 +77,12 @@ func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error)
 			panic(fmt.Sprintf("billing: the %s entries of %s sum to %d in %q", e.kind, e.request, sum, x.currency))
 		}
 	}
-	posted, err := queries.PostLedger(ctx, tx, params)
-	if err == nil && !posted.AccountExists {
-		err = errNoBalance
+	n, err := queries.PostLedger(ctx, tx, params)
+	if err == nil && n == 0 {
+		// No event means either a duplicate or an account without a balance row to lock.
+		_, err = lockAccount(ctx, tx, e.account)
 	}
-	return posted.Posted, wrapPost(e, err)
+	return n > 0, wrapPost(e, err)
 }
 
 // sumIn is the sum of the entries in currency.
