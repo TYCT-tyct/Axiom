@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -30,7 +31,7 @@ func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 		}
 		n, err := queries.TakeVerify(ctx, tx, uuid.UUID(id))
 		if err == nil && n == 0 {
-			return ErrVerifyLimited
+			return &Wait{ErrVerifyLimited, time.Minute}
 		}
 		return err
 	})
@@ -40,8 +41,7 @@ func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 	if err = p.queryOrder(ctx, o); err != nil {
 		return o, err
 	}
-	err = p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) { o, err = loadOrder(ctx, tx, id); return err })
-	return o, err
+	return p.GetOrder(ctx, s, id)
 }
 
 // A gateway may publish its paid status before the settlement fields. Retry once within the same deadline.
