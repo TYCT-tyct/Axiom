@@ -229,7 +229,7 @@ func (c *fakeConn) Done() suppliers.AttemptReceipt {
 }
 
 // Sanitize makes the test supplier's identity observable if the gateway skips sanitization.
-func (c *fakeConn) Sanitize(r protocol.Rejection) *protocol.Rejection {
+func (*fakeConn) Sanitize(r protocol.Rejection) *protocol.Rejection {
 	if r.Message == "" {
 		return nil
 	}
