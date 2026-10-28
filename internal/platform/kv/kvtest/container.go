@@ -37,7 +37,7 @@ func startServer(ctx context.Context, users string, settings options) (*box, err
 				host.PortBindings = network.PortMap{network.MustParsePort(port): {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: settings.hostPort}}}
 			}
 		}),
-		containertest.WithCgroupParent(),
+		containertest.WithHostPolicy(),
 		testcontainers.WithFiles(testcontainers.ContainerFile{
 			Reader: strings.NewReader(users), ContainerFilePath: aclPath, FileMode: 0o444,
 		}),
