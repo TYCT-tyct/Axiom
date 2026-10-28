@@ -185,7 +185,7 @@ type alertDelivery struct {
 }
 
 func pendingAlertDeliveries(ctx context.Context, tx pg.Tx, now time.Time) ([]alertDelivery, error) {
-	rows, err := tx.Query(ctx, `SELECT r.id,r.channel,r.quiet_start,r.quiet_end,e.kind,e.key,r.sequence,e.severity,e.fields FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id WHERE r.state='pending' AND r.not_before<=$1 ORDER BY r.at,r.id LIMIT 100`, now)
+	rows, err := tx.Query(ctx, `SELECT r.id,r.channel,r.quiet_start,r.quiet_end,e.kind,e.key,r.sequence,e.severity,e.fields FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id WHERE r.state='pending' AND r.not_before<=$1 ORDER BY r.at,r.id LIMIT 100 FOR UPDATE OF r SKIP LOCKED`, now)
 	if err != nil {
 		return nil, err
 	}

@@ -252,3 +252,27 @@ func assertAlertEvaluationPlan(t *testing.T, db *pg.DB) {
 		return nil
 	})
 }
+
+func TestAlertDispatchClaimsExcludeAnotherTransaction(t *testing.T) {
+	db := openDB(t)
+	configureAlerts(t, db, AlertRule{Threshold: 1})
+	now := time.Now()
+	persistAlert(t, db, "1", false)
+	alertCycle(t, db, now)
+	alertTx(t, db, func(tx pg.Tx) error {
+		first, err := pendingAlertDeliveries(t.Context(), tx, now)
+		if err != nil {
+			return err
+		}
+		if len(first) != 1 {
+			t.Fatal("first dispatcher did not claim the pending receipt")
+		}
+		return db.Tx(t.Context(), platformScope, func(other pg.Tx) error {
+			second, err := pendingAlertDeliveries(t.Context(), other, now)
+			if err == nil && len(second) != 0 {
+				t.Fatal("both dispatchers claimed the same receipt")
+			}
+			return err
+		})
+	})
+}
