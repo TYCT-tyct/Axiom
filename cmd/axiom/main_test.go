@@ -223,6 +223,7 @@ type program struct {
 	stderr  lockedBuffer
 	waitErr error
 	waiting sync.Once
+	exited  chan struct{} // closed once the program has ended and its output is all written
 	mu      sync.Mutex
 	partial []byte
 	logged  []string
@@ -230,11 +231,15 @@ type program struct {
 
 func startAxiom(t *testing.T, environ []string, args ...string) *program {
 	t.Helper()
-	p := &program{cmd: command(t, environ, args...), records: make(chan addresses, 64)}
+	p := &program{cmd: command(t, environ, args...), records: make(chan addresses, 64), exited: make(chan struct{})}
 	p.cmd.Stdout, p.cmd.Stderr = p, &p.stderr
 	if err := p.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	go func() {
+		_ = p.wait() //nolint:errcheck // the test reports the exit status where it matters
+		close(p.exited)
+	}()
 	t.Cleanup(func() {
 		// A test that failed before its own wait must not leave the program running.
 		_ = p.cmd.Process.Kill() //nolint:errcheck // a program already gone needs no killing
@@ -284,7 +289,9 @@ func (p *program) output() string {
 	return strings.Join(p.logged, "\n")
 }
 
-// until waits for the program to log the record with msg.
+// until waits for the program to log the record with msg, or to end without it. It has no deadline of its own: a
+// node starting on a loaded machine is slow, not wrong (a 10-second limit failed TestSecondSignalEndsTheNodeAtOnce on
+// CI with nothing logged yet), and a node that hangs is ended by go test's own timeout.
 func (p *program) until(t *testing.T, msg string) addresses {
 	t.Helper()
 	for {
@@ -293,8 +300,26 @@ func (p *program) until(t *testing.T, msg string) addresses {
 			if record.Msg == msg {
 				return record
 			}
-		case <-time.After(10 * time.Second):
-			t.Fatalf("the program logged no %q: %s\n%s", msg, p.output(), p.stderr.String())
+		case <-p.exited:
+			if record, ok := p.unread(msg); ok {
+				return record
+			}
+			t.Fatalf("the program ended (%v) without logging %q: %s\n%s", p.wait(), msg, p.output(), p.stderr.String())
+		}
+	}
+}
+
+// unread finds the record with msg among those still unread, once the program has ended: by then every record it
+// wrote is in the channel.
+func (p *program) unread(msg string) (addresses, bool) {
+	for {
+		select {
+		case record := <-p.records:
+			if record.Msg == msg {
+				return record, true
+			}
+		default:
+			return addresses{}, false
 		}
 	}
 }
