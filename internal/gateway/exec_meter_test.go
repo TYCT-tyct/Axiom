@@ -324,8 +324,7 @@ func TestATruncatedStreamConsumesNoMoreThanItsAllowance(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		const covered, allowance = 500, 500 // a segment of 500 tokens, and 5s at 100 tokens a second
 		const wait = 5 * time.Second        // how long the extension is waited for
-		var h *harness
-		h = newHarness(t, ctx, segmented(options{
+		h := newHarness(t, ctx, segmented(options{
 			segments: billing.Segments{Output: covered, Overshoot: 5 * time.Second},
 			config:   func(c *Config) { c.ExtendWait = wait },
 			extend: func(ctx context.Context, _ billing.ExtendRequest) error {

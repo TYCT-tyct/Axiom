@@ -221,43 +221,63 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 		counts[it] = reply.Usage.Count(it)
 	}
 	if !inputReported(u) { // none of the input was reported, so it is estimated
-		// The estimate is the whole prompt; a report that was accepted before a count went down keeps the counts it
-		// took, and the input side's counts are parts of one prompt, a cache read even overlapping the plain input.
-		// So only what those counts are short of the estimate is added, never the estimate beside them (#339). The
-		// shortfall is over the items' sum, not InputTotal: the physical total an OpenAI report carries is the prompt's
-		// own length, and cache reads and writes within it may overlap each other and it.
-		kept := int64(0)
-		for it := range catalog.NumItems {
-			if catalog.InputSide.Has(it) {
-				kept += counts[it]
-			}
-		}
-		counts[catalog.ItemInput] += max(input-kept, 0)
+		estimateInput(counts, input)
 	}
-	if !reply.Reported.Has(catalog.ItemOutput) {
-		out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
-		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), out) - counts[catalog.ItemReasoning] -
-			counts[catalog.ItemAudioOut] - counts[catalog.ItemImageOut]
-	}
+	counts[catalog.ItemOutput] = estimateOutput(*reply, p, outputCap)
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)
 	}
+	reply.Usage = recountCapped(reply.Usage, counts)
+	if n, ok := reply.Usage.PhysicalInput(); ok && !inputReported(u) && input > n {
+		// The prompt the estimate stands for is longer than the physical total the invalid report kept: the band and
+		// the client's echo read the physical total, and leaving it short would price the estimate in a lower band.
+		usage, err := reply.Usage.WithPhysicalInput(min(input, maxCount))
+		if err != nil {
+			panic(err) // the estimate is held to maxCount above
+		}
+		reply.Usage = usage
+	}
+	return segments
+}
+
+// estimateInput adds to the plain input what the kept input-side counts are short of the prompt's estimate: the estimate
+// is the whole prompt, and a report accepted before a count went down keeps the counts it took, which are parts of one
+// prompt, a cache read even overlapping the plain input. So the estimate stands in place of those counts rather than
+// beside them (#339). The shortfall is over the items' sum, not InputTotal: the physical total an OpenAI report carries
+// is the prompt's own length, and cache reads and writes within it may overlap each other and it.
+func estimateInput(counts map[catalog.Item]int64, estimate int64) {
+	kept := int64(0)
+	for it := range catalog.NumItems {
+		if catalog.InputSide.Has(it) {
+			kept += counts[it]
+		}
+	}
+	counts[catalog.ItemInput] += max(estimate-kept, 0)
+}
+
+// estimateOutput is the reply's ordinary output: the text, reasoning and tool input read at outputBytesPerToken, never
+// below a count reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own,
+// which metering holds the output to). A report that carried it keeps it.
+func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64) int64 {
+	if reply.Reported.Has(catalog.ItemOutput) {
+		return reply.Usage.Count(catalog.ItemOutput)
+	}
+	out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
+	return max(reply.Usage.OutputTotal(), out) - reply.Usage.Count(catalog.ItemReasoning) -
+		reply.Usage.Count(catalog.ItemAudioOut) - reply.Usage.Count(catalog.ItemImageOut)
+}
+
+// recountCapped holds every count to maxCount, the largest catalog.NewUsage takes, and recounts the reply with its own
+// tier and unknown counts. Only a reported count can need the cap: every estimate is held to it where it is made.
+func recountCapped(reply catalog.Usage, counts map[catalog.Item]int64) catalog.Usage {
 	for it, n := range counts {
 		counts[it] = min(n, maxCount)
 	}
-	usage, err := reply.Usage.Recount(counts, reply.Usage.Unknown())
+	usage, err := reply.Recount(counts, reply.Unknown())
 	if err != nil {
 		panic(err) // every count is within 0 and maxCount, and the tier and items are the usage's own
 	}
-	if n, ok := usage.PhysicalInput(); ok && !inputReported(u) && input > n {
-		// The prompt the estimate stands for is longer than the physical total the invalid report kept: the band and
-		// the client's echo read the physical total, and leaving it short would price the estimate in a lower band.
-		if usage, err = usage.WithPhysicalInput(min(input, maxCount)); err != nil {
-			panic(err) // the estimate is held to maxCount above
-		}
-	}
-	reply.Usage = usage
-	return segments
+	return usage
 }
 
 // The bytes per output token of the interim estimate (docs/domains/billing.md「用量来源与暂估」): English runs about 4

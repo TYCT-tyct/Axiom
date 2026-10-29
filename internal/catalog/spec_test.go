@@ -219,24 +219,36 @@ func TestStreamData(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s, err := parseSpec([]byte(tc.spec))
-			if tc.err != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.err) {
-					t.Fatalf("parseSpec error = %v, want one with %q", err, tc.err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseSpec: %v", err)
-			}
-			m := Model{speed: s.speed, reasoning: s.reasoning}
-			if m.OutputSpeed() != tc.speed || m.ReasoningVisible() != tc.visible {
-				t.Errorf("OutputSpeed = %d, ReasoningVisible = %d, want %d, %d", m.OutputSpeed(), m.ReasoningVisible(), tc.speed, tc.visible)
-			}
+			checkStreamData(t, tc.spec, tc.speed, tc.visible, tc.err)
 		})
 	}
-	// Reasoning that shows in a stream but is not listed as an ability is contradictory, refused when saved; a row
-	// already stored is read as it is, so one bad spec does not fail the whole snapshot load.
+}
+
+// checkStreamData parses one spec and checks the two facts read from it, or the error an impossible value is refused
+// with.
+func checkStreamData(t *testing.T, spec string, speed int64, visible FormatSet, wantErr string) {
+	t.Helper()
+	s, err := parseSpec([]byte(spec))
+	if wantErr != "" {
+		if err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Fatalf("parseSpec error = %v, want one with %q", err, wantErr)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("parseSpec: %v", err)
+	}
+	m := Model{speed: s.speed, reasoning: s.reasoning}
+	if m.OutputSpeed() != speed || m.ReasoningVisible() != visible {
+		t.Errorf("OutputSpeed = %d, ReasoningVisible = %d, want %d, %d", m.OutputSpeed(), m.ReasoningVisible(), speed, visible)
+	}
+}
+
+// TestSavedSpecRefusesReasoningVisibleWithoutAbility: reasoning that shows in a stream but is not listed as an ability is
+// contradictory, refused when saved; a row already stored is read as it is, so one bad spec does not fail the whole
+// snapshot load.
+func TestSavedSpecRefusesReasoningVisibleWithoutAbility(t *testing.T) {
+	t.Parallel()
 	contradictory := `{"abilities":["tools"],"reasoning_visible":["messages"]}`
 	if _, err := parseSpec([]byte(contradictory)); err != nil {
 		t.Errorf("a stored spec was refused on load: %v", err)

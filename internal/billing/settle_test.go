@@ -420,28 +420,36 @@ func TestLedgerProperty(t *testing.T) {
 
 func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 	b.t.Helper()
-	pick := func() *Hold { return (*holds)[r.IntN(len(*holds))] }
-	switch n := r.IntN(10); {
-	case n == 0:
+	switch n := r.IntN(10); n {
+	case 0:
 		b.randomCredit(r, r.Int64N(2000)+1, []*time.Time{nil, longAgo, farAhead}[r.IntN(3)])
-	case n == 6 || n == 7:
+	case 6, 7:
 		b.expire()
-	case n == 1 || len(*holds) == 0:
-		if h, err := b.tryHold(r.Int64N(1500)); err == nil {
-			*holds = append(*holds, h)
-		} else if !errors.As(err, new(*Insufficient)) {
-			b.t.Fatal(err)
+	case 1:
+		b.tryRandomHold(r, holds)
+	case 2, 3: // settle, or a retry of a settlement already made
+		if len(*holds) == 0 { // nothing reserved yet to settle
+			b.tryRandomHold(r, holds)
+		} else {
+			b.settleRandom(r, (*holds)[r.IntN(len(*holds))])
 		}
-	case n == 2: // settle, or settle again
-		b.settleRandom(r, pick())
-	case n == 3: // a retry of a settlement already made
-		b.settleRandom(r, pick())
-	case n == 8: // reservations and settlements of one account at once, as its concurrent calls make them
+	case 8: // reservations and settlements of one account at once, as its concurrent calls make them
 		b.concurrent(r)
-	case n == 9: // a reservation made in segments, extended once, then settled where a stream cut short stops
+	case 9: // a reservation made in segments, extended once, then settled where a stream cut short stops
 		b.truncated(r)
 	default: // a crash: what was left pending goes to cleanup, which records the request as lost
 		b.cleanup()
+	}
+}
+
+// tryRandomHold reserves one more call at a random prompt and keeps it for a later step to settle. A balance too small is
+// a state the property allows and later credits may lift; any other failure is not.
+func (b *bank) tryRandomHold(r *rand.Rand, holds *[]*Hold) {
+	b.t.Helper()
+	if h, err := b.tryHold(r.Int64N(1500)); err == nil {
+		*holds = append(*holds, h)
+	} else if !errors.As(err, new(*Insufficient)) {
+		b.t.Fatal(err)
 	}
 }
 
@@ -467,9 +475,7 @@ func (b *bank) concurrent(r *rand.Rand) {
 	errs := make(chan error, len(calls))
 	var wg sync.WaitGroup
 	for _, c := range calls {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			h, err := b.tryHold(c.text)
 			if err != nil {
 				if !errors.As(err, new(*Insufficient)) {
@@ -480,7 +486,7 @@ func (b *bank) concurrent(r *rand.Rand) {
 			if _, err := b.billing.Settle(context.Background(), h, outcome(Committed, FinishStop, used(b.t, 0, c.output, 0))); err != nil {
 				errs <- err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
@@ -504,7 +510,7 @@ func (b *bank) truncated(r *rand.Rand) {
 		return platform.AmountExact(b.count("SELECT amount FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"))
 	}
 	first := reserved()
-	m := h.Reservation.Bind(0)
+	m := h.Bind(0)
 	step := m.Observe(Progress{ContentBytes: 31}) // past the latest extension point of a segment of 50
 	if !step.Extend || step.Exhausted {
 		b.t.Fatalf("at 31 tokens of a segment of 50: %+v", step)
