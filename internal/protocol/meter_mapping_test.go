@@ -152,3 +152,30 @@ func TestNativeSplitsMergeByPresence(t *testing.T) {
 		t.Errorf("native split = %+v, want video 10, accepted 2, rejected 1", got)
 	}
 }
+
+// TestNativeSplitsReplaceOnSameSideSnapshot: a new output details object can report accepted=0 after accepted=4; the
+// zero is a replacement, not an absent field. Otherwise accepted and rejected would add up past the output total.
+func TestNativeSplitsReplaceOnSameSideSnapshot(t *testing.T) {
+	u := metered(t,
+		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":4,"rejected_prediction_tokens":1}}`,
+		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":0,"rejected_prediction_tokens":5}}`)
+	got := u.Segments[0].Usage.NativeTokens()
+	if got.AcceptedPrediction != 0 || got.RejectedPrediction != 5 {
+		t.Errorf("native split = %+v, want accepted 0, rejected 5", got)
+	}
+	if got.AcceptedPrediction+got.RejectedPrediction > 5 {
+		t.Errorf("native split %+v exceeds the output total", got)
+	}
+}
+
+// TestNativeVideoClearsOnAnInputSnapshot: video is an input-details field, so a later input snapshot with video=0
+// replaces the earlier 10; an output frame from the same call must not clear it.
+func TestNativeVideoClearsOnAnInputSnapshot(t *testing.T) {
+	u := metered(t,
+		`{"input_tokens":100,"input_tokens_details":{"video_tokens":10}}`,
+		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":2}}`,
+		`{"input_tokens":100,"input_tokens_details":{"video_tokens":0}}`)
+	if got := u.Segments[0].Usage.NativeTokens(); got.VideoInput != 0 || got.AcceptedPrediction != 2 {
+		t.Errorf("native split = %+v, want video 0 and accepted 2 kept from the output frame", got)
+	}
+}

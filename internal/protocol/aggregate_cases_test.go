@@ -119,8 +119,12 @@ func TestAggregatePending(t *testing.T) {
 				}
 			}
 			body := decode(t, r.Finish(protocol.Final{Pending: true}))
-			if obj(body["axiom"])["billing_pending"] != true || obj(body["usage"])["cost"] != nil || r.Status() != http.StatusOK {
+			usage := obj(body["usage"])
+			if obj(body["axiom"])["billing_pending"] != true || usage["cost"] != nil || r.Status() != http.StatusOK {
 				t.Errorf("body %v, status %d", body, r.Status())
+			}
+			if p.client == protocol.Responses && usage["is_byok"] != false {
+				t.Errorf("pending Responses usage %v: missing is_byok=false", usage)
 			}
 		})
 	}

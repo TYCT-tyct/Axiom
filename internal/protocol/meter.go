@@ -18,6 +18,7 @@ type usageReport struct {
 	unknown       []catalog.UnknownUsage
 	native        catalog.NativeTokens
 	nativeSet     nativeSet
+	nativeClear   nativeSet
 	physicalInput tokenTotal
 	outputTotal   tokenTotal
 	// inputDetailed and outputDetailed tell that the report carried the side's details object, so its split is a new
@@ -32,8 +33,9 @@ type tokenTotal struct {
 	set bool
 }
 
-// nativeSet marks each native split a report carried. They are merged field by field: a later output frame may carry
-// prediction tokens while saying nothing about the video input an earlier input frame reported.
+// nativeSet marks each nonzero native split a report carried; nativeClear marks splits a same-side details object
+// omitted or set to zero. They are merged separately: a later output frame may carry prediction tokens while saying
+// nothing about the video input an earlier input frame reported, and the reverse.
 type nativeSet uint8
 
 const (
@@ -83,6 +85,27 @@ const (
 	maxCompactions = 8
 )
 
+// nativeApply merges native splits by presence: a reported nonzero value replaces the earlier one, and a clear from
+// the same side's new snapshot removes it. Prediction splits belong to output snapshots and video to input snapshots,
+// so a report that does not carry that side leaves the other side's split alone.
+func (m *meter) nativeApply(set, clear nativeSet, native catalog.NativeTokens) {
+	if set&nativeVideo != 0 {
+		m.native.VideoInput, m.nativeSet = native.VideoInput, m.nativeSet|nativeVideo
+	} else if clear&nativeVideo != 0 {
+		m.native.VideoInput, m.nativeSet = 0, m.nativeSet&^nativeVideo
+	}
+	if set&nativeAccepted != 0 {
+		m.native.AcceptedPrediction, m.nativeSet = native.AcceptedPrediction, m.nativeSet|nativeAccepted
+	} else if clear&nativeAccepted != 0 {
+		m.native.AcceptedPrediction, m.nativeSet = 0, m.nativeSet&^nativeAccepted
+	}
+	if set&nativeRejected != 0 {
+		m.native.RejectedPrediction, m.nativeSet = native.RejectedPrediction, m.nativeSet|nativeRejected
+	} else if clear&nativeRejected != 0 {
+		m.native.RejectedPrediction, m.nativeSet = 0, m.nativeSet&^nativeRejected
+	}
+}
+
 // report takes a usage object: the reply's counts, and the compactions it lists, each its own segment.
 func (m *meter) report(r usageReport, compactions []usageReport) {
 	if m.invalid == nil {
@@ -94,15 +117,7 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 	if r.tierSet {
 		m.tier = r.tier
 	}
-	if r.nativeSet&nativeVideo != 0 {
-		m.native.VideoInput, m.nativeSet = r.native.VideoInput, m.nativeSet|nativeVideo
-	}
-	if r.nativeSet&nativeAccepted != 0 {
-		m.native.AcceptedPrediction, m.nativeSet = r.native.AcceptedPrediction, m.nativeSet|nativeAccepted
-	}
-	if r.nativeSet&nativeRejected != 0 {
-		m.native.RejectedPrediction, m.nativeSet = r.native.RejectedPrediction, m.nativeSet|nativeRejected
-	}
+	m.nativeApply(r.nativeSet, r.nativeClear, r.native)
 	for _, u := range r.unknown {
 		if i := slices.IndexFunc(m.unknown, func(v catalog.UnknownUsage) bool { return v.Field == u.Field }); i >= 0 {
 			m.unknown[i] = u

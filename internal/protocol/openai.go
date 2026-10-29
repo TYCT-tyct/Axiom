@@ -44,7 +44,7 @@ type openAIDetails struct {
 	CacheWrite    int64                     `json:"cache_write_tokens"`
 	Audio         int64                     `json:"audio_tokens"`
 	Image         int64                     `json:"image_tokens"`
-	Video         int64                     `json:"video_tokens"` // an input modality, charged as image_in: there is no output item
+	Video         *int64                    `json:"video_tokens"` // an input modality, charged as image_in: there is no output item
 	Text          int64                     `json:"text_tokens"`
 	CachedDetails *openAICachedDetails      `json:"cached_tokens_details"`
 	Reasoning     int64                     `json:"reasoning_tokens"`
@@ -104,10 +104,14 @@ func (u *openAIUsage) mapInput(r *usageReport) error {
 	if err := r.openAIInput(*in, d); err != nil {
 		return err
 	}
-	// Video has no billing item of its own and is only a client echo; a report without a positive video count says
-	// nothing about an earlier frame's video split.
-	if d.Video > 0 {
-		r.native.VideoInput, r.nativeSet = d.Video, r.nativeSet|nativeVideo
+	// Video is an input-details member: a details object is a new input snapshot, so an omitted or explicit zero
+	// video count clears an earlier one. A report without the details object says nothing about video.
+	if detailed {
+		if d.Video != nil && *d.Video > 0 {
+			r.native.VideoInput, r.nativeSet = *d.Video, r.nativeSet|nativeVideo
+		} else {
+			r.nativeClear |= nativeVideo
+		}
 	}
 	r.inputDetailed = detailed
 	unknownCounts(r, "usage."+name, d.Unknown)
@@ -132,7 +136,11 @@ func (u *openAIUsage) mapOutput(r *usageReport) error {
 	}
 	// Video has no output item and no vendor reports it here, so, like text_tokens, a count is a detail inside the
 	// output total: checked, and billed with that total rather than again on its own.
-	if !countOK(d.Video) || d.Video > *out {
+	var video int64
+	if d.Video != nil {
+		video = *d.Video
+	}
+	if !countOK(video) || video > *out {
 		return fmt.Errorf("usage: invalid output video count")
 	}
 	if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut, catalog.ItemImageOut},
@@ -143,14 +151,18 @@ func (u *openAIUsage) mapOutput(r *usageReport) error {
 	// count that does not fit inside the total is left out rather than priced.
 	accepted, acceptedOK := nativeCount(d.Accepted)
 	rejected, rejectedOK := nativeCount(d.Rejected)
-	if acceptedOK || rejectedOK {
-		if accepted+rejected <= *out {
-			if accepted > 0 {
-				r.native.AcceptedPrediction, r.nativeSet = accepted, r.nativeSet|nativeAccepted
-			}
-			if rejected > 0 {
-				r.native.RejectedPrediction, r.nativeSet = rejected, r.nativeSet|nativeRejected
-			}
+	if details != nil && accepted+rejected <= *out {
+		// Prediction splits are output-details members: the details object is a new output snapshot, so a field
+		// it omits or reports as zero replaces the earlier value instead of keeping it.
+		if acceptedOK && accepted > 0 {
+			r.native.AcceptedPrediction, r.nativeSet = accepted, r.nativeSet|nativeAccepted
+		} else {
+			r.nativeClear |= nativeAccepted
+		}
+		if rejectedOK && rejected > 0 {
+			r.native.RejectedPrediction, r.nativeSet = rejected, r.nativeSet|nativeRejected
+		} else {
+			r.nativeClear |= nativeRejected
 		}
 	}
 	r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, details != nil
@@ -162,11 +174,15 @@ func (u *openAIUsage) mapOutput(r *usageReport) error {
 // uncached remainder: absent intersection detail cannot justify charging a cached image a second time. Video has no item
 // of its own, so its input tokens are image_in with the images (catalog README.md「计费项与用量」).
 func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
-	if !countOK(total) || slices.ContainsFunc([]int64{d.Cached, d.CacheWrite, d.Audio, d.Image, d.Video, d.Text},
+	var video int64
+	if d.Video != nil {
+		video = *d.Video
+	}
+	if !countOK(total) || slices.ContainsFunc([]int64{d.Cached, d.CacheWrite, d.Audio, d.Image, video, d.Text},
 		func(n int64) bool { return !countOK(n) || n > total }) {
 		return fmt.Errorf("usage: input or a part of it is not a count within its total %d", total)
 	}
-	image, audio := d.Image+d.Video, d.Audio // no overflow: each count is at most 10¹⁰
+	image, audio := d.Image+video, d.Audio // no overflow: each count is at most 10¹⁰
 	if c := d.CachedDetails; c != nil {
 		if !c.within(d) {
 			return fmt.Errorf("usage: cached modality counts exceed their totals")
@@ -182,7 +198,7 @@ func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
 	if d.Audio > 0 {
 		r.set(catalog.ItemAudioIn, audio)
 	}
-	if d.Image > 0 || d.Video > 0 {
+	if d.Image > 0 || video > 0 {
 		r.set(catalog.ItemImageIn, image)
 	}
 	r.physicalInput = tokenTotal{total, true}

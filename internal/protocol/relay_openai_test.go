@@ -248,6 +248,28 @@ func TestRelayResponses(t *testing.T) {
 
 // TestRelayResponsesKeepsANullUsage: the events before the response ends carry usage: null, as OpenAI writes them, and
 // the ending carries the usage object.
+// TestRelayResponsesPendingKeepsIsByok: an unsettled Responses call still describes this site's key use. The cost is
+// absent because the settlement is pending, but is_byok is a usage member and stays.
+func TestRelayResponsesPendingKeepsIsByok(t *testing.T) {
+	got := relay(t, protocol.Responses, bytes.NewReader(sample(t, "responses/text/upstream.sse")), protocol.UsageContext{},
+		protocol.NewMemory(0), func(protocol.Usage) protocol.Final { return protocol.Final{Pending: true} })
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	es := events(t, got.out)
+	last := es[len(es)-1]
+	if last["type"] != "response.completed" || last["axiom"].(map[string]any)["billing_pending"] != true {
+		t.Fatalf("last event %v", last)
+	}
+	usage := obj(obj(last["response"])["usage"])
+	if usage["is_byok"] != false {
+		t.Errorf("pending usage %v: missing is_byok=false", usage)
+	}
+	if _, ok := usage["cost"]; ok {
+		t.Errorf("pending usage %v: has a cost", usage)
+	}
+}
+
 func TestRelayResponsesKeepsANullUsage(t *testing.T) {
 	created := responsesEvent("response.created", 0, responsesObject)
 	progress := responsesEvent("response.in_progress", 1, responsesObject)
