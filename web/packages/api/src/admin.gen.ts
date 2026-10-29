@@ -4,6 +4,208 @@
  */
 
 export interface paths {
+    "/api/admin/v1/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Support summaries without costs, endpoints or routes. Defaults to 24 hours; at most 31 days, newest first.
+         * @description Support summaries without costs, endpoints or routes. Defaults to 24 hours; at most 31 days, newest first.
+         */
+        get: operations["listAdminCalls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/calls/{call_id}/trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                call_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Operator-only trace, including costs, route and attempts in sequence order.
+         * @description Operator-only trace, including costs, route and attempts in sequence order.
+         */
+        get: operations["getAdminCallTrace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Immutable audit records, exact filters, newest first. Defaults to 24 hours; at most 31 days.
+         * @description Immutable audit records, exact filters, newest first. Defaults to 24 hours; at most 31 days.
+         */
+        get: operations["listAuditEntries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/audit/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read an immutable audit entry.
+         * @description Read an immutable audit entry.
+         */
+        get: operations["getAuditEntry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/system-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Site name and invite or closed registration policy.
+         * @description Site name and invite or closed registration policy.
+         */
+        get: operations["getSystemSettings"];
+        /**
+         * Site name and invite or closed registration policy.
+         * @description Site name and invite or closed registration policy.
+         */
+        put: operations["setSystemSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/system-settings/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Collection switch and accepted credit range. Omitted limits are unrestricted.
+         * @description Collection switch and accepted credit range. Omitted limits are unrestricted.
+         */
+        get: operations["getPaymentSettings"];
+        /**
+         * Collection switch and accepted credit range. Omitted limits are unrestricted.
+         * @description Collection switch and accepted credit range. Omitted limits are unrestricted.
+         */
+        put: operations["setPaymentSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/settings/mail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saved SMTP transport override; secrets are never returned. Environment remains authoritative when absent.
+         * @description Saved SMTP transport override; secrets are never returned. Environment remains authoritative when absent.
+         */
+        get: operations["getMailSettings"];
+        /**
+         * Save an encrypted SMTP override. Restart nodes to apply. Omitted password retains the saved password; a destination change requires reentry.
+         * @description Save an encrypted SMTP override. Restart nodes to apply. Omitted password retains the saved password; a destination change requires reentry.
+         */
+        put: operations["setMailSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/settings/mail/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send one fixed test mail using the saved transport. Accepted means SMTP acceptance; failed may be an unknown result. No automatic resend. Ten tests per session per minute.
+         * @description Send one fixed test mail using the saved transport. Accepted means SMTP acceptance; failed may be an unknown result. No automatic resend. Ten tests per session per minute.
+         */
+        post: operations["testMailSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/merchants/{merchant_id}/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                merchant_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Query an existing merchant without creating an order or transferring funds. Ten tests per session per minute.
+         * @description Query an existing merchant without creating an order or transferring funds. Ten tests per session per minute.
+         */
+        post: operations["testMerchantSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/rate-limits/{target}/{id}": {
         parameters: {
             query?: never;
@@ -828,7 +1030,7 @@ export interface paths {
         put?: never;
         /**
          * Use one of the supplier's keys for a group
-         * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected.
+         * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected. Use a dedicated key. If its model limits or expiry cannot be read, create an unrestricted dedicated key upstream and grant permission to read those fields; unreadable permissions deny all models.
          */
         post: operations["bindSupplierKey"];
         delete?: never;
@@ -888,7 +1090,7 @@ export interface paths {
         put?: never;
         /**
          * Map an upstream model name to a model
-         * @description Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The endpoint it creates waits for the authenticity check before it takes traffic. An alias is never changed; a wrong one is corrected by a new alias in the narrower scope. A name that already has an alias in that scope is a 409.
+         * @description Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The endpoint it creates waits for the authenticity check before it takes traffic. Without rev this creates an alias and refuses an existing name in that scope (409 conflict). To correct a group alias, send the current revision as rev; a missing or changed alias returns 409 stale_revision. A matching revision appends an audited correction, projected at the next sync; the same model leaves the revision unchanged. Supplier-wide aliases remain immutable (409).
          */
         post: operations["mapSupplierModel"];
         delete?: never;
@@ -1238,6 +1440,130 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AdminCallSummary: {
+            id?: string;
+            site_id?: components["schemas"]["SiteId"];
+            account_id?: components["schemas"]["AccountId"];
+            /** Format: date-time */
+            at?: string;
+            model?: string;
+            error_kind?: string;
+            latency_ms?: number;
+            price?: components["schemas"]["Money"];
+        };
+        AdminCallList: {
+            /** Format: date-time */
+            since?: string;
+            /** Format: date-time */
+            until?: string;
+            data?: components["schemas"]["AdminCallSummary"][];
+            next_cursor?: string;
+        };
+        AdminAttempt: {
+            seq?: number;
+            endpoint_id?: string;
+            supplier_id?: string;
+            source_class?: string;
+            egress?: string;
+            outcome?: string;
+            error_kind?: string;
+            /** Format: date-time */
+            started_at?: string;
+            /** Format: date-time */
+            finished_at?: string;
+            first_token_ms?: number;
+        };
+        AdminCallTrace: {
+            summary?: components["schemas"]["AdminCallSummary"];
+            cost?: components["schemas"]["Money"];
+            route?: {
+                [key: string]: unknown;
+            };
+            attempts?: components["schemas"]["AdminAttempt"][];
+        };
+        AuditEntry: {
+            id?: string;
+            actor_kind?: string;
+            actor_id?: string;
+            request_id?: string;
+            action?: string;
+            module?: string;
+            target_kind?: string;
+            target_id?: string;
+            reason?: string;
+            /** Format: date-time */
+            at?: string;
+            site_id?: components["schemas"]["SiteId"];
+            account_id?: components["schemas"]["AccountId"];
+            detail?: {
+                [key: string]: unknown;
+            };
+        };
+        AuditEntryList: {
+            /** Format: date-time */
+            since?: string;
+            /** Format: date-time */
+            until?: string;
+            data?: components["schemas"]["AuditEntry"][];
+            next_cursor?: string;
+        };
+        SystemSettings: {
+            name?: string;
+            /** @enum {string} */
+            registration?: "invite" | "closed";
+        };
+        SystemSettingsUpdate: {
+            settings: {
+                name: string;
+                /** @enum {string} */
+                registration: "invite" | "closed";
+            };
+            reason: components["schemas"]["Reason"];
+        };
+        PaymentSettings: {
+            open?: boolean;
+            credits_min?: components["schemas"]["Money"];
+            credits_max?: components["schemas"]["Money"];
+        };
+        PaymentSettingsUpdate: {
+            settings: {
+                open: boolean;
+                credits_min?: components["schemas"]["Money"];
+                credits_max?: components["schemas"]["Money"];
+            };
+            reason: components["schemas"]["Reason"];
+        };
+        MailSettings: {
+            enabled?: boolean;
+            host?: string;
+            port?: number;
+            username?: string;
+            from?: string;
+            has_password?: boolean;
+            restart_required?: boolean;
+            /** @enum {string} */
+            source?: "environment" | "database";
+        };
+        MailSettingsUpdate: {
+            settings: {
+                enabled: boolean;
+                host?: string;
+                /** @default 587 */
+                port: number;
+                username?: string;
+                from?: string;
+                password?: string;
+            };
+            reason: components["schemas"]["Reason"];
+        };
+        ConfigTestResult: {
+            /** @enum {string} */
+            status?: "accepted" | "rejected" | "failed" | "disabled" | "unsupported";
+        };
+        MailConfigTest: {
+            to: string;
+            reason: components["schemas"]["Reason"];
+        };
         RateLimitView: {
             requests?: number | null;
             effective_requests?: number;
@@ -1915,6 +2241,11 @@ export interface components {
             next_cursor: string | null;
         };
         ModelMappingRequest: {
+            /**
+             * Format: int64
+             * @description Current revision for an explicit group correction; omit to create a new alias.
+             */
+            rev?: number;
             /** @description The group the alias is for. Absent: the whole supplier. */
             group_id?: components["schemas"]["Uuid"];
             upstream_name: string;
@@ -1922,6 +2253,11 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         ModelMapping: {
+            /**
+             * Format: int64
+             * @description Current alias revision; unavailable on older nodes.
+             */
+            revision?: number;
             id: components["schemas"]["Uuid"];
             supplier_id: components["schemas"]["Uuid"];
             group_id?: components["schemas"]["Uuid"];
@@ -2348,6 +2684,390 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAdminCalls: {
+        parameters: {
+            query?: {
+                since?: string;
+                until?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+                account_id?: components["schemas"]["AccountId"];
+                request_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCallList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getAdminCallTrace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                call_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCallTrace"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listAuditEntries: {
+        parameters: {
+            query?: {
+                since?: string;
+                until?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+                site_id?: components["schemas"]["SiteId"];
+                account_id?: components["schemas"]["AccountId"];
+                request_id?: string;
+                actor_kind?: string;
+                actor_id?: string;
+                action?: string;
+                module?: string;
+                target_kind?: string;
+                target_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEntryList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getAuditEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSystemSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSystemSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getPaymentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setPaymentSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaymentSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getMailSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setMailSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testMailSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailConfigTest"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testMerchantSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                merchant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getRateLimit: {
         parameters: {
             query?: never;

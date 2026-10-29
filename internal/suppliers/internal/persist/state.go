@@ -207,7 +207,10 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		if changed == 0 {
 			return syncer.ErrFenced
 		}
-		return writeStep(ctx, tx, id, c, cur, snap, now)
+		if err := writeStep(ctx, tx, id, c, cur, snap, now); err != nil {
+			return err
+		}
+		return projectKeyPolicies(ctx, tx, id, c.KeyPolicies)
 	})
 	if err != nil {
 		return fmt.Errorf("persist: commit version %d of supplier %s: %w", c.State.Version, id, err)

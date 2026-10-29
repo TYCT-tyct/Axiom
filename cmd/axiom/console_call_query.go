@@ -8,7 +8,10 @@ import (
 	"axiom/internal/observability"
 )
 
-const callReportTimeout = 10 * time.Second
+const (
+	callReportTimeout   = 10 * time.Second
+	ownCallReportWindow = 30 * 24 * time.Hour
+)
 
 // ownCallQuery decodes the shared filters after the guard has validated the operation's query schema.
 func ownCallQuery(cl call) (observability.OwnQuery, error) {
@@ -60,12 +63,16 @@ func ownCallQuery(cl call) (observability.OwnQuery, error) {
 	return q, nil
 }
 
-func boundedCallWindow(q observability.OwnQuery, since, until *time.Time) (observability.OwnQuery, error) {
+func boundedCallWindow(q observability.OwnQuery, since, until *time.Time, defaultWindow time.Duration) (observability.OwnQuery, error) {
 	if until == nil {
 		q.Until = time.Now().UTC()
+	} else {
+		q.Until = *until
 	}
 	if since == nil {
-		q.Since = q.Until.Add(-30 * 24 * time.Hour)
+		q.Since = q.Until.Add(-defaultWindow)
+	} else {
+		q.Since = *since
 	}
 	if !q.Since.Before(q.Until) || q.Until.Sub(q.Since) > 31*24*time.Hour {
 		return q, invalidField("since", "choose a nonempty window of at most 31 days")

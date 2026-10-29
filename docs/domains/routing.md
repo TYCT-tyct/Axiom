@@ -42,7 +42,7 @@
 6. **预留**：每个条目自己报价，预留取保留条目的最大值；付不起的条目一遍删掉，首选条目被删才拒绝（见[计费的「预留与结算」](billing.md#预留与结算)）。计费只返回保留了哪些条目，由网关按它裁剪路线。
 
 M1 只有 `direct` 一个出口，调用直接走它，不按下面的规则选。出口选择的设计：每个端点附带一份可用出口的排序（按实测的线路延迟和成功率，见[端点评估](quality.md)）。执行时：
-- 供应商模块先挑凭证；
+- 供应商模块先挑凭证：重建时只保留允许端点上游模型名的 key，准入时再按时钟排除已到期的 key；限制、到期与分组映射修订的规则见[供应商](suppliers.md#凭证)；
 - 凭证绑定了固定出口的，就用那个出口；绑定的出口不可用时，换这个端点的另一个凭证；
 - 没有绑定的，用排序第一的出口。
 - 出口连不上只算出口的问题，不计入端点的熔断；它计入"供应商 × 出口"这条线路，一家供应商的线路全部熔断时，它的端点按"没有出口"排除（见[端点评估的「健康的对象」](quality.md#健康的对象)）。
@@ -137,6 +137,9 @@ M1 只有 `direct` 一个出口，调用直接走它，不按下面的规则选�
 路由的计算只读内存，耗时 p99 不超过 1 毫秒。会话粘性在准入事务之前取好（见上文「容量感知」）。
 
 ## 决策与理由
+
+`metadata.user_id` 的结构与 E2-6 共用实现：JSON 字符串内含分别派生的 `device_id`、`session_id` 和空 `account_uuid`。参考 sub2api [ParseMetadataUserID](https://github.com/Wei-Shaw/sub2api/blob/a3298b46ebe239fb0720b068a1eb3383955bdac2/backend/internal/service/metadata_userid.go#L35) 要求非空设备与会话，[GenerateSessionHash](https://github.com/Wei-Shaw/sub2api/blob/a3298b46ebe239fb0720b068a1eb3383955bdac2/backend/internal/service/gateway_service.go#L901) 优先原样取出会话（2026-10-29 核对）。两轮改消息仍取同一会话，租户不同派生值不同；回放契约和样本来源见 [gateway](../../internal/gateway/README.md)。
+
 
 P4（2026-10-29）依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，独立评审由流水线安排。以 [OpenRouter Provider Routing](https://openrouter.ai/docs/guides/routing/provider-selection) 为基线。不变量：请求限制必须兑现或在预留前返回 400；名称不越过端点归属与预设；价格使用实际受众售价且不经浮点换算。实现复用现有快照、过滤和排序，公开名称采用供应商分组不可变的代号，精确匹配分组，不把代号扩大为整家供应商。另一方案是在准入查供应商名称并转成供应商 ID：会增加数据库往返、暴露真实名称，并让选定分组扩大到同供应商其他组，因此不选。
 

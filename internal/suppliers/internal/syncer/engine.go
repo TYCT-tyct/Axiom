@@ -218,6 +218,7 @@ func (e *Engine) keys(ctx context.Context, c *Commit) error {
 		return adapter.Blocked{Until: page.Until}
 	}
 	keys := page.Items
+	c.KeyPolicies = &keys
 	old := make(map[adapter.KeyRef]adapter.KeyState, len(c.State.Keys))
 	for _, k := range c.State.Keys {
 		old[k.Ref] = k
@@ -232,7 +233,10 @@ func (e *Engine) keys(ctx context.Context, c *Commit) error {
 		c.Events = append(c.Events, Event{Kind: KeyChanged, Subject: string(gone), Old: statusName(true, old[gone].Status)})
 	}
 	slices.SortFunc(keys, func(a, b adapter.KeyState) int { return cmpStr(string(a.Ref), string(b.Ref)) })
-	c.State.Keys = keys
+	c.State.Keys = slices.Clone(keys)
+	for i := range c.State.Keys {
+		c.State.Keys[i].Policy = nil // Older nodes strictly decode the persisted state, including each key.
+	}
 	return nil
 }
 

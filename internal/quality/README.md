@@ -34,7 +34,7 @@ func (l *Loop) Drain(ctx context.Context) error
 | 不变量 | 怎么保证 |
 |---|---|
 | H-I4 只有判定表里"失败"的结局记为失败，"不计"的不进健康度 | `judge` 是唯一的判定；`TestJudge` 逐行覆盖：每个 `Cause` × 作用范围、客户端是否已离开、流内错误类别（`protocol.Fault` 的每个值）、预估输入是否超过阈值；`TestUncountedChangesNothing`：不计的结局不改变健康度（既不降、也不重置）；`TestEveryAttemptIsObservedOnce`：网关的每条尝试结束路径（5xx、429、响应头超时、200 无正文、提交前后断流、空闲、客户端提交前后离开、客户端离开后才来内容再断流、compact 与空的 compact）恰好报一次、按表计；`TestThroughputLeavesOutOurOwnWaits`：上游结束后还在等的追加不算进吞吐 |
-| H-I1 只写本模块的健康表 | `TestQualitySQLDoesNotWriteSuppliers` 扫描 SQL 和生产 Go 中的 SQL；`TestGatewayHealthRemoveProbeRestore`、`TestGatewayDisabledEndpointIsNeverProbed` 核对人工开关与成本状态 |
+| H-I1 只写本模块的健康表 | `TestQualitySQLDoesNotWriteSuppliers` 扫描 SQL 和生产 Go 中的 SQL；`TestGatewayHealthRemoveProbeRestore`、`TestGatewayDisabledEndpointIsNeverProbed` 核对人工开关与成本状态；前者故意让测试时钟落后，以网关记录的实际熔断时刻推进探测，避免把组装耗时算进首次等待 |
 | H-I2 人停用不路由、不试探 | `TestGatewayDisabledEndpointIsNeverProbed` 用真实组装，直接置位后刷新 suppliers，推进时钟；`TestProbeDeferrals` 覆盖无路由快照、暂停、自带和只观察 |
 | H-I5 窗口、硬失败、独立来源同时满足 | `TestIndependentFailures`、`TestWindowAndLateSuccess`、`TestObserveModeAndHealthyTraffic` 覆盖坏 key、单所有者、仅超时、闲置清窗和固定种子的 36 万个结局 |
 | H-I6 最后备选仍遵守其余过滤，恢复并发渐进放开 | `TestLiveHealthLastResortAndSlowStart`、`TestOwnedFallbackDoesNotBypassOtherFilters`、`TestLastResortPreservesRequestPriorities`；标记进路由记录的 `breaker_open_fallback` |

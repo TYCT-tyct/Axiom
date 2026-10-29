@@ -8,31 +8,27 @@ import (
 
 	"axiom/internal/observability/internal/store"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 )
 
 // OwnCall is a call as its own account sees it: what the user did and was charged, and not what it cost us, which
 // endpoint served it, or how it was routed (docs/domains/gateway.md「用量与费用」).
 type OwnCall struct {
-	PriceVersion                     string
-	ID, Workspace, Key               uuid.UUID
-	At                               time.Time
-	IP                               string
-	ClientApp, SessionID, SubagentID string
-	Class, Model                     string
-	Usage                            map[string]int64 // billing item name to count
-	ServiceTier                      string
-	PriceNano                        int64
-	Currency                         string
-	Free                             bool
-	Latency, FirstToken              time.Duration
-	FinishReason, ErrorKind          string
-}
-
-// Cursor is the place after which the next page starts: the last call of the page before.
-type Cursor struct {
-	At time.Time
-	ID uuid.UUID
+	PriceVersion                        string
+	ID, Workspace, Key                  uuid.UUID
+	At                                  time.Time
+	IP                                  string
+	ClientApp, SessionID, SubagentID    string
+	AppReferer, AppTitle, AppCategories string
+	Class, Model                        string
+	Usage                               map[string]int64 // billing item name to count
+	ServiceTier                         string
+	PriceNano                           int64
+	Currency                            string
+	Free                                bool
+	Latency, FirstToken                 time.Duration
+	FinishReason, ErrorKind             string
 }
 
 // OwnQuery selects the calls of one account, newest first, from those the transaction's scope can see. Account is
@@ -56,10 +52,8 @@ const (
 
 // cursorOf uses the tighter of the exclusive window end and the page cursor as one composite index bound.
 func cursorOf(q OwnQuery) (at time.Time, id string) {
-	if q.After != nil && q.After.At.Before(q.Until) {
-		return q.After.At, q.After.ID.String()
-	}
-	return q.Until, uuid.Nil().String()
+	upper := page.UpperBound(q.Until, q.After)
+	return upper.At, upper.ID.String()
 }
 
 // listRows plans for the actual filter values so optional predicates do not hide the ordered indexes.
@@ -148,6 +142,7 @@ func GetOwn(ctx context.Context, tx pg.Tx, id uuid.UUID) (OwnCall, error) {
 func ownCall(r store.ListOwnCallsRow) (OwnCall, error) {
 	c := OwnCall{
 		At: r.At, IP: r.Ip, ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID,
+		AppReferer: r.AppReferer, AppTitle: r.AppTitle, AppCategories: r.AppCategories,
 		PriceVersion: r.PriceVersion, Class: r.RequestClass, Model: r.Model, ServiceTier: r.ServiceTier, PriceNano: r.PriceNano,
 		Currency: r.Currency, Free: r.FreeOfCharge, Latency: time.Duration(r.LatencyMs) * time.Millisecond,
 		FirstToken: time.Duration(r.FirstTokenMs) * time.Millisecond, FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,

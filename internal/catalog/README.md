@@ -2,21 +2,21 @@
 
 模型、名字、官方规格和参考价，以及目录、成本计划、售价共用的价目表结构。要求和业务设计见[模型目录](../../docs/domains/catalog.md)，这里写代码结构、数据、不变量和接口。
 
-> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`、`ServiceTier`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`、`Lost`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式；以及存储、快照与管理操作：表 `author`、`model`、`name`、`reference_price`、`revision`、`change`，行级安全与授权，`Normalize`，内存快照与名字解析，管理操作和 `axiom catalog` 命令；以及 LiteLLM、OpenRouter 两个数据集的取数、解析、自动发布、改选到数据集和第一版验收的只读检查（#24，见「参考价的录入」），以及数据集同步的定时调度、它留在 `catalog.sync_state` 的记录和失败过久的告警（#319 E7-4、#281）。页面监测、审核项、数据集核对、后台任务角色和 `lock_models` 是设计，尚未实现，各节标题下有标注。
+> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`、`ServiceTier`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`、`Lost`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式；以及存储、快照与管理操作：表 `author`、`model`、`name`、`reference_price`、`revision`、`change`，行级安全与授权，`Normalize`，内存快照与名字解析，管理操作和 `axiom catalog` 命令；以及 LiteLLM、OpenRouter 两个数据集的取数、解析、自动发布、改选到数据集和第一版验收的只读检查（#24，见「参考价的录入」），以及数据集同步的定时调度、它留在 `catalog.sync_state` 的记录和失败过久的告警（#319 E7-4、#281）。页面监测、页面审核项和当前快照证据校验已实现；数据集核对、数据集审核项、后台任务角色和 `lock_models` 仍是设计。
 
 ## 包
 
 | 包 | 做什么 |
 |---|---|
-| `catalog` | 价目表结构与计价；名字的归一化与解析；内存快照；管理操作；数据集取数、解析与自动发布、改选到数据集、只读检查、定时同步与告警（均已实现）；页面监测与数据集核对（设计，尚未实现） |
-| `catalog/migrations` | schema `catalog` 的表、授权和行级安全策略，版本表 `platform.goose_catalog`（`watched_page` 等页面与数据集的表随它们的 PR 加入） |
+| `catalog` | 价目表结构与计价；名字的归一化与解析；内存快照；管理操作；数据集取数、解析与自动发布、改选到数据集、只读检查、定时同步与告警（均已实现）；页面监测与证据校验（已实现）；数据集核对（设计） |
+| `catalog/migrations` | schema `catalog` 的表、授权和行级安全策略，版本表 `platform.goose_catalog`（页面表已实现，数据集条目表仍是设计） |
 | `catalog/queries` | sqlc 的查询，生成的 `*.gen.go` 在 `catalog` 包里；生成的 `Queries` 构造函数叫 `New`，所以目录的构造函数叫 `Open` |
 
 ## 数据
 
 ### 表（schema `catalog`）
 
-> 已实现：`author`、`model`、`name`、`reference_price`、`revision`、`change`、`sync_state`。设计，尚未实现：`watched_page`、`page_snapshot`、`page_observation`、`dataset` / `dataset_entry`、`review`（页面监测与数据集的 PR 一起加入）。数据集同步仍不落库条目：每一轮取数后条目在内存里与模型对应，没发布的结果在报告和日志里，下一轮重新算，所以不丢；`sync_state` 只记各轮的结果——最后成功、连续失败、待确认改价（有候选价的 held）。`dataset` / `dataset_entry` / `review` 随页面监测与审核项一起加入。
+> 已实现：`author`、`model`、`name`、`reference_price`、`revision`、`change`、`sync_state`、`page_site`、`watched_page`、`page_snapshot`、`page_observation` 和页面专用 `review`。设计：`dataset` / `dataset_entry` 和数据集审核项。数据集条目仍每轮在内存中与模型对应，未发布的候选留在报告和日志，下一轮重新算；`sync_state` 只保存同步状态。
 
 "只追加"指 `axiom_app` 没有 UPDATE、DELETE 权限。类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。
 
@@ -29,11 +29,12 @@
 | `revision` | 单行 `n` | 只有影响快照的写入才加一 | 公开 | 改 |
 | `change` | `id`、`op_key` uuid、`at`、`actor`、`reason`、`kind`、`subject`、`before`、`after`、`evidence` jsonb | PK `id`；UNIQUE `op_key` | 平台 | 只追加 |
 | `sync_state` | 单行：`last_success_at`、`failing_since`、`failures`、`pending`（有候选价的 held 数） | PK `singleton`；`(failing_since IS NULL) = (failures = 0)` | 平台 | 改 |
-| `watched_page` | `id`、`author`、`url`、`currency`、`section_start`、`section_end`（截取价格段的标记）、`interval`、`enabled`、`lease_owner`、`lease_gen`、`lease_until`、`last_ok_at`、`failures`、`current_snapshot_id` | PK `id`；`url ~ '^https://'` | 平台 | 改 |
-| `page_snapshot` | `id`、`page_id`、`first_seen_at`、`extractor_version`、`text`（截取并规范化的正文）、`text_sha256` | PK `id`；UNIQUE `(page_id, extractor_version, text_sha256)` | 平台 | 只追加 |
-| `page_observation` | `page_id`、`observed_at`、`snapshot_id` | PK `(page_id, observed_at)`；只在当前内容变化时追加 | 平台 | 只追加 |
-| `dataset` / `dataset_entry` | 数据集（litellm / openrouter / modelsdev）及其租约和健康状态；条目的 `external_id`、`model_id`（可空）、`schedule`、`spec`、`parser_version`、`fetch_id`、`seen_at` | PK `(dataset, external_id)` | 平台 | 改 |
-| `review` | `id`、`subject_key`、`kind`（page_changed / price_change / mismatch / new_model / parse_failed）、`content` jsonb、`content_sha256`、`content_seq`、`status`（open / done / dismissed）、`resolution` | PK `id`；部分唯一索引 `subject_key WHERE status = 'open'`；dismissed 的 `(subject_key, content_sha256)` 不再重开 | 平台 | 改 `content`、`content_seq`、`status`、`resolution` |
+| `page_site` | `origin`、`delay_seconds`、`last_request_at`、`next_request_at` | PK `origin`；间隔 1 … 86400 秒 | 平台 | 改预约与间隔 |
+| `watched_page` | `id`、`author`、`url`、`origin`、`currency`、`section_start`、`section_end`、`interval_seconds`、`enabled`、`created_at`、`next_check_at`、`lease_gen`、`lease_until`、`last_ok_at`、`failures`、`current_snapshot_id` | PK `id`；同 URL 最多一个 enabled 登记；HTTPS；复合外键保证当前快照属于本页；配置只增、可停用 | 平台 | 改健康、租约、指针与启用状态 |
+| `page_snapshot` | `id`、`page_id`、`first_seen_at`、`extractor_version`、`text`、`text_sha256` | PK `id`；UNIQUE `(page_id, extractor_version, text_sha256)` | 平台 | 只追加 |
+| `page_observation` | `id`、`page_id`、`observed_at`、`snapshot_id` | PK `id`；只在当前内容变化时追加 | 平台 | 只追加 |
+| `dataset` / `dataset_entry` | 数据集及条目、租约和健康状态 | 设计，尚未实现 | 平台 | 改 |
+| `review` | `id`、`page_id`、`kind`（仅 page_changed）、`snapshot_id`、`previous_snapshot_id`、`removed`、`added`、`content_seq`、`status`、`resolution` | PK `id`；部分唯一索引 `page_id WHERE status = 'open'`；dismissed 的 `(page_id, snapshot_id)` 不重开 | 平台 | 改差异、版本与处理状态 |
 
 - `model.id` 是 UUIDv7，Go 类型 `catalog.ModelID`。
 - `model.slug` 是后台和日志用的唯一标识：`<厂商>/<模型>`，厂商给出版本标识时加 `@<版本>`；厂商部分 `^[a-z0-9][a-z0-9-]{0,39}$`。它不是名字，不进 `name` 表。
@@ -46,7 +47,7 @@
 - `spec.output_speed` 与 `spec.reasoning_visible` 是可选的两项模型数据：`output_speed` 是模型最快输出速度（每秒 token 的正整数），`reasoning_visible` 是流里显示推理进度的调用格式名列表（`messages`、`responses`、`chat`，可以为空）。`Model.OutputSpeed()`、`Model.ReasoningVisible()` 读出它们；缺省是 0 和空集，也就是不知道、不放行，谁用谁决定，不当成默认值。解析时拒绝非正的速度、不认识或重复的格式名；保存时还拒绝 `reasoning_visible` 列了格式而 `abilities` 列出的能力里没有 `reasoning`（解析不查这一条：旧数据不该让快照加载失败）。路由把速度读成 `Endpoint.OutputSpeed`，计费据它算超额额度（[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)）。
 - 管理员用 `axiom catalog update-spec <file>`（`UpdateSpecRequest`：`op_key`、`reason`、`model`、`rev`、完整的 `spec`）原地修改 `max_uses`；`rev` 防止覆盖并发修改，旧规格与理由进 `change`，快照随 revision 刷新。以 [OpenRouter server tools](https://openrouter.ai/docs/guides/features/server-tools#tool-call-limits) 为依据的端点可填 30（2026-10-28 查，外层循环共享默认及最大均为 30；按每项 30 次预留更保守）。这不是 Anthropic 原生工具的默认；模型的所有可路由端点没有共同、可验证的上界就不填。各上游没有默认时保留缺省，报价仍返回 `ErrUnbounded`，不批量改写存量规格；现有 jsonb 支持这份数据，无 schema 迁移。具体来源和范围见[目录领域决策](../../docs/domains/catalog.md#决策与理由)。
 - `model.rev` 是改模型时的乐观并发令牌：`ListModel`、`Retire`、`UpdateSpec`、`SelectPriceSource` 带上审核时看到的 `rev`，锁模型行后比较，不同就拒绝，成功后加一。没有它，两个基于同一份规格的修改，后提交的会悄悄覆盖先提交的。测试：基于同一 `rev` 的两个 `UpdateSpec` 只成功一个。
-- `subject_key` 非空且稳定：`page:<page_id>`、`price:<model_id>:<currency>`、`mismatch:<model_id>:<dataset>:<currency>`、`new:<dataset>:<external_id>`。没关联模型的条目用来源身份，不同的新模型不会合成一条。处理审核项时绑定 `content_seq`，期间内容又变了就处理失败。
+- 数据集审核项的 `subject_key` 是设计：`page:<page_id>`、`price:<model_id>:<currency>`、`mismatch:<model_id>:<dataset>:<currency>`、`new:<dataset>:<external_id>`。没关联模型的条目用来源身份，不同的新模型不会合成一条。处理审核项时绑定 `content_seq`，期间内容又变了就处理失败。
 - `actor` 暂存不透明字符串（`agent:<id>`、`user:<id>`、`system:catalog.sync`），#23 定义操作者类型后替换。
 
 ### 请求写法的键：值照厂商文档，不手填
@@ -205,9 +206,13 @@
 
 ## 参考价的录入
 
-> 已实现：LiteLLM 与 OpenRouter 的取数、解析、自动发布、改选到数据集（`Fetcher`、`SyncDataset`、`SyncAll`、`SelectDatasetSource`，命令 `axiom catalog sync`、`check`、`select-dataset-source`），以及每天一轮的定时同步、它留在 `catalog.sync_state` 的记录和失败过久的告警（`RegisterSync`，任务种类 `catalog.sync`）；各条的标注写明与设计的差别。设计，尚未实现：页面监测、官方价格页的证据核对、审核项、其余数据集（models.dev）的核对。选价格来源和发布见「管理操作」。
+> 已实现：LiteLLM / OpenRouter 的取数、解析、自动发布、改选到数据集及每日调度；官方页面监测、页面审核项、证据校验和只读 live 检查。其余数据集核对与数据集审核项仍是设计。
 
-- **页面监测**：租约用一条带条件的更新取得并递增 `lease_gen`；写入事务先 `SELECT … FOR UPDATE` 校验 `lease_gen`。正文先按内容找或存 `page_snapshot`；它不同于 `current_snapshot_id` 时，在同一事务里改 `current_snapshot_id`、追加 `page_observation`，并开或更新 `page_changed` 审核项（内容是与前一个当前快照的差异）。内容没变的成功取数只更新 `last_ok_at`、清零 `failures`。正文和 `extractor_version` 都没变才跳过后续处理。
+- **页面登记与调度**：管理员先审阅条款，用 `axiom catalog watch-page <file>`（`WatchPageRequest`，`Op` 加 `PageTarget`）登记厂商、HTTPS URL、币种和两个正文标记。`interval_seconds` 缺省 3600（可设 3600 … 604800），`rate_seconds` 缺省 10（可设 1 … 60），是同源共享设置，新登记可调低或调高它；已预约的等待不缩短。`unwatch-page`（`UnwatchPageRequest`）停用并增加租约代次；配置不可原地改，换 URL 或范围需新登记，避免在途抓取混入新配置。安装不预置页面。`RegisterPages` 在 serve 启动队列前登记 `catalog.pages`（syncs 队列，未终态按参数唯一，MaxAttempts=1），每分钟及启动时发现到期页；页面串行，每轮最多 9 分钟。条件更新用 FOR UPDATE SKIP LOCKED 取得 5 分钟租约并增加 lease_gen；网络和站点等待合计最多 4 分钟，写回最多 5 秒。节点关闭或轮次到期立即取消网络，不记页面失败、不推迟下次检查，等待租约自然到期；页面自身的 4 分钟超时仍记失败。写回先锁页面检查代次、有效期和启用状态，旧 worker 不得覆盖接手后的内容。成功或普通抓取失败后，下一轮等页面间隔加 0 … 10% 正向抖动。
+- **页面取数**：只 GET 登记 URL 和同源 `/robots.txt`，共用 egress（Axiom User-Agent），每次请求 60 秒，robots 上限 512 KiB、页面 32 MiB，不跟重定向。只把 robots 的 404/410 当作没有规则；其他非 200、解析失败或拒绝时不读价格页。`temoto/robotstxt` 处理 Axiom group、Allow/Disallow、通配符和 Crawl-delay，不使用它把任意 4xx 当作允许的默认。每个请求在 page_site 短事务里预约，间隔取当前登记值与本次 robots Crawl-delay 的较大值；robots 不改登记间隔，仅影响已预约的下一次访问时间，跨节点和同源页面共享；robots 拒绝也留下下一次允许访问时间。429/503 尊重 Retry-After（秒或 HTTP 日期），无有效值时等一小时，不在本轮重试；超过 60 秒的 Crawl-delay 明确拒绝取页面，仍留下延后预约。等待超过本次预算就失败并保留旧证据。
+- **页面截取与变化**：优先取 article，否则 main，否则整个文档；去脚本、样式、导航、页头页脚和隐藏节点；表格单元格等块之间留空格，解码 HTML 实体并归一空白。两个标记必须唯一（结束标记在开始之后）、中间内容不能为空，否则失败；只对标记之间的文本算 SHA-256。按页面、抽取版本与 hash 复用快照；当前指针变化才追加观测，变回旧内容则指回旧快照。差异是去掉公共前后缀的精确替换段 removed/added，不做价格解析。
+- **页面审核与告警**：快照、当前指针、观测、审核项和 `platform/alert.Persist` 信号同事务提交；任何一处失败都回滚。首次成功也开审核项；不变只续健康。每页最多一个 open 项，新内容保留它的原始 previous_snapshot_id，重算该基线到最新内容的差异并增加 content_seq，首次登记的基线为空；避免后续小改动掩盖未审的涨价。处理审核与写回按页面锁串行。`review-page`（`ReviewPageRequest`）按 review UUID 和审核时的 content_seq 标 done/dismissed，旧版本拒绝，不发布价格。dismissed 的同一快照不重开，回到它时旧 open 项自动结束，避免审核过时内容。`catalog.page_changed` 以页面 UUID 合并，人工处理或回到已驳回内容恢复；每次页面取数失败发 `catalog.page_failed`，成功或停用页面恢复；每分钟检查距最后成功（从未成功则登记时刻）超过两倍页面间隔的 `catalog.page_overdue`，成功或停用页面恢复。管理员须配置这三类规则与渠道；信号只含页面 UUID、分类，不含 URL 和正文。
+- **页面 live 验收**：`axiom catalog check-pages deploy/catalog/price-pages.json` 不打开数据库、不写目录；逐目标输出正文与 hash，失败输出错误并以非零退出，excluded 目标完全不发 GET。`PageInspector` 在同一进程中共享同源间隔，调度另有跨节点预约。清单不是自动启用配置；它验证网络、robots 和抽取，不代替连接真实目录数据的 `axiom catalog check`。条款依据与最终审阅归属见[领域文档](../../docs/domains/catalog.md#决策与理由)。
 - **取数**：经统一出站客户端，只访问登记的地址；超时 60 秒，正文上限 32MB，不跟随重定向。已实现：`Fetcher` 只读两个固定地址（`raw.githubusercontent.com` 上 LiteLLM 的 `model_prices_and_context_window.json`、`openrouter.ai/api/v1/models`），只收 200，重定向不跟随；超时 60 秒、正文上限 32MB。取数或解析失败时这一数据集整轮不发布，模型保持最后的价格，日志记 error。
 - **定时**（已实现，`sync_job.go`）：`catalog.sync` 每天在 `syncs` 队列上跑一轮，`axiom serve` 在队列启动前用 `RegisterSync` 登记；只有队列的领导节点插入，启动或换主也先跑一轮。参数相同，未结束任务按参数保持唯一，重启不会堆积任务。`MaxAttempts` 为 1；正常取数或解析失败写入 `catalog.sync_state` 后返回 nil，任务完成，等下一日轮次，不因一次短暂上游故障触发 `queue.job_discarded`。只有状态记录写不进才返回错误，队列丢弃信号暴露的是记录设施故障。任务自己打开目录，只做取数和发布；对外快照由调用路径打开。价格 worker 同时响应 River 任务和登记时传入的节点 context；节点开始关停即取消网络取数，启动失败也在停止队列前取消，不等通用队列的优雅收尾期限。结果记录使用不继承任务取消、最多 5 秒的 context，生产时间来自同一记录事务里的 `clock_timestamp()`，测试可注入时钟。读全两个数据集才写最后成功、清零连续失败，并重算待确认改价数（仅 `OutcomeHeld` 且 `Candidate != nil`）；缺条目、歧义、无法构造价目表的 held 仍留在报告和日志里，但不算待确认改价。失败累加连续失败，首次失败记录 `failing_since`，保留最后成功和上一完整轮次的待确认数，后续成功再重算。
 - **同步状态与告警**（已实现，`sync_metrics.go`）：登记任务时同时登记无标签 gauge `axiom_catalog_sync_last_success_age_seconds` 和 `axiom_catalog_sync_consecutive_failures`。每次采集都以平台范围读持久化状态和数据库时钟（最多 2 秒），距最后成功的秒数即使没有新任务执行也继续增长；从未成功时从 `failing_since` 起算，尚未执行过为 0，时钟倒退时不报负数。连续失败直接取 `failures`。读库失败返回采集错误、不伪报 0；运维节点需同时监测指标缺失。运维节点按后台数据配置时间和连续失败阈值、严重程度及通知渠道（[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）。节点仍在执行失败轮次时提供 `catalog.sync.overdue` 日志和 `axiom_catalog_sync_overdue_total` 计数作为兜底；`SyncJobConfig.AlertAfter` 的 48 小时是代码默认值，没有后台配置入口，显式启动配置可覆盖，不能把它当作后台规则。单次取数错误仍由 `SyncAll` 记录，但不走队列丢弃告警。
@@ -217,10 +222,10 @@
   - 币种固定 USD。条目有错（负数、指数越界、超过 15 位小数、字段不是数）时整条不可用，原因随结果报出，不取其余字段。
   - **分档的口径来自当前参考价**：数据集只说门槛在哪，不说哪些用量相加，而 `ParseSchedule` 要口径。条目的门槛与当前参考价的门槛逐个相同时，沿用当前的 `TierBasis`；没有当前价、门槛不同、条目没有分档而当前价有，都不发布（`ErrDatasetTiers` 或「分档结构不同」），由人发布后同步才接手。
   - **对应**：模型的名字（公开和内部，经 `ListNamesOfModel`）归一化后查条目。只有「名字本身是版本证据」的名字才算：移动名字的模型的任何名字，或带日期的名字（与 `Recognize` 的 `Exact` 同一规则）；只靠不带日期的名字找到条目的，结果是 held，因为数据集可能已把它换到新版本。同一模型对应到几个条目时，若有一个条目说出了其余所有条目说的（同一位置同一价格，如 LiteLLM 的 `deepseek-chat` 与 `deepseek/deepseek-chat` 后者多一个 0 的缓存写），取它；否则有歧义，held。不会从不同条目各取一个字段。
-- **自动发布**（已实现，审核项除外）：本轮取数成功后，对 `price_source` 等于这个数据集的每个 draft 或 listed 模型，把条目与当前美元参考价按整张价目表比较（规范字节相同为 unchanged）。不同就先过安全阀：合理性（每个计费项在单位范围内，token 项不超过每百万 1000 美元、按次项不超过 1 美元，缓存读价不高于输入价）、结构（门槛口径与门槛和当前价相同）、变化阈值（`Config.PriceChangeLimit`，默认 25%：任一服务等级、档位、计费项的价格相对当前价变化不超过它），再过发布自己的检查（`Lost` 为空、上架门槛 `Missing` 为空，在锁住的模型行上再查一次来源）。通过就以 `system:catalog.sync` 发布，证据是条目原文、数据集名、整份正文的 SHA-256 和取数时间；不通过、条目不可用、有歧义、少了档位或价格，就是 held，不发布，日志记 warn，报告里写原因，价目表有效时附上候选，由管理员用 `publish-price` 采用：结果里的 `base` 是报告对着的当前价行（无历史则为空），原样作为 `Base`，期间有人发布过就被拒。取数早于当前价的发布时间的一轮不发布（held，「当前价发布在取数之后」），所以两轮先后取数而逆序完成时，旧数据不会盖掉新价；取数时间是取数前从数据库读的时钟（`Catalog.Fetch`），发布时间也是数据库的，两者由同一个钟排序，不依赖节点的时钟；更严的互斥随租约代次。没有 `review` 表，所以没有审核项和 `fetch_id`，每轮重新算。billing 的参考价安全阀在 catalog 之上、调用不了，所以 catalog 带自己的一份，阈值在 `Config` 里，billing 的安全阀落地后以它为准并改本条。
+- **自动发布**（已实现，审核项除外）：本轮取数成功后，对 `price_source` 等于这个数据集的每个 draft 或 listed 模型，把条目与当前美元参考价按整张价目表比较（规范字节相同为 unchanged）。不同就先过安全阀：合理性（每个计费项在单位范围内，token 项不超过每百万 1000 美元、按次项不超过 1 美元，缓存读价不高于输入价）、结构（门槛口径与门槛和当前价相同）、变化阈值（`Config.PriceChangeLimit`，默认 25%：任一服务等级、档位、计费项的价格相对当前价变化不超过它），再过发布自己的检查（`Lost` 为空、上架门槛 `Missing` 为空，在锁住的模型行上再查一次来源）。通过就以 `system:catalog.sync` 发布，证据是条目原文、数据集名、整份正文的 SHA-256 和取数时间；不通过、条目不可用、有歧义、少了档位或价格，就是 held，不发布，日志记 warn，报告里写原因，价目表有效时附上候选，由管理员用 `publish-price` 采用：结果里的 `base` 是报告对着的当前价行（无历史则为空），原样作为 `Base`，期间有人发布过就被拒。取数早于当前价的发布时间的一轮不发布（held，「当前价发布在取数之后」），所以两轮先后取数而逆序完成时，旧数据不会盖掉新价；取数时间是取数前从数据库读的时钟（`Catalog.Fetch`），发布时间也是数据库的，两者由同一个钟排序，不依赖节点的时钟；更严的互斥随租约代次。`review` 当前只收页面变化，数据集仍没有审核项和 `fetch_id`，每轮重新算。billing 的参考价安全阀在 catalog 之上、调用不了，所以 catalog 带自己的一份，阈值在 `Config` 里，billing 的安全阀落地后以它为准并改本条。
 - **核对**：其余数据集的条目与当前参考价按整张价目表比较，不一致开 `mismatch` 审核项，不改价。
 - **选价格来源**：改选就是一次发布，在同一个事务里完成：改 `price_source`，为新来源的每个币种发布一行（价目表与旧行相同也发布，`source` 变了），为新来源没有的币种各写一行撤下。所以改选之后每个币种的当前价都来自新来源，旧来源的币种不会留下来继续生效，计费在站点币种没有当前价时按汇率换算（见[计费的「定价」](../../docs/domains/billing.md#定价)）。新的价目表来自所选数据集的当前条目（要能解析，并且带有当前参考价的每一档），或者选 `official`、`manual` 时由操作带上（每个币种的价目表和证据，与 `PublishPrice` 的检查相同），至少一个币种；每张新价目表对当前每个币种的参考价的 `Lost`（`r` 取 `Model.Reportable()`）都为空，否则拒绝，改选不会悄悄丢掉 priority 这类等级里已有的价格；`Lost` 返回 `ErrTierBasisChanged` 时，改选必须在操作里明确确认门槛口径的变化（审核记录写明新旧口径），没有确认就拒绝，所以口径变化不会让防退化检查被绕过。选 `manual` 或 `official` 后，同步不再为它写行。数据集来源由 `SelectDatasetSource` 执行：它按同步的规则找到模型的条目（无歧义、可用、过合理性），读出 `rev` 和每个币种的当前价作为 `bases`，其余交给同一个改选事务，所以 `Lost`、口径变化确认、其他币种撤下都照旧；条目没有当前任一币种价目表已有的分档（门槛或口径不同）时拒绝，因为基础价能盖住每个区间，`Lost` 看不出长请求会按基础价计；价目表只来自条目，`SelectPriceSource` 不接受数据集来源，手工的价格不会被记在数据集名下。
-- **发布**（页面证据的部分是设计，其余见「管理操作」）：一个事务里，引用页面证据的先 `SELECT … FOR SHARE` 锁页面行，让页面监测在提交前改不了 `current_snapshot_id`；再经 `lock_models` 锁模型行，确认 `price_source` 与这次发布的来源相同，读当前参考价与操作带来的 `base` 比较，写 `reference_price` 和 `change`，`revision` 加一。官方价格页的证据必须引用该页面的 `current_snapshot_id`，摘录必须逐字出现在快照正文里；每个单价换算成每百万后的数字应出现在摘录里，不出现时给警告，由审核者确认。
+- **发布**（页面证据已实现，其余见「管理操作」）：一个事务里，引用页面证据的先 `SELECT … FOR SHARE` 锁页面行，让页面监测在提交前改不了 `current_snapshot_id`；再锁模型行（批量 `lock_models` 尚未实现），确认 `price_source` 与这次发布的来源相同，读当前参考价与操作带来的 `base` 比较，写 `reference_price` 和 `change`，`revision` 加一。官方证据为 `PageEvidence`（`page_id`、`snapshot_id`、非空 `excerpts`），必须引用仍启用页面的当前快照，厂商、币种一致，每段非空摘录逐字出现在正文。来源切换按币种排序锁页面，避免反序锁；每页币种不可变。`axiom catalog check` 对 official 价格补查已记录证据、当前快照、摘录和未处理页面审核；数据库 I/O 错误向上传递。数字与门槛是否真能支持整张价目表由审核者判断，监测不自动发布。
 
 ## 管理操作
 
@@ -261,7 +266,7 @@
 
 ## 不变量
 
-> 已实现（有测试）：名字归一化后全局唯一、用户只能调用公开名字、快照一致且新的不被旧的覆盖、快照陈旧超限不再解析（含 revision 已变而全量加载失败时不续期旧快照）、参考价的历史不分叉并基于审核时看到的当前价（数据库约束与 `base`）、管理操作重试不重复生效、公开表里没有操作者、理由、证据，以及「单价精确、非负，计算不溢出」「用量不为零却没有价格的项一定被报告」和 `Usage` 保留未知用量那一半。数据集部分：`manual` 等来源的模型不在同步里、超过阈值的改价不自动生效、手工价格不会记在数据集名下；定时同步的记录跨重启和换主存活，一轮失败不改最后成功和待确认改价，连续失败的起点不随后续轮次移动。尚未实现：过期的取数者写不进数据、锁顺序（现在每个操作只锁一个模型）、参考价的证据可复核（页面部分）。
+> 已实现（有测试）：名字归一化后全局唯一、用户只能调用公开名字、快照一致且新的不被旧的覆盖、快照陈旧超限不再解析（含 revision 已变而全量加载失败时不续期旧快照）、参考价的历史不分叉并基于审核时看到的当前价（数据库约束与 `base`）、管理操作重试不重复生效、公开表里没有操作者、理由、证据，以及「单价精确、非负，计算不溢出」「用量不为零却没有价格的项一定被报告」和 `Usage` 保留未知用量那一半。数据集部分：`manual` 等来源的模型不在同步里、超过阈值的改价不自动生效、手工价格不会记在数据集名下；定时同步的记录跨重启和换主存活，一轮失败不改最后成功和待确认改价，连续失败的起点不随后续轮次移动。页面部分已实现：代次租约拒绝过期写回，按币种锁页面再锁模型，逐字复核官方证据；数据集租约和批量锁模型仍是设计。
 
 | 不变量 | 靠什么保证 |
 |---|---|
@@ -272,7 +277,7 @@
 | 快照陈旧超过上限就不再解析 | 见「快照」的陈旧上限；测试：revision 查询一直成功、全量加载一直失败，超过上限后返回 `ErrStale`、不就绪，成功发布后恢复 |
 | 参考价的历史不分叉，发布基于审核时看到的当前价 | 发布带 `base`，先锁模型行再比较；`supersedes` UNIQUE、起点的部分唯一索引、同一时间线的复合外键兜底；测试：基于同一 `base` 的两个发布只成功一个；替代另一个模型或币种的行、替代自己，都被数据库拒绝 |
 | 参考价只来自模型选定的来源，手填不被同步覆盖；每个币种的当前价的 `source` 都等于模型的 `price_source` | 发布在锁住的模型行上比较 `price_source` 与发布的来源；改选在同一事务里为每个币种发布或撤下；测试：`manual`、`official` 和另一个数据集的模型不在同步里，数据集改价后不变（`TestSyncLeavesOtherSourcesAlone`）；同步与改选来源并发时，改选先提交则同步的发布被拒；官方来源有 CNY 和 USD、改选只有 USD 的数据集后，`CurrentPrices` 里没有 CNY；当前价的 priority 有输入、输出价只缺 `web_search`，所选来源的 priority 只有输出价或没有 priority 时，改选被拒；同价改选后 USD 的当前行是新的 `id`、`source` 是新来源 |
-| 超过阈值的改价不自动生效 | 自动发布先过安全阀；测试（`TestSyncPublishes`、`TestSyncHolds`、`TestSyncBadDatasets`）：阈值内的变化发布，超过的是 held（报告里写原因和候选，日志记 warn），参考价不变，审核项随 `review` 表；取数或解析失败时保留最后的价格并告警，不换来源 |
+| 超过阈值的改价不自动生效 | 自动发布先过安全阀；测试（`TestSyncPublishes`、`TestSyncHolds`、`TestSyncBadDatasets`）：阈值内的变化发布，超过的是 held（报告里写原因和候选，日志记 warn），参考价不变，数据集审核项尚未实现；取数或解析失败时保留最后的价格并告警，不换来源 |
 | 定时同步的记录跨重启和换主存活，一轮失败不改写最后成功和待确认改价 | 记录在 `catalog.sync_state` 的一行里，每轮在自己的事务里写；测试（`TestTheSyncRecordsEachRound`）：成功写最后成功并清零连续失败，失败累加并保留两者，再失败不移动连续失败的起点 |
 | 管理操作重试不重复生效 | 每个操作带 `op_key`，`change.op_key` UNIQUE，重试返回第一次的结果；测试：提交成功、响应丢失后重试 |
 | 过期的取数者写不进数据 | 租约加代次，提交前校验；测试：A 取数期间租约被 B 接管，A 提交失败 |
@@ -340,11 +345,11 @@ func Open(db *pg.DB, scope pg.Scope, cfg Config) (*Catalog, error) // 平台范�
 func (c *Catalog) Current() (*Snapshot, error)              // 超过陈旧上限返回 ErrStale；一个请求从头到尾用同一个快照
 func (c *Catalog) Ready() bool
 func (c *Catalog) Refresh(ctx context.Context) error        // 读 revision，变了才全量加载
-func (c *Catalog) Run(ctx context.Context) error            // 每 PollEvery 刷新快照；数据集同步由 RegisterSync 登记到队列，页面监测与核对随它们的 PR（设计，尚未实现）
+func (c *Catalog) Run(ctx context.Context) error            // 每 PollEvery 刷新快照；数据集同步由 RegisterSync 登记到队列，页面监测由 RegisterPages 登记，数据集核对仍是设计
 func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) // 从数据库一致读取，给 billing 比对；设计，尚未实现
 // 读取（「管理操作」一节），平台范围：Authors、GetAuthor、Models(ModelQuery)、Model(ModelID)，返回 Author、ModelSummary、ModelView。
 // 管理操作（「管理操作」一节），平台范围：SaveAuthor、CreateModel、AddName、UpdateSpec、ListModel、Retire、PublishPrice、
-// SelectPriceSource、SelectDatasetSource，请求类型带 Op{Actor, Key, Reason}，返回 Result。ListReviews、ResolveReview 随审核项（设计，尚未实现）。
+// SelectPriceSource、SelectDatasetSource、WatchPage、UnwatchPage、ReviewPage，请求类型带 Op{Actor, Key, Reason}，返回 Result。通用 ListReviews、ResolveReview 随数据集审核项（设计，尚未实现）。
 
 type Fetched struct{ Source PriceSource; Body []byte; At time.Time } // 一份取回的数据集
 func NewFetcher(client *egress.Client) *Fetcher                     // 固定地址、60 秒、32MB、只收 200
@@ -403,7 +408,7 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 | 改选来源在同一事务里为每个币种发布或撤下 | 当前价只看时间线的头一行，不用再跨表比较来源；旧来源的币种不会在改选后继续生效，同价改选也留下新版本 | 当前价另按 `source = price_source` 过滤：改回旧来源时，没被替代的旧行会重新生效 |
 | 模型行经 `SECURITY DEFINER` 的 `lock_models` 加锁 | 任务角色不必有 `model` 任何一列的 UPDATE 权限；锁顺序集中在一处 | 给任务角色一列的 UPDATE：它就能改那一列；advisory 锁：管理操作和任务都要记得另取一把锁，漏一处就有竞态 |
 | `ModelID` 定义在本模块，不放 platform | 只被上层模块引用；platform 只放被下层引用的实体 ID | 放进 platform |
-| 数据集同步现在不建 `dataset`、`review` 表，没发布的结果在报告和日志里，每轮重算 | 条目与模型的对应、候选价目表、比较都能从当次取回的数据和当前参考价算出，要持久化的只有发布本身，它已在 `reference_price` 和 `change` 里；审核项要有处理它的界面和通知才有意义，一个没人看的队列只是积压；现在定表结构，页面监测需要的字段还没出现，会猜错 | 现在建 `review`、`dataset_entry`：没有读者，迁移要先兼容再清理 |
+| 数据集同步尚不落条目和数据集审核项，页面 review 只收 page_changed | 条目、候选和比较每轮可重算，发布已持久化；页面有独立的证据、通知与处理命令，不把数据集需求猜进其表结构 | 提前合并两类审核内容：扩展尚未实现的数据集流程会绑定页面生命周期 |
 | 分档的口径取自当前参考价；没有当前价或门槛不同就不发布 | 数据集只给门槛（LiteLLM 的 `_above_200k_tokens`、OpenRouter 的 `min_prompt_tokens`），不说哪些用量相加，口径错了长请求就按错的档计价；口径是厂商的规定，要逐家引用原文，现在只查实过 Anthropic 和 Gemini | 代码里写一张厂商口径表：没查实的厂商会被猜；表与当前价冲突时还要另处理 |
 | 只有「名字本身是版本证据」的名字才对应条目 | 数据集里 `gpt-4o` 这样的条目可能已指向新版本，把它的价格发布给固定在旧版本的模型就是错价；与 `Recognize` 的 `Exact` 同一规则 | 所有名字都对应：数据集换版本时悄悄改了旧模型的价格 |
 | 同一模型对应到几个条目时，取说出其余所有条目所说的那一个，否则 held | 实测 LiteLLM 的 `deepseek-chat` 与 `deepseek/deepseek-chat` 只差一个值为 0 的缓存写；取并集或逐字段表决会拼出没人发布过的价目表（见 docs/domains/catalog.md「参考价怎么进入目录」6） | 有歧义就全部 held：DeepSeek 永远同步不了；取第一个：随键的顺序错价 |

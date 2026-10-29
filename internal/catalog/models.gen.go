@@ -43,3 +43,22 @@ type CatalogReferencePrice struct {
 	PublishedAt    time.Time
 	Supersedes     *uuid.UUID
 }
+
+type CatalogWatchedPage struct {
+	ID                uuid.UUID
+	Author            string
+	Url               string
+	Origin            string
+	Currency          string
+	SectionStart      string
+	SectionEnd        string
+	IntervalSeconds   int64
+	Enabled           bool
+	CreatedAt         time.Time
+	NextCheckAt       time.Time
+	LeaseGen          int64
+	LeaseUntil        time.Time
+	LastOkAt          *time.Time
+	Failures          int64
+	CurrentSnapshotID *uuid.UUID
+}
