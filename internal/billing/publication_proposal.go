@@ -3,6 +3,8 @@ package billing
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"uuid"
 
 	"axiom/internal/catalog"
@@ -11,8 +13,8 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-func proposeAudiencePrice(audience Selector, policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks) (Publication, error) {
-	p, err := proposePrice(policy, rules, m, snap, currency, costs, defaults)
+func proposeAudiencePrice(audience Selector, policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks, rates ...platform.ExchangeRate) (Publication, error) {
+	p, err := proposePrice(policy, rules, m, snap, currency, costs, defaults, rates...)
 	if err != nil {
 		return p, err
 	}
@@ -30,11 +32,10 @@ func proposeAudiencePrice(audience Selector, policy PricePolicy, rules []Rule, m
 	return p, nil
 }
 
-func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks) (Publication, error) {
+func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks, rates ...platform.ExchangeRate) (Publication, error) {
 	p := Publication{Model: m.ID, Status: "unpriced"}
 	envelope, costErr := modelPriceCost(costs, m, currency)
-	ref, _ := snap.ReferencePrice(m.ID, currency.String())
-	input, matched, err := priceFromRules(rules, m, ref, envelope, costErr, currency)
+	input, matched, ref, err := priceFromRules(rules, m, snap, envelope, costErr, currency, rates)
 	p.matched = matched != nil
 	if matched != nil && matched.Method.Kind != "reference_multiplier" {
 		ref.ID = uuid.Nil()
@@ -42,7 +43,7 @@ func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catal
 	if err != nil {
 		p.Problem = err.Error()
 	}
-	p.Basis, err = priceEvidence(policy, matched, ref.ID, costs)
+	p.Basis, err = priceEvidence(policy, matched, ref.ID, costs, referenceExchange(ref, currency, rates))
 	if err != nil {
 		return p, err
 	}
@@ -70,37 +71,72 @@ func modelPriceCost(costs []PriceCost, m catalog.Model, currency platform.Curren
 	return CostEnvelope(costs, currency)
 }
 
-func priceFromRules(rules []Rule, m catalog.Model, ref catalog.ReferencePrice, envelope catalog.Schedule, costErr error, currency platform.Currency) (catalog.Schedule, *Rule, error) {
+func priceFromRules(rules []Rule, m catalog.Model, snap *catalog.Snapshot, envelope catalog.Schedule, costErr error, currency platform.Currency, rates []platform.ExchangeRate) (catalog.Schedule, *Rule, catalog.ReferencePrice, error) {
 	for _, r := range rules {
 		if !r.Enabled || !pricesModel(r.Target, m) {
 			continue
 		}
+		ref := saleReference(snap, m.ID, currency, r.Method)
 		if r.Method.Kind == "cost_plus" && r.Constraints == (Constraints{}) {
 			if costErr != nil {
-				return catalog.Schedule{}, &r, costErr
+				return catalog.Schedule{}, &r, ref, costErr
 			}
 			s, err := costPrice(r.Method, envelope, currency)
-			return s, &r, err
+			return s, &r, ref, err
 		}
-		s, err := Sell(r, ref, currency)
+		s, err := Sell(r, ref, currency, rates...)
 		if errors.Is(err, ErrUnpriced) {
 			continue
 		}
 		if errors.Is(err, ErrRuleRefuses) {
-			return catalog.Schedule{}, &r, &RuleRefusal{Rule: r.ID, Model: m.ID}
+			return catalog.Schedule{}, &r, ref, &RuleRefusal{Rule: r.ID, Model: m.ID}
 		}
-		return s, &r, err
+		return s, &r, ref, err
 	}
-	return catalog.Schedule{}, nil, ErrUnpriced
+	return catalog.Schedule{}, nil, catalog.ReferencePrice{}, ErrUnpriced
 }
 
-func priceEvidence(policy PricePolicy, rule *Rule, reference uuid.UUID, costs []PriceCost) (jsonx.Raw, error) {
+func saleReference(snap *catalog.Snapshot, model catalog.ModelID, currency platform.Currency, method Method) catalog.ReferencePrice {
+	if method.Kind != "reference_multiplier" {
+		return catalog.ReferencePrice{}
+	}
+	if ref, ok := snap.ReferencePrice(model, currency.String()); ok {
+		return ref
+	}
+	if method.CurrencyConversion != "exchange" {
+		return catalog.ReferencePrice{}
+	}
+	if ref, ok := snap.ReferencePrice(model, "USD"); ok {
+		return ref
+	}
+	for _, code := range slices.Sorted(maps.Keys(minorDigits)) {
+		if ref, ok := snap.ReferencePrice(model, code); ok {
+			return ref
+		}
+	}
+	return catalog.ReferencePrice{}
+}
+
+func referenceExchange(ref catalog.ReferencePrice, currency platform.Currency, rates []platform.ExchangeRate) *platform.ExchangeRate {
+	if ref.ID == uuid.Nil() || ref.Schedule.Currency() == currency {
+		return nil
+	}
+	for _, r := range rates {
+		if _, ok := r.Between(ref.Schedule.Currency(), currency); ok {
+			return &r
+		}
+	}
+	return nil
+}
+
+func priceEvidence(policy PricePolicy, rule *Rule, reference uuid.UUID, costs []PriceCost, exchange *platform.ExchangeRate) (jsonx.Raw, error) {
 	return jsonx.MarshalCanonical(struct {
-		Policy    PricePolicy `json:"policy"`
-		Rule      *Rule       `json:"rule"`
-		Reference uuid.UUID   `json:"reference"`
-		Costs     []PriceCost `json:"costs"`
-	}{policy, rule, reference, costs})
+		Policy    PricePolicy            `json:"policy"`
+		Rule      *Rule                  `json:"rule"`
+		Reference uuid.UUID              `json:"reference"`
+		Costs     []PriceCost            `json:"costs"`
+		Exchange  *platform.ExchangeRate `json:"reference_exchange,omitempty"`
+	}{policy, rule, reference, costs, exchange})
 }
 
 func (p *Publication) protectPrice(input, envelope catalog.Schedule, costErr error, policy PricePolicy, defaults fallbacks) error {

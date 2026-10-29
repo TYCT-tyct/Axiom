@@ -22,4 +22,14 @@ type BillingExchangeRate struct {
 	Reason      string
 	CreatedBy   string
 	CreatedAt   time.Time
+	SourceAt    *time.Time
+}
+
+type BillingExchangeSync struct {
+	Singleton   bool
+	StartedAt   *time.Time
+	LastAttempt *time.Time
+	LastSuccess *time.Time
+	SourceAt    *time.Time
+	Alerted     bool
 }

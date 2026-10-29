@@ -135,7 +135,7 @@ func TestLegacyRulesCanAlwaysBeRetired(t *testing.T) {
 	for _, change := range []func(*RuleInput){
 		func(in *RuleInput) { in.Target = Selector{Kind: "endpoint", ID: model} },
 		func(in *RuleInput) { v := "0.2"; in.Constraints.MinMarginRatio = &v },
-		func(in *RuleInput) { in.Method.CurrencyConversion = "exchange" },
+		func(in *RuleInput) { in.Method.CurrencyConversion = "" },
 	} {
 		f := newRules(t)
 		in := rule(Selector{Kind: "all"}, faced("1"))
