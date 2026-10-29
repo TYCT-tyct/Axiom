@@ -44,6 +44,8 @@ func TestConfigRejectsForbiddenRelations(t *testing.T) {
 		"rate window of fractional milliseconds":       {func(c *Config) { c.RateWindow = time.Minute + time.Microsecond }, "RateWindow"},
 		"rate window over the maximum":                 {func(c *Config) { c.RateWindow = maxRateWindow + time.Millisecond }, "RateWindow"},
 		"rate window whose double overflows":           {func(c *Config) { c.RateWindow = time.Duration(math.MaxInt64 - math.MaxInt64%int64(time.Millisecond)) }, "RateWindow"},
+		"no segment size":                              {func(c *Config) { c.SegmentOutput = 0 }, "SegmentOutput"},
+		"overshoot under the extension wait":           {func(c *Config) { c.SegmentOvershoot = c.ExtendWait - 1 }, "SegmentOvershoot"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := DefaultConfig()

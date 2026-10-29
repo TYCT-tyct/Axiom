@@ -110,19 +110,6 @@ func feed(ctx context.Context, pw *io.PipeWriter, beats []beat, end bool) {
 	}
 }
 
-// pause waits for d and reports whether the attempt is still on.
-func pause(ctx context.Context, d time.Duration) bool {
-	if d <= 0 {
-		return true
-	}
-	select {
-	case <-time.After(d):
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
 // late answers after the wait: the response headers take that long. An attempt cancelled meanwhile gets the failure of a
 // request that was cancelled.
 func late(waits time.Duration, then scripted) scripted {
@@ -352,11 +339,12 @@ type options struct {
 	settleErr    error               // every settlement fails with it
 	settle       func(try int) error // the error of each settlement, from 1, when settleErr is nil
 	extend       func(ctx context.Context, r billing.ExtendRequest) error
-	segmentable  bool  // the entries are reserved by segment of 40 output tokens
-	cost         int64 // of every attempt
-	costNotKnown bool  // whether Costs says the cost leaves something out
-	costErr      error // the error Costs fails with
-	stream       *bool // the request's stream member; true when nil
+	segmentable  bool             // the entries are reserved in segments
+	segments     billing.Segments // how they are segmented; 200 output tokens with a second's allowance when zero
+	cost         int64            // of every attempt
+	costNotKnown bool             // whether Costs says the cost leaves something out
+	costErr      error            // the error Costs fails with
+	stream       *bool            // the request's stream member; true when nil
 	supplier     func(n int) int
 	alive        func() bool
 	mutate       func(*Call)
@@ -411,6 +399,10 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	}
 	h.up = &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: h.w}
 	h.cfg = DefaultConfig()
+	// One source, as cmd/axiom wires it: the quote and the executor reserve by the same segment settings, so a test
+	// that changes how a call is segmented cannot leave one of them on the defaults.
+	segments := cmpOr(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
+	h.cfg.SegmentOutput, h.cfg.SegmentOvershoot = segments.Output, segments.Overshoot
 	if o.config != nil {
 		o.config(&h.cfg)
 	}
@@ -489,7 +481,9 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		}
 		h.up.eps[uuid.UUID(ep(i))] = &fakeEndpoint{script: script, policy: o.policy, noSlot: slices.Contains(o.noSlot, i)}
 	}
-	r, err := billing.Quote(routing.DemandOf(&req), quotes, billing.Segments{Output: 200, Overshoot: time.Second}, nil)
+	// The same segment settings the harness gave the executor (newHarness), from the one place they are chosen.
+	segments := cmpOr(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
+	r, err := billing.Quote(routing.DemandOf(&req), quotes, segments, nil)
 	if err != nil {
 		h.t.Fatal(err)
 	}

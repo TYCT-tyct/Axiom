@@ -227,7 +227,7 @@ func modelFromRow(row CatalogModel) (Model, error) {
 		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
 		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource),
 		spec: string(row.Spec), Rev: row.Rev, reportable: spec.reportable, serving: spec.serving, serves: spec.serves,
-		dialect: spec.dialect, toolUses: spec.toolUses,
+		dialect: spec.dialect, toolUses: spec.toolUses, speed: spec.speed, reasoning: spec.reasoning,
 	}, nil
 }
 
@@ -254,6 +254,9 @@ type specJSON struct {
 	Abilities *[]string        `json:"abilities"`
 	MaxUses   map[string]int64 `json:"max_uses"`
 
+	OutputSpeed      *int64    `json:"output_speed"`
+	ReasoningVisible *[]string `json:"reasoning_visible"`
+
 	DialectKeys
 }
 
@@ -277,10 +280,12 @@ type spec struct {
 	serves     bool // every key Serving reads is present
 	abilities  bool // the abilities are listed, possibly empty
 	dialect    Dialect
+	speed      int64     // the fastest output, in tokens per second; 0 when the spec does not say
+	reasoning  FormatSet // the call formats in which the model's stream shows reasoning progress
 }
 
 // parseSpec checks a spec is a JSON object whose items, tiers and abilities, if present, name billing items, service
-// tiers and abilities, and whose lengths, if present, are positive.
+// tiers and abilities, whose lengths, if present, are positive, and whose stream data, if present, is usable.
 func parseSpec(raw []byte) (spec, error) {
 	var w specJSON
 	if err := jsonx.Unmarshal(raw, &w); err != nil {
@@ -302,6 +307,10 @@ func parseSpec(raw []byte) (spec, error) {
 	if err != nil {
 		return spec{}, err
 	}
+	speed, reasoning, err := parseStream(w)
+	if err != nil {
+		return spec{}, err
+	}
 	return spec{
 		toolUses:   toolUses,
 		reportable: reportable,
@@ -310,7 +319,31 @@ func parseSpec(raw []byte) (spec, error) {
 		declared:   w.Items != nil && w.Tiers != nil,
 		serves:     w.Context != nil && w.MaxOutput != nil && w.Streams != nil && w.Abilities != nil,
 		abilities:  w.Abilities != nil,
+		speed:      speed,
+		reasoning:  reasoning,
 	}, nil
+}
+
+// parseStream reads the model data a reservation made in segments needs: the fastest output, which sizes the overshoot
+// allowance, and the call formats whose stream shows reasoning progress, which the gateway must see to stop the call
+// within that allowance. Both are optional and independent: an absent speed or a format left out reserves the whole
+// output, which is never short.
+func parseStream(w specJSON) (int64, FormatSet, error) {
+	var speed int64
+	var visible FormatSet
+	if w.OutputSpeed != nil {
+		if speed = *w.OutputSpeed; speed <= 0 {
+			return 0, 0, fmt.Errorf("spec output_speed must be above 0, not %d", speed)
+		}
+	}
+	if w.ReasoningVisible != nil {
+		formats, err := parseSet[CallFormat](formatNames[:], *w.ReasoningVisible)
+		if err != nil {
+			return 0, 0, fmt.Errorf("spec reasoning_visible: %w", err)
+		}
+		visible = formats
+	}
+	return speed, visible, nil
 }
 
 // parseToolUses accepts bounds only for server tools billing can quote. An absent bound stays absent.
@@ -387,6 +420,8 @@ func parseSavedSpec(raw []byte) (spec, error) {
 		return spec{}, errors.New(`spec says the model reasons (abilities) and does not think (thinking "none")`)
 	case !reasons && (s.dialect.Thinking == ThinkingAdaptive || s.dialect.Thinking == ThinkingManual):
 		return spec{}, errors.New("spec says the model thinks (thinking) and does not list reasoning in its abilities")
+	case !reasons && s.reasoning != 0:
+		return spec{}, errors.New("spec says reasoning shows in a stream (reasoning_visible) and does not list reasoning in its abilities")
 	}
 	return s, nil
 }

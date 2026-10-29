@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -310,6 +311,47 @@ func TestAWriteMayBlockOnlyAsLongAsTheSegmentLasts(t *testing.T) {
 		// the write timeout.
 		if h.w.status != http.StatusOK || first.deadline.Sub(first.at) != 1950*time.Millisecond || last.deadline.Sub(last.at) != h.cfg.WriteTimeout {
 			t.Errorf("status %d, deadlines %v and %v", h.w.status, first.deadline.Sub(first.at), last.deadline.Sub(last.at))
+		}
+	})
+}
+
+// TestATruncatedStreamConsumesNoMoreThanItsAllowance: the extension is in flight and the upstream goes on producing, as
+// a real one's socket buffers take what it writes, while the gateway stops reading; when the wait is over the attempt is
+// cut, and what the upstream produced beyond the segment it had reserved stays within the overshoot allowance that
+// segment's reservation set aside, so the supplier cannot bill more than was reserved for the call
+// (docs/domains/billing.md「预留与结算」).
+func TestATruncatedStreamConsumesNoMoreThanItsAllowance(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		const covered, allowance = 500, 500 // a segment of 500 tokens, and 5s at 100 tokens a second
+		const wait = 5 * time.Second        // how long the extension is waited for
+		h := newHarness(t, ctx, segmented(options{
+			segments: billing.Segments{Output: covered, Overshoot: 5 * time.Second},
+			config:   func(c *Config) { c.ExtendWait = wait },
+			extend: func(ctx context.Context, _ billing.ExtendRequest) error {
+				<-ctx.Done() // the ledger is too slow: the wait ends the attempt
+				return ctx.Err()
+			},
+		}))
+		var produced atomic.Int64
+		prefix := []string{h.feed(evStart).data, h.feed(evBlock).data, h.feed(evHello).data}
+		h.up.eps[uuidOf(ep(1))].script = []scripted{streaming(prefix, 10, 100*time.Millisecond, &produced)}
+		h.run()
+		// The extension was asked for 40%–60% of the segment in, and the wait lasted 5s: the upstream, producing at 100
+		// tokens a second throughout, made at most 3 seconds' worth more than the segment covered.
+		if extra := produced.Load() - covered; extra < 0 || extra > allowance {
+			t.Errorf("the upstream produced %d bytes beyond the %d it was covered for, past the %d allowance", extra, covered, allowance)
+		}
+		// The extension is asked for 40%–60% of the segment in, which the upstream, producing at 100 tokens a second,
+		// reaches in 2s to 3s; the wait then runs its 5s and the cut lands on the next write, 100ms apart.
+		if got := h.elapsed(); got < wait+2*time.Second || got > wait+3*time.Second+200*time.Millisecond {
+			t.Errorf("the attempt was cut after %v, not when the wait for the extension ended", got)
+		}
+		body := h.w.body()
+		if !strings.Contains(body, `"error_type":"billing_unavailable"`) || !strings.HasPrefix(body[strings.LastIndex(body, "event: "):], "event: error\n") {
+			t.Errorf("the stream does not end with the error event of an unavailable ledger:\n%.300s", body)
+		}
+		if a := h.ended().outcome.Attempts; len(a) != 1 || a[0].Result != billing.Committed || a[0].Finish != billing.FinishTruncated {
+			t.Errorf("attempts %+v", a)
 		}
 	})
 }

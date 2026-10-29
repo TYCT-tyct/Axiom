@@ -127,7 +127,7 @@ type Endpoint struct {
 	ToolUses         map[catalog.Item]int64 // each server tool's default most uses; the snapshot keeps a copy
 	Streams          bool
 	Cancels          bool      // measured: it stops generating when the client disconnects
-	ReasoningVisible FormatSet // the formats in which reasoning progress shows in the stream
+	ReasoningVisible FormatSet // the formats in which reasoning progress shows in the stream, of a model that reasons
 	MaxConcurrent    int64     // 0 for no limit at the endpoint itself
 
 	Funds          *suppliers.Funds // synced native balance and live supplier-wide refusal
