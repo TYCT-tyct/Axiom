@@ -82,6 +82,11 @@ func TestAttributionOf(t *testing.T) {
 			appAttribution{categories: "tool"},
 		},
 		{
+			"categories beyond two",
+			map[string]string{"X-OpenRouter-Categories": "cli-agent,cloud-agent,image-gen"},
+			appAttribution{categories: "cli-agent,cloud-agent"},
+		},
+		{
 			"a category longer than 30",
 			map[string]string{"X-OpenRouter-Categories": strings.Repeat("a", 31) + ",ok"},
 			appAttribution{categories: "ok"},
