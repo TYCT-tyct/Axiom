@@ -85,8 +85,8 @@ func TestFilters(t *testing.T) {
 			p.MaxPrice.Set.Add(catalog.ItemInput)
 			p.MaxPrice.Max[catalog.ItemInput] = price(t, "0.0000005")
 		}, routing.PresetFilter, true},
-		{"override only another supplier", nil, func(in *routing.Input) { in.Override.Only = []routing.SupplierID{sup(99)} }, nil, routing.OverrideFilter, true},
-		{"override excludes the supplier", nil, func(in *routing.Input) { in.Override.Exclude = []routing.SupplierID{sup(1)} }, nil, routing.OverrideFilter, true},
+		{"override only another supplier", nil, func(in *routing.Input) { in.Override.OnlyNames = []string{"g99"} }, nil, routing.OverrideFilter, true},
+		{"override excludes the supplier", nil, func(in *routing.Input) { in.Override.ExcludeNames = []string{"g1"} }, nil, routing.OverrideFilter, true},
 		{"override class", nil, func(in *routing.Input) { in.Override.Classes = 1 << routing.ClassRelay }, nil, routing.OverrideFilter, true},
 		{"override price limit", nil, func(in *routing.Input) {
 			in.Override.MaxPrice.Set.Add(catalog.ItemOutput)
@@ -212,7 +212,7 @@ func TestOrder(t *testing.T) {
 		t.Errorf("cheapest first: %+v", got)
 	}
 	in := input()
-	in.Override.Order = []routing.SupplierID{sup(3), sup(2)}
+	in.Override.OrderNames = []string{"g3", "g2"}
 	if got := h.plan(in).Entries; got[0].Endpoint != ep(3) || got[1].Endpoint != ep(2) || got[2].Endpoint != ep(1) {
 		t.Errorf("named order, then the rest: %+v", got)
 	}

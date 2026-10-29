@@ -43,6 +43,7 @@ type Routable struct {
 	Currency            platform.Currency
 	ID, Supplier, Model uuid.UUID
 	Upstream            string
+	Codename            string // the group's immutable public codename
 	Formats             []protocol.Format
 	Schedule            catalog.Schedule
 	Streams, Cancels    bool
@@ -286,6 +287,7 @@ type endpoint struct {
 	id, supplier, schedule uuid.UUID
 	model                  uuid.UUID
 	upstream               string
+	codename               string
 	formats                []protocol.Format
 	unitValueID            uuid.UUID
 	origin                 string
@@ -402,7 +404,7 @@ func (s *Service) Routable() ([]Routable, error) {
 			Site: ep.ownerSite, Account: ep.ownerAccount,
 			Credentials: s.availableCredentials(ep),
 			Funds:       ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
-			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Formats: slices.Clone(ep.formats),
+			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Codename: ep.codename, Formats: slices.Clone(ep.formats),
 			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
 		})
 	}
@@ -442,7 +444,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		return nil, fmt.Errorf("endpoint %s: its supplier's native balance: %w", r.EndpointID, err)
 	}
 	ep := &endpoint{
-		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName,
+		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
 		formats: formats, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt),
 	}
