@@ -50,7 +50,7 @@ func (a adminAPI) ListUsers(ctx context.Context, request adminapi.ListUsersReque
 	for i, u := range users {
 		list.Data[i] = adminapi.UserSummary{
 			Id: u.ID.TypeID(), AccountId: u.Account.TypeID(), SiteId: u.Site.TypeID(), Email: u.Email,
-			Status: adminapi.UserSummaryStatus(u.Status), Tier: tierRef(u.Tier), MfaEnabled: u.MFA, CreatedAt: u.CreatedAt,
+			SignInDisabled: new(u.Status == "disabled"), Status: adminapi.UserSummaryStatus(u.Status), Tier: tierRef(u.Tier), MfaEnabled: u.MFA, CreatedAt: u.CreatedAt,
 		}
 	}
 	if more {
@@ -128,7 +128,7 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 	body := adminapi.AccountDetail{
 		Id: account.ID.TypeID(), SiteId: account.Site.TypeID(), Name: account.Name, Kind: adminapi.AccountDetailKind(account.Kind),
 		Status: adminapi.AccountDetailStatus(account.Status), Tier: tierRef(account.Tier), Balance: balanceBody(balance, currency),
-		KeyLimits: limits, CreatedAt: account.CreatedAt,
+		CallsSuspended: new(account.Status == "disabled"), KeyLimits: limits, CreatedAt: account.CreatedAt,
 	}
 	body.Owner.Id, body.Owner.Email = account.Owner.ID.TypeID(), account.Owner.Email
 	return adminapi.GetAccount200JSONResponse(body), nil

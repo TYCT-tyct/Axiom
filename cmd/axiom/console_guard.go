@@ -179,7 +179,7 @@ func (g *guard) admit(r *http.Request, rl *rules) (call, error) {
 	case !rl.session:
 		return c, nil
 	}
-	if c.principal, err = g.authenticate(r, rl); err != nil {
+	if c.principal, err = g.authenticate(r, rl, c.ip); err != nil {
 		return call{}, err
 	}
 	if rl.permission != nil {
@@ -195,20 +195,20 @@ func (g *guard) admit(r *http.Request, rl *rules) (call, error) {
 }
 
 // authenticate is the session of the request, of the level the operation needs.
-func (g *guard) authenticate(r *http.Request, rl *rules) (accounts.Principal, error) {
+func (g *guard) authenticate(r *http.Request, rl *rules, ip netip.Addr) (accounts.Principal, error) {
 	switch rl.level {
 	case levelAny:
-		return g.accounts.AuthenticateAny(r.Context(), r)
+		return g.accounts.AuthenticateAny(r.Context(), r, ip)
 	case levelPendingMFA:
 		// Checked here, before the body is read, so that a client without a pending session learns only that it has
 		// none; VerifyMFA checks it again under the user's lock, which is what keeps one challenge to one session.
-		p, err := g.accounts.AuthenticateAny(r.Context(), r)
+		p, err := g.accounts.AuthenticateAny(r.Context(), r, ip)
 		if err == nil && !p.Pending() {
 			return accounts.Principal{}, accounts.ErrNoSession
 		}
 		return p, err
 	}
-	p, err := g.accounts.Authenticate(r.Context(), r)
+	p, err := g.accounts.Authenticate(r.Context(), r, ip)
 	if err == nil && rl.level == levelMFA && !p.Verified() {
 		return accounts.Principal{}, errMFARequired
 	}

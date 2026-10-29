@@ -125,9 +125,9 @@
 ### 错误
 
 - **外壳与类型**：Messages 用 Anthropic 的外壳；Chat 和 Responses 用 new-api 与 OpenAI 的 `error` 对象：`message`、`type`、`param`、`code`，另带统一的错误类型字段 `error_type`，程序判断它就够了（与 OpenRouter 一致，见 OpenRouter《Errors and Debugging》，2026-10）。
-  - `type` 用状态码表里「Messages 的 `type`」那一列的词（`invalid_request_error`、`authentication_error` 等），`param` 没有时是空字符串，`code` 是字符串：我们自己的错误里就是统一的错误类型（`invalid_request`、`model_not_found`……），上游拒绝请求时是上游给的 `code`（没给为 `null`）；
+  - `type` 用状态码表里「Messages 的 `type`」那一列的词（`invalid_request_error`、`authentication_error` 等），`param` 没有时是空字符串，`code` 通常是字符串：我们自己的错误里就是统一的错误类型（`invalid_request`、`model_not_found`……），上游拒绝请求时是上游给的 `code`（没给为 `null`）；账户暂停调用是例外，`code` 为数字 `403`，`metadata.error_type` 为 `account_suspended`；
   - `error_type` 的位置：Chat 在 `error.metadata.error_type`，Messages 在 `error.error_type`，Responses 在 `response.failed` 的顶层；Responses 在流开始之前出错时用 Chat 的外壳；Chat 流中途的出错块里的 `error` 也是同一个对象；
-  - 与 OpenRouter 的不同：它的 `error.code` 是与状态码相同的数字，我们的是字符串，状态码在响应的状态行里。读 OpenAI 或 new-api 的 `error.code`、`error.type` 的客户端能读到，读 OpenRouter 数字 `code` 的要改读状态行或 `error_type`。偏离的理由见「决策与理由」。
+  - 与 OpenRouter 的不同：它的 `error.code` 是与状态码相同的数字；除账户暂停调用外，我们的是字符串，状态码在响应的状态行里。读 OpenAI 或 new-api 的 `error.code`、`error.type` 的客户端能读到，读 OpenRouter 数字 `code` 的要改读状态行或 `error_type`。偏离的理由见「决策与理由」。
 - **上游拒绝请求本身（4xx）时，客户端读到上游的原话**：Claude Code 靠上游错误的原话自动恢复，例如推理签名被拒、`output_config.effort` 被拒，改写会让它们变成无法恢复的 400；new-api 也把上游的 `message`、`type`、`param`、`code` 原样交给客户端。我们交出上游错误对象里的这四项（OpenAI 和 Anthropic 的外壳都有 `error.message`，`type` 也同位置），去掉能指向供应商的内容后：
   - **去掉的**：其中所有的网址（含文档链接）、本站调用它用的凭证（先整串遮蔽，再处理其他模式，免得被切成碎片）、形似凭证的串（`sk-`、`ak-` 开头，`Bearer`，`api_key=`）、供应商自己的域名及它的每一级上级域名（两段以上，如 `api.us.relay.example` 连同 `us.relay.example`、`relay.example`；不引入公共后缀表，多遮蔽 `co.uk` 这类后缀只是多遮蔽，不会漏）、new-api 附在文字后面的 `(request id: …)`、new-api、one-api、sub2api 这些软件的名字；每项最多 2 KiB；流内错误超过此限的字段整项省略，避免先截断凭证导致后续脱敏漏掉前缀；
   - **`type` 只留通用的**：OpenAI、Anthropic 自己用的取值（`invalid_request_error`、`authentication_error`、`not_found_error` 等）；中转站软件自己的（new-api 的 `new_api_error`、sub2api 的 `scheduling_error`）不传，Chat、Responses 外壳改用统一的 `type`。名字里带软件名的 `code` 也不传；
@@ -142,6 +142,7 @@
 | 失败 | 流开始前 | Messages 的 `type` | 流开始后（状态码仍是 200） |
 |---|---|---|---|
 | key 无效、过期、停用，IP 或域名不允许 | 401 `authentication` | `authentication_error` | — |
+| 账户暂停调用，其余 key 条件有效 | 403 `account_suspended`，Chat/Responses 的 `error.code` 为数字 `403` | `permission_error` | — |
 | 余额、工作区预算或 key 上限不够 | 402 `credits_insufficient`，`limit_source` 为 `balance`、`workspace_budget` 或 `key_limit`；会重置的上限带 `Retry-After` | `billing_error` | 追加预留失败，截断，类型同左 |
 | 进行中的请求暂时占满了余额 | 402 同上，`limit_source` 为 `pending`，`Retry-After` 是最早释放的时间（待定：见「待定问题」；现在回 `balance`，与上一条相同） | `billing_error` | 同上 |
 | 追加预留时数据库出错 | 503 `billing_unavailable`（转发开始前就用完了第一段） | `api_error` | `billing_unavailable`，不带费用 |
@@ -296,7 +297,7 @@
 | 同时提供 `/v1` 和 `/api/v1` 路径 | 负责人同意。OpenRouter 的客户端只改地址就能接入 |
 | 请求头按白名单转发，`anthropic-beta` 不筛选具体的值 | Claude Code 官方的网关兼容指南明确要求原样转发协议头；客户端的凭证和身份信息不能流向上游 |
 | 上游 4xx 保留原文，只抹掉供应商身份 | Claude Code 依赖上游错误的原话自动恢复；同时不能暴露货源。负责人 2026-10-18：影响兼容的行为照 new-api、sub2api。实现见「错误」：适配器仍只读代码、不留文字，共用的调用代码在拒绝请求的失败上另存一份清洗过的 `Rejection`，只给这次回复用。不选让适配器带原文：每个适配器各清洗一遍，漏一个就泄露 |
-| Chat、Responses 的错误外壳照 new-api 与 OpenAI（字符串 `code`、`type`、`param`），不照 OpenRouter 的数字 `code` | 负责人 2026-10-18：错误码和外壳影响兼容，照搬 new-api。OpenAI 官方客户端和多数 SDK 读 `error.type`、`error.code` 字符串；OpenRouter 的数字 `code` 重复了状态码，状态码在状态行里本来就有。统一的 `error_type` 仍在 `metadata` 里，两种读法并存，不丢信息。代价：读 OpenRouter 数字 `code` 的客户端要改读状态行 |
+| Chat、Responses 的错误外壳通常照 new-api 与 OpenAI（字符串 `code`、`type`、`param`）；账户暂停调用按任务要求使用 OpenRouter 数字 `code` | 负责人 2026-10-18：错误码和外壳影响兼容，照搬 new-api。OpenAI 官方客户端和多数 SDK 读 `error.type`、`error.code` 字符串；OpenRouter 的数字 `code` 重复了状态码，状态码在状态行里本来就有。统一的 `error_type` 仍在 `metadata` 里，两种读法并存，不丢信息。代价：除账户暂停外，读 OpenRouter 数字 `code` 的客户端要改读状态行。暂停调用与禁用登录的边界及理由见[账户的停用与注销](accounts.md#停用与注销) |
 | Chat 回复的推理文本同时写 `reasoning` 和 `reasoning_content` | 负责人 2026-10-18：照 new-api 写 `reasoning_content`。两个名字都有人用：`reasoning_content` 是 DeepSeek、new-api、LiteLLM 的（LiteLLM 文档《Reasoning Content》），`reasoning` 是 OpenRouter 和新版 vLLM 的（OpenRouter《Reasoning Tokens》，vLLM《Reasoning Outputs》，2026-10-19）；读一个的客户端对另一个当作未知字段忽略。同文并存，客户端读哪个都对；只留一个就会让另一半客户端读不到推理。已知风险：若有客户端把两个字段都显示，推理会出现两遍，没有实测过，发现再收回其中一个。代价是推理文本多发一份 |
 | 变体在网关里读，目录和路由都不认识后缀 | 变体是路由开关，不是模型：放进目录会让一个模型分裂成多个条目，也要放宽目录"带 `:` 的名字永远查不到"的不变量，那条不变量正是为了保证带后缀的写法落不到基础模型。读法集中在 `variant.go`，调用、备选和 `count_tokens` 共用，不会各自读出不同的结果 |
 | `:free`、`:thinking` 等目录变体回 404，不改写请求 | 总览页把它们列为目录变体，没有条目就是查不到，也不回落到基础模型：`:free` 落到付费模型会替客户端花钱。做不了的请求回 400、不静默忽略（见「路由参数」）；这里不是做不了而是没有这个模型，所以 404。`:thinking` 若改成"打开推理"要改写请求内容，违反"请求内容不改"，OpenRouter 也已弃用它 |
