@@ -41,6 +41,7 @@ class RehearsalInspection(unittest.TestCase):
 timeout() { :; }
 compose() {
   case "$*" in
+    'exec -T postgres sh') return 0 ;;
     'ps --all --quiet')
       [ "$INVENTORY_STATUS" = 0 ] || return "$INVENTORY_STATUS"
       printf '%s\n' postgres valkey axiom migrate keys ;;
@@ -64,8 +65,10 @@ docker() {
                     env.pop("AXIOM_TEST_CGROUP_PARENT", None)
                     if parent is not None:
                         env["AXIOM_TEST_CGROUP_PARENT"] = parent
+                    (Path(tmp) / "deploy/postgres").mkdir(parents=True)
+                    (Path(tmp) / "deploy/postgres/roles.sh").touch()
                     result = subprocess.run([BASH, "-eu", "-c", stubs + start + "\nstart"], env=env,
-                                            text=True, capture_output=True)
+                                            text=True, capture_output=True, cwd=tmp)
                     self.assertEqual(result.returncode, inventory or (1 if parent and actual != parent else 0), result.stderr)
                     if result.returncode == 0:
                         self.assertEqual(log.read_text().splitlines(), ["postgres", "valkey", "axiom", "migrate", "keys"])

@@ -1,0 +1,80 @@
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from test_runner_host import BASH
+
+ROOT = Path(__file__).parents[1]
+
+
+@unittest.skipUnless(BASH, "Bash is unavailable")
+class ReuseRelease(unittest.TestCase):
+    def run_deploy(self, image, actual_image=None):
+        stubs = r'''
+python3() { echo fixture; }
+just() { [ "$1" != axiom-version ] || echo 'axiom fixture'; }
+go() { :; }
+timeout() { shift; "$@"; }
+docker() {
+  printf '%s\n' "$*" >> "$CALLS"
+  case "$*" in
+    'inspect --format {{.Config.Image}} axiom'|'inspect --format {{.Config.Image}} migrate') echo "${ACTUAL_IMAGE:-$CI_DEPLOY_IMAGE}" ;;
+    'compose -f deploy/compose.yaml ps --all --quiet axiom') echo axiom ;;
+    'compose -f deploy/compose.yaml ps --all --quiet migrate') echo migrate ;;
+    'compose -f deploy/compose.yaml port axiom 8080') echo 127.0.0.1:12345 ;;
+    'compose -f deploy/compose.yaml port axiom 8082') echo 127.0.0.1:12346 ;;
+  esac
+}
+curl() {
+  case "$*" in
+    *'/api/console/v1/version'|*'/api/admin/v1/version') echo '{"version":"axiom fixture"}' ;;
+    *'/api/console/v1/site'|*'/api/admin/v1/users') echo '{"error":{"code":"not_found"}}' ;;
+    *'-w '*'/assets/'*) echo 404 ;;
+    *'-H Accept-Encoding: br'*) printf 'cache-control: public, max-age=31536000, immutable\ncontent-encoding: br\n' ;;
+    *'-H Accept: text/html'*) printf 'cache-control: no-store\n' ;;
+    *) echo '<script src="/assets/index-fixture.js"></script>' ;;
+  esac
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "deploy/postgres").mkdir(parents=True)
+            (root / "deploy/postgres/roles.sh").touch()
+            log = root / "docker.log"
+            env = {**os.environ, "CALLS": str(log), "CI_DEPLOY_VERSION": "axiom fixture", "AXIOM_TEST_CGROUP_PARENT": ""}
+            if actual_image:
+                env["ACTUAL_IMAGE"] = actual_image
+            env.pop("CI_DEPLOY_IMAGE", None)
+            if image is not None:
+                env["CI_DEPLOY_IMAGE"] = image
+            # Source to preserve stub functions; the script's exit trap is exercised in the child shell.
+            result = subprocess.run([BASH, "-c", stubs + '\nsource "$1"', "test", str(ROOT / "scripts/ci/deploy-check.sh")],
+                                    env=env, cwd=tmp, capture_output=True, text=True)
+            return result, log.read_text().splitlines()
+
+    def test_restarts_and_legacy_role_upgrade_reuse_one_build_or_the_release_digest(self):
+        for image in (None, "127.0.0.1:1234/axiom@sha256:" + "a" * 64):
+            with self.subTest(image=image):
+                result, calls = self.run_deploy(image)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(sum(call.startswith("build --tag") for call in calls), 1 if image is None else 0)
+                starts = [call for call in calls if " up " in call]
+                self.assertEqual(len(starts), 6)  # database then services for each of three starts
+                self.assertTrue(all("--no-build" in call for call in starts))
+
+    def test_a_container_running_a_different_reference_is_rejected(self):
+        result, _ = self.run_deploy("local/axiom@sha256:" + "a" * 64, actual_image="axiom:stale")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not consume the release digest", result.stdout)
+
+    def test_a_tag_cannot_reach_release_startup(self):
+        result, calls = self.run_deploy("axiom:mutable")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires a digest", result.stdout)
+        self.assertFalse(any(" up " in call or call.startswith("build ") for call in calls))
+
+
+if __name__ == "__main__":
+    unittest.main()

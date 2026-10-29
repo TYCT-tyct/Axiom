@@ -246,3 +246,25 @@ class TestContainerPolicy(unittest.TestCase):
         result, calls = self.run_cleanup(fail_list=True)
         self.assertEqual(result.returncode, 37)
         self.assertEqual(len(calls), 1)
+
+
+class ReleaseChecks(unittest.TestCase):
+    def test_only_main_builds_and_retains_releases(self):
+        deploy = job("deploy")
+        for name in ("Build and rehearse release by digest", "Retain release image and provenance"):
+            condition = re.search(r"- name: " + name + r"\n        if: (.+)", deploy)[1]
+            for ref in ("refs/heads/main", "refs/heads/train/main/1", "refs/pull/1/merge"):
+                with self.subTest(step=name, ref=ref):
+                    self.assertEqual(expression(condition.replace("github.ref", repr(ref))), ref == "refs/heads/main")
+        self.assertIn("if-no-files-found: error", deploy)
+        self.assertIn("retention-days: 30", deploy)
+        self.assertNotIn("secrets.", deploy)
+
+    def test_main_cannot_pass_without_a_release(self):
+        check = re.search(r"- if: (github.ref .+)\n        run: (.+)", job("build"))
+        self.assertIsNotNone(check)
+        for ref in ("refs/heads/main", "refs/heads/train/main/1"):
+            self.assertEqual(expression(check[1].replace("github.ref", repr(ref))), ref == "refs/heads/main")
+        for result in ("success", "failure", "cancelled", "skipped"):
+            command = check[2].replace("${{ needs.deploy.result }}", result)
+            self.assertEqual(subprocess.run(["bash", "-c", command]).returncode == 0, result == "success")

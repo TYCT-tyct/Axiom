@@ -1,6 +1,60 @@
 # 发布前
 
-发布前逐项确认，本文写其中和模型目录有关的一步；其余按 project-workflow 的发布方法。部署到服务器要先问负责人（[CONTRIBUTING](../../CONTRIBUTING.md)），本文的写库步骤改的是线上目录，同样先问。
+发布前逐项确认，本文记录固定交付物和模型目录检查；其余按 project-workflow 的发布方法。部署到服务器要先问负责人（[CONTRIBUTING](../../CONTRIBUTING.md)），本文的写库步骤改的是线上目录，同样先问。
+
+## 固定交付物与 digest
+
+`ci.yml` 的 `deploy` 作业只在 `main`（push 或列车落地后的 dispatch）生成发布交付物；PR 不生成，列车只做本地部署演练。
+`release-check.sh` 构建一次 Linux/amd64 程序和 scratch 镜像，通过同一次 [Buildx 多 exporter 构建](https://docs.docker.com/build/exporters/#multiple-exporters)导出 OCI 归档并写入临时的 loopback
+registry（仅绑定 `127.0.0.1`，不上传外部仓库）。它按归档的 manifest digest 拉取镜像，迁移和服务都消费同一个
+`repository@sha256:…`，包括旧迁移角色升级后的再次启动；重启不重新构建。其他 CI 作业仍会构建自己的测试程序和前端。
+
+成功的部署作业保留 `release-<源码 SHA>-<run attempt>` Actions artifact，保留 30 天，内含：
+
+- `image.oci.tar`：原始镜像字节；发布时只复制这份，不在部署机重新构建。
+- `release.json`：源码完整提交、实际 Go/Node 工具链、前端构建版本、迁移 SQL 路径及 SHA-256、平台和镜像 manifest digest。
+  前五项同时写进镜像标签：`org.opencontainers.image.revision`、`io.axiom.go-toolchain`、`io.axiom.node-toolchain`、
+  `org.opencontainers.image.version`、`io.axiom.migrations`。迁移清单包含仓库内嵌 SQL；River 自带的迁移随源码提交锁定的 Go 模块版本追溯。
+
+### 选择和核对
+
+1. 在 Actions 找到目标 `main` 提交的 **整个 ci 工作流成功**的运行（不能只看 deploy 成功），记录 run ID、attempt、源码 SHA；
+   下载该运行同 SHA/attempt 的 release artifact。失败运行、PR、列车产物都不能作为发布版本。
+2. 在该源码 SHA 的检出中，解压 artifact 到独立目录，例如 `tmp/release`。运行：
+
+   ```bash
+   python3 scripts/release_image.py verify tmp/release/release.json tmp/release/image.oci.tar
+   jq '{source_commit, go_toolchain, node_toolchain, frontend_version, migrations, platform, image_digest}' tmp/release/release.json
+   test "$(jq -r .source_commit tmp/release/release.json)" = "$(git rev-parse HEAD)"
+   ```
+
+   verifier 检查 manifest、config、每层的长度与 SHA-256，标签与 JSON 一致，平台是 Linux/amd64，输出的 manifest digest
+   等于 JSON 的 `image_digest`。digest 是 OCI manifest 的哈希，不是镜像 config ID、tar 文件校验和或 tag。
+   同时逐项核对工具链、前端版本和迁移是否符合本次发布与目标库；镜像 digest 不保证数据库回滚兼容。
+3. **外部 registry 的选择、登录与上传由负责人执行**（花钱/对外动作，CI 不持有上传凭证）。负责人同意发布后，用能保留
+   digest 的工具复制同一 OCI 归档，例如已安装的 skopeo（这里不把它加入项目依赖）：
+
+   ```bash
+   # RELEASE_REPOSITORY 是负责人选择的仓库；staging 只用于传输，不能用于部署。
+   skopeo copy --preserve-digests oci-archive:tmp/release/image.oci.tar "docker://$RELEASE_REPOSITORY:staging"
+   digest="$(jq -r .image_digest tmp/release/release.json)"
+   skopeo inspect --raw "docker://$RELEASE_REPOSITORY@$digest" > tmp/release/registry-manifest.json
+   test "sha256:$(sha256sum tmp/release/registry-manifest.json | cut -d ' ' -f1)" = "$digest"
+   ```
+
+   不允许通过重新构建或转换 manifest 来消除 digest 不一致。保留 release JSON、归档及成功运行的引用到发布记录；30 天的
+   Actions 保留期不能替代负责人维护的长期归档。签名留给 M3；当前 provenance 和 digest 核对不是签名证明。
+4. 在生产 `deploy/.env` 设置 `DEPLOY_IMAGE=<负责人选择的仓库>@sha256:<上一步的 digest>`；迁移和服务共用此值。
+   按[生产入口](backup-restore.md#生产入口)执行，必须带 `--no-build`，先 pull 这个 digest，不运行开发用的 `just up`。
+   用 `docker inspect` 核对迁移与服务的 `.Config.Image` 是该 digest 引用，版本 API 与 JSON 的 `frontend_version` 一致。
+   回滚选择上次成功发布记录里的 digest，重复核对和部署步骤；已经执行的迁移不会因此自动撤回，先确认旧程序仍兼容当前 schema。
+
+### 决策与理由
+
+选择「CI 一次构建 + OCI 原件 + 本地 registry 按 digest 演练」，而不是「部署机按提交重建」或「直接发布外部 registry」。
+重建不能保证工具链和依赖环境一致；外部上传涉及费用与凭证且尚未获准。本地 registry 只用于证明与真实部署相同的 digest
+拉取路径；CI 结束删除 registry 和独占 builder，交付物由 Actions artifact 留存。代价是多一个临时 registry 和 BuildKit 容器，
+以及负责人发布前的复制步骤；不新增常驻基础设施、不决定生产 registry。
 
 ## 目录的规格要补全
 
