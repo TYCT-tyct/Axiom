@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -155,7 +156,7 @@ WITH reservation AS (
         workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates, price_versions)
     VALUES ($8, $3, $4, $1, $6, $9,
         $2, $7, 1, $5, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8),
-        $11::text[], $12::text[], $13::uuid[], $14::uuid[], $15::jsonb, $16::uuid[])
+        $11::text[], $12::text[], $13, $14, $15::jsonb, $16)
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + $5 WHERE b.account_id = $4
 )
@@ -178,15 +179,16 @@ type InsertReservationParams struct {
 	LifetimeSeconds float64
 	Prices          []string
 	Fallbacks       []string
-	Models          []uuid.UUID
-	Endpoints       []uuid.UUID
+	Models          pgtype.FlatArray[uuid.UUID]
+	Endpoints       pgtype.FlatArray[uuid.UUID]
 	ExchangeRates   []byte
-	PriceVersions   []uuid.UUID
+	PriceVersions   pgtype.FlatArray[uuid.UUID]
 }
 
 // One statement writes the reservation and its three counters. prices, fallbacks, models and endpoints are by route
 // index, the zero UUID for a dropped entry: endpoints are what cleanup hands suppliers as the route of a request whose
 // node was lost.
+// Let the insert columns type the UUID parameters, so sqlc retains their typed array codec overrides.
 func (q *Queries) InsertReservation(ctx context.Context, db DBTX, arg InsertReservationParams) error {
 	_, err := db.Exec(ctx, insertReservation,
 		arg.WorkspaceID,

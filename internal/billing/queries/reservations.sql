@@ -47,13 +47,14 @@ FROM d;
 -- One statement writes the reservation and its three counters. prices, fallbacks, models and endpoints are by route
 -- index, the zero UUID for a dropped entry: endpoints are what cleanup hands suppliers as the route of a request whose
 -- node was lost.
+-- Let the insert columns type the UUID parameters, so sqlc retains their typed array codec overrides.
 -- name: InsertReservation :exec
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
         workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates, price_versions)
     VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
         @workspace_window, @key_window, 1, @amount, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @lifetime_seconds::float8),
-        @prices::text[], @fallbacks::text[], @models::uuid[], @endpoints::uuid[], @exchange_rates::jsonb, @price_versions::uuid[])
+        @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions)
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + @amount WHERE b.account_id = @account_id
 )

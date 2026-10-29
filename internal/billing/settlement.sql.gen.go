@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -195,7 +196,7 @@ type LockReservationRow struct {
 	Amount          int64
 	State           string
 	Prices          []string
-	PriceVersions   []uuid.UUID
+	PriceVersions   pgtype.FlatArray[uuid.UUID]
 	ChargedSeq      *int32
 	Entry           *int32
 	Charged         int64
@@ -204,9 +205,9 @@ type LockReservationRow struct {
 	Estimated       bool
 	FinalUsage      []byte
 	Fallbacks       []string
-	Models          []uuid.UUID
+	Models          pgtype.FlatArray[uuid.UUID]
 	AttemptEntries  []int32
-	Endpoints       []uuid.UUID
+	Endpoints       pgtype.FlatArray[uuid.UUID]
 	Profit          *int64
 }
 
