@@ -11,22 +11,22 @@ import (
 // reasoning ability, or with thinking "none", does not take reasoning.
 func parameterSupport(s catalog.Serving, d catalog.Dialect) (p protocol.ParameterSet) {
 	if d.DefaultSamplingOnly != catalog.ClaimYes {
-		p.Add(protocol.ParamTemperature)
-		p.Add(protocol.ParamTopP)
+		p = p.With(protocol.ParamTemperature)
+		p = p.With(protocol.ParamTopP)
 	}
-	p.Add(protocol.ParamMaxTokens)
-	p.Add(protocol.ParamStop)
+	p = p.With(protocol.ParamMaxTokens)
+	p = p.With(protocol.ParamStop)
 	if s.Abilities.Has(catalog.AbilityStructuredOutput) {
-		p.Add(protocol.ParamResponseFormat)
+		p = p.With(protocol.ParamResponseFormat)
 	}
 	if s.Abilities.Has(catalog.AbilityTools) {
-		p.Add(protocol.ParamTools)
-		p.Add(protocol.ParamToolChoice)
-		p.Add(protocol.ParamParallelToolCalls)
+		p = p.With(protocol.ParamTools)
+		p = p.With(protocol.ParamToolChoice)
+		p = p.With(protocol.ParamParallelToolCalls)
 	}
 	if reasons(d, s.Abilities) {
-		p.Add(protocol.ParamReasoning)
-		p.Add(protocol.ParamReasoningEffort)
+		p = p.With(protocol.ParamReasoning)
+		p = p.With(protocol.ParamReasoningEffort)
 	}
 	return p
 }

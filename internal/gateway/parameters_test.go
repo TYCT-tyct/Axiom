@@ -28,7 +28,7 @@ func TestParameterSupport(t *testing.T) {
 			t.Parallel()
 			var want protocol.ParameterSet
 			for _, p := range tc.want {
-				want.Add(p)
+				want = want.With(p)
 			}
 			if diff := cmp.Diff(want, parameterSupport(tc.serving, tc.dialect)); diff != "" {
 				t.Errorf("(-want +got):\n%s", diff)

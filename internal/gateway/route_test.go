@@ -306,9 +306,7 @@ func TestRouteBuildHoldsWhatRoutingFiltersBy(t *testing.T) {
 	}
 	// The spec claims temperature, so a request that requires every parameter it sets still finds the endpoint.
 	in := call(f.served)
-	var params protocol.ParameterSet
-	params.Add(protocol.ParamTemperature)
-	in.Override.RequireParameters, in.Override.RequiredParameters = true, params
+	in.Override.RequireParameters, in.Override.RequiredParameters = true, protocol.ParameterSet(1)<<protocol.ParamTemperature
 	if got := f.planned(in); len(got) != 1 {
 		t.Errorf("a call requiring temperature was planned to %d endpoints, want the one whose spec claims it", len(got))
 	}

@@ -17,7 +17,7 @@ func TestRequestParameters(t *testing.T) {
 	t.Parallel()
 	set := func(params ...protocol.Parameter) (s protocol.ParameterSet) {
 		for _, p := range params {
-			s.Add(p)
+			s = s.With(p)
 		}
 		return s
 	}

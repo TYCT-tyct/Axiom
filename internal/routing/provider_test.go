@@ -67,8 +67,8 @@ func checkProviderExcluded(t *testing.T, h *harness, in routing.Input, private b
 func TestProviderRequireParameters(t *testing.T) {
 	t.Parallel()
 	var all protocol.ParameterSet
-	for p := protocol.Parameter(0); p < protocol.NumParameters; p++ {
-		all.Add(p)
+	for p := range protocol.NumParameters {
+		all = all.With(p)
 	}
 	noTemperature := all &^ (protocol.ParameterSet(1) << protocol.ParamTemperature)
 	dear := func(e *routing.Endpoint) {

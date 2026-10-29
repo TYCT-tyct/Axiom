@@ -26,7 +26,7 @@ const (
 	NumParameters
 )
 
-// A seventeenth parameter would have no bit: Has would report it absent and Add would drop it. This fails to compile
+// A seventeenth parameter would have no bit: Has would report it absent and With would drop it. This fails to compile
 // first.
 var _ [16 - NumParameters]struct{}
 
@@ -36,8 +36,8 @@ type ParameterSet uint16
 // Has reports whether s holds p.
 func (s ParameterSet) Has(p Parameter) bool { return s&(1<<p) != 0 }
 
-// Add puts p in the set.
-func (s *ParameterSet) Add(p Parameter) { *s |= 1 << p }
+// With returns the set with p added.
+func (s ParameterSet) With(p Parameter) ParameterSet { return s | 1<<p }
 
 // HasAll reports whether s holds every parameter in other.
 func (s ParameterSet) HasAll(other ParameterSet) bool { return s&other == other }
@@ -89,27 +89,40 @@ func RequestParameters(f Format, body []byte) (set ParameterSet, unknown string,
 		if err := s.member(); err != nil {
 			return set, "", false
 		}
-		present := s.dec.PeekKind() != 'n'
-		if present && f == Responses && string(s.name) == "text" {
-			if verbosity, err := s.textVerbosity(); err != nil {
-				return set, "", false
-			} else if verbosity {
-				return set, "verbosity", true
-			}
-			continue // textVerbosity consumed the value
-		}
-		if p, ok := parameterNames[string(s.name)]; ok { // a map lookup with this conversion does not allocate
-			if present {
-				set.Add(p)
-			}
-		} else if _, ok := requestControls[string(s.name)]; !ok && present {
-			return set, parameterName(string(s.name)), true
-		}
-		if err := s.skip(); err != nil {
+		member, miss, err := s.requestParameter(f, &set)
+		if err != nil {
 			return set, "", false
+		}
+		if miss {
+			return set, member, true
 		}
 	}
 	return set, "", false
+}
+
+// requestParameter reads one top-level member. A sampling, output-cap or stopping parameter the catalog declares joins
+// set; a Responses text object is read for verbosity, which is not declared; any other member neither declared nor a
+// request control stops the scan. It consumes the member's value in every case.
+func (s *scanner) requestParameter(f Format, set *ParameterSet) (string, bool, error) {
+	present := s.dec.PeekKind() != 'n'
+	if present && f == Responses && string(s.name) == "text" {
+		verbosity, err := s.textVerbosity()
+		if err != nil {
+			return "", false, err
+		}
+		if verbosity {
+			return "verbosity", true, nil
+		}
+		return "", false, nil // textVerbosity consumed the value
+	}
+	if p, ok := parameterNames[string(s.name)]; ok { // a map lookup with this conversion does not allocate
+		if present {
+			*set = set.With(p)
+		}
+	} else if _, ok := requestControls[string(s.name)]; !ok && present {
+		return parameterName(string(s.name)), true, nil
+	}
+	return "", false, s.skip()
 }
 
 // textVerbosity reads a Responses text object for verbosity, the one model parameter it carries that Inspect does not

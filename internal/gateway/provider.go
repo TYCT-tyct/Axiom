@@ -154,25 +154,33 @@ func readSortObject(o *routing.Override, name string, value []byte) (string, err
 		if string(v) == "null" {
 			continue
 		}
-		switch member {
-		case "by":
-			if err := jsonx.Unmarshal(v, &by); err != nil {
-				return "", mismatch(name+".by", "price, throughput or latency")
-			}
-		case "partition":
-			var partition string
-			if err := jsonx.Unmarshal(v, &partition); err != nil || partition != "model" && partition != "none" {
-				return "", mismatch(name+".partition", "model or none")
-			}
-			o.SortGlobal = partition == "none"
-		default:
-			if member == "percentile" {
-				return "", invalid("provider." + name + ".percentile is not supported: sort orders by by and partition only, and quality has no percentile measures.")
-			}
-			return "", unsupported(name + "." + member)
+		if err := readSortMember(o, name, member, v, &by); err != nil {
+			return "", err
 		}
 	}
 	return by, nil
+}
+
+// readSortMember reads one member of a sort object: the ordering and the partition it applies to.
+func readSortMember(o *routing.Override, name, member string, value []byte, by *string) error {
+	switch member {
+	case "by":
+		if err := jsonx.Unmarshal(value, by); err != nil {
+			return mismatch(name+".by", "price, throughput or latency")
+		}
+	case "partition":
+		var partition string
+		if err := jsonx.Unmarshal(value, &partition); err != nil || partition != "model" && partition != "none" {
+			return mismatch(name+".partition", "model or none")
+		}
+		o.SortGlobal = partition == "none"
+	default:
+		if member == "percentile" {
+			return invalid("provider." + name + ".percentile is not supported: sort orders by by and partition only, and quality has no percentile measures.")
+		}
+		return unsupported(name + "." + member)
+	}
+	return nil
 }
 
 // noRetention is what both data_collection deny and zdr ask for: endpoints whose supplier does not keep the data or

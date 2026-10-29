@@ -221,16 +221,20 @@ func TestProviderNarrowsTheRoute(t *testing.T) {
 	r.idle(1 << 30)
 }
 
+// allParameters is every parameter the catalog can declare.
+func allParameters() (all protocol.ParameterSet) {
+	for p := range protocol.NumParameters {
+		all = all.With(p)
+	}
+	return all
+}
+
 // TestProviderRequiresEveryParameter: require_parameters keeps the endpoints that declare every parameter the
-// request sets; one the catalog does not declare at all is a 400, and one no endpoint declares is the same 404 as any
-// other override that leaves nothing.
+// request sets; one the catalog does not declare at all is a 400.
 func TestProviderRequiresEveryParameter(t *testing.T) {
 	t.Parallel()
-	var all, noTemperature protocol.ParameterSet
-	for p := protocol.Parameter(0); p < protocol.NumParameters; p++ {
-		all.Add(p)
-	}
-	noTemperature = all &^ (protocol.ParameterSet(1) << protocol.ParamTemperature)
+	all := allParameters()
+	noTemperature := all &^ (protocol.ParameterSet(1) << protocol.ParamTemperature)
 	r := newRig(t, func(o *rigOptions) {
 		o.endpoints = func(name string, e *routing.Endpoint) {
 			if name == "alpha-2" {
@@ -266,14 +270,20 @@ func TestProviderRequiresEveryParameter(t *testing.T) {
 	if _, resp, body := r.sendNamed(a, "acme/alpha", `"":1,"temperature":0.5,"provider":{"require_parameters":true},`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "provider.require_parameters") {
 		t.Errorf("empty name before temperature: %d %s", resp.StatusCode, body)
 	}
-	// The same snapshot with no endpoint declaring temperature: the guarantee leaves nothing, as any override does.
-	endpoints := append([]routing.Endpoint(nil), r.routes...)
-	for i := range endpoints {
-		if endpoints[i].Model == r.alpha {
-			endpoints[i].Parameters = noTemperature
+	r.idle(1 << 30)
+}
+
+// TestProviderRequiresEveryParameterNoEndpoint: with no endpoint declaring temperature the guarantee leaves nothing,
+// as any override does.
+func TestProviderRequiresEveryParameterNoEndpoint(t *testing.T) {
+	t.Parallel()
+	noTemperature := allParameters() &^ (protocol.ParameterSet(1) << protocol.ParamTemperature)
+	r := newRig(t, func(o *rigOptions) {
+		o.endpoints = func(_ string, e *routing.Endpoint) {
+			e.Parameters = noTemperature
 		}
-	}
-	r.install(routing.Preset{Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest}, endpoints...)
+	})
+	a := r.newAccount(1e9)
 	if _, resp, body := r.sendNamed(a, "acme/alpha", `"temperature":0.5,"provider":{"require_parameters":true},`); resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "override_filter") {
 		t.Errorf("no endpoint with temperature: %d %s", resp.StatusCode, body)
 	}
@@ -286,11 +296,7 @@ func TestProviderRequireParametersReadsResponsesText(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, func(o *rigOptions) {
 		o.endpoints = func(_ string, e *routing.Endpoint) {
-			var all protocol.ParameterSet
-			for p := protocol.Parameter(0); p < protocol.NumParameters; p++ {
-				all.Add(p)
-			}
-			e.Parameters = all
+			e.Parameters = allParameters()
 		}
 	})
 	a := r.newAccount(1e9)
