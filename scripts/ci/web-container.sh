@@ -22,6 +22,24 @@ web_cache="${AXIOM_CACHE_DIR:-$(dirname "$go_cache")/_webcache}"
 mkdir -p "$go_cache" "$module_cache" "$web_cache"
 id
 stat -c '%u:%g %n' "$go_cache" "$web_cache"
+# The journey (#321) also needs the PostgreSQL and Valkey that withcluster started on the host. They are reached at their
+# container addresses on the Docker bridge: a published port on the bridge's gateway address is dropped by the host
+# firewall of the CI machines (measured 2026-10-29: connection timed out), while traffic between containers is not.
+shared=()
+if [ -n "${PGTEST_CLUSTER_URL:-}" ]; then
+  # Rewrites the URL's host:port, a port the host publishes, to the address and port inside the container behind it.
+  inside() {
+    local url=$1 inner=$2 published id ip
+    published=$(sed -E 's#^[a-z]+://[^@/]*@?[^:/]*:([0-9]+).*#\1#' <<< "$url")
+    id=$(docker ps --quiet --filter "publish=$published")
+    ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$id")
+    sed -E "s#@[^/@]*#@$ip:$inner#" <<< "$url"
+  }
+  password_dir=$(dirname "$KVTEST_PASSWORD_FILE")
+  shared=(--volume "$password_dir:$password_dir:ro"
+    --env "PGTEST_CLUSTER_URL=$(inside "$PGTEST_CLUSTER_URL" 5432)" --env "KVTEST_URL=$(inside "$KVTEST_URL" 6379)"
+    --env KVTEST_PASSWORD_FILE)
+fi
 # The shared 80-core budget / eight runners allows ten cores each; eight leaves room for host-side setup.
 # A private cgroup namespace lets Node count this quota, rather than the parent's 80 cores.
 docker create --name "$name" \
@@ -34,6 +52,7 @@ docker create --name "$name" \
   --env PATH --env CI --env GATE_STRESS --env E2E_SHARD_INDEX --env E2E_SHARD_COUNT --env HOME=/tmp/axiom-web-home \
   --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
   --env npm_config_store_dir="$(dirname "$pnpm_store")" \
+  "${shared[@]}" \
   "$WEB_IMAGE" bash -e -c '
     mkdir -p "$HOME"
     git config --global --add safe.directory "$PWD"
