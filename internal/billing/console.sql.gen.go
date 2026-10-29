@@ -62,7 +62,12 @@ SELECT k.key_id,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('weekly', t.now)), 0)::bigint AS weekly,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('monthly', t.now)), 0)::bigint AS monthly,
     coalesce(sum(s.spent + s.reserved) FILTER (WHERE s.window_start >= billing.window_from(k.reset, t.now)
-        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS limited
+        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS limited,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from(k.reset, t.now)
+        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS window_spent,
+    coalesce(sum(s.reserved) FILTER (WHERE s.window_start >= billing.window_from(k.reset, t.now)
+        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS window_reserved,
+    CASE WHEN k.reset = '' THEN '0001-01-01 00:00:00+00'::timestamptz ELSE billing.window_to(k.reset, t.now) END::timestamptz AS resets_at
 FROM k CROSS JOIN t
 LEFT JOIN billing.spend s ON s.subject = k.key_id
 GROUP BY k.key_id, k.reset, t.now
@@ -74,12 +79,15 @@ type ReadKeyUsagesParams struct {
 }
 
 type ReadKeyUsagesRow struct {
-	KeyID   uuid.UUID
-	Total   int64
-	Daily   int64
-	Weekly  int64
-	Monthly int64
-	Limited int64
+	KeyID          uuid.UUID
+	Total          int64
+	Daily          int64
+	Weekly         int64
+	Monthly        int64
+	Limited        int64
+	WindowSpent    int64
+	WindowReserved int64
+	ResetsAt       time.Time
 }
 
 // All usage fields for one bounded page, with one clock and one database round trip.
@@ -99,6 +107,9 @@ func (q *Queries) ReadKeyUsages(ctx context.Context, db DBTX, arg ReadKeyUsagesP
 			&i.Weekly,
 			&i.Monthly,
 			&i.Limited,
+			&i.WindowSpent,
+			&i.WindowReserved,
+			&i.ResetsAt,
 		); err != nil {
 			return nil, err
 		}

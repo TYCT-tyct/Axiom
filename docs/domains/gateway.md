@@ -148,7 +148,7 @@
 | 进行中的请求暂时占满了余额 | 402 同上，`limit_source` 为 `pending`，`Retry-After` 是最早释放的时间（待定：见「待定问题」；现在回 `balance`，与上一条相同） | `billing_error` | 同上 |
 | 追加预留时数据库出错 | 503 `billing_unavailable`（转发开始前就用完了第一段） | `api_error` | `billing_unavailable`，不带费用 |
 | 结算写不进，内容完整 | 200，带 `axiom.billing_pending: true`，不带费用 | 同左 | 同左 |
-| 限流（每个 key 调用和计数的频率）；按 IP、按账户的在途上限；同一账户的资金操作排队超过 5 秒（一次突发在一个账户上排的队，见 [gateway 模块的「并发、背压与共享状态」](../../internal/gateway/README.md#并发背压与共享状态)） | 429 `rate_limited` | `rate_limit_error` | — |
+| 限流（每个 key 的节点保护、账户聚合业务速率与 key 业务速率，调用和计数各一池）；按 IP、按账户的在途上限；同一账户的资金操作排队超过 5 秒（一次突发在一个账户上排的队，见 [gateway 模块的「并发、背压与共享状态」](../../internal/gateway/README.md#并发背压与共享状态)） | 429 `rate_limited` | `rate_limit_error` | — |
 | 端点都满载，排队的人数满了或排队超时；上游凭证被并发的请求占满 | 429 `rate_limited`，`Retry-After` 是估计的等待时间，凭证占满时为 1 | `rate_limit_error` | — |
 | 节点满载、准入超时、路由快照过旧、数据库不可用、本节点的持有者失效 | 503 `overloaded`，`Retry-After: 1` | `overloaded_error` | — |
 | 模型不存在；key 不允许用这个模型 | 404 `model_not_found`，不返回 403 | `not_found_error` | — |
@@ -166,7 +166,7 @@
 
 - **没有路由接的路径和方法**：也按上面的外壳作答——`/v1/messages`（含 `/api/v1/messages`）下用 Messages 的外壳，其余用 OpenAI（Chat）的外壳；路径不存在回 404 `not_found`，方法不对回 405 `method_not_allowed` 并保留 `Allow` 响应头，请求 ID 两个头照常带。new-api 对未知路径也回 404 的 OpenAI 外壳（new-api `controller/relay.go` 的 `RelayNotFound`，2026-10-19）。
 - **`Retry-After`** 用整数秒，不超过 60 秒。Claude Code 对超过 60 秒的值不再重试。
-- **429 的原因只进指标**：上表所有 429 的错误码都是 `rate_limited`，客户端程序不必区分；节点按原因（`ip_in_flight`、`account_in_flight`、`key_rate`、`count_rate`、`account_gate`、`queue_full`、`queue_key_full`、`queue_wait`、`credentials_busy`）计入指标 `axiom.gateway.rate_limited`，运维凭它判断是哪一道限制在拒绝（逐项含义见 [gateway 模块](../../internal/gateway/README.md#并发背压与共享状态)）。原因不写进响应：OpenRouter 的 429 也只给统一的 `error_type`（`rate_limit_exceeded`），要等的时间放在 `Retry-After`，它对付费模型没有平台级的请求上限，只有免费模型的额度和防 DDoS（OpenRouter《Limits》《Errors and Debugging》，2026-10-18）；sub2api 把原因编进错误码是它自己的做法（`gateway_queue_full`、`gateway_concurrency_limit`，`backend/internal/handler/concurrency_error_response.go`）。
+- **429 的原因只进指标**：上表所有 429 的错误码都是 `rate_limited`，客户端程序不必区分；节点按原因（`ip_in_flight`、`account_in_flight`、`key_rate`、`count_rate`、`account_rate`、`business_key_rate`、`account_gate`、`queue_full`、`queue_key_full`、`queue_wait`、`credentials_busy`）计入指标 `axiom.gateway.rate_limited`，运维凭它判断是哪一道限制在拒绝（逐项含义见 [gateway 模块](../../internal/gateway/README.md#并发背压与共享状态)）。原因不写进响应：OpenRouter 的 429 也只给统一的 `error_type`（`rate_limit_exceeded`），要等的时间放在 `Retry-After`，它对付费模型没有平台级的请求上限，只有免费模型的额度和防 DDoS（OpenRouter《Limits》《Errors and Debugging》，2026-10-18）；sub2api 把原因编进错误码是它自己的做法（`gateway_queue_full`、`gateway_concurrency_limit`，`backend/internal/handler/concurrency_error_response.go`）。
 - **供应商自己的 401、402、403、429** 只用来换凭证（同一端点另一把凭证，没有可用凭证时换下一个端点）或换端点，从不当作我们的认证或钱包错误返回给客户端。
 - **流中途出错**：状态码保持 200，按各格式的方式在流里报错，然后结束。结算已提交的结尾带用量和费用，没提交的只带用量：
   - Chat：一个带顶层 `error`、结束原因为 `error` 的数据块；
@@ -175,6 +175,16 @@
   - 上游自己报的错按它的类别定（`protocol.FaultOf`）：拒绝请求本身的（上下文过长、内容被拒、请求不合法）算这个请求的，不换端点重试，客户端读到上游的原话（格式支持的还带 `code`、`param`）；请求的写法没问题而端点失败、限流、看不出来的，都算供应商的失败，用统一的说法，提交点之前还可以交给下一个端点（[路由的「失败怎么办」](routing.md#失败怎么办)）。失败事件立即结束尝试，不等上游关连接；按字段值解码类别，转义写法与 HTTP 错误同义。
 - **非流式请求出错**：最后一次尝试生成了部分内容后失败时，Chat 返回 200，带已生成的内容、`finish_reason: "error"`、`error`、用量和费用；Responses 返回 200，`status: "failed"`，带 `output`、用量和费用；Messages 例外，返回 502 错误体、不带内容，用量和费用放在 `axiom` 对象里。没生成内容的，返回上表的状态码。未完成的工具参数不修补。
 - **对中转站对接方友好**：计费类问题绝不返回 401；不使用 new-api 默认会触发自动禁用渠道的措辞，例如 "You exceeded your current quota"、"Your credit balance is too low"（new-api 源码，2026-10）。这份措辞清单写成测试，防止以后被无意改坏。
+
+### 业务速率与 OpenRouter 的差异
+
+基线：[OpenRouter Limits](https://openrouter.ai/docs/api/reference/limits)，2026-10-29 核实：付费模型没有平台级请求速率上限；平台速率 429 带 `X-RateLimit-Limit`、`X-RateLimit-Remaining`、`X-RateLimit-Reset`，成功推理响应不带；`GET /api/v1/key` 报告预算与 effective_budget，`rate_limit` 已标为 deprecated。
+
+Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限流，防滥用并保护共享容量；等级给每个账户默认值、账户覆盖等级、key 独立受限，同时保留节点保护。继承、0 不限、默认和共享故障语义以[账户域](accounts.md#业务速率限制)为准。调用和 count_tokens 分开计数；读 key 信息不消费调用次数。
+
+只有请求速率触发的 429 带这三个头，Limit 是触发额度，Remaining 为 0，Reset 是 Unix **秒**的保守清空上界（预检时刻加两个窗口，向上取整到秒），Retry-After 为两个窗口并沿用最多 60 秒的兼容上限，Reset 可以更晚；滑动近似及持续重试计数使它不承诺精确放行时刻。容量/队列 429 继续只给已有的重试信息；成功不发限流头。秒是本站明确契约，客户端应按秒解析并遵循 Retry-After；上述 OpenRouter 官方文档只列头名、未标单位，无法确认其线上值是否毫秒，不宣称单位兼容。
+
+`GET /api/v1/key` 的 `rate_limit` 保留 requests/interval，另给 account_requests/key_requests；requests 是包含节点保护在内的有效最小正上限，interval 是配置窗口（默认 `1m0s`），没有免费模型专用策略。`budgets` 仅列已设置的 workspace/key_limit 预算，effective_budget 为第一个耗尽项（工作区优先，与计费检查顺序一致），否则为剩余最少项；无预算是 [] / null。limit_usd、spend_usd、remaining_usd 沿用兼容字段名但表示本站额度，新增 reserved_usd 明示预留，remaining 扣已收和预留并下限为 0；reset_interval 与数据库时钟的 resets_at 给 UTC 重置边界，永久预算为 null。没有 BYOK、组织护栏/member/全局 workspace 合并预算，guardrail_id、budget_id 为 null，include_byok 为 false；余额另由 credits 表达。原 limit/limit_remaining 继续只描述 key，与 key_limit 预算复用同一条查询的已收、预留和重置边界，不会因两次读取间的提交或跨 UTC 零点相互矛盾。
 
 ### 保活
 
@@ -327,6 +337,8 @@
 
 | 决策 | 理由 |
 |---|---|
+| E4-2/P13 的速率与预算只投影已有策略和计数，不增加预算状态 | 依据 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地。对比复制 OpenRouter 的组织/护栏对象与复用本站工作区/key，选择后者：没有对应对象时不造 ID，不引入第二份资金事实。remaining 扣预留，effective 按整数比较后才转显示单位，保持与准入检查一致 |
+| 只给请求速率 429 发窗口额度头，Reset 给保守清空时刻，Retry-After 保留 60 秒上限 | 并发/排队不是请求窗口，不伪造 Limit；滑动近似没有固定桶的精确重置时刻，两个窗口的上界不冒充剩余精确秒数；沿用既有客户端兼容的 60 秒 Retry-After 上限，有意差异和基线见上文 |
 | 推理开关、展示和强度分开，隐藏在计量之后执行 | [OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)（2026-10-29）规定 exclude 不减费用、预算与 effort 可换算；隐藏明文仍保留工具续聊必需的签名/密文，不以显示要求推断启用模式；[Anthropic Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) 的 omitted 保留签名且收费，[OpenAI Reasoning models](https://developers.openai.com/api/docs/guides/reasoning) 当前包含 minimal/xhigh/max。复用规范请求、UsageContext 与现有流读取器，不另建协议树；相比只信上游隐藏，在本地计量后过滤能防忽略隐藏的端点漏出明文。无法精确表达预算时按公开比例取最近档，同距取低，不承诺近似是硬上限；不按模型名猜 supported_efforts/mandatory。换算表在 protocol README。依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，独立评审由流水线安排 |
 | Chat 旧客户端的回复恢复旧函数表示，现代客户端保持工具数组 | [OpenAI Chat reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) 明确 `functions` → `tools`、`function_call` → `tool_choice`，消息中的旧调用由 `tool_calls` 取代。[OpenRouter 的工具规范化说明](https://openrouter.ai/blog/insights/agent-frameworks-compared-tool-calling-schema-handling/)和 [API reference](https://openrouter.ai/docs/api/reference/overview) 只承诺现代 `tool_calls`，未说明旧请求的回映射（2026-10-29 核实，未花费调用实测）。本任务要求兼容旧客户端，因此有意增加只针对旧请求的回映射，并在有工具声明时关闭并行；不采用对所有回复统一降级，因为会破坏现代客户端和并行调用。既有稳定 ID 配对逻辑同时用于同格式与转换；不重编码整份请求，以保留工具参数、签名和供应商扩展。此对外兼容决策依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，仍需独立评审 |
 | 模型发现复用路由构建并按分组端点给匿名 tag，公开 provider 为 Axiom | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落实 #311 P5/P10。比较逐请求读 suppliers 与构建时投影，选择后者：一份响应的价格、端点和计数一致，构建失败保留整份旧投影；不选把全部端点合成一个，因为产品要求逐端点列出，也不公开供应商名字与政策猜测。共享投影在分组前排除非零 Owner，未来自带端点不能使别的账户看出其存在。代号选模型内序号而不选带时间戳的 UUID；相比 HMAC 不引入密钥管理，代价是集合变化时可能重新编号，只用于发现展示。保留实时准入，避免缓存身份误放行已撤销的 key；独立评审仍由流水线执行 |
