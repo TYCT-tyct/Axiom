@@ -14,7 +14,7 @@ import (
 
 // snapshotter is the catalog's tables and a catalog on them, for the tests that price models from a snapshot.
 type snapshotter struct {
-	t    *testing.T
+	t    testing.TB
 	db   *pg.DB
 	cat  *catalog.Catalog
 	opts int
@@ -28,7 +28,7 @@ const (
 	saleReason = "a sale price"
 )
 
-func newSnapshotter(t *testing.T) *snapshotter {
+func newSnapshotter(t testing.TB) *snapshotter {
 	t.Helper()
 	db, err := pg.Open(t.Context(), pgtest.New(t, catalog.Migrations).App)
 	if err != nil {

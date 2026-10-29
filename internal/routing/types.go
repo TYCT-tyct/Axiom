@@ -10,6 +10,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
@@ -34,6 +35,7 @@ type (
 // Admission is the part of accounts' admission that routing reads: who asks, which preset applies, and which models
 // the key may use. Allowed is nil when the key may use every model.
 type Admission struct {
+	Tier    accounts.TierID
 	Account AccountID
 	Site    SiteID
 	Preset  PresetID

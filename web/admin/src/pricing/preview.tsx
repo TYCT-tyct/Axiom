@@ -78,6 +78,7 @@ function PreviewTable({ rows }: { rows: Row[] }) {
           <Th>{t("pricing.preview.model")}</Th>
           <Th>{t("pricing.preview.status")}</Th>
           <Th>{t("pricing.preview.sale")}</Th>
+          <Th>{t("pricing.preview.current")}</Th>
           <Th className="hidden md:table-cell">{t("pricing.preview.cost")}</Th>
           <Th>{t("pricing.preview.marginTitle")}</Th>
         </tr>
@@ -96,6 +97,13 @@ function PreviewTable({ rows }: { rows: Row[] }) {
             </Td>
             <Td>
               <Price schedule={row.sale} />
+            </Td>
+            <Td>
+              {row.current_sale ? (
+                <Price schedule={row.current_sale} />
+              ) : (
+                <span className="text-t3">{t("pricing.publish.unavailable")}</span>
+              )}
             </Td>
             <Td className="hidden md:table-cell">
               <Price schedule={row.cost} />

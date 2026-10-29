@@ -29,6 +29,8 @@ type PricePolicy struct {
 
 // Publication keeps a proposal separately from its current immutable sale version. Empty schedules mean unavailable.
 type Publication struct {
+	matched   bool
+	Audience  Selector        `json:"audience,omitzero"`
 	Model     catalog.ModelID `json:"model_id"`
 	Candidate uuid.UUID       `json:"candidate_id"`
 	Current   *uuid.UUID      `json:"current_id,omitempty"`
@@ -60,6 +62,7 @@ func PriceState(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy, []P
 		if err := jsonx.Unmarshal(r.Candidate, &p); err != nil {
 			return PricePolicy{}, nil, err
 		}
+		p.Audience = Selector{Kind: r.AudienceKind, ID: r.AudienceID}
 		p.Current, p.Status = r.CurrentID, r.Status
 		out = append(out, p)
 	}
@@ -119,15 +122,11 @@ func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platf
 	if err != nil {
 		return nil, err
 	}
-	rules = slices.DeleteFunc(rules, func(r Rule) bool { return r.Audience.Kind != "all" })
 	rows, err := queries.ReadPublications(ctx, tx, site)
 	if err != nil {
 		return nil, err
 	}
-	previous := map[catalog.ModelID]ReadPublicationsRow{}
-	for _, r := range rows {
-		previous[catalog.ModelID(r.ModelID)] = r
-	}
+	grouped, previous := publicationInputs(rules, rows)
 	byModel := map[catalog.ModelID][]PriceCost{}
 	for _, c := range costs {
 		byModel[c.Model] = append(byModel[c.Model], c)
@@ -136,22 +135,59 @@ func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platf
 	if err != nil {
 		return nil, err
 	}
-	sold := map[catalog.ModelID]Sold{}
-	for m := range snap.Models() {
-		p, err := proposePrice(policy, rules, m, snap, currency, byModel[m.ID], defaults)
-		if err != nil {
+	// Reconcile previous selectors too: an edit may have moved the rule to a different audience.
+	for audience, rules := range grouped {
+		if err := refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, audience, rules, previous[audience]); err != nil {
 			return nil, err
 		}
-		old := previous[m.ID]
-		current, err := reconcilePrice(ctx, tx, site, policy, p, old)
-		if err != nil {
-			return nil, fmt.Errorf("billing: refresh price %s: %w", m.ID, err)
-		}
-		if current.Version != uuid.Nil() {
-			sold[m.ID] = current
+	}
+	if err := queries.ConfirmPriceRefresh(ctx, tx, site); err != nil {
+		return nil, err
+	}
+	return PublishedPrices(ctx, tx, site)
+}
+
+func publicationInputs(rules []Rule, rows []ReadPublicationsRow) (map[Selector][]Rule, map[Selector]map[catalog.ModelID]ReadPublicationsRow) {
+	previous := map[Selector]map[catalog.ModelID]ReadPublicationsRow{}
+	grouped := map[Selector][]Rule{{Kind: "all"}: nil}
+	for _, r := range rules {
+		if r.Enabled {
+			grouped[r.Audience] = append(grouped[r.Audience], r)
 		}
 	}
-	return sold, queries.ConfirmPriceRefresh(ctx, tx, site)
+	for _, r := range rows {
+		audience := Selector{Kind: r.AudienceKind, ID: r.AudienceID}
+		if previous[audience] == nil {
+			previous[audience] = map[catalog.ModelID]ReadPublicationsRow{}
+		}
+		previous[audience][catalog.ModelID(r.ModelID)] = r
+	}
+	for audience := range previous {
+		if _, ok := grouped[audience]; !ok {
+			grouped[audience] = nil
+		}
+	}
+	return grouped, previous
+}
+
+func refreshAudience(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs map[catalog.ModelID][]PriceCost, defaults fallbacks, policy PricePolicy, audience Selector, rules []Rule, previous map[catalog.ModelID]ReadPublicationsRow) error {
+	for m := range snap.Models() {
+		old := previous[m.ID]
+		if audience.Kind != "all" && old.CandidateID == uuid.Nil() && !slices.ContainsFunc(rules, func(r Rule) bool { return r.Enabled && pricesModel(r.Target, m) }) {
+			continue
+		}
+		p, err := proposeAudiencePrice(audience, policy, rules, m, snap, currency, costs[m.ID], defaults)
+		if err != nil {
+			return err
+		}
+		if audience.Kind != "all" && !p.matched && old.CandidateID == uuid.Nil() {
+			continue
+		}
+		if _, err := reconcilePrice(ctx, tx, site, policy, p, old); err != nil {
+			return fmt.Errorf("billing: refresh price %s: %w", m.ID, err)
+		}
+	}
+	return nil
 }
 
 func digestPrice(raw []byte) uuid.UUID {
@@ -260,6 +296,9 @@ func persistPublication(ctx context.Context, tx pg.Tx, site uuid.UUID, p Publica
 	if err != nil {
 		return err
 	}
+	if p.Audience.Kind != "all" {
+		return queries.SaveAudiencePublication(ctx, tx, SaveAudiencePublicationParams{SiteID: site, ModelID: uuid.UUID(p.Model), AudienceKind: p.Audience.Kind, AudienceID: p.Audience.ID, CandidateID: p.Candidate, Candidate: raw, CurrentID: p.Current, Status: p.Status})
+	}
 	return queries.SavePublication(ctx, tx, SavePublicationParams{SiteID: site, ModelID: uuid.UUID(p.Model), CandidateID: p.Candidate, Candidate: raw, CurrentID: p.Current, Status: p.Status})
 }
 
@@ -279,7 +318,7 @@ func PublishPrice(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UU
 	if err != nil {
 		return uuid.Nil(), err
 	}
-	at := slices.IndexFunc(prices, func(p Publication) bool { return p.Model == model })
+	at := slices.IndexFunc(prices, func(p Publication) bool { return p.Model == model && p.Candidate == candidate })
 	if at < 0 {
 		return uuid.Nil(), ErrStalePrice
 	}
@@ -323,14 +362,14 @@ func publishVersion(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.
 		return Sold{}, err
 	}
 	id := uuid.NewV7()
-	if err := queries.InsertPriceVersion(ctx, tx, InsertPriceVersionParams{ID: id, SiteID: site, ModelID: uuid.UUID(p.Model), CandidateID: p.Candidate, Schedule: raw, Basis: p.Basis, Overridden: override, Actor: actor.String(), Reason: reason}); err != nil {
+	if err := queries.InsertPriceVersion(ctx, tx, InsertPriceVersionParams{ID: id, SiteID: site, ModelID: uuid.UUID(p.Model), AudienceKind: p.Audience.Kind, AudienceID: p.Audience.ID, CandidateID: p.Candidate, Schedule: raw, Basis: p.Basis, Overridden: override, Actor: actor.String(), Reason: reason}); err != nil {
 		return Sold{}, err
 	}
 	raised, err := priceRaised(p)
 	if err != nil {
 		return Sold{}, err
 	}
-	err = priceAudit(ctx, tx, actor, id, "price.publish", reason, map[string]any{"model": p.Model, "candidate": p.Candidate, "overridden": override, "raised_to_floor": raised && !override})
+	err = priceAudit(ctx, tx, actor, id, "price.publish", reason, map[string]any{"model": p.Model, "audience": p.Audience, "candidate": p.Candidate, "overridden": override, "raised_to_floor": raised && !override})
 	return Sold{Version: id, Schedule: s}, err
 }
 
@@ -364,7 +403,11 @@ func publicationSignal(ctx context.Context, tx pg.Tx, site uuid.UUID, p Publicat
 		}
 		severity = "critical"
 	}
-	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: kind, Key: site.String() + ":" + p.Model.String(), Severity: severity, Resolved: resolved, Fields: map[string]string{"model": p.Model.String(), "status": p.Status, "candidate": p.Candidate.String()}})
+	key := site.String() + ":" + p.Model.String()
+	if p.Audience.Kind != "all" {
+		key += ":" + p.Audience.Kind + ":" + p.Audience.ID
+	}
+	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: kind, Key: key, Severity: severity, Resolved: resolved, Fields: map[string]string{"model": p.Model.String(), "status": p.Status, "candidate": p.Candidate.String()}})
 }
 
 func unpricedSeverity(p Publication, previous string) (string, error) {

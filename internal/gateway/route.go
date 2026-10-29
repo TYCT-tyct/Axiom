@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"uuid"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
@@ -114,7 +115,7 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 			continue
 		}
 		e.LiveHealth = d.Quality.Live(r.ID, r.Credentials)
-		e.Exchange = exchangeBasis(rates, r.Currency, e.Price.Schedule.Currency())
+		e.Exchange = exchangeBasis(rates, r.Currency, routeCurrency(e))
 		built = append(built, e)
 	}
 	d.report(left)
@@ -128,6 +129,17 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	}
 	list.built = builtAt // the same stamp the snapshot takes, so the two are published and refused together
 	return snap, list, Count{Endpoints: len(built), Offered: len(routable)}, nil
+}
+
+func routeCurrency(e routing.Endpoint) platform.Currency {
+	if e.AudiencePrices != nil {
+		for _, p := range e.AudiencePrices.Layers() {
+			if p.Sold.Version != uuid.Nil() {
+				return p.Sold.Schedule.Currency()
+			}
+		}
+	}
+	return e.Price.Schedule.Currency()
 }
 
 func (d *RouteDeps) exchangeRates(ctx context.Context) ([]platform.ExchangeRate, error) {
@@ -254,11 +266,11 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		return routing.Endpoint{}, "its spec declares no context length, output limit, streaming or abilities"
 	}
 	sold, ok := prices[catalog.ModelID(r.Model)]
-	if !ok {
+	if !ok || !sold.Available() {
 		return routing.Endpoint{}, "no published sale price is available for this node; check the price publication list and local costs"
 	}
 	reportable := model.Reportable()
-	if billing.Unpriced(sold.Schedule, reportable) != (catalog.Reportable{}) {
+	if sold.Audiences == nil && billing.Unpriced(sold.Schedule, reportable) != (catalog.Reportable{}) {
 		// Only a reference price was checked against what the model reports when it was listed; a fixed price was not.
 		return routing.Endpoint{}, "its sale price lacks a price for an item or a service tier the model reports"
 	}
@@ -298,13 +310,14 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		// The spec records no image size and no page limit, so ImageTokens, PageTokens and FilePages stay 0: billing
 		// takes an image or a file of unknown size to fill the whole window when it reserves, which must never be below
 		// what a request spends, and charges an estimate when the upstream reports no input (billing.InputEstimate).
-		Streams:     streams,
-		Cancels:     r.Cancels,
-		Reports:     reportable.Items,
-		ToolUses:    model.ToolUses(),
-		UnknownItem: blockedItem,
-		Price:       routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule},
-		Target:      targetOf(r.Upstream, streams, model.Dialect()),
+		Streams:        streams,
+		Cancels:        r.Cancels,
+		Reports:        reportable.Items,
+		ToolUses:       model.ToolUses(),
+		UnknownItem:    blockedItem,
+		AudiencePrices: sold.Audiences,
+		Price:          routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule},
+		Target:         targetOf(r.Upstream, streams, model.Dialect()),
 	}
 	return e, ""
 }

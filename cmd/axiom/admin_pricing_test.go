@@ -86,8 +86,7 @@ func TestCreatePricingRule(t *testing.T) {
 	}
 }
 
-// store writes a rule for a target and an audience the way a later release will let an administrator make it, straight
-// into the table, as the superuser: this release refuses to make one.
+// store seeds historical pricing input directly, including unsupported target kinds.
 func (f pricingFixture) store(targetKind, targetID, audienceKind, audienceID, method string) {
 	f.t.Helper()
 	f.storeRule(targetKind, targetID, audienceKind, audienceID, method, `{}`)
@@ -116,8 +115,7 @@ func TestPricingRulesAreListedInTheOrderTheyAreTried(t *testing.T) {
 	} {
 		f.create(rule)
 	}
-	// Rules for an account or a tier cannot be made yet (TestPricingRulesForOneAudienceWait), but the order they will be
-	// tried in is already the stored form's, so they are written as a later release will.
+	// Historical rows use the same target-first, audience-second ordering.
 	f.store("model", f.model, "account", f.account, faced)
 	f.store("model", f.model, "tier", f.tier, faced)
 	var order []string
@@ -186,8 +184,8 @@ func TestPricingRuleRefusals(t *testing.T) {
 		{"a fixed price in another currency", ruleJSON(`{"kind":"author","id":"acme"}`, everything,
 			`{"kind":"fixed","schedule":{"v":1,"currency":"CNY","rates":{"input":"1"}}}`), "/rule/method/schedule/currency"},
 		{"a model ID that is no model's", ruleJSON(`{"kind":"model","id":"nonsense"}`, everything, faced), "/rule/target/id"},
-		{"a tier", ruleJSON(everything, `{"kind":"tier","id":"`+f.tier+`"}`, faced), "/rule/audience/kind"},
-		{"an account", ruleJSON(everything, `{"kind":"account","id":"`+f.account+`"}`, faced), "/rule/audience/kind"},
+		{"an invalid tier", ruleJSON(everything, `{"kind":"tier","id":"`+f.account+`"}`, faced), "/rule/audience/id"},
+		{"an invalid account", ruleJSON(everything, `{"kind":"account","id":"`+f.tier+`"}`, faced), "/rule/audience/id"},
 		// What this release prices is a model, an author or everything, by a multiplier read as the site's currency or by a
 		// fixed price: the rest would be accepted and then not applied, so it is refused (docs/domains/billing.md「定价」).
 		{"an endpoint", ruleJSON(`{"kind":"endpoint","id":"`+f.model+`"}`, everything, faced), "/rule/target/kind"},

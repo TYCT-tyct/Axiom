@@ -54,7 +54,7 @@ const orProviders = `{"data":[{"datacenters":null,"headquarters":null,"name":"Ax
 func (l *openRouterListing) count(v visibility, q orQuery) int {
 	n := 0
 	for i := range l.models {
-		if l.shows(v, l.models[i].model) && q.keeps(&l.models[i]) {
+		if e := l.models[i].forAudience(v.audience); e != nil && l.shows(v, e.model) && q.keeps(e) {
 			n++
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 )
 
@@ -112,14 +113,19 @@ func (r *Router) Fresh() bool {
 
 func (r *Router) fresh(s *Snapshot, now time.Time) bool { return now.Sub(s.built) <= r.cfg.MaxStale }
 
-// Serves reports whether the current snapshot has an endpoint for the model: a route a call could take once there is
-// room, which is all a model list may promise. It ignores everything that comes and goes (breakers, load, pauses,
-// budgets, filters) so a busy model does not drop out of a list, and it does not ask whether the snapshot is fresh: an
-// old one still names the models that have endpoints, and a stale router is what a call is refused for. It reads
-// memory only.
-func (r *Router) Serves(m catalog.ModelID) bool {
+// ServesFor reports whether an endpoint has a published price for this account and its admission tier.
+// It ignores transient state and snapshot freshness, so a busy or stale router keeps its model list.
+func (r *Router) ServesFor(m catalog.ModelID, a billing.Audience) bool {
 	snap := r.snap.Load()
-	return snap != nil && len(snap.byModel[m]) > 0
+	if snap == nil {
+		return false
+	}
+	for _, c := range snap.byModel[m] {
+		if p := c.priceFor(a); p != nil && !p.none() {
+			return true
+		}
+	}
+	return false
 }
 
 // Replace makes s the snapshot Plan uses, if it is newer than the current one: a build that finishes late never

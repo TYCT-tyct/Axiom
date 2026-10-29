@@ -128,10 +128,11 @@ type Endpoint struct {
 	ReasoningVisible FormatSet // the formats in which reasoning progress shows in the stream
 	MaxConcurrent    int64     // 0 for no limit at the endpoint itself
 
-	Funds *suppliers.Funds // synced native balance and live supplier-wide refusal
-	Cost  catalog.Schedule // in the same native units as Funds
+	Funds          *suppliers.Funds // synced native balance and live supplier-wide refusal
+	Cost           catalog.Schedule // in the same native units as Funds
+	AudiencePrices *billing.AudiencePrices
+	Price          PriceRef // the sale price version; a zero Version means none
 
-	Price PriceRef // the sale price version; a zero Version means none
 	// UnknownItem: billing met a usage field on the model it cannot price (billing.UnknownItems), so the model takes no
 	// new requests until an admin prices it (docs/domains/billing.md「价目表缺项」).
 	UnknownItem bool
@@ -238,11 +239,44 @@ type Snapshot struct {
 // live state, which outlives the snapshot.
 type candidate struct {
 	Endpoint
-	model         billing.Model // what billing reads of the endpoint's model, for the input bound
-	blend         float64       // input plus output base rate, as a number; only for weighting
-	cacheCheaper  bool          // reading the cache costs less than input, which is when sticking pays
+	model         billing.Model
+	price         candidatePrice
+	prices        []candidatePrice
 	state         *epState
 	supplierPause *cooldown
+}
+
+func (c *candidate) priceFor(a billing.Audience) *candidatePrice {
+	if c.AudiencePrices == nil {
+		return &c.price
+	}
+	at := c.AudiencePrices.Select(a)
+	if at < 0 {
+		return nil
+	}
+	return &c.prices[at]
+}
+
+type candidatePrice struct {
+	PriceRef
+	blend        float64
+	cacheCheaper bool
+}
+
+func priceOf(p PriceRef) (candidatePrice, error) {
+	price := candidatePrice{PriceRef: p}
+	if p.none() {
+		return price, nil
+	}
+	in, hasIn := p.Schedule.BaseRate(catalog.ItemInput)
+	out, hasOut := p.Schedule.BaseRate(catalog.ItemOutput)
+	if !hasIn || !hasOut {
+		return price, errors.New("routing snapshot: an endpoint's price schedule lacks input or output")
+	}
+	price.blend = number(in) + number(out)
+	read, hasRead := p.Schedule.BaseRate(catalog.ItemCacheRead)
+	price.cacheCheaper = hasRead && read.Cmp(in) < 0
+	return price, nil
 }
 
 // NewSnapshot groups the endpoints by model and checks them: an endpoint twice, or a preset twice, is a mistake in
@@ -250,15 +284,17 @@ type candidate struct {
 func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error) {
 	s := &Snapshot{built: built, byModel: map[catalog.ModelID][]*candidate{}, presets: make(map[PresetID]Preset, len(presets))}
 	seen := make(map[EndpointID]struct{}, len(endpoints))
+	prices := map[*billing.AudiencePrices][]candidatePrice{}
 	for _, e := range endpoints {
 		if _, dup := seen[e.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: endpoint %s twice", uuid.UUID(e.ID))
 		}
 		seen[e.ID] = struct{}{}
-		c, err := r.candidate(e)
+		c, err := r.snapshotCandidate(e, prices)
 		if err != nil {
 			return nil, err
 		}
+
 		s.byModel[e.Model] = append(s.byModel[e.Model], c)
 	}
 	for _, p := range presets {
@@ -277,6 +313,36 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 	return s, nil
 }
 
+func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrices][]candidatePrice) (*candidate, error) {
+	c, err := r.candidate(e)
+	if err != nil {
+		return nil, err
+	}
+	if e.AudiencePrices != nil {
+		c.prices, err = compileAudiencePrices(e.AudiencePrices, prices)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
+}
+
+func compileAudiencePrices(table *billing.AudiencePrices, cache map[*billing.AudiencePrices][]candidatePrice) ([]candidatePrice, error) {
+	if prices, ok := cache[table]; ok {
+		return prices, nil
+	}
+	compiled := make([]candidatePrice, len(table.Layers()))
+	for i, layer := range table.Layers() {
+		price, err := priceOf(PriceRef{Version: layer.Sold.Version, Schedule: layer.Sold.Schedule})
+		if err != nil {
+			return nil, err
+		}
+		compiled[i] = price
+	}
+	cache[table] = compiled
+	return compiled, nil
+}
+
 func (r *Router) candidate(e Endpoint) (*candidate, error) {
 	if e.Served&e.Native != e.Native {
 		return nil, fmt.Errorf("routing snapshot: endpoint %s serves less than it speaks", uuid.UUID(e.ID))
@@ -292,18 +358,9 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 		ID: e.Model, ContextLength: e.Context, ImageTokens: e.ImageTokens, PageTokens: e.PageTokens, FilePages: e.FilePages,
 		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports, ServiceTiers: e.ServiceTiers,
 	}}
-	if e.Price.Version == (uuid.UUID{}) {
-		return c, nil
-	}
-	in, hasIn := e.Price.Schedule.BaseRate(catalog.ItemInput)
-	out, hasOut := e.Price.Schedule.BaseRate(catalog.ItemOutput)
-	if !hasIn || !hasOut {
-		return nil, errors.New("routing snapshot: an endpoint's price schedule lacks input or output")
-	}
-	c.blend = number(in) + number(out)
-	read, hasRead := e.Price.Schedule.BaseRate(catalog.ItemCacheRead)
-	c.cacheCheaper = hasRead && read.Cmp(in) < 0
-	return c, nil
+	var err error
+	c.price, err = priceOf(e.Price)
+	return c, err
 }
 
 // number is a unit price as a float, for weighting only; money is never computed with it. It allocates, so it runs

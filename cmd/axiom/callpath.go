@@ -309,13 +309,24 @@ func salePrices(db *pg.DB, sites *accounts.Service) func(context.Context, *catal
 		for _, c := range costs {
 			byModel[c.Model] = append(byModel[c.Model], c)
 		}
-		for id, local := range byModel {
-			model, ok := snap.Model(id)
-			if price, priced := sold[id]; !ok || !priced || !price.AllowsCosts(model, local) {
-				delete(sold, id)
-			}
-		}
+		filterPriceCosts(sold, snap, byModel)
 		return sold, nil
+	}
+}
+
+func filterPriceCosts(sold map[catalog.ModelID]billing.Sold, snap *catalog.Snapshot, byModel map[catalog.ModelID][]billing.PriceCost) {
+	for id, price := range sold {
+		model, ok := snap.Model(id)
+		if !ok {
+			delete(sold, id)
+			continue
+		}
+		price = price.WithCosts(model, byModel[id])
+		if !price.Available() {
+			delete(sold, id)
+		} else {
+			sold[id] = price
+		}
 	}
 }
 
