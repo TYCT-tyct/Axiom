@@ -66,8 +66,8 @@ func TestTextCountDiscardsPartialFailure(t *testing.T) {
 // Limits include the smallest cap and the integer extreme; an exhausted counter must never consume another piece.
 func TestTextCountBounds(t *testing.T) {
 	t.Parallel()
-	for _, tok := range []Tokenizer{TokenizerCl100k, TokenizerO200k} {
-		for _, text := range []string{"", "a", "🙂", strings.Repeat("中文", 2000)} {
+	for _, tok := range []Tokenizer{TokenizerCl100k, TokenizerO200k, TokenizerClaude, TokenizerClaude47} {
+		for _, text := range []string{"", "a", "🙂", "∑", "1", strings.Repeat("中文", 2000)} {
 			for _, limit := range []int64{1, 2, 100, math.MaxInt64} {
 				c := NewTextCount(tok, limit)
 				more := c.Add([]byte(text))

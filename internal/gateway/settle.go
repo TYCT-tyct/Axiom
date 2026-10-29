@@ -100,7 +100,8 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		rec.Estimate.Currency = a.entry.Price.Schedule.Currency()
 		return
 	}
-	rec.Segments = estimated(a.usage, a.seen, a.demand(), a.entry.Limits, a.meter.OutputCap())
+	rec.Segments = estimated(a.usage, a.seen, a.demand(), a.entry.Limits, a.meter.OutputCap(),
+		billing.TokenizerOf(a.entry.Target.Model))
 	usage := make([]catalog.Usage, len(rec.Segments))
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
@@ -144,7 +145,7 @@ func costFlag(segments []billing.Segment, priced suppliers.CostFlag) suppliers.C
 }
 
 // demand is the request as billing estimates it: what the request says, and its text counted in the tokens of the
-// entry's model family when that family has a tokenizer and the reply reported none of the input, which is the only
+// entry's model family when that family has a count and the reply reported none of the input, which is the only
 // case the count is used in.
 func (a *attempt) demand() billing.Demand {
 	d := routing.DemandOf(&a.s.c.Request)
@@ -200,16 +201,18 @@ func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer) (int64, er
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the
 // upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the first
-// sampling's estimate (billing.InputEstimate: the text at the count of the endpoint's model family where it has a
-// tokenizer and at 4 bytes a token otherwise, an image at 1600 tokens, a file at 4096, each held to its bound), unless
+// sampling's estimate (billing.InputEstimate: the text at the count of the endpoint's model family where it has one
+// and at 4 bytes a token otherwise, an image at 1600 tokens, a file at 4096, each held to its bound), unless
 // any input-side item was reported, in which case the estimate stands in place of the items an invalid report kept
-// rather than beside them; the output by the text, reasoning and tool input read at outputBytesPerToken, never
-// below a count reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own,
-// which metering holds the output to); the web searches by the events seen. The ratios stand in for the estimates by
-// model the docs want, which have no data yet; the bounds and the cap keep an estimate within what the reservation
-// covers. Nothing corrects an estimate after the charge in M1: the supplier's record is the platform's cost, not the
-// user's bill.
-func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billing.Model, outputCap int64) []billing.Segment {
+// rather than beside them; the output by the text, reasoning and tool input read, at the tokens per byte of their
+// shape in tok's weights (billing.TextTokens) and at outputBytesPerToken for a family without, never below a count
+// reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own, which metering
+// holds the output to); the web searches by the events seen. The bounds and the cap keep an estimate within what the
+// reservation covers. Nothing corrects an estimate after the charge in M1: the supplier's record is the platform's
+// cost, not the user's bill.
+func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billing.Model, outputCap int64,
+	tok billing.Tokenizer,
+) []billing.Segment {
 	input := billing.InputEstimate(d, m)
 	segments := make([]billing.Segment, max(len(u.Segments), 1))
 	for i, seg := range u.Segments {
@@ -223,7 +226,7 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	if !inputReported(u) { // none of the input was reported, so it is estimated
 		estimateInput(counts, input)
 	}
-	counts[catalog.ItemOutput] = estimateOutput(*reply, p, outputCap)
+	counts[catalog.ItemOutput] = estimateOutput(*reply, p, outputCap, tok)
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)
 	}
@@ -255,14 +258,19 @@ func estimateInput(counts map[catalog.Item]int64, estimate int64) {
 	counts[catalog.ItemInput] += max(estimate-kept, 0)
 }
 
-// estimateOutput is the reply's ordinary output: the text, reasoning and tool input read at outputBytesPerToken, never
-// below a count reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own,
-// which metering holds the output to). A report that carried it keeps it.
-func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64) int64 {
+// estimateOutput is the reply's ordinary output: the text, reasoning and tool input read, at the tokens per byte their
+// shape takes in tok's weights or at outputBytesPerToken for a family without, never below a count reported so far and
+// never above the output cap the attempt was quoted at (outputCap, the meter's own, which metering holds the output
+// to). A report that carried it keeps it.
+func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64, tok billing.Tokenizer) int64 {
 	if reply.Reported.Has(catalog.ItemOutput) {
 		return reply.Usage.Count(catalog.ItemOutput)
 	}
-	out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
+	out, ok := billing.TextTokens(tok, p.Text, p.ContentBytes)
+	if !ok {
+		out = tokensOf(p.ContentBytes, outputBytesPerToken)
+	}
+	out = min(out, outputCap)
 	return max(reply.Usage.OutputTotal(), out) - reply.Usage.Count(catalog.ItemReasoning) -
 		reply.Usage.Count(catalog.ItemAudioOut) - reply.Usage.Count(catalog.ItemImageOut)
 }
@@ -281,9 +289,9 @@ func recountCapped(reply catalog.Usage, counts map[catalog.Item]int64) catalog.U
 	return usage
 }
 
-// The bytes per output token of the interim estimate (docs/domains/billing.md「用量来源与暂估」): English runs about 4
-// bytes a token, and output is taken at 3 to lean the guess up, since no record may come to correct it. The input's is
-// billing.InputBytesPerToken for a family whose tokenizer counted nothing.
+// The bytes per output token of the interim estimate for a family without weights (docs/domains/billing.md「用量来源与
+// 暂估」): English runs about 4 bytes a token, and output is taken at 3 to lean the guess up, since no record may come
+// to correct it. The input's is billing.InputBytesPerToken for a family whose tokenizer counted nothing.
 const outputBytesPerToken = 3
 
 // tokensOf is bytes at perToken bytes a token, rounded up: a token begun is charged.
