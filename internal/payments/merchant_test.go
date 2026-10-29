@@ -44,10 +44,10 @@ func newWorld(t *testing.T) *world {
 // asked or to have it answer in a way of their choosing.
 func newTestWorld(t *testing.T, plugin Plugin) *world {
 	t.Helper()
-	return newWorldOn(t, plugin, pgtest.New(t, billing.Migrations(), Migrations()))
+	return newTestWorldOn(t, plugin, pgtest.New(t, billing.Migrations(), Migrations()))
 }
 
-func newWorldOn(t *testing.T, plugin Plugin, d pgtest.Database) *world {
+func newTestWorldOn(t *testing.T, plugin Plugin, d pgtest.Database) *world {
 	t.Helper()
 	db, err := pg.Open(t.Context(), d.App)
 	if err != nil {
