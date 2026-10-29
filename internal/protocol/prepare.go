@@ -140,10 +140,9 @@ func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	return u, err
 }
 
-// usageContext is what the request tells the relay about the usage: a 1-hour cache breakpoint, and the service tier
-// when the request names one alone.
+// usageContext carries the request's metering facts and legacy reply shape through an upstream attempt.
 func usageContext(r *Request) UsageContext {
-	u := UsageContext{CacheTTL1h: r.InputItems.Has(catalog.ItemCacheWrite1h)}
+	u := UsageContext{CacheTTL1h: r.InputItems.Has(catalog.ItemCacheWrite1h), LegacyFunctions: r.legacy && !r.modernTools}
 	n := 0
 	for _, st := range [...]catalog.ServiceTier{
 		catalog.ServiceTierStandard, catalog.ServiceTierFlex, catalog.ServiceTierPriority, catalog.ServiceTierFast,
@@ -184,6 +183,9 @@ func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 		cost := int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n + replayCost(r.Format, body)
 		if r.Format == Responses {
 			cost += replayHistoryCost(w.History)
+		}
+		if r.Format == Chat && r.legacy {
+			cost += nativeRequestCost(body)
 		}
 		return cost
 	}
@@ -334,6 +336,8 @@ type rewriter struct {
 	usageMembers                          map[string]rule // the usage members the relay keeps
 	replayAssistant, replayEmpty          bool
 	replayMeta                            *aggBase
+	legacy                                *legacyRequest
+	legacyDelta                           *legacyReplyDelta
 }
 
 func (p *rewriter) copyTo(off int) {
@@ -591,7 +595,7 @@ func (p *rewriter) addResponses() error {
 func (p *rewriter) stream() error {
 	p.streamed = true
 	v, err := p.value()
-	if err == nil && p.t.Streams && string(v) != "true" {
+	if err == nil && p.t.Streams && v.Kind() != 't' {
 		p.replace(len(v), "true")
 	}
 	return err
@@ -672,7 +676,7 @@ func (p *rewriter) streamOptions() error {
 func (p *rewriter) forceUsage() error {
 	p.usageForced = true
 	v, err := p.value()
-	if err == nil && string(v) != "true" {
+	if err == nil && v.Kind() != 't' {
 		p.replace(len(v), "true")
 	}
 	return err
