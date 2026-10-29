@@ -43,9 +43,10 @@ type Config struct {
 	// Cache is the shared store the attempts before sign-in are counted in; nil, or a cache that is turned off, leaves
 	// them in this node's buckets (README.md「登录前的资源」).
 	Cache *kv.Client
-	// MasterKey is the master key's current version, from which the login key is derived: the addresses and emails in
-	// the cache's keys appear only as its HMAC (internal/platform/kv/README.md「键」). Cache needs it.
-	MasterKey []byte
+	// LoginKey is the HMAC key of the login subjects, which secret derives from the master key file's highest
+	// distributed version: the addresses and emails in the cache's keys appear only as its HMAC
+	// (internal/platform/kv/README.md「键」). Cache needs it.
+	LoginKey secret.LoginKey
 	// OnAccountOpened runs in the transaction of every account a registration opens; nil does nothing.
 	OnAccountOpened OpenedFunc
 }
@@ -74,7 +75,7 @@ type Service struct {
 	queries *Queries
 	// cache is where the attempts before sign-in are counted, and loginKey the HMAC key of their subjects.
 	cache    *kv.Client
-	loginKey [loginKeyLen]byte
+	loginKey secret.LoginKey
 }
 
 // keyHash is a key on a site, by its hash under the current version.
@@ -111,18 +112,12 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 	if err != nil {
 		panic(err) // the instrument name is a constant
 	}
-	var loginKey [loginKeyLen]byte
-	if cfg.Cache != nil && cfg.Cache.Enabled() {
-		if loginKey, err = deriveLoginKey(cfg.MasterKey); err != nil {
-			return nil, err
-		}
-	}
 	return &Service{
 		recovery: cfg.Recovery, misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
 		slot: slot, gated: cfg.LookupSlot != nil,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
 		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),
-		cache: cfg.Cache, loginKey: loginKey,
+		cache: cfg.Cache, loginKey: cfg.LoginKey,
 	}, nil
 }
 

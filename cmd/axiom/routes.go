@@ -41,7 +41,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, LookupSlot: limits.KeyLookupSlot, Meter: tel.Metrics.Meter("axiom/accounts"),
-		Recovery: recovery, OnAccountOpened: openBalance, Cache: cache, MasterKey: p.masterKey,
+		Recovery: recovery, OnAccountOpened: openBalance, Cache: cache, LoginKey: p.loginKey,
 	})
 	if err != nil {
 		return nodeRoutes{}, err

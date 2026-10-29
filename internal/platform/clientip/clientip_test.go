@@ -9,18 +9,38 @@ import (
 )
 
 func TestGroup(t *testing.T) {
-	for _, tc := range []struct{ input, want string }{
-		{"203.0.113.1", "203.0.113.1"},
-		{"::ffff:203.0.113.1", "203.0.113.1"},
-		{"2001:db8:1:2:3:4:5:6", "2001:db8:1:2::"},
-		{"fe80::1234%eth0", "fe80::"},
+	for _, tc := range []struct {
+		name, input, want string
+		valid             bool
+	}{
+		{"an invalid address", "", "", false},
+		{"IPv4", "203.0.113.1", "203.0.113.1", true},
+		{"IPv4 in v6 clothes", "::ffff:203.0.113.1", "203.0.113.1", true},
+		{"IPv6", "2001:db8:1:2:3:4:5:6", "2001:db8:1:2::", true},
+		{"IPv6 with a zone", "fe80::1234%eth0", "fe80::", true},
 	} {
-		if got := Group(netip.MustParseAddr(tc.input)); got.String() != tc.want {
-			t.Errorf("Group(%s) = %s, want %s", tc.input, got, tc.want)
+		t.Run(tc.name, func(t *testing.T) {
+			var ip netip.Addr
+			if tc.valid {
+				ip = netip.MustParseAddr(tc.input)
+			}
+			got := Group(ip)
+			if got.IsValid() != tc.valid || (tc.valid && got.String() != tc.want) {
+				t.Fatalf("Group(%s) = %s, want %s, valid %v", tc.input, got, tc.want, tc.valid)
+			}
+		})
+	}
+	// One /64 is one group, however its addresses are spelled; another /64 is another.
+	group := Group(netip.MustParseAddr("2001:db8:1:2::1"))
+	for _, input := range []string{"2001:db8:1:2::1", "2001:db8:1:2:ffff::1", "2001:db8:1:2:3:4:5:6"} {
+		if got := Group(netip.MustParseAddr(input)); got != group {
+			t.Errorf("Group(%s) = %s, want the group %s of the same /64", input, got, group)
 		}
 	}
-	if Group(netip.Addr{}).IsValid() {
-		t.Fatal("an absent address acquired an IP budget")
+	for _, input := range []string{"2001:db8:1:3::1", "2001:db8:1:4:1:0:0:0"} {
+		if got := Group(netip.MustParseAddr(input)); got == group {
+			t.Errorf("Group(%s) = %s, want another /64's group", input, got)
+		}
 	}
 }
 

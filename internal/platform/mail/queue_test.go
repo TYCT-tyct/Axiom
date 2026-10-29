@@ -18,6 +18,7 @@ import (
 	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/platform/secret"
 )
 
 // syncBuffer collects the mailer's log lines. The worker runs on the queue's goroutines, so the test may read the
@@ -168,12 +169,12 @@ func (w *queueWorld) register(t *testing.T, server *fakeServer) *Mailer {
 	return w.registerWith(t, server, nil, nil)
 }
 
-// registerWith registers a mailer with the shared store and master key a deployment gives it.
-func (w *queueWorld) registerWith(t *testing.T, server *fakeServer, cache *kv.Client, masterKey []byte) *Mailer {
+// registerWith registers a mailer with the shared store and master-key snapshot a deployment gives it.
+func (w *queueWorld) registerWith(t *testing.T, server *fakeServer, cache *kv.Client, master *secret.MasterKeys) *Mailer {
 	t.Helper()
 	mailer, err := Register(t.Context(), w.db, w.queue, Config{
 		Host: "127.0.0.1", Port: 587, From: netmail.Address{Name: "Axiom", Address: "no-reply@axiom.example"},
-	}, cache, masterKey, slog.New(slog.NewTextHandler(w.logs, nil)))
+	}, cache, master, slog.New(slog.NewTextHandler(w.logs, nil)))
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
@@ -249,7 +250,7 @@ func TestMailerSnoozesARecipientAnotherNodeAdmitted(t *testing.T) {
 	server := startTLSServer(t, nil)
 	shared := kvtest.New(t)
 	namespace := kvtest.Namespace()
-	mailer := w.registerWith(t, server, shared.OpenIn(t, namespace, kv.Deps{}), testMasterKey())
+	mailer := w.registerWith(t, server, shared.OpenIn(t, namespace, kv.Deps{}), testMasterKeys(t))
 	// Another node of the same deployment admits the recipient before this node's job runs.
 	other := sharedThrottle(shared.OpenIn(t, namespace, kv.Deps{}), testMailKey(t))
 	if !other.allow(t.Context(), welcome.To) {
@@ -281,7 +282,7 @@ func TestMailerSnoozesAfterTheSharedStoreGoesAway(t *testing.T) {
 	server := startTLSServer(t, nil)
 	shared := kvtest.New(t)
 	namespace := kvtest.Namespace()
-	mailer := w.registerWith(t, server, shared.OpenIn(t, namespace, kv.Deps{}), testMasterKey())
+	mailer := w.registerWith(t, server, shared.OpenIn(t, namespace, kv.Deps{}), testMasterKeys(t))
 	// A first message on this node is admitted through the shared store, which also records the interval locally.
 	if !mailer.sender.throttle.allow(t.Context(), welcome.To) {
 		t.Fatal("the recipient was already throttled")

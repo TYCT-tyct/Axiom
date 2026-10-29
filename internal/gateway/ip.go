@@ -13,12 +13,3 @@ import (
 func (h *Handler) clientIP(r *http.Request) netip.Addr {
 	return clientip.Addr(r, h.Proxies)
 }
-
-// ipKey is what the per-address limits count by. An IPv6 customer holds a whole /64, so counting its addresses one by
-// one would let a single host take as many shares as it has addresses.
-func ipKey(a netip.Addr) string {
-	if a.Is6() {
-		return netip.PrefixFrom(a, 64).Masked().String()
-	}
-	return a.String()
-}

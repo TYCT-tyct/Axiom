@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json/jsontext" //nolint:depguard // control values are compared after unquoting
 	"fmt"
 	"strconv"
 
@@ -48,7 +49,7 @@ func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstr
 func newChatStreamReader(u UsageContext, o RelayOptions, charge func(int) error) *chatStream {
 	s := &chatStream{choices: map[int64]bool{}}
 	s.init(u, o, nil, charge)
-	s.chatWriter = chatWriter{id: s.eventReader.id, model: s.eventReader.model, created: "0"} // quoted by init already
+	s.chatWriter = chatWriter{id: s.eventReader.id, model: s.eventReader.model, created: "0", legacy: o.legacyFunctions} // quoted by init already
 	return s
 }
 
@@ -272,10 +273,13 @@ func (s *chatStream) dropBuffers() {
 // chatWriter writes the chunks of ours a Chat client gets: the usage chunk and the error chunk, and for a stream
 // converted from another format every chunk. id, model and created are JSON values; first is choice 0's
 // finish_reason, as written, which the usage chunk repeats.
-type chatWriter struct{ id, model, created, first string }
+type chatWriter struct {
+	id, model, created, first string
+	legacy                    bool
+}
 
 func newChatWriter(o RelayOptions, created string) chatWriter {
-	return chatWriter{id: string(appendQuoted(nil, o.ID)), model: string(appendQuoted(nil, o.Model)), created: created}
+	return chatWriter{id: string(appendQuoted(nil, o.ID)), model: string(appendQuoted(nil, o.Model)), created: created, legacy: o.legacyFunctions}
 }
 
 // failure appends a chunk with a top-level error, finish_reason error and our error type in error.metadata
@@ -294,7 +298,11 @@ func (s *chatWriter) failure(dst []byte, e Error, u catalog.Usage, cost string) 
 func (s *chatWriter) usageEvent(dst []byte, u catalog.Usage, cost, top string) []byte {
 	choices := "[]"
 	if s.first != "" {
-		choices = `[{"index":0,"delta":{"content":""},"finish_reason":` + s.first + `}]`
+		reason := s.first
+		if s.legacy && controlIs([]byte(reason), "tool_calls") {
+			reason = `"function_call"`
+		}
+		choices = `[{"index":0,"delta":{"content":""},"finish_reason":` + reason + `}]`
 	}
 	data := append(appendOpenAIUsage(append(s.chunk(choices), `,"usage":`...), chatNames, u, cost), top+"}"...)
 	return sse.AppendEvent(dst, "", data)
@@ -354,4 +362,11 @@ func (s *chatStream) mirror(value []byte, into reasoningMember, name string) err
 	}
 	at := int(s.dec.InputOffset()) - 1
 	return s.editEcho(at, at, name, value)
+}
+
+// controlIs compares a validated JSON string without normalizing payload bytes.
+func controlIs(v []byte, want string) bool {
+	var buf [32]byte
+	name, err := jsontext.AppendUnquote(buf[:0], v)
+	return err == nil && string(name) == want
 }
