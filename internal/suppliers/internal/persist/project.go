@@ -27,6 +27,7 @@ import (
 
 // projector writes one supplier's listing onto its tables, in the transaction that stores the state it came from.
 type projector struct {
+	writes     store.ProjectionWrites
 	q          *store.Queries
 	tx         pg.Tx
 	id         uuid.UUID
@@ -88,7 +89,10 @@ func projectListing(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State
 	if err != nil {
 		return err
 	}
-	return p.endpoints(ctx, groups, states)
+	if err := p.endpoints(ctx, groups, states); err != nil {
+		return err
+	}
+	return p.writes.Apply(ctx, tx)
 }
 
 // read reads the supplier's aliases and the schedules of the plans in force, which the writes below compare and copy.
@@ -151,7 +155,7 @@ func (p *projector) groups(ctx context.Context) (map[string]uuid.UUID, error) {
 	}
 	for _, g := range p.st.Groups {
 		seen[g.Ref] = true
-		id, err := p.group(ctx, g, stored[g.Ref])
+		id, err := p.group(g, stored[g.Ref])
 		if err != nil {
 			return nil, err
 		}
@@ -161,9 +165,7 @@ func (p *projector) groups(ctx context.Context) (map[string]uuid.UUID, error) {
 	// deleted, and the supplier may sell it again.
 	for _, r := range rows {
 		if !seen[r.UpstreamRef] && r.Present {
-			if err := p.q.SetProjectedGroupAbsent(ctx, p.tx, r.ID); err != nil {
-				return nil, fmt.Errorf("mark group %s absent: %w", r.UpstreamRef, err)
-			}
+			p.writes.AbsentGroups = append(p.writes.AbsentGroups, r.ID)
 		}
 	}
 	return ids, nil
@@ -171,18 +173,17 @@ func (p *projector) groups(ctx context.Context) (map[string]uuid.UUID, error) {
 
 // group writes one group of the listing, if what the tables hold differs from it, and returns its id. found is the zero
 // row of a group that is not in the tables yet.
-func (p *projector) group(ctx context.Context, g syncer.GroupSnap, found store.ListProjectedGroupsRow) (uuid.UUID, error) {
+func (p *projector) group(g syncer.GroupSnap, found store.ListProjectedGroupsRow) (uuid.UUID, error) {
 	facts, err := factsObject(g.Facts)
 	if err != nil {
 		return uuid.Nil(), fmt.Errorf("group %s: %w", g.Ref, err)
 	}
 	if found.ID == uuid.Nil() {
-		id, err := p.q.InsertProjectedGroup(ctx, p.tx, store.InsertProjectedGroupParams{
+		id := uuid.NewV7()
+		p.writes.Groups = append(p.writes.Groups, store.ProjectedGroup{
+			ID:         id,
 			SupplierID: p.id, UpstreamRef: g.Ref, Name: g.Name, Ratio: g.Ratio, Facts: facts, SeenAt: &p.now,
 		})
-		if err != nil {
-			return uuid.Nil(), fmt.Errorf("make group %s: %w", g.Ref, err)
-		}
 		return id, nil
 	}
 	was, err := factsObject(found.Facts)
@@ -192,12 +193,9 @@ func (p *projector) group(ctx context.Context, g syncer.GroupSnap, found store.L
 	if found.Name == g.Name && sameRatio(found.Ratio, g.Ratio) && found.Present && bytes.Equal(was, facts) {
 		return found.ID, nil
 	}
-	err = p.q.UpdateProjectedGroup(ctx, p.tx, store.UpdateProjectedGroupParams{
+	p.writes.ChangedGroups = append(p.writes.ChangedGroups, store.UpdateProjectedGroupParams{
 		ID: found.ID, Name: g.Name, Ratio: g.Ratio, Facts: facts, SeenAt: &p.now,
 	})
-	if err != nil {
-		return uuid.Nil(), fmt.Errorf("change group %s: %w", g.Ref, err)
-	}
 	return found.ID, nil
 }
 
@@ -216,7 +214,7 @@ func (p *projector) models(ctx context.Context, groups map[string]uuid.UUID) (ma
 	seen := make(map[nameKey]bool, len(stored))
 	states := make(map[nameKey]nameState, len(stored))
 	for _, g := range p.st.Groups {
-		if err := p.groupModels(ctx, g, groups[g.Ref], stored, seen, states); err != nil {
+		if err := p.groupModels(g, groups[g.Ref], stored, seen, states); err != nil {
 			return nil, err
 		}
 	}
@@ -224,15 +222,13 @@ func (p *projector) models(ctx context.Context, groups map[string]uuid.UUID) (ma
 		if seen[key] || !r.Present {
 			continue
 		}
-		if err := p.q.SetProjectedModelAbsent(ctx, p.tx, store.SetProjectedModelAbsentParams{SupplierGroupID: key.group, UpstreamName: key.name}); err != nil {
-			return nil, fmt.Errorf("mark model %s absent: %w", key.name, err)
-		}
+		p.writes.AbsentModels = append(p.writes.AbsentModels, store.SetProjectedModelAbsentParams{SupplierGroupID: key.group, UpstreamName: key.name})
 	}
 	return states, nil
 }
 
 // groupModels writes the names of one group, filling what the listing says of each into seen and states.
-func (p *projector) groupModels(ctx context.Context, g syncer.GroupSnap, id uuid.UUID, stored map[nameKey]store.ListProjectedModelsRow, seen map[nameKey]bool, states map[nameKey]nameState) error {
+func (p *projector) groupModels(g syncer.GroupSnap, id uuid.UUID, stored map[nameKey]store.ListProjectedModelsRow, seen map[nameKey]bool, states map[nameKey]nameState) error {
 	for _, m := range g.Models {
 		key := nameKey{group: id, name: m.Name}
 		// A group the supplier will not sell us — a subscription group, one priced by the hour — still lists its models,
@@ -258,12 +254,9 @@ func (p *projector) groupModels(ctx context.Context, g syncer.GroupSnap, id uuid
 			mapped := uuid.UUID(state.model)
 			model = &mapped
 		}
-		err = p.q.UpsertProjectedModel(ctx, p.tx, store.UpsertProjectedModelParams{
+		p.writes.Models = append(p.writes.Models, store.UpsertProjectedModelParams{
 			SupplierID: p.id, SupplierGroupID: id, UpstreamName: m.Name, ModelID: model, Formats: formats,
 		})
-		if err != nil {
-			return fmt.Errorf("write model %s/%s: %w", g.Ref, m.Name, err)
-		}
 	}
 	return nil
 }
@@ -299,16 +292,12 @@ func (p *projector) endpoints(ctx context.Context, groups map[string]uuid.UUID, 
 		return fmt.Errorf("read the endpoints: %w", err)
 	}
 	for _, r := range rows {
-		if err := p.endpoint(ctx, r, desired, states); err != nil {
-			return err
-		}
+		p.endpoint(r, desired, states)
 		delete(desired, modelKey{group: r.SupplierGroupID, model: r.ModelID})
 	}
 	// What is left is an endpoint of a model that is on sale with a cost plan, and no row for it yet.
 	for _, key := range slices.SortedFunc(maps.Keys(desired), compareModelKeys) {
-		if err := p.makeEndpoint(ctx, key, desired[key]); err != nil {
-			return err
-		}
+		p.makeEndpoint(key, desired[key])
 	}
 	return nil
 }
@@ -361,96 +350,73 @@ func (p *projector) wanted(ref string, group uuid.UUID, m syncer.ModelSnap, stat
 
 // endpoint brings one stored endpoint in line with the listing: the name and formats a call uses, and the cost schedule
 // in force. A row the listing no longer has at all is taken out of routing, with the reason its name gives.
-func (p *projector) endpoint(ctx context.Context, r store.ListProjectedEndpointsRow, desired map[modelKey]desiredEndpoint, states map[nameKey]nameState) error {
+func (p *projector) endpoint(r store.ListProjectedEndpointsRow, desired map[modelKey]desiredEndpoint, states map[nameKey]nameState) {
 	d, ok := desired[modelKey{group: r.SupplierGroupID, model: r.ModelID}]
 	if ok {
 		if r.UpstreamName != d.upstream || !slices.Equal(r.Formats, d.formats) {
-			err := p.q.UpdateProjectedEndpoint(ctx, p.tx, store.UpdateProjectedEndpointParams{
+			p.writes.ChangedEndpoints = append(p.writes.ChangedEndpoints, store.UpdateProjectedEndpointParams{
 				ID: r.ID, UpstreamName: d.upstream, Formats: d.formats,
 			})
-			if err != nil {
-				return fmt.Errorf("change endpoint %s: %w", r.ID, err)
-			}
 		}
-		return p.setCost(ctx, r, d)
+		p.setCost(r, d)
+		return
 	}
 	why := states[nameKey{group: r.SupplierGroupID, name: r.UpstreamName}].why
 	if why == syncer.Routable {
 		why = syncer.Gone
 	}
-	return p.clearCost(ctx, r, why)
+	p.clearCost(r, why)
 }
 
 // setCost puts the endpoint's cost plan in force. The plan in force is named by the fingerprint of its schedule: a row
 // that already has this plan is left alone, and a new version of the plan replaces the old one, which stays in
 // cost_schedules because what a settled attempt was priced by must remain readable.
-func (p *projector) setCost(ctx context.Context, r store.ListProjectedEndpointsRow, d desiredEndpoint) error {
+func (p *projector) setCost(r store.ListProjectedEndpointsRow, d desiredEndpoint) {
 	if d.plan == nil {
-		return p.clearCost(ctx, r, syncer.CostUnknown)
+		p.clearCost(r, syncer.CostUnknown)
+		return
 	}
 	if r.Fingerprint == d.plan.Fingerprint {
 		// The plan is the one in force. A row the projection itself took down comes back; a row reconciliation took down
 		// stays down, because its verdict is that this estimate is too low, and the estimate has not changed.
 		if r.CostState != "known" && ours(r.CostStateReason) {
-			return p.putCost(ctx, r.ID, *d.plan)
+			p.putCost(r.ID, *d.plan)
+			return
 		}
-		return nil
+		return
 	}
-	return p.putCost(ctx, r.ID, *d.plan)
+	p.putCost(r.ID, *d.plan)
 }
 
 // putCost puts a cost schedule of an endpoint in force, making the row when the endpoint has none for this plan.
-func (p *projector) putCost(ctx context.Context, endpoint uuid.UUID, plan store.PlanVersion) error {
-	id, err := p.costSchedule(ctx, endpoint, plan)
-	if err != nil {
-		return err
-	}
-	err = p.q.SetProjectedEndpointCost(ctx, p.tx, store.SetProjectedEndpointCostParams{ID: endpoint, CostScheduleID: &id})
-	if err != nil {
-		return fmt.Errorf("set the cost of endpoint %s: %w", endpoint, err)
-	}
-	return nil
+func (p *projector) putCost(endpoint uuid.UUID, plan store.PlanVersion) {
+	p.writes.Costs = append(p.writes.Costs, store.EnsureCostScheduleParams{
+		SupplierID: p.id, EndpointID: endpoint, NativeUnit: p.nativeUnit,
+		Schedule: []byte(plan.Schedule), Basis: plan.Basis, Fingerprint: plan.Fingerprint,
+	})
 }
 
 // clearCost takes an endpoint with no cost plan out of routing, saying why. The row, its id and its enabled switch stay:
 // what an attempt was priced by is a schedule of this endpoint, and a person may have switched it off.
-func (p *projector) clearCost(ctx context.Context, r store.ListProjectedEndpointsRow, why syncer.Reason) error {
+func (p *projector) clearCost(r store.ListProjectedEndpointsRow, why syncer.Reason) {
 	if r.CostState != "known" {
-		return nil
+		return
 	}
-	err := p.q.UnsetProjectedEndpointCost(ctx, p.tx, store.UnsetProjectedEndpointCostParams{ID: r.ID, Reason: reason(why)})
-	if err != nil {
-		return fmt.Errorf("unset the cost of endpoint %s: %w", r.ID, err)
-	}
-	return nil
+	p.writes.UnknownCosts = append(p.writes.UnknownCosts, store.UnsetProjectedEndpointCostParams{ID: r.ID, Reason: reason(why)})
 }
 
 // makeEndpoint makes an endpoint of a model that is on sale with a cost plan, and puts the plan in force. enabled takes
 // its default, which is on: the projection makes a row once and never changes the switch afterwards.
-func (p *projector) makeEndpoint(ctx context.Context, key modelKey, d desiredEndpoint) error {
+func (p *projector) makeEndpoint(key modelKey, d desiredEndpoint) {
 	if d.plan == nil {
-		return nil
+		return
 	}
-	id, err := p.q.InsertProjectedEndpoint(ctx, p.tx, store.InsertProjectedEndpointParams{
+	id := uuid.NewV7()
+	p.writes.Endpoints = append(p.writes.Endpoints, store.ProjectedEndpoint{
+		ID:         id,
 		SupplierID: p.id, SupplierGroupID: key.group, ModelID: key.model, UpstreamName: d.upstream, Formats: d.formats,
 	})
-	if err != nil {
-		return fmt.Errorf("make the endpoint of model %s in group %s: %w", key.model, key.group, err)
-	}
-	return p.putCost(ctx, id, *d.plan)
-}
-
-// costSchedule is the row of the endpoint's cost schedule for this plan, made when the endpoint has none for it yet. A
-// plan is never changed: a new one is a new row, so what a settled attempt was priced by stays readable.
-func (p *projector) costSchedule(ctx context.Context, endpoint uuid.UUID, v store.PlanVersion) (uuid.UUID, error) {
-	id, err := p.q.EnsureCostSchedule(ctx, p.tx, store.EnsureCostScheduleParams{
-		SupplierID: p.id, EndpointID: endpoint, NativeUnit: p.nativeUnit,
-		Schedule: []byte(v.Schedule), Basis: v.Basis, Fingerprint: v.Fingerprint,
-	})
-	if err != nil {
-		return uuid.Nil(), fmt.Errorf("write the cost schedule of endpoint %s: %w", endpoint, err)
-	}
-	return id, nil
+	p.putCost(id, *d.plan)
 }
 
 // ours reports whether the reason an endpoint carries is one the projection wrote: every reason it clears an endpoint

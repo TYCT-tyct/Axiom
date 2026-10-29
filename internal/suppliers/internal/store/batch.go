@@ -2,12 +2,14 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 	"uuid"
 )
 
-// The statements below write many rows in one round trip with unnest. sqlc cannot type a call of unnest over eleven
-// arrays, so they are written by hand; each is tested against the real tables.
+// These handwritten statements batch rows with unnest or paged VALUES; sqlc cannot type
+// the wide unnest calls or generate variable-length VALUES. Tests use the real tables.
 
 // AttemptCostRow is the cost and reconciliation key of one finished attempt.
 type AttemptCostRow struct {
@@ -99,4 +101,178 @@ func InsertChargeRecords(ctx context.Context, db DBTX, supplier uuid.UUID, rows 
 	}
 	_, err := db.Exec(ctx, insertChargeRecords, supplier, a.key, a.ref, a.at, a.amount, a.usage, a.funding, a.model)
 	return err
+}
+
+// ProjectionPageSize bounds statement parameters and payloads for large listings.
+const ProjectionPageSize = 1000
+
+// ProjectedGroup allocates a group identity before its dependent rows are written.
+type ProjectedGroup struct {
+	ID uuid.UUID
+	InsertProjectedGroupParams
+}
+
+// ProjectedEndpoint allocates an endpoint identity before its cost schedules are written.
+type ProjectedEndpoint struct {
+	ID uuid.UUID
+	InsertProjectedEndpointParams
+}
+
+// ProjectionWrites contains only differences selected by the projector. Apply keeps dependency order;
+// the caller owns the transaction, so a failed page rolls back the entire listing.
+type ProjectionWrites struct {
+	Groups           []ProjectedGroup
+	ChangedGroups    []UpdateProjectedGroupParams
+	AbsentGroups     []uuid.UUID
+	Models           []UpsertProjectedModelParams
+	AbsentModels     []SetProjectedModelAbsentParams
+	Endpoints        []ProjectedEndpoint
+	ChangedEndpoints []UpdateProjectedEndpointParams
+	Costs            []EnsureCostScheduleParams
+	UnknownCosts     []UnsetProjectedEndpointCostParams
+}
+
+// Apply writes nonempty pages in dependency order, inside the caller's transaction.
+func (w *ProjectionWrites) Apply(ctx context.Context, db DBTX) error {
+	if err := w.applyNames(ctx, db); err != nil {
+		return err
+	}
+	return w.applyEndpoints(ctx, db)
+}
+
+func (w *ProjectionWrites) applyNames(ctx context.Context, db DBTX) error {
+	if err := projectionPages(ctx, db, w.Groups, `
+INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, last_seen_at)
+VALUES `, ``, []string{"uuid", "uuid", "text", "text", "numeric", "jsonb", "timestamptz"}, func(r ProjectedGroup) []any {
+		return []any{r.ID, r.SupplierID, r.UpstreamRef, r.Name, r.Ratio, r.Facts, r.SeenAt}
+	}); err != nil {
+		return fmt.Errorf("project groups: %w", err)
+	}
+	if err := projectionPages(ctx, db, lastProjectionRows(w.ChangedGroups, func(r UpdateProjectedGroupParams) uuid.UUID { return r.ID }), `
+UPDATE suppliers.supplier_groups AS t SET name = v.name, ratio = v.ratio, facts = v.facts, present = true, last_seen_at = v.seen_at
+FROM (VALUES `, `) AS v(id, name, ratio, facts, seen_at) WHERE t.id = v.id`, []string{"uuid", "text", "numeric", "jsonb", "timestamptz"}, func(r UpdateProjectedGroupParams) []any {
+		return []any{r.ID, r.Name, r.Ratio, r.Facts, r.SeenAt}
+	}); err != nil {
+		return fmt.Errorf("project changed groups: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.AbsentGroups, `
+UPDATE suppliers.supplier_groups AS t SET present = false
+FROM (VALUES `, `) AS v(id) WHERE t.id = v.id AND t.present`, []string{"uuid"}, func(r uuid.UUID) []any {
+		return []any{r}
+	}); err != nil {
+		return fmt.Errorf("project absent groups: %w", err)
+	}
+	if err := projectionPages(ctx, db, lastProjectionRows(w.Models, func(r UpsertProjectedModelParams) projectedNameKey {
+		return projectedNameKey{r.SupplierGroupID, r.UpstreamName}
+	}), `
+INSERT INTO suppliers.supplier_models (supplier_id, supplier_group_id, upstream_name, model_id, formats)
+VALUES `, `
+ON CONFLICT (supplier_group_id, upstream_name) DO UPDATE
+SET model_id = excluded.model_id, formats = excluded.formats, present = true`, []string{"uuid", "uuid", "text", "uuid", "text[]"}, func(r UpsertProjectedModelParams) []any {
+		return []any{r.SupplierID, r.SupplierGroupID, r.UpstreamName, r.ModelID, r.Formats}
+	}); err != nil {
+		return fmt.Errorf("project models: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.AbsentModels, `
+UPDATE suppliers.supplier_models AS t SET present = false
+FROM (VALUES `, `) AS v(group_id, name) WHERE t.supplier_group_id = v.group_id AND t.upstream_name = v.name AND t.present`, []string{"uuid", "text"}, func(r SetProjectedModelAbsentParams) []any {
+		return []any{r.SupplierGroupID, r.UpstreamName}
+	}); err != nil {
+		return fmt.Errorf("project absent models: %w", err)
+	}
+	return nil
+}
+
+func (w *ProjectionWrites) applyEndpoints(ctx context.Context, db DBTX) error {
+	if err := projectionPages(ctx, db, w.Endpoints, `
+INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
+VALUES `, ``, []string{"uuid", "uuid", "uuid", "uuid", "text", "text[]"}, func(r ProjectedEndpoint) []any {
+		return []any{r.ID, r.SupplierID, r.SupplierGroupID, r.ModelID, r.UpstreamName, r.Formats}
+	}); err != nil {
+		return fmt.Errorf("project endpoints: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.ChangedEndpoints, `
+UPDATE suppliers.endpoints AS t SET upstream_name = v.name, formats = v.formats
+FROM (VALUES `, `) AS v(id, name, formats) WHERE t.id = v.id`, []string{"uuid", "text", "text[]"}, func(r UpdateProjectedEndpointParams) []any {
+		return []any{r.ID, r.UpstreamName, r.Formats}
+	}); err != nil {
+		return fmt.Errorf("project changed endpoints: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.Costs, `
+WITH wanted(supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint) AS (VALUES `, `), made AS (
+ INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
+ SELECT * FROM wanted ON CONFLICT (endpoint_id, fingerprint) DO NOTHING
+ RETURNING id, endpoint_id
+), schedules AS (
+ SELECT id, endpoint_id FROM made
+ UNION ALL
+ SELECT c.id, c.endpoint_id FROM suppliers.cost_schedules c
+ JOIN wanted w ON w.endpoint_id = c.endpoint_id AND w.fingerprint = c.fingerprint
+)
+UPDATE suppliers.endpoints e SET cost_state = 'known', cost_schedule_id = s.id, cost_state_reason = NULL
+FROM schedules s WHERE e.id = s.endpoint_id`, []string{"uuid", "uuid", "text", "jsonb", "text", "text"}, func(r EnsureCostScheduleParams) []any {
+		return []any{r.SupplierID, r.EndpointID, r.NativeUnit, r.Schedule, r.Basis, r.Fingerprint}
+	}); err != nil {
+		return fmt.Errorf("project costs: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.UnknownCosts, `
+UPDATE suppliers.endpoints AS t SET cost_state = 'unknown', cost_state_reason = v.reason
+FROM (VALUES `, `) AS v(id, reason) WHERE t.id = v.id AND t.cost_state = 'known'`, []string{"uuid", "text"}, func(r UnsetProjectedEndpointCostParams) []any {
+		return []any{r.ID, r.Reason}
+	}); err != nil {
+		return fmt.Errorf("project unknown costs: %w", err)
+	}
+	return nil
+}
+
+// Explicit casts keep nullable values and all-null columns typed. VALUES also supports ragged
+// format arrays without padding them, unlike a multidimensional PostgreSQL array.
+func projectionPages[T any](ctx context.Context, db DBTX, rows []T, prefix, suffix string, types []string, values func(T) []any) error {
+	for start := 0; start < len(rows); start += ProjectionPageSize {
+		page := rows[start:min(start+ProjectionPageSize, len(rows))]
+		var sql strings.Builder
+		sql.WriteString(prefix)
+		args := make([]any, 0, len(page)*len(types))
+		for i, r := range page {
+			if i > 0 {
+				sql.WriteByte(',')
+			}
+			sql.WriteByte('(')
+			for j, typ := range types {
+				if j > 0 {
+					sql.WriteByte(',')
+				}
+				fmt.Fprintf(&sql, "$%d::%s", len(args)+j+1, typ)
+			}
+			sql.WriteByte(')')
+			args = append(args, values(r)...)
+		}
+		sql.WriteString(suffix)
+		if _, err := db.Exec(ctx, sql.String(), args...); err != nil {
+			return fmt.Errorf("rows %d-%d: %w", start+1, start+len(page), err)
+		}
+	}
+	return nil
+}
+
+type projectedNameKey struct {
+	group uuid.UUID
+	name  string
+}
+
+// One INSERT ON CONFLICT cannot affect a row twice, and UPDATE FROM chooses an
+// unspecified match for repeated IDs. Preserve the row-by-row path's last write.
+func lastProjectionRows[T any, K comparable](rows []T, key func(T) K) []T {
+	indices := make(map[K]int, len(rows))
+	out := make([]T, 0, len(rows))
+	for _, r := range rows {
+		k := key(r)
+		if i, ok := indices[k]; ok {
+			out[i] = r
+		} else {
+			indices[k] = len(out)
+			out = append(out, r)
+		}
+	}
+	return out
 }
