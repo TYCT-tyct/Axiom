@@ -66,7 +66,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, req, err := h.expandPreset(c, body)
+	body, req, err := h.expandPreset(c, body)
 	if err != nil {
 		return 0, err
 	}
@@ -78,7 +78,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, names, err := readRouting(&req) // a count refuses what the call would
+	_, names, err := readRouting(&req, body) // a count refuses what the call would
 	if err != nil {
 		return 0, err
 	}

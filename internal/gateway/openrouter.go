@@ -308,7 +308,7 @@ func newORModel(id string, m catalog.Model, s catalog.Serving, p catalog.Schedul
 		ID: id, CanonicalSlug: id, Name: nameOf(id), Created: createdUnix, Pricing: newORPricing(p, s.Abilities),
 		ContextLength: s.Context, Architecture: newORArchitecture(s.Abilities),
 		TopProvider:         orTopProvider{ContextLength: s.Context, MaxCompletionTokens: s.MaxOutput},
-		SupportedParameters: orParameters(s, d, reasons), Links: orLinks{Details: orListPath + "/" + id + "/endpoints"},
+		SupportedParameters: orParameters(parameterSupport(s, d)), Links: orLinks{Details: orListPath + "/" + id + "/endpoints"},
 	}
 	if reasons {
 		entry.Reasoning = &orReasoning{SupportsMaxTokens: d.Thinking == catalog.ThinkingManual}
@@ -386,29 +386,6 @@ func orPrice(p catalog.Schedule, it catalog.Item) string {
 		return ""
 	}
 	return price.String()
-}
-
-// orParameters is the parameters the model takes, in the order OpenRouter's parameter enum lists them (spec
-// `Parameter`): the sampling and output controls every model here takes, then the ones its abilities claim. A parameter
-// the gateway would pass through but the catalog says nothing about for this model (logprobs, seed, verbosity, …) is not
-// claimed: a client reads the list to decide what it may send.
-func orParameters(s catalog.Serving, d catalog.Dialect, reasons bool) []string {
-	var p []string
-	if d.DefaultSamplingOnly != catalog.ClaimYes { // a model that refuses other sampling takes neither
-		p = append(p, "temperature", "top_p")
-	}
-	p = append(p, "max_tokens", "max_completion_tokens")
-	if s.Abilities.Has(catalog.AbilityStructuredOutput) {
-		p = append(p, "response_format")
-	}
-	p = append(p, "stop")
-	if s.Abilities.Has(catalog.AbilityTools) {
-		p = append(p, "tools", "tool_choice", "parallel_tool_calls")
-	}
-	if reasons {
-		p = append(p, "reasoning", "reasoning_effort")
-	}
-	return p
 }
 
 // orRoom is what the buffer is given beyond the page's entries: the envelope's own members and the next page's link.

@@ -288,6 +288,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	// The model streams only if its spec says the vendor does and the supplier's own policy says it can pass a stream:
 	// the gateway reads every answer as one, so an endpoint lacking either cannot serve a generation.
 	streams := serving.Streams && r.Streams
+	dialect := model.Dialect()
 	e := routing.Endpoint{
 		ID: routing.EndpointID(r.ID), Supplier: routing.SupplierID(r.Supplier), Codename: r.Codename, Model: catalog.ModelID(r.Model),
 		// The platform's own: M1's suppliers are the platform's (suppliers' owner scope is not part of Routable), and
@@ -304,9 +305,10 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		Quality: 1, Confidence: 1, Health: measured.Health, Throughput: measured.Throughput, Latency: measured.Latency,
 		ServiceTiers: tiers,
 		Native:       native, Served: served,
-		Caps:      capabilities(serving.Abilities),
-		Context:   serving.Context,
-		MaxOutput: serving.MaxOutput,
+		Caps:       capabilities(serving.Abilities),
+		Parameters: parameterSupport(serving, dialect),
+		Context:    serving.Context,
+		MaxOutput:  serving.MaxOutput,
 		// The spec records no image size and no page limit, so ImageTokens, PageTokens and FilePages stay 0: billing
 		// takes an image or a file of unknown size to fill the whole window when it reserves, which must never be below
 		// what a request spends, and charges an estimate when the upstream reports no input (billing.InputEstimate).
@@ -322,7 +324,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		UnknownItem:      blockedItem,
 		AudiencePrices:   sold.Audiences,
 		Price:            routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule},
-		Target:           targetOf(r.Upstream, streams, model.Dialect()),
+		Target:           targetOf(r.Upstream, streams, dialect),
 	}
 	return e, ""
 }
