@@ -15,10 +15,11 @@ import (
 )
 
 const admitKey = `-- name: AdmitKey :many
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, a.tier_id, a.status = 'active' AS account_active
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
+LEFT JOIN accounts.users owner ON owner.account_id=a.id
 WHERE k.id = $1
     AND accounts.domain_site($2::text, 'api') = k.site_id
     AND k.kind = 'call' AND k.status = 'active' AND k.deleted_at IS NULL
@@ -40,7 +41,7 @@ type AdmitKeyRow struct {
 	LimitReset    *string
 	Budget        *int64
 	BudgetReset   *string
-	TierID        uuid.UUID
+	AdmissionIds  []byte
 	AccountActive bool
 }
 
@@ -63,7 +64,7 @@ func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]
 			&i.LimitReset,
 			&i.Budget,
 			&i.BudgetReset,
-			&i.TierID,
+			&i.AdmissionIds,
 			&i.AccountActive,
 		); err != nil {
 			return nil, err
