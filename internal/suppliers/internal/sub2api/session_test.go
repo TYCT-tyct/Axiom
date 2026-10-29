@@ -224,8 +224,8 @@ func TestFailuresCarryNoSupplierText(t *testing.T) {
 		m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
 		for _, call := range []func() error{
 			func() error { _, err := m.Account(t.Context()); return err },
-			func() error { _, err := m.Keys(t.Context()); return err },
-			func() error { _, err := m.Offer(t.Context()); return err },
+			func() error { _, err := m.Keys(t.Context(), nil); return err },
+			func() error { _, err := m.Offer(t.Context(), nil); return err },
 			func() error {
 				_, _, err := m.Charges(t.Context(), lateScan(t))
 				return err

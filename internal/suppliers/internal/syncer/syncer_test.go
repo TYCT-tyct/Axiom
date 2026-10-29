@@ -84,8 +84,8 @@ func (s *memStore) count(k Kind) (n int) {
 type supplier struct {
 	calls   [numTasks]int
 	account func() (adapter.Account, error)
-	offer   func() (adapter.Offer, error)
-	keys    func() ([]adapter.KeyState, error)
+	offer   func(from adapter.Listing) (adapter.Page[adapter.Group], error)
+	keys    func(from adapter.Listing) (adapter.Page[adapter.KeyState], error)
 	charges func(scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error)
 }
 
@@ -94,14 +94,14 @@ func (m *supplier) Account(context.Context) (adapter.Account, error) {
 	return m.account()
 }
 
-func (m *supplier) Offer(context.Context) (adapter.Offer, error) {
+func (m *supplier) Offer(_ context.Context, from adapter.Listing) (adapter.Page[adapter.Group], error) {
 	m.calls[TaskCatalog]++
-	return m.offer()
+	return m.offer(from)
 }
 
-func (m *supplier) Keys(context.Context) ([]adapter.KeyState, error) {
+func (m *supplier) Keys(_ context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
 	m.calls[TaskKeys]++
-	return m.keys()
+	return m.keys(from)
 }
 
 func (*supplier) KeySecret(context.Context, adapter.KeyRef) (secret.Secret, error) {
@@ -113,21 +113,20 @@ func (m *supplier) Charges(_ context.Context, scan adapter.ScanState) (adapter.C
 	return m.charges(scan)
 }
 
-// healthy is a supplier whose answers never change. Its Done page says nothing about how far it read, like an adapter
-// that never went through the contract test (#109).
+// healthy is a supplier whose answers never change and whose listings fit in one read.
 func healthy() *supplier {
 	return &supplier{
 		account: func() (adapter.Account, error) {
 			return adapter.Account{Balance: "100", Funding: adapter.FundingWallet}, nil
 		},
-		offer: func() (adapter.Offer, error) {
-			return adapter.Offer{Groups: []adapter.Group{{
+		offer: func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+			return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{
 				Ref: "1", Name: "g", Ratio: "1.5", Facts: adapter.GroupFacts(`{}`),
 				Models: []adapter.Model{{UpstreamName: "m1"}, {UpstreamName: "m2"}},
 			}}}, nil
 		},
-		keys: func() ([]adapter.KeyState, error) {
-			return []adapter.KeyState{{Ref: "7", GroupRef: "1", Status: adapter.KeyActive}}, nil
+		keys: func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+			return adapter.Page[adapter.KeyState]{Done: true, Items: []adapter.KeyState{{Ref: "7", GroupRef: "1", Status: adapter.KeyActive}}}, nil
 		},
 		charges: func(scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
 			return adapter.ChargePage{Done: true}, scan, nil
@@ -220,8 +219,8 @@ func TestFailuresBackOffAndRecover(t *testing.T) {
 func TestAuthRejectionStopsEverything(t *testing.T) {
 	t.Parallel()
 	m := healthy()
-	m.offer = func() (adapter.Offer, error) {
-		return adapter.Offer{}, fmt.Errorf("login: %w", adapter.ErrAuthRejected)
+	m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return adapter.Page[adapter.Group]{}, fmt.Errorf("login: %w", adapter.ErrAuthRejected)
 	}
 	e, st, clk := engine(m)
 	round(t, e)
@@ -243,7 +242,9 @@ func TestAuthRejectionStopsEverything(t *testing.T) {
 func TestUnrecognisedAnswerHaltsOnlyItsTask(t *testing.T) {
 	t.Parallel()
 	m := healthy()
-	m.offer = func() (adapter.Offer, error) { return adapter.Offer{}, adapter.ErrUnrecognised }
+	m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return adapter.Page[adapter.Group]{}, adapter.ErrUnrecognised
+	}
 	e, st, clk := engine(m)
 	round(t, e)
 	clk.advance(10 * time.Minute)
@@ -259,48 +260,49 @@ func TestBlockedBucketsAreNotFailures(t *testing.T) {
 	t.Parallel()
 	m := healthy()
 	until := t0.Add(7 * time.Minute)
-	m.keys = func() ([]adapter.KeyState, error) { return nil, adapter.Blocked{Until: until} }
+	m.account = func() (adapter.Account, error) { return adapter.Account{}, adapter.Blocked{Until: until} }
 	e, st, _ := engine(m)
 	round(t, e)
-	if ts := st.state.Tasks[TaskKeys]; ts.Failures != 0 || !ts.Due.Equal(until) {
-		t.Errorf("keys task = %+v, want due at %v with no failure", ts, until)
+	if ts := st.state.Tasks[TaskBalance]; ts.Failures != 0 || !ts.Due.Equal(until) {
+		t.Errorf("balance task = %+v, want due at %v with no failure", ts, until)
 	}
-	if !e.Blocked().Equal(until) {
-		t.Errorf("Blocked = %v, want %v", e.Blocked(), until)
-	}
-	m.keys = func() ([]adapter.KeyState, error) { return nil, nil }
+	m.account = healthy().account
 	e.now = func() time.Time { return until }
 	round(t, e)
-	if !e.Blocked().IsZero() {
-		t.Errorf("Blocked = %v after a round nothing was held up in, want none", e.Blocked())
+	if ts := st.state.Tasks[TaskBalance]; ts.Failures != 0 || !ts.Due.After(until) {
+		t.Errorf("balance task = %+v after the limits reopened, want no failure and its interval", ts)
 	}
 }
 
-// TestBlockedLastsUntilEveryHeldUpTaskHasGoneOn: tasks held up by the limits until different times are waited for one
-// after the other, and a task still waiting is reported after another has gone on, so that a caller keeping the Manager
-// does not drop it, and with it how far its listing got, while a later one is not yet due.
-func TestBlockedLastsUntilEveryHeldUpTaskHasGoneOn(t *testing.T) {
+// TestEachListingIsDueWhenItsOwnLimitsReopen: the offer and the keys are stopped by the supplier's limits until different
+// times, and each is due when its own reopen: neither is waited for with the other's time, and both positions are kept.
+func TestEachListingIsDueWhenItsOwnLimitsReopen(t *testing.T) {
 	t.Parallel()
 	m := healthy()
 	early, late := t0.Add(2*time.Minute), t0.Add(5*time.Minute)
-	m.offer = func() (adapter.Offer, error) { return adapter.Offer{}, adapter.Blocked{Until: early} }
-	m.keys = func() ([]adapter.KeyState, error) { return nil, adapter.Blocked{Until: late} }
-	e, _, clk := engine(m)
-	round(t, e)
-	if !e.Blocked().Equal(early) {
-		t.Fatalf("Blocked = %v, want the earlier %v", e.Blocked(), early)
+	m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return adapter.Page[adapter.Group]{Next: adapter.Listing(`{"page":1}`), Until: early}, nil
 	}
-	clk.advance(2 * time.Minute)
-	m.offer = healthy().offer
-	round(t, e)
-	if !e.Blocked().Equal(late) {
-		t.Errorf("Blocked = %v after the earlier task went on, want the later %v still waited for", e.Blocked(), late)
+	m.keys = func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+		return adapter.Page[adapter.KeyState]{Next: adapter.Listing(`{"page":1}`), Until: late}, nil
 	}
-	clk.advance(3 * time.Minute)
-	m.keys = func() ([]adapter.KeyState, error) { return nil, nil }
+	e, st, clk := engine(m)
 	round(t, e)
-	if !e.Blocked().IsZero() {
-		t.Errorf("Blocked = %v after every task went on, want none", e.Blocked())
+	if ts := st.state.Tasks[TaskCatalog]; ts.Failures != 0 || !ts.Due.Equal(early) {
+		t.Errorf("offer task = %+v, want due at %v with no failure", ts, early)
+	}
+	if ts := st.state.Tasks[TaskKeys]; ts.Failures != 0 || !ts.Due.Equal(late) {
+		t.Errorf("keys task = %+v, want due at %v with no failure", ts, late)
+	}
+	if len(st.state.OfferAt) == 0 || len(st.state.KeysAt) == 0 {
+		t.Error("a position a listing the limits stopped reached was not kept")
+	}
+	clk.advance(5 * time.Minute)
+	m.offer, m.keys = healthy().offer, healthy().keys
+	round(t, e)
+	if len(st.state.OfferAt) != 0 || len(st.state.KeysAt) != 0 || len(st.state.Groups) != 1 || len(st.state.Keys) != 1 {
+		t.Errorf("after both listings ended: offer position %q, keys position %q, %d groups, %d keys",
+			st.state.OfferAt, st.state.KeysAt, len(st.state.Groups), len(st.state.Keys))
 	}
 }
 
@@ -332,8 +334,8 @@ func TestChangedRatioMakesOneEventAndOnePlan(t *testing.T) {
 	st.state.Confirmed = map[string]string{"m1": confirmedBase}
 	round(t, e)
 	first := st.state.Plans["1/m1"]
-	m.offer = func() (adapter.Offer, error) {
-		return adapter.Offer{Groups: []adapter.Group{{
+	m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{
 			Ref: "1", Name: "g", Ratio: "2", Facts: adapter.GroupFacts(`{}`),
 			Models: []adapter.Model{{UpstreamName: "m1"}, {UpstreamName: "m2"}},
 		}}}, nil
@@ -372,8 +374,8 @@ func TestUnreadGroupKeepsItsModels(t *testing.T) {
 	m := healthy()
 	e, st, clk := engine(m)
 	round(t, e)
-	m.offer = func() (adapter.Offer, error) {
-		return adapter.Offer{Groups: []adapter.Group{{Ref: "1", Name: "g", Ratio: "3", Facts: adapter.GroupFacts(`{}`), ModelsUnread: true}}}, nil
+	m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return adapter.Page[adapter.Group]{Done: true, Items: []adapter.Group{{Ref: "1", Name: "g", Ratio: "3", Facts: adapter.GroupFacts(`{}`), ModelsUnread: true}}}, nil
 	}
 	clk.advance(10 * time.Minute)
 	round(t, e)

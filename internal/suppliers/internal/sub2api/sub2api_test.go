@@ -51,7 +51,7 @@ func TestKeysAndKeySecret(t *testing.T) {
 	t.Parallel()
 	srv := routes(panel(t))
 	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
-	keys, err := m.Keys(t.Context())
+	keys, err := readKeys(t, m)
 	want := []adapter.KeyState{{Ref: "2", GroupRef: "2", Status: adapter.KeyActive}, {Ref: "1", GroupRef: "1", Status: adapter.KeyActive}}
 	if err != nil || !slices.Equal(keys, want) {
 		t.Fatalf("Keys = %+v, %v; want %+v", keys, err, want)
@@ -79,11 +79,11 @@ func TestKeysAndKeySecret(t *testing.T) {
 func TestOfferReadsGroupsModelsAndMultipliers(t *testing.T) {
 	t.Parallel()
 	m := manager0(t, offerServer(t), login(t, epoch.Add(24*time.Hour)))
-	offer, err := m.Offer(t.Context())
-	if err != nil || len(offer.Groups) != 2 {
+	offer, err := readOffer(t, m)
+	if err != nil || len(offer) != 2 {
 		t.Fatalf("Offer = %+v, %v", offer, err)
 	}
-	named, empty := offer.Groups[0], offer.Groups[1]
+	named, empty := offer[0], offer[1]
 	if named.Name != "claude-mock" {
 		named, empty = empty, named
 	}
@@ -102,6 +102,8 @@ func TestOfferReadsGroupsModelsAndMultipliers(t *testing.T) {
 // billing view) and whose other key is billed at 1.5.
 func offerServer(t testing.TB) *server {
 	table := panel(t)
+	// The recorded panel holds the key of one group only; the offer reads the other one by its id, as the module does.
+	table["GET /api/v1/keys/1"] = adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"id":1,"key":"placeholder-key-two","group_id":1,"status":"active"}}`)}
 	return newServer(func(r adapter.Request) (adapter.Response, error) {
 		key := r.Header.Get("Authorization")
 		switch {
@@ -180,7 +182,7 @@ func TestScanCoversEveryKeyAndPage(t *testing.T) {
 	var asked []string
 	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
 		if strings.HasPrefix(r.Path, "/api/v1/keys?") {
-			return adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"items":[{"id":7,"key":"k","group_id":1,"status":"active"},{"id":8,"key":"k","group_id":1,"status":"active"}],"pages":1}}`)}, nil
+			return adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"items":[{"id":7,"key":"k","group_id":1,"status":"active"},{"id":8,"key":"k","group_id":1,"status":"active"}],"total":2,"pages":1}}`)}, nil
 		}
 		asked = append(asked, r.Path)
 		body := `[` + item(1, older) + `]`
@@ -304,7 +306,7 @@ func TestAbsentFieldsAreNotReported(t *testing.T) {
 	t.Parallel()
 	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
 		if strings.HasPrefix(r.Path, "/api/v1/keys?") {
-			return adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"items":[{"id":7,"key":"k","group_id":1,"status":"active"}],"pages":1}}`)}, nil
+			return adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"items":[{"id":7,"key":"k","group_id":1,"status":"active"}],"total":1,"pages":1}}`)}, nil
 		}
 		return adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"items":[
 			{"request_id":"client:a","api_key_id":7,"model":"m","created_at":"2026-10-15T12:00:00Z","actual_cost":0.25,"billing_type":0,"billing_mode":"token","input_tokens":10,"output_tokens":0},
@@ -322,6 +324,65 @@ func TestAbsentFieldsAreNotReported(t *testing.T) {
 	if b.Reported.Has(catalog.ItemInput) || b.Funding != adapter.FundingOther || len(b.Usage.Unknown()) != 1 {
 		t.Errorf("a per-request subscription record: reported %v, funding %v, unknown %v", b.Reported, b.Funding, b.Usage.Unknown())
 	}
+}
+
+// TestTheScanListsTheKeysOnePagePerRead: a pass begins by listing the keys it reads, one page of them per read, so that a
+// supplier with more keys than a window allows is scanned without listing them again from the start each time.
+func TestTheScanListsTheKeysOnePagePerRead(t *testing.T) {
+	t.Parallel()
+	clk := &clock{t: epoch}
+	m := managerAt(t, keysServer(t), login(t, clk.t.Add(24*time.Hour)), clk)
+	state := begin(t, m)
+	clk.advance(time.Hour)
+
+	first, s := listKeysStep(t, m, clk, state)
+	if s.Pass.Listed || len(s.Pass.Keys) != 100 || s.Pass.Page != 2 {
+		t.Fatalf("after the first page of keys: %+v; want 100 keys and the next page to read", s.Pass)
+	}
+	_, s = listKeysStep(t, m, clk, first)
+	if !s.Pass.Listed || len(s.Pass.Keys) != 150 {
+		t.Fatalf("after the second page of keys: %+v; want the 150 keys it reads from then on", s.Pass)
+	}
+}
+
+// keysServer answers a supplier of 150 keys in two pages, and no usage at all.
+func keysServer(t *testing.T) *server {
+	t.Helper()
+	return newServer(func(r adapter.Request) (adapter.Response, error) {
+		ok := func(body string) (adapter.Response, error) {
+			return adapter.Response{Status: 200, Body: []byte(body)}, nil
+		}
+		switch {
+		case strings.HasPrefix(r.Path, "/api/v1/keys?page="):
+			pg, err := keyPageOf(r.Path)
+			if err != nil {
+				return adapter.Response{}, err
+			}
+			var keys []string
+			for i := (pg-1)*100 + 1; i <= min(pg*100, 150); i++ {
+				keys = append(keys, fmt.Sprintf(`{"id":%d,"key":"k","group_id":1,"status":"active"}`, i))
+			}
+			return ok(fmt.Sprintf(`{"code":0,"data":{"items":[%s],"total":150,"pages":2}}`, strings.Join(keys, ",")))
+		case strings.HasPrefix(r.Path, "/api/v1/usage"):
+			return ok(`{"code":0,"data":{"items":[],"total":0,"pages":1}}`)
+		}
+		return adapter.Response{Status: 404}, nil
+	})
+}
+
+// listKeysStep reads one read of a pass that lists keys, which holds no records, and returns the position after it and
+// what it says.
+func listKeysStep(t *testing.T, m adapter.Manager, clk *clock, state adapter.ScanState) (adapter.ScanState, scanState) {
+	t.Helper()
+	page, next, err := m.Charges(t.Context(), state)
+	if err != nil || page.Done || len(page.Charges) != 0 {
+		t.Fatalf("a read that lists keys: %+v, %v; want a page of them and no records", page, err)
+	}
+	s, err := decodeScan(next, clk.now())
+	if err != nil || s.Pass == nil {
+		t.Fatalf("the position after a read that lists keys: %+v, %v", s.Pass, err)
+	}
+	return next, s
 }
 
 // begin makes the first scan, which only marks the start, and returns its position.

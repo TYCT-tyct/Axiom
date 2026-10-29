@@ -111,3 +111,22 @@ func open(t testing.TB, c adapter.Client, now time.Time) adapter.Manager {
 	}
 	return m
 }
+
+// These fixtures fit in one window; interruption is a test failure.
+func readOffer(t testing.TB, m adapter.Manager) ([]adapter.Group, error) {
+	t.Helper()
+	page, err := m.Offer(t.Context(), nil)
+	if err == nil && !page.Done {
+		t.Fatal("the offer did not end")
+	}
+	return page.Items, err
+}
+
+func readKeys(t testing.TB, m adapter.Manager) ([]adapter.KeyState, error) {
+	t.Helper()
+	page, err := m.Keys(t.Context(), nil)
+	if err == nil && !page.Done {
+		t.Fatal("the keys listing did not end")
+	}
+	return page.Items, err
+}

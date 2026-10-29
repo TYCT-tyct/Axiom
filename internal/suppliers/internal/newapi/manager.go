@@ -2,42 +2,41 @@ package newapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-// manager is the read-only management side of one account.
-//
-// A listing that takes more requests than the rate bucket allows in a window (9,000 keys are 91 pages against 90
-// requests) cannot finish in one go. The manager keeps how far a listing got when a request was refused for want of
-// allowance, so that the call made again on the same manager continues instead of starting over; the module keeps a
-// manager through the retries of a round. What it kept is dropped when the listing finishes, and when it is older than
-// progressLife, since the pages of an old listing no longer belong to the new one.
+// manager is the read-only management side of one account. It keeps nothing of a listing between reads: the position
+// (adapter.Listing) says where the pass is and what it has read, and the module stores it, so a listing the supplier's
+// limits stopped, an error or a restart of the node goes on where it stopped.
 type manager struct {
 	api api
 	now func() time.Time
-
-	mu    sync.Mutex
-	keys  *keysProgress
-	offer *offerProgress
 }
 
 var _ adapter.Manager = (*manager)(nil)
-
-const progressLife = 10 * time.Minute
 
 // errMissing is the error of a successful answer without a member the adapter needs: an answer in another form than
 // the one known, not an answer that there is nothing.
 func errMissing(what string) error {
 	return fmt.Errorf("%w: the answer has no %s", adapter.ErrUnrecognised, what)
+}
+
+func listing(p any) adapter.Listing {
+	b, err := jsonx.MarshalCanonical(p)
+	if err != nil {
+		panic(err) // a position of names, numbers and statuses always encodes
+	}
+	return b
 }
 
 // Account implements adapter.Manager. The balance is the account's remaining quota, an integer in new-api's own unit;
@@ -97,47 +96,83 @@ const keyPageSize = 100
 // maxPages bounds a listing: a supplier whose pages never end would otherwise keep the task busy.
 const maxPages = 100
 
-// keysProgress is how far a listing of keys got.
+// keysProgress is the position in the keys listing: the page to read next, the keys read so far, and the total the
+// supplier stated. A key created during the listing shifts the pages, so one key may be read twice, which the position's
+// keys take out. A listing that shrank (a key removed) moved its pages forward, which would skip a key, so it begins
+// again: the keys read so far are given up, none is skipped.
 type keysProgress struct {
-	at   time.Time
-	page int
-	keys []adapter.KeyState
-	seen map[adapter.KeyRef]bool // a key created during the listing shifts the pages, so a page may repeat the last key of the one before
+	V     int                `json:"v"`
+	Page  int                `json:"page"`
+	Total int                `json:"total"`
+	Keys  []adapter.KeyState `json:"keys"`
+}
+
+func decodeKeys(raw adapter.Listing) keysProgress {
+	if len(raw) == 0 {
+		return keysProgress{V: 1, Page: 1}
+	}
+	var p keysProgress
+	if jsonx.UnmarshalKnown(raw, &p) != nil || p.V != 1 || p.Page < 1 {
+		return keysProgress{V: 1, Page: 1}
+	}
+	return p
 }
 
 // Keys implements adapter.Manager. new-api's key status is 1 enabled, 2 disabled, 3 expired, 4 exhausted. A key
-// with no group follows the account's group, which the empty GroupRef says.
-func (m *manager) Keys(ctx context.Context) ([]adapter.KeyState, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	p := m.keys
-	if p == nil || m.now().Sub(p.at) > progressLife {
-		p = &keysProgress{page: 1, seen: map[adapter.KeyRef]bool{}}
-	}
-	for ; p.page <= maxPages; p.page++ {
-		page, err := m.keyPage(ctx, p.page)
-		if err != nil {
-			p.at, m.keys = m.now(), p
-			return nil, err
-		}
-		for _, k := range page {
-			if !p.seen[k.Ref] {
-				p.seen[k.Ref] = true
-				p.keys = append(p.keys, k)
-			}
-		}
-		if len(page) < keyPageSize {
-			m.keys = nil
-			return p.keys, nil
+// with no group follows the account's group, which the empty GroupRef says. The listing is read from the position in
+// from, as far as the global bucket allows; what it read is in the position it answers with.
+func (m *manager) Keys(ctx context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+	p := decodeKeys(from)
+	for {
+		page, more, err := m.keysPage(ctx, &p)
+		if err != nil || !more {
+			return page, err
 		}
 	}
-	m.keys = nil
-	return nil, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
 }
 
-func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, error) {
+func (m *manager) keysPage(ctx context.Context, p *keysProgress) (page adapter.Page[adapter.KeyState], more bool, err error) {
+	if p.Page > maxPages {
+		return page, false, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
+	}
+	items, total, err := m.keyPage(ctx, p.Page)
+	if err != nil {
+		if blocked, ok := errors.AsType[adapter.Blocked](err); ok {
+			return adapter.Page[adapter.KeyState]{Next: listing(*p), Until: blocked.Until}, false, nil
+		}
+		return page, false, err
+	}
+	if p.Page > 1 && total < p.Total { // the list shrank under the position: it begins again
+		*p = keysProgress{V: 1, Page: 1}
+		return page, true, nil
+	}
+	p.Total = total
+	seen := keyRefs(p.Keys)
+	for _, k := range items {
+		if !seen[k.Ref] {
+			seen[k.Ref] = true
+			p.Keys = append(p.Keys, k)
+		}
+	}
+	if len(items) < keyPageSize {
+		return adapter.Page[adapter.KeyState]{Items: p.Keys, Done: true}, false, nil
+	}
+	p.Page++
+	return page, true, nil
+}
+
+func keyRefs(keys []adapter.KeyState) map[adapter.KeyRef]bool {
+	seen := make(map[adapter.KeyRef]bool, len(keys))
+	for _, k := range keys {
+		seen[k.Ref] = true
+	}
+	return seen
+}
+
+func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, int, error) {
 	var list struct {
 		Data *struct {
+			Total *int `json:"total"`
 			Items []struct {
 				ID     int64  `json:"id"`
 				Status int    `json:"status"`
@@ -147,20 +182,20 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, er
 	}
 	path := "/api/token/?p=" + strconv.Itoa(page) + "&page_size=" + strconv.Itoa(keyPageSize)
 	if err := m.api.get(ctx, path, global, &list); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	if list.Data == nil || list.Data.Items == nil {
-		return nil, errMissing("list of keys")
+	if list.Data == nil || list.Data.Total == nil || list.Data.Items == nil {
+		return nil, 0, errMissing("list of keys or how many there are")
 	}
 	keys := make([]adapter.KeyState, 0, len(list.Data.Items))
 	for _, item := range list.Data.Items {
 		status, ok := keyStatus[item.Status]
 		if !ok || item.ID <= 0 {
-			return nil, fmt.Errorf("%w: a key with status %d", adapter.ErrUnrecognised, item.Status)
+			return nil, 0, fmt.Errorf("%w: a key with status %d", adapter.ErrUnrecognised, item.Status)
 		}
 		keys = append(keys, adapter.KeyState{Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Status: status})
 	}
-	return keys, nil
+	return keys, *list.Data.Total, nil
 }
 
 var keyStatus = map[int]adapter.KeyStatus{
