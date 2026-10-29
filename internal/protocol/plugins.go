@@ -19,6 +19,11 @@ func (r *Request) Compresses(context int64) bool {
 	return r.Format == Chat && (r.Compression == CompressionEnabled || r.Compression == CompressionDefault && context <= 8192)
 }
 
+// NoWebSearch says what is missing for OpenRouter-side web search. Every way a request asks for it — the deprecated
+// web plugin, the :online variant and the openrouter:web_search server tool — is refused with this one sentence, so
+// the three cannot drift apart while no service is configured (docs/domains/gateway.md「插件与提示词变换」).
+const NoWebSearch = "no outside search service is configured"
+
 // ExtensionError is a rejected OpenRouter plugin or transform. It preserves the numeric OpenRouter error code.
 type ExtensionError struct{ Message string }
 
@@ -69,7 +74,11 @@ func (s *scanner) applyPlugin(id string, enabled bool) error {
 		if enabled && s.r.Format != Chat {
 			return fmt.Errorf("plugin %q is not supported for this format", id)
 		}
-	case "web", "file-parser":
+	case "web":
+		if enabled {
+			return fmt.Errorf("plugin %q is not supported: %s", id, NoWebSearch)
+		}
+	case "file-parser":
 		if enabled {
 			return fmt.Errorf("plugin %q is not supported: external services are not configured", id)
 		}

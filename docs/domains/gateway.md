@@ -198,7 +198,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 - **接受 OpenRouter 的参数**：
   - `provider` 对象：只走、排除、指定顺序、是否允许回退、要求支持全部参数、数据政策、排序、最高价、性能条件；
   - `models` 备选模型；Messages 也支持 `fallbacks: [{model: "…"}]`，限制与映射见[路由的「命名预设」](routing.md#命名预设)和「失败怎么办」；
-  - 模型名变体 `:nitro`、`:floor`：等同 `provider.sort` 的 `throughput`、`price`；`:exacto`、`:online`、`~…-latest` 别名返回 400，`:free`、`:thinking` 等本站不能表示的目录变体返回 400，见下文「模型名变体」；
+  - 模型名变体 `:nitro`、`:floor`：等同 `provider.sort` 的 `throughput`、`price`；`:exacto`、`:online`、`:free`、`:batch`、`:extended`、`~…-latest` 别名返回 400，`:thinking` 只在请求已要求推理时接受，见下文「模型名变体」；
   - `@preset/名称`、`model@preset/名称`、`preset` 字段：使用当前账户的命名配置，覆盖与管理接口见[路由的「命名预设」](routing.md#命名预设)；
   - `session_id`、`x-session-id` 请求头、`prompt_cache_key`；请求体 session_id 优先于请求头，二者最多 256 字符；
   - `user`：终端用户标识，用于防滥用和归因。
@@ -231,10 +231,23 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | `plugins:[{id:"context-compression"}]`、`transforms:["middle-out"]` | 执行：Chat 在准入之前从中间删除完整对话轮次，保留首尾；仍超长时从纯文本消息中间截短；按 [Anthropic 消息上限](https://platform.claude.com/docs/en/api/messages/create)（2026-10-29）裁到最多 100000 条，跨消息的未完成工具调用不拆组。系统指令、工具调用及结果、签名和多模态部件不截短；剩余固定内容放不下则 400，不把不完整的工具对发给上游 |
 | `plugins:[{id:"context-compression",enabled:false}]`、`transforms:[]` | 执行关闭；显式插件策略优先于旧 `transforms`，没有显式策略时，Chat 上下文不超过 8192 token 默认尝试：正文超过整个上下文的字节上界（不扣默认输出上限），或超过消息条数上限才启动；压缩失败或临时内存不足时原样转发，不新增拒绝 |
 | 已知插件的 `enabled:false`、空数组、null | 忽略（等价于关闭或未指定）；未知 id 即使关闭仍拒绝 |
-| `web`、`file-parser` | 启用时 400，消息含 `not supported`：搜索索引/抓取、PDF/OCR 解析需要外部服务，目前没有对应执行、计量和故障边界；显式关闭可接受 |
+| `web` | 启用时 400，消息含 `not supported` 与「没有配置外部搜索服务」：联网搜索需要外部服务，执行与计量见「服务端工具」；显式关闭可接受。`:online` 变体和 `openrouter:web_search` 工具是同一件事，共用这句话 |
+| `file-parser` | 启用时 400，消息含 `not supported`：PDF/OCR 解析需要外部服务，目前没有对应执行、计量和故障边界；显式关闭可接受 |
 | 未知插件 id、未知 transform、未支持的插件选项；非 Chat 格式启用本地插件 | 400，消息含 `not supported`，不静默删除 |
 
 **有意偏离**：压缩使用目录主模型的上下文和输出上限，在路由与预留之前完成；不实现 OpenRouter 跨模型的「半个所需上下文」候选扩展，也不对每个回退端点重新压缩。仍按正常路由过滤装不下的备选模型。输入使用 JSON 正文字节上界（包含工具定义及控制字段）而非调用外部分词服务，因此仍可能更早压缩，显式开启时保护内容装不下会拒绝；默认策略只在超过整个上下文的字节上界或消息上限后尝试，失败时保留原文和原摘要。默认输出上限等于上下文也不会因此拒绝请求，实际输出上限仍由正常路由裁到剩余窗口。同一份摘要、预留与转发正文一致。只提供 Chat 插件接口，其他格式显式拒绝启用；不增加账户级默认插件设置。`web` 和 `file-parser` 暂不接入外部服务。
+
+### 服务端工具
+
+2026-10-29 核对 [Server Tools](https://openrouter.ai/docs/guides/features/server-tools) 及逐工具页面。服务端工具和客户端执行的 `function` 工具不是一回事：模型自己决定调用零到多次，OpenRouter 执行后把结果送回模型继续采样，步数和费用都由它管。Axiom 不跑这个循环，所以一个都不接受；但按名字认出来再拒绝，不把 `openrouter:*` 当普通函数转发给上游——上游会忽略它，客户端却以为能用。
+
+- **认哪些**：`openrouter:` 命名空间里 OpenRouter 文档列出的 13 种——`web_search`、`web_fetch`、`datetime`、`image_generation`、`apply_patch`、`shell`、`bash`、`fusion`、`advisor`、`subagent`、`experimental__search_models`、`tool_search`、`files`。三种调用格式的 `tools` 数组都认，表只在 `internal/protocol/grammar.go` 的 `openrouterTools` 一处；命名空间里没有的名字也拒绝，并说明它不是 OpenRouter 的服务端工具，因为 OpenRouter 会继续加工具。工具的 `parameters` 不解析：请求已经拒绝，不为一棵读不到的树写转换。
+- **怎么拒绝**：准入之前回 400 `invalid_request`，消息含 `not supported` 和工具名，走各格式自己的错误外壳（见「错误」）；不预留、不调用上游、不发送。`web_search` 的原因是没有配置外部搜索服务，与 `web` 插件、`:online` 变体共用 `protocol.NoWebSearch` 这一句话；其余工具的原因是没有 OpenRouter 的模型侧工具循环。
+- **为什么不做一半**：这些工具共同的执行前提是模型侧循环——拦截调用、执行、把结果作为下一次采样的输入、限定步数并计费；搜索、抓取、图片和沙箱还各需要一个外部服务或执行环境。只接受声明而把工具定义转给上游，会让模型以为工具可用、客户端拿不到结果；只实现其中一个，又要把其余十二个继续拒绝，判断分散在两处。
+- **将来怎么接（一个接口）**：循环留在网关，外部服务只做一件事：收到一次带界的查询（查询词、结果条数上限、允许/排除的域名、请求指定的引擎），返回有界的条目列表（URL、标题、摘要）或一次错误。网关负责其余部分——步数上限（`max_uses`）、每次搜索计入现有的按次 `web_search` 计费项、结果大小与字符集上限、超时和失败按普通上游失败处理、密钥只留在出网的一侧、查询内容不写进日志。换服务只改这一个实现，拒绝、计费和协议外壳都不动。没有先加一个空的 Go 接口：现在没有实现者，仓库规则也不留只为将来的抽象；接口的职责边界写在这里，接第一个服务时再落成类型。
+- **要负责人决定的事**（决定前保持 400）：用哪个搜索服务（Exa、Firecrawl、Parallel、Perplexity、自建，或只允许模型厂商的原生搜索、不接外部服务）；该服务的数据保留与零保留（ZDR）条款能否接受，因为查询词会离开本站；按次成本多少、现有 `web_search` 售价是否覆盖，以及每个请求的搜索次数上限；密钥由谁持有、出网走哪个出口。这些是业务和外部约束，代码和文档不能代替。决定后在这里补选型与计费口径，再实现上面那个接口。
+
+`GET /api/v1/tools` 的目录也没有：清单不能先于执行公开。
 
 ### 模型名变体
 
@@ -245,16 +258,19 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | `:nitro` | 按吞吐排序，并准入 priority 层的端点（[Nitro](https://openrouter.ai/docs/guides/routing/model-variants/nitro)） | 等同 `provider.sort: throughput`；层级准入见下 |
 | `:floor` | 按价格排序，并准入 flex 层的端点（[Floor](https://openrouter.ai/docs/guides/routing/model-variants/floor)） | 等同 `provider.sort: price`；层级准入见下 |
 | `:exacto` | 按质量信号排序：工具调用成功率、吞吐、延迟、基准结果（[Exacto](https://openrouter.ai/docs/guides/routing/model-variants/exacto)） | 400 暂不支持：现有健康度不包含 Exacto 的工具调用成功率和基准评分，不能声称按同样信号排序 |
-| `:online` | 已弃用，等于 `web` 插件（[Online](https://openrouter.ai/docs/guides/routing/model-variants/online)） | 400：没有联网搜索服务（`web` 插件返回 400，见上节） |
-| `:free` | [独立免费目录条目](https://openrouter.ai/docs/guides/routing/model-variants/free)，与付费条目的规格、价格和端点分开 | 400 `invalid_request`：目录禁止带冒号的条目，不能保证免费；不按零价猜测或回落到付费基础模型 |
-| `:thinking` | [总览](https://openrouter.ai/docs/guides/routing/model-variants/overview)列为独立思考目录条目，具有自己的规格、价格和端点 | 400 `invalid_request`：没有独立变体条目，提示使用 `reasoning` 参数；不把后缀自动改成开启思考 |
-| `:batch` `:extended` | 独立目录变体 | 400 `invalid_request`：目录没有独立条目与价格 |
+| `:online` | 已弃用，等于 `web` 插件（[Online](https://openrouter.ai/docs/guides/routing/model-variants/online)） | 400：没有联网搜索服务，与 `web` 插件、`openrouter:web_search` 共用一句话（见「服务端工具」） |
+| `:free` | [独立免费目录条目](https://openrouter.ai/docs/guides/routing/model-variants/free)，与付费条目的规格、价格和端点分开，OpenRouter 仍在提供 | 400：本目录没有免费条目，发布价必须为正，兑现不了免费；不按零价猜测，也不回落到付费基础模型 |
+| `:thinking` | OpenRouter 已弃用，总览页让改用 `reasoning` 参数；原先是独立的思考目录条目 | 请求自己已经要求推理时**接受**：本目录没有独立条目，这个后缀唯一能兑现的含义就是开启推理，此时已经满足，按基础模型服务；没要求推理时 400，提示改用 `reasoning` 参数。发现接口按基础模型回 200 |
+| `:batch` | 独立批量计价条目 | 400：本目录没有批量条目与价格，不按普通价冒充批量价 |
+| `:extended` | 已弃用，且没有模型再提供（总览页） | 400：本目录没有这个条目 |
 | 别的后缀 | 总览页：只有列出的才是变体 | 404 `model_not_found` |
-| `~作者/系列-latest` | [Latest Model Resolution](https://openrouter.ai/docs/guides/routing/routers/latest-resolution)：按已登记的模型族映射选最新可见模型，响应 `model` 是具体模型 | 400 `invalid_request`：目录没有模型族与可切换的别名映射，不按字符串前缀或日期猜最新版本 |
+| `~作者/系列-latest` | [Latest Model Resolution](https://openrouter.ai/docs/guides/routing/routers/latest-resolution)：按已登记的模型族映射选最新可见模型，响应 `model` 是具体模型 | 400：目录没有模型族与可切换的别名映射，不按字符串前缀或日期猜最新版本 |
 
-- **叠加**：变体可以任意顺序叠加，最后一个排序变体生效（总览页）：`:floor:nitro` 按吞吐，`:nitro:floor` 按价格。`:exacto` 之后又写了排序变体时，它已被替换，不报错。
+- **一张表**：每个后缀做什么、拒绝时说什么，都在 `internal/gateway/variant.go` 的 `variants` 表里，三种格式、调用、备选、`count_tokens` 和发现共用。表外的后缀是 404。
+- **`:thinking` 为什么只有一半接受**：它不是排序，而是「换成会思考的条目」。本目录一个模型只有一份规格和价格，没有思考条目；请求已经用 `thinking` / `reasoning` 参数要了推理时，后缀要的东西已经满足，再拒绝只会让照 OpenRouter 写的客户端多改一处。判断按整理后的能力标记：空的 `reasoning_effort`（或 `reasoning.effort` 的空值）不算开启推理，因为转换后的上游请求不会带任何推理设置；只有真正写出的 effort、`enabled: true` 或预算才算。反过来，请求没要推理时接受它，就会把「开启思考」悄悄降级成普通回答，所以仍是 400，并告诉客户端改成参数。发现接口不执行请求级判断，因此 `:thinking` 也像 `:exacto` 一样返回基础模型元数据。
+- **叠加**：变体可以任意顺序叠加，最后一个排序变体生效（总览页）：`:floor:nitro` 按吞吐，`:nitro:floor` 按价格。`:exacto` 之后又写了排序变体时，它已被替换，不报错；`:thinking` 与排序无关，叠加时保留。
 - **与 `provider.sort` 同时写**：显式的 `provider.sort` 优先。依据是 exacto 页的一句话："An explicit sort by price, throughput, or latency overrides it"；nitro 和 floor 页没写这一点，按同样处理，所以 `:exacto` 加 `provider.sort` 也可用。
-- **发现与调用的区别**：两种模型详情及 OpenRouter endpoints 查询只解析基础模型、检查可见性，不执行调用的排序校验；`:exacto` 因此可以返回基础模型元数据（200），不代表相同名字在未指定 `provider.sort` 时可调用。调用和 `count_tokens` 仍回 400，直到显式排序覆盖它；模型发现的成功不承诺某个请求的路由要求能被兑现。
+- **发现与调用的区别**：两种模型详情及 OpenRouter endpoints 查询只解析基础模型、检查可见性，不执行调用的请求级校验；`:exacto` 和 `:thinking` 因此可以返回基础模型元数据（200），不代表相同名字在未指定 `provider.sort` 或未要求推理时可调用。调用和 `count_tokens` 仍按上表拒绝；模型发现的成功不承诺某个请求的路由要求能被兑现。
 - **备选 `models`**：排序是整个请求一个（路由没有按模型的排序）。备选名字按同样的规则读：不支持的变体回 400，不当作略去；不认识的后缀，备选按"不存在"略去；已知目录变体回 400；备选的排序变体与请求最终的排序不同回 400；备选的 `:exacto` 只有显式 `provider.sort`（或它自己名字里后面的排序变体）能替换，主模型名上的排序变体不算，因为它不会按质量排备选。`count_tokens` 读同样的名字和 `provider`，拒绝的与调用一致。
 - **名字长度**：整个模型名（含变体）至多 200 字节，超过回 404 `model_not_found`，在准入之前。调用记录保存客户端写的整个名字，列最多 200 个字符；目录原来也不认更长的名字，不能让叠加的后缀绕过这个界限，被服务之后才丢了记录。
 - **层级准入没有做**：nitro 页说它同时准入 priority 层，floor 页说它同时准入 flex 层。这里只做排序一半。不写 `service_tier` 的请求本来就可以由 standard 和 priority 服务（协议 `anyTier`），flex 要客户端自己写 `service_tier`；为 `:floor` 改写发往上游的 `service_tier` 会改变预留和计费依据，另做。
@@ -350,6 +366,8 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | 变体在网关里读，目录和路由都不认识后缀 | 变体是路由开关，不是模型：放进目录会让一个模型分裂成多个条目，也要放宽目录"带 `:` 的名字永远查不到"的不变量，那条不变量正是为了保证带后缀的写法落不到基础模型。读法集中在 `variant.go`，调用、备选和 `count_tokens` 共用，不会各自读出不同的结果 |
 | 已知且不能兑现的目录变体回 400，未知后缀仍 404 | 选择在网关解释并拒绝，而不放宽目录约束或将后缀剥掉调用基础模型；后者可能收费或丢失推理约束。OpenRouter 的缺失目录条目 404 是其具有变体目录时的行为，本站因功能不可用主动回 400，是本任务要求的有意偏离。错误要让客户端区分功能尚不可用与模型下线 |
 | 显式 `provider.sort` 压过变体 | exacto 页明说显式排序覆盖它；请求体里的字段比名字里的后缀更具体，nitro 和 floor 照此处理。代价：写了 `:nitro` 又写 `sort: price` 的客户端得到按价格排序，与 OpenRouter 的实际行为未核对（页面没写） |
+| 服务端工具按 OpenRouter 文档逐个认名拒绝，联网搜索的三种写法共用一句话，执行留一个接口 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P2。比较整段 `openrouter:` 前缀一条消息与逐类型识别：后者说得出哪个工具、缺什么，OpenRouter 以后新增的名字仍拒绝但说明不认识。比较现在就实现工具循环与只定接口：循环要外部搜索或抓取服务、沙箱和按步计费，负责人还没选服务，先做会把计费和数据政策锁死；因此 `web` 插件、`:online`、`openrouter:web_search` 共用一个原因，其余工具说没有模型侧循环，接口职责与待定事项写在「服务端工具」。不先加空的 Go 接口：没有实现者，仓库规则不留只为将来的抽象 |
+| 模型名变体逐项定行为：能兑现的兑现，不能的带原因拒绝 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P3。2026-10-29 核对官方页面：`:nitro`、`:floor` 排序，`:exacto` 质量信号，`:thinking` 已弃用，`:online` 等于 web 插件，`:free`、`:batch` 独立目录条目，`:extended` 已下线，`~…-latest` 要模型族映射。能在本站兑现的只有排序和「请求已要求推理时的 `:thinking`」：`:exacto` 缺工具成功率与基准，`:free` 与正价发布矛盾，其余条目不存在，别名缺映射，所以各自说明原因后拒绝，不静默剥掉后缀。`:thinking` 的接受条件放在 `readRouting`，发现接口不执行请求级判断；`:online` 改说搜索服务而不是「暂不支持」 |
 | `~…-latest` 认出后回 400，保留后续别名表方向 | 比较显式的模型族/别名映射与按名字、日期猜测最新：只有映射能保证不串模型族、发现与调用价格一致、切换有审计。现有名字只追加，规格没有族关系，不能兑现“最新”。本次保留结构化拒绝，不把内部 `-latest` 名字开放调用，不新增未经数据证据支撑的自动切换；后续映射应独立于不可改指向的公开名字。决定依据同上 #309 授权，不再以等待负责人拍板为由阻塞 |
 | 会话、用户标识换成派生值，而不是删除 | 删除会让上游缓存失效；原样转发会串租户、泄露标识 |
 | 响应头按白名单放行 | 上游的请求 ID、组织名等头会暴露货源 |
@@ -382,5 +400,6 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 - 402 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
 - `~作者/系列-latest` 别名的后续实现：目录需要独立的模型族与可切换别名映射，切换追加审计；发现和调用应使用同一次发布的目标、规格与价格，响应 `model` 按 OpenRouter 返回具体模型。现有名字仍只追加，不把内部名字开放调用。需要补齐模型族数据与版本选择依据后再实现，不按前缀或日期猜最新；价格与能力变化遵循[目录的切换与迁移](catalog.md#模型的生命周期)。当前请求仍为上文说明原因的 400。
+- 服务端工具的外部服务：选哪个搜索或抓取服务、数据保留与零保留条款、按次成本与售价、密钥保管和出网，由负责人决定；决定前 `web` 插件、`:online` 和 `openrouter:web_search` 都回 400。职责划分和要决定的事项见「服务端工具」。
 - `:nitro`、`:floor` 的层级准入：为 `:floor` 准入 flex 层要决定是否改写发给上游的 `service_tier`，及其对预留和计费的影响
 - Claude Code 的 Bedrock、Vertex 格式和 Gemini 原生格式的支持，以后再做
