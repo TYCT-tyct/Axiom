@@ -267,7 +267,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | `~作者/系列-latest` | [Latest Model Resolution](https://openrouter.ai/docs/guides/routing/routers/latest-resolution)：按已登记的模型族映射选最新可见模型，响应 `model` 是具体模型 | 400：目录没有模型族与可切换的别名映射，不按字符串前缀或日期猜最新版本 |
 
 - **一张表**：每个后缀做什么、拒绝时说什么，都在 `internal/gateway/variant.go` 的 `variants` 表里，三种格式、调用、备选、`count_tokens` 和发现共用。表外的后缀是 404。
-- **`:thinking` 为什么只有一半接受**：它不是排序，而是「换成会思考的条目」。本目录一个模型只有一份规格和价格，没有思考条目；请求已经用 `thinking` / `reasoning` 参数要了推理时，后缀要的东西已经满足，再拒绝只会让照 OpenRouter 写的客户端多改一处。反过来，请求没要推理时接受它，就会把「开启思考」悄悄降级成普通回答，所以仍是 400，并告诉客户端改成参数。发现接口不执行请求级判断，因此 `:thinking` 也像 `:exacto` 一样返回基础模型元数据。
+- **`:thinking` 为什么只有一半接受**：它不是排序，而是「换成会思考的条目」。本目录一个模型只有一份规格和价格，没有思考条目；请求已经用 `thinking` / `reasoning` 参数要了推理时，后缀要的东西已经满足，再拒绝只会让照 OpenRouter 写的客户端多改一处。判断按整理后的能力标记：空的 `reasoning_effort`（或 `reasoning.effort` 的空值）不算开启推理，因为转换后的上游请求不会带任何推理设置；只有真正写出的 effort、`enabled: true` 或预算才算。反过来，请求没要推理时接受它，就会把「开启思考」悄悄降级成普通回答，所以仍是 400，并告诉客户端改成参数。发现接口不执行请求级判断，因此 `:thinking` 也像 `:exacto` 一样返回基础模型元数据。
 - **叠加**：变体可以任意顺序叠加，最后一个排序变体生效（总览页）：`:floor:nitro` 按吞吐，`:nitro:floor` 按价格。`:exacto` 之后又写了排序变体时，它已被替换，不报错；`:thinking` 与排序无关，叠加时保留。
 - **与 `provider.sort` 同时写**：显式的 `provider.sort` 优先。依据是 exacto 页的一句话："An explicit sort by price, throughput, or latency overrides it"；nitro 和 floor 页没写这一点，按同样处理，所以 `:exacto` 加 `provider.sort` 也可用。
 - **发现与调用的区别**：两种模型详情及 OpenRouter endpoints 查询只解析基础模型、检查可见性，不执行调用的请求级校验；`:exacto` 和 `:thinking` 因此可以返回基础模型元数据（200），不代表相同名字在未指定 `provider.sort` 或未要求推理时可调用。调用和 `count_tokens` 仍按上表拒绝；模型发现的成功不承诺某个请求的路由要求能被兑现。

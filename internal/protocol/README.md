@@ -33,7 +33,7 @@
 | `Provider`：OpenRouter 的 `provider` 对象，原样的字节，至多 4 KiB，没写或 `null` 为空；`Inspect` 只检查它是对象、大小在界内，含义由 gateway 读 | gateway 转成路由的覆盖条件（[gateway 的「入口与准入」](../gateway/README.md#入口与准入)） | `provider` | 同左 | 同左 |
 | `Needs` | 路由的能力过滤（[路由的「一个请求的路由步骤」](../../docs/domains/routing.md#一个请求的路由步骤)） | 见下 | 见下 | 见下 |
 
-`Needs` 的能力：`Images`、`Documents` 同上；`PromptCache` 是有 `cache_control`；`StructuredOutput` 是回复格式（Messages 的 `output_config.format`、`output_format`，Responses 的 `text.format`，Chat 的 `response_format`）的 `type` 为 `json_schema` 或 `json_object`；`Reasoning` 是显式启用、effort 或预算要求（Messages 也读 `output_config.effort`）；缺省、null、空设置或只选展示方式不要求推理能力。任一关闭（`type: "disabled"`、`effort: "none"`、`enabled: false`，含 Chat 的 `reasoning_effort`）优先于强度，不受成员顺序影响；工具按 `type` 分：Messages 的 `web_search_*`、`code_execution_*`，Responses 的 `web_search*`、`code_interpreter` 是 `WebSearch`、`CodeExecution`，除下文明示拒绝的服务端工具外，其余工具都是 `Tools`；Chat 有 `web_search_options` 是 `WebSearch`。
+`Needs` 的能力：`Images`、`Documents` 同上；`PromptCache` 是有 `cache_control`；`StructuredOutput` 是回复格式（Messages 的 `output_config.format`、`output_format`，Responses 的 `text.format`，Chat 的 `response_format`）的 `type` 为 `json_schema` 或 `json_object`；`Reasoning` 是显式启用、effort 或预算要求（Messages 也读 `output_config.effort`）；缺省、null、空设置（含空的 `reasoning_effort` 或 `reasoning.effort`）或只选展示方式不要求推理能力。任一关闭（`type: "disabled"`、`effort: "none"`、`enabled: false`，含 Chat 的 `reasoning_effort`）优先于强度，不受成员顺序影响；工具按 `type` 分：Messages 的 `web_search_*`、`code_execution_*`，Responses 的 `web_search*`、`code_interpreter` 是 `WebSearch`、`CodeExecution`，除下文明示拒绝的服务端工具外，其余工具都是 `Tools`；Chat 有 `web_search_options` 是 `WebSearch`。
 
 - **只按位置读**：从顶层出发，只沿消息、条目、部件的 `content` 和 `output`（Messages 的 `tool_result` 和 `document` 的 `source.content` 里也有部件）进入部件；Messages 和 Responses 部件的 `content`、`output` 也可以是单个部件，如服务端工具的结果、`computer_call_output` 的截图，按值的形状认，因为成员顺序不定，读到它时还不知道外层的 `type`；工具的 schema、工具调用的参数从不进入，所以客户端数据里叫 `cache_control`、`type`、`max_uses` 的键不算数。
 - **出错返回 `ErrInvalid`**（gateway 回 400）：不是 jsonx 接受的 JSON（非法 UTF-8、重复键、超过 `jsonx.MaxDepth`、值后还有数据）、不是对象、没有 `model`；读的成员类型不对、`provider` 超过 4 KiB、计数不是非负整数、同类工具的 `max_uses` 相加超出 int64；`service_tier`、`speed` 是表里没有的取值，因为定不了价。`null` 等于没写。错误说明是我们的话：JSON 语法错是 "Invalid request: invalid JSON request body"（new-api 的同一句），类型不对的值用 JSON 指针指出位置，解码库的原话（偏移量、Go 类型名）不外传（`bodyFault`，`TestAnInvalidBodyIsDescribedInOurWords`）。
@@ -153,12 +153,12 @@
 
 | 输入设置 | Messages manual 目标 | Messages adaptive 目标 | Responses 目标 | 原生 Messages / Responses → Chat |
 |---|---|---|---|---|
-| 未指定 / null / 空对象 | 不加 thinking | 不加 thinking | 不加 reasoning | 不加推理设置 |
+| 未指定 / null / 空对象 / 空 effort | 不加 thinking | 不加 thinking | 不加 reasoning | 不加推理设置 |
 | Chat enabled true | 以 medium 算预算 | adaptive + medium | effort medium | Messages adaptive 无 effort → medium（OpenRouter 开启默认，替换原 high） |
 | enabled false / effort none | thinking disabled | thinking disabled | effort none，不索取摘要 | Messages disabled → reasoning_effort none，压过 output_config.effort；Responses none 原值 |
 | minimal / low / medium / high | 输出上限的 10% / 20% / 50% / 80% | minimal → low；其余原值 | 原值 | 共享 effort 原值 |
 | xhigh / max | 都为输出上限的 95% | 原值 | 原值（当前 OpenAI 规范已列 max） | 原值，不沿用参考实现 max → xhigh 的旧规则 |
-| Chat reasoning.max_tokens | 原值 budget_tokens | 按最近比例换 effort | 同左 | Messages budget_tokens → reasoning_effort，比例同左；同时给 output_config.effort 时优先 effort |
+| Chat reasoning.max_tokens | 原值 budget_tokens | 按最近比例换 effort | 同左 | Messages budget_tokens → reasoning_effort，比例同左；同时给非空的 output_config.effort 时优先 effort，空值视为未给 |
 | Chat exclude true / false | 开启时加 display omitted / summarized | 已显式开启时加 display omitted / summarized；只给展示方式不补 thinking | true 不索取摘要；false 索取 summary auto | Messages display 只控制本地输出过滤，不向官方 Chat 添加非标准参数；Responses summary auto 可转，其他样式仍拒绝 |
 
 手动 effort 预算沿用 OpenRouter：`max(min(输出上限 × 比例, 128000), 1024)`；显式预算必须为正，手动模型还要求至少 1024 且严格小于输出上限，否则该端点 `NotSupported`。manual 在工具轮次缺少可回放的思考时仍拒绝。只有 effort 的目标不能保证精确 token 预算：按预算与有效输出上限之比取最近档（10%、20%、50%、80%、95%），同距取较低档，95% 取 xhigh。有效上限优先请求，否则取 `Target.MaxOutput`；都没有则返回 `NotSupported`。adaptive 的最低档为 low，因此 minimal 再近似为 low。比例只是强度换算，不承诺实际消耗或硬预算。

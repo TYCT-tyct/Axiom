@@ -201,6 +201,29 @@ func TestCountTokensReadsVariants(t *testing.T) {
 	}
 }
 
+// TestAnEmptyEffortCannotSatisfyThinking: a Chat request whose only reasoning setting is an empty effort asks for no
+// reasoning — the conversion writes no thinking for it — so :thinking on the model or on an alternate is refused
+// instead of being served by the plain model.
+func TestAnEmptyEffortCannotSatisfyThinking(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	for name, body := range map[string]string{
+		"the model":    `{"model":"acme/alpha:thinking","max_tokens":1000,"reasoning_effort":"","messages":[{"role":"user","content":"hello"}]}`,
+		"an alternate": `{"model":"acme/beta","models":["acme/alpha:thinking"],"max_tokens":1000,"reasoning_effort":"","messages":[{"role":"user","content":"hello"}]}`,
+	} {
+		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(body))
+		if code, _ := errorOf(t, out); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" ||
+			!strings.Contains(out, "reasoning parameter") {
+			t.Errorf("%s: %d %s", name, resp.StatusCode, out)
+		}
+	}
+	if calls := r.calls(); len(calls) != 0 {
+		t.Fatalf("%d calls reached an upstream", len(calls))
+	}
+	r.idle(1 << 30)
+}
+
 // TestAModelNameTooLongToBeRecordedIsRefusedFirst: the call record holds the name the client wrote, whole, in at most 200
 // characters, so a short base with variants stacked past that is refused at the door like a long base always was: before
 // anything is reserved, charged or sent, not served and then lost from the record.

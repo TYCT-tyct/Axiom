@@ -448,14 +448,16 @@ func (s *scanner) reasoning() error {
 	return nil
 }
 
+// reasoningEffort reads an effort. An empty string is no setting: the conversion writes nothing for it, so it must
+// not ask for the reasoning ability or satisfy a :thinking suffix (docs/domains/gateway.md「模型名变体」).
 func (s *scanner) reasoningEffort() error {
 	v, err := s.str()
-	if v != nil {
-		if string(v) == "none" {
-			s.reasoningOff = true
-		} else {
-			s.r.Needs |= Reasoning
-		}
+	switch string(v) {
+	case "":
+	case "none":
+		s.reasoningOff = true
+	default:
+		s.r.Needs |= Reasoning
 	}
 	return err
 }
