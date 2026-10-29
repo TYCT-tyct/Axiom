@@ -420,7 +420,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		},
 		"members":                 nil,
 		"platform_grants":         {"revoked_at"},
-		"api_keys":                {"name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
+		"api_keys":                {"updated_at", "management_window", "management_requests", "name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
 		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
 		"recovery_codes":          {"used_at"},
 		"security_failures":       {"started_at", "failures", "completed_peak", "sampled_at", "reported"},

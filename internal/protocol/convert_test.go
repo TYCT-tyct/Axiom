@@ -208,10 +208,10 @@ func TestConvertToMessages(t *testing.T) {
 		},
 		{
 			"effort none", chatBody(`"messages":[` + userHi + `],"reasoning_effort":"none"`), nil,
-			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"thinking":{"type":"disabled"}}`,
 		},
-		{"effort minimal", chatBody(`"messages":[` + userHi + `],"reasoning_effort":"minimal"`), nil, "unsupported"},
-		{"a budget for an adaptive model", chatBody(`"messages":[` + userHi + `],"reasoning":{"max_tokens":2000}`), nil, "unsupported"},
+		{"effort minimal", chatBody(`"messages":[` + userHi + `],"reasoning_effort":"minimal"`), nil, messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`},
+		{"a budget for an adaptive model", chatBody(`"messages":[` + userHi + `],"reasoning":{"max_tokens":2000}`), nil, messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"thinking":{"type":"adaptive"},"output_config":{"effort":"medium"}}`},
 		{
 			"manual effort", chatBody(`"messages":[` + userHi + `],"max_tokens":10000,"reasoning_effort":"medium"`), manual,
 			`{"model":"up","max_tokens":10000,"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"thinking":{"type":"enabled","budget_tokens":5000}}`,

@@ -31,8 +31,8 @@ type Config struct {
 	Hashes   *secret.MACKeys  // keys API keys are hashed with: at most 2 versions, the newest current
 	Keyring  *secret.Keyring  // seals users' TOTP secrets
 	Now      func() time.Time // the clock; time.Now when nil
-	// LookupSlot, when set, is asked for a slot before each lookup of a key in the database, and the slot is given back
-	// when the lookup ends. The lookup is shared by every request waiting for the key and outlives the one that started
+	// LookupSlot, when set, is asked for a slot before each key lookup or management request, and the slot is given back
+	// when that work ends. The lookup is shared by every request waiting for the key and outlives the one that started
 	// it, so it is the lookup that holds the slot, once. The gateway passes a connection of its admission class. Nil
 	// leaves lookups unbounded, for a service with no gateway in front of it.
 	LookupSlot func(ctx context.Context) (release func(), err error)

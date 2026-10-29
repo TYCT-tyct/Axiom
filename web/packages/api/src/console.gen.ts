@@ -324,7 +324,7 @@ export interface paths {
         put?: never;
         /**
          * Make an API key
-         * @description Makes a call key in the account's default workspace, with the site's prefix. Without `spend_limit` the key gets the site's limit for new keys, reset daily. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds, answered 409 `too_many_keys`, and the keys it makes in an hour, answered 429 with `Retry-After`; the message names the limit and how many the account has.
+         * @description Makes a call or management key in the account's default workspace, with the site's prefix. A call key without `spend_limit` gets the site's daily default. A management key requires `expires_at` and both api_keys.manage and api_keys.view. It does not use the site's default spending limit: omitted `spend_limit` means its delegation ceiling is unrestricted; child call keys created with an omitted limit inherit that ceiling. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds, answered 409 `too_many_keys`, and the keys it makes in an hour, answered 429 with `Retry-After`; the message names the limit and how many the account has.
          */
         post: operations["createKey"];
         delete?: never;
@@ -796,9 +796,14 @@ export interface components {
         Registered: {
             user_id: components["schemas"]["UserId"];
         };
-        /** @description A call key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit. */
+        /** @description A call or management key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit. */
         Key: {
             id: components["schemas"]["KeyId"];
+            /**
+             * @description Defaults to call. Management keys require expires_at and cannot call models.
+             * @enum {string}
+             */
+            kind?: "call" | "management";
             name: string;
             prefix: string;
             last4: string;
@@ -825,6 +830,11 @@ export interface components {
          */
         LimitReset: "daily" | "weekly" | "monthly";
         KeyCreate: {
+            /**
+             * @description Defaults to call. Management keys require expires_at and cannot call models.
+             * @enum {string}
+             */
+            kind?: "call" | "management";
             name: string;
             /**
              * Format: date-time

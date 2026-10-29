@@ -76,6 +76,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		publicRoutes(consoleAPI{exit: exit, version: version(), accounts: service, payments: pay, db: db},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
+	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})
 	public = withPaymentCallbacks(public, pay.Notify())
 	adminAPI := newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger)
 	adminAPI.keys, adminAPI.exit = p.master, exit

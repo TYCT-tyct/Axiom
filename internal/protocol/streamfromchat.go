@@ -16,6 +16,7 @@ import (
 // the references, retained output and deferred parallel calls draw on the budget.
 type chatToNative struct {
 	aggBase
+	hidesReasoning    bool
 	inner             upstream
 	client            Format
 	o                 RelayOptions
@@ -75,7 +76,7 @@ func newChatToNative(f Format, u UsageContext, o RelayOptions, charge func(int) 
 	inner := newChatStreamReader(u, o, charge)
 	inner.converting = true
 	s := &chatToNative{
-		client: f, o: o, inner: inner, active: -1,
+		client: f, o: o, inner: inner, active: -1, hidesReasoning: u.HidesReasoning,
 		tools: map[int64]int{}, toolIDs: map[string]bool{},
 	}
 	s.init(charge)

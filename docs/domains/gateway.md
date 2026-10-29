@@ -95,7 +95,8 @@
 - **格式特有的能力只走原格式的端点**，见[路由的「一个请求的路由步骤」](routing.md#一个请求的路由步骤)。
 - **Claude Code 的提示信息**（会话 ID、请求类别、"上下文已压缩"标记）用于会话粘性和路由，见[路由](routing.md)。
 - **事件流带 `X-Accel-Buffering: no`**：前面有 nginx 时，它据此不缓冲，事件才能及时到达客户端；new-api 的每个流都带这个头（new-api 源码 `relay/helper/common.go`，2026-10-18）。
-- **Chat 回复的推理文本写两个字段，内容相同**：`reasoning`（OpenRouter 的名字）和 `reasoning_content`（new-api、DeepSeek 的名字，不少客户端读它），流式的每一块、非流式的消息里都是；带签名和密文的 `reasoning_details` 照旧。客户端读哪个都行；代价是推理文本多发一份，只在模型推理时发生。依据见「决策与理由」。Chat 端点只写其中一个名字时（DeepSeek 写 `reasoning_content`，OpenRouter 写 `reasoning`），另一个由本站按同样的文本补上；两个都有文本的块不动。
+- **推理开关与展示分开**：缺省保留模型默认，显式关闭在转换时写成 Messages 的 thinking disabled 或 Responses 的 effort none；`reasoning.exclude:true` / Messages 的 thinking display omitted 只隐藏输出，推理仍计入用量和费用。本站在计量之后过滤，适用于同格式、跨格式、流式和非流式；Chat 不返回两个推理明文字段，details 只保留置空 text 的签名条目及密文，摘要不返回；三种格式均保留续聊状态。只给展示参数时不补写 thinking 模式，纯隐藏 Chat 块不在提交前积压。预算与 effort 的映射、近似和模型能力边界见 [protocol 换算表](../../internal/protocol/README.md#推理控制与换算)。
+- **Chat 回复的推理文本写两个字段，内容相同**：`reasoning`（OpenRouter 的名字）和 `reasoning_content`（new-api、DeepSeek 的名字，不少客户端读它），未要求隐藏时，流式的每一块、非流式的消息里都是；带签名和密文的 `reasoning_details` 照旧。客户端读哪个都行；代价是推理文本多发一份，只在模型推理时发生。依据见「决策与理由」。Chat 端点只写其中一个名字时（DeepSeek 写 `reasoning_content`，OpenRouter 写 `reasoning`），另一个由本站按同样的文本补上；两个都有文本的块不动。
 - **响应头按白名单放行**：只返回内容类型、我们自己的调用编号、我们计算的限流和重试信息。上游的 `x-request-id`、`openai-organization`、`cf-ray`、`server` 等会暴露上游身份的头一律删除；唯一的例外是上游铸造的 `x-codex-turn-state`，它只在作答的那次尝试的上游设了它时回传，客户端自己发的值不回显——那是厂商给下一轮的凭据，换一个出来没有意义。
 - **自己回显**：响应里的 `id` 用我们的调用编号，`model` 回显客户端请求的名字。
 
@@ -292,6 +293,7 @@
 
 | 决策 | 理由 |
 |---|---|
+| 推理开关、展示和强度分开，隐藏在计量之后执行 | [OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)（2026-10-29）规定 exclude 不减费用、预算与 effort 可换算；隐藏明文仍保留工具续聊必需的签名/密文，不以显示要求推断启用模式；[Anthropic Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) 的 omitted 保留签名且收费，[OpenAI Reasoning models](https://developers.openai.com/api/docs/guides/reasoning) 当前包含 minimal/xhigh/max。复用规范请求、UsageContext 与现有流读取器，不另建协议树；相比只信上游隐藏，在本地计量后过滤能防忽略隐藏的端点漏出明文。无法精确表达预算时按公开比例取最近档，同距取低，不承诺近似是硬上限；不按模型名猜 supported_efforts/mandatory。换算表在 protocol README。依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，独立评审由流水线安排 |
 | Chat 旧客户端的回复恢复旧函数表示，现代客户端保持工具数组 | [OpenAI Chat reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) 明确 `functions` → `tools`、`function_call` → `tool_choice`，消息中的旧调用由 `tool_calls` 取代。[OpenRouter 的工具规范化说明](https://openrouter.ai/blog/insights/agent-frameworks-compared-tool-calling-schema-handling/)和 [API reference](https://openrouter.ai/docs/api/reference/overview) 只承诺现代 `tool_calls`，未说明旧请求的回映射（2026-10-29 核实，未花费调用实测）。本任务要求兼容旧客户端，因此有意增加只针对旧请求的回映射，并在有工具声明时关闭并行；不采用对所有回复统一降级，因为会破坏现代客户端和并行调用。既有稳定 ID 配对逻辑同时用于同格式与转换；不重编码整份请求，以保留工具参数、签名和供应商扩展。此对外兼容决策依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，仍需独立评审 |
 | 模型发现复用路由构建并按分组端点给匿名 tag，公开 provider 为 Axiom | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落实 #311 P5/P10。比较逐请求读 suppliers 与构建时投影，选择后者：一份响应的价格、端点和计数一致，构建失败保留整份旧投影；不选把全部端点合成一个，因为产品要求逐端点列出，也不公开供应商名字与政策猜测。共享投影在分组前排除非零 Owner，未来自带端点不能使别的账户看出其存在。代号选模型内序号而不选带时间戳的 UUID；相比 HMAC 不引入密钥管理，代价是集合变化时可能重新编号，只用于发现展示。保留实时准入，避免缓存身份误放行已撤销的 key；独立评审仍由流水线执行 |
 | 同时提供 `/v1` 和 `/api/v1` 路径 | 负责人同意。OpenRouter 的客户端只改地址就能接入 |
@@ -310,7 +312,7 @@
 | 计费类问题不返回 401，避开自动禁用措辞，并写成测试 | 把我们当上游的 new-api 收到 401 或特定措辞会自动禁用渠道，临时问题会被放大成停用 |
 | 扩展字段放在独立的 `axiom` 对象 | 不与 OpenRouter 的字段冲突 |
 | 提供 OpenAI 旧版和 OpenRouter 格式的余额接口 | 第一版范围要求支持其他中转站接入（见产品需求）。new-api 查询 OpenAI 类型渠道时用前者；查询 OpenRouter 渠道时写死访问 openrouter.ai，所以后者只服务兼容 OpenRouter 的工具 |
-| `/api/v1/credits` 调用 key 就能读，不要求管理 key | 开发者按负责人的授权决定（对话中的全权委托）。OpenRouter 要求管理 key（OpenRouter《Get remaining credits》，2026-10-16）；M1 没有管理 key 的接口，照办则无人能调，而读到的只是本账户的余额。M2 有管理 key 时按其权限再定 |
+| `/api/v1/credits`、`/api/v1/key` 只接受调用 key；管理 key 返回 401 | 按[负责人技术决定授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)落地 E4-9/P14，本轮管理 key 的认证面仅用于 `/keys` CRUD，保留已有调用 key 的读取行为。2026-10-29 核实 OpenRouter 的[余额接口](https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits)要求管理 key，[当前 key 信息](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key)提供管理 key 类型字段；Axiom 有意继续拒绝管理 key 访问这两个接口。管理凭证自省需区分签发上界与消费余额，后续单独定义权限和响应含义；不能经模型准入给管理 key 放行 |
 | `count_tokens` 是本站的估算，不转发上游 | 开发者按负责人的授权决定（对话中的全权委托）。Anthropic 的接口返回精确值；转发要占用端点名额，且需要走路由。文本和图片的估算偏高，客户端据此裁剪只会偏早；文件按固定页数估，页数多的文件会被低估，所以不承诺不超窗口。口径见[模块 README 的「辅助接口」](../../internal/gateway/README.md#辅助接口) |
 | Responses 会话状态由我们保存，偏离 OpenRouter | 负责人同意。OpenRouter 的 Responses 接口不保存状态，`store: true` 和 `previous_response_id` 都会返回 400（OpenRouter《Responses API》，2026-10）；支持续接能让 Codex 少发重复内容、省钱。会话状态单独保存，内容保存关闭期间续接也可用 |
 | 会话状态按工作区隔离，单独保存 | 同一账户的不同工作区可能属于不同项目；负责人授权开发者按用户体验判断，单独保存让对话内容关闭期间续接仍然可用 |
