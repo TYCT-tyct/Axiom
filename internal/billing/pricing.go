@@ -379,8 +379,9 @@ func CreateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	return r, record(ctx, tx, actor, "pricing_rule.create", r, reason)
 }
 
-// UpdateRule replaces the rule as of rev, which a rule that has moved on refuses.
-func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, currency platform.Currency, id uuid.UUID, rev int64, in RuleInput, reason string) (Rule, error) {
+// UpdateRule replaces the rule as of rev. validate checks external subjects after locking the stored rule;
+// only unchanged retirement bypasses validation, so legacy rules can always be stopped.
+func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, currency platform.Currency, id uuid.UUID, rev int64, in RuleInput, reason string, validate func() error) (Rule, error) {
 	if _, err := LockPricePolicy(ctx, tx, site); err != nil {
 		return Rule{}, err
 	}
@@ -402,7 +403,7 @@ func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	if err != nil {
 		return Rule{}, err
 	}
-	if err := CheckRuleUpdate(before, in, currency); err != nil {
+	if err := checkRuleUpdate(before, in, currency, validate); err != nil {
 		return Rule{}, err
 	}
 	r := Rule{RuleInput: in, ID: id}
@@ -420,26 +421,37 @@ func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	return r, record(ctx, tx, actor, "pricing_rule.update", r, reason)
 }
 
-// CheckRuleUpdate allows a legacy rule to be retired unchanged even if this release cannot execute it.
-func CheckRuleUpdate(before Rule, in RuleInput, currency platform.Currency) error {
+func checkRuleUpdate(before Rule, in RuleInput, currency platform.Currency, validate func() error) error {
+	retiring, err := unchangedRetirement(before, in)
+	if err != nil || retiring {
+		return err
+	}
+	if err := in.Check(currency); err != nil {
+		return err
+	}
+	if validate != nil {
+		return validate()
+	}
+	return nil
+}
+
+// unchangedRetirement compares the saved input before permitting retirement without subject validation.
+func unchangedRetirement(before Rule, in RuleInput) (bool, error) {
 	if in.Enabled {
-		return in.Check(currency)
+		return false, nil
 	}
 	retired := before.RuleInput
 	retired.Enabled = false
 	// JSONB and the HTTP codec can change member order and whitespace without changing the stored rule.
 	old, err := jsonx.MarshalCanonical(retired)
 	if err != nil {
-		return err
+		return false, err
 	}
 	next, err := jsonx.MarshalCanonical(in)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if bytes.Equal(old, next) {
-		return nil
-	}
-	return in.Check(currency)
+	return bytes.Equal(old, next), nil
 }
 
 func encoded(in RuleInput) (method, constraints []byte, err error) {

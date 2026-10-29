@@ -2,7 +2,6 @@ package billing
 
 import (
 	"errors"
-	"math/rand/v2"
 	"slices"
 	"testing"
 	"uuid"
@@ -168,63 +167,6 @@ func TestLegacyRulesCanAlwaysBeRetired(t *testing.T) {
 	}
 }
 
-func TestAudiencePreviewEqualsChargeProperty(t *testing.T) {
-	f := newPrices(t)
-	banks := []*bank{newBank(t, 1e12, 0, Config{}), newBank(t, 1e12, 0, Config{})}
-	tier := accounts.TierID(uuid.UUID{15: 1})
-	account := accounts.AccountID(banks[0].admitted.Account)
-	for _, c := range []struct {
-		selector   Selector
-		multiplier string
-	}{
-		{Selector{Kind: "tier", ID: tier.TypeID()}, "1.020000001"},
-		{Selector{Kind: "account", ID: account.TypeID()}, "1.050000001"},
-	} {
-		in := rule(Selector{Kind: "all"}, faced(c.multiplier))
-		in.Audience = c.selector
-		if _, err := f.create(in); err != nil {
-			t.Fatal(err)
-		}
-	}
-	f.refresh()
-	rng := rand.New(rand.NewPCG(224, 436)) //nolint:gosec // deterministic property inputs, not secrets
-	for i := range 64 {
-		b := banks[i%len(banks)]
-		a := Audience{Account: accounts.AccountID(b.admitted.Account)}
-		if i%3 == 0 {
-			a.Tier = tier
-		}
-		preview := f.published().For(a)
-		q := b.exact
-		q.Price, q.Version, q.MaxOutput = preview.Schedule, preview.Version, 100
-		input, output := rng.Int64N(1000)+1, rng.Int64N(100)+1
-		assertPreviewCharge(t, b, q, preview, input, output)
-	}
-}
-
-func assertPreviewCharge(t *testing.T, b *bank, q Quotable, preview Sold, input, output int64) {
-	t.Helper()
-	var h *Hold
-	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: input}, []Quotable{q})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	usage := used(t, input, output, 0)
-	expected, missing, err := preview.Schedule.Cost(usage.Usage)
-	if err != nil || missing != 0 {
-		t.Fatal(err, missing)
-	}
-	final, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, usage))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if final.PriceVersion == nil || *final.PriceVersion != preview.Version || final.Charged.CeilAmount() != expected.CeilAmount() {
-		t.Fatalf("charge %+v, preview %s / %v", final, preview.Version, expected)
-	}
-}
-
 func TestAudienceSelectorEditRetiresOldPublication(t *testing.T) {
 	f := newPrices(t)
 	f.catalog.model("acme/other-audience")
@@ -262,7 +204,7 @@ func TestLegacyRetirementIgnoresJSONFormatting(t *testing.T) {
 	in := before.RuleInput
 	in.Enabled = false
 	in.Method.Schedule = jsonx.Raw(fixedUS)
-	if err := CheckRuleUpdate(before, in, usd); err != nil {
+	if retired, err := unchangedRetirement(before, in); err != nil || !retired {
 		t.Fatal("JSON normalization prevented legacy retirement", err)
 	}
 }

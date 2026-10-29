@@ -18,11 +18,31 @@ function PublicationAudience({ audience }: { audience: Publication["audience"] }
     <div className="max-w-48">
       <p className="truncate">{t(`pricing.audience.${audience.kind}`)}</p>
       {audience.id ? (
-        <p className="truncate text-label text-t3" title={audience.id}>
+        <p className="break-all text-label text-t3 xl:truncate" title={audience.id}>
           {audience.id}
         </p>
       ) : null}
     </div>
+  );
+}
+
+function PublicationModel({ publication: p }: { publication: Publication }) {
+  const { t } = useTranslation();
+  return (
+    <Td className="max-w-48">
+      <p className="break-all xl:truncate" title={p.model_id}>
+        {p.model_id}
+      </p>
+      <div className="mt-2 space-y-2 xl:hidden">
+        <PublicationAudience audience={p.audience} />
+        <p>{p.status ? t(`pricing.publish.${p.status}`) : t("pricing.publish.unavailable")}</p>
+        <p className="break-all text-label text-t3">
+          {t("pricing.publish.version")}
+          {": "}
+          {p.current_id ?? t("pricing.publish.unavailable")}
+        </p>
+      </div>
+    </Td>
   );
 }
 
@@ -44,29 +64,27 @@ export function Publications() {
               <thead>
                 <tr>
                   <Th>{t("pricing.publish.model")}</Th>
-                  <Th>{t("pricing.rules.audience")}</Th>
-                  <Th>{t("pricing.publish.version")}</Th>
-                  <Th>{t("pricing.publish.state")}</Th>
+                  <Th className="hidden xl:table-cell">{t("pricing.rules.audience")}</Th>
+                  <Th className="hidden xl:table-cell">{t("pricing.publish.version")}</Th>
+                  <Th className="hidden xl:table-cell">{t("pricing.publish.state")}</Th>
                   <Th />
                 </tr>
               </thead>
               <tbody>
                 {data.data.map((p) => (
                   <tr key={publicationKey(p)}>
-                    <Td className="max-w-48">
-                      <p className="truncate" title={p.model_id}>
-                        {p.model_id}
-                      </p>
-                    </Td>
-                    <Td>
+                    <PublicationModel publication={p} />
+                    <Td className="hidden xl:table-cell">
                       <PublicationAudience audience={p.audience} />
                     </Td>
-                    <Td className="max-w-48">
+                    <Td className="hidden max-w-48 xl:table-cell">
                       <p className="truncate" title={p.current_id}>
                         {p.current_id ?? t("pricing.publish.unavailable")}
                       </p>
                     </Td>
-                    <Td>{p.status ? t(`pricing.publish.${p.status}`) : t("pricing.publish.unavailable")}</Td>
+                    <Td className="hidden xl:table-cell">
+                      {p.status ? t(`pricing.publish.${p.status}`) : t("pricing.publish.unavailable")}
+                    </Td>
                     <Td>
                       {manage && p.schedule && p.model_id && p.candidate_id ? (
                         <Button onClick={() => setEditing(publicationKey(p))}>{t("pricing.publish.action")}</Button>

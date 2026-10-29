@@ -136,12 +136,12 @@ func TestConstraintChecks(t *testing.T) {
 
 // rules is a billing database with the platform scope.
 type rules struct {
-	t    *testing.T
+	t    testing.TB
 	db   *pg.DB
 	site uuid.UUID
 }
 
-func newRules(t *testing.T) rules {
+func newRules(t testing.TB) rules {
 	t.Helper()
 	db, err := pg.Open(t.Context(), pgtest.New(t, Migrations()).App)
 	if err != nil {
@@ -187,7 +187,7 @@ func (r rules) store(in RuleInput) {
 func (r rules) update(id uuid.UUID, rev int64, in RuleInput) (Rule, error) {
 	var made Rule
 	err := r.tx(func(tx pg.Tx) (err error) {
-		made, err = UpdateRule(r.t.Context(), tx, system, r.site, usd, id, rev, in, "changed")
+		made, err = UpdateRule(r.t.Context(), tx, system, r.site, usd, id, rev, in, "changed", nil)
 		return err
 	})
 	return made, err

@@ -19,10 +19,10 @@ func newAudienceORModel(id string, m catalog.Model, serving catalog.Serving, sol
 		}
 		if ok {
 			variants[i] = e
-			base = e
+			base = orModel{model: e.model, author: e.author, search: e.search}
 		}
 	}
-	if len(base.body) == 0 {
+	if base.search == "" {
 		return orModel{}, false, nil
 	}
 	base.audiences, base.variants = sold.Audiences, variants
@@ -42,8 +42,8 @@ func (m *orModel) forAudience(a billing.Audience) *orModel {
 
 func (m *orModel) encodeEndpoints(endpoints []routing.Endpoint) error {
 	var err error
-	m.endpoints, err = encodeOREndpoints(m.orEntry, endpoints)
-	if err != nil {
+	if m.audiences == nil {
+		m.endpoints, err = encodeOREndpoints(m.orEntry, endpoints)
 		return err
 	}
 	for i := range m.variants {

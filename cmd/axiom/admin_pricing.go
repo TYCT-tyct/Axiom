@@ -317,7 +317,7 @@ func (a adminAPI) previewAudience(ctx context.Context, site accounts.Site, body 
 		tier = site.DefaultTier
 	}
 	if tier != (accounts.TierID{}) {
-		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error { return a.checkTier(ctx, tx, site, tier.TypeID()) }); err != nil {
+		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error { return a.checkTier(ctx, tx, site, tier.TypeID(), "/tier_id") }); err != nil {
 			return out, err
 		}
 	}
@@ -474,10 +474,12 @@ func (a adminAPI) UpdatePricingRule(ctx context.Context, request adminapi.Update
 	}
 	rule, replayed, err := idempotently(ctx, a.db, "updatePricingRule", request.Params.IdempotencyKey, []any{request.RuleId, request.Body},
 		func(tx pg.Tx) (adminapi.PricingRule, error) {
-			if err := a.checkRuleEdit(ctx, tx, site, id, in); err != nil {
-				return adminapi.PricingRule{}, err
-			}
-			made, err := billing.UpdateRule(ctx, tx, actor(ctx), uuid.UUID(site.ID), site.Currency, id, request.Body.Rev, in, request.Body.Reason)
+			made, err := billing.UpdateRule(ctx, tx, actor(ctx), uuid.UUID(site.ID), site.Currency, id, request.Body.Rev, in, request.Body.Reason, func() error {
+				if err := a.checkSubjects(ctx, in); err != nil {
+					return err
+				}
+				return a.checkRuleAudience(ctx, tx, site, in)
+			})
 			if err != nil {
 				return adminapi.PricingRule{}, ruleProblem(err)
 			}

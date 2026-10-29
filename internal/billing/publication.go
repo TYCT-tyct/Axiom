@@ -151,7 +151,9 @@ func publicationInputs(rules []Rule, rows []ReadPublicationsRow) (map[Selector][
 	previous := map[Selector]map[catalog.ModelID]ReadPublicationsRow{}
 	grouped := map[Selector][]Rule{{Kind: "all"}: nil}
 	for _, r := range rules {
-		grouped[r.Audience] = append(grouped[r.Audience], r)
+		if r.Enabled {
+			grouped[r.Audience] = append(grouped[r.Audience], r)
+		}
 	}
 	for _, r := range rows {
 		audience := Selector{Kind: r.AudienceKind, ID: r.AudienceID}
@@ -170,11 +172,14 @@ func publicationInputs(rules []Rule, rows []ReadPublicationsRow) (map[Selector][
 
 func refreshAudience(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs map[catalog.ModelID][]PriceCost, defaults fallbacks, policy PricePolicy, audience Selector, rules []Rule, previous map[catalog.ModelID]ReadPublicationsRow) error {
 	for m := range snap.Models() {
+		old := previous[m.ID]
+		if audience.Kind != "all" && old.CandidateID == uuid.Nil() && !slices.ContainsFunc(rules, func(r Rule) bool { return r.Enabled && pricesModel(r.Target, m) }) {
+			continue
+		}
 		p, err := proposeAudiencePrice(audience, policy, rules, m, snap, currency, costs[m.ID], defaults)
 		if err != nil {
 			return err
 		}
-		old := previous[m.ID]
 		if audience.Kind != "all" && !p.matched && old.CandidateID == uuid.Nil() {
 			continue
 		}

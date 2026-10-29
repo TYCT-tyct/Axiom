@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"net/http"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -54,29 +56,41 @@ func assertAudienceNodeCharge(t *testing.T, withAccount bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	usage, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 25, catalog.ItemOutput: 15}, catalog.ServiceTierStandard, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expected, _, err := price.Cost(usage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := w.call(n, "/v1/messages", w.richKey, messagesCall)
-	if response.status != http.StatusOK {
-		t.Fatalf("call: %d %s", response.status, response.body)
-	}
-	w.checkSettled(response, expected.CeilAmount())
-	generation := response.header.Get("X-Generation-Id")
-	if got := w.query("SELECT price_versions[entry+1]::text FROM billing.reservations WHERE request_id::text=$1", generation); got != *preview.Data[0].CurrentVersion {
-		t.Fatalf("charged version %s, preview %s", got, *preview.Data[0].CurrentVersion)
+	assertAudienceCalls(t, w, n, price, *preview.Data[0].CurrentVersion)
+}
+
+func assertAudienceCalls(t *testing.T, w *callWorld, n runningNode, price catalog.Schedule, version string) {
+	t.Helper()
+	rng := rand.New(rand.NewPCG(224, 436)) //nolint:gosec // reproducible property inputs
+	for range 32 {
+		input, output := rng.Int64N(100)+1, rng.Int64N(150)+1
+		stream := strings.ReplaceAll(w.supplier.streams["/v1/messages"], `"input_tokens": 25`, fmt.Sprintf(`"input_tokens": %d`, input))
+		stream = strings.ReplaceAll(stream, `"output_tokens": 15`, fmt.Sprintf(`"output_tokens": %d`, output))
+		w.supplier.answer("/v1/messages", stream)
+		usage, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: input, catalog.ItemOutput: output}, catalog.ServiceTierStandard, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected, _, err := price.Cost(usage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := w.call(n, "/v1/messages", w.richKey, messagesCall)
+		if response.status != http.StatusOK {
+			t.Fatalf("call: %d %s", response.status, response.body)
+		}
+		w.checkSettled(response, expected.CeilAmount())
+		generation := response.header.Get("X-Generation-Id")
+		if got := w.query("SELECT price_versions[entry+1]::text FROM billing.reservations WHERE request_id::text=$1", generation); got != version {
+			t.Fatalf("charged version %s, preview %s", got, version)
+		}
 	}
 }
 
 func seedAudiencePrices(t *testing.T, f publicationViewFixture, account accounts.AccountID, tier accounts.TierID, withAccount bool) {
 	t.Helper()
 	w := f.world
-	for _, c := range []struct{ kind, id, multiplier string }{{"tier", tier.TypeID(), "1.6"}, {"account", account.TypeID(), "1.7"}} {
+	for _, c := range []struct{ kind, id, multiplier string }{{"tier", tier.TypeID(), "1.600000001"}, {"account", account.TypeID(), "1.700000001"}} {
 		if c.kind == "account" && !withAccount {
 			continue
 		}

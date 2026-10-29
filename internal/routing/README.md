@@ -12,7 +12,7 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 func (r *Router) Replace(s *Snapshot) // 只接受更新的快照
 func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte) SessionKey // 只扫有界前缀
 func (r *Router) Plan(in Input) (Plan, *Wait, error) // 纯内存；*NoEndpoint{Reasons, Permanent}；ErrStale
-func (r *Router) Serves(m catalog.ModelID) bool // 快照里有这个模型的端点；不看熔断、负载、暂停、预算、过滤，也不看快照新不新；模型列表和单个模型用
+func (r *Router) ServesFor(m catalog.ModelID, a billing.Audience) bool // 快照里有这个受众可收费的模型端点；不看熔断、负载、暂停、预算、过滤，也不看快照新不新；模型列表和单个模型用
 func (r *Router) Block(e Entry, scope Scope, after time.Duration) // 暂停端点或供应商到上游给的时间，最多两小时；没给用 Config.Pause
 func (r *Router) Blocked(e Entry) bool // 已定的条目在发出前再查一次
 func Decide(f Failure) Action // NextEntry | OtherCredential | ReturnToClient
@@ -64,5 +64,5 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 | 重试预算在 `Plan` 里只“看”，在 gateway 发出重试时“取” | `Plan` 在准入事务里，不该改共享状态；几个并发的重试要靠 `TakeRetry` 原子地各占一次 | `Plan` 里直接扣：Plan 可能因排队重做，会重复扣 |
 | 状态在进程内，快照只持有指针 | M1 只有一个核心节点（D10）；快照整体替换不丢负载和降权 | 状态放进快照：每次重建清零 |
 | 会话键含账户，透传标识用密钥派生 | 不同租户常发相同的会话值；原样透传会在上游串到一起并泄露客户端的标识 | 只用客户端的值 |
-| `Serves` 只问快照里有没有端点，是只读的单项查询，不走 `Plan` | 模型列表要的是「有路可走」而不是「现在走得通」：没有端点（组装时没有售价或规格的模型已整个排除）的模型调用必然 404，列出来就是让客户端选到必败的名字；满载、熔断、暂停、预算只是暂时的，列表据此增减会让模型随负载闪进闪出。`Plan` 需要一个假请求，且这些暂时状态正是它的过滤 | 用 `Plan` 探测：造假请求，满载时模型消失；把「已启用」等永久原因也算进去：要在 `Serves` 里重复 `Plan` 的一部分过滤，两处会漂移 |
+| `ServesFor` 只问快照里有没有端点，是只读的单项查询，不走 `Plan` | 模型列表要的是「有路可走」而不是「现在走得通」：没有端点（组装时没有售价或规格的模型已整个排除）的模型调用必然 404，列出来就是让客户端选到必败的名字；满载、熔断、暂停、预算只是暂时的，列表据此增减会让模型随负载闪进闪出。`Plan` 需要一个假请求，且这些暂时状态正是它的过滤 | 用 `Plan` 探测：造假请求，满载时模型消失；把「已启用」等永久原因也算进去：要在 `ServesFor` 里重复 `Plan` 的一部分过滤，两处会漂移 |
 | `BaseRate` 加在 catalog 的 `Schedule` 上 | 路由要比较价格和算权重，需要读标准档的单价；价目表的字段不导出 | routing 自己解析 JSON |

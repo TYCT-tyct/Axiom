@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"maps"
 	"net/http"
 	"strings"
 	"testing"
+	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform/adminapi"
 )
 
@@ -299,4 +302,39 @@ func TestLegacyRuleRetirementAPI(t *testing.T) {
 	body = strings.Replace(body, `"enabled":false`, `"enabled":true`, 1)
 	rec = f.change(f.s, http.MethodPut, "/pricing/rules/"+id, `{"rev":1,"rule":`+body+`,"reason":"unsafe enable"}`, newKey())
 	expectAdmin(t, "reject unsupported enable", rec, http.StatusUnprocessableEntity, codeUnprocessable)
+}
+
+func TestPricingRuleEditValidatesDisabledChanges(t *testing.T) {
+	t.Parallel()
+	f := newPreview(t)
+	id := f.storeRule("all", "", "all", "", timesTwo, `{}`)
+	foreignSite, foreignTier, foreignAccount := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	owner, err := accounts.ParseAccountID(f.account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.run("BEGIN", fmt.Sprintf(`INSERT INTO accounts.sites (id,parent_site_id,owner_account_id,name,status,key_prefix,registration,default_tier_id)
+      SELECT '%s',id,'%s','Other','active','sk-other-','closed','%s' FROM accounts.sites WHERE is_main`, foreignSite, uuid.UUID(owner), foreignTier),
+		fmt.Sprintf(`INSERT INTO accounts.tiers(id,site_id,name) VALUES ('%s','%s','Other')`, foreignTier, foreignSite),
+		fmt.Sprintf(`INSERT INTO accounts.accounts(id,site_id,kind,name,status,tier_id) VALUES ('%s','%s','personal','Other','active','%s')`, foreignAccount, foreignSite, foreignTier), "COMMIT")
+	for _, enabled := range []bool{false, true} {
+		for _, subject := range []struct{ target, audience, pointer string }{
+			{everything, fmt.Sprintf(`{"kind":"account","id":%q}`, accounts.AccountID(foreignAccount).TypeID()), "/rule/audience/id"},
+			{everything, `{"kind":"account","id":"acct_00000000000000000000000001"}`, "/rule/audience/id"},
+			{everything, `{"kind":"tier","id":"tier_00000000000000000000000001"}`, "/rule/audience/id"},
+			{`{"kind":"model","id":"00000000-0000-4000-8000-000000000001"}`, everything, ""},
+		} {
+			body := strings.Replace(ruleJSON(subject.target, subject.audience, timesTwo), `"enabled":true`, fmt.Sprintf(`"enabled":%t`, enabled), 1)
+			rec := f.change(f.s, http.MethodPut, "/pricing/rules/"+id, `{"rev":0,"rule":`+body+`,"reason":"change subjects"}`, newKey())
+			expectAdmin(t, "validate changed subjects", rec, http.StatusUnprocessableEntity, codeUnprocessable)
+			if subject.pointer != "" && !strings.Contains(rec.Body.String(), subject.pointer) {
+				t.Fatal(rec.Body.String())
+			}
+			rec = f.change(f.s, http.MethodPost, "/pricing/rules", `{"rule":`+body+`,"reason":"create subjects"}`, newKey())
+			expectAdmin(t, "validate created subjects", rec, http.StatusUnprocessableEntity, codeUnprocessable)
+			if subject.pointer != "" && !strings.Contains(rec.Body.String(), subject.pointer) {
+				t.Fatal(rec.Body.String())
+			}
+		}
+	}
 }

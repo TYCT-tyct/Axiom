@@ -8,6 +8,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -37,6 +38,7 @@ func TestModelDiscoveryUsesAudiencePrices(t *testing.T) {
 		f.build([]suppliers.Routable{routable(f.served, protocol.Messages)})
 		audience := billing.Audience{Account: account}
 		list := f.models.published()
+		assertAudienceMetadata(t, list)
 		visibility := visibility{audience: audience}
 		raw := list.encode(visibility, orQuery{})
 		in := call(f.served)
@@ -64,5 +66,14 @@ func assertDiscoveryPrice(t *testing.T, list *openRouterListing, visibility visi
 	prompt, ok := plan.Entries[0].Price.Schedule.BaseRate(catalog.ItemInput)
 	if !ok || model.Pricing.Prompt != prompt.String() || !bytes.Contains(raw, []byte(`"prompt":"`+prompt.String()+`"`)) || !bytes.Contains(model.endpoints, []byte(`"prompt":"`+prompt.String()+`"`)) || list.count(visibility, orQuery{}) != 1 {
 		t.Fatalf("discovery and charge differ: %s", raw)
+	}
+}
+
+func assertAudienceMetadata(t *testing.T, list *openRouterListing) {
+	t.Helper()
+	for _, model := range list.models {
+		if model.audiences != nil && (len(model.body) != 0 || len(model.endpoints) != 0 || model.Pricing != (orPricing{}) || model.prompt != (platform.UnitPrice{}) || model.output != (platform.UnitPrice{})) {
+			t.Fatal("shared audience metadata contains a price or encoded response")
+		}
 	}
 }
