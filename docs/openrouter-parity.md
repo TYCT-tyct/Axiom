@@ -145,7 +145,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | `session_id`/`x-session-id`/`prompt_cache_key` 粘性 | 见 §3 | 同上 | 部分：体内有；请求头转发给上游、值换成派生值，自己的粘性还没读它们 | 无 | 无 | 缺按请求头的分组 |
 | 响应缓存：请求头 `X-OpenRouter-Cache`、`-TTL`、`-Clear`，响应头 `X-OpenRouter-Cache-Status/-Age/-TTL/-Source-Id`；预设里 `cache_enabled`、`cache_ttl_seconds`；命中免费 | 网关级整包响应缓存，按 key 隔离 | docs/guides/features/response-caching | 没有：全仓库无这些头 | 无 | 无 | 单独的特性，需先定数据保留政策（`docs/product.md:82` 内容保存由平台统一决定） |
 | `response_format`：`json_object`、`json_schema`(strict) | 结构化输出，按端点支持 | docs/guides/features/structured-outputs | 有：`proto/grammar.go:76,132`、`proto/canon.go:31,280` 识别并作为能力要求，端点不支持则不参与路由 | 有 | 有 | 无 |
-| 响应修复插件 `response-healing` | 非流式 JSON 修复 | docs/guides/features/plugins/response-healing | 没有（见 §10：`plugins` 被丢弃） | 无 | 无 | 见 §10 |
+| 响应修复插件 `response-healing` | 非流式 JSON 修复 | docs/guides/features/plugins/response-healing | 已实现：非流式 Chat JSON 的本地语法修复（§10） | 无 | 无 | 见 §10 |
 | 工具调用：`tools`、`tool_choice`、`parallel_tool_calls`，流式分块 | 标准函数调用 | docs/guides/features/tool-calling | 有：`proto/grammar.go:74,279-293` 能力匹配；Chat 转 Messages 映射 `tool_choice`/`parallel_tool_calls`（`proto/tomessageschoice.go`），表达不了的返回 400；旧版 `functions`、`function_call` 在同格式与转换时均升级成 `tools`、`tool_choice`，旧消息按稳定 ID 配对（`proto/legacy.go`、`proto/legacyrewrite.go`）；仅旧客户端的回复还原 `function_call` 并关闭并行（`proto/legacyreply.go`，与 OpenRouter 现代回复基线的差异见 [gateway 的决策](domains/gateway.md#决策与理由)） | 有 | 有 | 无 |
 | `strict` 工具与 `structured-outputs-2025-11-13` 头 | 严格工具调用 | docs/guides/routing/provider-selection | 部分：`anthropic-beta` 头原样转发（`docs/domains/gateway.md:53`），所以头本身可用；`strict` 字段是否被剥离未核实 | 无 | 无 | 低优先 |
 | `reasoning` 对象：`effort`(max/xhigh/high/medium/low/minimal/none)、`max_tokens`、`exclude`、`enabled` | 统一推理控制，隐藏不减用量 | [Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)，2026-10-29 | 已实现 Chat ↔ Messages/Responses 的开关、展示、预算与 effort 换算及输出隐藏，见 [协议换算表](../internal/protocol/README.md#推理控制与换算) | 模型后缀及方言转换 | 部分 | Messages ↔ Responses 直接转换未实现；目录尚无模型级 supported_efforts/mandatory |
@@ -160,7 +160,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | 图片输入：`image_url`（URL 或 base64 data URL；png/jpeg/webp/gif） | 多模态输入 | docs/guides/overview/multimodal/image-understanding | 有：`proto/grammar.go:62,80`，转换 `proto/tomessages.go:336`、`proto/toresponses.go:148` | 有 | 有 | 无 |
-| PDF 输入：`file` 内容块（URL 或 base64），`file-parser` 插件选引擎(`mistral-ocr`、`cloudflare-ai`、`native`)，响应带 `file` 注解可复用跳过解析费用 | 文档解析 | docs/guides/overview/multimodal/pdfs | 部分：`file.file_data` 识别并要求支持文档的端点（`proto/grammar.go:81,128`，`proto/tomessages.go:338`）；`file-parser` 插件和解析注解没有（插件被丢弃） | 有（按模型） | 有 | 不支持原生 PDF 的模型拿不到 OCR/转文本兜底 |
+| PDF 输入：`file` 内容块（URL 或 base64），`file-parser` 插件选引擎(`mistral-ocr`、`cloudflare-ai`、`native`)，响应带 `file` 注解可复用跳过解析费用 | 文档解析 | docs/guides/overview/multimodal/pdfs | 部分：`file.file_data` 识别并要求支持文档的端点（`proto/grammar.go:81,128`，`proto/tomessages.go:338`）；`file-parser` 启用返回 400 not supported（无外部解析/OCR 服务），没有解析注解 | 有（按模型） | 有 | 不支持原生 PDF 的模型拿不到 OCR/转文本兜底 |
 | 音频输入 `input_audio`（base64，wav/mp3/…） | 音频输入 | docs/guides/overview/multimodal/audio | 没有：语法表里无 `input_audio`（`proto/grammar.go:62-83`） | 部分 | 无 | 范围里只写图片和 PDF |
 | 音频输出：`modalities:["text","audio"]` + `audio{voice,format}`，必须流式，`delta.audio` | 音频输出 | 同上 | 没有：`modalities` 非 `["text"]` 在转换里被拒（`proto/canon.go:379`） | 无 | 无 | 同上 |
 | 视频输入 `video_url` | 视频输入 | docs/guides/overview/multimodal/videos | 没有 | 无 | 无 | 同上 |
@@ -171,18 +171,18 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 
 ## 10. 插件、服务端工具、消息转换
 
-注意：`plugins`、`transforms`、`route`、`usage` 这四个请求成员在转发前被静默删除（`proto/prepare.go:281`，`withRouting`），**不报错也不生效**。
+`plugins`、`transforms` 于 2026-10-29 按 OpenRouter 官方文档核对并实现本地子集；入口对未支持的 id、选项和变换返回 400，不静默忽略。执行/拒绝/忽略和偏离的唯一表见[接入域](domains/gateway.md#插件与提示词变换)。`route`、`usage` 的独立缺口仍未处理。
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| 插件机制：`plugins:[{id, enabled, …}]`，账户默认插件设置，`enabled:false` 关掉默认插件 | 请求/响应改写 | docs/guides/features/plugins | 没有：成员被丢弃 | 无 | `s2:internal/config/config.go:108`（另一种概念，与此无关） | 开发者发 `plugins` 得到的是没有该功能的普通回答，且无提示 |
-| `web` 插件（已弃用）：`engine`、`max_results`、`search_prompt`… | 联网搜索 | docs/guides/features/plugins/web-search | 没有（丢弃） | 无 | 无 | 官方已转向服务端工具 |
+| 插件机制：`plugins:[{id, enabled, …}]`，账户默认插件设置，`enabled:false` 关掉默认插件 | 请求/响应改写 | docs/guides/features/plugins | 请求级 id/选项校验已实现，未知项 400；没有账户默认设置 | 无 | `s2:internal/config/config.go:108`（另一种概念，与此无关） | 本地支持修复与压缩，其余启用项显式拒绝；详见接入域 |
+| `web` 插件（已弃用）：`engine`、`max_results`、`search_prompt`… | 联网搜索 | docs/guides/features/plugins/web-search | 启用返回 400 not supported，缺外部搜索服务 | 无 | 无 | 官方已转向服务端工具 |
 | 服务端工具 `{"type":"openrouter:web_search"}`，参数 `engine`(auto/native/exa/firecrawl/parallel/perplexity)、`max_results`、`max_uses`、`allowed_domains`… | 任何模型都能联网搜索 | docs/guides/features/server-tools/web-search | 没有：不认识 `openrouter:` 前缀（`proto/grammar.go:46,66` 只认厂商的 `web_search_*`/`web_search`） | 无 | 无 | 厂商原生联网（Anthropic `web_search_*`、OpenAI `web_search`）有，并按次计费（`proto/errors.go:158`、`proto/grammar.go:286-310`） |
 | Chat 的 `web_search_options` | OpenAI 风格联网 | docs/api_reference/responses/web-search | 有：`proto/grammar.go:74,356-361` 作为能力要求 | 部分 | 部分 | 无 |
 | 服务端工具 `openrouter:web_fetch`、`datetime`、`image_generation`、`apply_patch`、`shell`、`bash`、`search_models`、`tool_search`、`fusion`、`advisor`、`subagent`，`GET /api/v1/tools` | OpenRouter 托管的工具 | docs/guides/features/server-tools | 没有 | 无 | 无 | 低优先；多数需要托管沙箱 |
-| `response-healing` 插件 | 修复非流式 JSON | docs/guides/features/plugins/response-healing | 没有（丢弃） | 无 | 无 | 单独实现简单，且纯本地 |
-| `context-compression` 插件 / `transforms:["middle-out"]` | 超长提示词从中间截断；也处理 Claude 的消息条数上限；`transforms:[]` 关闭 | docs/guides/features/message-transforms | 没有（`transforms` 丢弃）。超长请求由上游返回错误（原话交给客户端，`docs/domains/gateway.md:97`） | 无 | 无 | 依赖 `transforms` 的应用会直接拿到上下文超长错误 |
-| `alignment`、`armor` 插件（β） | 规则检查/工具调用安全分类 | docs/guides/features/plugins/alignment、armor | 没有 | 无 | 无 | 不跟 |
+| `response-healing` 插件 | 修复非流式 JSON | [官方文档](https://openrouter.ai/docs/guides/features/plugins/response-healing)，2026-10-29 | 已实现非流式 Chat JSON 本地修复，语法缺陷失败保留原文 | 无 | 无 | 不作 schema 语义校验，边界见接入域 |
+| `context-compression` 插件 / `transforms:["middle-out"]` | 从中间压缩；关闭与小上下文默认值 | [官方文档](https://openrouter.ai/docs/guides/features/message-transforms)，2026-10-29 | 已实现 Chat 准入前按主模型规格压缩，保留首尾与工具配对；按字节上界保守估算 | 无 | 无 | 不实现 OpenRouter 跨模型上下文候选扩展，保护内容装不下则 400；见接入域 |
+| `alignment`、`armor` 插件（β） | 规则检查/工具调用安全分类 | docs/guides/features/plugins/alignment、armor | 未支持 id 返回 400 | 无 | 无 | 不跟 |
 | 护栏（Guardrails）：敏感信息、提示注入、密钥格式、预算、模型/供应商白名单 | 账户级策略，命中返回 403 | docs/guides/features/guardrails | 没有（账户有预算和限额，但没有请求内容护栏） | `na:common/str.go`（有敏感词处理，未深入） | 部分（`s2:internal/server/routes/prompt_audit_route_coverage_test.go`，仅见测试） | 对应 #315 的滥用防护，但形态不同 |
 
 ## 11. 响应里的用量与费用
@@ -272,7 +272,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 
 排序依据：静默改变行为（开发者看不出来）> 对 OpenRouter 客户端常见配置直接 400/404 > 模型元数据缺失（SDK 的模型选择器、成本估算坏掉）> 读取类接口缺失 > 管理类 API 缺失 > 产品线缺失。
 
-1. 【静默失效】`plugins`、`transforms`、`route`、`usage` 被丢弃且不报错：`web` 插件、`file-parser`、`response-healing`、`context-compression`/`middle-out`、`auto-router` 设置全部不生效，开发者拿到的是一个功能缺失的正常回答（`proto/prepare.go:281`）。至少先改成「认识的 id 才收、不认识的 400」，再逐个实现。→ #311
+1. 【插件已落实，独立参数仍有缺口】`plugins` / `transforms` 已执行本地修复/压缩或明确 400（§10），不再静默丢弃；`route`、`usage`、`auto-router` 尚无实现。→ #311
 2. 【静默失效】`openrouter:web_search` 等服务端工具类型不被识别（`proto/grammar.go:46,66`），Responses/Chat 里带这类工具的请求行为未定；联网搜索只有厂商原生的。→ #311
 3. 【硬失败，部分已补】模型名后缀：`:nitro`、`:floor` 已支持（排序一半，`gw/variant.go`）；`:exacto`、`:online` 现在回 400 并说明原因，`:free`、`:thinking` 等目录变体回 400 并说明本站无法表示独立条目；`~anthropic/claude-sonnet-latest` 这类别名回 400 暂不支持，需要显式模型族与可切换别名映射，不能猜最新版本；`@preset/…`（文档说支持、代码没有）仍查不到。→ #311（别名解析、`:nitro/:floor` 的层级准入）；`@preset/` 前缀随预设一起归 #313
 4. 【硬失败】`provider.order/only/ignore` 写了供应商名就 400，`allow_fallbacks:false`、`require_parameters:true`、`quantizations`、`enforce_distillable_text`、`sort` 对象形式、百分位对象形式、`max_price.request/image` 也都 400（`gw/provider.go:51-70`）。→ #313（名字到供应商的映射可能要 #314 的用户供应商控制先落地）
