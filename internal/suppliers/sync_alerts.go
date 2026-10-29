@@ -250,7 +250,10 @@ func emitSupplierAvailability(ctx context.Context, tx pg.Tx, now time.Time) erro
 			return err
 		}
 	}
-	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "suppliers.exhausted", Key: "all", Severity: "critical", Resolved: len(available) > 0 || !configured, Fields: map[string]string{"available": fmt.Sprint(len(available))}})
+	if !configured {
+		return nil
+	}
+	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "suppliers.exhausted", Key: "all", Severity: "critical", Resolved: len(available) > 0, Fields: map[string]string{"available": fmt.Sprint(len(available))}})
 }
 
 func readSupplierAlertIDs(ctx context.Context, tx pg.Tx, query string, after uuid.UUID) ([]uuid.UUID, error) {

@@ -228,3 +228,21 @@ func TestSyncRecoveryUsesObservationsAcrossClockSkew(t *testing.T) {
 		t.Fatalf("clock rollback hid genuine recovery: %+v", signals)
 	}
 }
+
+func TestRetiringAllSuppliersDoesNotClaimAvailabilityRecovery(t *testing.T) {
+	w := newWorld(t, 2)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE suppliers.credentials SET expires_at=$2 WHERE id=$1`, w.credential, w.clock.now().Add(-time.Second))
+		return err
+	})
+	w.tx(func(ctx context.Context, tx pg.Tx) error { return emitSupplierAvailability(ctx, tx, w.clock.now()) })
+	consumeSupplierSignals(w)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE suppliers.suppliers SET status='paused' WHERE id=$1`, w.supplier)
+		return err
+	})
+	w.tx(func(ctx context.Context, tx pg.Tx) error { return emitSupplierAvailability(ctx, tx, w.clock.now()) })
+	if signals := consumeSupplierSignals(w); len(signals) != 0 {
+		t.Fatalf("retirement claimed recovery: %+v", signals)
+	}
+}
