@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
 	"axiom/internal/observability"
 	"axiom/internal/payments"
 	"axiom/internal/platform/httpserver"
@@ -41,6 +42,7 @@ type refusal struct {
 // refusals are how the modules' refusals are answered, in the order they are tried. The message is English for logs
 // and developers, and never repeats what the client sent.
 var refusals = []refusal{
+	{accounts.ErrInvalidReset, http.StatusUnprocessableEntity, codeUnprocessable, "invalid or expired password reset link"},
 	{accounts.ErrBadCredentials, http.StatusUnauthorized, codeWrongLogin, "wrong email or password"},
 	{accounts.ErrNoSession, http.StatusUnauthorized, codeUnauthenticated, "not signed in"},
 	{accounts.ErrBadCode, http.StatusUnauthorized, codeInvalidCode, "wrong code"},
@@ -77,7 +79,7 @@ func failure(err error) *apiError {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errDeadline
 	}
-	if errors.Is(err, observability.ErrBadCursor) {
+	if errors.Is(err, observability.ErrBadCursor) || errors.Is(err, billing.ErrBadStatementCursor) {
 		return invalidField("cursor", "not a cursor this API gave out")
 	}
 	if errors.Is(err, accounts.ErrBadSecret) {

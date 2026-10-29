@@ -9,6 +9,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 )
 
@@ -47,20 +48,38 @@ type Mailer struct {
 	queue  *pg.Queue
 	sender *sender // nil when email is disabled
 	logger *slog.Logger
+	// Receipt is installed before queue.Start for tracked messages; true means SMTP accepted.
+	Receipt func(context.Context, uuid.UUID, bool) error
 }
 
 // Register registers the send worker on the queue, which must not have started yet, and returns the mailer the flows
 // enqueue through. With no SMTP settings it logs that email is disabled and returns a mailer whose Enqueue fails with
-// ErrNotConfigured: email costs no configuration for a node that never sends it.
-func Register(ctx context.Context, db *pg.DB, queue *pg.Queue, cfg Config, logger *slog.Logger) (*Mailer, error) {
+// ErrNotConfigured: email costs no configuration for a node that never sends it. With a shared store the recipient
+// cooldowns live there; masterKey derives the HMAC key their subjects are hashed with, and is unused without one.
+func Register(ctx context.Context, db *pg.DB, queue *pg.Queue, cfg Config, cache *kv.Client, masterKey []byte,
+	logger *slog.Logger,
+) (*Mailer, error) {
 	m := &Mailer{db: db, queue: queue, logger: logger}
 	if !cfg.Configured() {
 		logger.InfoContext(ctx, disabledEvent)
 		return m, nil
 	}
 	m.sender = newSender(cfg)
+	if cache != nil && cache.Enabled() {
+		key, err := deriveMailKey(masterKey)
+		if err != nil {
+			return nil, err
+		}
+		m.sender.throttle.cache = cache
+		m.sender.throttle.key = key
+	}
 	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(m.work)); err != nil {
 		return nil, fmt.Errorf("mail: register the send worker: %w", err)
+	}
+	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(func(ctx context.Context, job *river.Job[trackedSendArgs]) error {
+		return m.work(ctx, &river.Job[sendArgs]{JobRow: job.JobRow, Args: job.Args.sendArgs})
+	})); err != nil {
+		return nil, err
 	}
 	logger.InfoContext(ctx, enabledEvent, "host", cfg.Host, "port", cfg.Port, "tls", m.sender.mode)
 	return m, nil
@@ -74,6 +93,11 @@ func Register(ctx context.Context, db *pg.DB, queue *pg.Queue, cfg Config, logge
 // once: a node that crashes after the message is accepted but before the job is completed sends it again, so a flow
 // must tolerate a repeated email.
 func (m *Mailer) Enqueue(ctx context.Context, tx pg.Tx, tenant Tenant, msg Message) error {
+	return m.EnqueueTracked(ctx, tx, tenant, msg, uuid.Nil())
+}
+
+// EnqueueTracked links a message to a caller-owned durable receipt without putting content in River.
+func (m *Mailer) EnqueueTracked(ctx context.Context, tx pg.Tx, tenant Tenant, msg Message, receipt uuid.UUID) error {
 	if m.sender == nil {
 		return ErrNotConfigured
 	}
@@ -90,7 +114,11 @@ func (m *Mailer) Enqueue(ctx context.Context, tx pg.Tx, tenant Tenant, msg Messa
 	if err != nil {
 		return fmt.Errorf("mail: enqueue: %w", err)
 	}
-	if _, err := m.queue.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: sendArgs{ID: id}}}); err != nil {
+	var args river.JobArgs = sendArgs{ID: id}
+	if receipt != uuid.Nil() {
+		args = trackedSendArgs{sendArgs{ID: id, Receipt: receipt}}
+	}
+	if _, err := m.queue.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: args}}); err != nil {
 		return fmt.Errorf("mail: enqueue: %w", err)
 	}
 	return nil
@@ -100,7 +128,8 @@ func (m *Mailer) Enqueue(ctx context.Context, tx pg.Tx, tenant Tenant, msg Messa
 // row until it is done and its retention has passed; the message it points at is deleted as soon as it is sent or
 // refused for good.
 type sendArgs struct {
-	ID uuid.UUID `json:"id"`
+	ID      uuid.UUID `json:"id"`
+	Receipt uuid.UUID `json:"receipt,omitempty"`
 }
 
 // Kind implements river.JobArgs.
@@ -125,6 +154,9 @@ func (m *Mailer) work(ctx context.Context, job *river.Job[sendArgs]) error {
 		return errSendFailed
 	}
 	if !found {
+		if err := m.recordReceipt(ctx, job, false); err != nil {
+			return errSendFailed
+		}
 		m.logger.InfoContext(ctx, goneEvent, "job_id", job.ID, "attempt", job.Attempt)
 		return nil
 	}
@@ -134,12 +166,20 @@ func (m *Mailer) work(ctx context.Context, job *river.Job[sendArgs]) error {
 	}
 	if err == nil {
 		m.logger.InfoContext(ctx, sentEvent, "job_id", job.ID, "attempt", job.Attempt, "to", msg.To, "message_id", id)
+		if err := m.recordReceipt(ctx, job, true); err != nil {
+			return errSendFailed
+		}
 		m.forget(ctx, job, msg.To)
 		return nil
 	}
 	permanent := errors.Is(err, ErrRejected) || errors.Is(err, ErrInvalidMessage)
 	m.logger.WarnContext(ctx, failedEvent, "job_id", job.ID, "attempt", job.Attempt, "to", msg.To,
 		"message_id", id, "permanent", permanent, "err", err)
+	if permanent || job.Attempt >= job.MaxAttempts {
+		if err := m.recordReceipt(ctx, job, false); err != nil {
+			return errSendFailed
+		}
+	}
 	if !permanent {
 		return errSendFailed
 	}
@@ -171,3 +211,20 @@ func (m *Mailer) forget(ctx context.Context, job *river.Job[sendArgs], to string
 		m.logger.ErrorContext(ctx, forgetFailedEvent, "job_id", job.ID, "attempt", job.Attempt, "to", to, "err", err)
 	}
 }
+
+// Configured reports whether this node can enqueue mail, without sending a message.
+func (m *Mailer) Configured() bool { return m.sender != nil }
+
+func (m *Mailer) recordReceipt(ctx context.Context, job *river.Job[sendArgs], delivered bool) error {
+	if job.Args.Receipt == uuid.Nil() {
+		return nil
+	}
+	if m.Receipt == nil {
+		return errSendFailed
+	}
+	return m.Receipt(ctx, job.Args.Receipt, delivered)
+}
+
+type trackedSendArgs struct{ sendArgs }
+
+func (trackedSendArgs) Kind() string { return "mail.send_tracked" }

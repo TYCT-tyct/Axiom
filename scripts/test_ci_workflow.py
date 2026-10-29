@@ -1,8 +1,13 @@
 import json
+import os
 import re
 import subprocess
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
+
+from test_runner_host import BASH
 
 
 ROOT = Path(__file__).parents[1]
@@ -71,7 +76,15 @@ class BuildChecks(unittest.TestCase):
             for event in ("pull_request", "push", "workflow_dispatch"):
                 for docs in (False, True):
                     with self.subTest(job=name, event=event, docs=docs):
-                        self.assertEqual(enabled(name, event, docs=docs), not docs)
+                        # the tests run once, in the train and on main; a pull request runs only the cheap checks
+                        want = not docs and (name == "web" or event != "pull_request")
+                        self.assertEqual(enabled(name, event, docs=docs), want)
+
+    def test_go_tests_run_in_trains_and_main_not_on_pull_requests(self):
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            for docs in (False, True):
+                with self.subTest(event=event, docs=docs):
+                    self.assertEqual(enabled("go-test", event, docs=docs), not docs and event != "pull_request")
 
     def test_matrix_and_command_keep_index_and_count(self):
         matrix = re.search(r"shard: \$\{\{ (.+) \}\}", job("e2e")).group(1)
@@ -87,11 +100,12 @@ class BuildChecks(unittest.TestCase):
         self.assertIn("fail-fast: false", job("e2e"))
         self.assertIn("name: e2e-test-results-${{ matrix.shard }}", job("e2e"))
 
-    def test_build_rejects_non_successful_shards_except_docs_only(self):
+    def test_build_rejects_non_successful_shards_except_docs_only_and_pull_requests(self):
         check = re.search(r"- if: (needs.changes.outputs.docs_only .+)\n        run: (.+)", job("build"))
         self.assertIsNotNone(check)
         for docs in (False, True):
-            self.assertEqual(expression(check[1], docs=docs), not docs)
+            self.assertEqual(expression(check[1], event="workflow_dispatch", docs=docs), not docs)
+            self.assertFalse(expression(check[1], event="pull_request", docs=docs))
             for result in ("success", "failure", "cancelled", "skipped"):
                 with self.subTest(docs=docs, result=result):
                     command = check[2].replace("${{ needs.e2e.result }}", result)
@@ -113,3 +127,94 @@ class BuildChecks(unittest.TestCase):
         recipe = re.search(r"^web-checks: web-embed\n(.*?)(?=^\S|\Z)", JUSTFILE, re.M | re.S).group(1)
         commands = re.findall(r"^    \{\{ web \}\} (.+)$", recipe, re.M)
         self.assertEqual(commands, ["typecheck", "lint", "limits", "unused", "duplicates", "test", "budget"])
+
+
+class TestContainerPolicy(unittest.TestCase):
+    def test_cleanup_brackets_tests_and_matches_job_timeout(self):
+        steps = job("go-test")
+        self.assertRegex(steps, r"(?m)^    timeout-minutes: 40$")
+        before = steps.index("- name: Clean test containers before tests")
+        tests = steps.index("- run: just test")
+        after = steps.index("- name: Clean test containers after tests")
+        self.assertLess(before, tests)
+        self.assertLess(tests, after)
+        self.assertIn("if: always()", steps[after:])
+        self.assertEqual(steps.count("run: bash scripts/ci/clean-test-containers.sh"), 2)
+
+    def test_policy_is_conditional_and_identifies_the_attempt_and_job(self):
+        if not BASH:
+            self.skipTest("Bash from Git for Windows or PATH is unavailable")
+        policy = re.search(
+            r"- name: Configure test container policy\n        run: \|\n(.*?)(?=^      -)",
+            job("go-test"), re.M | re.S,
+        ).group(1)
+        for parent in (None, "", "axiom-ci.slice"):
+            with self.subTest(parent=parent), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "env"
+                env = {**os.environ, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2",
+                       "GITHUB_JOB": "go-test", "GITHUB_ENV": output.as_posix()}
+                env.pop("AXIOM_TEST_CGROUP_PARENT", None)
+                if parent is not None:
+                    env["AXIOM_TEST_CGROUP_PARENT"] = parent
+                subprocess.run([BASH, "-euo", "pipefail", "-c", textwrap.dedent(policy)], env=env, check=True)
+                expected = "AXIOM_TEST_JOB=123-2-go-test\n"
+                if parent:
+                    expected += "TESTCONTAINERS_RYUK_DISABLED=true\n"
+                self.assertEqual(output.read_text(), expected)
+
+    def run_cleanup(self, job_id="123-2-go-test", fail_list=False):
+        if not BASH:
+            self.skipTest("Bash from Git for Windows or PATH is unavailable")
+        script = (Path(__file__).parent / "ci" / "clean-test-containers.sh").read_text()
+        # Deterministic Docker inventory and clock: no real containers or wall-clock waits in these tests.
+        stubs = r'''
+    docker() {
+      printf '%s\n' "$*" >> "$DOCKER_LOG"
+      case "$*" in
+        'ps -aq --filter label=axiom.ci.job=123-2-go-test')
+          [ "$FAIL_LIST" != true ] || return 37
+          printf '%s\n' own-new own-stopped already-gone ;;
+        'ps -aq --filter label=axiom.ci.job')
+          printf '%s\n' old boundary recent future vanished invalid ;;
+        'inspect --format {{.Created}} old') echo 7500 ;;
+        'inspect --format {{.Created}} boundary') echo 7600 ;;
+        'inspect --format {{.Created}} recent') echo 7601 ;;
+        'inspect --format {{.Created}} future') echo 10001 ;;
+        'inspect --format {{.Created}} vanished') return 1 ;;
+        'inspect --format {{.Created}} invalid') echo invalid ;;
+        'rm -fv already-gone') return 1 ;;
+        'rm -fv own-new'|'rm -fv own-stopped'|'rm -fv old'|'rm -fv boundary') ;;
+        *) echo "unexpected Docker call: $*" >&2; return 99 ;;
+      esac
+    }
+    date() {
+      if [ "$*" = '+%s' ]; then echo 10000
+      elif [ "$2" = invalid ]; then return 1
+      else echo "$2"; fi
+    }
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "docker"
+            env = {**os.environ, "AXIOM_TEST_JOB": job_id, "DOCKER_LOG": log.as_posix(),
+                   "FAIL_LIST": str(fail_list).lower()}
+            result = subprocess.run([BASH, "-c", stubs + script], env=env, text=True, capture_output=True)
+            calls = log.read_text().splitlines() if log.exists() else []
+        return result, calls
+
+    def test_cleanup_owns_only_current_attempt_and_expired_labelled_containers(self):
+        result, calls = self.run_cleanup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call for call in calls if call.startswith("rm ")], [
+            "rm -fv own-new", "rm -fv own-stopped", "rm -fv already-gone", "rm -fv old", "rm -fv boundary",
+        ])
+        self.assertEqual([call for call in calls if call.startswith("ps ")], [
+            "ps -aq --filter label=axiom.ci.job=123-2-go-test", "ps -aq --filter label=axiom.ci.job",
+        ])
+
+    def test_cleanup_requires_an_identity_and_reports_inventory_failure(self):
+        result, calls = self.run_cleanup(job_id="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls, [])
+        result, calls = self.run_cleanup(fail_list=True)
+        self.assertEqual(result.returncode, 37)
+        self.assertEqual(len(calls), 1)

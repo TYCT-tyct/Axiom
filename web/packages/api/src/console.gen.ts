@@ -46,6 +46,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/auth/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a password reset email
+         * @description Returns the same empty 202 for every valid email. Account lookup and email issuance run after acceptance. A later request immediately supersedes previous links. Links expire 30 minutes after the request. If no email arrives, wait and retry. Mail and processing failures alert the operator through the queue. Limited per email using the site sign-in email setting (default 10 per 15 minutes), independently counted, and by the sign-in IP bucket, with the same cache fallback. Email disabled or queue unavailable is an error for all addresses.
+         */
+        post: operations["requestPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/password-reset/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a forgotten password
+         * @description Consumes a single-use reset token on its own site and replaces the password. Invalid, expired, used, superseded and factor-stale tokens all return the same 422. Ends all sessions and recovery codes; TOTP stays enabled and sign-in is required. Password validation and hashing match registration. Consumption, password change, audit and password-changed notice commit together. Uses the sign-in IP limit.
+         */
+        post: operations["resetPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change the signed-in user's password
+         * @description Requires the current password. With TOTP enabled the session must have passed MFA; a pending session cannot change a password. Issues a replacement session at the same level, ends all other sessions and old recovery codes (returning replacements when TOTP is enabled), invalidates reset tokens, audits the change and queues a localized notification atomically. Uses registration password validation and hashing; wrong current passwords spend the user failure bucket.
+         */
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/auth/mfa": {
         parameters: {
             query?: never;
@@ -277,6 +337,46 @@ export interface paths {
          * @description What the user sees on arrival: the balance and what is left to spend. OpenRouter's `GET /api/v1/credits` returns total credits and total usage; Axiom returns the figures a call is admitted by, so the page can say why a call was refused.
          */
         get: operations["getBalance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/statement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's credit statement
+         * @description Every credit event, newest first in ledger commit order: top-up, gift, call charge or reversal, expiry, refund freeze, unfreeze or completed refund. Corrections can create multiple events for one call. `reference` identifies the call for charges/reversals and the batch otherwise (the order ID for paid credit). Freezes change frozen credits but leave the total balance unchanged. No ledger entry, book or platform account appears. An event that commits while the pages are being read lands above the cursor and shifts none of the pages already read. Each page scans at most eight bounded candidate batches; zero-effect events are skipped. An empty `data` with a non-null `next_cursor` means continue through an empty segment, not end of history.
+         */
+        get: operations["listStatement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/statement.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's credit statement as a CSV file
+         * @description The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC), `kind`, `amount`, `balance_after` (empty where the row's balance after is null), `currency`, `reference`, `frozen_change`, `frozen_after`. All amounts are exact decimals in site credits. At most the newest 10 000 events are streamed in cursor pages using bounded memory. Empty continuation pages are traversed. A failure after output starts closes the connection rather than completing a truncated CSV. Older events remain accessible through `listStatement`.
+         */
+        get: operations["exportStatement"];
         put?: never;
         post?: never;
         delete?: never;
@@ -552,6 +652,35 @@ export interface components {
             floor: components["schemas"]["Money"];
             available: components["schemas"]["Money"];
             spent_this_month: components["schemas"]["Money"];
+        };
+        /**
+         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+         * @enum {string}
+         */
+        StatementKind: "top_up" | "gift" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
+        /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in, so the balance between two of them is not known. */
+        StatementRow: {
+            /** @description The row's own identity, to tell two rows apart; it names no ledger entry. */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When the movement was recorded.
+             */
+            at: string;
+            kind: components["schemas"]["StatementKind"];
+            amount: components["schemas"]["Money"];
+            balance_after: components["schemas"]["Money"] | null;
+            /** @description Signed change in credits frozen for refunds; zero for ordinary balance changes. */
+            frozen_change: components["schemas"]["Money"];
+            /** @description Credits frozen after this event; included in balance_after, unavailable for new spending. */
+            frozen_after: components["schemas"]["Money"];
+            /** @description The call ID for charges and reversals; otherwise the credit batch ID (the order ID for paid credit, or the offline credit ID). No payment credentials or internal account IDs are included. */
+            reference: string;
+        };
+        Statement: {
+            data: components["schemas"]["StatementRow"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
         };
         /** @description An API key's ID (TypeID). */
         KeyId: string;
@@ -882,6 +1011,118 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    requestPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    email: string;
+                    /**
+                     * @default en
+                     * @enum {string}
+                     */
+                    language?: "zh" | "en";
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted; if the address is registered, a reset email will arrive. Retry later if none arrives. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    resetPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    token: string;
+                    new_password: string;
+                    /**
+                     * @default en
+                     * @enum {string}
+                     */
+                    language?: "zh" | "en";
+                };
+            };
+        };
+        responses: {
+            /** @description Password reset; sign in again. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    current_password: string;
+                    new_password: string;
+                    /**
+                     * @default en
+                     * @enum {string}
+                     */
+                    language?: "zh" | "en";
+                };
+            };
+        };
+        responses: {
+            /** @description Password changed and current session replaced. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        csrf_token?: string;
+                        /** @description Replacement recovery codes, returned only when TOTP is enabled. */
+                        recovery_codes?: string[];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];
         };
@@ -1252,6 +1493,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Balance"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listStatement: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the statement */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Statement"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    exportStatement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The statement, at most the newest 10 000 movements. */
+            200: {
+                headers: {
+                    /** @description An attachment named for its contents. */
+                    "Content-Disposition": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
                 };
             };
             401: components["responses"]["Unauthenticated"];

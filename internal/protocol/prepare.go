@@ -126,7 +126,7 @@ func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {
-		u.Body, err = rewrite(r.Format, body, t, w)
+		u.Body, err = rewrite(r, body, t, w)
 		return u, err
 	}
 	if t.Format == Chat && !t.Compact && (r.Format == Messages || r.Format == Responses) {
@@ -318,7 +318,10 @@ const (
 type rewriter struct {
 	reader
 	body, out                             []byte
+	src                                   bytes.Buffer
 	at                                    int
+	base, end                             int // offsets of an indexed top-level value; zero on the streaming path
+	consumed                              bool
 	t                                     Target
 	w                                     Rewrites
 	continues, stored, included, hasInput bool            // the Responses members seen
@@ -332,8 +335,6 @@ type rewriter struct {
 	replayAssistant, replayEmpty          bool
 	replayMeta                            *aggBase
 }
-
-func (p *rewriter) offset() int { return int(p.dec.InputOffset()) }
 
 func (p *rewriter) copyTo(off int) {
 	p.out = append(p.out, p.body[p.at:off]...)
@@ -458,17 +459,16 @@ func (p *rewriter) previous() error {
 // 「Responses 的会话状态」).
 func (p *rewriter) store() error {
 	p.stored = true
-	v, err := p.dec.ReadValue()
+	v, err := p.value()
 	p.replace(len(v), "false")
 	return err
 }
 
 // outputCap gives the output cap member, max_tokens or max_output_tokens, the cap the request was quoted at when it is
-// null, or zero in Messages: Inspect treats both as unset.
+// null or zero: Inspect treats both as unset.
 func (p *rewriter) outputCap() error {
-	v, err := p.dec.ReadValue()
-	// Responses zero normalization is tracked in https://github.com/TYCT-tyct/Axiom/issues/396.
-	if err == nil && p.t.MaxOutput > 0 && (v.Kind() == 'n' || p.t.Format == Messages && numberIs(v, 0)) {
+	v, err := p.value()
+	if err == nil && p.t.MaxOutput > 0 && (v.Kind() == 'n' || numberIs(v, 0)) {
 		p.replace(len(v), strconv.FormatInt(p.t.MaxOutput, 10))
 	}
 	p.capped = true
@@ -512,7 +512,7 @@ func (p *rewriter) input() error {
 	if len(p.w.History) == 0 {
 		return p.skip()
 	}
-	v, err := p.dec.ReadValue()
+	v, err := p.value()
 	if err != nil {
 		return err
 	}
@@ -590,7 +590,7 @@ func (p *rewriter) addResponses() error {
 // (docs/domains/gateway.md「转发规则」).
 func (p *rewriter) stream() error {
 	p.streamed = true
-	v, err := p.dec.ReadValue()
+	v, err := p.value()
 	if err == nil && p.t.Streams && string(v) != "true" {
 		p.replace(len(v), "true")
 	}
@@ -602,7 +602,7 @@ func (p *rewriter) stream() error {
 // so a cap the endpoint ignores must not stay and be taken for the bound the call was reserved at. The smallest value
 // above 0 is the client's cap; null and 0 stand for none (Inspect reads 0 as no cap too).
 func (p *rewriter) chatOutputCap() error {
-	v, err := p.dec.ReadValue()
+	v, err := p.value()
 	p.at = p.offset()
 	if err != nil || v.Kind() != '0' {
 		return err
@@ -671,7 +671,7 @@ func (p *rewriter) streamOptions() error {
 
 func (p *rewriter) forceUsage() error {
 	p.usageForced = true
-	v, err := p.dec.ReadValue()
+	v, err := p.value()
 	if err == nil && string(v) != "true" {
 		p.replace(len(v), "true")
 	}

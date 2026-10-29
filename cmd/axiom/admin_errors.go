@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/observability"
 	"axiom/internal/platform/idem"
 	"axiom/internal/suppliers"
 )
@@ -12,6 +14,8 @@ import (
 // adminRefusals are the refusals the admin API's modules make beyond those the console's do (refusals), tried after
 // them. A message is English for logs and developers and never repeats what the client sent.
 var adminRefusals = []refusal{
+	{observability.ErrAlertConfiguration, http.StatusUnprocessableEntity, codeUnprocessable, "the alert configuration is invalid"},
+	{observability.ErrAlertRevision, http.StatusConflict, codeStaleRevision, "the alert configuration changed since it was read"},
 	{idem.ErrReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another request"},
 
 	{catalog.ErrOpKeyReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another change"},
@@ -54,7 +58,7 @@ var adminRefusals = []refusal{
 	{suppliers.ErrTestOwner, http.StatusUnprocessableEntity, codeUnprocessable, "only platform endpoints may be tested"},
 	{suppliers.ErrTestCost, http.StatusUnprocessableEntity, codeUnprocessable, "the endpoint has no complete price for a test generation"},
 	{suppliers.ErrNoFormat, http.StatusUnprocessableEntity, codeUnprocessable, "the endpoint does not serve that call format"},
-	{suppliers.ErrLimits, http.StatusUnprocessableEntity, codeUnprocessable, "concurrency is 1 to 2147483647, and requests a minute 1 to 2147483647 or none"},
+	{suppliers.ErrLimits, http.StatusUnprocessableEntity, codeUnprocessable, fmt.Sprintf("concurrency is 1 to 2147483647, and requests a minute 1 to %d or none", suppliers.MaxRequestsPerMinute)},
 }
 
 // unprocessable is a request that is well formed but that a rule refuses; message says which.

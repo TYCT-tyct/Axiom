@@ -75,6 +75,116 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/password-reset:
+    post:
+      operationId: requestPasswordReset
+      tags: [Session]
+      summary: Request a password reset email
+      description: >-
+        Returns the same empty 202 for every valid email. Account lookup and email issuance run after acceptance.
+        A later request immediately supersedes previous links. Links expire 30 minutes after the request.
+        If no email arrives, wait and retry. Mail and processing failures alert the operator through the queue.
+        Limited per email using the site sign-in email setting (default 10 per 15 minutes), independently counted,
+        and by the sign-in IP bucket, with the same cache fallback.
+        Email disabled or queue unavailable is an error for all addresses.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email: {type: string, minLength: 3, maxLength: 254}
+                language: {type: string, enum: [zh, en], default: en}
+      responses:
+        "202": {description: "Accepted; if the address is registered, a reset email will arrive. Retry later if none arrives."}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/password-reset/complete:
+    post:
+      operationId: resetPassword
+      tags: [Session]
+      summary: Reset a forgotten password
+      description: >-
+        Consumes a single-use reset token on its own site and replaces the password. Invalid, expired, used,
+        superseded and factor-stale tokens all return the same 422. Ends all sessions and recovery codes;
+        TOTP stays enabled and sign-in is required. Password validation and hashing match registration.
+        Consumption, password change, audit and password-changed notice commit together. Uses the sign-in IP limit.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token, new_password]
+              properties:
+                token: {type: string, minLength: 1, maxLength: 256}
+                new_password: {type: string, minLength: 12, maxLength: 256}
+                language: {type: string, enum: [zh, en], default: en}
+      responses:
+        "204": {description: "Password reset; sign in again."}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/password:
+    post:
+      operationId: changePassword
+      tags: [Session]
+      summary: Change the signed-in user's password
+      description: >-
+        Requires the current password. With TOTP enabled the session must have passed MFA; a pending session
+        cannot change a password. Issues a replacement session at the same level, ends all other sessions and
+        old recovery codes (returning replacements when TOTP is enabled), invalidates reset tokens, audits the change and queues a localized notification atomically.
+        Uses registration password validation and hashing; wrong current passwords spend the user failure bucket.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [current_password, new_password]
+              properties:
+                current_password: {type: string, minLength: 1, maxLength: 256}
+                new_password: {type: string, minLength: 12, maxLength: 256}
+                language: {type: string, enum: [zh, en], default: en}
+      responses:
+        "200":
+          description: Password changed and current session replaced.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  csrf_token: {type: string}
+                  recovery_codes:
+                    type: array
+                    items: {type: string}
+                    description: Replacement recovery codes, returned only when TOTP is enabled.
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/mfa:
     post:
       operationId: verifyMfa
@@ -438,6 +548,66 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Balance"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/statement:
+    get:
+      operationId: listStatement
+      tags: [Balance]
+      summary: The account's credit statement
+      description: >-
+        Every credit event, newest first in ledger commit order: top-up, gift, call charge or reversal, expiry,
+        refund freeze, unfreeze or completed refund. Corrections can create multiple events for one call.
+        `reference` identifies the call for charges/reversals and the batch otherwise (the order ID for paid credit).
+        Freezes change frozen credits but leave the total balance unchanged. No ledger entry, book or platform account appears. An event that commits while the pages
+        are being read lands above the cursor and shifts none of the pages already read. Each page scans at most eight
+        bounded candidate batches; zero-effect events are skipped. An empty `data` with a non-null `next_cursor`
+        means continue through an empty segment, not end of history.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the statement
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Statement"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/statement.csv:
+    get:
+      operationId: exportStatement
+      tags: [Balance]
+      summary: The account's credit statement as a CSV file
+      description: >-
+        The rows of `listStatement`, newest first, as comma-separated text under a header row: `at` (RFC 3339, UTC),
+        `kind`, `amount`, `balance_after` (empty where the row's balance after is null), `currency`, `reference`,
+        `frozen_change`, `frozen_after`.
+        All amounts are exact decimals in site credits. At most the newest 10 000 events are streamed in cursor pages
+        using bounded memory. Empty continuation pages are traversed. A failure after output starts closes the
+        connection rather than completing a truncated CSV. Older events remain accessible through `listStatement`.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      responses:
+        "200":
+          description: The statement, at most the newest 10 000 movements.
+          headers:
+            Content-Disposition:
+              required: true
+              description: An attachment named for its contents.
+              schema: {type: string}
+          content:
+            text/csv:
+              schema: {type: string}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
@@ -966,6 +1136,51 @@ components:
         floor: {$ref: "#/components/schemas/Money"}
         available: {$ref: "#/components/schemas/Money"}
         spent_this_month: {$ref: "#/components/schemas/Money"}
+    StatementKind:
+      type: string
+      enum: [top_up, gift, spend, expiry, refund, reversal, freeze, unfreeze]
+      description: >-
+        What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit
+        given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+    StatementRow:
+      type: object
+      required: [id, at, kind, amount, balance_after, reference, frozen_change, frozen_after]
+      description: >-
+        One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and
+        `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before
+        the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in,
+        so the balance between two of them is not known.
+      properties:
+        id:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: The row's own identity, to tell two rows apart; it names no ledger entry.
+        at: {type: string, format: date-time, description: When the movement was recorded.}
+        kind: {$ref: "#/components/schemas/StatementKind"}
+        amount: {$ref: "#/components/schemas/Money"}
+        balance_after:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          nullable: true
+        frozen_change:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: Signed change in credits frozen for refunds; zero for ordinary balance changes.
+        frozen_after:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: Credits frozen after this event; included in balance_after, unavailable for new spending.
+        reference:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: >-
+            The call ID for charges and reversals; otherwise the credit batch ID (the order ID for paid credit,
+            or the offline credit ID). No payment credentials or internal account IDs are included.
+    Statement:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/StatementRow"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     KeyId: {type: string, pattern: '^key_[0-9a-hjkmnp-tv-z]{26}$', description: "An API key's ID (TypeID)."}
     WorkspaceId: {type: string, pattern: '^ws_[0-9a-hjkmnp-tv-z]{26}$', description: "A workspace's ID (TypeID)."}
     CallId:

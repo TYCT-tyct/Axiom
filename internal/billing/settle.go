@@ -116,6 +116,7 @@ func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err 
 		if err != nil {
 			return err
 		}
+		c.quotes = h.quotes
 		f, err = c.settle(ctx, tx, o)
 		seen, owed, charged = c.seen, c.owed, c.charged
 		return err
@@ -231,7 +232,7 @@ func (c *locked) price(last AttemptResult) (priced, error) {
 		return priced{}, err
 	}
 	waived := waivable(last)
-	p, err := priceSegments(s, f, last.Segments, waived)
+	p, err := priceSegments(s, f, last.Segments, waived, c.quotes[last.Entry].tiers)
 	p.waived = waived
 	return p, err
 }
@@ -271,7 +272,7 @@ const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCo
 // report or the schedule cannot price, or any usage protocol could not map, make the charge estimated; usage protocol
 // could not map, and an item the schedule prices nowhere, are charged at their fallback prices
 // (docs/domains/billing.md「价目表缺项」).
-func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOnly bool) (priced, error) {
+func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOnly bool, tiers catalog.ServiceTierSet) (priced, error) {
 	var p priced
 	total := platform.Exact{}
 	charged := ^catalog.ItemSet(0)
@@ -280,6 +281,10 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 	}
 	for _, seg := range segments {
 		cost, missing, err := segmentCost(s, seg.Usage, perUseOnly)
+		if undeclaredTier(tiers, seg.Usage.ServiceTier()) {
+			cost, missing, err = platform.Exact{}, ^catalog.ItemSet(0), nil
+			p.estimated = true
+		}
 		if err == nil {
 			cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), perUseOnly)
 		}
@@ -402,44 +407,6 @@ func (c *locked) pricing(entry int) (catalog.Schedule, fallbacks, error) {
 	return s, f, err
 }
 
-// noteAttempts notes the unknown fields of every attempt that ran, not only the charged one: a model whose upstream
-// reported one leaves routing however its attempt ended. An attempt known not to have run used nothing.
-func (c *locked) noteAttempts(ctx context.Context, tx pg.Tx, o Outcome) error {
-	for _, at := range o.Attempts {
-		if at.Result == NotExecuted {
-			continue
-		}
-		if err := c.noteUnknown(ctx, tx, at.Entry, at.Segments); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// noteUnknown records each field of segments protocol could not map against the entry's model, whichever attempt
-// reported it. The first time the model shows a field it leaves routing (「价目表缺项」), and seen collects it for the
-// alert once the transaction commits.
-func (c *locked) noteUnknown(ctx context.Context, tx pg.Tx, entry int, segments []Segment) error {
-	for _, seg := range segments {
-		for _, u := range seg.Usage.Unknown() {
-			if entry < 0 || entry >= len(c.row.Models) || entry >= len(c.row.Fallbacks) || c.row.Fallbacks[entry] == "" {
-				return ErrNoAttempt // admission locks a model on every kept entry, and only kept entries are attempted
-			}
-			model := c.row.Models[entry]
-			n, err := queries.NoteUnknownItem(ctx, tx, NoteUnknownItemParams{
-				ModelID: model, Field: u.Field, RequestID: c.id, SiteID: c.row.SiteID, AccountID: c.row.AccountID,
-			})
-			if err != nil {
-				return fmt.Errorf("billing: note the unknown item %s: %w", u.Field, err)
-			}
-			if n == 1 {
-				c.seen = append(c.seen, UnknownItem{Model: catalog.ModelID(model), Field: u.Field, Request: c.id})
-			}
-		}
-	}
-	return nil
-}
-
 func int32p(n int) *int32 {
 	i := int32(n) //nolint:gosec // G115: an attempt or route index, a few at most
 	return &i
@@ -508,6 +475,7 @@ func decodeUsage(b []byte) ([]Segment, error) {
 
 // locked is one reservation under its balance row lock, with what is charged once a branch has run.
 type locked struct {
+	quotes    []quote // only Settle brings usage, always with the original Hold, including after cleanup
 	cost      platform.Exact
 	costKnown bool
 	b         *Billing
@@ -581,10 +549,7 @@ func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult
 	if err != nil {
 		return err
 	}
-	if err := c.move(ctx, tx, -held, c.charged); err != nil {
-		return err
-	}
-	return c.write(ctx, tx, w)
+	return c.write(ctx, tx, w, -held, c.charged)
 }
 
 // late replaces what cleanup charged with what the full outcome charges: a refund, or a makeup capped at the floor.
@@ -596,32 +561,16 @@ func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResul
 	if _, err := post(ctx, tx, c.event("settle", lateRevision), charge(p.price, c.charged)...); err != nil {
 		return err
 	}
-	if err := c.move(ctx, tx, 0, c.charged-c.row.Charged); err != nil {
-		return err
-	}
 	w, err := result("settled", p, last)
 	if err != nil {
 		return err
 	}
-	return c.write(ctx, tx, w)
+	return c.write(ctx, tx, w, 0, c.charged-c.row.Charged)
 }
 
 // release ends a reservation in state, giving back what it held and keeping what was charged.
 func (c *locked) release(ctx context.Context, tx pg.Tx, state string, held int64) error {
-	if err := c.move(ctx, tx, -max(held, 0), 0); err != nil {
-		return err
-	}
-	return c.write(ctx, tx, c.kept(state))
-}
-
-func (c *locked) move(ctx context.Context, tx pg.Tx, reserved, spent int64) error {
-	if err := queries.MoveCounters(ctx, tx, MoveCountersParams{
-		Reserved: reserved, Spent: spent, AccountID: c.row.AccountID, WorkspaceID: c.row.WorkspaceID,
-		WorkspaceWindow: c.row.WorkspaceWindow, KeyID: c.row.KeyID, KeyWindow: c.row.KeyWindow,
-	}); err != nil {
-		return fmt.Errorf("billing: move the counters: %w", err)
-	}
-	return nil
+	return c.write(ctx, tx, c.kept(state), -max(held, 0), 0)
 }
 
 // written is what write records on the reservation.
@@ -655,9 +604,10 @@ var terminal = map[string]bool{"settled": true, "released": true, "cleanup_settl
 
 // write records w on the reservation, and the end of the request when its state is terminal, at the same moment of
 // the database's clock.
-func (c *locked) write(ctx context.Context, tx pg.Tx, w written) error {
+func (c *locked) write(ctx context.Context, tx pg.Tx, w written, reserved, spent int64) error {
 	at, err := queries.EndReservation(ctx, tx, EndReservationParams{
-		Profit:    c.profit(),
+		Profit: c.profit(), Reserved: reserved, Spent: spent, AccountID: c.row.AccountID,
+		WorkspaceID: c.row.WorkspaceID, WorkspaceWindow: c.row.WorkspaceWindow, KeyID: c.row.KeyID, KeyWindow: c.row.KeyWindow,
 		RequestID: c.id, State: w.state, ChargedSeq: w.seq, Entry: w.entry, Charged: c.charged, Price: w.price,
 		Waived: w.waived, Estimated: w.estimated, FinalUsage: w.usage, AttemptEntries: c.entries,
 	})

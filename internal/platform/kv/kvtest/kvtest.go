@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/valkey-io/valkey-go"
 
+	"axiom/internal/platform/containertest"
 	"axiom/internal/platform/kv"
 )
 
@@ -274,24 +274,9 @@ func StartServer(ctx context.Context) (url, passwordFile string, terminate func(
 	return "valkey://axiom@" + b.address, passwordFile, terminate, nil
 }
 
-// shared is the server withcluster started, read through os.Environ for the reason pgtest reads its own that way: the
-// go command puts every variable a test reads with os.Getenv in the key of the cached result, and these name a container
-// that is new on every run.
+// shared is the server withcluster started. Its URL and password file identify infrastructure, not test inputs.
 func shared() (url, passwordFile string) {
-	env := os.Environ()
-	return last(env, URLEnv), last(env, PasswordFileEnv)
-}
-
-// last is the final value of name in env: withcluster appends its values after os.Environ, so the last entry is the one
-// the command was given.
-func last(env []string, name string) string {
-	prefix := name + "="
-	for _, entry := range slices.Backward(env) {
-		if value, ok := strings.CutPrefix(entry, prefix); ok {
-			return value
-		}
-	}
-	return ""
+	return containertest.Untracked(URLEnv), containertest.Untracked(PasswordFileEnv)
 }
 
 // acl is the ACL file: the axiom user with the commands of README「权限」 under ax:*, `default` off, and an admin user

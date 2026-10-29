@@ -13,7 +13,7 @@ import (
 
 // The three scans a call makes of its body before the first byte goes upstream (internal/gateway/README.md「性能估算」):
 // Inspect reads the summary, SessionKey the first bytes for the session, and Prepare, after routing, rewrites for the
-// endpoint. The first and third read all of it.
+// endpoint. Prepare reuses Inspect's positions instead of parsing all of it again.
 
 // turns repeat to make a body of any size: text, an image and a tool call of each format Prepare rewrites.
 var turns = map[protocol.Format]struct{ head, turn string }{

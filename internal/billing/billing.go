@@ -108,6 +108,7 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 
 // alert reports each unknown item seen for the first time: its model has left routing and needs an administrator.
 func (b *Billing) alert(seen []UnknownItem) {
+	// TODO(#316): deliver this committed missing-item signal through operator notifications.
 	for _, u := range seen {
 		b.logger.Error("billing: an unknown billing item appeared; the model takes no new requests until it is priced",
 			"model", u.Model.String(), "field", u.Field, "request", u.Request.String())
@@ -185,9 +186,15 @@ func (b *Billing) Reap(ctx context.Context) (reaped int, err error) {
 
 // fence locks the holder row for the rest of tx if the holder is still alive by the database's clock.
 func (b *Billing) fence(ctx context.Context, tx pg.Tx) error {
-	if _, err := queries.FenceHolder(ctx, tx, b.holder); errors.Is(err, pg.ErrNoRows) {
+	_, err := queries.FenceHolder(ctx, tx, b.holder)
+	return fenceErr(err)
+}
+
+func fenceErr(err error) error {
+	if errors.Is(err, pg.ErrNoRows) {
 		return ErrTerminated
-	} else if err != nil {
+	}
+	if err != nil {
 		return fmt.Errorf("billing: fence the holder: %w", err)
 	}
 	return nil
