@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"sync/atomic"
 	"testing"
 	"uuid"
@@ -118,6 +119,12 @@ func TestOpenRouterRequestsDoNotReadPrices(t *testing.T) {
 		}
 		if got := r.orModel(a, "acme/alpha").Pricing["prompt"]; got != "0.000001" {
 			t.Fatalf("published detail price = %q", got)
+		}
+		for _, path := range []string{"/api/v1/models/count", "/api/v1/models/user", "/api/v1/models/acme/alpha/endpoints", "/api/v1/providers"} {
+			resp, body := r.do(http.MethodGet, path, a.key, nil)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s: %d %s", path, resp.StatusCode, body)
+			}
 		}
 	}
 	if got := reads.Load(); got != 1 {

@@ -114,9 +114,11 @@ func TestModelListJudgesTheKeyAsACallDoes(t *testing.T) {
 				t.Fatalf("before the change: %d %s", resp.StatusCode, body)
 			}
 			r.sql("UPDATE accounts.api_keys " + change)
-			resp, body := r.do(http.MethodGet, "/v1/models", a.key, nil)
-			if code, _ := errorOf(t, body); resp.StatusCode != http.StatusUnauthorized || code != "authentication" {
-				t.Errorf("after the change: %d %s", resp.StatusCode, body)
+			for _, path := range []string{"/v1/models", "/api/v1/models", "/api/v1/models/user", "/api/v1/models/count", "/api/v1/models/acme/alpha/endpoints", "/api/v1/providers"} {
+				resp, body := r.do(http.MethodGet, path, a.key, nil)
+				if code, _ := errorOf(t, body); resp.StatusCode != http.StatusUnauthorized || code != "authentication" {
+					t.Errorf("after the change, %s: %d %s", path, resp.StatusCode, body)
+				}
 			}
 		})
 	}

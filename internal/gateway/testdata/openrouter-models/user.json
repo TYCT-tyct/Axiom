@@ -1,0 +1,122 @@
+{
+  "source": "https://openrouter.ai/docs/api/api-reference/models/list-models-filtered-by-user-provider-preferences-privacy-settings-and-guardrails",
+  "recorded_at": "2026-10-29",
+  "response": {
+    "data": [
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": "chatml",
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-4",
+        "context_length": 8192,
+        "created": 1692901234,
+        "default_parameters": null,
+        "description": "GPT-4 is a large multimodal model that can solve difficult problems with greater accuracy.",
+        "expiration_date": null,
+        "id": "openai/gpt-4",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/gpt-4/endpoints"
+        },
+        "name": "GPT-4",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.00006",
+          "image": "0",
+          "prompt": "0.00003",
+          "request": "0"
+        },
+        "supported_parameters": [
+          "temperature",
+          "top_p",
+          "max_tokens",
+          "frequency_penalty",
+          "presence_penalty"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": true,
+          "max_completion_tokens": 4096
+        }
+      }
+    ],
+    "links": {
+      "next": "/api/v1/models?offset=500&limit=500"
+    },
+    "total_count": 150
+  },
+  "axiom": {
+    "data": [
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "file"
+          ],
+          "modality": "text+image+file->text",
+          "output_modalities": [
+            "text"
+          ]
+        },
+        "canonical_slug": "acme/golden",
+        "context_length": 200000,
+        "created": 0,
+        "default_parameters": null,
+        "id": "acme/golden",
+        "links": {
+          "details": "/api/v1/models/acme/golden/endpoints"
+        },
+        "name": "golden",
+        "per_request_limits": null,
+        "pricing": {
+          "audio": "0.00000001",
+          "audio_output": "0.00000002",
+          "completion": "0.000015",
+          "image_token": "0.000004",
+          "input_cache_read": "0.0000003",
+          "input_cache_write": "0.00000375",
+          "input_cache_write_1h": "0.000006",
+          "internal_reasoning": "0.00002",
+          "prompt": "0.000003",
+          "web_search": "0.01"
+        },
+        "reasoning": {
+          "supports_max_tokens": true
+        },
+        "supported_parameters": [
+          "temperature",
+          "top_p",
+          "max_tokens",
+          "max_completion_tokens",
+          "response_format",
+          "stop",
+          "tools",
+          "tool_choice",
+          "parallel_tool_calls",
+          "reasoning",
+          "reasoning_effort"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 200000,
+          "is_moderated": false,
+          "max_completion_tokens": 64000
+        }
+      }
+    ],
+    "links": {
+      "next": null
+    },
+    "total_count": 1
+  }
+}

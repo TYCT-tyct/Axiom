@@ -42,9 +42,19 @@ func (h *Handler) modelRoutes(prefix string) {
 	h.mux.HandleFunc("GET "+prefix+"/models", list)
 	// A model name holds a '/', so the wildcard takes the rest of the path, not one member.
 	h.mux.HandleFunc("GET "+prefix+"/models/{model...}", one)
-	// OpenRouter's other paths under /models are not served; without these the wildcard would take them for names.
+	// Reserve discovery paths before the model wildcard can take them for names.
 	for _, path := range []string{"/models/count", "/models/user", "/models/{author}/{slug}/endpoints"} {
-		h.mux.HandleFunc("GET "+prefix+path, notServed)
+		handler := http.HandlerFunc(notServed)
+		if prefix == "/api/v1" {
+			handler = h.discoverOpenRouter
+			if path == "/models/user" {
+				handler = h.listOpenRouterModels
+			}
+		}
+		h.mux.HandleFunc("GET "+prefix+path, handler)
+	}
+	if prefix == "/api/v1" {
+		h.mux.HandleFunc("GET "+prefix+"/providers", h.discoverOpenRouter)
 	}
 }
 

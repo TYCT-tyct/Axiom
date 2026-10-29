@@ -237,7 +237,7 @@ func TestModelListEdges(t *testing.T) {
 		"a model is not cached":    {http.MethodGet, "/v1/models/acme/alpha", all.key, checkNoStore},
 		"HEAD has no body":         {http.MethodHead, "/v1/models", all.key, checkHead},
 		"models/count":             {http.MethodGet, "/v1/models/count", all.key, checkNotFound},
-		"models/user":              {http.MethodGet, "/api/v1/models/user", all.key, checkNotFound},
+		"models/user":              {http.MethodGet, "/v1/models/user", all.key, checkNotFound},
 		"models/{a}/{s}/endpoints": {http.MethodGet, "/v1/models/acme/alpha/endpoints", all.key, checkNotFound},
 	} {
 		t.Run(name, func(t *testing.T) {
