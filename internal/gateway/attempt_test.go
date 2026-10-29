@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
+	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
@@ -185,6 +187,43 @@ func TestFrozenRouteRecordsRestedSupplierAsBalance(t *testing.T) {
 			}
 			if got := len(h.ended().outcome.Attempts); got != 0 {
 				t.Fatalf("unacquired route made %d attempts", got)
+			}
+		})
+	}
+}
+
+func TestProviderNoFallbackKeepsModelRecovery(t *testing.T) {
+	for _, global := range []bool{false, true} {
+		run(t, func(t *testing.T, ctx context.Context) {
+			h := newHarness(t, ctx, options{entries: 3})
+			primary, alternate := catalog.ModelID{1}, catalog.ModelID{2}
+			var candidates []routing.Endpoint
+			for i, e := range h.call.Plan.Entries {
+				model := []catalog.ModelID{primary, primary, alternate}[i]
+				candidates = append(candidates, routing.Endpoint{
+					ID: e.Endpoint, Supplier: e.Supplier, Model: model, Enabled: true, BalanceOK: true, Egresses: 1,
+					Class: routing.ClassOfficial, Policy: routing.PolicyNoRetention, Health: 1, Quality: 1, Confidence: 1,
+					Context: 100000, MaxOutput: e.MaxOutput, Streams: true, Native: routing.Of(h.call.Format), Served: routing.Of(h.call.Format), Caps: ^protocol.Capabilities(0),
+					ServiceTiers: 1 << catalog.ServiceTierStandard, Price: e.Price, Target: e.Target,
+				})
+			}
+			snap, err := h.router.NewSnapshot(time.Now(), candidates, []routing.Preset{{Strategy: routing.Cheapest, Classes: routing.AllClasses, Policies: routing.AllPolicies}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.router.Replace(snap)
+			h.call.Plan, _, err = h.router.Plan(routing.Input{Req: &h.call.Request, Models: []catalog.ModelID{primary, alternate}, Override: routing.Override{NoFallbacks: true, SortGlobal: global}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			upstreamFailure := failing(routing.ScopeEndpoint, true, suppliers.Failure{Cause: suppliers.UpstreamError{}})
+			h.up.endpoint(1).script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) { return nil, upstreamFailure }}
+			h.up.endpoint(2).script = []scripted{whole(h)}
+			h.up.endpoint(3).script = []scripted{whole(h)}
+			h.run()
+			got := [3]int{h.up.endpoint(1).sends, h.up.endpoint(2).sends, h.up.endpoint(3).sends}
+			if got != ([3]int{1, 0, 1}) || h.w.status != http.StatusOK {
+				t.Fatalf("global=%v: sends %v, status %d", global, got, h.w.status)
 			}
 		})
 	}

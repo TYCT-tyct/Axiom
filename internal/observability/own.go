@@ -40,11 +40,13 @@ type Cursor struct {
 // required: it is what the index is read by. Since is inclusive and Until exclusive; Model
 // and ClientApp, when not empty, must match exactly; After continues from a previous page.
 type OwnQuery struct {
-	Account          uuid.UUID
-	Since, Until     time.Time
-	Model, ClientApp string
-	After            *Cursor
-	PageSize         int // 1 to MaxPageSize; 0 is DefaultPageSize
+	Account                   uuid.UUID
+	Since, Until              time.Time
+	Model, ClientApp          string
+	Key, Workspace, RequestID *uuid.UUID
+	Status                    string // empty, success, or error; error means error_kind is nonempty
+	After                     *Cursor
+	PageSize                  int // 1 to MaxPageSize; 0 is DefaultPageSize
 }
 
 // The page sizes of ListOwn.
@@ -61,45 +63,43 @@ func cursorOf(q OwnQuery) (at time.Time, id string) {
 	return q.Until, uuid.Nil().String()
 }
 
-// listRows runs the list query that fits the filters, for a page of size calls: one more is asked for, to learn whether
-// a next page exists. A model, with or without a client application, is read from the model's index; a client
-// application alone from the application's; no filter from the account's. The rows of all three have one shape.
+// listRows plans for the actual filter values so optional predicates do not hide the ordered indexes.
 func listRows(ctx context.Context, tx pg.Tx, q OwnQuery, size int) ([]store.ListOwnCallsRow, error) {
-	// The values of a list decide its plan: a prepared statement that the server has switched to its generic plan reads
-	// all of an account's calls in the window (4,300 buffers for 60,000 calls) where the plan made for the values reads a
-	// page. A list is read for a person at a console, not on the call path, so it is planned every time.
-	if _, err := tx.Exec(ctx, "SET LOCAL plan_cache_mode = force_custom_plan"); err != nil {
-		return nil, fmt.Errorf("plan the list for its values: %w", err)
+	if err := planOwnPage(ctx, tx); err != nil {
+		return nil, err
 	}
 	at, id := cursorOf(q)
-	limit := int32(size) + 1 //nolint:gosec // ListOwn has checked size is 1 to MaxPageSize
-	account, queries := q.Account.String(), store.New()
-	switch {
-	case q.Model != "":
-		rows, err := queries.ListOwnCallsByModel(ctx, tx, store.ListOwnCallsByModelParams{
-			AccountID: account, Model: q.Model,
-			Since: q.Since, Until: q.Until, ClientApp: q.ClientApp, AfterAt: at, AfterID: id, PageSize: limit,
-		})
-		return convert(rows, func(r store.ListOwnCallsByModelRow) store.ListOwnCallsRow { return store.ListOwnCallsRow(r) }), err
-	case q.ClientApp != "":
-		rows, err := queries.ListOwnCallsByApp(ctx, tx, store.ListOwnCallsByAppParams{
-			AccountID: account, ClientApp: q.ClientApp,
-			Since: q.Since, Until: q.Until, AfterAt: at, AfterID: id, PageSize: limit,
-		})
-		return convert(rows, func(r store.ListOwnCallsByAppRow) store.ListOwnCallsRow { return store.ListOwnCallsRow(r) }), err
-	}
-	return queries.ListOwnCalls(ctx, tx, store.ListOwnCallsParams{
-		AccountID: account, Since: q.Since, Until: q.Until,
-		AfterAt: at, AfterID: id, PageSize: limit,
+	return store.New().ListOwnCalls(ctx, tx, store.ListOwnCallsParams{
+		AccountID: q.Account.String(), Since: q.Since, Until: q.Until, AfterAt: at, AfterID: id,
+		Model: q.Model, ClientApp: q.ClientApp, KeyID: uuidFilter(q.Key), WorkspaceID: uuidFilter(q.Workspace),
+		Status: q.Status, RequestID: uuidFilter(q.RequestID),
+		PageSize: int32(size) + 1, //nolint:gosec // ListOwn checks size is 1 to MaxPageSize
 	})
 }
 
-func convert[From any](rows []From, to func(From) store.ListOwnCallsRow) []store.ListOwnCallsRow {
-	out := make([]store.ListOwnCallsRow, len(rows))
-	for i, r := range rows {
-		out[i] = to(r)
+func planOwnPage(ctx context.Context, tx pg.Tx) error {
+	if err := planOwnQuery(ctx, tx); err != nil {
+		return err
 	}
-	return out
+	// Correlated sparse filters can be estimated below LIMIT and otherwise chosen as bitmap + sort.
+	if _, err := tx.Exec(ctx, "SET LOCAL enable_sort = off"); err != nil {
+		return fmt.Errorf("read the page in index order: %w", err)
+	}
+	return nil
+}
+
+func planOwnQuery(ctx context.Context, tx pg.Tx) error {
+	if _, err := tx.Exec(ctx, "SET LOCAL plan_cache_mode = force_custom_plan"); err != nil {
+		return fmt.Errorf("plan calls for their filters: %w", err)
+	}
+	return nil
+}
+
+func uuidFilter(id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+	return id.String()
 }
 
 // ListOwn returns one page of the calls the transaction's scope can see, and the cursor of the next page, nil when

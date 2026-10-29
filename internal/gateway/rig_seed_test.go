@@ -112,7 +112,7 @@ func (r *rig) seedRouting(o rigOptions) {
 			r.t.Fatal(err)
 		}
 		e := routing.Endpoint{
-			ID: routing.EndpointID(uuid.NewV7()), Supplier: routing.SupplierID(uuid.NewV7()), Model: s.model, Enabled: true,
+			ID: routing.EndpointID(uuid.NewV7()), Supplier: routing.SupplierID(uuid.NewV7()), Model: s.model, Codename: s.name, Enabled: true,
 			BalanceOK: true, Egresses: 1, Class: routing.ClassOfficial, Policy: routing.PolicyNoRetention, Verified: true,
 			Quality: 1, Confidence: 1, Health: 1, Throughput: 100, Latency: 500 * time.Millisecond,
 			ServiceTiers: 1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierPriority, Native: all, Served: all,

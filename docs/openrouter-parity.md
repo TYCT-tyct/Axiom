@@ -57,22 +57,22 @@
 
 ## 3. 供应商路由参数 `provider`、模型备选 `models`、变体
 
-Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员读进覆盖，不认识的成员和暂不支持的取值一律 400 并指明成员名（不静默忽略）。
+Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进覆盖，不认识的成员和暂不支持的取值一律 400 并指明成员名（不静默忽略）。
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| `provider.order`（供应商 slug 列表） | 按序尝试，可含 `provider/variant/region/tier` 形式的端点 slug | docs/guides/routing/provider-selection | 部分：空列表接受，写了名字就 400（`gw/provider.go:63,87-98`） | 无（按渠道优先级/权重，非请求级） | 无 | 名字到供应商 ID 的映射没有模块提供（`docs/domains/gateway.md` 待定问题）；这是 OpenRouter 客户端配置里最常见的参数 |
-| `provider.only` / `provider.ignore` | 只允许/排除某些供应商，与账户级设置合并 | 同上 | 部分：同 `order`，写了名字就 400（`gw/provider.go:64-65`） | 无 | 无 | 同上 |
-| `provider.allow_fallbacks` | 默认 true；false 则只用指定的 | 同上 | 部分：只接受 true（`gw/provider.go:69`） | 无 | 无 | `false` 会 400；需要 `order` 先有才有意义 |
-| `provider.require_parameters` | 只路由到支持请求里全部参数的端点 | 同上 | 部分：只接受 false（`gw/provider.go:70`）；但能力匹配默认强制（工具、图片、PDF、推理、结构化输出、缓存标记，`proto/inspect.go:34-44`） | 无 | 无 | 默认行为已覆盖大部分，但无法对采样参数做强制 |
-| `provider.data_collection`（`allow`/`deny`） | 排除会存储数据的供应商 | 同上 | 有：`gw/provider.go:126-135`，`deny` 映射到「不留存」政策 | 无 | 无 | 无 |
-| `provider.zdr` | 只走零数据保留端点 | 同上；docs/guides/features/zdr | 有：`gw/provider.go:137-147` `readZDR`（与 `data_collection: deny` 同一个过滤，`noRetention`） | 无 | 无 | 无 |
-| `provider.enforce_distillable_text` | 只走允许文本蒸馏的模型 | 同上 | 没有：不在 `providerMembers`，会 400（`gw/provider.go:41-43`） | 无 | 无 | 低优先；但 400 会让带此成员的客户端整体失败 |
-| `provider.quantizations`（int4/int8/fp4/mxfp4/nvfp4/fp6/fp8/mxfp8/fp16/bf16/fp32/unknown） | 按量化级别过滤 | 同上 | 没有：会 400 | 无 | 无 | Axiom 的上游是中转站，量化多半未知，归「待定」 |
-| `provider.sort` 字符串：`price` / `throughput` / `latency` | 关闭负载均衡，按该维度排序 | 同上 | 部分：`price`、`throughput` 有（`gw/provider.go:104-124`）；`latency` 400 | 无 | 无 | `latency` 要等路由有按延迟的排序 |
-| `provider.sort` 对象 `{by, partition}`（`partition: model/none`） | 多模型备选时是否跨模型统一排序 | 同上 | 没有：`readSort` 只读字符串，对象会 400 | 无 | 无 | 依赖 `models` 数组和排序维度 |
-| `provider.preferred_min_throughput` / `preferred_max_latency`（数字或 p50/p75/p90/p99 对象） | 偏好而非硬过滤，不满足的排后面 | 同上 | 部分：数字形式有（`gw/provider.go:56-60,149-161`，语义未逐条核对）；百分位对象会 400（`gw/provider.go:152` 报「percentile objects are not supported yet」） | 无 | 无 | 百分位对象形式要补 |
-| `provider.max_price{prompt,completion,request,image}` | 价格上限，过滤端点 | 同上 | 部分：`prompt`、`completion` 有（`gw/provider.go:171-190`）；`request`、`image` 会 400（`gw/provider.go:164-166`）；单位是站点记账单位而非美元 | 无 | 无 | 单位问题见 `docs/domains/gateway.md` 待定问题 |
+| `provider.order`（供应商 slug 列表） | 按序尝试，可含 `provider/variant/region/tier` 形式的端点 slug | docs/guides/routing/provider-selection | 有：按不可变公开分组代号排序（`gw/provider.go`、`rt/rank.go`） | 无（按渠道优先级/权重，非请求级） | 无 | 精确选组，不公开真实名称；官方名称没有可信映射；偏离见 gateway 领域文档 |
+| `provider.only` / `provider.ignore` | 只允许/排除某些供应商，与账户级设置合并 | 同上 | 有：按公开分组代号过滤，不扩大到同供应商其他组（`rt/plan.go`） | 无 | 无 | 预设和归属权限独立生效 |
+| `provider.allow_fallbacks` | 默认 true；false 配合 order 限定列表，无 order 则每个模型只取首选 | 同上 | 有：命名顺序限制集合，无顺序每个模型仅保留首条，保留 models 回退（`rt/plan.go`） | 无 | 无 | 不延长已冻结路线 |
+| `provider.require_parameters` | 只路由到支持请求里全部参数的端点 | 同上 | false 接受，true 明确 400；已有能力匹配始终强制 | 无 | 无 | 没有中转端点完整参数清单，模型能力不能代替 |
+| `provider.data_collection`（`allow`/`deny`） | 排除会存储数据的供应商 | 同上 | 有：`readDataCollection`（`gw/provider.go`），`deny` 映射到「不留存」政策 | 无 | 无 | 无 |
+| `provider.zdr` | 只走零数据保留端点 | 同上；docs/guides/features/zdr | 有：`readZDR`（`gw/provider.go`；与 `data_collection: deny` 同一个过滤，`noRetention`） | 无 | 无 | 无 |
+| `provider.enforce_distillable_text` | 只走允许文本蒸馏的模型 | 同上 | 没有：不在 `providerMembers`，由 `override` 拒绝 400（`gw/provider.go`） | 无 | 无 | 低优先；但 400 会让带此成员的客户端整体失败 |
+| `provider.quantizations`（int4/int8/fp4/mxfp4/nvfp4/fp6/fp8/mxfp8/fp16/bf16/fp32/unknown） | 按量化级别过滤 | 同上 | 非空列表明确 400；空列表接受 | 无 | 无 | 缺端点量化事实，偏离见 gateway 领域文档 |
+| `provider.sort` 字符串：`price` / `throughput` / `latency` | 关闭负载均衡，按该维度排序 | 同上 | 有：三种维度分别排序（`gw/provider.go`、`rt/rank.go`） | 无 | 无 | 未测量的按价格加权排在测量值之后 |
+| `provider.sort` 对象 `{by, partition}`（`partition: model/none`） | 多模型备选时是否跨模型统一排序 | 同上 | 有：默认 model；none 跨主模型和备选排序 | 无 | 无 | 未知对象成员明确 400 |
+| `provider.preferred_min_throughput` / `preferred_max_latency`（数字或 p50/p75/p90/p99 对象） | 偏好而非硬过滤，不满足的排后面 | 同上 | 数字按 EWMA 软偏好；百分位对象明确 400 | 无 | 无 | 没有五分钟窗口百分位，不以 EWMA 冒充 p50 |
+| `provider.max_price{prompt,completion,request,image}` | 价格上限，过滤端点 | 同上 | prompt/completion 精确比较受众售价；request/image 明确 400 | 无 | 无 | 缺按请求/按张计费单位；非美元站点以站点记账货币为单位，偏离见 gateway 领域文档 |
 | `provider.options`（按供应商透传的选项，spec `ProviderOptions`） | 给特定供应商的原生参数 | spec `ProviderPreferences.options` | 没有：不在 `providerMembers`，会 400 | 无 | 无 | 低优先 |
 | 默认价格加权负载均衡（按价格平方倒数、近 30 秒无故障优先） | 默认策略 | docs/guides/routing/provider-selection | 部分：默认是价格加权随机（`docs/domains/routing.md` 决策与理由），加权公式未核对是否一致 | 无（渠道权重） | 无 | 行为相近，公式可能不同 |
 | 失败后换端点 | 按序回退直到成功 | docs/guides/routing/provider-selection | 有：`gw/attempt.go`、`rt/plan.go:60`（`MaxAttempts`） | `na:controller/relay.go:177`（`RetryTimes`） | `s2:internal/service/gateway_anthropic_passthrough.go:802`（failover） | 无 |
@@ -114,7 +114,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | 字段 `provider_name`、`upstream_id`、`upstream_inference_cost`、`provider_responses`、`router`、`is_byok`、`cache_discount`、`api_type`、`origin`、`user_agent`、`http_referer`、`app_id`、`external_user`、`session_id`、`preset_id`、`workspace_id`、`data_region`、`web_search_engine`、`moderation_latency` | 来源、归因、供应商信息 | spec | 没有（有意不暴露供应商和成本，`docs/domains/gateway.md:79,198,224`）；`app` 只能是 `claude-code`/`codex`（`gw/record.go:43-51`） | 无 | 无 | `provider_name` 等不暴露是有意；`cache_discount`、`session_id`、`external_user` 应补 |
 | `GET /api/v1/generation/content`（存储的提示词、补全、错误内容） | 查看已存内容 | api/generations/get-stored-prompt-completion-and-error-content-for-a-generation | 没有（内容会保存，`docs/product.md:82`，但没有这个接口） | 无 | 无 | 归 #317 控制台调用详情 |
 | `POST /api/v1/generation/feedback` | 提交调用反馈 | api/generations/submit-feedback-for-a-generation | 没有 | 无 | 无 | 低优先 |
-| `GET /api/v1/activity`（按日、按端点聚合，近 30 天，可按 `api_key_hash`、`workspace_id` 过滤） | 用量活动 | spec `/activity` | 没有：控制台有自己的 `/api/console/v1/calls`（`api/console.yaml:440,471`），形状不同、要会话登录 | `na:router/api-router.go:298`（`/usage`，不同形） | 无 | 开发者用它做账单对账 |
+| `GET /api/v1/activity`（按日、按端点聚合，近 30 天，可按 `api_key_hash`、`workspace_id` 过滤） | 用量活动 | spec `/activity` | 没有 OpenRouter 同形接口：控制台 `/api/console/v1/calls` 支持 key/工作区/状态/请求 ID 筛选，`/calls/aggregate` 按日/模型/key 汇总调用与用户收费，`/calls/export` 流式 CSV；形状不同、要会话登录，见[用户调用记录查询与导出](domains/observability.md#用户调用记录查询与导出) | `na:router/api-router.go:298`（`/usage`，不同形） | 无 | 开发者用它做账单对账 |
 
 ## 6. 余额与 key 信息
 
@@ -275,7 +275,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 1. 【插件已落实，独立参数仍有缺口】`plugins` / `transforms` 已执行本地修复/压缩或明确 400（§10），不再静默丢弃；`route`、`usage`、`auto-router` 尚无实现。→ #311
 2. 【静默失效】`openrouter:web_search` 等服务端工具类型不被识别（`proto/grammar.go:46,66`），Responses/Chat 里带这类工具的请求行为未定；联网搜索只有厂商原生的。→ #311
 3. 【硬失败，部分已补】模型名后缀：`:nitro`、`:floor` 已支持（排序一半，`gw/variant.go`）；`:exacto`、`:online` 现在回 400 并说明原因，`:free`、`:thinking` 等目录变体回 400 并说明本站无法表示独立条目；`~anthropic/claude-sonnet-latest` 这类别名回 400 暂不支持，需要显式模型族与可切换别名映射，不能猜最新版本；`@preset/…`（文档说支持、代码没有）仍查不到。→ #311（别名解析、`:nitro/:floor` 的层级准入）；`@preset/` 前缀随预设一起归 #313
-4. 【硬失败】`provider.order/only/ignore` 写了供应商名就 400，`allow_fallbacks:false`、`require_parameters:true`、`quantizations`、`enforce_distillable_text`、`sort` 对象形式、百分位对象形式、`max_price.request/image` 也都 400（`gw/provider.go:51-70`）。→ #313（名字到供应商的映射可能要 #314 的用户供应商控制先落地）
+4. 【明确偏离】`provider.order/only/ignore` 按公开分组代号生效，关闭回退、三种排序与对象分区已支持。`require_parameters:true`、非空 `quantizations`、`enforce_distillable_text`、百分位对象、`max_price.request/image` 缺必要事实或计费单位而明确 400；来源和理由见 `docs/domains/gateway.md` 的路由参数。→ #313
 5. 【模型元数据】`GET /api/v1/models` 与 `/api/v1/models/{model}` 已是 OpenRouter 的模型对象：`pricing`（十个按 token / 按次计价的成员，取主站售价）、`context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`、`links.details`，外加查询参数过滤、排序和分页；`id` 是公开标准 ID，列表与路由快照同一次构建、一起发布，价格就是收费的价格。仍缺 `description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`（目录没有这些数据，整个不输出）、`alias_target`、`benchmarks`、按图与按请求计价（#320）；`created` 恒 0、`default_parameters`/`supported_voices`/`per_request_limits` 是 null（都是 Axiom 没有的数据，填位置而不编造）。SDK 的模型选择器、编码代理的上下文窗口探测、成本估算已经可用。→ #311
 6. 【预设】`@preset/…`、`preset` 字段、`/api/v1/presets` 全部没有，但产品范围把预设列在第一版（`docs/product.md:93`）；`docs/domains/gateway.md:150` 与代码不符，先改文档或做功能。→ #313（预设属于路由配置）
 7. 【错误形态，部分已补】新增 `context_length_exceeded`、`permission_denied`、`content_policy_violation`、`payload_too_large` 与 403，HTTP/SSE 分类一致；`code` 保持字符串（含 403，有意差异，见 [gateway 决策](domains/gateway.md#决策与理由)）。图片类等细分仍缺；预算耗尽仍用 402 而不是 OpenRouter 的 403+`limit_source`。→ #311
