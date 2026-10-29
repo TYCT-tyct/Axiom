@@ -28,7 +28,9 @@ func scheduleAlertTests(ctx context.Context, tx pg.Tx, now time.Time) error {
 	}
 	_, err = tx.Exec(ctx, `DELETE FROM observability.webhook_keys k WHERE expires_at<=$1 OR (
  NOT EXISTS(SELECT FROM observability.alert_configuration c,jsonb_array_elements(c.body->'channels') ch WHERE ch->>'id'=k.channel_id AND ch->>'webhook_url'=k.destination)
- AND NOT EXISTS(SELECT FROM observability.alert_receipts r WHERE r.state IN ('pending','queued') AND r.channel->>'id'=k.channel_id AND r.channel->>'webhook_url'=k.destination))`, now)
+ AND NOT EXISTS(SELECT FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id
+ WHERE (r.state IN ('pending','queued') OR e.resolved_at IS NULL OR e.pending_recovery)
+ AND r.channel->>'id'=k.channel_id AND r.channel->>'webhook_url'=k.destination))`, now)
 	return err
 }
 

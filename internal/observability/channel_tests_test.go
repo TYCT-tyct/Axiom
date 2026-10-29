@@ -165,3 +165,54 @@ func assertAbandonedReceipt(t *testing.T, db *pg.DB, id uuid.UUID, now time.Time
 		t.Fatal("lost job hid failed channel")
 	}
 }
+
+func TestRemovedWebhookKeepsItsKeyUntilIncidentRecoveryFinishes(t *testing.T) {
+	db := openDB(t)
+	keys := webhookTestKeys(t)
+	now := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+	ch := configureWebhook(t, db, "https://receiver.example/hook", keys, now)
+	persistAlert(t, db, "1", false)
+	events := alertCycle(t, db, now)
+	worker := alertWorker{db: db, scope: platformScope, now: func() time.Time { return now }}
+	reportAlertReceipt(t, &worker, events[0].Receipts[0].ID, true)
+	alertTx(t, db, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Rules = nil
+		c.Channels = nil
+		if err = SetAlertConfiguration(t.Context(), tx, c); err != nil {
+			return err
+		}
+		return scheduleAlertTests(t.Context(), tx, now)
+	})
+	assertWebhookKeyCount(t, db, 1)
+	persistAlert(t, db, "1", true)
+	events = alertCycle(t, db, now)
+	if len(events[0].Receipts) != 2 || events[0].Receipts[1].Sequence != -1 {
+		t.Fatalf("recovery receipt: %+v", events)
+	}
+	alertTx(t, db, func(tx pg.Tx) error {
+		values, err := readWebhookKeys(t.Context(), tx, keys, ch, now)
+		if len(values) != 1 {
+			t.Error("removed destination lost its recovery signing key")
+		}
+		return err
+	})
+	reportAlertReceipt(t, &worker, events[0].Receipts[1].ID, true)
+	alertCycle(t, db, now)
+	alertTx(t, db, func(tx pg.Tx) error { return scheduleAlertTests(t.Context(), tx, now) })
+	assertWebhookKeyCount(t, db, 0)
+}
+
+func assertWebhookKeyCount(t *testing.T, db *pg.DB, want int) {
+	t.Helper()
+	var n int
+	alertTx(t, db, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT count(*) FROM observability.webhook_keys`).Scan(&n)
+	})
+	if n != want {
+		t.Fatalf("signing keys=%d, want %d", n, want)
+	}
+}
