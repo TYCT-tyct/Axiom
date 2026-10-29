@@ -11,7 +11,7 @@ import (
 
 // PreviewPrices uses the publication calculation without saving a proposal or publishing a price. The rules may
 // include an unsaved edit. The publication list, separately, shows the version actually served.
-func PreviewPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, rules []Rule, models []catalog.ModelID, costs []PriceCost) (map[catalog.ModelID]Publication, error) {
+func PreviewPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, rules []Rule, models []catalog.ModelID, costs []PriceCost, rates ...platform.ExchangeRate) (map[catalog.ModelID]Publication, error) {
 	policy, err := loadPricePolicy(ctx, tx, site)
 	if err != nil {
 		return nil, err
@@ -30,7 +30,7 @@ func PreviewPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platf
 		if !ok {
 			continue
 		}
-		p, err := proposePrice(policy, rules, m, snap, currency, byModel[id], defaults)
+		p, err := proposePrice(policy, rules, m, snap, currency, byModel[id], defaults, rates...)
 		if err != nil {
 			return nil, err
 		}

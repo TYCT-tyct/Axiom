@@ -196,8 +196,8 @@ func (m Method) check(currency platform.Currency) error {
 		if err := m.checkMultiplier(); err != nil {
 			return err
 		}
-		if m.CurrencyConversion != "face" {
-			return &RuleError{"method/currency_conversion", "can only be face in this release: exchange sale pricing needs reference selection and price versions"}
+		if m.CurrencyConversion == "" {
+			return &RuleError{"method/currency_conversion", "must name face or exchange"}
 		}
 		return nil
 	case "fixed":
