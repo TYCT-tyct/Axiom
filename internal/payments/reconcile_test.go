@@ -97,7 +97,7 @@ func TestMerchantBreakerPersistsAndRecovers(t *testing.T) {
 	o := w.mustPlace(yuan, "breaker")
 	check := func() {
 		t.Helper()
-		if err := w.p.queryOrder(t.Context(), o); !errors.Is(err, ErrUnconfirmed) {
+		if err := w.p.queryOrder(t.Context(), o, false); !errors.Is(err, ErrUnconfirmed) {
 			t.Fatalf("unknown query: %v", err)
 		}
 	}
@@ -110,7 +110,7 @@ func TestMerchantBreakerPersistsAndRecovers(t *testing.T) {
 	for range 5 {
 		check()
 	}
-	if err := w.p.queryOrder(t.Context(), o); !errors.Is(err, ErrQueryPaused) {
+	if err := w.p.queryOrder(t.Context(), o, false); !errors.Is(err, ErrQueryPaused) {
 		t.Fatalf("open breaker allowed call: %v", err)
 	}
 	if calls.Load() != 10 || w.count(w.p.platform, "SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='payments.query_paused'") != 1 {
@@ -127,7 +127,7 @@ func assertBreakerRecovery(w *world, o Order, mode *atomic.Int32) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = restarted.queryOrder(t.Context(), o); !errors.Is(err, ErrQueryPaused) {
+	if err = restarted.queryOrder(t.Context(), o, false); !errors.Is(err, ErrQueryPaused) {
 		t.Fatal("restart lost breaker", err)
 	}
 	w.exec("UPDATE payments.orders SET expires_at=transaction_timestamp()-interval '1 minute'")
@@ -139,7 +139,7 @@ func assertBreakerRecovery(w *world, o Order, mode *atomic.Int32) {
 	}
 	w.exec("UPDATE payments.query_health SET paused_until=transaction_timestamp()-interval '1 minute'")
 	mode.Store(2)
-	if err = restarted.queryOrder(t.Context(), o); err != nil {
+	if err = restarted.queryOrder(t.Context(), o, false); err != nil {
 		t.Fatal(err)
 	}
 	if w.count(w.p.platform, "SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='payments.query_paused' AND body->>'resolved'='true'") != 1 {
@@ -354,8 +354,8 @@ func TestDailyQueryFindsChangedPaidAndUnfinishedOrders(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if next, err := w.p.reconcileQueries(t.Context(), m.ID, day, uuid.UUID{}); err != nil || next != (uuid.UUID{}) {
-		t.Fatal("daily queries", next, err)
+	if err := w.runDailyQueries(m.ID, day); err != nil {
+		t.Fatal("daily queries", err)
 	}
 	w.assertCredit(paid, paid.Credits)
 	w.assertCredit(already, already.Credits)
@@ -369,9 +369,9 @@ func TestDailyCashUsesOneAccountingDayAcrossMidnight(t *testing.T) {
 	m := w.waiting()
 	o := w.mustPlace(yuan, "midnight")
 	w.receive(receipt(o))
-	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
+	day := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	// A transaction starts its credit before midnight and updates the order after midnight.
-	w.exec("UPDATE billing.credit_batches SET created_at=(date_trunc('day',transaction_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')-interval '1 microsecond'")
+	w.exec("UPDATE billing.credit_batches SET created_at='2000-01-01 23:59:59.999999+00'", "UPDATE payments.orders SET paid_at='2000-01-02 00:00:00.000001+00',updated_at='2000-01-02 00:00:00.000001+00'")
 	for _, d := range []time.Time{day, day.Add(24 * time.Hour)} {
 		if err := w.p.reconcileMerchant(t.Context(), m.ID, d); err != nil {
 			t.Fatal(err)
@@ -384,7 +384,12 @@ func TestDailyCashUsesOneAccountingDayAcrossMidnight(t *testing.T) {
 
 func TestDailyQueryPagesContinueWithoutRepeatingOrders(t *testing.T) {
 	var calls atomic.Int32
-	w := newTestWorld(t, fakePlugin{create: goodCheckout, query: func(context.Context, string, string) (Payment, error) {
+	seen := make(map[string]bool)
+	w := newTestWorld(t, fakePlugin{create: goodCheckout, query: func(_ context.Context, order, _ string) (Payment, error) {
+		if seen[order] {
+			return Payment{}, errors.New("daily continuation repeated an order")
+		}
+		seen[order] = true
 		calls.Add(1)
 		return Payment{State: PayPending}, nil
 	}})
@@ -393,18 +398,23 @@ func TestDailyQueryPagesContinueWithoutRepeatingOrders(t *testing.T) {
 	w.exec(fmt.Sprintf(`INSERT INTO payments.orders
  SELECT (jsonb_populate_record(NULL::payments.orders,to_jsonb(o)||jsonb_build_object('id',gen_random_uuid(),'idem_key','page-'||n))).*
  FROM payments.orders o CROSS JOIN generate_series(1,204) n WHERE o.id='%s'`, uuid.UUID(o.ID)),
-		"UPDATE payments.orders SET created_at=transaction_timestamp()-interval '1 day'")
-	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
+		"UPDATE payments.orders SET created_at='2000-01-01 12:00:00+00'")
+	day := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	var after uuid.UUID
-	for _, want := range []int32{100, 200, 205} {
+	for want := int32(1); want <= 205; want++ {
 		next, err := w.p.reconcileQueries(t.Context(), m.ID, day, after)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if calls.Load() != want {
-			t.Fatalf("daily page called %d times, want %d", calls.Load(), want)
+			t.Fatalf("daily continuation called %d times, want %d", calls.Load(), want)
 		}
 		after = next
+	}
+	var err error
+	after, err = w.p.reconcileQueries(t.Context(), m.ID, day, after)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if after != (uuid.UUID{}) {
 		t.Fatal("last page did not finish")
@@ -444,8 +454,8 @@ func TestPollDiscoverySharesCapacityBetweenMerchants(t *testing.T) {
 func TestChangedDifferenceAfterInvestigationIsNotLost(t *testing.T) {
 	w := newTestWorld(t, fakePlugin{create: goodCheckout})
 	m := w.waiting()
-	w.mustPlace(yuan, "changed-difference")
-	day := time.Now().UTC().Truncate(24 * time.Hour)
+	o := w.mustPlace(yuan, "changed-difference")
+	day := w.accountingDay(o.ID)
 	w.exec("UPDATE payments.merchant_usage SET used=used+1")
 	if err := w.p.reconcileMerchant(t.Context(), m.ID, day); err != nil {
 		t.Fatal(err)
@@ -488,31 +498,5 @@ func TestDiscrepancyAmountStaysExactAndDuplicateLogsLocateOneRecord(t *testing.T
 func TestDailyQueryRetainsUnknownPage(t *testing.T) {
 	for _, incomplete := range []bool{false, true} {
 		t.Run(fmt.Sprint(incomplete), func(t *testing.T) { testDailyUnknown(t, incomplete) })
-	}
-}
-
-func testDailyUnknown(t *testing.T, incomplete bool) {
-	t.Helper()
-	var recovered atomic.Bool
-	unit := currency(t, "CNY")
-	w := newTestWorld(t, fakePlugin{create: goodCheckout, query: func(context.Context, string, string) (Payment, error) {
-		if recovered.Load() {
-			return Payment{State: PayPending}, nil
-		}
-		if incomplete {
-			return Payment{State: PayPaid, TradeNo: "incomplete", Paid: Money{Currency: unit}}, nil
-		}
-		return Payment{}, context.DeadlineExceeded
-	}})
-	m := w.waiting()
-	w.mustPlace(yuan, "retry-daily-page")
-	w.exec("UPDATE payments.orders SET created_at=transaction_timestamp()-interval '1 day'")
-	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
-	if next, err := w.p.reconcileQueries(t.Context(), m.ID, day, uuid.UUID{}); !errors.Is(err, ErrUnconfirmed) || next != (uuid.UUID{}) {
-		t.Fatalf("unknown page was completed: %s, %v", next, err)
-	}
-	recovered.Store(true)
-	if _, err := w.p.reconcileQueries(t.Context(), m.ID, day, uuid.UUID{}); err != nil {
-		t.Fatal("recovered page did not complete", err)
 	}
 }

@@ -13,16 +13,26 @@ import (
 )
 
 const merchantBatches = `-- name: MerchantBatches :many
-SELECT id FROM billing.credit_batches WHERE merchant_id = $1 AND id > $2 ORDER BY id LIMIT 100
+SELECT b.id FROM billing.credit_batches b WHERE b.merchant_id = $1
+    AND b.created_at >= $2::timestamptz AND b.created_at < $3::timestamptz
+    AND (b.created_at,b.id) > (coalesce((SELECT c.created_at FROM billing.credit_batches c WHERE c.id = $4),$2),$4::uuid)
+ORDER BY b.created_at,b.id LIMIT 100
 `
 
 type MerchantBatchesParams struct {
 	MerchantID *uuid.UUID
+	Since      time.Time
+	Until      time.Time
 	After      uuid.UUID
 }
 
 func (q *Queries) MerchantBatches(ctx context.Context, db DBTX, arg MerchantBatchesParams) ([]uuid.UUID, error) {
-	rows, err := db.Query(ctx, merchantBatches, arg.MerchantID, arg.After)
+	rows, err := db.Query(ctx, merchantBatches,
+		arg.MerchantID,
+		arg.Since,
+		arg.Until,
+		arg.After,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -42,12 +52,18 @@ func (q *Queries) MerchantBatches(ctx context.Context, db DBTX, arg MerchantBatc
 }
 
 const merchantCash = `-- name: MerchantCash :many
-SELECT coalesce(e.currency,b.currency)::text AS currency, sum(e.amount)::text AS amount
-FROM billing.credit_batches b JOIN billing.transactions t ON t.request_id = b.id
-JOIN billing.entries e ON e.transaction_id = t.id
-WHERE b.merchant_id = $1 AND e.book = 'cash' AND (CASE WHEN t.kind = 'credit' THEN b.created_at ELSE t.created_at END) >= $2::timestamptz
-    AND (CASE WHEN t.kind = 'credit' THEN b.created_at ELSE t.created_at END) < $3::timestamptz
-GROUP BY coalesce(e.currency,b.currency)
+WITH cash AS (
+    SELECT coalesce(e.currency,b.currency)::text AS currency, e.amount
+    FROM billing.credit_batches b JOIN billing.transactions t ON t.request_id = b.id AND t.kind = 'credit'
+    JOIN billing.entries e ON e.transaction_id = t.id AND e.book = 'cash'
+    WHERE b.merchant_id = $1 AND b.created_at >= $2::timestamptz AND b.created_at < $3::timestamptz
+    UNION ALL
+    SELECT coalesce(e.currency,b.currency)::text AS currency, e.amount
+    FROM billing.transactions t JOIN billing.credit_batches b ON b.id = t.request_id
+    JOIN billing.entries e ON e.transaction_id = t.id AND e.book = 'cash'
+    WHERE t.kind = 'refund' AND t.created_at >= $2 AND t.created_at < $3 AND b.merchant_id = $1
+)
+SELECT currency, sum(amount)::text AS amount FROM cash GROUP BY currency
 `
 
 type MerchantCashParams struct {
@@ -71,6 +87,62 @@ func (q *Queries) MerchantCash(ctx context.Context, db DBTX, arg MerchantCashPar
 	for rows.Next() {
 		var i MerchantCashRow
 		if err := rows.Scan(&i.Currency, &i.Amount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const readCreditBatches = `-- name: ReadCreditBatches :many
+SELECT id, site_id, account_id, source, amount, expires_at, created_at, coalesce(currency, '')::text AS currency, paid, fee,
+    merchant_id, coalesce(offline_channel, '')::text AS offline_channel, rate_id
+FROM billing.credit_batches WHERE id = ANY($1::uuid[])
+`
+
+type ReadCreditBatchesRow struct {
+	ID             uuid.UUID
+	SiteID         uuid.UUID
+	AccountID      uuid.UUID
+	Source         string
+	Amount         int64
+	ExpiresAt      *time.Time
+	CreatedAt      time.Time
+	Currency       string
+	Paid           *int64
+	Fee            *int64
+	MerchantID     *uuid.UUID
+	OfflineChannel string
+	RateID         *uuid.UUID
+}
+
+func (q *Queries) ReadCreditBatches(ctx context.Context, db DBTX, ids []uuid.UUID) ([]ReadCreditBatchesRow, error) {
+	rows, err := db.Query(ctx, readCreditBatches, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadCreditBatchesRow
+	for rows.Next() {
+		var i ReadCreditBatchesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SiteID,
+			&i.AccountID,
+			&i.Source,
+			&i.Amount,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.Currency,
+			&i.Paid,
+			&i.Fee,
+			&i.MerchantID,
+			&i.OfflineChannel,
+			&i.RateID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

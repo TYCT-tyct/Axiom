@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -16,19 +17,20 @@ const acquireQuery = `-- name: AcquireQuery :execrows
 UPDATE payments.query_health SET
     first_token = CASE WHEN first_until <= transaction_timestamp() THEN $1::uuid ELSE first_token END,
     first_until = CASE WHEN first_until <= transaction_timestamp() THEN transaction_timestamp() + interval '10 seconds' ELSE first_until END,
-    second_token = CASE WHEN first_until > transaction_timestamp() THEN $1::uuid ELSE second_token END,
-    second_until = CASE WHEN first_until > transaction_timestamp() THEN transaction_timestamp() + interval '10 seconds' ELSE second_until END
-WHERE merchant_id = $2 AND paused_until <= transaction_timestamp()
-    AND (first_until <= transaction_timestamp() OR second_until <= transaction_timestamp())
+    second_token = CASE WHEN NOT $2::boolean AND first_until > transaction_timestamp() THEN $1::uuid ELSE second_token END,
+    second_until = CASE WHEN NOT $2::boolean AND first_until > transaction_timestamp() THEN transaction_timestamp() + interval '10 seconds' ELSE second_until END
+WHERE merchant_id = $3 AND paused_until <= transaction_timestamp()
+    AND (first_until <= transaction_timestamp() OR (NOT $2::boolean AND second_until <= transaction_timestamp()))
 `
 
 type AcquireQueryParams struct {
 	Token      uuid.UUID
+	Background bool
 	MerchantID uuid.UUID
 }
 
 func (q *Queries) AcquireQuery(ctx context.Context, db DBTX, arg AcquireQueryParams) (int64, error) {
-	result, err := db.Exec(ctx, acquireQuery, arg.Token, arg.MerchantID)
+	result, err := db.Exec(ctx, acquireQuery, arg.Token, arg.Background, arg.MerchantID)
 	if err != nil {
 		return 0, err
 	}
@@ -84,23 +86,6 @@ func (q *Queries) GetDiscrepancy(ctx context.Context, db DBTX, id uuid.UUID) (Pa
 		&i.Note,
 	)
 	return i, err
-}
-
-const hasPaymentBatchOwner = `-- name: HasPaymentBatchOwner :one
-SELECT (EXISTS(SELECT 1 FROM payments.orders o WHERE o.id = $1 AND o.merchant_id = $2)
-    OR EXISTS(SELECT 1 FROM payments.discrepancies d WHERE d.id = $1 AND d.merchant_id = $2))::boolean AS owned
-`
-
-type HasPaymentBatchOwnerParams struct {
-	ID         uuid.UUID
-	MerchantID uuid.UUID
-}
-
-func (q *Queries) HasPaymentBatchOwner(ctx context.Context, db DBTX, arg HasPaymentBatchOwnerParams) (bool, error) {
-	row := db.QueryRow(ctx, hasPaymentBatchOwner, arg.ID, arg.MerchantID)
-	var owned bool
-	err := row.Scan(&owned)
-	return owned, err
 }
 
 const initQueryHealth = `-- name: InitQueryHealth :exec
@@ -221,6 +206,100 @@ func (q *Queries) LockQueryHealth(ctx context.Context, db DBTX, merchantID uuid.
 	return i, err
 }
 
+const paymentBatchOwners = `-- name: PaymentBatchOwners :many
+SELECT o.id FROM payments.orders o WHERE o.merchant_id = $1 AND o.id = ANY($2::uuid[])
+UNION
+SELECT d.id FROM payments.discrepancies d WHERE d.merchant_id = $1 AND d.id = ANY($2::uuid[])
+`
+
+type PaymentBatchOwnersParams struct {
+	MerchantID uuid.UUID
+	Ids        []uuid.UUID
+}
+
+func (q *Queries) PaymentBatchOwners(ctx context.Context, db DBTX, arg PaymentBatchOwnersParams) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, paymentBatchOwners, arg.MerchantID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const queryIsPaused = `-- name: QueryIsPaused :one
+SELECT paused_until > clock_timestamp() AS paused FROM payments.query_health WHERE merchant_id = $1
+`
+
+func (q *Queries) QueryIsPaused(ctx context.Context, db DBTX, merchantID uuid.UUID) (bool, error) {
+	row := db.QueryRow(ctx, queryIsPaused, merchantID)
+	var paused bool
+	err := row.Scan(&paused)
+	return paused, err
+}
+
+const reconcileBatchOrders = `-- name: ReconcileBatchOrders :many
+SELECT id, site_id, account_id, state, pay_currency, paid_total, paid_fee, credited, coalesce(paid_at, '1970-01-01 UTC'::timestamptz)::timestamptz AS paid_at FROM payments.orders
+WHERE merchant_id = $1 AND id = ANY($2::uuid[])
+`
+
+type ReconcileBatchOrdersParams struct {
+	MerchantID uuid.UUID
+	Ids        []uuid.UUID
+}
+
+type ReconcileBatchOrdersRow struct {
+	ID          uuid.UUID
+	SiteID      uuid.UUID
+	AccountID   uuid.UUID
+	State       string
+	PayCurrency string
+	PaidTotal   *int64
+	PaidFee     *int64
+	Credited    *int64
+	PaidAt      time.Time
+}
+
+func (q *Queries) ReconcileBatchOrders(ctx context.Context, db DBTX, arg ReconcileBatchOrdersParams) ([]ReconcileBatchOrdersRow, error) {
+	rows, err := db.Query(ctx, reconcileBatchOrders, arg.MerchantID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReconcileBatchOrdersRow
+	for rows.Next() {
+		var i ReconcileBatchOrdersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SiteID,
+			&i.AccountID,
+			&i.State,
+			&i.PayCurrency,
+			&i.PaidTotal,
+			&i.PaidFee,
+			&i.Credited,
+			&i.PaidAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const reconcileMerchants = `-- name: ReconcileMerchants :many
 SELECT id FROM payments.merchants WHERE id > $1 ORDER BY id LIMIT 100
 `
@@ -246,12 +325,16 @@ func (q *Queries) ReconcileMerchants(ctx context.Context, db DBTX, after uuid.UU
 }
 
 const reconcileOrders = `-- name: ReconcileOrders :many
-SELECT id, site_id, account_id, state, pay_currency, paid_total, paid_fee, credited, coalesce(paid_at, '1970-01-01 UTC'::timestamptz)::timestamptz AS paid_at FROM payments.orders
-WHERE merchant_id = $1 AND id > $2 ORDER BY id LIMIT 100
+SELECT o.id, o.site_id, o.account_id, o.state, o.pay_currency, o.paid_total, o.paid_fee, o.credited, coalesce(o.paid_at, '1970-01-01 UTC'::timestamptz)::timestamptz AS paid_at FROM payments.orders o
+WHERE o.merchant_id = $1 AND o.updated_at >= $2::timestamptz AND o.updated_at < $3::timestamptz
+    AND (o.updated_at,o.id) > (coalesce((SELECT c.updated_at FROM payments.orders c WHERE c.id = $4),$2),$4::uuid)
+ORDER BY o.updated_at,o.id LIMIT 100
 `
 
 type ReconcileOrdersParams struct {
 	MerchantID uuid.UUID
+	Since      time.Time
+	Until      time.Time
 	After      uuid.UUID
 }
 
@@ -268,7 +351,12 @@ type ReconcileOrdersRow struct {
 }
 
 func (q *Queries) ReconcileOrders(ctx context.Context, db DBTX, arg ReconcileOrdersParams) ([]ReconcileOrdersRow, error) {
-	rows, err := db.Query(ctx, reconcileOrders, arg.MerchantID, arg.After)
+	rows, err := db.Query(ctx, reconcileOrders,
+		arg.MerchantID,
+		arg.Since,
+		arg.Until,
+		arg.After,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +391,7 @@ WHERE o.merchant_id = $1 AND o.id > $2 AND (
     (o.created_at < $3 AND o.state IN ('pending','review'))
     OR (o.updated_at >= $4 AND o.updated_at < $3)
     OR (o.state IN ('expired','cancelled','failed') AND w.queryable))
-ORDER BY o.id LIMIT 100
+ORDER BY o.id LIMIT 1
 `
 
 type ReconcileQueriesParams struct {
@@ -339,16 +427,29 @@ func (q *Queries) ReconcileQueries(ctx context.Context, db DBTX, arg ReconcileQu
 }
 
 const reconcileUsage = `-- name: ReconcileUsage :many
-WITH expected AS (
-    SELECT (created_at AT TIME ZONE 'UTC')::date AS day, sum(total)::numeric AS used
-    FROM payments.orders o WHERE o.merchant_id = $1 AND state NOT IN ('expired','cancelled','failed')
-    GROUP BY 1
-), actual AS (
-    SELECT day, used::numeric FROM payments.merchant_usage u WHERE u.merchant_id = $1
+WITH days AS (
+    SELECT ($2)::date AS day
+    UNION
+    SELECT (o.created_at AT TIME ZONE 'UTC')::date FROM payments.orders o
+    WHERE o.merchant_id = $1 AND o.updated_at >= $3 AND o.updated_at < $4::timestamptz
+), expected AS (
+    SELECT d.day, coalesce(sum(o.total),0)::numeric AS used FROM days d
+    LEFT JOIN payments.orders o ON o.merchant_id = $1
+        AND o.created_at >= (d.day::timestamp AT TIME ZONE 'UTC')
+        AND o.created_at < ((d.day + 1)::timestamp AT TIME ZONE 'UTC')
+        AND o.state NOT IN ('expired','cancelled','failed') GROUP BY d.day
 )
-SELECT coalesce(e.day, a.day)::text AS day, coalesce(e.used, 0)::text AS expected, coalesce(a.used, 0)::text AS actual
-FROM expected e FULL JOIN actual a USING (day) WHERE coalesce(e.used, 0) <> coalesce(a.used, 0)
+SELECT e.day::text AS day, e.used::text AS expected, coalesce(a.used,0)::text AS actual
+FROM expected e LEFT JOIN payments.merchant_usage a ON a.merchant_id = $1 AND a.day = e.day
+WHERE e.used <> coalesce(a.used,0)
 `
+
+type ReconcileUsageParams struct {
+	MerchantID                           uuid.UUID
+	PgCatalogtimezoneUTCsincetimestamptz pgtype.Date
+	Since                                time.Time
+	Until                                time.Time
+}
 
 type ReconcileUsageRow struct {
 	Day      string
@@ -356,8 +457,13 @@ type ReconcileUsageRow struct {
 	Actual   string
 }
 
-func (q *Queries) ReconcileUsage(ctx context.Context, db DBTX, merchantID uuid.UUID) ([]ReconcileUsageRow, error) {
-	rows, err := db.Query(ctx, reconcileUsage, merchantID)
+func (q *Queries) ReconcileUsage(ctx context.Context, db DBTX, arg ReconcileUsageParams) ([]ReconcileUsageRow, error) {
+	rows, err := db.Query(ctx, reconcileUsage,
+		arg.MerchantID,
+		arg.PgCatalogtimezoneUTCsincetimestamptz,
+		arg.Since,
+		arg.Until,
+	)
 	if err != nil {
 		return nil, err
 	}

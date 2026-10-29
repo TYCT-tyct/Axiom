@@ -235,9 +235,9 @@ func (p *Payments) allowCallback(key callbackKey, limit int, now time.Time) bool
 }
 
 func (p *Payments) confirmQuery(ctx context.Context, ch Channel, merchant MerchantID, n Notice) (Payment, error) {
-	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, closeTimeout, errQueryDeadline)
 	defer cancel()
-	token, err := p.acquireQuery(ctx, merchant)
+	token, err := p.acquireQuery(ctx, merchant, false)
 	if err != nil {
 		return Payment{}, errors.Join(ErrUnconfirmed, err)
 	}

@@ -3,6 +3,7 @@ package payments
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 	"uuid"
 
@@ -13,15 +14,25 @@ import (
 // ErrQueryPaused means the merchant's two slots are occupied or its circuit is open. No order backoff is consumed.
 var ErrQueryPaused = errors.New("payments: merchant queries are temporarily paused")
 
-func (p *Payments) acquireQuery(ctx context.Context, merchant MerchantID) (uuid.UUID, error) {
+// ErrQueryBusy is transient contention, rather than an open circuit. Background jobs spend a retry, with jitter.
+var ErrQueryBusy = fmt.Errorf("%w: query slots are occupied", ErrQueryPaused)
+
+func (p *Payments) acquireQuery(ctx context.Context, merchant MerchantID, background bool) (uuid.UUID, error) {
 	token := uuid.NewV7()
 	err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error {
 		if err := queries.InitQueryHealth(ctx, tx, uuid.UUID(merchant)); err != nil {
 			return err
 		}
-		n, err := queries.AcquireQuery(ctx, tx, AcquireQueryParams{Token: token, MerchantID: uuid.UUID(merchant)})
+		n, err := queries.AcquireQuery(ctx, tx, AcquireQueryParams{Token: token, MerchantID: uuid.UUID(merchant), Background: background})
 		if err == nil && n == 0 {
-			return ErrQueryPaused
+			paused, err := queries.QueryIsPaused(ctx, tx, uuid.UUID(merchant))
+			if err != nil {
+				return err
+			}
+			if paused {
+				return ErrQueryPaused
+			}
+			return ErrQueryBusy
 		}
 		return err
 	})

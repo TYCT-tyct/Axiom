@@ -7,10 +7,13 @@ ON CONFLICT (merchant_id) DO NOTHING;
 UPDATE payments.query_health SET
     first_token = CASE WHEN first_until <= transaction_timestamp() THEN @token::uuid ELSE first_token END,
     first_until = CASE WHEN first_until <= transaction_timestamp() THEN transaction_timestamp() + interval '10 seconds' ELSE first_until END,
-    second_token = CASE WHEN first_until > transaction_timestamp() THEN @token::uuid ELSE second_token END,
-    second_until = CASE WHEN first_until > transaction_timestamp() THEN transaction_timestamp() + interval '10 seconds' ELSE second_until END
+    second_token = CASE WHEN NOT @background::boolean AND first_until > transaction_timestamp() THEN @token::uuid ELSE second_token END,
+    second_until = CASE WHEN NOT @background::boolean AND first_until > transaction_timestamp() THEN transaction_timestamp() + interval '10 seconds' ELSE second_until END
 WHERE merchant_id = @merchant_id AND paused_until <= transaction_timestamp()
-    AND (first_until <= transaction_timestamp() OR second_until <= transaction_timestamp());
+    AND (first_until <= transaction_timestamp() OR (NOT @background::boolean AND second_until <= transaction_timestamp()));
+
+-- name: QueryIsPaused :one
+SELECT paused_until > clock_timestamp() AS paused FROM payments.query_health WHERE merchant_id = @merchant_id;
 
 -- name: LockQueryHealth :one
 -- The policy clock must follow the state lock, so a lock wait cannot consume the pause.
@@ -32,19 +35,31 @@ WHERE merchant_id = @merchant_id;
 SELECT id FROM payments.merchants WHERE id > @after ORDER BY id LIMIT 100;
 
 -- name: ReconcileUsage :many
-WITH expected AS (
-    SELECT (created_at AT TIME ZONE 'UTC')::date AS day, sum(total)::numeric AS used
-    FROM payments.orders o WHERE o.merchant_id = @merchant_id AND state NOT IN ('expired','cancelled','failed')
-    GROUP BY 1
-), actual AS (
-    SELECT day, used::numeric FROM payments.merchant_usage u WHERE u.merchant_id = @merchant_id
+WITH days AS (
+    SELECT (@since::timestamptz AT TIME ZONE 'UTC')::date AS day
+    UNION
+    SELECT (o.created_at AT TIME ZONE 'UTC')::date FROM payments.orders o
+    WHERE o.merchant_id = @merchant_id AND o.updated_at >= @since AND o.updated_at < @until::timestamptz
+), expected AS (
+    SELECT d.day, coalesce(sum(o.total),0)::numeric AS used FROM days d
+    LEFT JOIN payments.orders o ON o.merchant_id = @merchant_id
+        AND o.created_at >= (d.day::timestamp AT TIME ZONE 'UTC')
+        AND o.created_at < ((d.day + 1)::timestamp AT TIME ZONE 'UTC')
+        AND o.state NOT IN ('expired','cancelled','failed') GROUP BY d.day
 )
-SELECT coalesce(e.day, a.day)::text AS day, coalesce(e.used, 0)::text AS expected, coalesce(a.used, 0)::text AS actual
-FROM expected e FULL JOIN actual a USING (day) WHERE coalesce(e.used, 0) <> coalesce(a.used, 0);
+SELECT e.day::text AS day, e.used::text AS expected, coalesce(a.used,0)::text AS actual
+FROM expected e LEFT JOIN payments.merchant_usage a ON a.merchant_id = @merchant_id AND a.day = e.day
+WHERE e.used <> coalesce(a.used,0);
 
 -- name: ReconcileOrders :many
+SELECT o.id, o.site_id, o.account_id, o.state, o.pay_currency, o.paid_total, o.paid_fee, o.credited, coalesce(o.paid_at, '1970-01-01 UTC'::timestamptz)::timestamptz AS paid_at FROM payments.orders o
+WHERE o.merchant_id = @merchant_id AND o.updated_at >= @since::timestamptz AND o.updated_at < @until::timestamptz
+    AND (o.updated_at,o.id) > (coalesce((SELECT c.updated_at FROM payments.orders c WHERE c.id = @after),@since),@after::uuid)
+ORDER BY o.updated_at,o.id LIMIT 100;
+
+-- name: ReconcileBatchOrders :many
 SELECT id, site_id, account_id, state, pay_currency, paid_total, paid_fee, credited, coalesce(paid_at, '1970-01-01 UTC'::timestamptz)::timestamptz AS paid_at FROM payments.orders
-WHERE merchant_id = @merchant_id AND id > @after ORDER BY id LIMIT 100;
+WHERE merchant_id = @merchant_id AND id = ANY(@ids::uuid[]);
 
 -- name: ReconcileQueries :many
 SELECT o.id FROM payments.orders o JOIN payments.order_windows w ON w.id = o.id
@@ -52,7 +67,7 @@ WHERE o.merchant_id = @merchant_id AND o.id > @after AND (
     (o.created_at < @until AND o.state IN ('pending','review'))
     OR (o.updated_at >= @since AND o.updated_at < @until)
     OR (o.state IN ('expired','cancelled','failed') AND w.queryable))
-ORDER BY o.id LIMIT 100;
+ORDER BY o.id LIMIT 1;
 
 -- name: ListDiscrepancies :many
 SELECT * FROM payments.discrepancies WHERE (@state::text = '' OR state = @state)
@@ -66,6 +81,7 @@ SELECT * FROM payments.discrepancies WHERE id = @id;
 UPDATE payments.discrepancies SET state = 'resolved', investigated_by = @actor, investigated_at = transaction_timestamp(), note = @note
 WHERE id = @id AND state = 'open' RETURNING *;
 
--- name: HasPaymentBatchOwner :one
-SELECT (EXISTS(SELECT 1 FROM payments.orders o WHERE o.id = @id AND o.merchant_id = @merchant_id)
-    OR EXISTS(SELECT 1 FROM payments.discrepancies d WHERE d.id = @id AND d.merchant_id = @merchant_id))::boolean AS owned;
+-- name: PaymentBatchOwners :many
+SELECT o.id FROM payments.orders o WHERE o.merchant_id = @merchant_id AND o.id = ANY(@ids::uuid[])
+UNION
+SELECT d.id FROM payments.discrepancies d WHERE d.merchant_id = @merchant_id AND d.id = ANY(@ids::uuid[]);

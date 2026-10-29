@@ -134,4 +134,6 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 测试用真实 PostgreSQL、受控时钟和显式调用消费：1000 次同键 raise、两个生产者同时写入、恢复、阈值/持续时间、跨午夜静默、邮件成功/失败回执、配置修订与范围隔离。网络发送允许至少一次，去重保证通知任务只安排一次。Webhook 和定期自测尚未实现。
 
+支付通知没有预置规则。启用时在现有配置中追加 `payments.discrepancy` 与 `payments.query_paused` 两条规则，各用唯一 id，最低严重度 warning、threshold=1、duration_seconds=0、repeat_seconds=0，channel 指向已测试的邮件渠道；使用当前 rev 保存并保留其余配置。仅绑定四条默认规则不会发送支付通知。事件持久化与渠道启用是两步，未配置不丢事件。
+
 `pending_recovery` 表示恢复及其投递尚未收尾；部分索引 `(checked_at,id)` 只含未恢复或待收尾事件。收尾后进入按 `(resolved_at,id)` 排序的清理索引，30 天后由周期任务每批删 100 个，外键级联删除回执和窗口。回执按页内事件 ID 一次查询，每个事件沿索引最多取最近 100 条。

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
-	"sync"
 	"time"
 	"uuid"
 
@@ -20,7 +19,6 @@ import (
 )
 
 type reconcileArgs struct {
-	singleRun
 	Merchant uuid.UUID `json:"merchant"`
 	Day      time.Time `json:"day"`
 	After    uuid.UUID `json:"after"`
@@ -28,6 +26,10 @@ type reconcileArgs struct {
 }
 
 func (reconcileArgs) Kind() string { return "payments.reconcile" }
+
+func (reconcileArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: pg.QueueReconcile, UniqueOpts: (singleRun{}).InsertOpts().UniqueOpts}
+}
 
 // RegisterReconcile fans out the previous UTC day to one durable job per merchant. Retries keep that day.
 func RegisterReconcile(cfg PollConfig) error {
@@ -126,7 +128,7 @@ func checkMerchant(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.T
 	if err != nil {
 		return nil, err
 	}
-	usage, err := queries.ReconcileUsage(ctx, tx, merchant)
+	usage, err := queries.ReconcileUsage(ctx, tx, ReconcileUsageParams{MerchantID: merchant, Since: day, Until: day.Add(24 * time.Hour)})
 	if err != nil {
 		return nil, err
 	}
@@ -185,24 +187,46 @@ func checkBatches(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Ti
 	var after uuid.UUID
 	var differences []RecordDiscrepancyParams
 	for {
-		orders, err := queries.ReconcileOrders(ctx, tx, ReconcileOrdersParams{MerchantID: merchant, After: after})
+		orders, err := queries.ReconcileOrders(ctx, tx, ReconcileOrdersParams{MerchantID: merchant, After: after, Since: day, Until: day.Add(24 * time.Hour)})
 		if err != nil {
 			return nil, err
 		}
 		if len(orders) == 0 {
 			break
 		}
-		for _, o := range orders {
-			found, err := checkOrderBatch(ctx, tx, merchant, o, day, expected)
-			if err != nil {
-				return nil, err
-			}
-			differences = append(differences, found...)
+		found, err := checkOrderPage(ctx, tx, merchant, orders, day, expected)
+		if err != nil {
+			return nil, err
 		}
+		differences = append(differences, found...)
 		after = orders[len(orders)-1].ID
 	}
-	orphaned, err := checkOrphanBatches(ctx, tx, merchant)
+	orphaned, err := checkOrphanBatches(ctx, tx, merchant, day, expected)
 	return append(differences, orphaned...), err
+}
+
+func checkOrderPage(ctx context.Context, tx pg.Tx, merchant uuid.UUID, orders []ReconcileOrdersRow, day time.Time, expected map[string]*big.Int) ([]RecordDiscrepancyParams, error) {
+	var differences []RecordDiscrepancyParams
+	ids := make([]uuid.UUID, len(orders))
+	for i, o := range orders {
+		ids[i] = o.ID
+	}
+	batches, err := billing.ReadCredits(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range orders {
+		b, exists := batches[o.ID]
+		if !exists {
+			addExpectedCash(o, b, false, day, expected)
+		}
+		found, err := checkOrderBatch(merchant, o, b, exists)
+		if err != nil {
+			return nil, err
+		}
+		differences = append(differences, found...)
+	}
+	return differences, nil
 }
 
 func batchMatches(o ReconcileOrdersRow, b billing.CreditBatch, exists bool, merchant uuid.UUID) bool {
@@ -215,26 +239,62 @@ func batchMatches(o ReconcileOrdersRow, b billing.CreditBatch, exists bool, merc
 		b.Payment.Currency.String() == o.PayCurrency && o.PaidFee != nil && *b.Payment == (billing.Payment{Currency: b.Payment.Currency, Paid: *o.PaidTotal, Fee: *o.PaidFee}) && o.Credited != nil && b.Amount == *o.Credited
 }
 
-func checkOrphanBatches(ctx context.Context, tx pg.Tx, merchant uuid.UUID) ([]RecordDiscrepancyParams, error) {
+func checkOrphanBatches(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Time, expected map[string]*big.Int) ([]RecordDiscrepancyParams, error) {
 	var after uuid.UUID
 	var differences []RecordDiscrepancyParams
 	for {
-		ids, err := billing.MerchantBatches(ctx, tx, merchant, after)
+		ids, err := billing.MerchantBatches(ctx, tx, merchant, after, day, day.Add(24*time.Hour))
+		if err != nil || len(ids) == 0 {
+			return differences, err
+		}
+		found, err := checkBatchPage(ctx, tx, merchant, day, ids, expected)
 		if err != nil {
 			return nil, err
 		}
-		if len(ids) == 0 {
-			return differences, nil
-		}
-		for _, id := range ids {
-			found, err := checkBatchOwner(ctx, tx, merchant, id)
-			if err != nil {
-				return nil, err
-			}
-			differences = append(differences, found...)
-		}
+		differences = append(differences, found...)
 		after = ids[len(ids)-1]
 	}
+}
+
+func checkBatchPage(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Time, ids []uuid.UUID, expected map[string]*big.Int) ([]RecordDiscrepancyParams, error) {
+	orders, err := queries.ReconcileBatchOrders(ctx, tx, ReconcileBatchOrdersParams{MerchantID: merchant, Ids: ids})
+	if err != nil {
+		return nil, err
+	}
+	batches, err := billing.ReadCredits(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	var differences []RecordDiscrepancyParams
+	for _, row := range orders {
+		o := ReconcileOrdersRow(row)
+		b, exists := batches[o.ID]
+		addExpectedCash(o, b, exists, day, expected)
+		found, err := checkOrderBatch(merchant, o, b, exists)
+		if err != nil {
+			return nil, err
+		}
+		differences = append(differences, found...)
+	}
+	owners, err := queries.PaymentBatchOwners(ctx, tx, PaymentBatchOwnersParams{MerchantID: merchant, Ids: ids})
+	if err != nil {
+		return nil, err
+	}
+	owned := make(map[uuid.UUID]bool, len(owners))
+	for _, id := range owners {
+		owned[id] = true
+	}
+	for _, id := range ids {
+		if owned[id] {
+			continue
+		}
+		d, err := pendingDifference(merchant, "ledger", "orphan/"+id.String(), map[string]any{"batch": id.String(), "reason": "paid batch has no payment record"})
+		if err != nil {
+			return nil, err
+		}
+		differences = append(differences, d)
+	}
+	return differences, nil
 }
 
 func (p *Payments) reconcileQueries(ctx context.Context, merchant uuid.UUID, day time.Time, after uuid.UUID) (uuid.UUID, error) {
@@ -246,42 +306,29 @@ func (p *Payments) reconcileQueries(ctx context.Context, merchant uuid.UUID, day
 	if err != nil || len(ids) == 0 {
 		return uuid.UUID{}, err
 	}
-	err = p.queryReconcilePage(ctx, ids)
-	if errors.Is(err, ErrQueryPaused) {
+	o, err := p.GetOrder(ctx, p.platform, OrderID(ids[0]))
+	if err == nil {
+		err = p.queryOrder(ctx, o, true)
+	}
+	if rejected, _ := errors.AsType[*Rejected](err); rejected != nil {
+		p.logger.Warn("payments: daily query refused", "order", OrderID(ids[0]).TypeID(), "error", err)
+		err = nil
+	}
+	if errors.Is(err, ErrQueryPaused) && !errors.Is(err, ErrQueryBusy) {
 		return uuid.UUID{}, river.JobSnooze(time.Minute)
 	}
 	if err != nil {
 		return uuid.UUID{}, err
 	}
-	if len(ids) < 100 {
-		return uuid.UUID{}, nil
-	}
-	return ids[len(ids)-1], nil
+	return ids[0], nil
 }
 
-func checkOrderBatch(ctx context.Context, tx pg.Tx, merchant uuid.UUID, o ReconcileOrdersRow, day time.Time, expected map[string]*big.Int) ([]RecordDiscrepancyParams, error) {
-	b, exists, err := billing.ReadCredit(ctx, tx, o.ID)
-	if err != nil {
-		return nil, err
-	}
-	addExpectedCash(o, b, exists, day, expected)
+func checkOrderBatch(merchant uuid.UUID, o ReconcileOrdersRow, b billing.CreditBatch, exists bool) ([]RecordDiscrepancyParams, error) {
 	if batchMatches(o, b, exists, merchant) {
 		return nil, nil
 	}
 	d, err := pendingDifference(merchant, "ledger", "batch/"+o.ID.String(), batchDifferenceDetail(o, b, exists))
 	d.OrderID, d.AccountID = &o.ID, &o.AccountID
-	return []RecordDiscrepancyParams{d}, err
-}
-
-func checkBatchOwner(ctx context.Context, tx pg.Tx, merchant, id uuid.UUID) ([]RecordDiscrepancyParams, error) {
-	owned, err := queries.HasPaymentBatchOwner(ctx, tx, HasPaymentBatchOwnerParams{ID: id, MerchantID: merchant})
-	if err != nil {
-		return nil, err
-	}
-	if owned {
-		return nil, nil
-	}
-	d, err := pendingDifference(merchant, "ledger", "orphan/"+id.String(), map[string]any{"batch": id.String(), "reason": "paid batch has no payment record"})
 	return []RecordDiscrepancyParams{d}, err
 }
 
@@ -301,38 +348,6 @@ func addExpectedCash(o ReconcileOrdersRow, b billing.CreditBatch, exists bool, d
 		expected[o.PayCurrency] = new(big.Int)
 	}
 	expected[o.PayCurrency].Add(expected[o.PayCurrency], big.NewInt(*o.PaidTotal))
-}
-
-func (p *Payments) queryReconcilePage(ctx context.Context, ids []uuid.UUID) error {
-	var workers sync.WaitGroup
-	failures := make([]error, min(2, len(ids)))
-	for worker := range len(failures) {
-		workers.Go(func() { failures[worker] = p.queryReconcileWorker(ctx, ids, worker) })
-	}
-	workers.Wait()
-	for _, err := range failures {
-		if errors.Is(err, ErrQueryPaused) {
-			return ErrQueryPaused
-		}
-	}
-	return errors.Join(failures...)
-}
-
-func (p *Payments) queryReconcileWorker(ctx context.Context, ids []uuid.UUID, offset int) error {
-	for i := offset; i < len(ids) && ctx.Err() == nil; i += 2 {
-		o, err := p.GetOrder(ctx, p.platform, OrderID(ids[i]))
-		if err == nil {
-			err = p.queryOrder(ctx, o)
-		}
-		if err != nil {
-			rejected, _ := errors.AsType[*Rejected](err)
-			if rejected == nil {
-				return err
-			}
-			p.logger.Warn("payments: daily query refused", "order", OrderID(ids[i]).TypeID(), "error", err)
-		}
-	}
-	return ctx.Err()
 }
 
 func batchDifferenceDetail(o ReconcileOrdersRow, b billing.CreditBatch, exists bool) map[string]any {

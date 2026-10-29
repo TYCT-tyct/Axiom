@@ -24,7 +24,24 @@ func MerchantCash(ctx context.Context, tx pg.Tx, merchant uuid.UUID, since, unti
 	return out, nil
 }
 
-// MerchantBatches returns at most 100 paid batch IDs after the cursor, including batches with no matching order.
-func MerchantBatches(ctx context.Context, tx pg.Tx, merchant, after uuid.UUID) ([]uuid.UUID, error) {
-	return queries.MerchantBatches(ctx, tx, MerchantBatchesParams{MerchantID: &merchant, After: after})
+// MerchantBatches returns at most 100 paid batch IDs for an accounting day, including batches with no order.
+func MerchantBatches(ctx context.Context, tx pg.Tx, merchant, after uuid.UUID, since, until time.Time) ([]uuid.UUID, error) {
+	return queries.MerchantBatches(ctx, tx, MerchantBatchesParams{MerchantID: &merchant, After: after, Since: since, Until: until})
+}
+
+// ReadCredits reads one page by primary key in the caller's consistent snapshot; missing IDs are omitted.
+func ReadCredits(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]CreditBatch, error) {
+	rows, err := queries.ReadCreditBatches(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]CreditBatch, len(rows))
+	for _, r := range rows {
+		b, err := creditBatch(ReadCreditBatchRow(r))
+		if err != nil {
+			return nil, err
+		}
+		out[b.ID] = b
+	}
+	return out, nil
 }

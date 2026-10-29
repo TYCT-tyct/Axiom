@@ -55,8 +55,9 @@ type Rate struct{ Reference platform.ExchangeRate; BufferPPM int64; Applied *big
 func MinorUnits(c platform.Currency, billionths int64) (int64, error) // 已实现：十亿分之一单位换成最小单位，不是整数个最小单位就报错
 func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (CreditBatch, bool, error)  // 已实现：AddCredit 或 CreditPaid 做的批次（来源、金额、过期、创建时间，付费的还有付款、渠道和汇率版本），管理接口回答加额度时读
 func RegisterExpire(cfg ExpireConfig) error // 已实现：把到期作废登记为队列上的周期任务 billing.expire_credit（`money` 队列，与扣费对账共用，不和同步、归档抢 worker，见 [平台的「任务队列」](../platform/README.md#任务队列)），每分钟，在队列 Start 之前调用（cmd/axiom 的 startSync）；包内的 expirer.run 是一轮，writeOffAccount 是一个账户的作废
-func MerchantCash(ctx context.Context, tx pg.Tx, merchant uuid.UUID, since, until time.Time) ([]PaymentCash, error) // 支付日对账；按币种返回精确十亿分之一文本合计（包括退款），credit 取批次创建日，其他现金取交易日，避免跨午夜假差额
-func MerchantBatches(ctx context.Context, tx pg.Tx, merchant, after uuid.UUID) ([]uuid.UUID, error) // 支付日对账；一页最多 100 个付费批次 ID，供检查没有支付记录的批次
+func MerchantCash(ctx context.Context, tx pg.Tx, merchant uuid.UUID, since, until time.Time) ([]PaymentCash, error) // 支付日对账；按币种返回精确十亿分之一文本合计（包括退款），credit 取批次创建日，退款现金取交易日，避免跨午夜假差额
+func MerchantBatches(ctx context.Context, tx pg.Tx, merchant, after uuid.UUID, since, until time.Time) ([]uuid.UUID, error) // 支付日对账；仅取该日入账批次，按 (created_at,id) 翻页，每页 100 个 ID
+func ReadCredits(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]CreditBatch, error) // 对账按页一次主键批量读，缺失批次不在返回 map
 func Reconcile(ctx context.Context, db *pg.DB, platform pg.Scope) ([]string, error) // 已实现：每日自平，列出不平的交易和与账本不符的余额
 func RegisterReconcile(cfg ReconcileConfig) error // 已实现：把自平登记为队列上的周期任务（`money` 队列），在队列 Start 之前调用（cmd/axiom 的 startSync）
 func LedgerOf(ctx, tx pg.Tx, requestID uuid.UUID) ([]LedgerTransaction, error) // 已实现：一个请求的账本交易与分录，按请求 ID 读；只从运营或管理的处理器调用，事务须是平台范围
@@ -85,6 +86,9 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **输出上界**（`Observe` 用它）：字节上界 = 已完整读到的事件里解码后的正文、推理、工具参数、思考的签名和加密推理的 UTF-8 字节（不含 SSE 和 JSON 外壳；计哪些成员见 [protocol 的「转发（草图）」](../protocol/README.md#转发草图)的「字节上界」；token 不多于字节）+ 正在读的不完整事件已到的原始字节（`PartialBytes`）；搜索按事件计数。已报告的输入侧项（输入、缓存读写、音频、图片）一经报告就是准数；输出侧的项（普通输出、推理、音频、图片、搜索）在最后的用量事件之前报告的只是下界（Anthropic `message_start` 里的 `output_tokens`、任何累计中的计数），所以在 `Final` 标明它之前，计量的输出 = max(已报告, 字节上界)。测试用已有的样本 `internal/protocol/testdata/messages/text/upstream.sse`：`message_start` 报 `output_tokens: 1`，之后的正文仍按字节计量、越过当前段时触发追加，`message_delta` 的 15 才是最终值。`Relay.Next` 每做一次至多 16 KiB 的底层读就返回，所以两次计量之间没计量的输出不超过一次读。
 - **`InputBound(d, m)`** 给出首次采样和任一次采样输入的最大 token 数，决定价格落在哪一档；`Quote` 和路由的最高价过滤用同一个函数。**`InputEstimate(d, m)`** 是上游没报告输入时收费用的暂估：文本按 `Demand.TextTokens` 算，即该条目模型族的分词器数出的 token（`NewTextCount`，未知族退回字节比例；核心节点在接收请求前 `WarmTokenizers`，两份只读词表由 `sync.OnceValue` 共用。gateway 在释放端点后按会话/族缓存计数，只分词最多 256 KiB 的解码字符串，超出部分按字节比例补齐），没有这个数时按文本字节 ÷ `InputBytesPerToken`（4，向上取整，routing 估上下文也用它）；再加每张图片 min(单张上界, 1600) + 每个文件 min(单个文件上界, 4096)，不超过上下文长度；因为每一项都不大于 `InputBound` 的对应项（token 不少于 1 个字节），暂估永远不超过预留（`TestInputEstimateNeverExceedsTheBound`）。预留仍按上界，两者分开：暂估不能高过预留，预留不能低过用户可能花的。
 - **`Segmentable`** 由 routing 按条目和请求算出（见 [routing 的「接口」](../routing/README.md#接口)）；不可分段的条目全额预留、不追加、不截断。
+
+
+支付对账的日范围读由迁移 `00022_payment_audit.sql` 的部分索引支撑：`credit_batches (merchant_id,created_at,id)` 只含线上商户批次，退款交易另有 `(created_at,request_id)` 的 `kind='refund'` 索引。现金查询分开读取该日入账与该日退款，避免按商户扫描全部历史；订单和批次主键一次批量读，不做每单往返。索引并发构建，不阻塞资金写入；中断后迁移重跑会并发删除并重建自己的索引，避免接受无效索引。
 
 ## 控制台的读取
 

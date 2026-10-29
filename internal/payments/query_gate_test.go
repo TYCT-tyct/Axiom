@@ -33,12 +33,12 @@ func TestMerchantQueryCapAcrossServices(t *testing.T) {
 	}
 	done := make(chan error, 2)
 	for _, p := range []*Payments{w.p, other} {
-		go func() { done <- p.queryOrder(t.Context(), o) }()
+		go func() { done <- p.queryOrder(t.Context(), o, false) }()
 	}
 	for range 2 {
 		<-entered
 	}
-	err = other.queryOrder(t.Context(), o)
+	err = other.queryOrder(t.Context(), o, false)
 	close(release)
 	if !errors.Is(err, ErrQueryPaused) {
 		t.Fatalf("third query exceeded merchant cap: %v", err)
@@ -57,26 +57,26 @@ func TestQueryLeaseReclaimsCrashAndFencesOldCompletion(t *testing.T) {
 	w := newWorld(t)
 	m := w.waiting()
 	merchant := MerchantID(m.ID)
-	first, err := w.p.acquireQuery(t.Context(), merchant)
+	first, err := w.p.acquireQuery(t.Context(), merchant, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := w.p.acquireQuery(t.Context(), merchant)
+	second, err := w.p.acquireQuery(t.Context(), merchant, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = w.p.acquireQuery(t.Context(), merchant); !errors.Is(err, ErrQueryPaused) {
+	if _, err = w.p.acquireQuery(t.Context(), merchant, false); !errors.Is(err, ErrQueryPaused) {
 		t.Fatal("third lease allowed", err)
 	}
 	w.exec("UPDATE payments.query_health SET first_until=transaction_timestamp()-interval '1 second'")
-	replacement, err := w.p.acquireQuery(t.Context(), merchant)
+	replacement, err := w.p.acquireQuery(t.Context(), merchant, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = w.p.finishQuery(t.Context(), merchant, first, queryUnknown); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = w.p.acquireQuery(t.Context(), merchant); !errors.Is(err, ErrQueryPaused) {
+	if _, err = w.p.acquireQuery(t.Context(), merchant, false); !errors.Is(err, ErrQueryPaused) {
 		t.Fatal("stale completion released replacement", err)
 	}
 	if n := w.count(w.p.platform, "SELECT count(*) FROM payments.query_health WHERE failures=0"); n != 1 {
@@ -99,7 +99,7 @@ func TestUnusedQuerySlotDoesNotResetUnknownStreak(t *testing.T) {
 	w := newWorld(t)
 	m := w.waiting()
 	for _, outcome := range []queryOutcome{queryUnknown, queryUnused, queryUnknown} {
-		token, err := w.p.acquireQuery(t.Context(), MerchantID(m.ID))
+		token, err := w.p.acquireQuery(t.Context(), MerchantID(m.ID), false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,12 +128,12 @@ func TestInFlightSuccessCannotReopenPausedMerchant(t *testing.T) {
 	w := newWorld(t)
 	m := w.waiting()
 	merchant := MerchantID(m.ID)
-	inFlight, err := w.p.acquireQuery(t.Context(), merchant)
+	inFlight, err := w.p.acquireQuery(t.Context(), merchant, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 5 {
-		token, err := w.p.acquireQuery(t.Context(), merchant)
+		token, err := w.p.acquireQuery(t.Context(), merchant, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -144,7 +144,7 @@ func TestInFlightSuccessCannotReopenPausedMerchant(t *testing.T) {
 	if err = w.p.finishQuery(t.Context(), merchant, inFlight, queryKnown); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = w.p.acquireQuery(t.Context(), merchant); !errors.Is(err, ErrQueryPaused) {
+	if _, err = w.p.acquireQuery(t.Context(), merchant, false); !errors.Is(err, ErrQueryPaused) {
 		t.Fatal("old success reopened circuit", err)
 	}
 	if w.count(w.p.platform, "SELECT count(*) FROM platform.alert_signals WHERE body->>'resolved'='true'") != 0 {
@@ -155,7 +155,7 @@ func TestInFlightSuccessCannotReopenPausedMerchant(t *testing.T) {
 func TestQueryHealthUsesTheClockAfterLocking(t *testing.T) {
 	w := newWorld(t)
 	m := w.waiting()
-	if _, err := w.p.acquireQuery(t.Context(), MerchantID(m.ID)); err != nil {
+	if _, err := w.p.acquireQuery(t.Context(), MerchantID(m.ID), false); err != nil {
 		t.Fatal(err)
 	}
 	// The controlled clock returns a different value until this transaction owns the tuple lock (xmax).

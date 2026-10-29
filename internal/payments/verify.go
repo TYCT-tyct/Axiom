@@ -14,18 +14,47 @@ import (
 // ErrVerifyLimited is an order queried by its user less than a minute ago.
 var ErrVerifyLimited = errors.New("payments: wait a minute before checking this order again")
 
+// Only this core deadline, rather than a caller abort, is evidence of a slow gateway.
+var errQueryDeadline = errors.New("payments: gateway query deadline")
+
 // Verify queries an order visible in s once. The platform scope is used only after the account's read authorized it;
 // the common receipt transaction supplies the same money and concurrency guarantees as Notify.
 func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, error) {
-	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, closeTimeout, errQueryDeadline)
 	defer cancel()
 	var o Order
 	var allowed bool
-	err := p.db.Tx(ctx, s, func(tx pg.Tx) (err error) {
+	err := p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) {
 		o, err = loadOrder(ctx, tx, id)
 		if err != nil {
 			return err
 		}
+		allowed, err = queries.QueryAllowed(ctx, tx, uuid.UUID(id))
+		if err != nil || !allowed {
+			return err
+		}
+		return err
+	})
+	if err != nil || !allowed {
+		return o, err
+	}
+	token, err := p.acquireQuery(ctx, o.MerchantID, false)
+	if err != nil {
+		return o, err
+	}
+	allowed, err = p.takeVerification(ctx, s, id)
+	if err != nil || !allowed {
+		return o, errors.Join(err, p.finishQuery(ctx, o.MerchantID, token, queryUnused))
+	}
+	if err = p.queryWithToken(ctx, o, token); err != nil {
+		return o, err
+	}
+	return p.GetOrder(ctx, s, id)
+}
+
+// Recheck eligibility and claim the user's allowance atomically, only after admission to the merchant.
+func (p *Payments) takeVerification(ctx context.Context, s pg.Scope, id OrderID) (allowed bool, err error) {
+	err = p.db.Tx(ctx, s, func(tx pg.Tx) (err error) {
 		allowed, err = queries.QueryAllowed(ctx, tx, uuid.UUID(id))
 		if err != nil || !allowed {
 			return err
@@ -36,18 +65,12 @@ func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 		}
 		return err
 	})
-	if err != nil || !allowed {
-		return o, err
-	}
-	if err = p.queryOrder(ctx, o); err != nil {
-		return o, err
-	}
-	return p.GetOrder(ctx, s, id)
+	return allowed, err
 }
 
 // A gateway may publish its paid status before the settlement fields. Retry once within the same deadline.
 func queryPayment(ctx context.Context, ch Channel, order, trade string) (Payment, error) {
-	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, closeTimeout, errQueryDeadline)
 	defer cancel()
 	paid, err := ch.Query(ctx, order, trade)
 	if err == nil && incompletePayment(paid) {
@@ -56,10 +79,10 @@ func queryPayment(ctx context.Context, ch Channel, order, trade string) (Payment
 	return paid, err
 }
 
-func (p *Payments) queryOrder(ctx context.Context, o Order) error {
-	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
+func (p *Payments) queryOrder(ctx context.Context, o Order, background bool) error {
+	ctx, cancel := context.WithTimeoutCause(ctx, closeTimeout, errQueryDeadline)
 	defer cancel()
-	token, err := p.acquireQuery(ctx, o.MerchantID)
+	token, err := p.acquireQuery(ctx, o.MerchantID, background)
 	if err != nil {
 		return err
 	}
@@ -70,7 +93,7 @@ func (p *Payments) queryWithToken(ctx context.Context, o Order, token uuid.UUID)
 	ch, err := p.channelOf(ctx, o.MerchantID)
 	var paid Payment
 	if err != nil {
-		return errors.Join(err, p.finishQuery(ctx, o.MerchantID, token, queryUnknown))
+		return errors.Join(err, p.finishQuery(ctx, o.MerchantID, token, queryUnused))
 	}
 	if !ch.Caps().Has(CapQuery) {
 		return p.finishQuery(ctx, o.MerchantID, token, queryUnused)
@@ -121,13 +144,13 @@ func (p *Payments) pollOrder(ctx context.Context, id OrderID) {
 }
 
 func (p *Payments) queryScheduled(ctx context.Context, id OrderID) error {
-	ctx, cancel := context.WithTimeout(ctx, closeTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, closeTimeout, errQueryDeadline)
 	defer cancel()
 	var o Order
 	if err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) { o, err = loadOrder(ctx, tx, id); return err }); err != nil {
 		return err
 	}
-	token, err := p.acquireQuery(ctx, o.MerchantID)
+	token, err := p.acquireQuery(ctx, o.MerchantID, false)
 	if err != nil {
 		return err
 	}
@@ -152,6 +175,9 @@ func (p *Payments) completeQuery(ctx context.Context, ch Channel, merchant Merch
 	outcome := queryKnown
 	if (err != nil && !errors.As(err, &rejected)) || incompletePayment(paid) {
 		outcome = queryUnknown
+	}
+	if errors.Is(err, context.Canceled) || (ctx.Err() != nil && !errors.Is(context.Cause(ctx), errQueryDeadline)) {
+		outcome = queryUnused
 	}
 	finishErr := p.finishQuery(ctx, merchant, token, outcome)
 	if err != nil {

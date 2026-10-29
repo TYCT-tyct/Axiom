@@ -44,10 +44,10 @@ func TestDailyQueryDefiniteRefusalCompletesPage(t *testing.T) {
 	w := newTestWorld(t, fakePlugin{create: goodCheckout, query: func(context.Context, string, string) (Payment, error) { return Payment{}, &Rejected{Code: "missing"} }})
 	m := w.waiting()
 	o := w.mustPlace(yuan, "daily-refused")
-	w.exec("UPDATE payments.orders SET created_at=transaction_timestamp()-interval '1 day'")
-	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
-	if next, err := w.p.reconcileQueries(t.Context(), m.ID, day, uuid.UUID{}); err != nil || next != (uuid.UUID{}) {
-		t.Fatal("definite query refusal retained page", next, err)
+	w.exec("UPDATE payments.orders SET created_at='2000-01-01 12:00:00+00'")
+	day := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := w.runDailyQueries(m.ID, day); err != nil {
+		t.Fatal("definite query refusal retained page", err)
 	}
 	if state, _, _ := w.stored(o.ID); state != "pending" {
 		t.Fatal("query refusal failed the order", state)
