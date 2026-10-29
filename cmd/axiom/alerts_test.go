@@ -14,6 +14,10 @@ import (
 
 type writerSignals []string
 
+func (s *writerSignals) RaiseOnce(_, kind, key, severity string, fields map[string]string) error {
+	return s.Raise(kind, key, severity, fields)
+}
+
 func (s *writerSignals) Raise(string, string, string, map[string]string) error {
 	*s = append(*s, "raise")
 	return nil
@@ -42,7 +46,10 @@ func TestAlertGracefulStopResolvesDrainedWriter(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	stop := sync.OnceFunc(startAlerts(t.Context(), f.db, recorder, "drained-node", 5*time.Second, logger))
+	console := consoleParts{cfg: nodeSettings{shutdownTimeout: 5 * time.Second}}
+	console.cfg.valkey.NodeID = "drained-node"
+	stopAlerts := startAlerts(t.Context(), f.db, recorder, &console, logger)
+	stop := sync.OnceFunc(stopAlerts)
 	t.Cleanup(stop)
 	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 		return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "observability.write_lag", Key: "drained-node", Severity: "warning", Fields: map[string]string{"value": "4000"}})

@@ -66,15 +66,16 @@ func collectAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, si
 	return previous
 }
 
-func startAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, node string, timeout time.Duration, logger *slog.Logger) func() {
+func startAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, console *consoleParts, logger *slog.Logger) func() {
 	signals := alert.New(ctx, db, pg.PlatformScope(), logger)
-	stop := sampleAlerts(ctx, db, r, signals, node, logger)
+	console.alerts = signals
+	stop := sampleAlerts(ctx, db, r, signals, console.cfg.valkey.NodeID, logger)
 	return func() {
 		stop()
-		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), console.cfg.shutdownTimeout)
 		defer cancel()
 		if depth, _ := r.AlertSample(); depth == 0 {
-			if err := signals.Resolve("observability.write_lag", node); err != nil {
+			if err := signals.Resolve("observability.write_lag", console.cfg.valkey.NodeID); err != nil {
 				logger.Error("resolving drained writer alert", "err", err)
 			}
 		}

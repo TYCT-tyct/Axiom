@@ -34,7 +34,7 @@ paths:
     get:
       operationId: getAlertConfiguration
       tags: [Alerts]
-      summary: Read alert rules and email channels
+      summary: Read alert rules and notification channels
       security:
         - session: []
       x-axiom-level: mfa
@@ -55,7 +55,7 @@ paths:
     put:
       operationId: setAlertConfiguration
       tags: [Alerts]
-      summary: Replace alert rules and email channels
+      summary: Replace alert rules and notification channels
       security:
         - session: []
           csrf: []
@@ -124,6 +124,39 @@ paths:
         content:
           application/json:
             schema: {$ref: "#/components/schemas/AlertTestRequest"}
+      responses:
+        "201":
+          description: The requested alert data or persisted operation.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AlertTestResult"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/alerts/channels/{channel_id}/secret:
+    put:
+      operationId: rotateAlertWebhookSecret
+      tags: [Alerts]
+      summary: Set or rotate a webhook signing secret
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: channel_id, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 64}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AlertWebhookSecretRequest"}
       responses:
         "201":
           description: The requested alert data or persisted operation.
@@ -2207,13 +2240,21 @@ components:
       properties:
         id: {type: string, minLength: 1, maxLength: 64}
         email: {type: string, format: email, maxLength: 254}
+        webhook_url: {type: string, format: uri, maxLength: 2048, description: "HTTPS destination, exclusive with email. Configure only after all nodes support webhooks; set its signing secret before use."}
+    AlertWebhookSecretRequest:
+      type: object
+      required: [rev, secret, reason]
+      properties:
+        rev: {type: integer, format: int64, minimum: 1}
+        secret: {type: string, minLength: 1, maxLength: 512, writeOnly: true, description: "32 to 512 UTF-8 bytes shared with the receiver. Rotation retains the old key for one hour; another rotation during that hour returns conflict."}
+        reason: {$ref: "#/components/schemas/Reason"}
     AlertConfigurationRequest:
       type: object
       required: [rev, rules, channels, reason]
       properties:
         rev: {type: integer, format: int64, minimum: 1}
         rules: {type: array, maxItems: 32, items: {allOf: [{$ref: "#/components/schemas/AlertRule"}], required: [id, kind, minimum_severity, threshold, duration_seconds, channel, quiet_start, quiet_end, repeat_seconds]}}
-        channels: {type: array, maxItems: 32, items: {allOf: [{$ref: "#/components/schemas/AlertChannel"}], required: [id, email]}}
+        channels: {type: array, maxItems: 32, items: {allOf: [{$ref: "#/components/schemas/AlertChannel"}], required: [id]}}
         reason: {$ref: "#/components/schemas/Reason"}
     AlertTestRequest:
       type: object

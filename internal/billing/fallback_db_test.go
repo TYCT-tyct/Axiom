@@ -498,6 +498,8 @@ func checkUnlistedModelTier(t *testing.T, declared, cleanup bool, wantItems int)
 	logs := &telemetrytest.Buffer{}
 	cfg := fallbackBankConfig
 	cfg.Logger = logs.Logger()
+	var signals settlementSignals
+	cfg.Alerts = &signals
 	b := fallbackBank(t, 10_000, 0, cfg)
 	q := metered(t)
 	q.Model.ID = catalog.ModelID(uuid.NewV7())
@@ -531,5 +533,16 @@ func checkUnlistedModelTier(t *testing.T, declared, cleanup bool, wantItems int)
 	if got := strings.Count(logs.String(), "an unknown billing item appeared"); got != wantItems {
 		t.Fatalf("got %d alerts, want %d", got, wantItems)
 	}
+	assertUnlistedTierSignals(t, signals, wantItems)
 	b.expect("settled", want)
+}
+
+func assertUnlistedTierSignals(t *testing.T, signals settlementSignals, wantItems int) {
+	t.Helper()
+	if len(signals) != wantItems {
+		t.Fatalf("missing-item notifications: %+v", signals)
+	}
+	if len(signals) > 0 && (signals[0].Kind != "billing.settlement_anomaly" || signals[0].Key != "unknown_items" || signals[0].Fields["field"] != "service_tier.priority") {
+		t.Fatalf("unlisted tier signal: %+v", signals)
+	}
 }
