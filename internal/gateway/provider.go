@@ -78,14 +78,12 @@ func mismatch(name, want string) *Refusal {
 	return invalid("provider." + name + " must be " + want + ".")
 }
 
-func readRequireParameters(_ *routing.Override, name string, value []byte) error {
+func readRequireParameters(o *routing.Override, name string, value []byte) error {
 	var b bool
 	if err := jsonx.Unmarshal(value, &b); err != nil {
 		return mismatch(name, "true or false")
 	}
-	if b {
-		return invalid("provider." + name + " true is not supported: endpoint parameter inventories are unavailable.")
-	}
+	o.RequireParameters = b
 	return nil
 }
 
@@ -95,7 +93,7 @@ func readQuantizations(_ *routing.Override, name string, value []byte) error {
 		return mismatch(name, "a list of names")
 	}
 	if len(names) > 0 {
-		return invalid("provider." + name + " is not supported: endpoint quantization metadata is unavailable.")
+		return invalid("provider." + name + " is not supported: supplier group records and catalog specs carry no quantization level.")
 	}
 	return nil
 }
@@ -156,22 +154,33 @@ func readSortObject(o *routing.Override, name string, value []byte) (string, err
 		if string(v) == "null" {
 			continue
 		}
-		switch member {
-		case "by":
-			if err := jsonx.Unmarshal(v, &by); err != nil {
-				return "", mismatch(name+".by", "price, throughput or latency")
-			}
-		case "partition":
-			var partition string
-			if err := jsonx.Unmarshal(v, &partition); err != nil || partition != "model" && partition != "none" {
-				return "", mismatch(name+".partition", "model or none")
-			}
-			o.SortGlobal = partition == "none"
-		default:
-			return "", unsupported(name + "." + member)
+		if err := readSortMember(o, name, member, v, &by); err != nil {
+			return "", err
 		}
 	}
 	return by, nil
+}
+
+// readSortMember reads one member of a sort object: the ordering and the partition it applies to.
+func readSortMember(o *routing.Override, name, member string, value []byte, by *string) error {
+	switch member {
+	case "by":
+		if err := jsonx.Unmarshal(value, by); err != nil {
+			return mismatch(name+".by", "price, throughput or latency")
+		}
+	case "partition":
+		var partition string
+		if err := jsonx.Unmarshal(value, &partition); err != nil || partition != "model" && partition != "none" {
+			return mismatch(name+".partition", "model or none")
+		}
+		o.SortGlobal = partition == "none"
+	default:
+		if member == "percentile" {
+			return invalid("provider." + name + ".percentile is not supported: sort orders by by and partition only, and quality has no percentile measures.")
+		}
+		return unsupported(name + "." + member)
+	}
+	return nil
 }
 
 // noRetention is what both data_collection deny and zdr ask for: endpoints whose supplier does not keep the data or
@@ -204,7 +213,10 @@ func readZDR(o *routing.Override, name string, value []byte) error {
 func jsonNumber(name string, value []byte, hi float64) (float64, error) {
 	var v float64
 	if err := jsonx.Unmarshal(value, &v); err != nil || v < 0 || v > hi {
-		return 0, mismatch(name, "a number (percentile objects are not supported yet)")
+		if trimmed := bytes.TrimSpace(value); len(trimmed) > 0 && trimmed[0] == '{' {
+			return 0, invalid("provider." + name + " percentile objects are not supported: quality measures an EWMA of latency and throughput, not five-minute p50/p75/p90/p99.")
+		}
+		return 0, mismatch(name, "a number")
 	}
 	return v, nil
 }
@@ -236,7 +248,7 @@ func readMaxPrice(o *routing.Override, name string, value []byte) error {
 		item, ok := maxPriceItems[member]
 		if !ok {
 			if member == "request" || member == "image" {
-				return invalid("provider." + name + "." + member + " is not supported: per-request and per-image prices are unavailable.")
+				return invalid("provider." + name + "." + member + " is not supported: the price schedule has no per-request or per-image item; it prices tokens and per-use tools only.")
 			}
 			return unsupported(name + "." + member)
 		}
