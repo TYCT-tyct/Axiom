@@ -11,13 +11,14 @@ import (
 // ID another way (README.md「ID」).
 
 var (
-	sitePrefix      = typeid.MustPrefix("site")
-	tierPrefix      = typeid.MustPrefix("tier")
-	accountPrefix   = typeid.MustPrefix("acct")
-	workspacePrefix = typeid.MustPrefix("ws")
-	userPrefix      = typeid.MustPrefix("user")
-	keyPrefix       = typeid.MustPrefix("key")
-	sessionPrefix   = typeid.MustPrefix("sess")
+	announcementPrefix = typeid.MustPrefix("ann")
+	sitePrefix         = typeid.MustPrefix("site")
+	tierPrefix         = typeid.MustPrefix("tier")
+	accountPrefix      = typeid.MustPrefix("acct")
+	workspacePrefix    = typeid.MustPrefix("ws")
+	userPrefix         = typeid.MustPrefix("user")
+	keyPrefix          = typeid.MustPrefix("key")
+	sessionPrefix      = typeid.MustPrefix("sess")
 )
 
 // SiteID is a site's ID.
@@ -102,4 +103,16 @@ func (id SessionID) TypeID() string { return sessionPrefix.Encode(uuid.UUID(id))
 func ParseSessionID(s string) (SessionID, error) {
 	id, err := sessionPrefix.Decode(s)
 	return SessionID(id), err
+}
+
+// AnnouncementID is a site announcement's ID.
+type AnnouncementID uuid.UUID
+
+// TypeID writes the ID as the API shows it.
+func (id AnnouncementID) TypeID() string { return announcementPrefix.Encode(uuid.UUID(id)) }
+
+// ParseAnnouncementID reads only announcement TypeIDs.
+func ParseAnnouncementID(s string) (AnnouncementID, error) {
+	id, err := announcementPrefix.Decode(s)
+	return AnnouncementID(id), err
 }

@@ -65,6 +65,8 @@
 - 大表上的每个查询都必须走索引；慢查询记日志并告警。
 - 后台任务从上次处理到的位置继续，只处理新增的数据：额度分配的重放、对账、分析标签都不全量重算。
 
+用户提醒 journal 每次余额实际变化新增一行；每分钟任务最多运行 30 秒。每批最多 1000 行，billing 一条 DELETE RETURNING、accounts 一条 INSERT SELECT 完成消费和转换；再以一条带偏好的查询读取最多 100 条待派发提醒。无提醒时往返数不随 journal 行数增长，另有开始、范围与提交的固定成本。仅两条转换语句的网络成本在 r=0.25–0.4ms 时每千行约 0.5–0.8ms；这是网络下界，不包括数据库执行、提交、连接竞争与实际邮件/Webhook 入队，也不是吞吐保证。按 50% 运行占比，若全平台每秒产生 λ 行，运行期间至少需处理 2λ 行/s；上线容量仍须按实际 journal 最旧记录与行数变化、派发积压和数据库负载测定。达到预算正常完成，下分钟续消费，不触发失败重试；Webhook 收尾和保留期清理每轮只跑一次，不随批次数重复。`TestBalanceNoticeConsumptionIsBoundedAndBatched` 与 `TestBalanceNoticeBatchResolvesEachTenantAndDefaults` 守住批量和集合判定，`TestUserNoticeRunDrainsWithoutBalanceJournal` 守住无账本事件时的派发积压。
+
 ### 规模与扩展
 
 - 入口、核心、出口都不存数据，加机器即可横向扩展。

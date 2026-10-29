@@ -271,6 +271,8 @@
 - **故障注入**：结算前后杀进程、数据库超时。
 - **监控**：暂估占比、缺项次数、平台承担的金额和次数、到期作废被在途预留或冻结推迟的批次和金额、对账偏差、成本漂移、截断和拒绝次数；新 key 的用量突增告警。
 
+用户余额变化与已到账 paid 批次在账本事务中写提醒 journal，消费与重试见[账户领域的「用户提醒与站内公告」](accounts.md#用户提醒与站内公告)，不在调用路径上发网络请求。仅钱包实际过账穿越阈值触发，赠送不算充值到账。
+
 ## 决策与理由
 
 分项计价（#319，2026-10-29）：读取时由 billing 根据预留的最终采样、冻结价目表、兜底价、版本和实际结算判定重建；控制台每页一次批量读取，generation 在账户范围读取一笔。预留仅增加可空的 `pricing_tiers`（NULL 为历史未知，−1 为未执行，其余为准入模型可报告档的位集），随结算原子写入；不修改已有用量 JSON 格式，旧节点仍可重试读取。新列的范围检查用 `NOT VALID`：历史该列全部为 NULL，新增/更新立即受约束，不在持有排他锁时扫描完整历史，依据 [PostgreSQL ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html)。对比在结算时复制整份分项发票：读取时展开不在钱的热路径分配发票、不产生第二份可漂移的金额，且保留原始判定才可准确复算未声明档位的兜底价。预留由 billing 持有，调用记录仍按请求编号关联；不允许 observability 跨模块查表。明细逐采样保留档位，避免将多档用量乘一个单价；原始未知字段名称不回显，只以 `unknown_tokens` / `unknown_uses` 展示，防止供应商内容泄漏。OpenRouter 的 [generation 元数据](https://openrouter.ai/docs/api/api-reference/generations/get-generation) 和[用量核算](https://github.com/OpenRouterTeam/docs/blob/main/cookbook/administration/usage-accounting.mdx)（2026-10-29 查）提供总收费、缓存用量与部分费用字段；未公布逐项售价/价格版本结构，Axiom 用 `charge_details` 扩展，并按本项目规则不返回其供应商成本字段。接口与存储判断依据为[负责人委托](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」；由流水线独立深审。风险检查：精度、缓存重叠的上下文档、混合服务档、免单与底线、未知用量、重试/迟到结算、账户隔离、旧记录、批量读取和热路径分配。
