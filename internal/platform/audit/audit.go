@@ -19,6 +19,9 @@ type Actor struct{ kind, id string }
 // User is a person signed in to the console or the admin.
 func User(id uuid.UUID) Actor { return Actor{"user", id.String()} }
 
+// ManagementKey is an independently authenticated programmatic key administrator.
+func ManagementKey(id uuid.UUID) Actor { return Actor{"management_key", id.String()} }
+
 // System is a job of ours acting on its own, named <module>.<job> such as catalog.sync.
 func System(job string) Actor { return Actor{"system", job} }
 
