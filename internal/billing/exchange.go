@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 	"uuid"
 
@@ -125,6 +127,10 @@ func checkExchangeChange(in ExchangeInput, next platform.ExchangeRate, previous 
 
 // SetExchangeRate appends and audits in the caller's platform transaction. The admin wraps it in idem.Once.
 func SetExchangeRate(ctx context.Context, tx pg.Tx, actor audit.Actor, in ExchangeInput) (BillingExchangeRate, error) {
+	return setExchangeRate(ctx, tx, actor, in, "manual", nil)
+}
+
+func setExchangeRate(ctx context.Context, tx pg.Tx, actor audit.Actor, in ExchangeInput, source string, sourceAt *time.Time) (BillingExchangeRate, error) {
 	r, err := in.normalized()
 	if err != nil {
 		return BillingExchangeRate{}, err
@@ -146,7 +152,7 @@ func SetExchangeRate(ctx context.Context, tx pg.Tx, actor audit.Actor, in Exchan
 	}
 	row, err := queries.InsertExchangeRate(ctx, tx, InsertExchangeRateParams{
 		ID: uuid.NewV7(), Base: r.Base, Quote: r.Quote, Version: in.ExpectedVersion + 1,
-		Numerator: r.Numerator, Denominator: r.Denominator, Kind: in.Kind, Reason: in.Reason, CreatedBy: actor.String(),
+		Numerator: r.Numerator, Denominator: r.Denominator, Kind: in.Kind, Reason: in.Reason, CreatedBy: actor.String(), Source: source, SourceAt: sourceAt,
 	})
 	if err != nil {
 		return row, fmt.Errorf("billing: append exchange rate: %w", err)
@@ -161,7 +167,7 @@ func SetExchangeRate(ctx context.Context, tx pg.Tx, actor audit.Actor, in Exchan
 
 // ExchangeRates reads all current pairs in one statement, so a build never mixes versions of a pair.
 func ExchangeRates(ctx context.Context, tx pg.Tx) ([]BillingExchangeRate, error) {
-	return queries.CurrentExchangeRates(ctx, tx)
+	return queries.CurrentExchangeRates(ctx, tx, slices.Sorted(maps.Keys(minorDigits)))
 }
 
 // ExchangeRateHistory reads at most 100 versions, newest first; before is an exclusive version cursor, zero for newest.

@@ -43,34 +43,34 @@ func refreshSalePrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency p
 	if err != nil {
 		return err
 	}
-	costs, err := publicationCosts(ctx, tx, currency)
+	costs, rates, err := publicationCosts(ctx, tx, currency)
 	if err != nil {
 		return err
 	}
-	_, err = billing.RefreshPrices(ctx, tx, site, currency, snap, costs)
+	_, err = billing.RefreshPrices(ctx, tx, site, currency, snap, costs, rates...)
 	return err
 }
 
-func publicationCosts(ctx context.Context, tx pg.Tx, currency platform.Currency) ([]billing.PriceCost, error) {
+func publicationCosts(ctx context.Context, tx pg.Tx, currency platform.Currency) ([]billing.PriceCost, []platform.ExchangeRate, error) {
 	rows, err := suppliers.PriceCosts(ctx, tx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	endpoints := make([]suppliers.Routable, len(rows))
 	for i, r := range rows {
 		value, err := platform.ParseUnitPrice(r.UnitValue)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		endpoints[i] = suppliers.Routable{ID: r.Endpoint, Model: r.Model, Currency: r.Currency, Schedule: r.Schedule, UnitValue: value, UnitValueID: r.UnitValueID}
 	}
 	exchange, err := billing.ExchangeRates(ctx, tx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rates := make([]platform.ExchangeRate, len(exchange))
 	for i, r := range exchange {
 		rates[i] = r.Basis()
 	}
-	return priceCosts(endpoints, rates, currency), nil
+	return priceCosts(endpoints, rates, currency), rates, nil
 }

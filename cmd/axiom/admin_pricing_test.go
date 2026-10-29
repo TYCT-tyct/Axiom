@@ -192,8 +192,6 @@ func TestPricingRuleRefusals(t *testing.T) {
 		{"a group", ruleJSON(`{"kind":"group","id":"`+f.model+`"}`, everything, faced), "/rule/target/kind"},
 		{"a supplier", ruleJSON(`{"kind":"supplier","id":"`+f.model+`"}`, everything, faced), "/rule/target/kind"},
 		{"a source type", ruleJSON(`{"kind":"source_type","id":"relay"}`, everything, faced), "/rule/target/kind"},
-		{"a multiplier by exchange", ruleJSON(`{"kind":"author","id":"acme"}`, everything,
-			`{"kind":"reference_multiplier","multiplier":"2","currency_conversion":"exchange"}`), "/rule/method/currency_conversion"},
 		{"a multiplier with no conversion named", ruleJSON(`{"kind":"author","id":"acme"}`, everything,
 			`{"kind":"reference_multiplier","multiplier":"2"}`), "/rule/method/currency_conversion"},
 		{"a model the catalog lacks", ruleJSON(`{"kind":"model","id":"0198c0a8-0000-7000-8000-000000000009"}`, everything, faced), ""},
@@ -273,5 +271,15 @@ func TestPricingRuleConstraintsWait(t *testing.T) {
 	}
 	if got := f.text("SELECT method->>'multiplier' FROM billing.pricing_rules"); got != "1.25" {
 		t.Errorf("the stored rule is at %s, want 1.25: the refused changes changed nothing", got)
+	}
+}
+
+func TestCreateExchangePricingRule(t *testing.T) {
+	t.Parallel()
+	f := newPricingFixture(t)
+	made := f.create(ruleJSON(everything, everything, `{"kind":"reference_multiplier","multiplier":"2","currency_conversion":"exchange"}`))
+	rows := f.list()
+	if len(rows) != 1 || rows[0].Id != made.Id || rows[0].Method.CurrencyConversion == nil || *rows[0].Method.CurrencyConversion != "exchange" {
+		t.Fatalf("exchange rule not stored: %+v", rows)
 	}
 }
