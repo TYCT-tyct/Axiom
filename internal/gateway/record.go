@@ -94,10 +94,10 @@ func refererOf(s string) string {
 	s = cleanHeader(s)
 	u, err := url.Parse(s)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		return truncate(s, maxAppReferer)
+		return headerText(s, maxAppReferer)
 	}
 	if u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.RawFragment == "" {
-		return truncate(s, maxAppReferer)
+		return headerText(s, maxAppReferer)
 	}
 	u.User, u.RawQuery, u.Fragment, u.RawFragment, u.ForceQuery = nil, "", "", "", false
 	return headerText(u.String(), maxAppReferer)
@@ -107,7 +107,7 @@ func refererOf(s string) string {
 // runes. The cut falls on a rune boundary, so the stored text is still valid. A clean value is returned as it came,
 // without allocating: this runs on the call path.
 func headerText(s string, n int) string {
-	return truncate(cleanHeader(s), n)
+	return strings.TrimSpace(truncate(cleanHeader(s), n))
 }
 
 // cleanHeader makes a header value safe to keep, without bounding its length: valid UTF-8, no control characters, and
