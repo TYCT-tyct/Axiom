@@ -37,6 +37,7 @@
 | `users` | `site_id`、`account_id`（个人账户）、`account_kind`（恒为 `personal` 的生成列）、`email`（规范化）、`email_verified_at`（邀请码注册为空，点击验证链接时写入）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_ciphertext`、`totp_nonce`、`totp_wrapped_dek`、`totp_key_version`（`secret.Sealed` 的四个字段，同为空或同不为空）、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, account_id, id)`；`UNIQUE (account_id)`、`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`：个人账户只属于这一个用户，不能绑到企业账户上，两个登录身份不会共用一个账户范围；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、四个 `totp_` 密文列、`totp_last_step`、`mfa_enabled_at` |
 | `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`：个人账户的成员只能是它唯一的用户，所以不需要另加部分唯一索引；`role_id → roles` | 账户 | 无，也没有 `UPDATE` 策略（移除成员随企业账户加 `removed_at`） |
 | `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)`；部分唯一 `(user_id, role_id) WHERE revoked_at IS NULL`：一个用户同一角色只有一条有效授予 | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态；恢复插入新授予） |
+| `presets` | `site_id`、`account_id`、slug、name、config、created_at、updated_at、deleted_at | 活跃 `(account_id,slug)` 唯一、复合账户外键 | 账户 | name、config、updated_at、deleted_at（终态） |
 | `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`updated_at`、`management_window`、`management_requests`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`、`rate_requests` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；请求计数 0–61（61 为已超限）；`limit_reset` 同工作区的 `budget_reset` | 账户 | `updated_at`、`management_window`、`management_requests`、`name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态）、`rate_requests` |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
@@ -112,7 +113,7 @@
 | `accounts.registration_tenant(domain, token_hash)` | 控制台域名、验证令牌的 SHA-256 | 待验证请求 `id`、`site_id`、邮箱和是否未过期；域名和令牌不匹配时无结果 |
 | `accounts.registration_request_tenant(id)` | 待验证请求 ID | `site_id`、空 `account_id`；供后台和点击链接时构造站点范围 |
 
-- 上述八个函数都已实现（迁移 00002、00003、00018）。`login_tenant` 只认控制台和管理后台的域名，`invite_tenant` 只认控制台域名。
+- 上述八个函数都已实现（迁移 00002、00003、00019）。`login_tenant` 只认控制台和管理后台的域名，`invite_tenant` 只认控制台域名。
 - 域名或站点停用、域名不属于这个监听面时都无结果；`key_tenant` 只认请求的站点和未删除的 key；都在库里判定，不看快照。都以请求的域名为条件，所以别站的 key、别站的会话令牌和不存在的走同一条路径。配置和密码哈希在拿到账户后用账户范围再读。
 - **函数的所有者是专用角色 `axiom_lookup`**，不用平台范围：它不能登录，不拥有任何表，`axiom_app` 不是它的成员（不能 `SetRole` 过去）。这几张表上只为它加 `FOR SELECT TO axiom_lookup USING (true)` 的策略，只授予函数要读的列。函数固定 `search_path = pg_catalog, pg_temp`，名字全部带 schema，只有 `axiom_app` 能执行。
 - 不在函数里设范围：`just scope` 禁止平台的 `pg` 之外出现范围参数，迁移也一样；按角色加策略不需要范围，也没有"函数返回后范围留在调用方事务里"的风险。
@@ -155,6 +156,12 @@
 | 负缓存 | 不存在的 `(site, 哈希)` | 默认 20 万条，60 秒；256 位随机串不会先被猜中再被创建 |
 
 **代价**：命中是一次 HMAC 加一次查表，基准测试进分配门槛。准入在预留的事务里多一条查询，计入[性能](../../docs/performance.md#延迟预算)准入那一格的 5ms；路由移进事务后，事务多开着路由计算的那段时间（"认站点和 key、读取请求、定规则、路由"那一格的预算），不持锁、不等待；限流计数和会话粘性在事务之前取好（M2 起是一次缓存往返），计入"限流和会话粘性"那一格，超时见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)。`BenchmarkAdmit` 在同一个库、同一个账户范围里对照空事务和 `Admit`：实现它的 PR 在开发机（Windows 上的 Docker Desktop，PostgreSQL 18，机器同时在跑别的测试）测得增量约 0.5–0.9ms（各 6 轮×5000 次，空事务中位 2.4ms、`Admit` 中位 3.2ms；最快一轮 1.2ms 对 1.7ms），即准入查询多出的一次往返；全程 p95 在 gateway 和 billing 接上后、在与核心同机房的库上验收。命中路径（`BenchmarkKnownKey`）约 4µs、10 次分配。冷的未命中另有一个事务，只在未命中时发生。
+
+### 命名请求配置
+
+`accounts.presets` 保存账户的 `{slug,name,config}`，业务合并规则与来源在[路由的「命名预设」](../../docs/domains/routing.md#命名预设)。`SavePreset`、`GetPreset`、`ListPresets`、`DeletePreset` 在调用者的事务里显式限定账户；创建/替换用账户行锁串行化，创建锁内检查数量与唯一 slug，配置和审计原子提交。配置不写入审计明细，避免系统提示和工具说明进入通用日志。删除只置 deleted_at，旧行不能改回；名字重建用新 UUID。迁移 `00018_presets.sql` 的 SELECT/INSERT/UPDATE 均启用并强制 RLS，仅授予 name、config、updated_at、deleted_at 更新权限。
+
+配置快照随站点快照整体发布，键为站点、账户、slug；`PresetConfig` 返回不可变字符串，不能把内部切片借给调用者。读写边界检查白名单、递归引用和瞬态字段；保存前用 PostgreSQL 规范化为 jsonb 文本，输入与存储文本均以 16 KiB 为限，数据库约束使用同一存储上限。数字指数展开超限或 jsonb 不支持的值（如 NUL）返回 ErrPreset，写入和审计均不发生。重载对不合法的单条配置记告警并跳过（日志仅含 ID 和原因），避免租户数据或滚动升级的新字段阻断全平台刷新；数据库读取失败仍阻止快照发布，超过既有陈旧期限拒绝请求。这里保存配置，不依赖 protocol 或 routing；协议解析与参数的最终可执行性由 gateway 在合并后检查。`TestAccountPresets` 覆盖同名隔离、RLS、快照、删除重建和审计；`TestPresetLimitConcurrent` 用两个真实事务竞争最后一个名额。`TestPresetStoredBoundary`、`TestPresetDatabaseSizeBoundary` 检查存储表示的边界和失败写入的原子性，`TestPresetReloadSkipsInvalidRows` 检查坏行与未来字段的故障隔离。
 
 ### 程序化 key 管理
 

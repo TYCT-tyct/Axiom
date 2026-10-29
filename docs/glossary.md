@@ -99,7 +99,7 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 声明式适配器 | declarative_adapter | 用后台配置而不是代码描述的适配器，用于只是接口路径和字段名不同的自研中转站 |
 | 回退路线 | `routing.Plan`（调用记录的 `route` 列） | 路由为一个请求排好的端点顺序，预留前定死，见[路由](domains/routing.md) |
 | 会话粘性 | `routing.SessionKey`、`Sticky` | 同一会话优先走上一次的端点，以提高缓存命中 |
-| 预设 | preset | 服务端保存的命名配置，第一版只含端点的筛选和排序规则，可挂在 API key 上；与 OpenRouter 的 Presets 是同一个概念，以后可以扩展到模型参数 |
+| 预设 | preset | 服务端保存的命名配置，命名请求配置包含模型、provider、生成参数、系统提示和工具，按账户管理；key 绑定的强制端点筛选规则仍独立执行，见[路由](domains/routing.md#命名预设) |
 | 请求 / 尝试 | request / attempt | 用户的一次调用，保存下来就是调用记录 / 对上游的一次调用 |
 | 请求 ID / 调用编号 | request_id（`platform.RequestID`） | 服务端为每个请求生成的唯一编号，对用户叫调用编号；放在 `X-Request-ID` 和 `X-Generation-Id` 两个响应头里（同一个值）和响应体的 `id` 里，日志、账本、调用记录和出错提示都用它 |
 | 尝试序号 | attempt_seq（`platform.AttemptSeq`） | 一个请求里第几次尝试，从 1 起，在向上游发出请求时分配；请求 ID 加尝试序号是一次尝试的身份 |

@@ -10,9 +10,9 @@
 - 来源列里 `docs/` = `https://openrouter.ai/docs/`，`api/` = `https://openrouter.ai/docs/api/api-reference/`，`spec` = OpenAPI 规范里的 schema 名。
 - Axiom 范围声明：`docs/product.md:92` 把向量化、重排、图片/视频/语音生成、批量调用、Auto Router 划在「以后」；用户自带厂商 key 划在「以后」（`docs/product.md:96`）。表里这些行照实标「没有」，缺口排序时单独考虑。
 
-## 文档与代码不符的地方（本表建立时已在 gateway.md 改正）
+## 文档与代码的一致性
 
-1. `docs/domains/gateway.md:151` 写接受 `@preset/名称`；全仓库代码没有解析 `@preset` 的地方（`gw/route.go:270-272` 只有一个零号预设，注释说明 M1 只路由零号预设），目录名字解析遇到 `:` 就查不到（`cat/snapshot.go:215`）。
+命名预设已由 `gw/presets.go`、`proto/presets.go` 在目录认名前展开；key 的强制端点过滤预设仍独立执行，现有零号预设不代表没有命名配置。预设与会话/回退的 OpenRouter 来源于 2026-10-29 复核，规则与来源链接见[路由](domains/routing.md#命名预设)。
 
 ## 1. 三种调用格式
 
@@ -21,7 +21,7 @@
 | `POST /api/v1/chat/completions` | OpenAI Chat 格式，`choices` 恒为数组，流式用 `delta`；以 Chat 为基准格式 | docs/api_reference/overview | 有：`gw/handler.go:66-68` 注册 `/v1` 与 `/api/v1` 两个前缀 | `na:router/relay-router.go:105` | `s2:internal/server/routes/gateway.go:233` | 无；Chat 客户端可以走 Chat、Messages、Responses 端点（`docs/domains/gateway.md` 转发规则「跨格式」），Messages、Responses 客户端也可转换到只说 Chat 的端点（#301 B） |
 | `POST /api/v1/responses` | OpenAI Responses 格式，无状态 | docs/api_reference/responses/overview | 有：`gw/handler.go:66-68`；比 OpenRouter 多保存会话状态（文档偏离项） | `na:router/relay-router.go:110`（compact）及 `/responses` | `s2:internal/server/routes/gateway.go:214,221` | 无 |
 | `POST /api/v1/messages` | Anthropic Messages 格式 | api/anthropic-messages/create-a-message | 有：`gw/handler.go:66-68` | `na:router/relay-router.go:97` | `s2:internal/server/routes/gateway.go:192` | 无 |
-| Messages 的 `fallbacks` 参数（最多 3 项，只许 `model`，不能与 `models` 同用） | 映射到 `models` 路由 | docs/guides/routing/model-fallbacks | 没有：未映射到 `models`；`fallbacks` 不在 `proto/prepare.go:281` 的丢弃名单里，Messages 顶层对未知成员的处理未核实（待核实：原样转给上游，还是由 scanner 拒绝） | 无 | 无 | Anthropic SDK 用户的备选模型写法是否生效未核实 |
+| Messages 的 `fallbacks` 参数（最多 3 项，只许 `model`，不能与非 null `models` 同用） | 映射到 `models` 路由 | docs/guides/routing/model-fallbacks | 有：`proto/presets.go` 读取到 `Request.Models`，由 gateway 交给同一冻结路线；Prepare 删除该成员 | 无 | 无 | 无 |
 | `POST /api/v1/messages/count_tokens` | OpenRouter 文档未列此路由 | （OpenAPI 路由表无） | 有：`gw/handler.go` 经 `gw/readonly.go:35` | `na:router/relay-router.go:96`（已注释掉） | `s2:internal/server/routes/gateway.go:203` | Axiom 比 OpenRouter 多，非缺口 |
 | `POST /v1/completions`（旧版补全） | OpenAPI 路由表没有该路径；Streaming 文档的措辞提到 completions | docs/api_reference/streaming | 没有：只注册 chat/responses/messages（`gw/handler.go:66`） | `na:router/relay-router.go:102` | 无 | OpenRouter 自己现在也不列它，低优先 |
 | 流式 SSE，注释保活，`data: [DONE]` | 偶发 `: OPENROUTER PROCESSING` 注释；Chat 流最后带 usage 的一块 | docs/api_reference/streaming | 有：保活 `proto/relay.go:429,598`，Chat 最后一块带 usage（`docs/domains/gateway.md:73`） | 有（ping，见差分规则） | 有 | 无 |
@@ -77,7 +77,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 默认价格加权负载均衡（按价格平方倒数、近 30 秒无故障优先） | 默认策略 | docs/guides/routing/provider-selection | 部分：默认是价格加权随机（`docs/domains/routing.md` 决策与理由），加权公式未核对是否一致 | 无（渠道权重） | 无 | 行为相近，公式可能不同 |
 | 失败后换端点 | 按序回退直到成功 | docs/guides/routing/provider-selection | 有：`gw/attempt.go`、`rt/plan.go:60`（`MaxAttempts`） | `na:controller/relay.go:177`（`RetryTimes`） | `s2:internal/service/gateway_anthropic_passthrough.go:802`（failover） | 无 |
 | 工具调用请求的 Auto Exacto 重排 | 有 `tools` 时按工具调用成功率重排 | docs/guides/routing/auto-exacto | 部分：`rt/rank.go:68` 按实测工具调用错误率排序；只在「均衡」「质量优先」策略下生效（`docs/domains/routing.md:74`） | 无 | 无 | 需要 #313 的端点健康数据 |
-| 会话粘性（`session_id`、`x-session-id` 头、`prompt_cache_key`，≤256 字符，10 分钟） | 缓存命中靠粘到同一供应商 | docs/guides/best-practices/prompt-caching | 部分：体内 `session_id`/`prompt_cache_key` 有（`rt/session.go:78`）；会话请求头转发给上游、值换成派生值（`gw/headers.go`），自己的粘性还没读它们；还会用首条消息哈希（`rt/session.go:80-85`） | 无 | 无 | 缺按请求头的分组（转发已有，中转站据此固定账号）；Embeddings/TTS 等端点要求用头分组 |
+| 会话粘性（`session_id`、`x-session-id` 头、`prompt_cache_key`，≤256 字符，10 分钟） | 缓存命中靠粘到同一供应商 | docs/guides/best-practices/prompt-caching | 有：body session_id 优先于 x-session-id，再取缓存键与既有身份回退；`gw/handler.go`、`rt/session.go`，键含账户，头转发仍派生隔离 | 无 | 无 | 本站默认一小时、使用不续期；理由见 routing.md「会话粘性」；Embeddings/TTS 不在当前范围 |
 | `models` 数组（备选模型，主模型失败/限流/审核时顺序尝试，按最终使用的模型计价） | 跨模型回退 | docs/guides/routing/model-fallbacks | 有：解析 `proto/grammar.go:148-157`（最多 8 个），逐个模型排端点 `rt/plan.go:45-58`；默认关闭跨模型，只有请求给出 `models` 才开 | 无 | 无 | 无 |
 | `route: "fallback"`（旧参数） | 老客户端会发 | spec `ChatRequest.route` | 部分：接受并丢弃（`proto/prepare.go:281`） | 无 | 无 | 丢弃而不报错，对旧参数是对的 |
 | `service_tier`（priority/flex/ultrafast 等）与端点分级计价 | 控制成本/延迟，按实际层级计费 | docs/guides/features/service-tiers | 部分：识别并按层级定价（`proto/grammar.go:57,76,363`，`proto/prepare.go:135-143`）；`:nitro/:floor` 只带来排序，没有它们说的层级准入（不写 `service_tier` 的请求本来可由 standard、priority 服务，`proto/inspect.go:141`；flex 要客户端自己写） | 无 | 无 | 层级定义见 `docs/domains/catalog.md`；为 `:floor` 准入 flex 要决定是否改写上游的 `service_tier`，见 `docs/domains/gateway.md` 待定问题 |
@@ -142,7 +142,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | Anthropic 缓存：`cache_control` 放在内容块上（≤4 个断点）或请求顶层（自动缓存），`ttl: "1h"` | 显式/自动缓存 | docs/guides/best-practices/prompt-caching | 部分：内容块和工具上的 `cache_control` 同格式原样转发、Chat 转 Messages 时保留（`proto/tomessages.go:347,418`）；请求顶层 `cache_control` 的处理未核实 | 有（`claude_cache_creation_*`，差分规则） | 有 | 顶层自动缓存字段要核实 |
 | OpenAI 显式缓存：`prompt_cache_breakpoint`、`prompt_cache_options{mode,ttl}` | 显式断点 | 同上 | 部分：Chat 转 Responses 时把文本块的 `cache_control` 转成断点（`proto/toresponses.go:133`）；`prompt_cache_options` 没有专门处理 | 无 | 无 | 低优先 |
 | 缓存用量：`usage.prompt_tokens_details.cached_tokens`、`cache_write_tokens` | 读/写缓存 token | docs/guides/best-practices/prompt-caching | 有：`proto/openai.go:36,137` | 部分（字段名不同） | 部分 | 无 |
-| `session_id`/`x-session-id`/`prompt_cache_key` 粘性 | 见 §3 | 同上 | 部分：体内有；请求头转发给上游、值换成派生值，自己的粘性还没读它们 | 无 | 无 | 缺按请求头的分组 |
+| `session_id`/`x-session-id`/`prompt_cache_key` 粘性 | 见 §3 | 同上 | 有：实现与优先级见 §3、`gw/handler.go` 与 `rt/session.go` | 无 | 无 | 有效期差异见 §3 |
 | 响应缓存：请求头 `X-OpenRouter-Cache`、`-TTL`、`-Clear`，响应头 `X-OpenRouter-Cache-Status/-Age/-TTL/-Source-Id`；预设里 `cache_enabled`、`cache_ttl_seconds`；命中免费 | 网关级整包响应缓存，按 key 隔离 | docs/guides/features/response-caching | 没有：全仓库无这些头 | 无 | 无 | 单独的特性，需先定数据保留政策（`docs/product.md:82` 内容保存由平台统一决定） |
 | `response_format`：`json_object`、`json_schema`(strict) | 结构化输出，按端点支持 | docs/guides/features/structured-outputs | 有：`proto/grammar.go:76,132`、`proto/canon.go:31,280` 识别并作为能力要求，端点不支持则不参与路由 | 有 | 有 | 无 |
 | 响应修复插件 `response-healing` | 非流式 JSON 修复 | docs/guides/features/plugins/response-healing | 已实现：非流式 Chat JSON 的本地语法修复（§10） | 无 | 无 | 见 §10 |
@@ -232,9 +232,9 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| 请求里 `model: "@preset/slug"`、`model: "provider/model@preset/slug"`、请求体 `preset: "@preset/slug"` | 配置与代码分离，覆盖 model/provider/参数/系统提示/工具 | docs/guides/features/presets | 没有：代码里没有 `@preset` 解析，名字含 `:`/`@` 查不到；`docs/domains/gateway.md:150` 写了支持，实际没有（`gw/route.go:265-270` 只有零号预设） | 无 | 无 | 产品范围里预设属于第一版（`docs/product.md:93`），但网关侧没做 |
-| `/api/v1/presets` 列表、详情、版本、`POST /presets/{slug}/chat/completions|messages|responses`（从请求体创建预设）、版本回滚 | 预设管理 API | api/presets/* | 没有 | 无 | 无 | 同上 |
-| 预设里的 `tools`（含服务端工具）、`cache_enabled`、`cache_ttl_seconds`、系统提示 | 预设内容 | docs/guides/features/presets | 没有 | 无 | 无 | 同上 |
+| 请求里 `model: "@preset/slug"`、`model: "provider/model@preset/slug"`、请求体 `preset: "@preset/slug"` | 配置与代码分离，覆盖 model/provider/参数/系统提示/工具 | docs/guides/features/presets | 有：gateway 展开账户配置，protocol 负责引用与合并 | 无 | 无 | 请求浅覆盖、tools 按身份合并，规则见 routing.md「命名预设」 |
+| `/api/v1/presets` 列表、详情、版本、`POST /presets/{slug}/chat/completions|messages|responses`（从请求体创建预设）、版本回滚 | 预设管理 API | api/presets/* | 账户 CRUD 与控制台 API 已有 | 无 | 无 | 版本历史、版本指定与从推理请求建版本未实现；响应直接返回 config |
+| 预设里的 `tools`（含服务端工具）、`cache_enabled`、`cache_ttl_seconds`、系统提示 | 预设内容 | docs/guides/features/presets | 系统提示、函数工具与生成参数已有 | 无 | 无 | 服务端工具仍按现有报价边界拒绝；响应缓存配置未实现 |
 
 ## 15. Key 管理（Management / provisioning keys）
 
@@ -274,16 +274,16 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 
 1. 【插件已落实，独立参数仍有缺口】`plugins` / `transforms` 已执行本地修复/压缩或明确 400（§10），不再静默丢弃；`route`、`usage`、`auto-router` 尚无实现。→ #311
 2. 【静默失效】`openrouter:web_search` 等服务端工具类型不被识别（`proto/grammar.go:46,66`），Responses/Chat 里带这类工具的请求行为未定；联网搜索只有厂商原生的。→ #311
-3. 【硬失败，部分已补】模型名后缀：`:nitro`、`:floor` 已支持（排序一半，`gw/variant.go`）；`:exacto`、`:online` 现在回 400 并说明原因，`:free`、`:thinking` 等目录变体回 400 并说明本站无法表示独立条目；`~anthropic/claude-sonnet-latest` 这类别名回 400 暂不支持，需要显式模型族与可切换别名映射，不能猜最新版本；`@preset/…`（文档说支持、代码没有）仍查不到。→ #311（别名解析、`:nitro/:floor` 的层级准入）；`@preset/` 前缀随预设一起归 #313
+3. 【硬失败，部分已补】模型名后缀：`:nitro`、`:floor` 已支持（排序一半，`gw/variant.go`）；`:exacto`、`:online` 现在回 400 并说明原因，`:free`、`:thinking` 等目录变体回 400 并说明本站无法表示独立条目；`~anthropic/claude-sonnet-latest` 这类别名回 400 暂不支持，需要显式模型族与可切换别名映射，不能猜最新版本；`@preset/…` 已在 catalog 认名前按账户快照展开。→ #311（别名解析、`:nitro/:floor` 的层级准入）；`@preset/` 前缀随预设一起归 #313
 4. 【明确偏离】`provider.order/only/ignore` 按公开分组代号生效，关闭回退、三种排序与对象分区已支持。`require_parameters:true`、非空 `quantizations`、`enforce_distillable_text`、百分位对象、`max_price.request/image` 缺必要事实或计费单位而明确 400；来源和理由见 `docs/domains/gateway.md` 的路由参数。→ #313
 5. 【模型元数据】`GET /api/v1/models` 与 `/api/v1/models/{model}` 已是 OpenRouter 的模型对象：`pricing`（十个按 token / 按次计价的成员，取主站售价）、`context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`、`links.details`，外加查询参数过滤、排序和分页；`id` 是公开标准 ID，列表与路由快照同一次构建、一起发布，价格就是收费的价格。仍缺 `description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`（目录没有这些数据，整个不输出）、`alias_target`、`benchmarks`、按图与按请求计价（#320）；`created` 恒 0、`default_parameters`/`supported_voices`/`per_request_limits` 是 null（都是 Axiom 没有的数据，填位置而不编造）。SDK 的模型选择器、编码代理的上下文窗口探测、成本估算已经可用。→ #311
-6. 【预设】`@preset/…`、`preset` 字段、`/api/v1/presets` 全部没有，但产品范围把预设列在第一版（`docs/product.md:93`）；`docs/domains/gateway.md:150` 与代码不符，先改文档或做功能。→ #313（预设属于路由配置）
+6. 【预设，已补】`@preset/…`、`preset` 字段与账户 CRUD 已实现（gateway/presets.go、accounts/presets.go、api/console.yaml）；版本 API 与响应缓存仍未实现。→ #313（预设属于路由配置）
 7. 【错误形态，部分已补】新增 `context_length_exceeded`、`permission_denied`、`content_policy_violation`、`payload_too_large` 与 403，HTTP/SSE 分类一致；`code` 保持字符串（含 403，有意差异，见 [gateway 决策](domains/gateway.md#决策与理由)）。图片类等细分仍缺；预算耗尽仍用 402 而不是 OpenRouter 的 403+`limit_source`。→ #311
 8. 【Chat 上游】Chat 客户端调用说 Chat 的端点是同格式转发（#301 A，`proto/prepare.go` 的 Chat 规则、`rt/plan.go` 的 `callFormat`）；Messages、Responses 到 Chat 的请求、流及聚合转换（#301 B）与三种原生格式一同纳入差分测试，不能表达的成员按跨格式策略拒绝。→ #311（#301）
 9. 【推理】`reasoning.max_tokens` 跨格式近似、`effort: xhigh/max/minimal`、关闭与隐藏已核实实现，映射及边界见 [protocol 换算表](../internal/protocol/README.md#推理控制与换算)。模型列表的 `reasoning` 仍只给 `supports_max_tokens`（按方言的手动预算判断）；未知 mandatory、模型支持的 effort 列表不声称。→ #311
 10. 【读取类】`GET /api/v1/models/{author}/{slug}/endpoints`、`/models/user`、`/models/count`、`/providers` 已提供内存快照投影（字段偏离和实时准入的 DB 例外见 gateway.md），`/endpoints/zdr` 没有；`/generation` 缺 `native_tokens_*`、`cache_discount`、`session_id`、`streamed/cancelled` 等，`/generation/content`、`/generation/feedback`、`/activity` 没有。→ `/endpoints` 等归 #311；`/generation`、`/activity` 归 #319
 11. 【用量字段】`usage.cost_details`（含 `server_tool_cost`）、`is_byok`、`completion_tokens_details` 的音频/预测项、返回给客户端的 `prompt_tokens_details` 音频/视频明细、`cache_discount`、Chat 里的 `server_tool_use_details` 没有；响应 `model` 回显请求名而不是实际使用的模型（用 `models` 回退时看不出换了谁）。→ #319
-12. 【会话与归因】会话请求头（`x-session-id` 等）转发给 Responses、Chat 端点并换成分值（`gw/headers.go`），Axiom 自己的粘性还没按它分组；`X-OpenRouter-Title`/`HTTP-Referer`/`X-OpenRouter-Categories` 已记入调用记录并出现在控制台的调用列表与详情，但没有应用页和排名；Anthropic Messages 的 `fallbacks` 参数不生效。→ #313（session 头、fallbacks）
+12. 【会话与归因】会话请求头（`x-session-id` 等）转发给 Responses、Chat 端点并换成分值（`gw/headers.go`），Axiom 自己的粘性已按 x-session-id 分组，请求体 session_id 优先；`X-OpenRouter-Title`/`HTTP-Referer`/`X-OpenRouter-Categories` 已记入调用记录并出现在控制台的调用列表与详情，但没有应用页和排名；Anthropic Messages 的 `fallbacks` 已映射到路由备选模型。→ #313（session 头、fallbacks）
 13. 【限流】E4-2/P13 已实现：共享账户/key 计数、等级默认与账户覆盖、请求速率 429 的 `X-RateLimit-*` 头、`GET /key` 的 `rate_limit`、`budgets`、`effective_budget`；付费模型平台限流等有意差异见[接入](domains/gateway.md#业务速率与-openrouter-的差异)。→ #315
 14. 【管理 API】`/api/v1/keys` 系列已提供管理 key 认证的调用 key CRUD（E4-9/P14）；限制与 OpenRouter 的差异见[账户域](domains/accounts.md#api-key)；`/workspaces`、`/guardrails`、`/organization` 管理 API 没有。→ #315（key）、#317（工作区/护栏的界面）
 15. 【响应缓存】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置没有；涉及内容保存政策，需要负责人定。→ 新建

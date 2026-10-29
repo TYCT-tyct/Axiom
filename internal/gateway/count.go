@@ -55,7 +55,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	c := &Call{caller: caller}
+	c := &Call{caller: caller, site: site, Format: protocol.Messages}
 	defer c.Done()
 	slot, err := h.Limits.InFlight.Acquire(accountKey(caller), 0)
 	if err != nil {
@@ -66,7 +66,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	req, err := protocol.Inspect(protocol.Messages, body)
+	_, req, err := h.expandPreset(c, body)
 	if err != nil {
 		return 0, err
 	}
