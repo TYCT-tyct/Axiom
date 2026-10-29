@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/gateway"
 	"axiom/internal/observability"
@@ -73,7 +74,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nodeRoutes{}, err
 	}
 	public := withModelCalls(
-		publicRoutes(consoleAPI{exit: exit, version: version(), accounts: service, payments: pay, db: db},
+		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, db: db},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})
