@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"uuid"
+
+	"github.com/jackc/pgx/v5" //nolint:depguard // execution-mode option only; statements still use the caller's scoped transaction
 )
 
 // These handwritten statements batch rows with unnest or paged VALUES; sqlc cannot type
@@ -106,27 +108,15 @@ func InsertChargeRecords(ctx context.Context, db DBTX, supplier uuid.UUID, rows 
 // ProjectionPageSize bounds statement parameters and payloads for large listings.
 const ProjectionPageSize = 1000
 
-// ProjectedGroup allocates a group identity before its dependent rows are written.
-type ProjectedGroup struct {
-	ID uuid.UUID
-	InsertProjectedGroupParams
-}
-
-// ProjectedEndpoint allocates an endpoint identity before its cost schedules are written.
-type ProjectedEndpoint struct {
-	ID uuid.UUID
-	InsertProjectedEndpointParams
-}
-
 // ProjectionWrites contains only differences selected by the projector. Apply keeps dependency order;
 // the caller owns the transaction, so a failed page rolls back the entire listing.
 type ProjectionWrites struct {
-	Groups           []ProjectedGroup
+	Groups           []InsertProjectedGroupParams
 	ChangedGroups    []UpdateProjectedGroupParams
 	AbsentGroups     []uuid.UUID
 	Models           []UpsertProjectedModelParams
 	AbsentModels     []SetProjectedModelAbsentParams
-	Endpoints        []ProjectedEndpoint
+	Endpoints        []InsertProjectedEndpointParams
 	ChangedEndpoints []UpdateProjectedEndpointParams
 	Costs            []EnsureCostScheduleParams
 	UnknownCosts     []UnsetProjectedEndpointCostParams
@@ -143,15 +133,15 @@ func (w *ProjectionWrites) Apply(ctx context.Context, db DBTX) error {
 func (w *ProjectionWrites) applyNames(ctx context.Context, db DBTX) error {
 	if err := projectionPages(ctx, db, w.Groups, `
 INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, last_seen_at)
-VALUES `, ``, []string{"uuid", "uuid", "text", "text", "numeric", "jsonb", "timestamptz"}, func(r ProjectedGroup) []any {
-		return []any{r.ID, r.SupplierID, r.UpstreamRef, r.Name, r.Ratio, r.Facts, r.SeenAt}
+VALUES `, ``, []string{"uuid", "uuid", "text", "text", "numeric", "jsonb", "timestamptz"}, func(r InsertProjectedGroupParams) []any {
+		return []any{r.ID, r.SupplierID, r.UpstreamRef, r.Name, r.Ratio, string(r.Facts), r.SeenAt}
 	}); err != nil {
 		return fmt.Errorf("project groups: %w", err)
 	}
 	if err := projectionPages(ctx, db, lastProjectionRows(w.ChangedGroups, func(r UpdateProjectedGroupParams) uuid.UUID { return r.ID }), `
 UPDATE suppliers.supplier_groups AS t SET name = v.name, ratio = v.ratio, facts = v.facts, present = true, last_seen_at = v.seen_at
 FROM (VALUES `, `) AS v(id, name, ratio, facts, seen_at) WHERE t.id = v.id`, []string{"uuid", "text", "numeric", "jsonb", "timestamptz"}, func(r UpdateProjectedGroupParams) []any {
-		return []any{r.ID, r.Name, r.Ratio, r.Facts, r.SeenAt}
+		return []any{r.ID, r.Name, r.Ratio, string(r.Facts), r.SeenAt}
 	}); err != nil {
 		return fmt.Errorf("project changed groups: %w", err)
 	}
@@ -186,7 +176,7 @@ FROM (VALUES `, `) AS v(group_id, name) WHERE t.supplier_group_id = v.group_id A
 func (w *ProjectionWrites) applyEndpoints(ctx context.Context, db DBTX) error {
 	if err := projectionPages(ctx, db, w.Endpoints, `
 INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
-VALUES `, ``, []string{"uuid", "uuid", "uuid", "uuid", "text", "text[]"}, func(r ProjectedEndpoint) []any {
+VALUES `, ``, []string{"uuid", "uuid", "uuid", "uuid", "text", "text[]"}, func(r InsertProjectedEndpointParams) []any {
 		return []any{r.ID, r.SupplierID, r.SupplierGroupID, r.ModelID, r.UpstreamName, r.Formats}
 	}); err != nil {
 		return fmt.Errorf("project endpoints: %w", err)
@@ -211,7 +201,7 @@ WITH wanted(supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
 )
 UPDATE suppliers.endpoints e SET cost_state = 'known', cost_schedule_id = s.id, cost_state_reason = NULL
 FROM schedules s WHERE e.id = s.endpoint_id`, []string{"uuid", "uuid", "text", "jsonb", "text", "text"}, func(r EnsureCostScheduleParams) []any {
-		return []any{r.SupplierID, r.EndpointID, r.NativeUnit, r.Schedule, r.Basis, r.Fingerprint}
+		return []any{r.SupplierID, r.EndpointID, r.NativeUnit, string(r.Schedule), r.Basis, r.Fingerprint}
 	}); err != nil {
 		return fmt.Errorf("project costs: %w", err)
 	}
@@ -227,6 +217,7 @@ FROM (VALUES `, `) AS v(id, reason) WHERE t.id = v.id AND t.cost_state = 'known'
 
 // Explicit casts keep nullable values and all-null columns typed. VALUES also supports ragged
 // format arrays without padding them, unlike a multidimensional PostgreSQL array.
+// JSON is passed as text: uncached execution otherwise infers []byte as bytea.
 func projectionPages[T any](ctx context.Context, db DBTX, rows []T, prefix, suffix string, types []string, values func(T) []any) error {
 	for start := 0; start < len(rows); start += ProjectionPageSize {
 		page := rows[start:min(start+ProjectionPageSize, len(rows))]
@@ -248,6 +239,8 @@ func projectionPages[T any](ctx context.Context, db DBTX, rows []T, prefix, suff
 			args = append(args, values(r)...)
 		}
 		sql.WriteString(suffix)
+		// Tail pages have varying SQL text; caching them would evict hot-path statements.
+		args = append([]any{pgx.QueryExecModeExec}, args...)
 		if _, err := db.Exec(ctx, sql.String(), args...); err != nil {
 			return fmt.Errorf("rows %d-%d: %w", start+1, start+len(page), err)
 		}

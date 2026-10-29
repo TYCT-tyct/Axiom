@@ -180,7 +180,7 @@ func (p *projector) group(g syncer.GroupSnap, found store.ListProjectedGroupsRow
 	}
 	if found.ID == uuid.Nil() {
 		id := uuid.NewV7()
-		p.writes.Groups = append(p.writes.Groups, store.ProjectedGroup{
+		p.writes.Groups = append(p.writes.Groups, store.InsertProjectedGroupParams{
 			ID:         id,
 			SupplierID: p.id, UpstreamRef: g.Ref, Name: g.Name, Ratio: g.Ratio, Facts: facts, SeenAt: &p.now,
 		})
@@ -412,7 +412,7 @@ func (p *projector) makeEndpoint(key modelKey, d desiredEndpoint) {
 		return
 	}
 	id := uuid.NewV7()
-	p.writes.Endpoints = append(p.writes.Endpoints, store.ProjectedEndpoint{
+	p.writes.Endpoints = append(p.writes.Endpoints, store.InsertProjectedEndpointParams{
 		ID:         id,
 		SupplierID: p.id, SupplierGroupID: key.group, ModelID: key.model, UpstreamName: d.upstream, Formats: d.formats,
 	})

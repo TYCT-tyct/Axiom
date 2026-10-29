@@ -24,12 +24,12 @@ import (
 func rowProjection(ctx context.Context, db store.DBTX, w store.ProjectionWrites) error {
 	q := store.New()
 	writes := []func() error{
-		func() error { return rowQueries(ctx, db, w.Groups, insertRowGroup) },
+		func() error { return rowQueries(ctx, db, w.Groups, q.InsertProjectedGroup) },
 		func() error { return rowQueries(ctx, db, w.ChangedGroups, q.UpdateProjectedGroup) },
 		func() error { return rowQueries(ctx, db, w.AbsentGroups, q.SetProjectedGroupAbsent) },
 		func() error { return rowQueries(ctx, db, w.Models, q.UpsertProjectedModel) },
 		func() error { return rowQueries(ctx, db, w.AbsentModels, q.SetProjectedModelAbsent) },
-		func() error { return rowQueries(ctx, db, w.Endpoints, insertRowEndpoint) },
+		func() error { return rowQueries(ctx, db, w.Endpoints, q.InsertProjectedEndpoint) },
 		func() error { return rowQueries(ctx, db, w.ChangedEndpoints, q.UpdateProjectedEndpoint) },
 		func() error { return rowQueries(ctx, db, w.Costs, setRowCost) },
 		func() error { return rowQueries(ctx, db, w.UnknownCosts, q.UnsetProjectedEndpointCost) },
@@ -49,20 +49,6 @@ func rowQueries[T any](ctx context.Context, db store.DBTX, rows []T, write func(
 		}
 	}
 	return nil
-}
-
-func insertRowGroup(ctx context.Context, db store.DBTX, r store.ProjectedGroup) error {
-	_, err := db.Exec(ctx, `INSERT INTO suppliers.supplier_groups
- (id, supplier_id, upstream_ref, name, ratio, facts, last_seen_at) VALUES ($1,$2,$3,$4,$5::numeric,$6::jsonb,$7)`,
-		r.ID, r.SupplierID, r.UpstreamRef, r.Name, r.Ratio, r.Facts, r.SeenAt)
-	return err
-}
-
-func insertRowEndpoint(ctx context.Context, db store.DBTX, r store.ProjectedEndpoint) error {
-	_, err := db.Exec(ctx, `INSERT INTO suppliers.endpoints
- (id,supplier_id,supplier_group_id,model_id,upstream_name,formats) VALUES ($1,$2,$3,$4,$5,$6)`,
-		r.ID, r.SupplierID, r.SupplierGroupID, r.ModelID, r.UpstreamName, r.Formats)
-	return err
 }
 
 func setRowCost(ctx context.Context, db store.DBTX, r store.EnsureCostScheduleParams) error {
@@ -130,7 +116,7 @@ func newProjection(supplier uuid.UUID, n int) store.ProjectionWrites {
 	var w store.ProjectionWrites
 	group := uuid.NewV7()
 	now := t0
-	w.Groups = append(w.Groups, store.ProjectedGroup{
+	w.Groups = append(w.Groups, store.InsertProjectedGroupParams{
 		ID:         group,
 		SupplierID: supplier, UpstreamRef: "default", Name: "Default", Ratio: "1.25", Facts: []byte(`{"platform":"openai"}`), SeenAt: &now,
 	})
@@ -142,7 +128,7 @@ func newProjection(supplier uuid.UUID, n int) store.ProjectionWrites {
 			formats = append(formats, "responses")
 		}
 		w.Models = append(w.Models, store.UpsertProjectedModelParams{SupplierID: supplier, SupplierGroupID: group, UpstreamName: name, ModelID: &model, Formats: formats})
-		w.Endpoints = append(w.Endpoints, store.ProjectedEndpoint{
+		w.Endpoints = append(w.Endpoints, store.InsertProjectedEndpointParams{
 			ID:         endpoint,
 			SupplierID: supplier, SupplierGroupID: group, ModelID: model, UpstreamName: name, Formats: formats,
 		})
@@ -267,25 +253,17 @@ func (c *countedProjection) QueryRow(ctx context.Context, sql string, args ...an
 	return c.DBTX.QueryRow(ctx, sql, args...)
 }
 
-func BenchmarkProjection10k(b *testing.B) {
+func BenchmarkProjectionPage(b *testing.B) {
 	db, supplier := projectionDB(b)
-	w := newProjection(supplier, 10000)
-	for name, apply := range map[string]func(context.Context, store.DBTX, store.ProjectionWrites) error{
-		"row":   rowProjection,
-		"batch": func(ctx context.Context, db store.DBTX, w store.ProjectionWrites) error { return w.Apply(ctx, db) },
-	} {
-		b.Run(name, func(b *testing.B) {
-			var total time.Duration
-			for b.Loop() {
-				elapsed, statements, err := measureProjection(b.Context(), db, w, apply)
-				if err != nil {
-					b.Fatal(err)
-				}
-				total += elapsed
-				b.ReportMetric(float64(statements), "statements/op")
-			}
-			b.ReportMetric(float64(total.Nanoseconds())/float64(b.N), "write-ns/op")
+	w := newProjection(supplier, store.ProjectionPageSize+3)
+	for b.Loop() {
+		_, statements, err := measureProjection(b.Context(), db, w, func(ctx context.Context, db store.DBTX, w store.ProjectionWrites) error {
+			return w.Apply(ctx, db)
 		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportMetric(float64(statements), "statements/op")
 	}
 }
 
@@ -341,5 +319,33 @@ func TestEmptyProjectionWritesNoStatements(t *testing.T) {
 	}
 	if count.statements != 0 {
 		t.Fatalf("empty differences issued %d statements", count.statements)
+	}
+}
+
+func TestProjectionPagesDoNotCacheVariableStatements(t *testing.T) {
+	db, supplier := projectionDB(t)
+	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		var before, after int
+		const preparedCount = "SELECT count(*) FROM pg_prepared_statements"
+		if err := tx.QueryRow(t.Context(), preparedCount).Scan(&before); err != nil {
+			return err
+		}
+		for _, n := range []int{1, 2, store.ProjectionPageSize + 3} {
+			w := newProjection(supplier, n)
+			w.Groups[0].UpstreamRef = fmt.Sprintf("group-%d", n)
+			if err := w.Apply(t.Context(), tx); err != nil {
+				return err
+			}
+		}
+		if err := tx.QueryRow(t.Context(), preparedCount).Scan(&after); err != nil {
+			return err
+		}
+		if after != before {
+			return fmt.Errorf("projection added %d prepared statements", after-before)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
