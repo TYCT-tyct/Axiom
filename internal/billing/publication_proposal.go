@@ -11,11 +11,31 @@ import (
 	"axiom/internal/platform/pg"
 )
 
+func proposeAudiencePrice(audience Selector, policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks) (Publication, error) {
+	p, err := proposePrice(policy, rules, m, snap, currency, costs, defaults)
+	if err != nil {
+		return p, err
+	}
+	p.Audience = audience
+	// The default table already binds its audience; keep its pre-audience digest and audited exceptions stable.
+	if audience.Kind == "all" {
+		return p, nil
+	}
+	p.Candidate = uuid.Nil()
+	raw, err := jsonx.MarshalCanonical(p)
+	if err != nil {
+		return p, err
+	}
+	p.Candidate = digestPrice(raw)
+	return p, nil
+}
+
 func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks) (Publication, error) {
 	p := Publication{Model: m.ID, Status: "unpriced"}
 	envelope, costErr := modelPriceCost(costs, m, currency)
 	ref, _ := snap.ReferencePrice(m.ID, currency.String())
 	input, matched, err := priceFromRules(rules, m, ref, envelope, costErr, currency)
+	p.matched = matched != nil
 	if matched != nil && matched.Method.Kind != "reference_multiplier" {
 		ref.ID = uuid.Nil()
 	}

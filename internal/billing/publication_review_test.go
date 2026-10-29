@@ -110,7 +110,7 @@ func signalFixture(t *testing.T, kind string) *priceFixture {
 		in := f.rule.RuleInput
 		in.Enabled = false
 		if err := f.tx(func(tx pg.Tx) (err error) {
-			f.rule, err = UpdateRule(t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, "no active rule")
+			f.rule, err = UpdateRule(t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, "no active rule", nil)
 			return err
 		}); err != nil {
 			t.Fatal(err)

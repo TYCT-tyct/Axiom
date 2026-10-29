@@ -62,7 +62,8 @@ class NeedsDeployCheck(unittest.TestCase):
                       ["internal/x/testdata/sample.sse"], [".github/workflows/ci.yml"],
                       ["scripts/test_ci_skips.py", "scripts/ci_skips.py", "scripts/train.py", "scripts/check_scope.py",
                        "scripts/workflow/check_docs.py", "scripts/ci/runner-host.sh", "scripts/ci/bench-compare.sh"],
-                      ["web/e2e/admin-access.spec.ts", "web/playwright.config.ts"]):
+                      ["web/e2e/admin-access.spec.ts", "web/playwright.config.ts", "web/journey/journey.spec.ts",
+                       "web/playwright.journey.config.ts"]):
             with self.subTest(paths=paths):
                 self.assertFalse(ci_skips.needs_deploy_check(paths))
 

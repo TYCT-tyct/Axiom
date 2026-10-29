@@ -275,5 +275,10 @@ web-checks: web-embed
 web-e2e shard="1/1": web-embed
     version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py e2e --version "$version" -- {{ web }} e2e --shard={{ quote(shard) }}
 
+# One browser against a real node with real PostgreSQL and Valkey (web/README.md「测试」): register, sign in, key, top-up,
+# call, statement. It needs Docker, so it runs beside the e2e shards, not in their container.
+web-journey: web-embed
+    go run ./internal/platform/pgtest/cmd/withcluster {{ web }} journey
+
 # The local entry point retains every check; the workflow schedules the two parts independently.
 web: web-checks web-e2e

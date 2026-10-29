@@ -123,7 +123,9 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 			rec.Excluded = append(rec.Excluded, Excluded{c.ID, RetryBudget})
 			continue
 		}
-		entries = append(entries, r.entry(c.candidate, n))
+		entry := r.entry(c.candidate, n)
+		entry.Price = c.price.PriceRef
+		entries = append(entries, entry)
 	}
 	return entries
 }
@@ -181,7 +183,7 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 
 // check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint
 // the account cannot see is not left out, it is not there: no reason is given, so no existence is revealed.
-func check(c *candidate, n *need) (reason Reason, visible bool) {
+func check(c *candidate, n *need, price *candidatePrice) (reason Reason, visible bool) {
 	if !c.Owner.visibleTo(n.in.Admission) {
 		return 0, false
 	}
@@ -192,11 +194,11 @@ func check(c *candidate, n *need) (reason Reason, visible bool) {
 		return reason, true
 	}
 	switch {
-	case !n.presetAllows(c):
+	case !n.presetAllows(c, price):
 		return PresetFilter, true
-	case !n.overrideAllows(c):
+	case !n.overrideAllows(c, price):
 		return OverrideFilter, true
-	case c.Price.none():
+	case price.none():
 		return NoPrice, true
 	case c.UnknownItem:
 		return UnknownItem, true
@@ -309,29 +311,29 @@ func (c *candidate) full() bool {
 }
 
 // presetAllows applies the preset's filters, and the price limit that the request's override may lower.
-func (n *need) presetAllows(c *candidate) bool {
+func (n *need) presetAllows(c *candidate, price *candidatePrice) bool {
 	p := n.preset
 	return p.Classes.Has(c.Class) && p.Policies.Has(c.Policy) && c.Quality >= p.MinQuality && c.Confidence >= p.MinConfidence &&
-		(!p.VerifiedOnly || c.Verified) && n.withinLimit(p.MaxPrice, c) &&
+		(!p.VerifiedOnly || c.Verified) && n.withinLimit(p.MaxPrice, c, price) &&
 		(!p.NoFallbacks || listed(p.Order, c.Supplier))
 }
 
 // overrideAllows applies the request's filters. They only narrow what the preset allows: they are checked after it,
 // and an endpoint must pass both.
-func (n *need) overrideAllows(c *candidate) bool {
+func (n *need) overrideAllows(c *candidate, price *candidatePrice) bool {
 	o := n.over
 	return (len(o.Only) == 0 || listed(o.Only, c.Supplier)) && !listed(o.Exclude, c.Supplier) &&
 		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
-		n.withinLimit(o.MaxPrice, c) && (!o.NoFallbacks || listed(o.Order, c.Supplier))
+		n.withinLimit(o.MaxPrice, c, price) && (!o.NoFallbacks || listed(o.Order, c.Supplier))
 }
 
 // withinLimit holds the endpoint's price to a limit against the longest prompt any sampling of the request can have.
-func (n *need) withinLimit(limit PriceLimit, c *candidate) bool {
+func (n *need) withinLimit(limit PriceLimit, c *candidate, price *candidatePrice) bool {
 	if limit.Set == 0 {
 		return true
 	}
 	_, longest := billing.InputBound(n.demand, c.model)
-	return limit.within(c.Price.Schedule, n.tiers, longest)
+	return limit.within(price.Schedule, n.tiers, longest)
 }
 
 func listed(ids []SupplierID, id SupplierID) bool { return slices.Contains(ids, id) }

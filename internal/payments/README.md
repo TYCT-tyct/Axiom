@@ -155,6 +155,8 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 
 schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 ENABLE 并 FORCE 行级安全（[平台的「范围」](../platform/README.md#范围)）。
 
+`TestReconcileMigrationsResumeWithoutLosingState` 用当前完整 schema 播种订单与查询租约，再只重放 billing 24、payments 6 及以前的历史迁移集合。重放期间一并移除目标及后继版本标记，完成后恢复已应用的后继标记，再检查当前版本、入账、租约和索引。这样当前应用的播种查询可以使用新增列，恢复测试也不会把后继标记留在旧迁移之前，制造生产中被拒绝的乱序历史；后继迁移的实际执行由普通完整迁移夹具覆盖。
+
 | 表 | 关键列 | 约束与索引 | 类别与策略 |
 |---|---|---|---|
 | `merchants` | `id`、`site_id`、`kind`、`name`、`enabled`、`currency`、`ttl_seconds`、`refund_enabled`、`user_refund`、`sort`、`rev` | `currency ~ '^[A-Z]{3}$'`；`ttl_seconds` 在 60 到 86400；唯一 `(id, site_id)` 供本模块的子表引用；`(site_id, sort)`；不删除，只停用 | 站点公开配置：平台范围和站点范围可读，普通账户范围只能读授权给出的所属站点。使用 [pg 的站点公开配置表达式](../platform/pg/README.md#决策与理由)，每个范围读取每条语句至多执行一次。所属站点由 `pg.AccountScopeIn(站点, 账户)` 携带，来自账户授权，不依据账户可以伪造的 `platform.tenants` 登记。写入由站点范围表达式限制；主站行另由管理接口的控制面守卫限制，只有平台范围可改 |

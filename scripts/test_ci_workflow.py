@@ -69,7 +69,7 @@ class BuildChecks(unittest.TestCase):
 
     def test_web_and_shards_run_independently_on_all_build_events(self):
         needs = re.search(r"^    needs: \[(.+)\]$", job("build"), re.M).group(1).split(", ")
-        self.assertEqual(set(needs), {"changes", "static", "go-test", "web", "e2e", "bench", "deploy"})
+        self.assertEqual(set(needs), {"changes", "static", "go-test", "web", "e2e", "journey", "bench", "deploy"})
         for name in ("web", "e2e"):
             self.assertRegex(job(name), r"(?m)^    needs: changes$")
             self.assertIn("bash scripts/ci/web-container.sh", job(name))
@@ -113,6 +113,13 @@ class BuildChecks(unittest.TestCase):
             for docs in (False, True):
                 with self.subTest(event=event, docs=docs):
                     self.assertEqual(enabled("go-test", event, docs=docs), not docs and event != "pull_request")
+
+    def test_journey_runs_in_trains_and_main_not_on_pull_requests(self):
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            for docs in (False, True):
+                with self.subTest(event=event, docs=docs):
+                    self.assertEqual(enabled("journey", event, docs=docs), not docs and event != "pull_request")
+        self.assertIn("withcluster bash scripts/ci/web-container.sh pnpm --dir web journey", job("journey"))
 
     def test_matrix_and_command_keep_index_and_count(self):
         matrix = re.search(r"shard: \$\{\{ (.+) \}\}", job("e2e")).group(1)
