@@ -89,8 +89,9 @@ VALUES (@id, @site_id, @account_id, 'Default', 'active', true);
 
 -- name: InsertUser :exec
 INSERT INTO accounts.users (id, site_id, account_id, email, password_hash, factor_version, status, invite_code,
-    inviter_user_id)
-VALUES (@id, @site_id, @account_id, @email, @password_hash, 1, 'active', @invite_code, @inviter_user_id);
+    inviter_user_id, email_verified_at)
+VALUES (@id, @site_id, @account_id, @email, @password_hash, 1, 'active', @invite_code, @inviter_user_id,
+    @email_verified_at);
 
 -- name: InsertOwner :exec
 INSERT INTO accounts.members (site_id, account_id, account_kind, user_id, user_account_id, role_id)

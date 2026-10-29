@@ -30,7 +30,7 @@ type Site struct {
 	Main         bool
 	Name         string
 	KeyPrefix    string
-	Registration string // invite or closed
+	Registration string // invite, closed or open
 	// Currency is the site's accounting currency, which the amounts its API shows are in.
 	Currency platform.Currency
 	// DefaultTier is the tier the site puts a new account in, its first unless an operator changed it.
@@ -40,6 +40,12 @@ type Site struct {
 	// MaxKeysPerAccount and KeyCreationsPerHour bound an account's call keys: how many it may hold that are not
 	// deleted, and how many it may make in an hour.
 	MaxKeysPerAccount, KeyCreationsPerHour int
+	// Open registration's human check and email domain policy. The check is a proof of work the page solves; the
+	// lists are lower-case domains, and the deny list wins over the allow list.
+	RegistrationHumanCheck     bool
+	RegistrationHumanCheckBits int
+	RegistrationDomainAllow    []string
+	RegistrationDomainDeny     []string
 	// APIBase is the origin a key's calls go to, where the site registers an API domain: the console tells the user
 	// where to point a client rather than trusting the Host of the request (README.md「快照」).
 	APIBase  string
@@ -169,10 +175,16 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		}
 		site.MaxKeysPerAccount = setting(r.MaxKeysPerAccount, defaultMaxKeysPerAccount)
 		site.KeyCreationsPerHour = setting(r.KeyCreationsPerHour, defaultKeyCreationsPerHour)
+		site.RegistrationHumanCheck = boolSetting(r.RegistrationHumanCheck, defaultHumanCheck)
+		site.RegistrationHumanCheckBits = setting(r.RegistrationHumanCheckBits, defaultHumanCheckBits)
+		site.RegistrationDomainAllow = lowerDomains(r.RegistrationDomainAllow)
+		site.RegistrationDomainDeny = lowerDomains(r.RegistrationDomainDeny)
 		site.limits = limits{
 			ipBurst: setting(r.IpAttemptBurst, defaultLimits.ipBurst), ipPerMinute: setting(r.IpAttemptsPerMinute, defaultLimits.ipPerMinute),
 			emailFailures: setting(r.EmailSignInFailures, defaultLimits.emailFailures), codeFailures: setting(r.UserCodeFailures, defaultLimits.codeFailures),
 			challengeAttempts: setting(r.ChallengeCodeAttempts, defaultLimits.challengeAttempts),
+			domainBurst:       setting(r.RegistrationDomainBurst, defaultLimits.domainBurst),
+			domainPerHour:     setting(r.RegistrationDomainPerHour, defaultLimits.domainPerHour),
 		}
 		next.sites[site.ID] = site
 	}
@@ -236,6 +248,14 @@ func setting(v *int32, fallback int) int {
 		return fallback
 	}
 	return int(*v)
+}
+
+// boolSetting is a site's switch, or fallback when it is unset.
+func boolSetting(v *bool, fallback bool) bool {
+	if v == nil {
+		return fallback
+	}
+	return *v
 }
 
 // SiteForHost is the site and surface of the request's Host, as written in the request: lower-cased here, with the

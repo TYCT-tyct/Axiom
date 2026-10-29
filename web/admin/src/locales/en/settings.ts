@@ -21,6 +21,37 @@ export default {
   limitHint: "An amount in {{currency}}, 0 to 1,000,000, up to 9 decimals. Empty uses the default.",
   invalidRange: "Times are whole seconds within the range shown.",
   invalidLimit: "The daily limit of a new key is an amount in {{currency}} from 0 to 1,000,000, with up to 9 decimals.",
+  registration: {
+    title: "Open registration",
+    unavailableLabel: "Registration",
+    unavailable: "Not available: this server does not give the registration policy yet. Everything else here works.",
+    mode: "Registration",
+    modes: { invite: "Invite code only", closed: "Closed", open: "Open with email verification" },
+    humanCheck: "Browser proof of work",
+    humanCheckHint:
+      "The page must solve a small puzzle bound to its site and address before the server stores a request.",
+    on: "On, {{bits}} bits",
+    off: "Off",
+    bits: "Proof difficulty (bits)",
+    bitsHint: "From 12 to 24; higher takes longer in the browser.",
+    domainBurst: "Registrations per domain at once",
+    burstHint: "A whole number from 1 to 10,000.",
+    domainPerHour: "Registrations per domain per hour",
+    perHourHint: "A whole number from 1 to 100,000.",
+    domainAllow: "Allowed email domains",
+    domainDeny: "Denied email domains",
+    domainHint:
+      "One domain per line, or comma-separated. An entry covers its subdomains; deny wins. Empty allow means every domain.",
+    any: "Any domain",
+    none: "None",
+    edit: "Edit registration",
+    intro:
+      "Open registration needs a node that can send mail. Domains are lower-cased, trimmed and de-duplicated. The change goes to the audit log.",
+    save: "Save registration",
+    saved: "The registration policy is saved.",
+    invalidMode: "Choose a registration mode.",
+    invalidNumber: "Proof difficulty is 12 to 24 bits; the limits are whole numbers within their bounds.",
+  },
   keyLimits: {
     title: {
       site: "Key limits of the site's accounts",

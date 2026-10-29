@@ -442,6 +442,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/sites/{site_id}/registration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's open-registration policy
+         * @description The registration mode and the anti-abuse values for open registration: the self-hosted proof of work, the email domain allow and deny lists, and the per-domain limits. Values the site does not set are the defaults in code, which `defaults` shows.
+         */
+        get: operations["getSiteRegistration"];
+        /**
+         * Set a site's open-registration policy
+         * @description Replaces the registration mode and every anti-abuse value. Domains are lower-cased, trimmed and de-duplicated; an entry covers its subdomains, and the deny list wins. Open registration needs a node that can send mail: a node without SMTP answers `unavailable` there until mail is configured. The change is audited.
+         */
+        put: operations["updateSiteRegistration"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/accounts/{account_id}/suspension": {
         parameters: {
             query?: never;
@@ -1432,7 +1458,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
         Money: {
             /** @example 1500000000 */
@@ -1577,6 +1603,26 @@ export interface components {
         };
         LoginLimitsUpdate: {
             limits: components["schemas"]["LoginLimits"];
+            reason: components["schemas"]["Reason"];
+        };
+        /** @description Open registration: `mode` is the site's registration mode; the proof of work the page solves; the domains allowed and denied (an entry covers its subdomains, the deny list wins, and an empty allow list takes every domain the syntax allows); and the per-domain burst and hourly limits. */
+        RegistrationPolicy: {
+            /** @enum {string} */
+            mode: "invite" | "closed" | "open";
+            human_check: boolean;
+            human_check_bits: number;
+            domain_burst: number;
+            domain_per_hour: number;
+            domain_allow: string[];
+            domain_deny: string[];
+        };
+        RegistrationPolicyView: {
+            policy: components["schemas"]["RegistrationPolicy"];
+            /** @description What applies where the site sets no value. */
+            defaults: components["schemas"]["RegistrationPolicy"];
+        };
+        RegistrationPolicyUpdate: {
+            policy: components["schemas"]["RegistrationPolicy"];
             reason: components["schemas"]["Reason"];
         };
         AccountSuspension: {
@@ -3174,6 +3220,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LoginLimitsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSiteRegistration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationPolicyView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteRegistration: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistrationPolicyUpdate"];
+            };
+        };
+        responses: {
+            /** @description The policy as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationPolicyView"];
                 };
             };
             400: components["responses"]["BadRequest"];

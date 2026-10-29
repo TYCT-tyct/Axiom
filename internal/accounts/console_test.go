@@ -60,7 +60,7 @@ func newTestSite(t *testing.T) site {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return site{db, database, s, c, user, email}
+	return site{db, database, s, c, user.User, email}
 }
 
 func inviteCode(t *testing.T, db *pg.DB, user string) string {
@@ -150,12 +150,24 @@ func TestRegistrationRefusals(t *testing.T) {
 		r    accounts.RegisterRequest
 		want error
 	}{
-		"an unknown code":       {accounts.RegisterRequest{console, "nosuchcode0000", "new@example.com", password, client}, accounts.ErrInvalidInvite},
-		"another site's code":   {accounts.RegisterRequest{console, inviteCode(t, x.db, ":u2"), "new@example.com", password, client}, accounts.ErrInvalidInvite},
-		"a site that is closed": {accounts.RegisterRequest{otherConsole, inviteCode(t, x.db, ":u2"), "new@example.com", password, client}, accounts.ErrInvalidInvite},
-		"a short password":      {accounts.RegisterRequest{console, code, "new@example.com", "short", client}, accounts.ErrWeakPassword},
-		"an email registered":   {accounts.RegisterRequest{console, code, " SOMEONE@example.com", password, client}, accounts.ErrEmailTaken},
-		"the admin domain":      {accounts.RegisterRequest{admin, code, "new@example.com", password, client}, accounts.ErrUnknownHost},
+		"an unknown code": {accounts.RegisterRequest{
+			Host: console, InviteCode: "nosuchcode0000", Email: "new@example.com", Password: password, ClientIP: client,
+		}, accounts.ErrInvalidInvite},
+		"another site's code": {accounts.RegisterRequest{
+			Host: console, InviteCode: inviteCode(t, x.db, ":u2"), Email: "new@example.com", Password: password, ClientIP: client,
+		}, accounts.ErrInvalidInvite},
+		"a site that is closed": {accounts.RegisterRequest{
+			Host: otherConsole, InviteCode: inviteCode(t, x.db, ":u2"), Email: "new@example.com", Password: password, ClientIP: client,
+		}, accounts.ErrRegistrationClosed},
+		"a short password": {accounts.RegisterRequest{
+			Host: console, InviteCode: code, Email: "new@example.com", Password: "short", ClientIP: client,
+		}, accounts.ErrWeakPassword},
+		"an email registered": {accounts.RegisterRequest{
+			Host: console, InviteCode: code, Email: " SOMEONE@example.com", Password: password, ClientIP: client,
+		}, accounts.ErrEmailTaken},
+		"the admin domain": {accounts.RegisterRequest{
+			Host: admin, InviteCode: code, Email: "new@example.com", Password: password, ClientIP: client,
+		}, accounts.ErrUnknownHost},
 	} {
 		if _, err := x.s.Register(t.Context(), c.r); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
@@ -164,7 +176,7 @@ func TestRegistrationRefusals(t *testing.T) {
 	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace("UPDATE accounts.users SET status = 'disabled' WHERE id = :u1")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{console, code, "new@example.com", password, client}); !errors.Is(err, accounts.ErrInvalidInvite) {
+	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: code, Email: "new@example.com", Password: password, ClientIP: client}); !errors.Is(err, accounts.ErrInvalidInvite) {
 		t.Errorf("a disabled inviter: %v", err)
 	}
 }

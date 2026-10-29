@@ -300,6 +300,52 @@ func (q *Queries) ReadSiteKeyLimits(ctx context.Context, db DBTX, siteID uuid.UU
 	return i, err
 }
 
+const readSiteRegistration = `-- name: ReadSiteRegistration :many
+SELECT s.registration, t.registration_human_check, t.registration_human_check_bits,
+    t.registration_domain_burst, t.registration_domain_per_hour,
+    t.registration_domain_allow, t.registration_domain_deny
+FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = $1
+`
+
+type ReadSiteRegistrationRow struct {
+	Registration               string
+	RegistrationHumanCheck     *bool
+	RegistrationHumanCheckBits *int32
+	RegistrationDomainBurst    *int32
+	RegistrationDomainPerHour  *int32
+	RegistrationDomainAllow    []string
+	RegistrationDomainDeny     []string
+}
+
+// A site's registration mode from its row and its own anti-abuse values; a NULL value is the default in code.
+func (q *Queries) ReadSiteRegistration(ctx context.Context, db DBTX, siteID uuid.UUID) ([]ReadSiteRegistrationRow, error) {
+	rows, err := db.Query(ctx, readSiteRegistration, siteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadSiteRegistrationRow
+	for rows.Next() {
+		var i ReadSiteRegistrationRow
+		if err := rows.Scan(
+			&i.Registration,
+			&i.RegistrationHumanCheck,
+			&i.RegistrationHumanCheckBits,
+			&i.RegistrationDomainBurst,
+			&i.RegistrationDomainPerHour,
+			&i.RegistrationDomainAllow,
+			&i.RegistrationDomainDeny,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const readSiteSettings = `-- name: ReadSiteSettings :many
 SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint AS console_idle_seconds,
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
@@ -406,6 +452,58 @@ type WriteSiteKeyLimitsParams struct {
 // replaces whole cannot take these along.
 func (q *Queries) WriteSiteKeyLimits(ctx context.Context, db DBTX, arg WriteSiteKeyLimitsParams) error {
 	_, err := db.Exec(ctx, writeSiteKeyLimits, arg.SiteID, arg.MaxKeys, arg.CreationsPerHour)
+	return err
+}
+
+const writeSiteRegistrationMode = `-- name: WriteSiteRegistrationMode :exec
+UPDATE accounts.sites SET registration = $1 WHERE id = $2
+`
+
+type WriteSiteRegistrationModeParams struct {
+	Registration string
+	SiteID       uuid.UUID
+}
+
+func (q *Queries) WriteSiteRegistrationMode(ctx context.Context, db DBTX, arg WriteSiteRegistrationModeParams) error {
+	_, err := db.Exec(ctx, writeSiteRegistrationMode, arg.Registration, arg.SiteID)
+	return err
+}
+
+const writeSiteRegistrationSettings = `-- name: WriteSiteRegistrationSettings :exec
+INSERT INTO accounts.site_settings (site_id, registration_human_check, registration_human_check_bits,
+    registration_domain_burst, registration_domain_per_hour, registration_domain_allow, registration_domain_deny)
+VALUES ($1, $2, $3, $4, $5,
+    $6::text[], $7::text[])
+ON CONFLICT (site_id) DO UPDATE SET registration_human_check = excluded.registration_human_check,
+    registration_human_check_bits = excluded.registration_human_check_bits,
+    registration_domain_burst = excluded.registration_domain_burst,
+    registration_domain_per_hour = excluded.registration_domain_per_hour,
+    registration_domain_allow = excluded.registration_domain_allow,
+    registration_domain_deny = excluded.registration_domain_deny
+`
+
+type WriteSiteRegistrationSettingsParams struct {
+	SiteID         uuid.UUID
+	HumanCheck     *bool
+	HumanCheckBits *int32
+	DomainBurst    *int32
+	DomainPerHour  *int32
+	DomainAllow    []string
+	DomainDeny     []string
+}
+
+// Replaces only the open-registration values, so the settings and login limits the admin API replaces whole cannot
+// take them along.
+func (q *Queries) WriteSiteRegistrationSettings(ctx context.Context, db DBTX, arg WriteSiteRegistrationSettingsParams) error {
+	_, err := db.Exec(ctx, writeSiteRegistrationSettings,
+		arg.SiteID,
+		arg.HumanCheck,
+		arg.HumanCheckBits,
+		arg.DomainBurst,
+		arg.DomainPerHour,
+		arg.DomainAllow,
+		arg.DomainDeny,
+	)
 	return err
 }
 

@@ -17,9 +17,10 @@ import (
 
 // The kinds of attempt before sign-in, as the shared store's keys name them (internal/platform/kv/README.md「键」).
 const (
-	ipKind    = "ip"
-	emailKind = "email"
-	userKind  = "user"
+	ipKind     = "ip"
+	emailKind  = "email"
+	userKind   = "user"
+	domainKind = "signup_domain"
 )
 
 // takeScript spends one of a bucket's attempts, and giveScript returns one it spent: the same GCRA as buckets.take and

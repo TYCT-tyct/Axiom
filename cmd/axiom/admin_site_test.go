@@ -205,3 +205,54 @@ func TestSiteSettingsLogAFailedReload(t *testing.T) {
 		t.Errorf("the failed reload was not logged: %s", f.logs)
 	}
 }
+
+// TestSiteRegistration: the policy reads with the code defaults; a PUT replaces every value, normalizes domain lists
+// and audits the change; a value outside its bounds is refused by name, and a repeated key replays the stored result.
+func TestSiteRegistration(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	site := f.siteID()
+	rec := f.do(http.MethodGet, "/sites/"+site+"/registration", "", as(s))
+	expectAdmin(t, "getSiteRegistration", rec, http.StatusOK, "")
+	var got adminapi.RegistrationPolicyView
+	decode(t, rec, &got)
+	if got.Policy.Mode != "invite" || !got.Policy.HumanCheck || got.Policy.HumanCheckBits != 18 || got.Policy.DomainBurst != 5 || got.Policy.DomainPerHour != 30 {
+		t.Errorf("the site's policy: %+v", got.Policy)
+	}
+	body := `{"policy":{"mode":"open","human_check":true,"human_check_bits":20,"domain_burst":7,"domain_per_hour":70,"domain_allow":[" Example.COM ","example.com"],"domain_deny":["Bad.Example.COM"]},"reason":"open registration"}`
+	key := newKey()
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/registration", body, key)
+	expectAdmin(t, "updateSiteRegistration", rec, http.StatusOK, "")
+	var updated adminapi.RegistrationPolicyView
+	decode(t, rec, &updated)
+	if updated.Policy.Mode != "open" || updated.Policy.HumanCheckBits != 20 || updated.Policy.DomainBurst != 7 ||
+		updated.Policy.DomainPerHour != 70 || len(updated.Policy.DomainAllow) != 1 || updated.Policy.DomainAllow[0] != "example.com" ||
+		len(updated.Policy.DomainDeny) != 1 || updated.Policy.DomainDeny[0] != "bad.example.com" {
+		t.Errorf("the stored policy: %+v", updated.Policy)
+	}
+	if f.auditCount("site_registration.update") != "1" {
+		t.Fatalf("%s audit entries, want 1", f.auditCount("site_registration.update"))
+	}
+	f.expectAudit("site_registration.update", map[string]string{
+		"reason": "open registration",
+		"coalesce(detail->'after'->>'mode', 'none')":             "open",
+		"coalesce(detail->'after'->>'human_check_bits', 'none')": "20",
+	})
+
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/registration", body, key)
+	expectAdmin(t, "the same registration request again", rec, http.StatusOK, "")
+	if rec.Header().Get("Idempotency-Replayed") != "true" || f.auditCount("site_registration.update") != "1" {
+		t.Errorf("replay header %q, audits %s", rec.Header().Get("Idempotency-Replayed"), f.auditCount("site_registration.update"))
+	}
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/registration",
+		`{"policy":{"mode":"open","human_check":true,"human_check_bits":11,"domain_burst":7,"domain_per_hour":70,"domain_allow":[],"domain_deny":[]},"reason":"r"}`, newKey())
+	expectAdmin(t, "a difficulty outside its bounds", rec, http.StatusBadRequest, codeInvalidRequest)
+	fields := errorDetailOf(t, rec).Fields
+	if fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != "/policy/human_check_bits" {
+		t.Errorf("fields %v, want /policy/human_check_bits", fields)
+	}
+	for _, id := range []string{"site_00000000000000000000000000", "acct_00000000000000000000000000"} {
+		expectAdmin(t, "getSiteRegistration of "+id, f.do(http.MethodGet, "/sites/"+id+"/registration", "", as(s)), http.StatusNotFound, codeNotFound)
+	}
+}

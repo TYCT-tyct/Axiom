@@ -3,6 +3,7 @@ package accounts
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 	"time"
@@ -278,4 +279,139 @@ func (s *Service) Account(ctx context.Context, tx pg.Tx, id AccountID) (AccountD
 	}
 	a.Owner.ID, a.Owner.Email = UserID(r.OwnerID), r.OwnerEmail
 	return a, nil
+}
+
+// RegistrationPolicy is a site's open-registration mode and its anti-abuse values. The mode is stored on the site;
+// the rest are settings, where nil in the table means the default in code.
+type RegistrationPolicy struct {
+	Mode           string
+	HumanCheck     bool
+	HumanCheckBits int
+	DomainBurst    int
+	DomainPerHour  int
+	DomainAllow    []string
+	DomainDeny     []string
+}
+
+// DefaultRegistrationPolicy is what a site that sets none of the values gets: registration by invitation, the
+// self-hosted proof of work on at 18 bits, five registrations from one domain in a burst and thirty an hour.
+func DefaultRegistrationPolicy() RegistrationPolicy {
+	return RegistrationPolicy{
+		Mode: "invite", HumanCheck: defaultHumanCheck, HumanCheckBits: defaultHumanCheckBits,
+		DomainBurst: defaultLimits.domainBurst, DomainPerHour: defaultLimits.domainPerHour,
+		DomainAllow: []string{}, DomainDeny: []string{},
+	}
+}
+
+// Check reports the first value outside its bounds and normalizes the domain lists in place: lower-case, trimmed and
+// without duplicates, so the table and the snapshot hold one spelling.
+func (p *RegistrationPolicy) Check() error {
+	switch p.Mode {
+	case "invite", "closed", "open":
+	default:
+		return &SettingError{"registration_mode", "must be invite, closed or open"}
+	}
+	if p.HumanCheckBits < 12 || p.HumanCheckBits > 24 {
+		return &SettingError{"registration_human_check_bits", "must be from 12 to 24"}
+	}
+	if p.DomainBurst < 1 || p.DomainBurst > 10_000 {
+		return &SettingError{"registration_domain_burst", "must be from 1 to 10000"}
+	}
+	if p.DomainPerHour < 1 || p.DomainPerHour > 100_000 {
+		return &SettingError{"registration_domain_per_hour", "must be from 1 to 100000"}
+	}
+	var err error
+	if p.DomainAllow, err = cleanDomains(p.DomainAllow); err != nil {
+		return &SettingError{"registration_domain_allow", "must be domains, at most 100"}
+	}
+	if p.DomainDeny, err = cleanDomains(p.DomainDeny); err != nil {
+		return &SettingError{"registration_domain_deny", "must be domains, at most 100"}
+	}
+	return nil
+}
+
+func (p RegistrationPolicy) detail() map[string]any {
+	return map[string]any{
+		"mode": p.Mode, "human_check": p.HumanCheck, "human_check_bits": p.HumanCheckBits,
+		"domain_burst": p.DomainBurst, "domain_per_hour": p.DomainPerHour,
+		"domain_allow": domainSummary(p.DomainAllow), "domain_deny": domainSummary(p.DomainDeny),
+	}
+}
+
+// domainSummary describes a list without copying it into the audit entry: a hundred long domains would exceed the
+// entry's 8 KiB limit and make an otherwise valid policy impossible to save.
+func domainSummary(domains []string) map[string]any {
+	hash := sha256.Sum256([]byte(strings.Join(domains, "\n")))
+	return map[string]any{"count": len(domains), "sha256": fmt.Sprintf("%x", hash)}
+}
+
+// SiteRegistration reads the site's registration policy; ErrNotFound when there is no such site.
+func (s *Service) SiteRegistration(ctx context.Context, tx pg.Tx, site SiteID) (RegistrationPolicy, error) {
+	rows, err := s.queries.ReadSiteRegistration(ctx, tx, uuid.UUID(site))
+	if err != nil {
+		return RegistrationPolicy{}, fmt.Errorf("read the site's registration policy: %w", err)
+	}
+	if len(rows) == 0 {
+		return RegistrationPolicy{}, ErrNotFound
+	}
+	r := rows[0]
+	p := DefaultRegistrationPolicy()
+	p.Mode = r.Registration
+	if r.RegistrationHumanCheck != nil {
+		p.HumanCheck = *r.RegistrationHumanCheck
+	}
+	if r.RegistrationHumanCheckBits != nil {
+		p.HumanCheckBits = int(*r.RegistrationHumanCheckBits)
+	}
+	if r.RegistrationDomainBurst != nil {
+		p.DomainBurst = int(*r.RegistrationDomainBurst)
+	}
+	if r.RegistrationDomainPerHour != nil {
+		p.DomainPerHour = int(*r.RegistrationDomainPerHour)
+	}
+	if r.RegistrationDomainAllow != nil {
+		p.DomainAllow = lowerDomains(r.RegistrationDomainAllow)
+	}
+	if r.RegistrationDomainDeny != nil {
+		p.DomainDeny = lowerDomains(r.RegistrationDomainDeny)
+	}
+	return p, nil
+}
+
+// SetSiteRegistration replaces the site's registration policy and records the change, in the site's turn so the entry
+// names the values it replaced. A value outside its bounds is a *SettingError, and no site ErrNotFound.
+func (s *Service) SetSiteRegistration(ctx context.Context, tx pg.Tx, actor audit.Actor, site SiteID, set RegistrationPolicy, reason string) error {
+	if err := set.Check(); err != nil {
+		return err
+	}
+	locked, err := s.queries.LockSite(ctx, tx, uuid.UUID(site))
+	if err != nil {
+		return fmt.Errorf("lock the site: %w", err)
+	}
+	if len(locked) == 0 {
+		return ErrNotFound
+	}
+	before, err := s.SiteRegistration(ctx, tx, site)
+	if err != nil {
+		return err
+	}
+	if err := s.queries.WriteSiteRegistrationMode(ctx, tx, WriteSiteRegistrationModeParams{
+		SiteID: uuid.UUID(site), Registration: set.Mode,
+	}); err != nil {
+		return fmt.Errorf("write the site's registration mode: %w", err)
+	}
+	humanCheck, bits := set.HumanCheck, int32(set.HumanCheckBits)
+	burst, perHour := int32(set.DomainBurst), int32(set.DomainPerHour)
+	if err := s.queries.WriteSiteRegistrationSettings(ctx, tx, WriteSiteRegistrationSettingsParams{
+		SiteID: uuid.UUID(site), HumanCheck: &humanCheck, HumanCheckBits: &bits,
+		DomainBurst: &burst, DomainPerHour: &perHour,
+		DomainAllow: set.DomainAllow, DomainDeny: set.DomainDeny,
+	}); err != nil {
+		return fmt.Errorf("write the site's registration settings: %w", err)
+	}
+	return audit.Record(ctx, tx, audit.Event{
+		Actor: actor, Action: "site_registration.update", Reason: reason,
+		Target: audit.Target{Module: "accounts", Kind: "site", ID: site.TypeID(), Site: uuid.UUID(site)},
+		Detail: map[string]any{"before": before.detail(), "after": set.detail()},
+	})
 }

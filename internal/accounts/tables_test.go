@@ -410,7 +410,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"announcements":            {"withdrawn_at"},
 		"sites":                    {"name", "status", "key_prefix", "registration", "default_tier_id"},
 		"site_domains":             {"disabled_at"},
-		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour"},
+		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour", "registration_human_check", "registration_human_check_bits", "registration_domain_burst", "registration_domain_per_hour", "registration_domain_allow", "registration_domain_deny"},
 		"tiers":                    {"name", "rate_requests"},
 		"roles":                    {"permissions", "additional_permissions"},
 		"accounts":                 {"name", "status", "tier_id", "max_keys", "key_creations_per_hour", "rate_requests"},
@@ -427,6 +427,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"security_failures":       {"started_at", "failures", "completed_peak", "sampled_at", "reported"},
 		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
 		"password_reset_tokens":   {"used_at"},
+		"registration_requests":   {"tier_id", "domain", "language", "expires_at", "token_hash"},
 	}
 	// Generated columns are left out: the database refuses to set them before it looks at privileges.
 	for _, column := range texts(t, db, platform, `SELECT table_name || ' ' || column_name FROM information_schema.columns
@@ -438,7 +439,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		}
 	}
 	for table := range updatable {
-		if strings.HasPrefix(table, "password_reset_") || table == "user_notices" {
+		if strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" {
 			continue
 		}
 		if _, err := exec(t, db, platform, "DELETE FROM accounts."+table+" WHERE false"); state(err) != "42501" {
@@ -501,11 +502,11 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "announcements", "api_keys", "members", "notification_preferences", "password_reset_requests", "password_reset_tokens", "platform_grants", "recovery_codes", "roles", "security_failures", "sessions", "site_domains",
+		"accounts", "announcements", "api_keys", "members", "notification_preferences", "password_reset_requests", "password_reset_tokens", "platform_grants", "recovery_codes", "registration_requests", "roles", "security_failures", "sessions", "site_domains",
 		"site_settings", "sites", "tiers", "user_notices", "users", "workspaces",
 	} {
 		commands := "INSERT, SELECT, UPDATE"
-		if strings.HasPrefix(table, "password_reset_") || table == "user_notices" {
+		if strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" {
 			commands = "DELETE, INSERT, SELECT, UPDATE"
 		}
 		if table == "members" {

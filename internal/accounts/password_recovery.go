@@ -111,7 +111,7 @@ func (r *PasswordRecovery) issueReset(ctx context.Context, tx pg.Tx, args passwo
 	if !emailAllowed(*request.Email) {
 		return ErrBadEmail
 	}
-	sites, err := q.PasswordResetSite(ctx, tx, PasswordResetSiteParams{SiteID: request.SiteID, Domain: request.Domain})
+	sites, err := q.ConsoleSite(ctx, tx, ConsoleSiteParams{SiteID: request.SiteID, Domain: request.Domain})
 	if err != nil {
 		return err
 	}
