@@ -41,7 +41,7 @@ func accountScope(accounts ...uuid.UUID) pg.Scope { return pg.NewScope(false, ni
 // record is a complete call of account, started at at, with two attempts: the first failed and the second committed.
 func record(account uuid.UUID, at time.Time) CallRecord {
 	return CallRecord{
-		ID: uuid.NewV7(), At: at, Site: uuid.NewV7(), Account: account, Workspace: uuid.NewV7(), Key: uuid.NewV7(),
+		PriceVersion: uuid.NewV7().String(), ID: uuid.NewV7(), At: at, Site: uuid.NewV7(), Account: account, Workspace: uuid.NewV7(), Key: uuid.NewV7(),
 		IP: netip.MustParseAddr("203.0.113.7"), ClientApp: "claude-code", SessionID: "session-1", SubagentID: "agent-1",
 		Class: "chat", Language: "en", UsedTools: true, HasImage: true, HasFile: true, Model: "claude-opus",
 		Attempts: []AttemptRecord{

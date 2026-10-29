@@ -782,6 +782,8 @@ export interface components {
         };
         /** @description One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. */
         Call: {
+            /** @description Published sale version locked at admission; absent for legacy or uncharged calls. */
+            price_version?: string;
             id: components["schemas"]["CallId"];
             /**
              * Format: date-time

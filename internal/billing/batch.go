@@ -51,6 +51,7 @@ func settlementRows(ctx context.Context, tx pg.Tx, id, account uuid.UUID) (balan
 			&r.Amount,
 			&r.State,
 			&r.Prices,
+			&r.PriceVersions,
 			&r.ChargedSeq,
 			&r.Entry,
 			&r.Charged,

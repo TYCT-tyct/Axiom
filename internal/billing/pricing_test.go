@@ -54,8 +54,8 @@ func TestRuleChecks(t *testing.T) {
 	}{
 		// M1 prices a model, an author or everything, by a multiplier at face or a fixed price. What it would accept and then
 		// not apply is refused, as a rule for one account is.
-		"cost plus a markup, which needs the supplier's cost": {rule(all, plus("0.25")), "method/kind"},
-		"cost plus a margin and fixed":                        {rule(all, Method{Kind: "cost_plus", MarginRatio: ratio("0.2"), FixedMarkup: jsonx.Raw(`{"output":"0.000001"}`)}), "method/kind"},
+		"cost plus a markup, which needs the supplier's cost": {rule(all, plus("0.25")), ""},
+		"cost plus a margin and fixed":                        {rule(all, Method{Kind: "cost_plus", MarginRatio: ratio("0.2"), FixedMarkup: jsonx.Raw(`{"output":"0.000001"}`)}), ""},
 		"a multiplier by exchange, which needs a rate":        {rule(all, Method{Kind: "reference_multiplier", Multiplier: ratio("1.5"), CurrencyConversion: "exchange"}), "method/currency_conversion"},
 		"a multiplier with no conversion named":               {rule(all, multiplier("1.5")), "method/currency_conversion"},
 		"a multiplier at face":                                {rule(all, Method{Kind: "reference_multiplier", Multiplier: ratio("2"), CurrencyConversion: "face"}), ""},
