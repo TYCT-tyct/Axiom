@@ -1,6 +1,6 @@
 # mail
 
-出站邮件：调用方写好正文，这里把它经 SMTP 发出。每次发送是一个 River 任务（`mail.send`，`notifications` 队列），按失败能否重试分别重试或放弃，同一收件人一分钟最多一封。
+出站邮件：调用方写好正文，这里把它经 SMTP 发出。普通投递每次是一个 River 任务（`mail.send`，`notifications` 队列），按失败能否重试分别重试或放弃，队列投递对同一收件人一分钟最多一封。
 
 投递放在 `platform` 而不是 accounts：收件人、模板、站点品牌和多语言属于账户流程（[accounts 的「给用户的邮件」](../../../docs/domains/accounts.md#给用户的邮件)），这里只有各模块共用的发送能力。走队列而不是进程内的 channel：任务和触发它的写入在同一个事务里入队，重启不丢，重试次数和最后错误由 River 记下（sub2api 的 `email_queue_service.go` 用 channel，重启即丢，2026-10）。
 
@@ -13,6 +13,10 @@
 | `AXIOM_SMTP_USERNAME` | — | 账号；和密码要么都设，要么都不设（不设用于按地址放行的中继） |
 | `AXIOM_SMTP_PASSWORD` | — | 密码或服务商的应用专用密码；以 `secret.Secret` 保存，任何格式都不打印 |
 | `AXIOM_SMTP_FROM` | — | 发件人，一个地址，可带显示名：`Axiom <no-reply@example.com>` |
+
+平台管理员可用 `StoredConfig`、`SaveConfig` 保存共享的 SMTP 覆盖，组装层在启动注册 worker 前读取；无覆盖仍使用环境变量。保存不改变在跑的 sender，API 返回 `restart_required`，重启节点后生效。显式禁用也保存覆盖，因此不会意外回落到环境变量。迁移 platform 00017 的 `smtp_config` 只限平台范围；配置整包加密，AAD 是表名、全零单例 ID 与 purpose=config，纳入主密钥轮换清单。API 不返回密码，审计只记 enabled；省略密码仅在连接目标未变时保留，改服务器、端口或用户名必须重填。保存校验失败返回 `ErrInvalidConfig`，数据库和解封失败原样上抛，不能误报为输入错误。
+
+`TestConfig` 使用原 sender 同步发固定测试邮件，返回 accepted/rejected/failed/disabled；错误原文、凭证与收件人不进入响应和审计。accepted 是 SMTP 接受；网络错误可能已送达，不能当作确定未送达。配置测试的临时 sender 使用独立会话预算，不占用普通邮件的共享收件人冷却；HTTP 层限会话频率、要求 MFA/CSRF/幂等/理由，重放已提交结果不重发；SMTP 接受后数据库提交失败仍可能重发，测试邮件可重复。测试复用 sender 的受控信任库连接真实 TLS 测试服务器，兼容各平台且不放松生产证书校验。
 
 `Mailer.Configured` 让账户流程在查用户之前统一判断此节点能否入队。
 
@@ -73,7 +77,7 @@ Valkey 不可用（出错、期限到、熔断打开）时退回进程内的桶�
 | 邮件内容不进入不属于任何租户的表 | 正文在 `platform.mail_outbox`，任务参数只有 outbox id（回执模式另有回执 id）；表使用 [pg 的账户范围表达式](../pg/README.md#决策与理由)，别的站点和空作用域都读不到 |
 | 一个租户不能替另一个租户入队 | 同一策略的 `WITH CHECK` 比较 `site_id`、`account_id`，租户从调用方的事务里来 |
 | 一封信一个任务 | `Enqueue` 在调用方的事务里插一行 outbox、一个 `mail.send`，参数是那一行的 id |
-| 同一收件人一分钟最多一封 | 有 Valkey 时每个规范化地址一个原子准入键，不可用时退回进程内 `limiter`；限流的任务 snooze，不耗尝试次数 |
+| 队列投递对同一收件人一分钟最多一封 | 有 Valkey 时每个规范化地址一个原子准入键，不可用时退回进程内 `limiter`；限流的任务 snooze，不耗尝试次数 |
 | 共享键里没有明文收件人 | 键的主体是 HMAC-SHA256 的前 16 字节，密钥由主密钥快照派生；值只是时刻 |
 | 5xx 不重试 | `wrapRejected` 把 500–599 包成 `ErrRejected`，工作函数转成 `JobCancel` |
 | 信封和头部写的是同一个地址 | `mailbox` 同时给 `MAIL FROM`、`RCPT TO` 和 `From`、`To` 用 |
