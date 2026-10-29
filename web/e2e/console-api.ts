@@ -34,8 +34,12 @@ function listCalls({ query, state }: Ctx<"/api/console/v1/calls", "get">) {
       (!since || call.at >= new Date(since).toISOString()) &&
       (!until || call.at < new Date(until).toISOString()),
   );
-  const page = paged(matching, query);
-  return page ? ({ status: 200, json: page } as const) : fail(400, "invalid_request");
+  const status = query.get("status") as Schemas["CallStatus"] | null;
+  const filtered = status ? matching.filter((call) => (call.error_kind !== "") === (status === "error")) : matching;
+  const page = paged(filtered, query);
+  return page
+    ? ({ status: 200, json: { ...page, status_filter: status ?? undefined } } as const)
+    : fail(400, "invalid_request");
 }
 
 function listKeys({ query, state }: Ctx<"/api/console/v1/keys", "get">) {

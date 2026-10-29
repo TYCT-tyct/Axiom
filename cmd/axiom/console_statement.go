@@ -75,7 +75,7 @@ func (c consoleAPI) ExportStatement(ctx context.Context, _ consoleapi.ExportStat
 	cl := callOf(ctx)
 	return statementDownload(func(w http.ResponseWriter) error {
 		deadline, _ := ctx.Deadline()
-		sink := statementCSVWriter{ResponseWriter: w, deadline: deadline}
+		sink := csvDownloadWriter{ResponseWriter: w, deadline: deadline, name: "statement"}
 		err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
 			return statementCSV(ctx, tx, uuid.UUID(cl.principal.AccountID()), cl.site.Currency, &sink)
 		})
@@ -86,21 +86,22 @@ func (c consoleAPI) ExportStatement(ctx context.Context, _ consoleapi.ExportStat
 	}), nil
 }
 
-type statementCSVWriter struct {
+type csvDownloadWriter struct {
 	http.ResponseWriter
 	started  bool
 	deadline time.Time
+	name     string
 }
 
-func (w *statementCSVWriter) Write(b []byte) (int, error) {
+func (w *csvDownloadWriter) Write(b []byte) (int, error) {
 	if !w.started {
 		if !w.deadline.IsZero() {
 			// In-process response writers have no socket deadline.
 			if err := http.NewResponseController(w.ResponseWriter).SetWriteDeadline(w.deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
-				return 0, fmt.Errorf("console: bound statement download: %w", err)
+				return 0, fmt.Errorf("console: bound %s download: %w", w.name, err)
 			}
 		}
-		name := "statement-" + time.Now().UTC().Format(time.DateOnly) + ".csv"
+		name := w.name + "-" + time.Now().UTC().Format(time.DateOnly) + ".csv"
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 		w.started = true
