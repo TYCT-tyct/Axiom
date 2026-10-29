@@ -1,15 +1,25 @@
 package payments
 
 import (
+	"io/fs"
 	"testing"
+	"testing/fstest"
 
 	"axiom/internal/billing"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
-	w := newTestWorld(t, fakePlugin{create: goodCheckout})
-	if err := w.db.Check(t.Context(), billing.Migrations(), Migrations()); err != nil {
+	previousBilling := migrationsThrough(t, billing.Migrations(), "00024_payment_audit.sql")
+	previousPayments := migrationsThrough(t, Migrations(), "00006_reconcile.sql")
+	// pgtest caches templates by module name, so migrate the historical sets on their own database.
+	d := pgtest.New(t)
+	if err := pg.Migrate(t.Context(), d.Migrator, previousBilling, previousPayments); err != nil {
+		t.Fatal("prepare historical schema", err)
+	}
+	w := newTestWorldOn(t, fakePlugin{create: goodCheckout}, d)
+	if err := w.db.Check(t.Context(), previousBilling, previousPayments); err != nil {
 		t.Fatal("migrated schema rejected at startup", err)
 	}
 	m := w.waiting()
@@ -88,4 +98,25 @@ func TestQueryHealthKeepsSiteScope(t *testing.T) {
 			}
 		})
 	}
+}
+
+func migrationsThrough(t *testing.T, module pg.Module, last string) pg.Module {
+	t.Helper()
+	files, err := fs.Glob(module.Migrations, "*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := fstest.MapFS{}
+	for _, name := range files {
+		if name > last {
+			continue
+		}
+		data, err := fs.ReadFile(module.Migrations, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		older[name] = &fstest.MapFile{Data: data}
+	}
+	module.Migrations = older
+	return module
 }

@@ -136,6 +136,8 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 
 schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 ENABLE 并 FORCE 行级安全（[平台的「范围」](../platform/README.md#范围)）。
 
+`TestReconcileMigrationsResumeWithoutLosingState` 从 billing 24、payments 6 的历史迁移集合建立夹具，模拟最后一条并发索引迁移未记完成，再执行当前完整迁移并核对订单入账、查询租约和索引。历史集合单独迁移到空的模块库，避免复用只按模块名缓存的最新测试模板；不能先应用新版本再删除旧版本的完成标记，那会制造生产中被拒绝的乱序迁移。
+
 | 表 | 关键列 | 约束与索引 | 类别与策略 |
 |---|---|---|---|
 | `merchants` | `id`、`site_id`、`kind`、`name`、`enabled`、`currency`、`ttl_seconds`、`refund_enabled`、`user_refund`、`sort`、`rev` | `currency ~ '^[A-Z]{3}$'`；`ttl_seconds` 在 60 到 86400；唯一 `(id, site_id)` 供本模块的子表引用；`(site_id, sort)`；不删除，只停用 | 站点公开配置：平台范围和站点范围可读，普通账户范围只能读授权给出的所属站点。使用 [pg 的站点公开配置表达式](../platform/pg/README.md#决策与理由)，每个范围读取每条语句至多执行一次。所属站点由 `pg.AccountScopeIn(站点, 账户)` 携带，来自账户授权，不依据账户可以伪造的 `platform.tenants` 登记。写入由站点范围表达式限制；主站行另由管理接口的控制面守卫限制，只有平台范围可改 |
