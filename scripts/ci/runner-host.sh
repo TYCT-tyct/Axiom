@@ -19,6 +19,9 @@ set -euo pipefail
 
 repo_url=https://github.com/TYCT-tyct/Axiom
 runner_version=2.338.0
+# The release build calls `docker buildx`; without the plugin `docker buildx create --name …` falls through to
+# `docker --name` and fails exit 125 (2026-10-29 main deploy).
+buildx_version=0.38.0
 user=axci
 home=/home/$user
 toolcache=/opt/hostedtoolcache
@@ -98,6 +101,18 @@ cache_tool() { # tool version url sha256
   tar -xf "$tarball" -C "$dir" --strip-components=1
   rm -f "$tarball"
   touch "$dir.complete"
+}
+
+# A Docker CLI plugin, not a tool cached for Actions: the runner user's Docker looks for it in <home>/.docker/cli-plugins.
+# The release's checksums.txt carries the SHA-256, so a swapped or truncated download fails before it becomes executable.
+install_buildx() {
+  local asset=buildx-v$buildx_version.linux-amd64 plugin=$home/.docker/cli-plugins/docker-buildx
+  as_user mkdir -p "$(dirname "$plugin")"
+  download "https://github.com/docker/buildx/releases/download/v$buildx_version/$asset" "$plugin" \
+    "$(curl -sSfL "https://github.com/docker/buildx/releases/download/v$buildx_version/checksums.txt" \
+      | awk -v f="$asset" '{ name = $2; sub(/^\*/, "", name) } name == f { print $1 }')"
+  chmod 755 "$plugin"
+  chown "$user:" "$plugin"
 }
 
 install_tools() {
@@ -190,6 +205,7 @@ install() {
   cd "$home" # commands run as the user need a working directory the user can read
   install_slice
   install_tools
+  install_buildx
   for i in $(seq 1 "$runners"); do install_runner "$i"; done
   check
 }
@@ -199,6 +215,7 @@ check() {
   cd "$home"
   ok() { if "${@:2}" >/dev/null 2>&1; then echo "ok    $1"; else echo "FAIL  $1"; failed=1; fi; }
   ok "user $user can use docker" as_user docker info
+  ok "docker buildx v$buildx_version for $user" as_user docker buildx version
   ok "go $go_version in the tool cache" cached go "$go_version"
   ok "node $node_version in the tool cache" cached node "$node_version"
   local race
