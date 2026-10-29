@@ -326,3 +326,9 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 | `Reserve` 接受 billing 自己的 `Admitted` | `Admitted` 只带预留要的字段和范围，范围仍只能由 accounts 构造后传入；gateway 把 `accounts.Admission` 转成它，billing 的测试可以直接构造 | 直接收 `accounts.Admission`：测试要先造出整个准入 |
 | 可回收的持有者 + 截止时间；写入的 `FOR KEY SHARE` 与回收的 `FOR UPDATE` 互斥 | 进程死了、活着但漏结算、库长时间不可用都有人收尾，回收前的能续上 | `expires_at > now()` 的节点租约：时间可能过时、清理与写入无互斥、库恢复后回收活着的进程 |
 | 无锁重放在读批次前固定可见的最大交易序号，每页不越界；读批次前后各读一次位置，变了就按 `errStale` 丢掉 | 充值不推进位置，序号上界让晚提交的入账和它的批次留到下一次重放，避免缺批次；每一笔交易都在余额行锁内编号，序号顺序就是提交顺序，上界内的交易在取上界时都已提交，之后读到的批次一定带着它们，而上界必须先于批次取，否则两者之间提交的充值会被算进上界而它的批次不在集合里；按账户的序号索引取最大值，读取量不随历史增长，空账本取 0，只有上线前的行要扫一遍（它们冻结在一个账户的前缀里，不随时长增长，测试给它单列一个上限）。批次的数只由推进位置的那个事务写，位置只前进，两次相同就证明批次与位置出自同一次提交；持锁路径仍读到最新，包括自己写的作废，不固定快照上界 | REPEATABLE READ：存的时候余额行常被收费并发改过，报 40001，繁忙账户的无锁重放几乎总被丢；一条语句 LEFT JOIN 状态和批次：批次列都成可空、状态逐行重复；重放遇到缺批次就当作过期：只盖住入账这一种症状（已放不下的作废照样报错），还要把是否持锁带进 `apply` |
+
+## 用户提醒 journal
+
+迁移 `00026_user_notices.sql` 在余额实际改变和 paid 批次创建时用 invoker trigger 写本模块的 `balance_notices`。余额行冻结变动前后金额，paid 批次另写带到账金额的记录，赠送不算充值。比较在 Go 里额外调用通知函数与数据库捕获，选择后者：不增加往返和 Go 分配，旧节点写入也能捕获；代价是每个实际余额变化多一行事务 journal，消费后删除。余额 trigger 不观察 reserved/frozen，短暂预留不触发提醒。
+
+`ConsumeBalanceNotices` 在调用方的平台事务中锁最多 100 行，经回调把来源 ID、站点、账户、变动前后金额和到账金额交给 accounts，再删除 journal。回调失败全部回滚；与原账本无跨模块外键，billing 不读取 accounts 的表。不依赖全局时间或提交顺序：每条变动的两端已冻结，所以并发工作者乱序消费也不漏中间的阈值穿越。来源 ID 仅供 accounts 幂等，不在任务参数中传递个人信息。PostgreSQL 的锁读要求 UPDATE 权限，因此仅授予 id 列并用平台 UPDATE 策略限制认领；正常消费只删除，不改 id。排障先查 journal 行数和最旧记录，再查 accounts 未派发提醒、River 的 accounts.user_notices / mail.send / accounts.notice_webhook 任务与 outbox；账本提交成功不等于网络送达。

@@ -399,18 +399,21 @@ func TestDefaultTierIsCheckedAtCommit(t *testing.T) {
 }
 
 // TestApplicationChangesOnlyUpdatableColumns: the application may update exactly the columns the README lists, and
-// delete nothing except expired password reset data; the other tables refuse the privilege, not just the rows.
+// delete nothing except expired password reset data and dispatched notices; the other tables refuse the privilege, not just the rows.
 func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 	t.Parallel()
 	db, _ := open(t)
 	updatable := map[string][]string{
-		"sites":         {"name", "status", "key_prefix", "registration", "default_tier_id"},
-		"site_domains":  {"disabled_at"},
-		"site_settings": {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour"},
-		"tiers":         {"name"},
-		"roles":         {"permissions", "additional_permissions"},
-		"accounts":      {"name", "status", "tier_id", "max_keys", "key_creations_per_hour"},
-		"workspaces":    {"name", "status", "budget", "budget_reset", "deleted_at"},
+		"notification_preferences": {"low_balance", "top_up", "factor_changed", "threshold", "webhook_url", "language"},
+		"user_notices":             {"email_done", "email_failed", "dispatched", "webhook_url", "webhook_state"},
+		"announcements":            {"withdrawn_at"},
+		"sites":                    {"name", "status", "key_prefix", "registration", "default_tier_id"},
+		"site_domains":             {"disabled_at"},
+		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour"},
+		"tiers":                    {"name"},
+		"roles":                    {"permissions", "additional_permissions"},
+		"accounts":                 {"name", "status", "tier_id", "max_keys", "key_creations_per_hour"},
+		"workspaces":               {"name", "status", "budget", "budget_reset", "deleted_at"},
 		"users": {
 			"password_hash", "factor_version", "status", "totp_ciphertext", "totp_nonce", "totp_wrapped_dek",
 			"totp_key_version", "totp_last_step", "mfa_enabled_at",
@@ -434,7 +437,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		}
 	}
 	for table := range updatable {
-		if strings.HasPrefix(table, "password_reset_") {
+		if strings.HasPrefix(table, "password_reset_") || table == "user_notices" {
 			continue
 		}
 		if _, err := exec(t, db, platform, "DELETE FROM accounts."+table+" WHERE false"); state(err) != "42501" {
@@ -486,7 +489,7 @@ func TestTerminalStatesAreFinal(t *testing.T) {
 }
 
 // TestOnePolicyPerCommand: every table has exactly one policy for everyone for each of SELECT, INSERT and UPDATE,
-// and none for ALL; only reset tables allow DELETE of expired rows. Members has none for UPDATE. Policies are OR-ed,
+// and none for ALL; only reset tables and user notices allow DELETE of expired rows. Members has none for UPDATE. Policies are OR-ed,
 // so a second UPDATE or a FOR ALL policy would let through what a terminal-state policy refuses.
 func TestOnePolicyPerCommand(t *testing.T) {
 	t.Parallel()
@@ -497,11 +500,11 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "api_keys", "members", "password_reset_requests", "password_reset_tokens", "platform_grants", "recovery_codes", "roles", "security_failures", "sessions", "site_domains",
-		"site_settings", "sites", "tiers", "users", "workspaces",
+		"accounts", "announcements", "api_keys", "members", "notification_preferences", "password_reset_requests", "password_reset_tokens", "platform_grants", "recovery_codes", "roles", "security_failures", "sessions", "site_domains",
+		"site_settings", "sites", "tiers", "user_notices", "users", "workspaces",
 	} {
 		commands := "INSERT, SELECT, UPDATE"
-		if strings.HasPrefix(table, "password_reset_") {
+		if strings.HasPrefix(table, "password_reset_") || table == "user_notices" {
 			commands = "DELETE, INSERT, SELECT, UPDATE"
 		}
 		if table == "members" {
