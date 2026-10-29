@@ -373,7 +373,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if c.Compact && req.Stream { // the compact endpoint answers a whole reply (docs/domains/gateway.md「转发规则」)
 		return invalid("The compact endpoint answers one reply, not a stream; leave stream out or set it to false.")
 	}
-	over, names, err := readRouting(&req)
+	over, names, err := readRouting(&req, body)
 	if err != nil {
 		return err
 	}
