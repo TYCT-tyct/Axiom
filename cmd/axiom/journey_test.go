@@ -145,19 +145,31 @@ func (g *journeyGateway) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.URL.Path == "/mapi.php" {
 		g.orders[id] = &journeyOrder{money: r.Form.Get("money")}
-		_, _ = fmt.Fprintf(w, `{"code":"1","trade_no":"T-%s","payurl":"https://pay.example.com/checkout"}`, id) //nolint:errcheck // a test server
+		g.reply(w, map[string]any{"code": "1", "trade_no": "T-" + id, "payurl": "https://pay.example.com/checkout"})
 		return
 	}
 	o, found := g.orders[id]
 	if !found {
-		_, _ = io.WriteString(w, `{"code":0,"msg":"no such order"}`) //nolint:errcheck // a test server
+		g.reply(w, map[string]any{"code": 0, "msg": "no such order"})
 		return
 	}
 	status := "0"
 	if o.paid {
 		status = "1"
 	}
-	_, _ = fmt.Fprintf(w, `{"code":"1","data":{"status":%q,"money":%q,"trade_no":"T-%s","out_trade_no":%q}}`, status, o.money, id, id) //nolint:errcheck // a test server
+	g.reply(w, map[string]any{"code": "1", "data": map[string]any{"status": status, "money": o.money, "trade_no": "T-" + id, "out_trade_no": id}})
+}
+
+// reply answers as JSON, encoded rather than formatted, since the order number is the request's.
+func (g *journeyGateway) reply(w http.ResponseWriter, v any) {
+	body, err := jsonx.MarshalCanonical(v)
+	if err != nil {
+		g.t.Error(err)
+		return
+	}
+	if _, err = w.Write(body); err != nil {
+		g.t.Error(err)
+	}
 }
 
 func (g *journeyGateway) settle(w http.ResponseWriter, _ *http.Request) {
