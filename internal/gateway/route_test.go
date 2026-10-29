@@ -244,6 +244,7 @@ func call(model catalog.ModelID, edits ...func(*protocol.Request)) routing.Input
 func TestRouteBuildMapsWhatRoutableGives(t *testing.T) {
 	f := newRouteFixture(t)
 	r := routable(f.served, protocol.Messages, protocol.Responses)
+	r.Codename = "g-public"
 	snap := f.build([]suppliers.Routable{r})
 	if want := (Count{Endpoints: 1, Offered: 1}); f.count != want {
 		t.Errorf("the build made %+v, want %+v", f.count, want)
@@ -251,7 +252,9 @@ func TestRouteBuildMapsWhatRoutableGives(t *testing.T) {
 	if got := f.planned(call(f.served)); len(got) != 1 || got[0] != r.ID {
 		t.Fatalf("routing plans to %v, want the endpoint %s", got, r.ID)
 	}
-	plan, _, err := f.router.Plan(call(f.served))
+	in := call(f.served)
+	in.Override.OnlyNames = []string{r.Codename}
+	plan, _, err := f.router.Plan(in)
 	if err != nil {
 		t.Fatal(err)
 	}

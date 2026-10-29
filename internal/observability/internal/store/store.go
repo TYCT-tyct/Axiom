@@ -3,9 +3,5 @@
 // (internal/observability/README.md「表」).
 package store
 
-// The texts of the three list queries as they run, for the plan test to explain.
-const (
-	ListQuery        = listOwnCalls
-	ListByModelQuery = listOwnCallsByModel
-	ListByAppQuery   = listOwnCallsByApp
-)
+// ListQuery is the production query for EXPLAIN regression tests.
+const ListQuery = listOwnCalls

@@ -1,6 +1,6 @@
 -- The projection of a sync's state onto the tables routing and the back office read (internal/suppliers/README.md「持久化」).
--- Every statement here is written by the projection only, and only when what the listing says differs from the row: a
--- listing read twice changes nothing.
+-- Reads feed the projection's difference decisions. The row writes are the regression oracle for batch.go;
+-- production applies only the collected differences through ProjectionWrites, so replay changes nothing.
 
 -- name: ListProjectedGroups :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts::text AS facts, present
@@ -8,11 +8,10 @@ FROM suppliers.supplier_groups
 WHERE supplier_id = @supplier_id
 ORDER BY upstream_ref;
 
--- name: InsertProjectedGroup :one
+-- name: InsertProjectedGroup :exec
 -- A group is made unselected: which groups to use is a person's choice, not the listing's.
-INSERT INTO suppliers.supplier_groups (supplier_id, upstream_ref, name, ratio, facts, last_seen_at)
-VALUES (@supplier_id, @upstream_ref, @name, @ratio::numeric, @facts::jsonb, @seen_at)
-RETURNING id;
+INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, last_seen_at)
+VALUES (@id, @supplier_id, @upstream_ref, @name, @ratio::numeric, @facts::jsonb, @seen_at);
 
 -- name: UpdateProjectedGroup :exec
 UPDATE suppliers.supplier_groups
@@ -50,11 +49,10 @@ LEFT JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
 WHERE e.supplier_id = @supplier_id
 ORDER BY e.id;
 
--- name: InsertProjectedEndpoint :one
+-- name: InsertProjectedEndpoint :exec
 -- enabled is left at its default: it is a person's switch, and the projection only ever sets it when it makes the row.
-INSERT INTO suppliers.endpoints (supplier_id, supplier_group_id, model_id, upstream_name, formats)
-VALUES (@supplier_id, @supplier_group_id, @model_id, @upstream_name, @formats)
-RETURNING id;
+INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
+VALUES (@id, @supplier_id, @supplier_group_id, @model_id, @upstream_name, @formats);
 
 -- name: UpdateProjectedEndpoint :exec
 UPDATE suppliers.endpoints SET upstream_name = @upstream_name, formats = @formats WHERE id = @id;

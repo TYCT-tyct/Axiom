@@ -360,7 +360,7 @@ func TestStatementDownloadBoundsSocketWrites(t *testing.T) {
 	want := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
 	for _, writeErr := range []error{nil, io.ErrClosedPipe} {
 		transport := &statementDeadlineWriter{ResponseRecorder: httptest.NewRecorder(), err: writeErr}
-		sink := statementCSVWriter{ResponseWriter: transport, deadline: want}
+		sink := csvDownloadWriter{ResponseWriter: transport, deadline: want, name: "statement"}
 		_, err := sink.Write([]byte("at,kind\n"))
 		if !errors.Is(err, writeErr) || transport.deadline != want {
 			t.Fatalf("deadline = %v, error = %v", transport.deadline, err)
