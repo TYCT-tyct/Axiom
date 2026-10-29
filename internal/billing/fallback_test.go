@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 )
 
 // testFallbacks prices a web search at 20 billionths, a code execution at 50 and corrects by cost at 1.5 times.
@@ -186,5 +187,51 @@ func TestFillPricesPerUse(t *testing.T) {
 	}
 	if got := f.highest(); got.Cmp(mustUnitPrice("0.00000005")) != 0 {
 		t.Errorf("highest = %s", got)
+	}
+}
+
+// TestPriceSegmentsUsageExtras: the two amounts a client's usage shows beside the token counts are sale amounts at the
+// same rates as the charge: every per-use item the call ran, and what cache reads saved against the input price. A
+// cache read priced at or above input saves nothing, and no per-use item means no server tool cost.
+func TestPriceSegmentsUsageExtras(t *testing.T) {
+	f := mustFallbacks(t, testFallbacks)
+	for _, tc := range []struct {
+		name       string
+		schedule   string
+		counts     map[catalog.Item]int64
+		wantTool   string
+		wantSaving string
+		tool       bool
+	}{
+		{
+			name: "a search and a code execution, cache below input",
+			schedule: `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cache_read":"0.0000000003",
+				"output":"0.000000002","web_search":"0.02","code_execution":"0.03"}}`,
+			counts: map[catalog.Item]int64{in: 10, catalog.ItemCacheRead: 100, catalog.ItemOutput: 1,
+				webSearch: 2, catalog.ItemCodeExecution: 1},
+			wantTool: "0.07", wantSaving: "0.00000007", tool: true,
+		},
+		{
+			name:     "cache at input price saves nothing",
+			schedule: `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cache_read":"0.000000001","output":"0.000000002"}}`,
+			counts:   map[catalog.Item]int64{in: 10, catalog.ItemCacheRead: 100, catalog.ItemOutput: 1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := catalog.NewUsage(tc.counts, catalog.ServiceTierStandard, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := priceSegments(mustSchedule(t, tc.schedule), f, []Segment{{Usage: u, Reported: ^catalog.ItemSet(0)}}, false, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTool, _ := platform.ParseExact(tc.wantTool)
+			wantSaving, _ := platform.ParseExact(tc.wantSaving)
+			if p.hasServerTool != tc.tool || p.serverTool != wantTool || p.cacheDiscount != wantSaving {
+				t.Errorf("extras = tool %v %v (has %v), saving %v; want %v (has %v), %v",
+					p.serverTool, p.hasServerTool, tc.tool, p.cacheDiscount, wantTool, tc.tool, wantSaving)
+			}
+		})
 	}
 }

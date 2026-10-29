@@ -16,6 +16,8 @@ type usageReport struct {
 	tier          catalog.ServiceTier
 	tierSet       bool
 	unknown       []catalog.UnknownUsage
+	native        catalog.NativeTokens
+	nativeSet     bool
 	physicalInput tokenTotal
 	outputTotal   tokenTotal
 	// inputDetailed and outputDetailed tell that the report carried the side's details object, so its split is a new
@@ -81,6 +83,9 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 	}
 	if r.tierSet {
 		m.tier = r.tier
+	}
+	if r.nativeSet {
+		m.native, m.nativeSet = r.native, true
 	}
 	for _, u := range r.unknown {
 		if i := slices.IndexFunc(m.unknown, func(v catalog.UnknownUsage) bool { return v.Field == u.Field }); i >= 0 {
@@ -245,6 +250,9 @@ func (m *meter) usage(r usageReport) (catalog.Usage, error) {
 	u, err := catalog.NewUsage(m.scratch, r.tier, r.unknown)
 	if err == nil && r.physicalInput.set {
 		u, err = u.WithPhysicalInput(r.physicalInput.n)
+	}
+	if err == nil && r.nativeSet {
+		u, err = u.WithNativeTokens(r.native)
 	}
 	return u, err
 }

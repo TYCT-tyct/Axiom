@@ -89,9 +89,9 @@ func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[stri
 	s.ctx, s.charge, s.rw.charge = u, charge, charge
 	s.rw.hidesReasoning = u.HidesReasoning
 	s.rw.w.Identity = func(string) string { return o.ID }
-	s.rw.t.Model = o.Model
+	s.rw.t.Model = o.modelName()
 	s.rw.usageMembers = usageMembers
-	s.id, s.model = string(appendQuoted(nil, o.ID)), string(appendQuoted(nil, o.Model))
+	s.id, s.model = string(appendQuoted(nil, o.ID)), string(appendQuoted(nil, o.modelName()))
 }
 
 // start begins reading an event.

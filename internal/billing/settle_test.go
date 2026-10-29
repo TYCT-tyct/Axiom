@@ -440,7 +440,30 @@ func (b *bank) settleRandom(r *rand.Rand, h *Hold) {
 	results := []Result{Committed, Aggregated, FailedBeforeCommit, Unknown, NotExecuted}
 	o := outcome(results[r.IntN(len(results))], FinishReason(r.IntN(9)), //nolint:gosec // G115: below 9
 		maybeUnknown(b.t, r, used(b.t, r.Int64N(2000), r.Int64N(200), r.Int64N(3), []catalog.Item{in}[:r.IntN(2)]...)))
-	if _, err := b.billing.Settle(b.t.Context(), h, o); err != nil {
+	f, err := b.billing.Settle(b.t.Context(), h, o)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	if f.Estimated && r.IntN(2) == 0 {
+		b.correctRandom(r, h)
+	}
+}
+
+// correctRandom corrects an estimated settlement from a complete supplier's record, as the correction job does.
+func (b *bank) correctRandom(r *rand.Rand, h *Hold) {
+	b.t.Helper()
+	u, err := catalog.NewUsage(map[catalog.Item]int64{
+		in: r.Int64N(2000), catalog.ItemOutput: r.Int64N(200), webSearch: r.Int64N(3),
+	}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	ev := suppliers.ChargeEvent{
+		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1,
+		Usage: u, Reported: 1<<in | 1<<catalog.ItemOutput | 1<<webSearch,
+	}
+	c := &corrector{db: b.app, scope: b.platform}
+	if _, err := c.correct(b.t.Context(), ev); err != nil && !errors.Is(err, errNoCorrection) {
 		b.t.Fatal(err)
 	}
 }

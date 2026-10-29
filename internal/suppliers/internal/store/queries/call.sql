@@ -147,3 +147,24 @@ JOIN suppliers.cost_schedules cs ON cs.id=e.cost_schedule_id
 WHERE e.enabled AND e.cost_state='known' AND s.status IN ('active','low_balance') AND s.balance_native>0
 AND EXISTS (SELECT 1 FROM suppliers.credentials c WHERE c.supplier_group_id=e.supplier_group_id AND c.status='active' AND c.ciphertext IS NOT NULL)
 ORDER BY e.id;
+
+-- name: ChargeEvents :many
+-- The events billing has not consumed yet, with the charge's stored usage and the event's attribution. A record that
+-- is not attributed to an attempt has nothing for billing to correct, and the join drops charges that were reattributed
+-- away. The cursor is (created_at, id), so an event is never read twice and a late one is still read.
+SELECT e.id, e.charge_record_id, e.revision, e.created_at, e.payload, cr.usage,
+    cr.attempt_request_id, coalesce(cr.attempt_seq, 0)::smallint AS attempt_seq
+FROM suppliers.charge_events e
+JOIN suppliers.charge_records cr ON cr.id = e.charge_record_id
+WHERE (e.created_at, e.id) > (@after_at::timestamptz, @after_id::uuid)
+    AND cr.attribution = 'attempt' AND cr.attempt_request_id IS NOT NULL
+ORDER BY e.created_at, e.id
+LIMIT @max;
+
+-- name: GetChargeEvent :one
+-- One event by id, for a correction that was not ready when it was first read. The same attribution rule applies.
+SELECT e.id, e.charge_record_id, e.revision, e.created_at, e.payload, cr.usage,
+    cr.attempt_request_id, coalesce(cr.attempt_seq, 0)::smallint AS attempt_seq
+FROM suppliers.charge_events e
+JOIN suppliers.charge_records cr ON cr.id = e.charge_record_id
+WHERE e.id = @id AND cr.attribution = 'attempt' AND cr.attempt_request_id IS NOT NULL;

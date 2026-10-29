@@ -104,8 +104,7 @@ func TestDebtIsPaidByTheNextCredit(t *testing.T) {
 }
 
 // TestApplyRefusesWhatTheLedgerCannotHold: a replay that meets a movement out of order, an expiry larger than what its
-// batch holds, a credit that is not its batch, or a return of what was charged, which is not allocated yet (#277), stops
-// instead of making up an allocation.
+// batch holds, or a credit that is not its batch stops instead of making up an allocation.
 func TestApplyRefusesWhatTheLedgerCannotHold(t *testing.T) {
 	gift := batchRow(1, 100, "gift", after(time.Hour))
 	for name, ms := range map[string][]movement{
@@ -114,7 +113,6 @@ func TestApplyRefusesWhatTheLedgerCannotHold(t *testing.T) {
 		"a credit unknown":     {{key: keyAt(1), kind: "credit", request: uuid.NewV7(), debit: -100}},
 		"an expiry too large":  {creditOf(gift), {key: keyAt(2), kind: "expire", request: gift.ID, debit: 101}},
 		"an expiry of nothing": {creditOf(gift), {key: keyAt(2), kind: "expire", request: gift.ID, debit: 0}},
-		"a return":             {creditOf(gift), settled(2, "settle", 30), settled(3, "reverse", -10)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{gift})
@@ -286,5 +284,41 @@ func sameAllocation(t *testing.T, name string, got, live *allocation) {
 		case ok && (g.consumed != b.consumed || g.expired != b.expired || g.freezeTotal != b.freezeTotal || g.unfreezeTotal != b.unfreezeTotal || g.refunded != b.refunded):
 			t.Errorf("%s: batch %s got %+v, live %+v", name, id, *g, *b)
 		}
+	}
+}
+
+// TestReturnGivesBackTheCharge: a reversal is a return of what the charge took, not an allocation error (#277), and a
+// correction's reverse and re-settle move only their difference, at the settle's place, so a batch that arrived in
+// between is not used to refund the old charge.
+func TestReturnGivesBackTheCharge(t *testing.T) {
+	old := batchRow(1, 100, "gift", after(time.Hour))
+	a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{old})
+	request := uuid.NewV7()
+	if err := a.applyAll(uuid.UUID{}, []movement{creditOf(old),
+		{key: keyAt(2), kind: "settle", request: request, debit: 80},
+		{key: keyAt(3), kind: "reverse", request: request, debit: -10, revision: 1},
+		{key: keyAt(4), kind: "settle", request: request, debit: 5, revision: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := leftOf(a, []LiveBatchesRow{old}); !slices.Equal(got, []int64{25}) || a.unfunded != 0 || a.funded() != 25 ||
+		a.batches[old.ID].consumed != 75 {
+		t.Fatalf("after the correction left %v, consumed %d, unfunded %d, funded %d; want [25], 75, 0, 25",
+			got, a.batches[old.ID].consumed, a.unfunded, a.funded())
+	}
+
+	// Two batches are spent, then a credit that expires sooner arrives. A correction that changes nothing must not
+	// refund the later batch and spend the new earlier one: the original allocation stays as it was.
+	later := batchRow(2, 100, "gift", after(2*time.Hour))
+	newer := batchRow(4, 100, "gift", after(30*time.Minute))
+	b := newAllocation(AllocationStateRow{}, []LiveBatchesRow{old, later, newer})
+	if err := b.applyAll(uuid.UUID{}, []movement{creditOf(old), creditOf(later),
+		{key: keyAt(3), kind: "settle", request: request, debit: 200},
+		creditOf(newer),
+		{key: keyAt(5), kind: "reverse", request: request, debit: -10, revision: 1},
+		{key: keyAt(6), kind: "settle", request: request, debit: 10, revision: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := leftOf(b, []LiveBatchesRow{old, later, newer}); !slices.Equal(got, []int64{0, 0, 100}) {
+		t.Fatalf("after an equal correction left %v; want [0 0 100]: the new batch must stay unspent", got)
 	}
 }

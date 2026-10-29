@@ -13,6 +13,25 @@ import (
 	"uuid"
 )
 
+const advanceCorrectionCursor = `-- name: AdvanceCorrectionCursor :execrows
+UPDATE billing.charge_correction_cursor SET after_at = $1, after_id = $2
+WHERE singleton AND (after_at, after_id) < ($1, $2)
+`
+
+type AdvanceCorrectionCursorParams struct {
+	AfterAt time.Time
+	AfterID uuid.UUID
+}
+
+// Only forward: a second worker's older page may not move the cursor back over events it has not read.
+func (q *Queries) AdvanceCorrectionCursor(ctx context.Context, db DBTX, arg AdvanceCorrectionCursorParams) (int64, error) {
+	result, err := db.Exec(ctx, advanceCorrectionCursor, arg.AfterAt, arg.AfterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const attemptCost = `-- name: AttemptCost :one
 SELECT coalesce(sum(e.amount), 0)::bigint FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id
 WHERE t.request_id = $1 AND t.attempt_seq = $2 AND e.book = 'supplier_cost'
@@ -28,6 +47,72 @@ func (q *Queries) AttemptCost(ctx context.Context, db DBTX, arg AttemptCostParam
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const correctionCursor = `-- name: CorrectionCursor :one
+SELECT after_at, after_id FROM billing.charge_correction_cursor WHERE singleton
+`
+
+type CorrectionCursorRow struct {
+	AfterAt time.Time
+	AfterID uuid.UUID
+}
+
+func (q *Queries) CorrectionCursor(ctx context.Context, db DBTX) (CorrectionCursorRow, error) {
+	row := db.QueryRow(ctx, correctionCursor)
+	var i CorrectionCursorRow
+	err := row.Scan(&i.AfterAt, &i.AfterID)
+	return i, err
+}
+
+const deleteCorrection = `-- name: DeleteCorrection :exec
+DELETE FROM billing.charge_corrections WHERE event_id = $1
+`
+
+func (q *Queries) DeleteCorrection(ctx context.Context, db DBTX, eventID uuid.UUID) error {
+	_, err := db.Exec(ctx, deleteCorrection, eventID)
+	return err
+}
+
+const dueCorrections = `-- name: DueCorrections :many
+SELECT event_id, revision, request_id, attempts, next_at FROM billing.charge_corrections
+WHERE next_at <= clock_timestamp()
+ORDER BY next_at, event_id
+LIMIT $1
+`
+
+type DueCorrectionsRow struct {
+	EventID   uuid.UUID
+	Revision  int32
+	RequestID uuid.UUID
+	Attempts  int32
+	NextAt    time.Time
+}
+
+func (q *Queries) DueCorrections(ctx context.Context, db DBTX, max int32) ([]DueCorrectionsRow, error) {
+	rows, err := db.Query(ctx, dueCorrections, max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueCorrectionsRow
+	for rows.Next() {
+		var i DueCorrectionsRow
+		if err := rows.Scan(
+			&i.EventID,
+			&i.Revision,
+			&i.RequestID,
+			&i.Attempts,
+			&i.NextAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const dueReservations = `-- name: DueReservations :many
@@ -352,4 +437,30 @@ func (q *Queries) Unbalanced(ctx context.Context, db DBTX) ([]string, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const upsertCorrection = `-- name: UpsertCorrection :exec
+INSERT INTO billing.charge_corrections (event_id, revision, request_id, next_at, attempts, last_error)
+VALUES ($1, $2, $3, $4, 1, $5)
+ON CONFLICT (event_id) DO UPDATE SET revision = excluded.revision, request_id = excluded.request_id,
+    next_at = excluded.next_at, attempts = billing.charge_corrections.attempts + 1, last_error = excluded.last_error
+`
+
+type UpsertCorrectionParams struct {
+	EventID   uuid.UUID
+	Revision  int32
+	RequestID uuid.UUID
+	NextAt    time.Time
+	LastError string
+}
+
+func (q *Queries) UpsertCorrection(ctx context.Context, db DBTX, arg UpsertCorrectionParams) error {
+	_, err := db.Exec(ctx, upsertCorrection,
+		arg.EventID,
+		arg.Revision,
+		arg.RequestID,
+		arg.NextAt,
+		arg.LastError,
+	)
+	return err
 }

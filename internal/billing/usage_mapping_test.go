@@ -170,6 +170,10 @@ func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
 	if u, err = u.WithPhysicalInput(100); err != nil {
 		t.Fatal(err)
 	}
+	native := catalog.NativeTokens{VideoInput: 10, AcceptedPrediction: 2, RejectedPrediction: 1}
+	if u, err = u.WithNativeTokens(native); err != nil {
+		t.Fatal(err)
+	}
 	seg := Segment{Usage: u}
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"cache_read":"1","cache_write":"1","web_search":"1"},"context_tiers":{"basis":["input","cache_read","cache_write"],"method":"whole","tiers":[{"above":150,"rates":{"web_search":"10","cache_read":"2"}}]}}`)
 	b, err := encodeUsage([]Segment{seg})
@@ -182,6 +186,9 @@ func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
 	}
 	if n, ok := decoded[0].Usage.PhysicalInput(); !ok || n != 100 {
 		t.Fatalf("lost physical input: %+v", decoded)
+	}
+	if got := decoded[0].Usage.NativeTokens(); got != native {
+		t.Fatalf("native tokens = %+v after storing, want %+v", got, native)
 	}
 	cost, _, err := segmentCost(s, decoded[0].Usage, true)
 	if err != nil || cost.Rat().RatString() != "1" {

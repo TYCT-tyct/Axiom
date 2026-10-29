@@ -134,6 +134,16 @@ func (u *openAIUsage) mapOutput(r *usageReport) error {
 		[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
 		return err
 	}
+	// Prediction tokens are part of the output total and billed with it. They have no item and are only echoed, so a
+	// count that does not fit inside the total is left out rather than priced.
+	accepted, acceptedOK := nativeCount(d.Accepted)
+	rejected, rejectedOK := nativeCount(d.Rejected)
+	if acceptedOK || rejectedOK {
+		if accepted+rejected <= *out {
+			r.native.AcceptedPrediction, r.native.RejectedPrediction = accepted, rejected
+			r.nativeSet = true
+		}
+	}
 	r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, details != nil
 	unknownCounts(r, "usage."+name, d.Unknown)
 	return nil
@@ -166,6 +176,10 @@ func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
 	if d.Image > 0 || d.Video > 0 {
 		r.set(catalog.ItemImageIn, image)
 	}
+	if d.Video > 0 {
+		r.native.VideoInput = d.Video
+		r.nativeSet = true
+	}
 	r.physicalInput = tokenTotal{total, true}
 	return nil
 }
@@ -191,6 +205,25 @@ func (r *usageReport) split(total int64, rest catalog.Item, parts []catalog.Item
 	}
 	r.set(rest, left)
 	return nil
+}
+
+// nativeCount reads a token count the upstream may report as null or leave out; anything but a non-negative decimal
+// integer within the bound is not a count and is left out of the echo.
+func nativeCount(v jsontext.Value) (int64, bool) {
+	if len(v) == 0 || string(v) == "null" {
+		return 0, false
+	}
+	var n int64
+	for _, c := range v {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int64(c-'0')
+		if n > maxCount {
+			return 0, false
+		}
+	}
+	return n, true
 }
 
 func (d *openAIDetails) orZero() openAIDetails {
@@ -228,10 +261,32 @@ var (
 func appendOpenAIUsage(dst []byte, n openAINames, u catalog.Usage, cost string) []byte {
 	in := u.InputTotal()
 	out := u.OutputTotal() // the client total includes every output modality, independently of the waiver's policy
-	return fmt.Appendf(dst, `{%q:%d,%q:{"cached_tokens":%d,"cache_write_tokens":%d},%q:%d,%q:{"reasoning_tokens":%d},`+
-		`"total_tokens":%d%s}`, n.input, in, n.inputDetails, u.Count(catalog.ItemCacheRead),
-		u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h), n.output, out, n.outputDetails,
-		u.Count(catalog.ItemReasoning), in+out, cost)
+	native := u.NativeTokens()
+	dst = fmt.Appendf(dst, `{%q:%d,%q:{"cached_tokens":%d,"cache_write_tokens":%d`, n.input, in, n.inputDetails,
+		u.Count(catalog.ItemCacheRead), u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h))
+	if audio := u.Count(catalog.ItemAudioIn); audio > 0 {
+		dst = fmt.Appendf(dst, `,"audio_tokens":%d`, audio)
+	}
+	if native.VideoInput > 0 {
+		dst = fmt.Appendf(dst, `,"video_tokens":%d`, native.VideoInput)
+	}
+	dst = fmt.Appendf(dst, `},%q:%d,%q:{"reasoning_tokens":%d`, n.output, out, n.outputDetails, u.Count(catalog.ItemReasoning))
+	if audio := u.Count(catalog.ItemAudioOut); audio > 0 {
+		dst = fmt.Appendf(dst, `,"audio_tokens":%d`, audio)
+	}
+	if native.AcceptedPrediction > 0 {
+		dst = fmt.Appendf(dst, `,"accepted_prediction_tokens":%d`, native.AcceptedPrediction)
+	}
+	if native.RejectedPrediction > 0 {
+		dst = fmt.Appendf(dst, `,"rejected_prediction_tokens":%d`, native.RejectedPrediction)
+	}
+	dst = fmt.Appendf(dst, `},"total_tokens":%d,"is_byok":false`, in+out)
+	if searches, calls := u.Count(catalog.ItemWebSearch), u.Count(catalog.ItemCodeExecution); searches > 0 || calls > 0 {
+		dst = fmt.Appendf(dst, `,"server_tool_use_details":{"tool_calls_requested":%d,"tool_calls_executed":%d,"web_search_requests":%d}`,
+			searches+calls, searches+calls, searches)
+	}
+	dst = append(dst, cost...)
+	return append(dst, '}')
 }
 
 // appendQuoted appends s as a JSON string.

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/jsonx"
@@ -100,6 +101,8 @@ var auxEndpoints = map[string]endpoint{
 	"key":          {http.MethodGet, "/api/v1/key", ""},
 	"credits":      {http.MethodGet, "/api/v1/credits", ""},
 	"generation":   {http.MethodGet, "/api/v1/generation?id=0198a8f0-0000-7000-8000-000000000000", ""},
+	"content":      {http.MethodGet, "/api/v1/generation/content?id=0198a8f0-0000-7000-8000-000000000000", ""},
+	"activity":     {http.MethodGet, "/api/v1/activity", ""},
 	"subscription": {http.MethodGet, "/v1/dashboard/billing/subscription", ""},
 	"usage":        {http.MethodGet, "/v1/dashboard/billing/usage?start_date=2026-10-01&end_date=2026-10-31", ""},
 }
@@ -389,6 +392,7 @@ func checkGeneration(t *testing.T, d map[string]any, id uuid.UUID) {
 	t.Helper()
 	for field, want := range map[string]any{
 		"id": id.String(), "model": "acme/alpha", "currency": "USD", "finish_reason": "stop", "app": "claude-code",
+		"streamed": false, "cancelled": false,
 	} {
 		if d[field] != want {
 			t.Errorf("%s: %v, want %v", field, d[field], want)
@@ -400,9 +404,13 @@ func checkGeneration(t *testing.T, d map[string]any, id uuid.UUID) {
 	if _, ok := d["api_type"]; ok { // the call record has no format, and the request class is not one
 		t.Errorf("api_type is shown: %v", d["api_type"])
 	}
+	if _, ok := d["native_tokens_prompt"]; ok {
+		t.Error("a call without a reported prompt total shows a native prompt")
+	}
 	for field, want := range map[string]float64{
 		"total_cost": 1.5, "tokens_prompt": 140, "tokens_completion": 25, "tokens_reasoning": 5, "tokens_cached": 40,
-		"latency": 300, "generation_time": 2500,
+		"native_tokens_completion": 25, "native_tokens_reasoning": 5, "native_tokens_cached": 40,
+		"native_tokens_completion_images": 0, "latency": 300, "generation_time": 2500,
 	} {
 		if !near(d[field], want) {
 			t.Errorf("%s: %v, want %v", field, d[field], want)
@@ -432,5 +440,127 @@ func TestGenerationRefusals(t *testing.T) {
 	}
 	if resp, _ := r.do(http.MethodPost, "/api/v1/key", a.key, nil); resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("POST /key: %d", resp.StatusCode)
+	}
+}
+
+// TestGenerationShowsHowTheCallRan: the generation endpoint reports whether the client streamed, whether it left
+// before the end, the session, and the provider's native token counts, with the prompt total only when the upstream
+// reported one.
+func TestGenerationShowsHowTheCallRan(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	id := uuid.NewV7()
+	r.callRow(a, id)
+	r.sql("UPDATE observability.call_log SET streamed = true, physical_input = 100, finish_reason = 'cancelled', " +
+		"session_id = 'session-7', usage = '{\"input\":60,\"cache_read\":40,\"output\":20,\"reasoning\":5,\"image_out\":3}' " +
+		"WHERE id = '" + id.String() + "'")
+	resp, body := r.do(http.MethodGet, "/api/v1/generation?id="+id.String(), a.key, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	d := data(t, body)
+	if d["streamed"] != true || d["cancelled"] != true || d["session_id"] != "session-7" {
+		t.Errorf("stream, cancellation or session: %v", d)
+	}
+	for field, want := range map[string]float64{
+		"native_tokens_prompt": 100, "native_tokens_completion": 28, "native_tokens_reasoning": 5,
+		"native_tokens_cached": 40, "native_tokens_completion_images": 3, "tokens_prompt": 100,
+	} {
+		if !near(d[field], want) {
+			t.Errorf("%s: %v, want %v", field, d[field], want)
+		}
+	}
+}
+
+// TestGenerationContentIsNotRetained: an existing call of the account has no content to show and says so; another
+// account's call is indistinguishable from one that does not exist.
+func TestGenerationContentIsNotRetained(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a, b := r.newAccount(1e9), r.newAccount(1e9)
+	mine, theirs := uuid.NewV7(), uuid.NewV7()
+	r.callRow(a, mine)
+	r.callRow(b, theirs)
+	resp, body := r.do(http.MethodGet, "/api/v1/generation/content?id="+mine.String(), a.key, nil)
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "content_not_available") {
+		t.Errorf("own call: %d %s", resp.StatusCode, body)
+	}
+	resp, body = r.do(http.MethodGet, "/api/v1/generation/content?id="+theirs.String(), a.key, nil)
+	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "generation_not_found" {
+		t.Errorf("another account's call: %d %s", resp.StatusCode, body)
+	}
+	for _, path := range []string{"/api/v1/generation/content", "/api/v1/generation/content?id=abc"} {
+		resp, body = r.do(http.MethodGet, path, a.key, nil)
+		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+			t.Errorf("%s: %d %s", path, resp.StatusCode, body)
+		}
+	}
+}
+
+// activityRows decodes /activity's data array.
+func activityRows(t *testing.T, body string) []map[string]any {
+	t.Helper()
+	var out struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := jsonx.Unmarshal([]byte(body), &out); err != nil || out.Data == nil {
+		t.Fatalf("not a data array: %s (%v)", body, err)
+	}
+	return out.Data
+}
+
+// TestActivityGroupsTheLastCompletedDays: the account's calls are summed over UTC day and model, with the sale charge
+// and the token counts, optionally split by workspace; today is not a completed day and is not included.
+func TestActivityGroupsTheLastCompletedDays(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	for range 2 {
+		id := uuid.NewV7()
+		r.callRow(a, id)
+		r.sql("UPDATE observability.call_log SET at = now() - interval '1 day' WHERE id = '" + id.String() + "'")
+	}
+	today := uuid.NewV7()
+	r.callRow(a, today) // outside the completed days
+	for _, query := range []string{"", "?group_by=workspace", "?api_key_hash=" + uuid.UUID(a.keyID).String()} {
+		resp, body := r.do(http.MethodGet, "/api/v1/activity"+query, a.key, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d %s", query, resp.StatusCode, body)
+		}
+		rows := activityRows(t, body)
+		if len(rows) != 1 {
+			t.Fatalf("%s: %d rows: %s", query, len(rows), body)
+		}
+		row := rows[0]
+		if row["model"] != "acme/alpha" || row["provider_name"] != "Axiom" || row["endpoint_id"] != uuid.Nil().String() {
+			t.Errorf("%s: identity: %v", query, row)
+		}
+		for field, want := range map[string]float64{
+			"requests": 2, "prompt_tokens": 280, "completion_tokens": 50, "reasoning_tokens": 10,
+			"cached_tokens": 80, "usage": 3, "byok_usage_inference": 0,
+		} {
+			if !near(row[field], want) {
+				t.Errorf("%s: %s = %v, want %v", query, field, row[field], want)
+			}
+		}
+		if query == "?group_by=workspace" {
+			if row["workspace_id"] != a.workspace.String() {
+				t.Errorf("workspace: %v", row["workspace_id"])
+			}
+		} else if _, ok := row["workspace_id"]; ok {
+			t.Errorf("workspace shown without group_by: %v", row)
+		}
+	}
+	day := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	if resp, body := r.do(http.MethodGet, "/api/v1/activity?date="+day, a.key, nil); resp.StatusCode != http.StatusOK ||
+		len(activityRows(t, body)) != 1 {
+		t.Errorf("date %s: %d %s", day, resp.StatusCode, body)
+	}
+	for _, query := range []string{"?date=2020-01-01", "?date=today", "?group_by=model", "?user_id=u"} {
+		resp, body := r.do(http.MethodGet, "/api/v1/activity"+query, a.key, nil)
+		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+			t.Errorf("%s: %d %s", query, resp.StatusCode, body)
+		}
 	}
 }

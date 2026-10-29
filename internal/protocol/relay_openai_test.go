@@ -184,8 +184,8 @@ func checkChunk(t *testing.T, block string, e map[string]any) {
 	if e["id"] != options.ID || e["model"] != options.Model || e["provider"] != nil {
 		t.Errorf("chunk %s: id, model or provider not ours", block)
 	}
-	if u, ok := e["usage"].(map[string]any); ok && (u["cost"] != 3.703701 || u["is_byok"] != nil) {
-		t.Errorf("usage %v: not our cost alone", u)
+	if u, ok := e["usage"].(map[string]any); ok && (u["cost"] != 3.703701 || u["is_byok"] != false) {
+		t.Errorf("usage %v: not our cost and is_byok", u)
 	}
 }
 
@@ -308,6 +308,7 @@ func TestRelayOpenAIUsage(t *testing.T) {
 		want        counts
 		st          catalog.ServiceTier
 		unknown     []catalog.UnknownUsage
+		native      *catalog.NativeTokens
 		invalid     bool
 	}{
 		{
@@ -330,6 +331,7 @@ func TestRelayOpenAIUsage(t *testing.T) {
 			name: "unknown counts", usage: `{"completion_tokens":2,"image_tokens":4,"completion_tokens_details":{"accepted_prediction_tokens":1,"x_tokens":3}}`,
 			want:    counts{catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
 			unknown: []catalog.UnknownUsage{{Field: "usage.completion_tokens_details.x_tokens", Value: "3"}, {Field: "usage.image_tokens", Value: "4"}},
+			native:  &catalog.NativeTokens{AcceptedPrediction: 1},
 		},
 		{name: "flex", usage: `{}`, tier: "flex", want: counts{}, st: catalog.ServiceTierFlex},
 		{name: "priority", usage: `{}`, tier: "priority", want: counts{}, st: catalog.ServiceTierPriority},
@@ -350,7 +352,11 @@ func TestRelayOpenAIUsage(t *testing.T) {
 			if c.invalid {
 				return
 			}
-			if diff := cmp.Diff([]protocol.Segment{wantWithPrompt(t, c.usage, segment(t, c.want, c.st, c.unknown))}, u.Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" {
+			want := wantWithPrompt(t, c.usage, segment(t, c.want, c.st, c.unknown))
+			if c.native != nil {
+				want.Usage = must(want.Usage.WithNativeTokens(*c.native))
+			}
+			if diff := cmp.Diff([]protocol.Segment{want}, u.Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" {
 				t.Errorf("segments (-want +got):\n%s", diff)
 			}
 		})

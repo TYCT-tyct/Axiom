@@ -80,9 +80,10 @@ type UsageContext struct {
 
 // RelayOptions are the gateway's values for one attempt.
 type RelayOptions struct {
-	// ID is the call ID, written in place of the upstream's ID for the reply; Model is the model name the client
-	// asked for (docs/domains/gateway.md「转发规则」).
-	ID, Model string
+	// ID is the call ID, written in place of the upstream's ID for the reply. Model is the name the client asked
+	// for; ActualModel, when set, is the model that served the call, which the reply names so a models fallback is
+	// visible (docs/domains/gateway.md「转发规则」).
+	ID, Model, ActualModel string
 	// Created is when the call started, in Unix seconds: the created of every chunk a Chat client gets from an
 	// upstream of another format, which has none of its own to give.
 	Created int64
@@ -94,12 +95,26 @@ type RelayOptions struct {
 	legacyFunctions bool
 }
 
+// modelName is the name a reply puts in its model member: the model that served it, or the requested name when the
+// gateway did not say.
+func (o RelayOptions) modelName() string {
+	if o.ActualModel != "" {
+		return o.ActualModel
+	}
+	return o.Model
+}
+
 // Final is what the ending reports: the usage and cost settled and whether that usage was estimated, or, when the
 // settlement could not be written, Pending and no cost (docs/domains/gateway.md「用量与费用」).
 type Final struct {
-	Usage              Usage
-	Cost               platform.Exact
-	Currency           platform.Currency
+	Usage    Usage
+	Cost     platform.Exact
+	Currency platform.Currency
+	// ServerToolCost is the settled sale price of the server tools the call ran, nil when none ran. It is a price the
+	// client paid, not what the tools cost us.
+	ServerToolCost *platform.Exact
+	// CacheDiscount is what cache reads saved against the input price.
+	CacheDiscount      platform.Exact
 	Estimated, Pending bool
 }
 
@@ -544,7 +559,7 @@ func (r *Relay) Finish(f Final) []byte {
 	if r.state != upstreamDone {
 		return nil
 	}
-	usage, top := cost(&f), ""
+	usage, top := cost(&f, r.client), ""
 	if f.Pending {
 		top = `,"axiom":{"billing_pending":true}`
 	}
@@ -603,7 +618,7 @@ func (r *Relay) Fail(e Error, f *Final) []byte {
 	case r.agg != nil:
 		out = r.failAggregate(e, f, u)
 	case r.up != nil: // nil for a pair of formats not relayed
-		out = r.up.failure(r.endOut(), e, reply(u), cost(f))
+		out = r.up.failure(r.endOut(), e, reply(u), cost(f, r.client))
 	}
 	r.state = ended
 	if r.agg == nil {
@@ -620,17 +635,31 @@ func (r *Relay) endOut() []byte {
 	return r.out
 }
 
-// cost is the members an ending's usage gets for f, each led by a comma: none without a settled cost.
-func cost(f *Final) string {
+// cost is the members an ending's usage gets for f, each led by a comma: none without a settled cost. Chat and
+// Responses also get the parts OpenRouter reports beside the price: the server tools' cost and the cache discount.
+func cost(f *Final, format Format) string {
 	if f == nil || f.Pending {
 		return ""
 	}
-	amount := strings.TrimRight(strings.TrimRight(f.Cost.Rat().FloatString(15), "0"), ".")
+	amount := decimal(f.Cost)
 	s := `,"cost":` + amount + `,"cost_currency":"` + f.Currency.String() + `"`
 	if f.Estimated {
 		s += `,"cost_estimated":true`
 	}
+	if format == Chat || format == Responses {
+		if f.ServerToolCost != nil {
+			s += `,"cost_details":{"server_tool_cost":` + decimal(*f.ServerToolCost) + `}`
+		}
+		if f.CacheDiscount.Cmp(platform.Exact{}) > 0 {
+			s += `,"cache_discount":` + decimal(f.CacheDiscount)
+		}
+	}
 	return s
+}
+
+// decimal is an exact amount as the shortest plain decimal that holds it.
+func decimal(e platform.Exact) string {
+	return strings.TrimRight(strings.TrimRight(e.Rat().FloatString(15), "0"), ".")
 }
 
 // KeepAlive returns the bytes that keep a client's stream of format f alive while the upstream sends nothing new:

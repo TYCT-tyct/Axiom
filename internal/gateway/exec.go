@@ -330,7 +330,10 @@ func (s *session) dropReply() {
 
 // final is what the ending reports of a settlement.
 func (s *session) final(f billing.Final) *protocol.Final {
-	fin := &protocol.Final{Cost: f.Charged, Currency: s.currency, Estimated: f.Estimated}
+	fin := &protocol.Final{
+		Cost: f.Charged, Currency: s.currency, Estimated: f.Estimated,
+		ServerToolCost: f.ServerToolCost, CacheDiscount: f.CacheDiscount,
+	}
 	for _, seg := range f.Segments {
 		fin.Usage.Segments = append(fin.Usage.Segments, protocol.Segment{Usage: seg.Usage, Reported: seg.Reported})
 	}

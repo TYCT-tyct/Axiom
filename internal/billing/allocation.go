@@ -163,12 +163,107 @@ func (a *allocation) apply(m movement) error {
 	case m.debit > 0:
 		a.spend(m.debit)
 	case m.debit < 0:
-		err = fmt.Errorf("billing: transaction %s (%s) gives %d back to the balance, which is not allocated yet", m.key.id, m.kind, -m.debit)
+		err = a.unspend(-m.debit)
 	}
 	if err != nil {
 		return err
 	}
 	a.at, a.changed = m.key, true
+	return nil
+}
+
+// applyAll replays a page, netting a correction's reverse and re-settle into one movement at the settle's place. The
+// two are posted in one transaction and so are adjacent; applying them apart would give credit back and spend it
+// again, which can move the refund to a batch that expires at another time (docs/domains/billing.md「额度批次」).
+func (a *allocation) applyAll(account uuid.UUID, moves []movement) error {
+	for i := 0; i < len(moves); i++ {
+		m := moves[i]
+		if m.kind == "reverse" && m.revision != 0 && i+1 < len(moves) {
+			next := moves[i+1]
+			if next.kind == "settle" && next.request == m.request && next.revision == m.revision {
+				if err := a.applyNet(m, next); err != nil {
+					return fmt.Errorf("billing: replay %s: %w", account, err)
+				}
+				i++
+				continue
+			}
+		}
+		if err := a.apply(m); err != nil {
+			return fmt.Errorf("billing: replay %s: %w", account, err)
+		}
+	}
+	return nil
+}
+
+// applyNet applies what a reverse and the settle that follows it did to the balance: only the difference moves, at the
+// settle's place. A refund restores the batches in reverse spend order, which never gives a later-expiring batch back
+// while an earlier-expiring one is still spent.
+func (a *allocation) applyNet(reverse, settle movement) error {
+	if settle.key.compare(a.at) <= 0 || reverse.key.compare(a.at) <= 0 {
+		return fmt.Errorf("movement %v replayed after %v", settle.key, a.at)
+	}
+	net := settle.debit + reverse.debit // reverse is negative
+	a.at, a.changed = settle.key, true
+	switch {
+	case net > 0:
+		a.spend(net)
+	case net < 0:
+		if err := a.unspend(-net); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unspend gives n back to the batches a charge took, in reverse spend order, and pays the debt first. An expired
+// batch's write-off is lowered when its consumed credit is not enough, so the refund cannot outlive the expiry the
+// next run will apply again.
+func (a *allocation) unspend(n int64) error {
+	if n <= 0 {
+		return nil
+	}
+	if paid := min(a.unfunded, n); paid > 0 {
+		a.unfunded -= paid
+		n -= paid
+	}
+	if n == 0 {
+		return nil
+	}
+	returned := n
+	candidates := make([]*batchState, 0, len(a.batches))
+	for _, b := range a.batches {
+		if b.consumed > 0 || b.expired > 0 {
+			candidates = append(candidates, b)
+		}
+	}
+	slices.SortFunc(candidates, func(x, y *batchState) int { return spendOrder(y, x) })
+	for _, b := range candidates {
+		give := min(b.consumed, n)
+		b.consumed -= give
+		b.touched = b.touched || give > 0
+		n -= give
+		if n == 0 {
+			break
+		}
+	}
+	for _, b := range candidates {
+		if n == 0 {
+			break
+		}
+		give := min(b.expired, n)
+		b.expired -= give
+		b.touched = b.touched || give > 0
+		n -= give
+	}
+	if n > 0 {
+		return fmt.Errorf("a return of %d has %d that no credit batch took", returned, n)
+	}
+	for _, b := range a.batches {
+		if b.remaining() > 0 && !slices.Contains(a.open, b) {
+			a.open = append(a.open, b)
+		}
+	}
+	slices.SortFunc(a.open, spendOrder)
 	return nil
 }
 
@@ -261,38 +356,60 @@ func loadAllocation(ctx context.Context, tx pg.Tx, account uuid.UUID) (*allocati
 // the page was full, so that there may be more. The transactions from before the sequence come first; the page that
 // ends them goes on into the numbered ones. A page is bounded by the index, not by the history.
 func (a *allocation) catchUpPage(ctx context.Context, tx pg.Tx, account uuid.UUID, size int32, through int64) (full bool, err error) {
+	// Read one row beyond the page so a page never ends on a reverse whose settle is the next row: the two must be
+	// netted at the settle's place, and a page boundary between them would refund first and spend again, possibly
+	// from a batch that expires at another time (docs/domains/billing.md「额度批次」).
+	fetch := size + 1
 	if a.at.seq == 0 {
-		rows, err := queries.LegacyMovements(ctx, tx, LegacyMovementsParams{AccountID: account, AfterAt: a.at.at, AfterID: a.at.id, Max: size})
+		rows, err := queries.LegacyMovements(ctx, tx, LegacyMovementsParams{AccountID: account, AfterAt: a.at.at, AfterID: a.at.id, Max: fetch})
 		if err != nil {
 			return false, fmt.Errorf("billing: read the movements of %s: %w", account, err)
 		}
-		for _, r := range rows {
-			if err := a.applyRow(account, r.Seq, r.CreatedAt, r.ID, r.Kind, r.RequestID, r.Debit, r.Revision); err != nil {
-				return false, err
-			}
+		moves := legacyMovementsOf(rows)
+		if len(rows) == int(fetch) {
+			return true, a.applyPage(account, moves[:size], true)
 		}
-		if len(rows) == int(size) {
-			return true, nil
-		}
-	}
-	rows, err := queries.Movements(ctx, tx, MovementsParams{AccountID: account, AfterSeq: a.at.seq, ThroughSeq: through, Max: size})
-	if err != nil {
-		return false, fmt.Errorf("billing: read the movements of %s: %w", account, err)
-	}
-	for _, r := range rows {
-		if err := a.applyRow(account, r.Seq, r.CreatedAt, r.ID, r.Kind, r.RequestID, r.Debit, r.Revision); err != nil {
+		if err := a.applyPage(account, moves, false); err != nil {
 			return false, err
 		}
 	}
-	return len(rows) == int(size), nil
+	rows, err := queries.Movements(ctx, tx, MovementsParams{AccountID: account, AfterSeq: a.at.seq, ThroughSeq: through, Max: fetch})
+	if err != nil {
+		return false, fmt.Errorf("billing: read the movements of %s: %w", account, err)
+	}
+	moves := movementsOf(rows)
+	if len(rows) == int(fetch) {
+		return true, a.applyPage(account, moves[:size], true)
+	}
+	return false, a.applyPage(account, moves, false)
 }
 
-func (a *allocation) applyRow(account uuid.UUID, seq int64, at time.Time, id uuid.UUID, kind string, request uuid.UUID, debit, revision int64) error {
-	m := movement{key: orderKey{seq: seq, at: at, id: id}, kind: kind, request: request, debit: debit, revision: revision}
-	if err := a.apply(m); err != nil {
-		return fmt.Errorf("billing: replay %s: %w", account, err)
+// applyPage replays a page, holding back a trailing reverse when another row follows. The next page starts with it and
+// its settle, so applyAll can net them.
+func (a *allocation) applyPage(account uuid.UUID, moves []movement, more bool) error {
+	if more && len(moves) > 1 {
+		last := moves[len(moves)-1]
+		if last.kind == "reverse" && last.revision != 0 {
+			moves = moves[:len(moves)-1]
+		}
 	}
-	return nil
+	return a.applyAll(account, moves)
+}
+
+func legacyMovementsOf(rows []LegacyMovementsRow) []movement {
+	moves := make([]movement, len(rows))
+	for i, r := range rows {
+		moves[i] = movement{key: orderKey{seq: r.Seq, at: r.CreatedAt, id: r.ID}, kind: r.Kind, request: r.RequestID, debit: r.Debit, revision: r.Revision}
+	}
+	return moves
+}
+
+func movementsOf(rows []MovementsRow) []movement {
+	moves := make([]movement, len(rows))
+	for i, r := range rows {
+		moves[i] = movement{key: orderKey{seq: r.Seq, at: r.CreatedAt, id: r.ID}, kind: r.Kind, request: r.RequestID, debit: r.Debit, revision: r.Revision}
+	}
+	return moves
 }
 
 // catchUp replays every transaction posted since the last one replayed.

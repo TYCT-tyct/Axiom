@@ -307,7 +307,7 @@ type chatWriter struct {
 }
 
 func newChatWriter(o RelayOptions, created string) chatWriter {
-	return chatWriter{id: string(appendQuoted(nil, o.ID)), model: string(appendQuoted(nil, o.Model)), created: created, legacy: o.legacyFunctions}
+	return chatWriter{id: string(appendQuoted(nil, o.ID)), model: string(appendQuoted(nil, o.modelName())), created: created, legacy: o.legacyFunctions}
 }
 
 // failure appends a chunk with a top-level error, finish_reason error and our error type in error.metadata

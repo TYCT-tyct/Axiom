@@ -130,7 +130,11 @@ func usageDoc(u catalog.Usage, reported catalog.ItemSet) map[string]any {
 	for _, k := range u.Unknown() {
 		unknown = append(unknown, map[string]string{"field": k.Field, "value": k.Value})
 	}
-	return map[string]any{"items": items, "reported": states, "unknown": unknown, "tier": u.ServiceTier().String()}
+	doc := map[string]any{"items": items, "reported": states, "unknown": unknown, "tier": u.ServiceTier().String()}
+	if n, ok := u.PhysicalInput(); ok {
+		doc["physical_input"] = n
+	}
+	return doc
 }
 
 // Run makes one pass: matches what can be matched, holds the charges that waited past the grace, and lists the attempts

@@ -378,6 +378,13 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 	}); err != nil {
 		return nil, nil, err
 	}
+	// Estimated charges are corrected from the suppliers' records by whichever node leads the queue
+	// (docs/domains/billing.md「用量来源与暂估」).
+	if err := billing.RegisterCorrections(billing.CorrectConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
+	}); err != nil {
+		return nil, nil, err
+	}
 	if err := suppliers.RegisterReconcile(suppliers.ReconcileJobConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger,
 	}); err != nil {
