@@ -18,6 +18,7 @@
     "budget": "node scripts/budget.ts",
     "embed": "node scripts/embed.ts",
     "e2e": "playwright test",
+    "vitals": "playwright test -c playwright.vitals.config.ts",
     "journey": "playwright test -c playwright.journey.config.ts"
   },
   "devDependencies": {

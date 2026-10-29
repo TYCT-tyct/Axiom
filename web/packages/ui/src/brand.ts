@@ -9,11 +9,12 @@ type Scheme = { surfaces: readonly Rgb[]; extreme: Rgb; line: string; softAlpha:
 const black: Rgb = [0, 0, 0];
 const white: Rgb = [255, 255, 255];
 
-// The surfaces accent text sits on, from the page to the cards (--bg and --s2 in styles.css; e2e/gate.spec.ts checks the rendered pages),
+// The surfaces accent text and the primary button sit on: the page, and the panels and dialogs on it (--bg, --s1 and
+// --s2 in styles.css; e2e/gate.spec.ts checks the rendered pages),
 // and the extreme the accent moves toward when it is too faint. line is the button's edge when the button is too close
-// to the page (--t1).
+// to any of the surfaces (--t1).
 const light: Scheme = {
-  surfaces: [white, [240, 241, 243]],
+  surfaces: [white, [247, 248, 249], [240, 241, 243]],
   extreme: black,
   line: "#0d0e10",
   softAlpha: 0.09,
@@ -22,6 +23,7 @@ const light: Scheme = {
 const dark: Scheme = {
   surfaces: [
     [8, 9, 10],
+    [15, 16, 18],
     [21, 22, 25],
   ],
   extreme: white,
@@ -67,7 +69,6 @@ function accentFor(brand: Rgb, scheme: Scheme) {
 
 function tokensFor(brand: Rgb, scheme: Scheme) {
   const accent = accentFor(brand, scheme);
-  const page = scheme.surfaces[0] ?? white;
   return {
     "--accent": hex(accent),
     "--accent-ink": hex(inkOn(accent)),
@@ -75,7 +76,7 @@ function tokensFor(brand: Rgb, scheme: Scheme) {
     "--accent-line": rgba(accent, scheme.lineAlpha),
     "--btn": hex(brand),
     "--btn-ink": hex(inkOn(brand)),
-    "--btn-line": contrast(brand, page) >= edge ? "transparent" : scheme.line,
+    "--btn-line": scheme.surfaces.every((s) => contrast(brand, s) >= edge) ? "transparent" : scheme.line,
   };
 }
 

@@ -169,6 +169,30 @@ jobs:
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
 
+  # The web vitals are timings, so they run in a job of their own: one test at a time, with no other test on the
+  # container's cores. Like e2e, not on a pull request.
+  vitals:
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the frontend's version stamp comes from this tree's history
+      - uses: ./.github/actions/setup
+      - name: Run the web vitals in their network namespace
+        run: bash scripts/ci/web-container.sh just web-vitals
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
+        with:
+          name: vitals-test-results
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+      - if: always()
+        run: bash scripts/ci/web-container.sh cleanup
+
   # Each shard keeps the same eight-core container and four-worker rule (#297/#363). Like go-test, not on a pull request.
   e2e:
     name: e2e (${{ matrix.shard }}/${{ inputs.gate_stress && 1 || 2 }})
@@ -315,7 +339,7 @@ jobs:
   build:
     # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
     name: build
-    needs: [changes, static, go-test, web, e2e, journey, bench, deploy]
+    needs: [changes, static, go-test, web, e2e, vitals, journey, bench, deploy]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
@@ -331,6 +355,8 @@ jobs:
       # `needs.e2e.result` aggregates the whole matrix. Only Markdown-only builds and pull requests may skip its shards.
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.e2e.result }}' = success
+      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+        run: test '${{ needs.vitals.result }}' = success
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.journey.result }}' = success
       - if: github.ref == 'refs/heads/main' && !inputs.gate_stress
