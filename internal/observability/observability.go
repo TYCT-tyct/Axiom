@@ -82,6 +82,7 @@ type AttemptRecord struct {
 // call's endpoint, source class, egress and attempt count are the last attempt's, so the row cannot disagree with its
 // attempts.
 type CallRecord struct {
+	PriceVersion                     string
 	ID                               uuid.UUID // the request ID
 	At                               time.Time // when the request started
 	Site, Account, Workspace, Key    uuid.UUID
@@ -107,6 +108,7 @@ type CallRecord struct {
 
 // row is a CallRecord as the insert statement reads it: its members are the table's column names.
 type row struct {
+	PriceVersion    string           `json:"price_version"`
 	ID              string           `json:"id"`
 	At              time.Time        `json:"at"`
 	SiteID          string           `json:"site_id"`
@@ -227,7 +229,7 @@ func newCallRow(r CallRecord) (row, error) {
 		ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID, RequestClass: r.Class,
 		Language: r.Language, UsedTools: r.UsedTools, HasImage: r.HasImage, HasFile: r.HasFile, Model: r.Model,
 		EndpointID: endpoint, SourceClass: sourceClass, Egress: egress, AttemptCount: len(r.Attempts), Route: route,
-		Usage: usage, ServiceTier: r.ServiceTier.String(), PriceNano: r.PriceNano,
+		PriceVersion: r.PriceVersion, Usage: usage, ServiceTier: r.ServiceTier.String(), PriceNano: r.PriceNano,
 		CostNano: r.CostNano, Currency: r.Currency.String(), FreeOfCharge: r.Free, LatencyMs: r.Latency.Milliseconds(),
 		FirstTokenMs: r.FirstToken.Milliseconds(), FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
 		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed,

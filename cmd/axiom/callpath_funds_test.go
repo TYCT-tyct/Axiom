@@ -32,6 +32,16 @@ import (
 func (w *callWorld) controlledCallPath(clock *testClock) (callNode, *routing.Router, *gateway.RouteDeps) {
 	w.t.Helper()
 	d, upstreams := w.controlledCallDeps(clock)
+	site, ok := d.accounts.MainSite()
+	if !ok {
+		w.t.Fatal("main site missing")
+	}
+	// Periodic workers are stopped, so publish the same database-owned prices explicitly.
+	if err := w.db.Tx(w.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return refreshSalePrices(w.t.Context(), tx, w.site, site.Currency)
+	}); err != nil {
+		w.t.Fatal(err)
+	}
 	ledger, err := billing.Start(w.t.Context(), w.db, pg.PlatformScope(), billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour,
 	}, suppliers.CallWrites{})
@@ -51,7 +61,7 @@ func (w *callWorld) controlledCallPath(clock *testClock) (callNode, *routing.Rou
 	if err := upstreams.Reload(w.t.Context()); err != nil {
 		w.t.Fatal(err)
 	}
-	routes := routeDeps(d, router, upstreams, health, &atomic.Bool{}, salePrices(w.db, d.accounts, d.catalog, d.logger), models)
+	routes := routeDeps(d, router, upstreams, health, &atomic.Bool{}, salePrices(w.db, d.accounts), models)
 	snap, list, count, err := routes.Build(w.t.Context())
 	if err != nil {
 		w.t.Fatal(err)
@@ -70,7 +80,7 @@ func (w *callWorld) callControlled(n callNode, body string) int {
 	if rw.Code != http.StatusOK {
 		w.t.Logf("gateway refusal: %d %s", rw.Code, rw.Body.String())
 	}
-	if rw.Code != http.StatusOK && rw.Code != http.StatusServiceUnavailable && rw.Code != http.StatusBadGateway {
+	if rw.Code != http.StatusOK && rw.Code != http.StatusNotFound && rw.Code != http.StatusServiceUnavailable && rw.Code != http.StatusBadGateway {
 		w.t.Fatalf("call: %d %s", rw.Code, rw.Body.String())
 	}
 	return rw.Code
@@ -316,7 +326,7 @@ func TestGatewaySupplierBalanceFiltersEachRequest(t *testing.T) {
 	}
 }
 
-func TestGatewayNewAPICostGapsKeepDefaultRequestsRoutable(t *testing.T) {
+func TestGatewayNewAPICostGapsAreWithheldBeforeRouting(t *testing.T) {
 	t.Parallel()
 	w := newCallWorld(t)
 	w.price()
@@ -332,11 +342,11 @@ func TestGatewayNewAPICostGapsKeepDefaultRequestsRoutable(t *testing.T) {
 		messagesCall,
 		`{"model":"claude-opus-5-5","max_tokens":16,"messages":[{"role":"user","content":"Hello"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`,
 	} {
-		if status := w.callControlled(n, body); status != http.StatusOK {
-			t.Fatalf("new-api native gaps rejected a default-tier request: %d", status)
+		if status := w.callControlled(n, body); status != http.StatusNotFound {
+			t.Fatalf("unpublished native gaps reached routing: %d", status)
 		}
 	}
-	if got := len(w.supplier.sent()); got != 2 {
-		t.Fatalf("upstream calls = %d, want 2", got)
+	if got := len(w.supplier.sent()); got != 0 {
+		t.Fatalf("unpublished native gaps made %d upstream calls", got)
 	}
 }

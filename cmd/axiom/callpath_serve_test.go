@@ -293,6 +293,13 @@ func (w *callWorld) checkBooked(r reply, want booking) {
 	if wanted := fmt.Sprintf("1 %d %d false %s %d %d %d %s relay", want.charge, want.cost, want.tier, want.input, want.output, want.searches, want.app); logged != wanted {
 		w.t.Errorf("the call log holds %q, want %q: one record with the ledger's charge, the supplier's cost, the service tier, the usage the relay reported, the client application and the source class", logged, wanted)
 	}
+	if got := w.query(`SELECT count(*)::text FROM observability.call_log c
+  JOIN billing.reservations r ON r.request_id=c.id
+  JOIN billing.price_versions v ON v.id=c.price_version
+  WHERE c.id::text=$1 AND c.price_version=r.price_versions[r.entry+1]
+   AND v.model_id=r.models[r.entry+1]`, id); got != "1" {
+		w.t.Errorf("%s matching published/reserved/logged price versions, want one", got)
+	}
 }
 
 // checkBalanced: every ledger transaction sums to zero, no balance differs from its book, and no reservation holds

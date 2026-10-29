@@ -134,3 +134,16 @@ WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < @before AND
     AND (finished_at, request_id, attempt_seq) > (@after_at::timestamptz, @after_request::uuid, @after_seq::smallint)
 ORDER BY finished_at, request_id, attempt_seq
 LIMIT @batch::int;
+
+-- name: ListPriceCosts :many
+-- Costs depend on configured eligibility, never on a node's adapter or key availability.
+SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency,
+ v.id AS unit_value_id, v.value::text AS unit_value, cs.schedule
+FROM suppliers.endpoints e
+JOIN suppliers.suppliers s ON s.id=e.supplier_id
+JOIN suppliers.supplier_groups g ON g.id=e.supplier_group_id AND g.selected AND g.present
+JOIN LATERAL (SELECT u.id,u.value FROM suppliers.unit_values u WHERE u.supplier_id=s.id ORDER BY u.id DESC LIMIT 1) v ON true
+JOIN suppliers.cost_schedules cs ON cs.id=e.cost_schedule_id
+WHERE e.enabled AND e.cost_state='known' AND s.status IN ('active','low_balance') AND s.balance_native>0
+AND EXISTS (SELECT 1 FROM suppliers.credentials c WHERE c.supplier_group_id=e.supplier_group_id AND c.status='active' AND c.ciphertext IS NOT NULL)
+ORDER BY e.id;

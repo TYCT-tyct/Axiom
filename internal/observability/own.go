@@ -14,6 +14,7 @@ import (
 // OwnCall is a call as its own account sees it: what the user did and was charged, and not what it cost us, which
 // endpoint served it, or how it was routed (docs/domains/gateway.md「用量与费用」).
 type OwnCall struct {
+	PriceVersion                     string
 	ID, Workspace, Key               uuid.UUID
 	At                               time.Time
 	IP                               string
@@ -147,7 +148,7 @@ func GetOwn(ctx context.Context, tx pg.Tx, id uuid.UUID) (OwnCall, error) {
 func ownCall(r store.ListOwnCallsRow) (OwnCall, error) {
 	c := OwnCall{
 		At: r.At, IP: r.Ip, ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID,
-		Class: r.RequestClass, Model: r.Model, ServiceTier: r.ServiceTier, PriceNano: r.PriceNano,
+		PriceVersion: r.PriceVersion, Class: r.RequestClass, Model: r.Model, ServiceTier: r.ServiceTier, PriceNano: r.PriceNano,
 		Currency: r.Currency, Free: r.FreeOfCharge, Latency: time.Duration(r.LatencyMs) * time.Millisecond,
 		FirstToken: time.Duration(r.FirstTokenMs) * time.Millisecond, FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
 	}

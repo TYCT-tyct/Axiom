@@ -284,6 +284,56 @@ func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requ
 	return named, err
 }
 
+const listPriceCosts = `-- name: ListPriceCosts :many
+SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency,
+ v.id AS unit_value_id, v.value::text AS unit_value, cs.schedule
+FROM suppliers.endpoints e
+JOIN suppliers.suppliers s ON s.id=e.supplier_id
+JOIN suppliers.supplier_groups g ON g.id=e.supplier_group_id AND g.selected AND g.present
+JOIN LATERAL (SELECT u.id,u.value FROM suppliers.unit_values u WHERE u.supplier_id=s.id ORDER BY u.id DESC LIMIT 1) v ON true
+JOIN suppliers.cost_schedules cs ON cs.id=e.cost_schedule_id
+WHERE e.enabled AND e.cost_state='known' AND s.status IN ('active','low_balance') AND s.balance_native>0
+AND EXISTS (SELECT 1 FROM suppliers.credentials c WHERE c.supplier_group_id=e.supplier_group_id AND c.status='active' AND c.ciphertext IS NOT NULL)
+ORDER BY e.id
+`
+
+type ListPriceCostsRow struct {
+	EndpointID         uuid.UUID
+	ModelID            uuid.UUID
+	SettlementCurrency string
+	UnitValueID        uuid.UUID
+	UnitValue          string
+	Schedule           []byte
+}
+
+// Costs depend on configured eligibility, never on a node's adapter or key availability.
+func (q *Queries) ListPriceCosts(ctx context.Context, db DBTX) ([]ListPriceCostsRow, error) {
+	rows, err := db.Query(ctx, listPriceCosts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPriceCostsRow
+	for rows.Next() {
+		var i ListPriceCostsRow
+		if err := rows.Scan(
+			&i.EndpointID,
+			&i.ModelID,
+			&i.SettlementCurrency,
+			&i.UnitValueID,
+			&i.UnitValue,
+			&i.Schedule,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRoutable = `-- name: ListRoutable :many
 SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.owner_scope,
     s.balance_native::text AS balance_native, s.balance_observed_at, s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,

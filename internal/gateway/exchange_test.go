@@ -141,7 +141,7 @@ func TestRouteBuildKeepsTheRatesReadBeforeAConcurrentCommit(t *testing.T) {
 	}
 	f.deps.ExchangeRates = f.currentRates
 	changed := false
-	f.deps.Prices = func(ctx context.Context) (map[catalog.ModelID]billing.Sold, error) {
+	f.deps.Prices = func(ctx context.Context, snap *catalog.Snapshot, endpoints []suppliers.Routable, rates []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
 		if changed {
 			return f.prices, nil
 		}

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"uuid"
 
+	"axiom/internal/platform"
+
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
@@ -99,7 +101,7 @@ func TestOpenRouterRequestsDoNotReadPrices(t *testing.T) {
 		Endpoints: func(context.Context) ([]suppliers.Routable, error) {
 			return []suppliers.Routable{routable(r.alpha, protocol.Messages)}, nil
 		},
-		Prices: func(context.Context) (map[catalog.ModelID]billing.Sold, error) {
+		Prices: func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
 			if reads.Add(1) > 1 {
 				return nil, errors.New("price storage unavailable")
 			}
