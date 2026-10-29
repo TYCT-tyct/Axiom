@@ -185,18 +185,19 @@ SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS k
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
-WHERE account_id = ($1::text)::uuid AND at >= $2 AND at < $3
-    AND (at, id) < ($4::timestamptz, ($5::text)::uuid)
+WHERE account_id = ($1::text)::uuid
+    AND (at, id) < ($2::timestamptz, ($3::text)::uuid)
+    AND at >= $4 AND at < $5
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT $6
 `
 
 type ListOwnCallsParams struct {
 	AccountID string
-	Since     time.Time
-	Until     time.Time
 	AfterAt   time.Time
 	AfterID   string
+	Since     time.Time
+	Until     time.Time
 	PageSize  int32
 }
 
@@ -225,15 +226,17 @@ type ListOwnCallsRow struct {
 // What a user may read of the account's own calls: no cost, no endpoint, no routing, no ledger. The scope's row-level
 // security limits the rows to the account, and the explicit account condition lets the planner walk the index
 // (account_id, at DESC, id DESC) in order instead of filtering every account's rows; the keyset (at, id) pages
-// stably while new calls arrive.
+// stably while new calls arrive. Keep the row upper bound before the scalar time bounds: PostgreSQL 18 cannot
+// compare their tightness and uses the first as the B-tree start key. Starting at until walks newer index leaves
+// even when EXPLAIN lists the cursor in Index Cond (README.md「读」, #408).
 // Qualified: a bare id would sort by the output column id::text, which is not the index order.
 func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsParams) ([]ListOwnCallsRow, error) {
 	rows, err := db.Query(ctx, listOwnCalls,
 		arg.AccountID,
-		arg.Since,
-		arg.Until,
 		arg.AfterAt,
 		arg.AfterID,
+		arg.Since,
+		arg.Until,
 		arg.PageSize,
 	)
 	if err != nil {
@@ -279,8 +282,9 @@ SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS k
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
-WHERE account_id = ($1::text)::uuid AND client_app = $2 AND at >= $3 AND at < $4
-    AND (at, id) < ($5::timestamptz, ($6::text)::uuid)
+WHERE account_id = ($1::text)::uuid AND client_app = $2
+    AND (at, id) < ($3::timestamptz, ($4::text)::uuid)
+    AND at >= $5 AND at < $6
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT $7
 `
@@ -288,10 +292,10 @@ LIMIT $7
 type ListOwnCallsByAppParams struct {
 	AccountID string
 	ClientApp string
-	Since     time.Time
-	Until     time.Time
 	AfterAt   time.Time
 	AfterID   string
+	Since     time.Time
+	Until     time.Time
 	PageSize  int32
 }
 
@@ -322,10 +326,10 @@ func (q *Queries) ListOwnCallsByApp(ctx context.Context, db DBTX, arg ListOwnCal
 	rows, err := db.Query(ctx, listOwnCallsByApp,
 		arg.AccountID,
 		arg.ClientApp,
-		arg.Since,
-		arg.Until,
 		arg.AfterAt,
 		arg.AfterID,
+		arg.Since,
+		arg.Until,
 		arg.PageSize,
 	)
 	if err != nil {
@@ -371,9 +375,10 @@ SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS k
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
-WHERE account_id = ($1::text)::uuid AND model = $2 AND at >= $3 AND at < $4
-    AND ($5::text = '' OR client_app = $5)
-    AND (at, id) < ($6::timestamptz, ($7::text)::uuid)
+WHERE account_id = ($1::text)::uuid AND model = $2
+    AND (at, id) < ($3::timestamptz, ($4::text)::uuid)
+    AND at >= $5 AND at < $6
+    AND ($7::text = '' OR client_app = $7)
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT $8
 `
@@ -381,11 +386,11 @@ LIMIT $8
 type ListOwnCallsByModelParams struct {
 	AccountID string
 	Model     string
+	AfterAt   time.Time
+	AfterID   string
 	Since     time.Time
 	Until     time.Time
 	ClientApp string
-	AfterAt   time.Time
-	AfterID   string
 	PageSize  int32
 }
 
@@ -417,11 +422,11 @@ func (q *Queries) ListOwnCallsByModel(ctx context.Context, db DBTX, arg ListOwnC
 	rows, err := db.Query(ctx, listOwnCallsByModel,
 		arg.AccountID,
 		arg.Model,
+		arg.AfterAt,
+		arg.AfterID,
 		arg.Since,
 		arg.Until,
 		arg.ClientApp,
-		arg.AfterAt,
-		arg.AfterID,
 		arg.PageSize,
 	)
 	if err != nil {

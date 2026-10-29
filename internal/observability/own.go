@@ -51,12 +51,13 @@ const (
 	MaxPageSize     = 200
 )
 
-// cursorOf is where the page starts: after the newest possible call for the first page, else after the cursor.
+// cursorOf uses the tighter of the exclusive window end and the page cursor as one composite index bound.
 func cursorOf(q OwnQuery) (at time.Time, id string) {
-	if q.After != nil {
+	until := q.Until.Truncate(time.Microsecond) // match the timestamp precision PostgreSQL compares
+	if q.After != nil && q.After.At.Before(until) {
 		return q.After.At, q.After.ID.String()
 	}
-	return time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), uuid.Max().String()
+	return until, uuid.Nil().String()
 }
 
 // listRows runs the list query that fits the filters, for a page of size calls: one more is asked for, to learn whether
