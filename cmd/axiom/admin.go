@@ -11,6 +11,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/egress"
+	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/webui"
@@ -21,6 +22,7 @@ import (
 // the session of two-step verification and its permission on the platform before a method runs, and kept the request
 // to the contract's schemas.
 type adminAPI struct {
+	smtp     mail.Config
 	version  string
 	accounts *accounts.Service
 	catalog  *catalog.Catalog

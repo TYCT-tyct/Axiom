@@ -62,3 +62,21 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 证据：PR #455 的 cf160d6 独立评审第 1 条；`TestDefaultCompressionPreservesServiceableRequests` 在修复前复现 5 KB 普通请求被改写、4.5 KB 系统提示被拒绝、默认输出等于上下文时全拒绝，以及两条溢出回退失败。`TestMiddleTextRetainsUnicodeEnds` 同时复现不同 UTF-8 宽度的首尾字符被丢失。
 哪一层没拦住：最初回归只测显式启用和等宽 emoji 首尾，没有覆盖小窗口模型的默认请求、输出上限等于上下文和不同宽度的边界。默认的有损优化需用未超触发阈值的小请求与关闭策略逐字节对照，失败或资源不足不新增拒绝；首尾不变量需覆盖不同宽度的 Unicode 字符。上述测试保留这些组合。
 出现：2026-10-29
+
+## 后台可写配置不能沿用运维参数的信任边界
+
+证据：#464 的 `699698b2` 独立评审第 1、2 条发现 SMTP 密码参与无盐幂等摘要，且后台可写目标直接拨号；诊断新增日志时也必须剔除 SMTP 回复里的凭证或收件人回显。信封加密本身不能保护摘要里的离线猜测校验器，保存时的地址检查也不能替代实际拨号时的 DNS 校验与 IP 钉扎。
+哪一层没拦住：最初只验证密文存储、HTTP 响应和审计脱敏，没有检查幂等表中的派生数据，也沿用了仅来自环境变量时的直接连接。回归 `TestSMTPFingerprintExcludesPassword` 检查持久化摘要与密码无关，`TestSMTPDestinationBoundary` 覆盖后台保存和旧配置测试的私网拒绝，`TestTCPRevalidatesDNSAndPinsTheConnection` 覆盖 DNS 重绑定，`TestSMTPDiagnosticRedactsServerEcho` 检查服务器回显脱敏。后续新增凭证写入口必须同时检查幂等记录；新增后台可写网络目标必须验证实际拨号边界。
+出现：2026-10-29
+
+## 供应商修订必须保留创建、旧位置与首版授权的边界
+
+证据：PR #461 的 a577486 独立评审第 1–3 条。原实现把待映射页的创建 POST 当作纠正，过期页面能无声覆盖他人的映射；版本 1 的 key 位置缺策略却继续被接受，旧页会投影为全拒；首版别名仍有列级 UPDATE 授权。`TestGroupMappingRevisionsAndIdempotentReplay`、`TestConcurrentMappingCorrectionsRequireCurrentRevision`、两个适配器的 `TestLegacyKeyListingRestartsBeforeProjectingPolicies` 和 `TestAliasRevisionsPreserveOwnershipAndHistory` 保留这些边界回归。
+哪一层没拦住：只验证追加历史和最终快照，没有回放既有前端的新建语义、升级前的分页位置及旧迁移留下的权限。后续供应商修订改动须同时核对创建冲突与显式版本前提、旧位置重读、原始行不可改写；不能仅凭新表只追加就称整条历史不可变。
+出现：2026-10-29
+
+## 集成探测的时间锚点与重复账本夹具放大列车负载
+
+证据：PR #462 的列车构建 [40914818602](https://github.com/TYCT-tyct/Axiom/actions/runs/40914818602) 在健康探测恢复断言失败，并在第二份大账本夹具播种时达到 billing 包的十分钟期限。
+哪一层没拦住：健康测试从组装前冻结的时钟推进 31 秒，实际熔断时间却由网关按真实时钟记录；两种账本计划测试分别播种 200 万笔数据，单包累计成本没有被局部测试暴露。集成测试应从实际事件时刻推进受控时钟，并用时钟偏移复现组装延迟；同模块同量级的计划验证共用大夹具，保留每种查询的完整计划断言。`TestGatewayHealthRemoveProbeRestore` 固定模拟两分钟时钟落后；`TestLedgerReadsGrowWithThePage` 同时验证 movements 和 statement，后续此类计划用例加在同一夹具下。
+出现：2026-10-29

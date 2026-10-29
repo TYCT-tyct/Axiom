@@ -23,6 +23,15 @@ import (
 func registerNotifications(ctx context.Context, db *pg.DB, queue *pg.Queue, smtp mail.Config,
 	cache *kv.Client, master *secret.MasterKeys, keys *secret.Keyring, exit *egress.Client, logger *slog.Logger,
 ) (*accounts.PasswordRecovery, *accounts.Registration, error) {
+	if err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		stored, found, err := mail.StoredConfig(ctx, tx, keys)
+		if found {
+			smtp = stored
+		}
+		return err
+	}); err != nil {
+		return nil, nil, err
+	}
 	mailer, err := mail.Register(ctx, db, queue, smtp, cache, master, logger)
 	if err != nil {
 		return nil, nil, err

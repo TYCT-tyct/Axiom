@@ -12,6 +12,8 @@ import (
 	"net/textproto"
 	"strconv"
 	"time"
+
+	"axiom/internal/platform/egress"
 )
 
 const (
@@ -55,6 +57,7 @@ func modeFor(port int) tlsMode {
 // sender delivers one message per SMTP session. It is safe for concurrent use: the throttle serializes its decision, and
 // every Send opens its own connection.
 type sender struct {
+	exit        *egress.Client
 	cfg         Config
 	addr        string
 	mode        tlsMode
@@ -70,6 +73,7 @@ type sender struct {
 // newSender takes a Config that ReadConfig accepted.
 func newSender(cfg Config) *sender {
 	s := &sender{
+		exit:        egress.NewDirect(),
 		cfg:         cfg,
 		addr:        net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
 		mode:        modeFor(cfg.Port),
@@ -150,7 +154,9 @@ func (s *sender) connect(ctx context.Context) (net.Conn, error) {
 
 // dialServer is the real dial, whose timeout covers the addresses of a name and the TCP handshake.
 func (s *sender) dialServer(ctx context.Context) (net.Conn, error) {
-	return (&net.Dialer{Timeout: s.dialTimeout}).DialContext(ctx, "tcp", s.addr)
+	ctx, cancel := context.WithTimeout(ctx, s.dialTimeout)
+	defer cancel()
+	return s.exit.DialContext(ctx, s.addr)
 }
 
 // session speaks TLS and authenticates: port 465 is TLS from the first byte, everything else is upgraded with

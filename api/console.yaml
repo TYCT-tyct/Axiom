@@ -1663,7 +1663,8 @@ components:
         - error_kind
       description: >-
         One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not
-        have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log.
+        have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. The app-attribution
+        members are absent when the client named no application, or when the call was recorded before they existed.
       properties:
         charge_details:
           $ref: "#/components/schemas/ChargeDetails"
@@ -1677,6 +1678,24 @@ components:
         key_id: {$ref: "#/components/schemas/KeyId"}
         ip: {type: string, description: The client address the call came from.}
         client_app: {type: string, description: "The tool that made the call, such as Claude Code."}
+        app_referer:
+          type: string
+          maxLength: 2048
+          description: >-
+            The application's URL, from the client's `HTTP-Referer` header: OpenRouter's primary app-attribution
+            identifier. Trimmed, bounded and free of control characters; absent when the client named none.
+        app_title:
+          type: string
+          maxLength: 200
+          description: >-
+            The application's display name, from `X-OpenRouter-Title` (or the older `X-Title`). Trimmed, bounded and
+            free of control characters; absent when the client named none.
+        app_categories:
+          type: string
+          maxLength: 64
+          description: >-
+            The application's marketplace categories, from `X-OpenRouter-Categories`: at most two lowercase
+            hyphen-separated names, comma-separated. Absent when the client named none.
         session_id: {type: string}
         subagent_id: {type: string}
         request_class: {type: string}
