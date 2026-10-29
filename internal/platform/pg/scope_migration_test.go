@@ -19,7 +19,8 @@ func TestScopeMigrationReleasesLocksAndResumes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	if err := pgtest.Run(ctx, database.Superuser,
-		"DELETE FROM platform.goose_platform WHERE version_id = 14",
+		"DELETE FROM platform.goose_platform WHERE version_id >= 14",
+		"DROP TABLE platform.alert_positions",
 		"ALTER POLICY tenant ON platform.audit_log USING (platform.in_scope(site_id, account_id))"); err != nil {
 		t.Fatal(err)
 	}

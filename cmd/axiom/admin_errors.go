@@ -15,6 +15,7 @@ import (
 // adminRefusals are the refusals the admin API's modules make beyond those the console's do (refusals), tried after
 // them. A message is English for logs and developers and never repeats what the client sent.
 var adminRefusals = []refusal{
+	{observability.ErrAlertRotationWindow, http.StatusConflict, codeConflict, "the preceding signing secret is still valid; wait until the one-hour overlap ends before rotating again"},
 	{payments.ErrInvestigated, http.StatusConflict, codeConflict, "this record was already investigated; read its saved note"},
 	{observability.ErrAlertConfiguration, http.StatusUnprocessableEntity, codeUnprocessable, "the alert configuration is invalid"},
 	{observability.ErrAlertRevision, http.StatusConflict, codeStaleRevision, "the alert configuration changed since it was read"},

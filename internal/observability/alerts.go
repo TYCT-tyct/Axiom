@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"net/url"
 	"strconv"
 	"time"
 	"uuid"
@@ -29,8 +30,9 @@ type AlertRule struct {
 
 // AlertChannel is a platform operator destination; its mail uses the reserved zero-site outbox.
 type AlertChannel struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
+	ID         string `json:"id"`
+	Email      string `json:"email,omitempty"`
+	WebhookURL string `json:"webhook_url,omitempty"`
 }
 
 // AlertConfiguration is replaced atomically with optimistic concurrency.
@@ -69,6 +71,8 @@ var (
 	ErrAlertConfiguration = errors.New("observability: invalid alert configuration")
 	// ErrAlertRevision refuses a stale configuration replacement.
 	ErrAlertRevision = errors.New("observability: stale alert configuration revision")
+	// ErrAlertRotationWindow preserves the complete validity window of the preceding secret.
+	ErrAlertRotationWindow = errors.New("observability: webhook secret overlap has not ended")
 )
 
 // GetAlertConfiguration reads the platform's rules and channels in the caller's authorized scope.
@@ -146,10 +150,30 @@ func validateAlertChannel(ch AlertChannel) error {
 	if ch.ID == "" || len(ch.ID) > 64 || len(ch.Email) > 254 {
 		return ErrAlertConfiguration
 	}
+	if ch.WebhookURL != "" {
+		return validateWebhookChannel(ch)
+	}
 	if _, err := mail.ParseAddress(ch.Email); err != nil {
 		return ErrAlertConfiguration
 	}
 	return nil
+}
+
+func validateWebhookChannel(ch AlertChannel) error {
+	if ch.Email != "" {
+		return ErrAlertConfiguration
+	}
+	_, err := ValidateAlertWebhookURL(ch.WebhookURL)
+	return err
+}
+
+// ValidateAlertWebhookURL is shared by configuration validation and egress preflight outside the database transaction.
+func ValidateAlertWebhookURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || len(raw) > 2048 || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+		return "", ErrAlertConfiguration
+	}
+	return u.Hostname(), nil
 }
 
 func validateAlertRule(r AlertRule) error {

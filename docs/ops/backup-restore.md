@@ -93,9 +93,9 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
 7. 重启所有节点（启动前也会校验密钥版本），恢复备份调度并做新的完整 set。保留轮换前的加密备份直到其正常过期。
    审计 `keyring.initialize/add/activate/rewrap/retire` 在 `platform.audit_log`，只含版本、表名与数量。
 
-重包裹只更新账户 TOTP、供应商登录和凭证、支付商户配置的包裹 DEK 与主密钥版本，不改密文、nonce、登录版本、TOTP 因子版本、商户配置修订或业务状态。
+重包裹只更新[平台信封清单](../../internal/platform/README.md#凭证加密)中各存储的包裹 DEK 与主密钥版本，不改数据密文、nonce、所属业务对象的状态或修订；Webhook 签名密钥也在该清单内，其签名材料和轮换重叠期限不变。
 新增存储信封的表必须加入 `cmd/axiom` 的清单；启动和命令遇到未登记的 `wrapped_dek` 列会拒绝继续，避免漏迁后退役。
-HMAC `hash` 和派生用的 `identity` 文件不在此命令范围，不能把它们当成 `master` 操作。
+API key 哈希用的 HMAC `hash` 和派生用的 `identity` 文件不在此命令范围，不能把它们当成 `master` 操作。
 
 恢复旧备份时必须恢复该 set 的数据库和密钥环，不能搭配已经退役并删去旧版本的当前文件。
 轮换失败但新版本尚未退役时，可以在保持停写的情况下重新激活旧可读版本，再重包裹；不要直接回滚文件而保留新数据库状态。

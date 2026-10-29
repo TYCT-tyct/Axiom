@@ -38,6 +38,7 @@ var adminOperations = []adminOperation{
 	{"setAlertConfiguration", http.MethodPut, "/alerts/configuration", `{}`, "sites.manage", true},
 	{"listAlertEvents", http.MethodGet, "/alerts/events", "", "sites.manage", false},
 	{"sendAlertTest", http.MethodPost, "/alerts/tests", `{"channel":"ops","reason":"r"}`, "sites.manage", true},
+	{"rotateAlertWebhookSecret", http.MethodPut, "/alerts/channels/hook/secret", `{"rev":1,"secret":"receiver test signing value 32 bytes","reason":"r"}`, "sites.manage", true},
 	{"resolveAlertEvent", http.MethodPost, "/alerts/events/0198c0a8-0000-7000-8000-000000000001/resolve", `{"reason":"r"}`, "sites.manage", true},
 	{"listExchangeRates", http.MethodGet, "/pricing/exchange-rates", "", "pricing.view", false},
 	{"setExchangeRate", http.MethodPost, "/pricing/exchange-rates", `{}`, "pricing.manage", true},
