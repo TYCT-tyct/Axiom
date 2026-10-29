@@ -101,7 +101,7 @@
 | 通道 | 存在哪 | 谁写 | 怎么回来 |
 |---|---|---|---|
 | 人停用 | `suppliers.endpoints.enabled` | 只有管理员；同步从不写它（[供应商的「同步与变化」](suppliers.md#同步与变化)） | 只有管理员重新启用 |
-| 成本未知 | `suppliers.endpoints.cost_state` | 供应商的同步与对账（估低摘牌；[#268](https://github.com/TYCT-tyct/Axiom/issues/268) 是这条通道里的错误：结论落到了已换计划的端点上） | 同步拿到新的成本计划 |
+| 成本未知 | `suppliers.endpoints.cost_state` | 供应商的同步与对账（估低摘牌只作用于仍使用该次尝试计划的端点，见[供应商成本](billing.md#供应商成本)） | 同步拿到新的成本计划 |
 | 熔断 | `quality.endpoint_health`（本节） | 本模块：真实流量的证据、试探结果、管理员的重置 | 试探通过；作为最后备选时真实请求成功；管理员重置或重新启用 |
 
 - 熔断从不写 `enabled` 或 `cost_state`：每个模块只读写自己的表（[总体架构的「模块边界规则」](../architecture.md#模块边界规则)第 1 条）。所有模块共用一个应用角色 `axiom_app`，数据库的授权分不开模块，所以由测试守住：一个测试扫描本模块的全部 SQL，不得出现 `suppliers.` 的表；另一个测试核对熔断、恢复、重置前后这两列不变。

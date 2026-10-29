@@ -30,7 +30,12 @@ func setExchange(ctx context.Context, r *rig, in billing.ExchangeInput) (row bil
 func payInCNY(t *testing.T, r *rig) {
 	t.Helper()
 	if err := r.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		_, err := tx.Exec(t.Context(), "UPDATE suppliers.suppliers SET settlement_currency='CNY'")
+		if _, err := tx.Exec(t.Context(), "UPDATE suppliers.suppliers SET settlement_currency='CNY'"); err != nil {
+			return err
+		}
+		_, err := tx.Exec(t.Context(), `INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason)
+			SELECT DISTINCT ON (supplier_id) supplier_id, value, 'test', 'CNY settlement'
+			FROM suppliers.unit_values ORDER BY supplier_id, id DESC`)
 		return err
 	}); err != nil {
 		t.Fatal(err)
