@@ -451,6 +451,9 @@ func (s *responsesToChat) emit(k partKey, p *snapshot, it *responsesItem, piece 
 		return s.addEntry(&s.draft.tools, toolIndex(it.tool), []byte(`,"function":{"arguments":`), piece, []byte("}}"))
 	case summaryPart, reasoningTextPart, otherPart: // part never makes an otherPart
 	}
+	if s.hidesReasoning {
+		return nil
+	}
 	if err := s.addText(&s.draft.reasoning, piece); err != nil {
 		return err
 	}

@@ -87,7 +87,7 @@ func (m *messagesWriter) checkThinking() error {
 	if err != nil {
 		return err
 	}
-	m.thinkingOn = m.effort != "" && m.effort != "none" || m.effort == "" && m.c.Reasoning != nil && m.c.Reasoning.Exclude != nil && m.t.Thinking == catalog.ThinkingAdaptive
+	m.thinkingOn = m.effort != "" && m.effort != "none"
 	if !m.thinkingOn {
 		return nil
 	}
@@ -119,7 +119,7 @@ func (m *messagesWriter) checkAdaptive() error {
 	if m.effort == "minimal" {
 		m.effort = "low"
 	}
-	if m.effort != "" && !slices.Contains(adaptiveEfforts, m.effort) {
+	if !slices.Contains(adaptiveEfforts, m.effort) {
 		return &NotSupported{Reason: "effort " + m.effort + " has no Messages counterpart"}
 	}
 	return nil
@@ -464,7 +464,7 @@ func (m *messagesWriter) thinkingSetting(out []byte) []byte {
 // thinking writes the thinking setting and output_config, including a structured reply schema.
 func (m *messagesWriter) thinking(out []byte) ([]byte, error) {
 	out = m.thinkingSetting(out)
-	adaptive := m.thinkingOn && m.t.Thinking == catalog.ThinkingAdaptive && m.effort != ""
+	adaptive := m.thinkingOn && m.t.Thinking == catalog.ThinkingAdaptive
 	format, err := m.replyFormat()
 	if err != nil {
 		return nil, err

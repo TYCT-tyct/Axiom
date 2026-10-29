@@ -117,9 +117,32 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 	s.e.final = s.e.usage
 	s.report, s.reportErr = nil, nil
 	if s.rewrites {
-		return s.rewrite(chatRewrites)
+		return s.clientEvent()
 	}
 	return s.e, nil
+}
+
+func (s *chatStream) clientEvent() (event, error) {
+	if s.ctx.HidesReasoning && !s.converting {
+		// A signed detail without text needs an empty text member for native replay.
+		// Its added bytes are smaller than the original detail, so twice the event bounds the rewrite.
+		var err error
+		s.buf, err = sse.Grow(s.buf[:0], 2*len(s.e.data)+len(s.eventReader.id)+len(s.eventReader.model), s.charge)
+		if err != nil {
+			return event{}, err
+		}
+	}
+	e, err := s.rewrite(chatRewrites)
+	if err != nil || !s.ctx.HidesReasoning || s.converting || e.role != passive {
+		return e, err
+	}
+	switch {
+	case s.rw.chatOpaque:
+		e.role = content
+	case !s.rw.chatPayload && !e.usage && e.withheld == nil:
+		e.role = skipped
+	}
+	return e, nil
 }
 
 func (s *chatStream) settle() {

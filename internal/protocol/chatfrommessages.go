@@ -253,7 +253,7 @@ func (s *messagesToChat) blockStop() error {
 
 // thinking adds a piece of the open thinking block's text, as reasoning and as its reasoning detail.
 func (s *messagesToChat) thinking(piece []byte) error {
-	if piece = nonEmpty(piece); piece == nil {
+	if piece = nonEmpty(piece); piece == nil || s.hidesReasoning {
 		return nil
 	}
 	if err := s.addText(&s.draft.reasoning, piece); err != nil {

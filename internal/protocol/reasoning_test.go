@@ -161,7 +161,7 @@ func checkHiddenReply(t *testing.T, tc reasoningSample, client protocol.Format, 
 	if !bytes.Contains(shown, []byte(tc.secret)) {
 		t.Fatalf("fixture did not exercise reasoning: %s", shown)
 	}
-	if bytes.Contains(hidden, []byte(tc.secret)) || client == protocol.Chat && (bytes.Contains(hidden, []byte(`"reasoning"`)) || bytes.Contains(hidden, []byte(`"reasoning_content"`)) || bytes.Contains(hidden, []byte(`"reasoning_details"`))) {
+	if bytes.Contains(hidden, []byte(tc.secret)) || client == protocol.Chat && (bytes.Contains(hidden, []byte(`"reasoning"`)) || bytes.Contains(hidden, []byte(`"reasoning_content"`))) {
 		t.Fatalf("reasoning leaked: %s", hidden)
 	}
 	if !bytes.Contains(hidden, []byte(tc.visible)) {
@@ -304,17 +304,21 @@ func TestReasoningVisibilityWithoutStrength(t *testing.T) {
 	for _, tc := range []struct {
 		target         protocol.Format
 		exclude        bool
+		mode           catalog.Thinking
 		thinking, want string
 		present        bool
 	}{
-		{protocol.Messages, false, "adaptive", `"display":"summarized"`, true},
-		{protocol.Messages, true, "adaptive", `"display":"omitted"`, true},
-		{protocol.Responses, false, "", `"summary":"auto"`, true},
-		{protocol.Responses, true, "", `"summary"`, false},
+		{protocol.Messages, false, catalog.ThinkingAdaptive, "", `"thinking"`, false},
+		{protocol.Messages, true, catalog.ThinkingAdaptive, "", `"thinking"`, false},
+		{protocol.Messages, true, catalog.ThinkingManual, "", `"thinking"`, false},
+		{protocol.Messages, true, catalog.ThinkingNone, "", `"thinking"`, false},
+		{protocol.Messages, true, catalog.ThinkingUnset, "", `"thinking"`, false},
+		{protocol.Responses, false, catalog.ThinkingUnset, "", `"summary":"auto"`, true},
+		{protocol.Responses, true, catalog.ThinkingUnset, "", `"summary"`, false},
 	} {
-		t.Run(fmt.Sprintf("%d/exclude=%t", tc.target, tc.exclude), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%d/%d/exclude=%t", tc.target, tc.mode, tc.exclude), func(t *testing.T) {
 			body := fmt.Sprintf(`{"model":"m","messages":[{"role":"user","content":"Hi"}],"reasoning":{"exclude":%t}}`, tc.exclude)
-			got, err := convertBody(tc.target, body, nil)
+			got, err := convertBody(tc.target, body, func(tg *protocol.Target) { tg.Thinking = tc.mode })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -342,6 +346,9 @@ data: {"type":"response.completed","sequence_number":2,"response":{"id":"r","mod
 			out, usage, _ := reasoningReply(t, protocol.Responses, protocol.Responses, stream, true, aggregate)
 			if bytes.Contains(out, []byte("private")) || !bytes.Contains(out, []byte("opaque")) || !bytes.Contains(out, []byte("answer")) {
 				t.Fatalf("bad hidden output: %s", out)
+			}
+			if !bytes.Contains(out, []byte(`"content":[{"type":"reasoning_text","text":""}]`)) {
+				t.Fatalf("reasoning part disappeared from snapshot: %s", out)
 			}
 			if usage.Segments[0].Usage.Count(catalog.ItemReasoning) != 15 {
 				t.Fatalf("lost reasoning usage: %+v", usage)

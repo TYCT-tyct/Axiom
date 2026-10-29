@@ -338,6 +338,7 @@ type rewriter struct {
 	replayMeta                            *aggBase
 	legacy                                *legacyRequest
 	hidesReasoning                        bool
+	chatPayload, chatOpaque               bool
 	legacyDelta                           *legacyReplyDelta
 }
 

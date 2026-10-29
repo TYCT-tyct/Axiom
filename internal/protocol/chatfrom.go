@@ -123,9 +123,6 @@ func (c *converted) addEntry(dst *[]byte, parts ...[]byte) error {
 // content.
 func (c *converted) render() (data []byte, content bool, err error) {
 	d := &c.draft
-	if c.hidesReasoning {
-		d.reasoning, d.details = d.reasoning[:0], d.details[:0]
-	}
 	members := []struct {
 		name string
 		v    []byte

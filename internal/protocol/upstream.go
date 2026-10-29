@@ -185,6 +185,7 @@ func (s *eventReader) rewrite(rules formatRules) (event, error) {
 		return event{}, err
 	}
 	p := &s.rw
+	p.chatPayload, p.chatOpaque = false, false
 	p.body, p.out, p.at, p.usageAt, p.ending = data, s.buf[:0], 0, -1, s.e.role == ending
 	if p.dec == nil {
 		p.dec = jsontext.NewDecoder(bytes.NewBuffer(data))

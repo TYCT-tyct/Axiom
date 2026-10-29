@@ -139,7 +139,7 @@
 
 ### 推理控制与换算
 
-不变量：是否启用、强度、是否展示分别表达。`canon.effort` 的空串表示未指定，`none` 表示明确关闭；关闭优先于强度，`exclude` 不等于关闭。`UsageContext.HidesReasoning` 从原客户端请求带到每次尝试，输出过滤在上游计量之后执行；流式与聚合共用，完整 usage、内容字节上界与结算不因隐藏而减少。Chat 删除 `reasoning`、`reasoning_content`、整个 `reasoning_details`；Messages 清空 thinking 文本，Responses 去掉摘要与 reasoning_text 部件；原生格式保留签名或密文供续聊。正常展示路径不启动隐藏改写；Chat 隐藏块不提前提交，首个可见内容仍是回退边界。
+不变量：是否启用、强度、是否展示分别表达。`canon.effort` 的空串表示未指定，`none` 表示明确关闭；关闭优先于强度，`exclude` 不等于关闭，也不单独开启推理；只有展示要求时，发给上游的启用模式仍保持缺省。`UsageContext.HidesReasoning` 从原客户端请求带到每次尝试，输出过滤在上游计量之后执行；流式与聚合共用，完整 usage、内容字节上界与结算不因隐藏而减少。Chat 删除 `reasoning`、`reasoning_content`；`reasoning_details` 只保留带签名的 `reasoning.text`（text 置空）和原样的 `reasoning.encrypted`，丢弃摘要及没有续聊状态的明文片段。Messages 清空 thinking 文本，Responses 去掉摘要并把 reasoning_text 部件置为空文本，保留部件位置；三种格式都保留签名或密文供续聊。正常展示路径不启动隐藏改写。Chat 的纯隐藏块直接跳过，不进入提交前缓冲；role、工具、结束信号和用量仍按协议处理，签名或密文作为有效内容及时写出。
 
 来源（2026-10-29 核实）：[OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)、[Anthropic Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)、[Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)、[Effort](https://platform.claude.com/docs/en/build-with-claude/effort)、[OpenAI Reasoning models](https://developers.openai.com/api/docs/guides/reasoning)。下表是协议层映射；同格式 Chat 保留端点方言，不重写强度；Messages 与 Responses 直接转换仍未实现。
 
@@ -151,11 +151,11 @@
 | minimal / low / medium / high | 输出上限的 10% / 20% / 50% / 80% | minimal → low；其余原值 | 原值 | 共享 effort 原值 |
 | xhigh / max | 都为输出上限的 95% | 原值 | 原值（当前 OpenAI 规范已列 max） | 原值，不沿用参考实现 max → xhigh 的旧规则 |
 | Chat reasoning.max_tokens | 原值 budget_tokens | 按最近比例换 effort | 同左 | Messages budget_tokens → reasoning_effort，比例同左；同时给 output_config.effort 时优先 effort |
-| Chat exclude true / false | 开启时加 display omitted / summarized | 加 display omitted / summarized；只给展示方式时保留默认强度 | true 不索取摘要；false 索取 summary auto | Messages display 只控制本地输出过滤，不向官方 Chat 添加非标准参数；Responses summary auto 可转，其他样式仍拒绝 |
+| Chat exclude true / false | 开启时加 display omitted / summarized | 已显式开启时加 display omitted / summarized；只给展示方式不补 thinking | true 不索取摘要；false 索取 summary auto | Messages display 只控制本地输出过滤，不向官方 Chat 添加非标准参数；Responses summary auto 可转，其他样式仍拒绝 |
 
 手动 effort 预算沿用 OpenRouter：`max(min(输出上限 × 比例, 128000), 1024)`；显式预算必须为正，手动模型还要求至少 1024 且严格小于输出上限，否则该端点 `NotSupported`。manual 在工具轮次缺少可回放的思考时仍拒绝。只有 effort 的目标不能保证精确 token 预算：按预算与有效输出上限之比取最近档（10%、20%、50%、80%、95%），同距取较低档，95% 取 xhigh。有效上限优先请求，否则取 `Target.MaxOutput`；都没有则返回 `NotSupported`。adaptive 的最低档为 low，因此 minimal 再近似为 low。比例只是强度换算，不承诺实际消耗或硬预算。
 
-具体模型支持的档位、能否关闭仍受厂商限制；现有目录没有 supported_efforts / mandatory，不按模型名猜，也不把关闭改成低强度。`ThinkingUnset` 在需要开启时仍拒绝；`ThinkingNone` 不接开启请求。同格式设置保留原文，让厂商校验模型限制。`TestReasoningControlsAcrossFormats`、`TestReasoningEffortBudgets`、`TestNativeReasoningRequestsToChat` 覆盖请求；`TestHiddenReasoningRecordedStreams` 在七个组合、流式与聚合两种模式回放录制流，比较隐藏前后的完整用量和内容上界。
+具体模型支持的档位、能否关闭仍受厂商限制；现有目录没有 supported_efforts / mandatory，不按模型名猜，也不把关闭改成低强度。`ThinkingUnset` 在需要开启时仍拒绝；`ThinkingNone` 不接开启请求。同格式设置保留原文，让厂商校验模型限制。`TestReasoningControlsAcrossFormats`、`TestReasoningEffortBudgets`、`TestNativeReasoningRequestsToChat` 覆盖请求；`TestHiddenReasoningRecordedStreams` 在七个组合、流式与聚合两种模式回放录制流，比较隐藏前后的完整用量和内容上界。`TestHiddenChatToolResultReplaysManualThinking`、`TestHiddenChatEncryptedContinuation` 检查隐藏后工具续聊，`TestHiddenChatDetailsKeepOpaqueState` 覆盖空 text 补齐及转义字段；`TestHiddenChatReasoningBufferIsBounded` 用两万个隐藏块检查缓冲有界，`TestHiddenResponsesPartMatchesSnapshots` 核对部件事件与最终快照的索引。Chat 隐藏改写在写出前按两倍原事件字节及身份改写空间申请缓冲，覆盖签名片段缺少 text 时补空串的增长；计量仍使用改写前的内容。
 
 ## 读 SSE
 
