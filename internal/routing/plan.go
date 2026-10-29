@@ -62,10 +62,11 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	if in.Override.SortGlobal {
 		r.sort(order, n.strategy())
 	}
-	rec.Unmeasured = n.strategy() == Fastest && len(order) > 0 &&
-		!slices.ContainsFunc(order, func(c ranked) bool { return c.Throughput > 0 })
 	attempts := orDefault(preset.MaxAttempts, r.cfg.MaxAttempts)
 	order = healthOrder(order, n, &rec, min(attempts, MaxEntries))
+	// After the breakers: a measured endpoint they take out of the route says nothing about this route's speed.
+	rec.Unmeasured = n.strategy() == Fastest && len(order) > 0 &&
+		!slices.ContainsFunc(order, func(c ranked) bool { return c.Throughput > 0 })
 	entries := r.entries(order, n, &rec)
 	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
 	if len(entries) == 0 {
