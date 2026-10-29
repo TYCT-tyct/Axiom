@@ -22,15 +22,22 @@ web_cache="${AXIOM_CACHE_DIR:-$(dirname "$go_cache")/_webcache}"
 mkdir -p "$go_cache" "$module_cache" "$web_cache"
 id
 stat -c '%u:%g %n' "$go_cache" "$web_cache"
-# The journey (#321) also needs the PostgreSQL and Valkey that withcluster started on the host: reach them through the
-# host gateway instead of the loopback address of the host's own network, and read the Valkey password from its file.
+# The journey (#321) also needs the PostgreSQL and Valkey that withcluster started on the host. They are reached at their
+# container addresses on the Docker bridge: a published port on the bridge's gateway address is dropped by the host
+# firewall of the CI machines (measured 2026-10-29: connection timed out), while traffic between containers is not.
 shared=()
 if [ -n "${PGTEST_CLUSTER_URL:-}" ]; then
-  host=host.docker.internal
-  via_gateway() { sed -e "s/127\.0\.0\.1/$host/" -e "s/localhost/$host/" <<< "$1"; }
+  # Rewrites the URL's host:port, a port the host publishes, to the address and port inside the container behind it.
+  inside() {
+    local url=$1 inner=$2 published id ip
+    published=$(sed -E 's#^[a-z]+://[^@/]*@?[^:/]*:([0-9]+).*#\1#' <<< "$url")
+    id=$(docker ps --quiet --filter "publish=$published")
+    ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$id")
+    sed -E "s#@[^/@]*#@$ip:$inner#" <<< "$url"
+  }
   password_dir=$(dirname "$KVTEST_PASSWORD_FILE")
-  shared=(--add-host "$host:host-gateway" --volume "$password_dir:$password_dir:ro"
-    --env "PGTEST_CLUSTER_URL=$(via_gateway "$PGTEST_CLUSTER_URL")" --env "KVTEST_URL=$(via_gateway "$KVTEST_URL")"
+  shared=(--volume "$password_dir:$password_dir:ro"
+    --env "PGTEST_CLUSTER_URL=$(inside "$PGTEST_CLUSTER_URL" 5432)" --env "KVTEST_URL=$(inside "$KVTEST_URL" 6379)"
     --env KVTEST_PASSWORD_FILE)
 fi
 # The shared 80-core budget / eight runners allows ten cores each; eight leaves room for host-side setup.

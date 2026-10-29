@@ -77,15 +77,18 @@ class WebContainer(unittest.TestCase):
                                         env=dict(self.env, HOME=str(self.root), FAKE_CPUS=cpus), capture_output=True)
                 self.assertEqual(result.returncode, expected)
 
-    def test_journey_reaches_the_hosts_databases_through_the_gateway(self):
+    def test_journey_reaches_the_hosts_databases_at_their_container_addresses(self):
         passwords = self.root / "kv"
         env = dict(PGTEST_CLUSTER_URL="postgres://postgres:postgres@127.0.0.1:5001/postgres?sslmode=disable",
                    KVTEST_URL="valkey://axiom@127.0.0.1:5002", KVTEST_PASSWORD_FILE=str(passwords / "password"))
         self.assertEqual(self.run_script("pnpm", "--dir", "web", "journey", **env).returncode, 0)
-        create = next(args for args in self.commands() if args[:2] == ["docker", "create"])
-        self.assertIn("host.docker.internal:host-gateway", create)
-        self.assertIn("PGTEST_CLUSTER_URL=postgres://postgres:postgres@host.docker.internal:5001/postgres?sslmode=disable", create)
-        self.assertIn("KVTEST_URL=valkey://axiom@host.docker.internal:5002", create)
+        commands = self.commands()
+        create = next(args for args in commands if args[:2] == ["docker", "create"])
+        self.assertIn(["docker", "ps", "--quiet", "--filter", "publish=5001"], commands)
+        self.assertIn(["docker", "ps", "--quiet", "--filter", "publish=5002"], commands)
+        # the shim answers every inspect with 123, which stands for the container's address
+        self.assertIn("PGTEST_CLUSTER_URL=postgres://postgres:postgres@123:5432/postgres?sslmode=disable", create)
+        self.assertIn("KVTEST_URL=valkey://axiom@123:6379", create)
         self.assertIn(f"{passwords}:{passwords}:ro", create)
         self.assertNotIn("--network=host", create)
 
