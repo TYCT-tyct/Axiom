@@ -198,6 +198,17 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	readRoles(ctx, next, roles)
+	next.presets, err = readPresets(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+// readRoles indexes the roles by name and by id, and drops a permission the code does not declare: a row written by a
+// newer node must not widen what this node checks.
+func readRoles(ctx context.Context, next *snapshot, roles []ListRolesRow) {
 	for _, r := range roles {
 		next.roleIDs[r.Name] = r.ID
 		next.roles[r.ID] = map[string]bool{}
@@ -209,11 +220,6 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 			next.roles[r.ID][p] = true
 		}
 	}
-	next.presets, err = readPresets(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	return next, nil
 }
 
 // readDomains indexes the site domains by host, and records each site's API base: the origin of its API domain, the
