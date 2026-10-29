@@ -111,13 +111,21 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 	if m.invalid == nil {
 		m.invalid = m.bound(r, compactions)
 	}
-	if m.invalid != nil || !m.takeCounts(r) {
+	inputApplied, outputApplied, ok := m.takeCounts(r)
+	if m.invalid != nil || !ok {
 		return
 	}
 	if r.tierSet {
 		m.tier = r.tier
 	}
-	m.nativeApply(r.nativeSet, r.nativeClear, r.native)
+	set, clear := r.nativeSet, r.nativeClear
+	if !inputApplied {
+		set, clear = set&^nativeVideo, clear&^nativeVideo
+	}
+	if !outputApplied {
+		set, clear = set&^(nativeAccepted|nativeRejected), clear&^(nativeAccepted|nativeRejected)
+	}
+	m.nativeApply(set, clear, r.native)
 	for _, u := range r.unknown {
 		if i := slices.IndexFunc(m.unknown, func(v catalog.UnknownUsage) bool { return v.Field == u.Field }); i >= 0 {
 			m.unknown[i] = u
@@ -169,11 +177,17 @@ func (m *meter) bound(r usageReport, compactions []usageReport) error {
 	return nil
 }
 
-// takeCounts takes r's counts, reporting false when one went down, which makes the usage invalid.
-func (m *meter) takeCounts(r usageReport) bool {
-	if !m.takeSide(r.physicalInput, r.inputDetailed, &m.physicalInput, catalog.InputSide, r) ||
-		!m.takeSide(r.outputTotal, r.outputDetailed, &m.outputTotal, catalog.OutputSide, r) {
-		return false
+// takeCounts takes r's counts, reporting false when one went down, which makes the usage invalid. A side reported
+// with a zero total or the same total and no details keeps its previous snapshot, so its native splits must not be
+// changed either.
+func (m *meter) takeCounts(r usageReport) (inputApplied, outputApplied, ok bool) {
+	inputApplied, ok = m.takeSide(r.physicalInput, r.inputDetailed, &m.physicalInput, catalog.InputSide, r)
+	if !ok {
+		return false, false, false
+	}
+	outputApplied, ok = m.takeSide(r.outputTotal, r.outputDetailed, &m.outputTotal, catalog.OutputSide, r)
+	if !ok {
+		return false, false, false
 	}
 	for it := range catalog.NumItems {
 		if r.physicalInput.set && catalog.InputSide.Has(it) || r.outputTotal.set && catalog.OutputSide.Has(it) {
@@ -184,31 +198,31 @@ func (m *meter) takeCounts(r usageReport) bool {
 		case !r.seen.Has(it), n == 0 && m.counts[it] > 0:
 		case n < m.counts[it]:
 			m.invalid = fmt.Errorf("usage: %s went down from %d to %d", it, m.counts[it], n)
-			return false
+			return false, false, false
 		default:
 			m.set(it, n)
 		}
 	}
-	return true
+	return inputApplied, outputApplied, true
 }
 
 // takeSide replaces an OpenAI breakdown together: later cache or image details can reduce ordinary tokens to zero
 // without reducing the physical total, and merging their maxima would charge those tokens twice. A report of the same
 // total without the side's details object says nothing about the split, so the earlier one stays: replacing it would
 // turn cached tokens back into ordinary ones. A larger total is a new snapshot, details or not.
-func (m *meter) takeSide(total tokenTotal, detailed bool, kept *tokenTotal, side catalog.ItemSet, r usageReport) bool {
+func (m *meter) takeSide(total tokenTotal, detailed bool, kept *tokenTotal, side catalog.ItemSet, r usageReport) (applied, ok bool) {
 	if !total.set {
-		return true
+		return false, true
 	}
 	if kept.set {
 		switch {
 		case total.n == 0 && kept.n > 0:
-			return true // some relays clear totals in later events
+			return false, true // some relays clear totals in later events
 		case total.n < kept.n:
 			m.invalid = fmt.Errorf("usage: physical token total went down from %d to %d", kept.n, total.n)
-			return false
+			return false, false
 		case total.n == kept.n && !detailed:
-			return true
+			return false, true
 		}
 	}
 	*kept = total
@@ -218,7 +232,7 @@ func (m *meter) takeSide(total tokenTotal, detailed bool, kept *tokenTotal, side
 			m.counts[it] = r.counts[it]
 		}
 	}
-	return true
+	return true, true
 }
 
 // compact replaces the compactions with the ones a report lists, at the reply's tier unless they name their own.
