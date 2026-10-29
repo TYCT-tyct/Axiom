@@ -73,7 +73,8 @@ func (c consoleAPI) Register(ctx context.Context, request consoleapi.RegisterReq
 
 // VerifyEmail turns the link's token and the chosen password into the pending user.
 func (c consoleAPI) VerifyEmail(ctx context.Context, request consoleapi.VerifyEmailRequestObject) (consoleapi.VerifyEmailResponseObject, error) {
-	if _, err := c.accounts.VerifyEmail(ctx, callOf(ctx).r.Host, request.Body.Token, request.Body.Password); err != nil {
+	cl := callOf(ctx)
+	if _, err := c.accounts.VerifyEmail(ctx, cl.r.Host, request.Body.Token, request.Body.Password, cl.ip); err != nil {
 		return nil, err
 	}
 	return consoleapi.VerifyEmail204Response{}, nil

@@ -213,7 +213,7 @@ func TestPasswordResetIssuanceAndBrand(t *testing.T) {
 		}
 	}
 	rows := texts(t, x.db, platform, "SELECT text_body FROM platform.mail_outbox")
-	if len(rows) != 1 || !strings.Contains(rows[0], "Main") || !strings.Contains(rows[0], "https://main.example/reset-password#token=") || !strings.Contains(rows[0], "30 分钟") {
+	if len(rows) != 1 || !strings.Contains(rows[0], "Main") || !strings.Contains(rows[0], "https://main.example/console/reset-password#token=") || !strings.Contains(rows[0], "30 分钟") {
 		t.Fatalf("reset mail: %v", rows)
 	}
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM accounts.password_reset_requests WHERE email IS NOT NULL"); got[0] != "0" {

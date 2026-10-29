@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,11 +42,16 @@ func TestOpenRegistrationHTTP(t *testing.T) {
 	if pending.Status != consoleapi.VerificationSent {
 		t.Fatalf("status %q", pending.Status)
 	}
-	token := ""
-	for deadline := time.Now().Add(10 * time.Second); token == "" && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		token = f.text(`SELECT coalesce((SELECT substring(text_body from '#token=([A-Za-z0-9_-]+)')
-			FROM platform.mail_outbox WHERE recipient = '<` + email + `>' ORDER BY created_at DESC LIMIT 1), '')`)
+	body := ""
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(body, "#token=") && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		body = f.text(`SELECT coalesce((SELECT text_body FROM platform.mail_outbox
+			WHERE recipient = '<` + email + `>' ORDER BY created_at DESC LIMIT 1), '')`)
 	}
+	const prefix = "https://" + consoleHost + "/console/verify-email#token="
+	if !strings.Contains(body, prefix) {
+		t.Fatalf("the verification link does not open the console page: %q", body)
+	}
+	token := strings.TrimSpace(body[strings.LastIndex(body, "#token=")+len("#token="):])
 	if token == "" {
 		t.Fatal("no verification link in the outbox")
 	}

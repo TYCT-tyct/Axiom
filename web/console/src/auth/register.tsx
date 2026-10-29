@@ -95,19 +95,50 @@ function RegisterFields({
   );
 }
 
+type RegisterResult = Schemas["Registered"] | Schemas["RegistrationPending"];
+
+function isRegistered(result: RegisterResult | undefined): result is Schemas["Registered"] {
+  return result !== undefined && "user_id" in result;
+}
+
+function CheckEmail() {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-4">
+      <p className="text-t2">{t("auth.register.checkEmail")}</p>
+      <p className="text-t3 text-sm">{t("auth.register.checkEmailHint")}</p>
+      <Link to="/sign-in" className="text-accent underline underline-offset-4">
+        {t("auth.register.signIn")}
+      </Link>
+    </div>
+  );
+}
+
 // Registering does not sign the user in: the page signs in next, with the same credentials. When that step fails the
-// account exists, so the form says to sign in instead of offering the registration again.
+// account exists, so the form says to sign in instead of offering the registration again. A mode change can turn an
+// invite form's submission into a pending registration instead: that answer means no account exists yet.
 function InviteRegisterForm() {
   const { t } = useTranslation();
   const errors = useErrors();
   const signIn = useSignIn();
+  const [sent, setSent] = useState(false);
   const register = useMutation({
     mutationFn: (body: Schemas["RegisterRequest"]) =>
       unwrap(consoleApi.POST("/api/console/v1/auth/register", { body })),
-    onSuccess: (_registered, { email, password }) => signIn.mutate({ email, password: password ?? "" }),
+    onSuccess: (result, { email, password }) => {
+      if (isRegistered(result)) {
+        signIn.mutate({ email, password: password ?? "" });
+      } else {
+        setSent(true);
+      }
+    },
   });
+  const made = isRegistered(register.data);
   const failure = register.error ?? signIn.error;
   const pending = register.isPending || signIn.isPending;
+  if (sent) {
+    return <CheckEmail />;
+  }
   return (
     <form
       noValidate
@@ -119,16 +150,14 @@ function InviteRegisterForm() {
           return;
         }
         // an account already made is signed in to, not registered again
-        if (register.isSuccess) {
+        if (made) {
           signIn.mutate({ email: email.trim(), password });
         } else {
           register.mutate({ invite_code: invite_code.trim(), email: email.trim(), password });
         }
       }}
     >
-      {failure ? (
-        <FormError>{register.isSuccess ? t("auth.register.signInFailed") : errors.message(failure)}</FormError>
-      ) : null}
+      {failure ? <FormError>{made ? t("auth.register.signInFailed") : errors.message(failure)}</FormError> : null}
       <RegisterFields error={register.error} invite />
       <SubmitButton pending={pending} className="w-full">
         {t("auth.register.submit")}
@@ -170,15 +199,7 @@ function OpenRegisterForm({ site }: { site: Schemas["Site"] }) {
     onSettled: () => setWorking(false),
   });
   if (register.isSuccess) {
-    return (
-      <div className="space-y-4">
-        <p className="text-t2">{t("auth.register.checkEmail")}</p>
-        <p className="text-t3 text-sm">{t("auth.register.checkEmailHint")}</p>
-        <Link to="/sign-in" className="text-accent underline underline-offset-4">
-          {t("auth.register.signIn")}
-        </Link>
-      </div>
-    );
+    return <CheckEmail />;
   }
   const pending = register.isPending || working;
   return (

@@ -499,7 +499,8 @@ paths:
         after the token is found; no password is kept before this request. The token is bound to the console domain
         and the pending registration; an unknown, expired or already used one is one `invalid_verification`, and an
         address registered in the meantime is `email_taken`. The user is not signed in: the page sends them to sign in
-        with the password they chose.
+        with the password they chose. Limits: the per-IP bucket of `signIn`; an attempt spends one before the token is
+        looked up or the password is hashed.
       security: []
       requestBody:
         required: true

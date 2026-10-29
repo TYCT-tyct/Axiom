@@ -32,8 +32,9 @@ DELETE FROM accounts.registration_requests WHERE id = @id;
 
 -- name: RegistrationTenant :many
 -- A token names its pending registration on the console domain that carries it; both are checked before any scope.
-SELECT t.id::uuid AS id, t.site_id::uuid AS site_id
-FROM accounts.registration_tenant(@domain::text, @token_hash::bytea) AS t (id, site_id);
+-- The address and expiry let the caller refuse a denied or expired request before hashing a password.
+SELECT t.id::uuid AS id, t.site_id::uuid AS site_id, t.email::text AS email, t.unexpired::boolean AS unexpired
+FROM accounts.registration_tenant(@domain::text, @token_hash::bytea) AS t (id, site_id, email, unexpired);
 
 -- name: PurgeRegistrationRequests :exec
 DELETE FROM accounts.registration_requests WHERE id IN (

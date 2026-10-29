@@ -138,8 +138,8 @@ func (q *Queries) RegistrationSite(ctx context.Context, db DBTX, domain string) 
 }
 
 const registrationTenant = `-- name: RegistrationTenant :many
-SELECT t.id::uuid AS id, t.site_id::uuid AS site_id
-FROM accounts.registration_tenant($1::text, $2::bytea) AS t (id, site_id)
+SELECT t.id::uuid AS id, t.site_id::uuid AS site_id, t.email::text AS email, t.unexpired::boolean AS unexpired
+FROM accounts.registration_tenant($1::text, $2::bytea) AS t (id, site_id, email, unexpired)
 `
 
 type RegistrationTenantParams struct {
@@ -148,11 +148,14 @@ type RegistrationTenantParams struct {
 }
 
 type RegistrationTenantRow struct {
-	ID     uuid.UUID
-	SiteID uuid.UUID
+	ID        uuid.UUID
+	SiteID    uuid.UUID
+	Email     string
+	Unexpired bool
 }
 
 // A token names its pending registration on the console domain that carries it; both are checked before any scope.
+// The address and expiry let the caller refuse a denied or expired request before hashing a password.
 func (q *Queries) RegistrationTenant(ctx context.Context, db DBTX, arg RegistrationTenantParams) ([]RegistrationTenantRow, error) {
 	rows, err := db.Query(ctx, registrationTenant, arg.Domain, arg.TokenHash)
 	if err != nil {
@@ -162,7 +165,12 @@ func (q *Queries) RegistrationTenant(ctx context.Context, db DBTX, arg Registrat
 	var items []RegistrationTenantRow
 	for rows.Next() {
 		var i RegistrationTenantRow
-		if err := rows.Scan(&i.ID, &i.SiteID); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.SiteID,
+			&i.Email,
+			&i.Unexpired,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

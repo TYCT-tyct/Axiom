@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"time"
 	"uuid"
@@ -75,7 +76,7 @@ func (r *Registration) work(ctx context.Context, job *river.Job[registrationArgs
 // process mails the link once. A redelivered job that finds the token already written sends nothing, and one that
 // finds the request gone or expired stops.
 func (r *Registration) process(ctx context.Context, args registrationArgs) error {
-	found, err := r.db.TenantTx(ctx, "accounts.registration_request_tenant", args.ID, func(tx pg.Tx) error {
+	_, err := r.db.TenantTx(ctx, "accounts.registration_request_tenant", args.ID, func(tx pg.Tx) error {
 		q := New()
 		rows, err := q.LockRegistrationRequest(ctx, tx, args.ID)
 		if err != nil {
@@ -108,13 +109,10 @@ func (r *Registration) process(ctx context.Context, args registrationArgs) error
 		if n != 1 {
 			return nil
 		}
-		link := "https://" + sites[0].Domain + "/verify-email#token=" + token
+		link := "https://" + sites[0].Domain + "/console/verify-email#token=" + token
 		return r.mailer.Enqueue(ctx, tx, mail.Tenant{Site: request.SiteID},
 			registrationMail(request.Email, sites[0].Name, request.Language, link))
 	})
-	if !found {
-		return nil
-	}
 	return err
 }
 
@@ -123,7 +121,7 @@ func (r *Registration) process(ctx context.Context, args registrationArgs) error
 // supplied here, not at the unauthenticated request, so a caller cannot choose the password of an address it does not
 // own. A token that is unknown, expired, already used or from another site is one ErrInvalidVerification, and a taken
 // email is ErrEmailTaken once the pending request is gone.
-func (s *Service) VerifyEmail(ctx context.Context, host, token, password string) (out UserID, err error) {
+func (s *Service) VerifyEmail(ctx context.Context, host, token, password string, ip netip.Addr) (out UserID, err error) {
 	d, snap, err := s.domain(host)
 	if err != nil {
 		return UserID{}, err
@@ -133,6 +131,9 @@ func (s *Service) VerifyEmail(ctx context.Context, host, token, password string)
 	}
 	event := securityAttempt{site: d.site, surface: d.surface}
 	defer func() { s.failed(ctx, event, "security.registration_failed", &err) }()
+	if err := s.fromIP(ctx, d.site, ip); err != nil {
+		return UserID{}, err
+	}
 	if !passwordAllowed(password) {
 		return UserID{}, ErrWeakPassword
 	}
@@ -148,8 +149,15 @@ func (s *Service) VerifyEmail(ctx context.Context, host, token, password string)
 	}); err != nil {
 		return UserID{}, fmt.Errorf("verify email: %w", err)
 	}
-	if len(targets) == 0 {
+	if len(targets) == 0 || !targets[0].Unexpired {
 		return UserID{}, ErrInvalidVerification
+	}
+	site, ok := snap.sites[SiteID(targets[0].SiteID)]
+	if !ok {
+		return UserID{}, ErrInvalidVerification
+	}
+	if !domainPermitted(site, domainOf(targets[0].Email)) {
+		return UserID{}, ErrEmailDomainNotAllowed
 	}
 	var passwordHash string
 	if err := s.hash(ctx, func() { passwordHash = hashPassword(password) }); err != nil {

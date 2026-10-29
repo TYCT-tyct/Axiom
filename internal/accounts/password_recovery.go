@@ -140,7 +140,7 @@ func (r *PasswordRecovery) issueReset(ctx context.Context, tx pg.Tx, args passwo
 	}); err != nil {
 		return err
 	}
-	link := "https://" + sites[0].Domain + "/reset-password#token=" + token
+	link := "https://" + sites[0].Domain + "/console/reset-password#token=" + token
 	if err := r.mailer.Enqueue(ctx, tx, mail.Tenant{Site: request.SiteID, Account: user.AccountID},
 		passwordMail(*request.Email, sites[0].Name, request.Language, link)); err != nil {
 		return err

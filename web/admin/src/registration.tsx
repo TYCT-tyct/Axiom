@@ -1,4 +1,4 @@
-import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
+import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
 import { Button, CheckField, DataState, Icon, SelectField, TextAreaField, TextField, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
@@ -25,7 +25,9 @@ function RegistrationUnavailable() {
 
 export function SiteRegistration({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const query = useQuery(siteRegistrationQuery(siteId));
-  if (query.isError) {
+  // Only a 404 says this node has no registration operation. A timeout, a 503 or a permission error is a current
+  // failure and belongs in DataState, with its reason and retry.
+  if (query.error instanceof ApiError && query.error.status === 404) {
     return <RegistrationUnavailable />;
   }
   return <DataState query={query}>{(view) => <RegistrationCard siteId={siteId} view={view} />}</DataState>;

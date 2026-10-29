@@ -322,7 +322,7 @@ export interface paths {
         put?: never;
         /**
          * Verify an open registration's email
-         * @description Turns the single-use token from the verification mail and the password chosen by the mailbox owner into the user, their personal account, its default workspace and balance. The password is validated and hashed only after the token is found; no password is kept before this request. The token is bound to the console domain and the pending registration; an unknown, expired or already used one is one `invalid_verification`, and an address registered in the meantime is `email_taken`. The user is not signed in: the page sends them to sign in with the password they chose.
+         * @description Turns the single-use token from the verification mail and the password chosen by the mailbox owner into the user, their personal account, its default workspace and balance. The password is validated and hashed only after the token is found; no password is kept before this request. The token is bound to the console domain and the pending registration; an unknown, expired or already used one is one `invalid_verification`, and an address registered in the meantime is `email_taken`. The user is not signed in: the page sends them to sign in with the password they chose. Limits: the per-IP bucket of `signIn`; an attempt spends one before the token is looked up or the password is hashed.
          */
         post: operations["verifyEmail"];
         delete?: never;

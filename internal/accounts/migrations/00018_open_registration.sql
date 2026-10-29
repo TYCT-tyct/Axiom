@@ -83,9 +83,10 @@ CREATE FUNCTION accounts.registration_site(domain text)
 -- The pending registration a token names on its console domain. Eligibility is checked again under the row lock.
 -- +goose StatementBegin
 CREATE FUNCTION accounts.registration_tenant(domain text, token_hash bytea)
-    RETURNS TABLE (id uuid, site_id uuid)
+    RETURNS TABLE (id uuid, site_id uuid, email text, unexpired boolean)
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-        SELECT r.id, r.site_id FROM accounts.registration_requests r
+        SELECT r.id, r.site_id, r.email, r.expires_at > clock_timestamp()
+        FROM accounts.registration_requests r
         JOIN accounts.sites s ON s.id = r.site_id AND s.status = 'active'
         WHERE r.token_hash = registration_tenant.token_hash
             AND r.site_id = accounts.domain_site(registration_tenant.domain, 'console')
@@ -98,7 +99,8 @@ CREATE FUNCTION accounts.registration_tenant(domain text, token_hash bytea)
 CREATE FUNCTION accounts.registration_request_tenant(id uuid)
     RETURNS TABLE (site_id uuid, account_id uuid)
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-        SELECT r.site_id, NULL::uuid FROM accounts.registration_requests r WHERE r.id = id
+        SELECT r.site_id, NULL::uuid FROM accounts.registration_requests r
+        WHERE r.id = registration_request_tenant.id
     $$;
 -- +goose StatementEnd
 
@@ -112,7 +114,7 @@ ALTER FUNCTION accounts.registration_tenant OWNER TO axiom_lookup;
 ALTER FUNCTION accounts.registration_request_tenant OWNER TO axiom_lookup;
 REVOKE CREATE ON SCHEMA accounts FROM axiom_lookup;
 
-GRANT SELECT (id, site_id, token_hash) ON accounts.registration_requests TO axiom_lookup;
+GRANT SELECT (id, site_id, email, expires_at, token_hash) ON accounts.registration_requests TO axiom_lookup;
 CREATE POLICY lookup ON accounts.registration_requests FOR SELECT TO axiom_lookup USING (true);
 
 -- +goose Down

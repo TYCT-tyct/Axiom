@@ -72,10 +72,21 @@ func registrationFor(t *testing.T, x site) (*accounts.Registration, *pg.Queue) {
 // open turns s1's registration on with the given work and the given domain limits, then reloads the node.
 func (x registrationWorld) open(t *testing.T, humanCheck bool, bits, burst, perHour int) {
 	t.Helper()
+	x.openAt(t, s1, humanCheck, bits, burst, perHour)
+}
+
+func (x registrationWorld) openAt(t *testing.T, site uuid.UUID, humanCheck bool, bits, burst, perHour int) {
+	t.Helper()
+	key := ":s1"
+	if site == s2 {
+		key = ":s2"
+	} else if site != s1 {
+		t.Fatalf("openAt: unknown site %s", site)
+	}
 	for _, statement := range []string{
-		"UPDATE accounts.sites SET registration = 'open' WHERE id = :s1",
+		"UPDATE accounts.sites SET registration = 'open' WHERE id = " + key,
 		`INSERT INTO accounts.site_settings (site_id, registration_human_check, registration_human_check_bits,
-			registration_domain_burst, registration_domain_per_hour) VALUES (:s1, ` +
+			registration_domain_burst, registration_domain_per_hour) VALUES (` + key + `, ` +
 			boolText(humanCheck) + `, ` + itoa(bits) + `, ` + itoa(burst) + `, ` + itoa(perHour) + `)
 		ON CONFLICT (site_id) DO UPDATE SET registration_human_check = excluded.registration_human_check,
 			registration_human_check_bits = excluded.registration_human_check_bits,
@@ -109,18 +120,23 @@ func (x registrationWorld) register(t *testing.T, email, human, language string,
 
 func (x registrationWorld) pendingID(t *testing.T, email string) uuid.UUID {
 	t.Helper()
+	return x.pendingIDAt(t, s1, email)
+}
+
+func (x registrationWorld) pendingIDAt(t *testing.T, site uuid.UUID, email string) uuid.UUID {
+	t.Helper()
 	hash := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
 	var id uuid.UUID
 	if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT id FROM accounts.registration_requests
-			WHERE site_id = $1 AND email_hash = $2`, s1, hash[:]).Scan(&id)
+			WHERE site_id = $1 AND email_hash = $2`, site, hash[:]).Scan(&id)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-func (x registrationWorld) token(t *testing.T, email string) string {
+func (x registrationWorld) mail(t *testing.T, email string) string {
 	t.Helper()
 	var body string
 	if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
@@ -129,6 +145,12 @@ func (x registrationWorld) token(t *testing.T, email string) string {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return body
+}
+
+func (x registrationWorld) token(t *testing.T, email string) string {
+	t.Helper()
+	body := x.mail(t, email)
 	i := strings.LastIndex(body, "#token=")
 	if i < 0 {
 		t.Fatalf("the verification mail has no token: %q", body)
@@ -162,10 +184,13 @@ func TestOpenRegistrationVerifiesEmail(t *testing.T) {
 	if token == "" {
 		t.Fatal("empty token")
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, "short"); !errors.Is(err, accounts.ErrWeakPassword) {
+	if body := x.mail(t, email); !strings.Contains(body, "https://"+console+"/console/verify-email#token=") {
+		t.Fatalf("the verification link does not open the console page: %q", body)
+	}
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, "short", client); !errors.Is(err, accounts.ErrWeakPassword) {
 		t.Fatalf("a weak password at verification: %v", err)
 	}
-	user, err := x.s.VerifyEmail(t.Context(), console, token, password)
+	user, err := x.s.VerifyEmail(t.Context(), console, token, password, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,11 +206,110 @@ func TestOpenRegistrationVerifiesEmail(t *testing.T) {
 	if _, err := x.s.SignIn(t.Context(), accounts.SignInRequest{Host: console, Email: email, Password: password, ClientIP: client}); err != nil {
 		t.Fatalf("sign in after verification: %v", err)
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, password); !errors.Is(err, accounts.ErrInvalidVerification) {
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, client); !errors.Is(err, accounts.ErrInvalidVerification) {
 		t.Fatalf("the token was used twice: %v", err)
 	}
 	if err := x.registration.ProcessRegistration(t.Context(), id); err != nil {
 		t.Fatalf("the worker failed on the spent request: %v", err)
+	}
+}
+
+// TestRegistrationRequestTenantScopesOneRequest: the lookup by id returns only the named row. A missing id must not
+// borrow another site's scope, and two pending requests on two sites must each issue and consume their own link.
+func TestRegistrationRequestTenantScopesOneRequest(t *testing.T) {
+	t.Parallel()
+	x := registrationSite(t)
+	x.open(t, false, 12, 100, 1000)
+	x.openAt(t, s2, false, 12, 100, 1000)
+	const first, second = "first@example.com", "second@example.com"
+	for _, c := range []struct {
+		host, email string
+	}{
+		{console, first},
+		{otherConsole, second},
+	} {
+		out, err := x.s.Register(t.Context(), accounts.RegisterRequest{
+			Host: c.host, Email: c.email, ClientIP: client,
+		})
+		if err != nil || !out.Pending {
+			t.Fatalf("register %s: %+v, %v", c.email, out, err)
+		}
+	}
+	var ran bool
+	found, err := x.db.TenantTx(t.Context(), "accounts.registration_request_tenant", uuid.NewV7(), func(pg.Tx) error {
+		ran = true
+		return nil
+	})
+	if err != nil || found || ran {
+		t.Fatalf("the lookup for a missing request = %v, %v, ran %v; want it not found", found, err, ran)
+	}
+	ids := []uuid.UUID{x.pendingIDAt(t, s1, first), x.pendingIDAt(t, s2, second)}
+	for _, id := range ids {
+		if err := x.registration.ProcessRegistration(t.Context(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	firstToken, secondToken := x.token(t, first), x.token(t, second)
+	if firstToken == secondToken {
+		t.Fatal("two pending requests got the same token")
+	}
+	for _, c := range []struct {
+		host, token string
+	}{
+		{console, firstToken},
+		{otherConsole, secondToken},
+	} {
+		if _, err := x.s.VerifyEmail(t.Context(), c.host, c.token, password, client); err != nil {
+			t.Fatalf("verify on %s: %v", c.host, err)
+		}
+	}
+	if got := count(t, x.db, "SELECT count(*) FROM accounts.users WHERE email IN ('"+first+"', '"+second+"')"); got != 2 {
+		t.Fatalf("verified users = %d, want 2", got)
+	}
+}
+
+// TestRegistrationRetriesAfterATenantLookupFailure: a database error while learning the tenant must fail the job, not
+// mark it done; the same pending request succeeds when the database is available again.
+func TestRegistrationRetriesAfterATenantLookupFailure(t *testing.T) {
+	t.Parallel()
+	x := registrationSite(t)
+	x.open(t, false, 12, 100, 1000)
+	const email = "retry@example.com"
+	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, Email: email, ClientIP: client}); err != nil {
+		t.Fatal(err)
+	}
+	id := x.pendingID(t, email)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := x.registration.ProcessRegistration(ctx, id); err == nil {
+		t.Fatal("a canceled lookup was reported as a completed job")
+	}
+	if got := count(t, x.db, "SELECT count(*) FROM platform.mail_outbox"); got != 0 {
+		t.Fatalf("mail after a failed lookup = %d, want 0", got)
+	}
+	if err := x.registration.ProcessRegistration(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if x.token(t, email) == "" {
+		t.Fatal("the retry sent no token")
+	}
+}
+
+// TestVerifyEmailSpendsTheIPBudget: a verification attempt costs one of the IP's authentication attempts before the
+// token is looked up or a password is hashed, so one token cannot be used to occupy the hash semaphore indefinitely.
+func TestVerifyEmailSpendsTheIPBudget(t *testing.T) {
+	t.Parallel()
+	x := registrationSite(t)
+	x.open(t, false, 12, 100, 1000)
+	token := strings.Repeat("a", 43)
+	ip := netip.MustParseAddr("198.51.100.99")
+	for range 20 {
+		if _, err := x.s.VerifyEmail(t.Context(), console, token, password, ip); !errors.Is(err, accounts.ErrInvalidVerification) {
+			t.Fatalf("an unknown token: %v", err)
+		}
+	}
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, ip); !errors.Is(err, accounts.ErrTooManyAttempts) {
+		t.Fatalf("the 21st verification: %v, want ErrTooManyAttempts", err)
 	}
 }
 
@@ -442,7 +566,7 @@ func TestOpenRegistrationRechecksTheDomainAtVerification(t *testing.T) {
 	if err := x.s.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, password); !errors.Is(err, accounts.ErrEmailDomainNotAllowed) {
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, client); !errors.Is(err, accounts.ErrEmailDomainNotAllowed) {
 		t.Fatalf("verify with the domain denied: %v", err)
 	}
 	if got := count(t, x.db, "SELECT count(*) FROM accounts.users WHERE email = '"+email+"'"); got != 0 {
@@ -455,7 +579,7 @@ func TestOpenRegistrationRechecksTheDomainAtVerification(t *testing.T) {
 	if err := x.s.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, password); err != nil {
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, client); err != nil {
 		t.Fatalf("verify after the deny was removed: %v", err)
 	}
 }
