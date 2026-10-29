@@ -113,7 +113,7 @@ func (h *Handler) keyInfo(ctx context.Context, tx pg.Tx, a accounts.Admission, _
 	if info.ExpiresAt != nil {
 		data["expires_at"] = info.ExpiresAt.UTC().Format(time.RFC3339)
 	}
-	budgets, effective, err := keyBudgets(ctx, tx, a)
+	budgets, effective, err := keyBudgets(ctx, tx, a, use)
 	if err != nil {
 		return nil, err
 	}

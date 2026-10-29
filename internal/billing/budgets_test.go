@@ -43,13 +43,13 @@ func checkBudgetWindow(t *testing.T, b *bank, tx pg.Tx, reset Reset, today time.
 	if err != nil {
 		return err
 	}
-	if budget.Spent+budget.Reserved != usage.Counted {
+	if budget.Spent+budget.Reserved != usage.Counted || budget != usage.BudgetUsage {
 		t.Errorf("%s: %v vs counted %d", reset, budget, usage.Counted)
 	}
-	if (budget.ResetsAt == nil) != (reset == ResetNever) {
+	if budget.ResetsAt.IsZero() != (reset == ResetNever) {
 		t.Errorf("%s reset: %v", reset, budget.ResetsAt)
 	}
-	if budget.ResetsAt != nil && !budget.ResetsAt.After(today) {
+	if !budget.ResetsAt.IsZero() && !budget.ResetsAt.After(today) {
 		t.Errorf("reset: %v", budget.ResetsAt)
 	}
 	workspace, err := ReadBudgetUsage(t.Context(), tx, b.admitted.Workspace, reset)

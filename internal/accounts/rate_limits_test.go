@@ -109,3 +109,43 @@ func TestRateTierVisibilityIsOnlyTheAssignedTier(t *testing.T) {
 		t.Fatalf("account wrote tier: %d %v", n, err)
 	}
 }
+
+func TestBusinessRateWritesAllowForeignKeyChecks(t *testing.T) {
+	t.Parallel()
+	db, _, svc, text := callSetup(t)
+	caller, err := svc.AuthenticateKey(t.Context(), accounts.SiteID(s1), text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tier uuid.UUID
+	if err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT tier_id FROM accounts.accounts WHERE id = $1", a1).Scan(&tier)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		target string
+		id     uuid.UUID
+		check  string
+	}{
+		{"tier", tier, "SELECT id FROM accounts.tiers WHERE id = $1 FOR KEY SHARE NOWAIT"},
+		{"account", a1, "SELECT id FROM accounts.accounts WHERE id = $1 FOR KEY SHARE NOWAIT"},
+		{"key", uuid.UUID(caller.KeyID()), "SELECT id FROM accounts.api_keys WHERE id = $1 FOR KEY SHARE NOWAIT"},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+				if err := svc.SetRateLimit(t.Context(), tx, system, tc.target, tc.id, new(int32(1)), "capacity"); err != nil {
+					return err
+				}
+				// A foreign-key check in another transaction must not wait for a non-key policy edit.
+				return db.Tx(t.Context(), platform, func(other pg.Tx) error {
+					var id uuid.UUID
+					return other.QueryRow(t.Context(), tc.check, tc.id).Scan(&id)
+				})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

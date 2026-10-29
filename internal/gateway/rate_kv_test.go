@@ -140,7 +140,8 @@ func TestRateKeysExpireWhateverTheClock(t *testing.T) {
 	clock := newFrozenClock()
 	h := node(t, server, kvtest.Namespace(), clock)
 	here := h.KV.Now()
-	for _, ahead := range []time.Duration{0, time.Hour, -time.Hour} {
+	offsets := []time.Duration{0, time.Hour, -time.Hour}
+	for _, ahead := range offsets {
 		clock.place(h.KV, here.Add(ahead))
 		h.countRate(t.Context(), rateSite, callDimension, "local", strconv.FormatInt(int64(ahead), 10))
 	}
@@ -148,8 +149,8 @@ func TestRateKeysExpireWhateverTheClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(keys) != 3 {
-		t.Fatalf("%d keys written, want one per call: %v", len(keys), keys)
+	if len(keys) != 2*len(offsets) {
+		t.Fatalf("%d keys written, want a key and account counter per distinct window: %v", len(keys), keys)
 	}
 	window := h.Limits.cfg.RateWindow
 	for _, key := range keys {
@@ -198,14 +199,14 @@ func benchmarkPrecheck(b *testing.B) *Handler {
 	return &Handler{Limits: limits, KV: server.Open(b, kv.Deps{})}
 }
 
-// BenchmarkPrecheck is the shared count alone: the batch K1 measured, so the gate keeps comparing like with like.
+// BenchmarkPrecheck is the shared count alone: the count_tokens batch, including the account pool, without a sticky read.
 func BenchmarkPrecheck(b *testing.B) {
 	h := benchmarkPrecheck(b)
 	ctx := b.Context()
-	h.countRate(ctx, rateSite, callDimension, "local", "bench") // the connection, and the key
+	h.countRate(ctx, rateSite, countDimension, "local", "bench") // the connection, and the key
 	b.ReportAllocs()
 	for b.Loop() {
-		h.countRate(ctx, rateSite, callDimension, "local", "bench")
+		h.countRate(ctx, rateSite, countDimension, "local", "bench")
 	}
 }
 
@@ -274,5 +275,43 @@ func TestKeyRateHoldsWhileTheCacheIsDown(t *testing.T) {
 // does not. The node's own counter is advanced on every request either way, so a fallback starts from the traffic the
 // node has already seen rather than from zero (README「限流计数」).
 func (h *Handler) countRate(ctx context.Context, site accounts.SiteID, dimension, localKey, subject string) int {
-	return h.precheck(ctx, site, dimension, localKey, subject, nil, false)
+	return h.precheck(ctx, site, dimension, localKey, subject, &Call{}, false)
+}
+
+func TestSharedNodeRejectionsPreserveAccountHistory(t *testing.T) {
+	t.Parallel()
+	server := kvtest.Own(t)
+	clock := newFrozenClock()
+	namespace := kvtest.Namespace()
+	a, b := node(t, server, namespace, clock), node(t, server, namespace, clock)
+	cfg := DefaultConfig()
+	cfg.CountRate = 1
+	for _, h := range []*Handler{a, b} {
+		var err error
+		h.Limits, err = New(cfg, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.midWindow(a.KV, cfg.RateWindow)
+	for range 2 {
+		a.precheck(t.Context(), rateSite, countDimension, "A", "A", &Call{}, false)
+	}
+	index, _ := a.Limits.Rate.slot(a.KV.Now())
+	clock.place(b.KV, time.UnixMilli((index+1)*cfg.RateWindow.Milliseconds()))
+	blocked := &Call{}
+	if rate := b.precheck(t.Context(), rateSite, countDimension, "A", "A", blocked, false); rate <= cfg.CountRate || blocked.accountRate != 1 {
+		t.Fatalf("previous-window node rejection: rate %d, account %d", rate, blocked.accountRate)
+	}
+	allowed := &Call{}
+	b.precheck(t.Context(), rateSite, countDimension, "B", "B", allowed, false)
+	if allowed.accountRate != 2 {
+		t.Fatalf("sibling charged for rejected attempts: %d", allowed.accountRate)
+	}
+	server.Stop(t)
+	fallback := &Call{}
+	b.precheck(t.Context(), rateSite, countDimension, "C", "C", fallback, false)
+	if fallback.accountRate != 2 {
+		t.Fatalf("rejected shared request warmed local account: %d", fallback.accountRate)
+	}
 }

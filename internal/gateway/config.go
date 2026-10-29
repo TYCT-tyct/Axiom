@@ -155,6 +155,7 @@ type Backpressure struct {
 	Rate        *RateCounter
 	IPCalls     *Limiter // requests in flight per client address
 	cfg         Config
+	rateCaps    [2]string
 	rateTTL     string // how long a rate count lives in the shared cache, in milliseconds as the script takes it: two windows
 }
 
@@ -187,6 +188,7 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 		AccountRate: NewRateCounter(cfg.RateWindow),
 		IPCalls:     NewLimiter(errIPInFlight),
 		cfg:         cfg,
+		rateCaps:    [2]string{strconv.Itoa(cfg.KeyRate), strconv.Itoa(cfg.CountRate)},
 		rateTTL:     strconv.FormatInt((2 * cfg.RateWindow).Milliseconds(), 10),
 	}, nil
 }

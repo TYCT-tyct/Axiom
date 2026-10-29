@@ -24,7 +24,9 @@ func TestReadKeyUsagesMatchesSingleKey(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(batch) != len(windows) || batch[b.admitted.Key] != b.keyUsage(scope, reset) || batch[idle] != (KeyUsage{}) {
+			idleUsage := batch[idle]
+			idleUsage.ResetsAt = time.Time{}
+			if len(batch) != len(windows) || batch[b.admitted.Key] != b.keyUsage(scope, reset) || idleUsage != (KeyUsage{}) {
 				t.Fatalf("reset %q: batch differs from single-key usage: %+v", reset, batch)
 			}
 		}

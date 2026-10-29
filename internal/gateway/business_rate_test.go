@@ -76,6 +76,74 @@ func TestBusinessAccountRateAggregatesKeys(t *testing.T) {
 	}
 }
 
+func TestNodeRateRejectsPreserveAccountPool(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"local", "shared", "outage"} {
+		for _, dimension := range []string{callDimension, countDimension} {
+			t.Run(mode+"/"+dimension, func(t *testing.T) {
+				t.Parallel()
+				testNodeRateAccountIsolation(t, mode, dimension)
+			})
+		}
+	}
+}
+
+func testNodeRateAccountIsolation(t *testing.T, mode, dimension string) {
+	t.Helper()
+	var server *kvtest.Server
+	var cache *kv.Client
+	if mode != "local" {
+		server = kvtest.Own(t)
+		cache = server.OpenIn(t, kvtest.Namespace(), kv.Deps{})
+	}
+	r := newRig(t, func(o *rigOptions) {
+		o.cache = cache
+		o.config = func(c *Config) { c.KeyRate, c.CountRate = 2, 2 }
+	})
+	a := r.newAccount(10e9)
+	second, _ := r.newKey(a)
+	r.sql("UPDATE accounts.accounts SET rate_requests = 3", "UPDATE accounts.api_keys SET rate_requests = 0")
+	send := func(key string) (reply, string) {
+		if dimension == countDimension {
+			return r.do(http.MethodPost, "/api/v1/messages/count_tokens", key, strings.NewReader(countBody))
+		}
+		c := a
+		c.key = key
+		return r.message(c, "acme/beta")
+	}
+	for n := range 6 {
+		if mode == "outage" && n == 2 {
+			server.Stop(t)
+		}
+		resp, body := send(a.key)
+		limit := 0
+		if n >= 2 {
+			limit = 2
+		}
+		requireRateResponse(t, resp, body, limit)
+	}
+	resp, body := send(second)
+	requireRateResponse(t, resp, body, 0)
+}
+
+func TestBusinessKeyRejectionsConsumeAccountPool(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(10e9)
+	second, _ := r.newKey(a)
+	r.sql("UPDATE accounts.accounts SET rate_requests = 3", "UPDATE accounts.api_keys SET rate_requests = 1")
+	for n := range 3 {
+		resp, body := r.do(http.MethodPost, "/api/v1/messages/count_tokens", a.key, strings.NewReader(countBody))
+		limit := 0
+		if n > 0 {
+			limit = 1
+		}
+		requireRateResponse(t, resp, body, limit)
+	}
+	resp, body := r.do(http.MethodPost, "/api/v1/messages/count_tokens", second, strings.NewReader(countBody))
+	requireRateResponse(t, resp, body, 3)
+}
+
 func TestBusinessRateConcurrentAdmission(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)

@@ -12,13 +12,13 @@ JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
 WHERE @target::text = 'key' AND k.id = @id AND k.kind = 'call' AND k.deleted_at IS NULL;
 
 -- name: LockRateTier :exec
-SELECT id FROM accounts.tiers WHERE id = @id FOR UPDATE;
+SELECT id FROM accounts.tiers WHERE id = @id FOR NO KEY UPDATE;
 
 -- name: LockRateAccount :exec
-SELECT id FROM accounts.accounts WHERE id = @id FOR UPDATE;
+SELECT id FROM accounts.accounts WHERE id = @id FOR NO KEY UPDATE;
 
 -- name: LockRateKey :exec
-SELECT id FROM accounts.api_keys WHERE id = @id FOR UPDATE;
+SELECT id FROM accounts.api_keys WHERE id = @id FOR NO KEY UPDATE;
 
 -- name: WriteRateLimit :exec
 WITH t AS (

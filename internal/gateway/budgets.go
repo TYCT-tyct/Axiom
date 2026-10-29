@@ -34,7 +34,7 @@ func (h *Handler) keyRateLimit(a accounts.Admission) map[string]any {
 	return map[string]any{"requests": effective, "interval": h.Limits.cfg.RateWindow.String(), "account_requests": account, "key_requests": key}
 }
 
-func keyBudgets(ctx context.Context, tx pg.Tx, a accounts.Admission) ([]budgetView, *budgetView, error) {
+func keyBudgets(ctx context.Context, tx pg.Tx, a accounts.Admission, keyUsage billing.KeyUsage) ([]budgetView, *budgetView, error) {
 	budgets := make([]budgetView, 0, 2)
 	caller := a.Caller()
 	keyAmount, keyReset, keyLimited := a.SpendLimit()
@@ -55,9 +55,13 @@ func keyBudgets(ctx context.Context, tx pg.Tx, a accounts.Admission) ([]budgetVi
 		if !limit.limited {
 			continue
 		}
-		use, err := billing.ReadBudgetUsage(ctx, tx, limit.subject, billing.Reset(limit.reset))
-		if err != nil {
-			return nil, nil, err
+		use := keyUsage.BudgetUsage
+		if limit.scope == "workspace" {
+			var err error
+			use, err = billing.ReadBudgetUsage(ctx, tx, limit.subject, billing.Reset(limit.reset))
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		var reset *string
 		if limit.reset != "" {
@@ -65,7 +69,11 @@ func keyBudgets(ctx context.Context, tx pg.Tx, a accounts.Admission) ([]budgetVi
 		}
 		remaining := max(0, limit.amount-use.Spent)
 		remaining = max(0, remaining-use.Reserved)
-		budgets = append(budgets, budgetView{Scope: limit.scope, Limit: credits(limit.amount), Spend: credits(use.Spent), Reserved: credits(use.Reserved), Remaining: credits(remaining), Reset: reset, ResetsAt: use.ResetsAt})
+		var resetsAt *time.Time
+		if !use.ResetsAt.IsZero() {
+			resetsAt = &use.ResetsAt
+		}
+		budgets = append(budgets, budgetView{Scope: limit.scope, Limit: credits(limit.amount), Spend: credits(use.Spent), Reserved: credits(use.Reserved), Remaining: credits(remaining), Reset: reset, ResetsAt: resetsAt})
 		b := &budgets[len(budgets)-1]
 		if effective == nil || remaining < least {
 			effective, least = b, remaining

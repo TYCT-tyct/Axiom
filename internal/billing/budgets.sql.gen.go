@@ -16,7 +16,7 @@ const readBudgetUsage = `-- name: ReadBudgetUsage :one
 WITH t AS MATERIALIZED (SELECT clock_timestamp() AS now)
 SELECT coalesce(sum(s.spent), 0)::bigint AS spent,
     coalesce(sum(s.reserved), 0)::bigint AS reserved,
-    CASE WHEN $1::text = '' THEN 'epoch'::timestamptz ELSE billing.window_to($1::text, t.now) END::timestamptz AS resets_at
+    CASE WHEN $1::text = '' THEN '0001-01-01 00:00:00+00'::timestamptz ELSE billing.window_to($1::text, t.now) END::timestamptz AS resets_at
 FROM t LEFT JOIN billing.spend s ON s.subject = $2
     AND s.window_start >= billing.window_from($1::text, t.now)
     AND s.window_start < billing.window_to($1::text, t.now)

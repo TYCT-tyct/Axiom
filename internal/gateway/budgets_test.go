@@ -5,6 +5,10 @@ import (
 	"testing"
 	"time"
 	"uuid"
+
+	"axiom/internal/accounts"
+	"axiom/internal/billing"
+	"axiom/internal/platform/pg"
 )
 
 func TestKeyReportsRateAndEffectiveBudgets(t *testing.T) {
@@ -97,5 +101,36 @@ func requireBudgetReset(t *testing.T, text string) {
 	at, err := time.Parse(time.RFC3339, text)
 	if err != nil || at.Day() != 1 || at.Hour() != 0 || !at.After(time.Now()) {
 		t.Fatalf("reset: %v %v", at, err)
+	}
+}
+
+func TestKeyBudgetReusesUsageSnapshot(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(50e9)
+	r.sql("UPDATE accounts.api_keys SET spend_limit = 5000000000, limit_reset = 'daily'")
+	r.spendRow(a, uuid.UUID(a.keyID), 0, 1e9, 2e9)
+	caller, err := r.accounts.AuthenticateKey(t.Context(), accounts.SiteID(siteID), a.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.accounts.Admit(t.Context(), caller, accounts.AdmitRequest{Domain: apiHost}, func(tx pg.Tx, admitted accounts.Admission) error {
+		usage, err := billing.ReadKeyUsage(t.Context(), tx, uuid.UUID(a.keyID), billing.ResetDaily)
+		if err != nil {
+			return err
+		}
+		// A concurrent reservation commits between reading legacy usage and building the budget response.
+		r.sql("UPDATE billing.spend SET reserved = reserved + 1000000000")
+		budgets, effective, err := keyBudgets(t.Context(), tx, admitted, usage)
+		if err != nil {
+			return err
+		}
+		if len(budgets) != 1 || effective.Scope != "key_limit" || effective.Remaining != credits(5e9-usage.Counted) || effective.Reserved != credits(usage.Reserved) || !effective.ResetsAt.Equal(usage.ResetsAt) {
+			t.Fatalf("key budget changed snapshots: %+v, usage %+v", effective, usage)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

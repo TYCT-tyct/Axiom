@@ -67,7 +67,7 @@
 
 ## 业务速率
 
-迁移 `00015_rate_limits.sql` 给 tiers、accounts、api_keys 各加可空的 `rate_requests`（0–10 亿），不写默认数据；继承、不限和默认值见[账户域](../../docs/domains/accounts.md#业务速率限制)。`Admission.RateLimits` 随准入读取最新账户/key 额度，配置不进身份缓存。`Service.RateLimit` 读后台原值和有效值；`Service.SetRateLimit` 持目标行锁修改并写 before/after 审计，后台独立资源要求 MFA、sites.manage、幂等与理由，target 与 tier/acct/key TypeID 必须对应。普通 key CRUD 不读写该列，旧页面和管理 key 无法清除或放宽它。
+迁移 `00015_rate_limits.sql` 给 tiers、accounts、api_keys 各加可空的 `rate_requests`（0–10 亿），不写默认数据；继承、不限和默认值见[账户域](../../docs/domains/accounts.md#业务速率限制)。`Admission.RateLimits` 随准入读取最新账户/key 额度，配置不进身份缓存。`Service.RateLimit` 读后台原值和有效值；`Service.SetRateLimit` 持目标行的 FOR NO KEY UPDATE 锁修改并写 before/after 审计（只改非键列，不阻塞新建 key/用户所需的外键 KEY SHARE 锁），后台独立资源要求 MFA、sites.manage、幂等与理由，target 与 tier/acct/key TypeID 必须对应。普通 key CRUD 不读写该列，旧页面和管理 key 无法清除或放宽它。
 
 不变量：等级是账户的缺省，不是全等级共享计数；修改与审计同事务，失败一起回滚；未配置默认 6000，只在 `DefaultRateRequests` 定义一次；速率窗口由 gateway 定义，默认一分钟。等级 SELECT 策略在原站点/平台范围外，只允许账户读取自己当前指定的等级；不增加等级写入权限，不能看到同站未指定或别站等级。更换等级或修改额度在下一次准入生效，不增加准入查询次数。滚动发布中旧核心仍只执行原有节点/key 保护；全部核心升级后，账户共享计数与新业务策略才完整生效；原 key 计数键保持不变。与单独查询可变策略或缓存策略相比，沿用准入 JOIN 能立即生效且无需失效协议。
 

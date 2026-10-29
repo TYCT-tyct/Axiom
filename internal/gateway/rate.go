@@ -64,12 +64,19 @@ func (r *RateCounter) slot(now time.Time) (index int64, elapsed time.Duration) {
 
 // rateScript is the count script: it adds to this window's key and reads the one before, so the caller weights the two
 // the way RateCounter does. The first write of a key gives it its expiry, in the same script, so no key outlives the two
-// windows it is read in (README「限流计数」「不变量」).
+// windows it is read in. Node-protection rejections skip the account increment so a runaway key cannot exhaust its
+// siblings' pool with attempts already rejected at the node limit (README「预检计数」).
 const rateScript = `
 local counts = {}
 for i = 1, #KEYS, 2 do
-  local current = redis.call('INCR', KEYS[i])
-  if current == 1 then redis.call('PEXPIRE', KEYS[i], ARGV[1]) end
+  local charge = i == 1 or math.floor(counts[1] + counts[2] * (1 - tonumber(ARGV[3]) / (tonumber(ARGV[1]) / 2))) <= tonumber(ARGV[2])
+  local current
+  if charge then
+    current = redis.call('INCR', KEYS[i])
+    if current == 1 then redis.call('PEXPIRE', KEYS[i], ARGV[1]) end
+  else
+    current = tonumber(redis.call('GET', KEYS[i]) or 0)
+  end
   local previous = redis.call('GET', KEYS[i + 1]) or 0
   counts[#counts + 1] = current
   counts[#counts + 1] = tonumber(previous)
@@ -91,34 +98,44 @@ func estimate(current, previous int64, elapsed, window time.Duration) int {
 // failure retains only the process count: a local sticky binding would disagree with other nodes, including after
 // recovery.
 func (h *Handler) precheck(ctx context.Context, site accounts.SiteID, dimension, localKey, subject string, call *Call, compacted bool) int {
+	call.accountRate = 0
 	local := h.Limits.Rate.Count(localKey)
-	if call != nil {
-		call.accountRate = h.Limits.AccountRate.Count(accountRateKey(dimension, call.caller))
+	protection := h.Limits.cfg.KeyRate
+	if dimension == countDimension {
+		protection = h.Limits.cfg.CountRate
 	}
-	if h.KV == nil || !h.KV.Enabled() {
-		if call != nil {
-			call.rateReset = h.Limits.Rate.now().Add(2*h.Limits.cfg.RateWindow + time.Second - time.Nanosecond).Unix()
-			if dimension == callDimension {
-				call.sticky = h.stickyLocal(call.Session, compacted)
-			}
+	rate, shared := local, false
+	if h.KV != nil && h.KV.Enabled() {
+		rate, shared = h.sharedPrecheck(ctx, site, dimension, subject, call, compacted, local)
+	} else {
+		call.rateReset = h.Limits.Rate.now().Add(2*h.Limits.cfg.RateWindow + time.Second - time.Nanosecond).Unix()
+		if dimension == callDimension {
+			call.sticky = h.stickyLocal(call.Session, compacted)
 		}
-		return local
 	}
-	return h.sharedPrecheck(ctx, site, dimension, subject, call, compacted, local)
+	if rate <= protection {
+		account := h.Limits.AccountRate.Count(accountRateKey(dimension, call.caller))
+		if !shared {
+			call.accountRate = account
+		}
+	}
+	return rate
 }
 
 // sharedPrecheck sends the counter dimensions and optional sticky read as one cache operation.
-func (h *Handler) sharedPrecheck(ctx context.Context, site accounts.SiteID, dimension, subject string, call *Call, compacted bool, local int) int {
+func (h *Handler) sharedPrecheck(ctx context.Context, site accounts.SiteID, dimension, subject string, call *Call, compacted bool, local int) (int, bool) {
 	now := h.KV.Now()
 	index, elapsed := h.Limits.Rate.slot(now)
-	keys := h.rateKeys(site, dimension, subject, call, index)
-	if call != nil {
-		call.rateReset = now.Add(2*h.Limits.cfg.RateWindow + time.Second - time.Nanosecond).Unix()
-	}
+	keys, elapsedArg := h.rateKeys(site, dimension, subject, call, index, elapsed)
+	call.rateReset = now.Add(2*h.Limits.cfg.RateWindow + time.Second - time.Nanosecond).Unix()
 	var cmds [2]kv.Cmd
-	cmds[0] = rateCounter.Cmd(keys, h.Limits.rateTTL)
+	capArg := h.Limits.rateCaps[0]
+	if dimension == countDimension {
+		capArg = h.Limits.rateCaps[1]
+	}
+	cmds[0] = rateCounter.Cmd(keys, h.Limits.rateTTL, capArg, elapsedArg)
 	n := 1
-	sticky := call != nil && dimension == callDimension
+	sticky := dimension == callDimension
 	if sticky {
 		call.sticky = routing.EndpointID{}
 		call.stickyCache, call.stickyKey = h.KV, routing.StickyKey(h.KV, uuid.UUID(site), call.Session)
@@ -130,19 +147,17 @@ func (h *Handler) sharedPrecheck(ctx context.Context, site accounts.SiteID, dime
 	}
 	values, err := h.KV.Do(ctx, kv.Precheck, cmds[:n]...)
 	if err != nil {
-		return local
+		return local, false
 	}
 	if sticky && !compacted {
 		call.sticky = routing.StickyEndpoint(values[1])
 	}
 	counts, err := values[0].Ints()
 	if err != nil || len(counts) != len(keys) {
-		return local
+		return local, false
 	}
-	if call != nil {
-		call.accountRate = estimate(counts[2], counts[3], elapsed, h.Limits.cfg.RateWindow)
-	}
-	return estimate(counts[0], counts[1], elapsed, h.Limits.cfg.RateWindow)
+	call.accountRate = estimate(counts[2], counts[3], elapsed, h.Limits.cfg.RateWindow)
+	return estimate(counts[0], counts[1], elapsed, h.Limits.cfg.RateWindow), true
 }
 
 // stickyLocal is the binding of single-core mode: the process table, forgotten first when the client says its context
@@ -157,17 +172,14 @@ func (h *Handler) stickyLocal(session routing.SessionKey, compacted bool) routin
 
 // rateKeys shares one backing string between the two windows of every dimension. Adding the account dimension
 // otherwise allocates another string for every key and window number on each request.
-func (h *Handler) rateKeys(site accounts.SiteID, dimension, subject string, call *Call, index int64) []string {
+func (h *Handler) rateKeys(site accounts.SiteID, dimension, subject string, call *Call, index int64, elapsed time.Duration) ([]string, string) {
 	prefix := h.KV.Key(kv.RateSpace, uuid.UUID(site))
-	n := 2
+	const n = 4
 	var account [32]byte
-	if call != nil {
-		n = 4
-		id := uuid.UUID(call.caller.AccountID())
-		hex.Encode(account[:], id[:])
-	}
+	id := uuid.UUID(call.caller.AccountID())
+	hex.Encode(account[:], id[:])
 	var text strings.Builder
-	text.Grow(n * (len(prefix) + len(dimension) + max(len(subject), len(account)) + len(":account_::") + 20))
+	text.Grow(n*(len(prefix)+len(dimension)+max(len(subject), len(account))+len(":account_::")+20) + 20)
 	var ends [4]int
 	var window [20]byte
 	for i := range n {
@@ -187,6 +199,7 @@ func (h *Handler) rateKeys(site accounts.SiteID, dimension, subject string, call
 		text.Write(strconv.AppendInt(window[:0], index-int64(i%2), 10))
 		ends[i] = text.Len()
 	}
+	text.Write(strconv.AppendInt(window[:0], elapsed.Milliseconds(), 10))
 	all := text.String()
 	keys := make([]string, n)
 	start := 0
@@ -194,7 +207,7 @@ func (h *Handler) rateKeys(site accounts.SiteID, dimension, subject string, call
 		keys[i] = all[start:ends[i]]
 		start = ends[i]
 	}
-	return keys
+	return keys, all[ends[3]:]
 }
 
 // keyHex is a key's ID as a cache key carries it: the 32 lowercase hex digits of its UUID, not the raw bytes the

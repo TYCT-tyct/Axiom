@@ -148,7 +148,7 @@
 | 进行中的请求暂时占满了余额 | 402 同上，`limit_source` 为 `pending`，`Retry-After` 是最早释放的时间（待定：见「待定问题」；现在回 `balance`，与上一条相同） | `billing_error` | 同上 |
 | 追加预留时数据库出错 | 503 `billing_unavailable`（转发开始前就用完了第一段） | `api_error` | `billing_unavailable`，不带费用 |
 | 结算写不进，内容完整 | 200，带 `axiom.billing_pending: true`，不带费用 | 同左 | 同左 |
-| 限流（每个 key 调用和计数的频率）；按 IP、按账户的在途上限；同一账户的资金操作排队超过 5 秒（一次突发在一个账户上排的队，见 [gateway 模块的「并发、背压与共享状态」](../../internal/gateway/README.md#并发背压与共享状态)） | 429 `rate_limited` | `rate_limit_error` | — |
+| 限流（每个 key 的节点保护、账户聚合业务速率与 key 业务速率，调用和计数各一池）；按 IP、按账户的在途上限；同一账户的资金操作排队超过 5 秒（一次突发在一个账户上排的队，见 [gateway 模块的「并发、背压与共享状态」](../../internal/gateway/README.md#并发背压与共享状态)） | 429 `rate_limited` | `rate_limit_error` | — |
 | 端点都满载，排队的人数满了或排队超时；上游凭证被并发的请求占满 | 429 `rate_limited`，`Retry-After` 是估计的等待时间，凭证占满时为 1 | `rate_limit_error` | — |
 | 节点满载、准入超时、路由快照过旧、数据库不可用、本节点的持有者失效 | 503 `overloaded`，`Retry-After: 1` | `overloaded_error` | — |
 | 模型不存在；key 不允许用这个模型 | 404 `model_not_found`，不返回 403 | `not_found_error` | — |
@@ -182,9 +182,9 @@
 
 Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限流，防滥用并保护共享容量；等级给每个账户默认值、账户覆盖等级、key 独立受限，同时保留节点保护。继承、0 不限、默认和共享故障语义以[账户域](accounts.md#业务速率限制)为准。调用和 count_tokens 分开计数；读 key 信息不消费调用次数。
 
-只有请求速率触发的 429 带这三个头，Limit 是触发额度，Remaining 为 0，Reset 是 Unix 秒的保守清空上界（预检时刻加两个窗口，向上取整到秒），Retry-After 为两个窗口并沿用最多 60 秒的兼容上限，Reset 可以更晚；滑动近似及持续重试计数使它不承诺精确放行时刻。容量/队列 429 继续只给已有的重试信息；成功不发限流头。
+只有请求速率触发的 429 带这三个头，Limit 是触发额度，Remaining 为 0，Reset 是 Unix **秒**的保守清空上界（预检时刻加两个窗口，向上取整到秒），Retry-After 为两个窗口并沿用最多 60 秒的兼容上限，Reset 可以更晚；滑动近似及持续重试计数使它不承诺精确放行时刻。容量/队列 429 继续只给已有的重试信息；成功不发限流头。秒是本站明确契约，客户端应按秒解析并遵循 Retry-After；上述 OpenRouter 官方文档只列头名、未标单位，无法确认其线上值是否毫秒，不宣称单位兼容。
 
-`GET /api/v1/key` 的 `rate_limit` 保留 requests/interval，另给 account_requests/key_requests；requests 是包含节点保护在内的有效最小正上限，interval 是配置窗口（默认 `1m0s`），没有免费模型专用策略。`budgets` 仅列已设置的 workspace/key_limit 预算，effective_budget 为第一个耗尽项（工作区优先，与计费检查顺序一致），否则为剩余最少项；无预算是 [] / null。limit_usd、spend_usd、remaining_usd 沿用兼容字段名但表示本站额度，新增 reserved_usd 明示预留，remaining 扣已收和预留并下限为 0；reset_interval 与数据库时钟的 resets_at 给 UTC 重置边界，永久预算为 null。没有 BYOK、组织护栏/member/全局 workspace 合并预算，guardrail_id、budget_id 为 null，include_byok 为 false；余额另由 credits 表达。原 limit/limit_remaining 继续只描述 key。
+`GET /api/v1/key` 的 `rate_limit` 保留 requests/interval，另给 account_requests/key_requests；requests 是包含节点保护在内的有效最小正上限，interval 是配置窗口（默认 `1m0s`），没有免费模型专用策略。`budgets` 仅列已设置的 workspace/key_limit 预算，effective_budget 为第一个耗尽项（工作区优先，与计费检查顺序一致），否则为剩余最少项；无预算是 [] / null。limit_usd、spend_usd、remaining_usd 沿用兼容字段名但表示本站额度，新增 reserved_usd 明示预留，remaining 扣已收和预留并下限为 0；reset_interval 与数据库时钟的 resets_at 给 UTC 重置边界，永久预算为 null。没有 BYOK、组织护栏/member/全局 workspace 合并预算，guardrail_id、budget_id 为 null，include_byok 为 false；余额另由 credits 表达。原 limit/limit_remaining 继续只描述 key，与 key_limit 预算复用同一条查询的已收、预留和重置边界，不会因两次读取间的提交或跨 UTC 零点相互矛盾。
 
 ### 保活
 

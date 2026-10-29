@@ -66,8 +66,11 @@ func TestRateKeyPairsPreserveNamespace(t *testing.T) {
 	for _, tc := range []struct {
 		call  *Call
 		index int64
-	}{{nil, 0}, {nil, 9223372036854775807}, {&Call{}, 1}, {&Call{}, 123456789}} {
-		keys := h.rateKeys(site, callDimension, "subject", tc.call, tc.index)
+	}{{&Call{}, 0}, {&Call{}, 9223372036854775807}, {&Call{}, 1}, {&Call{}, 123456789}} {
+		keys, elapsed := h.rateKeys(site, callDimension, "subject", tc.call, tc.index, 123*time.Millisecond)
+		if elapsed != "123" {
+			t.Fatalf("elapsed %s", elapsed)
+		}
 		for i, key := range keys {
 			dimension, subject := callDimension, "subject"
 			if i >= 2 {

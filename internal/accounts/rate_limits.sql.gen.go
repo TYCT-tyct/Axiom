@@ -12,7 +12,7 @@ import (
 )
 
 const lockRateAccount = `-- name: LockRateAccount :exec
-SELECT id FROM accounts.accounts WHERE id = $1 FOR UPDATE
+SELECT id FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
 `
 
 func (q *Queries) LockRateAccount(ctx context.Context, db DBTX, id uuid.UUID) error {
@@ -21,7 +21,7 @@ func (q *Queries) LockRateAccount(ctx context.Context, db DBTX, id uuid.UUID) er
 }
 
 const lockRateKey = `-- name: LockRateKey :exec
-SELECT id FROM accounts.api_keys WHERE id = $1 FOR UPDATE
+SELECT id FROM accounts.api_keys WHERE id = $1 FOR NO KEY UPDATE
 `
 
 func (q *Queries) LockRateKey(ctx context.Context, db DBTX, id uuid.UUID) error {
@@ -30,7 +30,7 @@ func (q *Queries) LockRateKey(ctx context.Context, db DBTX, id uuid.UUID) error 
 }
 
 const lockRateTier = `-- name: LockRateTier :exec
-SELECT id FROM accounts.tiers WHERE id = $1 FOR UPDATE
+SELECT id FROM accounts.tiers WHERE id = $1 FOR NO KEY UPDATE
 `
 
 func (q *Queries) LockRateTier(ctx context.Context, db DBTX, id uuid.UUID) error {
