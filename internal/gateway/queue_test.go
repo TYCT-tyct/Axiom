@@ -15,7 +15,7 @@ const queueWait = 20 * time.Second
 
 func wait(ctx context.Context, q *Queue, key string) *pending {
 	epoch, deadline := q.Epoch(), time.Now().Add(queueWait)
-	return start(func() (func(), error) { return nil, q.Wait(ctx, key, epoch, deadline) })
+	return start(func() (func(), error) { _, err := q.Wait(ctx, key, epoch, deadline); return nil, err })
 }
 
 func TestQueueWakesOneWaiterPerSlotInArrivalOrder(t *testing.T) {
@@ -100,7 +100,7 @@ func TestQueueDoesNotLoseAWakeThatCameEarly(t *testing.T) {
 		q := newQueue(5, 5)
 		epoch := q.Epoch()
 		q.Wake() // nobody waits: recorded
-		late := start(func() (func(), error) { return nil, q.Wait(ctx, "a", epoch, time.Now().Add(queueWait)) })
+		late := start(func() (func(), error) { _, err := q.Wait(ctx, "a", epoch, time.Now().Add(queueWait)); return nil, err })
 		late.mustGranted(t)
 
 		queued := wait(ctx, q, "a")
@@ -108,7 +108,7 @@ func TestQueueDoesNotLoseAWakeThatCameEarly(t *testing.T) {
 		epoch = q.Epoch()
 		q.Wake() // goes to queued
 		queued.mustGranted(t)
-		newcomer := start(func() (func(), error) { return nil, q.Wait(ctx, "a", epoch, time.Now().Add(queueWait)) })
+		newcomer := start(func() (func(), error) { _, err := q.Wait(ctx, "a", epoch, time.Now().Add(queueWait)); return nil, err })
 		newcomer.mustWait(t)
 	})
 }
@@ -153,7 +153,7 @@ func parkWaiters(t *testing.T, q *Queue, n int, woken *atomic.Int64) ([]context.
 		cancels[i] = cancel
 		epoch := q.Epoch()
 		wg.Go(func() {
-			if q.Wait(ctx, "k", epoch, time.Now().Add(time.Hour)) == nil {
+			if _, err := q.Wait(ctx, "k", epoch, time.Now().Add(time.Hour)); err == nil {
 				woken.Add(1)
 			}
 			returned.Add(1)
@@ -198,7 +198,7 @@ func TestQueueWaitReportsAnEndedContextBeforeAnythingElse(t *testing.T) {
 			"queue full":     {"b", q.Epoch()},
 			"key share full": {"a", q.Epoch()},
 		} {
-			if err := q.Wait(gone, tc.key, tc.epoch, time.Now().Add(queueWait)); !errors.Is(err, context.Canceled) {
+			if _, err := q.Wait(gone, tc.key, tc.epoch, time.Now().Add(queueWait)); !errors.Is(err, context.Canceled) {
 				t.Errorf("%s: Wait = %v, want context.Canceled", name, err)
 			}
 		}
@@ -212,16 +212,53 @@ func TestQueueRefusesAnExpiredDeadlineWhateverTheEpoch(t *testing.T) {
 		q := newQueue(5, 5)
 		stale := q.Epoch()
 		q.Wake() // nobody waits: the epoch moves on, so a call with a live deadline is told to retry
-		if err := q.Wait(ctx, "a", stale, time.Now().Add(queueWait)); err != nil {
+		if _, err := q.Wait(ctx, "a", stale, time.Now().Add(queueWait)); err != nil {
 			t.Fatalf("with time left and a stale epoch: %v, want a retry", err)
 		}
 		for name, deadline := range map[string]time.Time{"now": time.Now(), "past": time.Now().Add(-time.Second)} {
-			if err := q.Wait(ctx, "a", stale, deadline); !errors.Is(err, errQueueWait) {
+			if _, err := q.Wait(ctx, "a", stale, deadline); !errors.Is(err, errQueueWait) {
 				t.Errorf("a deadline that is %s, with a stale epoch: %v, want errQueueWait", name, err)
 			}
 		}
 		if q.queued() != 0 {
 			t.Errorf("%d still queued", q.queued())
 		}
+	})
+}
+
+// A woken waiter that cannot use the slot passes the wake to the next waiter queued before the slot came back, and to
+// nobody who queued after: a slot costs at most one admission for each call that was waiting for it.
+func TestQueuePassesAWakeOnOnce(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		q := newQueue(10, 10)
+		var woken relay
+		wait := func(key string) *pending {
+			epoch := q.Epoch()
+			return start(func() (func(), error) {
+				r, err := q.Wait(ctx, key, epoch, time.Now().Add(queueWait))
+				woken = r
+				return nil, err
+			})
+		}
+		first := wait("a")
+		first.mustWait(t)
+		second := wait("b")
+		second.mustWait(t)
+
+		q.Wake()
+		first.mustGranted(t)
+		first = wait("a") // its endpoint is still full: it queues again, behind second
+		first.mustWait(t)
+		q.Pass(woken)
+		second.mustGranted(t)
+		second = wait("b") // second cannot use it either
+		second.mustWait(t)
+		q.Pass(woken)
+		first.mustWait(t) // queued after the slot came back: the wake has been to it already
+		second.mustWait(t)
+
+		q.Wake() // a new slot starts a new round, oldest first
+		first.mustGranted(t)
+		second.mustWait(t)
 	})
 }

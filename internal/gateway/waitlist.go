@@ -7,7 +7,10 @@ import (
 )
 
 // waitList is a FIFO of parked waiters. The mutex of the structure that owns it guards it; the list takes no lock.
-type waitList struct{ l list.List }
+type waitList struct {
+	l      list.List
+	pushed uint64 // waiters ever pushed: the next one's seq
+}
 
 // waiter is one parked goroutine. ready closes when the list grants it; elem is nil once it has left the list.
 type waiter struct {
@@ -15,10 +18,13 @@ type waiter struct {
 	owner *waitList
 	elem  *list.Element
 	key   string
+	seq   uint64 // its place in the order of pushes
+	relay uint64 // the relay it was woken with
 }
 
 func (w *waitList) push(key string) *waiter {
-	wt := &waiter{ready: make(chan struct{}), owner: w, key: key}
+	wt := &waiter{ready: make(chan struct{}), owner: w, key: key, seq: w.pushed}
+	w.pushed++
 	wt.elem = w.l.PushBack(wt)
 	return wt
 }
@@ -47,6 +53,17 @@ func (w *waitList) grant() bool {
 	wt.elem = nil
 	close(wt.ready)
 	return true
+}
+
+// relay wakes the oldest waiter if it was pushed before push number n, handing it n, and reports whether it did. The
+// list is first in first out, so the waiters pushed before n are at its front.
+func (w *waitList) relay(n uint64) bool {
+	front := w.l.Front()
+	if front == nil || front.Value.(*waiter).seq >= n {
+		return false
+	}
+	front.Value.(*waiter).relay = n
+	return w.grant()
 }
 
 // park blocks until wt is granted or ctx ends; mu is the lock that guards wt's list. It reports whether wt holds a
