@@ -14,6 +14,10 @@ import (
 
 type writerSignals []string
 
+func (s *writerSignals) RaiseOnce(_, kind, key, severity string, fields map[string]string) error {
+	return s.Raise(kind, key, severity, fields)
+}
+
 func (s *writerSignals) Raise(string, string, string, map[string]string) error {
 	*s = append(*s, "raise")
 	return nil

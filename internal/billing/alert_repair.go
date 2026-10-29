@@ -10,28 +10,66 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// The ledger is the durable repair source for an immediate floor-loss signal lost with a node or a full bus.
-// Positive-entry counts never decrease in the append-only ledger, including reversals, and never mix currencies.
-// The self-check already scans the ledger daily; this adds no work to successful settlements.
+const settlementAlertPosition = "billing.platform_borne"
+
+func settlementAlertSource(e event) string {
+	return settlementAlertPosition + "/" + e.request.String() + "/" + strconv.FormatInt(int64(e.seq), 10) + "/" + strconv.FormatInt(e.revision, 10)
+}
+
+// Initialize before this node accepts calls, so historical losses are not new incidents and a lost first signal
+// can still be repaired. Restarting another node does not rescan the ledger.
+func initializeSettlementAlerts(ctx context.Context, tx pg.Tx) (bool, error) {
+	raw, err := alert.LockPosition(ctx, tx, settlementAlertPosition)
+	if err != nil {
+		return false, err
+	}
+	var position struct{ Initialized bool }
+	if err = jsonx.Unmarshal(raw, &position); err != nil || position.Initialized {
+		return false, err
+	}
+	sources, err := settlementAlertSources(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	if _, err = alert.ClaimSources(ctx, tx, sources); err != nil {
+		return false, err
+	}
+	position.Initialized = true
+	return true, alert.SavePosition(ctx, tx, settlementAlertPosition, position)
+}
+
+// The immediate writer and repair claim the same ledger identity. A consumed or manually closed incident must
+// not make that loss new again; claiming and publishing commit together, outside the successful call path.
 func repairSettlementAlerts(ctx context.Context, tx pg.Tx) error {
-	const source = "billing.platform_borne"
-	raw, err := alert.LockPosition(ctx, tx, source)
+	initialized, err := initializeSettlementAlerts(ctx, tx)
+	if err != nil || initialized {
+		return err
+	}
+	sources, err := settlementAlertSources(ctx, tx)
 	if err != nil {
 		return err
 	}
-	previous := struct{ Entries int64 }{}
-	if err = jsonx.Unmarshal(raw, &previous); err != nil {
+	claimed, err := alert.ClaimSources(ctx, tx, sources)
+	if err != nil || claimed == 0 {
 		return err
 	}
-	var entries int64
-	if err = tx.QueryRow(ctx, `SELECT count(*) FROM billing.entries WHERE book='platform_borne' AND amount>0`).Scan(&entries); err != nil {
-		return err
+	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "billing.settlement_anomaly", Key: "platform_borne", Severity: "critical", Fields: map[string]string{"settlements": strconv.FormatInt(claimed, 10)}})
+}
+
+func settlementAlertSources(ctx context.Context, tx pg.Tx) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT DISTINCT t.request_id,t.attempt_seq,t.revision FROM billing.entries e JOIN billing.transactions t ON t.id=e.transaction_id
+ WHERE t.kind='settle' AND e.book='platform_borne' AND e.amount>0 ORDER BY t.request_id,t.attempt_seq,t.revision`)
+	if err != nil {
+		return nil, err
 	}
-	if entries > previous.Entries {
-		if err = alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "billing.settlement_anomaly", Key: "platform_borne", Severity: "critical", Fields: map[string]string{"entries": strconv.FormatInt(entries, 10)}}); err != nil {
-			return err
+	defer rows.Close()
+	var sources []string
+	for rows.Next() {
+		var e event
+		if err := rows.Scan(&e.request, &e.seq, &e.revision); err != nil {
+			return nil, err
 		}
+		sources = append(sources, settlementAlertSource(e))
 	}
-	previous.Entries = entries
-	return alert.SavePosition(ctx, tx, source, previous)
+	return sources, rows.Err()
 }

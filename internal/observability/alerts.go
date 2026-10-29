@@ -160,11 +160,20 @@ func validateAlertChannel(ch AlertChannel) error {
 }
 
 func validateWebhookChannel(ch AlertChannel) error {
-	u, err := url.Parse(ch.WebhookURL)
-	if err != nil || len(ch.WebhookURL) > 2048 || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" || ch.Email != "" {
+	if ch.Email != "" {
 		return ErrAlertConfiguration
 	}
-	return nil
+	_, err := ValidateAlertWebhookURL(ch.WebhookURL)
+	return err
+}
+
+// ValidateAlertWebhookURL is shared by configuration validation and egress preflight outside the database transaction.
+func ValidateAlertWebhookURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || len(raw) > 2048 || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+		return "", ErrAlertConfiguration
+	}
+	return u.Hostname(), nil
 }
 
 func validateAlertRule(r AlertRule) error {

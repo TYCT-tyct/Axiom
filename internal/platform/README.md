@@ -419,3 +419,5 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 `Queue.OnDiscard` 在清理前持久处理丢弃通知；`discarded_jobs.notified` 与通知同事务提交，旧节点已认领但尚未通知的行仍会由新节点处理。通知失败回滚，下一次扫描再处理。
 
 `alert.LockPosition`/`alert.SavePosition` 在迁移 `00015` 的平台范围位置表中锁定并推进来源的 JSON 位置；来源转出的信号及其位置必须同事务提交，回滚时一并退回。`pgtest.WorkJob` 为跨模块 worker 测试提供 River 官方事务执行器及受控时钟；只有 River 元数据走其原生事务，业务读写仍走 pg.DB 的范围事务。`pg.HasPendingJob` 按种类和参数的识别子集查询 River 的存活任务，供持久回执修复丢失或取消的任务；模块不直接读取 River 的表。
+
+`alert.ClaimSources` 用来源身份在位置表中批量认领；首次启用可只种历史基线，其余认领必须和信号共用事务；`Signal.Source` 与 `Sink.RaiseOnce` 让即时生产者和补报认领同一身份，消费和人工关闭不删除认领。来源位置先于信号锁锁定；认领和写信号统一持有同一把信号锁，批次按身份排序，支持同一事务持久化多个来源身份；不可把只进入本机缓冲当作持久认领。

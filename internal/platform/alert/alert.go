@@ -20,11 +20,13 @@ import (
 // Sink never waits for persistence. A nil error acknowledges local buffering only.
 type Sink interface {
 	Raise(kind, key, severity string, fields map[string]string) error
+	RaiseOnce(source, kind, key, severity string, fields map[string]string) error
 	Resolve(kind, key string) error
 }
 
 // Signal carries only operations metadata, never tenant content or credentials.
 type Signal struct {
+	Source   string            `json:"source,omitempty"`
 	Kind     string            `json:"kind"`
 	Key      string            `json:"key"`
 	Severity string            `json:"severity"`
@@ -61,6 +63,14 @@ func (b *Bus) Raise(kind, key, severity string, fields map[string]string) error 
 	return b.push(Signal{Kind: kind, Key: key, Severity: severity, Fields: fields})
 }
 
+// RaiseOnce shares a durable source identity with a repair producer; local buffering is still not an acknowledgement.
+func (b *Bus) RaiseOnce(source, kind, key, severity string, fields map[string]string) error {
+	if source == "" {
+		return errors.New("alert: invalid source")
+	}
+	return b.push(Signal{Source: source, Kind: kind, Key: key, Severity: severity, Fields: fields})
+}
+
 // Resolve queues recovery; database arrival order defines ordering between independent producers.
 func (b *Bus) Resolve(kind, key string) error {
 	return b.push(Signal{Kind: kind, Key: key, Severity: "info", Resolved: true})
@@ -85,6 +95,9 @@ func (b *Bus) push(s Signal) error {
 }
 
 func validate(s Signal) error {
+	if s.Source != "" && !validText(s.Source, 256) {
+		return errors.New("alert: invalid source")
+	}
 	if !validText(s.Kind, 128) || !validText(s.Key, 256) || len(s.Fields) > 16 {
 		return errors.New("alert: invalid signal")
 	}
@@ -101,6 +114,11 @@ func validate(s Signal) error {
 
 const signalLock = 316005
 
+func lockSignals(ctx context.Context, tx pg.Tx) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, signalLock)
+	return err
+}
+
 // Persist is the durable boundary. Repeating id is harmless, including after an uncertain commit.
 // Producers and the consumer share this lock so identity allocation cannot overtake an uncommitted signal.
 func Persist(ctx context.Context, tx pg.Tx, id uuid.UUID, s Signal) error {
@@ -111,8 +129,14 @@ func Persist(ctx context.Context, tx pg.Tx, id uuid.UUID, s Signal) error {
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, signalLock); err != nil {
+	if err := lockSignals(ctx, tx); err != nil {
 		return err
+	}
+	if s.Source != "" {
+		claimed, err := claimSources(ctx, tx, []string{s.Source})
+		if err != nil || claimed == 0 {
+			return err
+		}
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO platform.alert_signals(id,body) VALUES($1,$2) ON CONFLICT(id) DO NOTHING`, id, body)
 	return err
@@ -120,7 +144,7 @@ func Persist(ctx context.Context, tx pg.Tx, id uuid.UUID, s Signal) error {
 
 // Consume atomically applies and removes at most 1000 signals in database arrival order.
 func Consume(ctx context.Context, tx pg.Tx, apply func(Signal) error) error {
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, signalLock); err != nil {
+	if err := lockSignals(ctx, tx); err != nil {
 		return err
 	}
 	signals, err := readSignals(ctx, tx)

@@ -205,7 +205,6 @@ func TestWebhookRefusesPrivateAddressesAndRedirects(t *testing.T) {
 			return c
 		}()},
 		{"redirect", server.URL, egress.NewForTesting(egresstest.Loopback(t, server.Certificate()))},
-		{"http", "http://receiver.example/hook", egress.NewForTesting(egresstest.Loopback(t))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer tc.exit.CloseIdleConnections()

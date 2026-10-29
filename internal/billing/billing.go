@@ -91,11 +91,15 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 	}
 	b.borne = counter(meter, "axiom.billing.platform_borne", "Settlements whose price the account's floor kept it from paying in full.")
 	b.borneAmount = counter(meter, "axiom.billing.platform_borne.amount", "What the platform bore of those settlements, in billionths of a credit.")
-	registered := time.Now()
+	var registered time.Time
 	err := db.Tx(ctx, platform, func(tx pg.Tx) error {
 		if err := CheckFallbacks(ctx, tx); err != nil {
 			return err
 		}
+		if _, err := initializeSettlementAlerts(ctx, tx); err != nil {
+			return err
+		}
+		registered = time.Now()
 		if err := queries.InsertHolder(ctx, tx, InsertHolderParams{ID: b.holder, TtlSeconds: config.HolderTTL.Seconds()}); err != nil {
 			return fmt.Errorf("billing: register the holder: %w", err)
 		}
@@ -137,17 +141,19 @@ func counter(m metric.Meter, name, description string) metric.Int64Counter {
 // bear reports what the platform bore of a settlement that has committed: the part of the price the account's floor did
 // not let it pay (docs/domains/billing.md「红线」). It is the platform's loss and nobody else's signal, so it is logged at
 // error and counted; the amounts are in billionths of a credit.
-func (b *Billing) bear(ctx context.Context, request uuid.UUID, price, charged int64) {
+func (b *Billing) bear(ctx context.Context, settlement event, price, charged int64) {
 	if price <= charged {
 		return
 	}
 	borne := price - charged
 	b.logger.Error("billing: the platform bears part of a settlement; the account could not pay it in full",
-		"request", request.String(), "price", price, "charged", charged, "borne", borne)
+		"request", settlement.request.String(), "price", price, "charged", charged, "borne", borne)
 	b.borne.Add(ctx, 1)
 	b.borneAmount.Add(ctx, borne)
 	if b.config.Alerts != nil {
-		b.signal("platform_borne", map[string]string{"request": request.String(), "borne": fmt.Sprint(borne)})
+		if err := b.config.Alerts.RaiseOnce(settlementAlertSource(settlement), "billing.settlement_anomaly", "platform_borne", "critical", map[string]string{"request": settlement.request.String(), "borne": fmt.Sprint(borne)}); err != nil {
+			b.logger.Error("billing: reporting settlement anomaly failed", "err", err)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"axiom/internal/platform/alert"
 	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 )
 
 func TestPeriodicChannelTestsDeduplicateAndIgnoreStaleResults(t *testing.T) {
@@ -214,5 +216,107 @@ func assertWebhookKeyCount(t *testing.T, db *pg.DB, want int) {
 	})
 	if n != want {
 		t.Fatalf("signing keys=%d, want %d", n, want)
+	}
+}
+
+func TestRemovedChannelResolvesHealthAndRetiresProbe(t *testing.T) {
+	db := openDB(t)
+	configureAlerts(t, db, AlertRule{Threshold: 1})
+	now := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+	alertTx(t, db, func(tx pg.Tx) error { return scheduleAlertTests(t.Context(), tx, now) })
+	alertTx(t, db, func(tx pg.Tx) error {
+		var id uuid.UUID
+		if err := tx.QueryRow(t.Context(), `SELECT receipt_id FROM observability.channel_tests WHERE channel_id='ops'`).Scan(&id); err != nil {
+			return err
+		}
+		return recordAlertReceipt(t.Context(), tx, id, false, now)
+	})
+	if channelHealth(t, db, now) != "firing" {
+		t.Fatal("failed probe did not fire")
+	}
+	alertTx(t, db, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Channels, c.Rules = nil, nil
+		return SetAlertConfiguration(t.Context(), tx, c)
+	})
+	if channelHealth(t, db, now) != "resolved" {
+		t.Fatal("retired channel kept repeating its health incident")
+	}
+	alertTx(t, db, func(tx pg.Tx) error {
+		var n int
+		if err := tx.QueryRow(t.Context(), `SELECT count(*) FROM observability.channel_tests`).Scan(&n); err != nil {
+			return err
+		}
+		if n != 0 {
+			t.Fatal("retired probe was retained")
+		}
+		return nil
+	})
+}
+
+func TestSettingWebhookKeyMakesFailedProbeDueImmediately(t *testing.T) {
+	db := openDB(t)
+	keys := webhookTestKeys(t)
+	now := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+	ch := configureWebhook(t, db, "https://receiver.example/hook", keys, now)
+	alertTx(t, db, func(tx pg.Tx) error { return scheduleAlertTests(t.Context(), tx, now) })
+	first := latestChannelTest(t, db, ch.ID)
+	alertTx(t, db, func(tx pg.Tx) error { return recordAlertReceipt(t.Context(), tx, first, false, now) })
+	if channelHealth(t, db, now) != "firing" {
+		t.Fatal("failed probe did not become unhealthy")
+	}
+	now = now.Add(time.Minute)
+	alertTx(t, db, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		_, err = RotateAlertWebhookSecret(t.Context(), tx, keys, ch.ID, c.Rev, secret.New(strings.Repeat("n", 32)), now)
+		if err != nil {
+			return err
+		}
+		return scheduleAlertTests(t.Context(), tx, now)
+	})
+	next := latestChannelTest(t, db, ch.ID)
+	if next == first {
+		t.Fatal("key change kept the failed probe for an hour")
+	}
+	alertTx(t, db, func(tx pg.Tx) error { return recordAlertReceipt(t.Context(), tx, next, true, now) })
+	if channelHealth(t, db, now) != "resolved" {
+		t.Fatal("key change did not recover channel health")
+	}
+}
+
+func latestChannelTest(t *testing.T, db *pg.DB, channel string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	alertTx(t, db, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT receipt_id FROM observability.channel_tests WHERE channel_id=$1`, channel).Scan(&id)
+	})
+	return id
+}
+
+func TestSourceIdentitySurvivesManualIncidentClosure(t *testing.T) {
+	db := openDB(t)
+	configureAlerts(t, db, AlertRule{Threshold: 1})
+	now := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+	s := alert.Signal{Source: "suppliers.unmatched/request/1", Kind: "test.failure", Key: "unmatched", Severity: "critical"}
+	publish := func() {
+		t.Helper()
+		alertTx(t, db, func(tx pg.Tx) error { return alert.Persist(t.Context(), tx, uuid.NewV7(), s) })
+	}
+	publish()
+	events := alertCycle(t, db, now)
+	if len(events) != 1 {
+		t.Fatalf("first finding: %+v", events)
+	}
+	alertTx(t, db, func(tx pg.Tx) error { return ResolveAlertEvent(t.Context(), tx, events[0].ID, now) })
+	publish()
+	events = alertCycle(t, db, now)
+	if len(events) != 1 || events[0].State != "resolved" {
+		t.Fatalf("same source reopened the closed incident: %+v", events)
 	}
 }

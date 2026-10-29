@@ -22,9 +22,7 @@ import (
 	"axiom/internal/platform/secret"
 )
 
-type webhookArgs struct {
-	Receipt uuid.UUID `json:"receipt"`
-}
+type webhookArgs receiptArgs
 
 func (webhookArgs) Kind() string { return "observability.webhook" }
 func (webhookArgs) InsertOpts() river.InsertOpts {
@@ -39,8 +37,6 @@ type webhookWorker struct {
 
 // Webhook retries use River's persisted backoff; returning only a category keeps URLs and response text out of jobs.
 func (w *webhookWorker) work(ctx context.Context, job *river.Job[webhookArgs]) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
 	d, keys, terminal, err := w.load(ctx, job.Args.Receipt)
 	if err != nil {
 		return errors.New("webhook: cannot load delivery")
@@ -48,16 +44,16 @@ func (w *webhookWorker) work(ctx context.Context, job *river.Job[webhookArgs]) e
 	if terminal {
 		return nil
 	}
-	if err = w.send(ctx, d, keys); err != nil {
-		if job.Attempt >= job.MaxAttempts {
-			if receiptErr := w.deliveryReceipt(ctx, d.id, false); receiptErr != nil {
-				return errors.New("webhook: cannot persist failed receipt")
-			}
+	delivered := false
+	if d.ch.WebhookURL != "" && len(keys) > 0 && validateAlertChannel(d.ch) == nil {
+		err = w.send(ctx, d, keys)
+		if err != nil && job.Attempt < job.MaxAttempts {
+			return err
 		}
-		return err
+		delivered = err == nil
 	}
-	if err = w.deliveryReceipt(ctx, d.id, true); err != nil {
-		return errors.New("webhook: cannot persist delivered receipt")
+	if err = w.deliveryReceipt(ctx, d.id, delivered); err != nil {
+		return errors.New("webhook: cannot persist receipt")
 	}
 	return nil
 }
@@ -84,12 +80,8 @@ func webhookPayload(d alertDelivery) ([]byte, error) {
 }
 
 func (w *webhookWorker) send(ctx context.Context, d alertDelivery, keys []secret.Secret) error {
-	if d.ch.WebhookURL == "" || d.ch.Email != "" || validateAlertChannel(d.ch) != nil {
-		return errors.New("webhook: invalid destination")
-	}
-	if len(keys) == 0 {
-		return errors.New("webhook: signing key unavailable")
-	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.ch.WebhookURL, bytes.NewReader(d.payload))
 	if err != nil {
 		return errors.New("webhook: invalid destination")

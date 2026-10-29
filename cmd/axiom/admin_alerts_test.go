@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -89,4 +90,22 @@ func TestAdminWebhookSecretIsSealedAuditedAndIdempotent(t *testing.T) {
 	// The production egress client refuses a literal private address before it can be saved.
 	body = `{"rev":3,"rules":[],"channels":[{"id":"private","webhook_url":"https://127.0.0.1/hook"}],"reason":"invalid target"}`
 	expectAdmin(t, "private webhook", f.change(s, http.MethodPut, "/alerts/configuration", body, newKey()), http.StatusUnprocessableEntity, codeUnprocessable)
+}
+
+func TestAdminWebhookPreflightUsesDomainValidation(t *testing.T) {
+	for _, raw := range []string{
+		"http://receiver.example/hook",
+		"https://user@receiver.example/hook",
+		"https://receiver.example/hook#fragment",
+		"https://receiver.example/" + strings.Repeat("x", 2048),
+	} {
+		body, err := alertJSON[adminapi.AlertConfigurationRequest](observability.AlertConfiguration{Channels: []observability.AlertChannel{{ID: "hook", WebhookURL: raw}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// No egress client: every invalid URL must fail before network preflight.
+		if err := (adminAPI{}).checkAlertDestinations(t.Context(), &body); !errors.Is(err, observability.ErrAlertConfiguration) {
+			t.Fatalf("invalid webhook reached egress: %v", err)
+		}
+	}
 }

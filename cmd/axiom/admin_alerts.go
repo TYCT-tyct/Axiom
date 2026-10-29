@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net/url"
 	"time"
 	"uuid"
 
@@ -64,11 +63,11 @@ func (a adminAPI) checkAlertDestinations(ctx context.Context, body *adminapi.Ale
 		if ch.WebhookUrl == nil {
 			continue
 		}
-		u, err := url.Parse(*ch.WebhookUrl)
-		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
-			return observability.ErrAlertConfiguration
+		host, err := observability.ValidateAlertWebhookURL(*ch.WebhookUrl)
+		if err != nil {
+			return err
 		}
-		if err = a.exit.Check(check, u.Hostname()); err != nil {
+		if err = a.exit.Check(check, host); err != nil {
 			return observability.ErrAlertConfiguration
 		}
 	}

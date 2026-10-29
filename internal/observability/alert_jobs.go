@@ -20,6 +20,10 @@ import (
 
 type alertArgs struct{}
 
+type receiptArgs struct {
+	Receipt uuid.UUID `json:"receipt"`
+}
+
 func (alertArgs) Kind() string { return "observability.alerts" }
 func (alertArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{Queue: pg.QueueNotifications, MaxAttempts: 5, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled, rivertype.JobStatePending}}}
@@ -284,9 +288,7 @@ func (a *alertWorker) discarded(ctx context.Context, tx pg.Tx, kind string, args
 		return err
 	}
 	if kind == "mail.send_tracked" || kind == "observability.webhook" {
-		var tracked struct {
-			Receipt uuid.UUID `json:"receipt"`
-		}
+		var tracked receiptArgs
 		if err := jsonx.Unmarshal(args, &tracked); err != nil {
 			return err
 		}

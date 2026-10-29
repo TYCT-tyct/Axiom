@@ -58,6 +58,9 @@ func rotateWebhookKey(ctx context.Context, tx pg.Tx, keys *secret.Keyring, ch Al
 	if err == nil {
 		_, err = tx.Exec(ctx, `UPDATE observability.alert_configuration SET rev=rev+1 WHERE singleton`)
 	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `UPDATE observability.channel_tests SET next_due=$2 WHERE channel_id=$1`, ch.ID, now)
+	}
 	return id, err
 }
 

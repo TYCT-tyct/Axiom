@@ -109,21 +109,20 @@ var ErrNoAttempt = errors.New("billing: the outcome names no attempt on a kept e
 // reached an upstream: its reservation is released.
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err error) {
 	a := h.admitted
-	var seen []UnknownItem
-	var owed, charged int64
+	var c *locked
 	err = b.db.Tx(ctx, a.Scope, func(tx pg.Tx) error {
-		c, err := b.lock(ctx, tx, h.id, a.Account)
+		var err error
+		c, err = b.lock(ctx, tx, h.id, a.Account)
 		if err != nil {
 			return err
 		}
 		c.quotes = h.quotes
 		f, err = c.settle(ctx, tx, o)
-		seen, owed, charged = c.seen, c.owed, c.charged
 		return err
 	})
 	if err == nil {
-		b.alert(seen)
-		b.bear(ctx, h.id, owed, charged)
+		b.alert(c.seen)
+		b.bear(ctx, c.settlement, c.owed, c.charged)
 	}
 	return f, err
 }
@@ -475,17 +474,18 @@ func decodeUsage(b []byte) ([]Segment, error) {
 
 // locked is one reservation under its balance row lock, with what is charged once a branch has run.
 type locked struct {
-	quotes    []quote // only Settle brings usage, always with the original Hold, including after cleanup
-	cost      platform.Exact
-	costKnown bool
-	b         *Billing
-	id        uuid.UUID
-	row       LockReservationRow
-	balance   LockBalanceRow
-	charged   int64
-	owed      int64         // what this transaction's charge asked for before the floor capped it; 0 when it charged nothing
-	seen      []UnknownItem // unknown items first seen in this transaction
-	entries   []int32       // the attempts' entries to write, nil to keep the recorded ones
+	quotes     []quote // only Settle brings usage, always with the original Hold, including after cleanup
+	cost       platform.Exact
+	costKnown  bool
+	b          *Billing
+	id         uuid.UUID
+	row        LockReservationRow
+	balance    LockBalanceRow
+	charged    int64
+	owed       int64         // what this transaction's charge asked for before the floor capped it; 0 when it charged nothing
+	settlement event         // the exact ledger event used by the post-commit loss notice
+	seen       []UnknownItem // unknown items first seen in this transaction
+	entries    []int32       // the attempts' entries to write, nil to keep the recorded ones
 }
 
 // stored is the Final the reservation holds.
@@ -542,7 +542,8 @@ func (c *locked) event(kind string, revision int64) event {
 func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult) error {
 	held := c.row.Amount - c.row.Charged
 	c.owed, c.charged = p.price, min(p.price, c.cap(held))
-	if _, err := post(ctx, tx, c.event("settle", 0), charge(p.price, c.charged)...); err != nil {
+	c.settlement = c.event("settle", 0)
+	if _, err := post(ctx, tx, c.settlement, charge(p.price, c.charged)...); err != nil {
 		return err
 	}
 	w, err := result("settled", p, last)
@@ -558,7 +559,8 @@ func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResul
 	if _, err := post(ctx, tx, c.event("reverse", lateRevision), reversal(c.row.Price, c.row.Charged)...); err != nil {
 		return err
 	}
-	if _, err := post(ctx, tx, c.event("settle", lateRevision), charge(p.price, c.charged)...); err != nil {
+	c.settlement = c.event("settle", lateRevision)
+	if _, err := post(ctx, tx, c.settlement, charge(p.price, c.charged)...); err != nil {
 		return err
 	}
 	w, err := result("settled", p, last)

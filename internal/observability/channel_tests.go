@@ -44,7 +44,7 @@ func repairAlertReceipts(ctx context.Context, tx pg.Tx, now time.Time) error {
 		if d.ch.WebhookURL != "" {
 			kind = "observability.webhook"
 		}
-		pending, err := pg.HasPendingJob(ctx, tx, kind, webhookArgs{Receipt: d.id})
+		pending, err := pg.HasPendingJob(ctx, tx, kind, receiptArgs{Receipt: d.id})
 		if err != nil {
 			return err
 		}
@@ -117,6 +117,9 @@ func abandonedAlertDeliveries(ctx context.Context, tx pg.Tx, now time.Time) ([]a
 }
 
 func reportChannelHealth(ctx context.Context, tx pg.Tx) error {
+	if err := retireChannelTests(ctx, tx); err != nil {
+		return err
+	}
 	rows, err := tx.Query(ctx, `SELECT t.channel_id,r.state FROM observability.channel_tests t JOIN observability.alert_receipts r ON r.id=t.receipt_id,observability.alert_configuration c
  WHERE r.state IN ('delivered','failed') AND r.state<>t.reported_state AND EXISTS(SELECT FROM jsonb_array_elements(c.body->'channels') ch WHERE ch->>'id'=t.channel_id AND coalesce(ch->>'email','')||coalesce(ch->>'webhook_url','')=t.destination)
  ORDER BY t.channel_id LIMIT 32 FOR UPDATE OF t SKIP LOCKED`)
@@ -143,6 +146,38 @@ func reportChannelHealth(ctx context.Context, tx pg.Tx) error {
 			return err
 		}
 		if err = alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "alert.channel_unavailable", Key: r.channel, Severity: "critical", Resolved: r.state == "delivered"}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Resolve retired channels in the signal phase, before evaluation takes configuration/event locks.
+func retireChannelTests(ctx context.Context, tx pg.Tx) error {
+	rows, err := tx.Query(ctx, `DELETE FROM observability.channel_tests t WHERE channel_id IN (
+ SELECT t.channel_id FROM observability.channel_tests t WHERE NOT EXISTS (
+ SELECT FROM observability.alert_configuration c,jsonb_array_elements(c.body->'channels') ch WHERE ch->>'id'=t.channel_id)
+ ORDER BY channel_id LIMIT 32 FOR UPDATE SKIP LOCKED) RETURNING channel_id`)
+	if err != nil {
+		return err
+	}
+	var channels []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			break
+		}
+		channels = append(channels, id)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, id := range channels {
+		if err = alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "alert.channel_unavailable", Key: id, Severity: "info", Resolved: true}); err != nil {
 			return err
 		}
 	}
