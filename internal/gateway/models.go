@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
@@ -26,9 +27,10 @@ const (
 // waits for capacity and the list is not (routing.Router.Serves). The list in OpenRouter's shape asks the router nothing:
 // the build that made it recorded which models it served, so one response is one build's (openRouterListing.shows).
 type visibility struct {
-	snap    *catalog.Snapshot
-	allowed map[catalog.ModelID]struct{} // nil: every model
-	router  *routing.Router
+	audience billing.Audience
+	snap     *catalog.Snapshot
+	allowed  map[catalog.ModelID]struct{} // nil: every model
+	router   *routing.Router
 }
 
 // modelRoutes adds the model list and the single model. The list under /api/v1 is OpenRouter's shape and the one under /v1
@@ -125,7 +127,9 @@ func (h *Handler) visible(r *http.Request) (visibility, error) {
 		return visibility{}, err
 	}
 	var allowed map[catalog.ModelID]struct{}
+	var audience billing.Audience
 	err = h.authorise(r, caller, func(_ context.Context, _ pg.Tx, a accounts.Admission) error {
+		audience = billing.Audience{Account: a.Caller().AccountID(), Tier: a.Tier()}
 		if names := a.Models(); names != nil { // nil allows every model, an empty list none
 			allowed = allowedModels(snap, names)
 		}
@@ -134,11 +138,13 @@ func (h *Handler) visible(r *http.Request) (visibility, error) {
 	if err != nil {
 		return visibility{}, err
 	}
-	return visibility{snap: snap, allowed: allowed, router: h.Router}, nil
+	return visibility{snap: snap, allowed: allowed, router: h.Router, audience: audience}, nil
 }
 
 // shows says whether the model is for this key to see: it may call it, and a call has a route to take.
-func (v visibility) shows(m catalog.ModelID) bool { return v.allows(m) && v.router.Serves(m) }
+func (v visibility) shows(m catalog.ModelID) bool {
+	return v.allows(m) && v.router.ServesFor(m, v.audience)
+}
 
 // allows says whether this key may call the model, whatever routing holds now: the half of shows that the list in
 // OpenRouter's shape freezes at build (openRouterListing.shows), so that one response's total, page and entries are one

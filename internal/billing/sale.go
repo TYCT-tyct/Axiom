@@ -14,6 +14,8 @@ import (
 
 // Sold is one model's sale price and the version it is.
 type Sold struct {
+	// Audiences contains sparse published layers, compiled by routing before requests arrive.
+	Audiences *AudiencePrices
 	// Version identifies the immutable published row.
 	Version uuid.UUID
 	// Schedule is the price itself, in the site's currency.

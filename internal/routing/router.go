@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 )
 
@@ -120,6 +121,20 @@ func (r *Router) fresh(s *Snapshot, now time.Time) bool { return now.Sub(s.built
 func (r *Router) Serves(m catalog.ModelID) bool {
 	snap := r.snap.Load()
 	return snap != nil && len(snap.byModel[m]) > 0
+}
+
+// ServesFor also requires a published price for this account and its admission tier.
+func (r *Router) ServesFor(m catalog.ModelID, a billing.Audience) bool {
+	snap := r.snap.Load()
+	if snap == nil {
+		return false
+	}
+	for _, c := range snap.byModel[m] {
+		if p := c.priceFor(a); p != nil && !p.none() {
+			return true
+		}
+	}
+	return false
 }
 
 // Replace makes s the snapshot Plan uses, if it is newer than the current one: a build that finishes late never

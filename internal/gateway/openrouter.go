@@ -85,7 +85,10 @@ func (l *openRouterListing) find(v visibility, name string) (*orModel, error) {
 	if l.shows(v, resolved.Model) {
 		for i := range l.models {
 			if l.models[i].model == resolved.Model {
-				return &l.models[i], nil
+				if e := l.models[i].forAudience(v.audience); e != nil {
+					return e, nil
+				}
+				return nil, errNoModel
 			}
 		}
 	}
@@ -169,14 +172,14 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 		if !ok {
 			continue
 		}
-		e, ok, err := newORModel(id, m, serving, sold.Schedule)
+		e, ok, err := newAudienceORModel(id, m, serving, sold)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
 			continue
 		}
-		e.endpoints, err = encodeOREndpoints(e.orEntry, byModel[m.ID])
+		err = e.encodeEndpoints(byModel[m.ID])
 		if err != nil {
 			return nil, err
 		}
@@ -198,6 +201,8 @@ func (l *openRouterListing) publicID(m catalog.Model) (string, bool) {
 // orModel is one model of the list: the object as OpenRouter's shape has it, encoded once, and what the query filters
 // and orders by, so a request reads neither a spec nor a price again.
 type orModel struct {
+	audiences *billing.AudiencePrices
+	variants  []orModel
 	orEntry
 	endpoints []byte // discovery response, encoded from the same build
 	body      []byte
@@ -422,8 +427,8 @@ func (l *openRouterListing) encodePage(v visibility, q orQuery, matched, size in
 	buf := append(make([]byte, 0, orRoom+len(next)+size), `{"data":[`...)
 	seen, written := 0, 0
 	for i := range l.models {
-		e := &l.models[i]
-		if !l.shows(v, e.model) || !q.keeps(e) {
+		e := l.models[i].forAudience(v.audience)
+		if e == nil || !l.shows(v, e.model) || !q.keeps(e) {
 			continue
 		}
 		if seen++; seen <= first || seen > last {
@@ -444,8 +449,8 @@ func (l *openRouterListing) encodePage(v visibility, q orQuery, matched, size in
 func (l *openRouterListing) encodeOrdered(v visibility, q orQuery) []byte {
 	matches := make([]*orModel, 0, len(l.models))
 	for i := range l.models {
-		if l.shows(v, l.models[i].model) && q.keeps(&l.models[i]) {
-			matches = append(matches, &l.models[i])
+		if e := l.models[i].forAudience(v.audience); e != nil && l.shows(v, e.model) && q.keeps(e) {
+			matches = append(matches, e)
 		}
 	}
 	slices.SortFunc(matches, q.compare)
@@ -468,8 +473,8 @@ func (l *openRouterListing) encodeOrdered(v visibility, q orQuery) []byte {
 // pageStats counts all matches but sizes only the page; subtraction avoids adding an unbounded offset to the limit.
 func (l *openRouterListing) pageStats(v visibility, q orQuery) (matched, size int) {
 	for i := range l.models {
-		e := &l.models[i]
-		if !l.shows(v, e.model) || !q.keeps(e) {
+		e := l.models[i].forAudience(v.audience)
+		if e == nil || !l.shows(v, e.model) || !q.keeps(e) {
 			continue
 		}
 		matched++

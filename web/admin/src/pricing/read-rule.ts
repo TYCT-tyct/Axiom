@@ -54,8 +54,18 @@ function readMethod(
 }
 
 // readRule makes the rule from the typed fields, or says what is wrong with them. Every ratio is decimal text. It never
-// carries constraints: this release does not apply them (#234), so the server refuses any, and saving clears a stored one.
+// carries new constraints: this release does not apply them (#234). Retirement preserves legacy input unchanged.
 export function readRule(values: Record<string, string>, words: Words, existing?: Rule): Rule | Problem {
+  // Retirement preserves the stored input, including legacy fields current editors cannot represent.
+  if (existing && values.enabled !== "on") {
+    return {
+      enabled: false,
+      target: existing.target,
+      audience: existing.audience,
+      method: existing.method,
+      constraints: existing.constraints,
+    };
+  }
   const target = readTarget(values, words);
   const audience = readAudience(values, words);
   const method = readMethod(values, words, existing?.method);

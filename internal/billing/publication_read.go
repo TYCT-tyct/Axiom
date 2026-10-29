@@ -3,6 +3,7 @@ package billing
 import (
 	"bytes"
 	"context"
+	"slices"
 	"time"
 	"uuid"
 
@@ -44,18 +45,71 @@ func PublishedPrices(ctx context.Context, tx pg.Tx, site uuid.UUID) (map[catalog
 		return nil, err
 	}
 	out := make(map[catalog.ModelID]Sold, len(rows))
+	layers := map[catalog.ModelID][]AudiencePrice{}
 	for _, row := range rows {
-		if row.CurrentID == nil || row.Status != "published" && row.Status != "pending" {
-			continue
-		}
-		sold, err := readPublishedPrice(row, policy)
+		price, err := publishedLayer(row, policy)
 		if err != nil {
 			return nil, err
 		}
-
-		out[catalog.ModelID(row.ModelID)] = sold
+		if price.Target.Kind == "" {
+			continue
+		}
+		model := catalog.ModelID(row.ModelID)
+		layers[model] = append(layers[model], price)
+		if row.AudienceKind == "all" && price.Sold.Version != uuid.Nil() {
+			out[model] = price.Sold
+		}
 	}
-	return out, nil
+
+	return packPublishedPrices(out, layers), nil
+}
+
+func packPublishedPrices(out map[catalog.ModelID]Sold, layers map[catalog.ModelID][]AudiencePrice) map[catalog.ModelID]Sold {
+	for model, prices := range layers {
+		// Preserve the default-only API's missing-price behavior. Audience layers must keep unavailable matches.
+		if len(prices) == 1 && prices[0].Audience == (Audience{}) {
+			continue
+		}
+		price := out[model]
+		price.Audiences = CompilePrices(prices)
+		out[model] = price
+	}
+
+	return out
+}
+
+func publishedLayer(row ReadPublicationsRow, policy PricePolicy) (AudiencePrice, error) {
+	var proposal Publication
+	if err := jsonx.Unmarshal(row.Candidate, &proposal); err != nil {
+		return AudiencePrice{}, err
+	}
+	var basis struct {
+		Rule *Rule `json:"rule"`
+	}
+	raw := proposal.Basis
+	// A pending proposal must not change precedence before its price version is confirmed.
+	if row.Status == "pending" && row.CurrentID != nil {
+		raw = row.Basis
+	}
+	if err := jsonx.Unmarshal(raw, &basis); err != nil {
+		return AudiencePrice{}, err
+	}
+	if basis.Rule == nil {
+		return AudiencePrice{}, nil
+	}
+	selector := Selector{Kind: row.AudienceKind, ID: row.AudienceID}
+	if err := checkAudience(selector); err != nil {
+		return AudiencePrice{}, err
+	}
+	audience, err := selectorAudience(selector)
+	if err != nil {
+		return AudiencePrice{}, err
+	}
+	price := AudiencePrice{Audience: audience, Target: basis.Rule.Target}
+	if row.CurrentID != nil && (row.Status == "published" || row.Status == "pending") {
+		price.Sold, err = readPublishedPrice(row, policy)
+	}
+	return price, err
 }
 
 func readPublishedPrice(row ReadPublicationsRow, policy PricePolicy) (Sold, error) {
@@ -121,4 +175,20 @@ func (s Sold) AllowsCosts(model catalog.Model, costs []PriceCost) bool {
 		}
 	}
 	return true
+}
+
+// WithCosts withholds unsafe audience layers while retaining their targets, so they cannot fall back.
+func (s Sold) WithCosts(model catalog.Model, costs []PriceCost) Sold {
+	if s.Audiences != nil {
+		layers := slices.Clone(s.Audiences.Layers())
+		for i := range layers {
+			layers[i].Sold = layers[i].Sold.WithCosts(model, costs)
+		}
+		s.Audiences = CompilePrices(layers)
+	}
+	if !s.AllowsCosts(model, costs) || Unpriced(s.Schedule, model.Reportable()) != (catalog.Reportable{}) {
+		s.Version = uuid.Nil()
+		s.Schedule = catalog.Schedule{}
+	}
+	return s
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -272,31 +271,32 @@ func saleOf(row adminapi.PricingPreviewRow) string {
 	return *row.Sale.Rates.Input
 }
 
-// TestPricingRulesForOneAudienceWait: this release sells one price list, so saving a rule for one account or one tier,
-// by creating it or by changing a rule into it, and previewing one, are refused as 422 pointing at the audience, and
-// nothing is stored. Rules there already (a later release's, written straight into the table) still list and still price
-// a preview's audience.
-func TestPricingRulesForOneAudienceWait(t *testing.T) {
+// TestPricingRulesForOneAudience supports creation, editing, preview and retirement through the real admin boundary.
+func TestPricingRulesForOneAudience(t *testing.T) {
 	t.Parallel()
 	f := newPreview(t)
-	made := f.create(ruleJSON(everything, everything, timesTwo))
-	for name, audience := range map[string]string{
-		"a tier":     `{"kind":"tier","id":"` + f.tier + `"}`,
-		"an account": `{"kind":"account","id":"` + f.account + `"}`,
-	} {
-		rule := ruleJSON(`{"kind":"author","id":"acme"}`, audience, timesThree)
-		for what, rec := range map[string]*httptest.ResponseRecorder{
-			"creating":   f.change(f.s, http.MethodPost, "/pricing/rules", `{"rule":`+rule+`,"reason":"r"}`, newKey()),
-			"changing":   f.change(f.s, http.MethodPut, "/pricing/rules/"+made.Id, `{"rev":0,"rule":`+rule+`,"reason":"r"}`, newKey()),
-			"previewing": f.do(http.MethodPost, "/pricing/previews", `{"model_ids":["`+f.model+`"],"rule":`+rule+`}`, as(f.s)),
-		} {
-			expectAdmin(t, what+" a rule for "+name, rec, http.StatusUnprocessableEntity, codeUnprocessable)
-			if fields := errorDetailOf(t, rec).Fields; fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != "/rule/audience/kind" {
-				t.Errorf("%s a rule for %s: fields %v, want /rule/audience/kind", what, name, fields)
-			}
-		}
+	for _, audience := range []string{`{"kind":"tier","id":"` + f.tier + `"}`, `{"kind":"account","id":"` + f.account + `"}`} {
+		made := f.create(ruleJSON(everything, audience, timesTwo))
+		body := ruleJSON(everything, audience, timesThree)
+		rec := f.do(http.MethodPost, "/pricing/previews", `{"model_ids":["`+f.model+`"],"rule":`+body+`,"replaces_rule_id":"`+made.Id+`"}`, as(f.s))
+		expectAdmin(t, "audience preview", rec, http.StatusOK, "")
+		rec = f.change(f.s, http.MethodPut, "/pricing/rules/"+made.Id, `{"rev":0,"rule":`+body+`,"reason":"edit audience"}`, newKey())
+		expectAdmin(t, "audience edit", rec, http.StatusOK, "")
+		body = strings.Replace(body, `"enabled":true`, `"enabled":false`, 1)
+		rec = f.change(f.s, http.MethodPut, "/pricing/rules/"+made.Id, `{"rev":1,"rule":`+body+`,"reason":"retire audience"}`, newKey())
+		expectAdmin(t, "audience retirement", rec, http.StatusOK, "")
 	}
-	if got := f.text("SELECT count(*)::text FROM billing.pricing_rules"); got != "1" {
-		t.Errorf("%s rules after the refusals, want the one for everyone", got)
-	}
+}
+
+func TestLegacyRuleRetirementAPI(t *testing.T) {
+	t.Parallel()
+	f := newPreview(t)
+	target := `{"kind":"endpoint","id":"` + f.model + `"}`
+	id := f.storeRule("endpoint", f.model, "all", "", timesTwo, `{"min_margin_ratio":"0.1"}`)
+	body := strings.Replace(ruleJSONWith(target, everything, timesTwo, `{"min_margin_ratio":"0.1"}`), `"enabled":true`, `"enabled":false`, 1)
+	rec := f.change(f.s, http.MethodPut, "/pricing/rules/"+id, `{"rev":0,"rule":`+body+`,"reason":"retire legacy"}`, newKey())
+	expectAdmin(t, "retire unsupported legacy input", rec, http.StatusOK, "")
+	body = strings.Replace(body, `"enabled":false`, `"enabled":true`, 1)
+	rec = f.change(f.s, http.MethodPut, "/pricing/rules/"+id, `{"rev":1,"rule":`+body+`,"reason":"unsafe enable"}`, newKey())
+	expectAdmin(t, "reject unsupported enable", rec, http.StatusUnprocessableEntity, codeUnprocessable)
 }

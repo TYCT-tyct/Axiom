@@ -5,8 +5,26 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, useSnapshot } from "../change";
+import { publicationKey } from "./publication-key";
 
 type Publication = AdminSchemas["PricePublication"];
+
+function PublicationAudience({ audience }: { audience: Publication["audience"] }) {
+  const { t } = useTranslation();
+  if (!audience) {
+    return <>{t("pricing.publish.unavailable")}</>;
+  }
+  return (
+    <div className="max-w-48">
+      <p className="truncate">{t(`pricing.audience.${audience.kind}`)}</p>
+      {audience.id ? (
+        <p className="truncate text-label text-t3" title={audience.id}>
+          {audience.id}
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 export function Publications() {
   const { t } = useTranslation();
@@ -16,7 +34,7 @@ export function Publications() {
     queryKey: [accountKey, "price-publications"],
     queryFn: ({ signal }) => unwrap(adminApi.GET("/api/admin/v1/pricing/publications", { signal })),
   });
-  const current = query.data?.data?.find((p) => p.model_id === editing);
+  const current = query.data?.data?.find((p) => publicationKey(p) === editing);
   return (
     <Panel title={t("pricing.publish.title")}>
       <DataState query={query}>
@@ -26,6 +44,7 @@ export function Publications() {
               <thead>
                 <tr>
                   <Th>{t("pricing.publish.model")}</Th>
+                  <Th>{t("pricing.rules.audience")}</Th>
                   <Th>{t("pricing.publish.version")}</Th>
                   <Th>{t("pricing.publish.state")}</Th>
                   <Th />
@@ -33,11 +52,14 @@ export function Publications() {
               </thead>
               <tbody>
                 {data.data.map((p) => (
-                  <tr key={p.model_id}>
+                  <tr key={publicationKey(p)}>
                     <Td className="max-w-48">
                       <p className="truncate" title={p.model_id}>
                         {p.model_id}
                       </p>
+                    </Td>
+                    <Td>
+                      <PublicationAudience audience={p.audience} />
                     </Td>
                     <Td className="max-w-48">
                       <p className="truncate" title={p.current_id}>
@@ -47,7 +69,7 @@ export function Publications() {
                     <Td>{p.status ? t(`pricing.publish.${p.status}`) : t("pricing.publish.unavailable")}</Td>
                     <Td>
                       {manage && p.schedule && p.model_id && p.candidate_id ? (
-                        <Button onClick={() => setEditing(p.model_id ?? null)}>{t("pricing.publish.action")}</Button>
+                        <Button onClick={() => setEditing(publicationKey(p))}>{t("pricing.publish.action")}</Button>
                       ) : (
                         p.problem
                       )}
@@ -76,9 +98,14 @@ function PublishDialog({ live, onClose }: { live: Publication; onClose: () => vo
   }
   return (
     <ChangeDialog
-      operation={`price-publication:${model}`}
+      operation={`price-publication:${publicationKey(price)}`}
       title={t("pricing.publish.action")}
-      intro={<p>{t("pricing.publish.intro")}</p>}
+      intro={
+        <>
+          <p>{t("pricing.publish.intro")}</p>
+          <PublicationAudience audience={price.audience} />
+        </>
+      }
       action={t("pricing.publish.action")}
       confirm={price.model_id}
       reload={reload}
