@@ -87,6 +87,7 @@ type eventReader struct {
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
 	s.ctx, s.charge, s.rw.charge = u, charge, charge
+	s.rw.hidesReasoning = u.HidesReasoning
 	s.rw.w.Identity = func(string) string { return o.ID }
 	s.rw.t.Model = o.Model
 	s.rw.usageMembers = usageMembers
@@ -184,6 +185,7 @@ func (s *eventReader) rewrite(rules formatRules) (event, error) {
 		return event{}, err
 	}
 	p := &s.rw
+	p.chatPayload, p.chatOpaque = false, false
 	p.body, p.out, p.at, p.usageAt, p.ending = data, s.buf[:0], 0, -1, s.e.role == ending
 	if p.dec == nil {
 		p.dec = jsontext.NewDecoder(bytes.NewBuffer(data))

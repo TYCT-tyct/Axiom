@@ -85,7 +85,7 @@ func (s *messagesStream) event(data []byte, m *meter) (event, error) {
 		s.meter(m, false)
 		s.report = nil
 	}
-	if s.e.name == "message_start" || s.e.role == ending {
+	if s.e.name == "message_start" || s.e.role == ending || s.ctx.HidesReasoning {
 		return s.rewrite(messagesRewrites)
 	}
 	return s.e, nil
@@ -312,6 +312,7 @@ var (
 	// messagesRewrites are the rewrites of message_start and of an ending, whose axiom member an upstream that is
 	// itself a gateway like ours may have written, and which our ending may need to write.
 	messagesRewrites = formatRules{members: map[string]rule{
+		"content_block": hiddenThinking, "delta": hiddenThinking,
 		"message": object(messageRules), "usage": (*rewriter).usage, "axiom": (*rewriter).drop,
 	}}
 )

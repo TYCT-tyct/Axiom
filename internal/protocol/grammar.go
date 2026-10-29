@@ -34,7 +34,7 @@ var grammars = [...]grammar{
 		top: withProvider(fields{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
 			"max_tokens": (*scanner).maxOutput, "system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
-			"thinking": (*scanner).reasoning, "output_config": (*scanner).withFormat, "output_format": (*scanner).format,
+			"thinking": (*scanner).reasoning, "output_config": func(s *scanner) error { return s.object(messagesOutputFields) }, "output_format": (*scanner).format,
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
 			"context_management": func(s *scanner) error { return s.object(editsHolder) },
 			"mcp_servers":        (*scanner).mcpServers,
@@ -137,11 +137,28 @@ var (
 		return err
 	}}
 	reasoningFields = fields{
-		"type":    func(s *scanner) error { return s.when("disabled", &s.p.off) },   // Messages' thinking
-		"effort":  func(s *scanner) error { return s.when("none", &s.p.off) },       // OpenAI, OpenRouter
+		"type": func(s *scanner) error {
+			v, err := s.str()
+			s.p.off = s.p.off || string(v) == "disabled"
+			s.p.on = s.p.on || string(v) == "adaptive" || string(v) == "enabled"
+			return err
+		}, // Messages' thinking
+		"effort": func(s *scanner) error {
+			v, err := s.str()
+			s.p.off = s.p.off || string(v) == "none"
+			s.p.on = s.p.on || len(v) > 0
+			return err
+		}, // OpenAI, OpenRouter
 		"display": func(s *scanner) error { return s.when("omitted", &s.p.hidden) }, // Messages' thinking
-		"enabled": func(s *scanner) error { k, err := s.flag(); s.p.off = s.p.off || k == 'f'; return err },
-		"exclude": func(s *scanner) error { k, err := s.flag(); s.p.hidden = s.p.hidden || k == 't'; return err },
+		"enabled": func(s *scanner) error {
+			k, err := s.flag()
+			s.p.off = s.p.off || k == 'f'
+			s.p.on = s.p.on || k == 't'
+			return err
+		},
+		"max_tokens":    func(s *scanner) error { n, err := s.count(); s.p.on = s.p.on || n > 0; return err },
+		"budget_tokens": func(s *scanner) error { n, err := s.count(); s.p.on = s.p.on || n > 0; return err },
+		"exclude":       func(s *scanner) error { k, err := s.flag(); s.p.hidden = s.p.hidden || k == 't'; return err },
 	}
 	editsHolder = fields{"edits": (*scanner).edits}
 	editFields  = fields{"type": func(s *scanner) error {
@@ -151,10 +168,11 @@ var (
 		}
 		return err
 	}}
-	chatImageFields = fields{"url": (*scanner).imageURL}
-	chatFileFields  = fields{"file_data": (*scanner).fileData}
-	formatHolder    = fields{"format": (*scanner).format}
-	formatFields    = fields{"type": func(s *scanner) error {
+	chatImageFields      = fields{"url": (*scanner).imageURL}
+	chatFileFields       = fields{"file_data": (*scanner).fileData}
+	messagesOutputFields = fields{"format": (*scanner).format, "effort": (*scanner).reasoningEffort}
+	formatHolder         = fields{"format": (*scanner).format}
+	formatFields         = fields{"type": func(s *scanner) error {
 		v, err := s.str()
 		if string(v) == "json_schema" || string(v) == "json_object" {
 			s.r.Needs |= StructuredOutput
@@ -392,7 +410,8 @@ func (s *scanner) reasoning() error {
 	if err := s.object(reasoningFields); err != nil {
 		return err
 	}
-	if !s.p.off {
+	s.reasoningOff = s.reasoningOff || s.p.off
+	if s.p.on && !s.p.off {
 		s.r.Needs |= Reasoning
 	}
 	s.r.HidesReasoning = s.p.hidden
@@ -401,8 +420,12 @@ func (s *scanner) reasoning() error {
 
 func (s *scanner) reasoningEffort() error {
 	v, err := s.str()
-	if v != nil && string(v) != "none" {
-		s.r.Needs |= Reasoning
+	if v != nil {
+		if string(v) == "none" {
+			s.reasoningOff = true
+		} else {
+			s.r.Needs |= Reasoning
+		}
 	}
 	return err
 }
