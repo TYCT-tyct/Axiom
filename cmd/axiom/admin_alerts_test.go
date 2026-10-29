@@ -99,7 +99,7 @@ func TestAdminWebhookPreflightUsesDomainValidation(t *testing.T) {
 		"https://receiver.example/hook#fragment",
 		"https://receiver.example/" + strings.Repeat("x", 2048),
 	} {
-		body, err := alertJSON[adminapi.AlertConfigurationRequest](observability.AlertConfiguration{Channels: []observability.AlertChannel{{ID: "hook", WebhookURL: raw}}})
+		body, err := adminJSON[adminapi.AlertConfigurationRequest](observability.AlertConfiguration{Channels: []observability.AlertChannel{{ID: "hook", WebhookURL: raw}}})
 		if err != nil {
 			t.Fatal(err)
 		}

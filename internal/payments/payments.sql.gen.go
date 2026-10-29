@@ -108,26 +108,37 @@ func (q *Queries) QueryAllowed(ctx context.Context, db DBTX, id uuid.UUID) (bool
 }
 
 const queryOrders = `-- name: QueryOrders :many
-SELECT id FROM payments.order_windows
-WHERE queryable AND (next_query_at <= transaction_timestamp() OR (state = 'pending' AND expires_at <= transaction_timestamp()))
-    AND (state = 'pending' OR expires_at >= transaction_timestamp() - interval '30 days')
-ORDER BY CASE WHEN state = 'pending' AND expires_at > transaction_timestamp() THEN 0
-    WHEN state = 'pending' THEN 1 ELSE 2 END, next_query_at, id LIMIT $1
+WITH due AS (
+    SELECT id, merchant_id, next_query_at,
+        CASE WHEN state = 'pending' AND expires_at > transaction_timestamp() THEN 0
+            WHEN state = 'pending' THEN 1 ELSE 2 END AS priority
+    FROM payments.order_windows
+    WHERE queryable AND (next_query_at <= transaction_timestamp() OR (state = 'pending' AND expires_at <= transaction_timestamp()))
+        AND (state = 'pending' OR expires_at >= transaction_timestamp() - interval '30 days')
+), ranked AS (
+    SELECT id, merchant_id, next_query_at, priority, row_number() OVER (PARTITION BY merchant_id, priority ORDER BY priority, next_query_at, id) AS turn FROM due
+)
+SELECT id, merchant_id FROM ranked ORDER BY priority, turn, next_query_at, id LIMIT $1
 `
 
-func (q *Queries) QueryOrders(ctx context.Context, db DBTX, batch int32) ([]uuid.UUID, error) {
+type QueryOrdersRow struct {
+	ID         uuid.UUID
+	MerchantID uuid.UUID
+}
+
+func (q *Queries) QueryOrders(ctx context.Context, db DBTX, batch int32) ([]QueryOrdersRow, error) {
 	rows, err := db.Query(ctx, queryOrders, batch)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []uuid.UUID
+	var items []QueryOrdersRow
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var i QueryOrdersRow
+		if err := rows.Scan(&i.ID, &i.MerchantID); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

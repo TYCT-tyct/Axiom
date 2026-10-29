@@ -3,6 +3,7 @@ package pg_test
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -53,7 +54,7 @@ func TestTheOldestWaitingJobOfEachQueueIsMeasured(t *testing.T) {
 	if archive < 10 || archive > 10+elapsed {
 		t.Errorf("the archive queue's oldest wait is %v seconds, want between 10 and %v", archive, 10+elapsed)
 	}
-	for _, empty := range []string{pg.QueueNotifications, pg.QueueSyncs} {
+	for _, empty := range []string{pg.QueueNotifications, pg.QueueSyncs, pg.QueueReconcile} {
 		if got, ok := waits[empty]; !ok || got != 0 {
 			t.Errorf("the %s queue, with nothing waiting, reads %v (present: %v), want 0", empty, got, ok)
 		}
@@ -68,6 +69,7 @@ func TestACollectionEndsWhileTheDatabaseBlocksAndRecovers(t *testing.T) {
 	t.Parallel()
 	database := pgtest.New(t)
 	_, tel := openQueueMetrics(t, database.App)
+	before := readOldestWaits(t, telemetrytest.Text(t, tel))
 	holder, err := pgx.Connect(t.Context(), database.Superuser)
 	if err != nil {
 		t.Fatal(err)
@@ -98,8 +100,8 @@ func TestACollectionEndsWhileTheDatabaseBlocksAndRecovers(t *testing.T) {
 	if err := lock.Rollback(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if waits := readOldestWaits(t, telemetrytest.Text(t, tel)); len(waits) != 4 {
-		t.Errorf("after the lock lifted the gauge reports %v, want the four queues", waits)
+	if waits := readOldestWaits(t, telemetrytest.Text(t, tel)); !maps.Equal(waits, before) {
+		t.Errorf("after the lock lifted the gauge reports %v, want the configured queues %v", waits, before)
 	}
 }
 

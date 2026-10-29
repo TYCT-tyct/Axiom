@@ -47,7 +47,7 @@ InitPlan 的布尔参数按未知布尔值估计，避免原来的无列文本�
 **真实查询的补充取舍**：只改策略通过了编号交易的分页（平台和账户范围，首页 / 深页 407 / 407–408 块），但真实查询仍有以下限制：
 
 - 历史交易的 `account_id` 与 `seq IS NULL` 强相关。超过 200 万笔的真实账本里，历史账户首页仍为 bitmap，流水页 1010 块、深页 614 块；InitPlan 不会修复账户与历史状态的独立性假设。保留 #405 的 `enable_sort = off`，并让分配重放在 `loadAllocation` 中每次加载设置一次，后续各页共用。`SET LOCAL` 持续到调用方事务提交或回滚，包括重放后的写入和其他模块在同一事务中的后续查询；退款接口的调用约定见 [billing](../../billing/README.md#额度批次的分配与到期)。它不改全库开关，也不承诺精确行数。扩展统计仍需持续采样、ANALYZE，并不能消除参数化计划的所有低估；在冻结的历史分支上强制已有索引顺序更直接。
-- 调用记录深页仍可能触碰随历史增长的索引块，详见 [#408](https://github.com/TYCT-tyct/Axiom/issues/408)。
+- 调用记录的标量时间上界与游标行上界竞争 B-tree 起点，与范围估计无关；三个列表先取时间窗与游标中较小的元组上界，把它放在标量时间窗前，保留分区裁剪与完整的 `(at, id)` 定位，实测与取舍见 [observability 的读取说明](../../observability/README.md#读)。
 
 范围的逐行成本与极低估计由策略 InitPlan 统一处理；账本条件自身的相关性由读取入口的事务内排序设置处理。
 
@@ -57,7 +57,7 @@ InitPlan 的布尔参数按未知布尔值估计，避免原来的无列文本�
 
 复现实验：`flock /tmp/axiom-remote-check.lock python3 internal/platform/pg/testdata/compare-scope.py --output scope-comparison.json`。JSON 保留完整计划，计时只作证据，不作 CI 门槛。
 
-`TestScopeSettingsAreStatementInitPlans` 检查被过滤与命中扫描的每个设置读取均在 InitPlan 内且执行至多一次；`TestScopePlansDoNotCacheAnEarlierScope` 强制两种计划并交替范围；`TestMalformedScopeArraysFailClosed` 检查非法数组报错。各模块既有隔离测试检查读、写与终态权限。账本计划测试检查平台和账户范围、首页与深页的索引顺序及块预算，EXPLAIN 在实际读取入口设置了有序扫描后进行。调用记录的既有计划测试覆盖首页及紧随其后的页。`TestScopeMigrationReleasesLocksAndResumes` 验证等待后一个表时已释放前一个表的锁，并在锁超时后重跑成功。
+`TestScopeSettingsAreStatementInitPlans` 检查被过滤与命中扫描的每个设置读取均在 InitPlan 内且执行至多一次；`TestScopePlansDoNotCacheAnEarlierScope` 强制两种计划并交替范围；`TestMalformedScopeArraysFailClosed` 检查非法数组报错。各模块既有隔离测试检查读、写与终态权限。账本计划测试检查平台和账户范围、首页与深页的索引顺序及块预算，EXPLAIN 在实际读取入口设置了有序扫描后进行。调用记录的 `TestListPlansFollowTheIndexes` 复用同一份 12 万行数据，覆盖首页、紧随页及深 45,000 行的页，在平台与账户两种范围检查 50、200 行页的有序扫描和块预算；证据见 [observability](../../observability/README.md#读)。`TestScopeMigrationReleasesLocksAndResumes` 验证等待后一个表时已释放前一个表的锁，并在锁超时后重跑成功。
 
 PostgreSQL 官方说明：无关联的单行子查询可以成为每次执行只运行一次的 [InitPlan](https://www.postgresql.org/docs/18/using-explain.html)；[函数易变性](https://www.postgresql.org/docs/18/xfunc-volatility.html)决定计划复用时能否把结果折叠为常量。查证日期：2026-10-28。
 

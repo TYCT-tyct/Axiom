@@ -38,6 +38,7 @@ var orderRefusals = []refusal{
 	{payments.ErrTooManyIPOrders, http.StatusTooManyRequests, codeRateLimited, "too many top-ups were started from this network lately; try again later"},
 	{payments.ErrTooManyIPFailures, http.StatusTooManyRequests, codeRateLimited, "too many top-ups from this network failed lately; try again later"},
 	{payments.ErrVerifyLimited, http.StatusTooManyRequests, codeRateLimited, "this order was checked a moment ago; wait a minute before checking it again"},
+	{payments.ErrQueryPaused, http.StatusServiceUnavailable, codeUnavailable, "the payment channel is busy; wait a moment before checking again"},
 	{payments.ErrUnconfirmed, http.StatusServiceUnavailable, codeUnavailable, "the payment channel did not answer; try again shortly, a payment already made is not lost"},
 }
 

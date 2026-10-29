@@ -22,13 +22,16 @@ ON CONFLICT (id, at) DO NOTHING;
 -- What a user may read of the account's own calls: no cost, no endpoint, no routing, no ledger. The scope's row-level
 -- security limits the rows to the account, and the explicit account condition lets the planner walk the index
 -- (account_id, at DESC, id DESC) in order instead of filtering every account's rows; the keyset (at, id) pages
--- stably while new calls arrive.
+-- stably while new calls arrive. Keep the row upper bound before the scalar time bounds: PostgreSQL 18 cannot
+-- compare their tightness and uses the first as the B-tree start key. Starting at until walks newer index leaves
+-- even when EXPLAIN lists the cursor in Index Cond (README.md「读」, #408).
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
-WHERE account_id = (@account_id::text)::uuid AND at >= @since AND at < @until
+WHERE account_id = (@account_id::text)::uuid
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
+    AND at >= @since AND at < @until
 -- Qualified: a bare id would sort by the output column id::text, which is not the index order.
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT @page_size;
@@ -40,9 +43,10 @@ SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS k
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
-WHERE account_id = (@account_id::text)::uuid AND model = @model AND at >= @since AND at < @until
-    AND (@client_app::text = '' OR client_app = @client_app)
+WHERE account_id = (@account_id::text)::uuid AND model = @model
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
+    AND at >= @since AND at < @until
+    AND (@client_app::text = '' OR client_app = @client_app)
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT @page_size;
 
@@ -52,8 +56,9 @@ SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS k
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
-WHERE account_id = (@account_id::text)::uuid AND client_app = @client_app AND at >= @since AND at < @until
+WHERE account_id = (@account_id::text)::uuid AND client_app = @client_app
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
+    AND at >= @since AND at < @until
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT @page_size;
 

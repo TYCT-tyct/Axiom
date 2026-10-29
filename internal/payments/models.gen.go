@@ -7,8 +7,25 @@ package payments
 import (
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
+
+type PaymentsDiscrepancy struct {
+	ID             uuid.UUID
+	SiteID         uuid.UUID
+	AccountID      *uuid.UUID
+	OrderID        *uuid.UUID
+	MerchantID     uuid.UUID
+	Kind           string
+	Dedupe         string
+	Detail         []byte
+	State          string
+	CreatedAt      time.Time
+	InvestigatedBy *string
+	InvestigatedAt pgtype.Timestamptz
+	Note           *string
+}
 
 type PaymentsMerchant struct {
 	ID            uuid.UUID

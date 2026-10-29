@@ -108,7 +108,7 @@ func (p *Payments) notify(ctx context.Context, ch Channel, merchant MerchantID, 
 	if !ch.Caps().Has(CapQuery) {
 		return p.receive(ctx, c)
 	}
-	payment, err := queryPayment(ctx, ch, n.Order, n.TradeNo)
+	payment, err := p.confirmQuery(ctx, ch, merchant, n)
 	if err != nil {
 		return errors.Join(ErrUnconfirmed, err)
 	}
@@ -232,4 +232,14 @@ func (p *Payments) allowCallback(key callbackKey, limit int, now time.Time) bool
 	}
 	v.n++
 	return true
+}
+
+func (p *Payments) confirmQuery(ctx context.Context, ch Channel, merchant MerchantID, n Notice) (Payment, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, closeTimeout, errQueryDeadline)
+	defer cancel()
+	token, err := p.acquireQuery(ctx, merchant, false)
+	if err != nil {
+		return Payment{}, errors.Join(ErrUnconfirmed, err)
+	}
+	return p.completeQuery(ctx, ch, merchant, token, n.Order, n.TradeNo)
 }
