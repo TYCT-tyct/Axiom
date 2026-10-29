@@ -39,12 +39,12 @@ func (unreadableCatalog) Account(context.Context) (adapter.Account, error) {
 	return adapter.Account{Balance: "10", Funding: adapter.FundingWallet}, nil
 }
 
-func (unreadableCatalog) Offer(context.Context) (adapter.Offer, error) {
-	return adapter.Offer{}, adapter.ErrUnrecognised
+func (unreadableCatalog) Offer(context.Context, adapter.Listing) (adapter.Page[adapter.Group], error) {
+	return adapter.Page[adapter.Group]{}, adapter.ErrUnrecognised
 }
 
-func (unreadableCatalog) Keys(context.Context) ([]adapter.KeyState, error) {
-	return nil, adapter.Blocked{Until: t0.Add(time.Hour)}
+func (unreadableCatalog) Keys(context.Context, adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+	return adapter.Page[adapter.KeyState]{}, adapter.Blocked{Until: t0.Add(time.Hour)}
 }
 
 func (unreadableCatalog) Charges(context.Context, adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {

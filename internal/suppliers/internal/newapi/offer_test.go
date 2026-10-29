@@ -50,14 +50,14 @@ func TestOfferPricesTheRecordedModelsLikeTheRecordedCharge(t *testing.T) {
 	f := offerClient(t, "", "")
 	f.routes["GET /api/user/models?group=default"] = sample(t, "42-user-models")
 	f.routes["GET /api/user/models?group=vip"] = answer(200, `{"success":true,"data":["mock-gpt"]}`)
-	offer, err := open(t, f, now).Offer(t.Context())
+	offer, err := readOffer(t, open(t, f, now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(offer.Groups) != 2 || offer.Groups[0].Ref != "default" || offer.Groups[1].Ref != "vip" {
-		t.Fatalf("groups %+v, want default then vip", offer.Groups)
+	if len(offer) != 2 || offer[0].Ref != "default" || offer[1].Ref != "vip" {
+		t.Fatalf("groups %+v, want default then vip", offer)
 	}
-	def := offer.Groups[0]
+	def := offer[0]
 	if def.Ratio != "1" || len(def.Models) != 2 || def.Models[0].UpstreamName != "gpt-4o-mini" {
 		t.Fatalf("default group %+v", def)
 	}
@@ -85,11 +85,11 @@ func TestOfferMultipliesTheGroupRatioAndDerivesTheCachePrices(t *testing.T) {
 		`{"success":true,"data":[{"model_name":"m","quota_type":0,"model_ratio":0.075,"completion_ratio":4,"cache_ratio":0.5,"create_cache_ratio":1.25},
 			{"model_name":"plain","quota_type":0,"model_ratio":2}]}`)
 	f.routes["GET /api/user/models?group=vip"] = answer(200, `{"success":true,"data":["plain","m"]}`)
-	offer, err := open(t, f, now).Offer(t.Context())
+	offer, err := readOffer(t, open(t, f, now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	models := offer.Groups[0].Models
+	models := offer[0].Models
 	// m: input 0.075 × 1.5 = 0.1125; output ×4; cache read ×0.5; cache write ×1.25; one hour ×1.6.
 	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 10, catalog.ItemCacheRead: 10, catalog.ItemCacheWrite: 10, catalog.ItemCacheWrite1h: 10}, catalog.ServiceTierStandard, nil)
 	if err != nil {
@@ -122,12 +122,12 @@ func TestOfferLeavesWhatAScheduleeCannotSayUnknown(t *testing.T) {
 			{"model_name":"huge","quota_type":0,"model_ratio":5000},
 			{"model_name":"claude","quota_type":0,"model_ratio":1,"supported_endpoint_types":["anthropic","openai"]}]}`)
 	f.routes["GET /api/user/models?group=g"] = answer(200, `{"success":true,"data":["percall","expr","img","img1","huge","claude","unpriced"]}`)
-	offer, err := open(t, f, now).Offer(t.Context())
-	if err != nil || len(offer.Groups) != 1 {
-		t.Fatalf("Offer: %v, %d groups (the auto group has no ratio and is left out)", err, len(offer.Groups))
+	offer, err := readOffer(t, open(t, f, now))
+	if err != nil || len(offer) != 1 {
+		t.Fatalf("Offer: %v, %d groups (the auto group has no ratio and is left out)", err, len(offer))
 	}
 	byName := map[string]adapter.Model{}
-	for _, m := range offer.Groups[0].Models {
+	for _, m := range offer[0].Models {
 		byName[m.UpstreamName] = m
 	}
 	for _, name := range []string{"percall", "expr", "huge", "unpriced"} {

@@ -24,8 +24,8 @@ func TestAnAnswerWithoutItsMembersIsNotAnEmptyResult(t *testing.T) {
 		`{"success":true,"data":{"items":null,"total":null}}`,
 	}
 	reads := map[string]func(m adapter.Manager) error{
-		"Keys":    func(m adapter.Manager) error { _, err := m.Keys(t.Context()); return err },
-		"Offer":   func(m adapter.Manager) error { _, err := m.Offer(t.Context()); return err },
+		"Keys":    func(m adapter.Manager) error { _, err := readKeys(t, m); return err },
+		"Offer":   func(m adapter.Manager) error { _, err := readOffer(t, m); return err },
 		"Account": func(m adapter.Manager) error { _, err := m.Account(t.Context()); return err },
 		"Charges": func(m adapter.Manager) error {
 			state := startState(t, t0)
@@ -69,29 +69,35 @@ func limited(clk *testClock, inner funcClient) (adapter.Client, *int) {
 	}), served
 }
 
-// retry calls read on the same manager until it succeeds, moving the clock to when the bucket reopens each time it is
-// refused.
-func retry(t *testing.T, clk *testClock, read func() error) (waits int) {
+// readPaged reads a listing over as many reads as its bucket allows: a read the bucket stopped is given again after the
+// window reopens, from the position it answered with. It returns the read that ended the listing, and how often it had
+// to wait.
+func readPaged[T any](t *testing.T, clk *testClock, read func(from adapter.Listing) (adapter.Page[T], error)) (adapter.Page[T], int) {
 	t.Helper()
-	for range 50 {
-		err := read()
-		if b, ok := errors.AsType[adapter.Blocked](err); ok {
-			waits++
-			clk.set(b.Until)
-			continue
-		}
-		if err != nil {
+	var from adapter.Listing
+	var page adapter.Page[T]
+	waits := 0
+	for range 500 {
+		var err error
+		if page, err = read(from); err != nil {
 			t.Fatal(err)
 		}
-		return waits
+		from = page.Next
+		if page.Done {
+			return page, waits
+		}
+		if !page.Until.IsZero() {
+			waits++
+			clk.set(page.Until)
+		}
 	}
-	t.Fatal("never finished")
-	return waits
+	t.Fatal("the listing did not end")
+	return page, waits
 }
 
-// TestAListingLongerThanARateWindowFinishes: 9,050 keys are 91 pages against a bucket of 90 requests per window. The
-// listing stops when the bucket is empty and goes on from the same page on the same manager, so each page is read once
-// and the keys come out whole; the offer of 120 groups, which takes a request per group, does the same.
+// TestAListingLongerThanARateWindowFinishes: 9,050 keys are 91 pages against a bucket of 90 requests per window. A read
+// the bucket stops answers with the page it reached, and the read after the window goes on from there: each page is read
+// once and the keys come out whole. The offer of 120 groups, which takes a request per group, does the same.
 func TestAListingLongerThanARateWindowFinishes(t *testing.T) {
 	t.Parallel()
 	clk := &testClock{t: t0}
@@ -106,17 +112,13 @@ func TestAListingLongerThanARateWindowFinishes(t *testing.T) {
 		for i := from; i < to; i++ {
 			items += fmt.Sprintf(`{"id":%d,"status":1,"group":"g"},`, i+1)
 		}
-		return answer(200, `{"success":true,"data":{"items":[`+trimComma(items)+`]}}`), nil
+		return answer(200, `{"success":true,"data":{"total":9050,"items":[`+trimComma(items)+`]}}`), nil
 	})
-	m := open(t, keys, t0)
-	var got int
-	waits := retry(t, clk, func() error {
-		k, err := m.Keys(t.Context())
-		got = len(k)
-		return err
+	page, waits := readPaged(t, clk, func(from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+		return open(t, keys, clk.now()).Keys(t.Context(), from)
 	})
-	if got != 9050 || *served != 91 || waits == 0 {
-		t.Errorf("%d keys from %d requests with %d waits, want 9050 from 91 with a wait", got, *served, waits)
+	if len(page.Items) != 9050 || *served != 91 || waits == 0 {
+		t.Errorf("%d keys from %d requests with %d waits, want 9050 from 91 with a wait", len(page.Items), *served, waits)
 	}
 
 	clk = &testClock{t: t0}
@@ -133,15 +135,13 @@ func TestAListingLongerThanARateWindowFinishes(t *testing.T) {
 		}
 		return answer(200, `{"success":true,"data":["m"]}`), nil
 	})
-	om := open(t, offer, t0)
-	var groups int
-	retry(t, clk, func() error {
-		o, err := om.Offer(t.Context())
-		groups = len(o.Groups)
-		return err
+	groups, _ := readPaged(t, clk, func(from adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return open(t, offer, clk.now()).Offer(t.Context(), from)
 	})
-	if groups != 120 || *served2 != 122 {
-		t.Errorf("%d groups from %d requests, want 120 from 122", groups, *served2)
+	// 120 model reads, the groups and the prices, and one read of the groups per resume: the position names the groups
+	// it was read over, so a pass that goes on checks they are still the supplier's before it goes on reading them.
+	if len(groups.Items) != 120 || *served2 != 123 {
+		t.Errorf("%d groups from %d requests, want 120 from 123", len(groups.Items), *served2)
 	}
 }
 
@@ -226,13 +226,13 @@ func TestOnlyTheAutoRatioLeavesAGroupOut(t *testing.T) {
 		"an empty string":            `{"g":{"ratio":""}}`,
 		"a good group and a bad one": `{"a":{"ratio":1},"b":{}}`,
 	} {
-		if _, err := open(t, groupsOf(groups), t0).Offer(t.Context()); !errors.Is(err, adapter.ErrUnrecognised) {
+		if _, err := readOffer(t, open(t, groupsOf(groups), t0)); !errors.Is(err, adapter.ErrUnrecognised) {
 			t.Errorf("%s: %v, want an unrecognised answer", name, err)
 		}
 	}
-	offer, err := open(t, groupsOf(`{"a":{"ratio":1.5},"auto":{"ratio":"auto"}}`), t0).Offer(t.Context())
-	if err != nil || len(offer.Groups) != 1 || offer.Groups[0].Ref != "a" {
-		t.Errorf("a group and the auto group: %+v, %v, want only the group", offer.Groups, err)
+	offer, err := readOffer(t, open(t, groupsOf(`{"a":{"ratio":1.5},"auto":{"ratio":"auto"}}`), t0))
+	if err != nil || len(offer) != 1 || offer[0].Ref != "a" {
+		t.Errorf("a group and the auto group: %+v, %v, want only the group", offer, err)
 	}
 }
 

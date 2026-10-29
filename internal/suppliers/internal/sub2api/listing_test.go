@@ -1,0 +1,153 @@
+package sub2api
+
+import (
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"axiom/internal/suppliers/internal/adapter"
+)
+
+// keyPageOf is the page a key list path asks for.
+func keyPageOf(path string) (int, error) {
+	q := strings.TrimPrefix(path, "/api/v1/keys?page=")
+	return strconv.Atoi(strings.SplitN(q, "&", 2)[0])
+}
+
+// keyList answers the key list of a supplier whose total is *total: pages of a hundred, the last one short.
+func keyList(total *int) func(adapter.Request) adapter.Response {
+	return func(r adapter.Request) adapter.Response {
+		page, err := keyPageOf(r.Path)
+		if err != nil {
+			panic(err) // the test's own request
+		}
+		var items []string
+		for i := (page-1)*100 + 1; i <= min(page*100, *total); i++ {
+			items = append(items, fmt.Sprintf(`{"id":%d,"key":"k","group_id":1,"status":"active"}`, i))
+		}
+		return adapter.Response{Status: 200, Body: []byte(fmt.Sprintf(`{"code":0,"data":{"items":[%s],"total":%d,"pages":%d}}`,
+			strings.Join(items, ","), *total, (*total+99)/100))}
+	}
+}
+
+func TestAKeyListingResumesAcrossManagers(t *testing.T) {
+	t.Parallel()
+	for _, shrink := range []bool{false, true} {
+		t.Run(fmt.Sprint(shrink), func(t *testing.T) {
+			t.Parallel()
+			resumeKeys(t, shrink)
+		})
+	}
+}
+
+func resumeKeys(t *testing.T, shrink bool) {
+	t.Helper()
+	total, asked, limited := 250, []int{}, true
+	serve := keyList(&total)
+	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
+		page, err := keyPageOf(r.Path)
+		if err != nil {
+			return adapter.Response{}, err
+		}
+		asked = append(asked, page)
+		if limited && page == 2 {
+			return adapter.Response{}, adapter.Blocked{Until: epoch.Add(time.Minute)}
+		}
+		return serve(r), nil
+	})
+	openManager := func() adapter.Manager { return manager0(t, srv, login(t, epoch.Add(24*time.Hour))) }
+	until := epoch.Add(time.Minute)
+	first, err := openManager().Keys(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Done || len(first.Next) == 0 || !first.Until.Equal(until) {
+		t.Fatalf("no resumable position: %+v", first)
+	}
+	limited = false
+	want := []int{1, 2, 2, 3}
+	if shrink {
+		total = 50
+		want = []int{1, 2, 2, 1}
+	}
+	page, err := openManager().Keys(t.Context(), first.Next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertKeyListing(t, page, total)
+	if !slices.Equal(asked, want) {
+		t.Fatalf("pages %v, want %v", asked, want)
+	}
+}
+
+func assertKeyListing(t *testing.T, page adapter.Page[adapter.KeyState], total int) {
+	t.Helper()
+	if !page.Done || len(page.Next) != 0 || len(page.Items) != total {
+		t.Fatalf("incomplete listing: done %v, %d keys, position %q", page.Done, len(page.Items), page.Next)
+	}
+	for i, k := range page.Items {
+		if k.Ref != adapter.KeyRef(strconv.Itoa(i+1)) {
+			t.Fatalf("key %d: %q", i+1, k.Ref)
+		}
+	}
+}
+
+// TestThePositionOfAListingHoldsNoKeyText: the position of a listing is stored in the supplier's sync state, which holds
+// no credentials. The offer reads keys to list their groups' models; the position it answers with when the panel bucket
+// stops it names them by id, never by their text.
+func TestThePositionOfAListingHoldsNoKeyText(t *testing.T) {
+	t.Parallel()
+	table := panel(t)
+	calls := 0
+	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
+		if calls++; calls > 4 { // the groups, the multipliers, one page of keys, and one key's own read
+			return adapter.Response{}, adapter.Blocked{Until: epoch.Add(time.Minute)}
+		}
+		return table[r.Method+" "+r.Path], nil
+	})
+	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
+	page, err := m.Offer(t.Context(), nil)
+	if err != nil || page.Done || len(page.Next) == 0 {
+		t.Fatalf("the read the limits stopped: done %v, position %q, %v; want a position", page.Done, page.Next, err)
+	}
+	if strings.Contains(string(page.Next), "placeholder-key") {
+		t.Errorf("the position of the offer holds a key's text: %s", page.Next)
+	}
+}
+
+// TestAnOfferWhoseGroupsChangedBeginsAgain: a group added to the supplier after a pass began is not one the pass read, so
+// the pass begins again over the groups it has now, its key page with them.
+func TestAnOfferWhoseGroupsChangedBeginsAgain(t *testing.T) {
+	t.Parallel()
+	groups := 2
+	calls := 0
+	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
+		if calls++; calls == 3 { // the groups and their multipliers are read; then the limits close
+			return adapter.Response{}, adapter.Blocked{Until: epoch.Add(time.Minute)}
+		}
+		return manyGroups(groups)(r), nil
+	})
+	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
+	first, err := m.Offer(t.Context(), nil)
+	if err != nil || first.Done || len(first.Next) == 0 {
+		t.Fatalf("the read the limits stopped: done %v, position %q, %v; want a position", first.Done, first.Next, err)
+	}
+
+	groups = 3 // a group was added
+	page, err := m.Offer(t.Context(), first.Next)
+	if err != nil || !page.Done || len(page.Items) != groups {
+		t.Fatalf("after the groups changed: done %v, %d groups, %v; want the %d it has now", page.Done, len(page.Items), err, groups)
+	}
+	listed := 0
+	for _, p := range srv.paths() {
+		if p == "GET /api/v1/groups/available" {
+			listed++
+		}
+	}
+	if listed != 2 {
+		t.Errorf("the groups were listed %d times, want twice: the pass that found them changed began again", listed)
+	}
+}

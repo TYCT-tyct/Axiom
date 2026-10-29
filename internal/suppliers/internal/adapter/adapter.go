@@ -87,18 +87,37 @@ var ErrStaleLogin = errors.New("adapter: the stored login changed since it was r
 
 // Manager is the read-only management half of an adapter.
 //
-// A listing that takes more requests than a rate bucket allows in a window may be read over several calls: when a request
-// is refused for want of allowance (an error wrapping ErrBucketsFull), the Manager may keep how far the listing got, and
-// the call made again on the same Manager continues. The module keeps a Manager through the retries of a round.
+// Its two listings, the offer and the keys, are read over as many reads as the supplier's limits need: a read is given
+// the position the one before returned (none for the first) and returns the position it reached, so that the module
+// stores it in the supplier's sync state and the next round goes on from there instead of holding a worker until the
+// limits reopen (Listing, Page).
 type Manager interface {
 	Account(ctx context.Context) (Account, error)
-	Offer(ctx context.Context) (Offer, error)
-	Keys(ctx context.Context) ([]KeyState, error)
+	// Offer reads the offer from the position in from, as far as the supplier's limits allow.
+	Offer(ctx context.Context, from Listing) (Page[Group], error)
+	// Keys reads the keys from the position in from, as far as the supplier's limits allow.
+	Keys(ctx context.Context, from Listing) (Page[KeyState], error)
 	// KeySecret reads a key's text from the supplier by its id there. Keys are never typed in, so the text always
 	// belongs to the key it is stored under.
 	KeySecret(ctx context.Context, ref KeyRef) (secret.Secret, error)
 	// Charges reads one page of the charge records, newest first, from the position in scan.
 	Charges(ctx context.Context, scan ScanState) (ChargePage, ScanState, error)
+}
+
+// Listing is an adapter's own position in a paged listing, opaque to everyone else. It carries what the pass has read so
+// far, so that a listing a rate limit, an error or a restart stopped goes on where it stopped instead of from the start.
+// A position the adapter cannot read, or one of a listing the supplier changed under it, begins the listing again: a
+// page may then be read twice, but none is skipped.
+type Listing []byte
+
+// Page is what one read of a paged listing got. Only the read that ends the listing (Done) holds items: it holds every
+// one the pass read, and no Next. A read that stops earlier holds the position to go on from in Next, and Until is when
+// the supplier's limits let the pass go on; an incomplete page always has a nonzero Until.
+type Page[T any] struct {
+	Items []T
+	Next  Listing
+	Done  bool
+	Until time.Time
 }
 
 // Account is the balance and where it is drawn from. UnitHint is the supplier's own statement of what a native unit
@@ -108,9 +127,6 @@ type Account struct {
 	Funding  Funding
 	UnitHint string
 }
-
-// Offer is what the supplier sells: groups and their models.
-type Offer struct{ Groups []Group }
 
 // Group is one of the supplier's groups. Facts is canonical JSON of what the supplier says about it (platform,
 // subscription type, peak pricing, long context), which Formats reads.
