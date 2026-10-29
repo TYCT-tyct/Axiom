@@ -202,7 +202,7 @@ func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer) (int64, er
 // upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the first
 // sampling's estimate (billing.InputEstimate: the text at the count of the endpoint's model family where it has a
 // tokenizer and at 4 bytes a token otherwise, an image at 1600 tokens, a file at 4096, each held to its bound), unless
-// any input-side item was reported, in which case the estimate stands in place of the counts an invalid report kept
+// any input-side item was reported, in which case the estimate stands in place of the items an invalid report kept
 // rather than beside them; the output by the text, reasoning and tool input read at outputBytesPerToken, never
 // below a count reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own,
 // which metering holds the output to); the web searches by the events seen. The ratios stand in for the estimates by
@@ -223,8 +223,16 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	if !inputReported(u) { // none of the input was reported, so it is estimated
 		// The estimate is the whole prompt; a report that was accepted before a count went down keeps the counts it
 		// took, and the input side's counts are parts of one prompt, a cache read even overlapping the plain input.
-		// So only what those counts are short of the estimate is added, never the estimate beside them (#339).
-		counts[catalog.ItemInput] += max(input-reply.Usage.InputTotal(), 0)
+		// So only what those counts are short of the estimate is added, never the estimate beside them (#339). The
+		// shortfall is over the items' sum, not InputTotal: the physical total an OpenAI report carries is the prompt's
+		// own length, and cache reads and writes within it may overlap each other and it.
+		kept := int64(0)
+		for it := range catalog.NumItems {
+			if catalog.InputSide.Has(it) {
+				kept += counts[it]
+			}
+		}
+		counts[catalog.ItemInput] += max(input-kept, 0)
 	}
 	if !reply.Reported.Has(catalog.ItemOutput) {
 		out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
