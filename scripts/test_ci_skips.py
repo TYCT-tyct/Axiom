@@ -32,6 +32,19 @@ class NeedsBenchmark(unittest.TestCase):
         self.assertTrue(ci_skips.needs_benchmark(["web/a.ts", "docs/a.md"]))
 
 
+class NeedsWeb(unittest.TestCase):
+    def test_frontend_and_build_inputs_run_it(self):
+        for path in ("web/site/src/app.ts", "web/pnpm-lock.yaml", "web/.node-version", "api/console.yaml",
+                     "api/admin.yaml", "scripts/web_cache.py", "scripts/ci/web-container.sh", "scripts/ci/runner-host.sh", "justfile",
+                     ".github/workflows/ci.yml", ".github/actions/setup/action.yml", "go.mod", "go.sum"):
+            with self.subTest(path=path):
+                self.assertTrue(ci_skips.needs_web(["docs/a.md", path]))
+        self.assertTrue(ci_skips.needs_web([]))
+
+    def test_unrelated_changes_skip_it(self):
+        self.assertFalse(ci_skips.needs_web(["internal/billing/ledger.go", "docs/a.md", "scripts/ci_skips.py", "scripts/ci/bench-compare.sh"]))
+
+
 class NeedsDeployCheck(unittest.TestCase):
     def test_anything_the_container_is_built_from_runs_it(self):
         for path in ("deploy/compose.yaml", "deploy/postgres/roles.sh", "Dockerfile.dev", "go.mod", "go.sum",
@@ -48,7 +61,7 @@ class NeedsDeployCheck(unittest.TestCase):
         for paths in (["docs/a.md"], ["README.md", "AGENTS.md"], ["internal/x/x_test.go"], ["cmd/axiom/admin_test.go"],
                       ["internal/x/testdata/sample.sse"], [".github/workflows/ci.yml"],
                       ["scripts/test_ci_skips.py", "scripts/ci_skips.py", "scripts/train.py", "scripts/check_scope.py",
-                       "scripts/workflow/check_docs.py", "scripts/ci/runner-host.sh"],
+                       "scripts/workflow/check_docs.py", "scripts/ci/runner-host.sh", "scripts/ci/bench-compare.sh"],
                       ["web/e2e/admin-access.spec.ts", "web/playwright.config.ts"]):
             with self.subTest(paths=paths):
                 self.assertFalse(ci_skips.needs_deploy_check(paths))
@@ -73,7 +86,12 @@ class ExitCodes(unittest.TestCase):
                 with mock.patch.object(ci_skips, "changed_paths", side_effect=error):
                     self.assertEqual(ci_skips.main(["bench-needed", "base"]), 0)
                     self.assertEqual(ci_skips.main(["deploy-needed", "base"]), 0)
+                    self.assertEqual(ci_skips.main(["web-needed", "base"]), 0)
                     self.assertEqual(ci_skips.main(["md-only", "base"]), 1)
+
+    def test_web_needed_codes(self):
+        self.assertEqual(self.main("web-needed", ["internal/x/x.go"]), ci_skips.NOT_NEEDED)
+        self.assertEqual(self.main("web-needed", ["api/console.yaml"]), 0)
 
     def test_md_only_codes(self):
         self.assertEqual(self.main("md-only", [".github/pull_request_template.md"]), 0)

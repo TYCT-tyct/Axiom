@@ -104,6 +104,32 @@ test.describe("signing in", () => {
     expect(new URL(page.url()).host).toBe(new URL(test.info().project.use.baseURL ?? page.url()).host);
   });
 
+  test("a protected page's own next is part of its address, not the way back", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto("/console/keys?x=1&next=/calls");
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    await signIn(page);
+    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+    const back = new URL(page.url());
+    expect(back.pathname).toBe("/console/keys");
+    expect([back.searchParams.get("x"), back.searchParams.get("next")]).toEqual(["1", "/calls"]);
+  });
+
+  for (const next of [
+    "%2F..%2Foutside",
+    "%2F%252e%252e%2Foutside",
+    "%2Fa%2F..%2F..%2Foutside",
+    "%2F..%2F%2Fevil.example",
+  ]) {
+    test(`a way back that climbs out of the app (${next}) is dropped`, async ({ page }) => {
+      await mockConsole(page);
+      await page.goto(`/console/sign-in?next=${next}`);
+      await signIn(page);
+      await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe("/console/");
+    });
+  }
+
   test("a session that ends while a page is open sends the user to sign in and back to that page", async ({ page }) => {
     const state = await mockConsole(page);
     signedInAs(state);

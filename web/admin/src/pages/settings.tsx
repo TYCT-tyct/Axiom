@@ -58,6 +58,7 @@ function SiteKeyLimits({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
     <DataState query={limits}>
       {(view) => (
         <KeyLimitsCard
+          operation={`key-limits:${siteId}`}
           level="site"
           view={view}
           editable
@@ -183,6 +184,7 @@ function EditDialog({
   const words = { range: t("settings.invalidRange"), limit: t("settings.invalidLimit", { currency: currency ?? "" }) };
   return (
     <ChangeDialog
+      operation={`site-settings:${siteId}`}
       title={t("settings.edit")}
       intro={<p>{t("settings.intro")}</p>}
       action={t("settings.save")}

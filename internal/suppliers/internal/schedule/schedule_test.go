@@ -36,24 +36,20 @@ type system struct {
 	account  func() (adapter.Account, error)
 	opens    atomic.Int32
 	accounts atomic.Int32
-	// holdKeys, if set, makes the first listing of keys of each opened adapter end at the supplier's limits for as long
-	// as it says, as a listing of more pages than a window allows does; the second goes on and is counted as finished.
-	holdKeys     time.Duration
+	// keys and offer are the listings of the supplier: pages of one item each, and the limits the tests move into them.
+	keys, offer paging
+	// keysFinished counts the listings of keys that ended.
 	keysFinished atomic.Int32
 	// holdOpen, if set, makes the first Open end at the supplier's limits for as long as it says, as a login the
 	// supplier answers with a wait does; the next goes through.
-	holdOpen time.Duration
-	// stuckKeys, if not zero, makes every listing of keys end at limits that reopen that long from now (a time already
-	// past if negative), so that the round is held up for as long as the job goes on.
-	stuckKeys time.Duration
-	keysCalls atomic.Int32
+	holdOpen time.Time
 }
 
 func (*system) Kind() adapter.Kind            { return "fake" }
 func (*system) Buckets() []adapter.BucketSpec { return nil }
 func (s *system) Open(context.Context, adapter.Client, adapter.LoginStore) (adapter.Manager, error) {
-	if s.opens.Add(1) == 1 && s.holdOpen > 0 {
-		return nil, adapter.Blocked{Until: time.Now().Add(s.holdOpen)}
+	if s.opens.Add(1) == 1 && !s.holdOpen.IsZero() {
+		return nil, adapter.Blocked{Until: s.holdOpen}
 	}
 	if s.openErr != nil {
 		return nil, s.openErr
@@ -62,8 +58,7 @@ func (s *system) Open(context.Context, adapter.Client, adapter.LoginStore) (adap
 }
 
 type manager struct {
-	s    *system
-	keys int
+	s *system
 }
 
 func (m *manager) Account(context.Context) (adapter.Account, error) {
@@ -71,19 +66,25 @@ func (m *manager) Account(context.Context) (adapter.Account, error) {
 	return m.s.account()
 }
 
-func (*manager) Offer(context.Context) (adapter.Offer, error) { return adapter.Offer{}, nil }
+func (m *manager) Offer(_ context.Context, from adapter.Listing) (adapter.Page[adapter.Group], error) {
+	items, next, done, until := m.s.offer.read(from)
+	out := adapter.Page[adapter.Group]{Next: next, Done: done, Until: until}
+	for _, page := range items {
+		out.Items = append(out.Items, adapter.Group{Ref: fmt.Sprint(page), Name: "g", Ratio: "1", Facts: adapter.GroupFacts(`{}`), Models: []adapter.Model{{UpstreamName: "m"}}})
+	}
+	return out, nil
+}
 
-func (m *manager) Keys(context.Context) ([]adapter.KeyState, error) {
-	m.keys++
-	m.s.keysCalls.Add(1)
-	if m.s.stuckKeys != 0 {
-		return nil, adapter.Blocked{Until: time.Now().Add(m.s.stuckKeys)}
+func (m *manager) Keys(_ context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+	items, next, done, until := m.s.keys.read(from)
+	out := adapter.Page[adapter.KeyState]{Next: next, Done: done, Until: until}
+	for _, page := range items {
+		out.Items = append(out.Items, adapter.KeyState{Ref: adapter.KeyRef(fmt.Sprint(page)), Status: adapter.KeyActive})
 	}
-	if m.keys == 1 && m.s.holdKeys > 0 {
-		return nil, adapter.Blocked{Until: time.Now().Add(m.s.holdKeys)}
+	if done {
+		m.s.keysFinished.Add(1)
 	}
-	m.s.keysFinished.Add(1)
-	return nil, nil
+	return out, nil
 }
 
 func (*manager) KeySecret(context.Context, adapter.KeyRef) (secret.Secret, error) {
@@ -114,6 +115,7 @@ type cluster struct {
 	keys     *secret.Keyring
 	reader   *pg.DB // one pool for all the reads of a test, which polls
 	supplier uuid.UUID
+	now      func() time.Time
 }
 
 func newCluster(t *testing.T, s *system) *cluster {
@@ -127,7 +129,7 @@ func newCluster(t *testing.T, s *system) *cluster {
 		t.Fatal(err)
 	}
 	c := &cluster{
-		t: t, system: s, keys: keys,
+		t: t, system: s, keys: keys, now: time.Now,
 		// The projection maps a listing's upstream names by the catalog, so the supplier's database has one.
 		database: pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()}, catalog.Migrations),
 	}
@@ -188,7 +190,7 @@ func (c *cluster) node(holder string, sweepEvery time.Duration) *node {
 	q := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil)
 	cfg := Config{
 		DB: db, Scope: platform, Keys: c.keys, Egress: egress.NewForTesting(egresstest.Loopback(c.t)), Queue: q, Registry: reg,
-		Holder: holder, SweepEvery: sweepEvery, Now: time.Now, Logger: slog.New(slog.DiscardHandler),
+		Holder: holder, SweepEvery: sweepEvery, Now: c.now, Logger: slog.New(slog.DiscardHandler),
 	}
 	s, err := New(cfg)
 	if err != nil {
@@ -485,53 +487,31 @@ func TestAQueuedJobOfASupplierNoLongerSyncedDoesNothing(t *testing.T) {
 	}
 }
 
-// TestARoundHeldUpByTheLimitsGoesOnOverTheSameAdapter: when the supplier's limits end a listing half way, the job waits
-// for them to reopen and goes on with the adapter it has, whose listing remembers how far it got; a job that ended there
-// would leave the next to open a new adapter and begin the listing again, and a listing longer than a window would never
-// be finished.
-func TestARoundHeldUpByTheLimitsGoesOnOverTheSameAdapter(t *testing.T) {
+// TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen: an Open that the supplier's limits refuse is not remembered as
+// the round's failure: the next task of the round opens again and goes through, and the task the refusal stopped is due
+// when they reopen, so the round after it reads the balance.
+func TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen(t *testing.T) {
 	t.Parallel()
-	s := &system{account: healthy(), holdKeys: 300 * time.Millisecond}
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	s := &system{account: healthy(), holdOpen: now.Add(time.Minute)}
 	c := newCluster(t, s)
+	c.now = func() time.Time { return now }
 	if err := c.node("a", time.Hour).s.sync(t.Context(), c.supplier); err != nil {
 		t.Fatal(err)
 	}
-	if s.opens.Load() != 1 || s.keysFinished.Load() != 1 {
-		t.Errorf("the adapter was opened %d times and finished the listing %d times, want once and once", s.opens.Load(), s.keysFinished.Load())
+	if s.opens.Load() < 2 {
+		t.Errorf("the adapter was opened %d times, want the task after the refused open to open it again", s.opens.Load())
 	}
-}
+	if s.accounts.Load() != 0 {
+		t.Errorf("the balance was read %d times by a round whose open the limits refused, want it left for the round they reopen in", s.accounts.Load())
+	}
 
-// TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen: an Open that the supplier's limits refuse is not remembered as
-// the round's failure: the job waits and opens again, and the round goes through.
-func TestALoginHeldUpByTheLimitsIsTriedAgainWhenTheyReopen(t *testing.T) {
-	t.Parallel()
-	s := &system{account: healthy(), holdOpen: 300 * time.Millisecond}
-	c := newCluster(t, s)
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second) // a job that keeps the refusal waits here
-	defer cancel()
-	if err := c.node("a", time.Hour).s.sync(ctx, c.supplier); err != nil {
+	now = s.holdOpen
+	if err := c.node("b", time.Hour).s.sync(t.Context(), c.supplier); err != nil {
 		t.Fatal(err)
 	}
-	if s.opens.Load() < 2 || s.accounts.Load() != 1 {
-		t.Errorf("the adapter was opened %d times and the balance read %d times, want a second open and one read", s.opens.Load(), s.accounts.Load())
-	}
-}
-
-// TestAJobHeldUpByTheLimitsEndsWhenItsTimeIsUp: a round that the limits keep holding up ends with the job's budget,
-// even when the time they name has already passed, which would otherwise keep it going until the queue cancels it.
-func TestAJobHeldUpByTheLimitsEndsWhenItsTimeIsUp(t *testing.T) {
-	t.Parallel()
-	s := &system{account: healthy(), stuckKeys: -time.Hour}
-	c := newCluster(t, s)
-	n := c.node("a", time.Hour)
-	n.s.budget = 3 * time.Second
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	if err := n.s.sync(ctx, c.supplier); err != nil {
-		t.Fatalf("the job did not end within its budget: %v", err)
-	}
-	if s.keysCalls.Load() < 2 {
-		t.Errorf("the listing was tried %d times, want it retried while the budget lasted", s.keysCalls.Load())
+	if s.accounts.Load() != 1 {
+		t.Errorf("the balance was read %d times, want once: the refused open was not remembered as a failure", s.accounts.Load())
 	}
 }
 
