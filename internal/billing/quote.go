@@ -60,6 +60,7 @@ type Model struct {
 // applies to it, whether it can be reserved in segments (routing decides that per entry and request), and the endpoint
 // it would call, which the reservation keeps as the route a lost request is recorded with.
 type Quotable struct {
+	Version     uuid.UUID
 	Exchange    platform.ExchangeRate
 	Price       catalog.Schedule
 	Model       Model

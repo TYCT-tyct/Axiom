@@ -122,7 +122,9 @@ func TestAnUndeclaredTierStopsTheNextRoute(t *testing.T) {
 		Endpoints: func(context.Context) ([]suppliers.Routable, error) {
 			return []suppliers.Routable{routable(r.beta, protocol.Messages)}, nil
 		},
-		Prices: func(context.Context) (map[catalog.ModelID]billing.Sold, error) { return r.prices(), nil },
+		Prices: func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
+			return r.prices(), nil
+		},
 		UnknownItems: func(ctx context.Context) (items []billing.UnknownItem, err error) {
 			err = r.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error { items, err = billing.UnknownItems(ctx, tx); return err })
 			return items, err

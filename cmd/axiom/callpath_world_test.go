@@ -60,9 +60,10 @@ const (
 	searchCost   = 5_000
 	supplierKey  = "sk-supplier-secret"
 	// servedCost is what the supplier charges, in its native quota: a model's tokens and searches, at twice the price at
-	// the priority tier. The supplier's unit value is 0.001, which makes a standard token ten and forty billionths.
-	servedCost = `{"v":1,"currency":"XXX","rates":{"input":"0.00001","output":"0.00004","web_search":"0.005"},` +
-		`"service_tiers":{"priority":{"rates":{"input":"0.00002","output":"0.00008","web_search":"0.01"}}}}`
+	// the priority tier. Cache operations are explicitly free in this fixture: every declared token item needs a
+	// known cost before publication. Unit value 0.001 makes a standard input/output token ten and forty billionths.
+	servedCost = `{"v":1,"currency":"XXX","rates":{"input":"0.00001","output":"0.00004","cache_read":"0","cache_write":"0","web_search":"0.005"},` +
+		`"service_tiers":{"priority":{"rates":{"input":"0.00002","output":"0.00008","cache_read":"0","cache_write":"0","web_search":"0.01"}}}}`
 )
 
 // fakeSupplier is a new-api relay: it answers /v1/messages and /v1/responses with the recorded upstream streams, with

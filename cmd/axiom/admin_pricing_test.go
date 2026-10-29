@@ -194,7 +194,6 @@ func TestPricingRuleRefusals(t *testing.T) {
 		{"a group", ruleJSON(`{"kind":"group","id":"`+f.model+`"}`, everything, faced), "/rule/target/kind"},
 		{"a supplier", ruleJSON(`{"kind":"supplier","id":"`+f.model+`"}`, everything, faced), "/rule/target/kind"},
 		{"a source type", ruleJSON(`{"kind":"source_type","id":"relay"}`, everything, faced), "/rule/target/kind"},
-		{"cost plus", ruleJSON(`{"kind":"author","id":"acme"}`, everything, `{"kind":"cost_plus","markup_ratio":"0.25"}`), "/rule/method/kind"},
 		{"a multiplier by exchange", ruleJSON(`{"kind":"author","id":"acme"}`, everything,
 			`{"kind":"reference_multiplier","multiplier":"2","currency_conversion":"exchange"}`), "/rule/method/currency_conversion"},
 		{"a multiplier with no conversion named", ruleJSON(`{"kind":"author","id":"acme"}`, everything,
@@ -265,7 +264,7 @@ func TestPricingRuleConstraintsWait(t *testing.T) {
 	}
 	// Empty constraints are what every rule of this release has, and previewing one still accepts them.
 	rows := f.preview(`{"model_ids":["` + f.model + `"],"rule":` + ruleJSON(`{"kind":"author","id":"acme"}`, everything, faced) + `}`)
-	if len(rows) != 1 || rows[0].Status != adminapi.Priced {
+	if len(rows) != 1 || rows[0].Status != adminapi.PricingPreviewRowStatusCostUnknown {
 		t.Errorf("a preview with a rule of no constraints: %+v", rows)
 	}
 	if got := f.text("SELECT count(*)::text FROM billing.pricing_rules"); got != "1" {

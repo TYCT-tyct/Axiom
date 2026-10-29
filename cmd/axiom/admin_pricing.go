@@ -63,11 +63,13 @@ func ruleBody(r billing.Rule) (adminapi.PricingRule, error) {
 }
 
 // ruleProblem is a rule that breaks a rule of rules as a 422 naming the member of the rule.
-func ruleProblem(err error) error {
+func ruleProblem(err error) error { return pricingProblem(err, "/rule/") }
+
+func pricingProblem(err error, prefix string) error {
 	if e, ok := errors.AsType[*billing.RuleError](err); ok {
 		return &apiError{
 			status: http.StatusUnprocessableEntity, code: codeUnprocessable, message: "the rule breaks a rule of pricing rules",
-			fields: []errorField{{Pointer: "/rule/" + e.Field, Message: e.Reason}},
+			fields: []errorField{{Pointer: prefix + e.Field, Message: e.Reason}},
 		}
 	}
 	return err
@@ -131,9 +133,7 @@ func (a adminAPI) checkTier(ctx context.Context, tx pg.Tx, site accounts.Site, i
 // PreviewPricing shows what models would sell for, with the main site's rules or with one added or replaced for the
 // preview alone. Nothing is stored.
 //
-// M1 prices from the reference price, so a row carries the sale price and no cost: what an endpoint's cost is comes with
-// routing's endpoints in M2 (m1-plan.md §4.2), and until then `cost_unknown` and `below_floor` are statuses nothing
-// produces. A model no rule prices is `unpriced`, never sold at its reference price (docs/domains/billing.md「定价」).
+// The preview uses the same rule, cost-envelope and floor calculation as publication, without changing a price.
 func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPricingRequestObject) (adminapi.PreviewPricingResponseObject, error) {
 	site, ok := a.accounts.MainSite()
 	if !ok {
@@ -150,29 +150,46 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 	rules = slices.DeleteFunc(rules, func(r billing.Rule) bool {
 		return !r.Audience.Prices(audience.account, audience.tier)
 	})
-	snap, err := a.catalog.Current()
-	if err != nil {
-		return nil, err
-	}
+	var snap *catalog.Snapshot
 	models, err := modelIDsOf(request.Body.ModelIds)
 	if err != nil {
 		return nil, err
 	}
-	sold, unpriced := billing.SalePrices(rules, snap, models, site.Currency)
-	for _, err := range unpriced {
-		// A rule that cannot price the model it was set for leaves it unsold rather than emptying the site's prices; an
-		// administrator is told, since the rule has to change. The error names the rule and the model.
-		a.logger.Warn("a model has no sale price; it is not sold", "err", err)
+
+	var proposals map[catalog.ModelID]billing.Publication
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		snap, err = catalog.ReadSnapshot(ctx, tx)
+		if err != nil {
+			return err
+		}
+		costs, err := publicationCosts(ctx, tx, site.Currency)
+		if err != nil {
+			return err
+		}
+		proposals, err = billing.PreviewPrices(ctx, tx, uuid.UUID(site.ID), site.Currency, snap, rules, models, costs)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
+	a.reportPriceProblems(proposals)
 	rows := adminapi.PricingPreview{Data: make([]adminapi.PricingPreviewRow, 0, len(models))}
 	for i, id := range request.Body.ModelIds {
-		row, err := previewRow(id, snap, models[i], sold)
+		row, err := previewRow(id, snap, models[i], proposals)
 		if err != nil {
 			return nil, err
 		}
 		rows.Data = append(rows.Data, row)
 	}
 	return adminapi.PreviewPricing200JSONResponse(rows), nil
+}
+
+func (a adminAPI) reportPriceProblems(proposals map[catalog.ModelID]billing.Publication) {
+	for id, p := range proposals {
+		if p.Problem != "" {
+			a.logger.Warn("a model has no sale price; it is not sold", "model", id.String(), "err", p.Problem)
+		}
+	}
 }
 
 func modelIDsOf(ids []string) ([]catalog.ModelID, error) {
@@ -187,20 +204,54 @@ func modelIDsOf(ids []string) ([]catalog.ModelID, error) {
 }
 
 // previewRow is the row of one model: priced when sold has its sale price, else unpriced.
-func previewRow(id string, snap *catalog.Snapshot, model catalog.ModelID, sold map[catalog.ModelID]billing.Sold) (adminapi.PricingPreviewRow, error) {
+func previewRow(id string, snap *catalog.Snapshot, model catalog.ModelID, proposals map[catalog.ModelID]billing.Publication) (adminapi.PricingPreviewRow, error) {
 	m, ok := snap.Model(model)
 	if !ok {
 		return adminapi.PricingPreviewRow{}, catalog.ErrModelNotFound
 	}
-	row := adminapi.PricingPreviewRow{ModelId: id, Slug: m.Slug, Status: adminapi.Unpriced}
-	if s, ok := sold[model]; ok {
-		row.Status = adminapi.Priced
-		var err error
-		if row.Sale, err = scheduleBody(s.Schedule); err != nil {
+	row := adminapi.PricingPreviewRow{ModelId: id, Slug: m.Slug, Status: adminapi.PricingPreviewRowStatusUnpriced}
+	p := proposals[model]
+	if len(p.Requested) == 0 {
+		return row, nil
+	}
+	s, err := catalog.ParseSchedule(p.Requested)
+	if err != nil {
+		return row, err
+	}
+	row.Sale, err = scheduleBody(s)
+	if err != nil {
+		return row, err
+	}
+	if len(p.Cost) > 0 {
+		cost, err := converted[adminapi.PriceSchedule](p.Cost)
+		if err != nil {
 			return row, err
 		}
+		row.Cost = &cost
+	}
+	row.Status, err = previewFloorStatus(s, p.Floor)
+	if err != nil {
+		return row, err
 	}
 	return row, nil
+}
+
+func previewFloorStatus(s catalog.Schedule, raw []byte) (adminapi.PricingPreviewRowStatus, error) {
+	if len(raw) == 0 {
+		return adminapi.PricingPreviewRowStatusCostUnknown, nil
+	}
+	floor, err := catalog.ParseSchedule(raw)
+	if err != nil {
+		return "", err
+	}
+	safe, err := s.CoversCost(floor)
+	if err != nil {
+		return "", err
+	}
+	if !safe {
+		return adminapi.PricingPreviewRowStatusBelowFloor, nil
+	}
+	return adminapi.PricingPreviewRowStatusPriced, nil
 }
 
 // previewAudience is whom the preview prices for: the account and its tier when the request names an account, else the
