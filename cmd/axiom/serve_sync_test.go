@@ -19,9 +19,6 @@ import (
 
 // serveForTest keeps the entry's admission checks, with periodic downloads disabled unless a test supplies local data.
 func serveForTest(ctx context.Context, environ []string, logger *slog.Logger) error {
-	if err := singleNodeOnly(environ); err != nil {
-		return err
-	}
 	return serveWith(ctx, environ, logger, directEgress, startRecorder, nil)
 }
 

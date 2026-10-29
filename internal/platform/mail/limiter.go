@@ -2,7 +2,6 @@ package mail
 
 import (
 	"context"
-	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,14 +14,15 @@ import (
 	"uuid"
 
 	"axiom/internal/platform/kv"
+	"axiom/internal/platform/secret"
 )
 
 const (
-	// mailLabel derives the recipient key from the master key under a label of its own, as the login keys do: the API
+	// mailLabel derives the recipient key from the master-key snapshot under a label of its own, as the login keys do: the API
 	// keys' hash key rotates with two versions at once, and that must not split a recipient between nodes
 	// (internal/platform/kv/README.md「键」).
 	mailLabel = "axiom kv mail v1"
-	// mailKeyLen is the length of the recipient key, and of the master key it comes from.
+	// mailKeyLen is the length of the recipient key, and of the master key it is derived from.
 	mailKeyLen = 32
 )
 
@@ -152,15 +152,15 @@ func (t *throttle) keyFor(recipient string) string {
 // millis is a duration as the script counts it: whole milliseconds, rounded up, so that the key never expires early.
 func millis(d time.Duration) int64 { return max(1, (d + time.Millisecond - 1).Milliseconds()) }
 
-// deriveMailKey is the HMAC key of the recipients in the mail keys: HKDF-SHA256 from the master key's current
-// version, under a label of its own.
-func deriveMailKey(master []byte) ([mailKeyLen]byte, error) {
-	if len(master) != mailKeyLen {
+// deriveMailKey is the HMAC key of the recipients in the mail keys: HKDF-SHA256 from the master-key snapshot's
+// highest version, under a label of its own.
+func deriveMailKey(master *secret.MasterKeys) ([mailKeyLen]byte, error) {
+	if master == nil {
 		return [mailKeyLen]byte{}, errors.New("mail: a shared cache needs the master key, which the recipient keys are derived from")
 	}
-	key, err := hkdf.Key(sha256.New, master, nil, mailLabel, mailKeyLen)
+	key, err := master.DeriveKey(mailLabel)
 	if err != nil {
 		return [mailKeyLen]byte{}, fmt.Errorf("mail: derive the recipient key: %w", err)
 	}
-	return [mailKeyLen]byte(key), nil
+	return key, nil
 }
