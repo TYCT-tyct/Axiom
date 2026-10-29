@@ -30,6 +30,7 @@ func (EasyPay) normalizeSettings(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	s.Gateway = base
+	s = s.withDefaults()
 	if s.SignType == "" {
 		s.SignType = "MD5"
 	}
@@ -46,13 +47,15 @@ func (EasyPay) identitySettings(raw []byte) ([]byte, error) {
 		s.SignType = "MD5"
 	}
 	return jsonx.MarshalCanonical(struct {
+		Preset   string
 		Gateway  string
 		PID      string
 		SignType string
-	}{s.Gateway, s.PID, s.SignType})
+	}{s.Preset, s.Gateway, s.PID, s.SignType})
 }
 
 type easyPaySettings struct {
+	Preset   string            `json:"preset,omitempty"`
 	Gateway  string            `json:"gateway"`
 	PID      string            `json:"pid"`
 	Mode     string            `json:"mode"`
@@ -81,11 +84,15 @@ func (EasyPay) Open(c MerchantConfig) (Channel, error) {
 		return nil, err
 	}
 	s.Gateway = base
+	s = s.withDefaults()
 	if err := s.check(); err != nil {
 		return nil, err
 	}
 	if c.Client == nil || c.Currency == (platform.Currency{}) || c.Secrets["key"].Reveal() == "" {
 		return nil, errors.New("easypay: require client, currency and key")
+	}
+	if err := s.checkPreset(c.Currency); err != nil {
+		return nil, err
 	}
 	for name := range c.Secrets {
 		if name != "key" && name != "old_key" {
@@ -93,6 +100,16 @@ func (EasyPay) Open(c MerchantConfig) (Channel, error) {
 		}
 	}
 	return &easyPayChannel{settings: s, currency: c.Currency, key: c.Secrets["key"], oldKey: c.Secrets["old_key"], client: c.Client}, nil
+}
+
+func (s easyPaySettings) withDefaults() easyPaySettings {
+	if s.Preset == "epusdt" {
+		if s.Mode == "" {
+			s.Mode = "redirect"
+		}
+		s.Query = true
+	}
+	return s
 }
 
 func (s easyPaySettings) check() error {
@@ -147,11 +164,19 @@ func (c *easyPayChannel) Caps() Caps {
 	return caps
 }
 
-func (*easyPayChannel) Methods() []Method { return nil }
+func (c *easyPayChannel) Methods() []Method {
+	if c.settings.Preset == "epusdt" {
+		return []Method{"usdt.tron"}
+	}
+	return nil
+}
 
 func (c *easyPayChannel) Create(ctx context.Context, r CreateRequest) (Checkout, error) {
 	if !easyPayToken(r.Upstream) || r.Total.Currency != c.currency || r.Total.Minor <= 0 || !easyPayHTTPS(r.ReturnURL) {
 		return Checkout{}, &Rejected{Code: "invalid_order", Message: "invalid method, amount or return URL"}
+	}
+	if c.settings.Preset == "epusdt" && (r.Method != "usdt.tron" || r.Upstream != "usdt.tron") {
+		return Checkout{}, &Rejected{Code: "invalid_order", Message: "Epusdt requires usdt.tron"}
 	}
 	v := c.createParams(r)
 	if c.settings.Mode == "redirect" {
@@ -167,6 +192,9 @@ func (c *easyPayChannel) Create(ctx context.Context, r CreateRequest) (Checkout,
 
 func (c *easyPayChannel) createParams(r CreateRequest) url.Values {
 	v := url.Values{"pid": {c.settings.PID}, "type": {r.Upstream}, "out_trade_no": {r.Order.TypeID()}, "notify_url": {r.NotifyURL}, "return_url": {r.ReturnURL}, "name": {r.Subject}, "money": {easyPayFormat(r.Total)}}
+	if c.settings.Preset == "epusdt" {
+		v.Set("currency", strings.ToLower(c.currency.String()))
+	}
 	if cid := c.settings.CIDs[r.Method]; cid != "" {
 		v.Set("cid", cid)
 	}

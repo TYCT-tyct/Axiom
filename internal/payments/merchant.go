@@ -156,7 +156,7 @@ func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 	} else if rev, err = p.lockForSave(ctx, tx, &in, settings); err != nil {
 		return Merchant{}, err
 	}
-	if err = p.validate(plugin, in, settings); err != nil {
+	if err = p.validate(ctx, plugin, in, settings); err != nil {
 		return Merchant{}, err
 	}
 	if err = p.write(ctx, tx, in, settings, rev, created); err != nil {
@@ -261,7 +261,7 @@ func sameSettingsIdentity(plugin Plugin, before, after []byte) (bool, error) {
 }
 
 // validate has the plugin open the configuration it would run with; every method must be one the channel offers.
-func (p *Payments) validate(plugin Plugin, in MerchantInput, settings []byte) error {
+func (p *Payments) validate(ctx context.Context, plugin Plugin, in MerchantInput, settings []byte) error {
 	ch, err := plugin.Open(MerchantConfig{ID: in.ID, Currency: in.Currency, Settings: settings, Secrets: in.Secrets, Client: p.client})
 	if err != nil {
 		return &FieldError{"/settings", err.Error()}
@@ -270,6 +270,11 @@ func (p *Payments) validate(plugin Plugin, in MerchantInput, settings []byte) er
 		if methods := ch.Methods(); methods != nil && !slices.Contains(methods, m.Method) {
 			return &FieldError{fmt.Sprintf("/methods/%d/method", i), "is not offered by this channel"}
 		}
+	}
+	if validator, ok := ch.(interface {
+		validateMerchant(context.Context, MerchantInput) error
+	}); ok {
+		return validator.validateMerchant(ctx, in)
 	}
 	return nil
 }
