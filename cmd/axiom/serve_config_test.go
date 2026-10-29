@@ -216,3 +216,10 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestHealthModeRejectsUnknownValues(t *testing.T) {
+	_, err := readSettings([]string{"AXIOM_HEALTH_MODE=invalid"})
+	if err == nil || !strings.Contains(err.Error(), "AXIOM_HEALTH_MODE: want observe or enforce") {
+		t.Fatalf("mode validation: %v", err)
+	}
+}
