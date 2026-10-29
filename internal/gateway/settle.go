@@ -202,7 +202,8 @@ func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer) (int64, er
 // upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the first
 // sampling's estimate (billing.InputEstimate: the text at the count of the endpoint's model family where it has a
 // tokenizer and at 4 bytes a token otherwise, an image at 1600 tokens, a file at 4096, each held to its bound), unless
-// any input-side item was reported; the output by the text, reasoning and tool input read at outputBytesPerToken, never
+// any input-side item was reported, in which case the estimate stands in place of the counts an invalid report kept
+// rather than beside them; the output by the text, reasoning and tool input read at outputBytesPerToken, never
 // below a count reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own,
 // which metering holds the output to); the web searches by the events seen. The ratios stand in for the estimates by
 // model the docs want, which have no data yet; the bounds and the cap keep an estimate within what the reservation
@@ -220,7 +221,10 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 		counts[it] = reply.Usage.Count(it)
 	}
 	if !inputReported(u) { // none of the input was reported, so it is estimated
-		counts[catalog.ItemInput] = max(counts[catalog.ItemInput], input)
+		// The estimate is the whole prompt; a report that was accepted before a count went down keeps the counts it
+		// took, and the input side's counts are parts of one prompt, a cache read even overlapping the plain input.
+		// So only what those counts are short of the estimate is added, never the estimate beside them (#339).
+		counts[catalog.ItemInput] += max(input-reply.Usage.InputTotal(), 0)
 	}
 	if !reply.Reported.Has(catalog.ItemOutput) {
 		out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
@@ -236,6 +240,13 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	usage, err := reply.Usage.Recount(counts, reply.Usage.Unknown())
 	if err != nil {
 		panic(err) // every count is within 0 and maxCount, and the tier and items are the usage's own
+	}
+	if n, ok := usage.PhysicalInput(); ok && !inputReported(u) && input > n {
+		// The prompt the estimate stands for is longer than the physical total the invalid report kept: the band and
+		// the client's echo read the physical total, and leaving it short would price the estimate in a lower band.
+		if usage, err = usage.WithPhysicalInput(min(input, maxCount)); err != nil {
+			panic(err) // the estimate is held to maxCount above
+		}
 	}
 	reply.Usage = usage
 	return segments
