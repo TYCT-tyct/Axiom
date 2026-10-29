@@ -209,7 +209,7 @@
 
 ### 邮件找回和改密码
 
-业务流程和取舍见[登录与会话](../../docs/domains/accounts.md#登录与会话)。`RegisterPasswordRecovery` 在队列启动前注册 `accounts.password_reset`（notifications 队列，最多 5 次），`Config.Recovery` 把同一对象交给 HTTP 服务；`RegisterRegistration` 注册 `accounts.registration` 和每分钟的 `accounts.registration_cleanup`，`Config.Registration` 交给 HTTP 服务。SMTP 未配置时不注册两个签发 worker，避免取走其他节点能处理的任务，清理任务仍注册；SMTP 未配置或没有接入时服务返回 `ErrBusy`，HTTP 映射 503。队列只携带请求 UUID，无个人信息或凭证。工作期限 15 秒；错误日志只记 job_id、attempt、类别和 SQLSTATE，原始错误及 detail 不进日志。交给 River 的错误仍为固定文字。没有 HTTPS 域名或历史邮箱不合法时提交清空邮箱并取消任务，临时故障由 River 重试、最终失败由现有告警暴露。
+业务流程和取舍见[登录与会话](../../docs/domains/accounts.md#登录与会话)。`RegisterPasswordRecovery` 在队列启动前注册 `accounts.password_reset`（notifications 队列，最多 5 次），`Config.Recovery` 把同一对象交给 HTTP 服务；`RegisterRegistration` 注册 `accounts.registration`（notifications 队列）和每分钟的 `accounts.registration_cleanup`（archive 队列），`Config.Registration` 交给 HTTP 服务。SMTP 未配置时不注册两个签发 worker，避免取走其他节点能处理的任务，清理任务仍注册；SMTP 未配置或没有接入时服务返回 `ErrBusy`，HTTP 映射 503。队列只携带请求 UUID，无个人信息或凭证。工作期限 15 秒；错误日志只记 job_id、attempt、类别和 SQLSTATE，原始错误及 detail 不进日志。交给 River 的错误仍为固定文字。没有 HTTPS 域名或历史邮箱不合法时提交清空邮箱并取消任务，临时故障由 River 重试、最终失败由现有告警暴露。
 
 迁移 00008：`password_reset_requests` 属站点范围，主键 `(site_id, email_hash)`，摘要为规范化邮箱的 SHA-256；`id` 是每次请求的新 UUIDv7，`email` 在处理后清空，`domain` 是请求时登记的控制台域名，`language` 为 zh/en，`expires_at` 为请求提交起 30 分钟。每个邮箱无条件 upsert 再入队，调用方路径不读用户。请求记录复用，所以没有终态策略；它的新 ID 同时阻止旧链接和旧任务生效。原始待处理邮箱只在 RLS 请求表，邮件正文只在 RLS outbox；`accounts.password_reset_cleanup` 在 archive 队列每分钟清理到期请求、摘要和令牌，每次每表最多 1000 行，15 秒超时。RLS 的 DELETE 策略仅允许删除范围内已过期行，保护有效凭证，过期无需保留来防重放；SMTP 关闭时仍注册清理任务。清理失败重试并留下分类日志。
 

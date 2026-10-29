@@ -307,7 +307,7 @@ type registrationCleanupArgs struct{}
 
 func (registrationCleanupArgs) Kind() string { return "accounts.registration_cleanup" }
 func (registrationCleanupArgs) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: pg.QueueNotifications, MaxAttempts: 5}
+	return river.InsertOpts{Queue: pg.QueueArchive, MaxAttempts: 5}
 }
 
 // logFailure records only the category, the SQLSTATE and the attempt: a link or an address must not reach the log.
