@@ -92,7 +92,7 @@ func TestQuoteEntry(t *testing.T) {
 			tools(text, ServerTool{Item: webSearch, MaxUses: 1}), true, "7980",
 		},
 	} {
-		got, err := quoteEntry(tc.d, entry(t, tc.segmentable, 3), segments)
+		got, err := quoteEntry(tc.d, entry(t, tc.segmentable, 3), segments, false)
 		if err != nil || units(t, got.amount) != tc.want {
 			t.Errorf("%s: quote = %s, %v; want %s", tc.name, units(t, got.amount), err, tc.want)
 		}
@@ -132,7 +132,7 @@ func TestQuoteEntryModel(t *testing.T) {
 			entry(t, false, 0), "14180",
 		},
 	} {
-		got, err := quoteEntry(tc.d, tc.e, segments)
+		got, err := quoteEntry(tc.d, tc.e, segments, false)
 		if err != nil || units(t, got.amount) != tc.want {
 			t.Errorf("%s: quote = %s, %v; want %s", tc.name, units(t, got.amount), err, tc.want)
 		}
@@ -163,7 +163,7 @@ func TestQuoteEntryRefuses(t *testing.T) {
 		{"a model without a context length", Demand{}, noContext},
 		{"an output limit past int64 behind a small first segment", Demand{Choices: 2}, hugeOutput},
 	} {
-		if got, err := quoteEntry(tc.d, tc.e, segments); err == nil {
+		if got, err := quoteEntry(tc.d, tc.e, segments, false); err == nil {
 			t.Errorf("%s: quote = %s, want an error", tc.name, units(t, got.amount))
 		}
 	}
@@ -292,14 +292,47 @@ func TestQuoteEntryNeedsSegments(t *testing.T) {
 		"no overshoot":    {Output: 40},
 		"neither":         {},
 	} {
-		if got, err := quoteEntry(d, entry(t, true, 3), s); !errors.Is(err, errNoSegments) {
+		if got, err := quoteEntry(d, entry(t, true, 3), s, false); !errors.Is(err, errNoSegments) {
 			t.Errorf("%s: quote = %s, %v; want errNoSegments", name, units(t, got.amount), err)
 		}
 		if _, err := Quote(d, []Quotable{entry(t, true, 3)}, s, nil); !errors.Is(err, errNoSegments) {
 			t.Errorf("%s: Quote = %v; want errNoSegments", name, err)
 		}
 	}
-	if got, err := quoteEntry(d, entry(t, false, 3), Segments{}); err != nil || units(t, got.amount) != "5080" {
+	if got, err := quoteEntry(d, entry(t, false, 3), Segments{}, false); err != nil || units(t, got.amount) != "5080" {
 		t.Errorf("a whole entry with no segments: quote = %s, %v; want 5080", units(t, got.amount), err)
+	}
+}
+
+func TestReservedCostEstimatesMissingPricesWithoutChangingAdmission(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, rates, balance string
+		openAI               bool
+		reports              catalog.ItemSet
+		tools                []ServerTool
+	}{
+		{"missing tier", `"input":"1","cache_read":"1","output":"2"`, "22", false, 1 << catalog.ItemCacheRead, nil},
+		{"overlapping caches", `"input":"1","cache_read":"1","output":"2"`, "24", true, 1<<catalog.ItemCacheRead | 1<<catalog.ItemCacheWrite, nil},
+		{"known tool stays dearer", `"input":"1","output":"2","web_search":"5"`, "227", false, 0, []ServerTool{{Item: catalog.ItemWebSearch, MaxUses: 1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := Quotable{
+				Price: mustSchedule(t, `{"v":1,"currency":"USD","rates":{`+tc.rates+`}}`), MaxOutput: 10,
+				Model: Model{ContextLength: 100, Reports: tc.reports, OpenAIUsage: tc.openAI, ServiceTiers: 1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierPriority},
+			}
+			d := Demand{TextBytes: 1, ServiceTiers: ^catalog.ServiceTierSet(0), ServerTools: tc.tools}
+			cost, err := ReservedCost(d, e)
+			want, parseErr := platform.ParseExact(tc.balance)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			if err != nil || cost.Cmp(want) != 0 {
+				t.Fatalf("native estimate = %v, %v, want %v", cost, err, want)
+			}
+			if _, err := Quote(d, []Quotable{e}, Segments{}, nil); !errors.Is(err, ErrUnpriced) {
+				t.Fatalf("sale admission changed its missing-price rule: %v", err)
+			}
+		})
 	}
 }

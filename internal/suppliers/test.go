@@ -190,7 +190,7 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	if prompt == "" {
 		prompt = TestPrompt
 	}
-	attempt, err := s.Acquire(req.Endpoint)
+	attempt, err := s.acquire(req.Endpoint, true)
 	if err != nil {
 		return TestResult{}, err
 	}
@@ -238,9 +238,21 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	}
 	defer resp.Body.Close() //nolint:errcheck // nothing more to learn from a body that fails to close
 	result.Status = resp.StatusCode
-	result.read(ctx, resp.Body, sent)
+	attempt.readProbe(ctx, &result, resp.Body, sent)
 	result.Total, result.FinishedAt = time.Since(sent), s.now()
 	return result, nil
+}
+
+func (a *Attempt) readProbe(ctx context.Context, result *TestResult, body io.Reader, sent time.Time) {
+	result.read(ctx, body, sent)
+	if result.Outcome() == TestPassed {
+		rt := a.ep.funds.state
+		rt.mu.Lock()
+		if rt.version == a.fundsRest {
+			rt.rested.Store(false)
+		}
+		rt.mu.Unlock()
+	}
 }
 
 // fail keeps a known refusal free even if the lifetime expires at the same time. The lifetime is our limit,

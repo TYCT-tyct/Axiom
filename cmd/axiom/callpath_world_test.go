@@ -69,12 +69,14 @@ const (
 // fakeSupplier is a new-api relay: it answers /v1/messages and /v1/responses with the recorded upstream streams, with
 // the request id header a new-api relay sends, and remembers what it was sent.
 type fakeSupplier struct {
-	server   *httptest.Server
-	streams  map[string]string // the recorded upstream stream each path answers with
-	mu       sync.Mutex
-	replies  map[string]string // what a path answers with instead, until answer clears it
-	seen     []supplied
-	failures []int // HTTP statuses consumed before the recorded successful replies
+	server      *httptest.Server
+	streams     map[string]string // the recorded upstream stream each path answers with
+	mu          sync.Mutex
+	replies     map[string]string // what a path answers with instead, until answer clears it
+	seen        []supplied
+	retryAfter  string // optional Retry-After on failed replies
+	failureBody string // optional classified rejection body
+	failures    []int  // HTTP statuses consumed before the recorded successful replies
 }
 
 type supplied struct{ path, auth, body string }
@@ -101,12 +103,12 @@ func newFakeSupplier(t *testing.T) *fakeSupplier {
 		if err != nil {
 			t.Errorf("the fake supplier could not read a request: %v", err)
 		}
-		n, reply, status := f.record(supplied{r.URL.Path, r.Header.Get("Authorization"), string(body)})
+		n, reply, status, retryAfter := f.record(supplied{r.URL.Path, r.Header.Get("Authorization"), string(body)})
 		w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.Itoa(n))
 		if status != 0 {
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", retryAfter)
 			w.WriteHeader(status)
-			reply = `{"error":{"type":"new_api_error","message":"upstream refused"}}`
 		} else {
 			if reply == "" {
 				http.NotFound(w, r)
@@ -124,7 +126,7 @@ func newFakeSupplier(t *testing.T) *fakeSupplier {
 
 // record remembers a call and says how many there have been, and what it is to be answered with: nothing for a path the
 // supplier does not serve.
-func (f *fakeSupplier) record(s supplied) (n int, reply string, status int) {
+func (f *fakeSupplier) record(s supplied) (n int, reply string, status int, retryAfter string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seen = append(f.seen, s)
@@ -134,7 +136,13 @@ func (f *fakeSupplier) record(s supplied) (n int, reply string, status int) {
 	if reply = f.replies[s.path]; reply == "" {
 		reply = f.streams[s.path]
 	}
-	return len(f.seen), reply, status
+	if status != 0 {
+		reply = f.failureBody
+		if reply == "" {
+			reply = `{"error":{"type":"new_api_error","message":"upstream refused"}}`
+		}
+	}
+	return len(f.seen), reply, status, f.retryAfter
 }
 
 // answer makes the path reply with the stream from now on, or with its recorded one again when the stream is empty.

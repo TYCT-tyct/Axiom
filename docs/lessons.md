@@ -6,7 +6,7 @@
 
 ## 测试按全进程状态判成败
 
-`TestFailedStartLeavesNoRecorderWriter` 用 `runtime.Stack(_, true)` 扫描全部 goroutine 找 `Recorder.writer`，判断依据是整个进程而不是这次 `serve` 调用自己的对象；#327 把测试并行后，它看到其他测试节点的写入器。该测试已改成断言本次调用创建的 `Recorder`（`Done()`，#338）。待加的检查：lint 禁止 `_test.go` 中出现 `runtime.Stack(…, true)`、`runtime.NumGoroutine`、`runtime.ReadMemStats`（`alloctest` 除外）。
+`TestFailedStartLeavesNoRecorderWriter` 用 `runtime.Stack(_, true)` 扫描全部 goroutine 找 `Recorder.writer`，判断依据是整个进程而不是这次 `serve` 调用自己的对象；#327 把测试并行后，它看到其他测试节点的写入器。该测试已改成断言本次调用创建的 `Recorder`（`Done()`，#338）。同类问题在 #313 的付得起分配测试中再次出现：`testing.AllocsPerRun` 也统计全进程，现已改为 `alloctest.Measure` 的隔离子进程。待加的检查：lint 禁止 `_test.go` 中出现 `runtime.Stack(…, true)`、`runtime.NumGoroutine`、`runtime.ReadMemStats`、`testing.AllocsPerRun`（`alloctest` 除外）。
 
 证据：合并车 train/main/39266027524-2 的 go-test 失败（`serve_test.go:390`）
 哪一层没拦住：CONTRIBUTING「时序」只写了「不用 `runtime.ReadMemStats` 之类的全进程计数」，没有 lint；#327 的评审没看出并行化影响了这个测试
@@ -36,3 +36,11 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 证据：PR #420 的 `5703a9b` 把 `suppliers/README.md` 的清单投影、登录唤醒、状态行先于供应商行的锁顺序说明替换成旧版，独立评审要求恢复；旧扣费写入接口的名字也混回文档，而当前实现是 `reconcile.Ingest`。
 哪一层没拦住：冲突解决后的自审只核对了新增位置协议，没有逐条检查同节原有的不变量；文档检查不核验「登录被替换时唤醒」这种正文引用。供应商模块此类合并应以 main 的持久化小节为底，核对投影、唤醒、锁顺序、状态格式、next_due 六项均保留，再加本次的位置协议；不能把旧分支的整段当冲突答案。
 出现：2026-10-28
+
+## 原生成本完整性误用售价上架门槛
+
+#313 最初把供应商成本计划直接交给售价的严格报价路径。new-api 只公布标准档 token 价格；真实请求未指定服务档时可能接受目录的全部等级，目录也可能报告音频或搜索，于是正余额端点被当成 `supplier_balance` 暂时排除。原生成本现按最高已知 token 单价估算缺项，其他不能报价的原因单独记录；售价准入保持严格。回归用 new-api 形状的成本计划、真实默认的任意等级集合，并覆盖音频、搜索、缓存重叠、已知更高价格和溢出分类。
+
+证据：提交 6e3ae54 的独立评审第 1 条；修复前默认档、音频和搜索三例均在余额充足时失败，溢出被记为暂时余额不足。
+哪一层没拦住：路由测试的请求辅助函数固定标准档，端到端夹具又补齐成本价格，未保留适配器真实的不完整计划形状。今后扩展原生成本检查需保留这组不完整计划与默认请求的组合回归。
+出现：2026-10-29

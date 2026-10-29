@@ -172,6 +172,7 @@ func rat(a adapter.Amount) *big.Rat {
 }
 
 func (e *Engine) balance(ctx context.Context, c *Commit) error {
+	observed := e.now() // a read begun before a refusal cannot clear that refusal when it eventually returns
 	acc, err := e.mgr.Account(ctx)
 	if err != nil {
 		return err
@@ -185,7 +186,7 @@ func (e *Engine) balance(ctx context.Context, c *Commit) error {
 			c.Events = append(c.Events, Event{Kind: BalanceCrossed, Old: string(s.Balance), New: string(acc.Balance), Why: map[bool]string{true: "above", false: "below"}[now]})
 		}
 	}
-	s.Balance, s.Funding, s.BalanceAt = acc.Balance, acc.Funding, e.now()
+	s.Balance, s.Funding, s.BalanceAt = acc.Balance, acc.Funding, observed
 	switch low := rat(acc.Balance).Cmp(rat(e.set.LowBalance)) < 0; {
 	case low && !s.LowNotified:
 		s.LowNotified = true

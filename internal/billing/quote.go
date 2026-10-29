@@ -157,7 +157,7 @@ func (*UnboundedError) Unwrap() error { return ErrUnbounded }
 func Quote(d Demand, q []Quotable, s Segments, avail []Available) (Reservation, error) {
 	r := Reservation{quotes: make([]quote, len(q)), trigger: 400 + rand.Int64N(201)} //nolint:gosec // G404: spreads extensions over time, not a secret
 	for i, e := range q {
-		eq, err := quoteEntry(d, e, s)
+		eq, err := quoteEntry(d, e, s, false)
 		if err != nil {
 			return Reservation{}, fmt.Errorf("entry %d: %w", i, err)
 		}
@@ -177,6 +177,16 @@ func Quote(d Demand, q []Quotable, s Segments, avail []Available) (Reservation, 
 	return r, nil
 }
 
+// ReservedCost returns a single entry's full-generation bound in its schedule's units. Routing uses a supplier's
+// native cost schedule here, so affordability follows Quote's bounds without allocating a reservation or drawing a
+// segment trigger. Supplier balances cannot reserve extensions, so this always covers the complete output. Missing
+// native prices are estimated at the highest known token rate; this does not alter user admission or settlement.
+func ReservedCost(d Demand, e Quotable) (platform.Exact, error) {
+	e.Segmentable = false
+	q, err := quoteEntry(d, e, Segments{}, true)
+	return q.amount, err
+}
+
 func shortSource(amount platform.Exact, avail []Available) int {
 	for i, a := range avail {
 		if amount.Cmp(a.Amount) > 0 {
@@ -189,10 +199,11 @@ func shortSource(amount platform.Exact, avail []Available) int {
 // quoteEntry follows docs/domains/billing.md「预留与结算」: the input of every sampling at its bound, every server tool
 // at its most uses, and the output, the first segment plus the overshoot allowance or else the whole limit, each at
 // the dearest price it can have.
-func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
+func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, err error) {
 	if err := checkEntry(e, s); err != nil {
 		return q, err
 	}
+	prices := quotePrices{schedule: &e.Price, estimateCost: estimateCost}
 	q.tiers = e.Model.ServiceTiers
 	window := e.Model.ContextLength
 	tiers := d.ServiceTiers
@@ -226,17 +237,17 @@ func quoteEntry(d Demand, e Quotable, s Segments) (q quote, err error) {
 		// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
 		in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
 	}
-	firstPrice, ok1 := inputCeiling(e.Price, in, tiers, first, e.Model.OpenAIUsage)
-	restPrice, ok2 := inputCeiling(e.Price, in, tiers, window, e.Model.OpenAIUsage)
+	firstPrice, ok1 := prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
+	restPrice, ok2 := prices.inputCeiling(in, tiers, window, e.Model.OpenAIUsage)
 	outItems := catalog.ItemSet(1<<catalog.ItemOutput|1<<catalog.ItemReasoning|1<<catalog.ItemImageOut) |
 		e.Model.Reports&(1<<catalog.ItemAudioOut)
-	outPrice, ok3 := e.Price.Ceiling(outItems, tiers, longest)
+	outPrice, ok3 := prices.ceiling(outItems, tiers, longest)
 	if !ok1 || !ok2 || !ok3 {
 		return q, ErrUnpriced
 	}
 	q.output = outPrice
 	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
-	if err := q.priceServerTools(d, e, tiers, uses, searchable, restPrice); err != nil {
+	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, restPrice); err != nil {
 		return q, err
 	}
 	q.allowance = outPrice.Mul(allowance)
@@ -259,7 +270,7 @@ func checkEntry(e Quotable, s Segments) error {
 // priceServerTools adds every server tool at its most uses to the fixed part and, when the request enables web
 // search, prices what a search beyond them costs the meter: its fee and the samplings it adds, rereading the whole
 // context at the input price of the later samplings, twice with compaction.
-func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
+func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
 	searchable bool, resample inputPrice,
 ) error {
 	window := e.Model.ContextLength
@@ -267,7 +278,7 @@ func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTier
 		if n == 0 {
 			continue
 		}
-		price, ok := e.Price.Ceiling(1<<catalog.Item(it), tiers, window)
+		price, ok := prices.ceiling(1<<catalog.Item(it), tiers, window)
 		if !ok {
 			return ErrUnpriced
 		}
@@ -277,7 +288,7 @@ func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTier
 		return nil
 	}
 	var ok bool
-	if q.search, ok = e.Price.Ceiling(1<<catalog.ItemWebSearch, tiers, window); !ok {
+	if q.search, ok = prices.ceiling(1<<catalog.ItemWebSearch, tiers, window); !ok {
 		return ErrUnpriced
 	}
 	q.searches, q.resample, q.rereads = uses[catalog.ItemWebSearch], resample, window
@@ -285,6 +296,29 @@ func (q *quote) priceServerTools(d Demand, e Quotable, tiers catalog.ServiceTier
 		q.rereads = mul(window, 2)
 	}
 	return nil
+}
+
+// quotePrices keeps sale admission strict while native cost estimation can use an incomplete upstream schedule.
+type quotePrices struct {
+	schedule      *catalog.Schedule
+	estimateCost  bool
+	fallback      platform.UnitPrice
+	fallbackReady bool
+}
+
+func (prices *quotePrices) ceiling(items catalog.ItemSet, tiers catalog.ServiceTierSet, length int64) (platform.UnitPrice, bool) {
+	highest, missing := prices.schedule.Highest(items, tiers, length)
+	if !missing || !prices.estimateCost {
+		return highest, !missing
+	}
+	if !prices.fallbackReady {
+		prices.fallback, _ = prices.schedule.Highest(tokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
+		prices.fallbackReady = true
+	}
+	if highest.Cmp(prices.fallback) < 0 {
+		highest = prices.fallback
+	}
+	return highest, true
 }
 
 // inputPrice bounds either disjoint input quantities or overlapping cache reads and writes. Keeping two unit
@@ -301,13 +335,13 @@ func (p inputPrice) Mul(n int64) platform.Exact {
 
 // inputCeiling is the dearest input price. An OpenAI call may bill the same cached tokens as a read and as a write, so
 // its ceiling keeps both prices to be added; any other call bills its items apart, and the dearest one bounds them.
-func inputCeiling(s catalog.Schedule, items catalog.ItemSet, tiers catalog.ServiceTierSet, length int64, overlap bool) (p inputPrice, ok bool) {
-	p.ordinary, ok = s.Ceiling(items, tiers, length)
+func (prices *quotePrices) inputCeiling(items catalog.ItemSet, tiers catalog.ServiceTierSet, length int64, overlap bool) (p inputPrice, ok bool) {
+	p.ordinary, ok = prices.ceiling(items, tiers, length)
 	if !overlap || !ok || !items.Has(catalog.ItemCacheRead) || !items.Has(catalog.ItemCacheWrite) {
 		return p, ok
 	}
-	p.read, _ = s.Ceiling(1<<catalog.ItemCacheRead, tiers, length)
-	p.write, _ = s.Ceiling(1<<catalog.ItemCacheWrite, tiers, length)
+	p.read, _ = prices.ceiling(1<<catalog.ItemCacheRead, tiers, length)
+	p.write, _ = prices.ceiling(1<<catalog.ItemCacheWrite, tiers, length)
 	return p, true
 }
 

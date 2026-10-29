@@ -89,10 +89,11 @@ const maxErrorBody = 64 << 10
 
 // Attempt is one call to one credential of an endpoint, from Acquire to Done.
 type Attempt struct {
-	s      *Service
-	ep     *endpoint
-	cred   *credential
-	priced time.Time
+	s         *Service
+	ep        *endpoint
+	cred      *credential
+	priced    time.Time
+	fundsRest uint64 // refusal observed when an explicit probe starts
 
 	mu     sync.Mutex
 	ref    string
@@ -101,15 +102,26 @@ type Attempt struct {
 }
 
 // Acquire takes a slot on the endpoint's least busy credential that is neither resting nor expired and whose rolling
-// minute admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint or
-// ErrNoSlot when there is none, and gateway moves on to its next entry: that is not an attempt. The slot is held until
-// Done.
-func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
+// minute admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint,
+// ErrSupplierResting or ErrNoSlot when there is none, and gateway moves on to its next entry: that is not an attempt.
+// The slot is held until Done.
+func (s *Service) Acquire(id EndpointID) (*Attempt, error) { return s.acquire(id, false) }
+
+func (s *Service) acquire(id EndpointID, probe bool) (*Attempt, error) {
 	for range 8 { // another caller may take the slot or the window's last request between looking and swapping
 		snap := s.snap.Load()
 		ep, ok := snap.endpoints[id]
 		if !ok {
 			return nil, ErrNoEndpoint
+		}
+		if !probe && ep.funds.resting() {
+			return nil, ErrSupplierResting
+		}
+		var fundsRest uint64
+		if probe {
+			ep.funds.state.mu.Lock()
+			fundsRest = ep.funds.state.version
+			ep.funds.state.mu.Unlock()
 		}
 		now := s.now() // the credential may have rested or expired since the last look
 		best, n := leastBusy(ep, now)
@@ -124,7 +136,7 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 			best.rt.inflight.Add(-1) // no request was made: the slot goes back, and another credential is tried
 			continue
 		}
-		return &Attempt{s: s, ep: ep, cred: best, priced: now}, nil
+		return &Attempt{s: s, ep: ep, cred: best, priced: now, fundsRest: fundsRest}, nil
 	}
 	return nil, ErrNoSlot
 }
@@ -277,9 +289,13 @@ func transportFailure(wrote bool) *Failure {
 	return &Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.Transport{}}
 }
 
-// rest keeps a credential the supplier refused from being picked for a while: until the time the supplier named, or
-// for the configured rest when it named none. Faults of other scopes are for routing and quality to act on.
+// rest pauses the whole supplier on a balance refusal, and an individual credential until its stated reset or
+// configured cooldown. Other faults are for routing and quality.
 func (a *Attempt) rest(f Failure) {
+	if _, low := f.Cause.(adapter.SupplierBalanceLow); low && f.Scope == adapter.ScopeSupplier {
+		a.ep.funds.rest(a.s.now())
+		return
+	}
 	if f.Scope != adapter.ScopeCredential {
 		return
 	}

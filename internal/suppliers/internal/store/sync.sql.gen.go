@@ -292,6 +292,33 @@ func (q *Queries) ReleaseSyncLease(ctx context.Context, db DBTX, arg ReleaseSync
 	return err
 }
 
+const requestBalanceSync = `-- name: RequestBalanceSync :exec
+UPDATE suppliers.sync_states
+SET listing = CASE WHEN listing @> jsonb_build_object('version', version)
+        THEN jsonb_set(listing, '{version}', to_jsonb($1::bigint)) ELSE listing END,
+    version = $1, state = $2, next_due = LEAST(next_due, $3)
+WHERE supplier_id = $4
+`
+
+type RequestBalanceSyncParams struct {
+	Version    int64
+	State      []byte
+	NextDue    time.Time
+	SupplierID uuid.UUID
+}
+
+// Preserve the lease and fence; the raised state version makes any step already in flight retry from this state.
+// Carry only a position bound to this state; an older node's invalidation must not be undone.
+func (q *Queries) RequestBalanceSync(ctx context.Context, db DBTX, arg RequestBalanceSyncParams) error {
+	_, err := db.Exec(ctx, requestBalanceSync,
+		arg.Version,
+		arg.State,
+		arg.NextDue,
+		arg.SupplierID,
+	)
+	return err
+}
+
 const resetSyncState = `-- name: ResetSyncState :exec
 UPDATE suppliers.sync_states
 SET version = $1, state = $2, next_due = $3, lease_holder = NULL, lease_until = NULL,

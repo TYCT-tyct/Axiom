@@ -92,10 +92,10 @@ func (s *session) exhausted() ended {
 	switch {
 	case len(s.ends) > 0:
 		return ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
-	case s.skips.noSlot:
-		return ended{err: protocol.Error{Type: protocol.RateLimited}, after: 1}
 	case s.skips.noEndpoint:
 		return ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}
+	case s.skips.noSlot:
+		return ended{err: protocol.Error{Type: protocol.RateLimited}, after: 1}
 	}
 	return ended{err: protocol.Error{Type: protocol.InvalidRequest, Message: s.skips.unsupported}}
 }
@@ -113,7 +113,11 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 	if err != nil {
 		s.skips.noSlot = s.skips.noSlot || errors.Is(err, suppliers.ErrNoSlot)
 		s.skips.noEndpoint = s.skips.noEndpoint || !errors.Is(err, suppliers.ErrNoSlot)
-		s.exclude(entry, routing.Full)
+		reason := routing.Full
+		if errors.Is(err, suppliers.ErrSupplierResting) {
+			reason = routing.SupplierBalance
+		}
+		s.exclude(entry, reason)
 		return nextEntry, ended{}
 	}
 	up, held, err := s.prepare(entry)
@@ -338,7 +342,8 @@ func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	}
 	scope := routingScope(f.Scope)
 	limit, limited := f.Cause.(suppliers.RateLimited)
-	if limited || scope == routing.ScopeSupplier {
+	_, outOfFunds := f.Cause.(suppliers.SupplierBalanceLow)
+	if limited || scope == routing.ScopeSupplier && !outOfFunds {
 		s.x.Router.Block(a.entry, scope, limit.RetryAfter)
 	}
 	if limited {

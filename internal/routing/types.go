@@ -144,10 +144,11 @@ const (
 	OverrideFilter
 	NoPrice
 	NoEgress
-	RetryBudget // a later entry at a supplier whose retry budget is used up
-	Full        // not a refusal: the endpoint would do if it had room
-	UnknownItem // billing met a usage field on the model that it cannot price, until an admin prices it
-	CoolingDown // the endpoint or its supplier is paused until its retry time, or this request already skipped the supplier after a supplier-scope failure
+	RetryBudget    // a later entry at a supplier whose retry budget is used up
+	Full           // not a refusal: the endpoint would do if it had room
+	UnknownItem    // billing met a usage field on the model that it cannot price, until an admin prices it
+	CoolingDown    // the endpoint or its supplier is paused until its retry time, or this request already skipped the supplier after a supplier-scope failure
+	UnquotableCost // native cost cannot be bounded due to model data or count overflow
 )
 
 var reasonNames = [...]string{
@@ -155,7 +156,7 @@ var reasonNames = [...]string{
 	SupplierBalance: "supplier_balance", MissingCapability: "missing_capability", ContextTooSmall: "context_too_small",
 	FormatNotServed: "format_not_served", ServiceTierNotServed: "service_tier_not_served", PresetFilter: "preset_filter", OverrideFilter: "override_filter",
 	NoPrice: "no_price", NoEgress: "no_egress", RetryBudget: "retry_budget", Full: "full",
-	UnknownItem: "unknown_item", CoolingDown: "cooling_down",
+	UnknownItem: "unknown_item", CoolingDown: "cooling_down", UnquotableCost: "unquotable_cost",
 }
 
 func (r Reason) String() string { return reasonNames[r] }
@@ -164,7 +165,7 @@ func (r Reason) String() string { return reasonNames[r] }
 func (r Reason) Permanent() bool {
 	switch r {
 	case NoCandidates, NotAllowed, Disabled, MissingCapability, ContextTooSmall, FormatNotServed, ServiceTierNotServed,
-		PresetFilter, OverrideFilter, NoPrice, UnknownItem:
+		PresetFilter, OverrideFilter, NoPrice, UnknownItem, UnquotableCost:
 		return true
 	case BreakerOpen, SupplierBalance, NoEgress, RetryBudget, Full, CoolingDown:
 		return false
