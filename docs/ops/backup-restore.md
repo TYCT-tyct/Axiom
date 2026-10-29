@@ -16,7 +16,7 @@
 | `db.dump.age` | 全库的逻辑转储，`pg_dump --format=custom`，带属主与授权 | `AXIOM_BACKUP_DB_RECIPIENT` |
 | `deploy.env.age` | 部署的 `deploy/.env`，即库的三个口令和桶的凭证 | `AXIOM_BACKUP_DB_RECIPIENT` |
 | `keys.tar.age` | 密钥环 `master`、`hash`、`identity`，带权限与属主 | `AXIOM_BACKUP_SECRETS_RECIPIENT` |
-| `manifest.txt` | 时间、`pg_dump` 与服务器版本、镜像标签、各文件大小、两个收件人 | — |
+| `manifest.txt` | 时间、`pg_dump` 与服务器版本、镜像引用（生产为 digest）、各文件大小、两个收件人 | — |
 
 - set 名是 UTC 的 `YYYYMMDDHH24MISS` 加三个随机字节，按名字排序即按时间排序。
 - `manifest.txt` 最后上传，它是"这组文件完整"的唯一标志：恢复只认有 manifest 的 set，落后的半组文件由保留策略按天
@@ -111,15 +111,14 @@ HMAC `hash` 和派生用的 `identity` 文件不在此命令范围，不能把�
 
 1. `deploy/.env` 至少有桶的设置（`AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_S3_*`，前缀不是 `axiom` 时还有
    `AXIOM_BACKUP_PREFIX`）。三个口令可以随便填占位值：恢复的第 1 步会用 set 的副本把整个文件换掉。恢复脚本在口令缺失时
-   自己也会补占位值好让 compose 能解析，但下面那条自己敲的 `build` 不会，所以先填上更省事。
+   自己也会补占位值好让 compose 能解析，但下面显式执行的运维镜像 `build` 不会，所以先填上更省事。
 2. 镜像要在这台机器上，并且与 set 的版本一致（第 1 步打印的 `manifest.txt` 里有 `app_image`）。比 set 新的镜像会先跑完自己
    的迁移，多出来的表、列和约束在 set 里没有，随后的恢复会失败（第 4 步先把迁移建的对象整体删掉，正是为了让它们不参与
-   冲突，但新迁移写进 `platform.goose_*` 的版本行也在转储之外）。升级放在恢复之后做。构建方式与 `just up` 相同：
+   冲突，但新迁移写进 `platform.goose_*` 的版本行也在转储之外）。升级放在恢复之后做。按发布记录选择 set 的 digest，配置 `DEPLOY_IMAGE` 后拉取，程序不重新构建；只构建独立的运维镜像：
 
    ```bash
-   just web-embed
-   CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
-   docker compose -f deploy/compose.yaml --env-file deploy/.env --profile ops build
+   docker compose -f deploy/compose.yaml --env-file deploy/.env pull axiom migrate postgres keys valkey
+   docker compose -f deploy/compose.yaml --env-file deploy/.env --profile ops build backup restore
    ```
 
    恢复脚本开头用 `docker image inspect` 逐个检查镜像在不在，不在就在第 1 步之前报错。
@@ -160,7 +159,7 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 
 - 用 `--overwrite` 重跑一次之前失败的恢复时，脚本会先删掉这个项目的库卷和密钥卷，再从头来一遍（它只删用这两个卷的容器，
   同项目里别的容器——演练的 S3——留着，因为 set 还在那里）。
-- 恢复之后核对 `manifest.txt` 里的镜像标签与本机部署的是否一致；不一致的话，先让程序在第 5 步的迁移上跑通再对外。
+- 恢复之后核对 `manifest.txt` 里的镜像引用与本机部署的 digest 是否一致；不一致的话，先让程序在第 5 步的迁移上跑通再对外。
 - 换掉泄露的口令与桶凭证后，重新做一次备份：set 里的 `deploy/.env` 是旧的。
 
 ## 恢复演练
@@ -207,11 +206,20 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 
 ## 生产入口
 
-`deploy/compose.edge.yaml` 在程序前面加一个 Caddy 容器，配置是 `deploy/ingress/Caddyfile`：
+`deploy/compose.edge.yaml` 在程序前面加一个 Caddy 容器，配置是 `deploy/ingress/Caddyfile`。
+生产先按[发布的 digest 选择与核对](release.md#选择和核对)确定交付物，在 `deploy/.env` 写入
+`DEPLOY_IMAGE=<仓库>@sha256:<摘要>`；不使用 tag、不在部署机重建，也不运行开发用的 `just up`。
+负责人执行部署前确认三份数据库口令已配置；新数据库初始化角色，已有数据库也须重放幂等角色授权：
 
 ```bash
-docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env up --detach --wait
+docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env pull axiom migrate
+docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --no-build --wait postgres
+docker compose -f deploy/compose.yaml --env-file deploy/.env exec -T postgres sh < deploy/postgres/roles.sh
+docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env up --detach --no-build --wait
 ```
+
+迁移和程序使用同一 digest；备份 manifest 的镜像字段也因此记录这个引用。恢复和回滚沿用发布记录里的摘要，不能将
+本地开发的 `axiom:local` 当生产交付物。
 
 单独一个文件，是因为入口用的网络钉了子网（程序只认地址/CIDR，入口得有固定地址），而钉死的子网在跑多个项目的机器上可能
 撞车：没有入口的部署（`just up`、CI 的部署检查）不该带上它。
@@ -266,7 +274,7 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
   迁移建；恢复时先跑迁移（角色与 schema 由它建，这一步结束再整体删掉 schema），角色定义只有一份，口令在 `deploy/.env`
   里随库一起备份。
 - **仓库里的文件不进 set**：`deploy/compose.yaml`、`deploy/compose.edge.yaml`、`deploy/ingress/Caddyfile` 都在 git 里，
-  manifest 记下镜像标签就够了；只有不是代码的 `deploy/.env` 需要备份。恢复因此要显式拿到这套文件（`-f`）：set 里没有它们，
+  manifest 记下镜像引用（生产为 digest）就够了；只有不是代码的 `deploy/.env` 需要备份。恢复因此要显式拿到这套文件（`-f`）：set 里没有它们，
   而缺了入口那一份，程序回来时就没有入口需要的网络和代理地址。
 - **入口分两个公开域名**：`accounts.site_domains` 的域名是主键，一个域名只属于一种 surface，所以控制台与模型 API 只能各用
   一个域名。代价是每个部署要三份 DNS 与证书，注册站点时也要三个 host；换来的是每种 surface 的来源限制能分开设，程序自己

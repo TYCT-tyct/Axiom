@@ -249,10 +249,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # `just up` stamps the image with this tree's history
+          fetch-depth: 0 # the frontend and program versions use this tree's history
       - uses: ./.github/actions/setup
-      - run: bash scripts/ci/deploy-check.sh
+      - name: Rehearse train deployment
+        if: github.ref != 'refs/heads/main'
+        run: bash scripts/ci/deploy-check.sh
         timeout-minutes: 40
+      - name: Build and rehearse release by digest
+        if: github.ref == 'refs/heads/main'
+        run: bash scripts/ci/release-check.sh
+        timeout-minutes: 40
+        env:
+          RELEASE_DIR: ${{ runner.temp }}/release-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Retain release image and provenance
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
+        with:
+          name: release-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
 
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
   # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy and may
@@ -276,6 +293,8 @@ jobs:
       # `needs.e2e.result` aggregates the whole matrix. Only Markdown-only builds and pull requests may skip its shards.
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.e2e.result }}' = success
+      - if: github.ref == 'refs/heads/main' && !inputs.gate_stress
+        run: test '${{ needs.deploy.result }}' = success
       - run: echo "every required job passed; only optional jobs were skipped"
 
   gate-stress:
