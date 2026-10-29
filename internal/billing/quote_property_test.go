@@ -26,7 +26,7 @@ func FuzzQuoteCoversWorstCase(f *testing.F) {
 	f.Fuzz(func(t *testing.T, seed1, seed2 uint64) {
 		r := rand.New(rand.NewPCG(seed1, seed2)) //nolint:gosec // G404: test data, not a secret
 		check := func(c quoteCase) {
-			q, err := quoteEntry(c.d, c.e, c.s)
+			q, err := quoteEntry(c.d, c.e, c.s, false)
 			if err != nil {
 				t.Fatalf("quote of %+v: %v", c, err)
 			}
@@ -59,7 +59,7 @@ func FuzzQuoteArithmetic(f *testing.F) {
 		r := rand.New(rand.NewPCG(seed1, seed2)) //nolint:gosec // G404: test data, not a secret
 		for range 500 {
 			c := randomQuoteCase(t, r, math.MaxInt64)
-			q, err := quoteEntry(c.d, c.e, c.s)
+			q, err := quoteEntry(c.d, c.e, c.s, false)
 			want, fits := c.reference(t)
 			if fits != (err == nil) || fits && q.amount.Rat().Cmp(want) != 0 {
 				t.Fatalf("quote %s, %v; want %s (fits %v): %+v under %s", q.amount.Rat().RatString(), err, want.RatString(), fits, c, c.json)

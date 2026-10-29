@@ -33,7 +33,7 @@ func TestSupplierRefusalSurvivesReloadUntilFreshFunds(t *testing.T) {
 		if original.CanPay(platform.Exact{}) {
 			t.Fatal("old balance or elapsed time cleared the refusal")
 		}
-		if _, err := w.svc.Acquire(w.endpoint); !errors.Is(err, ErrNoSlot) {
+		if _, err := w.svc.Acquire(w.endpoint); !errors.Is(err, ErrSupplierResting) {
 			t.Fatalf("rested supplier: %v", err)
 		}
 	}

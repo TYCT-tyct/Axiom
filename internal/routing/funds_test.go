@@ -2,11 +2,13 @@ package routing_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -80,21 +82,18 @@ func TestAffordabilityIncludesTierAndToolSampling(t *testing.T) {
 
 func TestAffordabilityAddsNoPlanAllocations(t *testing.T) {
 	e := endpoint(t, 1)
-	h := newHarness(t, routing.Config{}, openPreset(), e)
-	in := input()
-	measure := func() float64 {
-		return testing.AllocsPerRun(100, func() {
-			if _, _, err := h.r.Plan(in); err != nil {
-				panic(err)
-			}
-		})
-	}
-	before := measure()
+	before := newHarness(t, routing.Config{}, openPreset(), e)
 	e.Funds = &suppliers.Funds{Balance: platform.AmountExact(1_000_000_000_000)}
 	e.Cost = schedule(t, "0.000001", "0.000002", "0.0000001")
-	h.replace(openPreset(), e)
-	if after := measure(); after != before {
-		t.Fatalf("Plan allocations with funds = %v, without = %v", after, before)
+	after := newHarness(t, routing.Config{}, openPreset(), e)
+	in := input()
+	in.Req.ServiceTiers = ^catalog.ServiceTierSet(0)
+	got := alloctest.Measure(t,
+		alloctest.Function{Name: "without", F: func() { before.plan(in) }},
+		alloctest.Function{Name: "with", F: func() { after.plan(in) }},
+	)
+	if got["with"] != got["without"] {
+		t.Fatalf("Plan allocations with funds = %v, without = %v", got["with"], got["without"])
 	}
 }
 
@@ -131,12 +130,64 @@ func TestUnboundedToolKeepsItsAdmissionError(t *testing.T) {
 	}
 }
 
-func TestMissingNativeCostDoesNotBecomeFreeCapacity(t *testing.T) {
+func TestMissingNativeCostUsesKnownTokenEstimate(t *testing.T) {
+	t.Parallel()
+	quantum, err := platform.ParseExact("0.000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name          string
+		audio, search bool
+		balance       string
+	}{
+		{"default tier", false, false, "22"},
+		{"audio output", true, false, "22"},
+		{"bounded web search", false, true, "224"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := endpoint(t, 1)
+			// new-api publishes standard token rates only, even when the model advertises other tiers or items.
+			e.Cost = schedule(t, "1", "2", "1")
+			e.Context = 100
+			if tc.audio {
+				e.Reports.Add(catalog.ItemAudioOut)
+			}
+			balance, err := platform.ParseExact(tc.balance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.Funds = &suppliers.Funds{Balance: balance}
+			h := newHarness(t, routing.Config{}, openPreset(), e)
+			in := input()
+			in.Req.TextBytes, in.Req.MaxOutput = 1, 10
+			in.Req.ServiceTiers = ^catalog.ServiceTierSet(0) // protocol's default when service_tier is omitted
+			if tc.search {
+				in.Req.Needs, in.Req.WebSearches = protocol.WebSearch, 1
+			}
+			checkAffordable(t, h, in, true)
+			short, err := balance.Add(quantum.Neg())
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.Funds = &suppliers.Funds{Balance: short}
+			h.replace(openPreset(), e)
+			checkAffordable(t, h, in, false)
+		})
+	}
+}
+
+func TestUnquotableCostIsNotABalanceFailure(t *testing.T) {
 	t.Parallel()
 	e := endpoint(t, 1)
 	e.Funds = &suppliers.Funds{Balance: platform.AmountExact(1_000_000_000_000)}
-	// This model reports cache reads, so input/output prices alone do not bound the cost of the request.
-	e.Cost = schedule(t, "0.000001", "0.000002", "")
+	e.Cost = schedule(t, "1", "2", "1")
 	h := newHarness(t, routing.Config{}, openPreset(), e)
-	checkAffordable(t, h, input(), false)
+	in := input()
+	in.Req.Choices = math.MaxInt64
+	_, _, err := h.r.Plan(in)
+	var no *routing.NoEndpoint
+	if !errors.As(err, &no) || !no.Permanent || len(no.Reasons) != 1 || no.Reasons[0].Reason != routing.UnquotableCost {
+		t.Fatalf("unquotable cost: %v", err)
+	}
 }

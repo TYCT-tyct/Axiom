@@ -164,3 +164,28 @@ func TestSupplierStaysExcludedForTheRequestAfterItsLocalPause(t *testing.T) {
 		}
 	})
 }
+
+func TestFrozenRouteRecordsRestedSupplierAsBalance(t *testing.T) {
+	for _, rested := range []int{1, 2} {
+		run(t, func(t *testing.T, ctx context.Context) {
+			h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1, 2}})
+			// The refusal happens after planning, before this request acquires a credential.
+			h.up.beforeAcquire = func(id suppliers.EndpointID) {
+				if id == suppliers.EndpointID(ep(rested)) {
+					h.up.endpoint(rested).resting = true
+				}
+			}
+			h.run()
+			if h.w.status != http.StatusServiceUnavailable {
+				t.Fatalf("rested supplier mixed with busy credentials: status %d, want 503", h.w.status)
+			}
+			excluded := h.call.Plan.Record.Excluded
+			if len(excluded) != 2 || excluded[rested-1].Reason != routing.SupplierBalance {
+				t.Fatalf("frozen route exclusions: %+v", excluded)
+			}
+			if got := len(h.ended().outcome.Attempts); got != 0 {
+				t.Fatalf("unacquired route made %d attempts", got)
+			}
+		})
+	}
+}

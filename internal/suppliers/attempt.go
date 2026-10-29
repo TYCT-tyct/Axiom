@@ -102,9 +102,9 @@ type Attempt struct {
 }
 
 // Acquire takes a slot on the endpoint's least busy credential that is neither resting nor expired and whose rolling
-// minute admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint or
-// ErrNoSlot when there is none, and gateway moves on to its next entry: that is not an attempt. The slot is held until
-// Done.
+// minute admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint,
+// ErrSupplierResting or ErrNoSlot when there is none, and gateway moves on to its next entry: that is not an attempt.
+// The slot is held until Done.
 func (s *Service) Acquire(id EndpointID) (*Attempt, error) { return s.acquire(id, false) }
 
 func (s *Service) acquire(id EndpointID, probe bool) (*Attempt, error) {
@@ -115,7 +115,7 @@ func (s *Service) acquire(id EndpointID, probe bool) (*Attempt, error) {
 			return nil, ErrNoEndpoint
 		}
 		if !probe && ep.funds.resting() {
-			return nil, ErrNoSlot
+			return nil, ErrSupplierResting
 		}
 		var fundsRest uint64
 		if probe {

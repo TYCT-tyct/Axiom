@@ -125,7 +125,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 | 步 | 做什么 | 结果 |
 |---|---|---|
 | 开始前 | 客户端已走、持有者可能已失效（`Alive`）、单次调用最长到了、尝试已满 `min(Plan.MaxAttempts, 3)`、过了 `Plan.StartBy` | 依次：什么都不写；503 `overloaded`；408；502（有过尝试）；有过尝试 502，没有 408 |
-| `Acquire` | `ErrNoSlot` / `ErrNoEndpoint` | 跳过，路由记录 `Full`；不算尝试 |
+| `Acquire` | `ErrNoSlot` / `ErrNoEndpoint` / `ErrSupplierResting` | 跳过，不算尝试；前两种记录 `Full`，余额暂停记录 `SupplierBalance`。无尝试且含不可用端点时回 503，只有凭证满载时回 429 |
 | `Prepare` | `*NotSupported`；`ErrInvalid`；其他 | 跳过，记 `FormatNotServed`；400 照客户端的错；503 并记 error |
 | 重试预算 | 第一次尝试 `Router.Sent`；之后 `Router.TakeRetry`，用完 | 跳过，记 `RetryBudget` |
 | 内存 | `Prepare` 之前先按 `protocol.PrepareCost` 向节点预算申请它最多同时占用的量，`Prepare` 之后只留结果缓冲的容量，`Send` 返回即退还 | 申请不到：不调 `Prepare`，503 |

@@ -202,21 +202,23 @@ func check(c *candidate, n *need) (reason Reason, visible bool) {
 		return UnknownItem, true
 	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
 		return CoolingDown, true
-	case !c.canPay(n):
-		return SupplierBalance, true
-	case c.full():
+	}
+	if reason = c.funding(n); reason != 0 {
+		return reason, true
+	}
+	if c.full() {
 		return Full, true
 	}
 	return 0, true
 }
 
-// canPay uses the same demand, output cap and call format as the reservation, but the supplier's native cost plan.
-func (c *candidate) canPay(n *need) bool {
+// funding uses the same demand, output cap and call format as the reservation, but the supplier's native cost plan.
+func (c *candidate) funding(n *need) Reason {
 	if c.Funds == nil {
-		return c.BalanceOK
+		return 0
 	}
 	if !c.Funds.CanPay(platform.Exact{}) {
-		return false
+		return SupplierBalance
 	}
 	out, _ := c.outputLimit(n.req, n.tokens)
 	format, _ := c.callFormat(n)
@@ -225,7 +227,16 @@ func (c *candidate) canPay(n *need) bool {
 	cost, err := billing.ReservedCost(n.demand, billing.Quotable{Price: c.Cost, Model: model, MaxOutput: out})
 	// An unbounded tool is a request error: admission's Quote must keep returning its actionable 400, rather than
 	// disguising it as a supplier outage. The same bounds make Quote refuse it before any upstream call.
-	return errors.Is(err, billing.ErrUnbounded) || err == nil && c.Funds.CanPay(cost)
+	if errors.Is(err, billing.ErrUnbounded) {
+		return 0
+	}
+	if err != nil {
+		return UnquotableCost
+	}
+	if !c.Funds.CanPay(cost) {
+		return SupplierBalance
+	}
+	return 0
 }
 
 // unavailable is the endpoint's own state: switched off, taken out, or its supplier unable to pay or reach.

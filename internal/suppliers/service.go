@@ -499,10 +499,12 @@ func (s *Service) policy(ep *endpoint) adapter.CallPolicy {
 }
 
 // ErrNoEndpoint is the error for an endpoint the snapshot does not hold; ErrNoSlot is the one when every credential of
-// it is resting, expired or at its limit. gateway skips the entry in both cases and it is not an attempt.
+// it is resting, expired or at its limit. ErrSupplierResting is an account-wide balance refusal.
+// gateway skips the entry in each case and it is not an attempt.
 var (
-	ErrNoEndpoint = errors.New("suppliers: the endpoint is not in the snapshot")
-	ErrNoSlot     = errors.New("suppliers: no credential of the endpoint has a free slot")
+	ErrNoEndpoint      = errors.New("suppliers: the endpoint is not in the snapshot")
+	ErrSupplierResting = errors.New("suppliers: the supplier is resting after a balance refusal")
+	ErrNoSlot          = errors.New("suppliers: no credential of the endpoint has a free slot")
 	// ErrStale is the snapshot's: no Reload has confirmed it within MaxStale.
 	ErrStale = errors.New("suppliers: the snapshot has not been confirmed lately")
 )

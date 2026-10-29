@@ -59,7 +59,7 @@ func checkImageCall(t *testing.T, s catalog.Schedule, reports catalog.ItemSet, t
 		t.Fatalf("sale %+v, cost %v, err %v", p, cost.Rat(), err)
 	}
 	e := Quotable{Price: s, Model: Model{ContextLength: 1000, Reports: reports, OpenAIUsage: true}, MaxOutput: 20}
-	q, err := quoteEntry(Demand{TextBytes: n, ServiceTiers: 1 << tier}, e, Segments{})
+	q, err := quoteEntry(Demand{TextBytes: n, ServiceTiers: 1 << tier}, e, Segments{}, false)
 	if err != nil || q.amount.Cmp(cost) < 0 {
 		t.Fatalf("quote %v below cost %v: %v", q.amount.Rat(), cost.Rat(), err)
 	}
@@ -90,7 +90,7 @@ func TestOverlapReservationCounterexampleAndMaximumPrices(t *testing.T) {
 				d.InputItems = 1 << cacheWrite
 			}
 			m := Model{ContextLength: 100, Reports: 1<<catalog.ItemCacheRead | 1<<cacheWrite, OpenAIUsage: tc.openAI}
-			q, err := quoteEntry(d, Quotable{Price: s, Model: m}, Segments{})
+			q, err := quoteEntry(d, Quotable{Price: s, Model: m}, Segments{}, false)
 			if err != nil || q.amount.Rat().RatString() != tc.want {
 				t.Fatalf("quote %v, %v; want %s", q.amount.Rat(), err, tc.want)
 			}
@@ -115,7 +115,7 @@ func TestImageInputIsReservedWithoutReportsAndFallsBack(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{`+tc.prices+`,"output":"0"}}`)
 			m := Model{ContextLength: 100, Reports: 1<<in | 1<<catalog.ItemOutput, OpenAIUsage: tc.openAI}
-			q, err := quoteEntry(Demand{TextBytes: 100}, Quotable{Price: s, Model: m}, Segments{})
+			q, err := quoteEntry(Demand{TextBytes: 100}, Quotable{Price: s, Model: m}, Segments{}, false)
 			if err != nil || q.amount.Rat().RatString() != tc.want {
 				t.Fatalf("quote %v, %v; want %s", q.amount.Rat(), err, tc.want)
 			}

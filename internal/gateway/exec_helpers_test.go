@@ -148,9 +148,10 @@ type fakeUpstreams struct {
 }
 
 type fakeEndpoint struct {
-	script []scripted
-	policy suppliers.CallPolicy
-	noSlot bool
+	script  []scripted
+	policy  suppliers.CallPolicy
+	noSlot  bool
+	resting bool
 	// receipt is what the attempts of this endpoint leave, as a real one from suppliers does; the zero value is a
 	// receipt with nothing known, which prices every attempt at nothing. receipts, when set, is one per attempt, the
 	// last repeating: a supplier's receipts differ in its own id of each attempt.
@@ -185,6 +186,8 @@ func (u *fakeUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
 	switch {
 	case !ok:
 		return nil, suppliers.ErrNoEndpoint
+	case e.resting:
+		return nil, suppliers.ErrSupplierResting
 	case e.noSlot:
 		return nil, suppliers.ErrNoSlot
 	}

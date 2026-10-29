@@ -315,3 +315,28 @@ func TestGatewaySupplierBalanceFiltersEachRequest(t *testing.T) {
 		t.Fatalf("affordable request made %d attempts", got)
 	}
 }
+
+func TestGatewayNewAPICostGapsKeepDefaultRequestsRoutable(t *testing.T) {
+	t.Parallel()
+	w := newCallWorld(t)
+	w.price()
+	// Keep the native schedule in the shape new-api actually publishes: no service tiers or tool fees.
+	w.query(`WITH fresh AS (
+  INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
+  SELECT supplier_id, endpoint_id, native_unit, (schedule - 'service_tiers') #- '{rates,web_search}', basis, 'native-gaps'
+  FROM suppliers.cost_schedules RETURNING id, endpoint_id
+ ) UPDATE suppliers.endpoints e SET cost_schedule_id = f.id FROM fresh f
+ WHERE e.id = f.endpoint_id RETURNING e.id::text`)
+	n, _, _ := w.controlledCallPath(&testClock{now: time.Now()})
+	for _, body := range []string{
+		messagesCall,
+		`{"model":"claude-opus-5-5","max_tokens":16,"messages":[{"role":"user","content":"Hello"}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]}`,
+	} {
+		if status := w.callControlled(n, body); status != http.StatusOK {
+			t.Fatalf("new-api native gaps rejected a default-tier request: %d", status)
+		}
+	}
+	if got := len(w.supplier.sent()); got != 2 {
+		t.Fatalf("upstream calls = %d, want 2", got)
+	}
+}
