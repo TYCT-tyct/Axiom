@@ -13,6 +13,7 @@ func (r *Recorder) Enqueue(rec CallRecord) error          // 从不等待；队�
 func (r *Recorder) Close(ctx context.Context) error       // 写完队列里的，ctx 到期则报告丢了几条（含入队时丢的）
 func (r *Recorder) Done() <-chan struct{}                 // 写入协程退出时关闭；Close 返回前已等待它，测试据此断言没有写入协程留下
 func ListOwn(ctx, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error)
+func CheckOwnExportSize(ctx, tx pg.Tx, q OwnQuery) error // 同一 ReadTx 内、开始输出前检查最多 10001 个匹配键；超过 10000 返回 ErrExportSize
 func AggregateOwn(ctx, tx pg.Tx, q OwnQuery, groupBy string) ([]OwnAggregate, error) // day/model/key，最多 1000 组，收费与次数为精确文本
 func GetOwn(ctx, tx pg.Tx, id uuid.UUID) (OwnCall, error)
 func GetTrace(ctx, tx pg.Tx, id uuid.UUID) (CallRecord, error) // 一条调用、它的尝试和 route，按请求 ID；只从运营或管理的处理器调用，事务须是平台范围
@@ -71,9 +72,9 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 `ListOwn` 必须给账户（`OwnQuery.Account`），按 `(at, id)` 倒序、键集分页（不用 OFFSET：新记录到达时翻页不重不漏），可按时间、模型、客户端应用、key、工作区、成功/报错和请求 ID 组合筛选，一页最多 200 条。**范围就是全部访问控制**：调用方用授权通过后的账户范围打开事务，行级安全只放行这个账户的行；显式的账户条件只是让计划走索引，不是访问控制。站长看本站、平台运维看全部的查询随 operations 和 accounts 加入，用的是它们的范围。
 
-所有筛选共用 `ListOwnCalls` 查询，可选条件由 `force_custom_plan` 按参数折叠，让优化器按实际筛选选择有序索引。模型、应用、key、工作区和 `(error_kind <> '')` 各有 `(account_id, 筛选值, at DESC, id DESC)` 索引；请求 ID 复用主键。组合筛选由选定索引读候选，再检查其余条件，因此读取量也受候选的选择性影响。`ORDER BY call_log.at, call_log.id` 保持 UUID 索引顺序，不能用输出列 `id::text`。不使用 OFFSET。列表事务另设 `enable_sort=off`：多个稀疏筛选相关时，custom plan 仍可能把 100 个真实命中低估为 1 行，选位图加排序而不是在索引上遇 LIMIT 停止。真实 12 万行的模型+应用稀疏组合曾走该计划；设置只在有序列表及 CSV 读取的事务内，聚合仍允许排序。平台 RLS 的 InitPlan 修正不能消除筛选值之间的相关性。请求 ID 沿主键反向读 `at`，也是有序索引扫描；计划 helper 同时接受正向与反向扫描，保留无位图、无排序和块预算要求。
+所有筛选共用 `ListOwnCalls` 查询，可选条件由 `force_custom_plan` 按参数折叠，让优化器按实际筛选选择有序索引。模型、应用、key、工作区和 `(error_kind IS DISTINCT FROM '')` 各有 `(account_id, 筛选值, at DESC, id DESC)` 索引；请求 ID 复用主键。状态表达式使用 `IS DISTINCT FROM`（该列 NOT NULL，口径与原 `<>` 相同）：普通 `<>` 的假值在 custom plan 中会被折叠为 `error_kind = ''`，失去表达式索引；DistinctExpr 的取反保留为 NOT，成功与报错都能匹配同一布尔索引。组合筛选由选定索引读候选，再检查其余条件，因此读取量也受候选的选择性影响。`ORDER BY call_log.at, call_log.id` 保持 UUID 索引顺序，不能用输出列 `id::text`。不使用 OFFSET。列表事务另设 `enable_sort=off`：多个稀疏筛选相关时，custom plan 仍可能把 100 个真实命中低估为 1 行，选位图加排序而不是在索引上遇 LIMIT 停止。真实 12 万行的模型+应用稀疏组合曾走该计划；设置只在有序列表及 CSV 读取的事务内，聚合仍允许排序，由优化器按估算选择扫描方式；账户与状态高度相关时仍可能选择顺扫，不承诺聚合只读取匹配行。平台 RLS 的 InitPlan 修正不能消除筛选值之间的相关性。请求 ID 沿主键反向读 `at`，也是有序索引扫描；计划 helper 同时接受正向与反向扫描，保留无位图、无排序和块预算要求。
 
-`AggregateOwn` 复用同一组筛选及 custom plan，忽略游标与页大小；数据库按 UTC 日/模型/key 和货币分组，`sum(bigint)` 用 PostgreSQL numeric 再转文本，不溢出 int64，不将不同币种相加。多于 1000 组返回 `ErrAggregateSize`，处理器答 400。时间窗与 10 秒期限由 console HTTP 边界限制，调用路径不变。导出在 console 处理器里复用 `ListOwn`，同一 `ReadTx` 快照内逐页写 CSV；边界和安全规则见[用户调用记录查询与导出](../../docs/domains/observability.md#用户调用记录查询与导出)。
+`AggregateOwn` 复用同一组筛选及 custom plan，忽略游标与页大小；数据库按 UTC 日/模型/key 和货币分组，`sum(bigint)` 用 PostgreSQL numeric 再转文本，不溢出 int64，不将不同币种相加。多于 1000 组返回 `ErrAggregateSize`，处理器答 400。时间窗与 10 秒期限由 console HTTP 边界限制，调用路径不变。导出在 console 处理器里先调用 `CheckOwnExportSize`，再复用 `ListOwn`，两者在同一 `ReadTx` 快照内。探测只计有序前缀的键，SQL 的 LIMIT 为 `MaxOwnExportRows + 1`，超过上限返回 `ErrExportSize`，处理器在写 CSV 前答 400。成功流包含全部匹配行，不使用截断/完成 trailer；边界和安全规则见[用户调用记录查询与导出](../../docs/domains/observability.md#用户调用记录查询与导出)。
 
 `TestListPlansFollowTheIndexes` 使用真实应用角色与 RLS，12 万条记录中一个大账户 6 万条、100 个小账户各 600 条。未筛选、模型、应用、key、工作区与状态页都要求索引顺序，不能有位图、顺序扫描或排序。原有筛选的读取预算：大账户首页和密集筛选最多 40 块，稀疏筛选最多 400 块，无匹配最多 20 块；小账户最多 800 块（候选只有 600 行），仍须索引顺序。深页及新筛选还由下面的共享 helper 检查更紧的首页/深页相对预算；组合筛选的剩余条件可能增加候选读取量，不能承诺所有组合都只碰一页。
 
@@ -86,7 +87,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 稀疏筛选读的是命中的条数（命中不多于一页就读完），不是账户或分区的量：没有这两个索引时，稀疏和零命中的筛选读整个月分区（36 万条时 7,059 个缓冲，随表增长，60 到 100 ms），不管有没有命中。
 控制台把 `Cursor` 写成 32 个字符的不透明文本（`String`：调用开始时间的微秒数 8 字节、调用编号 16 字节，base64url 无填充），`ParseCursor` 读回，不是这个长度或字母表就是 `ErrBadCursor`（控制台答 400）。游标只标记一个账户的调用里的一个位置：伪造一个只会得到范围本来就让读的、从别处开始的一页，所以不签名；它也不绑定筛选条件，换了筛选条件续用同一个游标得到的是按新条件、从那个位置往后的一页。
 
-`TestOwnFiltersAndAggregates` 验证新筛选的单项、组合、游标页与账户隔离；`TestOwnAggregateKeepsCurrenciesSeparate` 保证不同货币不相加，`TestOwnAggregateRejectsPartialTotals` 守住组数上限。`TestListPlansFollowTheIndexes` 还复用 #408 的 `checkListPagePlans`，比较 key、工作区与状态筛选在平台/账户两种范围里的首页和深页，以及无匹配时的有序索引与块预算。跨分区测试也覆盖这些筛选。
+`TestOwnFiltersAndAggregates` 验证新筛选的单项、组合、游标页与账户隔离；`TestOwnAggregateKeepsCurrenciesSeparate` 保证不同货币不相加，`TestOwnAggregateRejectsPartialTotals` 守住组数上限。`TestListPlansFollowTheIndexes` 还复用 #408 的 `checkListPagePlans`，比较 key、工作区与状态筛选在平台/账户两种范围里的首页和深页，以及无匹配时的有序索引与块预算。跨分区测试也覆盖这些筛选。`TestSparseSuccessReadsFollowTheStatusIndex` 另外反转夹具分布，让 6 万条账户记录中只有 100 条成功，检查平台/账户范围的首页与深页块预算，以及导出探测只读取 100 条匹配记录；避免只用成功密集的样本掩盖反向条件失去索引的问题。
 
 调用记录的可空 `price_version` 是实际收费条目在预留时冻结的售价版本；由 billing 的 `Final.PriceVersion` 传入，随批量记录保存，`ListOwn`、`GetOwn` 与内部追溯原样返回。历史记录和旧节点没写的版本保持未知，控制台显示不可用。
 

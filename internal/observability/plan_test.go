@@ -21,8 +21,12 @@ const (
 
 // seedForPlans fills the table as the superuser: one heavy account and 100 light ones over eight hours.
 // Every 1200th call is of the model "rare" and from the application "codex", all of them the heavy account's; the others are of "m" and "cli" (a dense one); "absent" matches nothing.
-func seedForPlans(t *testing.T, database pgtest.Database) {
+func seedForPlans(t *testing.T, database pgtest.Database, sparseSuccess bool) {
 	t.Helper()
+	errorKind := "CASE WHEN n % 1200 = 0 THEN 'upstream' ELSE '' END"
+	if sparseSuccess {
+		errorKind = "CASE WHEN n % 2 = 0 AND n % 1200 <> 0 THEN 'failed' ELSE '' END"
+	}
 	if err := pgtest.Run(t.Context(), database.Superuser, `INSERT INTO observability.call_log (id, at, site_id, account_id,
 			workspace_id, key_id, ip, client_app, request_class, used_tools, has_image, has_file, model, endpoint_id,
 			attempt_count, usage, service_tier, price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms,
@@ -34,7 +38,7 @@ func seedForPlans(t *testing.T, database pgtest.Database) {
             CASE WHEN n % 1200 = 0 THEN '00000000-0000-4000-8000-000000000122'::uuid ELSE '00000000-0000-4000-8000-000000000121'::uuid END,
             '203.0.113.7', CASE WHEN n % 1200 = 0 THEN 'codex' ELSE 'cli' END, 'chat', false, false,
 			false, CASE WHEN n % 1200 = 0 THEN 'rare' ELSE 'm' END, uuidv7(), 1, '{}', 'standard', 1, 1,
-			'USD', false, 1, 0, 'v', true, CASE WHEN n % 1200 = 0 THEN 'upstream' ELSE '' END
+			'USD', false, 1, 0, 'v', true, `+errorKind+`
 		FROM generate_series(1, 120000) n`, "ANALYZE observability.call_log"); err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +69,7 @@ func explain(t *testing.T, db *pg.DB, q OwnQuery, scope pg.Scope) string {
 	sql, args := listCall(q, size)
 	var lines []string
 	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
-		if err := planOwnQuery(t.Context(), tx); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(t.Context(), "SET LOCAL enable_sort = off"); err != nil {
+		if err := planOwnPage(t.Context(), tx); err != nil {
 			return err
 		}
 		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+sql, args...)
@@ -163,7 +164,7 @@ func nextCursor(t *testing.T, db *pg.DB, q OwnQuery) *Cursor {
 func TestListPlansFollowTheIndexes(t *testing.T) {
 	t.Parallel()
 	db, database := openDBWithURL(t)
-	seedForPlans(t, database)
+	seedForPlans(t, database, false)
 	heavy, light := uuid.MustParse(heavyAccount), uuid.MustParse(lightAccount)
 	since, until := window()
 	base := func(account uuid.UUID) OwnQuery { return OwnQuery{Account: account, Since: since, Until: until} }
@@ -208,6 +209,7 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 	}
 	checkListDeepPagesReadInIndexOrder(t, db)
 	checkOwnFilterPlans(t, db)
+	checkOwnExportFilters(t, db)
 }
 
 // TestFilteredListsReturnTheMatches: the list filters return what they should, also when the match is sparse or
@@ -216,7 +218,7 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 func TestFilteredListsReturnTheMatches(t *testing.T) {
 	t.Parallel()
 	db, database := openDBWithURL(t)
-	seedForPlans(t, database)
+	seedForPlans(t, database, false)
 	heavy := uuid.MustParse(heavyAccount)
 	for name, c := range map[string]struct {
 		q    OwnQuery
@@ -252,7 +254,7 @@ func TestFilteredListsReturnTheMatches(t *testing.T) {
 func TestListIsPlannedForItsValues(t *testing.T) {
 	t.Parallel()
 	_, database := openDBWithURL(t)
-	seedForPlans(t, database)
+	seedForPlans(t, database, false)
 	generic, err := pg.Open(t.Context(), database.App+"&plan_cache_mode=force_generic_plan")
 	if err != nil {
 		t.Fatal(err)

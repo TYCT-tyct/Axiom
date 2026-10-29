@@ -23,7 +23,7 @@ WHERE account_id = ($2::text)::uuid
     AND ($6::text = '' OR client_app = $6)
     AND ($7::text = '' OR key_id = nullif($7, '')::uuid)
     AND ($8::text = '' OR workspace_id = nullif($8, '')::uuid)
-    AND ($9::text = '' OR (error_kind <> '') = ($9 = 'error'))
+    AND ($9::text = '' OR (error_kind IS DISTINCT FROM '') = ($9 = 'error'))
     AND ($10::text = '' OR id = nullif($10, '')::uuid)
 GROUP BY bucket, currency
 ORDER BY bucket, currency
@@ -86,6 +86,60 @@ func (q *Queries) AggregateOwnCalls(ctx context.Context, db DBTX, arg AggregateO
 		return nil, err
 	}
 	return items, nil
+}
+
+const countOwnExportCalls = `-- name: CountOwnExportCalls :one
+SELECT count(*)::int AS count FROM (
+    SELECT at, id
+    FROM observability.call_log
+    WHERE account_id = ($1::text)::uuid
+        AND (at, id) < ($2::timestamptz, ($3::text)::uuid)
+        AND at >= $4 AND at < $5
+        AND ($6::text = '' OR model = $6)
+        AND ($7::text = '' OR client_app = $7)
+        AND ($8::text = '' OR key_id = nullif($8, '')::uuid)
+        AND ($9::text = '' OR workspace_id = nullif($9, '')::uuid)
+        AND ($10::text = '' OR (error_kind IS DISTINCT FROM '') = ($10 = 'error'))
+        AND ($11::text = '' OR id = nullif($11, '')::uuid)
+    ORDER BY call_log.at DESC, call_log.id DESC
+    LIMIT $12
+) AS bounded_calls
+`
+
+type CountOwnExportCallsParams struct {
+	AccountID   string
+	AfterAt     time.Time
+	AfterID     string
+	Since       time.Time
+	Until       time.Time
+	Model       string
+	ClientApp   string
+	KeyID       string
+	WorkspaceID string
+	Status      string
+	RequestID   string
+	RowLimit    int32
+}
+
+// Count only a bounded ordered prefix, without loading call metadata into the export's memory.
+func (q *Queries) CountOwnExportCalls(ctx context.Context, db DBTX, arg CountOwnExportCallsParams) (int32, error) {
+	row := db.QueryRow(ctx, countOwnExportCalls,
+		arg.AccountID,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.Since,
+		arg.Until,
+		arg.Model,
+		arg.ClientApp,
+		arg.KeyID,
+		arg.WorkspaceID,
+		arg.Status,
+		arg.RequestID,
+		arg.RowLimit,
+	)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
 }
 
 const getCallTrace = `-- name: GetCallTrace :one
@@ -274,7 +328,7 @@ WHERE account_id = ($1::text)::uuid
     AND ($7::text = '' OR client_app = $7)
     AND ($8::text = '' OR key_id = nullif($8, '')::uuid)
     AND ($9::text = '' OR workspace_id = nullif($9, '')::uuid)
-    AND ($10::text = '' OR (error_kind <> '') = ($10 = 'error'))
+    AND ($10::text = '' OR (error_kind IS DISTINCT FROM '') = ($10 = 'error'))
     AND ($11::text = '' OR id = nullif($11, '')::uuid)
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT $12

@@ -64,12 +64,8 @@ func cursorOf(q OwnQuery) (at time.Time, id string) {
 
 // listRows plans for the actual filter values so optional predicates do not hide the ordered indexes.
 func listRows(ctx context.Context, tx pg.Tx, q OwnQuery, size int) ([]store.ListOwnCallsRow, error) {
-	if err := planOwnQuery(ctx, tx); err != nil {
+	if err := planOwnPage(ctx, tx); err != nil {
 		return nil, err
-	}
-	// Correlated sparse filters can be estimated below LIMIT and otherwise chosen as bitmap + sort.
-	if _, err := tx.Exec(ctx, "SET LOCAL enable_sort = off"); err != nil {
-		return nil, fmt.Errorf("read the page in index order: %w", err)
 	}
 	at, id := cursorOf(q)
 	return store.New().ListOwnCalls(ctx, tx, store.ListOwnCallsParams{
@@ -78,6 +74,17 @@ func listRows(ctx context.Context, tx pg.Tx, q OwnQuery, size int) ([]store.List
 		Status: q.Status, RequestID: uuidFilter(q.RequestID),
 		PageSize: int32(size) + 1, //nolint:gosec // ListOwn checks size is 1 to MaxPageSize
 	})
+}
+
+func planOwnPage(ctx context.Context, tx pg.Tx) error {
+	if err := planOwnQuery(ctx, tx); err != nil {
+		return err
+	}
+	// Correlated sparse filters can be estimated below LIMIT and otherwise chosen as bitmap + sort.
+	if _, err := tx.Exec(ctx, "SET LOCAL enable_sort = off"); err != nil {
+		return fmt.Errorf("read the page in index order: %w", err)
+	}
+	return nil
 }
 
 func planOwnQuery(ctx context.Context, tx pg.Tx) error {

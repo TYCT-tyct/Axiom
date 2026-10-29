@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-const callExportRows = 10_000
+const callExportRows = observability.MaxOwnExportRows
 
 type callDownload func(http.ResponseWriter) error
 
@@ -37,51 +38,47 @@ func (c consoleAPI) ExportCalls(ctx context.Context, request consoleapi.ExportCa
 		defer cancel()
 		deadline, _ := ctx.Deadline()
 		sink := csvDownloadWriter{ResponseWriter: w, deadline: deadline, name: "calls"}
-		w.Header().Set("Trailer", "X-Next-Cursor, X-Export-Complete")
 		w.Header().Set("X-Export-Since", q.Since.UTC().Format(time.RFC3339Nano))
 		w.Header().Set("X-Export-Until", q.Until.UTC().Format(time.RFC3339Nano))
-		var next *observability.Cursor
-		err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-			next, err = callsCSV(ctx, tx, q, &sink)
-			return err
+		err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
+			if err := observability.CheckOwnExportSize(ctx, tx, q); err != nil {
+				return err
+			}
+			return callsCSV(ctx, tx, q, &sink)
 		})
+		if errors.Is(err, observability.ErrExportSize) {
+			return invalidField("since", fmt.Sprintf("more than %d calls; narrow the window or filters", callExportRows))
+		}
 		if err != nil && sink.started {
 			panic(fmt.Errorf("console: stream calls: %w", err))
 		}
-		if err != nil {
-			return err
-		}
-		if next != nil {
-			w.Header().Set("X-Next-Cursor", next.String())
-		}
-		w.Header().Set("X-Export-Complete", "true")
-		return nil
+		return err
 	}), nil
 }
 
-func callsCSV(ctx context.Context, tx pg.Tx, q observability.OwnQuery, out io.Writer) (*observability.Cursor, error) {
+func callsCSV(ctx context.Context, tx pg.Tx, q observability.OwnQuery, out io.Writer) error {
 	w := csv.NewWriter(out)
 	if err := w.Write([]string{"request_id", "at", "workspace_id", "key_id", "model", "client_app", "status", "error_kind", "price", "currency"}); err != nil {
-		return nil, err
+		return err
 	}
 	for written := 0; ; {
 		q.PageSize = min(observability.MaxPageSize, callExportRows-written)
 		calls, next, err := observability.ListOwn(ctx, tx, q)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, call := range calls {
 			if err := w.Write(callCSVRow(call)); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		written += len(calls)
 		w.Flush()
 		if err := w.Error(); err != nil {
-			return nil, fmt.Errorf("write calls CSV: %w", err)
+			return fmt.Errorf("write calls CSV: %w", err)
 		}
 		if next == nil || written == callExportRows {
-			return next, nil
+			return nil
 		}
 		q.After = next
 	}

@@ -187,3 +187,42 @@ func TestOwnAggregateKeepsCurrenciesSeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestSparseSuccessReadsFollowTheStatusIndex(t *testing.T) {
+	t.Parallel()
+	db, database := openDBWithURL(t)
+	seedForPlans(t, database, true)
+	account := uuid.MustParse(heavyAccount)
+	since, until := window()
+	q := OwnQuery{Account: account, Since: since, Until: until, Status: "success", PageSize: pageSize}
+	calls := allPages(t, db, q)
+	if len(calls) != 100 {
+		t.Fatalf("success fixture: %d", len(calls))
+	}
+	deep := calls[75]
+	for _, scope := range []pg.Scope{platformScope, accountScope(account)} {
+		first := explain(t, db, q, scope)
+		q.After = &Cursor{At: deep.At, ID: deep.ID}
+		checkListPagePlans(t, first, explain(t, db, q, scope))
+		q.After = nil
+	}
+	var fetched int
+	if err := db.ReadTx(t.Context(), accountScope(account), func(tx pg.Tx) error {
+		before, err := fetchedCallRows(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		if err := CheckOwnExportSize(t.Context(), tx, q); err != nil {
+			return err
+		}
+		after, err := fetchedCallRows(t.Context(), tx)
+		fetched = after - before
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("sparse success export probe fetched %d rows", fetched)
+	if fetched != 100 {
+		t.Errorf("sparse success export probe fetched %d rows for 100 matches", fetched)
+	}
+}

@@ -434,7 +434,7 @@ export interface paths {
         };
         /**
          * Stream the account's call metadata as CSV
-         * @description Same filters and newest-first cursor order as listCalls, from one database snapshot. Defaults to the last 30 days ending now, at most 31 days. At most 10000 rows per download, in pages of 200; a nonempty X-Next-Cursor trailer means more rows remain. Continue with that cursor and the same explicit since/until. X-Export-Since and X-Export-Until return the effective window, including defaults. X-Export-Complete is true only after the snapshot finishes successfully; a failed stream is aborted. Ten-second request deadline includes writes, and cancellation releases the snapshot. Amounts are exact decimal text in currency units with nine fractional digits. Cells whose first non-whitespace character is =, +, -, or @ are prefixed with an apostrophe; CSV quoting alone is insufficient. No conversation content, credentials, supplier cost, endpoint or route.
+         * @description Same filters and newest-first cursor order as listCalls, from one database snapshot. Defaults to the last 30 days ending now, at most 31 days. At most 10000 matching rows, streamed in pages of 200. Before writing CSV, a bounded ordered key probe in the same snapshot reads at most 10001 matching keys. More than 10000 matches is a 400 response: narrow the window or filters. A successful CSV contains every matching row after the optional cursor; it is never silently truncated. No HTTP trailers are needed. X-Export-Since and X-Export-Until return the effective window, including defaults. A failure after streaming starts aborts the connection. Ten-second request deadline includes writes, and cancellation releases the snapshot. Amounts are exact decimal text in currency units with nine fractional digits. Cells whose first non-whitespace character is =, +, -, or @ are prefixed with an apostrophe; CSV quoting alone is insufficient. No conversation content, credentials, supplier cost, endpoint or route.
          */
         get: operations["exportCalls"];
         put?: never;
@@ -1737,19 +1737,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Streamed CSV; check completion and continuation trailers */
+            /** @description Complete CSV of the selected calls, never a truncated chunk */
             200: {
                 headers: {
                     "Content-Disposition"?: string;
-                    Trailer?: string;
-                    /** @description Effective inclusive start; reuse as since when continuing a capped download. */
+                    /** @description Effective inclusive start, including the default window. */
                     "X-Export-Since"?: string;
-                    /** @description Effective exclusive end; reuse as until when continuing a capped download. */
+                    /** @description Effective exclusive end, including the default window. */
                     "X-Export-Until"?: string;
-                    /** @description Response trailer; nonempty when the row cap was reached with more matches. */
-                    "X-Next-Cursor"?: string;
-                    /** @description Response trailer; true only for a successfully completed export chunk. */
-                    "X-Export-Complete"?: string;
                     [name: string]: unknown;
                 };
                 content: {

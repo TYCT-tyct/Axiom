@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -91,12 +90,12 @@ func checkCallReport(t *testing.T, path string, rec *httptest.ResponseRecorder, 
 			t.Fatalf("%s: %s", path, rec.Body)
 		}
 	case "/calls/export":
+		if rec.Header().Get("Trailer") != "" {
+			t.Errorf("CSV requires trailers: %v", rec.Header())
+		}
 		rows, err := csv.NewReader(rec.Body).ReadAll()
 		if err != nil || len(rows) != 2 || rows[1][0] != id {
 			t.Errorf("CSV %v: %v", rows, err)
-		}
-		if rec.Result().Trailer.Get("X-Export-Complete") != "true" {
-			t.Error("no completion trailer")
 		}
 	}
 }
@@ -189,37 +188,32 @@ func (c callsFixture) seedCallHistory(n int) {
         WHERE id = '` + c.recent.ID.String() + `'`)
 }
 
-func TestCallCSVBoundAndContinuation(t *testing.T) {
+func TestCallCSVAtLimitExportsAll(t *testing.T) {
 	t.Parallel()
 	c := newCallsFixture(t)
-	c.seedCallHistory(callExportRows)
-	rec := c.f.do(http.MethodGet, "/calls/export", "", as(c.s))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("%d %s", rec.Code, rec.Body)
+	c.seedCallHistory(callExportRows - 3)
+	q := observability.OwnQuery{Account: c.old.Account, Since: c.now.Add(-24 * time.Hour), Until: c.now}
+	var output bytes.Buffer
+	if err := c.f.db.ReadTx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{q.Account}), func(tx pg.Tx) error {
+		if err := observability.CheckOwnExportSize(t.Context(), tx, q); err != nil {
+			return err
+		}
+		return callsCSV(t.Context(), tx, q, &output)
+	}); err != nil {
+		t.Fatal(err)
 	}
-	rows, err := csv.NewReader(rec.Body).ReadAll()
+	rows, err := csv.NewReader(&output).ReadAll()
 	if err != nil || len(rows) != callExportRows+1 {
 		t.Fatalf("%d rows: %v", len(rows), err)
 	}
-	trailer := rec.Result().Trailer
-	next := trailer.Get("X-Next-Cursor")
-	if next == "" || trailer.Get("X-Export-Complete") != "true" {
-		t.Fatalf("trailers %v", trailer)
-	}
-	params := url.Values{"cursor": {next}, "since": {rec.Header().Get("X-Export-Since")}, "until": {rec.Header().Get("X-Export-Until")}}
-	second := c.f.do(http.MethodGet, "/calls/export?"+params.Encode(), "", as(c.s))
-	rest, err := csv.NewReader(second.Body).ReadAll()
-	if err != nil || len(rest) != 4 {
-		t.Fatalf("rest %d: %v %s", len(rest), err, second.Body)
-	}
 	seen := map[string]bool{}
-	for _, row := range append(rows[1:], rest[1:]...) {
+	for _, row := range rows[1:] {
 		if seen[row[0]] {
 			t.Fatalf("duplicate %s", row[0])
 		}
 		seen[row[0]] = true
 	}
-	if len(seen) != callExportRows+3 || seen[c.stranger.ID.String()] {
+	if len(seen) != callExportRows || seen[c.stranger.ID.String()] {
 		t.Fatalf("IDs %d", len(seen))
 	}
 }
@@ -234,15 +228,13 @@ func TestCallCSVStreamsAndCancels(t *testing.T) {
 	var streamed bytes.Buffer
 	sink := statementWriterFunc(func(b []byte) (int, error) { cancel(); return streamed.Write(b) })
 	err := c.f.db.ReadTx(ctx, pg.NewScope(false, nil, []uuid.UUID{q.Account}), func(tx pg.Tx) error {
-		_, err := callsCSV(ctx, tx, q, sink)
-		return err
+		return callsCSV(ctx, tx, q, sink)
 	})
 	if !errors.Is(err, context.Canceled) || streamed.Len() == 0 {
 		t.Fatalf("streamed %d bytes: %v", streamed.Len(), err)
 	}
 	err = c.f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		_, err := callsCSV(t.Context(), tx, q, statementWriterFunc(func([]byte) (int, error) { return 0, io.ErrClosedPipe }))
-		return err
+		return callsCSV(t.Context(), tx, q, statementWriterFunc(func([]byte) (int, error) { return 0, io.ErrClosedPipe }))
 	})
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("write error: %v", err)
@@ -323,5 +315,21 @@ func TestCallCSVQuotesUntrustedMetadata(t *testing.T) {
 	}
 	if rows[1][4] != "'"+r.Model || rows[1][5] != "'"+r.ClientApp || rows[1][7] != "'"+r.ErrorKind {
 		t.Errorf("unsafe CSV row %q", rows[1])
+	}
+}
+
+func TestCallCSVRejectsOversizedExportBeforeWriting(t *testing.T) {
+	t.Parallel()
+	c := newCallsFixture(t)
+	c.seedCallHistory(callExportRows)
+	rec := c.f.do(http.MethodGet, "/calls/export", "", as(c.s))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized export status %d, want 400", rec.Code)
+	}
+	if detail := errorDetailOf(t, rec); detail.Code != codeInvalidRequest {
+		t.Errorf("oversized export error: %+v", detail)
+	}
+	if rec.Header().Get("Content-Disposition") != "" || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("rejected export started a CSV download: %v", rec.Header())
 	}
 }

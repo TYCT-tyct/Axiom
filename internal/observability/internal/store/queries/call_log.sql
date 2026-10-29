@@ -33,11 +33,29 @@ WHERE account_id = (@account_id::text)::uuid
     AND (@client_app::text = '' OR client_app = @client_app)
     AND (@key_id::text = '' OR key_id = nullif(@key_id, '')::uuid)
     AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
-    AND (@status::text = '' OR (error_kind <> '') = (@status = 'error'))
+    AND (@status::text = '' OR (error_kind IS DISTINCT FROM '') = (@status = 'error'))
     AND (@request_id::text = '' OR id = nullif(@request_id, '')::uuid)
 -- Qualified names preserve UUID index order rather than sorting the output's id::text.
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT @page_size;
+
+-- name: CountOwnExportCalls :one
+-- Count only a bounded ordered prefix, without loading call metadata into the export's memory.
+SELECT count(*)::int AS count FROM (
+    SELECT at, id
+    FROM observability.call_log
+    WHERE account_id = (@account_id::text)::uuid
+        AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
+        AND at >= @since AND at < @until
+        AND (@model::text = '' OR model = @model)
+        AND (@client_app::text = '' OR client_app = @client_app)
+        AND (@key_id::text = '' OR key_id = nullif(@key_id, '')::uuid)
+        AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
+        AND (@status::text = '' OR (error_kind IS DISTINCT FROM '') = (@status = 'error'))
+        AND (@request_id::text = '' OR id = nullif(@request_id, '')::uuid)
+    ORDER BY call_log.at DESC, call_log.id DESC
+    LIMIT @row_limit
+) AS bounded_calls;
 
 -- name: AggregateOwnCalls :many
 SELECT CASE @group_by::text
@@ -52,7 +70,7 @@ WHERE account_id = (@account_id::text)::uuid
     AND (@client_app::text = '' OR client_app = @client_app)
     AND (@key_id::text = '' OR key_id = nullif(@key_id, '')::uuid)
     AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
-    AND (@status::text = '' OR (error_kind <> '') = (@status = 'error'))
+    AND (@status::text = '' OR (error_kind IS DISTINCT FROM '') = (@status = 'error'))
     AND (@request_id::text = '' OR id = nullif(@request_id, '')::uuid)
 GROUP BY bucket, currency
 ORDER BY bucket, currency
