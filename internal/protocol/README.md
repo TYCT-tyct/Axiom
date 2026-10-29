@@ -33,7 +33,7 @@
 | `Provider`：OpenRouter 的 `provider` 对象，原样的字节，至多 4 KiB，没写或 `null` 为空；`Inspect` 只检查它是对象、大小在界内，含义由 gateway 读 | gateway 转成路由的覆盖条件（[gateway 的「入口与准入」](../gateway/README.md#入口与准入)） | `provider` | 同左 | 同左 |
 | `Needs` | 路由的能力过滤（[路由的「一个请求的路由步骤」](../../docs/domains/routing.md#一个请求的路由步骤)） | 见下 | 见下 | 见下 |
 
-`Needs` 的能力：`Images`、`Documents` 同上；`PromptCache` 是有 `cache_control`；`StructuredOutput` 是回复格式（Messages 的 `output_config.format`、`output_format`，Responses 的 `text.format`，Chat 的 `response_format`）的 `type` 为 `json_schema` 或 `json_object`；`Reasoning` 是推理设置（Messages 的 `thinking`，Responses、Chat 的 `reasoning`）没有说关（`type: "disabled"`、`effort: "none"`、`enabled: false`），或 Chat 的 `reasoning_effort` 不是 `none`；工具按 `type` 分：Messages 的 `web_search_*`、`code_execution_*`，Responses 的 `web_search*`、`code_interpreter` 是 `WebSearch`、`CodeExecution`，除下文明示拒绝的服务端工具外，其余工具都是 `Tools`；Chat 有 `web_search_options` 是 `WebSearch`。
+`Needs` 的能力：`Images`、`Documents` 同上；`PromptCache` 是有 `cache_control`；`StructuredOutput` 是回复格式（Messages 的 `output_config.format`、`output_format`，Responses 的 `text.format`，Chat 的 `response_format`）的 `type` 为 `json_schema` 或 `json_object`；`Reasoning` 是显式启用、effort 或预算要求（Messages 也读 `output_config.effort`）；缺省、null、空设置或只选展示方式不要求推理能力。任一关闭（`type: "disabled"`、`effort: "none"`、`enabled: false`，含 Chat 的 `reasoning_effort`）优先于强度，不受成员顺序影响；工具按 `type` 分：Messages 的 `web_search_*`、`code_execution_*`，Responses 的 `web_search*`、`code_interpreter` 是 `WebSearch`、`CodeExecution`，除下文明示拒绝的服务端工具外，其余工具都是 `Tools`；Chat 有 `web_search_options` 是 `WebSearch`。
 
 - **只按位置读**：从顶层出发，只沿消息、条目、部件的 `content` 和 `output`（Messages 的 `tool_result` 和 `document` 的 `source.content` 里也有部件）进入部件；Messages 和 Responses 部件的 `content`、`output` 也可以是单个部件，如服务端工具的结果、`computer_call_output` 的截图，按值的形状认，因为成员顺序不定，读到它时还不知道外层的 `type`；工具的 schema、工具调用的参数从不进入，所以客户端数据里叫 `cache_control`、`type`、`max_uses` 的键不算数。
 - **出错返回 `ErrInvalid`**（gateway 回 400）：不是 jsonx 接受的 JSON（非法 UTF-8、重复键、超过 `jsonx.MaxDepth`、值后还有数据）、不是对象、没有 `model`；读的成员类型不对、`provider` 超过 4 KiB、计数不是非负整数、同类工具的 `max_uses` 相加超出 int64；`service_tier`、`speed` 是表里没有的取值，因为定不了价。`null` 等于没写。错误说明是我们的话：JSON 语法错是 "Invalid request: invalid JSON request body"（new-api 的同一句），类型不对的值用 JSON 指针指出位置，解码库的原话（偏移量、Go 类型名）不外传（`bodyFault`，`TestAnInvalidBodyIsDescribedInOurWords`）。
@@ -109,7 +109,7 @@
 | 空的助手消息 | 不写（Anthropic 拒绝空内容，前后的用户消息由它合并） | 一个空的 `output_text` |
 | 函数工具 | `input_schema`，没有就是空对象；`strict: true` 只在 schema 属于 Anthropic 的子集时写，否则 `*NotSupported` | `strict` 总是写，Chat 没写就写 `false`：Responses 未写时尝试规范成 strict schema，失败才退回 best effort（OpenAI《Function calling》「Strict mode」） |
 | `tool_choice`、`parallel_tool_calls: false` | `auto`、`none`、`any`、`tool`，`disable_parallel_tool_use`；思考时或 `ForcedToolChoice` 不是 yes 时强制选工具 `*NotSupported` | 原样，指定的写成 `{"type":"function","name":…}` |
-| 推理强度 | `Thinking` 是 `none` 或未设置时 `*NotSupported`；自适应模型：`low` 到 `max` 照写，`none` 关闭，其余和推理预算 `*NotSupported`；手动模型：预算 = max(min(上限 × 比例, 128000), 1024)，比例按 OpenRouter（xhigh 0.95、high 0.8、medium 0.5、low 0.2、minimal 0.1），必须小于 `max_tokens`；最后一条助手消息调用了工具却没有可回放的推理时 `*NotSupported`（《Extended thinking》） | `reasoning.effort`，要看推理时加 `summary: "auto"`；推理预算 `*NotSupported` |
+| 推理强度与展示 | 按下节「推理控制与换算」 | 按下节「推理控制与换算」 |
 | `response_format` | `json_schema` 在子集内时写进 `output_config.format`；`json_object` 和子集外的 `*NotSupported` | `text.format` |
 | `temperature`、`top_p` | 默认值 1 不写；其余在 0 到 1 之间照写，思考时或 `DefaultSamplingOnly` 不是 no 时 `*NotSupported` | 照写 |
 | `stop` | `stop_sequences` | `*NotSupported` |
@@ -126,7 +126,7 @@
 
 - `system` / `instructions` 变成首条系统消息；Messages 块和 Responses 输入项依原顺序转成 Chat 内容、助手工具调用、工具结果。Messages 工具结果的 content 没写、null 或空数组时写成 Chat 的空字符串（[Anthropic 空工具结果](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls#example-of-empty-tool-result)，2026-10-20）。图片的 base64 源变成 data URL；Responses 的图片精度保留。内联 PDF、Responses 的内联文件数据使用已有 Chat 文件部件；远程文件 ID 拒绝。
 - `metadata.user_id` 变成派生后的 `user`；其他非空 metadata 成员、服务端工具、引用等没有对应表达的内容按已有 `NotSupported` 策略拒绝。Chat 工具结果只接受文本：媒体结果也拒绝；new-api、sub2api 会把其中图片搬到后续用户消息，本站不改变内容所属的轮次。每层对象消费已知成员后检查剩余成员，不能借嵌套对象悄悄丢掉约束。路由参数由 gateway 使用后删除，缓存提示按既有可丢策略处理。
-- Messages 的 `thinking.enabled.budget_tokens` 使用 Chat/OpenRouter 的 `reasoning.max_tokens`，保留精确预算；adaptive 默认 high，显式 `output_config.effort` 优先；disabled 使用 none。Responses 的 effort 原样，summary 只接受 auto。此处不按模型名猜推理方言，仍由 Chat 端点解释；不能把预算近似成另一个努力等级。Messages 的结构化输出使用固定名称 response 包装原 schema；Responses 的 `text.format`、verbosity 反向展开。
+- Messages 的预算、adaptive、effort、disabled 与展示方式按下节「推理控制与换算」转换，不向官方 Chat 添加非标准预算或展示参数。Messages 的结构化输出使用固定名称 response 包装原 schema；Responses 的 `text.format`、verbosity 反向展开。
 - 工具定义显式的参数、说明、strict 原样；Responses 未写 strict 时显式写 false，采用 best effort；parameters 原样保留，不拒绝扩展关键字，也不改 additionalProperties。Chat 无法保证 Responses 服务端的隐式规范化，因此不自行收紧工具约束（[OpenAI Strict mode](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)，2026-10-20）。is_error 工具结果转换成 Chat 工具消息，并在结果文本前加 Error: 标记；空、字符串与文本数组均保留失败信号。工具调用、结果的 ID 保持一致，并复用 `canon.checkCalls` 检查。Responses 的 truncation 只接受 disabled、background 只接受 false，include 只接受 reasoning.encrypted_content 提示；Chat 无密文可回，因此不把这个提示交给上游。待挂推理在下一个非助手消息之前落成助手消息；工具结果之前的孤立推理丢弃，保持调用/结果相邻。可读的推理文本回放到 `reasoning_content`；别家签名、密文不交给 Chat，沿用反向转换对不可回放推理的丢弃规则。
 - Responses 的 `store` 由本站管理；`previous_response_id` 必须与 `Rewrites.History` 一致，先拼历史再转换，当前 instructions 不从历史继承。输出上限、派生标识、强制 stream 和 include_usage 全部交给同一个 Chat 改写器。
 - 新方向的 `PrepareCost` 单独覆盖对象映射、规范编码和校验同时在场的工作集：每字节 12、每个 `{` / `null` 3072、每个 `:` 512，另加目标名字和派生标识；历史逐项计入。原方向与同格式的基础预算公式不变；原生回放清理的额外预算见「同格式改写」；`TestNativeChatPrepareCostBoundsAllocations` 在独立子进程里以非竞态构建核对长文本、大量短消息和大对话的分配上界，且这些代表性形状的预估不超过实测两倍。竞态构建会随机丢弃 `sync.Pool` 中的 JSON 缓冲，不能用它衡量生产内存预算；该测试应与分配基准一起单独运行，行为测试仍跑竞态检测。
@@ -136,6 +136,26 @@
 - **旧客户端回复**：`UsageContext.LegacyFunctions` 随 `Upstream.Usage` 交给 `NewRelay`；只有旧请求且没有非空现代工具声明或现代工具选择时为真。该请求有工具声明时才强制关闭并行调用（Messages 为 `disable_parallel_tool_use:true`），只有历史而没有工具声明时省略并行开关，现代和混用声明的客户端保持原工具数组。旧客户端的流在计量之后由 `legacyreply.go` 改写成 `delta.function_call`，同一索引的名字/参数片段依次拼接，原有 `function_call` 占位字段先删除；工具类型的 `null` 或空字符串按未给出处理，非空类型只接受解码后的 `function`。非流式仍聚合现代工具片段，最后输出 `message.function_call`。结束原因与最终用量块中的结束原因都写 `function_call`，失败、用量和费用规则不变。非零工具索引按 `ErrUpstream` 处理，避免丢弃并行调用；流改写与拼片段的复用缓冲计入 relay 内存预算。OpenAI/OpenRouter 依据、兼容差异及理由见[接入的「决策与理由」](../../docs/domains/gateway.md#决策与理由)。
 - **控制字段的值**：布尔开关按 token 种类、字符串枚举按解码值、推理片段的索引按非负 int64 比较。`0` 与 `-0` 的片段合并，保留第一项索引的原写法；非法索引拒绝。正文、签名和工具参数不参与规范化。
 - **结构化输出的子集**（Anthropic《Structured outputs》「JSON Schema limitations」，2026-10-15）：没有数值、字符串约束，数组只有 `minItems` 0 或 1，每个对象都写 `additionalProperties: false`，枚举只含简单值，`format` 在它的列表里，`$ref` 只指向本 schema 的定义、不递归（每个定义只展开一次，已查完的不再展开，所以共享定义的 schema 按大小线性检查），`allOf` 里没有 `$ref`。不在子集内就换端点，不靠删约束凑。
+
+### 推理控制与换算
+
+不变量：是否启用、强度、是否展示分别表达。`canon.effort` 的空串表示未指定，`none` 表示明确关闭；关闭优先于强度，`exclude` 不等于关闭。`UsageContext.HidesReasoning` 从原客户端请求带到每次尝试，输出过滤在上游计量之后执行；流式与聚合共用，完整 usage、内容字节上界与结算不因隐藏而减少。Chat 删除 `reasoning`、`reasoning_content`、整个 `reasoning_details`；Messages 清空 thinking 文本，Responses 去掉摘要与 reasoning_text 部件；原生格式保留签名或密文供续聊。正常展示路径不启动隐藏改写；Chat 隐藏块不提前提交，首个可见内容仍是回退边界。
+
+来源（2026-10-29 核实）：[OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)、[Anthropic Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)、[Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)、[Effort](https://platform.claude.com/docs/en/build-with-claude/effort)、[OpenAI Reasoning models](https://developers.openai.com/api/docs/guides/reasoning)。下表是协议层映射；同格式 Chat 保留端点方言，不重写强度；Messages 与 Responses 直接转换仍未实现。
+
+| 输入设置 | Messages manual 目标 | Messages adaptive 目标 | Responses 目标 | 原生 Messages / Responses → Chat |
+|---|---|---|---|---|
+| 未指定 / null / 空对象 | 不加 thinking | 不加 thinking | 不加 reasoning | 不加推理设置 |
+| Chat enabled true | 以 medium 算预算 | adaptive + medium | effort medium | Messages adaptive 无 effort → medium（OpenRouter 开启默认，替换原 high） |
+| enabled false / effort none | thinking disabled | thinking disabled | effort none，不索取摘要 | Messages disabled → reasoning_effort none，压过 output_config.effort；Responses none 原值 |
+| minimal / low / medium / high | 输出上限的 10% / 20% / 50% / 80% | minimal → low；其余原值 | 原值 | 共享 effort 原值 |
+| xhigh / max | 都为输出上限的 95% | 原值 | 原值（当前 OpenAI 规范已列 max） | 原值，不沿用参考实现 max → xhigh 的旧规则 |
+| Chat reasoning.max_tokens | 原值 budget_tokens | 按最近比例换 effort | 同左 | Messages budget_tokens → reasoning_effort，比例同左；同时给 output_config.effort 时优先 effort |
+| Chat exclude true / false | 开启时加 display omitted / summarized | 加 display omitted / summarized；只给展示方式时保留默认强度 | true 不索取摘要；false 索取 summary auto | Messages display 只控制本地输出过滤，不向官方 Chat 添加非标准参数；Responses summary auto 可转，其他样式仍拒绝 |
+
+手动 effort 预算沿用 OpenRouter：`max(min(输出上限 × 比例, 128000), 1024)`；显式预算必须为正，手动模型还要求至少 1024 且严格小于输出上限，否则该端点 `NotSupported`。manual 在工具轮次缺少可回放的思考时仍拒绝。只有 effort 的目标不能保证精确 token 预算：按预算与有效输出上限之比取最近档（10%、20%、50%、80%、95%），同距取较低档，95% 取 xhigh。有效上限优先请求，否则取 `Target.MaxOutput`；都没有则返回 `NotSupported`。adaptive 的最低档为 low，因此 minimal 再近似为 low。比例只是强度换算，不承诺实际消耗或硬预算。
+
+具体模型支持的档位、能否关闭仍受厂商限制；现有目录没有 supported_efforts / mandatory，不按模型名猜，也不把关闭改成低强度。`ThinkingUnset` 在需要开启时仍拒绝；`ThinkingNone` 不接开启请求。同格式设置保留原文，让厂商校验模型限制。`TestReasoningControlsAcrossFormats`、`TestReasoningEffortBudgets`、`TestNativeReasoningRequestsToChat` 覆盖请求；`TestHiddenReasoningRecordedStreams` 在七个组合、流式与聚合两种模式回放录制流，比较隐藏前后的完整用量和内容上界。
 
 ## 读 SSE
 
@@ -374,7 +394,7 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 | 推理细节每块一条、带 `index`，签名单独一条 | 与 OpenRouter 的流式写法相同，客户端看得到推理的进度；请求一侧按 `index` 合并，原样交回也能回放 | 扣到块结束再一次给出：流式客户端看不到推理 |
 | 步骤类型带 `Step` 前缀 | 草图里的 `Progress` 既是类型又是步骤类型，同一个包里不能重名 | 改名 `Progress` 类型：billing 的草图用这个名字 |
 | 规范模型保留 Chat 的形状，反向转换先读成本节同一映射，再经 canon 校验 | 三种格式共用工具配对和内容形状约束；同格式不经过模型，原方向的热路径分配不变 | 经第三种格式中转：多一次有损映射与编解码 |
-| 表达不了的请求返回 `*NotSupported`，不近似 | 删掉约束、换写法会让模型做的不是客户端要的；换个端点能原样表达 | 尽量转换：结构化输出删掉子集外的约束、低细节图片按高细节发 |
+| 除推理控制的明示映射外，表达不了的请求返回 `*NotSupported` | 推理采用 OpenRouter 基线的预算/effort 近似，边界见「推理控制与换算」；其他约束仍不删改，换端点原样表达 | 尽量转换：结构化输出删掉子集外的约束、低细节图片按高细节发 |
 | 模型的思考方式、对话中系统消息、采样限制由 `Target` 带来 | 按模型名猜，新模型一出就错；catalog 的模型规格还没实现，由 gateway 从后台数据填 | 在 protocol 里按模型名判断 |
 | Responses 的推理项只回放带密文的 | 上游不存状态，只有 ID 的推理项查不到 | 只有摘要也回放 |
 | 拉取式：调用方循环调用 `Next` | 空闲超时只被真正的数据事件重置（[总体架构](../../docs/architecture.md#协议转换)）：注释在 `Next` 内部跳过，天然不算；`Next` 不认识数据里的事件类型，所以由认识格式的调用方先分出 Messages 的 `ping` 这类心跳，只在真正的数据事件上重置 | 回调或通道：取消和计时分散到两处 |

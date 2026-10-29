@@ -117,6 +117,7 @@ func newResponsesToChat(u UsageContext, o RelayOptions, charge func(int) error) 
 	inner.converting = true
 	s := &responsesToChat{raw: inner, items: map[int64]*responsesItem{}, parts: map[partKey]*snapshot{}}
 	s.init(inner, o, charge)
+	s.hidesReasoning = u.HidesReasoning
 	return s
 }
 

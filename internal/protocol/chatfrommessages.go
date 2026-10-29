@@ -75,6 +75,7 @@ func newMessagesToChat(u UsageContext, o RelayOptions, charge func(int) error) u
 	inner.converting = true
 	s := &messagesToChat{open: -1, leading: true}
 	s.init(inner, o, charge)
+	s.hidesReasoning = u.HidesReasoning
 	return s
 }
 

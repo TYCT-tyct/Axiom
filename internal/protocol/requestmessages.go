@@ -9,8 +9,8 @@ import (
 // messagesRequestToChat inverts toMessages. The block splitting follows sub2api
 // backend/internal/pkg/apicompat/chatcompletions_anthropic_bridge.go (8f2cbb5);
 // text and image blocks keep their position rather than being lifted across turns.
-func messagesRequestToChat(src, dst requestObject) ([]requestObject, error) {
-	if err := messagesSettings(src, dst); err != nil {
+func messagesRequestToChat(src, dst requestObject, maxOutput int64) ([]requestObject, error) {
+	if err := messagesSettings(src, dst, maxOutput); err != nil {
 		return nil, err
 	}
 	var out []requestObject
@@ -54,7 +54,7 @@ func messagesTurnToChat(raw jsontext.Value) ([]requestObject, error) {
 	return out, o.remaining()
 }
 
-func messagesSettings(src, dst requestObject) error {
+func messagesSettings(src, dst requestObject, maxOutput int64) error {
 	src.move(dst, "max_tokens", "max_tokens")
 	src.move(dst, "stop_sequences", "stop")
 	if tier := dst["service_tier"]; string(tier) == `"standard_only"` {
@@ -72,16 +72,13 @@ func messagesSettings(src, dst requestObject) error {
 			return err
 		}
 	}
-	if err := messagesThinking(src, dst); err != nil {
+	if err := messagesThinking(src, dst, maxOutput); err != nil {
 		return err
 	}
 	return nil
 }
 
-func messagesThinking(src, dst requestObject) error {
-	if err := thinkingToChat(src.take("thinking"), dst); err != nil {
-		return err
-	}
+func messagesThinking(src, dst requestObject, maxOutput int64) error {
 	if v := src.take("output_config"); !isNull(v) {
 		o, err := requestMembers(v)
 		if err != nil {
@@ -95,34 +92,58 @@ func messagesThinking(src, dst requestObject) error {
 			return err
 		}
 	}
-	return nil
+	return thinkingToChat(src.take("thinking"), dst, maxOutput)
 }
 
-func thinkingToChat(v jsontext.Value, dst requestObject) error {
-	if !isNull(v) {
-		o, err := requestMembers(v)
-		if err != nil {
+func thinkingToChat(v jsontext.Value, dst requestObject, maxOutput int64) error {
+	if isNull(v) {
+		return nil
+	}
+	o, err := requestMembers(v)
+	if err != nil {
+		return err
+	}
+	switch string(o.take("type")) {
+	case `"disabled"`:
+		dst["reasoning_effort"] = jsonValue("none")
+	case `"adaptive"`:
+		if isNull(dst["reasoning_effort"]) {
+			dst["reasoning_effort"] = jsonValue("medium")
+		}
+	case `"enabled"`:
+		if err := budgetToChat(o.take("budget_tokens"), dst, maxOutput); err != nil {
 			return err
 		}
-		switch string(o.take("type")) {
-		case `"disabled"`:
-			dst["reasoning_effort"] = jsonValue("none")
-		case `"adaptive"`:
-			dst["reasoning_effort"] = jsonValue("high")
-		case `"enabled"`:
-			budget := o.take("budget_tokens")
-			var n int64
-			if err := jsonx.Unmarshal(budget, &n); err != nil || n < 1024 {
-				return shapeError("thinking budget must be at least 1024")
-			}
-			dst["reasoning"] = jsonValue(requestObject{"max_tokens": budget, "enabled": jsonValue(true)})
-		default:
-			return &NotSupported{Reason: "thinking mode has no Chat counterpart"}
+	default:
+		return &NotSupported{Reason: "thinking mode has no Chat counterpart"}
+	}
+	if display := o.take("display"); !isNull(display) {
+		if !controlIs(display, "omitted") && !controlIs(display, "summarized") {
+			return &NotSupported{Reason: "thinking.display has no Chat counterpart"}
 		}
-		if err := o.remaining(); err != nil {
+	}
+	return o.remaining()
+}
+
+func budgetToChat(budget jsontext.Value, dst requestObject, maxOutput int64) error {
+	var n int64
+	if err := jsonx.Unmarshal(budget, &n); err != nil || n < 1024 {
+		return shapeError("thinking budget must be at least 1024")
+	}
+	if !isNull(dst["reasoning_effort"]) {
+		return nil
+	}
+	if cap := dst["max_tokens"]; !isNull(cap) {
+		if err := jsonx.Unmarshal(cap, &maxOutput); err != nil {
 			return err
 		}
 	}
+	c := canon{Reasoning: &canonReasoning{MaxTokens: &n}}
+	effort, err := c.targetEffort(maxOutput)
+	if err != nil {
+		return err
+	}
+	dst["reasoning_effort"] = jsonValue(effort)
 	return nil
 }
 

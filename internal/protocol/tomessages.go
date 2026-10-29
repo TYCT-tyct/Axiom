@@ -49,10 +49,10 @@ type messagesWriter struct {
 }
 
 // manualRatios are OpenRouter's shares of max_tokens for a thinking budget by effort (OpenRouter《Reasoning
-// tokens》, read 2026-10-14).
-var manualRatios = map[string]float64{"xhigh": 0.95, "high": 0.8, "medium": 0.5, "low": 0.2, "minimal": 0.1}
+// tokens》, read 2026-10-29).
+var manualRatios = map[string]float64{"max": 0.95, "xhigh": 0.95, "high": 0.8, "medium": 0.5, "low": 0.2, "minimal": 0.1}
 
-// adaptiveEfforts are the efforts output_config.effort takes (Anthropic《Effort》, read 2026-10-14).
+// adaptiveEfforts are the efforts output_config.effort takes (Anthropic《Effort》, read 2026-10-29).
 var adaptiveEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 
 // check settles what the request asks of the model before anything is written.
@@ -82,8 +82,12 @@ func (m *messagesWriter) check() error {
 
 // checkThinking maps the reasoning the request asks for onto the model's way of thinking.
 func (m *messagesWriter) checkThinking() error {
-	m.effort = m.c.effort()
-	m.thinkingOn = m.effort != "" && m.effort != "none"
+	var err error
+	m.effort, err = m.c.targetEffort(m.maxTokens)
+	if err != nil {
+		return err
+	}
+	m.thinkingOn = m.effort != "" && m.effort != "none" || m.effort == "" && m.c.Reasoning != nil && m.c.Reasoning.Exclude != nil && m.t.Thinking == catalog.ThinkingAdaptive
 	if !m.thinkingOn {
 		return nil
 	}
@@ -112,10 +116,10 @@ func (c *canon) budget() *int64 {
 
 // checkAdaptive holds the effort to the ones output_config.effort takes; such a model sets its own budget.
 func (m *messagesWriter) checkAdaptive() error {
-	if m.c.budget() != nil {
-		return &NotSupported{Reason: "a thinking budget for a model that sets its own"}
+	if m.effort == "minimal" {
+		m.effort = "low"
 	}
-	if !slices.Contains(adaptiveEfforts, m.effort) {
+	if m.effort != "" && !slices.Contains(adaptiveEfforts, m.effort) {
 		return &NotSupported{Reason: "effort " + m.effort + " has no Messages counterpart"}
 	}
 	return nil
@@ -435,9 +439,7 @@ func messagesTool(out []byte, tool canonTool) ([]byte, error) {
 	return append(out, '}'), nil
 }
 
-// thinking writes the thinking setting and output_config: the effort of an adaptive model, and the schema of a
-// structured reply.
-func (m *messagesWriter) thinking(out []byte) ([]byte, error) {
+func (m *messagesWriter) thinkingSetting(out []byte) []byte {
 	adaptive := m.thinkingOn && m.t.Thinking == catalog.ThinkingAdaptive
 	switch {
 	case adaptive:
@@ -446,6 +448,23 @@ func (m *messagesWriter) thinking(out []byte) ([]byte, error) {
 		out = strconv.AppendInt(append(out, `,"thinking":{"type":"enabled","budget_tokens":`...), m.budget, 10)
 		out = append(out, '}')
 	}
+	if m.thinkingOn && m.c.Reasoning != nil && m.c.Reasoning.Exclude != nil {
+		out = out[:len(out)-1]
+		if *m.c.Reasoning.Exclude {
+			out = append(out, `,"display":"omitted"}`...)
+		} else {
+			out = append(out, `,"display":"summarized"}`...)
+		}
+	} else if m.effort == "none" {
+		out = append(out, `,"thinking":{"type":"disabled"}`...)
+	}
+	return out
+}
+
+// thinking writes the thinking setting and output_config, including a structured reply schema.
+func (m *messagesWriter) thinking(out []byte) ([]byte, error) {
+	out = m.thinkingSetting(out)
+	adaptive := m.thinkingOn && m.t.Thinking == catalog.ThinkingAdaptive && m.effort != ""
 	format, err := m.replyFormat()
 	if err != nil {
 		return nil, err

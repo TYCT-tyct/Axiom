@@ -23,6 +23,7 @@ type converted struct {
 	out   []byte // the chunk the event becomes, charged and reused
 	head  []byte // every chunk's start, up to its delta's members
 	// started: the role chunk is out; finished: the finish_reason is held, after which no content may come.
+	hidesReasoning    bool
 	started, finished bool
 	tools, details    int64 // the tool calls and reasoning details started
 }
@@ -122,6 +123,9 @@ func (c *converted) addEntry(dst *[]byte, parts ...[]byte) error {
 // content.
 func (c *converted) render() (data []byte, content bool, err error) {
 	d := &c.draft
+	if c.hidesReasoning {
+		d.reasoning, d.details = d.reasoning[:0], d.details[:0]
+	}
 	members := []struct {
 		name string
 		v    []byte
