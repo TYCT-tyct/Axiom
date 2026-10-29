@@ -42,6 +42,7 @@ func (silentSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, 
 // chainFixture is a database with all modules, one funded account, and billing started under a live holder.
 type chainFixture struct {
 	app           *pg.DB
+	super         string // the superuser's URL, for what the application may not write
 	platformScope pg.Scope
 	scope         pg.Scope
 	site          uuid.UUID
@@ -71,7 +72,7 @@ func newChainFixtureWith(t *testing.T, cfg billing.Config, suppliers billing.Sup
 	t.Cleanup(app.Close)
 	ctx := t.Context()
 	f := chainFixture{
-		app: app, platformScope: pg.PlatformScope(),
+		app: app, super: database.Superuser, platformScope: pg.PlatformScope(),
 		site: uuid.NewV7(), account: uuid.NewV7(), workspace: uuid.NewV7(), key: uuid.NewV7(),
 	}
 	f.scope = pg.NewScope(false, nil, []uuid.UUID{f.account})

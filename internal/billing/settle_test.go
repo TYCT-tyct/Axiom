@@ -351,7 +351,7 @@ func (b *bank) takenOver(h *Hold) {
 
 func (b *bank) cleanup() {
 	b.t.Helper()
-	time.Sleep(5 * time.Millisecond) // past the reservation's deadline
+	b.pastDeadline()
 	if _, err := b.billing.Cleanup(b.t.Context(), 100); err != nil {
 		b.t.Fatal(err)
 	}
@@ -431,7 +431,6 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 	case n == 3: // a retry of a settlement already made
 		b.settleRandom(r, pick())
 	default: // a crash: what was left pending goes to cleanup, which records the request as lost
-		time.Sleep(time.Duration(r.IntN(2)) * 25 * time.Millisecond)
 		b.cleanup()
 	}
 }
