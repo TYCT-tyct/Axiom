@@ -24,13 +24,14 @@ def enabled(name, event, stress=False, draft=False, docs=False):
     return expression(condition, event, stress, draft, docs)
 
 
-def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None):
+def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base=""):
     results = results or {}
     values = {
         "always()": True,
         "github.event_name": event,
         "github.event.pull_request.draft": draft,
         "inputs.gate_stress": stress,
+        "inputs.base": base,
         "needs.changes.result": results.get("changes", "success"),
         "needs.changes.outputs.docs_only": "true" if docs else "false",
         "needs.changes.outputs.web": "true",
@@ -256,13 +257,23 @@ class TestContainerPolicy(unittest.TestCase):
 
 
 class ReleaseChecks(unittest.TestCase):
-    def test_only_main_builds_and_retains_releases(self):
+    def step_condition(self, name):
+        return re.search(r"- name: " + name + r"\n        if: (.+)", job("deploy"))[1]
+
+    def runs(self, name, ref, base=""):
+        return expression(self.step_condition(name).replace("github.ref", repr(ref)), base=base)
+
+    def test_every_build_rehearses_deployment_once_and_trains_build_releases(self):
         deploy = job("deploy")
-        for name in ("Build and rehearse release by digest", "Retain release image and provenance"):
-            condition = re.search(r"- name: " + name + r"\n        if: (.+)", deploy)[1]
-            for ref in ("refs/heads/main", "refs/heads/train/main/1", "refs/pull/1/merge"):
-                with self.subTest(step=name, ref=ref):
-                    self.assertEqual(expression(condition.replace("github.ref", repr(ref))), ref == "refs/heads/main")
+        for ref, base, rehearsal, retains in (
+            ("refs/heads/main", "", "release", True),           # main builds the release and keeps the artifact
+            ("refs/heads/train/main/1", "base", "release", False),  # a train exercises the release step too
+            ("refs/heads/topic", "", "deploy", False),          # a manual branch dispatch with no base
+        ):
+            with self.subTest(ref=ref, base=base):
+                self.assertEqual(self.runs("Rehearse train deployment", ref, base), rehearsal == "deploy")
+                self.assertEqual(self.runs("Build and rehearse release by digest", ref, base), rehearsal == "release")
+                self.assertEqual(self.runs("Retain release image and provenance", ref, base), retains)
         self.assertIn("if-no-files-found: error", deploy)
         self.assertIn("retention-days: 30", deploy)
         self.assertNotIn("secrets.", deploy)
