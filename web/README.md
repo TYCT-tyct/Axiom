@@ -14,6 +14,7 @@
 | `packages/api/` | 由 `api/console.yaml`、`api/admin.yaml` 生成的类型（`*.gen.ts`）和调用它们的客户端（`consoleApi`、`adminApi`）；`@axiom/api/auth` 是两个界面的登录、两步验证调用，形状相同，登录页面只对着它写 | — |
 | `packages/app/` | 控制台和后台共用、又不属于设计系统的部分：会话与 `Gate`、登录、第二步、强制开启两步验证、恢复码、外壳、新版本提示、错误译文。设计系统不依赖路由，所以它们不放进 `packages/ui/` | — |
 | `e2e/` | Playwright 端到端测试 | — |
+| `journey/` | 对着真实 Axiom 进程的旅程测试和启动它的 `node.ts`（[测试](#测试)） | — |
 | `scripts/embed.ts`、`scripts/compress.ts` | 把构建产物复制到 Go 代码树供程序嵌入，附预压缩的副本和内容安全策略；压缩函数只有这一个，体积预算也用它 | — |
 | `scripts/budget.ts` | 体积预算检查 | — |
 | `scripts/limits.ts` | 函数的圈复杂度和长度、文件长度检查 | — |
@@ -31,6 +32,7 @@
 | `just web-embed` | 先构建，再把三个应用复制到 `internal/platform/webui/build/`（不入库）供程序嵌入；`just up`、`just test`、`just web` 都先做这一步，没做的程序启动时会说要做 |
 | `just web-checks` | 构建、嵌入和除端到端之外的全部前端检查；CI 的 `web` 作业运行它 |
 | `just web-e2e "1/2"` | 构建、嵌入并运行第 1/2 个端到端分片；不传参数时跑完整的 `1/1`，CI 的两个 `e2e` 分片与 `web` 并行 |
+| `just web-journey` | 构建、嵌入并运行真实服务的旅程（要 Docker）；不含在 `just web` 里，CI 的 `journey` 作业只在列车和 `main` 上跑 |
 | `just web` | 前端的全部检查：类型、lint、函数和文件长度、未使用的代码、重复代码、单元测试、构建、体积预算、端到端测试；`just check` 包含它 |
 | `just generate` | 重新生成接口类型；`just generated` 检查生成结果已提交 |
 
@@ -73,6 +75,7 @@
 
 - 接口模拟的机制集中在 `e2e/mock.ts`（会话、权限、CSRF、Origin 的校验，后台操作的 Idempotency-Key 与理由），各界面只写自己的路由和数据：`e2e/console-api.ts`、`e2e/console-data.ts` 和 `e2e/admin-*.ts`（数据：常见、空、最坏）。路径、方法、请求体和每个响应的状态与 JSON 都由契约的类型约束，与契约不符就编译不过。
 - 验收门槛的截图：`AXIOM_SHOTS_DIR=<目录> pnpm --dir web e2e shots`（可用 `-g "admin users"` 缩小范围），写出控制台和后台每个页面在四种宽度、深浅色、中英文下的截图，以及最坏数据和极端品牌色（改令牌）的截图，只给人看，不入库。
+- 真实服务的旅程（`journey/`、`playwright.journey.config.ts`）：一个测试带着浏览器走一遍新用户的第一天，对着真实的 Axiom 进程，不模拟接口：用邀请码注册、登录、创建 key、充值、调用一次模型，在调用记录和额度流水里看到这次调用和扣费。服务端在 `cmd/axiom/journey_test.go`（构建标签 `journey`）：真实的 PostgreSQL 与 Valkey（容器），`axiom site`、`axiom user` 建站点和邀请人，目录、供应商、定价照调用路径测试的世界，只有外部的两样是假的：供应商（回放录制的流）和 EasyPay 网关（接单、回答查询、由旅程通知它「已支付」）。`journey/node.ts` 在 Playwright 的 globalSetup 里编译并启动它，节点写出地址后才开始测试，标准输入一关（含旅程崩溃）节点就停。站点域名是 `localhost:<端口>`，因为只有 localhost 在明文 http 下发会话 Cookie；API 域名是同一端口的 IP。控制台还没有充值页面（#317），所以充值这一步用浏览器会话调控制台的接口（订单、验证），再在页面上看余额。要 Docker，不在 e2e 的容器里，用 `just web-journey` 跑（`just web` 不含它），CI 的 `journey` 作业只在列车和 `main` 上跑，失败时上传 `test-results/`（浏览器 trace 和 `journey-node.log`）。
 - 单元测试（Vitest）测不需要浏览器的逻辑，和代码放在一起（`*.test.ts`）。
 - 端到端测试（Playwright）对着嵌入程序的构建产物跑：`internal/platform/webui/cmd/serveweb` 起程序自己的静态服务（公网监听上是官网和控制台，管理监听上是管理后台），发送服务端真实的缓存头、压缩和内容安全策略；接口用 `page.route` 模拟，不需要数据库。用 `just web` 跑全部检查，或用 `just web-e2e` 单跑端到端：两者都先构建并嵌入，再把构建写入的版本号传给测试。分片使用 `just web-e2e "1/2"`（内部为 `pnpm --dir web e2e --shard=1/2`），通过结果按完整命令缓存，分片序号和总数不同就不能复用；测试自己挑三个应用及其服务端口都空闲的端口（随机选，两个工作区同时跑不会撞），不设固定端口，也不会拿别的工作区的服务测；`AXIOM_WEB_PORT` 设了就用它，端口已被占用时测试失败。开发服务器要在另一个工作区同时跑，设环境变量 `AXIOM_WEB_PORT` 把三个应用的端口整体挪开（默认 `5173`，测试用的服务端口在其上加 1000），例如 `AXIOM_WEB_PORT=5273 just web`。并行的 worker 最多 8 个（`playwright.config.ts`）：Playwright 默认按整机核数的一半开，在 96 核的 CI 机上是 48 个，几个作业同时跑时每项检查被拖到超时（#297）。同一台 8 核机器、负载 10 到 20 时测 `gate.spec.ts` 里 axe 扫描的耗时：1 个 worker 中位 1.0 秒、最大 2.0 秒；4 个 1.2 秒、2.6 秒；8 个 1.8 秒、3.7 秒；48 个 14.5 秒、29 秒，20 项超过 30 秒。扫描本身不变，慢的是 worker 比核多后互相抢 CPU，所以靠上面的 worker 上限解决，不单独放宽超时、不重试。
 

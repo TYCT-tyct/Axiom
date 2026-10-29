@@ -60,8 +60,8 @@ def irrelevant_to_deployment(path: str) -> bool:
         or "testdata" in parts[:-1]
         or parts[0] == ".github"
         or IRRELEVANT_SCRIPT.fullmatch(path) is not None
-        or parts[:2] == ("web", "e2e")
-        or path == "web/playwright.config.ts"
+        or parts[:2] in (("web", "e2e"), ("web", "journey"))
+        or path in ("web/playwright.config.ts", "web/playwright.journey.config.ts")
     )
 
 

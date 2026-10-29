@@ -215,6 +215,41 @@ jobs:
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
 
+  # One browser against a real node with PostgreSQL and Valkey (#321): the host runs it, not the web container, because
+  # the node's test containers need Docker. Like go-test and e2e, not on a pull request; a failure keeps the browser's
+  # trace and the node's log.
+  journey:
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the frontend's version stamp comes from this tree's history
+      - name: Configure test container policy
+        run: |
+          echo "AXIOM_TEST_JOB=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB" >> "$GITHUB_ENV"
+          if [ -n "${AXIOM_TEST_CGROUP_PARENT:-}" ]; then
+            echo "TESTCONTAINERS_RYUK_DISABLED=true" >> "$GITHUB_ENV"
+          fi
+      - name: Clean test containers before tests
+        run: bash scripts/ci/clean-test-containers.sh
+      - uses: ./.github/actions/setup
+        with:
+          playwright: "true"
+      - run: just web-journey
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
+        with:
+          name: journey-test-results
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Clean test containers after tests
+        if: always()
+        run: bash scripts/ci/clean-test-containers.sh
+
   # A train or main only: a PR's change cannot move a benchmark's allocation count without the train catching it, and
   # the comparison is 4-5 minutes of the PR's wall. On main every benchmark runs once under -race (`bench-once`); a
   # train compares allocations against its base, with the existing skip rule.
@@ -277,7 +312,7 @@ jobs:
   build:
     # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
     name: build
-    needs: [changes, static, go-test, web, e2e, bench, deploy]
+    needs: [changes, static, go-test, web, e2e, journey, bench, deploy]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
@@ -293,6 +328,8 @@ jobs:
       # `needs.e2e.result` aggregates the whole matrix. Only Markdown-only builds and pull requests may skip its shards.
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.e2e.result }}' = success
+      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+        run: test '${{ needs.journey.result }}' = success
       - if: github.ref == 'refs/heads/main' && !inputs.gate_stress
         run: test '${{ needs.deploy.result }}' = success
       - run: echo "every required job passed; only optional jobs were skipped"
