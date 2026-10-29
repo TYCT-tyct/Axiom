@@ -16,11 +16,12 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 	if !isNull(c.Stop) {
 		return nil, &NotSupported{Reason: "stop has no Responses counterpart"}
 	}
-	if c.budget() != nil {
-		return nil, &NotSupported{Reason: "a reasoning budget has no Responses counterpart"}
+	effort, err := c.targetEffort(cmp.Or(c.maxOutput(), t.MaxOutput))
+	if err != nil {
+		return nil, err
 	}
 	out := appendQuoted(append([]byte(nil), `{"model":`...), t.Model)
-	out, err := input(append(out, `,"input":[`...), c, t.CacheBreakpoints == catalog.ClaimYes)
+	out, err = input(append(out, `,"input":[`...), c, t.CacheBreakpoints == catalog.ClaimYes)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +34,7 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 			return nil, err
 		}
 	}
-	out = responsesSettings(out, c, t)
+	out = responsesSettings(out, c, t, effort)
 	for _, id := range []struct {
 		name  string
 		value *string
@@ -61,7 +62,7 @@ func input(out []byte, c *canon, breakpoints bool) ([]byte, error) {
 
 // responsesSettings writes the cap, sampling, reasoning, streaming and service tier. A request that sets no cap gets
 // t.MaxOutput, if there is one.
-func responsesSettings(out []byte, c *canon, t Target) []byte {
+func responsesSettings(out []byte, c *canon, t Target, effort string) []byte {
 	if n := cmp.Or(c.maxOutput(), t.MaxOutput); n > 0 {
 		out = strconv.AppendInt(append(out, `,"max_output_tokens":`...), n, 10)
 	}
@@ -73,18 +74,26 @@ func responsesSettings(out []byte, c *canon, t Target) []byte {
 			out = append(append(append(append(out, ',', '"'), member.name...), `":`...), member.value...)
 		}
 	}
-	if effort := c.effort(); effort != "" {
-		out = appendQuoted(append(out, `,"reasoning":{"effort":`...), effort)
-		if c.Reasoning == nil || c.Reasoning.Exclude == nil || !*c.Reasoning.Exclude {
-			out = append(out, `,"summary":"auto"`...) // so that the client sees the reasoning, as Chat clients do
-		}
-		out = append(out, '}')
-	}
+	out = writeResponsesReasoning(out, c, effort)
 	if t.Streams { // the gateway reads every answer as a stream, and routing sends a conversion only to an endpoint that streams
 		out = append(out, `,"stream":true`...)
 	}
 	if c.ServiceTier != nil {
 		out = appendQuoted(append(out, `,"service_tier":`...), *c.ServiceTier)
+	}
+	return out
+}
+
+func writeResponsesReasoning(out []byte, c *canon, effort string) []byte {
+	if effort != "" {
+		out = appendQuoted(append(out, `,"reasoning":{"effort":`...), effort)
+		if effort != "none" && (c.Reasoning == nil || c.Reasoning.Exclude == nil || !*c.Reasoning.Exclude) {
+			out = append(out, `,"summary":"auto"`...) // so that the client sees the reasoning, as Chat clients do
+		}
+		out = append(out, '}')
+	}
+	if c.effort() == "" && c.Reasoning != nil && c.Reasoning.Exclude != nil && !*c.Reasoning.Exclude {
+		out = append(out, `,"reasoning":{"summary":"auto"}`...)
 	}
 	return out
 }

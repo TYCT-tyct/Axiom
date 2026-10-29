@@ -51,6 +51,65 @@ func (q *Queries) ReadBalance(ctx context.Context, db DBTX, accountID uuid.UUID)
 	return items, nil
 }
 
+const readKeyUsages = `-- name: ReadKeyUsages :many
+WITH k AS (
+    SELECT ($1::uuid[])[i]::uuid AS key_id, ($2::text[])[i]::text AS reset
+    FROM generate_subscripts($1::uuid[], 1) AS i
+), t AS MATERIALIZED (SELECT clock_timestamp() AS now)
+SELECT k.key_id,
+    coalesce(sum(s.spent), 0)::bigint AS total,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('daily', t.now)), 0)::bigint AS daily,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('weekly', t.now)), 0)::bigint AS weekly,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('monthly', t.now)), 0)::bigint AS monthly,
+    coalesce(sum(s.spent + s.reserved) FILTER (WHERE s.window_start >= billing.window_from(k.reset, t.now)
+        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS limited
+FROM k CROSS JOIN t
+LEFT JOIN billing.spend s ON s.subject = k.key_id
+GROUP BY k.key_id, k.reset, t.now
+`
+
+type ReadKeyUsagesParams struct {
+	Keys   []uuid.UUID
+	Resets []string
+}
+
+type ReadKeyUsagesRow struct {
+	KeyID   uuid.UUID
+	Total   int64
+	Daily   int64
+	Weekly  int64
+	Monthly int64
+	Limited int64
+}
+
+// All usage fields for one bounded page, with one clock and one database round trip.
+func (q *Queries) ReadKeyUsages(ctx context.Context, db DBTX, arg ReadKeyUsagesParams) ([]ReadKeyUsagesRow, error) {
+	rows, err := db.Query(ctx, readKeyUsages, arg.Keys, arg.Resets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadKeyUsagesRow
+	for rows.Next() {
+		var i ReadKeyUsagesRow
+		if err := rows.Scan(
+			&i.KeyID,
+			&i.Total,
+			&i.Daily,
+			&i.Weekly,
+			&i.Monthly,
+			&i.Limited,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const readKeysUsed = `-- name: ReadKeysUsed :many
 WITH k AS (
     SELECT ($1::uuid[])[i]::uuid AS key_id, ($2::text[])[i]::text AS reset
