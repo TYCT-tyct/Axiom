@@ -1,6 +1,7 @@
 package quality
 
 import (
+	"errors"
 	"time"
 	"uuid"
 
@@ -253,4 +254,16 @@ func (e *State) steady(v verdict, at time.Time) bool {
 		e.successes = 0
 	}
 	return e.successes >= 10 || e.record.Restored != 0 && at.Sub(time.Unix(0, e.record.Restored)) >= windowIdle
+}
+
+// ParseMode owns the default and validation for the environment and embedded call paths.
+func ParseMode(value string) (Mode, error) {
+	if value == "" {
+		return Observe, nil
+	}
+	mode := Mode(value)
+	if mode != Observe && mode != Enforce {
+		return "", errors.New("want observe or enforce")
+	}
+	return mode, nil
 }

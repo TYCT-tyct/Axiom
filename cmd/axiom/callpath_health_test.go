@@ -215,3 +215,51 @@ func (w *callWorld) checkDisabledHealth(router *routing.Router, health *quality.
 		w.t.Fatal("disabled endpoint remained in route")
 	}
 }
+
+func TestGatewayHealthDefersProbesDuringFundsRefusal(t *testing.T) {
+	w := newCallWorld(t)
+	w.seedFailover()
+	w.price()
+	clock := &testClock{now: time.Now()}
+	n, router, health, loop, _ := w.healthCallPath(clock, quality.Enforce)
+	in := routing.Input{Models: []catalog.ModelID{catalog.ModelID(w.models["anthropic/claude-opus-5-5"])}, Req: &protocol.Request{Format: protocol.Messages, TextBytes: 1, Choices: 1, MaxOutput: 256, ServiceTiers: 1 << catalog.ServiceTierStandard}}
+	first := mustPlan(t, router, in).Entries[0]
+	w.injectHealthFailures(n, first)
+	w.supplier.mu.Lock()
+	w.supplier.failures = []int{403}
+	w.supplier.failureBody = `{"error":{"type":"new_api_error","code":"insufficient_user_quota"}}`
+	w.supplier.mu.Unlock()
+	if status := w.callControlled(n, messagesCall); status != http.StatusBadGateway {
+		t.Fatalf("balance refusal: %d", status)
+	}
+	sent := len(w.supplier.sent())
+	clock.Advance(time.Minute)
+	if err := loop.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.supplier.sent()) != sent {
+		t.Fatal("automatic probe bypassed supplier balance pause")
+	}
+	if got := w.query(`SELECT count(*)::text FROM suppliers.attempt_costs WHERE test`); got != "0" {
+		t.Fatalf("paused probes wrote costs: %s", got)
+	}
+	if got := w.query(`SELECT count(*)::text FROM quality.endpoint_health WHERE probe_lease_until>0`); got != "0" {
+		t.Fatalf("paused probes took leases: %s", got)
+	}
+	w.recoverSupplierFunds(n, clock, "sync")
+	if err := loop.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.supplier.sent()) != sent+1 {
+		t.Fatal("balance recovery did not resume probe")
+	}
+	if at, _ := health.Live(uuid.UUID(first.Endpoint), 2).Routing(clock.Now()); !at.IsZero() {
+		t.Fatal("resumed probe did not restore endpoint")
+	}
+}

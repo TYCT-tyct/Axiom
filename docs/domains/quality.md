@@ -148,7 +148,7 @@
 - 次数、比例和间隔是后台配置（默认值在代码里）；另有按端点的"自动摘除"开关（H3），关掉的只降权、从不熔断，对应 new-api 按渠道的 `AutoBan`（`service/channel.go:29`）。
 - **全局模式**（H2 起，后台配置）：`observe`（默认）照常计数、判定、记事件和指标，事件标为"本会熔断"，但不排除端点、不发试探；判定里的"熔断"在下一个计入的成功时结束，记"本会恢复"。`enforce` 才真正排除和试探。参考实现的自动停用默认都关（new-api `common/constants.go:134` 的 `AutomaticDisableChannelEnabled = false`，sub2api 的两个熔断默认 `Enabled: false`，`settings_view.go:513`、`:603`），我们也不在没有数据时默认摘除：观察一两周，核对"本会熔断"里有多少是误判，再由一个带数据的 PR 把默认改为 `enforce`。
 - 熔断在**本节点立即生效**：路由快照里的端点持有指向本模块实时状态的指针（与 routing 自己的暂停和在途数同一种做法，快照替换不丢），`Plan` 的过滤和 `Router.Blocked` 的复查都读它，不等快照重建。
-- **熔断的端点什么时候被排除**：只在这个请求还有别的端点可用时。一个请求的候选全部不可用、而其中有的只因熔断而不可用时，`Plan` 把这些熔断的端点放回路线，最近熔断的排在前面，路由记录注明 `breaker_open_fallback`：熔断越久的端点没通过的试探越多，坏得越确定，最近熔断的更可能只是一阵波动。代价是这种请求遇到收下请求却不回答的上游时，要等到 `HeaderWait`（60 秒）才回 502，而不是立刻回 503；立即失败的（5xx、连不上）照样很快返回，等待受尝试次数和 `StartBy` 约束。这样单端点模型降级时仍然能用（上游 40% 失败时 60% 的请求照样成功），而不是整段 503；与 OpenRouter 把出过故障的供应商"作为剩余的回退"一致（OpenRouter《Provider Routing》，2026-10-16）。
+- **熔断的端点什么时候被排除**：只在这个请求还有别的端点可用时。一个请求的候选全部不可用、而其中有的只因熔断而不可用时，`Plan` 把这些熔断的端点放回路线，保留主模型与备选模型、供应商顺序及性能要求的优先级，同一模型内同一供应商顺序和性能档最近熔断的排在前面，路由记录注明 `breaker_open_fallback`：熔断越久的端点没通过的试探越多，坏得越确定，最近熔断的更可能只是一阵波动。代价是这种请求遇到收下请求却不回答的上游时，要等到 `HeaderWait`（60 秒）才回 502，而不是立刻回 503；立即失败的（5xx、连不上）照样很快返回，等待受尝试次数和 `StartBy` 约束。这样单端点模型降级时仍然能用（上游 40% 失败时 60% 的请求照样成功），而不是整段 503；与 OpenRouter 把出过故障的供应商"作为剩余的回退"一致（OpenRouter《Provider Routing》，2026-10-16）。
 - 熔断不调用 `Router.Block`：暂停是上游说了"等多久"，熔断是我们判断它坏了，两者分开记、分开到期；暂停也不清空窗口。
 
 #### 健康度
@@ -189,8 +189,8 @@
 
 #### 告警与指标
 
-- **事件**（`quality.health_events`，经 `platform` 的告警信号报告，由 observability 汇总、去重、发送；规则、去重和投递归 [#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：`endpoint_removed`（警告：原因类别、窗口里的失败数和来源数、最后一次失败的请求 ID）、`endpoint_restored`（信息：熔断了多久、怎么恢复的）、`endpoint_still_down`（警告：熔断超过 1 小时）、`owned_endpoint_removed`（通知站点或账户的所有者，不发给平台运维）、`model_unavailable`（严重：一个上架模型的全部端点都不可路由，熔断的已作为最后备选也算在内时说明它们也都在失败）、`path_down` / `path_restored`、`probe_budget_exhausted`（警告）；`observe` 模式下是 `would_remove` / `would_restore`，只计数不告警。同一端点的同一种变化只报一次，反复的合并。
-- **指标**（不带端点 ID 作标签，避免高基数；按端点的细节在后台视图）：`axiom.quality.health.transitions`（`kind` 为 endpoint 或 path，`to`，`cause`，`mode`）、`axiom.quality.health.open`、`axiom.quality.probes`（`result`：passed、failed、inconclusive、deferred）、`axiom.quality.probe.duration`、`axiom.quality.unclassified`、`axiom.quality.suspected_block`。
+- **事件**（`quality.health_events`，经 `platform` 的告警信号报告，由 observability 汇总、去重、发送；规则、去重和投递归 [#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：`endpoint_removed`（警告：原因类别、窗口里的失败数和来源数、最后一次失败的请求 ID）、`endpoint_restored`（信息：熔断了多久、怎么恢复的）、`endpoint_still_down`（警告：熔断超过 1 小时）、`owned_endpoint_removed`（通知站点或账户的所有者，不发给平台运维）、`model_unavailable`（严重：上架模型的平台端点全部熔断，已作为最后备选仍在失败；自带端点不参与平台告警的触发或解除）、`path_down` / `path_restored`、`probe_budget_exhausted`（警告）；`observe` 模式下是 `would_remove` / `would_restore`，只计数不告警。同一端点的同一种变化只报一次，反复的合并。恢复时同事务解除摘除和持续故障告警；恢复信息作为已完成事件保留，不持续重复通知。试探预算告警按稳定节点名归并，只在开始顺延时触发，恢复调度时解除；节点启动后首次正常调度也解除上次进程遗留的预算告警。
+- **指标**（不带端点 ID 作标签，避免高基数；按端点的细节在后台视图）：`axiom.quality.health.transitions`（`kind` 为 endpoint 或 path，`to`，`cause`，`mode`）、`axiom.quality.health.open`、`axiom.quality.probes`（`result`：passed、failed、inconclusive、deferred）、`axiom.quality.probe.duration`（只计实际发出请求的试探）、`axiom.quality.unclassified`、`axiom.quality.suspected_block`。
 
 #### 后台
 
@@ -279,6 +279,7 @@
 | 不设"放少量真实请求"的半开阶段，改用慢启动 | 半开阶段要按端点数放行名额，多一个状态；慢启动复用路由已有的并发上限与满载判断，对所有策略都有效，而健康度只在"均衡"里起作用 |
 | 退避 30 秒起、翻倍、最长 10 分钟，恢复后连续 10 次成功或稳定 10 分钟才重置 | 30 秒是 OpenRouter 判断"最近出过故障"的窗口（同上）；10 分钟上限是成本和恢复延迟的折中：每个熔断中的端点每小时最多约 6 次试探，而单端点模型有最后备选，不靠试探恢复。只凭一次真实成功就重置，试探能过、真实请求半数失败的端点会每分钟熔断恢复一次 |
 | 熔断状态写进本模块的表，从第一个版本起持久化，条件更新加试探租约 | 只放进程内的话，每次发布重启都让坏端点重新接流量；后台视图和多节点也都要读这张表。H2 起就可能有多个实例写同一行，所以从 H2 起用 `epoch` 条件更新和租约，事件只由写成的一方写 |
+| 告警描述当前事故，最后备选保留请求优先级 | 恢复原子解除摘除与持续故障告警，避免已恢复端点继续重复通知；预算按稳定节点名只报状态边沿，避免每秒写信号和重启遗留。最后备选只在同一模型、供应商顺序和性能档内按熔断时间排序，避免熔断时间反过来决定模型降级 |
 | H2 的开关先用启动配置，题库先用 256 种组合；后台编辑仍属 H3 | 不新增管理契约和后台数据编辑界面就能验证完整闭环；默认保持只观察，组合题只验证生成通路，不宣称防作弊。延后编辑能力不会改变健康状态表、租约或未来题库接口 |
 | H2 用模块自有的首个迁移、有界交接、条件更新与同事务持久告警 | 比纯内存状态多两张表，但重启不会放出坏端点，失败与重试可验证；不用缓存或逐请求共享窗口，调用路径不增加 I/O。按 [负责人 2026-10-28 的委托](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落实现有设计，独立评审仍由流水线完成 |
 | 计数和健康度按节点统计，不共享 | 共享就要在调用路径上访问缓存或数据库；按节点统计最坏是每个节点各自攒够失败，代价有界。共享的只有熔断与否和试探的认领，都是低频的状态变化 |

@@ -100,7 +100,7 @@ func finishProbe(t *testing.T, l *Loop, f *probeFixture) {
 
 func addProbeEndpoint(f *probeFixture) uuid.UUID {
 	id := uuid.NewV7()
-	f.endpoints = append(f.endpoints, suppliers.Routable{ID: id, Platform: true, Credentials: 1, Formats: []protocol.Format{protocol.Chat}})
+	f.endpoints = append(f.endpoints, suppliers.Routable{ID: id, Credentials: 1, Formats: []protocol.Format{protocol.Chat}})
 	return id
 }
 
@@ -189,7 +189,7 @@ func configureDeferral(reason string, l *Loop, f *probeFixture, now time.Time) {
 	case "manual":
 		f.endpoints = nil
 	case "owned":
-		f.endpoints[0].Platform = false
+		f.endpoints[0].Account = uuid.NewV7()
 	case "pause":
 		f.until = now.Add(time.Hour)
 	case "stale":
@@ -253,7 +253,7 @@ func checkDisabledPersistence(t *testing.T, m *Monitor, l *Loop, now *time.Time,
 	if opened == 0 {
 		t.Fatal("manual disable cleared durable automatic state")
 	}
-	if err := m.Prepare(t.Context(), []suppliers.Routable{{ID: id, Platform: true, Credentials: 1}}); err != nil {
+	if err := m.Prepare(t.Context(), []suppliers.Routable{{ID: id, Credentials: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	if at, _ := m.Live(id, 1).Routing(*now); at.IsZero() {

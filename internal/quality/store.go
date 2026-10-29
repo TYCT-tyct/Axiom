@@ -8,7 +8,6 @@ import (
 	"time"
 	"uuid"
 
-	"axiom/internal/platform/alert"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers"
 )
@@ -117,7 +116,7 @@ func (l *Loop) persist(ctx context.Context, c change) (healthRecord, error) {
 			return err
 		}
 		if c.record.Mode == Enforce {
-			return alert.Persist(ctx, tx, uuid.NewV7(), healthSignal(c))
+			return persistHealthSignal(ctx, tx, c)
 		}
 		return nil
 	})
@@ -192,7 +191,7 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 		e := m.Live(ep.ID, ep.Credentials)
 		e.mu.Lock()
 		loaded := e.loaded
-		e.owned = !ep.Platform
+		e.owned = !ep.Platform()
 		e.lastSeen = m.loop.now()
 		e.mu.Unlock()
 		if loaded {

@@ -36,7 +36,6 @@ type EndpointID = uuid.UUID
 // its supplier does with a stream (internal/suppliers/README.md「调用面」).
 type Routable struct {
 	Site, Account       uuid.UUID
-	Platform            bool
 	Credentials         int
 	Funds               *Funds
 	UnitValue           platform.UnitPrice
@@ -48,6 +47,9 @@ type Routable struct {
 	Schedule            catalog.Schedule
 	Streams, Cancels    bool
 }
+
+// Platform reports whether the endpoint belongs to the platform rather than a tenant.
+func (r Routable) Platform() bool { return r.Site == (uuid.UUID{}) && r.Account == (uuid.UUID{}) }
 
 // Config is what a node needs to call suppliers.
 type Config struct {
@@ -398,8 +400,8 @@ func (s *Service) Routable() ([]Routable, error) {
 		policy := s.policy(ep)
 		out = append(out, Routable{
 			Site: ep.ownerSite, Account: ep.ownerAccount,
-			Platform: ep.ownerScope == "platform", Credentials: s.availableCredentials(ep),
-			Funds: ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
+			Credentials: s.availableCredentials(ep),
+			Funds:       ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Formats: slices.Clone(ep.formats),
 			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
 		})

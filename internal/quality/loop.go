@@ -2,7 +2,6 @@ package quality
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"slices"
@@ -13,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/alert"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
@@ -37,8 +37,9 @@ type ProbeSource interface {
 	TestEndpoint(context.Context, suppliers.TestRequest) (suppliers.TestResult, error)
 }
 
-// Config supplies the background loop. Only Mode changes behavior; defaults stay in quality.
+// Config supplies the background loop; Node is the stable identity used for capacity alerts.
 type Config struct {
+	Node   string
 	DB     *pg.DB
 	Scope  pg.Scope
 	Mode   Mode
@@ -63,6 +64,8 @@ type Loop struct {
 	logger              *slog.Logger
 	now                 func() time.Time
 	rand                func() float64
+	node                string
+	budgetState         uint8
 	owner               uuid.UUID
 	retry               *change
 	active              int
@@ -83,15 +86,11 @@ type probeEnd struct {
 
 // Start loads persisted state synchronously, before the node serves traffic.
 func Start(ctx context.Context, c Config) (*Monitor, *Loop, error) {
-	if c.Mode == "" {
-		c.Mode = Observe
+	mode, err := ParseMode(string(c.Mode))
+	if err != nil {
+		return nil, nil, err
 	}
-	if c.Mode != Observe && c.Mode != Enforce {
-		return nil, nil, errors.New("quality: mode must be observe or enforce")
-	}
-	if c.DB == nil || c.Source == nil || c.Pauses == nil {
-		return nil, nil, errors.New("quality: database, source and pauses are required")
-	}
+	c.Mode = mode
 	if c.Now == nil {
 		c.Now = time.Now
 	}
@@ -105,7 +104,7 @@ func Start(ctx context.Context, c Config) (*Monitor, *Loop, error) {
 	m.mode = c.Mode
 	l := &Loop{
 		monitor: m, db: c.DB, scope: c.Scope, source: c.Source, pauses: c.Pauses, alerts: c.Alerts, logger: c.Logger,
-		now: c.Now, rand: c.Rand, unavailable: map[uuid.UUID]bool{}, owner: uuid.NewV7(), done: make(chan probeEnd, probeConcurrency),
+		node: c.Node, now: c.Now, rand: c.Rand, unavailable: map[uuid.UUID]bool{}, owner: uuid.NewV7(), done: make(chan probeEnd, probeConcurrency),
 	}
 	m.loop = l
 
@@ -224,13 +223,11 @@ func (l *Loop) schedule(ctx context.Context, due []*State, endpoints []suppliers
 	for _, e := range due {
 		if l.active >= probeConcurrency {
 			l.probeMetric(ctx, "deferred")
-			l.budgetSignal()
-			break
+			return l.budgetSignal(true)
 		}
 		if !l.budget[l.used%len(l.budget)].IsZero() && now.Sub(l.budget[l.used%len(l.budget)]) < time.Hour {
 			l.probeMetric(ctx, "deferred")
-			l.budgetSignal()
-			break
+			return l.budgetSignal(true)
 		}
 		claim, ok, err := l.claim(ctx, e, now)
 		if err != nil {
@@ -245,7 +242,7 @@ func (l *Loop) schedule(ctx context.Context, due []*State, endpoints []suppliers
 		l.active++
 		go l.probe(context.WithoutCancel(ctx), claim, ep, probePrompt(l.rand()))
 	}
-	return nil
+	return l.budgetSignal(false)
 }
 
 func (l *Loop) due(ctx context.Context, endpoints []suppliers.Routable, now time.Time) []*State {
@@ -256,8 +253,10 @@ func (l *Loop) due(ctx context.Context, endpoints []suppliers.Routable, now time
 		e.lastSeen = now
 		l.warnDown(e, now)
 		r := e.record
-		if l.monitor.mode == Enforce && ep.Platform && r.Opened != 0 && r.Next <= now.UnixNano() && r.Lease <= now.UnixNano() && e.pending == 0 {
-			if until := l.pauses.PausedUntil(ep.ID, ep.Supplier); until.After(now) {
+		if l.monitor.mode == Enforce && ep.Platform() && r.Opened != 0 && r.Next <= now.UnixNano() && r.Lease <= now.UnixNano() && e.pending == 0 {
+			if ep.Funds != nil && !ep.Funds.CanPay(platform.Exact{}) {
+				l.probeMetric(ctx, "deferred")
+			} else if until := l.pauses.PausedUntil(ep.ID, ep.Supplier); until.After(now) {
 				r.Next = until.UnixNano()
 				l.monitor.transition(e, r, "", false)
 				l.probeMetric(ctx, "deferred")
@@ -267,22 +266,24 @@ func (l *Loop) due(ctx context.Context, endpoints []suppliers.Routable, now time
 		}
 		e.mu.Unlock()
 	}
-	slices.SortFunc(due, func(a, b *State) int {
-		a.mu.Lock()
-		at := a.record.Next
-		a.mu.Unlock()
-		b.mu.Lock()
-		bt := b.record.Next
-		b.mu.Unlock()
-		if at < bt {
-			return -1
-		}
-		if at > bt {
-			return 1
-		}
-		return a.id.Compare(b.id)
-	})
+	slices.SortFunc(due, compareNextProbe)
 	return due
+}
+
+func compareNextProbe(a, b *State) int {
+	a.mu.Lock()
+	at := a.record.Next
+	a.mu.Unlock()
+	b.mu.Lock()
+	bt := b.record.Next
+	b.mu.Unlock()
+	if at < bt {
+		return -1
+	}
+	if at > bt {
+		return 1
+	}
+	return a.id.Compare(b.id)
 }
 
 func (l *Loop) warnDown(e *State, now time.Time) {
@@ -358,7 +359,7 @@ func (l *Loop) finish(ctx context.Context, end probeEnd) {
 		e.successes = 0
 	}
 	l.probeMetric(ctx, outcome.String())
-	if l.duration != nil {
+	if l.duration != nil && end.result.Request != (platform.RequestID{}) {
 		l.duration.Record(ctx, end.result.Total.Seconds())
 	}
 }
@@ -388,6 +389,10 @@ func (l *Loop) collect(ctx context.Context, endpoints []suppliers.Routable, now 
 		return err
 	}
 	l.cleanup = now
+	present := make(map[suppliers.EndpointID]struct{}, len(endpoints))
+	for _, ep := range endpoints {
+		present[ep.ID] = struct{}{}
+	}
 	l.monitor.mu.Lock()
 	defer l.monitor.mu.Unlock()
 	for id, e := range l.monitor.endpoints {
@@ -395,9 +400,11 @@ func (l *Loop) collect(ctx context.Context, endpoints []suppliers.Routable, now 
 		if e.lastSeen.IsZero() {
 			e.lastSeen = now
 		}
-		absent := slices.IndexFunc(endpoints, func(ep suppliers.Routable) bool { return ep.ID == id }) < 0
+		_, exists := present[id]
+		absent := !exists
 		if absent && now.Sub(e.lastSeen) > 24*time.Hour && e.pending == 0 && e.record.Lease <= now.UnixNano() {
 			delete(l.monitor.endpoints, id)
+			l.monitor.collected[id] = struct{}{}
 		}
 		e.mu.Unlock()
 	}
@@ -410,80 +417,11 @@ func (l *Loop) probeMetric(ctx context.Context, result string) {
 	}
 }
 
-func (l *Loop) budgetSignal() {
-	if l.alerts != nil {
-		if err := l.alerts.Raise("probe_budget_exhausted", l.owner.String(), "warning", nil); err != nil {
-			l.logger.Error("quality alert failed", "err", err)
-		}
-	}
-}
-
-func (l *Loop) transitionMetric(ctx context.Context, c change) {
-	if l.transitions != nil {
-		l.transitions.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", "endpoint"), attribute.String("to", c.kind), attribute.String("cause", c.record.Cause), attribute.String("mode", string(c.record.Mode))))
-	}
-}
-
-func healthSignal(c change) alert.Signal {
-	kind := "endpoint_" + c.kind
-	severity := "warning"
-	if c.kind == "restored" {
-		severity = "info"
-	}
-	if c.kind == "owned_endpoint_removed" {
-		kind = c.kind
-	}
-	key := c.record.ID.String()
-	source := "quality:" + key + ":" + strconv.FormatInt(c.record.Epoch, 10)
-	return alert.Signal{Source: source, Kind: kind, Key: key, Severity: severity, Fields: map[string]string{"cause": c.record.Cause}}
-}
-
 // The question and the number vary independently: 256 small, deterministic answers without a fixed probe phrase.
 func probePrompt(u float64) string {
 	questions := [4]string{"Write the integer after ", "Return one greater than ", "Add one to ", "What number follows "}
 	n := min(int(u*256), 255)
 	return questions[n/64] + strconv.Itoa(n%64) + ". Answer briefly."
-}
-
-func (l *Loop) checkModels(endpoints []suppliers.Routable) error {
-	if l.alerts == nil || l.monitor.mode != Enforce {
-		return nil
-	}
-	type health struct {
-		down   bool
-		opened int64
-	}
-	models := map[uuid.UUID]health{}
-	for _, ep := range endpoints {
-		e := l.monitor.of(ep.ID)
-		e.mu.Lock()
-		opened := e.record.Opened
-		e.mu.Unlock()
-		h, exists := models[ep.Model]
-		if !exists {
-			h.down = true
-		}
-		h.down = h.down && opened != 0
-		h.opened = max(h.opened, opened)
-		models[ep.Model] = h
-	}
-	for model, h := range models {
-		if old, known := l.unavailable[model]; known && old == h.down {
-			continue
-		}
-		key := model.String()
-		var err error
-		if h.down {
-			err = l.alerts.RaiseOnce("quality:model:"+key+":"+strconv.FormatInt(h.opened, 10), "model_unavailable", key, "critical", nil)
-		} else {
-			err = l.alerts.Resolve("model_unavailable", key)
-		}
-		if err != nil {
-			return err
-		}
-		l.unavailable[model] = h.down
-	}
-	return nil
 }
 
 func (l *Loop) instrument(meter metric.Meter) {

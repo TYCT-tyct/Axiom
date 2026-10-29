@@ -76,7 +76,7 @@ type nodeSettings struct {
 func readSettings(environ []string) (nodeSettings, error) {
 	env := config.New(environ)
 	s := nodeSettings{
-		healthMode:        quality.Mode(env.String("AXIOM_HEALTH_MODE", string(quality.Observe))),
+		healthMode:        quality.Mode(env.String("AXIOM_HEALTH_MODE", "")),
 		publicAddr:        env.Addr(publicAddrVar, ":8080"),         // model calls, the console, payment callbacks
 		adminAddr:         env.Addr(adminAddrVar, "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
 		probesAddr:        probesListenAddr(env),
@@ -107,8 +107,10 @@ func readSettings(environ []string) (nodeSettings, error) {
 	// configuration joins the problems above, so the node still reports everything wrong at once. The cache's own settings
 	// are judged with the rest, so a node that is wrong about them does not touch the database.
 	var healthErr error
-	if s.healthMode != quality.Observe && s.healthMode != quality.Enforce {
-		healthErr = errors.New("AXIOM_HEALTH_MODE: want observe or enforce")
+	var modeErr error
+	s.healthMode, modeErr = quality.ParseMode(string(s.healthMode))
+	if modeErr != nil {
+		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
 	}
 	smtp, mailErr := mail.ReadConfig(env)
 	s.smtp = smtp

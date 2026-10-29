@@ -82,6 +82,7 @@ type Monitor struct {
 	deferred  atomic.Int64
 	mu        sync.RWMutex
 	endpoints map[suppliers.EndpointID]*State
+	collected map[suppliers.EndpointID]struct{}
 
 	unclassified   metric.Int64Counter // failures the adapters could not classify, which are not counted
 	mode           Mode
@@ -137,6 +138,7 @@ func New(meter metric.Meter) *Monitor {
 	}
 	m := &Monitor{
 		endpoints: map[suppliers.EndpointID]*State{},
+		collected: map[suppliers.EndpointID]struct{}{},
 		changes:   make(chan change, 1024),
 		mode:      Observe,
 		unclassified: counter(meter, "axiom.quality.unclassified",
@@ -219,7 +221,9 @@ func (m *Monitor) of(id suppliers.EndpointID) *State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e = m.endpoints[id]; e == nil {
-		e = &State{id: id, mode: m.mode}
+		_, collected := m.collected[id]
+		delete(m.collected, id)
+		e = &State{id: id, mode: m.mode, loaded: !collected}
 		m.endpoints[id] = e
 	}
 	return e

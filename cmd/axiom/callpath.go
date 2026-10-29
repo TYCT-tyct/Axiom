@@ -50,6 +50,7 @@ const (
 // callDeps is what a node's call path is built from: the modules it orchestrates, the secret it derives the
 // identifiers sent upstream from, and the reverse proxies the deployment trusts (AXIOM_TRUSTED_PROXIES).
 type callDeps struct {
+	nodeID     string
 	healthMode quality.Mode
 	db         *pg.DB
 	keys       *secret.Keyring   // unseals suppliers' credentials
@@ -106,7 +107,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		return callNode{}, err
 	}
 	health, healthLoop, err := quality.Start(ctx, quality.Config{
-		DB: d.db, Scope: pg.PlatformScope(), Mode: d.healthMode,
+		Node: d.nodeID, DB: d.db, Scope: pg.PlatformScope(), Mode: d.healthMode,
 		Source: upstreams, Pauses: router, Alerts: d.alerts, Logger: d.logger, Meter: d.meter,
 	})
 	if err != nil {

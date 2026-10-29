@@ -78,8 +78,11 @@ type Owner struct {
 	Account AccountID
 }
 
+// Platform reports whether the endpoint has no tenant owner.
+func (o Owner) Platform() bool { return o.Site == (SiteID{}) && o.Account == (AccountID{}) }
+
 func (o Owner) visibleTo(a Admission) bool {
-	return (o.Site == SiteID{} && o.Account == AccountID{}) || o.Site == a.Site && o.Account == AccountID{} || o.Account == a.Account
+	return o.Platform() || o.Site == a.Site && o.Account == AccountID{} || o.Account == a.Account
 }
 
 // Endpoint is one supplier group serving one model, as the snapshot holds it: what routing filters and ranks by.
@@ -92,7 +95,6 @@ type Endpoint struct {
 	Owner    Owner
 
 	LiveHealth  *quality.State
-	Platform    bool
 	Enabled     bool // switched on
 	BreakerOpen bool // quality has taken it out for now
 	BalanceOK   bool // the supplier has a synced positive balance

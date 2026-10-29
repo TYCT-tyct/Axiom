@@ -47,8 +47,6 @@ func TestLiveHealthLastResortAndSlowStart(t *testing.T) {
 	a, b := endpoint(t, 1), endpoint(t, 2)
 	a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
 	b.LiveHealth = m.Live(uuid.UUID(b.ID), 1)
-	a.Platform = true
-	b.Platform = true
 	h.replace(openPreset(), a, b)
 	in := input()
 	before := h.plan(in).Entries[0]
@@ -87,7 +85,6 @@ func TestOwnedFallbackDoesNotBypassOtherFilters(t *testing.T) {
 	a, b := endpoint(t, 1), endpoint(t, 2)
 	a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
 	a.Owner = routing.Owner{Account: acct}
-	b.Platform = true
 	h.replace(openPreset(), a, b)
 	trip(t, m, 1, h.now)
 	if len(h.plan(input()).Entries) != 1 {
@@ -102,5 +99,39 @@ func TestOwnedFallbackDoesNotBypassOtherFilters(t *testing.T) {
 	h.replace(openPreset(), a, b)
 	if len(h.plan(input()).Entries) != 1 {
 		t.Fatal("disabled endpoint became last resort")
+	}
+}
+
+func TestLastResortPreservesRequestPriorities(t *testing.T) {
+	for _, tc := range []string{"model", "supplier", "slow", "same tier"} {
+		t.Run(tc, func(t *testing.T) {
+			h := newHarness(t, routing.Config{MaxStale: time.Hour}, openPreset())
+			m := routingHealth(t, h)
+			a, b := endpoint(t, 1), endpoint(t, 2)
+			a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
+			b.LiveHealth = m.Live(uuid.UUID(b.ID), 1)
+			in := input()
+			want := a.ID
+			switch tc {
+			case "model":
+				b.Model = other
+				in.Models = append(in.Models, other)
+			case "supplier":
+				in.Override.Order = []routing.SupplierID{a.Supplier, b.Supplier}
+			case "slow":
+				b.Throughput = 1
+				in.Override.MinThroughput = 50
+			case "same tier":
+				want = b.ID
+			}
+			h.replace(openPreset(), a, b)
+			trip(t, m, 1, h.now)
+			h.now = h.now.Add(time.Second)
+			trip(t, m, 2, h.now)
+			plan := h.plan(in)
+			if len(plan.Entries) != 2 || plan.Entries[0].Endpoint != want || !plan.Entries[0].BreakerFallback {
+				t.Fatalf("%s priority: %+v", tc, plan.Entries)
+			}
+		})
 	}
 }

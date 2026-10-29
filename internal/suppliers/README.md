@@ -209,9 +209,9 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 
 ## 调用面
 
-`Routable.Funds` 是该快照的原生单位余额与供应商共享自动暂停状态，`Routable.Schedule` 是同单位的成本计划；路由用 `billing.ReservedCost` 算完整生成上界后调用 `Funds.CanPay`。数据库的十进制余额在 Reload 时经 `platform.ParseExact` 转成定点数，精度或范围不支持的供应商按现有 unloadable 路径退出，调用路径不解析金额、不查库。
+`Routable.Platform` 从 `Site`、`Account` 均为空推导平台归属，快照不重复保存归属布尔值。`Routable.Funds` 是该快照的原生单位余额与供应商共享自动暂停状态，`Routable.Schedule` 是同单位的成本计划；路由用 `billing.ReservedCost` 算完整生成上界后调用 `Funds.CanPay`。数据库的十进制余额在 Reload 时经 `platform.ParseExact` 转成定点数，精度或范围不支持的供应商按现有 unloadable 路径退出，调用路径不解析金额、不查库。
 
-`SupplierBalanceLow` 且 `ScopeSupplier` 的 HTTP 拒绝使该供应商全部端点自动暂停；`Acquire` 也检查并返回 `ErrSupplierResting`，防止已冻结路线继续发请求；gateway 记 `SupplierBalance`，不与凭证满载混为一谈。状态独立于快照；只接受拒绝后开始的新正余额同步（观察时间取余额请求开始时刻），或者拒绝后开始并完整成功的 `TestEndpoint` 检测来恢复。检测可绕过这项自动暂停，仍遵守凭证并发、RPM、过期与人工停用；新的拒绝不会被旧检测清除。零余额、失败同步、重读旧余额和单纯等待都不能恢复。这个状态是节点内的，不改变供应商的人工状态或静态凭证份额。
+`SupplierBalanceLow` 且 `ScopeSupplier` 的 HTTP 拒绝使该供应商全部端点自动暂停；`Acquire` 也检查并返回 `ErrSupplierResting`，防止已冻结路线继续发请求；gateway 记 `SupplierBalance`，不与凭证满载混为一谈。状态独立于快照；只接受拒绝后开始的新正余额同步（观察时间取余额请求开始时刻），或者拒绝后开始并完整成功的 `TestEndpoint` 检测来恢复。显式检测可绕过这项自动暂停；quality 的自动恢复试探先检查 `Funds.CanPay`，暂停期间顺延且不占预算。检测仍遵守凭证并发、RPM、过期与人工停用；新的拒绝不会被旧检测清除。零余额、失败同步、重读旧余额和单纯等待都不能恢复。这个状态是节点内的，不改变供应商的人工状态或静态凭证份额。
 
 拒绝只设置共享内存标记。`RefreshBalances` 由节点已有的一秒后台循环在同步凭证份额之后调用，整轮数据库工作最多五秒，避免余额同步请求拖住份额心跳；按供应商合并并每分钟至多写一次余额任务提前请求；失败保留标记供重试。`persist.RequestBalance` 在同步状态锁内只提前余额任务的 Due，保留 BackoffUntil、Halted、人工停用和其他任务；提高状态版本使已经在途的旧轮次写入失效，不释放别人的租约；同一条语句只把仍绑定原状态版本的清单位置续绑到新版本，旧节点已作废的位置不被恢复。River 的既有扫描、唯一任务与管理面限速继续生效。
 

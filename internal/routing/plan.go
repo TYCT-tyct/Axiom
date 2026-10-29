@@ -352,7 +352,7 @@ func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
 		available = true
 	}
 	if !available {
-		slices.SortStableFunc(order, func(a, b ranked) int { return b.opened.Compare(a.opened) })
+		orderLastResorts(order)
 		return order
 	}
 	owned, hasOwned := ownedFallback(order, n.now)
@@ -379,7 +379,7 @@ func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
 
 func ownedFallback(order []ranked, now time.Time) (owned ranked, found bool) {
 	for _, c := range order {
-		if c.Platform || c.opened.IsZero() || now.Sub(c.opened) < 10*time.Minute {
+		if c.Owner.Platform() || c.opened.IsZero() || now.Sub(c.opened) < 10*time.Minute {
 			continue
 		}
 		if !found || c.opened.After(owned.opened) {
@@ -388,4 +388,16 @@ func ownedFallback(order []ranked, now time.Time) (owned ranked, found bool) {
 		}
 	}
 	return
+}
+
+func orderLastResorts(order []ranked) {
+	// rank already groups each model by supplier order and slow status.
+	for start := 0; start < len(order); {
+		end := start + 1
+		for end < len(order) && order[end].Model == order[start].Model && order[end].order == order[start].order && order[end].slow == order[start].slow {
+			end++
+		}
+		slices.SortStableFunc(order[start:end], func(a, b ranked) int { return b.opened.Compare(a.opened) })
+		start = end
+	}
 }

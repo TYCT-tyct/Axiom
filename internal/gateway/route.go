@@ -280,9 +280,8 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		ID: routing.EndpointID(r.ID), Supplier: routing.SupplierID(r.Supplier), Model: catalog.ModelID(r.Model),
 		// The platform's own: M1's suppliers are the platform's (suppliers' owner scope is not part of Routable), and
 		// the node reaches every one of them from its own address.
-		Platform: r.Platform,
-		Owner:    routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},
-		Enabled:  true, BalanceOK: r.Funds != nil, Funds: r.Funds, Cost: r.Schedule, Egresses: 1,
+		Owner:   routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},
+		Enabled: true, BalanceOK: r.Funds != nil, Funds: r.Funds, Cost: r.Schedule, Egresses: 1,
 		// Every supplier M1 buys from is a relay or reseller, which is what its adapter talks to; nothing records what
 		// one does with the data it is sent, so an endpoint is taken to be the worst case rather than the best: a preset
 		// that requires no retention must not route to it on the strength of a value nobody set.
