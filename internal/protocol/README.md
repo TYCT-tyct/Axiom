@@ -42,6 +42,12 @@
 
 `Inspect` 在工具声明边界拒绝没有完整报价的服务端工具：Messages 的 `web_fetch_*`、非空顶层 `mcp_servers`、`mcp_toolset`、`tool_search_tool_*`、`advisor_*`，Responses 的 `mcp`、`file_search`、`image_generation`、`programmatic_tool_calling`，以及未显式声明客户端执行的 `shell` / `tool_search`；三种格式的 `openrouter:*` 工具声明也拒绝：`openrouterTools` 逐个列出 OpenRouter 文档里的 13 种（`web_search`、`web_fetch`、`datetime`、`image_generation`、`apply_patch`、`shell`、`bash`、`fusion`、`advisor`、`subagent`、`experimental__search_models`、`tool_search`、`files`），`web_search` 说没有配置外部搜索服务（与 `web` 插件共用 `NoWebSearch`），其余说没有模型侧工具循环，命名空间外的名字说不认识；拒绝理由与执行设计见[接入域的「服务端工具」](../../docs/domains/gateway.md#服务端工具)。写了 `max_uses` 或 `max_tool_calls` 也不能使它们受支持；返回 `ErrInvalid`，网关回 400 并点名工具。`mcp_servers: []` / null 不启用工具；客户端函数的 `name` 恰好相同不受影响。此前同格式改写将这些声明原样携带到上游；转发审计留在 PR 记录中。Responses 的 `shell` 只有 `environment.type:"local"` 按客户端工具处理，`tool_search` 只有 `execution:"client"` 按客户端工具处理；缺省或不认识的执行模式保守拒绝。成员顺序不影响判定，两类客户端声明不能互相替代（`TestInspectKeepsClientToolExecution`）。`Prepare` 保持字节改写职责，准入策略由 `Inspect` 执行。支持项仍为 web search、code execution，次数缺省交给目录的 `max_uses`，没有默认由 billing 返回 `ErrUnbounded`。逐项依据、范围与日期见[计费决策](../../docs/domains/billing.md#决策与理由)。
 
+### 预设与回退控制
+
+`Request.Preset` 保存引用，`PresetReference` 识别三种写法并拒绝冲突。仅有有效前缀的 preset 字段时 Inspect 允许暂缺 model，gateway 展开后必须再次 Inspect 得到真实模型。`MergePreset` 以顶层 Raw 值浅合并，保持字符串值（含推理签名）和整数精度；系统提示与工具的例外见[路由](../../docs/domains/routing.md#命名预设)。仅有 models 列表时，合并后第一项成为主模型，其余进入备选，不拼接不同来源的主模型默认值；`TestPresetModelList` 检查请求覆盖后的列表顺序。Messages 的非 null fallbacks 覆盖预设备选而保留主模型，`TestPresetMessagesFallbackOverride` 覆盖 models-only 和显式主模型配置；`MergePreset` 的结构错误统一包装为 ErrInvalid，网关返回 400，`TestPresetMergeErrorsAreInvalidRequests` 覆盖工具结构和缺少 Chat messages。它不执行查库或授权；调用者先按 `PresetCost` 记账，合并后不能使用旧位置表和旧计费摘要。
+
+Messages 的 `fallbacks` 读取为 `Request.Models`，最多三项、只允许非空 model，与非 null models 互斥，和 JSON 成员顺序无关；Prepare 在所有目标格式与 compact 路径删除 preset、fallbacks。`Request.SessionID` 在完整严格扫描中读取，即使出现在会话前缀范围之后也可供 routing 使用；请求体与请求头各自上限为 256 字符，头由 gateway 校验。`TestMessagesFallbacks` 覆盖非法列表和同格式删除，`TestPresetMerge` 覆盖三种格式的覆盖与工具合并。
+
 ### 本地插件
 
 `Inspect` 按 id 和选项校验 `plugins`、`transforms`，返回 `Request.Compression`、`ResponseHealing` 和 Chat `MessageCount`。`ExtensionError` 仍属于 `ErrInvalid`，gateway 对这种参数错误使用 OpenRouter 数字 400 外壳。接受的四个 id 与执行/拒绝/忽略规则只在[接入域的插件表](../../docs/domains/gateway.md#插件与提示词变换)维护；不支持的选项拒绝而非丢失。
@@ -59,7 +65,7 @@
 | 成员 | Messages | Responses | 理由 |
 |---|---|---|---|
 | `model` | 换成 `Target.Model`，端点的名字 | 同左 | |
-| `provider`、`models`、`route`、`transforms`、`plugins`、`usage`、`session_id`、`axiom` | 删除 | 同左 | 路由参数和本站扩展；`plugins` / `transforms` 先由 `Inspect` 校验，再由 gateway 执行本地插件或返回 400，不能先丢弃 |
+| `provider`、`models`、`preset`、`fallbacks`、`route`、`transforms`、`plugins`、`usage`、`session_id`、`axiom` | 删除 | 同左 | 路由参数和本站扩展；`plugins` / `transforms` 先由 `Inspect` 校验，再由 gateway 执行本地插件或返回 400，不能先丢弃 |
 | `stream` | `Target.Streams` 时写成 `true`，没有就加上；否则原样 | 同左 | gateway 总是以流读上游，非流式客户端由它聚合（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；路由对生成请求只保留能流式的端点，`Streams` 为假时保持客户端的写法是协议层的约定（压缩请求用不到它，见下） |
 | 会话和终端用户的标识 | `metadata.user_id` | `prompt_cache_key`、`user`、`safety_identifier` | 换成 `Rewrites.Identity` 给出的派生值（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；`metadata.user_id` 例外，它把派生的会话和设备写进一个结构，是那个结构的 JSON 字符串，`{"device_id":"…","account_uuid":"","session_id":"…"}`，中转站从中取出会话固定账号，设备和空账户见接入的那一条；空串和纯空白写为空串，不派生公共会话（Chat 转换共用此规则）；`null` 不动 |
 | `previous_response_id` | — | 删除；`Rewrites.History` 的条目按原样、从旧到新放到 `input` 最前：`input` 是数组就插在开头，是字符串就先换成一条 user 消息，没有或 `null` 就以历史为 `input` | 上游不保存状态，由本站拼回历史（[接入的「Responses 的会话状态」](../../docs/domains/gateway.md#responses-的会话状态)）；`instructions` 不随 `previous_response_id` 延续（同一文档的 `instructions`），所以只拼 `input` |
@@ -421,7 +427,7 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 | `Target` 加 `Streams`，由路由按端点的能力填 | 请求发出去的 `stream` 是端点的属性，不是请求的；网关一处设置，`Prepare` 两处（改写、转换）照它写 | 在网关里改请求体：protocol 拥有请求体 |
 | `UsageOf` 只读顶层 `usage` 与 `service_tier` | compact 的回复整份读一次就完了，复用聚合器的成员读出即可，不需要新的解码器 | 解成结构体：多一份随回复大小增长的分配 |
 | 两个文件共用一张替换表，并替换请求里的 ID | 多轮请求里的工具调用 ID、`previous_response_id` 会出现在流里，替换后两边仍对得上 | 只替换流：请求里留下真实 ID，两边也对不上 |
-| 摘要一次严格扫描，顶层位置表供同格式改写复用 | 只记录有限的改写成员（当前最多 18 个），分配不随消息数增长；`Request` 复制后位置表仍有效，不借用原 body，重试可复用；位置复用条件与调用方约束见「同格式改写」。与按消息记录位置不同，不需要额外的动态数组。回放候选清理可能改变长度，因此沿用 tokenizer 路径；没有位置表的内部转换结果也走它。表容量不足时退回 tokenizer，`TestPositionCapacity` 要求同步扩容。Inspect 的严格校验和重复键检查保持不变 | 继续两遍完整解析：大体积请求的 Prepare CPU 浪费在未改写内容；只放宽预算：保留可消除的成本；按消息保存位置：内存随消息数增长 |
+| 摘要一次严格扫描，顶层位置表供同格式改写复用 | 只记录有限的改写成员（当前最多 20 个），分配不随消息数增长；`Request` 复制后位置表仍有效，不借用原 body，重试可复用；位置复用条件与调用方约束见「同格式改写」。与按消息记录位置不同，不需要额外的动态数组。回放候选清理可能改变长度，因此沿用 tokenizer 路径；没有位置表的内部转换结果也走它。表容量不足时退回 tokenizer，`TestPositionCapacity` 要求同步扩容。Inspect 的严格校验和重复键检查保持不变 | 继续两遍完整解析：大体积请求的 Prepare CPU 浪费在未改写内容；只放宽预算：保留可消除的成本；按消息保存位置：内存随消息数增长 |
 | 摘要按 token 读，深度在每个 token 上对照 `jsonx.MaxDepth` 检查 | 请求体可达数 MB，先 `jsonx.Validate` 再读字段要扫两遍；`jsontext` 的默认选项就是 jsonx 的严格程度，只有深度要自己查，所以 `jsontext` 只在这里和录制命令里引用，各自注明理由 | 先校验再读：两遍；解码到结构体：要为每种内容形状写解码器，分配随部件个数增长 |
 | 输入上界是请求体字节数减去图片、文件的数据，不是只数正文字段 | 只数正文要认出每一种放文本的字段，漏认一种就少算，少算就是欠款；多算的只是 JSON 语法和成员名 | 只数 `text` 等正文字段 |
 | 按位置读部件和工具，不在任意深度找 `cache_control`、`type` | schema 和工具参数里的同名键是客户端的数据，按名字找会让路由要求不需要的能力，预留也多算 | 任意深度按名字找 |
