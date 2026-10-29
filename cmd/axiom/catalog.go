@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/audit"
@@ -40,6 +41,9 @@ func run[R any, P interface {
 // catalogOperations are the admin operations `axiom catalog` runs until the admin interface exists. Each is a file with
 // the request of README's operations: who asks is this command, why and which attempt are in the file (internal/catalog/README.md「公开接口」).
 var catalogOperations = map[string]operation{
+	"watch-page":          run((*catalog.Catalog).WatchPage),
+	"unwatch-page":        run((*catalog.Catalog).UnwatchPage),
+	"review-page":         run((*catalog.Catalog).ReviewPage),
 	"save-author":         run((*catalog.Catalog).SaveAuthor),
 	"create-model":        run((*catalog.Catalog).CreateModel),
 	"add-name":            run((*catalog.Catalog).AddName),
@@ -67,15 +71,20 @@ var catalogOperations = map[string]operation{
 // apply-dialect [--apply] <file>` in the platform scope against AXIOM_DATABASE_URL. The platform scope is built here, in cmd/, and nowhere a request can reach. The
 // actor is the command itself until the operator's identity is defined (Issue #23).
 func catalogCommand(ctx context.Context, environ, args []string, out io.Writer) error {
-	usage := fmt.Errorf("usage: axiom catalog sync | check | apply-dialect [--apply] <file> | <operation> <file>; operations: %v",
+	if len(args) == 2 && args[0] == "check-pages" {
+		return checkPagesCommand(ctx, args[1], out)
+	}
+	usage := fmt.Errorf("usage: axiom catalog sync | check | check-pages <file> | apply-dialect [--apply] <file> | <operation> <file>; operations: %v",
 		slices.Sorted(maps.Keys(catalogOperations)))
 	switch {
 	case len(args) > 1 && args[0] == "apply-dialect":
 		return dialectCommand(ctx, environ, args[1:], out)
-	case len(args) == 1 && args[0] == "sync":
-		return withCatalog(ctx, environ, func(c *catalog.Catalog, f *catalog.Fetcher) error { return syncCommand(ctx, c, f, out) })
-	case len(args) == 1 && args[0] == "check":
-		return withCatalog(ctx, environ, func(c *catalog.Catalog, f *catalog.Fetcher) error { return checkCommand(ctx, c, f, out) })
+	case len(args) == 1:
+		report := map[string]func(context.Context, *catalog.Catalog, *catalog.Fetcher, io.Writer) error{"sync": syncCommand, "check": checkCommand}[args[0]]
+		if report == nil {
+			return usage
+		}
+		return withCatalog(ctx, environ, func(c *catalog.Catalog, f *catalog.Fetcher) error { return report(ctx, c, f, out) })
 	case len(args) != 2:
 		return usage
 	}
@@ -262,6 +271,52 @@ func checkDataset(ctx context.Context, c *catalog.Catalog, f *catalog.Fetcher, s
 		if err := report(map[string]any{"kind": "unrecognized", "openrouter": key}, true); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkPagesCommand fetches only explicitly included official pages and never opens the catalog database.
+func checkPagesCommand(ctx context.Context, path string, out io.Writer) error {
+	body, err := os.ReadFile(path) //nolint:gosec // the operator supplies their own acceptance manifest
+	if err != nil {
+		return err
+	}
+	var targets []struct {
+		catalog.PageTarget
+		Excluded string `json:"excluded,omitempty"`
+	}
+	if err := jsonx.UnmarshalKnown(body, &targets); err != nil {
+		return err
+	}
+	client, err := egress.New(egress.Direct)
+	if err != nil {
+		return err
+	}
+	defer client.CloseIdleConnections()
+	inspector := catalog.NewPageInspector(client)
+	failures := 0
+	for _, target := range targets {
+		result := map[string]any{"author": target.Author, "url": target.URL, "currency": target.Currency}
+		if target.Excluded != "" {
+			result["excluded"] = target.Excluded
+		} else {
+			attempt, cancel := context.WithTimeout(ctx, 4*time.Minute)
+			content, err := inspector.Inspect(attempt, target.PageTarget)
+			cancel()
+			if err != nil {
+				result["error"] = err.Error()
+				failures++
+			} else {
+				result["sha256"] = fmt.Sprintf("%x", content.SHA256)
+				result["text"] = content.Text
+			}
+		}
+		if err := writeLine(out, result); err != nil {
+			return err
+		}
+	}
+	if failures > 0 {
+		return fmt.Errorf("%d official pages failed inspection", failures)
 	}
 	return nil
 }

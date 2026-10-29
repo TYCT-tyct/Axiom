@@ -112,7 +112,7 @@ func parsePrice(raw jsonx.Raw) (newPrice, error) {
 func (n newPrice) currency() string { return n.schedule.currency.String() }
 
 // requireEvidence refuses evidence that is not a non-empty JSON object. What the evidence says is the reviewer's to
-// judge; the check of excerpts against a page's snapshot comes with page monitoring.
+// judge; official schedules additionally check their excerpts against the current page snapshot in the write transaction.
 func requireEvidence(raw jsonx.Raw) error {
 	var members map[string]jsonx.Raw
 	if err := jsonx.Unmarshal(raw, &members); err != nil || len(members) == 0 {
@@ -179,12 +179,9 @@ func (c *Catalog) PublishPrice(ctx context.Context, r PublishPriceRequest) (Resu
 }
 
 func publishIn(ctx context.Context, tx pg.Tx, r PublishPriceRequest, n newPrice) (outcome, error) {
-	row, err := lockedModel(ctx, tx, r.Model)
+	row, err := lockPublishingModel(ctx, tx, r, n)
 	if err != nil {
 		return outcome{}, err
-	}
-	if PriceSource(row.PriceSource) != r.Source || Status(row.Status) == StatusRetired {
-		return outcome{}, fmt.Errorf("%w: the model's is %s and it is %s", ErrSourceMismatch, row.PriceSource, row.Status)
 	}
 	spec, err := parseSpec(row.Spec)
 	if err != nil {
@@ -266,7 +263,7 @@ func (c *Catalog) selectSource(ctx context.Context, r SelectPriceSourceRequest) 
 }
 
 func switchIn(ctx context.Context, tx pg.Tx, r SelectPriceSourceRequest, news map[string]pricedFrom) (outcome, error) {
-	row, err := lockReviewed(ctx, tx, r.Model, r.Rev)
+	row, err := lockSwitchingModel(ctx, tx, r, news)
 	if err != nil {
 		return outcome{}, err
 	}
@@ -386,4 +383,37 @@ func writeSwitch(ctx context.Context, tx pg.Tx, row CatalogModel, source PriceSo
 		after[currency] = map[string]any{"price_id": id.String(), "schedule": jsonx.Raw(n.canonical)}
 	}
 	return after, evidence, nil
+}
+
+func lockPublishingModel(ctx context.Context, tx pg.Tx, r PublishPriceRequest, n newPrice) (CatalogModel, error) {
+	author, err := lockOfficialPrices(ctx, tx, r.Source, map[string]pricedFrom{n.currency(): {n, r.Evidence}})
+	if err != nil {
+		return CatalogModel{}, err
+	}
+	row, err := lockedModel(ctx, tx, r.Model)
+	if err != nil {
+		return row, err
+	}
+	if PriceSource(row.PriceSource) != r.Source || Status(row.Status) == StatusRetired {
+		return row, fmt.Errorf("%w: the model's is %s and it is %s", ErrSourceMismatch, row.PriceSource, row.Status)
+	}
+	if r.Source == SourceOfficial && author != row.Author {
+		return row, fmt.Errorf("%w: official page author differs", ErrNoEvidence)
+	}
+	return row, nil
+}
+
+func lockSwitchingModel(ctx context.Context, tx pg.Tx, r SelectPriceSourceRequest, news map[string]pricedFrom) (CatalogModel, error) {
+	author, err := lockOfficialPrices(ctx, tx, r.Source, news)
+	if err != nil {
+		return CatalogModel{}, err
+	}
+	row, err := lockReviewed(ctx, tx, r.Model, r.Rev)
+	if err != nil {
+		return row, err
+	}
+	if r.Source == SourceOfficial && author != row.Author {
+		return row, fmt.Errorf("%w: official page author differs", ErrNoEvidence)
+	}
+	return row, nil
 }

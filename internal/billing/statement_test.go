@@ -3,7 +3,6 @@ package billing
 import (
 	"errors"
 	"math"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -360,28 +359,10 @@ func TestStatementSkipsBoundedEmptySegments(t *testing.T) {
 	}
 }
 
-// TestStatementReadsGrowWithThePage: a page deep in a long history reads about what the first page reads, walking the
-// two indexes the ledger has backward, not the history above it: numbered rows with every row in view, and in the
-// account's own scope beside 2,000 other accounts (where the estimate of the row-level security filter alone made the
-// planner read the whole history and sort it), and an account whose rows all come from before the sequence. A page of
-// 100 is read from the start and from deep in: 25,000 rows in for the numbered ones, 10,000 for the older ones.
-func TestStatementReadsGrowWithThePage(t *testing.T) {
-	b := newBank(t, 0, 0, Config{})
-	legacy := uuid.NewV7()
-	b.sql(append(slices.Concat(
-		seedLedger(b.admitted.Site, b.admitted.Account, 30000, false),
-		seedLedger(b.admitted.Site, legacy, 12000, true),
-		[]string{`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
-			SELECT gen_random_uuid(), '` + b.admitted.Site.String() + `', a.id, 'settle', gen_random_uuid()
-			FROM (SELECT gen_random_uuid() AS id FROM generate_series(1, 2000)) a, generate_series(1, 1000)`},
-	), "ANALYZE billing.transactions", "ANALYZE billing.entries")...)
-	// Every account has its balance row from registration; the statement starts from it.
+// checkStatementReadsGrowWithThePage shares the ledger-plan fixture, including its legacy balance row.
+func checkStatementReadsGrowWithThePage(t *testing.T, b *bank, legacy uuid.UUID) {
+	t.Helper()
 	legacyScope := pg.NewScope(false, nil, []uuid.UUID{legacy})
-	if err := b.app.Tx(t.Context(), legacyScope, func(tx pg.Tx) error {
-		return OpenBalance(t.Context(), tx, b.admitted.Site, legacy, 0)
-	}); err != nil {
-		t.Fatal(err)
-	}
 	newest := statementNewest
 	far, farLegacy := newest, StatementCursor{}
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
