@@ -57,7 +57,7 @@ func clientAppOf(h http.Header) string {
 }
 
 // appAttribution is the client's own name for the application it builds, from OpenRouter's app-attribution headers
-// (https://openrouter.ai/docs/app-attribution, read 2026-11-02): the URL that identifies the application, its display
+// (https://openrouter.ai/docs/app-attribution, read 2026-10-29): the URL that identifies the application, its display
 // name, and the marketplace categories it claims. They are recorded for the account's own analytics and never forwarded
 // upstream (headers.go). A header is the client's word, but it is bounded and cleaned here because it goes into a
 // column: a value that does not fit or is not text must not make the call log refuse the whole record.
@@ -109,8 +109,9 @@ func headerText(s string, n int) string {
 	return strings.TrimSpace(s)
 }
 
-// categoriesOf keeps the categories OpenRouter would recognize, in its spelling: lowercase names of letters, digits and
-// single hyphens, at most 30 characters each, the first two of the list, as a request may claim two.
+// categoriesOf keeps the categories in the shape OpenRouter accepts, in its spelling: lowercase names of letters, digits
+// and single hyphens, at most 30 characters each, the first two of the list, as a request may claim two. A name outside
+// OpenRouter's recognised list is kept as the client claimed it rather than guessed at.
 func categoriesOf(s string) string {
 	var kept []string
 	for c := range strings.SplitSeq(s, ",") {

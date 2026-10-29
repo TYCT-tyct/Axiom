@@ -254,7 +254,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | 请求体 `user`（终端用户标识，防滥用/归因） | 透传并用于归因 | spec `ChatRequest.user` | 部分：接受，哈希后再发上游（`proto/prepare.go:237,254`）；不用于对外归因 | 部分 | 部分 | 无 |
-| App 归因头 `HTTP-Referer`、`X-OpenRouter-Title`(`X-Title`)、`X-OpenRouter-Categories`、`X-OpenRouter-App-Visibility` | 应用排名与分析 | docs/app-attribution（2026-11-02 核对） | 部分：前三个头不转发（`internal/gateway/headers.go` 的白名单），由 gateway 去控制字符、按列宽截断后记入调用记录的 `app_referer`、`app_title`、`app_categories`，并出现在控制台的调用列表与详情；没有应用页、排名或可见性（`X-OpenRouter-App-Visibility` 不记）；`client_app` 仍只从 `User-Agent` 识别 Claude Code/Codex | `na:relay/channel/openai/adaptor.go:243`（向 OpenRouter 上游发 `HTTP-Referer`） | 无 | 应用级用量统计可以按这三个字段做，但没有公开排名 |
+| App 归因头 `HTTP-Referer`、`X-OpenRouter-Title`(`X-Title`)、`X-OpenRouter-Categories`、`X-OpenRouter-App-Visibility` | 应用排名与分析 | docs/app-attribution（2026-10-29 核对） | 部分：前三个头不转发（`internal/gateway/headers.go` 的白名单），由 gateway 去控制字符、按列宽截断后记入调用记录的 `app_referer`、`app_title`、`app_categories`，并出现在控制台的调用列表与详情；没有应用页、排名或可见性（`X-OpenRouter-App-Visibility` 不记）；`client_app` 仍只从 `User-Agent` 识别 Claude Code/Codex | `na:relay/channel/openai/adaptor.go:243`（向 OpenRouter 上游发 `HTTP-Referer`） | 无 | 应用级用量统计可以按这三个字段做，但没有公开排名 |
 | 响应头 `X-Generation-Id` | 见 §1 | 见 §1 | 有 | — | — | — |
 | `metadata`、`trace`（`trace_id`、`span_name`…）字段 | 链路与广播 | spec `ChatRequest.trace` | 部分：`metadata` 同格式透传；`trace` 不识别 | 无 | 无 | 低优先 |
 | 广播 Broadcast（把 trace 发给 Langfuse、Datadog、S3 等 20 多个平台）与 `/observability/destinations` | 可观测性集成 | docs/guides/features/broadcast | 没有（对应 #316 通知渠道，形态不同） | 无 | 无 | 低优先 |
