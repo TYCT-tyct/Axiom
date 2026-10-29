@@ -373,7 +373,7 @@ func TestStatementReadsGrowWithThePage(t *testing.T) {
 		seedLedger(b.admitted.Site, legacy, 12000, true),
 		[]string{`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
 			SELECT gen_random_uuid(), '` + b.admitted.Site.String() + `', a.id, 'settle', gen_random_uuid()
-			FROM (SELECT gen_random_uuid() AS id FROM generate_series(1, 2000)) a, generate_series(1, 300)`},
+			FROM (SELECT gen_random_uuid() AS id FROM generate_series(1, 2000)) a, generate_series(1, 1000)`},
 	), "ANALYZE billing.transactions", "ANALYZE billing.entries")...)
 	// Every account has its balance row from registration; the statement starts from it.
 	legacyScope := pg.NewScope(false, nil, []uuid.UUID{legacy})
@@ -401,9 +401,9 @@ func TestStatementReadsGrowWithThePage(t *testing.T) {
 	}{
 		{"numbered, every row in view", b.platform, b.admitted.Account, "transactions_by_account_seq", newest, far},
 		{"numbered, in the account's scope", b.admitted.Scope, b.admitted.Account, "transactions_by_account_seq", newest, far},
+		{"from before the sequence, every row in view", b.platform, legacy, "transactions_legacy_by_account", newest, farLegacy},
 		{"from before the sequence, in the account's scope", legacyScope, legacy, "transactions_legacy_by_account", newest, farLegacy},
 	} {
-		// The page query is planned in the transaction ListStatement has read a page in, so the plan is the one it gets.
 		listed := func(tx pg.Tx) error {
 			_, _, err := ListStatement(t.Context(), tx, StatementQuery{Account: tc.account, PageSize: 1})
 			return err
@@ -414,10 +414,15 @@ func TestStatementReadsGrowWithThePage(t *testing.T) {
 		first, firstPlan := page(tc.first)
 		deep, deepPlan := page(tc.deep)
 		t.Logf("%s: EXPLAIN blocks: first=%d deep=%d", tc.name, first, deep)
-		checkStatementIndexPlan(t, firstPlan, 100)
-		checkStatementIndexPlan(t, deepPlan, 100)
+		checkTransactionIndexPlan(t, firstPlan, 100, "Backward")
+		checkTransactionIndexPlan(t, deepPlan, 100, "Backward")
 		if !strings.Contains(deepPlan, tc.index) {
 			t.Errorf("%s: the deep page is not read from %s:\n%s", tc.name, tc.index, deepPlan)
+		}
+		larger, largerPlan := b.plan(tc.scope, listed, statementPage, tc.account, tc.deep.Seq, int32(200), tc.deep.At, tc.deep.ID)
+		checkTransactionIndexPlan(t, largerPlan, 200, "Backward")
+		if larger < deep || larger > 3*deep+50 {
+			t.Errorf("%s: doubling the page touched %d blocks against %d", tc.name, larger, deep)
 		}
 		if deep > first+first/2+50 || deep > 1000 || first > 1000 {
 			t.Errorf("%s: the deep page touched %d blocks against the first page's %d:\n%s", tc.name, deep, first, deepPlan)
@@ -426,29 +431,29 @@ func TestStatementReadsGrowWithThePage(t *testing.T) {
 }
 
 // Entry lookups may use tiny bitmap scans. Only the transaction scan must preserve keyset order before LIMIT.
-type statementQueryPlan struct {
-	NodeType  string               `json:"Node Type"`
-	Relation  string               `json:"Relation Name"`
-	Direction string               `json:"Scan Direction"`
-	Loops     float64              `json:"Actual Loops"`
-	Rows      float64              `json:"Actual Rows"`
-	Plans     []statementQueryPlan `json:"Plans"`
+type ledgerQueryPlan struct {
+	NodeType  string            `json:"Node Type"`
+	Relation  string            `json:"Relation Name"`
+	Direction string            `json:"Scan Direction"`
+	Loops     float64           `json:"Actual Loops"`
+	Rows      float64           `json:"Actual Rows"`
+	Plans     []ledgerQueryPlan `json:"Plans"`
 }
 
-// checkStatementIndexPlan checks that the page returned rows and read every transaction it read in index order.
-func checkStatementIndexPlan(t *testing.T, raw string, rows float64) {
+// checkTransactionIndexPlan checks that the page returned rows and read every transaction in the requested order.
+func checkTransactionIndexPlan(t *testing.T, raw string, rows float64, direction string) {
 	t.Helper()
-	var plans []struct{ Plan statementQueryPlan }
+	var plans []struct{ Plan ledgerQueryPlan }
 	if err := jsonx.Unmarshal([]byte(raw), &plans); err != nil {
 		t.Fatal(err)
 	}
 	if plans[0].Plan.Rows != rows {
 		t.Errorf("the page returned %v rows, want %v", plans[0].Plan.Rows, rows)
 	}
-	var check func(statementQueryPlan)
-	check = func(p statementQueryPlan) {
+	var check func(ledgerQueryPlan)
+	check = func(p ledgerQueryPlan) {
 		if p.Relation == "transactions" && p.Loops > 0 {
-			if p.NodeType != "Index Scan" || p.Direction != "Backward" {
+			if (p.NodeType != "Index Scan" && p.NodeType != "Index Only Scan") || p.Direction != direction {
 				t.Errorf("unordered transaction scan: %s %s", p.NodeType, p.Direction)
 			}
 		}
