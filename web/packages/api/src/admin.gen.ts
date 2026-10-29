@@ -4,6 +4,57 @@
  */
 
 export interface paths {
+    "/api/admin/v1/payments/discrepancies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List payment records awaiting or completing investigation */
+        get: operations["listPaymentDiscrepancies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/discrepancies/{discrepancy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a payment discrepancy */
+        get: operations["getPaymentDiscrepancy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/discrepancies/{discrepancy_id}/investigate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark investigated with a note without moving funds */
+        post: operations["investigatePaymentDiscrepancy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/alerts/configuration": {
         parameters: {
             query?: never;
@@ -1132,6 +1183,33 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A top-up order's ID (TypeID), also the order number the payment channel sees. */
+        OrderId: string;
+        /** @description A merchant account's ID (TypeID). */
+        MerchantId: string;
+        /** @description All fields optional during rolling deployment. Resolved records contain an investigation note, not a financial resolution. */
+        PaymentDiscrepancy: {
+            id?: components["schemas"]["Uuid"];
+            site_id?: components["schemas"]["SiteId"];
+            account_id?: components["schemas"]["AccountId"];
+            order_id?: components["schemas"]["OrderId"];
+            merchant_id?: components["schemas"]["MerchantId"];
+            kind?: string;
+            /** @enum {string} */
+            state?: "open" | "resolved";
+            detail?: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            created_at?: string;
+            investigated_by?: string;
+            /** Format: date-time */
+            investigated_at?: string;
+            note?: string;
+        };
+        PaymentDiscrepancyList: {
+            data?: components["schemas"]["PaymentDiscrepancy"][];
+        };
         AlertConfiguration: {
             /** Format: int64 */
             rev?: number;
@@ -2181,6 +2259,104 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listPaymentDiscrepancies: {
+        parameters: {
+            query?: {
+                /** @description Return up to 100 records older than this ID. */
+                before?: components["schemas"]["Uuid"];
+                /** @description Omit to list both states. Resolved means investigated only. */
+                state?: "open" | "resolved";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The persisted payment investigation record. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentDiscrepancyList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getPaymentDiscrepancy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                discrepancy_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The persisted payment investigation record. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentDiscrepancy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    investigatePaymentDiscrepancy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                discrepancy_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The persisted payment investigation record. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentDiscrepancy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getAlertConfiguration: {
         parameters: {
             query?: never;

@@ -33,15 +33,19 @@ func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (batch CreditBatch,
 	if len(rows) == 0 {
 		return CreditBatch{}, false, nil
 	}
-	r := rows[0]
-	batch = CreditBatch{
+	batch, err = creditBatch(rows[0])
+	return batch, err == nil, err
+}
+
+func creditBatch(r ReadCreditBatchRow) (CreditBatch, error) {
+	batch := CreditBatch{
 		ID: r.ID, Site: r.SiteID, Account: r.AccountID, Source: r.Source, Amount: r.Amount, ExpiresAt: r.ExpiresAt,
 		CreatedAt: r.CreatedAt, Channel: Channel{Offline: r.OfflineChannel},
 	}
 	if r.Source == "paid" { // credit_batches_source_check: a paid batch has its currency, paid and fee
 		currency, err := platform.ParseCurrency(r.Currency)
 		if err != nil {
-			return CreditBatch{}, false, fmt.Errorf("billing: read the credit batch %s: %w", id, err)
+			return CreditBatch{}, fmt.Errorf("billing: read the credit batch %s: %w", r.ID, err)
 		}
 		batch.Payment = &Payment{Currency: currency, Paid: *r.Paid, Fee: *r.Fee}
 	}
@@ -51,5 +55,5 @@ func ReadCredit(ctx context.Context, tx pg.Tx, id uuid.UUID) (batch CreditBatch,
 	if r.RateID != nil {
 		batch.RateID = *r.RateID
 	}
-	return batch, true, nil
+	return batch, nil
 }

@@ -299,11 +299,11 @@ func (p *Payments) discrepancy(ctx context.Context, tx pg.Tx, c confirmed, o *Lo
 	if o != nil {
 		r.OrderID, r.AccountID = &o.ID, &o.AccountID
 	}
-	n, err := queries.RecordDiscrepancy(ctx, tx, r)
+	inserted, err := recordPending(ctx, tx, r)
 	if err != nil {
 		return fmt.Errorf("payments: record discrepancy: %w", err)
 	}
-	if n > 0 {
+	if inserted {
 		p.logger.Warn("payments: confirmed payment needs attention", "merchant", c.merchant.TypeID(), "kind", kind,
 			"order", c.order, "trade_no", c.payment.TradeNo, "discrepancy", r.ID)
 	}

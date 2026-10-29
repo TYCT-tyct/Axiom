@@ -63,6 +63,8 @@ const (
 	// QueueMoney is the queue of the jobs whose lateness costs money: the expiry of credit, and the reconciliation of
 	// charges and of the ledger.
 	QueueMoney = "money"
+	// QueueReconcile isolates daily payment checks and gateway queries from receipt and expiry jobs.
+	QueueReconcile = "reconcile"
 	// QueueNotifications isolates mail delivery, password-reset issuance and alert evaluation from money and supplier sync jobs.
 	QueueNotifications = "notifications"
 	// QueueSyncs is the queue of the jobs that reach a supplier: a sweep, a round of one supplier, and the price syncs
@@ -72,15 +74,15 @@ const (
 	QueueArchive = "archive"
 )
 
-// queues are the queues a node works and the workers each may run at once. Together they add up to the ten the single
-// queue had, so the split changes which jobs wait for each other, not how much a node runs; a burst of syncs or archive
-// jobs can no longer hold a money job back. The numbers are code defaults: only a deployment that has measured its own
+// queues are the queues a node works and the workers each may run at once. The separate reconciliation worker keeps
+// long daily scans and gateway calls from delaying receipts or expiry. The numbers are code defaults: only a deployment that has measured its own
 // load should change them, and only through a deliberate departure from the default.
 var queues = []struct {
 	name    string
 	workers int
 }{
 	{QueueMoney, 3},
+	{QueueReconcile, 1},
 	{QueueNotifications, 2},
 	{QueueSyncs, 4},
 	{QueueArchive, 1},
