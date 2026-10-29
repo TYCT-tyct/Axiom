@@ -16,7 +16,7 @@
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
 | `consoleapi`、`adminapi` | 由 `api/console.yaml`、`api/admin.yaml` 生成的接口类型和服务端接口，除包说明外不手写；约定见下文「接口约定」。生成的代码里内嵌的契约是 gzip 后的 base64，会被 gitleaks 的 `generic-api-key` 误报，所以仓库根的 `.gitleaks.toml` 只对这两个包的 `.gen.go` 放行，别处的密钥照常拦下 |
 | `jsonx` | 全项目的 JSON 策略：`Validate` 检查一段数据恰好是一个合规的 JSON 值，一个接一个检查许多段（流的事件）的调用方用 `Validator`，复用解码器，规则同一份；`Unmarshal` 在 `Validate` 通过后按 v2 的默认规则解码（只取目标类型列出的成员，名字区分大小写），数据读两遍；`Decode` 读完一个 `io.Reader` 再 `Unmarshal`，空的是 `io.EOF`，生成的处理器用它读请求体（见「接口约定」的守卫）；`UnmarshalKnown` 同 `Unmarshal`，另外拒绝目标类型没有列出的成员，给我们自己定义的存储格式用；`MarshalCanonical` 按 RFC 8785 写出（成员排序、最短的字符串写法），整数原样；按位置读改字段的接口随第一个用到它们的 PR 加入，现在还没有；`protocol` 为了一次扫描读完请求体，直接用 `jsontext` 逐个读记号，是这条规则记录在案的例外（nolint 在引用处，理由见 [protocol 的决策表](../protocol/README.md)「摘要一次扫描」一行） |
-| `pg` | 连接池、`Hold`（在池外的一条专用连接上持有会话级 advisory lock，连接断了就知道，节点名用它，见 [kv](kv/README.md#配置与启动)）、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者；`Unavailable` 认出数据库连不上或不接连接（连接失败、SQLSTATE 08、57P01 到 57P03、53300），返回固定的原因文本 |
+| `pg` | 连接池、`Hold`（在池外的一条专用连接上持有会话级 advisory lock，连接断了就知道，节点名用它，见 [kv](kv/README.md#配置与启动)）、`Dedicated`（池外的另一条专用连接，持有者的心跳与回收用它，断了下次调用自己重连，见 [billing 的「持有者与截止时间」](../billing/README.md#持有者与截止时间)）、带租户范围的事务、迁移、启动时的数据库检查、任务队列（River，见下文「任务队列」）；`IsDataError` 区分「数据本身被拒」（SQLSTATE 22、23）和「没写进去」，后台写入者只重试后者；`Unavailable` 认出数据库连不上或不接连接（连接失败、SQLSTATE 08、57P01 到 57P03、53300），返回固定的原因文本 |
 | `containertest` | 测试容器的共享宿主策略：`WithHostPolicy` 在已有宿主配置之后应用：`AXIOM_TEST_CGROUP_PARENT` 决定父 cgroup，`AXIOM_TEST_JOB` 非空时加 `axiom.ci.job` 标签；未设或空值保留原配置。作业标识、pgtest 集群连接串及 kvtest 地址和密码文件统一通过 `Untracked` 读取：用 `os.Environ` 避免基础设施标识进入 Go 测试缓存键，末项覆盖继承的同名变量。所有直接启动测试容器的入口都使用它。CI 的 `go-test` 在设置父 cgroup 时禁用 Ryuk，按标签清理；diff 在 CI 避免启动 SSHD sidecar，见[CI 在哪跑](../../docs/architecture.md) |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群（`withcluster` 同时起一个 Valkey，见 `kvtest`） |
 | `alloctest` | 测试用的分配测量：父进程重跑本测试二进制，子进程只跑被测函数（堆先结算、GC 关掉、单核），在 stdout 报告单次调用的分配次数和字节数（5 次中最小的，运行时自身的分配只会加到某一次上），测试二进制里其他 goroutine 的分配不计入 |
@@ -210,6 +210,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_observability_queue_depth` | 仪表 | 无 |
 | `axiom_gateway_outage_refusals_total` | 计数 | `dependency`（`database`、`accounts`、`catalog`、`routing`）：因依赖故障被拒的请求数，日志只在故障开始和结束时各记一条（#294；测试：`TestAnOutageIsLoggedOnceNotPerRequest` 经 `telemetry.New` 的处理器读到这个名字） |
   | `axiom_billing_platform_borne_total`、`axiom_billing_platform_borne_amount_total`、`axiom_billing_reconcile_problems_total` | 计数 | 无：账户的余额底线没让它付清的结算次数和平台承担的金额（十亿分之一额度），账本每日自平找到的问题数（测试：`TestThePlatformBearingASettlementIsReported`、`TestTheReconciliationReportsWhatItRefuses` 经 `telemetry.New` 的处理器读到这些名字） |
+  | `axiom_billing_expire_deferred_total`、`axiom_billing_expire_deferred_amount_total` | 计数 | 无：一轮到期作废里没能全部作废的批次数和剩下的金额（十亿分之一额度）——仍被冻结、被在途预留占着或超出余额的部分，每轮每个仍有剩余的到期批次各加一次；怎么读和处理见[计费的「额度批次」](../../docs/domains/billing.md#额度批次)（#308；测试：`TestTheWriteOffHeldBackIsCounted`、`TestTheWriteOffFrozenAtExpiryIsCounted` 经 `telemetry.New` 的处理器读到这两个名字） |
   | `axiom_catalog_sync_last_success_age_seconds` | 仪表 | 无：持久化记录距最后成功的秒数；从未成功则距首次失败，尚未执行为 0；每次采集读数据库时钟，即使没有下一轮也增长，运维按后台阈值判断；2 秒期限，读库失败返回采集错误、不伪报 0（测试：`TestTheSyncStateIsMeasuredWithoutAnotherRound`） |
   | `axiom_catalog_sync_consecutive_failures` | 仪表 | 无：持久化连续失败轮次数，成功清零；正常取数失败写状态后任务完成（`MaxAttempts=1`），不因同一任务的短退避重试重复计数（测试同上） |
   | `axiom_catalog_sync_overdue_total` | 计数 | 无：失败轮次超过节点代码默认阈值（48 小时）时的兜底计数，每次执行最多加一；日志为 `catalog.sync.overdue`，运维后台阈值判断使用上述 gauge（测试：`TestTheSyncAlertsWhenThePricesGoUnrefreshed`） |
@@ -252,7 +253,9 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 `pg.Open` 管理两个物理池，共用一个连接预算 N：默认 64（`pg.PoolSize`），连接串 `pool_max_conns` 可覆盖，包括调小。`serve` 和打开应用数据库的运维命令用 `AXIOM_DB_COMPLETION_RESERVE` 配置其中只供完成类使用的 R 条，默认 16（`pg.CompletionReserve`）；普通池最多 N−R 条。启动时要求 0 < R < N，连接串的 `pool_min_conns` 和 `pool_min_idle_conns` 不得超过 N−R；预留池的最小连接数为 0，按需建立，不把普通池的最小值复制一遍。错误只报配置名和预算，不带连接串。gateway 的许可数从打开后的 N、R 派生，部署不必为了调小预算改代码。
 
-`pg.DB.Tx` / `ReadTx` 在同一个入口选池：默认使用普通池；gateway 的追加、结算和孤儿结算入口用 `pg.CompletionContext` 标记该次事务，才使用预留池。后台查找租户后执行的 `TenantTx` 是另一个事务入口，固定使用普通池。两池沿用相同的登录角色、事务范围、追踪、回滚和取消规则。控制台、recorder、快照加载、River worker 和 River 自己的数据库操作都走普通池，不需要主动领取 gateway 的许可，也不能借用空闲的预留容量。完成类并发超过 R 时受自身 context 限制排队；预留保证的是连接容量，不保证行锁、数据库停机或结算自身饱和时仍成功。持有者心跳仍走普通池，专用连接见 #217。
+`pg.DB.Tx` / `ReadTx` 在同一个入口选池：默认使用普通池；gateway 的追加、结算和孤儿结算入口用 `pg.CompletionContext` 标记该次事务，才使用预留池。后台查找租户后执行的 `TenantTx` 是另一个事务入口，固定使用普通池。两池沿用相同的登录角色、事务范围、追踪、回滚和取消规则。控制台、recorder、快照加载、River worker 和 River 自己的数据库操作都走普通池，不需要主动领取 gateway 的许可，也不能借用空闲的预留容量。完成类并发超过 R 时受自身 context 限制排队；预留保证的是连接容量，不保证行锁、数据库停机或结算自身饱和时仍成功。
+
+持有者的心跳与回收用 `pg.DB.Dedicated`，一条不属于任何一个池的连接（`pgx.Conn`）：第一次事务时连上，任何一次失败后换一条新连接，每次事务的期限来自调用方的 context。`Billing.Run` 持有它、结束时关掉，`Heartbeat` 和 `Reap` 都走它，所以普通池被调用占满也不会推迟一次心跳（[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）；截止时间清理仍是后台的批量工作，继续走普通池。
 
 - **和 gateway 的许可同一份数**：`serve` 取 `db.MaxConns()` 和 `db.CompletionConns()`，准入和完成类分别限 N−R、R 个许可、各自计数，持有和等待完成许可都不减少准入容量（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。预算调小，许可跟着调小，不必改代码。
 - **两个池分别定容量**：R 至少按结算、孤儿结算和追加的峰值合计速率乘各自占用连接的时间估算，并为突发和尾延迟留余量；N−R 另按准入、查找、控制台和后台事务估算。若一次完成事务占连接 5–10ms，默认 R=16 的理论吞吐约每秒 1600–3200 次，不能据 N=64 推断能承受每秒 5000 次结算；持续超出会排队、超过前台结算期限后转后台重试或清理接管。5000 路在途不等于每秒 5000 次完成，默认值是否足够由[性能的压测](../../docs/performance.md#怎么验证)验证。
@@ -261,7 +264,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 默认 N=64 保留原有事务连接总预算，R=16 保留既定的完成类保底。选择两个物理池而不是仅在 `Tx` 前加信号量，是因为 River 驱动直接使用 pgxpool，其查询不经 `Tx`；只在 gateway 发许可同样拦不住控制台和 recorder。代价是普通池繁忙时不能借用空闲的预留连接，完成类也不能借用普通池，吞吐受 R 限制。new-api `model/main.go`（206e0fa，2026-10-20）和 sub2api `backend/internal/repository/db_pool.go`、`backend/internal/config/config.go`（8f2cbb5，2026-10-19）都配置普通池上限；Axiom 另分预留池以履行结算容量保证。
 
-部署按**所有进程**计预算：每个 `serve` 节点另有两条不在池里的连接，都从池里取走后 `Hijack`，不计入 pgxpool 的上限——持有节点名的 advisory lock 的那条（`pg.DB.Hold`，见 [kv 的「配置与启动」](kv/README.md#配置与启动)），以及 River v0.49.0 的 LISTEN 监听器；其余 River 查询仍计入 N−R。因此每个 `serve` 节点按 N+2 计算，再为迁移、运维以及部署中其他连接留余量。例如两个节点各 N=40、R=10，事务池、节点名和 River 监听合计最多 84 条，余量留给 PostgreSQL 的管理和其他连接。不能只把单进程默认 64 与数据库的 `max_connections` 比较。
+部署按**所有进程**计预算：每个 `serve` 节点另有三条不在池里的连接，不计入 pgxpool 的上限——持有节点名的 advisory lock 的那条（`pg.DB.Hold`，从池里取走后 `Hijack`，见 [kv 的「配置与启动」](kv/README.md#配置与启动)）、River v0.49.0 的 LISTEN 监听器（同样取走后 `Hijack`），以及持有者心跳与回收的那条（`pg.DB.Dedicated`，直接连数据库）；其余 River 查询仍计入 N−R。因此每个 `serve` 节点按 N+3 计算，再为迁移、运维以及部署中其他连接留余量。例如两个节点各 N=40、R=10，事务池、节点名、River 监听和持有者心跳合计最多 86 条，余量留给 PostgreSQL 的管理和其他连接。不能只把单进程默认 64 与数据库的 `max_connections` 比较。
 
 集成测试 `TestBackgroundAndConsoleCannotTakeTheSettlementReserve` 用真实 PostgreSQL、River worker、recorder 和普通控制台事务入口占满 N−R 条，通过事务回调、通道和数据库锁等待确认饱和；普通事务无法借用预留，结算和孤儿结算仍在各自期限内完成。没有用睡眠推断饱和。
 
@@ -394,6 +397,7 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | `just generated` 先删后生成，保留 `exclusions.generated: strict` | 只查文件头抓不到手写的 `x.gen.go`（重新生成不会碰它）；先删再生成，不是生成器写出的就显示为被删；有未提交改动的生成文件先拒绝，不删，否则检查会丢用户的文件。生成步骤是 `just generated` 的参数（默认 `just generate`），测试才能换成假的生成器，把这些行为写成测试。lint 的豁免继续由文件头决定，新模块的 sqlc 输出不用再登记第二处 | `generated: disable` 加按路径逐个列出生成文件：每个有查询的模块要在 `.golangci.yml` 再登记一次，与 `sqlc.yaml` 重复；只查文件头：不拦名字冒用 |
 | 角色语句的匹配写成 Python 脚本，不用 `git grep` 或 Go 工具 | `git grep` 逐行匹配，`SET` 与 `ROLE` 隔行或隔注释就漏；Go 工具的测试里要写 `SET ROLE` 字符串，会被 `just scope` 当成违规，Python 文件不在检查范围内 | `git grep -P` 加 `-z`：仍不会剥注释，也不会解开 Go 转义；`tools/` 里的 Go 程序：测试自己触发规则 |
 | 审计日志在平台，所有模块经 `audit.Record` 写同一张表 | 要留审计的 accounts、billing、catalog、payments 都不能引用 `operations`；一张表让运营按操作者、对象、时间检索全部改动 | 由 `operations` 提供写接口：违反依赖方向；各模块各建审计表：同样的列写好几份，检索要拼多张表 |
+| 持有者的心跳与回收用池外的一条专用连接（`pg.Dedicated`），不从任何一个池里借 | 一次心跳的期限是 TTL 的三分之一，等池里的连接就可能错过它，`Alive` 变假会给整个节点答 503；这条连接只服务心跳与回收，量与调用无关，任何一次失败后换新连接，不必猜一个半途而废的会话是否还能用（#217） | 从普通池取一条常驻连接再 `Hijack`（`Hold` 的做法）：连接断了要重新从池里取，池被占满时正是取不到的时候；给池加高优先级的取连接：仍是同一个池，池空时照样等 |
 | 审计在改动自己的事务里同步写 | 改动和条目一起成败，没有不留审计的改动，也没有记了却没发生的改动 | 提交后发事件再写：两者之间崩溃就丢条目；单独的事务写：改动回滚后留下没发生的条目 |
 | 写入时不接哈希链 | 链头要在每个写审计的事务里加锁，所有模块的管理操作排成一队，锁持有到各自提交；接链和异地留存放在提交之后 | 在 `Record` 里接链 |
 | 审计条目的读写使用同一条[账户范围策略](pg/README.md#决策与理由) | 租户要能看自己的条目，租户范围里的改动也要能记；同一个条件限制条目能记到哪个租户 | 按平台数据只让平台读写：账户范围里的改动记不进；写入不限范围：租户的改动能记到别人头上 |

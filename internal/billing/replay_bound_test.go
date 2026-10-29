@@ -110,7 +110,7 @@ func TestReplayBoundAcrossPages(t *testing.T) {
 	}
 	var written int64
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) (err error) {
-		written, err = writeOffAccount(b.t.Context(), tx, b.admitted.Account, 1)
+		written, _, err = writeOffAccount(b.t.Context(), tx, b.admitted.Account, 1)
 		return err
 	}); err != nil {
 		t.Fatal(err)
