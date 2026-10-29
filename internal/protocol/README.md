@@ -33,14 +33,20 @@
 | `Provider`：OpenRouter 的 `provider` 对象，原样的字节，至多 4 KiB，没写或 `null` 为空；`Inspect` 只检查它是对象、大小在界内，含义由 gateway 读 | gateway 转成路由的覆盖条件（[gateway 的「入口与准入」](../gateway/README.md#入口与准入)） | `provider` | 同左 | 同左 |
 | `Needs` | 路由的能力过滤（[路由的「一个请求的路由步骤」](../../docs/domains/routing.md#一个请求的路由步骤)） | 见下 | 见下 | 见下 |
 
-`Needs` 的能力：`Images`、`Documents` 同上；`PromptCache` 是有 `cache_control`；`StructuredOutput` 是回复格式（Messages 的 `output_config.format`、`output_format`，Responses 的 `text.format`，Chat 的 `response_format`）的 `type` 为 `json_schema` 或 `json_object`；`Reasoning` 是显式启用、effort 或预算要求（Messages 也读 `output_config.effort`）；缺省、null、空设置或只选展示方式不要求推理能力。任一关闭（`type: "disabled"`、`effort: "none"`、`enabled: false`，含 Chat 的 `reasoning_effort`）优先于强度，不受成员顺序影响；工具按 `type` 分：Messages 的 `web_search_*`、`code_execution_*`，Responses 的 `web_search*`、`code_interpreter` 是 `WebSearch`、`CodeExecution`，除下文明示拒绝的服务端工具外，其余工具都是 `Tools`；Chat 有 `web_search_options` 是 `WebSearch`。
+`Needs` 的能力：`Images`、`Documents` 同上；`PromptCache` 是有 `cache_control`；`StructuredOutput` 是回复格式（Messages 的 `output_config.format`、`output_format`，Responses 的 `text.format`，Chat 的 `response_format`）的 `type` 为 `json_schema` 或 `json_object`；`Reasoning` 是显式启用、effort 或预算要求（Messages 也读 `output_config.effort`）；缺省、null、空设置（含空的 `reasoning_effort` 或 `reasoning.effort`）或只选展示方式不要求推理能力。任一关闭（`type: "disabled"`、`effort: "none"`、`enabled: false`，含 Chat 的 `reasoning_effort`）优先于强度，不受成员顺序影响；工具按 `type` 分：Messages 的 `web_search_*`、`code_execution_*`，Responses 的 `web_search*`、`code_interpreter` 是 `WebSearch`、`CodeExecution`，除下文明示拒绝的服务端工具外，其余工具都是 `Tools`；Chat 有 `web_search_options` 是 `WebSearch`。
 
 - **只按位置读**：从顶层出发，只沿消息、条目、部件的 `content` 和 `output`（Messages 的 `tool_result` 和 `document` 的 `source.content` 里也有部件）进入部件；Messages 和 Responses 部件的 `content`、`output` 也可以是单个部件，如服务端工具的结果、`computer_call_output` 的截图，按值的形状认，因为成员顺序不定，读到它时还不知道外层的 `type`；工具的 schema、工具调用的参数从不进入，所以客户端数据里叫 `cache_control`、`type`、`max_uses` 的键不算数。
 - **出错返回 `ErrInvalid`**（gateway 回 400）：不是 jsonx 接受的 JSON（非法 UTF-8、重复键、超过 `jsonx.MaxDepth`、值后还有数据）、不是对象、没有 `model`；读的成员类型不对、`provider` 超过 4 KiB、计数不是非负整数、同类工具的 `max_uses` 相加超出 int64；`service_tier`、`speed` 是表里没有的取值，因为定不了价。`null` 等于没写。错误说明是我们的话：JSON 语法错是 "Invalid request: invalid JSON request body"（new-api 的同一句），类型不对的值用 JSON 指针指出位置，解码库的原话（偏移量、Go 类型名）不外传（`bodyFault`，`TestAnInvalidBodyIsDescribedInOurWords`）。
 
 `Text(body, byteLimit, callback)` 顺序扫描已校验的请求，只回调解码后的字符串值，不计 JSON 键、外壳或数值；跳过 `data`、`file_data`、`image_url`、`url`、`signature`、`encrypted_content` 的不透明字符串，图片/文件仍由各自的估计覆盖，音频和隐藏上下文的精确估计仍待 #203。普通字符串最多解码 `byteLimit` 个原始字节，边界不切断 UTF-8、转义或代理对，余下普通字符串的原始字节数返回给字节比例兜底。回调借用复用的解码缓冲，不应保留它；返回 false 可停止。只有缺输入用量的结算使用此接口，不建立完整请求对象，也不声称还原供应商的消息框架 token。
 
-`Inspect` 在工具声明边界拒绝没有完整报价的服务端工具：Messages 的 `web_fetch_*`、非空顶层 `mcp_servers`、`mcp_toolset`、`tool_search_tool_*`、`advisor_*`，Responses 的 `mcp`、`file_search`、`image_generation`、`programmatic_tool_calling`，以及未显式声明客户端执行的 `shell` / `tool_search`；三种格式的 `openrouter:*` 工具声明也拒绝，因为该工具命名空间与循环未实现。写了 `max_uses` 或 `max_tool_calls` 也不能使它们受支持；返回 `ErrInvalid`，网关回 400 并点名工具。`mcp_servers: []` / null 不启用工具；客户端函数的 `name` 恰好相同不受影响。此前同格式改写将这些声明原样携带到上游；转发审计留在 PR 记录中。Responses 的 `shell` 只有 `environment.type:"local"` 按客户端工具处理，`tool_search` 只有 `execution:"client"` 按客户端工具处理；缺省或不认识的执行模式保守拒绝。成员顺序不影响判定，两类客户端声明不能互相替代（`TestInspectKeepsClientToolExecution`）。`Prepare` 保持字节改写职责，准入策略由 `Inspect` 执行。支持项仍为 web search、code execution，次数缺省交给目录的 `max_uses`，没有默认由 billing 返回 `ErrUnbounded`。逐项依据、范围与日期见[计费决策](../../docs/domains/billing.md#决策与理由)。
+`Inspect` 在工具声明边界拒绝没有完整报价的服务端工具：Messages 的 `web_fetch_*`、非空顶层 `mcp_servers`、`mcp_toolset`、`tool_search_tool_*`、`advisor_*`，Responses 的 `mcp`、`file_search`、`image_generation`、`programmatic_tool_calling`，以及未显式声明客户端执行的 `shell` / `tool_search`；三种格式的 `openrouter:*` 工具声明也拒绝：`openrouterTools` 逐个列出 OpenRouter 文档里的 13 种（`web_search`、`web_fetch`、`datetime`、`image_generation`、`apply_patch`、`shell`、`bash`、`fusion`、`advisor`、`subagent`、`experimental__search_models`、`tool_search`、`files`），`web_search` 说没有配置外部搜索服务（与 `web` 插件共用 `NoWebSearch`），其余说没有模型侧工具循环，命名空间外的名字说不认识；拒绝理由与执行设计见[接入域的「服务端工具」](../../docs/domains/gateway.md#服务端工具)。写了 `max_uses` 或 `max_tool_calls` 也不能使它们受支持；返回 `ErrInvalid`，网关回 400 并点名工具。`mcp_servers: []` / null 不启用工具；客户端函数的 `name` 恰好相同不受影响。此前同格式改写将这些声明原样携带到上游；转发审计留在 PR 记录中。Responses 的 `shell` 只有 `environment.type:"local"` 按客户端工具处理，`tool_search` 只有 `execution:"client"` 按客户端工具处理；缺省或不认识的执行模式保守拒绝。成员顺序不影响判定，两类客户端声明不能互相替代（`TestInspectKeepsClientToolExecution`）。`Prepare` 保持字节改写职责，准入策略由 `Inspect` 执行。支持项仍为 web search、code execution，次数缺省交给目录的 `max_uses`，没有默认由 billing 返回 `ErrUnbounded`。逐项依据、范围与日期见[计费决策](../../docs/domains/billing.md#决策与理由)。
+
+### 预设与回退控制
+
+`Request.Preset` 保存引用，`PresetReference` 识别三种写法并拒绝冲突。仅有有效前缀的 preset 字段时 Inspect 允许暂缺 model，gateway 展开后必须再次 Inspect 得到真实模型。`MergePreset` 以顶层 Raw 值浅合并，保持字符串值（含推理签名）和整数精度；系统提示与工具的例外见[路由](../../docs/domains/routing.md#命名预设)。仅有 models 列表时，合并后第一项成为主模型，其余进入备选，不拼接不同来源的主模型默认值；`TestPresetModelList` 检查请求覆盖后的列表顺序。Messages 的非 null fallbacks 覆盖预设备选而保留主模型，`TestPresetMessagesFallbackOverride` 覆盖 models-only 和显式主模型配置；`MergePreset` 的结构错误统一包装为 ErrInvalid，网关返回 400，`TestPresetMergeErrorsAreInvalidRequests` 覆盖工具结构和缺少 Chat messages。它不执行查库或授权；调用者先按 `PresetCost` 记账，合并后不能使用旧位置表和旧计费摘要。
+
+Messages 的 `fallbacks` 读取为 `Request.Models`，最多三项、只允许非空 model，与非 null models 互斥，和 JSON 成员顺序无关；Prepare 在所有目标格式与 compact 路径删除 preset、fallbacks。`Request.SessionID` 在完整严格扫描中读取，即使出现在会话前缀范围之后也可供 routing 使用；请求体与请求头各自上限为 256 字符，头由 gateway 校验。`TestMessagesFallbacks` 覆盖非法列表和同格式删除，`TestPresetMerge` 覆盖三种格式的覆盖与工具合并。
 
 ### 本地插件
 
@@ -59,7 +65,7 @@
 | 成员 | Messages | Responses | 理由 |
 |---|---|---|---|
 | `model` | 换成 `Target.Model`，端点的名字 | 同左 | |
-| `provider`、`models`、`route`、`transforms`、`plugins`、`usage`、`session_id`、`axiom` | 删除 | 同左 | 路由参数和本站扩展；`plugins` / `transforms` 先由 `Inspect` 校验，再由 gateway 执行本地插件或返回 400，不能先丢弃 |
+| `provider`、`models`、`preset`、`fallbacks`、`route`、`transforms`、`plugins`、`usage`、`session_id`、`axiom` | 删除 | 同左 | 路由参数和本站扩展；`plugins` / `transforms` 先由 `Inspect` 校验，再由 gateway 执行本地插件或返回 400，不能先丢弃 |
 | `stream` | `Target.Streams` 时写成 `true`，没有就加上；否则原样 | 同左 | gateway 总是以流读上游，非流式客户端由它聚合（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；路由对生成请求只保留能流式的端点，`Streams` 为假时保持客户端的写法是协议层的约定（压缩请求用不到它，见下） |
 | 会话和终端用户的标识 | `metadata.user_id` | `prompt_cache_key`、`user`、`safety_identifier` | 换成 `Rewrites.Identity` 给出的派生值（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；`metadata.user_id` 例外，它把派生的会话和设备写进一个结构，是那个结构的 JSON 字符串，`{"device_id":"…","account_uuid":"","session_id":"…"}`，中转站从中取出会话固定账号，设备和空账户见接入的那一条；空串和纯空白写为空串，不派生公共会话（Chat 转换共用此规则）；`null` 不动 |
 | `previous_response_id` | — | 删除；`Rewrites.History` 的条目按原样、从旧到新放到 `input` 最前：`input` 是数组就插在开头，是字符串就先换成一条 user 消息，没有或 `null` 就以历史为 `input` | 上游不保存状态，由本站拼回历史（[接入的「Responses 的会话状态」](../../docs/domains/gateway.md#responses-的会话状态)）；`instructions` 不随 `previous_response_id` 延续（同一文档的 `instructions`），所以只拼 `input` |
@@ -153,12 +159,12 @@
 
 | 输入设置 | Messages manual 目标 | Messages adaptive 目标 | Responses 目标 | 原生 Messages / Responses → Chat |
 |---|---|---|---|---|
-| 未指定 / null / 空对象 | 不加 thinking | 不加 thinking | 不加 reasoning | 不加推理设置 |
+| 未指定 / null / 空对象 / 空 effort | 不加 thinking | 不加 thinking | 不加 reasoning | 不加推理设置 |
 | Chat enabled true | 以 medium 算预算 | adaptive + medium | effort medium | Messages adaptive 无 effort → medium（OpenRouter 开启默认，替换原 high） |
 | enabled false / effort none | thinking disabled | thinking disabled | effort none，不索取摘要 | Messages disabled → reasoning_effort none，压过 output_config.effort；Responses none 原值 |
 | minimal / low / medium / high | 输出上限的 10% / 20% / 50% / 80% | minimal → low；其余原值 | 原值 | 共享 effort 原值 |
 | xhigh / max | 都为输出上限的 95% | 原值 | 原值（当前 OpenAI 规范已列 max） | 原值，不沿用参考实现 max → xhigh 的旧规则 |
-| Chat reasoning.max_tokens | 原值 budget_tokens | 按最近比例换 effort | 同左 | Messages budget_tokens → reasoning_effort，比例同左；同时给 output_config.effort 时优先 effort |
+| Chat reasoning.max_tokens | 原值 budget_tokens | 按最近比例换 effort | 同左 | Messages budget_tokens → reasoning_effort，比例同左；同时给非空的 output_config.effort 时优先 effort，空值视为未给 |
 | Chat exclude true / false | 开启时加 display omitted / summarized | 已显式开启时加 display omitted / summarized；只给展示方式不补 thinking | true 不索取摘要；false 索取 summary auto | Messages display 只控制本地输出过滤，不向官方 Chat 添加非标准参数；Responses summary auto 可转，其他样式仍拒绝 |
 
 手动 effort 预算沿用 OpenRouter：`max(min(输出上限 × 比例, 128000), 1024)`；显式预算必须为正，手动模型还要求至少 1024 且严格小于输出上限，否则该端点 `NotSupported`。manual 在工具轮次缺少可回放的思考时仍拒绝。只有 effort 的目标不能保证精确 token 预算：按预算与有效输出上限之比取最近档（10%、20%、50%、80%、95%），同距取较低档，95% 取 xhigh。有效上限优先请求，否则取 `Target.MaxOutput`；都没有则返回 `NotSupported`。adaptive 的最低档为 low，因此 minimal 再近似为 low。比例只是强度换算，不承诺实际消耗或硬预算。
@@ -421,7 +427,7 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 | `Target` 加 `Streams`，由路由按端点的能力填 | 请求发出去的 `stream` 是端点的属性，不是请求的；网关一处设置，`Prepare` 两处（改写、转换）照它写 | 在网关里改请求体：protocol 拥有请求体 |
 | `UsageOf` 只读顶层 `usage` 与 `service_tier` | compact 的回复整份读一次就完了，复用聚合器的成员读出即可，不需要新的解码器 | 解成结构体：多一份随回复大小增长的分配 |
 | 两个文件共用一张替换表，并替换请求里的 ID | 多轮请求里的工具调用 ID、`previous_response_id` 会出现在流里，替换后两边仍对得上 | 只替换流：请求里留下真实 ID，两边也对不上 |
-| 摘要一次严格扫描，顶层位置表供同格式改写复用 | 只记录有限的改写成员（当前最多 18 个），分配不随消息数增长；`Request` 复制后位置表仍有效，不借用原 body，重试可复用；位置复用条件与调用方约束见「同格式改写」。与按消息记录位置不同，不需要额外的动态数组。回放候选清理可能改变长度，因此沿用 tokenizer 路径；没有位置表的内部转换结果也走它。表容量不足时退回 tokenizer，`TestPositionCapacity` 要求同步扩容。Inspect 的严格校验和重复键检查保持不变 | 继续两遍完整解析：大体积请求的 Prepare CPU 浪费在未改写内容；只放宽预算：保留可消除的成本；按消息保存位置：内存随消息数增长 |
+| 摘要一次严格扫描，顶层位置表供同格式改写复用 | 只记录有限的改写成员（当前最多 20 个），分配不随消息数增长；`Request` 复制后位置表仍有效，不借用原 body，重试可复用；位置复用条件与调用方约束见「同格式改写」。与按消息记录位置不同，不需要额外的动态数组。回放候选清理可能改变长度，因此沿用 tokenizer 路径；没有位置表的内部转换结果也走它。表容量不足时退回 tokenizer，`TestPositionCapacity` 要求同步扩容。Inspect 的严格校验和重复键检查保持不变 | 继续两遍完整解析：大体积请求的 Prepare CPU 浪费在未改写内容；只放宽预算：保留可消除的成本；按消息保存位置：内存随消息数增长 |
 | 摘要按 token 读，深度在每个 token 上对照 `jsonx.MaxDepth` 检查 | 请求体可达数 MB，先 `jsonx.Validate` 再读字段要扫两遍；`jsontext` 的默认选项就是 jsonx 的严格程度，只有深度要自己查，所以 `jsontext` 只在这里和录制命令里引用，各自注明理由 | 先校验再读：两遍；解码到结构体：要为每种内容形状写解码器，分配随部件个数增长 |
 | 输入上界是请求体字节数减去图片、文件的数据，不是只数正文字段 | 只数正文要认出每一种放文本的字段，漏认一种就少算，少算就是欠款；多算的只是 JSON 语法和成员名 | 只数 `text` 等正文字段 |
 | 按位置读部件和工具，不在任意深度找 `cache_control`、`type` | schema 和工具参数里的同名键是客户端的数据，按名字找会让路由要求不需要的能力，预留也多算 | 任意深度按名字找 |

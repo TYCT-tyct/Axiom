@@ -8,7 +8,7 @@ import (
 // Only the finite set of top-level rewrite members needs offsets, never the messages inside them.
 // If new rules outgrow the table, rewriting falls back to the tokenizer until its capacity is updated.
 type requestPositions struct {
-	members              [18]memberPosition
+	members              [20]memberPosition
 	n, close, tail, size int
 	ready                bool
 }

@@ -202,7 +202,7 @@ func TestStickyIsFirstWhateverTheWeights(t *testing.T) {
 func TestStickyStore(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, routing.Config{StickyTTL: time.Hour, StickyMax: 32}, openPreset(), endpoint(t, 1))
-	k := h.r.SessionKey(acct, input().Req, []byte(`{"session_id":"s"}`))
+	k := h.r.SessionKey(acct, input().Req, []byte(`{"session_id":"s"}`), "")
 	if _, ok := h.r.Stuck(k); ok {
 		t.Fatal("stuck before anything was stored")
 	}
@@ -224,7 +224,7 @@ func TestStickyStore(t *testing.T) {
 		t.Error("stuck after Forget")
 	}
 	for i := range 1000 {
-		h.r.Stick(h.r.SessionKey(acct, input().Req, []byte(`{"session_id":"`+strconv.Itoa(i)+`"}`)), ep(1), time.Hour)
+		h.r.Stick(h.r.SessionKey(acct, input().Req, []byte(`{"session_id":"`+strconv.Itoa(i)+`"}`), ""), ep(1), time.Hour)
 	}
 	if n := h.r.StickyLen(); n > 48 { // 16 shards of at most 32/16+1
 		t.Errorf("%d sessions kept, for a limit of 32", n)

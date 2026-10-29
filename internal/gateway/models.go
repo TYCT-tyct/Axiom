@@ -169,9 +169,9 @@ func (h *Handler) authorise(r *http.Request, caller accounts.Caller, fn func(con
 	return h.admitDB(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: h.clientIP(r)}, func(tx pg.Tx, a accounts.Admission) error { return fn(ctx, tx, a) })
 }
 
-// model resolves the public base name and checks model visibility. Discovery does not validate request-level sorting:
-// :exacto describes the base model even when a call would need an explicit provider.sort to override it. Unknown,
-// retired, unserved and key-hidden models are all model_not_found, never 403.
+// model resolves the public base name and checks model visibility. Discovery does not apply a call's request-level
+// checks: :exacto and :thinking describe the base model even when a call would need an explicit provider.sort or a
+// reasoning request to serve them. Unknown, retired, unserved and key-hidden models are all model_not_found, never 403.
 func (v visibility) model(name string) (modelEntry, error) {
 	parsed, ref := parseModelName(name)
 	if ref != nil {

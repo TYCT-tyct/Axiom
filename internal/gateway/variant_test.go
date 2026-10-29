@@ -38,7 +38,8 @@ func TestParseModelName(t *testing.T) {
 		"free":                                {base + ":free", modelName{}, http.StatusBadRequest, ":free"},
 		"batch":                               {base + ":batch", modelName{}, http.StatusBadRequest, ":batch"},
 		"extended":                            {base + ":extended", modelName{}, http.StatusBadRequest, ":extended"},
-		"thinking":                            {base + ":thinking", modelName{}, http.StatusBadRequest, "reasoning parameter"},
+		"thinking":                            {base + ":thinking", modelName{base: base, thinking: true}, 0, ""},
+		"thinking with a sort":                {base + ":thinking:nitro", modelName{base: base, sort: &fastest, thinking: true}, 0, ""},
 		"a catalog variant and a routing one": {base + ":free:nitro", modelName{}, http.StatusBadRequest, ":free"},
 		"a suffix nobody knows":               {base + ":turbo", modelName{}, http.StatusNotFound, "not a model variant"},
 		"an empty suffix":                     {base + ":", modelName{}, http.StatusNotFound, "not a model variant"},
@@ -95,6 +96,7 @@ func TestModelVariantsRoute(t *testing.T) {
 		"an explicit sort that agrees":               {"acme/alpha:nitro", `"provider":{"sort":"throughput"},`, []routing.EndpointID{two, one}},
 		"exacto, replaced by the sort":               {"acme/alpha:exacto", `"provider":{"sort":"price"},`, []routing.EndpointID{one, two}},
 		"exacto, replaced by a variant":              {"acme/alpha:exacto:nitro", "", []routing.EndpointID{two, one}},
+		"thinking, which the request asks for":       {"acme/alpha:thinking", `"output_config":{"effort":"high"},`, []routing.EndpointID{one, two}},
 		"an alternate that ranks the same":           {"acme/alpha:nitro", `"models":["acme/beta:nitro"],`, []routing.EndpointID{two, one, three}},
 		"an alternate that is not a model":           {"acme/alpha:nitro", `"models":["acme/none:turbo","acme/beta"],`, []routing.EndpointID{two, one, three}},
 		"a variant on the alternate agrees":          {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:floor"],`, []routing.EndpointID{one, two, three}},
@@ -134,7 +136,8 @@ func TestModelVariantsAreRefused(t *testing.T) {
 		"online":                   {"acme/alpha:online", "", 400, "invalid_request", ":online"},
 		"online with a sort":       {"acme/alpha:online", `"provider":{"sort":"price"},`, 400, "invalid_request", ":online"},
 		"free":                     {"acme/alpha:free", "", 400, "invalid_request", ":free"},
-		"thinking":                 {"acme/alpha:thinking", "", 400, "invalid_request", "reasoning"},
+		"thinking":                 {"acme/alpha:thinking", "", 400, "invalid_request", "reasoning parameter"},
+		"thinking, reasoning off":  {"acme/alpha:thinking", `"thinking":{"type":"disabled"},`, 400, "invalid_request", "reasoning parameter"},
 		"batch":                    {"acme/alpha:batch", "", 400, "invalid_request", ":batch"},
 		"extended":                 {"acme/alpha:extended", "", 400, "invalid_request", ":extended"},
 		"a suffix nobody knows":    {"acme/alpha:turbo", "", 404, "model_not_found", "not a model variant"},
@@ -182,6 +185,8 @@ func TestCountTokensReadsVariants(t *testing.T) {
 		"exacto":                          {"acme/alpha:exacto", "", 400},
 		"exacto, replaced by the sort":    {"acme/alpha:exacto", `"provider":{"sort":"price"},`, 200},
 		"exacto, replaced by a variant":   {"acme/alpha:exacto:nitro", "", 200},
+		"thinking":                        {"acme/alpha:thinking", "", 400},
+		"thinking, which the count asks":  {"acme/alpha:thinking", `"output_config":{"effort":"high"},`, 200},
 		"an alternate's exacto":           {"acme/alpha:nitro", `"models":["acme/beta:exacto"],`, 400},
 		"an alternate's exacto, replaced": {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:exacto"],`, 200},
 		"a provider selector":             {"acme/alpha", `"provider":{"only":["alpha-1"]},`, 200},
@@ -194,6 +199,29 @@ func TestCountTokensReadsVariants(t *testing.T) {
 			t.Errorf("%s: %d %s, want %d", name, resp.StatusCode, out, tc.status)
 		}
 	}
+}
+
+// TestAnEmptyEffortCannotSatisfyThinking: a Chat request whose only reasoning setting is an empty effort asks for no
+// reasoning — the conversion writes no thinking for it — so :thinking on the model or on an alternate is refused
+// instead of being served by the plain model.
+func TestAnEmptyEffortCannotSatisfyThinking(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	for name, body := range map[string]string{
+		"the model":    `{"model":"acme/alpha:thinking","max_tokens":1000,"reasoning_effort":"","messages":[{"role":"user","content":"hello"}]}`,
+		"an alternate": `{"model":"acme/beta","models":["acme/alpha:thinking"],"max_tokens":1000,"reasoning_effort":"","messages":[{"role":"user","content":"hello"}]}`,
+	} {
+		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(body))
+		if code, _ := errorOf(t, out); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" ||
+			!strings.Contains(out, "reasoning parameter") {
+			t.Errorf("%s: %d %s", name, resp.StatusCode, out)
+		}
+	}
+	if calls := r.calls(); len(calls) != 0 {
+		t.Fatalf("%d calls reached an upstream", len(calls))
+	}
+	r.idle(1 << 30)
 }
 
 // TestAModelNameTooLongToBeRecordedIsRefusedFirst: the call record holds the name the client wrote, whole, in at most 200

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"unicode/utf8"
 
 	"axiom/internal/catalog"
 )
@@ -33,6 +34,7 @@ var grammars = [...]grammar{
 	Messages: {
 		top: withProvider(fields{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"fallbacks":  (*scanner).fallbacks,
 			"max_tokens": (*scanner).maxOutput, "system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
 			"thinking": (*scanner).reasoning, "output_config": func(s *scanner) error { return s.object(messagesOutputFields) }, "output_format": (*scanner).format,
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
@@ -45,7 +47,7 @@ var grammars = [...]grammar{
 		},
 		tool:    fields{"type": (*scanner).toolType, "max_uses": (*scanner).maxUses, "cache_control": (*scanner).cacheControl},
 		parts:   map[string]Capabilities{"image": Images, "document": Documents},
-		servers: []serverTool{{"web_search_", WebSearch, false}, {"code_execution_", CodeExecution, false}, {"web_fetch_", 0, true}, {"mcp_toolset", 0, true}, {"tool_search_tool_", 0, true}, {"advisor_", 0, true}, {"openrouter:", 0, true}},
+		servers: []serverTool{{"web_search_", WebSearch, false}, {"code_execution_", CodeExecution, false}, {"web_fetch_", 0, true}, {"mcp_toolset", 0, true}, {"tool_search_tool_", 0, true}, {"advisor_", 0, true}},
 		tiers:   map[string]catalog.ServiceTierSet{"auto": 0, "standard_only": 1 << catalog.ServiceTierStandard},
 		input:   1 << catalog.ItemInput,
 		// compact_20260112 is the one that compacts; clear_tool_uses and clear_thinking only drop content.
@@ -69,7 +71,7 @@ var grammars = [...]grammar{
 			"environment": func(s *scanner) error { return s.object(shellEnvironmentFields) },
 		},
 		parts:   map[string]Capabilities{"input_image": Images, "computer_screenshot": Images, "input_file": Documents},
-		servers: []serverTool{{"web_search", WebSearch, false}, {"code_interpreter", CodeExecution, false}, {"mcp", 0, true}, {"file_search", 0, true}, {"image_generation", 0, true}, {"programmatic_tool_calling", 0, true}, {"openrouter:", 0, true}},
+		servers: []serverTool{{"web_search", WebSearch, false}, {"code_interpreter", CodeExecution, false}, {"mcp", 0, true}, {"file_search", 0, true}, {"image_generation", 0, true}, {"programmatic_tool_calling", 0, true}},
 		tiers:   openAITiers,
 		input:   openAIInput, compaction: "compaction",
 	},
@@ -103,11 +105,10 @@ var grammars = [...]grammar{
 			"image_url": func(s *scanner) error { return s.object(chatImageFields) },
 			"file":      func(s *scanner) error { return s.object(chatFileFields) },
 		},
-		tool:    fields{"type": (*scanner).toolType},
-		servers: []serverTool{{"openrouter:", 0, true}},
-		parts:   map[string]Capabilities{"image_url": Images, "file": Documents},
-		tiers:   openAITiers,
-		input:   openAIInput,
+		tool:  fields{"type": (*scanner).toolType},
+		parts: map[string]Capabilities{"image_url": Images, "file": Documents},
+		tiers: openAITiers,
+		input: openAIInput,
 	},
 }
 
@@ -191,6 +192,7 @@ func (s *scanner) model() error {
 const maxModels = 8
 
 func (s *scanner) models() error {
+	s.modelsSet = s.dec.PeekKind() != 'n'
 	return s.array(func(s *scanner) error {
 		if len(s.r.Models) == maxModels {
 			return fmt.Errorf("models lists more than %d models", maxModels)
@@ -371,8 +373,36 @@ func (s *scanner) addCalls() error {
 	return nil
 }
 
+// openrouterTools are the server tool types OpenRouter documents (OpenRouter《Server Tools》, read 2026-10-29). The
+// model decides when to call one and the provider executes it, resampling the model with the result: a loop this
+// gateway does not run, and one whose search, fetch, sandbox and image jobs would also need a service or a sandbox
+// here. The namespace is recognized in every format so that a client's tool is refused by name before admission,
+// rather than forwarded as a function the upstream would ignore (docs/domains/gateway.md「服务端工具」).
+var openrouterTools = map[string]struct{}{
+	"openrouter:web_search": {}, "openrouter:web_fetch": {}, "openrouter:datetime": {},
+	"openrouter:image_generation": {}, "openrouter:apply_patch": {}, "openrouter:shell": {},
+	"openrouter:bash": {}, "openrouter:fusion": {}, "openrouter:advisor": {}, "openrouter:subagent": {},
+	"openrouter:experimental__search_models": {}, "openrouter:tool_search": {}, "openrouter:files": {},
+}
+
+// openrouterTool refuses one tool of OpenRouter's namespace. A documented type says what is missing; a name the
+// namespace does not document is told so, because OpenRouter adds tools and a request may carry a name from a newer
+// provider release.
+func openrouterTool(name string) error {
+	if _, ok := openrouterTools[name]; !ok {
+		return fmt.Errorf("%.64q is not an OpenRouter server tool", name)
+	}
+	if name == "openrouter:web_search" {
+		return fmt.Errorf("the %s server tool is not supported: %s", name, NoWebSearch)
+	}
+	return fmt.Errorf("the %s server tool is not supported yet: this gateway runs no OpenRouter-side tool loop", name)
+}
+
 func (s *scanner) toolType() error {
 	v, err := s.str()
+	if hasPrefix(v, "openrouter:") {
+		return openrouterTool(string(v))
+	}
 	if s.r.Format == Responses {
 		switch string(v) {
 		case "shell":
@@ -421,14 +451,16 @@ func (s *scanner) reasoning() error {
 	return nil
 }
 
+// reasoningEffort reads an effort. An empty string is no setting: the conversion writes nothing for it, so it must
+// not ask for the reasoning ability or satisfy a :thinking suffix (docs/domains/gateway.md「模型名变体」).
 func (s *scanner) reasoningEffort() error {
 	v, err := s.str()
-	if v != nil {
-		if string(v) == "none" {
-			s.reasoningOff = true
-		} else {
-			s.r.Needs |= Reasoning
-		}
+	switch string(v) {
+	case "":
+	case "none":
+		s.reasoningOff = true
+	default:
+		s.r.Needs |= Reasoning
 	}
 	return err
 }
@@ -475,6 +507,15 @@ func hasPrefix(v []byte, prefix string) bool {
 
 // withProvider adds the provider member, which the three formats share, to the members of a format's top level.
 func withProvider(f fields) fields {
+	f["preset"] = func(s *scanner) error { v, err := s.str(); s.r.Preset = string(v); return err }
+	f["session_id"] = func(s *scanner) error {
+		v, err := s.str()
+		if utf8.RuneCount(v) > 256 {
+			return fmt.Errorf("session_id exceeds 256 characters")
+		}
+		s.r.SessionID = string(v)
+		return err
+	}
 	f["provider"] = (*scanner).provider
 	f["plugins"] = (*scanner).plugins
 	f["transforms"] = (*scanner).transforms
