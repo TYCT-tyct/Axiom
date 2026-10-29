@@ -21,6 +21,8 @@ import (
 func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
+		"accounts.user_notices":           QueueNotifications,
+		"accounts.notice_webhook":         QueueNotifications,
 		"accounts.password_reset":         QueueNotifications,
 		"accounts.password_reset_cleanup": QueueArchive,
 		"billing.exchange_sync":           QueueSyncs,

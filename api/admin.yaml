@@ -31,6 +31,74 @@ tags:
   - {name: Alerts, description: "Platform operations alert rules, channels, incidents and receipts."}
   - {name: Payments, description: "Payment discrepancies and investigation notes."}
 paths:
+  /api/admin/v1/announcements:
+    post:
+      operationId: publishAnnouncement
+      tags: [Sites]
+      summary: Publish a plain text site announcement
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AnnouncementRequest"}
+      responses:
+        "201":
+          description: The published site announcement.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Announcement"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/announcements/{announcement_id}/withdraw:
+    post:
+      operationId: withdrawAnnouncement
+      tags: [Sites]
+      summary: Withdraw a site announcement permanently
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: announcement_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AnnouncementId"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "201":
+          description: The withdrawn announcement ID.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AnnouncementResult"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/payments/discrepancies:
     get:
       operationId: listPaymentDiscrepancies
@@ -2300,6 +2368,33 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
+    Announcement:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {$ref: "#/components/schemas/AnnouncementId"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        title: {type: string, maxLength: 200}
+        body: {type: string, maxLength: 20000}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+    AnnouncementRequest:
+      type: object
+      additionalProperties: false
+      required: [site_id, title, body, starts_at, ends_at, reason]
+      properties:
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        title: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, minLength: 1, maxLength: 20000}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        reason: {type: string, minLength: 1, maxLength: 1000}
+    AnnouncementResult:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {$ref: "#/components/schemas/AnnouncementId"}
     OrderId: {type: string, pattern: '^ord_[0-9a-hjkmnp-tv-z]{26}$', description: "A top-up order's ID (TypeID), also the order number the payment channel sees."}
     MerchantId: {type: string, pattern: '^mch_[0-9a-hjkmnp-tv-z]{26}$', description: "A merchant account's ID (TypeID)."}
     PaymentDiscrepancy:
