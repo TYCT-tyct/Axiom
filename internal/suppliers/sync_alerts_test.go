@@ -165,10 +165,10 @@ func TestSupplierAvailabilityIncludesCredentialExpiryAndRecovery(t *testing.T) {
 func TestSupplierReconciliationPublishesSanitizedCategories(t *testing.T) {
 	w := newWorld(t, 2)
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
-		return persistReconcileAlerts(ctx, tx, ReconcileReport{Delisted: []uuid.UUID{uuid.NewV7()}, Over: []uuid.UUID{uuid.NewV7()}, Held: []uuid.UUID{uuid.NewV7()}, Violations: []string{"sensitive details"}})
+		return persistReconcileAlerts(ctx, tx, ReconcileReport{Delisted: []uuid.UUID{uuid.NewV7()}, UnderUnchanged: []uuid.UUID{uuid.NewV7()}, Over: []uuid.UUID{uuid.NewV7()}, Held: []uuid.UUID{uuid.NewV7()}, Violations: []string{"sensitive details"}})
 	})
 	signals := consumeSupplierSignals(w)
-	if len(signals) != 4 {
+	if len(signals) != 5 {
 		t.Fatalf("categories: %+v", signals)
 	}
 	for _, s := range signals {

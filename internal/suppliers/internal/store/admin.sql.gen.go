@@ -147,7 +147,7 @@ const getSupplierView = `-- name: GetSupplierView :many
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
-    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
+    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
 FROM suppliers.suppliers s WHERE s.id = $1
 `
 
@@ -414,7 +414,7 @@ const listSuppliersPage = `-- name: ListSuppliersPage :many
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
-    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
+    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
 FROM suppliers.suppliers s
 WHERE ($1::text IS NULL OR s.status = $1)
     AND ($2::uuid IS NULL OR s.id < $2)
@@ -448,8 +448,8 @@ type ListSuppliersPageRow struct {
 
 // What the admin API reads and writes of suppliers, in the platform scope (internal/suppliers/README.md「管理接口」).
 // Newest first: an ID is a UUIDv7, so its order is the order of connecting, and a page starts after the last ID of the
-// one before. The unit value is the latest the person gave. A balance, a threshold or a unit value that is not there is the
-// empty text, which no number is.
+// one before. The unit value is the latest confirmed for this currency and native unit. A missing balance, threshold
+// or unit value is the empty text, which no number is.
 func (q *Queries) ListSuppliersPage(ctx context.Context, db DBTX, arg ListSuppliersPageParams) ([]ListSuppliersPageRow, error) {
 	rows, err := db.Query(ctx, listSuppliersPage, arg.Status, arg.After, arg.PageSize)
 	if err != nil {

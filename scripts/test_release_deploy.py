@@ -64,6 +64,17 @@ curl() {
                 self.assertEqual(len(starts), 6)  # database then services for each of three starts
                 self.assertTrue(all("--no-build" in call for call in starts))
 
+    def test_legacy_upgrade_stops_the_node_before_recreating_postgres(self):
+        result, calls = self.run_deploy(None)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        drop = next(i for i, call in enumerate(calls) if "DROP OWNED BY axiom_migrator" in call)
+        stopped = "compose -f deploy/compose.yaml stop axiom"
+        self.assertIn(stopped, calls[:drop], "the old node must release its database name lock before the upgrade")
+        stop = calls.index(stopped)
+        starts = [i for i, call in enumerate(calls) if " up " in call]
+        self.assertLess(starts[1], stop)
+        self.assertLess(drop, starts[2])
+
     def test_a_container_running_a_different_reference_is_rejected(self):
         result, _ = self.run_deploy("local/axiom@sha256:" + "a" * 64, actual_image="axiom:stale")
         self.assertNotEqual(result.returncode, 0)

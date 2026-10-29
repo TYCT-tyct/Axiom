@@ -51,6 +51,7 @@ func TestReconcileJobJudgesOnlyCompleteCostsAndIsIdempotent(t *testing.T) {
 				_, err := tx.Exec(ctx, "UPDATE suppliers.suppliers SET native_unit = $1 WHERE id = $2", tc.unit, w.supplier)
 				return err
 			})
+			w.addValue("2")
 			a := w.attempt(newRequest(), 1, newAPIRef)
 			a.Cost.Flag = tc.flag
 			w.record(a)
