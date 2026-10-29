@@ -60,6 +60,11 @@ func TestPresetRequests(t *testing.T) {
 			t.Fatalf("%s: %d %s", tc.body, resp.StatusCode, body)
 		}
 	}
+	before := len(r.calls())
+	counted, out := r.do(http.MethodPost, "/v1/messages/count_tokens", a.key, strings.NewReader(messageBody("@preset/support")))
+	if counted.StatusCode != http.StatusOK || len(r.calls()) != before {
+		t.Fatalf("preset token count generated or failed: %d %s", counted.StatusCode, out)
+	}
 	checkPresetSession(t, r, a)
 	r.sql("UPDATE accounts.api_keys SET models=ARRAY['acme/beta'] WHERE id='" + uuid.UUID(a.keyID).String() + "'")
 	resp, body := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(`{"service_tier":"standard_only","model":"@preset/support"}`))
