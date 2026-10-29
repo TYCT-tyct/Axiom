@@ -141,7 +141,7 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 
 schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 ENABLE 并 FORCE 行级安全（[平台的「范围」](../platform/README.md#范围)）。
 
-`TestReconcileMigrationsResumeWithoutLosingState` 保留当前完整 schema 供现有订单和退款种子查询使用；`prepareMigrationReplay` 临时移除目标及其后续完成标记，只重放 billing 24、payments 6 以内的历史迁移集合，再恢复后续标记并核对入账、查询租约、索引和启动检查。该回归覆盖局部 DDL 的幂等重入和数据保留；历史版本升级需要独立的固定版本夹具。仅删除旧标记而留下后续版本会被 Goose 正确拒绝。
+`TestReconcileMigrationsResumeWithoutLosingState` 用当前完整 schema 播种订单与查询租约，再只重放 billing 24、payments 6 及以前的历史迁移集合。重放期间一并移除目标及后继版本标记，完成后恢复已应用的后继标记，再检查当前版本、入账、租约和索引。这样当前应用的播种查询可以使用新增列，恢复测试也不会把后继标记留在旧迁移之前，制造生产中被拒绝的乱序历史；后继迁移的实际执行由普通完整迁移夹具覆盖。局部 DDL 重入与数据保留不代替历史版本升级的独立固定版本夹具。
 
 | 表 | 关键列 | 约束与索引 | 类别与策略 |
 |---|---|---|---|

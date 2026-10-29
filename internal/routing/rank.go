@@ -6,6 +6,8 @@ import (
 	"slices"
 	"time"
 
+	"axiom/internal/accounts"
+	"axiom/internal/billing"
 	"axiom/internal/protocol"
 )
 
@@ -13,6 +15,7 @@ import (
 // request or preset named, the performance wishes the request set (an endpoint short of them goes behind), the
 // session's endpoint, then the strategy's score (docs/domains/routing.md「排序的先后」).
 type ranked struct {
+	price *candidatePrice
 	*candidate
 	order     int  // index of its supplier in the named order; after all of them when not named
 	slow      bool // misses a performance wish
@@ -43,13 +46,20 @@ func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 		strategy = *n.over.Sort
 	}
 	for _, c := range cands {
-		reason, visible := check(c, n)
+		price := c.priceFor(billing.Audience{Account: accounts.AccountID(n.in.Admission.Account), Tier: n.in.Admission.Tier})
+		if price == nil {
+			if c.Owner.visibleTo(n.in.Admission) {
+				rec.Excluded = append(rec.Excluded, Excluded{c.ID, NoPrice})
+			}
+			continue
+		}
+		reason, visible := check(c, n, price)
 		switch {
 		case !visible:
 		case reason != 0:
 			rec.Excluded = append(rec.Excluded, Excluded{c.ID, reason})
 		default:
-			out = append(out, r.score(c, n, order, strategy))
+			out = append(out, r.score(c, n, order, strategy, price))
 		}
 	}
 	if strategy == Fastest {
@@ -75,8 +85,8 @@ func (r *Router) explore(out []ranked) {
 
 // score works out what c is ordered by. Balanced draws its random key here, once, so the order is a sample without
 // replacement: the first is chosen with probability proportional to its weight, the second the same among the rest.
-func (r *Router) score(c *candidate, n *need, order []SupplierID, strategy Strategy) ranked {
-	s := ranked{candidate: c, order: len(order), notSticky: !r.sticks(c, n)}
+func (r *Router) score(c *candidate, n *need, order []SupplierID, strategy Strategy, price *candidatePrice) ranked {
+	s := ranked{candidate: c, price: price, order: len(order), notSticky: !r.sticks(c, n, price)}
 	for i, id := range order {
 		if id == c.Supplier {
 			s.order = i
@@ -90,7 +100,7 @@ func (r *Router) score(c *candidate, n *need, order []SupplierID, strategy Strat
 	}
 	s.quality = c.Quality * c.Confidence * tools
 	if strategy == Balanced || strategy == Fastest && c.Throughput == 0 {
-		s.weight = r.weight(c, n.now) * tools * tools
+		s.weight = r.weight(c, n.now, price) * tools * tools
 		u := 1 - r.cfg.Rand() // in (0, 1]
 		s.key = math.Log(u) / math.Max(s.weight, math.SmallestNonzeroFloat64)
 	}
@@ -106,8 +116,8 @@ func slow(c *candidate, o *Override) bool {
 
 // weight is the chance a candidate is given: cheaper is more likely, scaled by how healthy and good it is, halved when
 // its supplier's balance is low, and cut for a while after a 429.
-func (r *Router) weight(c *candidate, now time.Time) float64 {
-	w := c.Health * math.Max(c.Quality, 0.01) * c.state.damping(now, r.cfg.Recovery, r.cfg.ThrottleFloor) / math.Max(c.blend, 1e-18)
+func (r *Router) weight(c *candidate, now time.Time, price *candidatePrice) float64 {
+	w := c.Health * math.Max(c.Quality, 0.01) * c.state.damping(now, r.cfg.Recovery, r.cfg.ThrottleFloor) / math.Max(price.blend, 1e-18)
 	if c.BalanceLow {
 		w /= 2
 	}
@@ -116,8 +126,8 @@ func (r *Router) weight(c *candidate, now time.Time) float64 {
 
 // sticks reports whether the session's endpoint is this one and sticking still pays: only when reading the cache costs
 // less than input, and the endpoint is healthy, not throttled and not full.
-func (r *Router) sticks(c *candidate, n *need) bool {
-	return n.in.Sticky == c.ID && n.in.Sticky != (EndpointID{}) && c.cacheCheaper && c.Health >= stickyMinHealth &&
+func (r *Router) sticks(c *candidate, n *need, price *candidatePrice) bool {
+	return n.in.Sticky == c.ID && n.in.Sticky != (EndpointID{}) && price.cacheCheaper && c.Health >= stickyMinHealth &&
 		c.state.damping(n.now, r.cfg.Recovery, r.cfg.ThrottleFloor) == 1 && !c.full()
 }
 
@@ -137,7 +147,7 @@ func compare(a, b *ranked, strategy Strategy) int {
 	case Balanced:
 		c = cmp.Compare(b.key, a.key)
 	case Cheapest:
-		c = cmp.Compare(a.blend, b.blend)
+		c = cmp.Compare(a.price.blend, b.price.blend)
 	case Fastest:
 		c = compareFastest(a, b)
 	case BestQuality:

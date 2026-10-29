@@ -24,8 +24,8 @@ var usd = func() platform.Currency {
 
 const (
 	model   = "0198c0a8-0000-7000-8000-000000000001"
-	tierID  = "tier_00000000000000000000000000"
-	acctID  = "acct_00000000000000000000000000"
+	tierID  = "tier_00000000000000000000000001"
+	acctID  = "acct_00000000000000000000000001"
 	fixedUS = `{"v":1,"currency":"USD","rates":{"input":"0.000002","output":"0.000004"}}`
 )
 
@@ -67,8 +67,8 @@ func TestRuleChecks(t *testing.T) {
 		"a supplier":                                          {rule(Selector{Kind: "supplier", ID: model}, faced("1")), "target/kind"},
 		"a source type":                                       {rule(Selector{Kind: "source_type", ID: "relay"}, faced("1")), "target/kind"},
 		"an endpoint that is no UUID":                         {rule(Selector{Kind: "endpoint", ID: "x"}, faced("1")), "target/id"},
-		"a tier, which waits for a later release":             {RuleInput{Target: all, Audience: Selector{Kind: "tier", ID: tierID}, Method: faced("1")}, "audience/kind"},
-		"an account, which waits for a later release":         {RuleInput{Target: all, Audience: Selector{Kind: "account", ID: acctID}, Method: faced("1")}, "audience/kind"},
+		"a tier":                                              {RuleInput{Target: all, Audience: Selector{Kind: "tier", ID: tierID}, Method: faced("1")}, ""},
+		"an account":                                          {RuleInput{Target: all, Audience: Selector{Kind: "account", ID: acctID}, Method: faced("1")}, ""},
 		"a kind that prices nothing":                          {rule(Selector{Kind: "planet"}, plus("0")), "target/kind"},
 		"all with an ID":                                      {rule(Selector{Kind: "all", ID: "x"}, plus("0")), "target/id"},
 		"a model without an ID":                               {rule(Selector{Kind: "model"}, plus("0")), "target/id"},
@@ -136,12 +136,12 @@ func TestConstraintChecks(t *testing.T) {
 
 // rules is a billing database with the platform scope.
 type rules struct {
-	t    *testing.T
+	t    testing.TB
 	db   *pg.DB
 	site uuid.UUID
 }
 
-func newRules(t *testing.T) rules {
+func newRules(t testing.TB) rules {
 	t.Helper()
 	db, err := pg.Open(t.Context(), pgtest.New(t, Migrations()).App)
 	if err != nil {
@@ -166,8 +166,7 @@ func (r rules) create(in RuleInput) (Rule, error) {
 	return made, err
 }
 
-// store writes a rule straight into the table, as a release that lets an administrator make a rule for one account or
-// one tier will have it: CreateRule refuses those now.
+// store seeds historical pricing input, including unsupported targets.
 func (r rules) store(in RuleInput) {
 	r.t.Helper()
 	method, err := jsonx.MarshalCanonical(in.Method)
@@ -188,7 +187,7 @@ func (r rules) store(in RuleInput) {
 func (r rules) update(id uuid.UUID, rev int64, in RuleInput) (Rule, error) {
 	var made Rule
 	err := r.tx(func(tx pg.Tx) (err error) {
-		made, err = UpdateRule(r.t.Context(), tx, system, r.site, usd, id, rev, in, "changed")
+		made, err = UpdateRule(r.t.Context(), tx, system, r.site, usd, id, rev, in, "changed", nil)
 		return err
 	})
 	return made, err
@@ -236,7 +235,7 @@ func TestRulesAreTriedMostSpecificFirst(t *testing.T) {
 			}
 			continue
 		}
-		r.store(in) // CreateRule refuses the audiences of a later release; the order they will be tried in is already fixed
+		r.store(in) // the historical endpoint target is still unsupported
 	}
 	var order []string
 	for _, rule := range r.list() {

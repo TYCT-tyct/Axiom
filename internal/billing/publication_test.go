@@ -14,7 +14,7 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-func priceCost(t *testing.T, model catalog.ModelID, price string) PriceCost {
+func priceCost(t testing.TB, model catalog.ModelID, price string) PriceCost {
 	return PriceCost{Endpoint: uuid.NewV7(), Model: model, Schedule: mustSchedule(t, `{"v":1,"currency":"XXX","rates":{"input":"`+price+`","output":"0.000001"}}`), UnitValue: "1", UnitValueID: uuid.NewV7(), Currency: usd, CurrencyCode: "USD"}
 }
 
@@ -26,7 +26,7 @@ type priceFixture struct {
 	rule    Rule
 }
 
-func newPrices(t *testing.T) *priceFixture {
+func newPrices(t testing.TB) *priceFixture {
 	f := &priceFixture{rules: newRules(t), catalog: newSnapshotter(t)}
 	f.model = f.catalog.model("acme/price-test")
 	f.costs = []PriceCost{priceCost(t, f.model, "0.0000005")}
@@ -69,7 +69,7 @@ func (f *priceFixture) multiplier(value string) {
 	in := f.rule.RuleInput
 	in.Method = faced(value)
 	if err := f.tx(func(tx pg.Tx) (err error) {
-		f.rule, err = UpdateRule(f.t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, "price test")
+		f.rule, err = UpdateRule(f.t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, "price test", nil)
 		return err
 	}); err != nil {
 		f.t.Fatal(err)
@@ -206,7 +206,7 @@ func TestCostPlusAndUnknownCosts(t *testing.T) {
 	in := f.rule.RuleInput
 	in.Method = plus("0.25")
 	if err := f.tx(func(tx pg.Tx) (err error) {
-		f.rule, err = UpdateRule(t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, "cost plus")
+		f.rule, err = UpdateRule(t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, "cost plus", nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)

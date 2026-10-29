@@ -40,6 +40,27 @@ const dialog = (name: string, path: string, ...buttons: string[]): Scene =>
     },
   );
 
+const audienceScenes = (["tier", "account"] as const).map((kind) =>
+  scene(
+    `rule-${kind}`,
+    (p) => goto(p, "pricing"),
+    async (p) => {
+      await press(p, "pricing.rule.new");
+      await p.getByRole("dialog").locator("select[name=audience_kind]").selectOption(kind);
+    },
+  ),
+);
+
+const pricingPreview: Scene = {
+  name: "pricing-preview",
+  signedIn: true,
+  open: async (p) => {
+    await goto(p, "pricing");
+    await press(p, "pricing.preview.run");
+    await p.getByRole("table", { name: words("pricing.preview.title") }).waitFor();
+  },
+};
+
 const supplier = (n: number) => `suppliers/${uuid(2, n)}`;
 const model = (n: number) => `models/${uuid(5, n)}`;
 
@@ -108,6 +129,8 @@ const scenes: Scene[] = [
   view("model", model(1)),
   view("model-draft", model(3)),
   view("pricing", "pricing"),
+  pricingPreview,
+  ...audienceScenes,
   view("settings", "settings"),
   dialog("credit", `accounts/${acct(1)}`, "users.credit.open"),
   dialog("supplier-connect", "suppliers", "suppliers.connect.open"),

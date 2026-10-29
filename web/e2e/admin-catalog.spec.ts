@@ -185,7 +185,8 @@ test.describe("pricing", () => {
   test("rules are listed most specific first, and a rule is previewed before it is saved", async ({ page }) => {
     const state = await open(page, "/pricing");
     await expect(h1(page, zhText("nav.pricing"))).toBeVisible();
-    await expect(page.getByRole("row")).toHaveCount(4);
+    const rules = page.getByRole("table", { name: words("pricing.rules.title") });
+    await expect(rules.getByRole("row")).toHaveCount(state.rules.length + 1);
     await expect(page.getByText(zhText("pricing.off")).first()).toBeVisible();
 
     await press(page, "pricing.rule.new").click();
@@ -207,7 +208,7 @@ test.describe("pricing", () => {
       method: { kind: "reference_multiplier", multiplier: "1.5", currency_conversion: "face" },
     });
     await close(page);
-    await expect(page.getByRole("row")).toHaveCount(5);
+    await expect(rules.getByRole("row")).toHaveCount(state.rules.length + 1);
   });
 
   test("a rule for a target and audience that has one is refused, and a bad ratio is told", async ({ page }) => {
@@ -246,7 +247,7 @@ test.describe("pricing", () => {
     expect(state.rules.find((r) => !r.enabled && r.target.kind === "model")?.rev).toBe(3);
   });
 
-  test("limits are not applied yet: the inputs are disabled, a stored limit is told, and saving clears it", async ({
+  test("limits are not applied yet: the inputs are disabled, a stored limit is told, and editing clears it", async ({
     page,
   }) => {
     const state = await open(page, "/pricing");
@@ -264,11 +265,36 @@ test.describe("pricing", () => {
     await expect(dialog(page).getByLabel(words("pricing.constraints.minMargin"))).toBeDisabled();
     await expect(dialog(page).getByText(zhText("pricing.constraints.stored"))).toBeVisible();
     const sent = page.waitForRequest((request) => request.method() === "PUT");
-    await dialog(page).getByLabel(words("pricing.rule.enabled")).uncheck();
     await send(page);
     expect((await sent).postDataJSON().rule.constraints).toEqual({});
     await expect(done(page)).toBeVisible();
     expect(state.rules[0]?.constraints).toEqual({});
+  });
+
+  test("retiring a rule preserves its stored target, audience, method and unsupported constraints", async ({
+    page,
+  }) => {
+    const state = await open(page, "/pricing");
+    const existing = structuredClone(state.rules[0]);
+    if (!existing) throw new Error("the pricing fixture needs a rule to retire");
+    expect(existing.constraints).not.toEqual({});
+    await page
+      .getByRole("button", { name: /修改“.*”规则/ })
+      .first()
+      .click();
+    await dialog(page).getByLabel(words("pricing.rule.enabled")).uncheck();
+    const sent = page.waitForRequest((request) => request.method() === "PUT");
+    await send(page);
+    const retired = {
+      enabled: false,
+      target: existing.target,
+      audience: existing.audience,
+      method: existing.method,
+      constraints: existing.constraints,
+    };
+    expect((await sent).postDataJSON().rule).toEqual(retired);
+    await expect(done(page)).toBeVisible();
+    expect(state.rules[0]).toMatchObject({ ...retired, id: existing.id, rev: existing.rev + 1 });
   });
 
   test("the preview prices chosen models for a tier and says what it cannot price", async ({ page }) => {

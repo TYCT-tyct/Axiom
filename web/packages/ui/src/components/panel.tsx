@@ -60,11 +60,12 @@ export function Badge({
 // A table scrolls sideways inside its own box when the window is too narrow, and never widens the page.
 export function Table({ children, label }: { children: ReactNode; label: string }) {
   return (
-    <div className="overflow-x-auto">
+    // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need focus to scroll a table region.
+    <section className="overflow-x-auto" aria-label={label} tabIndex={0}>
       <table aria-label={label} className="w-full border-collapse text-left text-ui">
         {children}
       </table>
-    </div>
+    </section>
   );
 }
 

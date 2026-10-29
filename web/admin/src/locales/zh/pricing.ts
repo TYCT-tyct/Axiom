@@ -39,7 +39,7 @@ export default {
     endpoint: "某个端点",
     source_type: "某类来源",
   },
-  audience: { all: "所有人", tier: "某个等级（暂不可用）", account: "某个账户（暂不可用）" },
+  audience: { all: "所有人", tier: "某个等级", account: "某个账户" },
   describe: {
     markup: "成本加价 {{percent}}%",
     margin: "毛利率 {{percent}}%",
@@ -56,7 +56,7 @@ export default {
     save: "保存",
     saved: "规则已保存，现在是“{{state}}”。",
     enabled: "启用这条规则",
-    enabledHint: "停用后规则不再生效，但会保留。",
+    enabledHint: "关闭已有规则会保留已保存的设置，其他修改请单独保存。",
     target: "对象",
     targetModel: "模型",
     targetId: "对象的 ID",
@@ -104,6 +104,7 @@ export default {
     refMax: "不高于参考价的",
   },
   preview: {
+    current: "当前实收价",
     title: "预览",
     intro: "看这些模型按现有规则对某类用户卖多少钱、毛利多少。预览不会保存任何东西。",
     models: "要看的模型",

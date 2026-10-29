@@ -8,6 +8,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
@@ -354,7 +355,7 @@ func TestWait(t *testing.T) {
 // and however old the snapshot is; a model without one, or a router without a snapshot, serves nothing.
 func TestServes(t *testing.T) {
 	t.Parallel()
-	if mustRouter(t).Serves(model) {
+	if mustRouter(t).ServesFor(model, billing.Audience{}) {
 		t.Error("a router without a snapshot serves a model")
 	}
 	h := newHarness(t, routing.Config{}, openPreset(),
@@ -364,8 +365,8 @@ func TestServes(t *testing.T) {
 	if _, _, err := h.r.Plan(input()); !errors.Is(err, routing.ErrStale) {
 		t.Fatalf("a snapshot an hour old: %v, want ErrStale", err)
 	}
-	if !h.r.Serves(model) || h.r.Serves(other) {
-		t.Errorf("served: model %v, other %v; want true, false", h.r.Serves(model), h.r.Serves(other))
+	if !h.r.ServesFor(model, billing.Audience{}) || h.r.ServesFor(other, billing.Audience{}) {
+		t.Errorf("served: model %v, other %v; want true, false", h.r.ServesFor(model, billing.Audience{}), h.r.ServesFor(other, billing.Audience{}))
 	}
 }
 

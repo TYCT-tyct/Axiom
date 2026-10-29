@@ -99,7 +99,7 @@ func (a adminAPI) ListPricingRules(ctx context.Context, _ adminapi.ListPricingRu
 }
 
 // checkSubjects refuses a rule for a model or an author the catalog lacks: an ID with a typo would price nothing, and
-// quietly. (Rules for a tier or an account, which would be checked against the site, are refused by billing for now.)
+// quietly. Audience membership is checked in the same platform transaction as the write.
 func (a adminAPI) checkSubjects(ctx context.Context, in billing.RuleInput) error {
 	switch in.Target.Kind {
 	case "model":
@@ -119,15 +119,6 @@ func (a adminAPI) checkSubjects(ctx context.Context, in billing.RuleInput) error
 		}
 	}
 	return nil
-}
-
-// checkTier refuses a tier the site lacks, for a preview of what that tier pays.
-func (a adminAPI) checkTier(ctx context.Context, tx pg.Tx, site accounts.Site, id string) error {
-	tiers, err := a.accounts.Tiers(ctx, tx, site.ID)
-	if err == nil && !slices.ContainsFunc(tiers, func(t accounts.Tier) bool { return t.ID.TypeID() == id }) {
-		return unprocessable("the preview names a tier the site lacks")
-	}
-	return err
 }
 
 // PreviewPricing shows what models would sell for, with the main site's rules or with one added or replaced for the
@@ -157,6 +148,7 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 	}
 
 	var proposals map[catalog.ModelID]billing.Publication
+	var current map[catalog.ModelID]billing.Sold
 	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
 		snap, err = catalog.ReadSnapshot(ctx, tx)
 		if err != nil {
@@ -167,21 +159,49 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 			return err
 		}
 		proposals, err = billing.PreviewPrices(ctx, tx, uuid.UUID(site.ID), site.Currency, snap, rules, models, costs)
+		if err != nil {
+			return err
+		}
+		current, err = billing.PublishedPrices(ctx, tx, uuid.UUID(site.ID))
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	a.reportPriceProblems(proposals)
+	return previewRows(*request.Body, snap, models, proposals, current, audience)
+}
+
+func previewRows(body adminapi.PricingPreviewRequest, snap *catalog.Snapshot, models []catalog.ModelID, proposals map[catalog.ModelID]billing.Publication, current map[catalog.ModelID]billing.Sold, audience audience) (adminapi.PreviewPricing200JSONResponse, error) {
 	rows := adminapi.PricingPreview{Data: make([]adminapi.PricingPreviewRow, 0, len(models))}
-	for i, id := range request.Body.ModelIds {
+	for i, id := range body.ModelIds {
 		row, err := previewRow(id, snap, models[i], proposals)
 		if err != nil {
-			return nil, err
+			return adminapi.PreviewPricing200JSONResponse{}, err
+		}
+		if err := previewCurrent(&row, current[models[i]], audience, body.Rule == nil); err != nil {
+			return adminapi.PreviewPricing200JSONResponse{}, err
 		}
 		rows.Data = append(rows.Data, row)
 	}
 	return adminapi.PreviewPricing200JSONResponse(rows), nil
+}
+
+func previewCurrent(row *adminapi.PricingPreviewRow, price billing.Sold, audience audience, serving bool) error {
+	price = price.For(billing.Audience{Account: audience.account, Tier: audience.tier})
+	if price.Version == uuid.Nil() {
+		return nil
+	}
+	sale, err := scheduleBody(price.Schedule)
+	if err != nil {
+		return err
+	}
+	version := price.Version.String()
+	row.CurrentSale, row.CurrentVersion = sale, &version
+	if serving {
+		row.Sale = sale
+	}
+	return nil
 }
 
 func (a adminAPI) reportPriceProblems(proposals map[catalog.ModelID]billing.Publication) {
@@ -214,7 +234,11 @@ func previewRow(id string, snap *catalog.Snapshot, model catalog.ModelID, propos
 	if len(p.Requested) == 0 {
 		return row, nil
 	}
-	s, err := catalog.ParseSchedule(p.Requested)
+	raw := p.Schedule
+	if len(raw) == 0 {
+		raw = p.Requested
+	}
+	s, err := catalog.ParseSchedule(raw)
 	if err != nil {
 		return row, err
 	}
@@ -229,7 +253,11 @@ func previewRow(id string, snap *catalog.Snapshot, model catalog.ModelID, propos
 		}
 		row.Cost = &cost
 	}
-	row.Status, err = previewFloorStatus(s, p.Floor)
+	requested, err := catalog.ParseSchedule(p.Requested)
+	if err != nil {
+		return row, err
+	}
+	row.Status, err = previewFloorStatus(requested, p.Floor)
 	if err != nil {
 		return row, err
 	}
@@ -289,7 +317,7 @@ func (a adminAPI) previewAudience(ctx context.Context, site accounts.Site, body 
 		tier = site.DefaultTier
 	}
 	if tier != (accounts.TierID{}) {
-		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error { return a.checkTier(ctx, tx, site, tier.TypeID()) }); err != nil {
+		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error { return a.checkTier(ctx, tx, site, tier.TypeID(), "/tier_id") }); err != nil {
 			return out, err
 		}
 	}
@@ -365,7 +393,11 @@ func (a adminAPI) checkedRuleInput(ctx context.Context, site accounts.Site, rule
 	if err := in.Check(site.Currency); err != nil {
 		return in, ruleProblem(err)
 	}
-	return in, a.checkSubjects(ctx, in)
+	if err := a.checkSubjects(ctx, in); err != nil {
+		return in, err
+	}
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error { return a.checkRuleAudience(ctx, tx, site, in) })
+	return in, err
 }
 
 // withoutReplaced is rules less the one replaces names, or rules when it names none.
@@ -411,6 +443,9 @@ func (a adminAPI) CreatePricingRule(ctx context.Context, request adminapi.Create
 	}
 	rule, replayed, err := idempotently(ctx, a.db, "createPricingRule", request.Params.IdempotencyKey, request.Body,
 		func(tx pg.Tx) (adminapi.PricingRule, error) {
+			if err := a.checkRuleAudience(ctx, tx, site, in); err != nil {
+				return adminapi.PricingRule{}, err
+			}
 			made, err := billing.CreateRule(ctx, tx, actor(ctx), uuid.UUID(site.ID), site.Currency, in, request.Body.Reason)
 			if err != nil {
 				return adminapi.PricingRule{}, ruleProblem(err)
@@ -437,15 +472,14 @@ func (a adminAPI) UpdatePricingRule(ctx context.Context, request adminapi.Update
 	if err != nil {
 		return nil, err
 	}
-	if err := in.Check(site.Currency); err != nil {
-		return nil, ruleProblem(err)
-	}
-	if err := a.checkSubjects(ctx, in); err != nil {
-		return nil, err
-	}
 	rule, replayed, err := idempotently(ctx, a.db, "updatePricingRule", request.Params.IdempotencyKey, []any{request.RuleId, request.Body},
 		func(tx pg.Tx) (adminapi.PricingRule, error) {
-			made, err := billing.UpdateRule(ctx, tx, actor(ctx), uuid.UUID(site.ID), site.Currency, id, request.Body.Rev, in, request.Body.Reason)
+			made, err := billing.UpdateRule(ctx, tx, actor(ctx), uuid.UUID(site.ID), site.Currency, id, request.Body.Rev, in, request.Body.Reason, func() error {
+				if err := a.checkSubjects(ctx, in); err != nil {
+					return err
+				}
+				return a.checkRuleAudience(ctx, tx, site, in)
+			})
 			if err != nil {
 				return adminapi.PricingRule{}, ruleProblem(err)
 			}
