@@ -17,7 +17,7 @@ import (
 // ErrKeyNotFound is a key the transaction cannot see, or already deleted.
 var ErrKeyNotFound = errors.New("accounts: no such API key")
 
-// ErrTooManyKeys is a key an account may not make now, over one of its site's two limits: the call keys it holds that
+// ErrTooManyKeys is a key an account may not make now, over one of its site's two limits: the keys it holds that
 // are not deleted, which deleting a key lifts, and the keys it makes in an hour, which waiting lifts. A site that lowers
 // its limit leaves the keys already made usable.
 var ErrTooManyKeys = errors.New("accounts: too many API keys")
@@ -36,6 +36,12 @@ func (e *TooManyKeys) Error() string {
 // Is makes errors.Is(err, ErrTooManyKeys) true for it.
 func (*TooManyKeys) Is(target error) bool { return target == ErrTooManyKeys }
 
+// Key kinds separate model calls from programmatic key administration.
+const (
+	CallKey       = "call"
+	ManagementKey = "management"
+)
+
 // The reset windows of a spend limit.
 const (
 	ResetDaily   = "daily"
@@ -50,7 +56,7 @@ type KeySettings struct {
 	Name     string
 	Disabled bool
 	// SpendLimit is in billionths of a credit, nil for none. LimitReset is a Reset constant, or empty for a limit that
-	// never resets; it needs a SpendLimit. For a new key, a nil SpendLimit means the site's limit for new keys, reset
+	// never resets; it needs a SpendLimit. For a new console call key, a nil SpendLimit means the site's limit for new keys, reset
 	// daily.
 	SpendLimit *int64
 	LimitReset string
@@ -58,22 +64,26 @@ type KeySettings struct {
 	IPAllow    []netip.Prefix
 }
 
-// Key is a call key as the console shows it. Its text is not here: only its hash is kept, and the last four characters
+// Key is a key as the console shows it. Its text is not here: only its hash is kept, and the last four characters
 // to tell keys apart.
 type Key struct {
+	Kind      string
+	CreatedBy UserID
 	ID        KeyID
 	Workspace WorkspaceID
 	Prefix    string
 	Last4     string
 	// CreatedAt is when the database stamped the key, on the clock that also judges the hour's limit.
 	CreatedAt time.Time
+	UpdatedAt *time.Time
 	ExpiresAt *time.Time
 	KeySettings
 }
 
-// KeyRequest is a new call key in a workspace, made by a user of its site. A zero Workspace is the account's default
+// KeyRequest is a new key in a workspace, made by a user of its site. A zero Workspace is the account's default
 // workspace.
 type KeyRequest struct {
+	Kind      string // empty is call; management requires an expiry
 	Site      SiteID
 	Account   AccountID
 	Workspace WorkspaceID
@@ -89,10 +99,17 @@ type CreatedKey struct {
 	Text secret.Secret
 }
 
-// CreateKey makes a call key in tx, with the site's prefix and, unless r says otherwise, the site's daily spend limit
+// CreateKey makes a call or management key in tx, with the site's prefix and, unless r says otherwise, the site's daily spend limit
 // for new keys, and records it in the audit log in the same transaction. It refuses a key over one of the site's two
 // limits on how many an account holds and how many it makes in an hour (ErrTooManyKeys).
 func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r KeyRequest) (CreatedKey, error) {
+	return s.createKey(ctx, tx, actor, r, true)
+}
+
+func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r KeyRequest, defaults bool) (CreatedKey, error) {
+	if r.Kind == "" {
+		r.Kind = CallKey
+	}
 	site, ok := s.snapshot.Load().sites[r.Site]
 	if !ok {
 		return CreatedKey{}, fmt.Errorf("create an API key: site %s is not in the snapshot", r.Site.TypeID())
@@ -108,7 +125,7 @@ func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 		r.Workspace = WorkspaceID(found[0])
 	}
 	limit, reset := r.SpendLimit, r.LimitReset
-	if limit == nil {
+	if limit == nil && defaults && r.Kind == CallKey {
 		limit, reset = &site.NewKeyDailyLimit, ResetDaily
 	}
 	text := newKeyText(site.KeyPrefix)
@@ -116,7 +133,7 @@ func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	version := s.versions[0]
 	hash := s.hashes.Sum(version, []byte(text))
 	if err := s.queries.InsertKey(ctx, tx, InsertKeyParams{
-		ID: uuid.UUID(id), SiteID: uuid.UUID(r.Site), AccountID: uuid.UUID(r.Account),
+		Kind: r.Kind, ID: uuid.UUID(id), SiteID: uuid.UUID(r.Site), AccountID: uuid.UUID(r.Account),
 		WorkspaceID: uuid.UUID(r.Workspace), Name: r.Name, Prefix: site.KeyPrefix, Last4: text[len(text)-4:],
 		SecretHash: hash[:], SecretVersion: int64(version), CreatedBy: uuid.UUID(r.CreatedBy),
 		ExpiresAt: r.ExpiresAt, SpendLimit: limit, LimitReset: nullable(reset), Models: nilIfEmpty(r.Models), IpAllow: nilIfEmpty(r.IPAllow),
@@ -132,7 +149,7 @@ func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 // keyWindow is the span the limit of keys made counts over.
 const keyWindow = time.Hour
 
-// admitKey checks the limits on the call keys account holds and makes, in the transaction that makes one: the
+// admitKey checks the limits on the keys account holds and makes, in the transaction that makes one: the
 // account's own over its site's over the defaults. The account's row is locked first, so that two creates at once are
 // made one after the other and the second counts the key the first made: counting before the insert without the lock
 // would let both take the last place. The counts are the database's, so they hold across nodes, and the lock is held
@@ -184,7 +201,7 @@ func nilIfEmpty[T any](v []T) []T {
 	return v
 }
 
-// ListKeys is up to limit of account's call keys that are not deleted, disabled ones included, newest first, starting
+// ListKeys is up to limit of account's keys that are not deleted, disabled ones included, newest first, starting
 // after the key `after` (the zero KeyID for the first page); more tells whether keys remain beyond them.
 func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, after KeyID, limit int) (keys []Key, more bool, err error) {
 	before := uuid.Max()
@@ -205,7 +222,7 @@ func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, aft
 	return keys, more, nil
 }
 
-// GetKey is the call key in tx's scope with this ID, or ErrKeyNotFound.
+// GetKey is the key in tx's scope with this ID, or ErrKeyNotFound.
 func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error) {
 	rows, err := s.queries.GetKey(ctx, tx, uuid.UUID(id))
 	if err != nil {
@@ -283,11 +300,11 @@ func sameOptional[T comparable](a, b *T) bool {
 }
 
 // keyOf is a key row as a Key.
-func keyOf[R ListKeysRow | GetKeyRow](row R) Key {
+func keyOf[R ListKeysRow | GetKeyRow | ValidManagementKeyRow | ListManagedKeysRow](row R) Key {
 	r := ListKeysRow(row)
 	k := Key{
-		ID: KeyID(r.ID), Workspace: WorkspaceID(r.WorkspaceID), Prefix: r.Prefix, Last4: r.Last4,
-		CreatedAt: r.CreatedAt.Time, ExpiresAt: r.ExpiresAt,
+		Kind: r.Kind, CreatedBy: UserID(r.CreatedBy), ID: KeyID(r.ID), Workspace: WorkspaceID(r.WorkspaceID), Prefix: r.Prefix, Last4: r.Last4,
+		CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt, ExpiresAt: r.ExpiresAt,
 		Name: r.Name, Disabled: r.Status == "disabled", SpendLimit: r.SpendLimit, Models: r.Models, IPAllow: r.IpAllow,
 	}
 	if r.LimitReset != nil {

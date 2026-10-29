@@ -722,9 +722,14 @@ export interface components {
         Registered: {
             user_id: components["schemas"]["UserId"];
         };
-        /** @description A call key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit. */
+        /** @description A call or management key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit. */
         Key: {
             id: components["schemas"]["KeyId"];
+            /**
+             * @description Defaults to call. Management keys require expires_at and cannot call models.
+             * @enum {string}
+             */
+            kind?: "call" | "management";
             name: string;
             prefix: string;
             last4: string;
@@ -751,6 +756,11 @@ export interface components {
          */
         LimitReset: "daily" | "weekly" | "monthly";
         KeyCreate: {
+            /**
+             * @description Defaults to call. Management keys require expires_at and cannot call models.
+             * @enum {string}
+             */
+            kind?: "call" | "management";
             name: string;
             /**
              * Format: date-time

@@ -1223,11 +1223,12 @@ components:
       type: object
       required: [id, name, prefix, last4, workspace_id, created_at, disabled]
       description: >-
-        A call key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept
+        A call or management key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept
         besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the
         current window; both are absent for a key without a limit.
       properties:
         id: {$ref: "#/components/schemas/KeyId"}
+        kind: {type: string, enum: [call, management], description: "Defaults to call. Management keys require expires_at and cannot call models."}
         name: {type: string, minLength: 1, maxLength: 100}
         prefix: {type: string}
         last4: {type: string}
@@ -1256,6 +1257,7 @@ components:
       type: object
       required: [name]
       properties:
+        kind: {type: string, enum: [call, management], description: "Defaults to call. Management keys require expires_at and cannot call models."}
         name: {type: string, minLength: 1, maxLength: 100}
         expires_at: {type: string, format: date-time, description: "UTC, in the future. It cannot be set later."}
         spend_limit: {$ref: "#/components/schemas/Money"}
