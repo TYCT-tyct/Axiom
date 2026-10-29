@@ -29,8 +29,12 @@ func (s *store) follow(slug string, basis catalog.VersionBasis, source catalog.P
 		s.must(s.c.AddName(s.t.Context(), catalog.AddNameRequest{Op: op(), Model: id, Name: n, Visibility: catalog.VisibilityPublic}))
 	}
 	if schedule != "" {
+		ev := raw(evidence)
+		if source == catalog.SourceOfficial {
+			ev = s.officialEvidence(s.t.Context(), author, mustScheduleCurrency(s, schedule))
+		}
 		s.must(s.c.PublishPrice(s.t.Context(), catalog.PublishPriceRequest{
-			Op: op(), Model: id, Source: source, Schedule: raw(schedule), Evidence: raw(evidence),
+			Op: op(), Model: id, Source: source, Schedule: raw(schedule), Evidence: ev,
 		}))
 		s.list(id)
 	}

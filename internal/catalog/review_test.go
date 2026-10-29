@@ -50,7 +50,7 @@ func (s *store) switchTo(id catalog.ModelID, bases map[string]uuid.UUID, confirm
 		Source: catalog.SourceOfficial, Bases: bases, ConfirmBasisChange: confirm,
 	}
 	for _, schedule := range schedules {
-		r.Prices = append(r.Prices, catalog.SourcePrice{Schedule: raw(schedule), Evidence: raw(evidence)})
+		r.Prices = append(r.Prices, catalog.SourcePrice{Schedule: raw(schedule), Evidence: s.officialEvidence(s.t.Context(), "acme", mustScheduleCurrency(s, schedule))})
 	}
 	_, err := s.c.SelectPriceSource(s.t.Context(), r)
 	return err
@@ -187,4 +187,13 @@ func TestOpenRefusesNonPositiveDurations(t *testing.T) {
 		_, err := catalog.Open(nil, platformScope, cfg)
 		wantErr(t, err, "positive")
 	}
+}
+
+func mustScheduleCurrency(s *store, schedule string) string {
+	s.t.Helper()
+	p, err := catalog.ParseSchedule([]byte(schedule))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return p.Currency().String()
 }
