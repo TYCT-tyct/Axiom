@@ -186,9 +186,10 @@ func (e *expirer) expire(ctx context.Context, account uuid.UUID) (written int64,
 	return written, nil
 }
 
-// deferred is the expired credit the cap kept from being written off: it goes in a later run, once what holds the
-// balance has gone (docs/domains/billing.md「额度批次」). amount is in billionths of a credit; batches counts the
-// batches, one write-off each.
+// deferred is the expired credit a run left in the batches: still frozen, held by in-flight reservations, or beyond what
+// the balance covers. It is written off in a later run, once the freeze or the reservation has gone
+// (docs/domains/billing.md「额度批次」). amount is in billionths of a credit; batches counts the batches, one write-off
+// each.
 type deferred struct {
 	amount  int64
 	batches int
@@ -222,7 +223,7 @@ func writeOffAccount(ctx context.Context, tx pg.Tx, account uuid.UUID, size int3
 }
 
 // writeOffDue posts an expiry for each open batch whose time has come, in expiry order so that a cap of limit spares the
-// batches that expire last, and returns the total and what the cap held back. It does not replay what it posts.
+// batches that expire last, and returns the total and what it left in the batches. It does not replay what it posts.
 func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUID, limit int64) (written int64, held deferred, err error) {
 	now, err := queries.Now(ctx, tx)
 	if err != nil {
@@ -232,11 +233,11 @@ func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUI
 		if b.expiresAt == nil || b.expiresAt.After(now) {
 			break
 		}
-		available := b.available()
-		if available == 0 {
+		remaining := b.remaining()
+		if remaining == 0 {
 			continue
 		}
-		w := min(available, limit)
+		w := min(b.available(), limit)
 		if w > 0 {
 			e := event{site: b.site, account: account, kind: "expire", request: b.id, revision: b.expired}
 			if posted, err := post(ctx, tx, e, line{bookUserBalance, w, siteCredits}, line{bookCreditExpired, -w, siteCredits}); err != nil {
@@ -247,8 +248,8 @@ func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUI
 			limit -= w
 			written += w
 		}
-		if w < available {
-			held.amount += available - w
+		if w < remaining {
+			held.amount += remaining - w
 			held.batches++
 		}
 	}

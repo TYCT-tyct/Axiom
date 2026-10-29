@@ -263,3 +263,61 @@ func TestTheWriteOffHeldBackIsCounted(t *testing.T) {
 		t.Errorf("the scrape counts %s deferred credit after the rest was written off, want still the 200", got)
 	}
 }
+
+// TestTheWriteOffFrozenAtExpiryIsCounted: credit frozen when its batch expires cannot be written off until the freeze
+// resolves, so a run reports the whole remainder of the batch as deferred — both when part of it was unfrozen and
+// written off and when all of it is frozen, where the scan must still find the batch. Once the freeze is released the
+// next run writes the rest off and the counters stay, so they read as postponed credit and not as a backlog that grew
+// (#308).
+func TestTheWriteOffFrozenAtExpiryIsCounted(t *testing.T) {
+	for _, frozen := range []int64{150, 200} {
+		t.Run(fmt.Sprint(frozen), func(t *testing.T) {
+			tel, err := telemetry.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := newBank(t, 0, 0, Config{})
+			f := b.refundable(200)
+			f.Amount = frozen
+			if n := b.freeze(f); n != frozen {
+				t.Fatalf("froze %d, want %d", n, frozen)
+			}
+			b.sql("UPDATE billing.credit_batches SET expires_at = clock_timestamp() - interval '1 second'")
+			e := newExpirer(b.app, b.platform, slog.New(slog.DiscardHandler), tel.Metrics.Meter("axiom/billing"))
+			// The part that is not frozen is written off; all of an all-frozen batch waits.
+			changed := 0
+			if frozen < 200 {
+				changed = 1
+			}
+			expireOnce(t, e, changed)
+			checkDeferred(t, tel, 1, frozen)
+			// The freeze resolves, the credit is available again, and the next run writes off what it left.
+			b.finishRefund(f, false, true)
+			expireOnce(t, e, 1)
+			if b.batchLeft(f.Batch) != 0 || b.balanceOf(f.Account) != 0 {
+				t.Error("the released and expired batch still funds credit")
+			}
+			checkDeferred(t, tel, 1, frozen)
+		})
+	}
+}
+
+// expireOnce runs one expiry over the due accounts and checks that it changed the want accounts and failed none.
+func expireOnce(t *testing.T, e *expirer, want int) {
+	t.Helper()
+	changed, failed, err := e.run(t.Context())
+	if err != nil || failed != 0 || changed != want {
+		t.Fatalf("run = %d changed, %d failed, %v; want %d and none", changed, failed, err, want)
+	}
+}
+
+// checkDeferred checks what the scrape reads of the counters of the credit a run left for a later one.
+func checkDeferred(t *testing.T, tel *telemetry.Telemetry, batches, amount int64) {
+	t.Helper()
+	if got, want := scrape(t, tel, "axiom_billing_expire_deferred_total"), fmt.Sprint(batches); got != want {
+		t.Errorf("the scrape counts %s deferred batches, want %s", got, want)
+	}
+	if got, want := scrape(t, tel, "axiom_billing_expire_deferred_amount_total"), fmt.Sprint(amount); got != want {
+		t.Errorf("the scrape counts %s deferred credit, want %s", got, want)
+	}
+}

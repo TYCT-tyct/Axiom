@@ -205,7 +205,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_observability_queue_depth` | 仪表 | 无 |
 | `axiom_gateway_outage_refusals_total` | 计数 | `dependency`（`database`、`accounts`、`catalog`、`routing`）：因依赖故障被拒的请求数，日志只在故障开始和结束时各记一条（#294；测试：`TestAnOutageIsLoggedOnceNotPerRequest` 经 `telemetry.New` 的处理器读到这个名字） |
   | `axiom_billing_platform_borne_total`、`axiom_billing_platform_borne_amount_total`、`axiom_billing_reconcile_problems_total` | 计数 | 无：账户的余额底线没让它付清的结算次数和平台承担的金额（十亿分之一额度），账本每日自平找到的问题数（测试：`TestThePlatformBearingASettlementIsReported`、`TestTheReconciliationReportsWhatItRefuses` 经 `telemetry.New` 的处理器读到这些名字） |
-  | `axiom_billing_expire_deferred_total`、`axiom_billing_expire_deferred_amount_total` | 计数 | 无：一轮到期作废里被上限（余额 − 在途预留 − 全部冻结）少作废的批次数和金额（十亿分之一额度），每轮每个批次各加一次；怎么读和处理见[计费的「额度批次」](../../docs/domains/billing.md#额度批次)（#308；测试：`TestTheWriteOffHeldBackIsCounted` 经 `telemetry.New` 的处理器读到这两个名字） |
+  | `axiom_billing_expire_deferred_total`、`axiom_billing_expire_deferred_amount_total` | 计数 | 无：一轮到期作废里没能全部作废的批次数和剩下的金额（十亿分之一额度）——仍被冻结、被在途预留占着或超出余额的部分，每轮每个仍有剩余的到期批次各加一次；怎么读和处理见[计费的「额度批次」](../../docs/domains/billing.md#额度批次)（#308；测试：`TestTheWriteOffHeldBackIsCounted`、`TestTheWriteOffFrozenAtExpiryIsCounted` 经 `telemetry.New` 的处理器读到这两个名字） |
   | `axiom_catalog_sync_last_success_age_seconds` | 仪表 | 无：持久化记录距最后成功的秒数；从未成功则距首次失败，尚未执行为 0；每次采集读数据库时钟，即使没有下一轮也增长，运维按后台阈值判断；2 秒期限，读库失败返回采集错误、不伪报 0（测试：`TestTheSyncStateIsMeasuredWithoutAnotherRound`） |
   | `axiom_catalog_sync_consecutive_failures` | 仪表 | 无：持久化连续失败轮次数，成功清零；正常取数失败写状态后任务完成（`MaxAttempts=1`），不因同一任务的短退避重试重复计数（测试同上） |
   | `axiom_catalog_sync_overdue_total` | 计数 | 无：失败轮次超过节点代码默认阈值（48 小时）时的兜底计数，每次执行最多加一；日志为 `catalog.sync.overdue`，运维后台阈值判断使用上述 gauge（测试：`TestTheSyncAlertsWhenThePricesGoUnrefreshed`） |

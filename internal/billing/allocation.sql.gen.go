@@ -38,8 +38,7 @@ func (q *Queries) AllocationState(ctx context.Context, db DBTX, accountID uuid.U
 
 const dueAccounts = `-- name: DueAccounts :many
 SELECT b.account_id FROM billing.credit_batches b
-WHERE b.expires_at <= $1::timestamptz AND b.consumed + b.expired < b.amount
-    AND b.freeze_total - b.unfreeze_total < b.amount - b.consumed - b.expired AND b.account_id > $2
+WHERE b.expires_at <= $1::timestamptz AND b.consumed + b.expired < b.amount AND b.account_id > $2
 GROUP BY b.account_id
 ORDER BY b.account_id
 LIMIT $3
@@ -53,6 +52,8 @@ type DueAccountsParams struct {
 
 // The accounts with a batch whose time has come at now and which still holds something, after the account given, in
 // order. now is the one time the run takes, so the range on expires_at is a bound of the index credit_batches_due.
+// Frozen credit holds something too: it is written off once the freeze resolves, and until then the run reports it as
+// deferred (docs/domains/billing.md「额度批次」), so a batch whose whole remainder is frozen is due as well.
 func (q *Queries) DueAccounts(ctx context.Context, db DBTX, arg DueAccountsParams) ([]uuid.UUID, error) {
 	rows, err := db.Query(ctx, dueAccounts, arg.Now, arg.After, arg.Max)
 	if err != nil {
