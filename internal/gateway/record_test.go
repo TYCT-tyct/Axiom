@@ -44,6 +44,15 @@ func TestAttributionOf(t *testing.T) {
 	}{
 		{"nothing named", nil, appAttribution{}},
 		{
+			"referer drops userinfo, query and fragment",
+			map[string]string{"HTTP-Referer": "https://" + "user:pass" + "@app.example/cb?code=secret#access_token=secret"},
+			appAttribution{referer: "https://app.example/cb"},
+		},
+		{"referer drops a query", map[string]string{"HTTP-Referer": "https://app.example/cb?code=secret"}, appAttribution{referer: "https://app.example/cb"}},
+		{"referer drops a fragment", map[string]string{"HTTP-Referer": "https://app.example/cb#access_token=secret"}, appAttribution{referer: "https://app.example/cb"}},
+		{"a referer that is not a URL is kept", map[string]string{"HTTP-Referer": "not a url?code=secret"}, appAttribution{referer: "not a url?code=secret"}},
+		{"a long query is dropped before truncation", map[string]string{"HTTP-Referer": "https://app.example/cb?" + strings.Repeat("a", 3000)}, appAttribution{referer: "https://app.example/cb"}},
+		{
 			"all three",
 			map[string]string{
 				"HTTP-Referer": "https://app.example.com/chat", "X-OpenRouter-Title": "Example Chat",
@@ -85,6 +94,11 @@ func TestAttributionOf(t *testing.T) {
 			"categories beyond two",
 			map[string]string{"X-OpenRouter-Categories": "cli-agent,cloud-agent,image-gen"},
 			appAttribution{categories: "cli-agent,cloud-agent"},
+		},
+		{
+			"categories are deduplicated",
+			map[string]string{"X-OpenRouter-Categories": "coding,coding,chat"},
+			appAttribution{categories: "coding,chat"},
 		},
 		{
 			"a category longer than 30",

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -79,16 +81,38 @@ func attributionOf(h http.Header) appAttribution {
 		title = h.Get("X-Title")
 	}
 	return appAttribution{
-		referer:    headerText(h.Get("Http-Referer"), maxAppReferer),
+		referer:    refererOf(h.Get("Http-Referer")),
 		title:      headerText(title, maxAppTitle),
 		categories: categoriesOf(h.Get("X-Openrouter-Categories")),
 	}
+}
+
+// refererOf keeps the part of HTTP-Referer that names the application: a URL's scheme, host and path, without the
+// userinfo, query or fragment, which can carry credentials and OAuth codes. A value that is not an absolute URL is
+// kept as it was cleaned and truncated; there is no URL to take apart.
+func refererOf(s string) string {
+	s = cleanHeader(s)
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return truncate(s, maxAppReferer)
+	}
+	if u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.RawFragment == "" {
+		return truncate(s, maxAppReferer)
+	}
+	u.User, u.RawQuery, u.Fragment, u.RawFragment, u.ForceQuery = nil, "", "", "", false
+	return headerText(u.String(), maxAppReferer)
 }
 
 // headerText is one header value as the log keeps it: valid UTF-8, no control characters, trimmed, and no longer than n
 // runes. The cut falls on a rune boundary, so the stored text is still valid. A clean value is returned as it came,
 // without allocating: this runs on the call path.
 func headerText(s string, n int) string {
+	return truncate(cleanHeader(s), n)
+}
+
+// cleanHeader makes a header value safe to keep, without bounding its length: valid UTF-8, no control characters, and
+// no surrounding whitespace.
+func cleanHeader(s string) string {
 	s = strings.ToValidUTF8(s, "\uFFFD") // a header's bytes are not checked to be text by every client
 	if strings.IndexFunc(s, unicode.IsControl) >= 0 {
 		s = strings.Map(func(r rune) rune {
@@ -98,15 +122,19 @@ func headerText(s string, n int) string {
 			return r
 		}, s)
 	}
+	return strings.TrimSpace(s)
+}
+
+// truncate cuts s to n runes on a rune boundary.
+func truncate(s string, n int) string {
 	runes := 0
 	for i := range s {
 		if runes == n {
-			s = s[:i]
-			break
+			return s[:i]
 		}
 		runes++
 	}
-	return strings.TrimSpace(s)
+	return s
 }
 
 // categoriesOf keeps the categories in the shape OpenRouter accepts, in its spelling: lowercase names of letters, digits
@@ -118,7 +146,7 @@ func categoriesOf(s string) string {
 		if len(kept) == 2 {
 			break
 		}
-		if c = strings.ToLower(strings.TrimSpace(c)); validCategory(c) {
+		if c = strings.ToLower(strings.TrimSpace(c)); validCategory(c) && !slices.Contains(kept, c) {
 			kept = append(kept, c)
 		}
 	}

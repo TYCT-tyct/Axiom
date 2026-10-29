@@ -3,12 +3,13 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
 
 // TestDiffHarnessResponsesLifecycleOrder: a Responses stream's own lifecycle is checked apart from the pairing, so two
-// events that differ only by their IDs cannot be swapped and still compare equal.
+// events that differ only by their IDs cannot be swapped, lost or repeated and still compare equal.
 func TestDiffHarnessResponsesLifecycleOrder(t *testing.T) {
 	life := func(name string, sequence int) event {
 		return readEvent(name, canonical(map[string]any{"type": name, "sequence_number": sequence}))
@@ -28,12 +29,58 @@ func TestDiffHarnessResponsesLifecycleOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ok := true
 			for _, d := range compareEvents(theirs, tc.ours) {
-				if d.path == "sse[response].lifecycle" {
+				if d.path == "sse.order" || d.newAPI == absent || d.axiom == absent {
 					ok = false
 				}
 			}
 			if ok != tc.ok {
 				t.Errorf("lifecycle accepted=%v, want %v", ok, tc.ok)
+			}
+		})
+	}
+}
+
+// TestDiffHarnessEventOrder: the diff checks the order of every event group, not only the Responses lifecycle, so a
+// swap within one output item or content block, or a closing event moved before its group, is not hidden by pairing.
+func TestDiffHarnessEventOrder(t *testing.T) {
+	makeEvent := func(name string, doc map[string]any) event {
+		return readEvent(name, canonical(doc))
+	}
+	part := func(name string) event {
+		return makeEvent(name, map[string]any{"type": name, "output_index": 0, "content_index": 0})
+	}
+	message := func(name string, index int) event {
+		return makeEvent(name, map[string]any{"type": name, "index": index})
+	}
+	unindexed := func(name string) event { return makeEvent(name, map[string]any{"type": name}) }
+
+	added, partAdded, partDone, itemDone := part("response.output_item.added"), part("response.content_part.added"), part("response.content_part.done"), part("response.output_item.done")
+	delta, textDone := part("response.output_text.delta"), part("response.output_text.done")
+	created, completed := unindexed("response.created"), unindexed("response.completed")
+	messageStart, blockStart, blockStop := unindexed("message_start"), message("content_block_start", 0), message("content_block_stop", 0)
+	messageDelta, messageStop := unindexed("message_delta"), unindexed("message_stop")
+
+	item := func(index int) event {
+		return makeEvent("response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": index})
+	}
+	for _, tc := range []struct {
+		name         string
+		theirs, ours []event
+		order        bool
+	}{
+		{"same item keeps its lifecycle", []event{added, partAdded, partDone, itemDone}, []event{added, partAdded, partDone, itemDone}, false},
+		{"item closes before its part", []event{added, partAdded, partDone, itemDone}, []event{added, partAdded, itemDone, partDone}, true},
+		{"text delta after text done", []event{delta, textDone}, []event{textDone, delta}, true},
+		{"message stop before message delta", []event{messageStart, blockStart, blockStop, messageDelta, messageStop}, []event{messageStart, blockStart, blockStop, messageStop, messageDelta}, true},
+		{"message stop before content block stop", []event{messageStart, blockStart, blockStop, messageDelta, messageStop}, []event{messageStart, blockStart, messageStop, blockStop, messageDelta}, true},
+		{"response completed before its item", []event{created, item(0), completed}, []event{created, completed, item(0)}, true},
+		{"items close in either order", []event{item(1), item(0)}, []event{item(0), item(1)}, false},
+		{"a part the other stream omits", []event{added, itemDone}, []event{added, partAdded, partDone, itemDone}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := slices.ContainsFunc(compareEvents(tc.theirs, tc.ours), func(d difference) bool { return d.path == "sse.order" })
+			if got != tc.order {
+				t.Errorf("order difference=%v, want %v", got, tc.order)
 			}
 		})
 	}
