@@ -119,6 +119,9 @@ func Inspect(f Format, body []byte) (Request, error) {
 	if err := s.top(body); err != nil {
 		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
+	if s.reasoningOff {
+		s.r.Needs &^= Reasoning
+	}
 	s.r.ServiceTiers = s.fast
 	if s.r.ServiceTiers == 0 {
 		s.r.ServiceTiers = s.tiers
@@ -155,11 +158,12 @@ type reader struct {
 // settled when the object ends.
 type scanner struct {
 	reader
-	g           *grammar
-	r           Request
-	p           part
-	tiers, fast catalog.ServiceTierSet // service_tier, and Anthropic's speed, which overrides it
-	callCap     int64                  // Responses' max_tool_calls
+	g            *grammar
+	r            Request
+	p            part
+	tiers, fast  catalog.ServiceTierSet // service_tier, and Anthropic's speed, which overrides it
+	reasoningOff bool
+	callCap      int64 // Responses' max_tool_calls
 }
 
 // part is the content part, tool or reasoning setting being read.
@@ -170,7 +174,7 @@ type part struct {
 	payload                  int64 // the raw bytes of the data the part carries
 	binary                   bool  // the payload is image or file data, not text
 	max                      int64 // a server tool's max_uses
-	off, hidden              bool  // reasoning turned off; reasoning left out of the stream
+	off, hidden, on          bool  // reasoning turned off; reasoning left out of the stream
 }
 
 // fields maps an object's member names to their readers; other members are skipped.

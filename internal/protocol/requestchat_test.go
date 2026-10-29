@@ -36,7 +36,7 @@ func TestMessagesRequestsToChat(t *testing.T) {
 		{
 			"history and thinking",
 			`"messages":[{"role":"user","content":"Go"},{"role":"assistant","content":[{"type":"thinking","thinking":"why","signature":"opaque"},{"type":"tool_use","id":"c1","name":"f","input":{"x":1}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"ok"},{"type":"text","text":"next"}]}],"thinking":{"type":"enabled","budget_tokens":1024}`,
-			`"messages":[{"role":"user","content":"Go"},{"role":"assistant","content":[],"reasoning_content":"why","tool_calls":[{"type":"function","id":"c1","function":{"name":"f","arguments":"{\"x\":1}"}}]},{"role":"tool","tool_call_id":"c1","content":"ok"},{"role":"user","content":[{"type":"text","text":"next"}]}],"max_tokens":4096,"reasoning":{"enabled":true,"max_tokens":1024}`,
+			`"messages":[{"role":"user","content":"Go"},{"role":"assistant","content":[],"reasoning_content":"why","tool_calls":[{"type":"function","id":"c1","function":{"name":"f","arguments":"{\"x\":1}"}}]},{"role":"tool","tool_call_id":"c1","content":"ok"},{"role":"user","content":[{"type":"text","text":"next"}]}],"max_tokens":4096,"reasoning_effort":"low"`,
 		},
 		{
 			"images and cache marker",

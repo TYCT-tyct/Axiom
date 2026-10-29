@@ -27,19 +27,19 @@ WHERE k.id = @key_id
 SELECT max_keys, key_creations_per_hour FROM accounts.accounts WHERE id = @id FOR NO KEY UPDATE;
 
 -- name: CountKeys :one
--- The call keys the account holds that are not deleted: what the limit of keys held bounds. Read in the account's turn
+-- The keys the account holds that are not deleted: what the limit of keys held bounds. Read in the account's turn
 -- (LockAccount), so it counts every key an insert before this one made.
 SELECT count(*) FROM accounts.api_keys
-WHERE account_id = @account_id AND kind = 'call' AND deleted_at IS NULL;
+WHERE account_id = @account_id AND deleted_at IS NULL;
 
 -- name: RecentKeys :one
--- How many call keys the account made in the last window, deleted ones too, and how long until a place is free under a
+-- How many keys the account made in the last window, deleted ones too, and how long until a place is free under a
 -- limit of max_made: until the key that must age out for the count to fall below it is a window old (0 while the
 -- count is below the limit, when it is not asked). The time is the database's, taken once per statement, after the
 -- account's turn was won, and so is the time a key is stamped with (InsertKey): one clock for every node.
 WITH recent AS (
     SELECT created_at FROM accounts.api_keys
-    WHERE account_id = @account_id AND kind = 'call'
+    WHERE account_id = @account_id
         AND created_at > statement_timestamp() - make_interval(secs => @window_seconds::bigint)
 )
 SELECT (SELECT count(*) FROM recent)::bigint AS made,
@@ -49,37 +49,37 @@ SELECT (SELECT count(*) FROM recent)::bigint AS made,
 -- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
     secret_version, created_by, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow)
-VALUES (@id, @site_id, @account_id, @workspace_id, 'call', @name, @prefix, @last4, @secret_hash, @secret_version,
+VALUES (@id, @site_id, @account_id, @workspace_id, @kind, @name, @prefix, @last4, @secret_hash, @secret_version,
     @created_by, statement_timestamp(), @expires_at, 'active', @spend_limit, @limit_reset, @models, @ip_allow);
 
 -- name: DefaultWorkspace :many
 SELECT id FROM accounts.workspaces WHERE account_id = @account_id AND is_default;
 
 -- name: ListKeys :many
--- An account's call keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making.
-SELECT id, workspace_id, name, prefix, last4, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
+-- An account's keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making.
+SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys
-WHERE account_id = @account_id AND kind = 'call' AND deleted_at IS NULL AND id < @before
+WHERE account_id = @account_id AND deleted_at IS NULL AND id < @before
 ORDER BY id DESC
 LIMIT @page_size;
 
 -- name: GetKey :many
-SELECT id, workspace_id, name, prefix, last4, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
-FROM accounts.api_keys WHERE id = @id AND kind = 'call' AND deleted_at IS NULL;
+SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
+FROM accounts.api_keys WHERE id = @id AND deleted_at IS NULL;
 
 -- name: LockKey :one
 -- The settings a change leaves behind, read in the key's row's turn in the transaction that writes: the audit entry
 -- names what this change replaced, and not what a change made at the same moment did.
 SELECT site_id, account_id, name, status, spend_limit, limit_reset, models, ip_allow
-FROM accounts.api_keys WHERE id = @id AND kind = 'call' AND deleted_at IS NULL
+FROM accounts.api_keys WHERE id = @id AND deleted_at IS NULL
 FOR UPDATE;
 
 -- name: UpdateKey :exec
 -- Every setting a user may change, replaced whole; the expiry is not among them. The caller holds the key's turn
 -- (LockKey) and has read the settings this replaces.
-UPDATE accounts.api_keys SET name = @name, status = @status, spend_limit = @spend_limit, limit_reset = @limit_reset,
+UPDATE accounts.api_keys SET updated_at = statement_timestamp(), name = @name, status = @status, spend_limit = @spend_limit, limit_reset = @limit_reset,
     models = @models, ip_allow = @ip_allow
-WHERE id = @id AND kind = 'call';
+WHERE id = @id;
 
 -- name: DeleteKey :many
 -- A deleted key is final: the table's policy updates only keys not yet deleted.

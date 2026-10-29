@@ -120,8 +120,8 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| `GET /api/v1/credits` → `data.total_credits`、`data.total_usage` | 需要管理 key | api/credits/get-remaining-credits | 有：`gw/readonly.go:127-133`；调用 key 就能读（偏离，`docs/domains/gateway.md:234`） | `na:router/dashboard.go:18,20`（OpenAI 旧版） | `s2:internal/server/routes/gateway.go:186`（`/sub2api/billing`） | 无 |
-| `GET /api/v1/key` → `label`、`usage`、`usage_daily/weekly/monthly`、`limit`、`limit_remaining`、`limit_reset`、`expires_at`、`is_free_tier`、`is_management_key` | 当前 key 信息 | api/api-keys/get-current-api-key | 有：`gw/readonly.go:86-125` | 无 | 无 | 无 |
+| `GET /api/v1/credits` → `data.total_credits`、`data.total_usage` | 需要管理 key | api/credits/get-remaining-credits | 有：`gw/readonly.go:127-133`；只接受调用 key，管理 key 为 401（决定见账户 key 管理与 gateway 的决策） | `na:router/dashboard.go:18,20`（OpenAI 旧版） | `s2:internal/server/routes/gateway.go:186`（`/sub2api/billing`） | 有意偏离：管理 key 为 401，见 gateway 的决策 |
+| `GET /api/v1/key` → `label`、`usage`、`usage_daily/weekly/monthly`、`limit`、`limit_remaining`、`limit_reset`、`expires_at`、`is_free_tier`、`is_management_key` | 当前 key 信息，接受管理 key | api/api-keys/get-current-api-key | 有：`gw/readonly.go:86-125`；只接受调用 key，管理 key 为 401 | 无 | 无 | 有意偏离：管理 key 为 401，见 gateway 的决策 |
 | `/key` 的 `byok_usage*`、`include_byok_in_limit`、`is_provisioning_key`、`creator_user_id`、`organization_id`、`workspace_id`、`allowed_data_regions` | BYOK 与归属信息 | spec | 没有（无 BYOK；`gw/readonly.go:82-84` 注释） | 无 | 无 | 管理 key/工作区接口做了再补 |
 | `/key` 的 `rate_limit`（`requests`、`interval`）、`free_model_daily_requests` | 限流提示 | spec | 没有 | 无 | 无 | Axiom 有 key 限流（`gw/admit.go:83`（`KeyRate`）），但不在这里公布 |
 | `/key` 的 `budgets[]`、`effective_budget`（`limit_usd`、`spend_usd`、`remaining_usd`、`reset_interval`、`resets_at`、`scope`） | 预算上限，被挡之前可读 | docs/api_reference/limits | 没有：`gw/readonly.go:102-110` 只有 key 自己的限额 | 无 | 无 | 随工作区预算（#319/#315）做 |
@@ -148,7 +148,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | 响应修复插件 `response-healing` | 非流式 JSON 修复 | docs/guides/features/plugins/response-healing | 没有（见 §10：`plugins` 被丢弃） | 无 | 无 | 见 §10 |
 | 工具调用：`tools`、`tool_choice`、`parallel_tool_calls`，流式分块 | 标准函数调用 | docs/guides/features/tool-calling | 有：`proto/grammar.go:74,279-293` 能力匹配；Chat 转 Messages 映射 `tool_choice`/`parallel_tool_calls`（`proto/tomessageschoice.go`），表达不了的返回 400；旧版 `functions`、`function_call` 在同格式与转换时均升级成 `tools`、`tool_choice`，旧消息按稳定 ID 配对（`proto/legacy.go`、`proto/legacyrewrite.go`）；仅旧客户端的回复还原 `function_call` 并关闭并行（`proto/legacyreply.go`，与 OpenRouter 现代回复基线的差异见 [gateway 的决策](domains/gateway.md#决策与理由)） | 有 | 有 | 无 |
 | `strict` 工具与 `structured-outputs-2025-11-13` 头 | 严格工具调用 | docs/guides/routing/provider-selection | 部分：`anthropic-beta` 头原样转发（`docs/domains/gateway.md:53`），所以头本身可用；`strict` 字段是否被剥离未核实 | 无 | 无 | 低优先 |
-| `reasoning` 对象：`effort`(max/xhigh/high/medium/low/minimal/none)、`max_tokens`、`exclude`、`enabled` | 统一推理控制 | docs/guides/best-practices/reasoning-tokens | 部分：识别 `effort/enabled/exclude` 并设能力要求和是否隐藏（`proto/grammar.go:112-118,329-342`）；Chat 转 Messages 按 OpenRouter 的比例换算思考预算（`proto/tomessages.go:48,113,472`）；`reasoning.max_tokens` 同格式透传，跨格式未核实 | `na:relay/helper/reasoning_suffix.go:111`（用模型后缀） | 部分 | 跨格式的 `max_tokens`、`effort: xhigh/max/minimal` 映射要核实 |
+| `reasoning` 对象：`effort`(max/xhigh/high/medium/low/minimal/none)、`max_tokens`、`exclude`、`enabled` | 统一推理控制，隐藏不减用量 | [Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)，2026-10-29 | 已实现 Chat ↔ Messages/Responses 的开关、展示、预算与 effort 换算及输出隐藏，见 [协议换算表](../internal/protocol/README.md#推理控制与换算) | 模型后缀及方言转换 | 部分 | Messages ↔ Responses 直接转换未实现；目录尚无模型级 supported_efforts/mandatory |
 | `reasoning_effort`（Chat 的旧写法） | 与 `reasoning.effort` 等价 | spec `ChatRequest.reasoning_effort` | 有：`proto/grammar.go:75,344-350` | 有（`na:relay/helper/model_modifier.go:207-214`） | 无 | 无 |
 | 响应里的推理文本：`message.reasoning`、`reasoning_details[]`，续接时回传 | 推理内容 | 同上 | 有：同时写 `reasoning` 与 `reasoning_content`，`reasoning_details` 保留（`proto/chat.go:13-14,68-69`，`proto/aggregatechat.go:99-101`） | 只有 `reasoning_content` | 部分 | Axiom 更全 |
 | `reasoning` 在 `GET /models` 的 `reasoning{…}` 元数据 | 客户端画档位用 | 同上 | 没有（见 §2） | 无 | 无 | 同 §2 |
@@ -240,10 +240,10 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| 管理 key（不能调模型，只能调管理接口） | 程序化管理 key | docs/guides/overview/auth/management-api-keys | 没有：表结构有、接口在 M2（`docs/domains/accounts.md:69`） | 无 | 无 | #315 |
-| `GET /api/v1/keys`（`include_disabled`、`include_expired`、`offset`、`workspace_id`） | 列 key，带 `hash`、`usage*`、`limit*`、`byok_usage*`、`expires_at`、`disabled` | api/api-keys/list-api-keys | 没有：控制台有 `GET /api/console/v1/keys`（`api/console.yaml:294`），要登录会话，不是管理 key | `na:router/api-router.go:282-295`（令牌 CRUD，要登录） | `s2:internal/handler/api_key_handler.go` | 形态不同，不能被 OpenRouter 的管理工具调用 |
-| `POST /api/v1/keys`（`name`、`limit`、`limit_reset`、`include_byok_in_limit`、`expires_at`、`workspace_id`、`creator_user_id`，明文只返回一次） | 创建 key | api/api-keys/create-a-new-api-key | 没有（控制台里能建，`api/console.yaml:294`，要会话） | 同上 | 同上 | 同上 |
-| `GET/PATCH/DELETE /api/v1/keys/{hash}` | 查询/修改（含停用）/删除 | api/api-keys/get-a-single-api-key、update-an-api-key、delete-an-api-key | 没有（控制台有 `/keys/{key_id}`，`api/console.yaml:348`） | 同上 | 同上 | 同上 |
+| 管理 key（不能调模型，只能调管理接口） | 程序化管理 key | docs/guides/overview/auth/management-api-keys | 有：控制台签发、账户范围、禁止调用模型（`internal/accounts/management.go`） | 无 | 无 | #315 |
+| `GET /api/v1/keys`（`include_disabled`、`include_expired`、`offset`、`workspace_id`） | 列 key，带 `hash`、`usage*`、`limit*`、`byok_usage*`、`expires_at`、`disabled` | api/api-keys/list-api-keys | 有：`cmd/axiom/management.go`，只列调用 key，支持四个筛选/分页参数 | `na:router/api-router.go:282-295`（令牌 CRUD，要登录） | `s2:internal/handler/api_key_handler.go` | hash 为不透明 UUID 十六进制，限额为本站额度；无 BYOK，返回零用量 |
+| `POST /api/v1/keys`（`name`、`limit`、`limit_reset`、`include_byok_in_limit`、`expires_at`、`workspace_id`、`creator_user_id`，明文只返回一次） | 创建 key | api/api-keys/create-a-new-api-key | 有：`cmd/axiom/management.go`；创建人固定为管理 key 的签发人，限制继承且只能收紧 | 同上 | 同上 | 同上 |
+| `GET/PATCH/DELETE /api/v1/keys/{hash}` | 查询/修改（含停用）/删除 | api/api-keys/get-a-single-api-key、update-an-api-key、delete-an-api-key | 有：`cmd/axiom/management.go`，data/deleted 外壳；PATCH 只改设置，不改到期或工作区 | 同上 | 同上 | 同上 |
 | key 限额：`limit`(USD)、`limit_reset`(daily/weekly/monthly，UTC)、`expires_at` | 每 key 限额 | 同上 | 有：key 的限额、重置周期、过期（`gw/readonly.go:86-125`、`internal/accounts/keys.go`） | 有 | 有 | 周期的边界（UTC、周一起算）与 OpenRouter 是否一致未核实 |
 | OAuth PKCE 换 key（`/auth/keys/code`、`/auth/keys`） | 第三方应用让用户授权拿 key | docs/guides/overview/auth/oauth | 没有（范围「以后」：第三方应用用户用自己账户付费，`docs/product.md:96`） | 无 | 无 | 归「新建」 |
 | 工作区 `/workspaces`、成员、预算 `/workspaces/{id}/budgets`；护栏 `/guardrails`；组织 `/organization/*`；SCIM/SSO | 企业管理 API | docs/guides/features/workspaces、guardrails、sso | 没有（账户域有工作区，管理 API 未暴露） | 无 | 无 | #315 / #317 |
@@ -280,12 +280,12 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 6. 【预设】`@preset/…`、`preset` 字段、`/api/v1/presets` 全部没有，但产品范围把预设列在第一版（`docs/product.md:93`）；`docs/domains/gateway.md:150` 与代码不符，先改文档或做功能。→ #313（预设属于路由配置）
 7. 【错误形态】错误体用字符串 `code` 而不是数字（有意，`docs/domains/gateway.md:225`）；`error_type` 词表只有 12 个且名字多数与 OpenRouter 不同（缺 `context_length_exceeded`、`permission_denied`、`content_policy_violation`、图片类、`payload_too_large`…）；没有 403；预算耗尽用 402 而不是 OpenRouter 的 403+`limit_source`。读 OpenRouter 错误的客户端会走默认分支。→ #311
 8. 【Chat 上游】Chat 客户端调用说 Chat 的端点是同格式转发（#301 A，`proto/prepare.go` 的 Chat 规则、`rt/plan.go` 的 `callFormat`）；Messages、Responses 到 Chat 的请求、流及聚合转换（#301 B）与三种原生格式一同纳入差分测试，不能表达的成员按跨格式策略拒绝。→ #311（#301）
-9. 【推理】`reasoning.max_tokens` 的跨格式换算、`effort: xhigh/max/minimal` 映射未核实；模型列表里的 `reasoning` 只给 `supports_max_tokens`（按方言的手动推理预算判断），未知 `mandatory` 不声称，`supports_reasoning_effort` 没有数据不输出。推理文本的两个名字已有，这块对 Claude Code/Codex 用户基本可用。→ #311
+9. 【推理】`reasoning.max_tokens` 跨格式近似、`effort: xhigh/max/minimal`、关闭与隐藏已核实实现，映射及边界见 [protocol 换算表](../internal/protocol/README.md#推理控制与换算)。模型列表的 `reasoning` 仍只给 `supports_max_tokens`（按方言的手动预算判断）；未知 mandatory、模型支持的 effort 列表不声称。→ #311
 10. 【读取类】`GET /api/v1/models/{author}/{slug}/endpoints`、`/models/user`、`/models/count`、`/providers` 已提供内存快照投影（字段偏离和实时准入的 DB 例外见 gateway.md），`/endpoints/zdr` 没有；`/generation` 缺 `native_tokens_*`、`cache_discount`、`session_id`、`streamed/cancelled` 等，`/generation/content`、`/generation/feedback`、`/activity` 没有。→ `/endpoints` 等归 #311；`/generation`、`/activity` 归 #319
 11. 【用量字段】`usage.cost_details`（含 `server_tool_cost`）、`is_byok`、`completion_tokens_details` 的音频/预测项、返回给客户端的 `prompt_tokens_details` 音频/视频明细、`cache_discount`、Chat 里的 `server_tool_use_details` 没有；响应 `model` 回显请求名而不是实际使用的模型（用 `models` 回退时看不出换了谁）。→ #319
 12. 【会话与归因】会话请求头（`x-session-id` 等）转发给 Responses、Chat 端点并换成分值（`gw/headers.go`），Axiom 自己的粘性还没按它分组；`X-OpenRouter-Title`/`HTTP-Referer`/`X-OpenRouter-Categories` 归因被丢弃，只靠 User-Agent 认 Claude Code/Codex；Anthropic Messages 的 `fallbacks` 参数不生效。→ #313（session 头、fallbacks）、#311（归因头）
 13. 【限流】429 没有 `X-RateLimit-*` 头；Axiom 对付费 key 有请求速率限制，OpenRouter 付费模型没有平台级上限；`GET /key` 缺 `rate_limit`、`budgets`、`effective_budget`。→ #315
-14. 【管理 API】`/api/v1/keys` 系列（用管理 key 创建/列出/改/删调用 key）没有，只有要会话登录的控制台接口；管理 key 接口排在 M2；`/workspaces`、`/guardrails`、`/organization` 管理 API 没有。→ #315（key）、#317（工作区/护栏的界面）
+14. 【管理 API】`/api/v1/keys` 系列已提供管理 key 认证的调用 key CRUD（E4-9/P14）；限制与 OpenRouter 的差异见[账户域](domains/accounts.md#api-key)；`/workspaces`、`/guardrails`、`/organization` 管理 API 没有。→ #315（key）、#317（工作区/护栏的界面）
 15. 【响应缓存】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置没有；涉及内容保存政策，需要负责人定。→ 新建
 16. 【BYOK】用户自带供应商 key（`/byok`、优先/回退区、手续费）没有；范围里在「以后」。管理员侧号池已有。→ 新建
 17. 【路由器】`openrouter/auto`、`auto-beta`、`free`、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有；范围里 Auto Router 在「以后」。其中 `openrouter/free` 依赖 `:free` 条目。→ 新建
@@ -296,7 +296,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 ## Axiom 比 OpenRouter 多的（不算缺口，只是行为不一致，迁移时要说明）
 
 - `POST /v1/messages/count_tokens`、`POST /v1/responses/compact`、Responses 会话状态（`store`、`previous_response_id`）、`GET /v1/dashboard/billing/*`（给 new-api 当上游）。
-- `/key`、`/credits` 用调用 key 就能读（OpenRouter 要管理 key）。
+- `/key`、`/credits` 只接受调用 key，管理 key 均为 401。OpenRouter 的 /credits 要管理 key，/key 也接受管理 key；Axiom 本轮仅为 key CRUD 接入管理认证，余额和凭证自省接口未接入独立管理权限，决定见 [gateway](domains/gateway.md#决策与理由)。
 - 响应总是带 `usage.cost`/`cost_currency`/`cost_estimated`，不需要 `usage.include`。
 - 推理文本同时写 `reasoning` 与 `reasoning_content`。
 - 上游错误去掉供应商标识；响应头走白名单；`model` 回显请求名。

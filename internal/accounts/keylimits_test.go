@@ -263,7 +263,7 @@ func TestKeyCreationsIgnoreTheNodesClocks(t *testing.T) {
 }
 
 // TestKeyCreationsUseTheIndex: the hour's count of an account that made none reads no more than its own keys however
-// many keys other accounts made in the hour: the plan is a scan of api_keys_made_by_account with no row dropped by a
+// many keys other accounts made in the hour: the plan is a scan of api_keys_created_by_account with no row dropped by a
 // filter. The statement is RecentKeys's, spelled with the literals it takes, and must stay in step with it.
 func TestKeyCreationsUseTheIndex(t *testing.T) {
 	t.Parallel()
@@ -279,10 +279,10 @@ func TestKeyCreationsUseTheIndex(t *testing.T) {
 	plan := strings.Join(texts(t, db, platform, ids.Replace(`EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF)
 		WITH recent AS (
 			SELECT created_at FROM accounts.api_keys
-			WHERE account_id = :a1 AND kind = 'call' AND created_at > statement_timestamp() - make_interval(secs => 3600::bigint)
+			WHERE account_id = :a1 AND created_at > statement_timestamp() - make_interval(secs => 3600::bigint)
 		)
 		SELECT (SELECT count(*) FROM recent)::bigint AS made`)), "\n")
-	if !strings.Contains(plan, "api_keys_made_by_account") || strings.Contains(plan, "Seq Scan") || strings.Contains(plan, "Rows Removed by Filter") {
+	if !strings.Contains(plan, "api_keys_created_by_account") || strings.Contains(plan, "Seq Scan") || strings.Contains(plan, "Rows Removed by Filter") {
 		t.Errorf("the plan of the hour's count:\n%s", plan)
 	}
 }
@@ -551,5 +551,22 @@ func TestKeyUpdateRecordsWhatChanged(t *testing.T) {
 	}
 	if holding != "0" {
 		t.Errorf("%s audit entries hold the key's text", holding)
+	}
+}
+
+func TestLiveKeyCountDoesNotReadDeletedHistory(t *testing.T) {
+	t.Parallel()
+	db, database := open(t)
+	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(`
+        INSERT INTO accounts.api_keys(id,site_id,account_id,workspace_id,kind,name,prefix,last4,secret_hash,secret_version,created_by,status,deleted_at)
+        SELECT gen_random_uuid(),:s1,:a1,:w1,'call','history','sk-ax-v1-','test',sha256(convert_to(n::text,'UTF8')),1,:u1,'active',now()
+        FROM generate_series(1,20000) n;
+        ANALYZE accounts.api_keys`)); err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Join(texts(t, db, pg.NewScope(false, nil, []uuid.UUID{a1}), ids.Replace(`
+        EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF) SELECT count(*) FROM accounts.api_keys WHERE account_id=:a1 AND deleted_at IS NULL`)), "\n")
+	if !strings.Contains(plan, "api_keys_live_of_account") || strings.Contains(plan, "Rows Removed by Filter") {
+		t.Fatal("live count reads deleted history:\n" + plan)
 	}
 }
