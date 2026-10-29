@@ -21,8 +21,6 @@ type Refusal struct {
 	Reason     string
 	Message    string
 	Details    map[string]any
-	// OpenRouterCode uses the HTTP status as a numeric error.code for plugin validation.
-	OpenRouterCode bool
 }
 
 func (r *Refusal) Error() string { return r.Code }

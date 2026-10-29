@@ -122,7 +122,7 @@ func TestRetryBudgetInPlan(t *testing.T) {
 	for h.r.TakeRetry(sup(2)) { // use it all
 	}
 	in := input()
-	in.Override.Order = []routing.SupplierID{sup(1), sup(2)}
+	in.Override.OrderNames = []string{"g1", "g2"}
 	p := h.plan(in)
 	if len(p.Entries) != 1 || first(p) != ep(1) {
 		t.Errorf("route %v", p.Entries)
@@ -134,7 +134,7 @@ func TestRetryBudgetInPlan(t *testing.T) {
 	if !recorded {
 		t.Errorf("not recorded: %+v", p.Record.Excluded)
 	}
-	in.Override.Order = []routing.SupplierID{sup(2), sup(1)}
+	in.Override.OrderNames = []string{"g2", "g1"}
 	if p = h.plan(in); first(p) != ep(2) {
 		t.Errorf("an exhausted supplier as the first entry: %v", p.Entries)
 	}
