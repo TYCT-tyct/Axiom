@@ -225,15 +225,16 @@ check() {
 # name is left in its home.
 remove() {
   local unit units remaining
-  units=$(systemctl list-unit-files --no-legend "$(service '[0-9]*')")
+  units=$(systemctl list-unit-files --no-legend --type=service)
   for unit in $(awk '{ print $1 }' <<< "$units"); do
+    [[ "$unit" == actions.runner.TYCT-tyct-Axiom."$prefix"[0-9]*.service ]] || continue
     systemctl disable --now "$unit"
     rm -rf "/etc/systemd/system/$unit" "/etc/systemd/system/$unit.d"
   done
   systemctl daemon-reload
   rm -rf "$home/$prefix"[0-9]*
-  remaining=$(systemctl list-unit-files --no-legend 'actions.runner.TYCT-tyct-Axiom.*.service')
-  remaining+=$(systemctl list-units --all --no-legend 'actions.runner.TYCT-tyct-Axiom.*.service')
+  remaining=$(systemctl list-unit-files --no-legend --type=service | awk '$1 ~ /^actions[.]runner[.]TYCT-tyct-Axiom[.]/')
+  remaining+=$(systemctl list-units --all --no-legend --plain --type=service | awk '$1 ~ /^actions[.]runner[.]TYCT-tyct-Axiom[.]/ && $2 != "not-found"')
   if [ -n "$remaining" ]; then
     echo "Keeping shared slice and toolchains: Axiom runner units remain."
   else

@@ -11,7 +11,7 @@ SCRIPT = Path(__file__).parent / "ci" / "bench-compare.sh"
 
 @unittest.skipUnless(BASH, "Bash is unavailable")
 class BaseBenchmarkGate(unittest.TestCase):
-    def test_base_gate_is_current_even_when_head_has_not_merged_it(self):
+    def test_train_inherits_base_fix_and_checks_gate_changes_with_both_versions(self):
         for change in ("unrelated", "gate", "module"):
             gate_changed = change != "unrelated"
             for base_status, head_status in ((0, 0), (13, 0), (0, 17)):
@@ -35,12 +35,17 @@ class BaseBenchmarkGate(unittest.TestCase):
                     base = git("rev-parse", "HEAD")
                     git("checkout", "-q", "--detach", old)
                     if change == "gate":
-                        gate.write_text("proposed gate")
+                        (gate.parent / "proposed.go").write_text("proposed gate")
                     if change == "module":
                         (root / "tools" / "go.mod").write_text("head module")
                     (root / "change.go").write_text("head change")
                     git("add", "tools", "change.go")
-                    git("commit", "-qm", "head change without base fix")
+                    git("commit", "-qm", "PR change without base fix")
+                    pr = git("rev-parse", "HEAD")
+                    git("checkout", "-q", "--detach", base)
+                    git("merge", "--no-ff", "-qm", "assemble train", pr)
+                    git("merge-base", "--is-ancestor", base, "HEAD")
+                    self.assertEqual(gate.read_text(), "fixed base gate")
                     bin_dir = root / "bin"
                     bin_dir.mkdir()
                     fake_go = bin_dir / "go"
@@ -51,7 +56,11 @@ set -eu
 [ "$4" = ./benchgate ]
 [ "$5" = "$EXPECTED_ROOT" ]
 [ "$6" = "$EXPECTED_BASE" ]
-cat "$3/benchgate/main.go" >> "$LOG"
+if [ -f "$3/benchgate/proposed.go" ]; then
+  cat "$3/benchgate/proposed.go" >> "$LOG"
+else
+  cat "$3/benchgate/main.go" >> "$LOG"
+fi
 printf '\\n' >> "$LOG"
 if [ "$3" = "$EXPECTED_ROOT/tools" ]; then exit "$HEAD_STATUS"; fi
 [ "$(cat "$3/go.mod")" = 'base module' ]
@@ -67,4 +76,4 @@ exit "$BASE_STATUS"
                     self.assertEqual(result.returncode, (head_status or base_status) if gate_changed else base_status,
                                      result.stderr)
                     self.assertEqual(log.read_text().splitlines(),
-                                     ["fixed base gate"] + (["proposed gate" if change == "gate" else "old gate"] if gate_changed else []))
+                                     ["fixed base gate"] + (["proposed gate" if change == "gate" else "fixed base gate"] if gate_changed else []))

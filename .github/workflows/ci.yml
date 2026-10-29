@@ -42,8 +42,8 @@ env:
 jobs:
   # One cheap job decides what the others skip, so a Markdown-only change starts no job that would only stop again, and
   # the deploy and benchmark rules diff the base once. A Markdown-only PR or train runs `just md-checks` only; main, and
-  # every other PR or train, runs the checks below, with the benchmark comparison and the deployment check on a train or
-  # main alone.
+  # other trains run the full checks below; PRs run static and select web by frontend/build inputs. Go tests, e2e,
+  # benchmark comparison and deployment checks run on trains or main alone.
   changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
@@ -255,7 +255,8 @@ jobs:
         timeout-minutes: 40
 
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
-  # check counts as passed on GitHub; a part that was skipped (a Markdown-only change, a PR's bench and deploy) is fine.
+  # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy and may
+  # skip web by path. Intentional skips still produce this required check.
   build:
     # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
     name: build
