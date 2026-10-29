@@ -181,7 +181,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | Chat 的 `web_search_options` | OpenAI 风格联网 | docs/api_reference/responses/web-search | 有：`proto/grammar.go:74,356-361` 作为能力要求 | 部分 | 部分 | 无 |
 | 服务端工具 `openrouter:web_fetch`、`datetime`、`image_generation`、`apply_patch`、`shell`、`bash`、`search_models`、`tool_search`、`fusion`、`advisor`、`subagent`，`GET /api/v1/tools` | OpenRouter 托管的工具 | docs/guides/features/server-tools | 没有 | 无 | 无 | 低优先；多数需要托管沙箱 |
 | `response-healing` 插件 | 修复非流式 JSON | [官方文档](https://openrouter.ai/docs/guides/features/plugins/response-healing)，2026-10-29 | 已实现非流式 Chat JSON 本地修复，语法缺陷失败保留原文 | 无 | 无 | 不作 schema 语义校验，边界见接入域 |
-| `context-compression` 插件 / `transforms:["middle-out"]` | 从中间压缩；关闭与小上下文默认值 | [官方文档](https://openrouter.ai/docs/guides/features/message-transforms)，2026-10-29 | 已实现 Chat 准入前按主模型规格压缩，保留首尾与工具配对；按字节上界保守估算 | 无 | 无 | 不实现 OpenRouter 跨模型上下文候选扩展，保护内容装不下则 400；见接入域 |
+| `context-compression` 插件 / `transforms:["middle-out"]` | 从中间压缩；关闭与小上下文默认值 | [官方文档](https://openrouter.ai/docs/guides/features/message-transforms)，2026-10-29 | 已实现 Chat 准入前按主模型规格压缩，保留首尾与工具配对；按字节上界保守估算 | 无 | 无 | 不实现 OpenRouter 跨模型上下文候选扩展；显式开启时保护内容装不下则 400，默认失败保留原文；见接入域 |
 | `alignment`、`armor` 插件（β） | 规则检查/工具调用安全分类 | docs/guides/features/plugins/alignment、armor | 未支持 id 返回 400 | 无 | 无 | 不跟 |
 | 护栏（Guardrails）：敏感信息、提示注入、密钥格式、预算、模型/供应商白名单 | 账户级策略，命中返回 403 | docs/guides/features/guardrails | 没有（账户有预算和限额，但没有请求内容护栏） | `na:common/str.go`（有敏感词处理，未深入） | 部分（`s2:internal/server/routes/prompt_audit_route_coverage_test.go`，仅见测试） | 对应 #315 的滥用防护，但形态不同 |
 

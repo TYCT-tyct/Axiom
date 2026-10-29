@@ -46,7 +46,7 @@
 
 `Inspect` 按 id 和选项校验 `plugins`、`transforms`，返回 `Request.Compression`、`ResponseHealing` 和 Chat `MessageCount`。`ExtensionError` 仍属于 `ErrInvalid`，gateway 对这种参数错误使用 OpenRouter 数字 400 外壳。接受的四个 id 与执行/拒绝/忽略规则只在[接入域的插件表](../../docs/domains/gateway.md#插件与提示词变换)维护；不支持的选项拒绝而非丢失。
 
-`CompressContext` 由 gateway 在主模型解析后、路由和预留之前调用，先按 `CompressionCost` 计入节点预算，再替换正文并重新 `Inspect`。不变量：路由、账单的输入暂估、签名保留和发送正文都来自同一份压缩后的请求；重试不重复压缩。纯文本截断按 UTF-8 边界进行；删除按用户对话轮次成组，不拆工具调用/结果；系统消息和多模态部件保留，固定部分过大时拒绝。8192 的默认阈值和保留两端的基线见领域文档。
+`CompressContext` 由 gateway 在主模型解析后、路由和预留之前调用，先按 `CompressionCost` 计入节点预算，再替换正文并重新 `Inspect`。不变量：路由、账单的输入暂估、签名保留和发送正文都来自同一份压缩后的请求；重试不重复压缩。纯文本截断按 UTF-8 边界进行；删除按用户对话轮次成组，不拆工具调用/结果；系统消息和多模态部件保留；显式开启时固定部分过大则拒绝，默认策略由 gateway 保留原请求继续正常路由。默认触发不把输出上限当作输入已占用的空间。8192 的默认阈值和保留两端的基线见领域文档。
 
 `usageContext` 仅为非流式 Chat 结构化输出启用修复，随 `UsageContext.ResponseHealing` 交给聚合器；计量仍读原上游流。`chatAggregate` 接收正文时预留修复缓冲（按 20 倍容量计入节点预算，覆盖解码、修复、重新转义、严格校验和最终正文的工作集），在结算封账之前就拦住预算不足；`Finish` 不再申请预算。仅 `stop` 完成、无拒绝/工具调用/失败的选项可修复，JSON 已合法则原字节保留；修复结果必须通过 `jsonx.Validate`，失败保留原文，不把截断或未知内容伪装成完整结果。支持闭合括号、逗号、未引号键和包裹文本提取，不校验 JSON Schema 语义。
 

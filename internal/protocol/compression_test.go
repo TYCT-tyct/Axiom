@@ -99,8 +99,15 @@ func TestMiddleOutMessageLimitAndInsufficientWindow(t *testing.T) {
 }
 
 func TestMiddleTextRetainsUnicodeEnds(t *testing.T) {
-	if got := middleText("😀"+strings.Repeat("中", 10)+"👋", 100); got != "😀👋" {
-		t.Fatalf("got %q", got)
+	for _, tc := range []struct{ text, want string }{
+		{"😀" + strings.Repeat("中", 10) + "👋", "😀👋"},
+		{"ab€", "a€"},
+		{"€ab", "€b"},
+		{"a中👋", "a👋"},
+	} {
+		if got := middleText(tc.text, 100); got != tc.want {
+			t.Errorf("%q: got %q, want %q", tc.text, got, tc.want)
+		}
 	}
 }
 

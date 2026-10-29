@@ -12,17 +12,30 @@ func (h *Handler) compress(c *Call, body []byte, req protocol.Request, snap *cat
 		return body, req, nil
 	}
 	output := serving.MaxOutput
-	if req.MaxOutput > 0 && (output == 0 || req.MaxOutput < output) {
+	if req.MaxOutput > 0 && req.MaxOutput < output {
 		output = req.MaxOutput
 	}
-	if int64(len(body)) <= serving.Context-output && req.MessageCount <= protocol.CompressionMessageLimit {
+	inputLimit := serving.Context - output
+	// Automatic compression must not treat a reserved output limit as consumed input space.
+	if req.Compression == protocol.CompressionDefault {
+		inputLimit = serving.Context
+	}
+	if int64(len(body)) <= inputLimit && req.MessageCount <= protocol.CompressionMessageLimit {
 		return body, req, nil
 	}
+	compressed, inspected, err := h.compressBody(c, body, req, serving.Context, output)
+	if err != nil && req.Compression == protocol.CompressionDefault {
+		return body, req, nil
+	}
+	return compressed, inspected, err
+}
+
+func (h *Handler) compressBody(c *Call, body []byte, req protocol.Request, context, output int64) ([]byte, protocol.Request, error) {
 	cost := protocol.CompressionCost(body)
 	if !h.Memory.Charge(cost) {
 		return nil, req, ErrOverloaded
 	}
-	compressed, err := protocol.CompressContext(body, serving.Context, output)
+	compressed, err := protocol.CompressContext(body, context, output)
 	held := int64(cap(compressed))
 	if err != nil {
 		held = 0

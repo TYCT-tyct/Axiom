@@ -211,7 +211,7 @@ func middleText(text string, remove int64) string {
 		return text
 	}
 	keep := max(first+last, len(text)-int(min(remove, int64(len(text)))))
-	left := max(first, keep/2)
+	left := max(first, min(keep/2, keep-last))
 	right := len(text) - (keep - left)
 	for left > 0 && !utf8.RuneStart(text[left]) {
 		left--
