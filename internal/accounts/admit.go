@@ -2,6 +2,8 @@ package accounts
 
 import (
 	"context"
+	"encoding/binary"
+	"math"
 	"net/netip"
 	"strings"
 	"uuid"
@@ -19,15 +21,16 @@ type AdmitRequest struct {
 // Admission is what a call with the key may do, read from the database in the admission transaction: routing and
 // billing take their rules from it, never from a cache. Only Admit makes one.
 type Admission struct {
-	owner       UserID
-	caller      Caller
-	tier        TierID
-	preset      *uuid.UUID
-	models      []string
-	spendLimit  *int64
-	limitReset  *string
-	budget      *int64
-	budgetReset *string
+	accountRate, keyRate int
+	owner                UserID
+	caller               Caller
+	tier                 TierID
+	preset               *uuid.UUID
+	models               []string
+	spendLimit           *int64
+	limitReset           *string
+	budget               *int64
+	budgetReset          *string
 }
 
 // OwnerID is the account owner, used to deduplicate independent health evidence.
@@ -57,6 +60,9 @@ func (a Admission) Models() []string { return a.models }
 // SpendLimit is the key's spend limit in billionths of a credit and its reset period (daily, weekly, monthly, or
 // empty for a total), if it has one.
 func (a Admission) SpendLimit() (int64, string, bool) { return limit(a.spendLimit, a.limitReset) }
+
+// RateLimits are the account and key business allowances; zero is unlimited.
+func (a Admission) RateLimits() (account, key int) { return a.accountRate, a.keyRate }
 
 // Budget is the workspace's budget, as SpendLimit is the key's.
 func (a Admission) Budget() (int64, string, bool) { return limit(a.budget, a.budgetReset) }
@@ -100,8 +106,18 @@ func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(t
 		copy(tier[:], row.AdmissionIds[:16])
 		copy(owner[:], row.AdmissionIds[16:])
 		return fn(tx, Admission{
-			owner: owner, caller: c, tier: tier, preset: row.PresetID, models: row.Models,
+			accountRate: admissionRate(row.AdmissionIds[32:36]),
+			keyRate:     admissionRate(row.AdmissionIds[36:40]),
+			owner:       owner, caller: c, tier: tier, preset: row.PresetID, models: row.Models,
 			spendLimit: row.SpendLimit, limitReset: row.LimitReset, budget: row.Budget, budgetReset: row.BudgetReset,
 		})
 	})
+}
+
+func admissionRate(data []byte) int {
+	n := binary.BigEndian.Uint32(data)
+	if n == math.MaxUint32 {
+		return DefaultRateRequests
+	}
+	return int(n)
 }

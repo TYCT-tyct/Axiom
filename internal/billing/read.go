@@ -31,8 +31,9 @@ func ReadFunds(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []uu
 }
 
 // KeyUsage is what a key has spent, in billionths of a credit. The day, week and month are the current UTC ones by the
-// database's clock.
+// database's clock. BudgetUsage holds the limit window from that same statement.
 type KeyUsage struct {
+	BudgetUsage
 	Total, Day, Week, Month int64
 	// Counted is what the key's limit counts now: spent and reserved over the window of its reset, as admission checks
 	// it. The limit's remaining is the limit less this.
@@ -46,5 +47,9 @@ func ReadKeyUsage(ctx context.Context, tx pg.Tx, key uuid.UUID, reset Reset) (Ke
 	if err != nil {
 		return KeyUsage{}, fmt.Errorf("billing: read the usage of a key: %w", err)
 	}
-	return KeyUsage{Total: row.Total, Day: row.Daily, Week: row.Weekly, Month: row.Monthly, Counted: row.Limited}, nil
+	usage := KeyUsage{
+		Total: row.Total, Day: row.Daily, Week: row.Weekly, Month: row.Monthly, Counted: row.Limited,
+		Spent: row.WindowSpent, Reserved: row.WindowReserved, ResetsAt: row.ResetsAt.UTC(),
+	}
+	return usage, nil
 }
