@@ -38,7 +38,10 @@ UPDATE suppliers.supplier_models SET present = false
 WHERE supplier_group_id = @supplier_group_id AND upstream_name = @upstream_name AND present;
 
 -- name: ListProjectedAliases :many
-SELECT supplier_group_id, upstream_name, model_id FROM suppliers.supplier_aliases WHERE supplier_id = @supplier_id;
+SELECT a.supplier_group_id, a.upstream_name, COALESCE(r.model_id, a.model_id) AS model_id
+FROM suppliers.supplier_aliases a
+LEFT JOIN LATERAL (SELECT model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY revision DESC LIMIT 1) r ON true
+WHERE a.supplier_id = @supplier_id;
 
 -- name: ListProjectedEndpoints :many
 -- The endpoints as they stand, with the fingerprint of the cost schedule in force: whether a new plan is a new row.

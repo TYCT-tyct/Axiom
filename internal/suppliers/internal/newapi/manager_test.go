@@ -109,14 +109,14 @@ func TestKeysAreReadWithTheirStatus(t *testing.T) {
 	f := newFake()
 	f.routes["GET /api/token/?p=1&page_size=100"] = sample(t, "57-list-keys2")
 	got, err := readKeys(t, open(t, f, now))
-	want := []adapter.KeyState{{Ref: "2", Status: adapter.KeyActive}, {Ref: "1", Status: adapter.KeyActive}}
+	want := []adapter.KeyState{{Ref: "2", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}, {Ref: "1", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}}
 	if err != nil || cmp.Diff(want, got) != "" {
 		t.Errorf("Keys: %+v, %v; want %+v", got, err, want)
 	}
 	f.routes["GET /api/token/?p=1&page_size=100"] = answer(200, `{"success":true,"data":{"total":3,"items":[
 		{"id":5,"status":4,"group":"vip"},{"id":6,"status":3,"group":""},{"id":7,"status":2,"group":""}]}}`)
 	got, err = readKeys(t, open(t, f, now))
-	want = []adapter.KeyState{{Ref: "5", GroupRef: "vip", Status: adapter.KeyQuotaExhausted}, {Ref: "6", Status: adapter.KeyExpired}, {Ref: "7", Status: adapter.KeyDisabled}}
+	want = []adapter.KeyState{{Ref: "5", GroupRef: "vip", Status: adapter.KeyQuotaExhausted, Policy: &adapter.KeyPolicy{Models: []string{}}}, {Ref: "6", Status: adapter.KeyExpired, Policy: &adapter.KeyPolicy{Models: []string{}}}, {Ref: "7", Status: adapter.KeyDisabled, Policy: &adapter.KeyPolicy{Models: []string{}}}}
 	if err != nil || cmp.Diff(want, got) != "" {
 		t.Errorf("Keys by status: %+v, %v; want %+v", got, err, want)
 	}

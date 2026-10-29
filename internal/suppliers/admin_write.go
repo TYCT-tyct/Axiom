@@ -464,12 +464,12 @@ type Mapping struct {
 	Group        *uuid.UUID
 	UpstreamName string
 	Model        uuid.UUID
+	Revision     int64
 }
 
-// MapModel makes an alias: in the scope, the name means the model. An alias is never changed; a wrong one is corrected
-// by a new alias in the narrower scope. A name that has an alias in that scope is ErrAliasExists. The model is the
-// catalog's, which the caller has checked.
-func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, group *uuid.UUID, name string, model uuid.UUID, reason string) (Mapping, error) {
+// MapModel creates an alias when rev is nil, or corrects a group alias at the revision the caller read.
+// The caller checks the catalog model; the supplier lock serializes revisions and their audit entries.
+func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, group *uuid.UUID, name string, model uuid.UUID, rev *int64, reason string) (Mapping, error) {
 	if _, err := a.locked(ctx, tx, supplier); err != nil {
 		return Mapping{}, err
 	}
@@ -478,21 +478,58 @@ func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, suppl
 			return Mapping{}, err
 		}
 	}
-	id, err := store.New().InsertAlias(ctx, tx, store.InsertAliasParams{SupplierID: supplier, SupplierGroupID: group, UpstreamName: name, ModelID: model})
-	if _, duplicate := pg.Duplicate(err); duplicate {
-		return Mapping{}, ErrAliasExists
+	q := store.New()
+	rows, err := q.CurrentAlias(ctx, tx, store.CurrentAliasParams{SupplierID: supplier, SupplierGroupID: group, UpstreamName: name})
+	if err != nil {
+		return Mapping{}, fmt.Errorf("read the alias: %w", err)
+	}
+	if err := checkMappingRevision(rows, group, rev); err != nil {
+		return Mapping{}, err
+	}
+	m := Mapping{Supplier: supplier, Group: group, UpstreamName: name, Model: model, Revision: 1}
+	detail := map[string]any{"upstream_name": name, "model": model.String()}
+	action := "supplier_alias.create"
+	if len(rows) != 0 {
+		current := rows[0]
+		m.ID, m.Revision = current.ID, current.Revision
+		if current.ModelID == model {
+			return m, nil
+		}
+		m.Revision++
+		err = q.InsertAliasRevision(ctx, tx, store.InsertAliasRevisionParams{
+			AliasID: m.ID, SupplierID: supplier, Revision: m.Revision,
+			PreviousModelID: current.ModelID, ModelID: model, Actor: actor.String(), Reason: reason,
+		})
+		detail["model_from"], detail["model_to"] = current.ModelID.String(), model.String()
+		action = "supplier_alias.revise"
+	} else {
+		m.ID, err = q.InsertAlias(ctx, tx, store.InsertAliasParams{SupplierID: supplier, SupplierGroupID: group, UpstreamName: name, ModelID: model})
 	}
 	if err != nil {
-		return Mapping{}, fmt.Errorf("make the alias: %w", err)
+		return Mapping{}, fmt.Errorf("write the alias: %w", err)
 	}
-	detail := map[string]any{"alias": id.String(), "upstream_name": name, "model": model.String()}
+	detail["alias"], detail["revision"] = m.ID.String(), m.Revision
 	if group != nil {
 		detail["group"] = group.String()
 	}
-	if err := a.record(ctx, tx, actor, "supplier_alias.create", supplier, reason, detail); err != nil {
+	if err := q.BumpConfigGen(ctx, tx, supplier); err != nil {
+		return Mapping{}, fmt.Errorf("raise the generation: %w", err)
+	}
+	if err := a.record(ctx, tx, actor, action, supplier, reason, detail); err != nil {
 		return Mapping{}, err
 	}
-	return Mapping{ID: id, Supplier: supplier, Group: group, UpstreamName: name, Model: model}, nil
+	return m, nil
+}
+
+// checkMappingRevision runs under the supplier lock, so two corrections of one revision cannot both commit.
+func checkMappingRevision(rows []store.CurrentAliasRow, group *uuid.UUID, rev *int64) error {
+	if rev != nil && (len(rows) == 0 || rows[0].Revision != *rev) {
+		return ErrAliasRevision
+	}
+	if len(rows) != 0 && (group == nil || rev == nil) {
+		return ErrAliasExists
+	}
+	return nil
 }
 
 // PendingMapping is an upstream name waiting to be mapped.

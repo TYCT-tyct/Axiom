@@ -21,6 +21,46 @@ func (q *Queries) BumpConfigGen(ctx context.Context, db DBTX, id uuid.UUID) erro
 	return err
 }
 
+const currentAlias = `-- name: CurrentAlias :many
+SELECT a.id, COALESCE(r.model_id, a.model_id) AS model_id, COALESCE(r.revision, 1)::bigint AS revision
+FROM suppliers.supplier_aliases a
+LEFT JOIN LATERAL (SELECT model_id, revision FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY revision DESC LIMIT 1) r ON true
+WHERE a.supplier_id = $1 AND a.supplier_group_id IS NOT DISTINCT FROM $2::uuid
+    AND a.upstream_name = $3
+`
+
+type CurrentAliasParams struct {
+	SupplierID      uuid.UUID
+	SupplierGroupID *uuid.UUID
+	UpstreamName    string
+}
+
+type CurrentAliasRow struct {
+	ID       uuid.UUID
+	ModelID  uuid.UUID
+	Revision int64
+}
+
+func (q *Queries) CurrentAlias(ctx context.Context, db DBTX, arg CurrentAliasParams) ([]CurrentAliasRow, error) {
+	rows, err := db.Query(ctx, currentAlias, arg.SupplierID, arg.SupplierGroupID, arg.UpstreamName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CurrentAliasRow
+	for rows.Next() {
+		var i CurrentAliasRow
+		if err := rows.Scan(&i.ID, &i.ModelID, &i.Revision); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteSupplierLogin = `-- name: DeleteSupplierLogin :exec
 DELETE FROM suppliers.supplier_logins WHERE supplier_id = $1
 `
@@ -228,6 +268,34 @@ func (q *Queries) InsertAlias(ctx context.Context, db DBTX, arg InsertAliasParam
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertAliasRevision = `-- name: InsertAliasRevision :exec
+INSERT INTO suppliers.supplier_alias_revisions (alias_id, supplier_id, revision, previous_model_id, model_id, actor, reason)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertAliasRevisionParams struct {
+	AliasID         uuid.UUID
+	SupplierID      uuid.UUID
+	Revision        int64
+	PreviousModelID uuid.UUID
+	ModelID         uuid.UUID
+	Actor           string
+	Reason          string
+}
+
+func (q *Queries) InsertAliasRevision(ctx context.Context, db DBTX, arg InsertAliasRevisionParams) error {
+	_, err := db.Exec(ctx, insertAliasRevision,
+		arg.AliasID,
+		arg.SupplierID,
+		arg.Revision,
+		arg.PreviousModelID,
+		arg.ModelID,
+		arg.Actor,
+		arg.Reason,
+	)
+	return err
 }
 
 const insertBindingCredential = `-- name: InsertBindingCredential :exec
