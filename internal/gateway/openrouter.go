@@ -26,6 +26,8 @@ const orListPath = "/api/v1/models"
 // orMaxLimit is the most models one page may hold: the maximum of OpenRouter's limit parameter (OpenAPI `/models`).
 const orMaxLimit = 1000
 
+const orDefaultLimit = 500
+
 // listOpenRouterModels answers GET /api/v1/models in OpenRouter's shape: every model this key may call that the routing
 // snapshot serves, with the price the site sells it at, filtered and paged by the query parameters Axiom keeps. The list
 // is the one the last build published with the snapshot, so the request reads no price and no spec of its own.
@@ -59,37 +61,35 @@ func (h *Handler) retrieveOpenRouterModel(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer release()
-	var entry orEntry
+	var entry *orModel
 	v, err := h.visible(r)
 	if err == nil {
-		entry, err = h.Models.published().entry(v, r.PathValue("model"))
+		entry, err = h.Models.published().find(v, r.PathValue("model"))
 	}
 	if err != nil {
 		h.fail(w, r, format, err)
 		return
 	}
-	writeJSON(w, orModelResponse{Data: entry})
+	writeJSON(w, orModelResponse{Data: entry.orEntry})
 }
 
-// entry is the model the name resolves to, as the list holds it: the name is resolved against the catalog snapshot the
-// list was built from, so the entry is the one the list shows and not one a newer snapshot would describe.
-func (l *openRouterListing) entry(v visibility, name string) (orEntry, error) {
-	if l.snap == nil { // before the first build: nothing is routed, so nothing is fetched
-		return orEntry{}, errNoModel
+// find resolves names against the published catalog, so an endpoint and its model detail describe the same build.
+func (l *openRouterListing) find(v visibility, name string) (*orModel, error) {
+	if l.snap == nil {
+		return nil, errNoModel
 	}
 	resolved, err := l.snap.ResolvePublic(name)
 	if err != nil {
-		return orEntry{}, err
+		return nil, err
 	}
-	if !l.shows(v, resolved.Model) {
-		return orEntry{}, errNoModel
-	}
-	for i := range l.models {
-		if l.models[i].model == resolved.Model {
-			return l.models[i].orEntry, nil
+	if l.shows(v, resolved.Model) {
+		for i := range l.models {
+			if l.models[i].model == resolved.Model {
+				return &l.models[i], nil
+			}
 		}
 	}
-	return orEntry{}, errNoModel
+	return nil, errNoModel
 }
 
 // ModelList is the list in OpenRouter's shape that the handler serves: the one published with the routing snapshot it was
@@ -147,16 +147,22 @@ func (l *openRouterListing) shows(v visibility, m catalog.ModelID) bool {
 // declare its limits or whose price cannot fill prompt and completion is left out because OpenRouter's object cannot be
 // written without them.
 func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
-	served map[catalog.ModelID]struct{},
+	endpoints []routing.Endpoint,
 ) (*openRouterListing, error) {
-	l := &openRouterListing{snap: snap, served: served}
-	for m := range snap.Models() {
-		if _, ok := served[m.ID]; !ok {
+	served := make(map[catalog.ModelID]struct{}, len(endpoints))
+	byModel := make(map[catalog.ModelID][]routing.Endpoint)
+	for _, e := range endpoints {
+		if e.Owner != (routing.Owner{}) {
 			continue
 		}
+		served[e.Model] = struct{}{}
+		byModel[e.Model] = append(byModel[e.Model], e)
+	}
+	l := &openRouterListing{snap: snap, served: served}
+	for m := range snap.Models() {
 		serving, serves := m.Serving()
 		sold, priced := prices[m.ID]
-		if !serves || !priced {
+		if _, routed := served[m.ID]; !routed || !serves || !priced {
 			continue
 		}
 		id, ok := l.publicID(m)
@@ -167,9 +173,14 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			l.models = append(l.models, e)
+		if !ok {
+			continue
 		}
+		e.endpoints, err = encodeOREndpoints(e.orEntry, byModel[m.ID])
+		if err != nil {
+			return nil, err
+		}
+		l.models = append(l.models, e)
 	}
 	return l, nil
 }
@@ -188,13 +199,14 @@ func (l *openRouterListing) publicID(m catalog.Model) (string, bool) {
 // and orders by, so a request reads neither a spec nor a price again.
 type orModel struct {
 	orEntry
-	body    []byte
-	model   catalog.ModelID
-	author  string
-	search  string // the catalog name folded, for q
-	prompt  platform.UnitPrice
-	output  platform.UnitPrice
-	average platform.Exact // prompt + completion: the average the price orderings compare, undivided
+	endpoints []byte // discovery response, encoded from the same build
+	body      []byte
+	model     catalog.ModelID
+	author    string
+	search    string // the catalog name folded, for q
+	prompt    platform.UnitPrice
+	output    platform.UnitPrice
+	average   platform.Exact // prompt + completion: the average the price orderings compare, undivided
 }
 
 // orModelResponse is OpenRouter's answer for one model (spec `ModelResponse`).
@@ -259,16 +271,15 @@ type orTopProvider struct {
 	IsModerated         bool  `json:"is_moderated"`
 }
 
-// orReasoning is OpenRouter's reasoning metadata (spec `ModelReasoning`). mandatory is false: no spec key says a model
-// refuses to be asked not to reason, and the gateway asks either way. supports_max_tokens is present when the spec's
+// orReasoning is OpenRouter's reasoning metadata (spec `ModelReasoning`). The catalog does not record whether reasoning
+// is mandatory, so that required member is deliberately omitted (gateway.md). supports_max_tokens is present when the spec's
 // thinking is Anthropic's budget form, which is reasoning.max_tokens in a request.
 type orReasoning struct {
-	Mandatory         bool `json:"mandatory"`
 	SupportsMaxTokens bool `json:"supports_max_tokens,omitempty"`
 }
 
 // orLinks is OpenRouter's links (spec `ModelLinks`): details is the model's own path in this API, the only page Axiom has
-// for a model. OpenRouter points at its /models/{author}/{slug}/endpoints page, which Axiom does not serve.
+// for a model.
 type orLinks struct {
 	Details string `json:"details"`
 }
@@ -288,7 +299,7 @@ func newORModel(id string, m catalog.Model, s catalog.Serving, p catalog.Schedul
 		ID: id, CanonicalSlug: id, Name: nameOf(id), Created: createdUnix, Pricing: newORPricing(p, s.Abilities),
 		ContextLength: s.Context, Architecture: newORArchitecture(s.Abilities),
 		TopProvider:         orTopProvider{ContextLength: s.Context, MaxCompletionTokens: s.MaxOutput},
-		SupportedParameters: orParameters(s, d, reasons), Links: orLinks{Details: orListPath + "/" + id},
+		SupportedParameters: orParameters(s, d, reasons), Links: orLinks{Details: orListPath + "/" + id + "/endpoints"},
 	}
 	if reasons {
 		entry.Reasoning = &orReasoning{SupportsMaxTokens: d.Thinking == catalog.ThinkingManual}
