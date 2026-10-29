@@ -298,7 +298,8 @@ JOIN suppliers.supplier_groups g ON g.id=e.supplier_group_id AND g.selected AND 
 JOIN LATERAL (SELECT u.id,u.value FROM suppliers.unit_values u WHERE u.supplier_id=s.id AND u.currency=s.settlement_currency AND u.native_unit=s.native_unit ORDER BY u.id DESC LIMIT 1) v ON true
 JOIN suppliers.cost_schedules cs ON cs.id=e.cost_schedule_id
 WHERE e.enabled AND e.cost_state='known' AND s.status IN ('active','low_balance') AND s.balance_native>0
-AND EXISTS (SELECT 1 FROM suppliers.credentials c WHERE c.supplier_group_id=e.supplier_group_id AND c.status='active' AND c.ciphertext IS NOT NULL)
+AND EXISTS (SELECT 1 FROM suppliers.credentials c WHERE c.supplier_group_id=e.supplier_group_id AND c.status='active' AND c.ciphertext IS NOT NULL
+    AND (c.allowed_models IS NULL OR e.upstream_name = ANY(c.allowed_models)))
 ORDER BY e.id
 `
 
@@ -350,6 +351,7 @@ JOIN suppliers.suppliers s ON s.id = e.supplier_id
 JOIN LATERAL (SELECT u.id, u.value FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1) v ON true
 JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id AND g.selected AND g.present
 JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active' AND c.ciphertext IS NOT NULL
+    AND (c.allowed_models IS NULL OR e.upstream_name = ANY(c.allowed_models))
 JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
 WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance') AND s.balance_native > 0
 ORDER BY e.id, c.id

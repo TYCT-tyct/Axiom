@@ -94,3 +94,29 @@ func pageOf(t *testing.T, r adapter.Request) int {
 	}
 	return page
 }
+
+func TestLegacyKeyListingRestartsBeforeProjectingPolicies(t *testing.T) {
+	t.Parallel()
+	asked := []int{}
+	total := 2
+	client := funcClient(func(r adapter.Request) (adapter.Response, error) {
+		asked = append(asked, pageOf(t, r))
+		return sample(t, "57-list-keys2"), nil
+	})
+	legacy := adapter.Listing(`{"v":1,"page":2,"total":2,"keys":[{"Ref":"1","GroupRef":"","Status":0,"ResetAt":"0001-01-01T00:00:00Z"}]}`)
+	page, err := open(t, client, t0).Keys(t.Context(), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(asked, []int{1}) {
+		t.Fatalf("resumed legacy keys without policies: pages %v", asked)
+	}
+	if !page.Done || len(page.Items) != total {
+		t.Fatalf("incomplete fresh listing: %+v", page)
+	}
+	for _, key := range page.Items {
+		if key.Policy == nil || key.Policy.Models != nil {
+			t.Fatalf("key %s kept an unread legacy policy", key.Ref)
+		}
+	}
+}

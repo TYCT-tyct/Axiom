@@ -1,0 +1,82 @@
+{
+  "session": "c4bbbfa5ecaa4615727ca7e5a49facde",
+  "device": "4d18b626afe1c93e61564c049c13a5cd",
+  "turns": [
+    {
+      "client": {
+        "model": "client-model",
+        "stream": true,
+        "max_tokens": 9,
+        "metadata": {
+          "user_id": "conv-1"
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "first"
+          }
+        ]
+      },
+      "upstream": {
+        "model": "up-1",
+        "stream": true,
+        "max_tokens": 9,
+        "metadata": {
+          "user_id": "{\"device_id\":\"4d18b626afe1c93e61564c049c13a5cd\",\"account_uuid\":\"\",\"session_id\":\"c4bbbfa5ecaa4615727ca7e5a49facde\"}"
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "first"
+          }
+        ]
+      }
+    },
+    {
+      "client": {
+        "model": "client-model",
+        "stream": true,
+        "max_tokens": 9,
+        "metadata": {
+          "user_id": "conv-1"
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "first"
+          },
+          {
+            "role": "assistant",
+            "content": "ok"
+          },
+          {
+            "role": "user",
+            "content": "second"
+          }
+        ]
+      },
+      "upstream": {
+        "model": "up-1",
+        "stream": true,
+        "max_tokens": 9,
+        "metadata": {
+          "user_id": "{\"device_id\":\"4d18b626afe1c93e61564c049c13a5cd\",\"account_uuid\":\"\",\"session_id\":\"c4bbbfa5ecaa4615727ca7e5a49facde\"}"
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "first"
+          },
+          {
+            "role": "assistant",
+            "content": "ok"
+          },
+          {
+            "role": "user",
+            "content": "second"
+          }
+        ]
+      }
+    }
+  ]
+}
