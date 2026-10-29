@@ -3,6 +3,7 @@ package routing_test
 import (
 	"math"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,4 +99,33 @@ func endpoints(p routing.Plan) []routing.EndpointID {
 		out[i] = e.Endpoint
 	}
 	return out
+}
+
+// TestFastestSaysWhenUnmeasured: a fastest-first route over candidates none of which is measured is marked in the
+// record, which is where the call says why it went where it did; one measured candidate, or another strategy, is not.
+func TestFastestSaysWhenUnmeasured(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		preset routing.Preset
+		second func(*routing.Endpoint)
+		want   bool
+	}{
+		{"fastest, none measured", fastestPreset(), unmeasured, true},
+		{"fastest, one measured", fastestPreset(), speed(50, time.Second), false},
+		{"balanced, none measured", openPreset(), unmeasured, false},
+	} {
+		h := newHarness(t, routing.Config{}, c.preset, endpoint(t, 1, unmeasured), endpoint(t, 2, c.second))
+		p := h.plan(input())
+		if p.Record.Unmeasured != c.want {
+			t.Errorf("%s: unmeasured %v, want %v", c.name, p.Record.Unmeasured, c.want)
+		}
+		got, err := p.Record.JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(got), `"fastest_unmeasured":true`) != c.want {
+			t.Errorf("%s: stored record %s", c.name, got)
+		}
+	}
 }
