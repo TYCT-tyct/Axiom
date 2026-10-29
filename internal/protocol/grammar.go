@@ -78,10 +78,27 @@ var grammars = [...]grammar{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
 			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
 			"tools": (*scanner).tools, "functions": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
+			"function_call":    func(s *scanner) error { s.r.legacy = s.r.legacy || s.dec.PeekKind() != 'n'; return s.skip() },
+			"tool_choice":      func(s *scanner) error { s.r.modernTools = s.r.modernTools || s.dec.PeekKind() != 'n'; return s.skip() },
 			"reasoning_effort": (*scanner).reasoningEffort, "reasoning": (*scanner).reasoning,
 			"response_format": (*scanner).format, "service_tier": (*scanner).serviceTier,
 		}),
 		part: fields{
+			"function_call": func(s *scanner) error {
+				// Root object, messages array, message object; content parts are caller data.
+				if s.dec.StackDepth() == 3 {
+					s.r.legacy = s.r.legacy || s.dec.PeekKind() != 'n'
+				}
+				return s.skip()
+			},
+			"role": func(s *scanner) error {
+				if s.dec.StackDepth() != 3 || s.dec.PeekKind() != '"' {
+					return s.skip()
+				}
+				old, err := s.is("function")
+				s.r.legacy = s.r.legacy || old
+				return err
+			},
 			"type": (*scanner).partType, "content": (*scanner).content, "cache_control": (*scanner).cacheControl,
 			"image_url": func(s *scanner) error { return s.object(chatImageFields) },
 			"file":      func(s *scanner) error { return s.object(chatFileFields) },
@@ -286,7 +303,16 @@ func (s *scanner) edits() error {
 	return s.array(func(s *scanner) error { return s.object(editFields) })
 }
 
-func (s *scanner) tools() error { return s.array((*scanner).tool) }
+func (s *scanner) tools() error {
+	legacy := string(s.name) == "functions"
+	return s.array(func(s *scanner) error {
+		if s.r.Format == Chat {
+			s.r.legacy = s.r.legacy || legacy
+			s.r.modernTools = s.r.modernTools || !legacy
+		}
+		return s.tool()
+	})
+}
 
 func (s *scanner) tool() error {
 	s.p = part{kind: Tools}
