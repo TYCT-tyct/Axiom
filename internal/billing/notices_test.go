@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform/pg"
 )
 
@@ -19,10 +20,10 @@ func TestBalanceNoticeJournalRetriesAndPaidCredits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var notices []BalanceNotice
+	var notices []accounts.BalanceNotice
 	sentinel := errors.New("recipient rolled back")
 	err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-		if err := ConsumeBalanceNotices(t.Context(), tx, func(BalanceNotice) error { return sentinel }); err != nil {
+		if err := ConsumeBalanceNotices(t.Context(), tx, func([]accounts.BalanceNotice) error { return sentinel }); err != nil {
 			return err
 		}
 		t.Fatal("no journal")
@@ -33,7 +34,7 @@ func TestBalanceNoticeJournalRetriesAndPaidCredits(t *testing.T) {
 	}
 	for range 2 {
 		if err = b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-			return ConsumeBalanceNotices(t.Context(), tx, func(n BalanceNotice) error { notices = append(notices, n); return nil })
+			return ConsumeBalanceNotices(t.Context(), tx, func(n []accounts.BalanceNotice) error { notices = append(notices, n...); return nil })
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -60,9 +61,9 @@ func TestBalanceNoticePreservesIntermediateChanges(t *testing.T) {
 	// Ordinary credit is not paid, and every intermediate decrease survives before consumption.
 	b.credit(20)
 	b.sql("UPDATE billing.balances SET balance=90", "UPDATE billing.balances SET balance=80", "UPDATE billing.balances SET balance=200", "UPDATE billing.balances SET balance=70")
-	var notices []BalanceNotice
+	var notices []accounts.BalanceNotice
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-		return ConsumeBalanceNotices(t.Context(), tx, func(n BalanceNotice) error { notices = append(notices, n); return nil })
+		return ConsumeBalanceNotices(t.Context(), tx, func(n []accounts.BalanceNotice) error { notices = append(notices, n...); return nil })
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestBalanceNoticeConsumersClaimDistinctRows(t *testing.T) {
 	first := make(chan error, 1)
 	go func() {
 		first <- b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-			return ConsumeBalanceNotices(t.Context(), tx, func(BalanceNotice) error {
+			return ConsumeBalanceNotices(t.Context(), tx, func([]accounts.BalanceNotice) error {
 				close(claimed)
 				select {
 				case <-release:
@@ -102,11 +103,29 @@ func TestBalanceNoticeConsumersClaimDistinctRows(t *testing.T) {
 	}
 	var count int
 	err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-		return ConsumeBalanceNotices(t.Context(), tx, func(BalanceNotice) error { count++; return nil })
+		return ConsumeBalanceNotices(t.Context(), tx, func(n []accounts.BalanceNotice) error { count += len(n); return nil })
 	})
 	close(release)
 	firstErr := <-first
 	if err != nil || firstErr != nil || count != 0 {
 		t.Fatalf("concurrent claims: %d %v %v", count, err, firstErr)
+	}
+}
+
+func TestBalanceNoticeConsumptionIsBoundedAndBatched(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	b.sql(`INSERT INTO billing.balance_notices(site_id,account_id,previous,balance,top_up)
+ SELECT site_id,account_id,1,0,0 FROM billing.balances CROSS JOIN generate_series(1,1500)`)
+	for _, want := range []int{1000, 500, 0} {
+		calls, count := 0, 0
+		if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
+			return ConsumeBalanceNotices(t.Context(), tx, func(n []accounts.BalanceNotice) error { calls++; count = len(n); return nil })
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if count != want || (want > 0 && calls != 1) || (want == 0 && calls != 0) {
+			t.Fatalf("batch: calls=%d count=%d want=%d", calls, count, want)
+		}
 	}
 }

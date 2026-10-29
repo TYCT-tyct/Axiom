@@ -51,20 +51,22 @@ type userNotice struct {
 	site, account, user         uuid.UUID
 	email, brand, url, language string
 	emailDone                   bool
+	preferences                 NotificationPreferences
 }
 
-// DispatchUserNotices freezes delivery destinations and queues at most 100 notices in the caller's transaction.
-func DispatchUserNotices(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mailer) error {
-	rows, err := tx.Query(ctx, `SELECT n.id,n.site_id,n.account_id,n.user_id,n.kind,n.value::text,n.at,n.email_done,u.email,s.name,s.currency
- FROM accounts.user_notices n JOIN accounts.users u ON u.id=n.user_id JOIN accounts.sites s ON s.id=n.site_id
- WHERE NOT n.dispatched ORDER BY n.id FOR UPDATE OF n SKIP LOCKED LIMIT 100`)
+// DispatchUserNotices freezes destinations for at most 100 notices and returns how many were dispatched.
+func DispatchUserNotices(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mailer) (int, error) {
+	p := notificationDefaults()
+	rows, err := tx.Query(ctx, `SELECT n.id,n.site_id,n.account_id,n.user_id,n.kind,n.value::text,n.at,n.email_done,u.email,s.name,s.currency,coalesce(p.low_balance,$1),coalesce(p.top_up,$2),coalesce(p.factor_changed,$3),coalesce(p.webhook_url,''),coalesce(p.language,$4)
+ FROM accounts.user_notices n JOIN accounts.users u ON u.id=n.user_id JOIN accounts.sites s ON s.id=n.site_id LEFT JOIN accounts.notification_preferences p ON p.user_id=n.user_id
+ WHERE NOT n.dispatched ORDER BY n.id FOR UPDATE OF n SKIP LOCKED LIMIT 100`, p.LowBalance, p.TopUp, p.FactorChanged, p.Language)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var notices []userNotice
 	for rows.Next() {
 		var n userNotice
-		if err = rows.Scan(&n.ID, &n.site, &n.account, &n.user, &n.Kind, &n.Value, &n.At, &n.emailDone, &n.email, &n.brand, &n.Currency); err != nil {
+		if err = rows.Scan(&n.ID, &n.site, &n.account, &n.user, &n.Kind, &n.Value, &n.At, &n.emailDone, &n.email, &n.brand, &n.Currency, &n.preferences.LowBalance, &n.preferences.TopUp, &n.preferences.FactorChanged, &n.preferences.WebhookURL, &n.preferences.Language); err != nil {
 			break
 		}
 		notices = append(notices, n)
@@ -74,42 +76,44 @@ func DispatchUserNotices(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mai
 	}
 	rows.Close()
 	if err != nil {
-		return err
+		return 0, err
 	}
+	dispatched := 0
 	for _, n := range notices {
-		if err = dispatchUserNotice(ctx, tx, q, m, n); err != nil {
-			return err
+		done, err := dispatchUserNotice(ctx, tx, q, m, n)
+		if err != nil {
+			return 0, err
+		}
+		if done {
+			dispatched++
 		}
 	}
-	return maintainUserNotices(ctx, tx)
+	return dispatched, nil
 }
 
-func dispatchUserNotice(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mailer, n userNotice) error {
-	p, err := GetNotificationPreferences(ctx, tx, n.user)
-	if err != nil {
-		return err
-	}
+func dispatchUserNotice(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mailer, n userNotice) (bool, error) {
+	p := n.preferences
 	enabled := map[string]bool{"low_balance": p.LowBalance, "top_up": p.TopUp, "factor_changed": p.FactorChanged}[n.Kind]
 	needsEmail := enabled && !n.emailDone
 	if needsEmail && !m.Configured() {
-		return nil
+		return false, nil
 	}
 	state, url := "none", ""
 	emailFailed := needsEmail && !emailAllowed(n.email)
 	n.language = p.Language
 	if needsEmail && !emailFailed {
-		if err = m.Enqueue(ctx, tx, mail.Tenant{Site: n.site, Account: n.account}, noticeMail(n)); err != nil {
-			return err
+		if err := m.Enqueue(ctx, tx, mail.Tenant{Site: n.site, Account: n.account}, noticeMail(n)); err != nil {
+			return false, err
 		}
 	}
 	if enabled && p.WebhookURL != "" {
 		state, url = "queued", p.WebhookURL
-		if _, err = q.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: noticeArgs{ID: n.ID}}}); err != nil {
-			return err
+		if _, err := q.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: noticeArgs{ID: n.ID}}}); err != nil {
+			return false, err
 		}
 	}
-	_, err = tx.Exec(ctx, `UPDATE accounts.user_notices SET dispatched=true,webhook_url=$2,webhook_state=$3,email_failed=$4 WHERE id=$1`, n.ID, url, state, emailFailed)
-	return err
+	_, err := tx.Exec(ctx, `UPDATE accounts.user_notices SET dispatched=true,webhook_url=$2,webhook_state=$3,email_failed=$4 WHERE id=$1`, n.ID, url, state, emailFailed)
+	return err == nil, err
 }
 
 func noticeMail(n userNotice) mail.Message {
@@ -139,7 +143,8 @@ func noticeMail(n userNotice) mail.Message {
 	return mail.Message{To: n.email, Subject: brand + " — " + names[n.Kind], Text: text, HTML: "<p>" + html.EscapeString(text) + "</p>"}
 }
 
-func maintainUserNotices(ctx context.Context, tx pg.Tx) error {
+// MaintainUserNotices reconciles webhook receipts and retention once per evaluation run.
+func MaintainUserNotices(ctx context.Context, tx pg.Tx) error {
 	// A rescue/cancellation can bypass the worker's last attempt; do not retain a queued receipt forever.
 	rows, err := tx.Query(ctx, `SELECT id FROM accounts.user_notices WHERE dispatched AND webhook_state='queued' ORDER BY id LIMIT 100`)
 	if err != nil {

@@ -183,7 +183,7 @@
 
 后台与完成重置都按「请求行 → 用户行 → 令牌」加锁；重发只锁请求行，其他因素变化只锁用户行，避免锁顺序反转。后台先锁最新请求，检查未过期且尚未处理，查询本站当前启用的 HTTPS 控制台域名，优先本次请求登记的域名，停用后才回退，再锁用户，按当前因素版本签发令牌；令牌、outbox、请求邮箱清除同事务。未知或停用用户只清除请求邮箱。事务提交后任务重试看到邮箱为空，直接结束。重置先在无范围事务里按秘密定位，再在站点范围内重锁请求与用户；条件消费要同时匹配令牌哈希、用户、因素版本、未用及库的实际时钟未到期，影响行数必须为 1。使用 `clock_timestamp()` 而不是事务开始时间，避免锁等待跨过期限后仍可消费。
 
-`RequestPasswordReset` 接收邮箱、语言、客户端 IP；`ResetPassword` 接收本站 host、令牌与新密码；`ChangePassword` 接收 Principal 和当前/新密码。新密码均复用 `passwordAllowed`、`hashPassword` 和并发哈希槽；慢哈希在锁外。改密码需要非 pending 控制台会话，TOTP 开启时须已验证 MFA；当前密码错误计用户失败桶。两种密码写入都调用已有 `SetPassword` 提升因素版本，写同一种 `user.password_set` 审计，并按因素提醒开关经 outbox 发送 `passwordMail` 通知，任一步失败整体回滚。重置不签发会话；改密码签发原等级的新会话，新 CSRF 和 MFA 用户补发的恢复码在响应中均为可选字段；`insertRecoveryCodes` 与因素变更共用。TOTP 保持，旧会话、恢复码和重置令牌因版本变化失效；邮件重置通知提醒登录后重新生成恢复码。历史无效邮箱返回 `ErrBadEmail`（422）并回滚，注册和找回使用相同的可解析邮箱边界校验。
+`RequestPasswordReset` 接收邮箱、语言、客户端 IP；`ResetPassword` 接收本站 host、令牌与新密码；`ChangePassword` 接收 Principal 和当前/新密码。新密码均复用 `passwordAllowed`、`hashPassword` 和并发哈希槽；慢哈希在锁外。改密码需要非 pending 控制台会话，TOTP 开启时须已验证 MFA；当前密码错误计用户失败桶。两种密码写入都调用已有 `SetPassword` 提升因素版本，写同一种 `user.password_set` 审计，并经 outbox 必发不可关闭的 `passwordMail` 安全邮件，任一步失败整体回滚。重置不签发会话；改密码签发原等级的新会话，新 CSRF 和 MFA 用户补发的恢复码在响应中均为可选字段；`insertRecoveryCodes` 与因素变更共用。TOTP 保持，旧会话、恢复码和重置令牌因版本变化失效；邮件重置通知提醒登录后重新生成恢复码。历史无效邮箱返回 `ErrBadEmail`（422）并回滚，注册和找回使用相同的可解析邮箱边界校验。
 
 找回邮箱计数独立使用 `reset_email` 键及本地 `guards.resets`（复用可配置的 `email_sign_in_failures`，默认 15 分钟 10 次），不返还；IP 共用登录计数。共享键仍只含 HMAC、故障按节点分摊，算法复用 `takeAttempt`。测试见 `password_reset_test.go`、`password_change_test.go` 和控制台的 `console_password_test.go`：真实数据库、受控过期、显式后台推进，不用耗时阈值判断安全。
 
@@ -354,8 +354,8 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 
 ## 用户提醒与站内公告
 
-`notification_preferences` 是用户的账户数据，空值使用代码默认值；`user_notices` 用 `(user_id,kind,source)` 唯一键去重。因素版本改变的 invoker trigger 与用户变更同事务，覆盖控制台、CLI 和旧节点。密码变更沿用同步入 outbox 的模板，尊重因素开关，并把对应事件的 email_done 置真，后台只补 Webhook，不再排第二封邮件。其他因素变化由后台拼站点品牌的 zh/en 邮件。Webhook 发送不引用运维配置或运维密钥，URL 只在租户表，任务只有通知 ID；正文包括稳定 ID、kind、字符串 value（金额为十亿分之一站点额度；因素为版本）、currency 和 at。此用户 Webhook 没有签名，接收方只能按通知 ID 去重，不能据此执行敏感操作。
+`notification_preferences` 是用户的账户数据，没有行时使用代码默认值，保存后各列均非 NULL；`user_notices` 用 `(user_id,kind,source)` 唯一键去重。因素版本改变的 invoker trigger 与用户变更同事务，覆盖控制台、CLI 和旧节点。密码变更沿用同步入 outbox 的模板，不受因素开关影响，并把对应事件的 email_done 置真，后台只补 Webhook，不再排第二封邮件。其他因素变化由后台拼站点品牌的 zh/en 邮件。Webhook 发送不引用运维配置或运维密钥，URL 只在租户表，任务只有通知 ID；正文包括稳定 ID、kind、字符串 value（金额为十亿分之一站点额度；因素为版本）、currency 和 at。此用户 Webhook 没有签名，接收方只能按通知 ID 去重，不能据此执行敏感操作。
 
-组装层的周期任务按活跃状态去重，避免重试占满通知队列；每分钟在平台事务内调用 billing 的有界 journal 消费，再调用 `DispatchUserNotices`；多个节点使用 `FOR UPDATE SKIP LOCKED`，事件/派发标记、outbox、River 任务全成全败。邮件未配置的节点保留待派发，不影响原账本或因素写入；密码修改原有的 SMTP 就绪要求保持。邮件与 Webhook 最多五次持久尝试，Webhook 最后一次失败记 failed 后完成，异常丢弃/取消由下一轮检查持久任务收尾；通知 30 天后分批清理，排队 Webhook 受保护。SMTP 结果仍查 mail outbox、River 与日志；不能入 outbox 的历史非法邮箱记 email_failed，不悄悄略过，也不堵住整个批次。低余额是已过账钱包余额穿越，不是可用余额，也不是盗刷检测。
+组装层的周期任务按活跃状态去重，避免重试占满通知队列；每分钟先调用一次 `MaintainUserNotices`，再在每批平台事务内调用 billing 的集合 journal 消费（最多 1000 行）与 `RecordBalanceNotices`，再调用 `DispatchUserNotices`（最多 100 条）；即使 journal 为空也继续派发积压，直到没有进展或 30 秒预算不足以开始下一批，预算耗尽正常完成；多个节点使用 `FOR UPDATE SKIP LOCKED`，事件/派发标记、outbox、River 任务全成全败。邮件未配置的节点保留待派发，不影响原账本或因素写入；密码修改原有的 SMTP 就绪要求保持。邮件与 Webhook 最多五次持久尝试，Webhook 最后一次失败记 failed 后完成，异常丢弃/取消由下一轮检查持久任务收尾；通知 30 天后分批清理，排队 Webhook 受保护。SMTP 结果仍查 mail outbox、River 与日志；不能入 outbox 的历史非法邮箱记 email_failed，不悄悄略过，也不堵住整个批次。低余额是已过账钱包余额穿越，不是可用余额，也不是盗刷检测。
 
-`announcements` 是站点公开数据，账户范围通过 home_site 读取本站；发布/撤下只限平台，内容不可更新，撤下为终态。控制台按服务端时间取 `[starts_at,ends_at)` 的前 100 条。管理写入经 MFA、sites.manage、幂等与审计；控制台不接受选择另一个站点。文本只渲染为 React 文本节点。
+`announcements` 对外使用 `AnnouncementID`（`ann_` TypeID），是站点公开数据，账户范围通过 home_site 读取本站；发布/撤下只限平台，内容不可更新，撤下为终态。控制台按服务端时间取 `[starts_at,ends_at)` 的前 100 条。管理写入经 MFA、sites.manage、幂等与审计；控制台不接受选择另一个站点。文本只渲染为 React 文本节点。

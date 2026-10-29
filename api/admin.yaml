@@ -50,7 +50,7 @@ paths:
             schema: {$ref: "#/components/schemas/AnnouncementRequest"}
       responses:
         "201":
-          description: The requested notification data.
+          description: The published site announcement.
           headers:
             Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
           content:
@@ -78,7 +78,7 @@ paths:
         - name: announcement_id
           in: path
           required: true
-          schema: {type: string, format: uuid}
+          schema: {$ref: "#/components/schemas/AnnouncementId"}
       requestBody:
         required: true
         content:
@@ -86,7 +86,7 @@ paths:
             schema: {$ref: "#/components/schemas/ReasonRequest"}
       responses:
         "201":
-          description: The requested notification data.
+          description: The withdrawn announcement ID.
           headers:
             Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
           content:
@@ -2368,12 +2368,13 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
     Announcement:
       type: object
       additionalProperties: false
       properties:
-        id: {type: string, format: uuid}
-        site_id: {type: string}
+        id: {$ref: "#/components/schemas/AnnouncementId"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
         title: {type: string, maxLength: 200}
         body: {type: string, maxLength: 20000}
         starts_at: {type: string, format: date-time}
@@ -2383,7 +2384,7 @@ components:
       additionalProperties: false
       required: [site_id, title, body, starts_at, ends_at, reason]
       properties:
-        site_id: {type: string}
+        site_id: {$ref: "#/components/schemas/SiteId"}
         title: {type: string, minLength: 1, maxLength: 200}
         body: {type: string, minLength: 1, maxLength: 20000}
         starts_at: {type: string, format: date-time}
@@ -2393,7 +2394,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: {type: string, format: uuid}
+        id: {$ref: "#/components/schemas/AnnouncementId"}
     OrderId: {type: string, pattern: '^ord_[0-9a-hjkmnp-tv-z]{26}$', description: "A top-up order's ID (TypeID), also the order number the payment channel sees."}
     MerchantId: {type: string, pattern: '^mch_[0-9a-hjkmnp-tv-z]{26}$', description: "A merchant account's ID (TypeID)."}
     PaymentDiscrepancy:

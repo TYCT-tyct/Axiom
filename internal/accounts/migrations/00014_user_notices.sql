@@ -1,7 +1,7 @@
 -- +goose Up
 CREATE TABLE accounts.notification_preferences (
     site_id uuid NOT NULL, account_id uuid NOT NULL, user_id uuid PRIMARY KEY,
-    low_balance boolean, top_up boolean, factor_changed boolean, threshold bigint CHECK (threshold >= 0),
+    low_balance boolean NOT NULL, top_up boolean NOT NULL, factor_changed boolean NOT NULL, threshold bigint NOT NULL CHECK (threshold >= 0),
     webhook_url text NOT NULL DEFAULT '', language text NOT NULL CHECK (language IN ('en','zh')),
     FOREIGN KEY (site_id,account_id,user_id) REFERENCES accounts.users(site_id,account_id,id)
 );

@@ -83,7 +83,7 @@ paths:
       x-axiom-permission: none
       responses:
         "200":
-          description: The requested notification data.
+          description: Active announcements for the current site.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/AnnouncementList"}
@@ -1031,12 +1031,14 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    SiteId: {type: string, pattern: '^site_[0-9a-hjkmnp-tv-z]{26}$', description: "A site's ID (TypeID)."}
+    AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
     Announcement:
       type: object
       additionalProperties: false
       properties:
-        id: {type: string, format: uuid}
-        site_id: {type: string}
+        id: {$ref: "#/components/schemas/AnnouncementId"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
         title: {type: string, maxLength: 200}
         body: {type: string, maxLength: 20000}
         starts_at: {type: string, format: date-time}
@@ -1047,7 +1049,7 @@ components:
       properties:
         low_balance: {type: boolean}
         top_up: {type: boolean}
-        factor_changed: {type: boolean}
+        factor_changed: {type: boolean, description: "Controls background factor-change email and webhooks. Password-change security email is always sent."}
         threshold: {type: string, pattern: '^[0-9]+$', maxLength: 19, description: "Billionths of site credits."}
         webhook_url: {type: string, maxLength: 2048}
         language: {type: string, enum: [en, zh]}
@@ -1058,7 +1060,7 @@ components:
       properties:
         low_balance: {type: boolean}
         top_up: {type: boolean}
-        factor_changed: {type: boolean}
+        factor_changed: {type: boolean, description: "Controls background factor-change email and webhooks. Password-change security email is always sent."}
         threshold: {type: string, pattern: '^[0-9]+$', maxLength: 19, description: "Billionths of site credits."}
         webhook_url: {type: string, maxLength: 2048}
         language: {type: string, enum: [en, zh]}

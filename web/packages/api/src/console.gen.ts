@@ -576,10 +576,13 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A site's ID (TypeID). */
+        SiteId: string;
+        /** @description A site announcement's ID (TypeID). */
+        AnnouncementId: string;
         Announcement: {
-            /** Format: uuid */
-            id?: string;
-            site_id?: string;
+            id?: components["schemas"]["AnnouncementId"];
+            site_id?: components["schemas"]["SiteId"];
             title?: string;
             body?: string;
             /** Format: date-time */
@@ -590,6 +593,7 @@ export interface components {
         NotificationPreferences: {
             low_balance?: boolean;
             top_up?: boolean;
+            /** @description Controls background factor-change email and webhooks. Password-change security email is always sent. */
             factor_changed?: boolean;
             /** @description Billionths of site credits. */
             threshold?: string;
@@ -600,6 +604,7 @@ export interface components {
         NotificationPreferencesRequest: {
             low_balance: boolean;
             top_up: boolean;
+            /** @description Controls background factor-change email and webhooks. Password-change security email is always sent. */
             factor_changed: boolean;
             /** @description Billionths of site credits. */
             threshold: string;
@@ -1101,7 +1106,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The requested notification data. */
+            /** @description Active announcements for the current site. */
             200: {
                 headers: {
                     [name: string]: unknown;

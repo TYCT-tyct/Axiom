@@ -1217,10 +1217,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A site announcement's ID (TypeID). */
+        AnnouncementId: string;
         Announcement: {
-            /** Format: uuid */
-            id?: string;
-            site_id?: string;
+            id?: components["schemas"]["AnnouncementId"];
+            site_id?: components["schemas"]["SiteId"];
             title?: string;
             body?: string;
             /** Format: date-time */
@@ -1229,7 +1230,7 @@ export interface components {
             ends_at?: string;
         };
         AnnouncementRequest: {
-            site_id: string;
+            site_id: components["schemas"]["SiteId"];
             title: string;
             body: string;
             /** Format: date-time */
@@ -1239,8 +1240,7 @@ export interface components {
             reason: string;
         };
         AnnouncementResult: {
-            /** Format: uuid */
-            id?: string;
+            id?: components["schemas"]["AnnouncementId"];
         };
         /** @description A top-up order's ID (TypeID), also the order number the payment channel sees. */
         OrderId: string;
@@ -2334,7 +2334,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The requested notification data. */
+            /** @description The published site announcement. */
             201: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
@@ -2361,7 +2361,7 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
             path: {
-                announcement_id: string;
+                announcement_id: components["schemas"]["AnnouncementId"];
             };
             cookie?: never;
         };
@@ -2371,7 +2371,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The requested notification data. */
+            /** @description The withdrawn announcement ID. */
             201: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];

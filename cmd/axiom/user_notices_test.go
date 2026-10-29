@@ -7,10 +7,11 @@ import (
 	"net/http"
 	"testing"
 	"time"
-	"uuid"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/riverqueue/river"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform/pg"
 
 	"axiom/internal/platform/adminapi"
@@ -76,7 +77,13 @@ func TestAnnouncementPublishReadWithdrawAndReplay(t *testing.T) {
 	if list.Data == nil || len(*list.Data) != 1 || (*list.Data)[0].Body == nil || *(*list.Data)[0].Body != "Plain <b>text</b>" {
 		t.Fatalf("active: %s", r.Body)
 	}
-	withdraw := "/announcements/" + uuid.UUID(*a.Id).String() + "/withdraw"
+	if _, err := accounts.ParseAnnouncementID(*a.Id); err != nil {
+		t.Fatalf("announcement TypeID: %v", err)
+	}
+	if diff := cmp.Diff([]*string{new(site.ID.TypeID()), a.Id}, []*string{a.SiteId, (*list.Data)[0].Id}); diff != "" {
+		t.Fatalf("site/console IDs (-want +got): %s", diff)
+	}
+	withdraw := "/announcements/" + *a.Id + "/withdraw"
 	wkey := newKey()
 	expectAdmin(t, "withdraw", f.do(http.MethodPost, withdraw, `{"reason":"finished"}`, as(s), idempotent(wkey)), http.StatusCreated, "")
 	expectAdmin(t, "withdraw replay", f.do(http.MethodPost, withdraw, `{"reason":"finished"}`, as(s), idempotent(wkey)), http.StatusCreated, "")
@@ -87,11 +94,11 @@ func TestAnnouncementPublishReadWithdrawAndReplay(t *testing.T) {
 	}
 }
 
-func TestUserNotificationEvaluationDoesNotAccumulateActiveJobs(t *testing.T) {
+func TestUserNoticeEvaluationDoesNotAccumulateActiveJobs(t *testing.T) {
 	f := newConsoleFixture(t)
 	logger := slog.New(slog.DiscardHandler)
 	q := f.db.NewQueue(logger, pg.PlatformScope(), nil)
-	if err := river.AddWorkerSafely(q.Workers(), river.WorkFunc(func(context.Context, *river.Job[userNotificationArgs]) error { return nil })); err != nil {
+	if err := river.AddWorkerSafely(q.Workers(), river.WorkFunc(func(context.Context, *river.Job[userNoticeArgs]) error { return nil })); err != nil {
 		t.Fatal(err)
 	}
 	f.run(`INSERT INTO river.river_queue(name,paused_at) VALUES('notifications',now()) ON CONFLICT(name) DO UPDATE SET paused_at=now()`)
@@ -108,7 +115,7 @@ func TestUserNotificationEvaluationDoesNotAccumulateActiveJobs(t *testing.T) {
 	inserted := 0
 	err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) (err error) {
 		for range 2 {
-			n, err := q.InsertManyTx(t.Context(), tx, []river.InsertManyParams{{Args: userNotificationArgs{}}})
+			n, err := q.InsertManyTx(t.Context(), tx, []river.InsertManyParams{{Args: userNoticeArgs{}}})
 			if err != nil {
 				return err
 			}

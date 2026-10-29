@@ -59,15 +59,12 @@ func (c consoleAPI) ListAnnouncements(ctx context.Context, _ consoleapi.ListAnno
 }
 
 func (a adminAPI) PublishAnnouncement(ctx context.Context, r adminapi.PublishAnnouncementRequestObject) (adminapi.PublishAnnouncementResponseObject, error) {
-	site, err := accounts.ParseSiteID(r.Body.SiteId)
+	site, _, err := a.siteOf(r.Body.SiteId)
 	if err != nil {
 		return nil, accounts.ErrNotFound
 	}
-	if _, ok := a.accounts.Site(site); !ok {
-		return nil, accounts.ErrNotFound
-	}
 	body, replayed, err := idempotently(ctx, a.db, "publishAnnouncement", r.Params.IdempotencyKey, r.Body, func(tx pg.Tx) (adminapi.Announcement, error) {
-		n := accounts.Announcement{ID: uuid.NewV7(), Site: uuid.UUID(site), Title: r.Body.Title, Body: r.Body.Body, StartsAt: r.Body.StartsAt, EndsAt: r.Body.EndsAt}
+		n := accounts.Announcement{ID: accounts.AnnouncementID(uuid.NewV7()), Site: uuid.UUID(site), Title: r.Body.Title, Body: r.Body.Body, StartsAt: r.Body.StartsAt, EndsAt: r.Body.EndsAt}
 		if err := accounts.PublishAnnouncement(ctx, tx, n); err != nil {
 			return adminapi.Announcement{}, err
 		}
@@ -83,9 +80,12 @@ func (a adminAPI) PublishAnnouncement(ctx context.Context, r adminapi.PublishAnn
 }
 
 func (a adminAPI) WithdrawAnnouncement(ctx context.Context, r adminapi.WithdrawAnnouncementRequestObject) (adminapi.WithdrawAnnouncementResponseObject, error) {
-	id := uuid.UUID(r.AnnouncementId)
+	id, err := accounts.ParseAnnouncementID(r.AnnouncementId)
+	if err != nil {
+		return nil, accounts.ErrNotFound
+	}
 	input := struct {
-		ID     uuid.UUID
+		ID     accounts.AnnouncementID
 		Reason string
 	}{id, r.Body.Reason}
 	body, replayed, err := idempotently(ctx, a.db, "withdrawAnnouncement", r.Params.IdempotencyKey, input, func(tx pg.Tx) (adminapi.AnnouncementResult, error) {
@@ -95,7 +95,7 @@ func (a adminAPI) WithdrawAnnouncement(ctx context.Context, r adminapi.WithdrawA
 		if err := announcementAudit(ctx, tx, "announcement.withdraw", id, r.Body.Reason); err != nil {
 			return adminapi.AnnouncementResult{}, err
 		}
-		return adminJSON[adminapi.AnnouncementResult](map[string]string{"id": id.String()})
+		return adminJSON[adminapi.AnnouncementResult](map[string]string{"id": id.TypeID()})
 	})
 	if err != nil {
 		return nil, err
@@ -103,10 +103,10 @@ func (a adminAPI) WithdrawAnnouncement(ctx context.Context, r adminapi.WithdrawA
 	return adminapi.WithdrawAnnouncement201JSONResponse{Body: body, Headers: adminapi.WithdrawAnnouncement201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-func announcementAudit(ctx context.Context, tx pg.Tx, action string, id uuid.UUID, reason string) error {
-	return audit.Record(ctx, tx, audit.Event{Actor: actor(ctx), Action: action, Target: audit.Target{Module: "accounts", Kind: "announcement", ID: id.String()}, Reason: reason})
+func announcementAudit(ctx context.Context, tx pg.Tx, action string, id accounts.AnnouncementID, reason string) error {
+	return audit.Record(ctx, tx, audit.Event{Actor: actor(ctx), Action: action, Target: audit.Target{Module: "accounts", Kind: "announcement", ID: id.TypeID()}, Reason: reason})
 }
 
 func announcementJSON(n accounts.Announcement) map[string]any {
-	return map[string]any{"id": n.ID.String(), "site_id": accounts.SiteID(n.Site).TypeID(), "title": n.Title, "body": n.Body, "starts_at": n.StartsAt, "ends_at": n.EndsAt}
+	return map[string]any{"id": n.ID.TypeID(), "site_id": accounts.SiteID(n.Site).TypeID(), "title": n.Title, "body": n.Body, "starts_at": n.StartsAt, "ends_at": n.EndsAt}
 }

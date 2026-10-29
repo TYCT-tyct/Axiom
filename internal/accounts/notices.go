@@ -37,27 +37,13 @@ func ValidateNotificationWebhookURL(raw string) (string, error) {
 	return u.Hostname(), nil
 }
 
-// GetNotificationPreferences resolves unset values against the code defaults.
+// GetNotificationPreferences uses code defaults when the user has not saved preferences.
 func GetNotificationPreferences(ctx context.Context, tx pg.Tx, user uuid.UUID) (NotificationPreferences, error) {
 	p := notificationDefaults()
-	var low, top, factor *bool
-	var threshold *int64
 	err := tx.QueryRow(ctx, `SELECT low_balance,top_up,factor_changed,threshold,webhook_url,language FROM accounts.notification_preferences WHERE user_id=$1`, user).
-		Scan(&low, &top, &factor, &threshold, &p.WebhookURL, &p.Language)
+		Scan(&p.LowBalance, &p.TopUp, &p.FactorChanged, &p.Threshold, &p.WebhookURL, &p.Language)
 	if errors.Is(err, pg.ErrNoRows) {
 		return p, nil
-	}
-	if low != nil {
-		p.LowBalance = *low
-	}
-	if top != nil {
-		p.TopUp = *top
-	}
-	if factor != nil {
-		p.FactorChanged = *factor
-	}
-	if threshold != nil {
-		p.Threshold = *threshold
 	}
 	return p, err
 }
@@ -77,46 +63,44 @@ func SetNotificationPreferences(ctx context.Context, tx pg.Tx, site, account, us
 	return err
 }
 
-// RecordBalanceNotice resolves only the account's own active user; no email crosses the caller boundary.
-func RecordBalanceNotice(ctx context.Context, tx pg.Tx, id, site, account uuid.UUID, previous, balance, topUp int64) error {
-	var user uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT id FROM accounts.users WHERE site_id=$1 AND account_id=$2 AND status='active'`, site, account).Scan(&user)
-	if errors.Is(err, pg.ErrNoRows) {
+// BalanceNotice is a committed wallet movement. ID deduplicates downstream effects.
+type BalanceNotice struct {
+	ID, Site, Account        uuid.UUID
+	Previous, Balance, TopUp int64
+}
+
+// RecordBalanceNotices resolves active recipients and threshold crossings in one statement.
+func RecordBalanceNotices(ctx context.Context, tx pg.Tx, notices []BalanceNotice) error {
+	if len(notices) == 0 {
 		return nil
 	}
-	if err != nil {
-		return err
+	ids, sites, accounts := make([]uuid.UUID, len(notices)), make([]uuid.UUID, len(notices)), make([]uuid.UUID, len(notices))
+	previous, balances, topUps := make([]int64, len(notices)), make([]int64, len(notices)), make([]int64, len(notices))
+	for i, n := range notices {
+		ids[i], sites[i], accounts[i] = n.ID, n.Site, n.Account
+		previous[i], balances[i], topUps[i] = n.Previous, n.Balance, n.TopUp
 	}
-	p, err := GetNotificationPreferences(ctx, tx, user)
-	if err != nil {
-		return err
-	}
-	for _, n := range []struct {
-		kind  string
-		value int64
-		send  bool
-	}{
-		{"low_balance", balance, p.LowBalance && previous >= p.Threshold && balance < p.Threshold},
-		{"top_up", topUp, p.TopUp && topUp > 0},
-	} {
-		if !n.send {
-			continue
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO accounts.user_notices(site_id,account_id,user_id,source,kind,value) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id,kind,source) DO NOTHING`, site, account, user, id.String(), n.kind, n.value); err != nil {
-			return err
-		}
-	}
-	return nil
+	p := notificationDefaults()
+	_, err := tx.Exec(ctx, `INSERT INTO accounts.user_notices(site_id,account_id,user_id,source,kind,value)
+ SELECT n.site_id,n.account_id,u.id,n.id::text,k.kind,k.value
+ FROM unnest($1::uuid[],$2::uuid[],$3::uuid[],$4::bigint[],$5::bigint[],$6::bigint[]) n(id,site_id,account_id,previous,balance,top_up)
+ JOIN accounts.users u ON u.site_id=n.site_id AND u.account_id=n.account_id AND u.status='active'
+ LEFT JOIN accounts.notification_preferences p ON p.user_id=u.id
+ CROSS JOIN LATERAL (VALUES
+ ('low_balance',n.balance,coalesce(p.low_balance,$7) AND n.previous>=coalesce(p.threshold,$9) AND n.balance<coalesce(p.threshold,$9)),
+ ('top_up',n.top_up,coalesce(p.top_up,$8) AND n.top_up>0)) k(kind,value,enabled)
+ WHERE k.enabled ON CONFLICT(user_id,kind,source) DO NOTHING`, ids, sites, accounts, previous, balances, topUps, p.LowBalance, p.TopUp, p.Threshold)
+	return err
 }
 
 // Announcement is plain text. Withdrawals are terminal; the validity interval is [StartsAt, EndsAt).
 type Announcement struct {
-	ID       uuid.UUID `json:"id"`
-	Site     uuid.UUID `json:"site_id"`
-	Title    string    `json:"title"`
-	Body     string    `json:"body"`
-	StartsAt time.Time `json:"starts_at"`
-	EndsAt   time.Time `json:"ends_at"`
+	ID       AnnouncementID `json:"id"`
+	Site     uuid.UUID      `json:"site_id"`
+	Title    string         `json:"title"`
+	Body     string         `json:"body"`
+	StartsAt time.Time      `json:"starts_at"`
+	EndsAt   time.Time      `json:"ends_at"`
 }
 
 // ErrAnnouncement rejects an invalid text length or validity interval.
@@ -132,7 +116,7 @@ func PublishAnnouncement(ctx context.Context, tx pg.Tx, a Announcement) error {
 }
 
 // WithdrawAnnouncement makes a publication permanently inactive.
-func WithdrawAnnouncement(ctx context.Context, tx pg.Tx, id uuid.UUID) error {
+func WithdrawAnnouncement(ctx context.Context, tx pg.Tx, id AnnouncementID) error {
 	tag, err := tx.Exec(ctx, `UPDATE accounts.announcements SET withdrawn_at=clock_timestamp() WHERE id=$1 AND withdrawn_at IS NULL`, id)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
