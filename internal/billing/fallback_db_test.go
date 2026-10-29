@@ -522,6 +522,7 @@ func checkUnlistedModelTier(t *testing.T, declared, cleanup bool, wantItems int)
 	if f.Charged != platform.AmountExact(want) || f.Estimated == declared {
 		t.Fatalf("Settle = %+v, want %d estimated=%t", f, want, !declared)
 	}
+	assertTierChargeDetails(t, b, h.id, declared, want)
 	items := b.unknownItems()
 	if len(items) != wantItems {
 		t.Fatalf("unknown items = %+v", items)

@@ -174,13 +174,17 @@ func generation(ctx context.Context, tx pg.Tx, _ accounts.Admission, q url.Value
 	if err != nil {
 		return nil, err
 	}
+	charges, err := billing.ReadCharges(ctx, tx, []uuid.UUID{id})
+	if err != nil {
+		return nil, err
+	}
 	sum := func(items ...string) (n int64) {
 		for _, item := range items {
 			n += call.Usage[item]
 		}
 		return n
 	}
-	return map[string]any{"data": map[string]any{
+	data := map[string]any{
 		"id": call.ID.String(), "model": call.Model, "created_at": call.At.UTC().Format(time.RFC3339),
 		"total_cost": credits(call.PriceNano), "currency": call.Currency, "is_free": call.Free,
 		"service_tier": call.ServiceTier, "app": call.ClientApp,
@@ -189,5 +193,12 @@ func generation(ctx context.Context, tx pg.Tx, _ accounts.Admission, q url.Value
 		"tokens_prompt":     sum("input", "cache_read", "cache_write", "cache_write_1h", "audio_in", "image_in"),
 		"tokens_completion": sum("output", "reasoning", "audio_out", "image_out"),
 		"tokens_reasoning":  sum("reasoning"), "tokens_cached": sum("cache_read"),
-	}}, nil
+	}
+	if call.PriceVersion != "" {
+		data["price_version"] = call.PriceVersion
+	}
+	if d, ok := charges[id]; ok {
+		data["charge_details"] = d
+	}
+	return map[string]any{"data": data}, nil
 }

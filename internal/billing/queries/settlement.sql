@@ -2,7 +2,8 @@
 -- Run after the account's balance row is locked: every change to a reservation happens under that lock.
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.price_versions, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit,
+    coalesce(r.pricing_tiers, -2)::smallint AS pricing_tiers
 FROM billing.reservations r
 WHERE r.request_id = @request_id;
 
@@ -24,7 +25,7 @@ UPDATE billing.reservations
 SET state = @state, charged_seq = coalesce(sqlc.narg(charged_seq), charged_seq), entry = coalesce(sqlc.narg(entry), entry),
     charged = @charged, price = @price, waived = @waived, estimated = @estimated,
     final_usage = @final_usage, attempt_entries = coalesce(sqlc.narg(attempt_entries)::integer[], attempt_entries),
-    profit = sqlc.narg(profit)::bigint
+    profit = sqlc.narg(profit)::bigint, pricing_tiers = nullif(@pricing_tiers::smallint, -2)
 WHERE request_id = @request_id
 RETURNING clock_timestamp()::timestamptz AS ended_at;
 
