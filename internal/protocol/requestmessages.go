@@ -107,7 +107,7 @@ func thinkingToChat(v jsontext.Value, dst requestObject, maxOutput int64) error 
 	case `"disabled"`:
 		dst["reasoning_effort"] = jsonValue("none")
 	case `"adaptive"`:
-		if isNull(dst["reasoning_effort"]) {
+		if effortAbsent(dst["reasoning_effort"]) {
 			dst["reasoning_effort"] = jsonValue("medium")
 		}
 	case `"enabled"`:
@@ -125,12 +125,16 @@ func thinkingToChat(v jsontext.Value, dst requestObject, maxOutput int64) error 
 	return o.remaining()
 }
 
+// effortAbsent reports whether a Chat effort is no setting: absent, null or the empty string. The empty string is
+// kept in the body as the client wrote it, but it must not stop a thinking mode from writing the effort it needs.
+func effortAbsent(v jsontext.Value) bool { return isNull(v) || string(v) == `""` }
+
 func budgetToChat(budget jsontext.Value, dst requestObject, maxOutput int64) error {
 	var n int64
 	if err := jsonx.Unmarshal(budget, &n); err != nil || n < 1024 {
 		return shapeError("thinking budget must be at least 1024")
 	}
-	if !isNull(dst["reasoning_effort"]) {
+	if !effortAbsent(dst["reasoning_effort"]) {
 		return nil
 	}
 	if cap := dst["max_tokens"]; !isNull(cap) {

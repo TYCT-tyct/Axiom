@@ -338,7 +338,7 @@
 | 定价规则的接口原样表达「对象、人群、方法、约束」四部分，方法是一个带 `kind` 的扁平对象；预览不存储 | 联合类型生成的 Go 代码要手写编解码，扁平对象由服务端按 `kind` 校验；保存前先预览各模型的售价（[定价](#定价)；利润要每端点的成本，随 M2 加入），所以预览是独立入口。否决的做法：`oneOf`：生成物难用；保存后再看结果：错价已经发布 |
 | 额度流水一行一笔余额或退款冻结事件，不按天汇总；游标记下位置以及下一行的余额、冻结额起点；权限沿用 `balance.view` | 按事件可逐笔与账本对上，调用更正会显示退费和重新扣费；付费批次的引用就是订单编号（线下入账为记录编号），调用扣费/退费引用请求编号。按天汇总会丢掉退款冻结过程，因此采用已有账户内提交序号索引，不另建汇总表或迁移。OpenRouter 的 [Activity 导出](https://openrouter.ai/docs/guides/administration/activity-export) 提供按模型、key、成员的用量汇总 CSV/PDF，[Support](https://openrouter.ai/support) 将余额与退款放在 Credits；Axiom 此处按事件展示，是为了对上本地账本和退款冻结，统计汇总留给用量页（2026-10-21 查）。new-api `controller/log.go`、`model/log.go` 的用户读取与流式导出限于本人，sub2api `backend/internal/handler/usage_handler.go` 及 `dto/mappers.go` 分用户和管理数据；Axiom 复用账户 RLS，只投影用户余额和冻结额，不序列化成本、内部账本或渠道信息。分支先 LIMIT 交易、再聚合分录；零变动在 Go 中按最多 8 轮跳过，空段返回继续游标。导出沿游标逐页发送，跨过空段，最多 10 000 个事件，内存只随单页和固定 CSV 缓冲增长；中途失败关闭下载连接。 |
 
-服务端工具的准入范围由完整计费映射决定；没有映射的在 `Inspect` 返回 400，不因请求写了次数就放行。工具搜索虽然未必另收工具费，发现的定义和结果仍进入后续采样；不能因为没有独立单价就只预留一次输入。现有 web search / code execution 两项不足以表达下表的执行与用量，因此拒绝而不是映射到相似名称或编造工具费。以下官方资料核对于 2026-10-28。
+服务端工具的准入范围由完整计费映射决定；没有映射的在 `Inspect` 返回 400，不因请求写了次数就放行。计费映射不是唯一条件：`openrouter:web_search` 有按次售价，但执行它的搜索服务没有配置，仍拒绝，理由见[接入域的「服务端工具」](gateway.md#服务端工具)。工具搜索虽然未必另收工具费，发现的定义和结果仍进入后续采样；不能因为没有独立单价就只预留一次输入。现有 web search / code execution 两项不足以表达下表的执行与用量，因此拒绝而不是映射到相似名称或编造工具费。以下官方资料核对于 2026-10-28。
 
 | 格式与工具声明 | 处理与理由 | 官方依据 |
 |---|---|---|
@@ -351,7 +351,7 @@
 | Responses `shell` | `container_auto` / `container_reference` 是上游托管执行，拒绝；仅显式 `environment.type:"local"` 保留客户端工具语义，缺省或未知环境也拒绝 | [Shell](https://developers.openai.com/api/docs/guides/tools-shell) |
 | Responses `tool_search` | 拒绝托管或未声明执行方式；显式 `execution:"client"` 保留客户端工具语义 | [Tool search](https://developers.openai.com/api/docs/guides/tools-tool-search) |
 | Responses `programmatic_tool_calling` | 拒绝；官方定义为 hosted tool，程序运行时没有计费映射，即使它调用的函数由客户端执行 | [Programmatic tool calling](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling) |
-| 三种格式的 `openrouter:*` 声明 | 整个工具命名空间暂不支持并拒绝，不能把 OpenRouter 自行执行的工具循环误当普通客户端函数；此命名空间的参数转换也未实现 | [OpenRouter server tools](https://openrouter.ai/docs/guides/features/server-tools) |
+| 三种格式的 `openrouter:*` 声明 | 命名空间里文档列出的工具逐个认名拒绝，不能把 OpenRouter 自行执行的工具循环误当普通客户端函数；`openrouter:web_search` 与 `web` 插件、`:online` 同一句「没有配置外部搜索服务」，其余说没有模型侧循环；参数转换也未实现，见[接入域的「服务端工具」](gateway.md#服务端工具) | [OpenRouter server tools](https://openrouter.ai/docs/guides/features/server-tools) |
 
 Anthropic 的 bash、text editor、memory、computer / browser toolset 在官方工具目录里列为 Client，继续按客户端工具处理；不能把所有厂商提供的工具一律当作服务端工具。OpenRouter 的 [server tools](https://openrouter.ai/docs/guides/features/server-tools) 提供自己的循环及计量，Axiom 未实现该工具循环；不以它的 30 步循环证明原生托管执行有同样上界。
 
