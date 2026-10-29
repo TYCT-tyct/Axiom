@@ -207,13 +207,10 @@ func (g *journeyGateway) open(w *callWorld) {
 		g.t.Fatal(err)
 	}
 	settings := `{"gateway":"` + g.server.URL + `","pid":"1001","mode":"api","cids":{"alipay":"2"},"query":true}`
-	if err = w.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
-		_, err := pay.SaveMerchant(ctx, tx, audit.System("journey"), payments.MerchantInput{
-			Site: w.site, Kind: "easypay", Name: "Gateway", Enabled: true, Currency: usd, TTLSeconds: 1800,
-			Settings: []byte(settings), Secrets: map[string]secret.Secret{"key": secret.New("journey-gateway-key")},
-			Methods: []payments.MethodInput{{Method: "alipay", Upstream: "alipay", Enabled: true}},
-		})
-		return err
+	if _, err = pay.SaveMerchant(ctx, pg.PlatformScope(), audit.System("journey"), payments.MerchantInput{
+		Site: w.site, Kind: "easypay", Name: "Gateway", Enabled: true, Currency: usd, TTLSeconds: 1800,
+		Settings: []byte(settings), Secrets: map[string]secret.Secret{"key": secret.New("journey-gateway-key")},
+		Methods: []payments.MethodInput{{Method: "alipay", Upstream: "alipay", Enabled: true}},
 	}); err != nil {
 		g.t.Fatal(err)
 	}

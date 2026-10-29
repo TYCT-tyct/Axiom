@@ -131,10 +131,8 @@ func (m MethodInput) checkLimits() *FieldError {
 	return nil
 }
 
-// SaveMerchant creates or changes a merchant account in the caller's site- or platform-scoped transaction: the plugin
-// validates the configuration, the secrets are sealed with the hash of the settings, and the change is audited.
-// Refusing changes to the identity fields while orders are open comes with orders (README.md「实现拆分」E1-2b).
-func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, in MerchantInput) (Merchant, error) {
+// SaveMerchant probes the candidate outside database transactions, then commits the configuration and audit together.
+func (p *Payments) SaveMerchant(ctx context.Context, scope pg.Scope, actor audit.Actor, in MerchantInput) (Merchant, error) {
 	if err := in.check(); err != nil {
 		return Merchant{}, err
 	}
@@ -147,19 +145,35 @@ func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 		return Merchant{}, &FieldError{"/settings", err.Error()}
 	}
 	created := in.ID == MerchantID{}
-	rev := int64(1)
 	if created {
 		in.ID = MerchantID(uuid.NewV7())
 		if in.Secrets == nil {
 			return Merchant{}, &FieldError{"/secrets", "are required"}
 		}
-	} else if rev, err = p.lockForSave(ctx, tx, &in, settings); err != nil {
+	}
+	if err := p.probeMerchant(ctx, scope, plugin, in, settings, created); err != nil {
 		return Merchant{}, err
 	}
-	if err = p.validate(plugin, in, settings); err != nil {
+	var saved Merchant
+	err = p.db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
+		saved, err = p.saveMerchant(ctx, tx, actor, in, settings, created)
+		return err
+	})
+	return saved, err
+}
+
+func (p *Payments) saveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, in MerchantInput, settings []byte, created bool) (Merchant, error) {
+	rev := int64(1)
+	var err error
+	if !created {
+		if rev, err = p.lockForSave(ctx, tx, &in, settings); err != nil {
+			return Merchant{}, err
+		}
+	}
+	if _, err := p.validate(p.plugins[in.Kind], in, settings); err != nil {
 		return Merchant{}, err
 	}
-	if err = p.write(ctx, tx, in, settings, rev, created); err != nil {
+	if err := p.write(ctx, tx, in, settings, rev, created); err != nil {
 		return Merchant{}, err
 	}
 	return recordSave(ctx, tx, actor, in, created)
@@ -197,7 +211,11 @@ func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput,
 	if len(rows) == 0 {
 		return 0, ErrNotFound
 	}
-	r := rows[0]
+	return p.bindForSave(ctx, tx, in, settings, rows[0])
+}
+
+// Both the preflight read and the locked write check revision, identity and sealed configuration.
+func (p *Payments) bindForSave(ctx context.Context, tx pg.Tx, in *MerchantInput, settings []byte, r LockMerchantRow) (int64, error) {
 	if r.Rev != in.Rev {
 		return 0, ErrStale
 	}
@@ -205,10 +223,11 @@ func (p *Payments) lockForSave(ctx context.Context, tx pg.Tx, in *MerchantInput,
 		return 0, &FieldError{"/kind", "cannot change"}
 	}
 	in.Site = r.SiteID
-	if err = checkIdentity(ctx, tx, r, *in, settings, p.plugins[in.Kind]); err != nil {
+	if err := checkIdentity(ctx, tx, r, *in, settings, p.plugins[in.Kind]); err != nil {
 		return 0, err
 	}
 	if in.Secrets == nil {
+		var err error
 		if in.Secrets, err = p.unseal(in.ID, sealedOf(r.Ciphertext, r.Nonce, r.WrappedDek, r.KeyVersion), r.Settings); err != nil {
 			return 0, err
 		}
@@ -261,17 +280,24 @@ func sameSettingsIdentity(plugin Plugin, before, after []byte) (bool, error) {
 }
 
 // validate has the plugin open the configuration it would run with; every method must be one the channel offers.
-func (p *Payments) validate(plugin Plugin, in MerchantInput, settings []byte) error {
+func (p *Payments) validate(plugin Plugin, in MerchantInput, settings []byte) (Channel, error) {
 	ch, err := plugin.Open(MerchantConfig{ID: in.ID, Currency: in.Currency, Settings: settings, Secrets: in.Secrets, Client: p.client})
 	if err != nil {
-		return &FieldError{"/settings", err.Error()}
+		return nil, &FieldError{"/settings", err.Error()}
 	}
 	for i, m := range in.Methods {
 		if methods := ch.Methods(); methods != nil && !slices.Contains(methods, m.Method) {
-			return &FieldError{fmt.Sprintf("/methods/%d/method", i), "is not offered by this channel"}
+			return nil, &FieldError{fmt.Sprintf("/methods/%d/method", i), "is not offered by this channel"}
 		}
 	}
-	return nil
+	if validator, ok := ch.(interface {
+		validateMerchant(MerchantInput) error
+	}); ok {
+		if err := validator.validateMerchant(in); err != nil {
+			return nil, err
+		}
+	}
+	return ch, nil
 }
 
 func (p *Payments) write(ctx context.Context, tx pg.Tx, in MerchantInput, settings []byte, rev int64, created bool) error {
