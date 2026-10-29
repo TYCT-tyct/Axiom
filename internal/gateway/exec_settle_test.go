@@ -269,6 +269,14 @@ func TestEstimated(t *testing.T) {
 		}
 		return u
 	}
+	physical := func(t *testing.T, u catalog.Usage, n int64) catalog.Usage {
+		t.Helper()
+		v, err := u.WithPhysicalInput(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
 	const in, out, cached, search = catalog.ItemInput, catalog.ItemOutput, catalog.ItemCacheRead, catalog.ItemWebSearch
 	all := catalog.ItemSet(1<<in | 1<<out | 1<<search)
 	for _, tc := range []struct {
@@ -311,6 +319,30 @@ func TestEstimated(t *testing.T) {
 			protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{in: 10})}}, Invalid: errors.New("went down")},
 			protocol.Progress{ContentBytes: 7},
 			map[catalog.Item]int64{in: 900, out: 3},
+		},
+		{
+			// A report accepted, then made invalid by a count that went down: the counts it took stay, and the estimate
+			// of the whole prompt stands in their place, not on top of them. 100 prompt tokens are 20 plain and 80 cached;
+			// the estimate of 900 adds the 800 they are short of, not another 900 (#339).
+			"an accepted report that turned invalid",
+			protocol.Usage{
+				Segments: []protocol.Segment{{Usage: physical(t, usage(map[catalog.Item]int64{in: 20, cached: 80}), 100)}},
+				Invalid:  errors.New("the input went down"),
+			},
+			protocol.Progress{ContentBytes: 7},
+			map[catalog.Item]int64{in: 820, cached: 80, out: 3},
+		},
+		{
+			// The kept cache items add up past the physical total they overlap: 80 cached and 80 written within a
+			// 100-token prompt. The estimate of 900 is short of that sum by 740, and those 740 are the whole of what the
+			// plain input becomes; adding 800 (900 less the physical total) would charge the prompt twice (#339).
+			"an accepted report whose cache items overlap the prompt total",
+			protocol.Usage{
+				Segments: []protocol.Segment{{Usage: physical(t, usage(map[catalog.Item]int64{cached: 80, catalog.ItemCacheWrite: 80}), 100)}},
+				Invalid:  errors.New("the input went down"),
+			},
+			protocol.Progress{ContentBytes: 7},
+			map[catalog.Item]int64{in: 740, cached: 80, catalog.ItemCacheWrite: 80, out: 3},
 		},
 	} {
 		// 3600 bytes of text at 4 a token, inside the model's window: the first sampling's input is 900.

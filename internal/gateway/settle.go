@@ -202,7 +202,8 @@ func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer) (int64, er
 // upstream reported is kept, and the reply's items it did not are estimated, which billing marks: the input by the first
 // sampling's estimate (billing.InputEstimate: the text at the count of the endpoint's model family where it has a
 // tokenizer and at 4 bytes a token otherwise, an image at 1600 tokens, a file at 4096, each held to its bound), unless
-// any input-side item was reported; the output by the text, reasoning and tool input read at outputBytesPerToken, never
+// any input-side item was reported, in which case the estimate stands in place of the items an invalid report kept
+// rather than beside them; the output by the text, reasoning and tool input read at outputBytesPerToken, never
 // below a count reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own,
 // which metering holds the output to); the web searches by the events seen. The ratios stand in for the estimates by
 // model the docs want, which have no data yet; the bounds and the cap keep an estimate within what the reservation
@@ -220,25 +221,64 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 		counts[it] = reply.Usage.Count(it)
 	}
 	if !inputReported(u) { // none of the input was reported, so it is estimated
-		counts[catalog.ItemInput] = max(counts[catalog.ItemInput], input)
+		estimateInput(counts, input)
 	}
-	if !reply.Reported.Has(catalog.ItemOutput) {
-		out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
-		counts[catalog.ItemOutput] = max(reply.Usage.OutputTotal(), out) - counts[catalog.ItemReasoning] -
-			counts[catalog.ItemAudioOut] - counts[catalog.ItemImageOut]
-	}
+	counts[catalog.ItemOutput] = estimateOutput(*reply, p, outputCap)
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)
 	}
+	reply.Usage = recountCapped(reply.Usage, counts)
+	if n, ok := reply.Usage.PhysicalInput(); ok && !inputReported(u) && input > n {
+		// The prompt the estimate stands for is longer than the physical total the invalid report kept: the band and
+		// the client's echo read the physical total, and leaving it short would price the estimate in a lower band.
+		usage, err := reply.Usage.WithPhysicalInput(min(input, maxCount))
+		if err != nil {
+			panic(err) // the estimate is held to maxCount above
+		}
+		reply.Usage = usage
+	}
+	return segments
+}
+
+// estimateInput adds to the plain input what the kept input-side counts are short of the prompt's estimate: the estimate
+// is the whole prompt, and a report accepted before a count went down keeps the counts it took, which are parts of one
+// prompt, a cache read even overlapping the plain input. So the estimate stands in place of those counts rather than
+// beside them (#339). The shortfall is over the items' sum, not InputTotal: the physical total an OpenAI report carries
+// is the prompt's own length, and cache reads and writes within it may overlap each other and it.
+func estimateInput(counts map[catalog.Item]int64, estimate int64) {
+	kept := int64(0)
+	for it := range catalog.NumItems {
+		if catalog.InputSide.Has(it) {
+			kept += counts[it]
+		}
+	}
+	counts[catalog.ItemInput] += max(estimate-kept, 0)
+}
+
+// estimateOutput is the reply's ordinary output: the text, reasoning and tool input read at outputBytesPerToken, never
+// below a count reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own,
+// which metering holds the output to). A report that carried it keeps it.
+func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64) int64 {
+	if reply.Reported.Has(catalog.ItemOutput) {
+		return reply.Usage.Count(catalog.ItemOutput)
+	}
+	out := min(tokensOf(p.ContentBytes, outputBytesPerToken), outputCap)
+	return max(reply.Usage.OutputTotal(), out) - reply.Usage.Count(catalog.ItemReasoning) -
+		reply.Usage.Count(catalog.ItemAudioOut) - reply.Usage.Count(catalog.ItemImageOut)
+}
+
+// recountCapped holds every count to maxCount, the largest catalog.NewUsage takes, and recounts the reply with its own
+// tier and unknown counts. A count can arrive past the cap from the report itself or from an estimate set beside it, and
+// the recount refuses one: the cap is where an unrepresentable count stops instead of failing the settlement.
+func recountCapped(reply catalog.Usage, counts map[catalog.Item]int64) catalog.Usage {
 	for it, n := range counts {
 		counts[it] = min(n, maxCount)
 	}
-	usage, err := reply.Usage.Recount(counts, reply.Usage.Unknown())
+	usage, err := reply.Recount(counts, reply.Unknown())
 	if err != nil {
 		panic(err) // every count is within 0 and maxCount, and the tier and items are the usage's own
 	}
-	reply.Usage = usage
-	return segments
+	return usage
 }
 
 // The bytes per output token of the interim estimate (docs/domains/billing.md「用量来源与暂估」): English runs about 4

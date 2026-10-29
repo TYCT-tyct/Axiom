@@ -310,14 +310,19 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		// The spec records no image size and no page limit, so ImageTokens, PageTokens and FilePages stay 0: billing
 		// takes an image or a file of unknown size to fill the whole window when it reserves, which must never be below
 		// what a request spends, and charges an estimate when the upstream reports no input (billing.InputEstimate).
-		Streams:        streams,
-		Cancels:        r.Cancels,
-		Reports:        reportable.Items,
-		ToolUses:       model.ToolUses(),
-		UnknownItem:    blockedItem,
-		AudiencePrices: sold.Audiences,
-		Price:          routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule},
-		Target:         targetOf(r.Upstream, streams, model.Dialect()),
+		Streams: streams,
+		Cancels: r.Cancels,
+		// The two model facts a reservation made in segments rests on, from the spec: the fastest output, which sizes
+		// the overshoot allowance, and the formats whose stream shows reasoning, which metering must see. A spec that
+		// does not say leaves them zero, and the entry is reserved whole.
+		OutputSpeed:      model.OutputSpeed(),
+		ReasoningVisible: reasoningVisible(model.ReasoningVisible()),
+		Reports:          reportable.Items,
+		ToolUses:         model.ToolUses(),
+		UnknownItem:      blockedItem,
+		AudiencePrices:   sold.Audiences,
+		Price:            routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule},
+		Target:           targetOf(r.Upstream, streams, model.Dialect()),
 	}
 	if r.Capacity != nil { // a nil *suppliers.Capacity in the interface would read as an endpoint with no capacity
 		e.Capacity = r.Capacity
@@ -366,4 +371,23 @@ func capabilities(abilities catalog.AbilitySet) (c protocol.Capabilities) {
 // default is written down here rather than left implicit.
 func presets() []routing.Preset {
 	return []routing.Preset{{Classes: routing.AllClasses, Policies: routing.AllPolicies, MaxAttempts: 4}}
+}
+
+// reasoningVisible is a spec's formats whose stream shows reasoning as routing's bits. The two enumerations happen to be
+// in the same order, but the mapping is written out so that a change in either of them is a missing line here and not a
+// silent shift, as capabilities does for the abilities.
+func reasoningVisible(formats catalog.FormatSet) (f routing.FormatSet) {
+	for _, x := range [...]struct {
+		format catalog.CallFormat
+		bit    protocol.Format
+	}{
+		{catalog.FormatMessages, protocol.Messages},
+		{catalog.FormatResponses, protocol.Responses},
+		{catalog.FormatChat, protocol.Chat},
+	} {
+		if formats.Has(x.format) {
+			f |= routing.Of(x.bit)
+		}
+	}
+	return f
 }

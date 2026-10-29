@@ -148,13 +148,18 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 // be made in segments.
 func (r *Router) entry(c *candidate, n *need) Entry {
 	out, _ := c.outputLimit(n.req, n.tokens)
+	format, _ := c.callFormat(n)
 	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry
 	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments), and
 	// every entry while no segment size is configured: a segment of 0 tokens would reserve no output at all.
-	segmentable := !n.in.NoSegments && c.Streams && c.Cancels && c.ReasoningVisible.Has(n.req.Format) && !n.req.HidesReasoning &&
-		c.OutputSpeed > 0 && r.cfg.FirstSegment > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
+	allowance, _ := r.cfg.Segments.Allowance(c.OutputSpeed)
+	// Reasoning counts against a segment while it streams, so a model that reasons must show it in the stream the
+	// gateway reads: the format the endpoint is called in, not the client's, since a converted call is metered where it
+	// is made. A model without the ability has no reasoning to miss.
+	reasoning := c.Caps.Has(protocol.Reasoning)
+	segmentable := !n.in.NoSegments && c.Streams && c.Cancels && (!reasoning || c.ReasoningVisible.Has(format)) &&
+		!n.req.HidesReasoning && c.OutputSpeed > 0 && r.cfg.Segments.Output > 0 && out > r.cfg.Segments.Output+allowance
 	target := c.Target
-	format, _ := c.callFormat(n)
 	target.Format = format
 	target.Streams = c.Streams // the request sent asks for a stream, which the gateway relays or aggregates
 	if c.MaxOutput > 0 {       // a model whose limit is unknown has no default to send: the upstream's own applies
