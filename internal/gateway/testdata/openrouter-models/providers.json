@@ -1,0 +1,33 @@
+{
+  "source": "https://openrouter.ai/docs/api/api-reference/providers/list-all-providers",
+  "recorded_at": "2026-10-29",
+  "response": {
+    "data": [
+      {
+        "datacenters": [
+          "US",
+          "IE"
+        ],
+        "headquarters": "US",
+        "name": "OpenAI",
+        "privacy_policy_url": "https://openai.com/privacy",
+        "slug": "openai",
+        "status_page_url": "https://status.openai.com",
+        "terms_of_service_url": "https://openai.com/terms"
+      }
+    ]
+  },
+  "axiom": {
+    "data": [
+      {
+        "name": "Axiom",
+        "slug": "axiom",
+        "privacy_policy_url": null,
+        "terms_of_service_url": null,
+        "status_page_url": null,
+        "headquarters": null,
+        "datacenters": null
+      }
+    ]
+  }
+}
