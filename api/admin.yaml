@@ -31,6 +31,66 @@ tags:
   - {name: Alerts, description: "Platform operations alert rules, channels, incidents and receipts."}
   - {name: Payments, description: "Payment discrepancies and investigation notes."}
 paths:
+  /api/admin/v1/rate-limits/{target}/{id}:
+    parameters:
+      - {name: target, in: path, required: true, schema: {type: string, enum: [tier, account, key]}}
+      - {name: id, in: path, required: true, schema: {type: string, pattern: "^(tier|acct|key)_[0-9a-hjkmnp-tv-z]{26}$"}}
+    get:
+      operationId: getRateLimit
+      tags: [Sites]
+      summary: Read an administrator's business rate limit
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: Own setting and effective allowance over the gateway rate window
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RateLimitView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setRateLimit
+      tags: [Sites]
+      summary: Replace an administrator's business rate limit
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                requests: {type: integer, nullable: true, minimum: 0, maximum: 1000000000, description: "Absent/null inherits; zero is unlimited. Default rate window is one minute."}
+                reason: {$ref: "#/components/schemas/Reason"}
+      responses:
+        "200":
+          description: Committed allowance
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RateLimitView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+
   /api/admin/v1/announcements:
     post:
       operationId: publishAnnouncement
@@ -2371,6 +2431,12 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    RateLimitView:
+      type: object
+      properties:
+        requests: {type: integer, nullable: true, minimum: 0, maximum: 1000000000}
+        effective_requests: {type: integer, minimum: 0, maximum: 1000000000}
+
     AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
     Announcement:
       type: object

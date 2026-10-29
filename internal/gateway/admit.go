@@ -79,8 +79,8 @@ func (h *Handler) admitOnce(ctx context.Context, c *Call) error {
 // the same transaction. The route is cut to the entries the reservation covers; its first entry is always among them,
 // or the request is refused 402.
 func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c *Call) error {
-	if c.rate > h.Limits.cfg.KeyRate {
-		return errKeyRate
+	if err := h.judgeRate(a, c, callDimension); err != nil {
+		return err
 	}
 	plan, wait, err := h.Models.plan(h.Router, routing.Input{
 		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,

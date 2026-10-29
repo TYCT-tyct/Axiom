@@ -106,13 +106,18 @@ WHERE b.account_id = @account_id;
 -- current window of its reset (spent and reserved together, as admission does). An empty reset is the window of every
 -- day. A key that never spent has no rows, and its sums are 0.
 -- name: ReadKeyUsage :one
-WITH t AS (SELECT clock_timestamp() AS now)
+WITH t AS MATERIALIZED (SELECT clock_timestamp() AS now)
 SELECT
     coalesce(sum(s.spent), 0)::bigint AS total,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('daily', t.now)), 0)::bigint AS daily,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('weekly', t.now)), 0)::bigint AS weekly,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('monthly', t.now)), 0)::bigint AS monthly,
     coalesce(sum(s.spent + s.reserved) FILTER (WHERE s.window_start >= billing.window_from(@reset::text, t.now)
-        AND s.window_start < billing.window_to(@reset::text, t.now)), 0)::bigint AS limited
-FROM billing.spend s, t
-WHERE s.subject = @key_id;
+        AND s.window_start < billing.window_to(@reset::text, t.now)), 0)::bigint AS limited,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from(@reset::text, t.now)
+        AND s.window_start < billing.window_to(@reset::text, t.now)), 0)::bigint AS window_spent,
+    coalesce(sum(s.reserved) FILTER (WHERE s.window_start >= billing.window_from(@reset::text, t.now)
+        AND s.window_start < billing.window_to(@reset::text, t.now)), 0)::bigint AS window_reserved,
+    CASE WHEN @reset::text = '' THEN '0001-01-01 00:00:00+00'::timestamptz ELSE billing.window_to(@reset::text, t.now) END::timestamptz AS resets_at
+FROM t LEFT JOIN billing.spend s ON s.subject = @key_id
+GROUP BY t.now;
