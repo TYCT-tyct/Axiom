@@ -42,6 +42,7 @@ type supplierAlertTest struct {
 	queue            *pg.Queue
 	supplier         uuid.UUID
 	firing, recovery atomic.Int32
+	eventID          atomic.Value
 	received         chan struct{}
 }
 
@@ -136,8 +137,9 @@ func (w *supplierAlertTest) seed(destination string, keys *secret.Keyring) {
 
 func (w *supplierAlertTest) receive(out http.ResponseWriter, r *http.Request) {
 	var notice struct {
-		Kind  string `json:"kind"`
-		State string `json:"state"`
+		Kind    string `json:"kind"`
+		State   string `json:"state"`
+		EventID string `json:"event_id"`
 	}
 	if err := jsonx.Decode(r.Body, &notice); err != nil {
 		w.t.Error(err)
@@ -147,9 +149,13 @@ func (w *supplierAlertTest) receive(out http.ResponseWriter, r *http.Request) {
 	if notice.Kind == "suppliers.low_balance" {
 		switch notice.State {
 		case "firing":
+			w.eventID.Store(notice.EventID)
 			w.firing.Add(1)
 			w.received <- struct{}{}
 		case "resolved":
+			if notice.EventID == "" || w.eventID.Load() != notice.EventID {
+				w.t.Error("recovery belongs to a different incident")
+			}
 			w.recovery.Add(1)
 			w.received <- struct{}{}
 		}

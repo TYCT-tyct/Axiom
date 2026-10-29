@@ -73,12 +73,14 @@ func webhookPayload(d alertDelivery) ([]byte, error) {
 	// Fields and severity are frozen at dispatch; the incident may receive further signals during retries.
 	return jsonx.MarshalCanonical(struct {
 		ID       uuid.UUID `json:"id"`
+		EventID  uuid.UUID `json:"event_id"`
+		Sequence int       `json:"sequence"`
 		Kind     string    `json:"kind"`
 		Key      string    `json:"key"`
 		Severity string    `json:"severity"`
 		State    string    `json:"state"`
 		Fields   jsonx.Raw `json:"fields"`
-	}{d.id, d.kind, d.key, d.severity, phase, d.fields})
+	}{d.id, d.eventID, d.seq, d.kind, d.key, d.severity, phase, d.fields})
 }
 
 func (w *webhookWorker) send(ctx context.Context, d alertDelivery, keys []secret.Secret) error {

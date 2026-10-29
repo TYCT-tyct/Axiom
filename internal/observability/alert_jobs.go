@@ -177,6 +177,7 @@ func nextAlertSequence(ctx context.Context, tx pg.Tx, id uuid.UUID, r AlertRule,
 
 type alertDelivery struct {
 	id         uuid.UUID
+	eventID    uuid.UUID
 	ch         AlertChannel
 	start, end int
 	kind, key  string
@@ -187,7 +188,7 @@ type alertDelivery struct {
 }
 
 func pendingAlertDeliveries(ctx context.Context, tx pg.Tx, now time.Time) ([]alertDelivery, error) {
-	rows, err := tx.Query(ctx, `SELECT r.id,r.channel,r.quiet_start,r.quiet_end,e.kind,e.key,r.sequence,e.severity,e.fields FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id WHERE r.state='pending' AND r.not_before<=$1 ORDER BY r.at,r.id LIMIT 100 FOR UPDATE OF r SKIP LOCKED`, now)
+	rows, err := tx.Query(ctx, `SELECT r.id,e.id,r.channel,r.quiet_start,r.quiet_end,e.kind,e.key,r.sequence,e.severity,e.fields FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id WHERE r.state='pending' AND r.not_before<=$1 ORDER BY r.at,r.id LIMIT 100 FOR UPDATE OF r SKIP LOCKED`, now)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +196,7 @@ func pendingAlertDeliveries(ctx context.Context, tx pg.Tx, now time.Time) ([]ale
 	for rows.Next() {
 		var d alertDelivery
 		var raw []byte
-		err = rows.Scan(&d.id, &raw, &d.start, &d.end, &d.kind, &d.key, &d.seq, &d.severity, &d.fields)
+		err = rows.Scan(&d.id, &d.eventID, &raw, &d.start, &d.end, &d.kind, &d.key, &d.seq, &d.severity, &d.fields)
 		if err != nil {
 			break
 		}
