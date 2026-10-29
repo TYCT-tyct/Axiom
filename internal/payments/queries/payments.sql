@@ -1,8 +1,8 @@
 -- Read after acquiring the order lock: the policy clock must not precede a lock wait.
 -- name: PaymentTerms :one
-SELECT o.rate_id, o.fee_ppm, o.fee_fixed, clock_timestamp()::timestamptz AS observed_at,
-    w.grace_seconds, w.auto_credit_seconds
-FROM payments.orders o JOIN payments.order_windows w ON w.id = o.id WHERE o.id = @id;
+SELECT o.rate_id, o.applied_num::text AS applied_num, o.applied_den::text AS applied_den, o.fee_ppm, o.fee_fixed, clock_timestamp()::timestamptz AS observed_at,
+    w.grace_seconds, w.auto_credit_seconds, s.amount_mismatch_policy
+FROM payments.orders o JOIN payments.order_windows w ON w.id = o.id LEFT JOIN payments.settings s ON s.site_id = o.site_id WHERE o.id = @id;
 
 -- name: RecordPayment :exec
 INSERT INTO payments.order_payments (id, order_id, site_id, account_id, merchant_id, trade_no, amount, currency, source)

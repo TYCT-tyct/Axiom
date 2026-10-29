@@ -305,9 +305,10 @@ func (q *Queries) MoveOrder(ctx context.Context, db DBTX, arg MoveOrderParams) (
 
 const openMerchantOrders = `-- name: OpenMerchantOrders :one
 SELECT EXISTS (
-    SELECT 1 FROM payments.order_windows
-    WHERE merchant_id = $1 AND (queryable OR state = 'review')
-) AS open
+    SELECT 1 FROM payments.order_windows w
+    WHERE w.merchant_id = $1 AND (queryable OR state = 'review')
+UNION ALL SELECT 1 FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
+    WHERE o.merchant_id = $1 AND r.state IN ('frozen','sending','pending')) AS open
 `
 
 // A merchant account with an order still in flight keeps its identity: changing its keys or gateway would leave that
