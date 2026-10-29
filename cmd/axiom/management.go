@@ -131,6 +131,9 @@ func patchManagedKey(r *http.Request, m accounts.KeyManager, key accounts.Key, i
 	if err != nil {
 		return accounts.Key{}, err
 	}
+	if key.Equal(settings) {
+		return key, nil
+	}
 	return m.Update(r.Context(), key.ID, settings)
 }
 
@@ -145,12 +148,17 @@ func managementCollection(r *http.Request, m accounts.KeyManager, tx pg.Tx, inpu
 		if err != nil {
 			return nil, 0, err
 		}
+		windows := make([]billing.KeyWindow, len(keys))
+		for i, key := range keys {
+			windows[i] = billing.KeyWindow{Key: uuid.UUID(key.ID), Reset: billing.Reset(key.LimitReset)}
+		}
+		usage, err := billing.ReadKeyUsages(r.Context(), tx, windows)
+		if err != nil {
+			return nil, 0, err
+		}
 		data := make([]any, len(keys))
 		for i, key := range keys {
-			data[i], err = managedKeyBody(r.Context(), tx, key)
-			if err != nil {
-				return nil, 0, err
-			}
+			data[i] = managedKeyData(key, usage[uuid.UUID(key.ID)])
 		}
 		return map[string]any{"data": data}, http.StatusOK, nil
 	case http.MethodPost:
@@ -194,6 +202,10 @@ func managedKeyBody(ctx context.Context, tx pg.Tx, k accounts.Key) (map[string]a
 	if err != nil {
 		return nil, err
 	}
+	return managedKeyData(k, use), nil
+}
+
+func managedKeyData(k accounts.Key, use billing.KeyUsage) map[string]any {
 	id := uuid.UUID(k.ID)
 	data := map[string]any{
 		"hash": hex.EncodeToString(id[:]), "name": k.Name, "label": k.Prefix + "..." + k.Last4,
@@ -210,7 +222,7 @@ func managedKeyBody(ctx context.Context, tx pg.Tx, k accounts.Key) (map[string]a
 			data["limit_reset"] = k.LimitReset
 		}
 	}
-	return data, nil
+	return data
 }
 
 var (

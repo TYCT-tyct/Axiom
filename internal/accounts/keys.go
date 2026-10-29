@@ -64,6 +64,12 @@ type KeySettings struct {
 	IPAllow    []netip.Prefix
 }
 
+// Equal compares settings by value, treating empty model and address lists as unrestricted like nil lists.
+func (k KeySettings) Equal(other KeySettings) bool {
+	return k.Name == other.Name && k.Disabled == other.Disabled && sameOptional(k.SpendLimit, other.SpendLimit) &&
+		k.LimitReset == other.LimitReset && slices.Equal(k.Models, other.Models) && slices.Equal(k.IPAllow, other.IPAllow)
+}
+
 // Key is a key as the console shows it. Its text is not here: only its hash is kept, and the last four characters
 // to tell keys apart.
 type Key struct {

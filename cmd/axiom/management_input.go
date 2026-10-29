@@ -80,11 +80,18 @@ func (in managedInput) names(k *accounts.KeySettings) error {
 		raw    jsonx.Raw
 		target any
 	}{
-		{in.Name, &k.Name}, {in.Disabled, &k.Disabled}, {in.Models, &k.Models},
+		{in.Name, &k.Name}, {in.Disabled, &k.Disabled},
 	} {
 		if len(field.raw) > 0 && jsonx.Unmarshal(field.raw, field.target) != nil {
 			return errManagementInput
 		}
+	}
+	if len(in.Models) > 0 {
+		var models []string
+		if jsonx.Unmarshal(in.Models, &models) != nil {
+			return errManagementInput
+		}
+		k.Models = models
 	}
 	if string(in.Name) == "null" || string(in.Disabled) == "null" || utf8.RuneCountInString(k.Name) < 1 || utf8.RuneCountInString(k.Name) > 100 {
 		return errManagementInput
@@ -121,6 +128,9 @@ func (in managedInput) spend(k *accounts.KeySettings) error {
 			}
 			k.SpendLimit = &amount
 		}
+	}
+	if string(in.Limit) == "null" && len(in.Reset) == 0 {
+		k.LimitReset = ""
 	}
 	reset, err := in.reset(k.LimitReset)
 	if err != nil {

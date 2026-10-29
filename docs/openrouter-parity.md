@@ -120,8 +120,8 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| `GET /api/v1/credits` → `data.total_credits`、`data.total_usage` | 需要管理 key | api/credits/get-remaining-credits | 有：`gw/readonly.go:127-133`；调用 key 就能读（偏离，`docs/domains/gateway.md:234`） | `na:router/dashboard.go:18,20`（OpenAI 旧版） | `s2:internal/server/routes/gateway.go:186`（`/sub2api/billing`） | 无 |
-| `GET /api/v1/key` → `label`、`usage`、`usage_daily/weekly/monthly`、`limit`、`limit_remaining`、`limit_reset`、`expires_at`、`is_free_tier`、`is_management_key` | 当前 key 信息 | api/api-keys/get-current-api-key | 有：`gw/readonly.go:86-125` | 无 | 无 | 无 |
+| `GET /api/v1/credits` → `data.total_credits`、`data.total_usage` | 需要管理 key | api/credits/get-remaining-credits | 有：`gw/readonly.go:127-133`；只接受调用 key，管理 key 为 401（决定见账户 key 管理与 gateway 的决策） | `na:router/dashboard.go:18,20`（OpenAI 旧版） | `s2:internal/server/routes/gateway.go:186`（`/sub2api/billing`） | 有意偏离：管理 key 为 401，见 gateway 的决策 |
+| `GET /api/v1/key` → `label`、`usage`、`usage_daily/weekly/monthly`、`limit`、`limit_remaining`、`limit_reset`、`expires_at`、`is_free_tier`、`is_management_key` | 当前 key 信息，接受管理 key | api/api-keys/get-current-api-key | 有：`gw/readonly.go:86-125`；只接受调用 key，管理 key 为 401 | 无 | 无 | 有意偏离：管理 key 为 401，见 gateway 的决策 |
 | `/key` 的 `byok_usage*`、`include_byok_in_limit`、`is_provisioning_key`、`creator_user_id`、`organization_id`、`workspace_id`、`allowed_data_regions` | BYOK 与归属信息 | spec | 没有（无 BYOK；`gw/readonly.go:82-84` 注释） | 无 | 无 | 管理 key/工作区接口做了再补 |
 | `/key` 的 `rate_limit`（`requests`、`interval`）、`free_model_daily_requests` | 限流提示 | spec | 没有 | 无 | 无 | Axiom 有 key 限流（`gw/admit.go:83`（`KeyRate`）），但不在这里公布 |
 | `/key` 的 `budgets[]`、`effective_budget`（`limit_usd`、`spend_usd`、`remaining_usd`、`reset_interval`、`resets_at`、`scope`） | 预算上限，被挡之前可读 | docs/api_reference/limits | 没有：`gw/readonly.go:102-110` 只有 key 自己的限额 | 无 | 无 | 随工作区预算（#319/#315）做 |
@@ -296,7 +296,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 ## Axiom 比 OpenRouter 多的（不算缺口，只是行为不一致，迁移时要说明）
 
 - `POST /v1/messages/count_tokens`、`POST /v1/responses/compact`、Responses 会话状态（`store`、`previous_response_id`）、`GET /v1/dashboard/billing/*`（给 new-api 当上游）。
-- `/key`、`/credits` 用调用 key 就能读（OpenRouter 要管理 key）。
+- `/key`、`/credits` 只接受调用 key，管理 key 均为 401。OpenRouter 的 /credits 要管理 key，/key 也接受管理 key；Axiom 本轮仅为 key CRUD 接入管理认证，余额和凭证自省接口未接入独立管理权限，决定见 [gateway](domains/gateway.md#决策与理由)。
 - 响应总是带 `usage.cost`/`cost_currency`/`cost_estimated`，不需要 `usage.include`。
 - 推理文本同时写 `reasoning` 与 `reasoning_content`。
 - 上游错误去掉供应商标识；响应头走白名单；`model` 回显请求名。

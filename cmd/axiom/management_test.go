@@ -164,6 +164,7 @@ func TestManagementAPIRejectsEscalationAndMalformedInput(t *testing.T) {
 		{"forge account", http.MethodPost, "", `{"name":"x","account_id":"other"}`, http.StatusBadRequest},
 		{"forge creator", http.MethodPost, "", `{"name":"x","creator_user_id":"other"}`, http.StatusForbidden},
 		{"higher limit", http.MethodPatch, "/" + child.Hash, `{"limit":3}`, http.StatusForbidden},
+		{"remove limit alone", http.MethodPatch, "/" + child.Hash, `{"limit":null}`, http.StatusForbidden},
 		{"remove limit", http.MethodPatch, "/" + child.Hash, `{"limit":null,"limit_reset":null}`, http.StatusForbidden},
 		{"change reset", http.MethodPatch, "/" + child.Hash, `{"limit_reset":"monthly"}`, http.StatusForbidden},
 		{"remove model scope", http.MethodPatch, "/" + child.Hash, `{"models":null}`, http.StatusForbidden},
@@ -247,7 +248,7 @@ func TestManagementAPIUnlimitedAndPageFilters(t *testing.T) {
 	f := newConsoleFixture(t)
 	manager := f.managementKey(f.owner(), `"name":"manager"`)
 	child, _ := readManaged(t, f.managementRequest(http.MethodPost, "", `{"name":"child","limit":5,"limit_reset":"daily"}`, manager.Secret), http.StatusCreated)
-	cleared, _ := readManaged(t, f.managementRequest(http.MethodPatch, "/"+child.Hash, `{"limit":null,"limit_reset":null}`, manager.Secret), http.StatusOK)
+	cleared, _ := readManaged(t, f.managementRequest(http.MethodPatch, "/"+child.Hash, `{"limit":null}`, manager.Secret), http.StatusOK)
 	if cleared.Limit != nil || cleared.Reset != nil || cleared.Remaining != nil {
 		t.Fatalf("null did not clear: %+v", cleared)
 	}
@@ -385,5 +386,31 @@ func TestManagementAPICanDisableLegacyKeys(t *testing.T) {
 	rec := f.managementRequest(http.MethodPatch, "/"+hash, `{"disabled":false}`, manager.Secret)
 	if rec.Code != http.StatusForbidden {
 		t.Fatal("temporary manager enabled permanent key", rec.Code, rec.Body)
+	}
+}
+
+func TestManagementPATCHSkipsUnchangedSettings(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	manager := f.managementKey(f.owner(), `"name":"manager"`)
+	child, _ := readManaged(t, f.managementRequest(http.MethodPost, "", `{"name":"child","models":["a"]}`, manager.Secret), http.StatusCreated)
+	if child.Limit != nil || manager.Key.SpendLimit != nil {
+		t.Fatal("management keys inherited call-key default")
+	}
+	for _, body := range []string{`{"include_byok_in_limit":false}`, `{"name":"child","models":["a"]}`} {
+		unchanged, _ := readManaged(t, f.managementRequest(http.MethodPatch, "/"+child.Hash, body, manager.Secret), http.StatusOK)
+		if unchanged.Updated != nil {
+			t.Fatal("no-op PATCH updated timestamp")
+		}
+	}
+	if got := f.text(`SELECT count(*)::text FROM platform.audit_log WHERE actor_kind='management_key' AND action='api_key.update'`); got != "0" {
+		t.Fatal("no-op PATCH wrote audit", got)
+	}
+	readManaged(t, f.managementRequest(http.MethodPatch, "/"+child.Hash, `{"models":["b"]}`, manager.Secret), http.StatusOK)
+	if got := f.text(`SELECT array_to_string(models,',') FROM accounts.api_keys WHERE name='child'`); got != "b" {
+		t.Fatal("model patch mistaken for no-op", got)
+	}
+	if got := f.text(`SELECT count(*)::text FROM platform.audit_log WHERE actor_kind='management_key' AND action='api_key.update'`); got != "1" {
+		t.Fatal("model patch missing audit", got)
 	}
 }

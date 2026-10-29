@@ -310,7 +310,7 @@
 | 计费类问题不返回 401，避开自动禁用措辞，并写成测试 | 把我们当上游的 new-api 收到 401 或特定措辞会自动禁用渠道，临时问题会被放大成停用 |
 | 扩展字段放在独立的 `axiom` 对象 | 不与 OpenRouter 的字段冲突 |
 | 提供 OpenAI 旧版和 OpenRouter 格式的余额接口 | 第一版范围要求支持其他中转站接入（见产品需求）。new-api 查询 OpenAI 类型渠道时用前者；查询 OpenRouter 渠道时写死访问 openrouter.ai，所以后者只服务兼容 OpenRouter 的工具 |
-| `/api/v1/credits` 调用 key 就能读，不要求管理 key | 开发者按负责人的授权决定（对话中的全权委托）。OpenRouter 要求管理 key（OpenRouter《Get remaining credits》，2026-10-16）；M1 没有管理 key 的接口，照办则无人能调，而读到的只是本账户的余额。M2 有管理 key 时按其权限再定 |
+| `/api/v1/credits`、`/api/v1/key` 只接受调用 key；管理 key 返回 401 | 按[负责人技术决定授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)落地 E4-9/P14，本轮管理 key 的认证面仅用于 `/keys` CRUD，保留已有调用 key 的读取行为。2026-10-29 核实 OpenRouter 的[余额接口](https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits)要求管理 key，[当前 key 信息](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key)提供管理 key 类型字段；Axiom 有意继续拒绝管理 key 访问这两个接口。管理凭证自省需区分签发上界与消费余额，后续单独定义权限和响应含义；不能经模型准入给管理 key 放行 |
 | `count_tokens` 是本站的估算，不转发上游 | 开发者按负责人的授权决定（对话中的全权委托）。Anthropic 的接口返回精确值；转发要占用端点名额，且需要走路由。文本和图片的估算偏高，客户端据此裁剪只会偏早；文件按固定页数估，页数多的文件会被低估，所以不承诺不超窗口。口径见[模块 README 的「辅助接口」](../../internal/gateway/README.md#辅助接口) |
 | Responses 会话状态由我们保存，偏离 OpenRouter | 负责人同意。OpenRouter 的 Responses 接口不保存状态，`store: true` 和 `previous_response_id` 都会返回 400（OpenRouter《Responses API》，2026-10）；支持续接能让 Codex 少发重复内容、省钱。会话状态单独保存，内容保存关闭期间续接也可用 |
 | 会话状态按工作区隔离，单独保存 | 同一账户的不同工作区可能属于不同项目；负责人授权开发者按用户体验判断，单独保存让对话内容关闭期间续接仍然可用 |
