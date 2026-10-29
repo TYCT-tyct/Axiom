@@ -325,22 +325,6 @@ func (m *canonMessage) readParts() ([]canonPart, error) {
 	return parts, nil
 }
 
-// effort is the reasoning effort the request asks for, "" for none: reasoning_effort, or OpenRouter's reasoning,
-// whose enabled alone means medium (OpenRouter《Reasoning tokens》).
-func (c *canon) effort() string {
-	switch r := c.Reasoning; {
-	case c.ReasoningEffort != nil:
-		return *c.ReasoningEffort
-	case r == nil:
-		return ""
-	case r.Effort != nil:
-		return *r.Effort
-	case r.Enabled != nil && *r.Enabled, r.Enabled == nil && r.MaxTokens != nil:
-		return "medium"
-	}
-	return ""
-}
-
 // maxOutput is the output cap the request sets, 0 for none.
 func (c *canon) maxOutput() int64 {
 	var n int64

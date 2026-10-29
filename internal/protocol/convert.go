@@ -10,7 +10,8 @@ import (
 )
 
 // convert writes a Chat request for a Messages or Responses endpoint (README.md「跨格式转换」): what the endpoint's
-// format can express the same way is written; whatever it cannot is *NotSupported, never approximated.
+// format can express is written; reasoning uses the documented approximations in README.md,
+// and other unrepresentable settings are *NotSupported.
 func convert(body []byte, t Target, w Rewrites) ([]byte, error) {
 	c, err := decodeCanon(body)
 	if err != nil {

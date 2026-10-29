@@ -100,7 +100,7 @@ func requestToChat(f Format, body []byte, t Target, w Rewrites) ([]byte, error) 
 	}
 	var messages []requestObject
 	if f == Messages {
-		messages, err = messagesRequestToChat(src, dst)
+		messages, err = messagesRequestToChat(src, dst, t.MaxOutput)
 	} else {
 		messages, err = responsesRequestToChat(src, dst, w)
 	}

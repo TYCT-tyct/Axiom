@@ -64,7 +64,9 @@ var (
 	// responsesRewrites put the call ID and the client's model name in the response, keep its usage to the official
 	// members, and drop an upstream's axiom member, which our ending may write.
 	responsesRewrites = formatRules{members: map[string]rule{
-		"response": object(map[string]rule{"id": (*rewriter).ourID, "model": (*rewriter).ourModel, "usage": (*rewriter).usage}),
+		"item":     hiddenResponseItem,
+		"part":     hidden((*rewriter).hiddenResponsePart),
+		"response": object(map[string]rule{"id": (*rewriter).ourID, "model": (*rewriter).ourModel, "usage": (*rewriter).usage, "output": hidden(arrayObjects(map[string]rule{"summary": (*rewriter).emptyArray, "content": (*rewriter).hiddenReasoningParts}))}),
 		"axiom":    (*rewriter).drop,
 	}}
 )
@@ -100,7 +102,15 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 		s.meter(m, false)
 		s.report = nil
 	}
-	if s.hasResponse {
+	return s.clientEvent()
+}
+
+func (s *responsesStream) clientEvent() (event, error) {
+	if s.ctx.HidesReasoning && strings.HasPrefix(s.e.name, "response.reasoning") {
+		s.e.role = skipped
+		return s.e, nil
+	}
+	if s.hasResponse || s.ctx.HidesReasoning {
 		return s.rewrite(responsesRewrites)
 	}
 	return s.e, nil

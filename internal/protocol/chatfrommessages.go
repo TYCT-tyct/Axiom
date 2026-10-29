@@ -75,6 +75,7 @@ func newMessagesToChat(u UsageContext, o RelayOptions, charge func(int) error) u
 	inner.converting = true
 	s := &messagesToChat{open: -1, leading: true}
 	s.init(inner, o, charge)
+	s.hidesReasoning = u.HidesReasoning
 	return s
 }
 
@@ -252,7 +253,7 @@ func (s *messagesToChat) blockStop() error {
 
 // thinking adds a piece of the open thinking block's text, as reasoning and as its reasoning detail.
 func (s *messagesToChat) thinking(piece []byte) error {
-	if piece = nonEmpty(piece); piece == nil {
+	if piece = nonEmpty(piece); piece == nil || s.hidesReasoning {
 		return nil
 	}
 	if err := s.addText(&s.draft.reasoning, piece); err != nil {

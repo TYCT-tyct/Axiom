@@ -42,6 +42,9 @@ func (s *chatToNative) readNativeChoice() error {
 }
 
 func (s *chatToNative) readNativeDelta() error {
+	if s.hidesReasoning && (string(s.name) == "reasoning" || string(s.name) == "reasoning_content" || string(s.name) == "reasoning_details") {
+		return s.skip()
+	}
 	switch string(s.name) {
 	case "content":
 		return s.captureNative(&s.chunk.Delta.Content)
