@@ -47,7 +47,7 @@ func scan(router *routing.Router, f protocol.Format, body []byte) error {
 	if err != nil {
 		return err
 	}
-	router.SessionKey(routing.AccountID{1}, &req, body)
+	router.SessionKey(routing.AccountID{1}, &req, body, "")
 	_, err = protocol.Prepare(&req, body, protocol.Target{Format: f, Model: "up"}, protocol.Rewrites{Identity: func(s string) string { return "h" + s }})
 	return err
 }

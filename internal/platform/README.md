@@ -154,6 +154,8 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 ## 接口约定
 
+控制台命名预设契约在 `api/console.yaml`，响应字段均为 optional，沿用会话/CSRF 与 key 的查看/管理权限；config 在 Go 契约里用 jsonx.Raw 保留，防止工具 schema 或 seed 的大整数经 map[string]any 变成 float64；实际存储和快照见 [accounts](../accounts/README.md#命名请求配置)。
+
 控制台接口和管理接口的契约在 `api/` 里，每个监听一份、自成一体：`console.yaml` 在公网监听的 `/api/console/v1`，`admin.yaml` 在管理监听的 `/api/admin/v1`。运营接口以后另加一份。`just generate` 生成 Go 端的 `consoleapi`、`adminapi` 和 `web/packages/api/src` 里的 `console.gen.ts`、`admin.gen.ts`；`just api`（`tools/checkapi`）用 kin-openapi 校验契约，并检查下表中标「检查」的约定。PR 和列车还对照目标分支跑 `just api-compat`：目标分支里已有的结构（组件、操作里内联的请求和响应体，以及它们嵌套的对象）不得新增必填字段。滚动发布时，新页面会读到不返回这个字段的旧节点，旧页面写到新节点时也不带它；字段保持可选，生成的类型就会逼两边处理它缺失的情况。确实可以必填时（例如旧节点都已下线），在这个结构上用 `x-axiom-newly-required` 按字段写明理由。新加的结构不受限制。每个操作的权限、限次、幂等和 CSRF 写在契约里，不在这里重复。
 
 | 约定 | 内容 | 检查 |

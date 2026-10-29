@@ -29,6 +29,9 @@ func (c Caller) KeyID() KeyID { return c.key }
 // AccountID is the account the key belongs to.
 func (c Caller) AccountID() AccountID { return c.account }
 
+// SiteID is the authenticated account's site.
+func (c Caller) SiteID() SiteID { return c.site }
+
 // WorkspaceID is the workspace the key belongs to.
 func (c Caller) WorkspaceID() WorkspaceID { return c.workspace }
 

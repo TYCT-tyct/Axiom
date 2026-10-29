@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"unicode/utf8"
 
 	"axiom/internal/catalog"
 )
@@ -33,6 +34,7 @@ var grammars = [...]grammar{
 	Messages: {
 		top: withProvider(fields{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"fallbacks":  (*scanner).fallbacks,
 			"max_tokens": (*scanner).maxOutput, "system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
 			"thinking": (*scanner).reasoning, "output_config": func(s *scanner) error { return s.object(messagesOutputFields) }, "output_format": (*scanner).format,
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
@@ -191,6 +193,7 @@ func (s *scanner) model() error {
 const maxModels = 8
 
 func (s *scanner) models() error {
+	s.modelsSet = s.dec.PeekKind() != 'n'
 	return s.array(func(s *scanner) error {
 		if len(s.r.Models) == maxModels {
 			return fmt.Errorf("models lists more than %d models", maxModels)
@@ -475,6 +478,15 @@ func hasPrefix(v []byte, prefix string) bool {
 
 // withProvider adds the provider member, which the three formats share, to the members of a format's top level.
 func withProvider(f fields) fields {
+	f["preset"] = func(s *scanner) error { v, err := s.str(); s.r.Preset = string(v); return err }
+	f["session_id"] = func(s *scanner) error {
+		v, err := s.str()
+		if utf8.RuneCount(v) > 256 {
+			return fmt.Errorf("session_id exceeds 256 characters")
+		}
+		s.r.SessionID = string(v)
+		return err
+	}
 	f["provider"] = (*scanner).provider
 	f["plugins"] = (*scanner).plugins
 	f["transforms"] = (*scanner).transforms

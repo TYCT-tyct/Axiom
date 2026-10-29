@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
@@ -50,8 +51,10 @@ type Request struct {
 	Format Format
 	Model  string
 	// Models are OpenRouter's alternates, tried after Model when it cannot serve the request.
-	Models []string
-	Stream bool
+	Models    []string
+	Preset    string // OpenRouter reference, resolved by gateway before routing
+	SessionID string // explicit body session, ahead of the header and legacy identities
+	Stream    bool
 	// Local OpenRouter plugins are validated before their control fields are removed.
 	Compression     Compression
 	ResponseHealing bool
@@ -178,6 +181,8 @@ type scanner struct {
 	tiers, fast                              catalog.ServiceTierSet // service_tier, and Anthropic's speed, which overrides it
 	reasoningOff                             bool
 	compressionSet, transformsSet, middleOut bool
+	modelsSet, fallbacksSet                  bool
+	fallbackModels                           []string
 	callCap                                  int64 // Responses' max_tool_calls
 }
 
@@ -206,7 +211,13 @@ func (s *scanner) top(body []byte) error {
 	if _, err := s.dec.ReadToken(); !errors.Is(err, io.EOF) {
 		return errors.Join(errors.New("data after the request"), err)
 	}
-	if s.r.Model == "" {
+	if s.modelsSet && s.fallbacksSet {
+		return errors.New("fallbacks cannot be combined with models")
+	}
+	if s.fallbacksSet {
+		s.r.Models = s.fallbackModels
+	}
+	if s.r.Model == "" && !strings.HasPrefix(s.r.Preset, "@preset/") {
 		return errors.New("model is missing")
 	}
 	return nil
