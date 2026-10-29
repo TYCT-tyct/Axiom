@@ -19,13 +19,28 @@ func TestPaymentSettingsBoundsAndIsolation(t *testing.T) {
 	if err := w.db.Tx(ctx, scope, func(tx pg.Tx) error { return SetSiteSettings(ctx, tx, admin, w.siteA, valid, "enable") }); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []SiteSettings{{Min: new(int64(0))}, {Max: new(int64(-1))}, {Min: new(int64(2)), Max: new(int64(1))}} {
-		if err := w.db.Tx(ctx, scope, func(tx pg.Tx) error { return SetSiteSettings(ctx, tx, admin, w.siteA, s, "invalid") }); err == nil {
-			t.Fatal("accepted invalid limits")
+	for _, tc := range []struct {
+		settings SiteSettings
+		field    string
+	}{
+		{SiteSettings{Min: new(int64(0))}, "/credits_min"},
+		{SiteSettings{Max: new(int64(-1))}, "/credits_max"},
+		{SiteSettings{Min: new(int64(2)), Max: new(int64(1))}, "/credits_max"},
+	} {
+		err := w.db.Tx(ctx, scope, func(tx pg.Tx) error { return SetSiteSettings(ctx, tx, admin, w.siteA, tc.settings, "invalid") })
+		field, ok := errors.AsType[*FieldError](err)
+		if !ok || field.Field != tc.field {
+			t.Fatalf("invalid setting: %v, want %s", err, tc.field)
 		}
 	}
+
 	if err := w.db.Tx(ctx, siteScope(w.siteB), func(tx pg.Tx) error { return SetSiteSettings(ctx, tx, admin, w.siteA, SiteSettings{}, "cross site") }); err == nil {
 		t.Fatal("cross-site change")
+	}
+	if got := w.count(scope, `SELECT count(*) FROM platform.audit_log WHERE action='payment_settings.update'
+ AND detail->'after' ?& ARRAY['open','credits_min','credits_max']
+ AND NOT (detail->'after' ?| ARRAY['Open','Min','Max'])`); got != 1 {
+		t.Fatal("payment settings audit does not use the public field names")
 	}
 	if err := w.db.ReadTx(ctx, scope, func(tx pg.Tx) error {
 		s, err := ReadSiteSettings(ctx, tx, w.siteA)
@@ -89,11 +104,11 @@ func TestMerchantConfigTestUsesSavedSettings(t *testing.T) {
 	in.Kind = "easypay"
 	in.Settings = cfg.Settings
 	merchant := w.mustSave(siteScope(w.siteA), in)
-	status, err := w.p.TestMerchant(t.Context(), siteScope(w.siteA), MerchantID(merchant.ID))
+	status, err := testMerchant(t, w, siteScope(w.siteA), MerchantID(merchant.ID))
 	if err != nil || status != "accepted" {
 		t.Fatalf("test: %s %v", status, err)
 	}
-	if _, err := w.p.TestMerchant(t.Context(), siteScope(w.siteB), MerchantID(merchant.ID)); !errors.Is(err, ErrNotFound) {
+	if _, err := testMerchant(t, w, siteScope(w.siteB), MerchantID(merchant.ID)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-site merchant: %v", err)
 	}
 	if got := w.count(siteScope(w.siteA), "SELECT count(*) FROM payments.orders"); got != 0 {
@@ -101,7 +116,41 @@ func TestMerchantConfigTestUsesSavedSettings(t *testing.T) {
 	}
 	fake := newWorld(t)
 	saved := fake.mustSave(siteScope(fake.siteA), fake.input(fake.siteA))
-	if status, err := fake.p.TestMerchant(t.Context(), siteScope(fake.siteA), MerchantID(saved.ID)); err != nil || status != "unsupported" {
+	if status, err := testMerchant(t, fake, siteScope(fake.siteA), MerchantID(saved.ID)); err != nil || status != "unsupported" {
 		t.Fatalf("unsupported probe: %s %v", status, err)
+	}
+}
+
+func testMerchant(t *testing.T, w *world, scope pg.Scope, id MerchantID) (status string, err error) {
+	t.Helper()
+	err = w.db.Tx(t.Context(), scope, func(tx pg.Tx) (err error) { status, err = w.p.TestMerchant(t.Context(), tx, id); return err })
+	return status, err
+}
+
+func TestMerchantConfigFailureDiagnostic(t *testing.T) {
+	t.Parallel()
+	w := newTestWorld(t, EasyPay{})
+	server := merchantQueryServer(t, `{"code":-1,"msg":"echoed-private-value"}`, 200)
+	t.Cleanup(server.Close)
+	cfg := easyPayConfig(t, server.URL, server.Certificate())
+	w.p.client = cfg.Client
+	in := w.input(w.siteA)
+	in.Kind, in.Settings = "easypay", cfg.Settings
+	merchant := w.mustSave(siteScope(w.siteA), in)
+	id := MerchantID(merchant.ID)
+	status, err := testMerchant(t, w, siteScope(w.siteA), id)
+	if err != nil || status != "failed" {
+		t.Fatalf("test: %s %v", status, err)
+	}
+	logs := w.logs.String()
+	for _, want := range []string{"merchant configuration test failed", id.TypeID(), "request_id=", "gateway_refused"} {
+		if want == "" || !strings.Contains(logs, want) {
+			t.Fatalf("missing merchant diagnostic %q: %s", want, logs)
+		}
+	}
+	for _, private := range []string{theKey, "echoed-private-value"} {
+		if strings.Contains(logs, private) {
+			t.Fatal("merchant diagnostic contains a secret or gateway body")
+		}
 	}
 }

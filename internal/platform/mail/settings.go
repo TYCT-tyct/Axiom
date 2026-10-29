@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"uuid"
+
+	"axiom/internal/platform/httpserver"
 
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/jsonx"
@@ -96,15 +99,18 @@ func SaveConfig(ctx context.Context, tx pg.Tx, keys *secret.Keyring, actor audit
 }
 
 // TestConfig sends one fixed test message and returns only a stable, non-sensitive outcome.
-func TestConfig(ctx context.Context, cfg Config, to string) string {
+func TestConfig(ctx context.Context, cfg Config, to string, logger *slog.Logger) string {
 	if !cfg.Configured() {
 		return "disabled"
 	}
-	return newSender(cfg).testConfig(ctx, to)
+	return newSender(cfg).testConfig(ctx, to, logger)
 }
 
-func (s *sender) testConfig(ctx context.Context, to string) string {
+func (s *sender) testConfig(ctx context.Context, to string, logger *slog.Logger) string {
 	_, err := s.Send(ctx, Message{To: to, Subject: "Axiom SMTP configuration test", Text: "Axiom SMTP configuration test.", HTML: "<p>Axiom SMTP configuration test.</p>"})
+	if err != nil {
+		logger.WarnContext(ctx, "SMTP configuration test failed", "request_id", httpserver.RequestID(ctx), "err", smtpDiagnostic(err))
+	}
 	switch {
 	case err == nil:
 		return "accepted"

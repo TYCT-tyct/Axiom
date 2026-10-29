@@ -1,14 +1,18 @@
+-- +goose NO TRANSACTION
 -- +goose Up
-CREATE INDEX IF NOT EXISTS audit_log_time ON platform.audit_log (at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS audit_log_site ON platform.audit_log (site_id,at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS audit_log_account ON platform.audit_log (account_id,at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS audit_log_request ON platform.audit_log (request_id,at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS audit_log_actor ON platform.audit_log (actor_id,at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS audit_log_actor_kind ON platform.audit_log (actor_kind,at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS audit_log_action ON platform.audit_log (action,at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS audit_log_module ON platform.audit_log (module,at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS audit_log_target_kind ON platform.audit_log (target_kind,at DESC,id DESC);
-CREATE INDEX IF NOT EXISTS audit_log_target ON platform.audit_log (target_id,at DESC,id DESC);
+
+-- Keep authentication and other audited writes available while building the search indexes.
+-- An interrupted concurrent build may leave an invalid index; drop that index CONCURRENTLY before retrying.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_time ON platform.audit_log (at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_site ON platform.audit_log (site_id,at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_account ON platform.audit_log (account_id,at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_request ON platform.audit_log (request_id,at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_actor ON platform.audit_log (actor_id,at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_actor_kind ON platform.audit_log (actor_kind,at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_action ON platform.audit_log (action,at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_module ON platform.audit_log (module,at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_target_kind ON platform.audit_log (target_kind,at DESC,id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_log_target ON platform.audit_log (target_id,at DESC,id DESC);
 
 CREATE TABLE IF NOT EXISTS platform.smtp_config (
  id uuid PRIMARY KEY CHECK (id = '00000000-0000-0000-0000-000000000000'),

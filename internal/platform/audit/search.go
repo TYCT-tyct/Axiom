@@ -6,6 +6,7 @@ import (
 	"uuid"
 
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 )
 
@@ -28,8 +29,8 @@ type Entry struct {
 
 // Search uses exact filters. Since is inclusive, Until exclusive; the caller bounds the window and limit.
 type Search struct {
-	Since, Until, BeforeAt                                                             time.Time
-	BeforeID                                                                           uuid.UUID
+	Since, Until                                                                       time.Time
+	After                                                                              *page.Cursor
 	Site, Account, RequestID, ActorKind, ActorID, Action, Module, TargetKind, TargetID string
 	Limit                                                                              int
 }
@@ -47,25 +48,35 @@ const (
  ORDER BY audit_log.at DESC,audit_log.id DESC LIMIT $14`
 )
 
-// List returns at most Limit+1 entries; the extra entry proves another page exists.
-func List(ctx context.Context, tx pg.Tx, q Search) ([]Entry, error) {
+// List returns an ordered page and its next position, within the authorized transaction scope.
+func List(ctx context.Context, tx pg.Tx, q Search) ([]Entry, *page.Cursor, error) {
 	if _, err := tx.Exec(ctx, "SET LOCAL plan_cache_mode = force_custom_plan; SET LOCAL enable_sort = off"); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	rows, err := tx.Query(ctx, searchSQL, q.BeforeAt, q.BeforeID, q.Since, q.Until, q.Site, q.Account, q.RequestID, q.ActorKind, q.ActorID, q.Action, q.Module, q.TargetKind, q.TargetID, q.Limit+1)
+	upper := page.UpperBound(q.Until, q.After)
+	rows, err := tx.Query(ctx, searchSQL, upper.At, upper.ID, q.Since, q.Until, q.Site, q.Account, q.RequestID, q.ActorKind, q.ActorID, q.Action, q.Module, q.TargetKind, q.TargetID, q.Limit+1)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	out := make([]Entry, 0, q.Limit+1)
 	for rows.Next() {
 		var e Entry
 		if err := rows.Scan(&e.ID, &e.At, &e.ActorKind, &e.ActorID, &e.RequestID, &e.Action, &e.Module, &e.TargetKind, &e.TargetID, &e.Site, &e.Account, &e.Reason, &e.Detail); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	var next *page.Cursor
+	if len(out) > q.Limit {
+		out = out[:q.Limit]
+		last := out[len(out)-1]
+		next = &page.Cursor{At: last.At, ID: last.ID}
+	}
+	return out, next, nil
 }
 
 // Get returns a single entry within the caller's authorized scope.

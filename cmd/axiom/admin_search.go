@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net/url"
 	"strconv"
 	"time"
 	"uuid"
@@ -15,34 +14,19 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-func adminSearchWindow(values url.Values) (since, until time.Time, after *observability.Cursor, err error) {
-	until = time.Now().UTC()
-	since = until.Add(-24 * time.Hour)
-	for _, p := range []struct {
-		name string
-		dst  *time.Time
-	}{{"since", &since}, {"until", &until}} {
-		if raw := values.Get(p.name); raw != "" {
-			*p.dst, err = time.Parse(time.RFC3339Nano, raw)
-			if err != nil {
-				return since, until, nil, invalidField(p.name, "must be an RFC3339 time")
-			}
+func adminSearchWindow(since, until *time.Time, cursor *string) (time.Time, time.Time, *observability.Cursor, error) {
+	q, err := boundedCallWindow(observability.OwnQuery{}, since, until, 24*time.Hour)
+	if err != nil {
+		return time.Time{}, time.Time{}, nil, err
+	}
+	if cursor != nil {
+		c, err := observability.ParseCursor(*cursor)
+		if err != nil {
+			return time.Time{}, time.Time{}, nil, invalidField("cursor", "not a cursor this API gave out")
 		}
+		q.After = &c
 	}
-	if values.Get("since") == "" {
-		since = until.Add(-24 * time.Hour)
-	}
-	if !since.Before(until) || until.Sub(since) > 31*24*time.Hour {
-		return since, until, nil, invalidField("since", "window must be positive and no longer than 31 days")
-	}
-	if raw := values.Get("cursor"); raw != "" {
-		c, e := observability.ParseCursor(raw)
-		if e != nil || c.At.Year() < 1 || c.At.Year() > 9999 {
-			return since, until, nil, invalidField("cursor", "not a cursor this API gave out")
-		}
-		after = &c
-	}
-	return since, until, after, nil
+	return q.Since, q.Until, q.After, nil
 }
 
 func summaryBody(c observability.CallSummary) (adminapi.AdminCallSummary, error) {
@@ -52,27 +36,24 @@ func summaryBody(c observability.CallSummary) (adminapi.AdminCallSummary, error)
 func (a adminAPI) ListAdminCalls(ctx context.Context, r adminapi.ListAdminCallsRequestObject) (adminapi.ListAdminCallsResponseObject, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	values := callOf(ctx).r.URL.Query()
-	since, until, after, err := adminSearchWindow(values)
+	since, until, after, err := adminSearchWindow(r.Params.Since, r.Params.Until, r.Params.Cursor)
 	if err != nil {
 		return nil, err
 	}
 	q := observability.AdminQuery{Since: since, Until: until, After: after, PageSize: pageSize(r.Params.Limit)}
-	if raw := values.Get("account_id"); raw != "" {
-		id, e := accounts.ParseAccountID(raw)
+	if r.Params.AccountId != nil {
+		id, e := accounts.ParseAccountID(*r.Params.AccountId)
 		if e != nil {
 			return nil, invalidField("account_id", "not an account ID")
 		}
 		v := uuid.UUID(id)
 		q.Account = &v
 	}
-	if raw := values.Get("request_id"); raw != "" {
-		id, e := uuid.Parse(raw)
-		if e != nil {
-			return nil, invalidField("request_id", "not a UUID")
-		}
+	if r.Params.RequestId != nil {
+		id := uuid.UUID(*r.Params.RequestId)
 		q.RequestID = &id
 	}
+
 	var calls []observability.CallSummary
 	var next *observability.Cursor
 	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) { calls, next, err = observability.ListAdmin(ctx, tx, q); return err })
@@ -136,41 +117,42 @@ func auditBody(e audit.Entry) (adminapi.AuditEntry, error) {
 func (a adminAPI) ListAuditEntries(ctx context.Context, r adminapi.ListAuditEntriesRequestObject) (adminapi.ListAuditEntriesResponseObject, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	v := callOf(ctx).r.URL.Query()
-	since, until, after, err := adminSearchWindow(v)
+	since, until, after, err := adminSearchWindow(r.Params.Since, r.Params.Until, r.Params.Cursor)
 	if err != nil {
 		return nil, err
 	}
-	q := audit.Search{Since: since, Until: until, BeforeAt: until, Limit: pageSize(r.Params.Limit), ActorKind: v.Get("actor_kind"), ActorID: v.Get("actor_id"), Action: v.Get("action"), Module: v.Get("module"), TargetKind: v.Get("target_kind"), TargetID: v.Get("target_id"), RequestID: v.Get("request_id")}
-	if after != nil && after.At.Before(until) {
-		q.BeforeAt, q.BeforeID = after.At, after.ID
+	p := r.Params
+	q := audit.Search{Since: since, Until: until, After: after, Limit: pageSize(p.Limit), ActorKind: textValue(p.ActorKind), ActorID: textValue(p.ActorId), Action: textValue(p.Action), Module: textValue(p.Module), TargetKind: textValue(p.TargetKind), TargetID: textValue(p.TargetId)}
+	if p.RequestId != nil {
+		q.RequestID = p.RequestId.String()
 	}
-	if raw := v.Get("site_id"); raw != "" {
-		id, e := accounts.ParseSiteID(raw)
+
+	if p.SiteId != nil {
+		id, e := accounts.ParseSiteID(*p.SiteId)
 		if e != nil {
 			return nil, invalidField("site_id", "not a site ID")
 		}
 		q.Site = uuid.UUID(id).String()
 	}
-	if raw := v.Get("account_id"); raw != "" {
-		id, e := accounts.ParseAccountID(raw)
+	if p.AccountId != nil {
+		id, e := accounts.ParseAccountID(*p.AccountId)
 		if e != nil {
 			return nil, invalidField("account_id", "not an account ID")
 		}
 		q.Account = uuid.UUID(id).String()
 	}
 	var rows []audit.Entry
-	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) { rows, err = audit.List(ctx, tx, q); return err })
+	var next *observability.Cursor
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) { rows, next, err = audit.List(ctx, tx, q); return err })
 	if err != nil {
 		return nil, err
 	}
-	var next *string
-	if len(rows) > q.Limit {
-		rows = rows[:q.Limit]
-		last := rows[len(rows)-1]
-		v := (observability.Cursor{At: last.At, ID: last.ID}).String()
-		next = &v
+	var cursor *string
+	if next != nil {
+		v := next.String()
+		cursor = &v
 	}
+
 	data := make([]adminapi.AuditEntry, len(rows))
 	for i, e := range rows {
 		data[i], err = auditBody(e)
@@ -178,7 +160,7 @@ func (a adminAPI) ListAuditEntries(ctx context.Context, r adminapi.ListAuditEntr
 			return nil, err
 		}
 	}
-	return adminapi.ListAuditEntries200JSONResponse{Data: &data, NextCursor: next, Since: &since, Until: &until}, nil
+	return adminapi.ListAuditEntries200JSONResponse{Data: &data, NextCursor: cursor, Since: &since, Until: &until}, nil
 }
 
 func (a adminAPI) GetAuditEntry(ctx context.Context, r adminapi.GetAuditEntryRequestObject) (adminapi.GetAuditEntryResponseObject, error) {

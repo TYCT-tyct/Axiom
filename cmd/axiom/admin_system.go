@@ -145,11 +145,20 @@ func (a adminAPI) savedMail(ctx context.Context) (cfg mail.Config, found bool, e
 
 func (a adminAPI) SetMailSettings(ctx context.Context, r adminapi.SetMailSettingsRequestObject) (adminapi.SetMailSettingsResponseObject, error) {
 	v := r.Body.Settings
-	s := mail.Settings{Enabled: v.Enabled, Host: smtpText(v.Host), Port: 587, Username: smtpText(v.Username), From: smtpText(v.From), Password: v.Password}
+	s := mail.Settings{Enabled: v.Enabled, Host: textValue(v.Host), Port: 587, Username: textValue(v.Username), From: textValue(v.From), Password: v.Password}
 	if v.Port != nil {
 		s.Port = *v.Port
 	}
-	body, replayed, err := idempotently(ctx, a.db, "setMailSettings", r.Params.IdempotencyKey, r.Body, func(tx pg.Tx) (adminapi.MailSettings, error) {
+	// Credentials never enter the persisted, unkeyed idempotency fingerprint.
+	identity := []any{s.Enabled, s.Host, s.Port, s.Username, s.From, r.Body.Reason, s.Password != nil}
+	body, replayed, err := idempotently(ctx, a.db, "setMailSettings", r.Params.IdempotencyKey, identity, func(tx pg.Tx) (adminapi.MailSettings, error) {
+		if s.Enabled {
+			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if err := a.exit.Check(checkCtx, s.Host); err != nil {
+				return adminapi.MailSettings{}, invalidField("/settings/host", "SMTP destination could not be validated as public")
+			}
+		}
 		cfg, err := mail.SaveConfig(ctx, tx, a.keys, actor(ctx), s, r.Body.Reason)
 		if errors.Is(err, mail.ErrInvalidConfig) {
 			return adminapi.MailSettings{}, invalidField("/settings", "invalid SMTP configuration; verify host, port, sender and credentials, and reenter password after destination changes")
@@ -176,7 +185,7 @@ func (a adminAPI) TestMailSettings(ctx context.Context, r adminapi.TestMailSetti
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 40*time.Second)
 	defer cancel()
 	body, replayed, err := idempotently(ctx, a.db, "testMailSettings", r.Params.IdempotencyKey, r.Body, func(tx pg.Tx) (adminapi.ConfigTestResult, error) {
-		result := mail.TestConfig(ctx, cfg, r.Body.To)
+		result := mail.TestConfig(ctx, cfg, r.Body.To, a.logger)
 		err := audit.Record(ctx, tx, audit.Event{Actor: actor(ctx), Action: "smtp_config.test", Reason: r.Body.Reason, Target: audit.Target{Module: "platform", Kind: "smtp_config", ID: uuid.Nil().String()}, Detail: map[string]any{"status": result}})
 		body, e := adminJSON[adminapi.ConfigTestResult](map[string]string{"status": result})
 		if err != nil {
@@ -207,7 +216,7 @@ func (a adminAPI) TestMerchantSettings(ctx context.Context, r adminapi.TestMerch
 		if err != nil {
 			return adminapi.ConfigTestResult{}, err
 		}
-		status, err := p.TestMerchant(ctx, callOf(ctx).scope, payments.MerchantID(id))
+		status, err := p.TestMerchant(ctx, tx, payments.MerchantID(id))
 		if err != nil {
 			return adminapi.ConfigTestResult{}, err
 		}
@@ -224,7 +233,7 @@ func (a adminAPI) TestMerchantSettings(ctx context.Context, r adminapi.TestMerch
 	return adminapi.TestMerchantSettings200JSONResponse{Body: body, Headers: adminapi.TestMerchantSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-func smtpText(v *string) string {
+func textValue(v *string) string {
 	if v == nil {
 		return ""
 	}

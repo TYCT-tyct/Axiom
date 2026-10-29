@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -27,7 +28,6 @@ func TestAuditPagesFollowIndexOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := Search{Since: time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC), Until: time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC), Limit: 50}
-	q.BeforeAt = q.Until
 	for _, tc := range []struct {
 		name, actor string
 		deep        bool
@@ -36,7 +36,7 @@ func TestAuditPagesFollowIndexOrder(t *testing.T) {
 			v := q
 			v.ActorID = tc.actor
 			if tc.deep {
-				v.BeforeAt = v.Since.Add(5000 * time.Second)
+				v.After = &page.Cursor{At: v.Since.Add(5000 * time.Second)}
 			}
 			plan := explainAuditSearch(t, db, v)
 
@@ -49,10 +49,11 @@ func explainAuditSearch(t *testing.T, db *pg.DB, v Search) string {
 	t.Helper()
 	var lines []string
 	err := db.ReadTx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
-		if _, err := List(t.Context(), tx, v); err != nil {
+		if _, _, err := List(t.Context(), tx, v); err != nil {
 			return err
 		}
-		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+searchSQL, v.BeforeAt, v.BeforeID, v.Since, v.Until, v.Site, v.Account, v.RequestID, v.ActorKind, v.ActorID, v.Action, v.Module, v.TargetKind, v.TargetID, v.Limit+1)
+		upper := page.UpperBound(v.Until, v.After)
+		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+searchSQL, upper.At, upper.ID, v.Since, v.Until, v.Site, v.Account, v.RequestID, v.ActorKind, v.ActorID, v.Action, v.Module, v.TargetKind, v.TargetID, v.Limit+1)
 		if err != nil {
 			return err
 		}

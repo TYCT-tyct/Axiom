@@ -8,6 +8,7 @@ import (
 	"uuid"
 
 	"axiom/internal/platform/audit"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 )
 
@@ -17,7 +18,7 @@ func TestAuditSearchFiltersPagesAndScope(t *testing.T) {
 	ctx := t.Context()
 	seedAuditSearch(t, db)
 
-	base := audit.Search{Since: time.Now().Add(-time.Hour), Until: time.Now().Add(time.Hour), BeforeAt: time.Now().Add(time.Hour), Limit: 1}
+	base := audit.Search{Since: time.Now().Add(-time.Hour), Until: time.Now().Add(time.Hour), Limit: 1}
 	ids := auditSearchIDs(t, db, base)
 
 	if len(ids) != 3 || ids[0] == ids[1] || ids[1] == ids[2] {
@@ -30,6 +31,7 @@ func TestAuditSearchFiltersPagesAndScope(t *testing.T) {
 		want  int
 	}{
 		{"all", func(*audit.Search) {}, platform, 3},
+		{"later cursor", func(q *audit.Search) { q.After = &page.Cursor{At: q.Until.Add(time.Hour), ID: uuid.NewV7()} }, platform, 3},
 		{"account", func(q *audit.Search) { q.Account = account.String() }, platform, 1},
 		{"site", func(q *audit.Search) { q.Site = site.String() }, platform, 1},
 		{"action", func(q *audit.Search) { q.Action = "not.found" }, platform, 0},
@@ -41,8 +43,7 @@ func TestAuditSearchFiltersPagesAndScope(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q := base
-			q.BeforeAt = q.Until
-			q.BeforeID = uuid.Nil()
+			q.After = nil
 			q.Limit = 20
 			tc.edit(&q)
 			rows := auditSearch(t, db, tc.scope, q)
@@ -100,7 +101,7 @@ func seedAuditSearch(t *testing.T, db *pg.DB) {
 
 func auditSearch(t *testing.T, db *pg.DB, scope pg.Scope, q audit.Search) (rows []audit.Entry) {
 	t.Helper()
-	if err := db.ReadTx(t.Context(), scope, func(tx pg.Tx) (err error) { rows, err = audit.List(t.Context(), tx, q); return err }); err != nil {
+	if err := db.ReadTx(t.Context(), scope, func(tx pg.Tx) (err error) { rows, _, err = audit.List(t.Context(), tx, q); return err }); err != nil {
 		t.Fatal(err)
 	}
 	return rows
@@ -110,16 +111,17 @@ func auditSearchIDs(t *testing.T, db *pg.DB, base audit.Search) []uuid.UUID {
 	t.Helper()
 	var ids []uuid.UUID
 	for {
-		rows := auditSearch(t, db, platform, base)
-
-		if len(rows) == 0 {
-			break
+		var rows []audit.Entry
+		var next *page.Cursor
+		if err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) (err error) { rows, next, err = audit.List(t.Context(), tx, base); return err }); err != nil {
+			t.Fatal(err)
 		}
-		ids = append(ids, rows[0].ID)
-		if len(rows) == 1 {
-			break
+		for _, row := range rows {
+			ids = append(ids, row.ID)
 		}
-		base.BeforeAt, base.BeforeID = rows[0].At, rows[0].ID
+		if next == nil {
+			return ids
+		}
+		base.After = next
 	}
-	return ids
 }

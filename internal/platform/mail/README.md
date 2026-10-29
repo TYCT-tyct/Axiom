@@ -14,15 +14,17 @@
 | `AXIOM_SMTP_PASSWORD` | — | 密码或服务商的应用专用密码；以 `secret.Secret` 保存，任何格式都不打印 |
 | `AXIOM_SMTP_FROM` | — | 发件人，一个地址，可带显示名：`Axiom <no-reply@example.com>` |
 
-平台管理员可用 `StoredConfig`、`SaveConfig` 保存共享的 SMTP 覆盖，组装层在启动注册 worker 前读取；无覆盖仍使用环境变量。保存不改变在跑的 sender，API 返回 `restart_required`，重启节点后生效。显式禁用也保存覆盖，因此不会意外回落到环境变量。迁移 platform 00017 的 `smtp_config` 只限平台范围；配置整包加密，AAD 是表名、全零单例 ID 与 purpose=config，纳入主密钥轮换清单。API 不返回密码，审计只记 enabled；省略密码仅在连接目标未变时保留，改服务器、端口或用户名必须重填。保存校验失败返回 `ErrInvalidConfig`，数据库和解封失败原样上抛，不能误报为输入错误。
+平台管理员可用 `StoredConfig`、`SaveConfig` 保存共享的 SMTP 覆盖，组装层在启动注册 worker 前读取；无覆盖仍使用环境变量。保存不改变在跑的 sender，API 返回 `restart_required`，重启节点后生效。显式禁用也保存覆盖，因此不会意外回落到环境变量。迁移 platform 00017 的 `smtp_config` 只限平台范围；配置整包加密，AAD 是表名、全零单例 ID 与 purpose=config，纳入主密钥轮换清单。API 不返回密码，幂等指纹只保存非密设置、理由和是否提供密码，不形成离线密码猜测的校验器；审计只记 enabled；省略密码仅在连接目标未变时保留，改服务器、端口或用户名必须重填。保存校验失败返回 `ErrInvalidConfig`，数据库和解封失败原样上抛，不能误报为输入错误。
 
-`TestConfig` 使用原 sender 同步发固定测试邮件，返回 accepted/rejected/failed/disabled；错误原文、凭证与收件人不进入响应和审计。accepted 是 SMTP 接受；网络错误可能已送达，不能当作确定未送达。配置测试的临时 sender 使用独立会话预算，不占用普通邮件的共享收件人冷却；HTTP 层限会话频率、要求 MFA/CSRF/幂等/理由，重放已提交结果不重发；SMTP 接受后数据库提交失败仍可能重发，测试邮件可重复。测试复用 sender 的受控信任库连接真实 TLS 测试服务器，兼容各平台且不放松生产证书校验。
+`TestConfig` 使用原 sender 同步发固定测试邮件，返回 accepted/rejected/failed/disabled；错误原文、凭证与收件人不进入响应和审计。accepted 是 SMTP 接受；网络错误可能已送达，不能当作确定未送达。配置测试的临时 sender 使用独立会话预算，不占用普通邮件的共享收件人冷却；HTTP 层限会话频率、要求 MFA/CSRF/幂等/理由，重放已提交结果不重发；SMTP 接受后数据库提交失败仍可能重发，测试邮件可重复。测试复用 sender 的受控信任库连接真实 TLS 测试服务器，兼容各平台且不放松生产证书校验。幂等认领事务在网络调用期间保持开启，最多占一个连接；SMTP 会话总预算 40 秒，认领避免已提交的重复请求再次发信。
 
 `Mailer.Configured` 让账户流程在查用户之前统一判断此节点能否入队。
 
 没有设置任何一项时邮件关闭：启动日志写 `email disabled`，`Enqueue` 返回 `ErrNotConfigured`，节点的其他功能照常。设置了任意一项就要求整套配置，缺项或取值不合法时启动失败，并一次报出全部问题；错误只写变量名和期望的格式，不写取值。发件人同时出现在信封和 `From` 头里，所以两者都要在启动时写得出来：信封放不下的地址，以及带显示名时整行折不进 998 字符的 `From` 头，都在这里失败（只有 ASCII 能进信封路径，见「传输」）。发信域名的 SPF、DKIM、DMARC 仍待配置（[accounts 的「待定问题」](../../../docs/domains/accounts.md#待定问题)）。
 
 ## 传输
+
+SMTP 连接使用与 HTTP 相同的 egress 地址策略：保存管理配置时先检查全部 DNS 答案，发送时重新解析并只连接通过校验的 IP，不再交给系统做第二次 DNS 解析。回环、私网、云元数据地址和混合公私网答案均拒绝，节点环境变量配置也适用；本地中继须使用可公开路由的受信目标。测试服务器仅经 `egresstest` 能力放行回环，生产没有放行开关。配置测试失败写带请求 ID 的 Warn 日志，仅记录类型化的 DNS/TLS/超时分类或 SMTP 数字状态码，服务器回复原文可能回显凭证和地址，不能写入日志。
 
 - **始终加密**：端口 465 直接 TLS，其余端口在发出任何命令前用 STARTTLS 升级；服务器不提供 STARTTLS 就报错，不退回明文。证书按主机名校验，没有跳过校验的开关：私有 CA 放进系统的信任库，而不是关掉校验（new-api 的 `SMTPInsecureSkipVerify` 会让任何网络位置读到密码和全部邮件）。最低 TLS 1.2。
 - **认证**：用户名和密码都设置时，在 TLS 之后用 `smtp.PlainAuth`；只设一个在启动时就报错。

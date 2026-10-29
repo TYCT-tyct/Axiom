@@ -1,9 +1,17 @@
 package main
 
 import (
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/mail"
+	"axiom/internal/platform/pg"
 
 	"axiom/internal/platform/adminapi"
 )
@@ -58,7 +66,7 @@ func TestAdminMailSettings(t *testing.T) {
 	f := newAdminFixture(t)
 	s := f.owner()
 	path := "/settings/mail"
-	body := `{"settings":{"enabled":true,"host":"smtp.example.com","port":587,"username":"test-user","from":"no-reply@example.com","password":"smtp-test-value"},"reason":"configure"}`
+	body := `{"settings":{"enabled":true,"host":"8.8.8.8","port":587,"username":"test-user","from":"no-reply@example.com","password":"smtp-test-value"},"reason":"configure"}`
 	rec := f.change(s, http.MethodPut, path, body, newKey())
 	expectAdmin(t, "save mail", rec, 200, "")
 	if strings.Contains(rec.Body.String(), "smtp-test-value") {
@@ -71,10 +79,10 @@ func TestAdminMailSettings(t *testing.T) {
 	}
 	body = strings.Replace(body, `,"password":"smtp-test-value"`, "", 1)
 	expectAdmin(t, "retain password", f.change(s, http.MethodPut, path, body, newKey()), 200, "")
-	expectAdmin(t, "destination change", f.change(s, http.MethodPut, path, strings.Replace(body, "smtp.example.com", "elsewhere.example.com", 1), newKey()), 400, "")
+	expectAdmin(t, "destination change", f.change(s, http.MethodPut, path, strings.Replace(body, "8.8.8.8", "8.8.4.4", 1), newKey()), 400, "")
 	rec = f.do(http.MethodGet, path, "", as(s))
 	expectAdmin(t, "read mail", rec, 200, "")
-	if !strings.Contains(rec.Body.String(), "smtp.example.com") || strings.Contains(rec.Body.String(), "smtp-test-value") {
+	if !strings.Contains(rec.Body.String(), "8.8.8.8") || strings.Contains(rec.Body.String(), "smtp-test-value") {
 		t.Fatal(rec.Body.String())
 	}
 	if strings.Contains(f.text("SELECT detail::text FROM platform.audit_log WHERE action='smtp_config.update' LIMIT 1"), "smtp-test-value") {
@@ -105,5 +113,60 @@ func checkExactPaymentAudit(t *testing.T, f adminFixture, s session) {
 	expectAdmin(t, "exact audit detail", auditResponse, 200, "")
 	if !strings.Contains(auditResponse.Body.String(), "9007199254740993") {
 		t.Fatal("audit rounded amount")
+	}
+}
+
+func TestSMTPFingerprintExcludesPassword(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	body := `{"settings":{"enabled":true,"host":"8.8.8.8","port":587,"username":"test","from":"no-reply@example.com","password":"first-test-value"},"reason":"configure"}`
+	first := newKey()
+	expectAdmin(t, "first password", f.change(s, http.MethodPut, "/settings/mail", body, first), 200, "")
+	second := strings.Replace(body, "first-test-value", "different-test-value", 1)
+	expectAdmin(t, "second password", f.change(s, http.MethodPut, "/settings/mail", second, newKey()), 200, "")
+	if got := f.text("SELECT count(DISTINCT fingerprint)::text FROM platform.idempotency WHERE operation='setMailSettings'"); got != "1" {
+		t.Fatalf("password changed persisted fingerprint: %s", got)
+	}
+	replay := f.change(s, http.MethodPut, "/settings/mail", second, first)
+	expectAdmin(t, "secret-independent replay", replay, 200, "")
+	if replay.Header().Get("Idempotency-Replayed") != "true" || f.auditCount("smtp_config.update") != "2" {
+		t.Fatal("replayed credential save changed state")
+	}
+	withoutPassword := strings.Replace(body, `,"password":"first-test-value"`, "", 1)
+	expectAdmin(t, "password presence marker", f.change(s, http.MethodPut, "/settings/mail", withoutPassword, newKey()), 200, "")
+	if got := f.text("SELECT count(DISTINCT fingerprint)::text FROM platform.idempotency WHERE operation='setMailSettings'"); got != "2" {
+		t.Fatal("fingerprint lost the password presence marker")
+	}
+}
+
+func TestSMTPDestinationBoundary(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	for _, host := range []string{"127.0.0.1", "10.0.0.5", "169.254.169.254", "::1"} {
+		body := fmt.Sprintf(`{"settings":{"enabled":true,"host":%q,"port":6379,"from":"no-reply@example.com"},"reason":"check"}`, host)
+		expectAdmin(t, "private SMTP destination", f.change(s, http.MethodPut, "/settings/mail", body, newKey()), 400, "")
+	}
+	if f.auditCount("smtp_config.update") != "0" {
+		t.Fatal("denied SMTP configuration was stored")
+	}
+	// A configuration saved by an older node must still be checked at the actual dial.
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := mail.SaveConfig(t.Context(), tx, masterKeys(t), audit.System("platform.test"), mail.Settings{Enabled: true, Host: "127.0.0.1", Port: 6379, From: "no-reply@example.com"}, "old node")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.routes = httpserver.Public(f.routes, slog.New(slog.DiscardHandler), time.Second)
+	rec := f.change(s, http.MethodPost, "/settings/mail/tests", `{"to":"private-recipient@example.com","reason":"check saved config"}`, newKey())
+	expectAdmin(t, "check old unsafe config", rec, 200, "")
+	if !strings.Contains(rec.Body.String(), "failed") {
+		t.Fatal(rec.Body.String())
+	}
+	logs := f.logs.String()
+	requestID := rec.Header().Get("X-Request-ID")
+	if requestID == "" || !strings.Contains(logs, "destination denied") || !strings.Contains(logs, requestID) || strings.Contains(logs, "private-recipient@example.com") {
+		t.Fatal("missing or unsafe SMTP diagnostic")
 	}
 }

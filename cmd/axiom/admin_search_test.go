@@ -45,7 +45,7 @@ func TestAdminSearchSeparatesSupportAndOperator(t *testing.T) {
 
 func checkInvalidAdminSearch(t *testing.T, f adminFixture, owner session) {
 	t.Helper()
-	for _, query := range []string{"?since=2020-01-01T00:00:00Z", "?cursor=bogus", "?since=2026-10-30T00:00:00Z&until=2026-10-29T00:00:00Z"} {
+	for _, query := range []string{"?since=tomorrow", "?since=2020-01-01T00:00:00Z", "?cursor=bogus", "?since=2026-10-30T00:00:00Z&until=2026-10-29T00:00:00Z"} {
 		expectAdmin(t, "invalid call query", f.do(http.MethodGet, "/calls"+query, "", as(owner)), 400, "")
 		expectAdmin(t, "invalid audit query", f.do(http.MethodGet, "/audit"+query, "", as(owner)), 400, "")
 	}
@@ -87,7 +87,6 @@ func TestAdminSearchWindowBounds(t *testing.T) {
 		{"31 days", "since=2020-01-01T00:00:00Z&until=2020-02-01T00:00:00Z", true},
 		{"too wide", "since=2020-01-01T00:00:00Z&until=2020-02-02T00:00:00Z", false},
 		{"empty", "since=2020-01-01T00:00:00Z&until=2020-01-01T00:00:00Z", false},
-		{"bad time", "since=tomorrow", false},
 		{"invalid cursor time", "cursor=" + (observability.Cursor{At: time.UnixMicro(math.MinInt64)}).String(), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,7 +94,7 @@ func TestAdminSearchWindowBounds(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			since, until, _, err := adminSearchWindow(v)
+			since, until, _, err := adminSearchWindow(testSearchTime(t, v.Get("since")), testSearchTime(t, v.Get("until")), testSearchText(v.Get("cursor")))
 			if (err == nil) != tc.valid {
 				t.Fatalf("window: %v", err)
 			}
@@ -104,4 +103,23 @@ func TestAdminSearchWindowBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testSearchTime(t *testing.T, raw string) *time.Time {
+	t.Helper()
+	if raw == "" {
+		return nil
+	}
+	value, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &value
+}
+
+func testSearchText(raw string) *string {
+	if raw == "" {
+		return nil
+	}
+	return &raw
 }

@@ -127,7 +127,7 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 
 `ReadSiteSettings`、`SetSiteSettings` 读写收款开关与额度上下限；复用 settings 表，省略上下限表示不限，其余付款规则不变。站点专属事务咨询锁串行化首次 upsert 与审计，修改和前后值审计同事务。管理 HTTP 入口负责 MFA、sites.manage、CSRF、理由、幂等和金额币种校验。
 
-`TestMerchant` 在只读事务解封既有商户，关事务后调用渠道的只读测试。易支付用带认证的 `api.php?act=query` 检查商户，Epusdt 使用已有的不存在订单查询探测；不创建应付订单、不转钱、不返回网关正文；商户查询响应可能带回密钥和结算个人信息，因此只取状态码，不持久化或记录响应原文。无此能力的插件返回 unsupported；网络/认证失败返回 failed。`TestMerchantConfigQuery` 检查认证参数、成功/拒绝/非 JSON/HTTP 错误及响应脱敏，`TestPaymentSettingsBoundsAndIsolation` 检查精确大额、上下限与跨站拒绝。
+`TestMerchant` 复用调用方的幂等认领事务及连接读取、解封既有商户，再在认领仍开启时调用渠道的只读测试；网络期限为 10 秒，不再嵌套打开第二个数据库连接。易支付用带认证的 `api.php?act=query` 检查商户，Epusdt 使用已有的不存在订单查询探测；不创建应付订单、不转钱、不返回网关正文；商户查询响应可能带回密钥和结算个人信息，因此只取状态码，不持久化或记录响应原文。无此能力的插件返回 unsupported；网络/认证失败返回 failed，并写含商户 ID、请求 ID 和渠道脱敏错误的 Warn 日志。`TestMerchantConfigQuery` 检查认证参数、成功/拒绝/非 JSON/HTTP 错误及响应脱敏，`TestPaymentSettingsBoundsAndIsolation` 检查精确大额、上下限与跨站拒绝。
 
 ## 不变量
 
