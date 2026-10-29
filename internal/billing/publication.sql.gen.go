@@ -73,20 +73,22 @@ func (q *Queries) FreshPricePolicy(ctx context.Context, db DBTX, arg FreshPriceP
 }
 
 const insertPriceVersion = `-- name: InsertPriceVersion :exec
-INSERT INTO billing.price_versions(id,site_id,model_id,candidate_id,schedule,basis,overridden,actor,reason)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+INSERT INTO billing.price_versions(id,site_id,model_id,audience_kind,audience_id,candidate_id,schedule,basis,overridden,actor,reason)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 `
 
 type InsertPriceVersionParams struct {
-	ID          uuid.UUID
-	SiteID      uuid.UUID
-	ModelID     uuid.UUID
-	CandidateID uuid.UUID
-	Schedule    []byte
-	Basis       []byte
-	Overridden  bool
-	Actor       string
-	Reason      string
+	ID           uuid.UUID
+	SiteID       uuid.UUID
+	ModelID      uuid.UUID
+	AudienceKind string
+	AudienceID   string
+	CandidateID  uuid.UUID
+	Schedule     []byte
+	Basis        []byte
+	Overridden   bool
+	Actor        string
+	Reason       string
 }
 
 func (q *Queries) InsertPriceVersion(ctx context.Context, db DBTX, arg InsertPriceVersionParams) error {
@@ -94,6 +96,8 @@ func (q *Queries) InsertPriceVersion(ctx context.Context, db DBTX, arg InsertPri
 		arg.ID,
 		arg.SiteID,
 		arg.ModelID,
+		arg.AudienceKind,
+		arg.AudienceID,
 		arg.CandidateID,
 		arg.Schedule,
 		arg.Basis,
@@ -164,11 +168,17 @@ func (q *Queries) ReadPricePolicy(ctx context.Context, db DBTX, siteID uuid.UUID
 }
 
 const readPublications = `-- name: ReadPublications :many
-SELECT p.model_id,p.candidate_id,p.candidate,p.current_id,p.status,v.schedule,v.basis,v.overridden,v.candidate_id AS published_candidate
-FROM billing.price_publications p LEFT JOIN billing.price_versions v ON v.id=p.current_id WHERE p.site_id= $1 ORDER BY p.model_id
+SELECT p.audience_kind,p.audience_id,p.model_id,p.candidate_id,p.candidate,p.current_id,p.status,v.schedule,v.basis,v.overridden,v.candidate_id AS published_candidate
+FROM (
+ SELECT 'all'::text AS audience_kind,''::text AS audience_id,model_id,candidate_id,candidate,current_id,status FROM billing.price_publications d WHERE d.site_id= $1
+ UNION ALL
+ SELECT audience_kind,audience_id,model_id,candidate_id,candidate,current_id,status FROM billing.audience_publications a WHERE a.site_id= $1
+) p LEFT JOIN billing.price_versions v ON v.id=p.current_id ORDER BY p.model_id,p.audience_kind,p.audience_id
 `
 
 type ReadPublicationsRow struct {
+	AudienceKind       string
+	AudienceID         string
 	ModelID            uuid.UUID
 	CandidateID        uuid.UUID
 	Candidate          []byte
@@ -190,6 +200,8 @@ func (q *Queries) ReadPublications(ctx context.Context, db DBTX, siteID uuid.UUI
 	for rows.Next() {
 		var i ReadPublicationsRow
 		if err := rows.Scan(
+			&i.AudienceKind,
+			&i.AudienceID,
 			&i.ModelID,
 			&i.CandidateID,
 			&i.Candidate,
@@ -208,6 +220,37 @@ func (q *Queries) ReadPublications(ctx context.Context, db DBTX, siteID uuid.UUI
 		return nil, err
 	}
 	return items, nil
+}
+
+const saveAudiencePublication = `-- name: SaveAudiencePublication :exec
+INSERT INTO billing.audience_publications(site_id,model_id,audience_kind,audience_id,candidate_id,candidate,current_id,status)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+ON CONFLICT(site_id,model_id,audience_kind,audience_id) DO UPDATE SET candidate_id=excluded.candidate_id,candidate=excluded.candidate,current_id=excluded.current_id,status=excluded.status
+`
+
+type SaveAudiencePublicationParams struct {
+	SiteID       uuid.UUID
+	ModelID      uuid.UUID
+	AudienceKind string
+	AudienceID   string
+	CandidateID  uuid.UUID
+	Candidate    []byte
+	CurrentID    *uuid.UUID
+	Status       string
+}
+
+func (q *Queries) SaveAudiencePublication(ctx context.Context, db DBTX, arg SaveAudiencePublicationParams) error {
+	_, err := db.Exec(ctx, saveAudiencePublication,
+		arg.SiteID,
+		arg.ModelID,
+		arg.AudienceKind,
+		arg.AudienceID,
+		arg.CandidateID,
+		arg.Candidate,
+		arg.CurrentID,
+		arg.Status,
+	)
+	return err
 }
 
 const savePublication = `-- name: SavePublication :exec

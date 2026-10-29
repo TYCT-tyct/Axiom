@@ -80,6 +80,8 @@ function priced(model: Schemas["Model"], markup: string) {
     endpoint_id: uuid(9, Number(model.id.slice(-4))),
     status: "priced",
     sale: { ...reference, rates: rates(`${0.8 * (1 + Number(markup))}`) },
+    current_sale: { ...reference, rates: rates("1.25") },
+    current_version: uuid(10, 1),
     cost: { ...reference, rates: rates("0.8") },
     margin_ratio: markup === "0" ? "0" : (Number(markup) / (1 + Number(markup))).toFixed(4),
   } as const;
@@ -104,7 +106,31 @@ function preview({ body, state }: Ctx<"/api/admin/v1/pricing/previews", "post">)
   return ok({ data: models.map((m) => priced(m as Schemas["Model"], markup)) });
 }
 
+function publications({ state }: Ctx<"/api/admin/v1/pricing/publications", "get">) {
+  const audiences: Schemas["PricingAudience"][] = [
+    { kind: "all" },
+    { kind: "tier", id: state.tiers[0]?.id },
+    { kind: "account", id: state.accounts.keys().next().value },
+  ];
+  return ok({
+    data: state.models.slice(0, 3).map((model, index) => {
+      const schedule = model.prices.find((p) => p.schedule)?.schedule;
+      return {
+        model_id: model.id,
+        candidate_id: uuid(10, index),
+        current_id: uuid(11, index),
+        audience: audiences[index],
+        status: "pending" as const,
+        schedule,
+        requested: schedule,
+        floor: schedule,
+      };
+    }),
+  });
+}
+
 export const pricingHandlers: Handler<AdminState>[] = [
+  route("get", `${base}/pricing/publications`, reads("pricing.view"), publications),
   route("get", `${base}/pricing/rules`, reads("pricing.view"), ({ state }) => ok({ data: state.rules })),
   route("post", `${base}/pricing/rules`, changes("pricing.manage"), createRule),
   route("put", `${base}/pricing/rules/{rule_id}`, changes("pricing.manage"), updateRule),

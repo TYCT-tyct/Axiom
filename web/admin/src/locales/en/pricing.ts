@@ -43,7 +43,7 @@ export default {
     endpoint: "One endpoint",
     source_type: "One source type",
   },
-  audience: { all: "Everyone", tier: "One tier (not yet available)", account: "One account (not yet available)" },
+  audience: { all: "Everyone", tier: "One tier", account: "One account" },
   describe: {
     markup: "Cost plus {{percent}}%",
     margin: "{{percent}}% margin",
@@ -60,7 +60,7 @@ export default {
     save: "Save",
     saved: "The rule is saved and is now {{state}}.",
     enabled: "Rule is on",
-    enabledHint: "A rule that is off has no effect but is kept.",
+    enabledHint: "Turning off an existing rule preserves its saved settings. Save other edits separately.",
     target: "Prices",
     targetModel: "Model",
     targetId: "ID of the target",
@@ -108,6 +108,7 @@ export default {
     refMax: "At most this multiple of the reference",
   },
   preview: {
+    current: "Published serving price",
     title: "Preview",
     intro:
       "See what these models would sell for to a kind of user under the current rules, and the margin. A preview stores nothing.",

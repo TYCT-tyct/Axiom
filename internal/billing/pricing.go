@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -147,10 +148,6 @@ func checkTarget(t Selector) error {
 	return nil
 }
 
-// checkAudience: M1 sells every model at one price list, because a routing snapshot is one per node and so is the
-// price it locks, so a rule for one account or one tier is refused rather than accepted and then not applied
-// (docs/domains/billing.md「定价」). The selector stays in the stored form and the ordering of Rules, which is what
-// those rules will use when a snapshot can be per audience.
 func checkAudience(a Selector) error {
 	switch a.Kind {
 	case "all":
@@ -158,10 +155,20 @@ func checkAudience(a Selector) error {
 			return &RuleError{"audience/id", "is absent for all"}
 		}
 		return nil
-	case "account", "tier":
-		return &RuleError{"audience/kind", "can only be all in this release: a rule for one account or one tier comes later"}
+	case "account":
+		id, err := accounts.ParseAccountID(a.ID)
+		if err == nil && id != (accounts.AccountID{}) {
+			return nil
+		}
+	case "tier":
+		id, err := accounts.ParseTierID(a.ID)
+		if err == nil && id != (accounts.TierID{}) {
+			return nil
+		}
+	default:
+		return &RuleError{"audience/kind", "is not an audience a rule prices for"}
 	}
-	return &RuleError{"audience/kind", "is not an audience a rule prices for"}
+	return &RuleError{"audience/id", "is not a nonzero ID of the audience kind"}
 }
 
 // ratio reads a decimal member; ok is false for an absent one.
@@ -372,11 +379,9 @@ func CreateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	return r, record(ctx, tx, actor, "pricing_rule.create", r, reason)
 }
 
-// UpdateRule replaces the rule as of rev, which a rule that has moved on refuses.
-func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, currency platform.Currency, id uuid.UUID, rev int64, in RuleInput, reason string) (Rule, error) {
-	if err := in.Check(currency); err != nil {
-		return Rule{}, err
-	}
+// UpdateRule replaces the rule as of rev. validate checks external subjects after locking the stored rule;
+// only unchanged retirement bypasses validation, so legacy rules can always be stopped.
+func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, currency platform.Currency, id uuid.UUID, rev int64, in RuleInput, reason string, validate func() error) (Rule, error) {
 	if _, err := LockPricePolicy(ctx, tx, site); err != nil {
 		return Rule{}, err
 	}
@@ -393,6 +398,14 @@ func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	case locked[0].Rev != rev:
 		return Rule{}, fmt.Errorf("%w: it is at rev %d, the request is for %d", ErrStaleRule, locked[0].Rev, rev)
 	}
+	old := locked[0]
+	before, err := ruleOf(old.ID, old.Rev, old.UpdatedAt, old.Enabled, old.TargetKind, old.TargetID, old.AudienceKind, old.AudienceID, old.Method, old.Constraints)
+	if err != nil {
+		return Rule{}, err
+	}
+	if err := checkRuleUpdate(before, in, currency, validate); err != nil {
+		return Rule{}, err
+	}
 	r := Rule{RuleInput: in, ID: id}
 	updated, err := queries.UpdatePricingRule(ctx, tx, UpdatePricingRuleParams{
 		ID: id, Enabled: in.Enabled, TargetKind: in.Target.Kind, TargetID: in.Target.ID,
@@ -406,6 +419,39 @@ func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	}
 	r.Rev, r.UpdatedAt = updated.Rev, updated.UpdatedAt
 	return r, record(ctx, tx, actor, "pricing_rule.update", r, reason)
+}
+
+func checkRuleUpdate(before Rule, in RuleInput, currency platform.Currency, validate func() error) error {
+	retiring, err := unchangedRetirement(before, in)
+	if err != nil || retiring {
+		return err
+	}
+	if err := in.Check(currency); err != nil {
+		return err
+	}
+	if validate != nil {
+		return validate()
+	}
+	return nil
+}
+
+// unchangedRetirement compares the saved input before permitting retirement without subject validation.
+func unchangedRetirement(before Rule, in RuleInput) (bool, error) {
+	if in.Enabled {
+		return false, nil
+	}
+	retired := before.RuleInput
+	retired.Enabled = false
+	// JSONB and the HTTP codec can change member order and whitespace without changing the stored rule.
+	old, err := jsonx.MarshalCanonical(retired)
+	if err != nil {
+		return false, err
+	}
+	next, err := jsonx.MarshalCanonical(in)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(old, next), nil
 }
 
 func encoded(in RuleInput) (method, constraints []byte, err error) {

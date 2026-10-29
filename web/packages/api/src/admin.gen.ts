@@ -1079,7 +1079,7 @@ export interface paths {
         put?: never;
         /**
          * Add a pricing rule
-         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). This release prices everyone alike, so the audience can only be `all`: a rule for one account or one tier is refused (422, pointing at `/rule/audience/kind`). It prices a model, an author or everything, by the reference price times a multiplier read as the site's currency (`currency_conversion` `face`) or by a fixed price list: a rule for an endpoint, group, supplier or source type, an `exchange` conversion would not be applied, so it is refused too (422, pointing at `/rule/target/kind`, `/rule/method/kind` or `/rule/method/currency_conversion`). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices are published as immutable versions after cost and change-threshold checks; large moves wait for confirmation. The site floor applies unless an explicit audited exception is published. What a rule would do is shown by `previewPricing` first.
+         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). Account, tier and all audiences have independent published prices. It prices a model, an author or everything, by the reference price times a multiplier read as the site's currency (`currency_conversion` `face`) or by a fixed price list: a rule for an endpoint, group, supplier or source type, an `exchange` conversion would not be applied, so it is refused too (422, pointing at `/rule/target/kind`, `/rule/method/kind` or `/rule/method/currency_conversion`). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices are published as immutable versions after cost and change-threshold checks; large moves wait for confirmation. The site floor applies unless an explicit audited exception is published. What a rule would do is shown by `previewPricing` first.
          */
         post: operations["createPricingRule"];
         delete?: never;
@@ -1098,7 +1098,7 @@ export interface paths {
         get?: never;
         /**
          * Change a pricing rule
-         * @description Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`. A rule is never deleted, so the history stays: disable it. The audience can only be `all` in this release, and the target and method only what a rule can price (422, as for creating a rule). Changes of price follow the rules' own limits on the size of a change (docs/domains/operations.md「风险分级与审批」).
+         * @description Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`. A rule is never deleted, so the history stays: disable it. Account and tier audiences are supported. An unchanged legacy rule can always be disabled; other edits must pass current validation. Changes of price follow the rules' own limits on the size of a change (docs/domains/operations.md「风险分级与审批」).
          */
         put: operations["updatePricingRule"];
         post?: never;
@@ -2042,7 +2042,7 @@ export interface components {
             kind: "endpoint" | "group" | "supplier" | "model" | "author" | "source_type" | "all";
             id?: string;
         };
-        /** @description Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. This release accepts only `all` (422 for the others, pointing at `/rule/audience/kind`) and the listing can show the other two only for rules a later release wrote. */
+        /** @description Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. Account and tier IDs must belong to this site. */
         PricingAudience: {
             /** @enum {string} */
             kind: "account" | "tier" | "all";
@@ -2086,6 +2086,7 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         PricePublication: {
+            audience?: components["schemas"]["PricingAudience"];
             model_id?: components["schemas"]["Uuid"];
             candidate_id?: components["schemas"]["Uuid"];
             current_id?: components["schemas"]["Uuid"];
@@ -2141,7 +2142,7 @@ export interface components {
             tier_id?: components["schemas"]["TierId"];
             /** @description Show what this account pays: its tier, and the rules written for the account itself. Not with `tier_id` (400). */
             account_id?: components["schemas"]["AccountId"];
-            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only; its audience can only be `all` in this release (422, pointing at `/rule/audience/kind`). The site holds one rule for each target and audience, and the stored one would price the models, so a rule that would sit beside another stored rule with the same target and audience is refused: a rule to add, because it would be a second rule for them (409, as creating the rule is), and a replacement, because it would collide with a stored rule other than `replaces_rule_id` (422, pointing at `/replaces_rule_id`). */
+            /** @description A rule to add, or to put in place of `replaces_rule_id`, for this preview only. The site holds one rule for each target and audience, and the stored one would price the models, so a rule that would sit beside another stored rule with the same target and audience is refused: a rule to add, because it would be a second rule for them (409, as creating the rule is), and a replacement, because it would collide with a stored rule other than `replaces_rule_id` (422, pointing at `/replaces_rule_id`). */
             rule?: components["schemas"]["PricingRuleInput"];
             replaces_rule_id?: components["schemas"]["Uuid"];
         };
@@ -2151,10 +2152,14 @@ export interface components {
             /** @description The endpoint this row prices. Absent for a model with no endpoint, which has the one row. */
             endpoint_id?: components["schemas"]["Uuid"];
             /**
-             * @description `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's price was under the break-even floor and `sale` is the floor's; `unpriced`: no rule sets a price for the model by a way of pricing this release has, so the model has no sale price at all: its reference price is never sold in its place.
+             * @description `priced`: a price; `cost_unknown`: the endpoint's cost is not known, so no floor can be held; `below_floor`: the rule's requested price was under the break-even floor; `sale` is protected by the floor or is the retained published price. `unpriced`: no rule sets a price for the model by a way of pricing this release has, so the model has no sale price at all: its reference price is never sold in its place.
              * @enum {string}
              */
             status: "priced" | "cost_unknown" | "below_floor" | "unpriced";
+            /** @description The published serving price for this account and its current tier; unavailable on older nodes or when sales are stopped. */
+            current_sale?: components["schemas"]["PriceSchedule"];
+            current_version?: components["schemas"]["Uuid"];
+            /** @description The protected proposal for an unsaved edit; for stored rules with a serving head, the current published price. With unknown cost, only the requested rule price can be shown. */
             sale?: components["schemas"]["PriceSchedule"];
             /** @description The endpoint's cost, in the site's currency. */
             cost?: components["schemas"]["PriceSchedule"];
