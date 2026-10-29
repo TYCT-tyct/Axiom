@@ -98,10 +98,17 @@ type variantNames struct {
 // explicit provider.sort replaces (a sort variant on the first name does not rank an alternate's quality), and a sorting
 // variant on an alternate that differs from the ranking the request gets, as routing ranks per request. An alternate
 // with an unknown suffix is left out, as it could not be tried; a known unsupported variant is refused.
-func readRouting(req *protocol.Request) (routing.Override, variantNames, error) {
+func readRouting(req *protocol.Request, body []byte) (routing.Override, variantNames, error) {
 	over, err := override(req.Provider)
 	if err != nil {
 		return over, variantNames{}, err
+	}
+	if over.RequireParameters {
+		params, unknown := protocol.RequestParameters(body)
+		if unknown != "" {
+			return over, variantNames{}, invalid("provider.require_parameters cannot be kept: no endpoint parameter inventory records \"" + unknown + "\"; supplier model records and catalog specs carry no sampling or provider parameters.")
+		}
+		over.RequiredParameters = params
 	}
 	primary, ref := parseModelName(req.Model)
 	if ref != nil {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"axiom/internal/catalog"
+	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
 
@@ -60,6 +61,46 @@ func checkProviderExcluded(t *testing.T, h *harness, in routing.Input, private b
 	}
 	if private && slices.ContainsFunc(got.Reasons, func(e routing.Excluded) bool { return e.Endpoint == ep(2) }) {
 		t.Fatal("private endpoint appeared in exclusions")
+	}
+}
+
+func TestProviderRequireParameters(t *testing.T) {
+	t.Parallel()
+	var all protocol.ParameterSet
+	for p := protocol.Parameter(0); p < protocol.NumParameters; p++ {
+		all.Add(p)
+	}
+	noTemperature := all &^ (protocol.ParameterSet(1) << protocol.ParamTemperature)
+	dear := func(e *routing.Endpoint) {
+		e.Price.Schedule = schedule(t, "0.000002", "0.000004", "")
+	}
+	for _, tc := range []struct {
+		name     string
+		require  bool
+		required protocol.ParameterSet
+		first    protocol.ParameterSet
+		second   protocol.ParameterSet
+		want     []routing.EndpointID
+	}{
+		{"not required", false, 0, all, 0, []routing.EndpointID{ep(1), ep(2)}},
+		{"both declare it", true, all, all, all, []routing.EndpointID{ep(1), ep(2)}},
+		{"one declares it", true, all, all, noTemperature, []routing.EndpointID{ep(1)}},
+		{"neither declares it", true, all, noTemperature, noTemperature, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			preset := openPreset()
+			preset.Strategy = routing.Cheapest
+			h := newHarness(t, routing.Config{}, preset,
+				endpoint(t, 1, func(e *routing.Endpoint) { e.Parameters = tc.first }), endpoint(t, 2, dear, func(e *routing.Endpoint) { e.Parameters = tc.second }))
+			in := input()
+			in.Override = routing.Override{RequireParameters: tc.require, RequiredParameters: tc.required}
+			if len(tc.want) == 0 {
+				checkProviderExcluded(t, h, in, false)
+			} else if got := endpoints(h.plan(in)); !slices.Equal(got, tc.want) {
+				t.Errorf("route %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

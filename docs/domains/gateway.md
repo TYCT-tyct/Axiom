@@ -204,18 +204,18 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
   - `user`：终端用户标识，用于防滥用和归因。
 
   这些参数的语义见[路由的「请求覆盖」](routing.md#请求覆盖)。
-  - **能兑现的**（2026-10-29 核对 [OpenRouter Provider Routing](https://openrouter.ai/docs/guides/routing/provider-selection)）：`order`、`only`、`ignore` 使用供应商分组的公开代号，精确、区分大小写匹配；不接受真实供应商名称或内部 ID，也不把 OpenRouter 的供应商 slug 猜成本地供应商。未知的 `only` 或关闭回退的未知 `order` 无匹配时返回 404；未知的 `ignore` 无效果，未知的开放 `order` 仍可回退。空列表和 `null` 不增加限制。`allow_fallbacks: false` 有非空 `order` 时只试命名组；否则每个模型仅保留排序后的第一个端点；`models` 的跨模型回退仍保留，`partition: none` 也按模型去重。`sort` 支持 `price`、`throughput`、`latency` 字符串，以及 `{by, partition}` 对象：默认 `partition: model` 按模型分组，`none` 跨主模型和备选排序。`data_collection`、`zdr`、`max_price.prompt/completion` 和数字性能偏好继续生效。所有过滤都叠加在预设与归属权限之内，不能放宽。
+  - **能兑现的**（2026-10-29 核对 [OpenRouter Provider Routing](https://openrouter.ai/docs/guides/routing/provider-selection)）：`order`、`only`、`ignore` 使用供应商分组的公开代号，精确、区分大小写匹配；不接受真实供应商名称或内部 ID，也不把 OpenRouter 的供应商 slug 猜成本地供应商。未知的 `only` 或关闭回退的未知 `order` 无匹配时返回 404；未知的 `ignore` 无效果，未知的开放 `order` 仍可回退。空列表和 `null` 不增加限制。`allow_fallbacks: false` 有非空 `order` 时只试命名组；否则每个模型仅保留排序后的第一个端点；`models` 的跨模型回退仍保留，`partition: none` 也按模型去重。`sort` 支持 `price`、`throughput`、`latency` 字符串，以及 `{by, partition}` 对象：默认 `partition: model` 按模型分组，`none` 跨主模型和备选排序。`data_collection`、`zdr`、`max_price.prompt/completion` 和数字性能偏好继续生效。`require_parameters: true` 按 `supported_parameters` 过滤；这份清单由模型规格的能力和方言推出，`/api/v1/models` 和端点发现接口发布同一份，覆盖 `temperature`/`top_p`、输出上限、`stop`、`response_format`、`tools`/`tool_choice`/`parallel_tool_calls`、`reasoning`/`reasoning_effort`。能力类（`response_format`、`tools`、`reasoning`）由已有的 `Needs` 过滤，空 `tools` 不算需要工具；采样、输出上限和 `stop` 由参数清单判断。所有过滤都叠加在预设与归属权限之内，不能放宽。
 
   **与 OpenRouter 的偏离**（无法兑现的限制在预留与调用上游前回 400 `invalid_request`，错误消息指出 `provider` 成员；Chat/Responses 与 Messages 各用上文「错误」的外壳，Chat/Responses 的 `error.code` 保持字符串 `invalid_request`；与 [OpenRouter Errors and Debugging](https://openrouter.ai/docs/api/reference/errors-and-debugging) 的数字码差异见上文「错误」和「决策与理由」）：
 
   | 参数或行为 | 这里与理由 |
   |---|---|
   | 供应商名称 | 当前接入的都是中转系统，只按不可变分组代号选择；官方供应商名称尚无可信对应。发现接口的匿名展示 tag 不是分组代号，不参与路由；真实名称不公开 |
-  | `require_parameters: true` | 400；目录的模型能力不是每个中转端点的完整参数清单，不能保证采样、seed、logprobs 等全部被执行。`false` 或未写仍强制已有能力匹配 |
-  | 非空 `quantizations` | 400；没有端点的量化事实，不能把未知当作 fp16 或已验证的 unknown。空列表不增加限制 |
-  | `preferred_min_throughput` / `preferred_max_latency` 的百分位对象 | 400；quality 仅有 EWMA，没有 OpenRouter 五分钟窗口的 p50/p75/p90/p99。数字形式沿用实测 EWMA 软偏好，不声称是 p50 |
-  | `sort` 对象里其他成员（包括 percentile） | 400；仅 `by` 和 `partition` 有语义，不静默忽略 |
-  | `max_price.request` / `max_price.image` | 400；本站没有按生成请求或图片张数的价格单位，图片 token 价不能当成按张价。其他未知计价项同样 400 |
+  | `require_parameters: true` | 只保证上面公布的参数；`seed`、`logprobs`、`frequency_penalty`、`verbosity` 和供应商专有参数不在清单里，请求写了这些就 400 并点名，因为供应商同步的模型记录和目录规格没有逐端点的采样/提供商参数清单。清单内的采样、输出上限或 `stop` 没有端点满足时按覆盖过滤 404；能力参数没有端点时仍按能力缺失 404。`false` 或未写仍强制已有能力匹配 |
+  | 非空 `quantizations` | 400；目录规格和供应商同步的模型记录都没有量化等级，不能把未知当作 fp16 或已验证的 unknown。空列表不增加限制 |
+  | `preferred_min_throughput` / `preferred_max_latency` 的百分位对象 | 400；quality 只保存端点的 EWMA 延迟和吞吐（至少 5 个样本、30 分钟内），没有五分钟窗口的 p50/p75/p90/p99 分位数或窗口样本。数字形式沿用实测 EWMA 软偏好，不声称是 p50 |
+  | `sort` 对象里其他成员（包括 percentile） | 400；仅 `by` 和 `partition` 有语义；`percentile` 还缺分位数数据，不静默忽略 |
+  | `max_price.request` / `max_price.image` | 400；价目表只有按 token 和按次工具的计费项，没有按生成请求或图片张数的项；OpenRouter 的 `pricing.request`/`pricing.image` 也没有读入，图片 token 价不能当成按张价。其他未知计价项同样 400 |
   | `max_price.prompt` / `completion` | 本站记账货币每百万 token，比较实际受众售价的适用服务等级与上下文档位最高价；只接收可精确表示的十进制数，不四舍五入。非美元站点不声称美元上限 |
 
 - **我们自己的扩展**：放在单独的 `axiom` 对象里，也可以用 `x-axiom-*` 请求头传，方便无法修改请求体的工具。
@@ -378,7 +378,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 ## 待定问题
 
 - 各字段的最终名称和结构写入接口契约时确定
-- 官方供应商名称的可信映射、端点参数清单和量化事实、性能百分位、按请求和按张计价仍缺数据。`max_price` 在非美元站点是否统一换成美元待定；现状与明确拒绝项只在「路由参数」定义。
+- 官方供应商名称的可信映射、逐端点的采样/提供商参数清单、量化事实、性能百分位、按请求和按张计价仍缺数据。`require_parameters` 目前用模型规格推出的公开参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定；现状与明确拒绝项只在「路由参数」定义。
 - 402 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
 - `~作者/系列-latest` 别名的后续实现：目录需要独立的模型族与可切换别名映射，切换追加审计；发现和调用应使用同一次发布的目标、规格与价格，响应 `model` 按 OpenRouter 返回具体模型。现有名字仍只追加，不把内部名字开放调用。需要补齐模型族数据与版本选择依据后再实现，不按前缀或日期猜最新；价格与能力变化遵循[目录的切换与迁移](catalog.md#模型的生命周期)。当前请求仍为上文说明原因的 400。

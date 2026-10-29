@@ -186,7 +186,9 @@ func TestCountTokensReadsVariants(t *testing.T) {
 		"an alternate's exacto, replaced": {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:exacto"],`, 200},
 		"a provider selector":             {"acme/alpha", `"provider":{"only":["alpha-1"]},`, 200},
 		"a latency sort":                  {"acme/alpha", `"provider":{"sort":"latency"},`, 200},
-		"a provider a call would refuse":  {"acme/alpha", `"provider":{"require_parameters":true},`, 400},
+		"a provider a call would refuse":  {"acme/alpha", `"provider":{"quantizations":["fp8"]},`, 400},
+		"parameters a call would declare": {"acme/alpha", `"provider":{"require_parameters":true},`, 200},
+		"parameters a call would not":     {"acme/alpha", `"seed":7,"provider":{"require_parameters":true},`, 400},
 		"a name too long to be recorded":  {"acme/alpha" + strings.Repeat(":nitro", 32), "", 404},
 	} {
 		body := strings.Replace(strings.Replace(countBody, "acme/alpha", tc.model, 1), `{"model"`, `{`+tc.members+`"model"`, 1)

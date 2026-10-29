@@ -14,6 +14,7 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/alloctest"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
 
@@ -48,6 +49,7 @@ func TestOverride(t *testing.T) {
 		"sort across models":       {`{"sort":{"by":"latency","partition":"none"}}`, routing.Override{Sort: &latency, SortGlobal: true}},
 		"supplier selection":       {`{"order":["g2","g1"],"only":["g1"],"ignore":["g3"]}`, routing.Override{OrderNames: []string{"g2", "g1"}, OnlyNames: []string{"g1"}, ExcludeNames: []string{"g3"}}},
 		"fallbacks disabled":       {`{"allow_fallbacks":false}`, routing.Override{NoFallbacks: true}},
+		"every parameter required": {`{"require_parameters":true}`, routing.Override{RequireParameters: true}},
 		"empty quantizations":      {`{"quantizations":[]}`, routing.Override{}},
 		"data collection denied":   {`{"data_collection":"deny"}`, routing.Override{Policies: noRetention}},
 		"data collection allowed":  {`{"data_collection":"allow"}`, routing.Override{}},
@@ -85,7 +87,6 @@ func TestOverride(t *testing.T) {
 func TestOverrideRefuses(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ provider, named string }{
-		"every parameter required":                      {`{"require_parameters":true}`, "provider.require_parameters"},
 		"quantizations":                                 {`{"quantizations":["fp8"]}`, "provider.quantizations"},
 		"a member nobody knows":                         {`{"colour":"red"}`, "provider.colour"},
 		"a price of a request":                          {`{"max_price":{"request":1}}`, "provider.max_price.request"},
@@ -121,6 +122,30 @@ func TestOverrideRefuses(t *testing.T) {
 			var ref *Refusal
 			if !errors.As(err, &ref) || ref.Status != http.StatusBadRequest || !strings.Contains(ref.Message, tc.named) {
 				t.Errorf("got %v, want a 400 naming %s", err, tc.named)
+			}
+		})
+	}
+}
+
+// TestProviderRefusalsNameTheMissingData: a constraint the snapshot cannot keep says what it lacks, not just which
+// member was refused: quantization levels, percentile windows and per-request/per-image price items are absent data,
+// not values to guess.
+func TestProviderRefusalsNameTheMissingData(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ provider, want string }{
+		"quantizations":         {`{"quantizations":["fp8"]}`, "no quantization level"},
+		"throughput percentile": {`{"preferred_min_throughput": { "p90": 10 }}`, "EWMA"},
+		"latency percentile":    {`{"preferred_max_latency":{"p99":1}}`, "EWMA"},
+		"sort percentile":       {`{"sort":{"by":"price","percentile":"p90"}}`, "no percentile measures"},
+		"request price":         {`{"max_price":{"request":1}}`, "no per-request or per-image item"},
+		"image price":           {`{"max_price":{"image":1}}`, "no per-request or per-image item"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := override([]byte(tc.provider))
+			var ref *Refusal
+			if !errors.As(err, &ref) || !strings.Contains(ref.Message, tc.want) {
+				t.Errorf("got %v, want a refusal saying %q", err, tc.want)
 			}
 		})
 	}
@@ -196,16 +221,74 @@ func TestProviderNarrowsTheRoute(t *testing.T) {
 	r.idle(1 << 30)
 }
 
+// TestProviderRequiresEveryParameter: require_parameters keeps the endpoints that declare every parameter the
+// request sets; one the catalog does not declare at all is a 400, and one no endpoint declares is the same 404 as any
+// other override that leaves nothing.
+func TestProviderRequiresEveryParameter(t *testing.T) {
+	t.Parallel()
+	var all, noTemperature protocol.ParameterSet
+	for p := protocol.Parameter(0); p < protocol.NumParameters; p++ {
+		all.Add(p)
+	}
+	noTemperature = all &^ (protocol.ParameterSet(1) << protocol.ParamTemperature)
+	r := newRig(t, func(o *rigOptions) {
+		o.endpoints = func(name string, e *routing.Endpoint) {
+			if name == "alpha-2" {
+				e.Parameters = noTemperature
+			} else {
+				e.Parameters = all
+			}
+		}
+	})
+	a := r.newAccount(1e9)
+	only1 := []routing.EndpointID{r.endpoints["alpha-1"].ID}
+	both := []routing.EndpointID{r.endpoints["alpha-1"].ID, r.endpoints["alpha-2"].ID}
+	for name, tc := range map[string]struct {
+		members string
+		want    []routing.EndpointID
+	}{
+		"without the guarantee": {`"temperature":0.5,`, both},
+		"with the guarantee":    {`"temperature":0.5,"provider":{"require_parameters":true},`, only1},
+		"no parameter set":      {`"provider":{"require_parameters":true},`, both},
+	} {
+		t.Run(name, func(t *testing.T) {
+			route, resp, body := r.sendNamed(a, "acme/alpha", tc.members)
+			if resp.StatusCode != http.StatusOK || !cmp.Equal(route, tc.want) {
+				t.Errorf("%d, route %v, want %v: %s", resp.StatusCode, route, tc.want, body)
+			}
+		})
+	}
+	if _, resp, body := r.sendNamed(a, "acme/alpha", `"seed":7,"provider":{"require_parameters":true},`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "provider.require_parameters") || !strings.Contains(body, "no endpoint parameter inventory") {
+		t.Errorf("seed with the guarantee: %d %s", resp.StatusCode, body)
+	}
+	// The same snapshot with no endpoint declaring temperature: the guarantee leaves nothing, as any override does.
+	endpoints := append([]routing.Endpoint(nil), r.routes...)
+	for i := range endpoints {
+		if endpoints[i].Model == r.alpha {
+			endpoints[i].Parameters = noTemperature
+		}
+	}
+	r.install(routing.Preset{Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest}, endpoints...)
+	if _, resp, body := r.sendNamed(a, "acme/alpha", `"temperature":0.5,"provider":{"require_parameters":true},`); resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "override_filter") {
+		t.Errorf("no endpoint with temperature: %d %s", resp.StatusCode, body)
+	}
+	r.idle(1 << 30)
+}
+
 // TestProviderRefusedMembersReserveNothing: a member that cannot be kept is a 400 before anything is reserved.
 func TestProviderRefusedMembersReserveNothing(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
-	for _, provider := range []string{`{"require_parameters":true}`, `{"quantizations":["fp8"]}`, `{"preferred_min_throughput":{"p90":10}}`, `{"max_price":{"request":1}}`, `{"max_price":{"image":1}}`} {
+	for _, provider := range []string{`{"quantizations":["fp8"]}`, `{"preferred_min_throughput":{"p90":10}}`, `{"max_price":{"request":1}}`, `{"max_price":{"image":1}}`} {
 		_, resp, body := r.sendWith(a, provider)
 		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 			t.Errorf("%s: %d %s", provider, resp.StatusCode, body)
 		}
+	}
+	// require_parameters with a parameter the catalog does not declare is refused before anything is reserved too.
+	if _, resp, body := r.sendNamed(a, "acme/alpha", `"seed":7,"provider":{"require_parameters":true},`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "provider.require_parameters") {
+		t.Errorf("require_parameters with seed: %d %s", resp.StatusCode, body)
 	}
 	if r.count(allRows) != 0 || len(r.calls()) != 0 {
 		t.Errorf("%d reservation rows, %d calls", r.count(allRows), len(r.calls()))
@@ -305,16 +388,16 @@ func TestProviderErrorsKeepStringCodes(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
-	for _, tc := range []struct{ provider, member string }{
-		{`{"require_parameters":true}`, "require_parameters"},
-		{`{"quantizations":["fp8"]}`, "quantizations"},
-		{`{"preferred_min_throughput":{"p90":10}}`, "preferred_min_throughput"},
-		{`{"preferred_max_latency":{"p99":1}}`, "preferred_max_latency"},
-		{`{"max_price":{"request":0}}`, "max_price.request"},
-		{`{"max_price":{"image":0.01}}`, "max_price.image"},
-		{`{"sort":{"by":"price","percentile":"p90"}}`, "sort.percentile"},
+	for _, tc := range []struct{ provider, members, member string }{
+		{`{"require_parameters":true}`, `"seed":7,`, "require_parameters"},
+		{`{"quantizations":["fp8"]}`, "", "quantizations"},
+		{`{"preferred_min_throughput":{"p90":10}}`, "", "preferred_min_throughput"},
+		{`{"preferred_max_latency":{"p99":1}}`, "", "preferred_max_latency"},
+		{`{"max_price":{"request":0}}`, "", "max_price.request"},
+		{`{"max_price":{"image":0.01}}`, "", "max_price.image"},
+		{`{"sort":{"by":"price","percentile":"p90"}}`, "", "sort.percentile"},
 	} {
-		body := `{"model":"acme/alpha","provider":` + tc.provider + `,"messages":[{"role":"user","content":"hello"}]}`
+		body := `{"model":"acme/alpha",` + tc.members + `"provider":` + tc.provider + `,"messages":[{"role":"user","content":"hello"}]}`
 		resp, out := r.do(http.MethodPost, "/api/v1/chat/completions", a.key, strings.NewReader(body))
 		var got struct {
 			Error struct {

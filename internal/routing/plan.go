@@ -335,6 +335,7 @@ func (n *need) overrideAllows(c *candidate, price *candidatePrice) bool {
 	o := n.over
 	return o.allowsName(c.Codename) &&
 		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
+		(!o.RequireParameters || c.Parameters.HasAll(o.RequiredParameters)) &&
 		n.withinLimit(o.MaxPrice, c, price)
 }
 

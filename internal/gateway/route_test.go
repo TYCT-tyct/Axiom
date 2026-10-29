@@ -304,6 +304,14 @@ func TestRouteBuildHoldsWhatRoutingFiltersBy(t *testing.T) {
 	if got := f.planned(call(f.served, func(r *protocol.Request) { r.Format = protocol.Chat })); len(got) != 1 {
 		t.Errorf("a Chat call was planned to %d endpoints, want the one serving Chat by conversion", len(got))
 	}
+	// The spec claims temperature, so a request that requires every parameter it sets still finds the endpoint.
+	in := call(f.served)
+	var params protocol.ParameterSet
+	params.Add(protocol.ParamTemperature)
+	in.Override.RequireParameters, in.Override.RequiredParameters = true, params
+	if got := f.planned(in); len(got) != 1 {
+		t.Errorf("a call requiring temperature was planned to %d endpoints, want the one whose spec claims it", len(got))
+	}
 	// A stream is what a Claude Code or Codex turn is: an endpoint whose supplier cannot pass one must not be planned to.
 	f.build([]suppliers.Routable{withStreams(routable(f.served, protocol.Messages), false)})
 	if _, _, err := f.router.Plan(call(f.served)); err == nil {
