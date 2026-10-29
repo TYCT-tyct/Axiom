@@ -143,6 +143,7 @@ func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 // usageContext carries the request's metering facts and legacy reply shape through an upstream attempt.
 func usageContext(r *Request) UsageContext {
 	u := UsageContext{HidesReasoning: r.HidesReasoning, CacheTTL1h: r.InputItems.Has(catalog.ItemCacheWrite1h), LegacyFunctions: r.legacy && !r.modernTools}
+	u.ResponseHealing = r.ResponseHealing && !r.Stream && r.Format == Chat && r.Needs.Has(StructuredOutput)
 	n := 0
 	for _, st := range [...]catalog.ServiceTier{
 		catalog.ServiceTierStandard, catalog.ServiceTierFlex, catalog.ServiceTierPriority, catalog.ServiceTierFast,

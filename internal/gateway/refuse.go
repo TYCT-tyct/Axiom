@@ -148,6 +148,9 @@ func refusal(f protocol.Format, err error) (r *Refusal, expected bool) {
 	if none, ok := errors.AsType[*routing.NoEndpoint](err); ok {
 		return noEndpoint(none), true
 	}
+	if extension, ok := errors.AsType[*protocol.ExtensionError](err); ok {
+		return invalid(extension.Message), true
+	}
 	switch {
 	case errors.Is(err, accounts.ErrAccountSuspended):
 		return &Refusal{Status: http.StatusForbidden, Code: "permission_denied", Message: "Calls on this account are paused. Contact the site administrator."}, true

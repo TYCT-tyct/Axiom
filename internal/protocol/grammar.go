@@ -251,6 +251,9 @@ func (s *scanner) result() error {
 }
 
 func (s *scanner) contentPart() error {
+	if s.r.Format == Chat && s.dec.StackDepth() == 2 {
+		s.r.MessageCount++
+	}
 	outer := s.p
 	s.p = part{}
 	err := s.object(s.g.part)
@@ -473,6 +476,8 @@ func hasPrefix(v []byte, prefix string) bool {
 // withProvider adds the provider member, which the three formats share, to the members of a format's top level.
 func withProvider(f fields) fields {
 	f["provider"] = (*scanner).provider
+	f["plugins"] = (*scanner).plugins
+	f["transforms"] = (*scanner).transforms
 	return f
 }
 

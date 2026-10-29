@@ -28,6 +28,7 @@ type chatAggregate struct {
 	at                                        map[int64]int // a choice's place in choices, by its index
 	hadError                                  bool
 	legacy                                    bool
+	healing                                   bool
 }
 
 // The pieces of a choice that are strings.
@@ -283,7 +284,11 @@ func (a *chatAggregate) piece(i int) error {
 	if err := a.captureString(&v); err != nil || v == nil {
 		return err
 	}
-	return a.add(&a.cur().strings[i], v, 2)
+	factor := 2
+	if a.healing && i == pieceContent {
+		factor = healingMemoryFactor
+	}
+	return a.add(&a.cur().strings[i], v, factor)
 }
 
 // readTool reads an entry of tool_calls, and adds it to the call with its index.
@@ -351,6 +356,7 @@ func (c *chatChoice) toolCall(a *chatAggregate, index int64) (*chatTool, error) 
 }
 
 func (a *chatAggregate) body() ([]byte, error) {
+	a.heal()
 	slices.SortFunc(a.choices, func(x, y chatChoice) int { return cmp.Compare(x.index, y.index) })
 	size := 512 + len(a.id) + len(a.model) + len(a.usage) + len(a.errored) + len(a.axiom)
 	for i := range a.choices {

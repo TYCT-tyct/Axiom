@@ -209,7 +209,22 @@
   | `max_price.prompt` / `completion` | 本站记账货币每百万 token，比较实际受众售价的适用服务等级与上下文档位最高价；只接收可精确表示的十进制数，不四舍五入。非美元站点不声称美元上限 |
 
 - **我们自己的扩展**：放在单独的 `axiom` 对象里，也可以用 `x-axiom-*` 请求头传，方便无法修改请求体的工具。
-- **转发前处理**：路由参数和扩展字段在转发前删除；会话和用户标识换成派生值（见上文「转发规则」）。
+- **转发前处理**：路由参数和扩展字段在消费后删除；`plugins` / `transforms` 按下节执行或拒绝，不当作没写；会话和用户标识换成派生值（见上文「转发规则」）。
+
+### 插件与提示词变换
+
+基线于 2026-10-29 核对：[插件](https://openrouter.ai/docs/guides/features/plugins)、[响应修复](https://openrouter.ai/docs/guides/features/plugins/response-healing)、[上下文压缩](https://openrouter.ai/docs/guides/features/message-transforms)。`plugins` 和 `transforms` 在入口校验，只有已经执行或明确关闭的控制项才在转发前删除。
+
+| 成员 | 执行 / 拒绝 / 忽略 |
+|---|---|
+| `plugins:[{id:"response-healing"}]` | 执行：Chat 非流式且 `response_format.type` 为 `json_object` 或 `json_schema` 时，本地修复 JSON 语法、提取代码块/前缀后的 JSON。流式、普通文本、失败或 `length` 截断回复不修复，与基线一致；修复后移除不再对应文本的 logprobs；不保证 schema 语义校验，也不保证任意坏 JSON 可修复 |
+| `plugins:[{id:"context-compression"}]`、`transforms:["middle-out"]` | 执行：Chat 在准入之前从中间删除完整对话轮次，保留首尾；仍超长时从纯文本消息中间截短；按 [Anthropic 消息上限](https://platform.claude.com/docs/en/api/messages/create)（2026-10-29）裁到最多 100000 条，跨消息的未完成工具调用不拆组。系统指令、工具调用及结果、签名和多模态部件不截短；剩余固定内容放不下则 400，不把不完整的工具对发给上游 |
+| `plugins:[{id:"context-compression",enabled:false}]`、`transforms:[]` | 执行关闭；显式插件策略优先于旧 `transforms`，没有显式策略时，Chat 上下文不超过 8192 token 默认尝试：正文超过整个上下文的字节上界（不扣默认输出上限），或超过消息条数上限才启动；压缩失败或临时内存不足时原样转发，不新增拒绝 |
+| 已知插件的 `enabled:false`、空数组、null | 忽略（等价于关闭或未指定）；未知 id 即使关闭仍拒绝 |
+| `web`、`file-parser` | 启用时 400，消息含 `not supported`：搜索索引/抓取、PDF/OCR 解析需要外部服务，目前没有对应执行、计量和故障边界；显式关闭可接受 |
+| 未知插件 id、未知 transform、未支持的插件选项；非 Chat 格式启用本地插件 | 400，消息含 `not supported`，不静默删除 |
+
+**有意偏离**：压缩使用目录主模型的上下文和输出上限，在路由与预留之前完成；不实现 OpenRouter 跨模型的「半个所需上下文」候选扩展，也不对每个回退端点重新压缩。仍按正常路由过滤装不下的备选模型。输入使用 JSON 正文字节上界（包含工具定义及控制字段）而非调用外部分词服务，因此仍可能更早压缩，显式开启时保护内容装不下会拒绝；默认策略只在超过整个上下文的字节上界或消息上限后尝试，失败时保留原文和原摘要。默认输出上限等于上下文也不会因此拒绝请求，实际输出上限仍由正常路由裁到剩余窗口。同一份摘要、预留与转发正文一致。只提供 Chat 插件接口，其他格式显式拒绝启用；不增加账户级默认插件设置。`web` 和 `file-parser` 暂不接入外部服务。
 
 ### 模型名变体
 
@@ -220,7 +235,7 @@
 | `:nitro` | 按吞吐排序，并准入 priority 层的端点（[Nitro](https://openrouter.ai/docs/guides/routing/model-variants/nitro)） | 等同 `provider.sort: throughput`；层级准入见下 |
 | `:floor` | 按价格排序，并准入 flex 层的端点（[Floor](https://openrouter.ai/docs/guides/routing/model-variants/floor)） | 等同 `provider.sort: price`；层级准入见下 |
 | `:exacto` | 按质量信号排序：工具调用成功率、吞吐、延迟、基准结果（[Exacto](https://openrouter.ai/docs/guides/routing/model-variants/exacto)） | 400 暂不支持：现有健康度不包含 Exacto 的工具调用成功率和基准评分，不能声称按同样信号排序 |
-| `:online` | 已弃用，等于 `web` 插件（[Online](https://openrouter.ai/docs/guides/routing/model-variants/online)） | 400：没有联网搜索插件（`plugins` 现在被丢弃，见[对照表](../openrouter-parity.md)） |
+| `:online` | 已弃用，等于 `web` 插件（[Online](https://openrouter.ai/docs/guides/routing/model-variants/online)） | 400：没有联网搜索服务（`web` 插件返回 400，见上节） |
 | `:free` | [独立免费目录条目](https://openrouter.ai/docs/guides/routing/model-variants/free)，与付费条目的规格、价格和端点分开 | 400 `invalid_request`：目录禁止带冒号的条目，不能保证免费；不按零价猜测或回落到付费基础模型 |
 | `:thinking` | [总览](https://openrouter.ai/docs/guides/routing/model-variants/overview)列为独立思考目录条目，具有自己的规格、价格和端点 | 400 `invalid_request`：没有独立变体条目，提示使用 `reasoning` 参数；不把后缀自动改成开启思考 |
 | `:batch` `:extended` | 独立目录变体 | 400 `invalid_request`：目录没有独立条目与价格 |
@@ -329,6 +344,7 @@
 | 开始转发内容之前不发保活 | 此时还可能换端点；提前发出任何字节，状态码就无法再改 |
 | 402 区分上限来源，只有暂时性的带 `Retry-After` | 与 OpenRouter 一致；客户端据此判断该等待重试还是去充值 |
 | 计费类问题不返回 401，避开自动禁用措辞，并写成测试 | 把我们当上游的 new-api 收到 401 或特定措辞会自动禁用渠道，临时问题会被放大成停用 |
+| 本地插件在准入前压缩、在聚合后修复 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P1/E2-7。比较在上游执行与本站执行，选择纯本地：避免上游静默忽略；比较按端点重复压缩与准入前按主模型压缩，选后者让路由、报价、用量暂估和发送正文一致，不改计费契约，不引入依赖或外部服务。默认压缩作为可选优化失败即保留原请求，显式开启才执行严格的字节预算，避免以预留上界缩小默认请求的可服务范围。代价和偏离见「插件与提示词变换」；独立评审由流水线安排 |
 | 扩展字段放在独立的 `axiom` 对象 | 不与 OpenRouter 的字段冲突 |
 | 提供 OpenAI 旧版和 OpenRouter 格式的余额接口 | 第一版范围要求支持其他中转站接入（见产品需求）。new-api 查询 OpenAI 类型渠道时用前者；查询 OpenRouter 渠道时写死访问 openrouter.ai，所以后者只服务兼容 OpenRouter 的工具 |
 | `/api/v1/credits`、`/api/v1/key` 只接受调用 key；管理 key 返回 401 | 按[负责人技术决定授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)落地 E4-9/P14，本轮管理 key 的认证面仅用于 `/keys` CRUD，保留已有调用 key 的读取行为。2026-10-29 核实 OpenRouter 的[余额接口](https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits)要求管理 key，[当前 key 信息](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key)提供管理 key 类型字段；Axiom 有意继续拒绝管理 key 访问这两个接口。管理凭证自省需区分签发上界与消费余额，后续单独定义权限和响应含义；不能经模型准入给管理 key 放行 |
