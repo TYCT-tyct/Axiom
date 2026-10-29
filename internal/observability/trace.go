@@ -47,6 +47,7 @@ func GetTrace(ctx context.Context, tx pg.Tx, id uuid.UUID) (CallRecord, error) {
 func traceCall(r store.GetCallTraceRow) (CallRecord, error) {
 	c := CallRecord{
 		At: r.At, ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID, Class: r.RequestClass,
+		AppReferer: r.AppReferer, AppTitle: r.AppTitle, AppCategories: r.AppCategories,
 		Language: r.Language, UsedTools: r.UsedTools, HasImage: r.HasImage, HasFile: r.HasFile, Model: r.Model,
 		PriceVersion: r.PriceVersion, Route: []byte(r.Route), PriceNano: r.PriceNano, CostNano: r.CostNano, Free: r.FreeOfCharge,
 		Latency:      time.Duration(r.LatencyMs) * time.Millisecond,
