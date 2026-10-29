@@ -10,7 +10,7 @@
 func New(cfg Config) (*Router, error)
 func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error)
 func (r *Router) Replace(s *Snapshot) // 只接受更新的快照
-func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte) SessionKey // 只扫有界前缀
+func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte, header ...string) SessionKey // 只扫有界前缀
 func (r *Router) Plan(in Input) (Plan, *Wait, error) // 纯内存；*NoEndpoint{Reasons, Permanent}；ErrStale
 func (r *Router) ServesFor(m catalog.ModelID, a billing.Audience) bool // 快照里有这个受众可收费的模型端点；不看熔断、负载、暂停、预算、过滤，也不看快照新不新；模型列表和单个模型用
 func (r *Router) Block(e Entry, scope Scope, after time.Duration) // 暂停端点或供应商到上游给的时间，最多两小时；没给用 Config.Pause
@@ -18,7 +18,7 @@ func (r *Router) Blocked(e Entry) bool // 已定的条目在发出前再查一�
 func Decide(f Failure) Action // NextEntry | OtherCredential | ReturnToClient
 ```
 
-- **`SessionKey`** 在准入之前算出，最多读 `Config.SessionPrefix`（默认 16 KiB）字节：客户端自己的 `session_id`、`prompt_cache_key`，或 Anthropic `metadata.user_id`（Claude Code 的会话）；都没有时，用账户、模型和对话（`messages`、`input`、`contents`）的第一条消息（最多 1 KiB）的哈希：只取第一条，所以对话变长、或后面的参数变化，键都不变。键里总含账户，所以不同账户都发 `default` 也不会串。透传给上游的不透明标识不在这里：gateway 的 `Executor.identity` 按账户和客户端的值派生。gateway 用 `Stuck` 读粘住的端点，作为 `Input.Sticky` 传入；gateway 在调用交付了内容、且服务它的端点与粘住的不同时调 `Stick`，收到“上下文已压缩”标记时调 `Forget`（写回规则见 [gateway 的「粘性」](../gateway/README.md)）。
+- **`SessionKey`** 在准入之前算出，最多读 `Config.SessionPrefix`（默认 16 KiB）字节：已由 Inspect 读取的请求体 `session_id` 优先，其次 gateway 传入的 `x-session-id`，再取前缀里的 `prompt_cache_key`，或 Anthropic `metadata.user_id`（Claude Code 的会话）；都没有时，用账户、模型和对话（`messages`、`input`、`contents`）的第一条消息（最多 1 KiB）的哈希：只取第一条，所以对话变长、或后面的参数变化，键都不变。键里总含账户，所以不同账户都发 `default` 也不会串。透传给上游的不透明标识不在这里：gateway 的 `Executor.identity` 按账户和客户端的值派生。gateway 用 `Stuck` 读粘住的端点，作为 `Input.Sticky` 传入；gateway 在调用交付了内容、且服务它的端点与粘住的不同时调 `Stick`，收到“上下文已压缩”标记时调 `Forget`（写回规则见 [gateway 的「粘性」](../gateway/README.md)）。
 - **`Plan`** 在准入事务的 `fn` 里调用，只读内存快照和请求，不查库、不访问缓存。预设内容取快照，预设 ID、可用模型、账户及其当前等级取 `Admission`；快照陈旧超过 `MaxStale`（30s）返回 `ErrStale`（gateway 回 503）。`Fresh` 报告同一个条件（有快照且不超过 `MaxStale`），节点用它决定是否撤销就绪。步骤：对每个模型（主模型在前，备选在后）取候选，逐个过滤并记下原因，按“指定顺序 → 没达到性能期望的靠后 → 粘住的端点 → 策略”排序，取前 `MaxEntries`（3）个不同的端点（同一个模型写了两次只算一次，同一个端点只进一次）；第二个起的条目所在供应商的重试预算用完则跳过。每个条目还携带同次快照构建的 `platform.ExchangeRate` 值副本，预留保留的条目冻结它，刷新不改在途路线；同币种为空，缺汇率保留货币对但 ID 为零。每个条目带端点、供应商（尝试花它的重试预算）、`Target`（怎么调这个端点：它对模型的名字和模型规格里的写法，`Endpoint.Target` 带来；调用格式由 `Plan` 按请求选：端点说请求的格式就用它，Chat 请求先看端点说不说 Chat，不说才是转换给的第一个原生格式，先 Messages 后 Responses；`MaxOutput` 也由 `Plan` 填，等于下面的条目输出上限，端点的上限未知时为 0，见下）、模型、价格版本、输出上限（请求的上限与端点上限取小，请求没写取端点的默认）、`Segmentable` 和 `Limits`（报价用的 `billing.Model`，上下文、图片和页的 token 数、工具次数、输出速度、可上报的计费项，与过滤用的是同一份；`Limits.ID` 必须是条目的 `Model`，否则缺项会记到零 UUID，实际模型仍被选中）。gateway 用 `DemandOf` 把请求摘要转成报价的 `Demand`，路由比较价格上限用的也是它。`StartBy` 是准入后不再发起新尝试的时刻（窗口取预设的、没有则取 `Config.AttemptWindow`；节点里 `cmd/axiom` 把它设成 gateway 配置的 `StartBy`，两处不会不同），`MaxAttempts` 是最多尝试几次（含同一条目换凭证），是硬上限，取预设的、没有则取路由器的默认，从不因路线更长而提高；路线里到不了的条目（超过它的）被去掉。
 - **结果**：候选都满载（过了全部过滤但已达 `MaxConcurrent`）返回 `*Wait`，gateway 回滚准入、在事务外排队；没有可用端点返回 `*NoEndpoint`，`Permanent` 为真（所有被排除的原因都是永久的：能力、上下文、格式、预设或覆盖过滤、没有售价、未知计费项、原生成本无法报价、已停用、模型不可用于这把 key）时 gateway 回 404，否则（有熔断、供应商余额、没有出口、重试预算、暂停中的 `cooling_down`）回 503，见[接入的「错误」](../../docs/domains/gateway.md#错误)。账户看不到的端点（别人的自带端点）不进原因，不泄露存在。
 - **受众售价**：`Endpoint.AudiencePrices` 是后台编译的稀疏受众索引。同一模型各端点共享一份价目表、混合价格和缓存优惠派生值；`priceFor` 使用计费模块的同一选择器，在账户、准入等级与全部之间先比目标具体程度再比受众。过滤、最高价、均衡与最便宜排序、粘性判断和路线冻结均使用选中的版本；没有版本的匹配层拒绝售卖，不能向宽泛规则回落。`ServesFor` 也按这份价判定模型可见性，不读取数据库。

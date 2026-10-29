@@ -404,6 +404,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 	t.Parallel()
 	db, _ := open(t)
 	updatable := map[string][]string{
+		"presets":                  {"name", "config", "updated_at", "deleted_at"},
 		"notification_preferences": {"low_balance", "top_up", "factor_changed", "threshold", "webhook_url", "language"},
 		"user_notices":             {"email_done", "email_failed", "dispatched", "webhook_url", "webhook_state"},
 		"announcements":            {"withdrawn_at"},
@@ -500,7 +501,7 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "announcements", "api_keys", "members", "notification_preferences", "password_reset_requests", "password_reset_tokens", "platform_grants", "recovery_codes", "roles", "security_failures", "sessions", "site_domains",
+		"accounts", "announcements", "api_keys", "members", "notification_preferences", "password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes", "roles", "security_failures", "sessions", "site_domains",
 		"site_settings", "sites", "tiers", "user_notices", "users", "workspaces",
 	} {
 		commands := "INSERT, SELECT, UPDATE"

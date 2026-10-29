@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 	"uuid"
 
 	"go.opentelemetry.io/otel/metric"
@@ -358,7 +359,8 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	req, err := protocol.Inspect(c.Format, body)
+	sessionBody := body // default expansion must not move a client cache key beyond the session prefix
+	body, req, err := h.expandPreset(c, body)
 	if err != nil {
 		return err
 	}
@@ -385,7 +387,11 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 		return err
 	}
 	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
-	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, body)
+	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
+	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {
+		return invalid("x-session-id must be valid UTF-8 with at most 256 characters.")
+	}
+	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, sessionBody, headerSession)
 	c.rate = h.precheck(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller),
 		c, r.Header.Get("X-Claude-Code-Context-Compacted") != "")
 	return nil

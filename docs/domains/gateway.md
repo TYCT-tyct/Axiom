@@ -187,10 +187,10 @@
 
 - **接受 OpenRouter 的参数**：
   - `provider` 对象：只走、排除、指定顺序、是否允许回退、要求支持全部参数、数据政策、排序、最高价、性能条件；
-  - `models` 备选模型；
+  - `models` 备选模型；Messages 也支持 `fallbacks: [{model: "…"}]`，限制与映射见[路由的「命名预设」](routing.md#命名预设)和「失败怎么办」；
   - 模型名变体 `:nitro`、`:floor`：等同 `provider.sort` 的 `throughput`、`price`；`:exacto`、`:online`、`~…-latest` 别名返回 400，`:free`、`:thinking` 等本站不能表示的目录变体返回 400，见下文「模型名变体」；
-  - `@preset/名称`：尚未实现，现在按模型不存在处理（[#313](https://github.com/TYCT-tyct/Axiom/issues/313)）；
-  - `session_id`、`prompt_cache_key`；
+  - `@preset/名称`、`model@preset/名称`、`preset` 字段：使用当前账户的命名配置，覆盖与管理接口见[路由的「命名预设」](routing.md#命名预设)；
+  - `session_id`、`x-session-id` 请求头、`prompt_cache_key`；请求体 session_id 优先于请求头，二者最多 256 字符；
   - `user`：终端用户标识，用于防滥用和归因。
 
   这些参数的语义见[路由的「请求覆盖」](routing.md#请求覆盖)。
