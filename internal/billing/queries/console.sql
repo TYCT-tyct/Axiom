@@ -59,3 +59,20 @@ LEFT JOIN LATERAL (SELECT sum(e.amount)::bigint AS debit FROM billing.entries e
     WHERE e.transaction_id = p.id AND e.book = 'user_balance') e ON true
 LEFT JOIN billing.credit_batches b ON p.kind = 'credit' AND b.id = p.request_id
 ORDER BY p.seq DESC NULLS LAST, p.created_at DESC, p.id DESC;
+
+-- name: ReadKeyUsages :many
+-- All usage fields for one bounded page, with one clock and one database round trip.
+WITH k AS (
+    SELECT (@keys::uuid[])[i]::uuid AS key_id, (@resets::text[])[i]::text AS reset
+    FROM generate_subscripts(@keys::uuid[], 1) AS i
+), t AS MATERIALIZED (SELECT clock_timestamp() AS now)
+SELECT k.key_id,
+    coalesce(sum(s.spent), 0)::bigint AS total,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('daily', t.now)), 0)::bigint AS daily,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('weekly', t.now)), 0)::bigint AS weekly,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('monthly', t.now)), 0)::bigint AS monthly,
+    coalesce(sum(s.spent + s.reserved) FILTER (WHERE s.window_start >= billing.window_from(k.reset, t.now)
+        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS limited
+FROM k CROSS JOIN t
+LEFT JOIN billing.spend s ON s.subject = k.key_id
+GROUP BY k.key_id, k.reset, t.now;
