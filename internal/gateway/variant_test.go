@@ -12,7 +12,7 @@ import (
 )
 
 // TestParseModelName: each variant is the routing it stands for, or the refusal it gets; the base is what the catalog is
-// asked for. Variants come in any order and the last sorting one wins; a catalog variant is a 404 and never the base.
+// asked for. Variants come in any order and the last sorting one wins; an unsupported catalog variant is a 400 and never the base.
 func TestParseModelName(t *testing.T) {
 	t.Parallel()
 	const base = "acme/alpha"
@@ -35,11 +35,11 @@ func TestParseModelName(t *testing.T) {
 		"exacto replacing":                    {base + ":floor:exacto", modelName{base: base, exacto: true}, 0, ""},
 		"online":                              {base + ":online", modelName{}, http.StatusBadRequest, ":online"},
 		"online after a sort":                 {base + ":nitro:online", modelName{}, http.StatusBadRequest, ":online"},
-		"free":                                {base + ":free", modelName{}, http.StatusNotFound, ":free"},
-		"batch":                               {base + ":batch", modelName{}, http.StatusNotFound, ":batch"},
-		"extended":                            {base + ":extended", modelName{}, http.StatusNotFound, ":extended"},
-		"thinking":                            {base + ":thinking", modelName{}, http.StatusNotFound, "reasoning parameter"},
-		"a catalog variant and a routing one": {base + ":free:nitro", modelName{}, http.StatusNotFound, ":free"},
+		"free":                                {base + ":free", modelName{}, http.StatusBadRequest, ":free"},
+		"batch":                               {base + ":batch", modelName{}, http.StatusBadRequest, ":batch"},
+		"extended":                            {base + ":extended", modelName{}, http.StatusBadRequest, ":extended"},
+		"thinking":                            {base + ":thinking", modelName{}, http.StatusBadRequest, "reasoning parameter"},
+		"a catalog variant and a routing one": {base + ":free:nitro", modelName{}, http.StatusBadRequest, ":free"},
 		"a suffix nobody knows":               {base + ":turbo", modelName{}, http.StatusNotFound, "not a model variant"},
 		"an empty suffix":                     {base + ":", modelName{}, http.StatusNotFound, "not a model variant"},
 		"an empty suffix between":             {base + "::nitro", modelName{}, http.StatusNotFound, "not a model variant"},
@@ -96,7 +96,7 @@ func TestModelVariantsRoute(t *testing.T) {
 		"exacto, replaced by the sort":               {"acme/alpha:exacto", `"provider":{"sort":"price"},`, []routing.EndpointID{one, two}},
 		"exacto, replaced by a variant":              {"acme/alpha:exacto:nitro", "", []routing.EndpointID{two, one}},
 		"an alternate that ranks the same":           {"acme/alpha:nitro", `"models":["acme/beta:nitro"],`, []routing.EndpointID{two, one, three}},
-		"an alternate that is not a model":           {"acme/alpha:nitro", `"models":["acme/none:free","acme/beta"],`, []routing.EndpointID{two, one, three}},
+		"an alternate that is not a model":           {"acme/alpha:nitro", `"models":["acme/none:turbo","acme/beta"],`, []routing.EndpointID{two, one, three}},
 		"a variant on the alternate agrees":          {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:floor"],`, []routing.EndpointID{one, two, three}},
 		"an alternate exacto, replaced by the sort":  {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:exacto"],`, []routing.EndpointID{one, two, three}},
 		"an alternate exacto, replaced by a variant": {"acme/alpha:nitro", `"models":["acme/beta:exacto:nitro"],`, []routing.EndpointID{two, one, three}},
@@ -118,7 +118,7 @@ func TestModelVariantsRoute(t *testing.T) {
 }
 
 // TestModelVariantsAreRefused: a variant that cannot be served is answered before anything is reserved or sent, and
-// says why: a 400 for what OpenRouter has and this service does not, a 404 for a model that does not exist. A catalog
+// says why: a 400 for what OpenRouter has and this service does not, a 404 for an unknown suffix or model. A catalog
 // variant is not served by its base model, which exists.
 func TestModelVariantsAreRefused(t *testing.T) {
 	t.Parallel()
@@ -133,14 +133,16 @@ func TestModelVariantsAreRefused(t *testing.T) {
 		"exacto after a sort":      {"acme/alpha:nitro:exacto", "", 400, "invalid_request", ":exacto"},
 		"online":                   {"acme/alpha:online", "", 400, "invalid_request", ":online"},
 		"online with a sort":       {"acme/alpha:online", `"provider":{"sort":"price"},`, 400, "invalid_request", ":online"},
-		"free":                     {"acme/alpha:free", "", 404, "model_not_found", ":free"},
-		"thinking":                 {"acme/alpha:thinking", "", 404, "model_not_found", "reasoning"},
-		"batch":                    {"acme/alpha:batch", "", 404, "model_not_found", ":batch"},
-		"extended":                 {"acme/alpha:extended", "", 404, "model_not_found", ":extended"},
+		"free":                     {"acme/alpha:free", "", 400, "invalid_request", ":free"},
+		"thinking":                 {"acme/alpha:thinking", "", 400, "invalid_request", "reasoning"},
+		"batch":                    {"acme/alpha:batch", "", 400, "invalid_request", ":batch"},
+		"extended":                 {"acme/alpha:extended", "", 400, "invalid_request", ":extended"},
 		"a suffix nobody knows":    {"acme/alpha:turbo", "", 404, "model_not_found", "not a model variant"},
 		"a variant of nothing":     {"acme/none:nitro", "", 404, "model_not_found", ""},
 		"an alias":                 {"~acme/alpha-latest", "", 400, "invalid_request", "aliases"},
 		"an alternate's exacto":    {"acme/alpha", `"models":["acme/beta:exacto"],`, 400, "invalid_request", ":exacto"},
+		"an alternate's free":      {"acme/alpha", `"models":["acme/beta:free"],`, 400, "invalid_request", ":free"},
+		"an alternate's thinking":  {"acme/alpha", `"models":["acme/beta:thinking"],`, 400, "invalid_request", "reasoning"},
 		"an alternate's online":    {"acme/alpha:nitro", `"models":["acme/beta:online"],`, 400, "invalid_request", ":online"},
 		"an alternate's alias":     {"acme/alpha", `"models":["~acme/beta-latest"],`, 400, "invalid_request", "aliases"},
 		"an alternate's sort":      {"acme/alpha", `"models":["acme/beta:nitro"],`, 400, "invalid_request", "alternate"},
@@ -175,7 +177,7 @@ func TestCountTokensReadsVariants(t *testing.T) {
 		"nitro":                           {"acme/alpha:nitro", "", 200},
 		"the last variant wins":           {"acme/alpha:floor:nitro", "", 200},
 		"online":                          {"acme/alpha:online", "", 400},
-		"free":                            {"acme/alpha:free", "", 404},
+		"free":                            {"acme/alpha:free", "", 400},
 		"an alias":                        {"~acme/x-latest", "", 400},
 		"exacto":                          {"acme/alpha:exacto", "", 400},
 		"exacto, replaced by the sort":    {"acme/alpha:exacto", `"provider":{"sort":"price"},`, 200},
@@ -231,7 +233,7 @@ func TestAnAlternateWithAVariantServesWhenTheFirstModelCannot(t *testing.T) {
 	}{
 		"no alternate":                  {"acme/alpha:nitro", "", http.StatusNotFound, nil},
 		"an alternate with a variant":   {"acme/alpha:nitro", `"models":["acme/beta:nitro"],`, http.StatusOK, beta},
-		"an alternate that is no model": {"acme/alpha:nitro", `"models":["acme/beta:free"],`, http.StatusNotFound, nil},
+		"an alternate that is no model": {"acme/alpha:nitro", `"models":["acme/beta:free"],`, http.StatusBadRequest, nil},
 	} {
 		route, resp, body := r.sendNamed(a, tc.model, tc.members)
 		if resp.StatusCode != tc.status || !cmp.Equal(route, tc.want) {

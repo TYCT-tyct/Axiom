@@ -171,15 +171,7 @@ func (p *Payments) queryScheduled(ctx context.Context, id OrderID) error {
 
 func (p *Payments) completeQuery(ctx context.Context, ch Channel, merchant MerchantID, token uuid.UUID, order, trade string) (Payment, error) {
 	paid, err := queryPayment(ctx, ch, order, trade)
-	var rejected *Rejected
-	outcome := queryKnown
-	if (err != nil && !errors.As(err, &rejected)) || incompletePayment(paid) {
-		outcome = queryUnknown
-	}
-	if errors.Is(err, context.Canceled) || (ctx.Err() != nil && !errors.Is(context.Cause(ctx), errQueryDeadline)) {
-		outcome = queryUnused
-	}
-	finishErr := p.finishQuery(ctx, merchant, token, outcome)
+	finishErr := p.finishQuery(ctx, merchant, token, queryHealthOutcome(ctx, err, incompletePayment(paid)))
 	if err != nil {
 		return paid, errors.Join(fmt.Errorf("%w: query the order: %w", ErrUnconfirmed, err), finishErr)
 	}

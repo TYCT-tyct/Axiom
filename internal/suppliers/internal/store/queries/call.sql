@@ -10,8 +10,8 @@ WHERE id = @id;
 -- name: ListRoutable :many
 -- Every credential that can serve an endpoint: the supplier in use with a balance above zero and a unit value
 -- confirmed, the group chosen, the endpoint enabled with a cost known, and a key that is bound. A supplier whose balance
--- was never read is out, as one without a confirmed unit value is. The unit value is the latest the person gave. Expiry and
--- cooldown are judged by the clock when a credential is picked. upstream_name is the model's name at the supplier, as a
+-- was never read is out, as one without a confirmed unit value is. The unit value is the latest confirmed for this
+-- currency and native unit. Expiry and cooldown are judged by the clock when a credential is picked. upstream_name is the model's name at the supplier, as a
 -- call must send it; model_id is the catalog model the snapshot of routing names it by.
 SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.owner_scope, s.site_id, s.account_id,
     s.balance_native::text AS balance_native, s.balance_observed_at, s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
@@ -20,7 +20,7 @@ SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_i
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id = e.supplier_id
-JOIN LATERAL (SELECT u.id, u.value FROM suppliers.unit_values u WHERE u.supplier_id = s.id ORDER BY u.id DESC LIMIT 1) v ON true
+JOIN LATERAL (SELECT u.id, u.value FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1) v ON true
 JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id AND g.selected AND g.present
 JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active' AND c.ciphertext IS NOT NULL
 JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
@@ -75,14 +75,14 @@ WITH pairs AS (
     UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
     FROM pairs p
     WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.charge_record_id IS NULL
-    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.estimated_native, ac.cost_flag, ac.test
+    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.cost_schedule_id, ac.estimated_native, ac.cost_flag, ac.test
 )
 UPDATE suppliers.charge_records cr SET state = 'matched', attribution = 'attempt', attempt_request_id = claimed.request_id,
     attempt_seq = claimed.attempt_seq, lost_request_id = NULL, revision = cr.revision + 1
 FROM claimed
 WHERE cr.id = claimed.charge_id AND cr.state <> 'matched'
 RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native, claimed.estimated_native, claimed.cost_flag,
-    claimed.endpoint_id, claimed.request_id, claimed.attempt_seq, claimed.test,
+    claimed.endpoint_id, claimed.cost_schedule_id, claimed.request_id, claimed.attempt_seq, claimed.test,
     (SELECT s.native_unit FROM suppliers.suppliers s WHERE s.id = cr.supplier_id) AS native_unit;
 
 -- name: HoldOverdueCharges :many
@@ -123,7 +123,7 @@ ON CONFLICT (charge_record_id, revision) DO NOTHING;
 
 -- name: DelistEndpoint :execrows
 UPDATE suppliers.endpoints SET cost_state = 'unknown', cost_state_reason = 'under_estimated'
-WHERE id = @id AND cost_state = 'known';
+WHERE id = @id AND cost_state = 'known' AND cost_schedule_id = @cost_schedule_id;
 
 -- name: ListUnmatchedAttempts :many
 -- One batch of the attempts waiting past the grace, in a fixed order, after the position of the last one given before.
@@ -142,7 +142,7 @@ SELECT e.id AS endpoint_id, e.model_id, s.settlement_currency,
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id=e.supplier_id
 JOIN suppliers.supplier_groups g ON g.id=e.supplier_group_id AND g.selected AND g.present
-JOIN LATERAL (SELECT u.id,u.value FROM suppliers.unit_values u WHERE u.supplier_id=s.id ORDER BY u.id DESC LIMIT 1) v ON true
+JOIN LATERAL (SELECT u.id,u.value FROM suppliers.unit_values u WHERE u.supplier_id=s.id AND u.currency=s.settlement_currency AND u.native_unit=s.native_unit ORDER BY u.id DESC LIMIT 1) v ON true
 JOIN suppliers.cost_schedules cs ON cs.id=e.cost_schedule_id
 WHERE e.enabled AND e.cost_state='known' AND s.status IN ('active','low_balance') AND s.balance_native>0
 AND EXISTS (SELECT 1 FROM suppliers.credentials c WHERE c.supplier_group_id=e.supplier_group_id AND c.status='active' AND c.ciphertext IS NOT NULL)

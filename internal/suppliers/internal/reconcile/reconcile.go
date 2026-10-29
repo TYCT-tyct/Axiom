@@ -41,11 +41,12 @@ var granularity = map[string]*big.Rat{"quota": big.NewRat(1, 1), "usd": big.NewR
 
 // Report is what one run did and what needs a person.
 type Report struct {
-	Matched   int
-	Held      []uuid.UUID // charges moved to held in this run
-	Delisted  []uuid.UUID // endpoints whose cost proved lower than the supplier's charge
-	Over      []uuid.UUID // charges lower than the estimate by more than the tolerance: only reported
-	Unmatched []Unmatched // attempts that reached the supplier and are still without a charge after the grace
+	Matched        int
+	Held           []uuid.UUID // charges moved to held in this run
+	Delisted       []uuid.UUID // endpoints moved to cost unknown by this run
+	UnderUnchanged []uuid.UUID // underestimated charges whose endpoint was not newly delisted
+	Over           []uuid.UUID // charges lower than the estimate by more than the tolerance: only reported
+	Unmatched      []Unmatched // attempts that reached the supplier and are still without a charge after the grace
 	// Next is where the list of waiting attempts stopped when it was cut at a batch, for the next run to go on from; the
 	// zero value when the list reached its end, and then the next run begins again at the oldest.
 	Next Cursor
@@ -210,12 +211,16 @@ func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Confi
 	if err != nil {
 		report.Violations = append(report.Violations, fmt.Sprintf("charge %s: %v", m.ChargeID, err))
 	}
+	delisted := false
 	switch verdict {
 	case "under":
-		if n, err := q.DelistEndpoint(ctx, tx, m.EndpointID); err != nil {
+		if n, err := q.DelistEndpoint(ctx, tx, store.DelistEndpointParams{ID: m.EndpointID, CostScheduleID: &m.CostScheduleID}); err != nil {
 			return fmt.Errorf("delist endpoint: %w", err)
 		} else if n > 0 {
+			delisted = true
 			report.Delisted = append(report.Delisted, m.EndpointID)
+		} else {
+			report.UnderUnchanged = append(report.UnderUnchanged, m.ChargeID)
 		}
 	case "over":
 		report.Over = append(report.Over, m.ChargeID)
@@ -223,6 +228,7 @@ func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Confi
 	return event(ctx, tx, q, m.ChargeID, m.Revision, map[string]any{
 		"attribution": "attempt", "request_id": m.RequestID.String(), "attempt_seq": m.AttemptSeq, "verdict": verdict,
 		"actual_native": m.ActualNative, "estimated_native": m.EstimatedNative, "cost_flag": m.CostFlag, "test": m.Test,
+		"cost_schedule_id": m.CostScheduleID.String(), "endpoint_delisted": delisted,
 	})
 }
 

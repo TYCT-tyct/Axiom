@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -79,6 +80,12 @@ func SettleRefund(ctx context.Context, tx pg.Tx, r Refund) error {
 		return fmt.Errorf("billing: fix the refund policy of %s: %w", r.Batch, err)
 	}
 	return a.postRefund(ctx, tx, r.Freeze, credit.Site, "refund", entries)
+}
+
+// RefundRecordedAt reads the latest successful refund's ledger clock under the caller's batch serialization lock.
+// Payments uses that exact timestamp as finished_at, so a transaction spanning UTC midnight reconciles on one day.
+func RefundRecordedAt(ctx context.Context, tx pg.Tx, batch uuid.UUID) (time.Time, error) {
+	return queries.RefundRecordedAt(ctx, tx, batch)
 }
 
 func (f Freeze) load(ctx context.Context, tx pg.Tx) (LockBalanceRow, *allocation, CreditBatch, error) {

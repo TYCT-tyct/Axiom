@@ -2,12 +2,12 @@
 
 -- name: ListSuppliersPage :many
 -- Newest first: an ID is a UUIDv7, so its order is the order of connecting, and a page starts after the last ID of the
--- one before. The unit value is the latest the person gave. A balance, a threshold or a unit value that is not there is the
--- empty text, which no number is.
+-- one before. The unit value is the latest confirmed for this currency and native unit. A missing balance, threshold
+-- or unit value is the empty text, which no number is.
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
-    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
+    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
 FROM suppliers.suppliers s
 WHERE (sqlc.narg(status)::text IS NULL OR s.status = sqlc.narg(status))
     AND (sqlc.narg(after)::uuid IS NULL OR s.id < sqlc.narg(after))
@@ -18,7 +18,7 @@ LIMIT @page_size::int;
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
-    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
+    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
 FROM suppliers.suppliers s WHERE s.id = @id;
 
 -- name: ListGroupsOf :many

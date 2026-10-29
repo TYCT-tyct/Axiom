@@ -360,7 +360,7 @@ func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	s.record(a, true, scope, next)
 	switch next {
 	case routing.ReturnToClient: // the request itself is refused: the client gets what the supplier said of it, cleaned of its name
-		return over, ended{err: protocol.Error{Type: protocol.InvalidRequest, Rejection: f.Rejection}}
+		return over, ended{err: requestFailure(f)}
 	case routing.OtherCredential:
 		return sameEntry, ended{}
 	case routing.NextEntry:
