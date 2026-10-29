@@ -35,15 +35,42 @@ func TestUnpricedServerToolsNeverReachAdmission(t *testing.T) {
 		{"responses", `"tools":[{"type":"shell","environment":{"type":"container_auto"}}],"max_tool_calls":2`, "shell"},
 		{"responses", `"tools":[{"type":"tool_search"}],"max_tool_calls":2`, "tool_search"},
 		{"responses", `"tools":[{"type":"programmatic_tool_calling"}],"max_tool_calls":2`, "programmatic_tool_calling"},
+		{"chat/completions", `"tools":[{"type":"openrouter:web_search"}]`, "openrouter:web_search"},
+		{"messages", `"tools":[{"type":"openrouter:web_fetch"}]`, "openrouter:web_fetch"},
+		{"messages", `"tools":[{"type":"openrouter:tool_search"}]`, "openrouter:tool_search"},
+		{"responses", `"tools":[{"type":"openrouter:shell"}],"max_tool_calls":2`, "openrouter:shell"},
 	} {
 		resp, out := r.do(http.MethodPost, "/v1/"+tc.path, a.key, strings.NewReader(`{"model":"acme/beta",`+tc.member+`}`))
-		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.name) {
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.name) || !strings.Contains(out, "not supported") {
 			t.Errorf("%s = %d %s", tc.name, resp.StatusCode, out)
 		}
 	}
 	if got := r.count("SELECT count(*) FROM billing.reservations"); got != 0 {
 		t.Fatalf("refusals created %d reservations", got)
 	}
+}
+
+// TestWebSearchIsOneRefusal: the three ways a request asks for OpenRouter-side web search — the deprecated web plugin,
+// the deprecated :online variant and the openrouter:web_search server tool — get one 400 with one reason, before
+// anything is reserved. The search service a future provider plugs in is behind that one decision.
+func TestWebSearchIsOneRefusal(t *testing.T) {
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	for name, body := range map[string]string{
+		"web plugin":     `{"model":"acme/beta","plugins":[{"id":"web"}],"messages":[{"role":"user","content":"hello"}]}`,
+		"online variant": `{"model":"acme/beta:online","messages":[{"role":"user","content":"hello"}]}`,
+		"server tool":    `{"model":"acme/beta","tools":[{"type":"openrouter:web_search"}],"messages":[{"role":"user","content":"hello"}]}`,
+	} {
+		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(body))
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, protocol.NoWebSearch) ||
+			!strings.Contains(out, `"error_type":"invalid_request"`) {
+			t.Errorf("%s: %d %s, want a 400 saying %q", name, resp.StatusCode, out, protocol.NoWebSearch)
+		}
+	}
+	if got := r.count("SELECT count(*) FROM billing.reservations"); got != 0 {
+		t.Fatalf("web search refusals created %d reservations", got)
+	}
+	r.idle(1 << 30)
 }
 
 func TestCatalogToolDefaultsReachTheQuote(t *testing.T) {
