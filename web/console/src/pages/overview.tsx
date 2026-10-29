@@ -5,7 +5,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { maskedKey } from "../parts";
-import { balanceQuery, callsQuery, keysQuery } from "../queries";
+import { balanceQuery, keysQuery, recentErrorsQuery } from "../queries";
 
 export default function Overview() {
   const { t } = useTranslation();
@@ -105,25 +105,25 @@ function KeyItem({ apiKey }: { apiKey: Schemas["Key"] }) {
   );
 }
 
-// The latest failures among the newest calls, with the call to open for the reason.
+// The server selects failures before limiting, so successful traffic cannot hide an older error.
 function ErrorsPanel() {
   const { t } = useTranslation();
   const format = useFormat();
-  const calls = useInfiniteQuery(callsQuery({}));
+  const calls = useQuery(recentErrorsQuery);
   return (
     <Panel title={t("overview.recentErrors")}>
       <DataState
         query={calls}
         compact
-        isEmpty={(data) => !data.pages[0]?.data.some((call) => call.error_kind !== "")}
+        isEmpty={(data) => data.status_filter === "error" && data.data.length === 0}
         empty={<EmptyState compact title={t("overview.noErrors")} />}
       >
-        {(data) => (
-          <ul className="divide-y divide-b1">
-            {(data.pages[0]?.data ?? [])
-              .filter((call) => call.error_kind !== "")
-              .slice(0, 5)
-              .map((call) => (
+        {(data) =>
+          data.status_filter !== "error" ? (
+            <EmptyState compact title={t("overview.errorsUnavailable")} />
+          ) : (
+            <ul className="divide-y divide-b1">
+              {data.data.map((call) => (
                 <li key={call.id} className="px-4 py-2.5">
                   <Link to="/calls/$callId" params={{ callId: call.id }} className="block hover:text-t1">
                     <p className="truncate text-t1" title={call.model}>
@@ -136,8 +136,9 @@ function ErrorsPanel() {
                   </Link>
                 </li>
               ))}
-          </ul>
-        )}
+            </ul>
+          )
+        }
       </DataState>
     </Panel>
   );

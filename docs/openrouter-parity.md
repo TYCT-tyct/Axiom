@@ -114,7 +114,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | 字段 `provider_name`、`upstream_id`、`upstream_inference_cost`、`provider_responses`、`router`、`is_byok`、`cache_discount`、`api_type`、`origin`、`user_agent`、`http_referer`、`app_id`、`external_user`、`session_id`、`preset_id`、`workspace_id`、`data_region`、`web_search_engine`、`moderation_latency` | 来源、归因、供应商信息 | spec | 没有（有意不暴露供应商和成本，`docs/domains/gateway.md:79,198,224`）；`app` 只能是 `claude-code`/`codex`（`gw/record.go:43-51`） | 无 | 无 | `provider_name` 等不暴露是有意；`cache_discount`、`session_id`、`external_user` 应补 |
 | `GET /api/v1/generation/content`（存储的提示词、补全、错误内容） | 查看已存内容 | api/generations/get-stored-prompt-completion-and-error-content-for-a-generation | 没有（内容会保存，`docs/product.md:82`，但没有这个接口） | 无 | 无 | 归 #317 控制台调用详情 |
 | `POST /api/v1/generation/feedback` | 提交调用反馈 | api/generations/submit-feedback-for-a-generation | 没有 | 无 | 无 | 低优先 |
-| `GET /api/v1/activity`（按日、按端点聚合，近 30 天，可按 `api_key_hash`、`workspace_id` 过滤） | 用量活动 | spec `/activity` | 没有：控制台有自己的 `/api/console/v1/calls`（`api/console.yaml:440,471`），形状不同、要会话登录 | `na:router/api-router.go:298`（`/usage`，不同形） | 无 | 开发者用它做账单对账 |
+| `GET /api/v1/activity`（按日、按端点聚合，近 30 天，可按 `api_key_hash`、`workspace_id` 过滤） | 用量活动 | spec `/activity` | 没有 OpenRouter 同形接口：控制台 `/api/console/v1/calls` 支持 key/工作区/状态/请求 ID 筛选，`/calls/aggregate` 按日/模型/key 汇总调用与用户收费，`/calls/export` 流式 CSV；形状不同、要会话登录，见[用户调用记录查询与导出](domains/observability.md#用户调用记录查询与导出) | `na:router/api-router.go:298`（`/usage`，不同形） | 无 | 开发者用它做账单对账 |
 
 ## 6. 余额与 key 信息
 

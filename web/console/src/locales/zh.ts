@@ -33,6 +33,7 @@ export default {
     all: "全部",
     noKeys: "还没有 key",
     createFirst: "创建第一个 key",
+    errorsUnavailable: "当前服务节点暂不支持最近报错查询",
     recentErrors: "最近的报错",
     noErrors: "最近的调用没有报错",
   },

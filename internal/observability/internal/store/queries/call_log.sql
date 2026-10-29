@@ -19,12 +19,9 @@ FROM jsonb_array_elements(@rows::jsonb) AS r
 ON CONFLICT (id, at) DO NOTHING;
 
 -- name: ListOwnCalls :many
--- What a user may read of the account's own calls: no cost, no endpoint, no routing, no ledger. The scope's row-level
--- security limits the rows to the account, and the explicit account condition lets the planner walk the index
--- (account_id, at DESC, id DESC) in order instead of filtering every account's rows; the keyset (at, id) pages
--- stably while new calls arrive. Keep the row upper bound before the scalar time bounds: PostgreSQL 18 cannot
--- compare their tightness and uses the first as the B-tree start key. Starting at until walks newer index leaves
--- even when EXPLAIN lists the cursor in Index Cond (README.md「读」, #408).
+-- Custom plans fold absent filters away and select an ordered index for the remaining filters.
+-- Keep the row upper bound before the scalar window: PostgreSQL 18 uses the first as its
+-- B-tree start key even when EXPLAIN lists both in Index Cond (README.md「读」, #408).
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
@@ -32,35 +29,34 @@ FROM observability.call_log
 WHERE account_id = (@account_id::text)::uuid
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
     AND at >= @since AND at < @until
--- Qualified: a bare id would sort by the output column id::text, which is not the index order.
-ORDER BY call_log.at DESC, call_log.id DESC
-LIMIT @page_size;
-
--- name: ListOwnCallsByModel :many
--- The same list for one model, read from the index (account_id, model, at DESC, id DESC). A client application may be
--- given as well; it is then checked on the rows of the model, which are the fewer.
-SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
-FROM observability.call_log
-WHERE account_id = (@account_id::text)::uuid AND model = @model
-    AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
-    AND at >= @since AND at < @until
+    AND (@model::text = '' OR model = @model)
     AND (@client_app::text = '' OR client_app = @client_app)
+    AND (@key_id::text = '' OR key_id = nullif(@key_id, '')::uuid)
+    AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
+    AND (@status::text = '' OR (error_kind <> '') = (@status = 'error'))
+    AND (@request_id::text = '' OR id = nullif(@request_id, '')::uuid)
+-- Qualified names preserve UUID index order rather than sorting the output's id::text.
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT @page_size;
 
--- name: ListOwnCallsByApp :many
--- The same list for one client application, read from the index (account_id, client_app, at DESC, id DESC).
-SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
+-- name: AggregateOwnCalls :many
+SELECT CASE @group_by::text
+    WHEN 'day' THEN to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+    WHEN 'model' THEN model
+    WHEN 'key' THEN key_id::text
+END::text AS bucket, currency, count(*)::text AS calls, sum(price_nano)::text AS price_nano
 FROM observability.call_log
-WHERE account_id = (@account_id::text)::uuid AND client_app = @client_app
-    AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
+WHERE account_id = (@account_id::text)::uuid
     AND at >= @since AND at < @until
-ORDER BY call_log.at DESC, call_log.id DESC
-LIMIT @page_size;
+    AND (@model::text = '' OR model = @model)
+    AND (@client_app::text = '' OR client_app = @client_app)
+    AND (@key_id::text = '' OR key_id = nullif(@key_id, '')::uuid)
+    AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
+    AND (@status::text = '' OR (error_kind <> '') = (@status = 'error'))
+    AND (@request_id::text = '' OR id = nullif(@request_id, '')::uuid)
+GROUP BY bucket, currency
+ORDER BY bucket, currency
+LIMIT @group_limit;
 
 -- name: GetOwnCall :one
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,

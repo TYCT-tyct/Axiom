@@ -26,13 +26,15 @@ func seedForPlans(t *testing.T, database pgtest.Database) {
 	if err := pgtest.Run(t.Context(), database.Superuser, `INSERT INTO observability.call_log (id, at, site_id, account_id,
 			workspace_id, key_id, ip, client_app, request_class, used_tools, has_image, has_file, model, endpoint_id,
 			attempt_count, usage, service_tier, price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms,
-			consent_version, training_allowed)
+			consent_version, training_allowed, error_kind)
 		SELECT uuidv7(), now() - make_interval(secs => n / 4.0), '00000000-0000-4000-8000-0000000000ff',
 			CASE WHEN n % 2 = 0 THEN '`+heavyAccount+`'::uuid
 				ELSE ('00000000-0000-4000-8000-' || lpad((n % 200 + 2)::text, 12, '0'))::uuid END,
-			uuidv7(), uuidv7(), '203.0.113.7', CASE WHEN n % 1200 = 0 THEN 'codex' ELSE 'cli' END, 'chat', false, false,
+			CASE WHEN n % 1200 = 0 THEN '00000000-0000-4000-8000-000000000112'::uuid ELSE '00000000-0000-4000-8000-000000000111'::uuid END,
+            CASE WHEN n % 1200 = 0 THEN '00000000-0000-4000-8000-000000000122'::uuid ELSE '00000000-0000-4000-8000-000000000121'::uuid END,
+            '203.0.113.7', CASE WHEN n % 1200 = 0 THEN 'codex' ELSE 'cli' END, 'chat', false, false,
 			false, CASE WHEN n % 1200 = 0 THEN 'rare' ELSE 'm' END, uuidv7(), 1, '{}', 'standard', 1, 1,
-			'USD', false, 1, 0, 'v', true
+			'USD', false, 1, 0, 'v', true, CASE WHEN n % 1200 = 0 THEN 'upstream' ELSE '' END
 		FROM generate_series(1, 120000) n`, "ANALYZE observability.call_log"); err != nil {
 		t.Fatal(err)
 	}
@@ -46,14 +48,10 @@ func window() (since, until time.Time) {
 // listCall is the text of the list query listRows runs for q, and its arguments in the order of the text's $n.
 func listCall(q OwnQuery, size int) (string, []any) {
 	at, id := cursorOf(q)
-	account := q.Account.String()
-	switch {
-	case q.Model != "":
-		return store.ListByModelQuery, []any{account, q.Model, at, id, q.Since, q.Until, q.ClientApp, size + 1}
-	case q.ClientApp != "":
-		return store.ListByAppQuery, []any{account, q.ClientApp, at, id, q.Since, q.Until, size + 1}
+	return store.ListQuery, []any{
+		q.Account.String(), at, id, q.Since, q.Until, q.Model, q.ClientApp,
+		uuidFilter(q.Key), uuidFilter(q.Workspace), q.Status, uuidFilter(q.RequestID), size + 1,
 	}
-	return store.ListQuery, []any{account, at, id, q.Since, q.Until, size + 1}
 }
 
 // explain runs EXPLAIN (ANALYZE, BUFFERS) on the list query of q, as the application role in the account's scope with
@@ -67,7 +65,10 @@ func explain(t *testing.T, db *pg.DB, q OwnQuery, scope pg.Scope) string {
 	sql, args := listCall(q, size)
 	var lines []string
 	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
-		if _, err := tx.Exec(t.Context(), "SET LOCAL plan_cache_mode = force_custom_plan"); err != nil {
+		if err := planOwnQuery(t.Context(), tx); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(t.Context(), "SET LOCAL enable_sort = off"); err != nil {
 			return err
 		}
 		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+sql, args...)
@@ -142,7 +143,7 @@ func nextCursor(t *testing.T, db *pg.DB, q OwnQuery) *Cursor {
 	return next
 }
 
-// TestListPlansFollowTheIndexes explains the three list queries as they run, over a heavy and a light account among
+// TestListPlansFollowTheIndexes explains the shared list query across its filters, over a heavy and a light account among
 // many, for the first page, a later page, a dense filter, a sparse one and one that matches nothing. What the plans show, and what is asserted:
 //
 //   - no plan scans the table or the partition, and each reads the index range of the account (Index Cond on
@@ -157,8 +158,8 @@ func nextCursor(t *testing.T, db *pg.DB, q OwnQuery) *Cursor {
 //     matches (100 of 60,000), one that matches nothing reads an index page. Without these two indexes the sparse and the
 //     empty filter read the whole month's partition (7,059 buffers at 360,000 rows, growing with the table) and took
 //     35 to 100 ms;
-//   - for the light account (600 calls), an ordered scan or a bitmap scan of its range and a top-N sort are accepted:
-//     even the latter is bounded by the account's 600 calls in the window.
+//   - even sparse combinations and the light account (600 calls) read in index order: correlated filters can be
+//     underestimated below LIMIT, so listRows discourages sorting only within its read transaction.
 func TestListPlansFollowTheIndexes(t *testing.T) {
 	t.Parallel()
 	db, database := openDBWithURL(t)
@@ -168,26 +169,25 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 	base := func(account uuid.UUID) OwnQuery { return OwnQuery{Account: account, Since: since, Until: until} }
 	with := func(q OwnQuery, model, app string) OwnQuery { q.Model, q.ClientApp = model, app; return q }
 	cases := []struct {
-		name    string
-		q       OwnQuery
-		later   bool // the page after the first
-		ordered bool // an ordered index scan under the limit, with no sort
-		max     int  // the most buffers it may touch
+		name  string
+		q     OwnQuery
+		later bool // the page after the first
+		max   int  // the most buffers it may touch
 	}{
-		{"heavy, first page", base(heavy), false, true, 40},
-		{"heavy, later page", base(heavy), true, true, 40},
-		{"light, first page", base(light), false, false, 800},
-		{"light, later page", base(light), true, false, 800},
-		{"model, dense", with(base(heavy), "m", ""), false, true, 40},
-		{"model, dense, later page", with(base(heavy), "m", ""), true, true, 40},
-		{"model, sparse", with(base(heavy), "rare", ""), false, false, 400},
-		{"model, sparse, later page", with(base(heavy), "rare", ""), true, false, 400},
-		{"model, no match", with(base(heavy), "absent", ""), false, false, 20},
-		{"app, dense", with(base(heavy), "", "cli"), false, true, 40},
-		{"app, sparse", with(base(heavy), "", "codex"), false, false, 400},
-		{"app, no match", with(base(heavy), "", "absent"), false, false, 20},
-		{"model and app, sparse", with(base(heavy), "rare", "codex"), false, false, 400},
-		{"model sparse, app no match", with(base(heavy), "rare", "absent"), false, false, 400},
+		{"heavy, first page", base(heavy), false, 40},
+		{"heavy, later page", base(heavy), true, 40},
+		{"light, first page", base(light), false, 800},
+		{"light, later page", base(light), true, 800},
+		{"model, dense", with(base(heavy), "m", ""), false, 40},
+		{"model, dense, later page", with(base(heavy), "m", ""), true, 40},
+		{"model, sparse", with(base(heavy), "rare", ""), false, 400},
+		{"model, sparse, later page", with(base(heavy), "rare", ""), true, 400},
+		{"model, no match", with(base(heavy), "absent", ""), false, 20},
+		{"app, dense", with(base(heavy), "", "cli"), false, 40},
+		{"app, sparse", with(base(heavy), "", "codex"), false, 400},
+		{"app, no match", with(base(heavy), "", "absent"), false, 20},
+		{"model and app, sparse", with(base(heavy), "rare", "codex"), false, 400},
+		{"model sparse, app no match", with(base(heavy), "rare", "absent"), false, 400},
 	}
 	for _, c := range cases {
 		q := c.q
@@ -199,7 +199,7 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 		if !strings.Contains(plan, "Index Cond: ((account_id") || strings.Contains(plan, "Seq Scan") {
 			t.Errorf("%s: not read through an index of the account:\n%s", c.name, plan)
 		}
-		if c.ordered && (strings.Contains(plan, "Sort") || !strings.Contains(plan, "Index Scan using")) {
+		if strings.Contains(plan, "Sort") || !strings.Contains(plan, "Index Scan using") {
 			t.Errorf("%s: not an ordered index scan under the limit:\n%s", c.name, plan)
 		}
 		if n := buffers(t, plan); n > c.max {
@@ -207,9 +207,10 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 		}
 	}
 	checkListDeepPagesReadInIndexOrder(t, db)
+	checkOwnFilterPlans(t, db)
 }
 
-// TestFilteredListsReturnTheMatches: the three list queries return what they should, also when the match is sparse or
+// TestFilteredListsReturnTheMatches: the list filters return what they should, also when the match is sparse or
 // absent: a filtered list holds only the calls of the filter, newest first, in pages that join without gap or repeat;
 // no match is an empty page; a model and an application together narrow further.
 func TestFilteredListsReturnTheMatches(t *testing.T) {
@@ -286,6 +287,19 @@ func TestListIsPlannedForItsValues(t *testing.T) {
 		if fetched > c.max {
 			t.Errorf("%s: %d call-log tuples fetched (at most %d) on a connection that plans generically", name, fetched, c.max)
 		}
+	}
+	var fetched int
+	if err := generic.ReadTx(t.Context(), accountScope(heavy), func(tx pg.Tx) error {
+		if _, err := AggregateOwn(t.Context(), tx, OwnQuery{Account: heavy, Since: since, Until: until, ClientApp: "codex"}, "day"); err != nil {
+			return err
+		}
+		return tx.QueryRow(t.Context(), `SELECT coalesce(sum(coalesce(idx_tup_fetch, 0) + seq_tup_read), 0)::int
+            FROM pg_stat_xact_user_tables WHERE relname LIKE 'call_log\_20%' OR relname = 'call_log_default'`).Scan(&fetched)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fetched > 20*pageSize {
+		t.Errorf("sparse aggregation fetched %d tuples instead of its 100 matches", fetched)
 	}
 }
 

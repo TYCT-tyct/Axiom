@@ -10,6 +10,84 @@ import (
 	"time"
 )
 
+const aggregateOwnCalls = `-- name: AggregateOwnCalls :many
+SELECT CASE $1::text
+    WHEN 'day' THEN to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+    WHEN 'model' THEN model
+    WHEN 'key' THEN key_id::text
+END::text AS bucket, currency, count(*)::text AS calls, sum(price_nano)::text AS price_nano
+FROM observability.call_log
+WHERE account_id = ($2::text)::uuid
+    AND at >= $3 AND at < $4
+    AND ($5::text = '' OR model = $5)
+    AND ($6::text = '' OR client_app = $6)
+    AND ($7::text = '' OR key_id = nullif($7, '')::uuid)
+    AND ($8::text = '' OR workspace_id = nullif($8, '')::uuid)
+    AND ($9::text = '' OR (error_kind <> '') = ($9 = 'error'))
+    AND ($10::text = '' OR id = nullif($10, '')::uuid)
+GROUP BY bucket, currency
+ORDER BY bucket, currency
+LIMIT $11
+`
+
+type AggregateOwnCallsParams struct {
+	GroupBy     string
+	AccountID   string
+	Since       time.Time
+	Until       time.Time
+	Model       string
+	ClientApp   string
+	KeyID       string
+	WorkspaceID string
+	Status      string
+	RequestID   string
+	GroupLimit  int32
+}
+
+type AggregateOwnCallsRow struct {
+	Bucket    string
+	Currency  string
+	Calls     string
+	PriceNano string
+}
+
+func (q *Queries) AggregateOwnCalls(ctx context.Context, db DBTX, arg AggregateOwnCallsParams) ([]AggregateOwnCallsRow, error) {
+	rows, err := db.Query(ctx, aggregateOwnCalls,
+		arg.GroupBy,
+		arg.AccountID,
+		arg.Since,
+		arg.Until,
+		arg.Model,
+		arg.ClientApp,
+		arg.KeyID,
+		arg.WorkspaceID,
+		arg.Status,
+		arg.RequestID,
+		arg.GroupLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AggregateOwnCallsRow
+	for rows.Next() {
+		var i AggregateOwnCallsRow
+		if err := rows.Scan(
+			&i.Bucket,
+			&i.Currency,
+			&i.Calls,
+			&i.PriceNano,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCallTrace = `-- name: GetCallTrace :one
 SELECT id::text AS id, at, site_id::text AS site_id, account_id::text AS account_id, workspace_id::text AS workspace_id,
     key_id::text AS key_id, end_user_hash, host(ip) AS ip, client_app, session_id, subagent_id, request_class,
@@ -192,17 +270,29 @@ FROM observability.call_log
 WHERE account_id = ($1::text)::uuid
     AND (at, id) < ($2::timestamptz, ($3::text)::uuid)
     AND at >= $4 AND at < $5
+    AND ($6::text = '' OR model = $6)
+    AND ($7::text = '' OR client_app = $7)
+    AND ($8::text = '' OR key_id = nullif($8, '')::uuid)
+    AND ($9::text = '' OR workspace_id = nullif($9, '')::uuid)
+    AND ($10::text = '' OR (error_kind <> '') = ($10 = 'error'))
+    AND ($11::text = '' OR id = nullif($11, '')::uuid)
 ORDER BY call_log.at DESC, call_log.id DESC
-LIMIT $6
+LIMIT $12
 `
 
 type ListOwnCallsParams struct {
-	AccountID string
-	AfterAt   time.Time
-	AfterID   string
-	Since     time.Time
-	Until     time.Time
-	PageSize  int32
+	AccountID   string
+	AfterAt     time.Time
+	AfterID     string
+	Since       time.Time
+	Until       time.Time
+	Model       string
+	ClientApp   string
+	KeyID       string
+	WorkspaceID string
+	Status      string
+	RequestID   string
+	PageSize    int32
 }
 
 type ListOwnCallsRow struct {
@@ -228,13 +318,10 @@ type ListOwnCallsRow struct {
 	ErrorKind    string
 }
 
-// What a user may read of the account's own calls: no cost, no endpoint, no routing, no ledger. The scope's row-level
-// security limits the rows to the account, and the explicit account condition lets the planner walk the index
-// (account_id, at DESC, id DESC) in order instead of filtering every account's rows; the keyset (at, id) pages
-// stably while new calls arrive. Keep the row upper bound before the scalar time bounds: PostgreSQL 18 cannot
-// compare their tightness and uses the first as the B-tree start key. Starting at until walks newer index leaves
-// even when EXPLAIN lists the cursor in Index Cond (README.md「读」, #408).
-// Qualified: a bare id would sort by the output column id::text, which is not the index order.
+// Custom plans fold absent filters away and select an ordered index for the remaining filters.
+// Keep the row upper bound before the scalar window: PostgreSQL 18 uses the first as its
+// B-tree start key even when EXPLAIN lists both in Index Cond (README.md「读」, #408).
+// Qualified names preserve UUID index order rather than sorting the output's id::text.
 func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsParams) ([]ListOwnCallsRow, error) {
 	rows, err := db.Query(ctx, listOwnCalls,
 		arg.AccountID,
@@ -242,6 +329,12 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 		arg.AfterID,
 		arg.Since,
 		arg.Until,
+		arg.Model,
+		arg.ClientApp,
+		arg.KeyID,
+		arg.WorkspaceID,
+		arg.Status,
+		arg.RequestID,
 		arg.PageSize,
 	)
 	if err != nil {
@@ -251,200 +344,6 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 	var items []ListOwnCallsRow
 	for rows.Next() {
 		var i ListOwnCallsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.At,
-			&i.WorkspaceID,
-			&i.KeyID,
-			&i.Ip,
-			&i.ClientApp,
-			&i.SessionID,
-			&i.SubagentID,
-			&i.RequestClass,
-			&i.Model,
-			&i.Usage,
-			&i.ServiceTier,
-			&i.PriceVersion,
-			&i.PriceNano,
-			&i.Currency,
-			&i.FreeOfCharge,
-			&i.LatencyMs,
-			&i.FirstTokenMs,
-			&i.FinishReason,
-			&i.ErrorKind,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listOwnCallsByApp = `-- name: ListOwnCallsByApp :many
-SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
-FROM observability.call_log
-WHERE account_id = ($1::text)::uuid AND client_app = $2
-    AND (at, id) < ($3::timestamptz, ($4::text)::uuid)
-    AND at >= $5 AND at < $6
-ORDER BY call_log.at DESC, call_log.id DESC
-LIMIT $7
-`
-
-type ListOwnCallsByAppParams struct {
-	AccountID string
-	ClientApp string
-	AfterAt   time.Time
-	AfterID   string
-	Since     time.Time
-	Until     time.Time
-	PageSize  int32
-}
-
-type ListOwnCallsByAppRow struct {
-	ID           string
-	At           time.Time
-	WorkspaceID  string
-	KeyID        string
-	Ip           string
-	ClientApp    string
-	SessionID    string
-	SubagentID   string
-	RequestClass string
-	Model        string
-	Usage        string
-	ServiceTier  string
-	PriceVersion string
-	PriceNano    int64
-	Currency     string
-	FreeOfCharge bool
-	LatencyMs    int32
-	FirstTokenMs int32
-	FinishReason string
-	ErrorKind    string
-}
-
-// The same list for one client application, read from the index (account_id, client_app, at DESC, id DESC).
-func (q *Queries) ListOwnCallsByApp(ctx context.Context, db DBTX, arg ListOwnCallsByAppParams) ([]ListOwnCallsByAppRow, error) {
-	rows, err := db.Query(ctx, listOwnCallsByApp,
-		arg.AccountID,
-		arg.ClientApp,
-		arg.AfterAt,
-		arg.AfterID,
-		arg.Since,
-		arg.Until,
-		arg.PageSize,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListOwnCallsByAppRow
-	for rows.Next() {
-		var i ListOwnCallsByAppRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.At,
-			&i.WorkspaceID,
-			&i.KeyID,
-			&i.Ip,
-			&i.ClientApp,
-			&i.SessionID,
-			&i.SubagentID,
-			&i.RequestClass,
-			&i.Model,
-			&i.Usage,
-			&i.ServiceTier,
-			&i.PriceVersion,
-			&i.PriceNano,
-			&i.Currency,
-			&i.FreeOfCharge,
-			&i.LatencyMs,
-			&i.FirstTokenMs,
-			&i.FinishReason,
-			&i.ErrorKind,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listOwnCallsByModel = `-- name: ListOwnCallsByModel :many
-SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
-FROM observability.call_log
-WHERE account_id = ($1::text)::uuid AND model = $2
-    AND (at, id) < ($3::timestamptz, ($4::text)::uuid)
-    AND at >= $5 AND at < $6
-    AND ($7::text = '' OR client_app = $7)
-ORDER BY call_log.at DESC, call_log.id DESC
-LIMIT $8
-`
-
-type ListOwnCallsByModelParams struct {
-	AccountID string
-	Model     string
-	AfterAt   time.Time
-	AfterID   string
-	Since     time.Time
-	Until     time.Time
-	ClientApp string
-	PageSize  int32
-}
-
-type ListOwnCallsByModelRow struct {
-	ID           string
-	At           time.Time
-	WorkspaceID  string
-	KeyID        string
-	Ip           string
-	ClientApp    string
-	SessionID    string
-	SubagentID   string
-	RequestClass string
-	Model        string
-	Usage        string
-	ServiceTier  string
-	PriceVersion string
-	PriceNano    int64
-	Currency     string
-	FreeOfCharge bool
-	LatencyMs    int32
-	FirstTokenMs int32
-	FinishReason string
-	ErrorKind    string
-}
-
-// The same list for one model, read from the index (account_id, model, at DESC, id DESC). A client application may be
-// given as well; it is then checked on the rows of the model, which are the fewer.
-func (q *Queries) ListOwnCallsByModel(ctx context.Context, db DBTX, arg ListOwnCallsByModelParams) ([]ListOwnCallsByModelRow, error) {
-	rows, err := db.Query(ctx, listOwnCallsByModel,
-		arg.AccountID,
-		arg.Model,
-		arg.AfterAt,
-		arg.AfterID,
-		arg.Since,
-		arg.Until,
-		arg.ClientApp,
-		arg.PageSize,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListOwnCallsByModelRow
-	for rows.Next() {
-		var i ListOwnCallsByModelRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.At,

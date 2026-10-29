@@ -405,6 +405,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/calls/aggregate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Calls and user charges grouped by UTC day, model or key
+         * @description All matching calls in the window, independent of list pagination. Defaults to the last 30 days ending now; at most 31 days and 1000 groups. A larger result is refused with 400; narrow the window or filters. Currencies are grouped separately. Charges are exact integer text in billionths, never supplier cost. No conversation content, endpoint or routing data. Ten-second request deadline.
+         */
+        get: operations["aggregateCalls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/calls/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the account's call metadata as CSV
+         * @description Same filters and newest-first cursor order as listCalls, from one database snapshot. Defaults to the last 30 days ending now, at most 31 days. At most 10000 rows per download, in pages of 200; a nonempty X-Next-Cursor trailer means more rows remain. Continue with that cursor and the same explicit since/until. X-Export-Since and X-Export-Until return the effective window, including defaults. X-Export-Complete is true only after the snapshot finishes successfully; a failed stream is aborted. Ten-second request deadline includes writes, and cancellation releases the snapshot. Amounts are exact decimal text in currency units with nine fractional digits. Cells whose first non-whitespace character is =, +, -, or @ are prefixed with an apostrophe; CSV quoting alone is insufficient. No conversation content, credentials, supplier cost, endpoint or route.
+         */
+        get: operations["exportCalls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/calls/{call_id}": {
         parameters: {
             query?: never;
@@ -541,6 +581,28 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        CallStatus: "success" | "error";
+        CallAggregates: {
+            data?: components["schemas"]["CallAggregate"][];
+            /** Format: date-time */
+            since?: string;
+            /** Format: date-time */
+            until?: string;
+            /** @enum {string} */
+            group_by?: "day" | "model" | "key";
+        };
+        /** @description A sum of user charges, in billionths. Unlike a single charge, this can exceed int64 and 19 digits. */
+        CallAggregateMoney: {
+            amount?: string;
+            currency?: string;
+        };
+        CallAggregate: {
+            /** @description UTC date, exact model name, or public key ID, according to group_by. */
+            bucket?: string;
+            calls?: string;
+            price?: components["schemas"]["CallAggregateMoney"];
+        };
         /** @description The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response. */
         Error: {
             error: components["schemas"]["ErrorDetail"];
@@ -826,6 +888,8 @@ export interface components {
             error_kind: string;
         };
         CallList: {
+            /** @description Echoes an applied status filter. Missing on old nodes; recent errors are unavailable then. */
+            status_filter?: components["schemas"]["CallStatus"];
             data: components["schemas"]["Call"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
@@ -961,6 +1025,16 @@ export interface components {
         };
     };
     parameters: {
+        CallSince: string;
+        CallUntil: string;
+        /** @description Exactly the model name the client asked for. */
+        CallModel: string;
+        CallClientApp: string;
+        CallKey: components["schemas"]["KeyId"];
+        CallWorkspace: components["schemas"]["WorkspaceId"];
+        /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+        CallStatus: components["schemas"]["CallStatus"];
+        CallRequestId: components["schemas"]["CallId"];
         /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
         Cursor: string;
         /** @description How many items a page holds at most. */
@@ -1569,11 +1643,16 @@ export interface operations {
     listCalls: {
         parameters: {
             query?: {
-                since?: string;
-                until?: string;
+                since?: components["parameters"]["CallSince"];
+                until?: components["parameters"]["CallUntil"];
                 /** @description Exactly the model name the client asked for. */
-                model?: string;
-                client_app?: string;
+                model?: components["parameters"]["CallModel"];
+                client_app?: components["parameters"]["CallClientApp"];
+                key_id?: components["parameters"]["CallKey"];
+                workspace_id?: components["parameters"]["CallWorkspace"];
+                /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+                status?: components["parameters"]["CallStatus"];
+                request_id?: components["parameters"]["CallRequestId"];
                 /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description How many items a page holds at most. */
@@ -1592,6 +1671,89 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CallList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    aggregateCalls: {
+        parameters: {
+            query?: {
+                since?: components["parameters"]["CallSince"];
+                until?: components["parameters"]["CallUntil"];
+                /** @description Exactly the model name the client asked for. */
+                model?: components["parameters"]["CallModel"];
+                client_app?: components["parameters"]["CallClientApp"];
+                key_id?: components["parameters"]["CallKey"];
+                workspace_id?: components["parameters"]["CallWorkspace"];
+                /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+                status?: components["parameters"]["CallStatus"];
+                request_id?: components["parameters"]["CallRequestId"];
+                group_by?: "day" | "model" | "key";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Complete totals for the selected window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallAggregates"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    exportCalls: {
+        parameters: {
+            query?: {
+                since?: components["parameters"]["CallSince"];
+                until?: components["parameters"]["CallUntil"];
+                /** @description Exactly the model name the client asked for. */
+                model?: components["parameters"]["CallModel"];
+                client_app?: components["parameters"]["CallClientApp"];
+                key_id?: components["parameters"]["CallKey"];
+                workspace_id?: components["parameters"]["CallWorkspace"];
+                /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+                status?: components["parameters"]["CallStatus"];
+                request_id?: components["parameters"]["CallRequestId"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Streamed CSV; check completion and continuation trailers */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    Trailer?: string;
+                    /** @description Effective inclusive start; reuse as since when continuing a capped download. */
+                    "X-Export-Since"?: string;
+                    /** @description Effective exclusive end; reuse as until when continuing a capped download. */
+                    "X-Export-Until"?: string;
+                    /** @description Response trailer; nonempty when the row cap was reached with more matches. */
+                    "X-Next-Cursor"?: string;
+                    /** @description Response trailer; true only for a successfully completed export chunk. */
+                    "X-Export-Complete"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
                 };
             };
             400: components["responses"]["BadRequest"];

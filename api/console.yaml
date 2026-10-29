@@ -629,10 +629,14 @@ paths:
       x-axiom-level: signed_in
       x-axiom-permission: calls.view
       parameters:
-        - {name: since, in: query, required: false, schema: {type: string, format: date-time}}
-        - {name: until, in: query, required: false, schema: {type: string, format: date-time}}
-        - {name: model, in: query, required: false, description: "Exactly the model name the client asked for.", schema: {type: string, maxLength: 200}}
-        - {name: client_app, in: query, required: false, schema: {type: string, maxLength: 200}}
+        - $ref: "#/components/parameters/CallSince"
+        - $ref: "#/components/parameters/CallUntil"
+        - $ref: "#/components/parameters/CallModel"
+        - $ref: "#/components/parameters/CallClientApp"
+        - $ref: "#/components/parameters/CallKey"
+        - $ref: "#/components/parameters/CallWorkspace"
+        - $ref: "#/components/parameters/CallStatus"
+        - $ref: "#/components/parameters/CallRequestId"
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -641,6 +645,99 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/CallList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/calls/aggregate:
+    get:
+      operationId: aggregateCalls
+      tags: [Calls]
+      summary: Calls and user charges grouped by UTC day, model or key
+      description: >-
+        All matching calls in the window, independent of list pagination. Defaults to the last 30 days ending now;
+        at most 31 days and 1000 groups. A larger result is refused with 400; narrow the window or filters.
+        Currencies are grouped separately. Charges are exact integer text in billionths, never supplier cost.
+        No conversation content, endpoint or routing data. Ten-second request deadline.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: calls.view
+      parameters:
+        - $ref: "#/components/parameters/CallSince"
+        - $ref: "#/components/parameters/CallUntil"
+        - $ref: "#/components/parameters/CallModel"
+        - $ref: "#/components/parameters/CallClientApp"
+        - $ref: "#/components/parameters/CallKey"
+        - $ref: "#/components/parameters/CallWorkspace"
+        - $ref: "#/components/parameters/CallStatus"
+        - $ref: "#/components/parameters/CallRequestId"
+        - name: group_by
+          in: query
+          required: false
+          schema: {type: string, enum: [day, model, key], default: day}
+      responses:
+        "200":
+          description: Complete totals for the selected window
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CallAggregates"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/calls/export:
+    get:
+      operationId: exportCalls
+      tags: [Calls]
+      summary: Stream the account's call metadata as CSV
+      description: >-
+        Same filters and newest-first cursor order as listCalls, from one database snapshot. Defaults to the last
+        30 days ending now, at most 31 days. At most 10000 rows per download, in pages of 200; a nonempty
+        X-Next-Cursor trailer means more rows remain. Continue with that cursor and the same explicit since/until.
+        X-Export-Since and X-Export-Until return the effective window, including defaults.
+        X-Export-Complete is true only after the snapshot finishes successfully; a failed stream is aborted.
+        Ten-second request deadline includes writes, and cancellation releases the snapshot.
+        Amounts are exact decimal text in currency units with nine fractional digits. Cells whose first
+        non-whitespace character is =, +, -, or @ are prefixed with an apostrophe; CSV quoting alone is insufficient.
+        No conversation content, credentials, supplier cost, endpoint or route.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: calls.view
+      parameters:
+        - $ref: "#/components/parameters/CallSince"
+        - $ref: "#/components/parameters/CallUntil"
+        - $ref: "#/components/parameters/CallModel"
+        - $ref: "#/components/parameters/CallClientApp"
+        - $ref: "#/components/parameters/CallKey"
+        - $ref: "#/components/parameters/CallWorkspace"
+        - $ref: "#/components/parameters/CallStatus"
+        - $ref: "#/components/parameters/CallRequestId"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Streamed CSV; check completion and continuation trailers
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+            Trailer:
+              schema: {type: string}
+            X-Export-Since:
+              description: Effective inclusive start; reuse as since when continuing a capped download.
+              schema: {type: string, format: date-time}
+            X-Export-Until:
+              description: Effective exclusive end; reuse as until when continuing a capped download.
+              schema: {type: string, format: date-time}
+            X-Next-Cursor:
+              description: Response trailer; nonempty when the row cap was reached with more matches.
+              schema: {type: string}
+            X-Export-Complete:
+              description: Response trailer; true only for a successfully completed export chunk.
+              schema: {type: string}
+          content:
+            text/csv:
+              schema: {type: string}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -891,6 +988,40 @@ components:
       description: The new session cookie, or an expired one that ends the session.
       schema: {type: string}
   parameters:
+    CallSince:
+      name: since
+      in: query
+      schema: {type: string, format: date-time}
+    CallUntil:
+      name: until
+      in: query
+      schema: {type: string, format: date-time}
+    CallModel:
+      name: model
+      in: query
+      description: Exactly the model name the client asked for.
+      schema: {type: string, maxLength: 200}
+    CallClientApp:
+      name: client_app
+      in: query
+      schema: {type: string, maxLength: 200}
+    CallKey:
+      name: key_id
+      in: query
+      schema: {$ref: "#/components/schemas/KeyId"}
+    CallWorkspace:
+      name: workspace_id
+      in: query
+      schema: {$ref: "#/components/schemas/WorkspaceId"}
+    CallStatus:
+      name: status
+      in: query
+      description: success means empty error_kind; error means nonempty error_kind. Omit for both.
+      schema: {$ref: "#/components/schemas/CallStatus"}
+    CallRequestId:
+      name: request_id
+      in: query
+      schema: {$ref: "#/components/schemas/CallId"}
     Cursor:
       name: cursor
       in: query
@@ -963,6 +1094,37 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    CallStatus:
+      type: string
+      enum: [success, error]
+    CallAggregates:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/CallAggregate"}
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        group_by: {type: string, enum: [day, model, key]}
+    CallAggregateMoney:
+      type: object
+      additionalProperties: false
+      description: A sum of user charges, in billionths. Unlike a single charge, this can exceed int64 and 19 digits.
+      properties:
+        amount: {type: string, pattern: '^(0|[1-9][0-9]*)$'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+    CallAggregate:
+      type: object
+      additionalProperties: false
+      properties:
+        bucket:
+          type: string
+          description: UTC date, exact model name, or public key ID, according to group_by.
+        calls:
+          type: string
+          pattern: '^[0-9]+$'
+        price: {$ref: "#/components/schemas/CallAggregateMoney"}
     Error:
       type: object
       required: [error]
@@ -1359,6 +1521,10 @@ components:
       type: object
       required: [data, next_cursor]
       properties:
+        status_filter:
+          description: Echoes an applied status filter. Missing on old nodes; recent errors are unavailable then.
+          allOf:
+            - $ref: "#/components/schemas/CallStatus"
         data:
           type: array
           items: {$ref: "#/components/schemas/Call"}

@@ -66,27 +66,11 @@ func callBody(c observability.OwnCall) consoleapi.Call {
 // ListCalls lists the account's calls, newest first, a page at a time.
 func (c consoleAPI) ListCalls(ctx context.Context, request consoleapi.ListCallsRequestObject) (consoleapi.ListCallsResponseObject, error) {
 	cl := callOf(ctx)
-	p := request.Params
-	q := observability.OwnQuery{Account: uuid.UUID(cl.principal.AccountID()), Until: endOfTime, PageSize: pageSize(p.Limit)}
-	if p.Since != nil {
-		q.Since = *p.Since
+	q, err := ownCallQuery(cl)
+	if err != nil {
+		return nil, err
 	}
-	if p.Until != nil {
-		q.Until = *p.Until
-	}
-	if p.Model != nil {
-		q.Model = *p.Model
-	}
-	if p.ClientApp != nil {
-		q.ClientApp = *p.ClientApp
-	}
-	if p.Cursor != nil {
-		after, err := observability.ParseCursor(*p.Cursor)
-		if err != nil {
-			return nil, err
-		}
-		q.After = &after
-	}
+	q.PageSize = pageSize(request.Params.Limit)
 	var calls []observability.OwnCall
 	var next *observability.Cursor
 	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
@@ -95,7 +79,7 @@ func (c consoleAPI) ListCalls(ctx context.Context, request consoleapi.ListCallsR
 	}); err != nil {
 		return nil, err
 	}
-	list := consoleapi.CallList{Data: make([]consoleapi.Call, len(calls))}
+	list := consoleapi.CallList{Data: make([]consoleapi.Call, len(calls)), StatusFilter: request.Params.Status}
 	for i, call := range calls {
 		list.Data[i] = callBody(call)
 	}

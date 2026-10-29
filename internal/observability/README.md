@@ -2,7 +2,7 @@
 
 调用记录的代码接口：写什么、怎么写、怎么读、数据怎么放。要不要记、记多久、谁能看是[记录与告警](../../docs/domains/observability.md)的事，本文只写代码里的做法和理由。指标与链路的基座在 [platform 的「遥测」](../platform/README.md#遥测)，不在本模块。
 
-目前实现调用与尝试记录，以及运维告警事件、规则、邮件与 Webhook 通知和周期渠道自测。对话内容、分析标签和受控导出随各自的 Issue 加入。
+目前实现调用与尝试记录，以及运维告警事件、规则、邮件与 Webhook 通知和周期渠道自测。用户元数据筛选、聚合与导出已实现；对话内容、分析标签和内容受控导出随各自的 Issue 加入。
 
 ## 接口
 
@@ -13,6 +13,7 @@ func (r *Recorder) Enqueue(rec CallRecord) error          // 从不等待；队�
 func (r *Recorder) Close(ctx context.Context) error       // 写完队列里的，ctx 到期则报告丢了几条（含入队时丢的）
 func (r *Recorder) Done() <-chan struct{}                 // 写入协程退出时关闭；Close 返回前已等待它，测试据此断言没有写入协程留下
 func ListOwn(ctx, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error)
+func AggregateOwn(ctx, tx pg.Tx, q OwnQuery, groupBy string) ([]OwnAggregate, error) // day/model/key，最多 1000 组，收费与次数为精确文本
 func GetOwn(ctx, tx pg.Tx, id uuid.UUID) (OwnCall, error)
 func GetTrace(ctx, tx pg.Tx, id uuid.UUID) (CallRecord, error) // 一条调用、它的尝试和 route，按请求 ID；只从运营或管理的处理器调用，事务须是平台范围
 func (c Cursor) String() string; func ParseCursor(s string) (Cursor, error) // 控制台翻页用的不透明游标；格式不对 ErrBadCursor
@@ -68,28 +69,24 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 ## 读
 
-`ListOwn` 必须给账户（`OwnQuery.Account`），按 `(at, id)` 倒序、键集分页（不用 OFFSET：新记录到达时翻页不重不漏），可按时间、模型、客户端应用筛选，一页最多 200 条。**范围就是全部访问控制**：调用方用授权通过后的账户范围打开事务，行级安全只放行这个账户的行；显式的账户条件只是让计划走索引，不是访问控制。站长看本站、平台运维看全部的查询随 operations 和 accounts 加入，用的是它们的范围。
+`ListOwn` 必须给账户（`OwnQuery.Account`），按 `(at, id)` 倒序、键集分页（不用 OFFSET：新记录到达时翻页不重不漏），可按时间、模型、客户端应用、key、工作区、成功/报错和请求 ID 组合筛选，一页最多 200 条。**范围就是全部访问控制**：调用方用授权通过后的账户范围打开事务，行级安全只放行这个账户的行；显式的账户条件只是让计划走索引，不是访问控制。站长看本站、平台运维看全部的查询随 operations 和 accounts 加入，用的是它们的范围。
 
-按筛选分三条查询，各读自己的索引（[索引](#索引)）：不筛选读 `(account_id, at DESC, id DESC)`；给了模型（可再给客户端应用，在该模型的行上检查）读 `(account_id, model, at DESC, id DESC)`；只给客户端应用读 `(account_id, client_app, at DESC, id DESC)`。`ORDER BY` 的列写成 `call_log.at`、`call_log.id`：裸的 `id` 指输出列 `id::text`，按文本排序，会让大账户也退回位图加排序。每次查询前 `SET LOCAL plan_cache_mode = force_custom_plan`：服务端对预处理语句执行几次后可能改用通用计划，通用计划看不到账户、时间窗和可选筛选的值，不能按它们的分布选择计划；范围的逐行成本和极低估计已由 [pg 的策略级 InitPlan](../platform/pg/README.md#决策与理由)统一处理；列表是给控制台用的，不在调用路径上，每次按参数规划的代价（不到 1 ms）可以接受。
+所有筛选共用 `ListOwnCalls` 查询，可选条件由 `force_custom_plan` 按参数折叠，让优化器按实际筛选选择有序索引。模型、应用、key、工作区和 `(error_kind <> '')` 各有 `(account_id, 筛选值, at DESC, id DESC)` 索引；请求 ID 复用主键。组合筛选由选定索引读候选，再检查其余条件，因此读取量也受候选的选择性影响。`ORDER BY call_log.at, call_log.id` 保持 UUID 索引顺序，不能用输出列 `id::text`。不使用 OFFSET。列表事务另设 `enable_sort=off`：多个稀疏筛选相关时，custom plan 仍可能把 100 个真实命中低估为 1 行，选位图加排序而不是在索引上遇 LIMIT 停止。真实 12 万行的模型+应用稀疏组合曾走该计划；设置只在有序列表及 CSV 读取的事务内，聚合仍允许排序。平台 RLS 的 InitPlan 修正不能消除筛选值之间的相关性。请求 ID 沿主键反向读 `at`，也是有序索引扫描；计划 helper 同时接受正向与反向扫描，保留无位图、无排序和块预算要求。
 
-测得的读取量（应用角色，行级安全保留，12 万条、1 个大账户 6 万条、100 个小账户各 600 条；`TestListPlansFollowTheIndexes`）：
+`AggregateOwn` 复用同一组筛选及 custom plan，忽略游标与页大小；数据库按 UTC 日/模型/key 和货币分组，`sum(bigint)` 用 PostgreSQL numeric 再转文本，不溢出 int64，不将不同币种相加。多于 1000 组返回 `ErrAggregateSize`，处理器答 400。时间窗与 10 秒期限由 console HTTP 边界限制，调用路径不变。导出在 console 处理器里复用 `ListOwn`，同一 `ReadTx` 快照内逐页写 CSV；边界和安全规则见[用户调用记录查询与导出](../../docs/domains/observability.md#用户调用记录查询与导出)。
 
-| 请求 | 计划 | 缓冲 |
-|---|---|---|
-| 大账户不筛选，首页和后续页 | 索引上按序读，遇 LIMIT 即停，无排序 | 1 到 8 |
-| 模型或应用密集（几乎全部命中） | 同上，读该筛选的索引 | 6 到 8 |
-| 稀疏（6 万条里命中 100 条） | 读该筛选索引里的全部命中再取前 N | 53 到 109 |
-| 一个都不命中 | 索引上一次探查，返回空页 | 1 到 3 |
-| 小账户（600 条）不筛选，首页及紧接首页 | 本次为索引按序读；测试也允许由 600 条候选封顶的位图扫描 | 55 到 56 |
+`TestListPlansFollowTheIndexes` 使用真实应用角色与 RLS，12 万条记录中一个大账户 6 万条、100 个小账户各 600 条。未筛选、模型、应用、key、工作区与状态页都要求索引顺序，不能有位图、顺序扫描或排序。原有筛选的读取预算：大账户首页和密集筛选最多 40 块，稀疏筛选最多 400 块，无匹配最多 20 块；小账户最多 800 块（候选只有 600 行），仍须索引顺序。深页及新筛选还由下面的共享 helper 检查更紧的首页/深页相对预算；组合筛选的剩余条件可能增加候选读取量，不能承诺所有组合都只碰一页。
 
 深页的游标行比较 `(at, id) < (after_at, after_id)` 必须写在标量时间窗条件前面。PostgreSQL 18 的 B-tree 无法比较行上界与标量 `at < until` 哪个更紧，保留同方向的第一个 required key 作为扫描起点；即使两者都显示在 `Index Cond`，从 `until` 开始仍会逐项检查游标之前的索引叶子。源码见 [`_bt_compare_scankey_args` 和 `_bt_unmark_keys`](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/access/nbtree/nbtpreprocesskeys.c)（2026-10-29 查证）。这与 RLS 估计、custom plan 或索引列顺序无关：原计划已经裁剪到一个月、无排序、返回 51 行，12 万行中深 45,000 行却读 584 块，首页 6 块。
 
-同库对比（12 万行、深 45,000 行）：原查询 584 块，游标条件移到时间窗前为 8 块；事务内索引块读取增量为 580 / 4，两种写法都只取 51 条堆记录。添加冗余的 `at <= after_at` 仍为 584 块，因为没有改变哪个上界作为起点。选择调整三个查询的条件顺序，并由 `cursorOf` 取游标与 `(until, 全零 UUID)` 中较小的元组上界：全零 UUID 让 `until` 仍然排除该时刻的全部行；首页、历史窗口以及游标在窗口之外时都从更紧的界限开始。保留显式时间窗供分区裁剪。不选删除 `until`：会丢失窗口语义，也会探查所有未来分区。不选收紧标量上界：严格小于游标时间会漏掉同一时间的较小 ID，非严格上界仍可能扫描大量同时间的索引项。
+同库对比（12 万行、深 45,000 行）：原查询 584 块，游标条件移到时间窗前为 8 块；事务内索引块读取增量为 580 / 4，两种写法都只取 51 条堆记录。添加冗余的 `at <= after_at` 仍为 584 块，因为没有改变哪个上界作为起点。选择让共用列表查询保持这个条件顺序，并由 `cursorOf` 取游标与 `(until, 全零 UUID)` 中较小的元组上界：全零 UUID 让 `until` 仍然排除该时刻的全部行；首页、历史窗口以及游标在窗口之外时都从更紧的界限开始。保留显式时间窗供分区裁剪。不选删除 `until`：会丢失窗口语义，也会探查所有未来分区。不选收紧标量上界：严格小于游标时间会漏掉同一时间的较小 ID，非严格上界仍可能扫描大量同时间的索引项。
 
-`TestListPlansFollowTheIndexes` 在同一份 12 万行数据里比较首页与深 45,000 行的页：平台与账户两种范围、三种查询、50 和 200 行页，以及历史时间窗首页、游标等于或晚于窗口末尾、覆盖未来分区的时间窗。50 行页的首页 / 深页为 7 / 8 块，200 行页为 18 / 19 块；历史窗口的页分别为 8、19 块。覆盖未来分区时用 Merge Append 合并有序扫描，分别为 61 / 62、72 / 73 块，额外探查量随未裁剪的分区数增长。测试检查有序索引扫描和 shared hit + read 块预算，不仅检查计划节点名字。深页检查复用原有数据，不单独再写一份历史。`TestListOwnPagesAcrossPartitions` 检查跨月与默认分区、相同时间的 ID 顺序、时间窗的包含/排除边界，以及三种查询和组合筛选连续翻页不重不漏。
+`TestListPlansFollowTheIndexes` 在同一份 12 万行数据里比较首页与深 45,000 行的页：平台与账户两种范围、未筛选/模型/应用三种形态、50 和 200 行页，以及历史时间窗首页、游标等于或晚于窗口末尾、覆盖未来分区的时间窗。50 行页的首页 / 深页为 7 / 8 块，200 行页为 18 / 19 块；历史窗口的页分别为 8、19 块。覆盖未来分区时用 Merge Append 合并有序扫描，分别为 61 / 62、72 / 73 块，额外探查量随未裁剪的分区数增长。测试检查有序索引扫描和 shared hit + read 块预算，不仅检查计划节点名字。深页检查复用原有数据，不单独再写一份历史。`TestListOwnPagesAcrossPartitions` 检查跨月与默认分区、相同时间的 ID 顺序、时间窗的包含/排除边界，以及未筛选/模型/应用三种形态和组合筛选连续翻页不重不漏。
 
 稀疏筛选读的是命中的条数（命中不多于一页就读完），不是账户或分区的量：没有这两个索引时，稀疏和零命中的筛选读整个月分区（36 万条时 7,059 个缓冲，随表增长，60 到 100 ms），不管有没有命中。
 控制台把 `Cursor` 写成 32 个字符的不透明文本（`String`：调用开始时间的微秒数 8 字节、调用编号 16 字节，base64url 无填充），`ParseCursor` 读回，不是这个长度或字母表就是 `ErrBadCursor`（控制台答 400）。游标只标记一个账户的调用里的一个位置：伪造一个只会得到范围本来就让读的、从别处开始的一页，所以不签名；它也不绑定筛选条件，换了筛选条件续用同一个游标得到的是按新条件、从那个位置往后的一页。
+
+`TestOwnFiltersAndAggregates` 验证新筛选的单项、组合、游标页与账户隔离；`TestOwnAggregateKeepsCurrenciesSeparate` 保证不同货币不相加，`TestOwnAggregateRejectsPartialTotals` 守住组数上限。`TestListPlansFollowTheIndexes` 还复用 #408 的 `checkListPagePlans`，比较 key、工作区与状态筛选在平台/账户两种范围里的首页和深页，以及无匹配时的有序索引与块预算。跨分区测试也覆盖这些筛选。
 
 调用记录的可空 `price_version` 是实际收费条目在预留时冻结的售价版本；由 billing 的 `Final.PriceVersion` 传入，随批量记录保存，`ListOwn`、`GetOwn` 与内部追溯原样返回。历史记录和旧节点没写的版本保持未知，控制台显示不可用。
 
@@ -112,13 +109,13 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 ## 索引
 
-`call_log` 在每个分区上有四个索引：主键 `(id, at)`；`(account_id, at DESC, id DESC)`，不筛选的列表；`(account_id, model, at DESC, id DESC)` 和 `(account_id, client_app, at DESC, id DESC)`，两种筛选（迁移 `00002`）。
+`call_log` 在每个分区上有七个索引：主键 `(id, at)`；不筛选的 `(account_id, at DESC, id DESC)`；模型和应用筛选（迁移 `00002`），以及 key、工作区与报错布尔表达式筛选（迁移 `00009`）各一个 `(account_id, 筛选值, at DESC, id DESC)`。后三个每次写入各增加一条索引项，不在 gateway 的同步调用路径里；持续写入吞吐与索引总体体积仍待压测。
 
 `call_attempt` 只有主键索引 `(request_id, at, attempt_seq)`：按请求查它的尝试走这个前缀，保留任务按分区整块处理；没有按尝试的列表查询，所以暂不加别的索引。它的写入量是调用行乘以每次尝试，见下文的写入放大。
 
 - **选择**：比较了四种做法，量的是 36 万条（表 83 MB，原有索引 50 MB）。(a) 不加：稀疏和零命中读整个分区（7,059 缓冲，随表增长）。(b) 在账户索引上加 `INCLUDE (model, client_app)`：计划不变，仍然读整个分区，没有用。(c) 只加模型索引：模型筛选解决，应用筛选仍读整个分区。(d) 模型和应用各一个：两种筛选都读命中的行（见上表）。取 (d)，是让两个筛选都有界的最小做法。
-- **写入放大**：每个索引每行多一条索引项，36 万条各多约 41 MB（表加索引合计 133 MB 到 174 MB 到 215 MB，每个约 +31%）；批量写入 12 万条的最快一次是 4.6 s、3.9 s、7.9 s（无、一个、两个；机器噪声约三成，体积是确定的）。调用记录由后台按批写（满 500 条立即写，否则最多攒 200 ms），不在请求路径上；持续吞吐取决于调用到达的速率和数据库，没有固定上限。队列满时 `Enqueue` 丢掉新记录并计数，所以写入持续跟不上时只会少记录，不会拖慢调用；代价是 `call_attempt` 的每个尝试一行和它的主键索引，两条筛选索引在持续满批写入下的吞吐**待验证**，随[性能](../../docs/performance.md#怎么验证)的压测一起量。如果运营中发现应用筛选很少用，删掉 `call_log_account_app_at` 是一条只减不增的迁移。
-- **迁移方式**：加索引兼容旧程序（旧程序的查询没有它也对），按平时的顺序先迁移再发新程序。分区表的 `CREATE INDEX` 在每个分区上建一个，建的时候对该分区加 SHARE 锁，挡住写入器的插入，时长随该分区的行数增长（12 万条约 1.7 秒）；分区表的父表不支持 `CONCURRENTLY`。`00002` 用普通的 `CREATE INDEX`，只适合表还小的时候，也就是 `call_log` 第一次部署时。**已经有大量数据的调用记录再加索引**，迁移要这样写：标 `-- +goose NO TRANSACTION`；`CREATE INDEX 名 ON ONLY observability.call_log (...)`（建出无效的父索引，不锁写）；对每个分区 `CREATE INDEX CONCURRENTLY 分区索引名 ON 分区 (...)`（不挡写；`migrate` 的 5 秒 `lock_timeout` 对它等老事务也生效，超时就失败，留下无效索引，要先删掉再重跑）；再 `ALTER INDEX 父索引 ATTACH PARTITION 分区索引`，全部挂上后父索引才生效。新建的月分区自动带上父索引。
+- **写入放大**：每个索引每行多一条索引项，36 万条各多约 41 MB（表加索引合计 133 MB 到 174 MB 到 215 MB，每个约 +31%）；批量写入 12 万条的最快一次是 4.6 s、3.9 s、7.9 s（无、一个、两个；机器噪声约三成，体积是确定的）。调用记录由后台按批写（满 500 条立即写，否则最多攒 200 ms），不在请求路径上；持续吞吐取决于调用到达的速率和数据库，没有固定上限。队列满时 `Enqueue` 丢掉新记录并计数，所以写入持续跟不上时只会少记录，不会拖慢调用；代价是 `call_attempt` 的每个尝试一行和它的主键索引，筛选索引在持续满批写入下的吞吐**待验证**，随[性能](../../docs/performance.md#怎么验证)的压测一起量。如果运营中发现应用筛选很少用，删掉 `call_log_account_app_at` 是一条只减不增的迁移。
+- **迁移方式**：加索引兼容旧程序（旧程序的查询没有它也对），按平时的顺序先迁移再发新程序。分区表的 `CREATE INDEX` 在每个分区上建一个，建的时候对该分区加 SHARE 锁，挡住写入器的插入，时长随该分区的行数增长（12 万条约 1.7 秒）；分区表的父表不支持 `CONCURRENTLY`。`00002` 与 `00009` 用普通的 `CREATE INDEX`，只适合表还小的时候，也就是 `call_log` 第一次部署时。**已经有大量数据的调用记录再加索引**，迁移要这样写：标 `-- +goose NO TRANSACTION`；`CREATE INDEX 名 ON ONLY observability.call_log (...)`（建出无效的父索引，不锁写）；对每个分区 `CREATE INDEX CONCURRENTLY 分区索引名 ON 分区 (...)`（不挡写；`migrate` 的 5 秒 `lock_timeout` 对它等老事务也生效，超时就失败，留下无效索引，要先删掉再重跑）；再 `ALTER INDEX 父索引 ATTACH PARTITION 分区索引`，全部挂上后父索引才生效。新建的月分区自动带上父索引。
 
 ## 决策与理由
 

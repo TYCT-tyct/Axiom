@@ -35,6 +35,7 @@ export default {
     all: "All",
     noKeys: "No keys yet",
     createFirst: "Create your first key",
+    errorsUnavailable: "Recent errors unavailable on this server",
     recentErrors: "Recent errors",
     noErrors: "No errors in your latest calls",
   },

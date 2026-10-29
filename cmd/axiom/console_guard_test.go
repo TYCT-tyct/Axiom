@@ -182,6 +182,8 @@ func TestPermissionsAreCheckedEveryRequest(t *testing.T) {
 		{endpoint{http.MethodGet, "/statement", ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, "/statement.csv", ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, "/calls", ""}, http.StatusForbidden},
+		{endpoint{http.MethodGet, "/calls/aggregate", ""}, http.StatusForbidden},
+		{endpoint{http.MethodGet, "/calls/export", ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, someCall, ""}, http.StatusForbidden},
 	} {
 		rec := f.do(c.method, c.path, c.body, as(s))
