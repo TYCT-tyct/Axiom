@@ -33,14 +33,8 @@ type Registration struct {
 // still removes expired requests, so a node that once sent mail leaves no rows behind after SMTP is turned off.
 func RegisterRegistration(db *pg.DB, queue *pg.Queue, mailer *mail.Mailer, scope pg.Scope, logger *slog.Logger) (*Registration, error) {
 	r := &Registration{db: db, queue: queue, mailer: mailer, scope: scope, logger: logger}
-	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(r.cleanup)); err != nil {
-		return nil, err
-	}
-	queue.Every(time.Minute, func() river.JobArgs { return registrationCleanupArgs{} })
-	if !mailer.Configured() {
-		return r, nil
-	}
-	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(r.work)); err != nil {
+	tick := func() river.JobArgs { return registrationCleanupArgs{} }
+	if err := registerMailWorkers(queue, mailer, tick, r.cleanup, r.work); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -79,11 +73,8 @@ func (r *Registration) process(ctx context.Context, args registrationArgs) error
 	_, err := r.db.TenantTx(ctx, "accounts.registration_request_tenant", args.ID, func(tx pg.Tx) error {
 		q := New()
 		rows, err := q.LockRegistrationRequest(ctx, tx, args.ID)
-		if err != nil {
+		if err != nil || len(rows) == 0 {
 			return err
-		}
-		if len(rows) == 0 {
-			return nil
 		}
 		request := rows[0]
 		if !request.Unexpired {
@@ -93,27 +84,34 @@ func (r *Registration) process(ctx context.Context, args registrationArgs) error
 		if len(request.TokenHash) != 0 {
 			return nil
 		}
-		sites, err := q.ConsoleSite(ctx, tx, ConsoleSiteParams{SiteID: request.SiteID, Domain: request.Domain})
-		if err != nil {
-			return err
-		}
-		if len(sites) == 0 {
-			return errNoRegistrationDomain
-		}
-		token := randomToken()
-		hash := sha256.Sum256([]byte(token))
-		n, err := q.SetRegistrationToken(ctx, tx, SetRegistrationTokenParams{ID: args.ID, TokenHash: hash[:]})
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			return nil
-		}
-		link := "https://" + sites[0].Domain + "/console/verify-email#token=" + token
-		return r.mailer.Enqueue(ctx, tx, mail.Tenant{Site: request.SiteID},
-			registrationMail(request.Email, sites[0].Name, request.Language, link))
+		return r.issue(ctx, tx, args.ID, request)
 	})
 	return err
+}
+
+// issue stores the token's hash and mails the link, both in the request's tenant. A row the update missed sends
+// nothing: the job may be running twice, and the other one owns the token.
+func (r *Registration) issue(ctx context.Context, tx pg.Tx, id uuid.UUID, request LockRegistrationRequestRow) error {
+	q := New()
+	sites, err := q.ConsoleSite(ctx, tx, ConsoleSiteParams{SiteID: request.SiteID, Domain: request.Domain})
+	if err != nil {
+		return err
+	}
+	if len(sites) == 0 {
+		return errNoRegistrationDomain
+	}
+	token := randomToken()
+	hash := sha256.Sum256([]byte(token))
+	n, err := q.SetRegistrationToken(ctx, tx, SetRegistrationTokenParams{ID: id, TokenHash: hash[:]})
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return nil
+	}
+	link := "https://" + sites[0].Domain + "/console/verify-email#token=" + token
+	return r.mailer.Enqueue(ctx, tx, mail.Tenant{Site: request.SiteID},
+		registrationMail(request.Email, sites[0].Name, request.Language, link))
 }
 
 // VerifyEmail turns a verification link into a user. The token is looked up on the request's console domain, then the
@@ -141,79 +139,60 @@ func (s *Service) VerifyEmail(ctx context.Context, host, token, password string,
 		return UserID{}, ErrInvalidVerification
 	}
 	hash := sha256.Sum256([]byte(token))
-	var targets []RegistrationTenantRow
-	if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
-		var err error
-		targets, err = s.queries.RegistrationTenant(ctx, tx, RegistrationTenantParams{Domain: strings.ToLower(host), TokenHash: hash[:]})
-		return err
-	}); err != nil {
-		return UserID{}, fmt.Errorf("verify email: %w", err)
+	request, err := s.verificationRequest(ctx, host, hash[:])
+	if err != nil {
+		return UserID{}, err
 	}
-	if len(targets) == 0 || !targets[0].Unexpired {
-		return UserID{}, ErrInvalidVerification
-	}
-	site, ok := snap.sites[SiteID(targets[0].SiteID)]
+	site, ok := snap.sites[SiteID(request.SiteID)]
 	if !ok {
 		return UserID{}, ErrInvalidVerification
 	}
-	if !domainPermitted(site, domainOf(targets[0].Email)) {
+	// A deny entry added while the link was pending must stop it: the list is an abuse response, not just a
+	// request-time filter. The transaction checks it again, after the request is locked.
+	if !domainPermitted(site, domainOf(request.Email)) {
 		return UserID{}, ErrEmailDomainNotAllowed
 	}
 	var passwordHash string
 	if err := s.hash(ctx, func() { passwordHash = hashPassword(password) }); err != nil {
 		return UserID{}, err
 	}
+	user, err := s.verifyRequest(ctx, d, snap, request, hash[:], passwordHash)
+	if err != nil {
+		return UserID{}, err
+	}
+	return user, nil
+}
+
+// verificationRequest finds the pending registration a token names on the console domain in host. An unknown, expired
+// or already used token is one ErrInvalidVerification, so the caller learns nothing about which.
+func (s *Service) verificationRequest(ctx context.Context, host string, hash []byte) (RegistrationTenantRow, error) {
+	var targets []RegistrationTenantRow
+	if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
+		var err error
+		targets, err = s.queries.RegistrationTenant(ctx, tx, RegistrationTenantParams{Domain: strings.ToLower(host), TokenHash: hash})
+		return err
+	}); err != nil {
+		return RegistrationTenantRow{}, fmt.Errorf("verify email: %w", err)
+	}
+	if len(targets) == 0 || !targets[0].Unexpired {
+		return RegistrationTenantRow{}, ErrInvalidVerification
+	}
+	return targets[0], nil
+}
+
+// verifyRequest creates the user the pending request names, in the request's site scope.
+func (s *Service) verifyRequest(ctx context.Context, d domain, snap *snapshot, request RegistrationTenantRow, hash []byte, passwordHash string) (UserID, error) {
 	var user UserID
 	var taken bool
-	found, err := s.db.TenantTx(ctx, "accounts.registration_request_tenant", targets[0].ID, func(tx pg.Tx) error {
-		rows, err := s.queries.LockRegistrationRequest(ctx, tx, targets[0].ID)
-		if err != nil {
-			return err
-		}
-		if len(rows) == 0 || !rows[0].Unexpired || !bytes.Equal(rows[0].TokenHash, hash[:]) {
-			return ErrInvalidVerification
-		}
-		request := rows[0]
-		taken, err = s.queries.UserEmailTaken(ctx, tx, UserEmailTakenParams{SiteID: request.SiteID, Email: request.Email})
-		if err != nil {
-			return err
-		}
-		if taken {
-			_, err := s.queries.DeleteRegistrationRequest(ctx, tx, targets[0].ID)
-			return err
-		}
-		site, ok := snap.sites[SiteID(request.SiteID)]
-		if !ok {
-			return ErrInvalidVerification
-		}
-		// A deny entry added while the link was pending must stop it: the list is an abuse response, not just a
-		// request-time filter.
-		if !domainPermitted(site, domainOf(request.Email)) {
-			return ErrEmailDomainNotAllowed
-		}
-		id, account := uuid.NewV7(), uuid.NewV7()
-		now := s.now()
-		if err := createUser(ctx, tx, s.queries, s.opened, newUser{
-			id: id, account: account, site: request.SiteID, tier: request.TierID, role: snap.roleIDs["owner"],
-			email: request.Email, passwordHash: passwordHash, verified: &now,
-		}); err != nil {
-			return err
-		}
-		n, err := s.queries.DeleteRegistrationRequest(ctx, tx, targets[0].ID)
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			return ErrInvalidVerification
-		}
-		user = UserID(id)
-		success := securityAttempt{site: site.ID, user: id, account: account, surface: d.surface}
-		return success.record(ctx, tx, "security.registration")
+	found, err := s.db.TenantTx(ctx, "accounts.registration_request_tenant", request.ID, func(tx pg.Tx) error {
+		var err error
+		user, taken, err = s.verifyInTx(ctx, tx, d, snap, request.ID, hash, passwordHash)
+		return err
 	})
+	if constraint, ok := pg.Duplicate(err); ok && constraint == "users_site_id_email_key" {
+		return UserID{}, ErrEmailTaken
+	}
 	if err != nil {
-		if constraint, ok := pg.Duplicate(err); ok && constraint == "users_site_id_email_key" {
-			return UserID{}, ErrEmailTaken
-		}
 		return UserID{}, fmt.Errorf("verify email: %w", err)
 	}
 	if !found {
@@ -223,6 +202,72 @@ func (s *Service) VerifyEmail(ctx context.Context, host, token, password string,
 		return UserID{}, ErrEmailTaken
 	}
 	return user, nil
+}
+
+// verifyInTx locks the request, matches the token once more, and spends the request on one user, account and
+// workspace. taken reports an address registered while the link was pending: the request is deleted and the
+// transaction commits, so the next attempt is refused for the same reason instead of finding the request again.
+func (s *Service) verifyInTx(ctx context.Context, tx pg.Tx, d domain, snap *snapshot, requestID uuid.UUID, hash []byte, passwordHash string) (user UserID, taken bool, err error) {
+	pending, err := s.lockRegistrationRequest(ctx, tx, requestID, hash)
+	if err != nil {
+		return UserID{}, false, err
+	}
+	if taken, err = s.deleteIfTaken(ctx, tx, requestID, pending); err != nil || taken {
+		return UserID{}, taken, err
+	}
+	site, ok := snap.sites[SiteID(pending.SiteID)]
+	if !ok {
+		return UserID{}, false, ErrInvalidVerification
+	}
+	if !domainPermitted(site, domainOf(pending.Email)) {
+		return UserID{}, false, ErrEmailDomainNotAllowed
+	}
+	id, account := uuid.NewV7(), uuid.NewV7()
+	now := s.now()
+	if err := createUser(ctx, tx, s.queries, s.opened, newUser{
+		id: id, account: account, site: pending.SiteID, tier: pending.TierID, role: snap.roleIDs["owner"],
+		email: pending.Email, passwordHash: passwordHash, verified: &now,
+	}); err != nil {
+		return UserID{}, false, err
+	}
+	n, err := s.queries.DeleteRegistrationRequest(ctx, tx, requestID)
+	if err != nil {
+		return UserID{}, false, err
+	}
+	if n != 1 {
+		return UserID{}, false, ErrInvalidVerification
+	}
+	success := securityAttempt{site: site.ID, user: id, account: account, surface: d.surface}
+	if err := success.record(ctx, tx, "security.registration"); err != nil {
+		return UserID{}, false, err
+	}
+	return UserID(id), false, nil
+}
+
+// lockRegistrationRequest matches the token again under the request's lock: the row read before the transaction may
+// have been spent, or replaced by another attempt, since.
+func (s *Service) lockRegistrationRequest(ctx context.Context, tx pg.Tx, id uuid.UUID, hash []byte) (LockRegistrationRequestRow, error) {
+	rows, err := s.queries.LockRegistrationRequest(ctx, tx, id)
+	if err != nil {
+		return LockRegistrationRequestRow{}, err
+	}
+	if len(rows) == 0 || !rows[0].Unexpired || !bytes.Equal(rows[0].TokenHash, hash) {
+		return LockRegistrationRequestRow{}, ErrInvalidVerification
+	}
+	return rows[0], nil
+}
+
+// deleteIfTaken removes a request whose address was registered while its link was pending and reports it, so the
+// owner's next attempt learns the address is taken instead of waiting out the request.
+func (s *Service) deleteIfTaken(ctx context.Context, tx pg.Tx, id uuid.UUID, pending LockRegistrationRequestRow) (bool, error) {
+	taken, err := s.queries.UserEmailTaken(ctx, tx, UserEmailTakenParams{SiteID: pending.SiteID, Email: pending.Email})
+	if err != nil || !taken {
+		return false, err
+	}
+	if _, err := s.queries.DeleteRegistrationRequest(ctx, tx, id); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // registrationMail keeps untrusted brand text escaped in HTML and out of headers containing control characters.

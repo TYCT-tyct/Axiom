@@ -213,6 +213,14 @@ func TestSiteRegistration(t *testing.T) {
 	f := newAdminFixture(t)
 	s := f.owner()
 	site := f.siteID()
+	checkRegistrationDefaults(t, f, s, site)
+	checkRegistrationWrite(t, f, s, site)
+	checkRegistrationRefusals(t, f, s, site)
+}
+
+// checkRegistrationDefaults reads the policy a site that never set one has.
+func checkRegistrationDefaults(t *testing.T, f adminFixture, s session, site string) {
+	t.Helper()
 	rec := f.do(http.MethodGet, "/sites/"+site+"/registration", "", as(s))
 	expectAdmin(t, "getSiteRegistration", rec, http.StatusOK, "")
 	var got adminapi.RegistrationPolicyView
@@ -220,9 +228,15 @@ func TestSiteRegistration(t *testing.T) {
 	if got.Policy.Mode != "invite" || !got.Policy.HumanCheck || got.Policy.HumanCheckBits != 18 || got.Policy.DomainBurst != 5 || got.Policy.DomainPerHour != 30 {
 		t.Errorf("the site's policy: %+v", got.Policy)
 	}
+}
+
+// checkRegistrationWrite replaces the policy, reads the normalized lists back, checks the audit entry, and replays the
+// same key.
+func checkRegistrationWrite(t *testing.T, f adminFixture, s session, site string) {
+	t.Helper()
 	body := `{"policy":{"mode":"open","human_check":true,"human_check_bits":20,"domain_burst":7,"domain_per_hour":70,"domain_allow":[" Example.COM ","example.com"],"domain_deny":["Bad.Example.COM"]},"reason":"open registration"}`
 	key := newKey()
-	rec = f.change(s, http.MethodPut, "/sites/"+site+"/registration", body, key)
+	rec := f.change(s, http.MethodPut, "/sites/"+site+"/registration", body, key)
 	expectAdmin(t, "updateSiteRegistration", rec, http.StatusOK, "")
 	var updated adminapi.RegistrationPolicyView
 	decode(t, rec, &updated)
@@ -239,13 +253,18 @@ func TestSiteRegistration(t *testing.T) {
 		"coalesce(detail->'after'->>'mode', 'none')":             "open",
 		"coalesce(detail->'after'->>'human_check_bits', 'none')": "20",
 	})
-
 	rec = f.change(s, http.MethodPut, "/sites/"+site+"/registration", body, key)
 	expectAdmin(t, "the same registration request again", rec, http.StatusOK, "")
 	if rec.Header().Get("Idempotency-Replayed") != "true" || f.auditCount("site_registration.update") != "1" {
 		t.Errorf("replay header %q, audits %s", rec.Header().Get("Idempotency-Replayed"), f.auditCount("site_registration.update"))
 	}
-	rec = f.change(s, http.MethodPut, "/sites/"+site+"/registration",
+}
+
+// checkRegistrationRefusals names the offending field of an out-of-bounds difficulty and reports a site or account
+// that is not there.
+func checkRegistrationRefusals(t *testing.T, f adminFixture, s session, site string) {
+	t.Helper()
+	rec := f.change(s, http.MethodPut, "/sites/"+site+"/registration",
 		`{"policy":{"mode":"open","human_check":true,"human_check_bits":11,"domain_burst":7,"domain_per_hour":70,"domain_allow":[],"domain_deny":[]},"reason":"r"}`, newKey())
 	expectAdmin(t, "a difficulty outside its bounds", rec, http.StatusBadRequest, codeInvalidRequest)
 	fields := errorDetailOf(t, rec).Fields

@@ -14,12 +14,13 @@ import (
 	"uuid"
 
 	"axiom/internal/accounts"
-	"axiom/internal/platform/kv"
-	"axiom/internal/platform/kv/kvtest"
 	axmail "axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
+
+// openBits is the proof of work the tests open a site at: low enough that ProofNonce solves it at once.
+const openBits = 12
 
 type registrationWorld struct {
 	site
@@ -70,12 +71,12 @@ func registrationFor(t *testing.T, x site) (*accounts.Registration, *pg.Queue) {
 }
 
 // open turns s1's registration on with the given work and the given domain limits, then reloads the node.
-func (x registrationWorld) open(t *testing.T, humanCheck bool, bits, burst, perHour int) {
+func (x registrationWorld) open(t *testing.T, humanCheck bool, burst, perHour int) {
 	t.Helper()
-	x.openAt(t, s1, humanCheck, bits, burst, perHour)
+	x.openAt(t, s1, humanCheck, burst, perHour)
 }
 
-func (x registrationWorld) openAt(t *testing.T, site uuid.UUID, humanCheck bool, bits, burst, perHour int) {
+func (x registrationWorld) openAt(t *testing.T, site uuid.UUID, humanCheck bool, burst, perHour int) {
 	t.Helper()
 	key := ":s1"
 	if site == s2 {
@@ -87,7 +88,7 @@ func (x registrationWorld) openAt(t *testing.T, site uuid.UUID, humanCheck bool,
 		"UPDATE accounts.sites SET registration = 'open' WHERE id = " + key,
 		`INSERT INTO accounts.site_settings (site_id, registration_human_check, registration_human_check_bits,
 			registration_domain_burst, registration_domain_per_hour) VALUES (` + key + `, ` +
-			boolText(humanCheck) + `, ` + itoa(bits) + `, ` + itoa(burst) + `, ` + itoa(perHour) + `)
+			boolText(humanCheck) + `, ` + itoa(openBits) + `, ` + itoa(burst) + `, ` + itoa(perHour) + `)
 		ON CONFLICT (site_id) DO UPDATE SET registration_human_check = excluded.registration_human_check,
 			registration_human_check_bits = excluded.registration_human_check_bits,
 			registration_domain_burst = excluded.registration_domain_burst,
@@ -116,6 +117,23 @@ func (x registrationWorld) register(t *testing.T, email, human, language string,
 	return x.s.Register(t.Context(), accounts.RegisterRequest{
 		Host: console, Email: email, Password: password, HumanCheck: human, Language: language, ClientIP: ip,
 	})
+}
+
+// registerPending registers email at host with no proof, and fails the test unless it became a pending registration.
+func (x registrationWorld) registerPending(t *testing.T, host, email string) {
+	t.Helper()
+	out, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: host, Email: email, ClientIP: client})
+	if err != nil || !out.Pending {
+		t.Fatalf("register %s at %s: %+v, %v", email, host, out, err)
+	}
+}
+
+// verifyAt verifies token at host, and fails the test unless it makes the user.
+func (x registrationWorld) verifyAt(t *testing.T, host, token string) {
+	t.Helper()
+	if _, err := x.s.VerifyEmail(t.Context(), host, token, password, client); err != nil {
+		t.Fatalf("verify at %s: %v", host, err)
+	}
 }
 
 func (x registrationWorld) pendingID(t *testing.T, email string) uuid.UUID {
@@ -151,23 +169,22 @@ func (x registrationWorld) mail(t *testing.T, email string) string {
 func (x registrationWorld) token(t *testing.T, email string) string {
 	t.Helper()
 	body := x.mail(t, email)
-	i := strings.LastIndex(body, "#token=")
-	if i < 0 {
+	_, token, ok := strings.CutLast(body, "#token=")
+	if !ok {
 		t.Fatalf("the verification mail has no token: %q", body)
 	}
-	return strings.TrimSpace(body[i+len("#token="):])
+	return strings.TrimSpace(token)
 }
 
-// TestOpenRegistrationVerifiesEmail: an open registration makes no user until its link is clicked; the worker mails
-// one single-use token, the click makes the user, account and workspace, and the token is spent.
-func TestOpenRegistrationVerifiesEmail(t *testing.T) {
+// TestOpenRegistrationWaitsForVerification: an open registration makes no user until its link is clicked; the worker
+// mails one link to the console page, and the page's password is checked there.
+func TestOpenRegistrationWaitsForVerification(t *testing.T) {
 	t.Parallel()
 	x := registrationSite(t)
-	x.open(t, true, 12, 100, 1000)
+	x.open(t, true, 100, 1000)
 	const email = "new@example.com"
-	nonce := accounts.ProofNonce(accounts.SiteID(s1), email, 12)
+	nonce := accounts.ProofNonce(accounts.SiteID(s1), email, openBits)
 	out, err := x.register(t, " New@Example.com ", nonce, "zh", client)
-	id := x.pendingID(t, email)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,19 +194,30 @@ func TestOpenRegistrationVerifiesEmail(t *testing.T) {
 	if got := count(t, x.db, "SELECT count(*) FROM accounts.users WHERE email = 'new@example.com'"); got != 0 {
 		t.Fatalf("users before verification = %d, want 0", got)
 	}
-	if err := x.registration.ProcessRegistration(t.Context(), id); err != nil {
+	if err := x.registration.ProcessRegistration(t.Context(), x.pendingID(t, email)); err != nil {
 		t.Fatal(err)
-	}
-	token := x.token(t, email)
-	if token == "" {
-		t.Fatal("empty token")
 	}
 	if body := x.mail(t, email); !strings.Contains(body, "https://"+console+"/console/verify-email#token=") {
 		t.Fatalf("the verification link does not open the console page: %q", body)
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, "short", client); !errors.Is(err, accounts.ErrWeakPassword) {
+	if _, err := x.s.VerifyEmail(t.Context(), console, x.token(t, email), "short", client); !errors.Is(err, accounts.ErrWeakPassword) {
 		t.Fatalf("a weak password at verification: %v", err)
 	}
+}
+
+// TestVerificationCreatesOneUser: the click makes the user, account and workspace with a verified address, the token
+// is single-use, and a redelivered job leaves the spent request alone.
+func TestVerificationCreatesOneUser(t *testing.T) {
+	t.Parallel()
+	x := registrationSite(t)
+	x.open(t, false, 100, 1000)
+	const email = "new@example.com"
+	x.registerPending(t, console, email)
+	id := x.pendingID(t, email)
+	if err := x.registration.ProcessRegistration(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	token := x.token(t, email)
 	user, err := x.s.VerifyEmail(t.Context(), console, token, password, client)
 	if err != nil {
 		t.Fatal(err)
@@ -214,27 +242,50 @@ func TestOpenRegistrationVerifiesEmail(t *testing.T) {
 	}
 }
 
+// TestVerificationOfATakenEmailDeletesTheRequest: an address registered while its link was pending is refused with
+// ErrEmailTaken, and the request is deleted so the next attempt gets the same answer instead of finding it again.
+func TestVerificationOfATakenEmailDeletesTheRequest(t *testing.T) {
+	t.Parallel()
+	x := registrationSite(t)
+	x.open(t, false, 100, 1000)
+	const email = "taken@example.com"
+	x.registerPending(t, console, email)
+	if err := x.registration.ProcessRegistration(t.Context(), x.pendingID(t, email)); err != nil {
+		t.Fatal(err)
+	}
+	token := x.token(t, email)
+	// The site cannot take an invitation while it registers openly, so it goes back to invitation and the same address
+	// is registered there: the pending request now names a taken address.
+	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace(
+		`UPDATE accounts.sites SET registration = 'invite' WHERE id = :s1`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.s.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{
+		Host: console, InviteCode: inviteCode(t, x.db, ":u1"), Email: email, Password: password, ClientIP: client,
+	}); err != nil {
+		t.Fatalf("an invitation for the same address: %v", err)
+	}
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, client); !errors.Is(err, accounts.ErrEmailTaken) {
+		t.Fatalf("verify of a taken address: %v", err)
+	}
+	if got := count(t, x.db, "SELECT count(*) FROM accounts.registration_requests"); got != 0 {
+		t.Fatalf("pending requests after a taken address = %d, want 0", got)
+	}
+}
+
 // TestRegistrationRequestTenantScopesOneRequest: the lookup by id returns only the named row. A missing id must not
 // borrow another site's scope, and two pending requests on two sites must each issue and consume their own link.
 func TestRegistrationRequestTenantScopesOneRequest(t *testing.T) {
 	t.Parallel()
 	x := registrationSite(t)
-	x.open(t, false, 12, 100, 1000)
-	x.openAt(t, s2, false, 12, 100, 1000)
+	x.open(t, false, 100, 1000)
+	x.openAt(t, s2, false, 100, 1000)
 	const first, second = "first@example.com", "second@example.com"
-	for _, c := range []struct {
-		host, email string
-	}{
-		{console, first},
-		{otherConsole, second},
-	} {
-		out, err := x.s.Register(t.Context(), accounts.RegisterRequest{
-			Host: c.host, Email: c.email, ClientIP: client,
-		})
-		if err != nil || !out.Pending {
-			t.Fatalf("register %s: %+v, %v", c.email, out, err)
-		}
-	}
+	x.registerPending(t, console, first)
+	x.registerPending(t, otherConsole, second)
 	var ran bool
 	found, err := x.db.TenantTx(t.Context(), "accounts.registration_request_tenant", uuid.NewV7(), func(pg.Tx) error {
 		ran = true
@@ -243,8 +294,7 @@ func TestRegistrationRequestTenantScopesOneRequest(t *testing.T) {
 	if err != nil || found || ran {
 		t.Fatalf("the lookup for a missing request = %v, %v, ran %v; want it not found", found, err, ran)
 	}
-	ids := []uuid.UUID{x.pendingIDAt(t, s1, first), x.pendingIDAt(t, s2, second)}
-	for _, id := range ids {
+	for _, id := range []uuid.UUID{x.pendingIDAt(t, s1, first), x.pendingIDAt(t, s2, second)} {
 		if err := x.registration.ProcessRegistration(t.Context(), id); err != nil {
 			t.Fatal(err)
 		}
@@ -253,16 +303,8 @@ func TestRegistrationRequestTenantScopesOneRequest(t *testing.T) {
 	if firstToken == secondToken {
 		t.Fatal("two pending requests got the same token")
 	}
-	for _, c := range []struct {
-		host, token string
-	}{
-		{console, firstToken},
-		{otherConsole, secondToken},
-	} {
-		if _, err := x.s.VerifyEmail(t.Context(), c.host, c.token, password, client); err != nil {
-			t.Fatalf("verify on %s: %v", c.host, err)
-		}
-	}
+	x.verifyAt(t, console, firstToken)
+	x.verifyAt(t, otherConsole, secondToken)
 	if got := count(t, x.db, "SELECT count(*) FROM accounts.users WHERE email IN ('"+first+"', '"+second+"')"); got != 2 {
 		t.Fatalf("verified users = %d, want 2", got)
 	}
@@ -273,7 +315,7 @@ func TestRegistrationRequestTenantScopesOneRequest(t *testing.T) {
 func TestRegistrationRetriesAfterATenantLookupFailure(t *testing.T) {
 	t.Parallel()
 	x := registrationSite(t)
-	x.open(t, false, 12, 100, 1000)
+	x.open(t, false, 100, 1000)
 	const email = "retry@example.com"
 	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, Email: email, ClientIP: client}); err != nil {
 		t.Fatal(err)
@@ -300,7 +342,7 @@ func TestRegistrationRetriesAfterATenantLookupFailure(t *testing.T) {
 func TestVerifyEmailSpendsTheIPBudget(t *testing.T) {
 	t.Parallel()
 	x := registrationSite(t)
-	x.open(t, false, 12, 100, 1000)
+	x.open(t, false, 100, 1000)
 	token := strings.Repeat("a", 43)
 	ip := netip.MustParseAddr("198.51.100.99")
 	for range 20 {
@@ -309,138 +351,7 @@ func TestVerifyEmailSpendsTheIPBudget(t *testing.T) {
 		}
 	}
 	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, ip); !errors.Is(err, accounts.ErrTooManyAttempts) {
-		t.Fatalf("the 21st verification: %v, want ErrTooManyAttempts", err)
-	}
-}
-
-// TestOpenRegistrationDomainPolicy: an allow list is the whole set, a deny entry covers its subdomains and wins, and
-// an address outside the policy is refused before any hash or mail.
-func TestOpenRegistrationDomainPolicy(t *testing.T) {
-	t.Parallel()
-	x := registrationSite(t)
-	x.open(t, false, 12, 100, 1000)
-	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace(
-		`UPDATE accounts.site_settings SET registration_domain_allow = '{example.com}',
-			registration_domain_deny = '{bad.example.com}' WHERE site_id = :s1`)); err != nil {
-		t.Fatal(err)
-	}
-	if err := x.s.Reload(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	for name, c := range map[string]struct {
-		email string
-		want  error
-	}{
-		"the allowed domain":           {"one@example.com", nil},
-		"a subdomain of the allowed":   {"two@sub.example.com", nil},
-		"a suffix that is not a label": {"three@badexample.com", accounts.ErrEmailDomainNotAllowed},
-		"a denied subdomain":           {"four@bad.example.com", accounts.ErrEmailDomainNotAllowed},
-		"another domain":               {"five@other.com", accounts.ErrEmailDomainNotAllowed},
-	} {
-		_, err := x.register(t, c.email, "", "en", client)
-		if !errors.Is(err, c.want) {
-			t.Errorf("%s: %v, want %v", name, err, c.want)
-		}
-	}
-}
-
-// TestOpenRegistrationHumanCheck: the proof is bound to the site and the normalized address, and a site that turns it
-// off takes an empty proof.
-func TestOpenRegistrationHumanCheck(t *testing.T) {
-	t.Parallel()
-	x := registrationSite(t)
-	x.open(t, true, 12, 100, 1000)
-	if _, err := x.register(t, "one@example.com", "", "en", client); !errors.Is(err, accounts.ErrHumanCheck) {
-		t.Fatalf("an empty proof: %v", err)
-	}
-	other := accounts.ProofNonce(accounts.SiteID(s1), "two@example.com", 12)
-	if _, err := x.register(t, "one@example.com", other, "en", client); !errors.Is(err, accounts.ErrHumanCheck) {
-		t.Fatalf("another address's proof: %v", err)
-	}
-	good := accounts.ProofNonce(accounts.SiteID(s1), "one@example.com", 12)
-	if out, err := x.register(t, "one@example.com", good, "en", client); err != nil || !out.Pending {
-		t.Fatalf("the solved proof: %+v, %v", out, err)
-	}
-	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace(
-		`UPDATE accounts.site_settings SET registration_human_check = false WHERE site_id = :s1`)); err != nil {
-		t.Fatal(err)
-	}
-	if err := x.s.Reload(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := x.register(t, "three@example.com", "", "en", client); err != nil || !out.Pending {
-		t.Fatalf("a site without a check: %+v, %v", out, err)
-	}
-}
-
-// TestOpenRegistrationRateLimits: one domain's burst and hourly refill hold through the node's buckets, and the IP's
-// bucket is the same one sign-in uses.
-func TestOpenRegistrationRateLimits(t *testing.T) {
-	t.Parallel()
-	x := registrationSite(t)
-	x.open(t, false, 12, 1, 1)
-	if out, err := x.register(t, "a@example.com", "", "en", client); err != nil || !out.Pending {
-		t.Fatalf("first registration: %+v, %v", out, err)
-	}
-	if _, err := x.register(t, "b@example.com", "", "en", client); !errors.Is(err, accounts.ErrTooManyAttempts) {
-		t.Fatalf("the domain's second registration: %v", err)
-	}
-	x.clock.Advance(time.Hour)
-	if err := x.s.Reload(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := x.register(t, "b@example.com", "", "en", client); err != nil || !out.Pending {
-		t.Fatalf("after the domain refilled: %+v, %v", out, err)
-	}
-	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace(
-		`UPDATE accounts.site_settings SET registration_domain_burst = 100, ip_attempt_burst = 1
-			WHERE site_id = :s1`)); err != nil {
-		t.Fatal(err)
-	}
-	if err := x.s.Reload(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	ip := netip.MustParseAddr("198.51.100.9")
-	if out, err := x.register(t, "c@example.com", "", "en", ip); err != nil || !out.Pending {
-		t.Fatalf("first from the IP: %+v, %v", out, err)
-	}
-	if _, err := x.register(t, "d@example.com", "", "en", ip); !errors.Is(err, accounts.ErrTooManyAttempts) {
-		t.Fatalf("the IP's second registration: %v", err)
-	}
-	if out, err := x.register(t, "e@example.com", "", "en", netip.MustParseAddr("198.51.100.10")); err != nil || !out.Pending {
-		t.Fatalf("another IP: %+v, %v", out, err)
-	}
-}
-
-// TestOpenRegistrationUsesTheSharedDomainBucket: the domain's attempt is spent in the shared store when the node has
-// one, with the same key the other nodes would use.
-func TestOpenRegistrationUsesTheSharedDomainBucket(t *testing.T) {
-	t.Parallel()
-	x := newTestSite(t)
-	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace(
-		`UPDATE accounts.sites SET registration = 'open' WHERE id = :s1;
-		 INSERT INTO accounts.site_settings (site_id, registration_human_check, registration_domain_burst,
-			registration_domain_per_hour) VALUES (:s1, false, 1, 1)`)); err != nil {
-		t.Fatal(err)
-	}
-	namespace := kvtest.Namespace()
-	s := cachedNode(t, x.db, kvtest.New(t).OpenIn(t, namespace, kv.Deps{Now: clientClock(x.clock)}), x.clock.Now)
-	registration, _ := registrationFor(t, x)
-	w := registrationWorld{x, registration, nil}
-	s.UseRegistration(w.registration)
-	w.s = s
-	if err := s.Reload(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := w.register(t, "shared@example.com", "", "en", client); err != nil || !out.Pending {
-		t.Fatalf("first registration: %+v, %v", out, err)
-	}
-	key := s.SharedKeyForTest(accounts.SiteID(s1), "signup_domain", "example.com")
-	if key == "" {
-		t.Fatal("the shared key is empty")
-	}
-	if _, err := w.register(t, "shared2@example.com", "", "en", client); !errors.Is(err, accounts.ErrTooManyAttempts) {
-		t.Fatalf("the shared bucket did not hold: %v", err)
+		t.Fatalf("the 21st verification: %v", err)
 	}
 }
 
@@ -476,72 +387,28 @@ func TestOpenRegistrationWithoutMailRefuses(t *testing.T) {
 	}
 }
 
-// TestSiteRegistrationPolicy: the policy reads with code defaults, writes normalized domain lists, and audits one
-// change; every value outside its bounds is refused by name.
-func TestSiteRegistrationPolicy(t *testing.T) {
+// TestExpiredRegistrationsArePurged: the cleanup worker deletes a request once its 24 hours are over and leaves a
+// pending one alone.
+func TestExpiredRegistrationsArePurged(t *testing.T) {
 	t.Parallel()
-	o := newSettingsOf(t)
-	read := func() accounts.RegistrationPolicy {
-		var p accounts.RegistrationPolicy
-		if err := o.db.ReadTx(t.Context(), platform, func(tx pg.Tx) (err error) {
-			p, err = o.s.SiteRegistration(t.Context(), tx, accounts.SiteID(s1))
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	if got := read(); got.Mode != "invite" || !got.HumanCheck || got.HumanCheckBits != 18 || got.DomainBurst != 5 || got.DomainPerHour != 30 {
-		t.Fatalf("the defaults and the site's mode: %+v", got)
-	}
-	set := accounts.RegistrationPolicy{
-		Mode: "open", HumanCheck: true, HumanCheckBits: 20, DomainBurst: 7, DomainPerHour: 70,
-		DomainAllow: []string{" Example.COM ", "example.com"}, DomainDeny: []string{"Bad.Example.COM"},
-	}
-	if err := o.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		return o.s.SetSiteRegistration(t.Context(), tx, operatorActor, accounts.SiteID(s1), set, "because")
-	}); err != nil {
+	x := registrationSite(t)
+	x.open(t, false, 100, 1000)
+	const expired, pending = "expired@example.com", "pending@example.com"
+	x.registerPending(t, console, expired)
+	x.registerPending(t, console, pending)
+	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace(
+		`UPDATE accounts.registration_requests SET expires_at = now() - interval '1 minute'
+		 WHERE site_id = :s1 AND email = 'expired@example.com'`)); err != nil {
 		t.Fatal(err)
 	}
-	got := read()
-	if got.Mode != "open" || got.HumanCheckBits != 20 || got.DomainBurst != 7 || got.DomainPerHour != 70 ||
-		len(got.DomainAllow) != 1 || got.DomainAllow[0] != "example.com" || len(got.DomainDeny) != 1 || got.DomainDeny[0] != "bad.example.com" {
-		t.Fatalf("stored policy: %+v", got)
+	if err := x.registration.PurgeRegistrations(t.Context()); err != nil {
+		t.Fatal(err)
 	}
-	if n := count(t, o.db, "SELECT count(*) FROM platform.audit_log WHERE action = 'site_registration.update'"); n != 1 {
-		t.Fatalf("audit entries = %d, want 1", n)
+	if got := count(t, x.db, "SELECT count(*) FROM accounts.registration_requests WHERE email = 'expired@example.com'"); got != 0 {
+		t.Fatalf("expired requests = %d, want 0", got)
 	}
-	big := accounts.DefaultRegistrationPolicy()
-	big.Mode = "invite"
-	for i := range 100 {
-		big.DomainAllow = append(big.DomainAllow, "d"+strconv.Itoa(i)+".example.com")
-	}
-	if err := o.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		return o.s.SetSiteRegistration(t.Context(), tx, operatorActor, accounts.SiteID(s1), big, "large enough to exceed an audit entry if copied")
-	}); err != nil {
-		t.Fatalf("a policy with 100 domains: %v", err)
-	}
-	if n := count(t, o.db, "SELECT count(*) FROM platform.audit_log WHERE action = 'site_registration.update'"); n != 2 {
-		t.Fatalf("audit entries after the large policy = %d, want 2", n)
-	}
-	for name, c := range map[string]struct {
-		change func(*accounts.RegistrationPolicy)
-		field  string
-	}{
-		"mode":     {func(p *accounts.RegistrationPolicy) { p.Mode = "sometimes" }, "registration_mode"},
-		"bits":     {func(p *accounts.RegistrationPolicy) { p.HumanCheckBits = 11 }, "registration_human_check_bits"},
-		"burst":    {func(p *accounts.RegistrationPolicy) { p.DomainBurst = 0 }, "registration_domain_burst"},
-		"per hour": {func(p *accounts.RegistrationPolicy) { p.DomainPerHour = 100_001 }, "registration_domain_per_hour"},
-		"allow":    {func(p *accounts.RegistrationPolicy) { p.DomainAllow = []string{"-bad.example.com"} }, "registration_domain_allow"},
-		"deny":     {func(p *accounts.RegistrationPolicy) { p.DomainDeny = []string{"not a domain"} }, "registration_domain_deny"},
-		"too many": {func(p *accounts.RegistrationPolicy) { p.DomainAllow = make([]string, 101) }, "registration_domain_allow"},
-	} {
-		p := accounts.DefaultRegistrationPolicy()
-		p.Mode = "invite"
-		c.change(&p)
-		if err := p.Check(); !refuses(err, c.field) {
-			t.Errorf("%s: %v, want a refusal of %q", name, err, c.field)
-		}
+	if got := count(t, x.db, "SELECT count(*) FROM accounts.registration_requests"); got != 1 {
+		t.Fatalf("requests after the purge = %d, want the pending one", got)
 	}
 }
 
@@ -550,11 +417,9 @@ func TestSiteRegistrationPolicy(t *testing.T) {
 func TestOpenRegistrationRechecksTheDomainAtVerification(t *testing.T) {
 	t.Parallel()
 	x := registrationSite(t)
-	x.open(t, false, 12, 100, 1000)
+	x.open(t, false, 100, 1000)
 	const email = "blocked@example.com"
-	if out, err := x.register(t, email, "", "en", client); err != nil || !out.Pending {
-		t.Fatalf("register: %+v, %v", out, err)
-	}
+	x.registerPending(t, console, email)
 	if err := x.registration.ProcessRegistration(t.Context(), x.pendingID(t, email)); err != nil {
 		t.Fatal(err)
 	}

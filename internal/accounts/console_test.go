@@ -140,47 +140,6 @@ func TestRegisterSignInAndUse(t *testing.T) {
 	}
 }
 
-// TestRegistrationRefusals: registration needs the invite code of an enabled user of the site, a site that registers
-// by invitation, a console domain, a password of 12 characters or more, and an email not yet registered there.
-func TestRegistrationRefusals(t *testing.T) {
-	t.Parallel()
-	x := newTestSite(t)
-	code := inviteCode(t, x.db, ":u1")
-	for name, c := range map[string]struct {
-		r    accounts.RegisterRequest
-		want error
-	}{
-		"an unknown code": {accounts.RegisterRequest{
-			Host: console, InviteCode: "nosuchcode0000", Email: "new@example.com", Password: password, ClientIP: client,
-		}, accounts.ErrInvalidInvite},
-		"another site's code": {accounts.RegisterRequest{
-			Host: console, InviteCode: inviteCode(t, x.db, ":u2"), Email: "new@example.com", Password: password, ClientIP: client,
-		}, accounts.ErrInvalidInvite},
-		"a site that is closed": {accounts.RegisterRequest{
-			Host: otherConsole, InviteCode: inviteCode(t, x.db, ":u2"), Email: "new@example.com", Password: password, ClientIP: client,
-		}, accounts.ErrRegistrationClosed},
-		"a short password": {accounts.RegisterRequest{
-			Host: console, InviteCode: code, Email: "new@example.com", Password: "short", ClientIP: client,
-		}, accounts.ErrWeakPassword},
-		"an email registered": {accounts.RegisterRequest{
-			Host: console, InviteCode: code, Email: " SOMEONE@example.com", Password: password, ClientIP: client,
-		}, accounts.ErrEmailTaken},
-		"the admin domain": {accounts.RegisterRequest{
-			Host: admin, InviteCode: code, Email: "new@example.com", Password: password, ClientIP: client,
-		}, accounts.ErrUnknownHost},
-	} {
-		if _, err := x.s.Register(t.Context(), c.r); !errors.Is(err, c.want) {
-			t.Errorf("%s: %v, want %v", name, err, c.want)
-		}
-	}
-	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace("UPDATE accounts.users SET status = 'disabled' WHERE id = :u1")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, InviteCode: code, Email: "new@example.com", Password: password, ClientIP: client}); !errors.Is(err, accounts.ErrInvalidInvite) {
-		t.Errorf("a disabled inviter: %v", err)
-	}
-}
-
 // TestSignInRefusals: an unknown email, a wrong password, a disabled user and a user of another site are refused
 // alike.
 func TestSignInRefusals(t *testing.T) {

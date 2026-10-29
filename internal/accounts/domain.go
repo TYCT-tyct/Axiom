@@ -53,18 +53,29 @@ func validDomain(domain string) bool {
 		return false
 	}
 	for _, label := range labels {
-		if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for i := range len(label) {
-			c := label[i]
-			if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' {
-				continue
-			}
+		if !validLabel(label) {
 			return false
 		}
 	}
 	return true
+}
+
+// validLabel is one lower-case DNS label: 1 to 63 letters, digits or inner hyphens.
+func validLabel(label string) bool {
+	if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for i := range len(label) {
+		if !domainChar(label[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// domainChar is what a label may hold, lower case only: an entry is lower-cased before it arrives here.
+func domainChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-'
 }
 
 // cleanDomains lower-cases, trims and de-duplicates a policy list, refusing an entry that is not a domain and a list

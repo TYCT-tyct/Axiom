@@ -330,7 +330,7 @@ func (p *RegistrationPolicy) Check() error {
 	return nil
 }
 
-func (p RegistrationPolicy) detail() map[string]any {
+func (p *RegistrationPolicy) detail() map[string]any {
 	return map[string]any{
 		"mode": p.Mode, "human_check": p.HumanCheck, "human_check_bits": p.HumanCheckBits,
 		"domain_burst": p.DomainBurst, "domain_per_hour": p.DomainPerHour,
@@ -400,8 +400,8 @@ func (s *Service) SetSiteRegistration(ctx context.Context, tx pg.Tx, actor audit
 	}); err != nil {
 		return fmt.Errorf("write the site's registration mode: %w", err)
 	}
-	humanCheck, bits := set.HumanCheck, int32(set.HumanCheckBits)
-	burst, perHour := int32(set.DomainBurst), int32(set.DomainPerHour)
+	humanCheck, bits := set.HumanCheck, int32(set.HumanCheckBits)      // #nosec G115 -- Check bounds it to 24
+	burst, perHour := int32(set.DomainBurst), int32(set.DomainPerHour) // #nosec G115 -- Check bounds it to 100000
 	if err := s.queries.WriteSiteRegistrationSettings(ctx, tx, WriteSiteRegistrationSettingsParams{
 		SiteID: uuid.UUID(site), HumanCheck: &humanCheck, HumanCheckBits: &bits,
 		DomainBurst: &burst, DomainPerHour: &perHour,

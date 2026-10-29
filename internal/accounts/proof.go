@@ -38,9 +38,9 @@ func proofWorked(site SiteID, email, nonce string, bitsWanted int) bool {
 
 // domainOf returns the lower-case domain of an already normalized address.
 func domainOf(email string) string {
-	i := strings.LastIndexByte(email, '@')
-	if i < 0 {
+	_, domain, ok := strings.CutLast(email, "@")
+	if !ok {
 		return ""
 	}
-	return email[i+1:]
+	return domain
 }
