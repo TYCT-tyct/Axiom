@@ -63,8 +63,7 @@ func (b *bank) postUnlocked(e event, posted chan<- error, release <-chan struct{
 	})
 }
 
-// plan runs a query of the ledger under EXPLAIN (ANALYZE, BUFFERS) in scope, in a transaction that setup, if not nil,
-// has run in first, and returns the blocks it touched and the plan.
+// plan runs a query of the ledger under EXPLAIN (ANALYZE, BUFFERS) in scope, returning its blocks and plan.
 func (b *bank) plan(scope pg.Scope, setup func(pg.Tx) error, query string, args ...any) (blocks int, plan string) {
 	b.t.Helper()
 	if err := b.app.Tx(b.t.Context(), scope, func(tx pg.Tx) error {
@@ -112,7 +111,7 @@ func seedLedger(site, account uuid.UUID, n int, legacy bool) []string {
 // TestMovementsReadsGrowWithThePage: a page of the ledger far into a long history reads about what the first page
 // reads, from the index, not what the history behind or ahead of it holds, and the replay's bound reads about the same
 // on a long account as on a short one. 30,000 numbered transactions of an account, 12,000 from before the sequence of
-// another, as many of a third and three of a fourth are seeded; a page of 100 is read from the start and from deep in
+// another, as many of a third and three of a fourth are seeded, beside 2M rows across 2,000 other accounts; a page of 100 is read from the start and from deep in
 // (the numbered ones at 25,000, the legacy ones at 10,000), and the bound of the long accounts against the short one.
 //
 // The bound over an account with rows from before the sequence pays for them: transactions_by_account_seq holds no seq
@@ -123,13 +122,21 @@ func TestMovementsReadsGrowWithThePage(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	legacy, noise, short := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	statements := slices.Concat(seedLedger(b.admitted.Site, b.admitted.Account, 30000, false), seedLedger(b.admitted.Site, noise, 30000, false),
-		seedLedger(b.admitted.Site, legacy, 12000, true), seedLedger(b.admitted.Site, short, 3, false))
-	b.sql(append(statements, "ANALYZE billing.transactions", "ANALYZE billing.entries")...)
-	var farSeq int64
+		seedLedger(b.admitted.Site, legacy, 12000, true), seedLedger(b.admitted.Site, short, 3, false),
+		[]string{`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
+			SELECT gen_random_uuid(), '` + b.admitted.Site.String() + `', a.id, 'settle', gen_random_uuid()
+			FROM (SELECT gen_random_uuid() AS id FROM generate_series(1, 2000)) a, generate_series(1, 1000)`})
+	b.sql(append(statements, fmt.Sprintf(`INSERT INTO billing.balances(site_id, account_id)
+		SELECT '%s', unnest(ARRAY['%s'::uuid, '%s'::uuid, '%s'::uuid])`, b.admitted.Site, legacy, noise, short),
+		"ANALYZE billing.transactions", "ANALYZE billing.entries")...)
+	var farSeq, middleSeq int64
 	var farAt time.Time
 	var farID uuid.UUID
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
 		if err := tx.QueryRow(t.Context(), "SELECT seq FROM billing.transactions WHERE account_id = $1 ORDER BY seq OFFSET 25000 LIMIT 1", b.admitted.Account).Scan(&farSeq); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(t.Context(), "SELECT seq FROM billing.transactions WHERE account_id = $1 ORDER BY seq OFFSET 5000 LIMIT 1", b.admitted.Account).Scan(&middleSeq); err != nil {
 			return err
 		}
 		return tx.QueryRow(t.Context(), "SELECT created_at, id FROM billing.transactions WHERE account_id = $1 ORDER BY created_at, id OFFSET 10000 LIMIT 1", legacy).Scan(&farAt, &farID)
@@ -137,15 +144,17 @@ func TestMovementsReadsGrowWithThePage(t *testing.T) {
 		t.Fatal(err)
 	}
 	long := epoch.Add(-100 * 365 * 24 * time.Hour)
-	for _, tc := range []struct {
-		name, query, index, what string
-		first, deep              []any
-		budget                   int // the most blocks deep may touch; 0 compares deep with first instead
-	}{
+	for _, tc := range []movementPlanCase{
 		{
 			"numbered", movements, "transactions_by_account_seq", "a page of 100, from the start and 25,000 in",
 			[]any{b.admitted.Account, int64(0), int64(math.MaxInt64), int32(100)},
 			[]any{b.admitted.Account, farSeq, int64(math.MaxInt64), int32(100)},
+			0,
+		},
+		{
+			"numbered, 25,000 rows remaining", movements, "transactions_by_account_seq", "a page of 100, from the start and 5,000 in",
+			[]any{b.admitted.Account, int64(0), int64(math.MaxInt64), int32(100)},
+			[]any{b.admitted.Account, middleSeq, int64(math.MaxInt64), int32(100)},
 			0,
 		},
 		{
@@ -167,15 +176,47 @@ func TestMovementsReadsGrowWithThePage(t *testing.T) {
 			1000,
 		},
 	} {
-		first, _ := b.plan(b.platform, nil, tc.query, tc.first...)
-		deep, deepPlan := b.plan(b.platform, nil, tc.query, tc.deep...)
-		t.Logf("%s: %s: blocks touched %d, then %d", tc.name, tc.what, first, deep)
-		if !strings.Contains(deepPlan, tc.index) || strings.Contains(deepPlan, "Seq Scan") {
-			t.Errorf("%s: %s: not read from the index %s:\n%s", tc.name, tc.what, tc.index, deepPlan)
+		for name, scope := range map[string]pg.Scope{
+			"platform": b.platform,
+			"account":  pg.NewScope(false, nil, []uuid.UUID{tc.first[0].(uuid.UUID), tc.deep[0].(uuid.UUID)}), //nolint:forcetypeassert // every case starts with its account
+		} {
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
+				tc.check(t, b, scope)
+			})
 		}
-		if tc.budget > 0 && deep > tc.budget || tc.budget == 0 && (deep > first+first/2+50 || deep > 1000) {
-			t.Errorf("%s: %s: %d blocks against %d; the plan:\n%s", tc.name, tc.what, deep, first, deepPlan)
+	}
+}
+
+type movementPlanCase struct {
+	name, query, index, what string
+	first, deep              []any
+	budget                   int // the most blocks deep may touch; 0 compares deep with first instead
+}
+
+func (tc movementPlanCase) check(t *testing.T, b *bank, scope pg.Scope) {
+	t.Helper()
+	var setup func(pg.Tx) error
+	if tc.query != replayThrough {
+		setup = func(tx pg.Tx) error {
+			_, err := loadAllocation(t.Context(), tx, tc.first[0].(uuid.UUID)) //nolint:forcetypeassert // every case starts with its account
+			return err
 		}
+	}
+	first, firstPlan := b.plan(scope, setup, tc.query, tc.first...)
+	deep, deepPlan := b.plan(scope, setup, tc.query, tc.deep...)
+	t.Logf("%s: %s: blocks touched %d, then %d", tc.name, tc.what, first, deep)
+	rows, direction := float64(100), "Forward"
+	if tc.query == replayThrough {
+		rows, direction = 1, "Backward"
+	}
+	for _, plan := range []string{firstPlan, deepPlan} {
+		checkTransactionIndexPlan(t, plan, rows, direction)
+		if !strings.Contains(plan, tc.index) {
+			t.Errorf("%s: not read in index order from %s:\n%s", tc.name, tc.index, plan)
+		}
+	}
+	if tc.budget > 0 && deep > tc.budget || tc.budget == 0 && (deep > first+first/2+50 || deep > 1000) {
+		t.Errorf("%s: %d blocks against %d; the plan:\n%s", tc.name, deep, first, deepPlan)
 	}
 }
 

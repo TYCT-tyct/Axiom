@@ -19,6 +19,9 @@ var (
 func TestVisibility(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
+	if err := s.db.Check(t.Context(), catalog.Migrations); err != nil {
+		t.Fatal(err)
+	}
 	draft, _ := s.seed("acme/draft", basicSpec, basic)
 	listed, _ := s.seed("acme/listed", basicSpec, basic)
 	s.list(listed)

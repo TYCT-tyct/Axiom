@@ -29,6 +29,7 @@ export function StatusDialog({
   const { t } = useTranslation();
   return (
     <ChangeDialog
+      operation={`supplier-status:${supplier.id}:${to}`}
       title={t(`suppliers.status.${to}.title`, { name: supplier.name })}
       intro={<p>{t(`suppliers.status.${to}.body`)}</p>}
       action={t(`suppliers.status.${to}.action`)}
@@ -53,6 +54,7 @@ export function RemoveDialog({ supplier, onClose }: { supplier: Supplier; onClos
   const { t } = useTranslation();
   return (
     <ChangeDialog
+      operation={`supplier-remove:${supplier.id}`}
       title={t("suppliers.remove.title", { name: supplier.name })}
       intro={<p>{t("suppliers.remove.body")}</p>}
       action={t("suppliers.remove.action")}
@@ -90,6 +92,7 @@ export function ReplaceLoginDialog({ supplier, onClose }: { supplier: Supplier; 
   const fields = detection.data?.login_fields ?? [];
   return (
     <ChangeDialog
+      operation={`supplier-login:${supplier.id}`}
       title={t("suppliers.login.title", { name: supplier.name })}
       intro={<p>{t("suppliers.login.body", { account: supplier.upstream_account })}</p>}
       action={t("suppliers.login.action")}
@@ -124,6 +127,7 @@ export function UnitValueDialog({ supplier, onClose }: { supplier: Supplier; onC
   };
   return (
     <ChangeDialog
+      operation={`supplier-unit:${supplier.id}`}
       title={t("suppliers.unit.title", { name: supplier.name })}
       intro={
         <p>
@@ -186,6 +190,7 @@ export function SelectGroupDialog({
   const way = selected ? "select" : "unselect";
   return (
     <ChangeDialog
+      operation={`supplier-group:${group.id}:${way}`}
       title={t(`suppliers.group.${way}.title`, { name: group.name })}
       intro={<p>{t(`suppliers.group.${way}.body`)}</p>}
       action={t(`suppliers.group.${way}.action`)}
@@ -229,6 +234,7 @@ export function BindKeyDialog({
   const guess = groups.find((group) => group.upstream_ref === upstreamKey.group_ref);
   return (
     <ChangeDialog
+      operation={`supplier-bind:${supplier.id}:${upstreamKey.ref}`}
       title={t("suppliers.bind.title")}
       intro={
         <p>

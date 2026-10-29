@@ -17,6 +17,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
@@ -220,9 +221,11 @@ func (h *Handler) call(format protocol.Format, compact bool) http.HandlerFunc {
 }
 
 // ipSlot takes the in-flight slot of the client's address, the first limit every endpoint that needs a key is held to.
-// When there is none it has answered the request in format and ok is false; otherwise the caller gives release back.
+// The address is a group (clientip.Group), as the login attempts count it: an IPv6 customer holds a whole /64, so one
+// host must not take as many slots as it has addresses. When there is none it has answered the request in format and
+// ok is false; otherwise the caller gives release back.
 func (h *Handler) ipSlot(w http.ResponseWriter, r *http.Request, format protocol.Format) (release func(), ok bool) {
-	release, err := h.Limits.IPCalls.Acquire(ipKey(h.clientIP(r)), h.Limits.cfg.IPInFlight)
+	release, err := h.Limits.IPCalls.Acquire(clientip.Group(h.clientIP(r)).String(), h.Limits.cfg.IPInFlight)
 	if err != nil {
 		h.fail(w, r, format, err)
 		return nil, false

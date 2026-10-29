@@ -16,7 +16,7 @@ import (
 const tenantTxMigration = `-- +goose Up
 CREATE TABLE accounts.notes (id uuid PRIMARY KEY, site_id uuid NOT NULL, account_id uuid, body text NOT NULL);
 ALTER TABLE accounts.notes ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant ON accounts.notes USING (platform.in_scope(site_id, account_id));
+CREATE POLICY tenant ON accounts.notes USING (((SELECT platform.in_platform_scope()) OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[]) OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])));
 CREATE POLICY lookup ON accounts.notes FOR SELECT TO axiom_lookup USING (true);
 GRANT USAGE ON SCHEMA accounts TO axiom_app, axiom_lookup;
 GRANT SELECT, INSERT, DELETE ON accounts.notes TO axiom_app;
