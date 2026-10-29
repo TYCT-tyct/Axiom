@@ -141,6 +141,9 @@ grep -qi '^cache-control: public, max-age=31536000, immutable$' <<< "$headers" &
 
 # A deployment from before the migration administrator: no such role, an owner role that role did not create, and
 # a deploy/.env without its password, readable by others and lacking a final newline. just up upgrades it in place.
+# Changing the PostgreSQL environment recreates it. Stop the node first: losing its name lock makes it exit,
+# and Compose must not mistake that dying process for a running node during the next start.
+compose stop axiom
 compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d axiom -c 'DROP OWNED BY axiom_migrator' -c 'DROP ROLE axiom_migrator'
 kept="$(grep -v '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env)"
 printf '%s' "$kept" > deploy/.env && chmod 644 deploy/.env

@@ -147,7 +147,7 @@ River 的 `observability.alerts` 每分钟读取最多 1000 条信号。持久�
 | `suppliers.task_stopped` | 供应商 UUID + `/任务名` | 该任务验证新的成功观测 |
 | `suppliers.low_balance` | 供应商 UUID | 明确的余额恢复事件 |
 | `suppliers.sources_unavailable` / `suppliers.exhausted` | 供应商 UUID / `all` | 可用来源重新出现 |
-| `suppliers.reconciliation_difference` | `under_estimated` / `over_estimated` / `held` / `unmatched` / `invalid` | 人工调查关闭 |
+| `suppliers.reconciliation_difference` | `under_estimated` / `under_estimated_unchanged` / `over_estimated` / `held` / `unmatched` / `invalid` | 人工调查关闭 |
 | `alert.channel_unavailable` | 渠道 ID | 最新周期自测成功，或删除渠道 |
 
 首批渠道为邮件，经 `platform/mail` outbox 和 River `mail.send_tracked` 发送（旧节点不认识此种类，避免漏回执）；通知的持久回执区分 pending（等待派发）、queued（已在 outbox）、delivered、failed，delivered 表示 SMTP 接受，不表示收件人阅读。邮件发送后、回执提交前崩溃可能重发（至少一次）；故障合并保证只安排一次通知，不声称网络投递恰好一次。失败留在事件回执和 River，最多五次尝试。管理员可手动排测试消息，测试也留回执。Webhook（E5-5）使用 HTTPS POST JSON，经 platform egress 的地址策略、无重定向和仅出站请求的 10 秒期限，回执落库沿用作业期限；只将 2xx 视为接收成功。JSON 在派发时冻结，包含通知 `id`、故障 `event_id`、通知 `sequence`（首通知 0，重复递增，恢复 -1）、告警 `kind/key/severity/fields` 和 `state`（firing/resolved/test），同一回执重试不改变正文；每次重签当前时间。`X-Axiom-Signature` 为 `t=<Unix秒>,v1=<HMAC-SHA256十六进制>`，签名输入是时间戳的 ASCII、一个点和原始 HTTP 正文。接收端应恒定时间比较签名、拒绝超出正负 5 分钟的时间戳，并按通知 ID 去重至少 24 小时；重复接收也返回 2xx。按 event_id 分开跟踪故障，resolved 对该故障是终态，迟到的首通知不能再开启它；不能用 kind/key 的旧恢复关闭之后的新故障。River 持久退避重试最多 5 次，目标非法或无签名密钥直接记失败，其他网络失败重试至第 5 次后记失败并正常完成；仅救援丢弃或未能持久回执等意外失败进入 `queue.discarded`。任务参数只有回执 ID；接收后、回执落库前崩溃可重发，网络语义仍是至少一次。签名密钥由管理员单独写入，32–512 个 UTF-8 字节，按 secret 信封封存，配置、回执、审计和任务均不含密钥。密钥按渠道及目标地址绑定；轮换后一小时同时带新旧两个 v1，接收端可在窗口内只认识任意一个；为保证旧密钥的完整窗口，窗口内再次轮换返回修订冲突；设置或轮换后令周期探测立即到期，在下一轮消费者中重试，已有在途探测不叠加。初始化未绑定规则的渠道后先设置密钥，再绑定规则；未设置时留失败回执，不发无签名请求。滚动升级期间应在所有核心节点升级完成后才配置 Webhook，旧节点的邮件调度器不理解新渠道。

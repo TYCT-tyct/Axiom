@@ -26,7 +26,7 @@ internal/suppliers/internal/
 
 ## 表
 
-schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）；`00011` 在 `pg.Migrate` 提供的平台范围里把高于 100,000 的旧值降到上界；拒绝新写入的上限 CHECK 待旧节点退出后再加（[检查清单](../../CONTRIBUTING.md#检查清单)）。`00012` 将范围读取改为策略级 InitPlan，权限边界不变，表达式与可重跑方式见 [pg](../platform/pg/README.md#决策与理由)。`00013` 是清单读取进度。迁移只增不改。
+schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）；`00011` 在 `pg.Migrate` 提供的平台范围里把高于 100,000 的旧值降到上界；拒绝新写入的上限 CHECK 待旧节点退出后再加（[检查清单](../../CONTRIBUTING.md#检查清单)）。`00012` 将范围读取改为策略级 InitPlan，权限边界不变，表达式与可重跑方式见 [pg](../platform/pg/README.md#决策与理由)。`00013` 是清单读取进度；`00014` 固定单位价值的币种和原生单位，回填历史行并用插入触发器兼容旧节点的写入（不提升权限，仍受供应商可见范围限制）。迁移只增不改。
 
 | 表 | 内容 | 键与约束 |
 |---|---|---|
@@ -47,7 +47,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `sync_states` | 每个供应商一行：引擎的整份状态（jsonb，`format` 记格式）、两个清单读到哪（`listing`，见「持久化」）、`version`（引擎的栅栏）、`next_due`、租约（`lease_holder`、`lease_fence`、`lease_until`） | PK `supplier_id`；`lease_holder` 与 `lease_until` 同有同无；平台范围 |
 | `sync_events` | 引擎每一步产生的事件，只插入，事件按名字存 | PK `(supplier_id, version, seq)`；平台范围 |
 | `sync_plans` | 引擎算出的成本计划的每个版本（端点是「分组/模型」文本），只插入 | PK `(supplier_id, version, seq)`；平台范围 |
-| `unit_values` | 供应商的单位余额价值：1 单位余额值多少结算币种，管理员确认的值、操作人、理由 | 只插入，最新一行生效；`value` 在 (0, 1000] 且小数不超过 15 位；行级安全随所属供应商可见 |
+| `unit_values` | 供应商的单位余额价值：1 单位余额值多少结算币种，确认时的 `currency` 与 `native_unit`、管理员确认的值、操作人、理由 | 只插入，币种与原生单位均匹配的最新一行生效；`value` 在 (0, 1000] 且小数不超过 15 位；行级安全随所属供应商可见 |
 | `rate_buckets` | 供应商的限速桶：窗口起点、已用次数、封到何时 | PK `(scope, name)`；平台范围 |
 
 - **授权的偏差**：设计里这几张表只有对账角色能改，那个后台任务角色还没有（security.md 的角色表），所以应用角色现在能改 `attempt_costs` 的 `charge_record_id`、`state` 和 `charge_records` 的状态与归属列，别的列、DELETE 都没有；`attempt_journal` 的授权还在（连同它的 DELETE），但没有代码用它，删表时一起删；角色隔离随后台任务角色加入。
@@ -255,10 +255,11 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 - **`Send`** 对拒绝请求本身的失败（`ScopeRequest`）还附上 `Failure.Rejection`：响应体里 `error` 对象的 `message`、`type`、`param`、`code`（OpenAI 和 Anthropic 的外壳同位置），清洗见「不变量」；响应体不是这种对象时为空，网关回统一的说法。上游在流里报的同一个错误由网关交给 **`Sanitize`**：`Sanitize(protocol.Rejection) *protocol.Rejection` 用同一份清洗（`cleanRejection`），因为协议只按帧取出有界的几项，丢掉供应商身份要凭证和端点地址，只有 suppliers 知道；返回 nil 表示没有能交出去的话。**给每个失败标明上游是否执行过**（`Failure.Executed`）：用 `httptrace` 的 `WroteRequest` 判断，请求写完之前失败是 `NotExecuted`（作用于出口）；写完之后，非 2xx 由适配器的 `Classify` 归类，其余（5xx、断线、超时）是 `Unknown`。请求路径（压缩调用取压缩端点的）和鉴权头只由调用格式定（Bearer 加 Anthropic 版本头），响应头里的对账键记在 `Attempt` 上，失败的响应也记。凭证被拒、额度用尽、被要求等待时，凭证按适配器给的时间（没有就按配置）歇着。suppliers 和 egress 不暗中重试 POST。
 - **对账键**只取上游的响应头，由适配器的 `ChargeRef` 读：new-api 是 `X-Oneapi-Request-Id`；sub2api 是 `client:` 加 `X-Client-Request-Id`。对账只比较字符串是否相等。
 - **`Done()`** 没有参数，幂等：重复调用、取消与结束竞争都只释放一次占位。
-- **单位价值**：`Reload` 随端点读出供应商最新的单位价值、那一行的 id 和结算币种，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值和那一行的 id，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。节点用的是它最近一次 Reload 时的快照，不一定是数据库里最新的一行；复算用的是回执里的 id，不靠时间推断。回执的 `unit_value_id` 随结算写入 `attempt_costs`；旧行保持 NULL，不能拿最新单位价值推断过去。
+- **单位价值**：`Reload` 随端点读出供应商币种与原生单位均匹配的最新单位价值、那一行的 id 和结算币种；`ListPriceCosts` 的保本成本与管理视图使用同一匹配条件，没有确认单位价值的供应商，端点不进快照，与管理接口「确认之前不进路由」一致；回执带上 `Acquire` 时快照里的值和那一行的 id，所以一次尝试按它开始时的值计价，之后改的值只管之后的尝试。节点用的是它最近一次 Reload 时的快照，不一定是数据库里最新的一行；复算用的是回执里的 id，不靠时间推断。回执的 `unit_value_id` 随结算写入 `attempt_costs`；旧行保持 NULL，不能拿最新单位价值推断过去。
 - **`Credits`**（连同换算前的 `Cost`，一次定价）= 原生金额 × 尝试的单位余额价值 × 预留冻结的汇率，精确相乘后转成十亿分之一时向上取整一次。同币种不读汇率，结果与原算法一致。gateway 将路由冻结的 `platform.ExchangeRate` 经 `AttemptReceipt.WithExchange` 传回；供应商不读 billing 表。缺汇率、转换溢出返回未知，缺计费项给已定价部分与未知；原生 `CostFlag` 不因缺汇率改变，对账仍能比较原生估算与实际扣费。gateway 保留 `known` 给 billing，任何尝试未知都让请求利润为 NULL。
 - **换算依据**（迁移 `00007_exchange_basis.sql`，其检查约束先 `NOT VALID`，`00008_validate_exchange_basis.sql` 再 `VALIDATE`，不在大表上持排他锁扫描）：`attempt_costs` 保存 `unit_value_id`、`exchange_rate_id`、`conversion_from`/`conversion_to` 和 `conversion_state`（`Conversion` 枚举：same_currency、converted、missing_rate、overflow、unpriced、not_executed；SQL 的检查约束重复了这些名字，`TestConversionStatesAreStoredAndKeepTheRateOnlyWhenUsed` 逐个写入核对）。方向由源/目标币种与汇率行的规范化币种对确定；同币种、缺汇率和未执行的尝试没有用汇率，不写汇率 ID，只有 converted 和 overflow 写。旧节点/旧行的 NULL 是未知依据，绝不回填当前配置；字段随尝试只插入，不随重试变化，不建到 billing 的外键。测试在 `exchange_test.go`。
 - **缺汇率告警的数据**：`EnabledCurrencies` 在平台事务列出 active、low_balance 的供应商，包括暂时没有可路由端点的。组装层每轮路由构建与当前汇率一同读取，日志/指标只记录缺失及恢复状态变化，读取失败不能推进路由快照的新鲜时间。
+- **租户入参**：`AttemptRecord.Site/Account`、`EndRequest`、`RecordLostRequest` 及 `CallWrites` 一律接收 `uuid.UUID` 值。平台自己的尝试和终结请求用两个零值，由供应商侧的 `tenant` 在写入可空列时统一转为 NULL；失联请求只来自 billing 的租户预留，仍要求两个非零租户 ID，不新增平台失联请求的语义。
 - **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入。
 - **`CallPolicy.Cancels`**：适配器给默认值（new-api 传递，sub2api 不传递），quality 按端点实测的值覆盖它，规则见[计费的「客户端断开」](../../docs/domains/billing.md#客户端断开)。
 
@@ -324,16 +325,16 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 
 ## 对账
 
-对账 worker 的低估下架、高估、暂挂、超时未匹配和无效数据以 `suppliers.reconciliation_difference` 分类计数，在对账事务末尾经平台信号持久上报；具体对象继续在原日志中。分类事件由管理员调查后关闭，不把下一轮没有新增项当作修复。
+对账 worker 的低估下架、估低但端点未改变、高估、暂挂、超时未匹配和无效数据以 `suppliers.reconciliation_difference` 分类计数，在对账事务末尾经平台信号持久上报；具体对象继续在原日志中。分类事件由管理员调查后关闭，不把下一轮没有新增项当作修复。
 
 `internal/suppliers/internal/reconcile`。同步引擎在栅栏事务里经 `reconcile.Ingest` 写入扣费记录（一条记录读两次只存一次），结算在自己的事务里写入 `attempt_costs`（含对账键），清理写入丢失的请求。节点在 `pg.Queue` 启动前调用 `RegisterReconcile`：River leader 每分钟投递 `suppliers.reconcile`，启动或换主也投递，任一节点的 worker 都可执行。相同参数的未完成任务去重；匹配、暂挂、摘牌、事件及下一页任务在同一平台范围事务提交，重复和迟到执行不改变已有归属或重复增加版本。
 
 选择独立周期任务，而非接在每家供应商同步之后：同步暂停、上游断线、尝试迟到时，已有扣费记录仍要继续对账。未匹配尝试的下一页游标随事务写入 River，换 worker 或重启不丢进度；周期任务仍从头检查，持续缺失的扣费记录会再次告警。匹配和暂挂超过每轮上限的积压留给下一轮。
 
-告警使用结构化日志：`suppliers.reconcile.under_estimated`（ERROR，端点 ID）、`over_estimated`（WARN，扣费 ID）、`held`（WARN，扣费 ID）、`unmatched`（WARN，请求 ID 和尝试序号）、`invalid`（ERROR，无法判定的原因），后四项同用 `suppliers.reconcile.` 前缀。与队列丢弃任务的告警相同，在事务提交前记录，避免已提交摘牌却因进程崩溃漏报；事务回滚可能重复告警，不能把日志条数当作扣费笔数。摘牌由现有的供应商与路由快照重建传播（各 5 秒）。
+告警使用结构化日志：`suppliers.reconcile.under_estimated`（ERROR，端点 ID）、`under_estimated_unchanged`（WARN，估低但未新摘牌的扣费 ID）、`over_estimated`（WARN，扣费 ID）、`held`（WARN，扣费 ID）、`unmatched`（WARN，请求 ID 和尝试序号）、`invalid`（ERROR，无法判定的原因），其余项同用 `suppliers.reconcile.` 前缀。与队列丢弃任务的告警相同，在事务提交前记录，避免已提交摘牌却因进程崩溃漏报；事务回滚可能重复告警，不能把日志条数当作扣费笔数。摘牌由现有的供应商与路由快照重建传播（各 5 秒）。
 
 1. **匹配**：一条语句，先占住只有这个对账键的那一个尝试，再把扣费记录归到它，尝试和扣费记录各有唯一约束，两个节点同时跑也只有一个成功。有两个以上尝试共用一个键时都不对上。已暂挂、已归到丢失请求或已确认未归属的扣费记录，尝试到了就改归到尝试，旧归属在同一条语句里撤销，所以归属的 CHECK 始终成立。
-2. **判定**：只对估算完整（`cost_flag` 为 `complete`）的尝试：写行的 gateway 把上游一项用量都没报告的标 `no_usage`，估了一部分或有项没价格的标 `unpriced`（[gateway 的「尝试的结局」](../gateway/README.md)），所以估出来的数不会拿去判价格。检测的行（`test`）一律不判：它的估价是上界而不是估计，判它只会把付得起的端点摘掉（「用真实生成测试端点」）。|实际 − 估算| ≤ 供应商自己的取整（quota 为 1，美元为 1e-10）+ 估算 × 相对容差（默认 1%）。实际偏高：端点改回"成本未知"（原因 `under_estimated`），退出路由；偏低：只在报告里列出。
+2. **判定**：只对估算完整（`cost_flag` 为 `complete`）的尝试：写行的 gateway 把上游一项用量都没报告的标 `no_usage`，估了一部分或有项没价格的标 `unpriced`（[gateway 的「尝试的结局」](../gateway/README.md)），所以估出来的数不会拿去判价格。检测的行（`test`）一律不判：它的估价是上界而不是估计，判它只会把付得起的端点摘掉（「用真实生成测试端点」）。|实际 − 估算| ≤ 供应商自己的取整（quota 为 1，美元为 1e-10）+ 估算 × 相对容差（默认 1%）。实际偏高：仅在端点仍使用尝试的成本计划时改回"成本未知"（原因 `under_estimated`），退出路由并进入 `Delisted`；已经换用新计划或已为成本未知的端点不动、不发摘牌告警；对应扣费进入 `UnderUnchanged`，按扣费 ID 记 warning，并以 `under_estimated_unchanged` 持久上报笔数，重跑不重复。事件仍保留 `verdict = under`、尝试的 `cost_schedule_id` 和 `endpoint_delisted = false`；偏低：只在报告里列出。
 3. **暂挂**：过了宽限（默认 30 分钟）还没有对上的新扣费记录改为 `held`；有键的尝试过了宽限仍没有扣费记录，报告里列出，只告警，检测的尝试不在其中。通知在平台位置表按请求和尝试序号认领，每个身份仅报一次，认领和信号同事务；人工关闭后扫描同一 pending 行不会重开事件，回填或迟提交的尝试仍按身份发现，不用完成时间高水位。人工处理经 `AssignToLostRequest`、`AssignUnattributed`，只对 `held` 的记录生效，不按冻结路线猜用户。
 4. **扣费记录保留明细**：`charge_records.usage` 存每项的数量、记录声明了哪些项（`reported`，可以含声明为零的项，没声明的不在其中）、供应商给出但没有计费项的用量（`unknown`）和等级，因为只有声明了的项才能校正暂估。
 5. **资金来源**：不是钱包的扣费记录（订阅）入库时存下来、不参与匹配、暂挂和事件，同时把供应商暂停（`needs_attention`，原因 `funding_not_wallet`，配置代次加一），重建快照后不再路由到它。

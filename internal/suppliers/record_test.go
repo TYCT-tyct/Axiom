@@ -139,13 +139,13 @@ func TestAttemptRecordsFollowTheRequestsTenantAndCannotBeChanged(t *testing.T) {
 	w := newWorld(t, 1)
 	id := newRequest()
 	a := w.attempt(id, 1, "k")
-	a.Site, a.Account = &siteA, &accountA
+	a.Site, a.Account = siteA, accountA
 	own := pg.NewScope(false, []uuid.UUID{siteA}, nil)
 	if err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return RecordAttempts(t.Context(), tx, []AttemptRecord{a}) }); err != nil {
 		t.Fatalf("in the tenant's scope: %v", err)
 	}
 	b := w.attempt(newRequest(), 1, "k2")
-	b.Site, b.Account = &siteB, &accountA
+	b.Site, b.Account = siteB, accountA
 	err := w.db.Tx(t.Context(), own, func(tx pg.Tx) error { return RecordAttempts(t.Context(), tx, []AttemptRecord{b}) })
 	if pg.SQLState(err) != insufficientPrivilege {
 		t.Errorf("another tenant's attempt from site A: %v, want row-level security to refuse", err)
