@@ -124,6 +124,7 @@ function AccountKeyLimits({ account }: { account: Account }) {
   }
   return (
     <KeyLimitsCard
+      operation={`key-limits:${account.id}`}
       level="account"
       view={view}
       editable={editable}

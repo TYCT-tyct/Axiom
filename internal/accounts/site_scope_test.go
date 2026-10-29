@@ -25,7 +25,7 @@ func TestOriginIsTheRegisteredOne(t *testing.T) {
 }
 
 // TestAuthorizedScopeSeesItsOwnSite: the scope of an account the console authorized reads its own site's public
-// configuration and shared counters (sees_site), and no other site's.
+// configuration and shared counters; the scope carries no other home site.
 func TestAuthorizedScopeSeesItsOwnSite(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)
@@ -40,7 +40,7 @@ func TestAuthorizedScopeSeesItsOwnSite(t *testing.T) {
 	for site, want := range map[uuid.UUID]bool{s1: true, s2: false} {
 		var sees bool
 		err := x.db.Tx(t.Context(), scope, func(tx pg.Tx) error {
-			return tx.QueryRow(t.Context(), "SELECT platform.sees_site($1)", site).Scan(&sees)
+			return tx.QueryRow(t.Context(), "SELECT platform.home_site() = $1", site).Scan(&sees)
 		})
 		if err != nil || sees != want {
 			t.Errorf("the scope sees site %s: %v, %v; want %v", site, sees, err, want)

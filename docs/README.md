@@ -22,6 +22,7 @@
 | 模型目录在代码里怎么加载、同步和发布快照：参考价、名字解析、价目表 | [internal/catalog/README.md](../internal/catalog/README.md) | 实现或调用 `catalog` 之前 |
 | 三种调用格式的转换与透传：解析、转换、流式读写、用量 | [internal/protocol/README.md](../internal/protocol/README.md) | 实现或调用 `protocol` 之前 |
 | 平台层：监听与接口约定、日志与遥测、数据库访问、加密、前端文件、配置 | [internal/platform/README.md](../internal/platform/README.md) | 改动 `platform`、`cmd/axiom` 的组装或任何跨模块的基础设施之前 |
+| PostgreSQL 行级安全：范围表达式、策略迁移、行数估计与分页计划的实测 | [internal/platform/pg/README.md](../internal/platform/pg/README.md) | 改写行级安全策略或排查范围过滤与查询计划之前 |
 | 多个核心节点共用的计数与粘性：Valkey 里放什么、客户端与连接、键、期限与熔断、每种用途的兜底与恢复、部署、测试、PR 拆分 | [internal/platform/kv/README.md](../internal/platform/kv/README.md) | 改动限流、登录防爆破、会话粘性，或部署 Valkey 之前 |
 | 前端工程：目录、开发命令、共享包、性能预算、测试 | [web/README.md](../web/README.md) | 改动 `web/` 之前 |
 | 供应商：适配器、接入流程、供应商别名与待映射、凭证、同步、号池 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |

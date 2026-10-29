@@ -283,3 +283,19 @@ func alterRole(t *testing.T, superuser, role, change, undo string) {
 		}
 	})
 }
+
+// Check includes both USING and WITH CHECK, so a forgotten write policy cannot retain per-row scope parsing.
+func TestCheckRefusesLegacyScopePolicies(t *testing.T) {
+	t.Parallel()
+	for _, clause := range []string{"USING", "WITH CHECK"} {
+		database := pgtest.New(t)
+		statement := "ALTER POLICY tenant ON platform.audit_log " + clause + " (platform.in_scope(site_id, account_id))"
+		if err := pgtest.Run(t.Context(), database.Superuser, statement); err != nil {
+			t.Fatal(err)
+		}
+		err := open(t, database.App).Check(t.Context())
+		if err == nil || !strings.Contains(err.Error(), "per-row scope readers") || !strings.Contains(err.Error(), "platform.audit_log.tenant") {
+			t.Errorf("Check accepted legacy %s: %v", clause, err)
+		}
+	}
+}

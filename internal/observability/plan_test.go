@@ -14,14 +14,13 @@ import (
 )
 
 const (
-	heavyAccount = "00000000-0000-4000-8000-000000000001" // 60,000 calls in the window
-	lightAccount = "00000000-0000-4000-8000-000000000007" // 600 calls, among 100 such accounts
+	heavyAccount = "00000000-0000-4000-8000-000000000001" // half the calls; 60,000 in the 120,000-row fixture
+	lightAccount = "00000000-0000-4000-8000-000000000007" // one of 100 light accounts; 600 calls in the smaller fixture
 	pageSize     = 50
 )
 
-// seedForPlans fills the table as the superuser: one heavy account and 100 light ones, 120,000 calls over eight hours.
-// Every 1200th call is of the model "rare" and from the application "codex", all of them the heavy account's (100
-// calls, a sparse match); the others are of "m" and "cli" (a dense one); "absent" matches nothing.
+// seedForPlans fills the table as the superuser: one heavy account and 100 light ones over eight hours.
+// Every 1200th call is of the model "rare" and from the application "codex", all of them the heavy account's; the others are of "m" and "cli" (a dense one); "absent" matches nothing.
 func seedForPlans(t *testing.T, database pgtest.Database) {
 	t.Helper()
 	if err := pgtest.Run(t.Context(), database.Superuser, `INSERT INTO observability.call_log (id, at, site_id, account_id,
@@ -59,11 +58,14 @@ func listCall(q OwnQuery, size int) (string, []any) {
 
 // explain runs EXPLAIN (ANALYZE, BUFFERS) on the list query of q, as the application role in the account's scope with
 // row-level security, planned for its values as ListOwn has it planned.
-func explain(t *testing.T, db *pg.DB, q OwnQuery) string {
+func explain(t *testing.T, db *pg.DB, q OwnQuery, scope pg.Scope) string {
 	t.Helper()
 	sql, args := listCall(q, pageSize)
 	var lines []string
-	if err := db.Tx(t.Context(), accountScope(q.Account), func(tx pg.Tx) error {
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		if _, err := tx.Exec(t.Context(), "SET LOCAL plan_cache_mode = force_custom_plan"); err != nil {
+			return err
+		}
 		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+sql, args...)
 		if err != nil {
 			return err
@@ -142,7 +144,8 @@ func nextCursor(t *testing.T, db *pg.DB, q OwnQuery) *Cursor {
 //   - no plan scans the table or the partition, and each reads the index range of the account (Index Cond on
 //     account_id);
 //   - unfiltered, the heavy account's page is an ordered index scan under the limit with no sort: it reads about one
-//     page however many calls the account has. This needs the order to be the index's, which the query's ORDER BY says
+//     page for the first and immediately following pages; deeper reads are checked separately. This needs the order
+//     to be the index's, which the query's ORDER BY says
 //     with qualified columns: a bare "id" is the output column id::text, which sorts as text and turns the plan into a
 //     bitmap scan of the whole range and a sort of it;
 //   - filtered by model or by application, a page is read from the filter's own index (account_id, model|client_app, at
@@ -150,8 +153,8 @@ func nextCursor(t *testing.T, db *pg.DB, q OwnQuery) *Cursor {
 //     matches (100 of 60,000), one that matches nothing reads an index page. Without these two indexes the sparse and the
 //     empty filter read the whole month's partition (7,059 buffers at 360,000 rows, growing with the table) and took
 //     35 to 100 ms;
-//   - for the light account (600 calls) the planner prefers a bitmap scan of the account's range and a top-N sort: all
-//     600 rows, bounded by the account's calls in the window.
+//   - for the light account (600 calls), an ordered scan or a bitmap scan of its range and a top-N sort are accepted:
+//     even the latter is bounded by the account's 600 calls in the window.
 func TestListPlansFollowTheIndexes(t *testing.T) {
 	t.Parallel()
 	db, database := openDBWithURL(t)
@@ -187,7 +190,7 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 		if c.later {
 			q.After = nextCursor(t, db, c.q)
 		}
-		plan := explain(t, db, q)
+		plan := explain(t, db, q, accountScope(q.Account))
 		t.Logf("%s: %d buffers\n%s", c.name, buffers(t, plan), plan)
 		if !strings.Contains(plan, "Index Cond: ((account_id") || strings.Contains(plan, "Seq Scan") {
 			t.Errorf("%s: not read through an index of the account:\n%s", c.name, plan)

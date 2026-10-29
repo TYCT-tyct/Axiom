@@ -33,7 +33,10 @@ export default {
     replayed: "This was already done earlier. Below is the result from then; nothing was done again.",
     close: "Close",
     unknown:
-      "It isn’t known whether this change was made. The form is locked: resending sends the same request, which the server does at most once — the surest way to learn the result. If you close this, the first request may still take effect, and the data on the page does not prove it didn’t.",
+      "It isn’t known whether this change was made. The form is locked: resending sends the same request, which the server does at most once — the surest way to learn the result. If you close this, the request is kept: when you open this change again you can send it again or give it up. The data on the page does not prove it wasn’t made.",
+    unsettled:
+      "A change you made here earlier got no answer, so it isn’t known whether it was made. Send it again as it was — the server does it at most once, and tells you if it was already done — or give it up. If you give it up, it may still have taken effect: check the data before making the change again, because the data on the page does not prove it wasn’t made.",
+    giveUp: "Give it up",
     resend: "Resend as it was",
     stale:
       "Someone else changed this after you opened it. Nothing was saved, so their change isn’t overwritten. Reloading fills in the current version and discards what you entered here.",
