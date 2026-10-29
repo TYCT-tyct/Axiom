@@ -14,7 +14,7 @@ UPDATE suppliers.sync_states SET lease_holder = NULL, lease_until = NULL
 WHERE supplier_id = @supplier_id AND lease_fence = @lease_fence;
 
 -- name: GetSyncState :one
-SELECT version, format, state FROM suppliers.sync_states WHERE supplier_id = @supplier_id;
+SELECT version, format, state, listing FROM suppliers.sync_states WHERE supplier_id = @supplier_id;
 
 -- name: HoldSyncLease :one
 -- Locks the sync state of a supplier if its lease is still the one with this fence, until the transaction ends: a take-
@@ -25,7 +25,7 @@ SELECT lease_fence FROM suppliers.sync_states WHERE supplier_id = @supplier_id A
 -- Stores a step over the version it read, and keeps the lease for as long as another step may take. No row changed
 -- means the step is void.
 UPDATE suppliers.sync_states
-SET version = @version, format = @format, state = @state, next_due = @next_due, lease_until = @lease_until
+SET version = @version, format = @format, state = @state, listing = @listing, next_due = @next_due, lease_until = @lease_until
 WHERE supplier_id = @supplier_id AND version = @expect;
 
 -- name: EnsureSyncState :exec
