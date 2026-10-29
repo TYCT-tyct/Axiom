@@ -10,7 +10,8 @@
 #   scripts/ci/runner-host.sh remove    # then delete the runner registrations it prints on GitHub
 #
 # Settings, from the environment: RUNNERS (8), PREFIX (axiom-t: runners axiom-t1...), LABELS (axiom,axiom-temp),
-# TRAIN_RUNNERS (4: the first runners also get axiom-train; this label is managed separately from LABELS).
+# TRAIN_RUNNERS (4: the first runners also get axiom-train), TRAIN_ONLY (2: of those, the first get no axiom-pr; every
+# other runner gets axiom-pr). Both labels are managed separately from LABELS.
 # install also needs GH_TOKEN with repository Administration write permission to reconcile existing runners' labels.
 # PROCS (6: GOMAXPROCS of each job), CPU_QUOTA (8000%: of the whole host), CPU_WEIGHT (20: against 100 for the host's
 # own services, so CI yields to them), MEMORY_HIGH (45G), MEMORY_MAX (50G). Docker must already be installed.
@@ -26,8 +27,9 @@ toolcache=/opt/hostedtoolcache
 slice=axiom-ci.slice
 parent_dropin=/etc/systemd/system/axiom.slice.d/axiom-ci.conf
 runners=${RUNNERS:-8} prefix=${PREFIX:-axiom-t} labels=${LABELS:-axiom,axiom-temp} procs=${PROCS:-6}
-train_runners=${TRAIN_RUNNERS:-4}
+train_runners=${TRAIN_RUNNERS:-4} train_only=${TRAIN_ONLY:-2}
 [ "$train_runners" -ge 0 ] 2>/dev/null || { echo 'TRAIN_RUNNERS must be a nonnegative integer' >&2; exit 2; }
+[ "$train_only" -ge 0 ] 2>/dev/null && [ "$train_only" -le "$train_runners" ] || { echo 'TRAIN_ONLY must be an integer from 0 to TRAIN_RUNNERS' >&2; exit 2; }
 cpu_weight=${CPU_WEIGHT:-20}
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -42,13 +44,18 @@ as_user() {
     env PATH="$node_bin:$toolcache/go/$go_version/x64/bin:/usr/bin:/bin" "$@"
 }
 
-runner_labels() { # number: exclude axiom-train from LABELS so only TRAIN_RUNNERS decides membership
+# number: the first TRAIN_RUNNERS runners serve trains (axiom-train), every runner past TRAIN_ONLY serves PR builds
+# (axiom-pr), so the first TRAIN_ONLY are the train's alone and the ones between serve both. With trains sharing every
+# runner a train build waited 30 min behind PR jobs; with PRs on only four, 36 PR jobs queued while the train's runners
+# sat idle between trains (both 2026-10-28). Both labels are excluded from LABELS so only the counts decide.
+runner_labels() {
   local label result= items
   IFS=, read -ra items <<< "$labels"
   for label in "${items[@]}"; do
-    if [ "$label" != axiom-train ] && [ -n "$label" ]; then result+="${result:+,}$label"; fi
+    if [ "$label" != axiom-train ] && [ "$label" != axiom-pr ] && [ -n "$label" ]; then result+="${result:+,}$label"; fi
   done
   if [ "$1" -le "$train_runners" ]; then result+="${result:+,}axiom-train"; fi
+  if [ "$1" -gt "$train_only" ]; then result+="${result:+,}axiom-pr"; fi
   printf '%s\n' "$result"
 }
 

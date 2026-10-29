@@ -21,19 +21,21 @@ import (
 func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
-		"mail.send_tracked":     QueueNotifications,
-		"billing.expire_credit": QueueMoney,
-		"billing.reconcile":     QueueMoney,
-		"catalog.sync":          QueueSyncs,
-		"mail.send":             QueueNotifications,
-		"observability.alerts":  QueueNotifications,
-		"observability.webhook": QueueNotifications,
-		"payments.poll":         QueueMoney,
-		"queue.discard_scan":    QueueArchive,
-		"suppliers.reconcile":   QueueMoney,
-		"suppliers.sync":        QueueSyncs,
-		"suppliers.sync_sweep":  QueueSyncs,
-		"suppliers.sync_alerts": QueueNotifications,
+		"accounts.password_reset":         QueueNotifications,
+		"accounts.password_reset_cleanup": QueueArchive,
+		"billing.expire_credit":           QueueMoney,
+		"billing.reconcile":               QueueMoney,
+		"catalog.sync":                    QueueSyncs,
+		"mail.send":                       QueueNotifications,
+		"mail.send_tracked":               QueueNotifications,
+		"observability.alerts":            QueueNotifications,
+		"observability.webhook":           QueueNotifications,
+		"payments.poll":                   QueueMoney,
+		"queue.discard_scan":              QueueArchive,
+		"suppliers.reconcile":             QueueMoney,
+		"suppliers.sync":                  QueueSyncs,
+		"suppliers.sync_sweep":            QueueSyncs,
+		"suppliers.sync_alerts":           QueueNotifications,
 	}
 	got := jobKinds(t, repoRoot(t))
 	named := map[string]bool{}

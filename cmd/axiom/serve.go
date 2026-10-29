@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
@@ -188,7 +189,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer closeCache(ctx, cache, cfg.shutdownTimeout, logger)
-	queue, recorder, err := startBackground(syncCtx, db, console.master, console.masterKey, cfg.smtp, cache, exit, prices, tel, logger, cfg.shutdownTimeout, record)
+	queue, recorder, recovery, err := startBackground(syncCtx, db, console.master, console.masterKey, cfg.smtp, cache, exit, prices, tel, logger, cfg.shutdownTimeout, record)
 	if err != nil {
 		return err
 	}
@@ -207,7 +208,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, logger, recorder, exit, cache)
+	routes, err := console.routes(ctx, db, tel, logger, recorder, exit, cache, recovery)
 	if err != nil {
 		return err
 	}
@@ -332,21 +333,16 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Client, masterKey []byte,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher,
 	tel *telemetry.Telemetry, logger *slog.Logger,
-) (*pg.Queue, error) {
+) (*pg.Queue, *accounts.PasswordRecovery, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
-	// Outbound email rides the notifications queue. Registering here also reports at startup whether this node can
-	// send mail at all (docs/domains/accounts.md「给用户的邮件」).
-	mailer, err := mail.Register(ctx, db, queue, smtp, cache, masterKey, logger)
+	recovery, err := registerNotifications(ctx, db, queue, smtp, cache, masterKey, keys, exit, logger)
 	if err != nil {
-		return nil, err
-	}
-	if err = observability.RegisterAlerts(db, pg.PlatformScope(), queue, mailer, keys, exit); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// The datasets behind the reference prices are read once a day by whichever node leads the queue, and a sync that
 	// leaves them unrefreshed for too long alerts (docs/domains/catalog.md「参考价怎么进入目录」).
@@ -355,7 +351,7 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 			DB: db, Scope: pg.PlatformScope(), Queue: queue, Fetcher: prices(exit), Logger: logger,
 			Meter: tel.Metrics.Meter("axiom/catalog"),
 		}); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	// The ledger checks itself once a day, on whichever node leads the queue (the check needs only the database, so it
@@ -363,18 +359,18 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 	if err := billing.RegisterReconcile(billing.ReconcileConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Credit past its expiry is written off every minute by whichever node leads the queue (docs/domains/billing.md「额度批次」).
 	if err := billing.RegisterExpire(billing.ExpireConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := suppliers.RegisterReconcile(suppliers.ReconcileJobConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger,
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Orders past their deadline expire every minute, on whichever node leads the queue
 	// (docs/domains/payments.md「补单与过期」). Callbacks and polling register the same protocol plugins.
@@ -382,15 +378,15 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger, Plugins: paymentPlugins,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err = payments.RegisterPoll(payments.PollConfig{Payments: store, Queue: queue, Logger: logger}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := queue.Start(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return queue, nil
+	return queue, recovery, nil
 }
 
 // stopQueue stops the queue within timeout, on a context that outlives the one that ended the node.
@@ -458,14 +454,14 @@ func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, maste
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher,
 	tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
-) (*pg.Queue, *observability.Recorder, error) {
+) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, error) {
 	recorder := record(ctx, db, tel, logger)
-	queue, err := startSync(ctx, db, smtp, cache, masterKey, keys, exit, prices, tel, logger)
+	queue, recovery, err := startSync(ctx, db, smtp, cache, masterKey, keys, exit, prices, tel, logger)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return queue, recorder, nil
+	return queue, recorder, recovery, nil
 }
 
 // startServing serves every listener. The channel carries the error of the first listener to stop. Readiness is not

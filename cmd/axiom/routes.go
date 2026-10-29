@@ -27,7 +27,7 @@ type nodeRoutes struct {
 // ctx ends, the call path, and puts the console's API in front of it for the public listener with the model API beside
 // it, and the admin's API for the admin listener. Opening an account also opens its balance (openBalance).
 func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
-	recorder *observability.Recorder, exit *egress.Client, cache *kv.Client,
+	recorder *observability.Recorder, exit *egress.Client, cache *kv.Client, recovery *accounts.PasswordRecovery,
 ) (nodeRoutes, error) {
 	// The accounts module and the call path take their in-process limits from one value: a key lookup that misses the
 	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
@@ -41,7 +41,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, LookupSlot: limits.KeyLookupSlot, Meter: tel.Metrics.Meter("axiom/accounts"),
-		OnAccountOpened: openBalance, Cache: cache, MasterKey: p.masterKey,
+		Recovery: recovery, OnAccountOpened: openBalance, Cache: cache, MasterKey: p.masterKey,
 	})
 	if err != nil {
 		return nodeRoutes{}, err

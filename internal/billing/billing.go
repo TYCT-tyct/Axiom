@@ -199,9 +199,15 @@ func (b *Billing) Reap(ctx context.Context) (reaped int, err error) {
 
 // fence locks the holder row for the rest of tx if the holder is still alive by the database's clock.
 func (b *Billing) fence(ctx context.Context, tx pg.Tx) error {
-	if _, err := queries.FenceHolder(ctx, tx, b.holder); errors.Is(err, pg.ErrNoRows) {
+	_, err := queries.FenceHolder(ctx, tx, b.holder)
+	return fenceErr(err)
+}
+
+func fenceErr(err error) error {
+	if errors.Is(err, pg.ErrNoRows) {
 		return ErrTerminated
-	} else if err != nil {
+	}
+	if err != nil {
 		return fmt.Errorf("billing: fence the holder: %w", err)
 	}
 	return nil
