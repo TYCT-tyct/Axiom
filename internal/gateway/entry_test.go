@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
@@ -197,19 +198,38 @@ func TestIPLimits(t *testing.T) {
 	wantRefused(t, r.refused(), map[string]int64{"ip_in_flight": 1})
 }
 
-// TestIPKey: IPv4 addresses count one by one, IPv6 by their /64, and a v4 address in v6 clothes is the v4 address.
-func TestIPKey(t *testing.T) {
+// TestIPLimitsGroupIPv6By64: the in-flight limit counts an IPv6 customer's whole /64, so changing the address inside
+// it buys no slot; another /64 is another address. The group is clientip.Group's, the one the login attempts count too.
+func TestIPLimitsGroupIPv6By64(t *testing.T) {
 	t.Parallel()
-	for in, want := range map[string]string{
-		"203.0.113.7":          "203.0.113.7",
-		"::ffff:203.0.113.7":   "203.0.113.7",
-		"2001:db8:1:2:3:4:5:6": "2001:db8:1:2::/64",
-		"2001:db8:1:2::ffff":   "2001:db8:1:2::/64",
-	} {
-		if got := ipKey(netip.MustParseAddr(in).Unmap()); got != want {
-			t.Errorf("ipKey(%s) = %s, want %s", in, got, want)
-		}
+	r := newRig(t, func(o *rigOptions) { o.config = func(c *Config) { c.IPInFlight = 2 } })
+	a, b := r.newAccount(1e9), r.newAccount(1e9) // one account each: one account's gate would turn one away
+	group := clientip.Group(netip.MustParseAddr("2001:db8:1:2::1")).String()
+	first, err := r.limits.IPCalls.Acquire(group, 2)
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer first()
+	second, err := r.limits.IPCalls.Acquire(group, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second()
+	request := func(key, remote string) *http.Request {
+		req := post(t, apiHost, "/v1/messages", key, strings.NewReader(messageBody("acme/beta")))
+		req.RemoteAddr = remote
+		return req
+	}
+	if rec := r.serve(request(b.key, "[2001:db8:1:2::3]:4000")); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("another address of the same /64: %d %s", rec.Code, rec.Body)
+	}
+	if rec := r.serve(request(a.key, "[2001:db8:1:3::1]:4000")); rec.Code != http.StatusOK {
+		t.Errorf("another /64: %d %s", rec.Code, rec.Body)
+	}
+	first()
+	second()
+	r.idle(1 << 30)
+	wantRefused(t, r.refused(), map[string]int64{"ip_in_flight": 1})
 }
 
 // quietly closes what a test is done with; there is nobody to tell about a failure.

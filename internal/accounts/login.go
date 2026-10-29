@@ -2,18 +2,16 @@ package accounts
 
 import (
 	"context"
-	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
-	"fmt"
 	"math"
 	"net/netip"
 	"strconv"
 	"time"
 	"uuid"
 
+	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/kv"
 )
 
@@ -22,14 +20,6 @@ const (
 	ipKind    = "ip"
 	emailKind = "email"
 	userKind  = "user"
-)
-
-const (
-	// loginLabel is what the login key is derived under: a key of its own, so that the API keys' hash key rotating, with
-	// two versions at once, does not split one bucket between the nodes (internal/platform/kv/README.md「键」).
-	loginLabel = "axiom kv login v1"
-	// loginKeyLen is the length of the login key, and of the master key it comes from.
-	loginKeyLen = 32
 )
 
 // takeScript spends one of a bucket's attempts, and giveScript returns one it spent: the same GCRA as buckets.take and
@@ -61,18 +51,6 @@ var (
 	takeBucket = kv.NewScript(takeScript)
 	giveBucket = kv.NewScript(giveScript)
 )
-
-// deriveLoginKey is the HMAC key of the subjects in the login keys: HKDF-SHA256 from the master key's current version.
-func deriveLoginKey(master []byte) ([loginKeyLen]byte, error) {
-	if len(master) != loginKeyLen {
-		return [loginKeyLen]byte{}, errors.New("accounts: a shared cache needs the master key, which the login keys are derived from")
-	}
-	key, err := hkdf.Key(sha256.New, master, nil, loginLabel, loginKeyLen)
-	if err != nil {
-		return [loginKeyLen]byte{}, fmt.Errorf("accounts: derive the login key: %w", err)
-	}
-	return [loginKeyLen]byte(key), nil
-}
 
 // shared reports whether the attempts before sign-in are counted in the shared store: without one, or with the cache
 // turned off, this node's own buckets hold them (README.md「登录前的资源」).
@@ -107,18 +85,6 @@ func (s *Service) sharedKey(site SiteID, kind, value string) string {
 	return s.cache.Key(kv.LoginSpace, uuid.UUID(site), kind, hex.EncodeToString(mac.Sum(nil)[:16]))
 }
 
-// normalIP is an address as the buckets count it: v4-mapped addresses as their IPv4, and IPv6 by its /64, the block one
-// user usually holds, so that changing the address within it buys no new bucket (internal/platform/kv/README.md「键」).
-func normalIP(ip netip.Addr) netip.Addr {
-	if !ip.IsValid() {
-		return ip
-	}
-	if ip = ip.Unmap(); ip.Is4() {
-		return ip
-	}
-	return netip.PrefixFrom(ip.WithZone(""), 64).Masked().Addr()
-}
-
 // millis is a duration as the scripts count it: whole milliseconds, rounded up, so that a bucket refills no sooner than
 // the site's setting says.
 func millis(d time.Duration) int64 { return (d + time.Millisecond - 1).Milliseconds() }
@@ -135,9 +101,11 @@ type loginLimit[K comparable] struct {
 	per    time.Duration // how long one attempt takes to come back
 }
 
-// ipLimit is one source address's attempts on a site, and IP's attempts are never given back.
+// ipLimit is one source address's attempts on a site, and IP's attempts are never given back. The address is the one
+// the gateway's per-address limit counts (clientip.Group): one client changing its IPv6 address within its /64 or
+// spelling a v4 address in v6 clothes buys no new bucket (internal/platform/kv/README.md「键」).
 func (s *Service) ipLimit(site SiteID, ip netip.Addr, l limits) loginLimit[siteIP] {
-	ip = normalIP(ip)
+	ip = clientip.Group(ip)
 	return loginLimit[siteIP]{
 		bucket: s.guards.ips, key: siteIP{site, ip}, site: site, kind: ipKind, value: ip.String(),
 		size: l.ipBurst, per: time.Minute / time.Duration(l.ipPerMinute),

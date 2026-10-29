@@ -99,6 +99,7 @@ function CreateDialog({ detection, onClose }: { detection: Detection; onClose: (
   };
   return (
     <ChangeDialog
+      operation={"supplier-connect"}
       title={t("suppliers.connect.title")}
       intro={
         <>

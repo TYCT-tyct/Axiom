@@ -82,6 +82,7 @@ export function RuleDialog({ rule: live, onClose }: { rule?: PricingRule; onClos
   const read = (values: Record<string, string>): Rule | Problem => readRule(values, words, rule);
   return (
     <ChangeDialog
+      operation={`pricing-rule:${rule?.id ?? "new"}`}
       reload={reload}
       title={rule ? t("pricing.rule.editTitle") : t("pricing.rule.newTitle")}
       intro={<p>{t("pricing.rule.intro")}</p>}
