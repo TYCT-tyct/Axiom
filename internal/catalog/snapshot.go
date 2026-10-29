@@ -75,6 +75,8 @@ type Model struct {
 	serves       bool // the spec declares everything Serving reads
 	toolUses     map[Item]int64
 	dialect      Dialect
+	speed        int64     // the fastest output, in tokens per second; 0 when the spec does not say
+	reasoning    FormatSet // the call formats in which the model's stream shows reasoning progress
 }
 
 // Spec is a copy of the baseline's JSON.
@@ -85,6 +87,37 @@ func (m Model) ToolUses() map[Item]int64 { return maps.Clone(m.toolUses) }
 
 // Reportable is what the upstream may report for the model, from its spec, for the listing gate.
 func (m Model) Reportable() Reportable { return m.reportable }
+
+// OutputSpeed is the fastest output the model is known to produce, in tokens per second, from its spec. Billing sizes
+// a segment's overshoot allowance from it, and routing reserves an entry whole while it is 0, which is a spec that does
+// not say (README.md「规格」).
+func (m Model) OutputSpeed() int64 { return m.speed }
+
+// ReasoningVisible are the call formats in which the model's stream shows its reasoning as it is produced, from its
+// spec. The gateway must see that progress to meter it against a segment; an entry whose format is not in the set is
+// reserved whole (README.md「规格」).
+func (m Model) ReasoningVisible() FormatSet { return m.reasoning }
+
+// CallFormat is a request format as a model's spec names it. It is catalog's own enumeration, not protocol's, because
+// protocol is built on catalog: the two are mapped name by name where a routing snapshot is assembled.
+type CallFormat uint8
+
+// The call formats, in the order stored spec lists name them.
+const (
+	FormatMessages  CallFormat = iota // Anthropic Messages
+	FormatResponses                   // OpenAI Responses
+	FormatChat                        // OpenAI Chat Completions
+	NumFormats
+)
+
+// formatNames are the formats' names in a spec, so they never change.
+var formatNames = [NumFormats]string{"messages", "responses", "chat"}
+
+// FormatSet is a set of call formats.
+type FormatSet = set[CallFormat]
+
+// A seventeenth format would have no bit, as with the items.
+var _ [16 - NumFormats]struct{}
 
 // Ability is a feature a model has that a request may need: what protocol's Capabilities are the bits of. The names are
 // the spec's, and protocol turns them into its bits when a routing snapshot is built (README.md「规格」).

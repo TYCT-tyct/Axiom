@@ -303,7 +303,8 @@ func TestSegmentable(t *testing.T) {
 		{"the gateway cannot meter the call", nil, func(in *routing.Input) { in.NoSegments = true }, false},
 	}
 	for _, c := range cases {
-		h := newHarness(t, routing.Config{FirstSegment: 1000, Overshoot: 500}, openPreset(), endpoint(t, 1, func(e *routing.Endpoint) {
+		// 1000 output tokens a segment, with an allowance of 500 at the endpoint's 100 tokens a second: 5 seconds.
+		h := newHarness(t, routing.Config{Segments: billing.Segments{Output: 1000, Overshoot: 5 * time.Second}}, openPreset(), endpoint(t, 1, func(e *routing.Endpoint) {
 			if c.e != nil {
 				c.e(e)
 			}

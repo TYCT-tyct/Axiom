@@ -392,6 +392,9 @@ func TestCreditOnce(t *testing.T) {
 	b.balanced()
 }
 
+// segmentTokens is the output tokens a segment of the property bank's reservations covers.
+const segmentTokens = 50
+
 // TestLedgerProperty drives random sequences of credits, gifts and payments in the site's currency and another, some of
 // them expiring, reservations, settlements with retries
 // and crashes left to cleanup, some with usage only a fallback price covers, write-offs of expired credit, and checks
@@ -401,7 +404,10 @@ func TestLedgerProperty(t *testing.T) {
 	for seed := range uint64(3) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
-			b := fallbackBank(t, 5000, -500, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: 20 * time.Millisecond})
+			b := fallbackBank(t, 5000, -500, Config{
+				HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: 20 * time.Millisecond,
+				Segments: Segments{Output: segmentTokens, Overshoot: time.Second},
+			})
 			var holds []*Hold
 			for range 40 {
 				b.step(r, &holds)
@@ -415,7 +421,7 @@ func TestLedgerProperty(t *testing.T) {
 func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 	b.t.Helper()
 	pick := func() *Hold { return (*holds)[r.IntN(len(*holds))] }
-	switch n := r.IntN(8); {
+	switch n := r.IntN(10); {
 	case n == 0:
 		b.randomCredit(r, r.Int64N(2000)+1, []*time.Time{nil, longAgo, farAhead}[r.IntN(3)])
 	case n == 6 || n == 7:
@@ -430,6 +436,10 @@ func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
 		b.settleRandom(r, pick())
 	case n == 3: // a retry of a settlement already made
 		b.settleRandom(r, pick())
+	case n == 8: // reservations and settlements of one account at once, as its concurrent calls make them
+		b.concurrent(r)
+	case n == 9: // a reservation made in segments, extended once, then settled where a stream cut short stops
+		b.truncated(r)
 	default: // a crash: what was left pending goes to cleanup, which records the request as lost
 		b.cleanup()
 	}
@@ -442,6 +452,80 @@ func (b *bank) settleRandom(r *rand.Rand, h *Hold) {
 		maybeUnknown(b.t, r, used(b.t, r.Int64N(2000), r.Int64N(200), r.Int64N(3), []catalog.Item{in}[:r.IntN(2)]...)))
 	if _, err := b.billing.Settle(b.t.Context(), h, o); err != nil {
 		b.t.Fatal(err)
+	}
+}
+
+// concurrent reserves and settles four calls of the account at once: each is a transaction of its own on the one
+// balance row, and whatever the interleaving, the books must balance and the balance stay above its floor.
+func (b *bank) concurrent(r *rand.Rand) {
+	b.t.Helper()
+	type call struct{ text, output int64 }
+	calls := make([]call, 4)
+	for i := range calls {
+		calls[i] = call{text: r.Int64N(300), output: r.Int64N(100)}
+	}
+	errs := make(chan error, len(calls))
+	var wg sync.WaitGroup
+	for _, c := range calls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h, err := b.tryHold(c.text)
+			if err != nil {
+				if !errors.As(err, new(*Insufficient)) {
+					errs <- err
+				}
+				return
+			}
+			if _, err := b.billing.Settle(context.Background(), h, outcome(Committed, FinishStop, used(b.t, 0, c.output, 0))); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		b.t.Error(err)
+	}
+}
+
+// truncated reserves by segment, then either approves one extension or has it refused for funds, as a call near its
+// balance sees it, and settles where a stream cut short stops: inside what the approved segments cover, so the charge
+// stays within what was reserved for it.
+func (b *bank) truncated(r *rand.Rand) {
+	b.t.Helper()
+	q := metered(b.t)
+	q.Segmentable, q.Model, q.MaxOutput = true, Model{ContextLength: 1e12, OutputSpeed: 100}, 100
+	h := b.holdOn(q, 0)
+	m := h.Reservation.Bind(0)
+	step := m.Observe(Progress{ContentBytes: 31}) // past the latest extension point of a segment of 50
+	if !step.Extend || step.Exhausted {
+		b.t.Fatalf("at 31 tokens of a segment of 50: %+v", step)
+	}
+	covered := int64(2 * segmentTokens) // the first segment and the extension cover a segment each
+	if r.IntN(3) == 0 {
+		// One unit past what the balance leaves: the extension is refused, the meter keeps the first segment, and the
+		// cut comes inside it.
+		amount := b.count("SELECT amount FROM billing.reservations WHERE request_id = '" + h.id.String() + "'")
+		avail := b.count("SELECT balance - reserved - frozen - floor FROM billing.balances")
+		err := b.billing.Extend(b.t.Context(), h, ExtendRequest{Seq: step.Request.Seq, Target: platform.AmountExact(amount + avail + 1)})
+		if !errors.As(err, new(*Insufficient)) {
+			b.t.Fatalf("an extension of %d past the %d the balance leaves: %v", avail+1, avail, err)
+		}
+		m.Extended(step.Request.Seq, err)
+		covered = segmentTokens
+	} else {
+		if err := b.billing.Extend(b.t.Context(), h, step.Request); err != nil {
+			b.t.Fatal(err)
+		}
+		m.Extended(step.Request.Seq, nil)
+	}
+	f, err := b.billing.Settle(b.t.Context(), h, outcome(Committed, FinishTruncated, used(b.t, 0, 1+r.Int64N(covered), 0)))
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	if amount := platform.AmountExact(b.count("SELECT amount FROM billing.reservations WHERE request_id = '" + h.id.String() + "'")); f.Charged.Cmp(amount) > 0 {
+		b.t.Errorf("a cut stream was charged %v of %v reserved", f.Charged, amount)
 	}
 }
 

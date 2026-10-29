@@ -191,3 +191,63 @@ func TestSpecServerToolBounds(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamData: the two model facts a reservation made in segments rests on are read from the spec, each on its own,
+// and a value that cannot be one is refused when the spec is parsed. Absent means not known, which reserves the whole
+// output rather than guessing.
+func TestStreamData(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		spec    string
+		speed   int64
+		visible FormatSet
+		err     string
+	}{
+		{name: "nothing said", spec: `{}`},
+		{name: "null says nothing", spec: `{"output_speed":null,"reasoning_visible":null}`},
+		{
+			name: "speed and two formats", spec: `{"output_speed":250,"reasoning_visible":["messages","responses"]}`,
+			speed: 250, visible: FormatSet(1<<FormatMessages | 1<<FormatResponses),
+		},
+		{name: "one format", spec: `{"reasoning_visible":["chat"]}`, visible: FormatSet(1 << FormatChat)},
+		{name: "an empty list says no format", spec: `{"reasoning_visible":[]}`},
+		{name: "a speed of 0", spec: `{"output_speed":0}`, err: "output_speed must be above 0"},
+		{name: "a negative speed", spec: `{"output_speed":-1}`, err: "output_speed must be above 0"},
+		{name: "an unknown format", spec: `{"reasoning_visible":["grpc"]}`, err: `unknown name "grpc"`},
+		{name: "a format twice", spec: `{"reasoning_visible":["chat","chat"]}`, err: `"chat" is listed twice`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, err := parseSpec([]byte(tc.spec))
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("parseSpec error = %v, want one with %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseSpec: %v", err)
+			}
+			m := Model{speed: s.speed, reasoning: s.reasoning}
+			if m.OutputSpeed() != tc.speed || m.ReasoningVisible() != tc.visible {
+				t.Errorf("OutputSpeed = %d, ReasoningVisible = %d, want %d, %d", m.OutputSpeed(), m.ReasoningVisible(), tc.speed, tc.visible)
+			}
+		})
+	}
+	// Reasoning that shows in a stream but is not listed as an ability is contradictory, refused when saved; a row
+	// already stored is read as it is, so one bad spec does not fail the whole snapshot load.
+	contradictory := `{"abilities":["tools"],"reasoning_visible":["messages"]}`
+	if _, err := parseSpec([]byte(contradictory)); err != nil {
+		t.Errorf("a stored spec was refused on load: %v", err)
+	}
+	if _, err := parseSavedSpec([]byte(contradictory)); err == nil || !strings.Contains(err.Error(), "does not list reasoning") {
+		t.Errorf("a contradictory spec was saved: %v", err)
+	}
+	if _, err := parseSavedSpec([]byte(`{"abilities":["reasoning"],"reasoning_visible":["messages"]}`)); err != nil {
+		t.Errorf("a spec with the ability was refused: %v", err)
+	}
+	if _, err := parseSavedSpec([]byte(`{"reasoning_visible":["messages"]}`)); err != nil {
+		t.Errorf("a spec that does not list its abilities was refused: %v", err)
+	}
+}

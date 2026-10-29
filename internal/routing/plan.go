@@ -148,8 +148,9 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry
 	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments), and
 	// every entry while no segment size is configured: a segment of 0 tokens would reserve no output at all.
+	allowance, _ := r.cfg.Segments.Allowance(c.OutputSpeed)
 	segmentable := !n.in.NoSegments && c.Streams && c.Cancels && c.ReasoningVisible.Has(n.req.Format) && !n.req.HidesReasoning &&
-		c.OutputSpeed > 0 && r.cfg.FirstSegment > 0 && out > r.cfg.FirstSegment+r.cfg.Overshoot
+		c.OutputSpeed > 0 && r.cfg.Segments.Output > 0 && out > r.cfg.Segments.Output+allowance
 	target := c.Target
 	format, _ := c.callFormat(n)
 	target.Format = format

@@ -36,6 +36,13 @@ const specAll = `{"items":["input","output","cache_read","cache_write"],"tiers":
 // specNoServing is a spec that lists what the upstream may report but says nothing about what an endpoint offers.
 const specNoServing = `{"items":["input","output"],"tiers":["standard"]}`
 
+// specFast is specAll plus the two model facts segmenting needs: a fastest output speed, and the formats whose streams
+// show reasoning progress.
+const specFast = `{"items":["input","output","cache_read","cache_write"],"tiers":["standard"],` +
+	`"context_length":200000,"max_output_tokens":8192,"streams":true,` +
+	`"abilities":["tools","images","documents","reasoning","prompt_cache","structured_output","web_search","code_execution"],` +
+	`"output_speed":100,"reasoning_visible":["messages"]}`
+
 // specSearch is a spec whose upstream may report a per-use item: a sale price need not price it, because every currency
 // has a default price for it (docs/domains/billing.md「价目表缺项」).
 const specSearch = `{"items":["input","output","web_search"],"tiers":["standard"],` +
@@ -84,7 +91,7 @@ func newRouteFixture(t *testing.T) *routeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router, err := routing.New(routing.Config{MaxStale: time.Hour})
+	router, err := routing.New(routing.Config{MaxStale: time.Hour, Segments: billing.Segments{Output: 1000, Overshoot: 2 * time.Second}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,6 +315,36 @@ func TestRouteBuildHoldsWhatRoutingFiltersBy(t *testing.T) {
 	f.build([]suppliers.Routable{withStreams(routable(f.served, protocol.Messages), false)})
 	if _, _, err := f.router.Plan(call(f.served)); err == nil {
 		t.Error("a stream was planned to an endpoint whose supplier's policy passes no stream")
+	}
+}
+
+// TestRouteBuildCarriesWhatSegmentingNeeds: the spec's fastest output speed and the formats whose streams show reasoning
+// reach the snapshot, and they are what makes an entry segmentable: the segment plus the allowance the speed sets aside
+// must fit under the output limit, and the format must be one the spec lists. A model without them is reserved in full,
+// as checkEntry finds the ones whose spec says nothing.
+func TestRouteBuildCarriesWhatSegmentingNeeds(t *testing.T) {
+	f := newRouteFixture(t)
+	fast := f.seed("acme/fast", specFast)
+	prices, err := f.fixturePrices() // the model was seeded after the fixture's sale prices
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.prices = prices
+	f.build([]suppliers.Routable{routable(fast, protocol.Messages, protocol.Chat)})
+	for _, c := range []struct {
+		format protocol.Format
+		want   bool
+	}{
+		{protocol.Messages, true}, // the spec says a Messages stream shows reasoning
+		{protocol.Chat, false},    // and says nothing of a Chat one, which this endpoint serves by conversion
+	} {
+		plan, _, err := f.router.Plan(call(fast, func(r *protocol.Request) { r.Format = c.format }))
+		if err != nil {
+			t.Fatalf("a %v call was not planned: %v", c.format, err)
+		}
+		if got := plan.Entries[0].Segmentable; got != c.want {
+			t.Errorf("a %v call is segmentable=%t on the fast endpoint, want %t", c.format, got, c.want)
+		}
 	}
 }
 
