@@ -107,7 +107,10 @@ func (q *Queries) InsertProjectedGroup(ctx context.Context, db DBTX, arg InsertP
 }
 
 const listProjectedAliases = `-- name: ListProjectedAliases :many
-SELECT supplier_group_id, upstream_name, model_id FROM suppliers.supplier_aliases WHERE supplier_id = $1
+SELECT a.supplier_group_id, a.upstream_name, COALESCE(r.model_id, a.model_id) AS model_id
+FROM suppliers.supplier_aliases a
+LEFT JOIN LATERAL (SELECT model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY revision DESC LIMIT 1) r ON true
+WHERE a.supplier_id = $1
 `
 
 type ListProjectedAliasesRow struct {

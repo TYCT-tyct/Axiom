@@ -95,6 +95,17 @@ INSERT INTO suppliers.supplier_aliases (supplier_id, supplier_group_id, upstream
 VALUES (@supplier_id, sqlc.narg(supplier_group_id), @upstream_name, @model_id, 'user')
 RETURNING id;
 
+-- name: CurrentAlias :many
+SELECT a.id, COALESCE(r.model_id, a.model_id) AS model_id, COALESCE(r.revision, 1)::bigint AS revision
+FROM suppliers.supplier_aliases a
+LEFT JOIN LATERAL (SELECT model_id, revision FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY revision DESC LIMIT 1) r ON true
+WHERE a.supplier_id = @supplier_id AND a.supplier_group_id IS NOT DISTINCT FROM sqlc.narg(supplier_group_id)::uuid
+    AND a.upstream_name = @upstream_name;
+
+-- name: InsertAliasRevision :exec
+INSERT INTO suppliers.supplier_alias_revisions (alias_id, supplier_id, revision, previous_model_id, model_id, actor, reason)
+VALUES (@alias_id, @supplier_id, @revision, @previous_model_id, @model_id, @actor, @reason);
+
 -- name: PendingMappingsPage :many
 -- The upstream names the catalog could not recognise (no model) that no alias of the supplier or of the group covers,
 -- oldest first, a page starting after the last row of the one before.
