@@ -69,10 +69,19 @@ type Quotable struct {
 	Endpoint    uuid.UUID
 }
 
-// Segments are the site's settings for reserving in segments.
+// Segments are the settings for reserving in segments, one set per node.
 type Segments struct {
 	Output    int64         // output tokens per segment
 	Overshoot time.Duration // the extension wait plus the delays until a cancelled upstream stops billing
+}
+
+// Allowance is the most output tokens a segment's overshoot may add at the given fastest output speed: the time it
+// covers, times the speed, rounded up. Its second result is the product before rounding, which a quote checks for
+// saturation: a saturated allowance would understate a reservation, and routing treats one as leaving no room to
+// segment an entry.
+func (s Segments) Allowance(speed int64) (tokens, nanos int64) {
+	nanos = mul(int64(s.Overshoot), speed)
+	return ceilDiv(nanos, int64(time.Second)), nanos
 }
 
 // Source is what an amount available to a reservation is limited by.
@@ -223,8 +232,8 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	q.outputCap = mul(e.MaxOutput, max(d.Choices, 1))
 	output, allowance, overshoot := q.outputCap, int64(0), int64(0) // overshoot in token-nanoseconds
 	if e.Segmentable {
-		overshoot = mul(int64(s.Overshoot), e.Model.OutputSpeed)
-		q.segment, output, allowance = s.Output, min(output, s.Output), ceilDiv(overshoot, int64(time.Second))
+		q.segment, output = s.Output, min(output, s.Output)
+		allowance, overshoot = s.Allowance(e.Model.OutputSpeed)
 	}
 	// A saturated count understates the quote, so one that reached math.MaxInt64 refuses the entry. Only the first
 	// prompt may saturate: the context length caps it anyway.
