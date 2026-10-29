@@ -63,7 +63,7 @@ const (
 	// QueueMoney is the queue of the jobs whose lateness costs money: the expiry of credit, and the reconciliation of
 	// charges and of the ledger.
 	QueueMoney = "money"
-	// QueueNotifications isolates mail delivery and alert evaluation from money and supplier sync jobs.
+	// QueueNotifications isolates mail delivery, password-reset issuance and alert evaluation from money and supplier sync jobs.
 	QueueNotifications = "notifications"
 	// QueueSyncs is the queue of the jobs that reach a supplier: a sweep, a round of one supplier, and the price syncs
 	// when they arrive. They are the long jobs, waiting on the network.

@@ -75,6 +75,116 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/password-reset:
+    post:
+      operationId: requestPasswordReset
+      tags: [Session]
+      summary: Request a password reset email
+      description: >-
+        Returns the same empty 202 for every valid email. Account lookup and email issuance run after acceptance.
+        A later request immediately supersedes previous links. Links expire 30 minutes after the request.
+        If no email arrives, wait and retry. Mail and processing failures alert the operator through the queue.
+        Limited per email using the site sign-in email setting (default 10 per 15 minutes), independently counted,
+        and by the sign-in IP bucket, with the same cache fallback.
+        Email disabled or queue unavailable is an error for all addresses.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email: {type: string, minLength: 3, maxLength: 254}
+                language: {type: string, enum: [zh, en], default: en}
+      responses:
+        "202": {description: "Accepted; if the address is registered, a reset email will arrive. Retry later if none arrives."}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/password-reset/complete:
+    post:
+      operationId: resetPassword
+      tags: [Session]
+      summary: Reset a forgotten password
+      description: >-
+        Consumes a single-use reset token on its own site and replaces the password. Invalid, expired, used,
+        superseded and factor-stale tokens all return the same 422. Ends all sessions and recovery codes;
+        TOTP stays enabled and sign-in is required. Password validation and hashing match registration.
+        Consumption, password change, audit and password-changed notice commit together. Uses the sign-in IP limit.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token, new_password]
+              properties:
+                token: {type: string, minLength: 1, maxLength: 256}
+                new_password: {type: string, minLength: 12, maxLength: 256}
+                language: {type: string, enum: [zh, en], default: en}
+      responses:
+        "204": {description: "Password reset; sign in again."}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/password:
+    post:
+      operationId: changePassword
+      tags: [Session]
+      summary: Change the signed-in user's password
+      description: >-
+        Requires the current password. With TOTP enabled the session must have passed MFA; a pending session
+        cannot change a password. Issues a replacement session at the same level, ends all other sessions and
+        old recovery codes (returning replacements when TOTP is enabled), invalidates reset tokens, audits the change and queues a localized notification atomically.
+        Uses registration password validation and hashing; wrong current passwords spend the user failure bucket.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [current_password, new_password]
+              properties:
+                current_password: {type: string, minLength: 1, maxLength: 256}
+                new_password: {type: string, minLength: 12, maxLength: 256}
+                language: {type: string, enum: [zh, en], default: en}
+      responses:
+        "200":
+          description: Password changed and current session replaced.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  csrf_token: {type: string}
+                  recovery_codes:
+                    type: array
+                    items: {type: string}
+                    description: Replacement recovery codes, returned only when TOTP is enabled.
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/mfa:
     post:
       operationId: verifyMfa

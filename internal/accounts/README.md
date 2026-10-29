@@ -21,7 +21,7 @@
 
 - 主键 `id uuid`，由 Go 生成 UUIDv7。金额是 `bigint`，单位同[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)。`status` 取 `active` / `disabled`。
 - 类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。站点数据的表用 `site_id`、账户数据的表用 `(site_id, account_id)` 套 `platform.in_scope`；`sites` 自己用 `id` 当 `site_id`，`accounts` 用 `id` 当 `account_id`。
-- `axiom_app` 只对「可改的列」有 `UPDATE` 权限，任何表都没有 `DELETE` 权限。
+- `axiom_app` 只对「可改的列」有 `UPDATE` 权限，除密码找回请求和令牌到期清理外，没有 `DELETE` 权限。
 
 | 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
 |---|---|---|---|---|
@@ -38,6 +38,8 @@
 | `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management，M1 只开放 call）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；`limit_reset` 同工作区的 `budget_reset` | 账户 | `name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
+| `password_reset_requests` | `site_id`、`email_hash`、`id`、可空 `email`、`domain`、`language`、`expires_at` | 主键 `(site_id, email_hash)`；唯一 `id`；摘要 32 字节；语言 zh/en | 站点 | `id`、`email`、`domain`、`language`、`expires_at`（重发替换，处理后清除邮箱） |
+| `password_reset_tokens` | `id`、`site_id`、`account_id`、`user_id`、`token_hash`、`factor_version`、`expires_at`、`used_at` | `token_hash` 唯一、32 字节；`(site_id, account_id, user_id) → users` | 账户 | `used_at`（终态） |
 
 - **租户列直接存在行上**：账户数据的每张表都有 `site_id`、`account_id`，都不为空。被引用的父表有 `UNIQUE (site_id, id)` 一类的复合唯一键，子表用复合外键引用它，所以两列不可能与"key → 工作区 → 账户 → 站点"不一致；两列不在可改的列里，写入后不变。外键检查不受行级安全影响。理由见[账户与租户的「决策与理由」](../../docs/domains/accounts.md#决策与理由)。
 - **授予每种目标一张表**：账户角色在 `members.role_id`，平台角色在 `platform_grants`；站点员工、工作区角色以后各加一张。每张表的外键都直接，不需要一张多态表靠条件约束拼归属。
@@ -92,7 +94,7 @@
 | `accounts.invite_tenant(domain, code)` | 请求的域名、邀请码 | 邀请人的 `user_id`、站点当前的 `default_tier_id`；注册策略不是 invite 时无结果 |
 | `accounts.domain_site(domain, surface)` | 请求的域名、监听面 | `site_id`；供 `Admit` 在账户范围里核对域名 |
 
-- 五个函数都已实现（迁移 00002、00003）。`login_tenant` 只认控制台和管理后台的域名，`invite_tenant` 只认控制台域名。
+- 上述五个函数都已实现（迁移 00002、00003）。`login_tenant` 只认控制台和管理后台的域名，`invite_tenant` 只认控制台域名。
 - 域名或站点停用、域名不属于这个监听面时都无结果；`key_tenant` 只认请求的站点和未删除的 key；都在库里判定，不看快照。都以请求的域名为条件，所以别站的 key、别站的会话令牌和不存在的走同一条路径。配置和密码哈希在拿到账户后用账户范围再读。
 - **函数的所有者是专用角色 `axiom_lookup`**，不用平台范围：它不能登录，不拥有任何表，`axiom_app` 不是它的成员（不能 `SetRole` 过去）。这几张表上只为它加 `FOR SELECT TO axiom_lookup USING (true)` 的策略，只授予函数要读的列。函数固定 `search_path = pg_catalog, pg_temp`，名字全部带 schema，只有 `axiom_app` 能执行。
 - 不在函数里设范围：`just scope` 禁止平台的 `pg` 之外出现范围参数，迁移也一样；按角色加策略不需要范围，也没有"函数返回后范围留在调用方事务里"的风险。
@@ -147,24 +149,40 @@
 |---|---|---|
 | 注册 | 邀请码；邮箱不验证 | 开放注册（要人机验证）、邮箱验证 |
 | 登录 | 邮箱 + 密码，开了 TOTP 的再过 TOTP 或恢复码 | 第三方登录、通行密钥、邮箱验证码 |
-| 找回密码 | `axiom user set-password`（从标准输入读） | 邮件链接 |
+| 找回密码 | `axiom user set-password`（从标准输入读） | 控制台邮件链接（已实现） |
 | 第一个用户 | `axiom site init`、`axiom user create`、`axiom user grant-platform`（见下文「命令行」） | — |
-| 认证因素 | 开启 TOTP、重建恢复码 | 关闭或更换 TOTP、改密码（M1 只经命令行 `reset-mfa`、`set-password`） |
+| 认证因素 | 开启 TOTP、重建恢复码 | 控制台改密码（已实现）；关闭或更换 TOTP 待实现，仍可经命令行 `reset-mfa` |
 | 会话管理 | 退出 | 设备列表、踢掉一台、退出全部 |
 
-- **注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。邮箱规范化（去空白、转小写）后须是 3 到 254 个可打印 ASCII 字符、`@` 两侧各有字符，否则 `ErrBadEmail`：表的约束（`lower()`、`LIKE`）在各地区设置下对非 ASCII 的判断不一定与 Go 一致，放进库再被拒会变成 500；国际化邮箱地址 M1 不支持。不用站点或平台范围包住注册。
-- **认证因素的一条规则**：`users.factor_version` 是密码、TOTP、恢复码这一组的版本。签发会话、消费一次性因素、修改因素的事务，第一条语句都是 `SELECT … FROM users WHERE id = $u FOR UPDATE`，在锁内核对用户启用和版本；修改因素的事务在同一把锁内把版本加一。会话有效 = 未撤销、未过期、未超空闲、用户启用、版本等于用户当前版本，每个请求读会话时同一条查询一起核对；恢复码只在版本相等且未用过时可用。
+- **注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。邮箱规范化（去空白、转小写）后须是 3 到 254 个可打印 ASCII 字符、`@` 两侧各有字符，且必须通过 `net/mail.ParseAddress`、解析地址等于输入，否则 `ErrBadEmail`：表的约束（`lower()`、`LIKE`）在各地区设置下对非 ASCII 的判断不一定与 Go 一致，放进库再被拒会变成 500；国际化邮箱地址 M1 不支持。不用站点或平台范围包住注册。
+- **认证因素的一条规则**：`users.factor_version` 是密码、TOTP、恢复码这一组的版本。签发会话、消费一次性因素、修改因素的事务，先锁用户行 `SELECT … FROM users WHERE id = $u FOR UPDATE`（邮件重置先锁请求行，再锁用户；所有涉及请求的路径同序），在锁内核对用户启用和版本；修改因素的事务在同一把锁内把版本加一。会话有效 = 未撤销、未过期、未超空闲、用户启用、版本等于用户当前版本，每个请求读会话时同一条查询一起核对；恢复码只在版本相等且未用过时可用。
 - **密码登录**：argon2id，参数写进 PHC 串（M1 取 OWASP 的基线：19 MiB、2 遍、1 线程；以后提高参数，旧哈希照样能验）；密码 12 到 256 个字符；邮箱不存在也算一次假哈希。先在事务外读出哈希和版本并计算，再开签发事务，锁内版本没变且用户启用才签发。
 - **两步验证**：开了 TOTP 的用户密码通过后先拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口）。验证事务：锁用户行 → 核对待验证会话未撤销、未过期、版本相等、尝试次数未满 → 验码（TOTP 做 `totp_last_step < $step` 的条件更新，恢复码做条件消费，影响行数都必须为 1）→ 码不对只把尝试次数加一并提交（每个待验证会话的次数是站点的 `challenge_code_attempts`） → 码对就条件撤销待验证会话，签发新令牌、新 CSRF 令牌的 `mfa` 会话。用户行锁让一个挑战只换出一个会话。
 - **修改认证因素**：开启 TOTP 要重新输入密码并用新密钥的一个码确认，只对还没开启的用户：已开启的在用户行锁内拒绝（`ErrTOTPOn`），版本、密钥、恢复码、会话都不变，更换和关闭是 M2 的事；重建恢复码要一个当前的 TOTP 码，错码计入每用户的失败次数。两者都加版本，为当前设备签发新的 `mfa` 会话，并在同一事务里记审计 `user.totp_enable`、`user.recovery_codes_regenerate`（操作者和对象都是这个用户，带站点和个人账户，不记密钥和恢复码）：审计写不进，因素、恢复码和新会话一起回滚。TOTP 密钥用 `secret.Keyring.Seal` 封装，`Location` 是 `{accounts.users, 用户 ID 的标准 UUID 写法, totp}`，`Sealed` 的四个字段存进 `users` 的四个 `totp_` 列；`BeginTOTP` 只生成密钥和 `otpauth` 链接，不存库，确认时客户端把密钥带回。TOTP 按 RFC 6238（HMAC-SHA1、30 秒、6 位），接受前后各一个步长，同一步长只用一次。恢复码 10 个、各 80 位，写成 `xxxx-xxxx-xxxx-xxxx`，不分大小写、忽略连字符，只存 SHA-256。
 - **Cookie 与 CSRF**：`__Host-axiom_session`（HttpOnly、Secure、SameSite=Lax、Path=/），库里只存令牌的 SHA-256。所有会改数据的请求，包括登录、注册、两步验证：`Origin` 必须完全等于该站点该监听面登记的 `origin`，缺失或 `null` 拒绝；`Content-Type: application/json`，接口不开放 CORS；有会话的再核对 `X-CSRF-Token`。登记的源是 `http://localhost` 时 Cookie 才不带 `__Host-` 和 `Secure`，由登记决定、不看请求头。认证相关的响应 `Cache-Control: no-store`。
 - **参数**：默认值只在代码里。按站点的（会话时长：控制台空闲 7 天、最长 30 天，管理后台 30 分钟、12 小时；下表的尝试上限；新 key 的每日上限）存在 `site_settings`，经 `GET/PUT /api/admin/v1/sites/{site_id}/settings` 读改，要敏感权限并记审计；按节点的资源上限用 `AXIOM_*` 环境变量。
 
+### 邮件找回和改密码
+
+业务流程和取舍见[登录与会话](../../docs/domains/accounts.md#登录与会话)。`RegisterPasswordRecovery` 在队列启动前注册 `accounts.password_reset`（notifications 队列，最多 5 次）；`Config.Recovery` 把同一对象交给 HTTP 服务。SMTP 未配置时不注册签发 worker，避免取走其他节点能处理的任务；SMTP 未配置或没有接入时服务返回 `ErrBusy`，HTTP 映射 503。队列只携带请求 UUID，无个人信息或凭证。工作期限 15 秒；错误日志 `accounts.password_reset.failed` 只记 job_id、attempt、类别和 SQLSTATE，原始错误及 detail 不进日志。交给 River 的错误仍为固定文字。没有 HTTPS 域名或历史邮箱不合法时提交清空邮箱并取消任务，临时故障由 River 重试、最终失败由现有告警暴露。
+
+迁移 00008：`password_reset_requests` 属站点范围，主键 `(site_id, email_hash)`，摘要为规范化邮箱的 SHA-256；`id` 是每次请求的新 UUIDv7，`email` 在处理后清空，`domain` 是请求时登记的控制台域名，`language` 为 zh/en，`expires_at` 为请求提交起 30 分钟。每个邮箱无条件 upsert 再入队，调用方路径不读用户。请求记录复用，所以没有终态策略；它的新 ID 同时阻止旧链接和旧任务生效。原始待处理邮箱只在 RLS 请求表，邮件正文只在 RLS outbox；`accounts.password_reset_cleanup` 在 archive 队列每分钟清理到期请求、摘要和令牌，每次每表最多 1000 行，15 秒超时。RLS 的 DELETE 策略仅允许删除范围内已过期行，保护有效凭证，过期无需保留来防重放；SMTP 关闭时仍注册清理任务。清理失败重试并留下分类日志。
+
+`password_reset_tokens` 属个人账户范围，复合外键 `(site_id, account_id, user_id)` 指用户；`id` 对应签发请求编号，唯一 `token_hash` 是 `randomToken` 生成的 256 位随机串的 SHA-256；只可更新 `used_at`，已消费的行策略不再允许更新。后台通过 `db.TenantTx` 和 `password_reset_request_tenant(id)` 定位请求的站点范围；登录前函数 `password_reset_tenant(domain, token_hash)` 由专用 `axiom_lookup` 持有，固定 search_path、撤销 PUBLIC 的执行权，只交出租户与令牌 ID，不判最终可用性。所有表强制 RLS，只有这两张新表授予受过期策略约束的 DELETE。
+
+后台与完成重置都按「请求行 → 用户行 → 令牌」加锁；重发只锁请求行，其他因素变化只锁用户行，避免锁顺序反转。后台先锁最新请求，检查未过期且尚未处理，查询本站当前启用的 HTTPS 控制台域名，优先本次请求登记的域名，停用后才回退，再锁用户，按当前因素版本签发令牌；令牌、outbox、请求邮箱清除同事务。未知或停用用户只清除请求邮箱。事务提交后任务重试看到邮箱为空，直接结束。重置先在无范围事务里按秘密定位，再在站点范围内重锁请求与用户；条件消费要同时匹配令牌哈希、用户、因素版本、未用及库的实际时钟未到期，影响行数必须为 1。使用 `clock_timestamp()` 而不是事务开始时间，避免锁等待跨过期限后仍可消费。
+
+`RequestPasswordReset` 接收邮箱、语言、客户端 IP；`ResetPassword` 接收本站 host、令牌与新密码；`ChangePassword` 接收 Principal 和当前/新密码。新密码均复用 `passwordAllowed`、`hashPassword` 和并发哈希槽；慢哈希在锁外。改密码需要非 pending 控制台会话，TOTP 开启时须已验证 MFA；当前密码错误计用户失败桶。两种密码写入都调用已有 `SetPassword` 提升因素版本，写同一种 `user.password_set` 审计，并经 outbox 发送 `passwordMail` 通知，任一步失败整体回滚。重置不签发会话；改密码签发原等级的新会话，新 CSRF 和 MFA 用户补发的恢复码在响应中均为可选字段；`insertRecoveryCodes` 与因素变更共用。TOTP 保持，旧会话、恢复码和重置令牌因版本变化失效；邮件重置通知提醒登录后重新生成恢复码。历史无效邮箱返回 `ErrBadEmail`（422）并回滚，注册和找回使用相同的可解析邮箱边界校验。
+
+找回邮箱计数独立使用 `reset_email` 键及本地 `guards.resets`（复用可配置的 `email_sign_in_failures`，默认 15 分钟 10 次），不返还；IP 共用登录计数。共享键仍只含 HMAC、故障按节点分摊，算法复用 `takeAttempt`。测试见 `password_reset_test.go`、`password_change_test.go` 和控制台的 `console_password_test.go`：真实数据库、受控过期、显式后台推进，不用耗时阈值判断安全。
+
+### 登录前的资源
+
 | 登录前的资源 | 默认上限（配了 Valkey 时各节点共享计数，不可用时退回进程内、按核心节点数等分；没配时进程内计数，只用于单核心） | 站点设置 |
 |---|---|---|
 | 客户端 IP | 只认 `RemoteAddr`；`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，取最右一个不受信的地址；默认不信任任何代理 | — |
-| 每 IP 的登录、注册、两步验证 | 令牌桶，突发 20 次、每分钟 10 次，按（站点, IP）计 | `ip_attempt_burst`、`ip_attempts_per_minute` |
-| 每邮箱的登录失败 | 每 15 分钟 10 次，按（站点, 规范化邮箱）计，不存在的邮箱也计；超出后等待，不锁账户 | `email_sign_in_failures` |
+| 每 IP 的登录、注册、两步验证、找回密码 | 令牌桶，突发 20 次、每分钟 10 次，按（站点, IP）计 | `ip_attempt_burst`、`ip_attempts_per_minute` |
+| 每邮箱的登录失败、找回请求（各自计数） | 每 15 分钟 10 次，按（站点, 规范化邮箱）计，不存在的邮箱也计；超出后等待，不锁账户 | `email_sign_in_failures` |
 | 每用户的 TOTP、恢复码失败 | 每小时 10 次，跨待验证会话累计，重建恢复码的错码也计 | `user_code_failures` |
 | 每个待验证会话 | 5 次，计在 `sessions.mfa_attempts` | `challenge_code_attempts` |
 | argon2id 并发 | `GOMAXPROCS` 个，排队超过 2 秒返回 `ErrBusy`（503）；请求在排队时结束就带它自己的错误返回 | 按节点：`Config.HashConcurrency`、`HashWait` |
@@ -175,11 +193,11 @@
 - 三种计数都是令牌桶：每段时间 N 次，即每过「段时间 ÷ N」回一次。桶只存"再次装满的时刻"（GCRA），装满的桶等于没有，到时过期。次数用完返回 `ErrTooManyAttempts`（429），等待即恢复。
 - **多节点**（M2）：配了 Valkey 时，桶在 Valkey 里，由 `take`、`give` 两个脚本按同样的算法原子地扣和退，键里的邮箱和 IP 只以 HMAC 出现（从主密钥派生的专用密钥；IP 先 `Unmap()`，IPv6 取 /64，进程内的桶同样按此计）；建任何登录键之前先过进程内的粗 IP 桶；`give` 只退到 `take` 扣的那一边；Valkey 不可用时退回进程内的桶，突发除以节点数 N（至少 1）、间隔乘 N，不拒绝登录。脚本、键、兜底和恢复见 [platform/kv 的设计](../platform/kv/README.md)。
 - 失败次数**先扣后退**：尝试之前就扣一次，成功才退回，所以同时到达的尝试也超不过上限；扣不到的尝试不再计算哈希、不碰数据库。IP 的次数不退。
-- 每次 argon2id 计算（登录、未知邮箱的假哈希、注册、开启 TOTP 时核对密码）都要先拿到并发名额，用 `golang.org/x/sync/semaphore`。
+- 每次 argon2id 计算（登录、未知邮箱的假哈希、注册、改密码、邮件重置、开启 TOTP 时核对密码）都要先拿到并发名额，用 `golang.org/x/sync/semaphore`。
 
 ## 命令行
 
-`Operator` 以 `cmd/axiom` 交入的平台范围执行，是做出第一个站点和用户、授予平台角色、在 M1 改密码和重置两步验证的唯一途径；每个命令在同一事务里记审计，操作者是 `system:accounts.cli`，输出一行 JSON。
+`Operator` 以 `cmd/axiom` 交入的平台范围执行，是做出第一个站点和用户、授予平台角色、在 M1 改密码和重置两步验证的途径；每个命令在同一事务里记审计，操作者是 `system:accounts.cli`，输出一行 JSON。
 
 | 命令 | 做什么 |
 |---|---|

@@ -14,6 +14,8 @@
 | `AXIOM_SMTP_PASSWORD` | — | 密码或服务商的应用专用密码；以 `secret.Secret` 保存，任何格式都不打印 |
 | `AXIOM_SMTP_FROM` | — | 发件人，一个地址，可带显示名：`Axiom <no-reply@example.com>` |
 
+`Mailer.Configured` 让账户流程在查用户之前统一判断此节点能否入队。
+
 没有设置任何一项时邮件关闭：启动日志写 `email disabled`，`Enqueue` 返回 `ErrNotConfigured`，节点的其他功能照常。设置了任意一项就要求整套配置，缺项或取值不合法时启动失败，并一次报出全部问题；错误只写变量名和期望的格式，不写取值。发件人同时出现在信封和 `From` 头里，所以两者都要在启动时写得出来：信封放不下的地址，以及带显示名时整行折不进 998 字符的 `From` 头，都在这里失败（只有 ASCII 能进信封路径，见「传输」）。发信域名的 SPF、DKIM、DMARC 仍待配置（[accounts 的「待定问题」](../../../docs/domains/accounts.md#待定问题)）。
 
 ## 传输
