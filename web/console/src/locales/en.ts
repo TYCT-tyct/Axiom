@@ -2,6 +2,15 @@ import type { Messages } from "@axiom/ui";
 import type zh from "./zh";
 
 export default {
+  announcements: {
+    title: "Site announcements",
+    loading: "Loading announcements…",
+    unavailable: "Announcements are currently unavailable.",
+    error: "Could not load announcements. Try again.",
+    retry: "Try again",
+    empty: "No active announcements.",
+  },
+
   nav: {
     overview: "Overview",
     keys: "API keys",

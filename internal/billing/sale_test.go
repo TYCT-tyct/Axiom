@@ -48,7 +48,7 @@ func TestSell(t *testing.T) {
 		{"no finite decimal rounds up once", multiplied("0.3333333333333333333"), `"input":"0.000000033333334"`, nil},
 		{"a fixed price is the rule's own", fixed(), `"input":"0.000002"`, nil},
 		{"cost plus has no price in M1", plus("0.25"), "", ErrUnpriced},
-		{"an exchange rate has none either", Method{Kind: "reference_multiplier", Multiplier: new("2"), CurrencyConversion: "exchange"}, "", ErrUnpriced},
+		{"same currency needs no exchange rate", Method{Kind: "reference_multiplier", Multiplier: new("2"), CurrencyConversion: "exchange"}, `"input":"0.0000002"`, nil},
 		{"a multiplier read at face without a multiplier", Method{Kind: "reference_multiplier", CurrencyConversion: "face"}, "", ErrUnpriced},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

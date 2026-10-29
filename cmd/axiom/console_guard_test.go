@@ -26,6 +26,9 @@ const (
 
 // sessionOperations are every operation that needs a session, which a request without one must be refused.
 var sessionOperations = []endpoint{
+	{http.MethodGet, "/notification-preferences", ""},
+	{http.MethodPut, "/notification-preferences", `{"low_balance":true,"top_up":true,"factor_changed":true,"threshold":"0","webhook_url":"","language":"en"}`},
+	{http.MethodGet, "/announcements", ""},
 	{http.MethodPost, "/auth/mfa", `{"code":"123456"}`},
 	{http.MethodPost, "/auth/sign-out", ""},
 	{http.MethodGet, "/session", ""},

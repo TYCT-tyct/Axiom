@@ -42,6 +42,14 @@
 
 `Inspect` 在工具声明边界拒绝没有完整报价的服务端工具：Messages 的 `web_fetch_*`、非空顶层 `mcp_servers`、`mcp_toolset`、`tool_search_tool_*`、`advisor_*`，Responses 的 `mcp`、`file_search`、`image_generation`、`programmatic_tool_calling`，以及未显式声明客户端执行的 `shell` / `tool_search`；三种格式的 `openrouter:*` 工具声明也拒绝，因为该工具命名空间与循环未实现。写了 `max_uses` 或 `max_tool_calls` 也不能使它们受支持；返回 `ErrInvalid`，网关回 400 并点名工具。`mcp_servers: []` / null 不启用工具；客户端函数的 `name` 恰好相同不受影响。此前同格式改写将这些声明原样携带到上游；转发审计留在 PR 记录中。Responses 的 `shell` 只有 `environment.type:"local"` 按客户端工具处理，`tool_search` 只有 `execution:"client"` 按客户端工具处理；缺省或不认识的执行模式保守拒绝。成员顺序不影响判定，两类客户端声明不能互相替代（`TestInspectKeepsClientToolExecution`）。`Prepare` 保持字节改写职责，准入策略由 `Inspect` 执行。支持项仍为 web search、code execution，次数缺省交给目录的 `max_uses`，没有默认由 billing 返回 `ErrUnbounded`。逐项依据、范围与日期见[计费决策](../../docs/domains/billing.md#决策与理由)。
 
+### 本地插件
+
+`Inspect` 按 id 和选项校验 `plugins`、`transforms`，返回 `Request.Compression`、`ResponseHealing` 和 Chat `MessageCount`。`ExtensionError` 仍属于 `ErrInvalid`，gateway 对这种参数错误使用 OpenRouter 数字 400 外壳。接受的四个 id 与执行/拒绝/忽略规则只在[接入域的插件表](../../docs/domains/gateway.md#插件与提示词变换)维护；不支持的选项拒绝而非丢失。
+
+`CompressContext` 由 gateway 在主模型解析后、路由和预留之前调用，先按 `CompressionCost` 计入节点预算，再替换正文并重新 `Inspect`。不变量：路由、账单的输入暂估、签名保留和发送正文都来自同一份压缩后的请求；重试不重复压缩。纯文本截断按 UTF-8 边界进行；删除按用户对话轮次成组，不拆工具调用/结果；系统消息和多模态部件保留；显式开启时固定部分过大则拒绝，默认策略由 gateway 保留原请求继续正常路由。默认触发不把输出上限当作输入已占用的空间。8192 的默认阈值和保留两端的基线见领域文档。
+
+`usageContext` 仅为非流式 Chat 结构化输出启用修复，随 `UsageContext.ResponseHealing` 交给聚合器；计量仍读原上游流。`chatAggregate` 接收正文时预留修复缓冲（按 20 倍容量计入节点预算，覆盖解码、修复、重新转义、严格校验和最终正文的工作集），在结算封账之前就拦住预算不足；`Finish` 不再申请预算。仅 `stop` 完成、无拒绝/工具调用/失败的选项可修复，JSON 已合法则原字节保留；修复结果必须通过 `jsonx.Validate`，失败保留原文，不把截断或未知内容伪装成完整结果。支持闭合括号、逗号、未引号键和包裹文本提取，不校验 JSON Schema 语义。
+
 ## 同格式改写
 
 `Prepare(r, body, t, w)` 把 `Inspect` 接受过的请求体改写给同格式的端点，返回新分配的请求体。它复用 `Inspect` 的顶层位置表，跳过不改写的大块内容，只解析要改的值（如 Messages 的 `metadata`、Responses 的 `include`），按位置分段拷贝原文，所以下表之外的字节（空白、键序、转义写法、思考块的签名、`redacted_thinking`、`encrypted_content`、压缩项）原样到达上游。Chat 的改写见下表之后的「Chat 的改写」：模型方言的成员（推理参数、`cache_control`、回传的 `reasoning_content`）不改写，由端点按它自己的方言处理（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。`Target.Compact` 时不是生成请求，而是压缩请求：只用下表里 `model`、路由参数和标识那三行，什么都不补（见下），目前只有 Responses 有。字段取自 Anthropic《Messages API reference》、OpenAI《Create a model response》《Compaction》（2026-10-14 读取）。
@@ -51,7 +59,7 @@
 | 成员 | Messages | Responses | 理由 |
 |---|---|---|---|
 | `model` | 换成 `Target.Model`，端点的名字 | 同左 | |
-| `provider`、`models`、`route`、`transforms`、`plugins`、`usage`、`session_id`、`axiom` | 删除 | 同左 | OpenRouter 的路由参数和本站扩展，gateway 已经用过；官方接口拒绝不认识的成员 |
+| `provider`、`models`、`route`、`transforms`、`plugins`、`usage`、`session_id`、`axiom` | 删除 | 同左 | 路由参数和本站扩展；`plugins` / `transforms` 先由 `Inspect` 校验，再由 gateway 执行本地插件或返回 400，不能先丢弃 |
 | `stream` | `Target.Streams` 时写成 `true`，没有就加上；否则原样 | 同左 | gateway 总是以流读上游，非流式客户端由它聚合（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；路由对生成请求只保留能流式的端点，`Streams` 为假时保持客户端的写法是协议层的约定（压缩请求用不到它，见下） |
 | 会话和终端用户的标识 | `metadata.user_id` | `prompt_cache_key`、`user`、`safety_identifier` | 换成 `Rewrites.Identity` 给出的派生值（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；`metadata.user_id` 例外，它把派生的会话和设备写进一个结构，是那个结构的 JSON 字符串，`{"device_id":"…","account_uuid":"","session_id":"…"}`，中转站从中取出会话固定账号，设备和空账户见接入的那一条；空串和纯空白写为空串，不派生公共会话（Chat 转换共用此规则）；`null` 不动 |
 | `previous_response_id` | — | 删除；`Rewrites.History` 的条目按原样、从旧到新放到 `input` 最前：`input` 是数组就插在开头，是字符串就先换成一条 user 消息，没有或 `null` 就以历史为 `input` | 上游不保存状态，由本站拼回历史（[接入的「Responses 的会话状态」](../../docs/domains/gateway.md#responses-的会话状态)）；`instructions` 不随 `previous_response_id` 延续（同一文档的 `instructions`），所以只拼 `input` |

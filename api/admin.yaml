@@ -31,6 +31,74 @@ tags:
   - {name: Alerts, description: "Platform operations alert rules, channels, incidents and receipts."}
   - {name: Payments, description: "Payment discrepancies and investigation notes."}
 paths:
+  /api/admin/v1/announcements:
+    post:
+      operationId: publishAnnouncement
+      tags: [Sites]
+      summary: Publish a plain text site announcement
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AnnouncementRequest"}
+      responses:
+        "201":
+          description: The published site announcement.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Announcement"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/announcements/{announcement_id}/withdraw:
+    post:
+      operationId: withdrawAnnouncement
+      tags: [Sites]
+      summary: Withdraw a site announcement permanently
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: announcement_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AnnouncementId"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "201":
+          description: The withdrawn announcement ID.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AnnouncementResult"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/payments/discrepancies:
     get:
       operationId: listPaymentDiscrepancies
@@ -1884,7 +1952,7 @@ paths:
     get:
       operationId: listExchangeRates
       tags: [Pricing]
-      summary: List current manual exchange rates
+      summary: List current exchange rates (manual and automatic)
       security:
         - session: []
       x-axiom-level: mfa
@@ -1996,11 +2064,12 @@ paths:
       summary: Add a pricing rule
       description: >-
         A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints).
-        Account, tier and all audiences have independent published prices. It prices a model, an author or everything, by the reference
-        price times a multiplier read as the site's currency (`currency_conversion` `face`) or by a fixed price list:
-        a rule for an endpoint, group, supplier or source type, an `exchange` conversion would
-        not be applied, so it is refused too (422, pointing at `/rule/target/kind`, `/rule/method/kind` or
-        `/rule/method/currency_conversion`). Two rules with the same target and audience cannot both
+        Account, tier and all audiences have independent published prices. It prices a model, an author or everything.
+        Reference multipliers explicitly name `face` for a reference already in the site's currency or `exchange` for
+        exact conversion at the frozen reference rate; the multiplier and exchange fraction are combined before rounding.
+        Fixed schedules and cost-plus pricing use the site's currency. Endpoint, group, supplier and source-type targets
+        are refused (422, pointing at `/rule/target/kind`); an omitted conversion points at
+        `/rule/method/currency_conversion`. Two rules with the same target and audience cannot both
         exist (409): change the one there is. Prices are published as immutable versions after cost and change-threshold checks; large moves wait for confirmation. The site floor applies unless an explicit audited exception is published.
         What a rule would do is shown by `previewPricing` first.
       security:
@@ -2299,6 +2368,33 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
+    Announcement:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {$ref: "#/components/schemas/AnnouncementId"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        title: {type: string, maxLength: 200}
+        body: {type: string, maxLength: 20000}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+    AnnouncementRequest:
+      type: object
+      additionalProperties: false
+      required: [site_id, title, body, starts_at, ends_at, reason]
+      properties:
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        title: {type: string, minLength: 1, maxLength: 200}
+        body: {type: string, minLength: 1, maxLength: 20000}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        reason: {type: string, minLength: 1, maxLength: 1000}
+    AnnouncementResult:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {$ref: "#/components/schemas/AnnouncementId"}
     OrderId: {type: string, pattern: '^ord_[0-9a-hjkmnp-tv-z]{26}$', description: "A top-up order's ID (TypeID), also the order number the payment channel sees."}
     MerchantId: {type: string, pattern: '^mch_[0-9a-hjkmnp-tv-z]{26}$', description: "A merchant account's ID (TypeID)."}
     PaymentDiscrepancy:
@@ -3454,11 +3550,11 @@ components:
       description: >-
         How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio`
         instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios.
-        `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with
-        `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the
-        reference price is already in that currency: exchange-based reference selection is not implemented, so a reference price in another
-        currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be
-        absent.
+        `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in
+        the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency
+        in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding.
+        A missing exchange rate stops publication for the matched model, without falling through to another rule
+        (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. The members of the other kinds must be absent.
       properties:
         kind: {type: string, enum: [cost_plus, reference_multiplier, fixed]}
         markup_ratio: {$ref: "#/components/schemas/Decimal"}

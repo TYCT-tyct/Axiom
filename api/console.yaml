@@ -23,6 +23,77 @@ tags:
   - {name: Calls, description: "The account's call log."}
   - {name: Top-ups, description: "Buying credits through the site's payment channels."}
 paths:
+  /api/console/v1/notification-preferences:
+    get:
+      operationId: getNotificationPreferences
+      tags: [Session]
+      summary: Read your notification preferences
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The requested notification data.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NotificationPreferences"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setNotificationPreferences
+      tags: [Session]
+      summary: Replace your notification preferences
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NotificationPreferencesRequest"}
+      responses:
+        "200":
+          description: The requested notification data.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NotificationPreferences"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/announcements:
+    get:
+      operationId: listAnnouncements
+      tags: [Session]
+      summary: Read active announcements for this site
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: Active announcements for the current site.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AnnouncementList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/version:
     get:
       operationId: getVersion
@@ -1119,6 +1190,47 @@ components:
           type: string
           pattern: '^[0-9]+$'
         price: {$ref: "#/components/schemas/CallAggregateMoney"}
+    SiteId: {type: string, pattern: '^site_[0-9a-hjkmnp-tv-z]{26}$', description: "A site's ID (TypeID)."}
+    AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
+    Announcement:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {$ref: "#/components/schemas/AnnouncementId"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        title: {type: string, maxLength: 200}
+        body: {type: string, maxLength: 20000}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+    NotificationPreferences:
+      type: object
+      additionalProperties: false
+      properties:
+        low_balance: {type: boolean}
+        top_up: {type: boolean}
+        factor_changed: {type: boolean, description: "Controls background factor-change email and webhooks. Password-change security email is always sent."}
+        threshold: {type: string, pattern: '^[0-9]+$', maxLength: 19, description: "Billionths of site credits."}
+        webhook_url: {type: string, maxLength: 2048}
+        language: {type: string, enum: [en, zh]}
+    NotificationPreferencesRequest:
+      type: object
+      additionalProperties: false
+      required: [low_balance, top_up, factor_changed, threshold, webhook_url, language]
+      properties:
+        low_balance: {type: boolean}
+        top_up: {type: boolean}
+        factor_changed: {type: boolean, description: "Controls background factor-change email and webhooks. Password-change security email is always sent."}
+        threshold: {type: string, pattern: '^[0-9]+$', maxLength: 19, description: "Billionths of site credits."}
+        webhook_url: {type: string, maxLength: 2048}
+        language: {type: string, enum: [en, zh]}
+    AnnouncementList:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          maxItems: 100
+          items: {$ref: "#/components/schemas/Announcement"}
     Error:
       type: object
       required: [error]

@@ -20,6 +20,10 @@ func TestIDsReadOnlyTheirOwnKind(t *testing.T) {
 		prefix, written string
 		parse           func(string) (uuid.UUID, error)
 	}{
+		{"ann_", accounts.AnnouncementID(id).TypeID(), func(s string) (uuid.UUID, error) {
+			v, err := accounts.ParseAnnouncementID(s)
+			return uuid.UUID(v), err
+		}},
 		{"site_", accounts.SiteID(id).TypeID(), func(s string) (uuid.UUID, error) {
 			v, err := accounts.ParseSiteID(s)
 			return uuid.UUID(v), err

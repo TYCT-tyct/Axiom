@@ -113,7 +113,7 @@ func SetPricePolicy(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.
 
 // RefreshPrices reconciles input state, not events. It serializes publishers on the policy row and publishes only
 // safe prices. Costs must be from the same immutable endpoint/rate reading the caller will put into routing.
-func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs []PriceCost) (map[catalog.ModelID]Sold, error) {
+func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs []PriceCost, rates ...platform.ExchangeRate) (map[catalog.ModelID]Sold, error) {
 	policy, err := LockPricePolicy(ctx, tx, site)
 	if err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platf
 	}
 	// Reconcile previous selectors too: an edit may have moved the rule to a different audience.
 	for audience, rules := range grouped {
-		if err := refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, audience, rules, previous[audience]); err != nil {
+		if err := refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, audience, rules, previous[audience], rates); err != nil {
 			return nil, err
 		}
 	}
@@ -170,13 +170,13 @@ func publicationInputs(rules []Rule, rows []ReadPublicationsRow) (map[Selector][
 	return grouped, previous
 }
 
-func refreshAudience(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs map[catalog.ModelID][]PriceCost, defaults fallbacks, policy PricePolicy, audience Selector, rules []Rule, previous map[catalog.ModelID]ReadPublicationsRow) error {
+func refreshAudience(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs map[catalog.ModelID][]PriceCost, defaults fallbacks, policy PricePolicy, audience Selector, rules []Rule, previous map[catalog.ModelID]ReadPublicationsRow, rates []platform.ExchangeRate) error {
 	for m := range snap.Models() {
 		old := previous[m.ID]
 		if audience.Kind != "all" && old.CandidateID == uuid.Nil() && !slices.ContainsFunc(rules, func(r Rule) bool { return r.Enabled && pricesModel(r.Target, m) }) {
 			continue
 		}
-		p, err := proposeAudiencePrice(audience, policy, rules, m, snap, currency, costs[m.ID], defaults)
+		p, err := proposeAudiencePrice(audience, policy, rules, m, snap, currency, costs[m.ID], defaults, rates...)
 		if err != nil {
 			return err
 		}
