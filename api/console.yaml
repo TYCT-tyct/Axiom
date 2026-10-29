@@ -1597,6 +1597,8 @@ components:
         have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. The app-attribution
         members are absent when the client named no application, or when the call was recorded before they existed.
       properties:
+        charge_details:
+          $ref: "#/components/schemas/ChargeDetails"
         price_version:
           type: string
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -1642,6 +1644,35 @@ components:
         first_token_ms: {type: integer, minimum: 0}
         finish_reason: {type: string}
         error_kind: {type: string, description: "What failed, empty when the call succeeded."}
+    ChargeItem:
+      type: object
+      description: One billed item of a sampling at its frozen sale price; no supplier or cost information.
+      properties:
+        item: {type: string, description: "Billing item, or unknown_tokens / unknown_uses for unmapped usage."}
+        quantity: {type: integer, format: int64, minimum: 0}
+        unit: {type: string, enum: [token, use]}
+        unit_price: {type: string, description: "Exact currency units per token or use, decimal text with up to 15 fractional digits."}
+        amount: {type: string, description: "Exact quantity times unit_price, before call-level rounding and balance adjustment."}
+        sampling: {type: integer, minimum: 1}
+        service_tier: {type: string}
+        context_band: {type: integer, minimum: 0, description: "Zero is the base band; subsequent bands follow the locked schedule's thresholds."}
+        price_version: {type: string, description: "Frozen published sale version; absent when not recorded."}
+        estimated: {type: boolean}
+        fallback: {type: boolean, description: "An unknown item or missing/undeclared tier used the locked fallback sale price."}
+    ChargeDetails:
+      type: object
+      description: >-
+        Optional invoice from the immutable reservation, unavailable for historical or old-writer calls.
+        All amounts are exact decimal currency units: subtotal + rounding + balance_adjustment = charged.
+        Waived model items are omitted; tools remain chargeable. An unexecuted call has an empty items array.
+      properties:
+        currency: {type: string}
+        items: {type: array, items: {$ref: "#/components/schemas/ChargeItem"}}
+        subtotal: {type: string}
+        rounding: {type: string, description: "Adjustment when the complete subtotal is rounded up once to a billionth; extreme totals saturate at the amount limit."}
+        balance_adjustment: {type: string, description: "Non-positive reduction imposed by the balance floor."}
+        charged: {type: string, description: "Actual debit in currency units, matching Call.price after converting its billionths."}
+        estimated: {type: boolean}
     CallList:
       type: object
       required: [data, next_cursor]

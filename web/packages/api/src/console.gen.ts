@@ -928,6 +928,7 @@ export interface components {
         };
         /** @description One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. The app-attribution members are absent when the client named no application, or when the call was recorded before they existed. */
         Call: {
+            charge_details?: components["schemas"]["ChargeDetails"];
             /** @description Published sale version locked at admission; absent for legacy or uncharged calls. */
             price_version?: string;
             id: components["schemas"]["CallId"];
@@ -966,6 +967,41 @@ export interface components {
             finish_reason: string;
             /** @description What failed, empty when the call succeeded. */
             error_kind: string;
+        };
+        /** @description One billed item of a sampling at its frozen sale price; no supplier or cost information. */
+        ChargeItem: {
+            /** @description Billing item, or unknown_tokens / unknown_uses for unmapped usage. */
+            item?: string;
+            /** Format: int64 */
+            quantity?: number;
+            /** @enum {string} */
+            unit?: "token" | "use";
+            /** @description Exact currency units per token or use, decimal text with up to 15 fractional digits. */
+            unit_price?: string;
+            /** @description Exact quantity times unit_price, before call-level rounding and balance adjustment. */
+            amount?: string;
+            sampling?: number;
+            service_tier?: string;
+            /** @description Zero is the base band; subsequent bands follow the locked schedule's thresholds. */
+            context_band?: number;
+            /** @description Frozen published sale version; absent when not recorded. */
+            price_version?: string;
+            estimated?: boolean;
+            /** @description An unknown item or missing/undeclared tier used the locked fallback sale price. */
+            fallback?: boolean;
+        };
+        /** @description Optional invoice from the immutable reservation, unavailable for historical or old-writer calls. All amounts are exact decimal currency units: subtotal + rounding + balance_adjustment = charged. Waived model items are omitted; tools remain chargeable. An unexecuted call has an empty items array. */
+        ChargeDetails: {
+            currency?: string;
+            items?: components["schemas"]["ChargeItem"][];
+            subtotal?: string;
+            /** @description Adjustment when the complete subtotal is rounded up once to a billionth; extreme totals saturate at the amount limit. */
+            rounding?: string;
+            /** @description Non-positive reduction imposed by the balance floor. */
+            balance_adjustment?: string;
+            /** @description Actual debit in currency units, matching Call.price after converting its billionths. */
+            charged?: string;
+            estimated?: boolean;
         };
         CallList: {
             /** @description Echoes an applied status filter. Missing on old nodes; recent errors are unavailable then. */

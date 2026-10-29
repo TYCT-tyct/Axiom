@@ -91,6 +91,13 @@ func (s Schedule) BaseRate(it Item) (platform.UnitPrice, bool) {
 	return s.price(ServiceTierStandard, 0, it)
 }
 
+// Rate returns the effective unit price and context band (0 is the base) used by Cost for this sampling.
+func (s Schedule) Rate(u Usage, it Item) (price platform.UnitPrice, band int, ok bool) {
+	band = s.band(u)
+	price, ok = s.price(u.serviceTier, band, it)
+	return price, band, ok
+}
+
 // Ceiling is the highest unit price any of the items has at any of the service tiers, over every context tier a prompt
 // whose basis adds up to at most length can fall in, and false when one of them has no price. Billing reserves
 // count × Ceiling: the band follows the basis sum, which a split between basis and non-basis items can put anywhere

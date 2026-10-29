@@ -105,6 +105,10 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **游标带余额和冻结额**（`StatementCursor`）：它记这一页最后一行的位置**和下一行的余额、冻结额起点**，下一页从那里往回走，分别减去本行余额与冻结额变动，即上一笔事件之后的状态。不带余额的话，算第 n 行之后的余额得把它上面的分录全加起来，翻页就退化成扫全账本；余额与冻结额起点来自同一只读事务快照。伪造的游标只能挪用户自己那一列余额，读到别的账户的行也会被行级安全挡住；翻页期间新结算的调用序号更大、落在这页之上，已读的页不错位、行不重复（`TestStatementPagesAcrossNewMovements`）。
 - **序号之前的记录没有变动后余额**：`seq` 为空的记录排在最后，账户内按 `(created_at, id)` 从新到旧，这只是一个不变的顺序，不是入账顺序（迁移 00007：时钟会回拨，同一结算的两笔会落在同一微秒）。沿它倒推的余额可能是账户从未有过的数（先赠送 100、后扣 20 但时间戳早一小时，会读成赠送后 80、扣费后 −20），所以这些行的 `StatementRow.Balance` 为 nil，接口给 `null`、CSV 留空、页面显示「不可用」；金额照常给出，它们的合计仍与余额对得上。冻结额照常给出：退款冻结在序号之后才有，这些行都没动过它。有序号的行按提交顺序编号，余额照常给出（`TestStatementFromBeforeTheSequence` 覆盖时钟回拨和同一微秒）。
 
+`NewChargeReader(logger, meter)` 绑定节点的日志和指标；其 `ReadCharges(ctx, tx, ids)` 在账户范围批量读取已结算预留的冻结售价和最终用量，返回按请求编号索引的 `ChargeDetails`。它不查当前目录/售价，不返回发布依据、成本、供应商或原始未知字段名；不存在、范围外、旧写入方未记录判定的请求不在返回 map 中。控制台先读可见的一页调用，再一次读取这些编号，generation 读取一笔；明细重建仅发生在读取路径，结算不构建分项切片。新增的可空 `pricing_tiers` 与金额、用量同事务保存：NULL 为未知，−1 为 `NotExecuted`，0 表示原调用方未声明，正数为准入模型的服务档位集。终态重试保留判定，迟到结算重新写入真实判定；旧用量 JSON 无新成员，旧节点可以读取。迁移只加列、UPDATE 权限和 `NOT VALID` 检查，历史新列都是 NULL，无需扫描整张预留表；检查立即约束后续写入，旧节点写入仍为 NULL。
+
+明细逐采样采用 `catalog.Schedule.Rate`，与 `Cost` 的物理输入分档、服务档和推理/图片继承价格完全一致；未声明档位仍按原结算的最高 token 价及冻结按次兜底价。`subtotal` 是分项精确金额之和（货币单位的十进制文本，至多 15 位小数），`rounding` 是整次调用取整（极值饱和）差额，`balance_adjustment` 是余额底线减收，三者之和等于 `charged`；不逐项取整。重建后核对原结算应收；未知价目表条件、未来用量成员或小计不符时只省略这一笔明细，仍返回基础调用记录和其他正常明细。每次重建失败按原请求编号记录 error，并增加 `axiom_billing_charge_details_unavailable_total`（无请求编号标签，避免高基数）；SQL 查询失败仍返回错误。免单不列模型项，工具按 use 列出；未执行明细为空。价格版本只标冻结版本，缺失时不补当前版本。`TestItemizedSalePrices`、`TestReadChargesLocksSaleAndReconcilesDebit`、`TestReadChargesExecutionAndScope` 覆盖这些行为；`TestChargeReadFailureIsIsolatedAndReported` 验证逐行降级、日志和指标，`FuzzChargeItemsMatchSettlement` 随机组合服务档、上下文档、缺价、物理输入、未知用量、免单及极值，比较精确小计和最终取整。已知缺价项共用 `missingRate`，免单用 `chargedItems` 和 `unknownCharged`，避免两条路径各自定义收费范围。
+
 ## 报价
 
 `Quote` 按[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)给每个条目报价，删掉付不起的，返回保留条目报价的最大值。不读库，`Reserve` 在锁下读出余量后调用它，所以报价规则不需要数据库就能逐条测试。

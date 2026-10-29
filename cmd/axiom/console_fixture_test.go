@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
 	"axiom/internal/payments"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/egress"
@@ -87,7 +88,7 @@ func startNode(c commandLine, clock *testClock, deadline time.Duration) consoleF
 		c.t.Fatal(err)
 	}
 	c.t.Cleanup(exit.CloseIdleConnections)
-	routes := publicRoutes(consoleAPI{exit: exit, version: "test", accounts: svc, payments: pay, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
+	routes := publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, nil), exit: exit, version: "test", accounts: svc, payments: pay, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
 	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, pay: pay, gateway: gateway}
 }
 
