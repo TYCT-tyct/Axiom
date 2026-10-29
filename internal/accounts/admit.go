@@ -19,6 +19,7 @@ type AdmitRequest struct {
 // Admission is what a call with the key may do, read from the database in the admission transaction: routing and
 // billing take their rules from it, never from a cache. Only Admit makes one.
 type Admission struct {
+	owner       UserID
 	caller      Caller
 	tier        TierID
 	preset      *uuid.UUID
@@ -28,6 +29,9 @@ type Admission struct {
 	budget      *int64
 	budgetReset *string
 }
+
+// OwnerID is the account owner, used to deduplicate independent health evidence.
+func (a Admission) OwnerID() UserID { return a.owner }
 
 // Caller is the key admitted.
 func (a Admission) Caller() Caller { return a.caller }
@@ -90,8 +94,13 @@ func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(t
 		if !row.AccountActive {
 			return ErrAccountSuspended
 		}
+		// One fixed-width binary value avoids the UUID scanner's two allocations per additional column.
+		var tier TierID
+		var owner UserID
+		copy(tier[:], row.AdmissionIds[:16])
+		copy(owner[:], row.AdmissionIds[16:])
 		return fn(tx, Admission{
-			caller: c, tier: TierID(row.TierID), preset: row.PresetID, models: row.Models,
+			owner: owner, caller: c, tier: tier, preset: row.PresetID, models: row.Models,
 			spendLimit: row.SpendLimit, limitReset: row.LimitReset, budget: row.Budget, budgetReset: row.BudgetReset,
 		})
 	})

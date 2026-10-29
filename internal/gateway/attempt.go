@@ -232,6 +232,9 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	kept := s.c.Hold.Kept[i]
 	a := &attempt{s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept)}
 	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
+	a.obs.Source = uuid.UUID(s.c.Admission.OwnerID())
+	a.obs.BreakerFallback = entry.BreakerFallback
+	a.obs.Request = s.c.ID
 	s.ends = append(s.ends, billing.AttemptResult{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown})
 	s.tries = append(s.tries, try{entry: entry, started: a.obs.Sent})
 	s.currency = entry.Price.Schedule.Currency()
@@ -256,6 +259,7 @@ func (a *attempt) close(ctx context.Context) {
 	a.release()
 	receipt := a.conn.Done()
 	a.s.x.Router.End(a.entry.Endpoint)
+	a.obs.Credential = receipt.CredentialID()
 	a.result(receipt)
 	a.observe(ctx)
 }

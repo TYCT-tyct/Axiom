@@ -209,9 +209,9 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 
 ## 调用面
 
-`Routable.Funds` 是该快照的原生单位余额与供应商共享自动暂停状态，`Routable.Schedule` 是同单位的成本计划；路由用 `billing.ReservedCost` 算完整生成上界后调用 `Funds.CanPay`。数据库的十进制余额在 Reload 时经 `platform.ParseExact` 转成定点数，精度或范围不支持的供应商按现有 unloadable 路径退出，调用路径不解析金额、不查库。
+`Routable.Platform` 从 `Site`、`Account` 均为空推导平台归属，快照不重复保存归属布尔值。`Routable.Funds` 是该快照的原生单位余额与供应商共享自动暂停状态，`Routable.Schedule` 是同单位的成本计划；路由用 `billing.ReservedCost` 算完整生成上界后调用 `Funds.CanPay`。数据库的十进制余额在 Reload 时经 `platform.ParseExact` 转成定点数，精度或范围不支持的供应商按现有 unloadable 路径退出，调用路径不解析金额、不查库。
 
-`SupplierBalanceLow` 且 `ScopeSupplier` 的 HTTP 拒绝使该供应商全部端点自动暂停；`Acquire` 也检查并返回 `ErrSupplierResting`，防止已冻结路线继续发请求；gateway 记 `SupplierBalance`，不与凭证满载混为一谈。状态独立于快照；只接受拒绝后开始的新正余额同步（观察时间取余额请求开始时刻），或者拒绝后开始并完整成功的 `TestEndpoint` 检测来恢复。检测可绕过这项自动暂停，仍遵守凭证并发、RPM、过期与人工停用；新的拒绝不会被旧检测清除。零余额、失败同步、重读旧余额和单纯等待都不能恢复。这个状态是节点内的，不改变供应商的人工状态或静态凭证份额。
+`SupplierBalanceLow` 且 `ScopeSupplier` 的 HTTP 拒绝使该供应商全部端点自动暂停；`Acquire` 也检查并返回 `ErrSupplierResting`，防止已冻结路线继续发请求；gateway 记 `SupplierBalance`，不与凭证满载混为一谈。状态独立于快照；只接受拒绝后开始的新正余额同步（观察时间取余额请求开始时刻），或者拒绝后开始并完整成功的 `TestEndpoint` 检测来恢复。显式检测可绕过这项自动暂停；quality 的自动恢复试探先检查 `Funds.CanPay`，暂停期间顺延且不占预算。检测仍遵守凭证并发、RPM、过期与人工停用；新的拒绝不会被旧检测清除。零余额、失败同步、重读旧余额和单纯等待都不能恢复。这个状态是节点内的，不改变供应商的人工状态或静态凭证份额。
 
 拒绝只设置共享内存标记。`RefreshBalances` 由节点已有的一秒后台循环在同步凭证份额之后调用，整轮数据库工作最多五秒，避免余额同步请求拖住份额心跳；按供应商合并并每分钟至多写一次余额任务提前请求；失败保留标记供重试。`persist.RequestBalance` 在同步状态锁内只提前余额任务的 Due，保留 BackoffUntil、Halted、人工停用和其他任务；提高状态版本使已经在途的旧轮次写入失效，不释放别人的租约；同一条语句只把仍绑定原状态版本的清单位置续绑到新版本，旧节点已作废的位置不被恢复。River 的既有扫描、唯一任务与管理面限速继续生效。
 
@@ -274,6 +274,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 - **估价是确定的上界**：输入按题目的 token 数上界（字节数 + 16 的框架开销，一个字节至多一个 token），输出按上限 16，两侧都取输入上界可落入的所有上下文档位和标准档里的最高价，绝不用上游报告的用量。适配器或传输层已确定 `NotExecuted` 的尝试不产生检测成本：估价为 0、用量为空、换算状态为 `not_executed`，仍写检测行和审计；未知执行状态（包括可能已执行的 5xx）仍按上界估价。成本计划缺一侧的价时返回 `ErrTestCost`（管理接口为 422），在付钱之前拒绝这次检测。测试 `TestATestSendsACappedStreamAndBooksWhatItFound`：18 个 token 与 16 个 token 的封顶合成 6.15。
 - **对账**：成本事务已提交的检测扣费照常认到这一行（也照常给 billing 发带 `test: true` 的事件），但从不用估价判它：`reconcile.judge` 见 `test` 即返回未判，`ListUnmatchedAttempts` 也排除它，所以一次检测既不会把端点摘牌，也不会被当成"等不到扣费的尝试"告警（H-I9）。
 - **审计**：`endpoint.test`，目标是供应商，明细里有端点、格式、结局、原因与范围、上游状态与它的请求 ID、估价和原生单位；不带凭证和 key。
+- **自动恢复试探**：`TestRequest.AvoidCredential` 在存在另一把可用 key 时避开上一把，单 key 时照常调用；`TestResult.CredentialID` 与 `AttemptReceipt.CredentialID` 只交出 ID，用来去重失败来源与轮换，不交出密钥。`Routable` 同时给出归属与当前未过期、未冷却的凭证数，quality 据此限制独立证据与平台付费试探。
 - **没有做的**：`max_completion_tokens` 那条分支（设计稿 [quality](../../docs/domains/quality.md) 说不需要 o 系和 gpt-5 的细节）；一次检测里不换凭证（quality 的试探会刻意换一把，见[试探](../../docs/domains/quality.md#试探)）。
 
 ## 并发与速率

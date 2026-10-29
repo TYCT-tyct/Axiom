@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"uuid"
 )
 
 // State is the shared state of M1, kept in the process: how many requests each endpoint has in flight, which ones were
@@ -103,7 +104,22 @@ func (r *Router) Block(e Entry, scope Scope, after time.Duration) {
 // Blocked rechecks an already reserved entry: another request may have paused it since Plan ran.
 func (r *Router) Blocked(e Entry) bool {
 	now := r.cfg.Now()
-	return r.state.of(e.Endpoint).blocked.active(now) || r.state.supplier(e.Supplier).active(now)
+	if r.state.of(e.Endpoint).blocked.active(now) || r.state.supplier(e.Supplier).active(now) {
+		return true
+	}
+	if e.BreakerFallback {
+		return false
+	}
+	snap := r.snap.Load()
+	if snap != nil {
+		for _, c := range snap.byModel[e.Model] {
+			if c.ID == e.Endpoint && c.LiveHealth != nil {
+				open, _ := c.LiveHealth.Routing(now)
+				return !open.IsZero()
+			}
+		}
+	}
+	return false
 }
 
 // damping is the factor the endpoint's weight is multiplied by: the floor right after a 429, back to 1 after the
@@ -121,4 +137,13 @@ func (e *epState) damping(now time.Time, recovery time.Duration, floor float64) 
 		since = 0
 	}
 	return floor + (1-floor)*float64(since)/float64(recovery)
+}
+
+// PausedUntil exposes pauses without giving quality a dependency on routing.
+func (r *Router) PausedUntil(endpoint, supplier uuid.UUID) time.Time {
+	until := max(r.state.of(EndpointID(endpoint)).blocked.until.Load(), r.state.supplier(SupplierID(supplier)).until.Load())
+	if until == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, until)
 }

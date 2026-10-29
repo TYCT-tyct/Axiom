@@ -63,6 +63,9 @@ type AttemptReceipt struct {
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
 }
 
+// CredentialID identifies the selected key for independent health evidence.
+func (r AttemptReceipt) CredentialID() uuid.UUID { return r.credential }
+
 // WithExchange attaches the reservation's basis, never the supplier snapshot's current rate.
 func (r AttemptReceipt) WithExchange(rate platform.ExchangeRate) AttemptReceipt {
 	r.exchange = rate
@@ -105,9 +108,9 @@ type Attempt struct {
 // minute admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint,
 // ErrSupplierResting or ErrNoSlot when there is none, and gateway moves on to its next entry: that is not an attempt.
 // The slot is held until Done.
-func (s *Service) Acquire(id EndpointID) (*Attempt, error) { return s.acquire(id, false) }
+func (s *Service) Acquire(id EndpointID) (*Attempt, error) { return s.acquire(id, false, uuid.UUID{}) }
 
-func (s *Service) acquire(id EndpointID, probe bool) (*Attempt, error) {
+func (s *Service) acquire(id EndpointID, probe bool, avoid uuid.UUID) (*Attempt, error) {
 	for range 8 { // another caller may take the slot or the window's last request between looking and swapping
 		snap := s.snap.Load()
 		ep, ok := snap.endpoints[id]
@@ -124,7 +127,7 @@ func (s *Service) acquire(id EndpointID, probe bool) (*Attempt, error) {
 			ep.funds.state.mu.Unlock()
 		}
 		now := s.now() // the credential may have rested or expired since the last look
-		best, n := leastBusy(ep, now)
+		best, n := leastBusy(ep, now, avoid)
 		if best == nil {
 			return nil, ErrNoSlot
 		}
@@ -143,7 +146,7 @@ func (s *Service) acquire(id EndpointID, probe bool) (*Attempt, error) {
 
 // leastBusy is the credential with the lowest share of its limit in use among those that may be picked now, with the
 // count of attempts it was found with.
-func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
+func leastBusy(ep *endpoint, now time.Time, avoid uuid.UUID) (best *credential, bestN int32) {
 	if len(ep.creds) == 0 {
 		return nil, 0
 	}
@@ -157,7 +160,11 @@ func leastBusy(ep *endpoint, now time.Time) (best *credential, bestN int32) {
 		if n >= c.max {
 			continue
 		}
-		if load := float64(n) / float64(c.max); best == nil || load < bestLoad {
+		load := float64(n) / float64(c.max)
+		if c.id == avoid {
+			load += 2
+		} // Every admissible load is below one; an alternative always wins over the previous key.
+		if best == nil || load < bestLoad {
 			best, bestN, bestLoad = c, n, load
 		}
 	}
