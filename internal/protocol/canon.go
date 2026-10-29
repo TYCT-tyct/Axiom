@@ -16,6 +16,7 @@ import (
 // are refused, not dropped: Unknown holds those Chat defines that no member names here, and every other format's
 // own members, so the conversion can tell.
 type canon struct {
+	legacy              bool
 	Messages            []canonMessage            `json:"messages"`
 	Tools               []canonTool               `json:"tools"`
 	Functions           []canonFunction           `json:"functions"` // legacy: upgradeLegacy makes them tools
@@ -53,6 +54,7 @@ type canon struct {
 
 // canonMessage is one message. Content is a string or an array of parts, as Chat has it; parts reads both.
 type canonMessage struct {
+	legacyResult     bool
 	Role             string                    `json:"role"`
 	Content          jsontext.Value            `json:"content"`
 	ToolCalls        []canonToolCall           `json:"tool_calls"`
@@ -199,7 +201,11 @@ func mergeDetails(details []canonReasoningDetail) ([]canonReasoningDetail, error
 	var text, summary []joined
 	at := map[string]int{} // by type and index
 	for _, d := range details {
-		key := d.Type + "\x00" + string(d.Index)
+		index, err := reasoningIndex(d.Index)
+		if err != nil {
+			return nil, err
+		}
+		key := d.Type + "\x00" + string(index)
 		i, seen := at[key]
 		if !seen || isNull(d.Index) {
 			at[key], i = len(out), len(out)
@@ -397,3 +403,20 @@ func numberIs(v jsontext.Value, want float64) bool {
 	f, err := strconv.ParseFloat(string(v), 64)
 	return err == nil && f == want
 }
+
+// reasoningIndex gives equivalent integer spellings the same grouping key.
+func reasoningIndex(v jsontext.Value) (jsontext.Value, error) {
+	if isNull(v) {
+		return nil, nil
+	}
+	n, err := strconv.ParseInt(string(v), 10, 64)
+	if err != nil || n < 0 {
+		return nil, shapeError("a reasoning detail index that is not a non-negative integer")
+	}
+	if n == 0 {
+		return zeroReasoningIndex, nil
+	}
+	return v, nil
+}
+
+var zeroReasoningIndex = jsontext.Value("0")

@@ -62,7 +62,7 @@ func TestPrepareCostBoundsModalities(t *testing.T) {
 	}
 }
 
-func TestPrepareChatKeepsLegacyBytes(t *testing.T) {
+func TestPrepareChatUpgradesLegacyBytes(t *testing.T) {
 	const members = `"messages":[{"role":"user","content":"\u0048i"}],"functions":[{"name":"\u0066"}],"function_call":"\u0061uto"`
 	body := []byte(chatBody(members))
 	r := inspected(t, protocol.Chat, body)
@@ -70,7 +70,9 @@ func TestPrepareChatKeepsLegacyBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(u.Body, []byte(members)) {
+	if !bytes.Contains(u.Body, []byte(`"content":"\u0048i"`)) ||
+		!bytes.Contains(u.Body, []byte(`"tools":[{"type":"function","function":{"name":"\u0066"}}]`)) ||
+		!bytes.Contains(u.Body, []byte(`"tool_choice":"\u0061uto"`)) || bytes.Contains(u.Body, []byte(`"functions":`)) {
 		t.Fatalf("same-format legacy fields changed: %s", u.Body)
 	}
 }
