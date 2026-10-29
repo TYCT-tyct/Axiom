@@ -48,6 +48,9 @@ func RegisterSync(cfg SyncConfig) error {
 	if cfg.SweepEvery == 0 {
 		cfg.SweepEvery = 15 * time.Second
 	}
+	if err := RegisterSyncAlerts(cfg); err != nil {
+		return err
+	}
 	host, err := os.Hostname()
 	if err != nil {
 		host = "unknown"

@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
+	"uuid"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/pg"
 )
 
@@ -91,7 +94,18 @@ type reconciler struct {
 // work runs the reconciliation and reports what it refuses at error, and counts it. A ledger that does not reconcile is
 // not a failed job: the job did its work, and retrying it would only find the same.
 func (r *reconciler) work(ctx context.Context, _ *river.Job[reconcileArgs]) error {
-	problems, err := Reconcile(ctx, r.db, r.scope)
+	var problems []string
+	err := r.db.Tx(ctx, r.scope, func(tx pg.Tx) error {
+		var err error
+		problems, err = queries.Unbalanced(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if err = repairSettlementAlerts(ctx, tx); err != nil {
+			return err
+		}
+		return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "billing.reconciliation_difference", Key: "ledger", Severity: "critical", Fields: map[string]string{"value": strconv.Itoa(len(problems))}, Resolved: len(problems) == 0})
+	})
 	if err != nil {
 		return err
 	}

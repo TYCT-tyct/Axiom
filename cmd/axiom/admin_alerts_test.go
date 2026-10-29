@@ -2,10 +2,13 @@ package main
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"uuid"
 
+	"axiom/internal/observability"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/pg"
 )
 
 func TestAdminAlertConfigurationTestAndResolve(t *testing.T) {
@@ -47,4 +50,43 @@ func TestAdminAlertConfigurationTestAndResolve(t *testing.T) {
 		t.Fatal("resolution did not replay")
 	}
 	expectAdmin(t, "missing incident", f.change(s, http.MethodPost, "/alerts/events/"+uuid.NewV7().String()+"/resolve", `{"reason":"investigated"}`, newKey()), http.StatusNotFound, codeNotFound)
+}
+
+func TestAdminWebhookSecretIsSealedAuditedAndIdempotent(t *testing.T) {
+	f := newAdminFixture(t)
+	s := f.owner()
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		c, err := observability.GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Channels = []observability.AlertChannel{{ID: "hook", WebhookURL: "https://receiver.example/hook"}}
+		return observability.SetAlertConfiguration(t.Context(), tx, c)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"rev":2,"secret":"` + strings.Repeat("s", 32) + `","reason":"rotate receiver secret"}`
+	key := newKey()
+	path := "/alerts/channels/hook/secret"
+	rec := f.change(s, http.MethodPut, path, body, key)
+	expectAdmin(t, "rotateAlertWebhookSecret", rec, http.StatusCreated, "")
+	if strings.Contains(rec.Body.String(), strings.Repeat("s", 32)) {
+		t.Fatal("secret in response")
+	}
+	replay := f.change(s, http.MethodPut, path, body, key)
+	if replay.Header().Get("Idempotency-Replayed") != "true" || replay.Body.String() != rec.Body.String() {
+		t.Fatalf("rotation replay: %s", replay.Body)
+	}
+	expectAdmin(t, "stale secret rotation", f.change(s, http.MethodPut, path, body, newKey()), http.StatusConflict, codeStaleRevision)
+	f.expectAudit("alert_channel.rotate_secret", map[string]string{"reason": "rotate receiver secret"})
+	if n := f.text(`SELECT count(*)::text FROM observability.webhook_keys`); n != "1" {
+		t.Fatal("rotation repeated", n)
+	}
+	rec = f.do(http.MethodGet, "/alerts/configuration", "", as(s))
+	if strings.Contains(rec.Body.String(), strings.Repeat("s", 32)) || strings.Contains(rec.Body.String(), "ciphertext") {
+		t.Fatal("secret in configuration")
+	}
+	// The production egress client refuses a literal private address before it can be saved.
+	body = `{"rev":3,"rules":[],"channels":[{"id":"private","webhook_url":"https://127.0.0.1/hook"}],"reason":"invalid target"}`
+	expectAdmin(t, "private webhook", f.change(s, http.MethodPut, "/alerts/configuration", body, newKey()), http.StatusUnprocessableEntity, codeUnprocessable)
 }

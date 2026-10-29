@@ -11,9 +11,11 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"axiom/internal/platform/alert"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 )
 
 type alertArgs struct{}
@@ -24,29 +26,15 @@ func (alertArgs) InsertOpts() river.InsertOpts {
 }
 
 // RegisterAlerts registers the persistent signal consumer before the queue starts.
-func RegisterAlerts(db *pg.DB, scope pg.Scope, q *pg.Queue, m *mail.Mailer) error {
-	a := &alertWorker{db: db, scope: scope, mail: m, now: time.Now}
-	m.Receipt = a.mailReceipt
-	q.OnDiscard = func(ctx context.Context, tx pg.Tx, kind string, args []byte) error {
-		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "queue.discarded", Key: kind, Severity: "critical", Fields: map[string]string{"value": "1"}}); err != nil {
-			return err
-		}
-		if kind == "mail.send_tracked" {
-			var tracked struct {
-				Receipt uuid.UUID `json:"receipt"`
-			}
-			if err := jsonx.Unmarshal(args, &tracked); err != nil {
-				return err
-			}
-			if tracked.Receipt != uuid.Nil() {
-				if _, err := tx.Exec(ctx, `UPDATE observability.alert_receipts SET state='failed' WHERE id=$1 AND state<>'delivered'`, tracked.Receipt); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
+func RegisterAlerts(db *pg.DB, scope pg.Scope, q *pg.Queue, m *mail.Mailer, keys *secret.Keyring, exit *egress.Client) error {
+	a := &alertWorker{db: db, scope: scope, queue: q, mail: m, now: time.Now}
+	m.Receipt = a.deliveryReceipt
+	q.OnDiscard = a.discarded
 	if err := river.AddWorkerSafely(q.Workers(), river.WorkFunc(a.work)); err != nil {
+		return err
+	}
+	w := &webhookWorker{alertWorker: a, keys: keys, exit: exit}
+	if err := river.AddWorkerSafely(q.Workers(), river.WorkFunc(w.work)); err != nil {
 		return err
 	}
 	q.Every(time.Minute, func() river.JobArgs { return alertArgs{} })
@@ -57,6 +45,7 @@ type alertWorker struct {
 	db    *pg.DB
 	scope pg.Scope
 	mail  *mail.Mailer
+	queue *pg.Queue
 	now   func() time.Time
 }
 
@@ -66,11 +55,20 @@ func (a *alertWorker) work(ctx context.Context, _ *river.Job[alertArgs]) error {
 
 	now := a.now().UTC()
 	if err := a.db.Tx(ctx, a.scope, func(tx pg.Tx) error {
+		if err := reportChannelHealth(ctx, tx); err != nil {
+			return err
+		}
 		return alert.Consume(ctx, tx, func(s alert.Signal) error { return applyAlert(ctx, tx, s, now) })
 	}); err != nil {
 		return err
 	}
 	return a.db.Tx(ctx, a.scope, func(tx pg.Tx) error {
+		if err := scheduleAlertTests(ctx, tx, now); err != nil {
+			return err
+		}
+		if err := repairAlertReceipts(ctx, tx, now); err != nil {
+			return err
+		}
 		if err := evaluateAlerts(ctx, tx, now); err != nil {
 			return err
 		}
@@ -130,6 +128,9 @@ func evaluateIncident(ctx context.Context, tx pg.Tx, e AlertEvent, rules []Alert
 }
 
 func evaluateRule(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule, ch AlertChannel, now time.Time) error {
+	if e.Kind == "alert.channel_unavailable" && e.Key == ch.ID {
+		return nil
+	}
 	breached, err := alertBreached(ctx, tx, e, r, now)
 	if err != nil || !breached {
 		return err
@@ -182,6 +183,7 @@ type alertDelivery struct {
 	severity   string
 	fields     []byte
 	seq        int
+	payload    []byte
 }
 
 func pendingAlertDeliveries(ctx context.Context, tx pg.Tx, now time.Time) ([]alertDelivery, error) {
@@ -234,6 +236,9 @@ func (a *alertWorker) dispatchOne(ctx context.Context, tx pg.Tx, now time.Time, 
 		}
 		return nil
 	}
+	if d.ch.WebhookURL != "" {
+		return a.dispatchWebhook(ctx, tx, d)
+	}
 	phase := "firing"
 	if d.seq == -1 {
 		phase = "resolved"
@@ -244,7 +249,7 @@ func (a *alertWorker) dispatchOne(ctx context.Context, tx pg.Tx, now time.Time, 
 		if !errors.Is(err, mail.ErrNotConfigured) && !errors.Is(err, mail.ErrInvalidMessage) {
 			return err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE observability.alert_receipts SET state='failed' WHERE id=$1`, d.id); err != nil {
+		if err = recordAlertReceipt(ctx, tx, d.id, false, now); err != nil {
 			return err
 		}
 		return nil
@@ -255,18 +260,9 @@ func (a *alertWorker) dispatchOne(ctx context.Context, tx pg.Tx, now time.Time, 
 	return nil
 }
 
-func (a *alertWorker) mailReceipt(ctx context.Context, id uuid.UUID, delivered bool) error {
+func (a *alertWorker) deliveryReceipt(ctx context.Context, id uuid.UUID, delivered bool) error {
 	return a.db.Tx(ctx, a.scope, func(tx pg.Tx) error {
-		state := "failed"
-		if delivered {
-			state = "delivered"
-		}
-		_, err := tx.Exec(ctx, `UPDATE observability.alert_receipts SET state=$2,delivered_at=CASE WHEN $2='delivered' THEN $3::timestamptz ELSE NULL END WHERE id=$1 AND state<>'delivered'`, id, state, a.now().UTC())
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, `UPDATE observability.alert_events SET state='delivered' WHERE resolved_at IS NULL AND id=(SELECT event_id FROM observability.alert_receipts WHERE id=$1 AND sequence>=0 AND state='delivered')`, id)
-		return err
+		return recordAlertReceipt(ctx, tx, id, delivered, a.now().UTC())
 	})
 }
 
@@ -279,5 +275,37 @@ func recoverAlerts(ctx context.Context, tx pg.Tx, e AlertEvent, now time.Time) e
  FROM observability.alert_receipts r WHERE event_id=$1 AND sequence=0 AND state IN ('delivered','failed')
  AND NOT EXISTS(SELECT FROM observability.alert_receipts pending WHERE pending.event_id=r.event_id AND pending.rule_id=r.rule_id AND pending.sequence>=0 AND pending.state IN ('pending','queued'))
  ON CONFLICT(event_id,rule_id,sequence) DO NOTHING`, e.ID, now)
+	return err
+}
+
+func (a *alertWorker) discarded(ctx context.Context, tx pg.Tx, kind string, args []byte) error {
+	if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "queue.discarded", Key: kind, Severity: "critical", Fields: map[string]string{"value": "1"}}); err != nil {
+		return err
+	}
+	if kind == "mail.send_tracked" || kind == "observability.webhook" {
+		var tracked struct {
+			Receipt uuid.UUID `json:"receipt"`
+		}
+		if err := jsonx.Unmarshal(args, &tracked); err != nil {
+			return err
+		}
+		if tracked.Receipt != uuid.Nil() {
+			if err := recordAlertReceipt(ctx, tx, tracked.Receipt, false, a.now().UTC()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (a *alertWorker) dispatchWebhook(ctx context.Context, tx pg.Tx, d alertDelivery) error {
+	body, err := webhookPayload(d)
+	if err != nil {
+		return err
+	}
+	if _, err = a.queue.InsertManyTx(ctx, tx, []river.InsertManyParams{{Args: webhookArgs{Receipt: d.id}}}); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE observability.alert_receipts SET state='queued',payload=$2 WHERE id=$1`, d.id, body)
 	return err
 }

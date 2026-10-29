@@ -95,3 +95,26 @@ func TestEveryEventKindHasAName(t *testing.T) {
 		t.Errorf("%d names for %d kinds", len(kindNames), int(BalanceRecovered)+1)
 	}
 }
+
+func TestSyncFailureEventsKeepTheirSuccessBaseline(t *testing.T) {
+	at := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want time.Time
+	}{
+		{"login rejected", adapter.ErrAuthRejected, at},
+		{"task stopped", adapter.ErrUnrecognised, at.Add(time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Commit{}
+			c.State.Tasks[TaskBalance].LastOK = at
+			c.State.Tasks[TaskKeys].LastOK = at.Add(time.Minute)
+			e := Engine{}
+			e.settle(&c, TaskKeys, tc.err, at.Add(2*time.Minute))
+			if len(c.Events) != 1 || c.Events[0].Old != tc.want.Format(time.RFC3339Nano) {
+				t.Fatalf("failure baseline: %+v", c.Events)
+			}
+		})
+	}
+}

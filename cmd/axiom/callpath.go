@@ -16,6 +16,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/gateway"
 	"axiom/internal/observability"
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
@@ -60,6 +61,7 @@ type callDeps struct {
 	logger   *slog.Logger
 	proxies  []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
 	kv       *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
+	alerts   alert.Sink
 }
 
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
@@ -92,7 +94,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err != nil {
 		return callNode{}, err
 	}
-	ledger, err := startLedger(ctx, d.db, d.gate, d.meter, d.logger)
+	ledger, err := startLedger(ctx, d.db, d.gate, d.meter, d.logger, d.alerts)
 	if err != nil {
 		return callNode{}, err
 	}
@@ -130,12 +132,12 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 }
 
 // startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call.
-func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metric.Meter, logger *slog.Logger) (*billing.Billing, error) {
+func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metric.Meter, logger *slog.Logger, signals alert.Sink) (*billing.Billing, error) {
 	return billing.Start(ctx, db, pg.PlatformScope(), billing.Config{
 		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
 		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
 		// what no settlement will only once the call cannot still be running.
-		Lifetime: gate.MaxCall + gate.SettleGrace, Logger: logger, Meter: meter,
+		Lifetime: gate.MaxCall + gate.SettleGrace, Logger: logger, Meter: meter, Alerts: signals,
 	}, suppliers.CallWrites{})
 }
 

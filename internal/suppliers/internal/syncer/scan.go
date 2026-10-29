@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"time"
 
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -34,7 +35,7 @@ func (e *Engine) page(ctx context.Context, st *State, c *Commit) (done bool, err
 		if ch.Funding != adapter.FundingWallet && c.State.Status == Normal {
 			// A record paid from something other than the wallet is a cost this module does not model.
 			c.State.Status, c.State.Reason = NeedsAttention, "a charge was paid from something other than the wallet"
-			c.Events = append(c.Events, Event{Kind: NeedsAttentionEvent, Why: c.State.Reason})
+			c.Events = append(c.Events, Event{Kind: NeedsAttentionEvent, Old: c.State.Tasks[TaskBalance].LastOK.Format(time.RFC3339Nano), Why: c.State.Reason})
 		}
 	}
 	return page.Done, e.commit(ctx, st, c)

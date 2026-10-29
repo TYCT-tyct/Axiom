@@ -40,9 +40,15 @@ func alertCycle(t *testing.T, db *pg.DB, now time.Time) []AlertEvent {
 	t.Helper()
 	var events []AlertEvent
 	alertTx(t, db, func(tx pg.Tx) error {
+		if err := reportChannelHealth(t.Context(), tx); err != nil {
+			return err
+		}
 		if err := alert.Consume(t.Context(), tx, func(s alert.Signal) error { return applyAlert(t.Context(), tx, s, now) }); err != nil {
 			return err
 		}
+		return nil
+	})
+	alertTx(t, db, func(tx pg.Tx) error {
 		if err := evaluateAlerts(t.Context(), tx, now); err != nil {
 			return err
 		}
@@ -119,7 +125,7 @@ func TestAlertThresholdDurationRepeatAndRuleRemoval(t *testing.T) {
 	if len(events[0].Receipts) != 2 {
 		t.Fatal("missing repeat")
 	}
-	if err := worker.mailReceipt(t.Context(), events[0].Receipts[1].ID, true); err != nil {
+	if err := worker.deliveryReceipt(t.Context(), events[0].Receipts[1].ID, true); err != nil {
 		t.Fatal(err)
 	}
 	alertTx(t, db, func(tx pg.Tx) error {
@@ -231,7 +237,7 @@ func TestAlertFailedReceiptDoesNotClaimRecoveryDelivery(t *testing.T) {
 	persistAlert(t, db, "1", false)
 	events := alertCycle(t, db, now)
 	worker := alertWorker{db: db, scope: platformScope, now: func() time.Time { return now }}
-	if err := worker.mailReceipt(context.Background(), events[0].Receipts[0].ID, false); err != nil {
+	if err := worker.deliveryReceipt(context.Background(), events[0].Receipts[0].ID, false); err != nil {
 		t.Fatal(err)
 	}
 	persistAlert(t, db, "1", true)
@@ -262,7 +268,7 @@ func raiseAlertStorm(t *testing.T, db, other *pg.DB) {
 
 func reportAlertReceipt(t *testing.T, worker *alertWorker, id uuid.UUID, sent bool) {
 	t.Helper()
-	if err := worker.mailReceipt(t.Context(), id, sent); err != nil {
+	if err := worker.deliveryReceipt(t.Context(), id, sent); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -312,7 +318,7 @@ func TestRescuedMailDiscardPersistsFailedReceiptAndSignal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = RegisterAlerts(db, platformScope, q, m); err != nil {
+	if err = RegisterAlerts(db, platformScope, q, m, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw := []byte(`{"receipt":"` + events[0].Receipts[0].ID.String() + `"}`)

@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/pg"
 )
 
@@ -40,6 +41,7 @@ type Config struct {
 	Segments  Segments
 	Logger    *slog.Logger // where alerts go; default slog.Default()
 	Meter     metric.Meter // where the platform-borne counters go; nil for none
+	Alerts    alert.Sink
 }
 
 // heartbeatLimit is the longest period a heartbeat may have: one heartbeat missed must still leave the holder alive
@@ -108,10 +110,18 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 
 // alert reports each unknown item seen for the first time: its model has left routing and needs an administrator.
 func (b *Billing) alert(seen []UnknownItem) {
-	// TODO(#316): deliver this committed missing-item signal through operator notifications.
 	for _, u := range seen {
 		b.logger.Error("billing: an unknown billing item appeared; the model takes no new requests until it is priced",
 			"model", u.Model.String(), "field", u.Field, "request", u.Request.String())
+		b.signal("unknown_items", map[string]string{"model": u.Model.String(), "field": u.Field})
+	}
+}
+
+func (b *Billing) signal(key string, fields map[string]string) {
+	if b.config.Alerts != nil {
+		if err := b.config.Alerts.Raise("billing.settlement_anomaly", key, "critical", fields); err != nil {
+			b.logger.Error("billing: reporting settlement anomaly failed", "err", err)
+		}
 	}
 }
 
@@ -136,6 +146,9 @@ func (b *Billing) bear(ctx context.Context, request uuid.UUID, price, charged in
 		"request", request.String(), "price", price, "charged", charged, "borne", borne)
 	b.borne.Add(ctx, 1)
 	b.borneAmount.Add(ctx, borne)
+	if b.config.Alerts != nil {
+		b.signal("platform_borne", map[string]string{"request": request.String(), "borne": fmt.Sprint(borne)})
+	}
 }
 
 // Heartbeat extends the holder's life by the TTL from now, by the database's clock.

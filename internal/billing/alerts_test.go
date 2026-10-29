@@ -60,12 +60,17 @@ func TestThePlatformBearingASettlementIsReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs := &logBuffer{}
+	var signals settlementSignals
 	b := newBank(t, 2000, -100, Config{
+		Alerts:    &signals,
 		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, Logger: logs.logger(), Meter: tel.Metrics.Meter("axiom/billing"),
 	})
 	other, h := b.hold(500), b.hold(1000)
 	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 5000, 0, 0))); err != nil {
 		t.Fatal(err)
+	}
+	if len(signals) != 1 || signals[0].Key != "platform_borne" || signals[0].Fields["borne"] != "3500" {
+		t.Fatalf("floor-loss signal: %+v", signals)
 	}
 	for _, want := range []string{"level=ERROR", "the platform bears", "request=" + h.id.String(), "price=5000", "charged=1500", "borne=3500"} {
 		if !strings.Contains(logs.String(), want) {
@@ -250,10 +255,12 @@ func TestTheReconciliationReportsWhatItRefuses(t *testing.T) {
 	if err := r.work(t.Context(), nil); err != nil || logs.String() != "" {
 		t.Fatalf("a balanced ledger: %v, log %q", err, logs.String())
 	}
+	assertLedgerSignal(t, b, true)
 	id := b.unbalance()
 	if err := r.work(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
+	assertLedgerSignal(t, b, false)
 	for _, want := range []string{"level=ERROR", "does not reconcile", "transaction " + id.String()} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("the log lacks %q:\n%s", want, logs.String())
@@ -290,5 +297,13 @@ func TestTheReconciliationRunsOnTheQueue(t *testing.T) {
 			t.Fatalf("the queue never ran the reconciliation; the log:\n%s", logs.String())
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func assertLedgerSignal(t *testing.T, b *bank, resolved bool) {
+	t.Helper()
+	signals := takeBillingSignals(t, b)
+	if len(signals) != 1 || signals[0].Resolved != resolved || signals[0].Kind != "billing.reconciliation_difference" {
+		t.Fatalf("ledger signal: %+v", signals)
 	}
 }

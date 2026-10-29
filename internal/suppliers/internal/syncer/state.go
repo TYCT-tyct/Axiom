@@ -142,12 +142,12 @@ var kindNames = [...]string{
 // String is the name an event is stored and delivered under, so that reordering the constants changes no stored event.
 func (k Kind) String() string { return kindNames[k] }
 
-// Event is something that changed. The text fields are names and fingerprints, and a short reason of ours: never text
+// Event is something that changed. The text fields are names, fingerprints, success observations and a short reason of ours: never text
 // the supplier wrote.
 type Event struct {
 	Kind          Kind
 	Subject       string // group ref, "group/model", key ref
-	Old, New, Why string
+	Old, New, Why string // Failure events keep the task success baseline in Old for clock-independent recovery.
 }
 
 // Plan is a new version of a cost plan, appended and never changed.
