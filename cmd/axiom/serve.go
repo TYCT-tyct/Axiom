@@ -15,7 +15,6 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
-	"axiom/internal/payments"
 	"axiom/internal/platform/alert"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
@@ -368,13 +367,7 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 	}
 	// Orders past their deadline expire every minute, on whichever node leads the queue
 	// (docs/domains/payments.md「补单与过期」). Callbacks and polling register the same protocol plugins.
-	store, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger, Plugins: paymentPlugins,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	if err = payments.RegisterPoll(payments.PollConfig{Payments: store, Queue: queue, Logger: logger}); err != nil {
+	if err = registerPaymentJobs(db, keys, exit, logger, queue); err != nil {
 		return nil, nil, err
 	}
 	if err := queue.Start(ctx); err != nil {
