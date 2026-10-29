@@ -431,7 +431,7 @@ type WriteSiteSettingsParams struct {
 }
 
 // Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
-// limits are not the admin API's and are left as they are.
+// limits belong to their own admin resource and are left as they are.
 func (q *Queries) WriteSiteSettings(ctx context.Context, db DBTX, arg WriteSiteSettingsParams) error {
 	_, err := db.Exec(ctx, writeSiteSettings,
 		arg.SiteID,

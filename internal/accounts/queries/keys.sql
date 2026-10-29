@@ -17,8 +17,7 @@ WHERE k.id = @key_id
     AND k.kind = 'call' AND k.status = 'active' AND k.deleted_at IS NULL
     AND (k.expires_at IS NULL OR k.expires_at > now())
     AND (k.ip_allow IS NULL OR @client_ip::inet <<= ANY (k.ip_allow))
-    AND w.status = 'active' AND w.deleted_at IS NULL
-;
+    AND w.status = 'active' AND w.deleted_at IS NULL;
 
 -- name: LockAccount :one
 -- Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the

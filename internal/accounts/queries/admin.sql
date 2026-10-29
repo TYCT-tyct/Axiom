@@ -18,7 +18,7 @@ FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHE
 
 -- name: WriteSiteSettings :exec
 -- Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
--- limits are not the admin API's and are left as they are.
+-- limits belong to their own admin resource and are left as they are.
 INSERT INTO accounts.site_settings (site_id, console_idle_timeout, console_max_age, admin_idle_timeout, admin_max_age,
     new_key_daily_limit)
 VALUES (@site_id, make_interval(secs => sqlc.narg(console_idle_seconds)::bigint),
