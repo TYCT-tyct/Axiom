@@ -300,6 +300,8 @@ jobs:
 
   # A train or main only, as for the benchmark: a deployment regression is caught by the train, which ejects the PR that
   # broke it (scripts/train.py). The skip rule is the one ci.yml always had: only files clearly outside the container.
+  # A train builds the release too, so a step only main uses cannot wait until main to fail (the 2026-10-29 buildx
+  # failure); only main keeps the artifact.
   deploy:
     needs: changes
     if: >-
@@ -313,12 +315,14 @@ jobs:
         with:
           fetch-depth: 0 # the frontend and program versions use this tree's history
       - uses: ./.github/actions/setup
+      # release-check ends by running deploy-check, so a train rehearses deployment once; this stays for a manual
+      # branch dispatch with no base.
       - name: Rehearse train deployment
-        if: github.ref != 'refs/heads/main'
+        if: github.ref != 'refs/heads/main' && inputs.base == ''
         run: bash scripts/ci/deploy-check.sh
         timeout-minutes: 40
       - name: Build and rehearse release by digest
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || inputs.base != ''
         run: bash scripts/ci/release-check.sh
         timeout-minutes: 40
         env:

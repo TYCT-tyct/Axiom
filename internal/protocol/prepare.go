@@ -290,7 +290,7 @@ func withRouting(m map[string]rule) map[string]rule {
 	return m
 }
 
-var routingParameters = []string{"provider", "models", "route", "transforms", "plugins", "usage", "session_id", "axiom"}
+var routingParameters = []string{"provider", "models", "preset", "fallbacks", "route", "transforms", "plugins", "usage", "session_id", "axiom"}
 
 // encrypted asks Responses for reasoning items that can be sent again, the only way when the upstream stores
 // nothing (OpenAI《Create a model response》, include, read 2026-10-14).

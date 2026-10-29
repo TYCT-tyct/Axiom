@@ -71,6 +71,7 @@ var defaultLifetimes = map[Surface]lifetime{
 
 // snapshot is an immutable view of the sites, replaced whole.
 type snapshot struct {
+	presets map[presetKey]string
 	loaded  time.Time
 	sites   map[SiteID]Site
 	domains map[string]domain             // by host
@@ -195,6 +196,10 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 			}
 			next.roles[r.ID][p] = true
 		}
+	}
+	next.presets, err = readPresets(ctx, tx)
+	if err != nil {
+		return nil, err
 	}
 	return next, nil
 }
