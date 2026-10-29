@@ -302,6 +302,7 @@ func TestReservationLocksPriceVersionsThroughRetry(t *testing.T) {
 		if final.PriceVersion == nil || *final.PriceVersion != second {
 			t.Fatalf("settled version %v, want second route entry %s", final.PriceVersion, second)
 		}
+		assertChargeVersion(t, b, h.id, second)
 	}
 	q[1].Version = uuid.NewV7()
 	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {

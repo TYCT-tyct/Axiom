@@ -66,38 +66,29 @@ func callBody(c observability.OwnCall) consoleapi.Call {
 // ListCalls lists the account's calls, newest first, a page at a time.
 func (c consoleAPI) ListCalls(ctx context.Context, request consoleapi.ListCallsRequestObject) (consoleapi.ListCallsResponseObject, error) {
 	cl := callOf(ctx)
-	p := request.Params
-	q := observability.OwnQuery{Account: uuid.UUID(cl.principal.AccountID()), Until: endOfTime, PageSize: pageSize(p.Limit)}
-	if p.Since != nil {
-		q.Since = *p.Since
+	q, err := ownCallQuery(cl)
+	if err != nil {
+		return nil, err
 	}
-	if p.Until != nil {
-		q.Until = *p.Until
-	}
-	if p.Model != nil {
-		q.Model = *p.Model
-	}
-	if p.ClientApp != nil {
-		q.ClientApp = *p.ClientApp
-	}
-	if p.Cursor != nil {
-		after, err := observability.ParseCursor(*p.Cursor)
-		if err != nil {
-			return nil, err
-		}
-		q.After = &after
-	}
+	q.PageSize = pageSize(request.Params.Limit)
 	var calls []observability.OwnCall
 	var next *observability.Cursor
+	var charges map[uuid.UUID]billing.ChargeDetails
 	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
 		calls, next, err = observability.ListOwn(ctx, tx, q)
+		if err == nil {
+			charges, err = c.readCallCharges(ctx, tx, calls)
+		}
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	list := consoleapi.CallList{Data: make([]consoleapi.Call, len(calls))}
+	list := consoleapi.CallList{Data: make([]consoleapi.Call, len(calls)), StatusFilter: request.Params.Status}
 	for i, call := range calls {
 		list.Data[i] = callBody(call)
+		if d, ok := charges[call.ID]; ok {
+			list.Data[i].ChargeDetails = chargeBody(d)
+		}
 	}
 	if next != nil {
 		cursor := next.String()
@@ -115,13 +106,47 @@ func (c consoleAPI) GetCall(ctx context.Context, request consoleapi.GetCallReque
 		return nil, accounts.ErrNotFound
 	}
 	var call observability.OwnCall
+	var charges map[uuid.UUID]billing.ChargeDetails
 	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
 		call, err = observability.GetOwn(ctx, tx, id)
+		if err == nil {
+			charges, err = c.charges.ReadCharges(ctx, tx, []uuid.UUID{id})
+		}
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	return consoleapi.GetCall200JSONResponse(callBody(call)), nil
+	body := callBody(call)
+	if d, ok := charges[id]; ok {
+		body.ChargeDetails = chargeBody(d)
+	}
+	return consoleapi.GetCall200JSONResponse(body), nil
+}
+
+func (c consoleAPI) readCallCharges(ctx context.Context, tx pg.Tx, calls []observability.OwnCall) (map[uuid.UUID]billing.ChargeDetails, error) {
+	if len(calls) == 0 {
+		return map[uuid.UUID]billing.ChargeDetails{}, nil
+	}
+	ids := make([]uuid.UUID, len(calls))
+	for i, call := range calls {
+		ids[i] = call.ID
+	}
+	return c.charges.ReadCharges(ctx, tx, ids)
+}
+
+func chargeBody(d billing.ChargeDetails) *consoleapi.ChargeDetails {
+	items := make([]consoleapi.ChargeItem, len(d.Items))
+	for i, item := range d.Items {
+		items[i] = consoleapi.ChargeItem{
+			Item: new(item.Item), Quantity: new(item.Quantity), Unit: new(consoleapi.ChargeItemUnit(item.Unit)), UnitPrice: new(item.UnitPrice),
+			Amount: new(item.Amount), Sampling: new(item.Sampling), ServiceTier: new(item.ServiceTier), ContextBand: new(item.ContextBand),
+			PriceVersion: optionalPriceVersion(item.PriceVersion), Estimated: new(item.Estimated), Fallback: new(item.Fallback),
+		}
+	}
+	return &consoleapi.ChargeDetails{
+		Currency: new(d.Currency), Items: &items, Subtotal: new(d.Subtotal), Rounding: new(d.Rounding),
+		BalanceAdjustment: new(d.BalanceAdjustment), Charged: new(d.Charged), Estimated: new(d.Estimated),
+	}
 }
 
 func optionalPriceVersion(s string) *string {

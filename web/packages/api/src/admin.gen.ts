@@ -1067,7 +1067,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List current manual exchange rates */
+        /** List current exchange rates (manual and automatic) */
         get: operations["listExchangeRates"];
         put?: never;
         /**
@@ -1113,7 +1113,7 @@ export interface paths {
         put?: never;
         /**
          * Add a pricing rule
-         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). Account, tier and all audiences have independent published prices. It prices a model, an author or everything, by the reference price times a multiplier read as the site's currency (`currency_conversion` `face`) or by a fixed price list: a rule for an endpoint, group, supplier or source type, an `exchange` conversion would not be applied, so it is refused too (422, pointing at `/rule/target/kind`, `/rule/method/kind` or `/rule/method/currency_conversion`). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices are published as immutable versions after cost and change-threshold checks; large moves wait for confirmation. The site floor applies unless an explicit audited exception is published. What a rule would do is shown by `previewPricing` first.
+         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). Account, tier and all audiences have independent published prices. It prices a model, an author or everything. Reference multipliers explicitly name `face` for a reference already in the site's currency or `exchange` for exact conversion at the frozen reference rate; the multiplier and exchange fraction are combined before rounding. Fixed schedules and cost-plus pricing use the site's currency. Endpoint, group, supplier and source-type targets are refused (422, pointing at `/rule/target/kind`); an omitted conversion points at `/rule/method/currency_conversion`. Two rules with the same target and audience cannot both exist (409): change the one there is. Prices are published as immutable versions after cost and change-threshold checks; large moves wait for confirmation. The site floor applies unless an explicit audited exception is published. What a rule would do is shown by `previewPricing` first.
          */
         post: operations["createPricingRule"];
         delete?: never;
@@ -2107,7 +2107,7 @@ export interface components {
             kind: "account" | "tier" | "all";
             id?: string;
         };
-        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the reference price is already in that currency: exchange-based reference selection is not implemented, so a reference price in another currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be absent. */
+        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding. A missing exchange rate stops publication for the matched model, without falling through to another rule (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. The members of the other kinds must be absent. */
         PricingMethod: {
             /** @enum {string} */
             kind: "cost_plus" | "reference_multiplier" | "fixed";

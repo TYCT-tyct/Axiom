@@ -53,7 +53,7 @@ func checkListPagePlans(t *testing.T, firstPlan, deepPlan string) {
 	first, later := buffers(t, firstPlan), buffers(t, deepPlan)
 	t.Logf("blocks first=%d deep=%d\nfirst:\n%s\ndeep:\n%s", first, later, firstPlan, deepPlan)
 	for _, plan := range []string{firstPlan, deepPlan} {
-		if strings.Contains(plan, "Sort  (") || strings.Contains(plan, "Bitmap") || !strings.Contains(plan, "Index Scan using") || strings.Contains(plan, "Seq Scan") {
+		if strings.Contains(plan, "Sort  (") || strings.Contains(plan, "Bitmap") || (!strings.Contains(plan, "Index Scan using") && !strings.Contains(plan, "Index Scan Backward using")) || strings.Contains(plan, "Seq Scan") {
 			t.Errorf("not read in index order:\n%s", plan)
 		}
 	}

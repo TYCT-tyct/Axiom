@@ -78,6 +78,9 @@ func sameRoutable(t *testing.T, r Routable, row store.ListRoutableRow, endpoint 
 	if r.ID != row.EndpointID || r.ID != endpoint {
 		t.Errorf("Routable names endpoint %s and ListRoutable %s, want the world's %s", r.ID, row.EndpointID, endpoint)
 	}
+	if r.Codename != *row.Codename {
+		t.Errorf("public provider name %q, want group codename %v", r.Codename, row.Codename)
+	}
 	if r.Supplier != row.SupplierID || r.Model != row.ModelID {
 		t.Errorf("Routable's supplier and model %s/%s, ListRoutable's %s/%s", r.Supplier, r.Model, row.SupplierID, row.ModelID)
 	}

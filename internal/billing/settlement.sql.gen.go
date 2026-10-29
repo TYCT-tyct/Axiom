@@ -71,18 +71,18 @@ func (q *Queries) DueReservations(ctx context.Context, db DBTX, arg DueReservati
 
 const endReservation = `-- name: EndReservation :one
 WITH balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + $12 WHERE b.account_id = $13
+    UPDATE billing.balances b SET reserved = b.reserved + $13 WHERE b.account_id = $14
 ), spend AS (
-    UPDATE billing.spend s SET reserved = s.reserved + $12, spent = s.spent + $14
-    WHERE s.subject = $15 AND s.window_start = $16
-        OR s.subject = $17 AND s.window_start = $18
+    UPDATE billing.spend s SET reserved = s.reserved + $13, spent = s.spent + $15
+    WHERE s.subject = $16 AND s.window_start = $17
+        OR s.subject = $18 AND s.window_start = $19
 )
 UPDATE billing.reservations
 SET state = $1, charged_seq = coalesce($2, charged_seq), entry = coalesce($3, entry),
     charged = $4, price = $5, waived = $6, estimated = $7,
     final_usage = $8, attempt_entries = coalesce($9::integer[], attempt_entries),
-    profit = $10::bigint
-WHERE request_id = $11
+    profit = $10::bigint, pricing_tiers = nullif($11::smallint, -2)
+WHERE request_id = $12
 RETURNING clock_timestamp()::timestamptz AS ended_at
 `
 
@@ -97,6 +97,7 @@ type EndReservationParams struct {
 	FinalUsage      []byte
 	AttemptEntries  []int32
 	Profit          *int64
+	PricingTiers    int16
 	RequestID       uuid.UUID
 	Reserved        int64
 	AccountID       uuid.UUID
@@ -122,6 +123,7 @@ func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservatio
 		arg.FinalUsage,
 		arg.AttemptEntries,
 		arg.Profit,
+		arg.PricingTiers,
 		arg.RequestID,
 		arg.Reserved,
 		arg.AccountID,
@@ -181,7 +183,8 @@ func (q *Queries) InsertCreditBatch(ctx context.Context, db DBTX, arg InsertCred
 const lockReservation = `-- name: LockReservation :one
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.price_versions, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit,
+    coalesce(r.pricing_tiers, -2)::smallint AS pricing_tiers
 FROM billing.reservations r
 WHERE r.request_id = $1
 `
@@ -209,6 +212,7 @@ type LockReservationRow struct {
 	AttemptEntries  []int32
 	Endpoints       pgtype.FlatArray[uuid.UUID]
 	Profit          *int64
+	PricingTiers    int16
 }
 
 // Run after the account's balance row is locked: every change to a reservation happens under that lock.
@@ -238,6 +242,7 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 		&i.AttemptEntries,
 		&i.Endpoints,
 		&i.Profit,
+		&i.PricingTiers,
 	)
 	return i, err
 }

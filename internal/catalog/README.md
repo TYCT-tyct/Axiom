@@ -108,6 +108,8 @@
 
 ### 计费项与用量
 
+`Schedule.Rate(usage, item)` 返回该采样实际使用的单价、上下文档下标和是否有价；0 是基础档，后续档按阈值顺序编号。它复用 `Cost` 的物理输入分档、服务档和继承规则，供 billing 在只读接口展开用户的分项售价。
+
 `catalog.Item` 是封闭枚举，`ItemSet` 是它的位集合。各项是计费数量；除 OpenAI 兼容上游的缓存读写可重叠外，模态项从总量中拆出，不重复收费；`protocol` 按下表把上游报告的用量折成 `Usage`：
 
 | Item | 单位 | OpenAI（Chat / Responses） | Anthropic Messages | Gemini |

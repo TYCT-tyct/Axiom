@@ -79,11 +79,11 @@ func TestNamedOrderDoesNotLiftNoFallbacks(t *testing.T) {
 	preset := openPreset()
 	preset.NoFallbacks, preset.Order = true, []routing.SupplierID{sup(1)}
 	h := newHarness(t, routing.Config{}, preset, endpoint(t, 1), endpoint(t, 2), endpoint(t, 3))
-	for name, order := range map[string][]routing.SupplierID{
-		"no order": nil, "the same order": {sup(1)}, "another order": {sup(2), sup(3)}, "a longer order": {sup(1), sup(2)},
+	for name, order := range map[string][]string{
+		"no order": nil, "the same order": {"g1"}, "another order": {"g2", "g3"}, "a longer order": {"g1", "g2"},
 	} {
 		in := input()
-		in.Override.Order = order
+		in.Override.OrderNames = order
 		p, _, err := h.r.Plan(in)
 		if err != nil || len(p.Entries) != 1 || first(p) != ep(1) {
 			t.Errorf("%s: %v %v", name, p.Entries, err)
