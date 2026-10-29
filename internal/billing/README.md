@@ -93,6 +93,8 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 ## 控制台的读取
 
+管理 key 的列表使用 `ReadKeyUsages(ctx, tx, []KeyWindow)` 一次读取整页的累计、当前 UTC 日/周/月已收和各自限额窗口的已收加预留，返回每把 key 的 `KeyUsage`；与单把 `ReadKeyUsage` 使用相同口径，外账户或没有计数的 key 均为零。批量查询共享一次数据库时间，避免逐把往返占用准入名额和管理 key 行锁。控制台只需限额窗口的 `KeysUsed` 继续使用原查询，避免为它扫描完整历史。
+
 控制台的余额、key 和额度流水页读下面几个函数，都在账户范围的事务里，不加锁，几个字节旧一点无妨（页面不是准入）：
 
 - `ReadBalance(ctx, tx, account, workspaces) BalanceView`：余额行的 `balance`、`reserved`、`frozen`、`floor`（没有余额行按全 0），以及 `SpentThisMonth`，即给定的这些工作区自本 UTC 月初起被收的 `spend.spent` 之和。按工作区加是因为每笔收费在 `spend` 里记两行（工作区一行、key 一行），不能全加；账户的工作区由 accounts 的 `AccountWorkspaces` 给出（含已删除的，它们的花费仍算）。按 `(subject, window_start)` 主键读，每个工作区一次索引范围扫描，与账本的大小无关。余额页说明可用额度扣除预留与退款冻结，并提供到流水页的入口。可用额度 = 余额 − 在途预留 − 退款冻结，由 `BalanceView.Available()` 以大整数精确计算，控制台和管理后台共用。
