@@ -992,7 +992,7 @@ export interface components {
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
-        /** @description One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. */
+        /** @description One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. The app-attribution members are absent when the client named no application, or when the call was recorded before they existed. */
         Call: {
             charge_details?: components["schemas"]["ChargeDetails"];
             /** @description Published sale version locked at admission; absent for legacy or uncharged calls. */
@@ -1009,6 +1009,12 @@ export interface components {
             ip: string;
             /** @description The tool that made the call, such as Claude Code. */
             client_app: string;
+            /** @description The application's URL, from the client's `HTTP-Referer` header: OpenRouter's primary app-attribution identifier. Trimmed, bounded and free of control characters; absent when the client named none. */
+            app_referer?: string;
+            /** @description The application's display name, from `X-OpenRouter-Title` (or the older `X-Title`). Trimmed, bounded and free of control characters; absent when the client named none. */
+            app_title?: string;
+            /** @description The application's marketplace categories, from `X-OpenRouter-Categories`: at most two lowercase hyphen-separated names, comma-separated. Absent when the client named none. */
+            app_categories?: string;
             session_id: string;
             subagent_id: string;
             request_class: string;
