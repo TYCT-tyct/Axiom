@@ -64,9 +64,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	attempts := orDefault(preset.MaxAttempts, r.cfg.MaxAttempts)
 	order = healthOrder(order, n, &rec, min(attempts, MaxEntries))
-	// After the breakers: a measured endpoint they take out of the route says nothing about this route's speed.
-	rec.Unmeasured = n.strategy() == Fastest && len(order) > 0 &&
-		!slices.ContainsFunc(order, func(c ranked) bool { return c.Throughput > 0 })
+	rec.Unmeasured = unmeasured(order, n.strategy())
 	entries := r.entries(order, n, &rec)
 	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
 	if len(entries) == 0 {
@@ -83,6 +81,12 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		Entries: entries, MaxAttempts: attempts,
 		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), StickyTTL: preset.StickyTTL, Record: rec,
 	}, nil, nil
+}
+
+// unmeasured reports whether a fastest-first order has nothing measured to rank by. It reads the order after the
+// breakers: a measured endpoint they take out of the route says nothing about this route's speed.
+func unmeasured(order []ranked, strategy Strategy) bool {
+	return strategy == Fastest && len(order) > 0 && !slices.ContainsFunc(order, func(c ranked) bool { return c.Throughput > 0 })
 }
 
 // DemandOf is the request as billing's quote reads it, so the length that bounds the price limits is billing's own
