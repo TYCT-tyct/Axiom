@@ -2,7 +2,7 @@
 
 Markdown-only changes run the cheap checks that read Markdown instead of the whole build; a benchmark comparison is
 skipped only for Markdown-only and web/-only changes, and the deployment check is skipped only when every changed file is clearly outside the container. The decisions come from the file list, never a guess about what reads what. A failed diff runs the
-build, the comparison and the deployment check; bench-needed and deploy-needed use exit code 10 for "not needed", so
+build, the frontend checks, the comparison and the deployment check; *-needed actions use exit code 10 for "not needed", so
 any other outcome runs them.
 """
 
@@ -35,9 +35,19 @@ def needs_benchmark(paths: list[str]) -> bool:
     return not (all_md(paths) or web_only(paths))
 
 
+def needs_web(paths: list[str]) -> bool:
+    """PR frontend checks: API generation and build/toolchain inputs count as frontend changes too."""
+    return not paths or any(
+        path.startswith(("web/", "api/", ".github/actions/setup/"))
+        or path in {"justfile", "scripts/web_cache.py", "scripts/ci/web-container.sh", "scripts/ci/runner-host.sh",
+                    ".github/workflows/ci.yml", "go.mod", "go.sum"}
+        for path in paths
+    )
+
+
 # Scripts that only check the repository or run CI; every other scripts/ file may be used by `just up`'s build
 # (scripts/web_cache.py) or by the deployment check (deploy-check.sh, deploy_name.py).
-IRRELEVANT_SCRIPT = re.compile(r"scripts/(test_[^/]*\.py|check_[^/]*\.py|ci_skips\.py|train\.py|workflow/.*|ci/runner-host\.sh)")
+IRRELEVANT_SCRIPT = re.compile(r"scripts/(test_[^/]*\.py|check_[^/]*\.py|ci_skips\.py|train\.py|workflow/.*|ci/(runner-host|bench-compare)\.sh)")
 
 
 def irrelevant_to_deployment(path: str) -> bool:
@@ -63,7 +73,7 @@ def needs_deploy_check(paths: list[str]) -> bool:
 
 def main(argv: list[str]) -> int:
     if len(argv) not in (2, 3):
-        print("usage: ci_skips.py md-only|bench-needed|deploy-needed BASE [HEAD]", file=sys.stderr)
+        print("usage: ci_skips.py md-only|bench-needed|deploy-needed|web-needed BASE [HEAD]", file=sys.stderr)
         return 2
     action, base = argv[0], argv[1]
     head = argv[2] if len(argv) == 3 else "HEAD"
@@ -76,6 +86,8 @@ def main(argv: list[str]) -> int:
         return 0 if all_md(paths) else 1
     if action == "bench-needed":
         return 0 if needs_benchmark(paths) else NOT_NEEDED
+    if action == "web-needed":
+        return 0 if needs_web(paths) else NOT_NEEDED
     if action == "deploy-needed":
         return 0 if needs_deploy_check(paths) else NOT_NEEDED
     print(f"unknown action {action}", file=sys.stderr)

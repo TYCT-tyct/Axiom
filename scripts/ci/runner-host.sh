@@ -68,8 +68,20 @@ runner_api() { # method path [curl args]: empty path lists runners, /<id>/labels
 
 # download URL FILE SHA256: a swapped or truncated download fails the checksum
 download() {
-  curl -sSfL --retry 3 --retry-all-errors -o "$2" "$1"
-  echo "$3  $2" | sha256sum -c --quiet -
+  if [ -f "$2" ]; then
+    if echo "$3  $2" | sha256sum -c --quiet - >/dev/null 2>&1; then chmod 644 "$2"; return 0; fi
+    rm -f "$2"
+  fi
+  (
+    local partial
+    partial=$(mktemp "$2.part.XXXXXX")
+    trap 'rm -f "$partial"' EXIT
+    curl -sSfL --retry 3 --retry-all-errors -o "$partial" "$1" || exit 1
+    echo "$3  $partial" | sha256sum -c --quiet - || exit 1
+    # Root downloads these public archives, but the runner user extracts them.
+    chmod 644 "$partial"
+    mv -f "$partial" "$2"
+  )
 }
 
 # write_changed FILE CONTENT: writes CONTENT unless FILE already holds it; succeeds only when it wrote
@@ -126,11 +138,9 @@ install_runner() { # number
   local unit restart= desired id current
   desired=$(runner_labels "$1")
   unit=$(service "$1")
-  if [ ! -f "$tarball" ]; then
-    local url=https://github.com/actions/runner/releases/download/v$runner_version/actions-runner-linux-x64-$runner_version.tar.gz
-    download "$url" "$tarball" "$(curl -sSfL "https://api.github.com/repos/actions/runner/releases/tags/v$runner_version" \
-      | jq -r --arg f "$(basename "$tarball")" '.assets[] | select(.name == $f).digest | ltrimstr("sha256:")')"
-  fi
+  local url=https://github.com/actions/runner/releases/download/v$runner_version/actions-runner-linux-x64-$runner_version.tar.gz
+  download "$url" "$tarball" "$(curl -sSfL "https://api.github.com/repos/actions/runner/releases/tags/v$runner_version" \
+    | jq -r --arg f "$(basename "$tarball")" '.assets[] | select(.name == $f).digest | ltrimstr("sha256:")')"
   if [ ! -f "$dir/.runner" ]; then
     as_user mkdir -p "$dir"
     as_user tar -xzf "$tarball" -C "$dir"
@@ -214,18 +224,27 @@ check() {
 # found on the host rather than counted from RUNNERS; the tool versions it cached; the user once no runner of any
 # name is left in its home.
 remove() {
-  local unit
-  for unit in $(systemctl list-unit-files --no-legend "$(service '[0-9]*')" | awk '{ print $1 }'); do
-    systemctl disable --now "$unit" || true
+  local unit units remaining
+  units=$(systemctl list-unit-files --no-legend "$(service '[0-9]*')")
+  for unit in $(awk '{ print $1 }' <<< "$units"); do
+    systemctl disable --now "$unit"
     rm -rf "/etc/systemd/system/$unit" "/etc/systemd/system/$unit.d"
   done
-  rm -f "/etc/systemd/system/$slice" "$parent_dropin"
   systemctl daemon-reload
-  rm -rf "$home/$prefix"[0-9]* "$toolcache/go/$go_version" "$toolcache/node/$node_version"
-  rmdir "$toolcache/go" "$toolcache/node" "$toolcache" 2>/dev/null || true
-  if id "$user" >/dev/null 2>&1 && ! compgen -G "$home/*/.runner" >/dev/null; then
-    pkill -u "$user" || true
-    userdel -r "$user"
+  rm -rf "$home/$prefix"[0-9]*
+  remaining=$(systemctl list-unit-files --no-legend 'actions.runner.TYCT-tyct-Axiom.*.service')
+  remaining+=$(systemctl list-units --all --no-legend 'actions.runner.TYCT-tyct-Axiom.*.service')
+  if [ -n "$remaining" ]; then
+    echo "Keeping shared slice and toolchains: Axiom runner units remain."
+  else
+    rm -f "/etc/systemd/system/$slice" "$parent_dropin"
+    systemctl daemon-reload
+    rm -rf "$toolcache/go/$go_version" "$toolcache/node/$node_version"
+    rmdir "$toolcache/go" "$toolcache/node" "$toolcache" 2>/dev/null || true
+    if id "$user" >/dev/null 2>&1 && ! compgen -G "$home/*/.runner" >/dev/null; then
+      pkill -u "$user" || true
+      userdel -r "$user"
+    fi
   fi
   echo "Removed. gcc, libc6-dev and chromium's system libraries stay installed. Delete these registrations on GitHub:"
   echo "  gh api repos/TYCT-tyct/Axiom/actions/runners --jq '.runners[] | select(.name | startswith(\"$prefix\")) | .id'"

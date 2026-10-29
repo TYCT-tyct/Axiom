@@ -51,6 +51,7 @@ jobs:
       docs_only: ${{ steps.decide.outputs.docs_only }}
       deploy: ${{ steps.decide.outputs.deploy }}
       bench: ${{ steps.decide.outputs.bench }}
+      web: ${{ steps.decide.outputs.web }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
@@ -59,7 +60,7 @@ jobs:
       # never hides a regression. Without a base (main) everything runs.
       - id: decide
         run: |
-          docs_only=false; deploy=true; bench=true
+          docs_only=false; deploy=true; bench=true; web=true
           if [ -n "$BASE" ]; then
             if python3 scripts/ci_skips.py md-only "$BASE"; then
               docs_only=true; deploy=false; bench=false
@@ -82,7 +83,15 @@ jobs:
               fi
             fi
           fi
-          printf 'docs_only=%s\ndeploy=%s\nbench=%s\n' "$docs_only" "$deploy" "$bench" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = pull_request ] && [ -n "$BASE" ]; then
+            status=0
+            python3 scripts/ci_skips.py web-needed "$BASE" || status=$?
+            if [ "$status" -eq 10 ]; then
+              echo "web skipped: no frontend, API or build inputs changed"
+              web=false
+            fi
+          fi
+          printf 'docs_only=%s\ndeploy=%s\nbench=%s\nweb=%s\n' "$docs_only" "$deploy" "$bench" "$web" >> "$GITHUB_OUTPUT"
 
   # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
   # `just check` adds over `check-ci` (`docs`, `secrets`): workflow.yml does not run for the commits a train merges, and
@@ -148,7 +157,7 @@ jobs:
   # Keep frontend checks parallel to the browser suite; neither waits for the other's build.
   web:
     needs: changes
-    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.docs_only != 'true')
+    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.web == 'true')
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -225,7 +234,7 @@ jobs:
       - if: env.BASE == ''
         run: just bench-once
       - if: env.BASE != ''
-        run: just bench-compare "$BASE"
+        run: bash scripts/ci/bench-compare.sh "$BASE"
 
   # A train or main only, as for the benchmark: a deployment regression is caught by the train, which ejects the PR that
   # broke it (scripts/train.py). The skip rule is the one ci.yml always had: only files clearly outside the container.
