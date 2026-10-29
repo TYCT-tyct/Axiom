@@ -140,5 +140,6 @@ func (r *rig) install(preset routing.Preset, endpoints ...routing.Endpoint) {
 		r.t.Fatal(err)
 	}
 	r.router.Replace(snap)
+	r.routes = endpoints
 	r.publish()
 }

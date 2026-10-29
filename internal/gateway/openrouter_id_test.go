@@ -23,7 +23,7 @@ func TestOpenRouterVersionedModel(t *testing.T) {
 		t.Fatalf("the list: %v; want acme/versioned and no internal slug", ids)
 	}
 	m := r.orModel(a, "acme/versioned")
-	want := []string{"acme/versioned", "versioned", orListPath + "/acme/versioned"}
+	want := []string{"acme/versioned", "versioned", orListPath + "/acme/versioned/endpoints"}
 	if got := []string{m.CanonicalSlug, m.Name, m.Links.Details}; !slices.Equal(got, want) {
 		t.Errorf("the entry: %+v", m)
 	}

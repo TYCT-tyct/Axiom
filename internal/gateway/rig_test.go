@@ -69,6 +69,7 @@ type rig struct {
 	beta      catalog.ModelID                  // acme/beta, served by one
 	bare      catalog.ModelID                  // anthropic/claude-test, listed with its maker's name too, and no endpoint
 	claude    catalog.ModelID                  // anthropic/claude-live, listed with its maker's name too, served by one
+	routes    []routing.Endpoint               // endpoints in the installed snapshot
 	endpoints map[string]routing.Endpoint      // by name: alpha-1 and alpha-2 serve alpha, beta-1 serves beta, claude-1 serves claude
 	sold      map[catalog.ModelID]billing.Sold // the sale prices the OpenRouter list shows, by model
 	models    *ModelList                       // the list in OpenRouter's shape, published as a build would publish it
@@ -91,13 +92,7 @@ func (r *rig) publish() {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	served := make(map[catalog.ModelID]struct{})
-	for m := range snap.Models() {
-		if r.router != nil && r.router.Serves(m.ID) {
-			served[m.ID] = struct{}{}
-		}
-	}
-	l, err := newOpenRouterListing(snap, r.prices(), served)
+	l, err := newOpenRouterListing(snap, r.prices(), r.routes)
 	if err != nil {
 		r.t.Fatal(err)
 	}
