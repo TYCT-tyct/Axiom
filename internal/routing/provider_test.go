@@ -70,17 +70,17 @@ func TestProviderSortPartition(t *testing.T) {
 		global, closed bool
 		want           []routing.EndpointID
 	}{
-		{"model partition", false, false, []routing.EndpointID{ep(1), ep(2)}},
-		{"global partition", true, false, []routing.EndpointID{ep(2), ep(1)}},
-		{"top without fallback", false, true, []routing.EndpointID{ep(1)}},
-		{"global top without fallback", true, true, []routing.EndpointID{ep(2)}},
+		{"model partition", false, false, []routing.EndpointID{ep(1), ep(3), ep(2)}},
+		{"global partition", true, false, []routing.EndpointID{ep(2), ep(1), ep(3)}},
+		{"top per model without supplier fallback", false, true, []routing.EndpointID{ep(1), ep(2)}},
+		{"global top per model without supplier fallback", true, true, []routing.EndpointID{ep(2), ep(1)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			second := endpoint(t, 2, func(e *routing.Endpoint) {
 				e.Model = other
 				e.Price.Schedule = schedule(t, "0.0000001", "0.0000002", "")
 			})
-			h := newHarness(t, routing.Config{}, openPreset(), endpoint(t, 1), second)
+			h := newHarness(t, routing.Config{}, openPreset(), endpoint(t, 1), second, endpoint(t, 3))
 			in := input()
 			in.Models = []catalog.ModelID{model, other}
 			cheapest := routing.Cheapest

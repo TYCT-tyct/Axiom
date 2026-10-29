@@ -103,7 +103,7 @@ func TestOwnedFallbackDoesNotBypassOtherFilters(t *testing.T) {
 }
 
 func TestLastResortPreservesRequestPriorities(t *testing.T) {
-	for _, tc := range []string{"model", "global model", "supplier", "codename", "slow", "same tier"} {
+	for _, tc := range []string{"model", "global model", "codename", "slow", "same tier"} {
 		t.Run(tc, func(t *testing.T) {
 			h := newHarness(t, routing.Config{MaxStale: time.Hour}, openPreset())
 			m := routingHealth(t, h)
@@ -124,8 +124,6 @@ func TestLastResortPreservesRequestPriorities(t *testing.T) {
 			case "codename":
 				a.Codename, b.Codename = "g1", "g2"
 				in.Override.OrderNames = []string{"g1", "g2"}
-			case "supplier":
-				in.Override.Order = []routing.SupplierID{a.Supplier, b.Supplier}
 			case "slow":
 				b.Throughput = 1
 				in.Override.MinThroughput = 50

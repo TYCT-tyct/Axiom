@@ -119,15 +119,14 @@ func (r *Router) nothing(rec *Record) (*Wait, error) {
 // retry budget is used up is left out, as the budget is for.
 func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 	entries := make([]Entry, 0, MaxEntries)
-	limit := MaxEntries
-	if n.over.singleEntry() {
-		limit = 1
-	}
+	singleSupplier := n.over.NoFallbacks && len(n.over.OrderNames) == 0
 	for _, c := range order {
-		if len(entries) == limit {
+		if len(entries) == MaxEntries {
 			break
 		}
-		if slices.ContainsFunc(entries, func(e Entry) bool { return e.Endpoint == c.ID }) {
+		if slices.ContainsFunc(entries, func(e Entry) bool {
+			return e.Endpoint == c.ID || singleSupplier && e.Model == c.Model
+		}) {
 			continue
 		}
 		if len(entries) > 0 && !r.budget.allow(c.Supplier, n.now) {
@@ -334,23 +333,14 @@ func (n *need) presetAllows(c *candidate, price *candidatePrice) bool {
 // and an endpoint must pass both.
 func (n *need) overrideAllows(c *candidate, price *candidatePrice) bool {
 	o := n.over
-	return o.allowsSupplier(c) &&
+	return o.allowsName(c.Codename) &&
 		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
 		n.withinLimit(o.MaxPrice, c, price)
-}
-
-func (o *Override) singleEntry() bool {
-	return o.NoFallbacks && len(o.Order) == 0 && len(o.OrderNames) == 0
 }
 
 func (o *Override) allowsName(name string) bool {
 	return (len(o.OnlyNames) == 0 || slices.Contains(o.OnlyNames, name)) && !slices.Contains(o.ExcludeNames, name) &&
 		(len(o.OrderNames) == 0 || !o.NoFallbacks || slices.Contains(o.OrderNames, name))
-}
-
-func (o *Override) allowsSupplier(c *candidate) bool {
-	return (len(o.Only) == 0 || listed(o.Only, c.Supplier)) && !listed(o.Exclude, c.Supplier) &&
-		(!o.NoFallbacks || len(o.Order) == 0 || listed(o.Order, c.Supplier)) && o.allowsName(c.Codename)
 }
 
 // withinLimit holds the endpoint's price to a limit against the longest prompt any sampling of the request can have.
@@ -393,10 +383,30 @@ func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
 		}
 	}
 	if hasOwned {
-		out = out[:min(len(out), slots-1)]
-		out = append(out, owned)
+		out = includeOwnedFallback(out, owned, slots, n.over.NoFallbacks && len(n.over.OrderNames) == 0)
 	}
 	return out
+}
+
+// Repeated suppliers of one model must not consume the slots reserved for alternate models before entries deduplicates.
+func includeOwnedFallback(order []ranked, owned ranked, slots int, perModel bool) []ranked {
+	if perModel {
+		if slices.ContainsFunc(order, func(c ranked) bool { return c.Model == owned.Model }) {
+			return order
+		}
+		kept := order[:0]
+		for _, c := range order {
+			if len(kept) == slots-1 {
+				break
+			}
+			if !slices.ContainsFunc(kept, func(previous ranked) bool { return previous.Model == c.Model }) {
+				kept = append(kept, c)
+			}
+		}
+		order = kept
+	}
+	order = order[:min(len(order), slots-1)]
+	return append(order, owned)
 }
 
 func ownedFallback(order []ranked, now time.Time) (owned ranked, found bool) {

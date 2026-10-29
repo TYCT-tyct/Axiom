@@ -83,10 +83,7 @@ func (n *need) order(c *candidate) int {
 		}
 		return len(names)
 	}
-	order := n.over.Order
-	if len(order) == 0 {
-		order = n.preset.Order
-	}
+	order := n.preset.Order
 	if i := slices.Index(order, c.Supplier); i >= 0 {
 		return i
 	}

@@ -25,7 +25,7 @@ func override(raw []byte) (routing.Override, error) {
 	}
 	var members map[string]jsonx.Raw
 	if err := jsonx.Unmarshal(raw, &members); err != nil {
-		return o, providerInvalid("provider is not valid.")
+		return o, invalid("provider is not valid.")
 	}
 	for _, name := range slices.Sorted(maps.Keys(members)) { // in a fixed order, so a request with two faults is told the same one
 		value := bytes.TrimSpace(members[name])
@@ -70,18 +70,12 @@ var providerMembers = map[string]func(o *routing.Override, name string, value []
 	"require_parameters": readRequireParameters,
 }
 
-func providerInvalid(message string) *Refusal {
-	ref := invalid(message)
-	ref.OpenRouterCode = true
-	return ref
-}
-
 func unsupported(name string) *Refusal {
-	return providerInvalid("provider." + name + " is not supported yet.")
+	return invalid("provider." + name + " is not supported yet.")
 }
 
 func mismatch(name, want string) *Refusal {
-	return providerInvalid("provider." + name + " must be " + want + ".")
+	return invalid("provider." + name + " must be " + want + ".")
 }
 
 func readRequireParameters(_ *routing.Override, name string, value []byte) error {
@@ -90,7 +84,7 @@ func readRequireParameters(_ *routing.Override, name string, value []byte) error
 		return mismatch(name, "true or false")
 	}
 	if b {
-		return providerInvalid("provider." + name + " true is not supported: endpoint parameter inventories are unavailable.")
+		return invalid("provider." + name + " true is not supported: endpoint parameter inventories are unavailable.")
 	}
 	return nil
 }
@@ -101,7 +95,7 @@ func readQuantizations(_ *routing.Override, name string, value []byte) error {
 		return mismatch(name, "a list of names")
 	}
 	if len(names) > 0 {
-		return providerInvalid("provider." + name + " is not supported: endpoint quantization metadata is unavailable.")
+		return invalid("provider." + name + " is not supported: endpoint quantization metadata is unavailable.")
 	}
 	return nil
 }
@@ -159,6 +153,9 @@ func readSortObject(o *routing.Override, name string, value []byte) (string, err
 	var by string
 	for _, member := range slices.Sorted(maps.Keys(members)) {
 		v := bytes.TrimSpace(members[member])
+		if string(v) == "null" {
+			continue
+		}
 		switch member {
 		case "by":
 			if err := jsonx.Unmarshal(v, &by); err != nil {
@@ -239,7 +236,7 @@ func readMaxPrice(o *routing.Override, name string, value []byte) error {
 		item, ok := maxPriceItems[member]
 		if !ok {
 			if member == "request" || member == "image" {
-				return providerInvalid("provider." + name + "." + member + " is not supported: per-request and per-image prices are unavailable.")
+				return invalid("provider." + name + "." + member + " is not supported: per-request and per-image prices are unavailable.")
 			}
 			return unsupported(name + "." + member)
 		}

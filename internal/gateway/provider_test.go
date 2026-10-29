@@ -3,6 +3,7 @@ package gateway
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,7 @@ func TestOverride(t *testing.T) {
 		"sort by throughput":       {`{"sort":"throughput"}`, routing.Override{Sort: &fastest}},
 		"sort by latency":          {`{"sort":"latency"}`, routing.Override{Sort: &latency}},
 		"sort object default":      {`{"sort":{"by":"price"}}`, routing.Override{Sort: &cheapest}},
+		"null sort partition":      {`{"sort":{"by":"price","partition":null}}`, routing.Override{Sort: &cheapest}},
 		"sort by model":            {`{"sort":{"by":"throughput","partition":"model"}}`, routing.Override{Sort: &fastest}},
 		"sort across models":       {`{"sort":{"by":"latency","partition":"none"}}`, routing.Override{Sort: &latency, SortGlobal: true}},
 		"supplier selection":       {`{"order":["g2","g1"],"only":["g1"],"ignore":["g3"]}`, routing.Override{OrderNames: []string{"g2", "g1"}, OnlyNames: []string{"g1"}, ExcludeNames: []string{"g3"}}},
@@ -117,7 +119,7 @@ func TestOverrideRefuses(t *testing.T) {
 			t.Parallel()
 			_, err := override([]byte(tc.provider))
 			var ref *Refusal
-			if !errors.As(err, &ref) || ref.Status != http.StatusBadRequest || !ref.OpenRouterCode || !strings.Contains(ref.Message, tc.named) {
+			if !errors.As(err, &ref) || ref.Status != http.StatusBadRequest || !strings.Contains(ref.Message, tc.named) {
 				t.Errorf("got %v, want a 400 naming %s", err, tc.named)
 			}
 		})
@@ -283,12 +285,15 @@ func TestSortRanksAsAsked(t *testing.T) {
 	beta := r.endpoints["beta-1"].ID
 	for _, tc := range []struct {
 		partition string
+		closed    bool
 		want      []routing.EndpointID
 	}{
-		{"model", []routing.EndpointID{one, two, beta}},
-		{"none", []routing.EndpointID{one, beta, two}},
+		{"model", false, []routing.EndpointID{one, two, beta}},
+		{"none", false, []routing.EndpointID{one, beta, two}},
+		{"model", true, []routing.EndpointID{one, beta}},
+		{"none", true, []routing.EndpointID{one, beta}},
 	} {
-		members := `"models":["acme/beta"],"provider":{"sort":{"by":"latency","partition":"` + tc.partition + `"}},`
+		members := `"models":["acme/beta"],"provider":{"sort":{"by":"latency","partition":"` + tc.partition + `"},"allow_fallbacks":` + strconv.FormatBool(!tc.closed) + `},`
 		if route, resp, body := r.sendNamed(a, "acme/alpha", members); resp.StatusCode != http.StatusOK || !cmp.Equal(route, tc.want) {
 			t.Errorf("partition %s: %d, route %v, want %v: %s", tc.partition, resp.StatusCode, route, tc.want, body)
 		}
@@ -296,7 +301,7 @@ func TestSortRanksAsAsked(t *testing.T) {
 	r.idle(1 << 30)
 }
 
-func TestProviderOpenRouterErrors(t *testing.T) {
+func TestProviderErrorsKeepStringCodes(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
@@ -313,7 +318,7 @@ func TestProviderOpenRouterErrors(t *testing.T) {
 		resp, out := r.do(http.MethodPost, "/api/v1/chat/completions", a.key, strings.NewReader(body))
 		var got struct {
 			Error struct {
-				Code     int    `json:"code"`
+				Code     string `json:"code"`
 				Message  string `json:"message"`
 				Metadata struct {
 					Type string `json:"error_type"`
@@ -323,7 +328,7 @@ func TestProviderOpenRouterErrors(t *testing.T) {
 		if err := jsonx.Unmarshal([]byte(out), &got); err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != http.StatusBadRequest || got.Error.Code != http.StatusBadRequest || got.Error.Metadata.Type != "invalid_request" || !strings.Contains(got.Error.Message, "provider."+tc.member) {
+		if resp.StatusCode != http.StatusBadRequest || got.Error.Code != "invalid_request" || got.Error.Metadata.Type != "invalid_request" || !strings.Contains(got.Error.Message, "provider."+tc.member) {
 			t.Errorf("%s: %d %s", tc.provider, resp.StatusCode, out)
 		}
 	}

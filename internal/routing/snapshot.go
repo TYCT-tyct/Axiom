@@ -147,11 +147,9 @@ type Endpoint struct {
 // Override is what a request's provider parameter may change: filters only tighten a preset's, the price limits only
 // lower it, the order and the sort replace it, and the performance wishes only reorder.
 type Override struct {
-	Only, Exclude                       []SupplierID
 	OnlyNames, ExcludeNames, OrderNames []string
 	SortGlobal                          bool // sort.partition none: rank across models
-	Order                               []SupplierID
-	NoFallbacks                         bool // with an order, restrict to it; without one, retain the top entry
+	NoFallbacks                         bool // with an order, restrict to it; without one, retain one supplier per model
 	Sort                                *Strategy
 	Classes                             ClassSet  // when not zero, only these classes
 	Policies                            PolicySet // when not zero, only these policies

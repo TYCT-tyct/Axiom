@@ -189,7 +189,7 @@ func TestStickyIsFirstWhateverTheWeights(t *testing.T) {
 		if got := first(h.plan(in)); got != in.Sticky {
 			t.Fatalf("seed %d: first %v, the session's %v", seed, got, in.Sticky)
 		}
-		in.Override.Order = []routing.SupplierID{sup(1)}
+		in.Override.OrderNames = []string{"g1"}
 		in.Sticky = ep(3)
 		if got := first(h.plan(in)); got != ep(1) {
 			t.Fatalf("seed %d: with an order naming supplier 1, first is %v", seed, got)

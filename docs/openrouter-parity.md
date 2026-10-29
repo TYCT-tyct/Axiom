@@ -63,11 +63,11 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 |---|---|---|---|---|---|---|
 | `provider.order`（供应商 slug 列表） | 按序尝试，可含 `provider/variant/region/tier` 形式的端点 slug | docs/guides/routing/provider-selection | 有：按不可变公开分组代号排序（`gw/provider.go`、`rt/rank.go`） | 无（按渠道优先级/权重，非请求级） | 无 | 精确选组，不公开真实名称；官方名称没有可信映射；偏离见 gateway 领域文档 |
 | `provider.only` / `provider.ignore` | 只允许/排除某些供应商，与账户级设置合并 | 同上 | 有：按公开分组代号过滤，不扩大到同供应商其他组（`rt/plan.go`） | 无 | 无 | 预设和归属权限独立生效 |
-| `provider.allow_fallbacks` | 默认 true；false 配合 order 限定列表，无 order 则只取首选 | 同上 | 有：命名顺序限制集合，无顺序仅保留首条（`rt/plan.go`） | 无 | 无 | 不延长已冻结路线 |
+| `provider.allow_fallbacks` | 默认 true；false 配合 order 限定列表，无 order 则每个模型只取首选 | 同上 | 有：命名顺序限制集合，无顺序每个模型仅保留首条，保留 models 回退（`rt/plan.go`） | 无 | 无 | 不延长已冻结路线 |
 | `provider.require_parameters` | 只路由到支持请求里全部参数的端点 | 同上 | false 接受，true 明确 400；已有能力匹配始终强制 | 无 | 无 | 没有中转端点完整参数清单，模型能力不能代替 |
-| `provider.data_collection`（`allow`/`deny`） | 排除会存储数据的供应商 | 同上 | 有：`gw/provider.go:126-135`，`deny` 映射到「不留存」政策 | 无 | 无 | 无 |
-| `provider.zdr` | 只走零数据保留端点 | 同上；docs/guides/features/zdr | 有：`gw/provider.go:137-147` `readZDR`（与 `data_collection: deny` 同一个过滤，`noRetention`） | 无 | 无 | 无 |
-| `provider.enforce_distillable_text` | 只走允许文本蒸馏的模型 | 同上 | 没有：不在 `providerMembers`，会 400（`gw/provider.go:41-43`） | 无 | 无 | 低优先；但 400 会让带此成员的客户端整体失败 |
+| `provider.data_collection`（`allow`/`deny`） | 排除会存储数据的供应商 | 同上 | 有：`readDataCollection`（`gw/provider.go`），`deny` 映射到「不留存」政策 | 无 | 无 | 无 |
+| `provider.zdr` | 只走零数据保留端点 | 同上；docs/guides/features/zdr | 有：`readZDR`（`gw/provider.go`；与 `data_collection: deny` 同一个过滤，`noRetention`） | 无 | 无 | 无 |
+| `provider.enforce_distillable_text` | 只走允许文本蒸馏的模型 | 同上 | 没有：不在 `providerMembers`，由 `override` 拒绝 400（`gw/provider.go`） | 无 | 无 | 低优先；但 400 会让带此成员的客户端整体失败 |
 | `provider.quantizations`（int4/int8/fp4/mxfp4/nvfp4/fp6/fp8/mxfp8/fp16/bf16/fp32/unknown） | 按量化级别过滤 | 同上 | 非空列表明确 400；空列表接受 | 无 | 无 | 缺端点量化事实，偏离见 gateway 领域文档 |
 | `provider.sort` 字符串：`price` / `throughput` / `latency` | 关闭负载均衡，按该维度排序 | 同上 | 有：三种维度分别排序（`gw/provider.go`、`rt/rank.go`） | 无 | 无 | 未测量的按价格加权排在测量值之后 |
 | `provider.sort` 对象 `{by, partition}`（`partition: model/none`） | 多模型备选时是否跨模型统一排序 | 同上 | 有：默认 model；none 跨主模型和备选排序 | 无 | 无 | 未知对象成员明确 400 |

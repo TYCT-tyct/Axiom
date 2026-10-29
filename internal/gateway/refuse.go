@@ -120,11 +120,7 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 		detail["type"], detail["message"] = typ, message
 		body = map[string]any{"type": "error", "error": detail}
 	} else {
-		var code any = r.Code
-		if r.OpenRouterCode {
-			code = r.Status
-		}
-		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "param": "", "code": code, "metadata": detail}}
+		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "param": "", "code": r.Code, "metadata": detail}}
 	}
 	out, _ := jsonx.MarshalCanonical(body) //nolint:errcheck // a map of strings and numbers always encodes
 	h := w.Header()
