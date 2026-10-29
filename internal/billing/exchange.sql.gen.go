@@ -7,12 +7,36 @@ package billing
 
 import (
 	"context"
+	"time"
 
 	"uuid"
 )
 
+const claimExchangeSync = `-- name: ClaimExchangeSync :exec
+UPDATE billing.exchange_sync SET started_at = coalesce(started_at, $1), last_attempt = $1 WHERE singleton
+`
+
+func (q *Queries) ClaimExchangeSync(ctx context.Context, db DBTX, at *time.Time) error {
+	_, err := db.Exec(ctx, claimExchangeSync, at)
+	return err
+}
+
+const completeExchangeSync = `-- name: CompleteExchangeSync :exec
+UPDATE billing.exchange_sync SET last_success = $1, source_at = $2 WHERE singleton
+`
+
+type CompleteExchangeSyncParams struct {
+	At       *time.Time
+	SourceAt *time.Time
+}
+
+func (q *Queries) CompleteExchangeSync(ctx context.Context, db DBTX, arg CompleteExchangeSyncParams) error {
+	_, err := db.Exec(ctx, completeExchangeSync, arg.At, arg.SourceAt)
+	return err
+}
+
 const currentExchangeRates = `-- name: CurrentExchangeRates :many
-SELECT DISTINCT ON (base, quote) id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at FROM billing.exchange_rates ORDER BY base, quote, version DESC
+SELECT DISTINCT ON (base, quote) id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at, source_at FROM billing.exchange_rates ORDER BY base, quote, version DESC
 `
 
 func (q *Queries) CurrentExchangeRates(ctx context.Context, db DBTX) ([]BillingExchangeRate, error) {
@@ -36,6 +60,7 @@ func (q *Queries) CurrentExchangeRates(ctx context.Context, db DBTX) ([]BillingE
 			&i.Reason,
 			&i.CreatedBy,
 			&i.CreatedAt,
+			&i.SourceAt,
 		); err != nil {
 			return nil, err
 		}
@@ -48,7 +73,7 @@ func (q *Queries) CurrentExchangeRates(ctx context.Context, db DBTX) ([]BillingE
 }
 
 const exchangeHistory = `-- name: ExchangeHistory :many
-SELECT id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at FROM billing.exchange_rates WHERE base = $1 AND quote = $2
+SELECT id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at, source_at FROM billing.exchange_rates WHERE base = $1 AND quote = $2
 AND ($3::bigint = 0 OR version < $3)
 ORDER BY version DESC LIMIT 100
 `
@@ -80,6 +105,7 @@ func (q *Queries) ExchangeHistory(ctx context.Context, db DBTX, arg ExchangeHist
 			&i.Reason,
 			&i.CreatedBy,
 			&i.CreatedAt,
+			&i.SourceAt,
 		); err != nil {
 			return nil, err
 		}
@@ -92,7 +118,7 @@ func (q *Queries) ExchangeHistory(ctx context.Context, db DBTX, arg ExchangeHist
 }
 
 const exchangeRateByID = `-- name: ExchangeRateByID :many
-SELECT id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at FROM billing.exchange_rates WHERE id = $1
+SELECT id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at, source_at FROM billing.exchange_rates WHERE id = $1
 `
 
 func (q *Queries) ExchangeRateByID(ctx context.Context, db DBTX, id uuid.UUID) ([]BillingExchangeRate, error) {
@@ -116,6 +142,7 @@ func (q *Queries) ExchangeRateByID(ctx context.Context, db DBTX, id uuid.UUID) (
 			&i.Reason,
 			&i.CreatedBy,
 			&i.CreatedAt,
+			&i.SourceAt,
 		); err != nil {
 			return nil, err
 		}
@@ -128,9 +155,9 @@ func (q *Queries) ExchangeRateByID(ctx context.Context, db DBTX, id uuid.UUID) (
 }
 
 const insertExchangeRate = `-- name: InsertExchangeRate :one
-INSERT INTO billing.exchange_rates (id, base, quote, version, numerator, denominator, kind, reason, created_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at
+INSERT INTO billing.exchange_rates (id, base, quote, version, numerator, denominator, kind, reason, created_by, source, source_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at, source_at
 `
 
 type InsertExchangeRateParams struct {
@@ -143,6 +170,8 @@ type InsertExchangeRateParams struct {
 	Kind        string
 	Reason      string
 	CreatedBy   string
+	Source      string
+	SourceAt    *time.Time
 }
 
 func (q *Queries) InsertExchangeRate(ctx context.Context, db DBTX, arg InsertExchangeRateParams) (BillingExchangeRate, error) {
@@ -156,6 +185,8 @@ func (q *Queries) InsertExchangeRate(ctx context.Context, db DBTX, arg InsertExc
 		arg.Kind,
 		arg.Reason,
 		arg.CreatedBy,
+		arg.Source,
+		arg.SourceAt,
 	)
 	var i BillingExchangeRate
 	err := row.Scan(
@@ -170,12 +201,13 @@ func (q *Queries) InsertExchangeRate(ctx context.Context, db DBTX, arg InsertExc
 		&i.Reason,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.SourceAt,
 	)
 	return i, err
 }
 
 const latestExchangeRate = `-- name: LatestExchangeRate :many
-SELECT id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at FROM billing.exchange_rates WHERE base = $1 AND quote = $2 ORDER BY version DESC LIMIT 1
+SELECT id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at, source_at FROM billing.exchange_rates WHERE base = $1 AND quote = $2 ORDER BY version DESC LIMIT 1
 `
 
 type LatestExchangeRateParams struct {
@@ -204,6 +236,7 @@ func (q *Queries) LatestExchangeRate(ctx context.Context, db DBTX, arg LatestExc
 			&i.Reason,
 			&i.CreatedBy,
 			&i.CreatedAt,
+			&i.SourceAt,
 		); err != nil {
 			return nil, err
 		}
@@ -222,5 +255,32 @@ SELECT pg_advisory_xact_lock($1::bigint)
 // The advisory namespace is dedicated to FX. Six ASCII bytes encode the normalized pair without collisions.
 func (q *Queries) LockExchangePair(ctx context.Context, db DBTX, pairKey int64) error {
 	_, err := db.Exec(ctx, lockExchangePair, pairKey)
+	return err
+}
+
+const lockExchangeSync = `-- name: LockExchangeSync :one
+SELECT singleton, started_at, last_attempt, last_success, source_at, alerted FROM billing.exchange_sync WHERE singleton FOR UPDATE
+`
+
+func (q *Queries) LockExchangeSync(ctx context.Context, db DBTX) (BillingExchangeSync, error) {
+	row := db.QueryRow(ctx, lockExchangeSync)
+	var i BillingExchangeSync
+	err := row.Scan(
+		&i.Singleton,
+		&i.StartedAt,
+		&i.LastAttempt,
+		&i.LastSuccess,
+		&i.SourceAt,
+		&i.Alerted,
+	)
+	return i, err
+}
+
+const setExchangeAlert = `-- name: SetExchangeAlert :exec
+UPDATE billing.exchange_sync SET alerted = $1 WHERE singleton
+`
+
+func (q *Queries) SetExchangeAlert(ctx context.Context, db DBTX, alerted bool) error {
+	_, err := db.Exec(ctx, setExchangeAlert, alerted)
 	return err
 }

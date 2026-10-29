@@ -68,12 +68,14 @@ type nodeSettings struct {
 	trustedProxies                    []netip.Prefix
 	valkey                            kv.Config
 	smtp                              mail.Config
+	exchangeSource                    string
 }
 
 // readSettings reads and checks every variable the node uses, so a node started wrong fails with the whole list.
 func readSettings(environ []string) (nodeSettings, error) {
 	env := config.New(environ)
 	s := nodeSettings{
+		exchangeSource:    env.String("AXIOM_EXCHANGE_SOURCE", "manual"),
 		publicAddr:        env.Addr(publicAddrVar, ":8080"),         // model calls, the console, payment callbacks
 		adminAddr:         env.Addr(adminAddrVar, "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
 		probesAddr:        probesListenAddr(env),
@@ -104,6 +106,9 @@ func readSettings(environ []string) (nodeSettings, error) {
 	// configuration joins the problems above, so the node still reports everything wrong at once. The cache's own settings
 	// are judged with the rest, so a node that is wrong about them does not touch the database.
 	smtp, mailErr := mail.ReadConfig(env)
+	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
+		mailErr = errors.Join(mailErr, errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb"))
+	}
 	s.smtp = smtp
 	if err := errors.Join(env.Err(), mailErr, s.valkey.Resolve()); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
@@ -172,7 +177,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer closeCache(ctx, cache, cfg.shutdownTimeout, logger)
-	queue, recorder, recovery, err := startBackground(syncCtx, db, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, tel, logger, cfg.shutdownTimeout, record)
+	queue, recorder, recovery, err := startBackground(syncCtx, db, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, tel, logger, cfg.shutdownTimeout, record)
 	if err != nil {
 		return err
 	}
@@ -320,7 +325,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 // so a burst of syncs cannot hold a money job back (internal/platform/README.md「任务队列」). It reaches the suppliers and
 // the datasets through exit, the client the whole node shares.
 func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
-	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher,
+	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
 	tel *telemetry.Telemetry, logger *slog.Logger,
 ) (*pg.Queue, *accounts.PasswordRecovery, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
@@ -342,6 +347,9 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 		}); err != nil {
 			return nil, nil, err
 		}
+	}
+	if err := registerExchangeSource(ctx, db, queue, exit, logger, exchangeSource); err != nil {
+		return nil, nil, err
 	}
 	if err := registerSalePrices(db, queue); err != nil {
 		return nil, nil, err
@@ -436,12 +444,12 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // closed on every way out (closeRecorder, stopQueue), before the database they use; a queue that fails to start closes
 // the recorder it had already started, since the caller has no defer of its own yet.
 func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
-	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher,
+	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
 	tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, error) {
 	recorder := record(ctx, db, tel, logger)
-	queue, recovery, err := startSync(ctx, db, smtp, cache, master, keys, exit, prices, tel, logger)
+	queue, recovery, err := startSync(ctx, db, smtp, cache, master, keys, exit, prices, exchangeSource, tel, logger)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
 		return nil, nil, nil, err
@@ -576,4 +584,11 @@ func listen(ctx context.Context, servers []*listening) error {
 		s.listener = listener
 	}
 	return nil
+}
+
+func registerExchangeSource(ctx context.Context, db *pg.DB, queue *pg.Queue, exit *egress.Client, logger *slog.Logger, source string) error {
+	if source != "ecb" {
+		return nil
+	}
+	return billing.RegisterExchangeSync(ctx, billing.ExchangeSyncConfig{DB: db, Scope: pg.PlatformScope(), Queue: queue, Client: exit, Logger: logger})
 }
