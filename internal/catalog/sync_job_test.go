@@ -1,7 +1,6 @@
 package catalog_test
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"net/http"
@@ -18,40 +17,8 @@ import (
 	"axiom/internal/platform/egresstest"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
-
-// logBuffer is a log the tests read, written by the goroutines that log.
-type logBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (l *logBuffer) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
-}
-
-func (l *logBuffer) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.String()
-}
-
-func (l *logBuffer) logger() *slog.Logger { return slog.New(slog.NewTextHandler(l, nil)) }
-
-// scrape is the value of a metric in the process's metrics text, or what the text was when it is absent.
-func scrape(t *testing.T, tel *telemetry.Telemetry, name string) string {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	tel.MetricsHandler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
-	for line := range strings.Lines(rec.Body.String()) {
-		if value, ok := strings.CutPrefix(line, name+" "); ok {
-			return strings.TrimSpace(value)
-		}
-	}
-	return "absent from:\n" + rec.Body.String()
-}
 
 // openrouterDataset is a model list no model of these tests follows: a round needs every dataset to be readable, and only
 // makes a result for a model that follows one.
@@ -150,7 +117,7 @@ func TestTheSyncRoundRunsOnTheSyncsQueue(t *testing.T) {
 
 func runSyncQueueTest(t *testing.T, failing bool) {
 	t.Helper()
-	logs := &logBuffer{}
+	logs := &telemetrytest.Buffer{}
 	s := newStore(t)
 	d := served(`"gpt-x-2025-01-01"=` + xPrices("1e-06", "2e-06", "1e-07"))
 	now := time.Date(2025, 11, 1, 3, 0, 0, 0, time.UTC)
@@ -159,7 +126,7 @@ func runSyncQueueTest(t *testing.T, failing bool) {
 	d.failing.Store(failing)
 	q := s.db.NewQueue(slog.New(slog.DiscardHandler), platformScope, nil)
 	if err := catalog.RegisterSync(t.Context(), catalog.SyncJobConfig{
-		DB: s.db, Scope: platformScope, Queue: q, Fetcher: d.fetcher(t), Logger: logs.logger(),
+		DB: s.db, Scope: platformScope, Queue: q, Fetcher: d.fetcher(t), Logger: logs.Logger(),
 		Clock: func() time.Time {
 			ranOnce.Do(func() { close(ran) })
 			return now
@@ -259,11 +226,11 @@ func TestTheSyncAlertsWhenThePricesGoUnrefreshed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logs := &logBuffer{}
+	logs := &telemetrytest.Buffer{}
 	d := served(`"gpt-x-2025-01-01"=` + xPrices("1e-06", "2e-06", "1e-07"))
 	now := time.Date(2025, 11, 1, 3, 0, 0, 0, time.UTC)
 	cfg := catalog.SyncJobConfig{
-		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: logs.logger(),
+		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: logs.Logger(),
 		Meter: tel.Metrics.Meter("axiom/catalog"), Clock: func() time.Time { return now },
 	}
 	round := func() {
@@ -291,13 +258,13 @@ func TestTheSyncAlertsWhenThePricesGoUnrefreshed(t *testing.T) {
 			t.Errorf("the alert lacks %q:\n%s", want, logs.String())
 		}
 	}
-	if got := scrape(t, tel, "axiom_catalog_sync_overdue_total"); got != "1" {
+	if got := telemetrytest.Metric(t, tel, "axiom_catalog_sync_overdue_total"); got != "1" {
 		t.Errorf("the counter reads %s, want 1 after one overdue round", got)
 	}
 	d.failing.Store(false)
 	now = now.Add(time.Minute)
 	round()
-	if got := scrape(t, tel, "axiom_catalog_sync_overdue_total"); got != "1" {
+	if got := telemetrytest.Metric(t, tel, "axiom_catalog_sync_overdue_total"); got != "1" {
 		t.Errorf("the counter reads %s after a success, want 1", got)
 	}
 	if got, want := s.record(), "2025-11-03T04:01:00Z|never|0|0"; got != want {
@@ -310,12 +277,12 @@ func TestTheSyncAlertsWhenThePricesGoUnrefreshed(t *testing.T) {
 func TestTheSyncAlertsWhenItNeverSucceeded(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
-	logs := &logBuffer{}
+	logs := &telemetrytest.Buffer{}
 	d := served(`"gpt-x-2025-01-01"=` + xPrices("1e-06", "2e-06", "1e-07"))
 	d.failing.Store(true)
 	now := time.Date(2025, 11, 1, 3, 0, 0, 0, time.UTC)
 	cfg := catalog.SyncJobConfig{
-		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: logs.logger(),
+		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: logs.Logger(),
 		Clock: func() time.Time { return now },
 	}
 	round := func() {

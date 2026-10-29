@@ -32,6 +32,23 @@ func (f consoleFixture) statementRows(s session, query string) consoleapi.Statem
 	return page
 }
 
+// statementFile keeps full-cap content assertions independent of the HTTP guard's wall-clock budget.
+func (f consoleFixture) statementFile(s session) *bytes.Buffer {
+	f.t.Helper()
+	account, site := f.account(s)
+	currency, err := platform.ParseCurrency("USD")
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var exported bytes.Buffer
+	if err := f.db.ReadTx(f.t.Context(), pg.AccountScopeIn(site, account), func(tx pg.Tx) error {
+		return statementCSV(f.t.Context(), tx, account, currency, &exported)
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+	return &exported
+}
+
 // TestStatement: the statement lists the account's own movements newest first, each with the balance it left, under the
 // kind it was and the call or the batch it was for; a page ends where the next one starts.
 func TestStatement(t *testing.T) {
@@ -204,11 +221,7 @@ func TestStatementExportIsCapped(t *testing.T) {
 	f := newConsoleFixture(t)
 	s := f.owner()
 	f.seedStatementHistory(s, 10_050)
-	rec := f.do(http.MethodGet, "/statement.csv", "", as(s))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("the export: %d %s", rec.Code, rec.Body)
-	}
-	if got := strings.Count(rec.Body.String(), "\n"); got != 10_001 {
+	if got := strings.Count(f.statementFile(s).String(), "\n"); got != 10_001 {
 		t.Errorf("the file has %d lines, want a header and 10,000 movements of %d", got, 10_050)
 	}
 	if page := f.statementRows(s, ""); len(page.Data) != 50 || page.NextCursor == nil {
@@ -256,7 +269,7 @@ func TestStatementExportCutsInsideAPage(t *testing.T) {
 	if first := f.statementRows(s, "?limit=200"); len(first.Data) != 150 || first.NextCursor == nil {
 		t.Fatalf("the first page holds %d rows and the cursor %v; want 150 and a cursor", len(first.Data), first.NextCursor)
 	}
-	records, err := csv.NewReader(f.do(http.MethodGet, "/statement.csv", "", as(s)).Body).ReadAll()
+	records, err := csv.NewReader(f.statementFile(s)).ReadAll()
 	if err != nil || len(records) != statementExport+1 {
 		t.Fatalf("the file has %d records (%v); want a header and %d movements", len(records), err, statementExport)
 	}

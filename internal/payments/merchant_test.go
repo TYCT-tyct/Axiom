@@ -1,7 +1,6 @@
 package payments
 
 import (
-	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"uuid"
 
@@ -18,6 +16,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/secret"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 const theKey = "fake-merchant-key-0123456789"
@@ -30,23 +29,11 @@ type world struct {
 	db             *pg.DB
 	super          string
 	p              *Payments
-	logs           *lockedBuffer
+	logs           *telemetrytest.Buffer
 	siteA, siteB   uuid.UUID
 	account, acctB uuid.UUID
 	user           uuid.UUID
 }
-
-type lockedBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (l *lockedBuffer) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.b.Write(p)
-}
-func (l *lockedBuffer) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
@@ -64,7 +51,7 @@ func newTestWorld(t *testing.T, plugin Plugin) *world {
 	}
 	t.Cleanup(db.Close)
 	w := &world{
-		t: t, db: db, super: d.Superuser, logs: &lockedBuffer{},
+		t: t, db: db, super: d.Superuser, logs: &telemetrytest.Buffer{},
 		siteA: uuid.NewV7(), siteB: uuid.NewV7(), account: uuid.NewV7(), acctB: uuid.NewV7(), user: uuid.NewV7(),
 	}
 	w.exec(fmt.Sprintf("INSERT INTO platform.tenants VALUES ('%s','%[1]s'), ('%[1]s','%s'), ('%s','%[3]s'), ('%[3]s','%s')",
