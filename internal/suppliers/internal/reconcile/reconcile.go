@@ -210,11 +210,13 @@ func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Confi
 	if err != nil {
 		report.Violations = append(report.Violations, fmt.Sprintf("charge %s: %v", m.ChargeID, err))
 	}
+	delisted := false
 	switch verdict {
 	case "under":
-		if n, err := q.DelistEndpoint(ctx, tx, m.EndpointID); err != nil {
+		if n, err := q.DelistEndpoint(ctx, tx, store.DelistEndpointParams{ID: m.EndpointID, CostScheduleID: &m.CostScheduleID}); err != nil {
 			return fmt.Errorf("delist endpoint: %w", err)
 		} else if n > 0 {
+			delisted = true
 			report.Delisted = append(report.Delisted, m.EndpointID)
 		}
 	case "over":
@@ -223,6 +225,7 @@ func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Confi
 	return event(ctx, tx, q, m.ChargeID, m.Revision, map[string]any{
 		"attribution": "attempt", "request_id": m.RequestID.String(), "attempt_seq": m.AttemptSeq, "verdict": verdict,
 		"actual_native": m.ActualNative, "estimated_native": m.EstimatedNative, "cost_flag": m.CostFlag, "test": m.Test,
+		"cost_schedule_id": m.CostScheduleID.String(), "endpoint_delisted": delisted,
 	})
 }
 

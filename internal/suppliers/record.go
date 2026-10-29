@@ -141,12 +141,12 @@ func usedItems(u catalog.Usage) (items catalog.ItemSet) {
 }
 
 // AttemptRecord is a finished attempt, as billing hands it to RecordAttempts. Site and Account are the request's tenant,
-// nil for a request of the platform's own. Test marks a test generation, whose estimate is a bound of our own choosing
+// zero for a request of the platform's own. Test marks a test generation, whose estimate is a bound of our own choosing
 // (TestEndpoint): no tenant pays it, and reconciliation never judges it.
 type AttemptRecord struct {
 	Request       platform.RequestID
 	Seq           platform.AttemptSeq
-	Site, Account *uuid.UUID
+	Site, Account uuid.UUID
 	Receipt       AttemptReceipt
 	Usage         []catalog.Usage
 	Cost          AttemptCost
@@ -175,7 +175,8 @@ func setBasis(row *store.AttemptCostRow, a AttemptRecord) {
 // already recorded stays as it was: a settlement repeated after a crash changes nothing.
 func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) error {
 	rows := make([]store.AttemptCostRow, 0, len(attempts))
-	for _, a := range attempts {
+	for i := range attempts {
+		a := &attempts[i]
 		if !a.Seq.Valid() {
 			return fmt.Errorf("record attempts: attempt number %d of request %s", a.Seq, a.Request)
 		}
@@ -188,12 +189,12 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 			return err
 		}
 		row := store.AttemptCostRow{
-			RequestID: uuid.UUID(a.Request), AttemptSeq: int16(a.Seq), SiteID: a.Site, AccountID: a.Account,
+			RequestID: uuid.UUID(a.Request), AttemptSeq: int16(a.Seq), SiteID: tenant(&a.Site), AccountID: tenant(&a.Account),
 			SupplierID: a.Receipt.supplier, CredentialID: a.Receipt.credential, EndpointID: a.Receipt.endpoint,
 			ScheduleID: a.Receipt.schedule, Usage: usage, PricedAt: a.Receipt.pricedAt, FinishedAt: a.FinishedAt,
 			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate, Test: a.Test,
 		}
-		setBasis(&row, a)
+		setBasis(&row, *a)
 		if a.Receipt.ref != "" {
 			row.ChargeRef = &a.Receipt.ref
 		}
@@ -284,7 +285,7 @@ func ResolveLostRequest(ctx context.Context, tx pg.Tx, id platform.RequestID) er
 // request, when it is settled, released, or cleaned up, and never before. Telling it again changes nothing.
 func EndRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, site, account uuid.UUID, at time.Time) error {
 	err := store.New().InsertEndedRequest(ctx, tx, store.InsertEndedRequestParams{
-		RequestID: uuid.UUID(id), SiteID: tenant(site), AccountID: tenant(account), EndedAt: at,
+		RequestID: uuid.UUID(id), SiteID: tenant(&site), AccountID: tenant(&account), EndedAt: at,
 	})
 	if err != nil {
 		return fmt.Errorf("end the request %s: %w", id, err)
@@ -318,11 +319,11 @@ func (CallWrites) EndRequest(ctx context.Context, tx pg.Tx, request, site, accou
 }
 
 // tenant is a tenant column: NULL for the zero id, which says a request is the platform's own.
-func tenant(id uuid.UUID) *uuid.UUID {
-	if id == (uuid.UUID{}) {
+func tenant(id *uuid.UUID) *uuid.UUID {
+	if *id == (uuid.UUID{}) {
 		return nil
 	}
-	return &id
+	return id
 }
 
 // ReconcileConfig is what reconciliation reads from the operator's settings.

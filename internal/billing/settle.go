@@ -185,7 +185,7 @@ func (c *locked) recordAttempts(ctx context.Context, tx pg.Tx, o Outcome) error 
 		c.cost = sum(c.cost, platform.AmountExact(at.Cost))
 		records[i] = suppliers.AttemptRecord{
 			Request: platform.RequestID(c.id), Seq: platform.AttemptSeq(at.Seq), //nolint:gosec // at most platform.MaxAttempts
-			Site: &c.row.SiteID, Account: &c.row.AccountID,
+			Site: c.row.SiteID, Account: c.row.AccountID,
 			Receipt: at.Receipt, Usage: usages(at.Segments), Cost: at.Estimate, FinishedAt: at.FinishedAt,
 		}
 		e := c.event("attempt_cost", 0)
