@@ -12,6 +12,11 @@ import (
 // Pairing follows sub2api backend/internal/pkg/apicompat/chatcompletions_to_responses.go
 // (21cc92693, 2026-10-22): ordered IDs skip existing IDs and results claim the oldest call by name.
 func (c *canon) upgradeLegacy() error {
+	c.legacy = c.legacyOnly()
+	if c.legacy {
+		disabled := false
+		c.ParallelToolCalls = &disabled
+	}
 	if err := c.upgradeChoice(); err != nil {
 		return err
 	}
@@ -137,6 +142,7 @@ func (c *legacyCalls) add(m *canonMessage) error {
 
 // answer makes a legacy function result a tool result of the call it names.
 func (c *legacyCalls) answer(m *canonMessage) error {
+	m.legacyResult = true
 	if m.ToolCallID != nil { // the client paired it itself
 		m.Role, m.Name = "tool", nil
 		return nil
@@ -176,4 +182,20 @@ func (c *legacyCalls) claim(name string) (id string, ok bool) {
 	}
 	c.pending[name] = queue[1:]
 	return queue[0], true
+}
+
+// legacyOnly keeps modern and mixed clients on the modern response contract.
+func (c *canon) legacyOnly() bool {
+	if len(c.Tools) > 0 || !isNull(c.ToolChoice) {
+		return false
+	}
+	if len(c.Functions) > 0 || !isNull(c.FunctionCall) {
+		return true
+	}
+	for _, m := range c.Messages {
+		if !isNull(m.FunctionCall) || m.Role == "function" {
+			return true
+		}
+	}
+	return false
 }

@@ -27,6 +27,7 @@ type chatAggregate struct {
 	choices                                   []chatChoice
 	at                                        map[int64]int // a choice's place in choices, by its index
 	hadError                                  bool
+	legacy                                    bool
 }
 
 // The pieces of a choice that are strings.
@@ -323,6 +324,14 @@ func (a *chatAggregate) readTool() error {
 
 // toolCall returns the call of the choice with index, starting it.
 func (c *chatChoice) toolCall(a *chatAggregate, index int64) (*chatTool, error) {
+	if a.legacy {
+		if index != 0 {
+			return nil, fmt.Errorf("%w: parallel calls in a legacy reply", ErrUpstream)
+		}
+		if len(a.tool.kind) > 0 && !controlIs(a.tool.kind, "function") {
+			return nil, fmt.Errorf("%w: a non-function call in a legacy reply", ErrUpstream)
+		}
+	}
 	if i, ok := c.toolAt[index]; ok {
 		return &c.tools[i], nil
 	}
@@ -353,7 +362,7 @@ func (a *chatAggregate) body() ([]byte, error) {
 	out = append(append(out, orNull(a.model)...), `,"choices":[`...)
 	for i := range a.choices {
 		var err error
-		if out, err = a.choices[i].render(comma(out), a.hadError); err != nil {
+		if out, err = a.choices[i].render(comma(out), a.hadError, a.legacy); err != nil {
 			return nil, err
 		}
 	}
@@ -399,7 +408,7 @@ func orZero(v []byte) []byte {
 // render appends the choice as a completion's choice: the message, with the members a chunk's delta has only when it
 // has them. A tool call's message has no content, as OpenAI's has none. A choice that never finished, when the reply
 // failed, finished with the error.
-func (c *chatChoice) render(out []byte, failed bool) ([]byte, error) {
+func (c *chatChoice) render(out []byte, failed, legacy bool) ([]byte, error) {
 	out = append(strconv.AppendInt(append(out, `{"index":`...), c.index, 10), `,"message":{"role":"assistant","content":`...)
 	out = appendContents(out, c.strings[pieceContent], len(c.strings[pieceContent]) > 0 || len(c.tools) == 0)
 	out = appendContents(append(out, `,"refusal":`...), c.strings[pieceRefusal], len(c.strings[pieceRefusal]) > 0)
@@ -420,19 +429,12 @@ func (c *chatChoice) render(out []byte, failed bool) ([]byte, error) {
 	if len(c.annotations) > 0 {
 		out = append(append(append(out, `,"annotations":[`...), c.annotations...), ']')
 	}
-	if len(c.tools) > 0 {
-		out = appendTools(append(out, `,"tool_calls":`...), c.tools)
+	if out, err = c.appendCalls(out, legacy); err != nil {
+		return nil, err
 	}
+
 	out = c.appendLogprobs(append(out, `},"logprobs":`...))
-	out = append(out, `,"finish_reason":`...)
-	switch {
-	case len(c.finish) > 0:
-		out = append(out, c.finish...)
-	case failed:
-		out = append(out, `"error"`...)
-	default:
-		out = append(out, "null"...)
-	}
+	out = c.appendFinish(out, failed, legacy)
 	return append(out, '}'), nil
 }
 
@@ -525,3 +527,37 @@ func appendDetails(out, entries []byte) ([]byte, error) {
 }
 
 func (*chatAggregate) failed() {}
+
+func (c *chatChoice) appendCalls(out []byte, legacy bool) ([]byte, error) {
+	if len(c.tools) > 0 {
+		if legacy {
+			if len(c.tools) != 1 {
+				return nil, fmt.Errorf("%w: parallel calls in a legacy reply", ErrUpstream)
+			}
+			t := c.tools[0]
+			out = appendContents(append(out, `,"function_call":{"name":`...), t.name, true)
+			out = appendContents(append(out, `,"arguments":`...), t.arguments, true)
+			out = append(out, '}')
+		} else {
+			out = appendTools(append(out, `,"tool_calls":`...), c.tools)
+		}
+	}
+	return out, nil
+}
+
+func (c *chatChoice) appendFinish(out []byte, failed, legacy bool) []byte {
+	out = append(out, `,"finish_reason":`...)
+	switch {
+	case len(c.finish) > 0:
+		if legacy && controlIs(c.finish, "tool_calls") {
+			out = append(out, `"function_call"`...)
+		} else {
+			out = append(out, c.finish...)
+		}
+	case failed:
+		out = append(out, `"error"`...)
+	default:
+		out = append(out, "null"...)
+	}
+	return out
+}

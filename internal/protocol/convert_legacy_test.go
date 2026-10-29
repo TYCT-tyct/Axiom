@@ -13,12 +13,12 @@ func TestConvertLegacyToMessages(t *testing.T) {
 	convertCases(t, protocol.Messages, []convertCase{
 		{
 			"legacy functions and function_call", chatBody(`"messages":[` + userHi + `],"functions":[{"name":"f","description":"d","parameters":{"type":"object","properties":{}}}],"function_call":"auto"`), nil,
-			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","description":"d","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"auto"}}`,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","description":"d","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}`,
 		},
 		{
 			"a legacy choice of a named function", chatBody(`"messages":[` + userHi + `],"functions":[{"name":"f","description":"d","parameters":{"type":"object","properties":{}}}],"function_call":{"name":"f"}`),
 			func(t *protocol.Target) { t.ForcedToolChoice = catalog.ClaimYes },
-			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","description":"d","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"tool","name":"f"}}`,
+			messagesHead + `"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}],"tools":[{"name":"f","description":"d","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"tool","name":"f","disable_parallel_tool_use":true}}`,
 		},
 		{
 			"a legacy call and its result", chatBody(`"messages":[` + userHi + `,{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{\"a\":1}"}},` +
@@ -76,13 +76,13 @@ func TestConvertLegacyToResponses(t *testing.T) {
 		{
 			"legacy functions and function_call", chatBody(`"messages":[` + userHi + `],"functions":[{"name":"f","description":"d"}],"function_call":{"name":"f"}`), nil,
 			head + `{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}],"tools":[{"type":"function","name":"f","description":"d","strict":false}],` +
-				`"tool_choice":{"type":"function","name":"f"},"store":false}`,
+				`"tool_choice":{"type":"function","name":"f"},"store":false,"parallel_tool_calls":false}`,
 		},
 		{
 			"a legacy call and its result", chatBody(`"messages":[` + userHi + `,{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{\"a\":1}"}},` +
 				`{"role":"function","name":"f","content":"done"}]`), nil,
 			head + `{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]},{"type":"function_call","call_id":"call_legacy_1","name":"f","arguments":"{\"a\":1}"},` +
-				`{"type":"function_call_output","call_id":"call_legacy_1","output":"done"}],"store":false}`,
+				`{"type":"function_call_output","call_id":"call_legacy_1","output":"done"}],"store":false,"parallel_tool_calls":false}`,
 		},
 	})
 }
@@ -117,7 +117,11 @@ func TestLegacyConversionMatchesTools(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				want, err := convertBody(format.f, chatBody(c.current), nil)
+				current := c.current
+				if c.name != "mixed definitions" {
+					current += `,"parallel_tool_calls":false`
+				}
+				want, err := convertBody(format.f, chatBody(current), nil)
 				if err != nil {
 					t.Fatal(err)
 				}
