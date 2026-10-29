@@ -34,6 +34,7 @@ const (
 	// reloadEvery is how often the suppliers' snapshot is rebuilt, which is the catalog's polling period: routing
 	// merges the two every 5 seconds, so a faster reload would only be read later.
 	reloadEvery = 5 * time.Second
+	shareEvery  = time.Second
 	// readinessEvery is how often readiness is compared with the snapshot's freshness: well inside routing's MaxStale,
 	// so a node is out of rotation within a second of its calls starting to fail.
 	readinessEvery = time.Second
@@ -88,7 +89,11 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err != nil {
 		return callNode{}, err
 	}
-	upstreams, err := suppliers.New(suppliers.Config{DB: d.db, Scope: pg.PlatformScope(), Keys: d.keys, Egress: d.egress, Meter: d.meter})
+	var nodes suppliers.ShareRegistry
+	if d.kv != nil {
+		nodes = d.kv
+	}
+	upstreams, err := suppliers.New(suppliers.Config{DB: d.db, Scope: pg.PlatformScope(), Keys: d.keys, Egress: d.egress, Meter: d.meter, Nodes: nodes})
 	if err != nil {
 		return callNode{}, err
 	}
@@ -106,6 +111,9 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	}
 	// What the snapshot is built from, read once before the node is ready: a failure here is a startup failure.
 	if err := upstreams.Reload(ctx); err != nil {
+		return callNode{}, err
+	}
+	if err := upstreams.SyncShares(ctx); err != nil {
 		return callNode{}, err
 	}
 	if err := d.catalog.Refresh(ctx); err != nil {
@@ -252,11 +260,17 @@ func (c callNode) Drain(ctx context.Context) {
 // calling endpoints it can no longer confirm.
 func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Logger) {
 	tick := time.NewTicker(reloadEvery)
+	shares := time.NewTicker(shareEvery)
 	defer tick.Stop()
+	defer shares.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-shares.C:
+			if err := s.SyncShares(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("suppliers: credential shares could not be synchronized; admission stops when the lease expires", "err", err)
+			}
 		case <-tick.C:
 			if err := s.Reload(ctx); err != nil && ctx.Err() == nil {
 				logger.Error("suppliers: the reload failed; the endpoints of the last one stay until they are stale", "err", err)

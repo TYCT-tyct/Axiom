@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
+	"uuid"
 
 	"axiom/internal/platform/pg"
 )
@@ -32,13 +33,14 @@ const (
 // heartbeat is this node's row in platform.nodes: the machine that makes a wrong N visible, since nothing else notices
 // a node configured without Valkey or a count set too low (README「配置与启动」).
 type heartbeat struct {
-	db    *pg.DB
-	scope pg.Scope
-	id    string // the node's identity, which a restarted node keeps: its old row is its own, and is replaced
+	db      *pg.DB
+	scope   pg.Scope
+	session uuid.UUID
+	id      string // the node's identity, which a restarted node keeps: its old row is its own, and is replaced
 }
 
 func newHeartbeat(db *pg.DB, scope pg.Scope, id string) *heartbeat {
-	return &heartbeat{db: db, scope: scope, id: id}
+	return &heartbeat{db: db, scope: scope, id: id, session: uuid.NewV7()}
 }
 
 // startLock is the advisory lock that one node at a time holds while it counts the others and writes its own row. Without
@@ -70,7 +72,12 @@ func (h *heartbeat) start(ctx context.Context, nodes int, live *atomic.Int64, m 
 		if others >= nodes {
 			return errTooMany
 		}
-		return h.write(ctx, tx)
+		if err := retireShares(ctx, tx, h.id, ""); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view) VALUES ($1, $2, '{}')
+   ON CONFLICT (id) DO UPDATE SET seen_at = now(), share_session = excluded.share_session, share_view = '{}', share_joining = true`, h.id, h.session)
+		return err
 	})
 	if errors.Is(err, errTooMany) {
 		return fmt.Errorf("%s: %d nodes are alive besides this one, which is not fewer than the %d configured: either "+
@@ -107,14 +114,28 @@ func (h *heartbeat) beat(ctx context.Context) (int, error) {
 // write is this node's row, made or refreshed. now() is the database's clock, so every node's row is aged by one clock
 // and a node's own clock being wrong cannot make it look alive or gone.
 func (h *heartbeat) write(ctx context.Context, tx pg.Tx) error {
-	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id) VALUES ($1)
-		ON CONFLICT (id) DO UPDATE SET seen_at = now()`, h.id)
+	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view) VALUES ($1, $2, '{}')
+  ON CONFLICT (id) DO UPDATE SET seen_at = now(),
+   share_joining = platform.nodes.share_joining OR platform.nodes.seen_at <= now() - make_interval(secs => $3)
+ WHERE platform.nodes.share_session = excluded.share_session`,
+		h.id, h.session, AliveFor.Seconds())
 	return err
 }
 
 // forget deletes the rows that went stale: longer than AliveFor, so that two nodes never disagree about a row that is
 // about to expire, and the table holds a handful of rows either way.
 func forget(ctx context.Context, tx pg.Tx) error {
+	// Persist the RPM reservation before garbage-collecting a crashed process's heartbeat.
+	if _, err := tx.Exec(ctx, `INSERT INTO platform.credential_share_departures (id, share_view, expires_at)
+  SELECT id || '/' || coalesce(share_session::text, 'legacy'), share_view,
+   seen_at + make_interval(secs => $1) FROM platform.nodes
+  WHERE seen_at < clock_timestamp() - make_interval(secs => $2)
+  ON CONFLICT (id) DO NOTHING`, (AliveFor + shareWindow).Seconds(), forgetAfter.Seconds()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM platform.credential_share_departures WHERE expires_at <= clock_timestamp()`); err != nil {
+		return err
+	}
 	_, err := tx.Exec(ctx, `DELETE FROM platform.nodes WHERE seen_at < now() - make_interval(secs => $1)`,
 		forgetAfter.Seconds())
 	return err
@@ -125,7 +146,10 @@ func (h *heartbeat) stop(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, beatEvery)
 	defer cancel()
 	err := h.db.Tx(ctx, h.scope, func(tx pg.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM platform.nodes WHERE id = $1`, h.id)
+		if err := retireShares(ctx, tx, h.id, h.session.String()); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM platform.nodes WHERE id = $1 AND share_session = $2`, h.id, h.session)
 		return err
 	})
 	if err != nil {
