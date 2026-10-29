@@ -22,6 +22,6 @@ CREATE TABLE observability.channel_tests (
 );
 ALTER TABLE observability.webhook_keys ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 ALTER TABLE observability.channel_tests ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY platform_only ON observability.webhook_keys USING (platform.in_platform_scope());
-CREATE POLICY platform_only ON observability.channel_tests USING (platform.in_platform_scope());
+CREATE POLICY platform_only ON observability.webhook_keys USING ((SELECT platform.in_platform_scope()));
+CREATE POLICY platform_only ON observability.channel_tests USING ((SELECT platform.in_platform_scope()));
 GRANT SELECT, INSERT, UPDATE, DELETE ON observability.webhook_keys,observability.channel_tests TO axiom_app;
