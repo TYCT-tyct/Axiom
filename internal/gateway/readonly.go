@@ -102,6 +102,7 @@ func (h *Handler) keyInfo(ctx context.Context, tx pg.Tx, a accounts.Admission, _
 		"label": info.Label, "name": info.Name, "usage": credits(use.Total), "usage_daily": credits(use.Day),
 		"usage_weekly": credits(use.Week), "usage_monthly": credits(use.Month), "limit": nil, "limit_remaining": nil,
 		"limit_reset": nil, "expires_at": nil, "is_free_tier": false, "is_management_key": false,
+		"budgets": []budgetView{}, "effective_budget": nil, "rate_limit": h.keyRateLimit(a),
 	}
 	if limited {
 		data["limit"], data["limit_remaining"] = credits(limit), credits(max(0, limit-use.Counted))
@@ -112,6 +113,11 @@ func (h *Handler) keyInfo(ctx context.Context, tx pg.Tx, a accounts.Admission, _
 	if info.ExpiresAt != nil {
 		data["expires_at"] = info.ExpiresAt.UTC().Format(time.RFC3339)
 	}
+	budgets, effective, err := keyBudgets(ctx, tx, a)
+	if err != nil {
+		return nil, err
+	}
+	data["budgets"], data["effective_budget"] = budgets, effective
 	return map[string]any{"data": data}, nil
 }
 

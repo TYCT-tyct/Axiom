@@ -179,7 +179,9 @@ type Call struct {
 	stickyCache *kv.Client
 	stickyKey   string
 	over        routing.Override // what the request's provider object narrows the route by
-	rate        int              // requests of the key in the rate window, counted before admission
+	accountRate int
+	rateReset   int64
+	rate        int // requests of the key in the rate window, counted before admission
 
 	mu       sync.Mutex
 	releases []func()

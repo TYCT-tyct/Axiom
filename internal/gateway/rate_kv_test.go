@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -267,4 +268,11 @@ func TestKeyRateHoldsWhileTheCacheIsDown(t *testing.T) {
 	if codes[0] != 200 || codes[1] != 200 || codes[2] != 200 || codes[3] != 429 {
 		t.Errorf("statuses %v with the cache down and a limit of 3", codes)
 	}
+}
+
+// countRate is the count the limit is judged against: the shared one while Valkey answers, and this node's own while it
+// does not. The node's own counter is advanced on every request either way, so a fallback starts from the traffic the
+// node has already seen rather than from zero (README「限流计数」).
+func (h *Handler) countRate(ctx context.Context, site accounts.SiteID, dimension, localKey, subject string) int {
+	return h.precheck(ctx, site, dimension, localKey, subject, nil, false)
 }

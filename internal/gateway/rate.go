@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"encoding/hex"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"uuid"
@@ -85,31 +87,39 @@ func estimate(current, previous int64, elapsed, window time.Duration) int {
 	return int(float64(current) + carried)
 }
 
-// countRate is the count the limit is judged against: the shared one while Valkey answers, and this node's own while it
-// does not. The node's own counter is advanced on every request either way, so a fallback starts from the traffic the
-// node has already seen rather than from zero (README「限流计数」).
-func (h *Handler) countRate(ctx context.Context, site accounts.SiteID, dimension, localKey, subject string) int {
-	return h.precheck(ctx, site, dimension, localKey, subject, nil, false)
-}
-
 // precheck reads the count, and the call's session binding when there is one, in one batch before admission. A cache
 // failure retains only the process count: a local sticky binding would disagree with other nodes, including after
 // recovery.
 func (h *Handler) precheck(ctx context.Context, site accounts.SiteID, dimension, localKey, subject string, call *Call, compacted bool) int {
 	local := h.Limits.Rate.Count(localKey)
+	if call != nil {
+		call.accountRate = h.Limits.AccountRate.Count(accountRateKey(dimension, call.caller))
+	}
 	if h.KV == nil || !h.KV.Enabled() {
 		if call != nil {
-			call.sticky = h.stickyLocal(call.Session, compacted)
+			call.rateReset = h.Limits.Rate.now().Add(2*h.Limits.cfg.RateWindow + time.Second - time.Nanosecond).Unix()
+			if dimension == callDimension {
+				call.sticky = h.stickyLocal(call.Session, compacted)
+			}
 		}
 		return local
 	}
-	index, elapsed := h.Limits.Rate.slot(h.KV.Now())
-	keys := []string{h.rateKey(site, dimension, subject, index), h.rateKey(site, dimension, subject, index-1)}
+	return h.sharedPrecheck(ctx, site, dimension, subject, call, compacted, local)
+}
+
+// sharedPrecheck sends the counter dimensions and optional sticky read as one cache operation.
+func (h *Handler) sharedPrecheck(ctx context.Context, site accounts.SiteID, dimension, subject string, call *Call, compacted bool, local int) int {
+	now := h.KV.Now()
+	index, elapsed := h.Limits.Rate.slot(now)
+	keys := h.rateKeys(site, dimension, subject, call, index)
+	if call != nil {
+		call.rateReset = now.Add(2*h.Limits.cfg.RateWindow + time.Second - time.Nanosecond).Unix()
+	}
 	var cmds [2]kv.Cmd
 	cmds[0] = rateCounter.Cmd(keys, h.Limits.rateTTL)
 	n := 1
-	if call != nil {
-		// One store for the whole call, its eventual write included: the shared one, never the process table.
+	sticky := call != nil && dimension == callDimension
+	if sticky {
 		call.sticky = routing.EndpointID{}
 		call.stickyCache, call.stickyKey = h.KV, routing.StickyKey(h.KV, uuid.UUID(site), call.Session)
 		cmds[1] = kv.Get(call.stickyKey)
@@ -120,14 +130,17 @@ func (h *Handler) precheck(ctx context.Context, site accounts.SiteID, dimension,
 	}
 	values, err := h.KV.Do(ctx, kv.Precheck, cmds[:n]...)
 	if err != nil {
-		return local // the breaker and the deadline have already counted it: the limit falls back, and never to a refusal
+		return local
 	}
-	if call != nil && !compacted {
+	if sticky && !compacted {
 		call.sticky = routing.StickyEndpoint(values[1])
 	}
 	counts, err := values[0].Ints()
-	if err != nil || len(counts) != 2 {
+	if err != nil || len(counts) != len(keys) {
 		return local
+	}
+	if call != nil {
+		call.accountRate = estimate(counts[2], counts[3], elapsed, h.Limits.cfg.RateWindow)
 	}
 	return estimate(counts[0], counts[1], elapsed, h.Limits.cfg.RateWindow)
 }
@@ -142,11 +155,82 @@ func (h *Handler) stickyLocal(session routing.SessionKey, compacted bool) routin
 	return endpoint
 }
 
-// rateKey is one window's key for a subject: ax:v1:rate:<site>:<dimension>:<subject>:<window> (README「键」).
-func (h *Handler) rateKey(site accounts.SiteID, dimension, subject string, index int64) string {
-	return h.KV.Key(kv.RateSpace, uuid.UUID(site), dimension, subject, strconv.FormatInt(index, 10))
+// rateKeys shares one backing string between the two windows of every dimension. Adding the account dimension
+// otherwise allocates another string for every key and window number on each request.
+func (h *Handler) rateKeys(site accounts.SiteID, dimension, subject string, call *Call, index int64) []string {
+	prefix := h.KV.Key(kv.RateSpace, uuid.UUID(site))
+	n := 2
+	var account [32]byte
+	if call != nil {
+		n = 4
+		id := uuid.UUID(call.caller.AccountID())
+		hex.Encode(account[:], id[:])
+	}
+	var text strings.Builder
+	text.Grow(n * (len(prefix) + len(dimension) + max(len(subject), len(account)) + len(":account_::") + 20))
+	var ends [4]int
+	var window [20]byte
+	for i := range n {
+		text.WriteString(prefix)
+		text.WriteByte(':')
+		if i >= 2 {
+			text.WriteString("account_")
+		}
+		text.WriteString(dimension)
+		text.WriteByte(':')
+		if i >= 2 {
+			text.Write(account[:])
+		} else {
+			text.WriteString(subject)
+		}
+		text.WriteByte(':')
+		text.Write(strconv.AppendInt(window[:0], index-int64(i%2), 10))
+		ends[i] = text.Len()
+	}
+	all := text.String()
+	keys := make([]string, n)
+	start := 0
+	for i := range n {
+		keys[i] = all[start:ends[i]]
+		start = ends[i]
+	}
+	return keys
 }
 
 // keyHex is a key's ID as a cache key carries it: the 32 lowercase hex digits of its UUID, not the raw bytes the
 // in-process limits use.
 func keyHex(c accounts.Caller) string { return kv.Hex(uuid.UUID(c.KeyID())) }
+
+func accountRateKey(dimension string, caller accounts.Caller) string {
+	return dimension + accountKey(caller)
+}
+
+// judgeRate checks node protection before business limits against the single precheck snapshot.
+func (h *Handler) judgeRate(a accounts.Admission, c *Call, dimension string) error {
+	protection, refusal := h.Limits.cfg.KeyRate, errKeyRate
+	if dimension == countDimension {
+		protection, refusal = h.Limits.cfg.CountRate, errCountRate
+	}
+	account, key := a.RateLimits()
+	for _, check := range [...]struct {
+		count, limit int
+		refusal      *Refusal
+	}{
+		{c.rate, protection, refusal}, {c.accountRate, account, errAccountRate}, {c.rate, key, errBusinessKeyRate},
+	} {
+		if err := h.checkRate(check.count, check.limit, check.refusal, c.rateReset); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *Handler) checkRate(count, limit int, refusal *Refusal, reset int64) error {
+	if limit > 0 && count > limit {
+		r := *refusal
+		r.RateLimit, r.RateReset = limit, reset
+		r.RetryAfter = seconds(2 * h.Limits.cfg.RateWindow)
+		return &r
+	}
+	return nil
+}

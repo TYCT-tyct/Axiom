@@ -125,6 +125,11 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 	out, _ := jsonx.MarshalCanonical(body) //nolint:errcheck // a map of strings and numbers always encodes
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
+	if r.RateLimit > 0 {
+		h.Set("X-Ratelimit-Limit", strconv.Itoa(r.RateLimit))
+		h.Set("X-Ratelimit-Remaining", "0")
+		h.Set("X-Ratelimit-Reset", strconv.FormatInt(r.RateReset, 10))
+	}
 	if r.RetryAfter > 0 {
 		h.Set("Retry-After", strconv.Itoa(min(r.RetryAfter, maxRetryAfter)))
 	}

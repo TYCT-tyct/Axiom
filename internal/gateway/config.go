@@ -151,6 +151,7 @@ type Backpressure struct {
 	Funds       *Funds
 	Pool        *Pool // for the connections that need no account gate: cold-key lookup
 	Queue       *Queue
+	AccountRate *RateCounter
 	Rate        *RateCounter
 	IPCalls     *Limiter // requests in flight per client address
 	cfg         Config
@@ -178,14 +179,15 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 	pool := newPool(cfg.PoolSize, cfg.PoolReserve)
 	return &Backpressure{
 		rateLimited: rateLimited, byReason: byReason,
-		InFlight: &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(errAccountInFlight), nodeMax: cfg.NodeInFlight},
-		Funds:    &Funds{gate: newAccountGate(cfg.AccountGateWait), pool: pool, budget: cfg.AdmissionBudget},
-		Pool:     pool,
-		Queue:    newQueue(cfg.QueueMax, cfg.QueuePerKey),
-		Rate:     NewRateCounter(cfg.RateWindow),
-		IPCalls:  NewLimiter(errIPInFlight),
-		cfg:      cfg,
-		rateTTL:  strconv.FormatInt((2 * cfg.RateWindow).Milliseconds(), 10),
+		InFlight:    &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(errAccountInFlight), nodeMax: cfg.NodeInFlight},
+		Funds:       &Funds{gate: newAccountGate(cfg.AccountGateWait), pool: pool, budget: cfg.AdmissionBudget},
+		Pool:        pool,
+		Queue:       newQueue(cfg.QueueMax, cfg.QueuePerKey),
+		Rate:        NewRateCounter(cfg.RateWindow),
+		AccountRate: NewRateCounter(cfg.RateWindow),
+		IPCalls:     NewLimiter(errIPInFlight),
+		cfg:         cfg,
+		rateTTL:     strconv.FormatInt((2 * cfg.RateWindow).Milliseconds(), 10),
 	}, nil
 }
 
