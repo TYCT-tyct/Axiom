@@ -45,6 +45,9 @@ func (w *window) add(v verdict, o *Observation) {
 }
 
 func (w *window) evidence(credentials int) (failures, sources int, trip bool) {
+	if w.n < 5 || !w.consecutive(3) {
+		return
+	}
 	var all, failed, keys [windowSize]uuid.UUID
 	var na, nf, nk int
 	hard := false
@@ -69,12 +72,16 @@ func (w *window) evidence(credentials int) (failures, sources int, trip bool) {
 	if failures < threshold || !hard || !independent || (credentials > 1 && nk < 2) {
 		return
 	}
-	for i := 0; i < consecutive; i++ {
+	return failures, sources, w.consecutive(consecutive)
+}
+
+func (w *window) consecutive(n int) bool {
+	for i := range n {
 		if w.samples[(w.next-1-i+windowSize)%windowSize].verdict == success {
-			return
+			return false
 		}
 	}
-	return failures, sources, true
+	return true
 }
 
 func unique(ids *[windowSize]uuid.UUID, n int, id uuid.UUID) int {
