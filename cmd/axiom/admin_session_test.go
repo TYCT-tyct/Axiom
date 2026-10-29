@@ -55,7 +55,7 @@ func TestAdminSessionPermissions(t *testing.T) {
 		t.Errorf("the password session's permissions (-want +got):\n%s", diff)
 	}
 	wantAll := []string{
-		"api_keys.manage", "api_keys.view", "balance.top_up", "balance.view", "calls.view", "catalog.manage", "catalog.view", "credits.grant",
+		"api_keys.manage", "api_keys.view", "audit.view", "balance.top_up", "balance.view", "calls.inspect", "calls.search", "calls.view", "catalog.manage", "catalog.view", "credits.grant",
 		"platform_grants.manage", "pricing.manage", "pricing.view", "sites.manage", "suppliers.manage", "suppliers.view",
 		"users.manage", "users.view", "workspaces.manage",
 	}

@@ -24,6 +24,7 @@ func keyRotation(db *pg.DB, path string) secret.Rotation {
 		{Schema: "suppliers", Table: "credentials", ID: "id", Purpose: "key"},
 		{Schema: "payments", Table: "merchant_configs", ID: "merchant_id", Purpose: "config"},
 		{Schema: "observability", Table: "webhook_keys", ID: "id", Purpose: "signing"},
+		{Schema: "platform", Table: "smtp_config", ID: "id", Purpose: "config"},
 	}}
 }
 

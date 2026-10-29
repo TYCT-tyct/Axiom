@@ -22,6 +22,8 @@ info:
     `x-axiom-safe: true` changes nothing and takes neither. Every response carries `X-Request-ID` and
     `Cache-Control: no-store`.
 tags:
+  - {name: Calls, description: "Support summaries and operator traces."}
+  - {name: Audit, description: "Immutable audit search."}
   - {name: Session, description: "Sign-in, two-step verification and the current session."}
   - {name: Site, description: "Site settings."}
   - {name: Users, description: "Users, accounts and manual credit."}
@@ -31,6 +33,527 @@ tags:
   - {name: Alerts, description: "Platform operations alert rules, channels, incidents and receipts."}
   - {name: Payments, description: "Payment discrepancies and investigation notes."}
 paths:
+  /api/admin/v1/calls:
+    get:
+      operationId: listAdminCalls
+      tags:
+      - Calls
+      summary: Support summaries without costs, endpoints or routes. Defaults to 24 hours; at most 31 days, newest
+        first.
+      description: Support summaries without costs, endpoints or routes. Defaults to 24 hours; at most 31 days, newest
+        first.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: calls.search
+      parameters:
+      - &admin_path_id001
+        name: since
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - &admin_path_id002
+        name: until
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - &admin_path_id003
+        $ref: '#/components/parameters/Cursor'
+      - &admin_path_id004
+        $ref: '#/components/parameters/Limit'
+      - name: account_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/AccountId'
+      - name: request_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCallList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/calls/{call_id}/trace:
+    parameters:
+    - name: call_id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: getAdminCallTrace
+      tags:
+      - Calls
+      summary: Operator-only trace, including costs, route and attempts in sequence order.
+      description: Operator-only trace, including costs, route and attempts in sequence order.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: calls.inspect
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCallTrace'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/audit:
+    get:
+      operationId: listAuditEntries
+      tags:
+      - Audit
+      summary: Immutable audit records, exact filters, newest first. Defaults to 24 hours; at most 31 days.
+      description: Immutable audit records, exact filters, newest first. Defaults to 24 hours; at most 31 days.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: audit.view
+      parameters:
+      - *admin_path_id001
+      - *admin_path_id002
+      - *admin_path_id003
+      - *admin_path_id004
+      - name: site_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/SiteId'
+      - name: account_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/AccountId'
+      - name: request_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: actor_kind
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      - name: actor_id
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      - name: action
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      - name: module
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      - name: target_kind
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      - name: target_id
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEntryList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/audit/{entry_id}:
+    parameters:
+    - name: entry_id
+      in: path
+      required: true
+      schema: &admin_path_id005
+        type: string
+    get:
+      operationId: getAuditEntry
+      tags:
+      - Audit
+      summary: Read an immutable audit entry.
+      description: Read an immutable audit entry.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: audit.view
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/sites/{site_id}/system-settings:
+    parameters:
+    - name: site_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/SiteId'
+    get:
+      operationId: getSystemSettings
+      tags:
+      - Site
+      summary: Site name and invite or closed registration policy.
+      description: Site name and invite or closed registration policy.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+    put:
+      operationId: setSystemSettings
+      tags:
+      - Site
+      summary: Site name and invite or closed registration policy.
+      description: Site name and invite or closed registration policy.
+      security:
+      - session: []
+        csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemSettingsUpdate'
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemSettings'
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/sites/{site_id}/system-settings/payments:
+    parameters:
+    - name: site_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/SiteId'
+    get:
+      operationId: getPaymentSettings
+      tags:
+      - Site
+      summary: Collection switch and accepted credit range. Omitted limits are unrestricted.
+      description: Collection switch and accepted credit range. Omitted limits are unrestricted.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+    put:
+      operationId: setPaymentSettings
+      tags:
+      - Site
+      summary: Collection switch and accepted credit range. Omitted limits are unrestricted.
+      description: Collection switch and accepted credit range. Omitted limits are unrestricted.
+      security:
+      - session: []
+        csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentSettingsUpdate'
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentSettings'
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/settings/mail:
+    get:
+      operationId: getMailSettings
+      tags:
+      - Site
+      summary: Saved SMTP transport override; secrets are never returned. Environment remains authoritative when absent.
+      description: Saved SMTP transport override; secrets are never returned. Environment remains authoritative when
+        absent.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+    put:
+      operationId: setMailSettings
+      tags:
+      - Site
+      summary: Save an encrypted SMTP override. Restart nodes to apply. Omitted password retains the saved password;
+        a destination change requires reentry.
+      description: Save an encrypted SMTP override. Restart nodes to apply. Omitted password retains the saved password;
+        a destination change requires reentry.
+      security:
+      - session: []
+        csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailSettingsUpdate'
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailSettings'
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/settings/mail/tests:
+    post:
+      operationId: testMailSettings
+      tags:
+      - Site
+      summary: Send one fixed test mail using the saved transport. Accepted means SMTP acceptance; failed may be an
+        unknown result. No automatic resend. Ten tests per session per minute.
+      description: Send one fixed test mail using the saved transport. Accepted means SMTP acceptance; failed may
+        be an unknown result. No automatic resend. Ten tests per session per minute.
+      security:
+      - session: []
+        csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailConfigTest'
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigTestResult'
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/payments/merchants/{merchant_id}/tests:
+    parameters:
+    - name: merchant_id
+      in: path
+      required: true
+      schema: *admin_path_id005
+    post:
+      operationId: testMerchantSettings
+      tags:
+      - Payments
+      summary: Query an existing merchant without creating an order or transferring funds. Ten tests per session per
+        minute.
+      description: Query an existing merchant without creating an order or transferring funds. Ten tests per session
+        per minute.
+      security:
+      - session: []
+        csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigTestResult'
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Failure'
   /api/admin/v1/rate-limits/{target}/{id}:
     parameters:
       - {name: target, in: path, required: true, schema: {type: string, enum: [tier, account, key]}}
@@ -2431,6 +2954,257 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    AdminCallSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id: &admin_schema_id001
+          type: string
+        site_id:
+          $ref: '#/components/schemas/SiteId'
+        account_id:
+          $ref: '#/components/schemas/AccountId'
+        at:
+          type: string
+          format: date-time
+        model: *admin_schema_id001
+        error_kind: *admin_schema_id001
+        latency_ms:
+          type: integer
+        price:
+          $ref: '#/components/schemas/Money'
+    AdminCallList:
+      type: object
+      additionalProperties: false
+      properties:
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminCallSummary'
+        next_cursor: *admin_schema_id001
+    AdminAttempt:
+      type: object
+      additionalProperties: false
+      properties:
+        seq:
+          type: integer
+        endpoint_id: *admin_schema_id001
+        supplier_id: *admin_schema_id001
+        source_class: *admin_schema_id001
+        egress: *admin_schema_id001
+        outcome: *admin_schema_id001
+        error_kind: *admin_schema_id001
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        first_token_ms:
+          type: integer
+    AdminCallTrace:
+      type: object
+      additionalProperties: false
+      properties:
+        summary:
+          $ref: '#/components/schemas/AdminCallSummary'
+        cost:
+          $ref: '#/components/schemas/Money'
+        route:
+          x-go-type: jsonx.Raw
+          type: object
+          additionalProperties: true
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAttempt'
+    AuditEntry:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *admin_schema_id001
+        actor_kind: *admin_schema_id001
+        actor_id: *admin_schema_id001
+        request_id: *admin_schema_id001
+        action: *admin_schema_id001
+        module: *admin_schema_id001
+        target_kind: *admin_schema_id001
+        target_id: *admin_schema_id001
+        reason: *admin_schema_id001
+        at:
+          type: string
+          format: date-time
+        site_id:
+          $ref: '#/components/schemas/SiteId'
+        account_id:
+          $ref: '#/components/schemas/AccountId'
+        detail:
+          x-go-type: jsonx.Raw
+          type: object
+          additionalProperties: true
+    AuditEntryList:
+      type: object
+      additionalProperties: false
+      properties:
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+        next_cursor: *admin_schema_id001
+    SystemSettings:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        registration:
+          type: string
+          enum:
+          - invite
+          - closed
+    SystemSettingsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        settings:
+          type: object
+          additionalProperties: false
+          properties:
+            name:
+              type: string
+              minLength: 1
+              maxLength: 100
+            registration:
+              type: string
+              enum:
+              - invite
+              - closed
+          required:
+          - name
+          - registration
+        reason:
+          $ref: '#/components/schemas/Reason'
+      required:
+      - settings
+      - reason
+    PaymentSettings:
+      type: object
+      additionalProperties: false
+      properties:
+        open:
+          type: boolean
+        credits_min:
+          $ref: '#/components/schemas/Money'
+        credits_max:
+          $ref: '#/components/schemas/Money'
+    PaymentSettingsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        settings:
+          type: object
+          additionalProperties: false
+          properties:
+            open:
+              type: boolean
+            credits_min:
+              $ref: '#/components/schemas/Money'
+            credits_max:
+              $ref: '#/components/schemas/Money'
+          required:
+          - open
+        reason:
+          $ref: '#/components/schemas/Reason'
+      required:
+      - settings
+      - reason
+    MailSettings:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        host: *admin_schema_id001
+        port:
+          type: integer
+        username: *admin_schema_id001
+        from: *admin_schema_id001
+        has_password:
+          type: boolean
+        restart_required:
+          type: boolean
+        source:
+          type: string
+          enum:
+          - environment
+          - database
+    MailSettingsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        settings:
+          type: object
+          additionalProperties: false
+          properties:
+            enabled:
+              type: boolean
+            host:
+              type: string
+              maxLength: 253
+            port:
+              type: integer
+              minimum: 1
+              maximum: 65535
+              default: 587
+            username:
+              type: string
+              maxLength: 254
+            from:
+              type: string
+              maxLength: 998
+            password:
+              type: string
+              maxLength: 4096
+              writeOnly: true
+          required:
+          - enabled
+        reason:
+          $ref: '#/components/schemas/Reason'
+      required:
+      - settings
+      - reason
+    ConfigTestResult:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          x-enum-varnames: [ConfigAccepted, ConfigRejected, ConfigFailed, ConfigDisabled, ConfigUnsupported]
+          enum:
+          - accepted
+          - rejected
+          - failed
+          - disabled
+          - unsupported
+    MailConfigTest:
+      type: object
+      additionalProperties: false
+      properties:
+        to:
+          type: string
+          minLength: 3
+          maxLength: 254
+        reason:
+          $ref: '#/components/schemas/Reason'
+      required:
+      - to
+      - reason
     RateLimitView:
       type: object
       properties:

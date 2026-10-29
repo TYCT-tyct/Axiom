@@ -21,6 +21,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/egresstest"
 )
 
 // delivery is one message the fake server accepted, the envelope commands that led to it, and whether the session that
@@ -95,6 +98,7 @@ func (s *fakeServer) openSender(t *testing.T, cfg Config) *sender {
 		cfg.From = netmail.Address{Name: "Axiom", Address: "no-reply@axiom.example"}
 	}
 	sd := newSender(cfg)
+	sd.exit = egress.NewForTesting(egresstest.Loopback(t))
 	sd.addr = s.ln.Addr().String()
 	sd.roots = s.pool
 	return sd

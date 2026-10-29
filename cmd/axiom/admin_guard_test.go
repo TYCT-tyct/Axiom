@@ -31,6 +31,18 @@ func (o adminOperation) changes() bool { return o.method != http.MethodGet }
 
 // adminOperations are the operations that need a session and a permission on the platform: all but the Session tag's.
 var adminOperations = []adminOperation{
+	{"listAdminCalls", http.MethodGet, "/calls", "", "calls.search", false},
+	{"getAdminCallTrace", http.MethodGet, "/calls/0198c0a8-0000-7000-8000-000000000001/trace", "", "calls.inspect", false},
+	{"listAuditEntries", http.MethodGet, "/audit", "", "audit.view", false},
+	{"getAuditEntry", http.MethodGet, "/audit/0198c0a8-0000-7000-8000-000000000001", "", "audit.view", false},
+	{"getSystemSettings", http.MethodGet, strings.Replace(someSite, "/settings", "/system-settings", 1), "", "sites.manage", false},
+	{"setSystemSettings", http.MethodPut, strings.Replace(someSite, "/settings", "/system-settings", 1), `{"settings":{"name":"Test","registration":"closed"},"reason":"r"}`, "sites.manage", true},
+	{"getPaymentSettings", http.MethodGet, strings.Replace(someSite, "/settings", "/system-settings/payments", 1), "", "sites.manage", false},
+	{"setPaymentSettings", http.MethodPut, strings.Replace(someSite, "/settings", "/system-settings/payments", 1), `{"settings":{"open":false},"reason":"r"}`, "sites.manage", true},
+	{"getMailSettings", http.MethodGet, "/settings/mail", "", "sites.manage", false},
+	{"setMailSettings", http.MethodPut, "/settings/mail", `{"settings":{"enabled":false},"reason":"r"}`, "sites.manage", true},
+	{"testMailSettings", http.MethodPost, "/settings/mail/tests", `{"to":"test@example.com","reason":"r"}`, "sites.manage", true},
+	{"testMerchantSettings", http.MethodPost, "/payments/merchants/mch_00000000000000000000000000/tests", `{"reason":"r"}`, "sites.manage", true},
 	{"getRateLimit", http.MethodGet, "/rate-limits/account/acct_00000000000000000000000000", "", "sites.manage", false},
 	{"setRateLimit", http.MethodPut, "/rate-limits/account/acct_00000000000000000000000000", `{"reason":"r"}`, "sites.manage", true},
 	{"publishAnnouncement", http.MethodPost, "/announcements", `{"site_id":"site_00000000000000000000000000","title":"Maintenance","body":"Notice","starts_at":"2026-10-29T00:00:00Z","ends_at":"2026-10-30T00:00:00Z","reason":"test"}`, "sites.manage", true},
