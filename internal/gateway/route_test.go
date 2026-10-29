@@ -194,8 +194,13 @@ func (f *routeFixture) salePrices() (map[catalog.ModelID]billing.Sold, error) {
 
 // routable is one suppliers.Routable of a model on a supplier, as the sync writes them.
 func routable(model catalog.ModelID, formats ...protocol.Format) suppliers.Routable {
+	cost, err := catalog.ParseSchedule([]byte(strings.Replace(reference, `"rates":{`, `"rates":{"web_search":"0.01","code_execution":"0.01",`, 1)))
+	if err != nil {
+		panic(err)
+	}
 	return suppliers.Routable{
 		ID: uuid.NewV7(), Supplier: uuid.NewV7(), Model: uuid.UUID(model), Upstream: "upstream-name",
+		Funds: &suppliers.Funds{Balance: platform.AmountExact(1_000_000_000_000)}, Schedule: cost,
 		Formats: formats, Streams: true, Cancels: true,
 	}
 }

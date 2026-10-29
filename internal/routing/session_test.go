@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/alloctest"
 	"axiom/internal/routing"
+	"axiom/internal/suppliers"
 )
 
 func key(t *testing.T, r *routing.Router, a routing.AccountID, model, body string) routing.SessionKey {
@@ -180,6 +182,8 @@ func candidates(tb testing.TB, n int, cfg routing.Config) (*harness, routing.Inp
 	for i := 1; i <= n; i++ {
 		endpoints = append(endpoints, endpoint(tb, i, func(e *routing.Endpoint) {
 			e.Price.Schedule = schedule(tb, "0.000001", "0.000002", "0.0000001")
+			e.Cost = e.Price.Schedule
+			e.Funds = &suppliers.Funds{Balance: platform.AmountExact(1_000_000_000_000)}
 			if i%7 == 0 {
 				e.BreakerOpen = true
 			}

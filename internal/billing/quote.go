@@ -176,6 +176,15 @@ func Quote(d Demand, q []Quotable, s Segments, avail []Available) (Reservation, 
 	return r, nil
 }
 
+// ReservedCost returns a single entry's full-generation bound in its schedule's units. Routing uses a supplier's
+// native cost schedule here, so affordability follows Quote's bounds without allocating a reservation or drawing a
+// segment trigger. Supplier balances cannot reserve extensions, so this always covers the complete output.
+func ReservedCost(d Demand, e Quotable) (platform.Exact, error) {
+	e.Segmentable = false
+	q, err := quoteEntry(d, e, Segments{})
+	return q.amount, err
+}
+
 func shortSource(amount platform.Exact, avail []Available) int {
 	for i, a := range avail {
 		if amount.Cmp(a.Amount) > 0 {

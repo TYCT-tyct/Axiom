@@ -91,3 +91,8 @@ WHERE supplier_id = @supplier_id AND version = @version;
 -- name: SetRateBucket :exec
 UPDATE suppliers.rate_buckets SET window_start = @window_start, used = @used WHERE scope = @scope AND name = @name;
 
+
+-- name: RequestBalanceSync :exec
+-- Preserve the lease and fence; the raised state version makes any step already in flight retry from this state.
+UPDATE suppliers.sync_states SET version = @version, state = @state, next_due = LEAST(next_due, @next_due)
+WHERE supplier_id = @supplier_id;

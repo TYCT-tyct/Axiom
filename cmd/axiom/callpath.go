@@ -271,6 +271,9 @@ func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Log
 			if err := s.SyncShares(ctx); err != nil && ctx.Err() == nil {
 				logger.Error("suppliers: credential shares could not be synchronized; admission stops when the lease expires", "err", err)
 			}
+			if err := s.RefreshBalances(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("suppliers: a requested balance sync could not be scheduled", "err", err)
+			}
 		case <-tick.C:
 			if err := s.Reload(ctx); err != nil && ctx.Err() == nil {
 				logger.Error("suppliers: the reload failed; the endpoints of the last one stay until they are stale", "err", err)

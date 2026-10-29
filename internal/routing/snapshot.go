@@ -13,6 +13,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/suppliers"
 )
 
 // FormatSet is a set of call formats.
@@ -91,7 +92,7 @@ type Endpoint struct {
 
 	Enabled     bool // switched on
 	BreakerOpen bool // quality has taken it out for now
-	BalanceOK   bool // the supplier can pay for a request
+	BalanceOK   bool // the supplier has a synced positive balance
 	BalanceLow  bool // it can, but is below the warning line: its weight is halved
 	Egresses    int  // how many egresses can reach it
 
@@ -121,6 +122,9 @@ type Endpoint struct {
 	Cancels          bool      // measured: it stops generating when the client disconnects
 	ReasoningVisible FormatSet // the formats in which reasoning progress shows in the stream
 	MaxConcurrent    int64     // 0 for no limit at the endpoint itself
+
+	Funds *suppliers.Funds // synced native balance and live supplier-wide refusal
+	Cost  catalog.Schedule // in the same native units as Funds
 
 	Price PriceRef // the sale price version; a zero Version means none
 	// UnknownItem: billing met a usage field on the model it cannot price (billing.UnknownItems), so the model takes no

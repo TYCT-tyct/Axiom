@@ -338,7 +338,8 @@ func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	}
 	scope := routingScope(f.Scope)
 	limit, limited := f.Cause.(suppliers.RateLimited)
-	if limited || scope == routing.ScopeSupplier {
+	_, outOfFunds := f.Cause.(suppliers.SupplierBalanceLow)
+	if limited || scope == routing.ScopeSupplier && !outOfFunds {
 		s.x.Router.Block(a.entry, scope, limit.RetryAfter)
 	}
 	if limited {

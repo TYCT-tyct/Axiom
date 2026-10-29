@@ -107,7 +107,7 @@ func (r *shareCluster) node(t testing.TB, id string, max, rpm int32) *Service {
 	}
 	credentialID, supplierID := uuid.NewV7(), uuid.NewV7()
 	c := &credential{id: credentialID, max: max, configuredMax: max, perMinute: rpm, configuredMinute: rpm, rt: s.runtimeOf(credentialID, supplierID, max, rpm)}
-	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{uuid.Nil(): {creds: []*credential{c}}}})
+	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{uuid.Nil(): {creds: []*credential{c}, funds: &Funds{state: &fundsState{}}}}})
 	return s
 }
 

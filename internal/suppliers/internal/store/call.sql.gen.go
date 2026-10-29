@@ -286,7 +286,7 @@ func (q *Queries) InsertLostRequestResolution(ctx context.Context, db DBTX, requ
 
 const listRoutable = `-- name: ListRoutable :many
 SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.owner_scope,
-    s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
+    s.balance_native::text AS balance_native, s.balance_observed_at, s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     c.requests_per_minute,
     cs.id AS cost_schedule_id, cs.schedule
@@ -310,6 +310,8 @@ type ListRoutableRow struct {
 	Origin             string
 	NativeUnit         string
 	OwnerScope         string
+	BalanceNative      string
+	BalanceObservedAt  *time.Time
 	SettlementCurrency string
 	UnitValueID        uuid.UUID
 	UnitValue          string
@@ -349,6 +351,8 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 			&i.Origin,
 			&i.NativeUnit,
 			&i.OwnerScope,
+			&i.BalanceNative,
+			&i.BalanceObservedAt,
 			&i.SettlementCurrency,
 			&i.UnitValueID,
 			&i.UnitValue,

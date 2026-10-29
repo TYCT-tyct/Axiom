@@ -1,11 +1,13 @@
 package routing
 
 import (
+	"errors"
 	"slices"
 	"time"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 )
 
@@ -200,10 +202,30 @@ func check(c *candidate, n *need) (reason Reason, visible bool) {
 		return UnknownItem, true
 	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
 		return CoolingDown, true
+	case !c.canPay(n):
+		return SupplierBalance, true
 	case c.full():
 		return Full, true
 	}
 	return 0, true
+}
+
+// canPay uses the same demand, output cap and call format as the reservation, but the supplier's native cost plan.
+func (c *candidate) canPay(n *need) bool {
+	if c.Funds == nil {
+		return c.BalanceOK
+	}
+	if !c.Funds.CanPay(platform.Exact{}) {
+		return false
+	}
+	out, _ := c.outputLimit(n.req, n.tokens)
+	format, _ := c.callFormat(n)
+	model := c.model
+	model.OpenAIUsage = format != protocol.Messages
+	cost, err := billing.ReservedCost(n.demand, billing.Quotable{Price: c.Cost, Model: model, MaxOutput: out})
+	// An unbounded tool is a request error: admission's Quote must keep returning its actionable 400, rather than
+	// disguising it as a supplier outage. The same bounds make Quote refuse it before any upstream call.
+	return errors.Is(err, billing.ErrUnbounded) || err == nil && c.Funds.CanPay(cost)
 }
 
 // unavailable is the endpoint's own state: switched off, taken out, or its supplier unable to pay or reach.

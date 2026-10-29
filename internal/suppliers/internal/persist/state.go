@@ -96,6 +96,40 @@ func Wake(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
 	return nil
 }
 
+// RequestBalance brings only the balance task forward, without undoing a halt, a backoff, an administrator's pause,
+// or another node's active lease. The periodic sweep queues it as usual; the state version fences out a stale round.
+func RequestBalance(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
+	q := store.New()
+	if err := q.EnsureSyncState(ctx, tx, store.EnsureSyncStateParams{SupplierID: id, Now: now}); err != nil {
+		return err
+	}
+	row, err := q.LockSyncState(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	st, err := decode(row.Version, row.Format, row.State)
+	if err != nil {
+		return err
+	}
+	task := &st.Tasks[syncer.TaskBalance]
+	if st.Status != syncer.Normal || task.Halted || task.Due.Before(now) {
+		return nil
+	}
+	task.Due = now
+	st.Version++
+	raw, err := jsonx.MarshalCanonical(st)
+	if err != nil {
+		return err
+	}
+	due := now
+	if task.BackoffUntil.After(due) {
+		due = task.BackoffUntil
+	}
+	return q.RequestBalanceSync(ctx, tx, store.RequestBalanceSyncParams{
+		SupplierID: id, Version: st.Version, State: raw, NextDue: due,
+	})
+}
+
 // Commit implements syncer.Store: the state, the events and plans the step produced, the charge records it read, and the
 // projection of the state onto the supplier and its listing, in one transaction that holds only if the lease is still the
 // session's, the supplier's credentials are still the generation it was taken in, and the stored version is expect.

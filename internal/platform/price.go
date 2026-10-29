@@ -91,6 +91,29 @@ type Exact struct {
 	lo uint64
 }
 
+// ParseExact reads a signed decimal amount with at most 15 fractional digits. It rejects values outside Exact's
+// range; unlike a unit price, a balance may exceed 1000. Parsing belongs to snapshot construction, never to a call.
+func ParseExact(s string) (Exact, error) {
+	negative := strings.HasPrefix(s, "-")
+	if negative {
+		s = s[1:]
+	}
+	whole, frac, point := strings.Cut(s, ".")
+	if !isDigits(whole) || point && (!isDigits(frac) || len(frac) > priceDecimals) {
+		return Exact{}, errors.New("exact amount: want a decimal with at most 15 decimals")
+	}
+	n, _ := new(big.Int).SetString(whole+frac+strings.Repeat("0", priceDecimals-len(frac)), 10)
+	if negative {
+		n.Neg(n)
+	}
+	hi := new(big.Int).Rsh(new(big.Int).Set(n), 64)
+	if !hi.IsInt64() {
+		return Exact{}, errOverflow
+	}
+	lo := new(big.Int).And(n, new(big.Int).SetUint64(math.MaxUint64)).Uint64()
+	return Exact{hi.Int64(), lo}, nil
+}
+
 var errOverflow = errors.New("exact amount: the sum overflows 128 bits")
 
 // Add returns e + f. Within the documented domain of prices and usage a sum cannot overflow; it is still checked

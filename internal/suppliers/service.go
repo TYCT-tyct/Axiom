@@ -35,6 +35,7 @@ type EndpointID = uuid.UUID
 // upstream, the formats it speaks, the cost schedule it is priced by — already scaled by its group's ratio — and what
 // its supplier does with a stream (internal/suppliers/README.md「调用面」).
 type Routable struct {
+	Funds               *Funds
 	Currency            platform.Currency
 	ID, Supplier, Model uuid.UUID
 	Upstream            string
@@ -84,11 +85,13 @@ type Service struct {
 	schedules  atomic.Pointer[map[uuid.UUID]*catalog.Schedule]
 	shareNodes []kv.ShareNode // guarded by reloadMu; last successful membership reading
 	shareUntil time.Time
+	balanceMu  sync.Mutex // serializes background balance refreshes
 	reloadMu   sync.Mutex // one Reload at a time; no call takes it
 	// What outlives a snapshot: credential slots and rest, and the account's minute, must not reset
 	// when the snapshot is rebuilt while calls run. Each lock is held for a lookup, never while anything is parsed or
 	// decrypted.
 	runtimeMu sync.Mutex
+	funds     map[uuid.UUID]*fundsState
 	runtime   map[uuid.UUID]*credRuntime
 	minutes   map[uuid.UUID]*minuteRuntime
 	cancelsMu sync.RWMutex
@@ -128,7 +131,7 @@ func New(cfg Config) (*Service, error) {
 	}
 	s := &Service{
 		unloadable: counter, cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{}, cancels: map[EndpointID]bool{},
-		minutes: map[uuid.UUID]*minuteRuntime{},
+		minutes: map[uuid.UUID]*minuteRuntime{}, funds: map[uuid.UUID]*fundsState{},
 	}
 	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{}})
 	s.schedules.Store(&map[uuid.UUID]*catalog.Schedule{})
@@ -283,6 +286,7 @@ type endpoint struct {
 	creds                  []*credential
 	currency               platform.Currency
 	unitValue              platform.UnitPrice
+	funds                  *Funds
 	// nativeUnit is the unit the supplier counts its balance in, which its prices and its charges are in: what a test's
 	// estimate is read as.
 	nativeUnit string
@@ -387,8 +391,8 @@ func (s *Service) Routable() ([]Routable, error) {
 	for _, ep := range snap.endpoints {
 		policy := s.policy(ep)
 		out = append(out, Routable{
-			Currency: ep.currency,
-			ID:       ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Formats: slices.Clone(ep.formats),
+			Funds: ep.funds, Currency: ep.currency,
+			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Formats: slices.Clone(ep.formats),
 			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
 		})
 	}
@@ -423,10 +427,14 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	if err != nil || value.Cmp(platform.UnitPrice{}) == 0 {
 		return nil, fmt.Errorf("endpoint %s: its supplier's unit value %q is not above 0 and at most 1000 with at most 15 decimals", r.EndpointID, r.UnitValue)
 	}
+	balance, err := platform.ParseExact(r.BalanceNative)
+	if err != nil {
+		return nil, fmt.Errorf("endpoint %s: its supplier's native balance: %w", r.EndpointID, err)
+	}
 	ep := &endpoint{
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName,
 		formats: formats, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
-		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope,
+		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt),
 	}
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil
