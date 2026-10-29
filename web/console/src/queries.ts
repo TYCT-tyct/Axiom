@@ -64,6 +64,12 @@ export const callsQuery = (filters: CallFilters) =>
     getNextPageParam: nextCursor,
   });
 
+export const recentErrorsQuery = queryOptions({
+  queryKey: [accountKey, "recent-errors"],
+  queryFn: ({ signal }) =>
+    unwrap(consoleApi.GET("/api/console/v1/calls", { params: { query: { status: "error", limit: 5 } }, signal })),
+});
+
 export const callQuery = (id: string) =>
   queryOptions({
     queryKey: [accountKey, "call", id],
