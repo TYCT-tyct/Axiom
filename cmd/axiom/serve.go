@@ -348,15 +348,8 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 	}); err != nil {
 		return nil, nil, err
 	}
-	// The datasets behind the reference prices are read once a day by whichever node leads the queue, and a sync that
-	// leaves them unrefreshed for too long alerts (docs/domains/catalog.md「参考价怎么进入目录」).
-	if prices != nil {
-		if err := catalog.RegisterSync(ctx, catalog.SyncJobConfig{
-			DB: db, Scope: pg.PlatformScope(), Queue: queue, Fetcher: prices(exit), Logger: logger,
-			Meter: tel.Metrics.Meter("axiom/catalog"),
-		}); err != nil {
-			return nil, nil, err
-		}
+	if err := registerCatalogJobs(ctx, db, queue, exit, prices, tel, logger); err != nil {
+		return nil, nil, err
 	}
 	if err := registerExchangeSource(ctx, db, queue, exit, logger, exchangeSource); err != nil {
 		return nil, nil, err
@@ -399,6 +392,19 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 		return nil, nil, err
 	}
 	return queue, recovery, nil
+}
+
+// registerCatalogJobs keeps both catalog schedules on the node's shared queue and egress client.
+func registerCatalogJobs(ctx context.Context, db *pg.DB, queue *pg.Queue, exit *egress.Client,
+	prices func(*egress.Client) *catalog.Fetcher, tel *telemetry.Telemetry, logger *slog.Logger,
+) error {
+	if err := catalog.RegisterPages(ctx, catalog.PageJobConfig{DB: db, Scope: pg.PlatformScope(), Queue: queue, Client: exit, Logger: logger}); err != nil {
+		return err
+	}
+	if prices == nil {
+		return nil
+	}
+	return catalog.RegisterSync(ctx, catalog.SyncJobConfig{DB: db, Scope: pg.PlatformScope(), Queue: queue, Fetcher: prices(exit), Logger: logger, Meter: tel.Metrics.Meter("axiom/catalog")})
 }
 
 // stopQueue stops the queue within timeout, on a context that outlives the one that ended the node.

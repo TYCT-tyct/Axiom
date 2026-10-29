@@ -108,7 +108,7 @@ func seedLedger(site, account uuid.UUID, n int, legacy bool) []string {
 	return statements
 }
 
-// TestMovementsReadsGrowWithThePage: a page of the ledger far into a long history reads about what the first page
+// TestLedgerReadsGrowWithThePage: a page of the ledger far into a long history reads about what the first page
 // reads, from the index, not what the history behind or ahead of it holds, and the replay's bound reads about the same
 // on a long account as on a short one. 30,000 numbered transactions of an account, 12,000 from before the sequence of
 // another, as many of a third and three of a fourth are seeded, beside 2M rows across 2,000 other accounts; a page of 100 is read from the start and from deep in
@@ -118,7 +118,7 @@ func seedLedger(site, account uuid.UUID, n int, legacy bool) []string {
 // to stop at for those rows, so the scan reaches the end of the account's prefix, which is where they sort. That is one
 // pass over the account's own entries from before the release, which the release froze, rather than over a history that
 // grows, so it is bounded by a budget instead of by the short account's reading.
-func TestMovementsReadsGrowWithThePage(t *testing.T) {
+func TestLedgerReadsGrowWithThePage(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	legacy, noise, short := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	statements := slices.Concat(seedLedger(b.admitted.Site, b.admitted.Account, 30000, false), seedLedger(b.admitted.Site, noise, 30000, false),
@@ -185,6 +185,7 @@ func TestMovementsReadsGrowWithThePage(t *testing.T) {
 			})
 		}
 	}
+	t.Run("statement", func(t *testing.T) { checkStatementReadsGrowWithThePage(t, b, legacy) })
 }
 
 type movementPlanCase struct {

@@ -14,6 +14,8 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/egresstest"
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pg"
@@ -180,6 +182,7 @@ func (w *queueWorld) registerWith(t *testing.T, server *fakeServer, cache *kv.Cl
 	}
 	mailer.sender.addr = server.ln.Addr().String()
 	mailer.sender.roots = server.pool
+	mailer.sender.exit = egress.NewForTesting(egresstest.Loopback(t))
 	return mailer
 }
 

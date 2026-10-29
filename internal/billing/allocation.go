@@ -25,9 +25,9 @@ import (
 //   - a batch is never over-spent: consumed + expired + refunded + frozen <= amount, so leftovers are never negative;
 //   - unfunded > 0 only when no batch holds unfrozen credit, since a credit pays it off before anything else.
 //
-// A movement that gives the user's balance back, other than a credit, is not allocated: nothing in the ledger makes one
-// yet, and what the first will need is written in docs/domains/billing.md「额度批次」 (#277). The replay stops on it with
-// an error, so an account is never given an allocation it does not have.
+// A movement that gives the user's balance back, other than a credit, is returned to the batches that took it: the debt
+// first, then reverse spend order, lowering an expired batch's write-off when its consumed credit is not enough. A
+// correction's reverse and re-settle are netted at the settle's place, so a return cannot move credit to another batch.
 
 // orderKey is the place of a ledger transaction in the replay: its seq, which a transaction from before the sequence
 // does not have and reads as 0, then its time and ID, which for those transactions is a key that never changes.
