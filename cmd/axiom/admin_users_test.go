@@ -144,8 +144,8 @@ func TestGetAccount(t *testing.T) {
 	zero := adminapi.Money{Amount: "0", Currency: "USD"}
 	want := adminapi.AccountDetail{
 		Id: account, SiteId: f.siteID(), Name: got.Name, Kind: "personal", Status: "active", Tier: got.Tier, CreatedAt: got.CreatedAt,
-		Balance:   adminapi.Balance{Balance: zero, Reserved: zero, Floor: zero, Available: zero, SpentThisMonth: zero},
-		KeyLimits: adminapi.KeyLimitsView{Effective: adminapi.EffectiveKeyLimits{MaxKeys: 100, CreationsPerHour: 50}},
+		Balance:        adminapi.Balance{Balance: zero, Reserved: zero, Floor: zero, Available: zero, SpentThisMonth: zero},
+		CallsSuspended: new(false), KeyLimits: adminapi.KeyLimitsView{Effective: adminapi.EffectiveKeyLimits{MaxKeys: 100, CreationsPerHour: 50}},
 	}
 	want.Owner.Id, want.Owner.Email = f.userOf("alice@example.com"), "alice@example.com"
 	if diff := cmp.Diff(want, got); diff != "" || got.Tier.Name != "Default" || time.Since(got.CreatedAt) > time.Hour {

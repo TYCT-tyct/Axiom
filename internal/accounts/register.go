@@ -41,7 +41,7 @@ type RegisterRequest struct {
 // the site's default tier, registered as a tenant, its default workspace, the user and the user as the account's
 // owner. A taken email fails the whole transaction. It spends one of the IP's attempts, and the hash one of the
 // node's turns.
-func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, error) {
+func (s *Service) Register(ctx context.Context, r RegisterRequest) (out UserID, err error) {
 	d, snap, err := s.domain(r.Host)
 	if err != nil {
 		return UserID{}, err
@@ -49,6 +49,8 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 	if d.surface != Console {
 		return UserID{}, ErrUnknownHost
 	}
+	event := securityAttempt{site: d.site, surface: d.surface}
+	defer func() { s.failed(ctx, event, "security.registration_failed", &err) }()
 	if err := s.fromIP(ctx, d.site, r.ClientIP); err != nil {
 		return UserID{}, err
 	}
@@ -69,10 +71,14 @@ func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, erro
 	}
 	user, account := uuid.NewV7(), uuid.NewV7()
 	err = s.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
-		return createUser(ctx, tx, s.queries, s.opened, newUser{
+		if err := createUser(ctx, tx, s.queries, s.opened, newUser{
 			id: user, account: account, site: invite.SiteID, tier: invite.DefaultTierID, role: snap.roleIDs["owner"],
 			email: email, passwordHash: hash, inviter: &invite.InviterUserID,
-		})
+		}); err != nil {
+			return err
+		}
+		success := securityAttempt{site: d.site, user: user, account: account, surface: d.surface}
+		return success.record(ctx, tx, "security.registration")
 	})
 	if constraint, ok := pg.Duplicate(err); ok && constraint == "users_site_id_email_key" {
 		return UserID{}, ErrEmailTaken

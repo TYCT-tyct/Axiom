@@ -144,10 +144,11 @@ type PasswordChange struct {
 }
 
 // ChangePassword rechecks the current password outside the user lock, then refuses any intervening factor change.
-func (s *Service) ChangePassword(ctx context.Context, p Principal, c PasswordChange) (Issued, []string, error) {
+func (s *Service) ChangePassword(ctx context.Context, p Principal, c PasswordChange) (out Issued, recovery []string, err error) {
 	if p.user == (UserID{}) || p.Pending() || p.surface != Console {
 		return Issued{}, nil, ErrNoSession
 	}
+	defer func() { s.failed(ctx, p.securityAttempt(), "security.password_failed", &err) }()
 	if err := s.recoveryReady(); err != nil {
 		return Issued{}, nil, err
 	}
@@ -157,7 +158,7 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, c PasswordCha
 	l := s.snapshot.Load().sites[p.site].limits
 	var issued Issued
 	var codes []string
-	err := failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
+	err = failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
 		if err := s.checkPassword(ctx, p, c.CurrentPassword); err != nil {
 			return err
 		}

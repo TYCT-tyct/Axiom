@@ -293,6 +293,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/sites/{site_id}/login-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's login brute-force limits
+         * @description The site's own limits and the code defaults; absent members are unavailable on older nodes.
+         */
+        get: operations["getSiteLoginLimits"];
+        /**
+         * Set a site's login brute-force limits
+         * @description Replace only the five login thresholds. Absent values use code defaults. Changes are audited and applied locally at once and on other nodes within 30 seconds. Existing counters are preserved.
+         */
+        put: operations["updateSiteLoginLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/accounts/{account_id}/suspension": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Pause or restore account calls
+         * @description Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
+         */
+        put: operations["setAccountSuspension"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/users/{user_id}/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["schemas"]["UserId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Disable or enable user sign-in
+         * @description Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
+         */
+        put: operations["setUserSignIn"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/users/{user_id}/platform-grants/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["schemas"]["UserId"];
+                role: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Revoke or restore a platform grant
+         * @description Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
+         */
+        put: operations["setPlatformGrant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/users/{user_id}/platform-grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["schemas"]["UserId"];
+            };
+            cookie?: never;
+        };
+        /** Read a user's platform grants */
+        get: operations["listUserPlatformGrants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tiers": {
         parameters: {
             query?: never;
@@ -1260,6 +1372,41 @@ export interface components {
             settings: components["schemas"]["SiteSettings"];
             reason: components["schemas"]["Reason"];
         };
+        /** @description Site overrides. Absence selects code defaults. Refills use the existing IP, email and user windows. */
+        LoginLimits: {
+            ip_attempt_burst?: number;
+            ip_attempts_per_minute?: number;
+            email_sign_in_failures?: number;
+            user_code_failures?: number;
+            challenge_code_attempts?: number;
+        };
+        LoginLimitsView: {
+            limits?: components["schemas"]["LoginLimits"];
+            defaults?: components["schemas"]["LoginLimits"];
+        };
+        LoginLimitsUpdate: {
+            limits: components["schemas"]["LoginLimits"];
+            reason: components["schemas"]["Reason"];
+        };
+        AccountSuspension: {
+            suspended: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        UserSignIn: {
+            disabled: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        PlatformGrantChange: {
+            revoked: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        PlatformGrant: {
+            role?: string;
+            revoked?: boolean;
+        };
+        PlatformGrantList: {
+            data?: components["schemas"]["PlatformGrant"][];
+        };
         /** @description Limits on the call keys of an account: how many it may hold that are not deleted (`max_keys`), and how many it may make in an hour, deleted ones too (`creations_per_hour`). A limit that is absent is not set, and the level above applies: the site's for an account, the default in code for a site. Each is from 1 to 10,000. */
         KeyLimits: {
             max_keys?: number;
@@ -1288,6 +1435,7 @@ export interface components {
             status: "active" | "disabled";
             tier: components["schemas"]["TierRef"];
             mfa_enabled: boolean;
+            sign_in_disabled?: boolean;
             /** Format: date-time */
             created_at: string;
         };
@@ -1297,6 +1445,7 @@ export interface components {
             next_cursor: string | null;
         };
         AccountDetail: {
+            calls_suspended?: boolean;
             id: components["schemas"]["AccountId"];
             site_id: components["schemas"]["SiteId"];
             name: string;
@@ -2498,6 +2647,197 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSiteLoginLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The limits */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginLimitsView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteLoginLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginLimitsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The limits as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginLimitsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setAccountSuspension: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountSuspension"];
+            };
+        };
+        responses: {
+            /** @description State stored; a repeated state changes nothing */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setUserSignIn: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                user_id: components["schemas"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserSignIn"];
+            };
+        };
+        responses: {
+            /** @description State stored; a repeated state changes nothing */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setPlatformGrant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                user_id: components["schemas"]["UserId"];
+                role: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformGrantChange"];
+            };
+        };
+        responses: {
+            /** @description State stored; a repeated state changes nothing */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listUserPlatformGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["schemas"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest grant of each role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformGrantList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["Failure"];
         };
     };
