@@ -120,27 +120,11 @@ func hostName() string {
 	return name
 }
 
-// singleNodeOnly keeps production on one core until supplier credential concurrency and RPM have node shares.
-// K1-K3 share the cache state, but each suppliers.Service still applies the full configured ceilings locally
-// (internal/suppliers/README.md「并发与速率」). Refs #313 (E3-3), #382. Two-node tests use serveWith directly.
-func singleNodeOnly(environ []string) error {
-	env := config.New(environ)
-	nodes := env.Int(kv.NodesVar, 1, 1)
-	if env.Problems() == nil && nodes > 1 {
-		return fmt.Errorf("configuration:\n%s: %d nodes are not supported yet: supplier credential concurrency and RPM still use full per-node limits, "+
-			"so multiple nodes would exceed the configured ceilings (Refs #313 E3-3, #382)", kv.NodesVar, nodes)
-	}
-	return nil
-}
-
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
 // and requests in flight and the jobs of the queue get up to AXIOM_SHUTDOWN_TIMEOUT to finish. It refuses to start against a database whose
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	if err := singleNodeOnly(environ); err != nil {
-		return err
-	}
 	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher)
 }
 
