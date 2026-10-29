@@ -107,6 +107,8 @@ func BenchmarkObserve(b *testing.B) {
 	id := suppliers.EndpointID{3}
 	ok := answered(id, t0, time.Second, time.Second, 100, 100)
 	bad := Observation{Endpoint: id, Failure: failed500, Ended: t0}
+	ok.Source, ok.Credential = id, id
+	bad.Source, bad.Credential = id, id
 	observe := func() {
 		m.Observe(b.Context(), ok)
 		m.Observe(b.Context(), bad)

@@ -60,6 +60,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		order = append(order, r.rank(cands, n, &rec)...)
 	}
 	attempts := orDefault(preset.MaxAttempts, r.cfg.MaxAttempts)
+	order = healthOrder(order, n, &rec, min(attempts, MaxEntries))
 	entries := r.entries(order, n, &rec)
 	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
 	if len(entries) == 0 {
@@ -68,6 +69,9 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	for _, e := range entries {
 		rec.Route = append(rec.Route, e.Endpoint)
+		if e.BreakerFallback {
+			rec.BreakerFallback = append(rec.BreakerFallback, e.Endpoint)
+		}
 	}
 	return Plan{
 		Entries: entries, MaxAttempts: attempts,
@@ -124,6 +128,7 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 			continue
 		}
 		entry := r.entry(c.candidate, n)
+		entry.BreakerFallback = !c.opened.IsZero()
 		entry.Price = c.price.PriceRef
 		entries = append(entries, entry)
 	}
@@ -337,3 +342,63 @@ func (n *need) withinLimit(limit PriceLimit, c *candidate, price *candidatePrice
 }
 
 func listed(ids []SupplierID, id SupplierID) bool { return slices.Contains(ids, id) }
+
+// healthOrder applies breakers after every request-specific filter, across primary and alternate models.
+func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
+	available := slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() && !c.slowFull })
+	if !available && slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() }) {
+		for i := range order {
+			order[i].slowFull = false
+		}
+		available = true
+	}
+	if !available {
+		orderLastResorts(order)
+		return order
+	}
+	owned, hasOwned := ownedFallback(order, n.now)
+	out := order[:0]
+	for _, c := range order {
+		reason := Reason(0)
+		if !c.opened.IsZero() {
+			reason = BreakerOpen
+		} else if c.slowFull {
+			reason = Full
+		}
+		if reason != 0 {
+			rec.Excluded = append(rec.Excluded, Excluded{c.ID, reason})
+		} else {
+			out = append(out, c)
+		}
+	}
+	if hasOwned {
+		out = out[:min(len(out), slots-1)]
+		out = append(out, owned)
+	}
+	return out
+}
+
+func ownedFallback(order []ranked, now time.Time) (owned ranked, found bool) {
+	for _, c := range order {
+		if c.Owner.Platform() || c.opened.IsZero() || now.Sub(c.opened) < 10*time.Minute {
+			continue
+		}
+		if !found || c.opened.After(owned.opened) {
+			owned = c
+			found = true
+		}
+	}
+	return
+}
+
+func orderLastResorts(order []ranked) {
+	// rank already groups each model by supplier order and slow status.
+	for start := 0; start < len(order); {
+		end := start + 1
+		for end < len(order) && order[end].Model == order[start].Model && order[end].order == order[start].order && order[end].slow == order[start].slow {
+			end++
+		}
+		slices.SortStableFunc(order[start:end], func(a, b ranked) int { return b.opened.Compare(a.opened) })
+		start = end
+	}
+}

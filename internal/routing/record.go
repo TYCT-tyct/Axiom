@@ -10,9 +10,10 @@ import (
 // The gateway appends the attempts; observability stores it with the call, and the user and the operations agent read
 // it from there.
 type Record struct {
-	Excluded []Excluded
-	Route    []EndpointID
-	Attempts []Attempt
+	BreakerFallback []EndpointID
+	Excluded        []Excluded
+	Route           []EndpointID
+	Attempts        []Attempt
 }
 
 // Attempt is one try at an endpoint.
@@ -26,9 +27,10 @@ type Attempt struct {
 
 // recorded, JSON-ready: the identifiers as text, the reasons by name.
 type recordJSON struct {
-	Excluded []excludedJSON `json:"excluded"`
-	Route    []string       `json:"route"`
-	Attempts []attemptJSON  `json:"attempts"`
+	BreakerFallback []string       `json:"breaker_open_fallback,omitzero"`
+	Excluded        []excludedJSON `json:"excluded"`
+	Route           []string       `json:"route"`
+	Attempts        []attemptJSON  `json:"attempts"`
 }
 
 type excludedJSON struct {
@@ -56,6 +58,9 @@ func (r Record) JSON() ([]byte, error) {
 	}
 	for _, id := range r.Route {
 		w.Route = append(w.Route, uuid.UUID(id).String())
+	}
+	for _, id := range r.BreakerFallback {
+		w.BreakerFallback = append(w.BreakerFallback, uuid.UUID(id).String())
 	}
 	for _, a := range r.Attempts {
 		w.Attempts = append(w.Attempts, attemptJSON{uuid.UUID(a.Endpoint).String(), a.Egress, a.Failed, uint8(a.Scope), uint8(a.Action)})

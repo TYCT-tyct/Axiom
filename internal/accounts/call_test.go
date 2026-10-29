@@ -540,3 +540,33 @@ func BenchmarkKnownKey(b *testing.B) {
 		}
 	}
 }
+
+func TestAdmissionCarriesOwnerForHealthEvidence(t *testing.T) {
+	t.Parallel()
+	_, database, s, key := callSetup(t)
+	caller, err := s.AuthenticateKey(t.Context(), accounts.SiteID(s1), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(want accounts.UserID) {
+		t.Helper()
+		err := s.Admit(t.Context(), caller, accounts.AdmitRequest{Domain: apiDomain, ClientIP: client}, func(_ pg.Tx, a accounts.Admission) error {
+			if a.OwnerID() != want {
+				t.Fatalf("owner=%v, want %v", a.OwnerID(), want)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(accounts.UserID(u1))
+	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(member(":s1", ":a1", "personal", ":u1", ":a1"))); err != nil {
+		t.Fatal(err)
+	}
+	check(accounts.UserID(u1))
+	if err := pgtest.Run(t.Context(), database.Superuser, "DELETE FROM accounts.members WHERE account_id='"+a1.String()+"'"); err != nil {
+		t.Fatal(err)
+	}
+	check(accounts.UserID(u1))
+}

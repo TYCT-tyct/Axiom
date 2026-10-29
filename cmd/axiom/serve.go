@@ -25,6 +25,7 @@ import (
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/platform/webui"
+	"axiom/internal/quality"
 	"axiom/internal/suppliers"
 )
 
@@ -57,6 +58,7 @@ type listening struct {
 
 // nodeSettings are the node's configuration, all read from the environment before anything starts.
 type nodeSettings struct {
+	healthMode                        quality.Mode
 	publicAddr, adminAddr, probesAddr string
 	startupTimeout, shutdownTimeout   time.Duration
 	databaseURL                       string
@@ -76,6 +78,7 @@ func readSettings(environ []string) (nodeSettings, error) {
 	env := config.New(environ)
 	s := nodeSettings{
 		exchangeSource:    env.String("AXIOM_EXCHANGE_SOURCE", "manual"),
+		healthMode:        quality.Mode(env.String("AXIOM_HEALTH_MODE", "")),
 		publicAddr:        env.Addr(publicAddrVar, ":8080"),         // model calls, the console, payment callbacks
 		adminAddr:         env.Addr(adminAddrVar, "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
 		probesAddr:        probesListenAddr(env),
@@ -105,12 +108,18 @@ func readSettings(environ []string) (nodeSettings, error) {
 	// Email is optional: none of its variables set means the node starts with email disabled, and a partly set
 	// configuration joins the problems above, so the node still reports everything wrong at once. The cache's own settings
 	// are judged with the rest, so a node that is wrong about them does not touch the database.
+	var healthErr error
+	var modeErr error
+	s.healthMode, modeErr = quality.ParseMode(string(s.healthMode))
+	if modeErr != nil {
+		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
+	}
 	smtp, mailErr := mail.ReadConfig(env)
 	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
 		mailErr = errors.Join(mailErr, errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb"))
 	}
 	s.smtp = smtp
-	if err := errors.Join(env.Err(), mailErr, s.valkey.Resolve()); err != nil {
+	if err := errors.Join(env.Err(), mailErr, s.valkey.Resolve(), healthErr); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
 	}
 	return s, nil
@@ -229,8 +238,8 @@ func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *tele
 // answering, not ready), then the calls and their settlements, then the loops that keep the holder alive for them, then
 // the queue and the recorder, which the calls may still have fed, the two together: a slow job then cannot use up the
 // recorder's time. Each stage has a deadline of its own, so a long stream that uses the listeners' up does not take the
-// recorder's with it. The worst case is timeout + drainWait + abortGrace + timeout (deploy/compose.yaml's
-// stop_grace_period covers it).
+// recorder's with it. Health also finishes bounded paid probes and flushes their costs before the database closes;
+// deploy/compose.yaml's stop_grace_period covers every stage.
 func stopNode(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening,
 	calls callNode, queue *pg.Queue, recorder *observability.Recorder,
 ) error {

@@ -166,13 +166,14 @@ services:
     build: .
     image: ${DEPLOY_IMAGE:-axiom:local}
     restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
-    stop_grace_period: 100s # worst case: AXIOM_SHUTDOWN_TIMEOUT (30s by default) for the listeners, the drain of calls and settlements (15s + 5s), AXIOM_SHUTDOWN_TIMEOUT again for the queue and the recorder in parallel (80s), the cache's heartbeat row (10s at most), with a margin
+    stop_grace_period: 170s # listeners 30s + calls 20s + health probes/cost flush 65s + queue/recorder 30s + cache 10s, with margin
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
       AXIOM_ADMIN_ADDR: ":8082" # the admin app; the program's own default is loopback inside the container, unreachable
       AXIOM_MASTER_KEY_FILE: /keys/master
       AXIOM_KEY_HASH_FILE: /keys/hash
       AXIOM_IDENTITY_KEY_FILE: /keys/identity
+      AXIOM_HEALTH_MODE: ${AXIOM_HEALTH_MODE-}
       # The shared cache, in this single-core deployment too: a rate count that survives this process is one more thing
       # a restart does not take, and it is what `AXIOM_CORE_NODES` above 1 will need (internal/platform/kv/README.md
       # 「配置与启动」). The password is the file, never this environment.

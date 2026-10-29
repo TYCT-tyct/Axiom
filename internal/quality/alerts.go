@@ -1,0 +1,114 @@
+package quality
+
+import (
+	"context"
+	"strconv"
+	"uuid"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"axiom/internal/platform/alert"
+	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers"
+)
+
+func (l *Loop) budgetSignal(exhausted bool) error {
+	state := uint8(1)
+	if exhausted {
+		state = 2
+	}
+	if l.alerts == nil || l.budgetState == state {
+		return nil
+	}
+	var err error
+	key := "quality:" + l.node
+	if exhausted {
+		err = l.alerts.Raise("probe_budget_exhausted", key, "warning", nil)
+	} else {
+		err = l.alerts.Resolve("probe_budget_exhausted", key)
+	}
+	if err == nil {
+		l.budgetState = state
+	}
+	return err
+}
+
+func (l *Loop) transitionMetric(ctx context.Context, c change) {
+	if l.transitions != nil {
+		l.transitions.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", "endpoint"), attribute.String("to", c.kind), attribute.String("cause", c.record.Cause), attribute.String("mode", string(c.record.Mode))))
+	}
+}
+
+func healthSignal(c change) alert.Signal {
+	kind := "endpoint_" + c.kind
+	severity := "warning"
+	if c.kind == "restored" {
+		severity = "info"
+	}
+	if c.kind == "owned_endpoint_removed" {
+		kind = c.kind
+	}
+	key := c.record.ID.String()
+	source := "quality:" + key + ":" + strconv.FormatInt(c.record.Epoch, 10)
+	return alert.Signal{Source: source, Kind: kind, Key: key, Severity: severity, Fields: map[string]string{"cause": c.record.Cause}}
+}
+
+func (l *Loop) checkModels(endpoints []suppliers.Routable) error {
+	if l.alerts == nil || l.monitor.mode != Enforce {
+		return nil
+	}
+	type health struct {
+		up     bool
+		opened int64
+	}
+	models := map[uuid.UUID]health{}
+	for _, ep := range endpoints {
+		if !ep.Platform() {
+			continue
+		}
+		e := l.monitor.of(ep.ID)
+		e.mu.Lock()
+		opened := e.record.Opened
+		e.mu.Unlock()
+		h := models[ep.Model]
+		h.up = h.up || opened == 0
+		h.opened = max(h.opened, opened)
+		models[ep.Model] = h
+	}
+	for model, h := range models {
+		down := !h.up
+		if old, known := l.unavailable[model]; known && old == down {
+			continue
+		}
+		key := model.String()
+		var err error
+		if down {
+			err = l.alerts.RaiseOnce("quality:model:"+key+":"+strconv.FormatInt(h.opened, 10), "model_unavailable", key, "critical", nil)
+		} else {
+			err = l.alerts.Resolve("model_unavailable", key)
+		}
+		if err != nil {
+			return err
+		}
+		l.unavailable[model] = down
+	}
+	return nil
+}
+
+func persistHealthSignal(ctx context.Context, tx pg.Tx, c change) error {
+	signal := healthSignal(c)
+	if err := alert.Persist(ctx, tx, uuid.NewV7(), signal); err != nil {
+		return err
+	}
+	if c.kind != "restored" {
+		return nil
+	}
+	for _, kind := range []string{"endpoint_removed", "owned_endpoint_removed", "endpoint_still_down", "endpoint_restored"} {
+		recovery := alert.Signal{Source: signal.Source + ":" + kind + ":resolved", Kind: kind, Key: signal.Key, Severity: "info", Resolved: true}
+		if err := alert.Persist(ctx, tx, uuid.NewV7(), recovery); err != nil {
+			return err
+		}
+	}
+	return nil
+}

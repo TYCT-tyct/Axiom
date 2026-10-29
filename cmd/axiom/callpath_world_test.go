@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"io"
 	"log/slog"
 	"net/http"
@@ -178,6 +179,7 @@ func (f *fakeSupplier) sent() []supplied {
 // samples, and a supplier that serves them, all but the sale price, which a test adds when it wants the node to route.
 type callWorld struct {
 	commandLine
+	trusted        []*x509.Certificate // test servers the node's outbound client trusts besides the loopback supplier
 	supplier       *fakeSupplier
 	site           uuid.UUID
 	richKey, noKey string
@@ -386,8 +388,9 @@ type runningNode struct {
 	ended    func() error  // how serve ended; only after finished
 }
 
-// start runs a node of the program over the world's database, whose suppliers it reaches on loopback.
-func (w *callWorld) start() runningNode {
+// start runs a node of the program over the world's database, whose suppliers it reaches on loopback. extra variables
+// follow the defaults and so win over them.
+func (w *callWorld) start(extra ...string) runningNode {
 	w.t.Helper()
 	environ := append(slices.Clone(w.environ), "AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=10s", "AXIOM_MASTER_KEY_FILE="+keyFile(w.t, 'm'), "AXIOM_KEY_HASH_FILE="+keyFile(w.t, 'h'),
@@ -396,12 +399,13 @@ func (w *callWorld) start() runningNode {
 	// for rate counts and stickiness. serveWith bypasses the production guard for unpartitioned supplier ceilings.
 	cache := kvtest.New(w.t)
 	environ = append(environ, "AXIOM_NODE_ID="+uuid.New().String(), "AXIOM_CORE_NODES=2", "AXIOM_VALKEY_URL="+cache.URL, "AXIOM_VALKEY_PASSWORD_FILE="+cache.PasswordFile)
+	environ = append(environ, extra...)
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(w.t.Context())
 	done := make(chan error, 1)
 	// The node reaches the supplier, which listens on loopback, through a client that is allowed to.
 	loopback := func(tel *telemetry.Telemetry) (*egress.Client, error) { //nolint:unparam // the signature serveWith asks for; the production client can fail
-		return egress.NewForTesting(egresstest.Loopback(w.t), egress.WithTracerProvider(tel.Traces)), nil
+		return egress.NewForTesting(egresstest.Loopback(w.t, w.trusted...), egress.WithTracerProvider(tel.Traces)), nil
 	}
 	go func() {
 		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback, startRecorder, nil)

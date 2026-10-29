@@ -4,7 +4,12 @@
   "includeEntryExports": true,
   "workspaces": {
     // vite.shared.ts reads theme.js as text and serves it, which knip cannot follow.
-    ".": { "entry": ["theme.js"] }
+    ".": {
+      "entry": ["theme.js"],
+      // journey/node.ts starts the Go test binary of cmd/axiom/journey_test.go.
+      "playwright": { "config": ["playwright.config.ts", "playwright.journey.config.ts"] },
+      "ignoreBinaries": ["go"]
+    }
   },
   "ignore": ["**/*.gen.ts"]
 }
