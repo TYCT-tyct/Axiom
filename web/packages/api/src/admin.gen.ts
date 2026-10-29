@@ -867,7 +867,7 @@ export interface paths {
         put?: never;
         /**
          * Map an upstream model name to a model
-         * @description Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The endpoint it creates waits for the authenticity check before it takes traffic. A group alias can be corrected: each different model appends an audited revision, and the current revision is projected at the next sync. Repeating its current model leaves the revision unchanged. Supplier-wide aliases remain immutable (409).
+         * @description Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The endpoint it creates waits for the authenticity check before it takes traffic. Without rev this creates an alias and refuses an existing name in that scope (409 conflict). To correct a group alias, send the current revision as rev; a missing or changed alias returns 409 stale_revision. A matching revision appends an audited correction, projected at the next sync; the same model leaves the revision unchanged. Supplier-wide aliases remain immutable (409).
          */
         post: operations["mapSupplierModel"];
         delete?: never;
@@ -1890,6 +1890,11 @@ export interface components {
             next_cursor: string | null;
         };
         ModelMappingRequest: {
+            /**
+             * Format: int64
+             * @description Current revision for an explicit group correction; omit to create a new alias.
+             */
+            rev?: number;
             /** @description The group the alias is for. Absent: the whole supplier. */
             group_id?: components["schemas"]["Uuid"];
             upstream_name: string;

@@ -467,9 +467,9 @@ type Mapping struct {
 	Revision     int64
 }
 
-// MapModel creates an alias or appends a correction in group scope. Supplier-wide aliases remain immutable.
+// MapModel creates an alias when rev is nil, or corrects a group alias at the revision the caller read.
 // The caller checks the catalog model; the supplier lock serializes revisions and their audit entries.
-func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, group *uuid.UUID, name string, model uuid.UUID, reason string) (Mapping, error) {
+func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, group *uuid.UUID, name string, model uuid.UUID, rev *int64, reason string) (Mapping, error) {
 	if _, err := a.locked(ctx, tx, supplier); err != nil {
 		return Mapping{}, err
 	}
@@ -483,13 +483,13 @@ func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, suppl
 	if err != nil {
 		return Mapping{}, fmt.Errorf("read the alias: %w", err)
 	}
+	if err := checkMappingRevision(rows, group, rev); err != nil {
+		return Mapping{}, err
+	}
 	m := Mapping{Supplier: supplier, Group: group, UpstreamName: name, Model: model, Revision: 1}
 	detail := map[string]any{"upstream_name": name, "model": model.String()}
 	action := "supplier_alias.create"
 	if len(rows) != 0 {
-		if group == nil {
-			return Mapping{}, ErrAliasExists
-		}
 		current := rows[0]
 		m.ID, m.Revision = current.ID, current.Revision
 		if current.ModelID == model {
@@ -519,6 +519,17 @@ func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, suppl
 		return Mapping{}, err
 	}
 	return m, nil
+}
+
+// checkMappingRevision runs under the supplier lock, so two corrections of one revision cannot both commit.
+func checkMappingRevision(rows []store.CurrentAliasRow, group *uuid.UUID, rev *int64) error {
+	if rev != nil && (len(rows) == 0 || rows[0].Revision != *rev) {
+		return ErrAliasRevision
+	}
+	if len(rows) != 0 && (group == nil || rev == nil) {
+		return ErrAliasExists
+	}
+	return nil
 }
 
 // PendingMapping is an upstream name waiting to be mapped.

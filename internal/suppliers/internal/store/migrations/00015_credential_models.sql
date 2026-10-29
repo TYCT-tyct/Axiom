@@ -7,6 +7,7 @@ GRANT UPDATE (allowed_models) ON suppliers.credentials TO axiom_app;
 
 -- The immutable alias row is revision 1. Corrections append here, so old nodes can
 -- still create aliases and the original model never needs to be rewritten.
+REVOKE UPDATE (model_id, set_by) ON suppliers.supplier_aliases FROM axiom_app;
 ALTER TABLE suppliers.supplier_aliases ADD UNIQUE (id, supplier_id);
 CREATE TABLE suppliers.supplier_alias_revisions (
     alias_id uuid NOT NULL,

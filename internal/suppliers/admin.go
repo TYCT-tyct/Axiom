@@ -48,6 +48,8 @@ var (
 	ErrKeyBound = errors.New("suppliers: that key is already bound")
 	// ErrAliasExists is an upstream name that already has an alias in the scope.
 	ErrAliasExists = errors.New("suppliers: that name already has an alias in that scope")
+	// ErrAliasRevision is a correction based on an alias revision that is no longer current.
+	ErrAliasRevision = errors.New("suppliers: the alias changed since it was read")
 	// ErrUnitValue is a value that is not above 0 and at most 1000 with at most 15 decimals.
 	ErrUnitValue = errors.New("suppliers: a unit value is above 0 and at most 1000, with at most 15 decimals")
 	// ErrNoCredential is a credential the supplier does not have.

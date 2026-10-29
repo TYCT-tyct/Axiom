@@ -96,6 +96,8 @@ const keyPageSize = 100
 // maxPages bounds a listing: a supplier whose pages never end would otherwise keep the task busy.
 const maxPages = 100
 
+const keyListingVersion = 2 // Version 1 did not retain key policies.
+
 // keysProgress is the position in the keys listing: the page to read next, the keys read so far, and the total the
 // supplier stated. A key created during the listing shifts the pages, so one key may be read twice, which the position's
 // keys take out. A listing that shrank (a key removed) moved its pages forward, which would skip a key, so it begins
@@ -109,11 +111,11 @@ type keysProgress struct {
 
 func decodeKeys(raw adapter.Listing) keysProgress {
 	if len(raw) == 0 {
-		return keysProgress{V: 1, Page: 1}
+		return keysProgress{V: keyListingVersion, Page: 1}
 	}
 	var p keysProgress
-	if jsonx.UnmarshalKnown(raw, &p) != nil || p.V != 1 || p.Page < 1 {
-		return keysProgress{V: 1, Page: 1}
+	if jsonx.UnmarshalKnown(raw, &p) != nil || p.V != keyListingVersion || p.Page < 1 {
+		return keysProgress{V: keyListingVersion, Page: 1}
 	}
 	return p
 }
@@ -143,7 +145,7 @@ func (m *manager) keysPage(ctx context.Context, p *keysProgress) (page adapter.P
 		return page, false, err
 	}
 	if p.Page > 1 && total < p.Total { // the list shrank under the position: it begins again
-		*p = keysProgress{V: 1, Page: 1}
+		*p = keysProgress{V: keyListingVersion, Page: 1}
 		return page, true, nil
 	}
 	p.Total = total

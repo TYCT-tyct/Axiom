@@ -33,16 +33,16 @@ func TestProjectionUsesCurrentGroupMappingRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mapTo := func(model catalog.ModelID) {
+	mapTo := func(model catalog.ModelID, rev *int64) {
 		t.Helper()
 		if err := c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
-			_, err := admin.MapModel(t.Context(), tx, audit.System("suppliers.test"), c.supplier, &group, "alias", uuid.UUID(model), "correct the group model")
+			_, err := admin.MapModel(t.Context(), tx, audit.System("suppliers.test"), c.supplier, &group, "alias", uuid.UUID(model), rev, "correct the group model")
 			return err
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	mapTo(one)
+	mapTo(one, nil)
 	s = c.acquire(node)
 	c.commitListing(s, 2, groups)
 	same(t, "initial endpoint", c.column("endpoints", "model_id::text", "id"), []string{uuid.UUID(one).String()})
@@ -52,7 +52,8 @@ func TestProjectionUsesCurrentGroupMappingRevision(t *testing.T) {
 	if err := s.Release(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	mapTo(two)
+	rev := int64(1)
+	mapTo(two, &rev)
 	s = c.acquire(node)
 	c.commitListing(s, 3, groups)
 	if err := service.Reload(t.Context()); err != nil {

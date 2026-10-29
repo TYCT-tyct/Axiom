@@ -130,7 +130,7 @@ func namesOf(names []PendingMapping) []string {
 
 func (a admins) mapIn(supplier uuid.UUID, group *uuid.UUID, name string, model uuid.UUID) (Mapping, error) {
 	return inTx(a, func(ctx context.Context, tx pg.Tx) (Mapping, error) {
-		return a.admin.MapModel(ctx, tx, a.actor, supplier, group, name, model, "mapped")
+		return a.admin.MapModel(ctx, tx, a.actor, supplier, group, name, model, nil, "mapped")
 	})
 }
 

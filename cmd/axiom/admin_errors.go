@@ -51,6 +51,7 @@ var adminRefusals = []refusal{
 	{suppliers.ErrStatusLocked, http.StatusConflict, codeConflict, "the supplier's status does not allow this"},
 	{suppliers.ErrGroupGone, http.StatusConflict, codeConflict, "the supplier no longer lists that group"},
 	{suppliers.ErrKeyBound, http.StatusConflict, codeConflict, "that key is already bound"},
+	{suppliers.ErrAliasRevision, http.StatusConflict, codeStaleRevision, "the alias changed since it was read"},
 	{suppliers.ErrAliasExists, http.StatusConflict, codeConflict, "that name already has an alias in that scope"},
 	{suppliers.ErrNoAdapter, http.StatusUnprocessableEntity, codeUnprocessable, "no adapter of that kind that can be connected"},
 	{suppliers.ErrAddressRefused, http.StatusUnprocessableEntity, codeUnprocessable, "the outbound client refuses that address"},

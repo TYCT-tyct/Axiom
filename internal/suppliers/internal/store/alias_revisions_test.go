@@ -36,6 +36,8 @@ func TestAliasRevisionsPreserveOwnershipAndHistory(t *testing.T) {
 	}
 	for _, sql := range []string{
 		"UPDATE suppliers.supplier_alias_revisions SET reason = 'rewrite'",
+		"UPDATE suppliers.supplier_aliases SET model_id = uuidv7()",
+		"UPDATE suppliers.supplier_aliases SET set_by = 'system'",
 		"DELETE FROM suppliers.supplier_alias_revisions",
 	} {
 		if err := exec(t, db, platform, sql); pg.SQLState(err) != insufficientPrivilege {

@@ -27,7 +27,7 @@ func projectKeyPolicies(ctx context.Context, tx pg.Tx, id uuid.UUID, keys *[]ada
 	for _, k := range *keys {
 		policy := k.Policy
 		if policy == nil {
-			policy = &adapter.KeyPolicy{Models: []string{}} // A resumed legacy listing cannot prove permission.
+			policy = &adapter.KeyPolicy{Models: []string{}} // A listing without policy data cannot prove permission.
 		}
 		rows = append(rows, policyRow{Ref: string(k.Ref), Group: k.GroupRef, Models: policy.Models, ExpiresAt: policy.ExpiresAt})
 	}
