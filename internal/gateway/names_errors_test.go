@@ -24,7 +24,7 @@ func TestModelDetailVariants(t *testing.T) {
 			{":floor:nitro", 200},
 			{":exacto", 200},
 			{":free", 400},
-			{":thinking", 400},
+			{":thinking", 200},
 			{":online", 400},
 			{":unknown", 404},
 		} {

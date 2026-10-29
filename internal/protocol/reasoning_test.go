@@ -36,6 +36,11 @@ func TestReasoningControlsAcrossFormats(t *testing.T) {
 		{"budget adaptive", `"reasoning":{"max_tokens":8000}`, `adaptive`, `high`, protocol.Messages, catalog.ThinkingAdaptive},
 		{"disabled responses", `"reasoning":{"enabled":false}`, ``, `none`, protocol.Responses, 0},
 		{"budget responses", `"reasoning":{"max_tokens":8000}`, ``, `high`, protocol.Responses, 0},
+		{"empty effort", `"reasoning_effort":""`, ``, ``, protocol.Messages, catalog.ThinkingAdaptive},
+		{"empty effort responses", `"reasoning_effort":""`, ``, ``, protocol.Responses, 0},
+		{"an empty effort keeps the object's", `"reasoning":{"effort":"high"},"reasoning_effort":""`, `adaptive`, `high`, protocol.Messages, catalog.ThinkingAdaptive},
+		{"an empty effort inside the object", `"reasoning":{"enabled":true,"effort":""}`, `adaptive`, `medium`, protocol.Messages, catalog.ThinkingAdaptive},
+		{"an empty effort keeps the budget", `"reasoning":{"effort":"","max_tokens":8000}`, `adaptive`, `high`, protocol.Messages, catalog.ThinkingAdaptive},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := []byte(`{"model":"m","messages":[{"role":"user","content":"Hi"}],"max_tokens":10000`)
@@ -54,6 +59,29 @@ func TestReasoningControlsAcrossFormats(t *testing.T) {
 			}
 			checkReasoningSettings(t, up.Body, tc.target, tc.thinking, tc.effort)
 		})
+	}
+}
+
+// TestAnEmptyEffortAsksForNoReasoning: the summary and the conversion agree that "" is no setting, so it neither asks
+// for the reasoning ability nor satisfies a :thinking suffix; an effort the reasoning object does set still counts.
+func TestAnEmptyEffortAsksForNoReasoning(t *testing.T) {
+	for _, tc := range []struct {
+		setting string
+		want    bool
+	}{
+		{`"reasoning_effort":""`, false},
+		{`"reasoning":{"effort":""}`, false},
+		{`"reasoning":{"enabled":true,"effort":""}`, true},
+		{`"reasoning":{"effort":"high"},"reasoning_effort":""`, true},
+	} {
+		body := []byte(`{"model":"m","messages":[{"role":"user","content":"Hi"}],` + tc.setting + `}`)
+		r, err := protocol.Inspect(protocol.Chat, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := r.Needs.Has(protocol.Reasoning); got != tc.want {
+			t.Errorf("%s: reasoning=%t, want %t", tc.setting, got, tc.want)
+		}
 	}
 }
 

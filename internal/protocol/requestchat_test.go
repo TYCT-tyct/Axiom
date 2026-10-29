@@ -49,6 +49,16 @@ func TestMessagesRequestsToChat(t *testing.T) {
 			`"messages":[{"role":"user","content":"Hi"}],"reasoning_effort":"low","max_tokens":4096`,
 		},
 		{
+			"an empty effort does not hide adaptive thinking",
+			`"messages":[{"role":"user","content":"Hi"}],"thinking":{"type":"adaptive"},"output_config":{"effort":""}`,
+			`"messages":[{"role":"user","content":"Hi"}],"reasoning_effort":"medium","max_tokens":4096`,
+		},
+		{
+			"an empty effort does not hide a thinking budget",
+			`"messages":[{"role":"user","content":"Hi"}],"thinking":{"type":"enabled","budget_tokens":2048},"output_config":{"effort":""}`,
+			`"messages":[{"role":"user","content":"Hi"}],"reasoning_effort":"medium","max_tokens":4096`,
+		},
+		{
 			"disabled thinking and any choice",
 			`"messages":[{"role":"user","content":"Hi"}],"thinking":{"type":"disabled"},"tool_choice":{"type":"any"}`,
 			`"messages":[{"role":"user","content":"Hi"}],"reasoning_effort":"none","tool_choice":"required","max_tokens":4096`,

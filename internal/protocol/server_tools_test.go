@@ -24,9 +24,6 @@ func TestInspectRefusesUnpricedServerTools(t *testing.T) {
 		{protocol.Responses, `"tools":[{"type":"file_search","vector_store_ids":["vs_test"]}]`, "file_search"},
 		{protocol.Responses, `"tools":[{"type":"image_generation"}]`, "image_generation"},
 		{protocol.Responses, `"tools":[{"type":"programmatic_tool_calling"}]`, "programmatic_tool_calling"},
-		{protocol.Messages, `"tools":[{"type":"openrouter:tool_search"}]`, "openrouter:"},
-		{protocol.Responses, `"tools":[{"type":"openrouter:shell"}]`, "openrouter:"},
-		{protocol.Chat, `"tools":[{"type":"openrouter:web_search"}]`, "openrouter:"},
 		{protocol.Responses, `"tools":[{"type":"shell","environment":{"type":"container_auto"}}]`, "shell"},
 		{protocol.Responses, `"tools":[{"environment":{"type":"container_reference","container_id":"cntr_test"},"type":"shell"}]`, "shell"},
 		{protocol.Responses, `"tools":[{"type":"shell"}]`, "shell"},
@@ -45,6 +42,41 @@ func TestInspectRefusesUnpricedServerTools(t *testing.T) {
 				t.Errorf("Inspect(%s) = %v, want a named unsupported tool", body, err)
 			}
 		}
+	}
+}
+
+// TestInspectRefusesOpenRouterServerTools: every server tool OpenRouter documents is recognized by its own name in
+// every format and refused before admission, whether or not the request caps its calls; a name the namespace does not
+// document is refused as unknown rather than as an unsupported tool.
+func TestInspectRefusesOpenRouterServerTools(t *testing.T) {
+	tools := []string{
+		"openrouter:web_search", "openrouter:web_fetch", "openrouter:datetime", "openrouter:image_generation",
+		"openrouter:apply_patch", "openrouter:shell", "openrouter:bash", "openrouter:fusion", "openrouter:advisor",
+		"openrouter:subagent", "openrouter:experimental__search_models", "openrouter:tool_search", "openrouter:files",
+	}
+	for _, format := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
+		for _, name := range tools {
+			for _, limit := range []string{"", `,"max_tool_calls":2`} {
+				body := []byte(`{"model":"m","tools":[{"type":"` + name + `"}]` + limit + `}`)
+				_, err := protocol.Inspect(format, body)
+				if !errors.Is(err, protocol.ErrInvalid) || !strings.Contains(err.Error(), name+" server tool is not supported") {
+					t.Errorf("Inspect(%d, %s) = %v, want a refusal naming %s", format, name, err, name)
+				}
+			}
+		}
+	}
+	_, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","tools":[{"type":"openrouter:web_search"}]}`))
+	if !strings.Contains(err.Error(), protocol.NoWebSearch) {
+		t.Errorf("openrouter:web_search: %v does not say %q", err, protocol.NoWebSearch)
+	}
+	_, err = protocol.Inspect(protocol.Chat, []byte(`{"model":"m","tools":[{"type":"openrouter:teleport"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "not an OpenRouter server tool") {
+		t.Errorf("openrouter:teleport: %v, want an unknown-tool refusal", err)
+	}
+	// The web plugin and the server tool ask for the same thing and are refused with the same reason.
+	_, err = protocol.Inspect(protocol.Chat, []byte(`{"model":"m","plugins":[{"id":"web"}]}`))
+	if !strings.Contains(err.Error(), protocol.NoWebSearch) {
+		t.Errorf("the web plugin: %v does not say %q", err, protocol.NoWebSearch)
 	}
 }
 
