@@ -88,7 +88,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **`Segmentable`** 由 routing 按条目和请求算出（见 [routing 的「接口」](../routing/README.md#接口)）；不可分段的条目全额预留、不追加、不截断。
 
 
-支付对账的日范围读由迁移 `00022_payment_audit.sql` 的部分索引支撑：`credit_batches (merchant_id,created_at,id)` 只含线上商户批次，退款交易另有 `(created_at,request_id)` 的 `kind='refund'` 索引。现金查询分开读取该日入账与该日退款，避免按商户扫描全部历史；订单和批次主键一次批量读，不做每单往返。索引并发构建，不阻塞资金写入；中断后迁移重跑会并发删除并重建自己的索引，避免接受无效索引。
+支付对账的日范围读由迁移 `00024_payment_audit.sql` 的部分索引支撑：`credit_batches (merchant_id,created_at,id)` 只含线上商户批次，退款交易另有 `(created_at,request_id)` 的 `kind='refund'` 索引。现金查询分开读取该日入账与该日退款，避免按商户扫描全部历史；订单和批次主键一次批量读，不做每单往返。索引并发构建，不阻塞资金写入；中断后迁移重跑会并发删除并重建自己的索引，避免接受无效索引。
 
 ## 控制台的读取
 

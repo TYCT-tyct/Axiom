@@ -9,6 +9,9 @@ import (
 
 func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
 	w := newTestWorld(t, fakePlugin{create: goodCheckout})
+	if err := w.db.Check(t.Context(), billing.Migrations(), Migrations()); err != nil {
+		t.Fatal("migrated schema rejected at startup", err)
+	}
 	m := w.waiting()
 	o := w.mustPlace(yuan, "migration-resume")
 	w.receive(receipt(o))
@@ -17,9 +20,12 @@ func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Leave all schema steps present, as a failure in the last concurrent build would, without an applied marker.
-	w.exec("DELETE FROM platform.goose_payments WHERE version_id=5", "DELETE FROM platform.goose_billing WHERE version_id=22")
+	w.exec("DELETE FROM platform.goose_payments WHERE version_id=6", "DELETE FROM platform.goose_billing WHERE version_id=24")
 	if err := pg.Migrate(t.Context(), w.super, billing.Migrations(), Migrations()); err != nil {
 		t.Fatal("resume concurrent builds", err)
+	}
+	if err := w.db.Check(t.Context(), billing.Migrations(), Migrations()); err != nil {
+		t.Fatal("resumed schema rejected at startup", err)
 	}
 	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
 		h, err := queries.LockQueryHealth(t.Context(), tx, m.ID)
@@ -40,5 +46,46 @@ func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
 	}
 	if err := w.p.finishQuery(t.Context(), MerchantID(m.ID), token, queryUnused); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestQueryHealthKeepsSiteScope(t *testing.T) {
+	w := newWorld(t)
+	m := w.waiting()
+	token, err := w.p.acquireQuery(t.Context(), MerchantID(m.ID), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := w.p.finishQuery(t.Context(), MerchantID(m.ID), token, queryUnused); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, test := range []struct {
+		name  string
+		scope pg.Scope
+		want  int64
+	}{
+		{"platform", w.p.platform, 1},
+		{"own site", siteScope(w.siteA), 1},
+		{"other site", siteScope(w.siteB), 0},
+		{"own account", w.accountA(), 0},
+		{"other account", w.accountB(), 0},
+		{"empty", pg.Scope{}, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if n := w.count(test.scope, "SELECT count(*) FROM payments.query_health"); int64(n) != test.want {
+				t.Fatalf("query health read scope: got %d, want %d", n, test.want)
+			}
+			if err := w.tx(test.scope, func(tx pg.Tx) error {
+				tag, err := tx.Exec(t.Context(), "UPDATE payments.query_health SET failures=failures")
+				if err == nil && tag.RowsAffected() != test.want {
+					t.Fatalf("query health write scope: got %d, want %d", tag.RowsAffected(), test.want)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

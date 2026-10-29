@@ -18,8 +18,10 @@ ALTER TABLE payments.query_health ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SEC
 -- +goose StatementBegin
 DO $$ BEGIN
     IF NOT EXISTS (SELECT FROM pg_policies WHERE schemaname='payments' AND tablename='query_health' AND policyname='site') THEN
-        CREATE POLICY site ON payments.query_health USING (platform.in_scope(site_id, NULL))
-            WITH CHECK (platform.in_scope(site_id, NULL));
+        CREATE POLICY site ON payments.query_health USING ((SELECT platform.in_platform_scope())
+            OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[]))
+            WITH CHECK ((SELECT platform.in_platform_scope())
+            OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[]));
     END IF;
 END $$;
 -- +goose StatementEnd
