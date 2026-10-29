@@ -15,6 +15,8 @@ import (
 // set, replaces the text of the code, and Details are members added beside error_type. Reason is which limit turned
 // the call away when several share a Code; it is counted (Backpressure.refused) and never sent to the client.
 type Refusal struct {
+	RateLimit  int
+	RateReset  int64
 	Status     int
 	Code       string
 	RetryAfter int // seconds
@@ -35,12 +37,14 @@ var (
 	errIPInFlight      = rateLimited("ip_in_flight")      // the client address has IPInFlight requests in flight
 	errAccountInFlight = rateLimited("account_in_flight") // the account has its in-flight limit of requests
 	errKeyRate         = rateLimited("key_rate")          // the key made more than KeyRate requests in RateWindow
-	errCountRate       = rateLimited("count_rate")        // the key made more than CountRate count_tokens requests in RateWindow
-	errAccountGate     = rateLimited("account_gate")      // the account's gate stayed busy for AccountGateWait
-	errQueueFull       = rateLimited("queue_full")        // every candidate endpoint is full and the queue has QueueMax waiters
-	errQueueKeyFull    = rateLimited("queue_key_full")    // the same, and the key has QueuePerKey of them
-	errQueueWait       = rateLimited("queue_wait")        // the same, and the call waited QueueWait
-	errCredentialsBusy = rateLimited("credentials_busy")  // every credential of the route is at its concurrency limit
+	errAccountRate     = rateLimited("account_rate")
+	errBusinessKeyRate = rateLimited("business_key_rate")
+	errCountRate       = rateLimited("count_rate")       // the key made more than CountRate count_tokens requests in RateWindow
+	errAccountGate     = rateLimited("account_gate")     // the account's gate stayed busy for AccountGateWait
+	errQueueFull       = rateLimited("queue_full")       // every candidate endpoint is full and the queue has QueueMax waiters
+	errQueueKeyFull    = rateLimited("queue_key_full")   // the same, and the key has QueuePerKey of them
+	errQueueWait       = rateLimited("queue_wait")       // the same, and the call waited QueueWait
+	errCredentialsBusy = rateLimited("credentials_busy") // every credential of the route is at its concurrency limit
 	// ErrOverloaded is a node that has no capacity left and does not queue: 503.
 	ErrOverloaded = &Refusal{Status: 503, Code: "overloaded", RetryAfter: 1}
 )
@@ -74,6 +78,6 @@ func expired(parent context.Context, limit *Refusal) error {
 // rateLimits are the 429 refusals above, which the counter's attribute sets are made for ahead of time, so that
 // counting one on the call path allocates nothing (internal/platform/README.md「遥测」).
 var rateLimits = []*Refusal{
-	errIPInFlight, errAccountInFlight, errKeyRate, errCountRate, errAccountGate,
+	errIPInFlight, errAccountInFlight, errAccountRate, errBusinessKeyRate, errKeyRate, errCountRate, errAccountGate,
 	errQueueFull, errQueueKeyFull, errQueueWait, errCredentialsBusy,
 }
