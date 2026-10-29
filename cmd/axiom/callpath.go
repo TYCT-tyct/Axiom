@@ -89,8 +89,10 @@ type callNode struct {
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	billing.WarmTokenizers()
 	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
-	// stamps it on every plan and the executor reads it from there, not from the configuration.
-	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy})
+	// stamps it on every plan and the executor reads it from there, not from the configuration. The segment settings
+	// are the gateway's too, and billing takes the same ones in startLedger, so routing never marks an entry segmentable
+	// with no sizes to reserve it by (#229).
+	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy, Segments: d.gate.Segments()})
 	if err != nil {
 		return callNode{}, err
 	}
@@ -150,7 +152,7 @@ func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metr
 		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
 		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
 		// what no settlement will only once the call cannot still be running.
-		Lifetime: gate.MaxCall + gate.SettleGrace, Logger: logger, Meter: meter, Alerts: signals,
+		Lifetime: gate.MaxCall + gate.SettleGrace, Segments: gate.Segments(), Logger: logger, Meter: meter, Alerts: signals,
 	}, suppliers.CallWrites{})
 }
 

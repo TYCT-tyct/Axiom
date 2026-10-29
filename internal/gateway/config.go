@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
+	"axiom/internal/billing"
 	"axiom/internal/platform/pg"
 )
 
@@ -54,6 +55,15 @@ type Config struct {
 	SettleGrace       time.Duration // reservation deadline = admission + MaxCall + SettleGrace
 	SettleRetry       time.Duration // how long a settlement is retried before the ending is written without its cost
 	SettleBackground  time.Duration // how long a failed settlement is retried after SettleRetry, in the background
+
+	SegmentOutput    int64         // output tokens a segment covers before the reservation is extended
+	SegmentOvershoot time.Duration // the extension wait plus how long a cancelled upstream may keep billing
+}
+
+// Segments is billing's settings for reserving in segments, taken from this one place by routing and billing, so an
+// entry is never marked segmentable by one of them with no sizes for the other to reserve it by (Issue #229).
+func (c Config) Segments() billing.Segments {
+	return billing.Segments{Output: c.SegmentOutput, Overshoot: c.SegmentOvershoot}
 }
 
 // DefaultConfig returns the defaults of docs/domains/gateway.md and internal/gateway/README.md.
@@ -89,6 +99,11 @@ func DefaultConfig() Config {
 		SettleGrace:       30 * time.Minute,
 		SettleRetry:       10 * time.Second,
 		SettleBackground:  20 * time.Minute,
+		// A segment of 1000 output tokens at a model's speed extends every few seconds; the allowance covers one
+		// ExtendWait (1s) and as long again for a cancelled upstream to stop billing. No model ships an output speed
+		// yet, so nothing segments until a spec says one.
+		SegmentOutput:    1000,
+		SegmentOvershoot: 2 * time.Second,
 	}
 }
 
@@ -117,6 +132,9 @@ func (c Config) Validate() error {
 		c.HeaderWait, c.CompactHeaderWait, c.IdleTimeout, c.MaxCall, c.KeepAlive)
 	// Divided, not multiplied: 3*HolderHeartbeat overflows to a negative number for a huge heartbeat and would pass.
 	relation(c.HolderHeartbeat <= c.HolderTTL/3, "HolderTTL %v must be at least 3 x HolderHeartbeat %v", c.HolderTTL, c.HolderHeartbeat)
+	// The allowance has to cover the wait for an extension, or a stream cut short would have spent more than the
+	// reservation set aside for it.
+	relation(c.SegmentOvershoot >= c.ExtendWait, "SegmentOvershoot %v must be at least ExtendWait %v", c.SegmentOvershoot, c.ExtendWait)
 	relation(c.ReclaimGrace >= c.HolderTTL, "ReclaimGrace %v must be at least HolderTTL %v", c.ReclaimGrace, c.HolderTTL)
 	// Subtracted, not added: two huge positives would overflow past the grace.
 	relation(c.SettleBackground < c.SettleGrace-c.SettleRetry, "SettleGrace %v must exceed SettleRetry %v + SettleBackground %v",
