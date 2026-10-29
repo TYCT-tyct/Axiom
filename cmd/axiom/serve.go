@@ -115,11 +115,12 @@ func readSettings(environ []string) (nodeSettings, error) {
 		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
 	}
 	smtp, mailErr := mail.ReadConfig(env)
+	var exchangeErr error
 	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
-		mailErr = errors.Join(mailErr, errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb"))
+		exchangeErr = errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb")
 	}
 	s.smtp = smtp
-	if err := errors.Join(env.Err(), mailErr, s.valkey.Resolve(), healthErr); err != nil {
+	if err := errors.Join(env.Err(), mailErr, s.valkey.Resolve(), healthErr, exchangeErr); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
 	}
 	return s, nil

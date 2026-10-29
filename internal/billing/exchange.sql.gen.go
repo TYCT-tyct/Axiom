@@ -36,11 +36,20 @@ func (q *Queries) CompleteExchangeSync(ctx context.Context, db DBTX, arg Complet
 }
 
 const currentExchangeRates = `-- name: CurrentExchangeRates :many
-SELECT DISTINCT ON (base, quote) id, base, quote, version, numerator, denominator, source, kind, reason, created_by, created_at, source_at FROM billing.exchange_rates ORDER BY base, quote, version DESC
+SELECT current_rate.id, current_rate.base, current_rate.quote, current_rate.version, current_rate.numerator, current_rate.denominator, current_rate.source, current_rate.kind, current_rate.reason, current_rate.created_by, current_rate.created_at, current_rate.source_at
+FROM unnest($1::text[]) AS bases(currency)
+CROSS JOIN unnest($1::text[]) AS quotes(currency)
+CROSS JOIN LATERAL (
+    SELECT r.id, r.base, r.quote, r.version, r.numerator, r.denominator, r.source, r.kind, r.reason, r.created_by, r.created_at, r.source_at FROM billing.exchange_rates r
+    WHERE r.base = bases.currency AND r.quote = quotes.currency
+    ORDER BY r.version DESC LIMIT 1
+) current_rate
+WHERE bases.currency < quotes.currency
+ORDER BY current_rate.base, current_rate.quote
 `
 
-func (q *Queries) CurrentExchangeRates(ctx context.Context, db DBTX) ([]BillingExchangeRate, error) {
-	rows, err := db.Query(ctx, currentExchangeRates)
+func (q *Queries) CurrentExchangeRates(ctx context.Context, db DBTX, currencies []string) ([]BillingExchangeRate, error) {
+	rows, err := db.Query(ctx, currentExchangeRates, currencies)
 	if err != nil {
 		return nil, err
 	}

@@ -116,10 +116,10 @@ func TestExchangeSyncDailyAtomicAndManual(t *testing.T) {
 func TestExchangeSyncStaleAndRecovery(t *testing.T) {
 	f := newExchangeJob(t)
 	f.run()
-	f.at = time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+	f.at = time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)
 	f.run()
 	if got := f.count("SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='billing.exchange.stale'"); got != 0 {
-		t.Fatal("alert at exact seven-day boundary")
+		t.Fatal("alert at exact eight-day boundary")
 	}
 	f.at = f.at.Add(time.Hour)
 	f.run()
@@ -133,7 +133,7 @@ func TestExchangeSyncStaleAndRecovery(t *testing.T) {
 		t.Fatal("repeated stale signal")
 	}
 	f.at = f.at.Add(24 * time.Hour)
-	f.body.Store(strings.ReplaceAll(exchangeSample, "2026-10-29", "2026-11-06"))
+	f.body.Store(strings.ReplaceAll(exchangeSample, "2026-10-29", "2026-11-07"))
 	f.run()
 	if got := f.count("SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='billing.exchange.stale' AND body->>'resolved'='true'"); got != 1 {
 		t.Fatalf("recovery signals %d", got)
@@ -239,4 +239,34 @@ func checkExchangeStateHidden(t *testing.T, tx pg.Tx) error {
 		t.Fatal("tenant changed sync state")
 	}
 	return err
+}
+
+func TestExchangeSyncAfterDowntimeChecksFreshDownloadBeforeAlerting(t *testing.T) {
+	f := newExchangeJob(t)
+	f.run()
+	f.at = f.at.Add(exchangeMaxAge + time.Hour)
+	f.body.Store(strings.ReplaceAll(exchangeSample, "2026-10-29", f.at.Format(time.DateOnly)))
+	f.run()
+	if got := f.count("SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='billing.exchange.stale'"); got != 0 {
+		t.Fatalf("fresh restart generated %d stale/recovery signals", got)
+	}
+}
+
+func TestExchangeSyncFailedCompletionAlertsOnNextCheck(t *testing.T) {
+	f := newExchangeJob(t)
+	f.run()
+	f.at = f.at.Add(exchangeMaxAge + time.Hour)
+	fresh := strings.ReplaceAll(exchangeSample, "2026-10-29", f.at.Format(time.DateOnly))
+	f.body.Store(strings.ReplaceAll(fresh, `rate="1.1234"`, `rate="100"`))
+	if err := f.job.run(t.Context()); err == nil {
+		t.Fatal("accepted an invalid batch")
+	}
+	f.at = f.at.Add(time.Hour)
+	f.run()
+	if f.calls.Load() != 2 {
+		t.Fatal("non-download check fetched again")
+	}
+	if got := f.count("SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='billing.exchange.stale'"); got != 1 {
+		t.Fatalf("failed completion lost stale alarm: %d", got)
+	}
 }

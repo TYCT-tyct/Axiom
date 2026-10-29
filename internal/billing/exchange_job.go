@@ -17,8 +17,8 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// A Thursday source date can remain current through Easter Tuesday; daily polling adds up to another day.
-const exchangeMaxAge = 7 * 24 * time.Hour
+// Easter closure, daily polling and one failed daily download can leave a Thursday quote current for almost eight days.
+const exchangeMaxAge = 8 * 24 * time.Hour
 
 type exchangeArgs struct{}
 
@@ -92,12 +92,9 @@ func (j *exchangeJob) claim(ctx context.Context) (time.Time, bool, error) {
 		if err != nil {
 			return err
 		}
-		if err := exchangeAlert(ctx, tx, state, at); err != nil {
-			return err
-		}
 		due = state.LastAttempt == nil || at.Sub(*state.LastAttempt) >= 24*time.Hour
 		if !due {
-			return nil
+			return exchangeAlert(ctx, tx, state, at)
 		}
 		return queries.ClaimExchangeSync(ctx, tx, &at)
 	})

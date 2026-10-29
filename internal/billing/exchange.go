@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
 	"slices"
@@ -166,7 +167,7 @@ func setExchangeRate(ctx context.Context, tx pg.Tx, actor audit.Actor, in Exchan
 
 // ExchangeRates reads all current pairs in one statement, so a build never mixes versions of a pair.
 func ExchangeRates(ctx context.Context, tx pg.Tx) ([]BillingExchangeRate, error) {
-	return queries.CurrentExchangeRates(ctx, tx)
+	return queries.CurrentExchangeRates(ctx, tx, slices.Sorted(maps.Keys(minorDigits)))
 }
 
 // ExchangeRateHistory reads at most 100 versions, newest first; before is an exclusive version cursor, zero for newest.

@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
 	"math/rand/v2"
@@ -151,10 +152,7 @@ func TestExchangePublicationAndPreviewFreezeEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := published.Schedule.MarshalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := readExchangeSaleVersion(t, f, published.Version)
 	err = f.tx(func(tx pg.Tx) error {
 		row, err := SetExchangeRate(t.Context(), tx, system, fxInput("72", "10", "adjustment", 1))
 		if err != nil {
@@ -169,16 +167,11 @@ func TestExchangePublicationAndPreviewFreezeEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := published.Schedule.MarshalJSON()
-	if err != nil {
-		t.Fatal(err)
+	after := readExchangeSaleVersion(t, f, published.Version)
+	if !bytes.Equal(before.schedule, after.schedule) || !bytes.Equal(before.basis, after.basis) {
+		t.Fatal("stored price version or its evidence mutated after rate update")
 	}
-	if string(before) != string(after) {
-		t.Fatal("published price mutated after rate update")
-	}
-	if !strings.Contains(string(before), `"input":"0.0000071"`) {
-		t.Fatalf("converted price: %s", before)
-	}
+	checkStoredExchangeSaleVersion(t, after, rate)
 }
 
 func checkExchangePublication(t *testing.T, f *priceFixture, tx pg.Tx, r Rule, cny platform.Currency, costs []PriceCost, rate platform.ExchangeRate) Sold {
@@ -260,4 +253,39 @@ func exchangePrices(t *testing.T) *priceFixture {
 		t.Fatal(err)
 	}
 	return f
+}
+
+type storedExchangeSaleVersion struct{ schedule, basis []byte }
+
+func readExchangeSaleVersion(t *testing.T, f *priceFixture, version uuid.UUID) storedExchangeSaleVersion {
+	t.Helper()
+	var stored storedExchangeSaleVersion
+	if err := f.tx(func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT schedule,basis FROM billing.price_versions WHERE id=$1", version).Scan(&stored.schedule, &stored.basis)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return stored
+}
+
+func checkStoredExchangeSaleVersion(t *testing.T, after storedExchangeSaleVersion, rate platform.ExchangeRate) {
+	t.Helper()
+	var schedule struct {
+		Rates map[string]string `json:"rates"`
+	}
+	if err := jsonx.Unmarshal(after.schedule, &schedule); err != nil {
+		t.Fatal(err)
+	}
+	if schedule.Rates["input"] != "0.0000071" {
+		t.Fatalf("converted price: %s", after.schedule)
+	}
+	var evidence struct {
+		Exchange platform.ExchangeRate `json:"reference_exchange"`
+	}
+	if err := jsonx.Unmarshal(after.basis, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Exchange != rate {
+		t.Fatalf("stored rate changed: %+v, want %+v", evidence.Exchange, rate)
+	}
 }
