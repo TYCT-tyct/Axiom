@@ -8,6 +8,7 @@ import (
 
 	"axiom/internal/observability/internal/store"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 )
 
@@ -28,12 +29,6 @@ type OwnCall struct {
 	Free                                bool
 	Latency, FirstToken                 time.Duration
 	FinishReason, ErrorKind             string
-}
-
-// Cursor is the place after which the next page starts: the last call of the page before.
-type Cursor struct {
-	At time.Time
-	ID uuid.UUID
 }
 
 // OwnQuery selects the calls of one account, newest first, from those the transaction's scope can see. Account is
@@ -57,10 +52,8 @@ const (
 
 // cursorOf uses the tighter of the exclusive window end and the page cursor as one composite index bound.
 func cursorOf(q OwnQuery) (at time.Time, id string) {
-	if q.After != nil && q.After.At.Before(q.Until) {
-		return q.After.At, q.After.ID.String()
-	}
-	return q.Until, uuid.Nil().String()
+	upper := page.UpperBound(q.Until, q.After)
+	return upper.At, upper.ID.String()
 }
 
 // listRows plans for the actual filter values so optional predicates do not hide the ordered indexes.

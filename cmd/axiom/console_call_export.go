@@ -29,7 +29,7 @@ func (c consoleAPI) ExportCalls(ctx context.Context, request consoleapi.ExportCa
 	if err != nil {
 		return nil, err
 	}
-	q, err = boundedCallWindow(q, request.Params.Since, request.Params.Until)
+	q, err = boundedCallWindow(q, request.Params.Since, request.Params.Until, ownCallReportWindow)
 	if err != nil {
 		return nil, err
 	}

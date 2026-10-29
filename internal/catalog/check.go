@@ -36,7 +36,13 @@ func (c *Catalog) Check(ctx context.Context, authors []string) ([]ModelCheck, er
 			if err != nil {
 				return err
 			}
-			checks = append(checks, checkModel(m))
+			check := checkModel(m)
+			if check.Source == SourceOfficial {
+				if err := checkOfficialPrice(ctx, tx, m, &check); err != nil {
+					return err
+				}
+			}
+			checks = append(checks, check)
 		}
 		return nil
 	})

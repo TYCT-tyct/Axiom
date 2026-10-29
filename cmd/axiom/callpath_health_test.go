@@ -92,6 +92,8 @@ func runGatewayHealth(t *testing.T, mode quality.Mode) {
 	if !router.Blocked(first) {
 		t.Fatal("reservation recheck missed live breaker")
 	}
+	// Gateway observations use wall time; model slow fixture setup without sleeping.
+	clock.Advance(-2 * time.Minute)
 	w.checkHealthRecovery(clock, loop, health, first)
 	if len(mustPlan(t, router, in).Entries) != 2 {
 		t.Fatal("restored endpoint missing")
@@ -127,7 +129,8 @@ func (w *callWorld) injectHealthFailures(n callNode, first routing.Entry) {
 
 func (w *callWorld) checkHealthRecovery(clock *testClock, loop *quality.Loop, health *quality.Monitor, first routing.Entry) {
 	w.t.Helper()
-	clock.Advance(31 * time.Second)
+	opened, _ := health.Live(uuid.UUID(first.Endpoint), 2).Routing(clock.Now())
+	clock.Advance(opened.Sub(clock.Now()) + 31*time.Second)
 	w.supplier.mu.Lock()
 	w.supplier.failures = []int{500}
 	w.supplier.mu.Unlock()

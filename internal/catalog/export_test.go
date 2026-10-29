@@ -19,3 +19,10 @@ func RunSyncRound(ctx context.Context, cfg SyncJobConfig) error {
 	}
 	return j.work(ctx, nil)
 }
+
+// RecordPage exposes the transactional write boundary for integration tests.
+func (c *Catalog) RecordPage(ctx context.Context, page CatalogWatchedPage, content PageContent, err error) error {
+	return c.recordPage(ctx, page, content, err)
+}
+
+func (c *Catalog) ReportOverduePages(ctx context.Context) error { return c.reportOverduePages(ctx) }
