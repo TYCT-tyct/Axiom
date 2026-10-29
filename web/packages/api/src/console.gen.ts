@@ -479,6 +479,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/calls/aggregate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Calls and user charges grouped by UTC day, model or key
+         * @description All matching calls in the window, independent of list pagination. Defaults to the last 30 days ending now; at most 31 days and 1000 groups. A larger result is refused with 400; narrow the window or filters. Currencies are grouped separately. Charges are exact integer text in billionths, never supplier cost. No conversation content, endpoint or routing data. Ten-second request deadline.
+         */
+        get: operations["aggregateCalls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/calls/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the account's call metadata as CSV
+         * @description Same filters and newest-first cursor order as listCalls, from one database snapshot. Defaults to the last 30 days ending now, at most 31 days. At most 10000 matching rows, streamed in pages of 200. Before writing CSV, a bounded ordered key probe in the same snapshot reads at most 10001 matching keys. More than 10000 matches is a 400 response: narrow the window or filters. A successful CSV contains every matching row after the optional cursor; it is never silently truncated. No HTTP trailers are needed. X-Export-Since and X-Export-Until return the effective window, including defaults. A failure after streaming starts aborts the connection. Ten-second request deadline includes writes, and cancellation releases the snapshot. Amounts are exact decimal text in currency units with nine fractional digits. Cells whose first non-whitespace character is =, +, -, or @ are prefixed with an apostrophe; CSV quoting alone is insufficient. No conversation content, credentials, supplier cost, endpoint or route.
+         */
+        get: operations["exportCalls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/calls/{call_id}": {
         parameters: {
             query?: never;
@@ -641,6 +681,28 @@ export interface components {
         PresetList: {
             data?: components["schemas"]["Preset"][];
             total_count?: number;
+        };
+        /** @enum {string} */
+        CallStatus: "success" | "error";
+        CallAggregates: {
+            data?: components["schemas"]["CallAggregate"][];
+            /** Format: date-time */
+            since?: string;
+            /** Format: date-time */
+            until?: string;
+            /** @enum {string} */
+            group_by?: "day" | "model" | "key";
+        };
+        /** @description A sum of user charges, in billionths. Unlike a single charge, this can exceed int64 and 19 digits. */
+        CallAggregateMoney: {
+            amount?: string;
+            currency?: string;
+        };
+        CallAggregate: {
+            /** @description UTC date, exact model name, or public key ID, according to group_by. */
+            bucket?: string;
+            calls?: string;
+            price?: components["schemas"]["CallAggregateMoney"];
         };
         /** @description A site's ID (TypeID). */
         SiteId: string;
@@ -932,6 +994,7 @@ export interface components {
         };
         /** @description One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. */
         Call: {
+            charge_details?: components["schemas"]["ChargeDetails"];
             /** @description Published sale version locked at admission; absent for legacy or uncharged calls. */
             price_version?: string;
             id: components["schemas"]["CallId"];
@@ -965,7 +1028,44 @@ export interface components {
             /** @description What failed, empty when the call succeeded. */
             error_kind: string;
         };
+        /** @description One billed item of a sampling at its frozen sale price; no supplier or cost information. */
+        ChargeItem: {
+            /** @description Billing item, or unknown_tokens / unknown_uses for unmapped usage. */
+            item?: string;
+            /** Format: int64 */
+            quantity?: number;
+            /** @enum {string} */
+            unit?: "token" | "use";
+            /** @description Exact currency units per token or use, decimal text with up to 15 fractional digits. */
+            unit_price?: string;
+            /** @description Exact quantity times unit_price, before call-level rounding and balance adjustment. */
+            amount?: string;
+            sampling?: number;
+            service_tier?: string;
+            /** @description Zero is the base band; subsequent bands follow the locked schedule's thresholds. */
+            context_band?: number;
+            /** @description Frozen published sale version; absent when not recorded. */
+            price_version?: string;
+            estimated?: boolean;
+            /** @description An unknown item or missing/undeclared tier used the locked fallback sale price. */
+            fallback?: boolean;
+        };
+        /** @description Optional invoice from the immutable reservation, unavailable for historical or old-writer calls. All amounts are exact decimal currency units: subtotal + rounding + balance_adjustment = charged. Waived model items are omitted; tools remain chargeable. An unexecuted call has an empty items array. */
+        ChargeDetails: {
+            currency?: string;
+            items?: components["schemas"]["ChargeItem"][];
+            subtotal?: string;
+            /** @description Adjustment when the complete subtotal is rounded up once to a billionth; extreme totals saturate at the amount limit. */
+            rounding?: string;
+            /** @description Non-positive reduction imposed by the balance floor. */
+            balance_adjustment?: string;
+            /** @description Actual debit in currency units, matching Call.price after converting its billionths. */
+            charged?: string;
+            estimated?: boolean;
+        };
         CallList: {
+            /** @description Echoes an applied status filter. Missing on old nodes; recent errors are unavailable then. */
+            status_filter?: components["schemas"]["CallStatus"];
             data: components["schemas"]["Call"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
@@ -1101,6 +1201,16 @@ export interface components {
         };
     };
     parameters: {
+        CallSince: string;
+        CallUntil: string;
+        /** @description Exactly the model name the client asked for. */
+        CallModel: string;
+        CallClientApp: string;
+        CallKey: components["schemas"]["KeyId"];
+        CallWorkspace: components["schemas"]["WorkspaceId"];
+        /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+        CallStatus: components["schemas"]["CallStatus"];
+        CallRequestId: components["schemas"]["CallId"];
         /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
         Cursor: string;
         /** @description How many items a page holds at most. */
@@ -1944,11 +2054,16 @@ export interface operations {
     listCalls: {
         parameters: {
             query?: {
-                since?: string;
-                until?: string;
+                since?: components["parameters"]["CallSince"];
+                until?: components["parameters"]["CallUntil"];
                 /** @description Exactly the model name the client asked for. */
-                model?: string;
-                client_app?: string;
+                model?: components["parameters"]["CallModel"];
+                client_app?: components["parameters"]["CallClientApp"];
+                key_id?: components["parameters"]["CallKey"];
+                workspace_id?: components["parameters"]["CallWorkspace"];
+                /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+                status?: components["parameters"]["CallStatus"];
+                request_id?: components["parameters"]["CallRequestId"];
                 /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description How many items a page holds at most. */
@@ -1967,6 +2082,84 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CallList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    aggregateCalls: {
+        parameters: {
+            query?: {
+                since?: components["parameters"]["CallSince"];
+                until?: components["parameters"]["CallUntil"];
+                /** @description Exactly the model name the client asked for. */
+                model?: components["parameters"]["CallModel"];
+                client_app?: components["parameters"]["CallClientApp"];
+                key_id?: components["parameters"]["CallKey"];
+                workspace_id?: components["parameters"]["CallWorkspace"];
+                /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+                status?: components["parameters"]["CallStatus"];
+                request_id?: components["parameters"]["CallRequestId"];
+                group_by?: "day" | "model" | "key";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Complete totals for the selected window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallAggregates"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    exportCalls: {
+        parameters: {
+            query?: {
+                since?: components["parameters"]["CallSince"];
+                until?: components["parameters"]["CallUntil"];
+                /** @description Exactly the model name the client asked for. */
+                model?: components["parameters"]["CallModel"];
+                client_app?: components["parameters"]["CallClientApp"];
+                key_id?: components["parameters"]["CallKey"];
+                workspace_id?: components["parameters"]["CallWorkspace"];
+                /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+                status?: components["parameters"]["CallStatus"];
+                request_id?: components["parameters"]["CallRequestId"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Complete CSV of the selected calls, never a truncated chunk */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    /** @description Effective inclusive start, including the default window. */
+                    "X-Export-Since"?: string;
+                    /** @description Effective exclusive end, including the default window. */
+                    "X-Export-Until"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
                 };
             };
             400: components["responses"]["BadRequest"];

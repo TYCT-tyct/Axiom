@@ -219,13 +219,14 @@ func attemptEntries(attempts []AttemptResult) []int32 {
 type priced struct {
 	price             int64
 	estimated, waived bool
+	tiers             int16
 }
 
 // price applies 免单规则 to the outcome at the locked price of the last attempt's entry. A waivable call is waived, with
 // no limit on how many an account may have: the rules are what decides, and nothing else.
 func (c *locked) price(last AttemptResult) (priced, error) {
 	if last.Result == NotExecuted {
-		return priced{}, nil
+		return priced{tiers: -1}, nil
 	}
 	s, f, err := c.pricing(last.Entry)
 	if err != nil {
@@ -234,6 +235,7 @@ func (c *locked) price(last AttemptResult) (priced, error) {
 	waived := waivable(last)
 	p, err := priceSegments(s, f, last.Segments, waived, c.quotes[last.Entry].tiers)
 	p.waived = waived
+	p.tiers = int16(c.quotes[last.Entry].tiers) //nolint:gosec // a model declares only the four catalog service tiers
 	return p, err
 }
 
@@ -266,6 +268,20 @@ func zeroOutput(last AttemptResult) bool {
 // (Unpriced). Adding an item here adds it to all three.
 const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution
 
+func chargedItems(perUseOnly bool) catalog.ItemSet {
+	if perUseOnly {
+		return perUseItems
+	}
+	return ^catalog.ItemSet(0)
+}
+
+func unknownCharged(tokens bool, charged catalog.ItemSet) bool {
+	if tokens {
+		return charged&tokenItems != 0
+	}
+	return charged&perUseItems != 0
+}
+
 // priceSegments prices each sampling at its own band, sums them exactly and rounds up once; perUseOnly charges only
 // the per-use items, still at the band the whole sampling falls in, as the cost of the sampling less its cost without
 // them. s is the schedule admission filled with the per-use defaults. Charged items with usage the upstream did not
@@ -275,10 +291,7 @@ const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCo
 func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOnly bool, tiers catalog.ServiceTierSet) (priced, error) {
 	var p priced
 	total := platform.Exact{}
-	charged := ^catalog.ItemSet(0)
-	if perUseOnly {
-		charged = perUseItems
-	}
+	charged := chargedItems(perUseOnly)
 	for _, seg := range segments {
 		cost, missing, err := segmentCost(s, seg.Usage, perUseOnly)
 		if undeclaredTier(tiers, seg.Usage.ServiceTier()) {
@@ -286,7 +299,7 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 			p.estimated = true
 		}
 		if err == nil {
-			cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), perUseOnly)
+			cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), charged)
 		}
 		if err == nil {
 			cost, err = addMissing(s, f, cost, seg.Usage, missing, charged)
@@ -317,12 +330,11 @@ func guessed(seg Segment, charged, missing catalog.ItemSet) bool {
 	return false
 }
 
-// addFallbacks adds to cost the fallback price of each unknown usage. Tokens are model usage, which perUseOnly (a
-// waiver) leaves out; anything else is a use, which a waiver still charges.
-func addFallbacks(s catalog.Schedule, f fallbacks, cost platform.Exact, unknown []catalog.UnknownUsage, perUseOnly bool) (platform.Exact, error) {
+// addFallbacks adds the fallback price of unknown usage within the same charged classes as known items.
+func addFallbacks(s catalog.Schedule, f fallbacks, cost platform.Exact, unknown []catalog.UnknownUsage, charged catalog.ItemSet) (platform.Exact, error) {
 	for _, u := range unknown {
 		price, tokens := unknownCost(s, f, u)
-		if tokens && perUseOnly {
+		if !unknownCharged(tokens, charged) {
 			continue
 		}
 		var err error
@@ -344,21 +356,24 @@ func addMissing(s catalog.Schedule, f fallbacks, cost platform.Exact, u catalog.
 	if charged == 0 {
 		return cost, nil
 	}
-	tokens := tokenPrice(s)
 	for it := range catalog.NumItems {
 		if !charged.Has(it) {
 			continue
 		}
-		rate := tokens
-		if perUseItems.Has(it) {
-			rate = f.perUse[it]
-		}
+		rate := missingRate(s, f, it)
 		var err error
 		if cost, err = cost.Add(rate.Mul(u.Count(it))); err != nil {
 			return platform.Exact{}, err
 		}
 	}
 	return cost, nil
+}
+
+func missingRate(s catalog.Schedule, f fallbacks, it catalog.Item) platform.UnitPrice {
+	if perUseItems.Has(it) {
+		return f.perUse[it]
+	}
+	return tokenPrice(s)
 }
 
 // tokenItems are the items counted in tokens.
@@ -583,6 +598,7 @@ type written struct {
 	price             int64
 	waived, estimated bool
 	usage             []byte
+	tiers             int16
 }
 
 // result is what a charge for the last attempt writes.
@@ -590,7 +606,7 @@ func result(state string, p priced, last AttemptResult) (written, error) {
 	usage, err := encodeUsage(last.Segments)
 	return written{
 		state: state, seq: int32p(last.Seq), entry: int32p(last.Entry), price: p.price, waived: p.waived,
-		estimated: p.estimated, usage: usage,
+		estimated: p.estimated, usage: usage, tiers: p.tiers,
 	}, err
 }
 
@@ -598,7 +614,7 @@ func result(state string, p priced, last AttemptResult) (written, error) {
 func (c *locked) kept(state string) written {
 	r := c.row
 	return written{
-		state: state, price: r.Price, waived: r.Waived, estimated: r.Estimated, usage: r.FinalUsage,
+		state: state, price: r.Price, waived: r.Waived, estimated: r.Estimated, usage: r.FinalUsage, tiers: r.PricingTiers,
 	}
 }
 
@@ -613,6 +629,7 @@ func (c *locked) write(ctx context.Context, tx pg.Tx, w written, reserved, spent
 		WorkspaceID: c.row.WorkspaceID, WorkspaceWindow: c.row.WorkspaceWindow, KeyID: c.row.KeyID, KeyWindow: c.row.KeyWindow,
 		RequestID: c.id, State: w.state, ChargedSeq: w.seq, Entry: w.entry, Charged: c.charged, Price: w.price,
 		Waived: w.waived, Estimated: w.estimated, FinalUsage: w.usage, AttemptEntries: c.entries,
+		PricingTiers: w.tiers,
 	})
 	if err != nil {
 		return fmt.Errorf("billing: end the reservation: %w", err)

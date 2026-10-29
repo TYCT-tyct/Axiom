@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
 	"axiom/internal/payments"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/egress"
@@ -18,6 +19,7 @@ import (
 // consoleAPI implements the console's API (api/console.yaml). It stands behind the guard, which has found the site,
 // the session and its permission before a method runs, and kept the request to the contract's schemas.
 type consoleAPI struct {
+	charges  *billing.ChargeReader
 	exit     *egress.Client
 	version  string
 	accounts *accounts.Service

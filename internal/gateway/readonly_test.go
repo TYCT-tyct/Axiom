@@ -394,6 +394,9 @@ func checkGeneration(t *testing.T, d map[string]any, id uuid.UUID) {
 			t.Errorf("%s: %v, want %v", field, d[field], want)
 		}
 	}
+	if _, ok := d["charge_details"]; ok {
+		t.Error("legacy call has invented charge details")
+	}
 	if _, ok := d["api_type"]; ok { // the call record has no format, and the request class is not one
 		t.Errorf("api_type is shown: %v", d["api_type"])
 	}

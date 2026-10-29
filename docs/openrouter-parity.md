@@ -109,12 +109,12 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | `GET /api/v1/generation?id=` | 按 `gen-…` ID 查调用详情 | api/generations/get-request-&-usage-metadata-for-a-generation | 部分：`gw/readonly.go:161-198`；ID 是 UUID 不是 `gen-` 前缀 | 无（用 `/api/log`） | `s2:internal/server/routes/gateway.go:210`（`/usage`，不同形） | 路径对，字段子集 |
-| 字段 `id`、`model`、`created_at`、`total_cost`、`latency`、`generation_time`、`finish_reason`、`tokens_prompt`、`tokens_completion` | 基本字段 | spec `GenerationResponse` | 有：`gw/readonly.go:178-195` | 无 | 无 | 缺 `streamed`、`cancelled` |
+| 字段 `id`、`model`、`created_at`、`total_cost`、`latency`、`generation_time`、`finish_reason`、`tokens_prompt`、`tokens_completion` | 基本字段 | spec `GenerationResponse` | 有：`internal/gateway/readonly.go`；另有可选 `price_version`、`charge_details` 用户分项售价扩展，见[计费](domains/billing.md#用户看得到什么) | 无 | 无 | 缺 `streamed`、`cancelled` |
 | 字段 `native_tokens_prompt/completion/reasoning/cached/completion_images`、`num_media_prompt/completion`、`num_input_audio_prompt`、`num_search_results`、`num_fetches` | 原生 token 统计 | spec | 部分：有 `tokens_reasoning/tokens_cached` 和整个 `usage` 明细；`native_tokens_*` 名字没有 | 无 | 无 | 读 `native_tokens_*` 的工具会拿到空 |
 | 字段 `provider_name`、`upstream_id`、`upstream_inference_cost`、`provider_responses`、`router`、`is_byok`、`cache_discount`、`api_type`、`origin`、`user_agent`、`http_referer`、`app_id`、`external_user`、`session_id`、`preset_id`、`workspace_id`、`data_region`、`web_search_engine`、`moderation_latency` | 来源、归因、供应商信息 | spec | 没有（有意不暴露供应商和成本，`docs/domains/gateway.md:79,198,224`）；`app` 只能是 `claude-code`/`codex`（`gw/record.go:43-51`） | 无 | 无 | `provider_name` 等不暴露是有意；`cache_discount`、`session_id`、`external_user` 应补 |
 | `GET /api/v1/generation/content`（存储的提示词、补全、错误内容） | 查看已存内容 | api/generations/get-stored-prompt-completion-and-error-content-for-a-generation | 没有（内容会保存，`docs/product.md:82`，但没有这个接口） | 无 | 无 | 归 #317 控制台调用详情 |
 | `POST /api/v1/generation/feedback` | 提交调用反馈 | api/generations/submit-feedback-for-a-generation | 没有 | 无 | 无 | 低优先 |
-| `GET /api/v1/activity`（按日、按端点聚合，近 30 天，可按 `api_key_hash`、`workspace_id` 过滤） | 用量活动 | spec `/activity` | 没有：控制台有自己的 `/api/console/v1/calls`（`api/console.yaml:440,471`），形状不同、要会话登录 | `na:router/api-router.go:298`（`/usage`，不同形） | 无 | 开发者用它做账单对账 |
+| `GET /api/v1/activity`（按日、按端点聚合，近 30 天，可按 `api_key_hash`、`workspace_id` 过滤） | 用量活动 | spec `/activity` | 没有 OpenRouter 同形接口：控制台 `/api/console/v1/calls` 支持 key/工作区/状态/请求 ID 筛选，`/calls/aggregate` 按日/模型/key 汇总调用与用户收费，`/calls/export` 流式 CSV；形状不同、要会话登录，见[用户调用记录查询与导出](domains/observability.md#用户调用记录查询与导出) | `na:router/api-router.go:298`（`/usage`，不同形） | 无 | 开发者用它做账单对账 |
 
 ## 6. 余额与 key 信息
 

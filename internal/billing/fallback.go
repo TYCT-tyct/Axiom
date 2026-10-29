@@ -177,14 +177,19 @@ func withFallbacks(ctx context.Context, tx pg.Tx, q []Quotable) ([]Quotable, []s
 // A member of a cached-tokens intersection is neither: those tokens are already in the cached count, so it is recorded
 // and costs nothing.
 func unknownCost(s catalog.Schedule, f fallbacks, u catalog.UnknownUsage) (cost platform.Exact, tokens bool) {
+	rate, count, tokens := unknownRate(s, f, u)
+	return rate.Mul(count), tokens
+}
+
+func unknownRate(s catalog.Schedule, f fallbacks, u catalog.UnknownUsage) (platform.UnitPrice, int64, bool) {
 	if strings.Contains(u.Field, intersectionPath) {
-		return platform.Exact{}, true
+		return platform.UnitPrice{}, 0, true
 	}
 	n, err := strconv.ParseInt(u.Value, 10, 64)
 	if err == nil && n >= 0 && n <= maxUnknownCount && strings.HasSuffix(u.Field, "tokens") {
-		return tokenPrice(s).Mul(n), true
+		return tokenPrice(s), n, true
 	}
-	return f.highest().Mul(uses(u.Value)), false
+	return f.highest(), uses(u.Value), false
 }
 
 // intersectionPath is where an OpenAI usage object breaks its cached tokens down by modality. Its members are subsets of

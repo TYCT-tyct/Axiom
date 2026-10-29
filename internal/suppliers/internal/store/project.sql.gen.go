@@ -50,13 +50,13 @@ func (q *Queries) EnsureCostSchedule(ctx context.Context, db DBTX, arg EnsureCos
 	return id, err
 }
 
-const insertProjectedEndpoint = `-- name: InsertProjectedEndpoint :one
-INSERT INTO suppliers.endpoints (supplier_id, supplier_group_id, model_id, upstream_name, formats)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id
+const insertProjectedEndpoint = `-- name: InsertProjectedEndpoint :exec
+INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
+VALUES ($1, $2, $3, $4, $5, $6)
 `
 
 type InsertProjectedEndpointParams struct {
+	ID              uuid.UUID
 	SupplierID      uuid.UUID
 	SupplierGroupID uuid.UUID
 	ModelID         uuid.UUID
@@ -65,26 +65,25 @@ type InsertProjectedEndpointParams struct {
 }
 
 // enabled is left at its default: it is a person's switch, and the projection only ever sets it when it makes the row.
-func (q *Queries) InsertProjectedEndpoint(ctx context.Context, db DBTX, arg InsertProjectedEndpointParams) (uuid.UUID, error) {
-	row := db.QueryRow(ctx, insertProjectedEndpoint,
+func (q *Queries) InsertProjectedEndpoint(ctx context.Context, db DBTX, arg InsertProjectedEndpointParams) error {
+	_, err := db.Exec(ctx, insertProjectedEndpoint,
+		arg.ID,
 		arg.SupplierID,
 		arg.SupplierGroupID,
 		arg.ModelID,
 		arg.UpstreamName,
 		arg.Formats,
 	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+	return err
 }
 
-const insertProjectedGroup = `-- name: InsertProjectedGroup :one
-INSERT INTO suppliers.supplier_groups (supplier_id, upstream_ref, name, ratio, facts, last_seen_at)
-VALUES ($1, $2, $3, $4::numeric, $5::jsonb, $6)
-RETURNING id
+const insertProjectedGroup = `-- name: InsertProjectedGroup :exec
+INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, last_seen_at)
+VALUES ($1, $2, $3, $4, $5::numeric, $6::jsonb, $7)
 `
 
 type InsertProjectedGroupParams struct {
+	ID          uuid.UUID
 	SupplierID  uuid.UUID
 	UpstreamRef string
 	Name        string
@@ -94,8 +93,9 @@ type InsertProjectedGroupParams struct {
 }
 
 // A group is made unselected: which groups to use is a person's choice, not the listing's.
-func (q *Queries) InsertProjectedGroup(ctx context.Context, db DBTX, arg InsertProjectedGroupParams) (uuid.UUID, error) {
-	row := db.QueryRow(ctx, insertProjectedGroup,
+func (q *Queries) InsertProjectedGroup(ctx context.Context, db DBTX, arg InsertProjectedGroupParams) error {
+	_, err := db.Exec(ctx, insertProjectedGroup,
+		arg.ID,
 		arg.SupplierID,
 		arg.UpstreamRef,
 		arg.Name,
@@ -103,9 +103,7 @@ func (q *Queries) InsertProjectedGroup(ctx context.Context, db DBTX, arg InsertP
 		arg.Facts,
 		arg.SeenAt,
 	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+	return err
 }
 
 const listProjectedAliases = `-- name: ListProjectedAliases :many
@@ -206,8 +204,8 @@ type ListProjectedGroupsRow struct {
 }
 
 // The projection of a sync's state onto the tables routing and the back office read (internal/suppliers/README.md「持久化」).
-// Every statement here is written by the projection only, and only when what the listing says differs from the row: a
-// listing read twice changes nothing.
+// Reads feed the projection's difference decisions. The row writes are the regression oracle for batch.go;
+// production applies only the collected differences through ProjectionWrites, so replay changes nothing.
 func (q *Queries) ListProjectedGroups(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListProjectedGroupsRow, error) {
 	rows, err := db.Query(ctx, listProjectedGroups, supplierID)
 	if err != nil {
