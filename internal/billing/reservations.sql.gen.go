@@ -330,16 +330,21 @@ func (q *Queries) ReadFunds(ctx context.Context, db DBTX, arg ReadFundsParams) (
 }
 
 const readKeyUsage = `-- name: ReadKeyUsage :one
-WITH t AS (SELECT clock_timestamp() AS now)
+WITH t AS MATERIALIZED (SELECT clock_timestamp() AS now)
 SELECT
     coalesce(sum(s.spent), 0)::bigint AS total,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('daily', t.now)), 0)::bigint AS daily,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('weekly', t.now)), 0)::bigint AS weekly,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('monthly', t.now)), 0)::bigint AS monthly,
     coalesce(sum(s.spent + s.reserved) FILTER (WHERE s.window_start >= billing.window_from($1::text, t.now)
-        AND s.window_start < billing.window_to($1::text, t.now)), 0)::bigint AS limited
-FROM billing.spend s, t
-WHERE s.subject = $2
+        AND s.window_start < billing.window_to($1::text, t.now)), 0)::bigint AS limited,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from($1::text, t.now)
+        AND s.window_start < billing.window_to($1::text, t.now)), 0)::bigint AS window_spent,
+    coalesce(sum(s.reserved) FILTER (WHERE s.window_start >= billing.window_from($1::text, t.now)
+        AND s.window_start < billing.window_to($1::text, t.now)), 0)::bigint AS window_reserved,
+    CASE WHEN $1::text = '' THEN '0001-01-01 00:00:00+00'::timestamptz ELSE billing.window_to($1::text, t.now) END::timestamptz AS resets_at
+FROM t LEFT JOIN billing.spend s ON s.subject = $2
+GROUP BY t.now
 `
 
 type ReadKeyUsageParams struct {
@@ -348,11 +353,14 @@ type ReadKeyUsageParams struct {
 }
 
 type ReadKeyUsageRow struct {
-	Total   int64
-	Daily   int64
-	Weekly  int64
-	Monthly int64
-	Limited int64
+	Total          int64
+	Daily          int64
+	Weekly         int64
+	Monthly        int64
+	Limited        int64
+	WindowSpent    int64
+	WindowReserved int64
+	ResetsAt       time.Time
 }
 
 // What a key has spent: all time, and in the current UTC day, week and month, plus what its limit counts in the
@@ -367,6 +375,9 @@ func (q *Queries) ReadKeyUsage(ctx context.Context, db DBTX, arg ReadKeyUsagePar
 		&i.Weekly,
 		&i.Monthly,
 		&i.Limited,
+		&i.WindowSpent,
+		&i.WindowReserved,
+		&i.ResetsAt,
 	)
 	return i, err
 }

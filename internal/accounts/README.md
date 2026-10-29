@@ -12,7 +12,7 @@
 | 用户、密码、TOTP、恢复码、会话、邀请关系 | 发邮件（M2） |
 | 账户、成员、工作区及其停用 | 余额、在途预留、额度、账本，以及「余额不足」「暂停」（`billing`） |
 | 等级本身、账户在哪个等级 | 等级的加价（`billing` 的定价规则） |
-| key 的设置：花费上限与重置、工作区预算、过期、预设 ID、可用模型、IP 白名单 | 花费计数与准入时的检查（`billing`，设置作参数传入）；预设内容（`routing`）；限流计数（`gateway`） |
+| key 的设置：业务速率、花费上限与重置、工作区预算、过期、预设 ID、可用模型、IP 白名单 | 花费计数与准入时的检查（`billing`，设置作参数传入）；预设内容（`routing`）；限流计数（`gateway`） |
 | 权限、角色、授予；构造账户和站点的租户范围 | 资金上限、审批、审计的哈希链与回放（`operations`） |
 
 ## 数据
@@ -30,15 +30,15 @@
 | `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed；open 等人机验证）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变；`getSite` 也把它交给页面），`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
 | `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
 | `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值。另有可空的 `max_keys_per_account`、`key_creations_per_hour`（站点的 key 限额，各 1 到 1 万，由 `/key-limits` 读改，不在站点设置的整体替换里） | 站点 | 全部参数列 |
-| `tiers` | `site_id`、`name` | `UNIQUE (site_id, id)` | 站点 | `name` |
+| `tiers` | `site_id`、`name`、`rate_requests` | `UNIQUE (site_id, id)` | 站点 | `name`、`rate_requests` |
 | `roles` | `name`、`permissions text[]`、`additional_permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`、`additional_permissions`（M1 只经迁移） |
-| `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id`，可空的 `max_keys`、`key_creations_per_hour`（账户自己的 key 限额，各 1 到 1 万，空表示用站点的） | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)`，它同时保证 `site_id` 是一个站点 | 账户 | `name`、`status`、`tier_id`、`max_keys`、`key_creations_per_hour` |
+| `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id`，可空的 `max_keys`、`key_creations_per_hour`（账户自己的 key 限额，各 1 到 1 万，空表示用站点的）、`rate_requests` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)`，它同时保证 `site_id` 是一个站点 | 账户 | `name`、`status`、`tier_id`、`max_keys`、`key_creations_per_hour`、`rate_requests` |
 | `workspaces` | `site_id`、`account_id`、`name`、`status`、`is_default`、`budget`、`budget_reset`、`deleted_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；部分唯一 `(account_id) WHERE is_default`；默认工作区的 `deleted_at` 为空；`budget_reset` 取 daily / weekly / monthly，空表示不重置的总额，有它就要有 `budget` | 账户 | `name`、`status`、`budget`、`budget_reset`、`deleted_at` |
 | `users` | `site_id`、`account_id`（个人账户）、`account_kind`（恒为 `personal` 的生成列）、`email`（规范化）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_ciphertext`、`totp_nonce`、`totp_wrapped_dek`、`totp_key_version`（`secret.Sealed` 的四个字段，同为空或同不为空）、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, account_id, id)`；`UNIQUE (account_id)`、`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`：个人账户只属于这一个用户，不能绑到企业账户上，两个登录身份不会共用一个账户范围；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、四个 `totp_` 密文列、`totp_last_step`、`mfa_enabled_at` |
 | `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`：个人账户的成员只能是它唯一的用户，所以不需要另加部分唯一索引；`role_id → roles` | 账户 | 无，也没有 `UPDATE` 策略（移除成员随企业账户加 `removed_at`） |
 | `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)`；部分唯一 `(user_id, role_id) WHERE revoked_at IS NULL`：一个用户同一角色只有一条有效授予 | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态；恢复插入新授予） |
 | `presets` | `site_id`、`account_id`、slug、name、config、created_at、updated_at、deleted_at | 活跃 `(account_id,slug)` 唯一、复合账户外键 | 账户 | name、config、updated_at、deleted_at（终态） |
-| `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`updated_at`、`management_window`、`management_requests`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；请求计数 0–61（61 为已超限）；`limit_reset` 同工作区的 `budget_reset` | 账户 | `updated_at`、`management_window`、`management_requests`、`name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
+| `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`updated_at`、`management_window`、`management_requests`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`、`rate_requests` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；请求计数 0–61（61 为已超限）；`limit_reset` 同工作区的 `budget_reset` | 账户 | `updated_at`、`management_window`、`management_requests`、`name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态）、`rate_requests` |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
 | `security_failures` | `site_id`、`started_at`、`failures`、`completed_peak`、`sampled_at`、`reported` | 每站点一行；当前 UTC 分钟计数、尚未采样完整窗口峰值、最后采样时间及是否待恢复；部分索引只含有计数或待恢复的站点 | 站点 | 仅平台可写计数与采样状态 |
@@ -65,6 +65,12 @@
 - 其他表：`FOR UPDATE USING (范围) WITH CHECK (范围)`。
 - `platform_grants` 的 `INSERT`、`UPDATE` 用 `(SELECT platform.in_platform_scope())`：平台范围包含所有账户，所以它比类别更严，不更宽。
 - 测试：首次撤销或删除成功，之后清除终态列、改其他列都影响 0 行；迁移测试查 `pg_policies`，有终态列的表上没有 `FOR ALL`，也没有第二条 `UPDATE` 策略。
+
+## 业务速率
+
+迁移 `00015_rate_limits.sql` 给 tiers、accounts、api_keys 各加可空的 `rate_requests`（0–10 亿），不写默认数据；继承、不限和默认值见[账户域](../../docs/domains/accounts.md#业务速率限制)。`Admission.RateLimits` 随准入读取最新账户/key 额度，配置不进身份缓存。`Service.RateLimit` 读后台原值和有效值；`Service.SetRateLimit` 持目标行的 FOR NO KEY UPDATE 锁修改并写 before/after 审计（只改非键列，不阻塞新建 key/用户所需的外键 KEY SHARE 锁），后台独立资源要求 MFA、sites.manage、幂等与理由，target 与 tier/acct/key TypeID 必须对应。普通 key CRUD 不读写该列，旧页面和管理 key 无法清除或放宽它。
+
+不变量：等级是账户的缺省，不是全等级共享计数；修改与审计同事务，失败一起回滚；未配置默认 6000，只在 `DefaultRateRequests` 定义一次；速率窗口由 gateway 定义，默认一分钟。等级 SELECT 策略在原站点/平台范围外，只允许账户读取自己当前指定的等级；不增加等级写入权限，不能看到同站未指定或别站等级。更换等级或修改额度在下一次准入生效，不增加准入查询次数。滚动发布中旧核心仍只执行原有节点/key 保护；全部核心升级后，账户共享计数与新业务策略才完整生效；原 key 计数键保持不变。与单独查询可变策略或缓存策略相比，沿用准入 JOIN 能立即生效且无需失效协议。
 
 ## ID
 
@@ -119,7 +125,7 @@
 
 ### 认出与准入
 
-`Admission.OwnerID` 从同一次准入查询的用户表取得当前个人账户唯一所有者（`users.account_id` 唯一且只指向个人账户），供健康窗口去重；不使用 key 的创建人或会话的终端用户。尚无所属用户的账户返回零 ID，不改变 key 能否准入；quality 仍计测量，但不把缺少所有者的结局计入摘除窗口。角色表只有平台范围可见，因此这条账户范围查询不连接角色表，也不增加数据库往返。准入查询把等级和所有者作为一个 32 字节值返回（两个 UUID 的二进制表示，各 16 字节），调用面直接复制到类型化 ID；逐列扫描 UUID 的实现会使准入从 64 增至 66 次分配，固定宽度组合实测为 63 次分配（基线 64），避免这项回归，不新增持久化格式。企业账户的所有者语义随企业账户功能设计。`TestAdmissionCarriesOwnerForHealthEvidence` 守住传递。
+`Admission.OwnerID` 从同一次准入查询的用户表取得当前个人账户唯一所有者（`users.account_id` 唯一且只指向个人账户），供健康窗口去重；不使用 key 的创建人或会话的终端用户。尚无所属用户的账户返回零 ID，不改变 key 能否准入；quality 仍计测量，但不把缺少所有者的结局计入摘除窗口。角色表只有平台范围可见，因此这条账户范围查询不连接角色表，也不增加数据库往返。准入查询把等级、所有者和业务速率作为一个 40 字节值返回（两个 UUID 各 16 字节，再加账户/key 有效速率各 4 字节，网络字节序；-1 由代码补默认值），调用面直接复制到类型化 ID；逐列扫描 UUID 的实现会使准入从 64 增至 66 次分配，固定宽度组合实测为 63 次分配（基线 64），避免这项回归，不新增持久化格式。企业账户的所有者语义随企业账户功能设计。`TestAdmissionCarriesOwnerForHealthEvidence` 守住传递。
 
 **缓存只存不会变的东西；能被改的（停用、删除、过期、IP 白名单、可用模型、预设、上限、等级）每次调用都在准入事务里读库，判定能否使用、定规则和路由都只用读出的值。** 所以缓存陈旧、并发的缓存填充交出旧结果、提交确认丢失、多个核心节点，都不会让停用后的 key 通过，也不会按旧预设路由，不需要失效协议。
 
