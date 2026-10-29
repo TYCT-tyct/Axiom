@@ -216,7 +216,7 @@ func randomBatchMovement(r *rand.Rand, b *batchState, n int, seq int64) movement
 
 // checkInvariants fails the test unless the allocation funds exactly the balance, no batch is over-spent, and debt is
 // held only while no batch holds anything.
-func checkInvariants(t *testing.T, live *allocation, balance int64, m movement) {
+func checkInvariants(t testing.TB, live *allocation, balance int64, m movement) {
 	t.Helper()
 	if live.funded() != balance {
 		t.Fatalf("after %+v the allocation funds %d of a balance of %d", m, live.funded(), balance)

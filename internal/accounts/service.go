@@ -23,6 +23,8 @@ var ErrUnknownKey = errors.New("accounts: unknown API key")
 
 // Config is what cmd/ hands the module.
 type Config struct {
+	// Recovery queues reset requests and credential-change notices; nil disables these flows.
+	Recovery *PasswordRecovery
 	Platform pg.Scope         // the platform scope, for the snapshot; only cmd/ can build it
 	Hashes   *secret.MACKeys  // keys API keys are hashed with: at most 2 versions, the newest current
 	Keyring  *secret.Keyring  // seals users' TOTP secrets
@@ -58,6 +60,7 @@ type Service struct {
 	versions []uint32 // of hashes, newest first
 	now      func() time.Time
 	opened   OpenedFunc
+	recovery *PasswordRecovery
 	slot     func(ctx context.Context) (func(), error) // the lookups' slot; never nil
 	gated    bool                                      // whether Config.LookupSlot was set
 	misses   metric.Int64Counter                       // key lookups that had to ask the database
@@ -110,7 +113,7 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 		panic(err) // the instrument name is a constant
 	}
 	return &Service{
-		misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
+		recovery: cfg.Recovery, misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
 		slot: slot, gated: cfg.LookupSlot != nil,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
 		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),

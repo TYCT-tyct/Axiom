@@ -213,6 +213,9 @@ func (m *Mailer) forget(ctx context.Context, job *river.Job[sendArgs], to string
 	}
 }
 
+// Configured reports whether this node can enqueue mail, without sending a message.
+func (m *Mailer) Configured() bool { return m.sender != nil }
+
 func (m *Mailer) recordReceipt(ctx context.Context, job *river.Job[sendArgs], delivered bool) error {
 	if job.Args.Receipt == uuid.Nil() {
 		return nil
