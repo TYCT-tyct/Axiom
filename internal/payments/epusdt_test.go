@@ -102,8 +102,7 @@ func TestEpusdtPublicStatusCannotAuthorizeSave(t *testing.T) {
 			wr.WriteHeader(http.StatusNotFound)
 		case strings.HasPrefix(r.URL.Path, "/pay/check-status/"):
 			statuses.Add(1)
-			wr.Header().Set("Content-Type", "application/json")
-			_, _ = wr.Write([]byte(`{"status_code":200,"message":"success","data":{"trade_id":"T","status":2}}`))
+			easyPayWrite(t, wr, `{"status_code":200,"message":"success","data":{"trade_id":"T","status":2}}`)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			wr.WriteHeader(http.StatusNotFound)
