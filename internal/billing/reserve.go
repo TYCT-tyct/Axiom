@@ -49,16 +49,17 @@ type Hold struct {
 
 // lockedPrices are the kept entries' schedules in canonical JSON by route index, "" for a dropped entry: settlement and
 // cleanup price usage with them, whichever process runs them.
-func lockedPrices(q []Quotable, kept []int) ([]string, error) {
-	prices := make([]string, len(q))
+func lockedPrices(q []Quotable, kept []int, fallbacks []string) ([]string, []string, error) {
+	bodies := make([]string, len(q)*2)
+	prices, locked := bodies[:len(q)], bodies[len(q):]
 	for _, i := range kept {
 		b, err := q[i].Price.MarshalJSON()
 		if err != nil {
-			return nil, fmt.Errorf("billing: lock the price of entry %d: %w", i, err)
+			return nil, nil, fmt.Errorf("billing: lock the price of entry %d: %w", i, err)
 		}
-		prices[i] = string(b)
+		prices[i], locked[i] = string(b), fallbacks[i]
 	}
-	return prices, nil
+	return prices, locked, nil
 }
 
 // OpenBalance creates an account's balance row with its floor (0 or below), as the account is opened. Without the
@@ -92,16 +93,15 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 	} else if err != nil {
 		return nil, nil, err
 	}
-	prices, err := lockedPrices(q, r.Kept)
+	prices, locked, err := lockedPrices(q, r.Kept, fallbacks)
 	if err != nil {
 		return nil, nil, err
 	}
-	locked := make([]string, len(q))
 	identifiers := make([]uuid.UUID, len(q)*3)
 	models, endpoints, versions := identifiers[:len(q)], identifiers[len(q):2*len(q)], identifiers[2*len(q):]
 	for _, i := range r.Kept {
 		versions[i] = q[i].Version
-		locked[i], models[i], endpoints[i] = fallbacks[i], uuid.UUID(q[i].Model.ID), q[i].Endpoint
+		models[i], endpoints[i] = uuid.UUID(q[i].Model.ID), q[i].Endpoint
 	}
 	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
 	rates := frozenRates(q, r.Kept)
