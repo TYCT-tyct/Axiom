@@ -85,6 +85,12 @@ func (o Owner) visibleTo(a Admission) bool {
 	return o.Platform() || o.Site == a.Site && o.Account == AccountID{} || o.Account == a.Account
 }
 
+// Capacity reports whether an endpoint's credentials can take another call now: any key with a free concurrency slot
+// and room in its supplier account's rolling minute. Plan reads it before freezing a route, so a request is not sent to
+// an endpoint that would refuse it; the slot itself is still taken atomically when the attempt begins. suppliers'
+// Capacity is the production one; nil means the capacity is not known, which is not full.
+type Capacity interface{ Full() bool }
+
 // Endpoint is one supplier group serving one model, as the snapshot holds it: what routing filters and ranks by.
 // suppliers, quality and billing supply the values when the snapshot is built.
 type Endpoint struct {
@@ -96,6 +102,7 @@ type Endpoint struct {
 	Owner    Owner
 
 	LiveHealth  *quality.State
+	Capacity    Capacity
 	Enabled     bool // switched on
 	BreakerOpen bool // quality has taken it out for now
 	BalanceOK   bool // the supplier has a synced positive balance

@@ -62,7 +62,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 | 7 | 准入循环（下文） | 见「错误出口」 |
 | 8 | 交给 `Run` | — |
 
-**准入循环**（`admit`）：取 `Queue.Epoch()`，再 `admitOnce`；`*routing.Wait` 时事务已回滚，在事务外 `Queue.Wait`（按 key 计），醒来只重做 `admitOnce`，不重读体、不重复计速率。排队期限 `QueueWait` 从这次调用第一次排队起算一次（`Queue.Wait` 收到的是绝对期限），被无关的唤醒叫醒再排队也共用剩余时间，到期 429。期限在 `Wait` 里先于 `Epoch` 快路径检查，所以别处不断释放名额也不能让过期的调用继续重试；期限过后至多再做正在进行的那一次准入。`admitOnce` 的 1s 期限（`AdmissionBudget`）从取得账户闸起算，连接和事务共用，等闸不计入（`Funds.Admit` 把带期限的 context 交回来）：`Funds.Admit` → `accounts.Admit`，`fn` 依次是速率判定（先判节点 `KeyRate`，再用 `Admission.RateLimits()` 判账户与 key 的业务计数，超额回带限流头的 429）→ `routing.Plan` → `billing.Reserve`。`Reserve` 返回的下标裁剪路线（`Call.Plan.Entries` 与 `Record.Route` 只留保留下来的条目），首选条目被删就是 402。`Input.Admission` 里 key 没有预设时用零 ID 的预设，路由快照必须有它；`Admission.Models()` 为 nil 是全部模型、空列表是一个都不行。`billing.Model` 由路由条目带来（`Entry.Limits`），与路由过滤用的是同一份。
+**准入循环**（`admit`）：取 `Queue.Epoch()`，再 `admitOnce`；`*routing.Wait` 时事务已回滚，在事务外 `Queue.Wait`（按 key 计），醒来只重做 `admitOnce`，不重读体、不重复计速率。`routing.Wait` 现在也出现在候选的凭证都没容量时：路由快照持有供应商的容量视图（`suppliers.Capacity`），`Plan` 在过滤的最后读它，所以满载的判断不再只依赖生产上从不赋值的 `MaxConcurrent`（#313 E3-9）。每次尝试归还凭证并发位都会调 `Queue.Wake()`（`session.done`，`attempt.go`），排队等的是真实的容量释放；被无关的唤醒叫醒、或空位被别人拿走，就按剩余时间再排。排队期限 `QueueWait` 从这次调用第一次排队起算一次（`Queue.Wait` 收到的是绝对期限），被无关的唤醒叫醒再排队也共用剩余时间，到期 429。期限在 `Wait` 里先于 `Epoch` 快路径检查，所以别处不断释放名额也不能让过期的调用继续重试；期限过后至多再做正在进行的那一次准入。`admitOnce` 的 1s 期限（`AdmissionBudget`）从取得账户闸起算，连接和事务共用，等闸不计入（`Funds.Admit` 把带期限的 context 交回来）：`Funds.Admit` → `accounts.Admit`，`fn` 依次是速率判定（先判节点 `KeyRate`，再用 `Admission.RateLimits()` 判账户与 key 的业务计数，超额回带限流头的 429）→ `routing.Plan` → `billing.Reserve`。`Reserve` 返回的下标裁剪路线（`Call.Plan.Entries` 与 `Record.Route` 只留保留下来的条目），首选条目被删就是 402。`Input.Admission` 里 key 没有预设时用零 ID 的预设，路由快照必须有它；`Admission.Models()` 为 nil 是全部模型、空列表是一个都不行。`billing.Model` 由路由条目带来（`Entry.Limits`），与路由过滤用的是同一份。
 
 **提交确认丢失**：`fn` 写完预留后 `Admit` 仍返回错误（提交失败、确认丢失、期限到），无法区分已提交还是已回滚，一律按"可能已提交"处理：回 503，不发上游，名额不立即归还，后台 `settleOrphan` 调 `billing.SettleOrphan`（账户闸的完成类、2s 一次，库出错退避 50ms 到 2s 重试，到 `SettleBackground` 为止），成功或放弃后才 `Call.Done`。`Handler.Drain` 等它们，期限到则停止重试，剩下的归清理。
 
@@ -124,6 +124,7 @@ G9 的代码在 `readonly.go`（只读接口）、`count.go`（`count_tokens`）
 ## 尝试
 
 - 逐条目：先查本地持有者（`billing.Alive`：上次心跳成功 + TTL − 5s 晚于现在），失效就不再发起尝试、按「结束与结算」收尾。`Acquire`（内存比较交换）→ `Prepare`；拿不到凭证或 `*NotSupported` 就跳过，不算尝试，写进路由记录。全部因 `*NotSupported` 跳过：`Settle` 只释放，400 附原因；全部因凭证名额跳过：`Settle` 只释放，429、`Retry-After: 1`。
+- 并发位在每个 `session.done` 交还：正常尝试结束，以及 `Prepare` 失败、格式不支持、重试预算用尽时的提前归还都走它；它先 `conn.Done()` 再 `Queue.Wake()`，顺序保证被唤醒的排队者看到的是已经空出来的位。走 `Acquire` 之前就被跳过的条目不占位，也就没有唤醒。
 - **尝试的身份在进入 `Send` 时确定**：本模块按已有的尝试数分配序号（从 1 起，最多 `platform.MaxAttempts` = 3），`Hold.Bind(entry)` 把 `Meter` 绑到准入时报过价的条目（绑被删的条目会 panic：路线已按保留的条目裁剪，所以不会发生），开始时间（`priced_at`）在 `Acquire` 时记下。此后不论结果都算一次尝试，计入次数和重试预算。失败的尝试是**确知未执行**（用量 0）还是**结果未知**，取 `Failure.Executed`，判定规则见 [suppliers 的「调用面」](../suppliers/README.md#调用面)。
 - 尝试结束时 `result` 把它的用量、成本、回执（供应商的请求 ID 所在的 `AttemptReceipt`）和结束时刻填进 `billing.AttemptResult`，结算一次写进 suppliers，与账本同一次提交；没有别的地方记「这次尝试到过供应商」（[suppliers 的「没有对账日志」](../suppliers/README.md#没有对账日志)）。
 - 非 2xx 由适配器归为 `Failure`，`routing.Decide` 定换条目、换凭证还是返回。端点或供应商范围的限流、余额不足以外的供应商范围失败由 `Router.Block` 暂停到上游给的时间（没给用 `Config.Pause`，默认 5 秒；最多两小时）；供应商范围的失败还让本次调用跳过该供应商剩下的全部条目。余额不足的自动暂停归 suppliers：路由读同步原生余额与成本计划做付得起过滤，`Acquire` 再查整家暂停，新正余额同步或成功检测恢复；节点的一秒后台循环经 `RefreshBalances` 合并并限速请求余额同步。每个条目在 `Acquire` 前再查一次 `Router.Blocked`：规划之后别的请求可能已经暂停了它，这样跳过不算尝试、不花重试预算。2xx 后暂存开头事件，第一段正文、推理或工具调用到达即提交。提交前出错、空闲超时、200 无正文都换条目，换前取消当前上游。
@@ -386,6 +387,8 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 | M1 共享状态在进程内，Valkey 到 M2；多核心没有 Valkey 不启动（`AXIOM_CORE_NODES` 大于 1 而没有 `AXIOM_VALKEY_URL`） | 进程内实现本就是缓存不可用时的兜底 | M1 就接 Valkey |
 | M1 直接用 `platform/egress` | 一种实现不加抽象 | 先定义出口接口 |
 | 准入后凭证竞争失败即释放并 429 | 竞争罕见 | 持钱等待：多一条排队路径 |
+| 归还并发位时唤醒排队者，而不是让排队者轮询或睡满期限 | 排队等的是容量，容量释放的唯一事件是归还；每归还一个位唤醒一个，FIFO 不让新来的插队，`Epoch` 补上"释放时无人排队"的窗口 | 只靠期限：位空出来也要等满 `QueueWait` 才重试；轮询：按排队人数乘频率打准入事务 |
+| 满载判断读供应商的实时容量视图，而不是在路由里复制计数或只比较份额之和 | 视图和 `Acquire` 用同一套判断，快照只持有指针，份额、休息和账号分钟都在调用时现读；`Plan` 能说出"全满"，排队才可达 | 把 `MaxConcurrent` 设成份额之和：五秒一份快照，份额和休息在期间变化，路由会看错 |
 | 重试预算按比例并保底，按供应商、按进程 | 低流量时一次故障不至于封死回退 | 纯比例 |
 | pg 的普通池和完成池共用可配置预算，gateway 保留账户闸和准入许可 | 控制台、recorder 和直接使用 pgxpool 的 River 都无法侵占完成类容量；预算按部署缩小 | 只在 gateway 发许可或只给 `Tx` 加信号量：其他事务入口或 River 可绕过 |
 | 进程内账户闸，完成类优先 | 等锁不占连接、不拖别的租户 | 只靠行锁：等锁的事务占满准入名额 |

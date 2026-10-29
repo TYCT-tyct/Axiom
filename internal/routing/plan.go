@@ -317,7 +317,13 @@ func (c *candidate) servesFormat(n *need) bool {
 	return ok
 }
 
+// full reports whether the endpoint can take no more calls now: its credentials are all at their concurrency or minute
+// ceilings, or its own in-flight ceiling is reached. The credential view is read here, at the end of the filters, so a
+// route is not frozen to an endpoint that would refuse every attempt (docs/domains/routing.md「容量感知」).
 func (c *candidate) full() bool {
+	if c.Capacity != nil && c.Capacity.Full() {
+		return true
+	}
 	return c.MaxConcurrent > 0 && c.state.inflight.Load() >= c.MaxConcurrent
 }
 
