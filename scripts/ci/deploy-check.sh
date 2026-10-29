@@ -69,6 +69,14 @@ clean_stale
 # Start the stack and learn the ports it published: --build can replace the container, and with it the mapping.
 start() {
   timeout 300 just up # one command deploys this machine and waits for a ready node
+  # Include exited one-shot services before teardown, so their resource policy cannot escape inspection.
+  local id ids parent
+  ids=$(compose ps --all --quiet)
+  for id in $ids; do
+    parent=$(docker inspect --format '{{.HostConfig.CgroupParent}}' "$id")
+    docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}} cgroup_parent={{json .HostConfig.CgroupParent}}' "$id"
+    [ -z "${AXIOM_TEST_CGROUP_PARENT:-}" ] || [ "$parent" = "$AXIOM_TEST_CGROUP_PARENT" ] || { echo "::error::deployment container $id has unexpected cgroup parent"; return 1; }
+  done
   public="$(compose port axiom 8080)"
   public="${public##*:}"
   admin="$(compose port axiom 8082)"
