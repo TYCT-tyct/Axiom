@@ -158,6 +158,9 @@ func readEvent(name, data string) event {
 // leaf; what is left over is an event only one stream has.
 func compareEvents(newAPI, axiom []event) []difference {
 	var out []difference
+	if theirs, ours := responseLifecycle(newAPI), responseLifecycle(axiom); !slices.Equal(theirs, ours) {
+		out = append(out, difference{"sse[response].lifecycle", "sse[response].lifecycle", strings.Join(theirs, ","), strings.Join(ours, ",")})
+	}
 	if theirs, ours := stopIndexes(newAPI), stopIndexes(axiom); theirs != ours {
 		out = append(out, difference{"sse[content_block_stop].indexes", "sse[content_block_stop].indexes", theirs, ours})
 	}
@@ -167,6 +170,23 @@ func compareEvents(newAPI, axiom []event) []difference {
 		i, j = m[0]+1, m[1]+1
 	}
 	return append(out, compareGap(newAPI[i:], axiom[j:], i, j)...)
+}
+
+// responseLifecycle is the events that mark a Responses response's life, in the order one stream sent them: the
+// response is created, then reported in progress, then completed, failed or left incomplete. The pairing above matches
+// events by name, so a stream that swapped response.created and response.in_progress would still be compared with the
+// right partners when the two responses carry different IDs; the order is the protocol's own, so it is checked apart
+// from the pairing. The sequence numbers need no such check: eventSequence in the rules only explains one that equals
+// the event's position, so a skipped or repeated number already fails.
+func responseLifecycle(events []event) []string {
+	var out []string
+	for _, e := range events {
+		switch e.name {
+		case "response.created", "response.in_progress", "response.completed", "response.failed", "response.incomplete":
+			out = append(out, e.name)
+		}
+	}
+	return out
 }
 
 // A moved stop may be paired as two unmatched events, but a lost or duplicated block must still fail the comparison.

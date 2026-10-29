@@ -56,8 +56,9 @@ func callBody(c observability.OwnCall) consoleapi.Call {
 	return consoleapi.Call{
 		Id: c.ID.String(), At: c.At, WorkspaceId: accounts.WorkspaceID(c.Workspace).TypeID(), KeyId: accounts.KeyID(c.Key).TypeID(),
 		Ip: c.IP, ClientApp: c.ClientApp, SessionId: c.SessionID, SubagentId: c.SubagentID, RequestClass: c.Class,
+		AppReferer: optionalText(c.AppReferer), AppTitle: optionalText(c.AppTitle), AppCategories: optionalText(c.AppCategories),
 		Model: c.Model, Usage: usage, ServiceTier: c.ServiceTier,
-		PriceVersion: optionalPriceVersion(c.PriceVersion), Price: consoleapi.Money{Amount: strconv.FormatInt(c.PriceNano, 10), Currency: c.Currency},
+		PriceVersion: optionalText(c.PriceVersion), Price: consoleapi.Money{Amount: strconv.FormatInt(c.PriceNano, 10), Currency: c.Currency},
 		Free: c.Free, LatencyMs: int(c.Latency.Milliseconds()), FirstTokenMs: int(c.FirstToken.Milliseconds()),
 		FinishReason: c.FinishReason, ErrorKind: c.ErrorKind,
 	}
@@ -124,7 +125,9 @@ func (c consoleAPI) GetCall(ctx context.Context, request consoleapi.GetCallReque
 	return consoleapi.GetCall200JSONResponse(callBody(call)), nil
 }
 
-func optionalPriceVersion(s string) *string {
+// optionalText is a contract field that is absent when the call has nothing to say for it, which a page shows as
+// unavailable rather than as an empty value.
+func optionalText(s string) *string {
 	if s == "" {
 		return nil
 	}

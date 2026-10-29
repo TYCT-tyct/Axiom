@@ -254,7 +254,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | 请求体 `user`（终端用户标识，防滥用/归因） | 透传并用于归因 | spec `ChatRequest.user` | 部分：接受，哈希后再发上游（`proto/prepare.go:237,254`）；不用于对外归因 | 部分 | 部分 | 无 |
-| App 归因头 `HTTP-Referer`、`X-OpenRouter-Title`(`X-Title`)、`X-OpenRouter-Categories`、`X-OpenRouter-App-Visibility` | 应用排名与分析 | docs/app-attribution | 没有：这些头被丢弃不转发（`gw/handler.go:259`），也不记录；`client_app` 只从 `User-Agent` 识别 Claude Code/Codex（`gw/record.go:43-51`） | `na:relay/channel/openai/adaptor.go:243`（向 OpenRouter 上游发 `HTTP-Referer`） | 无 | 可接受无报错，但应用级用量统计没有 |
+| App 归因头 `HTTP-Referer`、`X-OpenRouter-Title`(`X-Title`)、`X-OpenRouter-Categories`、`X-OpenRouter-App-Visibility` | 应用排名与分析 | docs/app-attribution（2026-11-02 核对） | 部分：前三个头不转发（`internal/gateway/headers.go` 的白名单），由 gateway 去控制字符、按列宽截断后记入调用记录的 `app_referer`、`app_title`、`app_categories`，并出现在控制台的调用列表与详情；没有应用页、排名或可见性（`X-OpenRouter-App-Visibility` 不记）；`client_app` 仍只从 `User-Agent` 识别 Claude Code/Codex | `na:relay/channel/openai/adaptor.go:243`（向 OpenRouter 上游发 `HTTP-Referer`） | 无 | 应用级用量统计可以按这三个字段做，但没有公开排名 |
 | 响应头 `X-Generation-Id` | 见 §1 | 见 §1 | 有 | — | — | — |
 | `metadata`、`trace`（`trace_id`、`span_name`…）字段 | 链路与广播 | spec `ChatRequest.trace` | 部分：`metadata` 同格式透传；`trace` 不识别 | 无 | 无 | 低优先 |
 | 广播 Broadcast（把 trace 发给 Langfuse、Datadog、S3 等 20 多个平台）与 `/observability/destinations` | 可观测性集成 | docs/guides/features/broadcast | 没有（对应 #316 通知渠道，形态不同） | 无 | 无 | 低优先 |
@@ -283,7 +283,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go:30-70`：认识的成员
 9. 【推理】`reasoning.max_tokens` 跨格式近似、`effort: xhigh/max/minimal`、关闭与隐藏已核实实现，映射及边界见 [protocol 换算表](../internal/protocol/README.md#推理控制与换算)。模型列表的 `reasoning` 仍只给 `supports_max_tokens`（按方言的手动预算判断）；未知 mandatory、模型支持的 effort 列表不声称。→ #311
 10. 【读取类】`GET /api/v1/models/{author}/{slug}/endpoints`、`/models/user`、`/models/count`、`/providers` 已提供内存快照投影（字段偏离和实时准入的 DB 例外见 gateway.md），`/endpoints/zdr` 没有；`/generation` 缺 `native_tokens_*`、`cache_discount`、`session_id`、`streamed/cancelled` 等，`/generation/content`、`/generation/feedback`、`/activity` 没有。→ `/endpoints` 等归 #311；`/generation`、`/activity` 归 #319
 11. 【用量字段】`usage.cost_details`（含 `server_tool_cost`）、`is_byok`、`completion_tokens_details` 的音频/预测项、返回给客户端的 `prompt_tokens_details` 音频/视频明细、`cache_discount`、Chat 里的 `server_tool_use_details` 没有；响应 `model` 回显请求名而不是实际使用的模型（用 `models` 回退时看不出换了谁）。→ #319
-12. 【会话与归因】会话请求头（`x-session-id` 等）转发给 Responses、Chat 端点并换成分值（`gw/headers.go`），Axiom 自己的粘性还没按它分组；`X-OpenRouter-Title`/`HTTP-Referer`/`X-OpenRouter-Categories` 归因被丢弃，只靠 User-Agent 认 Claude Code/Codex；Anthropic Messages 的 `fallbacks` 参数不生效。→ #313（session 头、fallbacks）、#311（归因头）
+12. 【会话与归因】会话请求头（`x-session-id` 等）转发给 Responses、Chat 端点并换成分值（`gw/headers.go`），Axiom 自己的粘性还没按它分组；`X-OpenRouter-Title`/`HTTP-Referer`/`X-OpenRouter-Categories` 已记入调用记录并出现在控制台的调用列表与详情，但没有应用页和排名；Anthropic Messages 的 `fallbacks` 参数不生效。→ #313（session 头、fallbacks）
 13. 【限流】429 没有 `X-RateLimit-*` 头；Axiom 对付费 key 有请求速率限制，OpenRouter 付费模型没有平台级上限；`GET /key` 缺 `rate_limit`、`budgets`、`effective_budget`。→ #315
 14. 【管理 API】`/api/v1/keys` 系列已提供管理 key 认证的调用 key CRUD（E4-9/P14）；限制与 OpenRouter 的差异见[账户域](domains/accounts.md#api-key)；`/workspaces`、`/guardrails`、`/organization` 管理 API 没有。→ #315（key）、#317（工作区/护栏的界面）
 15. 【响应缓存】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置没有；涉及内容保存政策，需要负责人定。→ 新建

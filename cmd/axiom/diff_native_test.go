@@ -7,6 +7,38 @@ import (
 	"testing"
 )
 
+// TestDiffHarnessResponsesLifecycleOrder: a Responses stream's own lifecycle is checked apart from the pairing, so two
+// events that differ only by their IDs cannot be swapped and still compare equal.
+func TestDiffHarnessResponsesLifecycleOrder(t *testing.T) {
+	life := func(name string, sequence int) event {
+		return readEvent(name, canonical(map[string]any{"type": name, "sequence_number": sequence}))
+	}
+	created, progress, completed := life("response.created", 0), life("response.in_progress", 1), life("response.completed", 2)
+	theirs := []event{created, progress, completed}
+	for _, tc := range []struct {
+		name string
+		ours []event
+		ok   bool
+	}{
+		{"in order", theirs, true},
+		{"created and in progress swapped", []event{progress, created, completed}, false},
+		{"in progress lost", []event{created, completed}, false},
+		{"completed twice", []event{created, progress, completed, completed}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ok := true
+			for _, d := range compareEvents(theirs, tc.ours) {
+				if d.path == "sse[response].lifecycle" {
+					ok = false
+				}
+			}
+			if ok != tc.ok {
+				t.Errorf("lifecycle accepted=%v, want %v", ok, tc.ok)
+			}
+		})
+	}
+}
+
 func TestDiffHarnessResponsesItemOrder(t *testing.T) {
 	frame := func(index, seq int, text string) event {
 		return readEvent("response.output_item.done", canonical(map[string]any{

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 	"uuid"
 
 	"axiom/internal/billing"
@@ -32,10 +33,14 @@ type trail struct {
 	start     time.Time
 	currency  platform.Currency
 	clientApp string
+	app       appAttribution
 }
 
 func (s *session) trail() trail {
-	return trail{call: s.c, tries: s.tries, start: s.start, currency: s.currency, clientApp: clientAppOf(s.req.Header)}
+	return trail{
+		call: s.c, tries: s.tries, start: s.start, currency: s.currency,
+		clientApp: clientAppOf(s.req.Header), app: attributionOf(s.req.Header),
+	}
 }
 
 // clientAppOf is the client application the request's User-Agent names: Claude Code, Codex, or none (empty). It is
@@ -49,6 +54,87 @@ func clientAppOf(h http.Header) string {
 		return "codex"
 	}
 	return ""
+}
+
+// appAttribution is the client's own name for the application it builds, from OpenRouter's app-attribution headers
+// (https://openrouter.ai/docs/app-attribution, read 2026-11-02): the URL that identifies the application, its display
+// name, and the marketplace categories it claims. They are recorded for the account's own analytics and never forwarded
+// upstream (headers.go). A header is the client's word, but it is bounded and cleaned here because it goes into a
+// column: a value that does not fit or is not text must not make the call log refuse the whole record.
+type appAttribution struct{ referer, title, categories string }
+
+// The widths of the call log's attribution columns (migration 00010). A longer header is cut, not stored.
+const (
+	maxAppReferer    = 2048
+	maxAppTitle      = 200
+	maxAppCategories = 64
+)
+
+// attributionOf reads the three app-attribution headers. HTTP-Referer names the application and is OpenRouter's
+// primary identifier; X-OpenRouter-Title is its display name, which clients also send as X-Title, the older name;
+// X-OpenRouter-Categories is a comma-separated list of marketplace categories, at most two of up to 30 characters.
+func attributionOf(h http.Header) appAttribution {
+	title := h.Get("X-Openrouter-Title")
+	if strings.TrimSpace(title) == "" {
+		title = h.Get("X-Title")
+	}
+	return appAttribution{
+		referer:    headerText(h.Get("Http-Referer"), maxAppReferer),
+		title:      headerText(title, maxAppTitle),
+		categories: categoriesOf(h.Get("X-Openrouter-Categories")),
+	}
+}
+
+// headerText is one header value as the log keeps it: valid UTF-8, no control characters, trimmed, and no longer than n
+// runes. The cut falls on a rune boundary, so the stored text is still valid. A clean value is returned as it came,
+// without allocating: this runs on the call path.
+func headerText(s string, n int) string {
+	s = strings.ToValidUTF8(s, "\uFFFD") // a header's bytes are not checked to be text by every client
+	if strings.IndexFunc(s, unicode.IsControl) >= 0 {
+		s = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, s)
+	}
+	runes := 0
+	for i := range s {
+		if runes == n {
+			s = s[:i]
+			break
+		}
+		runes++
+	}
+	return strings.TrimSpace(s)
+}
+
+// categoriesOf keeps the categories OpenRouter would recognize, in its spelling: lowercase names of letters, digits and
+// single hyphens, at most 30 characters each, the first two of the list, as a request may claim two.
+func categoriesOf(s string) string {
+	var kept []string
+	for c := range strings.SplitSeq(s, ",") {
+		if len(kept) == 2 {
+			break
+		}
+		if c = strings.ToLower(strings.TrimSpace(c)); validCategory(c) {
+			kept = append(kept, c)
+		}
+	}
+	return strings.Join(kept, ",")
+}
+
+// validCategory is a marketplace category's spelling: lowercase letters and digits, separated by single hyphens.
+func validCategory(c string) bool {
+	if c == "" || len(c) > 30 || c[0] == '-' || c[len(c)-1] == '-' || strings.Contains(c, "--") {
+		return false
+	}
+	for _, r := range c {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // log writes the call into the call log. The record's amounts are the settlement's, so it is written once that is: the
@@ -85,6 +171,7 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		Workspace: uuid.UUID(c.caller.WorkspaceID()), Key: uuid.UUID(c.caller.KeyID()), IP: c.ip,
 		UsedTools: c.Request.Needs.Has(protocol.Tools), HasImage: c.Request.Images > 0, HasFile: c.Request.Documents > 0,
 		Model: c.Request.Model, ClientApp: t.clientApp,
+		AppReferer: t.app.referer, AppTitle: t.app.title, AppCategories: t.app.categories,
 		Class: "chat", ConsentVersion: noConsent,
 		Usage:       usageOf(f),
 		ServiceTier: tierOf(f),
