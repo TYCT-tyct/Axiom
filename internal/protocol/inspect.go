@@ -52,6 +52,11 @@ type Request struct {
 	// Models are OpenRouter's alternates, tried after Model when it cannot serve the request.
 	Models []string
 	Stream bool
+	// Local OpenRouter plugins are validated before their control fields are removed.
+	Compression     Compression
+	ResponseHealing bool
+	// MessageCount is Chat conversation length for the vendor message cap.
+	MessageCount int64
 	// Previous is Responses' previous_response_id. The stored history it names is input too.
 	Previous string
 	// Provider is OpenRouter's provider object as written, for the gateway to read: how the request narrows its route.
@@ -117,7 +122,16 @@ func Inspect(f Format, body []byte) (Request, error) {
 	s := scanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), g: g}
 	s.r = Request{Format: f, Choices: 1, TextBytes: int64(len(body)), InputItems: g.input}
 	if err := s.top(body); err != nil {
+		if e, ok := errors.AsType[*ExtensionError](err); ok {
+			return Request{}, e
+		}
 		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	if !s.compressionSet && s.transformsSet {
+		s.r.Compression = CompressionDisabled
+		if s.middleOut {
+			s.r.Compression = CompressionEnabled
+		}
 	}
 	if s.reasoningOff {
 		s.r.Needs &^= Reasoning
@@ -158,12 +172,13 @@ type reader struct {
 // settled when the object ends.
 type scanner struct {
 	reader
-	g            *grammar
-	r            Request
-	p            part
-	tiers, fast  catalog.ServiceTierSet // service_tier, and Anthropic's speed, which overrides it
-	reasoningOff bool
-	callCap      int64 // Responses' max_tool_calls
+	g                                        *grammar
+	r                                        Request
+	p                                        part
+	tiers, fast                              catalog.ServiceTierSet // service_tier, and Anthropic's speed, which overrides it
+	reasoningOff                             bool
+	compressionSet, transformsSet, middleOut bool
+	callCap                                  int64 // Responses' max_tool_calls
 }
 
 // part is the content part, tool or reasoning setting being read.
