@@ -165,7 +165,7 @@ func testLongestWindow(t *testing.T, longest string) {
 				return err
 			}
 			due, err := queries.QueryOrders(t.Context(), tx, expireBatch)
-			if err == nil && (allowed != (i < 2) || allowed != slices.Contains(due, uuid.UUID(o.ID))) {
+			if err == nil && (allowed != (i < 2) || allowed != slices.ContainsFunc(due, func(r QueryOrdersRow) bool { return r.ID == uuid.UUID(o.ID) })) {
 				t.Error("manual and scheduled query eligibility or tenant visibility differs")
 			}
 			return err
@@ -195,7 +195,7 @@ func TestQueryOrdersPrioritizeUnexpiredThenJustExpiredPending(t *testing.T) {
 		"UPDATE payments.orders SET next_query_at = transaction_timestamp() - interval '1 minute' WHERE state = 'pending'")
 	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
 		ids, err := queries.QueryOrders(t.Context(), tx, 2)
-		if err == nil && !slices.Equal(ids, []uuid.UUID{uuid.UUID(fresh.ID), uuid.UUID(just.ID)}) {
+		if err == nil && (len(ids) != 2 || ids[0].ID != uuid.UUID(fresh.ID) || ids[1].ID != uuid.UUID(just.ID)) {
 			t.Error("late backlog outranked a pending order", ids)
 		}
 		return err

@@ -43,11 +43,17 @@ WHERE id = @id AND next_verify_at <= clock_timestamp();
 SELECT EXISTS (SELECT 1 FROM payments.order_windows WHERE id = @id AND queryable) AS allowed;
 
 -- name: QueryOrders :many
-SELECT id FROM payments.order_windows
-WHERE queryable AND (next_query_at <= transaction_timestamp() OR (state = 'pending' AND expires_at <= transaction_timestamp()))
-    AND (state = 'pending' OR expires_at >= transaction_timestamp() - interval '30 days')
-ORDER BY CASE WHEN state = 'pending' AND expires_at > transaction_timestamp() THEN 0
-    WHEN state = 'pending' THEN 1 ELSE 2 END, next_query_at, id LIMIT @batch;
+WITH due AS (
+    SELECT id, merchant_id, next_query_at,
+        CASE WHEN state = 'pending' AND expires_at > transaction_timestamp() THEN 0
+            WHEN state = 'pending' THEN 1 ELSE 2 END AS priority
+    FROM payments.order_windows
+    WHERE queryable AND (next_query_at <= transaction_timestamp() OR (state = 'pending' AND expires_at <= transaction_timestamp()))
+        AND (state = 'pending' OR expires_at >= transaction_timestamp() - interval '30 days')
+), ranked AS (
+    SELECT *, row_number() OVER (PARTITION BY merchant_id, priority ORDER BY priority, next_query_at, id) AS turn FROM due
+)
+SELECT id, merchant_id FROM ranked ORDER BY priority, turn, next_query_at, id LIMIT @batch;
 
 -- name: ScheduleQuery :execrows
 UPDATE payments.orders AS o SET next_query_at = clock_timestamp() + make_interval(secs => query_delay_seconds),

@@ -13,8 +13,8 @@ import (
 	"axiom/internal/platform/secret"
 )
 
-// alertJSON bridges the contract's optional response fields and the domain's complete records.
-func alertJSON[T any](value any) (out T, err error) {
+// adminJSON bridges the contract's optional response fields and the domain's complete records.
+func adminJSON[T any](value any) (out T, err error) {
 	raw, err := jsonx.MarshalCanonical(value)
 	if err != nil {
 		return out, err
@@ -29,7 +29,7 @@ func (a adminAPI) GetAlertConfiguration(ctx context.Context, _ adminapi.GetAlert
 	if err != nil {
 		return nil, err
 	}
-	return alertJSON[adminapi.GetAlertConfiguration200JSONResponse](c)
+	return adminJSON[adminapi.GetAlertConfiguration200JSONResponse](c)
 }
 
 func (a adminAPI) SetAlertConfiguration(ctx context.Context, r adminapi.SetAlertConfigurationRequestObject) (adminapi.SetAlertConfigurationResponseObject, error) {
@@ -37,7 +37,7 @@ func (a adminAPI) SetAlertConfiguration(ctx context.Context, r adminapi.SetAlert
 		return nil, err
 	}
 	body, replayed, err := idempotently(ctx, a.db, "setAlertConfiguration", r.Params.IdempotencyKey, r.Body, func(tx pg.Tx) (adminapi.AlertConfiguration, error) {
-		c, err := alertJSON[observability.AlertConfiguration](r.Body)
+		c, err := adminJSON[observability.AlertConfiguration](r.Body)
 		if err != nil {
 			return adminapi.AlertConfiguration{}, err
 		}
@@ -48,7 +48,7 @@ func (a adminAPI) SetAlertConfiguration(ctx context.Context, r adminapi.SetAlert
 			return adminapi.AlertConfiguration{}, err
 		}
 		c.Rev++
-		return alertJSON[adminapi.AlertConfiguration](c)
+		return adminJSON[adminapi.AlertConfiguration](c)
 	})
 	if err != nil {
 		return nil, err
@@ -90,7 +90,7 @@ func (a adminAPI) RotateAlertWebhookSecret(ctx context.Context, r adminapi.Rotat
 		if err = alertAudit(ctx, tx, "alert_channel.rotate_secret", r.ChannelId, r.Body.Reason); err != nil {
 			return adminapi.AlertTestResult{}, err
 		}
-		return alertJSON[adminapi.AlertTestResult](map[string]string{"id": id.String()})
+		return adminJSON[adminapi.AlertTestResult](map[string]string{"id": id.String()})
 	})
 	if err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ func (a adminAPI) ListAlertEvents(ctx context.Context, r adminapi.ListAlertEvent
 	if err != nil {
 		return nil, err
 	}
-	return alertJSON[adminapi.ListAlertEvents200JSONResponse](map[string]any{"data": events})
+	return adminJSON[adminapi.ListAlertEvents200JSONResponse](map[string]any{"data": events})
 }
 
 func (a adminAPI) SendAlertTest(ctx context.Context, r adminapi.SendAlertTestRequestObject) (adminapi.SendAlertTestResponseObject, error) {
@@ -124,7 +124,7 @@ func (a adminAPI) SendAlertTest(ctx context.Context, r adminapi.SendAlertTestReq
 		if err = alertAudit(ctx, tx, "alert_channel.test", r.Body.Channel, r.Body.Reason); err != nil {
 			return adminapi.AlertTestResult{}, err
 		}
-		return alertJSON[adminapi.AlertTestResult](map[string]string{"id": id.String()})
+		return adminJSON[adminapi.AlertTestResult](map[string]string{"id": id.String()})
 	})
 	if err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func (a adminAPI) ResolveAlertEvent(ctx context.Context, r adminapi.ResolveAlert
 		if err := alertAudit(ctx, tx, "alert_event.resolve", r.EventId, r.Body.Reason); err != nil {
 			return adminapi.AlertTestResult{}, err
 		}
-		return alertJSON[adminapi.AlertTestResult](map[string]string{"id": id.String()})
+		return adminJSON[adminapi.AlertTestResult](map[string]string{"id": id.String()})
 	})
 	if err != nil {
 		return nil, err

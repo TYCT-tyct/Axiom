@@ -15,7 +15,7 @@ import (
 
 const (
 	heavyAccount = "00000000-0000-4000-8000-000000000001" // half the calls; 60,000 in the 120,000-row fixture
-	lightAccount = "00000000-0000-4000-8000-000000000007" // one of 100 light accounts; 600 calls in the smaller fixture
+	lightAccount = "00000000-0000-4000-8000-000000000007" // one of 100 light accounts; 600 calls in the fixture
 	pageSize     = 50
 )
 
@@ -49,18 +49,22 @@ func listCall(q OwnQuery, size int) (string, []any) {
 	account := q.Account.String()
 	switch {
 	case q.Model != "":
-		return store.ListByModelQuery, []any{account, q.Model, q.Since, q.Until, q.ClientApp, at, id, size + 1}
+		return store.ListByModelQuery, []any{account, q.Model, at, id, q.Since, q.Until, q.ClientApp, size + 1}
 	case q.ClientApp != "":
-		return store.ListByAppQuery, []any{account, q.ClientApp, q.Since, q.Until, at, id, size + 1}
+		return store.ListByAppQuery, []any{account, q.ClientApp, at, id, q.Since, q.Until, size + 1}
 	}
-	return store.ListQuery, []any{account, q.Since, q.Until, at, id, size + 1}
+	return store.ListQuery, []any{account, at, id, q.Since, q.Until, size + 1}
 }
 
 // explain runs EXPLAIN (ANALYZE, BUFFERS) on the list query of q, as the application role in the account's scope with
 // row-level security, planned for its values as ListOwn has it planned.
 func explain(t *testing.T, db *pg.DB, q OwnQuery, scope pg.Scope) string {
 	t.Helper()
-	sql, args := listCall(q, pageSize)
+	size := q.PageSize
+	if size == 0 {
+		size = pageSize
+	}
+	sql, args := listCall(q, size)
 	var lines []string
 	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
 		if _, err := tx.Exec(t.Context(), "SET LOCAL plan_cache_mode = force_custom_plan"); err != nil {
@@ -144,7 +148,7 @@ func nextCursor(t *testing.T, db *pg.DB, q OwnQuery) *Cursor {
 //   - no plan scans the table or the partition, and each reads the index range of the account (Index Cond on
 //     account_id);
 //   - unfiltered, the heavy account's page is an ordered index scan under the limit with no sort: it reads about one
-//     page for the first and immediately following pages; deeper reads are checked separately. This needs the order
+//     page for the first and immediately following pages, as well as deep pages in the same fixture. This needs the order
 //     to be the index's, which the query's ORDER BY says
 //     with qualified columns: a bare "id" is the output column id::text, which sorts as text and turns the plan into a
 //     bitmap scan of the whole range and a sort of it;
@@ -202,6 +206,7 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 			t.Errorf("%s: touched %d buffers, want at most %d:\n%s", c.name, n, c.max, plan)
 		}
 	}
+	checkListDeepPagesReadInIndexOrder(t, db)
 }
 
 // TestFilteredListsReturnTheMatches: the three list queries return what they should, also when the match is sparse or
@@ -287,7 +292,12 @@ func TestListIsPlannedForItsValues(t *testing.T) {
 // allPages reads every page of q, as the account, and returns the calls in the order they came.
 func allPages(t *testing.T, db *pg.DB, q OwnQuery) (calls []OwnCall) {
 	t.Helper()
-	q.Since, q.Until, q.PageSize = time.Now().Add(-48*time.Hour), time.Now().Add(time.Hour), MaxPageSize
+	if q.Since.IsZero() && q.Until.IsZero() {
+		q.Since, q.Until = window()
+	}
+	if q.PageSize == 0 {
+		q.PageSize = MaxPageSize
+	}
 	for {
 		var page []OwnCall
 		var next *Cursor
@@ -300,6 +310,9 @@ func allPages(t *testing.T, db *pg.DB, q OwnQuery) (calls []OwnCall) {
 		calls = append(calls, page...)
 		if next == nil {
 			return calls
+		}
+		if q.After != nil && (next.At.After(q.After.At) || (next.At.Equal(q.After.At) && next.ID.String() >= q.After.ID.String())) {
+			t.Fatalf("page cursor did not advance: %v -> %v", q.After, next)
 		}
 		q.After = next
 	}
