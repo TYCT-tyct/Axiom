@@ -59,7 +59,7 @@ func TestEpusdtSaveRequiresQuery(t *testing.T) {
 			t.Fatal("accepted incorrect Epusdt mapping", err)
 		}
 	}
-	for _, body := range []string{"404", `<html>cashier</html>`, `{}`, `{"code":1}`, `{"code":-1,"msg":"invalid key"}`, `{"msg":"订单不存在"}`, `{"code":1,"msg":"订单不存在"}`} {
+	for _, body := range []string{"404", `<html>cashier</html>`, `{}`, `{"code":1}`, `{"code":-1,"msg":"invalid key"}`, `{"msg":"订单不存在"}`, `{"code":1,"msg":"订单不存在"}`, `{"status_code":200,"message":"success","data":{"trade_id":"T","status":2}}`} {
 		reply.Store(body)
 		if _, err := w.save(siteScope(w.siteA), in); !isField(err, "/settings") {
 			t.Fatalf("saved without authenticated query protocol (%s): %v", body, err)
@@ -86,6 +86,41 @@ func TestEpusdtSaveRequiresQuery(t *testing.T) {
 	in.Rev, in.Enabled = disabled.Rev, true
 	if _, err := w.save(siteScope(w.siteA), in); !isField(err, "/settings") {
 		t.Fatal("re-enabled merchant without query", err)
+	}
+}
+
+// Epusdt's only query route is its public cashier status, which carries neither the merchant identity nor our order
+// number or fiat amount. A paid-looking answer there must not let an enabled merchant be saved, and the save probe
+// must not substitute it for the merchant query.
+func TestEpusdtPublicStatusCannotAuthorizeSave(t *testing.T) {
+	w := newTestWorld(t, EasyPay{})
+	var probes, statuses atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(wr http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/payments/epay/v1/order/create-transaction/api.php":
+			probes.Add(1)
+			wr.WriteHeader(http.StatusNotFound)
+		case strings.HasPrefix(r.URL.Path, "/pay/check-status/"):
+			statuses.Add(1)
+			wr.Header().Set("Content-Type", "application/json")
+			_, _ = wr.Write([]byte(`{"status_code":200,"message":"success","data":{"trade_id":"T","status":2}}`))
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			wr.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	w.p.client = easyPayConfig(t, upstream.URL, upstream.Certificate()).Client
+	in := w.input(w.siteA, MethodInput{Method: "usdt.tron", Upstream: "usdt.tron", Enabled: true})
+	in.Kind, in.Settings = "easypay", epusdtConfig(t, upstream.URL+"/payments/epay/v1/order/create-transaction")
+	if _, err := w.save(siteScope(w.siteA), in); !isField(err, "/settings") {
+		t.Fatal("public status authorized an enabled merchant", err)
+	}
+	if probes.Load() != 1 || statuses.Load() != 0 {
+		t.Fatalf("save probe asked %d merchant queries and %d public statuses", probes.Load(), statuses.Load())
+	}
+	if got := w.count(w.p.platform, "SELECT count(*) FROM payments.merchants"); got != 0 {
+		t.Fatal("failed save wrote a merchant", got)
 	}
 }
 

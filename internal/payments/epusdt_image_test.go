@@ -10,7 +10,9 @@ import (
 	"testing"
 )
 
-// An opt-in check against the locally installed official image, without adapting its protocol.
+// An opt-in check against the locally installed official image, without adapting its protocol. The published
+// Epusdt releases (v0.0.1 through v2.0.0) and master register only the EPay create route, so the merchant query
+// stays missing and an enabled account must be refused.
 func TestEpusdtOfficialImageQueryGate(t *testing.T) {
 	raw := os.Getenv("AXIOM_EPUSDT_TEST_URL")
 	if raw == "" {
