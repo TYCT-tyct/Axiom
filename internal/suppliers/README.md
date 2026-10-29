@@ -325,16 +325,16 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 
 ## 对账
 
-对账 worker 的低估下架、高估、暂挂、超时未匹配和无效数据以 `suppliers.reconciliation_difference` 分类计数，在对账事务末尾经平台信号持久上报；具体对象继续在原日志中。分类事件由管理员调查后关闭，不把下一轮没有新增项当作修复。
+对账 worker 的低估下架、估低但端点未改变、高估、暂挂、超时未匹配和无效数据以 `suppliers.reconciliation_difference` 分类计数，在对账事务末尾经平台信号持久上报；具体对象继续在原日志中。分类事件由管理员调查后关闭，不把下一轮没有新增项当作修复。
 
 `internal/suppliers/internal/reconcile`。同步引擎在栅栏事务里经 `reconcile.Ingest` 写入扣费记录（一条记录读两次只存一次），结算在自己的事务里写入 `attempt_costs`（含对账键），清理写入丢失的请求。节点在 `pg.Queue` 启动前调用 `RegisterReconcile`：River leader 每分钟投递 `suppliers.reconcile`，启动或换主也投递，任一节点的 worker 都可执行。相同参数的未完成任务去重；匹配、暂挂、摘牌、事件及下一页任务在同一平台范围事务提交，重复和迟到执行不改变已有归属或重复增加版本。
 
 选择独立周期任务，而非接在每家供应商同步之后：同步暂停、上游断线、尝试迟到时，已有扣费记录仍要继续对账。未匹配尝试的下一页游标随事务写入 River，换 worker 或重启不丢进度；周期任务仍从头检查，持续缺失的扣费记录会再次告警。匹配和暂挂超过每轮上限的积压留给下一轮。
 
-告警使用结构化日志：`suppliers.reconcile.under_estimated`（ERROR，端点 ID）、`over_estimated`（WARN，扣费 ID）、`held`（WARN，扣费 ID）、`unmatched`（WARN，请求 ID 和尝试序号）、`invalid`（ERROR，无法判定的原因），后四项同用 `suppliers.reconcile.` 前缀。与队列丢弃任务的告警相同，在事务提交前记录，避免已提交摘牌却因进程崩溃漏报；事务回滚可能重复告警，不能把日志条数当作扣费笔数。摘牌由现有的供应商与路由快照重建传播（各 5 秒）。
+告警使用结构化日志：`suppliers.reconcile.under_estimated`（ERROR，端点 ID）、`under_estimated_unchanged`（WARN，估低但未新摘牌的扣费 ID）、`over_estimated`（WARN，扣费 ID）、`held`（WARN，扣费 ID）、`unmatched`（WARN，请求 ID 和尝试序号）、`invalid`（ERROR，无法判定的原因），其余项同用 `suppliers.reconcile.` 前缀。与队列丢弃任务的告警相同，在事务提交前记录，避免已提交摘牌却因进程崩溃漏报；事务回滚可能重复告警，不能把日志条数当作扣费笔数。摘牌由现有的供应商与路由快照重建传播（各 5 秒）。
 
 1. **匹配**：一条语句，先占住只有这个对账键的那一个尝试，再把扣费记录归到它，尝试和扣费记录各有唯一约束，两个节点同时跑也只有一个成功。有两个以上尝试共用一个键时都不对上。已暂挂、已归到丢失请求或已确认未归属的扣费记录，尝试到了就改归到尝试，旧归属在同一条语句里撤销，所以归属的 CHECK 始终成立。
-2. **判定**：只对估算完整（`cost_flag` 为 `complete`）的尝试：写行的 gateway 把上游一项用量都没报告的标 `no_usage`，估了一部分或有项没价格的标 `unpriced`（[gateway 的「尝试的结局」](../gateway/README.md)），所以估出来的数不会拿去判价格。检测的行（`test`）一律不判：它的估价是上界而不是估计，判它只会把付得起的端点摘掉（「用真实生成测试端点」）。|实际 − 估算| ≤ 供应商自己的取整（quota 为 1，美元为 1e-10）+ 估算 × 相对容差（默认 1%）。实际偏高：仅在端点仍使用尝试的成本计划时改回"成本未知"（原因 `under_estimated`），退出路由并进入 `Delisted`；已经换用新计划的端点不动、不发摘牌告警，事件仍保留 `verdict = under`、尝试的 `cost_schedule_id` 和 `endpoint_delisted = false`；偏低：只在报告里列出。
+2. **判定**：只对估算完整（`cost_flag` 为 `complete`）的尝试：写行的 gateway 把上游一项用量都没报告的标 `no_usage`，估了一部分或有项没价格的标 `unpriced`（[gateway 的「尝试的结局」](../gateway/README.md)），所以估出来的数不会拿去判价格。检测的行（`test`）一律不判：它的估价是上界而不是估计，判它只会把付得起的端点摘掉（「用真实生成测试端点」）。|实际 − 估算| ≤ 供应商自己的取整（quota 为 1，美元为 1e-10）+ 估算 × 相对容差（默认 1%）。实际偏高：仅在端点仍使用尝试的成本计划时改回"成本未知"（原因 `under_estimated`），退出路由并进入 `Delisted`；已经换用新计划或已为成本未知的端点不动、不发摘牌告警；对应扣费进入 `UnderUnchanged`，按扣费 ID 记 warning，并以 `under_estimated_unchanged` 持久上报笔数，重跑不重复。事件仍保留 `verdict = under`、尝试的 `cost_schedule_id` 和 `endpoint_delisted = false`；偏低：只在报告里列出。
 3. **暂挂**：过了宽限（默认 30 分钟）还没有对上的新扣费记录改为 `held`；有键的尝试过了宽限仍没有扣费记录，报告里列出，只告警，检测的尝试不在其中。通知在平台位置表按请求和尝试序号认领，每个身份仅报一次，认领和信号同事务；人工关闭后扫描同一 pending 行不会重开事件，回填或迟提交的尝试仍按身份发现，不用完成时间高水位。人工处理经 `AssignToLostRequest`、`AssignUnattributed`，只对 `held` 的记录生效，不按冻结路线猜用户。
 4. **扣费记录保留明细**：`charge_records.usage` 存每项的数量、记录声明了哪些项（`reported`，可以含声明为零的项，没声明的不在其中）、供应商给出但没有计费项的用量（`unknown`）和等级，因为只有声明了的项才能校正暂估。
 5. **资金来源**：不是钱包的扣费记录（订阅）入库时存下来、不参与匹配、暂挂和事件，同时把供应商暂停（`needs_attention`，原因 `funding_not_wallet`，配置代次加一），重建快照后不再路由到它。

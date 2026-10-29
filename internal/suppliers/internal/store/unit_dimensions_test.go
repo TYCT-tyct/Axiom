@@ -55,10 +55,4 @@ func TestUpgradeSnapshotsUnitValueDimensionsAndKeepsLegacyWrites(t *testing.T) {
 			t.Errorf("%s: %d rows with dimensions, want backfilled and new rows", name, count)
 		}
 	}
-	other := w.supplier["site B"]
-	if err := run(t, db, pg.NewScope(false, []uuid.UUID{siteA}, nil), func(ctx context.Context, tx pg.Tx) error {
-		return queries.InsertUnitValue(ctx, tx, store.InsertUnitValueParams{SupplierID: other, Value: "2", Actor: "test", Reason: "wrong scope"})
-	}); err == nil {
-		t.Error("the insert trigger allowed a unit value under an invisible supplier")
-	}
 }

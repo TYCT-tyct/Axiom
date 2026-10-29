@@ -99,7 +99,7 @@ func persistReconcileAlerts(ctx context.Context, tx pg.Tx, report ReconcileRepor
 	for _, finding := range []struct {
 		key, severity string
 		count         int
-	}{{"under_estimated", "critical", len(report.Delisted)}, {"over_estimated", "warning", len(report.Over)}, {"held", "warning", len(report.Held)}, {"unmatched", "warning", int(unmatched)}, {"invalid", "critical", len(report.Violations)}} {
+	}{{"under_estimated", "critical", len(report.Delisted)}, {"under_estimated_unchanged", "warning", len(report.UnderUnchanged)}, {"over_estimated", "warning", len(report.Over)}, {"held", "warning", len(report.Held)}, {"unmatched", "warning", int(unmatched)}, {"invalid", "critical", len(report.Violations)}} {
 		if finding.count > 0 {
 			if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "suppliers.reconciliation_difference", Key: finding.key, Severity: finding.severity, Fields: map[string]string{"value": strconv.Itoa(finding.count)}}); err != nil {
 				return err
@@ -112,6 +112,9 @@ func persistReconcileAlerts(ctx context.Context, tx pg.Tx, report ReconcileRepor
 func (r *reconcileJob) report(ctx context.Context, report ReconcileReport) {
 	for _, id := range report.Delisted {
 		r.deps.Logger.ErrorContext(ctx, "suppliers.reconcile.under_estimated", "endpoint_id", id.String())
+	}
+	for _, id := range report.UnderUnchanged {
+		r.deps.Logger.WarnContext(ctx, "suppliers.reconcile.under_estimated_unchanged", "charge_id", id.String())
 	}
 	for _, id := range report.Over {
 		r.deps.Logger.WarnContext(ctx, "suppliers.reconcile.over_estimated", "charge_id", id.String())
