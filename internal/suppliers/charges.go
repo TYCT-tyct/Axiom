@@ -24,7 +24,7 @@ type ChargeEvent struct {
 	Request    uuid.UUID
 	AttemptSeq platform.AttemptSeq
 	Test       bool
-	CostFlag   string // complete when every item with usage has a price in the attempt's cost schedule
+	CostFlag   string // the original attempt's completeness; informational, not the later record's
 	Usage      catalog.Usage
 	Reported   catalog.ItemSet
 }
@@ -54,7 +54,11 @@ type chargeUsageDoc struct {
 // ChargeEvents reads the charge events after (afterAt, afterID), oldest first, at most max. Only events attributed to
 // an attempt are returned: an unattributed or lost-request charge has no user settlement to correct.
 func ChargeEvents(ctx context.Context, tx pg.Tx, afterAt time.Time, afterID uuid.UUID, max int32) ([]ChargeEvent, error) {
-	rows, err := store.New().ChargeEvents(ctx, tx, store.ChargeEventsParams{AfterAt: afterAt, AfterID: afterID, Max: max})
+	q := store.New()
+	if err := q.LockChargeEvents(ctx, tx); err != nil {
+		return nil, fmt.Errorf("lock charge events: %w", err)
+	}
+	rows, err := q.ChargeEvents(ctx, tx, store.ChargeEventsParams{AfterAt: afterAt, AfterID: afterID, Max: max})
 	if err != nil {
 		return nil, fmt.Errorf("read charge events: %w", err)
 	}

@@ -8,21 +8,27 @@ package store
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const activityOwn = `-- name: ActivityOwn :many
 SELECT to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date, model,
     count(*)::bigint AS requests,
     coalesce(sum(
-        coalesce((usage ->> 'input')::bigint, 0) + coalesce((usage ->> 'cache_read')::bigint, 0) +
-        coalesce((usage ->> 'cache_write')::bigint, 0) + coalesce((usage ->> 'cache_write_1h')::bigint, 0) +
-        coalesce((usage ->> 'audio_in')::bigint, 0) + coalesce((usage ->> 'image_in')::bigint, 0)), 0)::bigint AS prompt_tokens,
+        CASE WHEN physical_input >= 0 THEN physical_input ELSE
+            coalesce((usage ->> 'input')::bigint, 0) + coalesce((usage ->> 'cache_read')::bigint, 0) +
+            coalesce((usage ->> 'cache_write')::bigint, 0) + coalesce((usage ->> 'cache_write_1h')::bigint, 0) +
+            coalesce((usage ->> 'audio_in')::bigint, 0) + coalesce((usage ->> 'image_in')::bigint, 0)
+        END), 0)::bigint AS prompt_tokens,
     coalesce(sum(
         coalesce((usage ->> 'output')::bigint, 0) + coalesce((usage ->> 'reasoning')::bigint, 0) +
         coalesce((usage ->> 'audio_out')::bigint, 0) + coalesce((usage ->> 'image_out')::bigint, 0)), 0)::bigint AS completion_tokens,
     coalesce(sum(coalesce((usage ->> 'reasoning')::bigint, 0)), 0)::bigint AS reasoning_tokens,
     coalesce(sum(coalesce((usage ->> 'cache_read')::bigint, 0)), 0)::bigint AS cached_tokens,
     coalesce(sum(price_nano), 0)::bigint AS usage_nano,
+    array_agg(id ORDER BY id)::uuid[] AS request_ids,
+    array_agg(price_nano ORDER BY id)::bigint[] AS request_prices,
     CASE WHEN $1::boolean THEN workspace_id::text ELSE '' END AS workspace_id
 FROM observability.call_log
 WHERE account_id = ($2::text)::uuid
@@ -51,6 +57,8 @@ type ActivityOwnRow struct {
 	ReasoningTokens  int64
 	CachedTokens     int64
 	UsageNano        int64
+	RequestIds       []pgtype.UUID
+	RequestPrices    []int64
 	WorkspaceID      string
 }
 
@@ -81,6 +89,8 @@ func (q *Queries) ActivityOwn(ctx context.Context, db DBTX, arg ActivityOwnParam
 			&i.ReasoningTokens,
 			&i.CachedTokens,
 			&i.UsageNano,
+			&i.RequestIds,
+			&i.RequestPrices,
 			&i.WorkspaceID,
 		); err != nil {
 			return nil, err

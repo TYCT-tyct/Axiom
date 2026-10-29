@@ -192,3 +192,20 @@ func unknownChargeItem(tier catalog.ServiceTier, rate platform.UnitPrice, count 
 func chargeDecimal(e platform.Exact) string {
 	return strings.TrimRight(strings.TrimRight(e.Rat().FloatString(15), "0"), ".")
 }
+
+// ChargedCalls returns the current user charge of the named settled calls, after corrections, keyed by request. A
+// request the scope cannot see, or one not settled, is absent and the caller keeps its recorded snapshot.
+func ChargedCalls(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]int64, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID]int64{}, nil
+	}
+	rows, err := queries.ChargedCalls(ctx, tx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("billing: read current charges: %w", err)
+	}
+	out := make(map[uuid.UUID]int64, len(rows))
+	for _, r := range rows {
+		out[r.RequestID] = r.Charged
+	}
+	return out, nil
+}

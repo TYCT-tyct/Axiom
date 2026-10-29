@@ -107,15 +107,19 @@ WHERE id = (@id::text)::uuid;
 SELECT to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date, model,
     count(*)::bigint AS requests,
     coalesce(sum(
-        coalesce((usage ->> 'input')::bigint, 0) + coalesce((usage ->> 'cache_read')::bigint, 0) +
-        coalesce((usage ->> 'cache_write')::bigint, 0) + coalesce((usage ->> 'cache_write_1h')::bigint, 0) +
-        coalesce((usage ->> 'audio_in')::bigint, 0) + coalesce((usage ->> 'image_in')::bigint, 0)), 0)::bigint AS prompt_tokens,
+        CASE WHEN physical_input >= 0 THEN physical_input ELSE
+            coalesce((usage ->> 'input')::bigint, 0) + coalesce((usage ->> 'cache_read')::bigint, 0) +
+            coalesce((usage ->> 'cache_write')::bigint, 0) + coalesce((usage ->> 'cache_write_1h')::bigint, 0) +
+            coalesce((usage ->> 'audio_in')::bigint, 0) + coalesce((usage ->> 'image_in')::bigint, 0)
+        END), 0)::bigint AS prompt_tokens,
     coalesce(sum(
         coalesce((usage ->> 'output')::bigint, 0) + coalesce((usage ->> 'reasoning')::bigint, 0) +
         coalesce((usage ->> 'audio_out')::bigint, 0) + coalesce((usage ->> 'image_out')::bigint, 0)), 0)::bigint AS completion_tokens,
     coalesce(sum(coalesce((usage ->> 'reasoning')::bigint, 0)), 0)::bigint AS reasoning_tokens,
     coalesce(sum(coalesce((usage ->> 'cache_read')::bigint, 0)), 0)::bigint AS cached_tokens,
     coalesce(sum(price_nano), 0)::bigint AS usage_nano,
+    array_agg(id ORDER BY id)::uuid[] AS request_ids,
+    array_agg(price_nano ORDER BY id)::bigint[] AS request_prices,
     CASE WHEN @group_workspace::boolean THEN workspace_id::text ELSE '' END AS workspace_id
 FROM observability.call_log
 WHERE account_id = (@account_id::text)::uuid

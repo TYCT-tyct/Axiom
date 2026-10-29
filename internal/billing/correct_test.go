@@ -135,3 +135,44 @@ func TestCorrectionRefusesAPartlyReportedCharge(t *testing.T) {
 		t.Errorf("charged %d, want the original 100", got)
 	}
 }
+
+// TestCorrectionTrustsTheRecordNotTheAttemptsCostFlag: cost_flag describes how completely the attempt's own estimate
+// covered its cost; it is no_usage when the stream broke before any usage was reported. The supplier's record can
+// still be complete, and then it is exactly the record that must replace the estimate.
+func TestCorrectionTrustsTheRecordNotTheAttemptsCostFlag(t *testing.T) {
+	b := newBank(t, 1000, 0, fallbackBankConfig)
+	h := b.holdOn(b.exact, 100)
+	f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 0, 0, in)))
+	if !f.Estimated {
+		t.Fatalf("estimate = %+v; want estimated", f)
+	}
+	u, err := catalog.NewUsage(map[catalog.Item]int64{in: 50}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := suppliers.ChargeEvent{
+		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostNoUsage.String(), Revision: 1,
+		Usage: u, Reported: 1 << in,
+	}
+	c := &corrector{db: b.app, scope: b.platform}
+	if retry, err := c.one(t.Context(), ev); retry || err != nil {
+		t.Fatalf("retry %v, err %v; want corrected despite cost_flag=no_usage", retry, err)
+	}
+	if got := b.count("SELECT charged FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); got != 50 {
+		t.Errorf("charged %d after the correction, want 50", got)
+	}
+}
+
+// TestTestEventDoesNotWaitForAReservation: a probe has no tenant reservation, and must be discarded before the
+// reservation lookup, not retained in the retry table forever.
+func TestTestEventDoesNotWaitForAReservation(t *testing.T) {
+	b := newBank(t, 1000, 0, fallbackBankConfig)
+	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: uuid.NewV7(), AttemptSeq: 1, Test: true, Revision: 1}
+	c := &corrector{db: b.app, scope: b.platform}
+	if retry, err := c.one(t.Context(), ev); retry || !errors.Is(err, errNoCorrection) {
+		t.Fatalf("retry %v, err %v; want discarded as a test event", retry, err)
+	}
+	if got := b.count("SELECT count(*) FROM billing.charge_corrections"); got != 0 {
+		t.Errorf("%d retry rows for a test event, want none", got)
+	}
+}

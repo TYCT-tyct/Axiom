@@ -593,6 +593,19 @@ func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUn
 	return items, nil
 }
 
+const lockChargeEvents = `-- name: LockChargeEvents :exec
+SELECT pg_advisory_xact_lock(hashtext('axiom charge events'))
+`
+
+// Charge events and their consumer share this transaction lock. A producer keeps it from before inserting the event
+// until commit, and the consumer takes it before reading its cursor, so an event cannot commit behind a cursor it
+// would be older than. The event's timestamp is the insertion's clock_timestamp, after the lock, not now(), the
+// transaction's start. A test holds one transaction's lock while another tries to write.
+func (q *Queries) LockChargeEvents(ctx context.Context, db DBTX) error {
+	_, err := db.Exec(ctx, lockChargeEvents)
+	return err
+}
+
 const matchCharges = `-- name: MatchCharges :many
 WITH pairs AS (
     SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq

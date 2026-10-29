@@ -268,10 +268,10 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | `GET /api/v1/credits` | 账户余额（OpenRouter 格式），供兼容 OpenRouter 的工具使用 |
 | `GET /api/v1/generation?id=` | 按调用编号查询单次调用的详情（含 `native_tokens_*`、`streamed`、`cancelled`、`cache_discount`、`session_id`） |
 | `GET /api/v1/generation/content?id=` | OpenRouter 的内容接口；本站不保存对话内容，属于本账户的调用也返回 404 `content_not_available`，别人的调用按 `generation_not_found` 处理 |
-| `GET /api/v1/activity?date=&api_key_hash=&workspace_id=&group_by=workspace` | 最近 30 个完整 UTC 日的按日/模型用量，`api_key_hash` 用 key UUID，`user_id` 不支持；今天的调用不进结果，未完成的当天不算；官方要求管理 key，Axiom 的调用 key 可读本账户（同 `/credits` 的 M1 偏离，见[决策](#决策与理由)） |
+| `GET /api/v1/activity?date=&api_key_hash=&workspace_id=&group_by=workspace` | 最近 30 个完整 UTC 日的按日/模型用量，`api_key_hash` 用 key UUID，`user_id` 不支持；今天的调用不进结果，未完成的当天不算；金额读当前结算的实收（校正后），输入优先用写入的物理输入；官方要求管理 key，Axiom 的调用 key 可读本账户（同 `/credits` 的 M1 偏离，见[决策](#决策与理由)） |
 
 - **单位**：这些接口里的金额都以本站的记账货币计。二级站点用人民币记账时，对方会把数字当美元显示，这在站点的接入说明里写明。
-- **余额与用量**：`total_credits` 和旧版的 `hard_limit_usd` 是余额加累计消费，`total_usage` 是累计消费（旧版接口以 0.01 为单位，不看日期参数），所以额度减用量总是余额；在途预留不扣。`generation` 只读调用记录，行为见上文「用量与费用」的调用编号；`activity` 从同一份调用记录按 UTC 日聚合，只覆盖最近 30 个完整日。
+- **余额与用量**：`total_credits` 和旧版的 `hard_limit_usd` 是余额加累计消费，`total_usage` 是累计消费（旧版接口以 0.01 为单位，不看日期参数），所以额度减用量总是余额；在途预留不扣。`generation` 只读调用记录，行为见上文「用量与费用」的调用编号；`activity` 从同一份调用记录按 UTC 日聚合，只覆盖最近 30 个完整日；金额再按请求编号读 billing 的当前实收，所以校正后的调用不会继续显示旧快照，输入统计优先用物理输入，历史缺失时才用计费项之和。
 - **`POST /v1/messages/count_tokens`** 返回估算的输入 token 数（`{"input_tokens": n}`），口径、前置检查和理由见[模块 README](../../internal/gateway/README.md#辅助接口)；它不收费、不记录。
 
 ### Responses 的会话状态

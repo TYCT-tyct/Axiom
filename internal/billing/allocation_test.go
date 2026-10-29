@@ -322,3 +322,35 @@ func TestReturnGivesBackTheCharge(t *testing.T) {
 		t.Fatalf("after an equal correction left %v; want [0 0 100]: the new batch must stay unspent", got)
 	}
 }
+
+// TestReturnDoesNotOpenAFutureCredit: a full replay loads batches whose credit is later in the history too. A refund
+// from an earlier charge may only reopen batches that have already opened at the replay position; opening a future
+// one and then crediting it again counts its money twice (funded 240 for a balance of 140).
+func TestReturnDoesNotOpenAFutureCredit(t *testing.T) {
+	old := batchRow(1, 100, "gift", nil)
+	future := batchRow(4, 100, "gift", nil)
+	request := uuid.NewV7()
+	log := []movement{
+		creditOf(old),
+		{key: keyAt(2), kind: "settle", request: request, debit: 80},
+		{key: keyAt(3), kind: "reverse", request: request, debit: -80, revision: 1},
+		{key: keyAt(3), kind: "settle", request: request, debit: 60, revision: 1},
+		creditOf(future),
+	}
+	a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{old, future})
+	applyAll(t, a, log...)
+	if got := leftOf(a, []LiveBatchesRow{old, future}); !slices.Equal(got, []int64{40, 100}) || a.funded() != 140 {
+		t.Fatalf("left %v, funded %d; want [40 100], 140", got, a.funded())
+	}
+	seen := map[*batchState]bool{}
+	for _, b := range a.open {
+		if seen[b] {
+			t.Fatalf("open batches %v contain a duplicate", a.open)
+		}
+		seen[b] = true
+	}
+	if len(a.open) != 2 {
+		t.Fatalf("open batches %v, want the two credited batches once each", a.open)
+	}
+	checkReplays(t, []LiveBatchesRow{old, future}, log, a)
+}

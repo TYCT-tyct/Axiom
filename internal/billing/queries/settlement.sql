@@ -110,3 +110,8 @@ ON CONFLICT (event_id) DO UPDATE SET revision = excluded.revision, request_id = 
 
 -- name: DeleteCorrection :exec
 DELETE FROM billing.charge_corrections WHERE event_id = @event_id;
+
+-- name: LockChargeEvents :exec
+-- The consumer side of the shared charge-event commit order (suppliers' LockChargeEvents): read the cursor and the
+-- events only after every producer that inserted one has committed.
+SELECT pg_advisory_xact_lock(hashtext('axiom charge events'));

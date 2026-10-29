@@ -263,6 +263,11 @@ func judge(cfg Config, m store.MatchChargesRow) (string, error) {
 }
 
 func event(ctx context.Context, tx store.DBTX, q *store.Queries, charge uuid.UUID, revision int32, payload map[string]any) error {
+	// Hold the event-order lock until this transaction commits. Without it a producer that began earlier could commit
+	// after the consumer's cursor and leave an event with an older created_at permanently unseen (#319 review).
+	if err := q.LockChargeEvents(ctx, tx); err != nil {
+		return fmt.Errorf("lock charge events: %w", err)
+	}
 	b, err := jsonx.MarshalCanonical(payload)
 	if err != nil {
 		return err

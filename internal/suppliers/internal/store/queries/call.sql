@@ -170,3 +170,10 @@ SELECT e.id, e.charge_record_id, e.revision, e.created_at, e.payload, cr.usage,
 FROM suppliers.charge_events e
 JOIN suppliers.charge_records cr ON cr.id = e.charge_record_id
 WHERE e.id = @id AND cr.attribution = 'attempt' AND cr.attempt_request_id IS NOT NULL;
+
+-- name: LockChargeEvents :exec
+-- Charge events and their consumer share this transaction lock. A producer keeps it from before inserting the event
+-- until commit, and the consumer takes it before reading its cursor, so an event cannot commit behind a cursor it
+-- would be older than. The event's timestamp is the insertion's clock_timestamp, after the lock, not now(), the
+-- transaction's start. A test holds one transaction's lock while another tries to write.
+SELECT pg_advisory_xact_lock(hashtext('axiom charge events'));

@@ -49,6 +49,18 @@ func TestParseChargeUsageRefusesWhatItCannotPrice(t *testing.T) {
 
 // TestChargeEventUsesTheRecordedAttempt: the event's payload may predate a reattribution; the charge record's attempt
 // sequence is then the authority, so a correction still matches the reservation that was billed.
+func TestChargeEventKeepsTheRecordsUsageWhateverTheAttemptsCostFlag(t *testing.T) {
+	id, charge, request := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	ev, err := chargeEvent(id, charge, 1, time.Now(), []byte(`{"cost_flag":"no_usage","attempt_seq":1}`),
+		[]byte(`{"items":{"input":50},"reported":["input"],"tier":"standard"}`), &request, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.CostFlag != CostNoUsage.String() || ev.Usage.Count(catalog.ItemInput) != 50 || !ev.Reported.Has(catalog.ItemInput) {
+		t.Errorf("event = %+v, want the record's 50 input and no_usage cost flag", ev)
+	}
+}
+
 func TestChargeEventUsesTheRecordedAttempt(t *testing.T) {
 	id, charge, request := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	ev, err := chargeEvent(id, charge, 2, time.Now(), []byte(`{"cost_flag":"complete","attempt_seq":2}`),

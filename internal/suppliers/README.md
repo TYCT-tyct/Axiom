@@ -348,7 +348,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 4. **扣费记录保留明细**：`charge_records.usage` 存每项的数量、记录声明了哪些项（`reported`，可以含声明为零的项，没声明的不在其中）、供应商给出但没有计费项的用量（`unknown`）、等级和物理输入（有的话），因为只有声明了的项才能校正暂估，物理输入供 `native_tokens_prompt` 使用，等级单独存。旧记录没有物理输入，校正时该项未知、接口省略；新写入的带上它。
 5. **资金来源**：不是钱包的扣费记录（订阅）入库时存下来、不参与匹配、暂挂和事件，同时把供应商暂停（`needs_attention`，原因 `funding_not_wallet`，配置代次加一），重建快照后不再路由到它。
 6. **有界**：一遍对账每种语句最多 `MaxBatches`（默认 20）批、每批 `Batch`（默认 500）行，没做完的留给下一遍，报告里 `More` 为真；等待中的行（`state='new'`、`state<>'matched'`、`state='pending'` 且有键）各有部分索引，代价随积压而不随历史增长；等待的尝试列表一批一批地列，`Config.After` 和报告里的 `Next`（按完成时间、请求、序号排序的游标）把它跨轮推进，列到末尾 `Next` 归零、下一遍从头开始，所以超过一批、始终对不上的尝试最终都会被报告一次。
-7. **事件**：每次版本变化在同一事务里写一行 `charge_events`（扣费记录，版本，载荷），唯一键是（扣费记录，版本），重复运行不会重复。billing 的 `RegisterCorrections` 按 `(created_at, id)` 游标读归属为尝试的事件和 `charge_records.usage`，把暂估的用户收费校正到供应商的用量（[billing 的「暂估校正」](../billing/README.md#暂估校正)）；尝试归属的事件带布尔 `test`，检测为 `true`、真实调用为 `false`，billing 消费时跳过检测；成本分录按实际扣费的调整仍未接入（[#28](https://github.com/TYCT-tyct/Axiom/issues/28)），本模块本身只做匹配、判定、暂挂、归属记录和告警。
+7. **事件**：每次版本变化在同一事务里写一行 `charge_events`（扣费记录，版本，载荷），唯一键是（扣费记录，版本），重复运行不会重复。billing 的 `RegisterCorrections` 按 `(created_at, id)` 游标读归属为尝试的事件和 `charge_records.usage`，把暂估的用户收费校正到供应商的用量（[billing 的「暂估校正」](../billing/README.md#暂估校正)）；事件插入和消费共用事务级 advisory lock，事件时间取插入时的 `clock_timestamp()`，所以对账事务即使先开始、后提交，也不会把旧时间的事件落在已推进的游标之后；尝试归属的事件带布尔 `test`，检测为 `true`、真实调用为 `false`，billing 消费时在查预留前跳过检测；成本分录按实际扣费的调整仍未接入（[#28](https://github.com/TYCT-tyct/Axiom/issues/28)），本模块本身只做匹配、判定、暂挂、归属记录和告警。
 
 ## 没有对账日志
 

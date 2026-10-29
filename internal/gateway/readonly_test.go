@@ -4,12 +4,14 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 	"uuid"
 
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 )
 
@@ -562,5 +564,61 @@ func TestActivityGroupsTheLastCompletedDays(t *testing.T) {
 		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 			t.Errorf("%s: %d %s", query, resp.StatusCode, body)
 		}
+	}
+}
+
+// TestActivityUsesTheCurrentCharge: /activity must not sum the immutable call-log snapshot after a correction moved
+// the reservation and ledger. The current settled charge wins; a call with no reservation keeps its snapshot.
+func TestActivityUsesTheCurrentCharge(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	id, id2 := uuid.NewV7(), uuid.NewV7()
+	r.callRow(a, id)
+	r.callRow(a, id2)
+	r.sql(
+		"UPDATE observability.call_log SET at = now() - interval '1 day', price_nano = 100000000 WHERE id IN ('"+id.String()+"', '"+id2.String()+"')",
+		"INSERT INTO billing.holders (id, expires_at) VALUES ('"+uuid.NewV7().String()+"', now() + interval '1 day')",
+	)
+	var holder uuid.UUID
+	if err := r.db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT id FROM billing.holders ORDER BY started_at DESC LIMIT 1").Scan(&holder)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for request, charged := range map[uuid.UUID]int64{id: 50000000, id2: 70000000} {
+		r.sql("INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id, " +
+			"workspace_window, key_window, segment, amount, state, deadline, charged, price) VALUES ('" + request.String() + "', '" +
+			siteID.String() + "', '" + a.id.String() + "', '" + a.workspace.String() + "', '" + uuid.UUID(a.keyID).String() +
+			"', '" + holder.String() + "', now(), now(), 1, 100000000, 'settled', now() + interval '1 hour', " +
+			strconv.FormatInt(charged, 10) + ", 100000000)")
+	}
+	resp, body := r.do(http.MethodGet, "/api/v1/activity", a.key, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	rows := activityRows(t, body)
+	if len(rows) != 1 || rows[0]["requests"] != float64(2) || !near(rows[0]["usage"], 0.12) {
+		t.Fatalf("activity %v, want two requests and usage 0.12 from both corrected reservations", rows)
+	}
+}
+
+// TestActivityUsesThePhysicalPrompt: cache reads and writes may overlap, so adding the billed input items overcounts.
+// The stored physical prompt is the client's total and wins when present.
+func TestActivityUsesThePhysicalPrompt(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	id := uuid.NewV7()
+	r.callRow(a, id)
+	r.sql("UPDATE observability.call_log SET at = now() - interval '1 day', physical_input = 100, " +
+		"usage = '{\"input\":0,\"cache_read\":80,\"cache_write\":60,\"output\":20}' WHERE id = '" + id.String() + "'")
+	resp, body := r.do(http.MethodGet, "/api/v1/activity", a.key, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	rows := activityRows(t, body)
+	if len(rows) != 1 || !near(rows[0]["prompt_tokens"], 100) {
+		t.Fatalf("activity %v, want prompt_tokens 100 from physical_input", rows)
 	}
 }

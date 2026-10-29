@@ -140,3 +140,15 @@ func (tc splitCase) check(t *testing.T, got Usage) {
 		t.Errorf("output total = %d, want %d", u.OutputTotal(), tc.wantTotalOut)
 	}
 }
+
+// TestNativeSplitsMergeByPresence: an input frame reports video, a later output frame reports predictions and says
+// nothing about video. The later frame must not wipe the earlier native split.
+func TestNativeSplitsMergeByPresence(t *testing.T) {
+	u := metered(t,
+		`{"input_tokens":100,"input_tokens_details":{"video_tokens":10}}`,
+		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":2,"rejected_prediction_tokens":1}}`)
+	got := u.Segments[0].Usage.NativeTokens()
+	if got.VideoInput != 10 || got.AcceptedPrediction != 2 || got.RejectedPrediction != 1 {
+		t.Errorf("native split = %+v, want video 10, accepted 2, rejected 1", got)
+	}
+}

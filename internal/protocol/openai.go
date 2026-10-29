@@ -104,6 +104,11 @@ func (u *openAIUsage) mapInput(r *usageReport) error {
 	if err := r.openAIInput(*in, d); err != nil {
 		return err
 	}
+	// Video has no billing item of its own and is only a client echo; a report without a positive video count says
+	// nothing about an earlier frame's video split.
+	if d.Video > 0 {
+		r.native.VideoInput, r.nativeSet = d.Video, r.nativeSet|nativeVideo
+	}
 	r.inputDetailed = detailed
 	unknownCounts(r, "usage."+name, d.Unknown)
 	if d.CachedDetails != nil {
@@ -140,8 +145,12 @@ func (u *openAIUsage) mapOutput(r *usageReport) error {
 	rejected, rejectedOK := nativeCount(d.Rejected)
 	if acceptedOK || rejectedOK {
 		if accepted+rejected <= *out {
-			r.native.AcceptedPrediction, r.native.RejectedPrediction = accepted, rejected
-			r.nativeSet = true
+			if accepted > 0 {
+				r.native.AcceptedPrediction, r.nativeSet = accepted, r.nativeSet|nativeAccepted
+			}
+			if rejected > 0 {
+				r.native.RejectedPrediction, r.nativeSet = rejected, r.nativeSet|nativeRejected
+			}
 		}
 	}
 	r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, details != nil
@@ -175,10 +184,6 @@ func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
 	}
 	if d.Image > 0 || d.Video > 0 {
 		r.set(catalog.ItemImageIn, image)
-	}
-	if d.Video > 0 {
-		r.native.VideoInput = d.Video
-		r.nativeSet = true
 	}
 	r.physicalInput = tokenTotal{total, true}
 	return nil

@@ -319,11 +319,32 @@ func (h *Handler) activity(ctx context.Context, tx pg.Tx, a accounts.Admission, 
 	if err != nil {
 		return nil, err
 	}
+	// The call log's price is the snapshot written at settlement, and corrections move the reservation and ledger
+	// afterwards. Read the current charge for these calls and let it replace the snapshot when present; a missing row
+	// (old call, not settled, or out of scope) keeps the recorded amount.
+	var ids []uuid.UUID
+	for _, r := range rows {
+		ids = append(ids, r.RequestIDs...)
+	}
+	current, err := billing.ChargedCalls(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]activityItem, len(rows))
 	for i, r := range rows {
+		// A group may hold several calls with different corrections. Sum each call's current charge, falling back to
+		// that call's own snapshot only when its reservation is absent (an old or non-settled row).
+		var usage int64
+		for j, id := range r.RequestIDs {
+			if charged, ok := current[id]; ok {
+				usage += charged
+			} else if j < len(r.RequestPrices) {
+				usage += r.RequestPrices[j]
+			}
+		}
 		items[i] = activityItem{
 			Date: r.Date, Model: r.Model, ModelPermaslug: r.Model, EndpointID: uuid.Nil().String(),
-			ProviderName: "Axiom", Usage: credits(r.UsageNano), Requests: r.Requests,
+			ProviderName: "Axiom", Usage: credits(usage), Requests: r.Requests,
 			PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens, ReasoningTokens: r.ReasoningTokens,
 			CachedTokens: r.CachedTokens, WorkspaceID: r.Workspace,
 		}

@@ -17,7 +17,7 @@ type usageReport struct {
 	tierSet       bool
 	unknown       []catalog.UnknownUsage
 	native        catalog.NativeTokens
-	nativeSet     bool
+	nativeSet     nativeSet
 	physicalInput tokenTotal
 	outputTotal   tokenTotal
 	// inputDetailed and outputDetailed tell that the report carried the side's details object, so its split is a new
@@ -31,6 +31,16 @@ type tokenTotal struct {
 	n   int64
 	set bool
 }
+
+// nativeSet marks each native split a report carried. They are merged field by field: a later output frame may carry
+// prediction tokens while saying nothing about the video input an earlier input frame reported.
+type nativeSet uint8
+
+const (
+	nativeVideo nativeSet = 1 << iota
+	nativeAccepted
+	nativeRejected
+)
 
 // maxCount bounds a count as catalog.NewUsage does, checked before any arithmetic on counts, so none overflows.
 const maxCount = 1e10
@@ -84,8 +94,14 @@ func (m *meter) report(r usageReport, compactions []usageReport) {
 	if r.tierSet {
 		m.tier = r.tier
 	}
-	if r.nativeSet {
-		m.native, m.nativeSet = r.native, true
+	if r.nativeSet&nativeVideo != 0 {
+		m.native.VideoInput, m.nativeSet = r.native.VideoInput, m.nativeSet|nativeVideo
+	}
+	if r.nativeSet&nativeAccepted != 0 {
+		m.native.AcceptedPrediction, m.nativeSet = r.native.AcceptedPrediction, m.nativeSet|nativeAccepted
+	}
+	if r.nativeSet&nativeRejected != 0 {
+		m.native.RejectedPrediction, m.nativeSet = r.native.RejectedPrediction, m.nativeSet|nativeRejected
 	}
 	for _, u := range r.unknown {
 		if i := slices.IndexFunc(m.unknown, func(v catalog.UnknownUsage) bool { return v.Field == u.Field }); i >= 0 {
@@ -251,7 +267,7 @@ func (m *meter) usage(r usageReport) (catalog.Usage, error) {
 	if err == nil && r.physicalInput.set {
 		u, err = u.WithPhysicalInput(r.physicalInput.n)
 	}
-	if err == nil && r.nativeSet {
+	if err == nil && r.nativeSet != 0 {
 		u, err = u.WithNativeTokens(r.native)
 	}
 	return u, err

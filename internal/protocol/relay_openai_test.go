@@ -262,6 +262,11 @@ func TestRelayResponsesKeepsANullUsage(t *testing.T) {
 		if wantNull := i < 2; wantNull && (!has || usage != nil) || !wantNull && usage == nil {
 			t.Errorf("%v: usage %v (present %t)", e["type"], usage, has)
 		}
+		if i == 2 {
+			if u, ok := usage.(map[string]any); !ok || u["is_byok"] != false {
+				t.Errorf("end usage %v: missing is_byok=false", usage)
+			}
+		}
 	}
 	if n := strings.Count(string(got.out), `"usage"`); n != 3 {
 		t.Errorf("%d usage members, want one in each event:\n%s", n, got.out)

@@ -188,6 +188,8 @@ type ActivityItem struct {
 	PromptTokens, CompletionTokens int64
 	ReasoningTokens, CachedTokens  int64
 	UsageNano                      int64
+	RequestIDs                     []uuid.UUID
+	RequestPrices                  []int64
 }
 
 // ActivityOwn returns the account's activity, oldest first, as OpenRouter's /activity groups it. The scope is the
@@ -202,10 +204,16 @@ func ActivityOwn(ctx context.Context, tx pg.Tx, q ActivityQuery) ([]ActivityItem
 	}
 	items := make([]ActivityItem, len(rows))
 	for i, r := range rows {
+		ids := make([]uuid.UUID, 0, len(r.RequestIds))
+		for _, id := range r.RequestIds {
+			if id.Valid {
+				ids = append(ids, uuid.UUID(id.Bytes))
+			}
+		}
 		items[i] = ActivityItem{
 			Date: r.Date, Model: r.Model, Workspace: r.WorkspaceID, Requests: r.Requests,
 			PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens, ReasoningTokens: r.ReasoningTokens,
-			CachedTokens: r.CachedTokens, UsageNano: r.UsageNano,
+			CachedTokens: r.CachedTokens, UsageNano: r.UsageNano, RequestIDs: ids, RequestPrices: r.RequestPrices,
 		}
 	}
 	return items, nil

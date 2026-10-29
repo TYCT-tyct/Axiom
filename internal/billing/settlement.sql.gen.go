@@ -265,6 +265,17 @@ func (q *Queries) InsertCreditBatch(ctx context.Context, db DBTX, arg InsertCred
 	return err
 }
 
+const lockChargeEvents = `-- name: LockChargeEvents :exec
+SELECT pg_advisory_xact_lock(hashtext('axiom charge events'))
+`
+
+// The consumer side of the shared charge-event commit order (suppliers' LockChargeEvents): read the cursor and the
+// events only after every producer that inserted one has committed.
+func (q *Queries) LockChargeEvents(ctx context.Context, db DBTX) error {
+	_, err := db.Exec(ctx, lockChargeEvents)
+	return err
+}
+
 const lockReservation = `-- name: LockReservation :one
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.price_versions, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,

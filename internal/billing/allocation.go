@@ -232,7 +232,9 @@ func (a *allocation) unspend(n int64) error {
 	returned := n
 	candidates := make([]*batchState, 0, len(a.batches))
 	for _, b := range a.batches {
-		if b.consumed > 0 || b.expired > 0 {
+		// A batch whose credit is later in the replay has not opened yet. It must not receive an earlier charge's
+		// refund: credit() would then add the same batch to open again, counting its money twice.
+		if b.opened.compare(a.at) <= 0 && (b.consumed > 0 || b.expired > 0) {
 			candidates = append(candidates, b)
 		}
 	}
@@ -259,7 +261,7 @@ func (a *allocation) unspend(n int64) error {
 		return fmt.Errorf("a return of %d has %d that no credit batch took", returned, n)
 	}
 	for _, b := range a.batches {
-		if b.remaining() > 0 && !slices.Contains(a.open, b) {
+		if b.opened.compare(a.at) <= 0 && b.remaining() > 0 && !slices.Contains(a.open, b) {
 			a.open = append(a.open, b)
 		}
 	}

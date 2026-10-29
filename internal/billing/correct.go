@@ -152,6 +152,9 @@ func (c *corrector) readNew(ctx context.Context) (bool, error) {
 	var events []suppliers.ChargeEvent
 	if err := c.db.Tx(ctx, c.scope, func(tx pg.Tx) error {
 		var err error
+		if err := queries.LockChargeEvents(ctx, tx); err != nil {
+			return fmt.Errorf("lock charge events: %w", err)
+		}
 		if cursor, err = queries.CorrectionCursor(ctx, tx); err != nil {
 			return err
 		}
@@ -204,6 +207,11 @@ func (c *corrector) one(ctx context.Context, ev suppliers.ChargeEvent) (bool, er
 }
 
 func (c *corrector) correct(ctx context.Context, ev suppliers.ChargeEvent) (int64, error) {
+	if ev.Test {
+		// A test generation is the platform's own cost and has no tenant reservation to correct. Filter it before
+		// looking for the reservation, or a probe event would wait forever in the retry table.
+		return 0, errNoCorrection
+	}
 	var borne int64
 	err := c.db.Tx(ctx, c.scope, func(tx pg.Tx) error {
 		account, err := queries.ReservationAccount(ctx, tx, ev.Request)
@@ -289,7 +297,7 @@ func (c *corrector) correct(ctx context.Context, ev suppliers.ChargeEvent) (int6
 }
 
 // correctedPrice prices the supplier's usage at the schedule the request locked. It refuses anything but a settlement
-// that was wholly estimated, for the attempt that was billed, with a complete supplier's record: a partly reported
+// that was wholly estimated, for the attempt that was billed, with a supplier's record that declares every charged item: a partly reported
 // charge is already actual for its reported items and mixing the two would charge twice.
 func (c *corrector) correctedPrice(row LockReservationRow, ev suppliers.ChargeEvent) ([]Segment, priced, error) {
 	if row.State == "pending" {
@@ -301,7 +309,7 @@ func (c *corrector) correctedPrice(row LockReservationRow, ev suppliers.ChargeEv
 	if !row.Estimated || row.Entry == nil || row.ChargedSeq == nil || row.PricingTiers < 0 {
 		return nil, priced{}, errNoCorrection
 	}
-	if ev.Test || ev.CostFlag != suppliers.CostComplete.String() || ev.Revision < 1 {
+	if ev.Revision < 1 {
 		return nil, priced{}, errNoCorrection
 	}
 	if ev.AttemptSeq != platform.AttemptSeq(*row.ChargedSeq) {
@@ -334,9 +342,12 @@ func (c *corrector) correctedPrice(row LockReservationRow, ev suppliers.ChargeEv
 		}
 	}
 	segments := []Segment{{Usage: ev.Usage, Reported: ev.Reported}}
-	s, f, err := c.pricing(row, int(*row.Entry))
+	s, f, err := (&locked{row: row}).pricing(int(*row.Entry))
+	if errors.Is(err, ErrNoAttempt) {
+		return nil, priced{}, errNoCorrection
+	}
 	if err != nil {
-		return nil, priced{}, err
+		return nil, priced{}, fmt.Errorf("billing: read the locked price of %s: %w", ev.Request, err)
 	}
 	price, err := priceSegments(s, f, segments, row.Waived, catalog.ServiceTierSet(row.PricingTiers)) //nolint:gosec // stored CHECK bounds tiers
 	if err != nil {
@@ -363,18 +374,6 @@ func correctedProfit(row LockReservationRow, charged int64) *int64 {
 	}
 	n := profit.CeilAmount()
 	return &n
-}
-
-func (c *corrector) pricing(row LockReservationRow, entry int) (catalog.Schedule, fallbacks, error) {
-	if entry < 0 || entry >= len(row.Prices) || row.Prices[entry] == "" || entry >= len(row.Fallbacks) || row.Fallbacks[entry] == "" {
-		return catalog.Schedule{}, fallbacks{}, errNoCorrection
-	}
-	s, err := catalog.ParseSchedule([]byte(row.Prices[entry]))
-	if err != nil {
-		return catalog.Schedule{}, fallbacks{}, fmt.Errorf("billing: read the locked price of %s: %w", row.AccountID, err)
-	}
-	f, err := parseFallbacks(row.Fallbacks[entry])
-	return s, f, err
 }
 
 // record stores the event's outcome and, for a page, moves the cursor past it in the same transaction. An event that

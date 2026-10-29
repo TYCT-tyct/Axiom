@@ -584,6 +584,11 @@ func (r *Relay) Finish(f Final) []byte {
 // costed is the held ending with the members usage added to its usage object and top to the event: an ending
 // without a usage object gets one.
 func (r *Relay) costed(usage, top string) []byte {
+	if r.client == Responses && usage != "" {
+		// Responses' usage object is written by the upstream, so it bypasses appendOpenAIUsage. Add the one member
+		// that is ours and that OpenRouter promises, as Chat's usage event already does.
+		usage += `,"is_byok":false`
+	}
 	at := r.usageAt
 	if at < 0 { // no usage object: the ending gets one
 		at, usage = bytes.LastIndexByte(r.ending, '}'), `,"usage":{`+strings.TrimPrefix(usage, ",")+"}"
