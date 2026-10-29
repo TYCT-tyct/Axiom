@@ -107,9 +107,8 @@ type rigOptions struct {
 	routing   routing.Config
 	prefer    string // the endpoint the preset puts first; the cheapest comes first when empty
 	memory    int64
-	conns     int           // the most connections the database pool opens; the driver's own limit when zero
-	body      time.Duration // how long Public gives a request to send its body; a minute when zero
-	segments  billing.Segments
+	conns     int            // the most connections the database pool opens; the driver's own limit when zero
+	body      time.Duration  // how long Public gives a request to send its body; a minute when zero
 	suppliers bool           // the suppliers tables too, for a real suppliers service to price attempts
 	lifetime  time.Duration  // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
 	proxies   []netip.Prefix // the reverse proxies the handler believes, none when empty
@@ -146,6 +145,9 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if o.config != nil {
 		o.config(&r.cfg)
 	}
+	// One source, as cmd/axiom wires it: the routing snapshot and billing reserve by the gateway's segment settings,
+	// so a rig that segments in one of them segments in both.
+	o.routing.Segments = r.cfg.Segments()
 	mods := []pg.Module{accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module()}
 	if o.suppliers {
 		mods = append(mods, suppliers.Module())
@@ -172,7 +174,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	sup := r.settlementSuppliers(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: cmp.Or(o.lifetime, time.Hour), // nothing renews the holder while a test runs
-		Segments: o.segments,
+		Segments: r.cfg.Segments(),
 	}, sup); err != nil {
 		t.Fatal(err)
 	}

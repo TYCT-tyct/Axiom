@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
@@ -38,7 +39,9 @@ func TestSupplierAffordabilityUsesNativeFullCost(t *testing.T) {
 			e.Cost = schedule(t, "0.000001", "0.000002", "0.0000001")
 			// Sale prices and native cost have unrelated scales. The cheapest sale is not the cheapest purchase.
 			e.Price.Schedule = schedule(t, "100", "100", "1")
-			h := newHarness(t, routing.Config{FirstSegment: 1, Overshoot: 1}, openPreset(), e)
+			// The supplier's balance must cover the whole generation, not a segment of it, so no segment fits 100
+			// output tokens here: the reservation is whole.
+			h := newHarness(t, routing.Config{Segments: billing.Segments{Output: 1, Overshoot: time.Second}}, openPreset(), e)
 			in := input()
 			in.Req.TextBytes, in.Req.MaxOutput, in.Req.Choices = 1, tc.output, int64(tc.choices)
 			in.Req.ServiceTiers = 1 << catalog.ServiceTierStandard

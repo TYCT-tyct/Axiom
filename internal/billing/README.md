@@ -18,7 +18,7 @@ type Demand struct { // gateway 由 protocol.Request 填写；只放请求里的
 type ServerTool struct{ Item catalog.Item; MaxUses int64 } // MaxUses 0：请求没写，报价时用该条目模型的默认最大次数
 type Quotable struct{ Price catalog.Schedule; Model Model; MaxOutput int64; Segmentable bool; Endpoint uuid.UUID } // 已实现；Endpoint：预留作为丢失的请求的路线记下的端点；价格版本 `PriceRef` 在 routing 的条目里，不在这里
 type Model struct{ ID catalog.ModelID; ContextLength, ImageTokens, PageTokens, FilePages, OutputSpeed int64; MaxUses map[catalog.Item]int64; Reports catalog.ItemSet } // 调用方从目录快照填；ImageTokens、PageTokens、FilePages 为 0 表示不知道，报价按上下文长度
-type Segments struct{ Output int64; Overshoot time.Duration } // 站点设置：每段输出 token；追加等待加取消生效的延迟上限
+type Segments struct{ Output int64; Overshoot time.Duration } // 节点设置：每段输出 token；追加等待加取消生效的延迟上限
 func ReservedCost(d Demand, e Quotable) (platform.Exact, error) // 路由用原生成本计划估算完整生成成本，复用 Quote 的数量规则；原生缺价以最高已知 token 单价估算，不改变售价准入
 func Quote(d Demand, q []Quotable, s Segments, avail []Available) (Reservation, error) // 已实现，纯函数；Reserve 在锁下调用它
 type Reservation struct{ Amount platform.Exact; Kept []int }
@@ -119,7 +119,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **溢出**：计数饱和在 `math.MaxInt64` 而不回绕；饱和会少算，所以除首次提示词（被上下文长度截住）外，任何计数到达 `math.MaxInt64` 的条目报错不报价，输出上限 × 选择数也一样，即使首段比它小：计量器按它截住输出。在此之内每项乘积小于 2¹²³，至多 `NumItems` + 3 项相加，128 位不会溢出。
 - **缺价、模型没有上下文长度**：`Quote` 返回错误，整个请求不报价。上架门槛保证可能用到的项和等级都有价，已知的按次项目由准入补上默认单价（`withFallbacks`），所以这是数据错误，不按 0 计也不猜价。
 - **余量**：`[]Available` 按顺序列出各来源（余额、站长余额、工作区预算、key 上限）的余量；报价不超过每一个余量的条目保留，相等算付得起。首选条目被删时返回 `*Insufficient`，指明列表里第一个不够的来源；其余被删的条目只是不进 `Kept`。`Transient`（限额窗口下一刻会恢复）随 B2 的限额一起加。
-- **分段配置**：可分段的条目遇到没配置分段大小或超额额度（`Segments.Output`、`Overshoot` 不大于 0）时报 `errNoSegments`，不报一个输出为 0 的价（计量器把 `segment` 为 0 读成整笔预留，输出就没有上界）。M1 没有这份配置，路由在 `FirstSegment` 为 0 时也不标出可分段的条目，所以 M1 的预留全部是全额；分段的接线见 [#229](https://github.com/TYCT-tyct/Axiom/issues/229)。
+- **分段配置**：`Segments`（一段的输出 token 数与超额额度覆盖的时长）由 gateway 的节点设置一处给出（`gateway.Config.Segments()`），`cmd/axiom` 把同一个值交给 `routing.Config` 与 `billing.Config`，所以路由标出可分段条目的地方和报价读到的是同一份大小；`Segments.Allowance(速度)` 是超额额度的唯一算法（⌈时长 × 速度⌉），路由用它判断条目够不够分段，报价用它算额度。可分段的条目遇到没配置（任一项不大于 0）时报 `errNoSegments`，不报一个输出为 0 的价（计量器把 `segment` 为 0 读成整笔预留，输出就没有上界）。模型规格没有最快输出速度时路由不把任何条目标为可分段，所以预留仍是全额；写上速度后分段才生效（[#229](https://github.com/TYCT-tyct/Axiom/issues/229)）。
 - **测试**：表驱动用例逐条核对上面每条规则的金额；两个性质测试：报价不低于按 `catalog.Schedule.Cost` 逐次采样计价的任意一次合规调用（随机价目表让低档更贵、缓存写或缓存读比输入贵都经常出现，评审给的缓存读两倍于输入价的反例每次先跑），以及与 `math/big` 无界计算的结果相等、计数越界时报错。`BenchmarkQuote` 报单条目和三条目多档的耗时与分配，随 `just bench-compare` 比较分配次数。
 
 供应商原生成本检查使用 `ReservedCost`，复用完整生成的数量上界，但不要求上游计划覆盖目录的所有项和等级：`quotePrices` 以该计划全部等级与上下文档位的最高已知 token 单价估算缺项，保留请求涉及的更高已知价格，缓存读写重叠仍相加。这个估算只用于付得起判断，不补写价目表、不影响 `Quote` 或结算；上游未公布的实际成本不可能据此保证。测试覆盖默认多等级、音频、搜索、缓存重叠与售价缺价仍拒绝。
