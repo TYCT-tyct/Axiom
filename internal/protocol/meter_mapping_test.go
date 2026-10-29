@@ -180,16 +180,25 @@ func TestNativeVideoClearsOnAnInputSnapshot(t *testing.T) {
 	}
 }
 
-// TestNativeSplitsKeepWithAZeroTotal: a relay that clears a side's total is ignored by takeSide, so the native splits
-// from the kept snapshot must be ignored too, even when the clearing report has an empty details object.
-func TestNativeSplitsKeepWithAZeroTotal(t *testing.T) {
+// TestNativeVideoKeepsWithAZeroTotal: a relay that clears the input total is ignored by takeSide, so the video split
+// from the kept input snapshot must not be cleared by its empty details object.
+func TestNativeVideoKeepsWithAZeroTotal(t *testing.T) {
 	u := metered(t,
-		`{"input_tokens":100,"input_tokens_details":{"video_tokens":10},`+
-			`"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":4,"rejected_prediction_tokens":1}}`,
-		`{"input_tokens":0,"input_tokens_details":{}}`,
+		`{"input_tokens":100,"input_tokens_details":{"video_tokens":10}}`,
+		`{"input_tokens":0,"input_tokens_details":{}}`)
+	if got := u.Segments[0].Usage.NativeTokens(); got.VideoInput != 10 {
+		t.Errorf("native split = %+v, want the kept video 10", got)
+	}
+}
+
+// TestNativePredictionsKeepWithAZeroTotal: the same rule for the output side: a zero total with empty details keeps
+// the accepted and rejected prediction splits of the earlier snapshot.
+func TestNativePredictionsKeepWithAZeroTotal(t *testing.T) {
+	u := metered(t,
+		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":4,"rejected_prediction_tokens":1}}`,
 		`{"output_tokens":0,"output_tokens_details":{}}`)
 	got := u.Segments[0].Usage.NativeTokens()
-	if got.VideoInput != 10 || got.AcceptedPrediction != 4 || got.RejectedPrediction != 1 {
-		t.Errorf("native split = %+v, want the kept input video 10 and output predictions 4/1", got)
+	if got.AcceptedPrediction != 4 || got.RejectedPrediction != 1 {
+		t.Errorf("native split = %+v, want the kept predictions 4/1", got)
 	}
 }
