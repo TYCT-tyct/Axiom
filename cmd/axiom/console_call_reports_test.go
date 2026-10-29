@@ -246,17 +246,17 @@ func TestCallReportWindowBounds(t *testing.T) {
 	until := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
 	for _, days := range []int{0, 30, 31, 32} {
 		since := until.Add(-time.Duration(days) * 24 * time.Hour)
-		q, err := boundedCallWindow(observability.OwnQuery{Since: since, Until: until}, &since, &until)
+		q, err := boundedCallWindow(observability.OwnQuery{Since: since, Until: until}, &since, &until, ownCallReportWindow)
 		if (err == nil) != (days > 0 && days <= 31) {
 			t.Errorf("%d days: %+v %v", days, q, err)
 		}
 	}
 	since := endOfTime.Add(-24 * time.Hour)
-	q, err := boundedCallWindow(observability.OwnQuery{Since: since, Until: endOfTime}, &since, &endOfTime)
+	q, err := boundedCallWindow(observability.OwnQuery{Since: since, Until: endOfTime}, &since, &endOfTime, ownCallReportWindow)
 	if err != nil || !q.Since.Equal(since) || !q.Until.Equal(endOfTime) {
 		t.Fatalf("explicit extreme time window changed: %+v %v", q, err)
 	}
-	q, err = boundedCallWindow(observability.OwnQuery{Until: until}, nil, &until)
+	q, err = boundedCallWindow(observability.OwnQuery{Until: until}, nil, &until, ownCallReportWindow)
 	if err != nil || q.Until.Sub(q.Since) != 30*24*time.Hour {
 		t.Fatalf("default window: %+v %v", q, err)
 	}
