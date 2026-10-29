@@ -39,8 +39,10 @@ const (
 
 // TestRequest is one test generation: an endpoint, the call format to test it in and the prompt.
 type TestRequest struct {
-	Endpoint EndpointID
-	Format   protocol.Format
+	// AvoidCredential rotates automatic probes when another usable key exists.
+	AvoidCredential uuid.UUID
+	Endpoint        EndpointID
+	Format          protocol.Format
 	// Prompt is what the test asks for; empty is TestPrompt.
 	Prompt string
 }
@@ -124,6 +126,9 @@ type TestResult struct {
 	receipt      AttemptReceipt
 }
 
+// CredentialID identifies the key used by the generation.
+func (r *TestResult) CredentialID() uuid.UUID { return r.receipt.CredentialID() }
+
 // Estimate is what the test is booked at, as the contract and the cost row write an amount: a definite upper bound in
 // the supplier's unit, never what the supplier reported.
 func (r *TestResult) Estimate() string { return r.estimate }
@@ -190,7 +195,7 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	if prompt == "" {
 		prompt = TestPrompt
 	}
-	attempt, err := s.acquire(req.Endpoint, true)
+	attempt, err := s.acquire(req.Endpoint, true, req.AvoidCredential)
 	if err != nil {
 		return TestResult{}, err
 	}

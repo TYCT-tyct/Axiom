@@ -17,7 +17,8 @@
     "test": "vitest run",
     "budget": "node scripts/budget.ts",
     "embed": "node scripts/embed.ts",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "journey": "playwright test -c playwright.journey.config.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

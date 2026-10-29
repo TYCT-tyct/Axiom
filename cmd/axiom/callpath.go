@@ -50,20 +50,22 @@ const (
 // callDeps is what a node's call path is built from: the modules it orchestrates, the secret it derives the
 // identifiers sent upstream from, and the reverse proxies the deployment trusts (AXIOM_TRUSTED_PROXIES).
 type callDeps struct {
-	db       *pg.DB
-	keys     *secret.Keyring   // unseals suppliers' credentials
-	identity []byte            // the identity key file's newest key
-	accounts *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
-	catalog  *catalog.Catalog
-	egress   *egress.Client
-	gate     gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
-	limits   *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
-	records  *observability.Recorder // the call log, which the settlements write to
-	meter    metric.Meter            // where the call path's counters go
-	logger   *slog.Logger
-	proxies  []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
-	kv       *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
-	alerts   alert.Sink
+	nodeID     string
+	healthMode quality.Mode
+	db         *pg.DB
+	keys       *secret.Keyring   // unseals suppliers' credentials
+	identity   []byte            // the identity key file's newest key
+	accounts   *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
+	catalog    *catalog.Catalog
+	egress     *egress.Client
+	gate       gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
+	limits     *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
+	records    *observability.Recorder // the call log, which the settlements write to
+	meter      metric.Meter            // where the call path's counters go
+	logger     *slog.Logger
+	proxies    []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
+	kv         *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
+	alerts     alert.Sink
 }
 
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
@@ -104,7 +106,13 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err != nil {
 		return callNode{}, err
 	}
-	health := quality.New(d.meter) // the attempts report to it and the snapshot reads it, so it is one for both
+	health, healthLoop, err := quality.Start(ctx, quality.Config{
+		Node: d.nodeID, DB: d.db, Scope: pg.PlatformScope(), Mode: d.healthMode,
+		Source: upstreams, Pauses: router, Alerts: d.alerts, Logger: d.logger, Meter: d.meter,
+	})
+	if err != nil {
+		return callNode{}, err
+	}
 	// The list in OpenRouter's shape is built by the route builder with every snapshot it publishes, from the sale prices
 	// that snapshot was priced with, so a price a client reads is a price a call is charged at.
 	models := gateway.NewModelList()
@@ -113,13 +121,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		return callNode{}, err
 	}
 	// What the snapshot is built from, read once before the node is ready: a failure here is a startup failure.
-	if err := upstreams.Reload(ctx); err != nil {
-		return callNode{}, err
-	}
-	if err := upstreams.SyncShares(ctx); err != nil {
-		return callNode{}, err
-	}
-	if err := d.catalog.Refresh(ctx); err != nil {
+	if err := loadCallInputs(ctx, upstreams, d.catalog); err != nil {
 		return callNode{}, err
 	}
 	var routable atomic.Bool
@@ -136,7 +138,9 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	}
 	// The loops outlive the signal that stops the node: the holder must keep beating until the settlements are written.
 	loops, stop := context.WithCancel(context.WithoutCancel(ctx))
-	n.ready, n.reaped, n.stop = func() bool { return routable.Load() && router.Fresh() }, startLoops(loops, d, ledger, upstreams, routes), stop
+	healthDone := make(chan struct{})
+	go func() { defer close(healthDone); healthLoop.Run(loops) }()
+	n.ready, n.reaped, n.stop = func() bool { return routable.Load() && router.Fresh() }, startLoops(loops, d, ledger, upstreams, routes), func() { stop(); <-healthDone }
 	return n, nil
 }
 
@@ -353,4 +357,14 @@ func unknownItems(db *pg.DB) func(context.Context) ([]billing.UnknownItem, error
 		})
 		return items, err
 	}
+}
+
+func loadCallInputs(ctx context.Context, upstreams *suppliers.Service, cat *catalog.Catalog) error {
+	if err := upstreams.Reload(ctx); err != nil {
+		return err
+	}
+	if err := upstreams.SyncShares(ctx); err != nil {
+		return err
+	}
+	return cat.Refresh(ctx)
 }

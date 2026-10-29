@@ -17,6 +17,8 @@ import (
 type ranked struct {
 	price *candidatePrice
 	*candidate
+	opened    time.Time
+	slowFull  bool
 	order     int  // index of its supplier in the named order; after all of them when not named
 	slow      bool // misses a performance wish
 	notSticky bool
@@ -59,7 +61,13 @@ func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 		case reason != 0:
 			rec.Excluded = append(rec.Excluded, Excluded{c.ID, reason})
 		default:
-			out = append(out, r.score(c, n, order, strategy, price))
+			s := r.score(c, n, order, strategy, price)
+			if c.LiveHealth != nil {
+				var limit int64
+				s.opened, limit = c.LiveHealth.Routing(n.now)
+				s.slowFull = limit > 0 && c.state.inflight.Load() >= limit
+			}
+			out = append(out, s)
 		}
 	}
 	if strategy == Fastest {

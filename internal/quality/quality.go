@@ -1,12 +1,13 @@
-// Package quality judges endpoints by what they do. H1 measures real traffic: every attempt the gateway makes ends in
-// Observe, which judges it by the one table of what counts as a failure and keeps, per endpoint, its health, time to
-// first token and output speed; routing reads them through the snapshot. internal/quality/README.md has the design.
+// Package quality measures endpoints and maintains their health loop. Attempts update fixed-size local evidence;
+// the background loop persists breaker transitions and leases recovery probes. See internal/quality/README.md.
 package quality
 
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
+	"uuid"
 
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -40,13 +41,17 @@ const (
 // Observation is how one attempt at an endpoint ended, as the gateway saw it: the facts, not a verdict, which is the
 // table's (judge).
 type Observation struct {
-	Endpoint suppliers.EndpointID
+	Endpoint           suppliers.EndpointID
+	Source, Credential uuid.UUID
+	Request            uuid.UUID
 	// Failure is the supplier's failure when no 2xx came; nil once one did.
 	Failure *suppliers.Failure
 	// Fault is why the read of the 2xx failed (protocol.FaultOf); FaultNone when it did not.
 	Fault protocol.Fault
 	Cut   Cut
 	Gone  bool // the client had left
+	// BreakerFallback says routing deliberately admitted this attempt as a breaker last resort.
+	BreakerFallback bool
 	// Delivered is set when the commit point came while the client was still there: the first content was the
 	// client's. A client that left before it may still have its upstream read on, for the usage, without it.
 	Delivered bool
@@ -71,22 +76,38 @@ type Measures struct {
 	Throughput float64 // output tokens per second
 }
 
-// Monitor keeps the measures of every endpoint observed, in the process: nothing here is shared between nodes or
-// written to a table (H2). Observe is on the call path and allocates nothing once the endpoint has been seen.
+// Monitor keeps local endpoint evidence and live breaker state. Observe never accesses the database or allocates
+// once the endpoint has been registered; Loop writes accepted transitions asynchronously.
 type Monitor struct {
+	deferred  atomic.Int64
 	mu        sync.RWMutex
-	endpoints map[suppliers.EndpointID]*endpoint
+	endpoints map[suppliers.EndpointID]*State
+	collected map[suppliers.EndpointID]struct{}
 
 	unclassified   metric.Int64Counter // failures the adapters could not classify, which are not counted
+	mode           Mode
+	changes        chan change
+	loop           *Loop
 	suspectedBlock metric.Int64Counter // HTML answers, taken for a firewall on the route and not counted
 }
 
-// endpoint is one endpoint's numbers, under its own lock.
-type endpoint struct {
-	mu        sync.Mutex
-	errorRate float64 // the moving average of failures (1) and successes (0); 0 before any
-	latency   average // seconds to the first token
-	speed     average // output tokens per second
+// State holds one endpoint's measurements and live breaker under its own lock.
+type State struct {
+	generation  uint64
+	id          suppliers.EndpointID
+	mode        Mode
+	credentials int
+	window      window
+	record      healthRecord
+	owned       bool
+	loaded      bool
+	pending     int
+	successes   int
+	lastSeen    time.Time
+	mu          sync.Mutex
+	errorRate   float64 // the moving average of failures (1) and successes (0); 0 before any
+	latency     average // seconds to the first token
+	speed       average // output tokens per second
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -115,13 +136,18 @@ func New(meter metric.Meter) *Monitor {
 	if meter == nil {
 		meter = noop.NewMeterProvider().Meter("quality")
 	}
-	return &Monitor{
-		endpoints: map[suppliers.EndpointID]*endpoint{},
+	m := &Monitor{
+		endpoints: map[suppliers.EndpointID]*State{},
+		collected: map[suppliers.EndpointID]struct{}{},
+		changes:   make(chan change, 1024),
+		mode:      Observe,
 		unclassified: counter(meter, "axiom.quality.unclassified",
 			"Endpoint failures the adapter could not classify (an Unknown below 500), which do not count against health."),
 		suspectedBlock: counter(meter, "axiom.quality.suspected_block",
 			"HTML answers taken for a firewall on the route, which count against neither the endpoint nor the route."),
 	}
+	m.register(meter)
+	return m
 }
 
 func counter(m metric.Meter, name, description string) metric.Int64Counter {
@@ -145,6 +171,7 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.count(v)
+	m.health(e, v, &o)
 	if latency {
 		e.latency.add(o.FirstToken.Sub(o.Sent).Seconds(), o.Ended)
 	}
@@ -154,7 +181,7 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 }
 
 // count moves the error rate by a counted outcome. e.mu is held.
-func (e *endpoint) count(v verdict) {
+func (e *State) count(v verdict) {
 	switch v {
 	case success:
 		e.errorRate -= alpha * e.errorRate
@@ -184,7 +211,7 @@ func (m *Monitor) Measured(id suppliers.EndpointID, now time.Time) Measures {
 	return out
 }
 
-func (m *Monitor) of(id suppliers.EndpointID) *endpoint {
+func (m *Monitor) of(id suppliers.EndpointID) *State {
 	m.mu.RLock()
 	e := m.endpoints[id]
 	m.mu.RUnlock()
@@ -194,8 +221,37 @@ func (m *Monitor) of(id suppliers.EndpointID) *endpoint {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if e = m.endpoints[id]; e == nil {
-		e = new(endpoint)
+		_, collected := m.collected[id]
+		delete(m.collected, id)
+		e = &State{id: id, mode: m.mode, loaded: !collected}
 		m.endpoints[id] = e
 	}
 	return e
+}
+
+func (m *Monitor) register(meter metric.Meter) {
+	_, err := meter.Int64ObservableCounter("axiom.quality.health.deferred", metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+		o.Observe(m.deferred.Load())
+		return nil
+	}))
+	if err != nil {
+		panic(err)
+	}
+	_, err = meter.Int64ObservableGauge("axiom.quality.health.open", metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+		var n int64
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		for _, e := range m.endpoints {
+			e.mu.Lock()
+			if e.record.Opened != 0 {
+				n++
+			}
+			e.mu.Unlock()
+		}
+		o.Observe(n)
+		return nil
+	}))
+	if err != nil {
+		panic(err)
+	}
 }
