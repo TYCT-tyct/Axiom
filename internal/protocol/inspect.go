@@ -76,9 +76,10 @@ type Request struct {
 	HidesReasoning bool
 	// Compacts is set when the request turns on server-side compaction, which samples the model a second time
 	// (docs/domains/billing.md「预留与结算」).
-	Compacts  bool
-	Needs     Capabilities
-	positions requestPositions
+	Compacts            bool
+	Needs               Capabilities
+	positions           requestPositions
+	legacy, modernTools bool
 }
 
 // ErrInvalid reports a body Inspect cannot read: not strict JSON within jsonx's policy, or a member it reads with the

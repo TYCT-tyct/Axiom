@@ -8,9 +8,9 @@
 |---|---|
 | `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）、可复制的汇率依据 `ExchangeRate`（行 ID、版本、规范化币种对与整数分子/分母，`Between` 只取精确分数或倒数）。只有类型和运算；支持币种、数值范围、冻结与取整规则由 [billing](../../docs/domains/billing.md#汇率) 校验和决定 |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
-| `secret` | 从受保护文件加载主密钥和 HMAC 密钥；供应商凭证的信封加密与明文脱敏 |
+| `secret` | 从受保护文件加载主密钥和 HMAC 密钥；主密钥文件的一次读取同时给出信封密钥环、登录键和邮件键（`LoadMaster`），供应商凭证的信封加密与明文脱敏 |
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；`Compress`（只压缩较大的 JSON 响应，见下文「前端文件」）；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
-| `clientip` | 客户端地址的唯一一份读法：连接对端的地址，或 `AXIOM_TRUSTED_PROXIES` 里的代理给的最右一个不受信地址（变量见下文「监听」）；控制台守卫和网关都用它，读不出的头一律不信；`Group` 为支付回调归并映射 IPv4 与 IPv6 /64 的来源额度，登录与网关的分组迁移由 #393 交付 |
+| `clientip` | 客户端地址的唯一一份读法：连接对端的地址，或 `AXIOM_TRUSTED_PROXIES` 里的代理给的最右一个不受信地址（变量见下文「监听」）；控制台守卫和网关都用它，读不出的头一律不信；`Group` 是来源分组的唯一一份实现（映射 IPv4 还原、去 IPv6 zone、IPv6 /64），支付回调、登录尝试和网关的按 IP 限流都用它 |
 | `webui` | 提供嵌入程序的前端三个应用：缓存、预压缩、安全头、单页应用回退，见下文「前端文件」；`cmd/serveweb` 给端到端测试起同样的服务 |
 | `egress` | 共用出站 HTTP 客户端：校验全部目标 IP、固定拨号目标、限制请求期限和响应体读取 |
 | `egresstest` | 仅测试进程可构造的回环放行能力，零值不放行任何地址 |
@@ -21,6 +21,7 @@
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群（`withcluster` 同时起一个 Valkey，见 `kvtest`） |
 | `alloctest` | 测试用的分配测量：父进程重跑本测试二进制，子进程只跑被测函数（堆先结算、GC 关掉、单核），在 stdout 报告单次调用的分配次数和字节数（5 次中最小的，运行时自身的分配只会加到某一次上），测试二进制里其他 goroutine 的分配不计入 |
 | `telemetry` | 指标和链路的提供者，见下文「遥测」 |
+| `telemetrytest` | 测试用的读法：`Buffer` 收集别的 goroutine 写的日志，`Logger()` 把它交给 `slog`；`Metric` 从探针 `/metrics` 的文本里读一条序列（名字和标签），没有这条序列时返回整段文本；`Text` 返回整段文本 |
 | `audit` | 在改动自己的事务里写审计日志，见下文「审计日志」 |
 | `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
@@ -71,7 +72,9 @@
 
 ## 凭证加密
 
-`secret.Load(path)` 在启动阶段加载主密钥：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用 `Load`（否则变量未设定的错误会报两遍），加载失败同样不启动。`serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥、供应商凭证和支付商户配置的封装）、`AXIOM_KEY_HASH_FILE`（API key 的哈希）和 `AXIOM_IDENTITY_KEY_FILE`（发往上游的会话与用户标识的派生，见下），缺了或不合法就不启动；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这三个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
+`secret.LoadMaster(path)` 在启动阶段读一次主密钥文件：调用方用 `env.Required("AXIOM_MASTER_KEY_FILE")` 读出路径，`env.Err()` 为空后才调用（否则变量未设定的错误会报两遍），加载失败同样不启动。返回的 `MasterKeys` 只在读取它的函数内保留明文，只经方法交出结果：`Keyring()` 是信封加密的密钥环，数据库检查随后给它活动写版本；`LoginKey()` 是 HKDF-SHA256 从文件最高已分发版本派生的登录键，标签 `axiom kv login v1`，与数据库选定的信封写版本无关，也不随 API key 的哈希密钥轮换；`DeriveKey(label)` 用同一快照派生邮件键等专用键。`serve` 因此在 `loadConsole` 读一次，`openCheckedDatabase` 用同一个环做 `CheckRing`：启动期间替换文件不会让核对过的版本和登录键、邮件键来自两次不同的读取。`secret.Load(path)` 是只需要密钥环的调用方（如 `axiom keyring`）的简写，内部同样只读一次。
+
+`serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥、供应商凭证和支付商户配置的封装）、`AXIOM_KEY_HASH_FILE`（API key 的哈希）和 `AXIOM_IDENTITY_KEY_FILE`（发往上游的会话与用户标识的派生，见下），缺了或不合法就不启动；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这三个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
 
 文件为 UTF-8 文本，每行 `版本号:base64密钥`，允许 LF、CRLF 和末尾换行，不允许空行、注释、额外空白或 BOM（Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写入 BOM，错误会落在第 1 行的版本号上）。版本号是无前导零的十进制正 uint32；密钥是带填充的标准 base64，解码后恰好 32 字节。至少一行，版本不得重复，不同版本的密钥也不得相同。文件列出可读密钥；数据库 `platform.key_versions` 单独记录唯一的 `active` 写版本，其他版本为 `readable` 或 `retired`，并存 SHA-256 摘要以检查同版本不同材料，绝不存材料。首次启动或首次轮换命令把旧文件的最高版本登记为写版本，以后增加文件行不会激活它；读取按记录的 `KeyVersion` 选择。文件必须是普通文件；Unix 拒绝任何组或其他人权限（建议 0600 或 0400）。Windows 的 Go 文件模式不能表达 NTFS ACL，因此不检查权限位，由部署使用 ACL 限制到服务账户和负责人。
 
@@ -349,7 +352,9 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 
 ## 测试
 
-在 Windows 上，`pgtest` 没有 `DOCKER_HOST` 时先把它设成 Docker Desktop 的命名管道：不设的话 testcontainers 靠 `os.Stat` 管道路径找 Docker，所有管道实例都忙（很多测试二进制同时启动）时这个检查失败，转到无根 Docker 的分支，报“rootless Docker is not supported on Windows”，而 Docker 其实在运行；设了以后它直接拨管道，会等到有空闲实例。`pgtest` 的集群：`just test` 经 `internal/platform/pgtest/cmd/withcluster` 起一个 PostgreSQL 容器，把它的超级用户连接串放进环境变量 `PGTEST_CLUSTER_URL`，再运行 `go test`，结束后删除容器；连接串由 `containertest.Untracked` 读取（每个测试的库由 `pgtest.New` 新建，连接串不是测试输入）；这一次运行里所有测试包共用它，容器数是同时进行的运行数，不是运行数乘包数。没有这个变量时（直接 `go test ./某包`），`pgtest` 自己起一个容器，行为和以前一样。集群准备好时已建好角色，并用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，名字带本测试二进制的随机标识（共用集群里不同二进制不会重名），测试结束时不单个删库（`DROP DATABASE` 会强制做一次检查点，共用集群时会拖住其他包），整个集群在运行结束时连同这些库一起删掉。`pgtest.New(t, 模块…)` 给出还带着这些模块迁移的库：第一次要某组模块时，在集群的 advisory lock 下复制模板、执行迁移，改名为最终名字（按模块名排序拼成），之后的二进制和测试直接复制它；`pg.Migrate` 授予集群范围的角色，不能同时执行，所以建模板在锁里；先用固定的短名字建，做完再改名，建到一半退出的二进制不会留下看起来完整的模板。容器关闭 fsync 以求快，`max_connections` 调到 1000，因为所有二进制的连接池都在同一个集群里。连接串的主机用 `127.0.0.1` 而不是 `localhost`：`localhost` 让 pgx 先试 `::1`，Docker Desktop 的 IPv6 转发在负载下会卡几十秒，握手超时。会改集群范围状态的测试包要有自己的集群：`internal/platform/pg` 的测试创建、修改、改名角色，还数整个服务器的会话，它的 `TestMain` 清掉 `PGTEST_CLUSTER_URL`，自己起容器；其他包的测试不得依赖整个集群的状态，查 `pg_stat_activity` 要加 `datname = current_database()`。CI 的 `go-test` 在 `AXIOM_TEST_CGROUP_PARENT` 非空时设置 `TESTCONTAINERS_RYUK_DISABLED=true`，由作业开始和结束时的标签清理兜底；独立测试二进制留下的容器也由该清理删除。开发机未设这些变量时，容器仍由 testcontainers 的 Ryuk 兜底删除：运行被强杀时，Ryuk 在最后一个客户端断开约 2 分钟后删掉容器，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`；禁用 Ryuk 时不设置这个超时。
+在 Windows 上，`pgtest` 没有 `DOCKER_HOST` 时先把它设成 Docker Desktop 的命名管道：不设的话 testcontainers 靠 `os.Stat` 管道路径找 Docker，所有管道实例都忙（很多测试二进制同时启动）时这个检查失败，转到无根 Docker 的分支，报“rootless Docker is not supported on Windows”，而 Docker 其实在运行；设了以后它直接拨管道，会等到有空闲实例。`pgtest` 的集群：`just test` 经 `internal/platform/pgtest/cmd/withcluster` 起一个 PostgreSQL 容器，把它的超级用户连接串放进环境变量 `PGTEST_CLUSTER_URL`，再运行 `go test`，结束后删除容器；连接串由 `containertest.Untracked` 读取（每个测试的库由 `pgtest.New` 新建，连接串不是测试输入）；这一次运行里所有测试包共用它，容器数是同时进行的运行数，不是运行数乘包数。没有这个变量时（直接 `go test ./某包`），`pgtest` 自己起一个容器，行为和以前一样。集群准备好时已建好角色，并用非超级用户的迁移管理员执行全部迁移，做成模板；每个测试复制一个独立的库，名字带本测试二进制的随机标识（共用集群里不同二进制不会重名），测试结束时不单个删库（`DROP DATABASE` 会强制做一次检查点，共用集群时会拖住其他包），整个集群在运行结束时连同这些库一起删掉。`pgtest.New(t, 模块…)` 给出还带着这些模块迁移的库：第一次要某组模块时，在集群的 advisory lock 下复制模板、执行迁移，改名为最终名字（按模块名排序拼成），之后的二进制和测试直接复制它；`pg.Migrate` 授予集群范围的角色，不能同时执行，所以建模板在锁里；先用固定的短名字建，做完再改名，建到一半退出的二进制不会留下看起来完整的模板。容器关闭 fsync 以求快，`max_connections` 调到 1000，因为所有二进制的连接池都在同一个集群里。连接串的主机用 `127.0.0.1` 而不是 `localhost`：`localhost` 让 pgx 先试 `::1`，Docker Desktop 的 IPv6 转发在负载下会卡几十秒，握手超时。会改集群范围状态的测试包要有自己的集群：`internal/platform/pg` 的测试创建、修改、改名角色，还数整个服务器的会话，它的 `TestMain` 清掉 `PGTEST_CLUSTER_URL`，自己起容器；其他包的测试不得依赖整个集群的状态，查 `pg_stat_activity` 要加 `datname = current_database()`。`withcluster` 在 Ryuk 启用时把自身的 `TESTCONTAINERS_SESSION_ID` 传给子命令，让所有测试包和整次运行的集群共用清理容器；集群的连接一直保持到子命令退出，因此包之间即使长时间没有容器测试，也不会触发 Ryuk 的空闲退出（testcontainers-go v0.44.0 会复用正在退出的 Ryuk，见 [testcontainers-go#3867](https://github.com/testcontainers/testcontainers-go/issues/3867)）。禁用 Ryuk 时不注入 session，避免增加随运行变化的测试缓存输入；启用时，直接启动容器并读取该配置的包会因 session 变化而重新测试，共用集群且不读该配置的包仍可复用缓存。CI 的 `go-test` 在 `AXIOM_TEST_CGROUP_PARENT` 非空时设置 `TESTCONTAINERS_RYUK_DISABLED=true`，由作业开始和结束时的标签清理兜底；独立测试二进制留下的容器也由该清理删除。开发机未设这些变量时，容器仍由 testcontainers 的 Ryuk 兜底删除：运行被强杀时，Ryuk 在最后一个客户端断开约 2 分钟后删掉容器，环境变量可以改这个时间；等这么久是为了绕开 testcontainers-go 的一个竞态，原因写在 `pgtest` 的 `keepReaperAlive`；禁用 Ryuk 时不设置这个超时。
+
+控制台流水导出的满额夹具直接在账户范围事务里调用 CSV 导出器，沿用测试上下文：`TestStatementExportIsCapped` 守住条数上限，`TestStatementExportCutsInsideAPage` 守住跨短页的截断与顺序，不把共享机器完成 10 000 条真实数据库读取的速度当作正确性。HTTP 下载的状态、头部和权限由小夹具验证，请求期限由 `TestRequestsHaveADeadline` 验证，流式取消与写入失败由 `TestStatementCSVStreamsAndCancels` 验证。
 
 ## 决策与理由
 
@@ -405,7 +410,7 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 生成的处理器用 `jsonx.Decode` 读请求体，经 oapi-codegen 的用户模板 | 校验器按精确的名字匹配，encoding/json 不分大小写，两者读到的不是同一个请求；项目的 JSON 策略本来就是区分大小写、跳过未知成员 | 契约里给请求体都写 `additionalProperties: false`：新页面比服务器新时多发一个字段就被拒，与"多发的成员被忽略"的现有约定相反；守卫里自己比对大小写：多一套按 schema 走 JSON 的代码，且与解码器的折叠规则可能不一致 |
 | 路径里的 ID 不在守卫里校验，格式不对与不存在同样 404 | 契约写明如此；防枚举：客户端分不出"不存在"与"格式不对" | 守卫按 schema 的 pattern 返回 400 |
 | 处理器返回错误，守卫和生成代码的出错路径经同一张表回答（状态、`ErrorCode`、不含客户端值的英文说明） | 一个操作的失败只有一种写法；模块新增一种拒绝，加一行 | 每个操作各写各的错误响应：生成的响应类型每个操作各有一套，重复 |
-| 客户端 IP 由 `platform/clientip` 解析，控制台守卫和网关读同一份；accounts 收到的是已经判定的地址 | 谁是受信任的代理是部署的事（`AXIOM_TRUSTED_PROXIES`），模块不该知道部署的网络；网关和控制台各写一份就会在代理后各错一处 | 在 accounts 里读 `X-Forwarded-For`：模块要知道部署的网络；在网关里另写一份：同一行为两处维护 |
+| 客户端 IP 由 `platform/clientip` 解析，来源分组由它的 `Group` 一份给出，控制台守卫、网关、登录尝试和支付回调都用；accounts 收到的是已经判定的地址 | 谁是受信任的代理是部署的事（`AXIOM_TRUSTED_PROXIES`），模块不该知道部署的网络；网关和控制台各写一份就会在代理后各错一处，分组各写一份则会在改粒度时只改一处 | 在 accounts 里读 `X-Forwarded-For`：模块要知道部署的网络；在网关里另写一份：同一行为两处维护；在登录和网关各写掩码：/64 将来改成 /56 时两处不一致 |
 
 ## 运维告警信号
 

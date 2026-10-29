@@ -51,7 +51,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 
 | 步 | 做什么 | 失败 |
 |---|---|---|
-| 1 | 按 IP 的在途上限（`Backpressure.IPCalls`）；不在 accept 时按 IP 限连接数：节点只绑本机、前面是反向代理，accept 时看到的是代理的地址，按它限连接会变成整个节点的连接上限，所以连接数由前置代理或 CDN 限制（[安全的「防攻击」](../../docs/security.md#防攻击)）。IP 取 `platform/clientip` 的 `Addr`：只认 `RemoteAddr`，`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，与控制台守卫是同一份；IPv6 按 /64 计 | 429 |
+| 1 | 按 IP 的在途上限（`Backpressure.IPCalls`）；不在 accept 时按 IP 限连接数：节点只绑本机、前面是反向代理，accept 时看到的是代理的地址，按它限连接会变成整个节点的连接上限，所以连接数由前置代理或 CDN 限制（[安全的「防攻击」](../../docs/security.md#防攻击)）。IP 取 `platform/clientip` 的 `Addr`：只认 `RemoteAddr`，`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，与控制台守卫是同一份；计数的键是 `clientip.Group` 的来源分组，与登录尝试同一份（映射 IPv4 还原、去 IPv6 zone、IPv6 按 /64） | 429 |
 | 2 | 带 `Upgrade` 头的请求 | 400 |
 | 3 | `SiteForHost(r.Host)`，必须是 API 域名；`Authorization: Bearer`（不分大小写）或 `x-api-key` 认 key（有 Bearer 用 Bearer）；未登记的域名、控制台域名、认不出的 key 都是同一个 401，带 `Connection: close`，体从不被读。key 不在缓存里时查库，查库在共享的一次任务里取一个准入类连接名额（`accounts.Config.LookupSlot`，见「并发、背压与共享状态」）；认出只表示 key 存在，能否使用由第 7 步的 `Admit` 判定 | 401；站点快照过旧、库不答、名额等不到 503 |
 | 4 | 账户在途名额，再节点名额（`InFlight.Acquire`） | 429 / 503 |

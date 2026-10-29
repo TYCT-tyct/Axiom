@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-// Group is the source address a rate budget counts: mapped IPv4 is IPv4, and an IPv6 allocation shares its /64.
+// Group is the source address a rate budget counts: mapped IPv4 is IPv4, an IPv6 zone is dropped, and an IPv6
+// allocation shares its /64, the block one customer usually holds. The gateway's per-address limit, the login attempts
+// and payment callbacks count these groups, so a change here is one change for all of them; an invalid address stays
+// invalid, which keeps a request without one from acquiring a budget.
 func Group(ip netip.Addr) netip.Addr {
 	ip = ip.Unmap().WithZone("")
 	if ip.Is6() {
