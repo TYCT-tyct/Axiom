@@ -268,7 +268,7 @@ func principalOf(t *testing.T, s *accounts.Service, issued accounts.Issued) (acc
 		t.Fatal(err)
 	}
 	r.AddCookie(cookie)
-	return s.Authenticate(t.Context(), r)
+	return s.Authenticate(t.Context(), r, client)
 }
 
 // factorSite is a site with one user, a node on it with a clock of its own, and the operator.

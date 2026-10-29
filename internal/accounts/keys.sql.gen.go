@@ -15,7 +15,7 @@ import (
 )
 
 const admitKey = `-- name: AdmitKey :many
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, a.tier_id
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, a.tier_id, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
@@ -25,7 +25,6 @@ WHERE k.id = $1
     AND (k.expires_at IS NULL OR k.expires_at > now())
     AND (k.ip_allow IS NULL OR $3::inet <<= ANY (k.ip_allow))
     AND w.status = 'active' AND w.deleted_at IS NULL
-    AND a.status = 'active'
 `
 
 type AdmitKeyParams struct {
@@ -35,17 +34,19 @@ type AdmitKeyParams struct {
 }
 
 type AdmitKeyRow struct {
-	PresetID    *uuid.UUID
-	Models      []string
-	SpendLimit  *int64
-	LimitReset  *string
-	Budget      *int64
-	BudgetReset *string
-	TierID      uuid.UUID
+	PresetID      *uuid.UUID
+	Models        []string
+	SpendLimit    *int64
+	LimitReset    *string
+	Budget        *int64
+	BudgetReset   *string
+	TierID        uuid.UUID
+	AccountActive bool
 }
 
 // What a call with the key may do, read in the key's account scope in the admission transaction: no row unless the
-// request came to an enabled API domain of the key's site and the key, its workspace and account are all usable.
+// request came to an enabled API domain of the key's site and the key and workspace are usable. The account state
+// comes with the same row so suspension is distinguishable without another query.
 func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]AdmitKeyRow, error) {
 	rows, err := db.Query(ctx, admitKey, arg.KeyID, arg.Domain, arg.ClientIp)
 	if err != nil {
@@ -63,6 +64,7 @@ func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]
 			&i.Budget,
 			&i.BudgetReset,
 			&i.TierID,
+			&i.AccountActive,
 		); err != nil {
 			return nil, err
 		}

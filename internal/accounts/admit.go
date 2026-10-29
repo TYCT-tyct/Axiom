@@ -70,7 +70,7 @@ func limit(amount *int64, reset *string) (int64, string, bool) {
 // Admit opens the call's admission transaction in the key's account scope, checks in one query that the key may be
 // used now (on an enabled API domain of its site; key, workspace and account enabled; key and workspace not deleted;
 // key not expired, a call key, and the client's address allowed), and hands what it read to fn in the same
-// transaction. Anything refused is ErrUnknownKey, alike for every reason. Every node reads the database here, so a
+// transaction. An otherwise usable key on a suspended account is ErrAccountSuspended; other refusals are ErrUnknownKey. Every node reads the database here, so a
 // change committed before the call starts refuses it whatever the nodes have cached. fn's error rolls back.
 func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(tx pg.Tx, a Admission) error) error {
 	if c == (Caller{}) {
@@ -87,6 +87,9 @@ func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(t
 			return ErrUnknownKey
 		}
 		row := rows[0]
+		if !row.AccountActive {
+			return ErrAccountSuspended
+		}
 		return fn(tx, Admission{
 			caller: c, tier: TierID(row.TierID), preset: row.PresetID, models: row.Models,
 			spendLimit: row.SpendLimit, limitReset: row.LimitReset, budget: row.Budget, budgetReset: row.BudgetReset,

@@ -173,8 +173,8 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 | 面 | 权限 | 敏感 |
 |---|---|---|
-| 控制台 | `api_keys.view`、`api_keys.manage`（已有）；`calls.view`、`balance.view`（也守充值的五个操作，见[支付的决策表](../payments/README.md#决策与理由)） | 否 |
-| 管理 | `sites.manage`（已有）、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
+| 控制台 | `api_keys.view`、`api_keys.manage`（已有）；`calls.view`、`balance.view`（余额与订单读取）、`balance.top_up`（报价、创建、取消、补查充值订单；owner/admin/finance 持有） | 否 |
+| 管理 | `sites.manage`、`users.manage`、`platform_grants.manage`、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
 | 管理 | `users.view`、`suppliers.view`、`catalog.view`、`pricing.view` | 否 |
 
 控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。
