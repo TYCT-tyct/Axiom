@@ -1,15 +1,29 @@
 package payments
 
 import (
+	"io/fs"
 	"testing"
+	"testing/fstest"
+
+	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/billing"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
-	w := newTestWorld(t, fakePlugin{create: goodCheckout})
-	if err := w.db.Check(t.Context(), billing.Migrations(), Migrations()); err != nil {
+	historical := []pg.Module{
+		migrationsThrough(t, billing.Migrations(), "00024_payment_audit.sql"),
+		migrationsThrough(t, Migrations(), "00006_reconcile.sql"),
+	}
+	// Module templates are cached by name, so a historical prefix needs an empty database of its own.
+	database := pgtest.New(t)
+	if err := pg.Migrate(t.Context(), database.Superuser, historical...); err != nil {
+		t.Fatal(err)
+	}
+	w := newWorldOn(t, fakePlugin{create: goodCheckout}, database)
+	if err := w.db.Check(t.Context(), historical...); err != nil {
 		t.Fatal("migrated schema rejected at startup", err)
 	}
 	m := w.waiting()
@@ -21,8 +35,11 @@ func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
 	}
 	// Leave all schema steps present, as a failure in the last concurrent build would, without an applied marker.
 	w.exec("DELETE FROM platform.goose_payments WHERE version_id=6", "DELETE FROM platform.goose_billing WHERE version_id=24")
-	if err := pg.Migrate(t.Context(), w.super, billing.Migrations(), Migrations()); err != nil {
+	if err := pg.Migrate(t.Context(), w.super, historical...); err != nil {
 		t.Fatal("resume concurrent builds", err)
+	}
+	if err := pg.Migrate(t.Context(), w.super, billing.Migrations(), Migrations()); err != nil {
+		t.Fatal("upgrade after resuming concurrent builds", err)
 	}
 	if err := w.db.Check(t.Context(), billing.Migrations(), Migrations()); err != nil {
 		t.Fatal("resumed schema rejected at startup", err)
@@ -32,8 +49,8 @@ func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if h.FirstToken == nil || *h.FirstToken != token {
-			t.Fatal("migration reset the existing query lease")
+		if diff := cmp.Diff(new(token), h.FirstToken); diff != "" {
+			t.Fatal("migration reset the existing query lease (-want +got)", diff)
 		}
 		return nil
 	}); err != nil {
@@ -47,6 +64,27 @@ func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
 	if err := w.p.finishQuery(t.Context(), MerchantID(m.ID), token, queryUnused); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func migrationsThrough(t *testing.T, module pg.Module, last string) pg.Module {
+	t.Helper()
+	paths, err := fs.Glob(module.Migrations, "*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := fstest.MapFS{}
+	for _, path := range paths {
+		if path > last {
+			continue
+		}
+		data, err := fs.ReadFile(module.Migrations, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix[path] = &fstest.MapFile{Data: data}
+	}
+	module.Migrations = prefix
+	return module
 }
 
 func TestQueryHealthKeepsSiteScope(t *testing.T) {
