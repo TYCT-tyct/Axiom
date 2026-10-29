@@ -38,10 +38,14 @@ type Shape struct {
 	Counts [NumFeatures]int64
 	run    Feature // Word or Number, while open
 	open   bool    // a run of letters or digits continues into the next character of its feature
+	lead   Feature // the feature of the text's first character, which Merge may join to the run before it
 }
 
 // Add tallies text, continuing the run the last Add left open: a word cut between two pieces is one word.
 func (s *Shape) Add(text []byte) {
+	if s.Bytes == 0 && len(text) > 0 {
+		s.lead = first(text)
+	}
 	s.Bytes += int64(len(text))
 	for i := 0; i < len(text); {
 		c := text[i]
@@ -56,17 +60,33 @@ func (s *Shape) Add(text []byte) {
 	}
 }
 
-// Merge adds the tally of a text that follows s's, as its own: a run open at the end of s is not continued, so a
-// word cut between the two counts twice, which leans an estimate up.
+// Merge adds the tally of a text that follows s's, as Add would have tallied the two texts in one: a run open at the
+// end of s that o's first character continues is one run, not two. A stream tallies each event on its own and merges
+// it, and its deltas cut words wherever the upstream's tokens end, so without the join every cut would count a run
+// the weights, measured on whole texts, already hold.
 func (s *Shape) Merge(o Shape) {
 	if o.Bytes == 0 {
 		return // no text: the run s left open stays open
+	}
+	if s.Bytes == 0 {
+		s.lead = o.lead
+	} else if s.open && s.run == o.lead {
+		s.Counts[s.run]-- // o's first run continues s's, which s already counted
 	}
 	s.Bytes += o.Bytes
 	for f, n := range o.Counts {
 		s.Counts[f] += n
 	}
 	s.run, s.open = o.run, o.open
+}
+
+// first is the feature of text's first character.
+func first(text []byte) Feature {
+	if text[0] < utf8.RuneSelf {
+		return ascii[text[0]]
+	}
+	r, _ := utf8.DecodeRune(text)
+	return classify(r)
 }
 
 // tally counts one character of feature f, a letter or digit only where it opens a run.
@@ -77,7 +97,7 @@ func (s *Shape) tally(f Feature) {
 		}
 		s.run, s.open = f, true
 	} else {
-		s.open = false
+		s.run, s.open = 0, false // run is only read while open: cleared, so equal tallies compare equal
 	}
 	s.Counts[f]++
 }

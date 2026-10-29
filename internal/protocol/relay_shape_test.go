@@ -9,23 +9,24 @@ import (
 	"axiom/internal/protocol"
 )
 
-// TestRelayTextShape: the relay tallies the shape of the decoded text it counts as content, one delta at a time, for a
-// client of the upstream's format and for a Chat client of a converted stream alike, so an output the upstream does
-// not report is estimated from it.
+// TestRelayTextShape: the relay tallies the shape of the decoded text it counts as content, one event at a time, as the
+// whole text would be: deltas cut inside a word or a number, as an upstream's tokens cut them, count no more runs. So
+// it does for a client of the upstream's format and for a Chat client of a converted stream alike, and an output the
+// upstream does not report is estimated from it at the error measured on whole texts.
 func TestRelayTextShape(t *testing.T) {
-	deltas := []string{`Hello, wor`, `ld\n`, `你好`, `🙂 ok`}
+	deltas := []string{`Hello, wor`, `ld\n20`, `26 \u4f60`, `\u597d\ud83d\ude42 ok`}
 	stream := messageStart(`{"input_tokens":3,"output_tokens":1}`) + blockStart
-	var want textshape.Shape
+	whole := ""
 	for _, d := range deltas {
 		stream += `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + d + `"}}` + "\n\n"
-		var one textshape.Shape
 		var text string
 		if err := jsonx.Unmarshal([]byte(`"`+d+`"`), &text); err != nil {
 			t.Fatal(err)
 		}
-		one.Add([]byte(text))
-		want.Merge(one)
+		whole += text
 	}
+	var want textshape.Shape
+	want.Add([]byte(whole))
 	stream += blockStop + messageDelta(`{"output_tokens":9}`) + messageStop
 	for _, client := range []protocol.Format{protocol.Messages, protocol.Chat} {
 		o := options

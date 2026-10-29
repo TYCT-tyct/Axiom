@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/textshape"
@@ -28,7 +29,8 @@ type sample struct {
 }
 
 // TestEstimateError measures the estimates against reported usage, beside the byte rule they replace: Claude's from
-// the shape of the text, and o200k's estimate of a reply from its shape against the vocabulary's own count of it. The
+// the shape of the text, and o200k's estimate of a reply from its shape against the vocabulary's own count of it. A
+// reply's shape is the same whole or streamed one token a delta (streamedShape), so its error is a stream's too. The
 // committed corpus (testdata/usage-samples.jsonl: replies of Claude Opus 5.5 and Sonnet 5.5 written in this project,
 // in English, Chinese and tool calls) holds the median of a reply's text to ±15%; docs/domains/billing.md「用量来源与
 // 暂估」 has the distribution over the session logs as well.
@@ -54,6 +56,9 @@ func TestEstimateError(t *testing.T) {
 			price = 5
 			var shape textshape.Shape
 			shape.Add([]byte(s.Text))
+			if streamed := streamedShape(t, s.Text); streamed != shape {
+				t.Fatalf("%q: tallied as it streams %+v, whole %+v", s.Text, streamed, shape)
+			}
 			n, _ := TextTokens(TokenizerO200k, shape, shape.Bytes)
 			add("o200k/output/vocabulary/"+language(s.Text), n, ceilDiv(shape.Bytes, 3), wholeCount(t, TokenizerO200k, s.Text))
 		}
@@ -69,6 +74,31 @@ func TestEstimateError(t *testing.T) {
 		}
 	}
 	t.Logf("Claude's bill: estimate %+.1f%%, byte rule %+.1f%%", 100*bill.sum(bill.sumEst), 100*bill.sum(bill.sumBytes))
+}
+
+// streamedShape is a reply's tally as the relay makes it: each event tallied on its own and merged, the events cut
+// where OpenAI's streams cut them, one o200k token a delta, joined until a delta ends on a whole character as a JSON
+// string must. Equal to the whole text's, it makes the error measured on whole texts the error of a streamed reply.
+func streamedShape(t *testing.T, text string) textshape.Shape {
+	t.Helper()
+	_, tokens, err := o200k().Encode(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape textshape.Shape
+	delta := ""
+	for _, tok := range tokens {
+		if delta += tok; utf8.ValidString(delta) {
+			var one textshape.Shape
+			one.Add([]byte(delta))
+			shape.Merge(one)
+			delta = ""
+		}
+	}
+	if delta != "" {
+		t.Fatalf("%q: the tokens end inside a character", text)
+	}
+	return shape
 }
 
 // estimate is a sample's estimate as a settlement makes it, a request's text by its count and a reply's by its shape,

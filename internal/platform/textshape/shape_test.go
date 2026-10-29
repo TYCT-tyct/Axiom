@@ -2,6 +2,7 @@ package textshape
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"testing/quick"
 	"unicode/utf8"
@@ -47,22 +48,25 @@ func TestShape(t *testing.T) {
 }
 
 // TestShapeAcrossPieces: a text tallied in pieces cut between characters is tallied as it is whole, a run cut in two
-// included, which is how a stream's deltas arrive.
+// included, which is how a stream's deltas arrive: added one after another, or each tallied on its own and merged,
+// as the relay does per event.
 func TestShapeAcrossPieces(t *testing.T) {
 	t.Parallel()
 	f := func(text string, cuts []uint16) bool {
-		var s Shape
+		var added, merged Shape
 		rest := []byte(text)
 		for _, c := range cuts {
 			n := int(c) % (len(rest) + 1)
 			for n > 0 && n < len(rest) && !utf8.RuneStart(rest[n]) {
 				n--
 			}
-			s.Add(rest[:n])
+			added.Add(rest[:n])
+			merged.Merge(shapeOf(string(rest[:n])))
 			rest = rest[n:]
 		}
-		s.Add(rest)
-		return s == shapeOf(text)
+		added.Add(rest)
+		merged.Merge(shapeOf(string(rest)))
+		return added == shapeOf(text) && merged == shapeOf(text)
 	}
 	if err := quick.Check(f, nil); err != nil {
 		t.Error(err)
@@ -148,18 +152,25 @@ func BenchmarkShapeAdd(b *testing.B) {
 	}
 }
 
-// TestMerge: a tally merged after another adds to it, without continuing the run the first left open; merging no text
-// leaves that run open.
+// TestMerge: a tally merged after another continues the run the first left open where its first character continues
+// it, as a stream's deltas cut a word or a number at the upstream's token boundaries; a run of the other feature, or
+// none left open, is a run of its own; merging no text leaves the run open.
 func TestMerge(t *testing.T) {
 	t.Parallel()
-	s := shapeOf("to")
-	s.Merge(Shape{})
-	s.Add([]byte("ken"))
-	if s.Counts[Word] != 1 {
-		t.Errorf("merging no text broke the run: %+v", s)
-	}
-	s.Merge(shapeOf("s, ok"))
-	if s.Counts[Word] != 3 || s.Bytes != int64(len("tokens, ok")) {
-		t.Errorf("merged %+v", s)
+	for _, pieces := range [][]string{
+		{"to", "", "ken", "s, ok"},
+		{"2026", "2026", "2026"},
+		{"abc", "123", "def"},
+		{"a ", "b"},
+		{"", "x", "y"},
+		{"你", "好🙂", "ok"},
+	} {
+		var s Shape
+		for _, p := range pieces {
+			s.Merge(shapeOf(p))
+		}
+		if whole := shapeOf(strings.Join(pieces, "")); s != whole {
+			t.Errorf("%q merged to %+v, whole %+v", pieces, s, whole)
+		}
 	}
 }
