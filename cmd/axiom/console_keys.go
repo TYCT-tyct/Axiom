@@ -51,8 +51,10 @@ func keysUsed(ctx context.Context, tx pg.Tx, keys []accounts.Key) (map[uuid.UUID
 // keyBody is a key as the contract gives it. limit_remaining is what is left of the limit in its window, not below
 // zero: a key that a late charge pushed past its limit has nothing left.
 func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int64) consoleapi.Key {
+	kind := consoleapi.KeyKind(k.Kind)
 	body := consoleapi.Key{
-		Id: k.ID.TypeID(), Name: k.Name, Prefix: k.Prefix, Last4: k.Last4, WorkspaceId: k.Workspace.TypeID(),
+		Kind: &kind,
+		Id:   k.ID.TypeID(), Name: k.Name, Prefix: k.Prefix, Last4: k.Last4, WorkspaceId: k.Workspace.TypeID(),
 		CreatedAt: k.CreatedAt, ExpiresAt: k.ExpiresAt, Disabled: k.Disabled,
 	}
 	if k.SpendLimit != nil {
@@ -117,11 +119,23 @@ func (c consoleAPI) CreateKey(ctx context.Context, request consoleapi.CreateKeyR
 	if err != nil {
 		return nil, err
 	}
+	kind := accounts.CallKey
+	if request.Body.Kind != nil {
+		kind = string(*request.Body.Kind)
+	}
+	if kind == accounts.ManagementKey {
+		if expires == nil {
+			return nil, invalidField("/expires_at", "management keys require an expiry")
+		}
+		if _, err := c.accounts.Authorize(ctx, cl.principal, accounts.ViewKeys, accounts.AccountTarget(cl.principal.AccountID())); err != nil {
+			return nil, err
+		}
+	}
 	var created accounts.CreatedKey
 	var key accounts.Key
 	err = c.db.Tx(ctx, cl.scope, func(tx pg.Tx) error {
 		if created, err = c.accounts.CreateKey(ctx, tx, audit.User(uuid.UUID(cl.principal.UserID())), accounts.KeyRequest{
-			Site: cl.site.ID, Account: cl.principal.AccountID(), CreatedBy: cl.principal.UserID(), ExpiresAt: expires, KeySettings: settings,
+			Kind: kind, Site: cl.site.ID, Account: cl.principal.AccountID(), CreatedBy: cl.principal.UserID(), ExpiresAt: expires, KeySettings: settings,
 		}); err != nil {
 			return err
 		}
