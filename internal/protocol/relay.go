@@ -65,11 +65,13 @@ type Progress struct {
 	Final                                catalog.ItemSet
 }
 
-// UsageContext is what the request sent upstream tells about its usage: whether it set a 1-hour cache breakpoint,
-// and the service tier it asked for, used when the reply names none (catalog README.md「计费项与用量」).
+// UsageContext carries the upstream request's metering context and the original client's reply contract.
+// Tier supplies the service tier when the reply names none (catalog README.md「计费项与用量」).
 type UsageContext struct {
 	CacheTTL1h bool
-	Tier       catalog.ServiceTier
+	// LegacyFunctions restores the deprecated Chat reply shape for a legacy-only client.
+	LegacyFunctions bool
+	Tier            catalog.ServiceTier
 }
 
 // RelayOptions are the gateway's values for one attempt.
@@ -84,7 +86,8 @@ type RelayOptions struct {
 	Memory *Memory
 	// Aggregate is set for a client that did not ask for a stream: nothing is written until the end, Next gives no
 	// Out, and Finish and Fail return the reply's body, whose HTTP status Status gives (README.md「非流式聚合」).
-	Aggregate bool
+	Aggregate       bool
+	legacyFunctions bool
 }
 
 // Final is what the ending reports: the usage and cost settled and whether that usage was estimated, or, when the
@@ -177,6 +180,7 @@ type Relay struct {
 	agg    aggregator
 	lines  []byte
 	status int
+	legacy *rewriter
 }
 
 // relayFormat is what the relay needs to know of a format.
@@ -213,6 +217,7 @@ var fromChatConversions = [...]relayFormat{
 // NewRelay reads the upstream stream in its own format or converts between Chat and Messages/Responses.
 // Unsupported pairs fail on their first step.
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay {
+	o.legacyFunctions = client == Chat && u.LegacyFunctions
 	r := &Relay{o: o, client: client, held: meterMemory} // within the base allowance, so nothing is drawn yet
 	switch {
 	case client == upstream && int(upstream) < len(relayFormats):
@@ -225,10 +230,7 @@ func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOp
 		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported", upstream, client)
 		return r
 	}
-	r.up = r.format.newUpstream(u, o, r.charge)
-	if o.Aggregate {
-		r.agg = newAggregator(client, r.charge)
-	}
+	r.initReply(u, o)
 	r.meter.tier = u.Tier
 	r.events = sse.NewReader(body, r.format.limit)
 	r.events.ChargeGrowth(r.charge)
@@ -275,12 +277,20 @@ func (r *Relay) event(data []byte) (Step, error) {
 	if data, err = r.edit(&e); err != nil {
 		return Step{}, err
 	}
+	if e.role != skipped && e.role != heartbeat {
+		if data, err = r.legacyReply(data); err != nil {
+			return Step{}, err
+		}
+	}
 	step := Step{Kind: StepBuffered} // what a skipped event takes
 	if e.role != skipped {
 		step, err = r.route(e, data)
 	}
 	if err == nil && e.withheld != nil {
-		_, err = r.withhold("", e.withheld)
+		data, err = r.legacyReply(e.withheld)
+		if err == nil {
+			_, err = r.withhold("", data)
+		}
 	}
 	return step, err
 }
@@ -503,6 +513,7 @@ func (r *Relay) fail(err error) error {
 	r.state, r.err = failed, err
 	r.events, r.withheld, r.ending, r.trailing, r.stop, r.edited, r.lines = nil, nil, nil, nil, nil, nil, nil
 	r.up.dropBuffers()
+	r.legacy = nil
 	r.held = int64(cap(r.out)) + meterMemory
 	if r.agg != nil {
 		r.agg.failed()
@@ -627,4 +638,19 @@ var keepAlives = [...][]byte{
 	Messages:  []byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"),
 	Responses: []byte(": keep-alive\n\n"),
 	Chat:      []byte(": keep-alive\n\n"),
+}
+
+// initReply keeps the response representation tied to the original client's request.
+func (r *Relay) initReply(u UsageContext, o RelayOptions) {
+	if o.legacyFunctions && !o.Aggregate {
+		r.legacy = &rewriter{legacyDelta: &legacyReplyDelta{}}
+		r.legacy.charge = r.charge
+	}
+	r.up = r.format.newUpstream(u, o, r.charge)
+	if o.Aggregate {
+		r.agg = newAggregator(r.client, r.charge)
+		if a, ok := r.agg.(*chatAggregate); ok {
+			a.legacy = o.legacyFunctions
+		}
+	}
 }

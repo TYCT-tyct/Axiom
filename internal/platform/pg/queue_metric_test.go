@@ -5,8 +5,6 @@ import (
 	"log/slog"
 	"maps"
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +15,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 const oldestWaitName = "axiom_pg_queue_oldest_job_wait_seconds"
@@ -43,7 +42,7 @@ func TestTheOldestWaitingJobOfEachQueueIsMeasured(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	waits := readOldestWaits(t, scrape(t, tel))
+	waits := readOldestWaits(t, telemetrytest.Text(t, tel))
 	elapsed := databaseSeconds(t, db) - before // the most the jobs' time and the collection's can lie apart
 	money, archive := waits[pg.QueueMoney], waits[pg.QueueArchive]
 	if got := money - archive; math.Abs(got-80) > 1e-3 {
@@ -70,7 +69,7 @@ func TestACollectionEndsWhileTheDatabaseBlocksAndRecovers(t *testing.T) {
 	t.Parallel()
 	database := pgtest.New(t)
 	_, tel := openQueueMetrics(t, database.App)
-	before := readOldestWaits(t, scrape(t, tel))
+	before := readOldestWaits(t, telemetrytest.Text(t, tel))
 	holder, err := pgx.Connect(t.Context(), database.Superuser)
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +87,7 @@ func TestACollectionEndsWhileTheDatabaseBlocksAndRecovers(t *testing.T) {
 	// A hang is the failure under test: the guard only turns it into a failure sooner than the test binary's timeout,
 	// and no passing run depends on it.
 	collected := make(chan string, 1)
-	go func() { collected <- scrape(t, tel) }()
+	go func() { collected <- telemetrytest.Text(t, tel) }()
 	select {
 	case body := <-collected:
 		if strings.Contains(body, oldestWaitName) {
@@ -101,7 +100,7 @@ func TestACollectionEndsWhileTheDatabaseBlocksAndRecovers(t *testing.T) {
 	if err := lock.Rollback(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if waits := readOldestWaits(t, scrape(t, tel)); !maps.Equal(waits, before) {
+	if waits := readOldestWaits(t, telemetrytest.Text(t, tel)); !maps.Equal(waits, before) {
 		t.Errorf("after the lock lifted the gauge reports %v, want the configured queues %v", waits, before)
 	}
 }
@@ -133,14 +132,6 @@ func databaseSeconds(t *testing.T, db *pg.DB) float64 {
 		t.Fatal(err)
 	}
 	return seconds
-}
-
-// scrape is the process's metrics text.
-func scrape(t *testing.T, tel *telemetry.Telemetry) string {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	tel.MetricsHandler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
-	return rec.Body.String()
 }
 
 // readOldestWaits is the queue's oldest wait gauge by queue, read from the metrics text under the Prometheus name.

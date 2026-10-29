@@ -10,17 +10,13 @@ import (
 // rewrite is Prepare for an endpoint of the request's format.
 func rewrite(r *Request, body []byte, t Target, w Rewrites) ([]byte, error) {
 	f := r.Format
-	indexed := r.positions.ready && r.positions.size == len(body) && !replayCandidate(f, body)
 	rules := rulesFor(f, t)
 	if rules.members == nil {
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
 	}
-	var err error
-	if !indexed {
-		body, err = replayBody(f, body, false)
-		if err != nil {
-			return nil, err
-		}
+	body, indexed, err := rewriteBody(r, body)
+	if err != nil {
+		return nil, err
 	}
 	if f == Responses {
 		w.History, err = replayHistory(w.History)
@@ -54,4 +50,17 @@ func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
 		size += len(item) + 1
 	}
 	return size
+}
+
+// rewriteBody invalidates Inspect's offsets whenever a compatibility rewrite changes the body.
+func rewriteBody(r *Request, body []byte) ([]byte, bool, error) {
+	if r.Format == Chat && r.legacy {
+		body, err := rewriteLegacy(body)
+		return body, false, err
+	}
+	if r.positions.ready && r.positions.size == len(body) && !replayCandidate(r.Format, body) {
+		return body, true, nil
+	}
+	body, err := replayBody(r.Format, body, false)
+	return body, false, err
 }

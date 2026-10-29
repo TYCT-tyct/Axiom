@@ -51,7 +51,7 @@ func TestRunStopsWhenTheHolderIsReaped(t *testing.T) {
 func TestRunCleansUpAtOnce(t *testing.T) {
 	b := newBank(t, 1_000_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	h := b.hold(1000)
-	time.Sleep(5 * time.Millisecond) // past the reservation's deadline
+	b.pastDeadline()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- b.billing.Run(ctx) }()
@@ -101,7 +101,7 @@ func runInBackground(t *testing.T, b *bank) (stop func()) {
 func TestRunBeatsWhileTheCleanupIsStuck(t *testing.T) {
 	b := newBank(t, 1_000_000, 0, Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Millisecond})
 	b.hold(1000)
-	time.Sleep(5 * time.Millisecond) // past the reservation's deadline
+	b.pastDeadline()
 	b.supplies.stuck = make(chan struct{})
 	stop := runInBackground(t, b)
 	for deadline := time.Now().Add(12 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
