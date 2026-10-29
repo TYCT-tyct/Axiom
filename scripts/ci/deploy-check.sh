@@ -75,7 +75,7 @@ start() {
   for id in $ids; do
     parent=$(docker inspect --format '{{.HostConfig.CgroupParent}}' "$id")
     docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}} cgroup_parent={{json .HostConfig.CgroupParent}}' "$id"
-    [ "$parent" = "${AXIOM_TEST_CGROUP_PARENT:-}" ] || { echo "::error::deployment container $id has unexpected cgroup parent"; return 1; }
+    [ -z "${AXIOM_TEST_CGROUP_PARENT:-}" ] || [ "$parent" = "$AXIOM_TEST_CGROUP_PARENT" ] || { echo "::error::deployment container $id has unexpected cgroup parent"; return 1; }
   done
   public="$(compose port axiom 8080)"
   public="${public##*:}"

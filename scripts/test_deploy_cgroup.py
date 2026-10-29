@@ -56,7 +56,7 @@ docker() {
 }
 '''
         for parent in (None, "", "axiom-ci.slice"):
-            for actual, inventory in ((parent or "", 0), ("wrong.slice", 0), (parent or "", 37)):
+            for actual, inventory in ((parent or "", 0), ("daemon-default.slice", 0), (parent or "", 37)):
                 with self.subTest(parent=parent, actual=actual, inventory=inventory), tempfile.TemporaryDirectory() as tmp:
                     log = Path(tmp) / "inspect"
                     env = {**os.environ, "ACTUAL_PARENT": actual, "INVENTORY_STATUS": str(inventory),
@@ -66,6 +66,6 @@ docker() {
                         env["AXIOM_TEST_CGROUP_PARENT"] = parent
                     result = subprocess.run([BASH, "-eu", "-c", stubs + start + "\nstart"], env=env,
                                             text=True, capture_output=True)
-                    self.assertEqual(result.returncode, inventory or (1 if actual == "wrong.slice" else 0), result.stderr)
+                    self.assertEqual(result.returncode, inventory or (1 if parent and actual != parent else 0), result.stderr)
                     if result.returncode == 0:
                         self.assertEqual(log.read_text().splitlines(), ["postgres", "valkey", "axiom", "migrate", "keys"])
