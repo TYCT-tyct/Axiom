@@ -310,6 +310,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/sites/{site_id}/login-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's login brute-force limits
+         * @description The site's own limits and the code defaults; absent members are unavailable on older nodes.
+         */
+        get: operations["getSiteLoginLimits"];
+        /**
+         * Set a site's login brute-force limits
+         * @description Replace only the five login thresholds. Absent values use code defaults. Changes are audited and applied locally at once and on other nodes within 30 seconds. Existing counters are preserved.
+         */
+        put: operations["updateSiteLoginLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/accounts/{account_id}/suspension": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Pause or restore account calls
+         * @description Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
+         */
+        put: operations["setAccountSuspension"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/users/{user_id}/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["schemas"]["UserId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Disable or enable user sign-in
+         * @description Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
+         */
+        put: operations["setUserSignIn"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/users/{user_id}/platform-grants/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["schemas"]["UserId"];
+                role: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Revoke or restore a platform grant
+         * @description Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
+         */
+        put: operations["setPlatformGrant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/users/{user_id}/platform-grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["schemas"]["UserId"];
+            };
+            cookie?: never;
+        };
+        /** Read a user's platform grants */
+        get: operations["listUserPlatformGrants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/tiers": {
         parameters: {
             query?: never;
@@ -916,7 +1028,7 @@ export interface paths {
         put?: never;
         /**
          * Add a pricing rule
-         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). This release prices everyone alike, so the audience can only be `all`: a rule for one account or one tier is refused (422, pointing at `/rule/audience/kind`). It prices a model, an author or everything, by the reference price times a multiplier read as the site's currency (`currency_conversion` `face`) or by a fixed price list: a rule for an endpoint, group, supplier or source type, a `cost_plus` method, or an `exchange` conversion would not be applied, so it is refused too (422, pointing at `/rule/target/kind`, `/rule/method/kind` or `/rule/method/currency_conversion`). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices follow the rules automatically. This release applies no break-even floor (docs/domains/billing.md「定价」): a rule's price is the price. What a rule would do is shown by `previewPricing` first.
+         * @description A rule says what it prices (target), for whom (audience), how (method) and within what limits (constraints). This release prices everyone alike, so the audience can only be `all`: a rule for one account or one tier is refused (422, pointing at `/rule/audience/kind`). It prices a model, an author or everything, by the reference price times a multiplier read as the site's currency (`currency_conversion` `face`) or by a fixed price list: a rule for an endpoint, group, supplier or source type, an `exchange` conversion would not be applied, so it is refused too (422, pointing at `/rule/target/kind`, `/rule/method/kind` or `/rule/method/currency_conversion`). Two rules with the same target and audience cannot both exist (409): change the one there is. Prices are published as immutable versions after cost and change-threshold checks; large moves wait for confirmation. The site floor applies unless an explicit audited exception is published. What a rule would do is shown by `previewPricing` first.
          */
         post: operations["createPricingRule"];
         delete?: never;
@@ -956,9 +1068,60 @@ export interface paths {
         put?: never;
         /**
          * Preview prices and margins
-         * @description What each of up to 100 models would sell for, one row per model and endpoint since endpoints differ in cost, to one account (with its tier and the rules for it alone) or to a user of one tier, with the stored rules, or with `rule` added (or replacing `replaces_rule_id`) when given, and the margin over each endpoint's cost. Nothing is stored. There is no per-model summary: a model's lowest margin is the least of its rows.
+         * @description What each of up to 100 models would sell for, one row per model using the envelope of callable endpoint costs, to one account (with its tier and the rules for it alone) or to a user of one tier, with the stored rules, or with `rule` added (or replacing `replaces_rule_id`) when given, and whether its requested price covers the site floor. The scalar margin is unavailable; compare the per-item price and cost schedules. Nothing is stored. The publication list separately shows the actual served version and pending proposals.
          */
         post: operations["previewPricing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/pricing/publications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Published prices and pending proposals */
+        get: operations["listPricePublications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/pricing/publications/{model_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm a sale price version */
+        post: operations["publishSalePrice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/pricing/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the site publication policy */
+        put: operations["updatePricePolicy"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1238,6 +1401,41 @@ export interface components {
             settings: components["schemas"]["SiteSettings"];
             reason: components["schemas"]["Reason"];
         };
+        /** @description Site overrides. Absence selects code defaults. Refills use the existing IP, email and user windows. */
+        LoginLimits: {
+            ip_attempt_burst?: number;
+            ip_attempts_per_minute?: number;
+            email_sign_in_failures?: number;
+            user_code_failures?: number;
+            challenge_code_attempts?: number;
+        };
+        LoginLimitsView: {
+            limits?: components["schemas"]["LoginLimits"];
+            defaults?: components["schemas"]["LoginLimits"];
+        };
+        LoginLimitsUpdate: {
+            limits: components["schemas"]["LoginLimits"];
+            reason: components["schemas"]["Reason"];
+        };
+        AccountSuspension: {
+            suspended: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        UserSignIn: {
+            disabled: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        PlatformGrantChange: {
+            revoked: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        PlatformGrant: {
+            role?: string;
+            revoked?: boolean;
+        };
+        PlatformGrantList: {
+            data?: components["schemas"]["PlatformGrant"][];
+        };
         /** @description Limits on the call keys of an account: how many it may hold that are not deleted (`max_keys`), and how many it may make in an hour, deleted ones too (`creations_per_hour`). A limit that is absent is not set, and the level above applies: the site's for an account, the default in code for a site. Each is from 1 to 10,000. */
         KeyLimits: {
             max_keys?: number;
@@ -1266,6 +1464,7 @@ export interface components {
             status: "active" | "disabled";
             tier: components["schemas"]["TierRef"];
             mfa_enabled: boolean;
+            sign_in_disabled?: boolean;
             /** Format: date-time */
             created_at: string;
         };
@@ -1275,6 +1474,7 @@ export interface components {
             next_cursor: string | null;
         };
         AccountDetail: {
+            calls_suspended?: boolean;
             id: components["schemas"]["AccountId"];
             site_id: components["schemas"]["SiteId"];
             name: string;
@@ -1770,7 +1970,7 @@ export interface components {
             kind: "account" | "tier" | "all";
             id?: string;
         };
-        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the reference price is already in that currency: this release has no exchange rate, so a reference price in another currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be absent. */
+        /** @description How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio` instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios. `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the reference price is already in that currency: exchange-based reference selection is not implemented, so a reference price in another currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be absent. */
         PricingMethod: {
             /** @enum {string} */
             kind: "cost_plus" | "reference_multiplier" | "fixed";
@@ -1787,6 +1987,43 @@ export interface components {
             min_margin_ratio?: components["schemas"]["Decimal"];
             reference_min_ratio?: components["schemas"]["Decimal"];
             reference_max_ratio?: components["schemas"]["Decimal"];
+        };
+        PricePublicationList: {
+            policy?: components["schemas"]["PricePolicy"];
+            data?: components["schemas"]["PricePublication"][];
+        };
+        PricePolicy: {
+            /** Format: int64 */
+            rev?: number;
+            floor_multiplier?: string;
+            change_ratio?: string;
+            max_increase_ratio?: string;
+        };
+        PricePolicyInput: {
+            /** Format: int64 */
+            rev: number;
+            floor_multiplier: string;
+            change_ratio: string;
+            max_increase_ratio: string;
+            reason: components["schemas"]["Reason"];
+        };
+        PricePublication: {
+            model_id?: components["schemas"]["Uuid"];
+            candidate_id?: components["schemas"]["Uuid"];
+            current_id?: components["schemas"]["Uuid"];
+            /** @enum {string} */
+            status?: "published" | "pending" | "blocked" | "unpriced";
+            requested?: components["schemas"]["PriceSchedule"];
+            schedule?: components["schemas"]["PriceSchedule"];
+            floor?: components["schemas"]["PriceSchedule"];
+            problem?: string;
+        };
+        PricePublishInput: {
+            candidate_id: components["schemas"]["Uuid"];
+            current_id?: components["schemas"]["Uuid"];
+            confirmed: boolean;
+            override_floor: boolean;
+            reason: components["schemas"]["Reason"];
         };
         PricingRuleInput: {
             enabled: boolean;
@@ -2476,6 +2713,197 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSiteLoginLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The limits */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginLimitsView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteLoginLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginLimitsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The limits as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginLimitsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setAccountSuspension: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountSuspension"];
+            };
+        };
+        responses: {
+            /** @description State stored; a repeated state changes nothing */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setUserSignIn: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                user_id: components["schemas"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserSignIn"];
+            };
+        };
+        responses: {
+            /** @description State stored; a repeated state changes nothing */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setPlatformGrant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                user_id: components["schemas"]["UserId"];
+                role: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformGrantChange"];
+            };
+        };
+        responses: {
+            /** @description State stored; a repeated state changes nothing */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listUserPlatformGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: components["schemas"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest grant of each role */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformGrantList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["Failure"];
         };
     };
@@ -3657,6 +4085,102 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPricePublications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current publication state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PricePublicationList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    publishSalePrice: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                model_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PricePublishInput"];
+            };
+        };
+        responses: {
+            /** @description Current publication state */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PricePublicationList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updatePricePolicy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PricePolicyInput"];
+            };
+        };
+        responses: {
+            /** @description Current publication state */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PricePublicationList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];

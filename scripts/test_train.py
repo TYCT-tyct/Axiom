@@ -268,6 +268,27 @@ class Assembly(unittest.TestCase):
         self.assertEqual(repo.assemble(main, [Entry(1, merged), Entry(2, duplicate)]), [])
         self.assertEqual(repo.ejected, [2])
 
+    def test_reserved_high_number_rejects_later_lower_migration(self):
+        high = self.commit({"m/migrations/00004_high.sql": "high"}, self.start)
+        low = self.commit({"m/migrations/00003_late.sql": "late"}, self.start)
+
+        class Repo(train.Train):
+            def fetch(self, entries):
+                for entry in entries:
+                    train.git("update-ref", f"refs/remotes/pr/{entry.number}", entry.sha)
+
+            def eject(self, entry, label, reason):
+                self.ejected.append((entry.number, reason))
+
+        for base, entries in [(self.start, [Entry(1, high), Entry(2, low)]),
+                              (high, [Entry(2, low)])]:
+            with self.subTest(base=base):
+                repo = Repo("x/y", "main")
+                repo.ejected = []
+                repo.assemble(base, entries)
+                self.assertEqual([number for number, _ in repo.ejected], [2])
+                self.assertIn("below an already-applied version", repo.ejected[0][1])
+
 
 class Decisions(unittest.TestCase):
     def test_cut_points_cover_every_prefix_when_the_lane_allows(self):

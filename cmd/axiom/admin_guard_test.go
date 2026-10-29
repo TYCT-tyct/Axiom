@@ -44,6 +44,12 @@ var adminOperations = []adminOperation{
 	{"updateSiteSettings", http.MethodPut, someSite, `{"settings":{},"reason":"r"}`, "sites.manage", true},
 	{"getSiteKeyLimits", http.MethodGet, strings.Replace(someSite, "/settings", "/key-limits", 1), "", "sites.manage", false},
 	{"updateSiteKeyLimits", http.MethodPut, strings.Replace(someSite, "/settings", "/key-limits", 1), `{"limits":{},"reason":"r"}`, "sites.manage", true},
+	{"getSiteLoginLimits", http.MethodGet, strings.Replace(someSite, "/settings", "/login-limits", 1), "", "sites.manage", false},
+	{"updateSiteLoginLimits", http.MethodPut, strings.Replace(someSite, "/settings", "/login-limits", 1), `{"limits":{},"reason":"r"}`, "sites.manage", true},
+	{"setAccountSuspension", http.MethodPut, someAccount + "/suspension", `{"suspended":true,"reason":"r"}`, "users.manage", true},
+	{"setUserSignIn", http.MethodPut, "/users/user_00000000000000000000000000/sign-in", `{"disabled":true,"reason":"r"}`, "users.manage", true},
+	{"setPlatformGrant", http.MethodPut, "/users/user_00000000000000000000000000/platform-grants/admin", `{"revoked":true,"reason":"r"}`, "platform_grants.manage", true},
+	{"listUserPlatformGrants", http.MethodGet, "/users/user_00000000000000000000000000/platform-grants", "", "platform_grants.manage", false},
 	{"listTiers", http.MethodGet, "/tiers", "", "users.view", false},
 	{"listUsers", http.MethodGet, "/users", "", "users.view", false},
 	{"getAccount", http.MethodGet, someAccount, "", "users.view", false},
@@ -76,6 +82,9 @@ var adminOperations = []adminOperation{
 	{"listPricingRules", http.MethodGet, "/pricing/rules", "", "pricing.view", false},
 	{"createPricingRule", http.MethodPost, "/pricing/rules", `{}`, "pricing.manage", true},
 	{"updatePricingRule", http.MethodPut, someRule, `{}`, "pricing.manage", true},
+	{"listPricePublications", http.MethodGet, "/pricing/publications", "", "pricing.view", false},
+	{"publishSalePrice", http.MethodPost, "/pricing/publications/0198c0a8-0000-7000-8000-000000000001", `{}`, "pricing.manage", true},
+	{"updatePricePolicy", http.MethodPut, "/pricing/policy", `{}`, "pricing.manage", true},
 	{"previewPricing", http.MethodPost, "/pricing/previews", `{}`, "pricing.view", false},
 }
 

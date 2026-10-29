@@ -153,6 +153,8 @@ export default {
     },
   },
   calls: {
+    priceVersion: "价格版本 {{version}}",
+    priceVersionUnavailable: "价格版本不可用",
     description: "每次调用的结果、用量和费用。不含对话内容。",
     empty: { title: "还没有调用记录", body: "用 key 调用模型后，记录会出现在这里。" },
     noMatch: "没有符合条件的调用",

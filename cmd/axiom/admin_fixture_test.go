@@ -91,6 +91,9 @@ func startAdminNodeVia(c commandLine, clock *testClock, exit *egress.Client) adm
 	if err != nil {
 		c.t.Fatal(err)
 	}
+	if err := upstreams.Reload(c.t.Context()); err != nil {
+		c.t.Fatal(err)
+	}
 	api := newAdminAPI("test", svc, cat, supplierAdmin, upstreams, c.db, logger)
 	api.keys, api.exit = masterKeys(c.t), exit
 	routes := adminRoutes(api, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)

@@ -14,4 +14,4 @@ FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id;
 SELECT domain, site_id, surface, origin FROM accounts.site_domains WHERE disabled_at IS NULL;
 
 -- name: ListRoles :many
-SELECT id, name, permissions FROM accounts.roles;
+SELECT id, name, (permissions || additional_permissions)::text[] AS permissions FROM accounts.roles;

@@ -155,7 +155,7 @@ func (c *Catalog) load(ctx context.Context) (*Snapshot, time.Time, error) {
 	began := c.now()
 	var snap *Snapshot
 	err := c.db.ReadTx(ctx, c.scope, func(tx pg.Tx) (err error) {
-		snap, err = readSnapshot(ctx, tx)
+		snap, err = ReadSnapshot(ctx, tx)
 		return err
 	})
 	if err != nil {
@@ -164,7 +164,8 @@ func (c *Catalog) load(ctx context.Context) (*Snapshot, time.Time, error) {
 	return snap, began, nil
 }
 
-func readSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
+// ReadSnapshot loads database-owned catalog inputs in the caller's transaction.
+func ReadSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
 	q := New()
 	revision, err := q.GetRevision(ctx, tx)
 	if err != nil {

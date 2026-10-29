@@ -201,12 +201,16 @@ func severity(s string) int {
 }
 
 func applyAlert(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) error {
-	if s.Resolved {
-		_, err := tx.Exec(ctx, `UPDATE observability.alert_events SET resolved_at=$3,state='resolved',pending_recovery=true WHERE kind=$1 AND key=$2 AND resolved_at IS NULL`, s.Kind, s.Key, now)
-		return err
+	create := false
+	var err error
+	if !s.Resolved {
+		create, err = createAlert(ctx, tx, s)
+		if err != nil {
+			return err
+		}
 	}
-	create, err := createAlert(ctx, tx, s)
-	if err != nil {
+	if s.Resolved || s.Kind == "accounts.authentication_failures" && !create {
+		_, err = tx.Exec(ctx, `UPDATE observability.alert_events SET resolved_at=$3,state='resolved',pending_recovery=true WHERE kind=$1 AND key=$2 AND resolved_at IS NULL`, s.Kind, s.Key, now)
 		return err
 	}
 	fields, err := jsonx.MarshalCanonical(s.Fields)
@@ -216,7 +220,33 @@ func applyAlert(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) er
 	_, err = tx.Exec(ctx, `INSERT INTO observability.alert_events(id,kind,key,severity,fields,state,fired_at)
  SELECT $1,$2,$3,$4,$5,'firing',$6 WHERE $7 OR EXISTS(SELECT FROM observability.alert_events WHERE kind=$2 AND key=$3 AND resolved_at IS NULL) ON CONFLICT(kind,key) WHERE resolved_at IS NULL
  DO UPDATE SET severity=EXCLUDED.severity,fields=EXCLUDED.fields,occurrences=observability.alert_events.occurrences+1`, uuid.NewV7(), s.Kind, s.Key, s.Severity, fields, now, create)
-	return err
+	if err != nil || s.Kind != "accounts.authentication_failures" {
+		return err
+	}
+	return evaluateSecuritySample(ctx, tx, s, now)
+}
+
+func evaluateSecuritySample(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) error {
+	// Completed security samples must be evaluated before a later sample replaces
+	// their value or resolves the incident, even when the consumer is catching up.
+	c, err := GetAlertConfiguration(ctx, tx)
+	if err != nil {
+		return err
+	}
+	events, err := readAlertEvents(ctx, tx, `SELECT id,kind,key,severity,fields,occurrences,state,fired_at,resolved_at FROM observability.alert_events WHERE kind=$1 AND key=$2 AND resolved_at IS NULL`, s.Kind, s.Key)
+	if err != nil {
+		return err
+	}
+	channels := map[string]AlertChannel{}
+	for _, ch := range c.Channels {
+		channels[ch.ID] = ch
+	}
+	for _, e := range events {
+		if err := evaluateIncident(ctx, tx, e, c.Rules, channels, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListAlertEvents uses a UUID keyset and caps the page; receipts belong to the returned incidents only.
@@ -263,10 +293,10 @@ func alertReceipts(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUI
 }
 
 func createAlert(ctx context.Context, tx pg.Tx, s alert.Signal) (bool, error) {
-	if s.Kind != "observability.write_lag" {
+	if s.Kind != "observability.write_lag" && s.Kind != "accounts.authentication_failures" {
 		return true, nil
 	}
-	c, err := GetAlertConfiguration(ctx, tx)
+	c, err := readAlertConfiguration(ctx, tx, s.Kind == "accounts.authentication_failures")
 	if err != nil {
 		return false, err
 	}

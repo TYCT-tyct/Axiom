@@ -8,6 +8,8 @@ M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在
 
 ## 不变量
 
+账户暂停在 `accounts.Admit` 原查询读取账户状态，返回 `ErrAccountSuspended`；Chat/Responses 为 OpenRouter 的 `error.code: 403`，Messages 为 `permission_error`，内部分类 `account_suspended`。已通过准入的调用正常结束，用户禁用登录不影响 key；恢复账户无需缓存失效。
+
 | 不变量 | 靠什么保证 |
 |---|---|
 | I1 先落库再花钱：上游请求发出前，已提交的预留覆盖本次尝试当前允许执行的费用上界，加上停止前的最大额外消耗；不可分段的尝试就是整次的最大花费 | 准入提交后才进入尝试；`Bind` 只接受准入时报过价的条目；追加没批准就停读（「计量与追加」） |
@@ -66,7 +68,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 
 **`Run` 与 `Call`**：`Run` 是准入之后的缝（`Executor.Run` 填），拿走 `Call` 的所有权：`Call` 带请求 ID、格式、compact 标记（`/responses/compact` 的调用原样透传）、摘要、体、白名单头、会话键、`accounts.Admission`、`billing.Admitted`、`*billing.Hold`、裁剪后的 `routing.Plan`；结算写进之后（或交给清理之后，见「计量、追加与结算」）调 `Done`，归还账户和节点名额与体的内存，可能晚于 `Run` 返回。`NewHandler` 要求 `Run` 非空，生产路径没有 stub；测试里的 `Run` 只用 `SettleOrphan` 释放预留。
 
-**错误出口**（`writeRefusal`）：状态码、`error_type` 和外壳按[接入的「错误」](../../docs/domains/gateway.md#错误)。Messages 有自己的外壳，Chat 和 Responses 用 Chat 的（`message`、`type`、`param`、`code`，`code` 是错误类型的名字，`metadata.error_type` 同它）；`type` 由状态码决定。`protocol.RenderError` 写同样的外壳（尝试之后的错误、流中途的错误），两个写入函数由 `TestARefusalIsAnErrorOfProtocol` 拴在一起：每种拒绝与 protocol 写的同一个错误逐字相同。`Retry-After` 取整数秒、最多 60。文字不用 new-api 自动停用渠道的措辞（`TestMessagesAvoidAutoDisablePhrases`）。判定：
+**错误出口**（`writeRefusal`）：状态码、`error_type` 和外壳按[接入的「错误」](../../docs/domains/gateway.md#错误)。Messages 有自己的外壳，Chat 和 Responses 用 Chat 的（`message`、`type`、`param`、`code`，`metadata.error_type` 是错误类型的名字，`code` 通常同它；账户暂停调用时 `code` 为数字 `403`）；`type` 由状态码决定。`protocol.RenderError` 写同样的外壳（尝试之后的错误、流中途的错误），两个写入函数由 `TestARefusalIsAnErrorOfProtocol` 拴在一起：除账户暂停外，各种拒绝与 protocol 写的同一个错误逐字相同；暂停外壳由 `TestAccountSuspensionErrorEnvelopes` 单独验证。`Retry-After` 取整数秒、最多 60。文字不用 new-api 自动停用渠道的措辞（`TestMessagesAvoidAutoDisablePhrases`）。判定：
 - 402：`limit_source` 取 `balance`、`workspace_budget`、`key_limit`；会重置的上限（`Insufficient.Transient`）带 `Retry-After: 60`，billing 不报重置时刻。在途预留占满余额时同样报 `balance`：`Insufficient` 还没有区分它的来源，也没有所需金额，待 billing 报告。
 - `NoEndpoint`：理由全是 `NotAllowed`（key 不能用这个模型）回 404 `model_not_found`，不是 403；其余永久的回 404 `no_endpoint` 附理由；暂时的回 503 `no_endpoint`，`Retry-After: 1`，附理由。
 - 没有路由接的路径和方法：`Handler.ServeHTTP` 先用 `mux.Handler` 看有没有路由，没有就让 mux 自己判 404 还是 405（连同 `Allow`），只丢掉它的纯文本响应体，再用 `writeRefusal` 按路径选外壳——`/v1/messages` 与 `/api/v1/messages` 下用 Messages 的，其余用 Chat 的；404 是 `not_found`，405 是 `method_not_allowed`。`refuseUpgrade` 的 405 同样走 `writeRefusal`，`Allow: POST` 保留。
@@ -89,7 +91,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 
 G9 的代码在 `readonly.go`（只读接口）、`count.go`（`count_tokens`）。两套前缀（`/v1`、`/api/v1`）下路由相同：`POST /messages/count_tokens`，`GET /key`、`/credits`、`/generation?id=`、`/dashboard/billing/subscription`、`/dashboard/billing/usage`。行为基线是 OpenRouter 的 `GET /api/v1/key`、`/credits`（OpenRouter《API Reference》，2026-10-16 读取；`generation` 的字段取自同一套文档的惯例，该页当日取不到）、Anthropic 的 `count_tokens` 和 OpenAI 旧版的两个余额接口（new-api 源码，2026-10）。
 
-**认 key 与读数据**：与模型列表同一条路——`IPCalls`、`authenticate`、一个准入类连接名额（不过账户闸，不动钱）、`accounts.Admit`——`fn` 在同一个事务里读（模型列表读 key 的模型集合，这些接口读调用记录、余额、花费）。事务的范围就是 key 的账户，行级安全是全部的访问控制：别的账户的调用记录、余额、花费读不到，`generation` 取不到别人的编号（与不存在的编号同为 404）。停用、过期、删除、管理类 key、IP 白名单、控制台域名都是同一个 401。M1 没有管理 key 的接口，所以 `/credits` 不像 OpenRouter 那样要求管理 key（OpenRouter《Get remaining credits》："Management key required"，2026-10-16），调用 key 就可以读本账户的余额：偏离写在[接入的决策表](../../docs/domains/gateway.md#决策与理由)，M2 有管理 key 时再按其权限收紧。错误用 Chat 的外壳；`count_tokens` 用 Messages 的外壳。成功响应带 `Cache-Control: no-store`。
+**认 key 与读数据**：与模型列表同一条路——`IPCalls`、`authenticate`、一个准入类连接名额（不过账户闸，不动钱）、`accounts.Admit`——`fn` 在同一个事务里读（模型列表读 key 的模型集合，这些接口读调用记录、余额、花费）。事务的范围就是 key 的账户，行级安全是全部的访问控制：别的账户的调用记录、余额、花费读不到，`generation` 取不到别人的编号（与不存在的编号同为 404）。key/工作区停用、过期、删除、管理类 key、IP 白名单、控制台域名都是同一个 401；其余条件有效而账户暂停调用时为 403 `account_suspended`。M1 没有管理 key 的接口，所以 `/credits` 不像 OpenRouter 那样要求管理 key（OpenRouter《Get remaining credits》："Management key required"，2026-10-16），调用 key 就可以读本账户的余额：偏离写在[接入的决策表](../../docs/domains/gateway.md#决策与理由)，M2 有管理 key 时再按其权限收紧。错误用 Chat 的外壳；`count_tokens` 用 Messages 的外壳。成功响应带 `Cache-Control: no-store`。
 
 | 接口 | 内容 | 数据从哪来 |
 |---|---|---|
@@ -428,3 +430,7 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 ## 成本汇率的传递
 
 `RouteDeps.ExchangeRates` 每次构建只读一次，不成功就不发布新快照，最长陈旧时间继续由 routing 的 `MaxStale` 判断。条目携带的值经 `quotables` 进入预留，保留条目的汇率集合持久化；`attempt.result` 把同一条目的冻结汇率附到回执后交给 `Credits`，不读取新的汇率。`AttemptResult.CostKnown` 要求换算已知且最终的 `CostFlag` 为 `complete`：没有用量、用量靠暂估或有项目没有价格的成本是估计值，利润记未知（`NULL`）；缺汇率不会改写原生对账所用的 `CostFlag`。`exchange_test.go` 在 Plan 层证明条目的值副本在多次刷新后不变，及失败刷新不延长有效期；`exchange_costs_test.go` 端到端覆盖首次发送前改汇率，和第一次尝试失败、改汇率、回退到第二条目仍用预留时的汇率。
+
+路由构建的 `RouteDeps.Prices` 接收本次已读取的目录快照、端点与汇率，由 billing 发布或保留安全的价格版本；不会分别再取一次成本。准入把条目的 `Price.Version` 送到 `Quotable.Version`，结算后的调用记录使用冻结预留行返回的版本。
+
+路由构建的价格回调只读 `billing.PublishedPrices`，并检查本节点成本；没有可用的发布版本时，日志指向价格发布列表、发布确认是否超时和本地成本，不再归因为没有规则。

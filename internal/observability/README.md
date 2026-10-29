@@ -87,6 +87,8 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 稀疏筛选读的是命中的条数（命中不多于一页就读完），不是账户或分区的量：没有这两个索引时，稀疏和零命中的筛选读整个月分区（36 万条时 7,059 个缓冲，随表增长，60 到 100 ms），不管有没有命中。
 控制台把 `Cursor` 写成 32 个字符的不透明文本（`String`：调用开始时间的微秒数 8 字节、调用编号 16 字节，base64url 无填充），`ParseCursor` 读回，不是这个长度或字母表就是 `ErrBadCursor`（控制台答 400）。游标只标记一个账户的调用里的一个位置：伪造一个只会得到范围本来就让读的、从别处开始的一页，所以不签名；它也不绑定筛选条件，换了筛选条件续用同一个游标得到的是按新条件、从那个位置往后的一页。
 
+调用记录的可空 `price_version` 是实际收费条目在预留时冻结的售价版本；由 billing 的 `Final.PriceVersion` 传入，随批量记录保存，`ListOwn`、`GetOwn` 与内部追溯原样返回。历史记录和旧节点没写的版本保持未知，控制台显示不可用。
+
 ## 追溯
 
 一条调用、它的每次尝试和它的账本交易只靠一个键相连：请求 ID（调用编号）。它已经是 `call_log.id`、`call_attempt.request_id`、`billing.reservations.request_id` 和 `billing.transactions.request_id`，suppliers 的扣费也按请求 ID 加尝试序号关联（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）。
@@ -130,9 +132,11 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 ## 告警接口与不变量
 
-`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执，`00006` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置；platform `00015` 保存来源消费位置。
+账户的 `accounts.authentication_failures` 是账户后台按站点每分钟至多上报一次的完整分钟峰值，只有达到已配置规则阈值才创建事件。消费每条样本时立即评估该事件并持久安排符合规则的首通知，再处理后续低值或恢复；因此消费积压不会把已完成的攻击窗口覆盖掉。低于所有阈值的样本或零窗口结束事件，实际通知派发仍在消费事务之后。账户负责限速、计数和脱敏，本模块沿用持续时间、静默、重复和通知机制。
 
-比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁只覆盖信号转事件的有界数据库批次；评估、派发和保留清理另开事务，待发回执用 FOR UPDATE SKIP LOCKED 认领，邮件和 Webhook 网络请求在事务之外。Webhook 的 10 秒期限只包出站请求，回执读写使用外层作业期限。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。
+`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执，`00008` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置；platform `00015` 保存来源消费位置。
+
+比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁覆盖信号转事件的有界数据库批次及完整安全样本的即时评估；常规周期评估、派发和保留清理另开事务，待发回执用 FOR UPDATE SKIP LOCKED 认领，邮件和 Webhook 网络请求在事务之外。Webhook 的 10 秒期限只包出站请求，回执读写使用外层作业期限。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。
 
 不变量：同一种类和键只有一个未恢复事件（部分唯一索引）；同一事件、规则和通知序号只有一条回执（唯一约束）；基础设施失败回滚当前阶段，已提交事件仍在待评估索引中；无效信号留在信号表的 quarantined 行供排查，不堵后续信号；发送成功后才写 delivered；恢复通知等之前的发送进入终态；首通知失败则只留 failed 恢复回执；静默只推迟发送，不删除事件；无渠道不丢事件；所有新表 FORCE RLS，仅平台范围可见。评估读配置时持有 FOR SHARE，替换配置的 UPDATE 与其互斥，避免旧规则留下新窗口。管理替换配置以 rev 做乐观锁，拒绝悬空渠道引用。同一种类不能有两条规则指向同一渠道。待发通知保留渠道快照，后续配置替换不改变它的收件人。
 

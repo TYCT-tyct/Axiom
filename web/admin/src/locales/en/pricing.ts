@@ -1,9 +1,27 @@
 export default {
+  publish: {
+    title: "Published prices",
+    model: "Model",
+    version: "Current price version",
+    state: "Publication state",
+    action: "Publish price",
+    unavailable: "Unavailable on this node",
+    published: "Published",
+    pending: "Awaiting confirmation",
+    blocked: "Paused for price review",
+    unpriced: "Cost or price unavailable",
+    intro:
+      "Review the requested and protected price schedules. Type the model ID to confirm this exact proposal. An exception applies only to this cost evidence.",
+    requested: "Price from the rule",
+    safe: "Price with the site floor",
+    override: "Use the requested price even below the site floor (audited exception)",
+    saved: "The price version has been published.",
+  },
   description:
-    "Pricing rules decide what each model sells for, and to whom. Rules apply on their own, and the break-even floor always holds: a price a rule sets below it is raised to it.",
+    "Rules propose model prices. Cost and change checks decide whether to publish them or wait for confirmation. Below-floor exceptions require an explicit audited publication.",
   empty: {
     title: "No pricing rules yet",
-    body: "Without a rule, models sell at their reference price. Before adding one, preview its effect below.",
+    body: "A model without a matching rule is unavailable. Preview a rule before adding it.",
   },
   on: "On",
   off: "Off",
@@ -83,7 +101,7 @@ export default {
   },
   constraints: {
     title: "Limits",
-    hint: "This version does not apply these limits (see #234), so they cannot be filled in. The break-even floor always holds.",
+    hint: "These per-rule limits are not supported and cannot be saved. The separate site floor applies during publication unless an audited exception is confirmed.",
     stored: "This rule carries limits, so the models it matches are not sold now; saving clears the limits.",
     minMargin: "Lowest margin",
     refMin: "At least this multiple of the reference",

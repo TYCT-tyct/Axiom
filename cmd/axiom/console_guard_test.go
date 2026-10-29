@@ -166,7 +166,7 @@ func TestPermissionsAreCheckedEveryRequest(t *testing.T) {
 	f := newConsoleFixture(t)
 	s := f.owner()
 	f.run(`ALTER TABLE accounts.roles NO FORCE ROW LEVEL SECURITY`,
-		`UPDATE accounts.roles SET permissions = '{api_keys.view}' WHERE name = 'owner'`,
+		`UPDATE accounts.roles SET additional_permissions='{}', permissions = '{api_keys.view}' WHERE name = 'owner'`,
 		`ALTER TABLE accounts.roles FORCE ROW LEVEL SECURITY`)
 	f = f.restarted()
 	for _, c := range []struct {

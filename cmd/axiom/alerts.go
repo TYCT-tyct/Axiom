@@ -7,6 +7,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/observability"
 	"axiom/internal/platform/alert"
@@ -48,6 +49,9 @@ func collectAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, si
 	attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	err = db.Tx(attempt, pg.PlatformScope(), func(tx pg.Tx) error {
+		if err := accounts.SampleSecurityAlerts(attempt, tx); err != nil {
+			return err
+		}
 		items, err := billing.UnknownItems(attempt, tx)
 		if err != nil {
 			return err

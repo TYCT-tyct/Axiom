@@ -173,11 +173,11 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 | 面 | 权限 | 敏感 |
 |---|---|---|
-| 控制台 | `api_keys.view`、`api_keys.manage`（已有）；`calls.view`、`balance.view`（也守充值的五个操作，见[支付的决策表](../payments/README.md#决策与理由)） | 否 |
-| 管理 | `sites.manage`（已有）、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
+| 控制台 | `api_keys.view`、`api_keys.manage`（已有）；`calls.view`、`balance.view`（余额与订单读取）、`balance.top_up`（报价、创建、取消、补查充值订单；owner/admin/finance 持有） | 否 |
+| 管理 | `sites.manage`、`users.manage`、`platform_grants.manage`、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
 | 管理 | `users.view`、`suppliers.view`、`catalog.view`、`pricing.view` | 否 |
 
-控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。管理接口的处理器补上了：`accounts` 的站点设置读写、等级、用户和账户的读取、八个管理权限（见 accounts 的「管理接口」）；`billing` 的 `ReadCredit`（赠送批次）；平台的幂等键（`idem`）；`catalog` 的模型和参考价的读取、定价规则；`suppliers` 的管理操作与待映射队列；`billing` 的定价试算（`previewPricing`，经 `billing.SalePrices` 算出售价，`cost` 与 `margin_ratio` 要每端点的成本，随 M2 的路由端点一起加入）。
+控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。管理接口的处理器补上了：`accounts` 的站点设置读写、等级、用户和账户的读取、八个管理权限（见 accounts 的「管理接口」）；`billing` 的 `ReadCredit`（赠送批次）；平台的幂等键（`idem`）；`catalog` 的模型和参考价的读取、定价规则；`suppliers` 的管理操作与待映射队列；`billing` 的定价试算（`previewPricing`，经 `billing.PreviewPrices` 使用生产提案计算，返回规则原价、保本后售价与成本包络；没有唯一毛利率时省略该标量）。
 
 M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）、审核项、声明式适配器、调用详情里的尝试与路由、额度批次与来源、预设、用量统计、站长的站点管理。
 
@@ -421,3 +421,5 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 `alert.LockPosition`/`alert.SavePosition` 在迁移 `00015` 的平台范围位置表中锁定并推进来源的 JSON 位置；来源转出的信号及其位置必须同事务提交，回滚时一并退回。`pgtest.WorkJob` 为跨模块 worker 测试提供 River 官方事务执行器及受控时钟；只有 River 元数据走其原生事务，业务读写仍走 pg.DB 的范围事务。`pg.HasPendingJob` 按种类和参数的识别子集查询 River 的存活任务，供持久回执修复丢失或取消的任务；模块不直接读取 River 的表。
 
 `alert.ClaimSources` 用来源身份在位置表中批量认领；首次启用可只种历史基线，其余认领必须和信号共用事务；`Signal.Source` 与 `Sink.RaiseOnce` 让即时生产者和补报认领同一身份，消费和人工关闭不删除认领。来源位置先于信号锁锁定；认领和写信号统一持有同一把信号锁，批次按身份排序，支持同一事务持久化多个来源身份；不可把只进入本机缓冲当作持久认领。
+
+售价发布任务 `billing.publish_prices` 在 money 队列每 5 秒运行，waiting/running/retryable 期间保持唯一；路由不执行发布事务，只读取最近 30 秒确认过的版本。

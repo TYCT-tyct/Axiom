@@ -149,7 +149,7 @@ func quotables(entries []routing.Entry) []billing.Quotable {
 	for i, e := range entries {
 		q[i] = billing.Quotable{
 			Exchange: e.Exchange,
-			Price:    e.Price.Schedule, Model: e.Limits, MaxOutput: e.MaxOutput, Segmentable: e.Segmentable,
+			Version:  e.Price.Version, Price: e.Price.Schedule, Model: e.Limits, MaxOutput: e.MaxOutput, Segmentable: e.Segmentable,
 			Endpoint: uuid.UUID(e.Endpoint),
 		}
 	}

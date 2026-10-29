@@ -207,6 +207,7 @@ backup-rehearsal:
 # check: an empty list from a failed diff would pass it.
 migrations base:
     changed="$(git diff --name-only --no-renames --diff-filter=a {{ quote(base) }}...HEAD -- '*/migrations/*')" || exit 1; [ -z "$changed" ] || { echo "merged migrations were changed or removed:"; echo "$changed"; exit 1; }
+    {{ python }} {{ quote(justfile_directory() / "scripts/migration_order.py") }} {{ quote(base) }}
 
 vuln:
     {{ tool }} govulncheck ./...

@@ -18,7 +18,7 @@ FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHE
 
 -- name: WriteSiteSettings :exec
 -- Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
--- limits are not the admin API's and are left as they are.
+-- limits belong to their own admin resource and are left as they are.
 INSERT INTO accounts.site_settings (site_id, console_idle_timeout, console_max_age, admin_idle_timeout, admin_max_age,
     new_key_daily_limit)
 VALUES (@site_id, make_interval(secs => sqlc.narg(console_idle_seconds)::bigint),
@@ -94,3 +94,13 @@ FROM accounts.accounts a LEFT JOIN accounts.site_settings t ON t.site_id = a.sit
 -- name: WriteAccountKeyLimits :exec
 UPDATE accounts.accounts SET max_keys = sqlc.narg(max_keys)::integer, key_creations_per_hour = sqlc.narg(creations_per_hour)::integer
 WHERE id = @account_id;
+
+-- name: ReadLoginLimits :one
+SELECT t.ip_attempt_burst, t.ip_attempts_per_minute, t.email_sign_in_failures, t.user_code_failures, t.challenge_code_attempts
+FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id=s.id WHERE s.id = @site_id;
+
+-- name: WriteLoginLimits :exec
+INSERT INTO accounts.site_settings(site_id,ip_attempt_burst,ip_attempts_per_minute,email_sign_in_failures,user_code_failures,challenge_code_attempts)
+VALUES(@site_id,sqlc.narg(ip_attempt_burst),sqlc.narg(ip_attempts_per_minute),sqlc.narg(email_sign_in_failures),sqlc.narg(user_code_failures),sqlc.narg(challenge_code_attempts))
+ON CONFLICT(site_id) DO UPDATE SET ip_attempt_burst=excluded.ip_attempt_burst,ip_attempts_per_minute=excluded.ip_attempts_per_minute,
+ email_sign_in_failures=excluded.email_sign_in_failures,user_code_failures=excluded.user_code_failures,challenge_code_attempts=excluded.challenge_code_attempts;

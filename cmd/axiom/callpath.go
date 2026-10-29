@@ -4,10 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"net/netip"
-	"slices"
 	"sync/atomic"
 	"time"
 	"uuid"
+
+	"axiom/internal/platform"
 
 	"go.opentelemetry.io/otel/metric"
 
@@ -122,7 +123,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		return callNode{}, err
 	}
 	var routable atomic.Bool
-	routes := routeDeps(d, router, upstreams, health, &routable, salePrices(d.db, d.accounts, d.catalog, d.logger), models)
+	routes := routeDeps(d, router, upstreams, health, &routable, salePrices(d.db, d.accounts), models)
 	snap, list, count, err := routes.Build(ctx)
 	if err != nil {
 		return callNode{}, err
@@ -172,7 +173,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and
 // models collects the model list published with it.
 func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, health *quality.Monitor, routable *atomic.Bool,
-	prices func(context.Context) (map[catalog.ModelID]billing.Sold, error), models *gateway.ModelList,
+	prices func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error), models *gateway.ModelList,
 ) *gateway.RouteDeps {
 	return &gateway.RouteDeps{
 		ExchangeRates: exchangeRates(d),
@@ -281,43 +282,51 @@ func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Log
 	}
 }
 
-// salePrices is each model's sale price in the main site's currency: the site's pricing rules applied to the catalog's
-// reference prices (billing.SalePrices). M1 prices the node's models at the main site's, because the currency a call is
-// charged in is the site's and a routing snapshot is one per node, not one per site; a secondary site with its own
-// currency and rules is G8's. Only the rules that price everyone count, for the same reason: a rule for one account or
-// tier cannot price a model for the whole node.
-func salePrices(db *pg.DB, sites *accounts.Service, cat *catalog.Catalog, logger *slog.Logger) func(context.Context) (map[catalog.ModelID]billing.Sold, error) {
-	return func(ctx context.Context) (map[catalog.ModelID]billing.Sold, error) {
-		// A node deployed before its site exists prices nothing, so no model is routable: that is a normal state of a
-		// fresh deployment, and the site is set up through `axiom site` on a node that is already serving.
+// salePrices only reads published heads. Local cost checks may withhold a model, but never change shared publication
+// state: nodes with different adapters or key versions must not publish different evidence.
+func salePrices(db *pg.DB, sites *accounts.Service) func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
+	return func(ctx context.Context, snap *catalog.Snapshot, endpoints []suppliers.Routable, rates []platform.ExchangeRate) (sold map[catalog.ModelID]billing.Sold, err error) {
 		site, ok := sites.MainSite()
 		if !ok {
 			return nil, nil
 		}
-		snap, err := cat.Current()
-		if err != nil {
-			return nil, err
-		}
-		var rules []billing.Rule
 		err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
-			rules, err = billing.Rules(ctx, tx, uuid.UUID(site.ID))
+			sold, err = billing.PublishedPrices(ctx, tx, uuid.UUID(site.ID))
 			return err
 		})
 		if err != nil {
 			return nil, err
 		}
-		rules = slices.DeleteFunc(rules, func(r billing.Rule) bool { return !r.Audience.Prices(accounts.AccountID{}, accounts.TierID{}) })
-		listed := make([]catalog.ModelID, 0)
-		for m := range snap.Models() {
-			listed = append(listed, m.ID)
+		costs := priceCosts(endpoints, rates, site.Currency)
+		byModel := map[catalog.ModelID][]billing.PriceCost{}
+		for _, c := range costs {
+			byModel[c.Model] = append(byModel[c.Model], c)
 		}
-		sold, unpriced := billing.SalePrices(rules, snap, listed, site.Currency)
-		for _, err := range unpriced {
-			// A rule that cannot price the model it was set for leaves it unsold rather than emptying the site's prices.
-			logger.Warn("a model has no sale price; it is not sold", "err", err)
+		for id, local := range byModel {
+			model, ok := snap.Model(id)
+			if price, priced := sold[id]; !ok || !priced || !price.AllowsCosts(model, local) {
+				delete(sold, id)
+			}
 		}
 		return sold, nil
 	}
+}
+
+func priceCosts(endpoints []suppliers.Routable, rates []platform.ExchangeRate, currency platform.Currency) []billing.PriceCost {
+	costs := make([]billing.PriceCost, 0, len(endpoints))
+	for _, e := range endpoints {
+		var rate platform.ExchangeRate
+		if e.Currency != currency {
+			for _, r := range rates {
+				if _, ok := r.Between(e.Currency, currency); ok {
+					rate = r
+					break
+				}
+			}
+		}
+		costs = append(costs, billing.PriceCost{Endpoint: e.ID, Model: catalog.ModelID(e.Model), Schedule: e.Schedule, UnitValue: e.UnitValue.String(), UnitValueID: e.UnitValueID, Currency: e.Currency, CurrencyCode: e.Currency.String(), Exchange: rate})
+	}
+	return costs
 }
 
 // unknownItems is what billing met in a usage report that nothing prices. Its model takes no new requests until an

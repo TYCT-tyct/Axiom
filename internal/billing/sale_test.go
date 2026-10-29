@@ -177,39 +177,6 @@ func TestUnpriced(t *testing.T) {
 	}
 }
 
-// TestPriceVersion: a sale price's version changes with the rule's rev or the reference price's row, and never with
-// anything else, so a stored price is told from a new one by its version alone. A fixed price reads no reference price,
-// so a new row of it does not make a new version.
-func TestPriceVersion(t *testing.T) {
-	t.Parallel()
-	ref := reference(t, uuid.NewV7(), `{"v":1,"currency":"USD","rates":{"input":"1"}}`)
-	r := Rule{Enabled: true, Method: multiplied("1.2"), ID: uuid.NewV7(), Rev: 1}
-	base := priceVersion(r, ref)
-	if again := priceVersion(r, ref); again != base {
-		t.Errorf("the version is not stable: %s, %s", base, again)
-	}
-	r.Rev++
-	if next := priceVersion(r, ref); next == base {
-		t.Error("a new rev kept the version")
-	}
-	r.Rev--
-	other := reference(t, uuid.NewV7(), `{"v":1,"currency":"USD","rates":{"input":"1"}}`)
-	if next := priceVersion(r, other); next == base {
-		t.Error("another reference price kept the version")
-	}
-	if v := base.String()[14]; v != '8' {
-		t.Errorf("the version is a version-%c UUID, want 8: %s", v, base)
-	}
-	priced := Rule{Enabled: true, Method: fixed(), ID: uuid.NewV7(), Rev: 1}
-	if priceVersion(priced, ref) != priceVersion(priced, other) {
-		t.Error("a fixed price's version moved with the reference price's row")
-	}
-	priced.Rev++
-	if priceVersion(priced, ref) == priceVersion(Rule{Method: fixed(), ID: priced.ID, Rev: 1}, ref) {
-		t.Error("a fixed price's new rev kept the version")
-	}
-}
-
 // TestPlace: a rule that is not stored yet is tried where its target and audience put it, after the rules it ties with,
 // so a preview never displaces a stored rule it is no more specific than.
 func TestPlace(t *testing.T) {

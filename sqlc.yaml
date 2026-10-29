@@ -124,6 +124,10 @@ sql:
         emit_methods_with_db_argument: true
         omit_unused_structs: true
         overrides:
+          # Route UUID arrays use pgx's typed codec instead of reflective slice wrapping.
+          - {column: "billing.reservations.models", go_type: {import: "github.com/jackc/pgx/v5/pgtype", type: "FlatArray[uuid.UUID]"}}
+          - {column: "billing.reservations.endpoints", go_type: {import: "github.com/jackc/pgx/v5/pgtype", type: "FlatArray[uuid.UUID]"}}
+          - {column: "billing.reservations.price_versions", go_type: {import: "github.com/jackc/pgx/v5/pgtype", type: "FlatArray[uuid.UUID]"}}
           - {db_type: uuid, go_type: {import: uuid, type: UUID}}
           - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
           - {db_type: timestamptz, go_type: {import: time, type: Time}}

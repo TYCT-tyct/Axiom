@@ -344,6 +344,10 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 			return nil, nil, err
 		}
 	}
+	if err := registerSalePrices(db, queue); err != nil {
+		return nil, nil, err
+	}
+
 	// The ledger checks itself once a day, on whichever node leads the queue (the check needs only the database, so it
 	// is registered here and not with the call path, which starts after the queue).
 	if err := billing.RegisterReconcile(billing.ReconcileConfig{
