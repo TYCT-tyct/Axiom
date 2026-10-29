@@ -94,6 +94,8 @@ func TestPrepareMessagesCap(t *testing.T) {
 		want       string
 	}{
 		{"none", `{"model":"m","messages":[]}`, 7000, false, `{"model":"u","messages":[],"max_tokens":7000}`},
+		{"minimum default", `{"model":"m","messages":[]}`, 1, false, `{"model":"u","messages":[],"max_tokens":1}`},
+		{"unknown negative zero", `{"model":"m","messages":[],"max_tokens":-0}`, 0, false, `{"model":"u","messages":[],"max_tokens":-0}`},
 		{"the largest", `{"model":"m","messages":[]}`, math.MaxInt64, false, `{"model":"u","messages":[],"max_tokens":9223372036854775807}`},
 		{"null", `{"model":"m","max_tokens":null,"messages":[]}`, 7000, false, `{"model":"u","max_tokens":7000,"messages":[]}`},
 		{"zero", `{"model":"m","max_tokens":0,"messages":[]}`, 7000, false, `{"model":"u","max_tokens":7000,"messages":[]}`},

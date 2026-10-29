@@ -10,6 +10,7 @@ import (
 
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 // accountWithCredit is another account with a batch of 10 that has expired.
@@ -244,10 +245,10 @@ func TestTheWriteOffHeldBackIsCounted(t *testing.T) {
 	if written, err := e.expire(t.Context(), b.admitted.Account); err != nil || written != 100 {
 		t.Fatalf("expire = %d, %v; want the 100 the reservation left", written, err)
 	}
-	if got := scrape(t, tel, "axiom_billing_expire_deferred_total"); got != "1" {
+	if got := telemetrytest.Metric(t, tel, "axiom_billing_expire_deferred_total"); got != "1" {
 		t.Errorf("the scrape counts %s deferred batches, want 1", got)
 	}
-	if got := scrape(t, tel, "axiom_billing_expire_deferred_amount_total"); got != "200" {
+	if got := telemetrytest.Metric(t, tel, "axiom_billing_expire_deferred_amount_total"); got != "200" {
 		t.Errorf("the scrape counts %s deferred credit, want the 200 the reservation left", got)
 	}
 	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 150, 0, 0))); err != nil {
@@ -256,10 +257,10 @@ func TestTheWriteOffHeldBackIsCounted(t *testing.T) {
 	if written, err := e.expire(t.Context(), b.admitted.Account); err != nil || written != 50 {
 		t.Fatalf("expire after the settlement = %d, %v; want the 50 it held back", written, err)
 	}
-	if got := scrape(t, tel, "axiom_billing_expire_deferred_total"); got != "1" {
+	if got := telemetrytest.Metric(t, tel, "axiom_billing_expire_deferred_total"); got != "1" {
 		t.Errorf("the scrape counts %s deferred batches after the rest was written off, want still the 1", got)
 	}
-	if got := scrape(t, tel, "axiom_billing_expire_deferred_amount_total"); got != "200" {
+	if got := telemetrytest.Metric(t, tel, "axiom_billing_expire_deferred_amount_total"); got != "200" {
 		t.Errorf("the scrape counts %s deferred credit after the rest was written off, want still the 200", got)
 	}
 }
@@ -314,10 +315,10 @@ func expireOnce(t *testing.T, e *expirer, want int) {
 // checkDeferred checks what the scrape reads of the counters of the credit a run left for a later one.
 func checkDeferred(t *testing.T, tel *telemetry.Telemetry, batches, amount int64) {
 	t.Helper()
-	if got, want := scrape(t, tel, "axiom_billing_expire_deferred_total"), fmt.Sprint(batches); got != want {
+	if got, want := telemetrytest.Metric(t, tel, "axiom_billing_expire_deferred_total"), fmt.Sprint(batches); got != want {
 		t.Errorf("the scrape counts %s deferred batches, want %s", got, want)
 	}
-	if got, want := scrape(t, tel, "axiom_billing_expire_deferred_amount_total"), fmt.Sprint(amount); got != want {
+	if got, want := telemetrytest.Metric(t, tel, "axiom_billing_expire_deferred_amount_total"), fmt.Sprint(amount); got != want {
 		t.Errorf("the scrape counts %s deferred credit, want %s", got, want)
 	}
 }

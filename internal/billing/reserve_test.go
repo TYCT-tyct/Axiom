@@ -17,7 +17,7 @@ import (
 // bank is a test database with one account whose balance and floor the test chooses, and a billing whose holder is
 // alive. Its quotes are made exact: input at one billionth a token, no output, so TextBytes is the amount in billionths.
 type bank struct {
-	t        *testing.T
+	t        testing.TB
 	db       pgtest.Database
 	app      *pg.DB
 	platform pg.Scope
@@ -35,7 +35,7 @@ func exactQuote(tb testing.TB) Quotable {
 	return Quotable{Price: mustSchedule(tb, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0"}}`), Model: Model{ContextLength: 1e12}}
 }
 
-func newBank(t *testing.T, balance, floor int64, config Config) *bank {
+func newBank(t testing.TB, balance, floor int64, config Config) *bank {
 	t.Helper()
 	db := pgtest.New(t, Migrations())
 	app, err := pg.Open(t.Context(), db.App)
@@ -172,7 +172,7 @@ func (b *bank) storm(a Admitted, source Source) (total int64, refused []int64) {
 }
 
 // refusedBy reports whether err is a refusal by source, and fails the test for any other error.
-func refusedBy(t *testing.T, err error, source Source) bool {
+func refusedBy(t testing.TB, err error, source Source) bool {
 	var short *Insufficient
 	if err != nil && (!errors.As(err, &short) || short.Source != source) {
 		t.Errorf("Reserve: %v", err)

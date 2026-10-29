@@ -286,7 +286,7 @@ SELECT coalesce(max(seq), 0)::bigint FROM billing.transactions WHERE account_id 
 `
 
 // Fix the unlocked replay's upper bound before reading batches. Every transaction of an account takes its seq under that
-// account's balance row lock (InsertLockedTransaction), in the order the lock is taken and released at commit, so by the
+// account's balance row lock (PostLedger), in the order the lock is taken and released at commit, so by the
 // time this reads B every transaction of the account with a seq at or below B has committed, and the batches read after
 // it see theirs. A credit committed later gets a higher seq, and so stays out of this replay: the next one loads it
 // along with its batch (#361). Rows from before the sequence cannot arrive later, so they need no bound of their own.
