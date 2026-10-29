@@ -89,6 +89,8 @@ type CallRecord struct {
 	EndUser                          EndUserHash
 	IP                               netip.Addr
 	ClientApp, SessionID, SubagentID string
+	AppReferer, AppTitle             string // the client's own name for its application, from the attribution headers
+	AppCategories                    string // comma-separated marketplace categories, at most two
 	Class                            string // request class, such as chat or embeddings
 	Language                         string
 	UsedTools, HasImage, HasFile     bool
@@ -120,6 +122,9 @@ type row struct {
 	ClientApp       string           `json:"client_app"`
 	SessionID       string           `json:"session_id"`
 	SubagentID      string           `json:"subagent_id"`
+	AppReferer      string           `json:"app_referer"`
+	AppTitle        string           `json:"app_title"`
+	AppCategories   string           `json:"app_categories"`
 	RequestClass    string           `json:"request_class"`
 	Language        string           `json:"language"`
 	UsedTools       bool             `json:"used_tools"`
@@ -203,6 +208,7 @@ func newCallRow(r CallRecord) (row, error) {
 	}
 	if err := checkText(map[string]string{
 		"client app": r.ClientApp, "session": r.SessionID, "subagent": r.SubagentID,
+		"app referer": r.AppReferer, "app title": r.AppTitle, "app categories": r.AppCategories,
 		"class": r.Class, "language": r.Language, "model": r.Model,
 		"finish reason": r.FinishReason, "error kind": r.ErrorKind, "consent version": r.ConsentVersion,
 	}); err != nil {
@@ -227,6 +233,7 @@ func newCallRow(r CallRecord) (row, error) {
 		ID: r.ID.String(), At: r.At, SiteID: r.Site.String(), AccountID: r.Account.String(),
 		WorkspaceID: r.Workspace.String(), KeyID: r.Key.String(), EndUserHash: endUser, IP: r.IP.String(),
 		ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID, RequestClass: r.Class,
+		AppReferer: r.AppReferer, AppTitle: r.AppTitle, AppCategories: r.AppCategories,
 		Language: r.Language, UsedTools: r.UsedTools, HasImage: r.HasImage, HasFile: r.HasFile, Model: r.Model,
 		EndpointID: endpoint, SourceClass: sourceClass, Egress: egress, AttemptCount: len(r.Attempts), Route: route,
 		PriceVersion: r.PriceVersion, Usage: usage, ServiceTier: r.ServiceTier.String(), PriceNano: r.PriceNano,

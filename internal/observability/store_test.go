@@ -386,7 +386,9 @@ func TestCallLogCoversTheWriteTimeFields(t *testing.T) {
 		fields []string
 	}{
 		{"who", calls, []string{"site_id", "account_id", "workspace_id", "key_id", "end_user_hash", "ip"}},
-		{"with what", calls, []string{"client_app", "session_id", "subagent_id", "request_class"}},
+		{"with what", calls, []string{
+			"client_app", "app_referer", "app_title", "app_categories", "session_id", "subagent_id", "request_class",
+		}},
 		{"where", calls, []string{"model", "endpoint_id", "source_class", "egress", "route"}},
 		{"result", calls, []string{
 			"usage", "price_nano", "cost_nano", "latency_ms", "first_token_ms", "finish_reason", "error_kind", "free_of_charge",

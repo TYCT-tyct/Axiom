@@ -158,6 +158,9 @@ func readEvent(name, data string) event {
 // leaf; what is left over is an event only one stream has.
 func compareEvents(newAPI, axiom []event) []difference {
 	var out []difference
+	if theirs, ours, differ := eventOrder(newAPI, axiom); differ {
+		out = append(out, difference{"sse.order", "sse.order", theirs, ours})
+	}
 	if theirs, ours := stopIndexes(newAPI), stopIndexes(axiom); theirs != ours {
 		out = append(out, difference{"sse[content_block_stop].indexes", "sse[content_block_stop].indexes", theirs, ours})
 	}
@@ -167,6 +170,144 @@ func compareEvents(newAPI, axiom []event) []difference {
 		i, j = m[0]+1, m[1]+1
 	}
 	return append(out, compareGap(newAPI[i:], axiom[j:], i, j)...)
+}
+
+// eventOrder is the event names one stream sent, grouped by what they are about: each Responses output item or Messages
+// content block keeps its own sequence, and events without an index keep theirs, apart from the opening and closing
+// events, which must stay on their side of the stream. The pairing above matches by name, so two differently named
+// events swapped within one group still pair with the right partners and compare equal leaf by leaf; sequence numbers
+// travel with their events and cannot catch that either. Comparing the groups catches it, while groups let independent
+// items and blocks close in a different order, as the protocols allow.
+//
+// A name whose count differs between the streams is left out of the comparison: it is an event one stream has and the
+// other does not, which the pairing already reports. A name both streams have the same number of times must appear in
+// the same groups and the same order within each.
+func eventOrder(newAPI, axiom []event) (theirs, ours string, differ bool) {
+	t, a := orderOf(newAPI), orderOf(axiom)
+	keys := make([]string, 0, len(t.groups)+len(a.groups))
+	for key := range t.groups {
+		keys = append(keys, key)
+	}
+	for key := range a.groups {
+		if _, ok := t.groups[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	tParts, aParts := make([]string, 0, len(keys)), make([]string, 0, len(keys))
+	for _, key := range keys {
+		tParts = append(tParts, key+"="+strings.Join(commonOrder(t.groups[key], t.counts, a.counts), ","))
+		aParts = append(aParts, key+"="+strings.Join(commonOrder(a.groups[key], t.counts, a.counts), ","))
+	}
+	theirs = strings.Join(tParts, ";") + "|" + placementOrder(t, a.counts)
+	ours = strings.Join(aParts, ";") + "|" + placementOrder(a, t.counts)
+	return theirs, ours, theirs != ours
+}
+
+// orderView is one stream's groups of event names, how many times each name occurs in the whole stream, and whether
+// each opening or closing event is on its side of the indexed events.
+type orderView struct {
+	groups map[string][]string
+	counts map[string]int
+	placed map[string]map[bool]int
+}
+
+// orderOf groups a stream's events. Indexed events go by their index. A stream's opening events must be before its
+// first indexed event and its closing events after its last; any other unindexed event is kept in one sequence, so a
+// content block that closes later does not move it. Ping is a keepalive and carries no order.
+func orderOf(events []event) orderView {
+	index := make([]string, len(events))
+	indexed := make([]bool, len(events))
+	first, last := -1, -1
+	for i, e := range events {
+		if idx, ok := eventIndex(e); ok {
+			index[i], indexed[i] = idx, true
+			if first < 0 {
+				first = i
+			}
+			last = i
+		}
+	}
+	o := orderView{groups: map[string][]string{}, counts: map[string]int{}, placed: map[string]map[bool]int{}}
+	for i, e := range events {
+		if e.name == "ping" {
+			continue
+		}
+		group := "u"
+		if indexed[i] {
+			group = "i:" + index[i]
+		}
+		o.groups[group] = append(o.groups[group], e.name)
+		o.counts[e.name]++
+		switch {
+		case isOpeningEvent(e.name):
+			o.place(e.name, first >= 0 && i < first)
+		case isClosingEvent(e.name):
+			o.place(e.name, last >= 0 && i > last)
+		}
+	}
+	return o
+}
+
+func (o orderView) place(name string, inPlace bool) {
+	if o.placed[name] == nil {
+		o.placed[name] = map[bool]int{}
+	}
+	o.placed[name][inPlace]++
+}
+
+// placementOrder is where the opening and closing events both streams have the same number of times sit: before the
+// first indexed event and after the last, or not. A stream that moved its lifecycle around its items is caught here
+// even when its unindexed event order is unchanged.
+func placementOrder(v orderView, other map[string]int) string {
+	parts := make([]string, 0, len(v.placed))
+	for name, places := range v.placed {
+		if v.counts[name] == other[name] {
+			parts = append(parts, name+":"+strconv.Itoa(places[true])+"/"+strconv.Itoa(places[false]))
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+// commonOrder keeps the names both streams have the same number of times, in this stream's order.
+func commonOrder(names []string, theirs, ours map[string]int) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if theirs[name] == ours[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// eventIndex is the item or block an event belongs to: output_index for Responses, index for Messages.
+func eventIndex(e event) (string, bool) {
+	doc, ok := e.doc.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	member := "index"
+	if strings.HasPrefix(e.name, "response.") {
+		member = "output_index"
+	}
+	v, ok := doc[member]
+	if !ok {
+		return "", false
+	}
+	return canonical(v), true
+}
+
+func isOpeningEvent(name string) bool {
+	return name == "message_start" || name == "response.created" || name == "response.in_progress"
+}
+
+func isClosingEvent(name string) bool {
+	switch name {
+	case "message_stop", "response.completed", "response.failed", "response.incomplete":
+		return true
+	}
+	return false
 }
 
 // A moved stop may be paired as two unmatched events, but a lost or duplicated block must still fail the comparison.

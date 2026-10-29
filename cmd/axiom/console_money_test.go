@@ -135,19 +135,24 @@ func TestKeyLimitRemaining(t *testing.T) {
 	}
 }
 
-// newCall is a complete call record of account at at.
+// newCall is a complete call record of account at at. Claude Code names its application through the attribution
+// headers; the other clients name none.
 func newCall(account uuid.UUID, at time.Time, model, app string) observability.CallRecord {
 	currency, err := platform.ParseCurrency("USD")
 	if err != nil {
 		panic(err)
 	}
-	return observability.CallRecord{
+	c := observability.CallRecord{
 		ID: uuid.NewV7(), At: at, Site: uuid.NewV7(), Account: account, Workspace: uuid.NewV7(), Key: uuid.NewV7(),
 		IP: netip.MustParseAddr("203.0.113.7"), ClientApp: app, Class: "chat", Model: model, Route: []byte(`{}`),
 		Usage: map[catalog.Item]int64{catalog.ItemInput: 120, catalog.ItemOutput: 30}, ServiceTier: catalog.ServiceTierStandard,
 		PriceNano: 5_000_000, CostNano: 3_000_000, Currency: currency, Latency: 1200 * time.Millisecond, FirstToken: 300 * time.Millisecond,
 		FinishReason: "stop", ConsentVersion: "2026-10",
 	}
+	if app == "claude-code" {
+		c.AppReferer, c.AppTitle, c.AppCategories = "https://app.example.com", "Example Chat", "cli-agent,cloud-agent"
+	}
+	return c
 }
 
 // record writes calls through the recorder and waits for them to be stored.
@@ -208,6 +213,7 @@ func TestCallsPage(t *testing.T) {
 	}
 	want := consoleapi.Call{
 		Id: c.recent.ID.String(), At: c.recent.At, Model: "gpt-5", ClientApp: "claude-code", RequestClass: "chat", Ip: "203.0.113.7",
+		AppReferer: optionalText("https://app.example.com"), AppTitle: optionalText("Example Chat"), AppCategories: optionalText("cli-agent,cloud-agent"),
 		Usage: map[string]int64{"input": 120, "output": 30}, Price: consoleapi.Money{Amount: "5000000", Currency: "USD"},
 		LatencyMs: 1200, FirstTokenMs: 300, FinishReason: "stop", ServiceTier: "standard", KeyId: page.Data[0].KeyId, WorkspaceId: page.Data[0].WorkspaceId,
 	}
@@ -260,10 +266,27 @@ func TestGetCall(t *testing.T) {
 	if one.Id != c.mid.ID.String() || one.Model != "claude-opus" {
 		t.Errorf("getCall: %s", rec.Body)
 	}
+	if one.AppReferer == nil || *one.AppReferer != "https://app.example.com" ||
+		one.AppTitle == nil || *one.AppTitle != "Example Chat" ||
+		one.AppCategories == nil || *one.AppCategories != "cli-agent,cloud-agent" {
+		t.Errorf("getCall has no application attribution: %+v", one)
+	}
 	for _, path := range []string{
 		"/calls/" + c.stranger.ID.String(), "/calls/" + uuid.NewV7().String(), "/calls/not-an-id", "/calls/" + strings.ToUpper(c.mid.ID.String()),
 	} {
 		expect(t, "GET "+path, c.f.do(http.MethodGet, path, "", as(c.s)), http.StatusNotFound, consoleapi.ErrorCodeNotFound)
+	}
+}
+
+// TestCallWithoutAttribution: a call whose client named no application has no attribution in the contract, which a page
+// shows as unavailable rather than as an empty value.
+func TestCallWithoutAttribution(t *testing.T) {
+	t.Parallel()
+	c := newCallsFixture(t)
+	var got consoleapi.Call
+	decode(t, c.f.do(http.MethodGet, "/calls/"+c.old.ID.String(), "", as(c.s)), &got)
+	if got.AppReferer != nil || got.AppTitle != nil || got.AppCategories != nil {
+		t.Errorf("a call whose client named no application attributes one: %+v", got)
 	}
 }
 
