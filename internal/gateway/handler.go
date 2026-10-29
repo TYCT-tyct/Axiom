@@ -381,6 +381,10 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
+	body, req, err = h.compress(c, body, req, snap, models)
+	if err != nil {
+		return err
+	}
 	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
 	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, body)
 	c.rate = h.precheck(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller),
