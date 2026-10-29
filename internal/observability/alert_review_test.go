@@ -311,3 +311,30 @@ func TestSecuritySpikeUsesConfiguredThresholdAndRecovers(t *testing.T) {
 		t.Fatal("not recovered", got)
 	}
 }
+
+func TestSecurityCompletedSamplesSurviveConsumerDelay(t *testing.T) {
+	for _, next := range []string{"1", "0"} {
+		t.Run(next, func(t *testing.T) {
+			db := openDB(t)
+			now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+			alertTx(t, db, func(tx pg.Tx) error {
+				c, err := GetAlertConfiguration(t.Context(), tx)
+				if err != nil {
+					return err
+				}
+				c.Channels = []AlertChannel{{ID: "ops", Email: "ops@example.com"}}
+				c.Rules = []AlertRule{{ID: "auth", Kind: "accounts.authentication_failures", MinimumSeverity: "warning", Threshold: 20, Channel: "ops"}}
+				return SetAlertConfiguration(t.Context(), tx, c)
+			})
+			for _, value := range []string{"30", next} {
+				alertTx(t, db, func(tx pg.Tx) error {
+					return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "accounts.authentication_failures", Key: "site", Severity: "warning", Fields: map[string]string{"value": value}, Resolved: value == "0"})
+				})
+			}
+			got := alertCycle(t, db, now)
+			if len(got) != 1 || got[0].State != "resolved" || len(got[0].Receipts) != 1 || got[0].Receipts[0].Sequence != 0 {
+				t.Fatal("completed spike overwritten before notification", got)
+			}
+		})
+	}
+}

@@ -84,7 +84,7 @@ func (s *Service) verifyMFA(ctx context.Context, r *http.Request, code string, f
 		if err != nil {
 			return err
 		}
-		return (securityAttempt{site: d.site, user: found.UserID, account: found.AccountID, session: found.SessionID, surface: d.surface}).record(ctx, tx, "security.mfa")
+		return (securityAttempt{site: d.site, user: found.UserID, account: found.AccountID, session: issued.session, surface: d.surface}).record(ctx, tx, "security.mfa")
 	})
 	if err == nil && wrong {
 		return Issued{}, ErrBadCode

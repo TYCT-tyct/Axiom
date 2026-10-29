@@ -120,8 +120,8 @@ func (*Service) SetPlatformGrantRevoked(ctx context.Context, tx pg.Tx, p Princip
 		}
 	} else {
 		var subset bool
-		if err := tx.QueryRow(ctx, `SELECT r.permissions <@ ARRAY(
-            SELECT DISTINCT unnest(held.permissions)
+		if err := tx.QueryRow(ctx, `SELECT (r.permissions || r.additional_permissions) <@ ARRAY(
+            SELECT DISTINCT unnest(held.permissions || held.additional_permissions)
             FROM accounts.platform_grants g JOIN accounts.roles held ON held.id=g.role_id
             WHERE g.user_id=$1 AND g.revoked_at IS NULL)
             FROM accounts.roles r WHERE r.id=$2`, uuid.UUID(p.user), roleID).Scan(&subset); err != nil {

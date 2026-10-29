@@ -2,7 +2,6 @@ package accounts_test
 
 import (
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,7 +11,7 @@ import (
 )
 
 // TestSnapshot: a registered host names its site and surface whatever its case; an unknown one is refused; a snapshot
-// not reloaded for 90 seconds refuses everything until a reload succeeds; an undeclared role permission stops the start.
+// not reloaded for 90 seconds refuses everything until a reload succeeds; an undeclared role permission is ignored during rolling upgrades.
 func TestSnapshot(t *testing.T) {
 	t.Parallel()
 	db, database := open(t)
@@ -41,7 +40,7 @@ func TestSnapshot(t *testing.T) {
 	if err := pgtest.Run(t.Context(), database.Superuser, "UPDATE accounts.roles SET permissions = '{keys.create}' WHERE name = 'owner'"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Reload(t.Context()); err == nil || !strings.Contains(err.Error(), `role owner holds "keys.create"`) {
+	if err := s.Reload(t.Context()); err != nil {
 		t.Errorf("a role with an unknown permission: %v", err)
 	}
 }

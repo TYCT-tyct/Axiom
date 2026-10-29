@@ -31,7 +31,7 @@
 | `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
 | `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值。另有可空的 `max_keys_per_account`、`key_creations_per_hour`（站点的 key 限额，各 1 到 1 万，由 `/key-limits` 读改，不在站点设置的整体替换里） | 站点 | 全部参数列 |
 | `tiers` | `site_id`、`name` | `UNIQUE (site_id, id)` | 站点 | `name` |
-| `roles` | `name`、`permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`（M1 只经迁移） |
+| `roles` | `name`、`permissions text[]`、`additional_permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`、`additional_permissions`（M1 只经迁移） |
 | `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id`，可空的 `max_keys`、`key_creations_per_hour`（账户自己的 key 限额，各 1 到 1 万，空表示用站点的） | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)`，它同时保证 `site_id` 是一个站点 | 账户 | `name`、`status`、`tier_id`、`max_keys`、`key_creations_per_hour` |
 | `workspaces` | `site_id`、`account_id`、`name`、`status`、`is_default`、`budget`、`budget_reset`、`deleted_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；部分唯一 `(account_id) WHERE is_default`；默认工作区的 `deleted_at` 为空；`budget_reset` 取 daily / weekly / monthly，空表示不重置的总额，有它就要有 `budget` | 账户 | `name`、`status`、`budget`、`budget_reset`、`deleted_at` |
 | `users` | `site_id`、`account_id`（个人账户）、`account_kind`（恒为 `personal` 的生成列）、`email`（规范化）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_ciphertext`、`totp_nonce`、`totp_wrapped_dek`、`totp_key_version`（`secret.Sealed` 的四个字段，同为空或同不为空）、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, account_id, id)`；`UNIQUE (account_id)`、`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`：个人账户只属于这一个用户，不能绑到企业账户上，两个登录身份不会共用一个账户范围；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、四个 `totp_` 密文列、`totp_last_step`、`mfa_enabled_at` |
@@ -40,7 +40,7 @@
 | `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management，M1 只开放 call）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；`limit_reset` 同工作区的 `budget_reset` | 账户 | `name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
-| `security_failures` | `site_id`、`started_at`、`failures` | 每站点一行，一分钟窗口，原子增加/重置；非零窗口按 started_at 的部分索引供到期批次认领；只含计数 | 站点 | 仅平台可写计数与起点 |
+| `security_failures` | `site_id`、`started_at`、`failures`、`completed_peak`、`sampled_at`、`reported` | 每站点一行；当前 UTC 分钟计数、尚未采样完整窗口峰值、最后采样时间及是否待恢复；部分索引只含有计数或待恢复的站点 | 站点 | 仅平台可写计数与采样状态 |
 | `password_reset_requests` | `site_id`、`email_hash`、`id`、可空 `email`、`domain`、`language`、`expires_at` | 主键 `(site_id, email_hash)`；唯一 `id`；摘要 32 字节；语言 zh/en | 站点 | `id`、`email`、`domain`、`language`、`expires_at`（重发替换，处理后清除邮箱） |
 | `password_reset_tokens` | `id`、`site_id`、`account_id`、`user_id`、`token_hash`、`factor_version`、`expires_at`、`used_at` | `token_hash` 唯一、32 字节；`(site_id, account_id, user_id) → users` | 账户 | `used_at`（终态） |
 
@@ -81,7 +81,7 @@
 
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
 - `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。账户目标的范围是 `pg.AccountScopeIn(会话签发的站点, 账户)`：除了账户自己的行，还读这个站点的公开配置和共享计数（策略把站点列与 `platform.home_site()` 的 InitPlan 参数比较，如充值页的付款方式、每 IP 的下单计数），别的站点的读不到；站点来自会话，不来自账户能写的行。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
-- 权限在代码里声明名字和是否敏感；角色快照里有代码不认识的权限就不启动。敏感权限要求本次会话 `level = mfa`。
+- 权限在代码里声明名字和是否敏感；角色快照合并 permissions 与 additional_permissions，警告并忽略代码不认识的名字，避免新版本权限使旧节点快照过期。迁移 00010 将新增权限放进 additional_permissions，保留不支持忽略未知名字的旧节点所读 permissions 原样；`TestRolePermissionsRollingCompatibility` 同时核对旧投影及迁移权限的声明，防止拼写错误。敏感权限要求本次会话 `level = mfa`。
 - M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`、`balance.top_up`，以及敏感的 `sites.manage`、`platform_grants.manage`、`users.manage`，和管理接口的八个（见下文「管理接口」）。默认角色由迁移 00003 写入，00005、00006、00010 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。
 
@@ -148,9 +148,9 @@
 
 ## 注册、登录与会话
 
-安全事件写 `platform.audit_log`：`security.registration`、`security.sign_in`、`security.mfa` 与成功状态同事务；失败的 `security.registration_failed`、`security.sign_in_failed`、`security.authentication_failed`、`security.mfa_failed`、`security.factor_failed`、`security.password_failed` 在独立、有 5 秒期限的事务提交。只含固定分类、监听面、用户/会话/租户 ID 和上下文请求 ID，未知用户记站点和系统操作者；缺 Cookie 的普通未登录访问不记失败。邮箱、IP、User-Agent、密码、邀请码、TOTP/恢复码及令牌不进条目。审计写失败使操作失败，不伪报成功。
+安全事件写 `platform.audit_log`：`security.registration`、`security.sign_in`、`security.mfa` 与成功状态同事务，MFA 的 session_id 指向新签发的会话。猜凭证的失败（bad_credentials、bad_code、invalid_invite）以 `security.registration_failed`、`security.sign_in_failed`、`security.mfa_failed`、`security.factor_failed`、`security.password_failed` 在独立、有 5 秒期限的事务提交，只含固定分类、监听面、用户/会话/租户 ID 和上下文请求 ID。缺 Cookie、已过期/吊销/待验证会话、表单校验及限流拒绝不记安全审计、不计攻击。token 哈希查不到会话时，按调用者传入的可信客户端 IP 经过既有登录预算后只计数、不写逐请求审计；代理解析仍由 cmd 负责。邮箱、IP、User-Agent、密码、邀请码、TOTP/恢复码及令牌不进条目；存储失败返回错误，不伪报成功。
 
-失败事务原子累加每站点 `security_failures` 的一分钟窗口并持久化 `accounts.authentication_failures` 信号；计数行锁保证多节点不会丢计数。`SampleSecurityAlerts` 在平台后台每分钟用 `FOR UPDATE SKIP LOCKED` 最多认领 100 个已过期且非零窗口，清零并发一次恢复；与失败更新同样先锁计数、再持久化信号，防止旧恢复覆盖新失败。平台告警配置中添加 kind 为 `accounts.authentication_failures` 的规则（例如 threshold=20、duration_seconds=0，表示每站点一分钟 20 次失败），配置通知渠道；未配置时只保留审计和信号，不发通知。阈值、持续时间、静默与重复由平台告警规则配置，只有匹配阈值的安全信号才创建告警事件；不自动封号。审计条目的保留沿用平台策略，计数每站点一行，无个人信息，不随事件数增长。
+失败事务只原子更新每站点 `security_failures`，不调用平台信号入口。窗口按数据库 UTC 分钟对齐；跨分钟时将已完成次数并入 completed_peak 再重置当前计数，后台迟到也不丢峰值。`SampleSecurityAlerts` 每轮以 `FOR UPDATE SKIP LOCKED` 最多认领 100 个站点，按 sampled_at 限制每站点一分钟最多一条 `accounts.authentication_failures` 信号，取未采样完整窗口的最大值，保留尚未结束的窗口。非零上报后的下一个完整零窗口才发一次恢复；后台停顿期间多个窗口只保留峰值，不保留无限历史。消费逐条评估完整样本再处理下一个，保证积压中的高值后接低值或恢复也不会漏首通知。配置 kind 对应的阈值与渠道（如 threshold=20、duration_seconds=0，表示一个完整 UTC 分钟至少 20 次猜凭证失败）；未配置则不发通知，不自动封号。审计沿用平台保留策略；计数每站点一行，信号增长按采样频率而非失败频率。
 
 | 能力 | M1 | M2 |
 |---|---|---|
@@ -199,7 +199,7 @@
 - 超限返回 `*TooManyAttempts`（`errors.Is(err, ErrTooManyAttempts)` 仍成立），带 `RetryAfter`：桶再放过一次尝试的时间，控制台接口据此写 `Retry-After`（至少 1 秒）。开启 TOTP 也算：错的验证码或密码用掉用户的验证码失败次数（与登录的验证共用），"已经开启"这类没在猜什么的拒绝不算。
 - 三种计数都是令牌桶：每段时间 N 次，即每过「段时间 ÷ N」回一次。桶只存"再次装满的时刻"（GCRA），装满的桶等于没有，到时过期。次数用完返回 `ErrTooManyAttempts`（429），等待即恢复。
 - **多节点**（M2）：配了 Valkey 时，桶在 Valkey 里，由 `take`、`give` 两个脚本按同样的算法原子地扣和退，键里的邮箱和 IP 只以 HMAC 出现（从主密钥派生的专用密钥；IP 先经 `clientip.Group` 归组——`Unmap`、去 zone、IPv6 取 /64，与网关的按 IP 限流同一份，进程内的桶同样按此计）；建任何登录键之前先过进程内的粗 IP 桶；`give` 只退到 `take` 扣的那一边；Valkey 不可用时退回进程内的桶，突发除以节点数 N（至少 1）、间隔乘 N，不拒绝登录。脚本、键、兜底和恢复见 [platform/kv 的设计](../platform/kv/README.md)。
-- 失败次数**先扣后退**：尝试之前就扣一次，成功才退回，所以同时到达的尝试也超不过上限；扣不到的尝试不再读取凭证或计算哈希；安全拒绝仍单独写审计与失败计数。IP 的次数不退。
+- 失败次数**先扣后退**：尝试之前就扣一次，成功才退回，所以同时到达的尝试也超不过上限；扣不到的尝试不再读取凭证或计算哈希；已限流拒绝不再写安全审计或失败计数。IP 的次数不退。
 - 每次 argon2id 计算（登录、未知邮箱的假哈希、注册、改密码、邮件重置、开启 TOTP 时核对密码）都要先拿到并发名额，用 `golang.org/x/sync/semaphore`。
 
 ## 命令行

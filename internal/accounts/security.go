@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 	"uuid"
@@ -47,14 +49,7 @@ func (s *Service) failed(ctx context.Context, a securityAttempt, action string, 
 	}{
 		{ErrBadCredentials, "bad_credentials"},
 		{ErrBadCode, "bad_code"},
-		{ErrBadOrigin, "bad_origin"},
-		{ErrNoSession, "invalid_session"},
 		{ErrInvalidInvite, "invalid_invite"},
-		{ErrEmailTaken, "email_taken"},
-		{ErrBadEmail, "bad_email"},
-		{ErrWeakPassword, "weak_password"},
-		{ErrBadSecret, "bad_secret"},
-		{ErrTooManyAttempts, "rate_limited"},
 	} {
 		if errors.Is(*result, c.err) {
 			a.outcome = c.outcome
@@ -67,41 +62,49 @@ func (s *Service) failed(ctx context.Context, a securityAttempt, action string, 
 	record, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	err := s.db.Tx(record, s.platform, func(tx pg.Tx) error {
-		if err := a.record(record, tx, action); err != nil {
-			return err
+		if a.outcome != "unknown_session" {
+			if err := a.record(record, tx, action); err != nil {
+				return err
+			}
 		}
-		var count int64
-		err := tx.QueryRow(record, `INSERT INTO accounts.security_failures(site_id,failures) VALUES($1,1)
-ON CONFLICT(site_id) DO UPDATE SET failures=CASE WHEN accounts.security_failures.started_at<=statement_timestamp()-interval '1 minute' THEN 1 ELSE accounts.security_failures.failures+1 END,
-started_at=CASE WHEN accounts.security_failures.started_at<=statement_timestamp()-interval '1 minute' THEN statement_timestamp() ELSE accounts.security_failures.started_at END RETURNING failures`, uuid.UUID(a.site)).Scan(&count)
-		if err != nil {
-			return err
-		}
-		return alert.Persist(record, tx, uuid.NewV7(), alert.Signal{Kind: "accounts.authentication_failures", Key: a.site.TypeID(), Severity: "warning", Fields: map[string]string{"value": strconv.FormatInt(count, 10)}})
+		_, err := tx.Exec(record, `INSERT INTO accounts.security_failures(site_id,failures) VALUES($1,1)
+ON CONFLICT(site_id) DO UPDATE SET
+completed_peak=CASE WHEN accounts.security_failures.started_at<date_trunc('minute',statement_timestamp())
+ THEN greatest(accounts.security_failures.completed_peak,accounts.security_failures.failures) ELSE accounts.security_failures.completed_peak END,
+failures=CASE WHEN accounts.security_failures.started_at<date_trunc('minute',statement_timestamp()) THEN 1 ELSE accounts.security_failures.failures+1 END,
+started_at=greatest(accounts.security_failures.started_at,date_trunc('minute',statement_timestamp()))`, uuid.UUID(a.site))
+		return err
 	})
 	if err != nil {
 		*result = fmt.Errorf("record authentication security event: %w", err)
 	}
 }
 
-// SampleSecurityAlerts resolves at most 100 expired failure windows in the background.
-// Taking the counter's lock before the signal lock orders recovery before the next failure.
+// SampleSecurityAlerts emits at most one completed-window sample per site per minute.
+// Peaks survive delayed sampling; row locks serialize replicas without a per-failure signal.
 func SampleSecurityAlerts(ctx context.Context, tx pg.Tx) error {
-	rows, err := tx.Query(ctx, `WITH expired AS (
-        SELECT site_id FROM accounts.security_failures
-        WHERE failures>0 AND started_at<=statement_timestamp()-interval '1 minute'
+	rows, err := tx.Query(ctx, `WITH ready AS (
+        SELECT site_id, greatest(completed_peak, CASE WHEN started_at<date_trunc('minute',statement_timestamp()) THEN failures ELSE 0 END) AS value
+        FROM accounts.security_failures
+        WHERE (failures>0 OR completed_peak>0 OR reported)
+          AND sampled_at<=statement_timestamp()-interval '1 minute'
+          AND (completed_peak>0 OR started_at<date_trunc('minute',statement_timestamp()))
         ORDER BY started_at,site_id FOR UPDATE SKIP LOCKED LIMIT 100)
-        UPDATE accounts.security_failures f SET failures=0 FROM expired e WHERE f.site_id=e.site_id RETURNING f.site_id`)
+        UPDATE accounts.security_failures f SET completed_peak=0,
+        failures=CASE WHEN f.started_at<date_trunc('minute',statement_timestamp()) THEN 0 ELSE f.failures END,
+        started_at=date_trunc('minute',statement_timestamp()),sampled_at=statement_timestamp(),reported=ready.value>0
+        FROM ready WHERE f.site_id=ready.site_id RETURNING f.site_id,ready.value`)
 	if err != nil {
-		return fmt.Errorf("expire security failure windows: %w", err)
+		return fmt.Errorf("sample security failure windows: %w", err)
 	}
-	var sites []uuid.UUID
+	var signals []alert.Signal
 	for rows.Next() {
 		var site uuid.UUID
-		if err = rows.Scan(&site); err != nil {
+		var count int64
+		if err = rows.Scan(&site, &count); err != nil {
 			break
 		}
-		sites = append(sites, site)
+		signals = append(signals, alert.Signal{Kind: "accounts.authentication_failures", Key: SiteID(site).TypeID(), Severity: "warning", Fields: map[string]string{"value": strconv.FormatInt(count, 10)}, Resolved: count == 0})
 	}
 	rows.Close()
 	if err != nil {
@@ -110,8 +113,8 @@ func SampleSecurityAlerts(ctx context.Context, tx pg.Tx) error {
 	if err = rows.Err(); err != nil {
 		return err
 	}
-	for _, site := range sites {
-		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "accounts.authentication_failures", Key: SiteID(site).TypeID(), Severity: "warning", Resolved: true}); err != nil {
+	for _, signal := range signals {
+		if err := alert.Persist(ctx, tx, uuid.NewV7(), signal); err != nil {
 			return err
 		}
 	}
@@ -120,4 +123,20 @@ func SampleSecurityAlerts(ctx context.Context, tx pg.Tx) error {
 
 func (p Principal) securityAttempt() securityAttempt {
 	return securityAttempt{site: p.site, user: uuid.UUID(p.user), account: uuid.UUID(p.account), session: uuid.UUID(p.session), surface: p.surface}
+}
+
+// Unknown cookies have no authenticated actor and no IP gate before lookup. Budget
+// their counter writes without auditing every anonymous request or counting expiry.
+func (s *Service) failedSession(ctx context.Context, r *http.Request, d domain, ip netip.Addr, result error) error {
+	if !errors.Is(result, ErrNoSession) || d.site == (SiteID{}) {
+		return result
+	}
+	if _, err := r.Cookie(cookieName(d.origin)); err != nil {
+		return result
+	}
+	if err := s.fromIP(ctx, d.site, ip); err != nil {
+		return result
+	}
+	s.failed(ctx, securityAttempt{site: d.site, surface: d.surface, outcome: "unknown_session"}, "security.authentication_failed", &result)
+	return result
 }

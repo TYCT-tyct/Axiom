@@ -408,7 +408,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"site_domains":  {"disabled_at"},
 		"site_settings": {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour"},
 		"tiers":         {"name"},
-		"roles":         {"permissions"},
+		"roles":         {"permissions", "additional_permissions"},
 		"accounts":      {"name", "status", "tier_id", "max_keys", "key_creations_per_hour"},
 		"workspaces":    {"name", "status", "budget", "budget_reset", "deleted_at"},
 		"users": {
@@ -420,7 +420,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"api_keys":                {"name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
 		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
 		"recovery_codes":          {"used_at"},
-		"security_failures":       {"started_at", "failures"},
+		"security_failures":       {"started_at", "failures", "completed_peak", "sampled_at", "reported"},
 		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
 		"password_reset_tokens":   {"used_at"},
 	}

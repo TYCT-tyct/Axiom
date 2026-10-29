@@ -210,31 +210,22 @@ func (s *Service) issue(ctx context.Context, tx pg.Tx, n newSession) (Issued, er
 
 // Authenticate is the user whose session the request's cookie carries, for the site and surface of its Host. A
 // state-changing request must also come from the domain's registered origin, carry JSON and the session's CSRF token.
-// A pending session is not signed in.
-func (s *Service) Authenticate(ctx context.Context, r *http.Request) (Principal, error) {
-	return s.authenticate(ctx, r, false)
+// A pending session is not signed in. ip is the caller-resolved trusted client address for unknown-cookie limits.
+func (s *Service) Authenticate(ctx context.Context, r *http.Request, ip netip.Addr) (Principal, error) {
+	return s.authenticate(ctx, r, ip, false)
 }
 
 // AuthenticateAny is Authenticate for the operations a session still waiting for its second factor may do: read
 // itself and end.
-func (s *Service) AuthenticateAny(ctx context.Context, r *http.Request) (Principal, error) {
-	return s.authenticate(ctx, r, true)
+func (s *Service) AuthenticateAny(ctx context.Context, r *http.Request, ip netip.Addr) (Principal, error) {
+	return s.authenticate(ctx, r, ip, true)
 }
 
-func (s *Service) authenticate(ctx context.Context, r *http.Request, pendingToo bool) (out Principal, err error) {
-	domain, _, domainErr := s.domain(r.Host)
-	if domainErr != nil {
-		return Principal{}, domainErr
-	}
-	event := securityAttempt{site: domain.site, surface: domain.surface}
-	if _, cookieErr := r.Cookie(cookieName(domain.origin)); cookieErr == nil {
-		defer func() { s.failed(ctx, event, "security.authentication_failed", &err) }()
-	}
+func (s *Service) authenticate(ctx context.Context, r *http.Request, ip netip.Addr, pendingToo bool) (out Principal, err error) {
 	found, _, d, err := s.sessionOf(ctx, r)
 	if err != nil {
-		return Principal{}, err
+		return Principal{}, s.failedSession(ctx, r, d, ip, err)
 	}
-	event.user, event.account, event.session = found.UserID, found.AccountID, found.SessionID
 	var valid []ValidSessionRow
 	life := s.snapshot.Load().sites[d.site].sessions[d.surface]
 	maxAge, idle := life.seconds()
@@ -280,7 +271,7 @@ func (s *Service) sessionOf(ctx context.Context, r *http.Request) (SessionTenant
 		return SessionTenantRow{}, nil, domain{}, fmt.Errorf("find a session: %w", err)
 	}
 	if len(found) == 0 {
-		return SessionTenantRow{}, nil, domain{}, ErrNoSession
+		return SessionTenantRow{}, nil, d, ErrNoSession
 	}
 	return found[0], hash[:], d, nil
 }

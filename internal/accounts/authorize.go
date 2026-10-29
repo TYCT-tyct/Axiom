@@ -15,8 +15,7 @@ type Permission struct {
 	sensitive bool
 }
 
-// The permissions the code declares (README.md「授权与租户范围」). Roles name them; a role naming any other stops the
-// start. A migration gives the built-in roles theirs.
+// The permissions the code declares (README.md「授权与租户范围」). Roles name them; snapshots ignore names introduced by newer nodes. A migration gives the built-in roles theirs.
 var (
 	ViewKeys             = Permission{"api_keys.view", false}
 	ManageKeys           = Permission{"api_keys.manage", false}

@@ -97,7 +97,7 @@ func (x site) request(t *testing.T, host, origin string, issued accounts.Issued)
 
 func (x site) principal(t *testing.T, host string, issued accounts.Issued) (accounts.Principal, error) {
 	t.Helper()
-	return x.s.Authenticate(t.Context(), x.request(t, host, "https://"+host, issued))
+	return x.s.Authenticate(t.Context(), x.request(t, host, "https://"+host, issued), client)
 }
 
 // TestRegisterSignInAndUse: a user registered with an invite code signs in, is recognised from the cookie, may make
@@ -209,7 +209,7 @@ func TestRequestsMustComeFromTheSite(t *testing.T) {
 	for name, change := range cases {
 		r := x.request(t, console, "https://"+console, issued)
 		change(r)
-		_, err := x.s.Authenticate(t.Context(), r)
+		_, err := x.s.Authenticate(t.Context(), r, client)
 		if pass := strings.HasSuffix(name, "(passes)"); pass != (err == nil) || !pass && !errors.Is(err, accounts.ErrBadOrigin) {
 			t.Errorf("%s: %v", name, err)
 		}

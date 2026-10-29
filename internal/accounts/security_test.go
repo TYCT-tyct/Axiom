@@ -146,29 +146,62 @@ func TestSecuritySharedFailureCounts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := texts(t, x.db, platform, `SELECT failures::text FROM accounts.security_failures`)[0]; got != "2" {
+	if got := texts(t, x.db, platform, `SELECT (failures+completed_peak)::text FROM accounts.security_failures`)[0]; got != "2" {
 		t.Fatalf("shared failures=%s want 2", got)
 	}
-	if got := texts(t, x.db, platform, `SELECT body->'fields'->>'value' FROM platform.alert_signals ORDER BY seq DESC LIMIT 1`)[0]; got != "2" {
-		t.Fatal("no durable spike signal", got)
+	if got := texts(t, x.db, platform, `SELECT count(*)::text FROM platform.alert_signals`)[0]; got != "0" {
+		t.Fatal("request persisted a signal", got)
 	}
-	if err := pgtest.Run(t.Context(), x.database.Superuser, `UPDATE accounts.security_failures SET started_at=now()-interval '2 minutes'`); err != nil {
+}
+
+func TestSecurityCompletedWindows(t *testing.T) {
+	t.Parallel()
+	x := newTestSite(t)
+	other := node(t, x.db, hashKeys(t, 1), x.clock.Now)
+	if _, err := exec(t, x.db, platform, ids.Replace(`INSERT INTO accounts.security_failures(site_id,failures) VALUES(:s1,2)`)); err != nil {
 		t.Fatal(err)
 	}
-	inPlatform(t, x.db, func(tx pg.Tx) error { return accounts.SampleSecurityAlerts(t.Context(), tx) })
-	if got := texts(t, x.db, platform, `SELECT (body->>'resolved') FROM platform.alert_signals ORDER BY seq DESC LIMIT 1`)[0]; got != "true" {
-		t.Fatal("not recovered", got)
+	if err := pgtest.Run(t.Context(), x.database.Superuser, `UPDATE accounts.security_failures SET started_at=date_trunc('minute',now())-interval '1 minute'`); err != nil {
+		t.Fatal(err)
 	}
-	inPlatform(t, x.db, func(tx pg.Tx) error { return accounts.SampleSecurityAlerts(t.Context(), tx) })
-	if got := texts(t, x.db, platform, `SELECT count(*)::text FROM platform.alert_signals WHERE body->>'resolved'='true'`)[0]; got != "1" {
-		t.Fatal("duplicate recovery", got)
-	}
+	// The first failure in a new window cannot erase the completed window.
 	_, err := other.SignIn(t.Context(), accounts.SignInRequest{Host: console, Email: x.email, Password: "wrong"})
 	if !errors.Is(err, accounts.ErrBadCredentials) {
 		t.Fatal(err)
 	}
+	// Keep this fixture's unfinished window open across a real clock boundary.
+	if err := pgtest.Run(t.Context(), x.database.Superuser, `UPDATE accounts.security_failures SET started_at=now()+interval '1 minute'`); err != nil {
+		t.Fatal(err)
+	}
+	sample := func() {
+		t.Helper()
+		inPlatform(t, x.db, func(tx pg.Tx) error { return accounts.SampleSecurityAlerts(t.Context(), tx) })
+	}
+	sample()
+	if got := texts(t, x.db, platform, `SELECT coalesce((SELECT body->'fields'->>'value' FROM platform.alert_signals ORDER BY seq DESC LIMIT 1),'missing')`)[0]; got != "2" {
+		t.Fatal("completed window lost", got)
+	}
+	sample()
+	if got := texts(t, x.db, platform, `SELECT count(*)::text FROM platform.alert_signals`)[0]; got != "1" {
+		t.Fatal("duplicate sample", got)
+	}
 	if got := texts(t, x.db, platform, `SELECT failures::text FROM accounts.security_failures`)[0]; got != "1" {
-		t.Fatal("window not reset", got)
+		t.Fatal("current window lost", got)
+	}
+	if err := pgtest.Run(t.Context(), x.database.Superuser, `UPDATE accounts.security_failures SET started_at=now()-interval '2 minutes',sampled_at=now()-interval '2 minutes'`); err != nil {
+		t.Fatal(err)
+	}
+	sample()
+	if got := texts(t, x.db, platform, `SELECT coalesce((SELECT body->'fields'->>'value' FROM platform.alert_signals ORDER BY seq DESC LIMIT 1),'missing')`)[0]; got != "1" {
+		t.Fatal("second window lost", got)
+	}
+	if err := pgtest.Run(t.Context(), x.database.Superuser, `UPDATE accounts.security_failures SET started_at=now()-interval '2 minutes',sampled_at=now()-interval '2 minutes'`); err != nil {
+		t.Fatal(err)
+	}
+	sample()
+	sample()
+	if got := texts(t, x.db, platform, `SELECT count(*)::text FROM platform.alert_signals WHERE body->>'resolved'='true'`)[0]; got != "1" {
+		t.Fatal("missing or duplicate recovery", got)
 	}
 }
 

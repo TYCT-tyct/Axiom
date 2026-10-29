@@ -12,7 +12,7 @@ import (
 )
 
 const listRoles = `-- name: ListRoles :many
-SELECT id, name, permissions FROM accounts.roles
+SELECT id, name, (permissions || additional_permissions)::text[] AS permissions FROM accounts.roles
 `
 
 type ListRolesRow struct {

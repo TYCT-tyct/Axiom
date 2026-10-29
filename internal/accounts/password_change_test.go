@@ -61,7 +61,7 @@ func TestPasswordChangesPreserveMFA(t *testing.T) {
 	x := recoverySite(t)
 	_, mfa, codes := x.enableTOTP(t, console, x.signIn(t, console))
 	pending := x.signIn(t, console)
-	p, err := x.s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending))
+	p, err := x.s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending), client)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -210,7 +210,7 @@ func (x site) ownerHolds(t *testing.T, permissions string) {
 	t.Helper()
 	if err := pgtest.Run(t.Context(), x.database.Superuser,
 		"ALTER TABLE accounts.roles NO FORCE ROW LEVEL SECURITY",
-		"UPDATE accounts.roles SET permissions = '{"+permissions+"}' WHERE name = 'owner'",
+		"UPDATE accounts.roles SET additional_permissions='{}', permissions = '{"+permissions+"}' WHERE name = 'owner'",
 		"ALTER TABLE accounts.roles FORCE ROW LEVEL SECURITY"); err != nil {
 		t.Fatal(err)
 	}
@@ -254,14 +254,14 @@ func TestPendingSessionInfo(t *testing.T) {
 	x := newTestSite(t)
 	x.enableTOTP(t, console, x.signIn(t, console))
 	pending := x.signIn(t, console)
-	p, err := x.s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending))
+	p, err := x.s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending), client)
 	if err != nil || !p.Pending() {
 		t.Fatalf("a pending session through AuthenticateAny: %v, %v", p, err)
 	}
 	if info := x.sessionInfoOf(t, p); info.Level != "pending_mfa" || info.Permissions == nil || len(info.Permissions) != 0 {
 		t.Errorf("a pending session: %+v", info)
 	}
-	if _, err := x.s.Authenticate(t.Context(), x.request(t, console, "https://"+console, pending)); !errors.Is(err, accounts.ErrNoSession) {
+	if _, err := x.s.Authenticate(t.Context(), x.request(t, console, "https://"+console, pending), client); !errors.Is(err, accounts.ErrNoSession) {
 		t.Errorf("a pending session through Authenticate: %v", err)
 	}
 }
@@ -367,7 +367,7 @@ func TestPermissionsAreDeclared(t *testing.T) {
 		t.Error("an undeclared permission was found")
 	}
 	x := newTestSite(t)
-	if got := texts(t, x.db, platform, "SELECT array_to_string(permissions, ',') FROM accounts.roles WHERE name = 'owner'"); len(got) != 1 ||
+	if got := texts(t, x.db, platform, "SELECT array_to_string(permissions || additional_permissions, ',') FROM accounts.roles WHERE name = 'owner'"); len(got) != 1 ||
 		got[0] != "api_keys.view,api_keys.manage,workspaces.manage,calls.view,balance.view,balance.top_up" {
 		t.Errorf("the owner's permissions: %v", got)
 	}
