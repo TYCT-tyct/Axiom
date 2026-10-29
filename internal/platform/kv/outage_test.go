@@ -17,6 +17,7 @@ import (
 
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/kv/kvtest"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 // offsetClock is the real clock moved by an amount a test sets after the client has measured its offset to the server:
@@ -293,7 +294,7 @@ func TestDeferredChecksReportOnly(t *testing.T) {
 	t.Parallel()
 	server := kvtest.Own(t, kvtest.Policy("allkeys-lru"))
 	server.Stop(t)
-	clock, logs := &steadyClock{}, &lockedBuffer{}
+	clock, logs := &steadyClock{}, &telemetrytest.Buffer{}
 	clock.stand()
 	client, err := kv.Open(t.Context(), server.Config(kvtest.Namespace()),
 		kvtest.Deps(kv.Deps{Now: clock.Now, Logger: slog.New(slog.NewTextHandler(logs, nil))}))
@@ -315,24 +316,6 @@ func TestDeferredChecksReportOnly(t *testing.T) {
 	if _, err := count(t, client, kv.NewScript(countScript), 100); err != nil {
 		t.Fatalf("the node stopped serving over a policy it only reports: %v", err)
 	}
-}
-
-// lockedBuffer is a log destination that the client's loop and the test both touch.
-type lockedBuffer struct {
-	mu   sync.Mutex
-	text strings.Builder
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.text.Write(p)
-}
-
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.text.String()
 }
 
 // TestMemoryPolicyIsChecked: a server that may evict a key stops the start, naming the variable it was given

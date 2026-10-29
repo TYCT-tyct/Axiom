@@ -15,21 +15,9 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/telemetry/telemetrytest"
 	"axiom/internal/protocol"
 )
-
-// refusals is the scraped count of requests refused because dep was out.
-func refusals(t *testing.T, tel *telemetry.Telemetry, dep string) string {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	tel.MetricsHandler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
-	for line := range strings.Lines(rec.Body.String()) {
-		if value, ok := strings.CutPrefix(line, `axiom_gateway_outage_refusals_total{dependency="`+dep+`"`); ok {
-			return strings.TrimSpace(value[strings.LastIndex(value, " "):])
-		}
-	}
-	return "absent from:\n" + rec.Body.String()
-}
 
 // outageRig is a handler with nothing but the outage's state, its log and its metrics.
 type outageRig struct {
@@ -66,7 +54,8 @@ func (r outageRig) expectTold(t *testing.T, dep string, n int) {
 	if r.lines() != 1 {
 		t.Errorf("%d requests refused by an outage wrote %d log lines, want 1:\n%s", n, r.lines(), r.logs)
 	}
-	if got := refusals(t, r.tel, dep); got != strconv.Itoa(n) {
+	series := `axiom_gateway_outage_refusals_total{dependency="` + dep + `"}`
+	if got := telemetrytest.Metric(t, r.tel, series); got != strconv.Itoa(n) {
 		t.Errorf("the metric counts %s refusals, want %d", got, n)
 	}
 	r.outage.recovered(dep)

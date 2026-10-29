@@ -8,6 +8,7 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/telemetry"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 func TestTheSyncStateIsMeasuredWithoutAnotherRound(t *testing.T) {
@@ -33,7 +34,7 @@ func TestTheSyncStateIsMeasuredWithoutAnotherRound(t *testing.T) {
 			"axiom_catalog_sync_last_success_age_seconds": age,
 			"axiom_catalog_sync_consecutive_failures":     failures,
 		} {
-			if got := scrape(t, tel, name); got != want {
+			if got := telemetrytest.Metric(t, tel, name); got != want {
 				t.Errorf("%s: %s, want %s", name, got, want)
 			}
 		}
@@ -88,9 +89,9 @@ func TestTheSyncDoesNotCountAMissingEntryAsAPendingPrice(t *testing.T) {
 	id := s.follow("openai/gpt-x@20250101", catalog.VersionDated, catalog.SourceLiteLLM, xSpec, xCurrent, "openai/gpt-x", "gpt-x-2025-01-01")
 	before := s.usd(id)
 	d := served(`"different-model"=` + xPrices("1e-06", "2e-06", "1e-07"))
-	logs := &logBuffer{}
+	logs := &telemetrytest.Buffer{}
 	if err := catalog.RunSyncRound(t.Context(), catalog.SyncJobConfig{
-		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: logs.logger(),
+		DB: s.db, Scope: platformScope, Fetcher: d.fetcher(t), Logger: logs.Logger(),
 	}); err != nil {
 		t.Fatal(err)
 	}
