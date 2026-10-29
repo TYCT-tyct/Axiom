@@ -26,6 +26,9 @@ const (
 	RequestTooLarge
 	UpstreamFailed
 	Timeout
+	ContextLengthExceeded
+	PermissionDenied
+	ContentPolicyViolation
 )
 
 // errorTypes are each type's name, HTTP status, Messages type and the message it says when the caller gives none.
@@ -35,18 +38,21 @@ var errorTypes = [...]struct {
 	name, messages, message string
 	status                  int
 }{
-	Authentication:      {"authentication", "authentication_error", "The API key is invalid, expired or disabled, or may not be used from here.", 401},
-	CreditsInsufficient: {"credits_insufficient", "billing_error", "The balance or a spending limit cannot cover this request.", 402},
-	BillingUnavailable:  {"billing_unavailable", "api_error", "Billing is unavailable for now, so the response was cut short.", 503},
-	RateLimited:         {"rate_limited", "rate_limit_error", "Too many requests at once; retry after the time Retry-After gives.", 429},
-	Overloaded:          {"overloaded", "overloaded_error", "The service is busy; retry shortly.", 503},
-	ModelNotFound:       {"model_not_found", "not_found_error", "The model does not exist, or this key may not use it.", 404},
-	NoEndpoint:          {"no_endpoint", "not_found_error", "No endpoint can serve this request.", 404},
-	NoEndpointForNow:    {"no_endpoint", "overloaded_error", "No endpoint can serve this request right now; retry later.", 503},
-	InvalidRequest:      {"invalid_request", "invalid_request_error", "The request is not valid.", 400},
-	RequestTooLarge:     {"request_too_large", "request_too_large", "The request is too large.", 413},
-	UpstreamFailed:      {"upstream_error", "api_error", "The model provider failed to complete the request.", 502},
-	Timeout:             {"timeout", "timeout_error", "The request ran out of time.", 408},
+	Authentication:         {"authentication", "authentication_error", "The API key is invalid, expired or disabled, or may not be used from here.", 401},
+	CreditsInsufficient:    {"credits_insufficient", "billing_error", "The balance or a spending limit cannot cover this request.", 402},
+	BillingUnavailable:     {"billing_unavailable", "api_error", "Billing is unavailable for now, so the response was cut short.", 503},
+	RateLimited:            {"rate_limited", "rate_limit_error", "Too many requests at once; retry after the time Retry-After gives.", 429},
+	Overloaded:             {"overloaded", "overloaded_error", "The service is busy; retry shortly.", 503},
+	ModelNotFound:          {"model_not_found", "not_found_error", "The model does not exist, or this key may not use it.", 404},
+	NoEndpoint:             {"no_endpoint", "not_found_error", "No endpoint can serve this request.", 404},
+	NoEndpointForNow:       {"no_endpoint", "overloaded_error", "No endpoint can serve this request right now; retry later.", 503},
+	InvalidRequest:         {"invalid_request", "invalid_request_error", "The request is not valid.", 400},
+	RequestTooLarge:        {"payload_too_large", "request_too_large", "The request is too large.", 413},
+	UpstreamFailed:         {"upstream_error", "api_error", "The model provider failed to complete the request.", 502},
+	Timeout:                {"timeout", "timeout_error", "The request ran out of time.", 408},
+	ContextLengthExceeded:  {"context_length_exceeded", "invalid_request_error", "The request exceeds the model's context window.", 400},
+	PermissionDenied:       {"permission_denied", "permission_error", "This request is not permitted.", 403},
+	ContentPolicyViolation: {"content_policy_violation", "permission_error", "The request was declined by a content policy.", 403},
 }
 
 // Error is an error to answer or to end a stream with. Details are members of a JSON object that say more, such as
@@ -84,13 +90,17 @@ func appendErrorType(dst []byte, e Error) []byte {
 
 // appendOpenAIError appends the error object of Chat's shell, which Responses uses before a stream starts: new-api's
 // and OpenAI's members message, type, param and code, and metadata with the unified error type and the details. Our own
-// error has the unified error type as its string code and "" as param; a rejection has the upstream's type, param and
-// code, null when it gave none, as new-api passes them on (docs/domains/gateway.md「错误」).
+// error has the unified error type as its string code and "" as param; a rejection retains its param and code. Typed
+// request errors keep the status table's type and use their canonical code when absent; a generic invalid request
+// retains the upstream's type and a missing code stays null (docs/domains/gateway.md「错误」).
 func appendOpenAIError(dst []byte, e Error) []byte {
 	t := errorTypes[e.Type]
 	typ, param, code := t.messages, "", appendQuoted(nil, t.name)
 	if r := e.Rejection; r != nil {
-		typ, param, code = cmp.Or(r.Type, typ), r.Param, []byte("null")
+		param = r.Param
+		if e.Type == InvalidRequest {
+			typ, code = cmp.Or(r.Type, typ), []byte("null")
+		}
 		if r.Code != "" {
 			code = appendQuoted(nil, r.Code)
 		}

@@ -62,6 +62,9 @@ func TestARefusalIsAnErrorOfProtocol(t *testing.T) {
 		{&Refusal{Status: 503, Code: "no_endpoint"}, protocol.NoEndpointForNow},
 		{invalid("x"), protocol.InvalidRequest},
 		{errTooLarge, protocol.RequestTooLarge},
+		{&Refusal{Status: 400, Code: "context_length_exceeded"}, protocol.ContextLengthExceeded},
+		{&Refusal{Status: 403, Code: "permission_denied"}, protocol.PermissionDenied},
+		{&Refusal{Status: 403, Code: "content_policy_violation"}, protocol.ContentPolicyViolation},
 		{errBodyTimeout, protocol.Timeout},
 	} {
 		for _, f := range []protocol.Format{protocol.Chat, protocol.Responses, protocol.Messages} {
@@ -209,8 +212,8 @@ func TestAccountSuspensionErrorEnvelopes(t *testing.T) {
 		if rec.Code != 403 || detail["type"] != "permission_error" {
 			t.Fatal(rec.Code, body)
 		}
-		if format != protocol.Messages && detail["code"] != float64(403) {
-			t.Fatal("not OpenRouter compatible", body)
+		if format != protocol.Messages && detail["code"] != "permission_denied" {
+			t.Fatal("403 must keep a string code", body)
 		}
 	}
 }
