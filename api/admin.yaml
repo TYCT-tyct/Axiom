@@ -47,21 +47,21 @@ paths:
       x-axiom-level: mfa
       x-axiom-permission: calls.search
       parameters:
-      - &id001
+      - &admin_path_id001
         name: since
         in: query
         schema:
           type: string
           format: date-time
-      - &id002
+      - &admin_path_id002
         name: until
         in: query
         schema:
           type: string
           format: date-time
-      - &id003
+      - &admin_path_id003
         $ref: '#/components/parameters/Cursor'
-      - &id004
+      - &admin_path_id004
         $ref: '#/components/parameters/Limit'
       - name: account_id
         in: query
@@ -135,10 +135,10 @@ paths:
       x-axiom-level: mfa
       x-axiom-permission: audit.view
       parameters:
-      - *id001
-      - *id002
-      - *id003
-      - *id004
+      - *admin_path_id001
+      - *admin_path_id002
+      - *admin_path_id003
+      - *admin_path_id004
       - name: site_id
         in: query
         schema:
@@ -210,7 +210,7 @@ paths:
     - name: entry_id
       in: path
       required: true
-      schema: &id005
+      schema: &admin_path_id005
         type: string
     get:
       operationId: getAuditEntry
@@ -510,7 +510,7 @@ paths:
     - name: merchant_id
       in: path
       required: true
-      schema: *id005
+      schema: *admin_path_id005
     post:
       operationId: testMerchantSettings
       tags:
@@ -554,6 +554,66 @@ paths:
           $ref: '#/components/responses/Conflict'
         default:
           $ref: '#/components/responses/Failure'
+  /api/admin/v1/rate-limits/{target}/{id}:
+    parameters:
+      - {name: target, in: path, required: true, schema: {type: string, enum: [tier, account, key]}}
+      - {name: id, in: path, required: true, schema: {type: string, pattern: "^(tier|acct|key)_[0-9a-hjkmnp-tv-z]{26}$"}}
+    get:
+      operationId: getRateLimit
+      tags: [Sites]
+      summary: Read an administrator's business rate limit
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: Own setting and effective allowance over the gateway rate window
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RateLimitView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setRateLimit
+      tags: [Sites]
+      summary: Replace an administrator's business rate limit
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                requests: {type: integer, nullable: true, minimum: 0, maximum: 1000000000, description: "Absent/null inherits; zero is unlimited. Default rate window is one minute."}
+                reason: {$ref: "#/components/schemas/Reason"}
+      responses:
+        "200":
+          description: Committed allowance
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RateLimitView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+
   /api/admin/v1/announcements:
     post:
       operationId: publishAnnouncement
@@ -2895,7 +2955,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: &id001
+        id: &admin_schema_id001
           type: string
         site_id:
           $ref: '#/components/schemas/SiteId'
@@ -2904,8 +2964,8 @@ components:
         at:
           type: string
           format: date-time
-        model: *id001
-        error_kind: *id001
+        model: *admin_schema_id001
+        error_kind: *admin_schema_id001
         latency_ms:
           type: integer
         price:
@@ -2920,19 +2980,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AdminCallSummary'
-        next_cursor: *id001
+        next_cursor: *admin_schema_id001
     AdminAttempt:
       type: object
       additionalProperties: false
       properties:
         seq:
           type: integer
-        endpoint_id: *id001
-        supplier_id: *id001
-        source_class: *id001
-        egress: *id001
-        outcome: *id001
-        error_kind: *id001
+        endpoint_id: *admin_schema_id001
+        supplier_id: *admin_schema_id001
+        source_class: *admin_schema_id001
+        egress: *admin_schema_id001
+        outcome: *admin_schema_id001
+        error_kind: *admin_schema_id001
         started_at:
           type: string
           format: date-time
@@ -2961,15 +3021,15 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: *id001
-        actor_kind: *id001
-        actor_id: *id001
-        request_id: *id001
-        action: *id001
-        module: *id001
-        target_kind: *id001
-        target_id: *id001
-        reason: *id001
+        id: *admin_schema_id001
+        actor_kind: *admin_schema_id001
+        actor_id: *admin_schema_id001
+        request_id: *admin_schema_id001
+        action: *admin_schema_id001
+        module: *admin_schema_id001
+        target_kind: *admin_schema_id001
+        target_id: *admin_schema_id001
+        reason: *admin_schema_id001
         at:
           type: string
           format: date-time
@@ -2991,7 +3051,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AuditEntry'
-        next_cursor: *id001
+        next_cursor: *admin_schema_id001
     SystemSettings:
       type: object
       additionalProperties: false
@@ -3067,11 +3127,11 @@ components:
       properties:
         enabled:
           type: boolean
-        host: *id001
+        host: *admin_schema_id001
         port:
           type: integer
-        username: *id001
-        from: *id001
+        username: *admin_schema_id001
+        from: *admin_schema_id001
         has_password:
           type: boolean
         restart_required:
@@ -3142,6 +3202,12 @@ components:
       required:
       - to
       - reason
+    RateLimitView:
+      type: object
+      properties:
+        requests: {type: integer, nullable: true, minimum: 0, maximum: 1000000000}
+        effective_requests: {type: integer, minimum: 0, maximum: 1000000000}
+
     AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
     Announcement:
       type: object

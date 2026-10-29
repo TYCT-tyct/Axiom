@@ -34,6 +34,7 @@ type StatementRow struct{ ID uuid.UUID; At time.Time; Kind StatementKind; Amount
 type StatementCursor struct{ Seq int64; At time.Time; ID uuid.UUID; Balance, Frozen int64 } // 已实现；String 与 ParseStatementCursor 是它的文本形式，控制台的游标就是它
 func ReadFunds(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []uuid.UUID) (Funds, error) // 已实现：余额行加这些工作区的累计 spent，不加锁；没有余额行全是 0；只读接口用
 func ReadKeyUsage(ctx context.Context, tx pg.Tx, key uuid.UUID, reset Reset) (KeyUsage, error) // 已实现：key 的累计和当前 UTC 日、周、月已收，以及上限窗口里的已收加预留；只读接口用
+func ReadBudgetUsage(ctx context.Context, tx pg.Tx, subject uuid.UUID, reset Reset) (BudgetUsage, error) // key/工作区当前预算窗口的已收、预留和下次 UTC 重置时刻；不重置时 ResetsAt 为 time.Time 零值
 type Admitted struct{ Scope pg.Scope; Site, Account, Workspace, Key uuid.UUID; WorkspaceBudget, KeyLimit *Limit } // 已实现；gateway 把 accounts.Admission 转成它（`billingAdmitted`），这一层转换是设计，不是临时
 func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID,
 	d Demand, q []Quotable) (*Hold, []int, error) // 已实现；[]int：保留条目在 q（即原路线）里的下标；*Insufficient{Source, Transient}、ErrTerminated
@@ -93,7 +94,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 ## 控制台的读取
 
-管理 key 的列表使用 `ReadKeyUsages(ctx, tx, []KeyWindow)` 一次读取整页的累计、当前 UTC 日/周/月已收和各自限额窗口的已收加预留，返回每把 key 的 `KeyUsage`；与单把 `ReadKeyUsage` 使用相同口径，外账户或没有计数的 key 均为零。批量查询共享一次数据库时间，避免逐把往返占用准入名额和管理 key 行锁。控制台只需限额窗口的 `KeysUsed` 继续使用原查询，避免为它扫描完整历史。
+管理 key 的列表使用 `ReadKeyUsages(ctx, tx, []KeyWindow)` 一次读取整页的累计、当前 UTC 日/周/月已收和各自限额窗口的已收加预留，返回每把 key 的 `KeyUsage`（内含限额窗口的 BudgetUsage：已收、预留和下次重置时刻）；与单把 `ReadKeyUsage` 使用相同口径，外账户或没有计数的 key 金额均为零。单把和批量读取均在同一语句的数据库时间下计算窗口、已收、预留和重置边界；GET /api/v1/key 的 limit_remaining 与 key_limit 预算共用这份结果，工作区另查，避免重复读取 key 时并发提交或跨 UTC 边界导致同一响应不一致。批量查询共享一次数据库时间，避免逐把往返占用准入名额和管理 key 行锁。控制台只需限额窗口的 `KeysUsed` 继续使用原查询，避免为它扫描完整历史。
 
 控制台的余额、key 和额度流水页读下面几个函数，都在账户范围的事务里，不加锁，几个字节旧一点无妨（页面不是准入）：
 

@@ -206,6 +206,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/rate-limits/{target}/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: "tier" | "account" | "key";
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Read an administrator's business rate limit */
+        get: operations["getRateLimit"];
+        /** Replace an administrator's business rate limit */
+        put: operations["setRateLimit"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/announcements": {
         parameters: {
             query?: never;
@@ -1542,6 +1563,10 @@ export interface components {
         MailConfigTest: {
             to: string;
             reason: components["schemas"]["Reason"];
+        };
+        RateLimitView: {
+            requests?: number | null;
+            effective_requests?: number;
         };
         /** @description A site announcement's ID (TypeID). */
         AnnouncementId: string;
@@ -3023,6 +3048,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getRateLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: "tier" | "account" | "key";
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Own setting and effective allowance over the gateway rate window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setRateLimit: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                target: "tier" | "account" | "key";
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Absent/null inherits; zero is unlimited. Default rate window is one minute. */
+                    requests?: number | null;
+                    reason: components["schemas"]["Reason"];
+                };
+            };
+        };
+        responses: {
+            /** @description Committed allowance */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitView"];
                 };
             };
             400: components["responses"]["BadRequest"];

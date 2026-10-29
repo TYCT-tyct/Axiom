@@ -43,6 +43,8 @@ var adminOperations = []adminOperation{
 	{"setMailSettings", http.MethodPut, "/settings/mail", `{"settings":{"enabled":false},"reason":"r"}`, "sites.manage", true},
 	{"testMailSettings", http.MethodPost, "/settings/mail/tests", `{"to":"test@example.com","reason":"r"}`, "sites.manage", true},
 	{"testMerchantSettings", http.MethodPost, "/payments/merchants/mch_00000000000000000000000000/tests", `{"reason":"r"}`, "sites.manage", true},
+	{"getRateLimit", http.MethodGet, "/rate-limits/account/acct_00000000000000000000000000", "", "sites.manage", false},
+	{"setRateLimit", http.MethodPut, "/rate-limits/account/acct_00000000000000000000000000", `{"reason":"r"}`, "sites.manage", true},
 	{"publishAnnouncement", http.MethodPost, "/announcements", `{"site_id":"site_00000000000000000000000000","title":"Maintenance","body":"Notice","starts_at":"2026-10-29T00:00:00Z","ends_at":"2026-10-30T00:00:00Z","reason":"test"}`, "sites.manage", true},
 	{"withdrawAnnouncement", http.MethodPost, "/announcements/00000000-0000-0000-0000-000000000000/withdraw", `{"reason":"test"}`, "sites.manage", true},
 	{"listPaymentDiscrepancies", http.MethodGet, "/payments/discrepancies", "", "sites.manage", false},
