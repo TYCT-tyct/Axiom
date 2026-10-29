@@ -176,8 +176,8 @@ func compareEvents(newAPI, axiom []event) []difference {
 // response is created, then reported in progress, then completed, failed or left incomplete. The pairing above matches
 // events by name, so a stream that swapped response.created and response.in_progress would still be compared with the
 // right partners when the two responses carry different IDs; the order is the protocol's own, so it is checked apart
-// from the pairing. The sequence numbers need no such check: eventSequence in the rules only explains one that equals
-// the event's position, so a skipped or repeated number already fails.
+// from the pairing. The sequence numbers cannot catch that swap: each travels with its event, so after pairing the two
+// swapped events still compare equal leaf by leaf.
 func responseLifecycle(events []event) []string {
 	var out []string
 	for _, e := range events {
