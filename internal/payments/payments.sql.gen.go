@@ -67,18 +67,21 @@ func (q *Queries) PaymentCount(ctx context.Context, db DBTX, orderID uuid.UUID) 
 }
 
 const paymentTerms = `-- name: PaymentTerms :one
-SELECT o.rate_id, o.fee_ppm, o.fee_fixed, clock_timestamp()::timestamptz AS observed_at,
-    w.grace_seconds, w.auto_credit_seconds
-FROM payments.orders o JOIN payments.order_windows w ON w.id = o.id WHERE o.id = $1
+SELECT o.rate_id, o.applied_num::text AS applied_num, o.applied_den::text AS applied_den, o.fee_ppm, o.fee_fixed, clock_timestamp()::timestamptz AS observed_at,
+    w.grace_seconds, w.auto_credit_seconds, s.amount_mismatch_policy
+FROM payments.orders o JOIN payments.order_windows w ON w.id = o.id LEFT JOIN payments.settings s ON s.site_id = o.site_id WHERE o.id = $1
 `
 
 type PaymentTermsRow struct {
-	RateID            *uuid.UUID
-	FeePpm            int32
-	FeeFixed          int64
-	ObservedAt        time.Time
-	GraceSeconds      int64
-	AutoCreditSeconds int64
+	RateID               *uuid.UUID
+	AppliedNum           string
+	AppliedDen           string
+	FeePpm               int32
+	FeeFixed             int64
+	ObservedAt           time.Time
+	GraceSeconds         int64
+	AutoCreditSeconds    int64
+	AmountMismatchPolicy *string
 }
 
 // Read after acquiring the order lock: the policy clock must not precede a lock wait.
@@ -87,11 +90,14 @@ func (q *Queries) PaymentTerms(ctx context.Context, db DBTX, id uuid.UUID) (Paym
 	var i PaymentTermsRow
 	err := row.Scan(
 		&i.RateID,
+		&i.AppliedNum,
+		&i.AppliedDen,
 		&i.FeePpm,
 		&i.FeeFixed,
 		&i.ObservedAt,
 		&i.GraceSeconds,
 		&i.AutoCreditSeconds,
+		&i.AmountMismatchPolicy,
 	)
 	return i, err
 }

@@ -47,6 +47,18 @@ const (
 	queryUnknown
 )
 
+// queryHealthOutcome separates caller cancellation from the core gateway deadline and definite channel replies.
+func queryHealthOutcome(ctx context.Context, err error, incomplete bool) queryOutcome {
+	if errors.Is(err, context.Canceled) || ctx.Err() != nil && !errors.Is(context.Cause(ctx), errQueryDeadline) {
+		return queryUnused
+	}
+	var refused *Rejected
+	if err != nil && !errors.As(err, &refused) || incomplete {
+		return queryUnknown
+	}
+	return queryKnown
+}
+
 // finishQuery fences an expired worker with its token. A completion already in flight cannot reopen a paused circuit.
 func (p *Payments) finishQuery(ctx context.Context, merchant MerchantID, token uuid.UUID, outcome queryOutcome) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)

@@ -77,9 +77,10 @@ WHERE o.id = @id AND u.merchant_id = o.merchant_id AND u.site_id = o.site_id
 -- order unable to verify or query (docs/domains/payments.md「后台配置」).
 -- name: OpenMerchantOrders :one
 SELECT EXISTS (
-    SELECT 1 FROM payments.order_windows
-    WHERE merchant_id = @merchant_id AND (queryable OR state = 'review')
-) AS open;
+    SELECT 1 FROM payments.order_windows w
+    WHERE w.merchant_id = @merchant_id AND (queryable OR state = 'review')
+UNION ALL SELECT 1 FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
+    WHERE o.merchant_id = @merchant_id AND r.state IN ('frozen','sending','pending')) AS open;
 
 -- The orders a run of the expiry job takes: the oldest first, so one that fails to close cannot hold the queue.
 -- name: ExpiringOrders :many

@@ -7,6 +7,7 @@ package billing
 
 import (
 	"context"
+	"time"
 
 	"uuid"
 )
@@ -56,6 +57,18 @@ func (q *Queries) RefundHistory(ctx context.Context, db DBTX, arg RefundHistoryP
 	var i RefundHistoryRow
 	err := row.Scan(&i.WithFee, &i.Returned, &i.Fee)
 	return i, err
+}
+
+const refundRecordedAt = `-- name: RefundRecordedAt :one
+SELECT created_at FROM billing.transactions WHERE request_id = $1 AND attempt_seq = 0 AND kind = 'refund'
+ORDER BY revision DESC LIMIT 1
+`
+
+func (q *Queries) RefundRecordedAt(ctx context.Context, db DBTX, batch uuid.UUID) (time.Time, error) {
+	row := db.QueryRow(ctx, refundRecordedAt, batch)
+	var created_at time.Time
+	err := row.Scan(&created_at)
+	return created_at, err
 }
 
 const setRefundPolicy = `-- name: SetRefundPolicy :exec

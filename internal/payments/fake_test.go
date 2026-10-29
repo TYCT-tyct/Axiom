@@ -11,13 +11,15 @@ import (
 // fakePlugin is a channel kind for tests: its settings name a gateway and the methods it offers, and it needs a key.
 // create, close and caps let a test decide what its channel does, so it can watch the order reach the channel.
 type fakePlugin struct {
-	create  func(CreateRequest) (Checkout, error)
-	close   func(context.Context, OrderID, string) error
-	open    func() error
-	verify  func(Callback, string) (Notice, error)
-	query   func(context.Context, string, string) (Payment, error)
-	noQuery bool
-	caps    Caps
+	create      func(CreateRequest) (Checkout, error)
+	close       func(context.Context, OrderID, string) error
+	open        func() error
+	verify      func(Callback, string) (Notice, error)
+	query       func(context.Context, string, string) (Payment, error)
+	refund      func(context.Context, RefundCall) (RefundState, error)
+	queryRefund func(context.Context, RefundCall) (RefundState, error)
+	noQuery     bool
+	caps        Caps
 }
 
 type fakeSettings struct {
@@ -47,18 +49,20 @@ func (p fakePlugin) Open(c MerchantConfig) (Channel, error) {
 	if p.noQuery {
 		caps = p.caps
 	}
-	return fakeChannel{settings: s, key: c.Secrets["key"].Reveal(), create: p.create, close: p.close, caps: caps, verify: p.verify, query: p.query}, nil
+	return fakeChannel{settings: s, key: c.Secrets["key"].Reveal(), create: p.create, close: p.close, caps: caps, verify: p.verify, query: p.query, refund: p.refund, queryRefund: p.queryRefund}, nil
 }
 
 // fakeChannel offers its methods and does nothing else; key is what it would sign with.
 type fakeChannel struct {
-	settings fakeSettings
-	key      string
-	create   func(CreateRequest) (Checkout, error)
-	close    func(context.Context, OrderID, string) error
-	caps     Caps
-	verify   func(Callback, string) (Notice, error)
-	query    func(context.Context, string, string) (Payment, error)
+	refund      func(context.Context, RefundCall) (RefundState, error)
+	queryRefund func(context.Context, RefundCall) (RefundState, error)
+	settings    fakeSettings
+	key         string
+	create      func(CreateRequest) (Checkout, error)
+	close       func(context.Context, OrderID, string) error
+	caps        Caps
+	verify      func(Callback, string) (Notice, error)
+	query       func(context.Context, string, string) (Payment, error)
 }
 
 func (c fakeChannel) Caps() Caps        { return c.caps }
@@ -91,11 +95,17 @@ func (c fakeChannel) Close(ctx context.Context, id OrderID, tradeNo string) erro
 	return nil
 }
 
-func (fakeChannel) Refund(context.Context, RefundCall) (RefundState, error) {
+func (c fakeChannel) Refund(ctx context.Context, r RefundCall) (RefundState, error) {
+	if c.refund != nil {
+		return c.refund(ctx, r)
+	}
 	panic("fake: refund is not declared")
 }
 
-func (fakeChannel) QueryRefund(context.Context, RefundCall) (RefundState, error) {
+func (c fakeChannel) QueryRefund(ctx context.Context, r RefundCall) (RefundState, error) {
+	if c.queryRefund != nil {
+		return c.queryRefund(ctx, r)
+	}
 	panic("fake: refund is not declared")
 }
 

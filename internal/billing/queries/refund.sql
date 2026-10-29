@@ -19,3 +19,7 @@ WHERE b.id = @batch;
 WITH policy AS (SELECT @with_fee::boolean AS with_fee)
 UPDATE billing.credit_batches b SET refund_with_fee = p.with_fee FROM policy p
 WHERE b.id = @batch AND b.refund_with_fee IS NULL;
+
+-- name: RefundRecordedAt :one
+SELECT created_at FROM billing.transactions WHERE request_id = @batch AND attempt_seq = 0 AND kind = 'refund'
+ORDER BY revision DESC LIMIT 1;
