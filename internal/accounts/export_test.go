@@ -3,6 +3,7 @@ package accounts
 import (
 	"context"
 	"time"
+	"uuid"
 )
 
 // WellFormedKey and NewKeyText expose the key format to its tests.
@@ -34,3 +35,14 @@ func (s *Service) HashTurn(ctx context.Context) (release func(), err error) {
 
 // Hash runs compute in one of the node's turns at password hashing, as every argon2id computation does.
 func (s *Service) Hash(ctx context.Context, compute func()) error { return s.hash(ctx, compute) }
+
+// UsePasswordRecovery wires a test's queue without replacing the node's other dependencies.
+func (s *Service) UsePasswordRecovery(r *PasswordRecovery) { s.recovery = r }
+
+// ProcessPasswordReset runs one durable request under explicit test synchronization.
+func (r *PasswordRecovery) ProcessPasswordReset(ctx context.Context, id uuid.UUID) error {
+	return r.process(ctx, passwordResetArgs{ID: id})
+}
+
+// PurgePasswordResets advances the expiry worker under explicit test control.
+func (r *PasswordRecovery) PurgePasswordResets(ctx context.Context) error { return r.purge(ctx) }

@@ -549,10 +549,7 @@ func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult
 	if err != nil {
 		return err
 	}
-	if err := c.move(ctx, tx, -held, c.charged); err != nil {
-		return err
-	}
-	return c.write(ctx, tx, w)
+	return c.write(ctx, tx, w, -held, c.charged)
 }
 
 // late replaces what cleanup charged with what the full outcome charges: a refund, or a makeup capped at the floor.
@@ -564,32 +561,16 @@ func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResul
 	if _, err := post(ctx, tx, c.event("settle", lateRevision), charge(p.price, c.charged)...); err != nil {
 		return err
 	}
-	if err := c.move(ctx, tx, 0, c.charged-c.row.Charged); err != nil {
-		return err
-	}
 	w, err := result("settled", p, last)
 	if err != nil {
 		return err
 	}
-	return c.write(ctx, tx, w)
+	return c.write(ctx, tx, w, 0, c.charged-c.row.Charged)
 }
 
 // release ends a reservation in state, giving back what it held and keeping what was charged.
 func (c *locked) release(ctx context.Context, tx pg.Tx, state string, held int64) error {
-	if err := c.move(ctx, tx, -max(held, 0), 0); err != nil {
-		return err
-	}
-	return c.write(ctx, tx, c.kept(state))
-}
-
-func (c *locked) move(ctx context.Context, tx pg.Tx, reserved, spent int64) error {
-	if err := queries.MoveCounters(ctx, tx, MoveCountersParams{
-		Reserved: reserved, Spent: spent, AccountID: c.row.AccountID, WorkspaceID: c.row.WorkspaceID,
-		WorkspaceWindow: c.row.WorkspaceWindow, KeyID: c.row.KeyID, KeyWindow: c.row.KeyWindow,
-	}); err != nil {
-		return fmt.Errorf("billing: move the counters: %w", err)
-	}
-	return nil
+	return c.write(ctx, tx, c.kept(state), -max(held, 0), 0)
 }
 
 // written is what write records on the reservation.
@@ -623,9 +604,10 @@ var terminal = map[string]bool{"settled": true, "released": true, "cleanup_settl
 
 // write records w on the reservation, and the end of the request when its state is terminal, at the same moment of
 // the database's clock.
-func (c *locked) write(ctx context.Context, tx pg.Tx, w written) error {
+func (c *locked) write(ctx context.Context, tx pg.Tx, w written, reserved, spent int64) error {
 	at, err := queries.EndReservation(ctx, tx, EndReservationParams{
-		Profit:    c.profit(),
+		Profit: c.profit(), Reserved: reserved, Spent: spent, AccountID: c.row.AccountID,
+		WorkspaceID: c.row.WorkspaceID, WorkspaceWindow: c.row.WorkspaceWindow, KeyID: c.row.KeyID, KeyWindow: c.row.KeyWindow,
 		RequestID: c.id, State: w.state, ChargedSeq: w.seq, Entry: w.entry, Charged: c.charged, Price: w.price,
 		Waived: w.waived, Estimated: w.estimated, FinalUsage: w.usage, AttemptEntries: c.entries,
 	})

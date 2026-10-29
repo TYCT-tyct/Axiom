@@ -289,3 +289,66 @@ ALTER POLICY updates ON accounts.recovery_codes
         OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
     );
 
+ALTER POLICY request_select ON accounts.password_reset_requests
+    USING (
+        (SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    );
+
+ALTER POLICY request_insert ON accounts.password_reset_requests
+    WITH CHECK (
+        (SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    );
+
+ALTER POLICY request_update ON accounts.password_reset_requests
+    USING (
+        (SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    )
+    WITH CHECK (
+        (SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    );
+
+ALTER POLICY request_expiry ON accounts.password_reset_requests
+    USING (
+        ((SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[]))
+        AND expires_at <= clock_timestamp()
+    );
+
+ALTER POLICY token_select ON accounts.password_reset_tokens
+    USING (
+        (SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+        OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
+    );
+
+ALTER POLICY token_insert ON accounts.password_reset_tokens
+    WITH CHECK (
+        (SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+        OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
+    );
+
+ALTER POLICY token_update ON accounts.password_reset_tokens
+    USING (
+        ((SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+        OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[]))
+        AND used_at IS NULL
+    )
+    WITH CHECK (
+        (SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+        OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
+    );
+
+ALTER POLICY token_expiry ON accounts.password_reset_tokens
+    USING (
+        ((SELECT platform.in_platform_scope())
+        OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+        OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[]))
+        AND expires_at <= clock_timestamp()
+    );
