@@ -11,6 +11,7 @@ import (
 
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 )
 
 const (
@@ -55,8 +56,8 @@ type Mailer struct {
 // Register registers the send worker on the queue, which must not have started yet, and returns the mailer the flows
 // enqueue through. With no SMTP settings it logs that email is disabled and returns a mailer whose Enqueue fails with
 // ErrNotConfigured: email costs no configuration for a node that never sends it. With a shared store the recipient
-// cooldowns live there; masterKey derives the HMAC key their subjects are hashed with, and is unused without one.
-func Register(ctx context.Context, db *pg.DB, queue *pg.Queue, cfg Config, cache *kv.Client, masterKey []byte,
+// cooldowns live there; master is the snapshot their subjects' HMAC key is derived from, and is unused without one.
+func Register(ctx context.Context, db *pg.DB, queue *pg.Queue, cfg Config, cache *kv.Client, master *secret.MasterKeys,
 	logger *slog.Logger,
 ) (*Mailer, error) {
 	m := &Mailer{db: db, queue: queue, logger: logger}
@@ -66,7 +67,7 @@ func Register(ctx context.Context, db *pg.DB, queue *pg.Queue, cfg Config, cache
 	}
 	m.sender = newSender(cfg)
 	if cache != nil && cache.Enabled() {
-		key, err := deriveMailKey(masterKey)
+		key, err := deriveMailKey(master)
 		if err != nil {
 			return nil, err
 		}

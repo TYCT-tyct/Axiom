@@ -16,11 +16,19 @@ import (
 	"axiom/internal/platform/kv/kvtest"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/platform/secret"
 )
 
-// masterKey is the master key the login keys are derived from, the same for every node: one that differed would count
-// one email's failures twice (internal/platform/kv/README.md「键」).
-var masterKey = []byte(strings.Repeat("k", 32))
+// loginKey is what secret derives from the master key in production, the same for every node: one that differed would
+// count one email's failures twice (internal/platform/kv/README.md「键」).
+var loginKey = filledLoginKey('k')
+
+func filledLoginKey(fill byte) (key secret.LoginKey) {
+	for i := range key {
+		key[i] = fill
+	}
+	return key
+}
 
 // clientClock is the clock a test's cache client measures its offset from: the test's own frozen clock, moved up by how
 // long the test's setup took, so that the client opens within the second of the server's time that the startup check
@@ -34,7 +42,7 @@ func clientClock(c *clock) func() time.Time {
 func cachedNode(t *testing.T, db *pg.DB, cache *kv.Client, now func() time.Time) *accounts.Service {
 	t.Helper()
 	s, err := accounts.NewService(db, accounts.Config{
-		Platform: platform, Hashes: hashKeys(t, 1), Keyring: keyring(t), Now: now, Cache: cache, MasterKey: masterKey,
+		Platform: platform, Hashes: hashKeys(t, 1), Keyring: keyring(t), Now: now, Cache: cache, LoginKey: loginKey,
 	})
 	if err != nil {
 		t.Fatal(err)
