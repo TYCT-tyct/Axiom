@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI's deployment checks (ci.yml, job deploy): deploy this tree with `just up`, check the node runs it, upgrade a
+# CI's deployment checks (ci.yml, job deploy): build once or consume the release digest, check the node runs it, upgrade a
 # deployment from before the migration administrator in place, and always tear down with the database.
 #
 # The job owns its compose project, image tag and volumes, named from RUNNER_NAME and its workspace path
@@ -13,7 +13,7 @@ set -euo pipefail
 
 job="$(python3 scripts/deploy_name.py "${RUNNER_NAME:-local-$(hostname)}" "${GITHUB_WORKSPACE:-$(pwd)}")"
 export COMPOSE_PROJECT_NAME="axiom-ci-$job"
-export DEPLOY_IMAGE="axiom-ci:$job"
+export DEPLOY_IMAGE="${CI_DEPLOY_IMAGE:-axiom-ci:$job}"
 export DEPLOY_RESTART_POLICY=no # a CI stack must not start again after a killed job leaves it behind
 # Empty: the compose file publishes a port the kernel picks (deploy/compose.yaml), which no other job can hold.
 export DEPLOY_PORT= DEPLOY_ADMIN_PORT=
@@ -27,7 +27,7 @@ down() { docker compose --project-name "$COMPOSE_PROJECT_NAME" down --volumes --
 # Both steps always run: failing to stop the containers must not leave the image behind.
 teardown() {
   down || true
-  docker image rm --force "$DEPLOY_IMAGE" > /dev/null 2>&1 || true
+  if [ -z "${CI_DEPLOY_IMAGE:-}" ]; then docker image rm --force "$DEPLOY_IMAGE" > /dev/null 2>&1 || true; fi
 }
 
 # Keep the status the script already had: neither a failed teardown nor a successful one may change it.
@@ -66,9 +66,30 @@ clean_stale() {
 teardown
 clean_stale
 
-# Start the stack and learn the ports it published: --build can replace the container, and with it the mapping.
+if [ -n "${CI_DEPLOY_IMAGE:-}" ]; then
+  [[ "$CI_DEPLOY_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "::error::release deployment requires a digest"; exit 1; }
+  built="${CI_DEPLOY_VERSION:?release version is required}"
+else
+  just web-embed
+  mkdir -p deploy/bin
+  CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
+  built="$(just axiom-version)"
+  docker build --tag "$DEPLOY_IMAGE" deploy
+fi
+
+# Reuse the same image for every start, including the legacy-role upgrade. Only CI's own environment is initialized.
 start() {
-  timeout 300 just up # one command deploys this machine and waits for a ready node
+  umask 077
+  if [ ! -f deploy/.env ]; then
+    printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env
+  fi
+  if ! grep -q '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env; then
+    { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env
+  fi
+  chmod 600 deploy/.env
+  timeout 90 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60 postgres
+  compose exec -T postgres sh < deploy/postgres/roles.sh
+  timeout 180 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60
   # Include exited one-shot services before teardown, so their resource policy cannot escape inspection.
   local id ids parent
   ids=$(compose ps --all --quiet)
@@ -77,6 +98,14 @@ start() {
     docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}} cgroup_parent={{json .HostConfig.CgroupParent}}' "$id"
     [ -z "${AXIOM_TEST_CGROUP_PARENT:-}" ] || [ "$parent" = "$AXIOM_TEST_CGROUP_PARENT" ] || { echo "::error::deployment container $id has unexpected cgroup parent"; return 1; }
   done
+  if [ -n "${CI_DEPLOY_IMAGE:-}" ]; then
+    for service in axiom migrate; do
+      id=$(compose ps --all --quiet "$service")
+      [ "$(docker inspect --format '{{.Config.Image}}' "$id")" = "$DEPLOY_IMAGE" ] || {
+        echo "::error::$service did not consume the release digest"; return 1;
+      }
+    done
+  fi
   public="$(compose port axiom 8080)"
   public="${public##*:}"
   admin="$(compose port axiom 8082)"
@@ -87,7 +116,6 @@ start
 
 # The node answering runs the program built from this tree, not a stale image; the passwords are its owner's only
 deployed="$(curl -fsS "http://127.0.0.1:$public/api/console/v1/version" | jq -r .version)"
-built="$(just axiom-version)"
 [ "$deployed" = "$built" ] || { echo "::error::the node runs $deployed, this tree builds $built"; exit 1; }
 [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }
 # The console's other operations are served by a node that read its key files and its contract: an address no site
