@@ -22,6 +22,8 @@ func TestPrepareLegacyChat(t *testing.T) {
 		{"escaped", `"messages":[],"funct\u0069ons":[{"name":"f"}],"function_c\u0061ll":"\u0061uto","tool_choice":null,"tools":null`, true, []string{`"tool_choice":"\u0061uto"`, `"tools":[{"type":"function","function":{"name":"f"}}]`}},
 		{"mixed", `"messages":[],"tools":[{"type":"function","function":{"name":"g"},"cache_control":{"type":"ephemeral"}}],"functions":[{"name":"f"}]`, false, []string{`"tools":[{"type":"function","function":{"name":"g"},"cache_control":{"type":"ephemeral"}},{"type":"function","function":{"name":"f"}}]`}},
 		{"empty tools", `"messages":[],"tools":[ ],"functions":[{"name":"f"}],"parallel_tool_calls":true`, true, []string{`"parallel_tool_calls":false`}},
+		{"null tool calls", `"messages":[{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{}"},"tool_calls":null},{"role":"function","name":"f","content":"done"}]`, true, []string{`"tool_calls":[{"id":"call_legacy_1"`}},
+		{"empty tool calls", `"messages":[{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{}"},"tool_calls":[]},{"role":"function","name":"f","content":"done"}]`, true, []string{`"tool_calls":[{"id":"call_legacy_1"`}},
 		{"history only", `"messages":[{"role":"assistant","function_call":{"name":"f","arguments":"{ \"q\":\"\\u0061\" }"}},{"role":"funct\u0069on","name":"f"}]`, true, []string{`"arguments":"{ \"q\":\"\\u0061\" }"`, `"role":"tool","tool_call_id":"call_legacy_1"`}},
 		{"id collision", `"messages":[{"role":"assistant","tool_calls":[{"id":"call_legacy_1","type":"function","function":{"name":"g","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_legacy_1","content":"\u004fK"},{"role":"assistant","function_call":{"name":"f","arguments":"{}"}},{"role":"function","name":"f","content":"one"},{"role":"assistant","function_call":{"name":"f","arguments":"{}"}},{"role":"function","name":"f","content":"two"}]`, true, []string{`"tool_call_id":"call_legacy_2"`, `"tool_call_id":"call_legacy_3"`, `"content":"\u004fK"`}},
 		{"modern", `"messages":[{"role":"user","content":"functions function_call"}],"tools":[{"type":"function","function":{"name":"f"}}]`, false, []string{`"content":"functions function_call"`}},
@@ -92,7 +94,12 @@ func TestControlSpellings(t *testing.T) {
 
 func checkPreparedLegacy(t *testing.T, u protocol.Upstream, legacy bool, wants []string) {
 	t.Helper()
-	decode(t, u.Body)
+	body := decode(t, u.Body)
+	if _, tools := body["tools"]; legacy && !tools {
+		if _, parallel := body["parallel_tool_calls"]; parallel {
+			t.Fatalf("parallel switch without tools: %s", u.Body)
+		}
+	}
 	if u.Usage.LegacyFunctions != legacy {
 		t.Fatalf("legacy=%t, want %t: %s", u.Usage.LegacyFunctions, legacy, u.Body)
 	}

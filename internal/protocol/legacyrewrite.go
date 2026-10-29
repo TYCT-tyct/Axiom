@@ -55,7 +55,7 @@ var legacyRequestRules = formatRules{
 			p.out = append(append(p.out, `,"tool_choice":`...), p.legacy.canon.ToolChoice...)
 		}
 		// Both directions use the same single-call constraint for legacy clients.
-		if p.legacy.canon.legacy {
+		if p.legacy.canon.legacy && p.legacy.canon.ParallelToolCalls != nil {
 			p.out = append(p.out, `,"parallel_tool_calls":false`...)
 		}
 		return nil
@@ -136,6 +136,7 @@ func (p *rewriter) legacyMessages() error {
 
 var legacyMessageRules = map[string]rule{
 	"function_call": (*rewriter).drop,
+	"tool_calls":    (*rewriter).drop,
 	"role":          (*rewriter).legacyMessageIdentity,
 	"name":          (*rewriter).legacyMessageIdentity,
 	"tool_call_id":  (*rewriter).legacyMessageIdentity,

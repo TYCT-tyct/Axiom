@@ -87,7 +87,10 @@ func (p *rewriter) legacyReplyDelta() error {
 	return p.token()
 }
 
-var legacyReplyDeltaRules = map[string]rule{"tool_calls": (*rewriter).legacyReplyCalls}
+var legacyReplyDeltaRules = map[string]rule{
+	"tool_calls":    (*rewriter).legacyReplyCalls,
+	"function_call": (*rewriter).drop,
+}
 
 func (p *rewriter) legacyReplyCalls() error {
 	err := p.eachElement(func() error { return p.eachMember(p.legacyReplyMember) })
@@ -107,11 +110,11 @@ func (p *rewriter) legacyReplyMember() error {
 		}
 		return nil
 	case "type":
-		ok, err := p.is("function")
+		kind, err := p.str()
 		if err != nil {
 			return err
 		}
-		if !ok {
+		if len(kind) > 0 && string(kind) != "function" {
 			return shapeError("a non-function call in a legacy reply")
 		}
 		return nil

@@ -13,14 +13,17 @@ import (
 // (21cc92693, 2026-10-22): ordered IDs skip existing IDs and results claim the oldest call by name.
 func (c *canon) upgradeLegacy() error {
 	c.legacy = c.legacyOnly()
-	if c.legacy {
-		disabled := false
-		c.ParallelToolCalls = &disabled
-	}
 	if err := c.upgradeChoice(); err != nil {
 		return err
 	}
 	c.upgradeTools()
+	if c.legacy {
+		c.ParallelToolCalls = nil
+		if len(c.Tools) > 0 {
+			disabled := false
+			c.ParallelToolCalls = &disabled
+		}
+	}
 	return c.upgradeCalls()
 }
 

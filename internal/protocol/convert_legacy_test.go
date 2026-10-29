@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"strings"
 	"testing"
 
 	"axiom/internal/catalog"
@@ -82,7 +83,7 @@ func TestConvertLegacyToResponses(t *testing.T) {
 			"a legacy call and its result", chatBody(`"messages":[` + userHi + `,{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{\"a\":1}"}},` +
 				`{"role":"function","name":"f","content":"done"}]`), nil,
 			head + `{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]},{"type":"function_call","call_id":"call_legacy_1","name":"f","arguments":"{\"a\":1}"},` +
-				`{"type":"function_call_output","call_id":"call_legacy_1","output":"done"}],"store":false,"parallel_tool_calls":false}`,
+				`{"type":"function_call_output","call_id":"call_legacy_1","output":"done"}],"store":false}`,
 		},
 	})
 }
@@ -118,7 +119,8 @@ func TestLegacyConversionMatchesTools(t *testing.T) {
 					t.Fatal(err)
 				}
 				current := c.current
-				if c.name != "mixed definitions" {
+				switch c.name {
+				case "definitions", "no call":
 					current += `,"parallel_tool_calls":false`
 				}
 				want, err := convertBody(format.f, chatBody(current), nil)
@@ -127,6 +129,23 @@ func TestLegacyConversionMatchesTools(t *testing.T) {
 				}
 				sameJSON(t, string(want), got)
 			})
+		}
+	}
+}
+
+func TestLegacyHistoryDoesNotAddParallelSwitch(t *testing.T) {
+	const history = `"messages":[{"role":"user","content":"Hi"},{"role":"assistant","function_call":{"name":"f","arguments":"{}"}},{"role":"function","name":"f","content":"done"}]`
+	for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
+		for _, option := range []string{"", `,"parallel_tool_calls":true`, `,"parallel_tool_calls":false`} {
+			body := []byte(chatBody(history + option))
+			r := inspected(t, protocol.Chat, body)
+			u, err := protocol.Prepare(&r, body, protocol.Target{Format: f, Model: "up", MaxOutput: 4096}, rewrites())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(u.Body), `"parallel_tool_calls"`) || strings.Contains(string(u.Body), `"disable_parallel_tool_use"`) {
+				t.Fatalf("%d: history without tools gained a parallel switch: %s", f, u.Body)
+			}
 		}
 	}
 }

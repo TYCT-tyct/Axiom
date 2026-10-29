@@ -135,21 +135,20 @@ func checkLegacyReplyStream(t *testing.T, out []byte) {
 
 	reader := sse.NewReader(bytes.NewReader(out), 1<<20)
 	var name, args string
-	for data, err := reader.Next(); err == nil; data, err = reader.Next() {
+	for {
+		data, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
 		if string(data) == "[DONE]" {
 			continue
 		}
-		choices, _ := decode(t, data)["choices"].([]any)
-		for _, raw := range choices {
-			delta, _ := raw.(map[string]any)["delta"].(map[string]any)
-			call, _ := delta["function_call"].(map[string]any)
-			if s, ok := call["name"].(string); ok {
-				name += s
-			}
-			if s, ok := call["arguments"].(string); ok {
-				args += s
-			}
-		}
+		n, a := legacyReplyPieces(t, data)
+		name += n
+		args += a
 	}
 	if name != "f" || args != "{}" {
 		t.Fatalf("lost fragments: %q %q", name, args)
@@ -201,16 +200,51 @@ func TestLegacyReplyToolType(t *testing.T) {
 	for _, tc := range []struct {
 		kind    string
 		invalid bool
-	}{{"custom", true}, {`funct\u0069on`, false}} {
-		stream := strings.Replace(legacyReplyStream(protocol.Chat), `"type":"function"`, `"type":"`+tc.kind+`"`, 1)
-		for _, aggregate := range []bool{false, true} {
-			out, err := runLegacyReply(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{LegacyFunctions: true}, aggregate, protocol.NewMemory(4<<20))
-			if errors.Is(err, protocol.ErrUpstream) != tc.invalid {
-				t.Fatalf("%s/%t: %v", tc.kind, aggregate, err)
+	}{
+		{`"custom"`, true}, {`"funct\u0069on"`, false}, {`""`, false}, {`null`, false},
+	} {
+		for _, later := range []bool{false, true} {
+			stream := legacyReplyStream(protocol.Chat)
+			if later {
+				stream = strings.Replace(stream, `"index":0,"function":{"arguments":"}"}`, `"index":0,"type":`+tc.kind+`,"function":{"arguments":"}"}`, 1)
+			} else {
+				stream = strings.Replace(stream, `"type":"function"`, `"type":`+tc.kind, 1)
 			}
-			if !tc.invalid {
-				checkLegacyReply(t, out, true, aggregate)
-			}
+			checkLegacyReplyToolType(t, stream, tc.kind, tc.invalid)
 		}
 	}
+}
+
+func checkLegacyReplyToolType(t *testing.T, stream, kind string, invalid bool) {
+	t.Helper()
+	for _, aggregate := range []bool{false, true} {
+		out, err := runLegacyReply(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{LegacyFunctions: true}, aggregate, protocol.NewMemory(4<<20))
+		if errors.Is(err, protocol.ErrUpstream) != invalid {
+			t.Fatalf("%s/%t: %v", kind, aggregate, err)
+		}
+		if !invalid {
+			checkLegacyReply(t, out, true, aggregate)
+		}
+	}
+}
+
+func TestLegacyReplyDropsNullFunctionCall(t *testing.T) {
+	stream := strings.ReplaceAll(legacyReplyStream(protocol.Chat), `"tool_calls":`, `"function_call":null,"tool_calls":`)
+	checkLegacyReplyToolType(t, stream, "null function_call", false)
+}
+
+func legacyReplyPieces(t *testing.T, data []byte) (name, args string) {
+	t.Helper()
+	choices, _ := decode(t, data)["choices"].([]any)
+	for _, raw := range choices {
+		delta, _ := raw.(map[string]any)["delta"].(map[string]any)
+		call, _ := delta["function_call"].(map[string]any)
+		if s, ok := call["name"].(string); ok {
+			name += s
+		}
+		if s, ok := call["arguments"].(string); ok {
+			args += s
+		}
+	}
+	return name, args
 }

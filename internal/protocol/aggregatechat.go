@@ -328,7 +328,7 @@ func (c *chatChoice) toolCall(a *chatAggregate, index int64) (*chatTool, error) 
 		if index != 0 {
 			return nil, fmt.Errorf("%w: parallel calls in a legacy reply", ErrUpstream)
 		}
-		if len(a.tool.kind) > 0 && !controlIs(a.tool.kind, "function") {
+		if len(a.tool.kind) > len(`""`) && !controlIs(a.tool.kind, "function") {
 			return nil, fmt.Errorf("%w: a non-function call in a legacy reply", ErrUpstream)
 		}
 	}
