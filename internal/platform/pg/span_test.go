@@ -25,7 +25,7 @@ func BenchmarkTransactionSpan(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				_, span := db.startSpan(b.Context())
+				_, span := startSpan(b.Context(), db.tracer)
 				span.End()
 			}
 		})

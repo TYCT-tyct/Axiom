@@ -55,6 +55,7 @@ func newBank(t testing.TB, balance, floor int64, config Config) *bank {
 	if b.billing, err = Start(t.Context(), app, b.platform, config, b.supplies); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { b.billing.conn.Close(t.Context()) })
 	if err := app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
 		return OpenBalance(t.Context(), tx, site, account, floor)
 	}); err != nil {
