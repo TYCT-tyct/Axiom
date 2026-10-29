@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -33,17 +32,6 @@ func TestEpusdtPreset(t *testing.T) {
 	}
 	if !strings.Contains(checkout.PayURL, "/payments/epay/v1/order/create-transaction/submit.php?") || !strings.Contains(checkout.PayURL, "type=usdt.tron") || !strings.Contains(checkout.PayURL, "currency=cny") {
 		t.Fatal("incorrect Epusdt checkout")
-	}
-	for _, pid := range []string{"merchant", "01001", "0", "-1", "+1", "9223372036854775808"} {
-		var s easyPaySettings
-		if err := jsonx.UnmarshalKnown(cfg.Settings, &s); err != nil {
-			t.Fatal(err)
-		}
-		s.PID = pid
-		cfg.Settings = easyPayJSON(t, s)
-		if _, err := (EasyPay{}).Open(cfg); err == nil {
-			t.Fatalf("accepted PID %q", pid)
-		}
 	}
 }
 
@@ -88,14 +76,16 @@ func TestEpusdtSaveRequiresQuery(t *testing.T) {
 	if _, err := w.save(siteScope(w.siteA), in); !isField(err, "/settings") {
 		t.Fatal("saved update after query disappeared", err)
 	}
-	if err := w.tx(siteScope(w.siteA), func(tx pg.Tx) error {
-		stored, err := ReadMerchant(t.Context(), tx, MerchantID(m.ID))
-		if err == nil && (stored.Rev != m.Rev || stored.Name != m.Name) {
-			t.Error("failed update changed merchant")
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
+	w.epusdtFailedUpdateUnchanged(m)
+
+	in.Enabled = false
+	disabled := w.mustSave(siteScope(w.siteA), in)
+	if disabled.Enabled {
+		t.Fatal("gateway outage prevented disabling merchant")
+	}
+	in.Rev, in.Enabled = disabled.Rev, true
+	if _, err := w.save(siteScope(w.siteA), in); !isField(err, "/settings") {
+		t.Fatal("re-enabled merchant without query", err)
 	}
 }
 
@@ -190,12 +180,18 @@ func epusdtVisitCheckout(t *testing.T, upstream *httptest.Server, payURL string)
 
 func TestEpusdtPresetRejectsUnsupportedConfiguration(t *testing.T) {
 	for name, edit := range map[string]func(*MerchantConfig, *easyPaySettings){
-		"preset":        func(_ *MerchantConfig, s *easyPaySettings) { s.Preset = "unknown" },
-		"API":           func(_ *MerchantConfig, s *easyPaySettings) { s.Mode = "api" },
-		"close":         func(_ *MerchantConfig, s *easyPaySettings) { s.Close = true },
-		"refund":        func(_ *MerchantConfig, s *easyPaySettings) { s.Refund = true },
-		"cid":           func(_ *MerchantConfig, s *easyPaySettings) { s.CIDs = map[Method]string{"usdt.tron": "1"} },
-		"crypto amount": func(c *MerchantConfig, _ *easyPaySettings) { c.Currency = currency(t, "BTC") },
+		"pid/text":         func(_ *MerchantConfig, s *easyPaySettings) { s.PID = "merchant" },
+		"pid/leading zero": func(_ *MerchantConfig, s *easyPaySettings) { s.PID = "01001" },
+		"pid/zero":         func(_ *MerchantConfig, s *easyPaySettings) { s.PID = "0" },
+		"pid/negative":     func(_ *MerchantConfig, s *easyPaySettings) { s.PID = "-1" },
+		"pid/plus":         func(_ *MerchantConfig, s *easyPaySettings) { s.PID = "+1" },
+		"pid/overflow":     func(_ *MerchantConfig, s *easyPaySettings) { s.PID = "9223372036854775808" },
+		"preset":           func(_ *MerchantConfig, s *easyPaySettings) { s.Preset = "unknown" },
+		"API":              func(_ *MerchantConfig, s *easyPaySettings) { s.Mode = "api" },
+		"close":            func(_ *MerchantConfig, s *easyPaySettings) { s.Close = true },
+		"refund":           func(_ *MerchantConfig, s *easyPaySettings) { s.Refund = true },
+		"cid":              func(_ *MerchantConfig, s *easyPaySettings) { s.CIDs = map[Method]string{"usdt.tron": "1"} },
+		"crypto amount":    func(c *MerchantConfig, _ *easyPaySettings) { c.Currency = currency(t, "BTC") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := easyPayConfig(t, "https://pay.example.com")
@@ -235,4 +231,17 @@ func epusdtProbeReply(t *testing.T, wr http.ResponseWriter, r *http.Request, bod
 		return
 	}
 	easyPayWrite(t, wr, body)
+}
+
+func (w *world) epusdtFailedUpdateUnchanged(m Merchant) {
+	w.t.Helper()
+	if err := w.tx(siteScope(w.siteA), func(tx pg.Tx) error {
+		stored, err := ReadMerchant(w.t.Context(), tx, MerchantID(m.ID))
+		if err == nil && (stored.Rev != m.Rev || stored.Name != m.Name) {
+			w.t.Error("failed update changed merchant")
+		}
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
 }

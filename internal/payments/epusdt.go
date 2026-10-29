@@ -10,8 +10,7 @@ import (
 	"axiom/internal/platform/jsonx"
 )
 
-// Only save probes the gateway: opening a stored channel must not add network I/O to callbacks.
-func (c *easyPayChannel) validateMerchant(ctx context.Context, in MerchantInput) error {
+func (c *easyPayChannel) validateMerchant(in MerchantInput) error {
 	if c.settings.Preset != "epusdt" {
 		return nil
 	}
@@ -19,6 +18,14 @@ func (c *easyPayChannel) validateMerchant(ctx context.Context, in MerchantInput)
 		if method.Upstream != "usdt.tron" {
 			return &FieldError{Field: "/methods/" + strconv.Itoa(i) + "/upstream", Reason: "Epusdt requires usdt.tron"}
 		}
+	}
+	return nil
+}
+
+// Only save probes the gateway: opening a stored channel must not add network I/O to callbacks.
+func (c *easyPayChannel) probe(ctx context.Context) error {
+	if c.settings.Preset != "epusdt" {
+		return nil
 	}
 	v := c.credentials("order")
 	// Never create a payable order merely to validate configuration.

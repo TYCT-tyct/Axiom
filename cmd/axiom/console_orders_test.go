@@ -132,13 +132,10 @@ func (f consoleFixture) openTopUps(settings ...string) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if err = f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		_, err := f.pay.SaveMerchant(f.t.Context(), tx, audit.System("test"), payments.MerchantInput{
-			Site: uuid.UUID(f.siteID()), Kind: "testgw", Name: "Gateway", Enabled: true, Currency: usd, TTLSeconds: 1800,
-			Settings: []byte(`{}`), Secrets: map[string]secret.Secret{"key": secret.New("gateway-key")},
-			Methods: []payments.MethodInput{{Method: "alipay", Upstream: "alipay", Fee: payments.Fee{PPM: 30_000}, Enabled: true}},
-		})
-		return err
+	if _, err = f.pay.SaveMerchant(f.t.Context(), pg.PlatformScope(), audit.System("test"), payments.MerchantInput{
+		Site: uuid.UUID(f.siteID()), Kind: "testgw", Name: "Gateway", Enabled: true, Currency: usd, TTLSeconds: 1800,
+		Settings: []byte(`{}`), Secrets: map[string]secret.Secret{"key": secret.New("gateway-key")},
+		Methods: []payments.MethodInput{{Method: "alipay", Upstream: "alipay", Fee: payments.Fee{PPM: 30_000}, Enabled: true}},
 	}); err != nil {
 		f.t.Fatal(err)
 	}

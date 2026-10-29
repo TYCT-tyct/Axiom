@@ -175,9 +175,6 @@ func (c *easyPayChannel) Create(ctx context.Context, r CreateRequest) (Checkout,
 	if !easyPayToken(r.Upstream) || r.Total.Currency != c.currency || r.Total.Minor <= 0 || !easyPayHTTPS(r.ReturnURL) {
 		return Checkout{}, &Rejected{Code: "invalid_order", Message: "invalid method, amount or return URL"}
 	}
-	if c.settings.Preset == "epusdt" && (r.Method != "usdt.tron" || r.Upstream != "usdt.tron") {
-		return Checkout{}, &Rejected{Code: "invalid_order", Message: "Epusdt requires usdt.tron"}
-	}
 	v := c.createParams(r)
 	if c.settings.Mode == "redirect" {
 		result := Checkout{PayURL: c.settings.Gateway + "/submit.php?" + v.Encode()}
