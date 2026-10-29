@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -181,3 +182,107 @@ sudo() {
             self.assertNotIn(env["RUNNER_TOKEN"], " ".join(record["argv"]))
             self.assertNotIn("--token", record["argv"])
             self.assertIn("--preserve-env=ACTIONS_RUNNER_INPUT_TOKEN", record["argv"])
+
+
+@unittest.skipUnless(BASH, "Bash is unavailable")
+class RunnerDownloads(unittest.TestCase):
+    def test_failed_or_corrupt_downloads_are_retried_and_cached_files_are_verified(self):
+        digest = hashlib.sha256(b"verified archive").hexdigest()
+        stub = r'''
+curl() {
+  local output
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then output=$2; shift; fi
+    shift
+  done
+  if [ -z "${output:-}" ]; then echo metadata; return 0; fi
+  printf '%s' "$PAYLOAD" > "$output"
+  return "$CURL_STATUS"
+}
+jq() { echo "$DIGEST"; }
+runner_labels() { echo test; }
+'''
+        for cached in (None, "partial old archive", "verified archive"):
+            for payload, status in (("partial", 22), ("wrong checksum", 0), ("verified archive", 0)):
+                with self.subTest(cached=cached, payload=payload, status=status), tempfile.TemporaryDirectory() as tmp:
+                    archive = Path(tmp) / "actions-runner-linux-x64-fixture.tar.gz"
+                    if cached is not None:
+                        archive.write_text(cached)
+                        archive.chmod(0o600)
+                    env = {**os.environ, "PAYLOAD": payload, "CURL_STATUS": str(status),
+                           "DIGEST": digest, "home": Path(tmp).as_posix(), "prefix": "test", "runner_version": "fixture"}
+                    preamble = shell_function("install_runner").split('  if [ ! -f "$dir/.runner" ]; then')[0] + "}\n"
+                    result = subprocess.run([BASH, "-eu", "-c", stub + shell_function("download") + "\n" + shell_function("service") +
+                                             "\n" + preamble + "install_runner 1"],
+                                            env=env, capture_output=True, text=True)
+                    valid = cached == "verified archive" or (payload == "verified archive" and status == 0)
+                    self.assertEqual(result.returncode == 0, valid, result.stderr)
+                    self.assertEqual(list(Path(tmp).iterdir()), [archive] if valid else [])
+                    if valid:
+                        self.assertEqual(archive.read_text(), "verified archive")
+                        if os.name != "nt":
+                            self.assertEqual(archive.stat().st_mode & 0o777, 0o644)
+
+
+@unittest.skipUnless(BASH, "Bash is unavailable")
+class RunnerRemoval(unittest.TestCase):
+    def test_shared_resources_survive_other_prefixes_and_inventory_failures(self):
+        for remaining in ("", "other-prefix", "loaded-only", "not-found", "absent-prefix",
+                          "inventory-error", "initial-inventory-error", "loaded-inventory-error", "stop-error"):
+            with self.subTest(remaining=remaining), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                system = root / "system"
+                system.mkdir()
+                home = root / "home"
+                home.mkdir()
+                tools = root / "tools"
+                for name in ("go", "node"):
+                    (tools / name / "version").mkdir(parents=True)
+                unit = "actions.runner.TYCT-tyct-Axiom.test1.service"
+                for name in (unit, "axiom-ci.slice", "parent.conf"):
+                    (system / name).write_text("installed")
+                if remaining == "absent-prefix":
+                    (system / unit).unlink()
+                (home / "test1").mkdir()
+                (home / "other1").mkdir()
+                (home / "other1" / ".runner").write_text("registered")
+                stubs = r'''
+systemctl() {
+  case "$*" in
+    'list-unit-files --no-legend --type=service')
+      [ "$REMAINING" != initial-inventory-error ] || return 37
+      if [ "$REMAINING" = inventory-error ] && [ ! -f "$SYSTEM/$UNIT" ]; then return 37; fi
+      echo 'unrelated.service enabled'
+      if [ -f "$SYSTEM/$UNIT" ]; then echo "$UNIT enabled"; fi
+      if [ "$REMAINING" = other-prefix ]; then echo 'actions.runner.TYCT-tyct-Axiom.other1.service disabled'; fi ;;
+    'list-units --all --no-legend --plain --type=service')
+      [ "$REMAINING" != loaded-inventory-error ] || return 37
+      echo 'unrelated.service loaded active running'
+      if [ "$REMAINING" = loaded-only ]; then echo 'actions.runner.TYCT-tyct-Axiom.other1.service loaded active running'; fi
+      if [ "$REMAINING" = not-found ]; then echo "$UNIT not-found failed failed"; fi ;;
+    "disable --now $UNIT") [ "$REMAINING" != stop-error ] ;;
+    daemon-reload) ;;
+    list-unit-files*|list-units*) return 1 ;; # Unmatched patterned queries on systemd 255.
+    *) return 99 ;;
+  esac
+}
+
+id() { return 1; }
+pkill() { return 99; }
+userdel() { return 99; }
+'''
+                # Redirect every host path into the disposable fixture; no host units or users are touched.
+                remove = shell_function("remove").replace("/etc/systemd/system", system.as_posix())
+                env = {**os.environ, "home": home.as_posix(), "toolcache": tools.as_posix(), "prefix": "test",
+                       "go_version": "version", "node_version": "version", "slice": "axiom-ci.slice",
+                       "parent_dropin": (system / "parent.conf").as_posix(), "user": "unused", "REMAINING": remaining,
+                       "SYSTEM": system.as_posix(), "UNIT": unit}
+                result = subprocess.run([BASH, "-euo", "pipefail", "-c", shell_function("service") +
+                                         "\n" + stubs + remove + "\nremove"], env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 37 if "inventory-error" in remaining else (1 if remaining == "stop-error" else 0), result.stderr)
+                self.assertEqual((system / unit).exists(), remaining in ("stop-error", "initial-inventory-error"))
+                self.assertEqual((home / "test1").exists(), remaining in ("stop-error", "initial-inventory-error"))
+                self.assertTrue((home / "other1" / ".runner").exists())
+                for path in (system / "axiom-ci.slice", system / "parent.conf", tools / "go" / "version",
+                             tools / "node" / "version"):
+                    self.assertEqual(path.exists(), remaining not in ("", "not-found", "absent-prefix"), path)
