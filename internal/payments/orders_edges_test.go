@@ -168,6 +168,9 @@ func TestCheckoutCommitFailureReturnsUnknown(t *testing.T) {
 
 func TestOrderRLSWithinOneSite(t *testing.T) {
 	w := newTestWorld(t, fakePlugin{create: goodCheckout})
+	if err := w.db.Check(t.Context(), billing.Migrations(), Migrations()); err != nil {
+		t.Fatal(err)
+	}
 	w.waiting()
 	o := w.mustPlace(yuan, "rls")
 	other := pg.AccountScopeIn(w.siteA, uuid.NewV7())

@@ -16,6 +16,7 @@ export function SpecDialog({ model: live, onClose }: { model: Model; onClose: ()
   const [model, reload] = useSnapshot(live);
   return (
     <ChangeDialog
+      operation={`model-spec:${model.id}`}
       reload={reload}
       title={t("models.spec.title")}
       intro={<p>{t("models.spec.intro")}</p>}
@@ -51,6 +52,7 @@ export function NameDialog({ model, onClose }: { model: Model; onClose: () => vo
   };
   return (
     <ChangeDialog
+      operation={`model-names:${model.id}`}
       title={t("models.names.title")}
       intro={<p>{t("models.names.intro")}</p>}
       action={t("models.names.action")}
@@ -102,6 +104,7 @@ export function ModelStatusDialog({
   const checks = to === "listed" ? readiness(model) : [];
   return (
     <ChangeDialog
+      operation={`model-status:${model.id}:${to}`}
       reload={reload}
       title={t(`models.status.${to}.title`, { slug: model.slug })}
       intro={

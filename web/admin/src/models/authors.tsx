@@ -102,6 +102,7 @@ function AuthorDialog({ author, onClose }: { author?: Author; onClose: () => voi
   };
   return (
     <ChangeDialog
+      operation={author ? `model-author:edit:${author.slug}` : "model-author:create"}
       title={author ? t("models.authors.renameTitle") : t("models.authors.addTitle")}
       action={t("models.authors.save")}
       fields={(error) => (

@@ -3,7 +3,7 @@ import { mockAdmin } from "./admin-api.ts";
 import { uuid } from "./admin-data.ts";
 import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
-import { signedInAs } from "./mock-auth.ts";
+import { knownPassword, mfaEmail, signedInAs } from "./mock-auth.ts";
 import { words, zhText } from "./words.ts";
 
 // What a change dialog may send after an answer that did not settle it (change.tsx, attempt.ts): after a lost answer
@@ -149,6 +149,91 @@ test.describe("a grant whose answer is lost", () => {
     // the page fetched the account again, which here shows the one grant (it cannot prove a try was not done)
     await expect(page.getByText("$14.50").first()).toBeVisible();
     expect(sent).toHaveLength(2);
+  });
+});
+
+// The request of a grant left unsettled outlives its dialog and the session (unsettled.ts): the dialog opened again
+// offers that request again or giving it up, and never a form whose new key would add the credit a second time.
+test.describe("a grant left unsettled", () => {
+  const amount = words("users.credit.amount");
+  const cancel = (page: Page) => dialog(page).getByRole("button", { name: "取消" });
+  const resend = (page: Page) => dialog(page).getByRole("button", { name: zhText("change.resend") });
+  const giveUp = (page: Page) => dialog(page).getByRole("button", { name: zhText("change.giveUp") });
+
+  async function lose(page: Page) {
+    const state = await open(page, `/accounts/${acct(1)}`);
+    const sent = grants(page);
+    await press(page, "users.credit.open").click();
+    await dialog(page).getByLabel(amount).fill("2.5");
+    state.dropReplies = 1;
+    await send(page);
+    await expect(alert(page)).toContainText(zhText("change.unknown"));
+    return { state, sent };
+  }
+
+  async function expectOffered(page: Page) {
+    await press(page, "users.credit.open").click();
+    await expect(alert(page)).toContainText(zhText("change.unsettled"));
+    await expect(dialog(page).getByLabel(amount)).toHaveCount(0);
+    await expect(dialog(page).locator("button[type=submit]")).toHaveText(zhText("change.resend"));
+  }
+
+  test("is offered again after the dialog is closed, and sending it adds the credit once", async ({ page }) => {
+    const { state, sent } = await lose(page);
+    await cancel(page).click();
+    await expect(dialog(page)).toHaveCount(0);
+    await expectOffered(page);
+    // the page shows the old balance and the first try may still be committing: it is no proof, and nothing is sent
+    expect(sent).toHaveLength(1);
+
+    await resend(page).click();
+    await expect(done(page)).toBeVisible();
+    await expect(dialog(page).getByText(zhText("change.replayed"))).toBeVisible();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+    expect(state.stored.size).toBe(1);
+
+    // settled: the next dialog is a form again
+    await dialog(page)
+      .getByRole("button", { name: zhText("change.close") })
+      .last()
+      .click();
+    await press(page, "users.credit.open").click();
+    await expect(dialog(page).getByLabel(amount)).toBeVisible();
+  });
+
+  test("is given up on purpose: the form comes back and sends under a new key", async ({ page }) => {
+    const { state, sent } = await lose(page);
+    await cancel(page).click();
+    await expectOffered(page);
+    await giveUp(page).click();
+    await dialog(page).getByLabel(amount).fill("1");
+    await send(page);
+    await expect(done(page)).toBeVisible();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.key).not.toBe(sent[0]?.key);
+    expect(state.stored.size).toBe(2);
+  });
+
+  test("is offered again after the session ended and the person signed in again", async ({ page }) => {
+    const { state, sent } = await lose(page);
+    // the session ends before the request is sent again: the page goes to sign in, and the dialog goes with it
+    state.level = "none";
+    await resend(page).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    state.mfaEnabled = true;
+    await page.getByLabel("邮箱").fill(mfaEmail);
+    await page.getByLabel("密码").fill(knownPassword);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await page.getByLabel("验证码或恢复码").fill("123456");
+    await page.getByRole("button", { name: "验证" }).click();
+    await expect(page).toHaveURL(new RegExp(`/accounts/${acct(1)}$`));
+    await expectOffered(page);
+
+    await resend(page).click();
+    await expect(done(page)).toBeVisible();
+    expect(sent.at(-1)).toEqual(sent[0]);
+    expect(state.stored.size).toBe(1);
   });
 });
 

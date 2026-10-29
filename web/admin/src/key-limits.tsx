@@ -50,11 +50,14 @@ export function KeyLimitsUnavailable({ level }: { level: "site" | "account" }) {
 // KeyLimitsCard shows what an account of a site, or the site's accounts, are held to, and where it comes from; with
 // the right to, it opens the change.
 export function KeyLimitsCard({
+  operation,
   level,
   view,
   send,
   editable,
 }: {
+  // Whose limits these are ("key-limits:" + the site's or the account's id), for ChangeDialog to meet an unsettled try again.
+  operation: string;
   level: "site" | "account";
   view: View;
   send: Send;
@@ -85,17 +88,21 @@ export function KeyLimitsCard({
           ) : undefined
         }
       />
-      {open ? <KeyLimitsDialog level={level} view={view} send={send} onClose={() => setOpen(false)} /> : null}
+      {open ? (
+        <KeyLimitsDialog operation={operation} level={level} view={view} send={send} onClose={() => setOpen(false)} />
+      ) : null}
     </>
   );
 }
 
 function KeyLimitsDialog({
+  operation,
   level,
   view,
   send,
   onClose,
 }: {
+  operation: string;
   level: "site" | "account";
   view: View;
   send: Send;
@@ -106,6 +113,7 @@ function KeyLimitsDialog({
   const problem = t("settings.keyLimits.invalid", { min, max });
   return (
     <ChangeDialog
+      operation={operation}
       title={t("settings.keyLimits.edit")}
       intro={<p>{t(`settings.keyLimits.intro.${level}`)}</p>}
       action={t("settings.keyLimits.save")}

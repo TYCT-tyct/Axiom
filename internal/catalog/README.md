@@ -92,10 +92,12 @@
 
 ### 行级安全与权限
 
+范围读取位于策略级 InitPlan，写法和测量见 [pg](../platform/pg/README.md#决策与理由)。
+
 > 已实现：公开数据和平台数据的策略与授权。设计，尚未实现：后台任务角色 `axiom_catalog_job` 和 `catalog.lock_models`。
 
-- **公开数据**（`author`、`model`、`name`、`reference_price`、`revision`）：读用 `platform.in_any_scope()`（任意非空范围），写用 `platform.in_platform_scope()`。`model` 的读策略另加 `status <> 'draft' OR platform.in_platform_scope()`；`name` 和 `reference_price` 的读策略另加"所属模型已 listed，或在平台范围"，所以给草稿模型录的参考价不会提前公开。
-- **平台数据**（其余各表）：读写都用 `platform.in_platform_scope()`。
+- **公开数据**（`author`、`model`、`name`、`reference_price`、`revision`）：读用 `(SELECT platform.in_any_scope())`（任意非空范围），写用 `(SELECT platform.in_platform_scope())`（[pg 的范围表达式](../platform/pg/README.md#决策与理由)）。`model` 的读策略另加 `status <> 'draft' OR (SELECT platform.in_platform_scope())`；`name` 和 `reference_price` 的读策略另加"所属模型已 listed，或在平台范围"，所以给草稿模型录的参考价不会提前公开。
+- **平台数据**（其余各表）：读写都用 `(SELECT platform.in_platform_scope())`。
 - 后台任务以 `axiom_catalog_job` 角色执行：由本模块的迁移建立，只授予它要写的表：平台数据表，以及自动发布要写的 `reference_price`、`revision`；任务的事务用 `pg.Tx.SetRole` 切过去。
 - **现在的加锁**：管理操作以 `axiom_app` 执行，它对 `model` 的 `status`、`price_source`、`spec`、`rev` 有 UPDATE 权限，所以直接 `SELECT … FOR UPDATE`（`LockModel`），每个操作只锁一个模型，不需要排序。后台任务角色出现时才需要下面的 `lock_models`。
 - 模型行只经 `catalog.lock_models(ids uuid[])` 加锁（设计，随后台任务角色一起实现）：`SECURITY DEFINER`，属主 `axiom_owner`，固定 `search_path`，按 id 升序 `SELECT … FOR UPDATE` 并返回 `price_source`、`rev`；只把 EXECUTE 授予 `axiom_app` 和 `axiom_catalog_job`。它是运行时唯一以 `axiom_owner` 身份执行的代码，只加锁、不写。PostgreSQL 的行锁要求对该表至少一列有 UPDATE 权限（PostgreSQL 文档《SELECT》），任务角色没有 `model` 的 UPDATE 权限，也不该有：给它任何一列都等于允许它改这一列。表强制启用行级安全，所以函数里的查询仍受范围约束。测试：切到任务角色后自动发布成功；直接 `SELECT … FOR UPDATE` 模型行被拒。

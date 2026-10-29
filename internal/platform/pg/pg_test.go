@@ -26,11 +26,11 @@ CREATE SCHEMA rlstest AUTHORIZATION axiom_owner;
 SET ROLE axiom_owner;
 CREATE TABLE rlstest.items (site_id uuid NOT NULL, account_id uuid NOT NULL, note text NOT NULL);
 ALTER TABLE rlstest.items ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant ON rlstest.items USING (platform.in_scope(site_id, account_id));
+CREATE POLICY tenant ON rlstest.items USING (((SELECT platform.in_platform_scope()) OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[]) OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])));
 CREATE TABLE rlstest.shared (note text NOT NULL);
 ALTER TABLE rlstest.shared ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY read ON rlstest.shared FOR SELECT USING (platform.in_any_scope());
-CREATE POLICY write ON rlstest.shared USING (platform.in_platform_scope());
+CREATE POLICY read ON rlstest.shared FOR SELECT USING ((SELECT platform.in_any_scope()));
+CREATE POLICY write ON rlstest.shared USING ((SELECT platform.in_platform_scope()));
 GRANT USAGE ON SCHEMA rlstest TO axiom_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON rlstest.items, rlstest.shared TO axiom_app;
 RESET ROLE;`

@@ -37,7 +37,7 @@ func SQLState(err error) string {
 type Scope struct {
 	platform        bool
 	sites, accounts []uuid.UUID
-	// home is the site of an account scope's account, whose public configuration it reads (platform.sees_site); the
+	// home is the site of an account scope's account, whose public configuration it reads through platform.home_site(); the
 	// zero UUID is none. It widens nothing else: the account's rows are still only its own.
 	home uuid.UUID
 }
@@ -227,7 +227,7 @@ func applyScope(ctx context.Context, tx pgx.Tx, scope Scope) error {
 	return err
 }
 
-// uuidArray writes ids as a PostgreSQL array literal; no ids is the empty string, which in_scope reads as none.
+// uuidArray writes ids as a PostgreSQL array literal; no ids is the empty string, which the scope readers treat as none.
 func uuidArray(ids []uuid.UUID) string {
 	if len(ids) == 0 {
 		return ""
