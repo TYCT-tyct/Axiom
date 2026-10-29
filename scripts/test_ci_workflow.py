@@ -119,7 +119,7 @@ class BuildChecks(unittest.TestCase):
             for docs in (False, True):
                 with self.subTest(event=event, docs=docs):
                     self.assertEqual(enabled("journey", event, docs=docs), not docs and event != "pull_request")
-        self.assertIn("run: just web-journey", job("journey"))
+        self.assertIn("withcluster bash scripts/ci/web-container.sh pnpm --dir web journey", job("journey"))
 
     def test_matrix_and_command_keep_index_and_count(self):
         matrix = re.search(r"shard: \$\{\{ (.+) \}\}", job("e2e")).group(1)

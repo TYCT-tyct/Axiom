@@ -215,9 +215,10 @@ jobs:
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
 
-  # One browser against a real node with PostgreSQL and Valkey (#321): the host runs it, not the web container, because
-  # the node's test containers need Docker. Like go-test and e2e, not on a pull request; a failure keeps the browser's
-  # trace and the node's log.
+  # One browser against a real node with PostgreSQL and Valkey (#321). The databases are started on the host (withcluster,
+  # which needs Docker); the node and the browser run in the web container, so Chromium keeps its own network namespace
+  # (#363) and reaches the databases through the host gateway. Like go-test and e2e, not on a pull request; a failure
+  # keeps the browser's trace and the node's log.
   journey:
     needs: changes
     if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
@@ -236,9 +237,9 @@ jobs:
       - name: Clean test containers before tests
         run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
-        with:
-          playwright: "true"
-      - run: just web-journey
+      - run: just web-embed
+      - name: Run the journey in the web container
+        run: go run ./internal/platform/pgtest/cmd/withcluster bash scripts/ci/web-container.sh pnpm --dir web journey
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
@@ -246,6 +247,8 @@ jobs:
           path: web/test-results/
           if-no-files-found: ignore
           retention-days: 7
+      - if: always()
+        run: bash scripts/ci/web-container.sh cleanup
       - name: Clean test containers after tests
         if: always()
         run: bash scripts/ci/clean-test-containers.sh

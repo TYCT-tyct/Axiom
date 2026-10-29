@@ -77,6 +77,18 @@ class WebContainer(unittest.TestCase):
                                         env=dict(self.env, HOME=str(self.root), FAKE_CPUS=cpus), capture_output=True)
                 self.assertEqual(result.returncode, expected)
 
+    def test_journey_reaches_the_hosts_databases_through_the_gateway(self):
+        passwords = self.root / "kv"
+        env = dict(PGTEST_CLUSTER_URL="postgres://postgres:postgres@127.0.0.1:5001/postgres?sslmode=disable",
+                   KVTEST_URL="valkey://axiom@127.0.0.1:5002", KVTEST_PASSWORD_FILE=str(passwords / "password"))
+        self.assertEqual(self.run_script("pnpm", "--dir", "web", "journey", **env).returncode, 0)
+        create = next(args for args in self.commands() if args[:2] == ["docker", "create"])
+        self.assertIn("host.docker.internal:host-gateway", create)
+        self.assertIn("PGTEST_CLUSTER_URL=postgres://postgres:postgres@host.docker.internal:5001/postgres?sslmode=disable", create)
+        self.assertIn("KVTEST_URL=valkey://axiom@host.docker.internal:5002", create)
+        self.assertIn(f"{passwords}:{passwords}:ro", create)
+        self.assertNotIn("--network=host", create)
+
     def test_failed_or_exited_container_and_wrong_cgroup_fail_and_cleanup(self):
         for env, status in (({"FAKE_EXIT": "17"}, 17), ({"FAKE_PID": "0"}, 1), ({"WRONG_CGROUP": "1"}, 1)):
             with self.subTest(env=env):

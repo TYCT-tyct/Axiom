@@ -1,5 +1,5 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -25,8 +25,8 @@ export function readNode(): Node {
 // Starts the node as a test binary of cmd/axiom that serves until its standard input closes (so a crashed run cannot
 // leave it behind), and returns the function that stops it.
 export default async function start() {
-  const dir = join(tmpdir(), `axiom-journey-${process.pid}`);
-  mkdirSync(dir, { recursive: true });
+  // Unique per run: a leftover state file of an earlier run on this host would end the wait for the node at once.
+  const dir = mkdtempSync(join(tmpdir(), "axiom-journey-"));
   const binary = join(dir, "journey.test");
   execFileSync("go", ["test", "-tags", "journey", "-c", "-o", binary, "./cmd/axiom"], { cwd: root, stdio: "inherit" });
   const state = join(dir, "state.json");
@@ -45,13 +45,18 @@ export default async function start() {
   while (!existsSync(state)) {
     if (node.exitCode !== null || Date.now() > deadline) {
       node.kill();
+      rmSync(dir, { recursive: true, force: true });
       throw new Error(`the node did not start; its log is test-results/journey-node.log (exit ${node.exitCode})`);
     }
     await new Promise((done) => setTimeout(done, 200));
   }
   return async () => {
-    await stop(node, exited);
-    log.end();
+    try {
+      await stop(node, exited);
+    } finally {
+      log.end();
+      rmSync(dir, { recursive: true, force: true });
+    }
   };
 }
 

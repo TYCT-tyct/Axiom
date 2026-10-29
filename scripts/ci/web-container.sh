@@ -22,6 +22,17 @@ web_cache="${AXIOM_CACHE_DIR:-$(dirname "$go_cache")/_webcache}"
 mkdir -p "$go_cache" "$module_cache" "$web_cache"
 id
 stat -c '%u:%g %n' "$go_cache" "$web_cache"
+# The journey (#321) also needs the PostgreSQL and Valkey that withcluster started on the host: reach them through the
+# host gateway instead of the loopback address of the host's own network, and read the Valkey password from its file.
+shared=()
+if [ -n "${PGTEST_CLUSTER_URL:-}" ]; then
+  host=host.docker.internal
+  via_gateway() { sed -e "s/127\.0\.0\.1/$host/" -e "s/localhost/$host/" <<< "$1"; }
+  password_dir=$(dirname "$KVTEST_PASSWORD_FILE")
+  shared=(--add-host "$host:host-gateway" --volume "$password_dir:$password_dir:ro"
+    --env "PGTEST_CLUSTER_URL=$(via_gateway "$PGTEST_CLUSTER_URL")" --env "KVTEST_URL=$(via_gateway "$KVTEST_URL")"
+    --env KVTEST_PASSWORD_FILE)
+fi
 # The shared 80-core budget / eight runners allows ten cores each; eight leaves room for host-side setup.
 # A private cgroup namespace lets Node count this quota, rather than the parent's 80 cores.
 docker create --name "$name" \
@@ -34,6 +45,7 @@ docker create --name "$name" \
   --env PATH --env CI --env GATE_STRESS --env E2E_SHARD_INDEX --env E2E_SHARD_COUNT --env HOME=/tmp/axiom-web-home \
   --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
   --env npm_config_store_dir="$(dirname "$pnpm_store")" \
+  "${shared[@]}" \
   "$WEB_IMAGE" bash -e -c '
     mkdir -p "$HOME"
     git config --global --add safe.directory "$PWD"
