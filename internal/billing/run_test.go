@@ -139,6 +139,8 @@ func TestHeartbeatBeatsWhileThePoolIsExhausted(t *testing.T) {
 	}
 	defer b.conn.Close(t.Context())
 
+	// The held transaction is released however the test ends: a Fatal would otherwise leave it waiting on release, and
+	// the pool closes only once its connection comes back.
 	held, release := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -148,13 +150,22 @@ func TestHeartbeatBeatsWhileThePoolIsExhausted(t *testing.T) {
 			return nil
 		})
 	}()
-	<-held
+	var ended bool
 	defer func() {
+		if ended {
+			return
+		}
 		close(release)
 		if err := <-done; err != nil {
 			t.Errorf("the transaction that held the pool: %v", err)
 		}
 	}()
+	select {
+	case <-held:
+	case err := <-done:
+		ended = true
+		t.Fatalf("the transaction that was to hold the pool ended first: %v", err)
+	}
 
 	beat, cancel := context.WithTimeout(t.Context(), b.config.Heartbeat)
 	defer cancel()
@@ -178,6 +189,8 @@ func TestTheReapDoesNotTakeABeat(t *testing.T) {
 	// in flight on that node does: FOR UPDATE, which the reap takes, waits for FOR KEY SHARE.
 	other := uuid.NewV7()
 	b.sql("INSERT INTO billing.holders (id, expires_at) VALUES ('" + other.String() + "', clock_timestamp() - interval '2 hours')")
+	// The fencing transaction is released however the test ends: a Fatal would otherwise leave it waiting on release, and
+	// the bank's pool closes only once its connection comes back.
 	held, release := make(chan struct{}), make(chan struct{})
 	fenced := make(chan error, 1)
 	go func() {
@@ -190,7 +203,22 @@ func TestTheReapDoesNotTakeABeat(t *testing.T) {
 			return nil
 		})
 	}()
-	<-held
+	var ended bool
+	defer func() {
+		if ended {
+			return
+		}
+		close(release)
+		if err := <-fenced; err != nil {
+			t.Errorf("the transaction that fenced the row: %v", err)
+		}
+	}()
+	select {
+	case <-held:
+	case err := <-fenced:
+		ended = true
+		t.Fatalf("the fencing transaction ended before the reap waited: %v", err)
+	}
 	reaped := make(chan error, 1)
 	go func() {
 		_, err := b.billing.Reap(t.Context())
@@ -214,7 +242,8 @@ func TestTheReapDoesNotTakeABeat(t *testing.T) {
 		t.Error("the reap succeeded while the row it must lock was fenced, so the test proved nothing")
 	}
 	close(release)
+	ended = true
 	if err := <-fenced; err != nil {
-		t.Fatal(err)
+		t.Fatalf("the fencing transaction: %v", err)
 	}
 }
