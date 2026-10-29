@@ -56,6 +56,48 @@ type PaymentsMerchantMethod struct {
 	Enabled    bool
 }
 
+type PaymentsRefund struct {
+	ID               uuid.UUID
+	OrderID          uuid.UUID
+	SiteID           uuid.UUID
+	AccountID        uuid.UUID
+	State            string
+	Via              string
+	Credits          int64
+	RequestedCredits int64
+	Amount           int64
+	WithFee          bool
+	RefundKey        bool
+	ManualOnly       bool
+	ProviderRef      string
+	Reason           string
+	RequestedBy      uuid.UUID
+	ApprovedBy       *uuid.UUID
+	IdemKey          string
+	Attempts         int32
+	SentAt           pgtype.Timestamptz
+	NextQueryAt      time.Time
+	CreatedAt        time.Time
+	FinishedAt       pgtype.Timestamptz
+}
+
+type PaymentsResolution struct {
+	ID          uuid.UUID
+	OrderID     uuid.UUID
+	SiteID      uuid.UUID
+	AccountID   uuid.UUID
+	RefundID    *uuid.UUID
+	Outcome     string
+	TradeNo     string
+	Amount      int64
+	Evidence    string
+	Reason      string
+	RequestedBy uuid.UUID
+	ApprovedBy  *uuid.UUID
+	IdemKey     string
+	CreatedAt   time.Time
+}
+
 type PaymentsSetting struct {
 	SiteID                 uuid.UUID
 	Open                   *bool
@@ -72,4 +114,6 @@ type PaymentsSetting struct {
 	PostExpiryQuerySeconds *int64
 	IpOrderLimit           *int64
 	IpFailureLimit         *int64
+	RefundWithFee          *bool
+	AmountMismatchPolicy   *string
 }

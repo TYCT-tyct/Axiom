@@ -25,16 +25,15 @@ type modelName struct {
 // Variants》, 2026-10-19: :nitro sorts by throughput and :floor by price).
 var sortVariants = map[string]string{"nitro": "throughput", "floor": "price"}
 
-// catalogVariants are the variants OpenRouter keeps in its catalog as entries of their own. This catalog has none, and
-// a name is never served by the base model instead (the overview: stripping :free would return the paid entry), so
-// each is a model that does not exist.
-var catalogVariants = map[string]bool{"free": true, "batch": true, "thinking": true, "extended": true}
+// catalogVariants need separate entries and prices. Refuse them explicitly until the catalog can represent them:
+// stripping :free and serving the paid base model would break the request's price constraint.
+var catalogVariants = map[string]bool{"free": true, "batch": true, "extended": true}
 
 const (
 	errExacto = "The :exacto variant is not supported yet: it ranks endpoints by measured tool-calling quality, which is not measured here. " +
 		"Use :nitro, :floor or provider.sort."
 	errOnline = "The :online variant is not supported yet: it is the web search plugin, which is not available here."
-	errAlias  = "Model aliases such as ~author/family-latest are not supported yet; use the model's own name."
+	errAlias  = "Model aliases such as ~author/family-latest are not supported: this catalog has no model-family mappings; use a concrete model name."
 )
 
 // maxModelName bounds the whole name a client writes, variants included, in bytes. The call record keeps that name and
@@ -49,8 +48,8 @@ func noVariant(message string) *Refusal {
 
 // parseModelName reads the variants after the model. They may come in any order, the last sorting one deciding the
 // ranking. A variant this service cannot honor is a 400, as an unsupported provider member is: a request is never
-// served without what it asked for. A suffix that is a catalog variant or none is a 404 for a model that does not
-// exist, whether or not the base exists. :exacto is left to rank, because an explicit provider.sort replaces it
+// served without what it asked for. A known catalog variant cannot be represented here and is a 400; an unknown suffix is a 404,
+// whether or not the base exists. :exacto is left to rank, because an explicit provider.sort replaces it
 // (OpenRouter《Exacto》, 2026-10-19).
 func parseModelName(name string) (modelName, *Refusal) {
 	if len(name) > maxModelName {
@@ -76,9 +75,9 @@ func parseModelName(name string) (modelName, *Refusal) {
 		case suffix == "online":
 			return modelName{}, invalid(errOnline)
 		case suffix == "thinking":
-			return modelName{}, noVariant("The model has no :thinking variant; ask for reasoning with the reasoning parameter.")
+			return modelName{}, invalid("The :thinking catalog variant is not supported; ask for reasoning with the reasoning parameter.")
 		case catalogVariants[suffix]:
-			return modelName{}, noVariant("The model has no :" + suffix + " variant.")
+			return modelName{}, invalid("The :" + suffix + " catalog variant is not supported: this catalog has no separate variant entries or prices.")
 		default:
 			return modelName{}, noVariant("The model name has a suffix after ':' that is not a model variant.")
 		}
@@ -98,7 +97,7 @@ type variantNames struct {
 // variant. A variant that cannot be honored is refused, alternates' included, so none is ignored: an :exacto only an
 // explicit provider.sort replaces (a sort variant on the first name does not rank an alternate's quality), and a sorting
 // variant on an alternate that differs from the ranking the request gets, as routing ranks per request. An alternate
-// that is a catalog variant or has an unknown suffix is left out, as it could not be tried.
+// with an unknown suffix is left out, as it could not be tried; a known unsupported variant is refused.
 func readRouting(req *protocol.Request) (routing.Override, variantNames, error) {
 	over, err := override(req.Provider)
 	if err != nil {
