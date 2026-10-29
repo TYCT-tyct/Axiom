@@ -1,5 +1,14 @@
 // The console's messages in Chinese, the source every other language follows.
 export default {
+  announcements: {
+    title: "站内公告",
+    loading: "正在加载公告…",
+    unavailable: "公告暂不可用。",
+    error: "公告加载失败，请重试。",
+    retry: "重试",
+    empty: "暂无有效公告。",
+  },
+
   nav: {
     overview: "概览",
     keys: "API key",

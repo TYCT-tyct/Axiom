@@ -18,6 +18,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/payments"
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
@@ -81,7 +82,12 @@ func startNode(c commandLine, clock *testClock, deadline time.Duration) consoleF
 	}
 	logs := new(bytes.Buffer)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	routes := publicRoutes(consoleAPI{version: "test", accounts: svc, payments: pay, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
+	exit, err := egress.New(egress.Direct)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	c.t.Cleanup(exit.CloseIdleConnections)
+	routes := publicRoutes(consoleAPI{exit: exit, version: "test", accounts: svc, payments: pay, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
 	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, pay: pay, gateway: gateway}
 }
 

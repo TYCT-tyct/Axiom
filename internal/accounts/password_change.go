@@ -222,6 +222,10 @@ func (s *Service) setPassword(ctx context.Context, tx pg.Tx, user, account, site
 	if err := audit.Record(ctx, tx, audit.Event{Actor: audit.User(user), Action: "user.password_set", Target: userTarget(site, account, user)}); err != nil {
 		return err
 	}
-	return s.recovery.mailer.Enqueue(ctx, tx, mail.Tenant{Site: site, Account: account},
-		passwordMail(email, s.snapshot.Load().sites[SiteID(site)].Name, passwordLanguage(language), ""))
+	if err = s.recovery.mailer.Enqueue(ctx, tx, mail.Tenant{Site: site, Account: account},
+		passwordMail(email, s.snapshot.Load().sites[SiteID(site)].Name, passwordLanguage(language), "")); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE accounts.user_notices SET email_done=true WHERE user_id=$1 AND kind='factor_changed' AND source=(SELECT factor_version::text FROM accounts.users WHERE id=$1)`, user)
+	return err
 }
