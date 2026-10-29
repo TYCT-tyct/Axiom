@@ -119,8 +119,8 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 		return over, variantNames{}, err
 	}
 	if over.RequireParameters {
-		params, unknown := protocol.RequestParameters(body)
-		if unknown != "" {
+		params, unknown, found := protocol.RequestParameters(req.Format, body)
+		if found {
 			return over, variantNames{}, invalid("provider.require_parameters cannot be kept: no endpoint parameter inventory records \"" + unknown + "\"; supplier model records and catalog specs carry no sampling or provider parameters.")
 		}
 		over.RequiredParameters = params

@@ -70,33 +70,58 @@ var requestControls = map[string]struct{}{
 
 // RequestParameters reports the sampling, output-cap and stopping parameters a request sets, and the first top-level
 // member that is neither one of them nor a request control: that member's support is not in the catalog. Capability
-// parameters are Request.Needs' to enforce. A null member is absent, as everywhere else. It is a second pass over a
-// body Inspect has already validated, so only a request that asks for provider.require_parameters pays for it.
-func RequestParameters(body []byte) (set ParameterSet, unknown string) {
+// parameters are Request.Needs' to enforce. A null member is absent, as everywhere else. The third result says an
+// undeclared member was found: an empty member name is itself undeclared, so an empty unknown string cannot stand for
+// success. It is a second pass over a body Inspect has already validated, so only a request that asks for
+// provider.require_parameters pays for it.
+//
+// Responses carries verbosity inside its text object, which Inspect reads only for format. The scan reads that one
+// nested parameter; text.format stays a capability, enforced by Request.Needs.
+func RequestParameters(f Format, body []byte) (set ParameterSet, unknown string, found bool) {
 	s := scanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body))}
 	if s.dec.PeekKind() != '{' {
-		return set, ""
+		return set, "", false
 	}
 	if err := s.token(); err != nil {
-		return set, ""
+		return set, "", false
 	}
 	for s.dec.PeekKind() != '}' {
 		if err := s.member(); err != nil {
-			return set, ""
+			return set, "", false
 		}
 		present := s.dec.PeekKind() != 'n'
+		if present && f == Responses && string(s.name) == "text" {
+			if verbosity, err := s.textVerbosity(); err != nil {
+				return set, "", false
+			} else if verbosity {
+				return set, "verbosity", true
+			}
+			continue // textVerbosity consumed the value
+		}
 		if p, ok := parameterNames[string(s.name)]; ok { // a map lookup with this conversion does not allocate
 			if present {
 				set.Add(p)
 			}
 		} else if _, ok := requestControls[string(s.name)]; !ok && present {
-			return set, parameterName(string(s.name))
+			return set, parameterName(string(s.name)), true
 		}
 		if err := s.skip(); err != nil {
-			return set, ""
+			return set, "", false
 		}
 	}
-	return set, ""
+	return set, "", false
+}
+
+// textVerbosity reads a Responses text object for verbosity, the one model parameter it carries that Inspect does not
+// read. It consumes the whole value, including its closing brace.
+func (s *scanner) textVerbosity() (found bool, err error) {
+	err = s.eachMember(func() error {
+		if string(s.name) == "verbosity" && s.dec.PeekKind() != 'n' {
+			found = true
+		}
+		return s.skip()
+	})
+	return found, err
 }
 
 // parameterName bounds what an error message repeats of a name the client chose.

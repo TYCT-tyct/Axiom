@@ -211,7 +211,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
   | 参数或行为 | 这里与理由 |
   |---|---|
   | 供应商名称 | 当前接入的都是中转系统，只按不可变分组代号选择；官方供应商名称尚无可信对应。发现接口的匿名展示 tag 不是分组代号，不参与路由；真实名称不公开 |
-  | `require_parameters: true` | 只保证上面公布的参数；`seed`、`logprobs`、`frequency_penalty`、`verbosity` 和供应商专有参数不在清单里，请求写了这些就 400 并点名，因为供应商同步的模型记录和目录规格没有逐端点的采样/提供商参数清单。清单内的采样、输出上限或 `stop` 没有端点满足时按覆盖过滤 404；能力参数没有端点时仍按能力缺失 404。`false` 或未写仍强制已有能力匹配 |
+  | `require_parameters: true` | 只保证上面公布的参数；`seed`、`logprobs`、`frequency_penalty`、`verbosity`（含 Responses 的 `text.verbosity`）和供应商专有参数不在清单里，请求写了这些就 400 并点名，因为供应商同步的模型记录和目录规格没有逐端点的采样/提供商参数清单。清单内的采样、输出上限或 `stop` 没有端点满足时按覆盖过滤 404；能力参数没有端点时仍按能力缺失 404。`false` 或未写仍强制已有能力匹配 |
   | 非空 `quantizations` | 400；目录规格和供应商同步的模型记录都没有量化等级，不能把未知当作 fp16 或已验证的 unknown。空列表不增加限制 |
   | `preferred_min_throughput` / `preferred_max_latency` 的百分位对象 | 400；quality 只保存端点的 EWMA 延迟和吞吐（至少 5 个样本、30 分钟内），没有五分钟窗口的 p50/p75/p90/p99 分位数或窗口样本。数字形式沿用实测 EWMA 软偏好，不声称是 p50 |
   | `sort` 对象里其他成员（包括 percentile） | 400；仅 `by` 和 `partition` 有语义；`percentile` 还缺分位数数据，不静默忽略 |

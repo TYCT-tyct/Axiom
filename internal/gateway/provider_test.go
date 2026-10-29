@@ -261,6 +261,11 @@ func TestProviderRequiresEveryParameter(t *testing.T) {
 	if _, resp, body := r.sendNamed(a, "acme/alpha", `"seed":7,"provider":{"require_parameters":true},`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "provider.require_parameters") || !strings.Contains(body, "no endpoint parameter inventory") {
 		t.Errorf("seed with the guarantee: %d %s", resp.StatusCode, body)
 	}
+	// An empty member name is undeclared, not the end of the scan: it must refuse before the temperature behind it can
+	// be ignored.
+	if _, resp, body := r.sendNamed(a, "acme/alpha", `"":1,"temperature":0.5,"provider":{"require_parameters":true},`); resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "provider.require_parameters") {
+		t.Errorf("empty name before temperature: %d %s", resp.StatusCode, body)
+	}
 	// The same snapshot with no endpoint declaring temperature: the guarantee leaves nothing, as any override does.
 	endpoints := append([]routing.Endpoint(nil), r.routes...)
 	for i := range endpoints {
@@ -271,6 +276,41 @@ func TestProviderRequiresEveryParameter(t *testing.T) {
 	r.install(routing.Preset{Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest}, endpoints...)
 	if _, resp, body := r.sendNamed(a, "acme/alpha", `"temperature":0.5,"provider":{"require_parameters":true},`); resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "override_filter") {
 		t.Errorf("no endpoint with temperature: %d %s", resp.StatusCode, body)
+	}
+	r.idle(1 << 30)
+}
+
+// TestProviderRequireParametersReadsResponsesText: Responses carries verbosity inside text, which Inspect reads only
+// for format. The guarantee must see it in every format, and leave text.format to the capability filter.
+func TestProviderRequireParametersReadsResponsesText(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) {
+		o.endpoints = func(_ string, e *routing.Endpoint) {
+			var all protocol.ParameterSet
+			for p := protocol.Parameter(0); p < protocol.NumParameters; p++ {
+				all.Add(p)
+			}
+			e.Parameters = all
+		}
+	})
+	a := r.newAccount(1e9)
+	for name, tc := range map[string]struct {
+		path, body string
+		want       int
+	}{
+		"messages top-level": {"/v1/messages", `{"model":"acme/alpha","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"verbosity":"high","provider":{"require_parameters":true}}`, http.StatusBadRequest},
+		"chat top-level":     {"/v1/chat/completions", `{"model":"acme/alpha","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"verbosity":"high","provider":{"require_parameters":true}}`, http.StatusBadRequest},
+		"responses text":     {"/v1/responses", `{"model":"acme/alpha","max_output_tokens":16,"input":"hello","text":{"verbosity":"high"},"provider":{"require_parameters":true}}`, http.StatusBadRequest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, body := r.do(http.MethodPost, tc.path, a.key, strings.NewReader(tc.body))
+			if resp.StatusCode != tc.want {
+				t.Fatalf("%d, want %d: %s", resp.StatusCode, tc.want, body)
+			}
+			if tc.want == http.StatusBadRequest && !strings.Contains(body, "verbosity") {
+				t.Errorf("refusal does not name verbosity: %s", body)
+			}
+		})
 	}
 	r.idle(1 << 30)
 }

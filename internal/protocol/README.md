@@ -2,7 +2,7 @@
 
 三种调用格式（OpenAI Chat、OpenAI Responses、Anthropic Messages）的读和写。总体规则见[总体架构的「协议转换」](../../docs/architecture.md#协议转换)，对外行为见[接入与对外接口](../../docs/domains/gateway.md)。
 
-目前有读请求摘要的 `Inspect`、按 `provider.require_parameters` 读已声明参数的 `RequestParameters`、改写同格式请求并在 Chat 与另两种格式之间双向转换的 `Prepare`、转发流的 `Relay`（同格式，以及 Chat 与 Messages、Responses 之间的双向转换）、回答流开始前错误的 `RenderError`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；非流式聚合（`RelayOptions.Aggregate`）是同一个 `Relay` 的另一种输出，见「非流式聚合」；`UsageOf` 读一份完整答复（compact 端点透传的那种）里的用量。
+目前有读请求摘要的 `Inspect`、按 `provider.require_parameters` 读已声明参数的 `RequestParameters(format, body)`、改写同格式请求并在 Chat 与另两种格式之间双向转换的 `Prepare`、转发流的 `Relay`（同格式，以及 Chat 与 Messages、Responses 之间的双向转换）、回答流开始前错误的 `RenderError`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；非流式聚合（`RelayOptions.Aggregate`）是同一个 `Relay` 的另一种输出，见「非流式聚合」；`UsageOf` 读一份完整答复（compact 端点透传的那种）里的用量。
 
 ## 包
 
@@ -19,7 +19,7 @@
 
 `Request` 用目录的计费项和服务等级表达，不引用 billing：模块依赖里 protocol 在 billing 之下。字段名取自 Anthropic《Messages API reference》《Service tiers》《Fast mode》《Extended thinking》《Compaction》、OpenAI《Create chat completion》《Responses API reference》《Prompt caching》《Compaction》、OpenRouter《Reasoning tokens》《Prompt caching》（2026-10-14 读取）；`search_result` 取自 Anthropic《Search results》（2026-10-15 读取）：用户消息顶层和 `tool_result` 里都可以有，`content` 是文本块数组，所以沿 `content` 进入的部件规则照常适用。
 
-`RequestParameters(body)` 是第二次扫描，只在 `provider.require_parameters: true` 时由 gateway 调用：返回请求设置的采样、输出上限和停止参数集合，以及第一个既不是这些参数也不是请求控制的成员；`null` 算没写。采样、输出上限和停止由 `parameterNames` 判断，参数名的几种写法映射到同一位（`max_tokens`/`max_completion_tokens`/`max_output_tokens` 等）；工具、回复格式和推理是能力，已经由 `Inspect` 的 `Needs` 硬过滤（空 `tools` 不算需要工具），不在这里重复。控制成员（格式结构、路由与计费字段、`thinking`/`output_config` 等）不算参数。新增能力参数要进 `Request.Needs`，新增非能力参数才进 `parameterNames`；`TestRequestParameters` 覆盖。
+`RequestParameters(format, body)` 是第二次扫描，只在 `provider.require_parameters: true` 时由 gateway 调用：返回请求设置的采样、输出上限和停止参数集合，第一个既不是这些参数也不是请求控制的成员，以及是否发现了它；`null` 算没写，空成员名本身算发现（空字符串不能当「没有」）。`format` 让 Responses 的 `text.verbosity` 按顶层 `verbosity` 一样拒绝，同时保留 `text.format` 的能力检查。采样、输出上限和停止由 `parameterNames` 判断，参数名的几种写法映射到同一位（`max_tokens`/`max_completion_tokens`/`max_output_tokens` 等）；工具、回复格式和推理是能力，已经由 `Inspect` 的 `Needs` 硬过滤（空 `tools` 不算需要工具），不在这里重复。控制成员（格式结构、路由与计费字段、`thinking`/`output_config` 等）不算参数。新增能力参数要进 `Request.Needs`，新增非能力参数才进 `parameterNames`；`TestRequestParameters` 覆盖。
 
 | 字段 | 谁用 | Messages | Responses | Chat |
 |---|---|---|---|---|
