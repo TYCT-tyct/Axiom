@@ -31,6 +31,9 @@ type expirer struct {
 	scope    pg.Scope
 	logger   *slog.Logger
 	failures metric.Int64Counter
+	// deferred counts the batches a run could not write off in full, and deferredAmount what it left for a later run,
+	// in billionths of a credit.
+	deferred, deferredAmount metric.Int64Counter
 	// What the tests turn down: the transactions one read of the ledger takes, the accounts one read of the due
 	// accounts takes, and the budgets.
 	movements     int32
@@ -45,7 +48,11 @@ func newExpirer(db *pg.DB, scope pg.Scope, logger *slog.Logger, meter metric.Met
 	}
 	return &expirer{
 		db: db, scope: scope, logger: logger,
-		failures:  counter(meter, "axiom.billing.expire.failures", "Accounts whose expired credit could not be written off in a run."),
+		failures: counter(meter, "axiom.billing.expire.failures", "Accounts whose expired credit could not be written off in a run."),
+		deferred: counter(meter, "axiom.billing.expire.deferred",
+			"Expired credit batches a run wrote off only in part, the rest held back by reservations, freezes or the balance."),
+		deferredAmount: counter(meter, "axiom.billing.expire.deferred.amount",
+			"The credit those batches kept for a later run, in billionths of a credit."),
 		movements: movementPage, accounts: dueAccountsPage, accountBudget: expireAccountBudget, runBudget: expireRunBudget,
 	}
 }
@@ -164,19 +171,33 @@ func (e *expirer) expire(ctx context.Context, account uuid.UUID) (written int64,
 			return 0, err
 		}
 	}
+	var held deferred
 	err = e.db.Tx(ctx, e.scope, func(tx pg.Tx) (err error) {
-		written, err = writeOffAccount(ctx, tx, account, e.movements)
+		written, held, err = writeOffAccount(ctx, tx, account, e.movements)
 		return err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("billing: write off the credit of %s: %w", account, err)
 	}
+	if held.batches > 0 {
+		e.deferred.Add(ctx, int64(held.batches))
+		e.deferredAmount.Add(ctx, held.amount)
+	}
 	return written, nil
 }
 
+// deferred is the expired credit a run left in the batches: still frozen, held by in-flight reservations, or beyond what
+// the balance covers. It is written off in a later run, once the freeze or the reservation has gone
+// (docs/domains/billing.md「额度批次」). amount is in billionths of a credit; batches counts the batches, one write-off
+// each.
+type deferred struct {
+	amount  int64
+	batches int
+}
+
 // writeOffAccount writes off the expired part of the account's batches in tx, which must be in the platform scope, and
-// returns the amount. It holds the account's balance row lock to the end of the transaction, replays the allocation to
-// the latest movement, writes off, and stores the allocation.
+// returns the amount and what the cap held back. It holds the account's balance row lock to the end of the transaction,
+// replays the allocation to the latest movement, writes off, and stores the allocation.
 //
 // What counts as unspent is what the replay leaves at the moment the lock is taken, so credit spent after its expiry
 // and before the write-off is used, not lapsed. The write-off is capped at the balance less reservations and freezes, and not
@@ -185,47 +206,54 @@ func (e *expirer) expire(ctx context.Context, account uuid.UUID) (written int64,
 // reservation admitted before it can still be settled in full (its charge is capped by cap, which is at least its own
 // amount). What the cap holds back is written off by a later run, when the reservations have settled. A second run
 // finds nothing left to write off.
-func writeOffAccount(ctx context.Context, tx pg.Tx, account uuid.UUID, size int32) (written int64, err error) {
+func writeOffAccount(ctx context.Context, tx pg.Tx, account uuid.UUID, size int32) (written int64, held deferred, err error) {
 	balance, a, err := replayAccount(ctx, tx, account, size)
 	if err != nil {
-		return 0, err
+		return 0, deferred{}, err
 	}
-	if written, err = a.writeOffDue(ctx, tx, account, room(LockBalanceRow{Balance: balance.Balance, Reserved: balance.Reserved, Frozen: balance.Frozen}, 0)); err != nil {
-		return 0, err
+	if written, held, err = a.writeOffDue(ctx, tx, account, room(LockBalanceRow{Balance: balance.Balance, Reserved: balance.Reserved, Frozen: balance.Frozen}, 0)); err != nil {
+		return 0, deferred{}, err
 	}
 	if written > 0 {
 		if err := a.catchUp(ctx, tx, account, size); err != nil {
-			return 0, err
+			return 0, deferred{}, err
 		}
 	}
-	return written, a.save(ctx, tx, account)
+	return written, held, a.save(ctx, tx, account)
 }
 
 // writeOffDue posts an expiry for each open batch whose time has come, in expiry order so that a cap of limit spares the
-// batches that expire last, and returns the total. It does not replay what it posts.
-func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUID, limit int64) (written int64, err error) {
+// batches that expire last, and returns the total and what it left in the batches. It does not replay what it posts.
+func (a *allocation) writeOffDue(ctx context.Context, tx pg.Tx, account uuid.UUID, limit int64) (written int64, held deferred, err error) {
 	now, err := queries.Now(ctx, tx)
 	if err != nil {
-		return 0, fmt.Errorf("billing: read the clock: %w", err)
+		return 0, deferred{}, fmt.Errorf("billing: read the clock: %w", err)
 	}
 	for _, b := range a.open {
-		if b.expiresAt == nil || b.expiresAt.After(now) || limit == 0 {
+		if b.expiresAt == nil || b.expiresAt.After(now) {
 			break
 		}
-		w := min(b.available(), limit)
-		if w == 0 {
+		remaining := b.remaining()
+		if remaining == 0 {
 			continue
 		}
-		e := event{site: b.site, account: account, kind: "expire", request: b.id, revision: b.expired}
-		if posted, err := post(ctx, tx, e, line{bookUserBalance, w, siteCredits}, line{bookCreditExpired, -w, siteCredits}); err != nil {
-			return 0, err
-		} else if !posted {
-			return 0, fmt.Errorf("billing: the expiry of batch %s at %d is posted already, but the allocation did not see it", b.id, b.expired)
+		w := min(b.available(), limit)
+		if w > 0 {
+			e := event{site: b.site, account: account, kind: "expire", request: b.id, revision: b.expired}
+			if posted, err := post(ctx, tx, e, line{bookUserBalance, w, siteCredits}, line{bookCreditExpired, -w, siteCredits}); err != nil {
+				return 0, deferred{}, err
+			} else if !posted {
+				return 0, deferred{}, fmt.Errorf("billing: the expiry of batch %s at %d is posted already, but the allocation did not see it", b.id, b.expired)
+			}
+			limit -= w
+			written += w
 		}
-		limit -= w
-		written += w
+		if w < remaining {
+			held.amount += remaining - w
+			held.batches++
+		}
 	}
-	return written, nil
+	return written, held, nil
 }
 
 // expireArgs is the job of one run.

@@ -73,9 +73,10 @@ WHERE account_id = @account_id AND allocated_seq = @was_seq AND allocated_at = @
 -- name: DueAccounts :many
 -- The accounts with a batch whose time has come at now and which still holds something, after the account given, in
 -- order. now is the one time the run takes, so the range on expires_at is a bound of the index credit_batches_due.
+-- Frozen credit holds something too: it is written off once the freeze resolves, and until then the run reports it as
+-- deferred (docs/domains/billing.md「额度批次」), so a batch whose whole remainder is frozen is due as well.
 SELECT b.account_id FROM billing.credit_batches b
-WHERE b.expires_at <= @now::timestamptz AND b.consumed + b.expired < b.amount
-    AND b.freeze_total - b.unfreeze_total < b.amount - b.consumed - b.expired AND b.account_id > @after
+WHERE b.expires_at <= @now::timestamptz AND b.consumed + b.expired < b.amount AND b.account_id > @after
 GROUP BY b.account_id
 ORDER BY b.account_id
 LIMIT @max;
