@@ -2,13 +2,13 @@ package newapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
@@ -33,15 +33,34 @@ type priceEntry struct {
 // autoRatio is the ratio new-api writes for its "auto" group.
 const autoRatio number = "auto"
 
-// offerProgress is how far a reading of the offer got: the groups and prices, then the models of one group after
-// another. Reading them takes one request per group, more than a window of the rate bucket may allow.
+// offerProgress is the position in the offer listing: the groups, their ratios and the prices read when the pass began,
+// the group it reached, and the groups built so far. The pass reads the prices once, so its models are priced alike; a
+// model's cost is worked out when the pass ends, so the position carries names, not schedules. A position whose groups
+// are no longer the supplier's begins again: a group removed since would be read for ever, its model list refused.
 type offerProgress struct {
-	at     time.Time
-	groups map[string]groupEntry
-	names  []string
-	prices map[string]priceEntry
-	next   int
-	built  []adapter.Group
+	V      int                   `json:"v"`
+	Names  []string              `json:"names"`
+	Groups map[string]groupEntry `json:"groups"`
+	Prices []priceEntry          `json:"prices"`
+	Next   int                   `json:"next"`
+	Built  []builtGroup          `json:"built"`
+}
+
+// builtGroup is a group whose models the pass read; the prices turn it into an offer group when the pass ends.
+type builtGroup struct {
+	Name, Desc, Ratio string
+	Models            []string
+}
+
+func decodeOffer(raw adapter.Listing) offerProgress {
+	if len(raw) == 0 {
+		return offerProgress{}
+	}
+	var p offerProgress
+	if jsonx.UnmarshalKnown(raw, &p) != nil || p.V != 1 || p.Next < 0 || p.Next > len(p.Names) {
+		return offerProgress{}
+	}
+	return p
 }
 
 type groupEntry struct {
@@ -51,69 +70,116 @@ type groupEntry struct {
 
 // Offer implements adapter.Manager: the account's groups with their ratios, the models each serves, and for each model
 // a cost schedule where new-api's pricing can be expressed as one. The pricing answer is not trusted to name the
-// models a group serves; the per-group model list does. A request refused for want of allowance leaves the progress
-// with the manager (see manager).
-func (m *manager) Offer(ctx context.Context) (adapter.Offer, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	p := m.offer
-	if p == nil || m.now().Sub(p.at) > progressLife {
-		var err error
-		if p, err = m.readGroups(ctx); err != nil {
-			return adapter.Offer{}, err
+// models a group serves; the per-group model list does. The listing is read from the position in from, as far as the
+// global bucket allows; what it read is in the position it answers with.
+func (m *manager) Offer(ctx context.Context, from adapter.Listing) (adapter.Page[adapter.Group], error) {
+	p, err := m.offerStart(ctx, from)
+	if err != nil {
+		return adapter.Page[adapter.Group]{}, err
+	}
+	for {
+		page, more, err := m.offerPage(ctx, &p)
+		if err != nil || !more {
+			return page, err
 		}
 	}
-	for ; p.next < len(p.names); p.next++ {
-		name := p.names[p.next]
-		if p.groups[name].Ratio == autoRatio { // picks among groups per request and has no ratio of its own
-			continue
-		}
-		ratio, ok := p.groups[name].Ratio.rat()
-		if !ok { // missing, null or not a number: another form than the one known, not a group to leave out
-			return adapter.Offer{}, errMissing("ratio of group " + strconv.Quote(name))
-		}
-		var models struct {
-			Data []string `json:"data"`
-		}
-		if err := m.api.get(ctx, "/api/user/models?group="+url.QueryEscape(name), global, &models); err != nil {
-			p.at, m.offer = m.now(), p
-			return adapter.Offer{}, err
-		}
-		if models.Data == nil {
-			return adapter.Offer{}, errMissing("list of models")
-		}
-		g, err := buildGroup(name, p.groups[name].Desc, p.groups[name].Ratio, ratio, models.Data, p.prices)
-		if err != nil {
-			return adapter.Offer{}, err
-		}
-		p.built = append(p.built, g)
-	}
-	m.offer = nil
-	return adapter.Offer{Groups: p.built}, nil
 }
 
-// readGroups starts a reading of the offer: the groups and the prices.
-func (m *manager) readGroups(ctx context.Context) (*offerProgress, error) {
+func (m *manager) offerStart(ctx context.Context, from adapter.Listing) (offerProgress, error) {
+	p := decodeOffer(from)
+	if p.V == 0 {
+		return m.startOffer(ctx, nil)
+	}
+	groups, err := m.groupsNow(ctx)
+	if err != nil {
+		return offerProgress{}, err
+	}
+	if !slices.Equal(sortedKeys(groups), p.Names) {
+		return m.startOffer(ctx, groups)
+	}
+	return p, nil
+}
+
+func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter.Page[adapter.Group], more bool, err error) {
+	if p.Next == len(p.Names) {
+		groups, err := p.offer()
+		return adapter.Page[adapter.Group]{Items: groups, Done: true}, false, err
+	}
+	name := p.Names[p.Next]
+	if p.Groups[name].Ratio == autoRatio { // picks among groups per request and has no ratio of its own
+		p.Next++
+		return page, true, nil
+	}
+	if _, ok := p.Groups[name].Ratio.rat(); !ok { // missing, null or not a number: another form than the one known, not a group to leave out
+		return page, false, errMissing("ratio of group " + strconv.Quote(name))
+	}
+	var models struct {
+		Data []string `json:"data"`
+	}
+	if err := m.api.get(ctx, "/api/user/models?group="+url.QueryEscape(name), global, &models); err != nil {
+		if blocked, ok := errors.AsType[adapter.Blocked](err); ok {
+			return adapter.Page[adapter.Group]{Next: listing(*p), Until: blocked.Until}, false, nil
+		}
+		return page, false, err
+	}
+	if models.Data == nil {
+		return page, false, errMissing("list of models")
+	}
+	p.Built = append(p.Built, builtGroup{Name: name, Desc: p.Groups[name].Desc, Ratio: string(p.Groups[name].Ratio), Models: models.Data})
+	p.Next++
+	return page, true, nil
+}
+
+func (m *manager) startOffer(ctx context.Context, groups map[string]groupEntry) (offerProgress, error) {
+	var err error
+	if groups == nil {
+		if groups, err = m.groupsNow(ctx); err != nil {
+			return offerProgress{}, err
+		}
+	}
+	var pricing struct {
+		Data []priceEntry `json:"data"`
+	}
+	if err := m.api.get(ctx, "/api/pricing", global, &pricing); err != nil {
+		return offerProgress{}, err
+	}
+	if pricing.Data == nil {
+		return offerProgress{}, errMissing("list of prices")
+	}
+	return offerProgress{V: 1, Groups: groups, Names: sortedKeys(groups), Prices: pricing.Data}, nil
+}
+
+func (p offerProgress) offer() ([]adapter.Group, error) {
+	prices := make(map[string]priceEntry, len(p.Prices))
+	for _, e := range p.Prices {
+		prices[e.Model] = e
+	}
+	groups := make([]adapter.Group, 0, len(p.Built))
+	for _, b := range p.Built {
+		ratio, ok := number(b.Ratio).rat()
+		if !ok {
+			return nil, errMissing("ratio of group " + strconv.Quote(b.Name))
+		}
+		g, err := buildGroup(b.Name, b.Desc, number(b.Ratio), ratio, b.Models, prices)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, g)
+	}
+	return groups, nil
+}
+
+func (m *manager) groupsNow(ctx context.Context) (map[string]groupEntry, error) {
 	var groups struct {
 		Data map[string]groupEntry `json:"data"`
 	}
 	if err := m.api.get(ctx, "/api/user/self/groups", global, &groups); err != nil {
 		return nil, err
 	}
-	var pricing struct {
-		Data []priceEntry `json:"data"`
+	if groups.Data == nil {
+		return nil, errMissing("list of groups")
 	}
-	if err := m.api.get(ctx, "/api/pricing", global, &pricing); err != nil {
-		return nil, err
-	}
-	if groups.Data == nil || pricing.Data == nil {
-		return nil, errMissing("list of groups or prices")
-	}
-	prices := make(map[string]priceEntry, len(pricing.Data))
-	for _, e := range pricing.Data {
-		prices[e.Model] = e
-	}
-	return &offerProgress{at: m.now(), groups: groups.Data, names: sortedKeys(groups.Data), prices: prices}, nil
+	return groups.Data, nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

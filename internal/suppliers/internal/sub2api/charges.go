@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
@@ -41,7 +42,9 @@ type scanState struct {
 	Pass      *pass `json:"pass,omitempty"`
 }
 
-// pass is the pass under way: the time it covers, the keys it reads (listed when it starts) and where in them it is.
+// pass is the pass under way: the time it covers, the keys it reads and where in them it is. Page is the key page while
+// the keys are being listed, and the page of a key's usage records once they are: a member of its own for the key page
+// would be one a node of the version before refuses, and the two run side by side during a rollout.
 type pass struct {
 	Late   bool     `json:"late"`
 	Start  int64    `json:"start"`
@@ -121,18 +124,20 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	return out, state, err
 }
 
-// passPage reads one page of a pass and moves the pass's position on; done is true when the last key has ended.
+// passPage reads one page of a pass and moves the pass's position on; done is true when the last key has ended. A pass
+// begins by listing the keys it reads, one page of them per read, so that a supplier with more keys than a window allows
+// is read over several reads.
 func (m *manager) passPage(ctx context.Context, p *pass) ([]adapter.Charge, bool, error) {
 	if !p.Listed {
-		keys, err := m.listKeys(ctx)
-		if err != nil {
+		if err := m.listScanKeys(ctx, p); err != nil {
 			return nil, false, err
 		}
-		for _, k := range keys {
-			p.Keys = append(p.Keys, string(k.ID))
+		if !p.Listed {
+			return nil, false, nil
 		}
-		p.Listed, p.Page = true, 1
 	}
+	p.skipDuplicateKeys()
+
 	if p.Key >= len(p.Keys) {
 		return nil, true, nil
 	}
@@ -146,6 +151,39 @@ func (m *manager) passPage(ctx context.Context, p *pass) ([]adapter.Charge, bool
 		p.Page++
 	}
 	return charges, p.Key >= len(p.Keys), nil
+}
+
+func (m *manager) listScanKeys(ctx context.Context, p *pass) error {
+	pos := keysProgress{V: 1, Page: p.Page, Total: -1}
+	for _, id := range p.Keys {
+		pos.Keys = append(pos.Keys, adapter.KeyState{Ref: adapter.KeyRef(id)})
+	}
+	page, more, err := m.keysPage(ctx, &pos)
+	if err != nil {
+		return err
+	}
+	if !more && !page.Done {
+		return adapter.Blocked{Until: page.Until}
+	}
+	p.Keys = nil
+	for _, key := range pos.Keys {
+		p.Keys = append(p.Keys, string(key.Ref))
+	}
+	p.Page = pos.Page
+	if more {
+		return nil
+	}
+	p.Listed, p.Page = true, 1
+	return nil
+}
+
+// A legacy node may append a full listing after IDs saved by a newer node.
+// A repeated key must not carry its page number over to the next unread key.
+func (p *pass) skipDuplicateKeys() {
+	for p.Key < len(p.Keys) && slices.Contains(p.Keys[:p.Key], p.Keys[p.Key]) {
+		p.Key++
+		p.Page = 1
+	}
 }
 
 // usageItem is a charge record. Count fields are numbers that may be absent: one that is absent is not reported, which

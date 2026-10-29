@@ -98,6 +98,13 @@ type State struct {
 	Plans     map[string]string // "group/model" -> fingerprint of the current cost plan
 	Confirmed map[string]string // model -> a person's confirmed base schedule (JSON); scaled by the group's ratio
 
+	// OfferAt and KeysAt are how far the offer and the keys listing got: the adapter's own positions, kept with each
+	// read of a listing so that one the supplier's limits, an error or a restart stopped goes on where it stopped
+	// instead of being read from the start (adapter.Page). A listing that ended clears its position. They are stored
+	// beside the state, not in it: an older node refuses a member of the state it does not know (jsonx.UnmarshalKnown),
+	// and the two run side by side during a rollout (persist).
+	OfferAt, KeysAt adapter.Listing `json:"-"`
+
 	// Scan is the adapter's position in the charge records, opaque to the engine and stored with each page. ScanOpen
 	// is whether a pass is still under way; the adapter keeps the watermark in Scan.
 	Scan     adapter.ScanState
