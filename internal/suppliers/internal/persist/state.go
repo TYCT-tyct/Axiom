@@ -11,6 +11,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/reconcile"
 	"axiom/internal/suppliers/internal/store"
 	"axiom/internal/suppliers/internal/syncer"
@@ -23,6 +24,39 @@ const format = 1
 // never is the next_due of a supplier no round is due for: one the engine does not poll.
 var never = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 
+// listings keeps resumable reads outside the strictly decoded state for rolling releases.
+// Version invalidates positions when an older node commits without updating this column.
+type listings struct {
+	Version int64           `json:"version"`
+	Gen     int64           `json:"gen"`
+	Offer   adapter.Listing `json:"offer"`
+	Keys    adapter.Listing `json:"keys"`
+}
+
+func encodeListings(gen int64, st syncer.State) ([]byte, error) {
+	if len(st.OfferAt) == 0 && len(st.KeysAt) == 0 {
+		return nil, nil
+	}
+	return jsonx.MarshalCanonical(listings{Version: st.Version, Gen: gen, Offer: st.OfferAt, Keys: st.KeysAt})
+}
+
+func decodeListings(row []byte, gen, version int64) (offer, keys adapter.Listing) {
+	if len(row) == 0 {
+		return nil, nil
+	}
+	var l listings
+	if jsonx.Unmarshal(row, &l) != nil || l.Gen != gen || l.Version != version {
+		return nil, nil
+	}
+	if len(l.Offer) == 0 {
+		l.Offer = nil
+	}
+	if len(l.Keys) == 0 {
+		l.Keys = nil
+	}
+	return l.Offer, l.Keys
+}
+
 type stateStore struct{ s *Session }
 
 // Load implements syncer.Store. A supplier synced for the first time has no state yet, which is the zero State.
@@ -34,7 +68,11 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 			return err
 		}
 		out, err = decode(row.Version, row.Format, row.State)
-		return err
+		if err != nil {
+			return err
+		}
+		out.OfferAt, out.KeysAt = decodeListings(row.Listing, st.s.Supplier.ConfigGen, row.Version)
+		return nil
 	})
 	if err != nil {
 		return syncer.State{}, fmt.Errorf("persist: load the state of supplier %s: %w", st.s.Supplier.ID, err)
@@ -148,6 +186,10 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		return fmt.Errorf("persist: encode the state: %w", err)
 	}
 	cfg, id := st.s.node.cfg, st.s.Supplier.ID
+	listing, err := encodeListings(st.s.Supplier.ConfigGen, c.State)
+	if err != nil {
+		return fmt.Errorf("persist: encode the listings of supplier %s: %w", id, err)
+	}
 	now := cfg.Now()
 	until := now.Add(cfg.LeaseTTL)
 	err = cfg.DB.Tx(ctx, cfg.Scope, func(tx pg.Tx) error {
@@ -157,7 +199,7 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		}
 		changed, err := store.New().CommitSyncState(ctx, tx, store.CommitSyncStateParams{
 			SupplierID: id, Expect: expect, Version: c.State.Version, Format: format,
-			State: encoded, NextDue: nextDue(c.State), LeaseUntil: &until,
+			State: encoded, Listing: listing, NextDue: nextDue(c.State), LeaseUntil: &until,
 		})
 		if err != nil {
 			return err

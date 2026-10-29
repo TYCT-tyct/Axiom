@@ -154,6 +154,7 @@ type clock struct{ t time.Time }
 
 func (c *clock) now() time.Time          { return c.t }
 func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *clock) set(t time.Time)         { c.t = t }
 
 // managerAt opens a manager whose clock is clk.
 func managerAt(t testing.TB, srv adapter.Client, st *store, clk *clock) adapter.Manager {
@@ -196,4 +197,49 @@ func manager0(t testing.TB, srv *server, st *store) adapter.Manager {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// These fixtures fit in one window; interruption is a test failure.
+func readOffer(t testing.TB, m adapter.Manager) ([]adapter.Group, error) {
+	t.Helper()
+	page, err := m.Offer(t.Context(), nil)
+	if err == nil && !page.Done {
+		t.Fatal("the offer did not end")
+	}
+	return page.Items, err
+}
+
+func readKeys(t testing.TB, m adapter.Manager) ([]adapter.KeyState, error) {
+	t.Helper()
+	page, err := m.Keys(t.Context(), nil)
+	if err == nil && !page.Done {
+		t.Fatal("the keys listing did not end")
+	}
+	return page.Items, err
+}
+
+// readPaged reads a listing over as many reads as its bucket allows: a read the bucket stopped is given again after the
+// window reopens, from the position it answered with. It returns the read that ended the listing, and how often it had
+// to wait.
+func readPaged[T any](t *testing.T, clk *clock, read func(from adapter.Listing) (adapter.Page[T], error)) (adapter.Page[T], int) {
+	t.Helper()
+	var from adapter.Listing
+	var page adapter.Page[T]
+	waits := 0
+	for range 500 {
+		var err error
+		if page, err = read(from); err != nil {
+			t.Fatal(err)
+		}
+		from = page.Next
+		if page.Done {
+			return page, waits
+		}
+		if !page.Until.IsZero() {
+			waits++
+			clk.set(page.Until)
+		}
+	}
+	t.Fatal("the listing did not end")
+	return page, waits
 }

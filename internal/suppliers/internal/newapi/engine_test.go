@@ -18,8 +18,13 @@ func (chargesOnly) Account(context.Context) (adapter.Account, error) {
 	return adapter.Account{Balance: "100", Funding: adapter.FundingWallet}, nil
 }
 
-func (chargesOnly) Offer(context.Context) (adapter.Offer, error)     { return adapter.Offer{}, nil }
-func (chargesOnly) Keys(context.Context) ([]adapter.KeyState, error) { return nil, nil }
+func (chargesOnly) Offer(context.Context, adapter.Listing) (adapter.Page[adapter.Group], error) {
+	return adapter.Page[adapter.Group]{Done: true}, nil
+}
+
+func (chargesOnly) Keys(context.Context, adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+	return adapter.Page[adapter.KeyState]{Done: true}, nil
+}
 
 // TestScanProtocol: the module's sync starts a scan with no position and stores what comes back.
 func TestScanProtocol(t *testing.T) {

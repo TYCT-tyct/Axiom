@@ -56,8 +56,8 @@ func TestSuccessWithoutItsMembersIsNotAnEmptyResult(t *testing.T) {
 	t.Parallel()
 	read := map[string]func(m adapter.Manager) error{
 		"account": func(m adapter.Manager) error { _, err := m.Account(t.Context()); return err },
-		"keys":    func(m adapter.Manager) error { _, err := m.Keys(t.Context()); return err },
-		"offer":   func(m adapter.Manager) error { _, err := m.Offer(t.Context()); return err },
+		"keys":    func(m adapter.Manager) error { _, err := readKeys(t, m); return err },
+		"offer":   func(m adapter.Manager) error { _, err := readOffer(t, m); return err },
 		"key":     func(m adapter.Manager) error { _, err := m.KeySecret(t.Context(), "2"); return err },
 		"scan": func(m adapter.Manager) error {
 			_, _, err := m.Charges(t.Context(), lateScan(t))
@@ -83,9 +83,9 @@ func TestSuccessWithoutItsMembersIsNotAnEmptyResult(t *testing.T) {
 		}
 	}
 	empty := newServer(func(adapter.Request) (adapter.Response, error) {
-		return adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"items":[],"pages":1}}`)}, nil
+		return adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"items":[],"total":0,"pages":1}}`)}, nil
 	})
-	if keys, err := manager0(t, empty, login(t, epoch.Add(24*time.Hour))).Keys(t.Context()); err != nil || len(keys) != 0 {
+	if keys, err := readKeys(t, manager0(t, empty, login(t, epoch.Add(24*time.Hour)))); err != nil || len(keys) != 0 {
 		t.Errorf("an empty list of keys: %v, %v", keys, err)
 	}
 }
@@ -136,7 +136,10 @@ func manyGroups(n int) func(adapter.Request) adapter.Response {
 			for i := range n {
 				keys = append(keys, fmt.Sprintf(`{"id":%d,"key":"k%d","group_id":%d,"status":"active"}`, i+1, i+1, i+1))
 			}
-			return ok(`{"code":0,"data":{"items":[` + strings.Join(keys, ",") + `],"pages":1}}`)
+			return ok(fmt.Sprintf(`{"code":0,"data":{"items":[%s],"total":%d,"pages":1}}`, strings.Join(keys, ","), n))
+		case strings.HasPrefix(r.Path, "/api/v1/keys/"):
+			id := strings.TrimPrefix(r.Path, "/api/v1/keys/")
+			return ok(`{"code":0,"data":{"id":` + id + `,"key":"k` + id + `","group_id":` + id + `,"status":"active"}}`)
 		case r.Path == "/v1/models":
 			return ok(`{"data":[{"id":"m1"}]}`)
 		case r.Path == "/v1/sub2api/billing":
@@ -146,40 +149,28 @@ func manyGroups(n int) func(adapter.Request) adapter.Response {
 	}
 }
 
-// TestOfferLargerThanOneRateWindowFinishes: 29 groups with a key each need 3 + 29×2 = 61 panel requests, one more than a
-// window allows. The offer is kept between calls, so it ends in the next window instead of starting over for ever; the
-// groups are listed once.
+// TestOfferLargerThanOneRateWindowFinishes: 29 groups with a key each take 3 + 29×3 = 90 panel requests, more than a
+// window allows. The offer keeps the position of its reads, so a read after the window goes on where the one before
+// stopped — the keys are listed once, not once per window — and the offer ends with every group. A pass that goes on
+// checks the groups its position names against the supplier's once, which is one more request, not another pass.
 func TestOfferLargerThanOneRateWindowFinishes(t *testing.T) {
 	t.Parallel()
 	clk := &clock{t: epoch}
 	srv := limited(clk, manyGroups(29))
-	m := managerAt(t, srv, login(t, epoch.Add(24*time.Hour)), clk)
-	var offer adapter.Offer
-	var err error
-	windows := 0
-	for ; windows < 4; windows++ {
-		if offer, err = m.Offer(t.Context()); err == nil {
-			break
-		}
-		if !errors.Is(err, adapter.ErrBucketsFull) {
-			t.Fatal(err)
-		}
-		clk.advance(61 * time.Second)
-	}
-	if err != nil || len(offer.Groups) != 29 || windows != 1 {
-		t.Fatalf("Offer finished with %d groups after %d full windows, err %v; want 29 after 1", len(offer.Groups), windows, err)
-	}
-	if n := len(srv.paths()); n < 61 {
-		t.Errorf("only %d requests", n)
+	page, waits := readPaged(t, clk, func(from adapter.Listing) (adapter.Page[adapter.Group], error) {
+		return managerAt(t, srv, login(t, epoch.Add(24*time.Hour)), clk).Offer(t.Context(), from)
+	})
+	if len(page.Items) != 29 || waits == 0 {
+		t.Fatalf("Offer finished with %d groups after %d waits; want 29 groups after waiting for the next window", len(page.Items), waits)
 	}
 	listed := 0
 	for _, p := range srv.paths() {
-		if p == "GET /api/v1/groups/available" {
+		if strings.HasPrefix(p, "GET /api/v1/keys?") {
 			listed++
 		}
 	}
 	if listed != 1 {
-		t.Errorf("the groups were listed %d times: the progress was not kept", listed)
+		t.Errorf("the keys were listed %d times: the position of the listing was not kept", listed)
 	}
 }
 
@@ -187,31 +178,30 @@ func TestOfferLargerThanOneRateWindowFinishes(t *testing.T) {
 func TestKeyListingLargerThanOneRateWindowFinishes(t *testing.T) {
 	t.Parallel()
 	clk := &clock{t: epoch}
-	pages := 0
+	const (
+		total = 7000
+		pages = total / 100
+	)
+	served := 0
 	srv := limited(clk, func(r adapter.Request) adapter.Response {
 		q := strings.TrimPrefix(r.Path, "/api/v1/keys?page=")
 		page, err := strconv.Atoi(strings.SplitN(q, "&", 2)[0])
 		if err != nil {
 			panic(err) // the test's own request
 		}
-		pages++
+		served++
 		var keys []string
 		for i := range 100 {
 			keys = append(keys, fmt.Sprintf(`{"id":%d,"key":"k","group_id":1,"status":"active"}`, (page-1)*100+i+1))
 		}
-		return adapter.Response{Status: 200, Body: []byte(`{"code":0,"data":{"items":[` + strings.Join(keys, ",") + `],"pages":70}}`)}
+		return adapter.Response{Status: 200, Body: []byte(fmt.Sprintf(`{"code":0,"data":{"items":[%s],"total":%d,"pages":%d}}`,
+			strings.Join(keys, ","), total, pages))}
 	})
-	m := managerAt(t, srv, login(t, epoch.Add(24*time.Hour)), clk)
-	var keys []adapter.KeyState
-	var err error
-	for range 4 {
-		if keys, err = m.Keys(t.Context()); err == nil {
-			break
-		}
-		clk.advance(61 * time.Second)
-	}
-	if err != nil || len(keys) != 7000 || pages != 70 {
-		t.Errorf("Keys = %d keys, %d pages read, %v; want 7000 keys from 70 pages read once each", len(keys), pages, err)
+	page, waits := readPaged(t, clk, func(from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+		return managerAt(t, srv, login(t, epoch.Add(24*time.Hour)), clk).Keys(t.Context(), from)
+	})
+	if len(page.Items) != total || served != pages || waits == 0 {
+		t.Errorf("Keys = %d keys, %d pages read, %d waits; want %d keys from %d pages read once each", len(page.Items), served, waits, total, pages)
 	}
 }
 
@@ -229,7 +219,7 @@ type usageSupplier struct {
 func (u *usageSupplier) answer(r adapter.Request) adapter.Response {
 	ok := func(body string) adapter.Response { return adapter.Response{Status: 200, Body: []byte(body)} }
 	if strings.HasPrefix(r.Path, "/api/v1/keys?") {
-		return ok(`{"code":0,"data":{"items":[{"id":7,"key":"k","group_id":1,"status":"active"}],"pages":1}}`)
+		return ok(`{"code":0,"data":{"items":[{"id":7,"key":"k","group_id":1,"status":"active"}],"total":1,"pages":1}}`)
 	}
 	q := strings.SplitN(r.Path, "?", 2)[1]
 	get := func(name string) string {
@@ -258,8 +248,13 @@ func (healthyOthers) Account(context.Context) (adapter.Account, error) {
 	return adapter.Account{Balance: "100", Funding: adapter.FundingWallet}, nil
 }
 
-func (healthyOthers) Offer(context.Context) (adapter.Offer, error)     { return adapter.Offer{}, nil }
-func (healthyOthers) Keys(context.Context) ([]adapter.KeyState, error) { return nil, nil }
+func (healthyOthers) Offer(context.Context, adapter.Listing) (adapter.Page[adapter.Group], error) {
+	return adapter.Page[adapter.Group]{Done: true}, nil
+}
+
+func (healthyOthers) Keys(context.Context, adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+	return adapter.Page[adapter.KeyState]{Done: true}, nil
+}
 
 // TestEngineDrivesTheAdapter: the real adapter runs under the real engine. A first round only marks the start; a quarter
 // of an hour later the records in the window are stored once each, however often they are read.

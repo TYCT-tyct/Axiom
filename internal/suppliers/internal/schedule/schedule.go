@@ -30,19 +30,13 @@ import (
 
 const (
 	// leaseTTL is how long a node may go without committing before another may take its supplier over. A round commits
-	// after every task and every page of charge records, and one request of the supplier takes 30 seconds at most.
+	// after every task and every read of a listing or of the charge records, and one request of the supplier takes 30
+	// seconds at most.
 	leaseTTL = 5 * time.Minute
 	// sweepBatch is the most suppliers one sweep enqueues; the rest are the next sweep's, the longest-overdue first.
 	sweepBatch = 200
 	// releaseTimeout is how long giving a lease back may take once a round is over, whatever ended it.
 	releaseTimeout = 10 * time.Second
-	// maxBlockedWait is the longest a job waits, holding the supplier's lease, for the supplier's limits to reopen so
-	// that it can go on with the listing it was reading. It is shorter than leaseTTL, which the round's last commit
-	// started: the lease must not run out while the job sleeps.
-	maxBlockedWait = 4 * time.Minute
-	// roundsBudget is how long one job may go on running rounds while the limits hold it up. It ends before the
-	// queue's limit for a job (pg.Queue's jobTimeout, 10 minutes) cancels it.
-	roundsBudget = 8 * time.Minute
 )
 
 // syncable are the statuses of a supplier that is synced: the others are paused, being removed, or need a person.
@@ -60,8 +54,7 @@ type Config struct {
 	Registry *registry.Registry
 	// Holder names this node in the leases it takes.
 	Holder string
-	// SweepEvery is how often suppliers that are due are looked for; a supplier is synced at most this long after a
-	// round of it falls due.
+	// SweepEvery is how often suppliers that are due are looked for. Queue capacity decides when they start.
 	SweepEvery time.Duration
 	Now        func() time.Time
 	Logger     *slog.Logger
@@ -104,7 +97,6 @@ type Schedule struct {
 	cfg      Config
 	node     *persist.Node
 	settings syncer.Settings
-	budget   time.Duration // roundsBudget; a test shortens it
 }
 
 // New adds the workers and the periodic sweep to the queue, before it starts.
@@ -124,7 +116,7 @@ func New(cfg Config) (*Schedule, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Schedule{cfg: cfg, node: node, settings: settings(), budget: roundsBudget}
+	s := &Schedule{cfg: cfg, node: node, settings: settings()}
 	if err := river.AddWorkerSafely(cfg.Queue.Workers(), river.WorkFunc(s.workSync)); err != nil {
 		return nil, err
 	}
@@ -180,9 +172,11 @@ func (s *Schedule) sweep(ctx context.Context) error {
 	})
 }
 
-// sync runs the rounds of one supplier. A supplier another node is syncing is that node's, one that is no longer in a
+// sync runs one round of one supplier. A supplier another node is syncing is that node's, one that is no longer in a
 // status that is synced (it was paused or removed after its job was queued) is left alone, and a round whose lease was
-// taken over has stored nothing: none of these is a failure.
+// taken over has stored nothing: none of these is a failure. A task the supplier's limits stopped ends with the round,
+// its listing's position kept in the supplier's state and the task due when they reopen: the next job of the sweep goes
+// on from there, where waiting here would hold a worker of the queue (four workers per node on the syncs queue).
 func (s *Schedule) sync(ctx context.Context, id uuid.UUID) error {
 	session, err := s.node.Acquire(ctx, id)
 	if errors.Is(err, persist.ErrLeaseHeld) {
@@ -200,35 +194,10 @@ func (s *Schedule) sync(ctx context.Context, id uuid.UUID) error {
 	if !slices.Contains(syncable, session.Supplier.Status) {
 		return nil
 	}
-	if err := s.rounds(ctx, s.engine(ctx, session)); err != nil && !errors.Is(err, syncer.ErrFenced) {
+	if err := s.engine(ctx, session).Round(ctx); err != nil && !errors.Is(err, syncer.ErrFenced) {
 		return err
 	}
 	return nil
-}
-
-// rounds runs the engine, and while the supplier's limits hold a task up for a while, waits for them to reopen and runs
-// it again over the same adapter: a Manager keeps how far a listing got only for as long as it lives, and a listing of
-// more pages than one window allows could otherwise never be finished. A job waits at most roundsBudget in all, so that
-// it does not hold a worker of the queue for longer, which the time now says on its own: a limit whose time has already
-// passed would otherwise keep the loop going; what is still held up after that is the next job's.
-func (s *Schedule) rounds(ctx context.Context, engine *syncer.Engine) error {
-	end := s.cfg.Now().Add(s.budget)
-	for {
-		if err := engine.Round(ctx); err != nil {
-			return err
-		}
-		now, until := s.cfg.Now(), engine.Blocked()
-		if until.IsZero() || !now.Before(end) || until.Sub(now) > maxBlockedWait || until.After(end) {
-			return nil
-		}
-		timer := time.NewTimer(max(until.Sub(now), time.Second)) // a second at least, so that a limit that is already over cannot spin
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		}
-	}
 }
 
 // engine makes the engine of a supplier over its adapter, which it opens (it logs in) only when a task first needs it.
