@@ -323,10 +323,11 @@ func TestAWriteMayBlockOnlyAsLongAsTheSegmentLasts(t *testing.T) {
 func TestATruncatedStreamConsumesNoMoreThanItsAllowance(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		const covered, allowance = 500, 500 // a segment of 500 tokens, and 5s at 100 tokens a second
+		const wait = 5 * time.Second        // how long the extension is waited for
 		var h *harness
 		h = newHarness(t, ctx, segmented(options{
 			segments: billing.Segments{Output: covered, Overshoot: 5 * time.Second},
-			config:   func(c *Config) { c.ExtendWait = 5 * time.Second },
+			config:   func(c *Config) { c.ExtendWait = wait },
 			extend: func(ctx context.Context, _ billing.ExtendRequest) error {
 				<-ctx.Done() // the ledger is too slow: the wait ends the attempt
 				return ctx.Err()
@@ -341,7 +342,9 @@ func TestATruncatedStreamConsumesNoMoreThanItsAllowance(t *testing.T) {
 		if extra := produced.Load() - covered; extra < 0 || extra > allowance {
 			t.Errorf("the upstream produced %d bytes beyond the %d it was covered for, past the %d allowance", extra, covered, allowance)
 		}
-		if got := h.elapsed(); got < 7*time.Second || got > 8*time.Second {
+		// The extension is asked for 40%–60% of the segment in, which the upstream, producing at 100 tokens a second,
+		// reaches in 2s to 3s; the wait then runs its 5s and the cut lands on the next write, 100ms apart.
+		if got := h.elapsed(); got < wait+2*time.Second || got > wait+3*time.Second+200*time.Millisecond {
 			t.Errorf("the attempt was cut after %v, not when the wait for the extension ended", got)
 		}
 		body := h.w.body()
