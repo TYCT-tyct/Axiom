@@ -1,10 +1,15 @@
 package billing
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"uuid"
+
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
@@ -37,9 +42,26 @@ type ChargeItem struct {
 	Fallback     bool   `json:"fallback"`
 }
 
-// ReadCharges reads the immutable settlement's sale inputs in the caller's account scope. Missing entries (including
-// old writers without a pricing decision) are unavailable, never repriced using today's catalogue or fallbacks.
-func ReadCharges(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]ChargeDetails, error) {
+// ChargeReader keeps failures of optional historical pricing separate from availability of the call records.
+type ChargeReader struct {
+	logger *slog.Logger
+	failed metric.Int64Counter
+}
+
+// NewChargeReader binds the node's diagnostics; nil meter disables metrics, as for the settlement counters.
+func NewChargeReader(logger *slog.Logger, meter metric.Meter) *ChargeReader {
+	if meter == nil {
+		meter = noop.NewMeterProvider().Meter("billing")
+	}
+	return &ChargeReader{
+		logger: cmp.Or(logger, slog.Default()),
+		failed: counter(meter, "axiom.billing.charge_details.unavailable", "Calls whose optional charge details could not be reconstructed."),
+	}
+}
+
+// ReadCharges reads frozen sale inputs in the account scope. Old or incompatible rows omit their optional details;
+// a reconstruction failure is logged and counted, while database query failures remain errors.
+func (reader *ChargeReader) ReadCharges(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]ChargeDetails, error) {
 	rows, err := queries.ReadCharges(ctx, tx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("billing: read itemized charges: %w", err)
@@ -48,7 +70,9 @@ func ReadCharges(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]
 	for _, r := range rows {
 		d, err := chargeDetails(r)
 		if err != nil {
-			return nil, fmt.Errorf("billing: itemize %s: %w", r.RequestID, err)
+			reader.logger.ErrorContext(ctx, "billing: charge details unavailable", "request_id", r.RequestID.String(), "err", err)
+			reader.failed.Add(ctx, 1)
+			continue
 		}
 		out[r.RequestID] = d
 	}
@@ -111,16 +135,17 @@ func reconcileCharges(d ChargeDetails, price, charged int64) (ChargeDetails, err
 
 func chargeItems(s catalog.Schedule, f fallbacks, seg Segment, waived bool, tiers catalog.ServiceTierSet) []ChargeItem {
 	var items []ChargeItem
+	charged := chargedItems(waived)
 	for it := range catalog.NumItems {
 		count := seg.Usage.Count(it)
-		if count == 0 || waived && !perUseItems.Has(it) {
+		if count == 0 || !charged.Has(it) {
 			continue
 		}
 		items = append(items, knownChargeItem(s, f, seg, tiers, it))
 	}
 	for _, u := range seg.Usage.Unknown() {
 		rate, count, tokens := unknownRate(s, f, u)
-		if count == 0 || waived && tokens {
+		if count == 0 || !unknownCharged(tokens, charged) {
 			continue
 		}
 		items = append(items, unknownChargeItem(seg.Usage.ServiceTier(), rate, count, tokens))
@@ -132,10 +157,7 @@ func knownChargeItem(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog
 	rate, band, ok := s.Rate(seg.Usage, it)
 	ok = ok && !undeclaredTier(tiers, seg.Usage.ServiceTier())
 	if !ok {
-		rate = tokenPrice(s)
-		if perUseItems.Has(it) {
-			rate = f.perUse[it]
-		}
+		rate = missingRate(s, f, it)
 	}
 	unit := "token"
 	if perUseItems.Has(it) {

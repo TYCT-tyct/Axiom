@@ -93,7 +93,7 @@ func (c consoleAPI) ListCalls(ctx context.Context, request consoleapi.ListCallsR
 	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
 		calls, next, err = observability.ListOwn(ctx, tx, q)
 		if err == nil {
-			charges, err = readCallCharges(ctx, tx, calls)
+			charges, err = c.readCallCharges(ctx, tx, calls)
 		}
 		return err
 	}); err != nil {
@@ -126,7 +126,7 @@ func (c consoleAPI) GetCall(ctx context.Context, request consoleapi.GetCallReque
 	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
 		call, err = observability.GetOwn(ctx, tx, id)
 		if err == nil {
-			charges, err = billing.ReadCharges(ctx, tx, []uuid.UUID{id})
+			charges, err = c.charges.ReadCharges(ctx, tx, []uuid.UUID{id})
 		}
 		return err
 	}); err != nil {
@@ -139,7 +139,7 @@ func (c consoleAPI) GetCall(ctx context.Context, request consoleapi.GetCallReque
 	return consoleapi.GetCall200JSONResponse(body), nil
 }
 
-func readCallCharges(ctx context.Context, tx pg.Tx, calls []observability.OwnCall) (map[uuid.UUID]billing.ChargeDetails, error) {
+func (c consoleAPI) readCallCharges(ctx context.Context, tx pg.Tx, calls []observability.OwnCall) (map[uuid.UUID]billing.ChargeDetails, error) {
 	if len(calls) == 0 {
 		return map[uuid.UUID]billing.ChargeDetails{}, nil
 	}
@@ -147,7 +147,7 @@ func readCallCharges(ctx context.Context, tx pg.Tx, calls []observability.OwnCal
 	for i, call := range calls {
 		ids[i] = call.ID
 	}
-	return billing.ReadCharges(ctx, tx, ids)
+	return c.charges.ReadCharges(ctx, tx, ids)
 }
 
 func chargeBody(d billing.ChargeDetails) *consoleapi.ChargeDetails {

@@ -110,7 +110,7 @@ func readChargeTest(t *testing.T, b *bank, scope pg.Scope, id uuid.UUID) map[uui
 	t.Helper()
 	var got map[uuid.UUID]ChargeDetails
 	err := b.app.ReadTx(t.Context(), scope, func(tx pg.Tx) (err error) {
-		got, err = ReadCharges(t.Context(), tx, []uuid.UUID{id, uuid.NewV7()})
+		got, err = NewChargeReader(nil, nil).ReadCharges(t.Context(), tx, []uuid.UUID{id, uuid.NewV7()})
 		return err
 	})
 	if err != nil {

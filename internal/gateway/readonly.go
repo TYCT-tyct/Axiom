@@ -35,7 +35,7 @@ func (h *Handler) auxRoutes(prefix string) {
 	h.mux.HandleFunc("POST "+prefix+"/messages/count_tokens", h.countTokens)
 	h.mux.HandleFunc("GET "+prefix+"/key", h.reading(h.keyInfo))
 	h.mux.HandleFunc("GET "+prefix+"/credits", h.reading(h.accountCredits))
-	h.mux.HandleFunc("GET "+prefix+"/generation", h.reading(generation))
+	h.mux.HandleFunc("GET "+prefix+"/generation", h.reading(h.generation))
 	h.mux.HandleFunc("GET "+prefix+"/dashboard/billing/subscription", h.reading(h.subscription))
 	h.mux.HandleFunc("GET "+prefix+"/dashboard/billing/usage", h.reading(h.legacyUsage))
 }
@@ -162,7 +162,7 @@ func (h *Handler) legacyUsage(ctx context.Context, tx pg.Tx, a accounts.Admissio
 
 // generation is OpenRouter's GET /api/v1/generation?id=: what one call of the key's account used and was charged. It
 // shows the price the user paid and nothing of our cost, endpoint or route (observability.OwnCall has none).
-func generation(ctx context.Context, tx pg.Tx, _ accounts.Admission, q url.Values) (any, error) {
+func (h *Handler) generation(ctx context.Context, tx pg.Tx, _ accounts.Admission, q url.Values) (any, error) {
 	id, err := uuid.Parse(q.Get("id"))
 	if err != nil {
 		return nil, invalid("The id parameter must be the number of a call, as in X-Generation-Id.")
@@ -174,7 +174,7 @@ func generation(ctx context.Context, tx pg.Tx, _ accounts.Admission, q url.Value
 	if err != nil {
 		return nil, err
 	}
-	charges, err := billing.ReadCharges(ctx, tx, []uuid.UUID{id})
+	charges, err := h.charges.ReadCharges(ctx, tx, []uuid.UUID{id})
 	if err != nil {
 		return nil, err
 	}
