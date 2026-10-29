@@ -77,12 +77,11 @@ func (w syncAlertWorker) work(ctx context.Context, job *river.Job[syncAlertArgs]
 }
 
 type syncAlertPosition struct {
-	Initialized   bool
-	Version       int64
-	Seq           int
-	Attention     *syncAlertFault
-	AttentionKind string
-	Stopped       map[string]syncAlertFault
+	Initialized bool
+	Version     int64
+	Seq         int
+	Attention   map[string]syncAlertFault
+	Stopped     map[string]syncAlertFault
 }
 
 type syncAlertEvent struct {
@@ -100,7 +99,7 @@ func forwardSyncAlerts(ctx context.Context, tx pg.Tx, supplier uuid.UUID) error 
 	if err != nil {
 		return err
 	}
-	p := syncAlertPosition{Stopped: map[string]syncAlertFault{}}
+	p := syncAlertPosition{Attention: map[string]syncAlertFault{}, Stopped: map[string]syncAlertFault{}}
 	if err = jsonx.Unmarshal(raw, &p); err != nil {
 		return err
 	}
@@ -167,7 +166,7 @@ func forwardSyncEvent(ctx context.Context, tx pg.Tx, supplier uuid.UUID, e syncA
 		if err != nil {
 			return err
 		}
-		p.Attention, p.AttentionKind = &fault, kind
+		p.Attention[kind] = fault
 	case "task_halted":
 		return forwardStoppedTask(ctx, tx, supplier, e, state, p)
 	case "balance_low", "balance_recovered":
@@ -179,11 +178,14 @@ func forwardSyncEvent(ctx context.Context, tx pg.Tx, supplier uuid.UUID, e syncA
 }
 
 func recoverSyncAlerts(ctx context.Context, tx pg.Tx, id uuid.UUID, state syncer.State, version int64, p *syncAlertPosition) error {
-	if p.Attention != nil && state.Status == syncer.Normal && p.Attention.recovered(version, state.Tasks[syncer.TaskBalance].LastOK) {
-		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: p.AttentionKind, Key: id.String(), Severity: "info", Resolved: true}); err != nil {
-			return err
+	for _, kind := range []string{"suppliers.login_expired", "suppliers.sync_attention"} {
+		fault, pending := p.Attention[kind]
+		if pending && state.Status == syncer.Normal && fault.recovered(version, state.Tasks[syncer.TaskBalance].LastOK) {
+			if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: kind, Key: id.String(), Severity: "info", Resolved: true}); err != nil {
+				return err
+			}
+			delete(p.Attention, kind)
 		}
-		p.Attention = nil
 	}
 	for task := syncer.TaskBalance; task <= syncer.TaskCharges; task++ {
 		fault, stopped := p.Stopped[task.String()]

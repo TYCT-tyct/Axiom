@@ -246,3 +246,40 @@ func TestRetiringAllSuppliersDoesNotClaimAvailabilityRecovery(t *testing.T) {
 		t.Fatalf("retirement claimed recovery: %+v", signals)
 	}
 }
+
+func TestAttentionReasonChangesKeepBothRecoveryBaselines(t *testing.T) {
+	w := newWorld(t, 2)
+	state := syncer.State{Status: syncer.NeedsAttention, Reason: "the supplier rejected the account credentials"}
+	setSyncAlertState(w, 1, state)
+	forward := func() []alert.Signal {
+		t.Helper()
+		w.tx(func(ctx context.Context, tx pg.Tx) error { return forwardSyncAlerts(ctx, tx, w.supplier) })
+		return consumeSupplierSignals(w)
+	}
+	check := func(kind string, resolved bool) {
+		t.Helper()
+		got := forward()
+		if len(got) != 1 || got[0].Kind != kind || got[0].Resolved != resolved {
+			t.Fatalf("want %s resolved=%v: %+v", kind, resolved, got)
+		}
+	}
+	check("suppliers.login_expired", false)
+	at := w.clock.now()
+	state.Reason = "a charge was paid from something other than the wallet"
+	state.Tasks[syncer.TaskBalance].LastOK = at
+	setSyncAlertState(w, 2, state)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO suppliers.sync_events(supplier_id,version,seq,kind,subject,old_value,new_value,why) VALUES($1,2,0,'needs_attention','',$2,'',$3)`, w.supplier, at.Format(time.RFC3339Nano), state.Reason)
+		return err
+	})
+	check("suppliers.sync_attention", false)
+	state.Status = syncer.Normal
+	setSyncAlertState(w, 3, state)
+	check("suppliers.login_expired", true)
+	state.Tasks[syncer.TaskBalance].LastOK = at.Add(time.Minute)
+	setSyncAlertState(w, 4, state)
+	check("suppliers.sync_attention", true)
+	if got := forward(); len(got) != 0 {
+		t.Fatalf("replayed recovery: %+v", got)
+	}
+}
