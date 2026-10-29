@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 	"uuid"
@@ -187,12 +186,13 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		return nil, err
 	}
 	for _, r := range roles {
-		if unknown := slices.IndexFunc(r.Permissions, func(p string) bool { _, declared := permissions[p]; return !declared }); unknown >= 0 {
-			return nil, fmt.Errorf("role %s holds %q, which this program does not declare", r.Name, r.Permissions[unknown])
-		}
 		next.roleIDs[r.Name] = r.ID
 		next.roles[r.ID] = map[string]bool{}
 		for _, p := range r.Permissions {
+			if _, declared := permissions[p]; !declared {
+				slog.WarnContext(ctx, "ignoring undeclared role permission", "role", r.Name, "permission", p)
+				continue
+			}
 			next.roles[r.ID][p] = true
 		}
 	}

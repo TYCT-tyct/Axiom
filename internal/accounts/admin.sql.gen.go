@@ -256,6 +256,32 @@ func (q *Queries) ReadAccountKeyLimits(ctx context.Context, db DBTX, accountID u
 	return i, err
 }
 
+const readLoginLimits = `-- name: ReadLoginLimits :one
+SELECT t.ip_attempt_burst, t.ip_attempts_per_minute, t.email_sign_in_failures, t.user_code_failures, t.challenge_code_attempts
+FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id=s.id WHERE s.id = $1
+`
+
+type ReadLoginLimitsRow struct {
+	IpAttemptBurst        *int32
+	IpAttemptsPerMinute   *int32
+	EmailSignInFailures   *int32
+	UserCodeFailures      *int32
+	ChallengeCodeAttempts *int32
+}
+
+func (q *Queries) ReadLoginLimits(ctx context.Context, db DBTX, siteID uuid.UUID) (ReadLoginLimitsRow, error) {
+	row := db.QueryRow(ctx, readLoginLimits, siteID)
+	var i ReadLoginLimitsRow
+	err := row.Scan(
+		&i.IpAttemptBurst,
+		&i.IpAttemptsPerMinute,
+		&i.EmailSignInFailures,
+		&i.UserCodeFailures,
+		&i.ChallengeCodeAttempts,
+	)
+	return i, err
+}
+
 const readSiteKeyLimits = `-- name: ReadSiteKeyLimits :one
 SELECT t.max_keys_per_account, t.key_creations_per_hour
 FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = $1
@@ -335,6 +361,34 @@ func (q *Queries) WriteAccountKeyLimits(ctx context.Context, db DBTX, arg WriteA
 	return err
 }
 
+const writeLoginLimits = `-- name: WriteLoginLimits :exec
+INSERT INTO accounts.site_settings(site_id,ip_attempt_burst,ip_attempts_per_minute,email_sign_in_failures,user_code_failures,challenge_code_attempts)
+VALUES($1,$2,$3,$4,$5,$6)
+ON CONFLICT(site_id) DO UPDATE SET ip_attempt_burst=excluded.ip_attempt_burst,ip_attempts_per_minute=excluded.ip_attempts_per_minute,
+ email_sign_in_failures=excluded.email_sign_in_failures,user_code_failures=excluded.user_code_failures,challenge_code_attempts=excluded.challenge_code_attempts
+`
+
+type WriteLoginLimitsParams struct {
+	SiteID                uuid.UUID
+	IpAttemptBurst        *int32
+	IpAttemptsPerMinute   *int32
+	EmailSignInFailures   *int32
+	UserCodeFailures      *int32
+	ChallengeCodeAttempts *int32
+}
+
+func (q *Queries) WriteLoginLimits(ctx context.Context, db DBTX, arg WriteLoginLimitsParams) error {
+	_, err := db.Exec(ctx, writeLoginLimits,
+		arg.SiteID,
+		arg.IpAttemptBurst,
+		arg.IpAttemptsPerMinute,
+		arg.EmailSignInFailures,
+		arg.UserCodeFailures,
+		arg.ChallengeCodeAttempts,
+	)
+	return err
+}
+
 const writeSiteKeyLimits = `-- name: WriteSiteKeyLimits :exec
 INSERT INTO accounts.site_settings (site_id, max_keys_per_account, key_creations_per_hour)
 VALUES ($1, $2::integer, $3::integer)
@@ -377,7 +431,7 @@ type WriteSiteSettingsParams struct {
 }
 
 // Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
-// limits are not the admin API's and are left as they are.
+// limits belong to their own admin resource and are left as they are.
 func (q *Queries) WriteSiteSettings(ctx context.Context, db DBTX, arg WriteSiteSettingsParams) error {
 	_, err := db.Exec(ctx, writeSiteSettings,
 		arg.SiteID,

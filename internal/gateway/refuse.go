@@ -34,6 +34,7 @@ func invalid(message string) *Refusal {
 // (TestMessagesAvoidAutoDisablePhrases): a relay that has us as its upstream would take a billing problem for a dead
 // channel and switch it off.
 var messages = map[string]string{
+	"account_suspended":    "Calls on this account are paused. Contact the site administrator.",
 	"authentication":       "The API key is missing, malformed, or not valid for this address.",
 	"credits_insufficient": "The credits available are not enough for this request.",
 	"rate_limited":         "Too many requests; retry shortly.",
@@ -51,6 +52,7 @@ var messages = map[string]string{
 // errorTypes are the Messages `type` of a status; Chat's `type` uses the same words (protocol's errorTypes, which the
 // same errors answered after an attempt are written with: TestARefusalIsAnErrorOfProtocol).
 var errorTypes = map[int]string{
+	http.StatusForbidden:  "permission_error",
 	http.StatusBadRequest: "invalid_request_error", http.StatusUnauthorized: "authentication_error",
 	http.StatusPaymentRequired: "billing_error", http.StatusNotFound: "not_found_error",
 	http.StatusRequestTimeout: "timeout_error", http.StatusRequestEntityTooLarge: "request_too_large",
@@ -79,6 +81,9 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 	} else {
 		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "param": "", "code": r.Code, "metadata": detail}}
 	}
+	if r.Code == "account_suspended" && f != protocol.Messages {
+		body["error"].(map[string]any)["code"] = http.StatusForbidden
+	}
 	out, _ := jsonx.MarshalCanonical(body) //nolint:errcheck // a map of strings and numbers always encodes
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
@@ -106,6 +111,8 @@ func refusal(f protocol.Format, err error) (r *Refusal, expected bool) {
 		return noEndpoint(none), true
 	}
 	switch {
+	case errors.Is(err, accounts.ErrAccountSuspended):
+		return &Refusal{Status: http.StatusForbidden, Code: "account_suspended"}, true
 	case errors.Is(err, accounts.ErrUnknownKey), errors.Is(err, accounts.ErrUnknownHost):
 		return errUnauthorized, true
 	case errors.Is(err, catalog.ErrModelNotFound), errors.Is(err, catalog.ErrRetired):
