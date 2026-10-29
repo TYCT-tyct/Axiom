@@ -268,7 +268,8 @@ func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64)
 }
 
 // recountCapped holds every count to maxCount, the largest catalog.NewUsage takes, and recounts the reply with its own
-// tier and unknown counts. Only a reported count can need the cap: every estimate is held to it where it is made.
+// tier and unknown counts. A count can arrive past the cap from the report itself or from an estimate set beside it, and
+// the recount refuses one: the cap is where an unrepresentable count stops instead of failing the settlement.
 func recountCapped(reply catalog.Usage, counts map[catalog.Item]int64) catalog.Usage {
 	for it, n := range counts {
 		counts[it] = min(n, maxCount)
