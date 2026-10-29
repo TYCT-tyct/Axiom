@@ -6,8 +6,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Actions, Code, mainCell, PageBody, State } from "../parts";
 import { MethodSummary } from "../pricing/describe";
-import { Publications } from "../pricing/publications";
 import { PreviewPanel } from "../pricing/preview-panel";
+import { Publications } from "../pricing/publications";
 import { RuleDialog } from "../pricing/rule-dialog";
 import { rulesQuery } from "../queries";
 
