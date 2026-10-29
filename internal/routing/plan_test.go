@@ -297,6 +297,16 @@ func TestSegmentable(t *testing.T) {
 		{"does not cancel", func(e *routing.Endpoint) { e.Cancels = false }, nil, false},
 		{"its output speed is not known", func(e *routing.Endpoint) { e.OutputSpeed = 0 }, nil, false},
 		{"reasoning not visible in this format", func(e *routing.Endpoint) { e.ReasoningVisible = routing.Of(protocol.Chat) }, nil, false},
+		// The visibility that matters is the called format's: this endpoint speaks only Chat and is called in it, so a
+		// Messages stream's visibility says nothing about what the gateway reads.
+		{"reasoning not visible in the format it is called in", func(e *routing.Endpoint) {
+			e.Native, e.ReasoningVisible = routing.Of(protocol.Chat), routing.Of(protocol.Messages)
+			e.Served = routing.Of(protocol.Messages, protocol.Chat)
+		}, nil, false},
+		{"the model does not reason", func(e *routing.Endpoint) {
+			e.Caps &^= protocol.Reasoning
+			e.ReasoningVisible = 0
+		}, nil, true},
 		{"the request hides reasoning", nil, func(in *routing.Input) { in.Req.HidesReasoning = true }, false},
 		{"the limit is near the overshoot", nil, func(in *routing.Input) { in.Req.MaxOutput = 1500 }, false},
 		{"just above it", nil, func(in *routing.Input) { in.Req.MaxOutput = 1501 }, true},

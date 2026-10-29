@@ -94,8 +94,9 @@ func (m Model) Reportable() Reportable { return m.reportable }
 func (m Model) OutputSpeed() int64 { return m.speed }
 
 // ReasoningVisible are the call formats in which the model's stream shows its reasoning as it is produced, from its
-// spec. The gateway must see that progress to meter it against a segment; an entry whose format is not in the set is
-// reserved whole (README.md「规格」).
+// spec, for a model whose spec lists the reasoning ability: one that does not reason has nothing to hide. The gateway
+// must see that progress to meter it against a segment; an entry called in a format not in the set is reserved whole
+// (README.md「规格」).
 func (m Model) ReasoningVisible() FormatSet { return m.reasoning }
 
 // CallFormat is a request format as a model's spec names it. It is catalog's own enumeration, not protocol's, because
