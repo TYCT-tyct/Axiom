@@ -69,6 +69,8 @@ type Progress struct {
 // Tier supplies the service tier when the reply names none (catalog README.md「计费项与用量」).
 type UsageContext struct {
 	CacheTTL1h bool
+	// ResponseHealing repairs only a non-streaming Chat JSON reply.
+	ResponseHealing bool
 	// HidesReasoning filters client output after the full upstream usage has been metered.
 	HidesReasoning bool
 	// LegacyFunctions restores the deprecated Chat reply shape for a legacy-only client.
@@ -653,6 +655,7 @@ func (r *Relay) initReply(u UsageContext, o RelayOptions) {
 		r.agg = newAggregator(r.client, r.charge)
 		if a, ok := r.agg.(*chatAggregate); ok {
 			a.legacy = o.legacyFunctions
+			a.healing = u.ResponseHealing
 		}
 	}
 }

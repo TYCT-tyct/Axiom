@@ -67,6 +67,7 @@ var inspectCases = []struct {
 		r.Model, r.Stream = "gpt-6-astra", true
 	}},
 	{"chat sample", protocol.Chat, "chat/text/request.json", func(r *protocol.Request) {
+		r.MessageCount = 2
 		r.Model, r.Stream = "gpt-6-astra", true
 	}},
 	{
@@ -197,6 +198,7 @@ var inspectCases = []struct {
 		"tools":[{"type":"function","function":{"name":"f"}}],"web_search_options":{},
 		"reasoning":{"effort":"high","exclude":true},"response_format":{"type":"json_object"},"service_tier":"flex"}`,
 		func(r *protocol.Request) {
+			r.MessageCount = 1
 			r.Model, r.MaxOutput, r.Choices, r.Images, r.Documents, r.HidesReasoning = "m", 200, 3, 2, 1, true
 			r.TextBytes -= int64(len(pngURL) + len(pdfURL))
 			r.InputItems = items(catalog.ItemInput, catalog.ItemCacheWrite, catalog.ItemCacheWrite1h)

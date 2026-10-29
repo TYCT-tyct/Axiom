@@ -161,15 +161,16 @@ var routingParameters = []string{"provider", "models", "route", "transforms", "p
 
 // TestPrepareDropsRoutingParameters holds every routing parameter to being dropped (README.md「同格式改写」).
 func TestPrepareDropsRoutingParameters(t *testing.T) {
+	values := map[string]string{"models": `["alt"]`, "plugins": `[]`, "transforms": `[]`}
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
 		want := `{"model":"up"}`
 		if f == protocol.Responses {
 			want = `{"model":"up","store":false}`
 		}
 		for _, name := range routingParameters {
-			value := "{}"
-			if name == "models" { // the one routing parameter whose shape Inspect checks: an array of model names
-				value = `["alt"]`
+			value, known := values[name]
+			if !known {
+				value = "{}"
 			}
 			got, err := prepare(f, []byte(`{"model":"m","`+name+`":`+value+`}`), false, false)
 			if err != nil || string(got) != want {
