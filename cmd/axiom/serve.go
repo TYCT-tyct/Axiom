@@ -168,12 +168,12 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
-	db, master, err := openCheckedDatabase(ctx, cfg, tel)
+	db, master, err := openCheckedDatabase(ctx, cfg, tel, console.master)
 	if err != nil {
 		return err
 	}
-	defer db.Close() // after the listeners and the recorder close: requests in flight may still need it
-	console.master = master
+	defer db.Close()        // after the listeners and the recorder close: requests in flight may still need it
+	console.master = master // the same ring, with the check's write version
 
 	exit, err := outbound(tel)
 	if err != nil {
@@ -189,7 +189,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer closeCache(ctx, cache, cfg.shutdownTimeout, logger)
-	queue, recorder, recovery, err := startBackground(syncCtx, db, console.master, console.masterKey, cfg.smtp, cache, exit, prices, tel, logger, cfg.shutdownTimeout, record)
+	queue, recorder, recovery, err := startBackground(syncCtx, db, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, tel, logger, cfg.shutdownTimeout, record)
 	if err != nil {
 		return err
 	}
@@ -280,23 +280,29 @@ func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, los
 
 // consoleParts are what the node builds from its configuration before it touches the database: the secrets read from
 // protected files, whose errors name the variable and never the path or the contents, and the contract the guard
-// enforces. The master key ring is not here: it is read once under the database check (openCheckedDatabase), which
-// gives it the write version the database chose.
+// enforces. The master key file is read once here; the database check (openCheckedDatabase) gives that one ring the
+// write version the database chose, and the login and mail keys were derived from the same snapshot.
 type consoleParts struct {
 	cfg           nodeSettings
-	master        *secret.Keyring // seals users' TOTP secrets and suppliers' credentials; set once the database is checked
-	masterKey     []byte          // newest distributed version, for the login HMAC key
-	hashes        *secret.MACKeys // keys API keys are hashed with
-	identity      []byte          // derives what replaces the client's identifiers upstream
+	masterKeys    *secret.MasterKeys // the one master-key read; the mail worker derives the recipient key from it
+	master        *secret.Keyring    // seals users' TOTP secrets and suppliers' credentials; openCheckedDatabase sets its write version
+	loginKey      secret.LoginKey    // from the same master-key snapshot, under the login label
+	hashes        *secret.MACKeys    // keys API keys are hashed with
+	identity      []byte             // derives what replaces the client's identifiers upstream
 	contract      *contract
 	adminContract *contract
 	frontend      *webui.Frontend // the pages of the three apps
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
-	// The same file, read for its newest key: the login keys are derived from it under a label of their own, so that
-	// they do not follow the hash keys' rotation (internal/platform/kv/README.md「键」).
-	masterKey, err := secret.LoadSecret(masterKeyFileVar, cfg.masterKeyFile)
+	// One read of the master key file gives the ring openCheckedDatabase checks and the snapshot the login and mail keys
+	// are derived from under labels of their own, so a replacement during startup cannot mix versions and neither key
+	// follows the hash keys' rotation (internal/platform/kv/README.md「键」). The plaintext stays in secret.
+	master, err := secret.LoadMaster(cfg.masterKeyFile)
+	if err != nil {
+		return consoleParts{}, err
+	}
+	loginKey, err := master.LoginKey()
 	if err != nil {
 		return consoleParts{}, err
 	}
@@ -321,7 +327,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	return consoleParts{
-		cfg: cfg, masterKey: masterKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
+		cfg: cfg, masterKeys: master, master: master.Keyring(), loginKey: loginKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
 	}, nil
 }
 
@@ -349,7 +355,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, LookupSlot: limits.KeyLookupSlot, Meter: tel.Metrics.Meter("axiom/accounts"),
-		Recovery: recovery, OnAccountOpened: openBalance, Cache: cache, MasterKey: p.masterKey,
+		Recovery: recovery, OnAccountOpened: openBalance, Cache: cache, LoginKey: p.loginKey,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
@@ -393,12 +399,12 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 // reconciliation, the ledger's daily check and the expiry of credit on the money queue. Each queue has its own workers,
 // so a burst of syncs cannot hold a money job back (internal/platform/README.md「任务队列」). It reaches the suppliers and
 // the datasets through exit, the client the whole node shares.
-func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Client, masterKey []byte,
+func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher,
 	tel *telemetry.Telemetry, logger *slog.Logger,
 ) (*pg.Queue, *accounts.PasswordRecovery, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
-	recovery, err := registerNotifications(ctx, db, queue, smtp, cache, masterKey, logger)
+	recovery, err := registerNotifications(ctx, db, queue, smtp, cache, master, logger)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -463,16 +469,14 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 
 // openCheckedDatabase opens the node's database and checks that the key ring it needs is complete and agrees with the
 // database, both under one AXIOM_STARTUP_TIMEOUT. The key ring check reads every envelope store, so a lock held on one of
-// them is the database not answering, like a lock held on the fallback prices.
-func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.Telemetry) (*pg.DB, *secret.Keyring, error) {
+// them is the database not answering, like a lock held on the fallback prices. master is the ring loadConsole read
+// before the database, so a file the node cannot use is named as such instead of as a connection failure, and the
+// login key came from the same read; CheckRing checks this ring under the lock instead of reading the file again.
+func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.Telemetry,
+	master *secret.Keyring,
+) (*pg.DB, *secret.Keyring, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, cfg.startupTimeout, errNoAnswer)
 	defer cancel()
-	// Read before the database, so a file the node cannot use is named as such instead of as a connection failure, and
-	// CheckRing then checks this ring under the lock instead of reading the file again.
-	master, err := secret.Load(cfg.masterKeyFile)
-	if err != nil {
-		return nil, nil, err
-	}
 	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel, pg.WithCompletionReserve(cfg.completionReserve))
 	if err != nil {
 		return nil, nil, err
@@ -513,13 +517,13 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // startBackground starts what serves the call path and outlives it: the call-record writer and the job queue. Both are
 // closed on every way out (closeRecorder, stopQueue), before the database they use; a queue that fails to start closes
 // the recorder it had already started, since the caller has no defer of its own yet.
-func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, masterKey []byte, smtp mail.Config,
+func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher,
 	tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, error) {
 	recorder := record(ctx, db, tel, logger)
-	queue, recovery, err := startSync(ctx, db, smtp, cache, masterKey, keys, exit, prices, tel, logger)
+	queue, recovery, err := startSync(ctx, db, smtp, cache, master, keys, exit, prices, tel, logger)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
 		return nil, nil, nil, err

@@ -2,6 +2,7 @@ package mail
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/kv/kvtest"
+	"axiom/internal/platform/secret"
 )
 
 // stepClock is a controlled clock: a test advances it instead of waiting for the wall clock. The offset to the server
@@ -43,18 +45,60 @@ func clientClock(c *stepClock) func() time.Time {
 	return func() time.Time { return c.Now().Add(offset) }
 }
 
-// testMasterKey is the master key the mail keys are derived from, the same on every node: one that differed would put one
-// recipient in two buckets.
-func testMasterKey() []byte { return []byte(strings.Repeat("k", mailKeyLen)) }
+// testMasterKeys is the master-key snapshot the mail keys are derived from, the same on every node: one that differed
+// would put one recipient in two buckets.
+func testMasterKeys(t *testing.T) *secret.MasterKeys {
+	t.Helper()
+	return masterKeysFrom(t, "1:"+base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", mailKeyLen))))
+}
+
+// masterKeysFrom writes version:base64 lines to a protected file and loads them as one snapshot.
+func masterKeysFrom(t *testing.T, lines ...string) *secret.MasterKeys {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "master")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	master, err := secret.LoadMaster(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return master
+}
 
 // testMailKey is the HMAC key every test's throttle shares, as two nodes of one deployment do.
 func testMailKey(t *testing.T) [mailKeyLen]byte {
 	t.Helper()
-	key, err := deriveMailKey(testMasterKey())
+	key, err := deriveMailKey(testMasterKeys(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return key
+}
+
+func TestMailKeyUsesTheHighestDistributedVersion(t *testing.T) {
+	t.Helper()
+	key := func(fill byte) string {
+		return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string(fill), mailKeyLen)))
+	}
+	multi, err := deriveMailKey(masterKeysFrom(t, "1:"+key('a'), "7:"+key('b')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	highest, err := deriveMailKey(masterKeysFrom(t, "7:"+key('b')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowest, err := deriveMailKey(masterKeysFrom(t, "1:"+key('a')))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if multi != highest {
+		t.Fatal("the mail key is not the highest distributed version's")
+	}
+	if multi == lowest {
+		t.Fatal("the mail key is the lowest version's")
+	}
 }
 
 func sharedThrottle(cache *kv.Client, key [mailKeyLen]byte) *throttle {
