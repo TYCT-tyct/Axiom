@@ -16,11 +16,8 @@ import (
 	"axiom/internal/routing"
 )
 
-// override reads the request's provider object into what routing narrows the route by. Every member either becomes
-// part of the override or is refused 400 by name: a condition the route does not keep is one the client believes it
-// has, so it is never treated as not written. What is refused is what needs data this node does not have yet: the
-// names of suppliers (docs/domains/gateway.md「路由参数」) and the options routing has no filter for. A member that
-// asks for what the default already gives (an empty list, allow_fallbacks true) is accepted.
+// override validates the provider object before admission. A constraint is either enforced by the route or refused
+// by name; accepting a condition this node cannot keep would give the client a false guarantee.
 func override(raw []byte) (routing.Override, error) {
 	var o routing.Override
 	if raw == nil {
@@ -28,7 +25,7 @@ func override(raw []byte) (routing.Override, error) {
 	}
 	var members map[string]jsonx.Raw
 	if err := jsonx.Unmarshal(raw, &members); err != nil {
-		return o, invalid("provider is not valid.")
+		return o, providerInvalid("provider is not valid.")
 	}
 	for _, name := range slices.Sorted(maps.Keys(members)) { // in a fixed order, so a request with two faults is told the same one
 		value := bytes.TrimSpace(members[name])
@@ -58,65 +55,126 @@ var providerMembers = map[string]func(o *routing.Override, name string, value []
 		return err
 	},
 	"preferred_max_latency": readMaxLatency,
-	// The suppliers a request names are addressed by name or code name, and nothing the gateway can reach maps those to
-	// the supplier IDs routing filters by: an empty list is the default, a name is refused.
-	"order":  noNames,
-	"only":   noNames,
-	"ignore": noNames,
-	// allow_fallbacks false means only the first of order is tried, and there is no order here; require_parameters
-	// true asks for endpoints that support every parameter written, which routing does not know of parameters beyond
-	// the capabilities it already requires.
-	"allow_fallbacks":    func(_ *routing.Override, name string, v []byte) error { return mustBe(name, v, true) },
-	"require_parameters": func(_ *routing.Override, name string, v []byte) error { return mustBe(name, v, false) },
+	"order":                 readCodenames,
+	"only":                  readCodenames,
+	"ignore":                readCodenames,
+	"quantizations":         readQuantizations,
+	"allow_fallbacks": func(o *routing.Override, name string, v []byte) error {
+		var allow bool
+		if err := jsonx.Unmarshal(v, &allow); err != nil {
+			return mismatch(name, "true or false")
+		}
+		o.NoFallbacks = !allow
+		return nil
+	},
+	"require_parameters": readRequireParameters,
 }
 
-func unsupported(name string) *Refusal { return invalid("provider." + name + " is not supported yet.") }
+func providerInvalid(message string) *Refusal {
+	ref := invalid(message)
+	ref.OpenRouterCode = true
+	return ref
+}
+
+func unsupported(name string) *Refusal {
+	return providerInvalid("provider." + name + " is not supported yet.")
+}
 
 func mismatch(name, want string) *Refusal {
-	return invalid("provider." + name + " must be " + want + ".")
+	return providerInvalid("provider." + name + " must be " + want + ".")
 }
 
-// mustBe accepts the boolean that is the default and refuses the other.
-func mustBe(name string, value []byte, allowed bool) error {
+func readRequireParameters(_ *routing.Override, name string, value []byte) error {
 	var b bool
 	if err := jsonx.Unmarshal(value, &b); err != nil {
 		return mismatch(name, "true or false")
 	}
-	if b != allowed {
-		return unsupported(name + " " + strconv.FormatBool(b))
+	if b {
+		return providerInvalid("provider." + name + " true is not supported: endpoint parameter inventories are unavailable.")
 	}
 	return nil
 }
 
-func noNames(_ *routing.Override, name string, value []byte) error {
+func readQuantizations(_ *routing.Override, name string, value []byte) error {
 	var names []string
 	if err := jsonx.Unmarshal(value, &names); err != nil {
 		return mismatch(name, "a list of names")
 	}
 	if len(names) > 0 {
-		return unsupported(name)
+		return providerInvalid("provider." + name + " is not supported: endpoint quantization metadata is unavailable.")
 	}
 	return nil
 }
 
-// strategies are the values of sort that routing has a ranking for. Its Fastest ranks by throughput and only then by time
-// to first token, so it is not a ranking by latency: sort latency is refused rather than served as throughput.
-var strategies = map[string]routing.Strategy{"price": routing.Cheapest, "throughput": routing.Fastest}
+func readCodenames(o *routing.Override, name string, value []byte) error {
+	var names []string
+	if err := jsonx.Unmarshal(value, &names); err != nil {
+		return mismatch(name, "a list of names")
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	if slices.Contains(names, "") {
+		return mismatch(name, "a list of nonempty public group codenames")
+	}
+	switch name {
+	case "order":
+		o.OrderNames = names
+	case "only":
+		o.OnlyNames = names
+	case "ignore":
+		o.ExcludeNames = names
+	}
+	return nil
+}
+
+var strategies = map[string]routing.Strategy{
+	"price": routing.Cheapest, "throughput": routing.Fastest, "latency": routing.LowestLatency,
+}
 
 func readSort(o *routing.Override, name string, value []byte) error {
 	var by string
-	if err := jsonx.Unmarshal(value, &by); err != nil {
-		return mismatch(name, "price or throughput")
-	}
-	if by == "latency" {
-		return unsupported(name + " latency")
+	if len(value) > 0 && value[0] == '{' {
+		var err error
+		by, err = readSortObject(o, name, value)
+		if err != nil {
+			return err
+		}
+	} else if err := jsonx.Unmarshal(value, &by); err != nil {
+		return mismatch(name, "price, throughput, latency or a sort object")
 	}
 	s, ok := strategies[by]
 	if !ok {
-		return mismatch(name, "price or throughput")
+		return mismatch(name, "price, throughput or latency")
 	}
 	o.Sort = &s
 	return nil
+}
+
+func readSortObject(o *routing.Override, name string, value []byte) (string, error) {
+	var members map[string]jsonx.Raw
+	if err := jsonx.Unmarshal(value, &members); err != nil {
+		return "", mismatch(name, "a sort object")
+	}
+	var by string
+	for _, member := range slices.Sorted(maps.Keys(members)) {
+		v := bytes.TrimSpace(members[member])
+		switch member {
+		case "by":
+			if err := jsonx.Unmarshal(v, &by); err != nil {
+				return "", mismatch(name+".by", "price, throughput or latency")
+			}
+		case "partition":
+			var partition string
+			if err := jsonx.Unmarshal(v, &partition); err != nil || partition != "model" && partition != "none" {
+				return "", mismatch(name+".partition", "model or none")
+			}
+			o.SortGlobal = partition == "none"
+		default:
+			return "", unsupported(name + "." + member)
+		}
+	}
+	return by, nil
 }
 
 // noRetention is what both data_collection deny and zdr ask for: endpoints whose supplier does not keep the data or
@@ -161,8 +219,8 @@ func readMaxLatency(o *routing.Override, name string, value []byte) error {
 	return err
 }
 
-// maxPriceItems are the members of max_price that routing can hold a price to: the price of a prompt token and of a
-// completion token. image, audio and request are other billing items whose limits routing does not compare.
+// maxPriceItems maps token-denominated OpenRouter caps to Axiom's billing items. Per-request and per-image prices
+// have no corresponding billing unit here; treating image tokens as images would promise the wrong cap.
 var maxPriceItems = map[string]catalog.Item{"prompt": catalog.ItemInput, "completion": catalog.ItemOutput}
 
 // readMaxPrice reads max_price, in credits of the site per million tokens like the prices of the model list: the
@@ -180,6 +238,9 @@ func readMaxPrice(o *routing.Override, name string, value []byte) error {
 		}
 		item, ok := maxPriceItems[member]
 		if !ok {
+			if member == "request" || member == "image" {
+				return providerInvalid("provider." + name + "." + member + " is not supported: per-request and per-image prices are unavailable.")
+			}
 			return unsupported(name + "." + member)
 		}
 		price, ok := perToken(v)

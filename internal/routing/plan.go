@@ -59,6 +59,9 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		}
 		order = append(order, r.rank(cands, n, &rec)...)
 	}
+	if in.Override.SortGlobal {
+		r.sort(order, n.strategy())
+	}
 	attempts := orDefault(preset.MaxAttempts, r.cfg.MaxAttempts)
 	order = healthOrder(order, n, &rec, min(attempts, MaxEntries))
 	entries := r.entries(order, n, &rec)
@@ -116,8 +119,12 @@ func (r *Router) nothing(rec *Record) (*Wait, error) {
 // retry budget is used up is left out, as the budget is for.
 func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 	entries := make([]Entry, 0, MaxEntries)
+	limit := MaxEntries
+	if n.over.singleEntry() {
+		limit = 1
+	}
 	for _, c := range order {
-		if len(entries) == MaxEntries {
+		if len(entries) == limit {
 			break
 		}
 		if slices.ContainsFunc(entries, func(e Entry) bool { return e.Endpoint == c.ID }) {
@@ -327,9 +334,23 @@ func (n *need) presetAllows(c *candidate, price *candidatePrice) bool {
 // and an endpoint must pass both.
 func (n *need) overrideAllows(c *candidate, price *candidatePrice) bool {
 	o := n.over
-	return (len(o.Only) == 0 || listed(o.Only, c.Supplier)) && !listed(o.Exclude, c.Supplier) &&
+	return o.allowsSupplier(c) &&
 		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
-		n.withinLimit(o.MaxPrice, c, price) && (!o.NoFallbacks || listed(o.Order, c.Supplier))
+		n.withinLimit(o.MaxPrice, c, price)
+}
+
+func (o *Override) singleEntry() bool {
+	return o.NoFallbacks && len(o.Order) == 0 && len(o.OrderNames) == 0
+}
+
+func (o *Override) allowsName(name string) bool {
+	return (len(o.OnlyNames) == 0 || slices.Contains(o.OnlyNames, name)) && !slices.Contains(o.ExcludeNames, name) &&
+		(len(o.OrderNames) == 0 || !o.NoFallbacks || slices.Contains(o.OrderNames, name))
+}
+
+func (o *Override) allowsSupplier(c *candidate) bool {
+	return (len(o.Only) == 0 || listed(o.Only, c.Supplier)) && !listed(o.Exclude, c.Supplier) &&
+		(!o.NoFallbacks || len(o.Order) == 0 || listed(o.Order, c.Supplier)) && o.allowsName(c.Codename)
 }
 
 // withinLimit holds the endpoint's price to a limit against the longest prompt any sampling of the request can have.
@@ -353,7 +374,7 @@ func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
 		available = true
 	}
 	if !available {
-		orderLastResorts(order)
+		orderLastResorts(order, n.over.SortGlobal)
 		return order
 	}
 	owned, hasOwned := ownedFallback(order, n.now)
@@ -391,11 +412,11 @@ func ownedFallback(order []ranked, now time.Time) (owned ranked, found bool) {
 	return
 }
 
-func orderLastResorts(order []ranked) {
+func orderLastResorts(order []ranked, global bool) {
 	// rank already groups each model by supplier order and slow status.
 	for start := 0; start < len(order); {
 		end := start + 1
-		for end < len(order) && order[end].Model == order[start].Model && order[end].order == order[start].order && order[end].slow == order[start].slow {
+		for end < len(order) && (global || order[end].Model == order[start].Model) && order[end].order == order[start].order && order[end].slow == order[start].slow {
 			end++
 		}
 		slices.SortStableFunc(order[start:end], func(a, b ranked) int { return b.opened.Compare(a.opened) })

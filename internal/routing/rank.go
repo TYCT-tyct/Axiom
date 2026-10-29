@@ -39,14 +39,7 @@ const exploreShare = 0.05
 // reason, except those the account cannot see.
 func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 	out := make([]ranked, 0, len(cands))
-	order := n.over.Order
-	if len(order) == 0 {
-		order = n.preset.Order
-	}
-	strategy := n.preset.Strategy
-	if n.over.Sort != nil {
-		strategy = *n.over.Sort
-	}
+	strategy := n.strategy()
 	for _, c := range cands {
 		price := c.priceFor(billing.Audience{Account: accounts.AccountID(n.in.Admission.Account), Tier: n.in.Admission.Tier})
 		if price == nil {
@@ -61,7 +54,7 @@ func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 		case reason != 0:
 			rec.Excluded = append(rec.Excluded, Excluded{c.ID, reason})
 		default:
-			s := r.score(c, n, order, strategy, price)
+			s := r.score(c, n, strategy, price)
 			if c.LiveHealth != nil {
 				var limit int64
 				s.opened, limit = c.LiveHealth.Routing(n.now)
@@ -70,11 +63,41 @@ func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 			out = append(out, s)
 		}
 	}
-	if strategy == Fastest {
-		r.explore(out)
+	if !n.over.SortGlobal {
+		r.sort(out, strategy)
 	}
-	slices.SortFunc(out, func(a, b ranked) int { return compare(&a, &b, strategy) })
 	return out
+}
+
+func (r *Router) sort(order []ranked, strategy Strategy) {
+	if strategy == Fastest {
+		r.explore(order)
+	}
+	slices.SortFunc(order, func(a, b ranked) int { return compare(&a, &b, strategy) })
+}
+
+func (n *need) order(c *candidate) int {
+	if names := n.over.OrderNames; len(names) > 0 {
+		if i := slices.Index(names, c.Codename); i >= 0 {
+			return i
+		}
+		return len(names)
+	}
+	order := n.over.Order
+	if len(order) == 0 {
+		order = n.preset.Order
+	}
+	if i := slices.Index(order, c.Supplier); i >= 0 {
+		return i
+	}
+	return len(order)
+}
+
+func (n *need) strategy() Strategy {
+	if n.over.Sort != nil {
+		return *n.over.Sort
+	}
+	return n.preset.Strategy
 }
 
 // explore marks, in exploreShare of the requests, the unmeasured candidate with the highest key to go first: the one
@@ -93,21 +116,15 @@ func (r *Router) explore(out []ranked) {
 
 // score works out what c is ordered by. Balanced draws its random key here, once, so the order is a sample without
 // replacement: the first is chosen with probability proportional to its weight, the second the same among the rest.
-func (r *Router) score(c *candidate, n *need, order []SupplierID, strategy Strategy, price *candidatePrice) ranked {
-	s := ranked{candidate: c, price: price, order: len(order), notSticky: !r.sticks(c, n, price)}
-	for i, id := range order {
-		if id == c.Supplier {
-			s.order = i
-			break
-		}
-	}
+func (r *Router) score(c *candidate, n *need, strategy Strategy, price *candidatePrice) ranked {
+	s := ranked{candidate: c, price: price, order: n.order(c), notSticky: !r.sticks(c, n, price)}
 	s.slow = slow(c, n.over)
 	tools := 1.0
-	if n.req.Needs.Has(protocol.Tools) && strategy != Cheapest && strategy != Fastest {
+	if n.req.Needs.Has(protocol.Tools) && (strategy == Balanced || strategy == BestQuality) {
 		tools = 1 - c.ToolErrorRate // rank by the tool-call error measured on real traffic
 	}
 	s.quality = c.Quality * c.Confidence * tools
-	if strategy == Balanced || strategy == Fastest && c.Throughput == 0 {
+	if strategy == Balanced || strategy == Fastest && c.Throughput == 0 || strategy == LowestLatency && c.Latency == 0 {
 		s.weight = r.weight(c, n.now, price) * tools * tools
 		u := 1 - r.cfg.Rand() // in (0, 1]
 		s.key = math.Log(u) / math.Max(s.weight, math.SmallestNonzeroFloat64)
@@ -158,6 +175,15 @@ func compare(a, b *ranked, strategy Strategy) int {
 		c = cmp.Compare(a.price.blend, b.price.blend)
 	case Fastest:
 		c = compareFastest(a, b)
+	case LowestLatency:
+		c = compareBool(a.Latency == 0, b.Latency == 0)
+		if c == 0 {
+			if a.Latency == 0 {
+				c = cmp.Compare(b.key, a.key)
+			} else {
+				c = cmp.Compare(a.Latency, b.Latency)
+			}
+		}
 	case BestQuality:
 		c = cmp.Compare(b.quality, a.quality)
 	}

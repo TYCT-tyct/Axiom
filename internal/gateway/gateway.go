@@ -15,12 +15,13 @@ import (
 // set, replaces the text of the code, and Details are members added beside error_type. Reason is which limit turned
 // the call away when several share a Code; it is counted (Backpressure.refused) and never sent to the client.
 type Refusal struct {
-	Status     int
-	Code       string
-	RetryAfter int // seconds
-	Reason     string
-	Message    string
-	Details    map[string]any
+	OpenRouterCode bool // Chat/Responses errors for OpenRouter routing options use a numeric HTTP status.
+	Status         int
+	Code           string
+	RetryAfter     int // seconds
+	Reason         string
+	Message        string
+	Details        map[string]any
 }
 
 func (r *Refusal) Error() string { return r.Code }

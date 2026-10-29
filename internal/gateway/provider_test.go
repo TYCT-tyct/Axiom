@@ -12,6 +12,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/alloctest"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/routing"
 )
 
@@ -25,7 +26,7 @@ func TestOverride(t *testing.T) {
 		}
 		return p
 	}
-	cheapest, fastest := routing.Cheapest, routing.Fastest
+	cheapest, fastest, latency := routing.Cheapest, routing.Fastest, routing.LowestLatency
 	limit := func(item catalog.Item, p string) (l routing.PriceLimit) {
 		l.Set.Add(item)
 		l.Max[item] = price(p)
@@ -39,6 +40,13 @@ func TestOverride(t *testing.T) {
 		"null members":             {`{"sort":null,"only":null,"max_price":null}`, routing.Override{}},
 		"sort by price":            {`{"sort":"price"}`, routing.Override{Sort: &cheapest}},
 		"sort by throughput":       {`{"sort":"throughput"}`, routing.Override{Sort: &fastest}},
+		"sort by latency":          {`{"sort":"latency"}`, routing.Override{Sort: &latency}},
+		"sort object default":      {`{"sort":{"by":"price"}}`, routing.Override{Sort: &cheapest}},
+		"sort by model":            {`{"sort":{"by":"throughput","partition":"model"}}`, routing.Override{Sort: &fastest}},
+		"sort across models":       {`{"sort":{"by":"latency","partition":"none"}}`, routing.Override{Sort: &latency, SortGlobal: true}},
+		"supplier selection":       {`{"order":["g2","g1"],"only":["g1"],"ignore":["g3"]}`, routing.Override{OrderNames: []string{"g2", "g1"}, OnlyNames: []string{"g1"}, ExcludeNames: []string{"g3"}}},
+		"fallbacks disabled":       {`{"allow_fallbacks":false}`, routing.Override{NoFallbacks: true}},
+		"empty quantizations":      {`{"quantizations":[]}`, routing.Override{}},
 		"data collection denied":   {`{"data_collection":"deny"}`, routing.Override{Policies: noRetention}},
 		"data collection allowed":  {`{"data_collection":"allow"}`, routing.Override{}},
 		"zero data retention":      {`{"zdr":true}`, routing.Override{Policies: noRetention}},
@@ -75,10 +83,6 @@ func TestOverride(t *testing.T) {
 func TestOverrideRefuses(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ provider, named string }{
-		"suppliers to use":                              {`{"only":["acme"]}`, "provider.only"},
-		"suppliers to leave out":                        {`{"ignore":["acme"]}`, "provider.ignore"},
-		"an order of suppliers":                         {`{"order":["acme"]}`, "provider.order"},
-		"fallbacks off":                                 {`{"allow_fallbacks":false}`, "provider.allow_fallbacks"},
 		"every parameter required":                      {`{"require_parameters":true}`, "provider.require_parameters"},
 		"quantizations":                                 {`{"quantizations":["fp8"]}`, "provider.quantizations"},
 		"a member nobody knows":                         {`{"colour":"red"}`, "provider.colour"},
@@ -90,13 +94,19 @@ func TestOverrideRefuses(t *testing.T) {
 		"a price too dear to be one":                    {`{"max_price":{"prompt":1e10}}`, "provider.max_price.prompt"},
 		"prices that are not an object":                 {`{"max_price":1}`, "provider.max_price"},
 		"sort by something else":                        {`{"sort":"quality"}`, "provider.sort"},
-		"sort by latency":                               {`{"sort":"latency"}`, "provider.sort latency"},
 		"a price with an exponent of a million":         {`{"max_price":{"prompt":1e1000000}}`, "provider.max_price.prompt"},
 		"a price with a negative exponent of a million": {`{"max_price":{"prompt":1e-1000000}}`, "provider.max_price.prompt"},
 		"a price with a four-digit exponent":            {`{"max_price":{"prompt":1e1000}}`, "provider.max_price.prompt"},
 		"a price with digits past what a price takes":   {`{"max_price":{"prompt":12345678901234567890}}`, "provider.max_price.prompt"},
 		"a price of many zeros":                         {`{"max_price":{"prompt":0.00000000000000000000000000000001}}`, "provider.max_price.prompt"},
-		"sort as an object":                             {`{"sort":{"by":"price"}}`, "provider.sort"},
+		"sort partition invalid":                        {`{"sort":{"by":"price","partition":"account"}}`, "provider.sort.partition"},
+		"sort object missing by":                        {`{"sort":{"partition":"none"}}`, "provider.sort"},
+		"sort unknown member":                           {`{"sort":{"by":"price","percentile":"p90"}}`, "provider.sort.percentile"},
+		"empty provider name":                           {`{"only":[""]}`, "provider.only"},
+		"nonstring provider name":                       {`{"ignore":[1]}`, "provider.ignore"},
+		"fallbacks as text":                             {`{"allow_fallbacks":"false"}`, "provider.allow_fallbacks"},
+		"parameters as text":                            {`{"require_parameters":"true"}`, "provider.require_parameters"},
+		"percentile latency":                            {`{"preferred_max_latency":{"p50":1,"p99":2}}`, "provider.preferred_max_latency"},
 		"percentile throughput":                         {`{"preferred_min_throughput":{"p90":10}}`, "provider.preferred_min_throughput"},
 		"negative latency":                              {`{"preferred_max_latency":-1}`, "provider.preferred_max_latency"},
 		"a data collection of maybe":                    {`{"data_collection":"maybe"}`, "provider.data_collection"},
@@ -107,7 +117,7 @@ func TestOverrideRefuses(t *testing.T) {
 			t.Parallel()
 			_, err := override([]byte(tc.provider))
 			var ref *Refusal
-			if !errors.As(err, &ref) || ref.Status != http.StatusBadRequest || !strings.Contains(ref.Message, tc.named) {
+			if !errors.As(err, &ref) || ref.Status != http.StatusBadRequest || !ref.OpenRouterCode || !strings.Contains(ref.Message, tc.named) {
 				t.Errorf("got %v, want a 400 naming %s", err, tc.named)
 			}
 		})
@@ -156,12 +166,22 @@ func TestProviderNarrowsTheRoute(t *testing.T) {
 		provider string
 		route    []routing.EndpointID
 	}{
-		"no provider object":      {`{}`, both},
-		"data collection denied":  {`{"data_collection":"deny"}`, only1},
-		"zero data retention":     {`{"zdr":true}`, only1},
-		"a completion price cap":  {`{"max_price":{"completion":3}}`, only1},
-		"a cap both meet":         {`{"max_price":{"prompt":1,"completion":4}}`, both},
-		"data collection allowed": {`{"data_collection":"allow"}`, both},
+		"no provider object":            {`{}`, both},
+		"data collection denied":        {`{"data_collection":"deny"}`, only1},
+		"zero data retention":           {`{"zdr":true}`, only1},
+		"a completion price cap":        {`{"max_price":{"completion":3}}`, only1},
+		"a cap both meet":               {`{"max_price":{"prompt":1,"completion":4}}`, both},
+		"only a named group":            {`{"only":["alpha-1"]}`, only1},
+		"ignore a named group":          {`{"ignore":["alpha-2"]}`, only1},
+		"named order":                   {`{"order":["alpha-2","alpha-1"]}`, []routing.EndpointID{both[1], both[0]}},
+		"order allows others":           {`{"order":["alpha-2"]}`, []routing.EndpointID{both[1], both[0]}},
+		"closed two-group order":        {`{"order":["alpha-2","alpha-1"],"allow_fallbacks":false}`, []routing.EndpointID{both[1], both[0]}},
+		"closed order":                  {`{"order":["alpha-1"],"allow_fallbacks":false}`, only1},
+		"no fallback or order":          {`{"allow_fallbacks":false}`, only1},
+		"empty order disables fallback": {`{"order":[],"allow_fallbacks":false}`, only1},
+		"unknown ignore":                {`{"ignore":["missing"]}`, both},
+		"unknown preferred group":       {`{"order":["missing"]}`, both},
+		"data collection allowed":       {`{"data_collection":"allow"}`, both},
 	} {
 		if route, resp, body := r.sendWith(a, tc.provider); resp.StatusCode != http.StatusOK || !cmp.Equal(route, tc.route) {
 			t.Errorf("%s: %d, route %v, want %v: %s", name, resp.StatusCode, route, tc.route, body)
@@ -179,7 +199,7 @@ func TestProviderRefusedMembersReserveNothing(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
-	for _, provider := range []string{`{"only":["acme"]}`, `{"allow_fallbacks":false}`, `{"max_price":{"request":1}}`} {
+	for _, provider := range []string{`{"require_parameters":true}`, `{"quantizations":["fp8"]}`, `{"preferred_min_throughput":{"p90":10}}`, `{"max_price":{"request":1}}`, `{"max_price":{"image":1}}`} {
 		_, resp, body := r.sendWith(a, provider)
 		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 			t.Errorf("%s: %d %s", provider, resp.StatusCode, body)
@@ -234,8 +254,7 @@ func checkPriceAllocations(t *testing.T, huge []string) {
 	}
 }
 
-// TestSortRanksAsAsked: sort throughput ranks by throughput, price by price, and latency is refused, not served as
-// throughput. The endpoints are made so that every ranking differs: alpha-2 is the faster but dearer, alpha-1 the
+// TestSortRanksAsAsked: each strategy uses its own metric. The endpoints are made so that every ranking differs: alpha-2 is the faster but dearer, alpha-1 the
 // cheaper with the better first token.
 func TestSortRanksAsAsked(t *testing.T) {
 	t.Parallel()
@@ -252,17 +271,64 @@ func TestSortRanksAsAsked(t *testing.T) {
 	a := r.newAccount(1e9)
 	one, two := r.endpoints["alpha-1"].ID, r.endpoints["alpha-2"].ID
 	for provider, want := range map[string][]routing.EndpointID{
-		`{"sort":"price"}`:      {one, two},
-		`{"sort":"throughput"}`: {two, one},
+		`{"sort":"price"}`:                              {one, two},
+		`{"sort":"throughput"}`:                         {two, one},
+		`{"sort":"latency"}`:                            {one, two},
+		`{"sort":{"by":"latency","partition":"model"}}`: {one, two},
 	} {
 		if route, resp, body := r.sendWith(a, provider); resp.StatusCode != http.StatusOK || !cmp.Equal(route, want) {
 			t.Errorf("%s: %d, route %v, want %v: %s", provider, resp.StatusCode, route, want, body)
 		}
 	}
-	before := len(r.calls())
-	_, resp, body := r.sendWith(a, `{"sort":"latency"}`)
-	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" || !strings.Contains(body, "provider.sort latency") || len(r.calls()) != before {
-		t.Errorf("sort latency: %d %s", resp.StatusCode, body)
+	beta := r.endpoints["beta-1"].ID
+	for _, tc := range []struct {
+		partition string
+		want      []routing.EndpointID
+	}{
+		{"model", []routing.EndpointID{one, two, beta}},
+		{"none", []routing.EndpointID{one, beta, two}},
+	} {
+		members := `"models":["acme/beta"],"provider":{"sort":{"by":"latency","partition":"` + tc.partition + `"}},`
+		if route, resp, body := r.sendNamed(a, "acme/alpha", members); resp.StatusCode != http.StatusOK || !cmp.Equal(route, tc.want) {
+			t.Errorf("partition %s: %d, route %v, want %v: %s", tc.partition, resp.StatusCode, route, tc.want, body)
+		}
+	}
+	r.idle(1 << 30)
+}
+
+func TestProviderOpenRouterErrors(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	for _, tc := range []struct{ provider, member string }{
+		{`{"require_parameters":true}`, "require_parameters"},
+		{`{"quantizations":["fp8"]}`, "quantizations"},
+		{`{"preferred_min_throughput":{"p90":10}}`, "preferred_min_throughput"},
+		{`{"preferred_max_latency":{"p99":1}}`, "preferred_max_latency"},
+		{`{"max_price":{"request":0}}`, "max_price.request"},
+		{`{"max_price":{"image":0.01}}`, "max_price.image"},
+		{`{"sort":{"by":"price","percentile":"p90"}}`, "sort.percentile"},
+	} {
+		body := `{"model":"acme/alpha","provider":` + tc.provider + `,"messages":[{"role":"user","content":"hello"}]}`
+		resp, out := r.do(http.MethodPost, "/api/v1/chat/completions", a.key, strings.NewReader(body))
+		var got struct {
+			Error struct {
+				Code     int    `json:"code"`
+				Message  string `json:"message"`
+				Metadata struct {
+					Type string `json:"error_type"`
+				} `json:"metadata"`
+			} `json:"error"`
+		}
+		if err := jsonx.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusBadRequest || got.Error.Code != http.StatusBadRequest || got.Error.Metadata.Type != "invalid_request" || !strings.Contains(got.Error.Message, "provider."+tc.member) {
+			t.Errorf("%s: %d %s", tc.provider, resp.StatusCode, out)
+		}
+	}
+	if r.count(allRows) != 0 || len(r.calls()) != 0 {
+		t.Fatal("unsupported provider constraint reached reservation or upstream")
 	}
 	r.idle(1 << 30)
 }

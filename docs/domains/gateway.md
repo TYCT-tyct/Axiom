@@ -126,9 +126,9 @@
 ### 错误
 
 - **外壳与类型**：Messages 用 Anthropic 的外壳；Chat 和 Responses 用 new-api 与 OpenAI 的 `error` 对象：`message`、`type`、`param`、`code`，另带统一的错误类型字段 `error_type`，程序判断它就够了（与 OpenRouter 一致，见 OpenRouter《Errors and Debugging》，2026-10）。
-  - `type` 用状态码表里「Messages 的 `type`」那一列的词（`invalid_request_error`、`authentication_error` 等），`param` 没有时是空字符串，`code` 是字符串（上游未给出且无法分类时为 `null`）：我们自己的错误里就是统一的错误类型（`invalid_request`、`model_not_found`……），上游拒绝请求时是上游给的 `code`（没给时，已分类的错误用统一类型，其他为 `null`）；账户暂停调用也用字符串 `permission_denied`；
+  - `type` 用状态码表里「Messages 的 `type`」那一列的词（`invalid_request_error`、`authentication_error` 等），`param` 没有时是空字符串，`code` 默认是字符串（上游未给出且无法分类时为 `null`）：我们自己的错误里就是统一的错误类型（`invalid_request`、`model_not_found`……），上游拒绝请求时是上游给的 `code`（没给时，已分类的错误用统一类型，其他为 `null`）；账户暂停调用也用字符串 `permission_denied`；provider 参数校验的 Chat/Responses 400 使用数字 `400`；
   - `error_type` 的位置：Chat 在 `error.metadata.error_type`，Messages 在 `error.error_type`，Responses 在 `response.failed` 的顶层；Responses 在流开始之前出错时用 Chat 的外壳；Chat 流中途的出错块里的 `error` 也是同一个对象；
-  - 与 OpenRouter 的不同：它的 `error.code` 是与状态码相同的数字；我们的是字符串，状态码在响应的状态行里。读 OpenAI 或 new-api 的 `error.code`、`error.type` 的客户端能读到，读 OpenRouter 数字 `code` 的要改读状态行或 `error_type`。偏离的理由见「决策与理由」。
+  - 与 OpenRouter 的不同：它的 `error.code` 是与状态码相同的数字；除 `provider` 参数校验的 Chat/Responses 400 使用数字 `400` 外，我们的是字符串，状态码在响应的状态行里。读 OpenAI 或 new-api 的 `error.code`、`error.type` 的客户端能读到，读 OpenRouter 数字 `code` 的要改读状态行或 `error_type`。偏离的理由见「决策与理由」。
 - **上游拒绝请求本身（4xx）时，客户端读到上游的原话**：Claude Code 靠上游错误的原话自动恢复，例如推理签名被拒、`output_config.effort` 被拒，改写会让它们变成无法恢复的 400；new-api 也把上游的 `message`、`type`、`param`、`code` 原样交给客户端。我们交出上游错误对象里的这四项（OpenAI 和 Anthropic 的外壳都有 `error.message`，`type` 也同位置），去掉能指向供应商的内容后：
   - **去掉的**：其中所有的网址（含文档链接）、本站调用它用的凭证（先整串遮蔽，再处理其他模式，免得被切成碎片）、形似凭证的串（`sk-`、`ak-` 开头，`Bearer`，`api_key=`）、供应商自己的域名及它的每一级上级域名（两段以上，如 `api.us.relay.example` 连同 `us.relay.example`、`relay.example`；不引入公共后缀表，多遮蔽 `co.uk` 这类后缀只是多遮蔽，不会漏）、new-api 附在文字后面的 `(request id: …)`、new-api、one-api、sub2api 这些软件的名字；每项最多 2 KiB；流内错误超过此限的字段整项省略，避免先截断凭证导致后续脱敏漏掉前缀；
   - **`type` 只留通用的**：OpenAI、Anthropic 自己用的取值（`invalid_request_error`、`authentication_error`、`not_found_error` 等）；中转站软件自己的（new-api 的 `new_api_error`、sub2api 的 `scheduling_error`）不传，Chat、Responses 外壳改用统一的 `type`。名字里带软件名的 `code` 也不传；
@@ -194,7 +194,20 @@
   - `user`：终端用户标识，用于防滥用和归因。
 
   这些参数的语义见[路由的「请求覆盖」](routing.md#请求覆盖)。
-  - **第一版能兑现的**：`provider` 里的 `sort`（`price`、`throughput`；`latency` 无对应排序，返回 400）、`data_collection`、`zdr`、`max_price` 的 `prompt` 与 `completion`、`preferred_min_throughput`、`preferred_max_latency`；写了名字的 `only`、`ignore`、`order`，`allow_fallbacks: false`，`require_parameters: true`，`quantizations` 和不认识的成员返回 400 `invalid_request` 并指明成员名，不当作没写（原因见「待定问题」）。
+  - **能兑现的**（2026-10-29 核对 [OpenRouter Provider Routing](https://openrouter.ai/docs/guides/routing/provider-selection)）：`order`、`only`、`ignore` 使用供应商分组的公开代号，精确、区分大小写匹配；不接受真实供应商名称或内部 ID，也不把 OpenRouter 的供应商 slug 猜成本地供应商。未知的 `only` 或关闭回退的未知 `order` 无匹配时返回 404；未知的 `ignore` 无效果，未知的开放 `order` 仍可回退。空列表和 `null` 不增加限制。`allow_fallbacks: false` 有非空 `order` 时只试命名组；否则仅保留排序后的第一个条目。`sort` 支持 `price`、`throughput`、`latency` 字符串，以及 `{by, partition}` 对象：默认 `partition: model` 按模型分组，`none` 跨主模型和备选排序。`data_collection`、`zdr`、`max_price.prompt/completion` 和数字性能偏好继续生效。所有过滤都叠加在预设与归属权限之内，不能放宽。
+
+  **与 OpenRouter 的偏离**（无法兑现的限制在预留与调用上游前回 400 `invalid_request`，错误消息指出 `provider` 成员；Chat/Responses 与 Messages 各用上文「错误」的外壳，Chat/Responses 的 `error.code` 是数字 `400`，对齐 [OpenRouter Errors and Debugging](https://openrouter.ai/docs/api/reference/errors-and-debugging)（2026-10-29））：
+
+  | 参数或行为 | 这里与理由 |
+  |---|---|
+  | 供应商名称 | 当前接入的都是中转系统，只按不可变分组代号选择；官方供应商名称尚无可信对应。发现接口的匿名展示 tag 不是分组代号，不参与路由；真实名称不公开 |
+  | `require_parameters: true` | 400；目录的模型能力不是每个中转端点的完整参数清单，不能保证采样、seed、logprobs 等全部被执行。`false` 或未写仍强制已有能力匹配 |
+  | 非空 `quantizations` | 400；没有端点的量化事实，不能把未知当作 fp16 或已验证的 unknown。空列表不增加限制 |
+  | `preferred_min_throughput` / `preferred_max_latency` 的百分位对象 | 400；quality 仅有 EWMA，没有 OpenRouter 五分钟窗口的 p50/p75/p90/p99。数字形式沿用实测 EWMA 软偏好，不声称是 p50 |
+  | `sort` 对象里其他成员（包括 percentile） | 400；仅 `by` 和 `partition` 有语义，不静默忽略 |
+  | `max_price.request` / `max_price.image` | 400；本站没有按生成请求或图片张数的价格单位，图片 token 价不能当成按张价。其他未知计价项同样 400 |
+  | `max_price.prompt` / `completion` | 本站记账货币每百万 token，比较实际受众售价的适用服务等级与上下文档位最高价；只接收可精确表示的十进制数，不四舍五入。非美元站点不声称美元上限 |
+
 - **我们自己的扩展**：放在单独的 `axiom` 对象里，也可以用 `x-axiom-*` 请求头传，方便无法修改请求体的工具。
 - **转发前处理**：路由参数和扩展字段在转发前删除；会话和用户标识换成派生值（见上文「转发规则」）。
 
@@ -337,7 +350,7 @@
 ## 待定问题
 
 - 各字段的最终名称和结构写入接口契约时确定
-- `provider.only`、`ignore`、`order`：用户写的是官方 API 的名称或中转站分组的代号（[术语表](../glossary.md)），路由按供应商 ID 过滤；名称到 ID 的对应还没有模块提供（routing 的 `Endpoint` 不带名字，代号在 suppliers 的分组上），有了才能支持，在此之前返回 400。`max_price` 的单位按本站记账单位每百万 token，二级站点用人民币记账时与 OpenRouter 的美元不同，是否要换算待负责人定
+- 官方供应商名称的可信映射、端点参数清单和量化事实、性能百分位、按请求和按张计价仍缺数据。`max_price` 在非美元站点是否统一换成美元待定；现状与明确拒绝项只在「路由参数」定义。
 - 402 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
 - `~作者/系列-latest` 别名的后续实现：目录需要独立的模型族与可切换别名映射，切换追加审计；发现和调用应使用同一次发布的目标、规格与价格，响应 `model` 按 OpenRouter 返回具体模型。现有名字仍只追加，不把内部名字开放调用。需要补齐模型族数据与版本选择依据后再实现，不按前缀或日期猜最新；价格与能力变化遵循[目录的切换与迁移](catalog.md#模型的生命周期)。当前请求仍为上文说明原因的 400。
