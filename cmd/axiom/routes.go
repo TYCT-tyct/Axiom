@@ -73,7 +73,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nodeRoutes{}, err
 	}
 	public := withModelCalls(
-		publicRoutes(consoleAPI{version: version(), accounts: service, payments: pay, db: db},
+		publicRoutes(consoleAPI{exit: exit, version: version(), accounts: service, payments: pay, db: db},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})

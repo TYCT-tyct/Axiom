@@ -42,6 +42,8 @@ type refusal struct {
 // refusals are how the modules' refusals are answered, in the order they are tried. The message is English for logs
 // and developers, and never repeats what the client sent.
 var refusals = []refusal{
+	{accounts.ErrNotificationPreferences, http.StatusUnprocessableEntity, codeUnprocessable, "invalid notification preferences"},
+	{accounts.ErrAnnouncement, http.StatusUnprocessableEntity, codeUnprocessable, "invalid announcement validity window"},
 	{accounts.ErrInvalidReset, http.StatusUnprocessableEntity, codeUnprocessable, "invalid or expired password reset link"},
 	{accounts.ErrBadCredentials, http.StatusUnauthorized, codeWrongLogin, "wrong email or password"},
 	{accounts.ErrNoSession, http.StatusUnauthorized, codeUnauthenticated, "not signed in"},

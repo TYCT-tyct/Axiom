@@ -4,6 +4,7 @@ import { Badge, DataState, EmptyState, PageHeader, Panel, useFormat } from "@axi
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { Announcements } from "../announcements";
 import { maskedKey } from "../parts";
 import { balanceQuery, callsQuery, keysQuery } from "../queries";
 
@@ -13,6 +14,7 @@ export default function Overview() {
     <>
       <PageHeader title={t("nav.overview")} description={t("overview.description")} />
       <div className="space-y-4 p-4 sm:p-6">
+        <Announcements />
         <Figures />
         <div className="grid gap-4 xl:grid-cols-2">
           <KeysPanel />
