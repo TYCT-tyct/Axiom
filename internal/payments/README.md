@@ -136,7 +136,7 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 
 schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 ENABLE 并 FORCE 行级安全（[平台的「范围」](../platform/README.md#范围)）。
 
-`TestReconcileMigrationsResumeWithoutLosingState` 从 billing 24、payments 6 的历史迁移集合建立夹具，模拟最后一条并发索引迁移未记完成，再执行当前完整迁移并核对订单入账、查询租约和索引。历史集合单独迁移到空的模块库，避免复用只按模块名缓存的最新测试模板；不能先应用新版本再删除旧版本的完成标记，那会制造生产中被拒绝的乱序迁移。
+`TestReconcileMigrationsResumeWithoutLosingState` 用当前完整 schema 播种订单与查询租约，再只重放 billing 24、payments 6 及以前的历史迁移集合。重放期间一并移除目标及后继版本标记，完成后恢复已应用的后继标记，再检查当前版本、入账、租约和索引。这样当前应用的播种查询可以使用新增列，恢复测试也不会把后继标记留在旧迁移之前，制造生产中被拒绝的乱序历史；后继迁移的实际执行由普通完整迁移夹具覆盖。
 
 | 表 | 关键列 | 约束与索引 | 类别与策略 |
 |---|---|---|---|
