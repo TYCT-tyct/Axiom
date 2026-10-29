@@ -35,6 +35,8 @@ type EndpointID = uuid.UUID
 // upstream, the formats it speaks, the cost schedule it is priced by — already scaled by its group's ratio — and what
 // its supplier does with a stream (internal/suppliers/README.md「调用面」).
 type Routable struct {
+	UnitValue           platform.UnitPrice
+	UnitValueID         uuid.UUID
 	Currency            platform.Currency
 	ID, Supplier, Model uuid.UUID
 	Upstream            string
@@ -387,8 +389,8 @@ func (s *Service) Routable() ([]Routable, error) {
 	for _, ep := range snap.endpoints {
 		policy := s.policy(ep)
 		out = append(out, Routable{
-			Currency: ep.currency,
-			ID:       ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Formats: slices.Clone(ep.formats),
+			Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
+			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Formats: slices.Clone(ep.formats),
 			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
 		})
 	}

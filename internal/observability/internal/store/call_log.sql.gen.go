@@ -14,7 +14,7 @@ const getCallTrace = `-- name: GetCallTrace :one
 SELECT id::text AS id, at, site_id::text AS site_id, account_id::text AS account_id, workspace_id::text AS workspace_id,
     key_id::text AS key_id, end_user_hash, host(ip) AS ip, client_app, session_id, subagent_id, request_class,
     language, used_tools, has_image, has_file, model, route::text AS route, usage::text AS usage, service_tier,
-    price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind,
+    coalesce(price_version::text, '')::text AS price_version, price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind,
     consent_version, training_allowed
 FROM observability.call_log
 WHERE id = ($1::text)::uuid
@@ -41,6 +41,7 @@ type GetCallTraceRow struct {
 	Route           string
 	Usage           string
 	ServiceTier     string
+	PriceVersion    string
 	PriceNano       int64
 	CostNano        int64
 	Currency        string
@@ -80,6 +81,7 @@ func (q *Queries) GetCallTrace(ctx context.Context, db DBTX, id string) (GetCall
 		&i.Route,
 		&i.Usage,
 		&i.ServiceTier,
+		&i.PriceVersion,
 		&i.PriceNano,
 		&i.CostNano,
 		&i.Currency,
@@ -96,7 +98,7 @@ func (q *Queries) GetCallTrace(ctx context.Context, db DBTX, id string) (GetCall
 
 const getOwnCall = `-- name: GetOwnCall :one
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
+    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
 WHERE id = ($1::text)::uuid
@@ -115,6 +117,7 @@ type GetOwnCallRow struct {
 	Model        string
 	Usage        string
 	ServiceTier  string
+	PriceVersion string
 	PriceNano    int64
 	Currency     string
 	FreeOfCharge bool
@@ -140,6 +143,7 @@ func (q *Queries) GetOwnCall(ctx context.Context, db DBTX, id string) (GetOwnCal
 		&i.Model,
 		&i.Usage,
 		&i.ServiceTier,
+		&i.PriceVersion,
 		&i.PriceNano,
 		&i.Currency,
 		&i.FreeOfCharge,
@@ -154,7 +158,7 @@ func (q *Queries) GetOwnCall(ctx context.Context, db DBTX, id string) (GetOwnCal
 const insertCallLogs = `-- name: InsertCallLogs :execrows
 INSERT INTO observability.call_log (id, at, site_id, account_id, workspace_id, key_id, end_user_hash, ip, client_app,
     session_id, subagent_id, request_class, language, used_tools, has_image, has_file, model, endpoint_id, source_class,
-    egress, attempt_count, route, usage, service_tier, price_nano, cost_nano, currency, free_of_charge,
+    egress, attempt_count, route, usage, service_tier, price_version, price_nano, cost_nano, currency, free_of_charge,
     latency_ms, first_token_ms, finish_reason, error_kind, consent_version, training_allowed)
 SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (r ->> 'account_id')::uuid,
     (r ->> 'workspace_id')::uuid, (r ->> 'key_id')::uuid, r ->> 'end_user_hash', (r ->> 'ip')::inet,
@@ -162,7 +166,7 @@ SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (
     (r ->> 'used_tools')::boolean, (r ->> 'has_image')::boolean, (r ->> 'has_file')::boolean, r ->> 'model',
     (r ->> 'endpoint_id')::uuid, r ->> 'source_class', r ->> 'egress', (r ->> 'attempt_count')::smallint,
     (r ->> 'route')::jsonb, r -> 'usage', r ->> 'service_tier',
-    (r ->> 'price_nano')::bigint, (r ->> 'cost_nano')::bigint, r ->> 'currency', (r ->> 'free_of_charge')::boolean,
+    nullif(r ->> 'price_version', '')::uuid, (r ->> 'price_nano')::bigint, (r ->> 'cost_nano')::bigint, r ->> 'currency', (r ->> 'free_of_charge')::boolean,
     (r ->> 'latency_ms')::integer, (r ->> 'first_token_ms')::integer, r ->> 'finish_reason', r ->> 'error_kind',
     r ->> 'consent_version', (r ->> 'training_allowed')::boolean
 FROM jsonb_array_elements($1::jsonb) AS r
@@ -182,7 +186,7 @@ func (q *Queries) InsertCallLogs(ctx context.Context, db DBTX, rows []byte) (int
 
 const listOwnCalls = `-- name: ListOwnCalls :many
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
+    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
 WHERE account_id = ($1::text)::uuid
@@ -214,6 +218,7 @@ type ListOwnCallsRow struct {
 	Model        string
 	Usage        string
 	ServiceTier  string
+	PriceVersion string
 	PriceNano    int64
 	Currency     string
 	FreeOfCharge bool
@@ -259,6 +264,7 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 			&i.Model,
 			&i.Usage,
 			&i.ServiceTier,
+			&i.PriceVersion,
 			&i.PriceNano,
 			&i.Currency,
 			&i.FreeOfCharge,
@@ -279,7 +285,7 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 
 const listOwnCallsByApp = `-- name: ListOwnCallsByApp :many
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
+    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
 WHERE account_id = ($1::text)::uuid AND client_app = $2
@@ -312,6 +318,7 @@ type ListOwnCallsByAppRow struct {
 	Model        string
 	Usage        string
 	ServiceTier  string
+	PriceVersion string
 	PriceNano    int64
 	Currency     string
 	FreeOfCharge bool
@@ -352,6 +359,7 @@ func (q *Queries) ListOwnCallsByApp(ctx context.Context, db DBTX, arg ListOwnCal
 			&i.Model,
 			&i.Usage,
 			&i.ServiceTier,
+			&i.PriceVersion,
 			&i.PriceNano,
 			&i.Currency,
 			&i.FreeOfCharge,
@@ -372,7 +380,7 @@ func (q *Queries) ListOwnCallsByApp(ctx context.Context, db DBTX, arg ListOwnCal
 
 const listOwnCallsByModel = `-- name: ListOwnCallsByModel :many
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, price_nano, currency,
+    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
 FROM observability.call_log
 WHERE account_id = ($1::text)::uuid AND model = $2
@@ -407,6 +415,7 @@ type ListOwnCallsByModelRow struct {
 	Model        string
 	Usage        string
 	ServiceTier  string
+	PriceVersion string
 	PriceNano    int64
 	Currency     string
 	FreeOfCharge bool
@@ -449,6 +458,7 @@ func (q *Queries) ListOwnCallsByModel(ctx context.Context, db DBTX, arg ListOwnC
 			&i.Model,
 			&i.Usage,
 			&i.ServiceTier,
+			&i.PriceVersion,
 			&i.PriceNano,
 			&i.Currency,
 			&i.FreeOfCharge,

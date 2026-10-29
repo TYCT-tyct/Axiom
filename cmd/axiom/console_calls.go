@@ -57,8 +57,8 @@ func callBody(c observability.OwnCall) consoleapi.Call {
 		Id: c.ID.String(), At: c.At, WorkspaceId: accounts.WorkspaceID(c.Workspace).TypeID(), KeyId: accounts.KeyID(c.Key).TypeID(),
 		Ip: c.IP, ClientApp: c.ClientApp, SessionId: c.SessionID, SubagentId: c.SubagentID, RequestClass: c.Class,
 		Model: c.Model, Usage: usage, ServiceTier: c.ServiceTier,
-		Price: consoleapi.Money{Amount: strconv.FormatInt(c.PriceNano, 10), Currency: c.Currency},
-		Free:  c.Free, LatencyMs: int(c.Latency.Milliseconds()), FirstTokenMs: int(c.FirstToken.Milliseconds()),
+		PriceVersion: optionalPriceVersion(c.PriceVersion), Price: consoleapi.Money{Amount: strconv.FormatInt(c.PriceNano, 10), Currency: c.Currency},
+		Free: c.Free, LatencyMs: int(c.Latency.Milliseconds()), FirstTokenMs: int(c.FirstToken.Milliseconds()),
 		FinishReason: c.FinishReason, ErrorKind: c.ErrorKind,
 	}
 }
@@ -122,4 +122,11 @@ func (c consoleAPI) GetCall(ctx context.Context, request consoleapi.GetCallReque
 		return nil, err
 	}
 	return consoleapi.GetCall200JSONResponse(callBody(call)), nil
+}
+
+func optionalPriceVersion(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

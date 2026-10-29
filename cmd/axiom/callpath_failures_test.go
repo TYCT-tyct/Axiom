@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -38,6 +39,7 @@ func TestANodeFallsOverUpstreamFailures(t *testing.T) {
 			w.supplier.mu.Unlock()
 			w.price()
 			n := w.start()
+			waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
 			r := w.call(n, "/v1/messages", w.richKey, messagesCall)
 			count, charged := len(tc.statuses)+1, int64(messagesCharge)
 			if tc.fails {

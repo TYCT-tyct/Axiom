@@ -34,6 +34,8 @@ import tomllib
 from dataclasses import dataclass
 from urllib.parse import quote
 
+from migration_order import out_of_order, versions as migration_versions
+
 QUEUE, HOTFIX, CONFLICT, FAILED = "queue", "hotfix", "train:conflict", "train:failed"
 STATUS = "merge-train"  # required on main; posted on a PR head just before the train merges it. Not "train": that is
 # the name of the driver job's own check run, which a labelling run attaches to the PR it drives, so a required context of
@@ -43,7 +45,6 @@ TEST_JOB = "go-test"  # ci.yml's job for `just test`, the only one whose log nam
 VERIFIED = "train/verified"  # on train/<base>/land: the prefix passed and may be landed
 FLAKY = ".github/flaky.toml"
 SUBJECT = re.compile(r"train: #(\d+) ([0-9a-f]{40})$")
-MIGRATION = re.compile(r"^(.*/migrations)/(\d+)_[^/]*\.sql$")
 STAMP = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")  # the timestamp on every line of an Actions job log
 GREEN = {"success", "skipped", "neutral"}  # a skipped required check counts as passed on GitHub too
 SESSION_LINK = "https://claude.ai/code/session_"
@@ -86,11 +87,6 @@ def unmet_checks(required, check_runs, statuses):
     state = {run["name"]: run["conclusion"] if run["status"] == "completed" else run["status"] for run in runs}
     state.update({status["context"]: status["state"] for status in statuses})
     return [name for name in required if name != STATUS and state.get(name) not in GREEN]
-
-
-def migration_versions(paths):
-    """(directory, version) of each migration file: goose refuses two files with one version in a directory."""
-    return {(match[1], int(match[2])) for path in paths if (match := MIGRATION.match(path))}
 
 
 def cut_points(n, lane):
@@ -336,6 +332,11 @@ class Train:
                 git("reset", "-q", "--hard", before)
                 listed = ", ".join(f"`{directory}` {version:05d}" for directory, version in sorted(clash))
                 self.eject(entry, CONFLICT, f"It adds a migration version that main or a PR ahead of it already uses: {listed}. Renumber it.")
+                continue
+            if late := out_of_order(taken, added):
+                git("reset", "-q", "--hard", before)
+                listed = ", ".join(f"`{d}` {v:05d}" for d, v in sorted(late))
+                self.eject(entry, CONFLICT, f"It adds a migration below an already-applied version: {listed}. Renumber it above main and the PRs ahead of it.")
                 continue
             if blobs := self.new_workflow_blobs(entry.sha):
                 git("reset", "-q", "--hard", before)
@@ -605,6 +606,11 @@ def precheck(repo, base, number):
     problems = []
     if clash := train.added_migrations(tip, entry.sha) & migration_versions(git("ls-tree", "-r", "--name-only", tip).splitlines()):
         problems.append("adds a migration version main already uses: " + ", ".join(f"`{d}` {v:05d}" for d, v in sorted(clash)))
+    taken = migration_versions(git("ls-tree", "-r", "--name-only", tip).splitlines())
+    for other in ahead:
+        taken |= train.added_migrations(tip, other.sha)
+    if late := out_of_order(taken, train.added_migrations(tip, entry.sha)):
+        problems.append("adds an out-of-order migration: " + ", ".join(f"`{d}` {v:05d}" for d, v in sorted(late)))
     git("checkout", "-q", "--detach", tip)
     if files := train.try_merge(entry.sha):
         problems.append("conflicts with main: " + ", ".join(f"`{f}`" for f in files))

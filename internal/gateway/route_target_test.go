@@ -129,7 +129,7 @@ func (f *routeFixture) pricedModel(slug, spec string) catalog.ModelID {
 		f.t.Fatal(err)
 	}
 	var err error
-	if f.prices, err = f.salePrices(); err != nil {
+	if f.prices, err = f.fixturePrices(); err != nil {
 		f.t.Fatal(err)
 	}
 	return model
