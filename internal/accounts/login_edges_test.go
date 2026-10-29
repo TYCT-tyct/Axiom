@@ -2,7 +2,6 @@ package accounts
 
 import (
 	"context"
-	"encoding/hex"
 	"math"
 	"net/netip"
 	"strings"
@@ -14,34 +13,12 @@ import (
 
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/kv/kvtest"
+	"axiom/internal/platform/secret"
 )
-
-func TestLoginKeyDerivation(t *testing.T) {
-	t.Parallel()
-	for _, size := range []int{0, 31, 33} {
-		if _, err := deriveLoginKey(make([]byte, size)); err == nil {
-			t.Errorf("accepted master key with %d bytes", size)
-		}
-	}
-	master := []byte(strings.Repeat("a", loginKeyLen))
-	key, err := deriveLoginKey(master)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A fixed HKDF vector also catches replacing the derivation with the master key itself.
-	const want = "93f12231920429a87c22b10d76f68e21a9d71ca18c8805b5fca0bfc102c91538"
-	if hex.EncodeToString(key[:]) != want {
-		t.Fatal("HKDF label or key changed")
-	}
-	other, err := deriveLoginKey([]byte(strings.Repeat("b", loginKeyLen)))
-	if err != nil || key == other || key == [loginKeyLen]byte(master) {
-		t.Fatalf("login key must be derived and change with the master: %v", err)
-	}
-}
 
 func TestLoginKeysSeparateSubjects(t *testing.T) {
 	t.Parallel()
-	key, other := [loginKeyLen]byte{1}, [loginKeyLen]byte{2}
+	key, other := secret.LoginKey{1}, secret.LoginKey{2}
 	s := &Service{cache: kvtest.New(t).Open(t, kv.Deps{}), loginKey: key}
 	site := SiteID(uuid.New())
 	seen := make(map[string]bool)
@@ -64,29 +41,41 @@ func TestLoginKeysSeparateSubjects(t *testing.T) {
 	}
 }
 
+// TestAttemptIPNormalization: the login buckets count a source address as clientip.Group does, which is what the
+// gateway's per-address limit counts too, so the two agree on one group: a v4 address in v6 clothes, an IPv6 zone and
+// every address of one /64 share one bucket, and another /64 has its own.
 func TestAttemptIPNormalization(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct{ input, want string }{
-		{"203.0.113.1", "203.0.113.1"},
-		{"::ffff:203.0.113.1", "203.0.113.1"},
-		{"2001:db8:1:2:ffff::1", "2001:db8:1:2::"},
-		{"fe80::1234%eth0", "fe80::"},
+	s := &Service{}
+	site := SiteID(uuid.New())
+	l := limits{ipBurst: 2, ipPerMinute: 1}
+	group := func(input string) loginLimit[siteIP] {
+		return s.ipLimit(site, netip.MustParseAddr(input), l)
+	}
+	for _, c := range []struct{ name, input, want string }{
+		{"IPv4", "203.0.113.1", "203.0.113.1"},
+		{"IPv4 in v6 clothes", "::ffff:203.0.113.1", "203.0.113.1"},
+		{"IPv6", "2001:db8:1:2:ffff::1", "2001:db8:1:2::"},
+		{"IPv6 with a zone", "fe80::1234%eth0", "fe80::"},
 	} {
-		if got := normalIP(netip.MustParseAddr(c.input)); got != netip.MustParseAddr(c.want) {
-			t.Errorf("normalIP(%q) = %s, want %s", c.input, got, c.want)
+		t.Run(c.name, func(t *testing.T) {
+			got := group(c.input)
+			if got.key.ip != netip.MustParseAddr(c.want) || got.value != c.want {
+				t.Fatalf("ipLimit(%s) counts %s / %s, want %s", c.input, got.key.ip, got.value, c.want)
+			}
+		})
+	}
+	if got := s.ipLimit(site, netip.Addr{}, l); got.key.ip.IsValid() {
+		t.Fatal("an invalid address acquired a bucket")
+	}
+	first := group("2001:db8:1:2::1")
+	for _, input := range []string{"2001:db8:1:2::2", "2001:db8:1:2:ffff::1"} {
+		if got := group(input); got.key != first.key || got.value != first.value {
+			t.Errorf("%s has its own bucket, want the /64's: %v, want %v", input, got, first)
 		}
 	}
-	if normalIP(netip.Addr{}).IsValid() {
-		t.Fatal("invalid address became valid")
-	}
-	s := &Service{guards: newGuards(1, time.Second)}
-	now := time.Unix(1_760_000_000, 0)
-	for _, ip := range []string{"2001:db8::1", "2001:db8::2", "2001:db8::ffff"} {
-		l := s.ipLimit(SiteID{}, netip.MustParseAddr(ip), limits{ipBurst: 2, ipPerMinute: 1})
-		wait := l.bucket.take(l.key, l.size, l.per, now)
-		if (ip == "2001:db8::ffff") != (wait > 0) {
-			t.Fatalf("local bucket for %s: waited %v", ip, wait)
-		}
+	if got := group("2001:db8:1:3::1"); got.key == first.key || got.value == first.value {
+		t.Errorf("another /64 shares the bucket: %v", got)
 	}
 }
 
