@@ -33,6 +33,7 @@ def expression(condition, event="pull_request", stress=False, draft=False, docs=
         "inputs.gate_stress": stress,
         "needs.changes.result": results.get("changes", "success"),
         "needs.changes.outputs.docs_only": "true" if docs else "false",
+        "needs.changes.outputs.web": "true",
     }
     for name, result in results.items():
         values["needs." + name + ".result"] = result
@@ -79,6 +80,33 @@ class BuildChecks(unittest.TestCase):
                         # the tests run once, in the train and on main; a pull request runs only the cheap checks
                         want = not docs and (name == "web" or event != "pull_request")
                         self.assertEqual(enabled(name, event, docs=docs), want)
+
+    def test_unrelated_pr_skips_web_and_build_passes(self):
+        condition = re.search(r"^    if: (.+)$", job("web"), re.M).group(1)
+        condition = condition.replace("needs.changes.outputs.web", "'false'")
+        self.assertFalse(expression(condition))
+        self.assertTrue(enabled("build", "pull_request"))
+        guard = re.search(r"- if: (contains\(needs.\*.result.+)\n", job("build"))[1]
+        self.assertFalse(expression(guard, results={"web": "skipped", "static": "success", "changes": "success"}))
+        decide = re.search(r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1]
+        self.assertIn('if [ "${{ github.event_name }}" = pull_request ] && [ -n "$BASE" ]; then', decide)
+        self.assertIn('web=true', decide)
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_web_selection_runs_only_for_prs_and_fails_open(self):
+        decide = textwrap.dedent(re.search(
+            r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1])
+        stub = "python3() { case \"$2\" in md-only) return 1;; web-needed) return \"$WEB_STATUS\";; *) return 0;; esac; }\n"
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            for status in (0, 10, 37):
+                with self.subTest(event=event, status=status), tempfile.TemporaryDirectory() as tmp:
+                    output = Path(tmp) / "output"
+                    env = {**os.environ, "BASE": "" if event == "push" else "base", "WEB_STATUS": str(status),
+                           "GITHUB_OUTPUT": output.as_posix()}
+                    script = stub + decide.replace("${{ github.event_name }}", event)
+                    subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, check=True)
+                    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                    self.assertEqual(values["web"], "false" if event == "pull_request" and status == 10 else "true")
 
     def test_go_tests_run_in_trains_and_main_not_on_pull_requests(self):
         for event in ("pull_request", "push", "workflow_dispatch"):
