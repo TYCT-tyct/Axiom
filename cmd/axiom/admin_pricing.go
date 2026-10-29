@@ -154,11 +154,11 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 		if err != nil {
 			return err
 		}
-		costs, err := publicationCosts(ctx, tx, site.Currency)
+		costs, rates, err := publicationCosts(ctx, tx, site.Currency)
 		if err != nil {
 			return err
 		}
-		proposals, err = billing.PreviewPrices(ctx, tx, uuid.UUID(site.ID), site.Currency, snap, rules, models, costs)
+		proposals, err = billing.PreviewPrices(ctx, tx, uuid.UUID(site.ID), site.Currency, snap, rules, models, costs, rates...)
 		if err != nil {
 			return err
 		}

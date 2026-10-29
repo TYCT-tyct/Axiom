@@ -3,6 +3,7 @@ package billing
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"uuid"
 
 	"axiom/internal/catalog"
@@ -56,30 +57,21 @@ func Unpriced(s catalog.Schedule, r catalog.Reportable) catalog.Reportable {
 // Sell is the whole sale price one rule sets for one reference price: a pure function of the rule and the reference
 // price, so the same rule versions and reference price always give the same price list, with no database in between.
 //
-// reference_multiplier with currency_conversion face is the reference price's numbers times the rule's multiplier, read
-// as the site's currency (the 中转站 convention: LiteLLM and OpenRouter publish in US dollars, and a site reads those
-// numbers as its own). It applies only where the reference price is already in the site's currency: an exchange rate is
-// not what face means. fixed is the rule's own price list. cost_plus is evaluated by publication with endpoint costs;
-// Sell returns ErrUnpriced for it, for exchange-based reference selection, and for a reference price the model lacks (docs/domains/billing.md「定价」, #167, #185). A model without
-// a sale price has none: nothing is ever charged at its reference price by default.
+// reference_multiplier multiplies the selected reference by its multiplier and, for exchange, its exact rate.
+// All factors are combined before the schedule rounds once. Same-currency references need no rate; face only accepts
+// the site's currency. Publication selects references and persists their exchange evidence. fixed uses the rule's
+// own schedule; cost_plus needs publication's endpoint costs. A model without a sale price has none by default.
 //
 // A rule that carries constraints is refused with ErrRuleRefuses: this release does not apply them (#234), so pricing it
 // would ignore a limit it names. That refusal ends the model's pricing rather than leaving it to a broader rule
 // (priceFromRules).
-func Sell(r Rule, ref catalog.ReferencePrice, site platform.Currency) (catalog.Schedule, error) {
+func Sell(r Rule, ref catalog.ReferencePrice, site platform.Currency, rates ...platform.ExchangeRate) (catalog.Schedule, error) {
 	if r.Constraints != (Constraints{}) {
 		return catalog.Schedule{}, ErrRuleRefuses
 	}
 	switch r.Method.Kind {
 	case "reference_multiplier":
-		if r.Method.CurrencyConversion != "face" || r.Method.Multiplier == nil || ref.ID == uuid.Nil() || ref.Currency != site.String() {
-			return catalog.Schedule{}, ErrUnpriced
-		}
-		s, err := ref.Schedule.Scaled(*r.Method.Multiplier, site)
-		if err != nil {
-			return catalog.Schedule{}, fmt.Errorf("billing: price %s by the rule %s: %w", ref.Model, r.ID, err)
-		}
-		return s, nil
+		return referenceSale(r, ref, site, rates)
 	case "fixed":
 		s, err := catalog.ParseSchedule(r.Method.Schedule)
 		if err != nil {
@@ -88,6 +80,41 @@ func Sell(r Rule, ref catalog.ReferencePrice, site platform.Currency) (catalog.S
 		return s, nil
 	}
 	return catalog.Schedule{}, ErrUnpriced
+}
+
+func referenceSale(r Rule, ref catalog.ReferencePrice, site platform.Currency, rates []platform.ExchangeRate) (catalog.Schedule, error) {
+	if r.Method.Multiplier == nil || ref.ID == uuid.Nil() {
+		return catalog.Schedule{}, ErrUnpriced
+	}
+	if r.Method.CurrencyConversion != "face" && r.Method.CurrencyConversion != "exchange" || r.Method.CurrencyConversion == "face" && ref.Currency != site.String() {
+		return catalog.Schedule{}, ErrUnpriced
+	}
+	multiplier := *r.Method.Multiplier
+	if ref.Schedule.Currency() != site {
+		factor, err := saleFactor(r.Method, ref.Schedule.Currency(), site, rates)
+		if err != nil {
+			return catalog.Schedule{}, err
+		}
+		multiplier = factor.RatString()
+	}
+	s, err := ref.Schedule.Scaled(multiplier, site)
+	if err != nil {
+		return catalog.Schedule{}, fmt.Errorf("billing: price %s by the rule %s: %w", ref.Model, r.ID, err)
+	}
+	return s, nil
+}
+
+func saleFactor(m Method, from, to platform.Currency, rates []platform.ExchangeRate) (*big.Rat, error) {
+	factor, ok := new(big.Rat).SetString(*m.Multiplier)
+	if !ok || factor.Sign() < 0 {
+		return nil, ErrUnpriced
+	}
+	for _, rate := range rates {
+		if value, ok := rate.Between(from, to); ok {
+			return factor.Mul(factor, value), nil
+		}
+	}
+	return nil, errors.New("billing: the selected reference price has no exchange rate")
 }
 
 // pricesModel: the rule's target holds the model.
