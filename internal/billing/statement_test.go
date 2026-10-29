@@ -180,7 +180,7 @@ func TestStatementPages(t *testing.T) {
 }
 
 // checkStatementChain verifies opening + changes = closing for both counters and unique row identities.
-func checkStatementChain(t *testing.T, rows []StatementRow) {
+func checkStatementChain(t testing.TB, rows []StatementRow) {
 	t.Helper()
 	if len(rows) == 0 {
 		t.Fatal("empty statement")

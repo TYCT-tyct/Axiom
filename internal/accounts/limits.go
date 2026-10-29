@@ -85,6 +85,7 @@ func (b *buckets[K]) give(key K, per time.Duration, now time.Time) {
 type guards struct {
 	ips    *buckets[siteIP]
 	emails *buckets[siteEmail]
+	resets *buckets[siteEmail]
 	users  *buckets[siteUser]
 	// coarse bounds how many login keys one source makes in the shared store, at the site's own rate and per node, so
 	// that a flood cannot fill the store with them (internal/platform/kv/README.md「内存」).
@@ -117,7 +118,7 @@ func newGuards(concurrency int, wait time.Duration) guards {
 		wait = defaultHashWait
 	}
 	return guards{
-		ips: newBuckets[siteIP](), emails: newBuckets[siteEmail](), users: newBuckets[siteUser](),
+		resets: newBuckets[siteEmail](), ips: newBuckets[siteIP](), emails: newBuckets[siteEmail](), users: newBuckets[siteUser](),
 		coarse:  newBuckets[siteIP](),
 		hashing: semaphore.NewWeighted(int64(concurrency)), hashWait: wait,
 	}
