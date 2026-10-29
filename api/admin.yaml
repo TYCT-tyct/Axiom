@@ -2954,7 +2954,7 @@ components:
         native_unit: {type: string, enum: [quota, usd], description: "The unit the supplier counts its balance in."}
         settlement_currency: {type: string, pattern: '^[A-Z]{3}$'}
         status: {$ref: "#/components/schemas/SupplierStatus"}
-        status_reason: {type: string}
+        status_reason: {type: string, minLength: 1, maxLength: 200}
         balance_native: {$ref: "#/components/schemas/Decimal"}
         balance_observed_at: {type: string, format: date-time}
         low_balance_threshold: {$ref: "#/components/schemas/Decimal"}

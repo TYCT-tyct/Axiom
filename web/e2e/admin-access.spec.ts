@@ -126,6 +126,7 @@ test.describe("permissions", () => {
     await expect(h1(page, zhText("home.noAccessTitle"))).toBeVisible();
     await page.goto("/suppliers");
     await expect(page.getByRole("heading", { name: "没有权限" })).toBeVisible();
+    await expect(page.getByText("请联系站长授予权限。")).toBeVisible();
   });
 });
 

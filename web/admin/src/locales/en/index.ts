@@ -9,6 +9,7 @@ import users from "./users";
 
 export default {
   brandName: "Axiom Admin",
+  forbiddenHint: "Ask the site owner to grant the permission.",
   nav: {
     users: "Users",
     suppliers: "Suppliers",

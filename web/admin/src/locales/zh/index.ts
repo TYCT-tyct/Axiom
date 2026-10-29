@@ -8,6 +8,7 @@ import users from "./users";
 // The admin's messages in Chinese, the source every other language follows.
 export default {
   brandName: "Axiom 管理后台",
+  forbiddenHint: "请联系站长授予权限。",
   nav: {
     users: "用户",
     suppliers: "供应商",
