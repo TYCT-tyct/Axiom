@@ -105,7 +105,8 @@ type Attempt struct {
 // ErrNoSlot when there is none, and gateway moves on to its next entry: that is not an attempt. The slot is held until
 // Done.
 func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
-	ep, ok := s.snap.Load().endpoints[id]
+	snap := s.snap.Load()
+	ep, ok := snap.endpoints[id]
 	if !ok {
 		return nil, ErrNoEndpoint
 	}
@@ -118,7 +119,13 @@ func (s *Service) Acquire(id EndpointID) (*Attempt, error) {
 		if !best.rt.inflight.CompareAndSwap(n, n+1) { // n is below the limit, and the swap only succeeds if it is still n
 			continue
 		}
-		if !best.rt.requests.take(best.perMinute) {
+		var taken bool
+		if s.cfg.Nodes == nil {
+			taken = best.rt.requests.take(best.perMinute)
+		} else {
+			taken = best.rt.requests.takeCurrent(best.perMinute, s, snap)
+		}
+		if !taken {
 			best.rt.inflight.Add(-1) // no request was made: the slot goes back, and another credential is tried
 			continue
 		}

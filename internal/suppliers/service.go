@@ -19,6 +19,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/egress"
+	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
@@ -45,6 +46,8 @@ type Routable struct {
 // Config is what a node needs to call suppliers.
 type Config struct {
 	DB *pg.DB
+	// Nodes supplies the production core registry; nil is an isolated single-node service.
+	Nodes ShareRegistry
 	// Scope sees every supplier: the platform scope, which only cmd/ may build.
 	Scope  pg.Scope
 	Keys   *secret.Keyring
@@ -74,11 +77,14 @@ type Service struct {
 	now        func() time.Time
 	unloadable metric.Int64Counter
 
-	// The snapshot and the schedules are built apart from the calls and published whole; a call reads them with one
-	// atomic load and no lock. A receipt may name a schedule that is no longer an endpoint's, so schedules only grow.
-	snap      atomic.Pointer[snapshot]
-	schedules atomic.Pointer[map[uuid.UUID]*catalog.Schedule]
-	reloadMu  sync.Mutex // one Reload at a time; no call takes it
+	// The snapshot and schedules are built apart from calls and published whole. Shared admission validates the
+	// snapshot again under the account's existing lock before a membership handover can be acknowledged.
+	// A receipt may name a schedule that is no longer an endpoint's, so schedules only grow.
+	snap       atomic.Pointer[snapshot]
+	schedules  atomic.Pointer[map[uuid.UUID]*catalog.Schedule]
+	shareNodes []kv.ShareNode // guarded by reloadMu; last successful membership reading
+	shareUntil time.Time
+	reloadMu   sync.Mutex // one Reload at a time; no call takes it
 	// What outlives a snapshot: credential slots and rest, and the account's minute, must not reset
 	// when the snapshot is rebuilt while calls run. Each lock is held for a lookup, never while anything is parsed or
 	// decrypted.
@@ -209,7 +215,9 @@ func (rt *minuteRuntime) sum(now int64) int64 {
 // last request of a window, and a caller delayed after Acquire cannot count at an earlier second than one that already
 // took a request (README.md「并发与速率」). A request counted here is not given back: it may have reached the supplier,
 // whose own count it is in.
-func (rt *minuteRuntime) take(limit int32) bool {
+func (rt *minuteRuntime) take(limit int32) bool { return rt.takeCurrent(limit, nil, nil) }
+
+func (rt *minuteRuntime) takeCurrent(limit int32, s *Service, snap *snapshot) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	now := rt.now
@@ -217,6 +225,10 @@ func (rt *minuteRuntime) take(limit int32) bool {
 		now = time.Now
 	}
 	at := now()
+	// A caller paused before taking the account lock cannot spend a snapshot replaced before a handover was acknowledged.
+	if s != nil && (s.snap.Load() != snap || !at.Before(snap.until)) {
+		return false
+	}
 	if !rt.started {
 		rt.started = true
 		rt.epoch = at
@@ -277,12 +289,13 @@ type endpoint struct {
 }
 
 type credential struct {
-	id        uuid.UUID
-	key       secret.Secret
-	max       int32
-	perMinute int32 // account RPM ceiling for selecting this credential, 0 for none
-	expires   *time.Time
-	rt        *credRuntime
+	id                              uuid.UUID
+	key                             secret.Secret
+	configuredMax, configuredMinute int32
+	max                             int32
+	perMinute                       int32 // account RPM ceiling for selecting this credential, 0 for none
+	expires                         *time.Time
+	rt                              *credRuntime
 }
 
 // snapshot is the endpoints one Reload built. confirmed is when that Reload began reading the database, so the state it
@@ -290,6 +303,7 @@ type credential struct {
 type snapshot struct {
 	endpoints map[EndpointID]*endpoint
 	confirmed time.Time
+	until     time.Time // zero for isolated services; shared admission stops before its registry lease expires
 }
 
 // Reload rebuilds the snapshot from the database, decrypting the keys of the credentials in this node's memory. A
@@ -329,6 +343,7 @@ func (s *Service) Reload(ctx context.Context) error {
 		}
 	}
 	s.schedules.Store(&schedules) // first: the snapshot must never name a schedule the map lacks
+	s.applyShares(next)
 	s.snap.Store(next)
 	s.report(ctx, unloadable)
 	return nil
@@ -430,6 +445,7 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 	}
 	return &credential{
 		id: r.CredentialID, key: key, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
+		configuredMax: r.MaxConcurrency, configuredMinute: ceiling(r.RequestsPerMinute),
 		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, r.SupplierID),
 	}, nil
 }

@@ -4,7 +4,7 @@
 
 > 本文先于代码写成，是 [Issue #36](https://github.com/TYCT-tyct/Axiom/issues/36) 的调用路径契约；各部分随下文「PR 拆分」落地，已落地的是 G1–G9（下文「入口与准入」「尝试与转发」「计量、追加与结算」写它们的代码结构），代码与本文不一致时，在同一个 PR 里改本文。下层的接口见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[protocol](../protocol/README.md#转发草图)、[accounts](../accounts/README.md#认出与准入)。
 
-M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在 M2：限流计数移到 Valkey（K1 已落地），会话粘性也已共享（K3），状态核对见 [platform/kv 的设计](../platform/kv/README.md)，供应商凭证并发与 RPM 尚未按节点分份额，生产入口仍拒绝 N > 1。出口只有 `platform/egress` 直连。
+M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在 M2：限流计数移到 Valkey（K1 已落地），会话粘性也已共享（K3），状态核对见 [platform/kv 的设计](../platform/kv/README.md)，供应商凭证并发与有限账号 RPM 按存活核心后台静态分份额，生产支持 N > 1。出口只有 `platform/egress` 直连。
 
 ## 不变量
 
@@ -287,7 +287,7 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 |---|---|---|
 | 余额、预留、计数、账本、持有者 | PostgreSQL | 钱只在这里 |
 | 限流计数、会话粘性 | M1 进程内；M2 Valkey，计数脚本与粘性读取同批、一次往返，期限 20ms；最近 10 秒内至少 20 次且过半不可用、至少 10 次且超过 20% 超时、或连续 5 次不可用即熔断 5s（调用方自己的取消不计入），之后放一次试探（半开）；不可用期间按本节点计数与全额限额比较、不粘；粘性在结束后经后台队列写回 | 丢了不影响钱；放库每个请求多一次写。细节见 [platform/kv 的设计](../platform/kv/README.md) |
-| 端点负载、429 降权、凭证在途数与冷却、重试预算、账户闸 | 进程内；M2 后台每秒同步，凭证上限按核心静态分份额 | 请求里不访问缓存；硬上限不依赖共享提示 |
+| 端点负载、429 降权、凭证在途数与冷却、重试预算、账户闸 | 进程内；M2 后台每秒同步，凭证并发与有限账号 RPM 按存活核心静态分份额，完整成员确认及排空见 [suppliers](../suppliers/README.md#并发与速率) | 请求里不访问缓存；硬上限不依赖共享提示 |
 
 缓存只在准入之前同步访问一次，规则见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)。
 
