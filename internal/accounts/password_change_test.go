@@ -61,7 +61,7 @@ func TestPasswordChangesPreserveMFA(t *testing.T) {
 	x := recoverySite(t)
 	_, mfa, codes := x.enableTOTP(t, console, x.signIn(t, console))
 	pending := x.signIn(t, console)
-	p, err := x.s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending))
+	p, err := x.s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending), client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func testPasswordRollback(t *testing.T, flow string) {
 	before := x.factorVersion(t)
 	switch flow {
 	case "reset audit":
-		if err := pgtest.Run(t.Context(), x.database.Superuser, "DELETE FROM platform.tenants WHERE tenant_id = '"+uuid.UUID(p.AccountID()).String()+"'"); err != nil {
+		if err := pgtest.Run(t.Context(), x.database.Superuser, `ALTER TABLE platform.audit_log ADD CONSTRAINT reject_password_audit CHECK (action <> 'user.password_set') NOT VALID`); err != nil {
 			t.Fatal(err)
 		}
 	default:

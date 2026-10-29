@@ -6,8 +6,9 @@ FROM accounts.key_tenant(@site_id::uuid, @hashes::bytea[]) AS k (key_id, account
 
 -- name: AdmitKey :many
 -- What a call with the key may do, read in the key's account scope in the admission transaction: no row unless the
--- request came to an enabled API domain of the key's site and the key, its workspace and account are all usable.
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, a.tier_id
+-- request came to an enabled API domain of the key's site and the key and workspace are usable. The account state
+-- comes with the same row so suspension is distinguishable without another query.
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, a.tier_id, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
@@ -16,8 +17,7 @@ WHERE k.id = @key_id
     AND k.kind = 'call' AND k.status = 'active' AND k.deleted_at IS NULL
     AND (k.expires_at IS NULL OR k.expires_at > now())
     AND (k.ip_allow IS NULL OR @client_ip::inet <<= ANY (k.ip_allow))
-    AND w.status = 'active' AND w.deleted_at IS NULL
-    AND a.status = 'active';
+    AND w.status = 'active' AND w.deleted_at IS NULL;
 
 -- name: LockAccount :one
 -- Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
