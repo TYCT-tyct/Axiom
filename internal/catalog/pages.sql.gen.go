@@ -68,8 +68,8 @@ func (q *Queries) CloseSupersededPageReview(ctx context.Context, db DBTX, pageID
 }
 
 const delayPageSite = `-- name: DelayPageSite :exec
-UPDATE catalog.page_site SET delay_seconds = greatest(delay_seconds, $2::bigint),
-next_request_at = greatest(next_request_at, last_request_at + $2::bigint * interval '1 second') WHERE origin = $1
+UPDATE catalog.page_site SET next_request_at = greatest(next_request_at,
+    last_request_at + greatest(delay_seconds, $2::bigint) * interval '1 second') WHERE origin = $1
 `
 
 type DelayPageSiteParams struct {
@@ -189,6 +189,18 @@ func (q *Queries) LockPageEvidence(ctx context.Context, db DBTX, id uuid.UUID) (
 	return i, err
 }
 
+const lockPageForReview = `-- name: LockPageForReview :one
+SELECT p.id FROM catalog.watched_page p JOIN catalog.review r ON r.page_id = p.id
+WHERE r.id = $1 FOR UPDATE OF p
+`
+
+func (q *Queries) LockPageForReview(ctx context.Context, db DBTX, id uuid.UUID) (uuid.UUID, error) {
+	row := db.QueryRow(ctx, lockPageForReview, id)
+	var id_2 uuid.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const lockWatchedPage = `-- name: LockWatchedPage :one
 SELECT id, author, url, origin, currency, section_start, section_end, interval_seconds, enabled, created_at, next_check_at, lease_gen, lease_until, last_ok_at, failures, current_snapshot_id FROM catalog.watched_page WHERE id = $1 FOR UPDATE
 `
@@ -252,6 +264,17 @@ func (q *Queries) OfficialPriceEvidence(ctx context.Context, db DBTX, arg Offici
 	var i OfficialPriceEvidenceRow
 	err := row.Scan(&i.Evidence, &i.Kind)
 	return i, err
+}
+
+const openPageReviewBaseline = `-- name: OpenPageReviewBaseline :one
+SELECT previous_snapshot_id FROM catalog.review WHERE page_id = $1 AND status = 'open'
+`
+
+func (q *Queries) OpenPageReviewBaseline(ctx context.Context, db DBTX, pageID uuid.UUID) (*uuid.UUID, error) {
+	row := db.QueryRow(ctx, openPageReviewBaseline, pageID)
+	var previous_snapshot_id *uuid.UUID
+	err := row.Scan(&previous_snapshot_id)
+	return previous_snapshot_id, err
 }
 
 const overduePages = `-- name: OverduePages :many
@@ -385,7 +408,7 @@ func (q *Queries) RecordPageSuccess(ctx context.Context, db DBTX, arg RecordPage
 
 const registerPageSite = `-- name: RegisterPageSite :exec
 INSERT INTO catalog.page_site (origin, delay_seconds) VALUES ($1, $2)
-ON CONFLICT (origin) DO UPDATE SET delay_seconds = greatest(catalog.page_site.delay_seconds, excluded.delay_seconds),
+ON CONFLICT (origin) DO UPDATE SET delay_seconds = excluded.delay_seconds,
 next_request_at = greatest(catalog.page_site.next_request_at, catalog.page_site.last_request_at + excluded.delay_seconds * interval '1 second')
 `
 
@@ -401,15 +424,20 @@ func (q *Queries) RegisterPageSite(ctx context.Context, db DBTX, arg RegisterPag
 
 const reservePageRequest = `-- name: ReservePageRequest :one
 UPDATE catalog.page_site SET last_request_at = clock_timestamp(),
-    next_request_at = clock_timestamp() + delay_seconds * interval '1 second'
-WHERE origin = $1 AND next_request_at <= clock_timestamp() RETURNING origin
+    next_request_at = clock_timestamp() + greatest(delay_seconds, $1::bigint) * interval '1 second'
+WHERE origin = $2 AND next_request_at <= clock_timestamp() RETURNING origin
 `
 
-func (q *Queries) ReservePageRequest(ctx context.Context, db DBTX, origin string) (string, error) {
-	row := db.QueryRow(ctx, reservePageRequest, origin)
-	var origin_2 string
-	err := row.Scan(&origin_2)
-	return origin_2, err
+type ReservePageRequestParams struct {
+	Seconds int64
+	Origin  string
+}
+
+func (q *Queries) ReservePageRequest(ctx context.Context, db DBTX, arg ReservePageRequestParams) (string, error) {
+	row := db.QueryRow(ctx, reservePageRequest, arg.Seconds, arg.Origin)
+	var origin string
+	err := row.Scan(&origin)
+	return origin, err
 }
 
 const resolvePageReview = `-- name: ResolvePageReview :one
@@ -438,7 +466,7 @@ func (q *Queries) ResolvePageReview(ctx context.Context, db DBTX, arg ResolvePag
 const upsertPageReview = `-- name: UpsertPageReview :one
 INSERT INTO catalog.review (page_id, snapshot_id, previous_snapshot_id, removed, added) VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (page_id) WHERE status = 'open' DO UPDATE SET snapshot_id = excluded.snapshot_id,
-previous_snapshot_id = excluded.previous_snapshot_id, removed = excluded.removed, added = excluded.added,
+removed = excluded.removed, added = excluded.added,
 content_seq = catalog.review.content_seq + 1 RETURNING id
 `
 

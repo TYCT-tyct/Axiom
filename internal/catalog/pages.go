@@ -48,6 +48,13 @@ type UnwatchPageRequest struct {
 func (c *Catalog) UnwatchPage(ctx context.Context, r UnwatchPageRequest) (Result, error) {
 	return c.apply(ctx, r.Op, "page.unwatch", func(tx pg.Tx) (outcome, error) {
 		id, err := New().DisableWatchedPage(ctx, tx, r.Page)
+		if err != nil {
+			return outcome{}, err
+		}
+		if err := pageSignal(ctx, tx, "catalog.page_failed", id, true); err != nil {
+			return outcome{}, err
+		}
+		err = pageSignal(ctx, tx, "catalog.page_overdue", id, true)
 		return outcome{targetKind: "page", subject: id.String(), after: map[string]bool{"enabled": false}}, err
 	})
 }
@@ -66,20 +73,22 @@ func (c *Catalog) ReviewPage(ctx context.Context, r ReviewPageRequest) (Result, 
 		return Result{}, ErrInvalid
 	}
 	return c.apply(ctx, r.Op, "page.review", func(tx pg.Tx) (outcome, error) {
-		page, err := New().ResolvePageReview(ctx, tx, ResolvePageReviewParams{ID: r.Review, ContentSeq: r.ContentSeq, Status: r.Status, Resolution: &r.Reason})
+		// Share the watcher's page-first lock order so a new revision cannot race the recovery signal.
+		page, err := New().LockPageForReview(ctx, tx, r.Review)
 		if errors.Is(err, pg.ErrNoRows) {
 			return outcome{}, ErrStaleRev
 		}
 		if err != nil {
 			return outcome{}, err
 		}
-		pending, err := New().PendingPageReviews(ctx, tx, page)
+		_, err = New().ResolvePageReview(ctx, tx, ResolvePageReviewParams{ID: r.Review, ContentSeq: r.ContentSeq, Status: r.Status, Resolution: &r.Reason})
+		if errors.Is(err, pg.ErrNoRows) {
+			return outcome{}, ErrStaleRev
+		}
 		if err != nil {
 			return outcome{}, err
 		}
-		if pending == 0 {
-			err = pageSignal(ctx, tx, "catalog.page_changed", page, true)
-		}
+		err = pageSignal(ctx, tx, "catalog.page_changed", page, true)
 		return outcome{targetKind: "page", subject: page.String(), after: r.Status}, err
 	})
 }
@@ -158,8 +167,14 @@ func observePageChange(ctx context.Context, tx pg.Tx, page CatalogWatchedPage, s
 		return pageSignal(ctx, tx, "catalog.page_changed", page.ID, true)
 	}
 	var before string
-	if page.CurrentSnapshotID != nil {
-		before, err = q.PageSnapshotText(ctx, tx, *page.CurrentSnapshotID)
+	baseline, err := q.OpenPageReviewBaseline(ctx, tx, page.ID)
+	if errors.Is(err, pg.ErrNoRows) {
+		baseline = page.CurrentSnapshotID
+	} else if err != nil {
+		return err
+	}
+	if baseline != nil {
+		before, err = q.PageSnapshotText(ctx, tx, *baseline)
 		if err != nil {
 			return err
 		}
@@ -167,7 +182,7 @@ func observePageChange(ctx context.Context, tx pg.Tx, page CatalogWatchedPage, s
 	removed, added := pageDifference(before, text)
 	if _, err := q.UpsertPageReview(ctx, tx, UpsertPageReviewParams{
 		PageID: page.ID, SnapshotID: snapshot,
-		PreviousSnapshotID: page.CurrentSnapshotID, Removed: removed, Added: added,
+		PreviousSnapshotID: baseline, Removed: removed, Added: added,
 	}); err != nil {
 		return err
 	}
@@ -194,7 +209,7 @@ func reservePageRequestIn(ctx context.Context, tx pg.Tx, origin string, delay ti
 	if err := q.DelayPageSite(ctx, tx, DelayPageSiteParams{Origin: origin, Seconds: int64(math.Ceil(delay.Seconds()))}); err != nil {
 		return 0, false, err
 	}
-	_, err := q.ReservePageRequest(ctx, tx, origin)
+	_, err := q.ReservePageRequest(ctx, tx, ReservePageRequestParams{Origin: origin, Seconds: int64(math.Ceil(delay.Seconds()))})
 	if err == nil {
 		return 0, true, nil
 	}

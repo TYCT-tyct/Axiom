@@ -1,6 +1,6 @@
 -- name: RegisterPageSite :exec
 INSERT INTO catalog.page_site (origin, delay_seconds) VALUES ($1, $2)
-ON CONFLICT (origin) DO UPDATE SET delay_seconds = greatest(catalog.page_site.delay_seconds, excluded.delay_seconds),
+ON CONFLICT (origin) DO UPDATE SET delay_seconds = excluded.delay_seconds,
 next_request_at = greatest(catalog.page_site.next_request_at, catalog.page_site.last_request_at + excluded.delay_seconds * interval '1 second');
 
 -- name: InsertWatchedPage :one
@@ -19,6 +19,13 @@ RETURNING *;
 -- name: LockWatchedPage :one
 SELECT * FROM catalog.watched_page WHERE id = $1 FOR UPDATE;
 
+-- name: LockPageForReview :one
+SELECT p.id FROM catalog.watched_page p JOIN catalog.review r ON r.page_id = p.id
+WHERE r.id = $1 FOR UPDATE OF p;
+
+-- name: OpenPageReviewBaseline :one
+SELECT previous_snapshot_id FROM catalog.review WHERE page_id = $1 AND status = 'open';
+
 -- name: LockPageEvidence :one
 SELECT p.author, p.currency, p.current_snapshot_id, s.text FROM catalog.watched_page p
 JOIN catalog.page_snapshot s ON s.page_id = p.id AND s.id = p.current_snapshot_id
@@ -30,15 +37,15 @@ JOIN catalog.page_snapshot s ON s.page_id = p.id AND s.id = p.current_snapshot_i
 
 -- name: ReservePageRequest :one
 UPDATE catalog.page_site SET last_request_at = clock_timestamp(),
-    next_request_at = clock_timestamp() + delay_seconds * interval '1 second'
-WHERE origin = $1 AND next_request_at <= clock_timestamp() RETURNING origin;
+    next_request_at = clock_timestamp() + greatest(delay_seconds, sqlc.arg(seconds)::bigint) * interval '1 second'
+WHERE origin = sqlc.arg(origin) AND next_request_at <= clock_timestamp() RETURNING origin;
 
 -- name: PageRequestWait :one
 SELECT greatest(0, extract(epoch FROM next_request_at - clock_timestamp()))::double precision FROM catalog.page_site WHERE origin = $1;
 
 -- name: DelayPageSite :exec
-UPDATE catalog.page_site SET delay_seconds = greatest(delay_seconds, sqlc.arg(seconds)::bigint),
-next_request_at = greatest(next_request_at, last_request_at + sqlc.arg(seconds)::bigint * interval '1 second') WHERE origin = $1;
+UPDATE catalog.page_site SET next_request_at = greatest(next_request_at,
+    last_request_at + greatest(delay_seconds, sqlc.arg(seconds)::bigint) * interval '1 second') WHERE origin = $1;
 
 -- name: BackoffPageSite :exec
 UPDATE catalog.page_site SET next_request_at = greatest(next_request_at,
@@ -71,7 +78,7 @@ SELECT EXISTS(SELECT FROM catalog.review WHERE page_id = $1 AND snapshot_id = $2
 -- name: UpsertPageReview :one
 INSERT INTO catalog.review (page_id, snapshot_id, previous_snapshot_id, removed, added) VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (page_id) WHERE status = 'open' DO UPDATE SET snapshot_id = excluded.snapshot_id,
-previous_snapshot_id = excluded.previous_snapshot_id, removed = excluded.removed, added = excluded.added,
+removed = excluded.removed, added = excluded.added,
 content_seq = catalog.review.content_seq + 1 RETURNING id;
 
 -- name: ResolvePageReview :one

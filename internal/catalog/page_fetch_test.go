@@ -48,6 +48,8 @@ func TestPageExtractionIgnoresLayoutAndRejectsAmbiguity(t *testing.T) {
 func TestPageFetchRespectsRobotsLimitsAndRedirects(t *testing.T) {
 	for _, tc := range []pageFetchCase{
 		{name: "allow and crawl delay", robots: "User-agent: *\nDisallow: /private\nUser-agent: Axiom\nDisallow: /\nAllow: /price\nCrawl-delay: 12", wantPage: true},
+		{name: "maximum crawl delay", robots: "User-agent: Axiom\nCrawl-delay: 60", wantPage: true},
+		{name: "crawl delay exceeds budget", robots: "User-agent: Axiom\nCrawl-delay: 300"},
 		{name: "deny", robots: "User-agent: *\nDisallow: /price"},
 		{name: "wildcard", robots: "User-agent: Axiom\nDisallow: /*ice$"},
 		{name: "specific group", robots: "User-agent: *\nDisallow: /\nUser-agent: Axiom\nAllow: /", wantPage: true},
@@ -179,6 +181,8 @@ func TestWatchedPageBoundaryValidation(t *testing.T) {
 		{"credentials", func(p *PageTarget) { p.URL = "https://user:pass@example.com/prices" }},
 		{"fragment", func(p *PageTarget) { p.URL = "https://example.com/prices#table" }},
 		{"interval too short", func(p *PageTarget) { p.IntervalSeconds = 3599 }},
+		{"rate exceeds budget", func(p *PageTarget) { p.RateSeconds = 300 }},
+		{"rate above maximum", func(p *PageTarget) { p.RateSeconds = 61 }},
 		{"rate zero override", func(p *PageTarget) { p.RateSeconds = -1 }},
 		{"lowercase currency", func(p *PageTarget) { p.Currency = "usd" }},
 		{"empty section", func(p *PageTarget) { p.SectionStart = " " }},
@@ -191,9 +195,25 @@ func TestWatchedPageBoundaryValidation(t *testing.T) {
 			}
 		})
 	}
-	p := PageTarget{Author: "acme", URL: "https://EXAMPLE.com:443/prices", Currency: "USD", SectionStart: "Start", SectionEnd: "End"}
+	p := PageTarget{Author: "acme", URL: "https://EXAMPLE.com:443/prices", Currency: "USD", SectionStart: "Start", SectionEnd: "End", RateSeconds: 60}
 	origin, err := p.validate()
 	if err != nil || origin != "https://example.com" || p.URL != "https://example.com/prices" {
 		t.Fatalf("canonical site: %q, %q, %v", origin, p.URL, err)
 	}
+}
+
+func TestLiveInspectorDoesNotRetainPreviousCrawlDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := NewPageInspector(nil)
+		for i, delay := range []time.Duration{12 * time.Second, time.Second, time.Second} {
+			start := time.Now()
+			if err := p.reserve(t.Context(), "https://example.com", delay); err != nil {
+				t.Fatal(err)
+			}
+			want := []time.Duration{0, 12 * time.Second, time.Second}[i]
+			if got := time.Since(start); got != want {
+				t.Fatalf("request %d: waited %s, want %s", i, got, want)
+			}
+		}
+	})
 }

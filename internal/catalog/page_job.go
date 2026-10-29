@@ -78,6 +78,12 @@ func (c *Catalog) watchPages(ctx context.Context, client *egress.Client) error {
 		}
 		content, fetchErr := fetchPage(attempt, client, target, c.reservePageRequest, c.backoffPageSite)
 		cancel()
+		// Node/round cancellation leaves the page due; only an attempt timeout is a page failure.
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		record, done := context.WithTimeout(context.WithoutCancel(ctx), syncRecordTimeout)
 		err = c.recordPage(record, page, content, fetchErr)
 		done()

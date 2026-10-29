@@ -47,7 +47,7 @@ func (p *PageTarget) validate() (string, error) {
 	if strings.TrimSpace(p.Author) == "" || strings.TrimSpace(p.SectionStart) == "" || strings.TrimSpace(p.SectionEnd) == "" || p.SectionStart == p.SectionEnd {
 		return "", fmt.Errorf("%w: page needs author and distinct nonempty markers", ErrInvalid)
 	}
-	for _, bound := range [][3]int64{{p.IntervalSeconds, 3600, 604800}, {p.RateSeconds, 1, 86400}} {
+	for _, bound := range [][3]int64{{p.IntervalSeconds, 3600, 604800}, {p.RateSeconds, 1, 60}} {
 		if bound[0] < bound[1] || bound[0] > bound[2] {
 			return "", fmt.Errorf("%w: page interval or rate outside allowed range", ErrInvalid)
 		}
@@ -86,7 +86,6 @@ type PageInspector struct {
 
 type inspectionSite struct {
 	last, next time.Time
-	delay      time.Duration
 }
 
 // NewPageInspector uses the same egress policy as the scheduled watcher, without opening storage.
@@ -103,12 +102,11 @@ func (p *PageInspector) reserve(ctx context.Context, origin string, delay time.D
 	for {
 		p.mu.Lock()
 		site := p.sites[origin]
-		site.delay = max(site.delay, delay)
-		site.next = laterPageRequest(site.next, site.last.Add(site.delay))
+		site.next = laterPageRequest(site.next, site.last.Add(delay))
 		wait := time.Until(site.next)
 		if wait <= 0 {
 			site.last = time.Now()
-			site.next = site.last.Add(site.delay)
+			site.next = site.last.Add(delay)
 		}
 		p.sites[origin] = site
 		p.mu.Unlock()
@@ -150,11 +148,8 @@ func fetchPage(ctx context.Context, client *egress.Client, target PageTarget, re
 		return PageContent{}, fmt.Errorf("robots: %w", err)
 	}
 	delay, err = pageRobotsDelay(robots, status, target.URL, delay)
-	if delay > 0 {
-		err = errors.Join(err, backoff(ctx, origin, delay))
-	}
 	if err != nil {
-		return PageContent{}, err
+		return PageContent{}, errors.Join(err, backoff(ctx, origin, delay))
 	}
 	body, status, err := readPage(ctx, client, target.URL, origin, delay, reserve, backoff, maxDatasetBytes)
 	if err != nil {
@@ -237,8 +232,8 @@ func pageRobotsDelay(body []byte, status int, address string, delay time.Duratio
 	if !group.Test(u.RequestURI()) {
 		return delay, errors.New("robots: page disallowed for Axiom")
 	}
-	if delay > 24*time.Hour {
-		return delay, errors.New("robots: crawl delay exceeds one day; page not fetched")
+	if delay > time.Minute {
+		return delay, errors.New("robots: crawl delay exceeds 60 seconds; page not fetched")
 	}
 	return delay, nil
 }

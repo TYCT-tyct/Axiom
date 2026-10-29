@@ -95,7 +95,7 @@ func TestPageHistoryReviewsAndSignalsCommitTogether(t *testing.T) {
 	if got := query[int](s, platformScope, "SELECT content_seq FROM catalog.review WHERE status='open'"); got != 3 {
 		t.Fatal("review updates", got)
 	}
-	if got := query[string](s, platformScope, "SELECT removed || '/' || added FROM catalog.review WHERE status='open'"); got != "2/1" {
+	if got := query[string](s, platformScope, "SELECT removed || '/' || added FROM catalog.review WHERE status='open'"); got != "/alpha $1" {
 		t.Fatal("diff", got)
 	}
 	if got := query[int](s, platformScope, "SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='catalog.page_changed'"); got != 3 {
@@ -336,6 +336,15 @@ func TestPageJobStartsOnQueueAndCancelsInflightFetch(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("node cancellation did not cancel egress")
 	}
+	if err := queue.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !query[bool](s, platformScope, "SELECT failures=0 AND NOT EXISTS (SELECT FROM platform.alert_signals WHERE body->>'kind'='catalog.page_failed') FROM catalog.watched_page") {
+		t.Fatal("node cancellation counted as page failure or emitted a failure signal")
+	}
+	if !query[bool](s, platformScope, "SELECT next_check_at <= clock_timestamp() AND lease_until > clock_timestamp() FROM catalog.watched_page") {
+		t.Fatal("node cancellation deferred the next check or released its lease")
+	}
 }
 
 func TestPageSiteReservationsAndOverdueSignalsAreShared(t *testing.T) {
@@ -345,10 +354,10 @@ func TestPageSiteReservationsAndOverdueSignalsAreShared(t *testing.T) {
 	page := s.watch(t.Context(), "acme", "USD")
 	err := s.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 		q := catalog.New()
-		if _, err := q.ReservePageRequest(t.Context(), tx, "https://example.com"); err != nil {
+		if _, err := q.ReservePageRequest(t.Context(), tx, catalog.ReservePageRequestParams{Origin: "https://example.com", Seconds: 1}); err != nil {
 			return err
 		}
-		_, err := q.ReservePageRequest(t.Context(), tx, "https://example.com")
+		_, err := q.ReservePageRequest(t.Context(), tx, catalog.ReservePageRequestParams{Origin: "https://example.com", Seconds: 1})
 		if !errors.Is(err, pg.ErrNoRows) {
 			return fmt.Errorf("second request was admitted: %w", err)
 		}

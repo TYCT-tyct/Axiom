@@ -154,7 +154,7 @@ River 的 `observability.alerts` 每分钟读取最多 1000 条信号。持久�
 | `payments.discrepancy` | 差异记录 UUID | 标记已调查 |
 | `payments.query_paused` | 商户 TypeID | 暂停后成功查单 |
 | `catalog.page_changed` | 页面 UUID | 人工处理审核项或回到已驳回内容 |
-| `catalog.page_failed` / `catalog.page_overdue` | 页面 UUID | 该页取数成功 |
+| `catalog.page_failed` / `catalog.page_overdue` | 页面 UUID | 该页取数成功或停用页面 |
 | `suppliers.login_expired` / `suppliers.sync_attention` | 供应商 UUID | 验证新的成功观测 |
 | `suppliers.task_stopped` | 供应商 UUID + `/任务名` | 该任务验证新的成功观测 |
 | `suppliers.low_balance` | 供应商 UUID | 明确的余额恢复事件 |
