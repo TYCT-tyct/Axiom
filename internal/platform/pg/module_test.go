@@ -77,7 +77,7 @@ func TestModulesRunInTheFixedOrder(t *testing.T) {
 const lookupMigration = `-- +goose Up
 CREATE TABLE accounts.users (site_id uuid NOT NULL, account_id uuid NOT NULL, email text NOT NULL);
 ALTER TABLE accounts.users ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant ON accounts.users USING (platform.in_scope(site_id, account_id));
+CREATE POLICY tenant ON accounts.users USING (((SELECT platform.in_platform_scope()) OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[]) OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])));
 CREATE POLICY lookup ON accounts.users FOR SELECT TO axiom_lookup USING (true);
 GRANT USAGE ON SCHEMA accounts TO axiom_app, axiom_lookup;
 GRANT SELECT (account_id, email) ON accounts.users TO axiom_lookup;

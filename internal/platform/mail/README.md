@@ -42,7 +42,7 @@
 
 普通任务种类 `mail.send`，`notifications` 队列，最多尝试 5 次：River 的默认退避约为 16 秒、81 秒、256 秒、625 秒（五次共约 16 分钟），覆盖服务商几分钟的故障；用完仍失败的任务被丢弃，由队列的扫描报告（`queue.job_discarded` 和 `axiom.pg.queue.discarded_jobs`，[observability 的「监控与告警」](../../../docs/domains/observability.md#监控与告警)）。
 
-邮件正文不进任务参数：River 的任务行不属于任何租户，没有策略覆盖，所以地址、主题和正文都存在 `platform.mail_outbox`，普通任务参数只有那一行的 id。这张表开了 `FORCE ROW LEVEL SECURITY`，策略是 `platform.in_scope(site_id, account_id)`：调用方在租户的事务里入队，`WITH CHECK` 挡住替别的租户写的可能，读取同样受它限制（[平台基础设施的「租户隔离」](../README.md#范围)）。
+邮件正文不进任务参数：River 的任务行不属于任何租户，没有策略覆盖，所以地址、主题和正文都存在 `platform.mail_outbox`，普通任务参数只有那一行的 id。这张表开了 `FORCE ROW LEVEL SECURITY`，策略使用 [pg 的账户范围表达式](../pg/README.md#决策与理由)：调用方在租户的事务里入队，`WITH CHECK` 挡住替别的租户写的可能，读取同样受它限制（[平台基础设施的「租户隔离」](../README.md#范围)）。
 
 工作进程手里只有 id，没有租户，所以先用 `platform.mail_tenant(id)` 查到这一行的 `site_id`、`account_id`，再在该租户的作用域里读正文——这个函数是 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用，只返回这两个租户列，而这个角色只被授予 `id`、`site_id`、`account_id` 三列（`id` 是函数按它匹配的那一列，不能少；与 accounts 模块的登录前查找同一套做法，见 [accounts 的迁移](../../accounts/migrations/00002_lookup.sql)）。`pg.TenantTx` 先以空作用域查一次，再换成查到的租户，`fn` 在其中运行。
 
@@ -70,7 +70,7 @@ Valkey 不可用（出错、期限到、熔断打开）时退回进程内的桶�
 | 不变量 | 靠什么保证 |
 |---|---|
 | 邮件不会明文发出 | 465 之外必须 STARTTLS，服务器不提供就失败；没有跳过校验的配置 |
-| 邮件内容不进入不属于任何租户的表 | 正文在 `platform.mail_outbox`，任务参数只有 outbox id（回执模式另有回执 id）；表的策略是 `platform.in_scope`，别的站点和空作用域都读不到 |
+| 邮件内容不进入不属于任何租户的表 | 正文在 `platform.mail_outbox`，任务参数只有 outbox id（回执模式另有回执 id）；表使用 [pg 的账户范围表达式](../pg/README.md#决策与理由)，别的站点和空作用域都读不到 |
 | 一个租户不能替另一个租户入队 | 同一策略的 `WITH CHECK` 比较 `site_id`、`account_id`，租户从调用方的事务里来 |
 | 一封信一个任务 | `Enqueue` 在调用方的事务里插一行 outbox、一个 `mail.send`，参数是那一行的 id |
 | 同一收件人一分钟最多一封 | 有 Valkey 时每个规范化地址一个原子准入键，不可用时退回进程内 `limiter`；限流的任务 snooze，不耗尝试次数 |

@@ -126,6 +126,7 @@ function MapDialog({ pending, onClose }: { pending: Pending; onClose: () => void
   };
   return (
     <ChangeDialog
+      operation={`mapping:${pending.group_id}:${pending.upstream_name}`}
       title={t("mappings.dialog.title")}
       intro={
         <p>

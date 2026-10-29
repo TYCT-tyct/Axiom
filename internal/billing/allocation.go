@@ -236,6 +236,9 @@ const movementPage = 5000
 // place could drop it (#357). A caller that holds the account's balance row lock reads the latest state, and no other
 // transaction can move it.
 func loadAllocation(ctx context.Context, tx pg.Tx, account uuid.UUID) (*allocation, error) {
+	if err := planLedgerPage(ctx, tx); err != nil {
+		return nil, err
+	}
 	state, err := queries.AllocationState(ctx, tx, account)
 	if err != nil {
 		return nil, fmt.Errorf("billing: read the allocation of %s: %w", account, err)
