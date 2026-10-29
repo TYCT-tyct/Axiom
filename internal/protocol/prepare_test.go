@@ -157,11 +157,11 @@ func TestPrepare(t *testing.T) {
 }
 
 // routingParameters are the members README.md「同格式改写」 lists, written out so that a name lost from Prepare's list shows.
-var routingParameters = []string{"provider", "models", "route", "transforms", "plugins", "usage", "session_id", "axiom"}
+var routingParameters = []string{"provider", "models", "preset", "fallbacks", "route", "transforms", "plugins", "usage", "session_id", "axiom"}
 
 // TestPrepareDropsRoutingParameters holds every routing parameter to being dropped (README.md「同格式改写」).
 func TestPrepareDropsRoutingParameters(t *testing.T) {
-	values := map[string]string{"models": `["alt"]`, "plugins": `[]`, "transforms": `[]`}
+	values := map[string]string{"session_id": `"s"`, "preset": `"ignored"`, "fallbacks": `[]`, "models": `["alt"]`, "plugins": `[]`, "transforms": `[]`}
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
 		want := `{"model":"up"}`
 		if f == protocol.Responses {
@@ -280,6 +280,7 @@ func FuzzPrepare(f *testing.F) {
 		if err != nil {
 			t.Fatalf("%s: %v", out, err)
 		}
+		r.Preset, r.SessionID = "", ""
 		r.Model, r.Models, r.Provider, r.Previous, r.TextBytes = "up", nil, nil, "", r.TextBytes+int64(len(out)-len(body)) // models and provider are routing's, deleted
 		r = withSmallerCap(r, got)
 		if diff := cmp.Diff(r, got, cmpopts.IgnoreUnexported(protocol.Request{})); diff != "" {

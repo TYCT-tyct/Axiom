@@ -16,7 +16,7 @@ func key(t *testing.T, r *routing.Router, a routing.AccountID, model, body strin
 	t.Helper()
 	req := input().Req
 	req.Model = model
-	return r.SessionKey(a, req, []byte(body))
+	return r.SessionKey(a, req, []byte(body), "")
 }
 
 // TestSessionKey: the client's own session value wins, the same value from two accounts is two sessions, and without

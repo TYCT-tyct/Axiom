@@ -27,6 +27,7 @@ def bash_executable():
 BASH = bash_executable()
 SCRIPT = (Path(__file__).parent / "ci" / "runner-host.sh").read_text(encoding="utf-8")
 TRAIN_SETTINGS = re.search(r"^train_runners=.*?(?=^cpu_weight=)", SCRIPT, re.M | re.S).group()
+BUILDX_VERSION = re.search(r"^buildx_version=(.+)$", SCRIPT, re.M).group(1)
 
 
 def shell_function(name):
@@ -222,6 +223,98 @@ runner_labels() { echo test; }
                         self.assertEqual(archive.read_text(), "verified archive")
                         if os.name != "nt":
                             self.assertEqual(archive.stat().st_mode & 0o777, 0o644)
+
+
+@unittest.skipUnless(BASH, "Bash is unavailable")
+class RunnerBuildx(unittest.TestCase):
+    def test_plugin_uses_the_runner_users_docker_cli_plugins_path_and_the_release_checksum(self):
+        asset = f"buildx-v{BUILDX_VERSION}.linux-amd64"
+        digest = hashlib.sha256(b"verified buildx").hexdigest()
+        checksums = "\n".join((
+            "1" * 64 + " *buildx-v" + BUILDX_VERSION + ".linux-arm64",
+            digest + " *" + asset,
+            "2" * 64 + " *" + asset + ".provenance.json",
+        )) + "\n"
+        stub = r'''
+curl() { cat "$CHECKSUMS"; }
+as_user() { "$@"; }
+chown() { :; }
+download() {
+  printf '%s\0' "$1" "$2" "$3" > "$DOWNLOADED"
+  : > "$2"
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            checksums_file = Path(tmp) / "checksums.txt"
+            checksums_file.write_text(checksums)
+            downloaded = Path(tmp) / "downloaded"
+            env = {**os.environ, "CHECKSUMS": checksums_file.as_posix(), "DOWNLOADED": downloaded.as_posix(),
+                   "home": home.as_posix(), "user": "test-user", "buildx_version": BUILDX_VERSION}
+            result = subprocess.run(
+                [BASH, "-eu", "-c", stub + shell_function("install_buildx") + "\ninstall_buildx"],
+                env=env, text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            url, plugin, checksum = downloaded.read_bytes().split(b"\0")[:-1]
+            self.assertEqual(url.decode(), "https://github.com/docker/buildx/releases/download/v" + BUILDX_VERSION
+                             + "/" + asset)
+            self.assertEqual(plugin.decode(), (home / ".docker" / "cli-plugins" / "docker-buildx").as_posix())
+            self.assertEqual(checksum.decode(), digest)
+            if os.name != "nt":
+                self.assertTrue(os.access(plugin, os.X_OK))
+        self.assertRegex(shell_function("install"), r"(?m)^  install_buildx$")
+
+    def test_check_fails_when_the_runner_cannot_run_docker_buildx(self):
+        check = shell_function("check")
+        stubs = r'''
+service() { echo "service-$1.service"; }
+cached() { return 0; }
+as_user() { "$@"; }
+env() {
+  while [ "$#" -gt 0 ] && [[ "$1" == *=* ]]; do shift; done
+  "$@"
+}
+go() { return 0; }
+npx() { echo "Install location: $BROWSER"; }
+docker() {
+  case "$*" in
+    info) return 0 ;;
+    'buildx version') return "$BUILDX_STATUS" ;;
+    *) return 99 ;;
+  esac
+}
+systemctl() {
+  case "$*" in
+    'show axiom.slice -p CPUWeight --value') echo "$cpu_weight" ;;
+    show*Slice*) echo "$slice" ;;
+    *) return 0 ;;
+  esac
+}
+'''
+        for status in (0, 125):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp) / "home"
+                runner = home / "prefix1"
+                runner.mkdir(parents=True)
+                (runner / ".env").write_text(
+                    "GOMAXPROCS=6\nGOCACHE=" + runner.as_posix() + "/_gocache\n"
+                    "AXIOM_TEST_CGROUP_PARENT=axiom-ci.slice\n")
+                browser = Path(tmp) / "browser"
+                browser.mkdir()
+                env = {**os.environ, "home": home.as_posix(), "user": "test-user", "go_version": "go",
+                       "node_version": "node", "playwright_version": "playwright", "prefix": "prefix", "runners": "1",
+                       "procs": "6", "slice": "axiom-ci.slice", "cpu_weight": "20", "toolcache": Path(tmp).as_posix(),
+                       "buildx_version": BUILDX_VERSION, "BUILDX_STATUS": str(status), "BROWSER": browser.as_posix()}
+                result = subprocess.run(
+                    [BASH, "-eu", "-c", "buildx_version=" + BUILDX_VERSION + "\n" + stubs + check + "\ncheck"],
+                    env=env, text=True, capture_output=True,
+                )
+                line = next((line for line in result.stdout.splitlines() if "docker buildx" in line), "")
+                self.assertTrue(line, result.stdout + result.stderr)
+                self.assertEqual(line.startswith("ok "), status == 0, result.stdout)
+                self.assertEqual(result.returncode == 0, status == 0, result.stderr)
 
 
 @unittest.skipUnless(BASH, "Bash is unavailable")

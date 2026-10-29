@@ -42,6 +42,8 @@ type canon struct {
 	// gets; the rest are OpenRouter's routing parameters and our extensions, which the gateway has used.
 	Model         jsontext.Value `json:"model"`
 	StreamOptions jsontext.Value `json:"stream_options"`
+	Preset        jsontext.Value `json:"preset"`
+	Fallbacks     jsontext.Value `json:"fallbacks"`
 	Provider      jsontext.Value `json:"provider"`
 	Models        jsontext.Value `json:"models"`
 	Route         jsontext.Value `json:"route"`

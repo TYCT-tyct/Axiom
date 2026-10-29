@@ -23,6 +23,135 @@ tags:
   - {name: Calls, description: "The account's call log."}
   - {name: Top-ups, description: "Buying credits through the site's payment channels."}
 paths:
+  /api/console/v1/presets:
+    get:
+      operationId: listPresets
+      tags: [Keys]
+      summary: listPresets
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - in: query
+          name: offset
+          schema: {type: integer, minimum: 0, default: 0}
+      responses:
+        "200":
+          description: Account preset result.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PresetList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createPreset
+      tags: [Keys]
+      summary: createPreset
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PresetRequest"}
+      responses:
+        "201":
+          description: Account preset result.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Preset"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/presets/{slug}:
+    parameters:
+      - in: path
+        name: slug
+        required: true
+        schema: {type: string, minLength: 1, maxLength: 100, pattern: '^[a-zA-Z0-9_-]+$'}
+    get:
+      operationId: getPreset
+      tags: [Keys]
+      summary: getPreset
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: Account preset result.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Preset"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updatePreset
+      tags: [Keys]
+      summary: updatePreset
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PresetReplacement"}
+      responses:
+        "200":
+          description: Account preset result.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Preset"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+    delete:
+      operationId: deletePreset
+      tags: [Keys]
+      summary: deletePreset
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      responses:
+        "204":
+          description: Account preset result.
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/notification-preferences:
     get:
       operationId: getNotificationPreferences
@@ -1159,6 +1288,44 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    PresetConfig:
+      x-go-type: jsonx.Raw
+      type: object
+      additionalProperties: true
+      description: Inference defaults. Only deliberate configuration, no transient input.
+    PresetRequest:
+      type: object
+      additionalProperties: false
+      required: [slug, name, config]
+      properties:
+        slug: {type: string, minLength: 1, maxLength: 100, pattern: '^[a-zA-Z0-9_-]+$'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        config: {$ref: "#/components/schemas/PresetConfig"}
+    PresetReplacement:
+      type: object
+      additionalProperties: false
+      required: [name, config]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        config: {$ref: "#/components/schemas/PresetConfig"}
+    Preset:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        slug: {type: string}
+        name: {type: string}
+        config: {$ref: "#/components/schemas/PresetConfig"}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    PresetList:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Preset"}
+        total_count: {type: integer}
     CallStatus:
       type: string
       enum: [success, error]

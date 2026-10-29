@@ -30,6 +30,8 @@ func withKeyManagement(next http.Handler, api managementAPI) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/keys", api)
 	mux.Handle("/api/v1/keys/", api)
+	mux.Handle("/api/v1/presets", api)
+	mux.Handle("/api/v1/presets/", api)
 	mux.Handle("/", next)
 	return mux
 }
@@ -52,13 +54,13 @@ func (a managementAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body []byte
 	if err == nil {
 		// Client I/O must finish before the transaction takes the manager's row lock or a database slot.
-		input, inputErr := readManagementInput(r)
+		input, inputErr := readManagementPayload(r)
 		ip := clientip.Addr(r, a.proxies)
 		err = a.accounts.WithKeyManager(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: ip}, func(m accounts.KeyManager, tx pg.Tx) error {
 			if inputErr != nil {
 				return inputErr
 			}
-			out, code, err := dispatchManagement(r, m, tx, input)
+			out, code, err := input.dispatch(r, m, tx, caller)
 			if err != nil {
 				return err
 			}
@@ -267,6 +269,10 @@ func managementStatus(err error) int {
 		return http.StatusForbidden
 	case errors.Is(err, accounts.ErrKeyNotFound), errors.Is(err, accounts.ErrNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, accounts.ErrPresetConflict):
+		return http.StatusConflict
+	case errors.Is(err, accounts.ErrPreset):
+		return http.StatusBadRequest
 	case errors.Is(err, errManagementInput):
 		return http.StatusBadRequest
 	case errors.Is(err, errManagementMethod):
