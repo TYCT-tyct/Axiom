@@ -641,33 +641,6 @@ func (r *Relay) endOut() []byte {
 	return r.out
 }
 
-// cost is the members an ending's usage gets for f, each led by a comma: none without a settled cost. Chat and
-// Responses also get the parts OpenRouter reports beside the price: the server tools' cost and the cache discount.
-func cost(f *Final, format Format) string {
-	if f == nil || f.Pending {
-		return ""
-	}
-	amount := decimal(f.Cost)
-	s := `,"cost":` + amount + `,"cost_currency":"` + f.Currency.String() + `"`
-	if f.Estimated {
-		s += `,"cost_estimated":true`
-	}
-	if format == Chat || format == Responses {
-		if f.ServerToolCost != nil {
-			s += `,"cost_details":{"server_tool_cost":` + decimal(*f.ServerToolCost) + `}`
-		}
-		if f.CacheDiscount.Cmp(platform.Exact{}) > 0 {
-			s += `,"cache_discount":` + decimal(f.CacheDiscount)
-		}
-	}
-	return s
-}
-
-// decimal is an exact amount as the shortest plain decimal that holds it.
-func decimal(e platform.Exact) string {
-	return strings.TrimRight(strings.TrimRight(e.Rat().FloatString(15), "0"), ".")
-}
-
 // KeepAlive returns the bytes that keep a client's stream of format f alive while the upstream sends nothing new:
 // Messages' own ping event, and a comment for the others (docs/domains/gateway.md「保活」). They are made once and
 // shared, so the caller must not change them.

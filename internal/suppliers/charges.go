@@ -100,7 +100,9 @@ func chargeEvent(id, charge uuid.UUID, revision int32, at time.Time, payload, us
 	}
 	return ChargeEvent{
 		ID: id, ChargeID: charge, Revision: revision, At: at, Request: *request,
-		AttemptSeq: platform.AttemptSeq(attempt), Test: p.Test, CostFlag: p.CostFlag, Usage: u, Reported: reported,
+		// The charge record's attempt_seq references attempt_costs' 1 to 3.
+		AttemptSeq: platform.AttemptSeq(attempt), //nolint:gosec // G115: bounded by that reference
+		Test:       p.Test, CostFlag: p.CostFlag, Usage: u, Reported: reported,
 	}, nil
 }
 

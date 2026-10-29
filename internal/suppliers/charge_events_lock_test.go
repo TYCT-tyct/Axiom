@@ -41,17 +41,26 @@ func TestChargeEventProducersCannotCommitOutOfOrder(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the first producer did not take the lock")
 	}
-	second := make(chan bool, 1)
+	second := make(chan struct {
+		got bool
+		err error
+	}, 1)
 	go func() {
 		var got bool
-		_ = db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		err := db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 			return tx.QueryRow(t.Context(), `SELECT pg_try_advisory_xact_lock(hashtext('axiom charge events'))`).Scan(&got)
 		})
-		second <- got
+		second <- struct {
+			got bool
+			err error
+		}{got, err}
 	}()
 	select {
-	case got := <-second:
-		if got {
+	case res := <-second:
+		if res.err != nil {
+			t.Fatalf("the second producer: %v", res.err)
+		}
+		if res.got {
 			t.Fatal("the second producer took the lock before the first committed")
 		}
 	case <-time.After(10 * time.Second):
@@ -72,7 +81,9 @@ func TestChargeEventTimeFollowsTheLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	addSupplier(t, db, "event-clock", "newapi", "active")
+	if err := addSupplier(t, db, "event-clock", "newapi", "active"); err != nil {
+		t.Fatal(err)
+	}
 	var supplier uuid.UUID
 	if err := db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT id FROM suppliers.suppliers WHERE name = 'event-clock'`).Scan(&supplier)

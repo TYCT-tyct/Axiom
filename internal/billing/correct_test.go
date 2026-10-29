@@ -3,15 +3,25 @@ package billing
 import (
 	"errors"
 	"testing"
+	"uuid"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/suppliers"
-	"uuid"
 )
 
 // TestCorrectionRePricesAnEstimatedCharge: an estimated settlement is reversed and settled again from the supplier's
 // complete usage, at the schedule and tier the request locked, and the account gets the difference back.
+// usageOf is a standard-tier usage of the given counts, valid by construction.
+func usageOf(t *testing.T, counts map[catalog.Item]int64) catalog.Usage {
+	t.Helper()
+	u, err := catalog.NewUsage(counts, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
 func TestCorrectionRePricesAnEstimatedCharge(t *testing.T) {
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
@@ -19,34 +29,16 @@ func TestCorrectionRePricesAnEstimatedCharge(t *testing.T) {
 	if !f.Estimated || f.Charged != platform.AmountExact(100) {
 		t.Fatalf("estimate = %+v; want estimated 100", f)
 	}
-	u, err := catalog.NewUsage(map[catalog.Item]int64{in: 50}, catalog.ServiceTierStandard, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ev := suppliers.ChargeEvent{
 		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1,
-		Usage: u, Reported: 1<<in | 1<<catalog.ItemOutput | 1<<webSearch,
+		Usage: usageOf(t, map[catalog.Item]int64{in: 50}), Reported: 1<<in | 1<<catalog.ItemOutput | 1<<webSearch,
 	}
 	c := &corrector{db: b.app, scope: b.platform}
 	borne, err := c.correct(t.Context(), ev)
 	if err != nil || borne != 0 {
 		t.Fatalf("correct = %d borne, %v", borne, err)
 	}
-	if got := b.count("SELECT charged FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); got != 50 {
-		t.Errorf("charged %d after the correction, want 50", got)
-	}
-	if got := b.count("SELECT price FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); got != 50 {
-		t.Errorf("price %d after the correction, want 50", got)
-	}
-	if got := b.count("SELECT estimated::int FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); got != 0 {
-		t.Errorf("estimated %d after the correction, want 0", got)
-	}
-	if got := b.count("SELECT count(*) FROM billing.transactions WHERE request_id = '" + h.id.String() + "' AND revision = 1 AND kind IN ('reverse', 'settle')"); got != 2 {
-		t.Errorf("%d correction transactions, want reverse and settle", got)
-	}
-	if got := b.balanceOf(b.admitted.Account); got != 950 {
-		t.Errorf("balance %d after the correction, want 950", got)
-	}
+	assertCorrectedCharge(t, b, h.id)
 	if _, err := c.correct(t.Context(), ev); !errors.Is(err, errNoCorrection) {
 		t.Fatalf("a second delivery = %v; want no correction", err)
 	}
@@ -55,6 +47,27 @@ func TestCorrectionRePricesAnEstimatedCharge(t *testing.T) {
 	}
 	b.balanced()
 	b.replayed(b.admitted.Account)
+}
+
+// assertCorrectedCharge checks what the correction left on the reservation, the ledger and the balance.
+func assertCorrectedCharge(t *testing.T, b *bank, request uuid.UUID) {
+	t.Helper()
+	for _, c := range []struct {
+		query string
+		want  int64
+	}{
+		{"SELECT charged FROM billing.reservations WHERE request_id = '" + request.String() + "'", 50},
+		{"SELECT price FROM billing.reservations WHERE request_id = '" + request.String() + "'", 50},
+		{"SELECT estimated::int FROM billing.reservations WHERE request_id = '" + request.String() + "'", 0},
+		{"SELECT count(*) FROM billing.transactions WHERE request_id = '" + request.String() + "' AND revision = 1 AND kind IN ('reverse', 'settle')", 2},
+	} {
+		if got := b.count(c.query); got != c.want {
+			t.Errorf("%s = %d, want %d", c.query, got, c.want)
+		}
+	}
+	if got := b.balanceOf(b.admitted.Account); got != 950 {
+		t.Errorf("balance %d after the correction, want 950", got)
+	}
 }
 
 // TestCorrectionRefusesAMissingItem: a supplier record that leaves out an item we had to estimate is not a complete
@@ -66,8 +79,7 @@ func TestCorrectionRefusesAMissingItem(t *testing.T) {
 	if !f.Estimated {
 		t.Fatalf("estimate = %+v; want estimated", f)
 	}
-	u, _ := catalog.NewUsage(map[catalog.Item]int64{in: 50}, catalog.ServiceTierStandard, nil)
-	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1, Usage: u, Reported: 1 << in}
+	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1, Usage: usageOf(t, map[catalog.Item]int64{in: 50}), Reported: 1 << in}
 	c := &corrector{db: b.app, scope: b.platform}
 	if retry, err := c.one(t.Context(), ev); retry || !errors.Is(err, errNoCorrection) {
 		t.Fatalf("retry %v, err %v; want no correction", retry, err)
@@ -90,8 +102,10 @@ func TestCorrectionRefusesUnknownUsage(t *testing.T) {
 	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, Segment{Usage: u, Reported: 1 << in})); err != nil {
 		t.Fatal(err)
 	}
-	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(),
-		Revision: 1, Usage: u, Reported: 1 << in}
+	ev := suppliers.ChargeEvent{
+		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(),
+		Revision: 1, Usage: u, Reported: 1 << in,
+	}
 	c := &corrector{db: b.app, scope: b.platform}
 	if retry, err := c.one(t.Context(), ev); retry || !errors.Is(err, errNoCorrection) {
 		t.Fatalf("retry %v, err %v; want no correction", retry, err)
@@ -103,8 +117,7 @@ func TestCorrectionRefusesUnknownUsage(t *testing.T) {
 func TestCorrectionWaitsForTheReservation(t *testing.T) {
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
-	u, _ := catalog.NewUsage(map[catalog.Item]int64{in: 50}, catalog.ServiceTierStandard, nil)
-	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1, Usage: u, Reported: 1 << in}
+	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1, Usage: usageOf(t, map[catalog.Item]int64{in: 50}), Reported: 1 << in}
 	c := &corrector{db: b.app, scope: b.platform}
 	if retry, err := c.one(t.Context(), ev); !retry || err == nil {
 		t.Fatalf("before settlement: retry %v, err %v; want retry", retry, err)
@@ -125,8 +138,7 @@ func TestCorrectionRefusesAPartlyReportedCharge(t *testing.T) {
 	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 100, 0, 0, catalog.ItemOutput, webSearch))); err != nil {
 		t.Fatal(err)
 	}
-	u, _ := catalog.NewUsage(map[catalog.Item]int64{in: 50}, catalog.ServiceTierStandard, nil)
-	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1, Usage: u, Reported: 1 << in}
+	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1, Usage: usageOf(t, map[catalog.Item]int64{in: 50}), Reported: 1 << in}
 	c := &corrector{db: b.app, scope: b.platform}
 	if retry, err := c.one(t.Context(), ev); retry || !errors.Is(err, errNoCorrection) {
 		t.Fatalf("retry %v, err %v; want no correction", retry, err)
@@ -146,13 +158,9 @@ func TestCorrectionTrustsTheRecordNotTheAttemptsCostFlag(t *testing.T) {
 	if !f.Estimated {
 		t.Fatalf("estimate = %+v; want estimated", f)
 	}
-	u, err := catalog.NewUsage(map[catalog.Item]int64{in: 50}, catalog.ServiceTierStandard, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ev := suppliers.ChargeEvent{
 		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostNoUsage.String(), Revision: 1,
-		Usage: u, Reported: 1 << in,
+		Usage: usageOf(t, map[catalog.Item]int64{in: 50}), Reported: 1 << in,
 	}
 	c := &corrector{db: b.app, scope: b.platform}
 	if retry, err := c.one(t.Context(), ev); retry || err != nil {

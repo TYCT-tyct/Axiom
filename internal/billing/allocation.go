@@ -230,43 +230,59 @@ func (a *allocation) unspend(n int64) error {
 		return nil
 	}
 	returned := n
+	if n = giveBack(a.refundable(), n); n > 0 {
+		return fmt.Errorf("a return of %d has %d that no credit batch took", returned, n)
+	}
+	a.reopen()
+	return nil
+}
+
+// refundable are the batches a refund may give back to, in reverse spend order. A batch whose credit is later in the
+// replay has not opened yet, and must not receive an earlier charge's refund: credit() would then add the same batch
+// to open again, counting its money twice.
+func (a *allocation) refundable() []*batchState {
 	candidates := make([]*batchState, 0, len(a.batches))
 	for _, b := range a.batches {
-		// A batch whose credit is later in the replay has not opened yet. It must not receive an earlier charge's
-		// refund: credit() would then add the same batch to open again, counting its money twice.
 		if b.opened.compare(a.at) <= 0 && (b.consumed > 0 || b.expired > 0) {
 			candidates = append(candidates, b)
 		}
 	}
 	slices.SortFunc(candidates, func(x, y *batchState) int { return spendOrder(y, x) })
+	return candidates
+}
+
+// giveBack returns as much of n as the batches hold, spent credit first and written-off credit after it, and reports
+// what none of them took.
+func giveBack(candidates []*batchState, n int64) int64 {
 	for _, b := range candidates {
 		give := min(b.consumed, n)
 		b.consumed -= give
 		b.touched = b.touched || give > 0
 		n -= give
 		if n == 0 {
-			break
+			return 0
 		}
 	}
 	for _, b := range candidates {
-		if n == 0 {
-			break
-		}
 		give := min(b.expired, n)
 		b.expired -= give
 		b.touched = b.touched || give > 0
 		n -= give
+		if n == 0 {
+			return 0
+		}
 	}
-	if n > 0 {
-		return fmt.Errorf("a return of %d has %d that no credit batch took", returned, n)
-	}
+	return n
+}
+
+// reopen puts every batch that still holds credit back into spend order, including one a refund replenished.
+func (a *allocation) reopen() {
 	for _, b := range a.batches {
 		if b.opened.compare(a.at) <= 0 && b.remaining() > 0 && !slices.Contains(a.open, b) {
 			a.open = append(a.open, b)
 		}
 	}
 	slices.SortFunc(a.open, spendOrder)
-	return nil
 }
 
 // credit opens the batch the transaction made. What charges took beyond every batch before it is paid off from it

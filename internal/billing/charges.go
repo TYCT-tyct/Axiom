@@ -164,9 +164,9 @@ func chargeItems(s catalog.Schedule, f fallbacks, seg Segment, waived bool, tier
 }
 
 func knownChargeItem(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, it catalog.Item) ChargeItem {
-	rate, band, ok := s.Rate(seg.Usage, it)
+	_, band, ok := s.Rate(seg.Usage, it)
 	ok = ok && !undeclaredTier(tiers, seg.Usage.ServiceTier())
-	rate = itemRate(s, f, seg, tiers, it)
+	rate := itemRate(s, f, seg, tiers, it)
 	unit := "token"
 	if perUseItems.Has(it) {
 		unit = "use"

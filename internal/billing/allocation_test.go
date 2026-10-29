@@ -35,9 +35,9 @@ func creditOf(r LiveBatchesRow) movement {
 	return movement{key: orderKey{seq: r.OpenedSeq, at: r.OpenedAt, id: r.OpenedID}, kind: "credit", request: r.ID, debit: -r.Amount}
 }
 
-// settled is a movement of the given kind and net debit at seq.
-func settled(seq int64, kind string, debit int64) movement {
-	return movement{key: keyAt(seq), kind: kind, request: uuid.NewV7(), debit: debit}
+// settled is a settle movement of the given net debit at seq.
+func settled(seq, debit int64) movement {
+	return movement{key: keyAt(seq), kind: "settle", request: uuid.NewV7(), debit: debit}
 }
 
 // leftOf is what each batch has left, by position in rows.
@@ -83,7 +83,7 @@ func TestSpendOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newAllocation(stateAt(5), rows)
 			for i, n := range tc.spend {
-				applyAll(t, a, settled(int64(6+i), "settle", n))
+				applyAll(t, a, settled(int64(6+i), n))
 			}
 			if diff := cmp.Diff(tc.left, leftOf(a, rows)); diff != "" || a.unfunded != tc.debt {
 				t.Errorf("left %v (-want +got):\n%s\nunfunded %d, want %d", leftOf(a, rows), diff, a.unfunded, tc.debt)
@@ -97,7 +97,7 @@ func TestSpendOrder(t *testing.T) {
 func TestDebtIsPaidByTheNextCredit(t *testing.T) {
 	small, large := batchRow(2, 30, "gift", nil), batchRow(3, 100, "gift", nil)
 	a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{small, large})
-	applyAll(t, a, settled(1, "settle", 50), creditOf(small), creditOf(large))
+	applyAll(t, a, settled(1, 50), creditOf(small), creditOf(large))
 	if got := leftOf(a, []LiveBatchesRow{small, large}); !slices.Equal(got, []int64{0, 80}) || a.unfunded != 0 || a.funded() != 80 {
 		t.Errorf("left %v, unfunded %d, funded %d; want [0 80], 0, 80", got, a.unfunded, a.funded())
 	}
@@ -189,7 +189,7 @@ func randomMovement(r *rand.Rand, live *allocation, rows []LiveBatchesRow, next 
 		return creditOf(rows[*next-1])
 	}
 	if len(live.open) == 0 {
-		return settled(seq, "settle", 1+r.Int64N(120))
+		return settled(seq, 1+r.Int64N(120))
 	}
 	return randomBatchMovement(r, live.open[r.IntN(len(live.open))], n, seq)
 }
@@ -207,7 +207,7 @@ func randomBatchMovement(r *rand.Rand, b *batchState, n int, seq int64) movement
 		m.kind, m.debit = "refund", 1+r.Int64N(b.frozen())
 		m.revision = b.refunded + m.debit
 	default:
-		return settled(seq, "settle", 1+r.Int64N(120))
+		return settled(seq, 1+r.Int64N(120))
 	}
 	return m
 }
@@ -294,10 +294,12 @@ func TestReturnGivesBackTheCharge(t *testing.T) {
 	old := batchRow(1, 100, "gift", after(time.Hour))
 	a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{old})
 	request := uuid.NewV7()
-	if err := a.applyAll(uuid.UUID{}, []movement{creditOf(old),
+	if err := a.applyAll(uuid.UUID{}, []movement{
+		creditOf(old),
 		{key: keyAt(2), kind: "settle", request: request, debit: 80},
 		{key: keyAt(3), kind: "reverse", request: request, debit: -10, revision: 1},
-		{key: keyAt(4), kind: "settle", request: request, debit: 5, revision: 1}}); err != nil {
+		{key: keyAt(4), kind: "settle", request: request, debit: 5, revision: 1},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if got := leftOf(a, []LiveBatchesRow{old}); !slices.Equal(got, []int64{25}) || a.unfunded != 0 || a.funded() != 25 ||
@@ -311,11 +313,13 @@ func TestReturnGivesBackTheCharge(t *testing.T) {
 	later := batchRow(2, 100, "gift", after(2*time.Hour))
 	newer := batchRow(4, 100, "gift", after(30*time.Minute))
 	b := newAllocation(AllocationStateRow{}, []LiveBatchesRow{old, later, newer})
-	if err := b.applyAll(uuid.UUID{}, []movement{creditOf(old), creditOf(later),
+	if err := b.applyAll(uuid.UUID{}, []movement{
+		creditOf(old), creditOf(later),
 		{key: keyAt(3), kind: "settle", request: request, debit: 200},
 		creditOf(newer),
 		{key: keyAt(5), kind: "reverse", request: request, debit: -10, revision: 1},
-		{key: keyAt(6), kind: "settle", request: request, debit: 10, revision: 1}}); err != nil {
+		{key: keyAt(6), kind: "settle", request: request, debit: 10, revision: 1},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if got := leftOf(b, []LiveBatchesRow{old, later, newer}); !slices.Equal(got, []int64{0, 0, 100}) {

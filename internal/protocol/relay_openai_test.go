@@ -325,30 +325,32 @@ func TestRelayResponsesContent(t *testing.T) {
 	}
 }
 
+// openAIUsageCase is a reply's usage object and what protocol maps it to.
+type openAIUsageCase struct {
+	name, usage string
+	tier        string // the reply's service_tier member, if any
+	want        map[catalog.Item]int64
+	st          catalog.ServiceTier
+	unknown     []catalog.UnknownUsage
+	native      *catalog.NativeTokens
+	invalid     bool
+}
+
 // TestRelayOpenAIUsage maps both OpenAI formats' usage as catalog README.md「计费项与用量」 tabulates: the input total
 // less its cached, cache-written and audio parts is input; the output total less reasoning and audio is output.
 func TestRelayOpenAIUsage(t *testing.T) {
-	type counts = map[catalog.Item]int64
-	for _, c := range []struct {
-		name, usage string
-		tier        string // the reply's service_tier member, if any
-		want        counts
-		st          catalog.ServiceTier
-		unknown     []catalog.UnknownUsage
-		native      *catalog.NativeTokens
-		invalid     bool
-	}{
+	for _, c := range []openAIUsageCase{
 		{
 			name: "parts", usage: `{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":20,"audio_tokens":10},` +
 				`"completion_tokens":50,"completion_tokens_details":{"reasoning_tokens":15,"audio_tokens":5},"total_tokens":150}`,
-			want: counts{
+			want: map[catalog.Item]int64{
 				catalog.ItemInput: 40, catalog.ItemCacheRead: 30, catalog.ItemCacheWrite: 20, catalog.ItemAudioIn: 10,
 				catalog.ItemOutput: 30, catalog.ItemReasoning: 15, catalog.ItemAudioOut: 5,
 			},
 		},
 		{
 			name: "no details", usage: `{"prompt_tokens":9,"completion_tokens":2,"cost":0.5,"is_byok":false,"cost_details":{}}`,
-			want: counts{catalog.ItemInput: 9, catalog.ItemCacheRead: 0, catalog.ItemCacheWrite: 0, catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
+			want: map[catalog.Item]int64{catalog.ItemInput: 9, catalog.ItemCacheRead: 0, catalog.ItemCacheWrite: 0, catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
 		},
 		{name: "parts above the total", usage: `{"prompt_tokens":9,"prompt_tokens_details":{"cached_tokens":10}}`, invalid: true},
 		{name: "a negative part", usage: `{"prompt_tokens":9,"prompt_tokens_details":{"audio_tokens":-1}}`, invalid: true},
@@ -356,37 +358,41 @@ func TestRelayOpenAIUsage(t *testing.T) {
 		{name: "parts that overflow", usage: `{"prompt_tokens":9,"prompt_tokens_details":{"cached_tokens":9223372036854775807,"cache_write_tokens":9223372036854775807}}`, invalid: true},
 		{
 			name: "unknown counts", usage: `{"completion_tokens":2,"image_tokens":4,"completion_tokens_details":{"accepted_prediction_tokens":1,"x_tokens":3}}`,
-			want:    counts{catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
+			want:    map[catalog.Item]int64{catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
 			unknown: []catalog.UnknownUsage{{Field: "usage.completion_tokens_details.x_tokens", Value: "3"}, {Field: "usage.image_tokens", Value: "4"}},
 			native:  &catalog.NativeTokens{AcceptedPrediction: 1},
 		},
-		{name: "flex", usage: `{}`, tier: "flex", want: counts{}, st: catalog.ServiceTierFlex},
-		{name: "priority", usage: `{}`, tier: "priority", want: counts{}, st: catalog.ServiceTierPriority},
-		{name: "default", usage: `{}`, tier: "default", want: counts{}},
-		{name: "unknown tier", usage: `{}`, tier: "scale", want: counts{}, unknown: []catalog.UnknownUsage{{Field: "service_tier", Value: "scale"}}},
+		{name: "flex", usage: `{}`, tier: "flex", want: map[catalog.Item]int64{}, st: catalog.ServiceTierFlex},
+		{name: "priority", usage: `{}`, tier: "priority", want: map[catalog.Item]int64{}, st: catalog.ServiceTierPriority},
+		{name: "default", usage: `{}`, tier: "default", want: map[catalog.Item]int64{}},
+		{name: "unknown tier", usage: `{}`, tier: "scale", want: map[catalog.Item]int64{}, unknown: []catalog.UnknownUsage{{Field: "service_tier", Value: "scale"}}},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			tier := ""
-			if c.tier != "" {
-				tier = `"service_tier":"` + c.tier + `",`
-			}
-			stream := chatRole + chatHi + chatStop + strings.Replace(chatUsage(c.usage), `"choices"`, tier+`"choices"`, 1) + chatDone
-			got := relay(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-			u := got.r.Usage()
-			if got.err != nil || (u.Invalid != nil) != c.invalid {
-				t.Fatalf("error %v, invalid %v", got.err, u.Invalid)
-			}
-			if c.invalid {
-				return
-			}
-			want := wantWithPrompt(t, c.usage, segment(t, c.want, c.st, c.unknown))
-			if c.native != nil {
-				want.Usage = must(want.Usage.WithNativeTokens(*c.native))
-			}
-			if diff := cmp.Diff([]protocol.Segment{want}, u.Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" {
-				t.Errorf("segments (-want +got):\n%s", diff)
-			}
-		})
+		t.Run(c.name, func(t *testing.T) { assertOpenAIUsage(t, c) })
+	}
+}
+
+// assertOpenAIUsage checks one case's mapped segments, or that the reply is invalid.
+func assertOpenAIUsage(t *testing.T, c openAIUsageCase) {
+	t.Helper()
+	tier := ""
+	if c.tier != "" {
+		tier = `"service_tier":"` + c.tier + `",`
+	}
+	stream := chatRole + chatHi + chatStop + strings.Replace(chatUsage(c.usage), `"choices"`, tier+`"choices"`, 1) + chatDone
+	got := relay(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+	u := got.r.Usage()
+	if got.err != nil || (u.Invalid != nil) != c.invalid {
+		t.Fatalf("error %v, invalid %v", got.err, u.Invalid)
+	}
+	if c.invalid {
+		return
+	}
+	want := wantWithPrompt(t, c.usage, segment(t, c.want, c.st, c.unknown))
+	if c.native != nil {
+		want.Usage = must(want.Usage.WithNativeTokens(*c.native))
+	}
+	if diff := cmp.Diff([]protocol.Segment{want}, u.Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" {
+		t.Errorf("segments (-want +got):\n%s", diff)
 	}
 }
 

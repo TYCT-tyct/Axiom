@@ -176,21 +176,42 @@ func (h *Handler) legacyUsage(ctx context.Context, tx pg.Tx, a accounts.Admissio
 // generation is OpenRouter's GET /api/v1/generation?id=: what one call of the key's account used and was charged. It
 // shows the price the user paid and nothing of our cost, endpoint or route (observability.OwnCall has none).
 func (h *Handler) generation(ctx context.Context, tx pg.Tx, _ accounts.Admission, q url.Values) (any, error) {
+	call, err := ownCall(ctx, tx, q)
+	if err != nil {
+		return nil, err
+	}
+	charges, err := h.charges.ReadCharges(ctx, tx, []uuid.UUID{call.ID})
+	if err != nil {
+		return nil, err
+	}
+	data := generationData(call)
+	if d, ok := charges[call.ID]; ok {
+		data["charge_details"] = d
+		applyCharges(data, d)
+	}
+	return map[string]any{"data": data}, nil
+}
+
+// ownCall is the call an endpoint that names one call by id shows, in the key's account: a call number that is not the
+// account's is the same 404 as one that never existed.
+func ownCall(ctx context.Context, tx pg.Tx, q url.Values) (observability.OwnCall, error) {
 	id, err := uuid.Parse(q.Get("id"))
 	if err != nil {
-		return nil, invalid("The id parameter must be the number of a call, as in X-Generation-Id.")
+		return observability.OwnCall{}, invalid("The id parameter must be the number of a call, as in X-Generation-Id.")
 	}
 	call, err := observability.GetOwn(ctx, tx, id)
 	if errors.Is(err, pg.ErrNoRows) {
-		return nil, errNoGeneration
+		return observability.OwnCall{}, errNoGeneration
 	}
 	if err != nil {
-		return nil, err
+		return observability.OwnCall{}, err
 	}
-	charges, err := h.charges.ReadCharges(ctx, tx, []uuid.UUID{id})
-	if err != nil {
-		return nil, err
-	}
+	return call, nil
+}
+
+// generationData is what the call log holds of a call, as OpenRouter's generation object reports it; the charge adds
+// total_cost and cache_discount.
+func generationData(call observability.OwnCall) map[string]any {
 	sum := func(items ...string) (n int64) {
 		for _, item := range items {
 			n += call.Usage[item]
@@ -206,6 +227,12 @@ func (h *Handler) generation(ctx context.Context, tx pg.Tx, _ accounts.Admission
 		"tokens_prompt":     sum("input", "cache_read", "cache_write", "cache_write_1h", "audio_in", "image_in"),
 		"tokens_completion": sum("output", "reasoning", "audio_out", "image_out"),
 		"tokens_reasoning":  sum("reasoning"), "tokens_cached": sum("cache_read"),
+		"native_tokens_completion":        sum("output", "reasoning", "audio_out", "image_out"),
+		"native_tokens_reasoning":         sum("reasoning"),
+		"native_tokens_cached":            sum("cache_read"),
+		"native_tokens_completion_images": sum("image_out"),
+		"streamed":                        call.Streamed,
+		"cancelled":                       call.FinishReason == "cancelled",
 	}
 	if call.PriceVersion != "" {
 		data["price_version"] = call.PriceVersion
@@ -213,46 +240,35 @@ func (h *Handler) generation(ctx context.Context, tx pg.Tx, _ accounts.Admission
 	if call.PhysicalInput != nil {
 		data["native_tokens_prompt"] = *call.PhysicalInput
 	}
-	data["native_tokens_completion"] = sum("output", "reasoning", "audio_out", "image_out")
-	data["native_tokens_reasoning"] = sum("reasoning")
-	data["native_tokens_cached"] = sum("cache_read")
-	data["native_tokens_completion_images"] = sum("image_out")
-	data["streamed"] = call.Streamed
-	data["cancelled"] = call.FinishReason == "cancelled"
 	if call.SessionID != "" {
 		data["session_id"] = call.SessionID
 	}
-	if d, ok := charges[id]; ok {
-		data["charge_details"] = d
-		// A correction can change the charge after the call log was written; the reservation's itemization is the
-		// authority, so total_cost follows it rather than the log's snapshot.
-		if e, err := platform.ParseExact(d.Charged); err == nil {
-			if f, _ := e.Rat().Float64(); f >= 0 {
-				data["total_cost"] = f
-			}
-		}
-		if d.CacheDiscount != "" {
-			if e, err := platform.ParseExact(d.CacheDiscount); err == nil {
-				if f, _ := e.Rat().Float64(); f > 0 {
-					data["cache_discount"] = f
-				}
-			}
+	return data
+}
+
+// applyCharges replaces the call log's snapshot with the reservation's itemization, which a correction can move after
+// the log was written.
+func applyCharges(data map[string]any, d billing.ChargeDetails) {
+	if e, err := platform.ParseExact(d.Charged); err == nil {
+		if f, _ := e.Rat().Float64(); f >= 0 {
+			data["total_cost"] = f
 		}
 	}
-	return map[string]any{"data": data}, nil
+	if d.CacheDiscount == "" {
+		return
+	}
+	if e, err := platform.ParseExact(d.CacheDiscount); err == nil {
+		if f, _ := e.Rat().Float64(); f > 0 {
+			data["cache_discount"] = f
+		}
+	}
 }
 
 // generationContent is OpenRouter's GET /api/v1/generation/content: the prompt and reply text of a call, while the
 // retention rules keep it. Axiom keeps no content, so an existing call of the account is still 404 with a code that
 // says why, and another account's call is the same 404 as generation's.
-func (h *Handler) generationContent(ctx context.Context, tx pg.Tx, _ accounts.Admission, q url.Values) (any, error) {
-	id, err := uuid.Parse(q.Get("id"))
-	if err != nil {
-		return nil, invalid("The id parameter must be the number of a call, as in X-Generation-Id.")
-	}
-	if _, err := observability.GetOwn(ctx, tx, id); errors.Is(err, pg.ErrNoRows) {
-		return nil, errNoGeneration
-	} else if err != nil {
+func (*Handler) generationContent(ctx context.Context, tx pg.Tx, _ accounts.Admission, q url.Values) (any, error) {
+	if _, err := ownCall(ctx, tx, q); err != nil {
 		return nil, err
 	}
 	return nil, errNoContent
@@ -280,48 +296,69 @@ type activityItem struct {
 // activity is OpenRouter's GET /api/v1/activity: the account's use and sale charge per UTC day and model over the
 // last 30 completed days, or one day of them. api_key_hash names a key by its UUID, which is the identifier Axiom's
 // keys API returns (there is no exposed secret hash); user_id needs organization accounts, which Axiom does not have.
-func (h *Handler) activity(ctx context.Context, tx pg.Tx, a accounts.Admission, q url.Values) (any, error) {
-	now := time.Now().UTC()
+func (*Handler) activity(ctx context.Context, tx pg.Tx, a accounts.Admission, q url.Values) (any, error) {
+	query, err := activityQuery(q, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	query.Account = uuid.UUID(a.Caller().AccountID())
+	rows, err := observability.ActivityOwn(ctx, tx, query)
+	if err != nil {
+		return nil, err
+	}
+	items, err := activityItems(ctx, tx, rows)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"data": items}, nil
+}
+
+// activityQuery reads the parameters: a UTC day among the 30 completed before today, or those 30 days, optionally
+// narrowed by key and workspace.
+func activityQuery(q url.Values, now time.Time) (observability.ActivityQuery, error) {
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	since, until := today.AddDate(0, 0, -30), today
 	if date := q.Get("date"); date != "" {
 		d, err := time.Parse("2006-01-02", date)
 		if err != nil || !d.Before(today) || d.Before(since) {
-			return nil, invalid("The date parameter must be a UTC day within the last 30 completed days, as YYYY-MM-DD.")
+			return observability.ActivityQuery{}, invalid("The date parameter must be a UTC day within the last 30 completed days, as YYYY-MM-DD.")
 		}
 		since, until = d, d.AddDate(0, 0, 1)
 	}
 	if q.Get("user_id") != "" {
-		return nil, invalid("The user_id parameter needs organization accounts, which Axiom does not have.")
+		return observability.ActivityQuery{}, invalid("The user_id parameter needs organization accounts, which Axiom does not have.")
 	}
 	if group := q.Get("group_by"); group != "" && group != "workspace" {
-		return nil, invalid("The group_by parameter must be workspace.")
+		return observability.ActivityQuery{}, invalid("The group_by parameter must be workspace.")
 	}
-	var key, workspace *uuid.UUID
+	query := observability.ActivityQuery{Since: since, Until: until, GroupByWorkspace: q.Get("group_by") == "workspace"}
+	var err error
 	if v := q.Get("api_key_hash"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			return nil, invalid("The api_key_hash parameter must be the UUID of a key of this account.")
+		if query.Key, err = parseParameter(v, "The api_key_hash parameter must be the UUID of a key of this account."); err != nil {
+			return observability.ActivityQuery{}, err
 		}
-		key = &id
 	}
 	if v := q.Get("workspace_id"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			return nil, invalid("The workspace_id parameter must be a UUID.")
+		if query.Workspace, err = parseParameter(v, "The workspace_id parameter must be a UUID."); err != nil {
+			return observability.ActivityQuery{}, err
 		}
-		workspace = &id
 	}
-	rows, err := observability.ActivityOwn(ctx, tx, observability.ActivityQuery{
-		Account: uuid.UUID(a.Caller().AccountID()), Since: since, Until: until, Key: key, Workspace: workspace,
-		GroupByWorkspace: q.Get("group_by") == "workspace",
-	})
+	return query, nil
+}
+
+// parseParameter is an optional UUID parameter, refused with the message that names it.
+func parseParameter(v, message string) (*uuid.UUID, error) {
+	id, err := uuid.Parse(v)
 	if err != nil {
-		return nil, err
+		return nil, invalid(message)
 	}
-	// The call log's price is the snapshot written at settlement, and corrections move the reservation and ledger
-	// afterwards. Read the current charge for these calls and let it replace the snapshot when present; a missing row
-	// (old call, not settled, or out of scope) keeps the recorded amount.
+	return &id, nil
+}
+
+// activityItems sums each group's calls. The call log's price is the snapshot written at settlement, and corrections
+// move the reservation and ledger afterwards, so the current charge replaces it when present; a missing row (old call,
+// not settled, or out of scope) keeps the recorded amount.
+func activityItems(ctx context.Context, tx pg.Tx, rows []observability.ActivityItem) ([]activityItem, error) {
 	var ids []uuid.UUID
 	for _, r := range rows {
 		ids = append(ids, r.RequestIDs...)
@@ -332,22 +369,26 @@ func (h *Handler) activity(ctx context.Context, tx pg.Tx, a accounts.Admission, 
 	}
 	items := make([]activityItem, len(rows))
 	for i, r := range rows {
-		// A group may hold several calls with different corrections. Sum each call's current charge, falling back to
-		// that call's own snapshot only when its reservation is absent (an old or non-settled row).
-		var usage int64
-		for j, id := range r.RequestIDs {
-			if charged, ok := current[id]; ok {
-				usage += charged
-			} else if j < len(r.RequestPrices) {
-				usage += r.RequestPrices[j]
-			}
-		}
 		items[i] = activityItem{
 			Date: r.Date, Model: r.Model, ModelPermaslug: r.Model, EndpointID: uuid.Nil().String(),
-			ProviderName: "Axiom", Usage: credits(usage), Requests: r.Requests,
+			ProviderName: "Axiom", Usage: credits(groupUsage(r, current)), Requests: r.Requests,
 			PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens, ReasoningTokens: r.ReasoningTokens,
 			CachedTokens: r.CachedTokens, WorkspaceID: r.Workspace,
 		}
 	}
-	return map[string]any{"data": items}, nil
+	return items, nil
+}
+
+// groupUsage is a group's current charge: a group may hold several calls with different corrections, and a call whose
+// reservation is absent falls back to its own snapshot.
+func groupUsage(r observability.ActivityItem, current map[uuid.UUID]int64) int64 {
+	var usage int64
+	for j, id := range r.RequestIDs {
+		if charged, ok := current[id]; ok {
+			usage += charged
+		} else if j < len(r.RequestPrices) {
+			usage += r.RequestPrices[j]
+		}
+	}
+	return usage
 }

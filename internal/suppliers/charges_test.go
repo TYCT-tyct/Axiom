@@ -18,11 +18,17 @@ func TestParseChargeUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Count(catalog.ItemInput) != 50 || u.Count(catalog.ItemOutput) != 2 || u.Count(catalog.ItemCacheRead) != 10 {
-		t.Errorf("counts = input %d output %d cache %d", u.Count(catalog.ItemInput), u.Count(catalog.ItemOutput), u.Count(catalog.ItemCacheRead))
-	}
 	if !reported.Has(catalog.ItemInput) || !reported.Has(catalog.ItemOutput) || reported.Has(catalog.ItemCacheRead) {
 		t.Errorf("reported = %v", reported)
+	}
+	checkParsedUsage(t, u)
+}
+
+// checkParsedUsage checks the counts, the physical prompt, the unmapped field and the tier the document carries.
+func checkParsedUsage(t *testing.T, u catalog.Usage) {
+	t.Helper()
+	if u.Count(catalog.ItemInput) != 50 || u.Count(catalog.ItemOutput) != 2 || u.Count(catalog.ItemCacheRead) != 10 {
+		t.Errorf("counts = input %d output %d cache %d", u.Count(catalog.ItemInput), u.Count(catalog.ItemOutput), u.Count(catalog.ItemCacheRead))
 	}
 	if n, ok := u.PhysicalInput(); !ok || n != 55 {
 		t.Errorf("physical input = %d, %v; want 55", n, ok)

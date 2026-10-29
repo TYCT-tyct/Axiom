@@ -190,6 +190,19 @@ func TestFillPricesPerUse(t *testing.T) {
 	}
 }
 
+// exact is a decimal from a test table; the empty amount is zero.
+func exact(t *testing.T, s string) platform.Exact {
+	t.Helper()
+	if s == "" {
+		return platform.Exact{}
+	}
+	e, err := platform.ParseExact(s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return e
+}
+
 // TestPriceSegmentsUsageExtras: the two amounts a client's usage shows beside the token counts are sale amounts at the
 // same rates as the charge: every per-use item the call ran, and what cache reads saved against the input price. A
 // cache read priced at or above input saves nothing, and no per-use item means no server tool cost.
@@ -207,8 +220,10 @@ func TestPriceSegmentsUsageExtras(t *testing.T) {
 			name: "a search and a code execution, cache below input",
 			schedule: `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cache_read":"0.0000000003",
 				"output":"0.000000002","web_search":"0.02","code_execution":"0.03"}}`,
-			counts: map[catalog.Item]int64{in: 10, catalog.ItemCacheRead: 100, catalog.ItemOutput: 1,
-				webSearch: 2, catalog.ItemCodeExecution: 1},
+			counts: map[catalog.Item]int64{
+				in: 10, catalog.ItemCacheRead: 100, catalog.ItemOutput: 1,
+				webSearch: 2, catalog.ItemCodeExecution: 1,
+			},
 			wantTool: "0.07", wantSaving: "0.00000007", tool: true,
 		},
 		{
@@ -226,8 +241,7 @@ func TestPriceSegmentsUsageExtras(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantTool, _ := platform.ParseExact(tc.wantTool)
-			wantSaving, _ := platform.ParseExact(tc.wantSaving)
+			wantTool, wantSaving := exact(t, tc.wantTool), exact(t, tc.wantSaving)
 			if p.hasServerTool != tc.tool || p.serverTool != wantTool || p.cacheDiscount != wantSaving {
 				t.Errorf("extras = tool %v %v (has %v), saving %v; want %v (has %v), %v",
 					p.serverTool, p.hasServerTool, tc.tool, p.cacheDiscount, wantTool, tc.tool, wantSaving)

@@ -112,37 +112,35 @@ func (c *corrector) retryDue(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("billing: read due charge corrections: %w", err)
 	}
 	for _, r := range due {
-		ev, err := c.event(ctx, r.EventID)
-		if errors.Is(err, pg.ErrNoRows) {
-			if err := c.forget(ctx, r.EventID); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		if err != nil {
-			return 0, err
-		}
-		retry, err := c.one(ctx, ev)
-		if err != nil && !errors.Is(err, errNotReady) && !errors.Is(err, errNoCorrection) {
-			return 0, err
-		}
-		wait := correctionRetryMin
-		reason := ""
-		if retry {
-			reason = err.Error()
-			c.retried.Add(ctx, 1)
-			wait = backoff(r.Attempts)
-		} else {
-			reason = ""
-			if err == nil {
-				c.corrected.Add(ctx, 1)
-			}
-		}
-		if err := c.record(ctx, ev, retry, wait, reason, false); err != nil {
+		if err := c.retryOne(ctx, r); err != nil {
 			return 0, err
 		}
 	}
 	return len(due), nil
+}
+
+// retryOne reads one event again and corrects it, or forgets an event whose record is gone.
+func (c *corrector) retryOne(ctx context.Context, r DueCorrectionsRow) error {
+	ev, err := c.event(ctx, r.EventID)
+	if errors.Is(err, pg.ErrNoRows) {
+		return c.forget(ctx, r.EventID)
+	}
+	if err != nil {
+		return err
+	}
+	retry, err := c.one(ctx, ev)
+	if err != nil && !errors.Is(err, errNotReady) && !errors.Is(err, errNoCorrection) {
+		return err
+	}
+	wait, reason := time.Duration(0), ""
+	if retry {
+		reason = err.Error()
+		c.retried.Add(ctx, 1)
+		wait = backoff(r.Attempts)
+	} else if err == nil {
+		c.corrected.Add(ctx, 1)
+	}
+	return c.record(ctx, ev, retry, wait, reason, false)
 }
 
 // readNew reads one page of events and corrects them, moving the cursor one event at a time so that a page that
@@ -214,132 +212,134 @@ func (c *corrector) correct(ctx context.Context, ev suppliers.ChargeEvent) (int6
 	}
 	var borne int64
 	err := c.db.Tx(ctx, c.scope, func(tx pg.Tx) error {
-		account, err := queries.ReservationAccount(ctx, tx, ev.Request)
-		if errors.Is(err, pg.ErrNoRows) {
-			return errNotReady
-		}
-		if err != nil {
-			return fmt.Errorf("billing: read the account of %s: %w", ev.Request, err)
-		}
-		balance, err := lockAccount(ctx, tx, account)
-		if err != nil {
-			return err
-		}
-		row, err := queries.LockReservation(ctx, tx, ev.Request)
-		if err != nil {
-			return fmt.Errorf("billing: lock the reservation of %s: %w", ev.Request, err)
-		}
-		segments, price, err := c.correctedPrice(row, ev)
-		if err != nil {
-			return err
-		}
-		charged := &locked{id: ev.Request, row: row, balance: balance}
-		charged.owed = price.price
-		charged.charged = min(price.price, add(row.Charged, room(balance, 0)))
-		borne = max(price.price-charged.charged, 0)
-		revision := int64(ev.Revision)
-		reversed, err := post(ctx, tx, charged.event("reverse", revision), reversal(row.Price, row.Charged)...)
-		if err != nil {
-			return err
-		}
-		settled, err := post(ctx, tx, charged.event("settle", revision), charge(price.price, charged.charged)...)
-		if err != nil {
-			return err
-		}
-		if !reversed && !settled {
-			return errNoCorrection
-		}
-		usage, err := encodeUsage(segments)
-		if err != nil {
-			return err
-		}
-		if _, err := queries.EndReservation(ctx, tx, EndReservationParams{
-			Profit: correctedProfit(row, charged.charged), Reserved: 0, Spent: charged.charged - row.Charged,
-			AccountID: row.AccountID, WorkspaceID: row.WorkspaceID, WorkspaceWindow: row.WorkspaceWindow,
-			KeyID: row.KeyID, KeyWindow: row.KeyWindow, RequestID: ev.Request, State: "settled",
-			Charged: charged.charged, Price: price.price, Waived: row.Waived, Estimated: false,
-			FinalUsage: usage, PricingTiers: price.tiers,
-		}); err != nil {
-			return fmt.Errorf("billing: write the corrected settlement of %s: %w", ev.Request, err)
-		}
-		// The correction moved the balance, so the account's allocation must move with it in the same transaction: a
-		// later expiry or freeze replays from the saved place and would otherwise never see this refund, especially
-		// after the charged batch was fully spent (#277).
-		a, err := loadAllocation(ctx, tx, row.AccountID)
-		if errors.Is(err, errStale) {
-			return fmt.Errorf("%w: the allocation moved while correcting %s", errNotReady, ev.Request)
-		}
-		if err != nil {
-			return err
-		}
-		if err := a.catchUp(ctx, tx, row.AccountID, movementPage); err != nil {
-			return fmt.Errorf("%w: replay the allocation of %s: %v", errNotReady, ev.Request, err)
-		}
-		if want := balance.Balance - (charged.charged - row.Charged); a.funded() != want {
-			return fmt.Errorf("%w: the correction of %s funds %d, balance %d", errNotReady, ev.Request, a.funded(), want)
-		}
-		if err := a.save(ctx, tx, row.AccountID); errors.Is(err, errStale) {
-			return fmt.Errorf("%w: the allocation moved while correcting %s", errNotReady, ev.Request)
-		} else if err != nil {
-			return err
-		}
-		if borne > 0 {
-			if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
-				Kind: "billing.charge_correction_borne", Key: ev.Request.String(), Severity: "critical",
-				Fields: map[string]string{"request": ev.Request.String(), "event": ev.ID.String(), "borne": fmt.Sprint(borne)},
-			}); err != nil {
-				return fmt.Errorf("billing: report the borne correction: %w", err)
-			}
-		}
-		return nil
+		var err error
+		borne, err = replaceCharge(ctx, tx, ev)
+		return err
 	})
 	return borne, err
+}
+
+// replaceCharge reverses the estimated settlement and settles the supplier's usage in the account's transaction. It
+// returns what the account's floor kept it from paying.
+func replaceCharge(ctx context.Context, tx pg.Tx, ev suppliers.ChargeEvent) (int64, error) {
+	row, balance, err := lockCorrection(ctx, tx, ev.Request)
+	if err != nil {
+		return 0, err
+	}
+	segments, price, err := correctedPrice(row, ev)
+	if err != nil {
+		return 0, err
+	}
+	charged := &locked{id: ev.Request, row: row, balance: balance}
+	charged.owed = price.price
+	charged.charged = min(price.price, add(row.Charged, room(balance, 0)))
+	borne := max(price.price-charged.charged, 0)
+	revision := int64(ev.Revision)
+	reversed, err := post(ctx, tx, charged.event("reverse", revision), reversal(row.Price, row.Charged)...)
+	if err != nil {
+		return 0, err
+	}
+	settled, err := post(ctx, tx, charged.event("settle", revision), charge(price.price, charged.charged)...)
+	if err != nil {
+		return 0, err
+	}
+	if !reversed && !settled {
+		return 0, errNoCorrection
+	}
+	if err := writeCorrection(ctx, tx, charged, segments, price.tiers); err != nil {
+		return 0, err
+	}
+	if err := realignAllocation(ctx, tx, ev.Request, row, balance, charged.charged); err != nil {
+		return 0, err
+	}
+	if borne > 0 {
+		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
+			Kind: "billing.charge_correction_borne", Key: ev.Request.String(), Severity: "critical",
+			Fields: map[string]string{"request": ev.Request.String(), "event": ev.ID.String(), "borne": fmt.Sprint(borne)},
+		}); err != nil {
+			return 0, fmt.Errorf("billing: report the borne correction: %w", err)
+		}
+	}
+	return borne, nil
+}
+
+// lockCorrection reads the request's account, then locks its balance and reservation, the order every settlement uses.
+func lockCorrection(ctx context.Context, tx pg.Tx, request uuid.UUID) (LockReservationRow, LockBalanceRow, error) {
+	account, err := queries.ReservationAccount(ctx, tx, request)
+	if errors.Is(err, pg.ErrNoRows) {
+		return LockReservationRow{}, LockBalanceRow{}, errNotReady
+	}
+	if err != nil {
+		return LockReservationRow{}, LockBalanceRow{}, fmt.Errorf("billing: read the account of %s: %w", request, err)
+	}
+	balance, err := lockAccount(ctx, tx, account)
+	if err != nil {
+		return LockReservationRow{}, LockBalanceRow{}, err
+	}
+	row, err := queries.LockReservation(ctx, tx, request)
+	if err != nil {
+		return LockReservationRow{}, LockBalanceRow{}, fmt.Errorf("billing: lock the reservation of %s: %w", request, err)
+	}
+	return row, balance, nil
+}
+
+// writeCorrection records the corrected settlement on the reservation: the supplier's usage replaces the estimate.
+func writeCorrection(ctx context.Context, tx pg.Tx, charged *locked, segments []Segment, tiers int16) error {
+	usage, err := encodeUsage(segments)
+	if err != nil {
+		return err
+	}
+	row := charged.row
+	if _, err := queries.EndReservation(ctx, tx, EndReservationParams{
+		Profit: correctedProfit(row, charged.charged), Reserved: 0, Spent: charged.charged - row.Charged,
+		AccountID: row.AccountID, WorkspaceID: row.WorkspaceID, WorkspaceWindow: row.WorkspaceWindow,
+		KeyID: row.KeyID, KeyWindow: row.KeyWindow, RequestID: charged.id, State: "settled",
+		Charged: charged.charged, Price: charged.owed, Waived: row.Waived, Estimated: false,
+		FinalUsage: usage, PricingTiers: tiers,
+	}); err != nil {
+		return fmt.Errorf("billing: write the corrected settlement of %s: %w", charged.id, err)
+	}
+	return nil
+}
+
+// realignAllocation moves the account's allocation with the balance the correction changed in the same transaction: a
+// later expiry or freeze replays from the saved place and would otherwise never see this refund, especially after the
+// charged batch was fully spent (#277).
+func realignAllocation(ctx context.Context, tx pg.Tx, request uuid.UUID, row LockReservationRow, balance LockBalanceRow, charged int64) error {
+	a, err := loadAllocation(ctx, tx, row.AccountID)
+	if errors.Is(err, errStale) {
+		return fmt.Errorf("%w: the allocation moved while correcting %s", errNotReady, request)
+	}
+	if err != nil {
+		return err
+	}
+	if err := a.catchUp(ctx, tx, row.AccountID, movementPage); err != nil {
+		return fmt.Errorf("%w: replay the allocation of %s: %w", errNotReady, request, err)
+	}
+	if want := balance.Balance - (charged - row.Charged); a.funded() != want {
+		return fmt.Errorf("%w: the correction of %s funds %d, balance %d", errNotReady, request, a.funded(), want)
+	}
+	if err := a.save(ctx, tx, row.AccountID); errors.Is(err, errStale) {
+		return fmt.Errorf("%w: the allocation moved while correcting %s", errNotReady, request)
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 // correctedPrice prices the supplier's usage at the schedule the request locked. It refuses anything but a settlement
 // that was wholly estimated, for the attempt that was billed, with a supplier's record that declares every charged item: a partly reported
 // charge is already actual for its reported items and mixing the two would charge twice.
-func (c *corrector) correctedPrice(row LockReservationRow, ev suppliers.ChargeEvent) ([]Segment, priced, error) {
-	if row.State == "pending" {
-		return nil, priced{}, errNotReady
-	}
-	if row.State != "settled" && row.State != "cleanup_settled" {
-		return nil, priced{}, errNoCorrection
-	}
-	if !row.Estimated || row.Entry == nil || row.ChargedSeq == nil || row.PricingTiers < 0 {
-		return nil, priced{}, errNoCorrection
-	}
-	if ev.Revision < 1 {
-		return nil, priced{}, errNoCorrection
-	}
-	if ev.AttemptSeq != platform.AttemptSeq(*row.ChargedSeq) {
-		return nil, priced{}, errNoCorrection
+func correctedPrice(row LockReservationRow, ev suppliers.ChargeEvent) ([]Segment, priced, error) {
+	if err := correctionReady(row, ev); err != nil {
+		return nil, priced{}, err
 	}
 	old, err := decodeUsage(row.FinalUsage)
 	if err != nil {
 		return nil, priced{}, fmt.Errorf("billing: read the estimated usage of %s: %w", ev.Request, err)
 	}
-	charged := chargedItems(row.Waived)
-	for _, seg := range old {
-		if len(seg.Usage.Unknown()) > 0 {
-			// An item without a name cannot be matched to a supplier declaration; replacing it would refund a charge
-			// the supplier has not accounted for.
-			return nil, priced{}, errNoCorrection
-		}
-		for it := range catalog.NumItems {
-			if !charged.Has(it) || seg.Usage.Count(it) == 0 {
-				continue
-			}
-			// An item the upstream already reported is actual; the supplier's count for it would charge it twice.
-			if seg.Reported.Has(it) {
-				return nil, priced{}, errNoCorrection
-			}
-			// Every item we charged but estimated must be declared by the supplier; a record that only mentions
-			// some items is not a complete count, and pricing the rest as zero would silently refund them.
-			if !ev.Reported.Has(it) {
-				return nil, priced{}, errNoCorrection
-			}
-		}
+	if err := whollyEstimated(old, chargedItems(row.Waived), ev.Reported); err != nil {
+		return nil, priced{}, err
 	}
 	segments := []Segment{{Usage: ev.Usage, Reported: ev.Reported}}
 	s, f, err := (&locked{row: row}).pricing(int(*row.Entry))
@@ -349,7 +349,7 @@ func (c *corrector) correctedPrice(row LockReservationRow, ev suppliers.ChargeEv
 	if err != nil {
 		return nil, priced{}, fmt.Errorf("billing: read the locked price of %s: %w", ev.Request, err)
 	}
-	price, err := priceSegments(s, f, segments, row.Waived, catalog.ServiceTierSet(row.PricingTiers)) //nolint:gosec // stored CHECK bounds tiers
+	price, err := priceSegments(s, f, segments, row.Waived, catalog.ServiceTierSet(row.PricingTiers)) //nolint:gosec // G115: correctionReady excludes -1 and the column CHECKs at most 15
 	if err != nil {
 		return nil, priced{}, err
 	}
@@ -358,6 +358,54 @@ func (c *corrector) correctedPrice(row LockReservationRow, ev suppliers.ChargeEv
 	}
 	price.tiers = row.PricingTiers
 	return segments, price, nil
+}
+
+// correctionReady reports whether the reservation can be corrected: its settlement is final and wholly estimated, for
+// the attempt the supplier billed.
+func correctionReady(row LockReservationRow, ev suppliers.ChargeEvent) error {
+	if row.State == "pending" {
+		return errNotReady
+	}
+	if row.State != "settled" && row.State != "cleanup_settled" {
+		return errNoCorrection
+	}
+	if !row.Estimated || row.Entry == nil || row.ChargedSeq == nil || row.PricingTiers < 0 {
+		return errNoCorrection
+	}
+	if ev.Revision < 1 || *row.ChargedSeq < 1 || *row.ChargedSeq > platform.MaxAttempts {
+		return errNoCorrection
+	}
+	if ev.AttemptSeq != platform.AttemptSeq(*row.ChargedSeq) {
+		return errNoCorrection
+	}
+	return nil
+}
+
+// whollyEstimated reports whether every charged item of the stored usage was estimated and is declared by the supplier:
+// a partly reported charge is already actual for its items, and pricing a missing one as zero would refund it.
+func whollyEstimated(old []Segment, charged, reported catalog.ItemSet) error {
+	for _, seg := range old {
+		if len(seg.Usage.Unknown()) > 0 {
+			// An item without a name cannot be matched to a supplier declaration; replacing it would refund a charge
+			// the supplier has not accounted for.
+			return errNoCorrection
+		}
+		for it := range catalog.NumItems {
+			if !charged.Has(it) || seg.Usage.Count(it) == 0 {
+				continue
+			}
+			// An item the upstream already reported is actual; the supplier's count for it would charge it twice.
+			if seg.Reported.Has(it) {
+				return errNoCorrection
+			}
+			// Every item we charged but estimated must be declared by the supplier; a record that only mentions
+			// some items is not a complete count, and pricing the rest as zero would silently refund them.
+			if !reported.Has(it) {
+				return errNoCorrection
+			}
+		}
+	}
+	return nil
 }
 
 // correctedProfit moves the recorded profit by what the charge changed. The supplier's cost did not change with the

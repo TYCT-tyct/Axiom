@@ -135,6 +135,7 @@
 - **不认识的用量**：上游报告了映射表里没有、数值不为零的用量字段时，`protocol` 把字段名和数量放进 `Usage.Unknown()`，不丢弃，也不归进已有的项。计费据此按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)处理：模型停止接受新请求，在途请求按兜底价暂估。
 - **服务等级**：`Usage` 的服务等级 是这次实际服务的等级，封闭枚举 `ServiceTier`（standard、flex、priority、fast），`protocol` 按每家的取值表从响应里读（OpenAI 的 `service_tier`，Anthropic 的 `usage.service_tier` 和快速模式，Gemini 待核对）；响应没有回报时取请求里明确写的等级，都没有就是标准档。认不出的取值同样放进 `Unknown()`，不猜成标准档：这时 `ServiceTier` 填标准档只是占位，`Unknown()` 不为空，计费就按「价目表缺项」处理，不只看 `Cost` 的结果。`UnknownUsage{Field, Value}` 是上游的字段路径和原样的取值：数量不一定是整数，等级是字符串，由计费解读。
 - **输出的三个口径**：`Usage.OutputTotal()` 是计量、预留的计费输出（普通、推理、音频、图片之和）；OpenAI 客户端总数也显式加这四项；billing 的免单判断单独检查普通、推理和图片，纯图片回复不免单，音频免单政策保持原状。不能由一个总数函数隐式决定所有政策。
+- **原生细项**：`NativeTokens` 是供应商报告的、没有自己计费项、已经含在计费总量里的拆分：`video_input`（输入视频，已计入 `image_in`）和 `accepted_prediction`/`rejected_prediction`（输出预测 token，已计入 `output`）。`WithNativeTokens` 逐项校验 0 … 10¹⁰，与 `WithPhysicalInput` 一样保留「报告过」的存在性（全零也是报告过，字段缺失不是）；它们只用于客户端回显（`native_tokens_*`）和 `final_usage` 的存储，`Cost` 不再计价，`Recount` 替换计费数量时原样保留，`HasNativeTokens` 区分缺失与全零。
 - Anthropic 联网搜索每千次 $10，搜索带回的内容按普通 token 计入输入（Anthropic Pricing 页，2026-10-14）。
 
 ### 条件
@@ -299,17 +300,21 @@ type ServiceTier uint8                 // 封闭枚举；不叫 Tier，那是账
 type ServiceTierSet = set[ServiceTier] // ServiceTier 的位集合；两种集合都有 Has、Add
 type Reportable struct{ Items ItemSet; ServiceTiers ServiceTierSet } // 上游可能报告的计费项和服务等级
 type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Above 是区间的下门槛，第一段为 0
-type Usage struct{ /* 各项数量、服务等级、不认识的用量，字段不导出 */ } // 只能经 NewUsage 构造
+type Usage struct{ /* 各项数量、服务等级、不认识的用量、物理输入、原生细项，字段不导出 */ } // 只能经 NewUsage 构造
 func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
 func (u Usage) OutputTotal() int64
 func (u Usage) InputTotal() int64
 func (u Usage) PhysicalInput() (int64, bool)
 func (u Usage) WithPhysicalInput(int64) (Usage, error)
+func (u Usage) NativeTokens() NativeTokens // 已含在计费总量里、只回显的供应商拆分
+func (u Usage) HasNativeTokens() bool      // 供应商报告过这些拆分，全零也算；缺失不是零
+func (u Usage) WithNativeTokens(NativeTokens) (Usage, error)
 func (u Usage) Recount(map[Item]int64, []UnknownUsage) (Usage, error)
 func (u Usage) Count(it Item) int64     // 一项的数量：protocol 按它渲染客户端看到的用量，billing 的计量读已报告的数
 func (u Usage) ServiceTier() ServiceTier // 实际服务的等级，供应商记录扣费所报的等级
 func (u Usage) Unknown() []UnknownUsage // 映射表外的用量字段和认不出的服务等级，返回副本
 type UnknownUsage struct{ Field, Value string }
+type NativeTokens struct{ VideoInput, AcceptedPrediction, RejectedPrediction int64 } // 各有 JSON 标签，零值省略
 func ParseItem(name string) (Item, error)               // 存下的计费项名的反解，与 Item.String 互逆；认不出的报错
 func ParseServiceTier(name string) (ServiceTier, error) // 同上，服务等级
 

@@ -136,38 +136,51 @@ func (u *openAIUsage) mapOutput(r *usageReport) error {
 	}
 	// Video has no output item and no vendor reports it here, so, like text_tokens, a count is a detail inside the
 	// output total: checked, and billed with that total rather than again on its own.
-	var video int64
-	if d.Video != nil {
-		video = *d.Video
-	}
-	if !countOK(video) || video > *out {
-		return fmt.Errorf("usage: invalid output video count")
+	if err := checkOutputVideo(d.Video, *out); err != nil {
+		return err
 	}
 	if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut, catalog.ItemImageOut},
 		[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
 		return err
 	}
-	// Prediction tokens are part of the output total and billed with it. They have no item and are only echoed, so a
-	// count that does not fit inside the total is left out rather than priced.
-	accepted, acceptedOK := nativeCount(d.Accepted)
-	rejected, rejectedOK := nativeCount(d.Rejected)
-	if details != nil && accepted+rejected <= *out {
-		// Prediction splits are output-details members: the details object is a new output snapshot, so a field
-		// it omits or reports as zero replaces the earlier value instead of keeping it.
-		if acceptedOK && accepted > 0 {
-			r.native.AcceptedPrediction, r.nativeSet = accepted, r.nativeSet|nativeAccepted
-		} else {
-			r.nativeClear |= nativeAccepted
-		}
-		if rejectedOK && rejected > 0 {
-			r.native.RejectedPrediction, r.nativeSet = rejected, r.nativeSet|nativeRejected
-		} else {
-			r.nativeClear |= nativeRejected
-		}
-	}
+	mapPredictions(r, d, details != nil, *out)
 	r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, details != nil
 	unknownCounts(r, "usage."+name, d.Unknown)
 	return nil
+}
+
+// checkOutputVideo is the output video count: a detail inside the output total, never a count of its own.
+func checkOutputVideo(video *int64, out int64) error {
+	n := int64(0)
+	if video != nil {
+		n = *video
+	}
+	if !countOK(n) || n > out {
+		return fmt.Errorf("usage: invalid output video count")
+	}
+	return nil
+}
+
+// mapPredictions keeps prediction tokens, which are part of the output total and billed with it. They have no item and
+// are only echoed, so a count that does not fit inside the total is left out rather than priced.
+func mapPredictions(r *usageReport, d openAIDetails, detailed bool, out int64) {
+	accepted, acceptedOK := nativeCount(d.Accepted)
+	rejected, rejectedOK := nativeCount(d.Rejected)
+	if !detailed || accepted+rejected > out {
+		return
+	}
+	// Prediction splits are output-details members: the details object is a new output snapshot, so a field it omits
+	// or reports as zero replaces the earlier value instead of keeping it.
+	if acceptedOK && accepted > 0 {
+		r.native.AcceptedPrediction, r.nativeSet = accepted, r.nativeSet|nativeAccepted
+	} else {
+		r.nativeClear |= nativeAccepted
+	}
+	if rejectedOK && rejected > 0 {
+		r.native.RejectedPrediction, r.nativeSet = rejected, r.nativeSet|nativeRejected
+	} else {
+		r.nativeClear |= nativeRejected
+	}
 }
 
 // openAIInput preserves the physical total even when cache prefixes overlap. Modalities are charged only from the
