@@ -103,7 +103,6 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 		blocked[u.Model] = struct{}{}
 	}
 	built := make([]routing.Endpoint, 0, len(routable))
-	served := make(map[catalog.ModelID]struct{}, len(routable))
 	left := map[catalog.ModelID]*leftOut{}
 	now := time.Now()
 	for _, r := range routable {
@@ -114,14 +113,13 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 		}
 		e.Exchange = exchangeBasis(rates, r.Currency, e.Price.Schedule.Currency())
 		built = append(built, e)
-		served[e.Model] = struct{}{}
 	}
 	d.report(left)
 	snap, err := d.Router.NewSnapshot(builtAt, built, presets())
 	if err != nil {
 		return nil, nil, Count{}, err
 	}
-	list, err := newOpenRouterListing(catalogSnap, prices, served)
+	list, err := newOpenRouterListing(catalogSnap, prices, built)
 	if err != nil {
 		return nil, nil, Count{}, err
 	}

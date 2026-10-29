@@ -180,14 +180,14 @@ const (
 		"created": 0,
 		"default_parameters": null,
 		"id": "acme/golden",
-		"links": {"details": "/api/v1/models/acme/golden"},
+		"links": {"details": "/api/v1/models/acme/golden/endpoints"},
 		"name": "golden",
 		"per_request_limits": null,
 		"pricing": {"audio": "0.00000001", "audio_output": "0.00000002", "completion": "0.000015",
 			"image_token": "0.000004", "input_cache_read": "0.0000003", "input_cache_write": "0.00000375",
 			"input_cache_write_1h": "0.000006", "internal_reasoning": "0.00002", "prompt": "0.000003",
 			"web_search": "0.01"},
-		"reasoning": {"mandatory": false, "supports_max_tokens": true},
+		"reasoning": {"supports_max_tokens": true},
 		"supported_parameters": ["temperature", "top_p", "max_tokens", "max_completion_tokens", "response_format", "stop",
 			"tools", "tool_choice", "parallel_tool_calls", "reasoning", "reasoning_effort"],
 		"supported_voices": null,
@@ -469,7 +469,7 @@ func TestOpenRouterListIsOneBuild(t *testing.T) {
 	r := goldenRig(t)
 	v := visibility{router: r.router} // every model; the projection must ignore subsequent changes to this router
 	l := r.models.published()
-	q := orQuery{limit: 2}
+	q := orQuery{path: orListPath, limit: 2}
 	both := l.encode(v, q)
 	counted, resume := make(chan struct{}), make(chan struct{})
 	encoded := make(chan []byte, 1)
@@ -496,7 +496,7 @@ func TestOpenRouterListIsOneBuild(t *testing.T) {
 	// A page of one over that build still says how many it matched and links to the next, which is what the entries agree
 	// with only if the count and the page are the same build's.
 	var page orResponse
-	if err := jsonx.Unmarshal(l.encode(v, orQuery{limit: 1}), &page); err != nil {
+	if err := jsonx.Unmarshal(l.encode(v, orQuery{path: orListPath, limit: 1}), &page); err != nil {
 		t.Fatal(err)
 	}
 	if page.TotalCount != 4 || len(page.Data) != 1 || page.Links.Next == nil {
@@ -515,10 +515,10 @@ func TestOpenRouterPageBuffer(t *testing.T) {
 		q    orQuery
 		want float64 // the most one encoding may allocate
 	}{
-		{"one", orQuery{limit: 1}, 4 << 10},
-		{"empty", orQuery{offset: models + 10}, 1 << 10},
-		{"sorted-one", orQuery{limit: 1, sort: orCheapestFirst}, 16 << 10},
-		{"sorted-empty", orQuery{offset: models + 10, sort: orCheapestFirst}, 12 << 10},
+		{"one", orQuery{path: orListPath, limit: 1}, 4 << 10},
+		{"empty", orQuery{path: orListPath, offset: models + 10}, 1 << 10},
+		{"sorted-one", orQuery{path: orListPath, limit: 1, sort: orCheapestFirst}, 16 << 10},
+		{"sorted-empty", orQuery{path: orListPath, offset: models + 10, sort: orCheapestFirst}, 12 << 10},
 	}
 	funcs := make([]alloctest.Function, 0, len(cases))
 	for _, tc := range cases {
