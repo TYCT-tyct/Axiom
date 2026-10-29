@@ -216,6 +216,7 @@
 
 - **叠加**：变体可以任意顺序叠加，最后一个排序变体生效（总览页）：`:floor:nitro` 按吞吐，`:nitro:floor` 按价格。`:exacto` 之后又写了排序变体时，它已被替换，不报错。
 - **与 `provider.sort` 同时写**：显式的 `provider.sort` 优先。依据是 exacto 页的一句话："An explicit sort by price, throughput, or latency overrides it"；nitro 和 floor 页没写这一点，按同样处理，所以 `:exacto` 加 `provider.sort` 也可用。
+- **发现与调用的区别**：两种模型详情及 OpenRouter endpoints 查询只解析基础模型、检查可见性，不执行调用的排序校验；`:exacto` 因此可以返回基础模型元数据（200），不代表相同名字在未指定 `provider.sort` 时可调用。调用和 `count_tokens` 仍回 400，直到显式排序覆盖它；模型发现的成功不承诺某个请求的路由要求能被兑现。
 - **备选 `models`**：排序是整个请求一个（路由没有按模型的排序）。备选名字按同样的规则读：不支持的变体回 400，不当作略去；不认识的后缀，备选按"不存在"略去；已知目录变体回 400；备选的排序变体与请求最终的排序不同回 400；备选的 `:exacto` 只有显式 `provider.sort`（或它自己名字里后面的排序变体）能替换，主模型名上的排序变体不算，因为它不会按质量排备选。`count_tokens` 读同样的名字和 `provider`，拒绝的与调用一致。
 - **名字长度**：整个模型名（含变体）至多 200 字节，超过回 404 `model_not_found`，在准入之前。调用记录保存客户端写的整个名字，列最多 200 个字符；目录原来也不认更长的名字，不能让叠加的后缀绕过这个界限，被服务之后才丢了记录。
 - **层级准入没有做**：nitro 页说它同时准入 priority 层，floor 页说它同时准入 flex 层。这里只做排序一半。不写 `service_tier` 的请求本来就可以由 standard 和 priority 服务（协议 `anyTier`），flex 要客户端自己写 `service_tier`；为 `:floor` 改写发往上游的 `service_tier` 会改变预留和计费依据，另做。

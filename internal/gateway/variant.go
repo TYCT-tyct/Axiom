@@ -27,7 +27,7 @@ var sortVariants = map[string]string{"nitro": "throughput", "floor": "price"}
 
 // catalogVariants need separate entries and prices. Refuse them explicitly until the catalog can represent them:
 // stripping :free and serving the paid base model would break the request's price constraint.
-var catalogVariants = map[string]bool{"free": true, "batch": true, "thinking": true, "extended": true}
+var catalogVariants = map[string]bool{"free": true, "batch": true, "extended": true}
 
 const (
 	errExacto = "The :exacto variant is not supported yet: it ranks endpoints by measured tool-calling quality, which is not measured here. " +

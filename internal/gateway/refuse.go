@@ -76,21 +76,18 @@ func requestError(typ protocol.ErrorType, r *protocol.Rejection) protocol.Error 
 // (TestMessagesAvoidAutoDisablePhrases): a relay that has us as its upstream would take a billing problem for a dead
 // channel and switch it off.
 var messages = map[string]string{
-	"permission_denied":        "This request is not permitted.",
-	"context_length_exceeded":  "The request exceeds the model's context window.",
-	"content_policy_violation": "The request was declined by a content policy.",
-	"authentication":           "The API key is missing, malformed, or not valid for this address.",
-	"credits_insufficient":     "The credits available are not enough for this request.",
-	"rate_limited":             "Too many requests; retry shortly.",
-	"overloaded":               "The service is busy; retry shortly.",
-	"model_not_found":          "The model does not exist or is not available to this key.",
-	"no_endpoint":              "No endpoint can serve this request.",
-	"not_found":                "The path is not part of this API.",
-	"method_not_allowed":       "The method is not allowed on this path.",
-	"invalid_request":          "The request is not valid.",
-	"payload_too_large":        "The request body is larger than the limit.",
-	"timeout":                  "The request body was not received in time.",
-	"generation_not_found":     "No call with this ID is visible to this key.",
+	"authentication":       "The API key is missing, malformed, or not valid for this address.",
+	"credits_insufficient": "The credits available are not enough for this request.",
+	"rate_limited":         "Too many requests; retry shortly.",
+	"overloaded":           "The service is busy; retry shortly.",
+	"model_not_found":      "The model does not exist or is not available to this key.",
+	"no_endpoint":          "No endpoint can serve this request.",
+	"not_found":            "The path is not part of this API.",
+	"method_not_allowed":   "The method is not allowed on this path.",
+	"invalid_request":      "The request is not valid.",
+	"payload_too_large":    "The request body is larger than the limit.",
+	"timeout":              "The request body was not received in time.",
+	"generation_not_found": "No call with this ID is visible to this key.",
 }
 
 // errorTypes are the Messages `type` of a status; Chat's `type` uses the same words (protocol's errorTypes, which the
