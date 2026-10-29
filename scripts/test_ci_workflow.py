@@ -69,8 +69,8 @@ class BuildChecks(unittest.TestCase):
 
     def test_web_and_shards_run_independently_on_all_build_events(self):
         needs = re.search(r"^    needs: \[(.+)\]$", job("build"), re.M).group(1).split(", ")
-        self.assertEqual(set(needs), {"changes", "static", "go-test", "web", "e2e", "journey", "bench", "deploy"})
-        for name in ("web", "e2e"):
+        self.assertEqual(set(needs), {"changes", "static", "go-test", "web", "e2e", "vitals", "journey", "bench", "deploy"})
+        for name in ("web", "e2e", "vitals"):
             self.assertRegex(job(name), r"(?m)^    needs: changes$")
             self.assertIn("bash scripts/ci/web-container.sh", job(name))
             self.assertRegex(job(name), r"- if: always\(\)\n        run: bash scripts/ci/web-container.sh cleanup")
