@@ -96,6 +96,12 @@ func (p *Payments) poll(ctx context.Context) error {
 			closing = append(closing, *o)
 		}
 	}
+	refundCtx, stopRefunds := context.WithTimeout(ctx, 10*time.Second)
+	err = p.pollRefunds(refundCtx)
+	stopRefunds()
+	if err != nil {
+		p.logger.Warn("payments: poll refunds stopped", "error", err)
+	}
 	p.closeExpired(ctx, closing)
 	return nil
 }

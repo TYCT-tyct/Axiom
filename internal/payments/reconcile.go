@@ -123,6 +123,20 @@ func checkMerchant(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.T
 	if err != nil {
 		return nil, err
 	}
+	refunds, err := queries.SuccessfulRefundCash(ctx, tx, SuccessfulRefundCashParams{MerchantID: merchant, Since: day, Until: day.Add(24 * time.Hour)})
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range refunds {
+		amount, ok := new(big.Int).SetString(r.Amount, 10)
+		if !ok {
+			return nil, errors.New("payments: invalid refund cash aggregate")
+		}
+		if expected[r.Currency] == nil {
+			expected[r.Currency] = new(big.Int)
+		}
+		expected[r.Currency].Sub(expected[r.Currency], amount)
+	}
 	cash, err := checkCash(ctx, tx, merchant, day, expected)
 	differences = append(differences, cash...)
 	if err != nil {

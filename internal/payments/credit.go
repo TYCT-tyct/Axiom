@@ -98,7 +98,14 @@ func (p *Payments) fulfillOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c
 		return p.reviewPayment(ctx, tx, o, c, c.reason)
 	}
 	if o.Total != c.payment.Paid.Minor || o.PayCurrency != c.payment.Paid.Currency.String() {
-		return p.reviewPayment(ctx, tx, o, c, "amount_mismatch")
+		terms, err := queries.PaymentTerms(ctx, tx, o.ID)
+		if err != nil {
+			return err
+		}
+		actual := terms.AmountMismatchPolicy != nil && *terms.AmountMismatchPolicy == "actual"
+		if !actual || o.PayCurrency != c.payment.Paid.Currency.String() {
+			return p.reviewPayment(ctx, tx, o, c, "amount_mismatch")
+		}
 	}
 	// A held payment requires a human conclusion; a repeated query cannot clear an earlier discrepancy.
 	if !State(o.State).canMoveTo(Paid) || State(o.State) == Review {
@@ -150,8 +157,23 @@ func (p *Payments) creditOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c 
 	if terms.ObservedAt.After(o.ExpiresAt.Add(time.Duration(terms.AutoCreditSeconds) * time.Second)) {
 		return p.reviewPayment(ctx, tx, o, c, "late_payment")
 	}
+	return p.applyPaymentCredit(ctx, tx, o, c, terms)
+}
+
+func (p *Payments) creditResolvedPayment(ctx context.Context, tx pg.Tx, o LockOrderRow, c confirmed) error {
+	terms, err := queries.PaymentTerms(ctx, tx, o.ID)
+	if err != nil {
+		return err
+	}
+	return p.applyPaymentCredit(ctx, tx, o, c, terms)
+}
+
+func (p *Payments) applyPaymentCredit(ctx context.Context, tx pg.Tx, o LockOrderRow, c confirmed, terms PaymentTermsRow) error {
 	credit, update, err := arrivalCredit(ctx, tx, o, terms, c.payment)
 	if err != nil {
+		if c.source == "admin" {
+			return err
+		}
 		if errors.Is(err, ErrOutOfRange) {
 			return p.reviewPayment(ctx, tx, o, c, "invalid_credit")
 		}
@@ -162,6 +184,9 @@ func (p *Payments) creditOrder(ctx context.Context, tx pg.Tx, o LockOrderRow, c 
 	conflict, err := creditBatch(ctx, tx, credit)
 	if err != nil {
 		return err
+	}
+	if conflict && c.source == "admin" {
+		return billing.ErrCreditConflict
 	}
 	if conflict {
 		return p.reviewPayment(ctx, tx, o, c, "credit_conflict")
@@ -213,22 +238,30 @@ func arrivalCredit(ctx context.Context, tx pg.Tx, o LockOrderRow, t PaymentTerms
 		c.RateID = *t.RateID
 	}
 	u := CreditOrderParams{ID: o.ID, TradeNo: payment.TradeNo, PaidTotal: &payment.Paid.Minor, FromStates: predecessors(Paid)}
-	if site != payment.Paid.Currency && t.ObservedAt.After(o.ExpiresAt.Add(time.Duration(t.GraceSeconds)*time.Second)) {
-		rate, err := billing.TopUpRate(ctx, tx, o.SiteID, site, payment.Paid.Currency)
+	lateFX := site != payment.Paid.Currency && t.ObservedAt.After(o.ExpiresAt.Add(time.Duration(t.GraceSeconds)*time.Second))
+	if lateFX || payment.Paid.Minor != o.Total {
+		applied, ok := new(big.Rat).SetString(t.AppliedNum + "/" + t.AppliedDen)
+		if !ok {
+			return c, u, errors.New("payments: invalid locked rate")
+		}
+		if lateFX {
+			rate, err := billing.TopUpRate(ctx, tx, o.SiteID, site, payment.Paid.Currency)
+			if err != nil {
+				return c, u, err
+			}
+			applied = rate.Applied
+			c.RateID = rate.Reference.ID
+			u.ArrivalRateID = &c.RateID
+			ref, _ := rate.Reference.Between(site, payment.Paid.Currency)
+			refNum, refDen := ref.Num().String(), ref.Denom().String()
+			num, den := applied.Num().String(), applied.Denom().String()
+			u.ArrivalRefNum, u.ArrivalRefDen = &refNum, &refDen
+			u.ArrivalNum, u.ArrivalDen = &num, &den
+		}
+		c.Credited, c.Payment.Fee, err = creditAt(payment.Paid, Fee{PPM: t.FeePpm, Fixed: t.FeeFixed}, applied)
 		if err != nil {
 			return c, u, err
 		}
-		c.Credited, c.Payment.Fee, err = creditAt(payment.Paid, Fee{PPM: t.FeePpm, Fixed: t.FeeFixed}, rate.Applied)
-		if err != nil {
-			return c, u, err
-		}
-		c.RateID = rate.Reference.ID
-		ref, _ := rate.Reference.Between(site, payment.Paid.Currency) // TopUpRate already requires this pair.
-		u.ArrivalRateID = &c.RateID
-		refNum, refDen := ref.Num().String(), ref.Denom().String()
-		num, den := rate.Applied.Num().String(), rate.Applied.Denom().String()
-		u.ArrivalRefNum, u.ArrivalRefDen = &refNum, &refDen
-		u.ArrivalNum, u.ArrivalDen = &num, &den
 	}
 	u.Credited, u.PaidFee = &c.Credited, &c.Payment.Fee
 	return c, u, nil
