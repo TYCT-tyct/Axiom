@@ -8,10 +8,11 @@ FROM accounts.key_tenant(@site_id::uuid, @hashes::bytea[]) AS k (key_id, account
 -- What a call with the key may do, read in the key's account scope in the admission transaction: no row unless the
 -- request came to an enabled API domain of the key's site and the key and workspace are usable. The account state
 -- comes with the same row so suspension is distinguishable without another query.
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, a.tier_id, a.status = 'active' AS account_active
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
+LEFT JOIN accounts.users owner ON owner.account_id=a.id
 WHERE k.id = @key_id
     AND accounts.domain_site(@domain::text, 'api') = k.site_id
     AND k.kind = 'call' AND k.status = 'active' AND k.deleted_at IS NULL

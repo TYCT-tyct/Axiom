@@ -35,6 +35,9 @@ type EndpointID = uuid.UUID
 // upstream, the formats it speaks, the cost schedule it is priced by — already scaled by its group's ratio — and what
 // its supplier does with a stream (internal/suppliers/README.md「调用面」).
 type Routable struct {
+	Site, Account       uuid.UUID
+	Platform            bool
+	Credentials         int
 	Funds               *Funds
 	UnitValue           platform.UnitPrice
 	UnitValueID         uuid.UUID
@@ -291,8 +294,9 @@ type endpoint struct {
 	funds                  *Funds
 	// nativeUnit is the unit the supplier counts its balance in, which its prices and its charges are in: what a test's
 	// estimate is read as.
-	nativeUnit string
-	ownerScope string
+	nativeUnit              string
+	ownerScope              string
+	ownerSite, ownerAccount uuid.UUID
 }
 
 type credential struct {
@@ -393,6 +397,8 @@ func (s *Service) Routable() ([]Routable, error) {
 	for _, ep := range snap.endpoints {
 		policy := s.policy(ep)
 		out = append(out, Routable{
+			Site: ep.ownerSite, Account: ep.ownerAccount,
+			Platform: ep.ownerScope == "platform", Credentials: s.availableCredentials(ep),
 			Funds: ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Formats: slices.Clone(ep.formats),
 			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
@@ -437,6 +443,12 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName,
 		formats: formats, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt),
+	}
+	if r.SiteID != nil {
+		ep.ownerSite = *r.SiteID
+	}
+	if r.AccountID != nil {
+		ep.ownerAccount = *r.AccountID
 	}
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil
@@ -517,3 +529,15 @@ const (
 	unloadableEvent  = "suppliers.unloadable"
 	unloadableMetric = "axiom.suppliers.unloadable"
 )
+
+// availableCredentials counts eligible keys without consuming a concurrency or RPM slot.
+func (s *Service) availableCredentials(ep *endpoint) int {
+	now := s.now()
+	n := 0
+	for _, c := range ep.creds {
+		if (c.expires == nil || now.Before(*c.expires)) && now.UnixNano() >= c.rt.restUnix.Load() {
+			n++
+		}
+	}
+	return n
+}

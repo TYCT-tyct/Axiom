@@ -335,7 +335,7 @@ func (q *Queries) ListPriceCosts(ctx context.Context, db DBTX) ([]ListPriceCosts
 }
 
 const listRoutable = `-- name: ListRoutable :many
-SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.owner_scope,
+SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.supplier_id, s.kind, s.origin, s.native_unit, s.owner_scope, s.site_id, s.account_id,
     s.balance_native::text AS balance_native, s.balance_observed_at, s.settlement_currency, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     c.requests_per_minute,
@@ -360,6 +360,8 @@ type ListRoutableRow struct {
 	Origin             string
 	NativeUnit         string
 	OwnerScope         string
+	SiteID             *uuid.UUID
+	AccountID          *uuid.UUID
 	BalanceNative      string
 	BalanceObservedAt  *time.Time
 	SettlementCurrency string
@@ -401,6 +403,8 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 			&i.Origin,
 			&i.NativeUnit,
 			&i.OwnerScope,
+			&i.SiteID,
+			&i.AccountID,
 			&i.BalanceNative,
 			&i.BalanceObservedAt,
 			&i.SettlementCurrency,

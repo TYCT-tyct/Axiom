@@ -273,6 +273,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 - **估价是确定的上界**：输入按题目的 token 数上界（字节数 + 16 的框架开销，一个字节至多一个 token），输出按上限 16，两侧都取输入上界可落入的所有上下文档位和标准档里的最高价，绝不用上游报告的用量。适配器或传输层已确定 `NotExecuted` 的尝试不产生检测成本：估价为 0、用量为空、换算状态为 `not_executed`，仍写检测行和审计；未知执行状态（包括可能已执行的 5xx）仍按上界估价。成本计划缺一侧的价时返回 `ErrTestCost`（管理接口为 422），在付钱之前拒绝这次检测。测试 `TestATestSendsACappedStreamAndBooksWhatItFound`：18 个 token 与 16 个 token 的封顶合成 6.15。
 - **对账**：成本事务已提交的检测扣费照常认到这一行（也照常给 billing 发带 `test: true` 的事件），但从不用估价判它：`reconcile.judge` 见 `test` 即返回未判，`ListUnmatchedAttempts` 也排除它，所以一次检测既不会把端点摘牌，也不会被当成"等不到扣费的尝试"告警（H-I9）。
 - **审计**：`endpoint.test`，目标是供应商，明细里有端点、格式、结局、原因与范围、上游状态与它的请求 ID、估价和原生单位；不带凭证和 key。
+- **自动恢复试探**：`TestRequest.AvoidCredential` 在存在另一把可用 key 时避开上一把，单 key 时照常调用；`TestResult.CredentialID` 与 `AttemptReceipt.CredentialID` 只交出 ID，用来去重失败来源与轮换，不交出密钥。`Routable` 同时给出归属与当前未过期、未冷却的凭证数，quality 据此限制独立证据与平台付费试探。
 - **没有做的**：`max_completion_tokens` 那条分支（设计稿 [quality](../../docs/domains/quality.md) 说不需要 o 系和 gpt-5 的细节）；一次检测里不换凭证（quality 的试探会刻意换一把，见[试探](../../docs/domains/quality.md#试探)）。
 
 ## 并发与速率

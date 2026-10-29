@@ -81,15 +81,16 @@ const MaxEntries = 3
 // both: a request that sets no cap is sent with Target.MaxOutput, which is MaxOutput, so what is quoted is what the
 // upstream may produce (I1).
 type Entry struct {
-	Exchange    platform.ExchangeRate
-	Endpoint    EndpointID
-	Supplier    SupplierID
-	Target      protocol.Target
-	Model       catalog.ModelID
-	Price       PriceRef
-	Limits      billing.Model
-	MaxOutput   int64
-	Segmentable bool
+	BreakerFallback bool
+	Exchange        platform.ExchangeRate
+	Endpoint        EndpointID
+	Supplier        SupplierID
+	Target          protocol.Target
+	Model           catalog.ModelID
+	Price           PriceRef
+	Limits          billing.Model
+	MaxOutput       int64
+	Segmentable     bool
 }
 
 // PriceRef is a price version of billing: its identifier and the schedule it locks.

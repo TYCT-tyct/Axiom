@@ -13,6 +13,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/quality"
 	"axiom/internal/suppliers"
 )
 
@@ -90,6 +91,8 @@ type Endpoint struct {
 	Model    catalog.ModelID
 	Owner    Owner
 
+	LiveHealth  *quality.State
+	Platform    bool
 	Enabled     bool // switched on
 	BreakerOpen bool // quality has taken it out for now
 	BalanceOK   bool // the supplier has a synced positive balance

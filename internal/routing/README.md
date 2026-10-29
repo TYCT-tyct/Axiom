@@ -46,6 +46,12 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 
 共享粘性的 `StickyKey`、`StickyEndpoint`、`StickyWrite` 只定义键、值和 TTL；gateway 负责同批预检与后台投递。配了 Valkey 就不读写进程表，故障时不粘；未配置的单核心行为不变。详见[会话粘性](../../docs/domains/routing.md#会话粘性)。
 
+## 健康闭环
+
+`Endpoint.LiveHealth` 指向 quality 的实时状态，独立于 `BreakerOpen` 静态排除字段；`Plan` 先做权限、能力、价格、资金、暂停与硬并发过滤，再在所有主模型和备选模型之间处理实时熔断。只因熔断落选的平台端点在没有健康备选时回到路线，最近熔断优先；自带端点冷却十分钟后占最后一个可重试条目。`Entry.BreakerFallback` 让 `Blocked` 复查保留这条特意选出的备选，但仍复查暂停；路由记录用 `breaker_open_fallback` 标记。
+
+恢复后的临时并发上限通过已有在途数检查。没有其他健康且有容量的候选时忽略慢启动上限，单端点不因慢启动等待。`PausedUntil` 只向 quality 暴露端点与供应商暂停的较晚时刻；两种暂停和熔断各自维护，互不清除。行为由 `TestLiveHealthLastResortAndSlowStart` 与 `TestOwnedFallbackDoesNotBypassOtherFilters` 覆盖。
+
 ## 决策与理由
 
 | 决策 | 理由 | 不选 |
