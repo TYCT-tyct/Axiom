@@ -110,9 +110,7 @@ func (w *world) input(site uuid.UUID, methods ...MethodInput) MerchantInput {
 }
 
 func (w *world) save(s pg.Scope, in MerchantInput) (Merchant, error) {
-	var m Merchant
-	err := w.tx(s, func(tx pg.Tx) (err error) { m, err = w.p.SaveMerchant(w.t.Context(), tx, admin, in); return err })
-	return m, err
+	return w.p.SaveMerchant(w.t.Context(), s, admin, in)
 }
 
 func (w *world) mustSave(s pg.Scope, in MerchantInput) Merchant {

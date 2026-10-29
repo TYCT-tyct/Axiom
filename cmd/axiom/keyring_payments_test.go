@@ -61,15 +61,16 @@ func (f rotationFixture) saveRotationMerchant(keys *secret.Keyring, in payments.
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	var made payments.Merchant
 	if err := f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 		if err := tx.QueryRow(f.t.Context(), "SELECT id FROM accounts.sites WHERE is_main").Scan(&in.Site); err != nil {
 			return err
 		}
-		var err error
-		made, err = p.SaveMerchant(f.t.Context(), tx, audit.System("platform.keyring.test"), in)
-		return err
+		return nil
 	}); err != nil {
+		f.t.Fatal(err)
+	}
+	made, err := p.SaveMerchant(f.t.Context(), pg.PlatformScope(), audit.System("platform.keyring.test"), in)
+	if err != nil {
 		f.t.Fatal(err)
 	}
 	return made

@@ -34,7 +34,7 @@ func (p *Payments) GetRefund(ctx context.Context, s pg.Scope, id RefundID) (Refu
 func (p *Payments) GetResolution(ctx context.Context, s pg.Scope, order OrderID, key string) (Resolution, error) // 审批前读取持久提案
 func (p *Payments) ApproveResolution(ctx context.Context, s pg.Scope, order OrderID, key string, user uuid.UUID) error
 func (p *Payments) Resolve(ctx context.Context, s pg.Scope, r Resolution) error                          // 保存人工提案与渠道凭证；另一个管理员审批后落定
-func (p *Payments) SaveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, m MerchantInput) (Merchant, error)        // 调 Plugin.Open 校验后封装密钥；有未完成订单时拒改身份字段
+func (p *Payments) SaveMerchant(ctx context.Context, s pg.Scope, actor audit.Actor, m MerchantInput) (Merchant, error)        // 本地校验、事务外探测，再以独立事务复核修订号与身份并封装密钥
 ```
 
 ### 渠道接口
@@ -82,19 +82,33 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 
 ### 易支付配置与边界
 
-`EasyPay{}` 实现 `Plugin`，通过内部可选的 `normalizeSettings` 在身份比较和加密封装之前归一化配置，由公网回调与后台任务共用的插件清单登记。`Settings` 严格读取 `gateway`、`pid`、`mode`（`redirect` 或 `api`）、`sign_type`（省略即 `MD5`）、`cids`（本站方式到通道号的映射，可省略）、`query`、`close`、`refund`（省略即不支持）。`Secrets.key` 必填，轮换期间可同时提供 `old_key` 验签，其他密钥名拒绝保存；下单和查询只使用当前密钥。付款币种来自 `MerchantConfig.Currency`。示例：
+`EasyPay{}` 实现 `Plugin`，通过内部可选的 `normalizeSettings` 在身份比较和加密封装之前归一化配置，由公网回调与后台任务共用的插件清单登记。`Settings` 严格读取 `preset`（省略为通用易支付，或 `epusdt`）、`gateway`、`pid`、`mode`（`redirect` 或 `api`）、`sign_type`（省略即 `MD5`）、`cids`（本站方式到通道号的映射，可省略）、`query`、`close`、`refund`（省略即不支持）。`Secrets.key` 必填，轮换期间可同时提供 `old_key` 验签，其他密钥名拒绝保存；下单和查询只使用当前密钥。付款币种来自 `MerchantConfig.Currency`。示例：
 
 ```json
 {"gateway":"https://pay.example.com","pid":"1001","mode":"api","cids":{"alipay":"2"},"query":true,"close":false,"refund":true}
 ```
 
-付款方式映射只存于核心的 `MethodInput.Upstream`，下单时由核心读取并通过 `CreateRequest.Upstream` 传入。`Channel.Methods()` 返回 `nil` 表示协议允许管理员配置任意本站方式；返回非 `nil` 清单的插件仍受清单约束。网关地址保存前和绑定时去掉查询串、片段及三个 PHP 端点后缀，只接受无用户信息的 HTTPS 地址。`identitySettings` 只比较 `gateway`、`pid`、`sign_type`；订单在途时可以改付款方式、cid、下单模式和能力开关，网关、商户号、签名方式、币种和密钥仍受身份保护。所有设置仍整体参与密钥封装的哈希校验，不能通过库外编辑改变运行配置。
+付款方式映射只存于核心的 `MethodInput.Upstream`，下单时由核心读取并通过 `CreateRequest.Upstream` 传入。`Channel.Methods()` 返回 `nil` 表示协议允许管理员配置任意本站方式；返回非 `nil` 清单的插件仍受清单约束。网关地址保存前和绑定时去掉查询串、片段及三个 PHP 端点后缀，只接受无用户信息的 HTTPS 地址。`identitySettings` 只比较 `preset`、`gateway`、`pid`、`sign_type`；订单在途时可以改付款方式、cid、下单模式和能力开关，网关、商户号、签名方式、币种和密钥仍受身份保护。所有设置仍整体参与密钥封装的哈希校验，不能通过库外编辑改变运行配置。
 
 `close` 仅用于明确支持 `api.php?act=close` 的网关，参数与查单一样同时发 URL 和表单。退款使用 `api.php?act=refund` 和表单；不声明 `RefundKey`、`QueryRefund` 或 `Statements`。退款只在有效的 2xx JSON 明确说“订单不存在”时切换订单标识，网络错误、非 2xx 或无法解析的响应不能触发第二次退款。
 
 插件只持有不可变的商户绑定，每次调用创建自己的参数表。核心按服务端生成的返回地址同源域名和唯一的 `NotifyPath` 生成 `CreateRequest.NotifyURL`，运行程序也用这个常量登记 GET/POST 路由，插件直接使用该地址。GET 只读查询串，POST 只读表单并拒绝非空查询串，重复字段一律拒绝；`Notice.Raw` 只写固定协议描述。响应 JSON 使用平台严格解析，字符串或数字标量以原文读取，避免经过浮点。
 
 只有缺失或空的金额文本用 `Minor == 0` 表示，仍由核心补查；非空金额的零值、格式非法、精度超限和整数溢出统一用 `Minor == -1` 表示，保留为无效付款并转待处理。不接受千分位、指数、分数或符号，也不将它们误报为验签失败。所有网关响应、解析和网络错误仅给出固定上下文及 HTTP 状态，不能回显网关返回的消息。
+
+### Epusdt 预设与兼容门槛
+
+仍使用 `EasyPay{}`，不新增渠道种类、表或凭证格式。商户的 `kind` 是 `easypay`，方式与上游映射均为 `usdt.tron`，付款币种为 `CNY` 或 `USD`，`Secrets.key` 是网关测试或正式商户的密钥。预设配置：
+
+```json
+{"preset":"epusdt","gateway":"https://pay.example.com/payments/epay/v1/order/create-transaction","pid":"1001"}
+```
+
+预设默认并强制查单，省略模式时用 `redirect`；拒绝 API 下单、cid、关单和在线退款。PID 必须是无前导零的正 int64；下单签名包含小写法币 `currency`，`money` 仍是按法币小数位格式化的十进制金额，不是 USDT 数量。当前产品只使用人民币与美元，因此预设先限定这两个付款币种，避免把三字母代币代码当成法币；扩展其他法币时再增加对应网关实测。预设属于商户身份，在途期间不能移除或切换。`Open` 和内部商户校验钩子只做本地校验；`SaveMerchant` 接收站点或平台范围，自己管理读写事务：先无锁读取原配置并解封复用的密钥，结束读事务后，对保持启用的商户探测随机不存在的订单号，要求 `api.php?act=order` 返回 code 为 0 或 -1 且明确“订单不存在”。写事务随后重新获取商户身份排他锁，复核修订号、在途身份约束和密文哈希，再将配置与审计一起提交；探测期间既不占数据库连接，也不占商户锁。并发修改使本次保存返回 `ErrStale`，不能用旧探测覆盖新配置。普通易支付不增加网络调用。失败信息不包含响应体、PID、查询串或密钥。保持启用的更新（包括改名）和重新启用都要探测；保存为停用时只做本地校验，网关故障不能挡住止损。
+
+风险与检查：十秒出站期限和响应体上限约束保存时的网络等待；失败保存不产生商户或修改修订号；阻塞探测期间回调仍可确认入账和停用，并发停用不会被迟到的探测覆盖；查询在保存后失效时，核心仍要求确认后入账；`100.0000` 精确等于 10000 分，异常金额走已有待处理路径；无退款能力使退款进入已有线下凭证和独立审批流程。测试 `TestEpusdtPreset`、`TestEpusdtSaveRequiresQuery`、`TestEpusdtConfirmedCredit`、`TestEpusdtProbeLeavesPaymentsAndDisableAvailable` 分别覆盖约束、保存门槛、受控网关下单/GET 回调/查单/幂等入账，以及探测与停用并发。这些受控响应不代表官方镜像已通过兼容验收。
+
+官方镜像兼容性（2026-10-29 本机实测）：`gmwallet/epusdt@sha256:9d2fef82fb875e83f968870bee010ce593ef7bcb5362d09ef1c7f871fa27c55e`（v2.0.0，源码提交 `619cecb11d6bbd1dcdd1b698ee08b37fc722d3e3`）未提供易支付查单：上述前缀下的 `api.php` 返回 404，根路径的 `api.php` 返回 HTML。其公开状态接口只有交易号与状态，不能替代金额确认；创建订单还拒绝 loopback 回调地址。官方镜像的下单 → GET 回调 → 查询确认 → 入账验收尚未通过，当前不能用它开放 USDT 充值。可在本地初始化该镜像后设置 `AXIOM_EPUSDT_TEST_URL` 为其 loopback HTTP 地址，运行 `TestEpusdtOfficialImageQueryGate`，验证 HTTPS 测试代理原样转发的 404 使启用的商户保存失败；代理不增加或改写协议端点。真实钱包、正式商户、可公网访问的回调和生产部署仍由负责人提供与决定。
 
 ### billing 要提供的接口
 
@@ -220,7 +234,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | E1-2c `feat(payments): credit orders from callbacks and queries` | 表 `order_payments`、`discrepancies` 和迁移；回调处理器（限流、配置缓存、无锁预读、查单金额为准、找不到订单与网关订单号冲突记待处理、提交后才应答）和入账；"我已付款"；过期前的查单与过期后到账（宽限期、到账汇率、自动入账期限）；补查窗口内已过期、已取消及有网关单号的失败订单的商户身份保护（[#390](https://github.com/TYCT-tyct/Axiom/issues/390)，真实渠道启用前完成） | 身份保护的窗口边界、关单失败/不支持与晚付；性质测试：重复、乱序、并发、丢失回调下批次恰好一个、账本平衡；金额不符、多笔付款、折算为 0 进待处理，币种不符不入账；通知与查单金额不同进待处理；验签通过找不到订单、网关订单号冲突都有待处理记录且不回 500；坏签名不写库；查单失败返回 502；提交失败时应答不是成功（故障注入）；宽限期内按锁定汇率、之后按到账汇率、超过期限进待处理，锁定的汇率列不变 |
 | E1-2d `feat(payments): expose the console order contract` | 控制台订单契约与处理器：按站点域名生成 https 返回地址，不收浏览器传入的返回地址；每 IP 下单/失败限流，默认每小时 20/10 次，计数故障不放行；按订单 `State` 与 `Checkout` 映射重放应答（#389 评审第 10 项） | IP 限流边界（20/21、10/11 次，同 /64 与映射 IPv4 归并，窗口到期重置）、十个账户同 IP 并发只放行限额、计数故障（表上的触发器）下单被拒且渠道没被问、失败计数故障时订单仍是待支付；服务器生成返回地址（请求带 `return_url` 被契约拒绝，渠道收到的是登记 origin 加 `/console/balance`，且该路径在公共路由上命中控制台页面）；失败单重放回 422、无 checkout 的待支付单（结果未知）重放回 202 且不带支付链接、已取消的回 200；同键并发只问一次渠道；CSRF、会话、别的账户的订单读/取消/核验一律 404、渠道不被问；`Retry-After` |
 | E1-3 `feat(payments): add the easypay protocol channel` | 易支付插件：配置项（[支付的「易支付协议插件」](../../docs/domains/payments.md#易支付协议插件)）、跳转与接口两种下单、验签、白名单、查单确认、关单、退款 | 按协议自写的签名向量；参数走私（下单参数里嵌 `trade_status`）被拒；多余参数、`pid` 不符被拒；GET 与 POST 回调；PHP 风格的字符串整数、明确失败码优先、回显订单号不符；相对支付链接补全、`//` 开头被拒；退款响应是 HTML、空、字符串 `code`；退款先按订单号、明确"订单不存在"才按网关订单号；全部经出站客户端，日志和链路里没有查询串；本机假网关的端到端 |
-| E1-4 `feat(payments): take USDT through an easypay-compatible gateway` | Epusdt 作为易支付商户账户的接入与预设：`usdt.tron` 映射、数字 `pid`、法币金额；退款只能线下；接入前实测它的查单接口 | 用 Epusdt 官方镜像在本地部署后的下单、GET 回调、查单确认、入账；`money=100.0000` 精确解析；查单不可用时这个商户账户保存失败 |
+| E1-4 `feat(payments): take USDT through an easypay-compatible gateway` | Epusdt 作为易支付商户账户的接入与预设：`usdt.tron` 映射、数字 `pid`、法币金额；退款只能线下；接入前实测它的查单接口 | 用 Epusdt 官方镜像在本地部署后的下单、GET 回调、查单确认、入账；`money=100.0000` 精确解析；查单不可用时这个商户账户不能保存为启用，停用不依赖网关 |
 | E1-5 `feat(payments): reconcile unfinished orders and daily channel statements` | `payments.poll` 的商户并发上限与熔断（每单退避和过期后补查由 E1-2c 提供）；`payments.reconcile`；待处理记录的管理页与告警 | 丢回调由补单入账；一笔订单在有效期内的查询次数符合退避；一个商户账户超时不挡其他账户，连续未知触发暂停和告警；不能关单的渠道过期后付款，在补查窗口内补到；现金分录与订单不符、用量计数与订单复算不符时出现待处理记录并告警；同一差额重复上报只留一行 |
 | E1-6a `feat(billing): freeze paid credit as replayed events` | billing：冻结、解冻、退款三种带序号的交易，批次的冻结状态，重放、准入、到期都按冻结额处理；`FreezeRefund`、`SettleRefund`、`ReleaseRefund`（[billing 的「额度批次的分配与到期」](../billing/README.md#额度批次的分配与到期)） | 随机冻结、解冻、退款、扣费、到期，从头重放等于现场，且从任意位置续放相同（扩展 `TestReplayProperty`）；冻结期间并发调用花不掉冻结的额度；到期不作废冻结的额度；冻结后余额底线以下的扣费不动冻结额度；billing 不变量①–⑦（⑦ 随本 PR 加入）在冻结后成立 |
 | E1-6b `feat(payments): refund through channels with a sending state` | 表 `refunds` 和迁移；发起、审批、发送中、查询、人工结论（凭证、第二人批准）与金额不符策略（默认人工，可选按实付折算）；`payments.poll` 的第 4、5 步；订单状态按成功退款合计 | 渠道超时 → 待确认 → 查询收敛到成功或失败；第一个事务后崩溃只发一次；发送中崩溃时不认单号的渠道不重发、进待处理，认单号的用同一单号重发；不认单号的渠道同一订单只有一笔在途；同一人不能把未知退款标为失败；同一幂等键只退一次；多次部分退款合计不超过入账额度；性质测试：任意汇率序列和拆分下 Σ退款 ≤ Σ实付，全退恰好等于净付款额；退不退手续费两种策略；失败在一个事务里解冻 |

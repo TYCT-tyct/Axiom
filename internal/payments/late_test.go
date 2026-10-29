@@ -130,10 +130,14 @@ func testMerchantIdentityWindow(t *testing.T, tc identityCase) {
 		case "name":
 			in.Name = "Renamed"
 		}
-		// Roll back allowed saves so every field is checked against the same original revision.
+		// Exercise the locked write phase directly so allowed saves can be rolled back to the same revision.
 		rollback := errors.New("test: rollback allowed save")
-		err := w.tx(siteScope(w.siteA), func(tx pg.Tx) error {
-			_, err := w.p.SaveMerchant(t.Context(), tx, admin, in)
+		settings, err := merchantSettings(w.p.plugins[in.Kind], in.Settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = w.tx(siteScope(w.siteA), func(tx pg.Tx) error {
+			_, err := w.p.saveMerchant(t.Context(), tx, admin, in, settings, false)
 			if err != nil {
 				return err
 			}
