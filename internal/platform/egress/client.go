@@ -1,4 +1,4 @@
-// Package egress keeps outbound HTTP behind one DNS, address and timeout policy.
+// Package egress keeps outbound HTTP and TCP behind one DNS, address and timeout policy.
 package egress
 
 import (
@@ -56,7 +56,17 @@ func New(exit Exit, opts ...Option) (*Client, error) {
 	if exit != Direct {
 		return nil, errors.New("egress: unsupported exit")
 	}
-	return newClient(egresstest.Policy{}, net.DefaultResolver.LookupNetIP, opts...), nil
+	return NewDirect(opts...), nil
+}
+
+// NewDirect constructs the standard exit when the caller has no route selection to validate.
+func NewDirect(opts ...Option) *Client {
+	return newClient(egresstest.Policy{}, net.DefaultResolver.LookupNetIP, opts...)
+}
+
+// DialContext opens TCP through the same complete DNS validation and pinned IP policy as HTTP.
+func (c *Client) DialContext(ctx context.Context, address string) (net.Conn, error) {
+	return c.dialer.dialContext(ctx, "tcp", address)
 }
 
 // NewForTesting accepts only a capability minted by egresstest, never an arbitrary address predicate.

@@ -240,6 +240,8 @@
 - 每笔充值自动生成收据，用户可以在控制台下载。
 - 正式发票以后再做。
 
+系统设置 API 在 `/api/admin/v1/sites/{site_id}/system-settings/payments` 读改收款开关和充值额度范围；额度保持精确整数文本，省略上下限表示不限，不改变其他付款/退款规则。`/api/admin/v1/payments/merchants/{merchant_id}/tests` 以已保存的商户做认证只读查询（易支付 [V1 商户查询](https://docs.xarr.cn/merchant/api/epay.html)，2026-10-29 核对 POST、act=query 和 code=1），返回 accepted/failed/unsupported，不建单、不转钱、不泄漏渠道响应或密钥。两类操作需 MFA、sites.manage、CSRF、幂等与理由，配置和审计同事务。
+
 ## 决策与理由
 
 E1-5 的表和管理操作按负责人记录的授权落地：「遇到问题自己解决问题和判断最优而不是问我。」（[2026-10-28 原文](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)）；涉及钱，仍需流水线安排独立深评审。

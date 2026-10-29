@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +74,39 @@ func (f catalogFixture) publish(m adminapi.Model, schedule string, base *adminap
 		baseText = `"base":"` + *base + `",`
 	}
 	return f.send(http.MethodPost, "/models/"+m.Id+"/prices", `{`+baseText+`"source":"manual","schedule":`+schedule+`,"evidence":`+proof+`,"reason":"the price"}`, http.StatusOK)
+}
+
+// officialProof is the current evidence a page watch would have left, without reaching a live vendor in API tests.
+func (f catalogFixture) officialProof(author, currency string) string {
+	f.t.Helper()
+	ctx := f.t.Context()
+	var page, snapshot uuid.UUID
+	const text = "input 1 per million output 2 per million"
+	digest := sha256.Sum256([]byte(text))
+	err := f.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		q := catalog.New()
+		if err := q.RegisterPageSite(ctx, tx, catalog.RegisterPageSiteParams{Origin: "https://example.com", DelaySeconds: 10}); err != nil {
+			return err
+		}
+		var err error
+		page, err = q.InsertWatchedPage(ctx, tx, catalog.InsertWatchedPageParams{Author: author, Url: "https://example.com/" + uuid.NewV7().String(), Origin: "https://example.com", Currency: currency, SectionStart: "Start", SectionEnd: "End", IntervalSeconds: 3600})
+		if err != nil {
+			return err
+		}
+		snapshot, err = q.InsertPageSnapshot(ctx, tx, catalog.InsertPageSnapshotParams{PageID: page, ExtractorVersion: 1, Text: text, TextSha256: digest[:]})
+		if err != nil {
+			return err
+		}
+		return q.RecordPageSuccess(ctx, tx, catalog.RecordPageSuccessParams{ID: page, CurrentSnapshotID: &snapshot, Seconds: 3600})
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	body, err := jsonx.MarshalCanonical(catalog.PageEvidence{PageID: page, SnapshotID: snapshot, Excerpts: []string{"input 1 per million"}})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return string(body)
 }
 
 // ready drafts a model that can be put on sale: its standard ID as a public name and a USD price.
@@ -183,6 +217,7 @@ func TestModelRefusals(t *testing.T) {
 	f := newCatalogFixture(t)
 	m := f.create("acme/alpha")
 	f.addName(m, "acme/alpha", "public")
+	official := f.officialProof("acme", "USD")
 	for _, c := range []struct {
 		name, method, path, body string
 		status                   int
@@ -195,7 +230,7 @@ func TestModelRefusals(t *testing.T) {
 		{"listing without a price", http.MethodPut, "/models/" + m.Id + "/status", `{"status":"listed","rev":0,"reason":"r"}`, http.StatusUnprocessableEntity, codeNotReady},
 		{"retiring a draft", http.MethodPut, "/models/" + m.Id + "/status", `{"status":"retired","rev":0,"reason":"r"}`, http.StatusConflict, codeConflict},
 		{"a stale spec", http.MethodPut, "/models/" + m.Id + "/spec", `{"rev":9,"spec":` + specBody + `,"reason":"r"}`, http.StatusConflict, codeStaleRevision},
-		{"a price of another source", http.MethodPost, "/models/" + m.Id + "/prices", `{"source":"official","schedule":` + usd + `,"evidence":` + proof + `,"reason":"r"}`, http.StatusConflict, codeConflict},
+		{"a price of another source", http.MethodPost, "/models/" + m.Id + "/prices", `{"source":"official","schedule":` + usd + `,"evidence":` + official + `,"reason":"r"}`, http.StatusConflict, codeConflict},
 		{"a price on a base that is not the head", http.MethodPost, "/models/" + m.Id + "/prices", `{"base":"0198c0a8-0000-7000-8000-000000000009","source":"manual","schedule":` + usd + `,"evidence":` + proof + `,"reason":"r"}`, http.StatusConflict, codeStaleRevision},
 		{"a model that is not there", http.MethodPost, "/models/0198c0a8-0000-7000-8000-000000000009/names", `{"name":"x/y","visibility":"public","reason":"r"}`, http.StatusNotFound, codeNotFound},
 		{"an ID that is none", http.MethodPost, "/models/nonsense/names", `{"name":"x/y","visibility":"public","reason":"r"}`, http.StatusNotFound, codeNotFound},
@@ -241,7 +276,8 @@ func TestSelectPriceSource(t *testing.T) {
 	f := newCatalogFixture(t)
 	m := f.publish(f.ready("acme/alpha"), cny, nil)
 	bases := `{"CNY":"` + m.Prices[0].Id + `","USD":"` + m.Prices[1].Id + `"}`
-	body := `{"rev":` + strconv.FormatInt(m.Rev, 10) + `,"source":"official","bases":` + bases + `,"prices":[{"schedule":` + usd + `,"evidence":` + proof + `}],"reason":"the vendor's page"}`
+	official := f.officialProof("acme", "USD")
+	body := `{"rev":` + strconv.FormatInt(m.Rev, 10) + `,"source":"official","bases":` + bases + `,"prices":[{"schedule":` + usd + `,"evidence":` + official + `}],"reason":"the vendor's page"}`
 	switched := f.send(http.MethodPut, "/models/"+m.Id+"/price-source", body, http.StatusOK)
 	if switched.PriceSource != "official" || len(switched.Prices) != 2 || switched.Prices[0].Currency != "CNY" || switched.Prices[0].Schedule != nil ||
 		switched.Prices[1].Currency != "USD" || switched.Prices[1].Schedule == nil || switched.Prices[1].Source != "official" || switched.Rev != m.Rev+1 {

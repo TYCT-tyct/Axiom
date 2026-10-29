@@ -72,7 +72,10 @@ func TestPriceHistory(t *testing.T) {
 	second := s.head(id, "USD")
 	wantErr(t, publish(withPriority, &first), "not the one the request was decided on")
 	wantErr(t, publish(withPriority, nil), "not the one the request was decided on")
-	wantErr(t, publish(withPriority, &second, func(r *catalog.PublishPriceRequest) { r.Source = catalog.SourceOfficial }), "price source")
+	wantErr(t, publish(withPriority, &second, func(r *catalog.PublishPriceRequest) {
+		r.Source = catalog.SourceOfficial
+		r.Evidence = s.officialEvidence(ctx, "acme", "USD")
+	}), "price source")
 	wantErr(t, publish(basic, &second), "service tiers [priority]") // the listing gate: priority is declared
 	wantErr(t, publish(withPriority, &second, func(r *catalog.PublishPriceRequest) { r.Evidence = nil }), "evidence")
 	lossy := `{"v":1,"currency":"USD","rates":{"input":"1","output":"2"},"service_tiers":{"priority":{"rates":{"output":"4"}}}}`
@@ -103,7 +106,7 @@ func TestPriceLoss(t *testing.T) {
 	}
 	_, err = s.c.SelectPriceSource(ctx, catalog.SelectPriceSourceRequest{
 		Op: op(), Model: id, Rev: 0, Source: catalog.SourceOfficial, Bases: s.bases(ctx, id),
-		Prices: []catalog.SourcePrice{{Schedule: raw(lossy), Evidence: raw(evidence)}},
+		Prices: []catalog.SourcePrice{{Schedule: raw(lossy), Evidence: s.officialEvidence(ctx, "acme", "USD")}},
 	})
 	wantErr(t, err, "would lose")
 	if got := query[string](s, platformScope, "SELECT price_source FROM catalog.model WHERE id = $1", uuid.UUID(id)); got != "manual" {
@@ -154,7 +157,7 @@ func TestSelectPriceSource(t *testing.T) {
 	selectOfficial := func(schedule string, mutate ...func(*catalog.SelectPriceSourceRequest)) error {
 		r := catalog.SelectPriceSourceRequest{
 			Op: op(), Model: id, Rev: rev(), Source: catalog.SourceOfficial, Bases: s.bases(ctx, id),
-			Prices: []catalog.SourcePrice{{Schedule: raw(schedule), Evidence: raw(evidence)}},
+			Prices: []catalog.SourcePrice{{Schedule: raw(schedule), Evidence: s.officialEvidence(ctx, "acme", mustScheduleCurrency(s, schedule))}},
 		}
 		for _, m := range mutate {
 			m(&r)

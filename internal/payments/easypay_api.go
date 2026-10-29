@@ -237,3 +237,21 @@ func easyPayOrderMissing(msg string) bool {
 func (*easyPayChannel) QueryRefund(context.Context, RefundCall) (RefundState, error) {
 	panic("easypay: query refund is not declared")
 }
+
+// testConfig queries merchant metadata without creating a payment or returning gateway data.
+func (c *easyPayChannel) testConfig(ctx context.Context) error {
+	if c.settings.Preset == "epusdt" {
+		return c.probe(ctx)
+	}
+	body, err := c.post(ctx, "/api.php", c.credentials("query"), true)
+	if err != nil {
+		return err
+	}
+	var r struct {
+		Code jsonx.Raw `json:"code"`
+	}
+	if err = jsonx.Unmarshal(body, &r); err != nil {
+		return errors.New("easypay: invalid merchant query response")
+	}
+	return easyPayCode(r.Code, true)
+}
