@@ -1,5 +1,5 @@
 -- name: EnsurePricePolicy :exec
-INSERT INTO billing.price_policies(site_id) VALUES (@site_id) ON CONFLICT DO NOTHING;
+INSERT INTO billing.price_policies(site_id,floor_multiplier,change_ratio,max_increase_ratio) VALUES (@site_id,@floor_multiplier,@change_ratio,@max_increase_ratio) ON CONFLICT DO NOTHING;
 
 -- name: LockPricePolicy :one
 SELECT rev,floor_multiplier,change_ratio,max_increase_ratio FROM billing.price_policies WHERE site_id= @site_id FOR UPDATE;
@@ -19,3 +19,13 @@ ON CONFLICT(site_id,model_id) DO UPDATE SET candidate_id=excluded.candidate_id,c
 -- name: InsertPriceVersion :exec
 INSERT INTO billing.price_versions(id,site_id,model_id,candidate_id,schedule,basis,overridden,actor,reason)
 VALUES(@id,@site_id,@model_id,@candidate_id,@schedule,@basis,@overridden,@actor,@reason);
+
+-- name: ReadPricePolicy :many
+SELECT rev,floor_multiplier,change_ratio,max_increase_ratio FROM billing.price_policies WHERE site_id= @site_id;
+
+-- name: ConfirmPriceRefresh :exec
+UPDATE billing.price_policies SET confirmed_at=clock_timestamp() WHERE site_id = @site_id;
+
+-- name: FreshPricePolicy :many
+SELECT site_id FROM billing.price_policies
+WHERE site_id = @site_id AND confirmed_at >= clock_timestamp() - sqlc.arg(max_age_seconds)::int * INTERVAL '1 second';

@@ -16,7 +16,7 @@ func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catal
 	envelope, costErr := modelPriceCost(costs, m, currency)
 	ref, _ := snap.ReferencePrice(m.ID, currency.String())
 	input, matched, err := priceFromRules(rules, m, ref, envelope, costErr, currency)
-	if matched != nil && matched.Method.SameForEveryModel() {
+	if matched != nil && matched.Method.Kind != "reference_multiplier" {
 		ref.ID = uuid.Nil()
 	}
 	if err != nil {

@@ -76,6 +76,7 @@ function PublishDialog({ live, onClose }: { live: Publication; onClose: () => vo
   }
   return (
     <ChangeDialog
+      operation={`price-publication:${model}`}
       title={t("pricing.publish.action")}
       intro={<p>{t("pricing.publish.intro")}</p>}
       action={t("pricing.publish.action")}

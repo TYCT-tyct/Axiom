@@ -12,13 +12,64 @@ import (
 	"uuid"
 )
 
-const ensurePricePolicy = `-- name: EnsurePricePolicy :exec
-INSERT INTO billing.price_policies(site_id) VALUES ($1) ON CONFLICT DO NOTHING
+const confirmPriceRefresh = `-- name: ConfirmPriceRefresh :exec
+UPDATE billing.price_policies SET confirmed_at=clock_timestamp() WHERE site_id = $1
 `
 
-func (q *Queries) EnsurePricePolicy(ctx context.Context, db DBTX, siteID uuid.UUID) error {
-	_, err := db.Exec(ctx, ensurePricePolicy, siteID)
+func (q *Queries) ConfirmPriceRefresh(ctx context.Context, db DBTX, siteID uuid.UUID) error {
+	_, err := db.Exec(ctx, confirmPriceRefresh, siteID)
 	return err
+}
+
+const ensurePricePolicy = `-- name: EnsurePricePolicy :exec
+INSERT INTO billing.price_policies(site_id,floor_multiplier,change_ratio,max_increase_ratio) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING
+`
+
+type EnsurePricePolicyParams struct {
+	SiteID           uuid.UUID
+	FloorMultiplier  string
+	ChangeRatio      string
+	MaxIncreaseRatio string
+}
+
+func (q *Queries) EnsurePricePolicy(ctx context.Context, db DBTX, arg EnsurePricePolicyParams) error {
+	_, err := db.Exec(ctx, ensurePricePolicy,
+		arg.SiteID,
+		arg.FloorMultiplier,
+		arg.ChangeRatio,
+		arg.MaxIncreaseRatio,
+	)
+	return err
+}
+
+const freshPricePolicy = `-- name: FreshPricePolicy :many
+SELECT site_id FROM billing.price_policies
+WHERE site_id = $1 AND confirmed_at >= clock_timestamp() - $2::int * INTERVAL '1 second'
+`
+
+type FreshPricePolicyParams struct {
+	SiteID        uuid.UUID
+	MaxAgeSeconds int32
+}
+
+func (q *Queries) FreshPricePolicy(ctx context.Context, db DBTX, arg FreshPricePolicyParams) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, freshPricePolicy, arg.SiteID, arg.MaxAgeSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var site_id uuid.UUID
+		if err := rows.Scan(&site_id); err != nil {
+			return nil, err
+		}
+		items = append(items, site_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertPriceVersion = `-- name: InsertPriceVersion :exec
@@ -74,6 +125,42 @@ func (q *Queries) LockPricePolicy(ctx context.Context, db DBTX, siteID uuid.UUID
 		&i.MaxIncreaseRatio,
 	)
 	return i, err
+}
+
+const readPricePolicy = `-- name: ReadPricePolicy :many
+SELECT rev,floor_multiplier,change_ratio,max_increase_ratio FROM billing.price_policies WHERE site_id= $1
+`
+
+type ReadPricePolicyRow struct {
+	Rev              int64
+	FloorMultiplier  string
+	ChangeRatio      string
+	MaxIncreaseRatio string
+}
+
+func (q *Queries) ReadPricePolicy(ctx context.Context, db DBTX, siteID uuid.UUID) ([]ReadPricePolicyRow, error) {
+	rows, err := db.Query(ctx, readPricePolicy, siteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadPricePolicyRow
+	for rows.Next() {
+		var i ReadPricePolicyRow
+		if err := rows.Scan(
+			&i.Rev,
+			&i.FloorMultiplier,
+			&i.ChangeRatio,
+			&i.MaxIncreaseRatio,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const readPublications = `-- name: ReadPublications :many

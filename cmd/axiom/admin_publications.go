@@ -6,7 +6,6 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
-	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
 )
@@ -22,37 +21,13 @@ func publicationBody(ctx context.Context, tx pg.Tx, site uuid.UUID) (adminapi.Pr
 	}{policy, prices})
 }
 
-func (a adminAPI) refreshPriceTx(ctx context.Context, tx pg.Tx, site accounts.Site) error {
-	snap, err := a.catalog.Current()
-	if err != nil {
-		return err
-	}
-	endpoints, err := a.calls.Routable()
-	if err != nil {
-		return err
-	}
-	exchange, err := billing.ExchangeRates(ctx, tx)
-	if err != nil {
-		return err
-	}
-	rates := make([]platform.ExchangeRate, len(exchange))
-	for i, r := range exchange {
-		rates[i] = r.Basis()
-	}
-	_, err = billing.RefreshPrices(ctx, tx, uuid.UUID(site.ID), site.Currency, snap, priceCosts(endpoints, rates, site.Currency))
-	return err
-}
-
 func (a adminAPI) ListPricePublications(ctx context.Context, _ adminapi.ListPricePublicationsRequestObject) (adminapi.ListPricePublicationsResponseObject, error) {
 	site, ok := a.accounts.MainSite()
 	if !ok {
 		return nil, accounts.ErrNotFound
 	}
 	var body adminapi.PricePublicationList
-	err := a.db.Tx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		if err = a.refreshPriceTx(ctx, tx, site); err != nil {
-			return err
-		}
+	err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
 		body, err = publicationBody(ctx, tx, uuid.UUID(site.ID))
 		return err
 	})
@@ -81,7 +56,7 @@ func (a adminAPI) PublishSalePrice(ctx context.Context, r adminapi.PublishSalePr
 		current = &id
 	}
 	body, replayed, err := idempotently(ctx, a.db, "publishSalePrice", r.Params.IdempotencyKey, []any{r.ModelId, r.Body}, func(tx pg.Tx) (adminapi.PricePublicationList, error) {
-		if err := a.refreshPriceTx(ctx, tx, site); err != nil {
+		if err := refreshSalePrices(ctx, tx, uuid.UUID(site.ID), site.Currency); err != nil {
 			return adminapi.PricePublicationList{}, err
 		}
 		_, err := billing.PublishPrice(ctx, tx, actor(ctx), uuid.UUID(site.ID), model, candidate, current, r.Body.Confirmed, r.Body.OverrideFloor, r.Body.Reason)
@@ -105,6 +80,9 @@ func (a adminAPI) UpdatePricePolicy(ctx context.Context, r adminapi.UpdatePriceP
 		in := billing.PricePolicy{Rev: r.Body.Rev, FloorMultiplier: r.Body.FloorMultiplier, ChangeRatio: r.Body.ChangeRatio, MaxIncreaseRatio: r.Body.MaxIncreaseRatio}
 		if err := billing.SetPricePolicy(ctx, tx, actor(ctx), uuid.UUID(site.ID), in, r.Body.Reason); err != nil {
 			return adminapi.PricePublicationList{}, pricingProblem(err, "/")
+		}
+		if err := refreshSalePrices(ctx, tx, uuid.UUID(site.ID), site.Currency); err != nil {
+			return adminapi.PricePublicationList{}, err
 		}
 		return publicationBody(ctx, tx, uuid.UUID(site.ID))
 	})

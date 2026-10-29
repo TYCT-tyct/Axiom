@@ -2,9 +2,10 @@
 CREATE TABLE billing.price_policies (
  site_id uuid PRIMARY KEY,
  rev bigint NOT NULL DEFAULT 0 CHECK (rev >= 0),
- floor_multiplier text NOT NULL DEFAULT '1',
- change_ratio text NOT NULL DEFAULT '0.1',
- max_increase_ratio text NOT NULL DEFAULT '1'
+ confirmed_at timestamptz,
+ floor_multiplier text NOT NULL,
+ change_ratio text NOT NULL,
+ max_increase_ratio text NOT NULL
 );
 CREATE TABLE billing.price_versions (
  id uuid PRIMARY KEY,

@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -25,7 +24,7 @@ import (
 
 // A routing snapshot is what routing selects from, so what gets into it, and what is left out and why, is the whole of
 // this file. The sources are real: the catalog is the module's own over a migrated database, the prices are
-// billing.SalePrices over a real rule, and only the suppliers' endpoints are handed in, because what suppliers.Routable
+// explicit fixture prices using billing.Sell, and only the suppliers' endpoints are handed in, because what suppliers.Routable
 // returns from its first sync is a table this file has no opinion about (suppliers' own tests cover it).
 
 // specAll is a model whose spec declares everything an endpoint needs, with tools and prompt caching: what Claude Code
@@ -94,14 +93,10 @@ func newRouteFixture(t *testing.T) *routeFixture {
 	f.nospec = f.seed("acme/nospec", specNoServing)
 	f.unpriced = f.seed("other/unpriced", specAll)
 	f.unlistedID = catalog.ModelID(uuid.NewV7())
-	// The rule is inserted directly: billing's own tests cover creating one, and this file is about what a rule
-	// already there does to a snapshot.
-	f.exec("INSERT INTO billing.pricing_rules (id, site_id, enabled, target_kind, target_id, audience_kind, audience_id, method, constraints) "+
-		"VALUES ($1, $2, true, 'author', 'acme', 'all', '', $3::jsonb, '{}'::jsonb)", uuid.NewV7(), uuid.NewV7(), saleRule)
 	if err := cat.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if f.prices, err = f.salePrices(); err != nil {
+	if f.prices, err = f.fixturePrices(); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -150,46 +145,33 @@ func (f *routeFixture) seedPrice(slug, spec, price string) catalog.ModelID {
 	return catalog.ModelID(id)
 }
 
-func (f *routeFixture) exec(sql string, args ...any) {
-	f.t.Helper()
-	if err := f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		_, err := tx.Exec(f.t.Context(), sql, args...)
-		return err
-	}); err != nil {
-		f.t.Fatal(err)
-	}
-}
-
-// salePrices is billing.SalePrices over the rules of every site: the fixture has one site's rule, which prices every
-// model, and billing prices a model once however many sites there are.
-func (f *routeFixture) salePrices() (map[catalog.ModelID]billing.Sold, error) {
-	var rules []billing.Rule
-	var site uuid.UUID
-	if err := f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		return tx.QueryRow(f.t.Context(), "SELECT site_id FROM billing.pricing_rules LIMIT 1").Scan(&site)
-	}); err != nil {
-		return nil, err
-	}
-	if err := f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) (err error) {
-		rules, err = billing.Rules(f.t.Context(), tx, site)
-		return err
-	}); err != nil {
-		return nil, err
-	}
+// fixturePrices constructs explicit model prices; publication behavior belongs to billing and real-node tests.
+func (f *routeFixture) fixturePrices() (map[catalog.ModelID]billing.Sold, error) {
 	snap, err := f.cat.Current()
 	if err != nil {
 		return nil, err
 	}
-	usd, err := platform.ParseCurrency("USD")
+	currency, err := platform.ParseCurrency("USD")
 	if err != nil {
 		return nil, err
 	}
-	var listed []catalog.ModelID
-	for m := range snap.Models() {
-		listed = append(listed, m.ID)
+	var method billing.Method
+	if err := jsonx.Unmarshal([]byte(saleRule), &method); err != nil {
+		return nil, err
 	}
-	sold, unpriced := billing.SalePrices(rules, snap, listed, usd)
-	return sold, errors.Join(unpriced...)
+	out := map[catalog.ModelID]billing.Sold{}
+	for m := range snap.Models() {
+		if m.Author != "acme" {
+			continue
+		}
+		ref, _ := snap.ReferencePrice(m.ID, "USD")
+		schedule, err := billing.Sell(billing.Rule{Method: method}, ref, currency)
+		if err != nil {
+			return nil, err
+		}
+		out[m.ID] = billing.Sold{Version: uuid.NewV7(), Schedule: schedule}
+	}
+	return out, nil
 }
 
 // routable is one suppliers.Routable of a model on a supplier, as the sync writes them.
@@ -368,7 +350,7 @@ func TestRouteBuildLeavesOutWhatItCannotDescribe(t *testing.T) {
 		reason string
 	}{
 		{f.nospec, "no context length, output limit, streaming or abilities"},
-		{f.unpriced, "no pricing rule gives it a sale price"},
+		{f.unpriced, "no published sale price is available for this node; check the price publication list and local costs"},
 		{f.unlistedID, "the catalog has no such model"},
 	} {
 		model := uuid.UUID(want.model).String()
@@ -526,7 +508,7 @@ func TestRouteBuildTellsAStandingReasonOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reason := "no pricing rule gives it a sale price"
+	reason := "no published sale price is available for this node; check the price publication list and local costs"
 	if n := strings.Count(f.logs.String(), reason); n != 1 {
 		t.Fatalf("the reason was told %d times over 4 builds, want once", n)
 	}

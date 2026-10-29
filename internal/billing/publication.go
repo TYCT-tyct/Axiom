@@ -44,9 +44,9 @@ type Publication struct {
 // ErrStalePrice refuses a confirmation decided against superseded price evidence.
 var ErrStalePrice = errors.New("billing: the price proposal or publication changed; refresh before confirming")
 
-// PriceState is read while holding the site's publication lock, shared by refresh, confirmation and policy changes.
+// PriceState reads publication state without locking or writing.
 func PriceState(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy, []Publication, error) {
-	policy, err := readPolicyLocked(ctx, tx, site)
+	policy, err := loadPricePolicy(ctx, tx, site)
 	if err != nil {
 		return PricePolicy{}, nil, err
 	}
@@ -66,8 +66,9 @@ func PriceState(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy, []P
 	return policy, out, nil
 }
 
-func readPolicyLocked(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy, error) {
-	if err := queries.EnsurePricePolicy(ctx, tx, site); err != nil {
+// LockPricePolicy serializes publishers before they read canonical database inputs.
+func LockPricePolicy(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy, error) {
+	if err := queries.EnsurePricePolicy(ctx, tx, EnsurePricePolicyParams{SiteID: site, FloorMultiplier: defaultPricePolicy().FloorMultiplier, ChangeRatio: defaultPricePolicy().ChangeRatio, MaxIncreaseRatio: defaultPricePolicy().MaxIncreaseRatio}); err != nil {
 		return PricePolicy{}, err
 	}
 	r, err := queries.LockPricePolicy(ctx, tx, site)
@@ -93,7 +94,7 @@ func SetPricePolicy(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.
 	if err := priceReason(reason); err != nil {
 		return err
 	}
-	old, err := readPolicyLocked(ctx, tx, site)
+	old, err := LockPricePolicy(ctx, tx, site)
 	if err != nil {
 		return err
 	}
@@ -110,7 +111,7 @@ func SetPricePolicy(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.
 // RefreshPrices reconciles input state, not events. It serializes publishers on the policy row and publishes only
 // safe prices. Costs must be from the same immutable endpoint/rate reading the caller will put into routing.
 func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs []PriceCost) (map[catalog.ModelID]Sold, error) {
-	policy, err := readPolicyLocked(ctx, tx, site)
+	policy, err := LockPricePolicy(ctx, tx, site)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +151,7 @@ func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platf
 			sold[m.ID] = current
 		}
 	}
-	return sold, nil
+	return sold, queries.ConfirmPriceRefresh(ctx, tx, site)
 }
 
 func digestPrice(raw []byte) uuid.UUID {
@@ -182,7 +183,7 @@ func reconcilePrice(ctx context.Context, tx pg.Tx, site uuid.UUID, policy PriceP
 		}
 		p.Current = &current.Version
 	}
-	if err := publicationSignal(ctx, tx, site, p, false); err != nil {
+	if err := publicationSignal(ctx, tx, site, p, false, old.Status); err != nil {
 		return Sold{}, err
 	}
 	if err := persistPublication(ctx, tx, site, p); err != nil {
@@ -225,13 +226,19 @@ func publicationDecision(policy PricePolicy, p Publication, old ReadPublications
 func automaticPriceStatus(policy PricePolicy, previous, next, floor catalog.Schedule, hasHead bool) string {
 	safe, err := previous.CoversCost(floor)
 	safe = hasHead && safe && err == nil
-	if !safe && priceMoved(previous, next, policy.MaxIncreaseRatio) {
+	if !safe && priceIncreased(previous, next, policy.MaxIncreaseRatio) {
 		return "blocked"
 	}
 	if !hasHead || !safe || !priceMoved(previous, next, policy.ChangeRatio) {
 		return "published"
 	}
 	return "pending"
+}
+
+func priceIncreased(previous, next catalog.Schedule, ratio string) bool {
+	r, _ := new(big.Rat).SetString(ratio)
+	moved, err := previous.PriceIncrease(next, r)
+	return moved || err != nil
 }
 
 func priceMoved(previous, next catalog.Schedule, ratio string) bool {
@@ -265,6 +272,9 @@ func PublishPrice(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UU
 	if !confirmed {
 		return uuid.Nil(), &RuleError{"confirmed", "must explicitly confirm publication"}
 	}
+	if _, err := LockPricePolicy(ctx, tx, site); err != nil {
+		return uuid.Nil(), err
+	}
 	_, prices, err := PriceState(ctx, tx, site)
 	if err != nil {
 		return uuid.Nil(), err
@@ -286,7 +296,7 @@ func PublishPrice(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UU
 	}
 	p.Current = &sold.Version
 	p.Status = "published"
-	if err := publicationSignal(ctx, tx, site, p, true); err != nil {
+	if err := publicationSignal(ctx, tx, site, p, true, ""); err != nil {
 		return uuid.Nil(), err
 	}
 	return sold.Version, persistPublication(ctx, tx, site, p)
@@ -332,7 +342,7 @@ func priceAudit(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, 
 	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: action, Reason: reason, Target: audit.Target{Module: "billing", Kind: kind, ID: id.String()}, Detail: detail})
 }
 
-func publicationSignal(ctx context.Context, tx pg.Tx, site uuid.UUID, p Publication, acknowledged bool) error {
+func publicationSignal(ctx context.Context, tx pg.Tx, site uuid.UUID, p Publication, acknowledged bool, previous string) error {
 	kind := "billing.price.review"
 	severity := "warning"
 	raised, err := priceRaised(p)
@@ -340,10 +350,45 @@ func publicationSignal(ctx context.Context, tx pg.Tx, site uuid.UUID, p Publicat
 		return err
 	}
 	resolved := acknowledged || p.Status == "published" && !raised
-	if p.Status == "blocked" || p.Status == "unpriced" {
+	if p.Status == "unpriced" {
+		severity, err = unpricedSeverity(p, previous)
+		if err != nil || severity == "" {
+			return err
+		}
+		resolved = severity == "info"
+	}
+
+	if p.Status == "blocked" {
+		if previous == "blocked" {
+			return nil
+		}
 		severity = "critical"
 	}
 	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: kind, Key: site.String() + ":" + p.Model.String(), Severity: severity, Resolved: resolved, Fields: map[string]string{"model": p.Model.String(), "status": p.Status, "candidate": p.Candidate.String()}})
+}
+
+func unpricedSeverity(p Publication, previous string) (string, error) {
+	var basis struct {
+		Rule  *Rule       `json:"rule"`
+		Costs []jsonx.Raw `json:"costs"`
+	}
+	if err := jsonx.Unmarshal(p.Basis, &basis); err != nil {
+		return "", err
+	}
+	if basis.Rule == nil || len(basis.Costs) == 0 {
+		if previous == "" {
+			return "", nil
+		}
+		return "info", nil
+	}
+	switch previous {
+	case "unpriced":
+		return "", nil
+	case "published", "pending", "blocked":
+		return "critical", nil
+	default:
+		return "warning", nil
+	}
 }
 
 func priceRaised(p Publication) (bool, error) {

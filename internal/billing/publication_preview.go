@@ -12,7 +12,7 @@ import (
 // PreviewPrices uses the publication calculation without saving a proposal or publishing a price. The rules may
 // include an unsaved edit. The publication list, separately, shows the version actually served.
 func PreviewPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, rules []Rule, models []catalog.ModelID, costs []PriceCost) (map[catalog.ModelID]Publication, error) {
-	policy, err := readPolicyLocked(ctx, tx, site)
+	policy, err := loadPricePolicy(ctx, tx, site)
 	if err != nil {
 		return nil, err
 	}

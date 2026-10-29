@@ -1,7 +1,6 @@
 package billing
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"uuid"
@@ -98,157 +97,59 @@ func (f *snapshotter) snapshot() *catalog.Snapshot {
 	return snap
 }
 
-// TestSalePricesTakesTheMostSpecificRule: three rules price the same models, and the one for a model itself wins over
-// the one for its author, which wins over the one for everything; a rule that is off, or sets no price in M1's ways,
-// leaves the model to the next; a model no rule prices has no sale price at all.
-func TestSalePricesTakesTheMostSpecificRule(t *testing.T) {
-	t.Parallel()
+// TestProposalsSelectRules exercises the production proposal path, including cost-plus and refusals.
+func TestProposalsSelectRules(t *testing.T) {
 	f := newSnapshotter(t)
-	priced, unbilled := f.model("acme/priced"), f.model("beta/unbilled")
-	rules := []Rule{
-		{Enabled: true, Target: Selector{Kind: "model", ID: priced.String()}, Audience: Selector{Kind: "all"}, Method: multiplied("3"), ID: uuid.NewV7(), Rev: 1},
-		{Enabled: true, Target: Selector{Kind: "author", ID: "acme"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7(), Rev: 1},
-		{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("1.5"), ID: uuid.NewV7(), Rev: 1},
+	id := f.model("acme/priced")
+	snap := f.snapshot()
+	model, _ := snap.Model(id)
+	makeRule := func(target Selector, method Method) Rule {
+		return Rule{Enabled: true, Target: target, Audience: Selector{Kind: "all"}, Method: method, ID: uuid.NewV7(), Rev: 1}
 	}
-	sold, unpriced := SalePrices(rules, f.snapshot(), []catalog.ModelID{priced, unbilled}, usd)
-	if len(unpriced) != 0 {
-		t.Fatalf("SalePrices reported %v", unpriced)
-	}
-	// The reference price is 0.000001 an input token, so each rule's multiplier reads as its own input price.
-	if got := text(t, sold, priced); !strings.Contains(got, `"input":"0.000003"`) {
-		t.Errorf("the model's rule did not win: %s", got)
-	}
-	if got := text(t, sold, unbilled); !strings.Contains(got, `"input":"0.0000015"`) {
-		t.Errorf("the rule for everything priced the other model as %s, want its 1.5 times", got)
-	}
-	// A disabled model rule lets the author's through.
-	rules[0].Enabled = false
-	sold, unpriced = SalePrices(rules, f.snapshot(), []catalog.ModelID{priced, unbilled}, usd)
-	if len(unpriced) != 0 {
-		t.Fatalf("SalePrices reported %v", unpriced)
-	}
-	if got := text(t, sold, priced); !strings.Contains(got, `"input":"0.000002"`) {
-		t.Errorf("a disabled rule priced the model as %s, want the author's 2 times", got)
-	}
-}
-
-// TestSalePricesRefusesAStoredConstraint: a rule stored with a constraint that matches a model ends that model's
-// pricing: the broader rule after it does not price the model, and the other model is priced alike whichever order the
-// two come in. The broader rule's fixed price is cached by rule, so neither that price nor the refusal crosses models.
-func TestSalePricesRefusesAStoredConstraint(t *testing.T) {
-	t.Parallel()
-	f := newSnapshotter(t)
-	hit, other := f.model("acme/hit"), f.model("beta/other")
-	r := func(s string) *string { return &s }
-	constrained := Rule{
-		Enabled: true, Target: Selector{Kind: "model", ID: hit.String()}, Audience: Selector{Kind: "all"},
-		Method: multiplied("2"), Constraints: Constraints{MinMarginRatio: r("0.1")}, ID: uuid.NewV7(), Rev: 1,
-	}
-	global := Rule{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: fixed(), ID: uuid.NewV7(), Rev: 1}
-	rules := []Rule{constrained, global}
-	for name, models := range map[string][]catalog.ModelID{
-		"the constrained model first": {hit, other},
-		"the other model first":       {other, hit},
+	specific := makeRule(Selector{Kind: "model", ID: id.String()}, multiplied("3"))
+	broad := makeRule(Selector{Kind: "all"}, multiplied("1.5"))
+	author := makeRule(Selector{Kind: "author", ID: "acme"}, multiplied("2"))
+	disabled := specific
+	disabled.Enabled = false
+	constrained := specific
+	constrained.Constraints.MinMarginRatio = new("0.1")
+	for _, c := range []struct {
+		name    string
+		rules   []Rule
+		input   string
+		problem bool
+	}{
+		{"specific", []Rule{specific, author, broad}, "0.000003", false},
+		{"disabled", []Rule{disabled, author, broad}, "0.000002", false},
+		{"no rules", nil, "", true},
+		{"constraint refuses fallback", []Rule{constrained, broad}, "", true},
+		{"cost plus", []Rule{makeRule(Selector{Kind: "all"}, plus("0.25")), broad}, "0.000000625", false},
+		{"overflow", []Rule{makeRule(Selector{Kind: "all"}, multiplied("1000000000000")), broad}, "", true},
 	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			checkRefusal(t, rules, f.snapshot(), models, hit, other, constrained.ID)
+		t.Run(c.name, func(t *testing.T) {
+			p, err := proposePrice(defaultPricePolicy(), c.rules, model, snap, usd, []PriceCost{priceCost(t, id, "0.0000005")}, fallbacks{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertProposalPrice(t, p, c.input, c.problem)
 		})
 	}
 }
 
-// checkRefusal checks one model order for TestSalePricesRefusesAStoredConstraint.
-func checkRefusal(t *testing.T, rules []Rule, snap *catalog.Snapshot, models []catalog.ModelID, hit, other catalog.ModelID, ruleID uuid.UUID) {
+func assertProposalPrice(t *testing.T, p Publication, want string, problem bool) {
 	t.Helper()
-	sold, unpriced := SalePrices(rules, snap, models, usd)
-	if _, ok := sold[hit]; ok {
-		t.Error("the model the constrained rule names was sold")
+	if (p.Problem != "") != problem {
+		t.Fatalf("problem=%s", p.Problem)
 	}
-	if got, want := text(t, sold, other), `"input":"0.000002"`; !strings.Contains(got, want) {
-		t.Errorf("the other model sold as %s, want the global fixed price containing %s", got, want)
+	if problem {
+		if len(p.Schedule) != 0 {
+			t.Fatal("invalid proposal was priced")
+		}
+		return
 	}
-	if len(unpriced) != 1 {
-		t.Fatalf("reported %v, want one refusal", unpriced)
+	schedule := mustSchedule(t, string(p.Schedule))
+	input, _ := schedule.BaseRate(catalog.ItemInput)
+	if input.String() != want {
+		t.Fatalf("input=%s want %s", input, want)
 	}
-	refusal, ok := errors.AsType[*RuleRefusal](unpriced[0])
-	if !ok || refusal.Rule != ruleID || refusal.Model != hit {
-		t.Errorf("the refusal %v, want rule %s for model %s", unpriced[0], ruleID, hit)
-	}
-	if !errors.Is(unpriced[0], ErrRuleRefuses) {
-		t.Errorf("the refusal is not ErrRuleRefuses: %v", unpriced[0])
-	}
-}
-
-// TestSalePricesLeavesWhatNoRulePrices: with no rule, or only one whose method sets no price in M1, a model has no sale
-// price; it is never sold at its reference price.
-func TestSalePricesLeavesWhatNoRulePrices(t *testing.T) {
-	t.Parallel()
-	f := newSnapshotter(t)
-	model := f.model("acme/priced")
-	for name, rules := range map[string][]Rule{
-		"no rules": nil,
-		"a rule that is off": {
-			{Enabled: false, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7()},
-		},
-		"cost plus, which M1 does not price": {
-			{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: plus("0.25"), ID: uuid.NewV7()},
-		},
-		"an exchange rate, which M1 does not have": {
-			{
-				Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"},
-				Method: Method{Kind: "reference_multiplier", Multiplier: new("2"), CurrencyConversion: "exchange"}, ID: uuid.NewV7(),
-			},
-		},
-		"a target that prices no model in M1": {
-			{Enabled: true, Target: Selector{Kind: "source_type", ID: "relay"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7()},
-		},
-		"a multiplier the reference price cannot be scaled by": {
-			{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("1000000000000"), ID: uuid.NewV7()},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			sold, unpriced := SalePrices(rules, f.snapshot(), []catalog.ModelID{model}, usd)
-			if _, ok := sold[model]; ok {
-				t.Errorf("%s gave the model a sale price", name)
-			}
-			if strings.Contains(name, "cannot be scaled") != (len(unpriced) == 1) {
-				t.Errorf("%s reported %v: only a price the catalog cannot hold is reported", name, unpriced)
-			}
-		})
-	}
-}
-
-// TestSalePricesPricesOnlyWhatIsAsked: the models the caller names are the ones priced, so a site's whole catalog is
-// never walked for a preview of a few models.
-func TestSalePricesPricesOnlyWhatIsAsked(t *testing.T) {
-	t.Parallel()
-	f := newSnapshotter(t)
-	asked, unasked := f.model("acme/asked"), f.model("beta/unasked")
-	rules := []Rule{
-		{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: multiplied("2"), ID: uuid.NewV7(), Rev: 1},
-	}
-	sold, unpriced := SalePrices(rules, f.snapshot(), []catalog.ModelID{asked}, usd)
-	if len(unpriced) != 0 {
-		t.Fatalf("SalePrices reported %v", unpriced)
-	}
-	if len(sold) != 1 {
-		t.Errorf("sold %d models, want the one asked for: %v", len(sold), sold)
-	}
-	if _, ok := sold[unasked]; ok {
-		t.Error("a model the caller did not ask for was priced")
-	}
-}
-
-// text is one model's sale price in its canonical form, for a test to look for a price in; empty when it has none.
-func text(t *testing.T, sold map[catalog.ModelID]Sold, id catalog.ModelID) string {
-	t.Helper()
-	s, ok := sold[id]
-	if !ok {
-		return ""
-	}
-	body, err := s.Schedule.MarshalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(body)
 }

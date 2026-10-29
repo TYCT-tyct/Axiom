@@ -39,6 +39,15 @@ func (s Schedule) Aligned(other Schedule, add bool) (Schedule, error) {
 // PriceChange reports whether any effective unit price changes by more than ratio of its old value. Added or lost
 // prices require confirmation too; zero to nonzero is always a large move.
 func (s Schedule) PriceChange(next Schedule, ratio *big.Rat) (bool, error) {
+	return s.priceChange(next, ratio, false)
+}
+
+// PriceIncrease applies the automatic floor cap only to upward changes.
+func (s Schedule) PriceIncrease(next Schedule, ratio *big.Rat) (bool, error) {
+	return s.priceChange(next, ratio, true)
+}
+
+func (s Schedule) priceChange(next Schedule, ratio *big.Rat, increaseOnly bool) (bool, error) {
 	bands, err := comparisonBands(s, next)
 	if err != nil {
 		return false, err
@@ -49,7 +58,7 @@ func (s Schedule) PriceChange(next Schedule, ratio *big.Rat) (bool, error) {
 			if b > 0 {
 				length++
 			}
-			if s.changedRates(next, st, length, ratio) {
+			if s.changedRates(next, st, length, ratio, increaseOnly) {
 				return true, nil
 			}
 		}
@@ -129,16 +138,19 @@ func (s Schedule) combinedRates(other Schedule, st ServiceTier, length int64, ad
 	return r, nil
 }
 
-func (s Schedule) changedRates(next Schedule, st ServiceTier, length int64, ratio *big.Rat) bool {
+func (s Schedule) changedRates(next Schedule, st ServiceTier, length int64, ratio *big.Rat, increaseOnly bool) bool {
 	for it := range NumItems {
 		old, had := s.price(st, s.bandOf(length), it)
 		now, has := next.price(st, next.bandOf(length), it)
-		if had != has {
+		if !increaseOnly && had != has {
 			return true
 		}
 		diff := new(big.Rat).Sub(now.Rat(), old.Rat())
 		allowed := new(big.Rat).Mul(old.Rat(), ratio)
-		if diff.Abs(diff).Cmp(allowed) > 0 {
+		if !increaseOnly {
+			diff.Abs(diff)
+		}
+		if diff.Cmp(allowed) > 0 {
 			return true
 		}
 	}

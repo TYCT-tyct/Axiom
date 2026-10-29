@@ -18,6 +18,9 @@ def migrations(after, base="HEAD~1"):
 class Migrations(unittest.TestCase):
     def test_cases(self):
         cases = [
+            ("out of order below a previously applied version", {"a/migrations/00000_late.sql": "SELECT 1;\n"}, "HEAD~1", True),
+            ("duplicate version", {"a/migrations/00001_duplicate.sql": "SELECT 1;\n"}, "HEAD~1", True),
+            ("independent module", {"b/migrations/00001_first.sql": "SELECT 1;\n"}, "HEAD~1", False),
             ("a migration added", {NEW: "CREATE TABLE a.new ();\n"}, "HEAD~1", False),
             ("other files changed", {"README.md": "y\n", "a/other.sql": "SELECT 1;\n"}, "HEAD~1", False),
             ("a migration changed", {OLD: "CREATE TABLE a.old (x int);\n"}, "HEAD~1", True),

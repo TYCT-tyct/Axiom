@@ -3,13 +3,17 @@ package main
 import (
 	"net/http"
 	"testing"
+	"uuid"
 
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/pg"
 )
 
 func TestPricePolicyAPIAndUnknownCostPublication(t *testing.T) {
 	f := newPreview(t)
 	f.create(ruleJSON(everything, everything, faced))
+	seedUnpricedPublication(t, f.adminFixture)
+
 	rec := f.do(http.MethodGet, "/pricing/publications", "", as(f.s))
 	expectAdmin(t, "publication list", rec, http.StatusOK, "")
 	var state adminapi.PricePublicationList
@@ -47,4 +51,15 @@ func TestPricePolicyAPIAndUnknownCostPublication(t *testing.T) {
 	}
 	rec = f.change(f.s, http.MethodPost, "/pricing/publications/"+f.model, `{"candidate_id":"`+*p.CandidateId+`","confirmed":true,"override_floor":true,"reason":"cannot override unknown cost"}`, newKey())
 	expectAdmin(t, "unknown cost override", rec, http.StatusUnprocessableEntity, codeUnprocessable)
+}
+
+func seedUnpricedPublication(t *testing.T, f adminFixture) {
+	t.Helper()
+	site, ok := f.svc.MainSite()
+	if !ok {
+		t.Fatal("missing main site")
+	}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error { return refreshSalePrices(t.Context(), tx, uuid.UUID(site.ID), site.Currency) }); err != nil {
+		t.Fatal(err)
+	}
 }

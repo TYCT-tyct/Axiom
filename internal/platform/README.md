@@ -177,7 +177,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 | `sites.manage`（已有）、`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage` | 是 |
 | 管理 | `users.view`、`suppliers.view`、`catalog.view`、`pricing.view` | 否 |
 
-控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。管理接口的处理器补上了：`accounts` 的站点设置读写、等级、用户和账户的读取、八个管理权限（见 accounts 的「管理接口」）；`billing` 的 `ReadCredit`（赠送批次）；平台的幂等键（`idem`）；`catalog` 的模型和参考价的读取、定价规则；`suppliers` 的管理操作与待映射队列；`billing` 的定价试算（`previewPricing`，经 `billing.SalePrices` 算出售价，`cost` 与 `margin_ratio` 要每端点的成本，随 M2 的路由端点一起加入）。
+控制台的处理器已经补上它要的读写：`accounts` 的 key 列表、读取、整体替换设置、创建时带设置、会话信息、接受待验证会话的认证和 `AccountWorkspaces`；`billing` 的 `ReadBalance`（余额、在途预留、底线、本月花费）和 `KeysUsed`（key 在自己重置窗口里已用的）；`observability` 的游标编码与解码。管理接口的处理器补上了：`accounts` 的站点设置读写、等级、用户和账户的读取、八个管理权限（见 accounts 的「管理接口」）；`billing` 的 `ReadCredit`（赠送批次）；平台的幂等键（`idem`）；`catalog` 的模型和参考价的读取、定价规则；`suppliers` 的管理操作与待映射队列；`billing` 的定价试算（`previewPricing`，经 `billing.PreviewPrices` 使用生产提案计算，返回规则原价、保本后售价与成本包络；没有唯一毛利率时省略该标量）。
 
 M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）、审核项、声明式适配器、调用详情里的尝试与路由、额度批次与来源、预设、用量统计、站长的站点管理。
 
@@ -417,3 +417,5 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 `alert.Sink` 的 `Raise`/`Resolve` 不等待数据库：最多缓冲 1024 个信号，种类 128 字节、键 256 字节、最多 16 个字段（名字 64、值 512 字节），拒绝非法 UTF-8 和 NUL。返回 nil 仅表示本机接受；独立写协程失败后每秒重试，单次写入期限 5 秒，`Close` 用退出期限排空。`alert.Persist` 在后台事务里提交后才保证持久，UUID 让结果不明时重写不重复；原始信号与隔离的坏行在迁移 `00012` 的 `platform.alert_signals`。`alert.Consume` 的消费锁与持久写入锁一致，保证 seq 不越过尚未提交的生产事务；提交后其他节点可继续处理。只放运维元数据，不放正文、凭证或用户通知；规则和事件见 [observability](../observability/README.md#告警接口与不变量)。
 
 `Queue.OnDiscard` 在清理前持久处理丢弃通知；`discarded_jobs.notified` 与通知同事务提交，旧节点已认领但尚未通知的行仍会由新节点处理。通知失败回滚，下一次扫描再处理。
+
+售价发布任务 `billing.publish_prices` 在 money 队列每 5 秒运行，waiting/running/retryable 期间保持唯一；路由不执行发布事务，只读取最近 30 秒确认过的版本。

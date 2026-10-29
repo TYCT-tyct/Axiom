@@ -28,7 +28,7 @@ type RouteDeps struct {
 	// last Reload built and never the database.
 	Endpoints func(context.Context) ([]suppliers.Routable, error)
 	Catalog   *catalog.Catalog
-	// Prices reconciles published sale versions using this build's catalog, endpoints and exchange rates.
+	// Prices reads published sale versions and checks them against this build's local costs.
 	// One build's reading prices both the routing snapshot and the model list, so
 	// the price a client reads is the price a call is charged at.
 	Prices func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error)
@@ -66,7 +66,7 @@ func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 // whether the node may report itself ready (cmd/axiom).
 //
 // An endpoint whose model the catalog cannot describe is left out, and so are all of the model's endpoints: one whose
-// model has no spec, one no pricing rule gives a sale price. A model whose upstream reported a field nothing prices is
+// model has no spec, one with no published sale version safe for this node. A model whose upstream reported a field nothing prices is
 // in the snapshot, flagged, so that routing refuses it with a reason an administrator can read. Each of these is a line
 // in the log, since a model that cannot be routed is a price list or a spec to fix. A snapshot with no endpoint at all
 // is a valid one: every call is then answered 404 no_endpoint, which is what a node whose suppliers have not synced yet
@@ -254,7 +254,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	}
 	sold, ok := prices[catalog.ModelID(r.Model)]
 	if !ok {
-		return routing.Endpoint{}, "no pricing rule gives it a sale price"
+		return routing.Endpoint{}, "no published sale price is available for this node; check the price publication list and local costs"
 	}
 	reportable := model.Reportable()
 	if billing.Unpriced(sold.Schedule, reportable) != (catalog.Reportable{}) {

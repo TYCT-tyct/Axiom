@@ -280,20 +280,33 @@ func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Log
 	}
 }
 
-// salePrices publishes from the route build's immutable sources. The main site's one model-wide price is used until
-// audience-specific pricing (#224); a failed publication transaction prevents a fresh route snapshot.
+// salePrices only reads published heads. Local cost checks may withhold a model, but never change shared publication
+// state: nodes with different adapters or key versions must not publish different evidence.
 func salePrices(db *pg.DB, sites *accounts.Service) func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
 	return func(ctx context.Context, snap *catalog.Snapshot, endpoints []suppliers.Routable, rates []platform.ExchangeRate) (sold map[catalog.ModelID]billing.Sold, err error) {
 		site, ok := sites.MainSite()
 		if !ok {
 			return nil, nil
 		}
-		costs := priceCosts(endpoints, rates, site.Currency)
-		err = db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
-			sold, err = billing.RefreshPrices(ctx, tx, uuid.UUID(site.ID), site.Currency, snap, costs)
+		err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
+			sold, err = billing.PublishedPrices(ctx, tx, uuid.UUID(site.ID))
 			return err
 		})
-		return sold, err
+		if err != nil {
+			return nil, err
+		}
+		costs := priceCosts(endpoints, rates, site.Currency)
+		byModel := map[catalog.ModelID][]billing.PriceCost{}
+		for _, c := range costs {
+			byModel[c.Model] = append(byModel[c.Model], c)
+		}
+		for id, local := range byModel {
+			model, ok := snap.Model(id)
+			if price, priced := sold[id]; !ok || !priced || !price.AllowsCosts(model, local) {
+				delete(sold, id)
+			}
+		}
+		return sold, nil
 	}
 }
 

@@ -248,11 +248,6 @@ func (m Method) checkFixed(currency platform.Currency) error {
 	return checkSchedule(m.Schedule, currency)
 }
 
-// SameForEveryModel reports whether the rule's price does not read the model's reference price, so that it is the same
-// wherever it applies. Only a fixed price is: the ways that read the reference price differ by model, and with it their sale prices and
-// versions (sale.go).
-func (m Method) SameForEveryModel() bool { return m.Kind == "fixed" }
-
 // checkSchedule refuses a fixed price that is no price list of the catalog's form, or is in another currency than the
 // site's.
 func checkSchedule(raw jsonx.Raw, currency platform.Currency) error {
@@ -356,7 +351,7 @@ func CreateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	if err := in.Check(currency); err != nil {
 		return Rule{}, err
 	}
-	if _, err := readPolicyLocked(ctx, tx, site); err != nil {
+	if _, err := LockPricePolicy(ctx, tx, site); err != nil {
 		return Rule{}, err
 	}
 	method, constraints, err := encoded(in)
@@ -382,7 +377,7 @@ func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	if err := in.Check(currency); err != nil {
 		return Rule{}, err
 	}
-	if _, err := readPolicyLocked(ctx, tx, site); err != nil {
+	if _, err := LockPricePolicy(ctx, tx, site); err != nil {
 		return Rule{}, err
 	}
 	method, constraints, err := encoded(in)

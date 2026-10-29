@@ -11,7 +11,6 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
-	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
@@ -151,30 +150,23 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 	rules = slices.DeleteFunc(rules, func(r billing.Rule) bool {
 		return !r.Audience.Prices(audience.account, audience.tier)
 	})
-	snap, err := a.catalog.Current()
-	if err != nil {
-		return nil, err
-	}
+	var snap *catalog.Snapshot
 	models, err := modelIDsOf(request.Body.ModelIds)
 	if err != nil {
 		return nil, err
 	}
 
-	endpoints, err := a.calls.Routable()
-	if err != nil {
-		return nil, err
-	}
 	var proposals map[catalog.ModelID]billing.Publication
-	err = a.db.Tx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		rates, err := billing.ExchangeRates(ctx, tx)
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		snap, err = catalog.ReadSnapshot(ctx, tx)
 		if err != nil {
 			return err
 		}
-		bases := make([]platform.ExchangeRate, len(rates))
-		for i, r := range rates {
-			bases[i] = r.Basis()
+		costs, err := publicationCosts(ctx, tx, site.Currency)
+		if err != nil {
+			return err
 		}
-		proposals, err = billing.PreviewPrices(ctx, tx, uuid.UUID(site.ID), site.Currency, snap, rules, models, priceCosts(endpoints, bases, site.Currency))
+		proposals, err = billing.PreviewPrices(ctx, tx, uuid.UUID(site.ID), site.Currency, snap, rules, models, costs)
 		return err
 	})
 	if err != nil {
