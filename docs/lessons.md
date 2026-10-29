@@ -68,3 +68,9 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 证据：PR #461 的 a577486 独立评审第 1–3 条。原实现把待映射页的创建 POST 当作纠正，过期页面能无声覆盖他人的映射；版本 1 的 key 位置缺策略却继续被接受，旧页会投影为全拒；首版别名仍有列级 UPDATE 授权。`TestGroupMappingRevisionsAndIdempotentReplay`、`TestConcurrentMappingCorrectionsRequireCurrentRevision`、两个适配器的 `TestLegacyKeyListingRestartsBeforeProjectingPolicies` 和 `TestAliasRevisionsPreserveOwnershipAndHistory` 保留这些边界回归。
 哪一层没拦住：只验证追加历史和最终快照，没有回放既有前端的新建语义、升级前的分页位置及旧迁移留下的权限。后续供应商修订改动须同时核对创建冲突与显式版本前提、旧位置重读、原始行不可改写；不能仅凭新表只追加就称整条历史不可变。
 出现：2026-10-29
+
+## 集成探测的时间锚点与重复账本夹具放大列车负载
+
+证据：PR #462 的列车构建 [40914818602](https://github.com/TYCT-tyct/Axiom/actions/runs/40914818602) 在健康探测恢复断言失败，并在第二份大账本夹具播种时达到 billing 包的十分钟期限。
+哪一层没拦住：健康测试从组装前冻结的时钟推进 31 秒，实际熔断时间却由网关按真实时钟记录；两种账本计划测试分别播种 200 万笔数据，单包累计成本没有被局部测试暴露。集成测试应从实际事件时刻推进受控时钟，并用时钟偏移复现组装延迟；同模块同量级的计划验证共用大夹具，保留每种查询的完整计划断言。`TestGatewayHealthRemoveProbeRestore` 固定模拟两分钟时钟落后；`TestLedgerReadsGrowWithThePage` 同时验证 movements 和 statement，后续此类计划用例加在同一夹具下。
+出现：2026-10-29
