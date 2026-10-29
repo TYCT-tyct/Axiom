@@ -240,7 +240,7 @@ func (s *Service) regenerateRecoveryCodes(ctx context.Context, p Principal, c Fa
 // secret or a code.
 func (s *Service) changeFactors(ctx context.Context, p Principal, c FactorChange, action string, change func(pg.Tx, LockUserRow) error) (Issued, []string, error) {
 	user, account := uuid.UUID(p.user), uuid.UUID(p.account)
-	codes := make([]string, recoveryCodeCount)
+	var codes []string
 	var issued Issued
 	err := s.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
 		locked, err := s.lockUser(ctx, tx, user, p.factorVersion)
@@ -251,14 +251,9 @@ func (s *Service) changeFactors(ctx context.Context, p Principal, c FactorChange
 			return err
 		}
 		version := locked.FactorVersion + 1
-		for i := range codes {
-			codes[i] = newRecoveryCode()
-			hash := recoveryHash(codes[i])
-			if err := s.queries.InsertRecoveryCode(ctx, tx, InsertRecoveryCodeParams{
-				ID: uuid.NewV7(), SiteID: locked.SiteID, AccountID: account, UserID: user, FactorVersion: version, CodeHash: hash[:],
-			}); err != nil {
-				return err
-			}
+		codes, err = s.insertRecoveryCodes(ctx, tx, user, account, locked.SiteID, version)
+		if err != nil {
+			return err
 		}
 		if issued, err = s.issue(ctx, tx, newSession{
 			user: user, account: account, site: s.snapshot.Load().sites[p.site], surface: p.surface, level: levelMFA,
@@ -318,4 +313,18 @@ func recoveryHash(code string) [32]byte {
 		return r
 	}, strings.ToLower(code))
 	return sha256.Sum256([]byte(normal))
+}
+
+func (s *Service) insertRecoveryCodes(ctx context.Context, tx pg.Tx, user, account, site uuid.UUID, version int64) ([]string, error) {
+	codes := make([]string, recoveryCodeCount)
+	for i := range codes {
+		codes[i] = newRecoveryCode()
+		hash := recoveryHash(codes[i])
+		if err := s.queries.InsertRecoveryCode(ctx, tx, InsertRecoveryCodeParams{
+			ID: uuid.NewV7(), SiteID: site, AccountID: account, UserID: user, FactorVersion: version, CodeHash: hash[:],
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return codes, nil
 }

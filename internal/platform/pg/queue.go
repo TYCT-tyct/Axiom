@@ -65,7 +65,7 @@ const (
 	QueueMoney = "money"
 	// QueueReconcile isolates daily payment checks and gateway queries from receipt and expiry jobs.
 	QueueReconcile = "reconcile"
-	// QueueNotifications isolates mail delivery and alert evaluation from money and supplier sync jobs.
+	// QueueNotifications isolates mail delivery, password-reset issuance and alert evaluation from money and supplier sync jobs.
 	QueueNotifications = "notifications"
 	// QueueSyncs is the queue of the jobs that reach a supplier: a sweep, a round of one supplier, and the price syncs
 	// when they arrive. They are the long jobs, waiting on the network.

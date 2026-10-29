@@ -10,9 +10,16 @@ WHERE r.request_id = @request_id;
 SELECT account_id FROM billing.reservations WHERE request_id = @request_id;
 
 -- name: EndReservation :one
--- Writes a charge's outcome. The charged attempt and entry, and the attempts' entries, stay as they were when none is
--- given. It returns the database's time, which a terminal state's EndRequest records, so every clock the request's end
+-- Moves the reservation's three counters and writes its outcome together. The charged attempt and entry, and the
+-- attempts' entries, stay as they were when none is given. It returns the database's time, which a terminal state's EndRequest records, so every clock the request's end
 -- is judged by is the database's.
+WITH balance AS (
+    UPDATE billing.balances b SET reserved = b.reserved + @reserved WHERE b.account_id = @account_id
+), spend AS (
+    UPDATE billing.spend s SET reserved = s.reserved + @reserved, spent = s.spent + @spent
+    WHERE s.subject = @workspace_id AND s.window_start = @workspace_window
+        OR s.subject = @key_id AND s.window_start = @key_window
+)
 UPDATE billing.reservations
 SET state = @state, charged_seq = coalesce(sqlc.narg(charged_seq), charged_seq), entry = coalesce(sqlc.narg(entry), entry),
     charged = @charged, price = @price, waived = @waived, estimated = @estimated,
@@ -21,46 +28,27 @@ SET state = @state, charged_seq = coalesce(sqlc.narg(charged_seq), charged_seq),
 WHERE request_id = @request_id
 RETURNING clock_timestamp()::timestamptz AS ended_at;
 
--- name: MoveCounters :exec
--- Moves a reservation's counters: reserved by reserved, spent by spent, in the windows admission locked.
-WITH balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + @reserved WHERE b.account_id = @account_id
-)
-UPDATE billing.spend s SET reserved = s.reserved + @reserved, spent = s.spent + @spent
-WHERE s.subject = @workspace_id AND s.window_start = @workspace_window
-    OR s.subject = @key_id AND s.window_start = @key_window;
-
--- name: InsertTransaction :execrows
--- Only for a caller that already holds the account's balance row lock: every transaction of an account is numbered under
--- that lock (InsertLockedTransaction), and the replay's upper bound depends on it (ReplayThrough). A row numbered
--- outside the lock could take a seq below a locked credit and still commit after it, so a replay would read the credit
--- without its batch. 0 rows: the event was posted already, and its entries with it.
-INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
-VALUES (@id, @site_id, @account_id, @kind, @request_id, @attempt_seq, @revision)
-ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING;
-
--- name: InsertLockedTransaction :execrows
--- Numbers the transaction under the account's balance row lock, whether or not it moves the user's balance: the lock is
--- taken by the same statement before the row, and so its seq, is made, so the seqs of one account's transactions follow
--- the order they commit, which the allocation replays by and the unlocked replay bounds itself with (ReplayThrough;
--- internal/billing/README.md「额度批次的分配与到期」). The lock is taken again, without waiting, by a caller that holds
--- it. 0 rows: the event was posted already, or the account has no balance row.
-WITH locked AS (SELECT 1 FROM billing.balances WHERE account_id = @account_id FOR UPDATE)
-INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
-SELECT @id, @site_id, @account_id, @kind, @request_id, @attempt_seq, @revision FROM locked
-ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING;
-
--- name: InsertEntries :exec
--- One statement for a transaction's entries; the user's balance follows its book (user_debit, the entries' sum on
--- user_balance) in the same statement, and is left alone, unlocked by it, when they do not move it. currencies has an
--- empty string for an entry in the site's own credits, which is stored as NULL.
-WITH entry AS (
+-- name: PostLedger :execrows
+-- Lock before allocating the transaction sequence. Every write depends on the inserted event, so a duplicate
+-- changes neither entries nor balance. Entries in the site's own credits carry NULL currency.
+WITH locked AS MATERIALIZED (
+    SELECT 1 FROM billing.balances b WHERE b.account_id = @account_id FOR UPDATE
+), posted AS (
+    INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
+    SELECT @id, @site_id, @account_id, @kind, @request_id, @attempt_seq, @revision FROM locked
+    ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING
+    RETURNING id
+), entries AS (
     INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount, currency)
-    SELECT @transaction_id, @site_id, @account_id, unnest(@books::text[]), unnest(@amounts::bigint[]),
+    SELECT p.id, @site_id, @account_id, unnest(@books::text[]), unnest(@amounts::bigint[]),
         nullif(unnest(@currencies::text[]), '')
+    FROM posted p
+), balance AS (
+    UPDATE billing.balances b SET balance = b.balance - @user_debit
+    WHERE b.account_id = @account_id AND @user_debit::bigint <> 0 AND EXISTS (SELECT 1 FROM posted)
 )
-UPDATE billing.balances b SET balance = b.balance - @user_debit
-WHERE b.account_id = @account_id AND @user_debit::bigint <> 0;
+-- The command tag distinguishes a new event from a duplicate without allocating a result row.
+SELECT 1 FROM posted;
 
 -- name: AttemptCost :one
 SELECT coalesce(sum(e.amount), 0)::bigint FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id

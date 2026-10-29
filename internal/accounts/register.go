@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	netmail "net/mail"
 	"net/netip"
 	"strings"
 	"uuid"
@@ -20,7 +21,7 @@ var (
 	ErrEmailTaken = errors.New("accounts: email already registered")
 	// ErrWeakPassword is a password shorter than 12 characters or longer than 256.
 	ErrWeakPassword = errors.New("accounts: password must be 12 to 256 characters")
-	// ErrBadEmail is an address the table would refuse: not 3 to 254 printable ASCII characters around an @.
+	// ErrBadEmail is an address outside the printable ASCII mailbox syntax accepted by registration and mail.
 	ErrBadEmail = errors.New("accounts: not an email address")
 )
 
@@ -125,7 +126,7 @@ func createUser(ctx context.Context, tx pg.Tx, q *Queries, opened OpenedFunc, n 
 }
 
 // emailAllowed reports whether email, already normalized, is one the users table takes: 3 to 254 printable ASCII
-// characters (what lower() and the length check agree on in every locale) with an @ that has a character on each side.
+// characters (what lower() and the length check agree on in every locale), parseable as that exact mailbox.
 func emailAllowed(email string) bool {
 	if len(email) < 3 || len(email) > 254 {
 		return false
@@ -135,7 +136,8 @@ func emailAllowed(email string) bool {
 			return false
 		}
 	}
-	return strings.Contains(email[1:len(email)-1], "@")
+	address, err := netmail.ParseAddress(email)
+	return err == nil && address.Address == email
 }
 
 // invite is what code admits at host's site, or ErrInvalidInvite.
