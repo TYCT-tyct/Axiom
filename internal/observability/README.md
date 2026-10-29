@@ -33,7 +33,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 - **走了哪**：`model`（客户端要的公开名字）；`endpoint_id`、`source_class`、`egress`、`attempt_count` 都取自最后一个 `AttemptRecord`（没有尝试时分别是全零 UUID、`''`、`''`、0）；`route`（路由过程，≤ 8 KiB 的 JSON 对象，结构由 routing 定）。**每次尝试在 `call_attempt`**，供应商的成本和对账键仍在 suppliers，按同一个请求 ID 和尝试序号关联；账本交易不抄在这里，按请求 ID 从 billing 读（见「追溯」）。
 - **结果**：`usage`（计费项名字到数量的 JSON，含原生 token）、`service_tier`、`price_nano`、`cost_nano`（计费的最小单位）、`currency`、`free_of_charge`、`streamed`、`physical_input`（写入时能确定的物理输入；未知为 −1 的库内哨兵，读取时转成可空）、`latency_ms`、`first_token_ms`、`finish_reason`、`error_kind`。
 - **权利**：`consent_version`、`training_allowed`，只能在写入时记下。
-- **写入标签**：`client_app`、`session_id`、`subagent_id`、`request_class`、`language`、`used_tools`、`has_image`、`has_file`。分析标签随后台分类器加入，另表保存。
+- **写入标签**：`client_app`、`session_id`、`subagent_id`、`request_class`、`language`、`used_tools`、`has_image`、`has_file`；应用自己报的名字在 `app_referer`（URL，≤2048，只留 scheme、host 和 path）、`app_title`（≤200）、`app_categories`（最多两个小写连字符类别，≤64），由 gateway 从 `HTTP-Referer`、`X-OpenRouter-Title`（或旧的 `X-Title`）、`X-OpenRouter-Categories` 取出、去控制字符并截断后写入。分析标签随后台分类器加入，另表保存。
 
 `call_attempt`：一次尝试一行，外键意义上的归属是调用，按调用的 `at` 分区，主键 `(request_id, at, attempt_seq)`。
 
@@ -51,7 +51,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 | 用户看不到成本、端点和路由 | `OwnCall` 没有这些字段；尝试表不向用户开放，查询也不选尝试（[接入与对外接口的「用量与费用」](../../docs/domains/gateway.md#用量与费用)） |
 | 文字能存进库 | `Enqueue` 拒绝不合法的 UTF-8 和 NUL，包括每次尝试的文字；编码本身失败（`errEncoding`）和数据库的数据错误一样走坏行隔离。测试：非法 UTF-8 的行夹在好行之间，经真实的编码和库写入，好行落库、坏行被计数 |
 | 终端用户标识只以带密钥的哈希存放 | `EndUserHash` 是带私有数组的结构，包外无法构造非零值 |
-| 没有对话正文、密钥或凭证 | 两张表的列里没有这样的名字或字节类型，文字和 JSON 列都有长度或格式检查；测试读 `information_schema` 核对两张表。请求头一律不记 |
+| 没有对话正文、密钥或凭证 | 两张表的列里没有这样的名字或字节类型，文字和 JSON 列都有长度或格式检查；测试读 `information_schema` 核对两张表。请求头只记应用归因的三个，由 gateway 去控制字符、按列宽截断（`app_referer` 另去掉 userinfo、查询串和片段）后放入 `app_referer`、`app_title`、`app_categories`；其余请求头一律不记 |
 | 每次尝试有且只有一行，且能从调用找到 | `call_attempt` 的主键 `(request_id, at, attempt_seq)`；`Seq` 必须从 1 连续递增，最多 3 次；调用行的端点、来源类别、出口和次数由最后一个尝试算出。测试：写两次只有一行，按序号读回每次尝试，调用行与最后尝试一致 |
 | 同一个请求写两次是一行 | 两张表都是 `ON CONFLICT … DO NOTHING`；`at` 是请求开始时间，不是写入时间，所以重试的是同一个键。测试：同一个 `CallRecord` 写两次，调用一行、每次尝试一行 |
 | 写入从不因没有分区而失败 | 两张表都有默认分区兜底；测试写入 2001 年和 2090 年的调用和尝试 |

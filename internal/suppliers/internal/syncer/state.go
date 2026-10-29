@@ -171,4 +171,7 @@ type Commit struct {
 	Events  []Event
 	Plans   []Plan
 	Charges []adapter.Charge // upserted by Ref
+	// KeyPolicies is a complete fresh listing, projected with this commit and never encoded in State.
+	// A pointer distinguishes an empty completed listing from a step that did not read keys.
+	KeyPolicies *[]adapter.KeyState
 }

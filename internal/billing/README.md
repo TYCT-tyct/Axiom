@@ -34,6 +34,7 @@ type StatementRow struct{ ID uuid.UUID; At time.Time; Kind StatementKind; Amount
 type StatementCursor struct{ Seq int64; At time.Time; ID uuid.UUID; Balance, Frozen int64 } // 已实现；String 与 ParseStatementCursor 是它的文本形式，控制台的游标就是它
 func ReadFunds(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []uuid.UUID) (Funds, error) // 已实现：余额行加这些工作区的累计 spent，不加锁；没有余额行全是 0；只读接口用
 func ReadKeyUsage(ctx context.Context, tx pg.Tx, key uuid.UUID, reset Reset) (KeyUsage, error) // 已实现：key 的累计和当前 UTC 日、周、月已收，以及上限窗口里的已收加预留；只读接口用
+func ReadBudgetUsage(ctx context.Context, tx pg.Tx, subject uuid.UUID, reset Reset) (BudgetUsage, error) // key/工作区当前预算窗口的已收、预留和下次 UTC 重置时刻；不重置时 ResetsAt 为 time.Time 零值
 type Admitted struct{ Scope pg.Scope; Site, Account, Workspace, Key uuid.UUID; WorkspaceBudget, KeyLimit *Limit } // 已实现；gateway 把 accounts.Admission 转成它（`billingAdmitted`），这一层转换是设计，不是临时
 func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID,
 	d Demand, q []Quotable) (*Hold, []int, error) // 已实现；[]int：保留条目在 q（即原路线）里的下标；*Insufficient{Source, Transient}、ErrTerminated
@@ -93,7 +94,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 ## 控制台的读取
 
-管理 key 的列表使用 `ReadKeyUsages(ctx, tx, []KeyWindow)` 一次读取整页的累计、当前 UTC 日/周/月已收和各自限额窗口的已收加预留，返回每把 key 的 `KeyUsage`；与单把 `ReadKeyUsage` 使用相同口径，外账户或没有计数的 key 均为零。批量查询共享一次数据库时间，避免逐把往返占用准入名额和管理 key 行锁。控制台只需限额窗口的 `KeysUsed` 继续使用原查询，避免为它扫描完整历史。
+管理 key 的列表使用 `ReadKeyUsages(ctx, tx, []KeyWindow)` 一次读取整页的累计、当前 UTC 日/周/月已收和各自限额窗口的已收加预留，返回每把 key 的 `KeyUsage`（内含限额窗口的 BudgetUsage：已收、预留和下次重置时刻）；与单把 `ReadKeyUsage` 使用相同口径，外账户或没有计数的 key 金额均为零。单把和批量读取均在同一语句的数据库时间下计算窗口、已收、预留和重置边界；GET /api/v1/key 的 limit_remaining 与 key_limit 预算共用这份结果，工作区另查，避免重复读取 key 时并发提交或跨 UTC 边界导致同一响应不一致。批量查询共享一次数据库时间，避免逐把往返占用准入名额和管理 key 行锁。控制台只需限额窗口的 `KeysUsed` 继续使用原查询，避免为它扫描完整历史。
 
 控制台的余额、key 和额度流水页读下面几个函数，都在账户范围的事务里，不加锁，几个字节旧一点无妨（页面不是准入）：
 
@@ -184,15 +185,16 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **免单**：最后一次尝试 `NotExecuted` 不收；收费的那次尝试是因客户端离开而结束的（`Finish` 为 `FinishCancelled`）照收，客户端在一次失败的尝试之后才离开则按那次失败判断（`waivable` 只看收费的那次尝试，`Outcome` 里没有整个调用的"取消"）；内容没交到客户端（`FailedBeforeCommit`、`Unknown`），或交到了但每次采样都报告了输出、普通输出、推理与图片合计为 0、结束原因为空或出错的，只收按次项目（仍按整次采样所在的档位计价）。没有上限，也不数次数：同一个账户连续多少次零输出调用都全免（`settle_test.go` 的 `TestWaiversHaveNoCap`），`billing.waivers` 表已随迁移 `00006_drop_unused.sql` 删除。判定只看这三条，与金额无关（`waivable`、`zeroOutput`）。
 - **暂估**：收费的项里有上游没报告的、价目表缺价的，或有 protocol 映射不了的用量（`Usage.Unknown()`），收费标暂估，`Final.Estimated` 如实报出。缺价的都按「兜底价」收，结算和迟到的 `Settle` 都按它，所以从不免费：映射不了的用量由 `addFallbacks` 收，价目表给了项却给不了价的由 `addMissing` 收——上游按 `priority` 服务而锁定的售价只有标准档时 `Cost` 一项也价不了，token 按该价目表全部服务等级和档位里最高的 token 单价、按次项目按锁定的默认单价。已知的按次项目缺价时由准入补上的默认单价正常计价，不算暂估。上架门槛挡不住前一种：它查的是售价能不能给得出价（报价取请求等级与端点等级的交集再加标准档），不管上游回报什么。暂估不保留任何东西：预留里没用掉的部分在结算里一起释放；供应商记录到了以后由 `RegisterCorrections` 冲正并重新结算（下文「暂估校正」）。
 
-### 暂估校正
-
-- `RegisterCorrections` 在 money 队列每分钟运行，只有队列领导节点插入；`billing.charge_correction_cursor` 一行存 `(created_at, id)` 游标，`billing.charge_corrections` 存还没结算的事件及退避重试。供应商 API 按归属为尝试、非检测的事件读出 `charge_records.usage`（各项数量、供应商声明项、未知项、档位、物理输入）和事件版本；只处理 `settled`/`cleanup_settled`、`estimated`、收费项都没有被上游报告、事件属于被收费的尝试、`cost_flag=complete` 的请求，且重算后仍不暂估。每笔在账户事务里锁余额和预留，用预留锁定的价目表、兜底价和档位重算；先在事件版本上 `reverse` 旧结算、再 `settle` 新结算（同一版本、两个 kind），实收受余额底线约束，超出部分记 `platform_borne` 并写持久告警；更新 `final_usage`、实收、价格、`estimated=false`，利润按原利润加实收差额（原来未知仍未知）。同一事务里重放分配并保存，批次用完也留在重放集合里；事件没结算时留在重试表，1 分钟起、退避到 30 分钟。重复事件由 `(request_id, attempt_seq, kind, revision)` 唯一约束挡住，重试同一事件不会重复记账。测试：`TestCorrectionRePricesAnEstimatedCharge`（含重复事件不重复记账）、`TestCorrectionWaitsForTheReservation`、`TestCorrectionRefusesAPartlyReportedCharge`、`TestCorrectionRefusesAMissingItem`、`TestCorrectionRefusesUnknownUsage`，以及 `TestLedgerProperty` 把校正夹在随机结算里。
 - **`Cleanup`**：平台范围，逐笔一个事务。挂起且过了截止时间或持有者已回收的：记一行丢失的请求（带预留冻结的路线，不含被删条目的零 UUID），再清理释放；只释放，不收费，也不留待校正的状态。一笔失败不拦后面的，但算一次尝试：一次调用最多尝试 `max` 笔（成功加失败），工作量有界；到期的按 `request_id` 排序，游标越过失败的往后走，`sweep` 把游标记在内存里跨轮、跨次延续，走到到期集末尾就回到开头，所以恒失败的积压（每次都排在前面）不论多大都挡不住后面能清理的：排在游标之后第 r 位的预留，最多 ceil(r/max) 次调用就轮到。返回里区分「扫完」和「预算用尽」（`sweep` 扫完才停）；错误只保留前 5 条并计数其余；context 结束而提前返回时，带上下文的原因并入错误、已接管的数量照返；每释放一笔记一条警告日志（请求和释放的金额）。供应商侧因此留着「这个请求可能产生过费用，它的尝试可能落在这些端点上」，迟到的 `Settle` 或对账据此补上。没有尝试的记录可读：内容已交到客户端、结算还没提交时节点崩了，这次交付的尝试没有成本行，对账键也没有保存，由供应商的逐笔记录补齐。
 - **迟到的 `Settle`**：按完整的 `Outcome` 收（版本号 −1，先冲正清理记过的、再记这一笔），补扣最多到底线、其余平台承担，并 `ResolveLostRequest`。没有任何尝试的迟到 `Settle`（调用没到过上游）不收费，也 `ResolveLostRequest`。清理只释放、不收钱，所以冲正的那笔通常没有分录。清理不收钱而迟到的 `Settle` 收，是因为收费要按用户最终看到的用量，清理手上没有（理由见[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。找不到预留行时（主备切换丢了提交）现在返回错误，按清理释放补扣还没有：要先补一行预留。
 - **`AddCredit`**：锁余额行，记 credit 交易（借赠送支出）、批次行和审计日志，同成同败；同一 ID 重复无害。审计日志只在平台范围可写，所以它在调用方的平台范围事务里执行。
 - **`CreditPaid`**：与 `AddCredit` 共用 `addBatch`（锁余额行 → credit 交易 → 批次 → 审计），交易同样是 `credit`，所以分配重放不用改，`sourceRank` 已把非赠送排在赠送之后。先在边界检查：渠道恰好一个；`RateID` 按 ID 读出参考汇率版本，它必须是付款币种与记账货币这一对（同币种时必须为零）；入账额度在 1 到 `CreditsFor` 之间。分录：付款币种（同币种时就是记账货币）的账借现金（实付）、贷手续费收入（手续费）；记账货币的账贷用户余额（入账额度）；跨币种时付款币种的账贷汇兑损益（实付 − 手续费）、记账货币的账借汇兑损益（入账额度）；同币种时实付 − 手续费 − 入账额度（取整的零头）贷汇兑损益。同一 ID 已入账时读回批次比较账户、站点、来源、入账额度、付款（币种、实付、手续费）、渠道和汇率版本：一致返回 nil，不一致返回 `ErrCreditConflict`（不比较过期时间，重试可能按更晚的时钟重算它）。审计详情带来源、入账额度、币种、实付、手续费、渠道和汇率版本。迁移 `00018_paid_credit.sql`：`entries` 的两个约束以 NOT VALID 加上，存量行由下一个 billing 迁移 VALIDATE。
 - **`Suppliers`**：billing 在自己的事务里写尝试（每个尝试的成本、用量、回执、供应商单位下的估算）、丢失的请求与其解决、请求的终结（`EndRequest`）；接口在 billing，参数直接用 suppliers 的类型，`suppliers.CallWrites` 是它的实现（无状态，转发 suppliers 的 `RecordAttempts`、`RecordLostRequest`、`ResolveLostRequest`、`EndRequest`），测试用替身。
 - **`EndRequest`**：预留进入终态（已结算、已释放、清理释放）的那个事务里调用，时间取写预留行时的数据库时钟，suppliers 据此知道请求已有定论。迟到的 `Settle` 只在预留行上补记，不改写请求的结束。`SettleOrphan` 释放或写墓碑时同样调用。
+
+### 暂估校正
+
+- `RegisterCorrections` 在 money 队列每分钟运行，只有队列领导节点插入；`billing.charge_correction_cursor` 一行存 `(created_at, id)` 游标，`billing.charge_corrections` 存还没结算的事件及退避重试。供应商 API 按归属为尝试、非检测的事件读出 `charge_records.usage`（各项数量、供应商声明项、未知项、档位、物理输入）和事件版本；只处理 `settled`/`cleanup_settled`、`estimated`、收费项都没有被上游报告、事件属于被收费的尝试、`cost_flag=complete` 的请求，且重算后仍不暂估。每笔在账户事务里锁余额和预留，用预留锁定的价目表、兜底价和档位重算；先在事件版本上 `reverse` 旧结算、再 `settle` 新结算（同一版本、两个 kind），实收受余额底线约束，超出部分记 `platform_borne` 并写持久告警；更新 `final_usage`、实收、价格、`estimated=false`，利润按原利润加实收差额（原来未知仍未知）。同一事务里重放分配并保存，批次用完也留在重放集合里；事件没结算时留在重试表，1 分钟起、退避到 30 分钟。重复事件由 `(request_id, attempt_seq, kind, revision)` 唯一约束挡住，重试同一事件不会重复记账。测试：`TestCorrectionRePricesAnEstimatedCharge`（含重复事件不重复记账）、`TestCorrectionWaitsForTheReservation`、`TestCorrectionRefusesAPartlyReportedCharge`、`TestCorrectionRefusesAMissingItem`、`TestCorrectionRefusesUnknownUsage`，以及 `TestLedgerProperty` 把校正夹在随机结算里。
 
 ## 额度批次的分配与到期
 

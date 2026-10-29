@@ -227,8 +227,9 @@ func (q *Queries) CountOwnExportCalls(ctx context.Context, db DBTX, arg CountOwn
 
 const getCallTrace = `-- name: GetCallTrace :one
 SELECT id::text AS id, at, site_id::text AS site_id, account_id::text AS account_id, workspace_id::text AS workspace_id,
-    key_id::text AS key_id, end_user_hash, host(ip) AS ip, client_app, session_id, subagent_id, request_class,
-    language, used_tools, has_image, has_file, model, route::text AS route, usage::text AS usage, service_tier,
+    key_id::text AS key_id, end_user_hash, host(ip) AS ip, client_app, session_id, subagent_id, app_referer, app_title,
+    app_categories, request_class, language, used_tools, has_image, has_file, model, route::text AS route,
+    usage::text AS usage, service_tier,
     coalesce(price_version::text, '')::text AS price_version, price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind,
     consent_version, training_allowed
 FROM observability.call_log
@@ -247,6 +248,9 @@ type GetCallTraceRow struct {
 	ClientApp       string
 	SessionID       string
 	SubagentID      string
+	AppReferer      string
+	AppTitle        string
+	AppCategories   string
 	RequestClass    string
 	Language        string
 	UsedTools       bool
@@ -287,6 +291,9 @@ func (q *Queries) GetCallTrace(ctx context.Context, db DBTX, id string) (GetCall
 		&i.ClientApp,
 		&i.SessionID,
 		&i.SubagentID,
+		&i.AppReferer,
+		&i.AppTitle,
+		&i.AppCategories,
 		&i.RequestClass,
 		&i.Language,
 		&i.UsedTools,
@@ -313,7 +320,8 @@ func (q *Queries) GetCallTrace(ctx context.Context, db DBTX, id string) (GetCall
 
 const getOwnCall = `-- name: GetOwnCall :one
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
+    session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
+    service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, physical_input
 FROM observability.call_log
 WHERE id = ($1::text)::uuid
@@ -328,6 +336,9 @@ type GetOwnCallRow struct {
 	ClientApp     string
 	SessionID     string
 	SubagentID    string
+	AppReferer    string
+	AppTitle      string
+	AppCategories string
 	RequestClass  string
 	Model         string
 	Usage         string
@@ -356,6 +367,9 @@ func (q *Queries) GetOwnCall(ctx context.Context, db DBTX, id string) (GetOwnCal
 		&i.ClientApp,
 		&i.SessionID,
 		&i.SubagentID,
+		&i.AppReferer,
+		&i.AppTitle,
+		&i.AppCategories,
 		&i.RequestClass,
 		&i.Model,
 		&i.Usage,
@@ -376,12 +390,14 @@ func (q *Queries) GetOwnCall(ctx context.Context, db DBTX, id string) (GetOwnCal
 
 const insertCallLogs = `-- name: InsertCallLogs :execrows
 INSERT INTO observability.call_log (id, at, site_id, account_id, workspace_id, key_id, end_user_hash, ip, client_app,
-    session_id, subagent_id, request_class, language, used_tools, has_image, has_file, model, endpoint_id, source_class,
-    egress, attempt_count, route, usage, service_tier, price_version, price_nano, cost_nano, currency, free_of_charge,
-    latency_ms, first_token_ms, finish_reason, error_kind, consent_version, training_allowed, streamed, physical_input)
+    session_id, subagent_id, app_referer, app_title, app_categories, request_class, language, used_tools, has_image,
+    has_file, model, endpoint_id, source_class, egress, attempt_count, route, usage, service_tier, price_version, price_nano,
+    cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, consent_version,
+    training_allowed, streamed, physical_input)
 SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (r ->> 'account_id')::uuid,
     (r ->> 'workspace_id')::uuid, (r ->> 'key_id')::uuid, r ->> 'end_user_hash', (r ->> 'ip')::inet,
-    r ->> 'client_app', r ->> 'session_id', r ->> 'subagent_id', r ->> 'request_class', r ->> 'language',
+    r ->> 'client_app', r ->> 'session_id', r ->> 'subagent_id', r ->> 'app_referer', r ->> 'app_title',
+    r ->> 'app_categories', r ->> 'request_class', r ->> 'language',
     (r ->> 'used_tools')::boolean, (r ->> 'has_image')::boolean, (r ->> 'has_file')::boolean, r ->> 'model',
     (r ->> 'endpoint_id')::uuid, r ->> 'source_class', r ->> 'egress', (r ->> 'attempt_count')::smallint,
     (r ->> 'route')::jsonb, r -> 'usage', r ->> 'service_tier',
@@ -406,7 +422,8 @@ func (q *Queries) InsertCallLogs(ctx context.Context, db DBTX, rows []byte) (int
 
 const listOwnCalls = `-- name: ListOwnCalls :many
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
-    session_id, subagent_id, request_class, model, usage::text AS usage, service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
+    session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
+    service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, physical_input
 FROM observability.call_log
 WHERE account_id = ($1::text)::uuid
@@ -446,6 +463,9 @@ type ListOwnCallsRow struct {
 	ClientApp     string
 	SessionID     string
 	SubagentID    string
+	AppReferer    string
+	AppTitle      string
+	AppCategories string
 	RequestClass  string
 	Model         string
 	Usage         string
@@ -497,6 +517,9 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 			&i.ClientApp,
 			&i.SessionID,
 			&i.SubagentID,
+			&i.AppReferer,
+			&i.AppTitle,
+			&i.AppCategories,
 			&i.RequestClass,
 			&i.Model,
 			&i.Usage,

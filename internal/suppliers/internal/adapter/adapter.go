@@ -174,7 +174,15 @@ type KeyState struct {
 	Ref      KeyRef
 	GroupRef string
 	Status   KeyStatus
-	ResetAt  time.Time // when an exhausted key's allowance returns, zero if not stated
+	ResetAt  time.Time  // when an exhausted key's allowance returns, zero if not stated
+	Policy   *KeyPolicy `json:",omitzero"` // read with the listing; absent in the legacy persisted State.Keys
+}
+
+// KeyPolicy is the upstream permission of a key, independent of Axiom's concurrency limits.
+// Models nil means unrestricted; an empty list permits nothing, including unreadable restrictions.
+type KeyPolicy struct {
+	Models    []string `json:",omitzero"`
+	ExpiresAt *time.Time
 }
 
 // ChargeRef is the supplier's own id of a request, as it comes back in response headers and in the charge records.

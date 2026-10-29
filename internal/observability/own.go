@@ -14,21 +14,22 @@ import (
 // OwnCall is a call as its own account sees it: what the user did and was charged, and not what it cost us, which
 // endpoint served it, or how it was routed (docs/domains/gateway.md「用量与费用」).
 type OwnCall struct {
-	PriceVersion                     string
-	ID, Workspace, Key               uuid.UUID
-	At                               time.Time
-	IP                               string
-	ClientApp, SessionID, SubagentID string
-	Class, Model                     string
-	Usage                            map[string]int64 // billing item name to count
-	ServiceTier                      string
-	PriceNano                        int64
-	Currency                         string
-	Free                             bool
-	Latency, FirstToken              time.Duration
-	FinishReason, ErrorKind          string
-	Streamed                         bool
-	PhysicalInput                    *int64 // the upstream's prompt total, nil when it reported none
+	PriceVersion                        string
+	ID, Workspace, Key                  uuid.UUID
+	At                                  time.Time
+	IP                                  string
+	ClientApp, SessionID, SubagentID    string
+	AppReferer, AppTitle, AppCategories string
+	Class, Model                        string
+	Usage                               map[string]int64 // billing item name to count
+	ServiceTier                         string
+	PriceNano                           int64
+	Currency                            string
+	Free                                bool
+	Latency, FirstToken                 time.Duration
+	FinishReason, ErrorKind             string
+	Streamed                            bool
+	PhysicalInput                       *int64 // the upstream's prompt total, nil when it reported none
 }
 
 // Cursor is the place after which the next page starts: the last call of the page before.
@@ -150,6 +151,7 @@ func GetOwn(ctx context.Context, tx pg.Tx, id uuid.UUID) (OwnCall, error) {
 func ownCall(r store.ListOwnCallsRow) (OwnCall, error) {
 	c := OwnCall{
 		At: r.At, IP: r.Ip, ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID,
+		AppReferer: r.AppReferer, AppTitle: r.AppTitle, AppCategories: r.AppCategories,
 		PriceVersion: r.PriceVersion, Class: r.RequestClass, Model: r.Model, ServiceTier: r.ServiceTier, PriceNano: r.PriceNano,
 		Currency: r.Currency, Free: r.FreeOfCharge, Latency: time.Duration(r.LatencyMs) * time.Millisecond,
 		FirstToken: time.Duration(r.FirstTokenMs) * time.Millisecond, FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,

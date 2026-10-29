@@ -72,7 +72,12 @@ SELECT k.key_id,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('weekly', t.now)), 0)::bigint AS weekly,
     coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from('monthly', t.now)), 0)::bigint AS monthly,
     coalesce(sum(s.spent + s.reserved) FILTER (WHERE s.window_start >= billing.window_from(k.reset, t.now)
-        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS limited
+        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS limited,
+    coalesce(sum(s.spent) FILTER (WHERE s.window_start >= billing.window_from(k.reset, t.now)
+        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS window_spent,
+    coalesce(sum(s.reserved) FILTER (WHERE s.window_start >= billing.window_from(k.reset, t.now)
+        AND s.window_start < billing.window_to(k.reset, t.now)), 0)::bigint AS window_reserved,
+    CASE WHEN k.reset = '' THEN '0001-01-01 00:00:00+00'::timestamptz ELSE billing.window_to(k.reset, t.now) END::timestamptz AS resets_at
 FROM k CROSS JOIN t
 LEFT JOIN billing.spend s ON s.subject = k.key_id
 GROUP BY k.key_id, k.reset, t.now;
