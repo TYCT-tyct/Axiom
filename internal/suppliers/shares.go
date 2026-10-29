@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -11,7 +12,7 @@ import (
 )
 
 // ShareRegistry is the background-only core membership boundary. ConfirmShares must reject a view whose membership
-// changed since ShareView, and nil withdraws this process's former acknowledgement after its local lease expires.
+// changed since ShareView, and nil fences this process for rejoining after its local lease expires, retaining the last enforced view for peers.
 type ShareRegistry interface {
 	ShareID() string
 	ShareView(context.Context) ([]kv.ShareNode, error)
@@ -34,30 +35,41 @@ func (s *Service) SyncShares(ctx context.Context) error {
 			return err
 		}
 	}
-	nodes, err := s.cfg.Nodes.ShareView(ctx)
+	own, ids, err := s.readShares(ctx, asked)
 	if err != nil {
 		return err
 	}
-	ids := shareMembers(nodes)
-	ownIndex := slices.IndexFunc(nodes, func(n kv.ShareNode) bool { return n.ID == s.cfg.Nodes.ShareID() && n.Remaining > 0 })
-	if ownIndex < 0 {
-		return fmt.Errorf("suppliers: this process is absent from the live core registry")
-	}
-	own := &nodes[ownIndex]
-	s.shareNodes, s.shareUntil = nodes, asked.Add(min(kv.ShareLease, max(0, own.Remaining-5*time.Second)))
 	next := cloneSnapshot(s.snap.Load())
 	s.applyShares(next)
 	s.snap.Store(next)
-	if !slices.Equal(own.View, ids) && s.shareDrained(next, ids) {
+	if (own.Joining || !slices.Equal(own.View, ids)) && s.shareDrained(ids) {
 		if err := s.cfg.Nodes.ConfirmShares(ctx, ids); err != nil {
+			if errors.Is(err, kv.ErrShareMembershipChanged) {
+				return nil
+			}
 			return err
 		}
-		own.View = ids
+		own.View, own.Joining = ids, false
 		next = cloneSnapshot(next)
 		s.applyShares(next)
 		s.snap.Store(next)
 	}
 	return nil
+}
+
+func (s *Service) readShares(ctx context.Context, asked time.Time) (*kv.ShareNode, []string, error) {
+	nodes, err := s.cfg.Nodes.ShareView(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	ids := shareMembers(nodes)
+	ownIndex := slices.IndexFunc(nodes, func(n kv.ShareNode) bool { return n.ID == s.cfg.Nodes.ShareID() && n.Remaining > 0 })
+	if ownIndex < 0 {
+		return nil, nil, fmt.Errorf("suppliers: this process is absent from the live core registry")
+	}
+	own := &nodes[ownIndex]
+	s.shareNodes, s.shareUntil = nodes, asked.Add(min(kv.ShareLease, max(0, own.Remaining-5*time.Second)))
+	return own, ids, nil
 }
 
 func cloneSnapshot(old *snapshot) *snapshot {
@@ -97,13 +109,14 @@ func (s *Service) localShare(limit int32, rpm bool) int32 {
 		if !rpm && n.Remaining <= 0 {
 			continue
 		}
+		if n.ID == id && n.Remaining > 0 && n.Joining {
+			return 0
+		}
 		view := n.View
-		if len(view) == 0 {
-			// No acknowledgement reserves the full legacy share. A joining process itself stays closed until it confirms.
-			if n.ID == id {
-				return 0
-			}
+		if view == nil {
 			view = []string{n.ID}
+		} else if len(view) == 0 {
+			continue
 		}
 		value = min(value, share(limit, view, id))
 	}
@@ -129,20 +142,21 @@ func (s *Service) applyShares(next *snapshot) {
 	}
 }
 
-func (s *Service) shareDrained(snap *snapshot, ids []string) bool {
+func (s *Service) shareDrained(ids []string) bool {
 	id := s.cfg.Nodes.ShareID()
-	for _, ep := range snap.endpoints {
-		for _, c := range ep.creds {
-			rt := c.rt.requests
-			rt.mu.Lock()
-			drained := c.rt.inflight.Load() <= share(c.configuredMax, ids, id)
-			if c.configuredMinute != 0 {
-				drained = drained && rt.sum(rt.second(s.now())) <= int64(share(c.configuredMinute, ids, id))
-			}
-			rt.mu.Unlock()
-			if !drained {
-				return false
-			}
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	// A credential missing from the routable projection can still own calls and an account's old minute.
+	for _, c := range s.runtime {
+		rt := c.requests
+		rt.mu.Lock()
+		drained := c.inflight.Load() <= share(c.configuredMax, ids, id)
+		if c.configuredMinute != 0 {
+			drained = drained && rt.sum(rt.second(s.now())) <= int64(share(c.configuredMinute, ids, id))
+		}
+		rt.mu.Unlock()
+		if !drained {
+			return false
 		}
 	}
 	return true

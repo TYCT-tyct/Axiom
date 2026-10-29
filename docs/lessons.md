@@ -19,3 +19,11 @@
 证据：合并车 run 39439661276 的 go-test 失败（`internal/platform/kv/outage_test.go:347`：`the node stopped serving over a policy it only reports: valkey unavailable: context deadline exceeded`）；PR #372 的 `47f2d7e` CI 在同一文件第 174 行失败（`TestTimeoutReturnsAndTheBreakerRecovers`：`run the count: valkey unavailable: context deadline exceeded`）
 哪一层没拦住：PR #358 只在客户端构造函数里设置宽期限，直接调用 `kv.Open` 的路径漏过；超时测试虽用 `CLIENT PAUSE` 控制失败阶段，预热和恢复阶段仍要求真实网络在 20ms 内回复，测试和评审没有隔离这两种断言。待加的检查：测试中的直接 `kv.Open` 必须经过 `kvtest.Deps`；真实服务端的正常回复不得用生产期限断言，生产期限用受控服务端及虚拟时间验证。
 出现：2026-10-20
+
+## 凭证份额测试遗漏注册空档和路由投影外的占用
+
+E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都编码成空值视图；交接测试先同步加入者，漏过了注册后、首次确认前的空档。排空检查又只遍历可路由快照，余额不足或停用后隐藏的凭证仍持有的在途和账号窗口被漏掉。本轮以明确的空列表、独立的加入状态和保留的上次成员列表区分三种状态，并遍历全部保留运行时。回归覆盖 `TestUnconfirmedJoinKeepsExistingCoreUsable`、`TestUnconfirmedDepartureDoesNotReserveRPM`、`TestHiddenCredentialsMustDrainBeforeMembershipConfirmation`。
+
+证据：PR #433 的 de0a6a0 独立评审第 1、2 条；新增回归在修改实现前均失败，分别复现全停和提前释放加入者的份额。
+哪一层没拦住：份额测试只覆盖加入者已确认后的顺序，没有覆盖注册但未确认、未确认就退出，以及凭证从可路由投影中暂时消失的阶段；设计没有区分“从未准入”和“保留历史占用”的成员状态。后续份额协议修改需保留这组注册与投影变化的时序回归。
+出现：2026-10-29

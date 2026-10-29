@@ -3,7 +3,8 @@
 -- NULL identifies a node running the pre-share binary; it cannot acknowledge a handover.
 ALTER TABLE platform.nodes
     ADD COLUMN share_session uuid,
-    ADD COLUMN share_view text[];
+    ADD COLUMN share_view text[],
+    ADD COLUMN share_joining boolean NOT NULL DEFAULT true;
 
 -- Departed processes can still have requests in the upstream rolling minute. Keep their last partition until those
 -- requests have aged out; this is membership metadata, never a request counter.

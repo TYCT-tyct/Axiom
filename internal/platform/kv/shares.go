@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -10,11 +11,13 @@ import (
 )
 
 // ShareNode is a core incarnation and its enforced membership. Positive Remaining reserves concurrency; departed
-// entries stay after that to reserve RPM until their old minute ends. An empty View belongs to a joining process
-// or a legacy binary, whose former full share is reserved until it confirms membership.
+// entries stay after that to reserve RPM until their old minute ends. A nil View reserves a legacy process's full
+// share; an empty non-nil View has never admitted work. Joining fences only the process itself, keeping its previous
+// partition visible to peers while its old occupancy drains.
 type ShareNode struct {
 	ID        string
 	View      []string
+	Joining   bool
 	Remaining time.Duration // database heartbeat lifetime remaining when membership was read
 }
 
@@ -38,10 +41,10 @@ func (c *Client) ShareView(ctx context.Context) ([]ShareNode, error) {
 
 func shareNodes(ctx context.Context, tx pg.Tx) ([]ShareNode, error) {
 	rows, err := tx.Query(ctx, `SELECT id || '/' || coalesce(share_session::text, 'legacy'), share_view,
-  (extract(epoch FROM (seen_at + make_interval(secs => $1) - clock_timestamp())) * 1000000)::bigint
+  (extract(epoch FROM (seen_at + make_interval(secs => $1) - clock_timestamp())) * 1000000)::bigint, share_joining
   FROM platform.nodes WHERE seen_at > clock_timestamp() - make_interval(secs => $2)
   UNION ALL SELECT id, share_view,
-   (extract(epoch FROM (expires_at - make_interval(secs => $3) - clock_timestamp())) * 1000000)::bigint
+   (extract(epoch FROM (expires_at - make_interval(secs => $3) - clock_timestamp())) * 1000000)::bigint, false
    FROM platform.credential_share_departures
    WHERE expires_at > clock_timestamp() ORDER BY 1`, AliveFor.Seconds(), (AliveFor + shareWindow).Seconds(), shareWindow.Seconds())
 	if err != nil {
@@ -52,7 +55,7 @@ func shareNodes(ctx context.Context, tx pg.Tx) ([]ShareNode, error) {
 	for rows.Next() {
 		var n ShareNode
 		var micros int64
-		if err := rows.Scan(&n.ID, &n.View, &micros); err != nil {
+		if err := rows.Scan(&n.ID, &n.View, &micros, &n.Joining); err != nil {
 			return nil, err
 		}
 		n.Remaining = time.Duration(micros) * time.Microsecond
@@ -64,8 +67,11 @@ func shareNodes(ctx context.Context, tx pg.Tx) ([]ShareNode, error) {
 // ShareID is this process's membership identity, ordered by node name before the incarnation.
 func (c *Client) ShareID() string { return c.hear.id + "/" + c.hear.session.String() }
 
-// ConfirmShares publishes only a view still current at the write boundary. nil withdraws a stale local confirmation;
-// after a lease expires the process must join again, rather than revive a former share.
+// ErrShareMembershipChanged asks the background synchronizer to retry a membership race on its next tick.
+var ErrShareMembershipChanged = errors.New("kv: credential share membership changed")
+
+// ConfirmShares publishes only a view still current at the write boundary. nil fences this process for rejoining
+// while preserving its last partition for peers; it does not claim the legacy process's full allowance.
 func (c *Client) ConfirmShares(ctx context.Context, view []string) error {
 	return c.hear.db.Tx(ctx, c.hear.scope, func(tx pg.Tx) error { return c.hear.confirmShares(ctx, tx, view) })
 }
@@ -86,10 +92,11 @@ func (h *heartbeat) confirmShares(ctx context.Context, tx pg.Tx, view []string) 
 			}
 		}
 		if !slices.Equal(ids, view) {
-			return fmt.Errorf("kv: credential share membership changed")
+			return ErrShareMembershipChanged
 		}
 	}
-	result, err := tx.Exec(ctx, `UPDATE platform.nodes SET share_view = $3
+	result, err := tx.Exec(ctx, `UPDATE platform.nodes SET share_view = coalesce($3::text[], share_view),
+   share_joining = ($3::text[] IS NULL)
    WHERE id = $1 AND share_session = $2 AND seen_at > clock_timestamp() - make_interval(secs => $4)`,
 		h.id, h.session, view, AliveFor.Seconds())
 	if err != nil {

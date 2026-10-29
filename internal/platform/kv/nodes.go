@@ -75,8 +75,8 @@ func (h *heartbeat) start(ctx context.Context, nodes int, live *atomic.Int64, m 
 		if err := retireShares(ctx, tx, h.id, ""); err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session) VALUES ($1, $2)
-   ON CONFLICT (id) DO UPDATE SET seen_at = now(), share_session = excluded.share_session, share_view = NULL`, h.id, h.session)
+		_, err = tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view) VALUES ($1, $2, '{}')
+   ON CONFLICT (id) DO UPDATE SET seen_at = now(), share_session = excluded.share_session, share_view = '{}', share_joining = true`, h.id, h.session)
 		return err
 	})
 	if errors.Is(err, errTooMany) {
@@ -114,9 +114,9 @@ func (h *heartbeat) beat(ctx context.Context) (int, error) {
 // write is this node's row, made or refreshed. now() is the database's clock, so every node's row is aged by one clock
 // and a node's own clock being wrong cannot make it look alive or gone.
 func (h *heartbeat) write(ctx context.Context, tx pg.Tx) error {
-	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session) VALUES ($1, $2)
+	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view) VALUES ($1, $2, '{}')
   ON CONFLICT (id) DO UPDATE SET seen_at = now(),
-   share_view = CASE WHEN platform.nodes.seen_at <= now() - make_interval(secs => $3) THEN NULL ELSE platform.nodes.share_view END
+   share_joining = platform.nodes.share_joining OR platform.nodes.seen_at <= now() - make_interval(secs => $3)
  WHERE platform.nodes.share_session = excluded.share_session`,
 		h.id, h.session, AliveFor.Seconds())
 	return err

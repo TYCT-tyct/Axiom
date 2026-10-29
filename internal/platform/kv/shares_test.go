@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"errors"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -59,34 +60,28 @@ func TestCredentialShareRegistryRejectsStaleMembership(t *testing.T) {
 	t.Parallel()
 	w := newRegistryWorld(t)
 	a := w.start(t, "a")
-	view := registryView(t, a)
-	if len(view) != 1 || view[0].ID != a.ShareID() || len(view[0].View) != 0 {
-		t.Fatalf("initial membership: %+v", view)
-	}
-	if view[0].Remaining <= 0 || view[0].Remaining > AliveFor {
-		t.Fatalf("heartbeat lifetime: %s", view[0].Remaining)
-	}
 	old := []string{a.ShareID()}
 	if err := a.ConfirmShares(t.Context(), old); err != nil {
 		t.Fatal(err)
 	}
 	b := w.start(t, "b")
-	if err := a.ConfirmShares(t.Context(), old); err == nil {
+	if err := a.ConfirmShares(t.Context(), old); !errors.Is(err, ErrShareMembershipChanged) {
 		t.Fatal("accepted stale membership")
 	}
 	ids := []string{a.ShareID(), b.ShareID()}
 	if err := a.ConfirmShares(t.Context(), ids); err != nil {
 		t.Fatal(err)
 	}
-	view = registryView(t, b)
+	view := registryView(t, b)
 	if !slices.Equal(view[0].View, ids) {
 		t.Fatalf("peer did not see acknowledgement: %+v", view)
 	}
 	if err := a.ConfirmShares(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(registryView(t, b)[0].View) != 0 {
-		t.Fatal("expired local lease retained acknowledgement")
+	withdrawn := registryView(t, b)[0]
+	if !withdrawn.Joining || !slices.Equal(withdrawn.View, ids) {
+		t.Fatalf("rejoining changed the partition reserved for peers: %+v", withdrawn)
 	}
 }
 
@@ -105,20 +100,7 @@ func TestCredentialShareRegistryFencesOldProcessesAndKeepsTheirMinute(t *testing
 	if len(view) != 2 {
 		t.Fatalf("expected live and departed incarnation: %+v", view)
 	}
-	for _, n := range view {
-		switch n.ID {
-		case a.ShareID():
-			if n.Remaining <= 0 || !slices.Equal(n.View, []string{a.ShareID()}) {
-				t.Fatalf("restart lost the old minute: %+v", n)
-			}
-		case restarted.ShareID():
-			if n.Remaining <= 0 || len(n.View) != 0 {
-				t.Fatalf("restart inherited old view: %+v", n)
-			}
-		default:
-			t.Fatalf("unexpected member: %+v", n)
-		}
-	}
+	checkRestartPartitions(t, view, a.ShareID(), restarted.ShareID())
 }
 
 func TestAnOldCloseCannotRemoveTheReplacementHeartbeat(t *testing.T) {
@@ -156,8 +138,8 @@ func TestAHeartbeatThatReturnsAfterExpiryMustRejoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	nodes = registryView(t, c)
-	if len(nodes) != 1 || len(nodes[0].View) != 0 {
-		t.Fatalf("returning node kept its old confirmation: %+v", nodes)
+	if len(nodes) != 1 || !nodes[0].Joining || !slices.Equal(nodes[0].View, []string{c.ShareID()}) {
+		t.Fatalf("returning node lost its last partition or remained admitted: %+v", nodes)
 	}
 }
 
@@ -198,5 +180,50 @@ func checkDepartedPartition(t *testing.T, graceful bool) {
 	}
 	if len(registryView(t, c)) != 0 {
 		t.Fatal("departed RPM partition did not expire")
+	}
+}
+
+func TestNeverAdmittedDepartureRetainsAnEmptyPartition(t *testing.T) {
+	t.Parallel()
+	w := newRegistryWorld(t)
+	a := w.start(t, "a")
+	b := w.start(t, "b")
+	if err := b.hear.stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	nodes := registryView(t, a)
+	if len(nodes) != 2 || nodes[1].ID != b.ShareID() || nodes[1].View == nil || len(nodes[1].View) != 0 {
+		t.Fatalf("never admitted departure became a legacy full partition: %+v", nodes)
+	}
+}
+
+func TestNewShareRegistrationHasNoPriorAllocation(t *testing.T) {
+	t.Parallel()
+	w := newRegistryWorld(t)
+	a := w.start(t, "a")
+	view := registryView(t, a)
+	if len(view) != 1 || view[0].ID != a.ShareID() || (view[0].View == nil || len(view[0].View) != 0 || !view[0].Joining) {
+		t.Fatalf("initial membership: %+v", view)
+	}
+	if view[0].Remaining <= 0 || view[0].Remaining > AliveFor {
+		t.Fatalf("heartbeat lifetime: %s", view[0].Remaining)
+	}
+}
+
+func checkRestartPartitions(t *testing.T, view []ShareNode, old, current string) {
+	t.Helper()
+	for _, n := range view {
+		switch n.ID {
+		case old:
+			if n.Remaining <= 0 || !slices.Equal(n.View, []string{old}) {
+				t.Fatalf("restart lost the old minute: %+v", n)
+			}
+		case current:
+			if n.Remaining <= 0 || n.View == nil || len(n.View) != 0 || !n.Joining {
+				t.Fatalf("restart inherited old view: %+v", n)
+			}
+		default:
+			t.Fatalf("unexpected member: %+v", n)
+		}
 	}
 }

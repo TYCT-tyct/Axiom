@@ -137,9 +137,10 @@ func New(cfg Config) (*Service, error) {
 
 // credRuntime is the state of a credential that changes with calls.
 type credRuntime struct {
-	inflight atomic.Int32
-	restUnix atomic.Int64 // unix nanoseconds until which the credential is not picked
-	requests *minuteRuntime
+	configuredMax, configuredMinute int32 // last loaded limits, guarded by runtimeMu, retained when no endpoint routes it
+	inflight                        atomic.Int32
+	restUnix                        atomic.Int64 // unix nanoseconds until which the credential is not picked
+	requests                        *minuteRuntime
 }
 
 // minuteRuntime is the requests one upstream account made in the rolling minute, as this node counted them. It is a
@@ -226,7 +227,7 @@ func (rt *minuteRuntime) takeCurrent(limit int32, s *Service, snap *snapshot) bo
 	}
 	at := now()
 	// A caller paused before taking the account lock cannot spend a snapshot replaced before a handover was acknowledged.
-	if s != nil && (s.snap.Load() != snap || !at.Before(snap.until)) {
+	if s != nil && s.cfg.Nodes != nil && (s.snap.Load() != snap || !at.Before(snap.until)) {
 		return false
 	}
 	if !rt.started {
@@ -446,12 +447,12 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 	return &credential{
 		id: r.CredentialID, key: key, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
 		configuredMax: r.MaxConcurrency, configuredMinute: ceiling(r.RequestsPerMinute),
-		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, r.SupplierID),
+		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, r.SupplierID, r.MaxConcurrency, ceiling(r.RequestsPerMinute)),
 	}, nil
 }
 
 // runtimeOf is the running state of a credential, made when it is first seen and kept after.
-func (s *Service) runtimeOf(id, supplier uuid.UUID) *credRuntime {
+func (s *Service) runtimeOf(id, supplier uuid.UUID, max, perMinute int32) *credRuntime {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	rt, ok := s.runtime[id]
@@ -466,6 +467,7 @@ func (s *Service) runtimeOf(id, supplier uuid.UUID) *credRuntime {
 		rt = &credRuntime{requests: requests}
 		s.runtime[id] = rt
 	}
+	rt.configuredMax, rt.configuredMinute = max, perMinute
 	return rt
 }
 

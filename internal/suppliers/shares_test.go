@@ -43,7 +43,7 @@ func (r *shareCluster) live() []kv.ShareNode {
 	var nodes []kv.ShareNode
 	for _, m := range r.members {
 		if r.now.Sub(m.seen) < kv.AliveFor+61*time.Second {
-			nodes = append(nodes, kv.ShareNode{ID: m.ID, View: slices.Clone(m.View), Remaining: kv.AliveFor - r.now.Sub(m.seen)})
+			nodes = append(nodes, kv.ShareNode{ID: m.ID, View: slices.Clone(m.View), Joining: m.Joining, Remaining: kv.AliveFor - r.now.Sub(m.seen)})
 		}
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
@@ -64,10 +64,13 @@ func (r fakeShares) ConfirmShares(_ context.Context, view []string) error {
 		}
 	}
 	if view != nil && !slices.Equal(view, ids) {
-		return errors.New("membership changed")
+		return kv.ErrShareMembershipChanged
 	}
 	m := r.cluster.members[r.id]
-	m.View = slices.Clone(view)
+	if view != nil {
+		m.View = slices.Clone(view)
+	}
+	m.Joining = view == nil
 	r.cluster.members[r.id] = m
 	return nil
 }
@@ -91,8 +94,10 @@ func (r *shareCluster) node(t testing.TB, id string, max, rpm int32) *Service {
 	t.Helper()
 	r.mu.Lock()
 	member := shareMember{
-		seen: r.now,
-		ID:   id,
+		seen:    r.now,
+		ID:      id,
+		View:    []string{},
+		Joining: true,
 	}
 	r.members[id] = member
 	r.mu.Unlock()
@@ -101,7 +106,7 @@ func (r *shareCluster) node(t testing.TB, id string, max, rpm int32) *Service {
 		t.Fatal(err)
 	}
 	credentialID, supplierID := uuid.NewV7(), uuid.NewV7()
-	c := &credential{id: credentialID, max: max, configuredMax: max, perMinute: rpm, configuredMinute: rpm, rt: s.runtimeOf(credentialID, supplierID)}
+	c := &credential{id: credentialID, max: max, configuredMax: max, perMinute: rpm, configuredMinute: rpm, rt: s.runtimeOf(credentialID, supplierID, max, rpm)}
 	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{uuid.Nil(): {creds: []*credential{c}}}})
 	return s
 }
@@ -237,7 +242,7 @@ func TestShareLeaseFencesAStoppedSynchronizerAndRejoins(t *testing.T) {
 	syncShares(t, a, a)
 	calls := takeShares(t, a, 6)
 	fullShare(t, a)
-	// B's heartbeat returns. Clearing its expired confirmation makes it a joining core, even with the same identity.
+	// B's heartbeat returns. Fencing its expired lease makes it a joining core, even with the same identity.
 	r.advance(0, "b/1")
 	syncShares(t, b, a, b)
 	fullShare(t, b)
