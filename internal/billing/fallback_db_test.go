@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 // saveFallbacks saves body, a row in its stored form, through SaveFallbacks.
@@ -494,9 +495,9 @@ func TestUnlistedModelTierBecomesAMissingItem(t *testing.T) {
 
 func checkUnlistedModelTier(t *testing.T, declared, cleanup bool, wantItems int) {
 	t.Helper()
-	logs := &logBuffer{}
+	logs := &telemetrytest.Buffer{}
 	cfg := fallbackBankConfig
-	cfg.Logger = logs.logger()
+	cfg.Logger = logs.Logger()
 	var signals settlementSignals
 	cfg.Alerts = &signals
 	b := fallbackBank(t, 10_000, 0, cfg)

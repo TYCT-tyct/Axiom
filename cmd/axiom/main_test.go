@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/telemetry/telemetrytest"
 )
 
 // TestMain lets a test run the program in a process of its own, which exit codes and signals need: after "--" the test
@@ -220,7 +221,7 @@ func stopTheNode(t *testing.T, p *program) {
 type program struct {
 	cmd     *exec.Cmd
 	records chan addresses
-	stderr  lockedBuffer
+	stderr  telemetrytest.Buffer
 	waitErr error
 	waiting sync.Once
 	exited  chan struct{} // closed once the program has ended and its output is all written
@@ -322,22 +323,4 @@ func (p *program) unread(msg string) (addresses, bool) {
 			return addresses{}, false
 		}
 	}
-}
-
-// lockedBuffer collects the program's standard error, which another goroutine writes while the test reads it.
-type lockedBuffer struct {
-	mu     sync.Mutex
-	buffer bytes.Buffer
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buffer.Write(p)
-}
-
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buffer.String()
 }
