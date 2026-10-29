@@ -49,9 +49,9 @@ M1 只有 `direct` 一个出口，调用直接走它，不按下面的规则选�
 
 ### 命名预设
 
-账户通过管理 key 的 `/api/v1/presets`（GET/POST）和 `/api/v1/presets/{slug}`（GET/PATCH/DELETE），或控制台的 `/api/console/v1/presets`（GET/POST）及 `/{slug}`（GET/PUT/DELETE）管理 `{slug,name,config}`。控制台读写沿用 `api_keys.view` / `api_keys.manage`；写操作有 CSRF 防护，管理 key 沿用当前授权复核、IP 与每分钟限额。每账户最多 100 个，每个 config 最多 16 KiB，只保存模型、路由、生成参数、系统提示与工具配置，不保存消息、input、stream 或会话标识。删除为终态软删除，重建同名产生新 ID。命名配置由 accounts 保存并装入每 30 秒更新、90 秒过期的账户快照，不在调用路径查库；删除或修改至多滞后一个快照陈旧上限。它不替代 key 绑定的端点过滤预设。
+账户通过管理 key 的 `/api/v1/presets`（GET/POST）和 `/api/v1/presets/{slug}`（GET/PATCH/DELETE），或控制台的 `/api/console/v1/presets`（GET/POST）及 `/{slug}`（GET/PUT/DELETE）管理 `{slug,name,config}`。控制台读写沿用 `api_keys.view` / `api_keys.manage`；写操作有 CSRF 防护，管理 key 沿用当前授权复核、IP 与每分钟限额。每账户最多 100 个，每个 config 的输入及 PostgreSQL jsonb 文本表示均最多 16 KiB（包含数字指数展开与空白），只保存模型、路由、生成参数、系统提示与工具配置，不保存消息、input、stream 或会话标识。删除为终态软删除，重建同名产生新 ID。命名配置由 accounts 保存并装入每 30 秒更新、90 秒过期的账户快照，不在调用路径查库；删除或修改至多滞后一个快照陈旧上限。重载遇到不合法的单条配置（含旧节点不认识的新字段）时记告警并跳过，仅该预设不可用，不阻断其他账户的快照刷新；数据库读取失败仍沿用整体快照的陈旧规则。它不替代 key 绑定的端点过滤预设。
 
-调用支持 `model: "@preset/slug"`、`preset: "@preset/slug"` 和 `model: "vendor/model@preset/slug"`；裸 slug 的 preset 字段按 OpenRouter 忽略；两个有效引用不一致返回 400。只查当前站点和账户，同名不跨租户；不存在返回 404。只给 models 数组而未给 model 的配置，合并请求覆盖后取数组第一项作为主模型，其余作为有序备选；显式 model（含 null）仍按请求覆盖规则处理。生成上限、工具声明等配置使用客户端调用格式的字段和结构，例如 Responses 用 max_output_tokens，Messages 用 max_tokens。请求顶层字段浅覆盖配置，显式 null 也覆盖；provider 对象整体替换。tools 按身份合并：函数名、advisor/subagent 的 type+parameters.name、其他 OpenRouter 工具的 type、其他具名客户端工具的 type+name，原有顺序保留，请求专有项追加。系统提示 config.system 是字符串：Messages 补 system，Responses 补 instructions，Chat 在没有 system/developer 消息时前置系统消息。合并后的同一份请求重新 Inspect，路由、能力、预留与转发均以它为准；key 的模型限制与路由硬条件仍独立执行。未引用预设的调用不分配配置映射、不改写请求体。
+调用支持 `model: "@preset/slug"`、`preset: "@preset/slug"` 和 `model: "vendor/model@preset/slug"`；裸 slug 的 preset 字段按 OpenRouter 忽略；两个有效引用不一致返回 400。只查当前站点和账户，同名不跨租户；不存在返回 404。只给 models 数组而未给 model 的配置，合并请求覆盖后取数组第一项作为主模型，其余作为有序备选；显式 model（含 null）仍按请求覆盖规则处理。生成上限、工具声明等配置使用客户端调用格式的字段和结构，例如 Responses 用 max_output_tokens，Messages 用 max_tokens。请求顶层字段浅覆盖配置，显式 null 也覆盖；provider 对象整体替换。Messages 的非 null fallbacks（含空数组）覆盖预设的 models 备选，保留从仅有 models 的配置中取得的主模型；请求自己同时给出 models 和 fallbacks 仍返回 400。tools 按身份合并：函数名、advisor/subagent 的 type+parameters.name、其他 OpenRouter 工具的 type、其他具名客户端工具的 type+name，原有顺序保留，请求专有项追加。系统提示 config.system 是字符串：Messages 补 system，Responses 补 instructions，Chat 在没有 system/developer 消息时前置系统消息。合并中的结构错误返回 400，不按过载重试。合并后的同一份请求重新 Inspect，路由、能力、预留与转发均以它为准；key 的模型限制与路由硬条件仍独立执行。未引用预设的调用不分配配置映射、不改写请求体。
 
 基线：[OpenRouter Presets](https://openrouter.ai/docs/guides/features/presets)、[List presets](https://openrouter.ai/docs/api/api-reference/presets/list-presets)（2026-10-29）。本次只交付账户 CRUD 与请求合并，不提供 OpenRouter 的版本历史、指定版本、从推理请求建版本端点；响应直接给出 config 而非 designated_version。列表按更新时间倒序，用 limit（默认 50、最大 100）和 offset 分页。
 
@@ -146,7 +146,7 @@ M1 只有 `direct` 一个出口，调用直接走它，不按下面的规则选�
 
 ## 决策与理由
 
-命名配置采用账户表和现有账户快照，而不在每次调用时查库或增加独立缓存：复用租户隔离与有界陈旧机制，代价是控制面写入延迟至快照更新后生效。配置与 key 上的强制路由规则分开，保证请求参数覆盖不会放宽授权。CRUD 软删除并原子替换配置，不添加版本表：本次没有版本选择需求，避免把未经验证的历史存储接口固定下来。风险检查覆盖隔离、并发写入、失败回滚、快照过期、内存预算和最终摘要一致性。数据模型与公开接口按 [#309 的负责人委托](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」决定，仍须独立评审。
+命名配置采用账户表和现有账户快照，而不在每次调用时查库或增加独立缓存：复用租户隔离与有界陈旧机制，代价是控制面写入延迟至快照更新后生效。配置与 key 上的强制路由规则分开，保证请求参数覆盖不会放宽授权。CRUD 软删除并原子替换配置，不添加版本表：本次没有版本选择需求，避免把未经验证的历史存储接口固定下来。保存前使用数据库的 jsonb 文本表示校验大小，而非只校验客户端规范 JSON：数据库会展开指数数字；保留 JSONB 可复用既有存储与约束，无需另加编码格式。快照对无效预设单行告警并跳过，避免跨租户可用性故障及滚动发布字段不兼容；代价是该预设在不认识它的节点返回 404。风险检查覆盖隔离、并发写入、失败回滚、快照过期、内存预算和最终摘要一致性。数据模型与公开接口按 [#309 的负责人委托](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」决定，仍须独立评审。
 
 
 P4（2026-10-29）依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，独立评审由流水线安排。以 [OpenRouter Provider Routing](https://openrouter.ai/docs/guides/routing/provider-selection) 为基线。不变量：请求限制必须兑现或在预留前返回 400；名称不越过端点归属与预设；价格使用实际受众售价且不经浮点换算。实现复用现有快照、过滤和排序，公开名称采用供应商分组不可变的代号，精确匹配分组，不把代号扩大为整家供应商。另一方案是在准入查供应商名称并转成供应商 ID：会增加数据库往返、暴露真实名称，并让选定分组扩大到同供应商其他组，因此不选。

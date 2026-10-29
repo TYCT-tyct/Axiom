@@ -10,7 +10,7 @@
 func New(cfg Config) (*Router, error)
 func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error)
 func (r *Router) Replace(s *Snapshot) // 只接受更新的快照
-func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte, header ...string) SessionKey // 只扫有界前缀
+func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte, header string) SessionKey // 只扫有界前缀
 func (r *Router) Plan(in Input) (Plan, *Wait, error) // 纯内存；*NoEndpoint{Reasons, Permanent}；ErrStale
 func (r *Router) ServesFor(m catalog.ModelID, a billing.Audience) bool // 快照里有这个受众可收费的模型端点；不看熔断、负载、暂停、预算、过滤，也不看快照新不新；模型列表和单个模型用
 func (r *Router) Block(e Entry, scope Scope, after time.Duration) // 暂停端点或供应商到上游给的时间，最多两小时；没给用 Config.Pause

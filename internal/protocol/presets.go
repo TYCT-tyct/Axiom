@@ -62,6 +62,14 @@ func PresetCost(body, config []byte) int64 {
 // MergePreset shallowly overlays the request, preserving message and signature values.
 // Tools are the documented exception: identity union, with the request taking precedence.
 func MergePreset(f Format, body, config []byte, model string) ([]byte, error) {
+	merged, err := mergePreset(f, body, config, model)
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot merge preset: %s", ErrInvalid, strings.TrimPrefix(bodyFault(err), ErrInvalid.Error()+": "))
+	}
+	return merged, nil
+}
+
+func mergePreset(f Format, body, config []byte, model string) ([]byte, error) {
 	var request, defaults map[string]jsonx.Raw
 	if err := jsonx.Unmarshal(body, &request); err != nil {
 		return nil, err
@@ -69,11 +77,7 @@ func MergePreset(f Format, body, config []byte, model string) ([]byte, error) {
 	if err := jsonx.Unmarshal(config, &defaults); err != nil {
 		return nil, err
 	}
-	if err := presetModel(request, model); err != nil {
-		return nil, err
-	}
-	delete(request, "preset")
-	if err := presetSystem(f, request, defaults); err != nil {
+	if err := presetDefaults(f, request, defaults, model); err != nil {
 		return nil, err
 	}
 	if a, b := defaults["tools"], request["tools"]; len(a) > 0 && len(b) > 0 && !bytes.Equal(b, []byte("null")) {
@@ -92,6 +96,21 @@ func MergePreset(f Format, body, config []byte, model string) ([]byte, error) {
 		return nil, err
 	}
 	return presetObject(request), nil
+}
+
+func presetDefaults(f Format, request, defaults map[string]jsonx.Raw, model string) error {
+	if err := presetModel(request, model); err != nil {
+		return err
+	}
+	delete(request, "preset")
+	if f == Messages && !isNull(request["fallbacks"]) {
+		// Resolve the configured primary before replacing its alternate-model defaults.
+		if err := presetPrimary(defaults); err != nil {
+			return err
+		}
+		delete(defaults, "models")
+	}
+	return presetSystem(f, request, defaults)
 }
 
 // A models-only configuration is one ordered route, not an absent primary plus unrelated defaults.

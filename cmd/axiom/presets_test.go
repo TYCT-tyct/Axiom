@@ -53,6 +53,9 @@ func TestPresetAPIs(t *testing.T) {
 	check(request("POST", "", `{"slug":"support","name":"Duplicate","config":{}}`, manager.Secret), 409)
 	check(request("GET", "?limit=0", "", manager.Secret), 400)
 	check(request("POST", "", `{"slug":"bad","name":"Bad","config":{"messages":[]}}`, manager.Secret), 400)
+	invalid := `{"slug":"nul","name":"Invalid","config":{"system":"a\u0000b"}}`
+	check(request("POST", "", invalid, manager.Secret), 400)
+	check(f.do("POST", "/presets", invalid, as(owner)), 422)
 	check(f.do("POST", "/presets", `{"slug":"console","name":"Console","config":{}}`, as(owner)), 201)
 	check(f.do("DELETE", "/presets/console", "", as(owner)), 204)
 	check(request("DELETE", "/support", "", manager.Secret), 200)

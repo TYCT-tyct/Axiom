@@ -3,7 +3,7 @@ package accounts
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -33,11 +33,12 @@ var ErrPresetConflict = errors.New("accounts: preset slug exists or limit reache
 
 var presetSlug = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,100}$`)
 
+const maxPresetConfig = 16 << 10
+
 // ValidatePresetConfig bounds stored configuration and excludes transient input and recursive references.
 func ValidatePresetConfig(config []byte) error {
 	var fields map[string]jsonx.Raw
-	canonical, err := jsonx.MarshalCanonical(jsonx.Raw(config))
-	if err != nil || len(canonical) > 16<<10 || jsonx.Unmarshal(canonical, &fields) != nil || fields == nil {
+	if len(config) > maxPresetConfig || jsonx.Unmarshal(config, &fields) != nil || fields == nil {
 		return ErrPreset
 	}
 	for key, raw := range fields {
@@ -164,6 +165,11 @@ func SavePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, site SiteID, a
 	if !presetSlug.MatchString(p.Slug) || utf8.RuneCountInString(p.Name) < 1 || utf8.RuneCountInString(p.Name) > 100 || ValidatePresetConfig(p.Config) != nil {
 		return Preset{}, ErrPreset
 	}
+	config, err := normalizePresetConfig(ctx, tx, p.Config)
+	if err != nil {
+		return Preset{}, err
+	}
+	p.Config = config
 	var locked uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT id FROM accounts.accounts WHERE site_id=$1 AND id=$2 FOR UPDATE`, uuid.UUID(site), uuid.UUID(account)).Scan(&locked); err != nil {
 		return Preset{}, err
@@ -188,6 +194,21 @@ func SavePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, site SiteID, a
 		return Preset{}, err
 	}
 	return out, recordPreset(ctx, tx, actor, action, site, account, out.ID)
+}
+
+// PostgreSQL expands numeric exponents in jsonb text; bound the representation readers will validate.
+func normalizePresetConfig(ctx context.Context, tx pg.Tx, config jsonx.Raw) (jsonx.Raw, error) {
+	var stored string
+	if err := tx.QueryRow(ctx, `SELECT $1::jsonb::text`, []byte(config)).Scan(&stored); err != nil {
+		if strings.HasPrefix(pg.SQLState(err), "22") {
+			return nil, ErrPreset
+		}
+		return nil, err
+	}
+	if err := ValidatePresetConfig([]byte(stored)); err != nil {
+		return nil, err
+	}
+	return jsonx.Raw(stored), nil
 }
 
 func insertPreset(ctx context.Context, tx pg.Tx, site SiteID, account AccountID, p Preset) error {
@@ -232,20 +253,22 @@ type presetKey struct {
 }
 
 func readPresets(ctx context.Context, tx pg.Tx) (map[presetKey]string, error) {
-	rows, err := tx.Query(ctx, `SELECT site_id,account_id,slug,config FROM accounts.presets WHERE deleted_at IS NULL`)
+	rows, err := tx.Query(ctx, `SELECT id,site_id,account_id,slug,config FROM accounts.presets WHERE deleted_at IS NULL`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := map[presetKey]string{}
 	for rows.Next() {
+		var id uuid.UUID
 		var key presetKey
 		var config string
-		if err := rows.Scan(&key.site, &key.account, &key.slug, &config); err != nil {
+		if err := rows.Scan(&id, &key.site, &key.account, &key.slug, &config); err != nil {
 			return nil, err
 		}
 		if err := ValidatePresetConfig([]byte(config)); err != nil {
-			return nil, fmt.Errorf("load preset %s: %w", key.slug, err)
+			slog.WarnContext(ctx, "ignoring invalid preset", "preset_id", id, "site_id", uuid.UUID(key.site), "account_id", uuid.UUID(key.account), "error", err)
+			continue
 		}
 		out[key] = config
 	}

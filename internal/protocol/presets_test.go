@@ -3,6 +3,7 @@ package protocol_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -165,6 +166,38 @@ func TestPresetModelList(t *testing.T) {
 		req := must(protocol.Inspect(protocol.Chat, got))
 		if req.Model != tc.model || len(req.Models) != tc.alternates {
 			t.Fatalf("model list: %+v", req)
+		}
+	}
+}
+
+func TestPresetMergeErrorsAreInvalidRequests(t *testing.T) {
+	for _, tc := range []struct{ body, config string }{
+		{`{"model":"@preset/p","tools":[{"type":"function","name":"f"}]}`, `{"model":"m","tools":{"a":1}}`},
+		{`{"model":"@preset/p","tools":[{"type":"function","name":"f"}]}`, `{"model":"m","tools":[1]}`},
+		{`{"model":"@preset/p"}`, `{"model":"m","system":"help"}`},
+	} {
+		_, err := protocol.MergePreset(protocol.Chat, []byte(tc.body), []byte(tc.config), "")
+		if !errors.Is(err, protocol.ErrInvalid) {
+			t.Fatalf("merge error is not a request error: %v", err)
+		}
+	}
+}
+
+func TestPresetMessagesFallbackOverride(t *testing.T) {
+	for _, config := range []string{`{"models":["a","b"]}`, `{"models":["a"]}`, `{"model":"a","models":["b"]}`} {
+		for _, tc := range []struct {
+			fallbacks string
+			models    []string
+		}{
+			{`[{"model":"c"}]`, []string{"c"}},
+			{`[]`, nil},
+		} {
+			body := []byte(`{"model":"@preset/p","fallbacks":` + tc.fallbacks + `}`)
+			got := must(protocol.MergePreset(protocol.Messages, body, []byte(config), ""))
+			req := must(protocol.Inspect(protocol.Messages, got))
+			if req.Model != "a" || !slices.Equal(req.Models, tc.models) {
+				t.Fatalf("fallback override: %+v", req)
+			}
 		}
 	}
 }

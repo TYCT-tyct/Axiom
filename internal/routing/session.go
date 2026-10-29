@@ -23,15 +23,15 @@ const conversationHead = 1024
 // those already validated values are available even beyond the prefix. The prefix supplies
 // prompt_cache_key, or the user_id of Anthropic's metadata, which Claude Code fills with its session. Without one the
 // key comes from the account, the model, and the first bytes of the conversation (docs/domains/routing.md「会话粘性」).
-func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte, header ...string) SessionKey {
+func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte, header string) SessionKey {
 	if len(body) > r.cfg.SessionPrefix {
 		body = body[:r.cfg.SessionPrefix]
 	}
 	given, head := scanSession(body)
 	if req.SessionID != "" {
 		given = req.SessionID
-	} else if len(header) > 0 && header[0] != "" {
-		given = header[0]
+	} else if header != "" {
+		given = header
 	}
 	h := sha256.New()
 	h.Write(acct[:])

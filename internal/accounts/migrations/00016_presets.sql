@@ -3,7 +3,7 @@ CREATE TABLE accounts.presets (
     id uuid PRIMARY KEY, site_id uuid NOT NULL, account_id uuid NOT NULL,
     slug text NOT NULL CHECK (slug ~ '^[a-zA-Z0-9_-]{1,100}$'),
     name text NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
-    config jsonb NOT NULL CHECK (jsonb_typeof(config) = 'object' AND octet_length(config::text) <= 32768),
+    config jsonb NOT NULL CHECK (jsonb_typeof(config) = 'object' AND octet_length(config::text) <= 16384),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(), deleted_at timestamptz,
     FOREIGN KEY (site_id,account_id) REFERENCES accounts.accounts(site_id,id)
