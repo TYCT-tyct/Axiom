@@ -30,7 +30,10 @@ var errorRows = []struct {
 	{protocol.NoEndpoint, "no_endpoint", 404, "not_found_error"},
 	{protocol.NoEndpointForNow, "no_endpoint", 503, "overloaded_error"},
 	{protocol.InvalidRequest, "invalid_request", 400, "invalid_request_error"},
-	{protocol.RequestTooLarge, "request_too_large", 413, "request_too_large"},
+	{protocol.RequestTooLarge, "payload_too_large", 413, "request_too_large"},
+	{protocol.ContextLengthExceeded, "context_length_exceeded", 400, "invalid_request_error"},
+	{protocol.PermissionDenied, "permission_denied", 403, "permission_error"},
+	{protocol.ContentPolicyViolation, "content_policy_violation", 403, "permission_error"},
 	{protocol.UpstreamFailed, "upstream_error", 502, "api_error"},
 	{protocol.Timeout, "timeout", 408, "timeout_error"},
 }
@@ -159,6 +162,34 @@ func TestRenderRejection(t *testing.T) {
 				t.Errorf("a param in Anthropic's shell: %s", body)
 			}
 		})
+	}
+}
+
+func TestTypedRejectionUsesCanonicalCodeWhenAbsent(t *testing.T) {
+	for _, row := range []struct {
+		typ    protocol.ErrorType
+		code   string
+		status int
+		kind   string
+	}{
+		{protocol.ContextLengthExceeded, "context_length_exceeded", 400, "invalid_request_error"},
+		{protocol.PermissionDenied, "permission_denied", 403, "permission_error"},
+		{protocol.ContentPolicyViolation, "content_policy_violation", 403, "permission_error"},
+		{protocol.RequestTooLarge, "payload_too_large", 413, "request_too_large"},
+	} {
+		for _, f := range []protocol.Format{protocol.Chat, protocol.Responses} {
+			status, body := protocol.RenderError(f, protocol.Error{Type: row.typ, Rejection: &protocol.Rejection{
+				Type: "invalid_request_error", Message: "upstream words", Param: "input",
+			}}, nil)
+			var got map[string]any
+			if err := jsonx.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			e := got["error"].(map[string]any)
+			if status != row.status || e["code"] != row.code || e["type"] != row.kind || e["param"] != "input" || e["message"] != "upstream words" {
+				t.Errorf("%s: %d %s", row.code, status, body)
+			}
+		}
 	}
 }
 

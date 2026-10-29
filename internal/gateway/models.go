@@ -169,11 +169,15 @@ func (h *Handler) authorise(r *http.Request, caller accounts.Caller, fn func(con
 	return h.admitDB(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: h.clientIP(r)}, func(tx pg.Tx, a accounts.Admission) error { return fn(ctx, tx, a) })
 }
 
-// model is the entry for one name, resolved as a call resolves it, or the error a call gets: a name the catalog does
-// not know or has retired is model_not_found, and so is a model this key may not use, which is never 403, and one
-// nothing serves.
+// model resolves the public base name and checks model visibility. Discovery does not validate request-level sorting:
+// :exacto describes the base model even when a call would need an explicit provider.sort to override it. Unknown,
+// retired, unserved and key-hidden models are all model_not_found, never 403.
 func (v visibility) model(name string) (modelEntry, error) {
-	resolved, err := v.snap.ResolvePublic(name)
+	parsed, ref := parseModelName(name)
+	if ref != nil {
+		return modelEntry{}, ref
+	}
+	resolved, err := v.snap.ResolvePublic(parsed.base)
 	if err != nil {
 		return modelEntry{}, err
 	}

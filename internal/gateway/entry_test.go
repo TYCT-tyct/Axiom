@@ -252,8 +252,8 @@ func TestBodyLimits(t *testing.T) {
 		status int
 		code   string
 	}{
-		"announced over the limit": {strings.NewReader(big), int64(len(big)), http.StatusRequestEntityTooLarge, "request_too_large"},
-		"unannounced and over":     {io.NopCloser(strings.NewReader(big)), -1, http.StatusRequestEntityTooLarge, "request_too_large"},
+		"announced over the limit": {strings.NewReader(big), int64(len(big)), http.StatusRequestEntityTooLarge, "payload_too_large"},
+		"unannounced and over":     {io.NopCloser(strings.NewReader(big)), -1, http.StatusRequestEntityTooLarge, "payload_too_large"},
 		"too slow":                 {&countingBody{r: iotestErr{os.ErrDeadlineExceeded}}, -1, http.StatusRequestTimeout, "timeout"},
 		"cut short": {
 			&countingBody{r: io.MultiReader(strings.NewReader(small[:10]), iotestErr{io.ErrUnexpectedEOF})}, int64(len(small)),

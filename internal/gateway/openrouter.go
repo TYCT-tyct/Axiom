@@ -75,10 +75,14 @@ func (h *Handler) retrieveOpenRouterModel(w http.ResponseWriter, r *http.Request
 
 // find resolves names against the published catalog, so an endpoint and its model detail describe the same build.
 func (l *openRouterListing) find(v visibility, name string) (*orModel, error) {
+	parsed, ref := parseModelName(name)
+	if ref != nil {
+		return nil, ref
+	}
 	if l.snap == nil {
 		return nil, errNoModel
 	}
-	resolved, err := l.snap.ResolvePublic(name)
+	resolved, err := l.snap.ResolvePublic(parsed.base)
 	if err != nil {
 		return nil, err
 	}
