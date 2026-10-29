@@ -43,7 +43,7 @@ func (q *Queries) ApproveResolution(ctx context.Context, db DBTX, arg ApproveRes
 const claimRefund = `-- name: ClaimRefund :one
 UPDATE payments.refunds SET state = 'sending', sent_at = coalesce(sent_at, clock_timestamp()), attempts = attempts + 1,
     next_query_at = clock_timestamp() + interval '1 minute'
-WHERE id = $1 RETURNING id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at
+WHERE id = $1 RETURNING id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at
 `
 
 // The future due time is also a lease: the five-second call finishes before another worker can claim this attempt.
@@ -62,6 +62,7 @@ func (q *Queries) ClaimRefund(ctx context.Context, db DBTX, id uuid.UUID) (Payme
 		&i.Amount,
 		&i.WithFee,
 		&i.RefundKey,
+		&i.ManualOnly,
 		&i.ProviderRef,
 		&i.Reason,
 		&i.RequestedBy,
@@ -77,7 +78,7 @@ func (q *Queries) ClaimRefund(ctx context.Context, db DBTX, id uuid.UUID) (Payme
 }
 
 const dueRefunds = `-- name: DueRefunds :many
-SELECT id FROM payments.refunds WHERE via = 'channel' AND state IN ('frozen','sending','pending') AND approved_by IS NOT NULL
+SELECT id FROM payments.refunds WHERE via = 'channel' AND NOT manual_only AND state IN ('frozen','sending','pending') AND approved_by IS NOT NULL
     AND next_query_at <= clock_timestamp() ORDER BY next_query_at, id LIMIT 100
 `
 
@@ -129,7 +130,7 @@ const insertRefund = `-- name: InsertRefund :one
 INSERT INTO payments.refunds(id, order_id, site_id, account_id, state, via, credits, requested_credits, amount,
     with_fee, refund_key, reason, requested_by, idem_key)
 VALUES ($1, $2, $3, $4, 'frozen', $5, $6, $7, $8,
-    $9, $10, $11, $12, $13) RETURNING id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at
+    $9, $10, $11, $12, $13) RETURNING id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at
 `
 
 type InsertRefundParams struct {
@@ -177,6 +178,7 @@ func (q *Queries) InsertRefund(ctx context.Context, db DBTX, arg InsertRefundPar
 		&i.Amount,
 		&i.WithFee,
 		&i.RefundKey,
+		&i.ManualOnly,
 		&i.ProviderRef,
 		&i.Reason,
 		&i.RequestedBy,
@@ -232,7 +234,7 @@ func (q *Queries) InsertResolution(ctx context.Context, db DBTX, arg InsertResol
 }
 
 const lockRefund = `-- name: LockRefund :one
-SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at FROM payments.refunds WHERE id = $1 AND order_id = $2 FOR UPDATE
+SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at FROM payments.refunds WHERE id = $1 AND order_id = $2 FOR UPDATE
 `
 
 type LockRefundParams struct {
@@ -255,6 +257,7 @@ func (q *Queries) LockRefund(ctx context.Context, db DBTX, arg LockRefundParams)
 		&i.Amount,
 		&i.WithFee,
 		&i.RefundKey,
+		&i.ManualOnly,
 		&i.ProviderRef,
 		&i.Reason,
 		&i.RequestedBy,
@@ -269,6 +272,15 @@ func (q *Queries) LockRefund(ctx context.Context, db DBTX, arg LockRefundParams)
 	return i, err
 }
 
+const parkRefund = `-- name: ParkRefund :exec
+UPDATE payments.refunds SET manual_only = true WHERE id = $1
+`
+
+func (q *Queries) ParkRefund(ctx context.Context, db DBTX, id uuid.UUID) error {
+	_, err := db.Exec(ctx, parkRefund, id)
+	return err
+}
+
 const paymentAdministrator = `-- name: PaymentAdministrator :one
 SELECT EXISTS (SELECT 1 WHERE (SELECT platform.in_platform_scope()) OR $1::uuid = ANY ((SELECT platform.allowed_sites())::uuid[])) AS allowed
 `
@@ -281,7 +293,7 @@ func (q *Queries) PaymentAdministrator(ctx context.Context, db DBTX, siteID uuid
 }
 
 const readRefund = `-- name: ReadRefund :many
-SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at FROM payments.refunds WHERE id = $1
+SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at FROM payments.refunds WHERE id = $1
 `
 
 func (q *Queries) ReadRefund(ctx context.Context, db DBTX, id uuid.UUID) ([]PaymentsRefund, error) {
@@ -305,6 +317,7 @@ func (q *Queries) ReadRefund(ctx context.Context, db DBTX, id uuid.UUID) ([]Paym
 			&i.Amount,
 			&i.WithFee,
 			&i.RefundKey,
+			&i.ManualOnly,
 			&i.ProviderRef,
 			&i.Reason,
 			&i.RequestedBy,
@@ -371,7 +384,7 @@ func (q *Queries) ReadResolution(ctx context.Context, db DBTX, arg ReadResolutio
 }
 
 const refundByKey = `-- name: RefundByKey :many
-SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at FROM payments.refunds WHERE order_id = $1 AND idem_key = $2
+SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at FROM payments.refunds WHERE order_id = $1 AND idem_key = $2
 `
 
 type RefundByKeyParams struct {
@@ -400,6 +413,7 @@ func (q *Queries) RefundByKey(ctx context.Context, db DBTX, arg RefundByKeyParam
 			&i.Amount,
 			&i.WithFee,
 			&i.RefundKey,
+			&i.ManualOnly,
 			&i.ProviderRef,
 			&i.Reason,
 			&i.RequestedBy,

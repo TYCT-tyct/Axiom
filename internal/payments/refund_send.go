@@ -18,7 +18,7 @@ func (p *Payments) pollRefunds(ctx context.Context) error {
 		return err
 	}
 	for _, id := range ids {
-		if ctx.Err() != nil {
+		if !refundHasBudget(ctx) {
 			return ctx.Err()
 		}
 		if err := p.driveRefund(ctx, id, false); err != nil {
@@ -33,31 +33,39 @@ func (p *Payments) driveRefund(ctx context.Context, id uuid.UUID, initial bool) 
 	if err != nil {
 		return err
 	}
-	if row.Via != "channel" {
+	if !row.automatic() {
 		return nil
 	}
-	var ch Channel
-	openErr := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) { ch, err = p.channel(ctx, tx, o.MerchantID); return err })
-	// A frozen refund is certainly unsent. An unavailable binding need not turn it into an unknown send.
-	if openErr != nil && row.State == "frozen" {
-		return openErr
+	ch, err := p.channelOf(ctx, o.MerchantID)
+	if err != nil {
+		return err
 	}
-	// Start the deadline before committing sending: a sender paused beyond its lease must not wake and send later.
-	callCtx, cancel := context.WithTimeout(ctx, refundCallTimeout)
+	if row.State == "frozen" && !ch.Caps().Has(CapRefund) {
+		return ErrRefundForbidden
+	}
+	if !refundHasBudget(ctx) {
+		return ctx.Err()
+	}
+	// The absolute deadline starts before sending commits, independently of the request or poll that discovered it.
+	callCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), refundCallTimeout, errQueryDeadline)
 	defer cancel()
 	row, first, claimed, err := p.claimRefund(ctx, row, initial)
 	if err != nil || !claimed {
 		return err
 	}
-	result, callErr := RefundState{}, openErr
-	canQuery, canResend := false, false
-	if ch != nil {
-		canQuery = ch.Caps().Has(CapQueryRefund)
-		canResend = row.RefundKey && ch.Caps().Has(CapRefundKey|CapRefund)
-		result, callErr = p.callRefund(callCtx, ch, row, o, first, canQuery, canResend)
-	}
+	canQuery := ch.Caps().Has(CapQueryRefund)
+	canResend := row.RefundKey && ch.Caps().Has(CapRefundKey|CapRefund)
+	result, callErr := p.callRefund(callCtx, ch, row, o, first, canQuery, canResend)
 	outcome := refundOutcome(result, callErr, first)
 	return p.saveRefundOutcome(ctx, row, outcome, result.ProviderRef, !canQuery && !canResend)
+}
+
+func refundHasBudget(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	deadline, limited := ctx.Deadline()
+	return !limited || time.Until(deadline) >= refundCallTimeout
 }
 
 func refundOutcome(result RefundState, err error, first bool) string {
@@ -74,7 +82,6 @@ func refundOutcome(result RefundState, err error, first bool) string {
 	case RefundFailed:
 		return "failed"
 	case RefundPending:
-		return "pending"
 	}
 	return "pending"
 }
@@ -87,7 +94,7 @@ func (p *Payments) claimRefund(ctx context.Context, row PaymentsRefund, initial 
 			return err
 		}
 		first = locked.State == "frozen"
-		if locked.ApprovedBy == nil || refundTerminal(locked.State) || locked.NextQueryAt.After(now) && (!initial || !first) {
+		if !locked.automatic() || locked.NextQueryAt.After(now) && (!initial || !first) {
 			return nil
 		}
 		row, err = queries.ClaimRefund(ctx, tx, row.ID)
@@ -95,6 +102,10 @@ func (p *Payments) claimRefund(ctx context.Context, row PaymentsRefund, initial 
 		return err
 	})
 	return row, first, claimed, err
+}
+
+func (r PaymentsRefund) automatic() bool {
+	return r.Via == "channel" && r.ApprovedBy != nil && !r.ManualOnly && !refundTerminal(r.State)
 }
 
 func refundTerminal(state string) bool { return state == "succeeded" || state == "failed" }
@@ -121,20 +132,19 @@ func (p *Payments) callRefund(ctx context.Context, ch Channel, r PaymentsRefund,
 		return RefundState{}, err
 	}
 	result, err := ch.QueryRefund(ctx, call)
-	health := queryKnown
-	if err != nil {
-		health = queryUnknown
-	}
-	finishErr := p.finishQuery(ctx, o.MerchantID, token, health)
+	finishErr := p.finishQuery(ctx, o.MerchantID, token, queryHealthOutcome(ctx, err, false))
 	return result, errors.Join(err, finishErr)
 }
 
 func (p *Payments) saveRefundOutcome(ctx context.Context, row PaymentsRefund, outcome, provider string, noRecovery bool) error {
+	// Channel facts outlive the HTTP request and the poll's discovery budget; retain a bounded completion window.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refundFinishTimeout)
+	defer cancel()
 	if invalidPaymentText(provider) || len(provider) > 1024 {
-		outcome, provider = "pending", ""
+		provider = ""
 	}
 	if outcome != "pending" {
-		if err := billing.PrepareRefund(ctx, p.db, p.platform, billing.Freeze{Account: row.AccountID, Batch: row.OrderID, Amount: row.Credits}); err != nil {
+		if err := billing.PrepareRefund(ctx, p.db, p.platform, refundFreeze(row)); err != nil {
 			return err
 		}
 	}
@@ -171,15 +181,20 @@ func recordUnknownRefund(ctx context.Context, tx pg.Tx, o LockOrderRow, row Paym
 		return err
 	}
 	d.OrderID, d.AccountID = &o.ID, &o.AccountID
-	_, err = recordPending(ctx, tx, d)
-	return err
+	if _, err = recordPending(ctx, tx, d); err != nil {
+		return err
+	}
+	if noRecovery {
+		return queries.ParkRefund(ctx, tx, row.ID)
+	}
+	return nil
 }
 
 func finishRefundTx(ctx context.Context, tx pg.Tx, o LockOrderRow, r PaymentsRefund, outcome, provider, source string) error {
 	if refundTerminal(r.State) {
 		return nil
 	}
-	f := billing.Freeze{Account: r.AccountID, Batch: r.OrderID, Amount: r.Credits}
+	f := refundFreeze(r)
 	at, err := queries.RefundClock(ctx, tx)
 	if err != nil {
 		return err

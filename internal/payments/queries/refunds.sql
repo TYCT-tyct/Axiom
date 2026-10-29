@@ -45,7 +45,7 @@ UPDATE payments.orders SET refund_with_fee = @with_fee WHERE id = @id;
 SELECT coalesce(sum(credits), 0)::bigint AS credits FROM payments.refunds WHERE order_id = @order_id AND state = 'succeeded';
 
 -- name: DueRefunds :many
-SELECT id FROM payments.refunds WHERE via = 'channel' AND state IN ('frozen','sending','pending') AND approved_by IS NOT NULL
+SELECT id FROM payments.refunds WHERE via = 'channel' AND NOT manual_only AND state IN ('frozen','sending','pending') AND approved_by IS NOT NULL
     AND next_query_at <= clock_timestamp() ORDER BY next_query_at, id LIMIT 100;
 
 -- name: ReadResolution :many
@@ -68,3 +68,6 @@ GROUP BY o.pay_currency;
 
 -- name: RefundClock :one
 SELECT clock_timestamp()::timestamptz AS now;
+
+-- name: ParkRefund :exec
+UPDATE payments.refunds SET manual_only = true WHERE id = @id;

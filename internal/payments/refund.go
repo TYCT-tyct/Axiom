@@ -86,7 +86,16 @@ func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Ref
 	if err := r.check(); err != nil {
 		return Refund{}, err
 	}
-	o, err := p.paymentAccess(ctx, s, r.Order, false)
+	var o Order
+	var isAdmin bool
+	err := p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) {
+		o, err = loadOrder(ctx, tx, r.Order)
+		if err != nil {
+			return err
+		}
+		isAdmin, err = queries.PaymentAdministrator(ctx, tx, o.SiteID)
+		return err
+	})
 	if err != nil {
 		return Refund{}, err
 	}
@@ -106,11 +115,7 @@ func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Ref
 	if err = billing.PrepareRefund(ctx, p.db, p.platform, f); err != nil {
 		return Refund{}, err
 	}
-	_, adminErr := p.paymentAccess(ctx, s, r.Order, true)
-	isAdmin := adminErr == nil
-	if adminErr != nil && !errors.Is(adminErr, ErrRefundForbidden) {
-		return Refund{}, adminErr
-	}
+
 	row, err := p.reserveRefund(ctx, o, r, f, isAdmin)
 	return refundOf(row, o), err
 }
@@ -263,6 +268,9 @@ func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, u
 		return Refund{}, ErrSecondPerson
 	}
 	err = p.changeRefund(ctx, OrderID(row.OrderID), row.ID, func(tx pg.Tx, _ LockOrderRow, locked PaymentsRefund) error {
+		if refundTerminal(locked.State) {
+			return ErrRefundForbidden
+		}
 		if locked.ApprovedBy != nil {
 			return nil
 		}
@@ -291,7 +299,15 @@ func refundAudit(ctx context.Context, tx pg.Tx, r PaymentsRefund, user uuid.UUID
 }
 
 // one minute between attempts leaves a crashed sender fenced off for far longer than its five-second HTTP deadline.
-const refundCallTimeout = 5 * time.Second
+const (
+	refundCallTimeout   = 5 * time.Second
+	refundFinishTimeout = 30 * time.Second
+)
+
+// refundFreeze uses the held credit, which may be smaller than the original requested credit.
+func refundFreeze(row PaymentsRefund) billing.Freeze {
+	return billing.Freeze{Account: row.AccountID, Batch: row.OrderID, Amount: row.Credits}
+}
 
 // RejectRefund declines a still unapproved, certainly unsent request. Unknown refunds must use Resolve instead.
 func (p *Payments) RejectRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) {
@@ -302,7 +318,7 @@ func (p *Payments) RejectRefund(ctx context.Context, s pg.Scope, id RefundID, us
 	if err != nil {
 		return Refund{}, err
 	}
-	if err = billing.PrepareRefund(ctx, p.db, p.platform, billing.Freeze{Account: row.AccountID, Batch: row.OrderID, Amount: row.Credits}); err != nil {
+	if err = billing.PrepareRefund(ctx, p.db, p.platform, refundFreeze(row)); err != nil {
 		return Refund{}, err
 	}
 	err = p.changeRefund(ctx, OrderID(row.OrderID), row.ID, func(tx pg.Tx, o LockOrderRow, r PaymentsRefund) error {

@@ -16,6 +16,7 @@ CREATE TABLE payments.refunds (
     amount bigint NOT NULL CHECK (amount > 0),
     with_fee boolean NOT NULL,
     refund_key boolean NOT NULL,
+    manual_only boolean NOT NULL DEFAULT false,
     provider_ref text NOT NULL DEFAULT '',
     reason text NOT NULL,
     requested_by uuid NOT NULL,
@@ -27,6 +28,7 @@ CREATE TABLE payments.refunds (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     finished_at timestamptz,
     UNIQUE (order_id, idem_key),
+    UNIQUE (id, order_id),
     FOREIGN KEY (order_id, site_id, account_id) REFERENCES payments.orders(id, site_id, account_id),
     CHECK (approved_by IS NULL OR approved_by <> requested_by),
     CHECK (state NOT IN ('sending', 'pending') OR sent_at IS NOT NULL),
@@ -35,7 +37,7 @@ CREATE TABLE payments.refunds (
 CREATE UNIQUE INDEX refunds_one_inflight ON payments.refunds(order_id)
     WHERE state IN ('frozen', 'sending', 'pending');
 CREATE INDEX refunds_due ON payments.refunds(next_query_at, id)
-    WHERE via = 'channel' AND approved_by IS NOT NULL AND state IN ('frozen', 'sending', 'pending');
+    WHERE via = 'channel' AND approved_by IS NOT NULL AND NOT manual_only AND state IN ('frozen', 'sending', 'pending');
 CREATE INDEX refunds_cash ON payments.refunds(finished_at, order_id) WHERE state = 'succeeded';
 ALTER TABLE payments.refunds ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
 CREATE POLICY account ON payments.refunds USING (
@@ -49,7 +51,7 @@ CREATE TABLE payments.resolutions (
     order_id uuid NOT NULL,
     site_id uuid NOT NULL,
     account_id uuid NOT NULL,
-    refund_id uuid REFERENCES payments.refunds(id),
+    refund_id uuid,
     outcome text NOT NULL CHECK (outcome IN ('succeeded', 'failed', 'credit')),
     trade_no text NOT NULL,
     amount bigint NOT NULL,
@@ -61,6 +63,7 @@ CREATE TABLE payments.resolutions (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     UNIQUE (order_id, idem_key),
     FOREIGN KEY (order_id, site_id, account_id) REFERENCES payments.orders(id, site_id, account_id),
+    FOREIGN KEY (refund_id, order_id) REFERENCES payments.refunds(id, order_id),
     CHECK ((outcome = 'credit' AND refund_id IS NULL AND amount > 0 AND trade_no <> '')
         OR (outcome <> 'credit' AND refund_id IS NOT NULL AND amount = 0 AND trade_no = ''))
 );

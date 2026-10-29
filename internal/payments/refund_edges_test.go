@@ -34,13 +34,13 @@ func TestConcurrentRefundRequestsSerializeAtTheOrder(t *testing.T) {
 
 func TestRefundCapabilityUpgradeCannotResendAnEarlierUnknown(t *testing.T) {
 	var sends atomic.Int32
-	plugin := fakePlugin{caps: CapRefund, create: goodCheckout, refund: func(context.Context, RefundCall) (RefundState, error) {
+	plugin := fakePlugin{caps: CapRefund | CapQueryRefund, create: goodCheckout, refund: func(context.Context, RefundCall) (RefundState, error) {
 		sends.Add(1)
 		return RefundState{}, context.DeadlineExceeded
 	}}
 	w, o := refundWorld(t, plugin)
 	r := w.approve(w.mustRefund(o, o.Credits, "upgrade"))
-	plugin.caps |= CapRefundKey
+	plugin.caps = CapRefund | CapRefundKey
 	w.p.plugins["fake"] = plugin
 	w.p.mu.Lock()
 	clear(w.p.channels)

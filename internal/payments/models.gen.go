@@ -68,6 +68,7 @@ type PaymentsRefund struct {
 	Amount           int64
 	WithFee          bool
 	RefundKey        bool
+	ManualOnly       bool
 	ProviderRef      string
 	Reason           string
 	RequestedBy      uuid.UUID

@@ -109,7 +109,7 @@ func matchResolution(row PaymentsResolution, r Resolution) error {
 
 func resolutionTarget(ctx context.Context, tx pg.Tx, o LockOrderRow, r Resolution) error {
 	if r.Outcome == "credit" {
-		if State(o.State) != Review || r.Payment.Paid.Currency.String() != o.PayCurrency {
+		if State(o.State) != Review {
 			return ErrRefundForbidden
 		}
 		return nil
@@ -146,7 +146,7 @@ func (p *Payments) ApproveResolution(ctx context.Context, s pg.Scope, order Orde
 		if err != nil {
 			return err
 		}
-		if err = billing.PrepareRefund(ctx, p.db, p.platform, billing.Freeze{Account: row.AccountID, Batch: row.OrderID, Amount: row.Credits}); err != nil {
+		if err = billing.PrepareRefund(ctx, p.db, p.platform, refundFreeze(row)); err != nil {
 			return err
 		}
 	}
