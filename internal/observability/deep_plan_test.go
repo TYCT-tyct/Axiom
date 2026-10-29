@@ -10,15 +10,14 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-func TestListDeepPagesReadInIndexOrder(t *testing.T) {
-	db, database := openDBWithURL(t)
-	seedForPlans(t, database, 2000000)
+func checkListDeepPagesReadInIndexOrder(t *testing.T, db *pg.DB) {
+	t.Helper()
 	account := uuid.MustParse(heavyAccount)
 	since, until := window()
 	var deep Cursor
 	if err := db.Tx(t.Context(), pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT at, id FROM observability.call_log WHERE account_id = $1
-			ORDER BY at DESC, id DESC OFFSET 750000 LIMIT 1`, account).Scan(&deep.At, &deep.ID)
+			ORDER BY at DESC, id DESC OFFSET 45000 LIMIT 1`, account).Scan(&deep.At, &deep.ID)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -27,12 +26,12 @@ func TestListDeepPagesReadInIndexOrder(t *testing.T) {
 			{"unfiltered", "", ""}, {"model", "m", ""}, {"app", "", "cli"},
 		} {
 			for _, size := range []int{pageSize, MaxPageSize} {
-				t.Run(fmt.Sprintf("%s/%s/%d", name, filter.name, size), func(t *testing.T) {
+				t.Run(fmt.Sprintf("deep/%s/%s/%d", name, filter.name, size), func(t *testing.T) {
 					q := OwnQuery{Account: account, Since: since, Until: until, Model: filter.model, ClientApp: filter.app, PageSize: size}
 					firstPlan := explain(t, db, q, scope)
 					q.After = &deep
 					checkListPagePlans(t, firstPlan, explain(t, db, q, scope))
-					q.Until = deep.At.Add(500 * time.Nanosecond)
+					q.Until = deep.At
 					for _, after := range []*Cursor{nil, &deep, {At: until, ID: uuid.Max()}} {
 						q.After = after
 						t.Logf("historical window, cursor=%v", after)

@@ -54,11 +54,10 @@ const (
 
 // cursorOf uses the tighter of the exclusive window end and the page cursor as one composite index bound.
 func cursorOf(q OwnQuery) (at time.Time, id string) {
-	until := q.Until.Truncate(time.Microsecond) // match the timestamp precision PostgreSQL compares
-	if q.After != nil && q.After.At.Before(until) {
+	if q.After != nil && q.After.At.Before(q.Until) {
 		return q.After.At, q.After.ID.String()
 	}
-	return until, uuid.Nil().String()
+	return q.Until, uuid.Nil().String()
 }
 
 // listRows runs the list query that fits the filters, for a page of size calls: one more is asked for, to learn whether

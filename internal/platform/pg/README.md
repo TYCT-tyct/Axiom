@@ -57,7 +57,7 @@ InitPlan 的布尔参数按未知布尔值估计，避免原来的无列文本�
 
 复现实验：`flock /tmp/axiom-remote-check.lock python3 internal/platform/pg/testdata/compare-scope.py --output scope-comparison.json`。JSON 保留完整计划，计时只作证据，不作 CI 门槛。
 
-`TestScopeSettingsAreStatementInitPlans` 检查被过滤与命中扫描的每个设置读取均在 InitPlan 内且执行至多一次；`TestScopePlansDoNotCacheAnEarlierScope` 强制两种计划并交替范围；`TestMalformedScopeArraysFailClosed` 检查非法数组报错。各模块既有隔离测试检查读、写与终态权限。账本计划测试检查平台和账户范围、首页与深页的索引顺序及块预算，EXPLAIN 在实际读取入口设置了有序扫描后进行。调用记录的计划测试覆盖首页、紧随页及 200 万行中深 75 万行的页，在平台与账户两种范围检查 50、200 行页的有序扫描和块预算；证据见 [observability](../../observability/README.md#读)。`TestScopeMigrationReleasesLocksAndResumes` 验证等待后一个表时已释放前一个表的锁，并在锁超时后重跑成功。
+`TestScopeSettingsAreStatementInitPlans` 检查被过滤与命中扫描的每个设置读取均在 InitPlan 内且执行至多一次；`TestScopePlansDoNotCacheAnEarlierScope` 强制两种计划并交替范围；`TestMalformedScopeArraysFailClosed` 检查非法数组报错。各模块既有隔离测试检查读、写与终态权限。账本计划测试检查平台和账户范围、首页与深页的索引顺序及块预算，EXPLAIN 在实际读取入口设置了有序扫描后进行。调用记录的 `TestListPlansFollowTheIndexes` 复用同一份 12 万行数据，覆盖首页、紧随页及深 45,000 行的页，在平台与账户两种范围检查 50、200 行页的有序扫描和块预算；证据见 [observability](../../observability/README.md#读)。`TestScopeMigrationReleasesLocksAndResumes` 验证等待后一个表时已释放前一个表的锁，并在锁超时后重跑成功。
 
 PostgreSQL 官方说明：无关联的单行子查询可以成为每次执行只运行一次的 [InitPlan](https://www.postgresql.org/docs/18/using-explain.html)；[函数易变性](https://www.postgresql.org/docs/18/xfunc-volatility.html)决定计划复用时能否把结果折叠为常量。查证日期：2026-10-28。
 
