@@ -74,7 +74,7 @@ var (
 		"finish_reason": (*chatStream).finishReason,
 	}
 	chatDeltaFields = map[string]func(*chatStream) error{
-		"content": (*chatStream).text, "refusal": (*chatStream).text,
+		"content": (*chatStream).visibleText, "refusal": (*chatStream).visibleText,
 		"reasoning":         func(s *chatStream) error { return s.reasoningOf(&s.reasoning) },
 		"reasoning_content": func(s *chatStream) error { return s.reasoningOf(&s.reasoningContent) },
 		"reasoning_details": (*chatStream).rawContent,
@@ -85,11 +85,12 @@ var (
 	toolCallFields = map[string]func(*chatStream) error{
 		"function": func(s *chatStream) error { return walk(&s.reader, s, functionFields) },
 	}
-	functionFields = map[string]func(*chatStream) error{"name": (*chatStream).text, "arguments": (*chatStream).text}
+	functionFields = map[string]func(*chatStream) error{"name": (*chatStream).visibleText, "arguments": (*chatStream).visibleText}
 	// chatRewrites are for a chunk with members to drop: the others only get their edits in place. provider names the
 	// upstream (docs/domains/gateway.md「转发规则」).
 	chatRewrites = formatRules{members: map[string]rule{
 		"id": (*rewriter).ourID, "model": (*rewriter).ourModel, "provider": (*rewriter).drop, "axiom": (*rewriter).drop,
+		"choices": hiddenChatChoices,
 	}}
 )
 
@@ -98,7 +99,7 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 	if string(data) == sse.Done {
 		return s.done()
 	}
-	s.held, s.more, s.failed, s.rewrites, s.noChoices = s.held[:0], false, false, false, false
+	s.held, s.more, s.failed, s.rewrites, s.noChoices = s.held[:0], false, false, s.ctx.HidesReasoning, false
 	if err := walk(&s.reader, s, chatFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
@@ -112,20 +113,47 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		s.held = append(s.held, "]}"...)
 		s.e.withheld = s.held
 	}
+	s.settle()
+	s.e.final = s.e.usage
+	s.report, s.reportErr = nil, nil
+	if s.rewrites {
+		return s.clientEvent()
+	}
+	return s.e, nil
+}
+
+func (s *chatStream) clientEvent() (event, error) {
+	if s.ctx.HidesReasoning && !s.converting {
+		// A signed detail without text needs an empty text member for native replay.
+		// Its added bytes are smaller than the original detail, so twice the event bounds the rewrite.
+		var err error
+		s.buf, err = sse.Grow(s.buf[:0], 2*len(s.e.data)+len(s.eventReader.id)+len(s.eventReader.model), s.charge)
+		if err != nil {
+			return event{}, err
+		}
+	}
+	e, err := s.rewrite(chatRewrites)
+	if err != nil || !s.ctx.HidesReasoning || s.converting || e.role != passive {
+		return e, err
+	}
+	switch {
+	case s.rw.chatOpaque:
+		e.role = content
+	case !s.rw.chatPayload && !e.usage && e.withheld == nil:
+		e.role = skipped
+	}
+	return e, nil
+}
+
+func (s *chatStream) settle() {
 	switch {
 	case s.report != nil && s.noChoices: // the usage chunk, which our own replaces
 		s.e.role = ending
-	case s.e.content > 0:
+	case s.e.content > 0 && !s.ctx.HidesReasoning:
 		s.e.role = content
 	case len(s.held) > 0 && !s.more: // only finish signals, which are held
 		s.e.role = skipped
 	}
-	s.e.final = s.e.usage
-	s.report, s.reportErr = nil, nil
-	if s.rewrites {
-		return s.rewrite(chatRewrites)
-	}
-	return s.e, nil
 }
 
 // done is [DONE]: the normal end, once every choice that started has finished.
@@ -314,6 +342,16 @@ func (s *chatWriter) chunk(choices string) []byte {
 		`,"choices":` + choices)
 }
 
+// visibleText separates the commit point from the full content bound used for billing.
+func (s *chatStream) visibleText() error {
+	before := s.e.content
+	err := s.text()
+	if s.e.content > before {
+		s.e.role = content
+	}
+	return err
+}
+
 // reasoningMember is a reasoning member of a delta: its value as written, or for a null where it ends, 0 for a member
 // the delta does not have.
 type reasoningMember struct {
@@ -344,6 +382,9 @@ func (s *chatStream) delta() error {
 	s.reasoning, s.reasoningContent = reasoningMember{}, reasoningMember{}
 	if err := s.walkNoting(chatDeltaFields, true); err != nil {
 		return err
+	}
+	if s.ctx.HidesReasoning {
+		return nil
 	}
 	if s.reasoning.value != nil && s.reasoningContent.value == nil {
 		return s.mirror(s.reasoning.value, s.reasoningContent, `,"reasoning_content":`)

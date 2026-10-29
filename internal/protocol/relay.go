@@ -69,6 +69,8 @@ type Progress struct {
 // Tier supplies the service tier when the reply names none (catalog README.md「计费项与用量」).
 type UsageContext struct {
 	CacheTTL1h bool
+	// HidesReasoning filters client output after the full upstream usage has been metered.
+	HidesReasoning bool
 	// LegacyFunctions restores the deprecated Chat reply shape for a legacy-only client.
 	LegacyFunctions bool
 	Tier            catalog.ServiceTier
