@@ -103,9 +103,11 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 	if err != nil {
 		return nil, nil, err
 	}
-	locked, models := make([]string, len(q)), make([]uuid.UUID, len(q))
-	endpoints := make([]uuid.UUID, len(q))
+	locked := make([]string, len(q))
+	identifiers := make([]uuid.UUID, len(q)*3)
+	models, endpoints, versions := identifiers[:len(q)], identifiers[len(q):2*len(q)], identifiers[2*len(q):]
 	for _, i := range r.Kept {
+		versions[i] = q[i].Version
 		locked[i], models[i], endpoints[i] = fallbacks[i], uuid.UUID(q[i].Model.ID), q[i].Endpoint
 	}
 	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
@@ -115,8 +117,8 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		return nil, nil, fmt.Errorf("billing: freeze exchange rates: %w", err)
 	}
 	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
-		ExchangeRates: rateJSON,
-		Prices:        prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
+		ExchangeRates: rateJSON, PriceVersions: versions,
+		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
 		LifetimeSeconds: b.config.Lifetime.Seconds(),

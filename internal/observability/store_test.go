@@ -78,6 +78,7 @@ func TestTenantsReadOnlyTheirOwnCalls(t *testing.T) {
 		got[0].Latency != mine.Latency || got[0].Key != mine.Key || got[0].IP != "203.0.113.7" {
 		t.Errorf("account A reads %+v, want exactly its own call %s", got, mine.ID)
 	}
+
 	if got := list(t, db, accountScope(a), day(b)); len(got) != 0 {
 		t.Errorf("account A's scope asking for account B reads %d calls, want 0: the condition is not the access control", len(got))
 	}
@@ -410,6 +411,35 @@ func TestCallLogCoversTheWriteTimeFields(t *testing.T) {
 func TestStartupCheckAcceptsTheModule(t *testing.T) {
 	t.Parallel()
 	if err := openDB(t).Check(t.Context(), Module()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOwnCallPriceVersionAndLegacy(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	account := uuid.NewV7()
+	fresh := record(account, now)
+	legacy := record(account, now.Add(-time.Second))
+	legacy.PriceVersion = ""
+	keep(t, db, fresh, legacy)
+	got := list(t, db, accountScope(account), day(account))
+	if len(got) != 2 {
+		t.Fatalf("calls: %v", got)
+	}
+	if got[0].PriceVersion != fresh.PriceVersion || got[1].PriceVersion != "" {
+		t.Fatalf("versions: %s / %s", got[0].PriceVersion, got[1].PriceVersion)
+	}
+	if err := db.ReadTx(t.Context(), accountScope(account), func(tx pg.Tx) error {
+		call, err := GetOwn(t.Context(), tx, fresh.ID)
+		if err != nil {
+			return err
+		}
+		if call.PriceVersion != fresh.PriceVersion {
+			t.Fatalf("get own version: %s", call.PriceVersion)
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

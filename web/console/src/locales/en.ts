@@ -158,6 +158,8 @@ export default {
     },
   },
   calls: {
+    priceVersion: "Price version {{version}}",
+    priceVersionUnavailable: "Price version unavailable",
     description: "The result, usage and cost of each call. No conversation content.",
     empty: { title: "No calls yet", body: "Calls made with your keys show up here." },
     noMatch: "No calls match",

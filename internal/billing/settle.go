@@ -90,6 +90,7 @@ const (
 // Final is what the call ends with: the charged attempt's usage, what the user was charged (capped at the floor) and
 // whether any of it was estimated or waived.
 type Final struct {
+	PriceVersion *uuid.UUID
 	// Profit is nil if any attempt's converted cost is unknown, or the difference cannot fit an amount.
 	Profit    *int64
 	Segments  []Segment
@@ -171,7 +172,7 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	} else { // cleanup_settled or cleanup_released: replace what cleanup charged, at revision -1
 		err = c.late(ctx, tx, p, last)
 	}
-	return Final{Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated, Waived: p.waived, Profit: c.profit()}, err
+	return Final{PriceVersion: lockedVersion(c.row.PriceVersions, last.Entry), Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated, Waived: p.waived, Profit: c.profit()}, err
 }
 
 // recordAttempts books each attempt's cost and writes the attempts to suppliers, in this transaction: the row of an
@@ -491,7 +492,7 @@ type locked struct {
 // stored is the Final the reservation holds.
 func (c *locked) stored() (Final, error) {
 	segments, err := decodeUsage(c.row.FinalUsage)
-	return Final{Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived, Profit: c.row.Profit}, err
+	return Final{PriceVersion: settledVersion(c.row.PriceVersions, c.row.Entry), Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived, Profit: c.row.Profit}, err
 }
 
 func (c *locked) profit() *int64 {
@@ -638,4 +639,18 @@ func (c *locked) write(ctx context.Context, tx pg.Tx, w written) error {
 		}
 	}
 	return nil
+}
+
+func settledVersion(versions []uuid.UUID, entry *int32) *uuid.UUID {
+	if entry == nil {
+		return nil
+	}
+	return lockedVersion(versions, int(*entry))
+}
+
+func lockedVersion(versions []uuid.UUID, entry int) *uuid.UUID {
+	if entry < 0 || entry >= len(versions) || versions[entry] == uuid.Nil() {
+		return nil
+	}
+	return &versions[entry]
 }

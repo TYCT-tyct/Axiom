@@ -152,10 +152,10 @@ func (q *Queries) InsertHolder(ctx context.Context, db DBTX, arg InsertHolderPar
 const insertReservation = `-- name: InsertReservation :exec
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
-        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates)
+        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates, price_versions)
     VALUES ($8, $3, $4, $1, $6, $9,
         $2, $7, 1, $5, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8),
-        $11::text[], $12::text[], $13::uuid[], $14::uuid[], $15::jsonb)
+        $11::text[], $12::text[], $13::uuid[], $14::uuid[], $15::jsonb, $16::uuid[])
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + $5 WHERE b.account_id = $4
 )
@@ -181,6 +181,7 @@ type InsertReservationParams struct {
 	Models          []uuid.UUID
 	Endpoints       []uuid.UUID
 	ExchangeRates   []byte
+	PriceVersions   []uuid.UUID
 }
 
 // One statement writes the reservation and its three counters. prices, fallbacks, models and endpoints are by route
@@ -203,6 +204,7 @@ func (q *Queries) InsertReservation(ctx context.Context, db DBTX, arg InsertRese
 		arg.Models,
 		arg.Endpoints,
 		arg.ExchangeRates,
+		arg.PriceVersions,
 	)
 	return err
 }

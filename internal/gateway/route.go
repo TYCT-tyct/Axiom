@@ -28,10 +28,10 @@ type RouteDeps struct {
 	// last Reload built and never the database.
 	Endpoints func(context.Context) ([]suppliers.Routable, error)
 	Catalog   *catalog.Catalog
-	// Prices is each model's sale price in the main site's currency: billing.SalePrices over the site's pricing rules
-	// and the catalog's reference prices. One build's reading prices both the routing snapshot and the model list, so
+	// Prices reconciles published sale versions using this build's catalog, endpoints and exchange rates.
+	// One build's reading prices both the routing snapshot and the model list, so
 	// the price a client reads is the price a call is charged at.
-	Prices func(context.Context) (map[catalog.ModelID]billing.Sold, error)
+	Prices func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error)
 	// Models is where each published snapshot's model list in OpenRouter's shape goes: the handler serves it,
 	// and it is built in the same build as the snapshot from the same reading (docs/domains/gateway.md「模型列表」).
 	Models *ModelList
@@ -90,7 +90,7 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	if err != nil {
 		return nil, nil, Count{}, fmt.Errorf("gateway: the endpoints: %w", err)
 	}
-	prices, err := d.Prices(ctx)
+	prices, err := d.Prices(ctx, catalogSnap, routable, rates)
 	if err != nil {
 		return nil, nil, Count{}, fmt.Errorf("gateway: the sale prices: %w", err)
 	}

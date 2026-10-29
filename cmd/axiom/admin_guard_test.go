@@ -75,6 +75,9 @@ var adminOperations = []adminOperation{
 	{"listPricingRules", http.MethodGet, "/pricing/rules", "", "pricing.view", false},
 	{"createPricingRule", http.MethodPost, "/pricing/rules", `{}`, "pricing.manage", true},
 	{"updatePricingRule", http.MethodPut, someRule, `{}`, "pricing.manage", true},
+	{"listPricePublications", http.MethodGet, "/pricing/publications", "", "pricing.view", false},
+	{"publishSalePrice", http.MethodPost, "/pricing/publications/0198c0a8-0000-7000-8000-000000000001", `{}`, "pricing.manage", true},
+	{"updatePricePolicy", http.MethodPut, "/pricing/policy", `{}`, "pricing.manage", true},
 	{"previewPricing", http.MethodPost, "/pricing/previews", `{}`, "pricing.view", false},
 }
 

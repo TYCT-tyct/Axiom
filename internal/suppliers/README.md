@@ -200,6 +200,8 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 
 ## 调用面
 
+`Routable` 携带端点所属供应商快照里的 `UnitValue` 与 `UnitValueID`，与成本计划及结算币种同次读取，供 billing 发布保本价格；它们不从后来的配置补齐。
+
 已实现（`service.go`、`attempt.go`、`record.go`）。`Service` 是一个节点上的调用面：快照、凭证运行状态、成本计划。
 
 ```go

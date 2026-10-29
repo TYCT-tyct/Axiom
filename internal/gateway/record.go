@@ -96,6 +96,9 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		Latency: end.Sub(t.start),
 		Route:   route,
 	}
+	if f.PriceVersion != nil {
+		rec.PriceVersion = f.PriceVersion.String()
+	}
 	rec.Attempts = attemptsOf(o, t.tries)
 	if n := len(rec.Attempts); n > 0 {
 		rec.FinishReason = finishOf(o.Attempts[n-1])

@@ -268,7 +268,7 @@ func (q *Queries) InsertTransaction(ctx context.Context, db DBTX, arg InsertTran
 
 const lockReservation = `-- name: LockReservation :one
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
-    r.prices, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
+    r.prices, r.price_versions, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
     r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit
 FROM billing.reservations r
 WHERE r.request_id = $1
@@ -284,6 +284,7 @@ type LockReservationRow struct {
 	Amount          int64
 	State           string
 	Prices          []string
+	PriceVersions   []uuid.UUID
 	ChargedSeq      *int32
 	Entry           *int32
 	Charged         int64
@@ -312,6 +313,7 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 		&i.Amount,
 		&i.State,
 		&i.Prices,
+		&i.PriceVersions,
 		&i.ChargedSeq,
 		&i.Entry,
 		&i.Charged,

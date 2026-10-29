@@ -176,16 +176,15 @@ func ratio(field string, v *string) (r *big.Rat, ok bool, err error) {
 	return r, true, nil
 }
 
-// check refuses what is not a price, and, for M1, a way that sets none: the sale price of cost_plus needs a supplier's
-// cost, and a multiplier read through an exchange rate needs one, neither of which this release has (sale.go Sell), so
-// they are refused, like a rule for one account, rather than accepted and then left to the next rule.
+// check accepts only the methods the publication calculation executes. Exchange-based reference selection is still
+// unavailable, so it is refused at save instead of silently leaving a model to a broader rule.
 func (m Method) check(currency platform.Currency) error {
 	switch m.Kind {
 	case "cost_plus":
 		if err := m.checkCostPlus(); err != nil {
 			return err
 		}
-		return &RuleError{"method/kind", "cannot be cost_plus in this release: it needs the supplier's cost to price from"}
+		return nil
 	case "reference_multiplier":
 		if err := m.checkMultiplier(); err != nil {
 			return err
@@ -357,6 +356,9 @@ func CreateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	if err := in.Check(currency); err != nil {
 		return Rule{}, err
 	}
+	if _, err := readPolicyLocked(ctx, tx, site); err != nil {
+		return Rule{}, err
+	}
 	method, constraints, err := encoded(in)
 	if err != nil {
 		return Rule{}, err
@@ -378,6 +380,9 @@ func CreateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 // UpdateRule replaces the rule as of rev, which a rule that has moved on refuses.
 func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, currency platform.Currency, id uuid.UUID, rev int64, in RuleInput, reason string) (Rule, error) {
 	if err := in.Check(currency); err != nil {
+		return Rule{}, err
+	}
+	if _, err := readPolicyLocked(ctx, tx, site); err != nil {
 		return Rule{}, err
 	}
 	method, constraints, err := encoded(in)

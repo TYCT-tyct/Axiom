@@ -63,7 +63,7 @@ func TestPreviewPricing(t *testing.T) {
 	f := newPreview(t)
 	f.create(ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesTwo))
 	rows := f.preview(`{"model_ids":["` + f.model + `"]}`)
-	if len(rows) != 1 || rows[0].Status != adminapi.Priced {
+	if len(rows) != 1 || rows[0].Status != adminapi.PricingPreviewRowStatusCostUnknown {
 		t.Fatalf("the preview: %+v", rows)
 	}
 	if got, slug := saleOf(rows[0]), rows[0].Slug; got != "0.000002" || slug != "acme/alpha" {
@@ -83,7 +83,7 @@ func TestPreviewPricingRefusesAStoredConstraint(t *testing.T) {
 	other := f.listed("acme/beta")
 	ruleID := f.storeRule("model", f.model, "all", "", timesTwo, `{"min_margin_ratio":"0.1"}`)
 	f.create(ruleJSON(everything, everything, timesFour))
-	want := map[string]adminapi.PricingPreviewRowStatus{f.model: adminapi.Unpriced, other.Id: adminapi.Priced}
+	want := map[string]adminapi.PricingPreviewRowStatus{f.model: adminapi.PricingPreviewRowStatusUnpriced, other.Id: adminapi.PricingPreviewRowStatusCostUnknown}
 	for _, ids := range [][2]string{{f.model, other.Id}, {other.Id, f.model}} {
 		rows := f.preview(`{"model_ids":["` + ids[0] + `","` + ids[1] + `"]}`)
 		got, sale := map[string]adminapi.PricingPreviewRowStatus{}, ""
@@ -131,7 +131,7 @@ func TestPreviewPricingLeavesAModelUnpriced(t *testing.T) {
 	f.create(ruleJSON(`{"kind":"model","id":"`+f.model+`"}`, everything, timesTwo))
 	other := f.listed("acme/beta")
 	rows := f.preview(`{"model_ids":["` + other.Id + `"]}`)
-	if len(rows) != 1 || rows[0].Status != adminapi.Unpriced || rows[0].Sale != nil || rows[0].Cost != nil || rows[0].MarginRatio != nil {
+	if len(rows) != 1 || rows[0].Status != adminapi.PricingPreviewRowStatusUnpriced || rows[0].Sale != nil || rows[0].Cost != nil || rows[0].MarginRatio != nil {
 		t.Errorf("a model no rule prices: %+v", rows)
 	}
 }

@@ -374,6 +374,8 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 - 定时同步的用例（`sync_job_test.go`、`sync_job_recovery_test.go`）：队列启动即执行，健康或上游 503 的轮次均完成，`queue=syncs`、`max_attempts=1`，信号用 `sync.Once`；成功、失败、恢复及部分发布后的下一轮不重复发布；失败保留最后成功和完整待确认数，取消后仍记录并完成；恰在 48 小时不触发兜底、超过后日志和计数上升、恢复停止、从未成功也有兜底；manual/official 来源和涨跌幅安全阀保持不变。
 - 状态指标和边界用例（`sync_metrics_test.go`）：没有下一轮时 gauge 仍按受控时钟增长，从未成功、失败和恢复均能读到；生产记录时间在前后两次数据库 `clock_timestamp()` 之间；缺条目的 held 不计入待确认数且保持价格；记录写入失败仍返回错误。
 
+`Schedule.Aligned` 合并两张表的门槛并逐项取高（或相加），`Schedule.AddMarkup` 把固定加价应用到各服务等级，`Schedule.CoversCost` 与 `Schedule.PriceChange` 分别比较保本和相对变化；都复用实际计费的有效取价，口径不同返回 `ErrTierBasisChanged`。这些是后台售价发布的纯运算，不在逐事件调用路径执行。
+
 ## 决策与理由
 
 | 决策 | 理由 | 不选 |
@@ -385,7 +387,7 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 | 价格来源是模型上的一列，发布时在锁住的模型行上核对来源 | "手填不被覆盖""不自动换来源"变成一个比较，和发布同一个事务，没有竞态 | 每次同步时查一张来源配置表：同步与改选并发时可能写进旧来源的价格 |
 | 快照用只读 Repeatable Read 加载，只接受更大的 revision | Read Committed 下同一事务的两次查询可能看到不同的提交（PostgreSQL 文档《Transaction Isolation》） | 多表分别查询 |
 | 快照陈旧超限就拒绝新请求 | 刷新持续失败时，其他节点已下线的模型不能无限期地继续被调用 | 一直用旧快照 |
-| 售价在路由快照重建时按当前参考价现算，不通知 | 状态比对不怕漏消息、不怕重启；事件机制还没有 | 一次性的变化通知 |
+| 售价由 billing 根据状态生成候选、检查成本与变化阈值后持久发布，路由只使用已发布价格 | 参考价和售价版本分别归各自模块；保本和确认规则见 [billing](../billing/README.md#定价规则) | 在路由快照里直接把参考价当售价 |
 | 改动历史写本模块的 `change` 表，管理操作同时调 `audit.Record` | 改前改后的值、证据和 `op_key` 是目录自己要读回的领域数据：发布核对证据，重试靠 `op_key` 返回第一次的结果；操作者、理由、证据是平台数据，不能让租户范围读到。审计日志是所有模块共用、运营检索与回放的一条线，改参考价和模型状态是它要求留审计的后台数据改动；两个写入在同一个事务里，审计写不进操作就不成立，`detail` 只放 `change_id`，不受 8 KiB 限制（2026-10-15 定） | 公开表里带 `actor` 列；只写平台的审计日志：它不存证据、不管幂等，补充信息最多 8 KiB；只写 `change`：运营看不到目录的改动 |
 | 构造函数叫 `Open`，不叫 `New` | sqlc 生成的 `Queries` 构造函数在同一个包里叫 `New`，无法改名 | 把生成物放进子包：多一层包，类型要加前缀才能和目录自己的 `Model` 区分 |
 | 现在直接 `SELECT … FOR UPDATE` 锁模型行，`lock_models` 随后台任务角色 | `axiom_app` 有 `model` 四列的 UPDATE 权限，已能加锁；`lock_models` 要求 `SECURITY DEFINER` 函数属 `axiom_owner`，与[平台的启动检查](../platform/README.md#迁移)（只许 `axiom_lookup` 拥有）冲突，先有需要的是任务角色，到那时一并改检查 | 现在就建 `lock_models`：要改平台的检查，却没有调用方 |

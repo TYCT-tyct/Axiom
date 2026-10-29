@@ -1695,11 +1695,10 @@ paths:
         This release prices everyone alike, so the audience can only be `all`: a rule for one account or one tier is
         refused (422, pointing at `/rule/audience/kind`). It prices a model, an author or everything, by the reference
         price times a multiplier read as the site's currency (`currency_conversion` `face`) or by a fixed price list:
-        a rule for an endpoint, group, supplier or source type, a `cost_plus` method, or an `exchange` conversion would
+        a rule for an endpoint, group, supplier or source type, an `exchange` conversion would
         not be applied, so it is refused too (422, pointing at `/rule/target/kind`, `/rule/method/kind` or
         `/rule/method/currency_conversion`). Two rules with the same target and audience cannot both
-        exist (409): change the one there is. Prices follow
-        the rules automatically. This release applies no break-even floor (docs/domains/billing.md「定价」): a rule's price is the price.
+        exist (409): change the one there is. Prices are published as immutable versions after cost and change-threshold checks; large moves wait for confirmation. The site floor applies unless an explicit audited exception is published.
         What a rule would do is shown by `previewPricing` first.
       security:
         - session: []
@@ -1774,10 +1773,10 @@ paths:
       tags: [Pricing]
       summary: Preview prices and margins
       description: >-
-        What each of up to 100 models would sell for, one row per model and endpoint since endpoints differ in cost,
+        What each of up to 100 models would sell for, one row per model using the envelope of callable endpoint costs,
         to one account (with its tier and the rules for it alone) or to a user of one tier, with the stored rules, or
-        with `rule` added (or replacing `replaces_rule_id`) when given, and the margin over each endpoint's cost.
-        Nothing is stored. There is no per-model summary: a model's lowest margin is the least of its rows.
+        with `rule` added (or replacing `replaces_rule_id`) when given, and whether its requested price covers the site floor. The scalar margin is unavailable; compare the per-item price and cost schedules.
+        Nothing is stored. The publication list separately shows the actual served version and pending proposals.
       security:
         - session: []
           csrf: []
@@ -1799,6 +1798,93 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/publications:
+    get:
+      operationId: listPricePublications
+      tags: [Pricing]
+      summary: Published prices and pending proposals
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.view
+      responses:
+        "200":
+          description: Current publication state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PricePublicationList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/publications/{model_id}:
+    post:
+      operationId: publishSalePrice
+      tags: [Pricing]
+      summary: Confirm a sale price version
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: model_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PricePublishInput"}
+      responses:
+        "200":
+          description: Current publication state
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PricePublicationList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/pricing/policy:
+    put:
+      operationId: updatePricePolicy
+      tags: [Pricing]
+      summary: Set the site publication policy
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PricePolicyInput"}
+      responses:
+        "200":
+          description: Current publication state
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PricePublicationList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
@@ -2985,7 +3071,7 @@ components:
         instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios.
         `reference_multiplier`: the model's reference price × `multiplier`, converted by the exchange rate or, with
         `currency_conversion` = `face`, read as the same number in the site's currency — which holds only where the
-        reference price is already in that currency: this release has no exchange rate, so a reference price in another
+        reference price is already in that currency: exchange-based reference selection is not implemented, so a reference price in another
         currency is no sale price at all. `fixed`: `schedule` is the price. The members of the other kinds must be
         absent.
       properties:
@@ -3007,6 +3093,51 @@ components:
         min_margin_ratio: {$ref: "#/components/schemas/Decimal"}
         reference_min_ratio: {$ref: "#/components/schemas/Decimal"}
         reference_max_ratio: {$ref: "#/components/schemas/Decimal"}
+    PricePublicationList:
+      type: object
+      properties:
+        policy: {$ref: "#/components/schemas/PricePolicy"}
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PricePublication"}
+    PricePolicy:
+      type: object
+      properties:
+        rev: {type: integer, format: int64}
+        floor_multiplier: {type: string}
+        change_ratio: {type: string}
+        max_increase_ratio: {type: string}
+    PricePolicyInput:
+      type: object
+      additionalProperties: false
+      required: [rev, floor_multiplier, change_ratio, max_increase_ratio, reason]
+      properties:
+        rev: {type: integer, format: int64, minimum: 0}
+        floor_multiplier: {type: string, maxLength: 34}
+        change_ratio: {type: string, maxLength: 34}
+        max_increase_ratio: {type: string, maxLength: 34}
+        reason: {$ref: "#/components/schemas/Reason"}
+    PricePublication:
+      type: object
+      properties:
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        candidate_id: {$ref: "#/components/schemas/Uuid"}
+        current_id: {$ref: "#/components/schemas/Uuid"}
+        status: {type: string, enum: [published, pending, blocked, unpriced]}
+        requested: {$ref: "#/components/schemas/PriceSchedule"}
+        schedule: {$ref: "#/components/schemas/PriceSchedule"}
+        floor: {$ref: "#/components/schemas/PriceSchedule"}
+        problem: {type: string}
+    PricePublishInput:
+      type: object
+      additionalProperties: false
+      required: [candidate_id, confirmed, override_floor, reason]
+      properties:
+        candidate_id: {$ref: "#/components/schemas/Uuid"}
+        current_id: {$ref: "#/components/schemas/Uuid"}
+        confirmed: {type: boolean}
+        override_floor: {type: boolean}
+        reason: {$ref: "#/components/schemas/Reason"}
     PricingRuleInput:
       type: object
       required: [enabled, target, audience, method, constraints]

@@ -204,9 +204,11 @@ func routable(model catalog.ModelID, formats ...protocol.Format) suppliers.Routa
 func (f *routeFixture) build(endpoints []suppliers.Routable) *routing.Snapshot {
 	f.t.Helper()
 	f.deps = RouteDeps{
-		Endpoints:    func(context.Context) ([]suppliers.Routable, error) { return endpoints, nil },
-		Catalog:      f.cat,
-		Prices:       func(context.Context) (map[catalog.ModelID]billing.Sold, error) { return f.prices, nil },
+		Endpoints: func(context.Context) ([]suppliers.Routable, error) { return endpoints, nil },
+		Catalog:   f.cat,
+		Prices: func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
+			return f.prices, nil
+		},
 		Models:       f.models,
 		UnknownItems: func(context.Context) ([]billing.UnknownItem, error) { return f.items, nil },
 		Quality:      f.health,
@@ -446,7 +448,9 @@ func TestRouteBuildReportsAFailedSource(t *testing.T) {
 			d.Endpoints = func(context.Context) ([]suppliers.Routable, error) { return nil, boom }
 		},
 		"the sale prices": func(d *RouteDeps) {
-			d.Prices = func(context.Context) (map[catalog.ModelID]billing.Sold, error) { return nil, boom }
+			d.Prices = func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
+				return nil, boom
+			}
 		},
 		"the unknown billing items": func(d *RouteDeps) {
 			d.UnknownItems = func(context.Context) ([]billing.UnknownItem, error) { return nil, boom }
@@ -455,7 +459,7 @@ func TestRouteBuildReportsAFailedSource(t *testing.T) {
 		d := RouteDeps{
 			Endpoints: func(context.Context) ([]suppliers.Routable, error) { return nil, nil },
 			Catalog:   f.cat,
-			Prices: func(context.Context) (map[catalog.ModelID]billing.Sold, error) {
+			Prices: func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
 				return map[catalog.ModelID]billing.Sold{}, nil
 			},
 			UnknownItems: func(context.Context) ([]billing.UnknownItem, error) { return nil, nil },

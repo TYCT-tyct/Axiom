@@ -10,13 +10,12 @@ import (
 	"axiom/internal/platform"
 )
 
-// A model's sale price: what its calls are charged at, from the moment admission locks it
-// (docs/domains/billing.md「定价」). Every model's price comes from its site's pricing rules applied to the model's
-// reference price, so the whole of it lives here rather than in a second table of prices.
+// Rule-only sale-price arithmetic. Publication adds cost evidence, the site floor and durable versions
+// (publication.go); a request locks that published result at admission.
 
 // Sold is one model's sale price and the version it is.
 type Sold struct {
-	// Version changes whenever the price does: it is the rule's version and the reference price's row together.
+	// Version is the immutable published row ID in production; rule-only previews use a deterministic input digest.
 	Version uuid.UUID
 	// Schedule is the price itself, in the site's currency.
 	Schedule catalog.Schedule
@@ -58,7 +57,7 @@ func Unpriced(s catalog.Schedule, r catalog.Reportable) catalog.Reportable {
 // as the site's currency (the 中转站 convention: LiteLLM and OpenRouter publish in US dollars, and a site reads those
 // numbers as its own). It applies only where the reference price is already in the site's currency: an exchange rate is
 // not what face means, and M1 has none. fixed is the rule's own price list. The other ways give no sale price in M1:
-// ErrUnpriced for cost_plus, which needs a supplier's cost (M2), for exchange, which needs exchange rates, and for a
+// ErrUnpriced for cost_plus, which the publication layer evaluates with endpoint costs, for exchange, which needs exchange rates, and for a
 // rule that reads a reference price the model has none of (docs/domains/billing.md「定价」, #167, #185). A model without
 // a sale price has none: nothing is ever charged at its reference price by default.
 //
@@ -102,7 +101,7 @@ func Sell(r Rule, ref catalog.ReferencePrice, site platform.Currency) (catalog.S
 // prices with it. Check cannot refuse the overflow before it happens, since the ceiling it passes depends on each model's
 // reference price.
 //
-// A target that is not a model, an author or everything does not price a model in M1: endpoints, groups, suppliers and
+// A target that is not a model, an author or everything does not price a model in this release: endpoints, groups, suppliers and
 // source types are chosen per endpoint, which routing's snapshot does not have yet.
 func SalePrices(rules []Rule, snap *catalog.Snapshot, models []catalog.ModelID, currency platform.Currency) (map[catalog.ModelID]Sold, []error) {
 	sold := make(map[catalog.ModelID]Sold, len(models))
@@ -173,7 +172,7 @@ func pricesModel(t Selector, m catalog.Model) bool {
 	return false
 }
 
-// priceVersion identifies a sale price: the rule's ID and rev and the reference price's row. A digest makes the version
+// priceVersion identifies a rule-only preview: the rule's ID and rev and the reference price's row. A digest makes the version
 // change with any of them, so the same inputs always give the same version and a changed price never reuses one. It is
 // a version 8 UUID (RFC 9562), a value of our own rather than a random one. A fixed price does not read the reference
 // price, so publishing one does not give the fixed rule a new version.
