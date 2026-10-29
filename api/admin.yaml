@@ -1453,7 +1453,8 @@ paths:
         Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the
         supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync
         has read the key's text from the supplier and sealed it. A key is bound once, and the group must be
-        selected.
+        selected. Use a dedicated key. If its model limits or expiry cannot be read, create an unrestricted
+        dedicated key upstream and grant permission to read those fields; unreadable permissions deny all models.
       security:
         - session: []
           csrf: []
@@ -1565,9 +1566,9 @@ paths:
       summary: Map an upstream model name to a model
       description: >-
         Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The
-        endpoint it creates waits for the authenticity check before it takes traffic. An alias is never changed; a
-        wrong one is corrected by a new alias in the narrower scope. A name that already has an alias in that scope
-        is a 409.
+        endpoint it creates waits for the authenticity check before it takes traffic. A group alias can be corrected:
+        each different model appends an audited revision, and the current revision is projected at the next sync.
+        Repeating its current model leaves the revision unchanged. Supplier-wide aliases remain immutable (409).
       security:
         - session: []
           csrf: []
@@ -3259,6 +3260,11 @@ components:
       type: object
       required: [id, supplier_id, upstream_name, model_id]
       properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Current alias revision; unavailable on older nodes.
         id: {$ref: "#/components/schemas/Uuid"}
         supplier_id: {$ref: "#/components/schemas/Uuid"}
         group_id: {$ref: "#/components/schemas/Uuid"}

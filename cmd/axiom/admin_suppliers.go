@@ -520,7 +520,7 @@ func (a adminAPI) MapSupplierModel(ctx context.Context, request adminapi.MapSupp
 				return adminapi.ModelMapping{}, err
 			}
 			m, err := a.suppliers.MapModel(ctx, tx, actor(ctx), supplier, group, b.UpstreamName, model, b.Reason)
-			body := adminapi.ModelMapping{Id: m.ID.String(), SupplierId: m.Supplier.String(), UpstreamName: m.UpstreamName, ModelId: m.Model.String()}
+			body := adminapi.ModelMapping{Id: m.ID.String(), SupplierId: m.Supplier.String(), UpstreamName: m.UpstreamName, ModelId: m.Model.String(), Revision: &m.Revision}
 			if m.Group != nil {
 				groupID := m.Group.String()
 				body.GroupId = &groupID

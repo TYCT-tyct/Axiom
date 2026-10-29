@@ -179,7 +179,7 @@ func TestAnAliasTakesANameOutOfTheQueue(t *testing.T) {
 	same(t, "after an alias in the whole supplier", []string{}, namesOf(left))
 }
 
-// TestMapModel: an alias is made once in a scope and never changed; the same name in another scope is another alias;
+// TestMapModel: supplier-wide aliases are immutable; the same name in a group has its own alias;
 // a group the supplier lacks, and a supplier being removed, are refused.
 func TestMapModel(t *testing.T) {
 	t.Parallel()
@@ -189,7 +189,7 @@ func TestMapModel(t *testing.T) {
 	model := uuid.NewV7()
 	whole, err := a.mapIn(id, nil, "gpt-4", model)
 	refuses(t, "an alias for the supplier", err, nil)
-	same(t, "the alias", Mapping{ID: whole.ID, Supplier: id, UpstreamName: "gpt-4", Model: model}, whole)
+	same(t, "the alias", Mapping{ID: whole.ID, Supplier: id, UpstreamName: "gpt-4", Model: model, Revision: 1}, whole)
 	_, err = a.mapIn(id, nil, "gpt-4", model)
 	refuses(t, "the same name in the same scope", err, ErrAliasExists)
 	narrow, err := a.mapIn(id, &group, "gpt-4", model)

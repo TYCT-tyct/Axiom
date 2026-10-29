@@ -807,7 +807,7 @@ export interface paths {
         put?: never;
         /**
          * Use one of the supplier's keys for a group
-         * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected.
+         * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected. Use a dedicated key. If its model limits or expiry cannot be read, create an unrestricted dedicated key upstream and grant permission to read those fields; unreadable permissions deny all models.
          */
         post: operations["bindSupplierKey"];
         delete?: never;
@@ -867,7 +867,7 @@ export interface paths {
         put?: never;
         /**
          * Map an upstream model name to a model
-         * @description Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The endpoint it creates waits for the authenticity check before it takes traffic. An alias is never changed; a wrong one is corrected by a new alias in the narrower scope. A name that already has an alias in that scope is a 409.
+         * @description Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The endpoint it creates waits for the authenticity check before it takes traffic. A group alias can be corrected: each different model appends an audited revision, and the current revision is projected at the next sync. Repeating its current model leaves the revision unchanged. Supplier-wide aliases remain immutable (409).
          */
         post: operations["mapSupplierModel"];
         delete?: never;
@@ -1897,6 +1897,11 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         ModelMapping: {
+            /**
+             * Format: int64
+             * @description Current alias revision; unavailable on older nodes.
+             */
+            revision?: number;
             id: components["schemas"]["Uuid"];
             supplier_id: components["schemas"]["Uuid"];
             group_id?: components["schemas"]["Uuid"];

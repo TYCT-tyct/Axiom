@@ -174,9 +174,12 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, in
 		Data *struct {
 			Total *int `json:"total"`
 			Items []struct {
-				ID     int64  `json:"id"`
-				Status int    `json:"status"`
-				Group  string `json:"group"`
+				ID            int64   `json:"id"`
+				Status        int     `json:"status"`
+				Group         string  `json:"group"`
+				Expires       *int64  `json:"expired_time"`
+				LimitsEnabled *bool   `json:"model_limits_enabled"`
+				Limits        *string `json:"model_limits"`
 			} `json:"items"`
 		} `json:"data"`
 	}
@@ -193,9 +196,33 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, in
 		if !ok || item.ID <= 0 {
 			return nil, 0, fmt.Errorf("%w: a key with status %d", adapter.ErrUnrecognised, item.Status)
 		}
-		keys = append(keys, adapter.KeyState{Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Status: status})
+		policy, err := keyPolicy(item.Expires, item.LimitsEnabled, item.Limits)
+		if err != nil {
+			return nil, 0, err
+		}
+		keys = append(keys, adapter.KeyState{Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Status: status, Policy: policy})
 	}
 	return keys, *list.Data.Total, nil
+}
+
+func keyPolicy(expires *int64, enabled *bool, limits *string) (*adapter.KeyPolicy, error) {
+	policy := &adapter.KeyPolicy{Models: []string{}}
+	if expires == nil || enabled == nil || (*enabled && limits == nil) {
+		return policy, nil
+	}
+	if *expires < -1 {
+		return nil, errMissing("a valid key expiry")
+	}
+	if *expires != -1 {
+		at := time.Unix(*expires, 0)
+		policy.ExpiresAt = &at
+	}
+	if !*enabled {
+		policy.Models = nil
+	} else if *limits != "" {
+		policy.Models = strings.Split(*limits, ",")
+	}
+	return policy, nil
 }
 
 var keyStatus = map[int]adapter.KeyStatus{

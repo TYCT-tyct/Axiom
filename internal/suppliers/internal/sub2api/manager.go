@@ -84,13 +84,14 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 }
 
 type keyDTO struct {
-	ID      number `json:"id"`
-	Key     string `json:"key"`
-	GroupID number `json:"group_id"`
-	Status  string `json:"status"`
-	Reset5h string `json:"reset_5h_at"`
-	Reset1d string `json:"reset_1d_at"`
-	Reset7d string `json:"reset_7d_at"`
+	ID        number     `json:"id"`
+	Key       string     `json:"key"`
+	GroupID   number     `json:"group_id"`
+	Status    string     `json:"status"`
+	ExpiresAt *time.Time `json:"expires_at"`
+	Reset5h   string     `json:"reset_5h_at"`
+	Reset1d   string     `json:"reset_1d_at"`
+	Reset7d   string     `json:"reset_7d_at"`
 }
 
 func keyIDs(keys []adapter.KeyState) map[number]bool {
@@ -102,7 +103,7 @@ func keyIDs(keys []adapter.KeyState) map[number]bool {
 }
 
 func keyState(k keyDTO) adapter.KeyState {
-	out := adapter.KeyState{Ref: adapter.KeyRef(k.ID), GroupRef: string(k.GroupID), Status: keyStatus(k.Status)}
+	out := adapter.KeyState{Ref: adapter.KeyRef(k.ID), GroupRef: string(k.GroupID), Status: keyStatus(k.Status), Policy: &adapter.KeyPolicy{ExpiresAt: k.ExpiresAt}}
 	if out.Status == adapter.KeyQuotaExhausted {
 		out.ResetAt = k.resetAt()
 	}
