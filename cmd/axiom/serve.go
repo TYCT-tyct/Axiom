@@ -344,6 +344,9 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 	}
 	// The datasets behind the reference prices are read once a day by whichever node leads the queue, and a sync that
 	// leaves them unrefreshed for too long alerts (docs/domains/catalog.md「参考价怎么进入目录」).
+	if err := catalog.RegisterPages(ctx, catalog.PageJobConfig{DB: db, Scope: pg.PlatformScope(), Queue: queue, Client: exit, Logger: logger}); err != nil {
+		return nil, nil, err
+	}
 	if prices != nil {
 		if err := catalog.RegisterSync(ctx, catalog.SyncJobConfig{
 			DB: db, Scope: pg.PlatformScope(), Queue: queue, Fetcher: prices(exit), Logger: logger,
