@@ -10,7 +10,9 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 	"axiom/internal/platform/webui"
 	"axiom/internal/suppliers"
 )
@@ -24,6 +26,8 @@ type adminAPI struct {
 	catalog  *catalog.Catalog
 	db       *pg.DB
 	logger   *slog.Logger
+	keys     *secret.Keyring
+	exit     *egress.Client
 	// suppliers is what the admin does with suppliers; calls is the node's call path, which a test generation goes
 	// through, and detections and tests limit how often a session may ask a third party's site what it runs and may
 	// make it generate.

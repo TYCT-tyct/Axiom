@@ -30,11 +30,13 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 		"mail.send":                       QueueNotifications,
 		"mail.send_tracked":               QueueNotifications,
 		"observability.alerts":            QueueNotifications,
+		"observability.webhook":           QueueNotifications,
 		"payments.poll":                   QueueMoney,
 		"queue.discard_scan":              QueueArchive,
 		"suppliers.reconcile":             QueueMoney,
 		"suppliers.sync":                  QueueSyncs,
 		"suppliers.sync_sweep":            QueueSyncs,
+		"suppliers.sync_alerts":           QueueNotifications,
 	}
 	got := jobKinds(t, repoRoot(t))
 	named := map[string]bool{}

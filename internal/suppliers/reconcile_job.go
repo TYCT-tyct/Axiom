@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
+	"uuid"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/pg"
 )
 
@@ -76,10 +79,32 @@ func (r *reconcileJob) work(ctx context.Context, job *river.Job[reconcileArgs]) 
 		// commit a delisting without reporting it. A rollback can repeat alerts;
 		// charge revisions and events remain transactional and idempotent.
 		r.report(ctx, report)
-		return nil
+		return persistReconcileAlerts(ctx, tx, report)
 	})
 	if err != nil {
 		return fmt.Errorf("suppliers: reconcile: %w", err)
+	}
+	return nil
+}
+
+func persistReconcileAlerts(ctx context.Context, tx pg.Tx, report ReconcileReport) error {
+	sources := make([]string, len(report.Unmatched))
+	for i, a := range report.Unmatched {
+		sources[i] = fmt.Sprintf("suppliers.unmatched/%s/%d", a.Request, a.Seq)
+	}
+	unmatched, err := alert.ClaimSources(ctx, tx, sources)
+	if err != nil {
+		return err
+	}
+	for _, finding := range []struct {
+		key, severity string
+		count         int
+	}{{"under_estimated", "critical", len(report.Delisted)}, {"over_estimated", "warning", len(report.Over)}, {"held", "warning", len(report.Held)}, {"unmatched", "warning", int(unmatched)}, {"invalid", "critical", len(report.Violations)}} {
+		if finding.count > 0 {
+			if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "suppliers.reconciliation_difference", Key: finding.key, Severity: finding.severity, Fields: map[string]string{"value": strconv.Itoa(finding.count)}}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

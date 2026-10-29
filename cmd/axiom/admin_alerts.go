@@ -10,6 +10,7 @@ import (
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 )
 
 // alertJSON bridges the contract's optional response fields and the domain's complete records.
@@ -32,6 +33,9 @@ func (a adminAPI) GetAlertConfiguration(ctx context.Context, _ adminapi.GetAlert
 }
 
 func (a adminAPI) SetAlertConfiguration(ctx context.Context, r adminapi.SetAlertConfigurationRequestObject) (adminapi.SetAlertConfigurationResponseObject, error) {
+	if err := a.checkAlertDestinations(ctx, r.Body); err != nil {
+		return nil, err
+	}
 	body, replayed, err := idempotently(ctx, a.db, "setAlertConfiguration", r.Params.IdempotencyKey, r.Body, func(tx pg.Tx) (adminapi.AlertConfiguration, error) {
 		c, err := alertJSON[observability.AlertConfiguration](r.Body)
 		if err != nil {
@@ -50,6 +54,48 @@ func (a adminAPI) SetAlertConfiguration(ctx context.Context, r adminapi.SetAlert
 		return nil, err
 	}
 	return adminapi.SetAlertConfiguration201JSONResponse{Body: body, Headers: adminapi.SetAlertConfiguration201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+func (a adminAPI) checkAlertDestinations(ctx context.Context, body *adminapi.AlertConfigurationRequest) error {
+	check, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for _, ch := range body.Channels {
+		if ch.WebhookUrl == nil {
+			continue
+		}
+		host, err := observability.ValidateAlertWebhookURL(*ch.WebhookUrl)
+		if err != nil {
+			return err
+		}
+		if err = a.exit.Check(check, host); err != nil {
+			return observability.ErrAlertConfiguration
+		}
+	}
+	return nil
+}
+
+func (a adminAPI) RotateAlertWebhookSecret(ctx context.Context, r adminapi.RotateAlertWebhookSecretRequestObject) (adminapi.RotateAlertWebhookSecretResponseObject, error) {
+	if r.Body.Secret == nil {
+		return nil, observability.ErrAlertConfiguration
+	}
+	request := struct {
+		Channel string
+		Body    *adminapi.AlertWebhookSecretRequest
+	}{r.ChannelId, r.Body}
+	body, replayed, err := idempotently(ctx, a.db, "rotateAlertWebhookSecret", r.Params.IdempotencyKey, request, func(tx pg.Tx) (adminapi.AlertTestResult, error) {
+		id, err := observability.RotateAlertWebhookSecret(ctx, tx, a.keys, r.ChannelId, r.Body.Rev, secret.New(*r.Body.Secret), time.Now().UTC())
+		if err != nil {
+			return adminapi.AlertTestResult{}, err
+		}
+		if err = alertAudit(ctx, tx, "alert_channel.rotate_secret", r.ChannelId, r.Body.Reason); err != nil {
+			return adminapi.AlertTestResult{}, err
+		}
+		return alertJSON[adminapi.AlertTestResult](map[string]string{"id": id.String()})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.RotateAlertWebhookSecret201JSONResponse{Body: body, Headers: adminapi.RotateAlertWebhookSecret201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
 func (a adminAPI) ListAlertEvents(ctx context.Context, r adminapi.ListAlertEventsRequestObject) (adminapi.ListAlertEventsResponseObject, error) {

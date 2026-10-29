@@ -134,7 +134,7 @@ func (e *Engine) settle(c *Commit, t Task, err error, now time.Time) {
 		}
 	case errors.Is(err, adapter.ErrAuthRejected):
 		c.State.Status, c.State.Reason = NeedsAttention, "the supplier rejected the account credentials"
-		c.Events = append(c.Events, Event{Kind: NeedsAttentionEvent, Why: c.State.Reason})
+		c.Events = append(c.Events, Event{Kind: NeedsAttentionEvent, Old: c.State.Tasks[TaskBalance].LastOK.Format(time.RFC3339Nano), Why: c.State.Reason})
 	case errors.Is(err, adapter.ErrBucketsFull):
 		// Not a failure: the supplier's limits are used up for now, and the next round goes on then. A listing keeps
 		// its position, so this ends the round instead of holding a worker until they reopen.
@@ -144,7 +144,7 @@ func (e *Engine) settle(c *Commit, t Task, err error, now time.Time) {
 		}
 	case errors.Is(err, adapter.ErrUnrecognised):
 		ts.Halted = true
-		c.Events = append(c.Events, Event{Kind: TaskHalted, Subject: t.String(), Why: "the response is not in a form the adapter knows"})
+		c.Events = append(c.Events, Event{Kind: TaskHalted, Subject: t.String(), Old: ts.LastOK.Format(time.RFC3339Nano), Why: "the response is not in a form the adapter knows"})
 	default:
 		ts.Failures++
 		ts.BackoffUntil = now.Add(e.backoff(ts.Failures))

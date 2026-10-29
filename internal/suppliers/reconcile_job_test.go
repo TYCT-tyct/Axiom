@@ -136,3 +136,28 @@ func TestReconcileJobHoldsLostChargesWithoutGuessingTheirOwner(t *testing.T) {
 		w.wantCharge(newAPIRef, chargeState{State: "matched", Attribution: "attempt", Revision: 4, Attempt: true}, 3)
 	}
 }
+
+func TestClosedUnmatchedFindingDoesNotEmitAgain(t *testing.T) {
+	w := newWorld(t, 1)
+	w.record(w.attempt(newRequest(), 1, newAPIRef))
+	w.clock.advance(time.Hour)
+	var logs bytes.Buffer
+	r := w.reconciliation(&logs)
+	w.runReconciliation(r)
+	if got := consumeSupplierSignals(w); len(got) != 1 || got[0].Key != "unmatched" {
+		t.Fatalf("first overdue attempt: %+v", got)
+	}
+	// Once that incident is closed, another scan of the same still-pending row cannot reopen it.
+	w.runReconciliation(r)
+	if got := consumeSupplierSignals(w); len(got) != 0 {
+		t.Fatalf("closed finding was emitted again: %+v", got)
+	}
+	// A later commit may carry an older finished_at; a time watermark must not hide it.
+	late := w.attempt(newRequest(), 1, "late")
+	late.FinishedAt = w.clock.now().Add(-2 * time.Hour)
+	w.record(late)
+	w.runReconciliation(r)
+	if got := consumeSupplierSignals(w); len(got) != 1 || got[0].Fields["value"] != "1" {
+		t.Fatalf("late overdue attempt was skipped: %+v", got)
+	}
+}

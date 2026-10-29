@@ -12,6 +12,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/observability"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/secret"
@@ -370,3 +371,41 @@ func TestKeyringOutputFailureLeavesCommittedCheckpoint(t *testing.T) {
 type failingKeyringOutput struct{}
 
 func (failingKeyringOutput) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestKeyringRewrapIncludesWebhookSigningKeys(t *testing.T) {
+	f := newRotationFixture(t)
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		c, err := observability.GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Channels = []observability.AlertChannel{{ID: "hook", WebhookURL: "https://receiver.example/hook"}}
+		if err = observability.SetAlertConfiguration(t.Context(), tx, c); err != nil {
+			return err
+		}
+		_, err = observability.RotateAlertWebhookSecret(t.Context(), tx, masterKeys(t), "hook", c.Rev+1, secret.New("receiver test signing value 32 bytes"), time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.addAndActivate("2")
+	f.run("rewrap")
+	ring, _, err := f.r.Check(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		var id string
+		var sealed secret.Sealed
+		if err := tx.QueryRow(t.Context(), `SELECT id,ciphertext,nonce,wrapped_dek,key_version FROM observability.webhook_keys`).Scan(&id, &sealed.Ciphertext, &sealed.Nonce, &sealed.WrappedDEK, &sealed.KeyVersion); err != nil {
+			return err
+		}
+		value, err := ring.Open(sealed, secret.Location{Table: "observability.webhook_keys", RowID: id, Purpose: "signing"})
+		if sealed.KeyVersion != 2 || value.Reveal() != "receiver test signing value 32 bytes" {
+			t.Error("webhook signing key was not rewrapped")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

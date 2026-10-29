@@ -11,9 +11,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read alert rules and email channels */
+        /** Read alert rules and notification channels */
         get: operations["getAlertConfiguration"];
-        /** Replace alert rules and email channels */
+        /** Replace alert rules and notification channels */
         put: operations["setAlertConfiguration"];
         post?: never;
         delete?: never;
@@ -50,6 +50,23 @@ export interface paths {
         put?: never;
         /** Queue a channel test with a delivery receipt */
         post: operations["sendAlertTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/alerts/channels/{channel_id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set or rotate a webhook signing secret */
+        put: operations["rotateAlertWebhookSecret"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1143,12 +1160,24 @@ export interface components {
             id?: string;
             /** Format: email */
             email?: string;
+            /**
+             * Format: uri
+             * @description HTTPS destination, exclusive with email. Configure only after all nodes support webhooks; set its signing secret before use.
+             */
+            webhook_url?: string;
+        };
+        AlertWebhookSecretRequest: {
+            /** Format: int64 */
+            rev: number;
+            /** @description 32 to 512 UTF-8 bytes shared with the receiver. Rotation retains the old key for one hour; another rotation during that hour returns conflict. */
+            secret: string;
+            reason: components["schemas"]["Reason"];
         };
         AlertConfigurationRequest: {
             /** Format: int64 */
             rev: number;
             rules: WithRequired<components["schemas"]["AlertRule"], "id" | "kind" | "minimum_severity" | "threshold" | "duration_seconds" | "channel" | "quiet_start" | "quiet_end" | "repeat_seconds">[];
-            channels: WithRequired<components["schemas"]["AlertChannel"], "id" | "email">[];
+            channels: WithRequired<components["schemas"]["AlertChannel"], "id">[];
             reason: components["schemas"]["Reason"];
         };
         AlertTestRequest: {
@@ -2257,6 +2286,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AlertTestRequest"];
+            };
+        };
+        responses: {
+            /** @description The requested alert data or persisted operation. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    rotateAlertWebhookSecret: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertWebhookSecretRequest"];
             };
         };
         responses: {
