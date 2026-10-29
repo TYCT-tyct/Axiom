@@ -69,6 +69,13 @@ func (q *Queries) DueReservations(ctx context.Context, db DBTX, arg DueReservati
 }
 
 const endReservation = `-- name: EndReservation :one
+WITH balance AS (
+    UPDATE billing.balances b SET reserved = b.reserved + $12 WHERE b.account_id = $13
+), spend AS (
+    UPDATE billing.spend s SET reserved = s.reserved + $12, spent = s.spent + $14
+    WHERE s.subject = $15 AND s.window_start = $16
+        OR s.subject = $17 AND s.window_start = $18
+)
 UPDATE billing.reservations
 SET state = $1, charged_seq = coalesce($2, charged_seq), entry = coalesce($3, entry),
     charged = $4, price = $5, waived = $6, estimated = $7,
@@ -79,21 +86,28 @@ RETURNING clock_timestamp()::timestamptz AS ended_at
 `
 
 type EndReservationParams struct {
-	State          string
-	ChargedSeq     *int32
-	Entry          *int32
-	Charged        int64
-	Price          int64
-	Waived         bool
-	Estimated      bool
-	FinalUsage     []byte
-	AttemptEntries []int32
-	Profit         *int64
-	RequestID      uuid.UUID
+	State           string
+	ChargedSeq      *int32
+	Entry           *int32
+	Charged         int64
+	Price           int64
+	Waived          bool
+	Estimated       bool
+	FinalUsage      []byte
+	AttemptEntries  []int32
+	Profit          *int64
+	RequestID       uuid.UUID
+	Reserved        int64
+	AccountID       uuid.UUID
+	Spent           int64
+	WorkspaceID     uuid.UUID
+	WorkspaceWindow time.Time
+	KeyID           uuid.UUID
+	KeyWindow       time.Time
 }
 
-// Writes a charge's outcome. The charged attempt and entry, and the attempts' entries, stay as they were when none is
-// given. It returns the database's time, which a terminal state's EndRequest records, so every clock the request's end
+// Moves the reservation's three counters and writes its outcome together. The charged attempt and entry, and the
+// attempts' entries, stay as they were when none is given. It returns the database's time, which a terminal state's EndRequest records, so every clock the request's end
 // is judged by is the database's.
 func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservationParams) (time.Time, error) {
 	row := db.QueryRow(ctx, endReservation,
@@ -108,6 +122,13 @@ func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservatio
 		arg.AttemptEntries,
 		arg.Profit,
 		arg.RequestID,
+		arg.Reserved,
+		arg.AccountID,
+		arg.Spent,
+		arg.WorkspaceID,
+		arg.WorkspaceWindow,
+		arg.KeyID,
+		arg.KeyWindow,
 	)
 	var ended_at time.Time
 	err := row.Scan(&ended_at)
@@ -154,116 +175,6 @@ func (q *Queries) InsertCreditBatch(ctx context.Context, db DBTX, arg InsertCred
 		arg.RateID,
 	)
 	return err
-}
-
-const insertEntries = `-- name: InsertEntries :exec
-WITH entry AS (
-    INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount, currency)
-    SELECT $3, $4, $2, unnest($5::text[]), unnest($6::bigint[]),
-        nullif(unnest($7::text[]), '')
-)
-UPDATE billing.balances b SET balance = b.balance - $1
-WHERE b.account_id = $2 AND $1::bigint <> 0
-`
-
-type InsertEntriesParams struct {
-	UserDebit     int64
-	AccountID     uuid.UUID
-	TransactionID uuid.UUID
-	SiteID        uuid.UUID
-	Books         []string
-	Amounts       []int64
-	Currencies    []string
-}
-
-// One statement for a transaction's entries; the user's balance follows its book (user_debit, the entries' sum on
-// user_balance) in the same statement, and is left alone, unlocked by it, when they do not move it. currencies has an
-// empty string for an entry in the site's own credits, which is stored as NULL.
-func (q *Queries) InsertEntries(ctx context.Context, db DBTX, arg InsertEntriesParams) error {
-	_, err := db.Exec(ctx, insertEntries,
-		arg.UserDebit,
-		arg.AccountID,
-		arg.TransactionID,
-		arg.SiteID,
-		arg.Books,
-		arg.Amounts,
-		arg.Currencies,
-	)
-	return err
-}
-
-const insertLockedTransaction = `-- name: InsertLockedTransaction :execrows
-WITH locked AS (SELECT 1 FROM billing.balances WHERE account_id = $3 FOR UPDATE)
-INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
-SELECT $1, $2, $3, $4, $5, $6, $7 FROM locked
-ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING
-`
-
-type InsertLockedTransactionParams struct {
-	ID         uuid.UUID
-	SiteID     uuid.UUID
-	AccountID  uuid.UUID
-	Kind       string
-	RequestID  uuid.UUID
-	AttemptSeq int32
-	Revision   int64
-}
-
-// Numbers the transaction under the account's balance row lock, whether or not it moves the user's balance: the lock is
-// taken by the same statement before the row, and so its seq, is made, so the seqs of one account's transactions follow
-// the order they commit, which the allocation replays by and the unlocked replay bounds itself with (ReplayThrough;
-// internal/billing/README.md「额度批次的分配与到期」). The lock is taken again, without waiting, by a caller that holds
-// it. 0 rows: the event was posted already, or the account has no balance row.
-func (q *Queries) InsertLockedTransaction(ctx context.Context, db DBTX, arg InsertLockedTransactionParams) (int64, error) {
-	result, err := db.Exec(ctx, insertLockedTransaction,
-		arg.ID,
-		arg.SiteID,
-		arg.AccountID,
-		arg.Kind,
-		arg.RequestID,
-		arg.AttemptSeq,
-		arg.Revision,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const insertTransaction = `-- name: InsertTransaction :execrows
-INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING
-`
-
-type InsertTransactionParams struct {
-	ID         uuid.UUID
-	SiteID     uuid.UUID
-	AccountID  uuid.UUID
-	Kind       string
-	RequestID  uuid.UUID
-	AttemptSeq int32
-	Revision   int64
-}
-
-// Only for a caller that already holds the account's balance row lock: every transaction of an account is numbered under
-// that lock (InsertLockedTransaction), and the replay's upper bound depends on it (ReplayThrough). A row numbered
-// outside the lock could take a seq below a locked credit and still commit after it, so a replay would read the credit
-// without its batch. 0 rows: the event was posted already, and its entries with it.
-func (q *Queries) InsertTransaction(ctx context.Context, db DBTX, arg InsertTransactionParams) (int64, error) {
-	result, err := db.Exec(ctx, insertTransaction,
-		arg.ID,
-		arg.SiteID,
-		arg.AccountID,
-		arg.Kind,
-		arg.RequestID,
-		arg.AttemptSeq,
-		arg.Revision,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const lockReservation = `-- name: LockReservation :one
@@ -330,37 +241,61 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 	return i, err
 }
 
-const moveCounters = `-- name: MoveCounters :exec
-WITH balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + $1 WHERE b.account_id = $7
+const postLedger = `-- name: PostLedger :execrows
+WITH locked AS MATERIALIZED (
+    SELECT 1 FROM billing.balances b WHERE b.account_id = $1 FOR UPDATE
+), posted AS (
+    INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
+    SELECT $2, $3, $1, $4, $5, $6, $7 FROM locked
+    ON CONFLICT (request_id, attempt_seq, kind, revision) DO NOTHING
+    RETURNING id
+), entries AS (
+    INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount, currency)
+    SELECT p.id, $3, $1, unnest($8::text[]), unnest($9::bigint[]),
+        nullif(unnest($10::text[]), '')
+    FROM posted p
+), balance AS (
+    UPDATE billing.balances b SET balance = b.balance - $11
+    WHERE b.account_id = $1 AND $11::bigint <> 0 AND EXISTS (SELECT 1 FROM posted)
 )
-UPDATE billing.spend s SET reserved = s.reserved + $1, spent = s.spent + $2
-WHERE s.subject = $3 AND s.window_start = $4
-    OR s.subject = $5 AND s.window_start = $6
+SELECT 1 FROM posted
 `
 
-type MoveCountersParams struct {
-	Reserved        int64
-	Spent           int64
-	WorkspaceID     uuid.UUID
-	WorkspaceWindow time.Time
-	KeyID           uuid.UUID
-	KeyWindow       time.Time
-	AccountID       uuid.UUID
+type PostLedgerParams struct {
+	AccountID  uuid.UUID
+	ID         uuid.UUID
+	SiteID     uuid.UUID
+	Kind       string
+	RequestID  uuid.UUID
+	AttemptSeq int32
+	Revision   int64
+	Books      []string
+	Amounts    []int64
+	Currencies []string
+	UserDebit  int64
 }
 
-// Moves a reservation's counters: reserved by reserved, spent by spent, in the windows admission locked.
-func (q *Queries) MoveCounters(ctx context.Context, db DBTX, arg MoveCountersParams) error {
-	_, err := db.Exec(ctx, moveCounters,
-		arg.Reserved,
-		arg.Spent,
-		arg.WorkspaceID,
-		arg.WorkspaceWindow,
-		arg.KeyID,
-		arg.KeyWindow,
+// Lock before allocating the transaction sequence. Every write depends on the inserted event, so a duplicate
+// changes neither entries nor balance. Entries in the site's own credits carry NULL currency.
+// The command tag distinguishes a new event from a duplicate without allocating a result row.
+func (q *Queries) PostLedger(ctx context.Context, db DBTX, arg PostLedgerParams) (int64, error) {
+	result, err := db.Exec(ctx, postLedger,
 		arg.AccountID,
+		arg.ID,
+		arg.SiteID,
+		arg.Kind,
+		arg.RequestID,
+		arg.AttemptSeq,
+		arg.Revision,
+		arg.Books,
+		arg.Amounts,
+		arg.Currencies,
+		arg.UserDebit,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const reservationAccount = `-- name: ReservationAccount :one
