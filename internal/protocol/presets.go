@@ -88,7 +88,24 @@ func MergePreset(f Format, body, config []byte, model string) ([]byte, error) {
 			request[name] = value
 		}
 	}
+	if err := presetPrimary(request); err != nil {
+		return nil, err
+	}
 	return presetObject(request), nil
+}
+
+// A models-only configuration is one ordered route, not an absent primary plus unrelated defaults.
+func presetPrimary(request map[string]jsonx.Raw) error {
+	if _, present := request["model"]; present {
+		return nil
+	}
+	models, err := requestArray(request["models"])
+	if err != nil || len(models) == 0 {
+		return err
+	}
+	request["model"] = models[0]
+	request["models"] = presetArray(models[1:])
+	return nil
 }
 
 func presetModel(request map[string]jsonx.Raw, model string) error {

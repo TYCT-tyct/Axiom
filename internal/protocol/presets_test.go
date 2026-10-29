@@ -152,3 +152,19 @@ func TestPresetNamedTools(t *testing.T) {
 		}
 	}
 }
+
+func TestPresetModelList(t *testing.T) {
+	for _, tc := range []struct {
+		member, model string
+		alternates    int
+	}{
+		{``, "a", 1}, {`,"models":["b"]`, "b", 0},
+	} {
+		body := []byte(`{"model":"@preset/list"` + tc.member + `}`)
+		got := must(protocol.MergePreset(protocol.Chat, body, []byte(`{"models":["a","b"]}`), ""))
+		req := must(protocol.Inspect(protocol.Chat, got))
+		if req.Model != tc.model || len(req.Models) != tc.alternates {
+			t.Fatalf("model list: %+v", req)
+		}
+	}
+}

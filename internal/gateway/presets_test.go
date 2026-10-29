@@ -21,6 +21,10 @@ func TestPresetRequests(t *testing.T) {
 	other := r.newAccount(1e9)
 	err := r.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 		_, err := accounts.SavePreset(t.Context(), tx, audit.System("gateway.test"), accounts.SiteID(siteID), accounts.AccountID(a.id), accounts.Preset{Slug: "support", Name: "Support", Config: jsonx.Raw(`{"service_tier":"standard_only","model":"acme/alpha","max_tokens":12,"temperature":0.5,"provider":{"sort":"price"},"system":"Be kind"}`)}, true)
+		if err != nil {
+			return err
+		}
+		_, err = accounts.SavePreset(t.Context(), tx, audit.System("gateway.test"), accounts.SiteID(siteID), accounts.AccountID(a.id), accounts.Preset{Slug: "fallback-list", Name: "Fallback list", Config: jsonx.Raw(`{"models":["acme/alpha","acme/beta"],"provider":{"sort":"price"}}`)}, true)
 		return err
 	})
 	if err != nil {
@@ -49,6 +53,7 @@ func TestPresetRequests(t *testing.T) {
 		{a.key, `{"service_tier":"standard_only","preset":"@preset/support","model":null}`, 400},
 		{a.key, `{"service_tier":"standard_only","model":"acme/alpha","preset":"ignored"}`, 200},
 		{a.key, `{"service_tier":"standard_only","preset":"@preset/support"}`, 200},
+		{a.key, `{"service_tier":"standard_only","model":"@preset/fallback-list"}`, 200},
 	} {
 		resp, body := r.do(http.MethodPost, "/v1/messages", tc.key, strings.NewReader(tc.body))
 		if resp.StatusCode != tc.status {
