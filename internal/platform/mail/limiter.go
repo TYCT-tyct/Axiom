@@ -162,5 +162,5 @@ func deriveMailKey(master *secret.MasterKeys) ([mailKeyLen]byte, error) {
 	if err != nil {
 		return [mailKeyLen]byte{}, fmt.Errorf("mail: derive the recipient key: %w", err)
 	}
-	return [mailKeyLen]byte(key), nil
+	return key, nil
 }
