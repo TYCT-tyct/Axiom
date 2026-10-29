@@ -8,7 +8,7 @@ M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在
 
 ## 不变量
 
-账户暂停在 `accounts.Admit` 原查询读取账户状态，返回 `ErrAccountSuspended`；Chat/Responses 为 OpenRouter 的 `error.code: 403`，Messages 为 `permission_error`，内部分类 `account_suspended`。已通过准入的调用正常结束，用户禁用登录不影响 key；恢复账户无需缓存失效。
+账户暂停在 `accounts.Admit` 原查询读取账户状态，返回 `ErrAccountSuspended`；Chat/Responses 为字符串 `error.code: "permission_denied"`，Messages 为 `permission_error`，统一分类 `permission_denied`。已通过准入的调用正常结束，用户禁用登录不影响 key；恢复账户无需缓存失效。
 
 | 不变量 | 靠什么保证 |
 |---|---|
@@ -58,7 +58,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 | 3 | `SiteForHost(r.Host)`，必须是 API 域名；`Authorization: Bearer`（不分大小写）或 `x-api-key` 认 key（有 Bearer 用 Bearer）；未登记的域名、控制台域名、认不出的 key 都是同一个 401，带 `Connection: close`，体从不被读。key 不在缓存里时查库，查库在共享的一次任务里取一个准入类连接名额（`accounts.Config.LookupSlot`，见「并发、背压与共享状态」）；认出只表示 key 存在，能否使用由第 7 步的 `Admit` 判定 | 401；站点快照过旧、库不答、名额等不到 503 |
 | 4 | 账户在途名额，再节点名额（`InFlight.Acquire`） | 429 / 503 |
 | 5 | 读体（`MaxBody`，默认 32 MiB）：宣告的长度先计入节点内存预算（`protocol.Memory.Charge`），按宣告的长度一次分配；未宣告的从 4 KiB 起翻倍增长，每次分配前先计入新缓冲、复制后退还旧的，峰值就是已计入的量，读完留下的是最终缓冲（至多正文的两倍） | 413；408（超时）；503（预算不够）；断开或读到一半 400 |
-| 6 | `Inspect`；`previous_response_id` 非空 400；`provider` 对象转成路由覆盖（下文「路由参数」）；`parseModelName` 读掉模型名的变体（`:nitro`、`:floor` 定排序，`:exacto`、`:online`、`~` 别名 400，目录变体和不认识的后缀 404），`catalog.ResolvePublic` 认主模型的基础名字（不存在或已下线 404），`models` 里的备选（同样读变体）认得出的跟在后面；`SessionKey`；预检同批取限流计数与粘性（本地模式用 `Stuck` 与 `RateCounter.Count`） | 400 / 404 / 503 |
+| 6 | `Inspect`；`previous_response_id` 非空 400；`provider` 对象转成路由覆盖（下文「路由参数」）；`parseModelName` 读掉模型名的变体（`:nitro`、`:floor` 定排序，`:exacto`、`:online`、`~` 别名 400，已知目录变体 400，不认识的后缀 404），`catalog.ResolvePublic` 认主模型的基础名字（不存在或已下线 404），`models` 里的备选（同样读变体）认得出的跟在后面；`SessionKey`；预检同批取限流计数与粘性（本地模式用 `Stuck` 与 `RateCounter.Count`） | 400 / 404 / 503 |
 | 7 | 准入循环（下文） | 见「错误出口」 |
 | 8 | 交给 `Run` | — |
 
@@ -81,7 +81,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 
 **路由参数**（`provider`，`override`）：`Inspect` 把 `provider` 对象原样交出（至多 4 KiB），gateway 转成 `routing.Override`，每个成员要么生效要么按名字回 400，从不当作没写。生效的：`sort`（`price` 最便宜，`throughput` 最快——routing 的“最快”先比吞吐、吞吐相等才比首字延迟；`latency` 没有对应的排序，返回 400，不按吞吐代替）、`data_collection: "deny"` 与 `zdr: true`（只留数据政策为不留存的端点）、`max_price` 的 `prompt`、`completion`（本站记账单位每百万 token，十进制精确换算成每 token 的单价，超过 9 位小数不取整而是拒绝）、`preferred_min_throughput`、`preferred_max_latency`（秒；百分位对象不支持）。`max_price` 的数在构造大整数之前先按十进制位数和指数（至多三位）检查范围和精度，`1e1000000` 这类写法不会被算出来。不支持的：`only`、`ignore`、`order` 写了名字，`allow_fallbacks: false`（没有 `order` 就没有“首选”），`require_parameters: true`，`quantizations`，`max_price` 的其他项，不认识的成员。写了名字要把名称或代号换成 `SupplierID`，现在没有哪个模块给得出这张表（routing 的 `Endpoint` 不带名字，代号在 suppliers 的分组上）；表来了才能支持，见 [docs/domains/gateway.md 的「待定问题」](../../docs/domains/gateway.md#待定问题)。
 
-**模型名变体**（`variant.go`，[docs/domains/gateway.md 的「模型名变体」](../../docs/domains/gateway.md#模型名变体)）：`parseModelName` 在 `resolve` 和 `count_tokens` 查目录之前把 `:` 后面的变体读掉，只把基础名字交给 `ResolvePublic`，`Request.Model` 不改，所以回显和调用记录里仍是客户端写的名字。`:nitro`、`:floor` 查 `strategies` 表，等于 `provider.sort` 的 `throughput`、`price`，最后一个排序变体生效；显式的 `provider.sort`（`override` 已读好的 `Sort`）优先，`resolve` 把最终排序交回，`read` 写进 `Override.Sort`。`:exacto` 在没有别的排序替换它时回 400（质量分和工具调用错误率还没有测量，`route.go` 里质量固定为 1），`:online` 回 400，`~` 开头回 400；`:free`、`:batch`、`:thinking`、`:extended` 和不认识的后缀回 404，不看基础名字存不存在，从不落到基础模型。备选名字读同一个函数：400 照回，404 的略去，排序变体与请求最终排序不同回 400，备选的 `:exacto` 只有显式 `provider.sort` 能替换。调用（`read`）和 `count_tokens` 共用 `readRouting`（它连 `provider` 一起读，`override` 在其中），所以两边拒绝的一致。整个名字超过 `maxModelName`（200 字节，调用记录的列上限）在 `parseModelName` 里 404，后缀叠加也绕不过。不变量：目录只收到不带 `:` 的名字；`parseModelName` 是读变体的唯一入口，`readRouting` 是定最终排序的唯一入口。
+**模型名变体**（`variant.go`，[docs/domains/gateway.md 的「模型名变体」](../../docs/domains/gateway.md#模型名变体)）：`parseModelName` 在调用、`count_tokens`、模型详情和 endpoints 查目录之前把 `:` 后面的变体读掉，只把基础名字交给 `ResolvePublic`，`Request.Model` 不改，所以回显和调用记录里仍是客户端写的名字。`:nitro`、`:floor` 查 `strategies` 表，等于 `provider.sort` 的 `throughput`、`price`，最后一个排序变体生效；显式的 `provider.sort`（`override` 已读好的 `Sort`）优先，`resolve` 把最终排序交回，`read` 写进 `Override.Sort`。`:exacto` 在没有别的排序替换它时回 400（尚无工具调用成功率与基准评分，现有健康度不等于 Exacto），`:online` 回 400，`~` 开头回 400；`:free`、`:batch`、`:thinking`、`:extended` 回 400；不认识的后缀回 404，不看基础名字存不存在，从不落到基础模型。备选名字读同一个函数：400 照回，404 的略去，排序变体与请求最终排序不同回 400，备选的 `:exacto` 只有显式 `provider.sort` 能替换。调用（`read`）和 `count_tokens` 共用 `readRouting`（它连 `provider` 一起读，`override` 在其中），所以两边拒绝的一致。整个名字超过 `maxModelName`（200 字节，调用记录的列上限）在 `parseModelName` 里 404，后缀叠加也绕不过。不变量：目录只收到不带 `:` 的名字；`parseModelName` 是读变体的唯一入口，`readRouting` 是定最终排序的唯一入口。
 
 **头白名单**（`headers.go`）：按**目标协议**各一份表，只转发表里的名字，其余一律不转发（含 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-Title`、`Cookie`、`User-Agent`）。`accept` 时一次拷下所有协议可能用到的头（`forwardable`），每次尝试再按端点格式挑（`(*attempt).upstreamHeader`），所以同一份请求发给不同格式的端点时发的头也不同。Messages 端点：`Anthropic-Beta`、`Anthropic-Version`，值原样（`anthropic-beta` 不筛选值，见[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。Responses 端点：`session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID` 换成派生值——它们都是 sub2api 用来定账号的会话名（sub2api `internal/service/openai_gateway_scheduling.go` 的 `explicitOpenAIHeaderSessionNames`，2026-10-19），值与体内 `prompt_cache_key` 的派生同一个函数，客户端两处写同一个值时两条路读出来是同一个会话；`X-Codex-Turn-State` 原样转发，它是厂商铸的不透明状态，派生等于伪造。Chat 端点：那七个会话名同样换成派生值（它也是 OpenAI 的方言，中转站照样按这些名字定账号），没有状态头。空白的会话值整个头不发：派生空值会让所有客户端共用一个会话；体内 `metadata.user_id` 和 Chat `user` 转 Messages 遇到空串或纯空白也不派生，交给 protocol 的同一个编码函数写为空串，让中转站按内容回退。要加协议头只改 `requestHeaders` 这一处。
 
@@ -91,7 +91,7 @@ G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不
 
 G9 的代码在 `readonly.go`（只读接口）、`count.go`（`count_tokens`）。两套前缀（`/v1`、`/api/v1`）下路由相同：`POST /messages/count_tokens`，`GET /key`、`/credits`、`/generation?id=`、`/dashboard/billing/subscription`、`/dashboard/billing/usage`。行为基线是 OpenRouter 的 `GET /api/v1/key`、`/credits`（OpenRouter《API Reference》，2026-10-16 读取；`generation` 的字段取自同一套文档的惯例，该页当日取不到）、Anthropic 的 `count_tokens` 和 OpenAI 旧版的两个余额接口（new-api 源码，2026-10）。
 
-**认 key 与读数据**：与模型列表同一条路——`IPCalls`、`authenticate`、一个准入类连接名额（不过账户闸，不动钱）、`accounts.Admit`——`fn` 在同一个事务里读（模型列表读 key 的模型集合，这些接口读调用记录、余额、花费）。事务的范围就是 key 的账户，行级安全是全部的访问控制：别的账户的调用记录、余额、花费读不到，`generation` 取不到别人的编号（与不存在的编号同为 404）。key/工作区停用、过期、删除、管理类 key、IP 白名单、控制台域名都是同一个 401；其余条件有效而账户暂停调用时为 403 `account_suspended`。M1 没有管理 key 的接口，所以 `/credits` 不像 OpenRouter 那样要求管理 key（OpenRouter《Get remaining credits》："Management key required"，2026-10-16），调用 key 就可以读本账户的余额：偏离写在[接入的决策表](../../docs/domains/gateway.md#决策与理由)，M2 有管理 key 时再按其权限收紧。错误用 Chat 的外壳；`count_tokens` 用 Messages 的外壳。成功响应带 `Cache-Control: no-store`。
+**认 key 与读数据**：与模型列表同一条路——`IPCalls`、`authenticate`、一个准入类连接名额（不过账户闸，不动钱）、`accounts.Admit`——`fn` 在同一个事务里读（模型列表读 key 的模型集合，这些接口读调用记录、余额、花费）。事务的范围就是 key 的账户，行级安全是全部的访问控制：别的账户的调用记录、余额、花费读不到，`generation` 取不到别人的编号（与不存在的编号同为 404）。key/工作区停用、过期、删除、管理类 key、IP 白名单、控制台域名都是同一个 401；其余条件有效而账户暂停调用时为 403 `permission_denied`。M1 没有管理 key 的接口，所以 `/credits` 不像 OpenRouter 那样要求管理 key（OpenRouter《Get remaining credits》："Management key required"，2026-10-16），调用 key 就可以读本账户的余额：偏离写在[接入的决策表](../../docs/domains/gateway.md#决策与理由)，M2 有管理 key 时再按其权限收紧。错误用 Chat 的外壳；`count_tokens` 用 Messages 的外壳。成功响应带 `Cache-Control: no-store`。
 
 | 接口 | 内容 | 数据从哪来 |
 |---|---|---|
@@ -150,7 +150,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 | 上游正常结束 | — | `Settle` 后 `Finish`；结算写不进则 `Final{Pending}` |
 | 追加没批准 | 截断：回 402 / 503，不再换 | 截断：以 `credits_insufficient` / `billing_unavailable` 结束 |
 
-`classify` 决定答复、结束原因和是否重试。请求本身的那几类不换条目，理由与 `send` 阶段的 `ScopeRequest` 相同；已生成内容的聚合回复直接作为失败回复交回，保留 Chat、Responses 的部分内容，Messages 仍只给 502 错误体。上游原话经过 `Conn.Sanitize`：协议取出有界的 `code`、`type`、`message`、`param`，去掉供应商身份仍是 suppliers 的事，网关不认识凭证和端点地址。失败事件立即返回；节点期限、内存和客户端取消仍优先按本地原因结束。quality 照旧按 `protocol.FaultOf` 判断健康。`TestStreamFailureMeaningAndUsage` 覆盖七条转发路径的提交前后、聚合与流式、usage、错误范围和回退；`TestStreamRefusalMatchesHTTP400` 核对 HTTP 400 与 SSE 的脱敏原话及错误字段一致。
+`classify` 决定答复、结束原因和是否重试。请求本身的那几类不换条目，理由与 `send` 阶段的 `ScopeRequest` 相同；已生成内容的聚合回复直接作为失败回复交回，保留 Chat、Responses 的部分内容，Messages 仍只给 502 错误体。上游原话经过 `Conn.Sanitize`：协议取出有界的 `code`、`type`、`message`、`param`，去掉供应商身份仍是 suppliers 的事，网关不认识凭证和端点地址。失败事件立即返回；节点期限、内存和客户端取消仍优先按本地原因结束。`brokeAggregate` 以 `requestRefusals` 识别整个请求拒绝家族，不能只按旧的 invalid_request 判定，否则新增类型会丢掉已经生成的聚合内容。HTTP 和流内的拒绝都经 `requestError`：保留 context_length_exceeded、permission_denied、content_policy_violation、payload_too_large 的统一分类与状态，普通参数错误仍为 invalid_request。HTTP 优先供应商原因，流内优先 Fault；已知 code 再细分，凭证范围的失败不进入此路径。quality 照旧按 `protocol.FaultOf` 判断健康。`TestStreamFailureMeaningAndUsage` 覆盖七条转发路径的提交前后、聚合与流式、usage、错误范围和回退；`TestStreamRefusalMatchesHTTP400` 核对 HTTP 400 与 SSE 的脱敏原话及错误字段一致。
 
 **收尾**（`session.conclude`）只在这一处结算，所以每条出口恰好一次：运行 panic 时 `settleOnPanic` 以已有的尝试结算再让 panic 继续。尝试在 `attempt` 返回时已 `close`：取消它的 context、还凭证的名额和端点的在途数，按用量和回执（有上游的请求号）写好它的 `billing.AttemptResult`；`Settle` 之后才写结尾（I3）；提交前的错误用 `protocol.RenderError`，收了费的带上用量和费用（`axiom` 对象），没收费的不带。
 

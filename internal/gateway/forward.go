@@ -304,8 +304,19 @@ func (s *session) classify(ctx context.Context, err error, conn Conn) (protocol.
 	case errors.Is(cause, errIdle):
 		e, finish = protocol.Error{Type: protocol.Timeout}, billing.FinishTimeout
 	case upstreamRefused(fault):
-		e.Type, again = protocol.InvalidRequest, false
-		if r := protocol.RejectionOf(err); r != nil {
+		again = false
+		typ := protocol.InvalidRequest
+		switch fault {
+		case protocol.FaultContextTooLong:
+			typ = protocol.ContextLengthExceeded
+		case protocol.FaultModeration:
+			typ = protocol.ContentPolicyViolation
+		case protocol.FaultNone, protocol.FaultBroken, protocol.FaultServer, protocol.FaultRateLimited,
+			protocol.FaultBadRequest, protocol.FaultUnrecognised, protocol.FaultToolInput:
+		}
+		r := protocol.RejectionOf(err)
+		e = requestError(typ, r)
+		if r != nil {
 			e.Rejection = conn.Sanitize(*r)
 		}
 	}
@@ -356,7 +367,7 @@ func (s *session) unanswered(a *attempt, e protocol.Error, again bool, scope rou
 func (s *session) brokeAggregate(a *attempt, relay *protocol.Relay, e protocol.Error, again bool, scope routing.Scope) (step, ended) {
 	rec := &s.ends[a.i]
 	rec.Result = billing.FailedBeforeCommit
-	if !again && (!a.content || e.Type != protocol.InvalidRequest) {
+	if !again && (!a.content || !requestRefusals[e.Type]) {
 		s.drop(relay)
 		return s.unanswered(a, e, false, scope)
 	}

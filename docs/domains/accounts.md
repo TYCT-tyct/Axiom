@@ -163,7 +163,7 @@ E4-6/7/8 与充值权限依据同一[负责人授权记录](https://github.com/T
 | 每站点一行安全计数，保存当前 UTC 分钟与尚未采样的完整窗口峰值；后台每站点每分钟至多一条信号 | 请求不持久化平台信号，不争用全局消费锁；固定内存保留完整窗口峰值，避免窗口复位吞掉攻击。积压时合并峰值而非无限保存历史；消费时逐条评估完整样本，后续恢复不能抹掉首通知。只计猜凭证，限流拒绝、表单错误和正常会话失效不计 |
 | 新权限由迁移写入角色的 additional_permissions，旧 permissions 投影不变；新快照合并两列并忽略未知名字 | 仅修改新版本加载器不能保护仍运行的旧二进制。新增列使旧查询不见新名字，避免迁移先行造成全站快照过期；迁移权限拼写由测试核对。待旧节点退场前不合并两列 |
 | `balance.top_up` 给 owner、admin、finance，viewer 只读 | 财务可以买额度，普通成员和观察者不能发起支付；getOrder 与余额仍用 balance.view。listPaymentMethods 会创建报价，故也属于四个受保护操作 |
-| 账户暂停用 403 与 OpenRouter 错误外壳 | 2026-10-29 核实 [OpenRouter 官方错误文档](https://github.com/OpenRouterTeam/docs/blob/main/api_reference/errors-and-debugging.mdx)：403 用于权限拒绝，Chat/Responses 的 error.code 为 HTTP 数字，Messages 用 permission_error；只为新增暂停拒绝使用此形状，不改既有错误码 |
+| 账户暂停用 403 与 OpenRouter 错误外壳 | 2026-10-29 核实 [OpenRouter 官方错误文档](https://github.com/OpenRouterTeam/docs/blob/main/api_reference/errors-and-debugging.mdx)：403 用于权限拒绝，Messages 用 permission_error；Axiom 的统一分类及 Chat/Responses 字符串 code 为 permission_denied，有意偏离数字码的理由见[接入的错误决策](gateway.md#决策与理由) |
 
 
 邮件找回与改密码按[负责人授权记录](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)落地已有设计。记录原文：“所以，按已有设计落地的数据模型、对外接口、数据保存规则和计费口径，由编排者决定，并写进领域文档的「决策与理由」；独立评审照常进行。”本次覆盖请求重置、完成重置、已登录改密码三个控制台操作，`password_reset_requests`、`password_reset_tokens` 两张表及到期清理规则；以下保留各项决定的理由。部署、花钱、对外发消息和法律文本仍由负责人拍板。

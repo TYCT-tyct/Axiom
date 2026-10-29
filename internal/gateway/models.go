@@ -167,7 +167,11 @@ func (h *Handler) authorise(r *http.Request, caller accounts.Caller, fn func(con
 // not know or has retired is model_not_found, and so is a model this key may not use, which is never 403, and one
 // nothing serves.
 func (v visibility) model(name string) (modelEntry, error) {
-	resolved, err := v.snap.ResolvePublic(name)
+	parsed, ref := parseModelName(name)
+	if ref != nil {
+		return modelEntry{}, ref
+	}
+	resolved, err := v.snap.ResolvePublic(parsed.base)
 	if err != nil {
 		return modelEntry{}, err
 	}

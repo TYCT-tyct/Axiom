@@ -15,6 +15,7 @@ import (
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
+	"axiom/internal/suppliers"
 )
 
 // The refusals the error exit knows besides the limits' (gateway.go). Code is the unified error_type of
@@ -22,7 +23,7 @@ import (
 var (
 	errUnauthorized = &Refusal{Status: http.StatusUnauthorized, Code: "authentication"}
 	errNoModel      = &Refusal{Status: http.StatusNotFound, Code: "model_not_found"}
-	errTooLarge     = &Refusal{Status: http.StatusRequestEntityTooLarge, Code: "request_too_large"}
+	errTooLarge     = &Refusal{Status: http.StatusRequestEntityTooLarge, Code: "payload_too_large"}
 	errBodyTimeout  = &Refusal{Status: http.StatusRequestTimeout, Code: "timeout"}
 )
 
@@ -30,23 +31,66 @@ func invalid(message string) *Refusal {
 	return &Refusal{Status: http.StatusBadRequest, Code: "invalid_request", Message: message}
 }
 
+// requestRefusals retain partial aggregated content; local cancellation, memory and deadline failures discard it.
+var requestRefusals = map[protocol.ErrorType]bool{
+	protocol.InvalidRequest: true, protocol.ContextLengthExceeded: true, protocol.ContentPolicyViolation: true,
+	protocol.PermissionDenied: true, protocol.RequestTooLarge: true,
+}
+
+// requestFailure uses the adapter's classification even when the response has no usable error text.
+func requestFailure(f *suppliers.Failure) protocol.Error {
+	typ := protocol.InvalidRequest
+	switch f.Cause.(type) {
+	case suppliers.ContextTooLong:
+		typ = protocol.ContextLengthExceeded
+	case suppliers.ContentRejected:
+		typ = protocol.ContentPolicyViolation
+	}
+	return requestError(typ, f.Rejection)
+}
+
+// requestError preserves the specific meaning of a request rejection over HTTP and SSE alike. Supplier credential
+// failures never reach this path: their scope tells the router to try another credential or endpoint instead.
+func requestError(typ protocol.ErrorType, r *protocol.Rejection) protocol.Error {
+	if r != nil {
+		for _, class := range []string{r.Code, r.Type} {
+			switch class {
+			case "context_length_exceeded":
+				typ = protocol.ContextLengthExceeded
+			case "content_filter", "content_policy_violation", "image_content_policy_violation":
+				typ = protocol.ContentPolicyViolation
+			case "permission_denied", "permission_error":
+				typ = protocol.PermissionDenied
+			case "payload_too_large", "request_too_large", "413":
+				typ = protocol.RequestTooLarge
+			default:
+				continue
+			}
+			break // a specific code takes precedence over the generic type
+		}
+	}
+	return protocol.Error{Type: typ, Rejection: r}
+}
+
 // messages are what a client reads for each code. None of them uses a phrase new-api's auto-disable rules match
 // (TestMessagesAvoidAutoDisablePhrases): a relay that has us as its upstream would take a billing problem for a dead
 // channel and switch it off.
 var messages = map[string]string{
-	"account_suspended":    "Calls on this account are paused. Contact the site administrator.",
-	"authentication":       "The API key is missing, malformed, or not valid for this address.",
-	"credits_insufficient": "The credits available are not enough for this request.",
-	"rate_limited":         "Too many requests; retry shortly.",
-	"overloaded":           "The service is busy; retry shortly.",
-	"model_not_found":      "The model does not exist or is not available to this key.",
-	"no_endpoint":          "No endpoint can serve this request.",
-	"not_found":            "The path is not part of this API.",
-	"method_not_allowed":   "The method is not allowed on this path.",
-	"invalid_request":      "The request is not valid.",
-	"request_too_large":    "The request body is larger than the limit.",
-	"timeout":              "The request body was not received in time.",
-	"generation_not_found": "No call with this ID is visible to this key.",
+	"permission_denied":        "This request is not permitted.",
+	"context_length_exceeded":  "The request exceeds the model's context window.",
+	"content_policy_violation": "The request was declined by a content policy.",
+	"authentication":           "The API key is missing, malformed, or not valid for this address.",
+	"credits_insufficient":     "The credits available are not enough for this request.",
+	"rate_limited":             "Too many requests; retry shortly.",
+	"overloaded":               "The service is busy; retry shortly.",
+	"model_not_found":          "The model does not exist or is not available to this key.",
+	"no_endpoint":              "No endpoint can serve this request.",
+	"not_found":                "The path is not part of this API.",
+	"method_not_allowed":       "The method is not allowed on this path.",
+	"invalid_request":          "The request is not valid.",
+	"payload_too_large":        "The request body is larger than the limit.",
+	"timeout":                  "The request body was not received in time.",
+	"generation_not_found":     "No call with this ID is visible to this key.",
 }
 
 // errorTypes are the Messages `type` of a status; Chat's `type` uses the same words (protocol's errorTypes, which the
@@ -81,9 +125,6 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 	} else {
 		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "param": "", "code": r.Code, "metadata": detail}}
 	}
-	if r.Code == "account_suspended" && f != protocol.Messages {
-		body["error"].(map[string]any)["code"] = http.StatusForbidden
-	}
 	out, _ := jsonx.MarshalCanonical(body) //nolint:errcheck // a map of strings and numbers always encodes
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
@@ -112,7 +153,7 @@ func refusal(f protocol.Format, err error) (r *Refusal, expected bool) {
 	}
 	switch {
 	case errors.Is(err, accounts.ErrAccountSuspended):
-		return &Refusal{Status: http.StatusForbidden, Code: "account_suspended"}, true
+		return &Refusal{Status: http.StatusForbidden, Code: "permission_denied", Message: "Calls on this account are paused. Contact the site administrator."}, true
 	case errors.Is(err, accounts.ErrUnknownKey), errors.Is(err, accounts.ErrUnknownHost):
 		return errUnauthorized, true
 	case errors.Is(err, catalog.ErrModelNotFound), errors.Is(err, catalog.ErrRetired):

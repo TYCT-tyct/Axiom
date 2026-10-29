@@ -32,7 +32,7 @@ func TestStreamFailureMeaningAndUsage(t *testing.T) {
 		{protocol.Responses, protocol.Chat},
 	}
 	for _, path := range paths {
-		for _, fault := range []string{"invalid_request_error", "server_error", "rate_limit_error", "unknown_error"} {
+		for _, fault := range []string{"invalid_request_error", "context_length_exceeded", "content_policy_violation", "permission_denied", "payload_too_large", "server_error", "rate_limit_error", "unknown_error"} {
 			for _, content := range []bool{false, true} {
 				for _, stream := range []bool{false, true} {
 					c := streamFailureCase{path.client, path.upstream, fault, content, stream}
@@ -86,14 +86,26 @@ func streamFailure(f protocol.Format, fault string) string {
 		`,"usage":` + usage + "}}\n\n"
 }
 
+func (c streamFailureCase) requestStatus() int {
+	switch c.fault {
+	case "invalid_request_error", "context_length_exceeded":
+		return http.StatusBadRequest
+	case "content_policy_violation", "permission_denied":
+		return http.StatusForbidden
+	case "payload_too_large":
+		return http.StatusRequestEntityTooLarge
+	}
+	return 0
+}
+
 func (c streamFailureCase) retried() bool {
-	return c.fault != "invalid_request_error" && (!c.content || !c.stream)
+	return c.requestStatus() == 0 && (!c.content || !c.stream)
 }
 
 func (c streamFailureCase) checkAttempt(t *testing.T, h *harness) {
 	t.Helper()
 	wantAttempts, wantScope := 1, routing.ScopeEndpoint
-	if c.fault == "invalid_request_error" {
+	if c.requestStatus() != 0 {
 		wantScope = routing.ScopeRequest
 	}
 	if c.retried() {
@@ -119,8 +131,8 @@ func (c streamFailureCase) checkAttempt(t *testing.T, h *harness) {
 }
 
 func (c streamFailureCase) status() int {
-	if c.fault == "invalid_request_error" && !c.content {
-		return http.StatusBadRequest
+	if c.requestStatus() != 0 && !c.content {
+		return c.requestStatus()
 	}
 	if c.content && !c.stream && c.client == protocol.Messages && !c.retried() {
 		return http.StatusBadGateway
@@ -137,11 +149,14 @@ func (c streamFailureCase) checkReply(t *testing.T, h *harness) {
 	if strings.Contains(body, "upstream-vendor") {
 		t.Errorf("supplier leaked in response: %s", body)
 	}
-	if c.fault == "invalid_request_error" && !strings.Contains(body, "[hidden]: bad parameter") {
+	if c.requestStatus() != 0 && !strings.Contains(body, "[hidden]: bad parameter") {
 		t.Errorf("refusal lost upstream words: %s", body)
 	}
-	if c.fault != "invalid_request_error" && strings.Contains(body, "bad parameter") {
+	if c.requestStatus() == 0 && strings.Contains(body, "bad parameter") {
 		t.Errorf("endpoint error exposed upstream words: %s", body)
+	}
+	if c.requestStatus() != 0 && c.fault != "invalid_request_error" && !strings.Contains(body, `"error_type":"`+c.fault+`"`) {
+		t.Errorf("lost typed refusal %s: %s", c.fault, body)
 	}
 	if strings.Contains(h.ended().body, `"cost"`) {
 		t.Error("cost was sent before settlement")
