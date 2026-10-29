@@ -6,10 +6,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
-	"uuid"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
@@ -91,9 +89,6 @@ func TestOpenRouterRecordedContracts(t *testing.T) {
 			resp, body := r.do(http.MethodGet, path, a.key, nil)
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("%d %s", resp.StatusCode, body)
-			}
-			for _, e := range r.endpoints {
-				body = strings.ReplaceAll(body, uuid.UUID(e.ID).String(), "<endpoint>")
 			}
 			actual := decode(t, body)
 			if diff := cmp.Diff(fixture.Axiom, actual); diff != "" {
@@ -181,11 +176,10 @@ func TestOpenRouterEndpointBuild(t *testing.T) {
 	if err := jsonx.Unmarshal(entry.endpoints, &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Data.Endpoints) != 2 || old.count(visibility{}) != 1 {
+	if len(result.Data.Endpoints) != 2 || old.count(visibility{}, orQuery{}) != 1 {
 		t.Fatalf("%s", before)
 	}
-	tags := []string{"axiom/" + first.ID.String(), "axiom/" + second.ID.String()}
-	slices.Sort(tags)
+	tags := []string{"axiom/1", "axiom/2"}
 	for i, e := range result.Data.Endpoints {
 		want := []any{tags[i], "0.0000045", int64(200000), int64(8192)}
 		got := []any{e.Tag, e.Pricing.Prompt, e.ContextLength, e.MaxCompletionTokens}

@@ -152,17 +152,17 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 	served := make(map[catalog.ModelID]struct{}, len(endpoints))
 	byModel := make(map[catalog.ModelID][]routing.Endpoint)
 	for _, e := range endpoints {
+		if e.Owner != (routing.Owner{}) {
+			continue
+		}
 		served[e.Model] = struct{}{}
 		byModel[e.Model] = append(byModel[e.Model], e)
 	}
 	l := &openRouterListing{snap: snap, served: served}
 	for m := range snap.Models() {
-		if _, ok := served[m.ID]; !ok {
-			continue
-		}
 		serving, serves := m.Serving()
 		sold, priced := prices[m.ID]
-		if !serves || !priced {
+		if _, routed := served[m.ID]; !routed || !serves || !priced {
 			continue
 		}
 		id, ok := l.publicID(m)

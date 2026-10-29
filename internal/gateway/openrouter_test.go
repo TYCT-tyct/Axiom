@@ -469,7 +469,7 @@ func TestOpenRouterListIsOneBuild(t *testing.T) {
 	r := goldenRig(t)
 	v := visibility{router: r.router} // every model; the projection must ignore subsequent changes to this router
 	l := r.models.published()
-	q := orQuery{limit: 2}
+	q := orQuery{path: orListPath, limit: 2}
 	both := l.encode(v, q)
 	counted, resume := make(chan struct{}), make(chan struct{})
 	encoded := make(chan []byte, 1)
@@ -496,7 +496,7 @@ func TestOpenRouterListIsOneBuild(t *testing.T) {
 	// A page of one over that build still says how many it matched and links to the next, which is what the entries agree
 	// with only if the count and the page are the same build's.
 	var page orResponse
-	if err := jsonx.Unmarshal(l.encode(v, orQuery{limit: 1}), &page); err != nil {
+	if err := jsonx.Unmarshal(l.encode(v, orQuery{path: orListPath, limit: 1}), &page); err != nil {
 		t.Fatal(err)
 	}
 	if page.TotalCount != 4 || len(page.Data) != 1 || page.Links.Next == nil {
@@ -515,10 +515,10 @@ func TestOpenRouterPageBuffer(t *testing.T) {
 		q    orQuery
 		want float64 // the most one encoding may allocate
 	}{
-		{"one", orQuery{limit: 1}, 4 << 10},
-		{"empty", orQuery{offset: models + 10}, 1 << 10},
-		{"sorted-one", orQuery{limit: 1, sort: orCheapestFirst}, 16 << 10},
-		{"sorted-empty", orQuery{offset: models + 10, sort: orCheapestFirst}, 12 << 10},
+		{"one", orQuery{path: orListPath, limit: 1}, 4 << 10},
+		{"empty", orQuery{path: orListPath, offset: models + 10}, 1 << 10},
+		{"sorted-one", orQuery{path: orListPath, limit: 1, sort: orCheapestFirst}, 16 << 10},
+		{"sorted-empty", orQuery{path: orListPath, offset: models + 10, sort: orCheapestFirst}, 12 << 10},
 	}
 	funcs := make([]alloctest.Function, 0, len(cases))
 	for _, tc := range cases {

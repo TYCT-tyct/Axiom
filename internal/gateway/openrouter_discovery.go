@@ -1,17 +1,17 @@
 package gateway
 
 import (
-	"cmp"
+	"bytes"
 	"net/http"
 	"slices"
-	"uuid"
+	"strconv"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/routing"
 )
 
 // Discovery shares the model list's admission and publication. Supplier identities, credentials, upstream model names
-// and costs never enter this projection; each group endpoint has a stable opaque tag under the public provider Axiom.
+// and costs never enter this projection; each public group endpoint has a model-local ordinal under the public provider Axiom.
 func (h *Handler) discoverOpenRouter(w http.ResponseWriter, r *http.Request) {
 	format := formatFor(r)
 	release, ok := h.ipSlot(w, r, format)
@@ -27,10 +27,15 @@ func (h *Handler) discoverOpenRouter(w http.ResponseWriter, r *http.Request) {
 	l := h.Models.published()
 	switch r.URL.Path {
 	case orListPath + "/count":
-		writeJSON(w, map[string]any{"data": map[string]int{"count": l.count(v)}})
+		q, err := readORCountQuery(r)
+		if err != nil {
+			h.fail(w, r, format, err)
+			return
+		}
+		writeJSON(w, map[string]any{"data": map[string]int{"count": l.count(v, q)}})
 	case "/api/v1/providers":
 		body := `{"data":[]}`
-		if l.count(v) > 0 {
+		if l.count(v, orQuery{}) > 0 {
 			body = orProviders
 		}
 		writeBody(w, []byte(body))
@@ -46,10 +51,10 @@ func (h *Handler) discoverOpenRouter(w http.ResponseWriter, r *http.Request) {
 
 const orProviders = `{"data":[{"datacenters":null,"headquarters":null,"name":"Axiom","privacy_policy_url":null,"slug":"axiom","status_page_url":null,"terms_of_service_url":null}]}`
 
-func (l *openRouterListing) count(v visibility) int {
+func (l *openRouterListing) count(v visibility, q orQuery) int {
 	n := 0
 	for i := range l.models {
-		if l.shows(v, l.models[i].model) {
+		if l.shows(v, l.models[i].model) && q.keeps(&l.models[i]) {
 			n++
 		}
 	}
@@ -91,13 +96,15 @@ func encodeOREndpoints(m orEntry, endpoints []routing.Endpoint) ([]byte, error) 
 		ID: m.ID, Name: m.Name, Created: m.Created, Architecture: m.Architecture,
 		Endpoints: make([]orEndpoint, 0, len(endpoints)),
 	}
-	for _, e := range endpoints {
+	// Sort a copy: the route builder owns the input. Only ordinals cross the public boundary.
+	endpoints = slices.Clone(endpoints)
+	slices.SortFunc(endpoints, func(a, b routing.Endpoint) int { return bytes.Compare(a.ID[:], b.ID[:]) })
+	for i, e := range endpoints {
 		data.Endpoints = append(data.Endpoints, orEndpoint{
-			Name: "Axiom: " + m.Name, ModelID: m.ID, ModelName: m.Name, ProviderName: "Axiom", Tag: "axiom/" + uuid.UUID(e.ID).String(),
+			Name: "Axiom: " + m.Name, ModelID: m.ID, ModelName: m.Name, ProviderName: "Axiom", Tag: "axiom/" + strconv.Itoa(i+1),
 			ContextLength: e.Context, MaxCompletionTokens: e.MaxOutput, Pricing: m.Pricing, SupportedParameters: m.SupportedParameters,
 		})
 	}
-	slices.SortFunc(data.Endpoints, func(a, b orEndpoint) int { return cmp.Compare(a.Tag, b.Tag) })
 	return jsonx.MarshalCanonical(struct {
 		Data orEndpointModel `json:"data"`
 	}{Data: data})

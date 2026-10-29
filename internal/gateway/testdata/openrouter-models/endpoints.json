@@ -85,7 +85,7 @@
           "model_id": "acme/golden",
           "model_name": "golden",
           "provider_name": "Axiom",
-          "tag": "axiom/<endpoint>",
+          "tag": "axiom/1",
           "context_length": 1000000,
           "max_completion_tokens": 1000,
           "pricing": {

@@ -116,9 +116,9 @@ var orRefused = map[string]string{
 // ignored. A name OpenRouter does not document is ignored: a cache buster or a tracker in the URL must not turn a list
 // request into an error.
 func readORQuery(r *http.Request) (orQuery, error) {
-	values, err := url.ParseQuery(r.URL.RawQuery)
+	values, err := orQueryValues(r)
 	if err != nil {
-		return orQuery{}, invalid("The query string is not valid: " + err.Error())
+		return orQuery{}, err
 	}
 	q := orQuery{values: values, path: r.URL.Path}
 	for _, name := range slices.Sorted(maps.Keys(q.values)) { // in a fixed order, so a request with two faults is told the same one
@@ -144,6 +144,31 @@ func readORQuery(r *http.Request) (orQuery, error) {
 		q.limit = orDefaultLimit
 	}
 	return q, nil
+}
+
+// Count documents only output_modalities; pagination and list-only filters do not constrain its total.
+func readORCountQuery(r *http.Request) (orQuery, error) {
+	values, err := orQueryValues(r)
+	if err != nil {
+		return orQuery{}, err
+	}
+	value, written, err := orValue("output_modalities", values)
+	if err != nil {
+		return orQuery{}, err
+	}
+	var q orQuery
+	if written {
+		err = readOutputModalities(&q, "output_modalities", value)
+	}
+	return q, err
+}
+
+func orQueryValues(r *http.Request) (url.Values, error) {
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return nil, invalid("The query string is not valid: " + err.Error())
+	}
+	return values, nil
 }
 
 // orValue is the value of one query parameter: written once and not empty. An empty parameter is one not written, as
@@ -374,9 +399,5 @@ func (q *orQuery) next(last, matched int) string {
 	values := url.Values{} // the request's own query, with the offset moved; a query read from a request always has one
 	maps.Copy(values, q.values)
 	values.Set("offset", strconv.Itoa(last))
-	path := q.path
-	if path == "" {
-		path = orListPath
-	}
-	return path + "?" + values.Encode()
+	return q.path + "?" + values.Encode()
 }
