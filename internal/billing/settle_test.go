@@ -491,41 +491,62 @@ func (b *bank) concurrent(r *rand.Rand) {
 
 // truncated reserves by segment, then either approves one extension or has it refused for funds, as a call near its
 // balance sees it, and settles where a stream cut short stops: inside what the approved segments cover, so the charge
-// stays within what was reserved for it.
+// stays within what was reserved for it. The segment is 50 tokens and the model's speed 10 a second, so its second of
+// overshoot holds 10 more: a first reservation of 60 and an extension to 110, which is what tells an extension that was
+// written from one that was not, and leaves an output limit a real router would segment (billing's output limit here is
+// the 200 tokens the route's entry would carry).
 func (b *bank) truncated(r *rand.Rand) {
 	b.t.Helper()
 	q := metered(b.t)
-	q.Segmentable, q.Model, q.MaxOutput = true, Model{ContextLength: 1e12, OutputSpeed: 100}, 100
+	q.Segmentable, q.Model, q.MaxOutput = true, Model{ContextLength: 1e12, OutputSpeed: 10}, 200
 	h := b.holdOn(q, 0)
+	reserved := func() platform.Exact {
+		return platform.AmountExact(b.count("SELECT amount FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"))
+	}
+	first := reserved()
 	m := h.Reservation.Bind(0)
 	step := m.Observe(Progress{ContentBytes: 31}) // past the latest extension point of a segment of 50
 	if !step.Extend || step.Exhausted {
 		b.t.Fatalf("at 31 tokens of a segment of 50: %+v", step)
 	}
-	covered := int64(2 * segmentTokens) // the first segment and the extension cover a segment each
+	covered, want := int64(2*segmentTokens), step.Request.Target
 	if r.IntN(3) == 0 {
-		// One unit past what the balance leaves: the extension is refused, the meter keeps the first segment, and the
-		// cut comes inside it.
-		amount := b.count("SELECT amount FROM billing.reservations WHERE request_id = '" + h.id.String() + "'")
+		// One unit past what the balance leaves: the extension is refused, nothing is written, the meter keeps the first
+		// segment, and the cut comes inside it. The target is the test's own because a balance that admitted the hold can
+		// never refuse the meter's: an extension adds a segment to what is covered, less than the segment plus its
+		// allowance the hold already reserved. That refusal by a short balance is TestExtend's.
 		avail := b.count("SELECT balance - reserved - frozen - floor FROM billing.balances")
-		err := b.billing.Extend(b.t.Context(), h, ExtendRequest{Seq: step.Request.Seq, Target: platform.AmountExact(amount + avail + 1)})
+		err := b.billing.Extend(b.t.Context(), h, ExtendRequest{Seq: step.Request.Seq, Target: platform.AmountExact(first.CeilAmount() + avail + 1)})
 		if !errors.As(err, new(*Insufficient)) {
 			b.t.Fatalf("an extension of %d past the %d the balance leaves: %v", avail+1, avail, err)
 		}
 		m.Extended(step.Request.Seq, err)
-		covered = segmentTokens
+		covered, want = segmentTokens, first
 	} else {
 		if err := b.billing.Extend(b.t.Context(), h, step.Request); err != nil {
 			b.t.Fatal(err)
 		}
 		m.Extended(step.Request.Seq, nil)
 	}
-	f, err := b.billing.Settle(b.t.Context(), h, outcome(Committed, FinishTruncated, used(b.t, 0, 1+r.Int64N(covered), 0)))
+	if got := reserved(); got.Cmp(want) != 0 {
+		b.t.Fatalf("the reservation is %v, want %v (first %v, target %v)", got, want, first, step.Request.Target)
+	}
+	// An approved extension moved the reservation past the first segment's; a refused one left it there, so settling
+	// beyond the first reservation is only covered by the former, and settling inside it is the latter's whole bound.
+	allowance, _ := (Segments{Output: segmentTokens, Overshoot: time.Second}).Allowance(10) // the bank's settings and the model's speed
+	output := 1 + r.Int64N(segmentTokens)                                                   // inside the first segment
+	if want.Cmp(first) > 0 {
+		output = segmentTokens + allowance + 1 + r.Int64N(covered-segmentTokens-allowance) // past the first reservation
+	}
+	f, err := b.billing.Settle(b.t.Context(), h, outcome(Committed, FinishTruncated, used(b.t, 0, output, 0)))
 	if err != nil {
 		b.t.Fatal(err)
 	}
-	if amount := platform.AmountExact(b.count("SELECT amount FROM billing.reservations WHERE request_id = '" + h.id.String() + "'")); f.Charged.Cmp(amount) > 0 {
-		b.t.Errorf("a cut stream was charged %v of %v reserved", f.Charged, amount)
+	if want.Cmp(first) > 0 && f.Charged.Cmp(first) <= 0 {
+		b.t.Errorf("a cut stream of %d tokens was charged %v of the %v its extension was needed for", output, f.Charged, first)
+	}
+	if f.Charged.Cmp(want) > 0 {
+		b.t.Errorf("a cut stream was charged %v of %v reserved", f.Charged, want)
 	}
 }
 
