@@ -64,6 +64,7 @@ func settlementRows(ctx context.Context, tx pg.Tx, id, account uuid.UUID) (balan
 			&r.AttemptEntries,
 			&r.Endpoints,
 			&r.Profit,
+			&r.PricingTiers,
 		)
 		if err != nil {
 			err = fmt.Errorf("billing: read the reservation: %w", err)
