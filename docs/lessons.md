@@ -68,3 +68,9 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 证据：#464 的 `699698b2` 独立评审第 1、2 条发现 SMTP 密码参与无盐幂等摘要，且后台可写目标直接拨号；诊断新增日志时也必须剔除 SMTP 回复里的凭证或收件人回显。信封加密本身不能保护摘要里的离线猜测校验器，保存时的地址检查也不能替代实际拨号时的 DNS 校验与 IP 钉扎。
 哪一层没拦住：最初只验证密文存储、HTTP 响应和审计脱敏，没有检查幂等表中的派生数据，也沿用了仅来自环境变量时的直接连接。回归 `TestSMTPFingerprintExcludesPassword` 检查持久化摘要与密码无关，`TestSMTPDestinationBoundary` 覆盖后台保存和旧配置测试的私网拒绝，`TestTCPRevalidatesDNSAndPinsTheConnection` 覆盖 DNS 重绑定，`TestSMTPDiagnosticRedactsServerEcho` 检查服务器回显脱敏。后续新增凭证写入口必须同时检查幂等记录；新增后台可写网络目标必须验证实际拨号边界。
 出现：2026-10-29
+
+## 供应商修订必须保留创建、旧位置与首版授权的边界
+
+证据：PR #461 的 a577486 独立评审第 1–3 条。原实现把待映射页的创建 POST 当作纠正，过期页面能无声覆盖他人的映射；版本 1 的 key 位置缺策略却继续被接受，旧页会投影为全拒；首版别名仍有列级 UPDATE 授权。`TestGroupMappingRevisionsAndIdempotentReplay`、`TestConcurrentMappingCorrectionsRequireCurrentRevision`、两个适配器的 `TestLegacyKeyListingRestartsBeforeProjectingPolicies` 和 `TestAliasRevisionsPreserveOwnershipAndHistory` 保留这些边界回归。
+哪一层没拦住：只验证追加历史和最终快照，没有回放既有前端的新建语义、升级前的分页位置及旧迁移留下的权限。后续供应商修订改动须同时核对创建冲突与显式版本前提、旧位置重读、原始行不可改写；不能仅凭新表只追加就称整条历史不可变。
+出现：2026-10-29

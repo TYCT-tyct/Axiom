@@ -151,3 +151,30 @@ func TestAnOfferWhoseGroupsChangedBeginsAgain(t *testing.T) {
 		t.Errorf("the groups were listed %d times, want twice: the pass that found them changed began again", listed)
 	}
 }
+
+func TestLegacyKeyListingRestartsBeforeProjectingPolicies(t *testing.T) {
+	t.Parallel()
+	asked := []int{}
+	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
+		page, err := keyPageOf(r.Path)
+		if err != nil {
+			return adapter.Response{}, err
+		}
+		asked = append(asked, page)
+		return fixture(t, "keys"), nil
+	})
+	legacy := adapter.Listing(`{"v":1,"page":2,"total":2,"keys":[{"Ref":"2","GroupRef":"2","Status":0,"ResetAt":"0001-01-01T00:00:00Z"}]}`)
+	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
+	page, err := m.Keys(t.Context(), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !page.Done || len(page.Items) != 2 || !slices.Equal(asked, []int{1}) {
+		t.Fatalf("legacy resume: pages %v, result %+v", asked, page)
+	}
+	for _, key := range page.Items {
+		if key.Policy == nil || key.Policy.Models != nil {
+			t.Fatalf("key %s lost its unrestricted policy", key.Ref)
+		}
+	}
+}

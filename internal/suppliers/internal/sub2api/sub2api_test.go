@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
@@ -52,8 +54,8 @@ func TestKeysAndKeySecret(t *testing.T) {
 	srv := routes(panel(t))
 	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
 	keys, err := readKeys(t, m)
-	want := []adapter.KeyState{{Ref: "2", GroupRef: "2", Status: adapter.KeyActive}, {Ref: "1", GroupRef: "1", Status: adapter.KeyActive}}
-	if err != nil || !slices.Equal(keys, want) {
+	want := []adapter.KeyState{{Ref: "2", GroupRef: "2", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}, {Ref: "1", GroupRef: "1", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}}
+	if err != nil || !cmp.Equal(keys, want) {
 		t.Fatalf("Keys = %+v, %v; want %+v", keys, err, want)
 	}
 	s, err := m.KeySecret(t.Context(), "2")
