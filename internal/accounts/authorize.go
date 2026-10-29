@@ -22,11 +22,13 @@ var (
 	ManageKeys           = Permission{"api_keys.manage", false}
 	ManageWorkspaces     = Permission{"workspaces.manage", false}
 	ViewCalls            = Permission{"calls.view", false}
+	TopUpBalance         = Permission{"balance.top_up", false}
 	ViewBalance          = Permission{"balance.view", false}
 	ManageSites          = Permission{"sites.manage", true}
 	ManagePlatformGrants = Permission{"platform_grants.manage", true}
 
 	// The admin API's, asked of the platform. The ones that change money, credentials, prices or the catalog are sensitive.
+	ManageUsers     = Permission{"users.manage", true}
 	ViewUsers       = Permission{"users.view", false}
 	GrantCredits    = Permission{"credits.grant", true}
 	ViewSuppliers   = Permission{"suppliers.view", false}
@@ -40,7 +42,7 @@ var (
 var permissions = func() map[string]Permission {
 	declared := map[string]Permission{}
 	for _, p := range []Permission{
-		ViewKeys, ManageKeys, ManageWorkspaces, ViewCalls, ViewBalance, ManageSites, ManagePlatformGrants,
+		ViewKeys, ManageKeys, ManageWorkspaces, ViewCalls, ViewBalance, TopUpBalance, ManageUsers, ManageSites, ManagePlatformGrants,
 		ViewUsers, GrantCredits, ViewSuppliers, ManageSuppliers, ViewCatalog, ManageCatalog, ViewPricing, ManagePricing,
 	} {
 		declared[p.name] = p

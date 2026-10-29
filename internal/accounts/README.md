@@ -34,10 +34,11 @@
 | `workspaces` | `site_id`、`account_id`、`name`、`status`、`is_default`、`budget`、`budget_reset`、`deleted_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；部分唯一 `(account_id) WHERE is_default`；默认工作区的 `deleted_at` 为空；`budget_reset` 取 daily / weekly / monthly，空表示不重置的总额，有它就要有 `budget` | 账户 | `name`、`status`、`budget`、`budget_reset`、`deleted_at` |
 | `users` | `site_id`、`account_id`（个人账户）、`account_kind`（恒为 `personal` 的生成列）、`email`（规范化）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_ciphertext`、`totp_nonce`、`totp_wrapped_dek`、`totp_key_version`（`secret.Sealed` 的四个字段，同为空或同不为空）、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, account_id, id)`；`UNIQUE (account_id)`、`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`：个人账户只属于这一个用户，不能绑到企业账户上，两个登录身份不会共用一个账户范围；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、四个 `totp_` 密文列、`totp_last_step`、`mfa_enabled_at` |
 | `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`：个人账户的成员只能是它唯一的用户，所以不需要另加部分唯一索引；`role_id → roles` | 账户 | 无，也没有 `UPDATE` 策略（移除成员随企业账户加 `removed_at`） |
-| `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)`；部分唯一 `(user_id, role_id) WHERE revoked_at IS NULL`：一个用户同一角色只有一条有效授予 | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态） |
+| `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)`；部分唯一 `(user_id, role_id) WHERE revoked_at IS NULL`：一个用户同一角色只有一条有效授予 | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态；恢复插入新授予） |
 | `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management，M1 只开放 call）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；`limit_reset` 同工作区的 `budget_reset` | 账户 | `name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态） |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
+| `security_failures` | `site_id`、`started_at`、`failures` | 每站点一行，一分钟窗口，原子增加/重置；非零窗口按 started_at 的部分索引供到期批次认领；只含计数 | 站点 | 仅平台可写计数与起点 |
 | `password_reset_requests` | `site_id`、`email_hash`、`id`、可空 `email`、`domain`、`language`、`expires_at` | 主键 `(site_id, email_hash)`；唯一 `id`；摘要 32 字节；语言 zh/en | 站点 | `id`、`email`、`domain`、`language`、`expires_at`（重发替换，处理后清除邮箱） |
 | `password_reset_tokens` | `id`、`site_id`、`account_id`、`user_id`、`token_hash`、`factor_version`、`expires_at`、`used_at` | `token_hash` 唯一、32 字节；`(site_id, account_id, user_id) → users` | 账户 | `used_at`（终态） |
 
@@ -79,7 +80,7 @@
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
 - `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。账户目标的范围是 `pg.AccountScopeIn(会话签发的站点, 账户)`：除了账户自己的行，还读这个站点的公开配置和共享计数（`platform.sees_site`，如充值页的付款方式、每 IP 的下单计数），别的站点的读不到；站点来自会话，不来自账户能写的行。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
 - 权限在代码里声明名字和是否敏感；角色快照里有代码不认识的权限就不启动。敏感权限要求本次会话 `level = mfa`。
-- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`，以及敏感的 `sites.manage`、`platform_grants.manage`，和管理接口的八个（见下文「管理接口」）。默认角色由迁移 00003 写入，00005、00006 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
+- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`、`balance.top_up`，以及敏感的 `sites.manage`、`platform_grants.manage`、`users.manage`，和管理接口的八个（见下文「管理接口」）。默认角色由迁移 00003 写入，00005、00006、00010 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。
 
 ## 登录前的查找
@@ -113,7 +114,7 @@
 **缓存只存不会变的东西；能被改的（停用、删除、过期、IP 白名单、可用模型、预设、上限、等级）每次调用都在准入事务里读库，判定能否使用、定规则和路由都只用读出的值。** 所以缓存陈旧、并发的缓存填充交出旧结果、提交确认丢失、多个核心节点，都不会让停用后的 key 通过，也不会按旧预设路由，不需要失效协议。
 
 1. **认出**（`AuthenticateKey`，内存）：解析并核对校验位，用 `(site_id, 当前版本的哈希)` 查缓存。条目里只有 `key_id`、`account_id`、`workspace_id`、`site_id`，建后永不改变。未命中时按 `(site, 哈希)` 合并并发的查找：配了 `Config.LookupSlot` 时，这次共享的查找先取一个名额、查完才还（发起它的请求走了也不提前还，等它的请求不另取），名额取不到就按查找失败处理、不写负缓存；无范围调用 `key_tenant`，无结果写负缓存、返回 401；有结果写入缓存。
-2. **准入**（`Admit`，数据库）：gateway 调用 `accounts.Admit(ctx, caller, req, fn)`，`req` 带请求的域名、可信解析的客户端 IP。本模块用 key 所属账户的范围打开事务，执行一条查询：key ⨝ 工作区 ⨝ 账户，条件为 `domain_site(请求的域名, 'api') = key.site_id`，key、工作区、账户都启用，key 与工作区未删除，未过期，`kind = call`，`ip_allow` 为空或包含客户端 IP。不满足就回滚，返回与"key 不存在"相同的 401。满足就把当前的 `preset_id`、`models`、`tier_id`、`spend_limit`、`limit_reset`、工作区预算放进 `Admission` 交给 `fn`。`fn` 由 gateway 组装：用 `Admission` 定规则、路由（认模型里名字解析在准入之前做，key 的可用模型这一半在 `fn` 里按 `Admission.models` 约束，不允许返回 403），再调 billing 的准入在同一个事务里预留。`fn` 里只有对内存快照的有界计算和预留的数据库语句，不访问缓存、不等待：限流计数和会话粘性在 `Admit` 之前取好，端点负载在进程内，都作为路由的输入（见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)）；候选都满载时 `fn` 返回"需要等待"，`Admit` 回滚（这时还没有预留），gateway 在事务之外等，醒来后只重新调 `Admit`，不再访问缓存、不重复计限流；权限、预设、可用模型、等级都重新读库，路线也重新计算。
+2. **准入**（`Admit`，数据库）：gateway 调用 `accounts.Admit(ctx, caller, req, fn)`，`req` 带请求的域名、可信解析的客户端 IP。本模块用 key 所属账户的范围打开事务，执行一条查询：key ⨝ 工作区 ⨝ 账户，条件为 `domain_site(请求的域名, 'api') = key.site_id`，key、工作区、账户都启用，key 与工作区未删除，未过期，`kind = call`，`ip_allow` 为空或包含客户端 IP。其他条件有效而账户停用时回滚并返回 `ErrAccountSuspended`（403）；其余条件不满足返回与"key 不存在"相同的 `ErrUnknownKey`（401）。满足就把当前的 `preset_id`、`models`、`tier_id`、`spend_limit`、`limit_reset`、工作区预算放进 `Admission` 交给 `fn`。`fn` 由 gateway 组装：用 `Admission` 定规则、路由（认模型里名字解析在准入之前做，key 的可用模型这一半在 `fn` 里按 `Admission.models` 约束，不允许返回 403），再调 billing 的准入在同一个事务里预留。`fn` 里只有对内存快照的有界计算和预留的数据库语句，不访问缓存、不等待：限流计数和会话粘性在 `Admit` 之前取好，端点负载在进程内，都作为路由的输入（见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)）；候选都满载时 `fn` 返回"需要等待"，`Admit` 回滚（这时还没有预留），gateway 在事务之外等，醒来后只重新调 `Admit`，不再访问缓存、不重复计限流；权限、预设、可用模型、等级都重新读库，路线也重新计算。
 3. 不预留的 key 接口（`GET /api/v1/key`、`/credits`）同样经 `Admit` 打开事务，`fn` 只读。
 
 - **为什么停用立即生效**：停用的提交被确认之后开始的调用，其准入查询都在提交之后执行，读到的就是停用（Read Committed 每条语句取新快照），与缓存内容、节点数、提交确认是否送达都无关。改预设、可用模型、等级同理：下一次调用就按新值路由和计价，最高价也按新等级的售价比较。
@@ -144,6 +145,10 @@
 - 超过 90 秒（3 个周期）没有成功重载，所有请求返回 503，直到重载成功；启动时第一次加载失败就不启动。
 
 ## 注册、登录与会话
+
+安全事件写 `platform.audit_log`：`security.registration`、`security.sign_in`、`security.mfa` 与成功状态同事务；失败的 `security.registration_failed`、`security.sign_in_failed`、`security.authentication_failed`、`security.mfa_failed`、`security.factor_failed`、`security.password_failed` 在独立、有 5 秒期限的事务提交。只含固定分类、监听面、用户/会话/租户 ID 和上下文请求 ID，未知用户记站点和系统操作者；缺 Cookie 的普通未登录访问不记失败。邮箱、IP、User-Agent、密码、邀请码、TOTP/恢复码及令牌不进条目。审计写失败使操作失败，不伪报成功。
+
+失败事务原子累加每站点 `security_failures` 的一分钟窗口并持久化 `accounts.authentication_failures` 信号；计数行锁保证多节点不会丢计数。`SampleSecurityAlerts` 在平台后台每分钟用 `FOR UPDATE SKIP LOCKED` 最多认领 100 个已过期且非零窗口，清零并发一次恢复；与失败更新同样先锁计数、再持久化信号，防止旧恢复覆盖新失败。平台告警配置中添加 kind 为 `accounts.authentication_failures` 的规则（例如 threshold=20、duration_seconds=0，表示每站点一分钟 20 次失败），配置通知渠道；未配置时只保留审计和信号，不发通知。阈值、持续时间、静默与重复由平台告警规则配置，只有匹配阈值的安全信号才创建告警事件；不自动封号。审计条目的保留沿用平台策略，计数每站点一行，无个人信息，不随事件数增长。
 
 | 能力 | M1 | M2 |
 |---|---|---|
@@ -235,7 +240,7 @@
 | 一个用户同一平台角色只有一条有效授予 | 部分唯一索引 `platform_grants_held` + `ON CONFLICT DO NOTHING`；测试：两条授予同时开始（授予表被锁住直到两条都在等待），只留一条授予、一条审计 |
 | 主站的币种是 `USD` | `InitSite` 写库前核对；测试：EUR 被拒，没有任何写入（核对在事务之前） |
 | 站点的币种不可改 | `axiom_app` 对 `sites.currency` 没有 `UPDATE` 权限；`Money` 的币种由它决定 |
-| 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，删掉账户的租户登记后开启失败，因素、恢复码、会话都没有留下 |
+| 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，数据库拒绝审计时开启失败，因素、恢复码、会话都没有留下 |
 | 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
 | 快照不决定能否访问 | 站点、域名的状态和注册策略在库里判定；测试：只停用域名，另一个 `Service` 的准入、会话、登录、注册立即被拒；重载持续失败 90 秒后全部 503 |
 | 站点改短会话时长，已签发的会话也按新的算，之后放宽也不延长 | `SetSiteSettings` 在同一事务里把新时长写进已有会话（`CutSessions`，只取小）；测试：改短后空闲过久的、年龄过大的会话下一个请求被拒，没超的不受影响（`TestShorterSessionsEndOnTheNextRequest`）；改短、期间没有请求、再放宽，会话仍失效（`TestALoosenedSiteDoesNotRevive`） |
@@ -248,6 +253,9 @@
 | 函数 | 做什么 |
 |---|---|
 | `SiteSettings`、`SetSiteSettings` | 读、整体替换站点自己的会话时长和新 key 的每日上限；没设的列是空，用代码里的默认（`DefaultSiteSettings`）。越界是 `*SettingError`（名字是接口里的字段名），站点不存在是 `ErrNotFound`。替换在站点行锁里做，审计条目 `site_settings.update` 记改前和改后的值，改前就是被替换的值 |
+| `SiteLoginLimits`、`SetSiteLoginLimits` | 独立 `/login-limits` 读写现有五项阈值，空值选择 `DefaultLoginLimits`；站点锁内读旧值、替换、审计，与其他站点设置互不覆盖；写后刷新，其余节点 30 秒内重载 |
+| `SetAccountSuspended`、`SetUserSignInDisabled` | 分开控制调用和登录，前者复用准入同一条查询里的账户状态，后者在用户锁内吊销全部会话，恢复均不修改因素 |
+| `UserPlatformGrants`、`SetPlatformGrantRevoked` | 列表各角色最后状态，撤销终态不回退；恢复要求历史授予且权限为操作者当前平台角色权限的子集，插入新行并记录 granted_by；按用户锁串行 |
 | `Refresh` | 立即重载快照。改了站点设置的节点调用它；别的节点在重载间隔内（30 秒）跟上 |
 | `Site`、`MainSite` | 快照里的站点；管理接口用它取币种和默认站点 |
 | `Tiers` | 站点的等级，按名字 |
@@ -258,14 +266,14 @@
 
   | 角色 | 权限 |
   |---|---|
-  | owner | `api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view` |
-  | admin | owner 的全部，加 `sites.manage`、`platform_grants.manage` 和管理接口的八个 |
+  | owner | `api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`、`balance.top_up` |
+  | admin | owner 的全部，加 `sites.manage`、`platform_grants.manage`、`users.manage` 和管理接口的八个 |
   | member | `api_keys.view`、`api_keys.manage`、`calls.view` |
-  | finance | `api_keys.view`、`balance.view`、`users.view` |
+  | finance | `api_keys.view`、`balance.view`、`balance.top_up`、`users.view` |
   | viewer | `api_keys.view`、`calls.view`、`balance.view`、`users.view`、`suppliers.view`、`catalog.view`、`pricing.view` |
   | support | `api_keys.view`、`calls.view`、`users.view` |
 
-  只有 admin 能改钱、凭证、价格和目录；别的角色最多看。谁该有 `credits.grant` 这类权限是负责人的决定，现在只给 admin。
+  只有 admin 能赠送/调整余额、改凭证、价格和目录；owner、admin、finance 能用自己的资金充值，其余角色最多看。谁该有 `credits.grant` 这类权限是负责人的决定，现在只给 admin。
 - **管理会话的权限是平台授予的**：管理监听面的会话，`SessionInfo` 的权限列表取用户未撤销的平台授予的角色，不是账户里的成员关系；`Authorize` 对平台目标本来如此。
 - **站点缩短会话时长，已有的会话也缩短**：`SetSiteSettings` 在改设置的同一事务里，把站点新的空闲时长、最长时长（没设的取代码默认值）写进该站点、该监听面未撤销的会话：`expires_at` 与 `created_at` 加新最长时长取小，`idle_timeout` 与新空闲时长取小（`CutSessions`）。所以改短立即对所有节点生效，并且存进了会话本身：之后站点再放宽，被改短的会话也不会恢复，哪怕改短期间它没有发过请求。只会缩短，不会延长已签发的会话。`ValidSession` 和 `SessionInfo` 另把存下的时长与快照里站点现在的值取小，挡住别的节点在重载快照前按旧时长新签发的会话。应用因此对 `sessions` 的 `expires_at`、`idle_timeout` 有更新权限（迁移 00006），只经 `CutSessions` 往小改。
 

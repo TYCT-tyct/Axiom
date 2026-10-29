@@ -35,11 +35,18 @@ const recoveryCodeCount = 10 // each 80 random bits
 // factor version the user's, attempts left) and spends the code with a conditional update that must change one row;
 // a wrong code only counts an attempt, which commits. The pending session is revoked and a new one with new tokens
 // issued, so one challenge yields one session.
-func (s *Service) VerifyMFA(ctx context.Context, r *http.Request, code string, ip netip.Addr, userAgent string) (Issued, error) {
+func (s *Service) VerifyMFA(ctx context.Context, r *http.Request, code string, ip netip.Addr, userAgent string) (out Issued, err error) {
+	d0, _, domainErr := s.domain(r.Host)
+	if domainErr != nil {
+		return Issued{}, domainErr
+	}
+	event := securityAttempt{site: d0.site, surface: d0.surface}
+	defer func() { s.failed(ctx, event, "security.mfa_failed", &err) }()
 	found, tokenHash, d, err := s.sessionOf(ctx, r)
 	if err != nil {
 		return Issued{}, err
 	}
+	event.user, event.account, event.session = found.UserID, found.AccountID, found.SessionID
 	if err := s.fromIP(ctx, d.site, ip); err != nil {
 		return Issued{}, err
 	}
@@ -74,7 +81,10 @@ func (s *Service) verifyMFA(ctx context.Context, r *http.Request, code string, f
 			user: found.UserID, account: found.AccountID, site: s.snapshot.Load().sites[d.site], surface: d.surface,
 			level: levelMFA, factorVersion: locked.FactorVersion, ip: ip, userAgent: userAgent,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		return (securityAttempt{site: d.site, user: found.UserID, account: found.AccountID, session: found.SessionID, surface: d.surface}).record(ctx, tx, "security.mfa")
 	})
 	if err == nil && wrong {
 		return Issued{}, ErrBadCode
@@ -161,12 +171,13 @@ type FactorChange struct {
 // nothing. The factor version goes up, so every other session and recovery code stops working; the new recovery codes
 // and a two-step-verified session for this device are returned. A wrong code or password spends one of the user's
 // code failures, as in VerifyMFA.
-func (s *Service) ConfirmTOTP(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error) {
+func (s *Service) ConfirmTOTP(ctx context.Context, p Principal, c FactorChange) (out Issued, recovery []string, err error) {
+	defer func() { s.failed(ctx, p.securityAttempt(), "security.factor_failed", &err) }()
 	l := s.snapshot.Load().sites[p.site].limits
 	var issued Issued
 	var codes []string
 	var refused error
-	err := failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
+	err = failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
 		issued, codes, refused = s.confirmTOTP(ctx, p, c)
 		if errors.Is(refused, ErrBadCode) || errors.Is(refused, ErrBadCredentials) {
 			return refused // a wrong guess is the only thing that counts; the bucket is the user's, shared with sign-in's
@@ -208,6 +219,7 @@ func (s *Service) confirmTOTP(ctx context.Context, p Principal, c FactorChange) 
 // RegenerateRecoveryCodes replaces p's recovery codes when code is a current TOTP code, raising the factor version
 // as ConfirmTOTP does. A wrong code counts among the user's code failures, as in VerifyMFA.
 func (s *Service) RegenerateRecoveryCodes(ctx context.Context, p Principal, c FactorChange) (issued Issued, codes []string, err error) {
+	defer func() { s.failed(ctx, p.securityAttempt(), "security.factor_failed", &err) }()
 	l := s.snapshot.Load().sites[p.site].limits
 	err = failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
 		issued, codes, err = s.regenerateRecoveryCodes(ctx, p, c)

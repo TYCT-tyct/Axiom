@@ -392,8 +392,8 @@ func TestTOTPConfirmationsAtOnce(t *testing.T) {
 }
 
 // TestFactorChangesAreAudited: turning on TOTP and new recovery codes each leave an entry naming the user and its
-// tenant, in the change's transaction: an entry that cannot be written, here for want of the account's tenant
-// registration, undoes the factors, the recovery codes and the new session with it.
+// tenant, in the change's transaction: an entry rejected by the database undoes the factors, recovery codes
+// and new session with it.
 func TestFactorChangesAreAudited(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)
@@ -409,7 +409,7 @@ func TestFactorChangesAreAudited(t *testing.T) {
 	user, account := uuid.UUID(x.user).String(), uuid.UUID(p.AccountID()).String()
 	want := "user.totp_enable " + x.user.TypeID() + " " + s1.String() + " " + account + " user:" + user
 	got := texts(t, x.db, platform, "SELECT action || ' ' || target_id || ' ' || site_id || ' ' || account_id || ' ' || actor_kind || ':' || actor_id "+
-		"FROM platform.audit_log WHERE target_kind = 'user' ORDER BY id")
+		"FROM platform.audit_log WHERE action IN ('user.totp_enable','user.recovery_codes_regenerate') ORDER BY id")
 	if len(got) != 2 || got[0] != want || got[1] != strings.Replace(want, "user.totp_enable", "user.recovery_codes_regenerate", 1) {
 		t.Errorf("audit entries %q, want %q and its recovery_codes_regenerate", got, want)
 	}
@@ -419,8 +419,8 @@ func TestFactorChangesAreAudited(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, account = uuid.UUID(y.user).String(), uuid.UUID(q.AccountID()).String()
-	if err := pgtest.Run(t.Context(), y.database.Superuser, "DELETE FROM platform.tenants WHERE tenant_id = '"+account+"'"); err != nil {
+	user = uuid.UUID(y.user).String()
+	if err := pgtest.Run(t.Context(), y.database.Superuser, `ALTER TABLE platform.audit_log ADD CONSTRAINT reject_factor_audit CHECK (action NOT LIKE 'user.%') NOT VALID`); err != nil {
 		t.Fatal(err)
 	}
 	secretText, _ := y.s.BeginTOTP(q)

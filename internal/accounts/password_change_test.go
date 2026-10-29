@@ -141,7 +141,7 @@ func testPasswordRollback(t *testing.T, flow string) {
 	before := x.factorVersion(t)
 	switch flow {
 	case "reset audit":
-		if err := pgtest.Run(t.Context(), x.database.Superuser, "DELETE FROM platform.tenants WHERE tenant_id = '"+uuid.UUID(p.AccountID()).String()+"'"); err != nil {
+		if err := pgtest.Run(t.Context(), x.database.Superuser, `ALTER TABLE platform.audit_log ADD CONSTRAINT reject_password_audit CHECK (action <> 'user.password_set') NOT VALID`); err != nil {
 			t.Fatal(err)
 		}
 	default:

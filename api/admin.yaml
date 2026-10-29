@@ -515,6 +515,194 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/login-limits:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteLoginLimits
+      tags: [Site]
+      summary: A site's login brute-force limits
+      description: The site's own limits and the code defaults; absent members are unavailable on older nodes.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The limits
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LoginLimitsView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateSiteLoginLimits
+      tags: [Site]
+      summary: Set a site's login brute-force limits
+      description: >-
+        Replace only the five login thresholds. Absent values use code defaults. Changes are audited and applied
+        locally at once and on other nodes within 30 seconds. Existing counters are preserved.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LoginLimitsUpdate"}
+      responses:
+        "200":
+          description: The limits as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LoginLimitsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/suspension:
+    parameters:
+      - name: account_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/AccountId"}
+    put:
+      operationId: setAccountSuspension
+      tags: [Users]
+      summary: Pause or restore account calls
+      description: Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AccountSuspension"}
+      responses:
+        "204":
+          description: State stored; a repeated state changes nothing
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/users/{user_id}/sign-in:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/UserId"}
+    put:
+      operationId: setUserSignIn
+      tags: [Users]
+      summary: Disable or enable user sign-in
+      description: Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UserSignIn"}
+      responses:
+        "204":
+          description: State stored; a repeated state changes nothing
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/users/{user_id}/platform-grants/{role}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/UserId"}
+      - name: role
+        in: path
+        required: true
+        schema: {type: string, minLength: 1, maxLength: 100}
+    put:
+      operationId: setPlatformGrant
+      tags: [Users]
+      summary: Revoke or restore a platform grant
+      description: Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: platform_grants.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlatformGrantChange"}
+      responses:
+        "204":
+          description: State stored; a repeated state changes nothing
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/users/{user_id}/platform-grants:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/UserId"}
+    get:
+      operationId: listUserPlatformGrants
+      tags: [Users]
+      summary: Read a user's platform grants
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: platform_grants.manage
+      responses:
+        "200":
+          description: Latest grant of each role
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlatformGrantList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/tiers:
     get:
       operationId: listTiers
@@ -2255,6 +2443,55 @@ components:
       properties:
         settings: {$ref: "#/components/schemas/SiteSettings"}
         reason: {$ref: "#/components/schemas/Reason"}
+    LoginLimits:
+      type: object
+      description: Site overrides. Absence selects code defaults. Refills use the existing IP, email and user windows.
+      properties:
+        ip_attempt_burst: {type: integer, minimum: 1, maximum: 10000}
+        ip_attempts_per_minute: {type: integer, minimum: 1, maximum: 10000}
+        email_sign_in_failures: {type: integer, minimum: 1, maximum: 1000}
+        user_code_failures: {type: integer, minimum: 1, maximum: 1000}
+        challenge_code_attempts: {type: integer, minimum: 1, maximum: 100}
+    LoginLimitsView:
+      type: object
+      properties:
+        limits: {$ref: "#/components/schemas/LoginLimits"}
+        defaults: {$ref: "#/components/schemas/LoginLimits"}
+    LoginLimitsUpdate:
+      type: object
+      required: [limits, reason]
+      properties:
+        limits: {$ref: "#/components/schemas/LoginLimits"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    AccountSuspension:
+      type: object
+      required: [suspended, reason]
+      properties:
+        suspended: {type: boolean}
+        reason: {$ref: "#/components/schemas/Reason"}
+    UserSignIn:
+      type: object
+      required: [disabled, reason]
+      properties:
+        disabled: {type: boolean}
+        reason: {$ref: "#/components/schemas/Reason"}
+    PlatformGrantChange:
+      type: object
+      required: [revoked, reason]
+      properties:
+        revoked: {type: boolean}
+        reason: {$ref: "#/components/schemas/Reason"}
+    PlatformGrant:
+      type: object
+      properties:
+        role: {type: string}
+        revoked: {type: boolean}
+    PlatformGrantList:
+      type: object
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PlatformGrant"}
     KeyLimits:
       type: object
       description: >-
@@ -2297,6 +2534,7 @@ components:
         status: {type: string, enum: [active, disabled]}
         tier: {$ref: "#/components/schemas/TierRef"}
         mfa_enabled: {type: boolean}
+        sign_in_disabled: {type: boolean}
         created_at: {type: string, format: date-time}
     UserList:
       type: object
@@ -2310,6 +2548,7 @@ components:
       type: object
       required: [id, site_id, name, kind, status, tier, owner, balance, key_limits, created_at]
       properties:
+        calls_suspended: {type: boolean}
         id: {$ref: "#/components/schemas/AccountId"}
         site_id: {$ref: "#/components/schemas/SiteId"}
         name: {type: string}

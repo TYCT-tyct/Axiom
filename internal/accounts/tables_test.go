@@ -420,6 +420,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"api_keys":                {"name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
 		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
 		"recovery_codes":          {"used_at"},
+		"security_failures":       {"started_at", "failures"},
 		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
 		"password_reset_tokens":   {"used_at"},
 	}
@@ -496,7 +497,7 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "api_keys", "members", "password_reset_requests", "password_reset_tokens", "platform_grants", "recovery_codes", "roles", "sessions", "site_domains",
+		"accounts", "api_keys", "members", "password_reset_requests", "password_reset_tokens", "platform_grants", "recovery_codes", "roles", "security_failures", "sessions", "site_domains",
 		"site_settings", "sites", "tiers", "users", "workspaces",
 	} {
 		commands := "INSERT, SELECT, UPDATE"

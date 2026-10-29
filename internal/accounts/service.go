@@ -17,8 +17,10 @@ import (
 	"axiom/internal/platform/secret"
 )
 
-// ErrUnknownKey is every refusal of an API key, from a malformed one to one whose account is disabled, so a client
-// learns nothing from which (README.md「认出与准入」).
+// ErrAccountSuspended is an otherwise usable key whose account has paused calls.
+var ErrAccountSuspended = errors.New("accounts: account calls suspended")
+
+// ErrUnknownKey is an invalid API key; the refusal never reveals which credential check failed.
 var ErrUnknownKey = errors.New("accounts: unknown API key")
 
 // Config is what cmd/ hands the module.

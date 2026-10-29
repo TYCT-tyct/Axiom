@@ -688,7 +688,7 @@ paths:
       security:
         - session: []
       x-axiom-level: signed_in
-      x-axiom-permission: balance.view
+      x-axiom-permission: balance.top_up
       parameters:
         - name: credits
           in: query
@@ -740,7 +740,7 @@ paths:
         - session: []
           csrf: []
       x-axiom-level: signed_in
-      x-axiom-permission: balance.view
+      x-axiom-permission: balance.top_up
       parameters:
         - name: Idempotency-Key
           in: header
@@ -820,7 +820,7 @@ paths:
         - session: []
           csrf: []
       x-axiom-level: signed_in
-      x-axiom-permission: balance.view
+      x-axiom-permission: balance.top_up
       responses:
         "200":
           description: The order, cancelled
@@ -852,7 +852,7 @@ paths:
         - session: []
           csrf: []
       x-axiom-level: signed_in
-      x-axiom-permission: balance.view
+      x-axiom-permission: balance.top_up
       responses:
         "200":
           description: The order

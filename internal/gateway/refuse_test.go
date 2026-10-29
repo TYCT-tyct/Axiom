@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
@@ -187,6 +188,29 @@ func TestUnboundedSaysWhatToDo(t *testing.T) {
 		r, expected := refusal(tc.format, fmt.Errorf("entry 0: %w", tc.err))
 		if !expected || r.Status != http.StatusBadRequest || !strings.Contains(r.Message, tc.want) {
 			t.Errorf("%s: %d %q, want 400 containing %q", name, r.Status, r.Message, tc.want)
+		}
+	}
+}
+
+func TestAccountSuspensionErrorEnvelopes(t *testing.T) {
+	t.Parallel()
+	for _, format := range []protocol.Format{protocol.Chat, protocol.Responses, protocol.Messages} {
+		r, expected := refusal(format, accounts.ErrAccountSuspended)
+		if !expected || r.Status != http.StatusForbidden {
+			t.Fatalf("refusal: %+v %v", r, expected)
+		}
+		rec := httptest.NewRecorder()
+		writeRefusal(rec, format, r)
+		var body map[string]any
+		if err := jsonx.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		detail := body["error"].(map[string]any)
+		if rec.Code != 403 || detail["type"] != "permission_error" {
+			t.Fatal(rec.Code, body)
+		}
+		if format != protocol.Messages && detail["code"] != float64(403) {
+			t.Fatal("not OpenRouter compatible", body)
 		}
 	}
 }

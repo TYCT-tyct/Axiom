@@ -358,7 +358,7 @@ func TestKeyCacheMissesAreCounted(t *testing.T) {
 // the built-in owner after the migrations, and a name nobody declared is none.
 func TestPermissionsAreDeclared(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"api_keys.view", "api_keys.manage", "calls.view", "balance.view"} {
+	for _, name := range []string{"api_keys.view", "api_keys.manage", "calls.view", "balance.view", "balance.top_up"} {
 		if _, ok := accounts.PermissionNamed(name); !ok {
 			t.Errorf("%s is not declared", name)
 		}
@@ -368,7 +368,7 @@ func TestPermissionsAreDeclared(t *testing.T) {
 	}
 	x := newTestSite(t)
 	if got := texts(t, x.db, platform, "SELECT array_to_string(permissions, ',') FROM accounts.roles WHERE name = 'owner'"); len(got) != 1 ||
-		got[0] != "api_keys.view,api_keys.manage,workspaces.manage,calls.view,balance.view" {
+		got[0] != "api_keys.view,api_keys.manage,workspaces.manage,calls.view,balance.view,balance.top_up" {
 		t.Errorf("the owner's permissions: %v", got)
 	}
 }

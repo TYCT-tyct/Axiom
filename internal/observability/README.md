@@ -126,6 +126,8 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 ## 告警接口与不变量
 
+账户的 `accounts.authentication_failures` 信号按站点给出一分钟窗口内共享失败次数；与写入积压一样，只有达到已配置规则的阈值才创建事件，低水位只更新已有事件，过期窗口的恢复信号结束事件。账户模块负责计数和脱敏，本模块沿用阈值、持续时间、静默、重复和通知机制。
+
 `platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执。
 
 比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁只覆盖信号转事件的有界数据库批次；评估、派发和保留清理另开事务，待发回执用 FOR UPDATE SKIP LOCKED 认领，邮件网络请求在事务之外。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。

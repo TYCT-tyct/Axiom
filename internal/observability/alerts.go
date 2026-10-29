@@ -239,7 +239,7 @@ func alertReceipts(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUI
 }
 
 func createAlert(ctx context.Context, tx pg.Tx, s alert.Signal) (bool, error) {
-	if s.Kind != "observability.write_lag" {
+	if s.Kind != "observability.write_lag" && s.Kind != "accounts.authentication_failures" {
 		return true, nil
 	}
 	c, err := GetAlertConfiguration(ctx, tx)

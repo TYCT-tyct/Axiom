@@ -160,7 +160,6 @@ func TestNextCallReadsTheDatabase(t *testing.T) {
 		"the key expired":           superuser("UPDATE accounts.api_keys SET expires_at = now() - interval '1 second'"),
 		"the client's address left": superuser("UPDATE accounts.api_keys SET ip_allow = '{198.51.100.0/24}'"),
 		"the workspace disabled":    superuser("UPDATE accounts.workspaces SET status = 'disabled' WHERE id = :w1"),
-		"the account disabled":      superuser("UPDATE accounts.accounts SET status = 'disabled' WHERE id = :a1"),
 		"the domain disabled":       superuser("UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = '" + apiDomain + "'"),
 		"the site disabled":         superuser("UPDATE accounts.sites SET status = 'disabled' WHERE id = :s1"),
 		"the domain moved to s2":    superuser("UPDATE accounts.site_domains SET site_id = :s2 WHERE domain = '" + apiDomain + "'"),
