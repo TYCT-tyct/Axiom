@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"axiom/internal/accounts"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 )
@@ -69,8 +70,9 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if h.countRate(r.Context(), site.ID, countDimension, countRateKey(caller), keyHex(caller)) > h.Limits.cfg.CountRate {
-		return 0, errCountRate
+	c.rate = h.precheck(r.Context(), site.ID, countDimension, countRateKey(caller), keyHex(caller), c, false)
+	if err := h.checkRate(c.rate, h.Limits.cfg.CountRate, errCountRate, c.rateReset); err != nil {
+		return 0, err
 	}
 	snap, err := h.currentCatalog()
 	if err != nil {
@@ -85,12 +87,20 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 		return 0, err
 	}
 	err = h.authorise(r, caller, func(_ context.Context, _ pg.Tx, a accounts.Admission) error {
-		if names := a.Models(); names != nil { // a key that may not use the model is told it does not exist
-			if _, ok := allowedModels(snap, names)[model.Model]; !ok {
-				return errNoModel
-			}
-		}
-		return nil
+		return h.countAdmission(a, c, snap, model.Model)
 	})
 	return countInput(req), err
+}
+
+// countAdmission checks the current business policy and model permission in the key's admission transaction.
+func (h *Handler) countAdmission(a accounts.Admission, c *Call, snap *catalog.Snapshot, model catalog.ModelID) error {
+	if err := h.judgeRate(a, c, countDimension); err != nil {
+		return err
+	}
+	if names := a.Models(); names != nil { // a key that may not use the model is told it does not exist
+		if _, ok := allowedModels(snap, names)[model]; !ok {
+			return errNoModel
+		}
+	}
+	return nil
 }

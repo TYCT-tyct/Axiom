@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail when a pull request changes a module's code but neither that module's domain doc nor its README.
 
+Markdown documents, generated Go, tests and testdata do not count as module code.
 A pull request that really leaves the docs untouched says why as the first line of the Docs section of its
 description: 文档影响：无，因为<reason>, the reason on the same line. The rule is about a line, not about Markdown, so
 nothing has to be parsed beyond it: HTML comments (an unclosed one up to the end) and fenced code blocks are removed
@@ -16,7 +17,7 @@ import re
 import subprocess
 import sys
 
-MODULE_CODE = re.compile(r"^internal/([a-z]+)/(?!(?:.*/)?testdata/|.*_test\.go$|.*\.gen\.go$).+")
+MODULE_CODE = re.compile(r"^internal/([a-z]+)/(?!(?:.*/)?testdata/|.*_test\.go$|.*\.gen\.go$|.*\.md$).+")
 COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 DOCS_HEADING = "## Docs / 文档影响"

@@ -4,6 +4,27 @@
  */
 
 export interface paths {
+    "/api/admin/v1/rate-limits/{target}/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: "tier" | "account" | "key";
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Read an administrator's business rate limit */
+        get: operations["getRateLimit"];
+        /** Replace an administrator's business rate limit */
+        put: operations["setRateLimit"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/announcements": {
         parameters: {
             query?: never;
@@ -807,7 +828,7 @@ export interface paths {
         put?: never;
         /**
          * Use one of the supplier's keys for a group
-         * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected.
+         * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected. Use a dedicated key. If its model limits or expiry cannot be read, create an unrestricted dedicated key upstream and grant permission to read those fields; unreadable permissions deny all models.
          */
         post: operations["bindSupplierKey"];
         delete?: never;
@@ -867,7 +888,7 @@ export interface paths {
         put?: never;
         /**
          * Map an upstream model name to a model
-         * @description Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The endpoint it creates waits for the authenticity check before it takes traffic. An alias is never changed; a wrong one is corrected by a new alias in the narrower scope. A name that already has an alias in that scope is a 409.
+         * @description Makes an alias of the supplier's: the name means this model, in one group or in the whole supplier. The endpoint it creates waits for the authenticity check before it takes traffic. Without rev this creates an alias and refuses an existing name in that scope (409 conflict). To correct a group alias, send the current revision as rev; a missing or changed alias returns 409 stale_revision. A matching revision appends an audited correction, projected at the next sync; the same model leaves the revision unchanged. Supplier-wide aliases remain immutable (409).
          */
         post: operations["mapSupplierModel"];
         delete?: never;
@@ -1217,6 +1238,10 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        RateLimitView: {
+            requests?: number | null;
+            effective_requests?: number;
+        };
         /** @description A site announcement's ID (TypeID). */
         AnnouncementId: string;
         Announcement: {
@@ -1890,6 +1915,11 @@ export interface components {
             next_cursor: string | null;
         };
         ModelMappingRequest: {
+            /**
+             * Format: int64
+             * @description Current revision for an explicit group correction; omit to create a new alias.
+             */
+            rev?: number;
             /** @description The group the alias is for. Absent: the whole supplier. */
             group_id?: components["schemas"]["Uuid"];
             upstream_name: string;
@@ -1897,6 +1927,11 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         ModelMapping: {
+            /**
+             * Format: int64
+             * @description Current alias revision; unavailable on older nodes.
+             */
+            revision?: number;
             id: components["schemas"]["Uuid"];
             supplier_id: components["schemas"]["Uuid"];
             group_id?: components["schemas"]["Uuid"];
@@ -2323,6 +2358,75 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getRateLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target: "tier" | "account" | "key";
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Own setting and effective allowance over the gateway rate window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setRateLimit: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                target: "tier" | "account" | "key";
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Absent/null inherits; zero is unlimited. Default rate window is one minute. */
+                    requests?: number | null;
+                    reason: components["schemas"]["Reason"];
+                };
+            };
+        };
+        responses: {
+            /** @description Committed allowance */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     publishAnnouncement: {
         parameters: {
             query?: never;
