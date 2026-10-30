@@ -46,6 +46,7 @@ var catalogOperations = map[string]operation{
 	"save-author":         run((*catalog.Catalog).SaveAuthor),
 	"create-model":        run((*catalog.Catalog).CreateModel),
 	"add-name":            run((*catalog.Catalog).AddName),
+	"save-alias":          run((*catalog.Catalog).SaveAlias),
 	"update-spec":         run((*catalog.Catalog).UpdateSpec),
 	"list-model":          run((*catalog.Catalog).ListModel),
 	"retire":              run((*catalog.Catalog).Retire),

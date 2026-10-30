@@ -28,9 +28,10 @@ var openrouterItems = map[string]Item{
 var errOverrides = errors.New("the entry has price overrides (long prompts or hours of the day), whose thresholds and usage basis are not documented")
 
 // ParseOpenRouter reads OpenRouter's model list (/api/v1/models). A model matches by its id and its canonical_slug,
-// which carries the vendor's date. A variant such as :batch or :free is a supplier's alias, not a model, and is left out.
-// Prices with overrides are not used: the field names a minimum prompt length but not what counts toward it or whether
-// the minimum itself is in the tier, and some overrides are by hour.
+// which carries the vendor's date. :free is a model of its own, with its own prices and limits, so it is kept; other
+// variants such as :batch are priced apart from the model and are left out. Prices with overrides are not used: the
+// field names a minimum prompt length but not what counts toward it or whether the minimum itself is in the tier, and
+// some overrides are by hour.
 func ParseOpenRouter(body []byte) ([]Entry, error) {
 	var list struct {
 		Data []jsonx.Raw `json:"data"`
@@ -51,7 +52,8 @@ func ParseOpenRouter(body []byte) ([]Entry, error) {
 		if err := jsonx.Unmarshal(raw, &m); err != nil {
 			return nil, fmt.Errorf("openrouter: a model: %w", err)
 		}
-		if m.ID == "" || strings.Contains(m.ID, ":") {
+		norm := Normalize(m.ID)
+		if m.ID == "" || (strings.Contains(norm, ":") && !freeName(norm)) {
 			continue
 		}
 		evidence, err := jsonx.MarshalCanonical(map[string]any{"id": m.ID, "canonical_slug": m.CanonicalID, "pricing": m.Pricing})
