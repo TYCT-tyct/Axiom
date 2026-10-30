@@ -48,6 +48,9 @@ type Principal struct {
 	session       SessionID
 	level         string
 	factorVersion int64
+	// consentPending is whether a current legal document is not accepted; the console guard refuses everything but
+	// reading the session, accepting, and signing out until it is false.
+	consentPending bool
 }
 
 // UserID is the signed-in user.
@@ -64,6 +67,10 @@ func (p Principal) Pending() bool { return p.level == levelPending }
 
 // Verified reports whether the session passed two-step verification.
 func (p Principal) Verified() bool { return p.level == levelMFA }
+
+// ConsentPending reports whether the user has not accepted a current legal document. It is computed with the rest of
+// the session so a new version takes effect on the next request, not when a snapshot reloads.
+func (p Principal) ConsentPending() bool { return p.consentPending }
 
 // SignInRequest is a sign-in with a password at the request's Host.
 type SignInRequest struct {
@@ -283,6 +290,7 @@ func (s *Service) authenticate(ctx context.Context, r *http.Request, ip netip.Ad
 	return Principal{
 		user: UserID(found.UserID), account: AccountID(found.AccountID), site: d.site, surface: d.surface,
 		session: SessionID(found.SessionID), level: valid[0].Level, factorVersion: valid[0].FactorVersion,
+		consentPending: valid[0].ConsentPending,
 	}, nil
 }
 

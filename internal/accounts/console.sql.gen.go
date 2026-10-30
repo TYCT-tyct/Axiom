@@ -784,7 +784,19 @@ func (q *Queries) UserPassword(ctx context.Context, db DBTX, id uuid.UUID) ([]Us
 }
 
 const validSession = `-- name: ValidSession :many
-SELECT s.site_id, s.surface, s.level, s.csrf_token, s.factor_version
+SELECT s.site_id, s.surface, s.level, s.csrf_token, s.factor_version,
+    EXISTS (
+        SELECT 1
+        FROM accounts.legal_documents d
+        WHERE d.site_id = s.site_id
+            AND d.version = (SELECT max(x.version) FROM accounts.legal_documents x
+                WHERE x.site_id = d.site_id AND x.kind = d.kind)
+            AND NOT EXISTS (
+                SELECT 1 FROM accounts.legal_acceptances a
+                WHERE a.site_id = s.site_id AND a.user_id = s.user_id
+                    AND a.kind = d.kind AND a.version >= d.version
+            )
+    ) AS consent_pending
 FROM accounts.sessions s
 JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
 WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
@@ -800,11 +812,12 @@ type ValidSessionParams struct {
 }
 
 type ValidSessionRow struct {
-	SiteID        uuid.UUID
-	Surface       string
-	Level         string
-	CsrfToken     string
-	FactorVersion int64
+	SiteID         uuid.UUID
+	Surface        string
+	Level          string
+	CsrfToken      string
+	FactorVersion  int64
+	ConsentPending bool
 }
 
 // A session holds while it is not revoked, expired or idle too long, its user is enabled, and its factor version is
@@ -826,6 +839,7 @@ func (q *Queries) ValidSession(ctx context.Context, db DBTX, arg ValidSessionPar
 			&i.Level,
 			&i.CsrfToken,
 			&i.FactorVersion,
+			&i.ConsentPending,
 		); err != nil {
 			return nil, err
 		}

@@ -55,11 +55,22 @@ func TestOpenRegistrationHTTP(t *testing.T) {
 	if token == "" {
 		t.Fatal("no verification link in the outbox")
 	}
+	// A document published while the link is pending is accepted on the verification page, with the new user.
+	if err := pgtest.Run(t.Context(), c.database.Superuser, `INSERT INTO accounts.legal_documents (site_id, kind, version, body)
+		SELECT id, 'terms', 1, 'Placeholder terms of service for tests: this is not a real agreement.' FROM accounts.sites WHERE is_main`); err != nil {
+		t.Fatal(err)
+	}
 	rec = f.do(http.MethodPost, "/auth/verify-email", `{"token":"`+token+`","password":"`+chosen+`"}`)
+	expect(t, "verifyEmail without consent", rec, http.StatusForbidden, consoleapi.ErrorCodeConsentRequired)
+	rec = f.do(http.MethodPost, "/auth/verify-email", `{"token":"`+token+`","password":"`+chosen+`","consent":[{"kind":"terms","version":1}]}`)
 	expect(t, "verifyEmail", rec, http.StatusNoContent, "")
 	f.signIn(email, chosen)
 	if got := f.text(`SELECT count(*)::text FROM accounts.users WHERE email = '` + email + `' AND email_verified_at IS NOT NULL`); got != "1" {
 		t.Fatalf("verified users %s, want 1", got)
+	}
+	if got := f.text(`SELECT a.kind || ' ' || a.version FROM accounts.legal_acceptances a
+		JOIN accounts.users u ON u.id = a.user_id WHERE u.email = '` + email + `'`); got != "terms 1" {
+		t.Errorf("the verification's acceptance: %q", got)
 	}
 	rec = f.do(http.MethodPost, "/auth/verify-email", `{"token":"`+token+`","password":"`+chosen+`"}`)
 	expect(t, "verifyEmail again", rec, http.StatusUnprocessableEntity, consoleapi.ErrorCode(codeInvalidVerification))
