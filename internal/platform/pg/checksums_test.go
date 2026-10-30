@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -345,35 +346,73 @@ func TestASecondRunCannotApplyAfterTheHistoryChanged(t *testing.T) {
 	}
 }
 
-// TestLosingTheMigrationSessionStopsTheRun: the session that holds the migration lock is the session that runs the
-// migrations. Terminating it stops the run; no later migration commits on a new session that does not hold the lock.
+// pausedFS is a module's migrations whose first read once pause reports true waits until resume is closed, after
+// telling the test on paused. Migrate reads a module's files before it touches the database for that module, so the
+// run stops there with its session idle between the previous module's migrations and this one's.
+type pausedFS struct {
+	fstest.MapFS
+	pause          func() bool
+	once           *sync.Once
+	paused, resume chan struct{}
+}
+
+func (f pausedFS) ReadFile(name string) ([]byte, error) {
+	if f.pause() {
+		f.once.Do(func() {
+			close(f.paused)
+			<-f.resume
+		})
+	}
+	return f.MapFS.ReadFile(name)
+}
+
+// TestLosingTheMigrationSessionStopsTheRun: the session that holds the migration lock is the only one the run may use.
+// The run is paused between quality's committed migration and billing's pending one while its session is idle, the
+// test terminates that session, and the run must fail rather than apply billing's migration on a new session that does
+// not hold the lock. The session is left idle for over a second first: that is when pgx's stdlib pings a pooled session
+// before reuse and database/sql silently opens a new one in place of a dead one, the path that would commit unlocked.
 func TestLosingTheMigrationSessionStopsTheRun(t *testing.T) {
 	database := pgtest.New(t)
 	ctx := t.Context()
-	gateConn, gate := openGate(t, database)
-	module := pg.Module{Name: "quality", Migrations: fstest.MapFS{
-		"00001_first.sql":  {Data: []byte(up + "SELECT count(*) FROM quality.gate;\nCREATE TABLE quality.first (id int);")},
-		"00002_second.sql": {Data: []byte(up + "CREATE TABLE quality.first_two (id int);")},
-	}}
-	done := make(chan error, 1)
-	go func() { done <- pg.Migrate(ctx, database.Migrator, module) }()
-	pid := lockHolderPID(t, database)
-	if _, err := gateConn.Exec(ctx, "SELECT pg_terminate_backend($1)", pid); err != nil {
-		t.Fatalf("terminate the lock session: %v", err)
-	}
-	if err := gate.Rollback(ctx); err != nil {
+	probe, err := pgx.Connect(ctx, database.Superuser)
+	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("the run continued after the session that held its lock was terminated")
-		}
-	case <-time.After(time.Minute):
-		t.Fatal("the run did not return after the session that held its lock was terminated")
+	defer probe.Close(context.WithoutCancel(ctx)) //nolint:errcheck // the test is over when it closes
+	quality := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_first.sql": {Data: []byte(up + "CREATE TABLE quality.first (id int);")},
+	}}
+	billingFiles := pausedFS{
+		MapFS: fstest.MapFS{"00001_second.sql": {Data: []byte(up + "CREATE TABLE billing.second (id int);")}},
+		pause: func() bool {
+			var committed bool
+			if err := probe.QueryRow(ctx, "SELECT to_regclass('quality.first') IS NOT NULL").Scan(&committed); err != nil {
+				t.Error(err)
+			}
+			return committed
+		},
+		once: &sync.Once{}, paused: make(chan struct{}), resume: make(chan struct{}),
 	}
-	if relationExists(t, database, "quality.first_two") {
-		t.Error("a migration committed after the run lost the session that held its lock")
+	done := make(chan error, 1)
+	go func() {
+		done <- pg.Migrate(ctx, database.Migrator, quality, pg.Module{Name: "billing", Migrations: billingFiles})
+	}()
+	<-billingFiles.paused
+	pid := lockHolderPID(t, database)
+	watchActivity(t, database, `SELECT pid FROM pg_stat_activity
+		WHERE pid = $1 AND state = 'idle' AND state_change < now() - interval '1.5 seconds'`, pid)
+	if _, err := probe.Exec(ctx, "SELECT pg_terminate_backend($1, 30000)", pid); err != nil {
+		t.Fatalf("terminate the lock session: %v", err)
+	}
+	close(billingFiles.resume)
+	if err := <-done; err == nil {
+		t.Fatal("the run continued after the session that held its lock was terminated")
+	}
+	if !relationExists(t, database, "quality.first") {
+		t.Error("quality's migration did not commit before the pause")
+	}
+	if relationExists(t, database, "billing.second") {
+		t.Error("billing's migration committed after the run lost the session that held its lock")
 	}
 }
 

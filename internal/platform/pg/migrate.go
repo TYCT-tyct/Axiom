@@ -216,7 +216,7 @@ func (c timedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	return conn, redactConnect(MigrateDatabaseURLVar, err)
 }
 
-func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Duration, modules []Module) error {
+func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Duration, modules []Module) (err error) {
 	if err := prepare(ctx, config, connectTimeout, modules); err != nil {
 		return err
 	}
@@ -228,7 +228,12 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 	})), timeout: connectTimeout}})
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	defer db.Close()                                                         //nolint:errcheck // closing a pool whose work is done reports nothing worth acting on
+	// Ending the run's only session is what releases the migration lock, so a failure to end it is the run's failure.
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("release the migration lock: %w", closeErr))
+		}
+	}()
 	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 5)) // retries every second, 5 times
 	if err != nil {
 		return err
