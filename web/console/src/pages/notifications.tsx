@@ -1,4 +1,4 @@
-import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { useErrors } from "@axiom/app";
 import {
   Button,
@@ -63,6 +63,31 @@ export function spendAnomalyChange(settings: Settings, stored: boolean | undefin
   return { spend_anomaly: settings.spendAnomaly };
 }
 
+// putPreferences saves the form and says whether the reminder was stored. A node that handles the save may be older
+// than the one that served the read: with its closed request schema it either rejects the unknown field or (as today's
+// decoder does) ignores it. In both cases the other settings are saved without the reminder, and the page must say so
+// instead of reporting a complete save.
+export async function putPreferences(
+  body: Schemas["NotificationPreferencesRequest"],
+  send: (body: Schemas["NotificationPreferencesRequest"]) => Promise<Schemas["NotificationPreferences"]>,
+): Promise<{ data: Schemas["NotificationPreferences"]; spendSaved: boolean }> {
+  try {
+    const data = await send(body);
+    return { data, spendSaved: body.spend_anomaly === undefined || data.spend_anomaly !== undefined };
+  } catch (error) {
+    if (body.spend_anomaly === undefined || !(error instanceof ApiError)) {
+      throw error;
+    }
+    if (error.status !== 400 && error.status !== 422) {
+      throw error;
+    }
+    const rest = { ...body };
+    delete rest.spend_anomaly;
+    const data = await send(rest);
+    return { data, spendSaved: false };
+  }
+}
+
 // initialSettings is what the form starts from: the stored preference, or the default the site sends when it is absent.
 export function initialSettings(preferences: Schemas["NotificationPreferences"]): Settings {
   return {
@@ -87,33 +112,36 @@ function PreferencesForm({
   const errors = useErrors();
   const client = useQueryClient();
   const [settings, setSettings] = useState<Settings>(() => initialSettings(preferences));
-  const [saved, setSaved] = useState(false);
+  const [outcome, setOutcome] = useState<"saved" | "partial" | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
   const amount = parseMoney(settings.threshold);
   const set: SetSetting = (key, value) => setSettings((held) => ({ ...held, [key]: value }));
   const save = useMutation({
     mutationFn: () =>
-      unwrap(
-        consoleApi.PUT("/api/console/v1/notification-preferences", {
-          body: {
-            low_balance: settings.lowBalance,
-            top_up: settings.topUp,
-            factor_changed: settings.factorChanged,
-            ...spendAnomalyChange(settings, preferences.spend_anomaly),
-            threshold: amount ?? "0",
-            webhook_url: settings.webhook.trim(),
-            language: settings.language,
-          },
-        }),
+      putPreferences(
+        {
+          low_balance: settings.lowBalance,
+          top_up: settings.topUp,
+          factor_changed: settings.factorChanged,
+          ...spendAnomalyChange(settings, preferences.spend_anomaly),
+          threshold: amount ?? "0",
+          webhook_url: settings.webhook.trim(),
+          language: settings.language,
+        },
+        (body) => unwrap(consoleApi.PUT("/api/console/v1/notification-preferences", { body })),
       ),
-    onSuccess: (data) => {
+    onSuccess: ({ data, spendSaved }) => {
       client.setQueryData(notificationPreferencesQuery.queryKey, data);
       setFailure(null);
-      setSaved(true);
+      setOutcome(spendSaved ? "saved" : "partial");
+      if (!spendSaved) {
+        // This node cannot store the reminder; stop showing a switch whose value it would discard again.
+        setSettings((held) => ({ ...held, spendAnomaly: undefined }));
+      }
     },
     onError: (error) => {
       setFailure(error);
-      setSaved(false);
+      setOutcome(null);
     },
   });
   return (
@@ -126,9 +154,9 @@ function PreferencesForm({
         }
       }}
     >
-      {saved ? (
-        <Notice action={<Button onClick={() => setSaved(false)}>{t("notifications.dismiss")}</Button>}>
-          {t("notifications.saved")}
+      {outcome ? (
+        <Notice action={<Button onClick={() => setOutcome(null)}>{t("notifications.dismiss")}</Button>}>
+          {t(outcome === "partial" ? "notifications.savedPartialSpend" : "notifications.saved")}
         </Notice>
       ) : null}
       <BalanceAlerts currency={currency} settings={settings} set={set} invalid={amount === null} />

@@ -183,6 +183,7 @@ export default {
     title: "提醒",
     dismiss: "关闭",
     saved: "偏好已保存。",
+    savedPartialSpend: "其他偏好已保存；账户异常活动提醒没有保存：这个控制台节点还不支持这项设置，请等升级完成后再试。",
     balance: {
       title: "余额提醒",
       body: "可用余额跌破阈值时发送一次提醒。",

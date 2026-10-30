@@ -192,6 +192,8 @@ export default {
     title: "Alerts",
     dismiss: "Close",
     saved: "Preferences saved.",
+    savedPartialSpend:
+      "Your other preferences were saved. The unusual-activity reminder was not: this console node does not support it yet, so try again after the rollout.",
     balance: {
       title: "Balance reminders",
       body: "A reminder is sent when the available balance crosses below the threshold.",
