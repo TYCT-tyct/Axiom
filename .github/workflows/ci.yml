@@ -42,9 +42,10 @@ env:
 
 jobs:
   # One cheap job decides what the others skip, so a Markdown-only change starts no job that would only stop again, and
-  # the deploy and benchmark rules diff the base once. A Markdown-only PR or train runs `just md-checks` only; main, and
-  # other trains run the full checks below; PRs run static and select web by frontend/build inputs. Go tests, e2e,
-  # benchmark comparison and deployment checks run on trains or main alone.
+  # the rules that read paths diff the base once. A Markdown-only PR or train runs `just md-checks` only; main, and
+  # other trains run the full checks below; PRs run static and select web by frontend/build inputs, and PRs and trains
+  # run the vitals only when the pages' own inputs changed. Go tests, e2e, benchmark comparison and deployment checks
+  # run on trains or main alone.
   changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
@@ -53,6 +54,7 @@ jobs:
       deploy: ${{ steps.decide.outputs.deploy }}
       bench: ${{ steps.decide.outputs.bench }}
       web: ${{ steps.decide.outputs.web }}
+      vitals: ${{ steps.decide.outputs.vitals }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
@@ -61,10 +63,10 @@ jobs:
       # never hides a regression. Without a base (main) everything runs.
       - id: decide
         run: |
-          docs_only=false; deploy=true; bench=true; web=true
+          docs_only=false; deploy=true; bench=true; web=true; vitals=true
           if [ -n "$BASE" ]; then
             if python3 scripts/ci_skips.py md-only "$BASE"; then
-              docs_only=true; deploy=false; bench=false
+              docs_only=true; deploy=false; bench=false; vitals=false
             else
               status=0
               python3 scripts/ci_skips.py deploy-needed "$BASE" || status=$?
@@ -82,6 +84,14 @@ jobs:
               else
                 [ "$status" -eq 0 ] || echo "bench-needed check exited $status; running bench-compare"
               fi
+              status=0
+              python3 scripts/ci_skips.py vitals-needed "$BASE" || status=$?
+              if [ "$status" -eq 10 ]; then
+                echo "vitals skipped: nothing the pages are built from changed between $BASE and HEAD"
+                vitals=false
+              else
+                [ "$status" -eq 0 ] || echo "vitals-needed check exited $status; running vitals"
+              fi
             fi
           fi
           if [ "${{ github.event_name }}" = pull_request ] && [ -n "$BASE" ]; then
@@ -92,7 +102,7 @@ jobs:
               web=false
             fi
           fi
-          printf 'docs_only=%s\ndeploy=%s\nbench=%s\nweb=%s\n' "$docs_only" "$deploy" "$bench" "$web" >> "$GITHUB_OUTPUT"
+          printf 'docs_only=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\n' "$docs_only" "$deploy" "$bench" "$web" "$vitals" >> "$GITHUB_OUTPUT"
 
   # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
   # `just check` adds over `check-ci` (`docs`, `secrets`): the check-*.yml workflows do not run for the commits a train merges, and
@@ -171,10 +181,12 @@ jobs:
         run: bash scripts/ci/web-container.sh cleanup
 
   # The web vitals are timings, so they run in a job of their own: one test at a time, with no other test on the
-  # container's cores. Like e2e, not on a pull request.
+  # container's cores. A build whose diff touches nothing the pages are built from ships the same pages, so its timing
+  # can only follow the runner (#503): PRs and trains run them only for those inputs, main runs them on every push, and
+  # a failure there is main-red.
   vitals:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    if: needs.changes.result == 'success' && needs.changes.outputs.vitals == 'true' && !inputs.gate_stress
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
     steps:
@@ -339,8 +351,8 @@ jobs:
           compression-level: 0
 
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
-  # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy and may
-  # skip web by path. Intentional skips still produce this required check.
+  # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy and select
+  # web and the vitals by path. Intentional skips still produce this required check.
   build:
     # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
     name: build
@@ -360,7 +372,7 @@ jobs:
       # `needs.e2e.result` aggregates the whole matrix. Only Markdown-only builds and pull requests may skip its shards.
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.e2e.result }}' = success
-      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.vitals == 'true'
         run: test '${{ needs.vitals.result }}' = success
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.journey.result }}' = success
