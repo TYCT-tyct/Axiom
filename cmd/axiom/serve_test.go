@@ -258,10 +258,16 @@ func checkGuard(t *testing.T, url string) {
 	}
 }
 
-// addresses are where a node listens, as it logs them.
+// addresses are where a node listens, as it logs them, and the connection budget it reports at startup.
 type addresses struct {
 	Msg                string `json:"msg"`
 	Public, Admin, Ops string `json:",case:ignore"`
+	MaxConnections     int    `json:"max_connections"`
+	Reserved           int    `json:"reserved"`
+	Nodes              int    `json:"nodes"`
+	Share              int    `json:"share"`
+	Pool               int    `json:"pool"`
+	Completion         int    `json:"completion"`
 }
 
 // servingAddrs reads log records until the node reports the addresses it listens on.
