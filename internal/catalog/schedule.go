@@ -53,31 +53,32 @@ func (s Schedule) View() ScheduleView {
 		if !s.offered.Has(st) {
 			continue
 		}
-		l := s.levels[st]
-		items := l.base.priced
-		for _, r := range l.tiers {
-			items |= r.priced
-		}
-		for band := 0; band <= len(s.above); band++ {
-			above := int64(0)
-			if band > 0 {
-				above = s.above[band-1]
-			}
-			for it := range NumItems {
-				if !items.Has(Item(it)) {
-					continue
-				}
-				price, ok := s.price(st, band, Item(it))
-				if !ok {
-					continue
-				}
-				v.Rates = append(v.Rates, ScheduleRate{
-					ServiceTier: st, Base: band == 0, Above: above, Item: Item(it), Price: price,
-				})
-			}
+		items := s.levels[st].pricedItems()
+		for band := range len(s.above) + 1 {
+			v.Rates = append(v.Rates, s.bandRates(st, band, items)...)
 		}
 	}
 	return v
+}
+
+// bandRates is the effective price of each of items at one band of a service tier.
+func (s Schedule) bandRates(st ServiceTier, band int, items ItemSet) []ScheduleRate {
+	above := int64(0)
+	if band > 0 {
+		above = s.above[band-1]
+	}
+	var rates []ScheduleRate
+	for it := range NumItems {
+		if !items.Has(it) {
+			continue
+		}
+		price, ok := s.price(st, band, it)
+		if !ok {
+			continue
+		}
+		rates = append(rates, ScheduleRate{ServiceTier: st, Base: band == 0, Above: above, Item: it, Price: price})
+	}
+	return rates
 }
 
 // level is one service tier's prices: its base prices, and for each threshold in above, the base prices it replaces
@@ -92,6 +93,16 @@ type level struct {
 type rates struct {
 	price  [NumItems]platform.UnitPrice
 	priced ItemSet
+}
+
+// pricedItems are the items the service tier prices: its base prices and every item a context tier adds. A context
+// tier that leaves one out inherits the base price, and one that only adds an item still prices it.
+func (l *level) pricedItems() ItemSet {
+	items := l.base.priced
+	for _, r := range l.tiers {
+		items |= r.priced
+	}
+	return items
 }
 
 // The stored form, README.md「存储」. The top level holds the standard tier's prices; every other service tier has its

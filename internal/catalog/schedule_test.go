@@ -256,6 +256,7 @@ func TestScheduleViewKeepsBandsApart(t *testing.T) {
 		})
 	}
 }
+
 func TestScheduleScaled(t *testing.T) {
 	t.Parallel()
 	cny, usd := mustCurrency(t, "CNY"), mustCurrency(t, "USD")
