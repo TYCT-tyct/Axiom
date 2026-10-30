@@ -228,6 +228,12 @@ func TestMaxAttemptsIsAHardLimit(t *testing.T) {
 	if p := h.plan(input()); p.MaxAttempts != 2 || len(p.Entries) != 2 {
 		t.Errorf("the router's default: %d attempts, %d entries", p.MaxAttempts, len(p.Entries))
 	}
+	// A request naming a file by an upstream's id gets one attempt, however long the route would otherwise be.
+	ref := input()
+	ref.FileRef = true
+	if p := h.plan(ref); p.MaxAttempts != 1 || len(p.Entries) != 1 {
+		t.Errorf("a file reference: %d attempts, %d entries", p.MaxAttempts, len(p.Entries))
+	}
 }
 
 // TestRepeatedModelsGiveDistinctEndpoints: a model named twice is ranked once, so no endpoint is in the route twice.

@@ -1,0 +1,1 @@
+{"model":"up","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}],"store":false,"max_output_tokens":256}

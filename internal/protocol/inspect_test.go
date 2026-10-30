@@ -66,6 +66,32 @@ var inspectCases = []struct {
 	{"responses sample", protocol.Responses, "responses/text/request.json", func(r *protocol.Request) {
 		r.Model, r.Stream = "gpt-6-astra", true
 	}},
+	{
+		"files referred to by an id", protocol.Chat, `{"model":"m","messages":[{"role":"user","content":[{"type":"file","file":{"file_id":"file_1"}},{"type":"file","file":{"file_id":"file_2"}}]}]}`,
+		func(r *protocol.Request) {
+			r.Model, r.MessageCount, r.Documents, r.FileRefs, r.Needs = "m", 1, 2, 2, protocol.Documents
+		},
+	},
+	{
+		"a Responses file referred to by an id", protocol.Responses, `{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_file","file_id":"file_1"}]}]}`,
+		func(r *protocol.Request) {
+			r.Model, r.Documents, r.FileRefs, r.Needs = "m", 1, 1, protocol.Documents
+		},
+	},
+	{
+		"a Chat file with data and a null id", protocol.Chat, `{"model":"m","messages":[{"role":"user","content":[{"type":"file","file":{"file_data":` + pdfURL + `,"file_id":null}}]}]}`,
+		func(r *protocol.Request) {
+			r.MessageCount, r.Model, r.Documents, r.Needs = 1, "m", 1, protocol.Documents
+			r.TextBytes -= int64(len(pdfURL))
+		},
+	},
+	{
+		"a Responses file with data and a null id", protocol.Responses, `{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_file","file_data":` + pdfData + `,"file_id":null}]}]}`,
+		func(r *protocol.Request) {
+			r.Model, r.Documents, r.Needs = "m", 1, protocol.Documents
+			r.TextBytes -= int64(len(pdfData))
+		},
+	},
 	{"chat sample", protocol.Chat, "chat/text/request.json", func(r *protocol.Request) {
 		r.MessageCount = 2
 		r.Model, r.Stream = "gpt-6-astra", true

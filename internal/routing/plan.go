@@ -23,6 +23,15 @@ type need struct {
 	now    time.Time
 }
 
+// attempts is how many endpoints a plan may try: the preset's or the router's default, and one for a file reference,
+// whose id is the supplier account's and can only reach the endpoint that holds it.
+func (r *Router) attempts(n *need) int {
+	if n.in.FileRef {
+		return 1
+	}
+	return orDefault(n.preset.MaxAttempts, r.cfg.MaxAttempts)
+}
+
 // Plan makes the route of a request: the candidates of the first model that survive the filters, in order, then the
 // alternates', cut to MaxEntries. It reads memory only, so it can run inside the admission transaction. When nothing
 // is left it says whether to wait (every candidate that passed is full) or why nothing can serve the request.
@@ -62,7 +71,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	if in.Override.SortGlobal {
 		r.sort(order, n.strategy())
 	}
-	attempts := orDefault(preset.MaxAttempts, r.cfg.MaxAttempts)
+	attempts := r.attempts(n)
 	order = healthOrder(order, n, &rec, min(attempts, MaxEntries))
 	rec.Unmeasured = unmeasured(order, n.strategy())
 	entries := r.entries(order, n, &rec)
@@ -179,29 +188,33 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 }
 
 // callFormat is the format the endpoint is called in for the request, and whether it can serve it at all. A request of
-// the endpoint's own format is called in it. Otherwise Messages/Responses use Chat;
-// Chat uses Messages before Responses (docs/domains/gateway.md「转发规则」).
-// NativeOnly says only the request's own format will do.
+// the endpoint's own format is called in it. Otherwise Messages/Responses use Chat, then the other of the two; Chat uses
+// Messages before Responses (docs/domains/gateway.md「转发规则」). Every pair converts, so what is left is whether the
+// endpoint has a format to convert to at all. NativeOnly says only the request's own format will do.
 func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	f := n.req.Format
 	if n.in.NativeOnly {
 		return f, c.Native.Has(f)
 	}
-	if f != protocol.Chat {
-		if c.Native.Has(f) {
-			return f, true
-		}
-		if c.Served.Has(f) && c.Native.Has(protocol.Chat) {
-			return protocol.Chat, true
-		}
-		return f, c.Served.Has(f)
+	if c.Native.Has(f) {
+		return f, true
 	}
-	for _, g := range [...]protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
-		if c.Native.Has(g) {
-			return g, true
+	if f == protocol.Chat {
+		for _, g := range [...]protocol.Format{protocol.Messages, protocol.Responses} {
+			if c.Native.Has(g) {
+				return g, true
+			}
 		}
+		return f, false
 	}
-	return f, false
+	if c.Native.Has(protocol.Chat) {
+		return protocol.Chat, true
+	}
+	g := protocol.Responses // the other native format of a Messages client, and the other way round
+	if f == protocol.Responses {
+		g = protocol.Messages
+	}
+	return g, c.Native.Has(g)
 }
 
 // check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint
