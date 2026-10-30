@@ -83,6 +83,9 @@ jobs:
     concurrency:
       group: train-${{ inputs.base || 'main' }}
       cancel-in-progress: false
+    # The landing deploy key is an environment secret, and the environment's branch policy allows only main: a job on a
+    # PR branch or any other ref cannot read it, so no workflow but the train can push main.
+    environment: train
     permissions:
       contents: write # push train branches; merge
       pull-requests: write # merge, comment
@@ -94,6 +97,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The deploy key authenticates the one push the ruleset lets past: the fast-forward of the base. The other pushes
+      # and the fallback's API merges stay on GITHUB_TOKEN.
+      - name: Set up the landing key
+        env:
+          TRAIN_DEPLOY_KEY: ${{ secrets.TRAIN_DEPLOY_KEY }}
+        run: |
+          [ -n "$TRAIN_DEPLOY_KEY" ] || { echo "TRAIN_DEPLOY_KEY is missing: the train cannot land"; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$TRAIN_DEPLOY_KEY" > ~/.ssh/train-landing
+          chmod 600 ~/.ssh/train-landing
+          : > ~/.ssh/train-known_hosts
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/train-known_hosts 2>/dev/null
+          [ -s ~/.ssh/train-known_hosts ] || { echo "github.com's SSH host key could not be read"; exit 1; }
+          git config --local core.sshCommand "ssh -i $HOME/.ssh/train-landing -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/train-known_hosts"
       - run: python3 scripts/train.py --base "$BASE" run $DRY_RUN --prs "$PRS"
         env:
           GH_TOKEN: ${{ github.token }}
@@ -101,3 +118,4 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
           PRS: ${{ inputs.prs }}
           LANE_SIZE: 2 # concurrent prefix builds, independent of the four runners serving their jobs (RUNS_ON_TRAIN)
+          TRAIN_LAND_URL: git@github.com:${{ github.repository }}.git
