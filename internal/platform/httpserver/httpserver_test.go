@@ -62,3 +62,36 @@ func TestHealth(t *testing.T) {
 		}
 	}
 }
+
+// TestGate: a request that would start new work is refused while the node drains, with an answer a load balancer that
+// has not removed the node yet turns into a retry; before the drain and once it ends it passes through.
+func TestGate(t *testing.T) {
+	var health Health
+	gate := health.Gate(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	serve := func(method string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		gate.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, "/", nil))
+		return rec
+	}
+	if rec := serve(http.MethodGet); rec.Code != http.StatusNoContent {
+		t.Errorf("before the drain: %d", rec.Code)
+	}
+	health.SetReady(false) // not ready, still not draining: startup is not a reason to refuse a page
+	if rec := serve(http.MethodGet); rec.Code != http.StatusNoContent {
+		t.Errorf("not ready but not draining: %d", rec.Code)
+	}
+	health.BeginDrain()
+	if health.Ready() {
+		t.Error("draining while ready")
+	}
+	rec := serve(http.MethodGet)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" ||
+		rec.Header().Get("Cache-Control") != "no-store" || rec.Body.String() != "the node is draining\n" {
+		t.Errorf("during the drain: %d %q (%q, %q)", rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"),
+			rec.Header().Get("Cache-Control"))
+	}
+	if head := serve(http.MethodHead); head.Body.Len() != 0 {
+		t.Errorf("HEAD carried a body: %q", head.Body.String())
+	}
+}
