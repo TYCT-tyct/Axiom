@@ -42,6 +42,15 @@ type RefundID uuid.UUID
 // TypeID writes the ID as the API and the channel see it.
 func (id RefundID) TypeID() string { return refundPrefix.Encode(uuid.UUID(id)) }
 
+// ParseRefundID reads a refund's ID as the API writes it; a malformed one is ErrNotFound, like an unknown one.
+func ParseRefundID(s string) (RefundID, error) {
+	id, err := refundPrefix.Decode(s)
+	if err != nil {
+		return RefundID{}, ErrNotFound
+	}
+	return RefundID(id), nil
+}
+
 // Money is an amount the user pays, in minor units of its currency: never a float, compared with ==.
 type Money struct {
 	Currency platform.Currency

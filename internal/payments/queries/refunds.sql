@@ -78,3 +78,15 @@ SELECT clock_timestamp()::timestamptz AS now;
 
 -- name: ParkRefund :exec
 UPDATE payments.refunds SET manual_only = true WHERE id = @id;
+
+-- name: ListSiteRefunds :many
+-- One site's refunds for its operator, newest first. A state left out does not narrow; the cursor is
+-- (created_at, id). Whether a frozen refund was approved is in approved_by, which the page reads as a second person's
+-- signature.
+SELECT sqlc.embed(r), o.pay_currency AS pay_currency
+FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
+WHERE r.site_id = @site_id
+    AND (sqlc.narg(state)::text IS NULL OR r.state = sqlc.narg(state)::text)
+    AND (r.created_at, r.id) < (@after_at::timestamptz, @after_id::uuid)
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT @max;

@@ -55,7 +55,7 @@ func TestAdminEndpointGenerationSurvivesDisconnect(t *testing.T) {
 	expectAdmin(t, "disconnected test", rec, http.StatusCreated, "")
 	var first, replay adminapi.EndpointTest
 	decode(t, rec, &first)
-	if first.Outcome != adminapi.Passed || first.FirstTokenMs == nil || first.UpstreamRequestId == nil || *first.UpstreamRequestId != "admin-test-1" {
+	if first.Outcome != adminapi.EndpointTestOutcomePassed || first.FirstTokenMs == nil || first.UpstreamRequestId == nil || *first.UpstreamRequestId != "admin-test-1" {
 		t.Errorf("test result: %+v", first)
 	}
 	rec = f.change(f.s, http.MethodPost, "/suppliers/endpoint-tests", body, key)

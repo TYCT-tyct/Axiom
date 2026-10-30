@@ -139,3 +139,22 @@ ON CONFLICT (site_id, ip) DO UPDATE SET
         THEN 0 ELSE u.orders END,
     failures = CASE WHEN u.window_start <= transaction_timestamp() - make_interval(secs => @window_seconds::bigint)
         THEN 1 ELSE u.failures + 1 END;
+
+-- name: ListSiteOrders :many
+-- One site's orders for its operator, newest first. Every filter left out does not narrow; the cursor is
+-- (created_at, id). The merchant name is what the order list shows as the channel; nothing secret is selected.
+SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.credits,
+    o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
+    o.paid_at, o.credited, o.paid_total, o.paid_fee,
+    (m.user_refund AND m.refund_enabled)::boolean AS refund_allowed, m.name AS merchant_name
+FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id
+WHERE o.site_id = @site_id
+    AND (sqlc.narg(account_id)::uuid IS NULL OR o.account_id = sqlc.narg(account_id)::uuid)
+    AND (sqlc.narg(user_id)::uuid IS NULL OR o.user_id = sqlc.narg(user_id)::uuid)
+    AND (sqlc.narg(merchant_id)::uuid IS NULL OR o.merchant_id = sqlc.narg(merchant_id)::uuid)
+    AND (sqlc.narg(state)::text IS NULL OR o.state = sqlc.narg(state)::text)
+    AND (sqlc.narg(since)::timestamptz IS NULL OR o.created_at >= sqlc.narg(since)::timestamptz)
+    AND (sqlc.narg(until)::timestamptz IS NULL OR o.created_at < sqlc.narg(until)::timestamptz)
+    AND (o.created_at, o.id) < (@after_at::timestamptz, @after_id::uuid)
+ORDER BY o.created_at DESC, o.id DESC
+LIMIT @max;

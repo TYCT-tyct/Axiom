@@ -4,6 +4,7 @@ import type { IconName } from "@axiom/ui";
 // (the server decides again on every request); home sends a visitor to the first one they may open.
 export const nav = [
   { to: "/users", label: "nav.users", icon: "card", permission: "users.view" },
+  { to: "/orders", label: "nav.orders", icon: "card", permission: "sites.manage" },
   { to: "/calls", label: "nav.calls", icon: "list", permission: "calls.search" },
   { to: "/audit", label: "nav.audit", icon: "search", permission: "audit.view" },
   { to: "/suppliers", label: "nav.suppliers", icon: "cube", permission: "suppliers.view" },

@@ -459,6 +459,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/payments/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A site's top-up orders, newest first, with their refunds
+         * @description The admin's order list: one site's orders with what was quoted, what the channel actually took and credited, and each order's refunds. Filters left out do not narrow. `account_id` is the paying account, `user_id` the user who ordered, `merchant_id` the merchant account (the channel), and `since`/`until` are the order's creation time, `since` inclusive and `until` exclusive. Pages use `cursor` and `limit`; the answer's `next_cursor` is null on the last page. Money is exact text: `credits` is in the site's accounting currency (billionths), while the amounts are in the currency the order was paid in (minor units).
+         */
+        get: operations["listPaymentOrders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A site's refunds, newest first, for review and follow-up
+         * @description The admin's refund list. `state` is the internal state: `frozen` is held after the request and waits for an administrator's approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash; `failed` returned the frozen credits. Filters left out do not narrow. The page asks with `state=frozen` for the review queue. Money is exact text: `credits` is in the site's accounting currency (billionths), `amount` in the currency the order was paid in (minor units).
+         */
+        get: operations["listPaymentRefunds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/refunds/{refund_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a refund as a second person and start its channel flow
+         * @description Releases a frozen refund. The approver must be a different person from the one who requested it, and the reason goes to the audit log. A channel refund is sent after the approval commits; an offline refund stays frozen for a separate manual conclusion. Repeating the approval with the same `Idempotency-Key` returns the stored answer and sends nothing again; a refund that is already approved is returned unchanged.
+         */
+        post: operations["approvePaymentRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/refunds/{refund_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decline a refund that no one approved and no channel saw
+         * @description Returns the frozen credits and moves no cash. Only a refund still waiting for review, with no approver and nothing sent to a channel, can be rejected (`conflict` means it is past that point; a definitive channel outcome is resolved instead). The reason goes to the audit log. Repeating the rejection with the same `Idempotency-Key` returns the stored answer and unfreezes nothing again; an already declined refund is returned unchanged.
+         */
+        post: operations["rejectPaymentRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/alerts/configuration": {
         parameters: {
             query?: never;
@@ -1924,6 +2004,90 @@ export interface components {
         };
         /** @description A top-up order's ID (TypeID), also the order number the payment channel sees. */
         OrderId: string;
+        /** @description An amount in the currency a method is paid in, which is not always the site's. `amount` is a non-negative integer in decimal text, in the currency's minor units (cents for USD, fen for CNY, none for JPY). */
+        PayAmount: {
+            /** @example 7300 */
+            amount: string;
+            /** @example CNY */
+            currency: string;
+        };
+        /** @description A refund's ID (TypeID), the refund number of channels that take one. */
+        RefundId: string;
+        /**
+         * @description The order's state. `pending` waits for payment; `paid` is credited; `expired` and `cancelled` can still be credited if a payment arrives in time; `failed` was refused by the channel; `review` waits for a person; the rest follow refunds and chargebacks (docs/domains/payments.md「订单」).
+         * @enum {string}
+         */
+        PaymentOrderState: "pending" | "paid" | "expired" | "cancelled" | "failed" | "review" | "partially_refunded" | "refunded" | "charged_back";
+        /**
+         * @description The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
+         * @enum {string}
+         */
+        PaymentRefundState: "frozen" | "sending" | "pending" | "succeeded" | "failed";
+        /** @description A refund as the operator's list and decisions show it. Every field is optional during rolling deployment. */
+        PaymentRefund: {
+            id?: components["schemas"]["RefundId"];
+            order_id?: components["schemas"]["OrderId"];
+            account_id?: components["schemas"]["AccountId"];
+            state?: components["schemas"]["PaymentRefundState"];
+            /**
+             * @description channel sends the cash back; offline waits for a manual conclusion.
+             * @enum {string}
+             */
+            via?: "channel" | "offline";
+            credits?: components["schemas"]["Money"];
+            amount?: components["schemas"]["PayAmount"];
+            /** @description Why the user asked for the refund. */
+            reason?: string;
+            requested_by?: components["schemas"]["UserId"];
+            approved_by?: components["schemas"]["UserId"];
+            /** @description The channel's own refund number, once it has one. */
+            provider_ref?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            finished_at?: string;
+        };
+        PaymentRefundList: {
+            data: components["schemas"]["PaymentRefund"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description A top-up order as the operator's list shows it, with what was quoted, what the channel actually took and credited, and its refunds. Every field is optional during rolling deployment. */
+        PaymentOrder: {
+            id?: components["schemas"]["OrderId"];
+            account_id?: components["schemas"]["AccountId"];
+            user_id?: components["schemas"]["UserId"];
+            merchant_id?: components["schemas"]["MerchantId"];
+            /** @description The merchant account's name, the channel the order was paid through. */
+            merchant_name?: string;
+            method?: string;
+            state?: components["schemas"]["PaymentOrderState"];
+            credits?: components["schemas"]["Money"];
+            total?: components["schemas"]["PayAmount"];
+            fee?: components["schemas"]["PayAmount"];
+            /** @description The credits actually added, when the payment was credited; it can be less than `credits`. */
+            credited?: components["schemas"]["Money"];
+            /** @description What the channel actually took, when the payment was credited. */
+            paid_total?: components["schemas"]["PayAmount"];
+            /** @description The channel's fee on what it actually took. */
+            paid_fee?: components["schemas"]["PayAmount"];
+            /** @description The channel's own order number. */
+            trade_no?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            paid_at?: string;
+            /** Format: date-time */
+            expires_at?: string;
+            refund_allowed?: boolean;
+            /** @description The order's refunds, oldest first. */
+            refunds?: components["schemas"]["PaymentRefund"][];
+        };
+        PaymentOrderList: {
+            data: components["schemas"]["PaymentOrder"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
         /** @description A merchant account of a payment channel, without its secrets. Every field is optional during rolling deployment. */
         Merchant: {
             id?: components["schemas"]["MerchantId"];
@@ -4251,6 +4415,153 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaymentDiscrepancy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPaymentOrders: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                account_id?: components["schemas"]["AccountId"];
+                user_id?: components["schemas"]["UserId"];
+                merchant_id?: components["schemas"]["MerchantId"];
+                state?: components["schemas"]["PaymentOrderState"];
+                /** @description Orders created at or after this time. */
+                since?: string;
+                /** @description Orders created before this time. */
+                until?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the site's orders, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentOrderList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPaymentRefunds: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                state?: components["schemas"]["PaymentRefundState"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the site's refunds, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentRefundList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    approvePaymentRefund: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                refund_id: components["schemas"]["RefundId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The refund as it stands after the approval. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentRefund"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    rejectPaymentRefund: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                refund_id: components["schemas"]["RefundId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The refund as it stands after the rejection. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentRefund"];
                 };
             };
             400: components["responses"]["BadRequest"];

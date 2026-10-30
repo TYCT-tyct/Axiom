@@ -4,6 +4,7 @@ import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet 
 import type { ReactNode } from "react";
 import { Layout } from "./layout";
 import { modelStatus } from "./models/catalog";
+import { paymentOrderState } from "./orders/states";
 import { supplierStatus } from "./suppliers/statuses";
 
 const root = createRootRoute({ component: Outlet });
@@ -44,6 +45,18 @@ const routeTree = root.addChildren([
       (search) => ({ q: text(search.q) }),
     ),
     shellPage("/accounts/$accountId", () => import("./pages/account")),
+    shellPage(
+      "/orders",
+      () => import("./pages/orders"),
+      (search) => ({
+        account_id: text(search.account_id),
+        user_id: text(search.user_id),
+        state: paymentOrderState(search.state),
+        merchant_id: text(search.merchant_id),
+        since: text(search.since),
+        until: text(search.until),
+      }),
+    ),
     shellPage(
       "/calls",
       () => import("./pages/calls"),

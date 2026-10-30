@@ -1099,6 +1099,153 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/orders:
+    get:
+      operationId: listPaymentOrders
+      tags: [Payments]
+      summary: A site's top-up orders, newest first, with their refunds
+      description: >-
+        The admin's order list: one site's orders with what was quoted, what the channel actually took and credited,
+        and each order's refunds. Filters left out do not narrow. `account_id` is the paying account, `user_id` the user who ordered, `merchant_id`
+        the merchant account (the channel), and `since`/`until` are the order's creation time, `since` inclusive and
+        `until` exclusive. Pages use `cursor` and `limit`; the answer's `next_cursor` is null on the last page. Money
+        is exact text: `credits` is in the site's accounting currency (billionths), while the amounts are in the
+        currency the order was paid in (minor units).
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: account_id, in: query, schema: {$ref: "#/components/schemas/AccountId"}}
+        - {name: user_id, in: query, schema: {$ref: "#/components/schemas/UserId"}}
+        - {name: merchant_id, in: query, schema: {$ref: "#/components/schemas/MerchantId"}}
+        - {name: state, in: query, schema: {$ref: "#/components/schemas/PaymentOrderState"}}
+        - {name: since, in: query, schema: {type: string, format: date-time}, description: "Orders created at or after this time."}
+        - {name: until, in: query, schema: {type: string, format: date-time}, description: "Orders created before this time."}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of the site's orders, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentOrderList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/refunds:
+    get:
+      operationId: listPaymentRefunds
+      tags: [Payments]
+      summary: A site's refunds, newest first, for review and follow-up
+      description: >-
+        The admin's refund list. `state` is the internal state: `frozen` is held after the request and waits for an
+        administrator's approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel
+        and their result is not final; `succeeded` returned the cash; `failed` returned the frozen credits. Filters
+        left out do not narrow. The page asks with `state=frozen` for the review queue. Money is exact text: `credits`
+        is in the site's accounting currency (billionths), `amount` in the currency the order was paid in (minor units).
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: state, in: query, schema: {$ref: "#/components/schemas/PaymentRefundState"}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of the site's refunds, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentRefundList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/refunds/{refund_id}/approve:
+    post:
+      operationId: approvePaymentRefund
+      tags: [Payments]
+      summary: Approve a refund as a second person and start its channel flow
+      description: >-
+        Releases a frozen refund. The approver must be a different person from the one who requested it, and the
+        reason goes to the audit log. A channel refund is sent after the approval commits; an offline refund stays
+        frozen for a separate manual conclusion. Repeating the approval with the same `Idempotency-Key` returns the
+        stored answer and sends nothing again; a refund that is already approved is returned unchanged.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: refund_id, in: path, required: true, schema: {$ref: "#/components/schemas/RefundId"}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The refund as it stands after the approval.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentRefund"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/refunds/{refund_id}/reject:
+    post:
+      operationId: rejectPaymentRefund
+      tags: [Payments]
+      summary: Decline a refund that no one approved and no channel saw
+      description: >-
+        Returns the frozen credits and moves no cash. Only a refund still waiting for review, with no approver and
+        nothing sent to a channel, can be rejected (`conflict` means it is past that point; a definitive channel
+        outcome is resolved instead). The reason goes to the audit log. Repeating the rejection with the same
+        `Idempotency-Key` returns the stored answer and unfreezes nothing again; an already declined refund is
+        returned unchanged.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: refund_id, in: path, required: true, schema: {$ref: "#/components/schemas/RefundId"}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The refund as it stands after the rejection.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentRefund"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/alerts/configuration:
     get:
       operationId: getAlertConfiguration
@@ -3986,6 +4133,97 @@ components:
       properties:
         id: {$ref: "#/components/schemas/AnnouncementId"}
     OrderId: {type: string, pattern: '^ord_[0-9a-hjkmnp-tv-z]{26}$', description: "A top-up order's ID (TypeID), also the order number the payment channel sees."}
+    PayAmount:
+      type: object
+      required: [amount, currency]
+      description: >-
+        An amount in the currency a method is paid in, which is not always the site's. `amount` is a non-negative integer
+        in decimal text, in the currency's minor units (cents for USD, fen for CNY, none for JPY).
+      properties:
+        amount: {type: string, pattern: '^(0|[1-9][0-9]{0,18})$', example: "7300"}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: CNY}
+    RefundId: {type: string, pattern: '^rfd_[0-9a-hjkmnp-tv-z]{26}$', description: "A refund's ID (TypeID), the refund number of channels that take one."}
+    PaymentOrderState:
+      type: string
+      enum: [pending, paid, expired, cancelled, failed, review, partially_refunded, refunded, charged_back]
+      description: >-
+        The order's state. `pending` waits for payment; `paid` is credited; `expired` and `cancelled` can still be
+        credited if a payment arrives in time; `failed` was refused by the channel; `review` waits for a person; the
+        rest follow refunds and chargebacks (docs/domains/payments.md「订单」).
+    PaymentRefundState:
+      type: string
+      enum: [frozen, sending, pending, succeeded, failed]
+      description: >-
+        The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for
+        sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the
+        cash and took the credits; `failed` returned the credits and moved no cash.
+    PaymentRefund:
+      type: object
+      description: A refund as the operator's list and decisions show it. Every field is optional during rolling deployment.
+      properties:
+        id: {$ref: "#/components/schemas/RefundId"}
+        order_id: {$ref: "#/components/schemas/OrderId"}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        state: {$ref: "#/components/schemas/PaymentRefundState"}
+        via: {type: string, enum: [channel, offline], description: "channel sends the cash back; offline waits for a manual conclusion."}
+        credits: {$ref: "#/components/schemas/Money"}
+        amount: {$ref: "#/components/schemas/PayAmount"}
+        reason: {type: string, description: "Why the user asked for the refund."}
+        requested_by: {$ref: "#/components/schemas/UserId"}
+        approved_by: {$ref: "#/components/schemas/UserId"}
+        provider_ref: {type: string, description: "The channel's own refund number, once it has one."}
+        created_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+    PaymentRefundList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PaymentRefund"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    PaymentOrder:
+      type: object
+      description: >-
+        A top-up order as the operator's list shows it, with what was quoted, what the channel actually took and
+        credited, and its refunds. Every field is optional during rolling deployment.
+      properties:
+        id: {$ref: "#/components/schemas/OrderId"}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        user_id: {$ref: "#/components/schemas/UserId"}
+        merchant_id: {$ref: "#/components/schemas/MerchantId"}
+        merchant_name: {type: string, description: "The merchant account's name, the channel the order was paid through."}
+        method: {type: string}
+        state: {$ref: "#/components/schemas/PaymentOrderState"}
+        credits: {$ref: "#/components/schemas/Money"}
+        total: {$ref: "#/components/schemas/PayAmount"}
+        fee: {$ref: "#/components/schemas/PayAmount"}
+        credited:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: "The credits actually added, when the payment was credited; it can be less than `credits`."
+        paid_total:
+          allOf: [{$ref: "#/components/schemas/PayAmount"}]
+          description: "What the channel actually took, when the payment was credited."
+        paid_fee:
+          allOf: [{$ref: "#/components/schemas/PayAmount"}]
+          description: "The channel's fee on what it actually took."
+        trade_no: {type: string, description: "The channel's own order number."}
+        created_at: {type: string, format: date-time}
+        paid_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        refund_allowed: {type: boolean}
+        refunds:
+          type: array
+          description: The order's refunds, oldest first.
+          items: {$ref: "#/components/schemas/PaymentRefund"}
+    PaymentOrderList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PaymentOrder"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     Merchant:
       type: object
       description: A merchant account of a payment channel, without its secrets. Every field is optional during rolling deployment.
