@@ -233,6 +233,63 @@ func (q *Queries) InsertResolution(ctx context.Context, db DBTX, arg InsertResol
 	return err
 }
 
+const listRefunds = `-- name: ListRefunds :many
+SELECT r.id, r.order_id, r.site_id, r.account_id, r.state, r.via, r.credits, r.requested_credits, r.amount, r.with_fee, r.refund_key, r.manual_only, r.provider_ref, r.reason, r.requested_by, r.approved_by, r.idem_key, r.attempts, r.sent_at, r.next_query_at, r.created_at, r.finished_at, o.pay_currency FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
+WHERE r.order_id = ANY ($1::uuid[])
+ORDER BY r.created_at, r.id
+`
+
+type ListRefundsRow struct {
+	PaymentsRefund PaymentsRefund
+	PayCurrency    string
+}
+
+// A page's orders' refunds, oldest first, with the currency each returns cash in. One statement for the page instead of
+// one per order; the account scope already limits it to the account's own rows.
+func (q *Queries) ListRefunds(ctx context.Context, db DBTX, orderIds []uuid.UUID) ([]ListRefundsRow, error) {
+	rows, err := db.Query(ctx, listRefunds, orderIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRefundsRow
+	for rows.Next() {
+		var i ListRefundsRow
+		if err := rows.Scan(
+			&i.PaymentsRefund.ID,
+			&i.PaymentsRefund.OrderID,
+			&i.PaymentsRefund.SiteID,
+			&i.PaymentsRefund.AccountID,
+			&i.PaymentsRefund.State,
+			&i.PaymentsRefund.Via,
+			&i.PaymentsRefund.Credits,
+			&i.PaymentsRefund.RequestedCredits,
+			&i.PaymentsRefund.Amount,
+			&i.PaymentsRefund.WithFee,
+			&i.PaymentsRefund.RefundKey,
+			&i.PaymentsRefund.ManualOnly,
+			&i.PaymentsRefund.ProviderRef,
+			&i.PaymentsRefund.Reason,
+			&i.PaymentsRefund.RequestedBy,
+			&i.PaymentsRefund.ApprovedBy,
+			&i.PaymentsRefund.IdemKey,
+			&i.PaymentsRefund.Attempts,
+			&i.PaymentsRefund.SentAt,
+			&i.PaymentsRefund.NextQueryAt,
+			&i.PaymentsRefund.CreatedAt,
+			&i.PaymentsRefund.FinishedAt,
+			&i.PayCurrency,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockRefund = `-- name: LockRefund :one
 SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at FROM payments.refunds WHERE id = $1 AND order_id = $2 FOR UPDATE
 `

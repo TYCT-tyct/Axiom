@@ -17,6 +17,7 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/idem"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 )
 
@@ -101,6 +102,9 @@ type Order struct {
 	ExpiresAt  time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// RefundAllowed is the merchant account's policy for user refund requests. The request itself still checks the
+	// channel's current capability; this only says whether the page should offer it.
+	RefundAllowed bool
 }
 
 var (
@@ -329,6 +333,67 @@ func (p *Payments) GetOrder(ctx context.Context, s pg.Scope, id OrderID) (Order,
 	return o, err
 }
 
+// ListOrders is one page of the account's orders, newest first, and the cursor of the next page, nil at the end. The
+// scope is the access control: row-level security shows the account's own rows and no others.
+func (p *Payments) ListOrders(ctx context.Context, s pg.Scope, account uuid.UUID, after *page.Cursor, size int) ([]Order, *page.Cursor, error) {
+	if size < 1 || size > 200 {
+		return nil, nil, fmt.Errorf("payments: list orders: page size %d, want 1 to 200", size)
+	}
+	// The first page starts above every order; an empty ID in the bound excludes nothing at its time.
+	at, id := endOfOrders, uuid.UUID{}
+	if after != nil {
+		at, id = after.At, after.ID
+	}
+	var orders []Order
+	var next *page.Cursor
+	err := p.db.ReadTx(ctx, s, func(tx pg.Tx) error {
+		rows, err := queries.ListOrders(ctx, tx, ListOrdersParams{
+			AccountID: account, AfterAt: at, AfterID: id, Max: int32(size + 1), //nolint:gosec // size is 1 to 200
+		})
+		if err != nil {
+			return fmt.Errorf("payments: list orders: %w", err)
+		}
+		if len(rows) > size {
+			rows = rows[:size]
+			last := rows[size-1]
+			next = &page.Cursor{At: last.CreatedAt, ID: last.ID}
+		}
+		orders = make([]Order, len(rows))
+		for i, r := range rows {
+			orders[i], err = orderOfListed(r)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return orders, next, err
+}
+
+// endOfOrders is the upper bound of the first page: later than any order.
+var endOfOrders = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// orderOfListed is orderOf for a page row. The two generated row types carry the same fields, and this is the only
+// difference between the two reads.
+func orderOfListed(r ListOrdersRow) (Order, error) {
+	pay, err := platform.ParseCurrency(r.PayCurrency)
+	if err != nil {
+		return Order{}, fmt.Errorf("payments: order %s is paid in %q: %w", OrderID(r.ID).TypeID(), r.PayCurrency, err)
+	}
+	var c Checkout
+	if len(r.Checkout) > 0 {
+		if err = jsonx.UnmarshalKnown(r.Checkout, &c); err != nil {
+			return Order{}, fmt.Errorf("payments: order %s has a checkout that does not parse: %w", OrderID(r.ID).TypeID(), err)
+		}
+	}
+	return Order{
+		ID: OrderID(r.ID), SiteID: r.SiteID, AccountID: r.AccountID, UserID: r.UserID, MerchantID: MerchantID(r.MerchantID),
+		Method: Method(r.Method), State: State(r.State), Credits: r.Credits, Total: Money{pay, r.Total}, Fee: r.Fee,
+		TradeNo: r.TradeNo, Checkout: c, ExpiresAt: r.ExpiresAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		RefundAllowed: r.RefundAllowed,
+	}, nil
+}
+
 // readOrder reads one order of the transaction's scope.
 func loadOrder(ctx context.Context, tx pg.Tx, id OrderID) (Order, error) {
 	rows, err := queries.ReadOrder(ctx, tx, uuid.UUID(id))
@@ -357,6 +422,7 @@ func orderOf(r ReadOrderRow) (Order, error) {
 		ID: OrderID(r.ID), SiteID: r.SiteID, AccountID: r.AccountID, UserID: r.UserID, MerchantID: MerchantID(r.MerchantID),
 		Method: Method(r.Method), State: State(r.State), Credits: r.Credits, Total: Money{pay, r.Total}, Fee: r.Fee,
 		TradeNo: r.TradeNo, Checkout: c, ExpiresAt: r.ExpiresAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		RefundAllowed: r.RefundAllowed,
 	}, nil
 }
 

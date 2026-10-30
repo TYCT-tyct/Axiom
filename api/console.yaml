@@ -1597,6 +1597,32 @@ paths:
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/orders:
+    get:
+      operationId: listOrders
+      tags: [Top-ups]
+      summary: The account's top-up orders
+      description: >-
+        Newest first, `limit` per page, continued with `next_cursor`. Only the account's own orders; another account's
+        never appear. Each order carries its refunds, oldest first, so the page can show where a request stands without
+        a second call. A node of the previous release sends no `refunds` and no `refund_allowed`; the page then shows
+        refunds as unavailable instead of guessing.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the account's orders
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OrderList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
     post:
       operationId: createOrder
       tags: [Top-ups]
@@ -1753,6 +1779,56 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/orders/{order_id}/refunds:
+    parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/OrderId"}
+    post:
+      operationId: requestRefund
+      tags: [Top-ups]
+      summary: Ask for a refund of unused credits from an order
+      description: >-
+        The order page's refund request. It only works for an order paid through a merchant account that lets users
+        request refunds, and only for the part of that order's paid credits that is neither spent, expired nor already
+        frozen: `credits` is what the user asks to give back, and the answer's `credits` is what was actually frozen,
+        which can be less. The cash quote is computed from the batch's own payment and the site's refund policy, never
+        from the order's quote at the time. The request waits for a different administrator to approve it, so the
+        answer's `state` is `pending_review`; the order keeps its state meanwhile. A channel that cannot refund, or an order
+        whose merchant does not allow user requests, is `forbidden`; a second request while one is in flight is
+        `conflict`; an amount with nothing refundable left is `unprocessable`. `Idempotency-Key` makes the request
+        happen once per order: the same key with the same credits and reason returns the stored refund, and another
+        request under it is `idempotency_key_reused`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.top_up
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: "A key the caller chooses for one intended refund, 1 to 128 of letters, digits and `._:-` (a UUID is fine)."
+          schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,128}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RefundRequest"}
+      responses:
+        "201":
+          description: The refund, frozen and waiting for approval.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OrderRefund"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
 components:
   securitySchemes:
@@ -2223,6 +2299,39 @@ components:
         floor: {$ref: "#/components/schemas/Money"}
         available: {$ref: "#/components/schemas/Money"}
         spent_this_month: {$ref: "#/components/schemas/Money"}
+        batches:
+          type: array
+          description: >-
+            The credit batches that still hold something, oldest credit first, with what is left in each and when it
+            stops counting. An account with nothing is an empty array. Absent on a node of the previous release, and
+            on one that could not bring the account's allocation up to date in bounded time; the page then shows this
+            part as unavailable rather than a number that trails the ledger.
+          items: {$ref: "#/components/schemas/CreditBatch"}
+    CreditBatch:
+      type: object
+      required: [id, source, amount, remaining, frozen, created_at]
+      description: >-
+        Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending
+        takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this
+        batch, not what the next charge will take.
+      properties:
+        id:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: The batch's own identity; paid credit uses the order's ID as the batch ID.
+        source:
+          type: string
+          enum: [gift, paid]
+          x-enum-varnames: [CreditBatchGift, CreditBatchPaid]
+          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment."
+        amount: {$ref: "#/components/schemas/Money"}
+        remaining: {$ref: "#/components/schemas/Money"}
+        frozen: {$ref: "#/components/schemas/Money"}
+        created_at: {type: string, format: date-time}
+        expires_at:
+          type: string
+          format: date-time
+          description: "When what is left of the batch stops counting. Absent when it never expires."
     StatementKind:
       type: string
       enum: [top_up, gift, spend, expiry, refund, reversal, freeze, unfreeze]
@@ -2696,3 +2805,54 @@ components:
         created_at: {type: string, format: date-time}
         expires_at: {type: string, format: date-time, description: "When a waiting order stops being payable."}
         checkout: {$ref: "#/components/schemas/Checkout"}
+        refund_allowed:
+          type: boolean
+          description: >-
+            Whether this order's merchant account lets the account request refunds. Absent on a node of the previous
+            release; the page then shows no refund action. True does not promise the channel can refund: the request
+            itself still answers with the current policy.
+        refunds:
+          type: array
+          description: >-
+            The order's refunds, oldest first. Absent on a node of the previous release, and on responses that do not
+            read them (creating, cancelling and verifying an order); the page reads the order again for them.
+          items: {$ref: "#/components/schemas/OrderRefund"}
+    OrderList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Order"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    RefundId: {type: string, pattern: '^rfd_[0-9a-hjkmnp-tv-z]{26}$', description: "A refund's ID (TypeID), the refund number of channels that take one."}
+    RefundState:
+      type: string
+      enum: [pending_review, processing, succeeded, declined]
+      x-enum-varnames: [RefundPendingReview, RefundProcessing, RefundSucceeded, RefundDeclined]
+      description: >-
+        `pending_review` waits for an administrator's approval; `processing` is with the payment channel and its result
+        is not final; `succeeded` returned the cash and took the credits from the balance; `declined` returned the
+        frozen credits and moved no cash.
+    OrderRefund:
+      type: object
+      required: [id, state, credits, amount, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/RefundId"}
+        state: {$ref: "#/components/schemas/RefundState"}
+        credits: {$ref: "#/components/schemas/Money"}
+        amount:
+          allOf: [{$ref: "#/components/schemas/PayAmount"}]
+          description: The cash due back, in the currency the order was paid in, quoted from the batch's payment and the site's refund policy.
+        created_at: {type: string, format: date-time}
+        finished_at:
+          type: string
+          format: date-time
+          description: When the refund reached `succeeded` or `declined`; absent while it is not final.
+    RefundRequest:
+      type: object
+      additionalProperties: false
+      required: [credits, reason]
+      properties:
+        credits: {$ref: "#/components/schemas/Money"}
+        reason: {type: string, minLength: 1, maxLength: 1000}

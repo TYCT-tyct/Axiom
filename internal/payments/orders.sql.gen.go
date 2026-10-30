@@ -178,6 +178,90 @@ func (q *Queries) InsertOrder(ctx context.Context, db DBTX, arg InsertOrderParam
 	return i, err
 }
 
+const listOrders = `-- name: ListOrders :many
+SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.credits, o.site_currency,
+    o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
+    (m.user_refund AND m.refund_enabled)::boolean AS refund_allowed
+FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id
+WHERE o.account_id = $1 AND (o.created_at, o.id) < ($2::timestamptz, $3::uuid)
+ORDER BY o.created_at DESC, o.id DESC
+LIMIT $4
+`
+
+type ListOrdersParams struct {
+	AccountID uuid.UUID
+	AfterAt   time.Time
+	AfterID   uuid.UUID
+	Max       int32
+}
+
+type ListOrdersRow struct {
+	ID            uuid.UUID
+	SiteID        uuid.UUID
+	AccountID     uuid.UUID
+	UserID        uuid.UUID
+	MerchantID    uuid.UUID
+	Method        string
+	State         string
+	Credits       int64
+	SiteCurrency  string
+	PayCurrency   string
+	Total         int64
+	Fee           int64
+	TradeNo       string
+	Checkout      []byte
+	ExpiresAt     time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	RefundAllowed bool
+}
+
+// The account's orders, newest first. The (created_at, id) bound is the page cursor; the index is (account_id, created_at
+// DESC), which this reads in order and then filters by the cursor's id within the same microsecond.
+func (q *Queries) ListOrders(ctx context.Context, db DBTX, arg ListOrdersParams) ([]ListOrdersRow, error) {
+	rows, err := db.Query(ctx, listOrders,
+		arg.AccountID,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOrdersRow
+	for rows.Next() {
+		var i ListOrdersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SiteID,
+			&i.AccountID,
+			&i.UserID,
+			&i.MerchantID,
+			&i.Method,
+			&i.State,
+			&i.Credits,
+			&i.SiteCurrency,
+			&i.PayCurrency,
+			&i.Total,
+			&i.Fee,
+			&i.TradeNo,
+			&i.Checkout,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RefundAllowed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockAccountOrders = `-- name: LockAccountOrders :exec
 SELECT pg_advisory_xact_lock($1::bigint)
 `
@@ -428,34 +512,38 @@ func (q *Queries) OrderEvent(ctx context.Context, db DBTX, arg OrderEventParams)
 }
 
 const readOrder = `-- name: ReadOrder :many
-SELECT id, site_id, account_id, user_id, merchant_id, method, state, fingerprint, credits, site_currency, pay_currency,
-    total, fee, trade_no, checkout, expires_at, created_at, updated_at
-FROM payments.orders WHERE id = $1
+SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.fingerprint, o.credits,
+    o.site_currency, o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
+    (m.user_refund AND m.refund_enabled)::boolean AS refund_allowed
+FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id WHERE o.id = $1
 `
 
 type ReadOrderRow struct {
-	ID           uuid.UUID
-	SiteID       uuid.UUID
-	AccountID    uuid.UUID
-	UserID       uuid.UUID
-	MerchantID   uuid.UUID
-	Method       string
-	State        string
-	Fingerprint  []byte
-	Credits      int64
-	SiteCurrency string
-	PayCurrency  string
-	Total        int64
-	Fee          int64
-	TradeNo      string
-	Checkout     []byte
-	ExpiresAt    time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID            uuid.UUID
+	SiteID        uuid.UUID
+	AccountID     uuid.UUID
+	UserID        uuid.UUID
+	MerchantID    uuid.UUID
+	Method        string
+	State         string
+	Fingerprint   []byte
+	Credits       int64
+	SiteCurrency  string
+	PayCurrency   string
+	Total         int64
+	Fee           int64
+	TradeNo       string
+	Checkout      []byte
+	ExpiresAt     time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	RefundAllowed bool
 }
 
 // The order row as the module passes it around; the fraction columns are read as text, which is how a value beyond
 // int64 survives (README.md「数据」).
+// refund_allowed is the merchant's policy for user refund requests, not the channel's current capability: the request
+// itself still checks that (refund.go).
 func (q *Queries) ReadOrder(ctx context.Context, db DBTX, id uuid.UUID) ([]ReadOrderRow, error) {
 	rows, err := db.Query(ctx, readOrder, id)
 	if err != nil {
@@ -484,6 +572,7 @@ func (q *Queries) ReadOrder(ctx context.Context, db DBTX, id uuid.UUID) ([]ReadO
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RefundAllowed,
 		); err != nil {
 			return nil, err
 		}

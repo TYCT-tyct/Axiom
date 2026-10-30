@@ -13,7 +13,7 @@ type Method string   // 本站的付款方式代码："alipay"、"wxpay"、"usdt
 type MerchantID, OrderID, RefundID uuid.UUID // 对外写法 mch_、ord_、rfd_
 type Money struct{ Currency platform.Currency; Minor int64 } // 付款币种的最小单位；位数取 ISO 4217 表
 type State string    // 订单状态："pending"、"paid"……；转移表是 payments.transitions
-type Order struct{}  // ID、站点、账户、用户、商户账户、付款方式、状态、额度、总额、手续费、网关订单号、checkout、有效期、时间戳
+type Order struct{}  // ID、站点、账户、用户、商户账户、付款方式、状态、额度、总额、手续费、网关订单号、checkout、有效期、时间戳；RefundAllowed 是商户账户此刻是否允许用户申请退款
 type CreateOrder struct{} // Site、Account、User、Method、Credits、Key（幂等键）、ReturnURL、ClientIP、Mobile
 
 func Open(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client；告警经平台事务信号
@@ -21,6 +21,7 @@ func (p *Payments) Options(ctx context.Context, s pg.Scope, site accounts.Site, 
 func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (Order, Checkout, error)  // 账户范围；事务、渠道调用、事务
 func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, error)                     // 待支付 → 已取消，减回用量，之后请渠道关单
 func (p *Payments) GetOrder(ctx context.Context, s pg.Scope, id OrderID) (Order, error)                     // 账户范围读自己的订单；别的账户的是 ErrNotFound
+func (p *Payments) ListOrders(ctx context.Context, s pg.Scope, account uuid.UUID, after *page.Cursor, size int) ([]Order, *page.Cursor, error) // 控制台的订单列表，按 (created_at,id) 倒序，一页 1–200
 func ParseOrderID(s string) (OrderID, error)                                                              // 对外写法转 ID；格式不对与不存在同为 ErrNotFound
 type Wait struct{ Err error; After time.Duration }                                                        // 等一等就能放行的拒绝（取消次数、每 IP 限额、核验），控制台据此写 Retry-After
 func RegisterPoll(c PollConfig) error                // payments.poll：查单、入账、过期、商户查询并发和熔断
@@ -30,6 +31,7 @@ func (p *Payments) Notify() http.Handler                                        
 func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Refund, error)              // 冻结并等待审批；r.Key 幂等
 func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID) (Refund, error) // 独立管理员批准后发送；线下退款继续等待凭证
 func (p *Payments) RejectRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) // 拒绝尚未审批、确定未发送的申请
+func (p *Payments) ListRefunds(ctx context.Context, s pg.Scope, orders []OrderID) (map[OrderID][]Refund, error) // 一页订单的退款，按退款创建顺序，一次查询
 func (p *Payments) GetRefund(ctx context.Context, s pg.Scope, id RefundID) (Refund, error)
 func (p *Payments) GetResolution(ctx context.Context, s pg.Scope, order OrderID, key string) (Resolution, error) // 审批前读取持久提案
 func (p *Payments) ApproveResolution(ctx context.Context, s pg.Scope, order OrderID, key string, user uuid.UUID) error

@@ -96,7 +96,7 @@ func (p gatewayPlugin) Open(payments.MerchantConfig) (payments.Channel, error) {
 
 type gatewayChannel struct{ g *fakeGateway }
 
-func (gatewayChannel) Caps() payments.Caps        { return payments.CapQuery }
+func (gatewayChannel) Caps() payments.Caps        { return payments.CapQuery | payments.CapRefund }
 func (gatewayChannel) Methods() []payments.Method { return []payments.Method{"alipay"} }
 func (c gatewayChannel) Create(_ context.Context, r payments.CreateRequest) (payments.Checkout, error) {
 	return c.g.create(r)
@@ -111,7 +111,7 @@ func (c gatewayChannel) Query(_ context.Context, order, _ string) (payments.Paym
 }
 func (gatewayChannel) Close(context.Context, payments.OrderID, string) error { return nil }
 func (gatewayChannel) Refund(context.Context, payments.RefundCall) (payments.RefundState, error) {
-	panic("testgw: refund is not declared")
+	return payments.RefundState{State: payments.RefundSucceeded}, nil
 }
 
 func (gatewayChannel) QueryRefund(context.Context, payments.RefundCall) (payments.RefundState, error) {
@@ -134,6 +134,7 @@ func (f consoleFixture) openTopUps(settings ...string) {
 	}
 	if _, err = f.pay.SaveMerchant(f.t.Context(), pg.PlatformScope(), audit.System("test"), payments.MerchantInput{
 		Site: uuid.UUID(f.siteID()), Kind: "testgw", Name: "Gateway", Enabled: true, Currency: usd, TTLSeconds: 1800,
+		RefundEnabled: true, UserRefund: true,
 		Settings: []byte(`{}`), Secrets: map[string]secret.Secret{"key": secret.New("gateway-key")},
 		Methods: []payments.MethodInput{{Method: "alipay", Upstream: "alipay", Fee: payments.Fee{PPM: 30_000}, Enabled: true}},
 	}); err != nil {
