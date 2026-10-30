@@ -261,7 +261,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | `:floor` | 按价格排序，并准入 flex 层的端点（[Floor](https://openrouter.ai/docs/guides/routing/model-variants/floor)） | 等同 `provider.sort: price`；层级准入见下 |
 | `:exacto` | 按质量信号排序：工具调用成功率、吞吐、延迟、基准结果（[Exacto](https://openrouter.ai/docs/guides/routing/model-variants/exacto)） | 400 暂不支持：运营质量分只含可靠性、首字延迟和输出速度，没有 Exacto 的工具调用成功率和基准评分，不能声称按同样信号排序 |
 | `:online` | 已弃用，等于 `web` 插件（[Online](https://openrouter.ai/docs/guides/routing/model-variants/online)） | 400：没有联网搜索服务，与 `web` 插件、`openrouter:web_search` 共用一句话（见「服务端工具」） |
-| `:free` | [独立免费目录条目](https://openrouter.ai/docs/guides/routing/model-variants/free)，与付费条目的规格、价格和端点分开，OpenRouter 仍在提供 | 目录里的独立模型：标准 ID 是 `基础标准 ID:free`，有自己的规格、上下限、零价和端点，精确查询；目录没有这个条目时 404 `model_not_found`，不回落到付费基础模型，也不按零价猜测 |
+| `:free` | [独立免费目录条目](https://openrouter.ai/docs/guides/routing/model-variants/free)，与付费条目的规格、价格和端点分开，OpenRouter 仍在提供 | 目录里的独立模型：标准 ID 是 `基础标准 ID:free`，有自己的规格、上下限、零价和端点，精确查询；目录没有这个条目时 404 `model_not_found`，不回落到付费基础模型，也不按零价猜测。计费发布同样拒绝给它非零售价（`ErrFreePrice`），路由对已发布非零价的条目没有端点 |
 | `:thinking` | OpenRouter 已弃用，总览页让改用 `reasoning` 参数；原先是独立的思考目录条目 | 请求自己已经要求推理时**接受**：本目录没有独立条目，这个后缀唯一能兑现的含义就是开启推理，此时已经满足，按基础模型服务；没要求推理时 400，提示改用 `reasoning` 参数。发现接口按基础模型回 200 |
 | `:batch` | 独立批量计价条目 | 400：本目录没有批量条目与价格，不按普通价冒充批量价 |
 | `:extended` | 已弃用，且没有模型再提供（总览页） | 400：本目录没有这个条目 |
