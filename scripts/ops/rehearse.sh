@@ -26,7 +26,7 @@ die() {
 # into the file below or passed on each command, and COMPOSE_FILE and friends would change which files are read at all.
 for name in $(compgen -e); do
   case $name in
-  AXIOM_* | RCLONE_* | DEPLOY_* | COMPOSE_FILE | COMPOSE_PROFILES | COMPOSE_ENV_FILES | COMPOSE_PROJECT_NAME) unset "$name" ;;
+  AXIOM_* | DEPLOY_* | COMPOSE_FILE | COMPOSE_PROFILES | COMPOSE_ENV_FILES | COMPOSE_PROJECT_NAME) unset "$name" ;;
   esac
 done
 # The variables the script sets itself, after the sweep above.
@@ -52,12 +52,19 @@ docker_path() {
   if command -v cygpath > /dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
 }
 
-# One command in the backup image, which has psql, rclone, age, sha256sum and a shell. No dependencies: every caller runs
-# after the stack is up, or before it needs to be.
+# One command in the backup image, which has psql, age, the program's `axiom` binary and a shell. No dependencies: every
+# caller runs after the stack is up, or before it needs to be.
 ops() {
   local entry=$1
   shift
   compose run --rm --no-deps --entrypoint "$entry" backup "$@"
+}
+
+# The sets under the prefix, one name per line. The object store lists keys, not directories, so the first path segment
+# under the prefix is the set.
+bucket_sets() {
+  ops axiom objectstore list --prefix "$prefix/" --names |
+    sed "s|^$prefix/||" | cut -d/ -f1 | sed '/^$/d' | sort -u
 }
 
 # Everything that writes into the bucket goes through here: a backup, and the move that stands in for a set somebody moved
@@ -66,7 +73,8 @@ ops() {
 # Reads are not guarded: a wrong target there fails on the way in and changes nothing.
 storage_guard='
 for want in AXIOM_BACKUP_BUCKET=axiom-rehearsal AXIOM_BACKUP_PREFIX=axiom \
-  RCLONE_CONFIG_AXIOM_ENDPOINT=http://s3:9000 RCLONE_CONFIG_AXIOM_ACCESS_KEY_ID=rehearsal; do
+  AXIOM_OBJECTSTORE_BUCKET=axiom-rehearsal AXIOM_OBJECTSTORE_ENDPOINT=http://s3:9000 \
+  AXIOM_OBJECTSTORE_ACCESS_KEY_ID=rehearsal; do
   name=${want%%=*} value=${want#*=} got=${!name-}
   if [ "$got" != "$value" ]; then
     printf "rehearsal: %s is %s, not %s: refusing to write\n" "$name" "${got:-<empty>}" "$value" >&2
@@ -147,7 +155,19 @@ CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
 # Under the umask above the binary is mode 0700, and the image runs it as another user: without this the container fails
 # at start with `exec: "/axiom": permission denied`.
 chmod 0755 deploy/bin/axiom
+# The ops image copies /axiom out of the program image, so that image has to exist before the ops build resolves its FROM.
+compose build axiom
 compose --profile ops build
+# The transfer limit is shared by the backup and restore jobs; a non-default value has to reach both, not only the
+# service that happened to gain the override.
+config=$(AXIOM_BACKUP_TRANSFER_TIMEOUT=24h compose --profile ops config)
+for service in backup restore; do
+  got=$(printf '%s\n' "$config" | awk -v service="$service" '
+    $0 == "  " service ":" { inside = 1; next }
+    inside && /^  [a-z]/ { inside = 0 }
+    inside && /AXIOM_BACKUP_TRANSFER_TIMEOUT:/ { print $2; exit }')
+  [ "$got" = 24h ] || die "$service did not get AXIOM_BACKUP_TRANSFER_TIMEOUT=24h (got ${got:-nothing})"
+done
 
 echo "== 3/10 generate the two identities, and put their recipients in the environment file"
 mkdir -p "$work/identities" "$work/before" "$work/after" "$work/set"
@@ -172,13 +192,24 @@ compose up --detach --wait --wait-timeout 60 postgres
 compose exec -T postgres sh < deploy/postgres/roles.sh
 compose up --detach --build --wait --wait-timeout 240
 for _ in $(seq 1 60); do
-  ops rclone lsd axiom: > /dev/null 2>&1 && break
+  write axiom objectstore create > /dev/null 2>&1 && break
   sleep 1
 done
-ops rclone lsd axiom: > /dev/null || die "the S3 server never answered"
+ops axiom objectstore check > /dev/null || die "the S3 server never answered"
 compose run --rm --no-deps axiom site init --name Rehearsal --currency USD \
   --console console.rehearsal.example --api api.rehearsal.example --admin admin.rehearsal.example
 printf '%s\n' "$(openssl rand -hex 16)" | compose run --rm --no-deps -T axiom user create --email owner@rehearsal.example
+# A non-default policy, so the comparison has business content to preserve rather than an empty table that the program
+# fills with its default on the first start after the restore. The startup's pricing job may have inserted the default
+# already, so replace its values instead of racing it with a second row.
+compose exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres -d axiom <<'SQL'
+INSERT INTO billing.price_policies(site_id, floor_multiplier, change_ratio, max_increase_ratio)
+SELECT id, '1.25', '0.10', '0.50' FROM accounts.sites
+ON CONFLICT (site_id) DO UPDATE SET
+  floor_multiplier = EXCLUDED.floor_multiplier,
+  change_ratio = EXCLUDED.change_ratio,
+  max_increase_ratio = EXCLUDED.max_increase_ratio;
+SQL
 
 # The fingerprint reader also returns each table's row count, which is the evidence that the seed went in and came back;
 # the roles and the key ring are the other two.
@@ -232,7 +263,7 @@ seeded=$(awk -F'|' '$2 > 0' "$work/before/fingerprint.txt" | wc -l | tr -d ' ')
 
 echo "== 6/10 back up, and check the guards around it"
 write /ops/backup.sh
-set_name=$(ops rclone lsf --dirs-only "axiom:$bucket/$prefix" | tr -d '/' | sort | tail -n 1)
+set_name=$(bucket_sets | tail -n 1)
 [ -n "$set_name" ] || die "the bucket holds no set"
 
 # A limit of zero is refused before the lock is taken and before anything is written, rather than uploaded and then
@@ -242,7 +273,7 @@ for limit in AXIOM_BACKUP_KEEP_SETS=0 AXIOM_BACKUP_KEEP_DAYS=0; do
   compose run --rm --no-deps --env "$limit" backup > /dev/null 2>&1 || status=$?
   [ "$status" -eq 1 ] || die "$limit did not stop the run with exit 1 but with $status"
 done
-after=$(ops rclone lsf --dirs-only "axiom:$bucket/$prefix" | tr -d '/' | sort)
+after=$(bucket_sets)
 [ "$after" = "$set_name" ] || die "a run with a retention limit of zero changed the bucket"
 
 # One run at a time: with the lock held, a second one exits 75 and leaves the bucket alone.
@@ -258,8 +289,9 @@ docker rm --force "$project-lock" > /dev/null
 [ "$status" -eq 75 ] || die "a second backup with the lock held exited $status, not 75"
 
 # The key ring never shares a recipient with the database: the database's identity must not open it.
-compose run --rm --no-deps --volume "$(docker_path "$work/set"):/work" --entrypoint rclone backup \
-  copyto "axiom:$bucket/$prefix/$set_name/keys.tar.age" /work/keys.tar.age
+rm -f "$work/set/keys.tar.age"
+compose run --rm --no-deps --volume "$(docker_path "$work/set"):/work" --entrypoint axiom backup \
+  objectstore get --key "$prefix/$set_name/keys.tar.age" --file /work/keys.tar.age > /dev/null
 status=0
 compose run --rm --no-deps --volume "$(docker_path "$work/set"):/work" \
   --volume "$(docker_path "$work/identities"):/identities:ro" --entrypoint bash \
@@ -305,11 +337,14 @@ keys_hash > "$work/after/keys.txt"
 cut -d '|' -f 1 "$work/before/fingerprint.txt" > "$work/before/tables.txt"
 cut -d '|' -f 1 "$work/after/fingerprint.txt" > "$work/after/tables.txt"
 diff -u "$work/before/tables.txt" "$work/after/tables.txt" || die "the restored database has a different set of tables"
-# Three kinds of rows move on their own while the program runs, so they are left out of the row comparison: River's
-# queue tables (the library's, whose version the startup check verifies), billing.holders (one row per start of a core
-# process, so the restored database has the set's row and the new process' too) and billing.expiry_cursor (where the
-# expiry job's scan of accounts stopped, written every minute).
-skip() { grep -v -e '^river\.' -e '^billing\.holders|' -e '^billing\.expiry_cursor|'; }
+# Rows that move on their own while the program runs are left out of the row comparison: River's queue tables (the
+# library's, whose version the startup check verifies), billing.holders (one row per start of a core process, so the
+# restored database has the set's row and the new process' too), billing.expiry_cursor (where the expiry job's scan of
+# accounts stopped, written every minute), platform.alert_signals (the startup's own signals are added after the set),
+# platform.credential_share_departures (the new process garbage-collects the set's stale node row) and catalog.sync_state
+# (the catalog job's progress). billing.price_policies stays in the comparison: fingerprint.sql leaves out only its
+# confirmed_at timestamp, so its rev and multipliers are checked.
+skip() { grep -v -e '^river\.' -e '^billing\.holders|' -e '^billing\.expiry_cursor|' -e '^platform\.alert_signals|' -e '^platform\.credential_share_departures|' -e '^catalog\.sync_state|'; }
 skip < "$work/before/fingerprint.txt" > "$work/before/state.txt"
 skip < "$work/after/fingerprint.txt" > "$work/after/state.txt"
 diff -u "$work/before/state.txt" "$work/after/state.txt" || die "the restored database differs from the backup"
@@ -323,7 +358,7 @@ echo "   $tables tables and $rows rows, the roles, the key ring and the environm
 echo "== 9/10 retention: three more sets, so the first has to go"
 write /ops/backup.sh
 write /ops/backup.sh
-sets=$(ops rclone lsf --dirs-only "axiom:$bucket/$prefix" | tr -d '/' | sort)
+sets=$(bucket_sets)
 count=$(printf '%s\n' "$sets" | grep -c . || true)
 [ "$count" -eq 2 ] || die "retention left $count sets, not 2"
 if printf '%s\n' "$sets" | grep -q -x -e "$set_name"; then
@@ -340,11 +375,23 @@ sed -i "s/^AXIOM_BACKUP_S3_SECRET_ACCESS_KEY=.*/AXIOM_BACKUP_S3_SECRET_ACCESS_KE
 # and with it the sets, stays.
 compose up --detach --force-recreate --wait --wait-timeout 60 s3
 for _ in $(seq 1 60); do
-  ops rclone lsd axiom: > /dev/null 2>&1 && break
+  ops axiom objectstore check > /dev/null 2>&1 && break
   sleep 1
 done
-ops rclone lsd axiom: > /dev/null || die "the S3 server did not take the rotated credentials"
-write rclone move "axiom:$bucket/$prefix" "axiom:$bucket/axiom-moved"
+ops axiom objectstore check > /dev/null || die "the S3 server did not take the rotated credentials"
+write bash -c '
+set -euo pipefail
+from=$1 to=$2
+axiom objectstore list --prefix "$from/" --names | while IFS= read -r key; do
+  [ -n "$key" ] || continue
+  rel=${key#"$from/"}
+  file=$(mktemp)
+  axiom objectstore get --key "$key" --file "$file" > /dev/null
+  axiom objectstore put --key "$to/$rel" --file "$file" > /dev/null
+  axiom objectstore delete --key "$key" > /dev/null
+  rm -f "$file"
+done
+' rehearsal "$prefix" axiom-moved
 sed -i "s/^AXIOM_BACKUP_PREFIX=.*/AXIOM_BACKUP_PREFIX=axiom-moved/" "$env_file"
 compose rm --stop --force axiom postgres keys > /dev/null
 docker volume rm "${project}_postgres" "${project}_keys" > /dev/null

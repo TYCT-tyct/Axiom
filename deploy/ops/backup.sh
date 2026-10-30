@@ -11,6 +11,8 @@ PROGRAM=backup
 require_env AXIOM_BACKUP_BUCKET AXIOM_BACKUP_PREFIX AXIOM_BACKUP_DB_RECIPIENT AXIOM_BACKUP_SECRETS_RECIPIENT \
   AXIOM_BACKUP_KEEP_SETS AXIOM_BACKUP_KEEP_DAYS AXIOM_BACKUP_STATE_DIR AXIOM_KEYS_DIR AXIOM_DEPLOY_ENV_FILE \
   PGDATABASE PGPASSWORD
+require_objectstore_env
+require_prefix
 require_age_recipient AXIOM_BACKUP_DB_RECIPIENT
 require_age_recipient AXIOM_BACKUP_SECRETS_RECIPIENT
 require_readable "$AXIOM_DEPLOY_ENV_FILE" "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
@@ -41,6 +43,9 @@ flock -n 9 || {
   log "another run holds the lock, nothing to do"
   exit 75
 }
+
+# Refuse to spend a dump on a bucket the credentials cannot address; the same HEAD an operator runs by hand.
+axiom objectstore check >/dev/null || die "cannot check bucket $AXIOM_OBJECTSTORE_BUCKET"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -94,9 +99,15 @@ rm -f "$work/keys.tar"
   printf 'secrets_recipient=%s\n' "$AXIOM_BACKUP_SECRETS_RECIPIENT"
 } >"$work/manifest.txt"
 
-root="$(bucket_path)/$set_name"
+root="$(object_prefix "$set_name")"
+# A 5 GiB dump over a 2 MiB/s link needs about 43 minutes; the CLI default is 30 minutes for interactive use, so the
+# unattended job gets a larger, still finite limit. The value is validated by the command.
+transfer_timeout=${AXIOM_BACKUP_TRANSFER_TIMEOUT:-12h}
 for file in db.dump.age deploy.env.age keys.tar.age manifest.txt; do
-  rclone --quiet copyto "$work/$file" "$root/$file" || die "cannot upload $root/$file"
+  content_type=application/octet-stream
+  [ "$file" != manifest.txt ] || content_type=text/plain
+  axiom objectstore put --timeout "$transfer_timeout" --key "$root$file" --file "$work/$file" --content-type "$content_type" >/dev/null ||
+    die "cannot upload $root$file"
 done
 log "uploaded $root"
 
@@ -105,11 +116,21 @@ log "uploaded $root"
 # a failed run: it is left to the age limit rather than counted, so it neither pushes out a good set nor destroys the
 # half-written set of another host.
 prune() {
-  local listing all_sets complete_sets newest cutoff name
-  listing=$(rclone --quiet lsf --recursive "$(bucket_path)") || die "cannot list $(bucket_path)"
-  all_sets=$(printf '%s\n' "$listing" | cut -d/ -f1 | sort -u)
+  local listing all_sets complete_sets newest cutoff name key rel root_prefix
+  root_prefix=$(backup_root)
+  listing=$(axiom objectstore list --prefix "$root_prefix" --names) || die "cannot list $root_prefix"
+  all_sets="" complete_sets=""
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    rel=${key#"$root_prefix"}
+    name=${rel%%/*}
+    [ -n "$name" ] || continue
+    all_sets+="$name"$'\n'
+    case $rel in */manifest.txt) complete_sets+="$name"$'\n' ;; esac
+  done <<<"$listing"
+  all_sets=$(printf '%s' "$all_sets" | sort -u)
   [ -n "$all_sets" ] || return 0
-  complete_sets=$(printf '%s\n' "$listing" | grep '/manifest\.txt$' | cut -d/ -f1 | sort -u || true)
+  complete_sets=$(printf '%s' "$complete_sets" | sort -u)
   newest=$(printf '%s\n' "$complete_sets" | tail -n "$AXIOM_BACKUP_KEEP_SETS")
   cutoff=$(sql "SELECT to_char(now() at time zone 'utc' - interval '$AXIOM_BACKUP_KEEP_DAYS days', 'YYYYMMDDHH24MISS')")
   for name in $all_sets; do
@@ -124,7 +145,7 @@ prune() {
     else
       continue
     fi
-    rclone --quiet purge "$(bucket_path)/$name" || die "cannot drop $name"
+    axiom objectstore delete --prefix "$(object_prefix "$name")" >/dev/null || die "cannot drop $name"
   done
 }
 
