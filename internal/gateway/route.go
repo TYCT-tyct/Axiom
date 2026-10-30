@@ -254,6 +254,9 @@ func (d *RouteDeps) report(left map[catalog.ModelID]*leftOut) {
 // endpointOf is one supplier endpoint as routing holds it, or the reason it cannot be one. The rules are the assembly
 // ones of docs/domains/routing.md「快照从哪来」: nothing is guessed — a model without a spec, or without a sale price,
 // has no routing entry at all.
+// chatFormats are the formats that convert into each other: an endpoint speaking any of them serves all three.
+var chatFormats = routing.Of(protocol.Messages, protocol.Responses, protocol.Chat)
+
 func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
 	measured quality.Measures,
 ) (routing.Endpoint, string) {
@@ -284,8 +287,8 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	// serves all three; Native keeps the one it is called in, which is what a request only its own format can express
 	// needs. Legacy completions and the direct formats do not convert, so an endpoint serves one only where it lists it.
 	served := native
-	if chat := routing.Of(protocol.Messages, protocol.Responses, protocol.Chat); native&chat != 0 {
-		served |= chat
+	if native&chatFormats != 0 {
+		served |= chatFormats
 	}
 	_, blockedItem := blocked[catalog.ModelID(r.Model)]
 	// The model streams only if its spec says the vendor does and the supplier's own policy says it can pass a stream:
