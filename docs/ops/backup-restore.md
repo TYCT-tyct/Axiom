@@ -29,6 +29,22 @@
 它一个静态二进制就把 S3 兼容的桶（MinIO、R2、Backblaze、OSS）全收下，远端只用 `RCLONE_CONFIG_AXIOM_*` 环境变量配置，
 凭证不进命令行。
 
+### 与程序的对象存储分开
+
+程序有自己的可选对象存储（`AXIOM_OBJECTSTORE_*`，见 [platform/objectstore](../../internal/platform/objectstore/README.md)），
+它不是一个备份桶：两者用不同的桶和不同的凭证。备份 set 里有密钥环和 `deploy/.env`，拿到桶的凭证就能读走或删掉恢复一台
+机器所需的一切；程序的凭证只给归档，公开面上的进程被攻破也不应该碰到备份。`deploy/compose.yaml` 因此只把
+`AXIOM_OBJECTSTORE_*` 传给 `axiom`，备份的 `AXIOM_BACKUP_*` 与 `RCLONE_CONFIG_AXIOM_*` 只留在 `ops` 镜像里。
+
+现在的备份仍用运维镜像里的 rclone 上传（上一节）；程序里的归档写入还没有接入，对话正文的开关也仍然关着。要核对程序
+那一侧的桶和凭证：
+
+```bash
+docker compose -f deploy/compose.yaml --env-file deploy/.env exec axiom axiom objectstore check
+```
+
+它只做一次 HEAD，不读不写；输出桶名和 `checked`，凭证错或桶不存在时以非 0 退出。
+
 ### 保留
 
 `AXIOM_BACKUP_KEEP_SETS`（默认 30）与 `AXIOM_BACKUP_KEEP_DAYS`（默认 30）同时生效：超过份数的丢、超过天数的也丢，所以
