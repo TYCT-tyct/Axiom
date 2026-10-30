@@ -30,6 +30,8 @@
 | `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed / open；默认 invite，开放注册默认关闭）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变；`getSite` 也把它交给页面），`brand_color`（可空，`#rrggbb` 小写，空表示默认配色），`default_tier_id`（不为空）、`logo_hash`（当前 logo 的 SHA-256，可空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查；`(id, logo_hash) → site_logos(site_id, hash)` | 站点 | `name`、`status`、`key_prefix`、`registration`、`brand_color`、`default_tier_id`、`logo_hash` |
 | `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
 | `site_logos` | `site_id`、`hash`（SHA-256，32 字节）、`content_type`（image/svg+xml / image/png / image/webp）、`width`、`height`（像素，SVG 没有固有尺寸时为 0）、`bytes`（1 到 256 KiB）、`created_at` | 主键 `(site_id, hash)`；`0 ≤ width, height ≤ 1024`；同类字节只有一行，地址与内容一一对应 | 站点 | 无（只插入；旧行保留，`sites.logo_hash` 选择当前行） |
+| `legal_documents` | `site_id`、`kind`（terms / privacy）、`version`、`body`（纯文本 1 到 65536 字符）、`published_at` | 主键 `(site_id, kind, version)`；`version ≥ 1`；行只插入，正文不改不删 | 公开数据 | 无（只插入） |
+| `legal_acceptances` | `site_id`、`account_id`、`user_id`、`kind`、`version`、`accepted_at` | 主键 `id`；`UNIQUE (user_id, kind, version)`；`(site_id, account_id, user_id) → users`；`(site_id, kind, version) → legal_documents` | 账户 | 无（只插入） |
 | `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts`；开放注册的 `registration_human_check`、`registration_human_check_bits`、`registration_domain_burst`、`registration_domain_per_hour`、`registration_domain_allow`、`registration_domain_deny` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值。另有可空的 `max_keys_per_account`、`key_creations_per_hour`（站点的 key 限额，各 1 到 1 万，由 `/key-limits` 读改，不在站点设置的整体替换里） | 站点 | 全部参数列 |
 | `tiers` | `site_id`、`name`、`rate_requests` | `UNIQUE (site_id, id)` | 站点 | `name`、`rate_requests` |
 | `roles` | `name`、`permissions text[]`、`additional_permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`、`additional_permissions`（M1 只经迁移） |
@@ -203,6 +205,7 @@
 
 - **邀请码注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。邮箱规范化（去空白、转小写）后须是 3 到 254 个可打印 ASCII 字符、`@` 两侧各有字符，且必须通过 `net/mail.ParseAddress`、解析地址等于输入，否则 `ErrBadEmail`：表的约束（`lower()`、`LIKE`）在各地区设置下对非 ASCII 的判断不一定与 Go 一致，放进库再被拒会变成 500；国际化邮箱地址 M1 不支持。不用站点或平台范围包住注册。
 - **开放注册**：`Register` 先用 `domain_site` 和 `registration_site` 在库里确认站点、默认等级和模式；open 时校验邮箱、站点域名名单和 `proofWorked`，再检查本节点能发信、按邮箱域名扣一次共享计数，在站点范围按 `(site_id, email_hash)` upsert `registration_requests` 并入队 `accounts.registration`。待验证行不保存口令：初次提交即使带了口令也不使用，点击链接时才提交、校验并算 argon2id。提交一律返回 202；已注册地址也走同一条路径，直到点击链接才由 `UserEmailTaken` 发现并返回 `ErrEmailTaken`。后台 `process` 用 `TenantTx` 锁待验证行，按请求记录的 `domain` 找仍启用的 HTTPS 控制台域名，生成 256 位令牌、只存 SHA-256、写 `token_hash` 并把邮件入 outbox，然后同事务提交；重投任务看到 `token_hash` 已写就不重复发。`SetSiteRegistration` 在同一事务写站点模式和设置并记 `site_registration.update`；审计只存域名名单的数量与 SHA-256，不复制整份名单，保证 100 项的合法配置也不会超过审计条目 8 KiB 上限。`VerifyEmail` 先花一次该 IP 的认证预算，再用 `registration_tenant` 定位并做未过期、域名名单的廉价检查，校验新口令并在锁外算 argon2id，再在站点范围锁行，核对未过期、令牌哈希和当前域名名单（不重查注册模式；站点停用后链接失效），创建用户、账户、默认工作区、余额行、所有者成员关系，写 `email_verified_at`、删行、记 `security.registration`，全部同事务；不签发会话。令牌未知、过期、已用或别站统一 `ErrInvalidVerification`；邮箱已被占用返回 `ErrEmailTaken` 并删行。
+- **注册同意**：`PublishLegalDocument` 在站点行锁内取该类型的下一个版本并插入，正文是站长的纯文本，审计只记类型、版本、字符数和 SHA-256；同一行永不更新或删除。`CurrentLegalDocuments` 取每类的最大版本，公开读。邀请码 `Register` 和开放注册 `VerifyEmail` 都在建用户的事务里用 `currentVersionsAccepted` 重读当前版本：请求必须恰好给出每类当前版本，缺失、过期、重复或多出都是 `ErrConsentRequired`；通过后 `insertLegalAcceptances` 与用户、账户、工作区同事务写入，重复接受由唯一键 `DO NOTHING`。`ValidSession` 在每次认证的同一条查询里附加 `consent_pending`，`Authenticate` 把它放进 `Principal`；控制台守卫在授权之后、待验证会话除外，遇到未接受时只放行 `getSession`、`acceptLegalDocuments` 和 `signOut`，其余返回 `ErrConsentRequired`（403 `consent_required`）。`AcceptLegalDocuments` 在账户范围重做同一版本校验，接受行只插不改。
 - **认证因素的一条规则**：`users.factor_version` 是密码、TOTP、恢复码这一组的版本。签发会话、消费一次性因素、修改因素的事务，先锁用户行 `SELECT … FROM users WHERE id = $u FOR UPDATE`（邮件重置先锁请求行，再锁用户；所有涉及请求的路径同序），在锁内核对用户启用和版本；修改因素的事务在同一把锁内把版本加一。会话有效 = 未撤销、未过期、未超空闲、用户启用、版本等于用户当前版本，每个请求读会话时同一条查询一起核对；恢复码只在版本相等且未用过时可用。
 - **密码登录**：argon2id，参数写进 PHC 串（M1 取 OWASP 的基线：19 MiB、2 遍、1 线程；以后提高参数，旧哈希照样能验）；密码 12 到 256 个字符；邮箱不存在也算一次假哈希。先在事务外读出哈希和版本并计算，再开签发事务，锁内版本没变且用户启用才签发。
 - **两步验证**：开了 TOTP 的用户密码通过后先拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口）。验证事务：锁用户行 → 核对待验证会话未撤销、未过期、版本相等、尝试次数未满 → 验码（TOTP 做 `totp_last_step < $step` 的条件更新，恢复码做条件消费，影响行数都必须为 1）→ 码不对只把尝试次数加一并提交（每个待验证会话的次数是站点的 `challenge_code_attempts`） → 码对就条件撤销待验证会话，签发新令牌、新 CSRF 令牌的 `mfa` 会话。用户行锁让一个挑战只换出一个会话。
@@ -314,6 +317,7 @@
 | `ReadSiteBrand`、`SetSiteBrand` | 站点品牌色，空表示默认配色；只接受 `#rrggbb`（大写转小写），否则 `*SettingError{brand_color}`，站点不存在是 `ErrNotFound`。写入在站点行锁内读旧值、更新 sites.brand_color、审计 `site_brand.update`；写后由组装层刷新快照 |
 | `SiteSettings`、`SetSiteSettings` | 读、整体替换站点自己的会话时长和新 key 的每日上限；没设的列是空，用代码里的默认（`DefaultSiteSettings`）。越界是 `*SettingError`（名字是接口里的字段名），站点不存在是 `ErrNotFound`。替换在站点行锁里做，审计条目 `site_settings.update` 记改前和改后的值，改前就是被替换的值 |
 | `SiteLoginLimits`、`SetSiteLoginLimits` | 独立 `/login-limits` 读写现有五项阈值，空值选择 `DefaultLoginLimits`；站点锁内读旧值、替换、审计，与其他站点设置互不覆盖；写后刷新，其余节点 30 秒内重载 |
+| `LegalDocumentHistory`、`PublishLegalDocument` | 读站点全部法律文档版本（最新在前，最多 200 行）；发布在站点行锁内取该类型的下一个版本并插入，正文只插不改。`PublishLegalDocument` 的正文 1 到 65536 字符，审计 `site_legal_document.publish` 只记类型、版本、字符数和 SHA-256 |
 | `CurrentSiteLogo`、`SetSiteLogo` | 读当前 logo（没有时 nil）；`SetSiteLogo` 在站点行锁内解析并校验、插入 `site_logos`、更新 `sites.logo_hash`，`data` 为 nil 表示清除；`*SettingError` 是文件被拒，`ErrNotFound` 是站点不存在。审计 `site_logo.update` 只记 hash、类型、尺寸和字节数。写后由组装层刷新快照 |
 | `SiteLogoByHash` | 公开读：按站点和 hash 取一行，当前的和旧的都能取到；hash 已由 URL 校验为 32 字节，读在平台范围，不依赖快照的当前指针 |
 | `SetAccountSuspended`、`SetUserSignInDisabled` | 分开控制调用和登录，前者复用准入同一条查询里的账户状态，后者在用户锁内吊销全部会话，恢复均不修改因素 |
@@ -357,7 +361,12 @@ func (s *Service) GatesLookups() bool                    // Config.LookupSlot �
 func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest,
 	fn func(tx pg.Tx, a Admission) error) error              // fn 由 gateway 组装：定规则、路由、billing 的准入
 func (a Admission) Scope() pg.Scope                         // 同一调用后续事务（追加、结算、SettleOrphan）的账户范围，只能从 Admission 取得
-func (s *Service) Authenticate(ctx context.Context, r *http.Request) (Principal, error) // 站点和监听面取自 Host；改数据的请求另核对 Origin、JSON、CSRF
+func (s *Service) Authenticate(ctx context.Context, r *http.Request) (Principal, error) // 站点和监听面取自 Host；改数据的请求另核对 Origin、JSON、CSRF；Principal 带未接受的文档
+func (s *Service) CurrentLegalDocuments(ctx context.Context, site SiteID) ([]LegalDocument, error) // 公开：每类当前版本
+func (s *Service) PendingLegalDocuments(ctx context.Context, p Principal) ([]DocumentVersion, error) // 未接受的当前版本
+func (s *Service) AcceptLegalDocuments(ctx context.Context, p Principal, accepted []DocumentVersion) error // 校验失败是 ErrConsentRequired；重复接受不改首次时间
+func (s *Service) LegalDocumentHistory(ctx context.Context, tx pg.Tx, site SiteID) ([]LegalDocument, error) // 管理接口：平台范围的事务
+func (s *Service) PublishLegalDocument(ctx context.Context, tx pg.Tx, actor audit.Actor, site SiteID, kind, body, reason string) (LegalDocument, error) // 站点行锁内取下一个版本
 func (s *Service) Authorize(ctx context.Context, p Principal, perm Permission, t Target) (pg.Scope, error)
 func (s *Service) Register(ctx context.Context, r RegisterRequest) (UserID, error)
 func (s *Service) SignIn(ctx context.Context, r SignInRequest) (Issued, error)    // 有第二因素的得到待验证会话
@@ -381,7 +390,7 @@ func (s *Service) ConfirmTOTP(ctx context.Context, p Principal, c FactorChange) 
 func (s *Service) RegenerateRecoveryCodes(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error)
 func NewOperator(db *pg.DB, platform pg.Scope, opened OpenedFunc) *Operator // 命令行：InitSite、CreateUser、GrantPlatform、SetPassword、ResetMFA
 func (s *Service) AuthenticateAny(ctx context.Context, r *http.Request) (Principal, error) // 同 Authenticate，但接受待验证会话：getSession、signOut
-func (p Principal) Pending() bool; func (p Principal) Verified() bool
+func (p Principal) Pending() bool; func (p Principal) Verified() bool; func (p Principal) ConsentPending() bool
 func (p Principal) SessionID() SessionID // 认出主体的会话，管理接口的探测限次按会话计
 func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, error)  // 邮箱、邀请码、级别、CSRF、到期、按级别过滤的权限名
 func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, after KeyID, limit int) ([]Key, bool, error) // 新的在前，按 ID 翻页
@@ -419,6 +428,9 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 | 对外 ID 只在 HTTP 边界转换 | 库里索引小，Go 里类型安全 | 库里存 TypeID：索引更大；对外用原始 UUID：看不出是什么 |
 | 每种 ID 各写 `TypeID` 和 `Parse…ID`，不用泛型 | 每种只多一个类型和两个短函数，类型名和报错直接是 `SiteID`；前缀在本模块，一眼能对上 | `ID[K]` 加每种一个标记类型：省不了几行，读的人要多绕一层 |
 | 开放注册默认关闭，待验证请求与验证令牌分离，待验证行不保存口令，域名名单在请求和点击时都检查，人机校验自托管，IP 与域名双限流 | 默认关闭让升级不改变任何站点；待验证请求没有 account_id，站点范围即可写入和清理；口令只在邮箱所有权证明后设置，避免攻击者替受害者预置口令；令牌只存哈希且随行删除；请求时挡住已拒绝的域名，点击时再挡住待验证期间新增的封禁；自托管证明不保存挑战，也不把访客数据交给第三方；域名桶挡住单一域名的集中注册，IP 桶复用了登录的共享计数和故障降级 | 第三方 captcha：外部可用性和数据边界；有状态挑战表：多一次写入和过期清理；只在点击后校验域名：会把已拒绝的域名存进数据库 |
+| 法律文档按 (站点, 类型, 版本) 追加，正文只插不改，当前版本取该类型的最大版本 | 接受记录引用版本，必须永远指向当时给人看的文本；更正只能发新版本并重新同意。最大版本由主键前缀直接得到，不另设当前指针，也就没有指针与行不一致的第二种状态；发布在站点行锁内取下一个编号，两个并发发布不会撞号 | 原地修改正文：接受记录会指向没看过的文本；当前指针：多一处状态和并发更新，指针与最大版本可能不一致 |
+| 注册同意在创建用户的事务里校验并写入，已登录用户由 `ValidSession` 在同一查询里判断 | 开放注册点击链接前没有用户可挂接受记录，邀请码则在 `register` 就有；同事务保证不会留下没有接受记录的用户。会话查询里比较当前版本，新版本发布立即生效，不需要快照失效协议，也不增加一次往返 | 只在注册时检查：老用户和新版本都能绕过；只在页面检查：直接调 API 不受约束；缓存未接受状态：发布后要等失效 |
+| 没有文档的站点不要求同意，文档是公开数据、接受记录是账户数据 | 机制不替站长决定何时上线条款，升级不改变未配置站点；注册页未登录就要显示文本，按公开数据读，接受记录属于用户，按账户数据受行级安全约束 | 内置条款或要求所有站点先配置：代码会写真实法律文本，升级也会让所有站点立即不可用 |
 | Valkey 不可用时登录前的次数退回进程内、按节点数等分，不拒绝登录 | Valkey 只放丢了也不影响正确性的数据（[总体架构](../../docs/architecture.md#技术选型)），它出故障就挡住所有人登录，正是[安全的「账户安全」](../../docs/security.md#账户安全)要避免的「把用户锁在门外」；进程内的桶按份额限制后，N 个节点合计的回填速度不超过设定、突发不超过 max(突发, N)，代价只是每次故障或重启至多多一次突发，argon2id 名额仍按节点限制猜测速度 | 失败即拒（sub2api 认证路由在 Redis 故障时一律 429，`routes/auth.go:34`；new-api 回 500，`middleware/rate-limit.go:119`）：缓存故障变成登录故障；兜底不等分：故障期间限额放大 N 倍 |
 
 ## 用户提醒与站内公告

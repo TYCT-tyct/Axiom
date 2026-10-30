@@ -191,7 +191,23 @@ func (g *guard) admit(r *http.Request, rl *rules) (call, error) {
 			return call{}, err
 		}
 	}
+	if g.consentRefused(c, rl) {
+		return call{}, accounts.ErrConsentRequired
+	}
 	return c, nil
+}
+
+// consentRefused reports whether the console operation must wait for the current legal documents. The admin console is
+// not a site's, and a pending session must still reach verifyMfa.
+func (g *guard) consentRefused(c call, rl *rules) bool {
+	return !g.admin && c.principal.ConsentPending() && !c.principal.Pending() && !consentExempt[rl.operation]
+}
+
+// consentExempt are the console operations a session may use before it accepts the current legal documents: read the
+// session (which names them), accept them, and end the session. Every other operation is refused with
+// consent_required, which the page answers by showing the documents.
+var consentExempt = map[string]bool{
+	"GetSession": true, "AcceptLegalDocuments": true, "SignOut": true,
 }
 
 // authenticate is the session of the request, of the level the operation needs.

@@ -88,7 +88,7 @@ func (c consoleAPI) Register(ctx context.Context, request consoleapi.RegisterReq
 	}
 	out, err := c.accounts.Register(ctx, accounts.RegisterRequest{
 		Host: cl.r.Host, InviteCode: invite, Email: body.Email, Password: password,
-		HumanCheck: human, Language: language, ClientIP: cl.ip,
+		HumanCheck: human, Language: language, Consent: legalVersions(body.Consent), ClientIP: cl.ip,
 	})
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func (c consoleAPI) Register(ctx context.Context, request consoleapi.RegisterReq
 // VerifyEmail turns the link's token and the chosen password into the pending user.
 func (c consoleAPI) VerifyEmail(ctx context.Context, request consoleapi.VerifyEmailRequestObject) (consoleapi.VerifyEmailResponseObject, error) {
 	cl := callOf(ctx)
-	if _, err := c.accounts.VerifyEmail(ctx, cl.r.Host, request.Body.Token, request.Body.Password, cl.ip); err != nil {
+	if _, err := c.accounts.VerifyEmail(ctx, cl.r.Host, request.Body.Token, request.Body.Password, legalVersions(request.Body.Consent), cl.ip); err != nil {
 		return nil, err
 	}
 	return consoleapi.VerifyEmail204Response{}, nil
@@ -146,6 +146,11 @@ func (c consoleAPI) GetSession(ctx context.Context, _ consoleapi.GetSessionReque
 		Level: consoleapi.SessionLevel(info.Level), MfaEnabled: info.MFAEnabled, Permissions: info.Permissions,
 	}
 	session.User.Id, session.User.Email, session.User.InviteCode = info.User.TypeID(), info.Email, info.InviteCode
+	pending, err := c.accounts.PendingLegalDocuments(ctx, callOf(ctx).principal)
+	if err != nil {
+		return nil, err
+	}
+	session.Consent = &consoleapi.SessionConsent{Required: legalVersionList(pending)}
 	return consoleapi.GetSession200JSONResponse(session), nil
 }
 

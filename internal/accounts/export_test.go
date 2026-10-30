@@ -84,3 +84,8 @@ func ProofNonce(site SiteID, email string, bitsWanted int) string {
 		}
 	}
 }
+
+// PrincipalForTest is the signed-in principal a session of user would make, for operations whose test has no request.
+func PrincipalForTest(site SiteID, account AccountID, user UserID) Principal {
+	return Principal{site: site, account: account, user: user, level: levelPassword}
+}

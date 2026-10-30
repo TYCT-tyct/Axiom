@@ -1741,6 +1741,69 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/legal-documents:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: listLegalDocuments
+      tags: [Site]
+      summary: A site's legal document versions
+      description: >-
+        Every published version of the site's terms of service and privacy policy, newest first within a kind, with the
+        text. The current version of each kind is the first one of that kind; the earlier ones are what earlier
+        acceptances name. The list is at most 200 rows.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The versions
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LegalDocumentHistory"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: publishLegalDocument
+      tags: [Site]
+      summary: Publish a new version of a legal document
+      description: >-
+        Adds version 1 of the kind, or the next number after the current one. The version and its text never change:
+        a correction is another publication, which every user must accept before the console lets them continue. The
+        text is supplied by the site's operator, stored and returned as plain text; the request's reason and a digest,
+        not the text, go to the audit log.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LegalDocumentPublish"}
+      responses:
+        "201":
+          description: The published version
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LegalDocument"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/accounts/{account_id}/suspension:
     parameters:
       - name: account_id
@@ -3313,7 +3376,8 @@ components:
     Forbidden:
       description: >-
         The session may not do this: the permission is missing, the session has not passed two-step verification
-        (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`).
+        (`mfa_required`), the Origin, content type or CSRF token is wrong (`origin_rejected`), or the current legal
+        documents have not been accepted (`consent_required`).
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -3836,6 +3900,7 @@ components:
         - invalid_code
         - forbidden
         - mfa_required
+        - consent_required
         - origin_rejected
         - not_found
         - conflict
@@ -3941,6 +4006,28 @@ components:
             The permission names the session holds on its own scope (the user's account on the console, the platform
             on the admin), for showing or hiding what the user cannot do. The server decides again on every request.
           items: {type: string}
+        consent:
+          allOf: [{$ref: "#/components/schemas/SessionConsent"}]
+          description: >-
+            What the page must show before the session may do anything else. Optional so a page built before this field
+            reads an older node that does not send it.
+    SessionConsent:
+      type: object
+      description: >-
+        The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the
+        server refuses its requests with `consent_required` instead.
+      required: [required]
+      properties:
+        required:
+          type: array
+          description: Current documents this user has not accepted; empty when every one is accepted.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
+    LegalDocumentVersion:
+      type: object
+      required: [kind, version]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        version: {type: integer, minimum: 1}
     TotpSetup:
       type: object
       required: [secret, uri]
@@ -4126,6 +4213,33 @@ components:
           minLength: 1
           maxLength: 349528
           description: The file, at most 256 KiB before base64.
+    LegalDocumentKind:
+      type: string
+      enum: [terms, privacy]
+    LegalDocument:
+      type: object
+      description: One version of one of the site's legal documents; the text is plain text, never HTML.
+      required: [kind, version, body, published_at]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        version: {type: integer, minimum: 1}
+        body: {type: string}
+        published_at: {type: string, format: date-time}
+    LegalDocumentHistory:
+      type: object
+      required: [documents]
+      properties:
+        documents:
+          type: array
+          description: Newest first within a kind, at most 200 rows.
+          items: {$ref: "#/components/schemas/LegalDocument"}
+    LegalDocumentPublish:
+      type: object
+      required: [kind, body, reason]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        body: {type: string, minLength: 1, maxLength: 65536}
+        reason: {$ref: "#/components/schemas/Reason"}
     SiteSettingsView:
       type: object
       required: [settings, defaults]

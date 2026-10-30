@@ -27,6 +27,7 @@ export default {
     invalid_code: "That code is wrong, or that recovery code was already used.",
     forbidden: "Your account can’t do this.",
     mfa_required: "This needs two-step verification first.",
+    consent_required: "Read and accept the current terms of service and privacy policy first.",
     login_domain_locked:
       "The sign-in domain can’t change while passkeys or linked sign-in accounts exist. Remove them first.",
     login_domain_required: "Choose the console domain that third-party sign-in and passkeys use.",
