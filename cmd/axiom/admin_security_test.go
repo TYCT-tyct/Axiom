@@ -88,6 +88,64 @@ func TestAdminAccountUserAndGrantStates(t *testing.T) {
 	expectAdmin(t, "unprivileged mutation", f.change(victim, http.MethodPut, path, body, newKey()), 401, codeUnauthenticated)
 }
 
+func TestAdminAccountTierAndSignInView(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	email := "member@example.com"
+	f.addUser(email, "")
+	account := f.accountOf(email)
+	user := f.userOf(email)
+	rec := f.do(http.MethodGet, "/accounts/"+account, "", as(owner))
+	expectAdmin(t, "account", rec, 200, "")
+	var detail adminapi.AccountDetail
+	decode(t, rec, &detail)
+	if detail.SignInDisabled == nil || *detail.SignInDisabled {
+		t.Fatalf("sign-in view %+v", detail.SignInDisabled)
+	}
+	site := f.text("SELECT id::text FROM accounts.sites LIMIT 1")
+	f.run(`INSERT INTO accounts.tiers(id,site_id,name) VALUES ('00000000-0000-4000-8000-000000000042','` + site + `','Pro')`)
+	rec = f.do(http.MethodGet, "/tiers", "", as(owner))
+	expectAdmin(t, "tiers", rec, 200, "")
+	var tiers adminapi.TierList
+	decode(t, rec, &tiers)
+	pro := ""
+	for _, tier := range tiers.Data {
+		if tier.Name == "Pro" {
+			pro = tier.Id
+		}
+	}
+	if pro == "" {
+		t.Fatal("the new tier is not listed")
+	}
+	path := "/accounts/" + account + "/tier"
+	body := `{"tier_id":"` + pro + `","reason":"upgrade"}`
+	key := newKey()
+	expectAdmin(t, "tier change", f.change(owner, http.MethodPut, path, body, key), 204, "")
+	replay := f.change(owner, http.MethodPut, path, body, key)
+	expectAdmin(t, "tier replay", replay, 204, "")
+	if replay.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatal("tier replay is not marked")
+	}
+	expectAdmin(t, "same tier", f.change(owner, http.MethodPut, path, body, newKey()), 204, "")
+	rec = f.do(http.MethodGet, "/accounts/"+account, "", as(owner))
+	expectAdmin(t, "account after tier", rec, 200, "")
+	decode(t, rec, &detail)
+	if detail.Tier.Name != "Pro" {
+		t.Fatalf("tier is %+v", detail.Tier)
+	}
+	expectAdmin(t, "malformed tier", f.change(owner, http.MethodPut, path, `{"tier_id":"nope","reason":"r"}`, newKey()), 400, codeInvalidRequest)
+	expectAdmin(t, "unknown tier", f.change(owner, http.MethodPut, path, `{"tier_id":"tier_00000000000000000000000000","reason":"r"}`, newKey()), 422, codeUnprocessable)
+	expectAdmin(t, "disable sign-in", f.change(owner, http.MethodPut, "/users/"+user+"/sign-in", `{"disabled":true,"reason":"pause"}`, newKey()), 204, "")
+	rec = f.do(http.MethodGet, "/accounts/"+account, "", as(owner))
+	expectAdmin(t, "account after disable", rec, 200, "")
+	decode(t, rec, &detail)
+	if detail.SignInDisabled == nil || !*detail.SignInDisabled {
+		t.Fatal("sign-in view did not change")
+	}
+	f.expectAudit("account.tier_change", map[string]string{"reason": "upgrade", "detail->>'before'": "Default", "detail->>'after'": "Pro"})
+}
+
 func TestGrantRestoreCannotEscalate(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)

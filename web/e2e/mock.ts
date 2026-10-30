@@ -99,8 +99,10 @@ export const fail = <C extends number>(status: C, code: ErrorCode, extra?: Recor
 export const ok = <J>(json: J) => ({ status: 200 as const, json });
 
 // A page of a list: the cursor is the offset, tied to the filters it was made for, and a made-up one is a 400.
-export function paged<T>(items: T[], query: URLSearchParams) {
-  const filters = [...query].filter(([name]) => name !== "cursor" && name !== "limit").join("&");
+export function paged<T>(items: T[], query: URLSearchParams, ignore: readonly string[] = []) {
+  const filters = [...query]
+    .filter(([name]) => name !== "cursor" && name !== "limit" && !ignore.includes(name))
+    .join("&");
   const cursor = query.get("cursor");
   const [stamp, offset] = cursor ? cursor.split(":") : [filters, "0"];
   const start = Number(offset);
