@@ -74,6 +74,7 @@ services:
       # read by postgres/roles.sh
       AXIOM_APP_PASSWORD: ${AXIOM_APP_PASSWORD:?set it in deploy/.env}
       AXIOM_MIGRATOR_PASSWORD: ${AXIOM_MIGRATOR_PASSWORD:?set it in deploy/.env}
+      AXIOM_RETENTION_PASSWORD: ${AXIOM_RETENTION_PASSWORD-}
     volumes:
       - postgres:/var/lib/postgresql
       - ./postgres:/docker-entrypoint-initdb.d:ro
@@ -192,6 +193,8 @@ services:
     stop_grace_period: 170s # listeners 30s + calls 20s + health probes/cost flush 65s + queue/recorder 30s + cache 10s, with margin
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
+      # The call-log retention job's own login; without it retention (partition pre-creation and the archive) is off.
+      AXIOM_RETENTION_DATABASE_URL: ${AXIOM_RETENTION_DATABASE_URL-}
       AXIOM_NODE_ROLES: ${AXIOM_NODE_ROLES:-core}
       AXIOM_ADMIN_ADDR: ":8082" # the admin app; the program's own default is loopback inside the container, unreachable
       # This file publishes the admin port on the host's loopback only, so the socket bind is the boundary here. The

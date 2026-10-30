@@ -10,6 +10,7 @@ const (
 	startupTimeoutVar        = "AXIOM_STARTUP_TIMEOUT"
 	shutdownTimeoutVar       = "AXIOM_SHUTDOWN_TIMEOUT"
 	masterKeyFileVar         = "AXIOM_MASTER_KEY_FILE"
+	retentionDatabaseURLVar  = "AXIOM_RETENTION_DATABASE_URL"
 	keyHashFileVar           = "AXIOM_KEY_HASH_FILE"
 	identityKeyFileVar       = "AXIOM_IDENTITY_KEY_FILE"
 	hashConcurrencyVar       = "AXIOM_HASH_CONCURRENCY"

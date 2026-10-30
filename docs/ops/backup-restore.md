@@ -43,8 +43,11 @@
 `AXIOM_OBJECTSTORE_*` 传给 `axiom`；`ops` 服务的同名变量在容器内由 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_S3_*` 映射而来，
 宿主的备份凭证因此进不了程序容器。两边用的是同一个客户端，不是同一个桶。
 
-备份的 check、上传、列举、删除和恢复的下载都走 `axiom objectstore`；程序里的归档写入还没有接入（#324 的 E9-9），对话
-正文的开关也仍然关着。
+备份的 check、上传、列举、删除和恢复的下载都走 `axiom objectstore`。程序那一侧的写入方是调用记录的保留任务：整月
+离开热窗口的 `call_log` / `call_attempt` 分区经同一个客户端写到 `call-log/v1/<YYYY-MM>/`，清单确认后才从 PostgreSQL
+删除；没有配置程序桶时任务只预建分区，不删任何东西。程序的桶一旦配好，`AXIOM_RETENTION_DATABASE_URL` 也必须设置，
+否则启动拒绝，免得归档看着是开的、其实没有任务在跑。`just up` 会写这个变量；手工部署按 `.env.example` 补。这条链不是
+备份：归档对象不设到期，也不在备份 set 里，丢了它只丢调用明细，账本和汇总仍在。对话正文的开关也仍然关着。
 核对程序那一侧的桶和凭证（只做一次 HEAD，不读不写；桶不存在时可以用 `axiom objectstore create` 建；桶已存在时它只做
 HEAD，不再 PUT，避免 S3 重置已有桶的 ACL；命令会报错，确认桶归你再加 `--allow-existing`）。HEAD 只能证明这些凭证能访问桶，
 不能证明桶归你所有：桶策略必须只允许这组凭证，不要指向别人拥有的公开桶。
@@ -321,6 +324,9 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
   用到的子集（桶 HEAD/PUT、对象 PUT/GET/HEAD/DELETE、ListObjectsV2、multipart），换 S3 实现时要跑演练。备份的桶和凭证仍然与程序分开，
   见「与程序的对象存储分开」。按[负责人授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)
   「遇到问题自己解决问题和判断最优而不是问我。」落地，独立评审仍执行。
+- **程序桶只放调用记录的归档，不是备份的一部分**：归档对象和备份 set 用两个桶、两组凭证，备份不包含归档，恢复一台
+  机器也不依赖它。归档对象的丢失只丢调用明细，账本、汇总和审计各有自己的备份。热窗口是管理数据，由管理员在管理接口
+  设置并留审计；窗口为 0 或没有程序桶时全部留在 PostgreSQL，代价是库会随日志增长。
 - **age，不是 gpg**：只认公钥、没有信任网、两个收件人就是两行；gpg 的信任、过期和子密钥在"备份机器只放公钥"这件事上
   没有收益。
 - **角色不单独备份**：`axiom_app`、`axiom_migrator` 由 `deploy/postgres/roles.sh` 建，`axiom_owner`、`axiom_lookup` 由

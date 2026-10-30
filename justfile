@@ -187,6 +187,8 @@ compose := "docker compose -f deploy/compose.yaml"
 up: web-embed
     umask 077; [ -f deploy/.env ] || { volumes="$(docker volume ls --quiet --filter name=^${COMPOSE_PROJECT_NAME:-axiom}_postgres$)" || exit 1; [ -z "$volumes" ] || { echo "deploy/.env is missing but the project's database volume exists: restore the file, or delete the database with: just down -v"; exit 1; }; printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env; }
     grep -q '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env; chmod 600 deploy/.env
+    grep -q '^AXIOM_RETENTION_PASSWORD=' deploy/.env || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_RETENTION_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env
+    grep -q '^AXIOM_RETENTION_DATABASE_URL=' deploy/.env || { password="$(sed -n 's/^AXIOM_RETENTION_PASSWORD=//p' deploy/.env)"; [ -z "$password" ] || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_RETENTION_DATABASE_URL=postgres://axiom_retention:%s@postgres/axiom?sslmode=disable&pool_max_conns=2\n' "$password"; } >> deploy/.env; }; chmod 600 deploy/.env
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
     {{ compose }} up --detach --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 

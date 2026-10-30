@@ -1,8 +1,8 @@
 # 对象存储
 
 用 S3 接口读写对象。程序里只有这一份对象存储客户端；备份任务也用它，但用自己的桶和凭证（`deploy/ops`，见
-[备份与恢复](../../../docs/ops/backup-restore.md#与程序的对象存储分开)）。归档功能落地时调用这里；对话正文不经过它：
-保存正文的平台开关仍然是关的（[记录与告警](../../../docs/domains/observability.md#保留与开关)）。
+[备份与恢复](../../../docs/ops/backup-restore.md#与程序的对象存储分开)）。observability 的调用记录保留任务用它写每月的归档；
+对话正文不经过它：保存正文的平台开关仍然是关的（[记录与告警](../../../docs/domains/observability.md#存储)）。
 
 架构上的选型是「只依赖 S3 接口」，云厂商的对象存储和自托管的 SeaweedFS 都能接（[总体架构的技术选型](../../../docs/architecture.md#技术选型)）。本包不引入
 AWS SDK：用到的只是签名、五个对象操作和一次列举，自己实现 SigV4 少一批依赖；签名与 S3 的互操作由真实的 SeaweedFS
@@ -47,9 +47,10 @@ multipart，`-1` 仍是单次 PUT（最多 5 GiB）。
 六个变量全不设是「关闭」：`ReadConfig` 返回零值，`Open` 返回 `ErrNotConfigured`。设了任何一个就要设全，否则启动
 失败并一次列出缺的变量名；错误只报变量名和要求的形状，不报值，密钥赋错变量时不会进日志。
 
-`serve` 启动时读取并校验这组变量，所以部署设了它就能正常启动；程序内还没有功能写这个桶，`axiom objectstore` 是
-运维调用方。备份任务用同一份客户端、同一组变量名，但桶和凭证由 `deploy/compose.yaml` 从 `AXIOM_BACKUP_S3_*`
-映射进 `ops` 容器，程序容器拿不到备份的凭证。
+`serve` 启动时读取并校验这组变量：设了但不成组会启动失败，全不设则对象存储关闭，调用记录的保留任务只预建分区、
+不删除任何东西（[observability 的分区](../../../internal/observability/README.md#分区)）。程序里的写入方是调用记录的
+归档；`axiom objectstore` 是运维调用方。备份任务用同一份客户端、同一组变量名，但桶和凭证由 `deploy/compose.yaml`
+从 `AXIOM_BACKUP_S3_*` 映射进 `ops` 容器，程序容器拿不到备份的凭证。
 
 ## 期限与重试
 

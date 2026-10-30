@@ -45,6 +45,8 @@ type nodeSettings struct {
 	trustedProxies                    []netip.Prefix
 	valkey                            kv.Config
 	smtp                              mail.Config
+	objectstore                       objectstore.Config
+	retentionURL                      string
 	exchangeSource                    string
 }
 
@@ -88,6 +90,9 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	s.healthMode = quality.Mode(env.String("AXIOM_HEALTH_MODE", ""))
 	s.exchangeSource = env.String("AXIOM_EXCHANGE_SOURCE", "manual")
 	s.databaseURL = env.Required(pg.DatabaseURLVar)
+	// The retention job connects as its own login role; without the URL it does not run, and a configured bucket without
+	// it is a startup error in serveWith. It is optional so a deployment that archives nothing needs no third role.
+	s.retentionURL = env.String(retentionDatabaseURLVar, "")
 	s.completionReserve = env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)
 	s.masterKeyFile = env.Required(masterKeyFileVar)
 	s.keyHashFile = env.Required(keyHashFileVar)
@@ -117,11 +122,11 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
 	}
 	smtp, mailErr := mail.ReadConfig(env)
-	// The bucket is optional and no program feature writes through it yet (internal/platform/objectstore/README.md).
-	// Read it here so a node whose deployment sets it starts, and so half a configuration is a startup error rather than a
-	// surprise for the first archive job; `axiom objectstore` and the backup job use the same client, the latter with its
-	// own bucket.
-	_, storeErr := objectstore.ReadConfig(env)
+	// The bucket is optional: with none, the call log's retention keeps every partition. Read it here so a node whose
+	// deployment sets it starts, and so half a configuration is a startup error rather than a surprise for the first
+	// archive run; `axiom objectstore` and the backup job use the same client, the latter with its own bucket.
+	var storeErr error
+	s.objectstore, storeErr = objectstore.ReadConfig(env)
 	var exchangeErr error
 	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
 		exchangeErr = errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb")

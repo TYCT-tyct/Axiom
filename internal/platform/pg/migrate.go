@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"regexp"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,12 @@ var embedded embed.FS
 type Module struct {
 	Name       string
 	Migrations fs.FS // goose's SQL files, numbered with zero padding so that their names sort as their versions
+	// JobRole, when set, is a NOLOGIN role the bootstrap creates for the module's background jobs: it owns what those
+	// jobs must alter (a partition, for one) and everything else about it is a migration's. A job connects as its own
+	// login role, which the migration grants the job; the application may not set it, so SQL run as the application
+	// cannot own or drop tenant data. axiom_owner inherits it, so migrations keep altering the same objects. The name
+	// is Axiom's own.
+	JobRole string
 }
 
 // moduleOrder is the order migrations run in: the modules as the dependency table of docs/architecture.md「模块之间的依赖」
@@ -48,7 +55,7 @@ func ordered(modules []Module) ([]Module, error) {
 	if err != nil {
 		panic(err) // the directory is embedded, so this cannot happen
 	}
-	all := append([]Module{{"platform", files}}, modules...)
+	all := append([]Module{{Name: "platform", Migrations: files}}, modules...)
 	for i, m := range all {
 		if !slices.Contains(moduleOrder, m.Name) {
 			return nil, fmt.Errorf("migrations of %q: not a module in docs/architecture.md", m.Name)
@@ -389,21 +396,66 @@ func prepare(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 	}
 	defer closeAdmin(ctx, conn)
 	if err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, bootstrap); err != nil {
-			return err
-		}
-		for _, name := range append([]string{queueSchema}, moduleNames(modules)...) {
-			schema := pgx.Identifier{name}.Sanitize()
-			if _, err := tx.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schema+" AUTHORIZATION axiom_owner"); err != nil {
-				return err
-			}
-		}
-		return nil
+		return prepareRolesAndSchemas(ctx, tx, modules)
 	}); err != nil {
 		return fmt.Errorf("prepare roles and schemas: %w", err)
 	}
 	if err := migrateQueue(ctx, conn); err != nil {
 		return fmt.Errorf("migrate the queue: %w", err)
+	}
+	return nil
+}
+
+// prepareRolesAndSchemas runs the bootstrap, the modules' job roles and the schemas in one transaction, in that order:
+// bootstrap makes axiom_owner, the job roles are granted to it, and the schemas are authorized to it.
+func prepareRolesAndSchemas(ctx context.Context, tx pgx.Tx, modules []Module) error {
+	if _, err := tx.Exec(ctx, bootstrap); err != nil {
+		return err
+	}
+	for _, m := range modules {
+		if m.JobRole == "" {
+			continue
+		}
+		if err := prepareJobRole(ctx, tx, m.JobRole); err != nil {
+			return err
+		}
+	}
+	for _, name := range append([]string{queueSchema}, moduleNames(modules)...) {
+		schema := pgx.Identifier{name}.Sanitize()
+		if _, err := tx.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schema+" AUTHORIZATION axiom_owner"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// jobRoleName is a job role's name as prepareJobRole accepts it: names are code, never a caller's input, and the
+// check is what keeps one from carrying SQL into the statements below.
+var jobRoleName = regexp.MustCompile(`^axiom_[a-z][a-z0-9_]*$`)
+
+// prepareJobRole creates a module's job role if it is missing, refuses an existing one that could read past row-level
+// security or log in, and grants it to the owner (inherited with admin, so migrations still alter the objects the role
+// owns and can grant it to the job's login role). It runs in the bootstrap transaction with the administrator's
+// CREATEROLE; the module's migration gives it the privileges its work needs and grants it to that login role, which
+// the deployment creates. The application is deliberately not a member: a role it could set would let SQL run as it
+// own and drop the tables the role owns.
+func prepareJobRole(ctx context.Context, tx pgx.Tx, role string) error {
+	if !jobRoleName.MatchString(role) || len(role) > 63 {
+		return fmt.Errorf("job role %q: want axiom_ followed by lowercase letters, digits and underscores", role)
+	}
+	if _, err := tx.Exec(ctx, `DO $$
+BEGIN
+	IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '`+role+`') THEN
+		CREATE ROLE `+role+` NOLOGIN;
+	ELSIF EXISTS (SELECT FROM pg_roles WHERE rolname = '`+role+`' AND (rolsuper OR rolbypassrls OR rolcanlogin)) THEN
+		RAISE EXCEPTION 'job role `+role+` must not be a superuser, bypass row-level security or log in';
+	END IF;
+END
+$$`); err != nil {
+		return fmt.Errorf("prepare job role %s: %w", role, err)
+	}
+	if _, err := tx.Exec(ctx, `GRANT `+role+` TO axiom_owner WITH ADMIN TRUE, INHERIT TRUE, SET TRUE`); err != nil {
+		return fmt.Errorf("grant job role %s to axiom_owner: %w", role, err)
 	}
 	return nil
 }
