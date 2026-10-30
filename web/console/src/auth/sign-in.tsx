@@ -1,12 +1,12 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { SignInPage, useErrors, useStartSession } from "@axiom/app";
+import { SignInPage, useErrors } from "@axiom/app";
 import { Button, FormError, Icon } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
-import { signInWithPasskey } from "../webauthn";
+import { usePasskeySignIn } from "./passkey-sign-in";
 
 export default function SignIn() {
   const { t } = useTranslation();
@@ -56,7 +56,7 @@ function Methods() {
   const site = useQuery(siteQuery);
   const search = useSearch({ strict: false });
   const oauth = useOAuthStart();
-  const passkey = usePasskeySignIn();
+  const passkey = usePasskeySignIn("signIn");
   const providers = site.data?.oauth_providers ?? [];
   const passkeys = site.data?.passkeys ?? false;
   if (!passkeys && providers.length === 0 && search.oauth !== "failed") {
@@ -137,30 +137,4 @@ function useOAuthStart() {
     }
   }
   return { start, pending, failure };
-}
-
-function usePasskeySignIn() {
-  const start = useStartSession();
-  const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<unknown>(null);
-  async function run() {
-    setPending(true);
-    setFailure(null);
-    try {
-      const begin = await unwrap(consoleApi.POST("/api/console/v1/auth/passkeys/begin", { body: {} }));
-      const credential = await signInWithPasskey(begin.public_key);
-      const grant = await unwrap(
-        consoleApi.POST("/api/console/v1/auth/passkeys/finish", {
-          params: { query: { flow_id: begin.flow_id } },
-          body: credential,
-        }),
-      );
-      await start(grant.csrf_token);
-    } catch (error) {
-      setFailure(error);
-    } finally {
-      setPending(false);
-    }
-  }
-  return { start: run, pending, failure };
 }

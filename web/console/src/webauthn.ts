@@ -55,17 +55,31 @@ function requestOptions(options: unknown): PublicKeyCredentialRequestOptions {
   return publicKey as unknown as PublicKeyCredentialRequestOptions;
 }
 
-function created(credential: Credential | null): Record<string, unknown> {
+// publicKeyCredential narrows what the browser returned, typed as the base Credential by lib.dom.
+function publicKeyCredential(credential: Credential | null): PublicKeyCredential {
   if (!(credential instanceof PublicKeyCredential)) {
     throw new Error("not a public-key credential");
   }
-  const response = credential.response as AuthenticatorAttestationResponse;
+  return credential;
+}
+
+// credentialFields is what both ceremonies report about the credential itself. The response is what differs: an
+// attestation object for a new credential, an assertion signature for a sign-in.
+function credentialFields(credential: PublicKeyCredential) {
   return {
     id: credential.id,
     rawId: text(credential.rawId),
     type: credential.type,
     authenticatorAttachment: credential.authenticatorAttachment,
     clientExtensionResults: credential.getClientExtensionResults(),
+  };
+}
+
+function created(credential: Credential | null): Record<string, unknown> {
+  const key = publicKeyCredential(credential);
+  const response = key.response as AuthenticatorAttestationResponse;
+  return {
+    ...credentialFields(key),
     response: {
       clientDataJSON: text(response.clientDataJSON),
       attestationObject: text(response.attestationObject),
@@ -75,16 +89,10 @@ function created(credential: Credential | null): Record<string, unknown> {
 }
 
 function asserted(credential: Credential | null): Record<string, unknown> {
-  if (!(credential instanceof PublicKeyCredential)) {
-    throw new Error("not a public-key credential");
-  }
-  const response = credential.response as AuthenticatorAssertionResponse;
+  const key = publicKeyCredential(credential);
+  const response = key.response as AuthenticatorAssertionResponse;
   return {
-    id: credential.id,
-    rawId: text(credential.rawId),
-    type: credential.type,
-    authenticatorAttachment: credential.authenticatorAttachment,
-    clientExtensionResults: credential.getClientExtensionResults(),
+    ...credentialFields(key),
     response: {
       clientDataJSON: text(response.clientDataJSON),
       authenticatorData: text(response.authenticatorData),
