@@ -35,6 +35,11 @@ func encodeUsage(segments []Segment) ([]byte, error) {
 		for it := range catalog.NumItems {
 			counts[it] = s.Usage.Count(it)
 		}
+		// A trailing zero count is left out, so a node built before an item was added can still read a charge that uses
+		// none of the newer items; a count the list leaves out is zero.
+		for len(counts) > 0 && counts[len(counts)-1] == 0 {
+			counts = counts[:len(counts)-1]
+		}
 		stored[i] = storedSegment{Counts: counts, Tier: s.Usage.ServiceTier(), Reported: s.Reported, Unknown: s.Usage.Unknown()}
 		if n, ok := s.Usage.PhysicalInput(); ok {
 			stored[i].PhysicalInput = &n

@@ -33,7 +33,7 @@
   - 响应带 `Cache-Control: no-store`：列表是这把 key 的，不能进共享缓存；
   - Claude Code 启动时用它发现模型，超时只有 3 秒，任何跳转都算失败，所以必须在原地址直接、快速地返回（Claude Code《Gateway compatibility guide》，2026-10）。
 - **`GET /api/v1/models` 与 `GET /api/v1/models/{model}`**：
-  - 模型对象是 OpenRouter 的形状：`id`、`canonical_slug` 都是这个模型的公开标准 ID（`author/slug`，即目录名去掉内部版本后缀，`acme/claude@20250929` 按 `acme/claude` 列出），`name` 是去掉作者的部分，`created` 恒为 0；`pricing` 的每个成员都是字符串，取准入账户及当前等级发布售价的标准服务等级、第一档（美元 / token，`web_search` 每次），售价表没有的单位（`image`、`image_output` 按图，`request` 按次，`discount`、`overrides`）省略而不是写 0，`image_token`、`internal_reasoning` 只给能收图片、会推理的模型（价目表对这两项会用所在侧的原价兜底，纯文本模型不该出现）；`context_length` 与 `top_provider.*` 取规格，`architecture` 的模态取规格声明的能力，`supported_parameters`、`reasoning` 按能力与方言给出（未知 mandatory 不声称）；`default_parameters`、`per_request_limits`、`supported_voices` 是 null，`description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks` 不输出（目录没有这些数据）。`id` 只用能解析回这个模型的公开名字：标准 ID 解析不到它（目录不该出现）就整个不列，因为那个名字既取不到详情也调不通。只列 key 能调用、路由快照里有公共端点、有售价的模型；私有端点不进入这份共享投影。
+  - 模型对象是 OpenRouter 的形状：`id`、`canonical_slug` 都是这个模型的公开标准 ID（`author/slug`，即目录名去掉内部版本后缀，`acme/claude@20250929` 按 `acme/claude` 列出），`name` 是去掉作者的部分，`created` 恒为 0；`pricing` 的每个成员都是字符串，取准入账户及当前等级发布售价的标准服务等级、第一档（美元 / token，`web_search` 每次，`image`、`image_output` 每张），售价表没有的单位（价目表没有按张价时的 `image`、`image_output`，`request` 按次，`discount`、`overrides`）省略而不是写 0，`image_token`、`internal_reasoning` 只给能收图片、会推理的模型（价目表对这两项会用所在侧的原价兜底，纯文本模型不该出现）；`context_length` 与 `top_provider.*` 取规格，`architecture` 的模态取规格声明的能力，`supported_parameters`、`reasoning` 按能力与方言给出（未知 mandatory 不声称）；`default_parameters`、`per_request_limits`、`supported_voices` 是 null，`description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks` 不输出（目录没有这些数据）。`id` 只用能解析回这个模型的公开名字：标准 ID 解析不到它（目录不该出现）就整个不列，因为那个名字既取不到详情也调不通。只列 key 能调用、路由快照里有公共端点、有售价的模型；私有端点不进入这份共享投影。
   - 列表读 `offset`、`limit`、`q`、`context`、`min_price`/`max_price`、`min_output_price`/`max_output_price`、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`，`sort` 支持 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`；OpenRouter 文档里有而 Axiom 没有数据的参数按名字回 400 并说明缺什么，文档之外的参数（缓存参数、`utm_*`）忽略。查询串本身解不开（`%ZZ`、用 `;` 分隔）也回 400：标准库会静默丢掉解不开的那一项，过滤条件就这样变成「整个列表」。`links.next` 是同一个查询把 `offset` 往后挪一格，只在这页之后还有模型时给出。
   - 单模型按调用路径的方式解析别名（`claude-live` 与 `anthropic/claude-live` 是同一个模型），返回 `{data: 模型对象}`，`id` 是标准 ID 而不是请求里的名字：OpenRouter 的形状里一个模型只有一个 `id`。
   - 列表与路由快照是同一次构建的产物，一起发布；每个受众的模型与端点条目预先编码，价格过滤、排序、计数及分页使用同一受众选择器，没有可服务版本的受众不列出该模型：同一次读目录、同一次读售价，所以列表上的价格就是快照里那个售价版本的收费价格，两者不会各读各的（`RouteDeps.Build` 同时产出 `*routing.Snapshot` 与列表，`Publish` 在同一发布锁内一起换；取列表和调用规划持该锁的读锁，锁内只读内存，不包住鉴权事务、编码或网络写入；构建失败或迟到则两者都不换）。请求路径上没有读价：列表和它服务的模型集合都在构建时定下来，一次响应里的 `total_count`、这一页和它之后的链接因此都属于同一次构建，写响应时路由怎么变都不会让它们互相矛盾。
@@ -63,7 +63,7 @@
 | 字段或行为 | 官方基线（核对日期均为 2026-10-29） | Axiom 数据与偏离 |
 |---|---|---|
 | 模型 `id`、`canonical_slug`、`name`、`created`、`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date`、`alias_target`、`benchmarks`、`links.details` | [模型列表](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 标准公开 ID、名字尾段、创建时间 0；没有描述、日期、别名目标和评分数据则省略；详情链接指向本 API 的 endpoints 路径 |
-| `pricing.prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`internal_reasoning`、`image_token`、`audio`、`audio_output`、`web_search`；缺失的 `request`、`image`、`image_output`、`input_audio_cache`、`discount`、`overrides` | [模型列表 PublicPricing](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 该账户及当前等级的主站已发布售价，标准服务等级、第一档，精确十进制字符串；token 项为美元/token，web_search 为美元/次。没有对应单位的成员省略；不是免费，也不拼参考价。图片、推理价只给声明了相应能力的模型 |
+| `pricing.prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`internal_reasoning`、`image_token`、`audio`、`audio_output`、`web_search`，以及价目表有按张价时的 `image`、`image_output`；缺失的 `request`、`input_audio_cache`、`discount`、`overrides` | [模型列表 PublicPricing](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 该账户及当前等级的主站已发布售价，标准服务等级、第一档，精确十进制字符串；token 项为美元/token，web_search 为美元/次，image、image_output 为美元/张。没有对应单位的成员省略；不是免费，也不拼参考价。图片、推理价只给声明了相应能力的模型（image_output 不需要图片能力，只有按张价才出现） |
 | `context_length`、`top_provider.context_length`、`top_provider.max_completion_tokens`、`top_provider.is_moderated`、`per_request_limits` | [模型列表 TopProviderInfo](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 目录上下文和输出上限；本站网关不审查内容，is_moderated 为 false，不承诺上游的审查政策；per_request_limits 为 null |
 | `architecture.modality`、`input_modalities`、`output_modalities`、`tokenizer`、`instruct_type` | [模型列表 ModelArchitecture](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 能力位投影 text/image/file 输入、text 输出；目录没有分词器和指令模板，后两项省略 |
 | `supported_parameters`、`default_parameters`、`supported_voices`、`reasoning.mandatory`、`supported_efforts`、`default_effort`、`default_enabled`、`supports_max_tokens` | [模型列表 ModelReasoning / DefaultParameters](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 支持参数按规格能力及方言推导，未声明的不声称；默认采样值和声音为 null。手动思考预算时给 supports_max_tokens:true；目录没有 mandatory、默认推理和 effort 列表，省略。mandatory 在官方 reasoning 对象中必填，这是有意的契约偏离，不能把未知写成 false |
@@ -215,7 +215,9 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
   | 非空 `quantizations` | 400；目录规格和供应商同步的模型记录都没有量化等级，不能把未知当作 fp16 或已验证的 unknown。空列表不增加限制 |
   | `preferred_min_throughput` / `preferred_max_latency` 的百分位对象 | 400；quality 只保存端点的 EWMA 延迟和吞吐（至少 5 个样本、30 分钟内），没有五分钟窗口的 p50/p75/p90/p99 分位数或窗口样本。数字形式沿用实测 EWMA 软偏好，不声称是 p50 |
   | `sort` 对象里其他成员（包括 percentile） | 400；仅 `by` 和 `partition` 有语义；`percentile` 还缺分位数数据，不静默忽略 |
-  | `max_price.request` / `max_price.image` | 400；价目表只有按 token 和按次工具的计费项，没有按生成请求或图片张数的项；OpenRouter 的 `pricing.request`/`pricing.image` 也没有读入，图片 token 价不能当成按张价。其他未知计价项同样 400 |
+  | `max_price.request` | 400；价目表没有按生成请求计价的项，OpenRouter 的 `pricing.request` 也没有读入。其他未知计价项同样 400 |
+  | `max_price.image` | 400；目录现在有按张的输入价（`image_in_piece`，#320），但没有端点报告按张的输入用量，`max_price.image` 该比按张价还是图片 token 价取决于将来的图片端点，语义定下来再接 |
+
   | `max_price.prompt` / `completion` | 本站记账货币每百万 token，比较实际受众售价的适用服务等级与上下文档位最高价；只接收可精确表示的十进制数，不四舍五入。非美元站点不声称美元上限 |
 
 - **我们自己的扩展**：放在单独的 `axiom` 对象里，也可以用 `x-axiom-*` 请求头传，方便无法修改请求体的工具。
@@ -405,7 +407,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 ## 待定问题
 
 - 各字段的最终名称和结构写入接口契约时确定
-- 官方供应商名称的可信映射、逐端点的采样/提供商参数清单、量化事实、性能百分位、按请求和按张计价仍缺数据。`require_parameters` 目前用模型规格推出的公开参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定；现状与明确拒绝项只在「路由参数」定义。
+- 官方供应商名称的可信映射、逐端点的采样/提供商参数清单、量化事实、性能百分位、按请求计价仍缺数据；按张的输入价已有目录项，端点和 `max_price.image` 的语义未定。`require_parameters` 目前用模型规格推出的公开参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定；现状与明确拒绝项只在「路由参数」定义。
 - 402 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
 - `~作者/系列-latest` 别名的后续实现：目录需要独立的模型族与可切换别名映射，切换追加审计；发现和调用应使用同一次发布的目标、规格与价格，响应 `model` 按 OpenRouter 返回具体模型。现有名字仍只追加，不把内部名字开放调用。需要补齐模型族数据与版本选择依据后再实现，不按前缀或日期猜最新；价格与能力变化遵循[目录的切换与迁移](catalog.md#模型的生命周期)。当前请求仍为上文说明原因的 400。

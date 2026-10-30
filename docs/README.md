@@ -64,4 +64,4 @@
 | 部署、发布、监控、故障处理 | `docs/ops/` |
 | 给客户看的使用文档 | `docs/guides/` |
 
-文档写什么、怎么维护，见 [AGENTS.md 的「文档」](../AGENTS.md#文档)；细则在 project-workflow skill 的文档写法（`references/docs.md`）。
+文档写什么、怎么维护，见 [AGENTS.md 的「文档」](../AGENTS.md#记录)；细则在 project-workflow skill 的文档写法（`references/docs.md`）。
