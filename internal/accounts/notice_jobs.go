@@ -8,6 +8,7 @@ import (
 	"html"
 	"math/big"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -54,12 +55,17 @@ type userNotice struct {
 	preferences                 NotificationPreferences
 }
 
+// noticeKinds are the notice kinds this code can render. A dispatcher claims only these: during a rolling release a
+// newer node may write a kind this node does not know, and marking it dispatched without sending it would lose the
+// notice for good. It waits for a node that understands it.
+var noticeKinds = []string{"low_balance", "top_up", "factor_changed", "spend_anomaly"}
+
 // DispatchUserNotices freezes destinations for at most 100 notices and returns how many were dispatched.
 func DispatchUserNotices(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mailer) (int, error) {
 	p := notificationDefaults()
 	rows, err := tx.Query(ctx, `SELECT n.id,n.site_id,n.account_id,n.user_id,n.kind,n.value::text,n.at,n.email_done,u.email,s.name,s.currency,coalesce(p.low_balance,$1),coalesce(p.top_up,$2),coalesce(p.factor_changed,$3),coalesce(p.spend_anomaly,$4),coalesce(p.webhook_url,''),coalesce(p.language,$5)
  FROM accounts.user_notices n JOIN accounts.users u ON u.id=n.user_id JOIN accounts.sites s ON s.id=n.site_id LEFT JOIN accounts.notification_preferences p ON p.user_id=n.user_id
- WHERE NOT n.dispatched ORDER BY n.id FOR UPDATE OF n SKIP LOCKED LIMIT 100`, p.LowBalance, p.TopUp, p.FactorChanged, p.SpendAnomaly, p.Language)
+ WHERE NOT n.dispatched AND n.kind = ANY($6) ORDER BY n.id FOR UPDATE OF n SKIP LOCKED LIMIT 100`, p.LowBalance, p.TopUp, p.FactorChanged, p.SpendAnomaly, p.Language, noticeKinds)
 	if err != nil {
 		return 0, err
 	}
@@ -80,6 +86,9 @@ func DispatchUserNotices(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mai
 	}
 	dispatched := 0
 	for _, n := range notices {
+		if !slices.Contains(noticeKinds, n.Kind) {
+			continue // the query filters these; never mark a kind this node cannot render
+		}
 		done, err := dispatchUserNotice(ctx, tx, q, m, n)
 		if err != nil {
 			return 0, err
@@ -93,7 +102,7 @@ func DispatchUserNotices(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mai
 
 func dispatchUserNotice(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mailer, n userNotice) (bool, error) {
 	p := n.preferences
-	enabled := map[string]bool{"low_balance": p.LowBalance, "top_up": p.TopUp, "factor_changed": p.FactorChanged, "spend_anomaly": p.SpendAnomaly}[n.Kind]
+	enabled := noticeEnabled(n.Kind, p)
 	needsEmail := enabled && !n.emailDone
 	if needsEmail && !m.Configured() {
 		return false, nil
@@ -114,6 +123,23 @@ func dispatchUserNotice(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mail
 	}
 	_, err := tx.Exec(ctx, `UPDATE accounts.user_notices SET dispatched=true,webhook_url=$2,webhook_state=$3,email_failed=$4 WHERE id=$1`, n.ID, url, state, emailFailed)
 	return err == nil, err
+}
+
+// noticeEnabled answers whether the account wants this kind. A kind this code does not know is off: it is never claimed
+// (see noticeKinds), and if it ever reached here it must not be marked sent.
+func noticeEnabled(kind string, p NotificationPreferences) bool {
+	switch kind {
+	case "low_balance":
+		return p.LowBalance
+	case "top_up":
+		return p.TopUp
+	case "factor_changed":
+		return p.FactorChanged
+	case "spend_anomaly":
+		return p.SpendAnomaly
+	default:
+		return false
+	}
 }
 
 func noticeMail(n userNotice) mail.Message {

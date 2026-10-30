@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -154,7 +155,9 @@ func TestSpendAnomalyDetectsRaisesNotifiesAndResolves(t *testing.T) {
 		records = append(records, spendRecord(account, now.Add(-50*time.Minute+time.Duration(i)*time.Minute), "198.51.100.7", "gpt-5", 2_000_000_000))
 	}
 	keepSpend(t, db, records...)
-	configureSpendDetection(t, db, defaultSpendDetection())
+	d := defaultSpendDetection()
+	d.NotifyUsers = true
+	configureSpendDetection(t, db, d)
 
 	fired, resolved := runSpendDetection(t, db, now)
 	if fired != 3 || resolved != 0 {
@@ -203,6 +206,152 @@ func TestSpendAnomalyDetectsRaisesNotifiesAndResolves(t *testing.T) {
 	}
 	if active != 0 {
 		t.Fatalf("detector state left %d rows", active)
+	}
+}
+
+// TestSpendRegionNetworksAreNormalised: the host bits never split one network into several, so an address change inside
+// the account's own network is not foreign, and several addresses inside one new network count together.
+//
+//nolint:cyclop,gocognit // the table and its assertions read better in one place
+func TestSpendRegionNetworksAreNormalised(t *testing.T) {
+	db := openSpendDB(t)
+	site, tier := seedSpendSite(t, db)
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	types := []struct {
+		name             string
+		baselineIP       string
+		recentIPs        []string
+		wantRegion       bool
+		wantNetworkField string
+	}{
+		{"IPv4 host change in the account's own /16", "203.0.113.7", []string{"203.0.113.8"}, false, ""},
+		{"IPv4 addresses merged in one new /16", "203.0.113.7", []string{"198.51.100.1", "198.51.100.2", "198.51.100.3", "198.51.100.4", "198.51.100.5"}, true, "198.51.0.0/16"},
+		{"IPv6 host change in the account's own /32", "2001:db8:1::1", []string{"2001:db8:1::2"}, false, ""},
+		{"IPv6 addresses merged in one new /32", "2001:db8:1::1", []string{"2001:db9::1", "2001:db9::2", "2001:db9::3", "2001:db9::4", "2001:db9::5"}, true, "2001:db9::/32"},
+	}
+	var records []CallRecord
+	ids := make([]uuid.UUID, len(types))
+	for i, c := range types {
+		account := seedSpendAccount(t, db, site, tier, i+1)
+		ids[i] = account
+		for j := range 10 {
+			records = append(records, spendRecord(account, now.Add(-24*time.Hour+30*time.Minute+time.Duration(j)*2*time.Hour), c.baselineIP, "claude-opus", 0))
+		}
+		for j, ip := range c.recentIPs {
+			records = append(records, spendRecord(account, now.Add(-50*time.Minute+time.Duration(j)*time.Minute), ip, "claude-opus", 0))
+		}
+	}
+	keepSpend(t, db, records...)
+	configureSpendDetection(t, db, defaultSpendDetection())
+	runSpendDetection(t, db, now)
+
+	regions := map[uuid.UUID]string{}
+	for _, key := range spendSignalKinds(t, db) {
+		account, kind, ok := splitSignalKey(key)
+		if !ok || kind != "region" {
+			continue
+		}
+		regions[account] = signalField(t, db, key, "networks")
+	}
+	for i, c := range types {
+		got, ok := regions[ids[i]]
+		if ok != c.wantRegion {
+			t.Errorf("%s: region signal %v, want %v", c.name, ok, c.wantRegion)
+			continue
+		}
+		if c.wantRegion && !strings.Contains(got, c.wantNetworkField) {
+			t.Errorf("%s: networks %q, want %q", c.name, got, c.wantNetworkField)
+		}
+		if !c.wantRegion && got != "" {
+			t.Errorf("%s: unexpected network field %q", c.name, got)
+		}
+	}
+}
+
+// signalField reads one field of a persisted signal.
+func signalField(t *testing.T, db *pg.DB, key, field string) string {
+	t.Helper()
+	var value string
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT body->'fields'->>$2 FROM platform.alert_signals WHERE body->>'kind'=$1 AND body->>'key'=$3`, spendAnomalyKind, field, key).Scan(&value)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+// TestSpendScheduleLeavesNoGapBetweenRuns: a burst that happens between two scheduled runs still falls inside the next
+// run's window, because the job runs more often than the shortest window an administrator may set.
+func TestSpendScheduleLeavesNoGapBetweenRuns(t *testing.T) {
+	if spendEvery >= minSpendWindow {
+		t.Fatalf("the job runs every %s but the shortest window is %s: a burst can fall between runs", spendEvery, minSpendWindow)
+	}
+	db := openSpendDB(t)
+	site, tier := seedSpendSite(t, db)
+	account := seedSpendAccount(t, db, site, tier, 1)
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	var records []CallRecord
+	for i := range 23 {
+		records = append(records, spendRecord(account, now.Add(-24*time.Hour+time.Duration(i)*time.Hour+30*time.Minute), "203.0.113.7", "claude-opus", 100_000_000))
+	}
+	keepSpend(t, db, records...)
+	d := defaultSpendDetection()
+	d.WindowSeconds = int(minSpendWindow / time.Second)
+	d.NotifyUsers = true
+	configureSpendDetection(t, db, d)
+	if fired, _ := runSpendDetection(t, db, now); fired != 0 {
+		t.Fatalf("the calm run fired %d signals", fired)
+	}
+
+	// The burst starts a minute after the run and is over before the next one begins.
+	var burst []CallRecord
+	for i := range 5 {
+		burst = append(burst, spendRecord(account, now.Add(time.Minute+time.Duration(i)*time.Minute), "198.51.100.7", "gpt-5", 2_000_000_000))
+	}
+	keepSpend(t, db, burst...)
+	fired, _ := runSpendDetection(t, db, now.Add(spendEvery))
+	if fired != 3 {
+		t.Fatalf("the next run fired %d signals, want 3; the burst fell between windows", fired)
+	}
+}
+
+// TestSpendNoticeWaitsForNotifyUsers: detection and its signal do not depend on the user notice, which stays off until
+// an administrator enables it after the rollout; enabling it later notifies the next incident.
+func TestSpendNoticeWaitsForNotifyUsers(t *testing.T) {
+	db := openSpendDB(t)
+	site, tier := seedSpendSite(t, db)
+	account := seedSpendAccount(t, db, site, tier, 1)
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	var records []CallRecord
+	for i := range 23 {
+		records = append(records, spendRecord(account, now.Add(-24*time.Hour+time.Duration(i)*time.Hour+30*time.Minute), "203.0.113.7", "claude-opus", 100_000_000))
+	}
+	for i := range 5 {
+		records = append(records, spendRecord(account, now.Add(-50*time.Minute+time.Duration(i)*time.Minute), "198.51.100.7", "gpt-5", 2_000_000_000))
+	}
+	keepSpend(t, db, records...)
+	configureSpendDetection(t, db, defaultSpendDetection())
+	if fired, _ := runSpendDetection(t, db, now); fired != 3 {
+		t.Fatalf("fired %d signals", fired)
+	}
+	if n := noticeCount(t, db, account); n != 0 {
+		t.Fatalf("the reminder was produced while notify_users was off: %d", n)
+	}
+
+	d := defaultSpendDetection()
+	d.NotifyUsers = true
+	configureSpendDetection(t, db, d)
+	runSpendDetection(t, db, now.Add(2*time.Hour)) // resolves the first incident
+	var second []CallRecord
+	for i := range 5 {
+		second = append(second, spendRecord(account, now.Add(2*time.Hour+10*time.Minute+time.Duration(i)*time.Minute), "192.0.2.7", "gpt-6", 2_000_000_000))
+	}
+	keepSpend(t, db, second...)
+	if fired, _ := runSpendDetection(t, db, now.Add(3*time.Hour)); fired != 3 {
+		t.Fatalf("the next incident fired %d signals", fired)
+	}
+	if n := noticeCount(t, db, account); n != 1 {
+		t.Fatalf("notices after enabling: %d, want 1", n)
 	}
 }
 
@@ -338,6 +487,7 @@ func TestSpendDetectionConfiguration(t *testing.T) {
 
 	saved := defaultSpendDetection()
 	saved.SpendRatio = 5
+	saved.WindowSeconds = int(minSpendWindow / time.Second)
 	c.SpendDetection = &saved
 	alertTx(t, db, func(tx pg.Tx) error { return SetAlertConfiguration(t.Context(), tx, c) })
 
@@ -347,12 +497,16 @@ func TestSpendDetectionConfiguration(t *testing.T) {
 		t.Fatalf("saved: %+v rev %d", updated.SpendDetection, updated.Rev)
 	}
 
-	invalid := saved
-	invalid.WindowSeconds = 1
-	updated.SpendDetection = &invalid
-	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error { return SetAlertConfiguration(t.Context(), tx, updated) }); !errors.Is(err, ErrAlertConfiguration) {
-		t.Fatalf("invalid bounds: %v", err)
+	updated.SpendDetection = &saved
+	for _, window := range []int{1, int(minSpendWindow/time.Second) - 1, 86401} {
+		invalid := saved
+		invalid.WindowSeconds = window
+		updated.SpendDetection = &invalid
+		if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error { return SetAlertConfiguration(t.Context(), tx, updated) }); !errors.Is(err, ErrAlertConfiguration) {
+			t.Fatalf("window %d: %v", window, err)
+		}
 	}
+	updated.SpendDetection = &saved
 	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error { return SetAlertConfiguration(t.Context(), tx, c) }); !errors.Is(err, ErrAlertRevision) {
 		t.Fatalf("stale revision: %v", err)
 	}

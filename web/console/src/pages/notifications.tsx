@@ -46,12 +46,22 @@ type Settings = {
   threshold: string;
   topUp: boolean;
   factorChanged: boolean;
-  spendAnomaly: boolean;
+  spendAnomaly?: boolean; // undefined: the node predates the preference and did not advertise it
   webhook: string;
   language: "en" | "zh";
 };
 
 type SetSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => void;
+
+// spendAnomalyChange asks to change the reminder only when the node advertised the preference and the value differs
+// from the stored one. A node that predates it rejects the unknown field (its request schema is closed), and a value
+// the page merely echoed would overwrite a change made in another tab between the read and the save.
+export function spendAnomalyChange(settings: Settings, stored: boolean | undefined): { spend_anomaly?: boolean } {
+  if (settings.spendAnomaly === undefined || settings.spendAnomaly === stored) {
+    return {};
+  }
+  return { spend_anomaly: settings.spendAnomaly };
+}
 
 // initialSettings is what the form starts from: the stored preference, or the default the site sends when it is absent.
 export function initialSettings(preferences: Schemas["NotificationPreferences"]): Settings {
@@ -60,7 +70,7 @@ export function initialSettings(preferences: Schemas["NotificationPreferences"])
     threshold: moneyInput(preferences.threshold ?? "0"),
     topUp: preferences.top_up ?? true,
     factorChanged: preferences.factor_changed ?? true,
-    spendAnomaly: preferences.spend_anomaly ?? true,
+    spendAnomaly: preferences.spend_anomaly,
     webhook: preferences.webhook_url ?? "",
     language: preferences.language ?? "en",
   };
@@ -89,7 +99,7 @@ function PreferencesForm({
             low_balance: settings.lowBalance,
             top_up: settings.topUp,
             factor_changed: settings.factorChanged,
-            spend_anomaly: settings.spendAnomaly,
+            ...spendAnomalyChange(settings, preferences.spend_anomaly),
             threshold: amount ?? "0",
             webhook_url: settings.webhook.trim(),
             language: settings.language,
@@ -183,12 +193,14 @@ function EventAlerts({ settings, set }: { settings: Settings; set: SetSetting })
         checked={settings.factorChanged}
         onChange={(event) => set("factorChanged", event.target.checked)}
       />
-      <CheckField
-        label={t("notifications.spendAnomaly")}
-        hint={t("notifications.spendAnomalyHint")}
-        checked={settings.spendAnomaly}
-        onChange={(event) => set("spendAnomaly", event.target.checked)}
-      />
+      {settings.spendAnomaly === undefined ? null : (
+        <CheckField
+          label={t("notifications.spendAnomaly")}
+          hint={t("notifications.spendAnomalyHint")}
+          checked={settings.spendAnomaly}
+          onChange={(event) => set("spendAnomaly", event.target.checked)}
+        />
+      )}
     </fieldset>
   );
 }

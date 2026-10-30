@@ -23,6 +23,7 @@ import (
 // getSpendDetection returns the code defaults until an administrator saves a complete set.
 type SpendDetection struct {
 	Enabled           bool    `json:"enabled"`
+	NotifyUsers       bool    `json:"notify_users"`
 	WindowSeconds     int     `json:"window_seconds"`
 	BaselineSeconds   int     `json:"baseline_seconds"`
 	MinSpendNano      int64   `json:"min_spend_nano"`
@@ -31,11 +32,23 @@ type SpendDetection struct {
 	MinNewModelCalls  int     `json:"min_new_model_calls"`
 }
 
+// minSpendWindow is the shortest recent window an administrator may set, and spendEvery is how often the job runs. The
+// interval must stay below the window, or a burst that happens between two runs falls outside both recent windows and is
+// never detected. The overlap also absorbs a late run.
+const (
+	minSpendWindow = 15 * time.Minute
+	spendEvery     = 10 * time.Minute
+)
+
 // The detector compares one recent hour with the account's own preceding day. A shorter pair would react to normal
 // bursts, and a longer baseline reads more records without making a stolen key's first hour any more obvious.
+//
+// NotifyUsers defaults to off: an older node's dispatcher claims any undispatched notice, cannot render a kind it does
+// not know, and would mark the reminder sent without sending it. Enable it once every node runs a version that knows
+// the kind; detection and the alert channel do not wait for that.
 func defaultSpendDetection() SpendDetection {
 	return SpendDetection{
-		Enabled: true, WindowSeconds: 3600, BaselineSeconds: 86400, MinSpendNano: 5_000_000_000,
+		Enabled: true, NotifyUsers: false, WindowSeconds: 3600, BaselineSeconds: 86400, MinSpendNano: 5_000_000_000,
 		SpendRatio: 3, MinNewRegionCalls: 5, MinNewModelCalls: 5,
 	}
 }
@@ -48,7 +61,7 @@ func (d SpendDetection) validate() error {
 }
 
 func (d SpendDetection) validWindow() bool {
-	return d.WindowSeconds >= 300 && d.WindowSeconds <= 86400 &&
+	return d.WindowSeconds >= int(minSpendWindow/time.Second) && d.WindowSeconds <= 86400 &&
 		d.BaselineSeconds >= d.WindowSeconds && d.BaselineSeconds <= 604800
 }
 
@@ -127,7 +140,7 @@ func detectSpendAnomalies(ctx context.Context, tx pg.Tx, now time.Time) (fired, 
 	if err != nil {
 		return 0, 0, err
 	}
-	if fired, err = raiseSpendAnomalies(ctx, tx, found, active); err != nil {
+	if fired, err = raiseSpendAnomalies(ctx, tx, found, active, d.NotifyUsers); err != nil {
 		return 0, 0, err
 	}
 	resolved, err = resolveGoneSpendAnomalies(ctx, tx, active, found)
@@ -303,7 +316,7 @@ func (w spendWindow) collectRegions(ctx context.Context, tx pg.Tx, found map[ano
  count(*) FILTER (WHERE at >= $2),
  count(*) FILTER (WHERE at < $2)
  FROM (
-  SELECT account_id,at,CASE WHEN family(ip)=4 THEN set_masklen(ip,16)::text ELSE set_masklen(ip,32)::text END AS network
+  SELECT account_id,at,network(CASE WHEN family(ip)=4 THEN set_masklen(ip,16) ELSE set_masklen(ip,32) END)::text AS network
   FROM observability.call_log
   WHERE account_id = ANY($1) AND at >= $3 AND at < $4
  ) calls GROUP BY account_id,network`, w.accounts, w.recentStart, w.baselineStart, w.now)
@@ -379,7 +392,7 @@ func boundedList(items []string, max int) string {
 // raiseSpendAnomalies inserts the incident state, its durable signal and the user notice together. RowsAffected==0
 // means the incident was already firing, so a persistent anomaly is noticed once; an account that already has any
 // incident is not reminded again just because a second kind appears in the same burst.
-func raiseSpendAnomalies(ctx context.Context, tx pg.Tx, found map[anomalyID]spendAnomaly, active map[anomalyID]struct{}) (int, error) {
+func raiseSpendAnomalies(ctx context.Context, tx pg.Tx, found map[anomalyID]spendAnomaly, active map[anomalyID]struct{}, notify bool) (int, error) {
 	notices := map[uuid.UUID]accounts.SpendAnomalyNotice{}
 	notified := map[uuid.UUID]bool{}
 	for id := range active {
@@ -401,23 +414,39 @@ func raiseSpendAnomalies(ctx context.Context, tx pg.Tx, found map[anomalyID]spen
 		// One burst is one user notice even when it trips all three signals or a later kind appears; a later, separate
 		// burst has no active state and notifies again. Keep the largest spend across currencies so the amount is not
 		// lost when a region or model signal is sorted first.
-		if n, ok := notices[id.account]; ok {
-			if a.value > n.Value {
-				n.Value = a.value
-				notices[id.account] = n
-			}
-		} else if !notified[id.account] {
-			notices[id.account] = accounts.SpendAnomalyNotice{Account: id.account, Source: uuid.NewV7().String(), Value: a.value}
-			notified[id.account] = true
-		}
+		addSpendNotice(notices, notified, id, a)
 		fired++
 	}
+	if !notify {
+		return fired, nil
+	}
+	return fired, recordSpendNotices(ctx, tx, notices)
+}
+
+// addSpendNotice keeps one notice per account per burst, with the largest spend across currencies so the amount is not
+// lost when a region or model signal is visited first.
+func addSpendNotice(notices map[uuid.UUID]accounts.SpendAnomalyNotice, notified map[uuid.UUID]bool, id anomalyID, a spendAnomaly) {
+	if n, ok := notices[id.account]; ok {
+		if a.value > n.Value {
+			n.Value = a.value
+			notices[id.account] = n
+		}
+		return
+	}
+	if notified[id.account] {
+		return
+	}
+	notices[id.account] = accounts.SpendAnomalyNotice{Account: id.account, Source: uuid.NewV7().String(), Value: a.value}
+	notified[id.account] = true
+}
+
+func recordSpendNotices(ctx context.Context, tx pg.Tx, notices map[uuid.UUID]accounts.SpendAnomalyNotice) error {
 	list := make([]accounts.SpendAnomalyNotice, 0, len(notices))
 	for _, n := range notices {
 		list = append(list, n)
 	}
 	slices.SortFunc(list, func(a, b accounts.SpendAnomalyNotice) int { return cmp.Compare(a.Account.String(), b.Account.String()) })
-	return fired, accounts.RecordSpendAnomalyNotices(ctx, tx, list)
+	return accounts.RecordSpendAnomalyNotices(ctx, tx, list)
 }
 
 func readSpendAnomalies(ctx context.Context, tx pg.Tx) (map[anomalyID]struct{}, error) {

@@ -56,7 +56,7 @@ func RegisterAlerts(db *pg.DB, scope pg.Scope, q *pg.Queue, m *mail.Mailer, keys
 		return err
 	}
 	q.Every(time.Minute, func() river.JobArgs { return alertArgs{} })
-	q.Every(15*time.Minute, func() river.JobArgs { return spendArgs{} })
+	q.Every(spendEvery, func() river.JobArgs { return spendArgs{} })
 	return nil
 }
 

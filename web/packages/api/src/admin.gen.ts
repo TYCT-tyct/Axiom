@@ -2005,7 +2005,12 @@ export interface components {
         /** @description Offline account spend-anomaly thresholds. The object is optional so an older node's configuration replacement leaves the saved thresholds unchanged. */
         SpendDetection: {
             enabled: boolean;
-            /** @description Recent window compared with the baseline. */
+            /**
+             * @description Create the account's user reminder for a detected anomaly. Leave off until every node can dispatch the spend_anomaly notice kind: an older dispatcher would mark it sent without sending it. Detection and alert channels do not depend on it.
+             * @default false
+             */
+            notify_users: boolean;
+            /** @description Recent window compared with the baseline. The detector runs every 10 minutes, so the window is at least 15 minutes and consecutive windows overlap. */
             window_seconds: number;
             /** @description The account's own history immediately before the recent window; at least window_seconds. */
             baseline_seconds: number;

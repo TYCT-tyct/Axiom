@@ -30,17 +30,7 @@ func (c consoleAPI) SetNotificationPreferences(ctx context.Context, r consoleapi
 	if err != nil {
 		return nil, accounts.ErrNotificationPreferences
 	}
-	p := accounts.NotificationPreferences{LowBalance: r.Body.LowBalance, TopUp: r.Body.TopUp, FactorChanged: r.Body.FactorChanged, SpendAnomaly: true, Threshold: threshold, WebhookURL: r.Body.WebhookUrl, Language: string(r.Body.Language)}
-	if r.Body.SpendAnomaly != nil {
-		p.SpendAnomaly = *r.Body.SpendAnomaly
-	} else {
-		// A client that predates the field must not silently re-enable a reminder the user turned off.
-		current, err := c.accounts.NotificationPreferences(ctx, callOf(ctx).principal)
-		if err != nil {
-			return nil, err
-		}
-		p.SpendAnomaly = current.SpendAnomaly
-	}
+	p := accounts.NotificationPreferences{LowBalance: r.Body.LowBalance, TopUp: r.Body.TopUp, FactorChanged: r.Body.FactorChanged, Threshold: threshold, WebhookURL: r.Body.WebhookUrl, Language: string(r.Body.Language)}
 	if p.WebhookURL != "" {
 		host, err := accounts.ValidateNotificationWebhookURL(p.WebhookURL)
 		if err != nil {
@@ -50,7 +40,9 @@ func (c consoleAPI) SetNotificationPreferences(ctx context.Context, r consoleapi
 			return nil, accounts.ErrNotificationPreferences
 		}
 	}
-	if err = c.accounts.UpdateNotificationPreferences(ctx, callOf(ctx).principal, p); err != nil {
+	// A client that omits spend_anomaly leaves whatever is stored; the update decides that in the same statement rather
+	// than writing a value read in an earlier transaction.
+	if p, err = c.accounts.UpdateNotificationPreferences(ctx, callOf(ctx).principal, p, r.Body.SpendAnomaly); err != nil {
 		return nil, err
 	}
 	return consoleapi.SetNotificationPreferences200JSONResponse(preferencesJSON(p)), nil

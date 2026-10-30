@@ -29,11 +29,24 @@ GRANT SELECT, INSERT, UPDATE ON observability.spend_detection TO axiom_app;
 CREATE INDEX call_log_at_account ON observability.call_log (at, account_id) WHERE price_nano >= 0;
 
 -- Bind the kind once so an administrator only has to choose a channel; an empty channel keeps the event visible
--- without sending it anywhere. Existing custom rules are preserved.
-UPDATE observability.alert_configuration
-SET rev = rev + 1,
-    body = jsonb_set(body, '{rules}', (body->'rules') || jsonb_build_array(jsonb_build_object(
-        'id', 'spend-anomaly',
+-- without sending it anywhere. Existing custom rules are preserved: the rule is appended only when the configuration has
+-- room (its own limit is 32) and only under an id no other rule uses, so a legal pre-upgrade configuration cannot be
+-- pushed over the limit or given a duplicate id. A full configuration keeps its rules and the operator adds this one.
+WITH candidates AS (
+    SELECT n, CASE WHEN n = 1 THEN 'spend-anomaly' ELSE 'spend-anomaly-' || n END AS id
+    FROM generate_series(1, 33) AS n
+), pick AS (
+    SELECT id FROM candidates
+    WHERE NOT EXISTS (
+        SELECT 1 FROM observability.alert_configuration x, jsonb_array_elements(x.body->'rules') AS rule
+        WHERE x.singleton AND rule->>'id' = candidates.id)
+    ORDER BY n
+    LIMIT 1
+)
+UPDATE observability.alert_configuration c
+SET rev = c.rev + 1,
+    body = jsonb_set(c.body, '{rules}', (c.body->'rules') || jsonb_build_array(jsonb_build_object(
+        'id', pick.id,
         'kind', 'observability.spend_anomaly',
         'minimum_severity', 'warning',
         'threshold', 1,
@@ -42,6 +55,10 @@ SET rev = rev + 1,
         'quiet_start', 0,
         'quiet_end', 0,
         'repeat_seconds', 0)))
-WHERE NOT EXISTS (
-    SELECT 1 FROM jsonb_array_elements(body->'rules') AS rule
-    WHERE rule->>'kind' = 'observability.spend_anomaly');
+FROM pick
+WHERE c.singleton
+  AND pick.id IS NOT NULL
+  AND jsonb_array_length(c.body->'rules') < 32
+  AND NOT EXISTS (
+      SELECT 1 FROM jsonb_array_elements(c.body->'rules') AS rule
+      WHERE rule->>'kind' = 'observability.spend_anomaly');

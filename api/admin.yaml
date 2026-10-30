@@ -4033,8 +4033,9 @@ components:
       additionalProperties: false
       properties:
         enabled: {type: boolean}
-        window_seconds: {type: integer, minimum: 300, maximum: 86400, description: "Recent window compared with the baseline."}
-        baseline_seconds: {type: integer, minimum: 300, maximum: 604800, description: "The account's own history immediately before the recent window; at least window_seconds."}
+        notify_users: {type: boolean, default: false, description: "Create the account's user reminder for a detected anomaly. Leave off until every node can dispatch the spend_anomaly notice kind: an older dispatcher would mark it sent without sending it. Detection and alert channels do not depend on it."}
+        window_seconds: {type: integer, minimum: 900, maximum: 86400, description: "Recent window compared with the baseline. The detector runs every 10 minutes, so the window is at least 15 minutes and consecutive windows overlap."}
+        baseline_seconds: {type: integer, minimum: 900, maximum: 604800, description: "The account's own history immediately before the recent window; at least window_seconds."}
         min_spend_nano: {type: integer, format: int64, minimum: 0, maximum: 1000000000000000000, description: "Absolute floor for a spend spike, in billionths of a credit."}
         spend_ratio: {type: number, format: double, minimum: 1, maximum: 1000, description: "Recent spend divided by the baseline's expected spend for the same window."}
         min_new_region_calls: {type: integer, minimum: 1, maximum: 1000000}

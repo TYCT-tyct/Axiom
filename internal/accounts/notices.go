@@ -49,8 +49,11 @@ func GetNotificationPreferences(ctx context.Context, tx pg.Tx, user uuid.UUID) (
 	return p, err
 }
 
-// SetNotificationPreferences replaces preferences in the authenticated user's tenant transaction.
-func SetNotificationPreferences(ctx context.Context, tx pg.Tx, site, account, user uuid.UUID, p NotificationPreferences) error {
+// SetNotificationPreferences replaces preferences in the authenticated user's tenant transaction. spendAnomaly is
+// separate from p because a client that omits the field means "leave it alone", not "set the default": writing a value
+// read in an earlier transaction would undo another request that changed it in between. A first insert with no value
+// takes the default.
+func SetNotificationPreferences(ctx context.Context, tx pg.Tx, site, account, user uuid.UUID, p NotificationPreferences, spendAnomaly *bool) error {
 	if p.Threshold < 0 || (p.Language != "en" && p.Language != "zh") {
 		return ErrNotificationPreferences
 	}
@@ -60,7 +63,7 @@ func SetNotificationPreferences(ctx context.Context, tx pg.Tx, site, account, us
 		}
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO accounts.notification_preferences(site_id,account_id,user_id,low_balance,top_up,factor_changed,spend_anomaly,threshold,webhook_url,language)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(user_id) DO UPDATE SET low_balance=$4,top_up=$5,factor_changed=$6,spend_anomaly=$7,threshold=$8,webhook_url=$9,language=$10`, site, account, user, p.LowBalance, p.TopUp, p.FactorChanged, p.SpendAnomaly, p.Threshold, p.WebhookURL, p.Language)
+ VALUES($1,$2,$3,$4,$5,$6,coalesce($7,true),$8,$9,$10) ON CONFLICT(user_id) DO UPDATE SET low_balance=$4,top_up=$5,factor_changed=$6,spend_anomaly=coalesce($7,accounts.notification_preferences.spend_anomaly),threshold=$8,webhook_url=$9,language=$10`, site, account, user, p.LowBalance, p.TopUp, p.FactorChanged, spendAnomaly, p.Threshold, p.WebhookURL, p.Language)
 	return err
 }
 
@@ -152,17 +155,22 @@ func (s *Service) NotificationPreferences(ctx context.Context, p Principal) (out
 	return out, err
 }
 
-// UpdateNotificationPreferences binds all tenant identifiers to the authenticated principal.
-func (s *Service) UpdateNotificationPreferences(ctx context.Context, p Principal, prefs NotificationPreferences) error {
+// UpdateNotificationPreferences binds all tenant identifiers to the authenticated principal and returns the stored
+// preferences, including the spend reminder the request left unchanged.
+func (s *Service) UpdateNotificationPreferences(ctx context.Context, p Principal, prefs NotificationPreferences, spendAnomaly *bool) (out NotificationPreferences, err error) {
 	if p.user == (UserID{}) || p.Pending() || p.surface != Console {
-		return ErrNoSession
+		return out, ErrNoSession
 	}
-	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		if err := SetNotificationPreferences(ctx, tx, uuid.UUID(p.site), uuid.UUID(p.account), uuid.UUID(p.user), prefs); err != nil {
+	err = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+		if err := SetNotificationPreferences(ctx, tx, uuid.UUID(p.site), uuid.UUID(p.account), uuid.UUID(p.user), prefs, spendAnomaly); err != nil {
+			return err
+		}
+		if out, err = GetNotificationPreferences(ctx, tx, uuid.UUID(p.user)); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Actor: audit.User(uuid.UUID(p.user)), Action: "user.notification_preferences", Target: userTarget(uuid.UUID(p.site), uuid.UUID(p.account), uuid.UUID(p.user))})
 	})
+	return out, err
 }
 
 // Announcements uses the principal's site, never a client-selected tenant.

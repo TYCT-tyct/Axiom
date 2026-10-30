@@ -149,9 +149,9 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 ## 账户花费异常检测
 
-`spendWorker` 由 `RegisterAlerts` 注册为 `observability.spend`，每 15 分钟在 `notifications` 队列执行一次，单个事务完成检测、状态、信号和用户提醒。检测以传入的 `now`（生产为 `time.Now`，测试为受控时钟）切出最近窗口 `[now-W, now)` 和基线 `[now-W-B, now-W)`；窗口和基线秒数来自 `spend_detection`。只取最近窗口里有调用的账户，再按账户聚合，查询不会扫全部分区。花费按币种分别比较；来源网段用 `set_masklen(ip,16)`（IPv4）和 `set_masklen(ip,32)`（IPv6）近似，不引入 GeoIP 依赖；模型按 `model` 分组。三种异常共用 `observability.spend_anomaly`，严重度 warning，键为 `<account UUID>/<kind>`，这样同一账户的三种信号各有独立事件，用户提醒按账户合并为一封。
+`spendWorker` 由 `RegisterAlerts` 注册为 `observability.spend`，每 10 分钟在 `notifications` 队列执行一次，单个事务完成检测、状态、信号和用户提醒。检测以传入的 `now`（生产为 `time.Now`，测试为受控时钟）切出最近窗口 `[now-W, now)` 和基线 `[now-W-B, now-W)`；窗口和基线秒数来自 `spend_detection`。只取最近窗口里有调用的账户，再按账户聚合，查询不会扫全部分区。花费按币种分别比较；来源网段用 `network(set_masklen(ip,16))`（IPv4）和 `network(set_masklen(ip,32))`（IPv6）近似，主机位归一化后再分组，同一网段换地址不算新地区，不引入 GeoIP 依赖；模型按 `model` 分组。三种异常共用 `observability.spend_anomaly`，严重度 warning，键为 `<account UUID>/<kind>`，这样同一账户的三种信号各有独立事件，用户提醒按账户合并为一封。
 
-阈值和检测开关是后台数据：默认开启、1 小时窗口、24 小时基线、5 额度下限、3 倍、陌生网段/模型各 5 次；管理 API 的 `spend_detection` 整体读写，校验范围和交叉约束。检测对象为空时不改已存值，关闭检测时恢复所有现存状态，避免留下没人处理的事件。用户提醒走 accounts 的 `RecordSpendAnomalyNotices`，偏好 `spend_anomaly` 默认开启，同一异常期间同一账户只写一条；`source` 是每次异常生成的随机值，`user_notices` 的唯一键让重试和并发不重复。自动暂停 key 不在这里，key 状态归 accounts，检测不碰调用路径。
+阈值和检测开关是后台数据：默认开启、提醒生产关闭、1 小时窗口、24 小时基线、5 额度下限、3 倍、陌生网段/模型各 5 次；管理 API 的 `spend_detection` 整体读写，校验范围和交叉约束。检测对象为空时不改已存值，关闭检测时恢复所有现存状态，避免留下没人处理的事件。用户提醒走 accounts 的 `RecordSpendAnomalyNotices`，偏好 `spend_anomaly` 默认开启，但生产由 `spend_detection.notify_users` 控制、默认关闭：等全部节点认识这个种类后再打开，避免旧派发器把它标记成已发送却发不出去；同一异常期间同一账户只写一条；`source` 是每次异常生成的随机值，`user_notices` 的唯一键让重试和并发不重复。自动暂停 key 不在这里，key 状态归 accounts，检测不碰调用路径。
 
 ## 告警接口与不变量
 
