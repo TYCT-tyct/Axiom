@@ -289,6 +289,14 @@ func up(ctx context.Context, db *sql.DB, locker lock.SessionLocker, m Module) er
 	if _, err := provider.Up(ctx); err != nil {
 		return err
 	}
+	// Record what this run applied and refuse a merged migration that changed since the database recorded it: the run
+	// stops before a node starts against a schema that its recorded history no longer explains.
+	if err := recordChecksums(ctx, db, m); err != nil {
+		return err
+	}
+	if err := verifyChecksums(ctx, db, m); err != nil {
+		return err
+	}
 	// The application reads the version to refuse a database this program is newer than.
 	_, err = db.ExecContext(ctx, "GRANT SELECT ON "+versionTable(m.Name)+" TO axiom_app") //nolint:gosec // ordered admits only the names in moduleOrder
 	return err
