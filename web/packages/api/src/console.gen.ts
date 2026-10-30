@@ -724,7 +724,7 @@ export interface paths {
         };
         /**
          * The account's API keys
-         * @description Every key of the session's account that is not deleted, disabled ones included, newest first. The text of a key is never returned again after `createKey`.
+         * @description Every key of the session's account that is not deleted, disabled and expired ones included, newest first by making. `name` and `prefix` search part of a key's name or prefix, ignoring case; `status` keeps active, disabled or expired keys; `created_after` and `created_before` keep the keys made in a range. A page reads the keys in the index's order and applies the filters as it goes, so a later page starts after the last key read, whatever the filters match. The text of a key is never returned again after `createKey`.
          */
         get: operations["listKeys"];
         put?: never;
@@ -1502,8 +1502,33 @@ export interface components {
             limit_remaining?: components["schemas"]["Money"];
             /** @description The model names the key may call; absent means any model. */
             models?: string[];
+            /** @description The names in `models` that the catalog has retired, so calls to them cannot succeed. Absent when none is retired or the reading node has no catalog snapshot; a page shows no hint then. */
+            retired_models?: string[];
             /** @description The client addresses (IP or CIDR) the key may be used from; absent means any. */
             ip_allow?: string[];
+        };
+        /**
+         * @description The state the key list shows: `active` is enabled and not expired, `disabled` is disabled and not expired, and `expired` is past its `expires_at` whether enabled or not.
+         * @enum {string}
+         */
+        KeyStatus: "active" | "disabled" | "expired";
+        /** @description The filters this node applied to the page. Absent on nodes that predate key filters: those nodes ignore the filter parameters and return every key, so a filtered page cannot show their rows. */
+        KeyFilterEcho: {
+            /** @description The applied name filter, ignoring case in the match. */
+            name?: string;
+            /** @description The applied prefix filter, ignoring case in the match. */
+            prefix?: string;
+            status?: components["schemas"]["KeyStatus"];
+            /**
+             * Format: date-time
+             * @description The applied inclusive lower bound.
+             */
+            created_after?: string;
+            /**
+             * Format: date-time
+             * @description The applied exclusive upper bound.
+             */
+            created_before?: string;
         };
         /**
          * @description When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
@@ -1541,6 +1566,7 @@ export interface components {
             secret: string;
         };
         KeyList: {
+            filters?: components["schemas"]["KeyFilterEcho"];
             data: components["schemas"]["Key"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
@@ -1804,6 +1830,16 @@ export interface components {
         /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
         CallStatus: components["schemas"]["CallStatus"];
         CallRequestId: components["schemas"]["CallId"];
+        /** @description Part of a key's name, ignoring case. Omit for every name. */
+        KeyName: string;
+        /** @description The beginning of a key's prefix, ignoring case. Omit for every prefix. */
+        KeyPrefix: string;
+        /** @description A key's state as the list shows it. Omit for every state. */
+        KeyStatus: components["schemas"]["KeyStatus"];
+        /** @description Keys the database stamped at or after this instant. */
+        KeyCreatedAfter: string;
+        /** @description Keys the database stamped before this instant. */
+        KeyCreatedBefore: string;
         /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
         Cursor: string;
         /** @description How many items a page holds at most. */
@@ -2978,6 +3014,16 @@ export interface operations {
     listKeys: {
         parameters: {
             query?: {
+                /** @description Part of a key's name, ignoring case. Omit for every name. */
+                name?: components["parameters"]["KeyName"];
+                /** @description The beginning of a key's prefix, ignoring case. Omit for every prefix. */
+                prefix?: components["parameters"]["KeyPrefix"];
+                /** @description A key's state as the list shows it. Omit for every state. */
+                status?: components["parameters"]["KeyStatus"];
+                /** @description Keys the database stamped at or after this instant. */
+                created_after?: components["parameters"]["KeyCreatedAfter"];
+                /** @description Keys the database stamped before this instant. */
+                created_before?: components["parameters"]["KeyCreatedBefore"];
                 /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description How many items a page holds at most. */

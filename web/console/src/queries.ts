@@ -46,15 +46,29 @@ export const statementQuery = infiniteQueryOptions({
   getNextPageParam: nextCursor,
 });
 
-export const keysQuery = infiniteQueryOptions({
-  queryKey: [accountKey, "keys"],
-  queryFn: ({ pageParam, signal }) =>
-    unwrap(
-      consoleApi.GET("/api/console/v1/keys", { params: { query: { cursor: pageParam, limit: pageSize } }, signal }),
-    ),
-  initialPageParam: undefined as string | undefined,
-  getNextPageParam: nextCursor,
-});
+// What the key list can be narrowed by; an empty field does not narrow. A cursor is only good for the filters it was
+// given with, so the filters are part of the key.
+export type KeyFilters = {
+  name?: string;
+  prefix?: string;
+  status?: "active" | "disabled" | "expired";
+  created_after?: string;
+  created_before?: string;
+};
+
+export const keysQuery = (filters: KeyFilters = {}) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "keys", filters],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        consoleApi.GET("/api/console/v1/keys", {
+          params: { query: { ...filters, cursor: pageParam, limit: pageSize } },
+          signal,
+        }),
+      ),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: nextCursor,
+  });
 
 // What the call list can be narrowed by; an empty field does not narrow. The cursor is only good for the filters it was
 // given with, so the filters are part of the key.

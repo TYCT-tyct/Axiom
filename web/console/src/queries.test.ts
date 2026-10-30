@@ -8,7 +8,7 @@ vi.mock("@axiom/api", () => ({
 }));
 vi.mock("@axiom/app", () => ({ accountKey: "account" }));
 
-import { recentErrorsQuery } from "./queries";
+import { keysQuery, recentErrorsQuery } from "./queries";
 
 afterEach(() => vi.clearAllMocks());
 
@@ -22,6 +22,22 @@ describe("call queries", () => {
       params: { query: { status: "error", limit: 5 } },
       signal: expect.any(AbortSignal),
     });
+    client.clear();
+  });
+});
+
+describe("key queries", () => {
+  it("sends the filters to the server and keeps them in the key, because a cursor is only good for its filters", async () => {
+    const data = { data: [], next_cursor: null };
+    get.mockResolvedValue(data);
+    const filters = { name: "alpha", status: "disabled" } as const;
+    const client = new QueryClient();
+    expect((await client.fetchInfiniteQuery(keysQuery(filters))).pages).toEqual([data]);
+    expect(get).toHaveBeenCalledWith("/api/console/v1/keys", {
+      params: { query: { ...filters, cursor: undefined, limit: 50 } },
+      signal: expect.any(AbortSignal),
+    });
+    expect(keysQuery(filters).queryKey).not.toEqual(keysQuery({}).queryKey);
     client.clear();
   });
 });

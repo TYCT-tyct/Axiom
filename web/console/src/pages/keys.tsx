@@ -1,12 +1,28 @@
 import type { Schemas } from "@axiom/api";
-import { can, LoadMore, useSession } from "@axiom/app";
-import { Badge, Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Th, useFormat } from "@axiom/ui";
+import { can, LoadMore, readForm, useSession } from "@axiom/app";
+import {
+  Badge,
+  Button,
+  DataState,
+  EmptyState,
+  Icon,
+  PageHeader,
+  Panel,
+  SelectField,
+  Table,
+  Td,
+  TextField,
+  Th,
+  useFormat,
+} from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CreateKeyDialog, DeleteKeyDialog, EditKeyDialog, SecretDialog } from "../key-dialogs";
-import { maskedKey } from "../parts";
-import { keysQuery } from "../queries";
+import { keyFiltersApplied } from "../key-filters";
+import { maskedKey, toInstant, toLocalInput } from "../parts";
+import { type KeyFilters, keysQuery } from "../queries";
 
 type Key = Schemas["Key"];
 type Dialog =
@@ -18,7 +34,12 @@ type Dialog =
 export default function Keys() {
   const { t } = useTranslation();
   const manage = can(useSession(), "api_keys.manage");
-  const keys = useInfiniteQuery(keysQuery);
+  const filters: KeyFilters = useSearch({ from: "/app/keys" });
+  const keys = useInfiniteQuery(keysQuery(filters));
+  const filtered = Object.values(filters).some(Boolean);
+  const pages = keys.data?.pages ?? [];
+  const filtersApplied = keyFiltersApplied(filters, pages);
+  const rows = useMemo(() => keys.data?.pages.flatMap((page) => page.data) ?? [], [keys.data]);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const close = () => setDialog(null);
   return (
@@ -31,22 +52,27 @@ export default function Keys() {
             {t("keys.create")}
           </Button>
         ) : null}
+        <Filters filters={filters} />
         <Panel>
           <DataState
             query={keys}
-            isEmpty={(data) => data.pages[0]?.data.length === 0}
-            empty={<EmptyState title={t("keys.empty.title")}>{t("keys.empty.body")}</EmptyState>}
+            isEmpty={() => filtersApplied && rows.length === 0}
+            empty={<NoKeys filtered={filtered} />}
           >
-            {(data) => (
-              <KeysTable
-                keys={data.pages.flatMap((page) => page.data)}
-                manage={manage}
-                onEdit={(key) => setDialog({ kind: "edit", key })}
-                onDelete={(key) => setDialog({ kind: "delete", key })}
-              />
-            )}
+            {() =>
+              filtersApplied ? (
+                <KeysTable
+                  keys={rows}
+                  manage={manage}
+                  onEdit={(key) => setDialog({ kind: "edit", key })}
+                  onDelete={(key) => setDialog({ kind: "delete", key })}
+                />
+              ) : (
+                <EmptyState title={t("keys.filtersUnavailable.title")}>{t("keys.filtersUnavailable.body")}</EmptyState>
+              )
+            }
           </DataState>
-          <LoadMore list={keys} />
+          {filtersApplied ? <LoadMore list={keys} /> : null}
         </Panel>
       </div>
       {dialog?.kind === "create" ? (
@@ -56,6 +82,121 @@ export default function Keys() {
       {dialog?.kind === "delete" ? <DeleteKeyDialog apiKey={dialog.key} onClose={close} /> : null}
       {dialog?.kind === "secret" ? <SecretDialog created={dialog.created} onClose={close} /> : null}
     </>
+  );
+}
+
+function NoKeys({ filtered }: { filtered: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <EmptyState title={filtered ? t("keys.noMatch") : t("keys.empty.title")}>
+      {filtered ? t("keys.noMatchBody") : t("keys.empty.body")}
+    </EmptyState>
+  );
+}
+
+function filtersOf(form: HTMLFormElement): KeyFilters {
+  const values = readForm(form);
+  return {
+    name: values.name?.trim() || undefined,
+    prefix: values.prefix?.trim() || undefined,
+    status: statusOf(values.status),
+    created_after: toInstant(values.created_after),
+    created_before: toInstant(values.created_before),
+  };
+}
+
+function statusOf(value: string | undefined): KeyFilters["status"] {
+  return value === "active" || value === "disabled" || value === "expired" ? value : undefined;
+}
+
+// The filters live in the address, so a reload, the back button and a link keep them. The form is rebuilt when they
+// change from outside it.
+function Filters({ filters }: { filters: KeyFilters }) {
+  const navigate = useNavigate();
+  const form = useRef<HTMLFormElement>(null);
+  return (
+    <Panel className="p-4">
+      <form
+        ref={form}
+        key={JSON.stringify(filters)}
+        noValidate
+        className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void navigate({ to: "/keys", search: filtersOf(event.currentTarget) });
+        }}
+      >
+        <KeyFilterFields filters={filters} />
+        <KeyFilterActions onClear={() => form.current?.reset()} />
+      </form>
+    </Panel>
+  );
+}
+
+function KeyFilterFields({ filters }: { filters: KeyFilters }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <TextField
+        label={t("keys.filter.name")}
+        name="name"
+        maxLength={100}
+        defaultValue={filters.name}
+        autoComplete="off"
+      />
+      <TextField
+        label={t("keys.filter.prefix")}
+        name="prefix"
+        maxLength={16}
+        defaultValue={filters.prefix}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <SelectField label={t("keys.filter.status")} name="status" defaultValue={filters.status ?? ""}>
+        <option value="">{t("keys.filter.anyStatus")}</option>
+        <option value="active">{t("keys.enabled")}</option>
+        <option value="disabled">{t("keys.disabled")}</option>
+        <option value="expired">{t("keys.expired")}</option>
+      </SelectField>
+      <TextField
+        label={t("keys.filter.createdAfter")}
+        name="created_after"
+        type="datetime-local"
+        defaultValue={toLocalInput(filters.created_after)}
+      />
+      <TextField
+        label={t("keys.filter.createdBefore")}
+        name="created_before"
+        type="datetime-local"
+        defaultValue={toLocalInput(filters.created_before)}
+      />
+    </>
+  );
+}
+
+function KeyFilterActions({ onClear }: { onClear: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-end gap-2">
+      <Button variant="primary" size="md" type="submit">
+        {t("keys.filter.apply")}
+      </Button>
+      <Button size="md" asChild>
+        <Link
+          to="/keys"
+          search={{
+            name: undefined,
+            prefix: undefined,
+            status: undefined,
+            created_after: undefined,
+            created_before: undefined,
+          }}
+          onClick={onClear}
+        >
+          {t("keys.filter.reset")}
+        </Link>
+      </Button>
+    </div>
   );
 }
 
@@ -138,6 +279,7 @@ function KeyRow({
 }) {
   const { t } = useTranslation();
   const format = useFormat();
+  const retired = apiKey.retired_models?.join(", ");
   return (
     <tr>
       <Td className="w-full max-w-0 sm:w-auto sm:max-w-64 sm:min-w-40">
@@ -145,6 +287,11 @@ function KeyRow({
           {apiKey.name}
         </p>
         <p className="truncate font-mono text-label text-t4">{maskedKey(apiKey)}</p>
+        {retired ? (
+          <p className="truncate text-label text-warn" title={t("keys.retiredModels", { models: retired })}>
+            {t("keys.retiredModels", { models: retired })}
+          </p>
+        ) : null}
       </Td>
       <Td>
         <KeyStatus apiKey={apiKey} />
