@@ -12,8 +12,9 @@ on:
   push:
     branches: [main]
   # The merge train (train.yml, scripts/train.py) builds each train branch here. GITHUB_TOKEN's pushes start no workflow,
-  # so it dispatches this one: with base, the train is checked like a pull request from base, its PRs' whole change
-  # deciding what runs; without base (after a train lands on main), like a push to main.
+  # so it dispatches this one with base: the train is checked like a pull request from base, its PRs' whole change
+  # deciding what runs. Without base it runs like a push to main; the train's landing push (its deploy key) starts that
+  # run itself.
   workflow_dispatch:
     inputs:
       base:

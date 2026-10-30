@@ -138,7 +138,8 @@ class Landing(unittest.TestCase):
     def test_a_train_lands_in_one_fast_forward_when_the_ruleset_allows_it(self):
         fake = FakeLand(3, ff=True)
         self.assertEqual(fake.land_verified(), "c3")
-        self.assertEqual((fake.actions, fake.changed), (["fast-forward", "dispatch", "drop"], 3))
+        # the landing push triggers main's push workflows by itself: landing dispatches no second build
+        self.assertEqual((fake.actions, fake.changed), (["fast-forward", "drop"], 3))
 
     def test_a_refused_fast_forward_falls_back_to_merging_pr_by_pr(self):
         fake = FakeLand(2)
@@ -164,31 +165,42 @@ class Landing(unittest.TestCase):
                     fake.land_verified()
                     self.assertEqual(fake.actions, merges + ["dispatch", "drop"])
 
-    def test_resume_after_a_fast_forward_only_starts_mains_build(self):
+    def test_resume_after_a_fast_forward_only_forgets_the_record(self):
         fake = FakeLand(3, ff=True)
         fake.on_main = "tip"  # the run stopped after the push; GitHub may not have marked the PRs merged yet
         fake.prs[2]["headRefOid"] = "b" * 40  # nor does a PR that moved since matter: main holds the tested tip
         self.assertEqual(fake.land_verified(), "c3")
-        self.assertEqual(fake.actions, ["dispatch", "drop"])
+        self.assertEqual(fake.actions, ["drop"])
 
     def test_a_fast_forward_counts_by_where_the_base_is_after_the_push(self):
         # a refused push (the ruleset) leaves the base; a push whose reply was lost may still have moved it
         for returncode, base_after, landed in ((1, "m0", False), (1, "c3", True), (0, "c3", True)):
             with self.subTest(returncode=returncode, base_after=base_after):
                 fake = FakeLand(3)
+                fake.land_url = "git@github.com:x/y.git"
                 fake.base_head = lambda: base_after
                 pushed = mock.Mock(returncode=returncode, stderr="remote: error: GH013: Repository rule violations found" if returncode else "")
                 with mock.patch.object(train, "sh", return_value=pushed) as sh:
                     self.assertEqual(train.Train.fast_forward(fake, "c3"), landed)
-                sh.assert_called_once_with("git", "push", "-q", "origin", "c3:refs/heads/main", check=False)
+                sh.assert_called_once_with("git", "push", "-q", "git@github.com:x/y.git", "c3:refs/heads/main", check=False)
 
-    def test_the_record_stays_until_mains_build_is_dispatched(self):
-        for ff, landing in ((False, ["merge 1", "merge 2"]), (True, ["fast-forward"])):
-            with self.subTest(ff=ff):
-                fake = FakeLand(2, dispatch_error=True, ff=ff)
-                with self.assertRaises(RuntimeError):
-                    fake.land_verified()
-                self.assertEqual(fake.actions, landing)
+    def test_the_landing_push_goes_to_the_configured_remote(self):
+        with mock.patch.object(train, "FLAKY", "/nonexistent/flaky.toml"), \
+                mock.patch.dict(os.environ, {"TRAIN_LAND_URL": "git@github.com:x/y.git"}):
+            self.assertEqual(train.Train("x/y", "main").land_url, "git@github.com:x/y.git")
+        with mock.patch.object(train, "FLAKY", "/nonexistent/flaky.toml"), mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(train.Train("x/y", "main").land_url, "origin")
+
+    def test_the_record_stays_until_the_fallbacks_dispatch_succeeds(self):
+        fake = FakeLand(2, dispatch_error=True)
+        with self.assertRaises(RuntimeError):
+            fake.land_verified()
+        self.assertEqual(fake.actions, ["merge 1", "merge 2"])
+
+    def test_a_fast_forward_dispatches_no_build(self):
+        fake = FakeLand(2, dispatch_error=True, ff=True)  # dispatch_main raises, so touching it would fail the landing
+        self.assertEqual(fake.land_verified(), "c2")
+        self.assertEqual(fake.actions, ["fast-forward", "drop"])
 
     def test_a_failed_merge_keeps_the_record_for_the_next_run(self):
         fake = FakeLand(3, merge_error=2)
