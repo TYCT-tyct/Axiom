@@ -264,8 +264,11 @@ func (s *Service) replaceTOTP(ctx context.Context, p Principal, c FactorChange) 
 			return ErrTOTPOff
 		}
 		spent, err := s.spendCode(ctx, tx, user, locked, c.CurrentCode)
-		if err != nil || !spent {
-			return errors.Join(err, ErrBadCode)
+		if err != nil {
+			return err
+		}
+		if !spent {
+			return ErrBadCode
 		}
 		return s.queries.ReplaceTOTP(ctx, tx, ReplaceTOTPParams{
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,

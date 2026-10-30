@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/pgtest"
 )
 
 // TestSessionCookie: signing in sets a session cookie a page cannot read and that only HTTPS carries.
@@ -363,4 +364,25 @@ func TestLevelsAreEnforced(t *testing.T) {
 	f := newConsoleFixture(t)
 	rec := f.do(http.MethodPost, "/auth/recovery-codes", `{"code":"123456"}`, as(f.owner()))
 	expect(t, "regenerating with a password session", rec, http.StatusForbidden, consoleapi.ErrorCodeMfaRequired)
+}
+
+// TestReplaceTotpInternalError: a stored secret that cannot be opened is an internal error, not an invalid code, and
+// the session that tried stays signed in.
+func TestReplaceTotpInternalError(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	old := f.owner()
+	oldSecret, verified, _ := f.totpSetup(old)
+	if err := pgtest.Run(t.Context(), f.database.Superuser,
+		"UPDATE accounts.users SET totp_ciphertext = decode('00', 'hex') WHERE email = '"+ownerEmail+"'"); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.do(http.MethodPost, "/auth/totp/setup", "", as(verified))
+	expect(t, "beginTotpSetup", rec, http.StatusOK, "")
+	var setup consoleapi.TotpSetup
+	decode(t, rec, &setup)
+	f.clock.Advance(30 * time.Second)
+	body := `{"secret":"` + setup.Secret + `","current_code":"` + totpCode(t, oldSecret, f.clock.Now()) + `","code":"` + totpCode(t, setup.Secret, f.clock.Now()) + `"}`
+	expect(t, "replaceTotp with an unreadable secret", f.do(http.MethodPost, "/auth/totp/replace", body, as(verified)), http.StatusInternalServerError, consoleapi.ErrorCodeInternal)
+	expect(t, "the session after the internal error", f.do(http.MethodGet, "/session", "", as(verified)), http.StatusOK, "")
 }
