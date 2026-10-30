@@ -51,8 +51,8 @@
 | `GET /api/v1/models/user` | 按账户供应商偏好、隐私设置、护栏过滤后的模型 | api/models（OpenAPI `/models/user`） | 部分：复用列表的 key 可见性、过滤和分页，next 保留 user 路径 | `na:router/api-router.go:101`（`/user/self/models`） | 无 | 2026-10-29 核对官方用户模型文档；缺供应商偏好、隐私和护栏数据，不伪称这些过滤已生效 |
 | `GET /api/v1/providers` | 供应商列表及隐私政策链接 | api/providers/list-all-providers | 部分：有可见模型时列 Axiom/axiom，政策链接、总部和机房为 null，无可见模型时为空 | 无 | 无 | 2026-10-29 核对官方 providers 文档；聚合供应商不暴露真实货源，缺失政策和地域不虚构 |
 | `GET /api/v1/endpoints/zdr` | ZDR 过滤影响预览 | api/endpoints/preview-the-impact-of-zdr-on-the-available-endpoints | 没有 | 无 | 无 | 低优先 |
-| 模型变体后缀规则（目录变体 `:free/:batch/:thinking/:extended`，路由变体 `:nitro/:floor/:exacto/:online`；后缀可叠加） | 后缀是目录条目或路由开关 | docs/guides/routing/model-variants/overview | 部分：`internal/gateway/variant.go` 的 `variants` 表逐个定行为，`parseModelName` 在查目录之前读变体（调用、`models` 备选、`count_tokens`、模型详情与 endpoints 共用）；`:nitro/:floor` 生效，可叠加，最后一个排序变体生效；`:exacto` 只在质量验证过的端点上按质量优先（没有时 503 `no_endpoint`，原因 `not_verified`）；`:thinking` 只在请求已要求推理时接受，`:online`、`:free`、`:batch`、`:extended` 各按原因回 400，不认识的后缀回 404（`internal/catalog/snapshot.go` 仍拒绝带 `:` 的名字，目录没有变体条目） | 无 | 无 | 逐项行为见接入域「模型名变体」；目录变体要有条目才能服务，见各行 |
-| `~author/family-latest` 别名 | 总是解析到该系列最新模型，推理参数自动降级映射 | docs/guides/routing/routers/latest-resolution | 没有：`gw/variant.go` 认出 `~` 开头并回 400「暂不支持」（原来是 404）；目录没有别名表（名字只追加，公开名字不许 `~`、`-latest`，`cat/snapshot.go:146-149` 的 `Floating` 是供应商挪动版本，与别名无关） | 无 | 无 | 缺少显式模型族和可切换别名映射，不按前缀或日期猜测；取舍写在 `docs/domains/gateway.md` 决策与理由，归 #311 |
+| 模型变体后缀规则（目录变体 `:free/:batch/:thinking/:extended`，路由变体 `:nitro/:floor/:exacto/:online`；后缀可叠加） | 后缀是目录条目或路由开关 | docs/guides/routing/model-variants/overview | 部分：`internal/gateway/variant.go` 的 `variants` 表逐个定行为，`parseModelName` 在读目录之前处理变体（调用、`models` 备选、`count_tokens`、模型详情与 endpoints 共用）；`:nitro/:floor` 生效，可叠加，最后一个排序变体生效；`:thinking` 只在请求已要求推理时接受；`:free` 作为目录里的独立条目精确查询，没有条目回 404；`:exacto`、`:online`、`:batch`、`:extended` 各按原因回 400，不认识的后缀回 404；`~author/family-latest` 查目录别名表 | 无 | 无 | 逐项行为见接入域「模型名变体」；目录变体要有条目才能服务，见各行 |
+| `~author/family-latest` 别名 | 总是解析到该系列最新模型，推理参数自动降级映射 | docs/guides/routing/routers/latest-resolution | 部分：`internal/gateway/variant.go` 把 `~` 开头原样交给 `catalog.ResolvePublic`，目录的 `catalog.alias` 表只追加 `(名字, 目标模型)`，快照读最新版本；目标由管理员显式指定，响应 `model` 是具体标准 ID，目标下线时 404。OpenRouter 的推理参数自动降级映射没有做，别名只换模型。没有别名时 404，不按前缀或日期猜 | 无 | 无 | 目标显式，切换有审计；取舍见 `docs/domains/catalog.md` 决策与理由，归 #311 |
 | 官方 `models` 列表里不含 `:nitro` 等路由变体，客户端自己派生 | 路由变体不在目录里 | docs/guides/routing/model-variants/overview | 不适用 | 无 | 无 | 随后缀支持一起做 |
 
 ## 3. 供应商路由参数 `provider`、模型备选 `models`、变体
@@ -83,8 +83,8 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | `service_tier`（priority/flex/ultrafast 等）与端点分级计价 | 控制成本/延迟，按实际层级计费 | docs/guides/features/service-tiers | 部分：识别并按层级定价（`proto/grammar.go:57,76,363`，`proto/prepare.go:135-143`）；`:nitro/:floor` 只带来排序，没有它们说的层级准入（不写 `service_tier` 的请求本来可由 standard、priority 服务，`proto/inspect.go:141`；flex 要客户端自己写） | 无 | 无 | 层级定义见 `docs/domains/catalog.md`；为 `:floor` 准入 flex 要决定是否改写上游的 `service_tier`，见 `docs/domains/gateway.md` 待定问题 |
 | 变体 `:nitro`（按吞吐排序并准入 priority 层） | 路由变体 | docs/guides/routing/model-variants/nitro | 部分：等同 `provider.sort: throughput`（`gw/variant.go`，测试 `TestModelVariantsRoute`）；层级准入没有 | 无 | 无 | 排序一半做了；显式 `provider.sort` 优先于变体 |
 | 变体 `:floor`（按价格排序并准入 flex 层） | 路由变体 | docs/guides/routing/model-variants/floor | 部分：等同 `provider.sort: price`；层级准入没有 | 无 | 无 | 同上 |
-| 变体 `:exacto`（质量优先排序） | 路由变体 | docs/guides/routing/model-variants/exacto | 部分：映射到 `routing.BestQuality`（按运营质量分：可靠性、首字延迟、输出速度的 EWMA）加"只保留验证过的端点"（`quality` 的指纹检测填 `Verified`，`gw/route.go`）；没有验证过的端点时 503 `no_endpoint`、原因 `not_verified`；有显式 `provider.sort` 或后面的排序变体时被替换，不报错。Exacto 还要工具调用成功率与基准评分，这里没有声称按同样信号排序 | 无 | 无 | 工具成功率只在有工具调用的流量里有；基准评分等主动检测（#313 E3-12）与官方基线 |
-| 变体 `:free`（免费版条目，独立限额） | 目录变体 | docs/guides/routing/model-variants/free | 没有：400 `invalid_request`，说明本目录没有免费条目、发布价必须为正，也不落到付费的基础模型；`internal/billing` 的免单规则是零输出不收费，与免费模型无关 | 无 | 无 | 产品是否要有「免费模型」待定，非阻断 |
+| 变体 `:exacto`（质量优先排序） | 路由变体 | docs/guides/routing/model-variants/exacto | 部分：`routing.BestQuality` 按运营质量分（可靠性、首字延迟、输出速度的 EWMA）排序，并只保留真伪检测验证过的端点；没有已验证端点时 503 `no_endpoint`，原因 `not_verified`（失败关闭）。Exacto 还要工具调用成功率与基准评分，这里没有，因此不声称按相同信号排序；有显式 `provider.sort` 或后面的排序变体时被替换，不报错 | 无 | 无 | 等 G10 的主动检测数据，再决定 `:exacto` 是否映射到 `routing.BestQuality` |
+| 变体 `:free`（免费版条目，独立限额） | 目录变体 | docs/guides/routing/model-variants/free | 部分：目录可以建 `acme/model:free` 独立条目，要求基础模型已上架、每个币种的价都为 0；名字精确查询，没有该条目就 404，不落到付费基础模型。OpenRouter 的数据集解析也保留 `:free` 条目。没有自动把每个付费模型复制出免费版，由运营决定是否录入 | 无 | 无 | 免费版有自己的上下文和限额，只能作为独立模型数据存在；取舍见 `docs/domains/catalog.md` 决策与理由 |
 | 变体 `:batch`（批量价条目） | 目录变体，配合 Batch API | docs/batch-quickstart | 没有：400，本目录没有批量条目与价格（批量调用在「以后」） | 无 | 无 | 见 §16 |
 | 变体 `:online`（已弃用，等价于 `web` 插件） | 路由变体 | docs/guides/routing/model-variants/online | 没有：400，与 `web` 插件、`openrouter:web_search` 同一句「没有配置外部搜索服务」 | 无 | 无 | 官方已弃用；`web` 插件本身见 §10 |
 | 变体 `:thinking`（已弃用） | 目录变体 | docs/guides/routing/model-variants/thinking | 部分：请求自己已经要求推理时接受，按基础模型服务（本目录没有独立思考条目，后缀没有别的含义）；否则 400，提示改用 `reasoning` 参数 | 无 | 无 | 发现接口不执行请求级判断，按基础模型回 200 |
@@ -96,7 +96,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| `openrouter/auto`（按任务类型+市场花费份额选模型），插件 `auto-router`：`allowed_models`（通配）、`excluded_models`、`cost_tier`(low/medium/high/xhigh/max)；`openrouter/auto-beta` | 自动选模型，会话粘性 | docs/guides/routing/routers/auto-router | 没有（范围声明「以后」，`docs/product.md:92`） | 无 | 无 | 没有任务分类器和花费榜数据；可先做静态实现 |
+| `openrouter/auto`（按任务类型+市场花费份额选模型），插件 `auto-router`：`allowed_models`（通配）、`excluded_models`、`cost_tier`(low/medium/high/xhigh/max)；`openrouter/auto-beta` | 自动选模型，会话粘性 | docs/guides/routing/routers/auto-router | 部分：`openrouter/auto` 请求名已实现，按请求排序（`:nitro`、`:floor`、`provider.sort` 或预设策略）对全部可准入模型排序，取第一条并回显具体模型；`auto-beta`、插件成员 `allowed_models`、`excluded_models`、`cost_tier` 未实现 | 无 | 无 | 没有任务分类器和跨租户花费份额，用现有路由排序代替；取舍见 `docs/domains/gateway.md` 的 `openrouter/auto` 与决策与理由 |
 | `openrouter/free`（随机选支持所需能力的免费模型） | 零成本实验用 | docs/guides/routing/routers/free-router | 没有 | 无 | 无 | 依赖免费模型条目 |
 | `openrouter/pareto-code`（`pareto-router` 插件的 `min_coding_score`） | 按编码分挑最便宜的模型 | docs/guides/routing/routers/pareto-router | 没有 | 无 | 无 | 低优先，依赖外部基准数据 |
 | `openrouter/bodybuilder`（自然语言生成并行请求） | 路由器模型 | docs/guides/routing/routers/body-builder | 没有 | 无 | 无 | 低优先 |
@@ -277,7 +277,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 
 1. 【插件已落实，独立参数仍有缺口】`plugins` / `transforms` 已执行本地修复/压缩或明确 400（§10），不再静默丢弃；`route`、`usage`、`auto-router` 尚无实现。→ #311
 2. 【静默失效】`openrouter:*` 服务端工具类型不被识别（`internal/protocol/grammar.go` 原只认厂商的 `web_search_*`/`web_search`）。已缓解：文档列出的 13 种在三种格式里逐个认名并准入前拒绝，带这类工具的请求不再行为未定；联网搜索仍只有厂商原生的，外部搜索服务待选型。→ #311
-3. 【硬失败，部分已补】模型名后缀：`:nitro`、`:floor` 已支持（排序一半，`internal/gateway/variant.go`）；`:exacto` 已支持（验证过的端点上的质量优先，没有时 503）；`:online`、`:free`、`:batch`、`:extended` 回 400 并说明原因，`:thinking` 只在请求已要求推理时接受；`~anthropic/claude-sonnet-latest` 这类别名回 400 暂不支持，需要显式模型族与可切换别名映射，不能猜最新版本；`@preset/…` 已在 catalog 认名前按账户快照展开。→ #311（别名解析、`:nitro/:floor` 的层级准入）；`@preset/` 前缀随预设一起归 #313
+3. 【已落地，层级准入仍缺】模型名后缀：`:nitro`、`:floor` 已支持（排序一半，`internal/gateway/variant.go`）；`:free` 作为目录独立条目精确查询，没有条目 404；`~anthropic/claude-sonnet-latest` 这类别名查目录别名表，目标由管理员显式指定，响应 `model` 是具体模型；`:exacto` 质量优先且只保留已验证端点，没有时 503 `not_verified`；`:online`、`:batch`、`:extended` 回 400 并说明原因，`:thinking` 只在请求已要求推理时接受；`@preset/…` 已在 catalog 认名前按账户快照展开。→ #311（`:nitro/:floor` 的层级准入）；`@preset/` 前缀随预设一起归 #313
 4. 【明确偏离】`provider.order/only/ignore` 按公开分组代号生效，关闭回退、三种排序与对象分区已支持，`require_parameters` 按公开的端点参数清单过滤。非空 `quantizations`、`enforce_distillable_text`、百分位对象、`max_price.request/image` 缺必要事实（按请求的单位、按张的语义）而明确 400；`require_parameters` 里清单外的参数同样 400；来源和理由见 `docs/domains/gateway.md` 的路由参数。→ #313
 5. 【模型元数据】`GET /api/v1/models` 与 `/api/v1/models/{model}` 已是 OpenRouter 的模型对象：`pricing`（按 token、按次和按张计价的成员，取主站售价）、`context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`、`links.details`，外加查询参数过滤、排序和分页；`id` 是公开标准 ID，列表与路由快照同一次构建、一起发布，价格就是收费的价格。仍缺 `description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`（目录没有这些数据，整个不输出）、`alias_target`、`benchmarks`、按请求计价（按图已在 #320 补上）；`created` 恒 0、`default_parameters`/`supported_voices`/`per_request_limits` 是 null（都是 Axiom 没有的数据，填位置而不编造）。SDK 的模型选择器、编码代理的上下文窗口探测、成本估算已经可用。→ #311
 6. 【预设，已补】`@preset/…`、`preset` 字段与账户 CRUD 已实现（gateway/presets.go、accounts/presets.go、api/console.yaml）；版本 API 与响应缓存仍未实现。→ #313（预设属于路由配置）
@@ -291,7 +291,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 14. 【管理 API】`/api/v1/keys` 系列已提供管理 key 认证的调用 key CRUD（E4-9/P14）；限制与 OpenRouter 的差异见[账户域](domains/accounts.md#api-key)；`/workspaces`、`/guardrails`、`/organization` 管理 API 没有。→ #315（key）、#317（工作区/护栏的界面）
 15. 【响应缓存】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置没有；涉及内容保存政策，需要负责人定。→ 新建
 16. 【BYOK】用户自带供应商 key（`/byok`、优先/回退区、手续费）没有；范围里在「以后」。管理员侧号池已有。→ 新建
-17. 【路由器】`openrouter/auto`、`auto-beta`、`free`、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有；范围里 Auto Router 在「以后」。其中 `openrouter/free` 依赖 `:free` 条目。→ 新建
+17. 【路由器】`openrouter/auto` 已实现（按现有路由排序选具体模型）；`auto-beta`、`free`（`/free` 路由）、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有；其中 `openrouter/free` 的路由依赖 `:free` 条目，条目已支持但路由未做。→ 新建
 18. 【产品线】`/embeddings`、`/rerank`、`/images`、`/videos`、`/audio/speech`、`/audio/transcriptions`、音频/视频输入输出、Files API、Batch API、`/completions`、`/moderations`。向量化和重排是 RAG 开发者的硬需求，其余可后置；单次/按时长/按字符计价要先有 #320。→ 向量化/重排/批量/Files：#312 或新建；图片/视频/语音：#320
 19. 【认证与企业】OAuth PKCE 换 key、Workload Identity、SSO/SCIM、私有端点、终端用户登记、Broadcast 可观测性集成、护栏内容策略：不影响基本迁移。→ #315 / #316 / 新建
 20. 【不跟】`alignment`/`armor` 插件、Jev/Fusion/Switchyard 路由器、`debug.echo_upstream_body`、`openrouter_metadata` 路由元数据、地域路由、公开排名数据集：与 Axiom「不暴露供应商身份」或产品定位冲突，建议明确写成「有意不做」。→ 无

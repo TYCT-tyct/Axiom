@@ -58,6 +58,7 @@ type Input struct {
 	Admission  Admission
 	Req        *protocol.Request
 	Models     []catalog.ModelID
+	Auto       bool // rank every model in the snapshot: the request named openrouter/auto
 	Override   Override
 	Sticky     EndpointID
 	NativeOnly bool
@@ -92,6 +93,7 @@ type Entry struct {
 	Supplier        SupplierID
 	Target          protocol.Target
 	Model           catalog.ModelID
+	ModelSlug       string
 	Price           PriceRef
 	Limits          billing.Model
 	MaxOutput       int64

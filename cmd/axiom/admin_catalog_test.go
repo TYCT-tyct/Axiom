@@ -62,9 +62,10 @@ func (f catalogFixture) create(slug string) adminapi.Model {
 	return f.send(http.MethodPost, "/models", `{"slug":"`+slug+`","version_basis":"dated","price_source":"manual","spec":`+specBody+`,"reason":"a new model"}`, http.StatusCreated)
 }
 
-func (f catalogFixture) addName(m adminapi.Model, name, visibility string) adminapi.Model {
+// addName gives a model a public name, the only visibility an admin call may set here.
+func (f catalogFixture) addName(m adminapi.Model, name string) adminapi.Model {
 	f.t.Helper()
-	return f.send(http.MethodPost, "/models/"+m.Id+"/names", `{"name":"`+name+`","visibility":"`+visibility+`","reason":"its name"}`, http.StatusOK)
+	return f.send(http.MethodPost, "/models/"+m.Id+"/names", `{"name":"`+name+`","visibility":"public","reason":"its name"}`, http.StatusOK)
 }
 
 func (f catalogFixture) publish(m adminapi.Model, schedule string, base *adminapi.Uuid) adminapi.Model {
@@ -112,7 +113,7 @@ func (f catalogFixture) officialProof(author, currency string) string {
 // ready drafts a model that can be put on sale: its standard ID as a public name and a USD price.
 func (f catalogFixture) ready(slug string) adminapi.Model {
 	f.t.Helper()
-	return f.publish(f.addName(f.create(slug), slug, "public"), usd, nil)
+	return f.publish(f.addName(f.create(slug), slug), usd, nil)
 }
 
 func (f catalogFixture) setStatus(m adminapi.Model, status string) *httptest.ResponseRecorder {
@@ -152,6 +153,28 @@ func TestAuthorsThroughTheAPI(t *testing.T) {
 // isUSDBasic is whether the price is the USD schedule of the tests, input at one millionth.
 func isUSDBasic(p adminapi.ReferencePrice) bool {
 	return p.Currency == "USD" && p.Schedule != nil && p.Schedule.Rates.Input != nil && *p.Schedule.Rates.Input == "0.000001"
+}
+
+// TestFreeModelThroughTheAPI: the contract admits the slug the database admits, and the model read back carries it.
+func TestFreeModelThroughTheAPI(t *testing.T) {
+	t.Parallel()
+	f := newCatalogFixture(t)
+	base := f.ready("acme/alpha")
+	expectAdmin(t, "list the base", f.setStatus(base, "listed"), http.StatusOK, "")
+	free := f.create("acme/alpha:free")
+	free = f.addName(free, "acme/alpha:free")
+	free = f.publish(free, `{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`, nil)
+	free = f.send(http.MethodPut, "/models/"+free.Id+"/status", `{"status":"listed","rev":`+strconv.FormatInt(free.Rev, 10)+`,"reason":"free"}`, http.StatusOK)
+	if free.Slug != "acme/alpha:free" {
+		t.Errorf("the created free model has slug %q", free.Slug)
+	}
+	rec := f.do(http.MethodGet, "/models/"+free.Id, "", as(f.s))
+	expectAdmin(t, "get the free model", rec, http.StatusOK, "")
+	var got adminapi.Model
+	decode(t, rec, &got)
+	if got.Slug != "acme/alpha:free" {
+		t.Errorf("the API read the free model as %q", got.Slug)
+	}
 }
 
 // TestModelDraft: a model is drafted, gets its name and its price, each change answered with the model as it is.
@@ -216,7 +239,7 @@ func TestModelRefusals(t *testing.T) {
 	t.Parallel()
 	f := newCatalogFixture(t)
 	m := f.create("acme/alpha")
-	f.addName(m, "acme/alpha", "public")
+	f.addName(m, "acme/alpha")
 	official := f.officialProof("acme", "USD")
 	for _, c := range []struct {
 		name, method, path, body string
@@ -344,7 +367,7 @@ func TestCatalogKeys(t *testing.T) {
 	expectAdmin(t, "createModel", rec, http.StatusCreated, "")
 	var first, again adminapi.Model
 	decode(t, rec, &first)
-	f.addName(first, "acme/alpha", "public") // the model moves on; the replay is still the first response
+	f.addName(first, "acme/alpha") // the model moves on; the replay is still the first response
 	rec = f.change(f.s, http.MethodPost, "/models", body, key)
 	expectAdmin(t, "createModel again", rec, http.StatusCreated, "")
 	decode(t, rec, &again)

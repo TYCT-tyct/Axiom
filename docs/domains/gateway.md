@@ -198,7 +198,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 - **接受 OpenRouter 的参数**：
   - `provider` 对象：只走、排除、指定顺序、是否允许回退、要求支持全部参数、数据政策、排序、最高价、性能条件；
   - `models` 备选模型；Messages 也支持 `fallbacks: [{model: "…"}]`，限制与映射见[路由的「命名预设」](routing.md#命名预设)和「失败怎么办」；
-  - 模型名变体 `:nitro`、`:floor`：等同 `provider.sort` 的 `throughput`、`price`；`:exacto`：只在质量验证过的端点上按质量优先，没有时 503；`:online`、`:free`、`:batch`、`:extended`、`~…-latest` 别名返回 400，`:thinking` 只在请求已要求推理时接受，见下文「模型名变体」；
+  - 模型名变体 `:nitro`、`:floor`：等同 `provider.sort` 的 `throughput`、`price`；`:free` 查目录里的独立条目，没有就是 404；`~…-latest` 解析目录别名；`:exacto` 只在质量验证过的端点上按质量优先，没有时 503 `no_endpoint`（原因 `not_verified`）；`:online`、`:batch`、`:extended` 返回 400，`:thinking` 只在请求已要求推理时接受，见下文「模型名变体」；`openrouter/auto` 按路由排序选具体模型，见下文；
   - `@preset/名称`、`model@preset/名称`、`preset` 字段：使用当前账户的命名配置，覆盖与管理接口见[路由的「命名预设」](routing.md#命名预设)；
   - `session_id`、`x-session-id` 请求头、`prompt_cache_key`；请求体 session_id 优先于请求头，二者最多 256 字符；
   - `user`：终端用户标识，用于防滥用和归因。
@@ -253,7 +253,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 
 ### 模型名变体
 
-模型名后面可以跟 `:` 开头的变体，2026-10-29 核对 [OpenRouter Model Variants](https://openrouter.ai/docs/guides/routing/model-variants/overview)。网关在查目录之前读掉路由变体，目录只收到基础名字：目录里没有带 `:` 的名字（见[模型目录的「名字解析」](catalog.md#名字解析)）。读法只在 `internal/gateway/variant.go` 一处，调用、`models` 里的备选、`count_tokens`、两种模型详情和 OpenRouter endpoints 查询共用。调用响应和记录里的 `model` 仍是客户端写的整个名字；OpenRouter 模型发现响应仍报告基础标准 ID。认得出但本站不能兑现的请求回 400 `invalid_request` 并说明原因，不伪装成模型不存在，不调用基础模型。
+模型名后面可以跟 `:` 开头的变体，2026-10-29 核对 [OpenRouter Model Variants](https://openrouter.ai/docs/guides/routing/model-variants/overview)。网关在查目录之前读掉路由变体；`:free` 是唯一的目录后缀，作为独立条目原样交给目录（见[模型目录的「名字解析」](catalog.md#名字解析)），其余路由变体不会新建目录模型。读法只在 `internal/gateway/variant.go` 一处，调用、`models` 里的备选、`count_tokens`、两种模型详情和 OpenRouter endpoints 查询共用。调用响应和记录里的 `model` 在成功时是实际服务的具体模型（`RelayOptions.ActualModel`），调用记录仍保存客户端写的整个名字；OpenRouter 模型发现响应报告具体模型的标准 ID。认得出但本站不能兑现的请求回 400 `invalid_request` 并说明原因，不伪装成模型不存在，不调用基础模型。
 
 | 变体 | OpenRouter 的行为 | 这里 |
 |---|---|---|
@@ -261,21 +261,32 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | `:floor` | 按价格排序，并准入 flex 层的端点（[Floor](https://openrouter.ai/docs/guides/routing/model-variants/floor)） | 等同 `provider.sort: price`；层级准入见下 |
 | `:exacto` | 按质量信号排序：工具调用成功率、吞吐、延迟、基准结果（[Exacto](https://openrouter.ai/docs/guides/routing/model-variants/exacto)） | 质量优先排序（`routing.BestQuality`），并只保留质量验证过的端点；没有这样的端点时 503 `no_endpoint`，原因 `not_verified`。运营质量分只含可靠性、首字延迟和输出速度，没有 Exacto 的工具调用成功率和基准评分，所以不声称按同样信号排序 |
 | `:online` | 已弃用，等于 `web` 插件（[Online](https://openrouter.ai/docs/guides/routing/model-variants/online)） | 400：没有联网搜索服务，与 `web` 插件、`openrouter:web_search` 共用一句话（见「服务端工具」） |
-| `:free` | [独立免费目录条目](https://openrouter.ai/docs/guides/routing/model-variants/free)，与付费条目的规格、价格和端点分开，OpenRouter 仍在提供 | 400：本目录没有免费条目，发布价必须为正，兑现不了免费；不按零价猜测，也不回落到付费基础模型 |
+| `:free` | [独立免费目录条目](https://openrouter.ai/docs/guides/routing/model-variants/free)，与付费条目的规格、价格和端点分开，OpenRouter 仍在提供 | 目录里的独立模型：标准 ID 是 `基础标准 ID:free`，有自己的规格、上下限、零价和端点，精确查询；目录没有这个条目时 404 `model_not_found`，不回落到付费基础模型，也不按零价猜测。计费发布同样拒绝给它非零售价（`ErrFreePrice`），路由对已发布非零价的条目没有端点 |
 | `:thinking` | OpenRouter 已弃用，总览页让改用 `reasoning` 参数；原先是独立的思考目录条目 | 请求自己已经要求推理时**接受**：本目录没有独立条目，这个后缀唯一能兑现的含义就是开启推理，此时已经满足，按基础模型服务；没要求推理时 400，提示改用 `reasoning` 参数。发现接口按基础模型回 200 |
 | `:batch` | 独立批量计价条目 | 400：本目录没有批量条目与价格，不按普通价冒充批量价 |
 | `:extended` | 已弃用，且没有模型再提供（总览页） | 400：本目录没有这个条目 |
 | 别的后缀 | 总览页：只有列出的才是变体 | 404 `model_not_found` |
-| `~作者/系列-latest` | [Latest Model Resolution](https://openrouter.ai/docs/guides/routing/routers/latest-resolution)：按已登记的模型族映射选最新可见模型，响应 `model` 是具体模型 | 400：目录没有模型族与可切换的别名映射，不按字符串前缀或日期猜最新版本 |
+| `~作者/系列-latest` | [Latest Model Resolution](https://openrouter.ai/docs/guides/routing/routers/latest-resolution)：按已登记的模型族映射选最新可见模型，响应 `model` 是具体模型 | 目录别名表的最新目标：管理员把别名指向具体模型，切换追加版本并留审计；解析后按该模型的规格、价格和端点服务，响应 `model` 是具体标准 ID。没有别名时 404，不按前缀或日期猜最新版本 |
 
-- **一张表**：每个后缀做什么、拒绝时说什么，都在 `internal/gateway/variant.go` 的 `variants` 表里，三种格式、调用、备选、`count_tokens` 和发现共用。表外的后缀是 404。
-- **`:thinking` 为什么只有一半接受**：它不是排序，而是「换成会思考的条目」。本目录一个模型只有一份规格和价格，没有思考条目；请求已经用 `thinking` / `reasoning` 参数要了推理时，后缀要的东西已经满足，再拒绝只会让照 OpenRouter 写的客户端多改一处。判断按整理后的能力标记：空的 `reasoning_effort`（或 `reasoning.effort` 的空值）不算开启推理，因为转换后的上游请求不会带任何推理设置；只有真正写出的 effort、`enabled: true` 或预算才算。反过来，请求没要推理时接受它，就会把「开启思考」悄悄降级成普通回答，所以仍是 400，并告诉客户端改成参数。发现接口不执行请求级判断，因此 `:thinking` 和 `:exacto` 一样返回基础模型元数据。
-- **叠加**：变体可以任意顺序叠加，最后一个排序变体生效（总览页）：`:floor:nitro` 按吞吐，`:nitro:floor` 按价格。`:exacto` 之后又写了排序变体时，它已被替换，不报错；`:thinking` 与排序无关，叠加时保留。
+- **一张表**：每个后缀做什么、拒绝时说什么，都在 `internal/gateway/variant.go` 的 `variants` 表里，三种格式、调用、备选、`count_tokens` 和发现共用。表外的后缀是 404。`:free` 是例外的一条：它是目录数据，表里只把后缀留在名字上。
+- **`:free` 与 `:batch` 的区别**：OpenRouter 把免费版当独立模型，有独立的上下文、价格和端点，本站也建独立目录条目，所以 `:free` 能真正兑现，不是把付费请求改写成免费；`:batch` 还没有独立条目和价格，仍是 400。免费条目的上架门槛要求基础模型已上架、每个币种每个价都是 0，避免出现“免费名字按付费价收费”。
+- **别名**：`~作者/系列-latest` 走目录的 `alias` 表，表里只追加 `(名字, 目标模型)`，快照读最新版本；切换由 `axiom catalog save-alias` 完成，`change` 和审计记录改前改后。目标必须是同作者的已上架模型，避免跨厂商串族；目标下线时解析返回“已下线”。别名本身不按前缀或日期推导，所以 `acme/gpt-5` 与 `acme/gpt-50` 不会串族。
+- **`:thinking` 为什么只有一半接受**：它不是排序，而是「换成会思考的条目」。本目录一个模型只有一份规格和价格，没有思考条目；请求已经用 `thinking` / `reasoning` 参数要了推理时，后缀要的东西已经满足，再拒绝只会让照 OpenRouter 写的客户端多改一处。判断按整理后的能力标记：空的 `reasoning_effort`（或 `reasoning.effort` 的空值）不算开启推理，因为转换后的上游请求不会带任何推理设置；只有真正写出的 effort、`enabled: true` 或预算才算。反过来，请求没要推理时接受它，就会把「开启思考」悄悄降级成普通回答，所以仍是 400，并告诉客户端改成参数。发现接口不执行请求级判断，因此 `:thinking` 也像 `:exacto` 一样返回基础模型元数据。
+- **叠加**：变体可以任意顺序叠加，最后一个排序变体生效（总览页）：`:floor:nitro` 按吞吐，`:nitro:floor` 按价格。`:exacto` 之后又写了排序变体时，它已被替换，不报错，也不再要求端点已验证；`:thinking` 与排序无关，叠加时保留。
 - **与 `provider.sort` 同时写**：显式的 `provider.sort` 优先。依据是 exacto 页的一句话："An explicit sort by price, throughput, or latency overrides it"；nitro 和 floor 页没写这一点，按同样处理，所以 `:exacto` 加 `provider.sort` 也可用。
-- **发现与调用的区别**：两种模型详情及 OpenRouter endpoints 查询只解析基础模型、检查可见性，不执行调用的请求级校验；`:exacto` 和 `:thinking` 因此可以返回基础模型元数据（200），不代表相同名字有已验证的端点、或未要求推理时可调用。调用和 `count_tokens` 仍按上表拒绝不能兑现的变体；`:exacto` 的 503 是路由结果（暂时没有已验证端点），不是名字被拒。模型发现的成功不承诺某个请求的路由要求能被兑现。
-- **备选 `models`**：排序是整个请求一个（路由没有按模型的排序）。备选名字按同样的规则读：不支持的变体回 400，不当作略去；不认识的后缀，备选按"不存在"略去；已知目录变体回 400；备选的排序变体与请求最终的排序不同回 400；备选的 `:exacto` 在请求已经是 `:exacto`（主模型名上）或有显式 `provider.sort` 时成立，否则回 400；主模型名上的 `:nitro`、`:floor` 不算，因为它们不按质量排备选。`count_tokens` 读同样的名字和 `provider`，拒绝的与调用一致。
+- **发现与调用的区别**：两种模型详情及 OpenRouter endpoints 查询只解析基础模型、检查可见性，不执行调用的请求级校验；`:exacto` 和 `:thinking` 因此可以返回基础模型元数据（200），不代表相同名字在未指定 `provider.sort` 或未要求推理时可调用。调用和 `count_tokens` 按上表行事：`:exacto` 可以调用，但没有已验证端点时仍回 503；模型发现的成功不承诺某个请求的路由要求能被兑现。
+- **备选 `models`**：排序是整个请求一个（路由没有按模型的排序）。备选名字按同样的规则读：不支持的变体回 400，不当作略去；不认识的后缀，备选按"不存在"略去；没有 `:free` 条目或没有别名的备选也按"不存在"略去；备选的排序变体与请求最终的排序不同回 400；备选的 `:exacto` 只有请求本身已经是 `:exacto`（主模型名上）或有显式 `provider.sort` 时才成立，其余回 400，因为备选不单独按质量排。`count_tokens` 读同样的名字和 `provider`，拒绝的与调用一致。
 - **名字长度**：整个模型名（含变体）至多 200 字节，超过回 404 `model_not_found`，在准入之前。调用记录保存客户端写的整个名字，列最多 200 个字符；目录原来也不认更长的名字，不能让叠加的后缀绕过这个界限，被服务之后才丢了记录。
 - **层级准入没有做**：nitro 页说它同时准入 priority 层，floor 页说它同时准入 flex 层。这里只做排序一半。不写 `service_tier` 的请求本来就可以由 standard 和 priority 服务（协议 `anyTier`），flex 要客户端自己写 `service_tier`；为 `:floor` 改写发往上游的 `service_tier` 会改变预留和计费依据，另做。
+
+### `openrouter/auto`
+
+[Auto Router](https://openrouter.ai/docs/guides/routing/routers/auto-router) 让 OpenRouter 按任务分类、花费份额和成本档选一个模型。本站没有分类器和花费份额数据，用已有的路由排序代替：`openrouter/auto` 不是目录名字，网关在查目录之前认出它，把请求的排序（`:nitro`、`:floor`、`provider.sort` 或预设策略）作用到**这个 key 能调用的全部目录模型**上，取排序后的第一条，响应和记录里的 `model` 是它实际服务的具体模型。
+
+- **范围**：只考虑本次请求的准入能通过的模型（key 的模型权限、预设的类别和数据策略、上下文和输出上限、供应商余额和熔断等）；请求自己的 `models` 列表不再追加候选，因为 auto 已经覆盖全部模型。
+- **排序**：用请求的显式排序，没有就用预设的策略（默认均衡）；`openrouter/auto:nitro`、`:floor` 仍按变体规则改排序。随后的端点排序和回退照旧，所以一次 auto 调用失败后可以换到排名更后的模型，每次尝试的 `ActualModel` 都按该端点报告。
+- **不支持**：`count_tokens` 回 400，因为没有具体模型能算 token；`context-compression` 回 400，因为压缩需要知道所选模型的上下文窗口；OpenRouter 的 `/free` 路由不在本期。
+- **发现**：`/models` 不列出 `openrouter/auto`，它不是可上架的模型。
 
 ### 给其他中转站对接的接口
 
@@ -374,10 +385,13 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | Chat 回复的推理文本同时写 `reasoning` 和 `reasoning_content` | 负责人 2026-10-18：照 new-api 写 `reasoning_content`。两个名字都有人用：`reasoning_content` 是 DeepSeek、new-api、LiteLLM 的（LiteLLM 文档《Reasoning Content》），`reasoning` 是 OpenRouter 和新版 vLLM 的（OpenRouter《Reasoning Tokens》，vLLM《Reasoning Outputs》，2026-10-19）；读一个的客户端对另一个当作未知字段忽略。同文并存，客户端读哪个都对；只留一个就会让另一半客户端读不到推理。已知风险：若有客户端把两个字段都显示，推理会出现两遍，没有实测过，发现再收回其中一个。代价是推理文本多发一份 |
 | 变体在网关里读，目录和路由都不认识后缀 | 变体是路由开关，不是模型：放进目录会让一个模型分裂成多个条目，也要放宽目录"带 `:` 的名字永远查不到"的不变量，那条不变量正是为了保证带后缀的写法落不到基础模型。读法集中在 `variant.go`，调用、备选和 `count_tokens` 共用，不会各自读出不同的结果 |
 | 已知且不能兑现的目录变体回 400，未知后缀仍 404 | 选择在网关解释并拒绝，而不放宽目录约束或将后缀剥掉调用基础模型；后者可能收费或丢失推理约束。OpenRouter 的缺失目录条目 404 是其具有变体目录时的行为，本站因功能不可用主动回 400，是本任务要求的有意偏离。错误要让客户端区分功能尚不可用与模型下线 |
+| `:exacto` 只路由到质量验证过的端点 | 目录里没有 Exacto 的工具调用成功率和基准评分，但真伪检测已经能给出「这个端点自称的模型是假的吗」；把「按未测量的 Exacto 信号排序」降级成「质量优先且只信验证过的端点」，比继续 400 更接近用户想要的，也不假装有基准分。没有已验证端点时失败关闭（503 `not_verified`），不回落到未验证端点。 |
 | 显式 `provider.sort` 压过变体 | exacto 页明说显式排序覆盖它；请求体里的字段比名字里的后缀更具体，nitro 和 floor 照此处理。代价：写了 `:nitro` 又写 `sort: price` 的客户端得到按价格排序，与 OpenRouter 的实际行为未核对（页面没写） |
 | 服务端工具按 OpenRouter 文档逐个认名拒绝，联网搜索的三种写法共用一句话，执行留一个接口 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P2。比较整段 `openrouter:` 前缀一条消息与逐类型识别：后者说得出哪个工具、缺什么，OpenRouter 以后新增的名字仍拒绝但说明不认识。比较现在就实现工具循环与只定接口：循环要外部搜索或抓取服务、沙箱和按步计费，负责人还没选服务，先做会把计费和数据政策锁死；因此 `web` 插件、`:online`、`openrouter:web_search` 共用一个原因，其余工具说没有模型侧循环，接口职责与待定事项写在「服务端工具」。不先加空的 Go 接口：没有实现者，仓库规则不留只为将来的抽象 |
-| 模型名变体逐项定行为：能兑现的兑现，不能的带原因拒绝 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P3。2026-10-29 核对官方页面：`:nitro`、`:floor` 排序，`:exacto` 质量信号，`:thinking` 已弃用，`:online` 等于 web 插件，`:free`、`:batch` 独立目录条目，`:extended` 已下线，`~…-latest` 要模型族映射。能在本站兑现的是排序、「请求已要求推理时的 `:thinking`」，以及 `:exacto` 在真伪验证过的端点上的质量优先（缺工具成功率与基准，所以不声称完整 Exacto）：`:free` 与正价发布矛盾，其余条目不存在，别名缺映射，所以各自说明原因后拒绝，不静默剥掉后缀。`:thinking` 的接受条件放在 `readRouting`，发现接口不执行请求级判断；`:online` 改说搜索服务而不是「暂不支持」 |
-| `~…-latest` 认出后回 400，保留后续别名表方向 | 比较显式的模型族/别名映射与按名字、日期猜测最新：只有映射能保证不串模型族、发现与调用价格一致、切换有审计。现有名字只追加，规格没有族关系，不能兑现“最新”。本次保留结构化拒绝，不把内部 `-latest` 名字开放调用，不新增未经数据证据支撑的自动切换；后续映射应独立于不可改指向的公开名字。决定依据同上 #309 授权，不再以等待负责人拍板为由阻塞 |
+| 模型名变体逐项定行为：能兑现的兑现，不能的带原因拒绝 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P3。2026-10-29 核对官方页面：`:nitro`、`:floor` 排序，`:exacto` 质量信号，`:thinking` 已弃用，`:online` 等于 web 插件，`:free`、`:batch` 独立目录条目，`:extended` 已下线，`~…-latest` 要模型族映射。能在本站兑现的是排序、`:free` 的独立目录条目、别名表和「请求已要求推理时的 `:thinking`」；`:exacto` 缺工具成功率与基准，`:batch`、`:extended` 没有条目和价格，所以各自说明原因后拒绝，不静默剥掉后缀。`:thinking` 的接受条件放在 `readRouting`，发现接口不执行请求级判断；`:online` 改说搜索服务而不是「暂不支持」 |
+| `:free` 作为目录里的独立模型，不做名称改写 | OpenRouter 的免费版有自己的上下文、价格和端点，改写付费名字会把付费价带进免费请求或反过来；独立条目让发现、上架门槛、零价校验和路由都复用现有路径，没有条目时返回 404 而不是偷偷用付费模型 | 解析时去掉 `:free` 或加 `free_of` 列：要另写发现、价格和路由，且无法表达免费版更小的上下文 |
+| `~…-latest` 用目录别名表，显式目标、只追加 | 只有显式映射能保证不串模型族、发现与调用用同一个目标、切换有审计；按日期或前缀猜最新会在新模型上架时悄悄改掉用户实际调用和计费的模型。别名目标必须同作者且已上架，目标下线时解析为“已下线” | 按名字前缀挑最新；把别名做成 `name` 表的可变行：前者会串族，后者要 UPDATE 权限且旧快照与 `change` 对不上 |
+| `openrouter/auto` 用现有路由排序代替 OpenRouter 的分类器 | OpenRouter 按任务分类、花费份额和成本档选模型；本站没有分类器所需的标注数据和跨租户花费份额，硬编一个会把没有证据的偏好说成“智能”。把请求的排序作用到全部可准入模型上，选择可解释、可测试，也复用端点过滤、熔断和计价；选中后回显具体模型，客户端能知道实际用了谁 | 新写一个 auto 打分器或固定挑最便宜：前者没有数据支撑、还要新维护一套权重，后者忽略 `:nitro` 和用户排序；两者都绕开现有路由的准入与回退 |
 | 会话、用户标识换成派生值，而不是删除 | 删除会让上游缓存失效；原样转发会串租户、泄露标识 |
 | 响应头按白名单放行 | 上游的请求 ID、组织名等头会暴露货源 |
 | 开始转发内容之前不发保活 | 此时还可能换端点；提前发出任何字节，状态码就无法再改 |
@@ -410,7 +424,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 - 官方供应商名称的可信映射、逐端点的采样/提供商参数清单、量化事实、性能百分位、按请求计价仍缺数据；按张的输入价已有目录项，端点和 `max_price.image` 的语义未定。`require_parameters` 目前用模型规格推出的公开参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定；现状与明确拒绝项只在「路由参数」定义。
 - 402 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
-- `~作者/系列-latest` 别名的后续实现：目录需要独立的模型族与可切换别名映射，切换追加审计；发现和调用应使用同一次发布的目标、规格与价格，响应 `model` 按 OpenRouter 返回具体模型。现有名字仍只追加，不把内部名字开放调用。需要补齐模型族数据与版本选择依据后再实现，不按前缀或日期猜最新；价格与能力变化遵循[目录的切换与迁移](catalog.md#模型的生命周期)。当前请求仍为上文说明原因的 400。
+- `~作者/系列-latest` 的别名表已经落地；后续只缺后台界面：现在由 `axiom catalog save-alias` 写。发现和调用用同一次快照的目标、规格与价格，响应 `model` 是具体标准 ID。价格与能力变化仍遵循[目录的切换与迁移](catalog.md#模型的生命周期)。
 - 服务端工具的外部服务：选哪个搜索或抓取服务、数据保留与零保留条款、按次成本与售价、密钥保管和出网，由负责人决定；决定前 `web` 插件、`:online` 和 `openrouter:web_search` 都回 400。职责划分和要决定的事项见「服务端工具」。
 - `:nitro`、`:floor` 的层级准入：为 `:floor` 准入 flex 层要决定是否改写发给上游的 `service_tier`，及其对预留和计费的影响
 - Claude Code 的 Bedrock、Vertex 格式和 Gemini 原生格式的支持，以后再做

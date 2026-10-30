@@ -226,6 +226,9 @@ func publishIn(ctx context.Context, tx pg.Tx, r PublishPriceRequest, n newPrice)
 
 // checkPublish applies the gates to a schedule about to follow head: a listed model's listing gate, and the loss check.
 func checkPublish(row CatalogModel, spec spec, n newPrice, head price, confirmBasisChange bool) error {
+	if err := refuseFreePrice(row, n); err != nil {
+		return err
+	}
 	if Status(row.Status) == StatusListed {
 		if err := covers(n.currency(), n.schedule, spec.reportable); err != nil {
 			return err
@@ -354,11 +357,23 @@ func checkBases(heads prices, bases map[string]uuid.UUID) error {
 	return nil
 }
 
+// refuseFreePrice keeps a :free entry's history zero in every currency. The listing gate checks the current heads, but a
+// later PublishPrice or SelectPriceSource must not create a paid head behind the free name.
+func refuseFreePrice(row CatalogModel, n newPrice) error {
+	if freeSlug(row.Slug) && !n.schedule.IsZero() {
+		return fmt.Errorf("%w: a :free entry's price must be zero for every item, service tier and context band", ErrInvalid)
+	}
+	return nil
+}
+
 // checkSwitch applies the gates to every new schedule. Each is compared with every currency that has a price now, not
 // only its own: the currencies the new source lacks are withdrawn, so a price that only they had would be lost.
 func checkSwitch(row CatalogModel, spec spec, heads prices, news map[string]pricedFrom, confirmBasisChange bool) error {
 	for _, currency := range slices.Sorted(maps.Keys(news)) {
 		n := news[currency].newPrice
+		if err := refuseFreePrice(row, n); err != nil {
+			return err
+		}
 		if Status(row.Status) == StatusListed {
 			if err := covers(currency, n.schedule, spec.reportable); err != nil {
 				return err
