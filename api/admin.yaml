@@ -4338,6 +4338,40 @@ components:
         floor: {$ref: "#/components/schemas/Money"}
         available: {$ref: "#/components/schemas/Money"}
         spent_this_month: {$ref: "#/components/schemas/Money"}
+        batches:
+          type: array
+          description: >-
+            The credit batches that still hold something, oldest credit first, with what is left in each and when it
+            stops counting. An account with nothing is an empty array. Read in the same snapshot as the balance:
+            absent on a node of the previous release, when the allocation could not be brought up to date in bounded
+            time, or when a transaction committed after the last replay. The page then shows this part as unavailable
+            rather than a number from a different moment.
+          items: {$ref: "#/components/schemas/CreditBatch"}
+    CreditBatch:
+      type: object
+      required: [id, source, amount, remaining, frozen, created_at]
+      description: >-
+        Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending
+        takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this
+        batch, not what the next charge will take.
+      properties:
+        id:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: The batch's own identity; paid credit uses the order's ID as the batch ID.
+        source:
+          type: string
+          enum: [gift, paid]
+          x-enum-varnames: [CreditBatchGift, CreditBatchPaid]
+          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment."
+        amount: {$ref: "#/components/schemas/Money"}
+        remaining: {$ref: "#/components/schemas/Money"}
+        frozen: {$ref: "#/components/schemas/Money"}
+        created_at: {type: string, format: date-time}
+        expires_at:
+          type: string
+          format: date-time
+          description: "When what is left of the batch stops counting. Absent when it never expires."
     Uuid:
       type: string
       pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
