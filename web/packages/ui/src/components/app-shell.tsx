@@ -1,7 +1,7 @@
 import { Slot } from "radix-ui";
-import { type ComponentProps, type CSSProperties, type ReactNode, type RefObject, useEffect, useRef } from "react";
+import { type ComponentProps, type ReactNode, type RefObject, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { brandStyle } from "../brand";
+import { useBrandStyle } from "../brand";
 import { cn } from "../cn";
 import { Button } from "./button";
 import { Icon } from "./icon";
@@ -34,11 +34,9 @@ export function AppShell({
 }) {
   const { t } = useTranslation("common");
   const drawer = useRef<HTMLDialogElement>(null);
+  useBrandStyle(brandColor);
   return (
-    <div
-      className="min-h-dvh text-ui lg:grid lg:grid-cols-[216px_minmax(0,1fr)]"
-      style={brandColor ? (brandStyle(brandColor) as CSSProperties) : undefined}
-    >
+    <div className="min-h-dvh text-ui lg:grid lg:grid-cols-[216px_minmax(0,1fr)]">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-btn focus:bg-s2 focus:px-3 focus:py-2"

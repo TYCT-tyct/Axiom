@@ -1,11 +1,11 @@
-import { Button, brandStyle, Logo, PreferenceSwitches, usePageTitle } from "@axiom/ui";
-import type { CSSProperties, ReactNode } from "react";
+import { Button, Logo, PreferenceSwitches, useBrandStyle, usePageTitle } from "@axiom/ui";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { SignOutError } from "../parts";
 import { useSignOut } from "../session";
 
-// What names the site on a page of the app: its name, logo and brand colour, which the app's site settings give (none
-// yet: the default). The admin is the platform's and has no site to name.
+// What names the site on a page of the app: its name, logo and brand colour, from the console's site; the admin is the
+// platform's and has no site to name.
 export type Brand = { name?: string; logo_url?: string; brand_color?: string } | undefined;
 
 // AuthFrame is the page around a sign-in, two-step or registration form: the site's name and logo above, one form
@@ -24,11 +24,9 @@ export function AuthFrame({
   children: ReactNode;
 }) {
   usePageTitle(title);
+  useBrandStyle(brand?.brand_color);
   return (
-    <div
-      className="flex min-h-dvh flex-col"
-      style={brand?.brand_color ? (brandStyle(brand.brand_color) as CSSProperties) : undefined}
-    >
+    <div className="flex min-h-dvh flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 p-4 sm:px-6">
         <Logo name={brand?.name} logoUrl={brand?.logo_url} className="min-w-0" />
         <PreferenceSwitches className="flex gap-2" />
