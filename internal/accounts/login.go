@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"math"
 	"net/netip"
 	"strconv"
@@ -228,6 +229,11 @@ func failing[K comparable](s *Service, ctx context.Context, l loginLimit[K], att
 		return &TooManyAttempts{RetryAfter: wait}
 	}
 	if err := attempt(); err != nil {
+		// A correct password sent to the wrong console domain is not a guess: do not let repeated attempts spend
+		// the email's failure budget and lock a user out of a sign-in they could have made elsewhere.
+		if errors.Is(err, ErrWrongLoginDomain) {
+			giveAttempt(s, ctx, l, at)
+		}
 		return err
 	}
 	giveAttempt(s, ctx, l, at)

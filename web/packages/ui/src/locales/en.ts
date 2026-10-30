@@ -27,6 +27,14 @@ export default {
     invalid_code: "That code is wrong, or that recovery code was already used.",
     forbidden: "Your account can’t do this.",
     mfa_required: "This needs two-step verification first.",
+    login_domain_locked:
+      "The sign-in domain can’t change while passkeys or linked sign-in accounts exist. Remove them first.",
+    login_domain_required: "Choose the console domain that third-party sign-in and passkeys use.",
+    identity_taken: "That third-party account is already linked to another user.",
+    identity_already_linked:
+      "This account already has an account from that provider. Unlink it before linking another.",
+    account_not_linked:
+      "That third-party account isn’t linked to anyone here. Sign in with your password and link it first.",
     origin_rejected: "The request wasn’t accepted. Reload the page and try again.",
     not_found: "That doesn’t exist. It may have been deleted.",
     conflict: "That conflicts with what’s already there. Reload and try again.",

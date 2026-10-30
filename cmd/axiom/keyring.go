@@ -20,6 +20,7 @@ const keyringUsage = "usage: axiom keyring check | add|activate|retire --version
 func keyRotation(db *pg.DB, path string) secret.Rotation {
 	return secret.Rotation{DB: db, Scope: pg.PlatformScope(), Path: path, Stores: []secret.EnvelopeStore{
 		{Schema: "accounts", Table: "users", ID: "id", Prefix: "totp_", Purpose: "totp"},
+		{Schema: "accounts", Table: "site_oauth_providers", ID: "id", Prefix: "client_secret_", Purpose: "client_secret"},
 		{Schema: "suppliers", Table: "supplier_logins", ID: "supplier_id", Purpose: "login"},
 		{Schema: "suppliers", Table: "credentials", ID: "id", Purpose: "key"},
 		{Schema: "payments", Table: "merchant_configs", ID: "merchant_id", Purpose: "config"},

@@ -169,6 +169,13 @@ export const siteRegistrationQuery = (siteId: AdminSchemas["SiteId"]) =>
       unwrap(adminApi.GET(`${base}/sites/{site_id}/registration`, { params: { path: { site_id: siteId } }, signal })),
   });
 
+export const siteSignInQuery = (siteId: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-sign-in", siteId],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/sign-in`, { params: { path: { site_id: siteId } }, signal })),
+  });
+
 export const siteLogoQuery = (siteId: AdminSchemas["SiteId"]) =>
   queryOptions({
     queryKey: [accountKey, "site-logo", siteId],
