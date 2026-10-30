@@ -129,6 +129,9 @@ function Restrictions({ apiKey, error }: Section) {
         defaultValue={apiKey?.models?.join("\n")}
         error={errors.field(error, "models")}
       />
+      {apiKey?.retired_models?.length ? (
+        <p className="text-label text-warn">{t("keys.retiredModels", { models: apiKey.retired_models.join(", ") })}</p>
+      ) : null}
       <TextAreaField
         label={t("keys.form.ips")}
         hint={t("keys.form.ipsHint")}

@@ -49,6 +49,13 @@ const routeTree = root.addChildren([
     createRoute({
       getParentRoute: () => app,
       path: "/keys",
+      validateSearch: (search: Record<string, unknown>) => ({
+        name: text(search.name),
+        prefix: text(search.prefix),
+        status: keyStatus(search.status),
+        created_after: text(search.created_after),
+        created_before: text(search.created_before),
+      }),
       component: lazyRouteComponent(() => import("./pages/keys")),
     }),
     createRoute({
@@ -88,6 +95,11 @@ const routeTree = root.addChildren([
 
 function text(value: unknown) {
   return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+// A status from the address is one the API knows; anything else is no filter, not a request it would refuse.
+function keyStatus(value: unknown) {
+  return value === "active" || value === "disabled" || value === "expired" ? value : undefined;
 }
 
 export const router = createRouter({ ...routerDefaults, routeTree, basepath: import.meta.env.BASE_URL });
