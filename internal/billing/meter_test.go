@@ -127,6 +127,28 @@ func TestMeterOutput(t *testing.T) {
 	}
 }
 
+// TestMeterToolCalls: the framework of a client tool call is output the upstream may omit from its report, so the
+// meter's byte bound adds it too. Thirty calls of 45 tokens pass a segment of 8 by far even though the arguments are
+// empty, and the extension they ask for covers the settlement's estimate rather than leaving the difference to the
+// platform.
+func TestMeterToolCalls(t *testing.T) {
+	e := entry(t, true, 3)
+	e.MaxOutput = 4000
+	m := meter(t, Demand{TextBytes: 80}, e)
+	step := m.Observe(Progress{ContentBytes: 60, ToolCalls: 30, ToolCallTokens: 45})
+	if !step.Extend || !step.Exhausted || step.Request.Seq != 2 || units(t, step.Request.Target) != target(t, 1418) {
+		t.Fatalf("Observe = %+v, want extension 2 to %s and exhausted", step, target(t, 1418))
+	}
+	m.Extended(2, nil)
+	if step := m.Observe(Progress{ContentBytes: 60, ToolCalls: 30, ToolCallTokens: 45}); step.Extend || step.Exhausted {
+		t.Errorf("after approval: Observe = %+v, want to continue", step)
+	}
+	plain := meter(t, Demand{TextBytes: 80}, e)
+	if step := plain.Observe(Progress{ContentBytes: 3}); step.Extend || step.Exhausted {
+		t.Errorf("without the calls: Observe = %+v, want no extension", step)
+	}
+}
+
 // TestMeterLeft: Left is what the approved segments still cover of the output, never below zero, and grows by the
 // segment an extension adds; once they cover the output limit nothing more can come.
 func TestMeterLeft(t *testing.T) {

@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json/jsontext" //nolint:depguard // control values are compared after unquoting
 	"fmt"
+	"slices"
 	"strconv"
 
 	"axiom/internal/catalog"
@@ -38,6 +39,16 @@ type chatStream struct {
 	reportErr                         error
 	// The reasoning members of the delta being read, to be written under both names.
 	reasoning, reasoningContent reasoningMember
+	// pending are the tool-call indices of the choice being read, counted after its index is known: a chunk may put
+	// delta before index. The small buffers keep the common calls allocation-free; a longer response grows them and
+	// the growth is charged. seen and nSeen are the first (choice, tool) pairs counted, extra the rest, so a call's
+	// repeated deltas count once and the same index in another choice is another call.
+	pending    []int64
+	pendingBuf [8]int64
+	seen       [8]chatToolKey
+	nSeen      int
+	extra      map[chatToolKey]struct{}
+	toolIndex  int64
 }
 
 func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
@@ -48,6 +59,7 @@ func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstr
 // format the client reads, so it rewrites nothing and they set converting (README.md「跨格式的流」).
 func newChatStreamReader(u UsageContext, o RelayOptions, charge func(int) error) *chatStream {
 	s := &chatStream{choices: map[int64]bool{}}
+	s.pending = s.pendingBuf[:0]
 	s.init(u, o, nil, charge)
 	s.chatWriter = chatWriter{id: s.eventReader.id, model: s.eventReader.model, created: "0", legacy: o.legacyFunctions} // quoted by init already
 	return s
@@ -78,11 +90,10 @@ var (
 		"reasoning":         func(s *chatStream) error { return s.reasoningOf(&s.reasoning) },
 		"reasoning_content": func(s *chatStream) error { return s.reasoningOf(&s.reasoningContent) },
 		"reasoning_details": (*chatStream).rawContent,
-		"tool_calls": func(s *chatStream) error {
-			return s.eachElement(func() error { return walk(&s.reader, s, toolCallFields) })
-		},
+		"tool_calls":        func(s *chatStream) error { return s.eachElement(s.toolCall) },
 	}
 	toolCallFields = map[string]func(*chatStream) error{
+		"index":    (*chatStream).toolCallIndex,
 		"function": func(s *chatStream) error { return walk(&s.reader, s, functionFields) },
 	}
 	functionFields = map[string]func(*chatStream) error{"name": (*chatStream).visibleText, "arguments": (*chatStream).visibleText}
@@ -173,8 +184,11 @@ const choiceSize = 48
 
 // choice reads one choice of a chunk, starting it, and splits off its finish signal.
 func (s *chatStream) choice() error {
-	s.noChoices, s.index, s.finish = false, 0, nil
+	s.noChoices, s.index, s.finish, s.pending = false, 0, nil, s.pending[:0]
 	if err := s.walkNoting(choiceFields, false); err != nil {
+		return err
+	}
+	if err := s.countTools(); err != nil {
 		return err
 	}
 	if _, started := s.choices[s.index]; !started {
@@ -250,6 +264,73 @@ func (s *chatStream) finishReason() error {
 	return s.edit(len(v), "null")
 }
 
+// toolCall notes the index of a tool-call element. The element's choice may come after it, so counting waits until the
+// choice is read; the note is kept in a slice the stream reuses, and its growth is charged like any other buffer.
+func (s *chatStream) toolCall() error {
+	s.toolIndex = -1
+	if err := walk(&s.reader, s, toolCallFields); err != nil {
+		return err
+	}
+	if s.toolIndex < 0 {
+		return nil
+	}
+	if len(s.pending) == cap(s.pending) {
+		if err := s.charge(max(cap(s.pending), 8) * 8); err != nil {
+			return err
+		}
+	}
+	s.pending = append(s.pending, s.toolIndex)
+	return nil
+}
+
+// countTools counts the choice's tool calls once its index is known, once per (choice, tool) pair. The first pairs
+// live in the stream's inline buffer; a longer set is charged per entry. An index of any accepted width is kept, and a
+// call's deltas repeat its pair rather than add one.
+func (s *chatStream) countTools() error {
+	for _, tool := range s.pending {
+		key := chatToolKey{choice: s.index, tool: tool}
+		if s.counted(key) {
+			continue
+		}
+		if s.nSeen < len(s.seen) {
+			s.seen[s.nSeen] = key
+			s.nSeen++
+		} else {
+			if err := s.charge(chatToolKeySize); err != nil {
+				return err
+			}
+			if s.extra == nil {
+				s.extra = make(map[chatToolKey]struct{})
+			}
+			s.extra[key] = struct{}{}
+		}
+		s.e.toolCalls++
+	}
+	return nil
+}
+
+// counted reports whether the pair was already counted for this stream.
+func (s *chatStream) counted(key chatToolKey) bool {
+	if slices.Contains(s.seen[:s.nSeen], key) {
+		return true
+	}
+	_, seen := s.extra[key]
+	return seen
+}
+
+func (s *chatStream) toolCallIndex() error {
+	n, err := s.count()
+	s.toolIndex = n
+	return err
+}
+
+// chatToolKey is one client tool call in a Chat chunk: its choice and the index the format repeats across its deltas.
+type chatToolKey struct{ choice, tool int64 }
+
+// chatToolKeySize is what the overflow set is charged per counted call: a key and a value plus the table's growth,
+// rounded up. The inline pairs are part of the stream and need no charge.
+const chatToolKeySize = 64
+
 func (s *chatStream) upstreamError() error {
 	s.failed = s.dec.PeekKind() != 'n'
 	return errorObject(&s.reader, &s.eventReader, errorFields)
@@ -280,6 +361,7 @@ func (s *chatStream) usage() error {
 func (s *chatStream) dropBuffers() {
 	s.eventReader.dropBuffers()
 	s.choices, s.held, s.finish, s.first, s.report, s.reportErr = nil, nil, nil, "", nil, nil
+	s.pending, s.nSeen, s.extra, s.toolIndex = s.pendingBuf[:0], 0, nil, 0
 	s.reasoning, s.reasoningContent = reasoningMember{}, reasoningMember{}
 }
 

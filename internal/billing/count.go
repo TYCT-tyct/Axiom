@@ -126,6 +126,27 @@ var shapeWeights = [NumTokenizers]textshape.Weights{
 	TokenizerClaude47: {152, 177, 140, 89, 452, 145, 282, 260, 138, 21},
 }
 
+// toolCallTokens is what each family's framework adds to a tool call beyond the name, arguments and input the text
+// estimate already counts. Messages and Chat tally a client tool's name and arguments but not the id, type, keys and
+// punctuation around them, which the shape has no text for. 45 is the conservative end of the measured 50 tokens one
+// tool call adds and 98 two (docs/domains/billing.md「用量来源与暂估」); OpenAI's name and arguments are already
+// tallied and no sample has measured what is left, so it adds nothing rather than a guess.
+var toolCallTokens = [NumTokenizers]int64{
+	TokenizerO200k:    0,
+	TokenizerCl100k:   0,
+	TokenizerClaude:   45,
+	TokenizerClaude47: 45,
+}
+
+// ToolCallTokens estimates the tokens one tool call's framework adds in family t's tokens; zero for a family whose
+// text already carries the call and for one without a measurement.
+func ToolCallTokens(t Tokenizer) int64 {
+	if t >= NumTokenizers {
+		return 0
+	}
+	return toolCallTokens[t]
+}
+
 // TextTokens estimates the tokens of bytes of text shaped like s in family t's tokens: s's own tokens per byte, at
 // the family's weights, over all the bytes. ok is false for a family without weights, and for a tally of no text,
 // and then the bytes-per-token rule stands. It never exceeds bytes.
