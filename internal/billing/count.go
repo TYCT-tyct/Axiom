@@ -17,9 +17,11 @@ import (
 type Tokenizer uint8
 
 // The tokenizers, by family. OpenAI publishes its own, which count a request's text exactly. Anthropic publishes none
-// for Claude 3 and later, so its two families are estimated from the text's shape (textshape) at weights measured
-// against its reported usage; so is every family's reply, which is tallied as it streams, where running a vocabulary
-// on every call would cost the call path for the few calls whose output goes unreported.
+// for Claude 3 and later, and every permissively licensed word list is the pre-Claude-3 one that Anthropic says is
+// inaccurate (docs/domains/billing.md 决策与理由, 2026-10-30), so its two families are estimated from the text's shape
+// (textshape) at weights measured against its reported usage; so is every family's reply, which is tallied as it
+// streams, where running a vocabulary on every call would cost the call path for the few calls whose output goes
+// unreported.
 const (
 	TokenizerNone Tokenizer = iota
 	// TokenizerO200k is OpenAI's o200k_base for GPT-4o, GPT-4.1, GPT-4.5, GPT-5, o1, o3 and o4.
