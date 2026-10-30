@@ -117,9 +117,10 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
 	}
 	smtp, mailErr := mail.ReadConfig(env)
-	// The bucket is optional and no feature writes through it yet (internal/platform/objectstore/README.md). Read it
-	// here so a node whose deployment sets it starts, and so half a configuration is a startup error rather than a
-	// surprise for the first archive job; `axiom objectstore` uses the same variables.
+	// The bucket is optional and no program feature writes through it yet (internal/platform/objectstore/README.md).
+	// Read it here so a node whose deployment sets it starts, and so half a configuration is a startup error rather than a
+	// surprise for the first archive job; `axiom objectstore` and the backup job use the same client, the latter with its
+	// own bucket.
 	_, storeErr := objectstore.ReadConfig(env)
 	var exchangeErr error
 	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
