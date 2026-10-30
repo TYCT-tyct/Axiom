@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -62,6 +63,33 @@ func TestSuppliersNewestFirst(t *testing.T) {
 	same(t, "pages of 2", []any{2, true, []uuid.UUID{first.ID}, false}, []any{len(page), more, supplierIDs(rest), moreRest})
 	active, _ := a.list(SupplierQuery{Status: Active, PageSize: 10})
 	same(t, "the active suppliers", []uuid.UUID{second.ID}, supplierIDs(active))
+}
+
+// TestSupplierDetailShowsPool: the group carries what the pool's management API last said of it, and a group no read has
+// reported has none rather than a zeroed capacity.
+func TestSupplierDetailShowsPool(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	id := a.connect("https://api.example.com", "ops@example.com").ID
+	pooled := a.group(id, "pooled", true)
+	a.group(id, "empty", false)
+	a.sql(fmt.Sprintf(`UPDATE suppliers.supplier_groups
+SET pool_accounts = 10, pool_failed = 2, pool_usable = 8, pool_headroom = 40, pool_capacity = 32, pool_low = false,
+    pool_observed_at = '2026-10-15T12:00:00Z' WHERE id = '%s'`, pooled))
+	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	refuses(t, "the detail", err, nil)
+	if len(detail.Groups) != 2 {
+		t.Fatalf("groups %+v, want two", detail.Groups)
+	}
+	headroom, capacity := 40, 32
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	for _, g := range detail.Groups {
+		if g.UpstreamRef == "pooled" {
+			same(t, "the pooled group", &Pool{Accounts: 10, Failed: 2, Usable: 8, Headroom: &headroom, Capacity: &capacity, ObservedAt: at}, g.Pool)
+		} else {
+			same(t, "the group no read reported", (*Pool)(nil), g.Pool)
+		}
+	}
 }
 
 // TestSupplierDetail: one supplier with its groups, keys and endpoints (by upstream name) as the sync stored them; a

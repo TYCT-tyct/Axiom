@@ -67,6 +67,12 @@ func groupBody(g suppliers.Group) adminapi.SupplierGroup {
 	if len(g.Facts) > 0 {
 		body.Facts = &g.Facts
 	}
+	if g.Pool != nil {
+		body.Pool = &adminapi.SupplierPool{
+			Accounts: g.Pool.Accounts, Failed: g.Pool.Failed, Usable: g.Pool.Usable,
+			Headroom: g.Pool.Headroom, Capacity: g.Pool.Capacity, Low: g.Pool.Low, ObservedAt: g.Pool.ObservedAt,
+		}
+	}
 	return body
 }
 

@@ -300,12 +300,34 @@ func (m *canonMessage) checkShape() error {
 		}
 	}
 	for _, p := range m.Parts {
-		switch {
-		case (p.Type == "text" || p.Type == "refusal") && p.Text.Kind() != '"':
-			return shapeError("a text part without text or a refusal part without its refusal")
-		case p.Type == "refusal" && m.Role != "assistant":
-			return &NotSupported{Reason: "a refusal part in a " + m.Role + " message"}
+		if err := checkPart(p, m.Role); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// checkPart holds a part to what the conversions copy as written and the targets write or refuse by name: a text or
+// refusal part carries its text, a refusal belongs to the assistant, and an image's detail is one Chat defines
+// (OpenAI《Create chat completion》"detail", read 2026-10-14).
+func checkPart(p canonPart, role string) error {
+	switch p.Type {
+	case "text", "refusal":
+		if p.Text.Kind() != '"' {
+			return shapeError("a text part without text or a refusal part without its refusal")
+		}
+		if p.Type == "refusal" && role != "assistant" {
+			return &NotSupported{Reason: "a refusal part in a " + role + " message"}
+		}
+	case "image_url":
+		if p.ImageURL == nil {
+			return nil
+		}
+		switch p.ImageURL.Detail {
+		case "", "auto", "low", "high":
+			return nil
+		}
+		return shapeError("an image detail that is not auto, low or high")
 	}
 	return nil
 }
