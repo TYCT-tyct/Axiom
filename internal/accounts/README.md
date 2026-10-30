@@ -322,6 +322,7 @@
 | `CurrentSiteLogo`、`SetSiteLogo` | 读当前 logo（没有时 nil）；`SetSiteLogo` 在站点行锁内解析并校验、插入 `site_logos`、更新 `sites.logo_hash`，`data` 为 nil 表示清除；`*SettingError` 是文件被拒，`ErrNotFound` 是站点不存在。审计 `site_logo.update` 只记 hash、类型、尺寸和字节数。写后由组装层刷新快照 |
 | `SiteLogoByHash` | 公开读：按站点和 hash 取一行，当前的和旧的都能取到；hash 已由 URL 校验为 32 字节，读在平台范围，不依赖快照的当前指针 |
 | `SetAccountSuspended`、`SetUserSignInDisabled` | 分开控制调用和登录，前者复用准入同一条查询里的账户状态，后者在用户锁内吊销全部会话，恢复均不修改因素 |
+| `SetAccountTier` | 在账户行锁内把 `tier_id` 改成账户所在站点的另一个等级；同等级是空操作，不写审计；目标等级不属于该站点是 `*SettingError{tier_id}`，账户不存在是 `ErrNotFound`。审计 `account.tier_change` 记改前和改后的等级名 |
 | `UserPlatformGrants`、`SetPlatformGrantRevoked` | 列表各角色最后状态，撤销终态不回退；恢复要求历史授予且权限为操作者当前平台角色权限的子集，插入新行并记录 granted_by；按用户锁串行 |
 | `Refresh` | 立即重载快照。改了站点设置的节点调用它；别的节点在重载间隔内（30 秒）跟上 |
 | `Site`、`MainSite` | 快照里的站点；管理接口用它取币种和默认站点 |

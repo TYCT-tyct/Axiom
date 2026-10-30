@@ -25,6 +25,111 @@ function getAccount({ params, state }: Ctx<"/api/admin/v1/accounts/{account_id}"
   return account ? ok(account) : fail(404, "not_found");
 }
 
+function putSuspension({ body, params, state }: Ctx<"/api/admin/v1/accounts/{account_id}/suspension", "put">) {
+  const account = state.accounts.get(params.account_id ?? "");
+  if (!account) {
+    return fail(404, "not_found");
+  }
+  account.calls_suspended = body.suspended;
+  account.status = body.suspended ? "disabled" : "active";
+  const user = state.users.find((candidate) => candidate.account_id === account.id);
+  if (user) {
+    user.status = account.status;
+  }
+  return { status: 204 as const, json: undefined };
+}
+
+function putSignIn({ body, params, state }: Ctx<"/api/admin/v1/users/{user_id}/sign-in", "put">) {
+  const user = state.users.find((candidate) => candidate.id === params.user_id);
+  if (!user) {
+    return fail(404, "not_found");
+  }
+  user.status = body.disabled ? "disabled" : "active";
+  for (const account of state.accounts.values()) {
+    if (account.owner.id === user.id) {
+      account.sign_in_disabled = body.disabled;
+    }
+  }
+  return { status: 204 as const, json: undefined };
+}
+
+function putTier({ body, params, state }: Ctx<"/api/admin/v1/accounts/{account_id}/tier", "put">) {
+  const account = state.accounts.get(params.account_id ?? "");
+  if (!account) {
+    return fail(404, "not_found");
+  }
+  const tier = state.tiers.find((candidate) => candidate.id === body.tier_id);
+  if (!tier) {
+    return fail(422, "unprocessable", { "/tier_id": "is not a tier of this site" });
+  }
+  account.tier = tier;
+  const user = state.users.find((candidate) => candidate.account_id === account.id);
+  if (user) {
+    user.tier = tier;
+  }
+  return { status: 204 as const, json: undefined };
+}
+
+function listCalls({ query, state }: Ctx<"/api/admin/v1/calls", "get">) {
+  const account = query.get("account_id");
+  const request = query.get("request_id");
+  const calls = state.calls.filter(
+    (call) => (!account || call.account_id === account) && (!request || call.id === request),
+  );
+  const page = paged(calls, query, ["since", "until"]);
+  if (!page) {
+    return fail(400, "invalid_request");
+  }
+  const { next_cursor, ...rest } = page;
+  return ok({
+    ...rest,
+    ...(next_cursor ? { next_cursor } : {}),
+    since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
+    until: query.get("until") ?? "2026-10-30T23:59:59.000Z",
+  });
+}
+
+function getTrace({ params, state }: Ctx<"/api/admin/v1/calls/{call_id}/trace", "get">) {
+  const trace = state.traces.get(params.call_id ?? "");
+  return trace ? ok(trace) : fail(404, "not_found");
+}
+
+function listAudit({ query, state }: Ctx<"/api/admin/v1/audit", "get">) {
+  const exact = [
+    "action",
+    "module",
+    "actor_kind",
+    "actor_id",
+    "target_kind",
+    "target_id",
+    "account_id",
+    "site_id",
+    "request_id",
+  ] as const;
+  const audit = state.audit.filter((entry) =>
+    exact.every((name) => {
+      const value = query.get(name);
+      return !value || entry[name] === value;
+    }),
+  );
+  const page = paged(audit, query, ["since", "until"]);
+  if (!page) {
+    return fail(400, "invalid_request");
+  }
+  const { next_cursor, ...rest } = page;
+  return ok({
+    ...rest,
+    ...(next_cursor ? { next_cursor } : {}),
+    since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
+    until: query.get("until") ?? "2026-10-30T23:59:59.000Z",
+  });
+}
+
+function getAudit({ params, state }: Ctx<"/api/admin/v1/audit/{entry_id}", "get">) {
+  const entry = state.auditEntries.get(params.entry_id ?? "");
+  return entry ? ok(entry) : fail(404, "not_found");
+}
+
 // The most one grant may be, in nano-units: 1,000,000 units (the control plane's money limit, here a constant).
 const grantLimit = 1_000_000_000_000_000n;
 
@@ -159,6 +264,13 @@ const handlers: Handler<AdminState>[] = [
   route("get", `${base}/users`, reads("users.view"), listUsers),
   route("get", `${base}/accounts/{account_id}`, reads("users.view"), getAccount),
   route("put", `${base}/accounts/{account_id}/key-limits`, changes("sites.manage"), putAccountKeyLimits),
+  route("put", `${base}/accounts/{account_id}/suspension`, changes("users.manage"), putSuspension),
+  route("put", `${base}/accounts/{account_id}/tier`, changes("users.manage"), putTier),
+  route("put", `${base}/users/{user_id}/sign-in`, changes("users.manage"), putSignIn),
+  route("get", `${base}/calls`, reads("calls.search"), listCalls),
+  route("get", `${base}/calls/{call_id}/trace`, reads("calls.inspect"), getTrace),
+  route("get", `${base}/audit`, reads("audit.view"), listAudit),
+  route("get", `${base}/audit/{entry_id}`, reads("audit.view"), getAudit),
   route("post", `${base}/accounts/{account_id}/credit-grants`, changes("credits.grant"), grantCredit),
   ...supplyHandlers,
   ...catalogHandlers,

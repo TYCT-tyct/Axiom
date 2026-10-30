@@ -90,6 +90,30 @@ func (a adminAPI) SetAccountSuspension(ctx context.Context, r adminapi.SetAccoun
 	return adminapi.SetAccountSuspension204Response{Headers: adminapi.SetAccountSuspension204ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
+func (a adminAPI) SetAccountTier(ctx context.Context, r adminapi.SetAccountTierRequestObject) (adminapi.SetAccountTierResponseObject, error) {
+	id, err := accountID(r.AccountId)
+	if err != nil {
+		return nil, err
+	}
+	tier, err := accounts.ParseTierID(r.Body.TierId)
+	if err != nil {
+		return nil, invalidField("/tier_id", "not a tier's ID")
+	}
+	_, replayed, err := idempotently(ctx, a.db, "setAccountTier", r.Params.IdempotencyKey, []any{r.AccountId, r.Body}, func(tx pg.Tx) (struct{}, error) {
+		if err := a.accounts.SetAccountTier(ctx, tx, actor(ctx), id, tier, r.Body.Reason); err != nil {
+			if e, ok := errors.AsType[*accounts.SettingError](err); ok {
+				return struct{}{}, unprocessableFields("/"+e.Field, e.Reason)
+			}
+			return struct{}{}, err
+		}
+		return struct{}{}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetAccountTier204Response{Headers: adminapi.SetAccountTier204ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
 func (a adminAPI) SetUserSignIn(ctx context.Context, r adminapi.SetUserSignInRequestObject) (adminapi.SetUserSignInResponseObject, error) {
 	id, err := accounts.ParseUserID(r.UserId)
 	if err != nil {

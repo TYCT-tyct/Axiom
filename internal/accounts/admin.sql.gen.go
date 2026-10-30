@@ -170,11 +170,12 @@ func (q *Queries) LockSite(ctx context.Context, db DBTX, id uuid.UUID) ([]uuid.U
 
 const readAccount = `-- name: ReadAccount :many
 SELECT a.id, a.site_id, a.name, a.kind, a.status, a.tier_id, t.name AS tier_name,
-    uuid_extract_timestamp(a.id)::timestamptz AS created_at, o.id AS owner_id, o.email AS owner_email
+    uuid_extract_timestamp(a.id)::timestamptz AS created_at, o.id AS owner_id, o.email AS owner_email,
+    o.status AS owner_status
 FROM accounts.accounts a
 JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
 JOIN LATERAL (
-    SELECT u.id, u.email FROM accounts.members m
+    SELECT u.id, u.email, u.status FROM accounts.members m
     JOIN accounts.users u ON u.site_id = m.site_id AND u.account_id = m.user_account_id AND u.id = m.user_id
     JOIN accounts.roles r ON r.id = m.role_id
     WHERE m.account_id = a.id
@@ -184,19 +185,21 @@ WHERE a.id = $1
 `
 
 type ReadAccountRow struct {
-	ID         uuid.UUID
-	SiteID     uuid.UUID
-	Name       string
-	Kind       string
-	Status     string
-	TierID     uuid.UUID
-	TierName   string
-	CreatedAt  pgtype.Timestamptz
-	OwnerID    uuid.UUID
-	OwnerEmail string
+	ID          uuid.UUID
+	SiteID      uuid.UUID
+	Name        string
+	Kind        string
+	Status      string
+	TierID      uuid.UUID
+	TierName    string
+	CreatedAt   pgtype.Timestamptz
+	OwnerID     uuid.UUID
+	OwnerEmail  string
+	OwnerStatus string
 }
 
-// The account with its tier and its owner: in M1 an account is a person's own, so the owner is its one member.
+// The account with its tier and its owner: in M1 an account is a person's own, so the owner is its one member. The
+// owner's status is the sign-in switch the admin's account page shows beside the account's call switch.
 func (q *Queries) ReadAccount(ctx context.Context, db DBTX, id uuid.UUID) ([]ReadAccountRow, error) {
 	rows, err := db.Query(ctx, readAccount, id)
 	if err != nil {
@@ -217,6 +220,7 @@ func (q *Queries) ReadAccount(ctx context.Context, db DBTX, id uuid.UUID) ([]Rea
 			&i.CreatedAt,
 			&i.OwnerID,
 			&i.OwnerEmail,
+			&i.OwnerStatus,
 		); err != nil {
 			return nil, err
 		}

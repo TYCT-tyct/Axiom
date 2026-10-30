@@ -4,7 +4,7 @@ export { AuthFrame } from "./auth/frame";
 export { MfaPage } from "./auth/mfa";
 export { SignInPage } from "./auth/sign-in";
 export { useErrors } from "./errors";
-export { readForm } from "./forms";
+export { readForm, toInstant, toLocalInput } from "./forms";
 export { LoadMore, Stat } from "./parts";
 export { AppProviders } from "./providers";
 export { QrCode } from "./qr";
