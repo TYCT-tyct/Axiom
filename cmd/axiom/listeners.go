@@ -50,15 +50,16 @@ func listenerKey(variable string) string {
 // it drains while the probes still answer. The admin listener serves the admin app and the admin API, behind the source
 // restriction; it exists only on a core node (#171). The node listener is the same call path over mutual TLS, for the
 // ingress nodes' calls, and also answers the peers' readiness probes so an ingress knows whether the core can route.
+// Every listener but the probes refuses a request that starts during the drain (httpserver.Health.Gate).
 func node(cfg nodeSettings, routes http.Handler, admin http.Handler, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
 	servers := []*listening{
 		{
 			publicAddrVar, cfg.publicAddr,
-			httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil, false,
+			httpserver.New(httpserver.Public(health.Gate(routes), logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil, false,
 		},
 		{
 			adminAddrVar, cfg.adminAddr,
-			httpserver.New(httpserver.Public(restrictSources(admin, cfg.adminSources, cfg.trustedProxies), logger, bodyTimeout,
+			httpserver.New(httpserver.Public(health.Gate(restrictSources(admin, cfg.adminSources, cfg.trustedProxies)), logger, bodyTimeout,
 				httpserver.WithTelemetry(requests)), logger), nil, false,
 		},
 	}
@@ -72,24 +73,39 @@ func node(cfg nodeSettings, routes http.Handler, admin http.Handler, health *htt
 }
 
 // withHealth puts the two probes on the node listener in front of the call path, so an ingress can ask the core over
-// mutual TLS whether it can route. Metrics stay on the probes listener, which is not exposed to peers.
+// mutual TLS whether it can route. Metrics stay on the probes listener, which is not exposed to peers. The gate is
+// under the probes: /livez must keep answering while the node drains, and /readyz is what reports the drain.
 func withHealth(routes http.Handler, health *httpserver.Health) http.Handler {
 	mux := http.NewServeMux()
 	probes := health.Handler()
 	mux.Handle("/livez", probes)
 	mux.Handle("/readyz", probes)
-	mux.Handle("/", routes)
+	mux.Handle("/", health.Gate(routes))
 	return mux
 }
 
-// shutdown reports not ready, then stops the servers in order, each finishing its requests in flight, all within
-// timeout. The public listener comes first, so the probes keep answering, not ready, while it drains. Past timeout
-// a server's remaining connections are closed, which ends their requests' contexts: Shutdown alone would return and
-// leave them running, and closing the database pool would then wait for every connection they hold.
-func shutdown(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening) error {
-	health.SetReady(false)
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+// beginDrain stops taking new work and reports not ready, then waits for the load balancers in front to stop routing
+// here before the next step closes the listeners. A node that was never ready has no traffic to wait for; one that was
+// ready waits drainDelay.
+func beginDrain(health *httpserver.Health, timeout time.Duration) {
+	ready := health.Ready()
+	health.BeginDrain()
+	if ready {
+		time.Sleep(drainDelay(timeout))
+	}
+}
+
+// drainDelay is how long the edge has to notice that a ready node stopped accepting new work: a third of the shutdown
+// deadline, at most 10 seconds, so the wait stays bounded even when the deadline is long.
+func drainDelay(timeout time.Duration) time.Duration {
+	return min(timeout/3, 10*time.Second)
+}
+
+// shutdown stops the servers in order, each finishing its requests in flight, all within the one deadline ctx carries.
+// The public listener comes first, so the probes keep answering while it drains. Past the deadline a server's
+// remaining connections are closed, which ends their requests' contexts: Shutdown alone would return and leave them
+// running, and closing the database pool would then wait for every connection they hold.
+func shutdown(ctx context.Context, servers []*listening) error {
 	var errs []error
 	for _, s := range servers {
 		if err := s.server.Shutdown(ctx); err != nil {

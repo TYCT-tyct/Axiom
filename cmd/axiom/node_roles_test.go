@@ -95,6 +95,7 @@ func TestRoleConfigurationRefusesContradictions(t *testing.T) {
 		{"a public listener on an ops node", []string{"AXIOM_NODE_ROLES=ops", "AXIOM_PUBLIC_ADDR=127.0.0.1:0"}, "AXIOM_PUBLIC_ADDR: not used"},
 		{"an ingress given the database", ingress("AXIOM_DATABASE_URL=postgres://user:password@127.0.0.1:1/axiom"), "AXIOM_DATABASE_URL: unknown variable"},
 		{"an ingress given a key file", ingress("AXIOM_MASTER_KEY_FILE=/keys/master"), "AXIOM_MASTER_KEY_FILE: unknown variable"},
+		{"an ingress given shared frontend assets", ingress("AXIOM_WEB_ASSETS_DIR=/srv/web-assets"), "AXIOM_WEB_ASSETS_DIR: unknown variable"},
 		{"a core URL on an ops node", []string{"AXIOM_NODE_ROLES=ops", "AXIOM_CORE_URL=https://core.internal"}, "AXIOM_CORE_URL: not used"},
 		{"a core that forwards", coreEnviron("AXIOM_CORE_URL=https://core.internal"), "AXIOM_CORE_URL: only an ingress forwards to a core"},
 		{"an admin listener without sources on every address", coreEnviron("AXIOM_ADMIN_ADDR=:8082"), "AXIOM_ADMIN_SOURCES: required"},
@@ -123,6 +124,13 @@ func TestRoleConfigurationRefusesContradictions(t *testing.T) {
 	}
 	if len(settings.adminSources) != 2 {
 		t.Fatalf("explicit admin sources are %v, want both networks", settings.adminSources)
+	}
+	settings, err = readSettings(coreEnviron("AXIOM_WEB_ASSETS_DIR=/srv/web-assets"))
+	if err != nil {
+		t.Fatalf("a core node with shared frontend assets was refused: %v", err)
+	}
+	if settings.webAssetsDir != "/srv/web-assets" {
+		t.Fatalf("shared frontend assets are %q", settings.webAssetsDir)
 	}
 }
 

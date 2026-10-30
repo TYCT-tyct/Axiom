@@ -437,7 +437,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	h.exec, err = NewExecutor(ExecDeps{
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
 		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
-		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health,
+		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health, Outstanding: NewOutstanding(),
 	})
 	if err != nil {
 		t.Fatal(err)

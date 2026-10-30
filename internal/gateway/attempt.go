@@ -67,7 +67,7 @@ func (s *session) mayStart(maxAttempts int) (ended, bool) {
 	switch {
 	case s.req.Context().Err() != nil:
 		return ended{}, true
-	case s.x.shutdown.Err() != nil:
+	case s.x.Outstanding.shutdown.Err() != nil:
 		return ended{err: protocol.Error{Type: protocol.Timeout}}, true
 	case !s.x.Alive():
 		return ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, true
@@ -259,7 +259,7 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	ctx, release := AttemptContext(ctx, s.deadline, policy.Cancels)
 	ctx, a.cancel = context.WithCancelCause(ctx)
 	a.release = release
-	a.unhook = context.AfterFunc(s.x.shutdown, func() { a.cancel(errShutdown) })
+	a.unhook = context.AfterFunc(s.x.Outstanding.shutdown, func() { a.cancel(errShutdown) })
 	s.x.Router.Begin(entry.Endpoint)
 	s.setCancel(a.cancel, policy.Cancels)
 	return a, ctx

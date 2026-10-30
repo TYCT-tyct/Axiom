@@ -259,17 +259,17 @@ func trim(p routing.Plan, kept []int) routing.Plan {
 // pause until it is settled or the cleanup would have it anyway (SettleBackground). The call's slots stay held until
 // then, so the settlements waiting are bounded by the node's limit. Drain waits for it.
 func (h *Handler) settleOrphan(ctx context.Context, c *Call) {
-	h.background.Go(func() {
+	h.Outstanding.Go(func() {
 		defer c.Done()
 		never := func(error) bool { return false }
-		if err := h.background.retry(time.Now().Add(h.Limits.cfg.SettleBackground), never, func() error { return h.orphanOnce(ctx, c) }); err != nil {
+		if err := h.Outstanding.retry(time.Now().Add(h.Limits.cfg.SettleBackground), never, func() error { return h.orphanOnce(ctx, c) }); err != nil {
 			h.Logger.Error("a lost admission was not settled; the cleanup takes it", "request_id", c.ID.String(), "err", err)
 		}
 	})
 }
 
 func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
-	ctx, cancel := SettleContext(ctx, settleAttempt)
+	ctx, cancel := h.Outstanding.settlementContext(ctx, settleAttempt)
 	defer cancel()
 	item := &completionItem{scope: c.Admitted.Scope, work: func(ctx context.Context, tx pg.Tx) (func(), error) {
 		return nil, h.Billing.SettleOrphanIn(ctx, tx, c.Admitted, c.ID)
@@ -285,7 +285,3 @@ func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
 func (h *Handler) runOrphans(ctx context.Context, batch []*gateItem) error {
 	return runCompletionBatch(pg.CompletionContext(ctx), batch, h.Billing.RunBatch)
 }
-
-// Drain waits for the settlements still running in the background, until ctx ends; then it stops them, and what is
-// left is the cleanup's.
-func (h *Handler) Drain(ctx context.Context) { h.background.drain(ctx) }
