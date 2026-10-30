@@ -109,7 +109,7 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	built := make([]routing.Endpoint, 0, len(routable))
 	left := map[catalog.ModelID]*leftOut{}
 	for _, r := range routable {
-		e, why := endpointOf(catalogSnap, prices, blocked, r, d.Quality.Measured(r.ID, time.Now()))
+		e, why := endpointOf(catalogSnap, prices, blocked, r, d.Quality.MeasuredFor(r, time.Now()))
 		if why != "" {
 			note(left, catalog.ModelID(r.Model), why)
 			continue

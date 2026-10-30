@@ -151,3 +151,126 @@ func TestVerificationChecksOnlyPlatformEndpoints(t *testing.T) {
 		t.Fatal("a tenant-owned endpoint was checked")
 	}
 }
+
+// setVerificationUpstream changes the upstream name the endpoint projects, as a supplier sync does, and returns the new
+// claim.
+func setVerificationUpstream(f *probeFixture, upstream string) claim {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endpoints[0].Upstream = upstream
+	return claimOf(f.endpoints[0])
+}
+
+// TestVerificationFollowsTheUpstreamName: a pass is evidence about the upstream name that was checked. Renaming it
+// clears the pass at once, so the new upstream is not verified until it passes a check of its own.
+func TestVerificationFollowsTheUpstreamName(t *testing.T) {
+	m, l, f, now, id := verificationWorld(t)
+	c := newChallenge(func() float64 { return .5 }, stated)
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
+	tick(t, l)
+	collectVerification(t, l, f)
+	if !m.Measured(id, *now).Verified {
+		t.Fatal("the first check did not verify the endpoint")
+	}
+
+	want := setVerificationUpstream(f, "another-upstream-name")
+	*now = now.Add(time.Second)
+	tick(t, l)
+	if got := m.Measured(id, *now); got.Verified || !got.VerifiedAt.IsZero() {
+		t.Fatalf("a renamed upstream kept the old pass: %+v", got)
+	}
+	if v := verificationOf(m, id); v.claim != want || v.checked != (time.Time{}) || v.passed || v.failures != 0 {
+		t.Fatalf("the old evidence was not cleared: %+v, want the claim %+v", v, want)
+	}
+	if l.active != 1 {
+		t.Fatal("the renamed upstream was not checked at once")
+	}
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
+	collectVerification(t, l, f)
+	if !m.Measured(id, *now).Verified {
+		t.Fatal("the new upstream did not verify")
+	}
+}
+
+// TestVerificationDropsACheckOfAnotherClaim: a check that started before the upstream name changed answers for a
+// configuration that no longer serves traffic, so its pass is discarded and the new claim is checked instead.
+func TestVerificationDropsACheckOfAnotherClaim(t *testing.T) {
+	m, l, f, now, id := verificationWorld(t)
+	c := newChallenge(func() float64 { return .5 }, stated)
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
+	tick(t, l) // the check is in flight against the old claim
+
+	want := setVerificationUpstream(f, "another-upstream-name")
+	collectVerification(t, l, f) // its answer arrives after the change
+	if got := m.Measured(id, *now); got.Verified {
+		t.Fatalf("an answer about another configuration verified the endpoint: %+v", got)
+	}
+	if v := verificationOf(m, id); v.claim != want || v.passed || v.checked != (time.Time{}) {
+		t.Fatalf("the stale answer changed the state: %+v", v)
+	}
+
+	*now = now.Add(time.Second)
+	tick(t, l)
+	if l.active != 1 {
+		t.Fatal("the changed claim was not checked again")
+	}
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
+	collectVerification(t, l, f)
+	if !m.Measured(id, *now).Verified {
+		t.Fatal("the check of the new claim did not verify")
+	}
+}
+
+// TestVerificationAlertsAFakeOnce: crossing verifyFailures raises one critical fake alert, another contradiction does
+// not repeat it, and a pass resolves it.
+func TestVerificationAlertsAFakeOnce(t *testing.T) {
+	m, l, f, now, id := verificationWorld(t)
+	rec := &signalRecorder{}
+	l.alerts = rec
+	c := newChallenge(func() float64 { return .5 }, stated)
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
+	tick(t, l)
+	collectVerification(t, l, f)
+
+	for i := range verifyFailures + 1 {
+		if i == 0 {
+			*now = now.Add(verifyEvery) // the pass scheduled the next check six hours out
+		} else {
+			*now = now.Add(backoff(verifyRetry, i, verifyEvery))
+		}
+		f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "OpenAI")}
+		tick(t, l)
+		collectVerification(t, l, f)
+	}
+	var raised, resolved int
+	for _, s := range rec.signals {
+		if s.Kind != fakeAlert {
+			continue
+		}
+		if s.Resolved {
+			resolved++
+			continue
+		}
+		raised++
+		if s.Severity != "critical" || s.Key != id.String() || s.Fields["claimed_author"] != stated.Author || s.Fields["failures"] != "3" {
+			t.Fatalf("the fake alert: %+v", s)
+		}
+	}
+	if raised != 1 || resolved != 0 {
+		t.Fatalf("fake alerts: %d raised, %d resolved, want one raised while still a fake", raised, resolved)
+	}
+	if m.Measured(id, *now).Verified {
+		t.Fatal("a fake concluded endpoint is still verified")
+	}
+
+	*now = now.Add(backoff(verifyRetry, verifyFailures+1, verifyEvery))
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
+	tick(t, l)
+	collectVerification(t, l, f)
+	for _, s := range rec.signals {
+		if s.Kind == fakeAlert && s.Resolved && s.Key == id.String() {
+			return
+		}
+	}
+	t.Fatal("a pass after the fake did not resolve the alert")
+}

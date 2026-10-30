@@ -1,11 +1,14 @@
 package quality
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
+	"uuid"
 
+	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
 )
 
@@ -34,10 +37,24 @@ type Claimed struct {
 // answer; a contradiction clears passed at once, so routing fails closed, and verifyFailures of them in a row are the
 // conclusion that the endpoint is fake.
 type verification struct {
+	claim    claim     // the configuration the evidence is about
 	checked  time.Time // the last conclusive check
 	next     time.Time // when the next check is due
 	passed   bool      // the last conclusive check passed
 	failures int       // consecutive contradictions
+}
+
+// claim is what a check's evidence is about: the catalog model it names, the upstream name that serves it, and the
+// format the check used. A different claim is different configuration, and old evidence says nothing about it.
+type claim struct {
+	model    uuid.UUID
+	upstream string
+	format   protocol.Format
+}
+
+// claimOf is the claim the endpoint's current configuration makes.
+func claimOf(ep suppliers.Routable) claim {
+	return claim{model: ep.Model, upstream: ep.Upstream, format: ep.Formats[0]}
 }
 
 // verified says the endpoint passed a check that is still recent and has not been contradicted since.
@@ -114,7 +131,7 @@ func judgeVerification(result suppliers.TestResult, c challenge) verifyOutcome {
 	}
 	reply := strings.ToLower(result.Reply)
 	nonce := strings.Contains(reply, c.nonce)
-	sum := containsNumber(strings.ReplaceAll(reply, c.nonce, ""), c.a+c.b)
+	sum := answerSum(reply, c.nonce, c.a+c.b)
 	author := containsName(reply, c.claimed.Author)
 	switch {
 	case nonce && sum && author:
@@ -125,8 +142,59 @@ func judgeVerification(result suppliers.TestResult, c challenge) verifyOutcome {
 	return verifyUnknown
 }
 
-// containsNumber reports whether s has n as a whole decimal number, not as digits inside a longer one.
-func containsNumber(s string, n int) bool {
+// answerSum reads the answer to the sum: the line after the nonce, with a list marker removed, and only if that line
+// holds exactly one whole number. A line number is thereby not the answer ("2. 99" answers 99, not 2), and echoing the
+// expression ("1 + 1") is no answer for either of its numbers.
+func answerSum(reply, nonce string, want int) bool {
+	lines := strings.Split(reply, "\n")
+	at := slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, nonce) })
+	if at < 0 {
+		return false
+	}
+	// The sum may share the nonce's line; what follows the nonce is then the answer.
+	if n, ok := answerNumber(strings.Replace(numbered(lines[at]), nonce, "", 1)); ok && n == want {
+		return true
+	}
+	for _, line := range lines[at+1:] {
+		s := strings.TrimSpace(line)
+		if s == "" {
+			continue
+		}
+		n, ok := answerNumber(numbered(s))
+		return ok && n == want
+	}
+	return false
+}
+
+// numbered removes a leading list marker ("2. ", "2) ") from an answer line, keeping "2." when it is the answer
+// itself. Two digits are enough: an answer has three lines, and a longer run is a number, not a marker.
+func numbered(s string) string {
+	s = strings.TrimSpace(s)
+	i := 0
+	for i < len(s) && i < 2 && '0' <= s[i] && s[i] <= '9' {
+		i++
+	}
+	if i == 0 || i >= len(s) || !strings.ContainsRune(".)]:-", rune(s[i])) {
+		return s
+	}
+	if rest := strings.TrimSpace(s[i+1:]); rest != "" {
+		return rest
+	}
+	return s
+}
+
+// answerNumber reads a line's answer: the part after its last "=" when it writes the equation out ("1 + 1 = 2"),
+// otherwise the line itself, which must hold exactly one whole number.
+func answerNumber(s string) (int, bool) {
+	if i := strings.LastIndexByte(s, '='); i >= 0 {
+		s = s[i+1:]
+	}
+	return singleNumber(s)
+}
+
+// singleNumber returns s's only whole decimal number, and whether it has exactly one.
+func singleNumber(s string) (int, bool) {
+	answer, found := 0, false
 	for i := 0; i < len(s); {
 		if s[i] < '0' || s[i] > '9' {
 			i++
@@ -136,14 +204,17 @@ func containsNumber(s string, n int) bool {
 		for j < len(s) && '0' <= s[j] && s[j] <= '9' {
 			j++
 		}
-		if j-i <= 9 {
-			if v, err := strconv.Atoi(s[i:j]); err == nil && v == n {
-				return true
-			}
+		if j-i > 9 {
+			return 0, false
 		}
+		v, err := strconv.Atoi(s[i:j])
+		if err != nil || found {
+			return 0, false
+		}
+		answer, found = v, true
 		i = j
 	}
-	return false
+	return answer, found
 }
 
 // containsName reports whether s names n. Both sides are compared as runs of letters and digits, lower-cased, so

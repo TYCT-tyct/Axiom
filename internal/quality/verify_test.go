@@ -145,11 +145,54 @@ func TestContainsName(t *testing.T) {
 	}
 }
 
-func TestContainsNumber(t *testing.T) {
+func TestAnswerSum(t *testing.T) {
 	t.Parallel()
-	for s, want := range map[string]bool{"7": true, " 7.": true, "07": true, "17": false, "a7b": true, "70": false, "": false, "the 7th": true} {
-		if got := containsNumber(s, 7); got != want {
-			t.Errorf("containsNumber(%q) = %v, want %v", s, got, want)
-		}
+	const nonce = "ab12cd"
+	for name, tc := range map[string]struct {
+		reply string
+		want  int
+		ok    bool
+	}{
+		"on its own line":          {nonce + "\n7\nAnthropic", 7, true},
+		"after a list number":      {nonce + "\n2. 7\nAnthropic", 7, true},
+		"a numbered wrong answer":  {nonce + "\n2. 99\nAnthropic", 2, false},
+		"the number is the answer": {nonce + "\n2. 2\nAnthropic", 2, true},
+		"an echoed expression":     {nonce + "\n1 + 1\nAnthropic", 2, false},
+		"an equation":              {nonce + "\n1 + 1 = 2\nAnthropic", 2, true},
+		"a lone numbered answer":   {nonce + "\n2.\nAnthropic", 2, true},
+		"a label before it":        {nonce + "\nThe sum is 7.\nAnthropic", 7, true},
+		"on the nonce's line":      {nonce + " 7\nAnthropic", 7, true},
+		"no answer":                {nonce + "\nAnthropic", 7, false},
+		"no nonce line":            {"7", 7, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := answerSum(tc.reply, nonce, tc.want); got != tc.ok {
+				t.Errorf("answerSum(%q, %d) = %v, want %v", tc.reply, tc.want, got, tc.ok)
+			}
+		})
+	}
+}
+
+// TestJudgeVerificationNumbering: the number in front of an answer is a list marker, not the answer, and an echoed
+// expression answers nothing.
+func TestJudgeVerificationNumbering(t *testing.T) {
+	t.Parallel()
+	c := challenge{nonce: "cc11", a: 1, b: 1, claimed: Claimed{Author: "anthropic"}}
+	for name, tc := range map[string]struct {
+		reply string
+		want  verifyOutcome
+	}{
+		"the line number is not the sum": {c.nonce + "\n2. 99\nAnthropic", verifyUnknown},
+		"the expression is no answer":    {c.nonce + "\n1 + 1\nAnthropic", verifyUnknown},
+		"the equation answered":          {c.nonce + "\n1 + 1 = 2\nAnthropic", verifyPassed},
+		"the numbered answer":            {c.nonce + "\n2. 2\nAnthropic", verifyPassed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: tc.reply}, c); got != tc.want {
+				t.Errorf("judged %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

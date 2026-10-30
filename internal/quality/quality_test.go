@@ -255,3 +255,26 @@ func BenchmarkObserve(b *testing.B) {
 		observe()
 	}
 }
+
+// TestMeasuredForAnotherClaim: routing reads MeasuredFor, which does not let a pass of one upstream name, model or
+// format count for another even before the loop has cleared the state.
+func TestMeasuredForAnotherClaim(t *testing.T) {
+	m := New(nil)
+	at := t0.Add(time.Hour)
+	ep := suppliers.Routable{ID: suppliers.EndpointID{9}, Model: uuid.NewV7(), Upstream: "up-a", Formats: []protocol.Format{protocol.Chat}}
+	e := m.Live(ep.ID, 1)
+	e.mu.Lock()
+	e.verify = verification{claim: claimOf(ep), passed: true, checked: at}
+	e.mu.Unlock()
+	if got := m.MeasuredFor(ep, at); !got.Verified || got.VerifyConfidence != 1 {
+		t.Fatalf("the checked configuration: %+v", got)
+	}
+	changed := ep
+	changed.Upstream = "up-b"
+	if got := m.MeasuredFor(changed, at); got.Verified || got.VerifyConfidence != 0 || !got.VerifiedAt.IsZero() {
+		t.Fatalf("another upstream inherited the pass: %+v", got)
+	}
+	if got := m.Measured(ep.ID, at); !got.Verified {
+		t.Fatal("Measured stays claim-blind for callers that have no configuration")
+	}
+}

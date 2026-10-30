@@ -87,6 +87,7 @@
   - 一次矛盾：`Verified` 立即为假（失败关闭），但还不断言"假冒"，15 分钟后重查，连续矛盾按 15 分钟、30 分钟……退避；
   - 连续 `verifyFailures`（3）次矛盾：判定为假冒，仍按退避重查，直到重新通过。
 - **它证明什么、不证明什么**：通过说明端点在随机挑战下自报为声称的作者、原样回了随机串、真的生成了一个随机算术答案。它挡得住没有伪装的转发、静态假接口和改写输出的中转站；挡不住注入系统提示让别的模型自称是它，也挡不住同一厂商内部的降级——这两类要看官方基线（「待定问题」）和线上观测的长期不一致。所以 `Verified` 表示"与声称的身份相符"，不表示"权重与官方完全一致"；`:exacto` 只用这个更窄的承诺。
+- **证据绑定配置**：一条检测证据只说明它检测过的配置。证据记下目录模型、上游名字和所用格式，投影里任一变化就立即作废（`Verified` 为假、矛盾计数清零、假冒告警解除）并马上重查；检测途中配置变了，回来的答案丢弃，记 `stale`。路由读 `MeasuredFor`，配置不符时即使循环还没来得及清也不把 `Verified` 交出去；同一个端点 ID 换了上游名字，新上游不会继承旧的通过。
 - **按节点、不落库**：结果和健康度一样只在进程内（模块边界规则第 3 条：调用路径不查库）。重启后未知、`:exacto` 失败关闭，第一次检测完成前不接 `:exacto` 流量；持久化与跨节点采纳随 H3/H5。
 - **开关**：`AXIOM_MODEL_VERIFICATION` 默认 `on`；设为 `off` 时这一节不发检测，所有端点保持未验证、`:exacto` 失败关闭（503 `not_verified`）。这是为了能关掉这笔后台支出。
 
@@ -215,8 +216,8 @@
 
 #### 告警与指标
 
-- **事件**（`quality.health_events`，经 `platform` 的告警信号报告，由 observability 汇总、去重、发送；规则、去重和投递归 [#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：`endpoint_removed`（警告：原因类别、窗口里的失败数和来源数、最后一次失败的请求 ID）、`endpoint_restored`（信息：熔断了多久、怎么恢复的）、`endpoint_still_down`（警告：熔断超过 1 小时）、`owned_endpoint_removed`（通知站点或账户的所有者，不发给平台运维）、`model_unavailable`（严重：上架模型的平台端点全部熔断，已作为最后备选仍在失败；自带端点不参与平台告警的触发或解除）、`path_down` / `path_restored`、`probe_budget_exhausted`（警告）；`observe` 模式下是 `would_remove` / `would_restore`，只计数不告警。同一端点的同一种变化只报一次，反复的合并。恢复时同事务解除摘除和持续故障告警；恢复信息作为已完成事件保留，不持续重复通知。试探预算告警按稳定节点名归并，只在开始顺延时触发，恢复调度时解除；节点启动后首次正常调度也解除上次进程遗留的预算告警。
-- **指标**（不带端点 ID 作标签，避免高基数；按端点的细节在后台视图）：`axiom.quality.health.transitions`（`kind` 为 endpoint 或 path，`to`，`cause`，`mode`）、`axiom.quality.health.open`、`axiom.quality.probes`（`result`：passed、failed、inconclusive、deferred）、`axiom.quality.probe.duration`（只计实际发出请求的试探）、`axiom.quality.verification`（`result`：passed、contradicted、inconclusive、deferred）、`axiom.quality.unclassified`、`axiom.quality.suspected_block`。
+- **事件**（`quality.health_events`，经 `platform` 的告警信号报告，由 observability 汇总、去重、发送；规则、去重和投递归 [#316](https://github.com/TYCT-tyct/Axiom/issues/316)）：`endpoint_removed`（警告：原因类别、窗口里的失败数和来源数、最后一次失败的请求 ID）、`endpoint_restored`（信息：熔断了多久、怎么恢复的）、`endpoint_still_down`（警告：熔断超过 1 小时）、`owned_endpoint_removed`（通知站点或账户的所有者，不发给平台运维）、`model_unavailable`（严重：上架模型的平台端点全部熔断，已作为最后备选仍在失败；自带端点不参与平台告警的触发或解除）、`path_down` / `path_restored`、`probe_budget_exhausted`（警告）；`observe` 模式下是 `would_remove` / `would_restore`，只计数不告警。同一端点的同一种变化只报一次，反复的合并。恢复时同事务解除摘除和持续故障告警；恢复信息作为已完成事件保留，不持续重复通知。试探预算告警按稳定节点名归并，只在开始顺延时触发，恢复调度时解除；节点启动后首次正常调度也解除上次进程遗留的预算告警。真伪的 `endpoint_fake`（严重：连续三次得到另一个作者的答案）走同一个告警接口，只发信号、不写 `quality.health_events`；之后通过或检测配置变化时解除。
+- **指标**（不带端点 ID 作标签，避免高基数；按端点的细节在后台视图）：`axiom.quality.health.transitions`（`kind` 为 endpoint 或 path，`to`，`cause`，`mode`）、`axiom.quality.health.open`、`axiom.quality.probes`（`result`：passed、failed、inconclusive、deferred）、`axiom.quality.probe.duration`（只计实际发出请求的试探）、`axiom.quality.verification`（`result`：passed、contradicted、inconclusive、stale、deferred）、`axiom.quality.unclassified`、`axiom.quality.suspected_block`。
 
 #### 后台
 
