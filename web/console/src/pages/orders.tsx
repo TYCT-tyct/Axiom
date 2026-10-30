@@ -32,10 +32,65 @@ import {
 } from "@axiom/ui";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOrderActions } from "../order-actions";
 import { balanceQuery, ordersQuery } from "../queries";
+
+const refundStore = "axiom.console.refund.attempt";
+const refundKey = (scope: string, order: string) => `${scope}/${order}/${refundStore}`;
+
+function isRefundRequest(value: unknown): value is RefundRequest {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const { credits, reason } = value as { credits?: unknown; reason?: unknown };
+  return typeof credits === "string" && typeof reason === "string";
+}
+
+function readRefundAttempt(scope: string, order: string): Attempt<RefundRequest> | null {
+  try {
+    const raw = sessionStorage.getItem(refundKey(scope, order));
+    if (!raw) {
+      return null;
+    }
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== "object" || value === null) {
+      return null;
+    }
+    if ((value as { state?: unknown }).state === "reused") {
+      return { state: "reused" };
+    }
+    const key = (value as { key?: unknown }).key;
+    const request = (value as { request?: unknown }).request;
+    if ((value as { state?: unknown }).state === "unknown" && typeof key === "string" && isRefundRequest(request)) {
+      return { state: "unknown", key, request };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRefundAttempt(scope: string, order: string, attempt: Attempt<RefundRequest>) {
+  try {
+    if (attempt.state === "editing" || attempt.state === "stale") {
+      sessionStorage.removeItem(refundKey(scope, order));
+      return;
+    }
+    sessionStorage.setItem(refundKey(scope, order), JSON.stringify(attempt));
+  } catch {
+    // The dialog still locks this attempt; only a reload loses it.
+  }
+}
+
+function clearRefundAttempt(scope: string, order: string) {
+  try {
+    sessionStorage.removeItem(refundKey(scope, order));
+  } catch {
+    // nothing to clear
+  }
+}
 
 // Orders is the account's top-ups, newest first, with where each payment stands and what a refund of it is doing.
 export default function Orders() {
@@ -45,14 +100,14 @@ export default function Orders() {
   const orders = useMemo(() => list.data?.pages.flatMap((page) => page.data) ?? [], [list.data]);
   const [refunding, setRefunding] = useState<{ order: Schemas["Order"]; attempt: Attempt<RefundRequest> } | null>(null);
   const [noticed, setNoticed] = useState(false);
-  const attempts = useRef(new Map<string, Attempt<RefundRequest>>());
+  const scope = `${session.user.id}/${session.account}/refund`;
   const allowed = can(session, "balance.top_up");
   const refundsKnown = orders.every((order) => order.refund_allowed !== undefined);
   const openRefund = (order: Schemas["Order"]) =>
-    setRefunding({ order, attempt: attempts.current.get(order.id) ?? opened(crypto.randomUUID()) });
+    setRefunding({ order, attempt: readRefundAttempt(scope, order.id) ?? opened(crypto.randomUUID()) });
   const closeRefund = () => {
-    if (refunding && attempts.current.get(refunding.order.id)?.state === "editing") {
-      attempts.current.delete(refunding.order.id);
+    if (refunding && readRefundAttempt(scope, refunding.order.id)?.state === "editing") {
+      clearRefundAttempt(scope, refunding.order.id);
     }
     setRefunding(null);
   };
@@ -107,10 +162,10 @@ export default function Orders() {
         <RefundDialog
           order={refunding.order}
           initial={refunding.attempt}
-          onAttempt={(next) => attempts.current.set(refunding.order.id, next)}
+          onAttempt={(next) => writeRefundAttempt(scope, refunding.order.id, next)}
           onClose={closeRefund}
           onDone={() => {
-            attempts.current.delete(refunding.order.id);
+            clearRefundAttempt(scope, refunding.order.id);
             setRefunding(null);
             setNoticed(true);
           }}
