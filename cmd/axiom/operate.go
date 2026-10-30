@@ -12,7 +12,6 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/platform"
-	"axiom/internal/platform/config"
 	"axiom/internal/platform/pg"
 )
 
@@ -162,17 +161,7 @@ func readPassword(stdin io.Reader) (string, error) {
 
 // withOperator opens the database and the accounts' command-line access to it, and closes the database after do.
 func withOperator(ctx context.Context, environ []string, do func(*accounts.Operator) error) error {
-	env := config.New(environ)
-	databaseURL := env.Required(pg.DatabaseURLVar)
-	startupTimeout := env.Duration(startupTimeoutVar, defaultStartupTimeout)
-	reserve := env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)
-	if err := env.Problems(); err != nil {
-		return fmt.Errorf("configuration:\n%w", err)
-	}
-	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithCompletionReserve(reserve))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	return do(accounts.NewOperator(db, pg.PlatformScope(), openBalance))
+	return withDatabase(ctx, environ, func(db *pg.DB) error {
+		return do(accounts.NewOperator(db, pg.PlatformScope(), openBalance))
+	})
 }
