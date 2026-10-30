@@ -124,3 +124,122 @@ func TestDrainWithWaitsForARequestThatCanStillReachTheExecutor(t *testing.T) {
 		h.check()
 	})
 }
+
+// TestDrainWithKeepsTheEndContextOpenPastAbort: a body still pending at abort must not make the executor finish its
+// settlement context. The handler can still hand it a request to settle until the handler itself is done.
+func TestDrainWithKeepsTheEndContextOpenPastAbort(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{})
+		gate := &pendingGate{idle: make(chan struct{})}
+		gate.pending.Store(true)
+		stop, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		drained := make(chan struct{})
+		go func() {
+			h.exec.DrainWith(stop, 5*time.Second, gate)
+			close(drained)
+		}()
+		time.Sleep(6 * time.Second) // abort was at 5s; the handler is still holding a request
+		if err := h.exec.end.Err(); err != nil {
+			t.Errorf("the settlement context ended at %v, before the handler let go: %v", h.elapsed(), err)
+		}
+		gate.pending.Store(false)
+		close(gate.idle)
+		select {
+		case <-drained:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the drain did not finish after the handler became idle")
+		}
+		if err := h.exec.end.Err(); err == nil {
+			t.Error("the settlement context is still open after the drain returned")
+		}
+	})
+}
+
+// TestDrainWithWaitsForASettlementHandedOffAtAbort: a request may hand a failed settlement to the executor's background
+// just as the handler becomes idle. The drain must check the handler first, then wait for that background work, instead
+// of seeing the pre-handoff empty executor and stopping its retries.
+func TestDrainWithWaitsForASettlementHandedOffAtAbort(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{})
+		gate := &pendingGate{idle: make(chan struct{})}
+		gate.pending.Store(true)
+		stop, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		drained := make(chan struct{})
+		go func() {
+			h.exec.DrainWith(stop, 5*time.Second, gate)
+			close(drained)
+		}()
+		time.Sleep(6 * time.Second) // abort was at 5s; the executor is empty, the handler still holds the request
+		release := make(chan struct{})
+		h.exec.bg.Go(func() { <-release })
+		gate.pending.Store(false)
+		close(gate.idle)
+		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-drained:
+			t.Fatal("the drain stopped the background settlement handed off as the handler became idle")
+		default:
+		}
+		if err := h.exec.end.Err(); err != nil {
+			t.Errorf("the settlement context ended before the background settlement: %v", err)
+		}
+		close(release)
+		select {
+		case <-drained:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the drain did not finish after the background settlement")
+		}
+	})
+}
+
+// TestDrainWithWithARealHandlerKeepsTheEndOpenPastAbort: the real handler still holds a body after abort; the executor
+// must keep its settlement context open until the handler lets go, not finish at the abort mark.
+func TestDrainWithWithARealHandlerKeepsTheEndOpenPastAbort(t *testing.T) {
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	body := &slowBody{started: make(chan struct{}), release: make(chan struct{}), data: []byte(messageBody("acme/beta"))}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", body)
+	req.Host = apiHost
+	req.Header.Set("Authorization", "Bearer "+a.key)
+	rec := httptest.NewRecorder()
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		r.server.Config.Handler.ServeHTTP(rec, req)
+	}()
+	select {
+	case <-body.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request did not begin reading its body")
+	}
+	x := &Executor{bg: newBackground()}
+	x.shutdown, x.abort = context.WithCancel(context.Background())
+	x.end, x.finish = context.WithCancel(context.Background())
+	drainCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	drained := make(chan struct{})
+	go func() {
+		x.DrainWith(drainCtx, 5*time.Second, r.handler)
+		close(drained)
+	}()
+	time.Sleep(6 * time.Second) // abort was at 5s, the body is still held
+	if err := x.end.Err(); err != nil {
+		t.Errorf("the executor ended its settlement context at %v, before the handler let go", err)
+	}
+	close(body.release)
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the executor did not finish after the handler let go")
+	}
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request did not finish")
+	}
+	if err := x.end.Err(); err == nil {
+		t.Error("the executor's settlement context is still open after the drain")
+	}
+}

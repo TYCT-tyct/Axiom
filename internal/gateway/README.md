@@ -209,7 +209,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 | 暂时性错误 | 后台以同一结局重试到 `SettleBackground`，写进就在后台归还，放弃则同下一行 |
 | 永久性错误（`permanent`：`ErrNoAttempt`、找不到预留行、SQLSTATE 22/23/42 类），或后台放弃 | 记 error，交给清理：`Run` 返回时归还，清理按预留的截止时间接管并记丢失的请求（[suppliers 的「没有对账日志」](../suppliers/README.md#没有对账日志)） |
 
-**优雅退出**（`Executor.Drain(ctx, grace)`，节点用 `Executor.DrainWith(ctx, grace, handler)`）：等执行中的调用到 `ctx` 期限前 `grace`（cmd 的 `abortGrace` 5 秒），然后取消全部尝试（每个尝试的 context 经 `context.AfterFunc` 挂在执行器的 `shutdown` 上，原因 `errShutdown`，不论端点是否传递取消），不再发起新尝试（408），提交后的流以 `timeout` 结束、按已有用量结算；再等这些结算到 `ctx` 的期限。`grace` 从期限里扣，不在期限之后追加：结算的 context 也在期限取消，卡住的尝试到期限就结束，剩下的交给清理。`Handler.Drain` 用同一个绝对期限，和 `Executor.DrainWith` 并行；`ServeHTTP` 从请求过 gate 就计数，`DrainWith` 在执行器为空时等 handler 的 `Pending`/`Idle` 到 abort，所以还在读请求体、尚未进执行器的请求不会被当成“执行器空了”而提前取消。计数用锁而不是 `sync.WaitGroup`：退出等待期间可能有调用从零开始，`WaitGroup` 不允许。
+**优雅退出**（`Executor.Drain(ctx, grace)`，节点用 `Executor.DrainWith(ctx, grace, handler)`）：等执行中的调用到 `ctx` 期限前 `grace`（cmd 的 `abortGrace` 5 秒），然后取消全部尝试（每个尝试的 context 经 `context.AfterFunc` 挂在执行器的 `shutdown` 上，原因 `errShutdown`，不论端点是否传递取消），不再发起新尝试（408），提交后的流以 `timeout` 结束、按已有用量结算；再等这些结算到 `ctx` 的期限。`grace` 从期限里扣，不在期限之后追加：结算的 context 也在期限取消，卡住的尝试到期限就结束，剩下的交给清理。`Handler.Drain` 用同一个绝对期限，和 `Executor.DrainWith` 并行；`ServeHTTP` 从请求过 gate 就计数，`DrainWith` 在执行器为空时等 handler 的 `Pending`/`Idle` 到 abort，所以还在读请求体、尚未进执行器的请求不会被当成“执行器空了”而提前取消。abort 取消尝试后，`DrainWith` 先等 handler 不再派生工作，再等执行器的结算，最后才结束结算 context，所以 abort 后才交接的结算仍有期限内的重试时间。计数用锁而不是 `sync.WaitGroup`：退出等待期间可能有调用从零开始，`WaitGroup` 不允许。
 
 ## 计量与追加
 

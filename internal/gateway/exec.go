@@ -177,7 +177,9 @@ type DrainGate interface {
 
 // DrainWith is Drain for a node whose handler may still hand it a call. While the executor itself has nothing running,
 // it waits for the handler to become idle or for abort, instead of treating the empty moment as the time to cancel:
-// a body that arrives in the meantime must be allowed to run until abort and settle until the deadline.
+// a body that arrives in the meantime must be allowed to run until abort and settle until the deadline. After abort the
+// attempts are cancelled, but the handler is checked first and the settlements stay open until it is idle and the
+// executor is empty, or the deadline arrives.
 func (x *Executor) DrainWith(ctx context.Context, grace time.Duration, gate DrainGate) {
 	x.drain(ctx, grace, gate)
 }
@@ -197,12 +199,38 @@ func (x *Executor) drain(ctx context.Context, grace time.Duration, gate DrainGat
 	abort := deadline.Add(-grace)
 	if gate == nil {
 		x.bg.waitUntil(abort)
-	} else {
-		x.waitForGate(abort, gate)
+		x.abort()
+		x.bg.stop()
+		x.bg.waitUntil(deadline)
+		x.finish()
+		return
 	}
+	x.waitForGate(abort, gate)
 	x.abort()
+	x.awaitAfterAbort(deadline, gate)
+}
+
+// awaitAfterAbort keeps the settlements open after the attempts are cancelled. It first waits for the handler, because
+// a request that is still running may hand a failed settlement to the executor's background as it returns; checking the
+// executor before the handler would see the empty moment just before that handoff. Once the handler is idle, no more
+// handoffs can come from it, so the executor's background is checked and waited for. The end context, which settles
+// the per-try contexts, is not finished until both are idle or the deadline arrives.
+func (x *Executor) awaitAfterAbort(deadline time.Time, gate DrainGate) {
+	for {
+		if gate.Pending() {
+			if !waitGateIdle(deadline, gate) {
+				break
+			}
+		}
+		if x.bg.pending() {
+			if !x.bg.waitUntil(deadline) {
+				break
+			}
+			continue
+		}
+		break
+	}
 	x.bg.stop()
-	x.bg.waitUntil(deadline)
 	x.finish()
 }
 
