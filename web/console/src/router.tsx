@@ -74,6 +74,11 @@ const routeTree = root.addChildren([
     }),
     createRoute({
       getParentRoute: () => app,
+      path: "/orders",
+      component: lazyRouteComponent(() => import("./pages/orders")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
       path: "/statement",
       component: lazyRouteComponent(() => import("./pages/statement")),
     }),
@@ -81,6 +86,11 @@ const routeTree = root.addChildren([
       getParentRoute: () => app,
       path: "/security",
       component: lazyRouteComponent(() => import("./pages/security")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/notifications",
+      component: lazyRouteComponent(() => import("./pages/notifications")),
     }),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),
   ]),

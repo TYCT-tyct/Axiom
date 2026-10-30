@@ -20,6 +20,17 @@ export function moneyInput(amount: string) {
   return decimalOf(amount).replace(/\.?0+$/, "");
 }
 
+// minorOf writes an amount in minor units as the decimal it means: "1030" in USD as "10.30", "1000" in JPY as "1000".
+// It shifts digits in text, never through a floating point number.
+function minorOf(amount: string, digits: number) {
+  if (digits === 0) {
+    return amount;
+  }
+  const negative = amount.startsWith("-");
+  const value = (negative ? amount.slice(1) : amount).padStart(digits + 1, "0");
+  return `${negative ? "-" : ""}${value.slice(0, -digits)}.${value.slice(-digits)}`;
+}
+
 // parseMoney reads what a person typed, such as "12.5", as an amount in the contract's unit; null when it is not a
 // non-negative decimal with at most nine places that fits the contract's 19 digits.
 export function parseMoney(text: string): string | null {
@@ -53,9 +64,33 @@ export function formatters(language: Language, timeZone?: string) {
   });
   const zones = new Intl.DateTimeFormat(locale, { timeZoneName: "short", ...zone });
   const currencies = new Map<string, Intl.NumberFormat>();
+  // A payment's minor unit is the currency's, not always two digits (JPY, KWD), and is resolved once per currency.
+  const payDigits = new Map<string, number>();
+  const payFormats = new Map<string, Intl.NumberFormat>();
   return {
     number: (value: number | bigint) => integers.format(value),
     decimal: (text: string) => decimals.format(text as `${number}`),
+    // A price in the currency a payment method is paid in, in that currency's minor units (cents, fen, or none): the
+    // payment contract's PayAmount, not the site's billionths. The fraction digits are the currency's own.
+    pay: ({ amount, currency }: Money) => {
+      let digits = payDigits.get(currency);
+      if (digits === undefined) {
+        digits =
+          new Intl.NumberFormat(locale, { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
+        payDigits.set(currency, digits);
+      }
+      let format = payFormats.get(currency);
+      if (!format) {
+        format = new Intl.NumberFormat(locale, {
+          style: "currency",
+          currency,
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        });
+        payFormats.set(currency, format);
+      }
+      return format.format(minorOf(amount, digits) as `${number}`);
+    },
     // An amount of money exactly as the server holds it: never rounded, and at least the currency's two decimals.
     money: ({ amount, currency }: Money) => {
       let format = currencies.get(currency);

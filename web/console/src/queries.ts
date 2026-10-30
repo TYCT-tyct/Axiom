@@ -86,3 +86,42 @@ export const callQuery = (id: string) =>
     queryFn: ({ signal }) =>
       unwrap(consoleApi.GET("/api/console/v1/calls/{call_id}", { params: { path: { call_id: id } }, signal })),
   });
+
+// The top-up orders, newest first, with each one's refunds. The page that asks for refunds shares the key.
+export const ordersQuery = infiniteQueryOptions({
+  queryKey: [accountKey, "orders"],
+  queryFn: ({ pageParam, signal }) =>
+    unwrap(
+      consoleApi.GET("/api/console/v1/orders", {
+        params: { query: { cursor: pageParam, limit: pageSize } },
+        signal,
+      }),
+    ),
+  initialPageParam: undefined as string | undefined,
+  getNextPageParam: nextCursor,
+});
+
+// One order, polled while it waits for payment so the balance page notices a payment that arrives without the browser
+// coming back through the channel's return page.
+export const orderQuery = (id: string) =>
+  queryOptions({
+    queryKey: [accountKey, "order", id],
+    queryFn: ({ signal }) =>
+      unwrap(consoleApi.GET("/api/console/v1/orders/{order_id}", { params: { path: { order_id: id } }, signal })),
+    refetchInterval: (query) => (query.state.data?.state === "pending" ? 15_000 : false),
+  });
+
+// What an amount costs through each method. The amount is part of the key: a quote is only good for the amount it was
+// asked for. No amount means no request.
+export const paymentMethodsQuery = (credits: string) =>
+  queryOptions({
+    queryKey: [accountKey, "payment-methods", credits],
+    queryFn: ({ signal }) =>
+      unwrap(consoleApi.GET("/api/console/v1/payment-methods", { params: { query: { credits } }, signal })),
+    enabled: credits !== "",
+  });
+
+export const notificationPreferencesQuery = queryOptions({
+  queryKey: [accountKey, "notification-preferences"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/notification-preferences", { signal })),
+});
