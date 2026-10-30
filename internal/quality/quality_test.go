@@ -134,6 +134,26 @@ func TestQualityScore(t *testing.T) {
 	}
 }
 
+// TestQualityWithoutCountedOutcomesIsNeutral: an uncounted failure can still leave independent latency samples—a
+// stream that answers slowly and then reports rate limiting is one—but without a counted outcome the endpoint stays
+// unknown: quality 1 and confidence 0, never a low score derived from performance samples alone.
+func TestQualityWithoutCountedOutcomesIsNeutral(t *testing.T) {
+	m := New(nil)
+	id := suppliers.EndpointID{1}
+	for range minSamples {
+		o := answered(id, t0, 10*time.Second, time.Second, 100, 100)
+		o.Done, o.Fault = false, protocol.FaultRateLimited
+		m.Observe(t.Context(), o)
+	}
+	got := m.Measured(id, t0.Add(11*time.Second))
+	if got.Latency != 10*time.Second {
+		t.Fatalf("latency = %v, want the independent samples to stay measured", got.Latency)
+	}
+	if got.Quality != 1 || got.Confidence != 0 {
+		t.Fatalf("no counted outcomes: quality %v confidence %v, want 1 and 0", got.Quality, got.Confidence)
+	}
+}
+
 // TestProbeResultsScoreTheEndpoint: a probe is a real generation, so its result counts as quality evidence—a pass and
 // an endpoint-scope failure both move the score—but it never enters the breaker window, which needs independent sources.
 func TestProbeResultsScoreTheEndpoint(t *testing.T) {
