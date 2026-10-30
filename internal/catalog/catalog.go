@@ -21,11 +21,22 @@ type Config struct {
 	// sync holds it for a person; default 25. billing's reference-price safety valve (docs/domains/billing.md「定价」)
 	// is above the catalog and cannot be called from here, so the catalog keeps its own until that valve exists.
 	PriceChangeLimit int
+	// CountedItems allows publishing prices for the items counted per piece, second or character. An older release's
+	// parser rejects their names, and a node that cannot parse one price drops the whole snapshot and stops serving
+	// every model, so this stays off until every node runs a release that reads them: this release reads them; the
+	// release that opens the image, audio and speech endpoints, after the fleet runs this one, turns this on
+	// (README.md「新增计费项与滚动升级」).
+	CountedItems bool
 }
 
 // ErrStale is what Current returns when the snapshot is missing, or the database has not confirmed it for longer than
 // MaxStale: a model taken down elsewhere must not be called here for long.
 var ErrStale = errors.New("the catalog snapshot is missing or stale")
+
+// ErrCountedItems is what a publish or a source switch returns for a price on an item counted per piece, second or
+// character while Config.CountedItems is off: a node running an older release cannot parse that name and would drop the
+// whole snapshot.
+var ErrCountedItems = errors.New("catalog: prices for counted items wait until every node reads them")
 
 // Catalog holds the node's snapshot and runs the admin operations. The platform scope is given by cmd/axiom.
 type Catalog struct {

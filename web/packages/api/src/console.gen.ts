@@ -1546,8 +1546,8 @@ export interface components {
             /** Format: int64 */
             quantity?: number;
             /** @enum {string} */
-            unit?: "token" | "use";
-            /** @description Exact currency units per token or use, decimal text with up to 15 fractional digits. */
+            unit?: "token" | "use" | "piece" | "second" | "character";
+            /** @description Exact currency units per billing unit (token, use, piece, second or character), decimal text with up to 15 fractional digits. */
             unit_price?: string;
             /** @description Exact quantity times unit_price, before call-level rounding and balance adjustment. */
             amount?: string;
