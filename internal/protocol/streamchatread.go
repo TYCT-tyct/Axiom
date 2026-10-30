@@ -42,7 +42,7 @@ func (s *chatToNative) readNativeChoice() error {
 }
 
 func (s *chatToNative) readNativeDelta() error {
-	if s.hidesReasoning && (string(s.name) == "reasoning" || string(s.name) == "reasoning_content" || string(s.name) == "reasoning_details") {
+	if s.hiddenReasoning() {
 		return s.skip()
 	}
 	switch string(s.name) {
@@ -55,6 +55,13 @@ func (s *chatToNative) readNativeDelta() error {
 	case "refusal":
 		return s.captureNative(&s.chunk.Delta.Refusal)
 	case "reasoning_details":
+		if s.composed {
+			// The stream is another native format's, which the conversion wrote into Chat chunks to share one
+			// mapping: the details are Chat's carrier for state the client's format has no member for (a thinking
+			// signature, an encrypted item), and the plaintext reasoning or summary it does have is in the other
+			// members of the same delta (README.md「跨格式的流」).
+			return s.eachElement(func() error { return s.skip() })
+		}
 		return s.eachElement(func() error {
 			return fmt.Errorf("%w: Chat reasoning_details cannot be represented by this client", ErrUpstream)
 		})
@@ -63,6 +70,12 @@ func (s *chatToNative) readNativeDelta() error {
 	default:
 		return s.skip()
 	}
+}
+
+// hiddenReasoning holds when the relay hides every reasoning member of a delta: the client's format cannot represent
+// the reasoning the upstream reports, so it is read and dropped.
+func (s *chatToNative) hiddenReasoning() bool {
+	return s.hidesReasoning && (string(s.name) == "reasoning" || string(s.name) == "reasoning_content" || string(s.name) == "reasoning_details")
 }
 
 func (s *chatToNative) captureNative(dst *jsontext.Value) error {

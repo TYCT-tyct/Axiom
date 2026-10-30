@@ -1,0 +1,84 @@
+event: response.created
+data: {"response":{"created_at":1760000000,"error":null,"id":"gen-01","incomplete_details":null,"model":"claude-client-name","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"}
+
+event: response.output_item.added
+data: {"item":{"content":[],"id":"gen-01_0","role":"assistant","status":"in_progress","type":"message"},"output_index":0,"sequence_number":1,"type":"response.output_item.added"}
+
+event: response.content_part.added
+data: {"content_index":0,"item_id":"gen-01_0","output_index":0,"part":{"annotations":[],"text":"","type":"output_text"},"sequence_number":2,"type":"response.content_part.added"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":3,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":"Okay"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":4,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":","}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":5,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":" let"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":6,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":"'s"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":7,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":" check"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":8,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":" the"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":9,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":" weather"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":10,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":" for"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":11,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":" San"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":12,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":" Francisco"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":13,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":","}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":14,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":" CA"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":15,"output_index":0,"item_id":"gen-01_0","content_index":0,"delta":":"}
+
+event: response.output_item.added
+data: {"item":{"arguments":"","call_id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","id":"gen-01_1","name":"get_weather","status":"in_progress","type":"function_call"},"output_index":1,"sequence_number":16,"type":"response.output_item.added"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":17,"output_index":1,"item_id":"gen-01_1","delta":"{\"location\":"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":18,"output_index":1,"item_id":"gen-01_1","delta":" \"San"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":19,"output_index":1,"item_id":"gen-01_1","delta":" Francisc"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":20,"output_index":1,"item_id":"gen-01_1","delta":"o,"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":21,"output_index":1,"item_id":"gen-01_1","delta":" CA\"}"}
+
+event: response.output_text.done
+data: {"content_index":0,"item_id":"gen-01_0","output_index":0,"sequence_number":22,"text":"Okay, let's check the weather for San Francisco, CA:","type":"response.output_text.done"}
+
+event: response.content_part.done
+data: {"content_index":0,"item_id":"gen-01_0","output_index":0,"part":{"annotations":[],"text":"Okay, let's check the weather for San Francisco, CA:","type":"output_text"},"sequence_number":23,"type":"response.content_part.done"}
+
+event: response.output_item.done
+data: {"item":{"content":[{"annotations":[],"text":"Okay, let's check the weather for San Francisco, CA:","type":"output_text"}],"id":"gen-01_0","role":"assistant","status":"completed","type":"message"},"output_index":0,"sequence_number":24,"type":"response.output_item.done"}
+
+event: response.function_call_arguments.done
+data: {"arguments":"{\"location\": \"San Francisco, CA\"}","item_id":"gen-01_1","name":"get_weather","output_index":1,"sequence_number":25,"type":"response.function_call_arguments.done"}
+
+event: response.output_item.done
+data: {"item":{"arguments":"{\"location\": \"San Francisco, CA\"}","call_id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","id":"gen-01_1","name":"get_weather","status":"completed","type":"function_call"},"output_index":1,"sequence_number":26,"type":"response.output_item.done"}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":27,"response":{"created_at":1760000000,"error":null,"id":"gen-01","incomplete_details":null,"model":"claude-client-name","object":"response","output":[{"content":[{"annotations":[],"text":"Okay, let's check the weather for San Francisco, CA:","type":"output_text"}],"id":"gen-01_0","role":"assistant","status":"completed","type":"message"},{"arguments":"{\"location\": \"San Francisco, CA\"}","call_id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","id":"gen-01_1","name":"get_weather","status":"completed","type":"function_call"}],"status":"completed","usage":{"cost":3.703701,"cost_currency":"USD","input_tokens":472,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"is_byok":false,"output_tokens":89,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":561}}}
+
