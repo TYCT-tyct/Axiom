@@ -54,7 +54,7 @@ test("a site logo is uploaded, previewed, and cleared", async ({ page }) => {
     .getByRole("button", { name: zhText("change.close") })
     .last()
     .click();
-  await expect(page.locator("img[src^='data:image/svg+xml']")).toBeVisible();
+  await expect(page.locator("#main img[src^='data:image/svg+xml']")).toBeVisible();
 
   await page.getByRole("button", { name: words("settings.logo.clear") }).click();
   await dialog.getByLabel(words("change.reason")).fill("remove the brand");

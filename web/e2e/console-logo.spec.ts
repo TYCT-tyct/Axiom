@@ -6,13 +6,17 @@ import { mockConsole } from "./console-api.ts";
 // page shows the brand before a session exists.
 test.use({ baseURL: apps[1].url });
 
+// The console is mounted under /console/ on the site's listener; /sign-in would be the website's page.
+const signIn = "/console/sign-in";
+
 const logoSVG =
   "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCI+PHBhdGggZmlsbD0iIzEyMyIgZD0iTTAgMGgyNHYyNEgweiIvPjwvc3ZnPg==";
 
 test("the console sign-in page shows the site's logo", async ({ page }) => {
   const state = await mockConsole(page);
   state.site = { ...state.site, name: "ConsoleDemo", logo_url: logoSVG };
-  await page.goto("/sign-in");
+  await page.goto(signIn);
+  await expect(page.locator('form input[name="email"]')).toBeVisible();
   await expect(page.locator(`img[src='${logoSVG}']`)).toBeVisible();
   await expect(page.getByText("ConsoleDemo")).toBeVisible();
 });
@@ -26,8 +30,10 @@ test("two site origins show different brands", async ({ page, browser }) => {
 
   const secondURL = new URL(apps[1].url);
   secondURL.hostname = "127.0.0.1";
-  await Promise.all([page.goto("/sign-in"), secondPage.goto(new URL("sign-in", secondURL).href)]);
+  await Promise.all([page.goto(signIn), secondPage.goto(new URL(signIn, secondURL).href)]);
 
+  await expect(page.locator('form input[name="email"]')).toBeVisible();
+  await expect(secondPage.locator('form input[name="email"]')).toBeVisible();
   await expect(page.getByText("WebDemo")).toBeVisible();
   await expect(secondPage.getByText("ConsoleDemo")).toBeVisible();
   await expect(page.locator(`img[src='${logoSVG}']`)).toBeVisible();
