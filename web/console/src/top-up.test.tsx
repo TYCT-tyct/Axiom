@@ -2,7 +2,7 @@ import { createInstance } from "i18next";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it } from "vitest";
-import { balanceMoved, Checkout } from "./top-up";
+import { balanceMoved, Checkout, orderMoved } from "./top-up";
 
 const i18n = createInstance();
 
@@ -48,5 +48,13 @@ describe("balanceMoved", () => {
     expect(balanceMoved(undefined, "paid")).toBe(true);
     expect(balanceMoved(undefined, "pending")).toBe(false);
     expect(balanceMoved("paid", "paid")).toBe(false);
+  });
+});
+
+describe("orderMoved", () => {
+  it("treats the next order's first paid read as a change, not as the previous order's paid state", () => {
+    expect(orderMoved({ id: "ord_A", state: "paid" }, "ord_B", "paid")).toBe(true);
+    expect(orderMoved({ id: "ord_B", state: "pending" }, "ord_B", "paid")).toBe(true);
+    expect(orderMoved({ id: "ord_B", state: "paid" }, "ord_B", "paid")).toBe(false);
   });
 });

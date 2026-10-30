@@ -74,6 +74,16 @@ export function balanceMoved(previous: Schemas["OrderState"] | undefined, state:
   return previous !== undefined || state === "paid" || state === "refunded" || state === "partially_refunded";
 }
 
+// orderMoved is balanceMoved for the order the page is watching now. A state remembered for another order is not that
+// order's previous state: the next order is read for the first time even when both are paid.
+export function orderMoved(
+  previous: { id: string; state: Schemas["OrderState"] } | undefined,
+  id: string,
+  state: Schemas["OrderState"],
+) {
+  return balanceMoved(previous?.id === id ? previous.state : undefined, state);
+}
+
 // TopUpFlow keeps the order across the channel's return page and polls it while it waits: a payment often arrives
 // without the browser coming back through that page.
 function TopUpFlow({ currency }: { currency: string }) {
@@ -90,19 +100,21 @@ function TopUpFlow({ currency }: { currency: string }) {
   // The poll confirms a payment made in another tab or on another device. The balance and the order list were read
   // before it, so they are refreshed as soon as the state moves; a first read of a paid order does the same because
   // that payment may have landed after the balance query.
-  const lastState = useRef<Schemas["OrderState"] | undefined>(undefined);
+  const lastState = useRef<{ id: string; state: Schemas["OrderState"] } | undefined>(undefined);
   useEffect(() => {
+    const id = live.data?.id;
     const state = live.data?.state;
-    if (!state || state === lastState.current) {
+    // A read that does not belong to the order the page is watching now (an old answer after a restart) is not its state.
+    if (!id || !state || id !== orderId) {
       return;
     }
     const previous = lastState.current;
-    lastState.current = state;
-    if (balanceMoved(previous, state)) {
+    lastState.current = { id, state };
+    if (orderMoved(previous, id, state)) {
       void client.invalidateQueries({ queryKey: balanceQuery.queryKey });
       void client.invalidateQueries({ queryKey: ordersQuery.queryKey });
     }
-  }, [live.data?.state, client]);
+  }, [live.data?.id, live.data?.state, orderId, client]);
 
   // A remembered order this site does not have starts the flow over instead of showing an error nobody can act on.
   useEffect(() => {
