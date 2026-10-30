@@ -61,6 +61,8 @@ type Handler struct {
 
 	charges    *billing.ChargeReader
 	background *background             // settlements of lost admissions
+	end        context.Context         //nolint:containedctx // the node's final deadline, which every lost admission's settlement watches
+	finish     context.CancelFunc      // ends end at the deadline
 	outage     *outage                 // the dependency outage being told, if any
 	listings   atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
 }
@@ -79,7 +81,8 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground(), outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
+	end, finish := context.WithCancel(context.Background())
+	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground(), end: end, finish: finish, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
@@ -99,6 +102,9 @@ func NewHandler(d Deps) (*Handler, error) {
 // number is that ID, and every response carries it as X-Generation-Id beside Public's X-Request-ID, errors and the
 // routes that are not calls included.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The drain counts the request from the moment it passes the gate, not from Run: a request can still be reading
+	// its body when the drain begins, and starting a stream after it would otherwise escape the drain.
+	defer h.background.add()()
 	w.Header().Set("X-Generation-Id", httpserver.RequestID(r.Context()))
 	if _, pattern := h.mux.Handler(r); pattern == "" { // no route took it: the mux's own answer is plain text
 		h.refuseUnrouted(w, r)

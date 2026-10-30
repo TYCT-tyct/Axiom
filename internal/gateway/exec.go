@@ -94,6 +94,8 @@ type Executor struct {
 	bg       *background        // the calls running and the settlements that outlive them
 	shutdown context.Context    //nolint:containedctx // not a request's: the executor's own, which every attempt's context.AfterFunc watches; done once Drain gives up waiting
 	abort    context.CancelFunc // ends shutdown
+	end      context.Context    //nolint:containedctx // the node's final deadline, which every settlement's context watches
+	finish   context.CancelFunc // ends end: a settlement still writing at the deadline is cancelled
 }
 
 // minSecret is the shortest identity secret accepted.
@@ -109,7 +111,8 @@ func NewExecutor(d ExecDeps) (*Executor, error) {
 		return nil, errors.New("gateway: the identity secret is too short")
 	}
 	shutdown, abort := context.WithCancel(context.Background())
-	return &Executor{ExecDeps: d, bg: newBackground(), shutdown: shutdown, abort: abort}, nil
+	end, finish := context.WithCancel(context.Background())
+	return &Executor{ExecDeps: d, bg: newBackground(), shutdown: shutdown, abort: abort, end: end, finish: finish}, nil
 }
 
 // identity maps a value the client sent to the opaque one that goes upstream: the same value of the same account
@@ -154,17 +157,41 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 	s.conclude(ctx, s.attempts(ctx))
 }
 
-// Drain lets the calls in flight and the settlements in the background end, until ctx does; then it cancels every
-// attempt, as a node that is going away must, and gives what is left grace to settle. What still has not is the
-// cleanup's (README.md「故障矩阵」). A call that begins meanwhile is waited for too.
+// Drain lets the calls in flight and the settlements in the background end until abort, then cancels every attempt,
+// as a node that is going away must, and waits for what is left until ctx's deadline. abort is the deadline less
+// grace, so the grace is taken out of the node's deadline rather than added after the wait: a drain that is slow to
+// return cannot push the node past it. What still has not settled is the cleanup's (README.md「故障矩阵」). A call
+// that begins meanwhile is waited for too, and the shutdown is ended even when nothing was running when Drain began,
+// so a request that has passed the gate but is still reading its body cannot start a new stream after the call drain
+// has returned.
 func (x *Executor) Drain(ctx context.Context, grace time.Duration) {
-	if x.bg.wait(ctx) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		if x.bg.wait(ctx) {
+			return
+		}
+		x.abort()
+		tail, cancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
+		defer cancel()
+		x.bg.drain(tail)
 		return
 	}
+	x.bg.waitUntil(deadline.Add(-grace))
 	x.abort()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
-	defer cancel()
-	x.bg.drain(ctx)
+	x.bg.stop()
+	x.bg.waitUntil(deadline)
+	x.finish()
+}
+
+// settlementContext is SettleContext for one try, also ended when the node's deadline arrives: a write still in
+// progress then must not hold the process past the deadline the drain just waited for.
+func (x *Executor) settlementContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := SettleContext(ctx, timeout)
+	stop := context.AfterFunc(x.end, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // session is the run of one call. The goroutine that runs it owns it, but for the keep-alive timer and the cancelling

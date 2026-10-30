@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 	"uuid"
@@ -257,27 +258,26 @@ func announceReady(ctx context.Context, ready func() bool, every time.Duration, 
 // Drain gives the calls in flight and the settlements they left in the background until the shutdown deadline, after
 // the listeners have stopped admitting. Attempts are cancelled abortGrace before that deadline, and what is still not
 // settled when it ends is the cleanup's (internal/gateway/README.md「故障矩阵」).
+//
+// The two backgrounds drain side by side: the handler's covers a request from the moment it passes the gate (body
+// still being read, admission still running), the executor's covers the call and its settlements. Running them in
+// series let a slow orphan settlement eat the time the executor's abort needed. Both take the same absolute deadline
+// and take abortGrace out of it, so neither can add a grace after the deadline has passed.
 func (c callNode) Drain(ctx context.Context) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		c.handler.Drain(ctx) // the reservations of admissions that were lost
-		c.executor.Drain(ctx, abortGrace)
+	if c.handler == nil {
 		return
 	}
-	waitAt, grace := drainWait(deadline, time.Now())
-	wait, cancel := context.WithDeadline(ctx, waitAt)
-	defer cancel()
-	c.handler.Drain(wait)
-	c.executor.Drain(wait, grace)
-}
-
-// drainWait is when the calls stop waiting for what is in flight and their attempts are cancelled, and the grace left
-// after that for the settlements. The grace comes out of the deadline rather than being added to it: with 30 seconds,
-// attempts are cancelled at 25 and the settlements get the last 5, whichever of the listeners and the calls is ready
-// first. A deadline already past leaves no grace and no wait.
-func drainWait(deadline, now time.Time) (wait time.Time, grace time.Duration) {
-	grace = min(abortGrace, max(0, deadline.Sub(now)))
-	return deadline.Add(-grace), grace
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		c.handler.Drain(ctx, abortGrace)
+	}()
+	go func() {
+		defer wg.Done()
+		c.executor.Drain(ctx, abortGrace)
+	}()
+	wg.Wait()
 }
 
 // reloadEndpoints rebuilds the suppliers' snapshot every reloadEvery until ctx ends, so that a change made in the admin

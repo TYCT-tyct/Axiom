@@ -88,5 +88,18 @@ func writeAdditive(target string, body []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), target)
+	// Link creates the target only if it does not exist: two publishers that both found it missing cannot both
+	// succeed, and the second compares what the first left instead of overwriting it. Rename would replace it.
+	err = os.Link(tmp.Name(), target)
+	if errors.Is(err, fs.ErrExist) {
+		existing, readErr := os.ReadFile(target) //nolint:gosec // target is a content-hashed path under the operator's shared directory
+		if readErr != nil {
+			return readErr
+		}
+		if !bytes.Equal(existing, body) {
+			return fmt.Errorf("%s already holds different bytes: a content-hashed name must never change", target)
+		}
+		return nil
+	}
+	return err
 }

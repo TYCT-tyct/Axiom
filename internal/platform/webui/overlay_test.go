@@ -1,10 +1,12 @@
 package webui
 
 import (
+	"bytes"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 )
@@ -204,5 +206,49 @@ func TestPublishRefusesDifferentBytesUnderAName(t *testing.T) {
 	}
 	if err := old.Publish(dir); err == nil || !strings.Contains(err.Error(), "different bytes") {
 		t.Errorf("a published name accepted different bytes: %v", err)
+	}
+}
+
+// TestConcurrentPublishKeepsOneContentUnderAName: two publishers can both find a hashed name missing before either
+// writes it. The target is created with a link, so only one can win; the other must fail after comparing what the
+// winner left, never overwrite it and still report success.
+func TestConcurrentPublishKeepsOneContentUnderAName(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "site", "assets", "index-AAAAAAAA.js")
+	bodies := make([][]byte, 8)
+	for i := range bodies {
+		bodies[i] = bytes.Repeat([]byte{byte('a' + i)}, 1<<18)
+	}
+	start := make(chan struct{})
+	errs := make([]error, len(bodies))
+	var wg sync.WaitGroup
+	for i := range bodies {
+		wg.Go(func() {
+			<-start
+			errs[i] = writeAdditive(target, bodies[i])
+		})
+	}
+	close(start)
+	wg.Wait()
+	won := -1
+	for i, err := range errs {
+		switch {
+		case err == nil && won < 0:
+			won = i
+		case err == nil:
+			t.Errorf("publisher %d also succeeded; one hashed name cannot hold two bodies", i)
+		case !strings.Contains(err.Error(), "different bytes"):
+			t.Errorf("publisher %d: %v; want the different-bytes refusal", i, err)
+		}
+	}
+	if won < 0 {
+		t.Fatal("no publisher succeeded")
+	}
+	got, err := os.ReadFile(target) //nolint:gosec // the test's own temporary directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, bodies[won]) {
+		t.Errorf("the target holds %d bytes, not the winner's", len(got))
 	}
 }

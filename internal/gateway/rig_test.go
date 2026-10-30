@@ -187,7 +187,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	}
 	r.server = httptest.NewServer(httpserver.Public(r.handler, slog.New(slog.NewTextHandler(logWriter{t}, nil)), cmp.Or(o.body, time.Minute)))
 	t.Cleanup(r.server.Close)
-	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context())) })
+	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context()), time.Minute) })
 	return r
 }
 

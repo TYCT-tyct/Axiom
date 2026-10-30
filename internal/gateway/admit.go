@@ -189,7 +189,7 @@ func (h *Handler) settleOrphan(ctx context.Context, c *Call) {
 }
 
 func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
-	ctx, cancel := SettleContext(ctx, settleAttempt)
+	ctx, cancel := h.settlementContext(ctx, settleAttempt)
 	defer cancel()
 	release, err := h.Limits.Funds.Complete(ctx, accountKey(c.caller))
 	if err != nil {
@@ -199,6 +199,26 @@ func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
 	return h.Billing.SettleOrphan(pg.CompletionContext(ctx), c.Admitted, c.ID)
 }
 
-// Drain waits for the settlements still running in the background, until ctx ends; then it stops them, and what is
-// left is the cleanup's.
-func (h *Handler) Drain(ctx context.Context) { h.background.drain(ctx) }
+// Drain waits for the requests and settlements still running in the background until abort, then stops their retries
+// and waits for them until ctx's deadline; what is left is the cleanup's. abort is the deadline less grace, so the
+// grace comes out of the node's deadline rather than being added after the wait. A request that has passed the gate
+// but has not reached Run yet is counted by ServeHTTP, so it cannot start a call after the drain has returned.
+func (h *Handler) Drain(ctx context.Context, grace time.Duration) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		h.background.drain(ctx)
+		return
+	}
+	h.background.drainUntil(deadline.Add(-grace), deadline)
+	h.finish()
+}
+
+// settlementContext is SettleContext for one orphan settlement, also ended at the node's deadline.
+func (h *Handler) settlementContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := SettleContext(ctx, timeout)
+	stop := context.AfterFunc(h.end, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}

@@ -82,12 +82,49 @@ func (b *background) wait(ctx context.Context) bool {
 	}
 }
 
+// waitUntil is wait with an absolute deadline, for a drain that has one: it returns when nothing is running or the
+// deadline has passed.
+func (b *background) waitUntil(deadline time.Time) {
+	for {
+		b.mu.Lock()
+		idle, running := b.idle, b.running
+		b.mu.Unlock()
+		if running == 0 {
+			return
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-idle: // something may have started since: look again
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
+			return
+		}
+	}
+}
+
 // drain waits until ctx ends; then it stops what is left and waits for it to give up.
 func (b *background) drain(ctx context.Context) {
 	if !b.wait(ctx) {
 		b.stop()
 		b.wait(context.WithoutCancel(ctx))
 	}
+}
+
+// drainUntil waits for the background until abort, stops what is left and waits for it until deadline. The deadline
+// is the node's, not a new grace added after abort, so a slow settlement cannot push the node past it.
+func (b *background) drainUntil(abort, deadline time.Time) {
+	b.waitUntil(abort)
+	b.stop()
+	b.waitUntil(deadline)
 }
 
 // retry calls try until it succeeds, it fails in a way final says no retry can mend, until has passed, or the
