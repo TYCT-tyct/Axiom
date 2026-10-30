@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/pgtest"
 )
 
 // keyView is the parts of a key a test compares.
@@ -127,6 +129,120 @@ func TestKeyReads(t *testing.T) {
 	}
 	f.assertNotFound(s, "/keys/key_00000000000000000000000000")
 	f.assertNotFound(s, "/keys/not-an-id")
+}
+
+// TestKeyFilters: the URL's name, prefix, status and created range reach the query, the status tells an expired key
+// from a disabled one, and a filtered page follows its cursor. An inverted range is a 400 naming the field.
+func TestKeyFilters(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	alpha := f.createKey(s, `{"name":"Alpha One"}`).Key
+	f.createKey(s, `{"name":"Beta"}`)
+	f.createKey(s, `{"name":"Alpha Two"}`)
+	expect(t, "disabling a key", f.do(http.MethodPut, "/keys/"+alpha.Id, `{"name":"Alpha One","disabled":true}`, as(s)), http.StatusOK, "")
+	if err := pgtest.Run(t.Context(), f.database.Superuser,
+		`UPDATE accounts.api_keys SET prefix = 'old-', expires_at = now() - interval '1 minute' WHERE name = 'Beta'`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	rangeQuery := func(from, to time.Time) string {
+		return "created_after=" + url.QueryEscape(from.Format(time.RFC3339)) +
+			"&created_before=" + url.QueryEscape(to.Format(time.RFC3339))
+	}
+	for _, c := range []struct {
+		name, query string
+		want        []string
+	}{
+		{"a name, ignoring case", "name=ALPHA", []string{"Alpha Two", "Alpha One"}},
+		{"an old prefix", "prefix=OLD-", []string{"Beta"}},
+		{"active keys", "status=active", []string{"Alpha Two"}},
+		{"disabled keys", "status=disabled", []string{"Alpha One"}},
+		{"expired keys, enabled or not", "status=expired", []string{"Beta"}},
+		{"a name and a status", "name=alpha&status=disabled", []string{"Alpha One"}},
+		{"an empty filter", "name=", []string{"Alpha Two", "Beta", "Alpha One"}},
+		{"a range around every key", rangeQuery(now.Add(-time.Hour), now.Add(time.Hour)), []string{"Alpha Two", "Beta", "Alpha One"}},
+		{"a range before every key", "created_before=" + url.QueryEscape(now.Add(-time.Hour).Format(time.RFC3339)), []string{}},
+		{"a range after every key", "created_after=" + url.QueryEscape(now.Add(time.Hour).Format(time.RFC3339)), []string{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var list consoleapi.KeyList
+			decode(t, f.do(http.MethodGet, "/keys?"+c.query, "", as(s)), &list)
+			if diff := cmp.Diff(c.want, namesOf(list)); diff != "" {
+				t.Errorf("(-want +got):\n%s", diff)
+			}
+		})
+	}
+	var page, next consoleapi.KeyList
+	decode(t, f.do(http.MethodGet, "/keys?name=alpha&limit=1", "", as(s)), &page)
+	if diff := cmp.Diff([]string{"Alpha Two"}, namesOf(page)); diff != "" || page.NextCursor == nil {
+		t.Fatalf("the first filtered page (-want +got):\n%s\ncursor %v", diff, page.NextCursor)
+	}
+	decode(t, f.do(http.MethodGet, "/keys?name=alpha&limit=1&cursor="+*page.NextCursor, "", as(s)), &next)
+	if diff := cmp.Diff([]string{"Alpha One"}, namesOf(next)); diff != "" || next.NextCursor != nil {
+		t.Errorf("the next filtered page (-want +got):\n%s\ncursor %v", diff, next.NextCursor)
+	}
+	for _, c := range []struct{ name, query string }{
+		{"an inverted created range", rangeQuery(now, now.Add(-time.Hour))},
+		{"an unknown status", "status=unknown"},
+		{"a page size below one", "limit=0"},
+		{"a page size above the contract", "limit=201"},
+	} {
+		expect(t, c.name, f.do(http.MethodGet, "/keys?"+c.query, "", as(s)), http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
+	}
+}
+
+// TestKeyRetiredModelHint: a key whose model restrictions name a retired model says which ones, while a key with no
+// retired name omits the hint.
+func TestKeyRetiredModelHint(t *testing.T) {
+	t.Parallel()
+	c, _ := ownerFixture.get(t, buildOwnerDatabase)
+	if err := pgtest.Run(t.Context(), c.database.Superuser,
+		`INSERT INTO catalog.author (slug, name) VALUES ('acme', 'Acme')`,
+		`WITH m AS (
+			INSERT INTO catalog.model (author, slug, status, version_basis, price_source)
+			VALUES ('acme', 'acme/retired', 'retired', 'dated', 'manual'), ('acme', 'acme/listed', 'listed', 'dated', 'manual')
+			RETURNING id, slug)
+		INSERT INTO catalog.name (name, norm, visibility, model_id) SELECT slug, slug, 'public', id FROM m`); err != nil {
+		t.Fatal(err)
+	}
+	f := startNode(c, &testClock{now: time.Now()}, 0)
+	s := f.owner()
+	old := f.createKey(s, `{"name":"Old","models":["acme/retired","acme/listed","acme/unknown"]}`).Key
+	if old.RetiredModels == nil || !cmp.Equal([]string{"acme/retired"}, *old.RetiredModels) {
+		t.Errorf("the retired names of a key that names one: %v", old.RetiredModels)
+	}
+	var read consoleapi.Key
+	decode(t, f.do(http.MethodGet, "/keys/"+old.Id, "", as(s)), &read)
+	if read.RetiredModels == nil || !cmp.Equal([]string{"acme/retired"}, *read.RetiredModels) {
+		t.Errorf("the retired names when the key is read: %v", read.RetiredModels)
+	}
+	fresh := f.createKey(s, `{"name":"Fresh","models":["acme/listed"]}`).Key
+	if fresh.RetiredModels != nil {
+		t.Errorf("a key that names no retired model: %v", *fresh.RetiredModels)
+	}
+	var list consoleapi.KeyList
+	decode(t, f.do(http.MethodGet, "/keys", "", as(s)), &list)
+	for _, k := range list.Data {
+		switch k.Name {
+		case "Old":
+			if k.RetiredModels == nil || !cmp.Equal([]string{"acme/retired"}, *k.RetiredModels) {
+				t.Errorf("the retired names in the list: %v", k.RetiredModels)
+			}
+		case "Fresh":
+			if k.RetiredModels != nil {
+				t.Errorf("a listed key with no retired model has a hint: %v", *k.RetiredModels)
+			}
+		}
+	}
+}
+
+func namesOf(list consoleapi.KeyList) []string {
+	names := []string{}
+	for _, k := range list.Data {
+		names = append(names, k.Name)
+	}
+	return names
 }
 
 func idsOf(list consoleapi.KeyList) []string {

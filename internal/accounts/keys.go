@@ -49,6 +49,14 @@ const (
 	ResetMonthly = "monthly"
 )
 
+// The states a key list can select, as the console shows them. An expired key is past its expiry whether it is
+// enabled or not; a disabled key is one disabled before its expiry.
+const (
+	KeyStatusActive   = "active"
+	KeyStatusDisabled = "disabled"
+	KeyStatusExpired  = "expired"
+)
+
 // KeySettings are the settings of a key a user may change (README.md「API key」). What is left out is unrestricted: no
 // spend limit, any model, any address. They satisfy the table's checks (a reset needs a limit; money is not negative),
 // which the console's interface checks before it asks.
@@ -207,19 +215,49 @@ func nilIfEmpty[T any](v []T) []T {
 	return v
 }
 
-// ListKeys is up to limit of account's keys that are not deleted, disabled ones included, newest first, starting
-// after the key `after` (the zero KeyID for the first page); more tells whether keys remain beyond them.
-func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, after KeyID, limit int) (keys []Key, more bool, err error) {
-	before := uuid.Max()
-	if after != (KeyID{}) {
-		before = uuid.UUID(after)
+// KeyQuery is one page of an account's keys, newest first. The zero After starts at the newest key. Empty filters do
+// not narrow; Status is one of the KeyStatus constants.
+type KeyQuery struct {
+	After         KeyID
+	Limit         int
+	Name          string
+	Prefix        string
+	Status        string
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+}
+
+// ListKeys is up to q.Limit of account's keys that are not deleted and match q's filters, disabled ones included,
+// newest first, starting after q.After (the zero KeyID for the first page); more tells whether keys remain beyond
+// them. The page is read in index order, so a later page costs the rows it reads and not the account's history
+// (Issue #408).
+func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, q KeyQuery) (keys []Key, more bool, err error) {
+	// The scope's row estimate is below LIMIT when RLS is on, so PostgreSQL would otherwise prefer a bitmap scan of
+	// every matching key and a sort; force the custom plan and keep the ordered index the page reads through.
+	if _, err := tx.Exec(ctx, "SET LOCAL plan_cache_mode = force_custom_plan"); err != nil {
+		return nil, false, fmt.Errorf("plan the key page: %w", err)
 	}
-	rows, err := s.queries.ListKeys(ctx, tx, ListKeysParams{AccountID: uuid.UUID(account), Before: before, PageSize: int32(limit) + 1}) // #nosec G115 -- limit is the contract's 1 to 200
+	if _, err := tx.Exec(ctx, "SET LOCAL enable_sort = off"); err != nil {
+		return nil, false, fmt.Errorf("read the key page in index order: %w", err)
+	}
+	before := uuid.Max()
+	if q.After != (KeyID{}) {
+		before = uuid.UUID(q.After)
+	}
+	rows, err := s.queries.ListKeys(ctx, tx, ListKeysParams{ // #nosec G115 -- limit is the contract's 1 to 200
+		AccountID: uuid.UUID(account), Before: before, PageSize: int32(q.Limit) + 1,
+		Name: nullable(q.Name), Prefix: nullable(q.Prefix), Status: nullable(q.Status),
+		CreatedAfter: q.CreatedAfter, CreatedBefore: q.CreatedBefore,
+	})
 	if err != nil {
 		return nil, false, fmt.Errorf("list API keys: %w", err)
 	}
-	if more = len(rows) > limit; more {
-		rows = rows[:limit]
+	// The page is planned; the caller's next query in this transaction (the spend left) plans normally again.
+	if _, err := tx.Exec(ctx, "SET LOCAL enable_sort = on"); err != nil {
+		return nil, false, fmt.Errorf("restore the transaction's sort setting: %w", err)
+	}
+	if more = len(rows) > q.Limit; more {
+		rows = rows[:q.Limit]
 	}
 	keys = make([]Key, len(rows))
 	for i, r := range rows {

@@ -7,6 +7,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/payments"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/egress"
@@ -24,6 +25,7 @@ type consoleAPI struct {
 	version  string
 	accounts *accounts.Service
 	payments *payments.Payments
+	catalog  *catalog.Catalog
 	db       *pg.DB
 }
 

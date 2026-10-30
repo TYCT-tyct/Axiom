@@ -345,14 +345,29 @@ const listKeys = `-- name: ListKeys :many
 SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys
 WHERE account_id = $1 AND deleted_at IS NULL AND id < $2
+  AND ($3::text IS NULL OR strpos(lower(name), lower($3::text)) > 0)
+  AND ($4::text IS NULL OR starts_with(lower(prefix), lower($4::text)))
+  AND ($5::text IS NULL
+    OR ($5::text = 'expired' AND expires_at IS NOT NULL AND expires_at <= statement_timestamp())
+    OR ($5::text = 'active' AND status = 'active'
+      AND (expires_at IS NULL OR expires_at > statement_timestamp()))
+    OR ($5::text = 'disabled' AND status = 'disabled'
+      AND (expires_at IS NULL OR expires_at > statement_timestamp())))
+  AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR created_at < $7::timestamptz)
 ORDER BY id DESC
-LIMIT $3
+LIMIT $8
 `
 
 type ListKeysParams struct {
-	AccountID uuid.UUID
-	Before    uuid.UUID
-	PageSize  int32
+	AccountID     uuid.UUID
+	Before        uuid.UUID
+	Name          *string
+	Prefix        *string
+	Status        *string
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	PageSize      int32
 }
 
 type ListKeysRow struct {
@@ -373,9 +388,20 @@ type ListKeysRow struct {
 	IpAllow     []netip.Prefix
 }
 
-// An account's keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making.
+// An account's keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making. The
+// optional filters are applied while the keys are read in index order, so a later page starts after the last key
+// read and costs the same whatever the history holds.
 func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]ListKeysRow, error) {
-	rows, err := db.Query(ctx, listKeys, arg.AccountID, arg.Before, arg.PageSize)
+	rows, err := db.Query(ctx, listKeys,
+		arg.AccountID,
+		arg.Before,
+		arg.Name,
+		arg.Prefix,
+		arg.Status,
+		arg.CreatedAfter,
+		arg.CreatedBefore,
+		arg.PageSize,
+	)
 	if err != nil {
 		return nil, err
 	}

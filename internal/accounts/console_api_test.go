@@ -113,10 +113,10 @@ func TestListKeys(t *testing.T) {
 	var first, second []accounts.Key
 	var more, moreAfter bool
 	x.inAccount(t, p, func(tx pg.Tx) (err error) {
-		if first, more, err = x.s.ListKeys(t.Context(), tx, p.AccountID(), accounts.KeyID{}, 1); err != nil {
+		if first, more, err = x.s.ListKeys(t.Context(), tx, p.AccountID(), accounts.KeyQuery{Limit: 1}); err != nil {
 			return err
 		}
-		second, moreAfter, err = x.s.ListKeys(t.Context(), tx, p.AccountID(), first[0].ID, 5)
+		second, moreAfter, err = x.s.ListKeys(t.Context(), tx, p.AccountID(), accounts.KeyQuery{After: first[0].ID, Limit: 5})
 		return err
 	})
 	if diff := cmp.Diff([]string{"four"}, keyNames(first)); diff != "" || !more {
@@ -124,6 +124,91 @@ func TestListKeys(t *testing.T) {
 	}
 	if diff := cmp.Diff([]string{"three", "one"}, keyNames(second)); diff != "" || moreAfter || !second[1].Disabled {
 		t.Errorf("the second page (-want +got):\n%s, more %v", diff, moreAfter)
+	}
+}
+
+// TestKeyFilters: name and prefix narrow ignoring case, status tells an expired key from a disabled one, and the
+// created range is inclusive at its start and exclusive at its end; a filtered page still starts after its cursor.
+func TestKeyFilters(t *testing.T) {
+	t.Parallel()
+	x := newTestSite(t)
+	p := x.signedIn(t)
+	ids := []accounts.KeyID{
+		x.makeKey(t, p, accounts.KeySettings{Name: "Alpha one"}),
+		x.makeKey(t, p, accounts.KeySettings{Name: "Beta two"}),
+		x.makeKey(t, p, accounts.KeySettings{Name: "Alpha three"}),
+		x.makeKey(t, p, accounts.KeySettings{Name: "Delta four"}),
+	}
+	x.inAccount(t, p, func(tx pg.Tx) error {
+		for _, id := range []accounts.KeyID{ids[0], ids[3]} {
+			if err := disableKey(t.Context(), tx, x.s, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	t1, t2, t3 := t0.Add(time.Hour), t0.Add(2*time.Hour), t0.Add(3*time.Hour)
+	if err := pgtest.Run(t.Context(), x.database.Superuser,
+		`UPDATE accounts.api_keys SET created_at = '`+t0.Format(time.RFC3339)+`' WHERE id = '`+uuid.UUID(ids[0]).String()+`'`,
+		`UPDATE accounts.api_keys SET prefix = 'old-', created_at = '`+t1.Format(time.RFC3339)+`' WHERE id = '`+uuid.UUID(ids[1]).String()+`'`,
+		`UPDATE accounts.api_keys SET expires_at = now() - interval '1 minute', created_at = '`+t2.Format(time.RFC3339)+`' WHERE id = '`+uuid.UUID(ids[2]).String()+`'`,
+		`UPDATE accounts.api_keys SET expires_at = now() - interval '1 minute', created_at = '`+t3.Format(time.RFC3339)+`' WHERE id = '`+uuid.UUID(ids[3]).String()+`'`); err != nil {
+		t.Fatal(err)
+	}
+	list := func(q accounts.KeyQuery) ([]string, bool) {
+		t.Helper()
+		if q.Limit == 0 {
+			q.Limit = len(ids)
+		}
+		var keys []accounts.Key
+		var more bool
+		x.inAccount(t, p, func(tx pg.Tx) (err error) {
+			keys, more, err = x.s.ListKeys(t.Context(), tx, p.AccountID(), q)
+			return err
+		})
+		return keyNames(keys), more
+	}
+	status := func(s string) accounts.KeyQuery { return accounts.KeyQuery{Status: s} }
+	created := func(after, before *time.Time) accounts.KeyQuery {
+		return accounts.KeyQuery{CreatedAfter: after, CreatedBefore: before}
+	}
+	for _, c := range []struct {
+		name string
+		q    accounts.KeyQuery
+		want []string
+		more bool
+	}{
+		{"every key", accounts.KeyQuery{}, []string{"Delta four", "Alpha three", "Beta two", "Alpha one"}, false},
+		{"a name, ignoring case", accounts.KeyQuery{Name: "ALPHA"}, []string{"Alpha three", "Alpha one"}, false},
+		{"part of a name, literally", accounts.KeyQuery{Name: "_"}, []string{}, false},
+		{"the new prefix, ignoring case", accounts.KeyQuery{Prefix: "SK-AX-V1-"}, []string{"Delta four", "Alpha three", "Alpha one"}, false},
+		{"an old prefix", accounts.KeyQuery{Prefix: "old"}, []string{"Beta two"}, false},
+		{"active keys", status(accounts.KeyStatusActive), []string{"Beta two"}, false},
+		{"disabled keys", status(accounts.KeyStatusDisabled), []string{"Alpha one"}, false},
+		{"expired keys, enabled or not", status(accounts.KeyStatusExpired), []string{"Delta four", "Alpha three"}, false},
+		{"from the first key's making", created(&t0, nil), []string{"Delta four", "Alpha three", "Beta two", "Alpha one"}, false},
+		{"before the second key's making", created(nil, &t1), []string{"Alpha one"}, false},
+		{"the second key's hour", created(&t1, &t2), []string{"Beta two"}, false},
+		{"at the last key's making", created(&t2, nil), []string{"Delta four", "Alpha three"}, false},
+		{"a name and a status together", accounts.KeyQuery{Name: "alpha", Status: accounts.KeyStatusDisabled}, []string{"Alpha one"}, false},
+		{"a filtered page", accounts.KeyQuery{Name: "alpha", Limit: 1}, []string{"Alpha three"}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, more := list(c.q)
+			if diff := cmp.Diff(c.want, got); diff != "" || more != c.more {
+				t.Errorf("(-want +got):\n%s, more %v, want %v", diff, more, c.more)
+			}
+		})
+	}
+	var next []accounts.Key
+	var more bool
+	x.inAccount(t, p, func(tx pg.Tx) (err error) {
+		next, more, err = x.s.ListKeys(t.Context(), tx, p.AccountID(), accounts.KeyQuery{Name: "alpha", After: ids[2], Limit: 1})
+		return err
+	})
+	if diff := cmp.Diff([]string{"Alpha one"}, keyNames(next)); diff != "" || more {
+		t.Errorf("after the filtered page's cursor (-want +got):\n%s, more %v", diff, more)
 	}
 }
 

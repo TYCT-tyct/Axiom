@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 	"uuid"
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/consoleapi"
@@ -48,9 +50,47 @@ func keysUsed(ctx context.Context, tx pg.Tx, keys []accounts.Key) (map[uuid.UUID
 	return billing.KeysUsed(ctx, tx, windows)
 }
 
+// textOf is a query parameter's text, empty when the request did not send it: an absent filter and an empty one both
+// mean every key.
+func textOf(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// snapshot is the catalog the node has read, or nil when it has none: the retired-model hint is optional and the page
+// shows nothing without it.
+func (c consoleAPI) snapshot() *catalog.Snapshot {
+	if c.catalog == nil {
+		return nil
+	}
+	snap, err := c.catalog.Current()
+	if err != nil {
+		return nil
+	}
+	return snap
+}
+
+// retiredModels are the names among a key's restrictions that the catalog has retired: calls to them cannot succeed,
+// so the page warns that the key is narrower than its owner may think.
+func retiredModels(snap *catalog.Snapshot, models []string) []string {
+	if snap == nil {
+		return nil
+	}
+	var retired []string
+	for _, name := range models {
+		if _, err := snap.ResolvePublic(name); errors.Is(err, catalog.ErrRetired) {
+			retired = append(retired, name)
+		}
+	}
+	return retired
+}
+
 // keyBody is a key as the contract gives it. limit_remaining is what is left of the limit in its window, not below
-// zero: a key that a late charge pushed past its limit has nothing left.
-func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int64) consoleapi.Key {
+// zero: a key that a late charge pushed past its limit has nothing left. retired_models is the hint that some of the
+// key's model restrictions point at models the catalog has retired; it is absent when the node has no snapshot.
+func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int64, snap *catalog.Snapshot) consoleapi.Key {
 	kind := consoleapi.KeyKind(k.Kind)
 	body := consoleapi.Key{
 		Kind: &kind,
@@ -67,6 +107,9 @@ func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int6
 	}
 	if len(k.Models) > 0 {
 		body.Models = &k.Models
+		if retired := retiredModels(snap, k.Models); len(retired) > 0 {
+			body.RetiredModels = &retired
+		}
 	}
 	if len(k.IPAllow) > 0 {
 		ips := make([]string, len(k.IPAllow))
@@ -78,9 +121,16 @@ func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int6
 	return body
 }
 
-// ListKeys lists the account's keys, newest first, a page at a time.
+// ListKeys lists the account's keys, newest first, a page at a time, narrowed by the optional filters.
 func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysRequestObject) (consoleapi.ListKeysResponseObject, error) {
 	cl := callOf(ctx)
+	limit := pageSize(request.Params.Limit)
+	if limit < 1 || limit > 200 {
+		return nil, invalidField("limit", "must be between 1 and 200")
+	}
+	if request.Params.Status != nil && !request.Params.Status.Valid() {
+		return nil, invalidField("status", "must be active, disabled or expired")
+	}
 	var after accounts.KeyID
 	if request.Params.Cursor != nil {
 		var err error
@@ -88,11 +138,22 @@ func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysReq
 			return nil, invalidField("cursor", "not a cursor this API gave out")
 		}
 	}
+	q := accounts.KeyQuery{
+		After: after, Limit: limit,
+		Name: textOf(request.Params.Name), Prefix: textOf(request.Params.Prefix),
+		CreatedAfter: request.Params.CreatedAfter, CreatedBefore: request.Params.CreatedBefore,
+	}
+	if request.Params.Status != nil {
+		q.Status = string(*request.Params.Status)
+	}
+	if q.CreatedAfter != nil && q.CreatedBefore != nil && !q.CreatedAfter.Before(*q.CreatedBefore) {
+		return nil, invalidField("created_after", "must be before created_before")
+	}
 	var keys []accounts.Key
 	var used map[uuid.UUID]int64
 	var more bool
 	err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		if keys, more, err = c.accounts.ListKeys(ctx, tx, cl.principal.AccountID(), after, pageSize(request.Params.Limit)); err != nil {
+		if keys, more, err = c.accounts.ListKeys(ctx, tx, cl.principal.AccountID(), q); err != nil {
 			return err
 		}
 		used, err = keysUsed(ctx, tx, keys)
@@ -101,9 +162,10 @@ func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysReq
 	if err != nil {
 		return nil, err
 	}
+	snap := c.snapshot()
 	list := consoleapi.KeyList{Data: make([]consoleapi.Key, len(keys))}
 	for i, k := range keys {
-		list.Data[i] = keyBody(k, cl.site.Currency, used)
+		list.Data[i] = keyBody(k, cl.site.Currency, used, snap)
 	}
 	if more { // the next page starts after the last key of this one
 		next := keys[len(keys)-1].ID.TypeID()
@@ -146,7 +208,7 @@ func (c consoleAPI) CreateKey(ctx context.Context, request consoleapi.CreateKeyR
 		return nil, err
 	}
 	// A new key has used nothing, so no query is needed for its remaining limit.
-	return consoleapi.CreateKey201JSONResponse{Key: keyBody(key, cl.site.Currency, nil), Secret: created.Text.Reveal()}, nil
+	return consoleapi.CreateKey201JSONResponse{Key: keyBody(key, cl.site.Currency, nil, c.snapshot()), Secret: created.Text.Reveal()}, nil
 }
 
 // GetKey reads one key.
@@ -167,7 +229,7 @@ func (c consoleAPI) GetKey(ctx context.Context, request consoleapi.GetKeyRequest
 	}); err != nil {
 		return nil, err
 	}
-	return consoleapi.GetKey200JSONResponse(keyBody(key, cl.site.Currency, used)), nil
+	return consoleapi.GetKey200JSONResponse(keyBody(key, cl.site.Currency, used, c.snapshot())), nil
 }
 
 // UpdateKey replaces the settings of a key.
@@ -192,7 +254,7 @@ func (c consoleAPI) UpdateKey(ctx context.Context, request consoleapi.UpdateKeyR
 	}); err != nil {
 		return nil, err
 	}
-	return consoleapi.UpdateKey200JSONResponse(keyBody(key, cl.site.Currency, used)), nil
+	return consoleapi.UpdateKey200JSONResponse(keyBody(key, cl.site.Currency, used, c.snapshot())), nil
 }
 
 // DeleteKey deletes a key for good.
