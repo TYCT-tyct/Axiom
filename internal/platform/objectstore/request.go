@@ -48,8 +48,8 @@ type request struct {
 //
 //nolint:gocognit // the retry order — stop, drain, wait — is the mechanism; splitting it would hide that order
 func (c *Client) do(ctx context.Context, r request) (*http.Response, error) {
-	if _, ok := ctx.Deadline(); !ok {
-		return nil, ErrDeadlineRequired
+	if err := requireDeadline(ctx); err != nil {
+		return nil, err
 	}
 	var last error
 	for attempt := 1; ; attempt++ {
@@ -74,7 +74,7 @@ func (c *Client) do(ctx context.Context, r request) (*http.Response, error) {
 			}
 			return nil, last
 		}
-		wait := c.backoff(attempt, retryAfter(resp))
+		wait := c.backoff(attempt, retryAfter(resp, c.now()))
 		if resp != nil {
 			drain(resp)
 		}
@@ -247,7 +247,7 @@ func retryableStatus(status int) bool {
 
 // retryAfter reads the server's requested wait, in either form RFC 9110 allows, capped so a long one cannot push the
 // next attempt past a deadline that the caller set for the whole operation.
-func retryAfter(resp *http.Response) time.Duration {
+func retryAfter(resp *http.Response, now time.Time) time.Duration {
 	if resp == nil {
 		return 0
 	}
@@ -265,7 +265,7 @@ func retryAfter(resp *http.Response) time.Duration {
 		return time.Duration(seconds) * time.Second
 	}
 	if at, err := http.ParseTime(value); err == nil {
-		return min(max(time.Until(at), 0), retryAfterCap)
+		return min(max(at.Sub(now), 0), retryAfterCap)
 	}
 	return 0
 }

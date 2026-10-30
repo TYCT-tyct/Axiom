@@ -28,9 +28,20 @@ var (
 	ErrNotConfigured = errors.New("objectstore: no bucket is configured")
 	// ErrDeadlineRequired prevents an operation from waiting on a bucket forever.
 	ErrDeadlineRequired = errors.New("objectstore: request context requires a deadline")
+	// ErrTooLarge says the body is over the single PUT limit, so it cannot be one request.
+	ErrTooLarge = errors.New("objectstore: object is over the single PUT limit")
 	// ErrNotFound marks a missing object or bucket, and can be tested with errors.Is on any *Error with status 404.
 	ErrNotFound = errors.New("objectstore: not found")
 )
+
+// requireDeadline is the rule every operation follows before it waits on anything: the caller must bound the whole
+// call. A canceled call stops before its next read or attempt.
+func requireDeadline(ctx context.Context) error {
+	if _, ok := ctx.Deadline(); !ok {
+		return ErrDeadlineRequired
+	}
+	return ctx.Err()
+}
 
 // ObjectInfo is what a HEAD or a listing says about one object, without its bytes.
 type ObjectInfo struct {
@@ -48,7 +59,8 @@ type Object struct {
 }
 
 // Upload is one Put: the object's key and bytes. Size is the byte count when the caller knows it, which a file's
-// Stat normally does; -1 counts the body while hashing it. ContentType defaults to application/octet-stream.
+// Stat normally does; -1 counts the body while hashing it. ContentType defaults to application/octet-stream. The body
+// is read from its start; a Read that blocks must be unblocked by the body's owner, because ctx cannot interrupt it.
 type Upload struct {
 	Key         string
 	Body        io.ReadSeeker
@@ -119,7 +131,7 @@ func (c *Client) Close() { c.transport.CloseIdleConnections() }
 // Check verifies that the bucket exists and that the credentials may address it. It is a HEAD on the bucket, so it
 // reads nothing and writes nothing.
 func (c *Client) Check(ctx context.Context) error {
-	resp, err := c.do(ctx, request{method: http.MethodHead})
+	resp, err := c.do(ctx, request{method: http.MethodHead, payloadHash: emptySHA256})
 	if err != nil {
 		return fmt.Errorf("objectstore: check bucket %q: %w", c.bucket, err)
 	}
@@ -136,18 +148,21 @@ func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 	if err := checkKey(up.Key); err != nil {
 		return ObjectInfo{}, err
 	}
-	if up.Size > maxObjectSize {
-		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte single PUT limit", up.Key, maxObjectSize)
+	if err := requireDeadline(ctx); err != nil {
+		return ObjectInfo{}, err
 	}
-	hash, size, err := hashBody(up.Body)
+	if up.Size > maxObjectSize {
+		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte single PUT limit: %w", up.Key, maxObjectSize, ErrTooLarge)
+	}
+	hash, size, err := hashBody(ctx, up.Body, maxObjectSize)
+	if errors.Is(err, ErrTooLarge) {
+		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte single PUT limit: %w", up.Key, maxObjectSize, ErrTooLarge)
+	}
 	if err != nil {
 		return ObjectInfo{}, fmt.Errorf("objectstore: read %q: %w", up.Key, err)
 	}
 	if up.Size >= 0 && up.Size != size {
 		return ObjectInfo{}, fmt.Errorf("objectstore: %q is %d bytes but Size says %d", up.Key, size, up.Size)
-	}
-	if size > maxObjectSize {
-		return ObjectInfo{}, fmt.Errorf("objectstore: %q is %d bytes, over the %d-byte single PUT limit", up.Key, size, maxObjectSize)
 	}
 	contentType := up.ContentType
 	if contentType == "" {

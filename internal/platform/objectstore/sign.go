@@ -1,9 +1,11 @@
 package objectstore
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"sort"
@@ -81,14 +83,22 @@ func sumHex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// hashBody returns the payload hash and size of body, and rewinds it for the request that follows. A nil body is the
-// empty payload. Retries rewind the same body again, so a large object is sent from the start each time.
-func hashBody(body io.ReadSeeker) (string, int64, error) {
+// hashBody returns the payload hash and size of body, and rewinds it for the request that follows. It starts at the
+// beginning whatever position the caller left the reader in, so the hash and the bytes sent are the same range. A nil
+// body is the empty payload. It reads at most limit+1 bytes and returns ErrTooLarge past the limit; a Read that itself
+// blocks cannot be interrupted here, so a body that may block must be closed by its owner.
+func hashBody(ctx context.Context, body io.ReadSeeker, limit int64) (string, int64, error) {
 	if body == nil {
 		return emptySHA256, 0, nil
 	}
+	if err := requireDeadline(ctx); err != nil {
+		return "", 0, err
+	}
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		return "", 0, err
+	}
 	hash := sha256.New()
-	size, err := io.Copy(hash, body)
+	size, err := hashChunks(ctx, hash, body, limit)
 	if err != nil {
 		return "", 0, err
 	}
@@ -96,4 +106,41 @@ func hashBody(body io.ReadSeeker) (string, int64, error) {
 		return "", 0, err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), size, nil
+}
+
+// hashChunks copies at most limit+1 bytes into hash, checking ctx between reads and stopping as soon as the body is
+// over the limit.
+//
+//nolint:gocognit // one loop enforces cancellation, the limit, EOF and write errors in that order
+func hashChunks(ctx context.Context, hash io.Writer, body io.Reader, limit int64) (int64, error) {
+	buf := make([]byte, 32<<10)
+	var size int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		want := int64(len(buf))
+		if remaining := limit + 1 - size; remaining < want {
+			want = remaining
+		}
+		if want <= 0 {
+			return 0, ErrTooLarge
+		}
+		n, err := body.Read(buf[:want])
+		if n > 0 {
+			size += int64(n)
+			if size > limit {
+				return 0, ErrTooLarge
+			}
+			if _, writeErr := hash.Write(buf[:n]); writeErr != nil {
+				return 0, writeErr
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return size, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
 }

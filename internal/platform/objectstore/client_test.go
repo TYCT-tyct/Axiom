@@ -1,6 +1,7 @@
 package objectstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -146,6 +147,29 @@ func deadline(t *testing.T) context.Context {
 	return ctx
 }
 
+func TestCheckSignsTheEmptyPayload(t *testing.T) {
+	headers := make(chan http.Header, 1)
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers <- r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	client.now = func() time.Time { return signedAt }
+	if err := client.Check(deadline(t)); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	got := <-headers
+	if hash := got.Get("X-Amz-Content-Sha256"); hash != emptySHA256 {
+		t.Fatalf("check sent payload hash %q, want the empty payload's %q", hash, emptySHA256)
+	}
+	want, err := client.request(deadline(t), request{method: http.MethodHead, payloadHash: emptySHA256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth := got.Get("Authorization"); auth != want.Header.Get("Authorization") {
+		t.Fatalf("check signed\n%s\nwant\n%s", auth, want.Header.Get("Authorization"))
+	}
+}
+
 func TestEveryOperationNeedsADeadline(t *testing.T) {
 	fake := newFakeS3()
 	client := newTestClient(t, fake)
@@ -280,6 +304,84 @@ func TestListFollowsTheServerPages(t *testing.T) {
 	}
 }
 
+func TestPutStartsAtTheBeginningAndReusesTheReader(t *testing.T) {
+	fake := newFakeS3()
+	client := newTestClient(t, fake)
+	reader := bytes.NewReader([]byte("hello"))
+	if _, err := reader.Read(make([]byte, 2)); err != nil { // leave a caller's reader at a nonzero offset
+		t.Fatal(err)
+	}
+	for range 2 {
+		info, err := client.Put(deadline(t), Upload{Key: "k", Body: reader, Size: 5})
+		if err != nil || info.Size != 5 {
+			t.Fatalf("Put = %+v, %v", info, err)
+		}
+		if got := fake.body("k"); got != "hello" {
+			t.Fatalf("stored %q, want hello from the start of the reader", got)
+		}
+	}
+	if _, err := reader.Seek(2, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	info, err := client.Put(deadline(t), Upload{Key: "k", Body: reader, Size: -1})
+	if err != nil || info.Size != 5 {
+		t.Fatalf("Put with unknown size = %+v, %v", info, err)
+	}
+	if got := fake.body("k"); got != "hello" {
+		t.Fatalf("stored %q, want hello with an unknown size too", got)
+	}
+}
+
+func TestPutWithACanceledContextReadsNothing(t *testing.T) {
+	reader := &countingSeeker{reader: bytes.NewReader([]byte("hello"))}
+	client := newTestClient(t, newFakeS3())
+	ctx, cancel := context.WithCancel(deadline(t))
+	cancel()
+	if _, err := client.Put(ctx, Upload{Key: "k", Body: reader, Size: -1}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("a canceled Put read the body %d times", reader.reads)
+	}
+}
+
+func TestHashBodyStopsAtTheLimitPlusOneByte(t *testing.T) {
+	reader := &endlessReader{}
+	_, _, err := hashBody(deadline(t), reader, 64)
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	if reader.read != 65 {
+		t.Fatalf("read %d bytes, want the limit plus one", reader.read)
+	}
+}
+
+// countingSeeker counts read calls so a test can prove a canceled operation never touched the body.
+type countingSeeker struct {
+	reader *bytes.Reader
+	reads  int
+}
+
+func (c *countingSeeker) Read(p []byte) (int, error) {
+	c.reads++
+	return c.reader.Read(p)
+}
+
+func (c *countingSeeker) Seek(offset int64, whence int) (int64, error) {
+	return c.reader.Seek(offset, whence)
+}
+
+// endlessReader produces bytes forever and counts them; only the client's limit can stop it.
+type endlessReader struct{ read int64 }
+
+func (e *endlessReader) Read(p []byte) (int, error) {
+	clear(p)
+	e.read += int64(len(p))
+	return len(p), nil
+}
+
+func (*endlessReader) Seek(int64, int) (int64, error) { return 0, nil }
+
 func TestPutRefusesASizeThatDoesNotMatch(t *testing.T) {
 	client := newTestClient(t, newFakeS3())
 	if _, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("hello"), Size: 4}); err == nil {
@@ -305,6 +407,7 @@ func TestPutRefusesAnObjectOverTheSinglePutLimit(t *testing.T) {
 }
 
 func TestRetryAfter(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	for _, c := range []struct {
 		name   string
 		header string
@@ -312,22 +415,15 @@ func TestRetryAfter(t *testing.T) {
 	}{
 		{"seconds", "2", 2 * time.Second},
 		{"zero", "0", 0},
-		{"date", time.Now().Add(3 * time.Second).UTC().Format(http.TimeFormat), 3 * time.Second},
-		{"past date", time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat), 0},
+		{"date", now.Add(3 * time.Second).Format(http.TimeFormat), 3 * time.Second},
+		{"past date", now.Add(-time.Minute).Format(http.TimeFormat), 0},
 		{"nonsense", "soon", 0},
 		{"cap", "3600", retryAfterCap},
 		{"huge", "9223372036854775807", retryAfterCap},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			resp := &http.Response{Header: http.Header{"Retry-After": {c.header}}}
-			got := retryAfter(resp)
-			if c.name == "date" {
-				if got < 2*time.Second || got > 3*time.Second {
-					t.Fatalf("retryAfter = %v, want about 3s", got)
-				}
-				return
-			}
-			if got != c.want {
+			if got := retryAfter(resp, now); got != c.want {
 				t.Fatalf("retryAfter = %v, want %v", got, c.want)
 			}
 		})
