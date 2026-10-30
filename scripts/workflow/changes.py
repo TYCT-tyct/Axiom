@@ -19,12 +19,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ".github/project-workflow.toml"
-DOCS = ("README.md", "CONTRIBUTING.md", "docs/*")
-# The managed files, which the docs job tests on every PR; project-workflow's CI keeps this equal to SKILL.md's list
-MANAGED = ("AGENTS.md", "CLAUDE.md", ".github/pull_request_template.md", ".github/workflows/workflow.yml",
-           ".github/workflows/workflow-pr.yml", ".github/workflows/review-rerun.yml", "scripts/workflow/check_docs.py",
-           "scripts/workflow/test_check_docs.py", "scripts/workflow/check_pr.py", "scripts/workflow/test_check_pr.py",
-           "scripts/workflow/changes.py", "scripts/workflow/test_changes.py", ".github/project-workflow.toml")
+DOCS = ("README.md", "CONTRIBUTING.md", "docs/*", ".github/pull_request_template.md")
+# Every file the core and the modules manage, which no build depends on; project-workflow's CI keeps this equal to
+# SKILL.md's lists. RETIRED were managed before the modules: the upgrade that deletes them stays light.
+MANAGED = ("AGENTS.md", "CLAUDE.md", ".github/workflows/check-secrets.yml",
+           ".github/workflows/check-docs.yml", ".github/workflows/check-pr.yml", ".github/workflows/check-review.yml",
+           ".github/workflows/review-rerun.yml", "scripts/workflow/check_docs.py", "scripts/workflow/test_check_docs.py",
+           "scripts/workflow/check_pr.py", "scripts/workflow/test_check_pr.py", "scripts/workflow/changes.py",
+           "scripts/workflow/test_changes.py", ".github/project-workflow.toml")
+RETIRED = (".github/workflows/workflow.yml", ".github/workflows/workflow-pr.yml")
 
 
 def lanes(root):
@@ -41,7 +44,7 @@ def lanes(root):
 def code_changed(paths, light=(), code=()):
     def matches(path, patterns):
         return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
-    return not paths or any(not matches(path, DOCS + MANAGED + light) or matches(path, code) for path in paths)
+    return not paths or any(not matches(path, DOCS + MANAGED + RETIRED + light) or matches(path, code) for path in paths)
 
 
 def main():

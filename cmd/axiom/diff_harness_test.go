@@ -103,6 +103,43 @@ func TestDiffHarnessRulesRefuseDegradedValues(t *testing.T) {
 			"a stop sequence new-api has", "messages-deepseek-text-whole", "json.stop_sequence", `"\n\nHuman:"`, "null", false,
 		},
 		{
+			"the physical input total", "responses-claude-reasoning-stream",
+			"sse[response.completed].response.usage.input_tokens", "18", "29", true,
+		},
+		{
+			"an input total zeroed", "responses-claude-reasoning-stream",
+			"sse[response.completed].response.usage.input_tokens", "18", "0", false,
+		},
+		{
+			"an input total inflated", "responses-claude-reasoning-stream",
+			"sse[response.completed].response.usage.input_tokens", "18", "30", false,
+		},
+		{
+			"an output total", "responses-claude-reasoning-stream",
+			"sse[response.completed].response.usage.output_tokens", "123", "147", true,
+		},
+		{
+			"an output total inflated", "responses-claude-reasoning-stream",
+			"sse[response.completed].response.usage.output_tokens", "123", "148", false,
+		},
+		{
+			"a total", "responses-claude-reasoning-stream",
+			"sse[response.completed].response.usage.total_tokens", "141", "176", true,
+		},
+		{
+			"a total that is not the sum", "responses-claude-reasoning-stream",
+			"sse[response.completed].response.usage.total_tokens", "141", "175", false,
+		},
+		{
+			"the whole reply's input total", "responses-claude-reasoning-whole", "json.usage.input_tokens", "0", "29", true,
+		},
+		{
+			"the whole reply's input total zeroed", "responses-claude-reasoning-whole", "json.usage.input_tokens", "0", "0", false,
+		},
+		{
+			"the whole reply's input total inflated", "responses-claude-reasoning-whole", "json.usage.input_tokens", "0", "30", false,
+		},
+		{
 			"a block stopped elsewhere", "messages-deepseek-tools-stream",
 			"sse[content_block_stop]", `{"index":1,"type":"content_block_stop"}`, absent, true,
 		},

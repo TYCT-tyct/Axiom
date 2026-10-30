@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2" //nolint:depguard // reads values of replies; jsonx guards input from outside
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // diffRule explains the differences whose path matches, in the cases whose name matches, and whose two values are the
@@ -46,9 +47,9 @@ func axiomIs(pattern string) func(difference) bool {
 	return func(d difference) bool { return re.MatchString(d.axiom) }
 }
 
-func bothAre(pattern string) func(difference) bool {
-	re := regexp.MustCompile("^(?:" + pattern + ")$")
-	return func(d difference) bool { return re.MatchString(d.newAPI) && re.MatchString(d.axiom) }
+func bothAreNumbers(d difference) bool {
+	re := regexp.MustCompile("^(?:" + number + ")$")
+	return re.MatchString(d.newAPI) && re.MatchString(d.axiom)
 }
 
 func all(conditions ...func(difference) bool) func(difference) bool {
@@ -80,6 +81,30 @@ func newAPIAddsNewline(d difference) bool {
 		return false
 	}
 	return a == b+"\n"
+}
+
+// servedModelName holds when Axiom's value is the catalog name of the model new-api named: an author, a slash, and the
+// name the request used.
+func servedModelName(d difference) bool {
+	theirs, ours := strings.Trim(d.newAPI, `"`), strings.Trim(d.axiom, `"`)
+	author, name, ok := strings.Cut(ours, "/")
+	return ok && author != "" && name == theirs
+}
+
+// newAPIExtraSummaryNewline holds when new-api's unpaired event is a reasoning summary delta of one newline, which
+// Axiom does not send: the fixture's summary has no trailing newline.
+func newAPIExtraSummaryNewline(d difference) bool {
+	if d.axiom != absent {
+		return false
+	}
+	var ev struct {
+		Type  string `json:"type"`
+		Delta string `json:"delta"`
+	}
+	if json.Unmarshal([]byte(d.newAPI), &ev) != nil {
+		return false
+	}
+	return ev.Type == "response.reasoning_summary_text.delta" && ev.Delta == "\n"
 }
 
 func newAPIIs(pattern string) func(difference) bool {
@@ -179,6 +204,46 @@ func diffRules() []*diffRule {
 		rule(`json\.choices\[\]\.message\.reasoning|chat\.choices\[\]\.delta\.reasoning`, "", newAPILacks,
 			"Axiom writes reasoning, OpenRouter's name, beside reasoning_content, new-api's and DeepSeek's, with the same text, which reasoningNamesAgree checks (gateway.md「转发规则」)"),
 
+		rule(`(json|chat)\.model|sse\[(message_(start|delta)|response\.[a-z_]+)\]\.(message|delta|response)\.model`, "", servedModelName,
+			"a reply names the model Axiom actually served, resolved from the catalog, where new-api repeats the name the request used (gateway.md「决策与理由」: 响应 model 写实际服务的模型)"),
+		rule(`(json|chat)\.usage\.is_byok|sse\[response\.(created|completed|in_progress)\]\.response\.usage\.is_byok`, "", values(absent, "false"),
+			"Axiom's usage says the call is not BYOK, as OpenRouter's usage does; new-api has no such member and Axiom has no user key (gateway.md「用量与费用」)"),
+		rule(`(json|chat)\.usage\.cache_discount|sse\[response\.(created|completed|in_progress)\]\.response\.usage\.cache_discount`, "",
+			all(newAPILacks, axiomIs(`\d+(\.\d+)?`)),
+			"the discount the cached input got, which Axiom's usage carries (gateway.md「用量与费用」); new-api's does not"),
+		// The reasoning sample is the one whose cache read makes the physical input total differ, and whose whole reply
+		// new-api leaves zeroed: the pairs are the sample's own numbers, so a corrupted usage cannot pass.
+		rule(`json\.usage\.input_tokens`, `responses-claude-reasoning-whole`, values("0", "29"),
+			"the whole reply's usage is the sample's own: 18 input plus 11 cache reads; new-api zeroes the Responses counters and keeps the numbers in Chat's names"),
+		rule(`json\.usage\.output_tokens`, `responses-claude-reasoning-whole`, values("0", "147"),
+			"the sample's output total; new-api leaves the Responses counter zeroed"),
+		rule(`json\.usage\.total_tokens`, `responses-claude-reasoning-whole`, values("0", "176"),
+			"the sum of the sample's physical input and output; new-api leaves the Responses counter zeroed"),
+		rule(`sse\[response\.completed\]\.response\.usage\.input_tokens`, `responses-claude-reasoning-stream`, values("18", "29"),
+			"the physical input total is Anthropic's input_tokens plus the cache reads it leaves out (18 + 11); new-api reports Anthropic's count alone"),
+		rule(`sse\[response\.completed\]\.response\.usage\.output_tokens`, `responses-claude-reasoning-stream`, values("123", "147"),
+			"the sample's output total; new-api's count leaves out the reasoning the sample reports"),
+		rule(`sse\[response\.completed\]\.response\.usage\.total_tokens`, `responses-claude-reasoning-stream`, values("141", "176"),
+			"the sum of the sample's physical input and output; new-api's total is the two counts it reports"),
+		rule(`json\.output\[\]\.summary\[\]\.text|`+
+			`sse\[response\.completed\]\.response\.output\[\]\.summary\[\]\.text|`+
+			`sse\[response\.output_item\.(added|done)\]\.item\.summary\[\]\.text|`+
+			`sse\[response\.reasoning_summary_(text\.done|part\.done)\]\.(part\.)?text`, `responses-claude-reasoning-.*`, newAPIAddsNewline,
+			"the summary text is the upstream's, without the newline new-api adds"),
+		rule(`sse\[response\.reasoning_summary_text\.delta\]`, `responses-claude-reasoning-stream`, newAPIExtraSummaryNewline,
+			"new-api sends the trailing newline as a summary delta of its own; Axiom sends the upstream's text as it is"),
+		rule(`json\.output\[\]\.arguments`, `responses-claude-tools-whole`, sameJSONText,
+			"the arguments are the upstream's JSON, however the spaces fall"),
+		rule(`sse\[response\.content_part\.added\]`, `responses-claude-(image|text|tools)-stream`, responsePartIs("", 0),
+			"OpenAI content parts are announced before their text delta; new-api omits this event"),
+		rule(`sse\[response\.content_part\.added\]`, `responses-claude-reasoning-stream`, responsePartIs("", 1),
+			"the text after reasoning likewise has a content-part lifecycle"),
+		rule(`sse\[response\.content_part\.done\]`, `responses-claude-(image|text)-stream`, responsePartIs("Hello!", 0),
+			"the completed content part repeats the fixture's exact text"),
+		rule(`sse\[response\.content_part\.done\]`, `responses-claude-tools-stream`, responsePartIs("Okay, let's check the weather for San Francisco, CA:", 0),
+			"the completed text part precedes the tools and retains its exact text"),
+		rule(`sse\[response\.content_part\.done\]`, `responses-claude-reasoning-stream`, responsePartIs("The greatest common divisor of 1071 and 462 is **21**.", 1),
+			"the completed text part after reasoning retains its exact text"),
 		rule(`header\.(x-oneapi-request-id|x-new-api-version)`, "", axiomLacks,
 			"new-api names its request and its version; Axiom sends neither"),
 		rule(`header\.(x-request-id|x-generation-id)`, "", newAPILacks,
@@ -187,10 +252,10 @@ func diffRules() []*diffRule {
 			"new-api relays the upstream's headers; Axiom lets through only its own (gateway.md「转发规则」: 响应头按白名单放行)"),
 		rule(`json\.id|chat\.id|sse\[message_start\]\.message\.id|sse\[response\.[a-z_]+\]\.response\.id`, "", axiomIs(uuidText),
 			"the id of a reply is Axiom's call id, new-api passes the upstream's (gateway.md「转发规则」: 自己回显)"),
-		rule(`json\.output\[\]\.id|sse\[response\.[a-z_.]+\]\.(item\.id|item_id|response\.output\[\]\.id)`, `responses-deepseek-.*`,
+		rule(`json\.output\[\]\.id|sse\[response\.[a-z_.]+\]\.(item\.id|item_id|response\.output\[\]\.id)`, `responses-.*`,
 			axiomIs(`"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[0-9]+"`),
 			"converted Responses item IDs are the call ID and the output ordinal, never the upstream identity"),
-		rule(`json\.created_at|sse\[response\.[a-z_]+\]\.response\.created_at`, `responses-deepseek-.*`, bothAre(number),
+		rule(`json\.created_at|sse\[response\.[a-z_]+\]\.response\.created_at`, `responses-.*`, bothAreNumbers,
 			"converted Responses use the call's creation time; new-api uses the upstream's or its own clock"),
 		rule(`(json|chat)\.usage\.prompt_cache_(hit|miss)_tokens`, `chat-deepseek-.*`, axiomLacks,
 			"DeepSeek's names for the cache read and the rest of the prompt, which the upstream sends and new-api passes on; Axiom reports them as prompt_tokens_details.cached_tokens, once, in the format's own member (internal/protocol README.md「用量」)"),
@@ -198,7 +263,7 @@ func diffRules() []*diffRule {
 			`sse\[response\.completed\]\.response\.usage\.cost(_currency|_estimated)?`, "", newAPILacks,
 			"Axiom's usage carries the call's cost (gateway.md「用量与费用」)"),
 		rule(`(json|chat)\.usage\.(billing_usage\..*|usage_semantic|usage_source|claude_cache_creation_.*|input_tokens|output_tokens|`+
-			`input_tokens_details|(prompt|completion)_tokens_details\.(audio|image|text)_tokens)`, `chat-.*`, axiomLacks,
+			`input_tokens_details|(prompt|completion)_tokens_details\.(audio|image|text)_tokens)`, `(chat|responses)-.*`, axiomLacks,
 			"members new-api adds to a Chat usage that are not part of the format"),
 		rule(`(json|chat)\.usage\.(prompt_tokens_details\.cached_tokens|completion_tokens_details\.reasoning_tokens)`, `chat-deepseek-.*`,
 			all(newAPILacks, axiomIs("0")),
@@ -207,46 +272,46 @@ func diffRules() []*diffRule {
 			"OpenRouter's usage reports cache writes, which Axiom's does the same way (gateway.md「用量与费用」)"),
 		rule(`(json|sse\[message_delta\]|sse\[response\.completed\]\.response)\.usage\.(billing_usage\..*|claude_cache_creation_.*|prompt_cache_(hit|miss)_tokens|`+
 			`prompt_tokens|completion_tokens|total_tokens|prompt_tokens_details\..*|completion_tokens_details\..*|usage_(semantic|source))`,
-			`(messages|responses)-deepseek-.*`, axiomLacks,
+			`(messages|responses)-.*`, axiomLacks,
 			"new-api writes the OpenAI names of the upstream's usage, and its own billing block, into a usage of another format; Axiom writes the format's own members (gateway.md「用量与费用」)"),
 		rule(`(json|sse\[message_delta\]|sse\[response\.completed\]\.response)\.usage\.(input_tokens|output_tokens|cache_creation\.ephemeral_[0-9]+[mh]_input_tokens|`+
 			`input_tokens_details\..*|output_tokens_details\..*|server_tool_use\..*)`,
-			`(messages|responses)-deepseek-.*`, newAPILacks,
+			`(messages|responses)-.*`, newAPILacks,
 			"the members of Anthropic's and OpenAI's usage objects that new-api's conversion leaves out; Axiom fills them from the settlement, with 0 where the upstream said nothing"),
-		rule(`sse\[message_start\]\.message\.usage\.input_tokens`, `messages-deepseek-.*`,
+		rule(`sse\[message_start\]\.message\.usage\.input_tokens`, `messages-(deepseek|gpt)-.*`,
 			all(newAPIIs(number), axiomIs("0")),
 			"new-api counts the prompt itself and writes that count in message_start; Axiom learns the upstream's usage only at the end, so it writes 0 there and the counts in message_delta"),
-		rule(`sse\[message_start\]\.message\.usage\.(cache_read_input_tokens|cache_creation_input_tokens|claude_cache_creation_(1_h|5_m)_tokens)`, `messages-deepseek-.*`,
+		rule(`sse\[message_start\]\.message\.usage\.(cache_read_input_tokens|cache_creation_input_tokens|claude_cache_creation_(1_h|5_m)_tokens)`, `messages-(deepseek|gpt)-.*`,
 			values("0", absent),
 			"the same: the cache counts new-api has worked out before the first chunk, which Axiom only learns at the end"),
 		rule(`json\.stop_sequence|sse\[message_(start|delta)\]\.(message|delta)\.(stop_reason|stop_sequence)`,
-			`messages-deepseek-.*`, values(absent, "null"),
+			`messages-(deepseek|gpt)-.*`, values(absent, "null"),
 			"Anthropic's message and message_delta carry stop_reason and stop_sequence, null until a stop sequence matches; new-api's conversion omits them"),
 		rule(`sse\[content_block_stop\]`, `messages-deepseek-tools-stream`, aStopEitherWay,
 			"a parallel tool call's block closes when its arguments end, before the next block opens; new-api keeps every tool block of the turn open and stops them together at the end"),
-		rule(`json\.content\[\]\.signature|sse\[content_block_start\]\.content_block\.signature`, `messages-deepseek-reasoning-.*`, values(absent, `""`),
+		rule(`json\.content\[\]\.signature|sse\[content_block_start\]\.content_block\.signature`, `messages-(deepseek|gpt)-(reasoning|tools)-.*`, values(absent, `""`),
 			"a thinking block starts with Anthropic's empty signature; plaintext Chat reasoning supplies no provider signature"),
-		rule(`(json|sse\[response\.(created|completed)\]\.response)\.(error|incomplete_details)`, `responses-deepseek-.*`, values(absent, "null"),
+		rule(`(json|sse\[response\.(created|completed)\]\.response)\.(error|incomplete_details)`, `responses-.*`, values(absent, "null"),
 			"successful Responses have null error and incomplete_details, as OpenAI's response object"),
 		rule(`(json|sse\[response\.(created|completed)\]\.response)\.(instructions|metadata|previous_response_id|reasoning|tool_choice|tools|truncation|user)`,
-			`responses-deepseek-.*`, values("null", absent), "do not invent request settings not reported by a Chat upstream"),
+			`responses-.*`, values("null", absent), "do not invent request settings not reported by the upstream"),
 		rule(`(json|sse\[response\.(created|completed)\]\.response)\.(max_output_tokens|temperature|top_p)`,
-			`responses-deepseek-.*`, values("0", absent), "new-api's zero request settings are not reported by the Chat upstream"),
+			`responses-.*`, values("0", absent), "new-api's zero request settings are not reported by the Chat upstream"),
 		rule(`(json|sse\[response\.(created|completed)\]\.response)\.(parallel_tool_calls|store)`,
-			`responses-deepseek-.*`, values("false", absent), "Chat cannot report Responses storage or parallel-call settings"),
+			`responses-.*`, values("false", absent), "Chat cannot report Responses storage or parallel-call settings"),
 		rule(`(json\.output\[\]|sse\[response\.completed\]\.response\.output\[\]|sse\[response\.output_item\.(added|done)\]\.item)\.(quality|size|role)`,
-			`responses-deepseek-.*`, values(`""`, absent), "omit irrelevant empty image attributes and non-message roles"),
+			`responses-.*`, values(`""`, absent), "omit irrelevant empty image attributes and non-message roles"),
 		rule(`(json\.output\[\]|sse\[response\.completed\]\.response\.output\[\]|sse\[response\.output_item\.(added|done)\]\.item)\.content`,
-			`responses-deepseek-(reasoning|tools)-.*`, values("null", absent), "reasoning and function calls have no message content member"),
+			`responses-(claude|deepseek-(reasoning|tools))-.*`, values("null", absent), "reasoning and function calls have no message content member"),
 		rule(`(json\.output\[\]|sse\[response\.completed\]\.response\.output\[\]|sse\[response\.output_item\.(added|done)\]\.item)\.status`,
-			`responses-deepseek-reasoning-.*`, all(newAPIIs(`"(in_progress|completed)"`), axiomLacks), "reasoning item status is optional and Chat supplies no separate status"),
-		rule(`(json|sse\[response\.completed\]\.response)\.usage\.input_tokens_details`, `responses-deepseek-.*`, values("null", absent),
+			`(responses-claude|responses-deepseek-reasoning)-.*`, all(newAPIIs(`"(in_progress|completed)"`), axiomLacks), "item status is optional and Chat supplies no separate status"),
+		rule(`(json|sse\[response\.completed\]\.response)\.usage\.input_tokens_details`, `responses-.*`, values("null", absent),
 			"new-api also writes a null legacy input_tokens_details beside its Chat usage"),
-		rule(`(json|sse\[response\.completed\]\.response)\.usage\.input_tokens_details\.(audio|image|text)_tokens`, `responses-deepseek-.*`, values("0", absent),
+		rule(`(json|sse\[response\.completed\]\.response)\.usage\.input_tokens_details\.(audio|image|text)_tokens`, `responses-.*`, values("0", absent),
 			"Responses token details do not contain new-api's fabricated zero modality counts"),
-		rule(`sse\[response\.output_item\.added\]\.item_id`, `responses-deepseek-tools-stream`, all(newAPIIs(`"call_(00_Kq3vT9|01_Zb8mW2)"`), axiomLacks),
+		rule(`sse\[response\.output_item\.added\]\.item_id`, `responses-(deepseek|claude)-tools-stream`, all(newAPIIs(`"(call_|toolu_)[^"]+"`), axiomLacks),
 			"output_item.added identifies the item inside item.id; the tool call ID belongs in item.call_id"),
-		rule(`sse\[response\.[a-z_.]+\]\.sequence_number`, `responses-deepseek-.*-stream`, eventSequence,
+		rule(`sse\[response\.[a-z_.]+\]\.sequence_number`, `responses-.*-stream`, eventSequence,
 			"content-part lifecycle events and item closing order give each stream its own contiguous event numbers"),
 		rule(`sse\[response\.content_part\.added\]`, `responses-deepseek-(image|text|tools)-stream`, responsePartIs("", 0),
 			"OpenAI content parts are announced before their text delta; new-api omits this event"),
@@ -264,11 +329,11 @@ func diffRules() []*diffRule {
 			"new-api's conversion writes a null system_fingerprint, Axiom leaves it out"),
 		rule(`json\.choices\[\]\.message\.content`, `chat-gpt-(reasoning|tools)-whole`, values(`""`, "null"),
 			"a message of tool calls only has content null in OpenAI's reply, new-api writes an empty string"),
-		rule(`(json|chat)\.created`, "chat-.*", bothAre(number),
+		rule(`(json|chat)\.created`, "chat-.*", bothAreNumbers,
 			"a Chat reply made from another format is stamped with the time of the call; new-api stamps the upstream's creation time or its own clock"),
 		rule(`json\.choices\[\]\.message\.reasoning_details.*|chat\.choices\[\]\.delta\.reasoning_details`, "", newAPILacks,
 			"OpenRouter's reasoning_details, which carry the signature and the encrypted content that a later request sends back"),
-		rule(`(json|chat)\.usage\.(prompt_tokens|completion_tokens|total_tokens)`, `(chat|messages)-claude-reasoning-.*`, bothAre(number),
+		rule(`(json|chat)\.usage\.(prompt_tokens|completion_tokens|total_tokens)`, `(chat|messages)-claude-reasoning-.*`, bothAreNumbers,
 			"the upstream sample reports no usage, so each gateway counts the tokens itself"),
 		rule(`(json|chat)\.usage\.completion_tokens_details\.reasoning_tokens`, `chat-gpt-(reasoning|tools)-.*`, values("0", "12"),
 			"new-api's Responses-to-Chat conversion reports no reasoning tokens, Axiom passes the upstream's count on"),
