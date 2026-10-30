@@ -194,8 +194,8 @@ func (l *Loop) flush(ctx context.Context) error {
 	}
 }
 
-// Tick first commits evidence, then claims due probes in order. A stale source sends no traffic.
-func (l *Loop) Tick(ctx context.Context) error {
+// collectResults takes every finished generation without waiting; Drain waits for them instead.
+func (l *Loop) collectResults(ctx context.Context) {
 	for {
 		select {
 		case end := <-l.done:
@@ -205,10 +205,14 @@ func (l *Loop) Tick(ctx context.Context) error {
 			l.active--
 			l.finishVerification(ctx, end)
 		default:
-			goto collected
+			return
 		}
 	}
-collected:
+}
+
+// Tick first commits evidence, then claims due probes in order. A stale source sends no traffic.
+func (l *Loop) Tick(ctx context.Context) error {
+	l.collectResults(ctx)
 	if err := l.flush(ctx); err != nil {
 		return err
 	}
@@ -390,179 +394,6 @@ func (l *Loop) finish(ctx context.Context, end probeEnd) {
 	if l.duration != nil && end.result.Request != (platform.RequestID{}) {
 		l.duration.Record(ctx, end.result.Total.Seconds())
 	}
-}
-
-// verificationDue is the endpoints whose claim is due a check: routable, not broken, not being probed or verified,
-// not paused and funded. It consumes no budget; scheduleVerification does.
-func (l *Loop) verificationDue(endpoints []suppliers.Routable, now time.Time) []*State {
-	var due []*State
-	for _, ep := range endpoints {
-		if !ep.Platform() || len(ep.Formats) == 0 {
-			continue
-		}
-		e := l.monitor.Live(ep.ID, ep.Credentials)
-		want := claimOf(ep)
-		e.mu.Lock()
-		if e.verify.claim != want {
-			// The endpoint now names another model, upstream or format: the old evidence is about other
-			// configuration, so it stops counting, its fake conclusion is withdrawn, and the new one is due now.
-			if e.verify.failed() {
-				l.resolveFake(ep.ID)
-			}
-			e.verify = verification{claim: want}
-		}
-		r := e.record
-		ok := r.Opened == 0 && e.pending == 0 && !e.verifying && e.verify.due(now)
-		if ok && ep.Funds != nil && !ep.Funds.CanPay(platform.Exact{}) {
-			ok = false
-		}
-		if ok && l.pauses != nil && l.pauses.PausedUntil(ep.ID, ep.Supplier).After(now) {
-			ok = false
-		}
-		if ok {
-			due = append(due, e)
-		}
-		e.mu.Unlock()
-	}
-	slices.SortFunc(due, compareNextVerification)
-	return due
-}
-
-func compareNextVerification(a, b *State) int {
-	a.mu.Lock()
-	at := a.verify.next
-	a.mu.Unlock()
-	b.mu.Lock()
-	bt := b.verify.next
-	b.mu.Unlock()
-	if at.Before(bt) {
-		return -1
-	}
-	if at.After(bt) {
-		return 1
-	}
-	return a.id.Compare(b.id)
-}
-
-// scheduleVerification starts a check for each due endpoint the budget and the concurrency allow, after the recovery
-// probes of the same tick have had their share.
-func (l *Loop) scheduleVerification(ctx context.Context, due []*State, endpoints []suppliers.Routable, now time.Time) {
-	for _, e := range due {
-		if l.active >= probeConcurrency || l.spent(now) {
-			l.verifyMetric(ctx, "deferred")
-			return
-		}
-		idx := slices.IndexFunc(endpoints, func(ep suppliers.Routable) bool { return ep.ID == e.id })
-		if idx < 0 {
-			continue
-		}
-		ep := endpoints[idx]
-		claimed, ok := l.identity(catalog.ModelID(ep.Model))
-		if !ok || claimed.Author == "" {
-			// Nothing to compare an answer with; a catalog that has not loaded is retried soon.
-			e.mu.Lock()
-			e.verify.next = now.Add(l.spread(verifyRetry))
-			e.mu.Unlock()
-			continue
-		}
-		want := claimOf(ep)
-		e.mu.Lock()
-		if e.verifying || !e.verify.due(now) || e.verify.claim != want {
-			e.mu.Unlock()
-			continue
-		}
-		e.verifying = true
-		e.mu.Unlock()
-		l.budget[l.used%len(l.budget)] = now
-		l.used++
-		l.active++
-		go l.verify(context.WithoutCancel(ctx), ep, want, newChallenge(l.rand, claimed))
-	}
-}
-
-// verify runs one verification generation and hands its answer back to the single Tick caller.
-func (l *Loop) verify(ctx context.Context, ep suppliers.Routable, want claim, c challenge) {
-	end := verifyEnd{endpoint: ep.ID, claim: want, claimed: c.claimed}
-	ctx, cancel := context.WithTimeout(ctx, suppliers.TestDeadline+2*probeCommitGrace)
-	defer cancel()
-	end.err = l.db.Tx(ctx, l.scope, func(tx pg.Tx) error {
-		result, err := l.generate(ctx, tx, suppliers.TestRequest{
-			Endpoint: ep.ID, Format: want.format, Prompt: c.prompt(), Output: verifyOutput, Capture: verifyReply,
-		}, "automatic model verification")
-		end.result = result
-		return err
-	})
-	// A check whose cost and audit did not commit is treated like a probe's: the generation may have happened, but
-	// the evidence is not recorded, so it changes nothing.
-	if end.err == nil {
-		end.outcome = judgeVerification(end.result, c)
-	}
-	l.verifyDone <- end
-}
-
-// finishVerification takes one check's result: a pass makes the endpoint Verified until the pass ages out, a
-// contradiction clears it at once, and an answer that says nothing keeps the last evidence.
-func (l *Loop) finishVerification(ctx context.Context, end verifyEnd) {
-	current, ok := l.currentClaim(end.endpoint)
-	e := l.monitor.of(end.endpoint)
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.verifying = false
-	if !ok || current != end.claim || e.verify.claim != end.claim {
-		// The endpoint left routing or its claim changed while the generation ran: the answer is about another
-		// configuration, so it says nothing about the one that serves traffic now.
-		if ok && e.verify.claim != current {
-			if e.verify.failed() {
-				l.resolveFake(end.endpoint)
-			}
-			e.verify = verification{claim: current}
-		}
-		l.verifyMetric(ctx, "stale")
-		return
-	}
-	now := l.now()
-	if end.err != nil {
-		l.logger.Error("quality verification failed", "err", end.err, "request", end.result.Request.String())
-	}
-	switch end.outcome {
-	case verifyPassed:
-		if e.verify.failed() {
-			l.resolveFake(end.endpoint)
-		}
-		e.verify.passed, e.verify.failures, e.verify.checked = true, 0, now
-		e.verify.next = now.Add(l.spread(verifyEvery))
-	case verifyContradicted:
-		was := e.verify.failures
-		e.verify.passed = false
-		e.verify.failures++
-		e.verify.next = now.Add(l.spread(backoff(verifyRetry, e.verify.failures, verifyEvery)))
-		if was < verifyFailures && e.verify.failures >= verifyFailures {
-			l.raiseFake(end.endpoint, end.claimed.Author, e.verify.failures, now)
-		}
-		l.logger.Warn("quality verification contradicted the claimed model",
-			"endpoint", e.id.String(), "author", end.claimed.Author, "failures", e.verify.failures,
-			"request", end.result.Request.String())
-	case verifyUnknown:
-		e.verify.next = now.Add(l.spread(verifyRetry))
-	}
-	l.verifyMetric(ctx, end.outcome.String())
-}
-
-// currentClaim is the claim the endpoint makes in the routing snapshot the check ran against.
-func (l *Loop) currentClaim(id suppliers.EndpointID) (claim, bool) {
-	endpoints, err := l.source.Routable()
-	if err != nil {
-		return claim{}, false
-	}
-	for _, ep := range endpoints {
-		if ep.ID == id {
-			if len(ep.Formats) == 0 {
-				return claim{}, false
-			}
-			return claimOf(ep), true
-		}
-	}
-	return claim{}, false
 }
 
 // spent says this hour's probe budget is used up.

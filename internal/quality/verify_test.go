@@ -59,38 +59,42 @@ func TestJudgeVerificationNeedsAPassedGeneration(t *testing.T) {
 	}
 }
 
+// verificationView is a verification read as the assertions see it, so each expectation is one comparable value.
+type verificationView struct {
+	verified    bool
+	due, failed bool
+	confidence  float64
+}
+
+func (v verification) view(at time.Time) verificationView {
+	return verificationView{verified: v.verified(at), due: v.due(at), failed: v.failed(), confidence: v.confidence(at)}
+}
+
+func (v verificationView) want(t *testing.T, at time.Time, want verificationView) {
+	t.Helper()
+	if v != want {
+		t.Fatalf("at %v: verified %v, confidence %v, due %v, failed %v; want %+v", at, v.verified, v.confidence, v.due, v.failed, want)
+	}
+}
+
 // TestVerificationConfidenceAndDue: a pass is full confidence at once, is not verified after verifyMaxAge, and is due
 // again after verifyEvery; an endpoint never checked is unverified and due.
 func TestVerificationConfidenceAndDue(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	var v verification
-	if v.verified(at) || v.confidence(at) != 0 || !v.due(at) || v.failed() {
-		t.Fatalf("a never-checked endpoint: verified %v, confidence %v, due %v, failed %v", v.verified(at), v.confidence(at), v.due(at), v.failed())
-	}
+	v.view(at).want(t, at, verificationView{due: true})
 	v.passed, v.checked, v.next = true, at, at.Add(verifyEvery)
-	if !v.verified(at) || v.confidence(at) != 1 || v.due(at) {
-		t.Fatalf("a fresh pass: verified %v, confidence %v, due %v", v.verified(at), v.confidence(at), v.due(at))
-	}
-	if v.verified(at.Add(verifyMaxAge+time.Second)) || v.confidence(at.Add(verifyMaxAge+time.Second)) != 0 {
-		t.Fatal("a pass did not age out")
-	}
-	if !v.due(at.Add(verifyEvery)) {
-		t.Fatal("a pass is not checked again after verifyEvery")
-	}
+	v.view(at).want(t, at, verificationView{verified: true, confidence: 1})
+	v.view(at.Add(verifyEvery)).want(t, at.Add(verifyEvery), verificationView{verified: true, confidence: .75, due: true})
+	v.view(at.Add(verifyMaxAge+time.Second)).want(t, at.Add(verifyMaxAge+time.Second), verificationView{due: true})
 	v.passed = false // one contradiction clears it at once, but is not yet a fake
 	v.failures = 1
-	if v.verified(at) || v.failed() {
-		t.Fatalf("one contradiction: verified %v, failed %v", v.verified(at), v.failed())
-	}
+	v.view(at).want(t, at, verificationView{})
 	v.failures = verifyFailures
-	if !v.failed() {
-		t.Fatal("three contradictions are not a fake")
-	}
+	v.view(at).want(t, at, verificationView{failed: true})
 	v.passed, v.failures = true, 0
-	if !v.verified(at) {
-		t.Fatal("a later pass did not restore the endpoint")
-	}
+	v.view(at).want(t, at, verificationView{verified: true, confidence: 1})
 }
 
 // TestJudgeVerificationNames: a company display name need not appear verbatim—"Mistral" names "Mistral AI"—but a

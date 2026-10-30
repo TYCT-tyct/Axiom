@@ -2,7 +2,7 @@ package protocol
 
 import (
 	"bytes"
-	"encoding/json/jsontext"
+	"encoding/json/jsontext" //nolint:depguard // as in upstream.go: an answer's string is unescaped in place, not decoded and encoded again
 	"unicode/utf8"
 )
 

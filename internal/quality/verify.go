@@ -91,8 +91,10 @@ func (o verifyOutcome) String() string {
 		return "passed"
 	case verifyContradicted:
 		return "contradicted"
+	case verifyUnknown:
+		return "inconclusive"
 	}
-	return "inconclusive"
+	return "unknown"
 }
 
 // challenge is one verification question: the random string to echo, the two numbers to add, and the claim to check.
@@ -281,13 +283,13 @@ func nameRuns(s string) []string {
 	return runs
 }
 
-// backoff is base doubled failures-1 times, capped at max.
-func backoff(base time.Duration, failures int, max time.Duration) time.Duration {
+// backoff is verifyRetry doubled failures-1 times, capped at verifyEvery.
+func backoff(failures int) time.Duration {
 	if failures < 1 {
-		return base
+		return verifyRetry
 	}
 	if failures > 16 {
-		return max
+		return verifyEvery
 	}
-	return min(base<<uint(failures-1), max)
+	return min(verifyRetry<<uint(failures-1), verifyEvery)
 }

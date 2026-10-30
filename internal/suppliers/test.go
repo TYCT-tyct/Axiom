@@ -215,28 +215,9 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	if !slices.Contains(ep.formats, req.Format) {
 		return TestResult{}, fmt.Errorf("%w: %d", ErrNoFormat, req.Format)
 	}
-	body, err := testCall(req.Format, ep.upstream, prompt, orTestOutput(req.Output))
+	result, body, err := s.prepareTest(req, ep, prompt)
 	if err != nil {
 		return TestResult{}, err
-	}
-	// Priced before the call, so that an answer that cannot be priced is known before the platform pays for it.
-	cost, err := s.testCost(ep.schedule, prompt, orTestOutput(req.Output))
-	if err != nil {
-		return TestResult{}, err
-	}
-	if cost.Flag != CostComplete {
-		return TestResult{}, ErrTestCost
-	}
-	estimate, err := decimal(cost.Native)
-	if err != nil {
-		return TestResult{}, err
-	}
-	result := TestResult{
-		Request: platform.RequestID(uuid.NewV7()), Endpoint: ep.id, Supplier: ep.supplier, Model: ep.model,
-		Upstream: ep.upstream, NativeUnit: ep.nativeUnit, Format: req.Format, Cost: cost, estimate: estimate,
-	}
-	if req.Capture > 0 {
-		result.capture = &protocol.Capture{Max: req.Capture}
 	}
 	// The caller's cancellation is not passed on: a request that goes away while the supplier generates still costs us
 	// the whole generation, and the row must say so.
@@ -257,6 +238,35 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	attempt.readProbe(ctx, &result, resp.Body, sent)
 	result.Total, result.FinishedAt = time.Since(sent), s.now()
 	return result, nil
+}
+
+// prepareTest builds and prices a generation before it is sent: an answer that cannot be priced is known before the
+// platform pays for it, and a caller that never sends pays nothing.
+func (s *Service) prepareTest(req TestRequest, ep *endpoint, prompt string) (TestResult, []byte, error) {
+	output := orTestOutput(req.Output)
+	body, err := testCall(req.Format, ep.upstream, prompt, output)
+	if err != nil {
+		return TestResult{}, nil, err
+	}
+	cost, err := s.testCost(ep.schedule, prompt, output)
+	if err != nil {
+		return TestResult{}, nil, err
+	}
+	if cost.Flag != CostComplete {
+		return TestResult{}, nil, ErrTestCost
+	}
+	estimate, err := decimal(cost.Native)
+	if err != nil {
+		return TestResult{}, nil, err
+	}
+	result := TestResult{
+		Request: platform.RequestID(uuid.NewV7()), Endpoint: ep.id, Supplier: ep.supplier, Model: ep.model,
+		Upstream: ep.upstream, NativeUnit: ep.nativeUnit, Format: req.Format, Cost: cost, estimate: estimate,
+	}
+	if req.Capture > 0 {
+		result.capture = &protocol.Capture{Max: req.Capture}
+	}
+	return result, body, nil
 }
 
 func (a *Attempt) readProbe(ctx context.Context, result *TestResult, body io.Reader, sent time.Time) {

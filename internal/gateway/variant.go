@@ -37,6 +37,7 @@ type variant struct {
 
 const (
 	errExactoAlternate = "A sorting variant on an alternate model must match the request's ranking: the ranking is one for the whole request, and :exacto on an alternate needs the first model to rank the same way."
+	errAlternateSort   = "A sorting variant on an alternate model must match the request's ranking: the ranking is one for the whole request."
 	errOnline          = "The :online variant is the deprecated web plugin, and web search is not supported here: " + protocol.NoWebSearch + ". Use a model's native web search tool."
 	errThinking        = "The :thinking variant is deprecated by OpenRouter: ask for reasoning with the reasoning parameter, which also enables it. A request that already asks for reasoning may keep the suffix."
 	errBatch           = "The :batch variant is a separate batch-priced catalog entry on OpenRouter, and this catalog has none."
@@ -166,22 +167,33 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 // asks for nothing.
 func alternate(name string, explicit bool, ranking *routing.Strategy, verified, reasoning bool) (base string, ok bool, err error) {
 	alt, ref := parseModelName(name)
-	switch {
-	case ref != nil && ref.Status == http.StatusNotFound:
-		return "", false, nil
-	case ref != nil:
+	if ref != nil {
+		if ref.Status == http.StatusNotFound {
+			return "", false, nil
+		}
 		return "", false, ref
-	case alt.auto:
+	}
+	if alt.auto {
 		// auto already considers every model the key may call; a second auto adds nothing to try.
 		return "", false, nil
-	case alt.exacto && !explicit && !verified:
-		return "", false, invalid(errExactoAlternate)
-	case alt.thinking && !reasoning:
-		return "", false, invalid(errThinking)
-	case alt.sort != nil && (ranking == nil || *ranking != *alt.sort):
-		return "", false, invalid("A sorting variant on an alternate model must match the request's ranking: the ranking is one for the whole request.")
+	}
+	if err := alternateRefusal(alt, explicit, ranking, verified, reasoning); err != nil {
+		return "", false, err
 	}
 	return alt.base, true, nil
+}
+
+// alternateRefusal is why an alternate's variants cannot be honoured under the request's ranking, or nil.
+func alternateRefusal(alt modelName, explicit bool, ranking *routing.Strategy, verified, reasoning bool) error {
+	switch {
+	case alt.exacto && !explicit && !verified:
+		return invalid(errExactoAlternate)
+	case alt.thinking && !reasoning:
+		return invalid(errThinking)
+	case alt.sort != nil && (ranking == nil || *ranking != *alt.sort):
+		return invalid(errAlternateSort)
+	}
+	return nil
 }
 
 // resolve turns the model the request names, then the alternates it lists, into models. The first must exist; an

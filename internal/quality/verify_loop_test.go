@@ -48,61 +48,112 @@ func verificationOf(m *Monitor, id uuid.UUID) verification {
 	return e.verify
 }
 
-// TestVerificationPassesAndFailsClosed: a passed check is what sets Verified, with its time and confidence; one
-// contradiction clears it at once, three in a row are a fake, and a later pass restores the endpoint. The check is a
-// real generation with the challenge's own prompt and a captured answer.
-func TestVerificationPassesAndFailsClosed(t *testing.T) {
-	m, l, f, now, id := verificationWorld(t)
-	c := newChallenge(func() float64 { return .5 }, stated)
-	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
+// startVerification sends one check and waits until the fake upstream holds it, so the test controls when the answer
+// arrives.
+func startVerification(t *testing.T, l *Loop, f *probeFixture, reply string) {
+	t.Helper()
+	f.result = suppliers.TestResult{Streamed: true, Reply: reply}
 	tick(t, l)
 	if l.active != 1 {
 		t.Fatalf("active %d, want one verification in flight", l.active)
 	}
+}
+
+func passVerification(t *testing.T, l *Loop, f *probeFixture, c challenge) {
+	t.Helper()
+	startVerification(t, l, f, verificationAnswer(c, "Anthropic"))
 	collectVerification(t, l, f)
-	if got := m.Measured(id, *now); !got.Verified || got.VerifyConfidence != 1 || !got.VerifiedAt.Equal(*now) {
-		t.Fatalf("after a pass: %+v, want verified now with confidence 1", got)
+}
+
+func contradictVerification(t *testing.T, l *Loop, f *probeFixture, c challenge) {
+	t.Helper()
+	startVerification(t, l, f, verificationAnswer(c, "OpenAI"))
+	collectVerification(t, l, f)
+}
+
+// TestVerificationPassesAndFailsClosed: a passed check is what sets Verified, with its time and confidence; one
+// contradiction clears it at once, three in a row are a fake, and a later pass restores the endpoint. The check is a
+// real generation with the challenge's own prompt and a captured answer.
+func TestVerificationPassesAndFailsClosed(t *testing.T) {
+	t.Run("a pass sets the evidence", verificationPassSetsVerified)
+	t.Run("a contradiction clears it at once", verificationContradictionFailsClosed)
+	t.Run("three contradictions are a fake and a pass restores it", verificationFakeThenRestored)
+}
+
+func verificationPassSetsVerified(t *testing.T) {
+	m, l, f, now, id := verificationWorld(t)
+	c := newChallenge(func() float64 { return .5 }, stated)
+	startVerification(t, l, f, verificationAnswer(c, "Anthropic"))
+	collectVerification(t, l, f)
+	got := m.Measured(id, *now)
+	if !got.Verified {
+		t.Fatalf("after a pass: %+v, want verified", got)
+	}
+	if got.VerifyConfidence != 1 {
+		t.Fatalf("the pass's confidence is %v, want 1", got.VerifyConfidence)
+	}
+	if !got.VerifiedAt.Equal(*now) {
+		t.Fatalf("the pass is dated %v, want %v", got.VerifiedAt, *now)
 	}
 	req := <-f.calls
-	if req.Prompt == "" || !strings.Contains(req.Prompt, c.nonce) || req.Capture != verifyReply || req.Output != verifyOutput {
-		t.Errorf("the check sent %+v, want the nonce, the capture and %d tokens", req, verifyOutput)
+	if req.Prompt == "" || !strings.Contains(req.Prompt, c.nonce) {
+		t.Errorf("the check's prompt %q does not ask for the nonce %q", req.Prompt, c.nonce)
 	}
+	if req.Capture != verifyReply {
+		t.Errorf("the check captures %d bytes, want %d", req.Capture, verifyReply)
+	}
+	if req.Output != verifyOutput {
+		t.Errorf("the check asks for %d tokens, want %d", req.Output, verifyOutput)
+	}
+}
 
-	// One contradiction: no longer verified, but not yet concluded fake.
+func verificationContradictionFailsClosed(t *testing.T) {
+	m, l, f, now, id := verificationWorld(t)
+	c := newChallenge(func() float64 { return .5 }, stated)
+	passVerification(t, l, f, c)
 	*now = now.Add(verifyEvery)
-	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "OpenAI")}
-	tick(t, l)
-	collectVerification(t, l, f)
-	if got := m.Measured(id, *now); got.Verified || got.VerifyConfidence != 0 {
+	contradictVerification(t, l, f, c)
+	got := m.Measured(id, *now)
+	if got.Verified {
 		t.Fatalf("after a contradiction: %+v, want unverified", got)
 	}
-	if v := verificationOf(m, id); v.failures != 1 || v.failed() {
+	if got.VerifyConfidence != 0 {
+		t.Fatalf("a contradicted pass keeps confidence %v", got.VerifyConfidence)
+	}
+	v := verificationOf(m, id)
+	if v.failures != 1 {
 		t.Fatalf("after one contradiction: %+v", v)
 	}
+	if v.failed() {
+		t.Fatal("one contradiction concluded a fake")
+	}
+}
 
-	// Two more, each at its backed-off schedule, are the fake.
-	for i, retry := range []time.Duration{verifyRetry, 2 * verifyRetry} {
+func verificationFakeThenRestored(t *testing.T) {
+	m, l, f, now, id := verificationWorld(t)
+	c := newChallenge(func() float64 { return .5 }, stated)
+	passVerification(t, l, f, c)
+	for i, retry := range []time.Duration{verifyEvery, verifyRetry, 2 * verifyRetry} {
 		*now = now.Add(retry)
-		tick(t, l)
-		collectVerification(t, l, f)
-		if v := verificationOf(m, id); v.failures != i+2 {
-			t.Fatalf("after %d contradictions: %+v", i+2, v)
+		contradictVerification(t, l, f, c)
+		if v := verificationOf(m, id); v.failures != i+1 {
+			t.Fatalf("after %d contradictions: %+v", i+1, v)
 		}
 	}
 	if v := verificationOf(m, id); !v.failed() {
 		t.Fatalf("three contradictions are not a fake: %+v", v)
 	}
-
-	// A pass after the backoff restores it.
-	*now = now.Add(backoff(verifyRetry, verifyFailures, verifyEvery))
-	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
-	tick(t, l)
-	collectVerification(t, l, f)
+	*now = now.Add(backoff(verifyFailures))
+	passVerification(t, l, f, c)
 	if got := m.Measured(id, *now); !got.Verified {
 		t.Fatalf("after a later pass: %+v", got)
 	}
-	if v := verificationOf(m, id); v.failures != 0 || v.failed() {
+	v := verificationOf(m, id)
+	if v.failures != 0 {
 		t.Fatalf("a pass did not clear the contradictions: %+v", v)
+	}
+	if v.failed() {
+		t.Fatal("a pass left the endpoint concluded fake")
 	}
 }
 
@@ -228,49 +279,70 @@ func TestVerificationAlertsAFakeOnce(t *testing.T) {
 	rec := &signalRecorder{}
 	l.alerts = rec
 	c := newChallenge(func() float64 { return .5 }, stated)
-	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
-	tick(t, l)
-	collectVerification(t, l, f)
+	passVerification(t, l, f, c)
 
 	for i := range verifyFailures + 1 {
 		if i == 0 {
 			*now = now.Add(verifyEvery) // the pass scheduled the next check six hours out
 		} else {
-			*now = now.Add(backoff(verifyRetry, i, verifyEvery))
+			*now = now.Add(backoff(i))
 		}
-		f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "OpenAI")}
-		tick(t, l)
-		collectVerification(t, l, f)
+		contradictVerification(t, l, f, c)
 	}
-	var raised, resolved int
-	for _, s := range rec.signals {
-		if s.Kind != fakeAlert {
-			continue
-		}
-		if s.Resolved {
-			resolved++
-			continue
-		}
-		raised++
-		if s.Severity != "critical" || s.Key != id.String() || s.Fields["claimed_author"] != stated.Author || s.Fields["failures"] != "3" {
-			t.Fatalf("the fake alert: %+v", s)
-		}
+	raised, resolved := fakeSignals(rec, id)
+	if raised != 1 {
+		t.Fatalf("fake alerts raised: %d, want 1", raised)
 	}
-	if raised != 1 || resolved != 0 {
-		t.Fatalf("fake alerts: %d raised, %d resolved, want one raised while still a fake", raised, resolved)
+	if resolved != 0 {
+		t.Fatalf("fake alerts resolved while still a fake: %d", resolved)
 	}
+	wantFakeAlert(t, rec, id)
 	if m.Measured(id, *now).Verified {
 		t.Fatal("a fake concluded endpoint is still verified")
 	}
 
-	*now = now.Add(backoff(verifyRetry, verifyFailures+1, verifyEvery))
-	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
-	tick(t, l)
-	collectVerification(t, l, f)
+	*now = now.Add(backoff(verifyFailures + 1))
+	passVerification(t, l, f, c)
+	if _, resolved = fakeSignals(rec, id); resolved != 1 {
+		t.Fatalf("fake alerts resolved after a pass: %d, want 1", resolved)
+	}
+}
+
+// fakeSignals counts the fake alert's raises and resolutions for one endpoint.
+func fakeSignals(rec *signalRecorder, id uuid.UUID) (raised, resolved int) {
 	for _, s := range rec.signals {
-		if s.Kind == fakeAlert && s.Resolved && s.Key == id.String() {
-			return
+		if s.Kind != fakeAlert || s.Key != id.String() {
+			continue
+		}
+		if s.Resolved {
+			resolved++
+		} else {
+			raised++
 		}
 	}
-	t.Fatal("a pass after the fake did not resolve the alert")
+	return raised, resolved
+}
+
+// wantFakeAlert checks the fields of the one raised fake alert.
+func wantFakeAlert(t *testing.T, rec *signalRecorder, id uuid.UUID) {
+	t.Helper()
+	for _, s := range rec.signals {
+		if s.Kind != fakeAlert || s.Resolved {
+			continue
+		}
+		if s.Severity != "critical" {
+			t.Fatalf("the fake alert's severity is %q, want critical", s.Severity)
+		}
+		if s.Key != id.String() {
+			t.Fatalf("the fake alert's key is %q, want %q", s.Key, id.String())
+		}
+		if s.Fields["claimed_author"] != stated.Author {
+			t.Fatalf("the fake alert claims %q, want %q", s.Fields["claimed_author"], stated.Author)
+		}
+		if s.Fields["failures"] != "3" {
+			t.Fatalf("the fake alert counts %q failures, want 3", s.Fields["failures"])
+		}
+		return
+	}
+	t.Fatal("no fake alert was raised")
 }
