@@ -82,11 +82,20 @@ func TestEachRateLimitIsCountedByItsReason(t *testing.T) {
 			return err
 		},
 		"account_gate": func(t *testing.T, ctx context.Context, bp *Backpressure) error {
-			if _, err := bp.Funds.Complete(ctx, "a"); err != nil {
-				return err
-			}
-			_, _, err := bp.Funds.Admit(ctx, "a") // waits AccountGateWait for the gate the completion holds
-			return err
+			started, release := make(chan struct{}), make(chan struct{})
+			defer close(release)
+			go func() {
+				item := &gateItem{done: make(chan struct{})}
+				//nolint:errcheck,gosec // the holder only keeps the gate busy; the admission behind it is what is counted
+				bp.Funds.Complete(ctx, "a", item, func(context.Context, []*gateItem) error {
+					close(started)
+					<-release
+					return nil
+				})
+			}()
+			<-started
+			// The admission waits AccountGateWait for the gate the completion holds.
+			return submitAdmission(ctx, bp.Funds, "a")
 		},
 		"queue_key_full": func(t *testing.T, ctx context.Context, bp *Backpressure) error {
 			wait(ctx, bp.Queue, "a").mustWait(t)

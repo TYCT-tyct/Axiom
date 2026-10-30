@@ -199,7 +199,7 @@ func New(cfg Config, meter metric.Meter) (*Backpressure, error) {
 	return &Backpressure{
 		rateLimited: rateLimited, byReason: byReason,
 		InFlight:    &InFlight{node: NewLimiter(ErrOverloaded), accounts: NewLimiter(errAccountInFlight), nodeMax: cfg.NodeInFlight},
-		Funds:       &Funds{gate: newAccountGate(cfg.AccountGateWait), pool: pool, budget: cfg.AdmissionBudget},
+		Funds:       &Funds{gate: newBatchGate(cfg.AccountGateWait), pool: pool, budget: cfg.AdmissionBudget},
 		Pool:        pool,
 		Queue:       newQueue(cfg.QueueMax, cfg.QueuePerKey),
 		Rate:        NewRateCounter(cfg.RateWindow),
