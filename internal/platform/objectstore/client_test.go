@@ -225,6 +225,20 @@ func TestPutRetriesAndSendsTheSameBytes(t *testing.T) {
 	}
 }
 
+func TestRetriesStopAtTheAttemptLimit(t *testing.T) {
+	fake := newFakeS3()
+	fake.failures = 10
+	client := newTestClient(t, fake)
+	_, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("hello"), Size: 5})
+	var remote *Error
+	if !errors.As(err, &remote) || remote.Status != http.StatusServiceUnavailable {
+		t.Fatalf("err = %v, want the last 503 as an Error", err)
+	}
+	if got := len(fake.seen()); got != maxAttempts {
+		t.Fatalf("Put made %d attempts, want %d", got, maxAttempts)
+	}
+}
+
 func TestAForbiddenAnswerIsNotRetried(t *testing.T) {
 	fake := newFakeS3()
 	fake.forbidden = true
