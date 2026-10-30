@@ -13,7 +13,6 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/audit"
-	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
@@ -144,28 +143,18 @@ func dialectCommand(ctx context.Context, environ, args []string, out io.Writer) 
 
 // withCatalog opens the catalog on the database and a fetcher for the datasets, and closes them after do.
 func withCatalog(ctx context.Context, environ []string, do func(*catalog.Catalog, *catalog.Fetcher) error) error {
-	env := config.New(environ)
-	databaseURL := env.Required(pg.DatabaseURLVar)
-	startupTimeout := env.Duration(startupTimeoutVar, defaultStartupTimeout)
-	reserve := env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)
-	if err := env.Problems(); err != nil {
-		return fmt.Errorf("configuration:\n%w", err)
-	}
-	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithCompletionReserve(reserve))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	c, err := catalog.Open(db, pg.PlatformScope(), catalog.Config{})
-	if err != nil {
-		return err
-	}
-	client, err := egress.New(egress.Direct)
-	if err != nil {
-		return err
-	}
-	defer client.CloseIdleConnections()
-	return do(c, catalog.NewFetcher(client))
+	return withDatabase(ctx, environ, func(db *pg.DB) error {
+		c, err := catalog.Open(db, pg.PlatformScope(), catalog.Config{})
+		if err != nil {
+			return err
+		}
+		client, err := egress.New(egress.Direct)
+		if err != nil {
+			return err
+		}
+		defer client.CloseIdleConnections()
+		return do(c, catalog.NewFetcher(client))
+	})
 }
 
 func writeLine(out io.Writer, v any) error {
