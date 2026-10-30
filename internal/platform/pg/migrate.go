@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"time"
 	"uuid"
 
@@ -194,6 +195,20 @@ type timedConnector struct {
 	timeout time.Duration
 }
 
+// sessionConnector opens the one session a migration run may have and refuses to open another. The session holds the
+// migration lock, so a lost connection must fail the run instead of continuing on a new session without the lock.
+type sessionConnector struct {
+	driver.Connector
+	opened atomic.Bool
+}
+
+func (c *sessionConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	if c.opened.Swap(true) {
+		return nil, errors.New("the migration session was lost; the migration lock is no longer held")
+	}
+	return c.Connector.Connect(ctx)
+}
+
 func (c timedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -205,29 +220,26 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 	if err := prepare(ctx, config, connectTimeout, modules); err != nil {
 		return err
 	}
-	db := sql.OpenDB(timedConnector{stdlib.GetConnector(*config, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
-		// These connections serve only migrations and close with this run. Platform scope lets data migrations see
-		// every tenant while retaining forced RLS; modules never set their own scope.
+	db := sql.OpenDB(&sessionConnector{Connector: timedConnector{Connector: stdlib.GetConnector(*config, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
+		// This session serves only migrations and closes with this run. Platform scope lets data migrations see every
+		// tenant while retaining forced RLS; modules never set their own scope.
 		_, err := conn.Exec(ctx, "SET ROLE axiom_owner; SET axiom.scope_platform = 'on'")
 		return err
-	})), connectTimeout})
+	})), timeout: connectTimeout}})
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	defer db.Close()                                                         //nolint:errcheck // closing a pool whose work is done reports nothing worth acting on
 	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 5)) // retries every second, 5 times
 	if err != nil {
 		return err
 	}
-	// One session lock covers the whole run: the history check, each module's pending migrations and the record of what
-	// they applied. A second run cannot commit a migration between the check and the execution, so a history that
-	// disagrees with this program is refused before any of this run's migrations is applied.
-	lockConn, err := db.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("connect to hold the migration lock: %w", redactConnect(MigrateDatabaseURLVar, err))
+	// One session and one lock carry the whole run: the history check, each module's pending migrations and the record
+	// of what they applied. The lock is taken on the only session this run can open, so a second run cannot commit a
+	// migration between the check and the execution, and losing the session fails the run instead of continuing
+	// without the lock.
+	if err := holdLock(ctx, db, locker); err != nil {
+		return err
 	}
-	defer func() { _ = lockConn.Close() }() //nolint:errcheck // the connection ends with the run
-	if err := locker.SessionLock(ctx, lockConn); err != nil {
-		return fmt.Errorf("hold the migration lock: %w", err)
-	}
-	defer func() { _ = locker.SessionUnlock(context.WithoutCancel(ctx), lockConn) }() //nolint:errcheck // the session ends with the run
 	// Check every module's recorded history before any pending migration runs: a changed merged migration stops the run
 	// while the database is still at the versions the previous release left, not after a later migration committed.
 	checked, err := preflight(ctx, db, modules)
@@ -245,6 +257,23 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// holdLock takes goose's session lock on the run's only session. The lock lives on the session, so returning the handle
+// to the pool keeps it; every later query uses that session, and db.Close ends it after the run.
+func holdLock(ctx context.Context, db *sql.DB, locker lock.SessionLocker) error {
+	lockConn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("connect to hold the migration lock: %w", redactConnect(MigrateDatabaseURLVar, err))
+	}
+	if err := locker.SessionLock(ctx, lockConn); err != nil {
+		_ = lockConn.Close() //nolint:errcheck // the run is over
+		return fmt.Errorf("hold the migration lock: %w", err)
+	}
+	if err := lockConn.Close(); err != nil {
+		return fmt.Errorf("hold the migration lock: %w", err)
 	}
 	return nil
 }

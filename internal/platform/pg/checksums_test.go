@@ -1,8 +1,10 @@
 package pg_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -89,27 +91,80 @@ func relationExists(t *testing.T, database pgtest.Database, name string) bool {
 	return exists
 }
 
-// waitForLock waits until a session holds goose's migration lock.
-func waitForLock(t *testing.T, database pgtest.Database) {
+// openGate creates quality.gate, owned by axiom_owner, and returns a connection and a transaction that holds the table
+// locked until the transaction ends. A migration whose first statement reads the table waits there, so a test controls
+// when it continues without a sleep.
+func openGate(t *testing.T, database pgtest.Database) (*pgx.Conn, pgx.Tx) {
+	t.Helper()
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		"CREATE SCHEMA quality AUTHORIZATION axiom_owner",
+		"SET ROLE axiom_owner",
+		"CREATE TABLE quality.gate (id int)",
+		"RESET ROLE",
+	} {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	gate, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.Exec(ctx, "LOCK TABLE quality.gate IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = gate.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // the gate is opened for the test's lifetime
+		_ = conn.Close(context.WithoutCancel(ctx))    //nolint:errcheck // the test is over
+	})
+	return conn, gate
+}
+
+// watchSession waits until a migration run's session in this database has run a query like like, and returns its pid.
+func watchSession(t *testing.T, database pgtest.Database, like string) {
+	t.Helper()
+	watchActivity(t, database, `SELECT pid FROM pg_stat_activity
+		WHERE datname = current_database() AND application_name LIKE 'axiom-migrate-%'
+		AND query LIKE $1 AND pid <> pg_backend_pid() LIMIT 1`, like)
+}
+
+// lockHolderPID waits until a migration run's session in this database holds goose's migration lock, and returns its
+// pid.
+func lockHolderPID(t *testing.T, database pgtest.Database) int32 {
+	t.Helper()
+	return watchActivity(t, database, `SELECT l.pid FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+		WHERE l.locktype = 'advisory' AND l.granted AND l.classid = 0 AND l.objid = $1
+		AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+		AND a.datname = current_database() AND application_name LIKE 'axiom-migrate-%'
+		AND a.pid <> pg_backend_pid() LIMIT 1`, lock.DefaultLockID)
+}
+
+// watchActivity polls by query until one row holds a pid: the test sees a run reach the point it waits for instead of
+// sleeping for it.
+func watchActivity(t *testing.T, database pgtest.Database, query string, arg any) int32 {
 	t.Helper()
 	conn, err := pgx.Connect(t.Context(), database.Superuser)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close(t.Context()) //nolint:errcheck // the test is over when it closes
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
-		var held bool
-		if err := conn.QueryRow(t.Context(), `SELECT EXISTS (
-			SELECT FROM pg_locks WHERE locktype = 'advisory' AND granted AND classid = 0 AND objid = $1)`,
-			lock.DefaultLockID).Scan(&held); err != nil {
+		var pid int32
+		err := conn.QueryRow(t.Context(), query, arg).Scan(&pid)
+		switch {
+		case err == nil:
+			return pid
+		case !errors.Is(err, pgx.ErrNoRows):
 			t.Fatal(err)
 		}
-		if held {
-			return
-		}
 		if time.Now().After(deadline) {
-			t.Fatal("the migration lock was not held")
+			t.Fatalf("no migration session reached the point watched by %q", query)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -249,25 +304,31 @@ func TestAFailedNonTransactionalMigrationIsFrozenBeforeItRuns(t *testing.T) {
 }
 
 // TestASecondRunCannotApplyAfterTheHistoryChanged: the history check and every module's migrations run under one
-// session lock. A second run that starts while the first is migrating waits for the whole first run, sees the file the
-// first recorded and refuses it before applying a pending migration of its own. Were the check outside the lock, the
-// second run would pass it and apply its pending migration after the first committed.
+// session lock. The first run is held inside its first migration by a lock the test holds, the second run is let in and
+// watched until it reaches the migration lock; the first is then released. The second must see the file the first
+// recorded and refuse it before applying a pending migration of its own. Were the check outside the lock, the second
+// run would pass it while the first was held and apply its pending migration after the first committed.
 func TestASecondRunCannotApplyAfterTheHistoryChanged(t *testing.T) {
 	database := pgtest.New(t)
 	ctx := t.Context()
+	_, gate := openGate(t, database)
 	first := pg.Module{Name: "quality", Migrations: fstest.MapFS{
-		"00001_first.sql":  {Data: []byte(up + "SELECT pg_sleep(5);\nCREATE TABLE quality.first (id int);")},
+		"00001_first.sql":  {Data: []byte(up + "SELECT count(*) FROM quality.gate;\nCREATE TABLE quality.first (id int);")},
 		"00002_second.sql": {Data: []byte(up + "CREATE TABLE quality.first_two (id int);")},
 	}}
 	second := pg.Module{Name: "quality", Migrations: fstest.MapFS{
-		"00001_first.sql": {Data: []byte(up + "SELECT pg_sleep(5);\nCREATE TABLE quality.first (id int);\n-- second run")},
+		"00001_first.sql": {Data: []byte(up + "SELECT count(*) FROM quality.gate;\nCREATE TABLE quality.first (id int);\n-- second run")},
 		"00003_third.sql": {Data: []byte(up + "CREATE TABLE quality.third (id int);")},
 	}}
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- pg.Migrate(ctx, database.Migrator, first) }()
-	waitForLock(t, database)
+	watchSession(t, database, "%quality.gate%")
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- pg.Migrate(ctx, database.Migrator, second) }()
+	watchSession(t, database, "%pg_try_advisory_lock%")
+	if err := gate.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := <-firstDone; err != nil {
 		t.Fatalf("the first run: %v", err)
 	}
@@ -278,6 +339,41 @@ func TestASecondRunCannotApplyAfterTheHistoryChanged(t *testing.T) {
 	}
 	if relationExists(t, database, "quality.third") {
 		t.Error("the second run applied its migration after the first run changed the module")
+	}
+	if !relationExists(t, database, "quality.first_two") {
+		t.Error("the first run did not finish")
+	}
+}
+
+// TestLosingTheMigrationSessionStopsTheRun: the session that holds the migration lock is the session that runs the
+// migrations. Terminating it stops the run; no later migration commits on a new session that does not hold the lock.
+func TestLosingTheMigrationSessionStopsTheRun(t *testing.T) {
+	database := pgtest.New(t)
+	ctx := t.Context()
+	gateConn, gate := openGate(t, database)
+	module := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_first.sql":  {Data: []byte(up + "SELECT count(*) FROM quality.gate;\nCREATE TABLE quality.first (id int);")},
+		"00002_second.sql": {Data: []byte(up + "CREATE TABLE quality.first_two (id int);")},
+	}}
+	done := make(chan error, 1)
+	go func() { done <- pg.Migrate(ctx, database.Migrator, module) }()
+	pid := lockHolderPID(t, database)
+	if _, err := gateConn.Exec(ctx, "SELECT pg_terminate_backend($1)", pid); err != nil {
+		t.Fatalf("terminate the lock session: %v", err)
+	}
+	if err := gate.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("the run continued after the session that held its lock was terminated")
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("the run did not return after the session that held its lock was terminated")
+	}
+	if relationExists(t, database, "quality.first_two") {
+		t.Error("a migration committed after the run lost the session that held its lock")
 	}
 }
 
