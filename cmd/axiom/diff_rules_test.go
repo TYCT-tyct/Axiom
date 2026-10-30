@@ -211,8 +211,20 @@ func diffRules() []*diffRule {
 		rule(`(json|chat)\.usage\.cache_discount|sse\[response\.(created|completed|in_progress)\]\.response\.usage\.cache_discount`, "",
 			all(newAPILacks, axiomIs(`\d+(\.\d+)?`)),
 			"the discount the cached input got, which Axiom's usage carries (gateway.md「用量与费用」); new-api's does not"),
-		rule(`(json|sse\[response\.completed\]\.response)\.usage\.(input_tokens|output_tokens|total_tokens)`, `responses-claude-.*`, bothAreNumbers,
-			"a Responses usage reports the physical input total (cache reads included) and the output total in Responses' names; new-api writes Anthropic's input_tokens, which leaves the cache out, and leaves the output in Chat's name"),
+		// The reasoning sample is the one whose cache read makes the physical input total differ, and whose whole reply
+		// new-api leaves zeroed: the pairs are the sample's own numbers, so a corrupted usage cannot pass.
+		rule(`json\.usage\.input_tokens`, `responses-claude-reasoning-whole`, values("0", "29"),
+			"the whole reply's usage is the sample's own: 18 input plus 11 cache reads; new-api zeroes the Responses counters and keeps the numbers in Chat's names"),
+		rule(`json\.usage\.output_tokens`, `responses-claude-reasoning-whole`, values("0", "147"),
+			"the sample's output total; new-api leaves the Responses counter zeroed"),
+		rule(`json\.usage\.total_tokens`, `responses-claude-reasoning-whole`, values("0", "176"),
+			"the sum of the sample's physical input and output; new-api leaves the Responses counter zeroed"),
+		rule(`sse\[response\.completed\]\.response\.usage\.input_tokens`, `responses-claude-reasoning-stream`, values("18", "29"),
+			"the physical input total is Anthropic's input_tokens plus the cache reads it leaves out (18 + 11); new-api reports Anthropic's count alone"),
+		rule(`sse\[response\.completed\]\.response\.usage\.output_tokens`, `responses-claude-reasoning-stream`, values("123", "147"),
+			"the sample's output total; new-api's count leaves out the reasoning the sample reports"),
+		rule(`sse\[response\.completed\]\.response\.usage\.total_tokens`, `responses-claude-reasoning-stream`, values("141", "176"),
+			"the sum of the sample's physical input and output; new-api's total is the two counts it reports"),
 		rule(`json\.output\[\]\.summary\[\]\.text|`+
 			`sse\[response\.completed\]\.response\.output\[\]\.summary\[\]\.text|`+
 			`sse\[response\.output_item\.(added|done)\]\.item\.summary\[\]\.text|`+
@@ -243,7 +255,7 @@ func diffRules() []*diffRule {
 		rule(`json\.output\[\]\.id|sse\[response\.[a-z_.]+\]\.(item\.id|item_id|response\.output\[\]\.id)`, `responses-.*`,
 			axiomIs(`"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[0-9]+"`),
 			"converted Responses item IDs are the call ID and the output ordinal, never the upstream identity"),
-		rule(`json\.created_at|sse\[response\.[a-z_]+\]\.response\.created_at`, `responses-deepseek-.*`, bothAreNumbers,
+		rule(`json\.created_at|sse\[response\.[a-z_]+\]\.response\.created_at`, `responses-.*`, bothAreNumbers,
 			"converted Responses use the call's creation time; new-api uses the upstream's or its own clock"),
 		rule(`(json|chat)\.usage\.prompt_cache_(hit|miss)_tokens`, `chat-deepseek-.*`, axiomLacks,
 			"DeepSeek's names for the cache read and the rest of the prompt, which the upstream sends and new-api passes on; Axiom reports them as prompt_tokens_details.cached_tokens, once, in the format's own member (internal/protocol README.md「用量」)"),

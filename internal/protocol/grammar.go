@@ -299,9 +299,12 @@ func (s *scanner) fileData() error {
 // fileRef reads a file the client refers to by an id an upstream issued. The id is the supplier account's resource,
 // not content: it carries no bytes, and the request is only ever sent back to the provider that issued it (E2-17).
 func (s *scanner) fileRef() error {
+	v, err := s.str() // nil for null: the member is not written, and the part carries only its data
+	if err != nil || v == nil {
+		return err
+	}
 	s.p.refs++
-	_, err := s.str()
-	return err
+	return nil
 }
 
 // imageURL reads an image's URL, which carries the image itself when it is a data URL. An escaped "data:" counts
