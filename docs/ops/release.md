@@ -58,6 +58,8 @@ registry（仅绑定 `127.0.0.1`，不上传外部仓库）。它按归档的 ma
    按[生产入口](backup-restore.md#生产入口)执行，必须带 `--no-build`，先 pull 这个 digest，不运行开发用的 `just up`。
    用 `docker inspect` 核对迁移与服务的 `.Config.Image` 是该 digest 引用，版本 API 与 JSON 的 `frontend_version` 一致。
    回滚选择上次成功发布记录里的 digest，重复核对和部署步骤；已经执行的迁移不会因此自动撤回，先确认旧程序仍兼容当前 schema。
+   本版本起 `axiom migrate` 在 `platform.migration_checksums` 记下每个已应用迁移的文件名和 SHA-256，迁移和节点启动都核对：
+   已合并的迁移被改过、改名或删掉时两者都停下并报出文件与摘要，改动要走新的迁移；回滚到不认识这张表的旧版本不受影响，它只多看到一张启用行级安全的表（[platform 的「迁移」](../../internal/platform/README.md#迁移)）。
 
 ### 决策与理由
 

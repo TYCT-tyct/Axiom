@@ -12,6 +12,8 @@ import (
 )
 
 func TestChargeReadFailureIsIsolatedAndReported(t *testing.T) {
+	t.Parallel()
+
 	for _, mutation := range []struct{ name, sql string }{
 		{"future schedule", `UPDATE billing.reservations SET prices[1]=(prices[1]::jsonb || '{"future_condition":true}'::jsonb)::text WHERE request_id='%s'`},
 		{"future usage", `UPDATE billing.reservations SET final_usage='[{"future_usage":true}]'::jsonb WHERE request_id='%s'`},

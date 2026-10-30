@@ -91,6 +91,8 @@ func TestKeysUsed(t *testing.T) {
 }
 
 func TestReadFrozenBalance(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(1000)
 	if _, err := b.reserve(b.admitted, 300); err != nil {
@@ -105,6 +107,8 @@ func TestReadFrozenBalance(t *testing.T) {
 }
 
 func TestAvailableBalanceExtremes(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		view BalanceView
 		want string

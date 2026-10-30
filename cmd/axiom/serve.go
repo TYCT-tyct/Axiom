@@ -187,11 +187,11 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	// The shared store opens before the queue: the mail worker's recipient throttles live in it. The heartbeat is deleted
 	// on every way out, so a restart is not refused for a row that only a crash would leave. It runs once the listeners
 	// have drained and nothing prechecks any more, and before the database closes.
-	cache, err := openCache(ctx, cfg.valkey, cfg.startupTimeout, db, tel, logger)
+	cache, stopCache, err := openNodeCache(ctx, syncCtx, cfg, console.master, db, tel, logger)
 	if err != nil {
 		return err
 	}
-	defer closeCache(ctx, cache, cfg.shutdownTimeout, logger)
+	defer stopCache()
 	queue, recorder, recovery, registration, err := startBackground(syncCtx, db, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, tel, logger, cfg.shutdownTimeout, record)
 	if err != nil {
 		return err

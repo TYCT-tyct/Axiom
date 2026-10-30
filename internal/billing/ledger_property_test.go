@@ -31,6 +31,8 @@ type correctionStats struct {
 // counters equal the pending holds, the floor holds, and the credit batches fund exactly the balance without any being
 // over-spent.
 func TestLedgerProperty(t *testing.T) {
+	t.Parallel()
+
 	const seeds = 3
 	var corrected correctionStats
 	var ran int

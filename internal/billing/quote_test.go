@@ -56,6 +56,8 @@ func units(tb testing.TB, e platform.Exact) string {
 
 // TestQuoteEntry: each rule of docs/domains/billing.md「预留与结算」 moves the quote by the amount worked out beside it.
 func TestQuoteEntry(t *testing.T) {
+	t.Parallel()
+
 	text := Demand{TextBytes: 80}
 	tools := func(d Demand, ts ...ServerTool) Demand { d.ServerTools = ts; return d }
 	for _, tc := range []struct {
@@ -104,6 +106,8 @@ func TestQuoteEntry(t *testing.T) {
 // counter-example prices a cache read above input, so 80 tokens read from the cache plus 1 output token cost 161,
 // which a quote at the input price (81) would not cover.
 func TestQuoteEntryModel(t *testing.T) {
+	t.Parallel()
+
 	noPageLimit := entry(t, false, 3)
 	noPageLimit.Model.FilePages = 0
 	dearCache := Quotable{
@@ -140,6 +144,8 @@ func TestQuoteEntryModel(t *testing.T) {
 }
 
 func TestQuoteEntryRefuses(t *testing.T) {
+	t.Parallel()
+
 	noContext := entry(t, false, 3)
 	noContext.Model.ContextLength = 0
 	noCodeDefault := entry(t, false, 3)
@@ -173,6 +179,8 @@ func TestQuoteEntryRefuses(t *testing.T) {
 // route order; a dropped preferred entry refuses the request, naming the first source short. Entries differ in their
 // model's default searches (3 and 1), so a route across models quotes each by its own.
 func TestQuote(t *testing.T) {
+	t.Parallel()
+
 	d := Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch}}}
 	threeSegmented, threeFull, oneFull := entry(t, true, 3), entry(t, false, 3), entry(t, false, 1) // 16180, 22380, 14180
 	balance := func(n int64) Available { return Available{SourceBalance, amount(t, n)} }
@@ -260,6 +268,8 @@ func BenchmarkQuote(b *testing.B) {
 // maximum, has no upper cost and so no reservation: Quote refuses it with ErrUnbounded, naming the tool, however the
 // route's other entries quote. The same request with a limit of its own, or on a model with a default, is quoted.
 func TestQuoteRefusesAToolWithNoBound(t *testing.T) {
+	t.Parallel()
+
 	d := func(max int64) Demand {
 		return Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch, MaxUses: max}}}
 	}
@@ -286,6 +296,8 @@ func TestQuoteRefusesAToolWithNoBound(t *testing.T) {
 // TestQuoteEntryNeedsSegments: a segmentable entry with no segment size or no overshoot configured is refused, not
 // quoted with a segment of 0 tokens, which reserves no output; the same entry whole needs neither.
 func TestQuoteEntryNeedsSegments(t *testing.T) {
+	t.Parallel()
+
 	d := Demand{TextBytes: 80}
 	for name, s := range map[string]Segments{
 		"no segment size": {Overshoot: time.Second},

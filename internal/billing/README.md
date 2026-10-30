@@ -304,6 +304,10 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - `RefreshPrices` 与 `PreviewPrices` 的可变参数由组装层提供：`publicationCosts` 的同一份汇率切片同时用于成本与售价；不能在提案内部再查询当前值，避免同轮成本与售价混用版本。没有售价换汇的旧依据不新增 JSON 字段，维持原候选摘要。
 - 测试见 `exchange_fetch_test.go`、`exchange_job_test.go`、`sale_exchange_test.go`（下载边界、精确交叉汇率、原分数与定点数往返性质、每日认领、整批回滚、人工保护、陈旧与恢复、发布与预览依据）；`exchange_test.go`、`exchange_settle_test.go`，覆盖写入边界、正反向并发、幂等重放、审计回滚、应用角色权限、预留持久化、混合未知成本与重复结算。端到端传递与刷新测试在 gateway，精确乘法与原生对账测试在 suppliers。
 
+## 测试
+
+每个顶层测试自己建库、自己报价，测试之间不共享可变状态，所以全部并行执行（`t.Parallel`）；同一个包的墙钟时间由最长的测试决定，而不是测试的数量。`TestLedgerReadsGrowWithThePage` 的 200 万行夹具用 `uuidv7()` 生成主键和请求 ID，并在装载前去掉读取用的四个索引、装载后按目录里的定义重建，装载不再逐行维护它们。
+
 ## 决策与理由
 
 | 决策 | 理由 | 不选 |

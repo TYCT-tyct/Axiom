@@ -44,6 +44,8 @@ func (b *bank) keyUsage(scope pg.Scope, reset Reset) (u KeyUsage) {
 // limit's count is spent and reserved in the window of the key's reset. Days are placed at the edges of the windows, so
 // a window that starts a day early or late changes a sum.
 func TestReadKeyUsage(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	monday := today.AddDate(0, 0, -(int(today.Weekday())+6)%7)
@@ -82,6 +84,8 @@ func TestReadKeyUsage(t *testing.T) {
 // key's own counter of the same charges is not added; an account without a row has nothing; another account's row is
 // not visible.
 func TestReadFunds(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 700, -50, Config{})
 	a := b.admitted
 	old := uuid.NewV7()
