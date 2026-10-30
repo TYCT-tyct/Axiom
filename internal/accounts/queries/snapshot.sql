@@ -1,8 +1,9 @@
 -- name: ListSites :many
 -- The snapshot's tables, read whole in the platform scope (README.md「快照」). A session length of 0 is unset: the
 -- table's bounds keep a set one at 5 minutes or more.
-SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.currency, s.default_tier_id, s.login_domain,
-    t.new_key_daily_limit, coalesce(t.passkeys_enabled, false) AS passkeys_enabled,
+SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.currency, s.brand_color,
+    s.default_tier_id, s.logo_hash, s.login_domain, t.new_key_daily_limit,
+    coalesce(t.passkeys_enabled, false) AS passkeys_enabled,
     coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint AS console_idle_seconds,
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,

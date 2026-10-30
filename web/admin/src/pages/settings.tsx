@@ -10,6 +10,7 @@ import { Actions, Facts, PageBody, State } from "../parts";
 import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
 import { SiteRegistration } from "../registration";
 import { SiteSignIn } from "../sign-in";
+import { SiteLogo } from "../site-logo";
 
 type Settings = AdminSchemas["SiteSettings"];
 
@@ -34,6 +35,7 @@ export default function SettingsPage() {
           {(account) => (
             <>
               <SiteSettings siteId={account.site_id} />
+              <SiteLogo siteId={account.site_id} />
               <SiteKeyLimits siteId={account.site_id} />
               <SiteRegistration siteId={account.site_id} />
               <SiteSignIn siteId={account.site_id} />

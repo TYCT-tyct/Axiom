@@ -12,6 +12,7 @@ export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
+  logo: Schemas["SiteLogoView"];
   tiers: Schemas["TierRef"][];
   users: Schemas["UserSummary"][];
   accounts: Map<string, Schemas["AccountDetail"]>;
@@ -289,6 +290,7 @@ export function usualState(): AdminState {
       },
     },
     keyLimits: { limits: { max_keys: 20 }, effective: { max_keys: 20, creations_per_hour: 50 } },
+    logo: {},
     tiers,
     users,
     accounts: new Map([own, ...users].map((user) => [user.account_id, anAccount(user)])),

@@ -409,7 +409,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"notification_preferences": {"low_balance", "top_up", "factor_changed", "threshold", "webhook_url", "language"},
 		"user_notices":             {"email_done", "email_failed", "dispatched", "webhook_url", "webhook_state"},
 		"announcements":            {"withdrawn_at"},
-		"sites":                    {"name", "status", "key_prefix", "registration", "default_tier_id", "login_domain"},
+		"sites":                    {"name", "status", "key_prefix", "registration", "brand_color", "default_tier_id", "logo_hash", "login_domain"},
 		"site_domains":             {"disabled_at"},
 		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour", "registration_human_check", "registration_human_check_bits", "registration_domain_burst", "registration_domain_per_hour", "registration_domain_allow", "registration_domain_deny", "passkeys_enabled"},
 		"tiers":                    {"name", "rate_requests"},
@@ -512,8 +512,9 @@ func TestOnePolicyPerCommand(t *testing.T) {
 	for _, table := range []string{
 		"accounts", "announcements", "api_keys", "members", "notification_preferences", "oauth_flows", "passkey_credentials",
 		"password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes",
-		"registration_requests", "roles", "security_failures", "sessions", "site_domains", "site_oauth_providers",
-		"site_settings", "sites", "tiers", "user_identities", "user_notices", "users", "webauthn_flows", "workspaces",
+		"registration_requests", "roles", "security_failures", "sessions", "site_domains", "site_logos",
+		"site_oauth_providers", "site_settings", "sites", "tiers", "user_identities", "user_notices", "users",
+		"webauthn_flows", "workspaces",
 	} {
 		commands := "INSERT, SELECT, UPDATE"
 		if strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" ||
@@ -523,7 +524,7 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		if table == "user_identities" {
 			commands = "DELETE, INSERT, SELECT"
 		}
-		if table == "members" {
+		if table == "members" || table == "site_logos" {
 			commands = "INSERT, SELECT"
 		}
 		want = append(want, table+": "+commands)

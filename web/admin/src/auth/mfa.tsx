@@ -1,7 +1,6 @@
 import { MfaPage } from "@axiom/app";
-import { useTranslation } from "react-i18next";
+import { useAdminBrand } from "../brand";
 
 export default function Mfa() {
-  const { t } = useTranslation();
-  return <MfaPage brand={{ name: t("brandName") }} />;
+  return <MfaPage brand={useAdminBrand()} />;
 }

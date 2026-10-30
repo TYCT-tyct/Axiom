@@ -270,6 +270,7 @@ func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64,
 	if !ok {
 		out = tokensOf(p.ContentBytes, outputBytesPerToken)
 	}
+	out += min(max(p.ToolCalls, 0), maxCount) * billing.ToolCallTokens(tok)
 	out = min(out, outputCap)
 	return max(reply.Usage.OutputTotal(), out) - reply.Usage.Count(catalog.ItemReasoning) -
 		reply.Usage.Count(catalog.ItemAudioOut) - reply.Usage.Count(catalog.ItemImageOut)

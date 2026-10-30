@@ -17,9 +17,11 @@ import (
 type Tokenizer uint8
 
 // The tokenizers, by family. OpenAI publishes its own, which count a request's text exactly. Anthropic publishes none
-// for Claude 3 and later, so its two families are estimated from the text's shape (textshape) at weights measured
-// against its reported usage; so is every family's reply, which is tallied as it streams, where running a vocabulary
-// on every call would cost the call path for the few calls whose output goes unreported.
+// for Claude 3 and later, and every permissively licensed word list is the pre-Claude-3 one that Anthropic says is
+// inaccurate (docs/domains/billing.md 决策与理由, 2026-10-30), so its two families are estimated from the text's shape
+// (textshape) at weights measured against its reported usage; so is every family's reply, which is tallied as it
+// streams, where running a vocabulary on every call would cost the call path for the few calls whose output goes
+// unreported.
 const (
 	TokenizerNone Tokenizer = iota
 	// TokenizerO200k is OpenAI's o200k_base for GPT-4o, GPT-4.1, GPT-4.5, GPT-5, o1, o3 and o4.
@@ -122,6 +124,27 @@ var shapeWeights = [NumTokenizers]textshape.Weights{
 	TokenizerCl100k:   {75, 186, 96, 60, 268, 77, 200, 212, 95, 17},
 	TokenizerClaude:   {124, 153, 138, 66, 452, 74, 282, 260, 119, 14},
 	TokenizerClaude47: {152, 177, 140, 89, 452, 145, 282, 260, 138, 21},
+}
+
+// toolCallTokens is what each family's framework adds to a tool call beyond the name, arguments and input the text
+// estimate already counts. Messages and Chat tally a client tool's name and arguments but not the id, type, keys and
+// punctuation around them, which the shape has no text for. 45 is the conservative end of the measured 50 tokens one
+// tool call adds and 98 two (docs/domains/billing.md「用量来源与暂估」); OpenAI's name and arguments are already
+// tallied and no sample has measured what is left, so it adds nothing rather than a guess.
+var toolCallTokens = [NumTokenizers]int64{
+	TokenizerO200k:    0,
+	TokenizerCl100k:   0,
+	TokenizerClaude:   45,
+	TokenizerClaude47: 45,
+}
+
+// ToolCallTokens estimates the tokens one tool call's framework adds in family t's tokens; zero for a family whose
+// text already carries the call and for one without a measurement.
+func ToolCallTokens(t Tokenizer) int64 {
+	if t >= NumTokenizers {
+		return 0
+	}
+	return toolCallTokens[t]
 }
 
 // TextTokens estimates the tokens of bytes of text shaped like s in family t's tokens: s's own tokens per byte, at

@@ -27,6 +27,7 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 		"accounts.password_reset_cleanup": QueueArchive,
 		"accounts.registration":           QueueNotifications,
 		"accounts.registration_cleanup":   QueueArchive,
+		"billing.charge_corrections":      QueueMoney,
 		"billing.exchange_sync":           QueueSyncs,
 		"billing.expire_credit":           QueueMoney,
 		"billing.publish_prices":          QueueMoney,

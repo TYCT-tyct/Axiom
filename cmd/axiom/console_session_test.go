@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/pgtest"
 )
 
 // TestSessionCookie: signing in sets a session cookie a page cannot read and that only HTTPS carries.
@@ -210,6 +211,152 @@ func TestTwoStepVerificationStaysOn(t *testing.T) {
 	expect(t, "a recovery code from before", f.do(http.MethodPost, "/auth/mfa", `{"code":"`+codes[0]+`"}`, as(f.sessionOf(rec))), http.StatusOK, "")
 }
 
+// sessions lists the signed-in devices as s.
+func (f consoleFixture) sessions(s session) []consoleapi.SessionDevice {
+	f.t.Helper()
+	rec := f.do(http.MethodGet, "/sessions", "", as(s))
+	expect(f.t, "listSessions", rec, http.StatusOK, "")
+	var list consoleapi.SessionList
+	decode(f.t, rec, &list)
+	if list.Sessions == nil {
+		f.t.Fatal("the list has no sessions member")
+	}
+	return *list.Sessions
+}
+
+// sessionView is what the list decides about a device; presence of the other fields is checked on the way.
+type sessionView struct {
+	Current bool
+	Client  string
+	IPGroup string
+}
+
+func sessionViews(t *testing.T, devices []consoleapi.SessionDevice) []sessionView {
+	t.Helper()
+	views := make([]sessionView, 0, len(devices))
+	for _, device := range devices {
+		if device.Id == nil || *device.Id == "" || device.Current == nil || device.CreatedAt == nil || device.LastSeenAt == nil ||
+			device.Client == nil || device.IpGroup == nil {
+			t.Fatalf("a device is missing a field: %+v", device)
+		}
+		views = append(views, sessionView{Current: *device.Current, Client: *device.Client, IPGroup: *device.IpGroup})
+	}
+	return views
+}
+
+// TestSessionDevices: the list shows this user's live console sessions newest first with the grouped address and a
+// client summary, and marks the asking one.
+func TestSessionDevices(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	chrome := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+	f.signIn(ownerEmail, ownerPassword, header("User-Agent", chrome))
+	second := f.signIn(ownerEmail, ownerPassword, header("User-Agent", "curl/8.5.0"))
+	devices := f.sessions(second)
+	if len(devices) != 2 {
+		t.Fatalf("%d devices, want the two console sessions: %+v", len(devices), devices)
+	}
+	want := []sessionView{{Current: true, Client: "curl", IPGroup: "192.0.2.1"}, {Client: "Chrome on Windows", IPGroup: "192.0.2.1"}}
+	if diff := cmp.Diff(want, sessionViews(t, devices)); diff != "" {
+		t.Errorf("devices (-want +got):\n%s", diff)
+	}
+}
+
+// TestRevokeSession: the owner can end another session by ID; the asking session and a malformed ID are 404s and keep
+// the asking session signed in.
+func TestRevokeSession(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	first := f.signIn(ownerEmail, ownerPassword)
+	second := f.signIn(ownerEmail, ownerPassword)
+	devices := f.sessions(second)
+	var other, current string
+	for _, device := range devices {
+		if device.Current != nil && !*device.Current && device.Id != nil {
+			other = *device.Id
+		}
+		if device.Current != nil && *device.Current && device.Id != nil {
+			current = *device.Id
+		}
+	}
+	if other == "" || current == "" {
+		t.Fatalf("the listed devices have no other and current IDs: %+v", devices)
+	}
+	expect(t, "revokeSession", f.do(http.MethodDelete, "/sessions/"+other, "", as(second)), http.StatusNoContent, "")
+	expect(t, "the ended session", f.do(http.MethodGet, "/session", "", as(first)), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
+	expect(t, "the asking session", f.do(http.MethodGet, "/session", "", as(second)), http.StatusOK, "")
+	if len(f.sessions(second)) != 1 {
+		t.Error("the ended session is still listed")
+	}
+	expect(t, "ending the asking session", f.do(http.MethodDelete, "/sessions/"+current, "", as(second)), http.StatusNotFound, consoleapi.ErrorCodeNotFound)
+	expect(t, "a malformed ID", f.do(http.MethodDelete, "/sessions/nope", "", as(second)), http.StatusNotFound, consoleapi.ErrorCodeNotFound)
+	expect(t, "the asking session after the refusals", f.do(http.MethodGet, "/session", "", as(second)), http.StatusOK, "")
+}
+
+// TestRevokeOtherSessions: one call ends the other console sessions and leaves the asking one; a second call has
+// nothing to do.
+func TestRevokeOtherSessions(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	current := f.owner()
+	first := f.signIn(ownerEmail, ownerPassword)
+	second := f.signIn(ownerEmail, ownerPassword)
+	rec := f.do(http.MethodDelete, "/sessions", "", as(current))
+	expect(t, "revokeOtherSessions", rec, http.StatusOK, "")
+	var ended consoleapi.SessionRevocation
+	decode(t, rec, &ended)
+	if ended.Revoked == nil || *ended.Revoked != 2 {
+		t.Errorf("revoked: %+v, want 2", ended.Revoked)
+	}
+	expect(t, "the asking session", f.do(http.MethodGet, "/session", "", as(current)), http.StatusOK, "")
+	expect(t, "the first other session", f.do(http.MethodGet, "/session", "", as(first)), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
+	expect(t, "the second other session", f.do(http.MethodGet, "/session", "", as(second)), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
+	rec = f.do(http.MethodDelete, "/sessions", "", as(current))
+	expect(t, "revokeOtherSessions again", rec, http.StatusOK, "")
+	decode(t, rec, &ended)
+	if ended.Revoked == nil || *ended.Revoked != 0 {
+		t.Errorf("revoked on the second call: %+v, want 0", ended.Revoked)
+	}
+}
+
+// TestReplaceTotp: a session that passed two-step verification replaces the secret with a current code and a code from
+// the new secret; the old secret, old recovery codes and old session stop working and the response's session works.
+func TestReplaceTotp(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	old := f.owner()
+	oldSecret, verified, codes := f.totpSetup(old)
+	rec := f.do(http.MethodPost, "/auth/totp/setup", "", as(verified))
+	expect(t, "beginTotpSetup", rec, http.StatusOK, "")
+	var setup consoleapi.TotpSetup
+	decode(t, rec, &setup)
+	f.clock.Advance(30 * time.Second)
+	body := `{"secret":"` + setup.Secret + `","current_code":"` + totpCode(t, oldSecret, f.clock.Now()) + `","code":"` + totpCode(t, setup.Secret, f.clock.Now()) + `"}`
+	rec = f.do(http.MethodPost, "/auth/totp/replace", body, as(verified))
+	expect(t, "replaceTotp", rec, http.StatusOK, "")
+	var changed consoleapi.FactorChange
+	decode(t, rec, &changed)
+	if len(changed.RecoveryCodes) != 10 || changed.CsrfToken == "" {
+		t.Fatalf("factor change: %+v", changed)
+	}
+	replaced := session{rec.Result().Cookies()[0], changed.CsrfToken}
+	expect(t, "the session that replaced the factor", f.do(http.MethodGet, "/session", "", as(verified)), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
+	expect(t, "the session the response issued", f.do(http.MethodGet, "/session", "", as(replaced)), http.StatusOK, "")
+
+	rec = f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`)
+	pending := f.sessionOf(rec)
+	expect(t, "a code of the old secret", f.do(http.MethodPost, "/auth/mfa", `{"code":"`+totpCode(t, oldSecret, f.clock.Now())+`"}`, as(pending)), http.StatusUnauthorized, consoleapi.ErrorCodeInvalidCode)
+	rec = f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`)
+	expect(t, "an old recovery code", f.do(http.MethodPost, "/auth/mfa", `{"code":"`+codes[0]+`"}`, as(f.sessionOf(rec))), http.StatusUnauthorized, consoleapi.ErrorCodeInvalidCode)
+	f.clock.Advance(30 * time.Second)
+	rec = f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`)
+	expect(t, "a code of the new secret", f.do(http.MethodPost, "/auth/mfa", `{"code":"`+totpCode(t, setup.Secret, f.clock.Now())+`"}`, as(f.sessionOf(rec))), http.StatusOK, "")
+
+	other := newConsoleFixture(t)
+	passwordLevel := other.owner()
+	expect(t, "replacing with a password session", other.do(http.MethodPost, "/auth/totp/replace", body, as(passwordLevel)), http.StatusForbidden, consoleapi.ErrorCodeMfaRequired)
+}
+
 // TestLevelsAreEnforced: an operation that needs two-step verification refuses a session that proved only the
 // password, with the code that says why, before it looks at the body.
 func TestLevelsAreEnforced(t *testing.T) {
@@ -217,4 +364,25 @@ func TestLevelsAreEnforced(t *testing.T) {
 	f := newConsoleFixture(t)
 	rec := f.do(http.MethodPost, "/auth/recovery-codes", `{"code":"123456"}`, as(f.owner()))
 	expect(t, "regenerating with a password session", rec, http.StatusForbidden, consoleapi.ErrorCodeMfaRequired)
+}
+
+// TestReplaceTotpInternalError: a stored secret that cannot be opened is an internal error, not an invalid code, and
+// the session that tried stays signed in.
+func TestReplaceTotpInternalError(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	old := f.owner()
+	oldSecret, verified, _ := f.totpSetup(old)
+	if err := pgtest.Run(t.Context(), f.database.Superuser,
+		"UPDATE accounts.users SET totp_ciphertext = decode('00', 'hex') WHERE email = '"+ownerEmail+"'"); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.do(http.MethodPost, "/auth/totp/setup", "", as(verified))
+	expect(t, "beginTotpSetup", rec, http.StatusOK, "")
+	var setup consoleapi.TotpSetup
+	decode(t, rec, &setup)
+	f.clock.Advance(30 * time.Second)
+	body := `{"secret":"` + setup.Secret + `","current_code":"` + totpCode(t, oldSecret, f.clock.Now()) + `","code":"` + totpCode(t, setup.Secret, f.clock.Now()) + `"}`
+	expect(t, "replaceTotp with an unreadable secret", f.do(http.MethodPost, "/auth/totp/replace", body, as(verified)), http.StatusInternalServerError, consoleapi.ErrorCodeInternal)
+	expect(t, "the session after the internal error", f.do(http.MethodGet, "/session", "", as(verified)), http.StatusOK, "")
 }

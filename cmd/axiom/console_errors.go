@@ -78,6 +78,7 @@ var refusals = []refusal{
 	{accounts.ErrBadEmail, http.StatusUnprocessableEntity, codeUnprocessable, "not an email address"},
 	{accounts.ErrEmailTaken, http.StatusConflict, codeEmailTaken, "the email is already registered"},
 	{accounts.ErrTOTPOn, http.StatusConflict, codeConflict, "two-step verification is already on"},
+	{accounts.ErrTOTPOff, http.StatusConflict, codeConflict, "two-step verification is not on"},
 	{accounts.ErrTooManyKeys, http.StatusConflict, codeTooManyKeys, "the account may not make another key"},
 	{accounts.ErrTooManyAttempts, http.StatusTooManyRequests, codeRateLimited, "too many attempts"},
 	{accounts.ErrBusy, http.StatusServiceUnavailable, codeUnavailable, "busy, try again shortly"},

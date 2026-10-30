@@ -132,10 +132,11 @@
 - **图片、视频与缓存交叉统计**：输入的 `cached_tokens_details.image_tokens` 从图片量扣除，`video_tokens` 先并入图片量（OpenRouter《OpenAPI》`ChatUsage.prompt_tokens_details.video_tokens`「Video input tokens」，2026-10-19 读取）；明细必须不超过图片和缓存读总量，缓存图片与文本明细之和不超过缓存读。再把模态限制到 `max(总数 − 缓存读 − 缓存写, 0)` 中，先音频、后图片；无交集明细时也只收这个余量内的图片，不能把全缓存图片再收一次图片价。音频同理：`cached_tokens_details.audio_tokens` 不超过音频量，先从音频量扣除。`text_tokens` 是总量内的已知明细，只校验计数，不加入 `Unknown` 或额外收费。交集对象里其他未映射的成员（如 `cached_tokens_details.video_tokens`）已含在 `cached_tokens` 里，只记入 `Unknown` 供监控，计费不补收（`billing` 的 `unknownCost` 按路径 `.cached_tokens_details.` 判断）。输出侧没有视频项，`output/completion_tokens_details.video_tokens` 只校验为总量内的计数，已含在输出总量里，按普通输出收费。两种格式的 `input/prompt_tokens_details` 和 `output/completion_tokens_details` 别名均适用。
 - Anthropic 的缓存写入以顶层的 `cache_creation_input_tokens` 为准，它等于 `cache_creation` 里各项之和（Anthropic《Prompt caching》）。有 `cache_creation` 时断言 `ephemeral_5m_input_tokens + ephemeral_1h_input_tokens = cache_creation_input_tokens`，不等就是用量错误；没有时（流式的部分事件、只转发顶层字段的中转），按请求里的缓存断点归类：没有 `ttl:"1h"` 的断点，全部记 `cache_write`；有，就全部记 `cache_write_1h`，拆不开时取贵的一项。
 - 已核对（2026-10-14）：Gemini 的 `promptTokenCount` 包含缓存的内容（Gemini API《UsageMetadata》："this includes the number of tokens in the cached content"），所以 `input` 是两者之差；OpenAI Responses 的字段是 `usage.input_tokens_details.cached_tokens` 和 `cache_write_tokens`（OpenAI《Prompt caching》）。其余（联网搜索的计数字段、Gemini 按模态的明细是否包含缓存）由 `protocol` 实现这张表时按各家的接口参考核对，并写进它的测试：折算的代码在 `protocol`，本模块只接收 `Usage`。
-- **代码执行按次计**，是[计费的「定价」](../../docs/domains/billing.md#定价)列出的按次工具，缺价时用站点级默认单价（[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)），不进 `Unknown()`。厂商不按次收费：Anthropic 按容器的运行小时（每小时 $0.05，与联网搜索或网页抓取同用时免费），OpenAI 按 20 分钟的容器会话（按分钟计、最少 5 分钟），Gemini 只按 token（Anthropic、OpenAI、Gemini 的定价页，2026-10-14），用量里也没有时长；所以每次的单价是按这些计法折算的近似值。
+- **代码执行按次计**，是[计费的「定价」](../../docs/domains/billing.md#定价)列出的按次工具，缺价时用站点级默认单价（[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)），不进 `Unknown()`。厂商不按次收费：Anthropic 按容器的运行小时（每小时 $0.05，与 `web_search_20260209` / `web_fetch_20260209` 同用时免费），OpenAI 按 20 分钟的容器会话（按分钟计、最少 5 分钟），Gemini 只按 token（Anthropic、OpenAI、Gemini 的定价页，2026-10-14），用量里也没有时长；所以每次的单价是近似值。站点默认价取一小时容器价（$0.05）作为保守的上限：短调用会多收，超过一小时的调用会少收，模型知道自己的典型时长时应写自己的按次价；取 5 分钟最低价会低于多数调用的实际成本。
 - **不认识的用量**：上游报告了映射表里没有、数值不为零的用量字段时，`protocol` 把字段名和数量放进 `Usage.Unknown()`，不丢弃，也不归进已有的项。计费据此按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)处理：模型停止接受新请求，在途请求按兜底价暂估。
 - **服务等级**：`Usage` 的服务等级 是这次实际服务的等级，封闭枚举 `ServiceTier`（standard、flex、priority、fast），`protocol` 按每家的取值表从响应里读（OpenAI 的 `service_tier`，Anthropic 的 `usage.service_tier` 和快速模式，Gemini 待核对）；响应没有回报时取请求里明确写的等级，都没有就是标准档。认不出的取值同样放进 `Unknown()`，不猜成标准档：这时 `ServiceTier` 填标准档只是占位，`Unknown()` 不为空，计费就按「价目表缺项」处理，不只看 `Cost` 的结果。`UnknownUsage{Field, Value}` 是上游的字段路径和原样的取值：数量不一定是整数，等级是字符串，由计费解读。
-- **输出的三个口径**：`Usage.OutputTotal()` 是计量、预留的计费输出（普通、推理、音频、图片之和）；OpenAI 客户端总数也显式加这四项；billing 的免单判断单独检查普通、推理和图片，纯图片回复不免单，音频免单政策保持原状。不能由一个总数函数隐式决定所有政策。
+- **输出的三个口径**：`Usage.OutputTotal()` 是计量、预留的计费输出（普通、推理、音频、图片之和）；OpenAI 客户端总数也显式加这四项；billing 的免单判断检查普通、推理、音频和图片，纯图片或纯音频回复都不免单。不能由一个总数函数隐式决定所有政策。
+- **原生细项**：`NativeTokens` 是供应商报告的、没有自己计费项、已经含在计费总量里的拆分：`video_input`（输入视频，已计入 `image_in`）和 `accepted_prediction`/`rejected_prediction`（输出预测 token，已计入 `output`）。`WithNativeTokens` 逐项校验 0 … 10¹⁰，与 `WithPhysicalInput` 一样保留「报告过」的存在性（全零也是报告过，字段缺失不是）；它们只用于客户端回显（`native_tokens_*`）和 `final_usage` 的存储，`Cost` 不再计价，`Recount` 替换计费数量时原样保留，`HasNativeTokens` 区分缺失与全零。
 - Anthropic 联网搜索每千次 $10，搜索带回的内容按普通 token 计入输入（Anthropic Pricing 页，2026-10-14）。
 
 ### 条件
@@ -300,17 +301,21 @@ type ServiceTier uint8                 // 封闭枚举；不叫 Tier，那是账
 type ServiceTierSet = set[ServiceTier] // ServiceTier 的位集合；两种集合都有 Has、Add
 type Reportable struct{ Items ItemSet; ServiceTiers ServiceTierSet } // 上游可能报告的计费项和服务等级
 type PricePoint struct{ ServiceTier ServiceTier; Above int64; Item Item } // Above 是区间的下门槛，第一段为 0
-type Usage struct{ /* 各项数量、服务等级、不认识的用量，字段不导出 */ } // 只能经 NewUsage 构造
+type Usage struct{ /* 各项数量、服务等级、不认识的用量、物理输入、原生细项，字段不导出 */ } // 只能经 NewUsage 构造
 func NewUsage(q map[Item]int64, st ServiceTier, unknown []UnknownUsage) (Usage, error)
 func (u Usage) OutputTotal() int64
 func (u Usage) InputTotal() int64
 func (u Usage) PhysicalInput() (int64, bool)
 func (u Usage) WithPhysicalInput(int64) (Usage, error)
+func (u Usage) NativeTokens() NativeTokens // 已含在计费总量里、只回显的供应商拆分
+func (u Usage) HasNativeTokens() bool      // 供应商报告过这些拆分，全零也算；缺失不是零
+func (u Usage) WithNativeTokens(NativeTokens) (Usage, error)
 func (u Usage) Recount(map[Item]int64, []UnknownUsage) (Usage, error)
 func (u Usage) Count(it Item) int64     // 一项的数量：protocol 按它渲染客户端看到的用量，billing 的计量读已报告的数
 func (u Usage) ServiceTier() ServiceTier // 实际服务的等级，供应商记录扣费所报的等级
 func (u Usage) Unknown() []UnknownUsage // 映射表外的用量字段和认不出的服务等级，返回副本
 type UnknownUsage struct{ Field, Value string }
+type NativeTokens struct{ VideoInput, AcceptedPrediction, RejectedPrediction int64 } // 各有 JSON 标签，零值省略
 func ParseItem(name string) (Item, error)               // 存下的计费项名的反解，与 Item.String 互逆；认不出的报错
 func ParseServiceTier(name string) (ServiceTier, error) // 同上，服务等级
 

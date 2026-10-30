@@ -162,12 +162,38 @@ func TestImageOutputIsDeliveredAndMetered(t *testing.T) {
 	}
 }
 
+// TestAudioOutputIsOutput: a reply that delivered audio is not a zero-output reply even when it wrote no text, so it is
+// charged like any other delivered output; a reply that delivered no audio and no text with an error finish is still
+// waived.
+func TestAudioOutputIsOutput(t *testing.T) {
+	audio := usage(t, map[catalog.Item]int64{catalog.ItemAudioOut: 20})
+	at := AttemptResult{Result: Committed, Finish: FinishError, Segments: []Segment{{
+		Usage: audio, Reported: 1<<catalog.ItemOutput | 1<<catalog.ItemAudioOut,
+	}}}
+	if waivable(at) {
+		t.Fatalf("audio-only reply waived: %+v", at)
+	}
+	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"output":"1","audio_out":"10"}}`)
+	p, err := priceSegments(s, fallbacks{}, at.Segments, waivable(at), 0)
+	if err != nil || p.price != 200_000_000_000 || p.estimated {
+		t.Fatalf("price: %+v, %v", p, err)
+	}
+	silent := used(t, 50, 0, 0)
+	if !waivable(outcome(Committed, FinishError, silent).Attempts[0]) {
+		t.Fatal("a silent error finish is not waived")
+	}
+}
+
 func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
 	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, cacheWrite: 80, webSearch: 1}, catalog.ServiceTierStandard, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u, err = u.WithPhysicalInput(100); err != nil {
+		t.Fatal(err)
+	}
+	native := catalog.NativeTokens{VideoInput: 10, AcceptedPrediction: 2, RejectedPrediction: 1}
+	if u, err = u.WithNativeTokens(native); err != nil {
 		t.Fatal(err)
 	}
 	seg := Segment{Usage: u}
@@ -182,6 +208,9 @@ func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
 	}
 	if n, ok := decoded[0].Usage.PhysicalInput(); !ok || n != 100 {
 		t.Fatalf("lost physical input: %+v", decoded)
+	}
+	if got := decoded[0].Usage.NativeTokens(); got != native {
+		t.Fatalf("native tokens = %+v after storing, want %+v", got, native)
 	}
 	cost, _, err := segmentCost(s, decoded[0].Usage, true)
 	if err != nil || cost.Rat().RatString() != "1" {

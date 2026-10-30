@@ -88,7 +88,7 @@ func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 	if err != nil {
 		return event{}, err
 	}
-	out := event{role: skipped, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, usage: e.usage, final: e.final}
+	out := event{role: skipped, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, toolCalls: e.toolCalls, usage: e.usage, final: e.final}
 	if string(data) == sse.Done {
 		if !s.started || !s.finished {
 			return event{}, fmt.Errorf("%w: Chat ended without a finished choice", ErrUpstream)
@@ -246,7 +246,7 @@ func (s *chatToNative) start() error {
 	s.started = true
 	if s.client == Messages {
 		return s.emit("message_start", requestObject{"message": jsonValue(requestObject{
-			"id": jsonValue(s.o.ID), "type": jsonValue("message"), "role": jsonValue("assistant"), "model": jsonValue(s.o.Model),
+			"id": jsonValue(s.o.ID), "type": jsonValue("message"), "role": jsonValue("assistant"), "model": jsonValue(s.o.modelName()),
 			"content": jsontext.Value("[]"), "stop_reason": jsontext.Value("null"), "stop_sequence": jsontext.Value("null"),
 			"usage": jsontext.Value(`{"input_tokens":0,"output_tokens":0}`),
 		})})
@@ -312,7 +312,7 @@ func (s *chatToNative) failure(dst []byte, e Error, u catalog.Usage, cost string
 		return (*messagesStream)(nil).failure(dst, e, u, cost)
 	}
 	writer := &responsesStream{seq: s.seq - 1, created: s.published}
-	writer.id, writer.model = strconv.Quote(s.o.ID), strconv.Quote(s.o.Model)
+	writer.id, writer.model = strconv.Quote(s.o.ID), strconv.Quote(s.o.modelName())
 	return writer.failure(dst, e, u, cost)
 }
 

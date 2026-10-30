@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -58,14 +57,14 @@ type Usage struct {
 // Progress is what the relay has seen so far, for billing's meter after every step. ContentBytes are the text,
 // reasoning and tool input of the events read, unquoted, and Text the shape of the strings among them, whose tokens
 // per byte estimate the output a reply did not report; PartialBytes are the raw bytes read but not yet returned as
-// an event. Reported has the reply's counts reported so far, and Final those that are final: the input side once
-// reported, the rest from the format's last usage event on; until then an output count only bounds the output from
-// below (README.md「转发（草图）」).
+// an event; ToolCalls are the client tool calls begun, whose framing the estimate adds. Reported has the reply's
+// counts reported so far, and Final those that are final: the input side once reported, the rest from the format's
+// last usage event on; until then an output count only bounds the output from below (README.md「转发（草图）」).
 type Progress struct {
-	ContentBytes, PartialBytes, Searches int64
-	Text                                 textshape.Shape
-	Reported                             Segment
-	Final                                catalog.ItemSet
+	ContentBytes, PartialBytes, Searches, ToolCalls int64
+	Text                                            textshape.Shape
+	Reported                                        Segment
+	Final                                           catalog.ItemSet
 }
 
 // UsageContext carries the upstream request's metering context and the original client's reply contract.
@@ -83,9 +82,10 @@ type UsageContext struct {
 
 // RelayOptions are the gateway's values for one attempt.
 type RelayOptions struct {
-	// ID is the call ID, written in place of the upstream's ID for the reply; Model is the model name the client
-	// asked for (docs/domains/gateway.md「转发规则」).
-	ID, Model string
+	// ID is the call ID, written in place of the upstream's ID for the reply. Model is the name the client asked
+	// for; ActualModel, when set, is the model that served the call, which the reply names so a models fallback is
+	// visible (docs/domains/gateway.md「转发规则」).
+	ID, Model, ActualModel string
 	// Created is when the call started, in Unix seconds: the created of every chunk a Chat client gets from an
 	// upstream of another format, which has none of its own to give.
 	Created int64
@@ -97,12 +97,26 @@ type RelayOptions struct {
 	legacyFunctions bool
 }
 
+// modelName is the name a reply puts in its model member: the model that served it, or the requested name when the
+// gateway did not say.
+func (o RelayOptions) modelName() string {
+	if o.ActualModel != "" {
+		return o.ActualModel
+	}
+	return o.Model
+}
+
 // Final is what the ending reports: the usage and cost settled and whether that usage was estimated, or, when the
 // settlement could not be written, Pending and no cost (docs/domains/gateway.md「用量与费用」).
 type Final struct {
-	Usage              Usage
-	Cost               platform.Exact
-	Currency           platform.Currency
+	Usage    Usage
+	Cost     platform.Exact
+	Currency platform.Currency
+	// ServerToolCost is the settled sale price of the server tools the call ran, nil when none ran. It is a price the
+	// client paid, not what the tools cost us.
+	ServerToolCost *platform.Exact
+	// CacheDiscount is what cache reads saved against the input price.
+	CacheDiscount      platform.Exact
 	Estimated, Pending bool
 }
 
@@ -363,6 +377,7 @@ func (r *Relay) observe(e event) {
 	r.progress.ContentBytes += e.content
 	r.progress.Text.Merge(e.shape)
 	r.progress.Searches += e.searches
+	r.progress.ToolCalls += e.toolCalls
 	if e.usage || e.final {
 		r.meter.final = r.meter.final || e.final
 		r.progress.Reported, r.progress.Final = r.meter.progress()
@@ -548,7 +563,7 @@ func (r *Relay) Finish(f Final) []byte {
 	if r.state != upstreamDone {
 		return nil
 	}
-	usage, top := cost(&f), ""
+	usage, top := cost(&f, r.client), ""
 	if f.Pending {
 		top = `,"axiom":{"billing_pending":true}`
 	}
@@ -573,14 +588,32 @@ func (r *Relay) Finish(f Final) []byte {
 // costed is the held ending with the members usage added to its usage object and top to the event: an ending
 // without a usage object gets one.
 func (r *Relay) costed(usage, top string) []byte {
+	extra := ""
+	if r.client == Responses {
+		// Responses' usage object is written by the upstream, so it bypasses appendOpenAIUsage. Add the one member
+		// that is ours and that OpenRouter promises, as Chat's usage event already does. It describes the account,
+		// not the settlement, so pending usage carries it too even when there is no cost string.
+		extra = `,"is_byok":false`
+	}
 	at := r.usageAt
 	if at < 0 { // no usage object: the ending gets one
-		at, usage = bytes.LastIndexByte(r.ending, '}'), `,"usage":{`+strings.TrimPrefix(usage, ",")+"}"
+		at = bytes.LastIndexByte(r.ending, '}')
+		usage = `,"usage":{` + strings.TrimPrefix(usage, ",") + extra + "}"
+		extra = ""
 	} else if bytes.HasSuffix(bytes.TrimRight(r.ending[:at], " \t\r\n"), []byte("{")) {
-		usage = strings.TrimPrefix(usage, ",") // the usage object is empty
+		// The usage object is empty: no leading comma, and is_byok takes the one if no cost member does.
+		if usage = strings.TrimPrefix(usage, ","); usage == "" {
+			usage, extra = strings.TrimPrefix(extra, ","), ""
+		}
 	}
 	last := bytes.LastIndexByte(r.ending, '}') // the data is a JSON object, which ends with its brace
-	return slices.Concat(r.ending[:at], []byte(usage), r.ending[at:last], []byte(top), r.ending[last:])
+	out := make([]byte, 0, len(r.ending)+len(usage)+len(extra)+len(top))
+	out = append(out, r.ending[:at]...)
+	out = append(out, usage...)
+	out = append(out, extra...)
+	out = append(out, r.ending[at:last]...)
+	out = append(out, top...)
+	return append(out, r.ending[last:]...)
 }
 
 // reply is the reply's segment of u.
@@ -607,7 +640,7 @@ func (r *Relay) Fail(e Error, f *Final) []byte {
 	case r.agg != nil:
 		out = r.failAggregate(e, f, u)
 	case r.up != nil: // nil for a pair of formats not relayed
-		out = r.up.failure(r.endOut(), e, reply(u), cost(f))
+		out = r.up.failure(r.endOut(), e, reply(u), cost(f, r.client))
 	}
 	r.state = ended
 	if r.agg == nil {
@@ -622,19 +655,6 @@ func (r *Relay) endOut() []byte {
 		return r.out[:0]
 	}
 	return r.out
-}
-
-// cost is the members an ending's usage gets for f, each led by a comma: none without a settled cost.
-func cost(f *Final) string {
-	if f == nil || f.Pending {
-		return ""
-	}
-	amount := strings.TrimRight(strings.TrimRight(f.Cost.Rat().FloatString(15), "0"), ".")
-	s := `,"cost":` + amount + `,"cost_currency":"` + f.Currency.String() + `"`
-	if f.Estimated {
-		s += `,"cost_estimated":true`
-	}
-	return s
 }
 
 // KeepAlive returns the bytes that keep a client's stream of format f alive while the upstream sends nothing new:

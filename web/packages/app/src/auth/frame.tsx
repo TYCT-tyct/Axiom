@@ -1,12 +1,13 @@
-import { Button, Logo, PreferenceSwitches, usePageTitle } from "@axiom/ui";
+import { Button, Logo, PreferenceSwitches, useBrandStyle, usePageTitle } from "@axiom/ui";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { SignOutError } from "../parts";
 import { useSignOut } from "../session";
 
-// What names the site on a page of the app: its name and logo, which the app's site settings give (none yet: the
-// default). The admin is the platform's and has no site to name.
-export type Brand = { name?: string; logo_url?: string } | undefined;
+// What names the site on a page of the app: its name and logo, which the app's site settings give (none: the default),
+// and the console's brand colour. The console reads them from getSite and the admin from its public getAdminSite, both
+// before a session exists; the admin has no brand colour to read.
+export type Brand = { name?: string; logo_url?: string; brand_color?: string } | undefined;
 
 // AuthFrame is the page around a sign-in, two-step or registration form: the site's name and logo above, one form
 // below. It is its own page (main, heading, title), as the pages inside an app's shell are.
@@ -24,6 +25,7 @@ export function AuthFrame({
   children: ReactNode;
 }) {
   usePageTitle(title);
+  useBrandStyle(brand?.brand_color);
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 p-4 sm:px-6">

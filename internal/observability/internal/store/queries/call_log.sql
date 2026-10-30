@@ -6,7 +6,7 @@ INSERT INTO observability.call_log (id, at, site_id, account_id, workspace_id, k
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, language, used_tools, has_image,
     has_file, model, endpoint_id, source_class, egress, attempt_count, route, usage, service_tier, price_version, price_nano,
     cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, consent_version,
-    training_allowed)
+    training_allowed, streamed, physical_input)
 SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (r ->> 'account_id')::uuid,
     (r ->> 'workspace_id')::uuid, (r ->> 'key_id')::uuid, r ->> 'end_user_hash', (r ->> 'ip')::inet,
     r ->> 'client_app', r ->> 'session_id', r ->> 'subagent_id', r ->> 'app_referer', r ->> 'app_title',
@@ -16,7 +16,8 @@ SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (
     (r ->> 'route')::jsonb, r -> 'usage', r ->> 'service_tier',
     nullif(r ->> 'price_version', '')::uuid, (r ->> 'price_nano')::bigint, (r ->> 'cost_nano')::bigint, r ->> 'currency', (r ->> 'free_of_charge')::boolean,
     (r ->> 'latency_ms')::integer, (r ->> 'first_token_ms')::integer, r ->> 'finish_reason', r ->> 'error_kind',
-    r ->> 'consent_version', (r ->> 'training_allowed')::boolean
+    r ->> 'consent_version', (r ->> 'training_allowed')::boolean, (r ->> 'streamed')::boolean,
+    (r ->> 'physical_input')::bigint
 FROM jsonb_array_elements(@rows::jsonb) AS r
 ON CONFLICT (id, at) DO NOTHING;
 
@@ -27,7 +28,7 @@ ON CONFLICT (id, at) DO NOTHING;
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, physical_input
 FROM observability.call_log
 WHERE account_id = (@account_id::text)::uuid
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
@@ -83,7 +84,7 @@ LIMIT @group_limit;
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, physical_input
 FROM observability.call_log
 WHERE id = (@id::text)::uuid;
 
@@ -99,3 +100,31 @@ SELECT id::text AS id, at, site_id::text AS site_id, account_id::text AS account
     consent_version, training_allowed
 FROM observability.call_log
 WHERE id = (@id::text)::uuid;
+
+-- name: ActivityOwn :many
+-- One row per UTC day, model and, when asked, workspace: the sums OpenRouter's /activity reports. The price is the
+-- user's sale charge; the upstream's cost is not in this table's scope. A legacy row without a count contributes 0.
+SELECT to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date, model,
+    count(*)::bigint AS requests,
+    coalesce(sum(
+        CASE WHEN physical_input >= 0 THEN physical_input ELSE
+            coalesce((usage ->> 'input')::bigint, 0) + coalesce((usage ->> 'cache_read')::bigint, 0) +
+            coalesce((usage ->> 'cache_write')::bigint, 0) + coalesce((usage ->> 'cache_write_1h')::bigint, 0) +
+            coalesce((usage ->> 'audio_in')::bigint, 0) + coalesce((usage ->> 'image_in')::bigint, 0)
+        END), 0)::bigint AS prompt_tokens,
+    coalesce(sum(
+        coalesce((usage ->> 'output')::bigint, 0) + coalesce((usage ->> 'reasoning')::bigint, 0) +
+        coalesce((usage ->> 'audio_out')::bigint, 0) + coalesce((usage ->> 'image_out')::bigint, 0)), 0)::bigint AS completion_tokens,
+    coalesce(sum(coalesce((usage ->> 'reasoning')::bigint, 0)), 0)::bigint AS reasoning_tokens,
+    coalesce(sum(coalesce((usage ->> 'cache_read')::bigint, 0)), 0)::bigint AS cached_tokens,
+    coalesce(sum(price_nano), 0)::bigint AS usage_nano,
+    array_agg(id ORDER BY id)::uuid[] AS request_ids,
+    array_agg(price_nano ORDER BY id)::bigint[] AS request_prices,
+    CASE WHEN @group_workspace::boolean THEN workspace_id::text ELSE '' END AS workspace_id
+FROM observability.call_log
+WHERE account_id = (@account_id::text)::uuid
+    AND at >= @since AND at < @until
+    AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
+    AND (@key_id::text = '' OR key_id = nullif(@key_id, '')::uuid)
+GROUP BY date, model, CASE WHEN @group_workspace::boolean THEN workspace_id::text ELSE '' END
+ORDER BY date, model, workspace_id;

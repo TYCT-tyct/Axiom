@@ -56,6 +56,12 @@ type Site struct {
 	// client ID; a provider absent from the map is off.
 	Passkeys bool
 	OAuth    map[string]string
+	// BrandColor is the site's #rrggbb colour; empty means the default palette. The console derives both schemes from
+	// it (docs/frontend.md「主题与自由度」).
+	BrandColor string
+	// LogoHash is the SHA-256 of the logo the site currently serves, as its URL writes it; empty when it has none. The
+	// bytes are not in the snapshot: a logo page reads them by this hash, and only a cold fetch reaches the database.
+	LogoHash string
 	sessions map[Surface]lifetime
 	limits   limits
 }
@@ -179,6 +185,12 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 			return nil, fmt.Errorf("site %s: %w", site.ID.TypeID(), err)
 		}
 		site.Currency = currency
+		if r.BrandColor != nil {
+			site.BrandColor = *r.BrandColor
+		}
+		if len(r.LogoHash) != 0 {
+			site.LogoHash = fmt.Sprintf("%x", r.LogoHash)
+		}
 		if r.NewKeyDailyLimit != nil {
 			site.NewKeyDailyLimit = *r.NewKeyDailyLimit
 		}

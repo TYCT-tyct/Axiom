@@ -3,7 +3,7 @@ import { accountKey } from "@axiom/app";
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 // The calls the pages make, one place for each so a page and the change that alters its data agree on the key.
-// Everything is under accountKey, which the end of the session clears, and which a change invalidates as a whole: the
+// Account data is under accountKey, which the end of the session clears, and which a change invalidates as a whole: the
 // admin's data is small, and a change that leaves a list stale is worse than one that asks again.
 
 const pageSize = 50;
@@ -15,6 +15,14 @@ function nextCursor(page: { next_cursor: string | null }) {
 }
 
 const firstPage = undefined as string | undefined;
+
+// The site's public brand, for the sign-in pages and the shell. It is not account data: it must survive signing in,
+// which clears accountKey, and it is needed before there is a session. A logo change invalidates it explicitly.
+export const adminSiteQuery = queryOptions({
+  queryKey: ["admin-site"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/site`, { signal })),
+  staleTime: 30_000,
+});
 
 export const tiersQuery = queryOptions({
   queryKey: [accountKey, "tiers"],
@@ -166,6 +174,13 @@ export const siteSignInQuery = (siteId: AdminSchemas["SiteId"]) =>
     queryKey: [accountKey, "site-sign-in", siteId],
     queryFn: ({ signal }) =>
       unwrap(adminApi.GET(`${base}/sites/{site_id}/sign-in`, { params: { path: { site_id: siteId } }, signal })),
+  });
+
+export const siteLogoQuery = (siteId: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-logo", siteId],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/logo`, { params: { path: { site_id: siteId } }, signal })),
   });
 
 export const siteSettingsQuery = (siteId: AdminSchemas["SiteId"]) =>

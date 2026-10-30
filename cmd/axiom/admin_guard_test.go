@@ -61,6 +61,8 @@ var adminOperations = []adminOperation{
 	{"exchangeRateHistory", http.MethodGet, "/pricing/exchange-rates/USD/CNY", "", "pricing.view", false},
 	{"getSiteSettings", http.MethodGet, someSite, "", "sites.manage", false},
 	{"updateSiteSettings", http.MethodPut, someSite, `{"settings":{},"reason":"r"}`, "sites.manage", true},
+	{"getSiteLogoAdmin", http.MethodGet, strings.Replace(someSite, "/settings", "/logo", 1), "", "sites.manage", false},
+	{"updateSiteLogo", http.MethodPut, strings.Replace(someSite, "/settings", "/logo", 1), `{"reason":"r"}`, "sites.manage", true},
 	{"getSiteKeyLimits", http.MethodGet, strings.Replace(someSite, "/settings", "/key-limits", 1), "", "sites.manage", false},
 	{"updateSiteKeyLimits", http.MethodPut, strings.Replace(someSite, "/settings", "/key-limits", 1), `{"limits":{},"reason":"r"}`, "sites.manage", true},
 	{"getSiteSignIn", http.MethodGet, strings.Replace(someSite, "/settings", "/sign-in", 1), "", "sites.manage", false},
@@ -71,6 +73,8 @@ var adminOperations = []adminOperation{
 	{"updateSiteLoginLimits", http.MethodPut, strings.Replace(someSite, "/settings", "/login-limits", 1), `{"limits":{},"reason":"r"}`, "sites.manage", true},
 	{"getSiteRegistration", http.MethodGet, strings.Replace(someSite, "/settings", "/registration", 1), "", "sites.manage", false},
 	{"updateSiteRegistration", http.MethodPut, strings.Replace(someSite, "/settings", "/registration", 1), `{"policy":{"mode":"invite","human_check":true,"human_check_bits":18,"domain_burst":5,"domain_per_hour":30,"domain_allow":[],"domain_deny":[]},"reason":"r"}`, "sites.manage", true},
+	{"getSiteBrand", http.MethodGet, strings.Replace(someSite, "/settings", "/brand", 1), "", "sites.manage", false},
+	{"updateSiteBrand", http.MethodPut, strings.Replace(someSite, "/settings", "/brand", 1), `{"brand_color":"#335ddf","reason":"r"}`, "sites.manage", true},
 	{"setAccountSuspension", http.MethodPut, someAccount + "/suspension", `{"suspended":true,"reason":"r"}`, "users.manage", true},
 	{"setUserSignIn", http.MethodPut, "/users/user_00000000000000000000000000/sign-in", `{"disabled":true,"reason":"r"}`, "users.manage", true},
 	{"setPlatformGrant", http.MethodPut, "/users/user_00000000000000000000000000/platform-grants/admin", `{"revoked":true,"reason":"r"}`, "platform_grants.manage", true},
@@ -170,7 +174,9 @@ func TestAdminOperationsAreTheContracts(t *testing.T) {
 // tables above.
 func TestAdminTestsCoverTheContract(t *testing.T) {
 	t.Parallel()
-	covered := map[string]bool{"getversion": true, "signin": true} // public: they need no session to refuse
+	covered := map[string]bool{ // public: they need no session to refuse
+		"getversion": true, "signin": true, "getadminsite": true, "getadminsitelogo": true,
+	}
 	for _, op := range slices.Concat(adminOperations, adminSessionOperations) {
 		covered[strings.ToLower(op.name)] = true
 	}

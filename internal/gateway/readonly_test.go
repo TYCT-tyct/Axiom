@@ -100,6 +100,8 @@ var auxEndpoints = map[string]endpoint{
 	"key":          {http.MethodGet, "/api/v1/key", ""},
 	"credits":      {http.MethodGet, "/api/v1/credits", ""},
 	"generation":   {http.MethodGet, "/api/v1/generation?id=0198a8f0-0000-7000-8000-000000000000", ""},
+	"content":      {http.MethodGet, "/api/v1/generation/content?id=0198a8f0-0000-7000-8000-000000000000", ""},
+	"activity":     {http.MethodGet, "/api/v1/activity", ""},
 	"subscription": {http.MethodGet, "/v1/dashboard/billing/subscription", ""},
 	"usage":        {http.MethodGet, "/v1/dashboard/billing/usage?start_date=2026-10-01&end_date=2026-10-31", ""},
 }
@@ -389,6 +391,7 @@ func checkGeneration(t *testing.T, d map[string]any, id uuid.UUID) {
 	t.Helper()
 	for field, want := range map[string]any{
 		"id": id.String(), "model": "acme/alpha", "currency": "USD", "finish_reason": "stop", "app": "claude-code",
+		"streamed": false, "cancelled": false,
 	} {
 		if d[field] != want {
 			t.Errorf("%s: %v, want %v", field, d[field], want)
@@ -400,9 +403,13 @@ func checkGeneration(t *testing.T, d map[string]any, id uuid.UUID) {
 	if _, ok := d["api_type"]; ok { // the call record has no format, and the request class is not one
 		t.Errorf("api_type is shown: %v", d["api_type"])
 	}
+	if _, ok := d["native_tokens_prompt"]; ok {
+		t.Error("a call without a reported prompt total shows a native prompt")
+	}
 	for field, want := range map[string]float64{
 		"total_cost": 1.5, "tokens_prompt": 140, "tokens_completion": 25, "tokens_reasoning": 5, "tokens_cached": 40,
-		"latency": 300, "generation_time": 2500,
+		"native_tokens_completion": 25, "native_tokens_reasoning": 5, "native_tokens_cached": 40,
+		"native_tokens_completion_images": 0, "latency": 300, "generation_time": 2500,
 	} {
 		if !near(d[field], want) {
 			t.Errorf("%s: %v, want %v", field, d[field], want)
@@ -432,5 +439,60 @@ func TestGenerationRefusals(t *testing.T) {
 	}
 	if resp, _ := r.do(http.MethodPost, "/api/v1/key", a.key, nil); resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("POST /key: %d", resp.StatusCode)
+	}
+}
+
+// TestGenerationShowsHowTheCallRan: the generation endpoint reports whether the client streamed, whether it left
+// before the end, the session, and the provider's native token counts, with the prompt total only when the upstream
+// reported one.
+func TestGenerationShowsHowTheCallRan(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	id := uuid.NewV7()
+	r.callRow(a, id)
+	r.sql("UPDATE observability.call_log SET streamed = true, physical_input = 100, finish_reason = 'cancelled', " +
+		"session_id = 'session-7', usage = '{\"input\":60,\"cache_read\":40,\"output\":20,\"reasoning\":5,\"image_out\":3}' " +
+		"WHERE id = '" + id.String() + "'")
+	resp, body := r.do(http.MethodGet, "/api/v1/generation?id="+id.String(), a.key, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	d := data(t, body)
+	if d["streamed"] != true || d["cancelled"] != true || d["session_id"] != "session-7" {
+		t.Errorf("stream, cancellation or session: %v", d)
+	}
+	for field, want := range map[string]float64{
+		"native_tokens_prompt": 100, "native_tokens_completion": 28, "native_tokens_reasoning": 5,
+		"native_tokens_cached": 40, "native_tokens_completion_images": 3, "tokens_prompt": 100,
+	} {
+		if !near(d[field], want) {
+			t.Errorf("%s: %v, want %v", field, d[field], want)
+		}
+	}
+}
+
+// TestGenerationContentIsNotRetained: an existing call of the account has no content to show and says so; another
+// account's call is indistinguishable from one that does not exist.
+func TestGenerationContentIsNotRetained(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a, b := r.newAccount(1e9), r.newAccount(1e9)
+	mine, theirs := uuid.NewV7(), uuid.NewV7()
+	r.callRow(a, mine)
+	r.callRow(b, theirs)
+	resp, body := r.do(http.MethodGet, "/api/v1/generation/content?id="+mine.String(), a.key, nil)
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "content_not_available") {
+		t.Errorf("own call: %d %s", resp.StatusCode, body)
+	}
+	resp, body = r.do(http.MethodGet, "/api/v1/generation/content?id="+theirs.String(), a.key, nil)
+	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusNotFound || code != "generation_not_found" {
+		t.Errorf("another account's call: %d %s", resp.StatusCode, body)
+	}
+	for _, path := range []string{"/api/v1/generation/content", "/api/v1/generation/content?id=abc"} {
+		resp, body = r.do(http.MethodGet, path, a.key, nil)
+		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
+			t.Errorf("%s: %d %s", path, resp.StatusCode, body)
+		}
 	}
 }

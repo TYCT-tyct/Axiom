@@ -82,6 +82,66 @@ func (q *Queries) AssignChargeUnattributed(ctx context.Context, db DBTX, id uuid
 	return items, nil
 }
 
+const chargeEvents = `-- name: ChargeEvents :many
+SELECT e.id, e.charge_record_id, e.revision, e.created_at, e.payload, cr.usage,
+    cr.attempt_request_id, coalesce(cr.attempt_seq, 0)::smallint AS attempt_seq
+FROM suppliers.charge_events e
+JOIN suppliers.charge_records cr ON cr.id = e.charge_record_id
+WHERE (e.created_at, e.id) > ($1::timestamptz, $2::uuid)
+    AND cr.attribution = 'attempt' AND cr.attempt_request_id IS NOT NULL
+ORDER BY e.created_at, e.id
+LIMIT $3
+`
+
+type ChargeEventsParams struct {
+	AfterAt time.Time
+	AfterID uuid.UUID
+	Max     int32
+}
+
+type ChargeEventsRow struct {
+	ID               uuid.UUID
+	ChargeRecordID   uuid.UUID
+	Revision         int32
+	CreatedAt        time.Time
+	Payload          []byte
+	Usage            []byte
+	AttemptRequestID *uuid.UUID
+	AttemptSeq       int16
+}
+
+// The events billing has not consumed yet, with the charge's stored usage and the event's attribution. A record that
+// is not attributed to an attempt has nothing for billing to correct, and the join drops charges that were reattributed
+// away. The cursor is (created_at, id), so an event is never read twice and a late one is still read.
+func (q *Queries) ChargeEvents(ctx context.Context, db DBTX, arg ChargeEventsParams) ([]ChargeEventsRow, error) {
+	rows, err := db.Query(ctx, chargeEvents, arg.AfterAt, arg.AfterID, arg.Max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChargeEventsRow
+	for rows.Next() {
+		var i ChargeEventsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChargeRecordID,
+			&i.Revision,
+			&i.CreatedAt,
+			&i.Payload,
+			&i.Usage,
+			&i.AttemptRequestID,
+			&i.AttemptSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const delistEndpoint = `-- name: DelistEndpoint :execrows
 UPDATE suppliers.endpoints SET cost_state = 'unknown', cost_state_reason = 'under_estimated'
 WHERE id = $1 AND cost_state = 'known' AND cost_schedule_id = $2
@@ -128,6 +188,42 @@ func (q *Queries) EnabledSupplierCurrencies(ctx context.Context, db DBTX) ([]Ena
 		return nil, err
 	}
 	return items, nil
+}
+
+const getChargeEvent = `-- name: GetChargeEvent :one
+SELECT e.id, e.charge_record_id, e.revision, e.created_at, e.payload, cr.usage,
+    cr.attempt_request_id, coalesce(cr.attempt_seq, 0)::smallint AS attempt_seq
+FROM suppliers.charge_events e
+JOIN suppliers.charge_records cr ON cr.id = e.charge_record_id
+WHERE e.id = $1 AND cr.attribution = 'attempt' AND cr.attempt_request_id IS NOT NULL
+`
+
+type GetChargeEventRow struct {
+	ID               uuid.UUID
+	ChargeRecordID   uuid.UUID
+	Revision         int32
+	CreatedAt        time.Time
+	Payload          []byte
+	Usage            []byte
+	AttemptRequestID *uuid.UUID
+	AttemptSeq       int16
+}
+
+// One event by id, for a correction that was not ready when it was first read. The same attribution rule applies.
+func (q *Queries) GetChargeEvent(ctx context.Context, db DBTX, id uuid.UUID) (GetChargeEventRow, error) {
+	row := db.QueryRow(ctx, getChargeEvent, id)
+	var i GetChargeEventRow
+	err := row.Scan(
+		&i.ID,
+		&i.ChargeRecordID,
+		&i.Revision,
+		&i.CreatedAt,
+		&i.Payload,
+		&i.Usage,
+		&i.AttemptRequestID,
+		&i.AttemptSeq,
+	)
+	return i, err
 }
 
 const holdOverdueCharges = `-- name: HoldOverdueCharges :many
@@ -495,6 +591,19 @@ func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUn
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockChargeEvents = `-- name: LockChargeEvents :exec
+SELECT pg_advisory_xact_lock(hashtext('axiom charge events'))
+`
+
+// Charge events and their consumer share this transaction lock. A producer keeps it from before inserting the event
+// until commit, and the consumer takes it before reading its cursor, so an event cannot commit behind a cursor it
+// would be older than. The event's timestamp is the insertion's clock_timestamp, after the lock, not now(), the
+// transaction's start. A test holds one transaction's lock while another tries to write.
+func (q *Queries) LockChargeEvents(ctx context.Context, db DBTX) error {
+	_, err := db.Exec(ctx, lockChargeEvents)
+	return err
 }
 
 const matchCharges = `-- name: MatchCharges :many

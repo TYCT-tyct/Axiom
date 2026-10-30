@@ -19,7 +19,7 @@
 
 ### 表（schema `accounts`）
 
-迁移 `00009_scope_once.sql` 将全部范围策略改为 [pg 的 InitPlan 表达式](../platform/pg/README.md#决策与理由)，包括密码找回请求和令牌，保留终态与到期清理条件。
+迁移 `00009_scope_once.sql` 将全部范围策略改为 [pg 的 InitPlan 表达式](../platform/pg/README.md#决策与理由)，包括密码找回请求和令牌，保留终态与到期清理条件。迁移 `00020_session_devices.sql` 为 `sessions` 增加按用户、监听面和创建时间过滤有效行的并发索引 `sessions_live_of_user`，供设备列表和批量撤销使用。
 
 - 主键 `id uuid`，由 Go 生成 UUIDv7。金额是 `bigint`，单位同[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)。`status` 取 `active` / `disabled`。
 - 类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。站点数据的表用 `site_id`、账户数据的表用 `(site_id, account_id)` 与 [pg 的 InitPlan 范围参数](../platform/pg/README.md#决策与理由)比较；`sites` 自己用 `id` 当 `site_id`，`accounts` 用 `id` 当 `account_id`。
@@ -27,8 +27,9 @@
 
 | 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
 |---|---|---|---|---|
-| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed / open；默认 invite，开放注册默认关闭）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变；`getSite` 也把它交给页面），`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
+| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed / open；默认 invite，开放注册默认关闭）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变；`getSite` 也把它交给页面），`brand_color`（可空，`#rrggbb` 小写，空表示默认配色），`default_tier_id`（不为空）、`logo_hash`（当前 logo 的 SHA-256，可空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查；`(id, logo_hash) → site_logos(site_id, hash)` | 站点 | `name`、`status`、`key_prefix`、`registration`、`brand_color`、`default_tier_id`、`logo_hash` |
 | `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
+| `site_logos` | `site_id`、`hash`（SHA-256，32 字节）、`content_type`（image/svg+xml / image/png / image/webp）、`width`、`height`（像素，SVG 没有固有尺寸时为 0）、`bytes`（1 到 256 KiB）、`created_at` | 主键 `(site_id, hash)`；`0 ≤ width, height ≤ 1024`；同类字节只有一行，地址与内容一一对应 | 站点 | 无（只插入；旧行保留，`sites.logo_hash` 选择当前行） |
 | `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts`；开放注册的 `registration_human_check`、`registration_human_check_bits`、`registration_domain_burst`、`registration_domain_per_hour`、`registration_domain_allow`、`registration_domain_deny` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值。另有可空的 `max_keys_per_account`、`key_creations_per_hour`（站点的 key 限额，各 1 到 1 万，由 `/key-limits` 读改，不在站点设置的整体替换里） | 站点 | 全部参数列 |
 | `tiers` | `site_id`、`name`、`rate_requests` | `UNIQUE (site_id, id)` | 站点 | `name`、`rate_requests` |
 | `roles` | `name`、`permissions text[]`、`additional_permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`、`additional_permissions`（M1 只经迁移） |
@@ -181,6 +182,7 @@
 - 第三方登录与通行密钥的表：`site_oauth_providers`（每站点每 provider 一行，client secret 以 `secret.Sealed` 四个字段信封加密，`UNIQUE (site_id, provider)`）、`user_identities`（`UNIQUE (site_id, provider, subject)` 与 `UNIQUE (user_id, provider)`，只按 provider 的 subject 匹配）、`passkey_credentials`（`credential_id` 全局唯一，`sign_count` 限 0 到 4294967295，每人最多 10 个）、`oauth_flows`（state 与登录 nonce 只存 SHA-256、10 分钟过期、一次性）和 `webauthn_flows`（kind register/sign_in/mfa、5 分钟过期、一次性，登记发起时的 RP ID 和 origin；`sign_in` 不带用户和账户，其余带会话）。`passkey_tenant(bytea)` 是登录前的查找函数，只返回凭据所属的站点、账户和用户。
 - 站点、域名、站点设置、角色各是一份不可变的值，用 `atomic.Pointer` 整体替换。只有一个后台循环重载：每 30 秒无条件重载一次（本进程写这些表的接口加入时，再加写后标记"需要重载"），覆盖别的节点和命令行的修改；循环串行，旧值不会覆盖新值。平台的变更通知（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）做好后也触发重载，30 秒的兜底仍保留：快照不决定能否访问，滞后只影响价格页和参数。
 - **快照不决定能否访问**：域名和站点的启用、注册策略在库里判定，平台授予每个请求读库。快照只用来预筛没登记的域名（快照里没有就直接拒，省一次查库）、匿名价格页和计价预览按站点默认等级（`Site.DefaultTier`）选规则、尝试上限等参数、角色的权限集合。
+- 站点快照带着当前 logo 的 hash（`Site.LogoHash`，没有时为空），不带宽高和字节：`getSite` 只拼公开地址，图片请求才按 hash 读库。旧 logo 的行不会因为换图而删除，所以已经发出的地址继续有效。
 - 站点快照还带着本站 API 域名的 origin（`Site.APIBase`，没有启用的 API 域名时为空；有多个时优先 HTTPS，同协议取 origin 最小的那个，快照每 30 秒重载，地址不能因此变来变去）：控制台用它告诉用户把客户端指向哪里（[API key](../../docs/domains/accounts.md#api-key)「接入地址」）。它只是给界面看的地址，和准入、计价无关。
 - 超过 90 秒（3 个周期）没有成功重载，所有请求返回 503，直到重载成功；启动时第一次加载失败就不启动。
 
@@ -196,15 +198,15 @@
 | 登录 | 邮箱 + 密码；GitHub、Google、LinuxDO；通行密钥；第二因素为 TOTP、恢复码或通行密钥 | 邮箱验证码 |
 | 找回密码 | `axiom user set-password`（从标准输入读） | 控制台邮件链接（已实现） |
 | 第一个用户 | `axiom site init`、`axiom user create`、`axiom user grant-platform`（见下文「命令行」） | — |
-| 认证因素 | 开启 TOTP、重建恢复码、增删通行密钥、绑定/解绑第三方身份 | 关闭或更换 TOTP 待实现，仍可经命令行 `reset-mfa` |
-| 会话管理 | 退出 | 设备列表、踢掉一台、退出全部 |
+| 认证因素 | 开启、更换 TOTP，重建恢复码，增删通行密钥，绑定/解绑第三方身份；控制台改密码 | 关闭 TOTP（仍可经命令行 `reset-mfa`） |
+| 会话管理 | 退出、设备列表、踢掉一台、退出全部 | — |
 
 - **邀请码注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。邮箱规范化（去空白、转小写）后须是 3 到 254 个可打印 ASCII 字符、`@` 两侧各有字符，且必须通过 `net/mail.ParseAddress`、解析地址等于输入，否则 `ErrBadEmail`：表的约束（`lower()`、`LIKE`）在各地区设置下对非 ASCII 的判断不一定与 Go 一致，放进库再被拒会变成 500；国际化邮箱地址 M1 不支持。不用站点或平台范围包住注册。
 - **开放注册**：`Register` 先用 `domain_site` 和 `registration_site` 在库里确认站点、默认等级和模式；open 时校验邮箱、站点域名名单和 `proofWorked`，再检查本节点能发信、按邮箱域名扣一次共享计数，在站点范围按 `(site_id, email_hash)` upsert `registration_requests` 并入队 `accounts.registration`。待验证行不保存口令：初次提交即使带了口令也不使用，点击链接时才提交、校验并算 argon2id。提交一律返回 202；已注册地址也走同一条路径，直到点击链接才由 `UserEmailTaken` 发现并返回 `ErrEmailTaken`。后台 `process` 用 `TenantTx` 锁待验证行，按请求记录的 `domain` 找仍启用的 HTTPS 控制台域名，生成 256 位令牌、只存 SHA-256、写 `token_hash` 并把邮件入 outbox，然后同事务提交；重投任务看到 `token_hash` 已写就不重复发。`SetSiteRegistration` 在同一事务写站点模式和设置并记 `site_registration.update`；审计只存域名名单的数量与 SHA-256，不复制整份名单，保证 100 项的合法配置也不会超过审计条目 8 KiB 上限。`VerifyEmail` 先花一次该 IP 的认证预算，再用 `registration_tenant` 定位并做未过期、域名名单的廉价检查，校验新口令并在锁外算 argon2id，再在站点范围锁行，核对未过期、令牌哈希和当前域名名单（不重查注册模式；站点停用后链接失效），创建用户、账户、默认工作区、余额行、所有者成员关系，写 `email_verified_at`、删行、记 `security.registration`，全部同事务；不签发会话。令牌未知、过期、已用或别站统一 `ErrInvalidVerification`；邮箱已被占用返回 `ErrEmailTaken` 并删行。
 - **认证因素的一条规则**：`users.factor_version` 是密码、TOTP、恢复码这一组的版本。签发会话、消费一次性因素、修改因素的事务，先锁用户行 `SELECT … FROM users WHERE id = $u FOR UPDATE`（邮件重置先锁请求行，再锁用户；所有涉及请求的路径同序），在锁内核对用户启用和版本；修改因素的事务在同一把锁内把版本加一。会话有效 = 未撤销、未过期、未超空闲、用户启用、版本等于用户当前版本，每个请求读会话时同一条查询一起核对；恢复码只在版本相等且未用过时可用。
 - **密码登录**：argon2id，参数写进 PHC 串（M1 取 OWASP 的基线：19 MiB、2 遍、1 线程；以后提高参数，旧哈希照样能验）；密码 12 到 256 个字符；邮箱不存在也算一次假哈希。先在事务外读出哈希和版本并计算，再开签发事务，锁内版本没变且用户启用才签发。
 - **两步验证**：开了 TOTP 的用户密码通过后先拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口）。验证事务：锁用户行 → 核对待验证会话未撤销、未过期、版本相等、尝试次数未满 → 验码（TOTP 做 `totp_last_step < $step` 的条件更新，恢复码做条件消费，影响行数都必须为 1）→ 码不对只把尝试次数加一并提交（每个待验证会话的次数是站点的 `challenge_code_attempts`） → 码对就条件撤销待验证会话，签发新令牌、新 CSRF 令牌的 `mfa` 会话。用户行锁让一个挑战只换出一个会话。
-- **修改认证因素**：开启 TOTP 要重新输入密码并用新密钥的一个码确认，只对还没开启的用户：已开启的在用户行锁内拒绝（`ErrTOTPOn`），版本、密钥、恢复码、会话都不变，更换和关闭是 M2 的事；已有通行密钥的用户还必须在本次会话证明过通行密钥（`mfa`），从密码或管理后台会话开启会被拒绝，避免只拿到密码的人新增一个管理后台能完成的第二因素；重建恢复码要一个当前的 TOTP 码，错码计入每用户的失败次数。两者都加版本，为当前设备签发新的 `mfa` 会话，并在同一事务里记审计 `user.totp_enable`、`user.recovery_codes_regenerate`（操作者和对象都是这个用户，带站点和个人账户，不记密钥和恢复码）：审计写不进，因素、恢复码和新会话一起回滚。TOTP 密钥用 `secret.Keyring.Seal` 封装，`Location` 是 `{accounts.users, 用户 ID 的标准 UUID 写法, totp}`，`Sealed` 的四个字段存进 `users` 的四个 `totp_` 列；`BeginTOTP` 只生成密钥和 `otpauth` 链接，不存库，确认时客户端把密钥带回。TOTP 按 RFC 6238（HMAC-SHA1、30 秒、6 位），接受前后各一个步长，同一步长只用一次。恢复码 10 个、各 80 位，写成 `xxxx-xxxx-xxxx-xxxx`，不分大小写、忽略连字符，只存 SHA-256。
+- **修改认证因素**：开启 TOTP 要重新输入密码并用新密钥的一个码确认，只对还没开启的用户：已开启的在用户行锁内拒绝（`ErrTOTPOn`），版本、密钥、恢复码、会话都不变；已有通行密钥的用户还必须在本次会话证明过通行密钥（`mfa`），从密码或管理后台会话开启会被拒绝，避免只拿到密码的人新增一个管理后台能完成的第二因素；重建恢复码要一个当前的 TOTP 码，错码计入每用户的失败次数；更换 TOTP 走 `ReplaceTOTP`，要求非待验证的控制台 `mfa` 会话、当前 TOTP 码或未用恢复码，还要新密钥的一个码，因素未开启返回 `ErrTOTPOff`。三者都加版本，为当前设备签发新的 `mfa` 会话，并在同一事务里记审计 `user.totp_enable`、`user.recovery_codes_regenerate`、`user.totp_replace`（操作者和对象都是这个用户，带站点和个人账户，不记密钥和恢复码）：审计写不进，因素、恢复码和新会话一起回滚。当前因素码在换密钥的同一事务里消费，失败时恢复码仍可用。TOTP 密钥用 `secret.Keyring.Seal` 封装，`Location` 是 `{accounts.users, 用户 ID 的标准 UUID 写法, totp}`，`Sealed` 的四个字段存进 `users` 的四个 `totp_` 列；`BeginTOTP` 只生成密钥和 `otpauth` 链接，不存库，确认和更换时客户端把密钥带回。TOTP 按 RFC 6238（HMAC-SHA1、30 秒、6 位），接受前后各一个步长，同一步长只用一次。恢复码 10 个、各 80 位，写成 `xxxx-xxxx-xxxx-xxxx`，不分大小写、忽略连字符，只存 SHA-256。
 - **Cookie 与 CSRF**：`__Host-axiom_session`（HttpOnly、Secure、SameSite=Lax、Path=/），库里只存令牌的 SHA-256。所有会改数据的请求，包括登录、注册、两步验证：`Origin` 必须完全等于该站点该监听面登记的 `origin`，缺失或 `null` 拒绝；`Content-Type: application/json`，接口不开放 CORS；有会话的再核对 `X-CSRF-Token`。登记的源是 `http://localhost` 时 Cookie 才不带 `__Host-` 和 `Secure`，由登记决定、不看请求头。认证相关的响应 `Cache-Control: no-store`。
 - **参数**：默认值只在代码里。按站点的（会话时长：控制台空闲 7 天、最长 30 天，管理后台 30 分钟、12 小时；下表的尝试上限；新 key 的每日上限）存在 `site_settings`，经 `GET/PUT /api/admin/v1/sites/{site_id}/settings` 读改，要敏感权限并记审计；按节点的资源上限用 `AXIOM_*` 环境变量。
 
@@ -213,6 +215,12 @@
 第三方登录的 provider 端点、scope、PKCE 能力和用户信息字段在 `oauth.go` 的 `oauthProviders`；GitHub 只取数字 `id`，Google 取 `sub`，LinuxDO 取 `id`，`display_name` 只作展示。`StartOAuth` 先确认 Host 是站点的登录域名、provider 已配置并取一次 IP 预算，再生成 S256 PKCE、32 字节 state（256 位）和登录流程专用的 32 字节 nonce，把 state 与 nonce 的 SHA-256、verifier、provider、回调和（绑定时）会话/用户写进 `oauth_flows`，nonce 同时放进 `__Host-axiom_oauth`（HttpOnly、Lax、10 分钟），返回 provider 的授权地址。`CompleteOAuth` 在登录域名上重建站点、核对回调 Cookie 里的 nonce（登录流程必须有且相等），再消费 state（单次、未过期、provider 一致），用存下的回调地址换 token，`Authorization: Bearer` 读 userinfo；只有已绑定的 subject 才签发会话，未知 subject 返回 `ErrAccountNotLinked`。绑定流程要求发起时是已验证的登录会话，回调必须带回同一会话和用户；成功后插入 `user_identities`、提升 factor_version、撤销并重签当前会话，写 `user.identity_link` 审计。解绑删除身份、提升版本、重签会话并写 `user.identity_unlink`。
 
 通行密钥用 `github.com/go-webauthn/webauthn` 做协议层。`passkeySite` 从快照取登录域名和它的登记 origin 作为 RP ID/RPOrigins，且要求站点开启 `passkeys_enabled`；注册用 `BeginRegistration`（排除已有凭据、要求 UV 和 resident key），登录用 `BeginDiscoverableLogin`（不先问邮箱），第二因素用 `BeginLogin`（只允许该用户的凭据）。三者都把 challenge、RP ID/origin 和流程写进 `webauthn_flows`，finish 时单次消费并核对 kind、站点、会话、用户和账户；没有行或已消费都返回 `ErrPasskeyFailed`。`FinishPasskeyRegistration` 要求当前密码、已验证会话、名称合法且未超过 10 个；验证后在一个站点锁 + 用户锁的事务里重读当前开关和登录域名，与仪式登记的 RP ID/origin 不一致就拒绝，再存公钥、提升 factor_version、重签 `mfa` 会话并写 `user.passkey_add`。`DeletePasskey` 同样要求密码和已验证会话，删除、提升版本、重签并写 `user.passkey_remove`；两个密码核对都走用户的失败桶。`usePasskey` 拒绝 `CloneWarning`，并用条件更新只接受严格向前的计数器（0 只在库中也是 0 时接受），同一计数器的并发断言只有一个能写入。数据库触发器拒绝为有通行密钥的用户写入控制台 `password` 会话，也拒绝未经通行密钥证明的新 TOTP（新节点在锁内证明后设置事务级标记）；迁移会吊销这类已有会话，滚动发布中旧节点既不能用密码、也不能用后台自建 TOTP 绕过。登录和第二因素失败都返回 `ErrPasskeyFailed`，第二因素失败还花一次 `security.mfa` 的尝试次数。
+
+### 会话设备与撤销
+
+`Sessions` 读 p 的实时控制台会话，对应 `ListSessions` 和迁移 00020 的 `sessions_live_of_user` 索引：按创建时间倒序最多 100 条，套用与 `ValidSession` 相同的未撤销、未过期、未超空闲、用户启用和因素版本条件，并排除 `pending_mfa`（它还不是已登录设备）。返回 `SessionDevice`：`ID`、`Current`、`CreatedAt`、`LastSeenAt`、`IPGroup` 和 `Client`。`IPGroup` 用 `clientip.Group`，即 IPv4 原样、IPv6 取 /64，和登录预算同一分组；`Client` 由 `clientSummary` 只认固定记号，给出“Chrome on macOS”这类摘要，原始 User-Agent 不返回页面。
+
+`RevokeSession` 和 `RevokeOtherSessions` 只动 p 自己、同站点、控制台的会话，套用列表的有效性条件，并始终排除当前会话：单条不存在、已结束、别人的、别的监听面或当前会话都返回 `ErrNotFound`（HTTP 404），批量返回实际结束数。撤销只写 `revoked_at`，不改因素版本；批量把 `pending_mfa` 也一起结束，因为拿着密码但没过第二因素的登录不应在用户选择退出其他设备后继续。两者都在写 `revoked_at` 的同一事务里记审计：`session.revoke` 以会话为对象，`session.revoke_others` 以用户为对象并在 detail 里记 `revoked`；没有实际结束时批量不写审计。失败、越权和审计拒绝都整体回滚。测试见 `devices_test.go` 和控制台的 `console_session_test.go`。
 
 ### 邮件找回和改密码
 
@@ -236,7 +244,7 @@
 | 每 IP 的登录、注册、两步验证、找回密码 | 令牌桶，突发 20 次、每分钟 10 次，按（站点, IP）计 | `ip_attempt_burst`、`ip_attempts_per_minute` |
 | 每邮箱域名的开放注册 | 令牌桶，突发 5 次、每小时 30 次，按（站点, 小写域名）计；域名的子域名各自计数 | `registration_domain_burst`、`registration_domain_per_hour` |
 | 每邮箱的登录失败、找回请求（各自计数） | 每 15 分钟 10 次，按（站点, 规范化邮箱）计，不存在的邮箱也计；超出后等待，不锁账户 | `email_sign_in_failures` |
-| 每用户的 TOTP、恢复码失败 | 每小时 10 次，跨待验证会话累计，重建恢复码的错码也计 | `user_code_failures` |
+| 每用户的 TOTP、恢复码失败 | 每小时 10 次，跨待验证会话累计，重建恢复码和更换 TOTP 的错码也计 | `user_code_failures` |
 | 每个待验证会话 | 5 次，计在 `sessions.mfa_attempts` | `challenge_code_attempts` |
 | argon2id 并发 | `GOMAXPROCS` 个，排队超过 2 秒返回 `ErrBusy`（503）；请求在排队时结束就带它自己的错误返回 | 按节点：`Config.HashConcurrency`、`HashWait` |
 | key 未命中查库 | 每 IP 令牌桶加全局并发 32，超出返回 503 和 `Retry-After` | — |
@@ -288,6 +296,8 @@
 | 一个用户同一平台角色只有一条有效授予 | 部分唯一索引 `platform_grants_held` + `ON CONFLICT DO NOTHING`；测试：两条授予同时开始（授予表被锁住直到两条都在等待），只留一条授予、一条审计 |
 | 主站的币种是 `USD` | `InitSite` 写库前核对；测试：EUR 被拒，没有任何写入（核对在事务之前） |
 | 站点的币种不可改 | `axiom_app` 对 `sites.currency` 没有 `UPDATE` 权限；`Money` 的币种由它决定 |
+| 站点 logo 的类型、尺寸和字节数在入库前受约束 | `site_logos` 的 CHECK；解析器只接受 SVG、PNG、WebP，PNG 解码头部核对尺寸，WebP 先限制尺寸，再完整解码校验，SVG 重建后的字节不超过 256 KiB；测试覆盖脚本、事件属性、外部引用、DTD、超限尺寸和不可读文件 |
+| 当前 logo 一定属于本站点，且旧地址不变 | `(id, logo_hash) → site_logos(site_id, hash)` 复合外键；地址里的 SHA-256 就是内容的哈希，行只插入不更新；测试换图后旧 hash 仍读出原字节 |
 | 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，数据库拒绝审计时开启失败，因素、恢复码、会话都没有留下 |
 | 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
 | 快照不决定能否访问 | 站点、域名的状态和注册策略在库里判定；测试：只停用域名，另一个 `Service` 的准入、会话、登录、注册立即被拒；重载持续失败 90 秒后全部 503 |
@@ -301,8 +311,11 @@
 | 函数 | 做什么 |
 |---|---|
 | `ReadSystemSettings`、`SetSystemSettings` | 站点名称与 invite/closed 注册策略，读写既有 sites 行；站点行锁内读前值、修改和审计，写后由组装层刷新快照。后台客服/运维的新增权限通过迁移 00017 的 additional_permissions 保持旧节点兼容 |
+| `ReadSiteBrand`、`SetSiteBrand` | 站点品牌色，空表示默认配色；只接受 `#rrggbb`（大写转小写），否则 `*SettingError{brand_color}`，站点不存在是 `ErrNotFound`。写入在站点行锁内读旧值、更新 sites.brand_color、审计 `site_brand.update`；写后由组装层刷新快照 |
 | `SiteSettings`、`SetSiteSettings` | 读、整体替换站点自己的会话时长和新 key 的每日上限；没设的列是空，用代码里的默认（`DefaultSiteSettings`）。越界是 `*SettingError`（名字是接口里的字段名），站点不存在是 `ErrNotFound`。替换在站点行锁里做，审计条目 `site_settings.update` 记改前和改后的值，改前就是被替换的值 |
 | `SiteLoginLimits`、`SetSiteLoginLimits` | 独立 `/login-limits` 读写现有五项阈值，空值选择 `DefaultLoginLimits`；站点锁内读旧值、替换、审计，与其他站点设置互不覆盖；写后刷新，其余节点 30 秒内重载 |
+| `CurrentSiteLogo`、`SetSiteLogo` | 读当前 logo（没有时 nil）；`SetSiteLogo` 在站点行锁内解析并校验、插入 `site_logos`、更新 `sites.logo_hash`，`data` 为 nil 表示清除；`*SettingError` 是文件被拒，`ErrNotFound` 是站点不存在。审计 `site_logo.update` 只记 hash、类型、尺寸和字节数。写后由组装层刷新快照 |
+| `SiteLogoByHash` | 公开读：按站点和 hash 取一行，当前的和旧的都能取到；hash 已由 URL 校验为 32 字节，读在平台范围，不依赖快照的当前指针 |
 | `SetAccountSuspended`、`SetUserSignInDisabled` | 分开控制调用和登录，前者复用准入同一条查询里的账户状态，后者在用户锁内吊销全部会话，恢复均不修改因素 |
 | `UserPlatformGrants`、`SetPlatformGrantRevoked` | 列表各角色最后状态，撤销终态不回退；恢复要求历史授予且权限为操作者当前平台角色权限的子集，插入新行并记录 granted_by；按用户锁串行 |
 | `Refresh` | 立即重载快照。改了站点设置的节点调用它；别的节点在重载间隔内（30 秒）跟上 |
@@ -311,6 +324,7 @@
 | `Users` | 用户列表，新的在前，键集分页（上一页最后一个用户的 ID），可按站点、按邮箱前缀筛。前缀按字面匹配（`%`、`_` 不是通配符）、不分大小写，用 `users_email_prefix`（`text_pattern_ops`）的索引。创建时间取自 UUIDv7 的时间戳（ID 的顺序就是创建的顺序，没有 `created_at` 列） |
 | `Account` | 账户、等级、主人；账户没有成员时是 `ErrNotFound`（账户总有主人） |
 
+- **站点 logo 的解析与发送**：`logo.go` 的 `ParseLogo` 是唯一的解析入口，返回重建后的字节、类型、宽高和 SHA-256；`SetSiteLogo` 只存这个结果。PNG 用标准库的 `png.DecodeConfig` 读头；WebP 先用 `golang.org/x/image/webp` 的 `DecodeConfig` 限制画布尺寸，再完整解码，SVG 用 `encoding/xml` 逐个 token 重建：允许的元素和属性各是一张表，值里的 `href` 只能是本文件的 `#id`，`fill`/`stroke` 等只接受颜色或本文件的 `url(#id)`，`style`、事件属性和外部命名空间全部丢弃，DTD 直接拒绝。HTTP 层只按 `ContentType` 选生成的响应类型，并设置 `Cache-Control: public, max-age=31536000, immutable`；`Content-Type` 和 `Content-Length` 由生成代码写，`X-Content-Type-Options: nosniff` 由前端中间件统一加。
 - **权限**：管理接口权限（含 `calls.search`、`calls.inspect`、`audit.view`）（均在 `authorize.go` 声明，迁移 `00006` 给内置角色）：`users.view`、`suppliers.view`、`catalog.view`、`pricing.view`（非敏感）；`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage`（敏感，要做过两步验证的会话）。内置角色（迁移后）：
 
   | 角色 | 权限 |
@@ -333,6 +347,7 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) // cfg: 平台范围、
 func (s *Service) Load(ctx context.Context, logger *slog.Logger) error // 站点、域名、设置、角色的快照；核对权限名；启动重载循环
 func (s *Service) SiteForHost(host string) (Site, Surface, error) // Host 原样（小写、非默认端口带端口）；ErrUnknownHost、ErrStale
 func (s *Service) Origin(host string) (string, error) // 该域名登记的 origin（含协议和端口），服务端拼链接时用，不用请求头里的 Origin；错误同上
+func (s *Service) SiteLogoByHash(ctx context.Context, site SiteID, hash [32]byte) (*Logo, error) // 公开读取，当前或旧的 hash；ErrNotFound
 func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r KeyRequest) (CreatedKey, error)
 func (s *Service) DeleteKey(ctx context.Context, tx pg.Tx, actor audit.Actor, key KeyID) error
 func (s *Service) AuthenticateKey(ctx context.Context, site SiteID, raw string) (Caller, error) // 只认出，不判定能否使用

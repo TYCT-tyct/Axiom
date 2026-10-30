@@ -98,12 +98,12 @@
 - **推理开关与展示分开**：缺省保留模型默认，显式关闭在转换时写成 Messages 的 thinking disabled 或 Responses 的 effort none；`reasoning.exclude:true` / Messages 的 thinking display omitted 只隐藏输出，推理仍计入用量和费用。本站在计量之后过滤，适用于同格式、跨格式、流式和非流式；Chat 不返回两个推理明文字段，details 只保留置空 text 的签名条目及密文，摘要不返回；三种格式均保留续聊状态。只给展示参数时不补写 thinking 模式，纯隐藏 Chat 块不在提交前积压。预算与 effort 的映射、近似和模型能力边界见 [protocol 换算表](../../internal/protocol/README.md#推理控制与换算)。
 - **Chat 回复的推理文本写两个字段，内容相同**：`reasoning`（OpenRouter 的名字）和 `reasoning_content`（new-api、DeepSeek 的名字，不少客户端读它），未要求隐藏时，流式的每一块、非流式的消息里都是；带签名和密文的 `reasoning_details` 照旧。客户端读哪个都行；代价是推理文本多发一份，只在模型推理时发生。依据见「决策与理由」。Chat 端点只写其中一个名字时（DeepSeek 写 `reasoning_content`，OpenRouter 写 `reasoning`），另一个由本站按同样的文本补上；两个都有文本的块不动。
 - **响应头按白名单放行**：只返回内容类型、我们自己的调用编号、我们计算的限流和重试信息。上游的 `x-request-id`、`openai-organization`、`cf-ray`、`server` 等会暴露上游身份的头一律删除；唯一的例外是上游铸造的 `x-codex-turn-state`，它只在作答的那次尝试的上游设了它时回传，客户端自己发的值不回显——那是厂商给下一轮的凭据，换一个出来没有意义。
-- **自己回显**：响应里的 `id` 用我们的调用编号，`model` 回显客户端请求的名字。
+- **自己回显**：响应里的 `id` 用我们的调用编号，`model` 写实际服务的模型（备选 `models` 或别名解析之后），不是客户端请求的原名；供应商仍然不暴露。
 
 ### 用量与费用
 
-- **每次调用都返回用量和费用**：输入、输出、缓存读、缓存写、推理 token 和费用，与 OpenRouter 的用量统计对齐（OpenRouter《Usage Accounting》，2026-10）。
-- **流式输出放在最后一个事件里**：Chat 格式的最后一块带一个空内容的选项，避免客户端崩溃（与 OpenRouter 一致）。费用在回答结束前结算好再发出，字段是 `usage.cost` 和 `usage.cost_currency`；用量来自估算的另带 `usage.cost_estimated: true`，标出这次收费建立在估算上；M1 不按供应商记录校正它（见[计费的「用量来源与暂估」](billing.md#用量来源与暂估)）。
+- **每次调用都返回用量和费用**：输入、输出、缓存读、缓存写、推理 token 和费用，与 OpenRouter 的用量统计对齐（OpenRouter《Usage Accounting》，2026-10）。Chat/Responses 的用量块另带 `prompt_tokens_details` 的音频/视频、`completion_tokens_details` 的音频/接受/拒绝预测 token、`server_tool_use_details` 和 `is_byok:false`；`usage.cost_details.server_tool_cost` 只写按次工具的用户售价，供应商成本不写。用量块里的 `cache_discount` 是缓存读相对输入价省下的用户售价，只在为正时出现。
+- **流式输出放在最后一个事件里**：Chat 格式的最后一块带一个空内容的选项，避免客户端崩溃（与 OpenRouter 一致）。费用在回答结束前结算好再发出，字段是 `usage.cost` 和 `usage.cost_currency`；用量来自估算的另带 `usage.cost_estimated: true`，标出这次收费建立在估算上；供应商的完整记录到了以后由暂估校正冲正并重结，响应里已发出的数字不追改（见[计费的「用量来源与暂估」](billing.md#用量来源与暂估)）。
 - **Chat 端点报的用量**：按 OpenAI 的口径映射（`prompt_tokens` 含缓存的 token，`completion_tokens` 含推理的 token，缓存读写和图片的 token 只算一次，不在输入里再算一遍）。DeepSeek 把缓存命中写在 `prompt_cache_hit_tokens`（与 `prompt_cache_miss_tokens` 之和等于 `prompt_tokens`），`prompt_tokens_details.cached_tokens` 缺失或为 0、而命中数大于 0 时，命中数就是缓存读；两者都大于 0 时以 `cached_tokens` 为准，不比较是否相等。这和 new-api 一样（`relay/channel/openai/usage.go` 的 `applyUsagePostProcessing`）；两个名字都不当作额外的用量，否则会按未知 token 再收一遍。用量块可以在带内容的最后一块里（DeepSeek），也可以是没有选项的单独一块（OpenAI、Qwen）。
 - **结算写不进时**：上游已经正常结束、内容完整的，照常结束，但结尾不带费用，改带 `axiom.billing_pending: true`，非流式同样返回 200；费用由后台继续结算，在调用记录里查。只有被截断的流才以 `billing_unavailable` 报错结束。
 - **流开始前就出错也可能收费**（例如已执行的联网搜索，见[计费的「免单规则」](billing.md#免单规则)）：错误体的 `axiom` 对象里带用量和费用。
@@ -282,10 +282,12 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | `GET /v1/dashboard/billing/subscription`、`GET /v1/dashboard/billing/usage` | OpenAI 旧版的余额接口。new-api 用它查询 OpenAI 类型渠道的余额：余额 = `hard_limit_usd` 减去以 0.01 为单位的 `total_usage`；`usage` 的 `total_usage` 是累计消费，不看 `start_date`、`end_date`（new-api 源码，2026-10） |
 | `GET /api/v1/key` | key 的上限、剩余额度、各时间窗口的用量（OpenRouter 格式），供兼容 OpenRouter 的工具使用 |
 | `GET /api/v1/credits` | 账户余额（OpenRouter 格式），供兼容 OpenRouter 的工具使用 |
-| `GET /api/v1/generation?id=` | 按调用编号查询单次调用的详情 |
+| `GET /api/v1/generation?id=` | 按调用编号查询单次调用的详情（含 `native_tokens_*`、`streamed`、`cancelled`、`cache_discount`、`session_id`） |
+| `GET /api/v1/generation/content?id=` | OpenRouter 的内容接口；本站不保存对话内容，属于本账户的调用也返回 404 `content_not_available`，别人的调用按 `generation_not_found` 处理 |
+| `GET /api/v1/activity?date=&api_key_hash=&workspace_id=&group_by=workspace` | 最近 30 个完整 UTC 日的按日/模型用量，`api_key_hash` 用 key UUID，`user_id` 不支持；今天的调用不进结果，未完成的当天不算；金额读当前结算的实收（校正后），输入优先用写入的物理输入；官方要求管理 key，Axiom 的调用 key 可读本账户（同 `/credits` 的 M1 偏离，见[决策](#决策与理由)） |
 
 - **单位**：这些接口里的金额都以本站的记账货币计。二级站点用人民币记账时，对方会把数字当美元显示，这在站点的接入说明里写明。
-- **余额与用量**：`total_credits` 和旧版的 `hard_limit_usd` 是余额加累计消费，`total_usage` 是累计消费（旧版接口以 0.01 为单位，不看日期参数），所以额度减用量总是余额；在途预留不扣。`generation` 只读调用记录，行为见上文「用量与费用」的调用编号。
+- **余额与用量**：`total_credits` 和旧版的 `hard_limit_usd` 是余额加累计消费，`total_usage` 是累计消费（旧版接口以 0.01 为单位，不看日期参数），所以额度减用量总是余额；在途预留不扣。`generation` 只读调用记录，行为见上文「用量与费用」的调用编号；`activity` 从同一份调用记录按 UTC 日聚合，只覆盖最近 30 个完整日；金额再按请求编号读 billing 的当前实收，所以校正后的调用不会继续显示旧快照，输入统计优先用物理输入，历史缺失时才用计费项之和。
 - **`POST /v1/messages/count_tokens`** 返回估算的输入 token 数（`{"input_tokens": n}`），口径、前置检查和理由见[模块 README](../../internal/gateway/README.md#辅助接口)；它不收费、不记录。
 
 ### Responses 的会话状态
@@ -374,6 +376,8 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | 开始转发内容之前不发保活 | 此时还可能换端点；提前发出任何字节，状态码就无法再改 |
 | 402 区分上限来源，只有暂时性的带 `Retry-After` | 与 OpenRouter 一致；客户端据此判断该等待重试还是去充值 |
 | 计费类问题不返回 401，避开自动禁用措辞，并写成测试 | 把我们当上游的 new-api 收到 401 或特定措辞会自动禁用渠道，临时问题会被放大成停用 |
+| 生成查询补原生 token、流式/取消/会话，内容接口不保存内容；活动按日与模型汇总 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落实 #319 P10/P11。对照 [OpenRouter 生成查询](https://openrouter.ai/docs/api/api-reference/generations/get-request-&-usage-metadata-for-a-generation)、[内容](https://openrouter.ai/docs/api/api-reference/generations/get-stored-prompt-completion-and-error-content-for-a-generation)、[活动](https://openrouter.ai/docs/api/api-reference/analytics/get-user-activity-grouped-by-endpoint) 和[官方 OpenAPI](https://openrouter.ai/docs/openapi/openapi.yaml)（2026-10-30）。原生 prompt 取调用写入时已存的物理输入（迁移 `00012_streamed.sql`），不从缓存读写反推，避免把重叠的 token 相加；内容接口对已有调用也返回 404 `content_not_available`，因为 observability 有意不保存对话内容，新增留存面需要单独的产品决定；活动只算最近 30 个完整 UTC 日，`endpoint_id` 写零、`provider_name` 写 Axiom，避免暴露端点与货源，`api_key_hash` 暂按 key UUID 接受而官方是 SHA-256（keys API 未暴露该哈希），这是已记下的偏离。独立评审仍由流水线执行 |
+| 响应 `model` 写实际服务的模型，用量只暴露用户售价 | #319 P11 与 OpenRouter 的 [model fallbacks](https://openrouter.ai/docs/guides/routing/model-fallbacks) 和 [Usage Accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting)（2026-10-30）：`models` 回退后回显请求名会让客户端以为原模型回答，故 `RelayOptions.ActualModel` 由 routing 解析后的条目给出；`cost_details.server_tool_cost` 只写按次工具售价，`cache_discount` 按锁定输入价与缓存读价之差计算，均不含供应商成本。`is_byok` 固定 `false`，因为 Axiom 没有用户自带 key；字段为兼容保留。独立评审仍由流水线执行 |
 | 本地插件在准入前压缩、在聚合后修复 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P1/E2-7。比较在上游执行与本站执行，选择纯本地：避免上游静默忽略；比较按端点重复压缩与准入前按主模型压缩，选后者让路由、报价、用量暂估和发送正文一致，不改计费契约，不引入依赖或外部服务。默认压缩作为可选优化失败即保留原请求，显式开启才执行严格的字节预算，避免以预留上界缩小默认请求的可服务范围。代价和偏离见「插件与提示词变换」；独立评审由流水线安排 |
 | 扩展字段放在独立的 `axiom` 对象 | 不与 OpenRouter 的字段冲突 |
 | 提供 OpenAI 旧版和 OpenRouter 格式的余额接口 | 第一版范围要求支持其他中转站接入（见产品需求）。new-api 查询 OpenAI 类型渠道时用前者；查询 OpenRouter 渠道时写死访问 openrouter.ai，所以后者只服务兼容 OpenRouter 的工具 |
@@ -391,7 +395,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | Chat 端点只写一个推理名字时，本站补另一个 | 「转发规则」的 Chat 回复写两个名字是负责人 2026-10-18 的决定，对 Chat 上游同样适用，否则 DeepSeek 的客户端读得到、OpenRouter 的客户端读不到；补在流的每一块里，聚合的整份回复自然两个都有 |
 | 跨格式时缓存标记按 OpenRouter 转换，表达不了的丢掉，不拒绝请求 | 负责人在对话中授权开发者按推荐自行决定。CONTRIBUTING「产品设计」要求对齐 OpenRouter：它把文本块的 `cache_control` 转成 OpenAI 的 `prompt_cache_breakpoint`，TTL 不转（OpenRouter《Prompt caching》，2026-10-16）。拒绝会让带缓存标记的 Chat 请求到不了任何 Responses 端点；标记不改变模型读到的内容，收费按上游报告的实际缓存用量，丢掉只影响命中率，不会算错钱 |
 | 结算写不进时，内容完整的照常结束、不带费用、带 `billing_pending`；只有截断的才报 `billing_unavailable` | 不发出没入账的费用，也不让客户端把已完成的一轮当失败重发、付两次。没选一律报 `billing_unavailable`：主库切换时，整批在途的请求会被客户端重发、重复收费 |
-| `/responses/compact` 的回复原样透传、请求只做最小改写：请求带 `stream: true` 回 400，结算写不进时响应体里也不加 `axiom.billing_pending` | 回复是上游的整份回复，不是我们生成的流：加任何字段就不再是原样，客户端按上游的格式读它；这个端点只给整份回复。请求则不能原样：模型名要换成端点的名字（否则上游拒绝，或按别的模型计费），`user`、`safety_identifier`、`prompt_cache_key` 要换成派生值（上文「会话和用户标识换成派生值」），路由参数要删除；生成才用的成员（`store`、`include`、输出上限、`stream`）不加也不改，空闲超时与预算照旧。费用只在调用记录里查，M1 没有校正（上文「用量与费用」）。不选在透传的 JSON 里插字段或为压缩请求再拼一份生成请求的改写：前者改了上游的回复，后者要猜它接受哪些成员 |
+| `/responses/compact` 的回复原样透传、请求只做最小改写：请求带 `stream: true` 回 400，结算写不进时响应体里也不加 `axiom.billing_pending` | 回复是上游的整份回复，不是我们生成的流：加任何字段就不再是原样，客户端按上游的格式读它；这个端点只给整份回复。请求则不能原样：模型名要换成端点的名字（否则上游拒绝，或按别的模型计费），`user`、`safety_identifier`、`prompt_cache_key` 要换成派生值（上文「会话和用户标识换成派生值」），路由参数要删除；生成才用的成员（`store`、`include`、输出上限、`stream`）不加也不改，空闲超时与预算照旧。费用只在调用记录里查；它是暂估时同样由供应商记录校正（上文「用量与费用」）。不选在透传的 JSON 里插字段或为压缩请求再拼一份生成请求的改写：前者改了上游的回复，后者要猜它接受哪些成员 |
 
 ## 待定问题
 

@@ -79,6 +79,15 @@ func (s sessionOps) regenerateCodes(ctx context.Context, cl call, code string) (
 	})
 }
 
+// replaceTOTP replaces the second factor; the old secret, the old recovery codes and the user's other sessions end.
+func (s sessionOps) replaceTOTP(ctx context.Context, cl call, secret, currentCode, code string) (factorChange, error) {
+	return s.changed(cl, func() (accounts.Issued, []string, error) {
+		return s.accounts.ReplaceTOTP(ctx, cl.principal, accounts.FactorChange{
+			Secret: secret, CurrentCode: currentCode, Code: code, ClientIP: cl.ip, UserAgent: cl.r.UserAgent(),
+		})
+	})
+}
+
 func (s sessionOps) changed(cl call, change func() (accounts.Issued, []string, error)) (factorChange, error) {
 	issued, codes, err := change()
 	if err != nil {
