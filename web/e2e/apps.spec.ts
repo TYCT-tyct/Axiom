@@ -42,6 +42,24 @@ for (const app of apps) {
   });
 }
 
+test("the website lists models and prices and filters them in the address", async ({ page }) => {
+  await mockConsole(page);
+  await page.goto(`${apps[0].url}models`);
+  await expect(page.getByRole("heading", { level: 1, name: "模型与价格" })).toBeVisible();
+  const table = page.getByRole("table", { name: "模型与价格" });
+  await expect(table.getByRole("row")).toHaveCount(5);
+
+  await page.getByLabel("模型").fill("openai/gpt-5");
+  await page.getByRole("button", { name: "筛选" }).click();
+  await expect(page).toHaveURL(/q=openai%2Fgpt-5/);
+  await expect(table.getByRole("row")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "重置" }).click();
+  await expect(table.getByRole("row")).toHaveCount(5);
+  await table.getByRole("button", { name: "详情" }).first().click();
+  await expect(page.getByRole("table", { name: /gpt-5/ })).toBeVisible();
+});
+
 test("the website's buttons open the console", async ({ page }) => {
   signedInAs(await mockConsole(page));
   await page.goto(apps[0].url);

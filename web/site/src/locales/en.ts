@@ -2,6 +2,9 @@ import type { Messages } from "@axiom/ui";
 import type zh from "./zh";
 
 export default {
+  home: "Home",
+  navigation: "Main navigation",
+  models: "Models & prices",
   signIn: "Sign in",
   hero: {
     title: "One key for every major model",

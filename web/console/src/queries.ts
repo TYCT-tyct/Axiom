@@ -70,9 +70,56 @@ export const keysQuery = (filters: KeyFilters = {}) =>
     getNextPageParam: nextCursor,
   });
 
+// The public models and prices page. The console asks the account-priced projection, so a user sees the price a call
+// would be charged at; the website asks the public one.
+export type ModelFilters = {
+  q?: string;
+  author?: string;
+  ability?:
+    | "tools"
+    | "images"
+    | "documents"
+    | "reasoning"
+    | "prompt_cache"
+    | "structured_output"
+    | "web_search"
+    | "code_execution";
+};
+
+export const modelsQuery = (filters: ModelFilters) =>
+  queryOptions({
+    queryKey: [accountKey, "models", filters],
+    queryFn: ({ signal }) =>
+      unwrap(consoleApi.GET("/api/console/v1/models/account", { params: { query: filters }, signal })),
+  });
+
 // What the call list can be narrowed by; an empty field does not narrow. The cursor is only good for the filters it was
 // given with, so the filters are part of the key.
-export type CallFilters = { since?: string; until?: string; model?: string; client_app?: string };
+export type CallFilters = {
+  since?: string;
+  until?: string;
+  model?: string;
+  client_app?: string;
+  key_id?: string;
+  workspace_id?: string;
+  status?: "success" | "error";
+  request_id?: string;
+};
+export type CallGroupBy = "day" | "model" | "key";
+
+// The summary of the same filters, grouped for the page. It covers at most 31 days and defaults to the last 30, so its
+// window is shown beside the table.
+export const callAggregateQuery = (filters: CallFilters, groupBy: CallGroupBy) =>
+  queryOptions({
+    queryKey: [accountKey, "calls", "aggregate", filters, groupBy],
+    queryFn: ({ signal }) =>
+      unwrap(
+        consoleApi.GET("/api/console/v1/calls/aggregate", {
+          params: { query: { ...filters, group_by: groupBy } },
+          signal,
+        }),
+      ),
+  });
 
 export const callsQuery = (filters: CallFilters) =>
   infiniteQueryOptions({
