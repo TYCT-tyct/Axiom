@@ -184,7 +184,7 @@ billing 在账本写入同事务记余额变化 journal（含变动前后余额�
 
 ## 后台系统设置
 
-`/api/admin/v1/sites/{site_id}/system-settings` 读取和整体替换站点名称及注册策略（invite/closed，不开放未实现的人机验证注册）；修改需 MFA、平台 `sites.manage`、CSRF、幂等键和理由，与审计同事务，站点快照随后刷新。收款开关及充值额度上下限由同路径的 `/payments` 资源交给 payments 读写。
+`/api/admin/v1/sites/{site_id}/system-settings` 读取站点名称和注册方式，也可改名称；请求里省略 `registration` 时在站点行锁内保留当时的注册方式（包括由注册策略接口设置的 open），给出时只接受 invite/closed。名称编辑只提交名称，不把表单打开后别人改过的注册方式写回去；响应里的 `name_editable` 标明本节点是否接受这种保存，旧节点不返回该字段时设置页把名称保持只读并说明等升级。修改需 MFA、平台 `sites.manage`、CSRF、幂等键和理由，与审计同事务，站点快照随后刷新。收款开关、充值额度上下限和充值缓冲由同路径的 `/payments` 资源交给 payments 读写。
 
 同源的 `/api/admin/v1/sites/{site_id}/legal-documents` 按 `(kind, version)` 游标分页读版本、发布新版本：正文是站长的纯文本，版本号由服务端在站点行锁内取下一个，正文不改不删；发布需 MFA、`sites.manage`、CSRF、幂等键和理由，审计只记类型、版本、长度和 SHA-256。控制台的 `/api/console/v1/legal` 公开返回当前版本，`/legal/accept` 记录已登录用户的接受；已发布文档的站点在用户接受前只放行读会话、接受和退出。
 

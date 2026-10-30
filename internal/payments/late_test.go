@@ -137,7 +137,7 @@ func testMerchantIdentityWindow(t *testing.T, tc identityCase) {
 			t.Fatal(err)
 		}
 		err = w.tx(siteScope(w.siteA), func(tx pg.Tx) error {
-			_, err := w.p.saveMerchant(t.Context(), tx, admin, in, settings, false)
+			_, err := w.p.saveMerchant(t.Context(), tx, admin, in, settings, false, "test save")
 			if err != nil {
 				return err
 			}

@@ -70,23 +70,38 @@ func Once[T any](ctx context.Context, tx pg.Tx, c Claim, do func() (T, error)) (
 	return response, false, nil
 }
 
-// replay is the response of the request that claimed the key, if c is that request.
-func replay[T any](ctx context.Context, tx pg.Tx, c Claim) (T, error) {
-	var response T
+// Lookup reads the response of the request that claimed the key, if it has one. A key that was not claimed, or whose
+// change is still running, reports found false: the caller prepares and claims as usual, and Once waits or replays.
+// A key used by another request is ErrReused. It makes no change, so a caller may check it before work that it wants to
+// skip on a replay, then still claim the key in the change's transaction.
+func Lookup[T any](ctx context.Context, tx pg.Tx, c Claim) (response T, found bool, err error) {
+	var zero T
 	rows, err := queries.ClaimedKey(ctx, tx, c.Key)
 	if err != nil {
-		return response, fmt.Errorf("idem: read the claim: %w", err)
+		return zero, false, fmt.Errorf("idem: read the claim: %w", err)
 	}
 	if len(rows) != 1 || rows[0].Response == nil {
-		// The claim was committed before this statement, with its response, in one transaction.
-		return response, fmt.Errorf("idem: the claim of key %s has no response", c.Key)
+		return zero, false, nil
 	}
 	first := rows[0]
 	if first.Actor != c.Actor.String() || first.Operation != c.Operation || string(first.Fingerprint) != string(c.Fingerprint[:]) {
-		return response, ErrReused
+		return zero, false, ErrReused
 	}
 	if err := jsonx.Unmarshal(first.Response, &response); err != nil {
-		return response, fmt.Errorf("idem: read the stored response: %w", err)
+		return zero, false, fmt.Errorf("idem: read the stored response: %w", err)
+	}
+	return response, true, nil
+}
+
+// replay is Lookup for a key that must have been claimed with its response: the claim and the response commit in one
+// transaction, so a key without one cannot be replayed.
+func replay[T any](ctx context.Context, tx pg.Tx, c Claim) (T, error) {
+	response, found, err := Lookup[T](ctx, tx, c)
+	if err != nil {
+		return response, err
+	}
+	if !found {
+		return response, fmt.Errorf("idem: the claim of key %s has no response", c.Key)
 	}
 	return response, nil
 }

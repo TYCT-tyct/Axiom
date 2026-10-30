@@ -29,7 +29,7 @@ func SetSystemSettings(ctx context.Context, tx pg.Tx, actor audit.Actor, site Si
 	if strings.TrimSpace(s.Name) == "" || utf8.RuneCountInString(s.Name) > 100 || strings.ContainsRune(s.Name, 0) {
 		return &SettingError{"name", "must have 1 to 100 characters without NUL"}
 	}
-	if s.Registration != "invite" && s.Registration != "closed" {
+	if s.Registration != "" && s.Registration != "invite" && s.Registration != "closed" {
 		return &SettingError{"registration", "must be invite or closed"}
 	}
 	if _, err := New().LockSite(ctx, tx, uuid.UUID(site)); err != nil {
@@ -38,6 +38,11 @@ func SetSystemSettings(ctx context.Context, tx pg.Tx, actor audit.Actor, site Si
 	before, err := ReadSystemSettings(ctx, tx, site)
 	if err != nil {
 		return err
+	}
+	// A request that only changes the name leaves the registration mode as it is, including open: the mode is edited
+	// through the registration policy, which carries the work factor and the domain limits.
+	if s.Registration == "" {
+		s.Registration = before.Registration
 	}
 	if _, err = tx.Exec(ctx, `UPDATE accounts.sites SET name=$2,registration=$3 WHERE id=$1`, uuid.UUID(site), s.Name, s.Registration); err != nil {
 		return fmt.Errorf("save system settings: %w", err)

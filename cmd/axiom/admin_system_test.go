@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,46 @@ func TestAdminSystemSettings(t *testing.T) {
 		t.Fatal("replay duplicated audit")
 	}
 	expectAdmin(t, "bad registration", f.change(s, http.MethodPut, path, strings.Replace(body, "closed", "open", 1), newKey()), 400, "")
-	payments := path + "/payments"
+
+	// Changing only the name keeps the registration mode, including open, which this operation cannot set itself.
+	f.run(`UPDATE accounts.sites SET registration = 'open' WHERE is_main`)
+	rec = f.change(s, http.MethodPut, path, `{"settings":{"name":"Still open"},"reason":"rename"}`, newKey())
+	expectAdmin(t, "name only", rec, 200, "")
+	checkSystemSettings(t, rec, "Still open", "open")
+}
+
+// checkSystemSettings reads a response and checks the name, the registration mode it kept and the name-only capability.
+func checkSystemSettings(t *testing.T, rec *httptest.ResponseRecorder, name, registration string) {
+	t.Helper()
+	var system adminapi.SystemSettings
+	decode(t, rec, &system)
+	if system.Name == nil || *system.Name != name || system.Registration == nil || string(*system.Registration) != registration {
+		t.Fatalf("system settings %s", rec.Body)
+	}
+	if system.NameEditable == nil || !*system.NameEditable {
+		t.Fatalf("a node that accepts name-only saves does not say so: %s", rec.Body)
+	}
+}
+
+// TestAdminSystemSettingsNameOnlyKeepsConcurrentRegistration: another administrator closes registration after this form
+// was filled. A name-only save must not put the mode read with that form back; the site row lock reads and writes the
+// current mode in one turn.
+func TestAdminSystemSettingsNameOnlyKeepsConcurrentRegistration(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	path := "/sites/" + f.siteID() + "/system-settings"
+	f.run(`UPDATE accounts.sites SET registration = 'closed' WHERE is_main`)
+	rec := f.change(s, http.MethodPut, path, `{"settings":{"name":"Closed meanwhile"},"reason":"rename"}`, newKey())
+	expectAdmin(t, "name after a concurrent close", rec, 200, "")
+	checkSystemSettings(t, rec, "Closed meanwhile", "closed")
+}
+
+func TestAdminPaymentSettings(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	payments := "/sites/" + f.siteID() + "/system-settings/payments"
 	for _, tc := range []struct {
 		body string
 		code int
@@ -52,7 +92,7 @@ func TestAdminSystemSettings(t *testing.T) {
 		expectAdmin(t, "payment settings", f.change(s, http.MethodPut, payments, tc.body, newKey()), tc.code, "")
 	}
 	checkExactPaymentAudit(t, f, s)
-	rec = f.do(http.MethodGet, payments, "", as(s))
+	rec := f.do(http.MethodGet, payments, "", as(s))
 	expectAdmin(t, "payment read", rec, 200, "")
 	var p adminapi.PaymentSettings
 	decode(t, rec, &p)
