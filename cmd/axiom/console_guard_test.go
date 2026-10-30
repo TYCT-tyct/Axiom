@@ -45,6 +45,15 @@ var sessionOperations = []endpoint{
 	{http.MethodGet, "/statement.csv", ""},
 	{http.MethodGet, "/calls", ""},
 	{http.MethodGet, someCall, ""},
+	{http.MethodPost, "/auth/oauth/link/start", `{"provider":"github"}`},
+	{http.MethodGet, "/auth/passkeys", ""},
+	{http.MethodPost, "/auth/passkeys/register/begin", `{"name":"Laptop"}`},
+	{http.MethodPost, "/auth/passkeys/register/finish", `{"flow_id":"f","credential":{}}`},
+	{http.MethodPost, "/auth/passkeys/mfa/begin", ""},
+	{http.MethodPost, "/auth/passkeys/mfa/finish", `{"flow_id":"f","credential":{}}`},
+	{http.MethodDelete, "/auth/passkeys/pk_00000000000000000000000000", `{"password":"p"}`},
+	{http.MethodGet, "/auth/identities", ""},
+	{http.MethodDelete, "/auth/identities/github", `{"password":"p"}`},
 }
 
 // TestSessionOperationsNeedASession: every operation that names a session refuses a request without one, or with one

@@ -48,7 +48,14 @@ type Site struct {
 	RegistrationDomainDeny     []string
 	// APIBase is the origin a key's calls go to, where the site registers an API domain: the console tells the user
 	// where to point a client rather than trusting the Host of the request (README.md「快照」).
-	APIBase  string
+	APIBase string
+	// LoginDomain is the one domain passkeys bind to and providers redirect back to. LoginOrigin is that domain's
+	// registered origin, empty when the domain is not enabled: no ceremony can run then.
+	LoginDomain, LoginOrigin string
+	// Passkeys is whether the site turned passkeys on. OAuth is the providers it configured, by name, with the public
+	// client ID; a provider absent from the map is off.
+	Passkeys bool
+	OAuth    map[string]string
 	sessions map[Surface]lifetime
 	limits   limits
 }
@@ -161,6 +168,7 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		site := Site{
 			ID: SiteID(r.ID), Main: r.IsMain, Name: r.Name, KeyPrefix: r.KeyPrefix, Registration: r.Registration,
 			DefaultTier: TierID(r.DefaultTierID), NewKeyDailyLimit: defaultNewKeyDailyLimit,
+			Passkeys: r.PasskeysEnabled, OAuth: map[string]string{},
 			sessions: map[Surface]lifetime{
 				Console: {seconds(r.ConsoleIdleSeconds, defaultLifetimes[Console].idle), seconds(r.ConsoleMaxAgeSeconds, defaultLifetimes[Console].max)},
 				Admin:   {seconds(r.AdminIdleSeconds, defaultLifetimes[Admin].idle), seconds(r.AdminMaxAgeSeconds, defaultLifetimes[Admin].max)},
@@ -173,6 +181,9 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		site.Currency = currency
 		if r.NewKeyDailyLimit != nil {
 			site.NewKeyDailyLimit = *r.NewKeyDailyLimit
+		}
+		if r.LoginDomain != nil {
+			site.LoginDomain = *r.LoginDomain
 		}
 		site.MaxKeysPerAccount = setting(r.MaxKeysPerAccount, defaultMaxKeysPerAccount)
 		site.KeyCreationsPerHour = setting(r.KeyCreationsPerHour, defaultKeyCreationsPerHour)
@@ -194,6 +205,16 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		return nil, err
 	}
 	readDomains(next, domains)
+	providers, err := s.queries.ListSiteOAuthProviders(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		if site, ok := next.sites[SiteID(p.SiteID)]; ok {
+			site.OAuth[p.Provider] = p.ClientID
+			next.sites[site.ID] = site
+		}
+	}
 	roles, err := s.queries.ListRoles(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -232,6 +253,11 @@ func readDomains(next *snapshot, domains []ListSiteDomainsRow) {
 		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == API &&
 			preferAPIOrigin(r.Origin, site.APIBase) {
 			site.APIBase = r.Origin
+			next.sites[site.ID] = site
+		}
+		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == Console &&
+			r.Domain == site.LoginDomain {
+			site.LoginOrigin = r.Origin
 			next.sites[site.ID] = site
 		}
 	}

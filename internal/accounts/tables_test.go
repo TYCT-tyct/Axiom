@@ -409,9 +409,9 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"notification_preferences": {"low_balance", "top_up", "factor_changed", "threshold", "webhook_url", "language"},
 		"user_notices":             {"email_done", "email_failed", "dispatched", "webhook_url", "webhook_state"},
 		"announcements":            {"withdrawn_at"},
-		"sites":                    {"name", "status", "key_prefix", "registration", "default_tier_id"},
+		"sites":                    {"name", "status", "key_prefix", "registration", "default_tier_id", "login_domain"},
 		"site_domains":             {"disabled_at"},
-		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour", "registration_human_check", "registration_human_check_bits", "registration_domain_burst", "registration_domain_per_hour", "registration_domain_allow", "registration_domain_deny"},
+		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour", "registration_human_check", "registration_human_check_bits", "registration_domain_burst", "registration_domain_per_hour", "registration_domain_allow", "registration_domain_deny", "passkeys_enabled"},
 		"tiers":                    {"name", "rate_requests"},
 		"roles":                    {"permissions", "additional_permissions"},
 		"accounts":                 {"name", "status", "tier_id", "max_keys", "key_creations_per_hour", "rate_requests"},
@@ -424,6 +424,11 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"platform_grants":         {"revoked_at"},
 		"api_keys":                {"rate_requests", "updated_at", "management_window", "management_requests", "name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
 		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
+		"site_oauth_providers":    {"client_id", "client_secret_ciphertext", "client_secret_nonce", "client_secret_wrapped_dek", "client_secret_key_version", "updated_at"},
+		"user_identities":         nil,
+		"passkey_credentials":     {"sign_count", "last_used_at", "backup_state", "name"},
+		"oauth_flows":             {"consumed_at"},
+		"webauthn_flows":          {"consumed_at"},
 		"recovery_codes":          {"used_at"},
 		"security_failures":       {"started_at", "failures", "completed_peak", "sampled_at", "reported"},
 		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
@@ -440,7 +445,9 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		}
 	}
 	for table := range updatable {
-		if strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" {
+		if strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" ||
+			table == "site_oauth_providers" || table == "user_identities" || table == "passkey_credentials" ||
+			table == "oauth_flows" || table == "webauthn_flows" {
 			continue
 		}
 		if _, err := exec(t, db, platform, "DELETE FROM accounts."+table+" WHERE false"); state(err) != "42501" {
@@ -503,12 +510,18 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "announcements", "api_keys", "members", "notification_preferences", "password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes", "registration_requests", "roles", "security_failures", "sessions", "site_domains",
-		"site_settings", "sites", "tiers", "user_notices", "users", "workspaces",
+		"accounts", "announcements", "api_keys", "members", "notification_preferences", "oauth_flows", "passkey_credentials",
+		"password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes",
+		"registration_requests", "roles", "security_failures", "sessions", "site_domains", "site_oauth_providers",
+		"site_settings", "sites", "tiers", "user_identities", "user_notices", "users", "webauthn_flows", "workspaces",
 	} {
 		commands := "INSERT, SELECT, UPDATE"
-		if strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" {
+		if strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" ||
+			table == "site_oauth_providers" || table == "passkey_credentials" || table == "oauth_flows" || table == "webauthn_flows" {
 			commands = "DELETE, INSERT, SELECT, UPDATE"
+		}
+		if table == "user_identities" {
+			commands = "DELETE, INSERT, SELECT"
 		}
 		if table == "members" {
 			commands = "INSERT, SELECT"

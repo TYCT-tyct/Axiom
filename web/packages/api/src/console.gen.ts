@@ -306,6 +306,263 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/auth/oauth/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start signing in with a third-party provider
+         * @description Makes a single-use state and, where the provider supports it, a PKCE verifier, stores them with the site's callback URI and a nonce cookie, and returns the provider's authorization URL. The callback must carry that nonce or it signs no browser in: state alone would let a completed callback be used to sign another browser in to the account that began it. The flow is for one site and expires in 10 minutes. Needs the `Origin` of the console and no session; a site that has not stored the provider's application is a 404, and a request on a console domain that is not the site's login domain is refused because the callback and its cookie belong to that domain. Limits: the sign-in per-IP bucket.
+         */
+        post: operations["startOAuthSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/oauth/link/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start linking a third-party provider to the signed-in user
+         * @description The same flow as `startOAuthSignIn`, bound to this user and session. It is a credential change: a user with a second factor must be in an `mfa` session. The callback must return to this same browser and session, or it links nothing. Limits: the sign-in per-IP bucket.
+         */
+        post: operations["startOAuthLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/oauth/{provider}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The provider's redirect back to the site
+         * @description Spends the state, exchanges the code for the stored callback URI, and reads the provider's subject. A sign-in matches that subject against linked identities only: an unknown one is not registered and its email never joins accounts (no automatic merge). A link attaches the subject to the session that began the flow, raises the user's factor version and issues a new session. Answers 303 to `/` after a sign-in, `/security` after a link, and `/sign-in?oauth=failed` when the round trip fails, so a browser never lands on JSON. The path's provider must be the one the state was made for.
+         */
+        get: operations["completeOAuth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/begin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start signing in with a passkey
+         * @description A discoverable assertion: the browser offers every passkey for the site's login domain and the chosen one carries its user, so nobody types an email first and an unknown caller learns nothing about who exists. The ceremony requires user verification and expires in 5 minutes. Needs the `Origin` of the console and no session; the site must have passkeys on and a login domain. Limits: the sign-in per-IP bucket.
+         */
+        post: operations["beginPasskeySignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish signing in with a passkey
+         * @description Verifies the assertion against the stored public key and the counter, then issues an `mfa` session: the authenticator verified the person and proved possession. A counter that goes backwards is refused; zero is what synced passkeys report and stays accepted. The body is the browser's credential JSON; `flow_id` is the one `beginPasskeySignIn` returned. Needs the `Origin` of the console and no session. Limits: the sign-in per-IP bucket.
+         */
+        post: operations["finishPasskeySignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/mfa/begin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start the passkey factor of a pending sign-in
+         * @description The pending session a password sign-in issued is the only credential needed. The challenge names the user's credentials and requires user verification; it expires in 5 minutes.
+         */
+        post: operations["beginPasskeyMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/mfa/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish the passkey factor of a pending sign-in
+         * @description Verifies the assertion, ends the pending session and issues an `mfa` session. A failed ceremony counts one of the pending session's five attempts, as a wrong code does. The body is the browser's credential JSON; `flow_id` is the one `beginPasskeyMfa` returned.
+         */
+        post: operations["finishPasskeyMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The signed-in user's passkeys
+         * @description The credentials the account page offers to delete, newest last.
+         */
+        get: operations["listPasskeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/register/begin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start adding a passkey
+         * @description The current password is required, and a user with a second factor must be in an `mfa` session: a passkey can sign in on its own, so adding one from a password-only session would let a stolen password bypass the second factor. The challenge excludes the user's credentials and requires user verification; it expires in 5 minutes. At most 10 passkeys per user.
+         */
+        post: operations["beginPasskeyRegistration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/register/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish adding a passkey
+         * @description Verifies the attestation, stores the credential with the name the begin stored, raises the user's factor version, ends every other session and issues this browser an `mfa` session. The body is the browser's credential JSON; `flow_id` is the one `beginPasskeyRegistration` returned.
+         */
+        post: operations["finishPasskeyRegistration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a passkey
+         * @description Requires the current password, and an `mfa` session when the user has another second factor. Raises the factor version, ends every other session and issues this browser a new session at the same level; audits the removal. The password remains a way in.
+         */
+        delete: operations["deletePasskey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/identities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in user's linked third-party accounts */
+        get: operations["listIdentities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/identities/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Unlink a third-party account
+         * @description Requires an `mfa` session when the user has a second factor. Raises the factor version, ends every other session and issues this browser a new session at the same level; audits the removal. The password remains a way in.
+         */
+        delete: operations["unlinkIdentity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/site": {
         parameters: {
             query?: never;
@@ -785,7 +1042,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
         Money: {
             /** @example 1500000000 */
@@ -945,6 +1202,78 @@ export interface components {
              * @enum {string}
              */
             registration: "invite" | "closed" | "open";
+            /** @description The console domain third-party sign-in returns to and passkeys bind to. Absent until an operator sets it; the sign-in page sends visitors to `login_origin` when the Host is another console domain. */
+            login_domain?: string;
+            /**
+             * Format: uri
+             * @description The registered origin of `login_domain`. Absent with it, or when that domain is disabled.
+             */
+            login_origin?: string;
+            /** @description Whether the site offers passkeys. False on an older node that does not know the field. */
+            passkeys?: boolean;
+            /** @description The third-party providers the site configured, for the sign-in page's buttons. */
+            oauth_providers?: components["schemas"]["OAuthProvider"][];
+        };
+        /**
+         * @description A third-party sign-in provider.
+         * @enum {string}
+         */
+        OAuthProvider: "github" | "google" | "linuxdo";
+        OAuthStartRequest: {
+            provider: components["schemas"]["OAuthProvider"];
+        };
+        OAuthStart: {
+            /**
+             * Format: uri
+             * @description The provider's authorization endpoint with this flow's client, state and, where supported, PKCE challenge.
+             */
+            authorize_url: string;
+        };
+        /** @description The browser's `PublicKeyCredential` JSON, passed through to the WebAuthn verifier unchanged. Its shape is the WebAuthn specification's, not this contract's. */
+        WebAuthnCredential: {
+            [key: string]: unknown;
+        };
+        PasskeyChallenge: {
+            /** @description The ceremony to finish; single use, expires in 5 minutes. */
+            flow_id: string;
+            public_key: components["schemas"]["WebAuthnCredential"];
+        };
+        /** @description A passkey's ID (TypeID). */
+        PasskeyId: string;
+        PasskeyRegistrationRequest: {
+            /** @description A label for the credential; absent means Passkey. */
+            name?: string;
+            /** @description The current password, asked again. */
+            password: string;
+        };
+        PasskeyDeleteRequest: {
+            password: string;
+        };
+        Passkey: {
+            id: components["schemas"]["PasskeyId"];
+            name: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_used_at?: string | null;
+            /** @description Whether the credential can be synced or backed up between devices. */
+            backup_eligible: boolean;
+        };
+        Passkeys: {
+            passkeys: components["schemas"]["Passkey"][];
+        };
+        Identity: {
+            provider: components["schemas"]["OAuthProvider"];
+            display_name: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        Identities: {
+            identities: components["schemas"]["Identity"][];
+        };
+        /** @description A credential was removed: every other session ended and the response's cookie replaces this browser's session. */
+        CredentialChange: {
+            csrf_token: string;
         };
         RegisterRequest: {
             /** @description Required on an invite-only site; ignored where registration is open. */
@@ -1832,6 +2161,388 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    startOAuthSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthStartRequest"];
+            };
+        };
+        responses: {
+            /** @description The URL to send the browser to, with the nonce cookie the callback must return. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthStart"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    startOAuthLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthStartRequest"];
+            };
+        };
+        responses: {
+            /** @description The URL to send the browser to. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthStart"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    completeOAuth: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+            };
+            header?: never;
+            path: {
+                provider: components["schemas"]["OAuthProvider"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The browser goes to the console page for the outcome; the cookie is set on success. */
+            303: {
+                headers: {
+                    Location: string;
+                    /** @description The new session cookie, on success. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    beginPasskeySignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description The assertion challenge. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeyChallenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    finishPasskeySignIn: {
+        parameters: {
+            query: {
+                flow_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebAuthnCredential"];
+            };
+        };
+        responses: {
+            /** @description Signed in with an `mfa` session. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    beginPasskeyMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description The assertion challenge. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeyChallenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    finishPasskeyMfa: {
+        parameters: {
+            query: {
+                flow_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebAuthnCredential"];
+            };
+        };
+        responses: {
+            /** @description Signed in with an `mfa` session. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPasskeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The passkeys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Passkeys"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    beginPasskeyRegistration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasskeyRegistrationRequest"];
+            };
+        };
+        responses: {
+            /** @description The creation challenge. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeyChallenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    finishPasskeyRegistration: {
+        parameters: {
+            query: {
+                flow_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebAuthnCredential"];
+            };
+        };
+        responses: {
+            /** @description The new passkey and the replacement session. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Passkey"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    deletePasskey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["PasskeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasskeyDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The replacement session's CSRF token. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialChange"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listIdentities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The linked identities. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Identities"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    unlinkIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: components["schemas"]["OAuthProvider"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The replacement session's CSRF token. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialChange"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];
         };

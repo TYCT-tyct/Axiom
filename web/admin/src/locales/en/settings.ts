@@ -79,4 +79,38 @@ export default {
     },
     invalid: "Limits are whole numbers from {{min}} to {{max}}.",
   },
+  signIn: {
+    title: "Third-party sign-in and passkeys",
+    loginDomain: "Login domain",
+    domainNone: "Not set",
+    domainHint: "One of this site's enabled console domains. Provider callbacks and passkeys are bound to it.",
+    passkeys: "Passkeys",
+    passkeysHint:
+      "Off until a login domain is set. Users can then sign in with a passkey or use one as a second factor.",
+    on: "On",
+    off: "Off",
+    edit: "Edit sign-in",
+    intro:
+      "Provider callbacks and passkey ceremonies happen on the login domain. It may be set after a provider application, but moving it once passkeys, linked identities or an application exist is refused. The change goes to the audit log.",
+    save: "Save sign-in",
+    saved: "The sign-in settings are saved.",
+    providers: { github: "GitHub", google: "Google", linuxdo: "LinuxDO" },
+    providerOff: "Not configured",
+    providerConfigure: "Configure",
+    providerEdit: "Replace application",
+    providerRemove: "Turn off",
+    providerDialog: "{{provider}} application",
+    providerIntro:
+      "The client ID and secret of the OAuth application this site registered with the provider. The secret is sealed on arrival and never shown again.",
+    clientId: "Client ID",
+    clientSecret: "Client secret",
+    secretHint: "Required again on every save; the stored one is never read back.",
+    providerSave: "Save application",
+    providerSaved: "The application is saved.",
+    removeIntro:
+      "The provider is turned off for this site. Linked identities stay and can be unlinked from the user's security page. The change goes to the audit log.",
+    removed: "The provider is turned off.",
+    missingClientId: "Enter the client ID.",
+    missingClientSecret: "Enter the client secret.",
+  },
 };

@@ -109,10 +109,16 @@ func TestKeyringRemovesLeftoverReplacements(t *testing.T) {
 func (f rotationFixture) makeCredentialRoutable() {
 	f.t.Helper()
 	ctx := f.t.Context()
+	credential := ""
+	for _, row := range f.before {
+		if row.store.Table == "credentials" {
+			credential = row.id
+		}
+	}
 	if err := f.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 		var supplier, group uuid.UUID
 		if err := tx.QueryRow(ctx, "SELECT supplier_id, supplier_group_id FROM suppliers.credentials WHERE id=$1",
-			f.before[2].id).Scan(&supplier, &group); err != nil {
+			credential).Scan(&supplier, &group); err != nil {
 			return err
 		}
 		stmts := append(endpointStatements(supplier, group, uuid.NewV7(), "rotation", "chat"),

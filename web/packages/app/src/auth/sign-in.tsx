@@ -8,15 +8,35 @@ import { AuthFrame, type Brand } from "./frame";
 
 // SignInPage is the page of an app's guests; what it says about the app's purpose and where else a guest can go is the
 // app's (description, footer).
-export function SignInPage({ description, footer, brand }: { description: string; footer?: ReactNode; brand?: Brand }) {
+export function SignInPage({
+  description,
+  footer,
+  brand,
+  extra,
+}: {
+  description: string;
+  footer?: ReactNode;
+  brand?: Brand;
+  extra?: ReactNode;
+}) {
   return (
     <Gate stage="guest">
-      <SignInForm description={description} footer={footer} brand={brand} />
+      <SignInForm description={description} footer={footer} brand={brand} extra={extra} />
     </Gate>
   );
 }
 
-function SignInForm({ description, footer, brand }: { description: string; footer?: ReactNode; brand?: Brand }) {
+function SignInForm({
+  description,
+  footer,
+  brand,
+  extra,
+}: {
+  description: string;
+  footer?: ReactNode;
+  brand?: Brand;
+  extra?: ReactNode;
+}) {
   const { t } = useTranslation("common");
   const errors = useErrors();
   const [missing, setMissing] = useState(false);
@@ -44,6 +64,7 @@ function SignInForm({ description, footer, brand }: { description: string; foote
           {t("auth.signIn.submit")}
         </SubmitButton>
       </form>
+      {extra}
     </AuthFrame>
   );
 }

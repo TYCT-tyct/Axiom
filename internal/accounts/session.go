@@ -145,7 +145,13 @@ func (s *Service) signIn(ctx context.Context, r SignInRequest, d domain, snap *s
 			return err
 		}
 		level := levelPassword
-		if locked.Mfa {
+		// A passkey only works on the site's login domain. A user with no TOTP is sent there instead of getting a
+		// session that skips the passkey; a user who also has TOTP can finish that on any console domain, and the
+		// admin surface, which cannot run WebAuthn at all, keeps a usable password session.
+		if locked.Passkeys && !locked.Mfa && d.surface == Console && d.origin != snap.sites[d.site].LoginOrigin {
+			return ErrWrongLoginDomain
+		}
+		if locked.Mfa || (locked.Passkeys && d.surface == Console) {
 			level = levelPending
 		}
 		issued, err = s.issue(ctx, tx, newSession{
@@ -160,6 +166,14 @@ func (s *Service) signIn(ctx context.Context, r SignInRequest, d domain, snap *s
 	})
 	return issued, err
 }
+
+// secondFactor reports whether the user has a second factor to prove: two-step verification or a passkey. Either one
+// makes a password sign-in wait for it, and a sensitive change need an already verified session.
+func (r LockUserRow) secondFactor() bool { return r.Mfa || r.Passkeys }
+
+// passkeyFactor reports whether a passkey is a second factor on this principal's surface. The admin listener cannot run
+// a WebAuthn ceremony, so a passkey there would only leave a pending session no page can complete.
+func (p Principal) passkeyFactor() bool { return p.surface == Console }
 
 // lockUser is the first statement of a transaction that issues a session or spends or changes a factor: it locks the
 // user's row and refuses a disabled user or factors changed since version.
