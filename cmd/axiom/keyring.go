@@ -100,7 +100,7 @@ func keyringCommand(ctx context.Context, environ, args []string, out io.Writer) 
 	if err := env.Problems(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
-	db, err := openDatabase(ctx, databaseURL, timeout)
+	db, err := openDatabase(ctx, databaseURL, timeout, pg.WithOperationsPool())
 	if err != nil {
 		return err
 	}

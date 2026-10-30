@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,13 +67,13 @@ func TestServeReadsTheMasterKeyFileOnce(t *testing.T) {
 	})
 	// Register version 1's fingerprint while the file still holds m, as an earlier start of this node would have. A
 	// second read after the replacement then disagrees with the database, not just with the login key.
-	db, _, err := openCheckedDatabase(t.Context(), cfg, tel, master.Keyring())
+	db, _, err := openCheckedDatabase(t.Context(), cfg, tel, master.Keyring(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
 	replaceMasterKey(t, path, 'x')
-	db, ring, err := openCheckedDatabase(t.Context(), cfg, tel, console.master)
+	db, ring, err := openCheckedDatabase(t.Context(), cfg, tel, console.master, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("the startup check read the file again: %v", err)
 	}
