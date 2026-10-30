@@ -115,9 +115,13 @@ func consoleBase(t *testing.T) commandLine {
 }
 
 func TestModelsPickTheAudienceOfThePage(t *testing.T) {
+	currency, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
 	fake := &fakeModelProjection{models: []gateway.PublicModel{{
 		ID: "acme/alpha", Name: "alpha", Author: "Acme", ContextLength: 1000, MaxOutput: 100, Streams: true,
-		Pricing: catalog.ScheduleView{Currency: platform.CurrencyNone},
+		Pricing: catalog.ScheduleView{Currency: currency},
 	}}}
 	c := startNodeWithModels(consoleBase(t), &testClock{now: time.Now()}, 0, false, fake)
 	site, _, err := c.svc.SiteForHost(consoleHost)
