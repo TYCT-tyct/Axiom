@@ -18,7 +18,7 @@ import (
 type modelName struct {
 	base     string
 	sort     *routing.Strategy // the ranking the last sorting variant asks for, or nil
-	exacto   bool              // the last sorting variant is :exacto, which no ranking here serves
+	exacto   bool              // the last sorting variant is :exacto, which the operational quality score does not satisfy
 	thinking bool              // the deprecated :thinking, which only a request that asks for reasoning itself honours
 }
 
@@ -27,7 +27,7 @@ type modelName struct {
 // docs/domains/gateway.md「模型名变体」.
 type variant struct {
 	sort     string // the provider.sort it stands for, "" for none
-	exacto   bool   // the quality-first ranking, which nothing measures here
+	exacto   bool   // the Exacto ranking, which needs tool-calling and benchmark quality, not measured here
 	thinking bool   // reasoning on, which the request must already ask for
 	refusal  string // what every request with this suffix gets, "" when it can be honoured
 }
@@ -43,10 +43,10 @@ const (
 	errAlias    = "Model aliases such as ~author/family-latest are not supported: this catalog has no model-family mappings; use a concrete model name."
 )
 
-// variants are the suffixes OpenRouter documents: :nitro and :floor rank endpoints, :exacto needs quality signals
-// nothing measures, :thinking is the deprecated way to ask for reasoning, :online is the deprecated web plugin, and
-// :free, :batch and :extended are catalog entries this catalog cannot hold. One table, so what a suffix does and why
-// it is refused are read together.
+// variants are the suffixes OpenRouter documents: :nitro and :floor rank endpoints, :exacto needs tool-calling and
+// benchmark quality signals nothing measures, :thinking is the deprecated way to ask for reasoning, :online is the
+// deprecated web plugin, and :free, :batch and :extended are catalog entries this catalog cannot hold. One table, so
+// what a suffix does and why it is refused are read together.
 var variants = map[string]variant{
 	"nitro": {sort: "throughput"}, "floor": {sort: "price"},
 	"exacto": {exacto: true}, "thinking": {thinking: true},
