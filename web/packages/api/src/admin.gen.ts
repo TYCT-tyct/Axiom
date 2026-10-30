@@ -845,7 +845,7 @@ export interface paths {
         };
         /**
          * A site's legal document versions
-         * @description Every published version of the site's terms of service and privacy policy, newest first within a kind, with the text. The current version of each kind is the first one of that kind; the earlier ones are what earlier acceptances name. The list is at most 200 rows.
+         * @description Every published version of the site's terms of service and privacy policy, newest first within a kind, with the text. The current version of each kind is the first one of that kind; the earlier ones are what earlier acceptances name. One page holds at most `limit` rows; `next_cursor` continues after the last row, so a kind with more than one page does not hide the other kind or its own older versions.
          */
         get: operations["listLegalDocuments"];
         put?: never;
@@ -2192,8 +2192,10 @@ export interface components {
             published_at: string;
         };
         LegalDocumentHistory: {
-            /** @description Newest first within a kind, at most 200 rows. */
+            /** @description Newest first within a kind, at most `limit` rows. */
             documents: components["schemas"]["LegalDocument"][];
+            /** @description Where the next page starts, or null on the last page. */
+            next_cursor: string | null;
         };
         LegalDocumentPublish: {
             kind: components["schemas"]["LegalDocumentKind"];
@@ -4617,7 +4619,12 @@ export interface operations {
     };
     listLegalDocuments: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path: {
                 site_id: components["schemas"]["SiteId"];

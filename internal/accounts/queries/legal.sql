@@ -11,12 +11,18 @@ WHERE d.site_id = @site_id
 ORDER BY d.kind;
 
 -- name: LegalDocumentHistory :many
--- Every version of every kind, newest first within a kind. The reads are the admin's, in the platform scope.
+-- Every version of every kind, newest first within a kind, after the cursor position (kind, version). The reads are the
+-- admin's, in the platform scope.
 SELECT kind, version, body, published_at
 FROM accounts.legal_documents
 WHERE site_id = @site_id
+    AND (
+        @cursor_kind::text = ''
+        OR kind > @cursor_kind
+        OR (kind = @cursor_kind AND version < @cursor_version)
+    )
 ORDER BY kind, version DESC
-LIMIT 200;
+LIMIT @page_size;
 
 -- name: NextLegalVersion :one
 -- The next version of a kind, read under the site's lock so two publications cannot choose the same one.

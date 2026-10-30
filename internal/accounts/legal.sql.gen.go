@@ -152,9 +152,21 @@ const legalDocumentHistory = `-- name: LegalDocumentHistory :many
 SELECT kind, version, body, published_at
 FROM accounts.legal_documents
 WHERE site_id = $1
+    AND (
+        $2::text = ''
+        OR kind > $2
+        OR (kind = $2 AND version < $3)
+    )
 ORDER BY kind, version DESC
-LIMIT 200
+LIMIT $4
 `
+
+type LegalDocumentHistoryParams struct {
+	SiteID        uuid.UUID
+	CursorKind    string
+	CursorVersion int32
+	PageSize      int32
+}
 
 type LegalDocumentHistoryRow struct {
 	Kind        string
@@ -163,9 +175,15 @@ type LegalDocumentHistoryRow struct {
 	PublishedAt pgtype.Timestamptz
 }
 
-// Every version of every kind, newest first within a kind. The reads are the admin's, in the platform scope.
-func (q *Queries) LegalDocumentHistory(ctx context.Context, db DBTX, siteID uuid.UUID) ([]LegalDocumentHistoryRow, error) {
-	rows, err := db.Query(ctx, legalDocumentHistory, siteID)
+// Every version of every kind, newest first within a kind, after the cursor position (kind, version). The reads are the
+// admin's, in the platform scope.
+func (q *Queries) LegalDocumentHistory(ctx context.Context, db DBTX, arg LegalDocumentHistoryParams) ([]LegalDocumentHistoryRow, error) {
+	rows, err := db.Query(ctx, legalDocumentHistory,
+		arg.SiteID,
+		arg.CursorKind,
+		arg.CursorVersion,
+		arg.PageSize,
+	)
 	if err != nil {
 		return nil, err
 	}

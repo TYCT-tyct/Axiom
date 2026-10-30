@@ -65,8 +65,12 @@ func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
 	}
 	var history []accounts.LegalDocument
 	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		var more bool
 		var err error
-		history, err = s.LegalDocumentHistory(t.Context(), tx, site)
+		history, more, err = s.LegalDocumentHistory(t.Context(), tx, site, nil, 200)
+		if err == nil && more {
+			t.Error("a site with three documents has a next page")
+		}
 		return err
 	}); err != nil {
 		t.Fatal(err)

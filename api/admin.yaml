@@ -1754,11 +1754,15 @@ paths:
       description: >-
         Every published version of the site's terms of service and privacy policy, newest first within a kind, with the
         text. The current version of each kind is the first one of that kind; the earlier ones are what earlier
-        acceptances name. The list is at most 200 rows.
+        acceptances name. One page holds at most `limit` rows; `next_cursor` continues after the last row, so a kind
+        with more than one page does not hide the other kind or its own older versions.
       security:
         - session: []
       x-axiom-level: mfa
       x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           description: The versions
@@ -4227,12 +4231,17 @@ components:
         published_at: {type: string, format: date-time}
     LegalDocumentHistory:
       type: object
-      required: [documents]
+      required: [documents, next_cursor]
       properties:
         documents:
           type: array
-          description: Newest first within a kind, at most 200 rows.
+          description: Newest first within a kind, at most `limit` rows.
           items: {$ref: "#/components/schemas/LegalDocument"}
+        next_cursor:
+          type: string
+          nullable: true
+          description: Where the next page starts, or null on the last page.
+
     LegalDocumentPublish:
       type: object
       required: [kind, body, reason]

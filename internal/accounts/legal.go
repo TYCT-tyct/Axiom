@@ -104,7 +104,6 @@ func (s *Service) CurrentLegalDocuments(ctx context.Context, site SiteID) ([]Leg
 	return documents, nil
 }
 
-//nolint:dupl // the two generated row types carry the same columns; one conversion is the same as the other.
 func (s *Service) currentLegalDocuments(ctx context.Context, tx pg.Tx, site SiteID) ([]LegalDocument, error) {
 	rows, err := s.queries.CurrentLegalDocuments(ctx, tx, uuid.UUID(site))
 	if err != nil {
@@ -117,20 +116,27 @@ func (s *Service) currentLegalDocuments(ctx context.Context, tx pg.Tx, site Site
 	return documents, nil
 }
 
-// LegalDocumentHistory reads every version of every kind, newest first within a kind, for the admin. The caller's
-// transaction holds the platform scope.
-//
-//nolint:dupl // the two generated row types carry the same columns; one conversion is the same as the other.
-func (s *Service) LegalDocumentHistory(ctx context.Context, tx pg.Tx, site SiteID) ([]LegalDocument, error) {
-	rows, err := s.queries.LegalDocumentHistory(ctx, tx, uuid.UUID(site))
+// LegalDocumentHistory reads one page of every kind's versions, newest first within a kind, after the cursor position.
+// It asks for one row more than the page so the caller knows whether a next page exists. The caller's transaction holds
+// the platform scope.
+func (s *Service) LegalDocumentHistory(ctx context.Context, tx pg.Tx, site SiteID, after *DocumentVersion, limit int) ([]LegalDocument, bool, error) {
+	params := LegalDocumentHistoryParams{SiteID: uuid.UUID(site), PageSize: int32(limit + 1)} // #nosec G115 -- the admin contract bounds the page size at 200
+	if after != nil {
+		params.CursorKind, params.CursorVersion = after.Kind, int32(after.Version) // #nosec G115 -- the cursor comes from a published version
+	}
+	rows, err := s.queries.LegalDocumentHistory(ctx, tx, params)
 	if err != nil {
-		return nil, fmt.Errorf("read the legal document history: %w", err)
+		return nil, false, fmt.Errorf("read the legal document history: %w", err)
+	}
+	more := len(rows) > limit
+	if more {
+		rows = rows[:limit]
 	}
 	documents := make([]LegalDocument, len(rows))
 	for i, row := range rows {
 		documents[i] = LegalDocument{Kind: row.Kind, Version: int(row.Version), Body: row.Body, PublishedAt: row.PublishedAt.Time}
 	}
-	return documents, nil
+	return documents, more, nil
 }
 
 // PendingLegalDocuments is what the signed-in user has not accepted at its current version. An empty result means
