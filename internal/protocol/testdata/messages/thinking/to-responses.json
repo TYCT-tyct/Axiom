@@ -1,0 +1,1 @@
+{"model":"up","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"What is the greatest common divisor of 1071 and 462?"}]}],"store":false,"max_output_tokens":20000,"reasoning":{"effort":"medium","summary":"auto"}}

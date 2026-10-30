@@ -16,31 +16,65 @@ import (
 // prices (vertex_ai, bedrock, azure), and the vendor's name in the catalog.
 var litellmProviders = map[string]string{"openai": "openai", "anthropic": "anthropic", "gemini": "google", "deepseek": "deepseek"}
 
-// litellmItems are the fields that price one billing item. The other cost fields (per image, per second, per
-// character, batch prices, a duplicate spelling such as input_cost_per_token_cache_hit) price nothing we bill.
-var litellmItems = map[string]Item{
-	"input_cost_per_token":                      ItemInput,
-	"output_cost_per_token":                     ItemOutput,
-	"cache_read_input_token_cost":               ItemCacheRead,
-	"cache_creation_input_token_cost":           ItemCacheWrite,
-	"cache_creation_input_token_cost_above_1hr": ItemCacheWrite1h,
-	"output_cost_per_reasoning_token":           ItemReasoning,
-	"input_cost_per_audio_token":                ItemAudioIn,
-	"output_cost_per_audio_token":               ItemAudioOut,
-	"input_cost_per_image_token":                ItemImageIn,
-	"output_cost_per_image_token":               ItemImageOut,
+// The row modes the catalog takes: the text modes it follows, and the image and audio modes whose per-piece,
+// per-second and per-character items it prices.
+const (
+	modeChat = 1 << iota
+	modeResponses
+	modeImage
+	modeSpeech
+	modeTranscription
+	modeText = modeChat | modeResponses
+	modeAll  = modeText | modeImage | modeSpeech | modeTranscription
+)
+
+// litellmModes is the bit of each mode the catalog takes; a mode left out prices something it does not bill.
+var litellmModes = map[string]int{
+	"chat": modeChat, "responses": modeResponses,
+	"image_generation": modeImage, "audio_speech": modeSpeech, "audio_transcription": modeTranscription,
+}
+
+// litellmItem is the item a field prices, in the row modes whose unit the field's name gives. A field is not read in a
+// mode where its unit differs.
+type litellmItem struct {
+	item  Item
+	modes int
+}
+
+// litellmItems are the fields that price one billing item. The other cost fields (batch prices, a monthly commitment,
+// video with no item of its own, a duplicate spelling such as input_cost_per_token_cache_hit) price nothing we bill.
+// output_cost_per_image is read only for image generation rows: chat rows carry the per-image-token price there, and
+// on the size-prefixed image keys it is the price of generating one, not of an input image, so input_cost_per_image is
+// not read at all.
+var litellmItems = map[string]litellmItem{
+	"input_cost_per_token":                      {ItemInput, modeAll},
+	"output_cost_per_token":                     {ItemOutput, modeAll},
+	"cache_read_input_token_cost":               {ItemCacheRead, modeAll},
+	"cache_creation_input_token_cost":           {ItemCacheWrite, modeAll},
+	"cache_creation_input_token_cost_above_1hr": {ItemCacheWrite1h, modeAll},
+	"output_cost_per_reasoning_token":           {ItemReasoning, modeAll},
+	"input_cost_per_audio_token":                {ItemAudioIn, modeChat | modeResponses | modeSpeech},
+	"output_cost_per_audio_token":               {ItemAudioOut, modeChat | modeResponses | modeSpeech},
+	"input_cost_per_image_token":                {ItemImageIn, modeChat | modeResponses | modeImage},
+	"output_cost_per_image_token":               {ItemImageOut, modeChat | modeResponses | modeImage},
+	"output_cost_per_image":                     {ItemImageOutPiece, modeImage},
+	"input_cost_per_character":                  {ItemCharacterIn, modeSpeech},
+	"output_cost_per_second":                    {ItemAudioOutSecond, modeSpeech},
+	"input_cost_per_second":                     {ItemAudioInSecond, modeTranscription},
 }
 
 var (
 	litellmTier    = regexp.MustCompile(`^(.+)_above_(\d+)k_tokens$`)
 	litellmLevels  = map[string]ServiceTier{"_priority": ServiceTierPriority, "_flex": ServiceTierFlex}
-	errNoVendorRow = errors.New("litellm: the table has no text model of any vendor")
+	errNoVendorRow = errors.New("litellm: the table has no model of any vendor")
 )
 
 // ParseLiteLLM reads LiteLLM's model price table (model_prices_and_context_window.json) into the entries of the vendors
-// the catalog follows. A field is read as: the service tier suffix (_priority, _flex), then the threshold suffix
-// _above_<N>k_tokens (N thousand tokens), then the item; a field that is no item after that, such as the _batches
-// prices (batch is a supplier's alias, not a service tier), is not read. Numbers are taken from the text as written.
+// the catalog follows, in the modes whose units it bills: chat, responses, image generation, speech and transcription.
+// A field is read as: the service tier suffix (_priority, _flex), then the threshold suffix _above_<N>k_tokens (N
+// thousand tokens), then the item, and only in the row modes the item's unit allows; a field that is no item after
+// that, such as the _batches prices (batch is a supplier's alias, not a service tier), is not read. Numbers are taken
+// from the text as written.
 func ParseLiteLLM(body []byte) ([]Entry, error) {
 	var table map[string]jsonx.Raw
 	if err := jsonx.Unmarshal(body, &table); err != nil {
@@ -56,11 +90,12 @@ func ParseLiteLLM(body []byte) ([]Entry, error) {
 		if jsonx.Unmarshal(fields["litellm_provider"], &provider) != nil || jsonx.Unmarshal(fields["mode"], &mode) != nil {
 			continue // sample_spec and the like describe the format
 		}
-		if _, vendor := litellmProviders[provider]; !vendor || mode != "chat" && mode != "responses" {
+		kind, known := litellmModes[mode]
+		if _, vendor := litellmProviders[provider]; !vendor || !known {
 			continue
 		}
-		e := Entry{Key: key, Names: []string{strings.TrimPrefix(key, provider+"/")}, Text: true, Raw: table[key]}
-		e.Err = readLiteLLMPrices(&e.sheet, fields)
+		e := Entry{Key: key, Names: []string{strings.TrimPrefix(key, provider+"/")}, Text: kind&modeText != 0, Raw: table[key]}
+		e.Err = readLiteLLMPrices(&e.sheet, kind, fields)
 		entries = append(entries, e)
 	}
 	if len(entries) == 0 {
@@ -69,10 +104,10 @@ func ParseLiteLLM(body []byte) ([]Entry, error) {
 	return entries, nil
 }
 
-func readLiteLLMPrices(sh *sheet, fields map[string]jsonx.Raw) error {
+func readLiteLLMPrices(sh *sheet, mode int, fields map[string]jsonx.Raw) error {
 	var errs []error
 	for _, name := range slices.Sorted(maps.Keys(fields)) {
-		st, above, it, ok := litellmField(name)
+		st, above, it, ok := litellmField(name, mode)
 		if !ok {
 			continue
 		}
@@ -89,8 +124,8 @@ func readLiteLLMPrices(sh *sheet, fields map[string]jsonx.Raw) error {
 	return errors.Join(errs...)
 }
 
-// litellmField says which price a field name carries.
-func litellmField(name string) (st ServiceTier, above int64, it Item, ok bool) {
+// litellmField says which price a field name carries in a row of mode.
+func litellmField(name string, mode int) (st ServiceTier, above int64, it Item, ok bool) {
 	for suffix, tier := range litellmLevels {
 		if base, found := strings.CutSuffix(name, suffix); found {
 			name, st = base, tier
@@ -103,8 +138,11 @@ func litellmField(name string) (st ServiceTier, above int64, it Item, ok bool) {
 		}
 		name, above = m[1], n*1000
 	}
-	it, ok = litellmItems[name]
-	return st, above, it, ok
+	price, ok := litellmItems[name]
+	if !ok || price.modes&mode == 0 {
+		return 0, 0, 0, false
+	}
+	return st, above, price.item, true
 }
 
 // searchPrice is the price of a web search when LiteLLM gives one price for every context size; sizes priced

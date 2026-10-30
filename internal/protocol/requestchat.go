@@ -81,6 +81,20 @@ func jsonValue(v any) jsontext.Value {
 // The canonical model and Prepare's Chat rewrite own validation and identity/cap
 // policy; unlike the reference, unsupported members are never silently discarded.
 func requestToChat(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
+	chat, err := nativeChatRequest(f, body, t, w)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkNativeChat(chat); err != nil {
+		return nil, err
+	}
+	return rewrite(&Request{Format: Chat}, chat, t, w)
+}
+
+// nativeChatRequest writes a Messages or Responses request as the canonical Chat-shaped request, before anything the
+// target adds: the model's name, the identifiers' derived values and the endpoint's settings. A conversion to the other
+// of the two formats reads it (convertNative) instead of the endpoint's rewrite.
+func nativeChatRequest(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	// Dispatch on JSON values, independent of escaped enum spelling or whitespace
 	// in empty arrays. Same-format rewrites still preserve the original bytes.
 	body, err := jsonx.MarshalCanonical(jsontext.Value(body))
@@ -117,11 +131,7 @@ func requestToChat(f Format, body []byte, t Target, w Rewrites) ([]byte, error) 
 		return nil, err
 	}
 	dst["messages"] = jsonValue(messages)
-	chat := jsonValue(dst)
-	if err := checkNativeChat(chat); err != nil {
-		return nil, err
-	}
-	return rewrite(&Request{Format: Chat}, chat, t, w)
+	return jsonValue(dst), nil
 }
 
 // checkNativeChat applies the shared Chat invariants to a constructed native request.

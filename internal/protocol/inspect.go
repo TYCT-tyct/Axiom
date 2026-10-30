@@ -71,6 +71,10 @@ type Request struct {
 	// TextBytes bounds the text input's tokens: the body's bytes less the image and document data that Images and
 	// Documents count instead.
 	TextBytes, Images, Documents int64
+	// FileRefs is how many files the request refers to by an id an upstream issued instead of carrying their data. A
+	// reference is the supplier account's resource: routing keeps such a request to the one provider the client names,
+	// so it can only reach the account that can hold the file (README.md「跨格式转换」).
+	FileRefs int64
 	// InputItems are the billing items the input may be billed as: input, and the cache writes the request marks or
 	// its format makes by default.
 	InputItems catalog.ItemSet
@@ -193,6 +197,7 @@ type part struct {
 	kind                     Capabilities
 	payload                  int64 // the raw bytes of the data the part carries
 	binary                   bool  // the payload is image or file data, not text
+	refs                     int64 // files the part refers to by an id
 	max                      int64 // a server tool's max_uses
 	off, hidden, on          bool  // reasoning turned off; reasoning left out of the stream
 }

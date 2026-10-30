@@ -166,6 +166,7 @@ const (
 	// shows the standard tier's price below the first threshold, which is the price the shape means by a model's price.
 	goldenPrice = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","cache_read":"0.0000003",` +
 		`"cache_write":"0.00000375","cache_write_1h":"0.000006","reasoning":"0.00002","image_in":"0.000004",` +
+		`"image_in_piece":"0.0011","image_out_piece":"0.134",` +
 		`"audio_in":"0.00000001","audio_out":"0.00000002","web_search":"0.01"},` +
 		`"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":200000,"rates":{"input":"0.000006",` +
 		`"output":"0.0000225"}}]}}`
@@ -184,7 +185,8 @@ const (
 		"name": "golden",
 		"per_request_limits": null,
 		"pricing": {"audio": "0.00000001", "audio_output": "0.00000002", "completion": "0.000015",
-			"image_token": "0.000004", "input_cache_read": "0.0000003", "input_cache_write": "0.00000375",
+			"image": "0.0011", "image_output": "0.134", "image_token": "0.000004",
+			"input_cache_read": "0.0000003", "input_cache_write": "0.00000375",
 			"input_cache_write_1h": "0.000006", "internal_reasoning": "0.00002", "prompt": "0.000003",
 			"web_search": "0.01"},
 		"reasoning": {"supports_max_tokens": true},
