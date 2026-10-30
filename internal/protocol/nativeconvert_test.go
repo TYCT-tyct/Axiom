@@ -134,7 +134,38 @@ func TestConvertResponsesToMessages(t *testing.T) {
 			"a file id cannot reach Messages", `{"model":"m","max_output_tokens":64,"input":[{"type":"message","role":"user","content":[{"type":"input_file","file_id":"file-1"}]}]}`, nil, "unsupported",
 		},
 		{
+			"a file's default detail", `{"model":"m","max_output_tokens":64,"input":[{"type":"message","role":"user","content":[{"type":"input_file","filename":"a.pdf",` +
+				`"file_data":"data:application/pdf;base64,BBBB","detail":"auto"}]}]}`, nil,
+			`{"model":"up","max_tokens":64,"messages":[{"role":"user","content":[{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"BBBB"},"title":"a.pdf"}]}]}`,
+		},
+		{
+			"a file's high detail", `{"model":"m","max_output_tokens":64,"input":[{"type":"message","role":"user","content":[{"type":"input_file","filename":"a.pdf",` +
+				`"file_data":"data:application/pdf;base64,BBBB","detail":"high"}]}]}`, nil, "unsupported",
+		},
+		{
+			"a file's low detail", `{"model":"m","max_output_tokens":64,"input":[{"type":"message","role":"user","content":[{"type":"input_file","filename":"a.pdf",` +
+				`"file_data":"data:application/pdf;base64,BBBB","detail":"low"}]}]}`, nil, "unsupported",
+		},
+		{
+			"a file detail outside the three", `{"model":"m","max_output_tokens":64,"input":[{"type":"message","role":"user","content":[{"type":"input_file","filename":"a.pdf",` +
+				`"file_data":"data:application/pdf;base64,BBBB","detail":"medium"}]}]}`, nil, "invalid",
+		},
+		{
+			"an image detail outside the three", `{"model":"m","max_output_tokens":64,"input":[{"type":"message","role":"user","content":[{"type":"input_image",` +
+				`"image_url":"https://example.test/i.png","detail":"medium"}]}]}`, nil, "invalid",
+		},
+		{
 			"auto truncation has no Messages counterpart", `{"model":"m","max_output_tokens":64,"truncation":"auto","input":"Hi"}`, nil, "unsupported",
+		},
+		{
+			"a replayed output with empty logprobs", `{"model":"m","max_output_tokens":64,"input":[{"role":"user","content":"Hi"},{"role":"assistant",` +
+				`"content":[{"type":"output_text","text":"a","annotations":[],"logprobs":[]}]}]}`, nil,
+			`{"model":"up","max_tokens":64,"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]},` +
+				`{"role":"assistant","content":[{"type":"text","text":"a"}]}]}`,
+		},
+		{
+			"a replayed output with logprobs", `{"model":"m","max_output_tokens":64,"input":[{"role":"user","content":"Hi"},{"role":"assistant",` +
+				`"content":[{"type":"output_text","text":"a","annotations":[],"logprobs":[{"token":"a","logprob":-0.1}]}]}]}`, nil, "unsupported",
 		},
 		{
 			"a reasoning summary is not a thinking block", `{"model":"m","max_output_tokens":20000,"input":[{"type":"message","role":"user","content":"Hi"},` +
