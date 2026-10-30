@@ -1204,13 +1204,21 @@ paths:
       tags: [Keys]
       summary: The account's API keys
       description: >-
-        Every key of the session's account that is not deleted, disabled ones included, newest first. The text of a
-        key is never returned again after `createKey`.
+        Every key of the session's account that is not deleted, disabled and expired ones included, newest first by
+        making. `name` and `prefix` search part of a key's name or prefix, ignoring case; `status` keeps active,
+        disabled or expired keys; `created_after` and `created_before` keep the keys made in a range. A page reads the
+        keys in the index's order and applies the filters as it goes, so a later page starts after the last key read,
+        whatever the filters match. The text of a key is never returned again after `createKey`.
       security:
         - session: []
       x-axiom-level: signed_in
       x-axiom-permission: api_keys.view
       parameters:
+        - $ref: "#/components/parameters/KeyName"
+        - $ref: "#/components/parameters/KeyPrefix"
+        - $ref: "#/components/parameters/KeyStatus"
+        - $ref: "#/components/parameters/KeyCreatedAfter"
+        - $ref: "#/components/parameters/KeyCreatedBefore"
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -1812,6 +1820,31 @@ components:
       name: request_id
       in: query
       schema: {$ref: "#/components/schemas/CallId"}
+    KeyName:
+      name: name
+      in: query
+      description: Part of a key's name, ignoring case. Omit for every name.
+      schema: {type: string, maxLength: 100}
+    KeyPrefix:
+      name: prefix
+      in: query
+      description: The beginning of a key's prefix, ignoring case. Omit for every prefix.
+      schema: {type: string, maxLength: 16}
+    KeyStatus:
+      name: status
+      in: query
+      description: A key's state as the list shows it. Omit for every state.
+      schema: {$ref: "#/components/schemas/KeyStatus"}
+    KeyCreatedAfter:
+      name: created_after
+      in: query
+      description: Keys the database stamped at or after this instant.
+      schema: {type: string, format: date-time}
+    KeyCreatedBefore:
+      name: created_before
+      in: query
+      description: Keys the database stamped before this instant.
+      schema: {type: string, format: date-time}
     Cursor:
       name: cursor
       in: query
@@ -2464,10 +2497,34 @@ components:
           type: array
           description: The model names the key may call; absent means any model.
           items: {type: string, maxLength: 200}
+        retired_models:
+          type: array
+          description: >-
+            The names in `models` that the catalog has retired, so calls to them cannot succeed. Absent when none is
+            retired or the reading node has no catalog snapshot; a page shows no hint then.
+          items: {type: string, maxLength: 200}
         ip_allow:
           type: array
           description: The client addresses (IP or CIDR) the key may be used from; absent means any.
           items: {type: string, maxLength: 64}
+    KeyStatus:
+      type: string
+      enum: [active, disabled, expired]
+      x-enum-varnames: [KeyStatusActive, KeyStatusDisabled, KeyStatusExpired]
+      description: >-
+        The state the key list shows: `active` is enabled and not expired, `disabled` is disabled and not expired,
+        and `expired` is past its `expires_at` whether enabled or not.
+    KeyFilterEcho:
+      type: object
+      description: >-
+        The filters this node applied to the page. Absent on nodes that predate key filters: those nodes ignore the
+        filter parameters and return every key, so a filtered page cannot show their rows.
+      properties:
+        name: {type: string, description: "The applied name filter, ignoring case in the match."}
+        prefix: {type: string, description: "The applied prefix filter, ignoring case in the match."}
+        status: {$ref: "#/components/schemas/KeyStatus"}
+        created_after: {type: string, format: date-time, description: The applied inclusive lower bound.}
+        created_before: {type: string, format: date-time, description: The applied exclusive upper bound.}
     LimitReset:
       type: string
       enum: [daily, weekly, monthly]
@@ -2517,6 +2574,8 @@ components:
       type: object
       required: [data, next_cursor]
       properties:
+        filters:
+          $ref: "#/components/schemas/KeyFilterEcho"
         data:
           type: array
           items: {$ref: "#/components/schemas/Key"}

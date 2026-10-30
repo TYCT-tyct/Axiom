@@ -56,7 +56,7 @@ function Figures() {
 
 function KeysPanel() {
   const { t } = useTranslation();
-  const keys = useInfiniteQuery(keysQuery);
+  const keys = useInfiniteQuery(keysQuery());
   return (
     <Panel
       title={t("nav.keys")}

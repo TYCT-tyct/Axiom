@@ -164,7 +164,7 @@ test.describe("signing in", () => {
     await page.goto("/console/keys");
     await expect(page.getByText("Laptop")).toBeVisible();
     await page.getByRole("button", { name: "创建 key" }).click();
-    await page.getByLabel("名称").fill("Deploy bot");
+    await page.getByRole("dialog", { name: "创建 key" }).getByLabel("名称").fill("Deploy bot");
     await page.getByRole("button", { name: "创建", exact: true }).click();
     const secret = page.getByRole("dialog", { name: "复制你的 key" });
     await expect(secret).toBeVisible();
@@ -296,7 +296,7 @@ test.describe("API keys", () => {
     await expect(page.getByText("Laptop")).toBeVisible();
 
     await page.getByRole("button", { name: "创建 key" }).click();
-    await page.getByLabel("名称").fill("Deploy bot");
+    await page.getByRole("dialog", { name: "创建 key" }).getByLabel("名称").fill("Deploy bot");
     await page.getByLabel(/花费上限/).fill("2.5");
     await page.getByLabel("可用模型").fill("openai/gpt-5\nanthropic/claude-sonnet-4");
     await page.getByRole("button", { name: "创建", exact: true }).click();

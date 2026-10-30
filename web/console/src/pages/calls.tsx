@@ -17,22 +17,8 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { memo, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { CallStatus } from "../parts";
+import { CallStatus, toInstant, toLocalInput } from "../parts";
 import { type CallFilters, callsQuery } from "../queries";
-
-// A time in a datetime-local field is the viewer's own clock; the API takes an instant.
-function toLocalInput(instant: string | undefined) {
-  const date = new Date(instant ?? Number.NaN);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
-}
-
-function toInstant(local: string | undefined) {
-  return local ? new Date(local).toISOString() : undefined;
-}
 
 export default function Calls() {
   const { t } = useTranslation();
