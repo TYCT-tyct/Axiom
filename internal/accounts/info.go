@@ -60,6 +60,19 @@ func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, er
 	}, nil
 }
 
+// AccountTier is the tier whose sale prices the session's account pays. It reads the account row itself, not the site
+// snapshot: a tier change takes effect on the next read, as it does for admission.
+func (s *Service) AccountTier(ctx context.Context, p Principal) (TierID, error) {
+	var tier uuid.UUID
+	if err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) (err error) {
+		tier, err = s.queries.AccountTier(ctx, tx, uuid.UUID(p.account))
+		return err
+	}); err != nil {
+		return TierID{}, fmt.Errorf("read the account's tier: %w", err)
+	}
+	return TierID(tier), nil
+}
+
 // permissionsOf is the names of the permissions roles hold that p's session level allows, sorted.
 func (s *Service) permissionsOf(p Principal, roles []uuid.UUID) []string {
 	names := []string{}

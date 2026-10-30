@@ -946,6 +946,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/models/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the published models at the signed-in account's prices
+         * @description The same projection as `listPublicModels`, priced for the session's account and its current tier. A signed-in user sees the price a call would be charged at, so a tier change shows on the next request. The account is read in the same scope as the rest of the console; no supplier, endpoint, route or cost is ever part of the answer.
+         */
+        get: operations["listAccountModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the published models and the site's sale prices
+         * @description The public projection of the catalog: the models the node serves and prices, under their public names, with their limits, abilities and the sale prices of the site's default tier. It is the price a visitor pays after registering, and the same data the website's models and prices page shows. It carries no supplier, endpoint, route, cost, internal name, price source or evidence. An anonymous request is answered for the site of the `Host`, like `getSite`; any other host is a 404.
+         */
+        get: operations["listPublicModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/payment-methods": {
         parameters: {
             query?: never;
@@ -1137,6 +1177,53 @@ export interface components {
             calls?: string;
             price?: components["schemas"]["CallAggregateMoney"];
         };
+        PublicModelList: {
+            data: components["schemas"]["PublicModel"][];
+        };
+        /** @description One published model as a visitor may see it: its public name and limits, the abilities its spec declares, and the sale prices of the audience that asked. No supplier, endpoint, route, cost or internal name. */
+        PublicModel: {
+            /** @description The public model ID, such as acme/claude-sonnet. */
+            id: string;
+            /** @description The vendor's name for the model, the part of the public ID after the author. */
+            name: string;
+            /** @description The author slug, the part of the public ID before the slash. */
+            author: string;
+            /** Format: int64 */
+            context_length: number;
+            /** Format: int64 */
+            max_output: number;
+            /** @description Whether the vendor streams the model's replies. */
+            streams: boolean;
+            abilities: components["schemas"]["ModelAbility"][];
+            pricing: components["schemas"]["ModelPricing"];
+        };
+        /** @enum {string} */
+        ModelAbility: "tools" | "images" | "documents" | "reasoning" | "prompt_cache" | "structured_output" | "web_search" | "code_execution";
+        /** @description Every unit price the model's sale schedule sets, for each service tier and context band. A price is decimal text in the pricing currency, per the item's unit; an item the schedule does not price is absent. */
+        ModelPricing: {
+            currency: string;
+            /** @description The items whose counts add up to the prompt length the context bands compare; empty when the schedule has no context tiers. */
+            basis: components["schemas"]["ModelItem"][];
+            rates: components["schemas"]["ModelRate"][];
+        };
+        ModelRate: {
+            service_tier: components["schemas"]["ModelServiceTier"];
+            /**
+             * Format: int64
+             * @description The prompt length above which this rate applies. Absent or 0 is the base band.
+             */
+            above?: number;
+            item: components["schemas"]["ModelItem"];
+            unit: components["schemas"]["ModelUnit"];
+            /** @description Exact currency units per unit, decimal text with up to 15 fractional digits. */
+            amount: string;
+        };
+        /** @enum {string} */
+        ModelServiceTier: "standard" | "flex" | "priority" | "fast";
+        /** @enum {string} */
+        ModelItem: "input" | "cache_read" | "cache_write" | "cache_write_1h" | "audio_in" | "image_in" | "output" | "reasoning" | "audio_out" | "image_out" | "web_search" | "code_execution" | "image_in_piece" | "image_out_piece" | "audio_in_second" | "audio_out_second" | "character_in";
+        /** @enum {string} */
+        ModelUnit: "token" | "use" | "piece" | "second" | "character";
         /** @description A site's ID (TypeID). */
         SiteId: string;
         /** @description A site announcement's ID (TypeID). */
@@ -1898,6 +1985,12 @@ export interface components {
         /** @description Exactly the model name the client asked for. */
         CallModel: string;
         CallClientApp: string;
+        /** @description Part of a model's public ID or display name, ignoring case. Omit for every model. */
+        ModelQuery: string;
+        /** @description The exact author slug, ignoring case. Omit for every author. */
+        ModelAuthor: string;
+        /** @description Only models that declare this ability. Omit for every ability. */
+        ModelAbility: components["schemas"]["ModelAbility"];
         CallKey: components["schemas"]["KeyId"];
         CallWorkspace: components["schemas"]["WorkspaceId"];
         /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
@@ -3498,6 +3591,66 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listAccountModels: {
+        parameters: {
+            query?: {
+                /** @description Part of a model's public ID or display name, ignoring case. Omit for every model. */
+                q?: components["parameters"]["ModelQuery"];
+                /** @description The exact author slug, ignoring case. Omit for every author. */
+                author?: components["parameters"]["ModelAuthor"];
+                /** @description Only models that declare this ability. Omit for every ability. */
+                ability?: components["parameters"]["ModelAbility"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The published models at the account's prices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicModelList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPublicModels: {
+        parameters: {
+            query?: {
+                /** @description Part of a model's public ID or display name, ignoring case. Omit for every model. */
+                q?: components["parameters"]["ModelQuery"];
+                /** @description The exact author slug, ignoring case. Omit for every author. */
+                author?: components["parameters"]["ModelAuthor"];
+                /** @description Only models that declare this ability. Omit for every ability. */
+                ability?: components["parameters"]["ModelAbility"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The published models at the site's default-tier prices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicModelList"];
+                };
+            };
             404: components["responses"]["NotFound"];
             default: components["responses"]["Failure"];
         };

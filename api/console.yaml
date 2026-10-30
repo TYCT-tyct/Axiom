@@ -1613,6 +1613,57 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/models/account:
+    get:
+      operationId: listAccountModels
+      tags: [Models]
+      summary: List the published models at the signed-in account's prices
+      description: >-
+        The same projection as `listPublicModels`, priced for the session's account and its current tier. A signed-in user
+        sees the price a call would be charged at, so a tier change shows on the next request. The account is read in
+        the same scope as the rest of the console; no supplier, endpoint, route or cost is ever part of the answer.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - $ref: "#/components/parameters/ModelQuery"
+        - $ref: "#/components/parameters/ModelAuthor"
+        - $ref: "#/components/parameters/ModelAbility"
+      responses:
+        "200":
+          description: The published models at the account's prices
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PublicModelList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/models:
+    get:
+      operationId: listPublicModels
+      tags: [Models]
+      summary: List the published models and the site's sale prices
+      description: >-
+        The public projection of the catalog: the models the node serves and prices, under their public names, with
+        their limits, abilities and the sale prices of the site's default tier. It is the price a visitor pays after
+        registering, and the same data the website's models and prices page shows. It carries no supplier, endpoint,
+        route, cost, internal name, price source or evidence. An anonymous request is answered for the site of the
+        `Host`, like `getSite`; any other host is a 404.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/ModelQuery"
+        - $ref: "#/components/parameters/ModelAuthor"
+        - $ref: "#/components/parameters/ModelAbility"
+      responses:
+        "200":
+          description: The published models at the site's default-tier prices
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PublicModelList"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/payment-methods:
     get:
       operationId: listPaymentMethods
@@ -1924,6 +1975,21 @@ components:
       name: client_app
       in: query
       schema: {type: string, maxLength: 200}
+    ModelQuery:
+      name: q
+      in: query
+      description: Part of a model's public ID or display name, ignoring case. Omit for every model.
+      schema: {type: string, maxLength: 100}
+    ModelAuthor:
+      name: author
+      in: query
+      description: The exact author slug, ignoring case. Omit for every author.
+      schema: {type: string, maxLength: 100}
+    ModelAbility:
+      name: ability
+      in: query
+      description: Only models that declare this ability. Omit for every ability.
+      schema: {$ref: "#/components/schemas/ModelAbility"}
     CallKey:
       name: key_id
       in: query
@@ -2108,6 +2174,76 @@ components:
           type: string
           pattern: '^[0-9]+$'
         price: {$ref: "#/components/schemas/CallAggregateMoney"}
+    PublicModelList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PublicModel"}
+    PublicModel:
+      type: object
+      additionalProperties: false
+      description: >-
+        One published model as a visitor may see it: its public name and limits, the abilities its spec declares, and
+        the sale prices of the audience that asked. No supplier, endpoint, route, cost or internal name.
+      required: [id, name, author, context_length, max_output, streams, abilities, pricing]
+      properties:
+        id: {type: string, description: "The public model ID, such as acme/claude-sonnet."}
+        name: {type: string, description: "The vendor's name for the model, the part of the public ID after the author."}
+        author: {type: string, description: "The author slug, the part of the public ID before the slash."}
+        context_length: {type: integer, format: int64, minimum: 1}
+        max_output: {type: integer, format: int64, minimum: 1}
+        streams: {type: boolean, description: Whether the vendor streams the model's replies.}
+        abilities:
+          type: array
+          items: {$ref: "#/components/schemas/ModelAbility"}
+        pricing: {$ref: "#/components/schemas/ModelPricing"}
+    ModelAbility:
+      type: string
+      enum: [tools, images, documents, reasoning, prompt_cache, structured_output, web_search, code_execution]
+    ModelPricing:
+      type: object
+      additionalProperties: false
+      description: >-
+        Every unit price the model's sale schedule sets, for each service tier and context band. A price is decimal
+        text in the pricing currency, per the item's unit; an item the schedule does not price is absent.
+      required: [currency, basis, rates]
+      properties:
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        basis:
+          type: array
+          description: >-
+            The items whose counts add up to the prompt length the context bands compare; empty when the schedule has
+            no context tiers.
+          items: {$ref: "#/components/schemas/ModelItem"}
+        rates:
+          type: array
+          items: {$ref: "#/components/schemas/ModelRate"}
+    ModelRate:
+      type: object
+      additionalProperties: false
+      required: [service_tier, item, unit, amount]
+      properties:
+        service_tier: {$ref: "#/components/schemas/ModelServiceTier"}
+        above:
+          type: integer
+          format: int64
+          minimum: 0
+          description: "The prompt length above which this rate applies. Absent or 0 is the base band."
+        item: {$ref: "#/components/schemas/ModelItem"}
+        unit: {$ref: "#/components/schemas/ModelUnit"}
+        amount: {type: string, description: "Exact currency units per unit, decimal text with up to 15 fractional digits."}
+    ModelServiceTier:
+      type: string
+      enum: [standard, flex, priority, fast]
+    ModelItem:
+      type: string
+      enum: [input, cache_read, cache_write, cache_write_1h, audio_in, image_in, output, reasoning, audio_out, image_out, web_search, code_execution, image_in_piece, image_out_piece, audio_in_second, audio_out_second, character_in]
+    ModelUnit:
+      type: string
+      enum: [token, use, piece, second, character]
     SiteId: {type: string, pattern: '^site_[0-9a-hjkmnp-tv-z]{26}$', description: "A site's ID (TypeID)."}
     AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
     Announcement:
