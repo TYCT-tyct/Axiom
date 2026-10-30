@@ -220,7 +220,8 @@ func (s *Service) confirmTOTP(ctx context.Context, p Principal, c FactorChange) 
 
 // ReplaceTOTP replaces two-step verification's TOTP secret for p when CurrentCode is a current TOTP code or an unused
 // recovery code and Code is a code from the new secret. It is for a user who has the factor on and is signed in on the
-// console with a session that passed two-step verification; a factor that is off is ErrTOTPOff. The current code is
+// console; the API asks for a session that passed two-step verification, and the current code is the proof this
+// method checks; a factor that is off is ErrTOTPOff. The current code is
 // spent and the factor version rises under the user's lock, so every other session and recovery code ends; the new
 // recovery codes and a two-step-verified session for this device are returned. A wrong current or new code spends one
 // of the user's code failures, as in VerifyMFA.
