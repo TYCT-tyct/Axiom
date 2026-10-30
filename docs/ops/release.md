@@ -12,6 +12,14 @@
 2. 对达到或超过默认值、或需要余量的现有账户，先通过后台 `PUT /api/admin/v1/rate-limits/account/{id}` 配置经确认的 rate_requests，并读取核对，保留 MFA、幂等键、理由与审计。需要保持不设账户业务上限时可明确设 0，仍受节点/key 限制；不要以 null 代替 0，null 会重新继承等级或 6000。旧节点不提供该接口时，须在放流量前通过隔离的新版本管理入口预设，核对完成后再切流量。
 3. 切换后核对 `axiom_gateway_rate_limited_total{reason="account_rate"}` 与 reason="business_key_rate" 的增量、受影响账户的入口记录和 429 头。按账户的识别靠访问记录，不把账户 ID 加入低基数指标；异常时调整已核对的后台覆盖值或按下节回滚镜像，保留兼容的数据库列。
 
+## 注册同意上线前核对
+
+注册同意（[账户与租户](../domains/accounts.md#登录与会话)）要求所有控制台操作先检查当前条款版本。旧节点没有这段查询和守卫，迁移又只新增表，所以混合版本期间发布文档会让同一个用户随负载均衡结果被放行或拒绝。
+
+1. 先升级全部服务节点和页面，确认每个节点都返回 `GET /api/console/v1/legal` 和 `getSession.consent`；旧页面没有阅读和接受入口，先升级页面再发布。
+2. 全部节点和页面就绪后才发布首份文档；发布前站点没有文档，机制不改变行为。
+3. 发布后不把流量切回不支持该机制的版本；确需回退时停用站点或保持新版本，不能只换镜像。回退前先确认旧程序仍兼容已经写入的接受记录。
+
 ## 固定交付物与 digest
 
 `ci.yml` 的 `deploy` 作业在列车和 `main`（push 运行，或落地退回逐个合并后调起的 dispatch）上都运行 `release-check.sh`，所以只在 `main` 上会跑的发布步骤会先在列车里失败、退回弄坏它的 PR；只有 `main` 保留发布交付物，PR 不生成。runner 由 `runner-host.sh` 安装固定版本（当前 v0.38.0）、按发布页 `checksums.txt` 校验 SHA-256 的 buildx CLI 插件，`check` 运行 `docker buildx version`；缺少它时 `docker buildx create --name …` 会落到 `docker --name` 并以 125 退出（2026-10-29 `main` 的 `deploy`）。

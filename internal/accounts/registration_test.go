@@ -131,7 +131,7 @@ func (x registrationWorld) registerPending(t *testing.T, host, email string) {
 // verifyAt verifies token at host, and fails the test unless it makes the user.
 func (x registrationWorld) verifyAt(t *testing.T, host, token string) {
 	t.Helper()
-	if _, err := x.s.VerifyEmail(t.Context(), host, token, password, client); err != nil {
+	if _, err := x.s.VerifyEmail(t.Context(), host, token, password, nil, client); err != nil {
 		t.Fatalf("verify at %s: %v", host, err)
 	}
 }
@@ -200,7 +200,7 @@ func TestOpenRegistrationWaitsForVerification(t *testing.T) {
 	if body := x.mail(t, email); !strings.Contains(body, "https://"+console+"/console/verify-email#token=") {
 		t.Fatalf("the verification link does not open the console page: %q", body)
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, x.token(t, email), "short", client); !errors.Is(err, accounts.ErrWeakPassword) {
+	if _, err := x.s.VerifyEmail(t.Context(), console, x.token(t, email), "short", nil, client); !errors.Is(err, accounts.ErrWeakPassword) {
 		t.Fatalf("a weak password at verification: %v", err)
 	}
 }
@@ -218,7 +218,7 @@ func TestVerificationCreatesOneUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := x.token(t, email)
-	user, err := x.s.VerifyEmail(t.Context(), console, token, password, client)
+	user, err := x.s.VerifyEmail(t.Context(), console, token, password, nil, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestVerificationCreatesOneUser(t *testing.T) {
 	if _, err := x.s.SignIn(t.Context(), accounts.SignInRequest{Host: console, Email: email, Password: password, ClientIP: client}); err != nil {
 		t.Fatalf("sign in after verification: %v", err)
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, client); !errors.Is(err, accounts.ErrInvalidVerification) {
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, nil, client); !errors.Is(err, accounts.ErrInvalidVerification) {
 		t.Fatalf("the token was used twice: %v", err)
 	}
 	if err := x.registration.ProcessRegistration(t.Context(), id); err != nil {
@@ -268,7 +268,7 @@ func TestVerificationOfATakenEmailDeletesTheRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("an invitation for the same address: %v", err)
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, client); !errors.Is(err, accounts.ErrEmailTaken) {
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, nil, client); !errors.Is(err, accounts.ErrEmailTaken) {
 		t.Fatalf("verify of a taken address: %v", err)
 	}
 	if got := count(t, x.db, "SELECT count(*) FROM accounts.registration_requests"); got != 0 {
@@ -346,11 +346,11 @@ func TestVerifyEmailSpendsTheIPBudget(t *testing.T) {
 	token := strings.Repeat("a", 43)
 	ip := netip.MustParseAddr("198.51.100.99")
 	for range 20 {
-		if _, err := x.s.VerifyEmail(t.Context(), console, token, password, ip); !errors.Is(err, accounts.ErrInvalidVerification) {
+		if _, err := x.s.VerifyEmail(t.Context(), console, token, password, nil, ip); !errors.Is(err, accounts.ErrInvalidVerification) {
 			t.Fatalf("an unknown token: %v", err)
 		}
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, ip); !errors.Is(err, accounts.ErrTooManyAttempts) {
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, nil, ip); !errors.Is(err, accounts.ErrTooManyAttempts) {
 		t.Fatalf("the 21st verification: %v", err)
 	}
 }
@@ -431,7 +431,7 @@ func TestOpenRegistrationRechecksTheDomainAtVerification(t *testing.T) {
 	if err := x.s.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, client); !errors.Is(err, accounts.ErrEmailDomainNotAllowed) {
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, nil, client); !errors.Is(err, accounts.ErrEmailDomainNotAllowed) {
 		t.Fatalf("verify with the domain denied: %v", err)
 	}
 	if got := count(t, x.db, "SELECT count(*) FROM accounts.users WHERE email = '"+email+"'"); got != 0 {
@@ -444,7 +444,7 @@ func TestOpenRegistrationRechecksTheDomainAtVerification(t *testing.T) {
 	if err := x.s.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, client); err != nil {
+	if _, err := x.s.VerifyEmail(t.Context(), console, token, password, nil, client); err != nil {
 		t.Fatalf("verify after the deny was removed: %v", err)
 	}
 }
