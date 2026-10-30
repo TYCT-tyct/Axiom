@@ -29,6 +29,10 @@ type Demand struct {
 	// counted it (NewTextCount); 0 keeps the bytes-per-token rule of the estimate. It is an estimate, not a bound:
 	// InputBound goes by TextBytes alone.
 	TextTokens int64
+	// Counts are the request's quantities of the items billed per piece, per second or per character, in each item's
+	// own unit: the images to generate, the seconds of audio, the characters to read aloud. A count of a token or
+	// per-use item here is ignored, because those are bounded by TextBytes, the output limit and ServerTools.
+	Counts map[catalog.Item]int64
 }
 
 // ServerTool is a server tool and the most uses the request allows it; 0 means the request set none, so the entry's
@@ -206,8 +210,8 @@ func shortSource(amount platform.Exact, avail []Available) int {
 }
 
 // quoteEntry follows docs/domains/billing.md「预留与结算」: the input of every sampling at its bound, every server tool
-// at its most uses, and the output, the first segment plus the overshoot allowance or else the whole limit, each at
-// the dearest price it can have.
+// at its most uses, every piece, second and character the request states at its count, and the output, the first
+// segment plus the overshoot allowance or else the whole limit, each at the dearest price it can have.
 func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, err error) {
 	if err := checkEntry(e, s); err != nil {
 		return q, err
@@ -259,9 +263,34 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, restPrice); err != nil {
 		return q, err
 	}
+	if err := q.priceCounted(d, &prices, tiers, longest, samplings); err != nil {
+		return q, err
+	}
 	q.allowance = outPrice.Mul(allowance)
 	q.amount = sum(q.fixed, q.allowance, outPrice.Mul(output))
 	return q, nil
+}
+
+// priceCounted adds every piece, second and character the request states at the dearest price it can have: the count
+// is the whole request's, so no band above the longest prompt applies, and every sampling may report it, so each is
+// covered.
+func (q *quote) priceCounted(d Demand, prices *quotePrices, tiers catalog.ServiceTierSet, longest, samplings int64) error {
+	for it := range catalog.NumItems {
+		n := d.Counts[it]
+		if n <= 0 || !catalog.CountedItems.Has(it) {
+			continue
+		}
+		price, ok := prices.ceiling(1<<it, tiers, longest)
+		if !ok {
+			return ErrUnpriced
+		}
+		bound := mul(n, samplings)
+		if bound == math.MaxInt64 {
+			return errOverflow
+		}
+		q.fixed = sum(q.fixed, price.Mul(bound))
+	}
+	return nil
 }
 
 // checkEntry refuses an entry that data, not the request, makes impossible to quote: a model with no context length, and
@@ -321,7 +350,7 @@ func (prices *quotePrices) ceiling(items catalog.ItemSet, tiers catalog.ServiceT
 		return highest, !missing
 	}
 	if !prices.fallbackReady {
-		prices.fallback, _ = prices.schedule.Highest(tokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
+		prices.fallback, _ = prices.schedule.Highest(catalog.TokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
 		prices.fallbackReady = true
 	}
 	if highest.Cmp(prices.fallback) < 0 {

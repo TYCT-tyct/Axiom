@@ -317,7 +317,8 @@ func oneOf(found []*Entry) (*Entry, error) {
 }
 
 // maxTokenPrice is $1000 per million tokens, past 100 times what the dearest models cost; a price above it is a unit
-// mistake (per million for per token). maxUsePrice is the same for a search or a call.
+// mistake (per million for per token). maxUsePrice is the same for anything not counted in tokens: a search or a call,
+// and a piece, second or character, each of which is priced per thing rather than per million.
 var maxTokenPrice, maxUsePrice = mustPrice("0.001"), mustPrice("1")
 
 func mustPrice(s string) platform.UnitPrice {
@@ -358,7 +359,7 @@ func sane(s Schedule) error {
 func saneBand(s Schedule, st ServiceTier, band int) error {
 	for it := range NumItems {
 		limit := maxTokenPrice
-		if it == ItemWebSearch || it == ItemCodeExecution {
+		if it.Unit() != UnitToken {
 			limit = maxUsePrice
 		}
 		if p, ok := s.price(st, band, it); ok && p.Cmp(limit) > 0 {

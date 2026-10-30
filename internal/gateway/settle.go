@@ -207,9 +207,10 @@ func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer) (int64, er
 // rather than beside them; the output by the text, reasoning and tool input read, at the tokens per byte of their
 // shape in tok's weights (billing.TextTokens) and at outputBytesPerToken for a family without, never below a count
 // reported so far and never above the output cap the attempt was quoted at (outputCap, the meter's own, which metering
-// holds the output to); the web searches by the events seen. The bounds and the cap keep an estimate within what the
-// reservation covers. Nothing corrects an estimate after the charge in M1: the supplier's record is the platform's
-// cost, not the user's bill.
+// holds the output to); the web searches by the events seen; and the pieces, seconds and characters by the request's own
+// counts, since it was reserved for them. The bounds and the cap keep an estimate within what the reservation covers.
+// Nothing corrects an estimate after the charge in M1: the supplier's record is the platform's cost, not the user's
+// bill.
 func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billing.Model, outputCap int64,
 	tok billing.Tokenizer,
 ) []billing.Segment {
@@ -229,6 +230,11 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	counts[catalog.ItemOutput] = estimateOutput(*reply, p, outputCap, tok)
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)
+	}
+	for it, n := range d.Counts {
+		if catalog.CountedItems.Has(it) && !reply.Reported.Has(it) {
+			counts[it] = max(counts[it], n)
+		}
 	}
 	reply.Usage = recountCapped(reply.Usage, counts)
 	if n, ok := reply.Usage.PhysicalInput(); ok && !inputReported(u) && input > n {

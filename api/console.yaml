@@ -2086,8 +2086,8 @@ components:
       properties:
         item: {type: string, description: "Billing item, or unknown_tokens / unknown_uses for unmapped usage."}
         quantity: {type: integer, format: int64, minimum: 0}
-        unit: {type: string, enum: [token, use]}
-        unit_price: {type: string, description: "Exact currency units per token or use, decimal text with up to 15 fractional digits."}
+        unit: {type: string, enum: [token, use, piece, second, character]}
+        unit_price: {type: string, description: "Exact currency units per billing unit (token, use, piece, second or character), decimal text with up to 15 fractional digits."}
         amount: {type: string, description: "Exact quantity times unit_price, before call-level rounding and balance adjustment."}
         sampling: {type: integer, minimum: 1}
         service_tier: {type: string}

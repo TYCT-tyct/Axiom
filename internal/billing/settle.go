@@ -259,24 +259,32 @@ func waivable(last AttemptResult) bool {
 	return last.Finish != FinishCancelled && (!delivered || zeroOutput(last))
 }
 
+// deliveredOutputs are the items that show a reply reached the client as billable output: the token outputs and the
+// pieces and seconds an image or speech endpoint delivers instead of tokens.
+const deliveredOutputs = catalog.OutputSide | 1<<catalog.ItemImageOutPiece | 1<<catalog.ItemAudioOutSecond
+
 // zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning, audio
-// and images adds up to zero, and the finish was empty or an error. An output count the upstream never reported is a
-// default zero, not a reported one, so it proves nothing.
+// and images, in tokens and in pieces and seconds, adds up to zero, and the finish was empty or an error. An output
+// count the upstream never reported is a default zero, not a reported one, so it proves nothing.
 func zeroOutput(last AttemptResult) bool {
 	var output int64
 	for _, s := range last.Segments {
 		if !s.Reported.Has(catalog.ItemOutput) {
 			return false
 		}
-		output += s.Usage.Count(catalog.ItemOutput) + s.Usage.Count(catalog.ItemReasoning) +
-			s.Usage.Count(catalog.ItemAudioOut) + s.Usage.Count(catalog.ItemImageOut)
+		for it := range catalog.NumItems {
+			if deliveredOutputs.Has(it) {
+				output += s.Usage.Count(it)
+			}
+		}
 	}
 	return len(last.Segments) > 0 && output == 0 && (last.Finish == FinishNone || last.Finish == FinishError)
 }
 
 // perUseItems are the items charged even when a call is waived (「按次计费的项目照常收费」), the ones a fallback row must
 // price for every currency (parseFallbacks), and the ones the listing gate leaves out because admission fills them in
-// (Unpriced). Adding an item here adds it to all three.
+// (Unpriced). Adding an item here adds it to all three. A piece, second or character is not one: it is output the call
+// delivers, so a waived call does not charge it.
 const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution
 
 func chargedItems(perUseOnly bool) catalog.ItemSet {
@@ -288,7 +296,7 @@ func chargedItems(perUseOnly bool) catalog.ItemSet {
 
 func unknownCharged(tokens bool, charged catalog.ItemSet) bool {
 	if tokens {
-		return charged&tokenItems != 0
+		return charged&catalog.TokenItems != 0
 	}
 	return charged&perUseItems != 0
 }
@@ -424,15 +432,51 @@ func addMissing(s catalog.Schedule, f fallbacks, cost platform.Exact, u catalog.
 	return cost, nil
 }
 
+// missingRate is the rate an item without a price is charged at. A per-use item takes its configured default. An item
+// counted per piece, second or character takes the dearest price the schedule has for the same unit over every tier and
+// band, so a piece is never priced as a token; a unit the schedule prices nowhere falls back to the token price, as
+// every unpriced item did before, and the charge is estimated.
 func missingRate(s catalog.Schedule, f fallbacks, it catalog.Item) platform.UnitPrice {
 	if perUseItems.Has(it) {
 		return f.perUse[it]
 	}
+	if unit := it.Unit(); unit != catalog.UnitToken {
+		if highest, priced := unitPrice(s, unit); priced {
+			return highest
+		}
+	}
 	return tokenPrice(s)
 }
 
-// tokenItems are the items counted in tokens.
-const tokenItems = ^perUseItems
+// unitPrice is the dearest price the schedule has for a unit, over every tier and band, and whether it prices the unit
+// at all. Any price counts, including an explicit zero: a unit priced nowhere is the only reason to charge it as tokens.
+func unitPrice(s catalog.Schedule, unit catalog.Unit) (platform.UnitPrice, bool) {
+	items := itemsOfUnit(unit)
+	highest, missing := s.Highest(items, ^catalog.ServiceTierSet(0), math.MaxInt64)
+	if !missing || highest.Cmp(platform.UnitPrice{}) > 0 {
+		return highest, true
+	}
+	for it := range catalog.NumItems {
+		if items.Has(it) {
+			p, missing := s.Highest(1<<it, ^catalog.ServiceTierSet(0), math.MaxInt64)
+			if !missing || p.Cmp(platform.UnitPrice{}) > 0 {
+				return highest, true
+			}
+		}
+	}
+	return highest, false
+}
+
+// itemsOfUnit are the items billed in unit, for pricing one the schedule leaves out at the dearest price of its own
+// unit.
+func itemsOfUnit(unit catalog.Unit) (items catalog.ItemSet) {
+	for it := range catalog.NumItems {
+		if catalog.Item(it).Unit() == unit {
+			items.Add(catalog.Item(it))
+		}
+	}
+	return items
+}
 
 // segmentCost is one sampling's cost, of its per-use items alone when perUseOnly, and the items without a price.
 func segmentCost(s catalog.Schedule, u catalog.Usage, perUseOnly bool) (platform.Exact, catalog.ItemSet, error) {

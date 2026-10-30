@@ -199,7 +199,7 @@ const intersectionPath = ".cached_tokens_details."
 // tokenPrice is one token at the highest price of any token item at any service tier and band: what a schedule that
 // prices a token nowhere near the price of the tier a call was served at still charges, 0 if it prices no token at all.
 func tokenPrice(s catalog.Schedule) platform.UnitPrice {
-	price, _ := s.Highest(tokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
+	price, _ := s.Highest(catalog.TokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
 	return price
 }
 
