@@ -128,6 +128,12 @@ export async function unwrapEmpty(call: Promise<Settled<unknown>>) {
   await settle(call);
 }
 
+// unwrapEmptyChange is unwrapChange for a change that answers 204: no data, but still the replay flag.
+export async function unwrapEmptyChange(call: Promise<Settled<unknown>>) {
+  const { response } = await settle(call);
+  return { data: null, replayed: response.headers.get("Idempotency-Replayed") === "true" };
+}
+
 // isTransient tells whether a failed call may succeed when sent again: no response arrived, or the server failed. A
 // refused request (4xx) and a response that could not be read fail the same way again.
 export function isTransient(error: unknown) {

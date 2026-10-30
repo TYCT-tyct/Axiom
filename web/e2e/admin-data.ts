@@ -16,6 +16,10 @@ export type AdminState = AuthState & {
   tiers: Schemas["TierRef"][];
   users: Schemas["UserSummary"][];
   accounts: Map<string, Schemas["AccountDetail"]>;
+  calls: Schemas["AdminCallSummary"][];
+  traces: Map<string, Schemas["AdminCallTrace"]>;
+  audit: Schemas["AuditEntry"][];
+  auditEntries: Map<string, Schemas["AuditEntry"]>;
   suppliers: Schemas["SupplierDetail"][];
   // how many times a supplier that is connecting has been read, to settle it after the first
   reads: Map<string, number>;
@@ -27,7 +31,11 @@ export type AdminState = AuthState & {
 
 const allPermissions = [
   "users.view",
+  "users.manage",
   "credits.grant",
+  "calls.search",
+  "calls.inspect",
+  "audit.view",
   "suppliers.view",
   "suppliers.manage",
   "catalog.view",
@@ -83,9 +91,87 @@ function anAccount(user: Schemas["UserSummary"], over: Partial<Schemas["AccountD
       spent_this_month: nano("3141592653"),
     },
     key_limits: { limits: {}, effective: { max_keys: 100, creations_per_hour: 50 } },
+    calls_suspended: user.status === "disabled",
+    sign_in_disabled: user.status === "disabled",
     created_at: user.created_at,
     ...over,
   } satisfies Schemas["AccountDetail"];
+}
+
+const callTime = (n: number) => new Date(Date.UTC(2026, 9, 30, 10, n % 60, n % 60)).toISOString();
+
+function aCall(n: number, user: Schemas["UserSummary"]): Schemas["AdminCallSummary"] {
+  const failed = n % 7 === 0;
+  return {
+    id: uuid(11, n),
+    site_id: siteId,
+    account_id: user.account_id,
+    at: callTime(n),
+    model: n % 5 === 0 ? "unmapped-model" : "claude-sonnet-4-5",
+    error_kind: failed ? "upstream_timeout" : "",
+    latency_ms: failed ? 30_000 : 1_200 + n,
+    price: nano(String(n * 1_500_000_000)),
+  };
+}
+
+function aTrace(call: Schemas["AdminCallSummary"], n: number): Schemas["AdminCallTrace"] {
+  const at = call.at ?? callTime(n);
+  const failed = Boolean(call.error_kind);
+  return {
+    summary: call,
+    cost: nano(String(n * 900_000_000)),
+    route: { requested_model: call.model, endpoint_id: uuid(6, 1), retries: 1, note: long("route ", 40) },
+    attempts: [
+      {
+        seq: 1,
+        endpoint_id: uuid(6, 1),
+        supplier_id: uuid(2, 1),
+        source_class: "primary",
+        egress: "direct",
+        outcome: failed ? "failed" : "committed",
+        error_kind: failed ? call.error_kind : "",
+        started_at: at,
+        finished_at: at,
+        first_token_ms: failed ? undefined : 420,
+      },
+      {
+        seq: 2,
+        endpoint_id: uuid(6, 2),
+        supplier_id: uuid(2, 2),
+        source_class: "fallback",
+        egress: "proxy",
+        outcome: "committed",
+        error_kind: "",
+        started_at: at,
+        finished_at: at,
+        first_token_ms: 610,
+      },
+    ],
+  };
+}
+
+function anAuditEntry(n: number, user: Schemas["UserSummary"]): Schemas["AuditEntry"] {
+  const rows = [
+    ["accounts", "account.tier_change", "account"],
+    ["billing", "credit.grant", "account"],
+    ["catalog", "model.update", "model"],
+  ] as const;
+  const [module, action, kind] = rows[n % rows.length] ?? rows[0];
+  return {
+    id: uuid(12, n),
+    actor_kind: "user",
+    actor_id: "admin@example.com",
+    request_id: uuid(11, n),
+    action,
+    module,
+    target_kind: kind,
+    target_id: kind === "model" ? `anthropic/model-${n}` : user.account_id,
+    reason: `Reviewed change ${n}`,
+    at: new Date(Date.UTC(2026, 9, 30, 11, n % 60, n % 60)).toISOString(),
+    site_id: siteId,
+    account_id: user.account_id,
+    detail: { before: "Standard", after: "Pro", amount: nano(String(n * 2_000_000_000)), attempt: n },
+  };
 }
 
 export function aSupplier(n: number, over: Partial<Schemas["Supplier"]> = {}): Schemas["Supplier"] {
@@ -276,6 +362,9 @@ function rules(): Schemas["PricingRule"][] {
 export function usualState(): AdminState {
   const users = range(60).map((n) => aUser(n));
   const own = aUser(0, { email: "admin@example.com", mfa_enabled: true, tier: tiers[0] });
+  const people = [own, ...users];
+  const calls = range(60).map((n) => aCall(n, people[(n - 1) % people.length] ?? own));
+  const audit = range(60).map((n) => anAuditEntry(n, people[(n - 1) % people.length] ?? own));
   const state: AdminState = {
     ...authState(allPermissions),
     siteId,
@@ -294,6 +383,10 @@ export function usualState(): AdminState {
     tiers,
     users,
     accounts: new Map([own, ...users].map((user) => [user.account_id, anAccount(user)])),
+    calls,
+    traces: new Map(calls.map((call, i) => [call.id ?? uuid(11, i + 1), aTrace(call, i + 1)])),
+    audit,
+    auditEntries: new Map(audit.map((entry) => [entry.id ?? uuid(12, 1), entry])),
     suppliers: suppliers(),
     reads: new Map(),
     pending: pending(60),
@@ -307,7 +400,19 @@ export function usualState(): AdminState {
 }
 
 export function emptyState(): AdminState {
-  return { ...usualState(), users: [], suppliers: [], pending: [], authors: [], models: [], rules: [] };
+  return {
+    ...usualState(),
+    users: [],
+    calls: [],
+    traces: new Map(),
+    audit: [],
+    auditEntries: new Map(),
+    suppliers: [],
+    pending: [],
+    authors: [],
+    models: [],
+    rules: [],
+  };
 }
 
 // The longest values the contract allows, mixed over the rows: a 200-character supplier name, a 254-character email,
@@ -332,6 +437,11 @@ export function worstState(): AdminState {
       }),
     );
   }
+  const people = state.users;
+  state.calls = range(1_000).map((n) => aCall(n, people[(n - 1) % people.length] ?? aUser(0)));
+  state.traces = new Map(state.calls.map((call, i) => [call.id ?? uuid(11, i + 1), aTrace(call, i + 1)]));
+  state.audit = range(500).map((n) => anAuditEntry(n, people[(n - 1) % people.length] ?? aUser(0)));
+  state.auditEntries = new Map(state.audit.map((entry) => [entry.id ?? uuid(12, 1), entry]));
   state.suppliers = [
     aDetail(1, {
       name: long("Supplier with a name of the longest length ", 200),

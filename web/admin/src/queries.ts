@@ -52,6 +52,83 @@ export const accountQuery = (id: AdminSchemas["AccountId"]) =>
       unwrap(adminApi.GET(`${base}/accounts/{account_id}`, { params: { path: { account_id: id } }, signal })),
   });
 
+// A window is the server's: the page a cursor leads to keeps the since/until of the answer it came from, so the end
+// of a 31-day search does not silently become the default 24 hours.
+type PageWindow = { cursor?: string; since?: string; until?: string };
+
+export function nextWindow(page: { next_cursor?: string | null; since?: string; until?: string }) {
+  return page.next_cursor ? { cursor: page.next_cursor, since: page.since, until: page.until } : undefined;
+}
+
+export type AdminCallFilters = {
+  account_id?: string;
+  request_id?: string;
+  since?: string;
+  until?: string;
+};
+
+// The server's page carries the window the first page actually used; the next page sends it back so a default window
+// does not move while someone pages through it.
+const callPageQuery = (filters: AdminCallFilters, page: PageWindow) => ({
+  ...filters,
+  since: page.since ?? filters.since,
+  until: page.until ?? filters.until,
+  cursor: page.cursor,
+  limit: pageSize,
+});
+
+export const adminCallsQuery = (filters: AdminCallFilters) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "admin-calls", filters],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/calls`, {
+          params: { query: callPageQuery(filters, pageParam) },
+          signal,
+        }),
+      ),
+    initialPageParam: {} as PageWindow,
+    getNextPageParam: nextWindow,
+  });
+
+export const adminCallQuery = (id: string) =>
+  queryOptions({
+    queryKey: [accountKey, "admin-call", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/calls/{call_id}/trace`, { params: { path: { call_id: id } }, signal })),
+  });
+
+export type AdminAuditFilters = AdminCallFilters & {
+  actor_kind?: string;
+  actor_id?: string;
+  action?: string;
+  module?: string;
+  target_kind?: string;
+  target_id?: string;
+  site_id?: string;
+};
+
+export const adminAuditQuery = (filters: AdminAuditFilters) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "admin-audit", filters],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/audit`, {
+          params: { query: callPageQuery(filters, pageParam) },
+          signal,
+        }),
+      ),
+    initialPageParam: {} as PageWindow,
+    getNextPageParam: nextWindow,
+  });
+
+export const auditEntryQuery = (id: string) =>
+  queryOptions({
+    queryKey: [accountKey, "audit-entry", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/audit/{entry_id}`, { params: { path: { entry_id: id } }, signal })),
+  });
+
 export const siteKeyLimitsQuery = (id: AdminSchemas["SiteId"]) =>
   queryOptions({
     queryKey: [accountKey, "site-key-limits", id],
