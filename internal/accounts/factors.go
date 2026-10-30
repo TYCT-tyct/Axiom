@@ -22,9 +22,10 @@ var (
 	ErrBadCode = errors.New("accounts: wrong code")
 	// ErrBadSecret is a TOTP secret that is not 20 bytes of base32.
 	ErrBadSecret = errors.New("accounts: not a TOTP secret")
-	// ErrTOTPOn is turning on two-step verification for a user who has it: replacing or turning it off is M2's
-	// (README.md「注册、登录与会话」), and in M1 only the command line resets it.
+	// ErrTOTPOn is turning on two-step verification for a user who has it; ReplaceTOTP is how it is replaced instead.
 	ErrTOTPOn = errors.New("accounts: two-step verification is already on")
+	// ErrTOTPOff is replacing two-step verification for a user who does not have it.
+	ErrTOTPOff = errors.New("accounts: two-step verification is not on")
 )
 
 const recoveryCodeCount = 10 // each 80 random bits
@@ -159,11 +160,12 @@ func (*Service) BeginTOTP(p Principal) (secretText, uri string) {
 }
 
 // FactorChange is a change to a user's factors: a new TOTP secret confirmed with the password and one of its codes,
-// or new recovery codes confirmed with a current TOTP code.
+// new recovery codes confirmed with a current TOTP code, or a replacement TOTP secret confirmed with a current TOTP
+// or recovery code (CurrentCode) and a code from the new secret (Code).
 type FactorChange struct {
-	Secret, Password, Code string
-	ClientIP               netip.Addr
-	UserAgent              string
+	Secret, Password, Code, CurrentCode string
+	ClientIP                            netip.Addr
+	UserAgent                           string
 }
 
 // ConfirmTOTP turns on two-step verification for p with the secret BeginTOTP gave, when password is the user's and
@@ -210,6 +212,61 @@ func (s *Service) confirmTOTP(ctx context.Context, p Principal, c FactorChange) 
 			return ErrTOTPOn
 		}
 		return s.queries.EnableTOTP(ctx, tx, EnableTOTPParams{
+			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,
+			Step: step, ID: user,
+		})
+	})
+}
+
+// ReplaceTOTP replaces two-step verification's TOTP secret for p when CurrentCode is a current TOTP code or an unused
+// recovery code and Code is a code from the new secret. It is for a user who has the factor on and is signed in on the
+// console with a session that passed two-step verification; a factor that is off is ErrTOTPOff. The current code is
+// spent and the factor version rises under the user's lock, so every other session and recovery code ends; the new
+// recovery codes and a two-step-verified session for this device are returned. A wrong current or new code spends one
+// of the user's code failures, as in VerifyMFA.
+func (s *Service) ReplaceTOTP(ctx context.Context, p Principal, c FactorChange) (out Issued, recovery []string, err error) {
+	if p.user == (UserID{}) || p.Pending() || p.surface != Console {
+		return Issued{}, nil, ErrNoSession
+	}
+	defer func() { s.failed(ctx, p.securityAttempt(), "security.factor_failed", &err) }()
+	l := s.snapshot.Load().sites[p.site].limits
+	var issued Issued
+	var codes []string
+	var refused error
+	err = failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
+		issued, codes, refused = s.replaceTOTP(ctx, p, c)
+		if errors.Is(refused, ErrBadCode) {
+			return refused // a wrong guess is the only thing that counts; the bucket is the user's, shared with sign-in's
+		}
+		return nil
+	})
+	if err == nil {
+		err = refused
+	}
+	return issued, codes, err
+}
+
+func (s *Service) replaceTOTP(ctx context.Context, p Principal, c FactorChange) (Issued, []string, error) {
+	key, err := totpBase32.DecodeString(strings.ToUpper(c.Secret))
+	if err != nil || len(key) != 20 {
+		return Issued{}, nil, ErrBadSecret
+	}
+	step, ok := totpStep(key, c.Code, s.now())
+	if !ok {
+		return Issued{}, nil, ErrBadCode
+	}
+	user := uuid.UUID(p.user)
+	sealed := s.keyring.Seal(secret.New(totpBase32.EncodeToString(key)), totpLocation(user))
+	version := int64(sealed.KeyVersion)
+	return s.changeFactors(ctx, p, c, "user.totp_replace", func(tx pg.Tx, locked LockUserRow) error {
+		if !locked.Mfa {
+			return ErrTOTPOff
+		}
+		spent, err := s.spendCode(ctx, tx, user, locked, c.CurrentCode)
+		if err != nil || !spent {
+			return errors.Join(err, ErrBadCode)
+		}
+		return s.queries.ReplaceTOTP(ctx, tx, ReplaceTOTPParams{
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,
 			Step: step, ID: user,
 		})
