@@ -167,37 +167,39 @@ func compare(a, b *ranked, strategy Strategy) int {
 	if c := compareBool(a.notSticky, b.notSticky); c != 0 {
 		return c
 	}
-	var c int
+	if c := compareBy(a, b, strategy); c != 0 {
+		return c
+	}
+	return slices.Compare(a.ID[:], b.ID[:])
+}
+
+// compareBy is the strategy's own order, once the order, the performance wishes and stickiness agree.
+func compareBy(a, b *ranked, strategy Strategy) int {
 	switch strategy {
 	case Balanced:
-		c = cmp.Compare(b.key, a.key)
+		return cmp.Compare(b.key, a.key)
 	case Cheapest:
-		c = cmp.Compare(a.price.blend, b.price.blend)
+		return cmp.Compare(a.price.blend, b.price.blend)
 	case Fastest:
-		c = compareFastest(a, b)
+		return compareFastest(a, b)
 	case LowestLatency:
-		c = compareBool(a.Latency == 0, b.Latency == 0)
-		if c == 0 {
-			if a.Latency == 0 {
-				c = cmp.Compare(b.key, a.key)
-			} else {
-				c = cmp.Compare(a.Latency, b.Latency)
+		if a.Latency == 0 || b.Latency == 0 {
+			if a.Latency != b.Latency {
+				return compareBool(a.Latency == 0, b.Latency == 0)
 			}
+			return cmp.Compare(b.key, a.key)
 		}
+		return cmp.Compare(a.Latency, b.Latency)
 	case BestQuality:
 		if c := compareBool(!a.known, !b.known); c != 0 {
 			return c
 		}
-		if a.known {
-			c = cmp.Compare(b.quality, a.quality)
-		} else {
-			c = cmp.Compare(b.key, a.key) // unknown: balanced's price-weighted draw, never the endpoint's ID
+		if !a.known {
+			return cmp.Compare(b.key, a.key) // unknown: balanced's price-weighted draw, never the endpoint's ID
 		}
+		return cmp.Compare(b.quality, a.quality)
 	}
-	if c != 0 {
-		return c
-	}
-	return slices.Compare(a.ID[:], b.ID[:])
+	return 0
 }
 
 // compareFastest puts the explored candidate first, then the measured ones by throughput and time to first token, then
