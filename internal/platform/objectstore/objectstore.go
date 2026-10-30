@@ -1,7 +1,7 @@
 // Package objectstore reads and writes objects through the S3 API. It is the platform's only client for object
-// storage: backups keep their own bucket and credentials in the ops image, and archive and content features take this
-// client when they land. Conversation bodies are not written through it: the product switch that would save them is
-// still off (docs/domains/observability.md「保留与开关」).
+// storage: backups use it with their own bucket and credentials in the ops job, and archive and content features take
+// this client when they land. Conversation bodies are not written through it: the product switch that would save them
+// is still off (docs/domains/observability.md「保留与开关」).
 //
 // Every operation requires a context deadline, retries only failures that may pass, and never follows a redirect.
 // The rules and the choices behind them are in this directory's README.
@@ -94,6 +94,10 @@ type Client struct {
 	attempts    int
 	retryBase   time.Duration
 	retryMax    time.Duration
+	// partSize and threshold are fields so the tests can exercise several parts without moving sixteen mebibytes;
+	// production keeps the constants.
+	partSize  int64
+	threshold int64
 }
 
 // Open checks the configuration and builds the client. It does not contact the bucket: a deployment may start while
@@ -122,6 +126,8 @@ func Open(cfg Config) (*Client, error) {
 		attempts:    maxAttempts,
 		retryBase:   retryBase,
 		retryMax:    retryMax,
+		partSize:    defaultPartSize,
+		threshold:   multipartThreshold,
 	}, nil
 }
 
@@ -142,8 +148,30 @@ func (c *Client) Check(ctx context.Context) error {
 	return nil
 }
 
+// Create makes the bucket. An existing bucket is success only if Check can address it: S3 answers 409 both for a name
+// these credentials already own and for another owner's, and the HEAD that follows tells them apart.
+func (c *Client) Create(ctx context.Context) error {
+	resp, err := c.do(ctx, request{method: http.MethodPut, payloadHash: emptySHA256})
+	if err != nil {
+		return fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+	}
+	if resp.StatusCode/100 == 2 {
+		_ = resp.Body.Close() //nolint:errcheck // no body carries a result here
+		return nil
+	}
+	if resp.StatusCode == http.StatusConflict {
+		_ = resp.Body.Close() //nolint:errcheck // the conflict body says which owner; the HEAD that follows is authoritative
+		if err := c.Check(ctx); err != nil {
+			return fmt.Errorf("objectstore: create bucket %q: the name is taken and these credentials cannot address it: %w", c.bucket, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, remoteError(resp))
+}
+
 // Put writes one object. A failed attempt re-sends the body from its start, so the body must be seekable; the same
-// key is overwritten, as S3 defines PUT.
+// key is overwritten, as S3 defines PUT. A known size over the multipart threshold goes up in parts, so an archive is
+// not bounded by the single PUT limit; an unknown size is counted while hashing and stays a single PUT.
 func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 	if err := checkKey(up.Key); err != nil {
 		return ObjectInfo{}, err
@@ -152,11 +180,14 @@ func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 		return ObjectInfo{}, err
 	}
 	if up.Size > maxObjectSize {
-		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte single PUT limit: %w", up.Key, maxObjectSize, ErrTooLarge)
+		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte object limit: %w", up.Key, int64(maxObjectSize), ErrTooLarge)
 	}
-	hash, size, err := hashBody(ctx, up.Body, maxObjectSize)
+	if up.Size > c.threshold {
+		return c.putMultipart(ctx, up, up.Size)
+	}
+	hash, size, err := hashBody(ctx, up.Body, maxSinglePut)
 	if errors.Is(err, ErrTooLarge) {
-		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte single PUT limit: %w", up.Key, maxObjectSize, ErrTooLarge)
+		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte single PUT limit: %w", up.Key, int64(maxSinglePut), ErrTooLarge)
 	}
 	if err != nil {
 		return ObjectInfo{}, fmt.Errorf("objectstore: read %q: %w", up.Key, err)

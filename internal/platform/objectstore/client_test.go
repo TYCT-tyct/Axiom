@@ -3,11 +3,13 @@ package objectstore
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,15 +18,23 @@ import (
 	"axiom/internal/platform/secret"
 )
 
-// fakeS3 is the smallest S3 the client's tests need: one bucket, PUT/GET/HEAD/DELETE, a two-page listing, and switches
-// for the failures a test wants the client to meet.
+// fakeS3 is the smallest S3 the client's tests need: one bucket, PUT/GET/HEAD/DELETE, a two-page listing, multipart
+// uploads, and switches for the failures a test wants the client to meet.
 type fakeS3 struct {
-	mu        sync.Mutex
-	objects   map[string][]byte
-	paths     []string
-	failures  int  // answer 503 this many times, then behave
-	forbidden bool // answer 403
-	redirect  bool // answer 307
+	mu           sync.Mutex
+	objects      map[string][]byte
+	uploads      map[string]map[int][]byte
+	aborted      []string
+	paths        []string
+	created      int
+	bucket       bool // the bucket exists; a second Create answers 409
+	takenByOther bool // the bucket belongs to another owner, so the HEAD after the 409 is 403
+	failures     int  // answer 503 this many times, then behave
+	failPartAt   int  // answer 500 for this part number, forever
+	failDone     bool // answer 500 to every completion
+	errorDone    bool // answer 200 with an Error document to every completion
+	forbidden    bool // answer 403
+	redirect     bool // answer 307
 }
 
 // writeTest is a test handler's write: the client on the other end failing is the test's own failure to report.
@@ -32,7 +42,9 @@ func writeTest(w io.Writer, value string) {
 	_, _ = io.WriteString(w, value) //nolint:errcheck // a test handler's write
 }
 
-func newFakeS3() *fakeS3 { return &fakeS3{objects: map[string][]byte{}} }
+func newFakeS3() *fakeS3 {
+	return &fakeS3{objects: map[string][]byte{}, uploads: map[string]map[int][]byte{}}
+}
 
 // seen copies the paths the server answered, under its lock, so a test reads no field the handler is writing.
 func (f *fakeS3) seen() []string {
@@ -68,12 +80,37 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	key := strings.TrimPrefix(r.URL.Path, "/axiom")
 	key = strings.TrimPrefix(key, "/")
-	if key == "" && r.Method == http.MethodHead {
+	query := r.URL.Query()
+	if key == "" && r.Method == http.MethodPut {
+		f.created++
+		if f.bucket {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		f.bucket = true
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if r.URL.Query().Get("list-type") == "2" {
+	if key == "" && r.Method == http.MethodHead {
+		if f.takenByOther {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if query.Get("list-type") == "2" {
 		f.list(w, r)
+		return
+	}
+	if _, initiating := query["uploads"]; initiating && r.Method == http.MethodPost {
+		id := fmt.Sprintf("upload-%d", len(f.uploads)+1)
+		f.uploads[id] = map[int][]byte{}
+		writeTest(w, `<InitiateMultipartUploadResult><UploadId>`+id+`</UploadId></InitiateMultipartUploadResult>`)
+		return
+	}
+	if uploadID := query.Get("uploadId"); uploadID != "" {
+		f.multipart(w, r, uploadID)
 		return
 	}
 	switch r.Method {
@@ -102,6 +139,81 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case http.MethodDelete:
 		delete(f.objects, key)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// multipart answers one part's PUT, the completion and the abort, under the handler's lock.
+func (f *fakeS3) multipart(w http.ResponseWriter, r *http.Request, uploadID string) {
+	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/axiom"), "/")
+	parts, ok := f.uploads[uploadID]
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		writeTest(w, `<Error><Code>NoSuchUpload</Code><Message>missing upload</Message></Error>`)
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		number, err := strconv.Atoi(r.URL.Query().Get("partNumber"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if number == f.failPartAt {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		parts[number] = body
+		w.Header().Set("ETag", fmt.Sprintf(`"part-%d-%s"`, number, sumHex(body)))
+		w.WriteHeader(http.StatusOK)
+	case http.MethodPost:
+		if f.failDone {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if f.errorDone {
+			writeTest(w, `<Error><Code>InternalError</Code><Message>completion failed</Message><RequestId>r1</RequestId></Error>`)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var request struct {
+			Parts []struct {
+				PartNumber int    `xml:"PartNumber"`
+				ETag       string `xml:"ETag"`
+			} `xml:"Part"`
+		}
+		if err := xml.Unmarshal(body, &request); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var object []byte
+		for _, part := range request.Parts {
+			data, ok := parts[part.PartNumber]
+			if !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			object = append(object, data...)
+		}
+		f.objects[key] = object
+		delete(f.uploads, uploadID)
+		writeTest(w, `<CompleteMultipartUploadResult><ETag>"complete"</ETag></CompleteMultipartUploadResult>`)
+	case http.MethodDelete:
+		delete(f.uploads, uploadID)
+		f.aborted = append(f.aborted, uploadID)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -398,11 +510,140 @@ func TestUnsafeKeysAreRefused(t *testing.T) {
 	}
 }
 
-func TestPutRefusesAnObjectOverTheSinglePutLimit(t *testing.T) {
+func TestPutRefusesAnObjectOverTheObjectLimit(t *testing.T) {
 	client := newTestClient(t, newFakeS3())
 	_, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("v"), Size: maxObjectSize + 1})
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+}
+
+// multipartClient makes a ten-byte object three parts: the threshold is eight bytes and a part four, so the test does
+// not move sixteen mebibytes through the double.
+func multipartClient(t *testing.T, fake *fakeS3) *Client {
+	t.Helper()
+	client := newTestClient(t, fake)
+	client.threshold = 8
+	client.partSize = 4
+	return client
+}
+
+func TestPutAboveTheThresholdUsesParts(t *testing.T) {
+	fake := newFakeS3()
+	client := multipartClient(t, fake)
+	info, err := client.Put(deadline(t), Upload{Key: "archive.bin", Body: strings.NewReader("abcdefghij"), Size: 10})
+	if err != nil || info.Size != 10 || info.ETag != `"complete"` {
+		t.Fatalf("Put = %+v, %v", info, err)
+	}
+	if got := fake.body("archive.bin"); got != "abcdefghij" {
+		t.Fatalf("stored %q, want abcdefghij", got)
+	}
+	if len(fake.uploads) != 0 {
+		t.Fatalf("the upload survived completion: %v", fake.uploads)
+	}
+	paths := strings.Join(fake.seen(), "\n")
+	for _, want := range []string{"?uploads=", "partNumber=1&uploadId=upload-1", "partNumber=3&uploadId=upload-1", "uploadId=upload-1"} {
+		if !strings.Contains(paths, want) {
+			t.Fatalf("requests lack %q:\n%s", want, paths)
+		}
+	}
+}
+
+func TestPutAtTheThresholdStaysOneRequest(t *testing.T) {
+	fake := newFakeS3()
+	client := multipartClient(t, fake)
+	if _, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefgh"), Size: 8}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if strings.Contains(strings.Join(fake.seen(), "\n"), "uploads") {
+		t.Fatalf("a body at the threshold started a multipart upload: %v", fake.seen())
+	}
+}
+
+func TestMultipartAbortsWhenAPartKeepsFailing(t *testing.T) {
+	fake := newFakeS3()
+	fake.failPartAt = 2
+	client := multipartClient(t, fake)
+	_, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefghij"), Size: 10})
 	if err == nil {
-		t.Fatal("a body over the single PUT limit was accepted")
+		t.Fatal("a failing part was accepted")
+	}
+	if len(fake.aborted) != 1 || fake.aborted[0] != "upload-1" {
+		t.Fatalf("aborted = %v, want upload-1", fake.aborted)
+	}
+	if len(fake.uploads) != 0 {
+		t.Fatalf("the failed upload survived: %v", fake.uploads)
+	}
+	partAttempts := 0
+	for _, path := range fake.seen() {
+		if strings.Contains(path, "partNumber=2") {
+			partAttempts++
+		}
+	}
+	if partAttempts != maxAttempts {
+		t.Fatalf("part 2 was attempted %d times, want %d", partAttempts, maxAttempts)
+	}
+}
+
+func TestMultipartAbortsWhenCompletionFails(t *testing.T) {
+	fake := newFakeS3()
+	fake.failDone = true
+	client := multipartClient(t, fake)
+	if _, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefghij"), Size: 10}); err == nil {
+		t.Fatal("a failing completion was accepted")
+	}
+	if len(fake.aborted) != 1 {
+		t.Fatalf("aborted = %v, want one abort", fake.aborted)
+	}
+}
+
+func TestMultipartRejectsATwoHundredErrorDocument(t *testing.T) {
+	fake := newFakeS3()
+	fake.errorDone = true
+	client := multipartClient(t, fake)
+	_, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefghij"), Size: 10})
+	var remote *Error
+	if !errors.As(err, &remote) || remote.Code != "InternalError" {
+		t.Fatalf("err = %v, want the 200 Error document", err)
+	}
+	if len(fake.aborted) != 1 {
+		t.Fatalf("aborted = %v, want one abort", fake.aborted)
+	}
+}
+
+func TestMultipartRefusesASizeThatDoesNotMatchBeforeUploading(t *testing.T) {
+	fake := newFakeS3()
+	client := multipartClient(t, fake)
+	if _, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefghij"), Size: 9}); err == nil {
+		t.Fatal("a wrong Size was accepted")
+	}
+	if len(fake.seen()) != 0 {
+		t.Fatalf("a mismatch reached the server: %v", fake.seen())
+	}
+}
+
+func TestCreateBucketIsIdempotent(t *testing.T) {
+	fake := newFakeS3()
+	client := newTestClient(t, fake)
+	if err := client.Create(deadline(t)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := client.Create(deadline(t)); err != nil {
+		t.Fatalf("Create on an existing bucket: %v", err)
+	}
+	if fake.created != 2 {
+		t.Fatalf("created %d times, want two requests", fake.created)
+	}
+}
+
+func TestCreateRejectsABucketAnotherOwnerHas(t *testing.T) {
+	fake := newFakeS3()
+	fake.bucket = true
+	fake.takenByOther = true
+	client := newTestClient(t, fake)
+	err := client.Create(deadline(t))
+	if err == nil || !strings.Contains(err.Error(), "cannot address") {
+		t.Fatalf("Create on another owner's bucket = %v, want a refusal", err)
 	}
 }
 

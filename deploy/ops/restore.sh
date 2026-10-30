@@ -10,6 +10,8 @@ PROGRAM=restore
 . /ops/common.sh
 
 require_env AXIOM_RESTORE_STEP AXIOM_RESTORE_SET AXIOM_BACKUP_BUCKET AXIOM_BACKUP_PREFIX
+require_objectstore_env
+require_prefix
 case $AXIOM_RESTORE_STEP in
 config) require_env AXIOM_RESTORE_OUT_DIR AXIOM_RESTORE_DB_IDENTITY_FILE ;;
 data) require_env AXIOM_KEYS_DIR AXIOM_RESTORE_DB_IDENTITY_FILE AXIOM_RESTORE_SECRETS_IDENTITY_FILE PGDATABASE PGPASSWORD ;;
@@ -19,10 +21,10 @@ esac
 export LC_ALL=C
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-root="$(bucket_path)/$AXIOM_RESTORE_SET"
+root="$(object_prefix "$AXIOM_RESTORE_SET")"
 
 fetch() {
-  rclone --quiet copyto "$root/$1" "$work/$1" || die "cannot fetch $root/$1"
+  axiom objectstore get --key "$root$1" --file "$work/$1" >/dev/null || die "cannot fetch $root$1"
 }
 
 # The manifest is written last by the backup, so its presence is what makes a set restorable, and its contents are the

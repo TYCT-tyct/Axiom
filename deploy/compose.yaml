@@ -26,7 +26,13 @@ x-hardened: &hardened
 # CHOWN capability x-hardened drops, and both write into a temporary directory, which a read-only root would refuse.
 x-ops: &ops
   profiles: [ops]
-  build: ./ops
+  build:
+    context: ./ops
+    # The job's S3 client is the release's own binary, copied out of the program image: the backup must speak exactly
+    # the client the tree tests, and a second S3 implementation in the ops image would drift from it. The image has to
+    # exist first (`just up` builds it; a deployment pulls the release digest before building the ops profile).
+    args:
+      PROGRAM_IMAGE: ${DEPLOY_IMAGE:-axiom:local}
   image: ${DEPLOY_OPS_IMAGE:-axiom-ops:local}
   # A one-shot job: a failure is a non-zero exit for the scheduler to report, not a container that restarts forever.
   restart: "no"
@@ -41,16 +47,16 @@ x-ops: &ops
     AXIOM_BACKUP_BUCKET: ${AXIOM_BACKUP_BUCKET-}
     AXIOM_BACKUP_PREFIX: ${AXIOM_BACKUP_PREFIX:-axiom}
     AXIOM_BACKUP_STATE_DIR: /state
-    # rclone's S3 backend, configured through the environment so no credential is ever an argument: path-style
-    # addressing and this region are what MinIO, R2 and Backblaze want; AWS S3 itself wants the bucket in its own region
-    # and AXIOM_BACKUP_S3_FORCE_PATH_STYLE=false.
-    RCLONE_CONFIG_AXIOM_TYPE: s3
-    RCLONE_CONFIG_AXIOM_PROVIDER: Other
-    RCLONE_CONFIG_AXIOM_ENDPOINT: ${AXIOM_BACKUP_S3_ENDPOINT-}
-    RCLONE_CONFIG_AXIOM_ACCESS_KEY_ID: ${AXIOM_BACKUP_S3_ACCESS_KEY_ID-}
-    RCLONE_CONFIG_AXIOM_SECRET_ACCESS_KEY: ${AXIOM_BACKUP_S3_SECRET_ACCESS_KEY-}
-    RCLONE_CONFIG_AXIOM_REGION: ${AXIOM_BACKUP_S3_REGION:-us-east-1}
-    RCLONE_CONFIG_AXIOM_FORCE_PATH_STYLE: ${AXIOM_BACKUP_S3_FORCE_PATH_STYLE:-true}
+    # The backup's own bucket, handed to the program's S3 client only inside this job. The program service has its own
+    # AXIOM_OBJECTSTORE_* group (the archive bucket), so a compromised program never holds the credentials of the sets
+    # that restore the database. Path-style addressing and this region are what SeaweedFS, R2 and Backblaze want; AWS S3
+    # itself wants the bucket in its own region and AXIOM_BACKUP_S3_FORCE_PATH_STYLE=false.
+    AXIOM_OBJECTSTORE_ENDPOINT: ${AXIOM_BACKUP_S3_ENDPOINT-}
+    AXIOM_OBJECTSTORE_BUCKET: ${AXIOM_BACKUP_BUCKET-}
+    AXIOM_OBJECTSTORE_REGION: ${AXIOM_BACKUP_S3_REGION:-us-east-1}
+    AXIOM_OBJECTSTORE_ACCESS_KEY_ID: ${AXIOM_BACKUP_S3_ACCESS_KEY_ID-}
+    AXIOM_OBJECTSTORE_SECRET_ACCESS_KEY: ${AXIOM_BACKUP_S3_SECRET_ACCESS_KEY-}
+    AXIOM_OBJECTSTORE_PATH_STYLE: ${AXIOM_BACKUP_S3_FORCE_PATH_STYLE:-true}
 
 services:
   postgres:

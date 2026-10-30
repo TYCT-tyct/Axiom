@@ -22,6 +22,7 @@ import (
 type commandStore struct {
 	mu      sync.Mutex
 	objects map[string][]byte
+	created int
 }
 
 // writeTest is a test handler's write: the client on the other end failing is the test's own failure to report.
@@ -34,6 +35,11 @@ func (s *commandStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/axiom"), "/")
 	if r.Method == http.MethodHead && key == "" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method == http.MethodPut && key == "" {
+		s.created++
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -123,6 +129,51 @@ func TestObjectstoreCommandMovesAnObject(t *testing.T) {
 	err = objectstoreCommand(context.Background(), environ, []string{"get", "--key", "a/b.bin", "--file", filepath.Join(dir, "missing.bin")}, &out)
 	if !errors.Is(err, objectstore.ErrNotFound) {
 		t.Fatalf("get after delete = %v, want ErrNotFound", err)
+	}
+}
+
+func TestObjectstoreCommandCreatesListsNamesAndDeletesAPrefix(t *testing.T) {
+	store := &commandStore{objects: map[string][]byte{}}
+	server := httptest.NewServer(store)
+	defer server.Close()
+	environ := commandEnv(server.URL)
+	run := func(args ...string) string {
+		t.Helper()
+		var out bytes.Buffer
+		if err := objectstoreCommand(t.Context(), environ, args, &out); err != nil {
+			t.Fatalf("objectstore %v: %v", args, err)
+		}
+		return out.String()
+	}
+	if got := run("create"); !strings.Contains(got, `"created":true`) {
+		t.Fatalf("create printed %q", got)
+	}
+	if store.created != 1 {
+		t.Fatalf("the server saw %d bucket creations, want 1", store.created)
+	}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run("put", "--key", "sets/one/a", "--file", file)
+	if got := run("list", "--names", "--prefix", "sets/"); got != "sets/one/a\n" {
+		t.Fatalf("list --names printed %q", got)
+	}
+	if got := run("delete", "--prefix", "sets/"); !strings.Contains(got, `"deleted":1`) {
+		t.Fatalf("delete --prefix printed %q", got)
+	}
+	if got := run("list", "--names", "--prefix", "sets/"); got != "" {
+		t.Fatalf("list after delete printed %q", got)
+	}
+	for _, args := range [][]string{
+		{"delete"},
+		{"delete", "--key", "k", "--prefix", "p/"},
+	} {
+		var out bytes.Buffer
+		if err := objectstoreCommand(t.Context(), environ, args, &out); err == nil {
+			t.Fatalf("objectstore %v was accepted", args)
+		}
 	}
 }
 

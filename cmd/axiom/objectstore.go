@@ -14,7 +14,7 @@ import (
 	"axiom/internal/platform/objectstore"
 )
 
-const objectstoreUsage = "usage: axiom objectstore check | list [--prefix P] | put --key K --file F [--content-type T] | get --key K --file F | delete --key K"
+const objectstoreUsage = "usage: axiom objectstore create | check | list [--prefix P] [--names] | put --key K --file F [--content-type T] | get --key K --file F | delete (--key K | --prefix P)"
 
 // The command's deadlines: a check or one metadata call may wait out a slow bucket; a transfer may take as long as a
 // large archive needs, bounded so a stuck upload cannot live until the process is killed.
@@ -24,15 +24,15 @@ const (
 )
 
 // objectstoreCommand runs the operator's object-store verbs against AXIOM_OBJECTSTORE_*. It is how a deployment checks
-// a new bucket and how an operator moves a backup copy or an archive in and out before a scheduled job exists; the
-// program's own archive and content features will call the same client.
+// a new bucket, creates one, and moves a backup copy or an archive in and out; the backup job calls the same verbs with
+// its own bucket, and the program's own archive features will call the same client.
 func objectstoreCommand(ctx context.Context, environ, args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return errors.New(objectstoreUsage)
 	}
 	verb := args[0]
 	switch verb {
-	case "check", "list", "put", "get", "delete":
+	case "create", "check", "list", "put", "get", "delete":
 	default:
 		return fmt.Errorf("unknown verb %q\n%s", verb, objectstoreUsage)
 	}
@@ -58,6 +58,7 @@ func objectstoreCommand(ctx context.Context, environ, args []string, out io.Writ
 //nolint:cyclop // one branch per verb: this is the command's whole surface
 func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket, verb string, args []string, out io.Writer) error {
 	var key, file, prefix, contentType string
+	var names bool
 	err := flags("objectstore "+verb, objectstoreUsage, args, func(set *flag.FlagSet) {
 		switch verb {
 		case "put":
@@ -69,14 +70,23 @@ func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket,
 			set.StringVar(&file, "file", "", "where to write the object")
 		case "delete":
 			set.StringVar(&key, "key", "", "the object key")
+			set.StringVar(&prefix, "prefix", "", "every object under this prefix")
 		case "list":
 			set.StringVar(&prefix, "prefix", "", "only keys under this prefix")
+			set.BoolVar(&names, "names", false, "print keys alone, one per line, for a shell")
 		}
 	})
 	if err != nil {
 		return err
 	}
 	switch verb {
+	case "create":
+		ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
+		defer cancel()
+		if err := client.Create(ctx); err != nil {
+			return err
+		}
+		return writeLine(out, map[string]any{"kind": "objectstore", "bucket": bucket, "created": true})
 	case "check":
 		ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
 		defer cancel()
@@ -87,23 +97,64 @@ func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket,
 	case "list":
 		ctx, cancel := context.WithTimeout(ctx, objectstoreMoveTimeout)
 		defer cancel()
-		return listObjects(ctx, client, prefix, out)
+		return listObjects(ctx, client, prefix, names, out)
 	case "put":
 		return putObject(ctx, client, key, file, contentType, out)
 	case "get":
 		return getObject(ctx, client, key, file, out)
 	default:
-		ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
-		defer cancel()
-		if err := client.Delete(ctx, key); err != nil {
-			return err
+		switch {
+		case key != "" && prefix != "":
+			return errors.New("objectstore delete: give --key or --prefix, not both\n" + objectstoreUsage)
+		case prefix != "":
+			ctx, cancel := context.WithTimeout(ctx, objectstoreMoveTimeout)
+			defer cancel()
+			deleted, err := deletePrefix(ctx, client, prefix)
+			if err != nil {
+				return err
+			}
+			return writeLine(out, map[string]any{"kind": "objectstore", "prefix": prefix, "deleted": deleted})
+		case key != "":
+			ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
+			defer cancel()
+			if err := client.Delete(ctx, key); err != nil {
+				return err
+			}
+			return writeLine(out, map[string]any{"kind": "objectstore", "key": key, "deleted": true})
+		default:
+			return errors.New("objectstore delete: --key or --prefix is required\n" + objectstoreUsage)
 		}
-		return writeLine(out, map[string]any{"kind": "objectstore", "key": key, "deleted": true})
 	}
 }
 
+// deletePrefix removes every object under a prefix, one key at a time. It collects the keys first: deleting while
+// following a continuation token makes a server's next page depend on objects this call has already removed.
+func deletePrefix(ctx context.Context, client *objectstore.Client, prefix string) (int, error) {
+	var keys []string
+	token := ""
+	for {
+		page, err := client.List(ctx, objectstore.ListOptions{Prefix: prefix, ContinuationToken: token, MaxKeys: 1000})
+		if err != nil {
+			return 0, err
+		}
+		for _, object := range page.Objects {
+			keys = append(keys, object.Key)
+		}
+		if page.NextToken == "" {
+			break
+		}
+		token = page.NextToken
+	}
+	for _, key := range keys {
+		if err := client.Delete(ctx, key); err != nil {
+			return 0, fmt.Errorf("objectstore delete %q: %w", key, err)
+		}
+	}
+	return len(keys), nil
+}
+
 // listObjects follows every page, because the caller asked for the keys under a prefix, not for one page of 1000.
-func listObjects(ctx context.Context, client *objectstore.Client, prefix string, out io.Writer) error {
+func listObjects(ctx context.Context, client *objectstore.Client, prefix string, names bool, out io.Writer) error {
 	token := ""
 	for {
 		page, err := client.List(ctx, objectstore.ListOptions{Prefix: prefix, ContinuationToken: token, MaxKeys: 1000})
@@ -111,6 +162,12 @@ func listObjects(ctx context.Context, client *objectstore.Client, prefix string,
 			return err
 		}
 		for _, object := range page.Objects {
+			if names {
+				if _, err := fmt.Fprintln(out, object.Key); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := writeLine(out, map[string]any{
 				"kind": "objectstore", "key": object.Key, "size": object.Size,
 				"modified": object.LastModified, "etag": object.ETag,

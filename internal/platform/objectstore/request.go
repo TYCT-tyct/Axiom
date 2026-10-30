@@ -24,7 +24,15 @@ const (
 	retryAfterCap = 30 * time.Second
 	maxErrorBody  = 4 << 10
 	maxListBody   = 8 << 20
-	maxObjectSize = 5 << 30 // S3's single PUT limit; larger archives need multipart, which has no caller yet
+
+	// S3's limits: one PUT carries at most 5 GiB, a multipart object at most 5 TiB, and its parts between 5 MiB and
+	// 5 GiB. A 16 MiB part keeps a 5 TiB object under the 10,000-part limit once the size grows past 160 GiB.
+	maxSinglePut       = 5 << 30
+	maxObjectSize      = 5 << 40
+	defaultPartSize    = 16 << 20
+	maxPartSize        = 5 << 30
+	maxParts           = 10000
+	multipartThreshold = defaultPartSize
 )
 
 // hexDigits writes the upper-case escapes SigV4 and S3 URLs use.

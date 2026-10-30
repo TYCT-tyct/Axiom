@@ -88,6 +88,25 @@ func TestSeaweedFS(t *testing.T) {
 	if info.Size != int64(len(body)) || info.ETag == "" {
 		t.Fatalf("put returned %+v", info)
 	}
+	// Above the multipart threshold: a real server has to accept the initiate, part and complete requests, not just the
+	// single PUT that a fake can imitate.
+	large := bytes.Repeat(body, 20)
+	largeKey := "archive/2026/large.bin"
+	if info, err := client.Put(opCtx, objectstore.Upload{Key: largeKey, Body: bytes.NewReader(large), Size: int64(len(large))}); err != nil || info.Size != int64(len(large)) {
+		t.Fatalf("multipart put = %+v, %v", info, err)
+	}
+	largeObject, err := client.Get(opCtx, largeKey)
+	if err != nil {
+		t.Fatalf("get the multipart object: %v", err)
+	}
+	largeGot, largeReadErr := io.ReadAll(largeObject.Body)
+	largeCloseErr := largeObject.Body.Close()
+	if largeReadErr != nil || largeCloseErr != nil {
+		t.Fatalf("read the multipart object: %v, %v", largeReadErr, largeCloseErr)
+	}
+	if !bytes.Equal(largeGot, large) {
+		t.Fatalf("read %d multipart bytes that differ from the %d written", len(largeGot), len(large))
+	}
 	object, err := client.Get(opCtx, key)
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -110,15 +129,15 @@ func TestSeaweedFS(t *testing.T) {
 		t.Fatalf("put unicode key: %v", err)
 	}
 	page, err := client.List(opCtx, objectstore.ListOptions{Prefix: "archive/"})
-	if err != nil || len(page.Objects) != 2 {
+	if err != nil || len(page.Objects) != 3 {
 		t.Fatalf("list = %+v, %v", page, err)
 	}
 	seen := map[string]bool{}
 	for _, object := range page.Objects {
 		seen[object.Key] = true
 	}
-	if !seen[key] || !seen[unicodeKey] {
-		t.Fatalf("list keys = %v, want %q and %q", seen, key, unicodeKey)
+	if !seen[key] || !seen[unicodeKey] || !seen[largeKey] {
+		t.Fatalf("list keys = %v, want %q, %q and %q", seen, key, unicodeKey, largeKey)
 	}
 	if err := client.Delete(opCtx, key); err != nil {
 		t.Fatalf("delete: %v", err)
@@ -128,6 +147,9 @@ func TestSeaweedFS(t *testing.T) {
 	}
 	if err := client.Delete(opCtx, unicodeKey); err != nil {
 		t.Fatalf("delete unicode key: %v", err)
+	}
+	if err := client.Delete(opCtx, largeKey); err != nil {
+		t.Fatalf("delete the multipart key: %v", err)
 	}
 }
 
