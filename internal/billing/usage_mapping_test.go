@@ -263,6 +263,8 @@ func TestStoredPhysicalInputPreservesPresence(t *testing.T) {
 // character, so a node built before they existed still reads it (a count the list leaves out is zero); a counted charge
 // stores its count.
 func TestStoredUsageOmitsTrailingZeros(t *testing.T) {
+	t.Parallel()
+
 	b, err := encodeUsage([]Segment{{Usage: usage(t, map[catalog.Item]int64{in: 5, catalog.ItemOutput: 2})}})
 	if err != nil {
 		t.Fatal(err)
