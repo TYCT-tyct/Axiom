@@ -104,7 +104,7 @@ func (s *chatStream) event(data []byte, m *meter) (event, error) {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	if s.report != nil {
-		s.meter(m, s.failed)
+		meterUsage(m, s.report, s.reportErr, s.tier, s.failed)
 	}
 	if s.failed {
 		return event{}, s.errorEvent("an error chunk")
@@ -275,21 +275,6 @@ func (s *chatStream) usage() error {
 	s.report, s.e.usage = &openAIUsage{}, true
 	s.reportErr = jsonx.Unmarshal(v, s.report)
 	return nil
-}
-
-// meter maps the usage just read onto billing items. final is set for the usage of the chunk that ended the stream:
-// what it states is charged as it is rather than estimated (meter.take).
-func (s *chatStream) meter(m *meter, final bool) {
-	if s.reportErr != nil {
-		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
-		return
-	}
-	r, err := s.report.items(s.tier)
-	if err != nil {
-		m.invalid = err
-		return
-	}
-	m.take(r, nil, final)
 }
 
 func (s *chatStream) dropBuffers() {

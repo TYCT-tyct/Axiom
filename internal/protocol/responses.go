@@ -86,7 +86,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 		// an error event ends the stream, so a usage object it carries is the upstream's last word on the attempt: it
 		// is taken here, before the error ends the reading (docs/domains/billing.md「用量来源与暂估」)
 		if s.report != nil {
-			s.meter(m, true)
+			meterUsage(m, s.report, s.reportErr, s.tier, true)
 		}
 		return event{}, s.errorEvent(s.e.name)
 	case "response.created":
@@ -99,7 +99,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 		return event{}, err
 	}
 	if s.report != nil {
-		s.meter(m, false)
+		meterUsage(m, s.report, s.reportErr, s.tier, false)
 		s.report = nil
 	}
 	return s.clientEvent()
@@ -241,21 +241,6 @@ func (s *responsesStream) topUsage() error {
 		s.topReport = s.e.data[to-len(v) : to]
 	}
 	return nil
-}
-
-// meter maps the usage just read onto billing items. final is set for the usage of the event that ended the stream:
-// what it states is charged as it is rather than estimated (meter.take).
-func (s *responsesStream) meter(m *meter, final bool) {
-	if s.reportErr != nil {
-		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
-		return
-	}
-	r, err := s.report.items(s.tier)
-	if err != nil {
-		m.invalid = err
-		return
-	}
-	m.take(r, nil, final)
 }
 
 // failure appends response.failed, with our error type at its top level (docs/domains/gateway.md「错误」), or, before
