@@ -10,8 +10,17 @@ import { systemSettingsQuery } from "./queries";
 
 type Settings = AdminSchemas["SystemSettingsUpdate"]["settings"];
 
-// The site's name and the registration mode the system settings operation still carries. The mode is edited on the
-// registration card, which knows all three values; here it is sent back as it is, because that operation requires it.
+// siteSettingsInput carries the stored registration mode for the values an older node's contract requires. New nodes
+// accept an omitted mode, which is how an open site stays open: open cannot be sent to the system-settings operation.
+export function siteSettingsInput(
+  name: string,
+  registration: AdminSchemas["SystemSettings"]["registration"],
+): Settings {
+  return registration === "invite" || registration === "closed" ? { name, registration } : { name };
+}
+
+// The site's name. The registration mode is edited on the registration card, which knows all three values; when the
+// stored mode is invite or closed it is sent back because an older node requires it, and open is left out.
 export function SiteInformation({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const settings = useQuery(systemSettingsQuery(siteId));
   return <DataState query={settings}>{(view) => <Card siteId={siteId} view={view} />}</DataState>;
@@ -70,7 +79,7 @@ function EditDialog({
           return { problem: t("settings.site.invalidName") };
         }
         // The operation keeps the registration mode when it is omitted, so open sites keep open registration.
-        return { name };
+        return siteSettingsInput(name, view.registration);
       }}
       send={(settings, { reason, key }) =>
         unwrapChange(

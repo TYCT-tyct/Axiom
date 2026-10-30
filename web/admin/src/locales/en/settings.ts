@@ -166,6 +166,7 @@ export default {
     sources: { environment: "Environment", database: "Saved here" },
     restart: "Restart",
     restartBody: "Saved; this server picks it up after a restart.",
+    restartSaved: "Saved; restart this server before it sends with the new settings.",
     test: "Send a test",
     edit: "Edit mail",
     intro:
@@ -202,6 +203,7 @@ export default {
     none: "No limit",
     buffer: "Top-up buffer",
     bufferUnavailable: "Not available on this server yet",
+    bufferSkipped: "Saved; this server does not accept the top-up buffer yet, so it was left unchanged.",
     edit: "Edit payments",
     intro:
       "Whether users can top up, the credits one top-up may buy, and the buffer added to the reference rate. The change goes to the audit log.",

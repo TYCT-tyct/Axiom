@@ -230,16 +230,33 @@ func (a adminAPI) CreateMerchant(ctx context.Context, r adminapi.CreateMerchantR
 		return nil, err
 	}
 	in.Site = uuid.UUID(site)
+	claim, err := idempotencyClaim(ctx, "createMerchant", r.Params.IdempotencyKey, []any{r.Body.SiteId, merchantRequest(r.Body.Merchant), r.Body.Reason})
+	if err != nil {
+		return nil, err
+	}
+	// A replay answers from its claim before any preparation: the merchant may have changed since, and the probe must
+	// not run for a change that is not made again.
+	if body, found, err := replayed[adminapi.Merchant](ctx, a.db, claim); err != nil {
+		return nil, err
+	} else if found {
+		return adminapi.CreateMerchant201JSONResponse{Body: body, Headers: adminapi.CreateMerchant201ResponseHeaders{IdempotencyReplayed: replayedHeader(true)}}, nil
+	}
 	p, err := a.paymentsService(ctx)
 	if err != nil {
 		return nil, err
 	}
-	body, replayed, err := idempotently(ctx, a.db, "createMerchant", r.Params.IdempotencyKey, []any{r.Body.SiteId, merchantRequest(r.Body.Merchant), r.Body.Reason}, func(tx pg.Tx) (adminapi.Merchant, error) {
-		change, err := p.PrepareMerchant(ctx, callOf(ctx).scope, in)
-		if err != nil {
-			return adminapi.Merchant{}, merchantProblem(err)
+	// The probe runs before the idempotency transaction: it must not hold a connection while waiting on a gateway,
+	// and an update's preflight read needs a connection of its own.
+	change, err := p.PrepareMerchant(ctx, callOf(ctx).scope, in)
+	if err != nil {
+		// The first request under this key may have committed between the replay check and preparation.
+		if body, found, replayErr := replayed[adminapi.Merchant](ctx, a.db, claim); replayErr == nil && found {
+			return adminapi.CreateMerchant201JSONResponse{Body: body, Headers: adminapi.CreateMerchant201ResponseHeaders{IdempotencyReplayed: replayedHeader(true)}}, nil
 		}
-		saved, err := p.WriteMerchant(ctx, tx, actor(ctx), change)
+		return nil, merchantProblem(err)
+	}
+	body, replayed, err := idempotentlyClaimed(ctx, a.db, claim, func(tx pg.Tx) (adminapi.Merchant, error) {
+		saved, err := p.WriteMerchant(ctx, tx, actor(ctx), change, r.Body.Reason)
 		if err != nil {
 			return adminapi.Merchant{}, merchantProblem(err)
 		}
@@ -260,16 +277,33 @@ func (a adminAPI) UpdateMerchant(ctx context.Context, r adminapi.UpdateMerchantR
 	if err != nil {
 		return nil, err
 	}
+	claim, err := idempotencyClaim(ctx, "updateMerchant", r.Params.IdempotencyKey, []any{r.MerchantId, merchantRequest(r.Body.Merchant), r.Body.Reason})
+	if err != nil {
+		return nil, err
+	}
+	// A replay answers from its claim before any preparation: the merchant may have changed since, and the probe must
+	// not run for a change that is not made again.
+	if body, found, err := replayed[adminapi.Merchant](ctx, a.db, claim); err != nil {
+		return nil, err
+	} else if found {
+		return adminapi.UpdateMerchant200JSONResponse{Body: body, Headers: adminapi.UpdateMerchant200ResponseHeaders{IdempotencyReplayed: replayedHeader(true)}}, nil
+	}
 	p, err := a.paymentsService(ctx)
 	if err != nil {
 		return nil, err
 	}
-	body, replayed, err := idempotently(ctx, a.db, "updateMerchant", r.Params.IdempotencyKey, []any{r.MerchantId, merchantRequest(r.Body.Merchant), r.Body.Reason}, func(tx pg.Tx) (adminapi.Merchant, error) {
-		change, err := p.PrepareMerchant(ctx, callOf(ctx).scope, in)
-		if err != nil {
-			return adminapi.Merchant{}, merchantProblem(err)
+	// The probe runs before the idempotency transaction: it must not hold a connection while waiting on a gateway,
+	// and an update's preflight read needs a connection of its own.
+	change, err := p.PrepareMerchant(ctx, callOf(ctx).scope, in)
+	if err != nil {
+		// The first request under this key may have committed between the replay check and preparation.
+		if body, found, replayErr := replayed[adminapi.Merchant](ctx, a.db, claim); replayErr == nil && found {
+			return adminapi.UpdateMerchant200JSONResponse{Body: body, Headers: adminapi.UpdateMerchant200ResponseHeaders{IdempotencyReplayed: replayedHeader(true)}}, nil
 		}
-		saved, err := p.WriteMerchant(ctx, tx, actor(ctx), change)
+		return nil, merchantProblem(err)
+	}
+	body, replayed, err := idempotentlyClaimed(ctx, a.db, claim, func(tx pg.Tx) (adminapi.Merchant, error) {
+		saved, err := p.WriteMerchant(ctx, tx, actor(ctx), change, r.Body.Reason)
 		if err != nil {
 			return adminapi.Merchant{}, merchantProblem(err)
 		}

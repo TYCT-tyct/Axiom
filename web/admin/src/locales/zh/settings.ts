@@ -158,6 +158,7 @@ export default {
     sources: { environment: "环境变量", database: "在本站保存" },
     restart: "需要重启",
     restartBody: "已保存，这台服务器重启后生效。",
+    restartSaved: "已保存，重启这台服务器后才会用新配置发信。",
     test: "发送测试",
     edit: "修改邮件",
     intro:
@@ -194,6 +195,7 @@ export default {
     none: "不限",
     buffer: "充值缓冲",
     bufferUnavailable: "这台服务器还没有这一项",
+    bufferSkipped: "已保存；这台服务器还不接受充值缓冲，缓冲保持原值。",
     edit: "修改支付设置",
     intro: "用户能否充值、单次充值可买多少积分，以及参考汇率上加的缓冲。修改会记进审计日志。",
     save: "保存支付设置",

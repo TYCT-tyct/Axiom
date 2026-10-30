@@ -1,6 +1,17 @@
+import { ApiError } from "@axiom/api";
 import { expect, it } from "vitest";
 import { isProblem } from "./change";
-import { formatPercent, parseBufferPercent, parsePercent, readMerchant, readPayments } from "./payment-read";
+import { mailSavedRestart } from "./mail-settings";
+import {
+  bufferRefused,
+  formatPercent,
+  parseBufferPercent,
+  parsePercent,
+  readMerchant,
+  readPayments,
+  withoutBuffer,
+} from "./payment-read";
+import { siteSettingsInput } from "./site-info";
 
 const paymentWords = { amount: "amount", range: "range", buffer: "buffer" };
 const merchantWords = {
@@ -124,4 +135,33 @@ it("keeps the sealed key when an edit leaves both secret fields empty", () => {
   }
   expect(read.rev).toBe(4);
   expect(read.secrets).toBeUndefined();
+});
+
+it("drops only the buffer for a node whose contract refuses it", () => {
+  const settings = { open: true, credits_min: { amount: "1", currency: "USD" }, top_up_buffer_ppm: 20_000 };
+  expect(withoutBuffer(settings)).toEqual({ open: true, credits_min: { amount: "1", currency: "USD" } });
+  const refusal = new ApiError(400, null, {
+    body: {
+      error: {
+        code: "invalid_request",
+        message: "the settings are invalid",
+        fields: [{ pointer: "/settings/top_up_buffer_ppm", message: "unknown field" }],
+      },
+    },
+  });
+  expect(bufferRefused(refusal)).toBe(true);
+  expect(bufferRefused(new ApiError(422, null, { body: { error: { code: "unprocessable", message: "no" } } }))).toBe(
+    false,
+  );
+});
+
+it("keeps a name edit acceptable to an old node that requires the stored registration mode", () => {
+  expect(siteSettingsInput("Main", "closed")).toEqual({ name: "Main", registration: "closed" });
+  expect(siteSettingsInput("Main", "invite")).toEqual({ name: "Main", registration: "invite" });
+  expect(siteSettingsInput("Main", "open")).toEqual({ name: "Main" });
+});
+
+it("shows the restart a database mail save needs", () => {
+  expect(mailSavedRestart({ restart_required: true })).toBe(true);
+  expect(mailSavedRestart({})).toBe(false);
 });

@@ -35,9 +35,9 @@ func (p *Payments) GetRefund(ctx context.Context, s pg.Scope, id RefundID) (Refu
 func (p *Payments) GetResolution(ctx context.Context, s pg.Scope, order OrderID, key string) (Resolution, error) // 审批前读取持久提案
 func (p *Payments) ApproveResolution(ctx context.Context, s pg.Scope, order OrderID, key string, user uuid.UUID) error
 func (p *Payments) Resolve(ctx context.Context, s pg.Scope, r Resolution) error                          // 保存人工提案与渠道凭证；另一个管理员审批后落定
-func (p *Payments) SaveMerchant(ctx context.Context, s pg.Scope, actor audit.Actor, m MerchantInput) (Merchant, error)        // 本地校验、事务外探测，再以独立事务复核修订号与身份并封装密钥
+func (p *Payments) SaveMerchant(ctx context.Context, s pg.Scope, actor audit.Actor, m MerchantInput, reason string) (Merchant, error) // 本地校验、事务外探测，再以独立事务复核修订号与身份并封装密钥
 func (p *Payments) PrepareMerchant(ctx context.Context, s pg.Scope, m MerchantInput) (MerchantChange, error)                 // 校验与探测在调用方的事务之外；写入另行
-func (p *Payments) WriteMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, change MerchantChange) (Merchant, error)   // 写在调用方的事务里，通常是幂等声明的那个事务
+func (p *Payments) WriteMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, change MerchantChange, reason string) (Merchant, error) // 写在调用方的事务里，通常是幂等声明的那个事务；reason 进保存审计
 func ListMerchants(ctx context.Context, tx pg.Tx, site uuid.UUID) ([]Merchant, error)                             // 站点范围；没有密钥
 func DisableMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, id MerchantID, reason string) (Merchant, error) // 只改启用位，保留配置与密文；已停用时什么也不写
 ```

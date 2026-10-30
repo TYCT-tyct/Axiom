@@ -110,7 +110,7 @@ func (w *world) input(site uuid.UUID, methods ...MethodInput) MerchantInput {
 }
 
 func (w *world) save(s pg.Scope, in MerchantInput) (Merchant, error) {
-	return w.p.SaveMerchant(w.t.Context(), s, admin, in)
+	return w.p.SaveMerchant(w.t.Context(), s, admin, in, "test save")
 }
 
 func (w *world) mustSave(s pg.Scope, in MerchantInput) Merchant {
@@ -301,7 +301,7 @@ func TestPrepareMerchantCommitsWithTheCallersTransaction(t *testing.T) {
 	}
 	refused := errors.New("the idempotency claim was rolled back")
 	err = w.tx(site, func(tx pg.Tx) error {
-		if _, err := w.p.WriteMerchant(w.t.Context(), tx, admin, change); err != nil {
+		if _, err := w.p.WriteMerchant(w.t.Context(), tx, admin, change, "test save"); err != nil {
 			return err
 		}
 		return refused

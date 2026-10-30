@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/egresstest"
 )
 
 const merchantSecret = "fake-gateway-key-0123456789"
@@ -33,6 +39,31 @@ func merchantJSON(site, name string, enabled bool, rev int64, feeFixed string, w
 				"fee_fixed": {"amount": %q, "currency": "USD"}, "enabled": true}]
 		}, "reason": "configured the gateway for the site"
 	}`, siteField, revField, name, enabled, secrets, feeFixed)
+}
+
+// epusdtMerchantJSON is a merchant account whose Epusdt preset probes the gateway on every enabled save.
+func epusdtMerchantJSON(site, name string, enabled bool, rev int64, gateway string, withSecrets bool) string {
+	siteField := ""
+	if site != "" {
+		siteField = fmt.Sprintf(`"site_id": %q,`, site)
+	}
+	revField := ""
+	if rev > 0 {
+		revField = fmt.Sprintf(`"rev": %d,`, rev)
+	}
+	secrets := ""
+	if withSecrets {
+		secrets = fmt.Sprintf(`"secrets": {"key": %q},`, merchantSecret)
+	}
+	return fmt.Sprintf(`{
+		%s"merchant": {
+			%s"kind": "easypay", "name": %q, "enabled": %t, "currency": "USD", "ttl_seconds": 1800,
+			"refund_enabled": false, "user_refund": false, "sort": 1,
+			"settings": {"preset": "epusdt", "gateway": %q, "pid": "1001", "mode": "redirect"},
+			%s"methods": [{"method": "usdt.tron", "upstream": "usdt.tron", "fee_ppm": 0,
+				"fee_fixed": {"amount": "0", "currency": "USD"}, "enabled": true}]
+		}, "reason": "switched the account on"
+	}`, siteField, revField, name, enabled, gateway, secrets)
 }
 
 func TestAdminMerchantLifecycle(t *testing.T) {
@@ -102,6 +133,7 @@ func checkMerchantSealed(t *testing.T, f adminFixture) {
 		t.Fatalf("the secret is stored in clear: %s", got)
 	}
 	f.expectAudit("merchant.create", map[string]string{
+		"reason":                "configured the gateway for the site",
 		"detail->>'currency'":   "USD",
 		"detail->>'enabled'":    "false",
 		"detail->>'kind'":       "easypay",
@@ -125,6 +157,12 @@ func updateMerchant(t *testing.T, f adminFixture, s session, created adminapi.Me
 	if updated.Name == nil || *updated.Name != "Renamed" || updated.Rev == nil || *updated.Rev != 2 {
 		t.Fatalf("updated merchant %s", rec.Body)
 	}
+	f.expectAudit("merchant.update", map[string]string{
+		"reason":                "configured the gateway for the site",
+		"detail->>'name'":       "Renamed",
+		"detail->>'enabled'":    "true",
+		"detail->'methods'->>0": "alipay",
+	})
 	expectAdmin(t, "stale update", f.change(s, http.MethodPut, path, update, newKey()), http.StatusConflict, codeStaleRevision)
 
 	// A malformed amount is refused by pointer, not by a bare 400.
@@ -149,6 +187,98 @@ func disableMerchant(t *testing.T, f adminFixture, s session, created adminapi.M
 		t.Fatalf("disable lost the configuration: %s", rec.Body)
 	}
 	f.expectAudit("merchant.disable", map[string]string{"reason": "stop new orders"})
+}
+
+// TestAdminMerchantReplaySurvivesLaterChanges: a lost answer is replayed from its claim even after the merchant has
+// changed since. Preparation and probing run only when the change still has to happen, so a stale revision of the
+// original request cannot turn its replay into a 409.
+func TestAdminMerchantReplaySurvivesLaterChanges(t *testing.T) {
+	f := newAdminFixture(t)
+	s := f.owner()
+	created := createMerchant(t, f, s, f.siteID())
+	path := "/payments/merchants/" + *created.Id
+	update := merchantJSON("", "Renamed", true, 1, "0", false)
+	key := newKey()
+	first := f.change(s, http.MethodPut, path, update, key)
+	expectAdmin(t, "update merchant", first, http.StatusOK, "")
+
+	// A later change moves the revision past the one the update carried.
+	expectAdmin(t, "disable merchant", f.change(s, http.MethodPost, path+"/disable", `{"reason":"stop new orders"}`, newKey()), http.StatusOK, "")
+
+	again := f.change(s, http.MethodPut, path, update, key)
+	expectAdmin(t, "replay after a later change", again, http.StatusOK, "")
+	if again.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatal("the update did not replay")
+	}
+	var replayed adminapi.Merchant
+	decode(t, again, &replayed)
+	if replayed.Name == nil || *replayed.Name != "Renamed" || replayed.Rev == nil || *replayed.Rev != 2 {
+		t.Fatalf("replayed merchant %s", again.Body)
+	}
+	if n := f.auditCount("merchant.update"); n != "1" {
+		t.Errorf("%s merchant.update audit entries, want 1", n)
+	}
+}
+
+// TestAdminMerchantProbeDoesNotHoldTheWriteTransaction: with one ordinary connection, an enabled Epusdt save still
+// reaches the gateway probe. Holding the idempotency transaction while preparing would use both the connection and the
+// time, so the probe would never start (and a real save would hold a database connection across the network call).
+func TestAdminMerchantProbeDoesNotHoldTheWriteTransaction(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(entered) })
+		select {
+		case <-release:
+			w.Header().Set("Content-Type", "application/json")
+			if _, err := w.Write([]byte(`{"code":-1,"msg":"订单不存在"}`)); err != nil {
+				return
+			}
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	exit := egress.NewForTesting(egresstest.Loopback(t, server.Certificate()))
+	f := newAdminFixtureWithPool(t, exit)
+	s := f.owner()
+	site := f.siteID()
+
+	rec := f.change(s, http.MethodPost, "/payments/merchants", epusdtMerchantJSON(site, "Epusdt", false, 0, server.URL, true), newKey())
+	expectAdmin(t, "create epusdt merchant", rec, http.StatusCreated, "")
+	var created adminapi.Merchant
+	decode(t, rec, &created)
+	if created.Id == nil {
+		t.Fatalf("created merchant %s", rec.Body)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- f.doContext(
+			ctx, http.MethodPut, "/payments/merchants/"+*created.Id,
+			epusdtMerchantJSON("", "Epusdt", true, 1, server.URL, false), as(s), idempotent(newKey()),
+		)
+	}()
+	select {
+	case <-entered:
+	case rec := <-done:
+		t.Fatalf("the save finished before the probe: %d %s", rec.Code, rec.Body)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the save never reached the probe; it held the only ordinary connection before probing")
+	}
+	select {
+	case rec := <-done:
+		t.Fatalf("the save finished while the probe was blocked: %d %s", rec.Code, rec.Body)
+	default:
+	}
+	close(release)
+	select {
+	case rec := <-done:
+		expectAdmin(t, "enable epusdt merchant", rec, http.StatusOK, "")
+	case <-ctx.Done():
+		t.Fatal("the save did not finish after the probe was released")
+	}
 }
 
 func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {

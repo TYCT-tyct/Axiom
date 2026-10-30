@@ -46,8 +46,8 @@ func (p *Payments) PrepareMerchant(ctx context.Context, scope pg.Scope, in Merch
 }
 
 // WriteMerchant saves a prepared change in tx, which may be the transaction that claims its Idempotency-Key.
-func (p *Payments) WriteMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, change MerchantChange) (Merchant, error) {
-	return p.saveMerchant(ctx, tx, actor, change.in, change.settings, change.created)
+func (p *Payments) WriteMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, change MerchantChange, reason string) (Merchant, error) {
+	return p.saveMerchant(ctx, tx, actor, change.in, change.settings, change.created, reason)
 }
 
 // ListMerchants reads a site's merchant accounts and their payment methods without their secrets.

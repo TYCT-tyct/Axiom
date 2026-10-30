@@ -1,4 +1,4 @@
-import type { AdminSchemas } from "@axiom/api";
+import { type AdminSchemas, ApiError } from "@axiom/api";
 import { parseMoney } from "@axiom/ui";
 import type { Problem } from "./change";
 
@@ -55,6 +55,22 @@ export type PaymentWords = { amount: string; range: string; buffer: string };
 
 // readPayments makes the payment settings from the dialog's fields. A buffer is only offered when the node answered
 // with one; an older node has no field for it, and leaving it out keeps whatever it has.
+function rangeReversed(min: AdminSchemas["Money"] | undefined, max: AdminSchemas["Money"] | undefined): boolean {
+  return min !== undefined && max !== undefined && BigInt(min.amount) > BigInt(max.amount);
+}
+
+function readBuffer(
+  values: Record<string, string>,
+  bufferOffered: boolean,
+  words: PaymentWords,
+): { ppm?: number; problem?: string } {
+  if (!bufferOffered || (values.top_up_buffer_ppm ?? "").trim() === "") {
+    return {};
+  }
+  const ppm = parseBufferPercent((values.top_up_buffer_ppm ?? "").trim());
+  return ppm === null ? { problem: words.buffer } : { ppm };
+}
+
 export function readPayments(
   values: Record<string, string>,
   currency: string,
@@ -66,25 +82,18 @@ export function readPayments(
   if (!min.ok || !max.ok) {
     return { problem: words.amount };
   }
-  if (min.value && max.value && BigInt(min.value.amount) > BigInt(max.value.amount)) {
+  if (rangeReversed(min.value, max.value)) {
     return { problem: words.range };
   }
-  let buffer: number | undefined;
-  if (bufferOffered) {
-    const typed = (values.top_up_buffer_ppm ?? "").trim();
-    if (typed !== "") {
-      const ppm = parseBufferPercent(typed);
-      if (ppm === null) {
-        return { problem: words.buffer };
-      }
-      buffer = ppm;
-    }
+  const buffer = readBuffer(values, bufferOffered, words);
+  if (buffer.problem !== undefined) {
+    return { problem: buffer.problem };
   }
   return {
     open: values.open === "true",
     credits_min: min.value,
     credits_max: max.value,
-    ...(buffer === undefined ? {} : { top_up_buffer_ppm: buffer }),
+    ...(buffer.ppm === undefined ? {} : { top_up_buffer_ppm: buffer.ppm }),
   };
 }
 
@@ -110,21 +119,25 @@ function readChannelSettings(text: string): { [key: string]: unknown } | null {
   }
 }
 
-function readMethod(
+function readMethodCodes(
   values: Record<string, string>,
   index: number,
-  currency: string,
   words: MerchantWords,
-): AdminSchemas["MerchantMethodInput"] | Problem {
+): { method: string; upstream: string } | Problem {
   const method = (values[`method-${index}-method`] ?? "").trim();
   const upstream = (values[`method-${index}-upstream`] ?? "").trim();
   if (!/^[a-z][a-z0-9_.]{0,31}$/.test(method) || !upstream || [...upstream].length > 64) {
     return { problem: words.methods };
   }
-  const ppm = parsePercent(values[`method-${index}-percent`] ?? "", 500_000);
-  if (ppm === null) {
-    return { problem: words.fee };
-  }
+  return { method, upstream };
+}
+
+function readMethodAmounts(
+  values: Record<string, string>,
+  index: number,
+  currency: string,
+  words: MerchantWords,
+): Pick<AdminSchemas["MerchantMethodInput"], "fee_fixed" | "single_min" | "single_max" | "daily_limit"> | Problem {
   const fixed = readMoney(values[`method-${index}-fixed`] ?? "", currency, true);
   const min = readMoney(values[`method-${index}-min`] ?? "", currency, false);
   const max = readMoney(values[`method-${index}-max`] ?? "", currency, false);
@@ -132,17 +145,39 @@ function readMethod(
   if (!fixed.ok || !min.ok || !max.ok || !daily.ok) {
     return { problem: words.amount };
   }
-  if (min.value && max.value && BigInt(min.value.amount) > BigInt(max.value.amount)) {
+  if (rangeReversed(min.value, max.value)) {
     return { problem: words.range };
   }
   return {
-    method,
-    upstream,
-    fee_ppm: ppm,
     fee_fixed: fixed.value as AdminSchemas["Money"],
     single_min: min.value,
     single_max: max.value,
     daily_limit: daily.value,
+  };
+}
+
+function readMethod(
+  values: Record<string, string>,
+  index: number,
+  currency: string,
+  words: MerchantWords,
+): AdminSchemas["MerchantMethodInput"] | Problem {
+  const codes = readMethodCodes(values, index, words);
+  if ("problem" in codes) {
+    return codes;
+  }
+  const ppm = parsePercent(values[`method-${index}-percent`] ?? "", 500_000);
+  if (ppm === null) {
+    return { problem: words.fee };
+  }
+  const amounts = readMethodAmounts(values, index, currency, words);
+  if ("problem" in amounts) {
+    return amounts;
+  }
+  return {
+    ...codes,
+    ...amounts,
+    fee_ppm: ppm,
     enabled: values[`method-${index}-enabled`] === "true",
   };
 }
@@ -200,22 +235,45 @@ function withChangeFields(
 
 // readMerchant makes a create or update request from the dialog's fields, one method per method-<i>-* group the form
 // holds. The server checks the plugin's own settings; this checks what the contract states before the request leaves.
-export function readMerchant(
+function readMerchantBasics(
   values: Record<string, string>,
   merchant: AdminSchemas["Merchant"] | undefined,
   words: MerchantWords,
-): AdminSchemas["MerchantInput"] | Problem {
+):
+  | Pick<
+      AdminSchemas["MerchantInput"],
+      "kind" | "name" | "enabled" | "currency" | "ttl_seconds" | "refund_enabled" | "user_refund" | "sort"
+    >
+  | Problem {
   const name = (values.name ?? "").trim();
   if (!name || [...name].length > 100) {
     return { problem: words.name };
   }
   const ttl = readWhole(values.ttl_seconds ?? "", 60, 86_400);
-  if (ttl === null) {
+  const sort = readSort(values.sort ?? "");
+  if (ttl === null || sort === null) {
     return { problem: words.number };
   }
-  const sort = readSort(values.sort ?? "");
-  if (sort === null) {
-    return { problem: words.number };
+  return {
+    kind: values.kind ?? merchant?.kind ?? "easypay",
+    name,
+    enabled: values.enabled === "true",
+    currency: values.currency ?? "",
+    ttl_seconds: ttl,
+    refund_enabled: values.refund_enabled === "true",
+    user_refund: values.user_refund === "true",
+    sort,
+  };
+}
+
+export function readMerchant(
+  values: Record<string, string>,
+  merchant: AdminSchemas["Merchant"] | undefined,
+  words: MerchantWords,
+): AdminSchemas["MerchantInput"] | Problem {
+  const basics = readMerchantBasics(values, merchant, words);
+  if ("problem" in basics) {
+    return basics;
   }
   const settings = readChannelSettings(values.settings ?? "");
   if (settings === null) {
@@ -229,20 +287,25 @@ export function readMerchant(
   if (secrets === null) {
     return { problem: words.secret };
   }
-  return withChangeFields(
-    {
-      kind: values.kind ?? merchant?.kind ?? "easypay",
-      name,
-      enabled: values.enabled === "true",
-      currency: values.currency ?? "",
-      ttl_seconds: ttl,
-      refund_enabled: values.refund_enabled === "true",
-      user_refund: values.user_refund === "true",
-      sort,
-      settings,
-      methods,
-    },
-    merchant?.rev,
-    secrets,
+  return withChangeFields({ ...basics, settings, methods }, merchant?.rev, secrets);
+}
+
+// withoutBuffer removes the field an old node's contract refuses; the rest of the settings are unchanged.
+export function withoutBuffer(
+  settings: AdminSchemas["PaymentSettingsUpdate"]["settings"],
+): AdminSchemas["PaymentSettingsUpdate"]["settings"] {
+  const { top_up_buffer_ppm: _, ...rest } = settings;
+  return rest;
+}
+
+// bufferRefused is the old node's 400 for top_up_buffer_ppm under additionalProperties: false.
+export function bufferRefused(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 400 &&
+    error.code === "invalid_request" &&
+    error.fields.some(
+      ({ pointer, message }) => pointer === "/settings/top_up_buffer_ppm" || message.includes("top_up_buffer_ppm"),
+    )
   );
 }

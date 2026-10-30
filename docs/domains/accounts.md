@@ -181,7 +181,7 @@ billing 在账本写入同事务记余额变化 journal（含变动前后余额�
 
 ## 后台系统设置
 
-`/api/admin/v1/sites/{site_id}/system-settings` 读取站点名称和注册方式，也可改名称；请求里省略 `registration` 时保留原注册方式（包括由注册策略接口设置的 open），给出时只接受 invite/closed。修改需 MFA、平台 `sites.manage`、CSRF、幂等键和理由，与审计同事务，站点快照随后刷新。收款开关、充值额度上下限和充值缓冲由同路径的 `/payments` 资源交给 payments 读写。
+`/api/admin/v1/sites/{site_id}/system-settings` 读取站点名称和注册方式，也可改名称；请求里省略 `registration` 时保留原注册方式（包括由注册策略接口设置的 open），给出时只接受 invite/closed；后台设置页在 invite/closed 时把原值送回，兼容仍要求该字段的旧节点。修改需 MFA、平台 `sites.manage`、CSRF、幂等键和理由，与审计同事务，站点快照随后刷新。收款开关、充值额度上下限和充值缓冲由同路径的 `/payments` 资源交给 payments 读写。
 
 同源的 `/api/admin/v1/sites/{site_id}/brand` 读写站点的品牌色：`#rrggbb` 或空（空就是默认配色），小写存储，改后本节点立即重载快照、其他节点在重载间隔内跟上；修改同样需 MFA、`sites.manage`、CSRF、幂等键和理由。控制台的 `GET /api/console/v1/site` 在站点设置了品牌色时返回 `brand_color`，页面据此生成深浅两套配色（[前端](../frontend.md#主题与自由度)）；没有设置或旧节点不返回时用默认配色。
 
