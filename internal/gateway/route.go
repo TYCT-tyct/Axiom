@@ -269,6 +269,9 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	if !ok || !sold.Available() {
 		return routing.Endpoint{}, "no published sale price is available for this node; check the price publication list and local costs"
 	}
+	if model.Free() && !sold.Zero() {
+		return routing.Endpoint{}, "a :free model has a non-zero sale price for some audience"
+	}
 	reportable := model.Reportable()
 	if sold.Audiences == nil && billing.Unpriced(sold.Schedule, reportable) != (catalog.Reportable{}) {
 		// Only a reference price was checked against what the model reports when it was listed; a fixed price was not.
@@ -289,7 +292,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	streams := serving.Streams && r.Streams
 	dialect := model.Dialect()
 	e := routing.Endpoint{
-		ID: routing.EndpointID(r.ID), Supplier: routing.SupplierID(r.Supplier), Codename: r.Codename, Model: catalog.ModelID(r.Model),
+		ID: routing.EndpointID(r.ID), Supplier: routing.SupplierID(r.Supplier), Codename: r.Codename, Model: catalog.ModelID(r.Model), ModelSlug: model.Slug,
 		// The platform's own: M1's suppliers are the platform's (suppliers' owner scope is not part of Routable), and
 		// the node reaches every one of them from its own address.
 		Owner:   routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},

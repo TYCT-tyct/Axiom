@@ -101,17 +101,10 @@ func freeName(norm string) bool {
 	return len(norm) > len(":free") && strings.Count(norm, ":") == 1 && strings.HasSuffix(norm, ":free")
 }
 
-// zeroPrice reports whether every price in the schedule is zero, including prices for items the spec does not declare:
-// a :free entry must not charge for anything.
-func zeroPrice(s Schedule) bool {
-	for st := range numServiceTiers {
-		for it := range NumItems {
-			for band := range len(s.above) + 1 {
-				if p, ok := s.price(st, band, it); ok && p.String() != "0" {
-					return false
-				}
-			}
-		}
-	}
-	return true
+// freeSlug reports whether a model's slug is a :free entry, with or without its @version.
+func freeSlug(slug string) bool {
+	return freeName(Normalize(strings.SplitN(slug, "@", 2)[0]))
 }
+
+// Free reports whether the model is a :free entry, whose sale price must be zero for every audience.
+func (m Model) Free() bool { return freeSlug(m.Slug) }

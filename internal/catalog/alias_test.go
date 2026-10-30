@@ -1,11 +1,13 @@
 package catalog_test
 
 import (
+	"crypto/sha256"
 	"errors"
 	"testing"
 	"uuid"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/pg"
 )
 
 // TestAlias: an alias is catalog data that points at one concrete model. Moving it appends a revision, the snapshot
@@ -117,6 +119,32 @@ func TestFreeEntry(t *testing.T) {
 	if _, err := snap.ResolvePublic("acme/alpha:free:free"); !errors.Is(err, catalog.ErrModelNotFound) {
 		t.Errorf("a stacked :free gives %v, want ErrModelNotFound", err)
 	}
+	// A later price write must not turn the free entry into a paid one: PublishPrice, SelectPriceSource and the
+	// dataset source all pass through the same zero-price gate.
+	base := s.head(free, "USD")
+	wantErr(t, func() error {
+		_, err := s.c.PublishPrice(ctx, catalog.PublishPriceRequest{
+			Op: op(), Model: free, Base: &base, Source: catalog.SourceManual,
+			Schedule: raw(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0"}}`), Evidence: raw(evidence),
+		})
+		return err
+	}(), "zero")
+	rev = query[int64](s, platformScope, "SELECT rev FROM catalog.model WHERE id = $1", uuid.UUID(free))
+	wantErr(t, func() error {
+		_, err := s.c.SelectPriceSource(ctx, catalog.SelectPriceSourceRequest{
+			Op: op(), Model: free, Rev: rev, Source: catalog.SourceManual,
+			Bases: map[string]uuid.UUID{"USD": base},
+			Prices: []catalog.SourcePrice{{
+				Schedule: raw(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0"}}`), Evidence: raw(evidence),
+			}},
+		})
+		return err
+	}(), "zero")
+	if got, err := s.c.Current(); err != nil {
+		t.Fatal(err)
+	} else if got, err := got.ResolvePublic("acme/alpha:free"); err != nil || got.Model != free {
+		t.Errorf("the free entry after refused price writes resolves to %v, %v; want %v", got.Model, err, free)
+	}
 	wantErr(t, func() error {
 		_, err := s.c.AddName(ctx, catalog.AddNameRequest{Op: op(), Model: alpha, Name: "acme/other:free", Visibility: catalog.VisibilityPublic})
 		return err
@@ -130,9 +158,26 @@ func TestFreeEntry(t *testing.T) {
 		Op: op(), Slug: "acme/paid:free", VersionBasis: catalog.VersionDated, PriceSource: catalog.SourceManual, Spec: raw(basicSpec),
 	})))
 	s.must(s.c.AddName(ctx, catalog.AddNameRequest{Op: op(), Model: paid, Name: "acme/paid:free", Visibility: catalog.VisibilityPublic}))
-	s.must(s.c.PublishPrice(ctx, catalog.PublishPriceRequest{
-		Op: op(), Model: paid, Source: catalog.SourceManual, Schedule: raw(basic), Evidence: raw(evidence),
-	}))
+	// Insert the paid head directly: the admin entry points now refuse it, but the listing gate must still catch a
+	// pre-existing bad row, which is why the check exists in both places.
+	schedule, err := catalog.ParseSchedule([]byte(basic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := schedule.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(canonical)
+	if err := s.db.Tx(ctx, platformScope, func(tx pg.Tx) error {
+		_, err := catalog.New().InsertReferencePrice(ctx, tx, catalog.InsertReferencePriceParams{
+			ModelID: uuid.UUID(paid), Currency: "USD", Source: string(catalog.SourceManual),
+			Schedule: canonical, ScheduleSha256: sum[:],
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	rev = query[int64](s, platformScope, "SELECT rev FROM catalog.model WHERE id = $1", uuid.UUID(paid))
 	wantErr(t, func() error {
 		_, err := s.c.ListModel(ctx, catalog.ModelRequest{Op: op(), Model: paid, Rev: rev})

@@ -411,7 +411,7 @@ func requireListable(ctx context.Context, tx pg.Tx, row CatalogModel) error {
 // only means something if a client can call the model it belongs to.
 func requireFreeBase(ctx context.Context, tx pg.Tx, standard string, prices prices) error {
 	for _, currency := range prices.priced() {
-		if !zeroPrice(*prices[currency].schedule) {
+		if !prices[currency].schedule.IsZero() {
 			return fmt.Errorf("a :free entry must have a zero price in every currency, but %s is not zero", currency)
 		}
 	}
