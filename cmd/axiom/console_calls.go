@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
 	"uuid"
@@ -22,13 +23,34 @@ func moneyOf(amount int64, currency platform.Currency) consoleapi.Money {
 // GetBalance reads the figures a call is admitted by.
 func (c consoleAPI) GetBalance(ctx context.Context, _ consoleapi.GetBalanceRequestObject) (consoleapi.GetBalanceResponseObject, error) {
 	cl := callOf(ctx)
+	account := uuid.UUID(cl.principal.AccountID())
+	// The batches need the allocation replay advanced to say what is left in each exactly. That is bounded so the page
+	// does not wait on an account with a long history; if it cannot finish, the field is absent and the page shows this
+	// part as unavailable instead of a figure that trails the ledger.
+	batchCtx, cancel := context.WithTimeout(ctx, batchReplayBudget)
+	advanced, err := billing.AdvanceCreditBatches(batchCtx, c.db, cl.scope, account, batchReplayPages)
+	cancel()
+	switch {
+	case err == nil:
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+		advanced = false
+	default:
+		return nil, err
+	}
+	// Balance and batches come from one snapshot. Reading them separately could show a balance that already includes a
+	// charge which the batches, replayed a moment earlier, do not.
 	var view billing.BalanceView
-	err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
+	var batches []billing.CreditBatchView
+	var ready bool
+	err = c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
 		ids, err := c.accounts.AccountWorkspaces(ctx, tx, cl.principal.AccountID())
 		if err != nil {
 			return err
 		}
-		view, err = billing.ReadBalance(ctx, tx, uuid.UUID(cl.principal.AccountID()), ids)
+		if view, err = billing.ReadBalance(ctx, tx, account, ids); err != nil {
+			return err
+		}
+		batches, ready, err = billing.ReadCreditBatches(ctx, tx, account, advanced)
 		return err
 	})
 	if err != nil {
@@ -37,11 +59,35 @@ func (c consoleAPI) GetBalance(ctx context.Context, _ consoleapi.GetBalanceReque
 	// The balance less reservations and freezes can leave 64 bits when the figures are at their limits; text does not.
 	available := view.Available()
 	currency := cl.site.Currency
-	return consoleapi.GetBalance200JSONResponse{
+	body := consoleapi.GetBalance200JSONResponse{
 		Balance: moneyOf(view.Balance, currency), Reserved: moneyOf(view.Reserved, currency), Floor: moneyOf(view.Floor, currency),
 		Available:      consoleapi.Money{Amount: available.String(), Currency: currency.String()},
 		SpentThisMonth: moneyOf(view.SpentThisMonth, currency),
-	}, nil
+	}
+	if ready {
+		list := make([]consoleapi.CreditBatch, len(batches))
+		for i, b := range batches {
+			list[i] = creditBatchBody(b, currency)
+		}
+		body.Batches = &list
+	}
+	return body, nil
+}
+
+// How far a balance read may chase the allocation and how long it may spend doing it. A page after the first is usually
+// already caught up; the bound only matters for an account whose whole history has never been replayed.
+const (
+	batchReplayPages  = 8
+	batchReplayBudget = 2 * time.Second
+)
+
+// creditBatchBody is a batch as the contract shows it. Money is the site's accounting currency.
+func creditBatchBody(b billing.CreditBatchView, currency platform.Currency) consoleapi.CreditBatch {
+	return consoleapi.CreditBatch{
+		Id: b.ID.String(), Source: consoleapi.CreditBatchSource(b.Source), Amount: moneyOf(b.Amount, currency),
+		Remaining: moneyOf(b.Remaining, currency), Frozen: moneyOf(b.Frozen, currency), CreatedAt: b.CreatedAt,
+		ExpiresAt: b.ExpiresAt,
+	}
 }
 
 // endOfTime is the upper bound of a list that gives none: later than any call.

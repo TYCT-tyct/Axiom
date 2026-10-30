@@ -2257,6 +2257,28 @@ export interface components {
             floor: components["schemas"]["Money"];
             available: components["schemas"]["Money"];
             spent_this_month: components["schemas"]["Money"];
+            /** @description The credit batches that still hold something, oldest credit first, with what is left in each and when it stops counting. An account with nothing is an empty array. Read in the same snapshot as the balance: absent on a node of the previous release, when the allocation could not be brought up to date in bounded time, or when a transaction committed after the last replay. The page then shows this part as unavailable rather than a number from a different moment. */
+            batches?: components["schemas"]["CreditBatch"][];
+        };
+        /** @description Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this batch, not what the next charge will take. */
+        CreditBatch: {
+            /** @description The batch's own identity; paid credit uses the order's ID as the batch ID. */
+            id: string;
+            /**
+             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment.
+             * @enum {string}
+             */
+            source: "gift" | "paid";
+            amount: components["schemas"]["Money"];
+            remaining: components["schemas"]["Money"];
+            frozen: components["schemas"]["Money"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When what is left of the batch stops counting. Absent when it never expires.
+             */
+            expires_at?: string;
         };
         /** @description An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text. */
         Uuid: string;
