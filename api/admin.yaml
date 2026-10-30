@@ -4584,6 +4584,27 @@ components:
           type: object
           description: What the supplier says about the group (platform, subscription type, peak pricing, long context).
           additionalProperties: true
+        pool: {$ref: "#/components/schemas/SupplierPool"}
+    SupplierPool:
+      type: object
+      description: What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool, or a read has not reported it yet.
+      required: [accounts, failed, usable, low, observed_at]
+      properties:
+        accounts: {type: integer, minimum: 1, description: "The accounts assigned to the group."}
+        failed: {type: integer, minimum: 0, description: "How many of them the pool marks failed: they cannot serve."}
+        usable: {type: integer, minimum: 0, description: "How many of them the pool may schedule now."}
+        headroom:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: "The mean room left in the tighter quota window of the accounts that can serve, in percent. Absent when no account reported a window."
+        capacity:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: "The effective capacity this leaves: headroom times the share of accounts that can serve, in percent. Absent when no account reported a window."
+        low: {type: boolean, description: "Routing halves the group's weight while this is true."}
+        observed_at: {type: string, format: date-time, description: "When these numbers were recorded."}
     GroupSelection:
       type: object
       required: [selected, reason]

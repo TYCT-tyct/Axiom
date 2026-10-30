@@ -22,6 +22,9 @@ const maxPages = 100
 
 type manager struct {
 	s *session
+	// role is the role the account last reported at /auth/me: "admin" for a login that administers the pool. It is kept
+	// for the round so the pool task does not ask again what the balance task just read.
+	role string
 }
 
 var _ adapter.Manager = (*manager)(nil)
@@ -42,19 +45,34 @@ func statusError(what string, resp adapter.Response) error {
 	return fmt.Errorf("sub2api: %s: status %d", what, resp.Status)
 }
 
+// meDTO is the part of the logged-in account that decides the balance and whether it administers the pool.
+type meDTO struct {
+	Balance number `json:"balance"`
+	Role    string `json:"role"`
+}
+
+// me reads the logged-in account. The role is kept for the round, so the pool read after the balance read costs no
+// request of its own.
+func (m *manager) me(ctx context.Context) (meDTO, error) {
+	resp, err := m.get(ctx, "/api/v1/auth/me", bucketPanel)
+	if err != nil {
+		return meDTO{}, err
+	}
+	if resp.Status != http.StatusOK {
+		return meDTO{}, statusError("account", resp)
+	}
+	me, err := open[meDTO](resp)
+	if err != nil {
+		return meDTO{}, err
+	}
+	m.role = me.Role
+	return me, nil
+}
+
 // Account reads the balance and where it is drawn from. An active subscription means some calls are paid from its
 // windows, not the wallet; the supplier is then not taken to be wallet-funded.
 func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
-	resp, err := m.get(ctx, "/api/v1/auth/me", bucketPanel)
-	if err != nil {
-		return adapter.Account{}, err
-	}
-	if resp.Status != http.StatusOK {
-		return adapter.Account{}, statusError("account", resp)
-	}
-	me, err := open[struct {
-		Balance number `json:"balance"`
-	}](resp)
+	me, err := m.me(ctx)
 	if err != nil {
 		return adapter.Account{}, err
 	}
@@ -62,7 +80,7 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 	if err != nil {
 		return adapter.Account{}, err
 	}
-	resp, err = m.get(ctx, "/api/v1/subscriptions/active", bucketPanel)
+	resp, err := m.get(ctx, "/api/v1/subscriptions/active", bucketPanel)
 	if err != nil {
 		return adapter.Account{}, err
 	}

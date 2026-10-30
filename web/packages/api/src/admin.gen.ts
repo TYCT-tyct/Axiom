@@ -2460,6 +2460,27 @@ export interface components {
             facts?: {
                 [key: string]: unknown;
             };
+            pool?: components["schemas"]["SupplierPool"];
+        };
+        /** @description What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool, or a read has not reported it yet. */
+        SupplierPool: {
+            /** @description The accounts assigned to the group. */
+            accounts: number;
+            /** @description How many of them the pool marks failed: they cannot serve. */
+            failed: number;
+            /** @description How many of them the pool may schedule now. */
+            usable: number;
+            /** @description The mean room left in the tighter quota window of the accounts that can serve, in percent. Absent when no account reported a window. */
+            headroom?: number;
+            /** @description The effective capacity this leaves: headroom times the share of accounts that can serve, in percent. Absent when no account reported a window. */
+            capacity?: number;
+            /** @description Routing halves the group's weight while this is true. */
+            low: boolean;
+            /**
+             * Format: date-time
+             * @description When these numbers were recorded.
+             */
+            observed_at: string;
         };
         GroupSelection: {
             selected: boolean;

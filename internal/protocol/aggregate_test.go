@@ -107,6 +107,7 @@ func samplePaths(t *testing.T) []sampledPath {
 	t.Helper()
 	paths := []sampledPath{
 		{"assembled/responses-reasoning-tool.sse", "assembled/responses-reasoning-tool.aggregate-to-chat.json", protocol.Chat, protocol.Responses},
+		{"assembled/responses-reasoning-tool.sse", "assembled/responses-reasoning-tool.aggregate-to-messages.json", protocol.Messages, protocol.Responses},
 		{"assembled/responses-reasoning-tool.sse", "assembled/responses-reasoning-tool.aggregate-responses.json", protocol.Responses, protocol.Responses},
 	}
 	for _, format := range formats {
