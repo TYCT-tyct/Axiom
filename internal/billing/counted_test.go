@@ -84,14 +84,15 @@ type wantCharge struct {
 	unit, price string
 }
 
-// checkCharges checks the items are exactly want: each count, unit and price, and none estimated.
+// checkCharges checks the items are exactly one per wanted name: each count, unit and price, and none estimated. A
+// repeated name is a failure too, which the second length catches.
 func checkCharges(t *testing.T, items []ChargeItem, want map[string]wantCharge) {
 	t.Helper()
 	got := make(map[string]ChargeItem, len(items))
 	for _, item := range items {
 		got[item.Item] = item
 	}
-	if len(got) != len(want) {
+	if len(items) != len(want) || len(got) != len(want) {
 		t.Fatalf("charge items %+v, want %v", items, want)
 	}
 	for name, w := range want {
