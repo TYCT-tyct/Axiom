@@ -42,6 +42,15 @@ for (const app of apps) {
   });
 }
 
+test("the website reaches models and prices on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await mockConsole(page);
+  await page.goto(apps[0].url);
+  await page.getByRole("navigation").getByRole("link", { name: "模型与价格" }).click();
+  await expect(page).toHaveURL(/\/models$/);
+  await expect(page.getByRole("heading", { level: 1, name: "模型与价格" })).toBeVisible();
+});
+
 test("the website lists models and prices and filters them in the address", async ({ page }) => {
   await mockConsole(page);
   await page.goto(`${apps[0].url}models`);

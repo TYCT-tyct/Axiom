@@ -34,10 +34,10 @@ export function SiteShell({ children, mainClassName = "" }: { children: ReactNod
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="mx-auto flex h-16 w-full max-w-[1248px] items-center gap-4 px-4 sm:px-6">
-        <a href="/" className="shrink-0" aria-label={t("home")}>
+        <a href="/" className="min-w-0 shrink" aria-label={t("home")}>
           <Logo name={brand?.name} logoUrl={brand?.logo_url} />
         </a>
-        <nav aria-label={t("navigation")} className="hidden items-center gap-1 sm:flex">
+        <nav aria-label={t("navigation")} className="flex shrink-0 items-center gap-1">
           <a
             href="/models"
             className="rounded-xs px-2 py-1 text-ui text-t2 underline-offset-4 hover:text-t1 hover:underline"
@@ -46,7 +46,7 @@ export function SiteShell({ children, mainClassName = "" }: { children: ReactNod
           </a>
         </nav>
         <PreferenceSwitches className="ml-auto hidden gap-2 sm:flex" />
-        <Button asChild size="sm" className="ml-auto sm:ml-0">
+        <Button asChild size="sm" className="ml-auto shrink-0 sm:ml-0">
           <a href={consoleHref}>{t("signIn")}</a>
         </Button>
       </header>
