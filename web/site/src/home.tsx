@@ -1,3 +1,4 @@
+import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { Button, Logo, PreferenceSwitches } from "@axiom/ui";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -5,7 +6,7 @@ import { useTranslation } from "react-i18next";
 // The console lives on the same listener under /console/ (console/vite.config.ts).
 const consoleHref = "/console/";
 
-type Brand = { name?: string; logo_url?: string };
+type Brand = Pick<Schemas["Site"], "logo_url"> & { name?: string };
 
 // The site's name and logo, from the same public call the console's sign-in page uses. A host the API does not know, or
 // a failed request, leaves the default mark and name: the page is still the product's.
@@ -13,17 +14,11 @@ function useSiteBrand(): Brand | undefined {
   const [brand, setBrand] = useState<Brand>();
   useEffect(() => {
     const call = new AbortController();
-    fetch("/api/console/v1/site", { signal: call.signal, headers: { Accept: "application/json" } })
-      .then((response) => (response.ok ? response.json() : undefined))
-      .then((data: unknown) => {
-        if (call.signal.aborted || data === null || typeof data !== "object") {
-          return;
+    unwrap(consoleApi.GET("/api/console/v1/site", { signal: call.signal }))
+      .then((site) => {
+        if (!call.signal.aborted) {
+          setBrand({ name: site.name || undefined, logo_url: site.logo_url });
         }
-        const { name, logo_url } = data as Record<string, unknown>;
-        setBrand({
-          name: typeof name === "string" ? name : undefined,
-          logo_url: typeof logo_url === "string" ? logo_url : undefined,
-        });
       })
       .catch(() => {});
     return () => call.abort();
