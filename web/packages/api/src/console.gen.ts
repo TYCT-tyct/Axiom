@@ -1466,9 +1466,9 @@ export interface components {
         KeyStatus: "active" | "disabled" | "expired";
         /** @description The filters this node applied to the page. Absent on nodes that predate key filters: those nodes ignore the filter parameters and return every key, so a filtered page cannot show their rows. */
         KeyFilterEcho: {
-            /** @description The applied name filter */
+            /** @description The applied name filter, ignoring case in the match. */
             name?: string;
-            /** @description The applied prefix filter */
+            /** @description The applied prefix filter, ignoring case in the match. */
             prefix?: string;
             status?: components["schemas"]["KeyStatus"];
             /**
