@@ -315,7 +315,7 @@ export interface paths {
         };
         /**
          * The site the request's domain belongs to
-         * @description What the sign-in and registration pages need before anyone is signed in: the site's name and logo for the brand, and whether registration needs an invite. The site is found from the `Host`, which must be a domain registered for the console; any other host gets a 404.
+         * @description What the sign-in and registration pages need before anyone is signed in: the site's name and logo for the brand, whether registration needs an invite, and, on a site with open registration, the proof-of-work difficulty the page must solve. The site is found from the `Host`, which must be a domain registered for the console; any other host gets a 404.
          */
         get: operations["getSite"];
         put?: never;
@@ -336,12 +336,34 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Register with an invite code
-         * @description Makes the user, their personal account, its default workspace and balance, in the site's default tier. It does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown, its user disabled, or the site not registering by invitation) is one `invalid_invite`. A taken email is `email_taken`, and the whole registration is undone. The email is not verified in M1.
+         * Register with an invite code or open registration
+         * @description On a site registering by invitation, makes the user, their personal account, its default workspace and balance, in the site's default tier, and answers 201. It does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown, its user disabled, or the site not registering by invitation) is one `invalid_invite`; a taken email is `email_taken`, and the whole registration is undone.
          *
-         *     Limits: the per-IP bucket of `signIn`.
+         *     On a site with open registration, checks the address against the site's domain lists and the proof of work, stores one pending registration without a password, and queues a single-use verification link; the answer is always 202 for a well-formed address, whether or not it is registered already, so an anonymous caller cannot learn which addresses exist. A password in this request is ignored: the verification page sets it after the address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot send mail answers `unavailable`, and a closed site `registration_closed`.
+         *
+         *     Limits: the per-IP bucket of `signIn`, and on open registration, the email domain's bucket.
          */
         post: operations["register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/verify-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify an open registration's email
+         * @description Turns the single-use token from the verification mail and the password chosen by the mailbox owner into the user, their personal account, its default workspace and balance. The password is validated and hashed only after the token is found; no password is kept before this request. The token is bound to the console domain and the pending registration; an unknown, expired or already used one is one `invalid_verification`, and an address registered in the meantime is `email_taken`. The user is not signed in: the page sends them to sign in with the password they chose. Limits: the per-IP bucket of `signIn`; an attempt spends one before the token is looked up or the password is hashed.
+         */
+        post: operations["verifyEmail"];
         delete?: never;
         options?: never;
         head?: never;
@@ -763,7 +785,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
         Money: {
             /** @example 1500000000 */
@@ -891,6 +913,7 @@ export interface components {
         /** @description A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`. */
         CallId: string;
         Site: {
+            id?: components["schemas"]["SiteId"];
             name: string;
             /**
              * @description The site's accounting currency, the one of every `Money` its API shows. It never changes.
@@ -904,6 +927,13 @@ export interface components {
              * @example sk-ax-v1-
              */
             key_prefix: string;
+            /** @description Whether open registration verifies the address by mail before the user exists. Absent on a node of the previous release. */
+            email_verification?: boolean;
+            /** @description The proof of work the open-registration page must solve. Absent when the site does not check, or when the node predates open registration. */
+            human_check?: {
+                /** @description Leading zero bits the SHA-256 of `axiom-registration-v1`, the site id, the normalized email and the decimal nonce must have. */
+                bits: number;
+            };
             /**
              * Format: uri
              * @description Where a key's calls go: the origin of the site's API domain, which serves `/v1/...`. The console shows it to the user because the console's own host is a different one; it is never built from the request's Host. Absent when the site has no enabled API domain.
@@ -911,18 +941,36 @@ export interface components {
              */
             api_base_url?: string;
             /**
-             * @description `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
+             * @description `invite` needs an invite code; `closed` takes no one; `open` verifies the address by mail, with the site's human check, domain lists and limits.
              * @enum {string}
              */
             registration: "invite" | "closed" | "open";
         };
         RegisterRequest: {
-            invite_code: string;
+            /** @description Required on an invite-only site; ignored where registration is open. */
+            invite_code?: string;
             email: string;
-            password: string;
+            /** @description Required on an invite-only site. Open registration does not keep it: the page chooses the password on the verification page, so an unauthenticated caller cannot choose the password of an address it does not own. */
+            password?: string;
+            /** @description The decimal nonce that solves the site's proof of work. Required where `human_check` is present. */
+            human_check?: string;
+            /**
+             * @description The language of the verification mail; absent means en. The page sends its own.
+             * @enum {string}
+             */
+            language?: "zh" | "en";
         };
         Registered: {
             user_id: components["schemas"]["UserId"];
+        };
+        RegistrationPending: {
+            /** @enum {string} */
+            status: "verification_sent";
+        };
+        VerifyEmailRequest: {
+            token: string;
+            /** @description The password chosen by the mailbox owner when the link is clicked. */
+            password: string;
         };
         /** @description A call or management key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit. */
         Key: {
@@ -1823,7 +1871,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Registered. */
+            /** @description Registered with an invite code. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -1831,6 +1879,43 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Registered"];
                 };
+            };
+            /** @description Open registration accepted; a verification link is on its way. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationPending"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    verifyEmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyEmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Verified. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];

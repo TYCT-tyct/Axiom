@@ -7,6 +7,7 @@ package accounts
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
@@ -206,18 +207,20 @@ func (q *Queries) InsertSession(ctx context.Context, db DBTX, arg InsertSessionP
 
 const insertUser = `-- name: InsertUser :exec
 INSERT INTO accounts.users (id, site_id, account_id, email, password_hash, factor_version, status, invite_code,
-    inviter_user_id)
-VALUES ($1, $2, $3, $4, $5, 1, 'active', $6, $7)
+    inviter_user_id, email_verified_at)
+VALUES ($1, $2, $3, $4, $5, 1, 'active', $6, $7,
+    $8)
 `
 
 type InsertUserParams struct {
-	ID            uuid.UUID
-	SiteID        uuid.UUID
-	AccountID     uuid.UUID
-	Email         string
-	PasswordHash  string
-	InviteCode    string
-	InviterUserID *uuid.UUID
+	ID              uuid.UUID
+	SiteID          uuid.UUID
+	AccountID       uuid.UUID
+	Email           string
+	PasswordHash    string
+	InviteCode      string
+	InviterUserID   *uuid.UUID
+	EmailVerifiedAt *time.Time
 }
 
 func (q *Queries) InsertUser(ctx context.Context, db DBTX, arg InsertUserParams) error {
@@ -229,6 +232,7 @@ func (q *Queries) InsertUser(ctx context.Context, db DBTX, arg InsertUserParams)
 		arg.PasswordHash,
 		arg.InviteCode,
 		arg.InviterUserID,
+		arg.EmailVerifiedAt,
 	)
 	return err
 }

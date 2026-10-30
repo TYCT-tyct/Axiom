@@ -21,26 +21,63 @@ func grant(issued accounts.Issued) consoleapi.SessionGrant {
 // GetSite tells the sign-in and registration pages whose they are, and where a key's calls go.
 func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject) (consoleapi.GetSiteResponseObject, error) {
 	site := callOf(ctx).site
+	id := site.ID.TypeID()
 	response := consoleapi.Site{
-		Name: site.Name, Currency: site.Currency.String(), KeyPrefix: site.KeyPrefix,
+		Id: &id, Name: site.Name, Currency: site.Currency.String(), KeyPrefix: site.KeyPrefix,
 		Registration: consoleapi.SiteRegistration(site.Registration),
 	}
 	if site.APIBase != "" {
 		response.ApiBaseUrl = &site.APIBase
 	}
+	if site.Registration == "open" {
+		verified := true
+		response.EmailVerification = &verified
+		if site.RegistrationHumanCheck {
+			response.HumanCheck = &struct {
+				Bits int `json:"bits"`
+			}{Bits: site.RegistrationHumanCheckBits}
+		}
+	}
 	return consoleapi.GetSite200JSONResponse(response), nil
 }
 
-// Register makes a user from an invite code.
+// Register makes a user from an invite code, or starts the email verification of an open registration.
 func (c consoleAPI) Register(ctx context.Context, request consoleapi.RegisterRequestObject) (consoleapi.RegisterResponseObject, error) {
 	cl := callOf(ctx)
-	user, err := c.accounts.Register(ctx, accounts.RegisterRequest{
-		Host: cl.r.Host, InviteCode: request.Body.InviteCode, Email: request.Body.Email, Password: request.Body.Password, ClientIP: cl.ip,
+	body := request.Body
+	invite, password, human, language := "", "", "", ""
+	if body.InviteCode != nil {
+		invite = *body.InviteCode
+	}
+	if body.Password != nil {
+		password = *body.Password
+	}
+	if body.HumanCheck != nil {
+		human = *body.HumanCheck
+	}
+	if body.Language != nil {
+		language = string(*body.Language)
+	}
+	out, err := c.accounts.Register(ctx, accounts.RegisterRequest{
+		Host: cl.r.Host, InviteCode: invite, Email: body.Email, Password: password,
+		HumanCheck: human, Language: language, ClientIP: cl.ip,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return consoleapi.Register201JSONResponse{UserId: user.TypeID()}, nil
+	if out.Pending {
+		return consoleapi.Register202JSONResponse{Status: consoleapi.VerificationSent}, nil
+	}
+	return consoleapi.Register201JSONResponse{UserId: out.User.TypeID()}, nil
+}
+
+// VerifyEmail turns the link's token and the chosen password into the pending user.
+func (c consoleAPI) VerifyEmail(ctx context.Context, request consoleapi.VerifyEmailRequestObject) (consoleapi.VerifyEmailResponseObject, error) {
+	cl := callOf(ctx)
+	if _, err := c.accounts.VerifyEmail(ctx, cl.r.Host, request.Body.Token, request.Body.Password, cl.ip); err != nil {
+		return nil, err
+	}
+	return consoleapi.VerifyEmail204Response{}, nil
 }
 
 // SignIn checks the password and sets a session, a pending one when the user has two-step verification.

@@ -362,7 +362,7 @@ type reasoningMember struct {
 // reasoningOf counts a reasoning member as content and keeps where it is, to write its text under the other name.
 func (s *chatStream) reasoningOf(m *reasoningMember) error {
 	v, err := s.raw()
-	s.e.content += unquotedLen(v)
+	s.addText(v)
 	if err != nil {
 		return err
 	}

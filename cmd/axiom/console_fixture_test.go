@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/mail"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/jsonx"
+	axmail "axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
 )
 
@@ -52,6 +54,7 @@ type consoleFixture struct {
 	// pay is the payments module behind the top-up operations, with the one channel kind a test has: gateway.
 	pay     *payments.Payments
 	gateway *fakeGateway
+	queue   *pg.Queue
 }
 
 func newConsoleFixture(t *testing.T) consoleFixture {
@@ -64,10 +67,38 @@ func newConsoleFixture(t *testing.T) consoleFixture {
 // sites, domains and roles as they are now, and the console's routes in front of it. A request deadline of 0 is the
 // program's.
 func startNode(c commandLine, clock *testClock, deadline time.Duration) consoleFixture {
+	return startNodeWith(c, clock, deadline, false)
+}
+
+// startNodeWithRegistration starts a node with the open-registration worker, which a test that registers by email
+// needs; the queue is not started, so a test starts it when it is ready.
+func startNodeWithRegistration(c commandLine, clock *testClock) consoleFixture {
+	return startNodeWith(c, clock, 0, true)
+}
+
+func startNodeWith(c commandLine, clock *testClock, deadline time.Duration, withRegistration bool) consoleFixture {
 	c.t.Helper()
-	svc, err := accounts.NewService(c.db, accounts.Config{
+	logs := new(bytes.Buffer)
+	logger := slog.New(slog.NewJSONHandler(logs, nil))
+	config := accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: macKeys(c.t), Keyring: masterKeys(c.t), Now: clock.Now, OnAccountOpened: openBalance,
-	})
+	}
+	var queue *pg.Queue
+	if withRegistration {
+		queue = c.db.NewQueue(logger, pg.PlatformScope(), nil)
+		mailer, err := axmail.Register(c.t.Context(), c.db, queue, axmail.Config{
+			Host: "localhost", Port: 1, From: mail.Address{Address: "no-reply@example.com"},
+		}, nil, nil, logger)
+		if err != nil {
+			c.t.Fatal(err)
+		}
+		registration, err := accounts.RegisterRegistration(c.db, queue, mailer, pg.PlatformScope(), logger)
+		if err != nil {
+			c.t.Fatal(err)
+		}
+		config.Registration = registration
+	}
+	svc, err := accounts.NewService(c.db, config)
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -81,15 +112,13 @@ func startNode(c commandLine, clock *testClock, deadline time.Duration) consoleF
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	logs := new(bytes.Buffer)
-	logger := slog.New(slog.NewJSONHandler(logs, nil))
 	exit, err := egress.New(egress.Direct)
 	if err != nil {
 		c.t.Fatal(err)
 	}
 	c.t.Cleanup(exit.CloseIdleConnections)
 	routes := publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, nil), exit: exit, version: "test", accounts: svc, payments: pay, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
-	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, pay: pay, gateway: gateway}
+	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, pay: pay, gateway: gateway, queue: queue}
 }
 
 // restarted is a new node on the same database, as the reload loop would make the old one after 30 seconds: it sees

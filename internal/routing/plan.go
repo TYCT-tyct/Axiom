@@ -64,6 +64,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	attempts := orDefault(preset.MaxAttempts, r.cfg.MaxAttempts)
 	order = healthOrder(order, n, &rec, min(attempts, MaxEntries))
+	rec.Unmeasured = unmeasured(order, n.strategy())
 	entries := r.entries(order, n, &rec)
 	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
 	if len(entries) == 0 {
@@ -80,6 +81,12 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		Entries: entries, MaxAttempts: attempts,
 		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), StickyTTL: preset.StickyTTL, Record: rec,
 	}, nil, nil
+}
+
+// unmeasured reports whether a fastest-first order has nothing measured to rank by. It reads the order after the
+// breakers: a measured endpoint they take out of the route says nothing about this route's speed.
+func unmeasured(order []ranked, strategy Strategy) bool {
+	return strategy == Fastest && len(order) > 0 && !slices.ContainsFunc(order, func(c ranked) bool { return c.Throughput > 0 })
 }
 
 // DemandOf is the request as billing's quote reads it, so the length that bounds the price limits is billing's own
@@ -322,7 +329,13 @@ func (c *candidate) servesFormat(n *need) bool {
 	return ok
 }
 
+// full reports whether the endpoint can take no more calls now: its credentials are all at their concurrency or minute
+// ceilings, or its own in-flight ceiling is reached. The credential view is read here, at the end of the filters, so a
+// route is not frozen to an endpoint that would refuse every attempt (docs/domains/routing.md「容量感知」).
 func (c *candidate) full() bool {
+	if c.Capacity != nil && c.Capacity.Full() {
+		return true
+	}
 	return c.MaxConcurrent > 0 && c.state.inflight.Load() >= c.MaxConcurrent
 }
 
@@ -340,6 +353,7 @@ func (n *need) overrideAllows(c *candidate, price *candidatePrice) bool {
 	o := n.over
 	return o.allowsName(c.Codename) &&
 		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
+		(!o.RequireParameters || c.Parameters.HasAll(o.RequiredParameters)) &&
 		n.withinLimit(o.MaxPrice, c, price)
 }
 

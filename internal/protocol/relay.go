@@ -10,6 +10,7 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
+	"axiom/internal/platform/textshape"
 	"axiom/internal/protocol/internal/sse"
 )
 
@@ -54,12 +55,14 @@ type Usage struct {
 }
 
 // Progress is what the relay has seen so far, for billing's meter after every step. ContentBytes are the text,
-// reasoning and tool input of the events read, unquoted; PartialBytes are the raw bytes read but not yet returned as
+// reasoning and tool input of the events read, unquoted, and Text the shape of the strings among them, whose tokens
+// per byte estimate the output a reply did not report; PartialBytes are the raw bytes read but not yet returned as
 // an event. Reported has the reply's counts reported so far, and Final those that are final: the input side once
 // reported, the rest from the format's last usage event on; until then an output count only bounds the output from
 // below (README.md「转发（草图）」).
 type Progress struct {
 	ContentBytes, PartialBytes, Searches int64
+	Text                                 textshape.Shape
 	Reported                             Segment
 	Final                                catalog.ItemSet
 }
@@ -372,6 +375,7 @@ func (r *Relay) edit(e *event) ([]byte, error) {
 // observe adds what an event reports to the progress.
 func (r *Relay) observe(e event) {
 	r.progress.ContentBytes += e.content
+	r.progress.Text.Merge(e.shape)
 	r.progress.Searches += e.searches
 	if e.usage || e.final {
 		r.meter.final = r.meter.final || e.final

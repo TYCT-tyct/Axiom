@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: events are read token by token, in place
 	"fmt"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/textshape"
 	"axiom/internal/protocol/internal/sse"
 )
 
@@ -50,9 +53,10 @@ type event struct {
 	withheld          []byte
 	usageAt           int
 	content, searches int64
-	usage             bool // it reported usage, which the meter has taken
-	final             bool // it is the format's last usage event
-	ends              bool // an ending that is also the normal end, as Responses' response.completed is
+	shape             textshape.Shape // the shape of the content's decoded strings
+	usage             bool            // it reported usage, which the meter has taken
+	final             bool            // it is the format's last usage event
+	ends              bool            // an ending that is also the normal end, as Responses' response.completed is
 }
 
 // edit replaces data[from:to] with with, then echo: a value of the event itself, copied again.
@@ -133,8 +137,14 @@ func (s *eventReader) serviceTier() error {
 // text counts a string member, unquoted, as content.
 func (s *eventReader) text() error {
 	v, err := s.raw()
-	s.e.content += unquotedLen(v)
+	s.addText(v)
 	return err
+}
+
+// addText counts v, a JSON string or nil, as content, and tallies its text's shape.
+func (s *eventReader) addText(v jsontext.Value) {
+	s.e.content += unquotedLen(v)
+	addShape(&s.e.shape, v)
 }
 
 // rawContent counts a member as written, such as a tool's input or an output item, as content: its bytes bound
@@ -264,10 +274,7 @@ func unquotedLen(v jsontext.Value) int64 {
 			n++
 			continue
 		}
-		var r rune
-		for _, c := range v[i+1 : i+5] {
-			r = r<<4 | rune(c&0xf+c>>6*9) // a hex digit: '0'-'9' is 0x3_, 'A'-'F' and 'a'-'f' are 0x4_ and 0x6_
-		}
+		r := hex4(v[i+1 : i+5])
 		i += 4
 		switch {
 		case r < 0x80:
@@ -279,6 +286,52 @@ func unquotedLen(v jsontext.Value) int64 {
 		}
 	}
 	return n
+}
+
+// addShape tallies the text of v, a JSON string or nil, without unquoting it into a buffer: the runs between escapes
+// as they are, each escape as the character it stands for. v is valid JSON, as unquotedLen's is.
+func addShape(shape *textshape.Shape, v jsontext.Value) {
+	if len(v) < 2 {
+		return
+	}
+	v = v[1 : len(v)-1]
+	var buf [utf8.UTFMax]byte
+	for len(v) > 0 {
+		i := bytes.IndexByte(v, '\\')
+		if i < 0 {
+			shape.Add(v)
+			return
+		}
+		shape.Add(v[:i])
+		r, n := unescape(v[i:])
+		shape.Add(utf8.AppendRune(buf[:0], r))
+		v = v[i+n:]
+	}
+}
+
+// unescape is the character the escape that begins v stands for, a surrogate pair as one, and the escape's length.
+func unescape(v []byte) (rune, int) {
+	if v[1] != 'u' {
+		return rune(escaped[v[1]]), 2
+	}
+	r := hex4(v[2:6])
+	if utf16.IsSurrogate(r) && len(v) >= 12 && v[6] == '\\' && v[7] == 'u' {
+		if pair := utf16.DecodeRune(r, hex4(v[8:12])); pair != utf8.RuneError {
+			return pair, 12
+		}
+	}
+	return r, 6 // a lone surrogate tallies as the invalid character it is
+}
+
+// escaped is what each two-character escape stands for.
+var escaped = [256]byte{'"': '"', '\\': '\\', '/': '/', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t'}
+
+func hex4(h []byte) rune {
+	var r rune
+	for _, c := range h {
+		r = r<<4 | rune(c&0xf+c>>6*9) // a hex digit: '0'-'9' is 0x3_, 'A'-'F' and 'a'-'f' are 0x4_ and 0x6_
+	}
+	return r
 }
 
 // usage copies a usage object's members the format defines and drops the rest, such as a relay's cost, marking where

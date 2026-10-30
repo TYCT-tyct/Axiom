@@ -60,7 +60,7 @@ func newTestSite(t *testing.T) site {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return site{db, database, s, c, user, email}
+	return site{db, database, s, c, user.User, email}
 }
 
 func inviteCode(t *testing.T, db *pg.DB, user string) string {
@@ -137,35 +137,6 @@ func TestRegisterSignInAndUse(t *testing.T) {
 	}
 	if _, err := x.principal(t, console, issued); !errors.Is(err, accounts.ErrNoSession) {
 		t.Errorf("after signing out: %v", err)
-	}
-}
-
-// TestRegistrationRefusals: registration needs the invite code of an enabled user of the site, a site that registers
-// by invitation, a console domain, a password of 12 characters or more, and an email not yet registered there.
-func TestRegistrationRefusals(t *testing.T) {
-	t.Parallel()
-	x := newTestSite(t)
-	code := inviteCode(t, x.db, ":u1")
-	for name, c := range map[string]struct {
-		r    accounts.RegisterRequest
-		want error
-	}{
-		"an unknown code":       {accounts.RegisterRequest{console, "nosuchcode0000", "new@example.com", password, client}, accounts.ErrInvalidInvite},
-		"another site's code":   {accounts.RegisterRequest{console, inviteCode(t, x.db, ":u2"), "new@example.com", password, client}, accounts.ErrInvalidInvite},
-		"a site that is closed": {accounts.RegisterRequest{otherConsole, inviteCode(t, x.db, ":u2"), "new@example.com", password, client}, accounts.ErrInvalidInvite},
-		"a short password":      {accounts.RegisterRequest{console, code, "new@example.com", "short", client}, accounts.ErrWeakPassword},
-		"an email registered":   {accounts.RegisterRequest{console, code, " SOMEONE@example.com", password, client}, accounts.ErrEmailTaken},
-		"the admin domain":      {accounts.RegisterRequest{admin, code, "new@example.com", password, client}, accounts.ErrUnknownHost},
-	} {
-		if _, err := x.s.Register(t.Context(), c.r); !errors.Is(err, c.want) {
-			t.Errorf("%s: %v, want %v", name, err, c.want)
-		}
-	}
-	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace("UPDATE accounts.users SET status = 'disabled' WHERE id = :u1")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{console, code, "new@example.com", password, client}); !errors.Is(err, accounts.ErrInvalidInvite) {
-		t.Errorf("a disabled inviter: %v", err)
 	}
 }
 

@@ -84,31 +84,39 @@ SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.curren
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
     t.ip_attempt_burst, t.ip_attempts_per_minute, t.email_sign_in_failures, t.user_code_failures,
-    t.challenge_code_attempts, t.max_keys_per_account, t.key_creations_per_hour
+    t.challenge_code_attempts, t.max_keys_per_account, t.key_creations_per_hour,
+    t.registration_human_check, t.registration_human_check_bits, t.registration_domain_burst,
+    t.registration_domain_per_hour, t.registration_domain_allow, t.registration_domain_deny
 FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id
 `
 
 type ListSitesRow struct {
-	ID                    uuid.UUID
-	IsMain                bool
-	Name                  string
-	Status                string
-	KeyPrefix             string
-	Registration          string
-	Currency              string
-	DefaultTierID         uuid.UUID
-	NewKeyDailyLimit      *int64
-	ConsoleIdleSeconds    int64
-	ConsoleMaxAgeSeconds  int64
-	AdminIdleSeconds      int64
-	AdminMaxAgeSeconds    int64
-	IpAttemptBurst        *int32
-	IpAttemptsPerMinute   *int32
-	EmailSignInFailures   *int32
-	UserCodeFailures      *int32
-	ChallengeCodeAttempts *int32
-	MaxKeysPerAccount     *int32
-	KeyCreationsPerHour   *int32
+	ID                         uuid.UUID
+	IsMain                     bool
+	Name                       string
+	Status                     string
+	KeyPrefix                  string
+	Registration               string
+	Currency                   string
+	DefaultTierID              uuid.UUID
+	NewKeyDailyLimit           *int64
+	ConsoleIdleSeconds         int64
+	ConsoleMaxAgeSeconds       int64
+	AdminIdleSeconds           int64
+	AdminMaxAgeSeconds         int64
+	IpAttemptBurst             *int32
+	IpAttemptsPerMinute        *int32
+	EmailSignInFailures        *int32
+	UserCodeFailures           *int32
+	ChallengeCodeAttempts      *int32
+	MaxKeysPerAccount          *int32
+	KeyCreationsPerHour        *int32
+	RegistrationHumanCheck     *bool
+	RegistrationHumanCheckBits *int32
+	RegistrationDomainBurst    *int32
+	RegistrationDomainPerHour  *int32
+	RegistrationDomainAllow    []string
+	RegistrationDomainDeny     []string
 }
 
 // The snapshot's tables, read whole in the platform scope (README.md「快照」). A session length of 0 is unset: the
@@ -143,6 +151,12 @@ func (q *Queries) ListSites(ctx context.Context, db DBTX) ([]ListSitesRow, error
 			&i.ChallengeCodeAttempts,
 			&i.MaxKeysPerAccount,
 			&i.KeyCreationsPerHour,
+			&i.RegistrationHumanCheck,
+			&i.RegistrationHumanCheckBits,
+			&i.RegistrationDomainBurst,
+			&i.RegistrationDomainPerHour,
+			&i.RegistrationDomainAllow,
+			&i.RegistrationDomainDeny,
 		); err != nil {
 			return nil, err
 		}

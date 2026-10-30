@@ -8,6 +8,7 @@ import { ChangeDialog, type Problem } from "../change";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { Actions, Facts, PageBody, State } from "../parts";
 import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
+import { SiteRegistration } from "../registration";
 
 type Settings = AdminSchemas["SiteSettings"];
 
@@ -33,6 +34,7 @@ export default function SettingsPage() {
             <>
               <SiteSettings siteId={account.site_id} />
               <SiteKeyLimits siteId={account.site_id} />
+              <SiteRegistration siteId={account.site_id} />
             </>
           )}
         </DataState>

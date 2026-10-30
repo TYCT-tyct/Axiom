@@ -85,6 +85,12 @@ func (o Owner) visibleTo(a Admission) bool {
 	return o.Platform() || o.Site == a.Site && o.Account == AccountID{} || o.Account == a.Account
 }
 
+// Capacity reports whether an endpoint's credentials can take another call now: any key with a free concurrency slot
+// and room in its supplier account's rolling minute. Plan reads it before freezing a route, so a request is not sent to
+// an endpoint that would refuse it; the slot itself is still taken atomically when the attempt begins. suppliers'
+// Capacity is the production one; nil means the capacity is not known, which is not full.
+type Capacity interface{ Full() bool }
+
 // Endpoint is one supplier group serving one model, as the snapshot holds it: what routing filters and ranks by.
 // suppliers, quality and billing supply the values when the snapshot is built.
 type Endpoint struct {
@@ -96,6 +102,7 @@ type Endpoint struct {
 	Owner    Owner
 
 	LiveHealth  *quality.State
+	Capacity    Capacity
 	Enabled     bool // switched on
 	BreakerOpen bool // quality has taken it out for now
 	BalanceOK   bool // the supplier has a synced positive balance
@@ -116,6 +123,7 @@ type Endpoint struct {
 	Native           FormatSet              // formats it speaks itself
 	Served           FormatSet              // formats it can serve, with protocol's conversion; includes Native
 	Caps             protocol.Capabilities
+	Parameters       protocol.ParameterSet  // the request parameters its spec declares it takes; provider.require_parameters reads it
 	Context          int64                  // the most tokens a request may take, input plus output
 	MaxOutput        int64                  // the model's output limit here, also its default
 	OutputSpeed      int64                  // the fastest it outputs, in tokens per second; 0 when not known, which rules out segmenting
@@ -156,6 +164,10 @@ type Override struct {
 	MaxPrice                            PriceLimit
 	MinThroughput                       float64
 	MaxLatency                          time.Duration
+	// RequireParameters is provider.require_parameters: every parameter in RequiredParameters must be declared by the
+	// endpoint. The gateway fills both only when the member is true.
+	RequireParameters  bool
+	RequiredParameters protocol.ParameterSet
 }
 
 // PriceLimit caps the sale price per billing item; an item not in Set has no limit. It compares the standard tier's

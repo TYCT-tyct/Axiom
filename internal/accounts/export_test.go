@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"context"
+	"fmt"
 	"time"
 	"uuid"
 )
@@ -46,3 +47,34 @@ func (r *PasswordRecovery) ProcessPasswordReset(ctx context.Context, id uuid.UUI
 
 // PurgePasswordResets advances the expiry worker under explicit test control.
 func (r *PasswordRecovery) PurgePasswordResets(ctx context.Context) error { return r.purge(ctx) }
+
+// UseRegistration wires a test's open-registration worker without replacing the node's other dependencies.
+func (s *Service) UseRegistration(r *Registration) { s.registration = r }
+
+// SharedKeyForTest names the bucket a subject uses in the shared store.
+func (s *Service) SharedKeyForTest(site SiteID, kind, value string) string {
+	return s.sharedKey(site, kind, value)
+}
+
+// ProcessRegistration runs one pending registration's mail job under explicit test synchronization.
+func (r *Registration) ProcessRegistration(ctx context.Context, id uuid.UUID) error {
+	return r.process(ctx, registrationArgs{ID: id})
+}
+
+// PurgeRegistrations advances the expiry worker under explicit test control.
+func (r *Registration) PurgeRegistrations(ctx context.Context) error {
+	return r.cleanup(ctx, nil)
+}
+
+// ProofWorked and ProofNonce expose the page's proof of work to its tests.
+var ProofWorked = proofWorked
+
+// ProofNonce finds a nonce for the test's work.
+func ProofNonce(site SiteID, email string, bitsWanted int) string {
+	for i := uint64(0); ; i++ {
+		nonce := fmt.Sprintf("%d", i)
+		if proofWorked(site, email, nonce, bitsWanted) {
+			return nonce
+		}
+	}
+}

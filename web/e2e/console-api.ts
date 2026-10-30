@@ -20,7 +20,7 @@ function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">)
     return fail(409, "email_taken");
   }
   state.user.email = body.email;
-  state.user.password = body.password;
+  state.user.password = body.password ?? "";
   return { status: 201, json: { user_id: `user_${"1".repeat(26)}` as Schemas["UserId"] } } as const;
 }
 

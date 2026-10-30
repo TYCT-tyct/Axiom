@@ -34,13 +34,22 @@ type limits struct {
 	emailFailures        int // failed sign-ins of one email per emailWindow
 	codeFailures         int // failed TOTP and recovery codes of one user per codeWindow
 	challengeAttempts    int // codes per pending session
+	domainBurst          int // open registrations from one email domain
+	domainPerHour        int
 }
 
-var defaultLimits = limits{ipBurst: 20, ipPerMinute: 10, emailFailures: 10, codeFailures: 10, challengeAttempts: 5}
+var defaultLimits = limits{
+	ipBurst: 20, ipPerMinute: 10, emailFailures: 10, codeFailures: 10, challengeAttempts: 5,
+	domainBurst: 5, domainPerHour: 30,
+}
 
 const (
-	emailWindow = 15 * time.Minute
-	codeWindow  = time.Hour
+	// Open registration's human check is on by default at 18 leading zero bits, which a page solves in well under a
+	// second; a site can turn it off or move it within 12 to 24 bits.
+	defaultHumanCheck     = true
+	defaultHumanCheckBits = 18
+	emailWindow           = 15 * time.Minute
+	codeWindow            = time.Hour
 	// defaultHashWait is how long a password hash waits for a turn before ErrBusy.
 	defaultHashWait = 2 * time.Second
 )
@@ -87,6 +96,8 @@ type guards struct {
 	emails *buckets[siteEmail]
 	resets *buckets[siteEmail]
 	users  *buckets[siteUser]
+	// domains holds open registrations per email domain, shared by the nodes like the other buckets.
+	domains *buckets[siteEmail]
 	// coarse bounds how many login keys one source makes in the shared store, at the site's own rate and per node, so
 	// that a flood cannot fill the store with them (internal/platform/kv/README.md「内存」).
 	coarse *buckets[siteIP]
@@ -119,6 +130,7 @@ func newGuards(concurrency int, wait time.Duration) guards {
 	}
 	return guards{
 		resets: newBuckets[siteEmail](), ips: newBuckets[siteIP](), emails: newBuckets[siteEmail](), users: newBuckets[siteUser](),
+		domains: newBuckets[siteEmail](),
 		coarse:  newBuckets[siteIP](),
 		hashing: semaphore.NewWeighted(int64(concurrency)), hashWait: wait,
 	}

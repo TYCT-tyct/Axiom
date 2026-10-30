@@ -21,7 +21,7 @@ func TestEstimatedKeepsPhysicalInputAndImageOutput(t *testing.T) {
 	}
 	for _, tc := range []struct{ bytes, want int64 }{{0, 0}, {30, 0}, {90, 10}} {
 		original := protocol.Usage{Segments: []protocol.Segment{{Usage: u, Reported: 1<<catalog.ItemInput | 1<<catalog.ItemCacheRead | 1<<catalog.ItemCacheWrite}, {Usage: u}}}
-		got := estimated(original, protocol.Progress{ContentBytes: tc.bytes}, billing.Demand{TextBytes: 1000}, billing.Model{ContextLength: 1000}, 100)
+		got := estimated(original, protocol.Progress{ContentBytes: tc.bytes}, billing.Demand{TextBytes: 1000}, billing.Model{ContextLength: 1000}, 100, billing.TokenizerNone)
 		for _, seg := range got {
 			if n, ok := seg.Usage.PhysicalInput(); !ok || n != 100 {
 				t.Fatalf("physical total lost: %+v", seg)
@@ -76,7 +76,7 @@ func checkInvalidUsageChargedOnce(t *testing.T, r *rand.Rand, model billing.Mode
 	d := billing.Demand{TextBytes: r.Int64N(40000), Images: r.Int64N(3), Documents: r.Int64N(2)}
 	estimate := billing.InputEstimate(d, model)
 	got := estimated(protocol.Usage{Segments: []protocol.Segment{{Usage: u}}, Invalid: errors.New("a count went down")},
-		protocol.Progress{ContentBytes: r.Int64N(1000)}, d, model, 1000)
+		protocol.Progress{ContentBytes: r.Int64N(1000)}, d, model, 1000, billing.TokenizerNone)
 	want := max(kept, estimate)
 	if total := inputItems(got[0].Usage); total != want {
 		t.Fatalf("counts %v with physical input %d: the input side totals %d, want %d (kept %d, estimate %d)",

@@ -17,8 +17,9 @@ const nav = [
 export function Layout() {
   const { t } = useTranslation();
   const site = useQuery(siteQuery);
+  const items = nav.map((item) => ({ ...item, label: t(item.label) }));
   return (
-    <Shell brand={site.data} nav={nav.map((item) => ({ ...item, label: t(item.label) }))}>
+    <Shell brand={site.data} nav={items} forbiddenHint={t("forbiddenHint")}>
       <Outlet />
     </Shell>
   );

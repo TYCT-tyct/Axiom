@@ -14,6 +14,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/textshape"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -346,7 +347,7 @@ func TestEstimated(t *testing.T) {
 		},
 	} {
 		// 3600 bytes of text at 4 a token, inside the model's window: the first sampling's input is 900.
-		got := estimated(tc.usage, tc.progress, billing.Demand{TextBytes: 3600}, billing.Model{ContextLength: 1 << 20}, math.MaxInt64)
+		got := estimated(tc.usage, tc.progress, billing.Demand{TextBytes: 3600}, billing.Model{ContextLength: 1 << 20}, math.MaxInt64, billing.TokenizerNone)
 		for it := range catalog.NumItems {
 			if n := got[0].Usage.Count(it); n != tc.want[it] {
 				t.Errorf("%s: %s is %d, want %d", tc.name, it, n, tc.want[it])
@@ -383,7 +384,7 @@ func TestAnEstimateOfImagesAndFiles(t *testing.T) {
 		{"the input reported", reported(in, 12), billing.Model{ContextLength: 200000}, 12},
 		{"the cached part of the input reported", reported(cached, 12), billing.Model{ContextLength: 200000}, 0},
 	} {
-		got := estimated(tc.usage, protocol.Progress{}, demand, tc.model, math.MaxInt64)
+		got := estimated(tc.usage, protocol.Progress{}, demand, tc.model, math.MaxInt64, billing.TokenizerNone)
 		if n := got[0].Usage.Count(in); n != tc.want {
 			t.Errorf("%s: the input is %d, want %d", tc.name, n, tc.want)
 		}
@@ -430,7 +431,7 @@ func TestAnEstimateOfCountedText(t *testing.T) {
 		if tc.tok == billing.TokenizerNone && d.TextTokens != 0 {
 			t.Errorf("%s: counted %d with no tokenizer", tc.name, d.TextTokens)
 		}
-		got := estimated(protocol.Usage{}, protocol.Progress{}, d, tc.model, math.MaxInt64)
+		got := estimated(protocol.Usage{}, protocol.Progress{}, d, tc.model, math.MaxInt64, billing.TokenizerNone)
 		if n := got[0].Usage.Count(in); n != tc.want {
 			t.Errorf("%s: the input is %d, want %d", tc.name, n, tc.want)
 		}
@@ -442,7 +443,7 @@ func TestAnEstimateOfCountedText(t *testing.T) {
 		t.Fatal(err)
 	}
 	reported := protocol.Usage{Segments: []protocol.Segment{{Usage: u, Reported: 1 << in}}}
-	if n := estimated(reported, protocol.Progress{}, d, cl100k, math.MaxInt64)[0].Usage.Count(in); n != 12 {
+	if n := estimated(reported, protocol.Progress{}, d, cl100k, math.MaxInt64, billing.TokenizerNone)[0].Usage.Count(in); n != 12 {
 		t.Errorf("the reported input of 12 was estimated over: %d", n)
 	}
 }
@@ -476,11 +477,54 @@ func TestAnEstimateStaysWithinTheOutputLimit(t *testing.T) {
 		{"reasoning is part of the limit", reported(map[catalog.Item]int64{reasoning: 300}), 4000, map[catalog.Item]int64{reasoning: 300, out: 700}},
 		{"a count above the limit stays", reported(map[catalog.Item]int64{reasoning: 1200}), 4000, map[catalog.Item]int64{reasoning: 1200}},
 	} {
-		got := estimated(tc.usage, protocol.Progress{ContentBytes: tc.bytes}, billing.Demand{}, billing.Model{}, 1000)
+		got := estimated(tc.usage, protocol.Progress{ContentBytes: tc.bytes}, billing.Demand{}, billing.Model{}, 1000, billing.TokenizerNone)
 		for _, it := range []catalog.Item{out, reasoning} {
 			if n := got[0].Usage.Count(it); n != tc.want[it] {
 				t.Errorf("%s: %s is %d, want %d", tc.name, it, n, tc.want[it])
 			}
+		}
+	}
+}
+
+// TestOutputEstimateByShape: an output the upstream did not report is the tokens its text's shape takes in the entry
+// family's weights, over every content byte, raw tool input beyond the tallied text included; a family without weights,
+// or a reply whose content held no text to tally, keeps 3 bytes a token; either is held to the output limit and never
+// below a count reported so far.
+func TestOutputEstimateByShape(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 20) // 900 bytes, 180 words, 180 spaces, 20 dots
+	var shape textshape.Shape
+	shape.Add([]byte(text))
+	lower, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemOutput: 500}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		tok   billing.Tokenizer
+		p     protocol.Progress
+		usage protocol.Usage
+		limit int64
+		want  int64
+	}{
+		// 180×1.52 + 20×0.89 + 180×0.21 = 329.2
+		{"Claude Opus 4.7's weights", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 1000, 330},
+		// 180×1.24 + 20×0.66 + 180×0.14 = 261.6
+		{"the earlier Claude's", billing.TokenizerClaude, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 1000, 262},
+		{"raw input beside the text", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 1800, Text: shape}, protocol.Usage{}, 1000, 660},
+		{"held to the limit", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 100, 100},
+		{"a family without weights", billing.TokenizerNone, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 1000, 300},
+		{"no text tallied", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900}, protocol.Usage{}, 1000, 300},
+		{
+			"a reported lower bound above it", billing.TokenizerClaude47,
+			protocol.Progress{ContentBytes: 900, Text: shape},
+			protocol.Usage{Segments: []protocol.Segment{{Usage: lower}}},
+			1000, 500,
+		},
+	} {
+		got := estimated(tc.usage, tc.p, billing.Demand{}, billing.Model{}, tc.limit, tc.tok)
+		if n := got[0].Usage.Count(catalog.ItemOutput); n != tc.want {
+			t.Errorf("%s: output %d, want %d", tc.name, n, tc.want)
 		}
 	}
 }

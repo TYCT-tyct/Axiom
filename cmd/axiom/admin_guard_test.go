@@ -65,6 +65,8 @@ var adminOperations = []adminOperation{
 	{"updateSiteKeyLimits", http.MethodPut, strings.Replace(someSite, "/settings", "/key-limits", 1), `{"limits":{},"reason":"r"}`, "sites.manage", true},
 	{"getSiteLoginLimits", http.MethodGet, strings.Replace(someSite, "/settings", "/login-limits", 1), "", "sites.manage", false},
 	{"updateSiteLoginLimits", http.MethodPut, strings.Replace(someSite, "/settings", "/login-limits", 1), `{"limits":{},"reason":"r"}`, "sites.manage", true},
+	{"getSiteRegistration", http.MethodGet, strings.Replace(someSite, "/settings", "/registration", 1), "", "sites.manage", false},
+	{"updateSiteRegistration", http.MethodPut, strings.Replace(someSite, "/settings", "/registration", 1), `{"policy":{"mode":"invite","human_check":true,"human_check_bits":18,"domain_burst":5,"domain_per_hour":30,"domain_allow":[],"domain_deny":[]},"reason":"r"}`, "sites.manage", true},
 	{"setAccountSuspension", http.MethodPut, someAccount + "/suspension", `{"suspended":true,"reason":"r"}`, "users.manage", true},
 	{"setUserSignIn", http.MethodPut, "/users/user_00000000000000000000000000/sign-in", `{"disabled":true,"reason":"r"}`, "users.manage", true},
 	{"setPlatformGrant", http.MethodPut, "/users/user_00000000000000000000000000/platform-grants/admin", `{"revoked":true,"reason":"r"}`, "platform_grants.manage", true},

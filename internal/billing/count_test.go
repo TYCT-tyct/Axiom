@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/tiktoken-go/tokenizer"
+
+	"axiom/internal/platform/textshape"
 )
 
 // TestTokenizerOf: the tokenizer a model's text is counted in is read from the name its endpoint calls it by, with a
@@ -41,8 +43,24 @@ func TestTokenizerOf(t *testing.T) {
 		{"gpt-50", TokenizerNone}, // no version and no variant follows: another model
 		{"gpt-4x", TokenizerNone},
 		{"o5", TokenizerNone},
-		{"claude-sonnet-4-5", TokenizerNone},
-		{"anthropic/claude-opus-4-1", TokenizerNone},
+		{"claude-sonnet-4-5", TokenizerClaude},
+		{"claude-sonnet-4-5-20250929", TokenizerClaude},
+		{"anthropic/claude-opus-4-1", TokenizerClaude},
+		{"claude-3-5-sonnet-20240620", TokenizerClaude},
+		{"claude-3-opus-20240229", TokenizerClaude},
+		{"claude-haiku-4-5", TokenizerClaude},
+		{"claude-sonnet-4-6", TokenizerClaude},
+		{"claude-2.1", TokenizerClaude},
+		{"claude-opus-4-7", TokenizerClaude47}, // Claude Opus 4.7 introduced the tokenizer every later Claude uses
+		{"claude-opus-4-7@20260416", TokenizerClaude47},
+		{"us.anthropic.claude-opus-4-7-v1:0", TokenizerClaude47},
+		{"us.anthropic.claude-sonnet-4-5-20250929-v1:0", TokenizerClaude},
+		{"claude-sonnet-5", TokenizerClaude47},
+		{"claude-opus-5-5", TokenizerClaude47},
+		{"Claude-Fable-5-1", TokenizerClaude47},
+		{"claude-mythos-preview", TokenizerClaude47}, // no version: a new name, at the larger count
+		{"myclaude-3-5", TokenizerNone},              // claude- inside another word is not Claude
+		{"claude", TokenizerNone},
 		{"gemini-2.5-pro", TokenizerNone},
 		{"deepseek-chat", TokenizerNone},
 		{"", TokenizerNone},
@@ -62,8 +80,8 @@ func wholeCount(t *testing.T, tok Tokenizer, text string) int64 {
 		encoding = tokenizer.O200kBase
 	case TokenizerCl100k:
 		encoding = tokenizer.Cl100kBase
-	case TokenizerNone:
-		t.Fatal("a family without a tokenizer has no reference count")
+	case TokenizerNone, TokenizerClaude, TokenizerClaude47, NumTokenizers:
+		t.Fatal("a family without a vocabulary has no reference count")
 	}
 	codec, err := tokenizer.Get(encoding)
 	if err != nil {
@@ -147,6 +165,55 @@ func TestTextCountStopsAtItsLimit(t *testing.T) {
 	}
 	if countTotal(t, c) != before {
 		t.Errorf("counted on to %d past the limit at %d", countTotal(t, c), before)
+	}
+}
+
+// TestShapeEstimate: a family without a vocabulary estimates from the text's shape at its weights, both a request's
+// text, which stops at its limit, and a reply's, scaled over all its bytes; Claude Opus 4.7's tokenizer takes more
+// tokens than the one before it for the same text. A family without weights has no estimate, and the byte rule stands.
+func TestShapeEstimate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		tok  Tokenizer
+		text string
+		want int64
+	}{
+		// 2 words, 2 symbols and a space: 2×1.24 + 2×0.66 + 0.14 = 3.94
+		{TokenizerClaude, "Hello, world!", 4},
+		// 2×1.52 + 2×0.89 + 0.21 = 5.03
+		{TokenizerClaude47, "Hello, world!", 6},
+		// 9 CJK characters at 1.40
+		{TokenizerClaude47, "今天天气很好我们去", 13},
+		// 2×0.75 + 2×0.60 + 0.17 = 2.87, against o200k's own 4
+		{TokenizerO200k, "Hello, world!", 3},
+		{TokenizerClaude, "", 0},
+	} {
+		var s textshape.Shape
+		s.Add([]byte(tc.text))
+		got, ok := TextTokens(tc.tok, s, s.Bytes)
+		if !ok && tc.text != "" || got != tc.want {
+			t.Errorf("%d %q: %d, %v, want %d", tc.tok, tc.text, got, ok, tc.want)
+		}
+		if tc.tok == TokenizerO200k {
+			continue // a request's text in an OpenAI family is counted with its vocabulary
+		}
+		c := NewTextCount(tc.tok, math.MaxInt64)
+		c.Add([]byte(tc.text))
+		if n := countTotal(t, c); n != tc.want {
+			t.Errorf("%d %q: counted %d, want %d", tc.tok, tc.text, n, tc.want)
+		}
+	}
+	var s textshape.Shape
+	s.Add([]byte(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 20)))
+	old, _ := TextTokens(TokenizerClaude, s, s.Bytes)
+	if newer, _ := TextTokens(TokenizerClaude47, s, s.Bytes); newer <= old {
+		t.Errorf("Claude Opus 4.7's count %d is not above the earlier %d", newer, old)
+	}
+	if twice, _ := TextTokens(TokenizerClaude, s, 2*s.Bytes); twice < 2*old-1 || twice > 2*old {
+		t.Errorf("twice the bytes of the same shape took %d tokens, against %d", twice, old)
+	}
+	if _, ok := TextTokens(TokenizerNone, s, s.Bytes); ok {
+		t.Error("a family without weights gave an estimate")
 	}
 }
 

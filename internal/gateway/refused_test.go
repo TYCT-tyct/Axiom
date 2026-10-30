@@ -90,15 +90,18 @@ func TestEachRateLimitIsCountedByItsReason(t *testing.T) {
 		},
 		"queue_key_full": func(t *testing.T, ctx context.Context, bp *Backpressure) error {
 			wait(ctx, bp.Queue, "a").mustWait(t)
-			return bp.Queue.Wait(ctx, "a", bp.Queue.Epoch(), time.Now().Add(queueWait))
+			_, err := bp.Queue.Wait(ctx, "a", bp.Queue.Epoch(), time.Now().Add(queueWait))
+			return err
 		},
 		"queue_full": func(t *testing.T, ctx context.Context, bp *Backpressure) error {
 			wait(ctx, bp.Queue, "a").mustWait(t)
 			wait(ctx, bp.Queue, "b").mustWait(t)
-			return bp.Queue.Wait(ctx, "c", bp.Queue.Epoch(), time.Now().Add(queueWait))
+			_, err := bp.Queue.Wait(ctx, "c", bp.Queue.Epoch(), time.Now().Add(queueWait))
+			return err
 		},
 		"queue_wait": func(t *testing.T, ctx context.Context, bp *Backpressure) error {
-			return bp.Queue.Wait(ctx, "a", bp.Queue.Epoch(), time.Now()) // its time is spent
+			_, err := bp.Queue.Wait(ctx, "a", bp.Queue.Epoch(), time.Now()) // its time is spent
+			return err
 		},
 	} {
 		t.Run(reason, func(t *testing.T) {
