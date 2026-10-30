@@ -355,7 +355,7 @@ func block(out []byte, p canonPart, textOnly bool) ([]byte, error) {
 	case p.Type == "image_url" && p.ImageURL != nil:
 		out, err = imageBlock(out, p)
 	case p.Type == "file" && p.File != nil && p.File.FileData != nil:
-		out, err = documentBlock(out, *p.File.FileData)
+		out, err = documentBlock(out, *p.File.FileData, p.File.Filename)
 	default:
 		return nil, &NotSupported{Reason: "a " + p.Type + " part has no Messages counterpart"}
 	}
@@ -384,14 +384,19 @@ func imageBlock(out []byte, p canonPart) ([]byte, error) {
 	return append(out, '}'), nil
 }
 
-// documentBlock writes a PDF's data URL as a document block but its closing brace.
-func documentBlock(out []byte, fileData string) ([]byte, error) {
+// documentBlock writes a PDF's data URL as a document block but its closing brace. Chat calls the file's name what
+// Anthropic calls the document's title.
+func documentBlock(out []byte, fileData string, filename jsontext.Value) ([]byte, error) {
 	media, data, ok := dataURL(fileData)
 	if !ok || media != "application/pdf" {
 		return nil, &NotSupported{Reason: "a file that is not PDF data"}
 	}
 	out = append(out, messagesFileHead...)
-	return append(appendQuoted(out, data), '}'), nil
+	out = append(appendQuoted(out, data), '}')
+	if !isNull(filename) {
+		out = append(append(out, `,"title":`...), filename...)
+	}
+	return out, nil
 }
 
 // tools writes the function tools.

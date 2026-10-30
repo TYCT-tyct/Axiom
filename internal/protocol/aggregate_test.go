@@ -119,6 +119,13 @@ func samplePaths(t *testing.T) []sampledPath {
 			if format.f != protocol.Chat {
 				paths = append(paths, sampledPath{dir + "/upstream.sse", dir + "/aggregate-to-chat.json", protocol.Chat, format.f})
 			}
+			switch format.f {
+			case protocol.Messages:
+				paths = append(paths, sampledPath{dir + "/upstream.sse", dir + "/aggregate-to-responses.json", protocol.Responses, format.f})
+			case protocol.Responses:
+				paths = append(paths, sampledPath{dir + "/upstream.sse", dir + "/aggregate-to-messages.json", protocol.Messages, format.f})
+			case protocol.Chat:
+			}
 		}
 	}
 	return paths

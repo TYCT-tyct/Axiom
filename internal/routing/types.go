@@ -51,7 +51,9 @@ func (a Admission) allows(m catalog.ModelID) bool {
 // preset allows, in order. NativeOnly is set when the request uses something only its own format can express (an
 // Anthropic beta, a reasoning signature). NoSegments is set when the gateway reads the answer whole instead of as a
 // stream, as for a call the upstream answers whole: its reservation is made in full (gateway README.md「Relay 的所有权」)
-// and the endpoint need not stream one. Sticky is the endpoint the session stuck to, zero if none.
+// and the endpoint need not stream one. Sticky is the endpoint the session stuck to, zero if none. FileRef is set when
+// the request refers to a file by an id an upstream issued: such a request gets one attempt, to one endpoint, because
+// the id names a resource of that endpoint's supplier account and nowhere else (protocol README.md「跨格式转换」).
 type Input struct {
 	Admission  Admission
 	Req        *protocol.Request
@@ -60,6 +62,7 @@ type Input struct {
 	Sticky     EndpointID
 	NativeOnly bool
 	NoSegments bool
+	FileRef    bool
 }
 
 // Plan is the route of a request: at most MaxEntries entries in order, the most attempts to make (a credential or

@@ -16,6 +16,7 @@ var (
 	responsesTextHead    = `{"type":"` + contentNames[Responses]["text"] + `","text":`
 	responsesImageHead   = `{"type":"` + contentNames[Responses]["image_url"] + `","image_url":`
 	responsesFileHead    = `{"type":"` + contentNames[Responses]["file"] + `","file_data":`
+	responsesFileIDHead  = `{"type":"` + contentNames[Responses]["file"] + `","file_id":`
 	responsesRefusalHead = `{"type":"` + contentNames[Responses]["refusal"] + `","refusal":`
 )
 
@@ -103,9 +104,13 @@ func nativeFile(o requestObject, f Format) (requestObject, error) {
 	file := requestObject{}
 	if f == Responses {
 		o.move(file, "file_data", "file_data")
+		o.move(file, "file_id", "file_id")
 		o.move(file, "filename", "filename")
-		if isNull(file["file_data"]) {
-			return nil, &NotSupported{Reason: "a file without inline data cannot be replayed"}
+		switch {
+		case isNull(file["file_data"]) && isNull(file["file_id"]):
+			return nil, &NotSupported{Reason: "a file without data or an id cannot be replayed"}
+		case !isNull(file["file_data"]) && !isNull(file["file_id"]):
+			return nil, &NotSupported{Reason: "a file carrying both data and an id"}
 		}
 		return file, nil
 	}
@@ -121,6 +126,8 @@ func nativeFile(o requestObject, f Format) (requestObject, error) {
 		return nil, err
 	}
 	file["file_data"] = jsonValue("data:application/pdf;base64," + data)
+	// Anthropic's title is the document's name, which Chat calls the file's name.
+	o.move(file, "title", "filename")
 	return file, source.remaining()
 }
 
