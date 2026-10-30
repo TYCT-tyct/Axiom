@@ -314,6 +314,9 @@ test.describe("long list", () => {
   }
 
   test("console calls: 1000 rows scroll without dropped frames", async ({ browser }) => {
+    // The list has no ceiling: its frames and long tasks are reported. Loading 1000 rows through the infinite scroll can
+    // take more than the 120 s describe timeout on a loaded host, which would fail before it reports anything.
+    test.slow();
     const page = await measuredPage(browser, phone, devices["Desktop Chrome"]);
     const state = await mockConsole(page, "worst");
     signedInAs(state);
@@ -330,6 +333,7 @@ test.describe("long list", () => {
   });
 
   test("admin users: 1000 rows scroll without dropped frames", async ({ browser }) => {
+    test.slow();
     const page = await measuredPage(browser, phone, devices["Desktop Chrome"]);
     const state = await mockAdmin(page, "worst");
     signedInAs(state, "mfa");
