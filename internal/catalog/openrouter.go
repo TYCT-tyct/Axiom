@@ -60,10 +60,13 @@ func ParseOpenRouter(body []byte) ([]Entry, error) {
 		if err != nil {
 			return nil, err
 		}
-		e := Entry{
-			Key: m.ID, Names: slices.DeleteFunc([]string{m.ID, m.CanonicalID}, func(n string) bool { return n == "" }),
-			Text: slices.Equal(m.Architecture.Output, []string{"text"}), Raw: evidence,
+		names := slices.DeleteFunc([]string{m.ID, m.CanonicalID}, func(n string) bool { return n == "" })
+		if freeName(norm) {
+			// The canonical slug is the paid model's name: keeping it would let the free entry's zero price match the
+			// paid model in a dataset sync. Only the :free name identifies this entry.
+			names = []string{m.ID}
 		}
+		e := Entry{Key: m.ID, Names: names, Text: slices.Equal(m.Architecture.Output, []string{"text"}), Raw: evidence}
 		e.Err = readOpenRouterPrices(&e.sheet, m.Pricing)
 		entries = append(entries, e)
 	}

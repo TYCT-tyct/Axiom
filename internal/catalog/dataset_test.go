@@ -235,13 +235,17 @@ func TestPickEntry(t *testing.T) {
 // TestParseOpenRouterFree: a :free offer is a model of its own with its own prices, not an alias of the paid one.
 func TestParseOpenRouterFree(t *testing.T) {
 	t.Parallel()
-	entries, err := ParseOpenRouter([]byte(`{"data":[{"id":"acme/model:free","canonical_slug":"acme/model:free",
+	entries, err := ParseOpenRouter([]byte(`{"data":[{"id":"acme/model:free","canonical_slug":"acme/model-20261021",
 		"architecture":{"output_modalities":["text"]},"pricing":{"prompt":"0","completion":"0"}}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 || entries[0].Key != "acme/model:free" || entries[0].Err != nil {
 		t.Fatalf("entries = %+v, want the :free model", entries)
+	}
+	// The canonical slug names the paid model; using it would let a sync match the free price to that model.
+	if !slices.Equal(entries[0].Names, []string{"acme/model:free"}) {
+		t.Errorf("names = %v, want only the :free name", entries[0].Names)
 	}
 	if got := scheduleOf(t, entries[0], nil); got != `{"currency":"USD","rates":{"input":"0","output":"0"},"v":1}` {
 		t.Errorf("schedule = %s", got)
