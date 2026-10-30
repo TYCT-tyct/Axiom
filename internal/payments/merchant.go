@@ -131,38 +131,21 @@ func (m MethodInput) checkLimits() *FieldError {
 	return nil
 }
 
-// SaveMerchant probes the candidate outside database transactions, then commits the configuration and audit together.
-func (p *Payments) SaveMerchant(ctx context.Context, scope pg.Scope, actor audit.Actor, in MerchantInput) (Merchant, error) {
-	if err := in.check(); err != nil {
-		return Merchant{}, err
-	}
-	plugin, ok := p.plugins[in.Kind]
-	if !ok {
-		return Merchant{}, &FieldError{"/kind", "is not a channel this program has"}
-	}
-	settings, err := merchantSettings(plugin, in.Settings)
+// SaveMerchant probes the candidate outside database transactions, then commits the configuration and its audit together, recording reason.
+func (p *Payments) SaveMerchant(ctx context.Context, scope pg.Scope, actor audit.Actor, in MerchantInput, reason string) (Merchant, error) {
+	change, err := p.PrepareMerchant(ctx, scope, in)
 	if err != nil {
-		return Merchant{}, &FieldError{"/settings", err.Error()}
-	}
-	created := in.ID == MerchantID{}
-	if created {
-		in.ID = MerchantID(uuid.NewV7())
-		if in.Secrets == nil {
-			return Merchant{}, &FieldError{"/secrets", "are required"}
-		}
-	}
-	if err := p.probeMerchant(ctx, scope, plugin, in, settings, created); err != nil {
 		return Merchant{}, err
 	}
 	var saved Merchant
 	err = p.db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
-		saved, err = p.saveMerchant(ctx, tx, actor, in, settings, created)
+		saved, err = p.WriteMerchant(ctx, tx, actor, change, reason)
 		return err
 	})
 	return saved, err
 }
 
-func (p *Payments) saveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, in MerchantInput, settings []byte, created bool) (Merchant, error) {
+func (p *Payments) saveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, in MerchantInput, settings []byte, created bool, reason string) (Merchant, error) {
 	rev := int64(1)
 	var err error
 	if !created {
@@ -176,7 +159,7 @@ func (p *Payments) saveMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor
 	if err := p.write(ctx, tx, in, settings, rev, created); err != nil {
 		return Merchant{}, err
 	}
-	return recordSave(ctx, tx, actor, in, created)
+	return recordSave(ctx, tx, actor, in, created, reason)
 }
 
 func merchantSettings(plugin Plugin, input []byte) ([]byte, error) {
@@ -346,7 +329,7 @@ func (p *Payments) write(ctx context.Context, tx pg.Tx, in MerchantInput, settin
 }
 
 // recordSave audits the change, never the secrets, and reads back what was saved.
-func recordSave(ctx context.Context, tx pg.Tx, actor audit.Actor, in MerchantInput, created bool) (Merchant, error) {
+func recordSave(ctx context.Context, tx pg.Tx, actor audit.Actor, in MerchantInput, created bool, reason string) (Merchant, error) {
 	action, methods := "merchant.update", make([]string, len(in.Methods))
 	if created {
 		action = "merchant.create"
@@ -355,7 +338,7 @@ func recordSave(ctx context.Context, tx pg.Tx, actor audit.Actor, in MerchantInp
 		methods[i] = string(m.Method)
 	}
 	err := audit.Record(ctx, tx, audit.Event{
-		Actor: actor, Action: action,
+		Actor: actor, Action: action, Reason: reason,
 		Target: audit.Target{Module: "payments", Kind: "merchant", ID: in.ID.TypeID(), Site: in.Site},
 		Detail: map[string]any{"name": in.Name, "kind": in.Kind, "currency": in.Currency.String(), "enabled": in.Enabled, "methods": methods},
 	})

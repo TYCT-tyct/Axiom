@@ -6,10 +6,13 @@ import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
+import { MailSettings } from "../mail-settings";
 import { Actions, Facts, PageBody, State } from "../parts";
+import { PaymentsSettings } from "../payments-settings";
 import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
 import { SiteRegistration } from "../registration";
 import { SiteSignIn } from "../sign-in";
+import { SiteInformation } from "../site-info";
 import { SiteLogo } from "../site-logo";
 
 type Settings = AdminSchemas["SiteSettings"];
@@ -34,11 +37,14 @@ export default function SettingsPage() {
         <DataState query={owner}>
           {(account) => (
             <>
-              <SiteSettings siteId={account.site_id} />
+              <SiteInformation siteId={account.site_id} />
               <SiteLogo siteId={account.site_id} />
+              <SiteSettings siteId={account.site_id} />
               <SiteKeyLimits siteId={account.site_id} />
               <SiteRegistration siteId={account.site_id} />
               <SiteSignIn siteId={account.site_id} />
+              <MailSettings />
+              <PaymentsSettings siteId={account.site_id} currency={account.balance.balance.currency} />
             </>
           )}
         </DataState>

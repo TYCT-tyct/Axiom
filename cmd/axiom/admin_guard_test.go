@@ -15,6 +15,7 @@ const (
 	someSupplier = "/suppliers/0198c0a8-0000-7000-8000-000000000001"
 	someModel    = "/models/0198c0a8-0000-7000-8000-000000000002"
 	someRule     = "/pricing/rules/0198c0a8-0000-7000-8000-000000000003"
+	someMerchant = "/payments/merchants/mch_00000000000000000000000000"
 )
 
 // adminOperation is an operation of the admin's API as the tests state it, by hand and apart from the contract, which
@@ -42,7 +43,12 @@ var adminOperations = []adminOperation{
 	{"getMailSettings", http.MethodGet, "/settings/mail", "", "sites.manage", false},
 	{"setMailSettings", http.MethodPut, "/settings/mail", `{"settings":{"enabled":false},"reason":"r"}`, "sites.manage", true},
 	{"testMailSettings", http.MethodPost, "/settings/mail/tests", `{"to":"test@example.com","reason":"r"}`, "sites.manage", true},
-	{"testMerchantSettings", http.MethodPost, "/payments/merchants/mch_00000000000000000000000000/tests", `{"reason":"r"}`, "sites.manage", true},
+	{"listMerchants", http.MethodGet, "/payments/merchants?site_id=site_00000000000000000000000000", "", "sites.manage", false},
+	{"getMerchant", http.MethodGet, someMerchant, "", "sites.manage", false},
+	{"createMerchant", http.MethodPost, "/payments/merchants", `{"site_id":"site_00000000000000000000000000","merchant":{},"reason":"r"}`, "sites.manage", true},
+	{"updateMerchant", http.MethodPut, someMerchant, `{"merchant":{},"reason":"r"}`, "sites.manage", true},
+	{"disableMerchant", http.MethodPost, someMerchant + "/disable", `{"reason":"r"}`, "sites.manage", true},
+	{"testMerchantSettings", http.MethodPost, someMerchant + "/tests", `{"reason":"r"}`, "sites.manage", true},
 	{"getRateLimit", http.MethodGet, "/rate-limits/account/acct_00000000000000000000000000", "", "sites.manage", false},
 	{"setRateLimit", http.MethodPut, "/rate-limits/account/acct_00000000000000000000000000", `{"reason":"r"}`, "sites.manage", true},
 	{"publishAnnouncement", http.MethodPost, "/announcements", `{"site_id":"site_00000000000000000000000000","title":"Maintenance","body":"Notice","starts_at":"2026-10-29T00:00:00Z","ends_at":"2026-10-30T00:00:00Z","reason":"test"}`, "sites.manage", true},
@@ -75,6 +81,8 @@ var adminOperations = []adminOperation{
 	{"updateSiteRegistration", http.MethodPut, strings.Replace(someSite, "/settings", "/registration", 1), `{"policy":{"mode":"invite","human_check":true,"human_check_bits":18,"domain_burst":5,"domain_per_hour":30,"domain_allow":[],"domain_deny":[]},"reason":"r"}`, "sites.manage", true},
 	{"getSiteBrand", http.MethodGet, strings.Replace(someSite, "/settings", "/brand", 1), "", "sites.manage", false},
 	{"updateSiteBrand", http.MethodPut, strings.Replace(someSite, "/settings", "/brand", 1), `{"brand_color":"#335ddf","reason":"r"}`, "sites.manage", true},
+	{"listLegalDocuments", http.MethodGet, strings.Replace(someSite, "/settings", "/legal-documents", 1), "", "sites.manage", false},
+	{"publishLegalDocument", http.MethodPost, strings.Replace(someSite, "/settings", "/legal-documents", 1), `{"kind":"terms","body":"Text.","reason":"r"}`, "sites.manage", true},
 	{"setAccountSuspension", http.MethodPut, someAccount + "/suspension", `{"suspended":true,"reason":"r"}`, "users.manage", true},
 	{"setUserSignIn", http.MethodPut, "/users/user_00000000000000000000000000/sign-in", `{"disabled":true,"reason":"r"}`, "users.manage", true},
 	{"setPlatformGrant", http.MethodPut, "/users/user_00000000000000000000000000/platform-grants/admin", `{"revoked":true,"reason":"r"}`, "platform_grants.manage", true},

@@ -469,3 +469,46 @@ func TestStartupCheckCoversTheTables(t *testing.T) {
 		}
 	}
 }
+
+// TestLegalDocumentsArePublicAndAcceptancesBelongToTheirAccount: the text is public data, so every scope reads it and
+// only the platform writes it; an acceptance is account data, so only the user's site and account read it, and only
+// the account it belongs to may record it. The test inserts the placeholder text directly: the module never writes
+// legal terms of its own.
+func TestLegalDocumentsArePublicAndAcceptancesBelongToTheirAccount(t *testing.T) {
+	t.Parallel()
+	db, _ := open(t)
+	if _, err := exec(t, db, platform, `INSERT INTO accounts.legal_documents (site_id, kind, version, body)
+		VALUES (:s1, 'terms', 1, 'Placeholder terms for the legal document test.')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec(t, db, pg.AccountScope(a1), `INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
+		VALUES (gen_random_uuid(), :s1, :a1, :u1, 'terms', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	scopes := map[string]struct {
+		scope               pg.Scope
+		documents, accepted string
+	}{
+		"platform": {platform, "1", "1"},
+		"s1":       {pg.SiteScope(s1), "1", "1"},
+		"s2":       {pg.SiteScope(s2), "1", "0"},
+		"a1":       {pg.AccountScope(a1), "1", "1"},
+		"a2":       {pg.AccountScope(a2), "1", "0"},
+		"none":     {pg.Scope{}, "0", "0"},
+	}
+	for name, c := range scopes {
+		documents := texts(t, db, c.scope, "SELECT count(*)::text FROM accounts.legal_documents")
+		accepted := texts(t, db, c.scope, "SELECT count(*)::text FROM accounts.legal_acceptances")
+		if len(documents) != 1 || documents[0] != c.documents || len(accepted) != 1 || accepted[0] != c.accepted {
+			t.Errorf("%s sees documents %v and acceptances %v, want %s and %s", name, documents, accepted, c.documents, c.accepted)
+		}
+	}
+	if _, err := attempt(t, db, pg.SiteScope(s1), `INSERT INTO accounts.legal_documents (site_id, kind, version, body)
+		VALUES (:s1, 'privacy', 1, 'Placeholder privacy text.')`); state(err) != "42501" {
+		t.Errorf("a site scope inserting a document: %v, want permission denied", err)
+	}
+	if _, err := attempt(t, db, pg.AccountScope(a2), `INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
+		VALUES (gen_random_uuid(), :s1, :a1, :u1, 'terms', 1)`); state(err) != "42501" {
+		t.Errorf("another account recording an acceptance: %v, want permission denied", err)
+	}
+}

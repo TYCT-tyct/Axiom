@@ -410,6 +410,10 @@ func (w *callWorld) start(extra ...string) runningNode {
 	go func() {
 		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback, startRecorder, nil)
 	}()
+	budget := awaitRecord(w.t, logs, done, "database connection budget")
+	if budget.Nodes != 2 {
+		w.t.Errorf("startup budget nodes = %d, want the deployment's 2", budget.Nodes)
+	}
 	n := runningNode{addresses: servingAddrs(w.t, logs, done), finished: make(chan struct{})}
 	var result error
 	go func() { result = <-done; close(n.finished) }()

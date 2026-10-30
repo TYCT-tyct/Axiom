@@ -137,7 +137,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 84 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_DB_COMPLETION_RESERVE`（完成类预留的连接数，默认 16，见「连接池」）、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_EXCHANGE_SOURCE`（缺省 `manual`；`ecb` 启用[参考汇率任务](../billing/README.md#汇率与成本依据)，按货币对保留人工值，其他值启动失败）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）、`AXIOM_VALKEY_URL`（不设就是单核心模式，共享状态都在进程内）、`AXIOM_VALKEY_PASSWORD_FILE`（受保护文件，权限要求同主密钥文件）、`AXIOM_CORE_NODES`（核心节点数，默认 1；大于 1 必须配置 Valkey）、`AXIOM_NODE_ID`（本节点的名字，默认主机名，心跳行用它，重启的同一节点替换自己的行），见 [kv 的「配置与启动」](kv/README.md#配置与启动)。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_DB_COMPLETION_RESERVE`（完成类预留的连接数，默认 16，见「连接池」）、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_EXCHANGE_SOURCE`（缺省 `manual`；`ecb` 启用[参考汇率任务](../billing/README.md#汇率与成本依据)，按货币对保留人工值，其他值启动失败）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）、`AXIOM_VALKEY_URL`（不设就是单核心模式，共享状态都在进程内）、`AXIOM_VALKEY_PASSWORD_FILE`（受保护文件，权限要求同主密钥文件）、`AXIOM_CORE_NODES`（核心节点数，默认 1；大于 1 必须配置 Valkey；同时决定每个节点的连接份额，见「连接池」）、`AXIOM_NODE_ID`（本节点的名字，默认主机名，心跳行用它，重启的同一节点替换自己的行），见 [kv 的「配置与启动」](kv/README.md#配置与启动)。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
 
 公网和管理监听的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
@@ -270,20 +270,20 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 
 ### 连接池
 
-`pg.Open` 管理两个物理池，共用一个连接预算 N：默认 64（`pg.PoolSize`），连接串 `pool_max_conns` 可覆盖，包括调小。`serve` 和打开应用数据库的运维命令用 `AXIOM_DB_COMPLETION_RESERVE` 配置其中只供完成类使用的 R 条，默认 16（`pg.CompletionReserve`）；普通池最多 N−R 条。启动时要求 0 < R < N，连接串的 `pool_min_conns` 和 `pool_min_idle_conns` 不得超过 N−R；预留池的最小连接数为 0，按需建立，不把普通池的最小值复制一遍。错误只报配置名和预算，不带连接串。gateway 的许可数从打开后的 N、R 派生，部署不必为了调小预算改代码。
+`pg.Open` 管理两个物理池，共用一个连接预算 N（每个节点两个池合计）。`serve` 把 `AXIOM_CORE_NODES` 交给 `pg.WithNodes`；`Open` 先用应用角色读服务器的 `max_connections`、`superuser_reserved_connections` 和 `reserved_connections`，留出 `pg.OperationsReserve`（4）条给迁移、运维命令、备份和一个备用，把剩下的按节点数等分，每份减去 `pg.OutsidePoolConns`（3）条池外连接，就是该节点两个池的合计上限，最多 64（`pg.PoolSize`）。装不下完成类预留 R 加一条普通连接时节点不启动，错误列出 `max_connections`、预留数、节点数、每节点份额、池外连接和 R。连接串的 `pool_max_conns` 可以在份额内覆盖这个数（调大或调小），但不能超过它：超过时同样不启动。启动日志按 `max_connections`、`reserved`、`nodes`、`share`、`pool`、`completion` 报出这些数（`reserved` 是服务器预留槽位与 `OperationsReserve` 之和），`db.Budget()` 给出同一份。`serve` 和打开应用数据库的运维命令用 `AXIOM_DB_COMPLETION_RESERVE` 配置其中只供完成类使用的 R 条，默认 16（`pg.CompletionReserve`）；普通池最多 N−R 条。启动时要求 0 < R < N，连接串的 `pool_min_conns` 和 `pool_min_idle_conns` 不得超过 N−R；预留池的最小连接数为 0，按需建立，不把普通池的最小值复制一遍。错误只报配置名和预算，不带连接串。gateway 的许可数从打开后的 N、R 派生，部署不必为了调小预算改代码。
 
 `pg.DB.Tx` / `ReadTx` 在同一个入口选池：默认使用普通池；gateway 的追加、结算和孤儿结算入口用 `pg.CompletionContext` 标记该次事务，才使用预留池。后台查找租户后执行的 `TenantTx` 是另一个事务入口，固定使用普通池。两池沿用相同的登录角色、事务范围、追踪、回滚和取消规则。控制台、recorder、快照加载、River worker 和 River 自己的数据库操作都走普通池，不需要主动领取 gateway 的许可，也不能借用空闲的预留容量。完成类并发超过 R 时受自身 context 限制排队；预留保证的是连接容量，不保证行锁、数据库停机或结算自身饱和时仍成功。
 
 持有者的心跳与回收用 `pg.DB.Dedicated`，一条不属于任何一个池的连接（`pgx.Conn`）：第一次事务时连上，任何一次失败后换一条新连接，每次事务的期限来自调用方的 context。`Billing.Run` 持有它、结束时关掉，`Heartbeat` 和 `Reap` 都走它，所以普通池被调用占满也不会推迟一次心跳（[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）；截止时间清理仍是后台的批量工作，继续走普通池。
 
 - **和 gateway 的许可同一份数**：`serve` 取 `db.MaxConns()` 和 `db.CompletionConns()`，准入和完成类分别限 N−R、R 个许可、各自计数，持有和等待完成许可都不减少准入容量（[gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)）。预算调小，许可跟着调小，不必改代码。
-- **两个池分别定容量**：R 至少按结算、孤儿结算和追加的峰值合计速率乘各自占用连接的时间估算，并为突发和尾延迟留余量；N−R 另按准入、查找、控制台和后台事务估算。若一次完成事务占连接 5–10ms，默认 R=16 的理论吞吐约每秒 1600–3200 次，不能据 N=64 推断能承受每秒 5000 次结算；持续超出会排队、超过前台结算期限后转后台重试或清理接管。5000 路在途不等于每秒 5000 次完成，默认值是否足够由[性能的压测](../../docs/performance.md#怎么验证)验证。
-- **一个账户占不满**：单个账户受账户闸约束；准入和完成按批合并，每批占一条连接，正常时一个热点账户约占 1–2 条。逐请求的往返与批大小见 [gateway 的「账户闸」](../gateway/README.md#账户闸)。
-- **留在默认的 max_connections 以内**：64 加迁移、查找和管理连接仍在 PostgreSQL 默认的 100 以内，单机不用改配置。多个核心节点连同一个库时，按节点数调大 max_connections，或者在连接串里写 `pool_max_conns`。
+- **两个池分别定容量**：R 至少按结算、孤儿结算和追加的峰值合计速率乘各自占用连接的时间估算，并为突发和尾延迟留余量；N−R 另按准入、查找、控制台和后台事务估算。若一次完成事务占连接 5–10ms，默认 R=16 的理论吞吐约每秒 1600–3200 次，不能据单节点的 64 条推断能承受每秒 5000 次结算；持续超出会排队、超过前台结算期限后转后台重试或清理接管。5000 路在途不等于每秒 5000 次完成，默认值是否足够由[性能的压测](../../docs/performance.md#怎么验证)验证。
+- **一个账户占不满**：单个账户受账户闸和每秒 151–222 个请求的上限约束；准入和完成按批合并，每批占一条连接，正常时一个热点账户约占 2 条。逐请求的往返与批大小见 [gateway 的「账户闸」](../gateway/README.md#账户闸)。
+- **装进服务器的 max_connections**：单节点份额是 `(max_connections − 服务器预留槽位 − 4) ÷ 节点数 − 3`，算出的池上限最多 64；显式 `pool_max_conns` 在不超过份额时可以高于 64。默认 PostgreSQL 的 100 留下 93：单节点仍用 64，两个节点各 43（R=16 时普通池 27、完成池 16），四个节点各 20；五个节点装不下默认的 R=16，节点拒绝启动。算出的数不够时改 `AXIOM_CORE_NODES`、`AXIOM_DB_COMPLETION_RESERVE` 或 `max_connections`，不要改 `pool_max_conns` 绕过检查。
 
-默认 N=64 保留原有事务连接总预算，R=16 保留既定的完成类保底。选择两个物理池而不是仅在 `Tx` 前加信号量，是因为 River 驱动直接使用 pgxpool，其查询不经 `Tx`；只在 gateway 发许可同样拦不住控制台和 recorder。代价是普通池繁忙时不能借用空闲的预留连接，完成类也不能借用普通池，吞吐受 R 限制。new-api `model/main.go`（206e0fa，2026-10-20）和 sub2api `backend/internal/repository/db_pool.go`、`backend/internal/config/config.go`（8f2cbb5，2026-10-19）都配置普通池上限；Axiom 另分预留池以履行结算容量保证。
+单节点的默认上限 64 保留原有事务连接总预算，节点多时按份额缩小；R=16 保留既定的完成类保底。选择两个物理池而不是仅在 `Tx` 前加信号量，是因为 River 驱动直接使用 pgxpool，其查询不经 `Tx`；只在 gateway 发许可同样拦不住控制台和 recorder。代价是普通池繁忙时不能借用空闲的预留连接，完成类也不能借用普通池，吞吐受 R 限制。new-api `model/main.go`（206e0fa，2026-10-20）和 sub2api `backend/internal/repository/db_pool.go`、`backend/internal/config/config.go`（8f2cbb5，2026-10-19）都配置普通池上限；Axiom 另分预留池以履行结算容量保证。
 
-部署按**所有进程**计预算：每个 `serve` 节点另有三条不在池里的连接，不计入 pgxpool 的上限——持有节点名的 advisory lock 的那条（`pg.DB.Hold`，从池里取走后 `Hijack`，见 [kv 的「配置与启动」](kv/README.md#配置与启动)）、River v0.49.0 的 LISTEN 监听器（同样取走后 `Hijack`），以及持有者心跳与回收的那条（`pg.DB.Dedicated`，直接连数据库）；其余 River 查询仍计入 N−R。因此每个 `serve` 节点按 N+3 计算，再为迁移、运维以及部署中其他连接留余量。例如两个节点各 N=40、R=10，事务池、节点名、River 监听和持有者心跳合计最多 86 条，余量留给 PostgreSQL 的管理和其他连接。不能只把单进程默认 64 与数据库的 `max_connections` 比较。
+部署按**所有进程**计预算，公式已经把每个 `serve` 节点的三条池外连接算进去：持有节点名的 advisory lock 的那条（`pg.DB.Hold`，从池里取走后 `Hijack`，见 [kv 的「配置与启动」](kv/README.md#配置与启动)）、River v0.49.0 的 LISTEN 监听器（同样取走后 `Hijack`），以及持有者心跳与回收的那条（`pg.DB.Dedicated`，直接连数据库）；其余 River 查询仍计入 N−R。`OperationsReserve` 的 4 条留给迁移、运维命令、备份和一个备用，在服务器自己的预留槽位之外另算；`axiom billing`、`catalog`、`operate`、`keyring` 这类不作为节点运行的命令沿用 URL 的 `pool_max_conns`，但启动时把 `pool_min_conns` 和 `pool_min_idle_conns` 清零，不预开连接；这 4 条由迁移、命令、备份和备用共用，命令按实际串行工作需要连接。滚动发布时新旧进程短暂重叠会超过按 N 算出的预算：同名的进程拿不到名字锁，先停旧进程再起新的；换名字扩节点时先调大 `max_connections`，不要改 `pool_max_conns` 绕过检查。`serve` 的启动日志给出本节点算出的数，失败时错误里有全部输入；`TestOpenSizesThePoolFromTheDatabaseBudget`、`TestOpenRefusesANodeCountThatCannotFit` 和 `TestServeChecksTheConnectionBudget` 覆盖计算、拒绝和日志。
 
 集成测试 `TestBackgroundAndConsoleCannotTakeTheSettlementReserve` 用真实 PostgreSQL、River worker、recorder 和普通控制台事务入口占满 N−R 条，通过事务回调、通道和数据库锁等待确认饱和；普通事务无法借用预留，结算和孤儿结算仍在各自期限内完成。没有用睡眠推断饱和。
 
@@ -372,6 +372,7 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | `response` | 当时回答调用方的对象，JSON；与占键在同一个事务里写入 |
 
 - **`idem.Once(ctx, tx, claim, do)`** 在改动自己的事务里：先 `INSERT … ON CONFLICT DO NOTHING` 占键，再执行 `do`，最后把响应写进同一行。占到键就执行；没占到，读出第一次的行，操作者、操作、指纹都相同则返回存下的响应（`replayed`），不执行 `do`，否则 `ErrReused`（409 `idempotency_key_reused`）。
+- **`idem.Lookup(ctx, tx, claim)`** 只读已有的响应，不改键：重放的请求可在准备和探测之前拿到第一次的结果；还没提交的键报告未找到，调用方照常准备，让 `Once` 等第一次提交后重放。
 - **改动与占键同成同败**：`do` 失败则事务回滚，占键随之消失，调用方可以带同一个键、改正后重发；键被占用的行一定带着响应，所以重放不会读到做到一半的改动。
 - **同键的并发请求**：第二个请求的 `INSERT` 在唯一索引上等第一个事务提交或回滚；提交则重放，回滚则轮到它自己执行。所以同一个键至多执行一次，不需要应用层的锁。
 - **键属于一次改动**：另一个操作者、另一个操作、同一个操作但内容不同，都是 `ErrReused`。这比契约的字面（"另一种改动"）严：内容不同的请求若重放"第一次的结果"，调用方会以为新的金额已经生效。
@@ -393,6 +394,7 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 私有测试能力值，只能在测试进程构造 | 类型和未导出字段阻止伪造，测试开关不能在生产启用 | 导出 AllowPrivate、任意 Resolver/Dialer：生产调用方能绕过 SSRF 边界 |
 | RoundTrip 返回第一个响应 | 重定向既不请求也不解析，畸形 Location 也不能把凭证带进重定向错误 | 默认 http.Client：默认跟随重定向；拒绝回调前仍可能解析 Location |
 | 任务队列用 River，放在 `pg` 里，用应用自己的连接池，表在自己的 schema | 任务和业务写入在同一个事务里入队，事件不会丢也不会早发（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）；`pg.Tx` 有意不暴露 `pgx.Tx`，入队只能由 `pg` 提供；队列的表不存租户的行，不进行级安全审计，和模块的表分开；要带租户数据的任务把数据放模块自己的表、参数只放 id，`pg.TenantTx` 用模块的查找函数换到那个租户的作用域；worker 返回给 River 的错误同样只写分类，`errors` 列也属于没有策略的表 | River 的迁移手抄进 goose 文件：升级 River 时要同步，且 River 启动时核对自己的迁移版本；让模块自己建连接池：绕过范围；把租户数据放进任务参数或错误：任务行和 `errors` 列都没有策略，谁也管不住它们 |
+| 连接预算由数据库的 `max_connections`、服务器预留槽位和部署节点数在启动时算出（`pg.WithNodes`），而不是写死每节点 64 或按当前存活节点算 | 多核心共用默认的 100 条时，手工调 `max_connections` 或 `pool_max_conns` 容易漏掉一个节点，数据库要到扩容当天才报连接满；按当前存活数算会让先启动的节点占着按少数节点算出的份额，后加入的节点再算一次也挤不下；算不下就不启动，错误和启动日志带着全部输入 | PgBouncer（先测量）、按当前存活节点动态缩池（旧节点不会让出连接）、每节点固定 64（两节点已超默认值） |
 | River 的迁移跟在建 schema 的连接上做，不另开连接 | 每多一个连接，负载高的机器多一次连不上的机会；两者都在迁移管理员的权限下，顺序无关 | 在 goose 之后另开连接：多一个连接 |
 | 配置只来自环境变量 | 架构规定不用反射加载配置；容器和 Compose 原生支持；只有一个来源，不用判断优先级 | 配置文件加环境变量覆盖：两个来源，要定优先级 |
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |

@@ -75,7 +75,7 @@ func (f rotationFixture) saveRotationMerchant(keys *secret.Keyring, in payments.
 	}); err != nil {
 		f.t.Fatal(err)
 	}
-	made, err := p.SaveMerchant(f.t.Context(), pg.PlatformScope(), audit.System("platform.keyring.test"), in)
+	made, err := p.SaveMerchant(f.t.Context(), pg.PlatformScope(), audit.System("platform.keyring.test"), in, "test save")
 	if err != nil {
 		f.t.Fatal(err)
 	}

@@ -77,6 +77,36 @@ func TestOnceReplaysTheFirstResponse(t *testing.T) {
 	}
 }
 
+// TestLookupReadsAReplayBeforeTheChange: a caller can check a key without claiming it, so a replayed request can skip
+// work that must not happen twice; an unclaimed key reports found false and a key of another request is refused.
+func TestLookupReadsAReplayBeforeTheChange(t *testing.T) {
+	t.Parallel()
+	db := open(t)
+	var done atomic.Int32
+	c := claim(t, uuid.NewV7(), "tester", "grantCredit", map[string]any{"amount": "5"})
+	lookup := func(c idem.Claim) (response, bool, error) {
+		var got response
+		var found bool
+		err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) (err error) {
+			got, found, err = idem.Lookup[response](t.Context(), tx, c)
+			return err
+		})
+		return got, found, err
+	}
+	if _, found, err := lookup(c); err != nil || found {
+		t.Fatalf("before the change: found=%v, err=%v", found, err)
+	}
+	if _, _, err := once(t, db, c, &done, response{ID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := lookup(c); err != nil || !found || got.ID != "a" {
+		t.Errorf("after the change: %+v found=%v, err=%v", got, found, err)
+	}
+	if _, _, err := lookup(claim(t, c.Key, "tester", "grantCredit", map[string]any{"amount": "6"})); !errors.Is(err, idem.ErrReused) {
+		t.Errorf("another request under the key: %v, want ErrReused", err)
+	}
+}
+
 // TestOnceRefusesAKeyUsedForAnotherRequest: a key is bound to its actor, its operation and its request, so a replay
 // cannot be had by another person, nor a different change under the same key; the refusal changes nothing, and the
 // first request still replays.

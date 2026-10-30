@@ -136,7 +136,7 @@ func (f consoleFixture) openTopUps(settings ...string) {
 		Site: uuid.UUID(f.siteID()), Kind: "testgw", Name: "Gateway", Enabled: true, Currency: usd, TTLSeconds: 1800,
 		Settings: []byte(`{}`), Secrets: map[string]secret.Secret{"key": secret.New("gateway-key")},
 		Methods: []payments.MethodInput{{Method: "alipay", Upstream: "alipay", Fee: payments.Fee{PPM: 30_000}, Enabled: true}},
-	}); err != nil {
+	}, "test save"); err != nil {
 		f.t.Fatal(err)
 	}
 	f.run(fmt.Sprintf("INSERT INTO payments.settings (site_id, open) VALUES ('%s', true)", uuid.UUID(f.siteID())))

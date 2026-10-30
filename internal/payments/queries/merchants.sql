@@ -41,6 +41,11 @@ ON CONFLICT (merchant_id, method) DO UPDATE SET upstream = excluded.upstream, fe
     fee_fixed = excluded.fee_fixed, single_min = excluded.single_min, single_max = excluded.single_max,
     daily_limit = excluded.daily_limit, enabled = excluded.enabled;
 
+-- Disabling keeps the configuration and its sealed secrets: callbacks, queries and refunds of its orders still use
+-- them, and only the choice of it for new orders stops.
+-- name: DisableMerchant :execrows
+UPDATE payments.merchants SET enabled = false, rev = rev + 1, updated_at = clock_timestamp() WHERE id = @id;
+
 -- name: ListMerchants :many
 SELECT * FROM payments.merchants WHERE site_id = @site_id ORDER BY sort, id;
 

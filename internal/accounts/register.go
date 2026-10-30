@@ -45,7 +45,10 @@ type OpenedFunc func(ctx context.Context, tx pg.Tx, site, account uuid.UUID) err
 type RegisterRequest struct {
 	Host, InviteCode, Email, Password string
 	HumanCheck, Language              string
-	ClientIP                          netip.Addr
+	// Consent names the current legal documents the person accepted; a site with documents refuses a registration
+	// that does not name all of them at their current versions.
+	Consent  []DocumentVersion
+	ClientIP netip.Addr
 }
 
 // RegisterResult is a registration that made a user at once (an invitation) or one waiting for its address to be
@@ -114,9 +117,13 @@ func (s *Service) registerInvite(ctx context.Context, d domain, snap *snapshot, 
 	}
 	user, account := uuid.NewV7(), uuid.NewV7()
 	err = s.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
+		consent, err := s.currentVersionsAccepted(ctx, tx, SiteID(invite.SiteID), r.Consent)
+		if err != nil {
+			return err
+		}
 		if err := createUser(ctx, tx, s.queries, s.opened, newUser{
 			id: user, account: account, site: invite.SiteID, tier: invite.DefaultTierID, role: snap.roleIDs["owner"],
-			email: email, passwordHash: hash, inviter: &invite.InviterUserID,
+			email: email, passwordHash: hash, inviter: &invite.InviterUserID, consent: consent,
 		}); err != nil {
 			return err
 		}
@@ -226,6 +233,8 @@ type newUser struct {
 	email, passwordHash           string
 	inviter                       *uuid.UUID
 	verified                      *time.Time
+	// consent is the legal documents this registration accepted; empty for a user the command line makes.
+	consent []DocumentVersion
 }
 
 // createUser inserts n's account, its tenant registration, its default workspace, the user and the user as the
@@ -245,6 +254,9 @@ func createUser(ctx context.Context, tx pg.Tx, q *Queries, opened OpenedFunc, n 
 				ID: n.id, SiteID: n.site, AccountID: n.account, Email: n.email, PasswordHash: n.passwordHash,
 				InviteCode: newInviteCode(), InviterUserID: n.inviter, EmailVerifiedAt: n.verified,
 			})
+		},
+		func() error {
+			return insertLegalAcceptances(ctx, tx, q, SiteID(n.site), AccountID(n.account), UserID(n.id), n.consent)
 		},
 		func() error {
 			return q.InsertOwner(ctx, tx, InsertOwnerParams{SiteID: n.site, AccountID: n.account, UserID: n.id, RoleID: n.role})

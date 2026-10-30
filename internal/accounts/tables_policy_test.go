@@ -32,6 +32,8 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 			"totp_key_version", "totp_last_step", "mfa_enabled_at",
 		},
 		"members":                 nil,
+		"legal_documents":         nil,
+		"legal_acceptances":       nil,
 		"platform_grants":         {"revoked_at"},
 		"api_keys":                {"rate_requests", "updated_at", "management_window", "management_requests", "name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
 		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
@@ -97,7 +99,7 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "announcements", "api_keys", "members", "notification_preferences", "oauth_flows", "passkey_credentials",
+		"accounts", "announcements", "api_keys", "legal_acceptances", "legal_documents", "members", "notification_preferences", "oauth_flows", "passkey_credentials",
 		"password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes",
 		"registration_requests", "roles", "security_failures", "sessions", "site_domains", "site_logos",
 		"site_oauth_providers", "site_settings", "sites", "tiers", "user_identities", "user_notices", "users",
@@ -115,7 +117,7 @@ func policyCommands(table string) string {
 	switch {
 	case table == "user_identities":
 		return "DELETE, INSERT, SELECT"
-	case table == "members" || table == "site_logos":
+	case table == "members" || table == "site_logos" || table == "legal_documents" || table == "legal_acceptances":
 		return "INSERT, SELECT"
 	case deletable(table):
 		return "DELETE, INSERT, SELECT, UPDATE"

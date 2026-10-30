@@ -102,7 +102,7 @@ func withDatabase(ctx context.Context, environ []string, use func(*pg.DB) error)
 	if err := env.Problems(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
-	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithCompletionReserve(reserve))
+	db, err := openDatabase(ctx, databaseURL, startupTimeout, pg.WithCompletionReserve(reserve), pg.WithOperationsPool())
 	if err != nil {
 		return err
 	}
