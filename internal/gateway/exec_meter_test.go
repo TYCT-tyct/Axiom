@@ -324,10 +324,12 @@ func TestATruncatedStreamConsumesNoMoreThanItsAllowance(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		const covered, allowance = 500, 500 // a segment of 500 tokens, and 5s at 100 tokens a second
 		const wait = 5 * time.Second        // how long the extension is waited for
+		var asked atomic.Int64              // when the extension was asked for, in Unix nanoseconds
 		h := newHarness(t, ctx, segmented(options{
 			segments: billing.Segments{Output: covered, Overshoot: 5 * time.Second},
 			config:   func(c *Config) { c.ExtendWait = wait },
 			extend: func(ctx context.Context, _ billing.ExtendRequest) error {
+				asked.Store(time.Now().UnixNano())
 				<-ctx.Done() // the ledger is too slow: the wait ends the attempt
 				return ctx.Err()
 			},
@@ -341,10 +343,10 @@ func TestATruncatedStreamConsumesNoMoreThanItsAllowance(t *testing.T) {
 		if extra := produced.Load() - covered; extra < 0 || extra > allowance {
 			t.Errorf("the upstream produced %d bytes beyond the %d it was covered for, past the %d allowance", extra, covered, allowance)
 		}
-		// The extension is asked for 40%–60% of the segment in, which the upstream, producing at 100 tokens a second,
-		// reaches in 2s to 3s; the wait then runs its 5s and the cut lands on the next write, 100ms apart.
-		if got := h.elapsed(); got < wait+2*time.Second || got > wait+3*time.Second+200*time.Millisecond {
-			t.Errorf("the attempt was cut after %v, not when the wait for the extension ended", got)
+		// The point the extension is asked at is drawn at random (billing.Quote), so the cut is measured from when it
+		// was asked: it ends the read the moment the wait does.
+		if got := time.Since(time.Unix(0, asked.Load())); got != wait {
+			t.Errorf("the attempt was cut %v after the extension was asked for, not when the wait for it ended", got)
 		}
 		body := h.w.body()
 		if !strings.Contains(body, `"error_type":"billing_unavailable"`) || !strings.HasPrefix(body[strings.LastIndex(body, "event: "):], "event: error\n") {
