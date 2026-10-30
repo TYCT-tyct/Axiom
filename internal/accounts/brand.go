@@ -32,7 +32,7 @@ func (b *SiteBrand) Check() error {
 	return nil
 }
 
-func (b SiteBrand) detail() map[string]any { return map[string]any{"brand_color": b.Color} }
+func (b *SiteBrand) detail() map[string]any { return map[string]any{"brand_color": b.Color} }
 
 // ReadSiteBrand reads the site's brand colour; ErrNotFound when there is no such site.
 func ReadSiteBrand(ctx context.Context, tx pg.Tx, site SiteID) (SiteBrand, error) {
