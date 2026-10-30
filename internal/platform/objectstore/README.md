@@ -1,7 +1,8 @@
 # 对象存储
 
-用 S3 接口读写对象。程序里只有这一份对象存储客户端；备份任务仍用自己的桶和凭证（`deploy/ops`），归档和对话正文等
-功能落地时调用这里。对话正文不经过它：保存正文的平台开关仍然是关的（[记录与告警](../../../docs/domains/observability.md#保留与开关)）。
+用 S3 接口读写对象。程序里只有这一份对象存储客户端；备份任务也用它，但用自己的桶和凭证（`deploy/ops`，见
+[备份与恢复](../../../docs/ops/backup-restore.md#与程序的对象存储分开)）。归档功能落地时调用这里；对话正文不经过它：
+保存正文的平台开关仍然是关的（[记录与告警](../../../docs/domains/observability.md#保留与开关)）。
 
 架构上的选型是「只依赖 S3 接口」，云厂商的对象存储和自托管的 SeaweedFS 都能接（[总体架构的技术选型](../../../docs/architecture.md#技术选型)）。本包不引入
 AWS SDK：用到的只是签名、五个对象操作和一次列举，自己实现 SigV4 少一批依赖；签名与 S3 的互操作由真实的 SeaweedFS
@@ -14,6 +15,7 @@ type Config struct { Endpoint, Bucket, Region, AccessKeyID string; SecretAccessK
 func ReadConfig(env *config.Env) (Config, error)   // 一个变量都没设时返回零值，表示关闭
 func Open(cfg Config) (*Client, error)
 
+func (c *Client) Create(ctx, allowExisting bool) (bool, error) // 先 HEAD；404 才 PUT，返回是否新建；已存在需显式同意
 func (c *Client) Check(ctx) error                  // HEAD 桶：核对桶存在、凭证可用，不读不写
 func (c *Client) Put(ctx, Upload) (ObjectInfo, error)
 func (c *Client) Get(ctx, key) (*Object, error)    // 调用方关闭 Body
@@ -22,8 +24,12 @@ func (c *Client) Delete(ctx, key) error            // 已经不存在的键也�
 func (c *Client) List(ctx, ListOptions) (ListPage, error)
 ```
 
+`Create`/`Check` 的 HEAD 只证明这些凭证能访问桶，不能证明桶归调用方所有：只对自有的桶运行，桶策略要限制到这些凭证。
+`axiom objectstore create` 对已存在的桶默认报错，确认自有后加 `--allow-existing`；它不会因此写入或改 ACL。
+
 `List` 一次返回一页和下一页的令牌；要整个前缀的调用方顺着 `NextToken` 循环。`Upload.Size` 在调用方知道字节数时给出
-（文件 `Stat` 一般知道），`-1` 表示由客户端边算哈希边数；给了但对不上是错误，不发请求。
+（文件 `Stat` 一般知道），`-1` 表示由客户端边算哈希边数；给了但对不上是错误，不发请求。知道大小且超过 16 MiB 时走
+multipart，`-1` 仍是单次 PUT（最多 5 GiB）。
 
 ## 配置
 
@@ -41,8 +47,9 @@ func (c *Client) List(ctx, ListOptions) (ListPage, error)
 六个变量全不设是「关闭」：`ReadConfig` 返回零值，`Open` 返回 `ErrNotConfigured`。设了任何一个就要设全，否则启动
 失败并一次列出缺的变量名；错误只报变量名和要求的形状，不报值，密钥赋错变量时不会进日志。
 
-`serve` 启动时读取并校验这组变量，所以部署设了它就能正常启动；现在还没有程序内的功能写这个桶，`axiom objectstore`
-是第一个用它的调用方。
+`serve` 启动时读取并校验这组变量，所以部署设了它就能正常启动；程序内还没有功能写这个桶，`axiom objectstore` 是
+运维调用方。备份任务用同一份客户端、同一组变量名，但桶和凭证由 `deploy/compose.yaml` 从 `AXIOM_BACKUP_S3_*`
+映射进 `ops` 容器，程序容器拿不到备份的凭证。
 
 ## 期限与重试
 
@@ -51,10 +58,10 @@ func (c *Client) List(ctx, ListOptions) (ListPage, error)
 - **退避**：从 200ms 起翻倍，最多 5s，加一半以内的抖动；服务端给了 `Retry-After` 时按它等，最多 30s，且不会越过调用方
   的期限。
 - **PUT 从头发**：请求体要求可寻址（`io.ReadSeeker`），哈希和每次发送都先 `Seek(0)`，半途失败不会把后半段当新对象写进去；
-  载荷哈希在发送前算好并签名，重试沿用同一个哈希。
-- **PUT 先查期限和上限**：读请求体之前检查调用方的期限和取消，哈希分块检查 `ctx`，最多读上限加一个字节，超过 5 GiB 返回
-  `ErrTooLarge`。底层 `Read` 如果自己阻塞，`context` 不能替它解阻塞；调用方要能关闭文件或提供响应取消的 reader，这里
-  不启动后台 goroutine 假装取消。
+  载荷哈希在发送前算好并签名，重试沿用同一个哈希。multipart 的每一片都从对象里的固定偏移读，重试不会串到下一片。
+- **PUT 先查期限和上限**：读请求体之前检查调用方的期限和取消，哈希分块检查 `ctx`，最多读上限加一个字节；单次 PUT 超过
+  5 GiB 返回 `ErrTooLarge`，已知大小超过 5 TiB 直接拒绝。失败的上传会 abort，不把分片留在桶里。底层 `Read` 如果自己
+  阻塞，`context` 不能替它解阻塞；调用方要能关闭文件或提供响应取消的 reader，这里不启动后台 goroutine 假装取消。
 - **GET 不重试正文**：响应头到了以后正文读失败直接交给调用方，已经交出去的字节收不回来；调用方要完整文件就整次重来。
 - **不跟随重定向**：直接 `RoundTrip`，3xx 当成错误返回，和 `egress` 的规则一致；101 升级也拒绝并关闭连接。
 
@@ -72,19 +79,22 @@ func (c *Client) List(ctx, ListOptions) (ListPage, error)
 
 ## 限制
 
-- 单个 PUT 最多 5 GiB（S3 的单次 PUT 上限）；更大的归档需要分片上传，等真正有这么大的消费者时再加。
-- 只实现了 `Check`/`Put`/`Get`/`Head`/`Delete`/`List`。没有桶管理、ACL、版本、生命周期规则或多桶路由：桶由负责人建，
-  保留策略属于使用它的功能。
+- 单个 PUT 最多 5 GiB，multipart 对象最多 5 TiB、最多 10,000 片；分片默认 16 MiB，对象大到 160 GiB 以上时按 1 MiB
+  向上取整自动放大。最后一片可以小于 5 MiB，其余分片不小于 5 MiB（由 S3 检查，客户端不自造限制）。
+- 实现了 `Create`、`Check`、`Put`、`Get`、`Head`、`Delete`、`List`。没有 ACL、版本、生命周期规则或多桶路由；桶由负责人
+  建（`Create` 只是让部署能把自己拥有的桶准备好），保留策略属于使用它的功能。
 - 没有临时凭证（`x-amz-security-token`）：部署给的是长期访问键。以后接云厂商的临时凭证时再加。
 
 ## 测试
 
-单元测试用 `httptest` 的假 S3 覆盖期限、重试、不重试的 4xx、分页和重定向；签名另有 botocore 生成的固定向量，
-固定日期、区域、路径和查询，签名逐字节对得上。
+单元测试用 `httptest` 的假 S3 覆盖期限、重试、不重试的 4xx、分页、重定向、multipart 的分片与 abort；签名另有
+botocore 生成的固定向量，固定日期、区域、路径和查询，签名逐字节对得上。
 
-`container_test.go` 启动真实的 SeaweedFS（`chrislusf/seaweedfs:3.80`，只用于测试，不是部署依赖），用它的 shell 建桶，
-再走一遍 `Check`、1 MiB 带二进制字节的 PUT、GET、HEAD、LIST 和 DELETE。手写的签名器很容易在自己的假服务器上通过，
-只有真实实现能证明转义、头和分页是对的。这个测试启动容器，机器上要排在重型测试锁后面：
+`container_test.go` 启动真实的 SeaweedFS（`chrislusf/seaweedfs:3.80`，只用于测试，不是部署依赖），用它的 shell 建主桶，
+再走一遍 `Create`、`Check`、1.25 MiB 带二进制字节的 PUT、GET、HEAD、LIST 和 DELETE，以及 25 MiB 的 multipart PUT 与逐字节
+比对；另有一个桶只由 `Create` 建两次（第二次返回 false），证明真实服务器上的 HEAD/PUT 路径。
+手写的签名器很容易在自己的假服务器上通过，只有真实实现能证明转义、头和分页是对的。这个测试启动容器，机器上要排在
+重型测试锁后面：
 
 ```sh
 flock /tmp/axiom-remote-check.lock go test ./internal/platform/objectstore/...

@@ -4,8 +4,9 @@
 `deploy/ops` 的运维镜像里跑，从 `deploy/compose.yaml` 的 `ops` profile 启动；入口在 `deploy/compose.edge.yaml`，
 配置是 `deploy/ingress/Caddyfile`。两者都不随 `just up` 启动。
 
-为什么不在程序镜像里：`pg_dump` 的版本不能低于数据库（`deploy/compose.yaml` 把库钉在 `postgres:18.6-alpine`，运维镜像
-用同一个 tag），而 age、rclone、桶凭证都没有理由进那个 scratch 镜像。
+为什么是独立的运维镜像：`pg_dump` 的版本不能低于数据库（`deploy/compose.yaml` 把库钉在 `postgres:18.6-alpine`，运维镜像
+用同一个 tag），而 age、桶凭证和写桶的代码都没有理由进那个面向公网的 scratch 镜像。镜像里的 S3 客户端不是另装的工具，
+而是从发布镜像取出的 `axiom` 二进制（下一节）。
 
 ## 备份
 
@@ -25,25 +26,30 @@
   泄露也不该同时打开两者。私钥只以文件形式留在别处，不在这台机器上，也不在桶里。
 - 转储用超级用户 `postgres` 读：每张表都 `FORCE ROW LEVEL SECURITY`，按行安全策略导出的备份会静默丢行。版本清单也从 `db.dump` 内用同一镜像的 `pg_restore` 读出，不再用备份前后的实时查询：只有转储快照里的 `platform.key_versions` 决定归档必须含哪些密钥。
 
-加密用 [age](https://age-encryption.org)：备份侧只需要公钥，因此这台机器被攻破也解不开历史 set。上传用 rclone，因为
-它一个静态二进制就把 S3 兼容的桶（MinIO、R2、Backblaze、OSS）全收下，远端只用 `RCLONE_CONFIG_AXIOM_*` 环境变量配置，
-凭证不进命令行。
+加密用 [age](https://age-encryption.org)：备份侧只需要公钥，因此这台机器被攻破也解不开历史 set。上传、列举、删除和
+恢复时的下载都调程序自己的 S3 客户端（`axiom objectstore`，见 [platform/objectstore](../../internal/platform/objectstore/README.md)）：
+运维镜像从发布镜像里取同一个 `/axiom` 二进制，用 `AXIOM_BACKUP_S3_*` 映射出的 `AXIOM_OBJECTSTORE_*` 配它自己的桶。
+这样签名、期限、重试和 multipart 只有一份实现，备份不会因为另装一个 S3 工具而与程序的行为分叉。`AXIOM_BACKUP_S3_ENDPOINT`
+留空表示 AWS S3 本身（与 `deploy/.env.example` 一致），ops 脚本按 `AXIOM_BACKUP_S3_REGION` 补成
+`https://s3.<region>.amazonaws.com`（中国区为 `amazonaws.com.cn`）；程序自己的 `AXIOM_OBJECTSTORE_ENDPOINT` 仍然必须显式给出。
 
 ### 与程序的对象存储分开
 
 程序有自己的可选对象存储（`AXIOM_OBJECTSTORE_*`，见 [platform/objectstore](../../internal/platform/objectstore/README.md)），
 它不是一个备份桶：两者用不同的桶和不同的凭证。备份 set 里有密钥环和 `deploy/.env`，拿到桶的凭证就能读走或删掉恢复一台
-机器所需的一切；程序的凭证只给归档，公开面上的进程被攻破也不应该碰到备份。`deploy/compose.yaml` 因此只把
-`AXIOM_OBJECTSTORE_*` 传给 `axiom`，备份的 `AXIOM_BACKUP_*` 与 `RCLONE_CONFIG_AXIOM_*` 只留在 `ops` 镜像里。
+机器所需的一切；程序的凭证只给归档，公开面上的进程被攻破也不应该碰到备份。`deploy/compose.yaml` 只把
+`AXIOM_OBJECTSTORE_*` 传给 `axiom`；`ops` 服务的同名变量在容器内由 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_S3_*` 映射而来，
+宿主的备份凭证因此进不了程序容器。两边用的是同一个客户端，不是同一个桶。
 
-现在的备份仍用运维镜像里的 rclone 上传（上一节）；程序里的归档写入还没有接入，对话正文的开关也仍然关着。要核对程序
-那一侧的桶和凭证：
+备份的 check、上传、列举、删除和恢复的下载都走 `axiom objectstore`；程序里的归档写入还没有接入（#324 的 E9-9），对话
+正文的开关也仍然关着。
+核对程序那一侧的桶和凭证（只做一次 HEAD，不读不写；桶不存在时可以用 `axiom objectstore create` 建；桶已存在时它只做
+HEAD，不再 PUT，避免 S3 重置已有桶的 ACL；命令会报错，确认桶归你再加 `--allow-existing`）。HEAD 只能证明这些凭证能访问桶，
+不能证明桶归你所有：桶策略必须只允许这组凭证，不要指向别人拥有的公开桶。
 
 ```bash
 docker compose -f deploy/compose.yaml --env-file deploy/.env exec axiom axiom objectstore check
 ```
-
-它只做一次 HEAD，不读不写；输出桶名和 `checked`，凭证错或桶不存在时以非 0 退出。
 
 ### 保留
 
@@ -54,6 +60,9 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env exec axiom axiom ob
 两个都必须 ≥ 1，否则运行在拿锁、上传之前就退出 1：份数为 0 会删掉刚写完的 set，天数为 0 会把截止时间定在这次运行自己的那一
 秒，年龄判断于是把它也算成"更早"，同样删掉它；两种情况都只剩一句 `done`。没有"永不删除"的取值，要表达它就给一个大到用不到
 的天数。本次运行写出的那个 set 永远不在删除之列。
+
+`AXIOM_BACKUP_TRANSFER_TIMEOUT`（默认 `12h`）是一次上传或下载的总期限，按 5 GiB 转储、2 MiB/s 的链路留出余量；CLI 的
+`--timeout` 默认仍是 30 分钟，备份和恢复脚本显式传这个值，传输卡住时仍会结束。
 
 ### 单实例
 
@@ -144,7 +153,10 @@ API key 哈希用的 HMAC `hash` 和派生用的 `identity` 文件不在此命�
    docker compose -f deploy/compose.yaml --env-file deploy/.env --profile ops build backup restore
    ```
 
-   恢复脚本开头用 `docker image inspect` 逐个检查镜像在不在，不在就在第 1 步之前报错。
+   运维镜像用程序镜像作构建阶段（`FROM ${PROGRAM_IMAGE} AS program`），最终镜像基于 `postgres:18.6-alpine`，只把
+   `/axiom` 取进 `/usr/local/bin`，所以上面的 `pull axiom` 必须在前。`just backup-rehearsal` 会先构建程序镜像和 ops 镜像；
+   `just up` 只构建程序，不构建 ops profile，恢复前按上面的 `--profile ops build` 构建。恢复脚本开头用
+   `docker image inspect` 逐个检查镜像在不在，不在就在第 1 步之前报错。
 3. 两个 age 私钥文件（库的、密钥环的），路径给 `AXIOM_RESTORE_DB_IDENTITY` 和 `AXIOM_RESTORE_SECRETS_IDENTITY`。它们只
    在恢复时只读挂进容器，不属于部署配置，也不进 `deploy/.env`。
 
@@ -162,7 +174,9 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 脚本按顺序做六步，每步都有输出，失败即停：
 
 1. 取 set 的 `deploy.env.age`，用库的身份解开，装成 `deploy/.env`（权限 600）。没有口令先建集群的顺序问题就在这里解决。
-2. 用这份配置启动 `postgres`：空卷 → initdb → `deploy/postgres/roles.sh` 建 `axiom_app` 与 `axiom_migrator`。
+2. 用这份配置启动 `postgres`：空卷 → initdb → `deploy/postgres/roles.sh` 建 `axiom_app` 与 `axiom_migrator`。脚本也会
+   删掉 Valkey 和 `keys` 容器：恢复后的 `/keys` 没有 `valkey-password`，重跑 `keys` 会换掉缓存里的旧 ACL 并生成新口令；
+   复用已退出的 `keys` 容器则会让 Valkey 拿着旧 ACL 启动，程序报 `WRONGPASS`。缓存卷本身只放限流和会话状态，不删。
 3. `axiom migrate`：`axiom_owner`、`axiom_lookup` 和各模块的 schema 属于迁移，由程序建。转储里每个对象的属主都是这两个
    `NOLOGIN` 角色，所以恢复前它们必须存在；角色定义只有一处（迁移），脚本不抄第二份。
 4. 取 `db.dump.age` 解开后先删掉迁移建的那些 schema（属主是 `axiom_owner` 的全部，`public` 不在其中），再
@@ -173,10 +187,11 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
    API（控制台域名上 `/api/console/v1/site` 是 200，API 域名上同一路径是 404，`/v1/models` 无 key 是 401），没有入口时才
    打程序自己发布的两个回环端口。**只查回环端口是不够的**：入口连不上程序时那里照样 200，而外部请求全是 502。
 
-整个恢复过程固定使用启动时那一份桶的位置和凭证：脚本先问恢复容器自己解析出的 `AXIOM_BACKUP_*`、`RCLONE_CONFIG_AXIOM_*`
-是什么，再把它们导出成 compose 的同名变量。compose 的插值先看环境再看 `--env-file`，所以第 1 步装进来的 set 副本改不了它们；
-不固定的话，set 里的 `deploy/.env` 记的是备份那天的位置和凭证，可能已经轮换或搬走，第 4 步就会拿旧凭证去取转储——而那时库已经
-被换掉了。放环境里而不是当参数传，是因为参数会留在进程列表里，而它们是凭证。
+整个恢复过程固定使用启动时那一份桶的位置和凭证：脚本先问恢复容器自己解析出的 `AXIOM_BACKUP_*`、`AXIOM_OBJECTSTORE_*`
+是什么，再把 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_PREFIX` 和 `AXIOM_BACKUP_S3_*` 导出。compose 用它们重新算出 `ops`
+服务的 `AXIOM_OBJECTSTORE_*`，而第 1 步装进来的 set 副本改不了它们。不固定的话，set 里的 `deploy/.env` 记的是备份那天的
+位置和凭证，可能已经轮换或搬走，第 4 步就会拿旧凭证去取转储——而那时库已经被换掉了。不能直接导出
+`AXIOM_OBJECTSTORE_*`：那会同时改掉第 6 步程序的桶。放环境里而不是当参数传，是因为参数会留在进程列表里，而它们是凭证。
 
 恢复完要做的：
 
@@ -192,26 +207,29 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 - 自己的 compose 项目 `axiom-rehearsal`、自己的 `deploy/.env.rehearsal`、内核分配的宿主机端口（程序的和入口的都是）；
 - 先用两种 `AXIOM_EDGE_TLS_ISSUER` 各解析一次 `deploy/ingress/Caddyfile`（`caddy validate`）：`internal`，和变量缺失时 compose 填进去的那个值。
   演练自己跑 `internal`，所以另一个取值——有公网证书的部署用的那个——只能这样验到；
-- 开跑先把继承来的 `AXIOM_*`、`RCLONE_*`、`DEPLOY_*` 和 `COMPOSE_FILE` 一类变量清掉：compose 的插值优先取 Shell 环境，
+- 开跑先把继承来的 `AXIOM_*`、`DEPLOY_*` 和 `COMPOSE_FILE` 一类变量清掉：compose 的插值优先取 Shell 环境，
   操作者导出过的生产桶名和凭证会覆盖 `--env-file`，第一次备份就写进真桶、再按演练的保留策略删掉真实 set；
 - 本地 S3 容器（`deploy/compose.rehearsal.yaml` 里的 RustFS）代替桶，set 随栈一起销毁；
-- 上传和删除（备份、以及第 10 步的搬迁）先在容器里断言 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_PREFIX`、
-  `RCLONE_CONFIG_AXIOM_ENDPOINT`、`RCLONE_CONFIG_AXIOM_ACCESS_KEY_ID` 确实是演练 S3 和它的专用桶、前缀，不是就退出；
-- 种一个站点和一个用户，停程序，记录全库内容指纹（含每张表的行数）、角色与成员关系、密钥环哈希、`deploy/.env`；种数验证
+- 上传、删除和建桶（备份、第 10 步的搬迁，以及第 4 步的 `create`）先在容器里断言 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_PREFIX`、
+  `AXIOM_OBJECTSTORE_BUCKET`、`AXIOM_OBJECTSTORE_ENDPOINT`、`AXIOM_OBJECTSTORE_ACCESS_KEY_ID` 确实是演练 S3 和它的专用桶、
+  前缀，不是就退出；
+- 种一个站点、一个用户和一条非默认的价格政策，停程序，记录全库内容指纹（含每张表的行数）、角色与成员关系、密钥环哈希、`deploy/.env`；种数验证
   按名断言 `accounts.sites` 与 `accounts.users` 各有行——空表也有一行指纹，只数"有指纹的表"证明不了种子发生过；
 - 备份；验证保留为 0（份数和天数各一次）在写任何东西之前退出 1 且桶不变；验证持锁时第二个运行退出 75；验证密钥环用库的
   身份解不开、用密钥环的身份解得开；
 - 删掉库卷和密钥卷（S3 容器留着，set 在它这里），删掉 `deploy/.env` 里的一行标记，再走一遍上面的恢复脚本，文件组合带上
   `deploy/compose.edge.yaml`；
-- 比对表清单与指纹（三类行除外，见下）、角色、密钥环、环境文件，并经入口各打一次控制台域名和 API 域名；
+- 比对表清单与指纹（下列行除外，见下）、角色、密钥环、环境文件，并经入口各打一次控制台域名和 API 域名；
 - 连续再备份两次，验证保留只留下最新两份、最早那份被删；
 - 轮换 S3 凭证（重建演练的 S3 容器，卷不动）并把整个前缀搬到 `axiom-moved`、把 `AXIOM_BACKUP_PREFIX` 改过去，再恢复一次：
   这一遍只有"固定使用启动时的位置和凭证"才能走完，因为 set 里的配置写的是搬走之前的位置和已吊销的凭证；
 - 打印一行可直接粘到下表的记录，含 RTO（从执行恢复脚本到 `compose up --wait` 返回）。
 
-指纹比较按行内容，跳过三类会被程序自己改动的行：River 的队列表（库自己的迁移版本由程序的启动检查核对）、
+指纹比较按行内容，跳过会被程序自己改动的行：River 的队列表（库自己的迁移版本由程序的启动检查核对）、
 `billing.holders`（每次核心进程启动插一行，恢复后的库里既有 set 里的那行也有新的）、`billing.expiry_cursor`（到期任务每分钟
-更新自己扫到哪）。表本身少一张就失败，所以跳过的是行，不是表。
+更新自己扫到哪）、`platform.alert_signals`（启动产生的新告警）、`platform.credential_share_departures`（新进程清理 set 里过期的
+节点行）和 `catalog.sync_state`（目录同步的进度）。`billing.price_policies` 不整表跳过：只有发布任务每次改写的 `confirmed_at`
+列不进哈希，`rev` 和三个乘数仍然要逐行一致。表本身少一张就失败，所以跳过的是行，不是表。
 
 它要 Docker、go、node、pnpm 和约十五分钟，并且会删掉自己创建的东西（`trap` 里 `compose down --volumes` 加删镜像）。同一台
 机器上只能跑一个。入口在演练里用 `AXIOM_EDGE_TLS_ISSUER=internal`（自己的 CA，所以检查带 `--insecure`），域名是 `.example`，
@@ -226,6 +244,12 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 | 时间（UTC） | 备份集 | RTO | 自动检查 | 结论 |
 |---|---|---|---|---|
 | 2026-10-20 02:01 | 20261020020036-cef1ec | 19s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
+| 2026-10-30 11:00 | 20261030105920-5d0746 | 29s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
+| 2026-10-30 11:08 | 20261030110649-57e259 | 32s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
+| 2026-10-30 11:13 | 20261030111116-4e91d2 | 38s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
+| 2026-10-30 11:37 | 20261030113558-676233 | 33s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
+| 2026-10-30 11:47 | 20261030114440-bb2802 | 91s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
+| 2026-10-30 12:45 | 20261030124404-0967c4 | 27s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 
 ## 生产入口
 
@@ -288,9 +312,12 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
 
 - **逻辑转储，不是 WAL 归档或基础备份**：单机、库在一个卷里；PITR 要多一套归档、恢复目标和操作练习，换来的是"误删后
   回滚到某一秒"，而这里要的是"机器没了能重建"。代价：RTO 是一次全量恢复（演练记录里有实测值），不是秒级。
-- **rclone，不是 aws-cli**：一个静态二进制覆盖所有 S3 兼容实现，`copyto`、`lsf --dirs-only`、`purge` 正好对上 set 目录与
-  保留；aws-cli 要 Python 运行时，也只对 AWS 的 S3 顺手。代价：桶的语义停在 rclone 支持的子集里（这里只用到对象读写与
-  列举）。
+- **用程序自己的对象存储客户端，不再装 rclone 或 aws-cli**：备份的上传、列举、删除和恢复的下载都调 `axiom objectstore`，
+  与程序的归档共用一份 SigV4、期限、重试和 multipart；运维镜像从发布镜像取同一个二进制，不另装 S3 实现。代价：运维镜像
+  因此多带一份发布二进制（几十 MB，也含 HTTP 服务面，但它不监听端口），且必须和程序镜像同版本构建或发布；桶要支持客户端
+  用到的子集（桶 HEAD/PUT、对象 PUT/GET/HEAD/DELETE、ListObjectsV2、multipart），换 S3 实现时要跑演练。备份的桶和凭证仍然与程序分开，
+  见「与程序的对象存储分开」。按[负责人授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)
+  「遇到问题自己解决问题和判断最优而不是问我。」落地，独立评审仍执行。
 - **age，不是 gpg**：只认公钥、没有信任网、两个收件人就是两行；gpg 的信任、过期和子密钥在"备份机器只放公钥"这件事上
   没有收益。
 - **角色不单独备份**：`axiom_app`、`axiom_migrator` 由 `deploy/postgres/roles.sh` 建，`axiom_owner`、`axiom_lookup` 由
@@ -312,5 +339,5 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
 - 公网证书这条路没有在任何地方验过：演练用 `.example` 域名和 Caddy 自己的 CA，没有公网 DNS 也就没有 ACME。第一次真实部署时
   才第一次走 HTTP-01，失败原因看 `docker compose logs caddy`。
 - 演练用的桶是 `rustfs/rustfs`，一个钉住版本的第三方 S3 实现。MinIO 自己已经拿不到公开镜像（Docker Hub 的仓库没了，
-  quay.io 返回 401），而 `adobe/s3mock` 之类的替身并不真存对象，测不出保留和重取。桶的语义只用到对象读写和列举，换成别的
-  实现时改 `deploy/compose.rehearsal.yaml` 的一个服务就够。
+  quay.io 返回 401），而 `adobe/s3mock` 之类的替身并不真存对象，测不出保留和重取。桶的语义只用到对象读写、列举和
+  multipart，换成别的实现时改 `deploy/compose.rehearsal.yaml` 的一个服务就够，但要重跑演练确认客户端仍兼容。

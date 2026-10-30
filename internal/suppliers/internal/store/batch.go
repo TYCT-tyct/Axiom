@@ -114,6 +114,8 @@ type ProjectionWrites struct {
 	Groups           []InsertProjectedGroupParams
 	ChangedGroups    []UpdateProjectedGroupParams
 	AbsentGroups     []uuid.UUID
+	Pool             []SetProjectedGroupPoolParams
+	ClearedPool      []uuid.UUID
 	Models           []UpsertProjectedModelParams
 	AbsentModels     []SetProjectedModelAbsentParams
 	Endpoints        []InsertProjectedEndpointParams
@@ -151,6 +153,23 @@ FROM (VALUES `, `) AS v(id) WHERE t.id = v.id AND t.present`, []string{"uuid"}, 
 		return []any{r}
 	}); err != nil {
 		return fmt.Errorf("project absent groups: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.Pool, `
+UPDATE suppliers.supplier_groups AS t SET pool_accounts = v.accounts, pool_failed = v.failed,
+    pool_usable = v.usable, pool_headroom = v.headroom, pool_capacity = v.capacity, pool_low = v.low,
+    pool_observed_at = v.observed_at
+FROM (VALUES `, `) AS v(id, accounts, failed, usable, headroom, capacity, low, observed_at) WHERE t.id = v.id`, []string{"uuid", "integer", "integer", "integer", "integer", "integer", "boolean", "timestamptz"}, func(r SetProjectedGroupPoolParams) []any {
+		return []any{r.ID, r.Accounts, r.Failed, r.Usable, r.Headroom, r.Capacity, r.Low, r.ObservedAt}
+	}); err != nil {
+		return fmt.Errorf("project pool capacity: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.ClearedPool, `
+UPDATE suppliers.supplier_groups AS t SET pool_accounts = NULL, pool_failed = NULL, pool_usable = NULL,
+    pool_headroom = NULL, pool_capacity = NULL, pool_low = NULL, pool_observed_at = NULL
+FROM (VALUES `, `) AS v(id) WHERE t.id = v.id`, []string{"uuid"}, func(r uuid.UUID) []any {
+		return []any{r}
+	}); err != nil {
+		return fmt.Errorf("clear pool capacity: %w", err)
 	}
 	if err := projectionPages(ctx, db, lastProjectionRows(w.Models, func(r UpsertProjectedModelParams) projectedNameKey {
 		return projectedNameKey{r.SupplierGroupID, r.UpstreamName}

@@ -22,9 +22,13 @@ func TestRoutePublishesMeasuredQuality(t *testing.T) {
 		t.Fatal(err)
 	}
 	good := routable(f.served, protocol.Messages, protocol.Responses)
+	good.PoolLow = true
 	u := published(t, f, snap, good, now)
 	if u.Quality != 1 || u.Confidence != 0 {
 		t.Errorf("unknown endpoint: quality %v confidence %v, want 1 and 0", u.Quality, u.Confidence)
+	}
+	if !u.PoolLow {
+		t.Error("a low pool did not reach the routing endpoint")
 	}
 	observed(t, f, 10, quality.Observation{
 		Endpoint: good.ID, Done: true, InputTokens: 100, OutputTokens: 100,

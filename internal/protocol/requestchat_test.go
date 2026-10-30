@@ -151,6 +151,11 @@ func TestResponsesRequestsToChat(t *testing.T) {
 			`"input":[{"role":"user","content":[{"type":"input_text","text":"look"},{"type":"input_image","image_url":"https://example.test/i.png","detail":"low"}]}]`,
 			`"messages":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"https://example.test/i.png","detail":"low"}}]}],"max_tokens":4096`,
 		},
+		{
+			"file with auto detail",
+			`"input":[{"role":"user","content":[{"type":"input_file","filename":"a.pdf","file_data":"data:application/pdf;base64,BBBB","detail":"auto"}]}]`,
+			`"messages":[{"role":"user","content":[{"type":"file","file":{"file_data":"data:application/pdf;base64,BBBB","filename":"a.pdf"}}]}],"max_tokens":4096`,
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			up, err := prepareNativeChat(protocol.Responses, chatBody(c.members), "up", nil)

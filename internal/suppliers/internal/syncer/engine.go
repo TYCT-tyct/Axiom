@@ -286,6 +286,9 @@ func (e *Engine) catalog(ctx context.Context, c *Commit) error {
 	diffGroups(c, prev, groups)
 	diffPlans(c, plans)
 	c.State.Groups, c.State.Plans = groups, plans
+	if err := e.pool(ctx, c); err != nil && !errors.Is(err, adapter.ErrNotPool) {
+		return err
+	}
 	return nil
 }
 

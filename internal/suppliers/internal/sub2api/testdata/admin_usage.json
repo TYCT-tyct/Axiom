@@ -1,0 +1,33 @@
+{
+ "method": "POST",
+ "path": "/api/v1/admin/accounts/usage/batch",
+ "status": 200,
+ "header": {},
+ "body": {
+  "code": 0,
+  "message": "success",
+  "data": {
+   "usage": {
+    "13": {
+     "source": "active",
+     "updated_at": "2026-10-15T11:58:00Z",
+     "five_hour": {"utilization": 92.4, "resets_at": "2026-10-15T16:00:00Z", "remaining_seconds": 14340},
+     "seven_day": {"utilization": 30, "resets_at": "2026-10-20T00:00:00Z", "remaining_seconds": 399720}
+    },
+    "21": {
+     "source": "active",
+     "updated_at": "2026-10-15T11:58:00Z",
+     "five_hour": {"utilization": 40, "resets_at": "2026-10-15T16:00:00Z", "remaining_seconds": 14340},
+     "seven_day": {"utilization": 20, "resets_at": "2026-10-20T00:00:00Z", "remaining_seconds": 399720}
+    },
+    "22": {
+     "source": "active",
+     "updated_at": "2026-10-15T11:58:00Z",
+     "five_hour": {"utilization": 50, "resets_at": "2026-10-15T16:00:00Z", "remaining_seconds": 14340},
+     "seven_day": {"utilization": 60, "resets_at": "2026-10-20T00:00:00Z", "remaining_seconds": 399720}
+    }
+   },
+   "errors": {}
+  }
+ }
+}

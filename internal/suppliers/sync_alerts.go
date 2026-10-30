@@ -3,6 +3,7 @@ package suppliers
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 	"uuid"
 
@@ -82,6 +83,10 @@ type syncAlertPosition struct {
 	Seq         int
 	Attention   map[string]syncAlertFault
 	Stopped     map[string]syncAlertFault
+	// PoolLow is the groups the bridge has reported low: it is compared with the projected rows each run, so a reading
+	// missed while nodes of an older version were consuming events still raises its alert. nil means a position written
+	// before this bridge kept the set, and the run then also resolves alerts of groups that are no longer low.
+	PoolLow []string
 }
 
 type syncAlertEvent struct {
@@ -111,7 +116,8 @@ func forwardSyncAlerts(ctx context.Context, tx pg.Tx, supplier uuid.UUID) error 
 	if err = jsonx.Unmarshal(raw, &state); err != nil {
 		return err
 	}
-	if !p.Initialized {
+	first := !p.Initialized
+	if first {
 		// Existing recovered history must not page operators on the first deployment. The state/version
 		// fence makes this a consistent starting point; later commits always have a greater version.
 		if err = initializeSyncAlerts(ctx, tx, supplier, state, version, &p); err != nil {
@@ -129,12 +135,21 @@ func forwardSyncAlerts(ctx context.Context, tx pg.Tx, supplier uuid.UUID) error 
 		}
 		p.Version, p.Seq = e.version, e.seq
 	}
-	if len(events) < 1000 {
-		if err = recoverSyncAlerts(ctx, tx, supplier, state, version, &p); err != nil {
+	if err = finishSyncAlerts(ctx, tx, supplier, state, version, len(events), &p, first); err != nil {
+		return err
+	}
+	return alert.SavePosition(ctx, tx, source, p)
+}
+
+// finishSyncAlerts closes the kinds whose recovery needs the whole page (a recovery is only claimed when nothing older is
+// still queued) and reconciles the pool's rows, which do not go through events.
+func finishSyncAlerts(ctx context.Context, tx pg.Tx, supplier uuid.UUID, state syncer.State, version int64, events int, p *syncAlertPosition, first bool) error {
+	if events < 1000 {
+		if err := recoverSyncAlerts(ctx, tx, supplier, state, version, p); err != nil {
 			return err
 		}
 	}
-	return alert.SavePosition(ctx, tx, source, p)
+	return reconcilePoolAlerts(ctx, tx, supplier, p, first)
 }
 
 func readSyncAlertEvents(ctx context.Context, tx pg.Tx, id uuid.UUID, version int64, p syncAlertPosition) ([]syncAlertEvent, error) {
@@ -216,6 +231,124 @@ func initializeSyncAlerts(ctx context.Context, tx pg.Tx, id uuid.UUID, state syn
 		return forwardSyncEvent(ctx, tx, id, syncAlertEvent{kind: "balance_low"}, state, p)
 	}
 	return nil
+}
+
+// reconcilePoolAlerts raises an alert for each group the projection now marks low and resolves those it no longer does.
+// The pool's reading is observed state written beside the groups, not a listing change, so the bridge compares the rows
+// with the set it last reported instead of consuming an event: a transition that happened while an older version was
+// consuming events is still seen, and a group that left the answer is resolved.
+func reconcilePoolAlerts(ctx context.Context, tx pg.Tx, id uuid.UUID, p *syncAlertPosition, first bool) error {
+	current, err := poolLowGroups(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	fire, resolve := poolChanges(current, p.PoolLow)
+	if !first && p.PoolLow == nil {
+		// The position was written by a version that did not keep this set (an older node): its consumer skipped the
+		// pool events, so close the alerts of every group the pool no longer calls low. It happens once per supplier
+		// after the upgrade, and once more if an older node writes the position again.
+		resting, err := poolRestingGroups(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		for _, ref := range resting {
+			resolve[ref] = true
+		}
+	}
+	for _, ref := range fire {
+		signal := alert.Signal{Kind: "suppliers.pool_capacity", Key: id.String() + "/" + ref, Severity: "warning", Fields: current[ref]}
+		if err = alert.Persist(ctx, tx, uuid.NewV7(), signal); err != nil {
+			return err
+		}
+	}
+	refs := make([]string, 0, len(resolve))
+	for ref := range resolve {
+		refs = append(refs, ref)
+	}
+	slices.Sort(refs)
+	for _, ref := range refs {
+		signal := alert.Signal{Kind: "suppliers.pool_capacity", Key: id.String() + "/" + ref, Severity: "warning", Resolved: true}
+		if err = alert.Persist(ctx, tx, uuid.NewV7(), signal); err != nil {
+			return err
+		}
+	}
+	low := make([]string, 0, len(current))
+	for ref := range current {
+		low = append(low, ref)
+	}
+	slices.Sort(low)
+	p.PoolLow = low
+	return nil
+}
+
+// poolChanges is the groups to raise and to resolve: those low now that were not reported, and those reported that are
+// low no longer.
+func poolChanges(current map[string]map[string]string, reportedLow []string) ([]string, map[string]bool) {
+	reported := make(map[string]bool, len(reportedLow))
+	for _, ref := range reportedLow {
+		reported[ref] = true
+	}
+	var fire []string
+	resolve := map[string]bool{}
+	for ref := range current {
+		if !reported[ref] {
+			fire = append(fire, ref)
+		}
+	}
+	for ref := range reported {
+		if _, ok := current[ref]; !ok {
+			resolve[ref] = true
+		}
+	}
+	slices.Sort(fire)
+	return fire, resolve
+}
+
+// poolLowGroups is the groups the projection marks low, with the numbers to show. Their counts are set: the row's check
+// allows all or none of the pool columns.
+func poolLowGroups(ctx context.Context, tx pg.Tx, id uuid.UUID) (map[string]map[string]string, error) {
+	rows, err := tx.Query(ctx, `SELECT upstream_ref, pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity
+FROM suppliers.supplier_groups WHERE supplier_id=$1 AND pool_low ORDER BY upstream_ref`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]map[string]string{}
+	for rows.Next() {
+		var ref string
+		var accounts, failed, usable, headroom, capacity *int32
+		if err = rows.Scan(&ref, &accounts, &failed, &usable, &headroom, &capacity); err != nil {
+			return nil, err
+		}
+		fields := map[string]string{"accounts": fmt.Sprint(*accounts), "failed": fmt.Sprint(*failed), "usable": fmt.Sprint(*usable)}
+		if headroom != nil {
+			fields["headroom"] = fmt.Sprint(*headroom)
+		}
+		if capacity != nil {
+			fields["capacity"] = fmt.Sprint(*capacity)
+		}
+		out[ref] = fields
+	}
+	return out, rows.Err()
+}
+
+// poolRestingGroups is the groups of the supplier the pool does not currently call low.
+func poolRestingGroups(ctx context.Context, tx pg.Tx, id uuid.UUID) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT upstream_ref FROM suppliers.supplier_groups
+WHERE supplier_id=$1 AND NOT coalesce(pool_low, false) ORDER BY upstream_ref`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []string
+	for rows.Next() {
+		var ref string
+		if err = rows.Scan(&ref); err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
 }
 
 func emitSupplierAvailability(ctx context.Context, tx pg.Tx, now time.Time) error {

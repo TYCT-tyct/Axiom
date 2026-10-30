@@ -4,124 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"axiom/internal/platform/secret"
 )
-
-// fakeS3 is the smallest S3 the client's tests need: one bucket, PUT/GET/HEAD/DELETE, a two-page listing, and switches
-// for the failures a test wants the client to meet.
-type fakeS3 struct {
-	mu        sync.Mutex
-	objects   map[string][]byte
-	paths     []string
-	failures  int  // answer 503 this many times, then behave
-	forbidden bool // answer 403
-	redirect  bool // answer 307
-}
-
-// writeTest is a test handler's write: the client on the other end failing is the test's own failure to report.
-func writeTest(w io.Writer, value string) {
-	_, _ = io.WriteString(w, value) //nolint:errcheck // a test handler's write
-}
-
-func newFakeS3() *fakeS3 { return &fakeS3{objects: map[string][]byte{}} }
-
-// seen copies the paths the server answered, under its lock, so a test reads no field the handler is writing.
-func (f *fakeS3) seen() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.paths...)
-}
-
-func (f *fakeS3) body(key string) string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return string(f.objects[key])
-}
-
-//nolint:cyclop // a tiny S3 double: one branch per method and failure switch
-func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.paths = append(f.paths, r.URL.EscapedPath()+"?"+r.URL.RawQuery)
-	switch {
-	case f.failures > 0:
-		f.failures--
-		w.Header().Set("Retry-After", "0")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
-	case f.forbidden:
-		w.WriteHeader(http.StatusForbidden)
-		return
-	case f.redirect:
-		w.Header().Set("Location", "http://example.invalid/elsewhere")
-		w.WriteHeader(http.StatusTemporaryRedirect)
-		return
-	}
-	key := strings.TrimPrefix(r.URL.Path, "/axiom")
-	key = strings.TrimPrefix(key, "/")
-	if key == "" && r.Method == http.MethodHead {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	if r.URL.Query().Get("list-type") == "2" {
-		f.list(w, r)
-		return
-	}
-	switch r.Method {
-	case http.MethodPut:
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		f.objects[key] = body
-		w.Header().Set("ETag", `"`+sumHex(body)+`"`)
-		w.WriteHeader(http.StatusOK)
-	case http.MethodGet, http.MethodHead:
-		body, ok := f.objects[key]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			writeTest(w, `<Error><Code>NoSuchKey</Code><Message>missing</Message><RequestId>r1</RequestId></Error>`)
-			return
-		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("ETag", `"`+sumHex(body)+`"`)
-		w.Header().Set("Last-Modified", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).Format(http.TimeFormat))
-		if r.Method == http.MethodGet {
-			writeTest(w, string(body))
-		}
-	case http.MethodDelete:
-		delete(f.objects, key)
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
-}
-
-func (*fakeS3) list(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("continuation-token") == "" {
-		writeTest(w, `<?xml version="1.0" encoding="UTF-8"?>
-<ListBucketResult><Name>axiom</Name><IsTruncated>true</IsTruncated>
-<NextContinuationToken>page2</NextContinuationToken>
-<Contents><Key>a.txt</Key><Size>3</Size><ETag>"x"</ETag><LastModified>2026-01-02T03:04:05Z</LastModified></Contents>
-</ListBucketResult>`)
-		return
-	}
-	writeTest(w, `<?xml version="1.0" encoding="UTF-8"?>
-<ListBucketResult><Name>axiom</Name><IsTruncated>false</IsTruncated>
-<Contents><Key>b.txt</Key><Size>4</Size><ETag>"y"</ETag><LastModified>2026-01-02T03:04:06Z</LastModified></Contents>
-</ListBucketResult>`)
-}
 
 func newTestClient(t *testing.T, handler http.Handler) *Client {
 	t.Helper()
@@ -199,6 +90,7 @@ func TestEveryOperationNeedsADeadline(t *testing.T) {
 //nolint:cyclop // one object through every verb is the point of the test
 func TestRoundTrip(t *testing.T) {
 	fake := newFakeS3()
+	fake.bucket = true
 	client := newTestClient(t, fake)
 	ctx := deadline(t)
 
@@ -398,11 +290,73 @@ func TestUnsafeKeysAreRefused(t *testing.T) {
 	}
 }
 
-func TestPutRefusesAnObjectOverTheSinglePutLimit(t *testing.T) {
+func TestPutRefusesAnObjectOverTheObjectLimit(t *testing.T) {
 	client := newTestClient(t, newFakeS3())
 	_, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("v"), Size: maxObjectSize + 1})
-	if err == nil {
-		t.Fatal("a body over the single PUT limit was accepted")
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+}
+
+func TestCreateBucketIsIdempotent(t *testing.T) {
+	fake := newFakeS3()
+	client := newTestClient(t, fake)
+	created, err := client.Create(deadline(t), false)
+	if err != nil || !created {
+		t.Fatalf("Create = %v, %v; want a new bucket", created, err)
+	}
+	if _, err := client.Create(deadline(t), false); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("Create on an existing bucket without consent = %v, want a refusal", err)
+	}
+	created, err = client.Create(deadline(t), true)
+	if err != nil || created {
+		t.Fatalf("Create on an existing bucket = %v, %v; want false, nil", created, err)
+	}
+	if got := fake.createdCount(); got != 1 {
+		t.Fatalf("created %d times, want one PUT and a HEAD on the second call", got)
+	}
+}
+
+func TestCreateAcceptsAnOwnedBucketFromTheConflictCode(t *testing.T) {
+	fake := newFakeS3()
+	fake.bucket = true
+	fake.headMissing = true // HEAD lost a race with the bucket's creation; the PUT sees it
+	client := newTestClient(t, fake)
+	created, err := client.Create(deadline(t), true)
+	if err != nil || created {
+		t.Fatalf("Create on a bucket owned by these credentials = %v, %v; want false, nil", created, err)
+	}
+	if got := fake.createdCount(); got != 1 {
+		t.Fatalf("created %d times, want one PUT", got)
+	}
+}
+
+func TestCreateRejectsABucketAnotherOwnerHas(t *testing.T) {
+	fake := newFakeS3()
+	fake.bucket = true
+	fake.headMissing = true // the PUT is the only place the conflict code is visible
+	fake.bucketConflict = "BucketAlreadyExists"
+	client := newTestClient(t, fake)
+	_, err := client.Create(deadline(t), false)
+	if err == nil || !strings.Contains(err.Error(), "BucketAlreadyExists") {
+		t.Fatalf("Create on another owner's bucket = %v, want the conflict refused", err)
+	}
+}
+
+func TestCreateSendsTheRegionOutsideUsEast(t *testing.T) {
+	fake := newFakeS3()
+	client := newTestClient(t, fake)
+	client.region = "eu-west-1"
+	created, err := client.Create(deadline(t), false)
+	if err != nil || !created {
+		t.Fatalf("Create = %v, %v; want a new bucket", created, err)
+	}
+	body := fake.creationBody()
+	if !strings.Contains(body, "<LocationConstraint>eu-west-1</LocationConstraint>") {
+		t.Fatalf("create body = %q, want the region's LocationConstraint", body)
+	}
+	if !strings.Contains(body, `xmlns="http://s3.amazonaws.com/doc/2006-03-01/"`) {
+		t.Fatalf("create body = %q, want the S3 namespace", body)
 	}
 }
 
