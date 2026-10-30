@@ -128,7 +128,8 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 	body := adminapi.AccountDetail{
 		Id: account.ID.TypeID(), SiteId: account.Site.TypeID(), Name: account.Name, Kind: adminapi.AccountDetailKind(account.Kind),
 		Status: adminapi.AccountDetailStatus(account.Status), Tier: tierRef(account.Tier), Balance: balanceBody(balance, currency),
-		CallsSuspended: new(account.Status == "disabled"), KeyLimits: limits, CreatedAt: account.CreatedAt,
+		CallsSuspended: new(account.Status == "disabled"), SignInDisabled: new(account.Owner.SignInDisabled),
+		KeyLimits: limits, CreatedAt: account.CreatedAt,
 	}
 	body.Owner.Id, body.Owner.Email = account.Owner.ID.TypeID(), account.Owner.Email
 	return adminapi.GetAccount200JSONResponse(body), nil

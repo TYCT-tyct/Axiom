@@ -1,3 +1,5 @@
+import audit from "./audit";
+import calls from "./calls";
 import mappings from "./mappings";
 import models from "./models";
 import pricing from "./pricing";
@@ -11,12 +13,16 @@ export default {
   forbiddenHint: "请联系站长授予权限。",
   nav: {
     users: "用户",
+    calls: "调用记录",
+    audit: "审计日志",
     suppliers: "供应商",
     mappings: "待映射模型",
     models: "模型目录",
     pricing: "定价",
     settings: "站点设置",
   },
+  calls,
+  audit,
   signIn: { description: "管理后台只对运营人员开放，登录后还要完成两步验证。" },
   home: { noAccessTitle: "还没有可用的页面", noAccessBody: "你的账户没有任何管理权限。请联系负责人授权。" },
   filter: { apply: "筛选", reset: "清除" },

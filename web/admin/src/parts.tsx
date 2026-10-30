@@ -2,6 +2,9 @@ import { can, readForm, useSession } from "@axiom/app";
 import { Badge, Button, Icon, Panel, SelectField, Th, useFormat } from "@axiom/ui";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { formatJSON } from "./lossless";
+
+export { toInstant, toLocalInput } from "@axiom/app";
 
 // PageBody is the area under a page's header; the pages of the admin are all lists, cards and tables in a column.
 export function PageBody({ children }: { children: ReactNode }) {
@@ -39,6 +42,14 @@ export function Time({ at }: { at: string | undefined }) {
 // Code is an identifier or a name the system gives, in the monospaced face; it may be long, so it wraps anywhere.
 export function Code({ children }: { children: ReactNode }) {
   return <span className="font-mono text-label [overflow-wrap:anywhere]">{children}</span>;
+}
+
+// Json keeps a record's shape: the route of a call and an audit entry's detail are nested and meant to be read as they
+// were written, not flattened into one line.
+export function Json({ value }: { value: unknown }) {
+  return (
+    <pre className="max-h-96 overflow-auto rounded-md bg-s2 p-3 font-mono text-label text-t2">{formatJSON(value)}</pre>
+  );
 }
 
 // A state in words with an icon: the tone says how much attention it needs, never alone.
