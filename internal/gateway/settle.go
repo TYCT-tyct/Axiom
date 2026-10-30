@@ -107,7 +107,15 @@ func runCompletionBatch(ctx context.Context, batch []*gateItem, run func(context
 		if !errors.As(err, &failed) || failed.Index < 0 || failed.Index >= len(pending) {
 			return err
 		}
-		items[pending[failed.Index]].gate.err = failed.Err
+		failedItem := &items[pending[failed.Index]].gate
+		failedItem.err = failed.Err
+		if !failedItem.closed {
+			// Return the failed request before retrying the others: an extension's landing and cancel must not wait
+			// for a slow settlement or extension in the rest of the batch. This runs after the rollback, so the
+			// failed request has no committed write.
+			failedItem.closed = true
+			close(failedItem.done)
+		}
 		pending = append(pending[:failed.Index], pending[failed.Index+1:]...)
 		if len(pending) == 0 {
 			return nil

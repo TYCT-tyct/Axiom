@@ -29,6 +29,7 @@ type gateItem struct {
 	done     chan struct{}
 	err      error
 	panicked any
+	closed   bool
 	taken    bool
 	elem     *list.Element
 	queue    *accountQueue
@@ -324,9 +325,13 @@ func batchContext(batch []*gateItem, class Class, budget time.Duration) (context
 // batch's error covers the rest, so a failure before a request's work never leaves that request waiting.
 func (f *Funds) finish(batch []*gateItem, err error) {
 	for _, item := range batch {
+		if item.closed {
+			continue
+		}
 		if item.err == nil {
 			item.err = err
 		}
+		item.closed = true
 		close(item.done)
 	}
 }

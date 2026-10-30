@@ -376,31 +376,42 @@ func testOneCompletionFailure(t *testing.T, fail error) {
 		first := &Call{ID: h.call.ID, Admitted: h.call.Admitted, caller: h.call.caller}
 		second := &Call{ID: uuid.New(), Admitted: h.call.Admitted, caller: h.call.caller}
 		var ran, reported bool
-		done := make(chan error, 2)
+		firstDone := make(chan error, 1)
+		secondStarted, releaseSecond := make(chan struct{}), make(chan struct{})
+		secondDone := make(chan error, 1)
 		go func() {
-			done <- h.exec.withFunds(ctx, first, func(context.Context, pg.Tx) (func(), error) {
+			firstDone <- h.exec.withFunds(ctx, first, func(context.Context, pg.Tx) (func(), error) {
 				return nil, fail
 			})
 		}()
+		synctest.Wait()
 		go func() {
-			done <- h.exec.withFunds(ctx, second, func(context.Context, pg.Tx) (func(), error) {
+			secondDone <- h.exec.withFunds(ctx, second, func(context.Context, pg.Tx) (func(), error) {
+				close(secondStarted)
+				<-releaseSecond
 				ran = true
 				return func() { reported = true }, nil
 			})
 		}()
 		synctest.Wait()
 		release()
-		errs := []error{<-done, <-done}
-		failed, granted := 0, 0
-		for _, err := range errs {
-			if errors.Is(err, fail) {
-				failed++
-			} else if err == nil {
-				granted++
-			}
+		<-secondStarted
+		synctest.Wait()
+		var firstErr error
+		select {
+		case firstErr = <-firstDone:
+		default:
+			close(releaseSecond)
+			t.Fatal("the failed request waited for the retry of the rest of the batch")
 		}
-		if failed != 1 || granted != 1 || !ran || !reported {
-			t.Fatalf("errors %v, ran=%v reported=%v; want one failure, one success and its report", errs, ran, reported)
+		if !errors.Is(firstErr, fail) {
+			close(releaseSecond)
+			t.Fatalf("failed request got %v, want %v", firstErr, fail)
+		}
+		close(releaseSecond)
+		secondErr := <-secondDone
+		if secondErr != nil || !ran || !reported {
+			t.Fatalf("second request got %v, ran=%v reported=%v; want success and its report", secondErr, ran, reported)
 		}
 	})
 }
