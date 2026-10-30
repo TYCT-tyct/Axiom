@@ -43,28 +43,41 @@ func (s *commandStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/axiom"), "/")
-	if r.Method == http.MethodHead && key == "" {
-		if !s.bucket {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
+	switch {
+	case key == "" && r.Method == http.MethodHead:
+		s.headBucket(w)
+	case key == "" && r.Method == http.MethodPut:
+		s.createBucket(w)
+	case r.URL.Query().Get("list-type") == "2":
+		s.list(w)
+	default:
+		s.object(w, r, key)
+	}
+}
+
+func (s *commandStore) headBucket(w http.ResponseWriter) {
+	if !s.bucket {
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	if r.Method == http.MethodPut && key == "" {
-		s.created++
-		s.bucket = true
-		w.WriteHeader(http.StatusOK)
-		return
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *commandStore) createBucket(w http.ResponseWriter) {
+	s.created++
+	s.bucket = true
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *commandStore) list(w http.ResponseWriter) {
+	writeTest(w, `<ListBucketResult><IsTruncated>false</IsTruncated>`)
+	for name, body := range s.objects {
+		writeTest(w, "<Contents><Key>"+name+"</Key><Size>"+strconv.Itoa(len(body))+"</Size><ETag>\"e\"</ETag><LastModified>2026-01-02T03:04:05Z</LastModified></Contents>")
 	}
-	if r.URL.Query().Get("list-type") == "2" {
-		writeTest(w, `<ListBucketResult><IsTruncated>false</IsTruncated>`)
-		for name, body := range s.objects {
-			writeTest(w, "<Contents><Key>"+name+"</Key><Size>"+strconv.Itoa(len(body))+"</Size><ETag>\"e\"</ETag><LastModified>2026-01-02T03:04:05Z</LastModified></Contents>")
-		}
-		writeTest(w, `</ListBucketResult>`)
-		return
-	}
+	writeTest(w, `</ListBucketResult>`)
+}
+
+func (s *commandStore) object(w http.ResponseWriter, r *http.Request, key string) {
 	switch r.Method {
 	case http.MethodPut:
 		body, err := io.ReadAll(r.Body)
@@ -75,22 +88,26 @@ func (s *commandStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.objects[key] = body
 		w.Header().Set("ETag", `"e"`)
 	case http.MethodGet, http.MethodHead:
-		body, ok := s.objects[key]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			writeTest(w, `<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>`)
-			return
-		}
-		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-		w.Header().Set("ETag", `"e"`)
-		if r.Method == http.MethodGet {
-			writeTest(w, string(body))
-		}
+		s.readObject(w, r, key)
 	case http.MethodDelete:
 		delete(s.objects, key)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *commandStore) readObject(w http.ResponseWriter, r *http.Request, key string) {
+	body, ok := s.objects[key]
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		writeTest(w, `<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>`)
+		return
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.Header().Set("ETag", `"e"`)
+	if r.Method == http.MethodGet {
+		writeTest(w, string(body))
 	}
 }
 
@@ -121,15 +138,16 @@ type recordingGetter struct {
 func (g *recordingGetter) Get(ctx context.Context, key string) (*objectstore.Object, error) {
 	g.deadline, g.has = ctx.Deadline()
 	return &objectstore.Object{
-		ObjectInfo: objectstore.ObjectInfo{Key: key, Size: 1, ETag: `"e"`},
-		Body:       io.NopCloser(strings.NewReader("x")),
+		Key:  key,
+		Size: 1,
+		ETag: `"e"`,
+		Body: io.NopCloser(strings.NewReader("x")),
 	}, nil
 }
 
-func TestObjectstoreTransfersUseTheTimeout(t *testing.T) {
+func TestObjectstorePutUsesTheTransferTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		dir := t.TempDir()
-		upload := filepath.Join(dir, "upload.bin")
+		upload := filepath.Join(t.TempDir(), "upload.bin")
 		if err := os.WriteFile(upload, []byte("payload"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -137,20 +155,30 @@ func TestObjectstoreTransfersUseTheTimeout(t *testing.T) {
 		if err := putObject(t.Context(), putter, "p", upload, "", 2*time.Hour, io.Discard); err != nil {
 			t.Fatalf("put: %v", err)
 		}
-		if !putter.has || putter.deadline.Sub(time.Now()) != 2*time.Hour {
+		if !putter.has || time.Until(putter.deadline) != 2*time.Hour {
 			t.Fatalf("put deadline = %v, want 2h from now", putter.deadline)
 		}
+	})
+}
+
+func TestObjectstoreGetUsesTheTransferTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dest := filepath.Join(t.TempDir(), "downloaded")
 		getter := &recordingGetter{}
-		dest := filepath.Join(dir, "downloaded")
 		if err := getObject(t.Context(), getter, "g", dest, 2*time.Hour, io.Discard); err != nil {
 			t.Fatalf("get: %v", err)
 		}
-		if !getter.has || getter.deadline.Sub(time.Now()) != 2*time.Hour {
+		if !getter.has || time.Until(getter.deadline) != 2*time.Hour {
 			t.Fatalf("get deadline = %v, want 2h from now", getter.deadline)
 		}
-		if got, err := os.ReadFile(dest); err != nil || string(got) != "x" {
+		if got, err := os.ReadFile(dest); err != nil || string(got) != "x" { //nolint:gosec // a path this test wrote under t.TempDir()
 			t.Fatalf("downloaded %q, %v", got, err)
 		}
+	})
+}
+
+func TestTransferContextCarriesItsDeadlineAndCancels(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := transferContext(t.Context(), time.Hour)
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("transferContext made no deadline")
@@ -256,12 +284,17 @@ func TestObjectstoreCommandCreatesListsNamesAndDeletesAPrefix(t *testing.T) {
 	if got := run("list", "--names", "--prefix", "sets/"); got != "" {
 		t.Fatalf("list after delete printed %q", got)
 	}
+}
+
+func TestObjectstoreCommandRejectsAnIncompleteDelete(t *testing.T) {
+	store := &commandStore{objects: map[string][]byte{}, bucket: true}
+	server := httptest.NewServer(store)
+	defer server.Close()
 	for _, args := range [][]string{
 		{"delete"},
 		{"delete", "--key", "k", "--prefix", "p/"},
 	} {
-		var out bytes.Buffer
-		if err := objectstoreCommand(t.Context(), environ, args, &out); err == nil {
+		if err := objectstoreCommand(t.Context(), commandEnv(server.URL), args, io.Discard); err == nil {
 			t.Fatalf("objectstore %v was accepted", args)
 		}
 	}

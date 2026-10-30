@@ -70,92 +70,116 @@ func objectstoreCommand(ctx context.Context, environ, args []string, out io.Writ
 	return runObjectstoreVerb(ctx, client, cfg.Bucket, verb, args[1:], out)
 }
 
-// runObjectstoreVerb parses one verb's flags and runs it; the client and the configuration are already checked.
-//
-//nolint:cyclop // one branch per verb: this is the command's whole surface
-func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket, verb string, args []string, out io.Writer) error {
-	var key, file, prefix, contentType string
-	var names, allowExisting bool
-	timeout := objectstoreTransferTimeout
+// objectstoreFlags is one verb's arguments after its flags are parsed.
+type objectstoreFlags struct {
+	key, file, prefix, contentType string
+	names, allowExisting           bool
+	timeout                        time.Duration
+}
+
+// parseObjectstoreVerb registers the verb's own flags and parses them, so each verb refuses the others'.
+func parseObjectstoreVerb(verb string, args []string) (objectstoreFlags, error) {
+	parsed := objectstoreFlags{timeout: objectstoreTransferTimeout}
 	err := flags("objectstore "+verb, objectstoreUsage, args, func(set *flag.FlagSet) {
 		switch verb {
 		case "create":
-			set.BoolVar(&allowExisting, "allow-existing", false, "succeed when the bucket already exists")
+			set.BoolVar(&parsed.allowExisting, "allow-existing", false, "succeed when the bucket already exists")
 		case "put":
-			set.StringVar(&key, "key", "", "the object key to write")
-			set.StringVar(&file, "file", "", "the file to upload")
-			set.StringVar(&contentType, "content-type", "", "the object's content type; default application/octet-stream")
-			set.DurationVar(&timeout, "timeout", objectstoreTransferTimeout, "how long the whole transfer may take; e.g. 12h")
+			set.StringVar(&parsed.key, "key", "", "the object key to write")
+			set.StringVar(&parsed.file, "file", "", "the file to upload")
+			set.StringVar(&parsed.contentType, "content-type", "", "the object's content type; default application/octet-stream")
+			set.DurationVar(&parsed.timeout, "timeout", objectstoreTransferTimeout, "how long the whole transfer may take; e.g. 12h")
 		case "get":
-			set.StringVar(&key, "key", "", "the object key")
-			set.StringVar(&file, "file", "", "where to write the object")
-			set.DurationVar(&timeout, "timeout", objectstoreTransferTimeout, "how long the whole transfer may take; e.g. 12h")
+			set.StringVar(&parsed.key, "key", "", "the object key")
+			set.StringVar(&parsed.file, "file", "", "where to write the object")
+			set.DurationVar(&parsed.timeout, "timeout", objectstoreTransferTimeout, "how long the whole transfer may take; e.g. 12h")
 		case "delete":
-			set.StringVar(&key, "key", "", "the object key")
-			set.StringVar(&prefix, "prefix", "", "every object under this prefix")
+			set.StringVar(&parsed.key, "key", "", "the object key")
+			set.StringVar(&parsed.prefix, "prefix", "", "every object under this prefix")
 		case "list":
-			set.StringVar(&prefix, "prefix", "", "only keys under this prefix")
-			set.BoolVar(&names, "names", false, "print keys alone, one per line, for a shell")
+			set.StringVar(&parsed.prefix, "prefix", "", "only keys under this prefix")
+			set.BoolVar(&parsed.names, "names", false, "print keys alone, one per line, for a shell")
 		}
 	})
+	return parsed, err
+}
+
+// runObjectstoreVerb parses one verb's flags and runs it; the client and the configuration are already checked.
+func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket, verb string, args []string, out io.Writer) error {
+	parsed, err := parseObjectstoreVerb(verb, args)
 	if err != nil {
 		return err
 	}
 	switch verb {
 	case "create":
-		ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
-		defer cancel()
-		created, err := client.Create(ctx, allowExisting)
-		if err != nil {
-			return err
-		}
-		if !created && !allowExisting {
-			return fmt.Errorf("objectstore: bucket %q already exists; run check, or create --allow-existing if you own it", bucket)
-		}
-		return writeLine(out, map[string]any{"kind": "objectstore", "bucket": bucket, "created": created})
+		return createBucket(ctx, client, bucket, parsed.allowExisting, out)
 	case "check":
-		ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
-		defer cancel()
-		if err := client.Check(ctx); err != nil {
-			return err
-		}
-		return writeLine(out, map[string]any{"kind": "objectstore", "bucket": bucket, "checked": true})
+		return checkBucket(ctx, client, bucket, out)
 	case "list":
 		ctx, cancel := context.WithTimeout(ctx, objectstoreMoveTimeout)
 		defer cancel()
-		return listObjects(ctx, client, prefix, names, out)
+		return listObjects(ctx, client, parsed.prefix, parsed.names, out)
 	case "put":
-		if timeout <= 0 {
+		if parsed.timeout <= 0 {
 			return errors.New("objectstore put: --timeout must be positive")
 		}
-		return putObject(ctx, client, key, file, contentType, timeout, out)
+		return putObject(ctx, client, parsed.key, parsed.file, parsed.contentType, parsed.timeout, out)
 	case "get":
-		if timeout <= 0 {
+		if parsed.timeout <= 0 {
 			return errors.New("objectstore get: --timeout must be positive")
 		}
-		return getObject(ctx, client, key, file, timeout, out)
+		return getObject(ctx, client, parsed.key, parsed.file, parsed.timeout, out)
 	default:
-		switch {
-		case key != "" && prefix != "":
-			return errors.New("objectstore delete: give --key or --prefix, not both\n" + objectstoreUsage)
-		case prefix != "":
-			ctx, cancel := context.WithTimeout(ctx, objectstoreMoveTimeout)
-			defer cancel()
-			deleted, err := deletePrefix(ctx, client, prefix)
-			if err != nil {
-				return err
-			}
-			return writeLine(out, map[string]any{"kind": "objectstore", "prefix": prefix, "deleted": deleted})
-		case key != "":
-			ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
-			defer cancel()
-			if err := client.Delete(ctx, key); err != nil {
-				return err
-			}
-			return writeLine(out, map[string]any{"kind": "objectstore", "key": key, "deleted": true})
-		default:
-			return errors.New("objectstore delete: --key or --prefix is required\n" + objectstoreUsage)
+		return deleteObject(ctx, client, parsed.key, parsed.prefix, out)
+	}
+}
+
+// createBucket is the one verb that may write to the bucket's own configuration; a bucket that exists without the
+// operator saying they own it is refused, because a HEAD cannot prove ownership (Client.Create).
+func createBucket(ctx context.Context, client *objectstore.Client, bucket string, allowExisting bool, out io.Writer) error {
+	ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
+	defer cancel()
+	created, err := client.Create(ctx, allowExisting)
+	if err != nil {
+		return err
+	}
+	if !created && !allowExisting {
+		return fmt.Errorf("objectstore: bucket %q already exists; run check, or create --allow-existing if you own it", bucket)
+	}
+	return writeLine(out, map[string]any{"kind": "objectstore", "bucket": bucket, "created": created})
+}
+
+func checkBucket(ctx context.Context, client *objectstore.Client, bucket string, out io.Writer) error {
+	ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
+	defer cancel()
+	if err := client.Check(ctx); err != nil {
+		return err
+	}
+	return writeLine(out, map[string]any{"kind": "objectstore", "bucket": bucket, "checked": true})
+}
+
+// deleteObject removes one key or every key under a prefix; the caller gives one and not the other.
+func deleteObject(ctx context.Context, client *objectstore.Client, key, prefix string, out io.Writer) error {
+	switch {
+	case key != "" && prefix != "":
+		return errors.New("objectstore delete: give --key or --prefix, not both\n" + objectstoreUsage)
+	case prefix != "":
+		ctx, cancel := context.WithTimeout(ctx, objectstoreMoveTimeout)
+		defer cancel()
+		deleted, err := deletePrefix(ctx, client, prefix)
+		if err != nil {
+			return err
 		}
+		return writeLine(out, map[string]any{"kind": "objectstore", "prefix": prefix, "deleted": deleted})
+	case key != "":
+		ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
+		defer cancel()
+		if err := client.Delete(ctx, key); err != nil {
+			return err
+		}
+		return writeLine(out, map[string]any{"kind": "objectstore", "key": key, "deleted": true})
+	default:
+		return errors.New("objectstore delete: --key or --prefix is required\n" + objectstoreUsage)
 	}
 }
 
@@ -194,16 +218,7 @@ func listObjects(ctx context.Context, client *objectstore.Client, prefix string,
 			return err
 		}
 		for _, object := range page.Objects {
-			if names {
-				if _, err := fmt.Fprintln(out, object.Key); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := writeLine(out, map[string]any{
-				"kind": "objectstore", "key": object.Key, "size": object.Size,
-				"modified": object.LastModified, "etag": object.ETag,
-			}); err != nil {
+			if err := writeObject(out, object, names); err != nil {
 				return err
 			}
 		}
@@ -212,6 +227,18 @@ func listObjects(ctx context.Context, client *objectstore.Client, prefix string,
 		}
 		token = page.NextToken
 	}
+}
+
+// writeObject prints one listed object: its key alone for a shell, or the line a person reads.
+func writeObject(out io.Writer, object objectstore.ObjectInfo, names bool) error {
+	if names {
+		_, err := fmt.Fprintln(out, object.Key)
+		return err
+	}
+	return writeLine(out, map[string]any{
+		"kind": "objectstore", "key": object.Key, "size": object.Size,
+		"modified": object.LastModified, "etag": object.ETag,
+	})
 }
 
 func putObject(ctx context.Context, client objectPutter, key, path, contentType string, timeout time.Duration, out io.Writer) error {

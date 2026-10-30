@@ -222,20 +222,27 @@ func canonicalQuery(values url.Values) string {
 func remoteError(resp *http.Response) error {
 	data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	closeErr := resp.Body.Close()
+	remote := errorDocument(resp.StatusCode, data)
+	if remote == nil {
+		// An HTML error page from a proxy is still an Error with its status; a body that is not XML adds nothing.
+		remote = &Error{Status: resp.StatusCode}
+	}
+	remote.cause = errors.Join(readErr, closeErr)
+	return remote
+}
+
+// errorDocument parses an S3 Error document a caller already read, and returns nil when the body names no code.
+func errorDocument(status int, data []byte) *Error {
 	var remote struct {
 		Code      string `xml:"Code"`
 		Message   string `xml:"Message"`
 		RequestID string `xml:"RequestId"`
 	}
-	// An HTML error page from a proxy is still an Error with its status; a body that is not XML adds nothing.
-	_ = xml.Unmarshal(data, &remote) //nolint:errcheck // the status above is the answer when the body is not S3 XML
-	return &Error{
-		Status:    resp.StatusCode,
-		Code:      remote.Code,
-		Message:   remote.Message,
-		RequestID: remote.RequestID,
-		cause:     errors.Join(readErr, closeErr),
+	if xml.Unmarshal(data, &remote) == nil && remote.Code != "" {
+		return &Error{Status: status, Code: remote.Code, Message: remote.Message, RequestID: remote.RequestID}
 	}
+	// An HTML error page from a proxy, or XML that names no code, adds nothing beyond the status.
+	return nil
 }
 
 // statusError describes a retryable status before the response body is parsed; the last attempt is parsed instead.

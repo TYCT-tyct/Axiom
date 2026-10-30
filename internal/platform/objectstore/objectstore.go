@@ -157,33 +157,17 @@ func (c *Client) Check(ctx context.Context) error {
 func (c *Client) Create(ctx context.Context, allowExisting bool) (bool, error) {
 	if err := c.Check(ctx); err == nil {
 		if !allowExisting {
-			return false, fmt.Errorf("objectstore: create bucket %q: the bucket already exists; pass allowExisting only if you own it", c.bucket)
+			return false, c.bucketExists()
 		}
 		return false, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
 	}
-	body, contentType, err := createBucketBody(c.region)
+	put, err := c.createBucketPut(ctx)
 	if err != nil {
-		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+		return false, err
 	}
-	var reader *bytes.Reader
-	payloadHash, size := emptySHA256, int64(0)
-	if len(body) > 0 {
-		reader = bytes.NewReader(body)
-		hash, n, err := hashBody(ctx, reader, int64(len(body)))
-		if err != nil {
-			return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
-		}
-		payloadHash, size = hash, n
-	}
-	var bodyReader io.ReadSeeker
-	if reader != nil {
-		bodyReader = reader
-	}
-	resp, err := c.do(ctx, request{
-		method: http.MethodPut, body: bodyReader, size: size, contentType: contentType, payloadHash: payloadHash,
-	})
+	resp, err := c.do(ctx, put)
 	if err != nil {
 		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
 	}
@@ -192,24 +176,52 @@ func (c *Client) Create(ctx context.Context, allowExisting bool) (bool, error) {
 		return true, nil
 	}
 	if resp.StatusCode == http.StatusConflict {
-		data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		_ = resp.Body.Close() //nolint:errcheck // the body is already read; a close failure adds nothing
-		var remote struct {
-			Code      string `xml:"Code"`
-			Message   string `xml:"Message"`
-			RequestID string `xml:"RequestId"`
-		}
-		if xml.Unmarshal(data, &remote) == nil && remote.Code == "BucketAlreadyOwnedByYou" {
-			if !allowExisting {
-				return false, fmt.Errorf("objectstore: create bucket %q: the bucket already exists; pass allowExisting only if you own it", c.bucket)
-			}
-			return false, nil
-		}
-		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, &Error{
-			Status: resp.StatusCode, Code: remote.Code, Message: remote.Message, RequestID: remote.RequestID, cause: readErr,
-		})
+		return c.bucketConflict(resp, allowExisting)
 	}
 	return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, remoteError(resp))
+}
+
+// createBucketPut is the CreateBucket request: us-east-1 sends no body, every other region names itself in one.
+func (c *Client) createBucketPut(ctx context.Context) (request, error) {
+	body, contentType, err := createBucketBody(c.region)
+	if err != nil {
+		return request{}, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+	}
+	put := request{method: http.MethodPut, contentType: contentType, payloadHash: emptySHA256}
+	if len(body) == 0 {
+		return put, nil
+	}
+	reader := bytes.NewReader(body)
+	hash, size, err := hashBody(ctx, reader, int64(len(body)))
+	if err != nil {
+		return request{}, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+	}
+	put.body, put.size, put.payloadHash = reader, size, hash
+	return put, nil
+}
+
+// bucketConflict answers a 409 CreateBucket: S3 reports a bucket this account owns as BucketAlreadyOwnedByYou and
+// another account's as BucketAlreadyExists. The code decides, because a public list policy on another owner's bucket
+// also answers HEAD 200.
+func (c *Client) bucketConflict(resp *http.Response, allowExisting bool) (bool, error) {
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	_ = resp.Body.Close() //nolint:errcheck // the body is already read; a close failure adds nothing
+	remote := errorDocument(resp.StatusCode, data)
+	if remote != nil && remote.Code == "BucketAlreadyOwnedByYou" {
+		if !allowExisting {
+			return false, c.bucketExists()
+		}
+		return false, nil
+	}
+	if remote == nil {
+		remote = &Error{Status: resp.StatusCode}
+	}
+	remote.cause = readErr
+	return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, remote)
+}
+
+func (c *Client) bucketExists() error {
+	return fmt.Errorf("objectstore: create bucket %q: the bucket already exists; pass allowExisting only if you own it", c.bucket)
 }
 
 // createBucketBody is empty for us-east-1, where S3 rejects a LocationConstraint naming it; other regions need one.
