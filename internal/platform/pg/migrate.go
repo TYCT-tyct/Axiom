@@ -212,10 +212,22 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 		return err
 	})), connectTimeout})
 	defer db.Close()                                                         //nolint:errcheck // closing a pool whose work is done reports nothing worth acting on
-	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 5)) // goose retries every second, 5 times
+	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 5)) // retries every second, 5 times
 	if err != nil {
 		return err
 	}
+	// One session lock covers the whole run: the history check, each module's pending migrations and the record of what
+	// they applied. A second run cannot commit a migration between the check and the execution, so a history that
+	// disagrees with this program is refused before any of this run's migrations is applied.
+	lockConn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("connect to hold the migration lock: %w", redactConnect(MigrateDatabaseURLVar, err))
+	}
+	defer func() { _ = lockConn.Close() }() //nolint:errcheck // the connection ends with the run
+	if err := locker.SessionLock(ctx, lockConn); err != nil {
+		return fmt.Errorf("hold the migration lock: %w", err)
+	}
+	defer func() { _ = locker.SessionUnlock(context.WithoutCancel(ctx), lockConn) }() //nolint:errcheck // the session ends with the run
 	// Check every module's recorded history before any pending migration runs: a changed merged migration stops the run
 	// while the database is still at the versions the previous release left, not after a later migration committed.
 	checked, err := preflight(ctx, db, modules)
@@ -223,7 +235,7 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 		return err
 	}
 	for i, m := range modules {
-		if err := up(ctx, db, locker, m); err != nil {
+		if err := up(ctx, db, m); err != nil {
 			return fmt.Errorf("migrate %s: %w", m.Name, err)
 		}
 		// Platform's migrations include the one that creates the record table. Until it exists there is nothing to
@@ -288,8 +300,9 @@ func closeAdmin(ctx context.Context, conn *pgx.Conn) {
 	_ = conn.Close(closeCtx) //nolint:errcheck // the transaction already reported the outcome
 }
 
-// up applies one module's pending migrations, holding goose's session lock.
-func up(ctx context.Context, db *sql.DB, locker lock.SessionLocker, m Module) error {
+// up applies one module's pending migrations. The caller holds the migration lock for the whole run, so goose does not
+// take it again for each module.
+func up(ctx context.Context, db *sql.DB, m Module) error {
 	files, err := migrationChecksums(m)
 	if err != nil {
 		return err
@@ -308,7 +321,7 @@ func up(ctx context.Context, db *sql.DB, locker lock.SessionLocker, m Module) er
 	}
 	provider, err := goose.NewProvider("", db, m.Migrations,
 		goose.WithStore(&checksumStore{Store: store, module: m.Name, files: byVersion}),
-		goose.WithSessionLocker(locker), goose.WithDisableGlobalRegistry(true))
+		goose.WithDisableGlobalRegistry(true))
 	if err != nil {
 		return err
 	}

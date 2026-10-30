@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/pressly/goose/v3/lock"
 
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -69,6 +71,48 @@ func appliedVersion(t *testing.T, database pgtest.Database, module string) int64
 		t.Fatal(err)
 	}
 	return version
+}
+
+// relationExists reports whether a relation exists. It reads as the superuser, because the application has no access to
+// the module's schema.
+func relationExists(t *testing.T, database pgtest.Database, name string) bool {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context()) //nolint:errcheck // the test is over when it closes
+	var exists bool
+	if err := conn.QueryRow(t.Context(), "SELECT to_regclass($1) IS NOT NULL", name).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	return exists
+}
+
+// waitForLock waits until a session holds goose's migration lock.
+func waitForLock(t *testing.T, database pgtest.Database) {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context()) //nolint:errcheck // the test is over when it closes
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var held bool
+		if err := conn.QueryRow(t.Context(), `SELECT EXISTS (
+			SELECT FROM pg_locks WHERE locktype = 'advisory' AND granted AND classid = 0 AND objid = $1)`,
+			lock.DefaultLockID).Scan(&held); err != nil {
+			t.Fatal(err)
+		}
+		if held {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the migration lock was not held")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // TestMigrateRecordsEachAppliedMigrationsChecksum: every migration this program applies is recorded with the SHA-256 of
@@ -201,6 +245,39 @@ func TestAFailedNonTransactionalMigrationIsFrozenBeforeItRuns(t *testing.T) {
 	}
 	if got := appliedVersion(t, database, "quality"); got != 0 {
 		t.Errorf("the changed non-transactional migration ran (version %d)", got)
+	}
+}
+
+// TestASecondRunCannotApplyAfterTheHistoryChanged: the history check and every module's migrations run under one
+// session lock. A second run that starts while the first is migrating waits for the whole first run, sees the file the
+// first recorded and refuses it before applying a pending migration of its own. Were the check outside the lock, the
+// second run would pass it and apply its pending migration after the first committed.
+func TestASecondRunCannotApplyAfterTheHistoryChanged(t *testing.T) {
+	database := pgtest.New(t)
+	ctx := t.Context()
+	first := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_first.sql":  {Data: []byte(up + "SELECT pg_sleep(5);\nCREATE TABLE quality.first (id int);")},
+		"00002_second.sql": {Data: []byte(up + "CREATE TABLE quality.first_two (id int);")},
+	}}
+	second := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_first.sql": {Data: []byte(up + "SELECT pg_sleep(5);\nCREATE TABLE quality.first (id int);\n-- second run")},
+		"00003_third.sql": {Data: []byte(up + "CREATE TABLE quality.third (id int);")},
+	}}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- pg.Migrate(ctx, database.Migrator, first) }()
+	waitForLock(t, database)
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- pg.Migrate(ctx, database.Migrator, second) }()
+	if err := <-firstDone; err != nil {
+		t.Fatalf("the first run: %v", err)
+	}
+	err := <-secondDone
+	want := "quality migration 00001_first.sql changed after it was applied"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("the second run: %v, want %q", err, want)
+	}
+	if relationExists(t, database, "quality.third") {
+		t.Error("the second run applied its migration after the first run changed the module")
 	}
 }
 
