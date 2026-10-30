@@ -460,6 +460,78 @@ paths:
               schema: {$ref: "#/components/schemas/Session"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/sessions:
+    get:
+      operationId: listSessions
+      tags: [Session]
+      summary: The signed-in devices
+      description: >-
+        This user's live console sessions, newest first and at most 100, with when each was made and last used, the
+        network it was signed in from and a short client description. `current` marks the session of this request. The
+        network is the group the sign-in limits count (an IPv4 address as it is, an IPv6 allocation as its /64), and
+        `client` is derived from the stored User-Agent, which is not returned. A sign-in that still waits for its
+        second factor is not a signed-in device and is not listed; another surface's sessions (the admin's) and
+        sessions ended by a factor change are not listed either.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The signed-in devices.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    delete:
+      operationId: revokeOtherSessions
+      tags: [Session]
+      summary: End every other session
+      description: >-
+        Revokes all other console sessions of the user, pending sign-ins included, and leaves the session of this
+        request signed in. Returns how many ended. Another surface's sessions are not touched; replacing a factor
+        ends those. The change and its audit entry commit together.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The other sessions ended.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionRevocation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/sessions/{session_id}:
+    parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SessionId"}
+    delete:
+      operationId: revokeSession
+      tags: [Session]
+      summary: End one other session
+      description: >-
+        Revokes one console session of the user. The asking session is ended by `signOut`, not here, so it is not
+        found; neither is another user's, another surface's or one already ended. The change and its audit entry
+        commit together.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "204": {description: "Ended."}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/totp/setup:
     post:
       operationId: beginTotpSetup
@@ -508,6 +580,45 @@ paths:
       responses:
         "200":
           description: Enabled.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FactorChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/totp/replace:
+    post:
+      operationId: replaceTotp
+      tags: [Session]
+      summary: Replace two-step verification's secret
+      description: >-
+        Needs a session that passed two-step verification and proof of the factor being replaced: a current TOTP
+        code or an unused recovery code in `current_code`. It also needs a code from the new secret, taken from
+        `beginTotpSetup`, which stores nothing until this call. The old secret and every unused recovery code stop
+        working, the user's other sessions end, and this device gets a new `mfa` session as `FactorChange` describes,
+        all in one transaction with the audit entry. A factor that is not on is a 409; a user who lost both the
+        authenticator and the recovery codes is reset from the command line.
+
+
+        Limits: failed current or new codes count against the user's 10 an hour, like sign-in's second factor.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TotpReplaceRequest"}
+      responses:
+        "200":
+          description: Replaced.
           headers:
             Set-Cookie: {$ref: "#/components/headers/SetCookie"}
           content:
@@ -1610,6 +1721,37 @@ components:
             The permission names the session holds on its own scope (the user's account on the console, the platform
             on the admin), for showing or hiding what the user cannot do. The server decides again on every request.
           items: {type: string}
+    SessionList:
+      type: object
+      properties:
+        sessions:
+          type: array
+          description: Newest first, at most 100. A page that gets no `sessions` shows the list as unavailable.
+          items: {$ref: "#/components/schemas/SessionDevice"}
+    SessionDevice:
+      type: object
+      description: >-
+        One signed-in console session. Every field is optional so a page built before it reads an older node that does
+        not send it.
+      properties:
+        id: {$ref: "#/components/schemas/SessionId"}
+        current: {type: boolean, description: "Whether this is the session of the request."}
+        created_at: {type: string, format: date-time, description: "When the session was signed in."}
+        last_seen_at: {type: string, format: date-time, description: "When a request was last charged to it, accurate to about a minute."}
+        ip_group:
+          type: string
+          description: >-
+            The network the session was signed in from, grouped as the sign-in limits count it: an IPv4 address as it
+            is, an IPv6 allocation as its /64. Empty when no address was recorded.
+        client:
+          type: string
+          description: >-
+            A short browser and platform summary derived from the User-Agent recorded at sign-in, such as
+            `Chrome on macOS`, or `Unknown client`. The raw header is not returned.
+    SessionRevocation:
+      type: object
+      properties:
+        revoked: {type: integer, minimum: 0, description: "How many other sessions ended."}
     TotpSetup:
       type: object
       required: [secret, uri]
@@ -1622,6 +1764,19 @@ components:
       properties:
         secret: {type: string, maxLength: 128}
         password: {type: string, maxLength: 256, description: "The user's password, asked again."}
+        code: {type: string, pattern: '^[0-9]{6}$', description: "A code from the new secret."}
+    TotpReplaceRequest:
+      type: object
+      required: [secret, current_code, code]
+      properties:
+        secret: {type: string, maxLength: 128, description: "The new TOTP secret in base32, from `beginTotpSetup`."}
+        current_code:
+          type: string
+          minLength: 6
+          maxLength: 19
+          description: >-
+            Proof of the factor being replaced: a current TOTP code (6 digits) or an unused recovery code
+            (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server tells them apart by shape.
         code: {type: string, pattern: '^[0-9]{6}$', description: "A code from the new secret."}
     RecoveryCodesRequest:
       type: object
@@ -1699,6 +1854,7 @@ components:
           items: {$ref: "#/components/schemas/StatementRow"}
         next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     KeyId: {type: string, pattern: '^key_[0-9a-hjkmnp-tv-z]{26}$', description: "An API key's ID (TypeID)."}
+    SessionId: {type: string, pattern: '^sess_[0-9a-hjkmnp-tv-z]{26}$', description: "A session's ID (TypeID)."}
     WorkspaceId: {type: string, pattern: '^ws_[0-9a-hjkmnp-tv-z]{26}$', description: "A workspace's ID (TypeID)."}
     CallId:
       type: string

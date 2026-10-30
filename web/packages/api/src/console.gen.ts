@@ -242,6 +242,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The signed-in devices
+         * @description This user's live console sessions, newest first and at most 100, with when each was made and last used, the network it was signed in from and a short client description. `current` marks the session of this request. The network is the group the sign-in limits count (an IPv4 address as it is, an IPv6 allocation as its /64), and `client` is derived from the stored User-Agent, which is not returned. A sign-in that still waits for its second factor is not a signed-in device and is not listed; another surface's sessions (the admin's) and sessions ended by a factor change are not listed either.
+         */
+        get: operations["listSessions"];
+        put?: never;
+        post?: never;
+        /**
+         * End every other session
+         * @description Revokes all other console sessions of the user, pending sign-ins included, and leaves the session of this request signed in. Returns how many ended. Another surface's sessions are not touched; replacing a factor ends those. The change and its audit entry commit together.
+         */
+        delete: operations["revokeOtherSessions"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: components["schemas"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End one other session
+         * @description Revokes one console session of the user. The asking session is ended by `signOut`, not here, so it is not found; neither is another user's, another surface's or one already ended. The change and its audit entry commit together.
+         */
+        delete: operations["revokeSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/auth/totp/setup": {
         parameters: {
             query?: never;
@@ -278,6 +324,28 @@ export interface paths {
          *     Limits: failed codes count against the user's 10 an hour.
          */
         post: operations["confirmTotpSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/totp/replace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace two-step verification's secret
+         * @description Needs a session that passed two-step verification and proof of the factor being replaced: a current TOTP code or an unused recovery code in `current_code`. It also needs a code from the new secret, taken from `beginTotpSetup`, which stores nothing until this call. The old secret and every unused recovery code stop working, the user's other sessions end, and this device gets a new `mfa` session as `FactorChange` describes, all in one transaction with the audit entry. A factor that is not on is a 409; a user who lost both the authenticator and the recovery codes is reset from the command line.
+         *
+         *     Limits: failed current or new codes count against the user's 10 an hour, like sign-in's second factor.
+         */
+        post: operations["replaceTotp"];
         delete?: never;
         options?: never;
         head?: never;
@@ -866,6 +934,34 @@ export interface components {
             /** @description The permission names the session holds on its own scope (the user's account on the console, the platform on the admin), for showing or hiding what the user cannot do. The server decides again on every request. */
             permissions: string[];
         };
+        SessionList: {
+            /** @description Newest first, at most 100. A page that gets no `sessions` shows the list as unavailable. */
+            sessions?: components["schemas"]["SessionDevice"][];
+        };
+        /** @description One signed-in console session. Every field is optional so a page built before it reads an older node that does not send it. */
+        SessionDevice: {
+            id?: components["schemas"]["SessionId"];
+            /** @description Whether this is the session of the request. */
+            current?: boolean;
+            /**
+             * Format: date-time
+             * @description When the session was signed in.
+             */
+            created_at?: string;
+            /**
+             * Format: date-time
+             * @description When a request was last charged to it, accurate to about a minute.
+             */
+            last_seen_at?: string;
+            /** @description The network the session was signed in from, grouped as the sign-in limits count it: an IPv4 address as it is, an IPv6 allocation as its /64. Empty when no address was recorded. */
+            ip_group?: string;
+            /** @description A short browser and platform summary derived from the User-Agent recorded at sign-in, such as `Chrome on macOS`, or `Unknown client`. The raw header is not returned. */
+            client?: string;
+        };
+        SessionRevocation: {
+            /** @description How many other sessions ended. */
+            revoked?: number;
+        };
         TotpSetup: {
             /** @description The new TOTP secret in base32. Nothing is stored yet; confirmTotp sends it back. */
             secret: string;
@@ -876,6 +972,14 @@ export interface components {
             secret: string;
             /** @description The user's password, asked again. */
             password: string;
+            /** @description A code from the new secret. */
+            code: string;
+        };
+        TotpReplaceRequest: {
+            /** @description The new TOTP secret in base32, from `beginTotpSetup`. */
+            secret: string;
+            /** @description Proof of the factor being replaced: a current TOTP code (6 digits) or an unused recovery code (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server tells them apart by shape. */
+            current_code: string;
             /** @description A code from the new secret. */
             code: string;
         };
@@ -928,6 +1032,8 @@ export interface components {
         };
         /** @description An API key's ID (TypeID). */
         KeyId: string;
+        /** @description A session's ID (TypeID). */
+        SessionId: string;
         /** @description A workspace's ID (TypeID). */
         WorkspaceId: string;
         /** @description A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`. */
@@ -1772,6 +1878,76 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    listSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signed-in devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    revokeOtherSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The other sessions ended. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionRevocation"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    revokeSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: components["schemas"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ended. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
     beginTotpSetup: {
         parameters: {
             query?: never;
@@ -1809,6 +1985,37 @@ export interface operations {
         };
         responses: {
             /** @description Enabled. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FactorChange"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    replaceTotp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Replaced. */
             200: {
                 headers: {
                     "Set-Cookie": components["headers"]["SetCookie"];

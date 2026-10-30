@@ -184,3 +184,52 @@ func (c consoleAPI) RegenerateRecoveryCodes(ctx context.Context, request console
 		Body: consoleapi.FactorChange{CsrfToken: f.csrf, RecoveryCodes: f.codes}, Headers: consoleapi.RegenerateRecoveryCodes200ResponseHeaders{SetCookie: f.cookie},
 	}, nil
 }
+
+// ReplaceTotp replaces the second factor with proof of the current one; the old secret, old recovery codes and the
+// user's other sessions end.
+func (c consoleAPI) ReplaceTotp(ctx context.Context, request consoleapi.ReplaceTotpRequestObject) (consoleapi.ReplaceTotpResponseObject, error) {
+	f, err := c.sessions().replaceTOTP(ctx, callOf(ctx), request.Body.Secret, request.Body.CurrentCode, request.Body.Code)
+	if err != nil {
+		return nil, err
+	}
+	return consoleapi.ReplaceTotp200JSONResponse{
+		Body: consoleapi.FactorChange{CsrfToken: f.csrf, RecoveryCodes: f.codes}, Headers: consoleapi.ReplaceTotp200ResponseHeaders{SetCookie: f.cookie},
+	}, nil
+}
+
+// ListSessions tells the page which devices are signed in and marks this one.
+func (c consoleAPI) ListSessions(ctx context.Context, _ consoleapi.ListSessionsRequestObject) (consoleapi.ListSessionsResponseObject, error) {
+	devices, err := c.accounts.Sessions(ctx, callOf(ctx).principal)
+	if err != nil {
+		return nil, err
+	}
+	sessions := make([]consoleapi.SessionDevice, 0, len(devices))
+	for _, device := range devices {
+		id, current, createdAt, lastSeenAt, ipGroup, client := device.ID.TypeID(), device.Current, device.CreatedAt, device.LastSeenAt, device.IPGroup, device.Client
+		sessions = append(sessions, consoleapi.SessionDevice{
+			Id: &id, Current: &current, CreatedAt: &createdAt, LastSeenAt: &lastSeenAt, IpGroup: &ipGroup, Client: &client,
+		})
+	}
+	return consoleapi.ListSessions200JSONResponse(consoleapi.SessionList{Sessions: &sessions}), nil
+}
+
+// RevokeSession ends one other console session; a malformed or unknown ID is the same 404.
+func (c consoleAPI) RevokeSession(ctx context.Context, request consoleapi.RevokeSessionRequestObject) (consoleapi.RevokeSessionResponseObject, error) {
+	id, err := accounts.ParseSessionID(request.SessionId)
+	if err != nil {
+		return nil, accounts.ErrNotFound
+	}
+	if err := c.accounts.RevokeSession(ctx, callOf(ctx).principal, id); err != nil {
+		return nil, err
+	}
+	return consoleapi.RevokeSession204Response{}, nil
+}
+
+// RevokeOtherSessions ends every other console session and says how many, leaving this one signed in.
+func (c consoleAPI) RevokeOtherSessions(ctx context.Context, _ consoleapi.RevokeOtherSessionsRequestObject) (consoleapi.RevokeOtherSessionsResponseObject, error) {
+	revoked, err := c.accounts.RevokeOtherSessions(ctx, callOf(ctx).principal)
+	if err != nil {
+		return nil, err
+	}
+	return consoleapi.RevokeOtherSessions200JSONResponse(consoleapi.SessionRevocation{Revoked: &revoked}), nil
+}
