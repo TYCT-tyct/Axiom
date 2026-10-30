@@ -49,53 +49,101 @@ func TestCommandsUseTheConfiguredConnectionBudget(t *testing.T) {
 	}
 }
 
-// TestServeChecksTheConnectionBudget refuses an impossible reserve and starts with a smaller deployment budget.
+// TestServeChecksTheConnectionBudget refuses an impossible reserve, starts with a smaller deployment budget and
+// refuses a pool above this node's share of the database.
 func TestServeChecksTheConnectionBudget(t *testing.T) {
 	t.Parallel()
-	url := pgtest.New(t, modules()...).App
 	const reserve = 2
+	url, withPool := connectionBudgetFixture(t, reserve)
+	t.Run("reserve consumes the budget", func(t *testing.T) {
+		testReserveConsumesBudget(t, withPool(reserve), url)
+	})
+	t.Run("smaller than the default", func(t *testing.T) {
+		testSmallerPool(t, withPool(8), reserve)
+	})
+	t.Run("above the node's share", func(t *testing.T) {
+		testPoolAboveShare(t, url, withPool)
+	})
+}
+
+// connectionBudgetFixture is a real database and the environment of a one-node deployment whose pool spends the given
+// number of connections of its share.
+func connectionBudgetFixture(t *testing.T, reserve int) (string, func(int) []string) {
+	t.Helper()
+	url := pgtest.New(t, modules()...).App
 	base := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=5s", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
-		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DB_COMPLETION_RESERVE=2",
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), fmt.Sprintf("AXIOM_DB_COMPLETION_RESERVE=%d", reserve),
 	}
-	withPool := func(size int) []string {
+	return url, func(size int) []string {
 		return append(slices.Clone(base), fmt.Sprintf("AXIOM_DATABASE_URL=%s&pool_max_conns=%d", url, size))
 	}
+}
 
-	t.Run("reserve consumes the budget", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-		defer cancel()
-		err := serveForTest(ctx, withPool(reserve), slog.New(slog.DiscardHandler))
-		if err == nil {
-			t.Fatal("the node started without ordinary connections")
+func testReserveConsumesBudget(t *testing.T, environ []string, url string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	err := serveForTest(ctx, environ, slog.New(slog.DiscardHandler))
+	if err == nil {
+		t.Fatal("the node started without ordinary connections")
+	}
+	for _, want := range []string{pg.DatabaseURLVar, "pool_max_conns 2", "completion reserve"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
 		}
-		for _, want := range []string{pg.DatabaseURLVar, "pool_max_conns 2", "completion reserve"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("%q does not say %q", err, want)
-			}
-		}
-		if strings.Contains(err.Error(), url) {
-			t.Errorf("%q quotes the connection string", err)
-		}
-	})
+	}
+	if strings.Contains(err.Error(), url) {
+		t.Errorf("%q quotes the connection string", err)
+	}
+}
 
-	t.Run("smaller than the default", func(t *testing.T) {
-		logs := make(records, 16)
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan error, 1)
-		go func() { done <- serveForTest(ctx, withPool(8), slog.New(slog.NewJSONHandler(logs, nil))) }()
-		servingAddrs(t, logs, done)
-		cancel()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatalf("shutdown: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("the node did not shut down")
+func testSmallerPool(t *testing.T, environ []string, reserve int) {
+	t.Helper()
+	logs := make(records, 16)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- serveForTest(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
+	budget := awaitRecord(t, logs, done, "database connection budget")
+	if budget.Nodes != 1 || budget.Pool != 8 || budget.Completion != reserve || budget.Share < 8 ||
+		budget.Share != budget.MaxConnections-budget.Reserved-pg.OutsidePoolConns {
+		t.Errorf("startup log = %+v, want one node with an 8-connection pool within its share", budget)
+	}
+	servingAddrs(t, logs, done)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("shutdown: %v", err)
 		}
-	})
+	case <-time.After(10 * time.Second):
+		t.Fatal("the node did not shut down")
+	}
+}
+
+func testPoolAboveShare(t *testing.T, url string, withPool func(int) []string) {
+	t.Helper()
+	probe, err := pg.Open(t.Context(), url, pg.WithNodes(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, _ := probe.Budget()
+	probe.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	err = serveForTest(ctx, withPool(budget.Share+1), slog.New(slog.DiscardHandler))
+	if err == nil {
+		t.Fatal("the node started with a pool above its share of the database")
+	}
+	for _, want := range []string{pg.DatabaseURLVar, "pool_max_conns", "exceeds"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), url) {
+		t.Errorf("%q quotes the connection string", err)
+	}
 }
 
 // TestServeRefusesBadKeysAndSettings: the key files and the new settings are checked before the database is touched,
