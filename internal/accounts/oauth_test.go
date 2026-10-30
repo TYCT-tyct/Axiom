@@ -405,36 +405,6 @@ func TestSetSiteSignInRefusesADomainWithAssets(t *testing.T) {
 	}
 }
 
-// signedInOAuth configures a site's login domain and provider, signs a user in and returns the service and the
-// principal.
-func signedInOAuth(t *testing.T) (site, *accounts.Service, accounts.Principal, *fakeOAuth) {
-	t.Helper()
-	x := newTestSite(t)
-	fake, server := newFakeOAuth(t, 42, x.email)
-	exit := egress.NewForTesting(egresstest.Loopback(t, server.Certificate()))
-	t.Cleanup(exit.CloseIdleConnections)
-	s := oauthService(t, x.db, exit)
-	fake.configure(t, s, server)
-	if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		domain := console
-		if err := s.SetSiteSignIn(t.Context(), tx, system, accounts.SiteID(s1), accounts.SiteSignInUpdate{LoginDomain: &domain}, "test"); err != nil {
-			return err
-		}
-		return s.SetSiteOAuthProvider(t.Context(), tx, system, accounts.SiteID(s1), "github", "client-id", "client-secret", "test")
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	session := x.signIn(t, console)
-	p, err := s.Authenticate(t.Context(), x.request(t, console, "https://"+console, session), client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return x, s, p, fake
-}
-
 // TestSetLoginDomainAfterProvider: an application stored before the site has a login domain does not prevent choosing
 // the first domain; only moving an existing one is locked.
 func TestSetLoginDomainAfterProvider(t *testing.T) {
