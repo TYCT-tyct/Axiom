@@ -189,3 +189,36 @@ export const siteSettingsQuery = (siteId: AdminSchemas["SiteId"]) =>
     queryFn: ({ signal }) =>
       unwrap(adminApi.GET(`${base}/sites/{site_id}/settings`, { params: { path: { site_id: siteId } }, signal })),
   });
+
+export const systemSettingsQuery = (siteId: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "system-settings", siteId],
+    queryFn: ({ signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/sites/{site_id}/system-settings`, { params: { path: { site_id: siteId } }, signal }),
+      ),
+  });
+
+export const mailSettingsQuery = queryOptions({
+  queryKey: [accountKey, "mail-settings"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/mail`, { signal })),
+});
+
+export const paymentSettingsQuery = (siteId: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "payment-settings", siteId],
+    queryFn: ({ signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/sites/{site_id}/system-settings/payments`, {
+          params: { path: { site_id: siteId } },
+          signal,
+        }),
+      ),
+  });
+
+export const merchantsQuery = (siteId: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "merchants", siteId],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/payments/merchants`, { params: { query: { site_id: siteId } }, signal })),
+  });

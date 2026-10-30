@@ -18,6 +18,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/payments"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/egress"
@@ -117,7 +118,14 @@ func startNodeWith(c commandLine, clock *testClock, deadline time.Duration, with
 		c.t.Fatal(err)
 	}
 	c.t.Cleanup(exit.CloseIdleConnections)
-	routes := publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, nil), exit: exit, version: "test", accounts: svc, payments: pay, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
+	cat, err := catalog.Open(c.db, pg.PlatformScope(), catalog.Config{Logger: logger})
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	if err := cat.Refresh(c.t.Context()); err != nil {
+		c.t.Fatal(err)
+	}
+	routes := publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, nil), exit: exit, version: "test", accounts: svc, payments: pay, catalog: cat, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
 	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, pay: pay, gateway: gateway, queue: queue}
 }
 

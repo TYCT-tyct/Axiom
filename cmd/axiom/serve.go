@@ -80,7 +80,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
-	tel, db, master, err := openCoreNode(ctx, cfg, console.master)
+	tel, db, master, err := openCoreNode(ctx, cfg, console.master, logger)
 	if err != nil {
 		return err
 	}
@@ -333,12 +333,14 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 
 // openCoreNode opens the providers and the database a serving core needs, shutting the providers down if the database
 // refuses the start so a failed start does not leave them running.
-func openCoreNode(ctx context.Context, cfg nodeSettings, master *secret.Keyring) (*telemetry.Telemetry, *pg.DB, *secret.Keyring, error) {
+func openCoreNode(ctx context.Context, cfg nodeSettings, master *secret.Keyring,
+	logger *slog.Logger,
+) (*telemetry.Telemetry, *pg.DB, *secret.Keyring, error) {
 	tel, err := telemetry.New()
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	db, ring, err := openCheckedDatabase(ctx, cfg, tel, master)
+	db, ring, err := openCheckedDatabase(ctx, cfg, tel, master, logger)
 	if err != nil {
 		return nil, nil, nil, errors.Join(err, tel.Shutdown(context.WithoutCancel(ctx)))
 	}
@@ -351,14 +353,16 @@ func openCoreNode(ctx context.Context, cfg nodeSettings, master *secret.Keyring)
 // before the database, so a file the node cannot use is named as such instead of as a connection failure, and the
 // login key came from the same read; CheckRing checks this ring under the lock instead of reading the file again.
 func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.Telemetry,
-	master *secret.Keyring,
+	master *secret.Keyring, logger *slog.Logger,
 ) (*pg.DB, *secret.Keyring, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, cfg.startupTimeout, errNoAnswer)
 	defer cancel()
-	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel, pg.WithCompletionReserve(cfg.completionReserve))
+	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel,
+		pg.WithCompletionReserve(cfg.completionReserve), pg.WithNodes(cfg.valkey.Nodes))
 	if err != nil {
 		return nil, nil, err
 	}
+	logConnectionBudget(logger, db)
 	ring, _, err := keyRotation(db, cfg.masterKeyFile).CheckRing(ctx, master)
 	if err == nil {
 		return db, ring, nil
@@ -368,6 +372,15 @@ func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.T
 		return nil, nil, errNoAnswer
 	}
 	return nil, nil, err
+}
+
+// logConnectionBudget reports the numbers the startup check derived from the database's limits, so a deployment can
+// see what it will use before the listeners open.
+func logConnectionBudget(logger *slog.Logger, db *pg.DB) {
+	if budget, ok := db.Budget(); ok {
+		logger.Info("database connection budget", "max_connections", budget.MaxConnections, "reserved", budget.Reserved,
+			"nodes", budget.Nodes, "share", budget.Share, "pool", budget.Pool, "completion", budget.Completion)
+	}
 }
 
 // openNodeDatabase opens the database for serving, traced, and refuses it when its fallback prices fail billing's check
@@ -463,6 +476,9 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
+		if errors.Is(context.Cause(ctx), errNoAnswer) {
+			return nil, errNoAnswer // the budget read is part of opening, and pgx reports only that the context ended
+		}
 		return nil, err
 	}
 	if err := db.Check(ctx, modules()...); err != nil {

@@ -38,6 +38,17 @@ func RunBounded(ctx context.Context, grace time.Duration, stop, f func() error) 
 	return runBounded(ctx, grace, stop, f)
 }
 
+// PoolMinimums are the ordinary pool's eagerly opened minimums after Open's options, for the operations-pool test.
+func (db *DB) PoolMinimums() (minConns, minIdleConns int32) {
+	config := db.pool.Config()
+	return config.MinConns, config.MinIdleConns
+}
+
+// SizePool is the connection budget's arithmetic, so a table test can cover the numbers without restarting a server.
+func SizePool(maxConnections, reserved, nodes, completion int) (Budget, error) {
+	return sizePool(maxConnections, reserved, nodes, completion)
+}
+
 // NewTimedConnector wraps a database/sql connector so that each connect has one deadline.
 func NewTimedConnector(inner driver.Connector, timeout time.Duration) driver.Connector {
 	return timedConnector{inner, timeout}
