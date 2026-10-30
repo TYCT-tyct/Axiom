@@ -54,6 +54,7 @@ var refusals = []refusal{
 	{accounts.ErrIdentityLinked, http.StatusConflict, codeIdentityTaken, "this provider account is linked to another user"},
 	{accounts.ErrIdentityAlreadyLinked, http.StatusConflict, codeIdentityAlreadyLinked, "unlink this provider before linking another account from it"},
 	{accounts.ErrMFARequired, http.StatusForbidden, codeMfaRequired, "this needs a session that passed two-step verification"},
+	{accounts.ErrConsentRequired, http.StatusForbidden, codeConsentRequired, "the current legal documents must be accepted first"},
 	{accounts.ErrOAuthFailed, http.StatusBadRequest, codeInvalidRequest, "the provider did not complete the sign-in"},
 	{accounts.ErrPasskeysOff, http.StatusNotFound, codeNotFound, "passkeys are not enabled"},
 	{accounts.ErrPasskeyFailed, http.StatusBadRequest, codeInvalidRequest, "the passkey ceremony failed"},

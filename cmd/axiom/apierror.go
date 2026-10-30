@@ -15,6 +15,7 @@ const (
 	codeInvalidCode           errorCode = "invalid_code"
 	codeForbidden             errorCode = "forbidden"
 	codeMfaRequired           errorCode = "mfa_required"
+	codeConsentRequired       errorCode = "consent_required"
 	codeOriginRejected        errorCode = "origin_rejected"
 	codeNotFound              errorCode = "not_found"
 	codeConflict              errorCode = "conflict"

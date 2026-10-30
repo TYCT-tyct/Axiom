@@ -631,6 +631,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/legal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site's current legal documents
+         * @description The terms of service and the privacy policy the site has published, at their current versions, as plain text. The registration page shows them and sends their versions back with the registration or with `acceptLegalDocuments`. A site that publishes none answers an empty list and requires no acceptance. The text is public: no session is needed.
+         */
+        get: operations["getLegalDocuments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/legal/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept the current legal documents
+         * @description Records the signed-in user's acceptance of every current document at the version the request names, with the time. A missing, stale or extra version is `consent_required`: the page must send exactly what `getLegalDocuments` returned. Accepting the same version again changes nothing. A session may call this while the rest of the console is refused for want of acceptance.
+         */
+        post: operations["acceptLegalDocuments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/site": {
         parameters: {
             query?: never;
@@ -1156,7 +1196,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
         Money: {
             /** @example 1500000000 */
@@ -1197,6 +1237,33 @@ export interface components {
          * @enum {string}
          */
         SessionLevel: "pending_mfa" | "password" | "mfa";
+        /** @enum {string} */
+        LegalDocumentKind: "terms" | "privacy";
+        /** @description One version of one of the site's legal documents; the text is plain text, never HTML. */
+        LegalDocument: {
+            kind: components["schemas"]["LegalDocumentKind"];
+            version: number;
+            body: string;
+            /** Format: date-time */
+            published_at: string;
+        };
+        LegalDocumentVersion: {
+            kind: components["schemas"]["LegalDocumentKind"];
+            version: number;
+        };
+        LegalDocuments: {
+            /** @description The current version of each kind, at most one per kind. */
+            documents: components["schemas"]["LegalDocument"][];
+        };
+        LegalAcceptance: {
+            /** @description Every current document at its current version, as getLegalDocuments returned it. */
+            consent: components["schemas"]["LegalDocumentVersion"][];
+        };
+        /** @description The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead. */
+        SessionConsent: {
+            /** @description Current documents this user has not accepted; empty when every one is accepted. */
+            required: components["schemas"]["LegalDocumentVersion"][];
+        };
         Session: {
             user: {
                 id: components["schemas"]["UserId"];
@@ -1216,6 +1283,8 @@ export interface components {
             expires_at: string;
             /** @description The permission names the session holds on its own scope (the user's account on the console, the platform on the admin), for showing or hiding what the user cannot do. The server decides again on every request. */
             permissions: string[];
+            /** @description What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it. */
+            consent?: components["schemas"]["SessionConsent"];
         };
         SessionList: {
             /** @description Newest first, at most 100. A page that gets no `sessions` shows the list as unavailable. */
@@ -1464,6 +1533,8 @@ export interface components {
              * @enum {string}
              */
             language?: "zh" | "en";
+            /** @description The current legal documents the person accepted. Required on a site that publishes any, where a missing or stale version is `consent_required`; open registration checks it at verify-email instead, because no user exists yet. */
+            consent?: components["schemas"]["LegalDocumentVersion"][];
         };
         Registered: {
             user_id: components["schemas"]["UserId"];
@@ -1476,6 +1547,8 @@ export interface components {
             token: string;
             /** @description The password chosen by the mailbox owner when the link is clicked. */
             password: string;
+            /** @description The current legal documents the person accepted, shown on the verification page. Required on a site that publishes any; a missing or stale version is `consent_required`. */
+            consent?: components["schemas"]["LegalDocumentVersion"][];
         };
         /** @description A call or management key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit. */
         Key: {
@@ -1763,7 +1836,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The session may not do this: the permission is missing, the session has not passed two-step verification (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`). */
+        /** @description The session may not do this: the permission is missing, the session has not passed two-step verification (`mfa_required`), the Origin, content type or CSRF token is wrong (`origin_rejected`), or the current legal documents have not been accepted (`consent_required`). */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -2891,6 +2964,54 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getLegalDocuments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current documents, one per kind, oldest kind first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalDocuments"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    acceptLegalDocuments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LegalAcceptance"];
+            };
+        };
+        responses: {
+            /** @description Accepted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             default: components["responses"]["Failure"];
         };
     };

@@ -37,7 +37,19 @@ VALUES (@id, @site_id, @account_id, @user_id, @surface, @token_hash, @csrf_token
 -- the user's. The site's lifetimes now (the caller's, in seconds) cut what the session was issued with, never extend it:
 -- a site that shortens its sessions writes that into the ones already made (CutSessions), and this cut also holds a
 -- session another node issued from its snapshot before reloading the change.
-SELECT s.site_id, s.surface, s.level, s.csrf_token, s.factor_version
+SELECT s.site_id, s.surface, s.level, s.csrf_token, s.factor_version,
+    EXISTS (
+        SELECT 1
+        FROM accounts.legal_documents d
+        WHERE d.site_id = s.site_id
+            AND d.version = (SELECT max(x.version) FROM accounts.legal_documents x
+                WHERE x.site_id = d.site_id AND x.kind = d.kind)
+            AND NOT EXISTS (
+                SELECT 1 FROM accounts.legal_acceptances a
+                WHERE a.site_id = s.site_id AND a.user_id = s.user_id
+                    AND a.kind = d.kind AND a.version >= d.version
+            )
+    ) AS consent_pending
 FROM accounts.sessions s
 JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
 WHERE s.id = @id AND s.revoked_at IS NULL AND s.expires_at > now()
