@@ -198,7 +198,7 @@ func (c *Catalog) syncOne(ctx context.Context, f Fetched, bodySum string, index 
 		return r, err
 	}
 	// The publish makes these two checks again on the locked row; making them here as well gives a dry run the answer.
-	if err := errors.Join(outdated(m, f), c.safe(current, next), checkPublish(m.row, spec, n, m.head, false)); err != nil {
+	if err := errors.Join(outdated(m, f), c.safe(current, next), c.allowCounted(next), checkPublish(m.row, spec, n, m.head, false)); err != nil {
 		return r.heldBy(err, n.canonical), nil
 	}
 	if !publish {
@@ -221,7 +221,7 @@ func (c *Catalog) publishSynced(ctx context.Context, f Fetched, bodySum string, 
 	case err == nil:
 		r.Outcome = OutcomePublished
 	case errors.Is(err, ErrPriceChanged), errors.Is(err, ErrSourceMismatch), errors.Is(err, ErrPriceLost),
-		errors.Is(err, ErrIncomplete), errors.Is(err, ErrTierBasisChanged):
+		errors.Is(err, ErrIncomplete), errors.Is(err, ErrTierBasisChanged), errors.Is(err, ErrCountedItems):
 		return r.heldBy(err, n.canonical), nil
 	default:
 		return r, fmt.Errorf("catalog sync: publish %s: %w", m.row.Slug, err)
