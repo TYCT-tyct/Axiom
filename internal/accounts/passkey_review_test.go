@@ -137,3 +137,29 @@ func TestConsolePasswordSessionCannotSkipAPasskey(t *testing.T) {
 		t.Fatalf("a console password session for a user with a passkey: %v", err)
 	}
 }
+
+// TestPasskeyRegistrationRechecksTheLoginDomain: disabling the login domain while a ceremony is open must not let the
+// stale page store a credential for an origin the site no longer serves.
+func TestPasskeyRegistrationRechecksTheLoginDomain(t *testing.T) {
+	t.Parallel()
+	x, s := passkeySite(t)
+	session := x.signIn(t, console)
+	p, err := s.Authenticate(t.Context(), x.request(t, console, "https://"+console, session), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, err := s.BeginPasskeyRegistration(t.Context(), passkeyRequest(t, nil), p, "Laptop", password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := newSoftAuthenticator(t).register(t, registration.PublicKey)
+	if err := pgtest.Run(t.Context(), x.database.Superuser, "UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = '"+console+"'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeysOff) {
+		t.Fatalf("registration after the login domain was disabled: %v", err)
+	}
+	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM accounts.passkey_credentials"); got[0] != "0" {
+		t.Errorf("a disabled login domain stored a passkey: %v", got)
+	}
+}

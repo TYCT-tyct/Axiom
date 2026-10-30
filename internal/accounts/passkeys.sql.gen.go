@@ -315,6 +315,7 @@ SELECT coalesce(t.passkeys_enabled, false)::boolean AS passkeys,
 FROM accounts.sites s
 LEFT JOIN accounts.site_settings t ON t.site_id = s.id
 LEFT JOIN accounts.site_domains d ON d.site_id = s.id AND d.domain = s.login_domain AND d.surface = 'console'
+    AND d.disabled_at IS NULL
 WHERE s.id = $1
 `
 
