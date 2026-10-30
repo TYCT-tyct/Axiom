@@ -74,7 +74,7 @@
 | 端点 `status`、`supports_implicit_caching`、`supports_tool_choice`、`native_tools`、`supports_diarization`、`supports_image_reference`、`supports_multiple_audio_references`、`supports_voice_cloning`、`perf_last_30m_by_workload` | [模型端点 PublicEndpoint](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model) | 没有窗口统计、逐值测试、原生工具映射或相关能力数据，省略而非把未知写成 false 或空集合；前四项能力字段（supports_implicit_caching、supports_tool_choice、native_tools、supports_diarization）在官方为必填，这是有意的契约偏离。实时暂停、满载和熔断不改变发现列表 |
 | `GET /api/v1/providers` 的 `data[].name`、`slug`、`privacy_policy_url`、`terms_of_service_url`、`status_page_url`、`headquarters`、`datacenters` | [供应商列表](https://openrouter.ai/docs/api/api-reference/providers/list-all-providers) | 有可见端点时给公开聚合供应商 Axiom/axiom；没有则空数组。不暴露货源、凭证、上游名字和成本；没有登记的政策链接和地域均为 null |
 
-目录、售价、端点字段只从构建时发布的内存投影读取，没有逐请求目录、计费或供应商查询。**鉴权例外**：这些路径仍像既有模型列表一样要求调用 key，实时停用、过期、IP 和模型权限通过 `accounts.Admit` 的数据库事务检查；不能用仅缓存身份的 AuthenticateKey 替代准入。因此不承诺“每请求零 DB”，承诺的是响应数据零 DB。完全零 DB 需要另定具有失效机制的权限快照，当前没有这份数据，不在本次虚构它。
+目录、售价、端点字段只从构建时发布的内存投影读取，没有逐请求目录、计费或供应商查询。**鉴权例外**：这些路径仍像既有模型列表一样要求调用 key，实时停用、过期、IP 和模型权限通过 `accounts.AdmitBatch`（单请求路径为 `Admit`）的数据库事务检查；不能用仅缓存身份的 AuthenticateKey 替代准入。因此不承诺“每请求零 DB”，承诺的是响应数据零 DB。完全零 DB 需要另定具有失效机制的权限快照，当前没有这份数据，不在本次虚构它。
 
 ### 转发规则
 
