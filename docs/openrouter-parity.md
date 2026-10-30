@@ -170,7 +170,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 图片生成：Chat 里 `modalities:["image","text"]` + `image_config`，或 `POST /api/v1/images`、`/images/models` | 生图 | docs/guides/overview/multimodal/image-generation | 没有（范围「以后」） | `na:router/relay-router.go:127` | `s2:internal/server/routes/gateway.go:253` | 归 #320 多单位计价后再做 |
 | 视频生成 `/api/v1/videos` 提交/轮询/下载 | 异步视频任务 | docs/guides/overview/multimodal/video-generation | 没有 | `na:router/main.go:20`（`SetVideoRouter`） | `s2:internal/server/routes/gateway.go:270-281` | 同上 |
 | TTS `POST /api/v1/audio/speech`、STT `POST /api/v1/audio/transcriptions` | 语音 | docs/guides/overview/multimodal/tts、stt | 没有 | `na:router/relay-router.go:140-146` | `s2:internal/server/routes/gateway.go:295-296` | 同上 |
-| Files API `/api/v1/files`（上传、下载、删除，请求里按文件 ID 引用） | 工作区文件 | docs/guides/features/files-api | 没有 | 返回未实现（`na:router/relay-router.go:170-174`） | 无 | 对应 #312「文件引用」 |
+| Files API `/api/v1/files`（上传、下载、删除，请求里按文件 ID 引用） | 工作区文件 | docs/guides/features/files-api | 部分：请求里按 `file_id` 引用时原样带回发它的那一家（Chat、Responses 的 `file_data`/`file_id`，要求 `provider.only` 指定唯一供应商，路由只安排一次尝试，#312 E2-17）；上传、下载、删除端点没有 | 返回未实现（`na:router/relay-router.go:170-174`） | 无 | `file_id` 是供应商账户的资源，本站不代管文件，也不转发上传/下载/删除；对应 #312「文件引用」 |
 
 ## 10. 插件、服务端工具、消息转换
 

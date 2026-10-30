@@ -92,6 +92,9 @@ func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c
 		NativeOnly: c.Compact,
 		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full.
 		NoSegments: c.Compact,
+		// A file id is the supplier account's resource: one attempt, to the provider the client pinned, so it can only
+		// reach the account that can hold the file (protocol README.md「跨格式转换」).
+		FileRef: c.Request.FileRefs > 0,
 	})
 	if wait != nil {
 		return &errWait{wait.RetryAfter}

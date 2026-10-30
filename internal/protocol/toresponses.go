@@ -161,14 +161,31 @@ func inputPart(out []byte, p canonPart, breakpoints bool) ([]byte, error) {
 			out = appendQuoted(append(out, `,"detail":`...), p.ImageURL.Detail)
 		}
 		return append(out, '}'), nil
-	case p.Type == "file" && p.File != nil && p.File.FileData != nil:
-		out = appendQuoted(append(out, responsesFileHead...), *p.File.FileData)
-		if !isNull(p.File.Filename) {
-			out = append(append(out, `,"filename":`...), p.File.Filename...)
+	case p.Type == "file" && p.File != nil:
+		if out, ok, err := inputFilePart(out, p.File.FileData, p.File.FileID, p.File.Filename); ok || err != nil {
+			return out, err
 		}
-		return append(out, '}'), nil
 	}
 	return nil, &NotSupported{Reason: "a " + p.Type + " part has no Responses counterpart"}
+}
+
+// inputFilePart writes a file part: the data inline, or the id the upstream issued sent back as it is, never as content
+// and never to another provider (routing keeps it to the client's pin). It reports false when the part has neither.
+func inputFilePart(out []byte, data, id *string, filename jsontext.Value) ([]byte, bool, error) {
+	switch {
+	case data != nil && id != nil:
+		return nil, false, &NotSupported{Reason: "a file part carries both data and an id"}
+	case data != nil:
+		out = appendQuoted(append(out, responsesFileHead...), *data)
+	case id != nil:
+		out = appendQuoted(append(out, responsesFileIDHead...), *id)
+	default:
+		return nil, false, nil
+	}
+	if !isNull(filename) {
+		out = append(append(out, `,"filename":`...), filename...)
+	}
+	return append(out, '}'), true, nil
 }
 
 // assistantItems writes an assistant message: each reasoning item it hands back with encrypted content, which is

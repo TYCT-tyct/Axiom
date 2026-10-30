@@ -6,8 +6,23 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go
 	"strings"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 )
+
+// convertNative writes a Messages or Responses request for an endpoint of the other of the two (README.md
+// 「跨格式转换」): the request is read into the canonical model by its own format's reader and written by the target
+// format's writer, so both directions share Chat's mapping and cannot drift from it.
+func convertNative(from Format, body []byte, t Target, w Rewrites) ([]byte, error) {
+	chat, err := nativeChatRequest(from, body, t, w)
+	if err != nil {
+		return nil, err
+	}
+	if from == Messages { // a Messages reply hands back thinking signatures, not the encrypted content include asks for
+		t.EncryptedReasoning = catalog.ClaimNo
+	}
+	return convert(chat, t, w)
+}
 
 // convert writes a Chat request for a Messages or Responses endpoint (README.md「跨格式转换」): what the endpoint's
 // format can express is written; reasoning uses the documented approximations in README.md,
