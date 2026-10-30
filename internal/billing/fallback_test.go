@@ -25,6 +25,8 @@ func mustFallbacks(tb testing.TB, body string) fallbacks {
 // TestParseFallbacks: a row is valid only with a currency, a price above 0 and at most 1 for each known per-use item
 // and nothing else, and a markup from 1 to 10 (docs/domains/billing.md「价目表缺项」: 币种、单位正确，不为 0).
 func TestParseFallbacks(t *testing.T) {
+	t.Parallel()
+
 	row := func(currency, markup, search, code string) string {
 		return `{"currency":"` + currency + `","markup":"` + markup + `","per_use":{"code_execution":"` + code + `","web_search":"` + search + `"}}`
 	}
@@ -63,6 +65,8 @@ func TestParseFallbacks(t *testing.T) {
 
 // TestUses: an unknown value counts its uses, rounded up and bounded; anything else is one use.
 func TestUses(t *testing.T) {
+	t.Parallel()
+
 	for v, want := range map[string]int64{
 		"2": 2, "0": 0, "2.5": 3, "2.000": 2, "0.1": 1, `"scale"`: 1, "1e3": 1, "-1": 1, "": 1, ".5": 1, "3.": 1,
 		"9999999999": 9999999999, "9999999999.5": 1e10, "10000000000": 1e10, strings.Repeat("9", 40): 1e10,
@@ -77,6 +81,8 @@ func TestUses(t *testing.T) {
 // unknown tokens at the highest token price, unknown uses at the dearest per-use default, both estimated; a cached
 // modality intersection is recorded and free; a waiver keeps the uses and drops the tokens; a free model's unknown tokens are free with it, but its uses are not.
 func TestPriceSegmentsFallbacks(t *testing.T) {
+	t.Parallel()
+
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"},
 		"service_tiers":{"priority":{"rates":{"input":"0.000000003","output":"0.000000002"}}}}`)
 	free := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`)
@@ -115,6 +121,8 @@ func TestPriceSegmentsFallbacks(t *testing.T) {
 // each sampling is charged, not only the last, which search is what makes several of
 // (docs/domains/billing.md「定价」: 上游报告了列表之外的等级，那次调用的各项按兜底价收并标暂估).
 func TestPriceSegmentsPricesATierTheListLacks(t *testing.T) {
+	t.Parallel()
+
 	f := mustFallbacks(t, testFallbacks)
 	s := mustSchedule(t, `{"v":1,"currency":"USD",
 		"rates":{"input":"0.000000001","output":"0.000000001","web_search":"0.00000001"}}`).Fill(f.perUse)
@@ -150,6 +158,8 @@ func TestPriceSegmentsPricesATierTheListLacks(t *testing.T) {
 // alone, twice in a sampling or over two samplings, price past what an amount holds: the charge is the most an amount
 // holds, not a panic.
 func TestPriceSegmentsSaturates(t *testing.T) {
+	t.Parallel()
+
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)
 	f := mustFallbacks(t, `{"currency":"USD","markup":"10","per_use":{"code_execution":"1","web_search":"1"}}`)
 	most := func(field string) catalog.UnknownUsage {
@@ -174,6 +184,8 @@ func TestPriceSegmentsSaturates(t *testing.T) {
 // TestFillPricesPerUse: a schedule filled with the defaults prices a known per-use item it lacks exactly, not as an
 // estimate, and keeps its own price where it has one.
 func TestFillPricesPerUse(t *testing.T) {
+	t.Parallel()
+
 	f := mustFallbacks(t, testFallbacks)
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001","web_search":"0.00000001"}}`).Fill(f.perUse)
 	u, err := catalog.NewUsage(map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, webSearch: 2, catalog.ItemCodeExecution: 3},
@@ -207,6 +219,8 @@ func exact(t *testing.T, s string) platform.Exact {
 // same rates as the charge: every per-use item the call ran, and what cache reads saved against the input price. A
 // cache read priced at or above input saves nothing, and no per-use item means no server tool cost.
 func TestPriceSegmentsUsageExtras(t *testing.T) {
+	t.Parallel()
+
 	f := mustFallbacks(t, testFallbacks)
 	for _, tc := range []struct {
 		name       string

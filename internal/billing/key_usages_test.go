@@ -9,6 +9,8 @@ import (
 )
 
 func TestReadKeyUsagesMatchesSingleKey(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	seedKeyDays(b, today, today.AddDate(0, 0, -(int(today.Weekday())+6)%7), today.AddDate(0, 0, 1-today.Day()))

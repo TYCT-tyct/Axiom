@@ -16,6 +16,8 @@ import (
 // for a segment number an earlier one already used. Extend succeeds only once the reservation covers the target, so
 // the later attempt's larger target is written, not taken for a retry.
 func TestExtendAcrossAttempts(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, Segments: Segments{Output: 100, Overshoot: time.Second}})
 	segmented := b.exact
 	segmented.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)
@@ -48,6 +50,8 @@ func TestExtendAcrossAttempts(t *testing.T) {
 // TestReserveLimitResets: a limit counts every day its current window covers, whatever window it had when the
 // money was spent or reserved, so changing how often it resets never forgets what is already held.
 func TestReserveLimitResets(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{})
 	a := b.admitted
 	a.KeyLimit = &Limit{Amount: 1000, Reset: ResetDaily}
@@ -70,6 +74,8 @@ func TestReserveLimitResets(t *testing.T) {
 // TestReserveBalanceExtremes: the balance's headroom is computed exactly, so stored values at the ends of int64
 // neither refuse a reservation they allow nor allow one a negative balance cannot cover.
 func TestReserveBalanceExtremes(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name                     string
 		balance, reserved, floor int64
@@ -92,6 +98,8 @@ func TestReserveBalanceExtremes(t *testing.T) {
 // TestReserveNoBalanceRow: an account without a balance row reserves nothing, even at a price of zero, and nothing is
 // written.
 func TestReserveNoBalanceRow(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	a := b.admitted
 	a.Account = uuid.NewV7()
@@ -114,6 +122,8 @@ func TestReserveNoBalanceRow(t *testing.T) {
 // to, so a reservation admitted before a UTC day, week or month boundary cannot outgrow its limit by extending after
 // it, when the new window is still empty; nor does it count what the new window holds.
 func TestExtendAcrossWindows(t *testing.T) {
+	t.Parallel()
+
 	for _, r := range []Reset{ResetDaily, ResetWeekly, ResetMonthly} {
 		t.Run(string(r), func(t *testing.T) {
 			b := newBank(t, 1e6, 0, Config{})

@@ -13,6 +13,8 @@ import (
 // TestLedgerScope: a settlement writes its revenue and cost entries in its account's scope, and no other account's
 // scope reads them.
 func TestLedgerScope(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{})
 	if _, err := b.billing.Settle(t.Context(), b.hold(100), outcome(Committed, FinishStop, used(t, 50, 20, 0))); err != nil {
 		t.Fatal(err)
@@ -29,6 +31,8 @@ func TestLedgerScope(t *testing.T) {
 // TestSettleBalanceExtremes: the floor cap is computed exactly, so a balance at the top of int64 above a negative
 // floor charges in full instead of wrapping to nothing.
 func TestSettleBalanceExtremes(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{})
 	h := b.hold(100)
 	b.sql(fmt.Sprintf("UPDATE billing.balances SET balance = %d, floor = -1", int64(math.MaxInt64)))

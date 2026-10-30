@@ -59,6 +59,8 @@ func (b *bank) finishRefund(f Freeze, withFee, release bool) RefundAmounts {
 }
 
 func TestFreezeRefundRoom(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name          string
 		reserved      int64
@@ -119,6 +121,8 @@ func (b *bank) checkFreezeRoom(reserved int64, expired, gift bool, want int64) {
 
 // Expiry takes only unfrozen credit; release after expiry permits the next run to write it off.
 func TestRefundAcrossExpiry(t *testing.T) {
+	t.Parallel()
+
 	for _, release := range []bool{false, true} {
 		t.Run(fmt.Sprint(release), func(t *testing.T) {
 			b := newBank(t, 0, 0, Config{})
@@ -160,6 +164,8 @@ func (b *bank) refundAcrossExpiry(release bool) {
 }
 
 func TestExpiryRespectsFrozenAndReserved(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(800)
 	b.freeze(f)
@@ -185,6 +191,8 @@ func TestExpiryRespectsFrozenAndReserved(t *testing.T) {
 }
 
 func TestFreezeRevisionContinuesAfterRelease(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(500)
 	for range 3 {
@@ -206,6 +214,8 @@ func TestFreezeRevisionContinuesAfterRelease(t *testing.T) {
 }
 
 func TestRefundRejectsOtherAccounts(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(500)
 	other := uuid.NewV7()
@@ -230,6 +240,8 @@ func TestRefundRejectsOtherAccounts(t *testing.T) {
 
 // A call waiting for an uncommitted freeze must quote the frozen balance after taking the same lock.
 func TestFreezeSerializesAdmission(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(1000)
 	f.Amount = 800
@@ -260,6 +272,8 @@ func TestFreezeSerializesAdmission(t *testing.T) {
 }
 
 func TestFrozenSettlementFloor(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, -100, Config{})
 	f := b.refundable(1000)
 	f.Amount = 800
@@ -289,6 +303,8 @@ func TestFrozenSettlementFloor(t *testing.T) {
 }
 
 func TestFreezeConcurrentSettlement(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(1000)
 	holds := make([]*Hold, 5)
@@ -323,6 +339,8 @@ func TestFreezeConcurrentSettlement(t *testing.T) {
 }
 
 func TestFreezeAfterSpending(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(500)
 	b.creditBatch(500, nil)
@@ -339,6 +357,8 @@ func TestFreezeAfterSpending(t *testing.T) {
 }
 
 func TestConcurrentFreezes(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(500)
 	f.Amount = 400
@@ -368,6 +388,8 @@ func TestConcurrentFreezes(t *testing.T) {
 }
 
 func TestFreezeRollback(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(500)
 	abort := errors.New("payment state update failed")
@@ -383,6 +405,8 @@ func TestFreezeRollback(t *testing.T) {
 }
 
 func TestRefundValidation(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(500)
 	b.freeze(f)
@@ -407,6 +431,8 @@ func TestRefundValidation(t *testing.T) {
 }
 
 func TestRefundRollback(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(500)
 	b.freeze(f)
@@ -435,6 +461,8 @@ func TestRefundRollback(t *testing.T) {
 }
 
 func TestRefundStopsAtFrozenMismatch(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(500)
 	f.Amount = 100

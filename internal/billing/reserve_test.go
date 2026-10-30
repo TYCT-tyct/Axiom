@@ -123,6 +123,8 @@ func (b *bank) consistent() {
 // TestReserveStorm: many reservations at once never take the account past its floor, and each refusal was for an
 // amount above what was left even after every reservation that succeeded.
 func TestReserveStorm(t *testing.T) {
+	t.Parallel()
+
 	daily := &Limit{Amount: 1500, Reset: ResetDaily}
 	for _, tc := range []struct {
 		name     string
@@ -191,6 +193,8 @@ func boolInt(b bool) int64 {
 // TestReserveSeesCommitsBeforeItsLock: B starts while A holds the account's lock; once A commits, B's counters
 // include A's reservation, read by a statement that starts after B's lock is granted, so the key limit holds.
 func TestReserveSeesCommitsBeforeItsLock(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{})
 	a := b.admitted
 	a.KeyLimit = &Limit{Amount: 1000, Reset: ResetNever}
@@ -263,6 +267,8 @@ func (b *bank) superCount(query string) int64 {
 // number; a target below the amount keeps it; an unaffordable one is refused and changes nothing; and an extension of a
 // released reservation is terminated.
 func TestExtend(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, Config{})
 	ctx := t.Context()
 	h, err := b.reserve(b.admitted, 100)
@@ -306,6 +312,8 @@ func TestExtend(t *testing.T) {
 // TestExtendRace: extensions of several requests race for what is left, and the same segment is sent twice at once;
 // the account never passes its floor and each segment counts once.
 func TestExtendRace(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, Config{})
 	var holds []*Hold
 	for range 5 {
@@ -337,6 +345,8 @@ func TestExtendRace(t *testing.T) {
 // TestSettleOrphan*: whatever became of an admission whose COMMIT went unacknowledged, its reservation ends released:
 // committed, it is released; rolled back, a tombstone keeps the request ID; still open, the orphan waits for it.
 func TestSettleOrphanCommitted(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	b := newBank(t, 1000, 0, Config{})
 	h, err := b.reserve(b.admitted, 400)
@@ -355,6 +365,8 @@ func TestSettleOrphanCommitted(t *testing.T) {
 }
 
 func TestSettleOrphanRolledBack(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	b := newBank(t, 1000, 0, Config{})
 	id := uuid.NewV7()
@@ -371,6 +383,8 @@ func TestSettleOrphanRolledBack(t *testing.T) {
 }
 
 func TestSettleOrphanStillOpen(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	b := newBank(t, 1000, 0, Config{})
 	id := uuid.NewV7()
@@ -397,6 +411,8 @@ func TestSettleOrphanStillOpen(t *testing.T) {
 // for the write, so a TTL short enough to expire quickly would leave too little of it to observe the wait. The update
 // touches no key column, so it does not conflict with the write's fence.
 func TestReap(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	b := newBank(t, 1000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Millisecond, Lifetime: time.Hour})
 	h, err := b.reserve(b.admitted, 100)
@@ -443,6 +459,8 @@ func TestReap(t *testing.T) {
 // TestHeartbeat: a heartbeat keeps a holder whose time ran out alive while it is not reaped, so a database outage
 // shorter than the grace costs nothing.
 func TestHeartbeat(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, Config{HolderTTL: time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
 	b.waitFor("SELECT count(*) FROM billing.holders WHERE expires_at < clock_timestamp()", 1)
 	if _, err := b.reserve(b.admitted, 1); !errors.Is(err, ErrTerminated) {
@@ -458,6 +476,8 @@ func TestHeartbeat(t *testing.T) {
 
 // TestHolderPolicy: an account's transaction locks a holder row for its fence but cannot change it.
 func TestHolderPolicy(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
 		if err := b.billing.fence(t.Context(), tx); err != nil {
