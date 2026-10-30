@@ -77,10 +77,12 @@ func decodeUsage(b []byte) ([]Segment, error) {
 	return segments, nil
 }
 
-// serverToolPtr is the per-use sale price when a per-use item ran, nil otherwise: zero is a real price.
+// serverToolPtr is the per-use sale price when a per-use item ran, nil otherwise: zero is a real price. It returns a
+// copy, so a caller that keeps the price does not move the pricing itself to the heap for every settlement.
 func (p *priced) serverToolPtr() *platform.Exact {
 	if !p.hasServerTool {
 		return nil
 	}
-	return &p.serverTool
+	price := p.serverTool
+	return &price
 }

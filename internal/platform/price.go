@@ -148,6 +148,52 @@ func (e Exact) Cmp(f Exact) int {
 	return cmp.Compare(e.lo, f.lo)
 }
 
+// AppendDecimal appends the amount as canonical decimal text: no leading zeros, no trailing decimal zeros. The amount
+// is a whole number of 10⁻¹⁵ units, so the text is exact without rounding. It appends and divides directly because
+// every reply writes its cost this way, and a big.Rat takes twenty allocations (docs/performance.md「怎么验证」).
+func (e Exact) AppendDecimal(dst []byte) []byte {
+	if e.hi < 0 { // no charge is negative; a reversal or a discount may be, and big is exact for it too
+		return appendDecimalBig(dst, e)
+	}
+	if uint64(e.hi) >= priceScale { // beyond 2⁶⁴ currency units: no price reaches it, big is exact there as well
+		return appendDecimalBig(dst, e)
+	}
+	whole, frac := bits.Div64(uint64(e.hi), e.lo, priceScale)
+	dst = strconv.AppendUint(dst, whole, 10)
+	if frac == 0 {
+		return dst
+	}
+	return appendFraction(dst, frac)
+}
+
+// appendDecimalBig appends an amount the 64-bit division cannot hold, through math/big.
+func appendDecimalBig(dst []byte, e Exact) []byte {
+	n := e.int()
+	if n.Sign() < 0 { // big's quotient is negative, so the sign comes off before the digits do
+		dst = append(dst, '-')
+		n.Neg(n)
+	}
+	q, r := new(big.Int).QuoRem(n, big.NewInt(priceScale), new(big.Int))
+	dst = q.Append(dst, 10)
+	if r.Sign() == 0 {
+		return dst
+	}
+	return appendFraction(dst, r.Uint64())
+}
+
+// appendFraction appends '.' and frac's fifteen digits without the zeros they end with: frac is a part of 10¹⁵.
+func appendFraction(dst []byte, frac uint64) []byte {
+	dst = append(dst, '.')
+	start := len(dst)
+	dst = strconv.AppendUint(dst, priceScale+frac, 10) // the leading 1 keeps the zeros after the point
+	copy(dst[start:], dst[start+1:])                   // and is not part of the text
+	dst = dst[:len(dst)-1]
+	for dst[len(dst)-1] == '0' {
+		dst = dst[:len(dst)-1]
+	}
+	return dst
+}
+
 // Rat returns the amount as an exact fraction of a currency unit. Exchange rates and markups such as 10/71 have no
 // finite decimal form, so billing multiplies this fraction and rounds once at the end.
 func (e Exact) Rat() *big.Rat { return new(big.Rat).SetFrac(e.int(), big.NewInt(priceScale)) }

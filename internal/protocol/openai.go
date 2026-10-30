@@ -4,6 +4,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go
 	"fmt"
 	"slices"
+	"strconv"
 
 	"axiom/internal/catalog"
 )
@@ -291,36 +292,62 @@ var (
 )
 
 // appendOpenAIUsage appends a usage object with u's counts in the format's names and cost, members each led by a
-// comma.
+// comma. It writes the names and counts itself rather than formatting them: this object is built for every reply, and
+// the benchmark gate counts the allocations of each (docs/performance.md「怎么验证」).
 func appendOpenAIUsage(dst []byte, n openAINames, u catalog.Usage, cost string) []byte {
 	in := u.InputTotal()
 	out := u.OutputTotal() // the client total includes every output modality, independently of the waiver's policy
 	native := u.NativeTokens()
-	dst = fmt.Appendf(dst, `{%q:%d,%q:{"cached_tokens":%d,"cache_write_tokens":%d`, n.input, in, n.inputDetails,
-		u.Count(catalog.ItemCacheRead), u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h))
-	if audio := u.Count(catalog.ItemAudioIn); audio > 0 {
-		dst = fmt.Appendf(dst, `,"audio_tokens":%d`, audio)
-	}
-	if native.VideoInput > 0 {
-		dst = fmt.Appendf(dst, `,"video_tokens":%d`, native.VideoInput)
-	}
-	dst = fmt.Appendf(dst, `},%q:%d,%q:{"reasoning_tokens":%d`, n.output, out, n.outputDetails, u.Count(catalog.ItemReasoning))
-	if audio := u.Count(catalog.ItemAudioOut); audio > 0 {
-		dst = fmt.Appendf(dst, `,"audio_tokens":%d`, audio)
-	}
-	if native.AcceptedPrediction > 0 {
-		dst = fmt.Appendf(dst, `,"accepted_prediction_tokens":%d`, native.AcceptedPrediction)
-	}
-	if native.RejectedPrediction > 0 {
-		dst = fmt.Appendf(dst, `,"rejected_prediction_tokens":%d`, native.RejectedPrediction)
-	}
-	dst = fmt.Appendf(dst, `},"total_tokens":%d,"is_byok":false`, in+out)
+	dst = append(dst, '{')
+	dst = appendQuoted(dst, n.input)
+	dst = append(dst, ':')
+	dst = strconv.AppendInt(dst, in, 10)
+	dst = append(dst, ',')
+	dst = appendQuoted(dst, n.inputDetails)
+	dst = append(dst, `:{"cached_tokens":`...)
+	dst = strconv.AppendInt(dst, u.Count(catalog.ItemCacheRead), 10)
+	dst = append(dst, `,"cache_write_tokens":`...)
+	dst = strconv.AppendInt(dst, u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h), 10)
+	dst = appendCount(dst, "audio_tokens", u.Count(catalog.ItemAudioIn))
+	dst = appendCount(dst, "video_tokens", native.VideoInput)
+	dst = append(dst, '}')
+	dst = append(dst, ',')
+	dst = appendQuoted(dst, n.output)
+	dst = append(dst, ':')
+	dst = strconv.AppendInt(dst, out, 10)
+	dst = append(dst, ',')
+	dst = appendQuoted(dst, n.outputDetails)
+	dst = append(dst, `:{"reasoning_tokens":`...)
+	dst = strconv.AppendInt(dst, u.Count(catalog.ItemReasoning), 10)
+	dst = appendCount(dst, "audio_tokens", u.Count(catalog.ItemAudioOut))
+	dst = appendCount(dst, "accepted_prediction_tokens", native.AcceptedPrediction)
+	dst = appendCount(dst, "rejected_prediction_tokens", native.RejectedPrediction)
+	dst = append(dst, `},"total_tokens":`...)
+	dst = strconv.AppendInt(dst, in+out, 10)
+	dst = append(dst, `,"is_byok":false`...)
 	if searches, calls := u.Count(catalog.ItemWebSearch), u.Count(catalog.ItemCodeExecution); searches > 0 || calls > 0 {
-		dst = fmt.Appendf(dst, `,"server_tool_use_details":{"tool_calls_requested":%d,"tool_calls_executed":%d,"web_search_requests":%d}`,
-			searches+calls, searches+calls, searches)
+		dst = append(dst, `,"server_tool_use_details":{"tool_calls_requested":`...)
+		dst = strconv.AppendInt(dst, searches+calls, 10)
+		dst = append(dst, `,"tool_calls_executed":`...)
+		dst = strconv.AppendInt(dst, searches+calls, 10)
+		dst = append(dst, `,"web_search_requests":`...)
+		dst = strconv.AppendInt(dst, searches, 10)
+		dst = append(dst, '}')
 	}
 	dst = append(dst, cost...)
 	return append(dst, '}')
+}
+
+// appendCount appends a count led by a comma, or nothing for a zero: the optional members of a details object are
+// the counts a reply has, and an absent one is not a zero.
+func appendCount(dst []byte, name string, n int64) []byte {
+	if n == 0 {
+		return dst
+	}
+	dst = append(dst, ',')
+	dst = appendQuoted(dst, name)
+	dst = append(dst, ':')
+	return strconv.AppendInt(dst, n, 10)
 }
 
 // appendQuoted appends s as a JSON string.

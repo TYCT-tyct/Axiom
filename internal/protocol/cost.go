@@ -1,8 +1,6 @@
 package protocol
 
 import (
-	"strings"
-
 	"axiom/internal/platform"
 )
 
@@ -29,6 +27,4 @@ func cost(f *Final, format Format) string {
 }
 
 // decimal is an exact amount as the shortest plain decimal that holds it.
-func decimal(e platform.Exact) string {
-	return strings.TrimRight(strings.TrimRight(e.Rat().FloatString(15), "0"), ".")
-}
+func decimal(e platform.Exact) string { return string(e.AppendDecimal(nil)) }
