@@ -193,6 +193,8 @@ export default {
     title: "Alerts",
     dismiss: "Close",
     saved: "Preferences saved.",
+    savedPartialSpend:
+      "Your other preferences were saved. The unusual-activity reminder was not: this console node does not support it yet, so try again after the rollout.",
     balance: {
       title: "Balance reminders",
       body: "A reminder is sent when the available balance crosses below the threshold.",
@@ -207,6 +209,9 @@ export default {
     topUpHint: "Confirm by email when a top-up is credited.",
     factorChanged: "Security changes",
     factorChangedHint: "Tell me when two-step verification or a passkey changes. Password changes are always emailed.",
+    spendAnomaly: "Unusual account activity",
+    spendAnomalyHint:
+      "Tell me when this account's spend, source regions or models change sharply. If it was not you, disable any API keys you do not recognize.",
     delivery: { title: "Delivery" },
     webhook: "Webhook URL",
     webhookHint: "HTTPS only. Leave empty to turn webhooks off.",

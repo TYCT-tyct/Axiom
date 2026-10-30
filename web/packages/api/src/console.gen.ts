@@ -1243,6 +1243,8 @@ export interface components {
             top_up?: boolean;
             /** @description Controls background factor-change email and webhooks. Password-change security email is always sent. */
             factor_changed?: boolean;
+            /** @description Controls account spend-anomaly email and webhooks. Absent from a node that predates the preference; a client must then neither show the switch nor send the field. */
+            spend_anomaly?: boolean;
             /** @description Billionths of site credits. */
             threshold?: string;
             webhook_url?: string;
@@ -1254,6 +1256,8 @@ export interface components {
             top_up: boolean;
             /** @description Controls background factor-change email and webhooks. Password-change security email is always sent. */
             factor_changed: boolean;
+            /** @description Controls account spend-anomaly email and webhooks. Omit to keep the stored value. */
+            spend_anomaly?: boolean;
             /** @description Billionths of site credits. */
             threshold: string;
             webhook_url: string;

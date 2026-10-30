@@ -2022,6 +2022,32 @@ export interface components {
             rev?: number;
             rules?: components["schemas"]["AlertRule"][];
             channels?: components["schemas"]["AlertChannel"][];
+            spend_detection?: components["schemas"]["SpendDetection"];
+        };
+        /** @description Offline account spend-anomaly thresholds. The object is optional so an older node's configuration replacement leaves the saved thresholds unchanged. */
+        SpendDetection: {
+            enabled: boolean;
+            /**
+             * @description Create the account's user reminder for a detected anomaly. Leave off until every node can dispatch the spend_anomaly notice kind: an older dispatcher would mark it sent without sending it. Detection and alert channels do not depend on it.
+             * @default false
+             */
+            notify_users: boolean;
+            /** @description Recent window compared with the baseline. The detector runs every 10 minutes, so the window is at least 15 minutes and consecutive windows overlap. */
+            window_seconds: number;
+            /** @description The account's own history immediately before the recent window; at least window_seconds. */
+            baseline_seconds: number;
+            /**
+             * Format: int64
+             * @description Absolute floor for a spend spike, in billionths of a credit.
+             */
+            min_spend_nano: number;
+            /**
+             * Format: double
+             * @description Recent spend divided by the baseline's expected spend for the same window.
+             */
+            spend_ratio: number;
+            min_new_region_calls: number;
+            min_new_model_calls: number;
         };
         AlertRule: {
             id?: string;
@@ -2063,6 +2089,7 @@ export interface components {
             rev: number;
             rules: WithRequired<components["schemas"]["AlertRule"], "id" | "kind" | "minimum_severity" | "threshold" | "duration_seconds" | "channel" | "quiet_start" | "quiet_end" | "repeat_seconds">[];
             channels: WithRequired<components["schemas"]["AlertChannel"], "id">[];
+            spend_detection?: components["schemas"]["SpendDetection"];
             reason: components["schemas"]["Reason"];
         };
         AlertTestRequest: {
