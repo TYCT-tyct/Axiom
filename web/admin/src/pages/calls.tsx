@@ -4,7 +4,7 @@ import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Text
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { FilterBar, Head, mainCell, PageBody, State, Time, text, toInstant, toLocalInput } from "../parts";
+import { Code, FilterBar, Head, mainCell, PageBody, State, Time, text, toInstant, toLocalInput } from "../parts";
 import { adminCallsQuery } from "../queries";
 
 // The support view of calls: what a person asks about a bill, without costs, endpoints or routes. The operator's trace
@@ -110,6 +110,7 @@ function CallsTable({ rows }: { rows: AdminSchemas["AdminCallSummary"][] }) {
       <Head
         cols={[
           [t("calls.col.at")],
+          [t("calls.requestId")],
           [t("calls.col.account")],
           [t("calls.col.model"), "hidden md:table-cell"],
           [t("calls.col.result")],
@@ -129,6 +130,9 @@ function CallsTable({ rows }: { rows: AdminSchemas["AdminCallSummary"][] }) {
               ) : (
                 <Time at={call.at} />
               )}
+            </Td>
+            <Td>
+              <Code>{call.id ?? "—"}</Code>
             </Td>
             <Td className={mainCell}>
               <span className="block truncate font-mono text-label text-t2" title={call.account_id}>

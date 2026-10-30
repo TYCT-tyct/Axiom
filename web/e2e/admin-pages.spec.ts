@@ -585,7 +585,9 @@ test.describe("calls and audit", () => {
     expect(state.accounts.get(acct(1))?.sign_in_disabled).toBe(true);
     await expect(page.getByText(zhText("users.account.signInDisabled")).first()).toBeVisible();
 
+    const tiers = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/tiers"));
     await press(page, "users.account.changeTier").click();
+    expect(new URL((await tiers).url()).searchParams.get("site_id")).toBe(state.accounts.get(acct(1))?.site_id);
     await dialog(page).locator("select[name=tier_id]").selectOption({ label: "Pro" });
     await send(page);
     await expect(done(page)).toBeVisible();
@@ -628,6 +630,7 @@ test.describe("calls and audit", () => {
     state.permissions = ["calls.search"];
     await page.goto("/calls");
     await expect(page.getByRole("row")).toHaveCount(51);
+    await expect(page.getByText(state.calls[0]?.id ?? "")).toBeVisible();
     await expect(page.getByRole("link", { name: words("calls.trace") })).toHaveCount(0);
   });
 
@@ -645,7 +648,7 @@ test.describe("calls and audit", () => {
     await expect(page.getByText(zhText("audit.detailTitle"))).toBeVisible();
     await expect(page.getByText(/"before": "Standard"/)).toBeVisible();
     await page.getByRole("link", { name: zhText("audit.openCalls") }).click();
-    await expect(page).toHaveURL(/\/calls\?request_id=/);
+    await expect(page).toHaveURL(/\/calls\?request_id=.*since=.*until=/);
     await expect(h1(page, words("nav.calls"))).toBeVisible();
   });
 });

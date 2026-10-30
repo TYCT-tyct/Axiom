@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { nextWindow } from "./queries";
+import { nextWindow, tiersQuery } from "./queries";
 
 it.each<{ case: string; page: { next_cursor: string | null; since?: string; until?: string }; want: unknown }>([
   {
@@ -15,4 +15,10 @@ it.each<{ case: string; page: { next_cursor: string | null; since?: string; unti
   { case: "the last page asks for nothing", page: { next_cursor: null }, want: undefined },
 ])("$case", ({ page, want }) => {
   expect(nextWindow(page)).toEqual(want);
+});
+
+it("keeps the tiers of different sites apart", () => {
+  const first = tiersQuery("site_00000000000000000000000001");
+  const second = tiersQuery("site_00000000000000000000000002");
+  expect(first.queryKey).not.toEqual(second.queryKey);
 });

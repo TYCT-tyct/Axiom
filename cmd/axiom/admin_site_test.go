@@ -1,13 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform/adminapi"
 )
 
@@ -181,6 +184,17 @@ func TestTiers(t *testing.T) {
 	named := f.do(http.MethodGet, "/tiers?site_id="+f.siteID(), "", as(s))
 	if named.Body.String() != rec.Body.String() {
 		t.Errorf("the main site named: %s, want %s", named.Body, rec.Body)
+	}
+	child, childTier := uuid.NewV7(), uuid.NewV7()
+	f.run("BEGIN",
+		fmt.Sprintf(`INSERT INTO accounts.sites (id,parent_site_id,owner_account_id,name,status,key_prefix,registration,default_tier_id)
+			SELECT '%s',id,(SELECT a.id FROM accounts.accounts a WHERE a.site_id=s.id LIMIT 1),'Other','active','sk-other-','closed','%s' FROM accounts.sites s WHERE s.is_main`, child, childTier),
+		fmt.Sprintf(`INSERT INTO accounts.tiers(id,site_id,name) VALUES ('%s','%s','Other')`, childTier, child), "COMMIT")
+	rec = f.do(http.MethodGet, "/tiers?site_id="+accounts.SiteID(child).TypeID(), "", as(s))
+	expectAdmin(t, "a second site's tiers", rec, http.StatusOK, "")
+	decode(t, rec, &list)
+	if len(list.Data) != 1 || list.Data[0].Name != "Other" {
+		t.Errorf("the second site's tiers: %+v", list)
 	}
 	rec = f.do(http.MethodGet, "/tiers?site_id=site_00000000000000000000000000", "", as(s))
 	expectAdmin(t, "a site with no tiers", rec, http.StatusOK, "")

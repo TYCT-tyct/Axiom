@@ -2,6 +2,7 @@ import { can, readForm, useSession } from "@axiom/app";
 import { Badge, Button, Icon, Panel, SelectField, Th, useFormat } from "@axiom/ui";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { formatJSON } from "./lossless";
 
 export { toInstant, toLocalInput } from "@axiom/app";
 
@@ -47,9 +48,7 @@ export function Code({ children }: { children: ReactNode }) {
 // were written, not flattened into one line.
 export function Json({ value }: { value: unknown }) {
   return (
-    <pre className="max-h-96 overflow-auto rounded-md bg-s2 p-3 font-mono text-label text-t2">
-      {JSON.stringify(value, null, 2)}
-    </pre>
+    <pre className="max-h-96 overflow-auto rounded-md bg-s2 p-3 font-mono text-label text-t2">{formatJSON(value)}</pre>
   );
 }
 

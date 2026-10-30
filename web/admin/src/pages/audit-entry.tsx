@@ -91,10 +91,23 @@ function Request({ entry }: { entry: Entry }) {
   return (
     <Link
       to="/calls"
-      search={{ request_id: entry.request_id }}
+      search={{ request_id: entry.request_id, ...callWindow(entry.at) }}
       className="font-mono text-label text-accent hover:underline"
     >
       {t("audit.openCalls")}
     </Link>
   );
+}
+
+// The call list defaults to the last 24 hours, which would hide an older linked call. Carry the widest window the API
+// accepts, ending one day after the audit entry: a call is written before the entry that refers to it.
+export function callWindow(at: string | undefined) {
+  const time = at ? Date.parse(at) : Number.NaN;
+  if (Number.isNaN(time)) {
+    return {};
+  }
+  return {
+    since: new Date(time - 30 * 24 * 60 * 60 * 1000).toISOString(),
+    until: new Date(time + 24 * 60 * 60 * 1000).toISOString(),
+  };
 }

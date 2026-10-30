@@ -143,7 +143,7 @@ function StateDialog<Input extends Record<string, boolean>>({
 
 function TierDialog({ account, onClose }: { account: Account; onClose: () => void }) {
   const { t } = useTranslation();
-  const tiers = useQuery(tiersQuery);
+  const tiers = useQuery(tiersQuery(account.site_id));
   return (
     <ChangeDialog
       title={t("users.account.tierChange.title", { email: account.owner.email })}

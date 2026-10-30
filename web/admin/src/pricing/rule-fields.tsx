@@ -78,7 +78,7 @@ function TargetFields({ target }: { target?: Target }) {
 // Whom a rule prices for: everyone, the users of one tier, or one account.
 function AudienceFields({ audience }: { audience?: Audience }) {
   const { t } = useTranslation();
-  const tiers = useQuery(tiersQuery);
+  const tiers = useQuery(tiersQuery());
   const [kind, setKind] = useState<Audience["kind"]>(audience?.kind ?? "all");
   return (
     <>

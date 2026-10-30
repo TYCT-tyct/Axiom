@@ -1,6 +1,7 @@
 import { type AdminSchemas, adminApi, unwrap } from "@axiom/api";
 import { accountKey } from "@axiom/app";
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { parseJSONLossless } from "./lossless";
 
 // The calls the pages make, one place for each so a page and the change that alters its data agree on the key.
 // Account data is under accountKey, which the end of the session clears, and which a change invalidates as a whole: the
@@ -24,10 +25,13 @@ export const adminSiteQuery = queryOptions({
   staleTime: 30_000,
 });
 
-export const tiersQuery = queryOptions({
-  queryKey: [accountKey, "tiers"],
-  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/tiers`, { signal })),
-});
+// The site's tiers, not the main site's: an account belongs to one site, and a tier of another site cannot be assigned.
+export const tiersQuery = (site?: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "tiers", site],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/tiers`, { params: site ? { query: { site_id: site } } : {}, signal })),
+  });
 
 export type UserFilters = { email_prefix?: string };
 
@@ -91,11 +95,21 @@ export const adminCallsQuery = (filters: AdminCallFilters) =>
     getNextPageParam: nextWindow,
   });
 
+// The route and the attempts are shown as JSON and may hold integers beyond JavaScript's exact range, so the trace is
+// read as text and parsed without rounding those numbers.
 export const adminCallQuery = (id: string) =>
   queryOptions({
     queryKey: [accountKey, "admin-call", id],
-    queryFn: ({ signal }) =>
-      unwrap(adminApi.GET(`${base}/calls/{call_id}/trace`, { params: { path: { call_id: id } }, signal })),
+    queryFn: async ({ signal }) =>
+      parseJSONLossless(
+        await unwrap(
+          adminApi.GET(`${base}/calls/{call_id}/trace`, {
+            params: { path: { call_id: id } },
+            parseAs: "text",
+            signal,
+          }),
+        ),
+      ) as AdminSchemas["AdminCallTrace"],
   });
 
 export type AdminAuditFilters = AdminCallFilters & {
@@ -122,11 +136,20 @@ export const adminAuditQuery = (filters: AdminAuditFilters) =>
     getNextPageParam: nextWindow,
   });
 
+// The same for an audit entry's detail: its ratios and other integers are data, not display rounding.
 export const auditEntryQuery = (id: string) =>
   queryOptions({
     queryKey: [accountKey, "audit-entry", id],
-    queryFn: ({ signal }) =>
-      unwrap(adminApi.GET(`${base}/audit/{entry_id}`, { params: { path: { entry_id: id } }, signal })),
+    queryFn: async ({ signal }) =>
+      parseJSONLossless(
+        await unwrap(
+          adminApi.GET(`${base}/audit/{entry_id}`, {
+            params: { path: { entry_id: id } },
+            parseAs: "text",
+            signal,
+          }),
+        ),
+      ) as AdminSchemas["AuditEntry"],
   });
 
 export const siteKeyLimitsQuery = (id: AdminSchemas["SiteId"]) =>
