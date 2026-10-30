@@ -3,10 +3,10 @@ package main
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
-
 	"uuid"
 
 	"axiom/internal/billing"
@@ -27,43 +27,47 @@ func TestListOrders(t *testing.T) {
 	first := f.order(s, "list-first", http.StatusCreated)
 	second := f.order(s, "list-second", http.StatusCreated)
 
-	rec := f.do(http.MethodGet, "/orders", "", as(s))
-	expect(t, "listOrders", rec, http.StatusOK, "")
-	var list consoleapi.OrderList
-	decode(t, rec, &list)
-	if len(list.Data) != 2 || list.NextCursor != nil {
-		t.Fatalf("listOrders: %d orders, next %v, want 2 and none", len(list.Data), list.NextCursor)
+	list := listOrders(t, f, s, "")
+	requireOrderPage(t, list, []string{second.Id, first.Id}, false)
+	top := list.Data[0]
+	if top.Refunds == nil || len(*top.Refunds) != 0 {
+		t.Fatalf("listOrders: refunds %v, want an empty list", top.Refunds)
 	}
-	if list.Data[0].Id != second.Id || list.Data[1].Id != first.Id {
-		t.Fatalf("listOrders: %s, %s, want newest first", list.Data[0].Id, list.Data[1].Id)
-	}
-	if list.Data[0].Refunds == nil || len(*list.Data[0].Refunds) != 0 {
-		t.Fatalf("listOrders: refunds %v, want an empty list", list.Data[0].Refunds)
-	}
-	if list.Data[0].RefundAllowed == nil || !*list.Data[0].RefundAllowed {
-		t.Fatalf("listOrders: refund_allowed %v, want true", list.Data[0].RefundAllowed)
+	if top.RefundAllowed == nil || !*top.RefundAllowed {
+		t.Fatalf("listOrders: refund_allowed %v, want true", top.RefundAllowed)
 	}
 	// The channel's client secret is shown once, when the order is made; a page read does not repeat it.
-	if list.Data[0].Checkout != nil && list.Data[0].Checkout.ClientSecret != nil {
+	if top.Checkout != nil && top.Checkout.ClientSecret != nil {
 		t.Fatalf("listOrders: checkout carries a client secret")
 	}
 
-	rec = f.do(http.MethodGet, "/orders?limit=1", "", as(s))
-	expect(t, "listOrders", rec, http.StatusOK, "")
-	list = consoleapi.OrderList{}
-	decode(t, rec, &list)
-	if len(list.Data) != 1 || list.Data[0].Id != second.Id || list.NextCursor == nil {
-		t.Fatalf("listOrders: one order %v, next %v, want %s and a cursor", list.Data, list.NextCursor, second.Id)
-	}
-	rec = f.do(http.MethodGet, "/orders?limit=1&cursor="+url.QueryEscape(*list.NextCursor), "", as(s))
-	expect(t, "listOrders", rec, http.StatusOK, "")
-	list = consoleapi.OrderList{}
-	decode(t, rec, &list)
-	if len(list.Data) != 1 || list.Data[0].Id != first.Id || list.NextCursor != nil {
-		t.Fatalf("listOrders: second page %v, next %v, want %s and none", list.Data, list.NextCursor, first.Id)
-	}
+	one := listOrders(t, f, s, "?limit=1")
+	requireOrderPage(t, one, []string{second.Id}, true)
+	requireOrderPage(t, listOrders(t, f, s, "?limit=1&cursor="+url.QueryEscape(*one.NextCursor)), []string{first.Id}, false)
 
 	expect(t, "listOrders", f.do(http.MethodGet, "/orders?cursor=nonsense", "", as(s)), http.StatusBadRequest, "invalid_request")
+}
+
+// listOrders reads one page of the account's orders as the query asks for it.
+func listOrders(t *testing.T, f consoleFixture, s session, query string) consoleapi.OrderList {
+	t.Helper()
+	rec := f.do(http.MethodGet, "/orders"+query, "", as(s))
+	expect(t, "listOrders", rec, http.StatusOK, "")
+	var list consoleapi.OrderList
+	decode(t, rec, &list)
+	return list
+}
+
+// requireOrderPage checks the page's orders in the order it returned them and whether a cursor says more follow.
+func requireOrderPage(t *testing.T, list consoleapi.OrderList, ids []string, more bool) {
+	t.Helper()
+	got := make([]string, len(list.Data))
+	for i, order := range list.Data {
+		got[i] = order.Id
+	}
+	if !slices.Equal(got, ids) || (list.NextCursor != nil) != more {
+		t.Fatalf("listOrders: orders %v, next %v, want %v and cursor %t", got, list.NextCursor, ids, more)
+	}
 }
 
 // TestRequestRefund: a paid order's unused credits can be frozen for a refund; the request waits for approval, replays
@@ -149,22 +153,52 @@ func TestBalanceBatches(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	b := f.balance(s)
-	if b.Batches == nil || len(*b.Batches) != 2 {
-		t.Fatalf("balance: batches %v, want two", b.Batches)
+	requireBatches(t, f.balance(s).Batches, map[string]batchWant{
+		first.String():  {source: consoleapi.CreditBatchGift, amount: "5000000000", remaining: "5000000000", expires: &expires},
+		second.String(): {source: consoleapi.CreditBatchGift, amount: "3000000000", remaining: "3000000000"},
+	})
+}
+
+// batchWant is what one batch of the balance should say: what it came from, what it was, what is left and, if it
+// expires, when.
+type batchWant struct {
+	source    consoleapi.CreditBatchSource
+	amount    string
+	remaining string
+	expires   *time.Time
+}
+
+// requireBatches checks the balance's batches by ID: each one's source, remaining credits and expiry, and no others.
+func requireBatches(t *testing.T, batches *[]consoleapi.CreditBatch, want map[string]batchWant) {
+	t.Helper()
+	got := make(map[string]consoleapi.CreditBatch, len(want))
+	if batches != nil {
+		for _, batch := range *batches {
+			got[batch.Id] = batch
+		}
 	}
-	byID := map[string]consoleapi.CreditBatch{}
-	for _, batch := range *b.Batches {
-		byID[batch.Id] = batch
+	if len(got) != len(want) {
+		t.Fatalf("balance: %d batches, want %d", len(got), len(want))
 	}
-	expiring, ok := byID[first.String()]
-	if !ok || expiring.Source != consoleapi.CreditBatchGift || expiring.Remaining.Amount != "5000000000" || expiring.ExpiresAt == nil {
-		t.Fatalf("balance: expiring batch %+v, want a gift of 5 credits expiring at %v", expiring, expires)
+	for id, w := range want {
+		batch, ok := got[id]
+		if !ok {
+			t.Fatalf("balance: no batch %s", id)
+		}
+		if batch.Source != w.source || batch.Amount.Amount != w.amount || batch.Remaining.Amount != w.remaining {
+			t.Fatalf("balance: batch %s is %s/%s/%s, want %s/%s/%s", id,
+				batch.Source, batch.Amount.Amount, batch.Remaining.Amount, w.source, w.amount, w.remaining)
+		}
+		if !sameInstant(batch.ExpiresAt, w.expires) {
+			t.Fatalf("balance: batch %s expires at %v, want %v", id, batch.ExpiresAt, w.expires)
+		}
 	}
-	if !expiring.ExpiresAt.Equal(expires) {
-		t.Fatalf("balance: expiry %v, want %v", expiring.ExpiresAt, expires)
+}
+
+// sameInstant compares two optional instants, either of which may be absent.
+func sameInstant(got, want *time.Time) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
 	}
-	if lasting := byID[second.String()]; lasting.ExpiresAt != nil || lasting.Amount.Amount != "3000000000" {
-		t.Fatalf("balance: lasting batch %+v, want 3 credits without expiry", lasting)
-	}
+	return got.Equal(*want)
 }

@@ -119,7 +119,7 @@ func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Ref
 	}
 	// Only a paid order has a paid-credit batch to freeze. checkRefundTerms rejects this too, but it runs after the
 	// freeze; answering here keeps a request that can never work out of the billing layer's internal errors.
-	if State(o.State) != Paid && State(o.State) != PartiallyRefunded {
+	if o.State != Paid && o.State != PartiallyRefunded {
 		return Refund{}, ErrRefundAmount
 	}
 	f := billing.Freeze{Account: o.AccountID, Batch: uuid.UUID(o.ID), Amount: r.Credits}
