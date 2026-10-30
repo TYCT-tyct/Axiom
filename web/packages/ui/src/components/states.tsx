@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { createContext, type ReactNode, useContext } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../cn";
 import { useFormat } from "../format";
@@ -87,11 +87,18 @@ export function EmptyState({
 // Where a view stands in its page: compact inside a section, or the whole page (page), which then has the heading.
 type Placement = { compact?: boolean; page?: boolean };
 
+// What a person without the permission is told to do, in the words of the app they are in: who grants it differs by app,
+// so the app gives the sentence (AppShell) and the shared state only places it.
+const ForbiddenHintContext = createContext<string | undefined>(undefined);
+export const ForbiddenHint = ForbiddenHintContext.Provider;
+
 function ForbiddenState(placement: Placement) {
   const { t } = useTranslation("common");
+  const hint = useContext(ForbiddenHintContext);
   return (
     <StateFrame icon="lock" title={t("state.forbiddenTitle")} {...placement}>
       <p>{t("state.forbiddenBody")}</p>
+      {hint ? <p>{hint}</p> : null}
     </StateFrame>
   );
 }

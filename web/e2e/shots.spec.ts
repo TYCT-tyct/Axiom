@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { type Page, test } from "@playwright/test";
+import { applyBrand, brands } from "./brand.ts";
 import { suites } from "./suites.ts";
 
 // The screenshots of the acceptance gate (docs/frontend.md「验收门槛」) for a person to look at: every screen of each app at 360, 768,
@@ -13,16 +14,6 @@ test.skip(!directory, "set AXIOM_SHOTS_DIR to take the screenshots");
 test.describe.configure({ mode: "parallel" });
 
 const widths = [360, 768, 1280, 2560] as const;
-
-// Brand colours at the edges, with the ink a person would put on them, applied to the tokens of the accent and the
-// primary button as a site's colour setting will (docs/frontend.md「主题与自由度」).
-const brands = {
-  red: ["#ff0000", "#ffffff"],
-  yellow: ["#ffff00", "#000000"],
-  black: ["#050505", "#ffffff"],
-  white: ["#fafafa", "#000000"],
-  green: ["#39ff14", "#000000"],
-} as const;
 
 async function shoot(page: Page, name: string) {
   mkdirSync(directory as string, { recursive: true });
@@ -59,7 +50,7 @@ for (const suite of suites) {
     }
   }
 
-  for (const [brand, [color, ink]] of Object.entries(brands)) {
+  for (const [brand, color] of Object.entries(brands)) {
     for (const scheme of ["light", "dark"] as const) {
       for (const scene of suite.scenes.filter((s) => suite.brands.includes(s.name))) {
         test(`brand ${brand} ${suite.app}-${scene.name} ${scheme}`, async ({ page }) => {
@@ -67,18 +58,7 @@ for (const suite of suites) {
           await suite.prepare(page, scene);
           await page.setViewportSize({ width: 1280, height: 800 });
           await scene.open(page);
-          await page.evaluate(
-            ([accent, accentInk]) => {
-              const style = document.documentElement.style;
-              for (const token of ["--accent", "--btn"]) {
-                style.setProperty(token, accent as string);
-              }
-              for (const token of ["--accent-ink", "--btn-ink"]) {
-                style.setProperty(token, accentInk as string);
-              }
-            },
-            [color, ink],
-          );
+          await applyBrand(page, color);
           await shoot(page, `brand-${brand}-${suite.app}-${scene.name}-${scheme}`);
         });
       }

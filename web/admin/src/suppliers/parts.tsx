@@ -13,8 +13,9 @@ const tones = {
   removed: "neutral",
 } as const satisfies Record<AdminSchemas["SupplierStatus"], "neutral" | "good" | "warn" | "bad">;
 
-// SupplierState names where a supplier stands, and for one that needs a person, why. The reason has no length limit in
-// the contract, so a list shows its start (brief) and keeps rows short; the supplier's page shows all of it.
+// SupplierState names where a supplier stands, and for one that needs a person, why. The reason is at most 200
+// characters in the contract, which a list still shows as its start (brief) to keep rows short; the supplier's page shows
+// all of it.
 export function SupplierState({ supplier, brief = false }: { supplier: AdminSchemas["Supplier"]; brief?: boolean }) {
   const { t } = useTranslation();
   return (

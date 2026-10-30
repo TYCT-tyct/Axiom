@@ -7,8 +7,12 @@
     ".": {
       "entry": ["theme.js"],
       // journey/node.ts starts the Go test binary of cmd/axiom/journey_test.go.
-      "playwright": { "config": ["playwright.config.ts", "playwright.journey.config.ts"] },
-      "ignoreBinaries": ["go"]
+      "playwright": {
+        "config": ["playwright.config.ts", "playwright.journey.config.ts", "playwright.vitals.config.ts"]
+      },
+      "ignoreBinaries": ["go"],
+      // e2e/vitals.spec.ts reads the library's IIFE file by path to inject it into pages; no import names it.
+      "ignoreDependencies": ["web-vitals"]
     }
   },
   "ignore": ["**/*.gen.ts"]

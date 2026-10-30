@@ -337,7 +337,7 @@ export function worstState(): AdminState {
       upstream_account: long("ops-", 254),
       balance_native: "999999999999999999.999999999999999",
       status: "needs_attention",
-      status_reason: long("The supplier rejected the login. ", 600),
+      status_reason: long("The supplier rejected the login. ", 200),
     }),
     ...range(60).map((n) => aDetail(n + 1)),
   ];
