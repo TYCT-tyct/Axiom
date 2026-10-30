@@ -245,8 +245,8 @@ func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, q K
 	if q.After != (KeyID{}) {
 		before = uuid.UUID(q.After)
 	}
-	rows, err := s.queries.ListKeys(ctx, tx, ListKeysParams{ // #nosec G115 -- limit is the contract's 1 to 200
-		AccountID: uuid.UUID(account), Before: before, PageSize: int32(q.Limit) + 1,
+	rows, err := s.queries.ListKeys(ctx, tx, ListKeysParams{
+		AccountID: uuid.UUID(account), Before: before, PageSize: int32(q.Limit) + 1, // #nosec G115 -- limit is the contract's 1 to 200
 		Name: nullable(q.Name), Prefix: nullable(q.Prefix), Status: nullable(q.Status),
 		CreatedAfter: q.CreatedAfter, CreatedBefore: q.CreatedBefore,
 	})

@@ -138,38 +138,46 @@ func keyFilterEcho(q accounts.KeyQuery) *consoleapi.KeyFilterEcho {
 	return echo
 }
 
+// keyQueryOf is one page's query from a request's parameters, or the 400 for a value the contract rejects.
+func keyQueryOf(p consoleapi.ListKeysParams) (accounts.KeyQuery, error) {
+	q := accounts.KeyQuery{
+		Limit: pageSize(p.Limit),
+		Name:  textOf(p.Name), Prefix: textOf(p.Prefix),
+		CreatedAfter: p.CreatedAfter, CreatedBefore: p.CreatedBefore,
+	}
+	if q.Limit < 1 || q.Limit > 200 {
+		return accounts.KeyQuery{}, invalidField("limit", "must be between 1 and 200")
+	}
+	if p.Status != nil {
+		if !p.Status.Valid() {
+			return accounts.KeyQuery{}, invalidField("status", "must be active, disabled or expired")
+		}
+		q.Status = string(*p.Status)
+	}
+	if p.Cursor != nil {
+		after, err := accounts.ParseKeyID(*p.Cursor)
+		if err != nil {
+			return accounts.KeyQuery{}, invalidField("cursor", "not a cursor this API gave out")
+		}
+		q.After = after
+	}
+	if q.CreatedAfter != nil && q.CreatedBefore != nil && !q.CreatedAfter.Before(*q.CreatedBefore) {
+		return accounts.KeyQuery{}, invalidField("created_after", "must be before created_before")
+	}
+	return q, nil
+}
+
 // ListKeys lists the account's keys, newest first, a page at a time, narrowed by the optional filters.
 func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysRequestObject) (consoleapi.ListKeysResponseObject, error) {
 	cl := callOf(ctx)
-	limit := pageSize(request.Params.Limit)
-	if limit < 1 || limit > 200 {
-		return nil, invalidField("limit", "must be between 1 and 200")
-	}
-	if request.Params.Status != nil && !request.Params.Status.Valid() {
-		return nil, invalidField("status", "must be active, disabled or expired")
-	}
-	var after accounts.KeyID
-	if request.Params.Cursor != nil {
-		var err error
-		if after, err = accounts.ParseKeyID(*request.Params.Cursor); err != nil {
-			return nil, invalidField("cursor", "not a cursor this API gave out")
-		}
-	}
-	q := accounts.KeyQuery{
-		After: after, Limit: limit,
-		Name: textOf(request.Params.Name), Prefix: textOf(request.Params.Prefix),
-		CreatedAfter: request.Params.CreatedAfter, CreatedBefore: request.Params.CreatedBefore,
-	}
-	if request.Params.Status != nil {
-		q.Status = string(*request.Params.Status)
-	}
-	if q.CreatedAfter != nil && q.CreatedBefore != nil && !q.CreatedAfter.Before(*q.CreatedBefore) {
-		return nil, invalidField("created_after", "must be before created_before")
+	q, err := keyQueryOf(request.Params)
+	if err != nil {
+		return nil, err
 	}
 	var keys []accounts.Key
 	var used map[uuid.UUID]int64
 	var more bool
-	err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
+	err = c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
 		if keys, more, err = c.accounts.ListKeys(ctx, tx, cl.principal.AccountID(), q); err != nil {
 			return err
 		}

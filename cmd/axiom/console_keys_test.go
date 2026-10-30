@@ -205,21 +205,15 @@ func TestKeyFilterEcho(t *testing.T) {
 	decode(t, f.do(http.MethodGet, "/keys?name=alpha&prefix=SK-AX&status=active"+
 		"&created_after="+url.QueryEscape(from.Format(time.RFC3339))+
 		"&created_before="+url.QueryEscape(to.Format(time.RFC3339)), "", as(s)), &page)
-	if page.Filters == nil {
-		t.Fatal("a filtered page has no filter echo")
-	}
-	if page.Filters.Name == nil || *page.Filters.Name != "alpha" ||
-		page.Filters.Prefix == nil || *page.Filters.Prefix != "SK-AX" ||
-		page.Filters.Status == nil || *page.Filters.Status != consoleapi.KeyStatusActive ||
-		page.Filters.CreatedAfter == nil || !page.Filters.CreatedAfter.Equal(from) ||
-		page.Filters.CreatedBefore == nil || !page.Filters.CreatedBefore.Equal(to) {
-		t.Errorf("the filter echo = %+v", page.Filters)
+	name, prefix, status := "alpha", "SK-AX", consoleapi.KeyStatusActive
+	want := &consoleapi.KeyFilterEcho{Name: &name, Prefix: &prefix, Status: &status, CreatedAfter: &from, CreatedBefore: &to}
+	if diff := cmp.Diff(want, page.Filters); diff != "" {
+		t.Errorf("the filters a page was read with (-want +got):\n%s", diff)
 	}
 	var all consoleapi.KeyList
 	decode(t, f.do(http.MethodGet, "/keys", "", as(s)), &all)
-	if all.Filters == nil || all.Filters.Name != nil || all.Filters.Prefix != nil ||
-		all.Filters.Status != nil || all.Filters.CreatedAfter != nil || all.Filters.CreatedBefore != nil {
-		t.Errorf("an unfiltered page's echo = %+v", all.Filters)
+	if diff := cmp.Diff(&consoleapi.KeyFilterEcho{}, all.Filters); diff != "" {
+		t.Errorf("an unfiltered page's echo (-want +got):\n%s", diff)
 	}
 }
 
@@ -240,13 +234,14 @@ func TestKeyRetiredModelHint(t *testing.T) {
 	f := startNode(c, &testClock{now: time.Now()}, 0)
 	s := f.owner()
 	old := f.createKey(s, `{"name":"Old","models":["acme/retired","acme/listed","acme/unknown"]}`).Key
-	if old.RetiredModels == nil || !cmp.Equal([]string{"acme/retired"}, *old.RetiredModels) {
-		t.Errorf("the retired names of a key that names one: %v", old.RetiredModels)
+	retired := []string{"acme/retired"}
+	if diff := cmp.Diff(&retired, old.RetiredModels); diff != "" {
+		t.Errorf("the retired names of a key that names one (-want +got):\n%s", diff)
 	}
 	var read consoleapi.Key
 	decode(t, f.do(http.MethodGet, "/keys/"+old.Id, "", as(s)), &read)
-	if read.RetiredModels == nil || !cmp.Equal([]string{"acme/retired"}, *read.RetiredModels) {
-		t.Errorf("the retired names when the key is read: %v", read.RetiredModels)
+	if diff := cmp.Diff(&retired, read.RetiredModels); diff != "" {
+		t.Errorf("the retired names when the key is read (-want +got):\n%s", diff)
 	}
 	fresh := f.createKey(s, `{"name":"Fresh","models":["acme/listed"]}`).Key
 	if fresh.RetiredModels != nil {
@@ -254,17 +249,12 @@ func TestKeyRetiredModelHint(t *testing.T) {
 	}
 	var list consoleapi.KeyList
 	decode(t, f.do(http.MethodGet, "/keys", "", as(s)), &list)
+	hints := make(map[string]*[]string, len(list.Data))
 	for _, k := range list.Data {
-		switch k.Name {
-		case "Old":
-			if k.RetiredModels == nil || !cmp.Equal([]string{"acme/retired"}, *k.RetiredModels) {
-				t.Errorf("the retired names in the list: %v", k.RetiredModels)
-			}
-		case "Fresh":
-			if k.RetiredModels != nil {
-				t.Errorf("a listed key with no retired model has a hint: %v", *k.RetiredModels)
-			}
-		}
+		hints[k.Name] = k.RetiredModels
+	}
+	if diff := cmp.Diff(map[string]*[]string{"Old": &retired, "Fresh": nil}, hints); diff != "" {
+		t.Errorf("the retired names in the list (-want +got):\n%s", diff)
 	}
 }
 
