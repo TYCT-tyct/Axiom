@@ -1,5 +1,6 @@
 import { consoleApi, unwrap } from "@axiom/api";
 import { accountKey } from "@axiom/app";
+import type { ModelFilters } from "@axiom/ui";
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 // The calls the pages make, one place for each so a page and the one that changes its data agree on the key. Everything
@@ -72,19 +73,7 @@ export const keysQuery = (filters: KeyFilters = {}) =>
 
 // The public models and prices page. The console asks the account-priced projection, so a user sees the price a call
 // would be charged at; the website asks the public one.
-export type ModelFilters = {
-  q?: string;
-  author?: string;
-  ability?:
-    | "tools"
-    | "images"
-    | "documents"
-    | "reasoning"
-    | "prompt_cache"
-    | "structured_output"
-    | "web_search"
-    | "code_execution";
-};
+export type { ModelFilters } from "@axiom/ui";
 
 export const modelsQuery = (filters: ModelFilters) =>
   queryOptions({

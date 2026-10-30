@@ -4,41 +4,28 @@ import {
   DataState,
   EmptyState,
   ModelCatalog,
+  ModelFilterForm,
+  type ModelFilters,
+  modelAbilities,
   Panel,
   type PublicModel,
-  SelectField,
-  TextField,
 } from "@axiom/ui";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SiteShell } from "./shell";
 
-type Ability = (typeof abilities)[number];
-type Filters = { q?: string; author?: string; ability?: Ability };
-
-const abilities = [
-  "tools",
-  "images",
-  "documents",
-  "reasoning",
-  "prompt_cache",
-  "structured_output",
-  "web_search",
-  "code_execution",
-] as const;
-
-function readFilters(): Filters {
+function readFilters(): ModelFilters {
   const params = new URLSearchParams(window.location.search);
   const text = (name: string) => params.get(name)?.trim() || undefined;
-  const ability = text("ability") as Ability | undefined;
+  const ability = text("ability") as ModelFilters["ability"];
   return {
     q: text("q"),
     author: text("author"),
-    ability: ability && abilities.includes(ability) ? ability : undefined,
+    ability: ability && modelAbilities.includes(ability) ? ability : undefined,
   };
 }
 
-function urlOf(filters: Filters) {
+function urlOf(filters: ModelFilters) {
   const params = new URLSearchParams();
   for (const [name, value] of Object.entries(filters)) {
     if (value) {
@@ -49,17 +36,6 @@ function urlOf(filters: Filters) {
   return `${window.location.pathname}${query ? `?${query}` : ""}`;
 }
 
-function filtersOf(form: HTMLFormElement): Filters {
-  const data = new FormData(form);
-  const text = (name: string) => String(data.get(name) ?? "").trim() || undefined;
-  const ability = text("ability") as Ability | undefined;
-  return {
-    q: text("q"),
-    author: text("author"),
-    ability: ability && abilities.includes(ability) ? ability : undefined,
-  };
-}
-
 type Data = { data: PublicModel[] };
 type Query = {
   status: "pending" | "error" | "success";
@@ -68,7 +44,7 @@ type Query = {
   errorUpdatedAt: number;
 };
 
-function usePublicModels(filters: Filters, attempt: number) {
+function usePublicModels(filters: ModelFilters, attempt: number) {
   const [query, setQuery] = useState<Query>({ status: "pending", data: undefined, error: null, errorUpdatedAt: 0 });
   useEffect(() => {
     const call = new AbortController();
@@ -91,7 +67,7 @@ function usePublicModels(filters: Filters, attempt: number) {
 
 export function Models() {
   const { t } = useTranslation("common");
-  const [filters, setFilters] = useState<Filters>(readFilters);
+  const [filters, setFilters] = useState<ModelFilters>(readFilters);
   const [attempt, setAttempt] = useState(0);
   const query = usePublicModels(filters, attempt);
 
@@ -101,7 +77,7 @@ export function Models() {
     return () => window.removeEventListener("popstate", back);
   }, []);
 
-  const apply = (next: Filters) => {
+  const apply = (next: ModelFilters) => {
     setFilters(next);
     window.history.pushState(null, "", urlOf(next));
   };
@@ -112,59 +88,18 @@ export function Models() {
         <p className="mt-3 text-[15px] leading-relaxed text-t2">{t("publicModels.description")}</p>
       </div>
       <Panel className="p-4">
-        <ModelFilterForm filters={filters} onApply={apply} />
+        <ModelFilterForm
+          filters={filters}
+          onApply={apply}
+          reset={
+            <Button size="md" type="button" onClick={() => apply({})}>
+              {t("publicModels.reset")}
+            </Button>
+          }
+        />
       </Panel>
       <ModelResults query={query} onRetry={() => setAttempt((n) => n + 1)} onReset={() => apply({})} />
     </SiteShell>
-  );
-}
-
-function ModelFilterForm({ filters, onApply }: { filters: Filters; onApply: (filters: Filters) => void }) {
-  const { t } = useTranslation("common");
-  return (
-    <form
-      key={JSON.stringify(filters)}
-      noValidate
-      className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(3,minmax(0,1fr))_auto] lg:items-end"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onApply(filtersOf(event.currentTarget));
-      }}
-    >
-      <TextField
-        label={t("publicModels.search")}
-        name="q"
-        maxLength={100}
-        defaultValue={filters.q}
-        placeholder={t("publicModels.searchHint")}
-        autoComplete="off"
-        spellCheck={false}
-      />
-      <TextField
-        label={t("publicModels.author")}
-        name="author"
-        maxLength={100}
-        defaultValue={filters.author}
-        autoComplete="off"
-        spellCheck={false}
-      />
-      <SelectField label={t("publicModels.ability")} name="ability" defaultValue={filters.ability ?? ""}>
-        <option value="">{t("publicModels.allAbilities")}</option>
-        {abilities.map((ability) => (
-          <option key={ability} value={ability}>
-            {t(`publicModels.abilityNames.${ability}`)}
-          </option>
-        ))}
-      </SelectField>
-      <div className="flex gap-2">
-        <Button variant="primary" size="md" type="submit">
-          {t("publicModels.apply")}
-        </Button>
-        <Button size="md" type="button" onClick={() => onApply({})}>
-          {t("publicModels.reset")}
-        </Button>
-      </div>
-    </form>
   );
 }
 

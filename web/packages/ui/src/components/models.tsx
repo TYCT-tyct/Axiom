@@ -3,13 +3,14 @@ import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useFormat } from "../format";
 import { Button } from "./button";
+import { SelectField, TextField } from "./form";
 import { Icon } from "./icon";
 import { Badge, Panel, Table, Td, Th } from "./panel";
 
 // The public models and prices page: what a visitor may see of the catalog, at the price of the audience that asked.
 // Every member but the identity is optional, so a page served by an older node shows what it has and marks the rest
 // unavailable instead of failing (docs/frontend.md「滚动发布」).
-export type PublicModelRate = {
+type PublicModelRate = {
   service_tier: string;
   above?: number;
   item: string;
@@ -17,7 +18,7 @@ export type PublicModelRate = {
   amount: string;
 };
 
-export type PublicModelPricing = {
+type PublicModelPricing = {
   currency: string;
   basis?: string[];
   rates?: PublicModelRate[];
@@ -81,6 +82,90 @@ function Price({ model, item }: { model: PublicModel; item: "input" | "output" }
       {priceText(format, rate, model.pricing.currency)}
       {rate.unit === "token" ? <span className="text-label text-t3"> {t("publicModels.perMillion")}</span> : null}
     </span>
+  );
+}
+
+export const modelAbilities = [
+  "tools",
+  "images",
+  "documents",
+  "reasoning",
+  "prompt_cache",
+  "structured_output",
+  "web_search",
+  "code_execution",
+] as const;
+
+type ModelAbility = (typeof modelAbilities)[number];
+export type ModelFilters = { q?: string; author?: string; ability?: ModelAbility };
+
+// modelFiltersOf reads the three filters both pages share. An ability outside the contract's list is no filter, not a
+// request the API would refuse.
+function modelFiltersOf(form: HTMLFormElement): ModelFilters {
+  const data = new FormData(form);
+  const text = (name: string) => String(data.get(name) ?? "").trim() || undefined;
+  const ability = text("ability") as ModelAbility | undefined;
+  return {
+    q: text("q"),
+    author: text("author"),
+    ability: ability && modelAbilities.includes(ability) ? ability : undefined,
+  };
+}
+
+// ModelFilterForm is the website's and the console's filter row: the fields, the apply button and the caller's reset,
+// so the two pages cannot drift apart. The caller owns what a submitted filter means (a URL push or a router navigate).
+export function ModelFilterForm({
+  filters,
+  onApply,
+  reset,
+}: {
+  filters: ModelFilters;
+  onApply: (filters: ModelFilters) => void;
+  reset: ReactNode;
+}) {
+  const { t } = useTranslation("common");
+  return (
+    <form
+      key={JSON.stringify(filters)}
+      noValidate
+      className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(3,minmax(0,1fr))_auto] lg:items-end"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onApply(modelFiltersOf(event.currentTarget));
+      }}
+    >
+      <TextField
+        label={t("publicModels.search")}
+        name="q"
+        maxLength={100}
+        defaultValue={filters.q}
+        placeholder={t("publicModels.searchHint")}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <TextField
+        label={t("publicModels.author")}
+        name="author"
+        maxLength={100}
+        defaultValue={filters.author}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <SelectField label={t("publicModels.ability")} name="ability" defaultValue={filters.ability ?? ""}>
+        <option value="">{t("publicModels.allAbilities")}</option>
+        {modelAbilities.map((ability) => (
+          <option key={ability} value={ability}>
+            {t(`publicModels.abilityNames.${ability}`)}
+          </option>
+        ))}
+      </SelectField>
+      <div className="flex gap-2">
+        <Button variant="primary" size="md" type="submit">
+          {t("publicModels.apply")}
+        </Button>
+        {reset}
+      </div>
+    </form>
   );
 }
 
