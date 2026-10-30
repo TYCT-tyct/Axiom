@@ -508,6 +508,8 @@ func TestRowRules(t *testing.T) {
 		{"an origin in capitals", []string{supplier("https://X.example", "newapi", "USD")}, checkViolation},
 		{"a kind with a capital", []string{supplier("https://x.example", "NewApi", "USD")}, checkViolation},
 		{"a currency in lower case", []string{supplier("https://x.example", "newapi", "usd")}, checkViolation},
+		{"a status reason of 200 characters", []string{supplierSet("status_reason = '" + strings.Repeat("x", 200) + "'")}, ""},
+		{"a status reason of 201 characters", []string{supplierSet("status_reason = '" + strings.Repeat("x", 201) + "'")}, checkViolation},
 		{"one account twice at one origin", []string{supplier("https://x.example", "newapi", "USD"), supplier("https://x.example", "newapi", "USD")}, uniqueViolation},
 	}
 	for _, c := range cases {
