@@ -12,7 +12,7 @@ import { Badge, Panel, Table, Td, Th } from "./panel";
 // unavailable instead of failing (docs/frontend.md「滚动发布」).
 type PublicModelRate = {
   service_tier: string;
-  above?: number;
+  above?: number; // absent is the base band; 0 is an explicit first band above 0
   item: string;
   unit: string;
   amount: string;
@@ -61,6 +61,19 @@ function priceText(format: ReturnType<typeof useFormat>, rate: PublicModelRate, 
   return `${format.decimal(rate.amount)} ${currency}`;
 }
 
+// baseRate is the headline price: the standard tier's price in the base band. An explicit above: 0 tier is a different
+// band even though its threshold is zero, so it must not stand in for the base price.
+export function baseRate<T extends Pick<PublicModelRate, "item" | "above" | "service_tier">>(
+  rates: T[],
+  item: string,
+): T | undefined {
+  return (
+    rates.find(
+      (candidate) => candidate.item === item && candidate.above === undefined && candidate.service_tier === "standard",
+    ) ?? rates.find((candidate) => candidate.item === item && candidate.above === undefined)
+  );
+}
+
 function Price({ model, item }: { model: PublicModel; item: "input" | "output" }) {
   const { t } = useTranslation("common");
   const format = useFormat();
@@ -70,10 +83,8 @@ function Price({ model, item }: { model: PublicModel; item: "input" | "output" }
   }
   const rate =
     rates.find(
-      (candidate) => candidate.item === item && (candidate.above ?? 0) === 0 && candidate.service_tier === "standard",
-    ) ??
-    rates.find((candidate) => candidate.item === item && (candidate.above ?? 0) === 0) ??
-    rates.find((candidate) => candidate.item === item);
+      (candidate) => candidate.item === item && candidate.above === undefined && candidate.service_tier === "standard",
+    ) ?? rates.find((candidate) => candidate.item === item && candidate.above === undefined);
   if (!rate) {
     return <span className="text-t3">{t("publicModels.priceUnavailable")}</span>;
   }
@@ -312,10 +323,12 @@ function RateTable({ model, currency, rates }: { model: PublicModel; currency: s
       </thead>
       <tbody>
         {rates.map((rate, i) => (
-          <tr key={`${rate.service_tier}:${rate.above ?? 0}:${rate.item}:${i}`}>
+          <tr key={`${rate.service_tier}:${rate.above ?? "base"}:${rate.item}:${i}`}>
             <Td>{label(t, "serviceTier", rate.service_tier)}</Td>
             <Td className="whitespace-nowrap tabular-nums">
-              {rate.above ? t("publicModels.above", { tokens: format.number(rate.above) }) : "—"}
+              {rate.above === undefined
+                ? t("publicModels.base")
+                : t("publicModels.above", { tokens: format.number(rate.above) })}
             </Td>
             <Td>{label(t, "item", rate.item)}</Td>
             <Td className="text-right whitespace-nowrap tabular-nums">

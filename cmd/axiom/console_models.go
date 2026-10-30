@@ -79,7 +79,7 @@ func publicModelBody(m gateway.PublicModel) consoleapi.PublicModel {
 			Unit:        consoleapi.ModelUnit(rate.Item.Unit().String()),
 			Amount:      rate.Price.String(),
 		}
-		if rate.Above != 0 {
+		if !rate.Base {
 			above := rate.Above
 			body.Above = &above
 		}

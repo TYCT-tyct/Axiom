@@ -1210,7 +1210,7 @@ export interface components {
             service_tier: components["schemas"]["ModelServiceTier"];
             /**
              * Format: int64
-             * @description The prompt length above which this rate applies. Absent or 0 is the base band.
+             * @description The prompt length above which this rate applies. Absent for the base band that applies below every threshold; 0 is an explicit first band above 0 and is not the base band.
              */
             above?: number;
             item: components["schemas"]["ModelItem"];

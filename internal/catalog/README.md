@@ -111,7 +111,7 @@
 
 `Schedule.Rate(usage, item)` 返回该采样实际使用的单价、上下文档下标和是否有价；0 是基础档，后续档按阈值顺序编号。它复用 `Cost` 的物理输入分档、服务档和继承规则，供 billing 在只读接口展开用户的分项售价。
 
-`Schedule.View()` 返回公开页面用的 `ScheduleView{Currency, Basis, Rates}`：按服务等级、上下文档、计费项展开每个单价，`Above` 是这一档的门槛（0 是基础档）。它只读价目表本身，不读成本、供应商或价格来源；`catalog.PriceView` 仍是管理接口的单模型参考价摘要，两者不是一回事。
+`Schedule.View()` 返回公开页面用的 `ScheduleView{Currency, Basis, Rates}`：按服务等级、上下文档、计费项展开每个**实际生效**的单价。`Base` 标出基础档，`Above` 是这一档的门槛；显式 `above: 0` 的门槛是 `Base: false`，不和基础档混在一起。某档没写的计费项继承基础价，所以空档也会展开成恢复后的基础价，而不是从视图里消失。它只读价目表本身，不读成本、供应商或价格来源；`catalog.PriceView` 仍是管理接口的单模型参考价摘要，两者不是一回事。
 
 `catalog.Item` 是封闭枚举，`ItemSet` 是它的位集合（32 位，最多 32 项，`NumItems` 超过 32 编译不过）。各项是计费数量；除 OpenAI 兼容上游的缓存读写可重叠外，模态项从总量中拆出，不重复收费；`protocol` 按下表把上游报告的用量折成 `Usage`：
 

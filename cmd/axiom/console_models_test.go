@@ -47,7 +47,8 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 			ID: "other/haiku", Name: "haiku", Author: "other", ContextLength: 100000, MaxOutput: 8000,
 			Abilities: []string{"tools"},
 			Pricing: catalog.ScheduleView{Currency: platform.CurrencyNone, Rates: []catalog.ScheduleRate{
-				{ServiceTier: catalog.ServiceTierStandard, Item: catalog.ItemInput, Price: price("0.000001")},
+				{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemInput, Price: price("0.000001")},
+				{ServiceTier: catalog.ServiceTierStandard, Above: 0, Item: catalog.ItemInput, Price: price("0.000003")},
 				{ServiceTier: catalog.ServiceTierPriority, Above: 100000, Item: catalog.ItemOutput, Price: price("0.000002")},
 			}},
 		},
@@ -97,10 +98,12 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 
 	body := call(query("other/", "", nil)).Data[0]
 	if !slices.Equal(body.Abilities, []consoleapi.ModelAbility{"tools"}) ||
-		len(body.Pricing.Basis) != 0 || len(body.Pricing.Rates) != 2 {
+		len(body.Pricing.Basis) != 0 || len(body.Pricing.Rates) != 3 {
 		t.Errorf("body: %+v", body)
 	}
-	if body.Pricing.Rates[0].Above != nil || body.Pricing.Rates[1].Above == nil || *body.Pricing.Rates[1].Above != 100000 {
+	if body.Pricing.Rates[0].Above != nil ||
+		body.Pricing.Rates[1].Above == nil || *body.Pricing.Rates[1].Above != 0 ||
+		body.Pricing.Rates[2].Above == nil || *body.Pricing.Rates[2].Above != 100000 {
 		t.Errorf("bands: %+v", body.Pricing.Rates)
 	}
 	if body.Pricing.Rates[0].Unit != consoleapi.ModelUnitToken || body.Pricing.Rates[0].Amount != "0.000001" {

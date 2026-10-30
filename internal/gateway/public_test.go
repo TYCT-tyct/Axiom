@@ -34,8 +34,8 @@ func TestPublicModelsAreTheServedCatalogAtTheAudiencePrice(t *testing.T) {
 	}
 	rates := map[catalog.Item]string{}
 	for _, rate := range alpha.Pricing.Rates {
-		if rate.ServiceTier != catalog.ServiceTierStandard || rate.Above != 0 {
-			t.Errorf("alpha rate at %v above %d", rate.ServiceTier, rate.Above)
+		if rate.ServiceTier != catalog.ServiceTierStandard || !rate.Base || rate.Above != 0 {
+			t.Errorf("alpha rate at %v base %v above %d", rate.ServiceTier, rate.Base, rate.Above)
 		}
 		rates[rate.Item] = rate.Price.String()
 	}

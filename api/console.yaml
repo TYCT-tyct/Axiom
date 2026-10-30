@@ -2231,7 +2231,9 @@ components:
           type: integer
           format: int64
           minimum: 0
-          description: "The prompt length above which this rate applies. Absent or 0 is the base band."
+          description: >-
+            The prompt length above which this rate applies. Absent for the base band that applies below every
+            threshold; 0 is an explicit first band above 0 and is not the base band.
         item: {$ref: "#/components/schemas/ModelItem"}
         unit: {$ref: "#/components/schemas/ModelUnit"}
         amount: {type: string, description: "Exact currency units per unit, decimal text with up to 15 fractional digits."}

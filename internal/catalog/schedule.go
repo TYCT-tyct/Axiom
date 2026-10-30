@@ -25,18 +25,21 @@ type Schedule struct {
 // Currency is what the schedule's prices are in.
 func (s Schedule) Currency() platform.Currency { return s.currency }
 
-// ScheduleRate is one unit price of a schedule: what one unit of an item costs at a service tier above a prompt length,
-// where 0 is the base band that no threshold has to be exceeded for.
+// ScheduleRate is one effective unit price of a schedule: what one unit of an item costs at a service tier above a
+// prompt length. Base is true for the base band that no threshold has to be exceeded for; Above is 0 there and is the
+// applied threshold otherwise, so an explicit threshold of 0 is not confused with the base band.
 type ScheduleRate struct {
 	ServiceTier ServiceTier
+	Base        bool
 	Above       int64
 	Item        Item
 	Price       platform.UnitPrice
 }
 
-// ScheduleView is every price a schedule sets, in enumeration order of service tier, band and item. It is the read model
-// a public price page shows: the schedule keeps its prices unexported, and the view copies them for a caller that must
-// not reach into the schedule.
+// ScheduleView is each item's effective price at each band, in enumeration order of service tier, band and item. It is
+// the read model a public price page shows: the schedule keeps its prices unexported, and the view copies them for a
+// caller that must not reach into the schedule. A band that leaves an item out inherits the base price, so the view
+// includes that inherited price; an empty band therefore shows the base prices it restores, not nothing.
 type ScheduleView struct {
 	Currency platform.Currency
 	Basis    []Item // the items whose counts add up to the context band; empty without context tiers
@@ -51,20 +54,30 @@ func (s Schedule) View() ScheduleView {
 			continue
 		}
 		l := s.levels[st]
-		v.appendRates(st, 0, l.base)
-		for i, r := range l.tiers {
-			v.appendRates(st, s.above[i], r)
+		items := l.base.priced
+		for _, r := range l.tiers {
+			items |= r.priced
+		}
+		for band := 0; band <= len(s.above); band++ {
+			above := int64(0)
+			if band > 0 {
+				above = s.above[band-1]
+			}
+			for it := range NumItems {
+				if !items.Has(Item(it)) {
+					continue
+				}
+				price, ok := s.price(st, band, Item(it))
+				if !ok {
+					continue
+				}
+				v.Rates = append(v.Rates, ScheduleRate{
+					ServiceTier: st, Base: band == 0, Above: above, Item: Item(it), Price: price,
+				})
+			}
 		}
 	}
 	return v
-}
-
-func (v *ScheduleView) appendRates(st ServiceTier, above int64, r rates) {
-	for it := range NumItems {
-		if r.priced.Has(Item(it)) {
-			v.Rates = append(v.Rates, ScheduleRate{ServiceTier: st, Above: above, Item: Item(it), Price: r.price[it]})
-		}
-	}
 }
 
 // level is one service tier's prices: its base prices, and for each threshold in above, the base prices it replaces

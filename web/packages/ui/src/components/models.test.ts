@@ -1,5 +1,5 @@
-import { expect, it } from "vitest";
-import { perMillionBillionths } from "./models";
+import { describe, expect, it } from "vitest";
+import { baseRate, perMillionBillionths } from "./models";
 
 // A per-token price becomes billionths per million tokens by moving the decimal point six places in text. The page
 // never divides a price as a float: 0.000001 per token is exactly 1.00 per million, not 0.9999999999999999.
@@ -16,4 +16,14 @@ it.each([
 
 it("refuses a price with more places than a UnitPrice can hold", () => {
   expect(perMillionBillionths("0.0000000000000001")).toBeNull();
+});
+
+describe("baseRate", () => {
+  it("takes the base band, not an explicit threshold of zero", () => {
+    const rates = [
+      { service_tier: "standard", above: 0, item: "input", unit: "token", amount: "2" },
+      { service_tier: "standard", item: "input", unit: "token", amount: "1" },
+    ];
+    expect(baseRate(rates, "input")?.amount).toBe("1");
+  });
 });
