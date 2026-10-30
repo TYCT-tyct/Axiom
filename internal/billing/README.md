@@ -163,7 +163,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **余额行**在开户时由 `OpenBalance` 建；没有余额行就没有锁可取，`Reserve` 直接返回余额不足（零价也一样），什么也不写；追加和 `SettleOrphan` 遇到它报错。
 - **余量**按 `Exact` 精确算（余额 − 在途 − 冻结 − 底线，限额 − 窗口内已用），任何存得下的组合都不会回绕。
 - **墓碑**：`SettleOrphan` 找不到预留行时写一行 `segment = 0`、`amount = 0`、`released` 的行占住请求 ID，丢失的准入不可能再落库。
-- **`top_up_buffers`**（迁移 `00019_top_up_buffers.sql`，查询 `queries/topup.sql`）：`site_id`（主键）、`ppm`（0 到 100000）；站点数据，按 [pg 的站点范围表达式](../platform/pg/README.md#决策与理由)读写，应用有 SELECT、INSERT、UPDATE。没有行就用 `topup.go` 里的默认值；`TopUpRate` 在平台范围读它，写入的管理接口随支付的 E1-2a2。
+- **`top_up_buffers`**（迁移 `00019_top_up_buffers.sql`，查询 `queries/topup.sql`）：`site_id`（主键）、`ppm`（0 到 100000）；站点数据，按 [pg 的站点范围表达式](../platform/pg/README.md#决策与理由)读写，应用有 SELECT、INSERT、UPDATE。没有行就用 `topup.go` 里的默认值；`TopUpRate` 在平台范围读它，写入随站点支付设置的 PUT（`top_up_buffer_ppm`，[支付的「后台配置」](../../docs/domains/payments.md#后台配置)）。
 - **`endpoints`**（迁移 `00005_reservations_endpoints.sql`）：`Reserve` 与 `prices` 一起写，保留条目的端点在路线里的下标处，被删的条目写零 UUID，所以两列等长同序；只在准入写一次，与 `prices` 一样，应用对它没有 UPDATE 的授权。迁移前的预留行是 `'{}'`，与 `prices` 不等长，这样的行清理出的路线为空，只在迁移时的存量里有。清理读它记丢失的请求（[suppliers 的「丢失的请求」](../suppliers/README.md#丢失的请求)），迟到的 `Settle` 用 `prices` 定价，两者出自同一条路线。
 
 ## 结算与账本

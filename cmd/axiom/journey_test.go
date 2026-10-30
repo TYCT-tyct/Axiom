@@ -211,7 +211,7 @@ func (g *journeyGateway) open(w *callWorld) {
 		Site: w.site, Kind: "easypay", Name: "Gateway", Enabled: true, Currency: usd, TTLSeconds: 1800,
 		Settings: []byte(settings), Secrets: map[string]secret.Secret{"key": secret.New("journey-gateway-key")},
 		Methods: []payments.MethodInput{{Method: "alipay", Upstream: "alipay", Enabled: true}},
-	}); err != nil {
+	}, "journey setup"); err != nil {
 		g.t.Fatal(err)
 	}
 	if err = pgtest.Run(ctx, w.database.Superuser, "INSERT INTO payments.settings (site_id, open) VALUES ('"+w.site.String()+"', true)"); err != nil {
