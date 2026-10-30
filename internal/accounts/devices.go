@@ -131,11 +131,11 @@ func clientSummary(ua string) string {
 // browserName is the first known browser token in the User-Agent, or empty.
 func browserName(ua string) string {
 	switch {
-	case strings.Contains(ua, "Edg/"):
+	case strings.Contains(ua, "Edg/"), strings.Contains(ua, "EdgA/"), strings.Contains(ua, "EdgiOS/"):
 		return "Edge"
-	case strings.Contains(ua, "OPR/"), strings.Contains(ua, "Opera"):
+	case strings.Contains(ua, "OPR/"), strings.Contains(ua, "Opera"), strings.Contains(ua, "OPiOS/"):
 		return "Opera"
-	case strings.Contains(ua, "Firefox/"):
+	case strings.Contains(ua, "Firefox/"), strings.Contains(ua, "FxiOS/"):
 		return "Firefox"
 	case strings.Contains(ua, "Chrome/"), strings.Contains(ua, "CriOS"):
 		return "Chrome"
