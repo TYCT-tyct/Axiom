@@ -15,7 +15,9 @@ class ChangesTest(unittest.TestCase):
     def test_only_docs_and_managed_files_skip_the_slow_jobs(self):
         cases = {
             "docs": (["README.md", "docs/domains/billing.md"], (), (), False),
-            "an upgrade": (["AGENTS.md", ".github/workflows/workflow-pr.yml", "scripts/workflow/check_pr.py"], (), (), False),
+            "an upgrade": (["AGENTS.md", ".github/workflows/check-pr.yml", "scripts/workflow/check_pr.py"], (), (), False),
+            "the upgrade that retires the workflows from before the modules": (
+                [".github/workflows/workflow.yml", ".github/workflows/workflow-pr.yml", ".github/workflows/check-docs.yml"], (), (), False),
             "code": (["docs/a.md", "internal/billing/quote.go"], (), (), True),
             "a prompt the code embeds": (["internal/prompts/system.md"], (), (), True),
             "the project's own scripts beside the managed ones": (["scripts/workflow/deploy.py"], (), (), True),

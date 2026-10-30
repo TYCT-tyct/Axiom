@@ -7,7 +7,7 @@ tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
 # Run every check CI runs, except one run of each benchmark and the deployment check: `check-all` adds the benchmarks.
-# This is the local pre-push gate, so it keeps `secrets` and `docs`, which a PR build leaves to workflow.yml (see
+# This is the local pre-push gate, so it keeps `secrets` and `docs`, which a PR build leaves to check-docs.yml and check-secrets.yml (see
 # `check-ci`)
 check: docs check-static test secrets web
 
@@ -134,9 +134,9 @@ load scale="1" only="": web-embed
 # Every check, including one run of each benchmark under the race detector
 check-all: check bench-once
 
-# What a pull request's build runs: `check` without `secrets` and the workflow half of `docs`, which workflow.yml's
+# What a pull request's build runs: `check` without `secrets` and the workflow half of `docs`, which check-docs.yml's
 # required `secrets` and `docs` jobs already run on it, so they would run twice per build. `script-tests` is the half of
-# `docs` workflow.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
+# `docs` check-docs.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
 check-ci: script-tests check-static test web
 
 # The checks a Markdown-only pull request runs instead of the full build: the docs tests (including the pull request
@@ -215,7 +215,7 @@ vuln:
 
 # No secret in this branch's commits, checked before they are pushed: CI scans every commit of a pull request, and a
 # secret, or a test value that looks like one, stays in the history until the branch is replaced. The version
-# matches GITLEAKS_VERSION in .github/workflows/workflow.yml. Without origin/main, gitleaks would scan nothing and
+# matches GITLEAKS_VERSION in .github/workflows/check-secrets.yml. Without origin/main, gitleaks would scan nothing and
 # still pass, so a missing base fails instead.
 secrets:
     git rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' > /dev/null || { echo "origin/main is missing, so the branch cannot be scanned: run git fetch origin main"; exit 1; }

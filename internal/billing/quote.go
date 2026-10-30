@@ -29,6 +29,10 @@ type Demand struct {
 	// counted it (NewTextCount); 0 keeps the bytes-per-token rule of the estimate. It is an estimate, not a bound:
 	// InputBound goes by TextBytes alone.
 	TextTokens int64
+	// Counts are the request's quantities of the items billed per piece, per second or per character, in each item's
+	// own unit: the images to generate, the seconds of audio, the characters to read aloud. A count of a token or
+	// per-use item here is ignored, because those are bounded by TextBytes, the output limit and ServerTools.
+	Counts map[catalog.Item]int64
 }
 
 // ServerTool is a server tool and the most uses the request allows it; 0 means the request set none, so the entry's
@@ -206,8 +210,8 @@ func shortSource(amount platform.Exact, avail []Available) int {
 }
 
 // quoteEntry follows docs/domains/billing.md「预留与结算」: the input of every sampling at its bound, every server tool
-// at its most uses, and the output, the first segment plus the overshoot allowance or else the whole limit, each at
-// the dearest price it can have.
+// at its most uses, every piece, second and character the request states at its count, and the output, the first
+// segment plus the overshoot allowance or else the whole limit, each at the dearest price it can have.
 func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, err error) {
 	if err := checkEntry(e, s); err != nil {
 		return q, err
@@ -240,28 +244,75 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	if max(samplings, rest, q.outputCap, add(output, allowance), overshoot) == math.MaxInt64 {
 		return q, errOverflow
 	}
+	resample, err := q.priceTokens(d, e, &prices, tiers, first, rest, longest)
+	if err != nil {
+		return q, err
+	}
+	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, resample); err != nil {
+		return q, err
+	}
+	if err := q.priceCounted(d, &prices, tiers, longest, samplings); err != nil {
+		return q, err
+	}
+	q.allowance = q.output.Mul(allowance)
+	q.amount = sum(q.fixed, q.allowance, q.output.Mul(output))
+	return q, nil
+}
+
+// priceTokens adds every sampling's input and the whole output at their dearest token prices, and returns the input price
+// of the samplings after the first, which a search beyond the tool's uses pays too. Token prices are required for a model
+// that may report any token item, as every model did before. A counted-only model (a speech or transcription endpoint
+// that reports characters or seconds rather than tokens) has no token charge to bound, so its schedule must be quotable
+// without token prices; an empty Reports is unknown, not none.
+func (q *quote) priceTokens(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, first, rest, longest int64) (inputPrice, error) {
+	if e.Model.Reports != 0 && e.Model.Reports&catalog.TokenItems == 0 {
+		return inputPrice{}, nil
+	}
 	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
 	in.Add(catalog.ItemInput)
 	if e.Model.OpenAIUsage {
 		// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
 		in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
 	}
-	firstPrice, ok1 := prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
-	restPrice, ok2 := prices.inputCeiling(in, tiers, window, e.Model.OpenAIUsage)
+	firstPrice, ok := prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
+	if !ok {
+		return inputPrice{}, ErrUnpriced
+	}
+	restPrice, ok := prices.inputCeiling(in, tiers, e.Model.ContextLength, e.Model.OpenAIUsage)
+	if !ok {
+		return inputPrice{}, ErrUnpriced
+	}
 	outItems := catalog.ItemSet(1<<catalog.ItemOutput|1<<catalog.ItemReasoning|1<<catalog.ItemImageOut) |
 		e.Model.Reports&(1<<catalog.ItemAudioOut)
-	outPrice, ok3 := prices.ceiling(outItems, tiers, longest)
-	if !ok1 || !ok2 || !ok3 {
-		return q, ErrUnpriced
+	outPrice, ok := prices.ceiling(outItems, tiers, longest)
+	if !ok {
+		return inputPrice{}, ErrUnpriced
 	}
 	q.output = outPrice
 	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
-	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, restPrice); err != nil {
-		return q, err
+	return restPrice, nil
+}
+
+// priceCounted adds every piece, second and character the request states at the dearest price it can have: the count
+// is the whole request's, so no band above the longest prompt applies, and every sampling may report it, so each is
+// covered.
+func (q *quote) priceCounted(d Demand, prices *quotePrices, tiers catalog.ServiceTierSet, longest, samplings int64) error {
+	for it := range catalog.NumItems {
+		n := d.Counts[it]
+		if n <= 0 || !catalog.CountedItems.Has(it) {
+			continue
+		}
+		price, ok := prices.ceiling(1<<it, tiers, longest)
+		if !ok {
+			return ErrUnpriced
+		}
+		bound := mul(n, samplings)
+		if bound == math.MaxInt64 {
+			return errOverflow
+		}
+		q.fixed = sum(q.fixed, price.Mul(bound))
 	}
-	q.allowance = outPrice.Mul(allowance)
-	q.amount = sum(q.fixed, q.allowance, outPrice.Mul(output))
-	return q, nil
+	return nil
 }
 
 // checkEntry refuses an entry that data, not the request, makes impossible to quote: a model with no context length, and
@@ -321,7 +372,7 @@ func (prices *quotePrices) ceiling(items catalog.ItemSet, tiers catalog.ServiceT
 		return highest, !missing
 	}
 	if !prices.fallbackReady {
-		prices.fallback, _ = prices.schedule.Highest(tokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
+		prices.fallback, _ = prices.schedule.Highest(catalog.TokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
 		prices.fallbackReady = true
 	}
 	if highest.Cmp(prices.fallback) < 0 {

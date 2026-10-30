@@ -64,7 +64,10 @@ func (s *store) priceCount(id catalog.ModelID) int {
 }
 
 // litellm is a LiteLLM table of the given entries, each a key and the fields after its provider and mode.
-func litellm(entries ...string) catalog.Fetched {
+func litellm(entries ...string) catalog.Fetched { return litellmMode("chat", entries...) }
+
+// litellmMode is litellm for entries of one mode, which decides which fields are read.
+func litellmMode(mode string, entries ...string) catalog.Fetched {
 	var b strings.Builder
 	b.WriteString("{")
 	for i, e := range entries {
@@ -73,7 +76,7 @@ func litellm(entries ...string) catalog.Fetched {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		fmt.Fprintf(&b, `%q:{"litellm_provider":"openai","mode":"chat",%s}`, key, fields)
+		fmt.Fprintf(&b, `%q:{"litellm_provider":"openai","mode":%q,%s}`, key, mode, fields)
 	}
 	b.WriteString("}")
 	return catalog.Fetched{Source: catalog.SourceLiteLLM, Body: []byte(b.String()), At: time.Now()}
@@ -81,6 +84,7 @@ func litellm(entries ...string) catalog.Fetched {
 
 const (
 	xSpec    = `{"items":["input","output","cache_read"],"tiers":[]}`
+	ttsSpec  = `{"items":["character_in"],"tiers":[]}`
 	xCurrent = `{"v":1,"currency":"USD","rates":{"cache_read":"0.0000001","input":"0.000001","output":"0.000002"}}`
 	xEntry   = `"gpt-x-2025-01-01"=%s`
 )
@@ -173,6 +177,38 @@ func TestSyncHolds(t *testing.T) {
 				t.Error("a held model's price changed")
 			}
 		})
+	}
+}
+
+// TestSyncHoldsCountedPrices: a dataset price for an item counted per piece, second or character waits while a node
+// running an older release could still read the snapshot (Config.CountedItems off), and publishes once this release may
+// write it. The wait keeps the candidate like any other hold.
+func TestSyncHoldsCountedPrices(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	id := s.follow("openai/tts-1", catalog.VersionFloating, catalog.SourceLiteLLM, ttsSpec, "", "openai/tts-1", "tts-1")
+	data := litellmMode("audio_speech", `"tts-1"="input_cost_per_character":1.5e-05`)
+	report, err := s.c.SyncDataset(t.Context(), data, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := report.Results[0]; r.Outcome != catalog.OutcomeHeld || !strings.Contains(r.Reason, "counted items") {
+		t.Fatalf("result %+v, want held until every node reads counted items", r)
+	}
+	if s.priceCount(id) != 0 {
+		t.Error("a held model got a price")
+	}
+	// The release that opens the image, audio and speech endpoints turns this on, after the fleet runs this one.
+	c, err := catalog.Open(s.db, platformScope, catalog.Config{CountedItems: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err = c.SyncDataset(t.Context(), data, true)
+	if err != nil || report.Results[0].Outcome != catalog.OutcomePublished {
+		t.Fatalf("round with CountedItems on: %+v, %v", report, err)
+	}
+	if got, want := s.usd(id), `{"currency":"USD","rates":{"character_in":"0.000015"},"v":1}`; got != want {
+		t.Errorf("schedule %s, want %s", got, want)
 	}
 }
 

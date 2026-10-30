@@ -6,6 +6,7 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 )
 
 func TestImageSaleReservationAndCostAgree(t *testing.T) {
@@ -255,5 +256,34 @@ func TestStoredPhysicalInputPreservesPresence(t *testing.T) {
 		if total, ok := decoded[0].Usage.PhysicalInput(); ok != (n >= 0) || ok && total != n {
 			t.Fatalf("physical input %d/%t after storing %d", total, ok, n)
 		}
+	}
+}
+
+// TestStoredUsageOmitsTrailingZeros: a text-only charge stores no count for the items counted per piece, second or
+// character, so a node built before they existed still reads it (a count the list leaves out is zero); a counted charge
+// stores its count.
+func TestStoredUsageOmitsTrailingZeros(t *testing.T) {
+	b, err := encodeUsage([]Segment{{Usage: usage(t, map[catalog.Item]int64{in: 5, catalog.ItemOutput: 2})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored []struct {
+		Counts []int64 `json:"counts"`
+	}
+	if err := jsonx.Unmarshal(b, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stored[0].Counts), int(catalog.ItemOutput)+1; got != want {
+		t.Errorf("a text-only call stored %d counts, want the %d up to its last nonzero item", got, want)
+	}
+	b, err = encodeUsage([]Segment{{Usage: usage(t, map[catalog.Item]int64{in: 5, catalog.ItemCharacterIn: 7})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jsonx.Unmarshal(b, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stored[0].Counts), int(catalog.ItemCharacterIn)+1; got != want || stored[0].Counts[want-1] != 7 {
+		t.Errorf("a counted call stored %v, want %d counts ending in 7", stored[0].Counts, want)
 	}
 }
