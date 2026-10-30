@@ -38,7 +38,7 @@ func TestCorrectionRePricesAnEstimatedCharge(t *testing.T) {
 	if err != nil || borne != 0 {
 		t.Fatalf("correct = %d borne, %v", borne, err)
 	}
-	assertCorrectedCharge(t, b, h.id)
+	assertCorrection(t, b, h.id, 50)
 	if _, err := c.correct(t.Context(), ev); !errors.Is(err, errNoCorrection) {
 		t.Fatalf("a second delivery = %v; want no correction", err)
 	}
@@ -49,15 +49,16 @@ func TestCorrectionRePricesAnEstimatedCharge(t *testing.T) {
 	b.replayed(b.admitted.Account)
 }
 
-// assertCorrectedCharge checks what the correction left on the reservation, the ledger and the balance.
-func assertCorrectedCharge(t *testing.T, b *bank, request uuid.UUID) {
+// assertCorrection checks what a correction left on the reservation, the ledger and the account's balance, which starts
+// at 1000.
+func assertCorrection(t *testing.T, b *bank, request uuid.UUID, charged int64) {
 	t.Helper()
 	for _, c := range []struct {
 		query string
 		want  int64
 	}{
-		{"SELECT charged FROM billing.reservations WHERE request_id = '" + request.String() + "'", 50},
-		{"SELECT price FROM billing.reservations WHERE request_id = '" + request.String() + "'", 50},
+		{"SELECT charged FROM billing.reservations WHERE request_id = '" + request.String() + "'", charged},
+		{"SELECT price FROM billing.reservations WHERE request_id = '" + request.String() + "'", charged},
 		{"SELECT estimated::int FROM billing.reservations WHERE request_id = '" + request.String() + "'", 0},
 		{"SELECT count(*) FROM billing.transactions WHERE request_id = '" + request.String() + "' AND revision = 1 AND kind IN ('reverse', 'settle')", 2},
 	} {
@@ -65,9 +66,98 @@ func assertCorrectedCharge(t *testing.T, b *bank, request uuid.UUID) {
 			t.Errorf("%s = %d, want %d", c.query, got, c.want)
 		}
 	}
-	if got := b.balanceOf(b.admitted.Account); got != 950 {
-		t.Errorf("balance %d after the correction, want 950", got)
+	if got, want := b.balanceOf(b.admitted.Account), 1000-charged; got != want {
+		t.Errorf("balance %d after the correction, want %d", got, want)
 	}
+}
+
+// TestCorrectionFromANewAPIRecord: new-api's consumption log states prompt_tokens, completion_tokens and an "other" JSON
+// with cache_tokens and cache_creation_tokens, under the request id it returned in X-Oneapi-Request-Id (new-api
+// model/log.go:57-79 and common/constants.go:194; our reader internal/suppliers/internal/newapi/charges.go:225, whose
+// reported at :251 declares the input only when no cache token is named, and never the output because
+// completion_tokens includes reasoning the log does not split). A settlement whose only charged item is the estimated
+// input is therefore the one a new-api record corrects, and it replaces the estimate exactly.
+func TestCorrectionFromANewAPIRecord(t *testing.T) {
+	b := newBank(t, 1000, 0, fallbackBankConfig)
+	h := b.holdOn(b.exact, 100)
+	f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 0, 0, in)))
+	if !f.Estimated || f.Charged != platform.AmountExact(100) {
+		t.Fatalf("estimate = %+v; want estimated 100", f)
+	}
+	// The record: prompt_tokens=50, completion_tokens=0, other={"billing_source":"wallet","cache_tokens":0,
+	// "cache_creation_tokens":0}; read as the adapter does, it declares only the input item.
+	ev := suppliers.ChargeEvent{
+		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1,
+		Usage: usageOf(t, map[catalog.Item]int64{in: 50}), Reported: 1 << in,
+	}
+	c := &corrector{db: b.app, scope: b.platform}
+	if borne, err := c.correct(t.Context(), ev); err != nil || borne != 0 {
+		t.Fatalf("correct = %d borne, %v", borne, err)
+	}
+	assertCorrection(t, b, h.id, 50)
+	b.balanced()
+	b.replayed(b.admitted.Account)
+}
+
+// TestCorrectionFromASub2APIRecord: sub2api's /api/v1/usage record states input_tokens, output_tokens, cache_read_tokens,
+// cache_creation_tokens and the 5m/1h writes, under the "client:"-prefixed id it echoes in X-Client-Request-Id
+// (sub2api service/usage_service.go:20-40 and handler/usage_handler.go; our reader
+// internal/suppliers/internal/sub2api/charges.go:191 and quirks.go:41). It declares every count field present, so a
+// record corrects an estimated input and output together.
+func TestCorrectionFromASub2APIRecord(t *testing.T) {
+	b := newBank(t, 1000, 0, fallbackBankConfig)
+	h := b.holdOn(metered(t), 100)
+	f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 20, 0, in, catalog.ItemOutput)))
+	if !f.Estimated || f.Charged != platform.AmountExact(120) {
+		t.Fatalf("estimate = %+v; want estimated 120", f)
+	}
+	// The record: input_tokens=50, output_tokens=10, cache_read_tokens=0, cache_creation_tokens=0; every present field
+	// is declared, so both charged items are corrected together.
+	ev := suppliers.ChargeEvent{
+		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1,
+		Usage:    usageOf(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 10}),
+		Reported: 1<<in | 1<<catalog.ItemOutput,
+	}
+	c := &corrector{db: b.app, scope: b.platform}
+	if borne, err := c.correct(t.Context(), ev); err != nil || borne != 0 {
+		t.Fatalf("correct = %d borne, %v", borne, err)
+	}
+	assertCorrection(t, b, h.id, 60)
+	b.balanced()
+	b.replayed(b.admitted.Account)
+}
+
+// TestCorrectionIsBorneAtTheFloor: a record that prices above the estimate is charged up to the account's floor and not
+// past it; the rest is the platform's, recorded on the books and alerted, so a correction cannot push the balance under
+// its floor.
+func TestCorrectionIsBorneAtTheFloor(t *testing.T) {
+	b := newBank(t, 100, -50, fallbackBankConfig)
+	h := b.holdOn(b.exact, 100)
+	if f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 0, 0, in))); !f.Estimated || f.Charged != platform.AmountExact(100) {
+		t.Fatalf("estimate = %+v; want estimated 100", f)
+	}
+	ev := suppliers.ChargeEvent{
+		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1,
+		Usage: usageOf(t, map[catalog.Item]int64{in: 400}), Reported: 1 << in,
+	}
+	c := &corrector{db: b.app, scope: b.platform}
+	if borne, err := c.correct(t.Context(), ev); err != nil || borne != 250 {
+		t.Fatalf("correct = %d borne, %v; want 250 borne", borne, err)
+	}
+	if got := b.count("SELECT charged FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); got != 150 {
+		t.Errorf("charged %d, want 150 up to the floor", got)
+	}
+	if got := b.balanceOf(b.admitted.Account); got != -50 {
+		t.Errorf("balance %d, want the floor -50", got)
+	}
+	if got := b.borne(); got != 250 {
+		t.Errorf("the platform bore %d, want 250", got)
+	}
+	if got := b.count("SELECT count(*) FROM platform.alert_signals WHERE body->>'kind' = 'billing.charge_correction_borne' AND body->'fields'->>'request' = '" + h.id.String() + "' AND body->'fields'->>'borne' = '250'"); got != 1 {
+		t.Errorf("%d borne alerts, want 1", got)
+	}
+	b.balanced()
+	b.replayed(b.admitted.Account)
 }
 
 // TestCorrectionRefusesAMissingItem: a supplier record that leaves out an item we had to estimate is not a complete

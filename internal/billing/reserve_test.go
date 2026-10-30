@@ -17,14 +17,15 @@ import (
 // bank is a test database with one account whose balance and floor the test chooses, and a billing whose holder is
 // alive. Its quotes are made exact: input at one billionth a token, no output, so TextBytes is the amount in billionths.
 type bank struct {
-	t        testing.TB
-	db       pgtest.Database
-	app      *pg.DB
-	platform pg.Scope
-	billing  *Billing
-	admitted Admitted
-	supplies *supplies
-	exact    Quotable
+	t         testing.TB
+	db        pgtest.Database
+	app       *pg.DB
+	platform  pg.Scope
+	billing   *Billing
+	admitted  Admitted
+	supplies  *supplies
+	exact     Quotable
+	corrected correctionStats
 }
 
 // exactQuote is a route entry priced in billionths: a token of input 1, no output, so TextBytes is the amount in
