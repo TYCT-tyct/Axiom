@@ -1,10 +1,16 @@
 package pg_test
 
 import (
+	"context"
+	"fmt"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -55,9 +61,10 @@ func requireNoBudget(t *testing.T, db *pg.DB) {
 	}
 }
 
-// TestOpenCapsAnOperationsPoolMinimum: a command outside a node keeps the deployment's pool ceiling but does not
-// eagerly open more than the slots the budget reserves for such commands, so its URL minimums cannot eat a node's share.
-func TestOpenCapsAnOperationsPoolMinimum(t *testing.T) {
+// TestOpenClearsAnOperationsPoolMinimum: a command outside a node keeps the deployment's pool ceiling but opens no
+// connection until it needs one. The four slots the budget keeps outside the nodes are shared by the migration, the
+// command, the backup and a spare, so pre-opening all four for one command would deny the others.
+func TestOpenClearsAnOperationsPoolMinimum(t *testing.T) {
 	t.Parallel()
 	app := pgtest.New(t).App
 	db, err := pg.Open(t.Context(), app+"&pool_max_conns=8&pool_min_conns=8&pool_min_idle_conns=8",
@@ -69,9 +76,86 @@ func TestOpenCapsAnOperationsPoolMinimum(t *testing.T) {
 	if got := db.MaxConns(); got != 8 || db.CompletionConns() != 2 {
 		t.Errorf("pool = %d/%d, want 8/2", got, db.CompletionConns())
 	}
-	if minConns, minIdle := db.PoolMinimums(); minConns != pg.OperationsReserve || minIdle != pg.OperationsReserve {
-		t.Errorf("minimums = %d/%d, want %d/%d", minConns, minIdle, pg.OperationsReserve, pg.OperationsReserve)
+	if minConns, minIdle := db.PoolMinimums(); minConns != 0 || minIdle != 0 {
+		t.Errorf("minimums = %d/%d, want 0/0", minConns, minIdle)
 	}
+}
+
+// TestOperationsPoolLeavesRoomForTheReservedWork: at a 20-connection server, two nodes hold six connections each (the
+// budget's pool plus the three outside it), and the application role may use the 17 slots left after the three
+// superuser ones. Four of those 17 are shared by a migration, a command, a backup and a spare. The role's CONNECTION
+// LIMIT stands in for the server limit so the test can exhaust the same arithmetic without lowering max_connections;
+// the command must not pre-open the whole reserve and leave the migration or backup out.
+func TestOperationsPoolLeavesRoomForTheReservedWork(t *testing.T) {
+	t.Parallel()
+	database := pgtest.New(t)
+	probeURL := reservedWorkRole(t, database)
+	held := holdConnections(t, probeURL, 12)
+	t.Cleanup(func() {
+		for _, conn := range held {
+			if err := conn.Close(context.WithoutCancel(t.Context())); err != nil {
+				t.Logf("close held connection: %v", err)
+			}
+		}
+	})
+	separator := "?"
+	if strings.Contains(probeURL, "?") {
+		separator = "&"
+	}
+	db, err := pg.Open(t.Context(), probeURL+separator+"pool_max_conns=8&pool_min_conns=4&pool_min_idle_conns=4",
+		pg.WithOperationsPool(), pg.WithCompletionReserve(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if minConns, minIdle := db.PoolMinimums(); minConns != 0 || minIdle != 0 {
+		t.Fatalf("operations pool minimums = %d/%d, want 0/0", minConns, minIdle)
+	}
+	if err := db.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
+		var one int
+		return tx.QueryRow(t.Context(), "SELECT 1").Scan(&one)
+	}); err != nil {
+		t.Fatalf("command connection: %v", err)
+	}
+	held = append(held, holdConnections(t, probeURL, 2)...)
+}
+
+// reservedWorkRole creates a login role whose connection limit stands in for the app-role slots of a 20-connection
+// server after its three superuser slots, and returns the database URL for it.
+func reservedWorkRole(t *testing.T, database pgtest.Database) string {
+	t.Helper()
+	app, err := url.Parse(database.App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := fmt.Sprintf("budget_ops_%d", time.Now().UnixNano())
+	roleName := pgx.Identifier{role}.Sanitize()
+	if err := pgtest.Run(t.Context(), database.Superuser,
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD 'budget' CONNECTION LIMIT 17", roleName)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := pgtest.Run(context.WithoutCancel(t.Context()), database.Superuser,
+			fmt.Sprintf("DROP ROLE IF EXISTS %s", roleName)); err != nil {
+			t.Logf("drop role %s: %v", role, err)
+		}
+	})
+	app.User = url.UserPassword(role, "budget")
+	return app.String()
+}
+
+// holdConnections opens count connections as the test role and keeps them for the rest of the test.
+func holdConnections(t *testing.T, databaseURL string, count int) []*pgx.Conn {
+	t.Helper()
+	held := make([]*pgx.Conn, 0, count)
+	for i := range count {
+		conn, err := pgx.Connect(t.Context(), databaseURL)
+		if err != nil {
+			t.Fatalf("connection %d: %v", i+1, err)
+		}
+		held = append(held, conn)
+	}
+	return held
 }
 
 // TestOpenRefusesANonPositiveNodeCount: zero is not "no node count" when the option was given, and neither zero nor a

@@ -74,9 +74,10 @@ func WithNodes(nodes int) Option {
 	return func(db *DB) { db.nodes, db.nodesSet = nodes, true }
 }
 
-// WithOperationsPool marks a command's pool, which is not a node's: its ceiling stays the deployment's, but it does not
-// keep the connection string's pool_min_conns or pool_min_idle_conns above the slots the budget reserves for commands
-// outside a node (OperationsReserve). A command is run by one operator and takes the few connections it needs.
+// WithOperationsPool marks a command's pool, which is not a node's: its ceiling stays the deployment's, but it clears
+// the connection string's pool_min_conns and pool_min_idle_conns. The slots the budget reserves outside the nodes are
+// shared by a migration, a command, a backup and a spare; one command must not pre-open them all. A command takes the
+// few connections its serial work needs.
 func WithOperationsPool() Option {
 	return func(db *DB) { db.operations = true }
 }
@@ -123,8 +124,8 @@ func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
 		config.MaxConns = int32(budget.Pool) //nolint:gosec // G115: the budget is at most pool_max_conns or PoolSize
 	}
 	if db.operations {
-		config.MinConns = min(config.MinConns, int32(OperationsReserve))
-		config.MinIdleConns = min(config.MinIdleConns, int32(OperationsReserve))
+		config.MinConns = 0
+		config.MinIdleConns = 0
 	}
 	ordinary, completion, err := splitPoolConfig(config, db.reserve)
 	if err != nil {
