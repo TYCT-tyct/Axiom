@@ -592,6 +592,49 @@ test.describe("orders and refunds", () => {
     await expect(queue.getByRole("row")).toHaveCount(3);
   });
 
+  test("shows what the channel took, not the quote, and says when an order is unpaid", async ({ page }) => {
+    const state = await open(page, "/orders");
+    const paid = state.orders[0];
+    const unpaid = state.orders[1];
+    if (!paid || !unpaid) throw new Error("the usual orders are missing");
+    paid.state = "paid";
+    paid.total = { amount: "1000", currency: "USD" };
+    paid.paid_total = { amount: "800", currency: "USD" };
+    paid.paid_fee = { amount: "24", currency: "USD" };
+    paid.credits = { amount: "7000000000", currency: "USD" };
+    paid.credited = { amount: "6000000000", currency: "USD" };
+    unpaid.state = "pending";
+    delete unpaid.paid_total;
+    delete unpaid.paid_fee;
+    delete unpaid.credited;
+    unpaid.total = { amount: "1000", currency: "USD" };
+    unpaid.credits = { amount: "7000000000", currency: "USD" };
+    await page.reload();
+
+    const orders = page.getByRole("table", { name: zhText("nav.orders") });
+    const paidRow = orders.getByRole("row").filter({ hasText: paid.id?.slice(-8) ?? "" });
+    await expect(paidRow.getByText("US$8.00")).toBeVisible();
+    await expect(paidRow.getByText("US$10.00")).toBeVisible();
+    await expect(paidRow.getByText("US$0.24")).toBeVisible();
+    const unpaidRow = orders.getByRole("row").filter({ hasText: unpaid.id?.slice(-8) ?? "" });
+    await expect(unpaidRow.getByText(zhText("orders.notPaid"))).toBeVisible();
+    await expect(unpaidRow.getByText("US$10.00")).toBeVisible();
+  });
+
+  test("the narrow-screen confirmation shows the refund facts", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 800 });
+    const state = await open(page, "/orders");
+    const refund = state.refunds[0];
+    if (!refund) throw new Error("the usual refunds are missing");
+    const queue = page.getByRole("table", { name: zhText("orders.refund.title") });
+    await queue.getByRole("button", { name: zhText("orders.refund.approve") }).first().click();
+    await expect(dialog(page).getByText(zhText("orders.refund.review"))).toBeVisible();
+    await expect(dialog(page).getByText(refund.account_id ?? "")).toBeVisible();
+    await expect(dialog(page).getByText(refund.reason ?? "")).toBeVisible();
+    await expect(dialog(page).getByText("US$5.00").first()).toBeVisible();
+    await expect(dialog(page).getByText(refund.requested_by ?? "")).toBeVisible();
+  });
+
   test("a person who asked for a refund does not approve it themselves", async ({ page }) => {
     const state = await open(page, "/orders");
     if (state.refunds[0]) {

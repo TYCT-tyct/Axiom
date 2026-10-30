@@ -17,6 +17,7 @@ import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
+import { orderAmounts } from "../orders/amounts";
 import { orderTone, paymentOrderStates, refundTone, shortId } from "../orders/states";
 import { ChoiceFilter, Code, FilterBar, Head, mainCell, PageBody, State, text, toInstant, toLocalInput } from "../parts";
 import { accountQuery, merchantsQuery, paymentOrdersQuery, paymentRefundsQuery } from "../queries";
@@ -195,15 +196,18 @@ function RefundDecision({ kind, refund, onClose }: Decision & { onClose: () => v
       title={t(approve ? "orders.refund.approveTitle" : "orders.refund.rejectTitle", { id: shortId(refund.id) })}
       operation={`${kind}-refund:${id}`}
       intro={
-        <p>
-          {t(
-            approve
-              ? offline
-                ? "orders.refund.approveIntroOffline"
-                : "orders.refund.approveIntro"
-              : "orders.refund.rejectIntro",
-          )}
-        </p>
+        <>
+          <p>
+            {t(
+              approve
+                ? offline
+                  ? "orders.refund.approveIntroOffline"
+                  : "orders.refund.approveIntro"
+                : "orders.refund.rejectIntro",
+            )}
+          </p>
+          <RefundFacts refund={refund} />
+        </>
       }
       action={t(approve ? "orders.refund.approveAction" : "orders.refund.rejectAction")}
       danger={approve}
@@ -223,6 +227,38 @@ function RefundDecision({ kind, refund, onClose }: Decision & { onClose: () => v
       )}
       onClose={onClose}
     />
+  );
+}
+
+// RefundFacts keeps the decision's basis readable at every width: the queue hides its wider columns on a phone, so the
+// confirmation has the account, cash, credits, reason and requester before the person approves or rejects.
+function RefundFacts({ refund }: { refund: Refund }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <div className="space-y-2">
+      <p className="text-label text-t3">{t("orders.refund.review")}</p>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+        <dt className="text-label text-t3">{t("orders.refund.col.account")}</dt>
+        <dd>
+          <Code title={refund.account_id}>{refund.account_id ?? "—"}</Code>
+        </dd>
+        <dt className="text-label text-t3">{t("orders.refund.col.order")}</dt>
+        <dd>
+          <Code title={refund.order_id}>{refund.order_id ?? "—"}</Code>
+        </dd>
+        <dt className="text-label text-t3">{t("orders.refund.col.credits")}</dt>
+        <dd>{refund.credits ? format.money(refund.credits) : "—"}</dd>
+        <dt className="text-label text-t3">{t("orders.refund.col.amount")}</dt>
+        <dd>{refund.amount ? format.pay(refund.amount) : "—"}</dd>
+        <dt className="text-label text-t3">{t("orders.refund.col.reason")}</dt>
+        <dd className="break-words">{refund.reason ?? "—"}</dd>
+        <dt className="text-label text-t3">{t("orders.refund.col.requested")}</dt>
+        <dd>
+          <Code title={refund.requested_by}>{refund.requested_by ?? "—"}</Code>
+        </dd>
+      </dl>
+    </div>
   );
 }
 
@@ -349,46 +385,70 @@ function OrdersTable({ rows }: { rows: Order[] }) {
         ]}
       />
       <tbody>
-        {rows.map((order, index) => (
-          <tr key={order.id ?? index} className="align-top hover:bg-s2">
-            <Td className={mainCell}>
-              <Code title={order.id}>{shortId(order.id)}</Code>
-              <span className="block text-label text-t3" title={order.created_at}>
-                {order.created_at ? format.dateTime(new Date(order.created_at)) : "—"}
-              </span>
-              <span className="block text-label text-t3">
-                {[order.merchant_name, order.method].filter(Boolean).join(" · ")}
-              </span>
-            </Td>
-            <Td className="hidden md:table-cell">
-              <Code title={order.account_id}>{shortId(order.account_id)}</Code>
-              <span className="block text-label text-t3" title={order.user_id}>
-                {shortId(order.user_id)}
-              </span>
-            </Td>
-            <Td>
-              {order.state ? (
-                <State tone={orderTone(order.state)}>{t(`orders.state.${order.state}`)}</State>
-              ) : (
-                "—"
-              )}
-              {order.trade_no ? <span className="mt-1 block text-label text-t3">{order.trade_no}</span> : null}
-            </Td>
-            <Td className="whitespace-nowrap text-right tabular-nums">
-              {order.credits ? format.money(order.credits) : "—"}
-              {order.credited ? (
-                <span className="block text-label text-t3">{format.money(order.credited)}</span>
-              ) : null}
-            </Td>
-            <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">
-              {order.total ? format.pay(order.total) : "—"}
-              {order.fee ? <span className="block text-label text-t3">{format.pay(order.fee)}</span> : null}
-            </Td>
-            <Td className="hidden max-w-72 lg:table-cell">
-              <Refunds refunds={order.refunds} />
-            </Td>
-          </tr>
-        ))}
+        {rows.map((order, index) => {
+          const amounts = orderAmounts(order);
+          return (
+            <tr key={order.id ?? index} className="align-top hover:bg-s2">
+              <Td className={mainCell}>
+                <Code title={order.id}>{shortId(order.id)}</Code>
+                <span className="block text-label text-t3" title={order.created_at}>
+                  {order.created_at ? format.dateTime(new Date(order.created_at)) : "—"}
+                </span>
+                <span className="block text-label text-t3">
+                  {[order.merchant_name, order.method].filter(Boolean).join(" · ")}
+                </span>
+              </Td>
+              <Td className="hidden md:table-cell">
+                <Code title={order.account_id}>{shortId(order.account_id)}</Code>
+                <span className="block text-label text-t3" title={order.user_id}>
+                  {shortId(order.user_id)}
+                </span>
+              </Td>
+              <Td>
+                {order.state ? (
+                  <State tone={orderTone(order.state)}>{t(`orders.state.${order.state}`)}</State>
+                ) : (
+                  "—"
+                )}
+                {order.trade_no ? <span className="mt-1 block text-label text-t3">{order.trade_no}</span> : null}
+              </Td>
+              <Td className="whitespace-nowrap text-right tabular-nums">
+                {amounts.credited ? (
+                  format.money(amounts.credited!)
+                ) : (
+                  <span className="text-label text-t3">{t("orders.notCredited")}</span>
+                )}
+                {amounts.quotedCredits ? (
+                  <span className="block text-label text-t3">
+                    {t("orders.quote")} {format.money(amounts.quotedCredits!)}
+                  </span>
+                ) : null}
+              </Td>
+              <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">
+                {amounts.paid ? (
+                  format.pay(amounts.paid!)
+                ) : (
+                  <span className="text-label text-t3">
+                    {t(amounts.paidMissing ? "orders.paidUnavailable" : "orders.notPaid")}
+                  </span>
+                )}
+                {amounts.quote ? (
+                  <span className="block text-label text-t3">
+                    {t("orders.quote")} {format.pay(amounts.quote!)}
+                  </span>
+                ) : null}
+                {amounts.paidFee ? (
+                  <span className="block text-label text-t3">
+                    {t("orders.fee")} {format.pay(amounts.paidFee!)}
+                  </span>
+                ) : null}
+              </Td>
+              <Td className="hidden max-w-72 lg:table-cell">
+                <Refunds refunds={order.refunds} />
+              </Td>
+            </tr>
+          );
+        })}
       </tbody>
     </Table>
   );

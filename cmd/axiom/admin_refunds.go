@@ -221,20 +221,12 @@ func refundDecisionProblem(err error) error {
 	return err
 }
 
-// decideRefund runs one refund decision and records its answer under the request's Idempotency-Key. The decision owns
-// its transactions and its channel call, so the claim comes after it: a claim committed before an effect that can fail
-// would turn a retry into the stored answer of a decision that never happened. Both decisions are idempotent by the
-// refund's own state, so a retry after a lost answer applies nothing twice; the reply then repeats the current refund
-// without the replay header, because this node cannot know the first request's answer.
-func (a adminAPI) decideRefund(ctx context.Context, operation, refundID, key string, body adminapi.ReasonRequest, decide func(*payments.Payments, payments.RefundID, uuid.UUID, string) (payments.Refund, error)) (adminapi.PaymentRefund, bool, error) {
+// decideRefund runs one refund decision and records the local decision and its answer under the request's
+// Idempotency-Key in one transaction. The channel call, when there is one, happens after that commit: the decision is
+// then durable and the refund poller can finish a send this node did not. A key used by another refund or request is
+// refused before the decision runs, so two funds changes cannot share a key.
+func (a adminAPI) decideRefund(ctx context.Context, operation, refundID, key string, body adminapi.ReasonRequest, send bool, decide func(*payments.Payments, pg.Tx, payments.RefundID, uuid.UUID, string) (payments.Refund, error)) (adminapi.PaymentRefund, bool, error) {
 	claim, err := idempotencyClaim(ctx, operation, key, []any{refundID, body})
-	if err != nil {
-		return adminapi.PaymentRefund{}, false, err
-	}
-	if stored, found, err := replayed[adminapi.PaymentRefund](ctx, a.db, claim); err != nil || found {
-		return stored, found, err
-	}
-	id, err := refundIDOf(refundID)
 	if err != nil {
 		return adminapi.PaymentRefund{}, false, err
 	}
@@ -242,27 +234,40 @@ func (a adminAPI) decideRefund(ctx context.Context, operation, refundID, key str
 	if err != nil {
 		return adminapi.PaymentRefund{}, false, err
 	}
-	refund, err := decide(service, id, uuid.UUID(callOf(ctx).principal.UserID()), body.Reason)
-	if err != nil {
-		return adminapi.PaymentRefund{}, false, refundDecisionProblem(err)
-	}
-	_, site, err := a.siteOf(accounts.SiteID(refund.SiteID).TypeID())
+	var decided payments.Refund
+	stored, replayed, err := idempotentlyClaimed(ctx, a.db, claim, func(tx pg.Tx) (adminapi.PaymentRefund, error) {
+		id, err := refundIDOf(refundID)
+		if err != nil {
+			return adminapi.PaymentRefund{}, err
+		}
+		refund, err := decide(service, tx, id, uuid.UUID(callOf(ctx).principal.UserID()), body.Reason)
+		if err != nil {
+			return adminapi.PaymentRefund{}, refundDecisionProblem(err)
+		}
+		decided = refund
+		_, site, err := a.siteOf(accounts.SiteID(refund.SiteID).TypeID())
+		if err != nil {
+			return adminapi.PaymentRefund{}, err
+		}
+		return paymentRefundBody(refund, site.Currency), nil
+	})
 	if err != nil {
 		return adminapi.PaymentRefund{}, false, err
 	}
-	answer := paymentRefundBody(refund, site.Currency)
-	stored, replayed, err := idempotentlyClaimed(ctx, a.db, claim, func(pg.Tx) (adminapi.PaymentRefund, error) {
-		return answer, nil
-	})
-	return stored, replayed, err
+	if !replayed && send && decided.Via == "channel" {
+		if err = service.SendRefund(ctx, callOf(ctx).scope, decided.ID, true); err != nil {
+			a.logger.WarnContext(ctx, "refund decided but this node did not start its channel flow", "refund", decided.ID.TypeID(), "err", err)
+		}
+	}
+	return stored, replayed, nil
 }
 
 // ApprovePaymentRefund releases a refund as a second person and lets the channel flow start.
 func (a adminAPI) ApprovePaymentRefund(ctx context.Context, r adminapi.ApprovePaymentRefundRequestObject) (adminapi.ApprovePaymentRefundResponseObject, error) {
-	f := func(p *payments.Payments, id payments.RefundID, user uuid.UUID, reason string) (payments.Refund, error) {
-		return p.ApproveRefund(ctx, callOf(ctx).scope, id, user, reason)
+	f := func(p *payments.Payments, tx pg.Tx, id payments.RefundID, user uuid.UUID, reason string) (payments.Refund, error) {
+		return p.ApproveRefundTx(ctx, tx, id, user, reason)
 	}
-	body, replayed, err := a.decideRefund(ctx, "approvePaymentRefund", r.RefundId, r.Params.IdempotencyKey, *r.Body, f)
+	body, replayed, err := a.decideRefund(ctx, "approvePaymentRefund", r.RefundId, r.Params.IdempotencyKey, *r.Body, true, f)
 	if err != nil {
 		return nil, err
 	}
@@ -273,10 +278,10 @@ func (a adminAPI) ApprovePaymentRefund(ctx context.Context, r adminapi.ApprovePa
 
 // RejectPaymentRefund declines a refund that nobody approved and no channel saw, returning its frozen credits.
 func (a adminAPI) RejectPaymentRefund(ctx context.Context, r adminapi.RejectPaymentRefundRequestObject) (adminapi.RejectPaymentRefundResponseObject, error) {
-	f := func(p *payments.Payments, id payments.RefundID, user uuid.UUID, reason string) (payments.Refund, error) {
-		return p.RejectRefund(ctx, callOf(ctx).scope, id, user, reason)
+	f := func(p *payments.Payments, tx pg.Tx, id payments.RefundID, user uuid.UUID, reason string) (payments.Refund, error) {
+		return p.RejectRefundTx(ctx, tx, id, user, reason)
 	}
-	body, replayed, err := a.decideRefund(ctx, "rejectPaymentRefund", r.RefundId, r.Params.IdempotencyKey, *r.Body, f)
+	body, replayed, err := a.decideRefund(ctx, "rejectPaymentRefund", r.RefundId, r.Params.IdempotencyKey, *r.Body, false, f)
 	if err != nil {
 		return nil, err
 	}

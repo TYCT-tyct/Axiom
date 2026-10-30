@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -230,4 +231,82 @@ func TestAdminDecidesRefunds(t *testing.T) {
 	expectAdmin(t, "approving one's own refund", f.change(s, http.MethodPost,
 		"/payments/refunds/"+payments.RefundID(ownRefund).TypeID()+"/approve", `{"reason":"mine"}`, newKey()),
 		http.StatusForbidden, codeForbidden)
+}
+
+// One key stands for one decision: two refunds cannot both be approved because they raced past a lookup.
+func TestRefundDecisionKeyCoversOneRefund(t *testing.T) {
+	f := newAdminFixture(t)
+	f.addUser("other@example.com", "")
+	s := f.owner()
+	merchant := f.seedMerchant()
+	at := time.Now().UTC()
+	firstOrder := f.seedOrder(merchant, "other@example.com", "paid", at)
+	secondOrder := f.seedOrder(merchant, "other@example.com", "paid", at.Add(time.Second))
+	first := f.seedRefund(firstOrder, "other@example.com", "frozen")
+	second := f.seedRefund(secondOrder, "other@example.com", "frozen")
+
+	key := newKey()
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	for _, id := range []uuid.UUID{first, second} {
+		id := id
+		go func() {
+			path := "/payments/refunds/" + payments.RefundID(id).TypeID() + "/approve"
+			responses <- f.change(s, http.MethodPost, path, `{"reason":"checked the receipt"}`, key)
+		}()
+	}
+	a, b := <-responses, <-responses
+	won, lost := a, b
+	if a.Code != http.StatusOK {
+		won, lost = b, a
+	}
+	expectAdmin(t, "the first refund under the key", won, http.StatusOK, "")
+	expectAdmin(t, "the other refund under the same key", lost, http.StatusConflict, codeIdempotencyReuse)
+	if n := f.text("SELECT count(*)::text FROM payments.refunds WHERE approved_by IS NOT NULL"); n != "1" {
+		t.Errorf("%s refunds were approved under one key, want 1", n)
+	}
+	if n := f.text("SELECT count(*)::text FROM payments.refunds WHERE state = 'frozen' AND approved_by IS NULL"); n != "1" {
+		t.Errorf("%s refunds were left frozen without an approver, want 1", n)
+	}
+	if n := f.auditCount("refund.approve"); n != "1" {
+		t.Errorf("%s approvals were audited, want 1", n)
+	}
+}
+
+// The local decision, its audit and its idempotency answer commit together; if the answer cannot be stored, no approval
+// is left behind and the same key can be retried after the fault is gone.
+func TestRefundDecisionAndItsKeyCommitTogether(t *testing.T) {
+	f := newAdminFixture(t)
+	f.addUser("other@example.com", "")
+	s := f.owner()
+	merchant := f.seedMerchant()
+	order := f.seedOrder(merchant, "other@example.com", "paid", time.Now().UTC())
+	refund := f.seedRefund(order, "other@example.com", "frozen")
+	path := "/payments/refunds/" + payments.RefundID(refund).TypeID() + "/approve"
+	key := newKey()
+
+	f.run(`CREATE FUNCTION platform.reject_idempotency_finish() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'injected idempotency failure'; END $$`)
+	f.run(`CREATE TRIGGER reject_idempotency_finish BEFORE UPDATE ON platform.idempotency
+		FOR EACH ROW WHEN (OLD.response IS NULL AND NEW.response IS NOT NULL)
+		EXECUTE FUNCTION platform.reject_idempotency_finish()`)
+	expectAdmin(t, "an approval whose key cannot be saved", f.change(s, http.MethodPost, path, `{"reason":"checked the receipt"}`, key),
+		http.StatusInternalServerError, codeInternal)
+	if got := f.text("SELECT state || ':' || (approved_by IS NULL)::text FROM payments.refunds WHERE id = '" + refund.String() + "'"); got != "frozen:true" {
+		t.Errorf("a failed key write left the refund as %q, want frozen:true", got)
+	}
+	if n := f.auditCount("refund.approve"); n != "0" {
+		t.Errorf("a failed key write audited %s approvals, want none", n)
+	}
+
+	f.run(`DROP TRIGGER reject_idempotency_finish ON platform.idempotency`)
+	rec := f.change(s, http.MethodPost, path, `{"reason":"checked the receipt"}`, key)
+	expectAdmin(t, "the same key after the fault", rec, http.StatusOK, "")
+	var approved adminapi.PaymentRefund
+	decode(t, rec, &approved)
+	if approved.ApprovedBy == nil || *approved.ApprovedBy != f.userOf(ownerEmail) {
+		t.Errorf("approved by %v, want %s", approved.ApprovedBy, f.userOf(ownerEmail))
+	}
+	if n := f.auditCount("refund.approve"); n != "1" {
+		t.Errorf("%s approvals were audited after the retry, want 1", n)
+	}
 }

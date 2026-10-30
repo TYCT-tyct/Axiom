@@ -15,20 +15,8 @@ export const paymentOrderStates = [
   "charged_back",
 ] as const satisfies readonly AdminSchemas["PaymentOrderState"][];
 
-export const paymentRefundStates = [
-  "frozen",
-  "sending",
-  "pending",
-  "succeeded",
-  "failed",
-] as const satisfies readonly AdminSchemas["PaymentRefundState"][];
-
 export function paymentOrderState(value: unknown) {
   return paymentOrderStates.find((state) => state === value);
-}
-
-export function paymentRefundState(value: unknown) {
-  return paymentRefundStates.find((state) => state === value);
 }
 
 export type Tone = "neutral" | "good" | "warn" | "bad";

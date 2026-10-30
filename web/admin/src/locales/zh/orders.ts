@@ -32,11 +32,17 @@ export default {
     total: "实付",
     refunds: "退款",
   },
+  quote: "报价",
+  fee: "手续费",
+  notPaid: "未支付",
+  paidUnavailable: "未记录",
+  notCredited: "未入账",
   empty: { title: "还没有订单", body: "没有订单符合这个筛选，本站也还没有可显示的订单。" },
   noMatch: { title: "没有符合条件的订单", body: "清除一个筛选条件或放宽日期，可以看到更多。" },
   noRefunds: "没有退款",
   refundsUnavailable: "这台服务器还不提供订单的退款记录。",
   refund: {
+    review: "审核信息",
     title: "退款申请",
     description:
       "用户申请后冻结的退款。需由另一位管理员批准，才会开始走渠道退款；驳回会把冻结的额度退回账户，不动现金。",

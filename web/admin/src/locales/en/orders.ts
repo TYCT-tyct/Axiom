@@ -32,11 +32,17 @@ export default {
     total: "Paid",
     refunds: "Refunds",
   },
+  quote: "Quoted",
+  fee: "Fee",
+  notPaid: "Not paid",
+  paidUnavailable: "Not recorded",
+  notCredited: "Not credited",
   empty: { title: "No order yet", body: "No order matches this filter, and this site has none to show." },
   noMatch: { title: "No order matches", body: "Clear a filter or widen the dates to see more." },
   noRefunds: "No refund",
   refundsUnavailable: "This server does not give an order's refunds yet.",
   refund: {
+    review: "What you are deciding",
     title: "Refund requests",
     description:
       "Refunds held after a user's request. A different administrator approves a refund before its channel flow starts; rejecting one returns the frozen credits and moves no cash.",

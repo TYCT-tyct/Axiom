@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { orderTone, paymentOrderState, paymentRefundState, refundTone, shortId } from "./states";
+import { orderTone, paymentOrderState, refundTone, shortId } from "./states";
 
 it.each([
   ["paid", "paid"],
@@ -8,15 +8,6 @@ it.each([
   ["succeeded", undefined],
 ])("an order state from the address: %s", (value, want) => {
   expect(paymentOrderState(value)).toBe(want);
-});
-
-it.each([
-  ["frozen", "frozen"],
-  ["pending_review", undefined],
-  ["succeeded", "succeeded"],
-  [42, undefined],
-])("a refund state from the address: %s", (value, want) => {
-  expect(paymentRefundState(value)).toBe(want);
 });
 
 it("tells a refund waiting for review from one already approved", () => {
