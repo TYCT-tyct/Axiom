@@ -5,7 +5,7 @@ services:
   s3:
     # MinIO's own images are no longer publicly available — its Docker Hub repository is gone and quay.io/minio/minio
     # answers 401 — and this one is on Docker Hub with a tag per release. The rehearsal uses only what a backup uses:
-    # list, copy, purge, over the S3 API.
+    # list, get, put, delete and multipart, over the S3 API.
     image: rustfs/rustfs:1.0.3
     command: [server, /data]
     restart: "no"

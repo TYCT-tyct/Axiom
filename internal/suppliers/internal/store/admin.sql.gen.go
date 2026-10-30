@@ -134,7 +134,9 @@ func (q *Queries) GetCredentialOf(ctx context.Context, db DBTX, arg GetCredentia
 }
 
 const getGroupOf = `-- name: GetGroupOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+    pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
+    pool_observed_at
 FROM suppliers.supplier_groups WHERE supplier_id = $1 AND id = $2
 `
 
@@ -144,14 +146,21 @@ type GetGroupOfParams struct {
 }
 
 type GetGroupOfRow struct {
-	ID          uuid.UUID
-	UpstreamRef string
-	Name        string
-	Ratio       string
-	Facts       []byte
-	Selected    bool
-	Codename    *string
-	Present     bool
+	ID             uuid.UUID
+	UpstreamRef    string
+	Name           string
+	Ratio          string
+	Facts          []byte
+	Selected       bool
+	Codename       *string
+	Present        bool
+	PoolAccounts   *int32
+	PoolFailed     *int32
+	PoolUsable     *int32
+	PoolHeadroom   *int32
+	PoolCapacity   *int32
+	PoolLow        bool
+	PoolObservedAt *time.Time
 }
 
 func (q *Queries) GetGroupOf(ctx context.Context, db DBTX, arg GetGroupOfParams) ([]GetGroupOfRow, error) {
@@ -172,6 +181,13 @@ func (q *Queries) GetGroupOf(ctx context.Context, db DBTX, arg GetGroupOfParams)
 			&i.Selected,
 			&i.Codename,
 			&i.Present,
+			&i.PoolAccounts,
+			&i.PoolFailed,
+			&i.PoolUsable,
+			&i.PoolHeadroom,
+			&i.PoolCapacity,
+			&i.PoolLow,
+			&i.PoolObservedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -433,19 +449,28 @@ func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.
 }
 
 const listGroupsOf = `-- name: ListGroupsOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+    pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
+    pool_observed_at
 FROM suppliers.supplier_groups WHERE supplier_id = $1 ORDER BY name, id
 `
 
 type ListGroupsOfRow struct {
-	ID          uuid.UUID
-	UpstreamRef string
-	Name        string
-	Ratio       string
-	Facts       []byte
-	Selected    bool
-	Codename    *string
-	Present     bool
+	ID             uuid.UUID
+	UpstreamRef    string
+	Name           string
+	Ratio          string
+	Facts          []byte
+	Selected       bool
+	Codename       *string
+	Present        bool
+	PoolAccounts   *int32
+	PoolFailed     *int32
+	PoolUsable     *int32
+	PoolHeadroom   *int32
+	PoolCapacity   *int32
+	PoolLow        bool
+	PoolObservedAt *time.Time
 }
 
 func (q *Queries) ListGroupsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListGroupsOfRow, error) {
@@ -466,6 +491,13 @@ func (q *Queries) ListGroupsOf(ctx context.Context, db DBTX, supplierID uuid.UUI
 			&i.Selected,
 			&i.Codename,
 			&i.Present,
+			&i.PoolAccounts,
+			&i.PoolFailed,
+			&i.PoolUsable,
+			&i.PoolHeadroom,
+			&i.PoolCapacity,
+			&i.PoolLow,
+			&i.PoolObservedAt,
 		); err != nil {
 			return nil, err
 		}

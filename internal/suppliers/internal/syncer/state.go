@@ -98,6 +98,11 @@ type State struct {
 	Plans     map[string]string // "group/model" -> fingerprint of the current cost plan
 	Confirmed map[string]string // model -> a person's confirmed base schedule (JSON); scaled by the group's ratio
 
+	// Pool is what the management API of a pool last said of each group's accounts and windows, sorted by group ref.
+	// It lives in the groups' own columns, not in the stored state (json:"-"): the state's format is what an older node
+	// reads strictly, and a pool is observed data the projection compares row by row.
+	Pool []PoolCapacity `json:"-"`
+
 	// OfferAt and KeysAt are how far the offer and the keys listing got: the adapter's own positions, kept with each
 	// read of a listing so that one the supplier's limits, an error or a restart stopped goes on where it stopped
 	// instead of being read from the start (adapter.Page). A listing that ended clears its position. They are stored

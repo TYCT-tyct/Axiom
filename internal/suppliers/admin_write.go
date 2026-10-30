@@ -339,7 +339,8 @@ func (*Admin) group(ctx context.Context, tx pg.Tx, supplier, id uuid.UUID) (Grou
 		return Group{}, ErrNoGroup
 	}
 	g := rows[0]
-	return groupOf(g.ID, g.UpstreamRef, g.Name, g.Ratio, g.Facts, g.Selected, g.Codename, g.Present)
+	return groupOf(g.ID, g.UpstreamRef, g.Name, g.Ratio, g.Facts, g.Selected, g.Codename, g.Present,
+		poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt))
 }
 
 // defaultMaxConcurrency is how many calls a key serves at once until a person sets another number.
