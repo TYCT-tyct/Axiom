@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform/consoleapi"
@@ -53,31 +50,8 @@ func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject
 
 // GetSiteLogo serves a logo by its content hash. The hash is part of the URL, so the bytes never change under it and a
 // browser may keep them for a year; an earlier logo stays at its own hash. A hash the site never served is a 404.
-//
-//nolint:dupl // the console and admin contracts generate separate response types for the same bytes
 func (c consoleAPI) GetSiteLogo(ctx context.Context, request consoleapi.GetSiteLogoRequestObject) (consoleapi.GetSiteLogoResponseObject, error) {
-	raw, err := hex.DecodeString(request.Hash)
-	if err != nil || len(raw) != sha256.Size {
-		return nil, invalidField("hash", "not a logo hash")
-	}
-	var hash [sha256.Size]byte
-	copy(hash[:], raw)
-	logo, err := c.accounts.SiteLogoByHash(ctx, callOf(ctx).site.ID, hash)
-	if err != nil {
-		return nil, err
-	}
-	headers := consoleapi.GetSiteLogo200ResponseHeaders{CacheControl: logoServedFor}
-	body, length := logoBody(logo)
-	switch logo.ContentType {
-	case accounts.LogoSVG:
-		return consoleapi.GetSiteLogo200ImagesvgXmlResponse{Body: body, Headers: headers, ContentLength: length}, nil
-	case accounts.LogoPNG:
-		return consoleapi.GetSiteLogo200ImagepngResponse{Body: body, Headers: headers, ContentLength: length}, nil
-	case accounts.LogoWebP:
-		return consoleapi.GetSiteLogo200ImagewebpResponse{Body: body, Headers: headers, ContentLength: length}, nil
-	default:
-		return nil, fmt.Errorf("a stored logo has the content type %q", logo.ContentType)
-	}
+	return siteLogoResponse(ctx, c.accounts, callOf(ctx).site.ID, request.Hash, consoleLogos)
 }
 
 // Register makes a user from an invite code, or starts the email verification of an open registration.
