@@ -61,16 +61,22 @@ func (e *Engine) pool(ctx context.Context, c *Commit) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, poolReadTimeout)
 	defer cancel()
-	reported, err := p.Pool(ctx)
+	reading, err := p.Pool(ctx)
 	if err != nil {
 		return err
+	}
+	if !reading.Complete {
+		// The directory has more pages than one read may take, so what was read is a prefix. Diffing it would clear the
+		// readings of groups that are merely on a later page and call them recovered; keep the previous reading, and the
+		// next round starts the directory again.
+		return nil
 	}
 	listed := make(map[string]bool, len(c.State.Groups))
 	for _, g := range c.State.Groups {
 		listed[g.Ref] = true
 	}
-	caps := make([]PoolCapacity, 0, len(reported))
-	for _, g := range reported {
+	caps := make([]PoolCapacity, 0, len(reading.Groups))
+	for _, g := range reading.Groups {
 		if listed[g.GroupRef] && g.Accounts > 0 {
 			caps = append(caps, poolCapacity(g))
 		}

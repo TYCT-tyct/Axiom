@@ -333,6 +333,35 @@ func TestPoolCapacityIsStoredBesideTheListing(t *testing.T) {
 	}
 }
 
+// TestAPoolWithNoWindowIsStoredWhenHalfFailed: a group whose accounts all failed has no window to sample, so its
+// capacity is unknown, but it is still low and must commit: the failed share is a reason of its own.
+func TestAPoolWithNoWindowIsStoredWhenHalfFailed(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	s := c.acquire(c.node("a"))
+	st := stateAt(1)
+	st.Tasks[syncer.TaskCatalog].LastOK = t0
+	st.Groups = []syncer.GroupSnap{
+		{Ref: "1", Name: "all failed", Ratio: "1", Facts: `{}`},
+		{Ref: "2", Name: "half failed", Ratio: "1", Facts: `{}`},
+	}
+	// The shape the engine derives from the adapter: one account failed with no usable account, and one of two failed.
+	st.Pool = []syncer.PoolCapacity{
+		{GroupRef: "1", Accounts: 1, Failed: 1, Low: true},
+		{GroupRef: "2", Accounts: 2, Failed: 1, Usable: 1, Low: true},
+	}
+	if err := s.Store().Commit(t.Context(), 0, syncer.Commit{State: st}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.Store().Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(st.Pool, loaded.Pool); diff != "" {
+		t.Fatalf("loaded pool differs (-want +got):\n%s", diff)
+	}
+}
+
 // TestACommitKeepsTheLeaseAndAReleaseGivesItUp: every commit lengthens the lease by its time, so a round longer than the
 // time keeps it; a released lease can be taken at once, and a release by a holder that lost the lease takes nothing.
 func TestACommitKeepsTheLeaseAndAReleaseGivesItUp(t *testing.T) {

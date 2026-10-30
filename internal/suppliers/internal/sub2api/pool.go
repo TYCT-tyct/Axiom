@@ -71,17 +71,17 @@ func (m *manager) roleOf(ctx context.Context) (string, error) {
 // Pool reads the pool's groups from the account directory and the quota windows of a sample of their accounts. A login
 // that does not administer the supplier is not a pool: it answers ErrNotPool without asking an administrator endpoint,
 // so a relay costs nothing.
-func (m *manager) Pool(ctx context.Context) ([]adapter.GroupCapacity, error) {
+func (m *manager) Pool(ctx context.Context) (adapter.PoolReading, error) {
 	role, err := m.roleOf(ctx)
 	if err != nil {
-		return nil, err
+		return adapter.PoolReading{}, err
 	}
 	if role != "admin" {
-		return nil, adapter.ErrNotPool
+		return adapter.PoolReading{}, adapter.ErrNotPool
 	}
-	accounts, err := m.poolAccounts(ctx)
+	accounts, complete, err := m.poolAccounts(ctx)
 	if err != nil {
-		return nil, err
+		return adapter.PoolReading{}, err
 	}
 	groups := poolGroups(accounts)
 	ids, sample := poolSample(groups)
@@ -89,18 +89,20 @@ func (m *manager) Pool(ctx context.Context) ([]adapter.GroupCapacity, error) {
 	if len(ids) > 0 {
 		usage, err = m.poolUsage(ctx, ids)
 		if err != nil {
-			return nil, err
+			return adapter.PoolReading{}, err
 		}
 	}
 	out := make([]adapter.GroupCapacity, 0, len(groups))
 	for _, ref := range sortedKeys(groups) {
 		g := groups[ref]
-		g.setHeadroom(usage, sample[ref], m.s.now())
+		if err = g.setHeadroom(usage, sample[ref], m.s.now()); err != nil {
+			return adapter.PoolReading{}, err
+		}
 		out = append(out, adapter.GroupCapacity{
 			GroupRef: ref, Accounts: g.accounts, Failed: g.failed, Usable: g.usable, Headroom: g.headroom,
 		})
 	}
-	return out, nil
+	return adapter.PoolReading{Groups: out, Complete: complete}, nil
 }
 
 // poolAccountGroup is a group's counts while the directory is read.
@@ -158,14 +160,17 @@ func poolSample(groups map[string]*poolAccountGroup) ([]number, map[string][]num
 
 // setHeadroom sets the group's headroom from its sampled windows: the mean remaining percent of the tighter window,
 // rounded down, so an estimate never says there is more room than the accounts reported.
-func (g *poolAccountGroup) setHeadroom(usage map[string]*poolUsage, sampled []number, now time.Time) {
+func (g *poolAccountGroup) setHeadroom(usage map[string]*poolUsage, sampled []number, now time.Time) error {
 	total, n := 0, 0
 	for _, id := range sampled {
 		u := usage[string(id)]
 		if u == nil {
 			continue
 		}
-		room, ok := u.remaining(now)
+		room, ok, err := u.remaining(now)
+		if err != nil {
+			return err
+		}
 		if !ok {
 			continue
 		}
@@ -173,23 +178,25 @@ func (g *poolAccountGroup) setHeadroom(usage map[string]*poolUsage, sampled []nu
 		n++
 	}
 	if n == 0 {
-		return
+		return nil
 	}
 	headroom := total / n
 	g.headroom = &headroom
+	return nil
 }
 
 // remaining is the percent left of the tighter of the account's windows. A window whose reset has passed is reset: its
-// utilization is no longer what is left. ok is false when the supplier reported neither window.
-func (u poolUsage) remaining(now time.Time) (int, bool) {
+// utilization is no longer what is left. ok is false when the supplier reported neither window; a utilization that is
+// not a number is refused rather than read as spent, which would halve a healthy group's weight.
+func (u poolUsage) remaining(now time.Time) (int, bool, error) {
 	left, seen := 100, false
 	for _, w := range []*poolWindow{u.FiveHour, u.SevenDay} {
 		if w == nil || !w.Utilization.present() {
 			continue
 		}
-		used := 100.0
-		if v, err := strconv.ParseFloat(string(w.Utilization), 64); err == nil {
-			used = v
+		used, err := w.used()
+		if err != nil {
+			return 0, false, err
 		}
 		if w.ResetsAt != nil && !w.ResetsAt.After(now) {
 			used = 0
@@ -198,26 +205,50 @@ func (u poolUsage) remaining(now time.Time) (int, bool) {
 		seen = true
 	}
 	if !seen {
-		return 0, false
+		return 0, false, nil
 	}
-	return left, true
+	return left, true, nil
+}
+
+// used is the share of the window the supplier reports as used. Only a JSON number is accepted: a quoted one would
+// otherwise read as spent and halve a healthy group.
+func (w *poolWindow) used() (float64, error) {
+	v, err := strconv.ParseFloat(string(w.Utilization), 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: a window utilization that is not a number", adapter.ErrUnrecognised)
+	}
+	return v, nil
+}
+
+// validate refuses a window utilization that is not a JSON number, even for an account this read does not sample: the
+// supplier changed the shape, and a later sample must not read it as spent.
+func (u poolUsage) validate() error {
+	for _, w := range []*poolWindow{u.FiveHour, u.SevenDay} {
+		if w == nil || !w.Utilization.present() {
+			continue
+		}
+		if _, err := w.used(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // poolAccounts reads the account directory, page by page, up to maxPoolPages. A page that lacks its list or page count is
-// not an empty page.
-func (m *manager) poolAccounts(ctx context.Context) ([]poolAccount, error) {
-	var accounts []poolAccount
+// not an empty page. complete is false when the directory had more pages than the cap: the accounts are then a prefix,
+// and a caller that diffed them would clear the groups it did not reach.
+func (m *manager) poolAccounts(ctx context.Context) (accounts []poolAccount, complete bool, err error) {
 	for n := 1; n <= maxPoolPages; n++ {
 		items, pages, err := m.poolPage(ctx, n)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		accounts = append(accounts, items...)
 		if n >= pages {
-			break
+			return accounts, true, nil
 		}
 	}
-	return accounts, nil
+	return accounts, false, nil
 }
 
 // poolPage reads one page of the directory: its accounts and how many pages there are.
@@ -241,12 +272,26 @@ func (m *manager) poolPage(ctx context.Context, n int) ([]poolAccount, int, erro
 	if err != nil {
 		return nil, 0, err
 	}
-	for _, a := range items {
-		if _, err := a.ID.int64(); err != nil {
-			return nil, 0, fmt.Errorf("%w: an account without its id", adapter.ErrUnrecognised)
-		}
+	if err = poolAccountsValid(items); err != nil {
+		return nil, 0, err
 	}
 	return items, pages, nil
+}
+
+// poolAccountsValid checks the identifiers the counts and the window sample are keyed by: a quoted number would key a
+// different group, silently dropping an account or clearing a group's reading, so it is refused as unrecognised.
+func poolAccountsValid(items []poolAccount) error {
+	for _, a := range items {
+		if _, err := a.ID.int64(); err != nil {
+			return fmt.Errorf("%w: an account without its id", adapter.ErrUnrecognised)
+		}
+		for _, ref := range a.GroupIDs {
+			if n, err := ref.int64(); err != nil || n <= 0 {
+				return fmt.Errorf("%w: an account with a group id that is not a positive integer", adapter.ErrUnrecognised)
+			}
+		}
+	}
+	return nil
 }
 
 // poolUsage asks the supplier for the windows of ids, a batch at a time. An account the supplier reported an error for,
@@ -296,6 +341,9 @@ func (m *manager) poolUsageBatch(ctx context.Context, ids []number) (map[string]
 	out := make(map[string]*poolUsage, len(usage.Usage))
 	for id := range usage.Usage {
 		u := usage.Usage[id]
+		if err = u.validate(); err != nil {
+			return nil, err
+		}
 		out[id] = &u
 	}
 	return out, nil

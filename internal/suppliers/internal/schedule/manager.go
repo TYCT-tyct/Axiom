@@ -71,14 +71,14 @@ func (o *openOnUse) Charges(ctx context.Context, scan adapter.ScanState) (adapte
 
 // Pool forwards the pool read to the adapter that has one. A relay's manager does not, and answers ErrNotPool; that is
 // how the engine tells a supplier whose group weights it may lower from one whose capacity is its own.
-func (o *openOnUse) Pool(ctx context.Context) ([]adapter.GroupCapacity, error) {
+func (o *openOnUse) Pool(ctx context.Context) (adapter.PoolReading, error) {
 	m, err := o.get()
 	if err != nil {
-		return nil, err
+		return adapter.PoolReading{}, err
 	}
 	p, ok := m.(adapter.Pool)
 	if !ok {
-		return nil, adapter.ErrNotPool
+		return adapter.PoolReading{}, adapter.ErrNotPool
 	}
 	return p.Pool(ctx)
 }

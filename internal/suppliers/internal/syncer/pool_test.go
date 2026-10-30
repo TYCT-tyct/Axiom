@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/suppliers/internal/adapter"
 )
 
@@ -13,10 +15,10 @@ import (
 // what the test wants the pool's management API to say.
 type poolSupplier struct {
 	*supplier
-	pool func(context.Context) ([]adapter.GroupCapacity, error)
+	pool func(context.Context) (adapter.PoolReading, error)
 }
 
-func (p *poolSupplier) Pool(ctx context.Context) ([]adapter.GroupCapacity, error) { return p.pool(ctx) }
+func (p *poolSupplier) Pool(ctx context.Context) (adapter.PoolReading, error) { return p.pool(ctx) }
 
 // TestPoolCapacityTracksTheReading: the step carries what the pool said, with the capacity derived from it, so the
 // projection can write it and compare rows; half the accounts failed is low on its own, a supplier that stops being a
@@ -39,11 +41,15 @@ func TestPoolCapacityTracksTheReading(t *testing.T) {
 		{"stopped being a pool", nil, adapter.ErrNotPool, 1, 50, true},
 		{"left the answer", nil, nil, 0, 0, false},
 	}
-	m := &poolSupplier{supplier: healthy(), pool: func(context.Context) ([]adapter.GroupCapacity, error) { return nil, nil }}
+	m := &poolSupplier{supplier: healthy(), pool: func(context.Context) (adapter.PoolReading, error) {
+		return adapter.PoolReading{}, nil
+	}}
 	e, st, clk := engine(m)
 	for _, c := range cases {
 		caps, poolErr := c.caps, c.err
-		m.pool = func(context.Context) ([]adapter.GroupCapacity, error) { return caps, poolErr }
+		m.pool = func(context.Context) (adapter.PoolReading, error) {
+			return adapter.PoolReading{Groups: caps, Complete: true}, poolErr
+		}
 		clk.advance(10 * time.Minute)
 		round(t, e)
 		p := st.state.Pool
@@ -70,12 +76,14 @@ func TestPoolCapacityArithmetic(t *testing.T) {
 		capacity *int
 		low      bool
 	}{
-		"at the line":       {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Usable: 10, Headroom: head(20)}, head(20), true},
-		"above the line":    {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Usable: 10, Headroom: head(21)}, head(21), false},
-		"half failed":       {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Failed: 5, Usable: 5, Headroom: head(100)}, head(50), true},
-		"one of ten failed": {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Failed: 1, Usable: 9, Headroom: head(100)}, head(90), false},
-		"no window":         {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Usable: 10}, nil, false},
-		"nothing can serve": {adapter.GroupCapacity{GroupRef: "1", Accounts: 1, Failed: 1, Headroom: head(100)}, head(0), true},
+		"at the line":            {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Usable: 10, Headroom: head(20)}, head(20), true},
+		"above the line":         {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Usable: 10, Headroom: head(21)}, head(21), false},
+		"half failed":            {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Failed: 5, Usable: 5, Headroom: head(100)}, head(50), true},
+		"one of ten failed":      {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Failed: 1, Usable: 9, Headroom: head(100)}, head(90), false},
+		"no window":              {adapter.GroupCapacity{GroupRef: "1", Accounts: 10, Usable: 10}, nil, false},
+		"all failed, no window":  {adapter.GroupCapacity{GroupRef: "1", Accounts: 1, Failed: 1}, nil, true},
+		"half failed, no window": {adapter.GroupCapacity{GroupRef: "1", Accounts: 2, Failed: 1, Usable: 1}, nil, true},
+		"nothing can serve":      {adapter.GroupCapacity{GroupRef: "1", Accounts: 1, Failed: 1, Headroom: head(100)}, head(0), true},
 	}
 	for name, c := range cases {
 		got := poolCapacity(c.in)
@@ -85,12 +93,29 @@ func TestPoolCapacityArithmetic(t *testing.T) {
 	}
 }
 
+// TestATruncatedDirectoryKeepsThePreviousReading: a directory with more pages than one read may take is a prefix, so the
+// groups it did not reach must keep their reading and their weight rather than look recovered.
+func TestATruncatedDirectoryKeepsThePreviousReading(t *testing.T) {
+	t.Parallel()
+	head := 10
+	m := &poolSupplier{supplier: healthy(), pool: func(context.Context) (adapter.PoolReading, error) {
+		return adapter.PoolReading{Complete: false}, nil
+	}}
+	e, st, _ := engine(m)
+	before := []PoolCapacity{{GroupRef: "1", Accounts: 10, Failed: 2, Usable: 8, Headroom: &head, Capacity: &head, Low: true}}
+	st.state.Pool = before
+	round(t, e)
+	if diff := cmp.Diff(before, st.state.Pool); diff != "" {
+		t.Errorf("a truncated directory changed the reading (-want +got):\n%s", diff)
+	}
+}
+
 // TestPoolReadFailureIsTheTaskFailure: a pool that cannot be read fails the catalog task, with the round's usual backoff,
 // rather than leaving a stale reading looking current.
 func TestPoolReadFailureIsTheTaskFailure(t *testing.T) {
 	t.Parallel()
-	m := &poolSupplier{supplier: healthy(), pool: func(context.Context) ([]adapter.GroupCapacity, error) {
-		return nil, errors.New("the pool is down")
+	m := &poolSupplier{supplier: healthy(), pool: func(context.Context) (adapter.PoolReading, error) {
+		return adapter.PoolReading{}, errors.New("the pool is down")
 	}}
 	e, st, clk := engine(m)
 	round(t, e)

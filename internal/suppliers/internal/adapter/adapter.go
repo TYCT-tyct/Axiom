@@ -70,7 +70,15 @@ type Pool interface {
 	// Pool reads the pool's capacity per group. GroupRef is the supplier's own group ID, the one its offer lists. It
 	// reports a group only when at least one account is assigned to it: a group absent from the answer is not known,
 	// which is not the same as empty.
-	Pool(ctx context.Context) ([]GroupCapacity, error)
+	Pool(ctx context.Context) (PoolReading, error)
+}
+
+// PoolReading is one read of a pool. Complete is false when the directory had more pages than one read may take:
+// Groups is then a prefix, and the caller must keep its previous reading instead of treating the groups it did not
+// reach as recovered.
+type PoolReading struct {
+	Groups   []GroupCapacity
+	Complete bool
 }
 
 // GroupCapacity is what one group of a pool has: its accounts and the room left in their quota windows. The counts are

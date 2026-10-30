@@ -22,7 +22,9 @@ ALTER TABLE suppliers.supplier_groups
             AND (pool_headroom IS NULL OR pool_headroom BETWEEN 0 AND 100)
             AND (pool_capacity IS NULL OR pool_capacity BETWEEN 0 AND 100)
             AND pool_low IS NOT NULL
-            AND (NOT pool_low OR pool_capacity IS NOT NULL)
+            -- Low follows either a nearly spent window (a capacity) or half the accounts failed; a group with every
+            -- account failed may report no window at all, so the failed share is a sufficient reason on its own.
+            AND (NOT pool_low OR pool_capacity IS NOT NULL OR pool_failed * 2 >= pool_accounts)
             AND pool_observed_at IS NOT NULL));
 
 GRANT UPDATE (pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, pool_low, pool_observed_at)
