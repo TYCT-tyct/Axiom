@@ -8,7 +8,7 @@ import { adminUrl } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { consoleSuite } from "./console-scenes.ts";
 import { signedInAs } from "./mock-auth.ts";
-import type { Suite } from "./scene.ts";
+import type { Scene, Suite } from "./scene.ts";
 import { words } from "./words.ts";
 
 // The performance budgets of docs/frontend.md「前端性能指标」 as checks: LCP and CLS of the main pages on a phone over a
@@ -43,15 +43,11 @@ const phone = { rtt: 150, down: 1.6 * 1024 * 0.9 * 128, up: 750 * 0.9 * 128, cpu
 const desktop = { rtt: 40, down: 10 * 1024 * 0.9 * 128, up: 10 * 1024 * 0.9 * 128, cpu: 1 };
 type Profile = typeof phone;
 
-// Every number here is a timing of this host, and the 4x CPU throttle multiplies the renderer's own CPU time: the same
-// page measured 2.9 s on a developer's host and 5.8 s on the CI runner. Before the loads, a fixed CPU loop runs in a page
-// under the same throttle; its time is how fast this host is, and the LCP is scaled back to the runner the ceiling was set
-// on (docs/frontend.md「实测」). The loop mixes 40M integers and the minimum of three runs is taken, so JIT warm-up and a
-// single scheduler stall do not decide it. reference is milliseconds on the 2026-10-30 CI runner.
-const calibration = {
-  iterations: 40_000_000,
-  reference: { phone: 280, desktop: 70 } as Record<"phone" | "desktop", number>,
-};
+// Every number here is a timing of this host, so a busy runner stretches it: the same page measured 2.9 s on a
+// developer's host and 5.8 s on the CI runner. For every page but the overview itself, the console overview, the lightest page with the
+// same shell and a table of mocked data, is loaded three times under the same throttle first; its LCP says how this host is
+// doing, and the page's LCP is scaled to the overview's LCP on the 2026-10-30 run the ceiling was set on
+// (docs/frontend.md「实测」). The overview is measured in the same test, so a filtered single test needs no earlier run.
 
 // web-vitals' IIFE build, which a page gets before its own scripts so it sees the whole load.
 // The package does not export its IIFE file, so it is found beside the CommonJS one the package does.
@@ -95,34 +91,32 @@ async function vitals(page: Page): Promise<Vitals> {
 
 const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
 
-// calibrationOf is how fast this host runs a fixed CPU loop under the profile's throttle: a page created the same way
-// as a measured load, the minimum of three runs. The loop's result is compared so the engine cannot drop the work.
-async function calibrationOf(browser: Browser, profile: Profile, device: Parameters<Browser["newContext"]>[0]) {
-  const page = await measuredPage(browser, profile, device);
-  try {
-    const elapsed = await page.evaluate((iterations) => {
-      const run = () => {
-        const started = performance.now();
-        let value = 0x12345678;
-        for (let i = 0; i < iterations; i++) {
-          value = (Math.imul(value ^ i, 2654435761) + 0x9e3779b9) | 0;
-        }
-        return { ms: performance.now() - started, value };
-      };
-      const runs = [run(), run(), run()];
-      if (runs.some((entry) => entry.value !== runs[0]?.value)) {
-        throw new Error("calibration is not deterministic");
-      }
-      return Math.min(...runs.map((entry) => entry.ms));
-    }, calibration.iterations);
-    if (!(elapsed > 0)) {
-      throw new Error(`calibration took ${elapsed} ms`);
-    }
-    return elapsed;
-  } finally {
+// loadsOf is one scene loaded three times, each in a fresh context with the profile's throttle.
+async function loadsOf(
+  browser: Browser,
+  profile: Profile,
+  device: Parameters<Browser["newContext"]>[0],
+  suite: Suite,
+  scene: Scene,
+): Promise<Vitals[]> {
+  const loads: Vitals[] = [];
+  for (let i = 0; i < 3; i++) {
+    const page = await measuredPage(browser, profile, device);
+    await suite.prepare(page, scene);
+    await scene.open(page);
+    loads.push(await vitals(page));
     await page.context().close();
   }
+  return loads;
 }
+
+const lcpOf = async (
+  browser: Browser,
+  profile: Profile,
+  device: Parameters<Browser["newContext"]>[0],
+  suite: Suite,
+  scene: Scene,
+) => median((await loadsOf(browser, profile, device, suite, scene)).map((l) => l.LCP ?? Number.POSITIVE_INFINITY));
 
 // A throttled page is slow by design: the 4x CPU and the slow network stretch a load and its waits well past the 30 s.
 test.describe.configure({ timeout: 120_000 });
@@ -143,6 +137,14 @@ function sceneOf(suite: Suite, name: string) {
   }
   return scene;
 }
+
+// The console overview is the baseline: the lightest page with the same shell and mocked table, so a slow host or a busy
+// neighbour stretches it and the page under test alike. reference is its median LCP on the 2026-10-30 CI run that the
+// 6 s ceiling came from; scaling to it keeps the ceiling a page budget rather than a host budget.
+const baseline = {
+  scene: sceneOf(consoleSuite, "overview"),
+  reference: { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>,
+};
 
 // The pages a person lands on and works in, by their names in the suites' scene lists.
 const pages: [Suite, string][] = [
@@ -165,23 +167,19 @@ test.describe("loading", () => {
     for (const [suite, sceneName] of pages) {
       test(`${suite.app} ${sceneName}: LCP and CLS on ${name}`, async ({ browser }) => {
         const scene = sceneOf(suite, sceneName);
-        const measured = await calibrationOf(browser, profile, device);
-        const loads: Vitals[] = [];
-        for (let i = 0; i < 3; i++) {
-          const page = await measuredPage(browser, profile, device);
-          await suite.prepare(page, scene);
-          await scene.open(page);
-          loads.push(await vitals(page));
-          await page.context().close();
-        }
+        const isBaseline = scene === baseline.scene;
+        const base = isBaseline ? undefined : await lcpOf(browser, profile, device, consoleSuite, baseline.scene);
+        const loads = await loadsOf(browser, profile, device, suite, scene);
         const label = `${suite.app} ${sceneName} ${name}`;
         const raw = median(loads.map((l) => l.LCP ?? Number.POSITIVE_INFINITY));
-        const reference = calibration.reference[name];
+        const reference = baseline.reference[name];
         record(
           `LCP ${label}`,
-          (raw * reference) / measured,
+          base === undefined ? raw : (raw * reference) / base,
           lcp,
-          `raw ${raw.toFixed(0)} ms, calibration ${measured.toFixed(0)} of ${reference} ms`,
+          base === undefined
+            ? `raw ${raw.toFixed(0)} ms`
+            : `raw ${raw.toFixed(0)} ms, overview ${base.toFixed(0)} of ${reference} ms`,
         );
         record(`CLS ${label}`, Math.max(...loads.map((l) => l.CLS ?? 0)), budget.cls);
       });
