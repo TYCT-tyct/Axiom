@@ -394,12 +394,20 @@ func TestCreditOnce(t *testing.T) {
 // segmentTokens is the output tokens a segment of the property bank's reservations covers.
 const segmentTokens = 50
 
+// correctionStats counts the corrections a property run applied and how their price moved.
+type correctionStats struct {
+	applied, refunds, extras int
+}
+
 // TestLedgerProperty drives random sequences of credits, gifts and payments in the site's currency and another, some of
 // them expiring, reservations, settlements with retries
-// and crashes left to cleanup, some with usage only a fallback price covers, write-offs of expired credit, and checks
-// after every step that every transaction balances, the balance equals its book, the counters equal the pending holds,
-// the floor holds, and the credit batches fund exactly the balance without any being over-spent.
+// and crashes left to cleanup, some with usage only a fallback price covers, write-offs of expired credit, and
+// corrections of estimated charges from a supplier's record, some of them refunds and some extra charges. After every
+// step it checks that every transaction balances, the balance equals its book, the
+// counters equal the pending holds, the floor holds, and the credit batches fund exactly the balance without any being
+// over-spent.
 func TestLedgerProperty(t *testing.T) {
+	var corrected correctionStats
 	for seed := range uint64(3) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
@@ -413,7 +421,16 @@ func TestLedgerProperty(t *testing.T) {
 				b.balanced()
 				b.replayed(b.admitted.Account)
 			}
+			t.Logf("corrections %+v", b.corrected)
+			corrected.applied += b.corrected.applied
+			corrected.refunds += b.corrected.refunds
+			corrected.extras += b.corrected.extras
 		})
+	}
+	// A run that corrected nothing, or only one way, has not shown that a correction's refund and its extra charge both
+	// leave the books and the batches as they were.
+	if corrected.refunds == 0 || corrected.extras == 0 {
+		t.Errorf("corrections %+v, want applied corrections with at least one refund and one extra charge", corrected)
 	}
 }
 
@@ -454,24 +471,35 @@ func (b *bank) tryRandomHold(r *rand.Rand, holds *[]*Hold) {
 
 func (b *bank) settleRandom(r *rand.Rand, h *Hold) {
 	b.t.Helper()
+	// Every charged item is estimated, as a call that reported no usage of its own leaves them, so that a complete
+	// supplier's record can replace the whole charge; partial records are covered by the refusal tests.
 	results := []Result{Committed, Aggregated, FailedBeforeCommit, Unknown, NotExecuted}
 	o := outcome(results[r.IntN(len(results))], FinishReason(r.IntN(9)), //nolint:gosec // G115: below 9
-		maybeUnknown(b.t, r, used(b.t, r.Int64N(2000), r.Int64N(200), r.Int64N(3), []catalog.Item{in}[:r.IntN(2)]...)))
+		maybeUnknown(b.t, r, used(b.t, r.Int64N(2000), r.Int64N(200), r.Int64N(3), in, catalog.ItemOutput, webSearch)))
 	f, err := b.billing.Settle(b.t.Context(), h, o)
 	if err != nil {
 		b.t.Fatal(err)
 	}
-	if f.Estimated && r.IntN(2) == 0 {
-		b.correctRandom(r, h)
+	if f.Estimated {
+		b.correctRandom(r, h, o)
 	}
 }
 
-// correctRandom corrects an estimated settlement from a complete supplier's record, as the correction job does.
-func (b *bank) correctRandom(r *rand.Rand, h *Hold) {
+// correctRandom corrects an estimated settlement from a complete supplier's record, as the correction job does. Every
+// other applied correction states more tokens than the estimate and every other fewer, so a run covers both a refund
+// and an extra charge; the floor that caps an extra charge has its own test.
+func (b *bank) correctRandom(r *rand.Rand, h *Hold, o Outcome) {
 	b.t.Helper()
-	u, err := catalog.NewUsage(map[catalog.Item]int64{
-		in: r.Int64N(2000), catalog.ItemOutput: r.Int64N(200), webSearch: r.Int64N(3),
-	}, catalog.ServiceTierStandard, nil)
+	old := o.Attempts[0].Segments[0].Usage
+	counts := map[catalog.Item]int64{in: old.Count(in), catalog.ItemOutput: old.Count(catalog.ItemOutput), webSearch: old.Count(webSearch)}
+	for _, it := range []catalog.Item{in, catalog.ItemOutput, webSearch} {
+		if b.corrected.applied%2 == 0 {
+			counts[it] = max(counts[it]-r.Int64N(50)-1, 0)
+		} else {
+			counts[it] += r.Int64N(50) + 1
+		}
+	}
+	u, err := catalog.NewUsage(counts, catalog.ServiceTierStandard, nil)
 	if err != nil {
 		b.t.Fatal(err)
 	}
@@ -479,10 +507,27 @@ func (b *bank) correctRandom(r *rand.Rand, h *Hold) {
 		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1,
 		Usage: u, Reported: 1<<in | 1<<catalog.ItemOutput | 1<<webSearch,
 	}
+	before := b.owedOf(h.id)
 	c := &corrector{db: b.app, scope: b.platform}
-	if _, err := c.correct(b.t.Context(), ev); err != nil && !errors.Is(err, errNoCorrection) {
-		b.t.Fatal(err)
+	if _, err := c.correct(b.t.Context(), ev); err != nil {
+		if !errors.Is(err, errNoCorrection) {
+			b.t.Fatal(err)
+		}
+		return
 	}
+	b.corrected.applied++
+	switch after := b.owedOf(h.id); {
+	case after < before:
+		b.corrected.refunds++
+	case after > before:
+		b.corrected.extras++
+	}
+}
+
+// owedOf is the price the reservation's current settlement charged, before or after a correction.
+func (b *bank) owedOf(request uuid.UUID) int64 {
+	b.t.Helper()
+	return b.count("SELECT price FROM billing.reservations WHERE request_id = '" + request.String() + "'")
 }
 
 // concurrent reserves and settles four calls of the account at once: each is a transaction of its own on the one
