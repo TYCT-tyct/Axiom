@@ -33,6 +33,15 @@ var partitionName = regexp.MustCompile(`^(call_log|call_attempt)_([0-9]{4})_([0-
 // errNothingToArchive says a month has neither partition left and no manifest; the run logs it and moves on.
 var errNothingToArchive = errors.New("observability: nothing left to archive")
 
+// errArchiveChanged says the partition gained rows after its snapshot; the old manifest cannot justify a drop, so the
+// month is copied again. The call log is append-only (the application holds only SELECT and INSERT), which is why an
+// equal row count under the drop lock proves the snapshot is complete.
+var errArchiveChanged = errors.New("observability: the partition changed after it was archived")
+
+// archiveAttempts bounds how often one run rewrites a month that keeps receiving late writes. A run that still sees
+// changes returns the error and lets the next scheduled run try again; it never drops an unarchived row.
+const archiveAttempts = 3
+
 // pastWindow lists the whole months whose end is not after cutoff, oldest first. Only leaf partitions named for a month
 // are candidates; the default partition has no month and stays where it is.
 func (r *retainer) pastWindow(ctx context.Context, cutoff time.Time) ([]time.Time, error) {
@@ -100,26 +109,10 @@ func monthOf(table, name string) (time.Time, bool) {
 
 // archiveMonth moves one month to the object store and drops it only after the archive is confirmed. If a manifest is
 // already there, its objects are checked by size and only the drop remains; a manifest the run cannot trust is written
-// again from the partition, which is still present until the drop.
+// again from the partition, which is still present until the drop. A write that arrives after the snapshot makes the
+// drop fail its row-count check; that month is copied again.
 func (r *retainer) archiveMonth(ctx context.Context, month time.Time) error {
-	manifest, ready, err := r.readyArchive(ctx, month)
-	if err != nil {
-		return err
-	}
-	if ready {
-		return r.dropMonth(ctx, month, manifest)
-	}
-	// A month with neither partition left and no manifest has nothing to do: an operator removed it, or an earlier
-	// drop committed. Retrying forever would only fill the log.
-	empty, err := r.bothPartitionsMissing(ctx, month)
-	if err != nil {
-		return err
-	}
-	if empty {
-		r.logger.WarnContext(ctx, "observability: a month past the window has no partitions to archive", "month", monthKey(month))
-		return nil
-	}
-	manifest, err = r.writeArchive(ctx, month)
+	manifest, err := r.archiveReady(ctx, month)
 	if errors.Is(err, errNothingToArchive) {
 		r.logger.WarnContext(ctx, "observability: a month past the window has no partitions to archive", "month", monthKey(month))
 		return nil
@@ -127,17 +120,76 @@ func (r *retainer) archiveMonth(ctx context.Context, month time.Time) error {
 	if err != nil {
 		return err
 	}
+	err = r.dropArchived(ctx, month, manifest)
+	if errors.Is(err, errNothingToArchive) {
+		r.logger.WarnContext(ctx, "observability: a month past the window has no partitions to archive", "month", monthKey(month))
+		return nil
+	}
+	return err
+}
+
+// archiveReady returns a manifest the run can try to drop with, writing and confirming a new one when the existing
+// manifest is missing, incomplete or fails confirmation. A month with neither partition and no manifest is
+// errNothingToArchive.
+func (r *retainer) archiveReady(ctx context.Context, month time.Time) (archiveManifest, error) {
+	manifest, ready, err := r.readyArchive(ctx, month)
+	if err != nil {
+		return manifest, err
+	}
+	if ready {
+		return manifest, nil
+	}
+	// A month with neither partition left and no manifest has nothing to do: an operator removed it, or an earlier
+	// drop committed. Retrying forever would only fill the log.
+	empty, err := r.bothPartitionsMissing(ctx, month)
+	if err != nil {
+		return manifest, err
+	}
+	if empty {
+		return archiveManifest{}, errNothingToArchive
+	}
+	return r.writeAndConfirm(ctx, month)
+}
+
+// dropArchived drops a confirmed month, rewriting it when the row-count check finds a write after its snapshot. Bounded
+// attempts keep a busy old month from holding one run forever; the next scheduled run tries again, never dropping the
+// new rows.
+func (r *retainer) dropArchived(ctx context.Context, month time.Time, manifest archiveManifest) error {
+	for attempt := range archiveAttempts {
+		err := r.dropMonth(ctx, month, manifest)
+		if !errors.Is(err, errArchiveChanged) {
+			return err
+		}
+		if attempt == archiveAttempts-1 {
+			return fmt.Errorf("observability: %s still changed after %d archive attempts", monthKey(month), archiveAttempts)
+		}
+		r.logger.WarnContext(ctx, "observability: the partition changed after it was archived; archiving it again", "month", monthKey(month))
+		manifest, err = r.writeAndConfirm(ctx, month)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeAndConfirm copies a month, checks every object, and counts the tables it archived. It returns
+// errNothingToArchive when both partitions have gone.
+func (r *retainer) writeAndConfirm(ctx context.Context, month time.Time) (archiveManifest, error) {
+	manifest, err := r.writeArchive(ctx, month)
+	if err != nil {
+		return manifest, err
+	}
 	ok, err := r.confirm(ctx, manifest)
 	if err != nil {
-		return err
+		return manifest, err
 	}
 	if !ok {
-		return errors.New("observability: the archive does not match what was uploaded")
+		return manifest, errors.New("observability: the archive does not match what was uploaded")
 	}
 	for _, entry := range manifest.Tables {
 		r.partitions.Add(ctx, 1, metric.WithAttributes(attribute.String("action", "archived"), attribute.String("table", entry.Table)))
 	}
-	return r.dropMonth(ctx, month, manifest)
+	return manifest, nil
 }
 
 // readyArchive reports whether a month's manifest can be trusted as complete: every present partition is named in it
@@ -399,8 +451,11 @@ func tableColumns(ctx context.Context, tx pg.Tx, table string) ([]archiveColumn,
 	return columns, rows.Err()
 }
 
-// dropMonth drops the month's partitions in one transaction, attempts first (see archiveTables). A drop that cannot get
-// its lock rolls back and the whole month is retried; the archive stays and the next run tries again.
+// dropMonth drops the month's partitions in one transaction, attempts first (see archiveTables). Before it drops, it
+// locks every present partition against writes and counts its rows; a count that differs from the manifest means a
+// writer added a row after the snapshot, so the transaction rolls back and the month is archived again. The lock is held
+// until the drop commits, so no row can arrive between the count and the drop. A drop that cannot get its lock rolls
+// back and the whole month is retried; the archive stays and the next run tries again.
 func (r *retainer) dropMonth(ctx context.Context, month time.Time, manifest archiveManifest) error {
 	err := r.db.Tx(ctx, r.scope, func(tx pg.Tx) error {
 		if err := tx.SetRole(ctx, retentionJobRole); err != nil {
@@ -411,15 +466,14 @@ func (r *retainer) dropMonth(ctx context.Context, month time.Time, manifest arch
 		if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '5s'"); err != nil {
 			return err
 		}
-		for _, table := range archiveTables {
-			if !manifest.has(table) {
-				continue // it appeared after the manifest; the next run archives and drops it
-			}
-			if _, err := tx.Exec(ctx, "DROP TABLE IF EXISTS observability."+partitionNameOf(table, month)); err != nil {
-				return err
-			}
+		present, err := lockArchivedPartitions(ctx, tx, month)
+		if err != nil {
+			return err
 		}
-		return nil
+		if err := checkArchivedRows(ctx, tx, month, manifest, present); err != nil {
+			return err
+		}
+		return dropArchivedTables(ctx, tx, month, manifest)
 	})
 	if err != nil {
 		return err
@@ -429,6 +483,77 @@ func (r *retainer) dropMonth(ctx context.Context, month time.Time, manifest arch
 	}
 	r.logger.InfoContext(ctx, "observability: dropped archived call-log partitions", "month", monthKey(month))
 	return nil
+}
+
+// lockArchivedPartitions takes the write-blocking lock on every present partition in one statement and reports which
+// ones exist. The names come from the validated month, never from a caller.
+func lockArchivedPartitions(ctx context.Context, tx pg.Tx, month time.Time) (map[string]bool, error) {
+	present := make(map[string]bool, len(archiveTables))
+	names := make([]string, 0, len(archiveTables))
+	for _, table := range archiveTables {
+		part := partitionNameOf(table, month)
+		exists, err := partitionExistsTx(ctx, tx, part)
+		if err != nil {
+			return nil, err
+		}
+		present[part] = exists
+		if exists {
+			names = append(names, "observability."+part)
+		}
+	}
+	if len(names) > 0 {
+		if _, err := tx.Exec(ctx, "LOCK TABLE "+strings.Join(names, ", ")+" IN ACCESS EXCLUSIVE MODE"); err != nil {
+			return nil, err
+		}
+	}
+	return present, nil
+}
+
+// checkArchivedRows proves each present partition still has exactly the rows its manifest recorded. The caller holds
+// the partition lock, so no write can change the count between this check and the drop.
+func checkArchivedRows(ctx context.Context, tx pg.Tx, month time.Time, manifest archiveManifest, present map[string]bool) error {
+	for _, table := range archiveTables {
+		part := partitionNameOf(table, month)
+		if !present[part] {
+			continue
+		}
+		entry, listed := manifest.entry(table)
+		if !listed {
+			// A partition that appeared after the snapshot has rows the manifest cannot cover.
+			return fmt.Errorf("%w: %s is not in the manifest", errArchiveChanged, part)
+		}
+		var rows int64
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM observability."+part).Scan(&rows); err != nil {
+			return err
+		}
+		if rows != entry.Rows {
+			return fmt.Errorf("%w: %s has %d rows, the manifest says %d", errArchiveChanged, part, rows, entry.Rows)
+		}
+	}
+	return nil
+}
+
+// dropArchivedTables drops the partitions the manifest covers, attempts before calls. A partition the manifest does not
+// cover has no archive to justify a drop and is left for the next run.
+func dropArchivedTables(ctx context.Context, tx pg.Tx, month time.Time, manifest archiveManifest) error {
+	for _, table := range archiveTables {
+		if !manifest.has(table) {
+			continue
+		}
+		if _, err := tx.Exec(ctx, "DROP TABLE IF EXISTS observability."+partitionNameOf(table, month)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// partitionExistsTx reports whether a partition exists inside tx, so the caller can decide and act in one snapshot.
+func partitionExistsTx(ctx context.Context, tx pg.Tx, name string) (bool, error) {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, "observability."+name).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func partitionNameOf(table string, month time.Time) string {
@@ -444,12 +569,17 @@ func objectKey(month time.Time, name string) string {
 // archiveManifest is what is stored last for a month. It names the format, the month, the objects and their sizes and
 // digests, so a reader can tell a complete set from a half-written one and restore the CSV with its column types.
 func (m archiveManifest) has(table string) bool {
+	_, ok := m.entry(table)
+	return ok
+}
+
+func (m archiveManifest) entry(table string) (archivedTable, bool) {
 	for _, entry := range m.Tables {
 		if entry.Table == table {
-			return true
+			return entry, true
 		}
 	}
-	return false
+	return archivedTable{}, false
 }
 
 type archiveManifest struct {

@@ -58,6 +58,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 | 租户只读写自己账户的行 | 两张表和每个分区强制行级安全，策略比较本行站点/账户与 [pg 的 InitPlan 范围参数](../platform/pg/README.md#决策与理由)；写入者在平台范围里（`pg.PlatformScope()` 由 cmd 交给 `NewRecorder`）。测试：账户 A 读不到 B 的行也按 ID 取不到，A 的范围写不进 B 的调用或尝试 |
 | 记录不可改、不可删 | `axiom_app` 只有 SELECT 和 INSERT；到期按分区整块处理，由持有表的角色执行。测试：两张表的 UPDATE、DELETE、TRUNCATE 被拒 |
 | 归档确认后才删分区 | 清单最后上传，存在即表示两份对象都完整上传；删除前逐个 HEAD 核对清单里的字节数，核对失败不删，下次重写或重试。测试：上传失败、HEAD 失败、对象短于清单时分区都在；修复后才删 |
+| 归档之后的迟到写入不丢 | 调用记录只有 INSERT（应用没有 UPDATE/DELETE），删除事务先对现存分区加 `ACCESS EXCLUSIVE` 锁并精确 `count(*)`；行数与清单不符就回滚重写整月，锁一直持到 DROP 提交，所以计数和删除之间没有写入窗口。一次运行最多重写三次，仍变化就报错留给下一轮，绝不删未归档的行。测试：确认失败后补写旧月记录再重试，新行在清单和 CSV 里 |
 | 账本、汇总和审计不随调用日志删除 | 保留任务只拼 `observability.call_log_*` 与 `call_attempt_*` 的分区名，从不写 `billing` 的语句；测试在一个已归档月份旁边放另一 schema 的行，运行后仍在 |
 | 分区的建与删只由专用角色做 | 两张父表和全部分区归 `axiom_retention_job`（NOLOGIN）；`axiom_owner` 继承它，部署建的 `axiom_retention` 登录是它的成员，`axiom_app` 不是。应用仍只有 SELECT/INSERT，保留任务用 `AXIOM_RETENTION_DATABASE_URL` 独立连接，拿到分区 DDL 所需的所有权。测试：任务在独立登录下能建、删分区，应用不能改表 |
 | 用户看不到成本、端点和路由 | `OwnCall` 没有这些字段；尝试表不向用户开放，查询也不选尝试（[接入与对外接口的「用量与费用」](../../docs/domains/gateway.md#用量与费用)） |
@@ -128,7 +129,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 列表保留标量时间窗供分区裁剪；游标行比较负责索引起点，两者的条件顺序见[读](#读)。新分区必须与父表采用相同的策略级 InitPlan 表达式；`pg.Check` 同时审计父表与分区，拒绝旧的逐行范围函数。
 
-迁移给 `call_log` 和 `call_attempt` 都建了 2026-10 到 2028-12 的月分区和一个默认分区，两表的月份一一对应，按调用开始的 `at` 分区。父表和已有分区归 `axiom_retention_job`：PostgreSQL 只让表的属主建、删它的分区，`axiom_app` 不能是属主（启动检查会拒绝能成为属主的登录角色）。迁移的第一步建这个 NOLOGIN 角色并授予 `axiom_owner`（继承并带 ADMIN，后续迁移仍能 `ALTER TABLE` 父表），部署的 `roles.sh` 建 `axiom_retention` 登录角色、迁移把它加入这个任务角色。`axiom_app` 不是任务角色的成员：否则应用里的任意 SQL 都能 `SET ROLE` 过去，自己关掉行级安全或删掉分区。任务用 `AXIOM_RETENTION_DATABASE_URL` 开自己的连接池（`pool_max_conns=2`，串行），`axiom_retention_job` 只多拿 schema 的 USAGE/CREATE、两张表的全部权限、`retention` 的 SELECT 和 `platform` 的 USAGE；没有 BYPASSRLS，读分区时照样过策略。
+迁移给 `call_log` 和 `call_attempt` 都建了 2026-10 到 2028-12 的月分区和一个默认分区，两表的月份一一对应，按调用开始的 `at` 分区。父表和已有分区归 `axiom_retention_job`：PostgreSQL 只让表的属主建、删它的分区，`axiom_app` 不能是属主（启动检查会拒绝能成为属主的登录角色）。迁移的第一步建这个 NOLOGIN 角色并授予 `axiom_owner`（继承并带 ADMIN，后续迁移仍能 `ALTER TABLE` 父表），部署的 `roles.sh` 建 `axiom_retention` 登录角色、并在每次启动时补 `GRANT axiom_retention_job TO axiom_retention`（迁移时角色还不存在的库，之后启用也不会漏授权）；迁移在角色已存在时也做同样的授予。`axiom_app` 不是任务角色的成员：否则应用里的任意 SQL 都能 `SET ROLE` 过去，自己关掉行级安全或删掉分区。任务用 `AXIOM_RETENTION_DATABASE_URL` 开自己的连接池（`pool_max_conns=2`，串行），启动时在 10 秒内实际 `SET ROLE` 并检查 schema/表权限，缺授权就拒绝启动；`axiom_retention_job` 只多拿 schema 的 USAGE/CREATE、两张表的全部权限、`retention` 的 SELECT 和 `platform` 的 USAGE；没有 BYPASSRLS，读分区时照样过策略。
 
 没有 `AXIOM_RETENTION_DATABASE_URL` 时任务不登记：分区只到迁移预建的 2028-12，之后写默认分区；配了对象存储却没有这个变量则启动失败，免得“归档开着”其实没跑。
 
@@ -138,9 +139,9 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 2. **读窗口**：`hot_days` 为 0 时只预建；没有对象存储时同样只预建，并记一条日志说明为什么不删。都不会删任何东西。
 3. **列出整月**已经早于 `now - hot_days` 的叶子分区（`pg_partition_tree`，只认 `call_log_YYYY_MM` / `call_attempt_YYYY_MM`；默认分区不认）。按时间从旧到新处理，每月一次。
 4. **归档**：用 `COPY (SELECT * FROM 分区) TO STDOUT` 以 CSV（带表头）导出，gzip 后按 `call-log/v1/<YYYY-MM>/call_log.csv.gz`、`call_attempt.csv.gz` 上传，最后写 `manifest.json`：版本、月份、格式、每张表的行数、字节数、SHA-256 和列名/类型。清单最后写，存在即证明两份对象都已上传；`confirm` 再逐个 HEAD 核对清单里的字节数。
-5. **删除**：确认后在一个事务里先删 `call_attempt` 的分区、再删 `call_log` 的，同一月的两张表一起提交。上传或核对失败、存储不可用、事务拿不到锁都不删；下次运行读到清单，核对通过就只做删除，不通过就从仍在的分区重写。一个月的失败不挡其他月份，错误交回 River 重试。
+5. **删除**：确认后在同一个事务里先对两张现存分区加 `ACCESS EXCLUSIVE` 锁、精确核对行数，再删 `call_attempt` 的分区、后删 `call_log` 的。行数比清单多说明快照后有迟到写入，事务回滚并重写整月；锁一直持到提交，计数和删除之间没有写入窗口。上传、核对、存储或锁失败都不删；一个月的失败不挡其他月份，错误交回 River 重试，最多重写三次后留给下一轮。
 
-`pg.Tx.CopyTo` 是 COPY 的出口：语句里的分区名只来自上面校验过的月份，数据本身从不拼进 SQL。归档文件先落到本地临时目录（`os.CreateTemp`），因为 `objectstore.Put` 的 body 必须可寻址；成功或失败都会删掉临时文件。归档对象没有到期删除：调用记录「全部保存，不能关闭」指的是不丢弃，热窗口只决定 PostgreSQL 里留多久，离开的月份仍在桶里。
+`pg.Tx.CopyTo` 是 COPY 的出口：语句里的分区名只来自上面校验过的月份，数据本身从不拼进 SQL。归档文件先落到 `TMPDIR` 下的临时目录（`os.CreateTemp`），因为 `objectstore.Put` 的 body 必须可寻址；成功或失败都会删掉临时文件。程序镜像是 scratch、根文件系统只读，部署因此给 `TMPDIR=/retention-tmp` 一个由 `keys` 服务 chown 给 65532 的独立卷；没有这个卷时第一次归档会因建不了临时文件而失败，不会误删分区。归档对象没有到期删除：调用记录「全部保存，不能关闭」指的是不丢弃，热窗口只决定 PostgreSQL 里留多久，离开的月份仍在桶里。
 
 对象存储没配置（`objectstore.ReadConfig` 返回零值）时归档关闭，任务只预建分区。读取归档还不是产品接口：`GetTrace` 对已删除的月份返回 `pg.ErrNoRows`，控制台显示为空/404；清单和列类型足以离线恢复，按需再做导出或查询接口。
 

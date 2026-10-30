@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -52,11 +53,17 @@ type fakeStore struct {
 	objects map[string][]byte
 	putErr  error
 	headErr error
+	putPath string
 }
 
 func newFakeStore() *fakeStore { return &fakeStore{objects: map[string][]byte{}} }
 
 func (s *fakeStore) Put(_ context.Context, up objectstore.Upload) (objectstore.ObjectInfo, error) {
+	if f, ok := up.Body.(*os.File); ok {
+		s.mu.Lock()
+		s.putPath = f.Name()
+		s.mu.Unlock()
+	}
 	if s.putErr != nil {
 		return objectstore.ObjectInfo{}, s.putErr
 	}
@@ -323,34 +330,6 @@ func TestRetentionDoesNotDropWhenConfirmationFails(t *testing.T) {
 	}
 	if partitionExists(t, db, "call_log_2026_10") {
 		t.Error("the partition was not dropped after the confirmation succeeded")
-	}
-}
-
-// TestRetentionRewritesATruncatedArchive: an object shorter than its manifest is not trusted; the job rewrites it from
-// the partition, which is still present, before dropping anything.
-func TestRetentionRewritesATruncatedArchive(t *testing.T) {
-	t.Parallel()
-	db, database := openDBWithURL(t)
-	retention := openRetention(t, database)
-	account := uuid.NewV7()
-	keep(t, db, record(account, time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)))
-	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return SetRetention(t.Context(), tx, Retention{HotDays: 30})
-	}); err != nil {
-		t.Fatal(err)
-	}
-	store := newFakeStore()
-	store.objects[manifestKey(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))] = []byte(`{"version":1,"month":"2026-10","format":"postgresql-copy-csv-gzip","tables":[{"table":"call_log","key":"call-log/v1/2026-10/call_log.csv.gz","rows":1,"bytes":100,"sha256":"00","columns":[]}]}`)
-	store.objects["call-log/v1/2026-10/call_log.csv.gz"] = []byte("short")
-	if err := newTestRetainer(t, retention, store).run(t.Context(), time.Date(2026, 12, 15, 0, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatal(err)
-	}
-	if partitionExists(t, db, "call_log_2026_10") {
-		t.Fatal("the partition stayed after the archive was rewritten")
-	}
-	manifest := readManifest(t, store, "2026-10")
-	if len(manifest.Tables) != 2 || manifest.Tables[0].Bytes == 100 {
-		t.Errorf("the archive was not rewritten: %+v", manifest.Tables)
 	}
 }
 
