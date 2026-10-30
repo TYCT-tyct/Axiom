@@ -71,7 +71,7 @@
 | 没有没人用的文件、导出和依赖 | knip（`knip.jsonc`）；包只给本仓库的应用用，入口文件的导出也要有应用引用 |
 | 没有重复代码 | jscpd（`.jscpd.json`），50 个词法单元以上算重复；测试和端到端的模拟（`e2e/`）不查 |
 | 首屏脚本、每多开一页增加的脚本、西文字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按程序发送时的压缩（`scripts/compress.ts`，brotli q11）后的大小计脚本，字体取 woff2 文件本身的大小；首屏算入口页加载的每个脚本和它们的静态依赖，再加入口地址打开的页面（控制台的概览、后台的首页） |
-| 主要页面的 LCP、CLS，常用操作的 INP，长列表滚动的掉帧和长任务不超过[前端性能指标](../docs/frontend.md#前端性能指标)：超出上限即失败（CLS、长列表滚动只报告），数字写进测试的注解；它是计时，单独在 CI 的 `vitals` 任务里用 `just web-vitals` 一次一个测试地跑，普通分片排除它（`playwright.vitals.config.ts`） | `e2e/vitals.spec.ts`：web-vitals 的 IIFE 构建在页面脚本之前注入；手机档（Pixel 5、慢速 4G、CPU 降速 4 倍）和电脑档（10 Mbps）取三次加载的中位数；INP 在 CPU 降速 4 倍下取该操作的最差值 |
+| 主要页面的 LCP、CLS，常用操作的 INP，长列表滚动的掉帧和长任务不超过[前端性能指标](../docs/frontend.md#前端性能指标)：只有 LCP 超出上限才失败，CLS、INP、长列表滚动只报告（INP 和掉帧随共享 CI 机器的负载摆动，CLS 同一页在两次测量之间差别很大），数字写进测试的注解；它是计时，单独在 CI 的 `vitals` 任务里用 `just web-vitals` 一次一个测试地跑，普通分片排除它（`playwright.vitals.config.ts`） | `e2e/vitals.spec.ts`：web-vitals 的 IIFE 构建在页面脚本之前注入；手机档（Pixel 5、慢速 4G、CPU 降速 4 倍）和电脑档（10 Mbps）取三次加载的中位数；INP 在 CPU 降速 4 倍下取该操作的最差值 |
 
 ## 测试
 
