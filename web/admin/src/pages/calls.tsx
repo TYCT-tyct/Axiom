@@ -108,7 +108,7 @@ function CallsTable({ rows }: { rows: AdminSchemas["AdminCallSummary"][] }) {
     <Table label={t("nav.calls")}>
       <Head
         cols={[
-          [t("calls.col.at")],
+          [t("calls.col.at"), "hidden sm:table-cell"],
           [t("calls.requestId")],
           [t("calls.col.account")],
           [t("calls.col.model"), "hidden md:table-cell"],
@@ -132,7 +132,7 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
   const format = useFormat();
   return (
     <tr>
-      <Td>
+      <Td className="hidden sm:table-cell">
         {inspect ? (
           <Link to="/calls/$callId" params={{ callId: call.id }} className="text-accent hover:underline">
             <Time at={call.at} />
@@ -143,6 +143,9 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
       </Td>
       <Td>
         <Code>{call.id ?? "—"}</Code>
+        <span className="block text-label text-t3 sm:hidden">
+          <Time at={call.at} />
+        </span>
       </Td>
       <Td className={mainCell}>
         <span className="block truncate font-mono text-label text-t2" title={call.account_id}>
@@ -164,8 +167,8 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
       {inspect ? (
         <Td className="w-0">
           <Button asChild size="sm" variant="ghost">
-            <Link to="/calls/$callId" params={{ callId: call.id }}>
-              {t("calls.trace")}
+            <Link to="/calls/$callId" params={{ callId: call.id }} aria-label={t("calls.trace")}>
+              <span className="hidden sm:inline">{t("calls.trace")}</span>
               <Icon name="right" />
             </Link>
           </Button>

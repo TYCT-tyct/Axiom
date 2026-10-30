@@ -29,7 +29,7 @@ test.describe("calls and audit", () => {
       .first()
       .click();
     await expect(h1(page, words("calls.traceTitle"))).toBeVisible();
-    await expect(page.getByText(zhText("calls.costTitle"))).toBeVisible();
+    await expect(page.getByRole("heading", { name: zhText("calls.costTitle") })).toBeVisible();
     await expect(page.getByRole("table", { name: zhText("calls.attemptsTitle") })).toBeVisible();
     await expect(page.getByText(zhText("calls.outcome.committed")).first()).toBeVisible();
   });
@@ -49,7 +49,7 @@ test.describe("calls and audit", () => {
   }) => {
     await open(page, "/audit");
     await expect(page.getByRole("row")).toHaveCount(51);
-    await page.getByLabel(zhText("audit.filters.action")).fill("account.tier_change");
+    await page.getByLabel(zhText("audit.filters.action"), { exact: true }).fill("account.tier_change");
     await page.getByRole("button", { name: zhText("filter.apply") }).click();
     await expect(page).toHaveURL(/action=account.tier_change/);
     await expect(page.getByRole("row")).toHaveCount(21);

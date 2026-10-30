@@ -58,12 +58,12 @@ test.describe("account state", () => {
     const tiers = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/tiers"));
     await press(page, "users.account.changeTier").click();
     expect(new URL((await tiers).url()).searchParams.get("site_id")).toBe(state.accounts.get(acct(1))?.site_id);
-    await dialog(page).locator("select[name=tier_id]").selectOption({ label: "Pro" });
+    await dialog(page).locator("select[name=tier_id]").selectOption({ label: "Friends" });
     await send(page);
     await expect(done(page)).toBeVisible();
     await close(page);
-    expect(state.accounts.get(acct(1))?.tier.name).toBe("Pro");
-    await expect(page.getByText("Pro").first()).toBeVisible();
+    expect(state.accounts.get(acct(1))?.tier.name).toBe("Friends");
+    await expect(page.getByText("Friends").first()).toBeVisible();
   });
 
   test("a node of the release before the sign-in switch shows that part as unavailable", async ({ page }) => {
