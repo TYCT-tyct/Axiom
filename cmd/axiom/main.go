@@ -75,6 +75,8 @@ func operate(ctx context.Context, environ, args []string) error {
 		return billingCommand(ctx, environ, args[1:], os.Stdout)
 	case "keyring":
 		return keyringCommand(ctx, environ, args[1:], os.Stdout)
+	case "objectstore":
+		return objectstoreCommand(ctx, environ, args[1:], os.Stdout)
 	default:
 		return userCommand(ctx, environ, args[1:], os.Stdin, os.Stdout)
 	}
