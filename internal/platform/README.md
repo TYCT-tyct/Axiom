@@ -139,7 +139,9 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 节点 `AXIOM_NODE_ADDR` | 核心的节点调用面：与公网监听相同的路由，外加 `/livez`、`/readyz`，给入口转发和探活；只接受 `ca.crt` 签发、带客户端证书的连接（最低 TLS 1.3，证书用途要匹配）。只在核心且设置了地址时开；公网监听不经过它 |
 | 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics`；每个节点都开，入口的 `/readyz` 由它对核心的探活决定 |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_DB_COMPLETION_RESERVE`（完成类预留的连接数，默认 16，见「连接池」）、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_EXCHANGE_SOURCE`（缺省 `manual`；`ecb` 启用[参考汇率任务](../billing/README.md#汇率与成本依据)，按货币对保留人工值，其他值启动失败）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）、`AXIOM_VALKEY_URL`（不设就是单核心模式，共享状态都在进程内）、`AXIOM_VALKEY_PASSWORD_FILE`（受保护文件，权限要求同主密钥文件）、`AXIOM_CORE_NODES`（核心节点数，默认 1；大于 1 必须配置 Valkey；同时决定每个节点的连接份额，见「连接池」）、`AXIOM_NODE_ID`（本节点的名字，默认主机名，心跳行用它，重启的同一节点替换自己的行），见 [kv 的「配置与启动」](kv/README.md#配置与启动)；`AXIOM_NODE_ROLES`（逗号分隔的 `core`、`ingress`、`ops`，默认 `core`；`core` 和 `ingress` 不能在同一节点）、`AXIOM_ADMIN_SOURCES`（逗号分隔的地址或网段，管理监听的来源；不是回环地址又没配就启动失败，回环地址默认 `127.0.0.1/32,::1/128`）、`AXIOM_NODE_ADDR`（核心接受节点调用的地址，只在核心且设置时开节点监听）、`AXIOM_CORE_URL`（入口转发到的 `https` 地址，不能带路径、查询或用户信息）、`AXIOM_NODE_TLS_DIR`（节点证书目录；核心不设时默认与主密钥同目录，入口必须显式给；文件为 `node.crt`、`node.key`、`ca.crt`）。节点角色决定开哪些监听和读哪些变量：`core` 之外的角色不读数据库、密钥环、Valkey、邮件、对象存储和管理监听的配置，设了就算错；`ingress` 必须给 `AXIOM_CORE_URL` 和证书，`ops` 不读公网监听也不读核心的变量。入口的转发在 `cmd/axiom`，用 `httputil.ReverseProxy` 和 HTTP/2 的 `http.Transport`，流式响应逐块下发，客户端断开就取消核心上的请求；等核心响应头最多 15 分钟，响应体连续 5 分钟没有数据就结束本次转发，整个请求最多 65 分钟（核心最长调用 60 分钟），每次向客户端写入或刷新最多 10 秒并在请求结束时清掉写期限，核心卡住或客户端不读时请求仍有界结束；它对核心的 `/readyz` 每秒探一次，核心不能路由时入口报告未就绪。核心要把入口节点的地址写进 `AXIOM_TRUSTED_PROXIES`，才会采信入口转来的 `X-Forwarded-For` 和协议头。节点证书的签发、注册和轮换由部署负责，程序只读取并检查。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_DB_COMPLETION_RESERVE`（完成类预留的连接数，默认 16，见「连接池」）、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_EXCHANGE_SOURCE`（缺省 `manual`；`ecb` 启用[参考汇率任务](../billing/README.md#汇率与成本依据)，按货币对保留人工值，其他值启动失败）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）、`AXIOM_VALKEY_URL`（不设就是单核心模式，共享状态都在进程内）、`AXIOM_VALKEY_PASSWORD_FILE`（受保护文件，权限要求同主密钥文件）、`AXIOM_CORE_NODES`（核心节点数，默认 1；大于 1 必须配置 Valkey；同时决定每个节点的连接份额，见「连接池」）、`AXIOM_NODE_ID`（本节点的名字，默认主机名，心跳行用它，重启的同一节点替换自己的行），见 [kv 的「配置与启动」](kv/README.md#配置与启动)；`AXIOM_NODE_ROLES`（逗号分隔的 `core`、`ingress`、`ops`，默认 `core`；`core` 和 `ingress` 不能在同一节点）、`AXIOM_ADMIN_SOURCES`（逗号分隔的地址或网段，管理监听的来源；不是回环地址又没配就启动失败，回环地址默认 `127.0.0.1/32,::1/128`）、`AXIOM_NODE_ADDR`（核心接受节点调用的地址，只在核心且设置时开节点监听）、`AXIOM_CORE_URL`（入口转发到的 `https` 地址，不能带路径、查询或用户信息）、`AXIOM_NODE_TLS_DIR`（节点证书目录；核心不设时默认与主密钥同目录，入口必须显式给；文件为 `node.crt`、`node.key`、`ca.crt`）、`AXIOM_WEB_ASSETS_DIR`（只在核心：别的构建的带哈希前端文件所在目录，见「前端文件」；不设就只服务自己嵌入的构建，设了必须是已存在的目录）。节点角色决定开哪些监听和读哪些变量：`core` 之外的角色不读数据库、密钥环、Valkey、邮件、对象存储和管理监听的配置，设了就算错；`ingress` 必须给 `AXIOM_CORE_URL` 和证书，`ops` 不读公网监听也不读核心的变量。入口的转发在 `cmd/axiom`，用 `httputil.ReverseProxy` 和 HTTP/2 的 `http.Transport`，流式响应逐块下发，客户端断开就取消核心上的请求；等核心响应头最多 15 分钟，响应体连续 5 分钟没有数据就结束本次转发，整个请求最多 65 分钟（核心最长调用 60 分钟），每次向客户端写入或刷新最多 10 秒并在请求结束时清掉写期限，核心卡住或客户端不读时请求仍有界结束；它对核心的 `/readyz` 每秒探一次，核心不能路由时入口报告未就绪。核心要把入口节点的地址写进 `AXIOM_TRUSTED_PROXIES`，才会采信入口转来的 `X-Forwarded-For` 和协议头。节点证书的签发、注册和轮换由部署负责，程序只读取并检查。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+
+节点开始退出时，`/readyz` 先答 503，公开、管理和节点监听对之后开始的请求答 503（`Retry-After: 1`、`no-store`），已经在跑的请求继续；探针监听不受影响，所以边缘能先看到未就绪再看到监听关闭。等边缘摘流量的时间和监听、调用的共享期限见[发布的「滚动发布」](../../docs/ops/release.md#滚动发布)。
 
 公网、管理和节点监听的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
@@ -164,7 +166,8 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 公网监听不含管理后台 | 公网的处理器只持有官网和控制台的文件；管理后台的处理器只交给管理监听 | 结构上不可达，而不是靠路径判断 |
 | 安全响应头 | `Content-Security-Policy`（`vite.shared.ts` 里唯一的一份，由 `embed.ts` 写进 `build/content-security-policy.txt`，Go 原样发送）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`（关摄像头、麦克风、定位）。每个应答都带，错误也带 | 策略只在一处定义，两边不会漂移；HSTS 由终结 TLS 的入口节点发 |
 | 不支持范围请求 | 整个文件带 `Content-Length` 发送 | 脚本、样式和字体没有人要一段；`http.ServeContent` 对已编码的响应不写长度 |
-| 滚动发布时 | 旧页面请求新版本已经没有的代码块得到 404，前端自动刷新一次（`web/README.md`）；一台机器上的页面和资源总来自同一个构建 | 多台机器新旧并存时，页面和它的代码块可能落在不同版本上，靠这一次刷新恢复；要彻底避免，由入口节点按会话粘到同一台 |
+| 其他构建的带哈希文件 | `webui.Open(AXIOM_WEB_ASSETS_DIR)` 在嵌入的构建之外再读一个目录，只认 `assets/` 下带 8 位内容哈希、且本构建没有的名字；本构建有的优先，入口页和策略永远不从目录读。目录按请求读、读到一次就缓存，所以比本构建先启动的旧节点也能取到后来发布的文件。`axiom web-assets <dir>`（`Frontend.Publish`）把本构建的这些文件写进目录，已有同名文件保留，内容不同则失败 | 滚动发布时页面和它的代码块会落到不同构建；只保留带哈希的文件既补上旧代码块，又不会让旧入口页盖掉新的。文件按请求读，是因为旧节点不会重启，新构建的文件在它启动后才发布 |
+| 滚动发布时 | 共享目录里有两套带哈希的文件时，旧页面在新节点上也取得到旧代码块；只有真的缺失（没有共享目录，或回滚到没保留的构建）才得到 404，前端自动刷新一次（`web/README.md`）；入口页仍各用各的构建 | 多台机器新旧并存时，页面和它的代码块可能落在不同版本上；保留两套文件是彻底的做法，刷新只是没有共享目录时的兜底 |
 
 模型与价格页由 Go 在返回页面时写入数据的位置留在 `webui` 的应用里：以后在回退到入口页的地方改成渲染，不改路由。
 
@@ -252,7 +255,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 探针监听 `AXIOM_PROBES_ADDR` 默认只听本机，不对公网：
 
 - `/livez`：进程在运行；
-- `/readyz`：能接新工作时 200，开始退出后 503。启动时监听在数据库检查通过后才打开，之前探针连不上，编排工具把连不上和 503 一样算作未就绪；这样启动失败的节点从不占用端口。退出时就绪先改为否，公网监听等在途请求完成期间，探针监听仍然应答（`/readyz` 返回 503），之后才关闭。
+- `/readyz`：能接新工作时 200，开始退出后 503。启动时监听在数据库检查通过后才打开，之前探针连不上，编排工具把连不上和 503 一样算作未就绪；这样启动失败的节点从不占用端口。退出时就绪先改为否，公开监听对新的请求答 503（`Retry-After: 1`）而让在途请求完成，探针监听在这段时间仍然应答（`/readyz` 返回 503），之后才关闭；入口节点把核心的 `/readyz` 映到自己的就绪上。
 - 探针读请求头、读整个请求（含请求体）、写响应各限时 2 秒：探针从不流式响应，不限时的话，声明了请求体却不发送的客户端能一直占住连接。
 
 ## 数据库
@@ -448,6 +451,8 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 路径里的 ID 不在守卫里校验，格式不对与不存在同样 404 | 契约写明如此；防枚举：客户端分不出"不存在"与"格式不对" | 守卫按 schema 的 pattern 返回 400 |
 | 处理器返回错误，守卫和生成代码的出错路径经同一张表回答（状态、`ErrorCode`、不含客户端值的英文说明） | 一个操作的失败只有一种写法；模块新增一种拒绝，加一行 | 每个操作各写各的错误响应：生成的响应类型每个操作各有一套，重复 |
 | 客户端 IP 由 `platform/clientip` 解析，来源分组由它的 `Group` 一份给出，控制台守卫、网关、登录尝试和支付回调都用；accounts 收到的是已经判定的地址 | 谁是受信任的代理是部署的事（`AXIOM_TRUSTED_PROXIES`），模块不该知道部署的网络；网关和控制台各写一份就会在代理后各错一处，分组各写一份则会在改粒度时只改一处 | 在 accounts 里读 `X-Forwarded-For`：模块要知道部署的网络；在网关里另写一份：同一行为两处维护；在登录和网关各写掩码：/64 将来改成 /56 时两处不一致 |
+| 退出时先答 503 让边缘摘流量，监听和调用共用一个期限 | 监听一关，负载均衡只能看到连接错误，客户端要等自己的超时才换节点；503 带 `Retry-After` 在一次探测内就能换。监听和调用各自计时会让最坏情况变成两段之和，和部署的 `stop_grace_period` 对不上；一个期限让最坏情况可算，期限前 5 秒取消尝试，剩下的交给清理 | 收到信号立即关监听：切断在途请求，边缘也来不及停发；只靠关监听：客户端看到连接错误而不是可重试的 503 |
+| 新旧构建的带哈希前端文件放共享卷，入口页和策略仍各用各的 | 滚动期间页面和代码块的请求会落到不同构建；只保留带哈希的文件，旧代码块在新节点上也取得到，旧入口页又不会盖掉新页面，回滚到旧 digest 直接可用。代价是多一个卷和发布前的一步写入 | 入口按会话粘到同一节点：所有入口都要做粘滞，节点故障时仍然断；把整份旧构建放进去：入口页和策略跟着旧构建走 |
 
 ## 运维告警信号
 

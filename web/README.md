@@ -50,7 +50,7 @@
 | 每个数据视图都有加载中、空、出错、没有权限四种状态 | 用 `DataState`；出错时显示请求 ID和时间；要找的东西不存在（404）时说明它找不到、给回首页的链接，不让人重试；整页的视图（详情页）传 `page`，失败时页面仍有一级标题和标签页标题；`isTransient` 判定的暂时性失败（没有收到响应、服务端错误 5xx）自动重试两次，被拒绝（4xx）和响应读不出来不重试。端到端测试覆盖没有权限、服务端错误、断网和连接无响应 |
 | 每个请求都会结束 | `@axiom/api` 的客户端给每个请求设 10 秒超时（含读响应体），并接上调用方的 signal；查询把 TanStack Query 的 signal 传下去，没人再看的查询会取消请求。已知更慢的调用用 `fetchWithin` 给自己的超时：后台的端点测试是 75 秒，长过服务端给它的一分钟，否则每次慢测试都拿不到结果、只能重发 |
 | 切换页面不出现空白 | 两个应用的路由都从 `routerDefaults` 开始：保留当前页面，等待超过 150 毫秒时只在内容区显示骨架 |
-| 部署后旧页面加载不到新的代码块时自动刷新一次 | 路由的 `lazyRouteComponent`：只在打开页面时刷新，悬停或聚焦链接引起的预加载失败不刷新；同一个代码块在本标签页只刷新一次，再失败就显示 `PageFailedState`；会话存储不可用时不刷新，直接显示。端到端测试覆盖 |
+| 部署后旧页面加载不到新的代码块时自动刷新一次；滚动发布保留了旧构建的带哈希文件时通常不触发，回滚到没有保留的构建仍靠它 | 路由的 `lazyRouteComponent`：只在打开页面时刷新，悬停或聚焦链接引起的预加载失败不刷新；同一个代码块在本标签页只刷新一次，再失败就显示 `PageFailedState`；会话存储不可用时不刷新，直接显示。保留旧文件的机制在 [platform 的「前端文件」](../internal/platform/README.md#前端文件)，端到端测试覆盖刷新 |
 | 数字和时间按页面语言格式化，时间注明时区 | `packages/ui/src/format.ts` 的 `useFormat` |
 | 登录状态只由服务端说了算：页面启动时问 `getSession`，401 就是没登录（不是故障）；CSRF 令牌只放内存（Cookie 是 HttpOnly），每个改数据的请求自动带它和 JSON 内容类型，登录、第二步和改认证因素的响应换新令牌 | `@axiom/api` 的 `setCsrfToken` 与客户端中间件，`packages/app/src/session.tsx`；端到端的接口模拟按契约校验会话、等级、权限、CSRF、Origin，缺一个就拒绝 |
 | 会话中途失效（任何请求得到 `unauthenticated`）：清掉会话和账户的缓存，去登录页，登录后回到原来的页面（路径加查询）；只有登录流程的页面（登录、第二步、开启两步验证、注册）沿用它地址里经过校验的 `next`，受保护页面地址里的 `next` 是页面自己的参数；`next` 按浏览器的 URL 规则（含编码的 `..`）解析，只收落在本应用路径范围内的地址 | `createQueryClient`（`packages/app/src/providers.tsx`）里 `QueryCache`/`MutationCache` 的 `onError`、`Gate`、`safeNext`；`safeNext` 的单元测试和 `e2e/console-pages.spec.ts` |

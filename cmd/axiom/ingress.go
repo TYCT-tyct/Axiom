@@ -69,18 +69,21 @@ func serveWithoutCore(ctx context.Context, cfg nodeSettings, logger *slog.Logger
 	if stopWatching != nil {
 		stopWatching()
 	}
-	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
-	return errors.Join(ended, shutdown(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers))
+	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String(), "edge_delay", drainDelay(cfg.shutdownTimeout).String())
+	beginDrain(&health, cfg.shutdownTimeout)
+	drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.shutdownTimeout)
+	defer cancel()
+	return errors.Join(ended, shutdown(drainCtx, servers))
 }
 
 // nonCoreServers is the ingress's or the ops node's listeners in the order shutdown stops them: the public proxy first,
-// then the probes, which keep answering while it drains.
+// then the probes, which keep answering while it drains. The public proxy refuses a request that starts during the drain.
 func nonCoreServers(cfg nodeSettings, transport http.RoundTripper, health *httpserver.Health, requests httpserver.Telemetry, logger *slog.Logger) []*listening {
 	var servers []*listening
 	if cfg.roles.has(roleIngress) {
 		servers = append(servers, &listening{
 			publicAddrVar, cfg.publicAddr,
-			httpserver.New(httpserver.Public(ingressHandler(cfg.coreURL, transport, logger), logger, bodyTimeout,
+			httpserver.New(httpserver.Public(health.Gate(ingressHandler(cfg.coreURL, transport, logger)), logger, bodyTimeout,
 				httpserver.WithTelemetry(requests)), logger), nil, false,
 		})
 	}

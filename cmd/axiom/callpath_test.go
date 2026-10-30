@@ -85,3 +85,26 @@ func TestTheCallPathIsWhatBillingWritesSuppliersThrough(t *testing.T) {
 			"want cleanup_released, both endpoints in order, ended, none", state, frozen, lost, ended, attempts)
 	}
 }
+
+// TestDrainWaitKeepsTheGraceInsideTheDeadline: the calls' last wait and their grace are both inside the shutdown
+// deadline the listeners drain under; a deadline already reached leaves neither.
+func TestDrainWaitKeepsTheGraceInsideTheDeadline(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		deadline    time.Time
+		wait, grace time.Duration
+	}{
+		{"the default deadline", now.Add(30 * time.Second), 25 * time.Second, 5 * time.Second},
+		{"less than a grace left", now.Add(3 * time.Second), 0, 3 * time.Second},
+		{"already past", now.Add(-time.Second), -time.Second, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			wait, grace := drainWait(c.deadline, now)
+			if wait.Sub(now) != c.wait || grace != c.grace {
+				t.Errorf("wait %v, grace %v; want %v and %v", wait.Sub(now), grace, c.wait, c.grace)
+			}
+		})
+	}
+}

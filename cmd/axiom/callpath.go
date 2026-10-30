@@ -40,11 +40,12 @@ const (
 	// readinessEvery is how often readiness is compared with the snapshot's freshness: well inside routing's MaxStale,
 	// so a node is out of rotation within a second of its calls starting to fail.
 	readinessEvery = time.Second
-	// drainWait is how long the calls and the settlements they left in the background may take to end after the
-	// listeners stop, and abortGrace how long what is left has after its attempts are cancelled
-	// (internal/gateway/README.md「优雅退出」). What is still unsettled then is the cleanup's. deploy/compose.yaml's
-	// stop_grace_period covers AXIOM_SHUTDOWN_TIMEOUT, these two and the queue's and the recorder's own deadlines.
-	drainWait, abortGrace = 15 * time.Second, 5 * time.Second
+	// abortGrace is how long what the calls left in the background has after its attempts are cancelled
+	// (internal/gateway/README.md「优雅退出」); it comes out of the shutdown deadline the listeners drain under, so the
+	// calls and their settlements share that one deadline. What is still unsettled then is the cleanup's.
+	// deploy/compose.yaml's stop_grace_period covers the edge delay, AXIOM_SHUTDOWN_TIMEOUT and the queue's and the
+	// recorder's own deadlines.
+	abortGrace = 5 * time.Second
 )
 
 // callDeps is what a node's call path is built from: the modules it orchestrates, the secret it derives the
@@ -253,14 +254,30 @@ func announceReady(ctx context.Context, ready func() bool, every time.Duration, 
 	return func() { cancel(); <-done }
 }
 
-// Drain gives the calls in flight and the settlements they left in the background up to drainWait to end, after the
-// listeners have stopped admitting, and abortGrace more once their attempts are cancelled: what still has not ended is
-// the cleanup's (internal/gateway/README.md「故障矩阵」).
+// Drain gives the calls in flight and the settlements they left in the background until the shutdown deadline, after
+// the listeners have stopped admitting. Attempts are cancelled abortGrace before that deadline, and what is still not
+// settled when it ends is the cleanup's (internal/gateway/README.md「故障矩阵」).
 func (c callNode) Drain(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, drainWait)
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		c.handler.Drain(ctx) // the reservations of admissions that were lost
+		c.executor.Drain(ctx, abortGrace)
+		return
+	}
+	waitAt, grace := drainWait(deadline, time.Now())
+	wait, cancel := context.WithDeadline(ctx, waitAt)
 	defer cancel()
-	c.handler.Drain(ctx) // the reservations of admissions that were lost
-	c.executor.Drain(ctx, abortGrace)
+	c.handler.Drain(wait)
+	c.executor.Drain(wait, grace)
+}
+
+// drainWait is when the calls stop waiting for what is in flight and their attempts are cancelled, and the grace left
+// after that for the settlements. The grace comes out of the deadline rather than being added to it: with 30 seconds,
+// attempts are cancelled at 25 and the settlements get the last 5, whichever of the listeners and the calls is ready
+// first. A deadline already past leaves no grace and no wait.
+func drainWait(deadline, now time.Time) (wait time.Time, grace time.Duration) {
+	grace = min(abortGrace, max(0, deadline.Sub(now)))
+	return deadline.Add(-grace), grace
 }
 
 // reloadEndpoints rebuilds the suppliers' snapshot every reloadEvery until ctx ends, so that a change made in the admin
