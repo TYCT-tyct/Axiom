@@ -25,6 +25,7 @@ type ranked struct {
 	weight    float64 // Balanced, and Fastest's unmeasured: the chance of being first is proportional to it
 	key       float64 // a random key whose order draws without replacement by weight
 	quality   float64
+	known     bool // BestQuality: the endpoint has counted evidence, so its score is not unknown
 	explore   bool // Fastest: the unmeasured endpoint this request puts first, so that it gets measured
 }
 
@@ -116,12 +117,14 @@ func (r *Router) explore(out []ranked) {
 func (r *Router) score(c *candidate, n *need, strategy Strategy, price *candidatePrice) ranked {
 	s := ranked{candidate: c, price: price, order: n.order(c), notSticky: !r.sticks(c, n, price)}
 	s.slow = slow(c, n.over)
+	s.known = c.Confidence > 0
 	tools := 1.0
 	if n.req.Needs.Has(protocol.Tools) && (strategy == Balanced || strategy == BestQuality) {
 		tools = 1 - c.ToolErrorRate // rank by the tool-call error measured on real traffic
 	}
 	s.quality = c.Quality * c.Confidence * tools
-	if strategy == Balanced || strategy == Fastest && c.Throughput == 0 || strategy == LowestLatency && c.Latency == 0 {
+	if strategy == Balanced || strategy == Fastest && c.Throughput == 0 ||
+		strategy == BestQuality && !s.known || strategy == LowestLatency && c.Latency == 0 {
 		s.weight = r.weight(c, n.now, price) * tools * tools
 		u := 1 - r.cfg.Rand() // in (0, 1]
 		s.key = math.Log(u) / math.Max(s.weight, math.SmallestNonzeroFloat64)
@@ -136,10 +139,10 @@ func slow(c *candidate, o *Override) bool {
 		(o.MaxLatency > 0 && c.Latency > o.MaxLatency)
 }
 
-// weight is the chance a candidate is given: cheaper is more likely, scaled by how healthy and good it is, halved when
-// its supplier's balance is low, and cut for a while after a 429.
+// weight is the chance a candidate is given: cheaper is more likely, scaled by the quality score—which already includes
+// the endpoint's health—halved when its supplier's balance is low, and cut for a while after a 429.
 func (r *Router) weight(c *candidate, now time.Time, price *candidatePrice) float64 {
-	w := c.Health * math.Max(c.Quality, 0.01) * c.state.damping(now, r.cfg.Recovery, r.cfg.ThrottleFloor) / math.Max(price.blend, 1e-18)
+	w := math.Max(c.Quality, 0.01) * c.state.damping(now, r.cfg.Recovery, r.cfg.ThrottleFloor) / math.Max(price.blend, 1e-18)
 	if c.BalanceLow {
 		w /= 2
 	}
@@ -182,7 +185,14 @@ func compare(a, b *ranked, strategy Strategy) int {
 			}
 		}
 	case BestQuality:
-		c = cmp.Compare(b.quality, a.quality)
+		if c := compareBool(!a.known, !b.known); c != 0 {
+			return c
+		}
+		if a.known {
+			c = cmp.Compare(b.quality, a.quality)
+		} else {
+			c = cmp.Compare(b.key, a.key) // unknown: balanced's price-weighted draw, never the endpoint's ID
+		}
 	}
 	if c != 0 {
 		return c
