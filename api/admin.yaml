@@ -5087,9 +5087,9 @@ components:
     AuthorSlug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,39}$'}
     ModelSlug:
       type: string
-      maxLength: 182
-      pattern: '^[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9._-]{0,99}(@[a-z0-9][a-z0-9._-]{0,39})?$'
-      description: "`<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it."
+      maxLength: 187
+      pattern: '^[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9._-]{0,99}(:free)?(@[a-z0-9][a-z0-9._-]{0,39})?$'
+      description: "`<author>/<model>`, with optional `:free` and `@<version>` when the vendor gives one; lower case, as the catalog stores it."
     Author:
       type: object
       required: [slug, name]

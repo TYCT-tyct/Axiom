@@ -154,6 +154,28 @@ func isUSDBasic(p adminapi.ReferencePrice) bool {
 	return p.Currency == "USD" && p.Schedule != nil && p.Schedule.Rates.Input != nil && *p.Schedule.Rates.Input == "0.000001"
 }
 
+// TestFreeModelThroughTheAPI: the contract admits the slug the database admits, and the model read back carries it.
+func TestFreeModelThroughTheAPI(t *testing.T) {
+	t.Parallel()
+	f := newCatalogFixture(t)
+	base := f.ready("acme/alpha")
+	expectAdmin(t, "list the base", f.setStatus(base, "listed"), http.StatusOK, "")
+	free := f.create("acme/alpha:free")
+	free = f.addName(free, "acme/alpha:free", "public")
+	free = f.publish(free, `{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`, nil)
+	free = f.send(http.MethodPut, "/models/"+free.Id+"/status", `{"status":"listed","rev":`+strconv.FormatInt(free.Rev, 10)+`,"reason":"free"}`, http.StatusOK)
+	if free.Slug != "acme/alpha:free" {
+		t.Errorf("the created free model has slug %q", free.Slug)
+	}
+	rec := f.do(http.MethodGet, "/models/"+free.Id, "", as(f.s))
+	expectAdmin(t, "get the free model", rec, http.StatusOK, "")
+	var got adminapi.Model
+	decode(t, rec, &got)
+	if got.Slug != "acme/alpha:free" {
+		t.Errorf("the API read the free model as %q", got.Slug)
+	}
+}
+
 // TestModelDraft: a model is drafted, gets its name and its price, each change answered with the model as it is.
 func TestModelDraft(t *testing.T) {
 	t.Parallel()
