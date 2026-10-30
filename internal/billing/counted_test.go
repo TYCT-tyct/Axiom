@@ -213,3 +213,108 @@ func TestCountedMissingPrice(t *testing.T) {
 	}
 	b.balanced()
 }
+
+// TestCountedExplicitZeroPrice: a unit priced at an explicit zero is priced, so an item of that unit the schedule leaves
+// out is charged at that zero instead of at the token price. Highest's missing cannot tell this: with only the standard
+// tier in the schedule, it is true even when the unit has a zero price.
+func TestCountedExplicitZeroPrice(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, schedule string
+		text           int64
+		usage          map[catalog.Item]int64
+		want           platform.Exact
+	}{
+		{"a zero in the base prices", `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001",
+			"audio_out_second":"0"}}`, 10, map[catalog.Item]int64{catalog.ItemOutput: 10, catalog.ItemAudioInSecond: 30}, platform.AmountExact(10)},
+		{"a zero only in a later band", `{"v":1,"currency":"USD","rates":{"input":"0.001","output":"0.001"},
+			"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":1000,"rates":{"audio_in_second":"0"}}]}}`,
+			10, map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemAudioInSecond: 30}, platform.AmountExact(10_000_000)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := newBank(t, 10_000_000_000, 0, Config{})
+			q := Quotable{Price: mustSchedule(t, tc.schedule), Model: Model{ContextLength: 4096}, MaxOutput: 100, Endpoint: uuid.NewV7()}
+			h, err := b.tryCountedHold(q, tc.text, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := b.settleWith(h, outcome(Committed, FinishNone, reported(t, tc.usage)))
+			if f.Charged != tc.want || !f.Estimated {
+				t.Fatalf("Settle = %+v, want %v estimated", f, tc.want)
+			}
+			var second *ChargeItem
+			details := b.charges(h.id)
+			for i := range details.Items {
+				if details.Items[i].Item == "audio_in_second" {
+					second = &details.Items[i]
+				}
+			}
+			if second == nil || second.Quantity != 30 || second.Unit != "second" || second.UnitPrice != "0" ||
+				second.Amount != "0" || !second.Estimated {
+				t.Errorf("charge items %+v, want 30 seconds at 0 estimated", details.Items)
+			}
+			b.balanced()
+		})
+	}
+}
+
+// TestCountedOnlyQuote: the schedules the dataset parser gives speech and transcription models price a counted unit and
+// no tokens (catalog.TestParseLiteLLM pins their exact text). A request that declares only that unit quotes and settles
+// without token prices; a model that may report tokens still needs them.
+func TestCountedOnlyQuote(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, schedule, unit string
+		reports              catalog.ItemSet
+		key                  catalog.Item
+		count                int64
+		want                 platform.Exact
+		subtotal             string
+	}{
+		{"a character read aloud", `{"currency":"USD","rates":{"character_in":"0.000015"},"v":1}`, "character",
+			1 << catalog.ItemCharacterIn, catalog.ItemCharacterIn, 500, platform.AmountExact(7_500_000), "0.0075"},
+		{"a second transcribed", `{"currency":"USD","rates":{"audio_in_second":"0.0001"},"v":1}`, "second",
+			1 << catalog.ItemAudioInSecond, catalog.ItemAudioInSecond, 30, platform.AmountExact(3_000_000), "0.003"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			q := Quotable{Price: mustSchedule(t, tc.schedule), Model: Model{ContextLength: 4096, Reports: tc.reports}, Endpoint: uuid.NewV7()}
+			counts := map[catalog.Item]int64{tc.key: tc.count}
+			d := Demand{Counts: counts}
+			res, err := Quote(d, []Quotable{q}, Segments{}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Amount != tc.want {
+				t.Errorf("reserved %v, want %v", res.Amount, tc.want)
+			}
+			b := newBank(t, 10_000_000_000, 0, Config{})
+			h, err := b.tryCountedHold(q, 0, counts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := b.settleWith(h, outcome(Committed, FinishNone, reported(t, counts)))
+			if f.Charged != tc.want || f.Estimated || f.Waived {
+				t.Fatalf("Settle = %+v, want %v not estimated, not waived", f, tc.want)
+			}
+			details := b.charges(h.id)
+			if len(details.Items) != 1 || details.Subtotal != tc.subtotal {
+				t.Fatalf("charge details %+v, subtotal %q, want one item and %s", details.Items, details.Subtotal, tc.subtotal)
+			}
+			if item := details.Items[0]; item.Quantity != tc.count || item.Unit != tc.unit || item.Estimated {
+				t.Errorf("charge item %+v, want unit %s and not estimated", item, tc.unit)
+			}
+			b.balanced()
+		})
+	}
+	// A model that may report tokens is still refused when its token price is missing.
+	text := Quotable{
+		Price:    mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.001"}}`),
+		Model:    Model{ContextLength: 4096, Reports: 1<<catalog.ItemInput | 1<<catalog.ItemOutput},
+		Endpoint: uuid.NewV7(), MaxOutput: 10,
+	}
+	if _, err := Quote(Demand{TextBytes: 10}, []Quotable{text}, Segments{}, nil); !errors.Is(err, ErrUnpriced) {
+		t.Errorf("a text model without an output price: %v, want ErrUnpriced", err)
+	}
+}

@@ -244,19 +244,29 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	if max(samplings, rest, q.outputCap, add(output, allowance), overshoot) == math.MaxInt64 {
 		return q, errOverflow
 	}
-	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
-	in.Add(catalog.ItemInput)
-	if e.Model.OpenAIUsage {
-		// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
-		in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
-	}
-	firstPrice, ok1 := prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
-	restPrice, ok2 := prices.inputCeiling(in, tiers, window, e.Model.OpenAIUsage)
-	outItems := catalog.ItemSet(1<<catalog.ItemOutput|1<<catalog.ItemReasoning|1<<catalog.ItemImageOut) |
-		e.Model.Reports&(1<<catalog.ItemAudioOut)
-	outPrice, ok3 := prices.ceiling(outItems, tiers, longest)
-	if !ok1 || !ok2 || !ok3 {
-		return q, ErrUnpriced
+	// Token prices are required for a model that may report any token item, as every model did before. A counted-only
+	// model (a speech or transcription endpoint that reports characters or seconds rather than tokens) has no token
+	// charge to bound, so its schedule must be quotable without token prices. An empty Reports is unknown, not none.
+	tokens := e.Model.Reports == 0 || e.Model.Reports&catalog.TokenItems != 0
+	var firstPrice, restPrice inputPrice
+	var outPrice platform.UnitPrice
+	if tokens {
+		in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
+		in.Add(catalog.ItemInput)
+		if e.Model.OpenAIUsage {
+			// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
+			in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
+		}
+		var ok1, ok2 bool
+		firstPrice, ok1 = prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
+		restPrice, ok2 = prices.inputCeiling(in, tiers, window, e.Model.OpenAIUsage)
+		outItems := catalog.ItemSet(1<<catalog.ItemOutput|1<<catalog.ItemReasoning|1<<catalog.ItemImageOut) |
+			e.Model.Reports&(1<<catalog.ItemAudioOut)
+		var ok3 bool
+		outPrice, ok3 = prices.ceiling(outItems, tiers, longest)
+		if !ok1 || !ok2 || !ok3 {
+			return q, ErrUnpriced
+		}
 	}
 	q.output = outPrice
 	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
