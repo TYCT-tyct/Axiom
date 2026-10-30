@@ -14,6 +14,12 @@ var (
 	TOTPStep      = totpStep
 )
 
+// ClientSummary and IPGroup expose the device list's summaries to its tests.
+var ClientSummary, IPGroup = clientSummary, ipGroup
+
+// SessionID is the session a sign-in issued, for tests that list or end it.
+func (i Issued) SessionID() SessionID { return SessionID(i.session) }
+
 // Reload reloads the snapshot now, as the reload loop does every 30 seconds, within the same time limit.
 func (s *Service) Reload(ctx context.Context) error { return s.reloadWithin(ctx) }
 
