@@ -77,6 +77,10 @@ data)
   # here as well (deploy/Dockerfile runs as 65532).
   chown 65532:65532 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
   chmod 0400 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
+  # The program replaces the master file atomically when a rotation distributes or retires a version, so its directory
+  # must be writable by it; root's group keeps the directory traversable for the backup and restore containers.
+  chown 65532:0 "$AXIOM_KEYS_DIR"
+  chmod 770 "$AXIOM_KEYS_DIR"
   for name in master hash identity; do
     [ -f "$AXIOM_KEYS_DIR/$name" ] || die "$AXIOM_KEYS_DIR/$name is not a regular file"
   done

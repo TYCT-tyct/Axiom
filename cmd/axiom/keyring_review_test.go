@@ -15,34 +15,60 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// TestKeyringRefusesLifecycleWhileANodeIsAlive: activation and retirement are maintenance-window operations, and a
-// recent heartbeat means a serve that was missed may still write envelopes under the version being moved away from.
-func TestKeyringRefusesLifecycleWhileANodeIsAlive(t *testing.T) {
+// rotationFixture helpers keep one lifecycle test's sequence readable: each statement or assertion is one call, and the
+// failure message says which state was expected.
+func (f rotationFixture) execSQL(t *testing.T, statement string) {
+	t.Helper()
+	if err := pgtest.Run(t.Context(), f.database.Superuser, statement); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f rotationFixture) mustActivate(t *testing.T, version uint32) {
+	t.Helper()
+	if err := f.r.Activate(t.Context(), version); err != nil {
+		t.Fatalf("activate %d: %v", version, err)
+	}
+}
+
+func (f rotationFixture) mustRetire(t *testing.T, version uint32) {
+	t.Helper()
+	if err := f.r.Retire(t.Context(), version); err != nil {
+		t.Fatalf("retire %d: %v", version, err)
+	}
+}
+
+func wantLifecycleError(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("got %v, want an error containing %q", err, want)
+	}
+}
+
+// TestKeyringWaitsForEveryLiveNode: activation waits until every live heartbeat reports the new version, and retirement
+// waits until every live node has written the active version for a whole heartbeat window, so no delayed seal can commit
+// under the version whose material is about to be destroyed. A stale row no longer counts as a running node.
+func TestKeyringWaitsForEveryLiveNode(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
 	f.run("add", "--version", "2")
 	f.run("add", "--version", "3")
-	if err := pgtest.Run(t.Context(), f.database.Superuser,
-		"INSERT INTO platform.nodes (id, seen_at) VALUES ('rotation-test', now())"); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.r.Activate(t.Context(), 2); err == nil || !strings.Contains(err.Error(), "heartbeat") {
-		t.Fatalf("activated while a node was alive: %v", err)
-	}
-	if err := f.r.Retire(t.Context(), 3); err == nil || !strings.Contains(err.Error(), "heartbeat") {
-		t.Fatalf("retired while a node was alive: %v", err)
-	}
+	f.execSQL(t, "INSERT INTO platform.nodes (id, seen_at, key_versions, key_active) VALUES ('rotation-test', now(), '{1}', 1)")
+	wantLifecycleError(t, f.r.Activate(t.Context(), 2), "do not report version 2")
+	wantLifecycleError(t, f.r.Retire(t.Context(), 3), "not on version 1")
+	// The node reloaded the distribution file but has written version 1 until just now: the quiet window still holds.
+	f.execSQL(t, "UPDATE platform.nodes SET key_versions='{1,2,3}', key_active=1, key_active_since=now() - make_interval(secs => 31)")
+	f.mustActivate(t, 2)
+	f.execSQL(t, "UPDATE platform.nodes SET key_active=2, key_active_since=now()")
+	wantLifecycleError(t, f.r.Retire(t.Context(), 3), "not on version 2")
+	f.execSQL(t, "UPDATE platform.nodes SET key_active_since=now() - make_interval(secs => 31)")
+	f.mustRetire(t, 3)
 	// The window is kv's: a row older than the three beats no longer counts as a running node.
-	if err := pgtest.Run(t.Context(), f.database.Superuser,
-		"UPDATE platform.nodes SET seen_at = now() - make_interval(secs => 31)"); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.r.Activate(t.Context(), 2); err != nil {
-		t.Fatalf("activation after the heartbeat expired: %v", err)
-	}
-	if err := f.r.Retire(t.Context(), 3); err != nil {
-		t.Fatalf("retirement after the heartbeat expired: %v", err)
-	}
+	f.execSQL(t, "UPDATE platform.nodes SET seen_at = now() - make_interval(secs => 31)")
+	wantLifecycleError(t, f.r.Retire(t.Context(), 2), "unknown or active")
+	// Version 1 is still readable and referenced by the fixture's envelopes, so it stays until rewrapped; with the row
+	// stale, retirement is judged on references alone.
+	wantLifecycleError(t, f.r.Retire(t.Context(), 1), "still referenced")
 }
 
 // TestKeyringRewrapsModuleEnvelopes: the TOTP secret and the supplier login are written by accounts and suppliers

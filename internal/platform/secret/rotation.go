@@ -14,8 +14,9 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// Rotation manages version metadata and stored envelopes, using the platform scope assembled by cmd/.
-// Nodes must be stopped for activation and retirement: an already loaded Keyring is immutable.
+// Rotation manages version metadata and stored envelopes, using the platform scope assembled by cmd/. Activation and
+// retirement wait on the key reports every live node writes to platform.nodes; a running node installs a reloaded
+// snapshot, so neither requires stopping the processes that seal envelopes.
 type Rotation struct {
 	DB     *pg.DB
 	Scope  pg.Scope
@@ -42,19 +43,54 @@ func (r Rotation) transaction(ctx context.Context, fn func(context.Context, pg.T
 	})
 }
 
-// ensureNoWriters refuses a lifecycle change while any node's heartbeat is recent. A serve that was missed keeps writing
-// envelopes under the version the change is about to move away from, and those rows would then be unreadable. The window
-// is kv's heartbeat window, so a stopped node stops counting after the same missed beats.
-func ensureNoWriters(ctx context.Context, tx pg.Tx) error {
-	var alive bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT FROM platform.nodes WHERE seen_at > now() - make_interval(secs => $1))`,
-		kv.AliveFor.Seconds()).Scan(&alive)
+// ErrNotDistributed reports that a live node has not reported the version a lifecycle step needs yet. It is the normal
+// answer while a distribution spreads, not a failure: a background caller waits for the next heartbeat.
+var ErrNotDistributed = errors.New("keyring: a live node has not reported the version yet")
+
+// ErrQuiet reports that a live node has not written the active version long enough to rule out a seal started under the
+// version being retired. It too is a wait, not a failure.
+var ErrQuiet = errors.New("keyring: a live node has not written the active version long enough")
+
+// ErrReferenced reports that envelopes still point at a version, so retirement has to wait for rewrap.
+var ErrReferenced = errors.New("keyring: still referenced")
+
+// errHeldRetired reports a tombstoned version that is still in the local distribution file. Retirement commits before
+// it prunes, so a process that stopped in between leaves this state; Check and Refresh clear it themselves, which is also
+// how a node that was offline during the retirement recovers on its next start.
+var errHeldRetired = errors.New("keyring: retired versions still in the local file")
+
+// ensureReaders refuses activation until every live node's heartbeat lists the version: a running node that cannot read a
+// version must not have new envelopes sealed under it. The window is kv's heartbeat window, so a stopped node stops
+// counting after the same missed beats, and the file, not the database, is what distributes the material.
+func ensureReaders(ctx context.Context, tx pg.Tx, version uint32) error {
+	var missing int
+	err := tx.QueryRow(ctx, `SELECT count(*) FROM platform.nodes
+		WHERE seen_at > now() - make_interval(secs => $1) AND NOT ($2 = ANY(key_versions))`,
+		kv.AliveFor.Seconds(), int64(version)).Scan(&missing)
 	if err != nil {
-		return fmt.Errorf("keyring: cannot read node heartbeats: %w", err)
+		return fmt.Errorf("keyring: cannot read node key reports: %w", err)
 	}
-	if alive {
-		return fmt.Errorf("keyring: a node's heartbeat is within %s; stop every serve instance and wait for its row to expire",
-			kv.AliveFor)
+	if missing != 0 {
+		return fmt.Errorf("%w: %d live node(s) do not report version %d", ErrNotDistributed, missing, version)
+	}
+	return nil
+}
+
+// ensureQuiet refuses retirement until every live node has written the active version for kv's heartbeat window. A
+// process that loaded the old version can still commit a seal it started before noticing the switch, so retirement waits
+// one window first; the request paths that seal write in the same call, and a transaction blocked for the whole window
+// is outside that bound.
+func ensureQuiet(ctx context.Context, tx pg.Tx, active uint32) error {
+	var unready int
+	err := tx.QueryRow(ctx, `SELECT count(*) FROM platform.nodes
+		WHERE seen_at > now() - make_interval(secs => $1)
+		  AND (key_active <> $2 OR NOT ($2 = ANY(key_versions)) OR key_active_since > now() - make_interval(secs => $3))`,
+		kv.AliveFor.Seconds(), int64(active), kv.AliveFor.Seconds()).Scan(&unready)
+	if err != nil {
+		return fmt.Errorf("keyring: cannot read node key reports: %w", err)
+	}
+	if unready != 0 {
+		return fmt.Errorf("%w: %d live node(s) are not on version %d", ErrQuiet, unready, active)
 	}
 	return nil
 }
@@ -66,7 +102,8 @@ func (r Rotation) Check(ctx context.Context) (*Keyring, KeyStatus, error) {
 }
 
 // CheckRing is Check on a ring the caller has already read. A node reads the file before it opens the database, so a
-// file it cannot use is reported without one, and the transaction still reads the file only once.
+// file it cannot use is reported without one, and the transaction reads the file itself only when a held retired
+// version has to be pruned.
 func (r Rotation) CheckRing(ctx context.Context, ring *Keyring) (*Keyring, KeyStatus, error) {
 	return r.check(ctx, ring)
 }
@@ -74,24 +111,27 @@ func (r Rotation) CheckRing(ctx context.Context, ring *Keyring) (*Keyring, KeySt
 func (r Rotation) check(ctx context.Context, ring *Keyring) (*Keyring, KeyStatus, error) {
 	var status KeyStatus
 	err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
-		var err error
+		var snapshot *keySnapshot
 		if ring == nil {
-			ring, err = Load(r.Path)
-			if err != nil {
+			var err error
+			if snapshot, err = loadSnapshot(r.Path); err != nil {
 				return err
 			}
+			ring = &Keyring{}
+		} else {
+			snapshot = ring.snapshot()
 		}
-		if err := bootstrapRing(ctx, tx, ring); err != nil {
+		if err := bootstrapRing(ctx, tx, snapshot); err != nil {
 			return err
 		}
-		status, err = checkVersions(ctx, tx, ring, 0)
-		if err != nil {
+		var err error
+		if snapshot, status, err = r.reconcile(ctx, tx, snapshot); err != nil {
 			return err
 		}
-		if err := r.checkReferences(ctx, tx, ring, status); err != nil {
+		if err := r.checkReferences(ctx, tx, snapshot, status); err != nil {
 			return err
 		}
-		ring.latest = status.Active
+		ring.install(snapshot.withActive(status.Active))
 		return nil
 	})
 	if err != nil {
@@ -100,9 +140,57 @@ func (r Rotation) check(ctx context.Context, ring *Keyring) (*Keyring, KeyStatus
 	return ring, status, nil
 }
 
+// reconcile checks the versions the database knows against one file read. A retired version that is still in the file is
+// the state a retirement leaves when its process stops between the commit and the file edit; when no envelope references
+// it, the file is pruned and read again so the caller installs the ring the database describes. A referenced version is
+// never deleted: that state means the tombstone and the stored envelopes disagree, and the key may still be the only way
+// to read them.
+func (r Rotation) reconcile(ctx context.Context, tx pg.Tx, snapshot *keySnapshot) (*keySnapshot, KeyStatus, error) {
+	status, err := checkVersions(ctx, tx, snapshot, 0)
+	if !errors.Is(err, errHeldRetired) {
+		return snapshot, status, err
+	}
+	if err := r.pruneRetired(ctx, tx); err != nil {
+		return nil, KeyStatus{}, err
+	}
+	if snapshot, err = loadSnapshot(r.Path); err != nil {
+		return nil, KeyStatus{}, err
+	}
+	status, err = checkVersions(ctx, tx, snapshot, 0)
+	return snapshot, status, err
+}
+
+// Refresh reads the distribution file again and installs the whole ring with the database's write version. A node calls
+// it on a heartbeat-sized tick: a version written by an operator then reaches every live node without a restart, and a
+// failed read leaves the previous ring serving rather than publishing a partial one. It checks the version metadata, not
+// the envelope inventory: scanning every envelope store belongs to startup, activation and the commands, not to a tick
+// that runs on every node for the life of the process. The one exception is a held retired version: pruning it first
+// confirms that no envelope references it, because deleting the only key that reads a stored value cannot be undone.
+func (r Rotation) Refresh(ctx context.Context, ring *Keyring) (KeyStatus, error) {
+	var status KeyStatus
+	err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
+		snapshot, err := loadSnapshot(r.Path)
+		if err != nil {
+			return err
+		}
+		if err := bootstrapRing(ctx, tx, snapshot); err != nil {
+			return err
+		}
+		if snapshot, status, err = r.reconcile(ctx, tx, snapshot); err != nil {
+			return err
+		}
+		ring.install(snapshot.withActive(status.Active))
+		return nil
+	})
+	if err != nil {
+		return KeyStatus{}, err
+	}
+	return status, nil
+}
+
 // bootstrapRing seeds the metadata from the file the first time a database-backed node starts, so a ring that predates
 // the table keeps writing under the version its file says is the write version.
-func bootstrapRing(ctx context.Context, tx pg.Tx, ring *Keyring) error {
+func bootstrapRing(ctx context.Context, tx pg.Tx, ring *keySnapshot) error {
 	var exists bool
 	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM platform.key_versions)").Scan(&exists); err != nil {
 		return fmt.Errorf("keyring: cannot read version metadata: %w", err)
@@ -143,7 +231,7 @@ func newVersionCheck() versionCheck {
 
 // add records one row. A retired version that is still in the local file is held, unless it is the version being
 // retired: its tombstone is already committed and the same command prunes the file.
-func (c *versionCheck) add(ring *Keyring, version uint32, fingerprint []byte, state string, retiring uint32) {
+func (c *versionCheck) add(ring *keySnapshot, version uint32, fingerprint []byte, state string, retiring uint32) {
 	if state == "retired" {
 		c.retired = append(c.retired, version)
 		if _, ok := ring.fingerprints[version]; ok && version != retiring {
@@ -166,7 +254,7 @@ func (c *versionCheck) add(ring *Keyring, version uint32, fingerprint []byte, st
 // remains in the file, and one version is active.
 func (c *versionCheck) err() error {
 	if len(c.held) > 0 {
-		return fmt.Errorf("keyring: retired versions still in the local file: %v", c.held)
+		return fmt.Errorf("%w: %v", errHeldRetired, c.held)
 	}
 	if len(c.missing)+len(c.mismatched) > 0 {
 		return fmt.Errorf("keyring: missing versions %v; mismatched versions %v", c.missing, c.mismatched)
@@ -181,7 +269,7 @@ func (c *versionCheck) status() KeyStatus {
 	return KeyStatus{Active: c.active, Readable: c.readable, Retired: c.retired}
 }
 
-func checkVersions(ctx context.Context, tx pg.Tx, ring *Keyring, retiring uint32) (KeyStatus, error) {
+func checkVersions(ctx context.Context, tx pg.Tx, ring *keySnapshot, retiring uint32) (KeyStatus, error) {
 	rows, err := tx.Query(ctx, "SELECT version, fingerprint, state FROM platform.key_versions ORDER BY version")
 	if err != nil {
 		return KeyStatus{}, fmt.Errorf("keyring: cannot read versions: %w", err)
@@ -229,11 +317,11 @@ func (r Rotation) Add(ctx context.Context, version uint32) error {
 		if state != "" {
 			return nil
 		}
-		ring, err := Load(r.Path)
+		snapshot, err := loadSnapshot(r.Path)
 		if err != nil {
 			return err
 		}
-		if err := insertVersion(ctx, tx, version, ring.fingerprints[version], "readable"); err != nil {
+		if err := insertVersion(ctx, tx, version, snapshot.fingerprints[version], "readable"); err != nil {
 			return err
 		}
 		return rotationAudit(ctx, tx, "add", version, map[string]any{})
@@ -252,21 +340,17 @@ func versionState(ctx context.Context, tx pg.Tx, version uint32) (string, error)
 	return state, nil
 }
 
-// Activate chooses a distributed readable version for subsequent node starts and rewrap batches.
+// Activate chooses a distributed readable version for subsequent node starts and rewrap batches. Every live node must
+// report the version in its heartbeat first: activation changes what new envelopes are sealed under, so a node that
+// cannot read it must not let the switch happen.
 func (r Rotation) Activate(ctx context.Context, version uint32) error {
 	return r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
-		if err := ensureNoWriters(ctx, tx); err != nil {
-			return err
-		}
-		ring, err := Load(r.Path)
+		snapshot, err := loadSnapshot(r.Path)
 		if err != nil {
 			return err
 		}
-		status, err := checkVersions(ctx, tx, ring, 0)
+		status, err := checkVersions(ctx, tx, snapshot, 0)
 		if err != nil {
-			return err
-		}
-		if err := r.checkReferences(ctx, tx, ring, status); err != nil {
 			return err
 		}
 		if status.Active == version {
@@ -274,6 +358,14 @@ func (r Rotation) Activate(ctx context.Context, version uint32) error {
 		}
 		if !slices.Contains(status.Readable, version) {
 			return fmt.Errorf("keyring: version %d is not readable", version)
+		}
+		// The cheap wait comes before the inventory scan: a lifecycle retries this every heartbeat while a distribution
+		// spreads, and only the attempt that finds every node ready has to read every envelope store.
+		if err := ensureReaders(ctx, tx, version); err != nil {
+			return err
+		}
+		if err := r.checkReferences(ctx, tx, snapshot, status); err != nil {
+			return err
 		}
 		if err := setActive(ctx, tx, version); err != nil {
 			return err
@@ -293,6 +385,38 @@ func setActive(ctx context.Context, tx pg.Tx, version uint32) error {
 	return nil
 }
 
+// pruneRetired removes tombstoned versions still present in the distribution file. It recovers the state a retirement
+// leaves when the process stops between its commit and its file edit. A version is deleted only after confirming that no
+// envelope references it: the tombstone is written by a retirement that checked the same thing, so a reference here
+// means the metadata and the stored data disagree and the key may still be the only way to read it.
+func (r Rotation) pruneRetired(ctx context.Context, tx pg.Tx) error {
+	rows, err := tx.Query(ctx, "SELECT version FROM platform.key_versions WHERE state = 'retired' ORDER BY version")
+	if err != nil {
+		return fmt.Errorf("keyring: cannot read retired versions: %w", err)
+	}
+	defer rows.Close()
+	var retired []uint32
+	for rows.Next() {
+		var version uint32
+		if err := rows.Scan(&version); err != nil {
+			return fmt.Errorf("keyring: cannot decode retired version: %w", err)
+		}
+		retired = append(retired, version)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("keyring: cannot read retired versions: %w", err)
+	}
+	for _, version := range retired {
+		if err := r.unreferenced(ctx, tx, version); err != nil {
+			return fmt.Errorf("keyring: refusing to prune version %d: %w", version, err)
+		}
+		if err := removeKey(r.Path, version); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Retire refuses an active or referenced version. The tombstone commits before the local file is pruned.
 func (r Rotation) Retire(ctx context.Context, version uint32) error {
 	if err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
@@ -308,14 +432,17 @@ func (r Rotation) Retire(ctx context.Context, version uint32) error {
 
 // tombstone records the retirement, or finds it already recorded by a run that stopped before pruning its file.
 func (r Rotation) tombstone(ctx context.Context, tx pg.Tx, version uint32) error {
-	if err := ensureNoWriters(ctx, tx); err != nil {
-		return err
-	}
-	ring, err := Load(r.Path)
+	snapshot, err := loadSnapshot(r.Path)
 	if err != nil {
 		return err
 	}
-	if _, err := checkVersions(ctx, tx, ring, version); err != nil {
+	status, err := checkVersions(ctx, tx, snapshot, version)
+	if err != nil {
+		return err
+	}
+	// The write version has to be this old one's successor on every live node for long enough that no seal started
+	// under the old version can still commit.
+	if err := ensureQuiet(ctx, tx, status.Active); err != nil {
 		return err
 	}
 	state, err := versionState(ctx, tx, version)

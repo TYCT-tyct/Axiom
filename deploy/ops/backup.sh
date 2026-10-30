@@ -50,6 +50,10 @@ trap 'rm -rf "$work"' EXIT
 set_name="$(sql "SELECT to_char(now() at time zone 'utc', 'YYYYMMDDHH24MISS') || '-' || substr(md5(random()::text), 1, 6)")"
 log "backing up into $set_name"
 
+# The versions the database can reference right now. Automatic retirement can remove one from the key ring between this
+# query, the dump and the archive; the archive must cover both ends of that window, or the set is unrestorable.
+versions_before="$(sql "SELECT version FROM platform.key_versions WHERE state <> 'retired' ORDER BY 1")"
+
 # The database, as the superuser: every table forces row security, and a dump that obeyed it would silently lose rows.
 # Owners and grants stay in the archive because the restore puts them back as they were.
 pg_dump --no-password --format=custom --compress=zstd:9 --lock-wait-timeout=30s --file="$work/db.dump"
@@ -62,6 +66,15 @@ age --encrypt --recipient "$AXIOM_BACKUP_DB_RECIPIENT" --output "$work/deploy.en
 
 # The key ring with its modes and owner, which the program checks before it serves anything.
 tar -C "$AXIOM_KEYS_DIR" -cf "$work/keys.tar" master hash identity
+# The dump's snapshot lies between the two queries. Requiring the archive to hold every version either saw means a
+# version retired while the dump ran cannot make the set incomplete: retirement only happens after rewrap, and this
+# check fails the run (nothing is uploaded) if it raced the archive.
+versions_after="$(sql "SELECT version FROM platform.key_versions WHERE state <> 'retired' ORDER BY 1")"
+held="$(tar -xOf "$work/keys.tar" master | cut -d: -f1)"
+for version in $versions_before $versions_after; do
+  printf '%s\n' "$held" | grep -qx "$version" ||
+    die "the key ring archive lacks version $version, which the database could reference; retry outside a rotation"
+done
 age --encrypt --recipient "$AXIOM_BACKUP_SECRETS_RECIPIENT" --output "$work/keys.tar.age" "$work/keys.tar"
 rm -f "$work/keys.tar"
 

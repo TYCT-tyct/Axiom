@@ -136,7 +136,7 @@ func (c *Client) register(ctx context.Context, cfg Config, deps Deps) error {
 	if err != nil {
 		return fmt.Errorf("kv: hold this node's name: %w", err)
 	}
-	c.hold, c.hear = hold, newHeartbeat(deps.DB, deps.Scope, id)
+	c.hold, c.hear = hold, newHeartbeat(deps.DB, deps.Scope, id, cfg.Keys)
 	if err := c.hear.start(ctx, cfg.Nodes, &c.live, c.m); err != nil {
 		return errors.Join(err, hold.Release(ctx))
 	}
