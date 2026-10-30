@@ -77,7 +77,7 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
 
 ## 主密钥轮换
 
-命令使用 `AXIOM_DATABASE_URL`（应用角色）和 `AXIOM_MASTER_KEY_FILE`。数据库迁移须包含 platform `00019`。
+命令使用 `AXIOM_DATABASE_URL`（应用角色）和 `AXIOM_MASTER_KEY_FILE`。数据库迁移须包含 platform `00022`。
 只有负责人接触密钥文件；以服务账户执行，目录仅允许该账户和负责人访问，文件 0600 或 0400，Windows 用目录和文件 ACL。
 命令只打印版本号、操作结果和每批数量，不打印密钥、摘要或文件路径。不要用 shell 输出文件来核对。
 

@@ -412,7 +412,7 @@ func (r Rotation) pruneRetired(ctx context.Context, tx pg.Tx) error {
 			return fmt.Errorf("keyring: refusing to prune version %d: %w", version, err)
 		}
 		// A retired version always has a marker: the tombstone and the marker commit together, and migration
-		// 00020 backfilled the rows from before the fence. A missing marker means this state was edited by hand; deleting
+		// 00023 backfilled the rows from before the fence. A missing marker means this state was edited by hand; deleting
 		// the key could then race a writer the fence never saw, so leave it in place.
 		var fenced bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM platform.key_retirements WHERE version = $1)",
