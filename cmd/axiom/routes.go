@@ -44,6 +44,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, LookupSlot: limits.KeyLookupSlot, Meter: tel.Metrics.Meter("axiom/accounts"),
 		Recovery: recovery, Registration: registration, OnAccountOpened: openBalance, Cache: cache, LoginKey: p.loginKey,
+		Egress: exit,
 	})
 	if err != nil {
 		return nodeRoutes{}, err

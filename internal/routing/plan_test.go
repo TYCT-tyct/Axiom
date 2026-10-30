@@ -57,7 +57,8 @@ func TestFilters(t *testing.T) {
 			func(in *routing.Input) { in.NativeOnly = true }, nil, routing.FormatNotServed, true,
 		},
 		{
-			"format nobody converts to", func(e *routing.Endpoint) { e.Served = routing.Of(protocol.Chat); e.Native = routing.Of(protocol.Chat) },
+			// Every pair of the three formats converts, so only an endpoint that serves none refuses a request's format.
+			"format no endpoint serves", func(e *routing.Endpoint) { e.Served = 0; e.Native = 0 },
 			nil, nil, routing.FormatNotServed, true,
 		},
 		{

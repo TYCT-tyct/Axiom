@@ -36,6 +36,21 @@ func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject
 		path := "/api/console/v1/site/logo/" + site.LogoHash
 		response.LogoUrl = &path
 	}
+	if site.LoginDomain != "" {
+		response.LoginDomain = &site.LoginDomain
+	}
+	if site.LoginOrigin != "" {
+		response.LoginOrigin = &site.LoginOrigin
+	}
+	passkeys := site.Passkeys
+	response.Passkeys = &passkeys
+	providers := make([]consoleapi.OAuthProvider, 0, len(site.OAuth))
+	for _, name := range accounts.ProviderNames {
+		if _, ok := site.OAuth[name]; ok {
+			providers = append(providers, consoleapi.OAuthProvider(name))
+		}
+	}
+	response.OauthProviders = &providers
 	if site.Registration == "open" {
 		verified := true
 		response.EmailVerification = &verified

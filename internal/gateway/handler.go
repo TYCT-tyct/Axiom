@@ -367,14 +367,14 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	if req.Previous != "" { // continuing a stored response is M2 (docs/domains/gateway.md「Responses 的会话状态」)
-		return invalid("previous_response_id is not supported yet.")
-	}
-	if c.Compact && req.Stream { // the compact endpoint answers a whole reply (docs/domains/gateway.md「转发规则」)
-		return invalid("The compact endpoint answers one reply, not a stream; leave stream out or set it to false.")
+	if err := unsupportedRequest(c, &req); err != nil {
+		return err
 	}
 	over, names, err := readRouting(&req, body)
 	if err != nil {
+		return err
+	}
+	if err := pinnedProvider(&req, over); err != nil {
 		return err
 	}
 	snap, err := h.currentCatalog()
@@ -421,4 +421,26 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.F
 		h.Logger.Warn("a request was turned away", "request_id", httpserver.RequestID(r.Context()), "status", ref.Status, "err", err)
 	}
 	writeRefusal(w, format, ref)
+}
+
+// pinnedProvider refuses a file reference the client did not pin to one provider: a file id is the supplier account's
+// resource, not content, and the plan is cut to a single attempt, so the id can only reach that provider (protocol
+// README.md「跨格式转换」).
+func pinnedProvider(req *protocol.Request, over routing.Override) error {
+	if req.FileRefs > 0 && len(over.OnlyNames) != 1 {
+		return invalid("A file reference (file_id) is only sent back to the provider that issued it: name that one provider in provider.only.")
+	}
+	return nil
+}
+
+// unsupportedRequest refuses what this gateway does not serve yet: continuing a stored response is M2, and the compact
+// endpoint answers one reply (docs/domains/gateway.md「Responses 的会话状态」「转发规则」).
+func unsupportedRequest(c *Call, req *protocol.Request) error {
+	if req.Previous != "" {
+		return invalid("previous_response_id is not supported yet.")
+	}
+	if c.Compact && req.Stream {
+		return invalid("The compact endpoint answers one reply, not a stream; leave stream out or set it to false.")
+	}
+	return nil
 }

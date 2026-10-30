@@ -78,7 +78,9 @@ func (q *Queries) ListSiteDomains(ctx context.Context, db DBTX) ([]ListSiteDomai
 }
 
 const listSites = `-- name: ListSites :many
-SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.currency, s.brand_color, s.default_tier_id, s.logo_hash, t.new_key_daily_limit,
+SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.currency, s.brand_color,
+    s.default_tier_id, s.logo_hash, s.login_domain, t.new_key_daily_limit,
+    coalesce(t.passkeys_enabled, false) AS passkeys_enabled,
     coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint AS console_idle_seconds,
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
@@ -101,7 +103,9 @@ type ListSitesRow struct {
 	BrandColor                 *string
 	DefaultTierID              uuid.UUID
 	LogoHash                   []byte
+	LoginDomain                *string
 	NewKeyDailyLimit           *int64
+	PasskeysEnabled            bool
 	ConsoleIdleSeconds         int64
 	ConsoleMaxAgeSeconds       int64
 	AdminIdleSeconds           int64
@@ -143,7 +147,9 @@ func (q *Queries) ListSites(ctx context.Context, db DBTX) ([]ListSitesRow, error
 			&i.BrandColor,
 			&i.DefaultTierID,
 			&i.LogoHash,
+			&i.LoginDomain,
 			&i.NewKeyDailyLimit,
+			&i.PasskeysEnabled,
 			&i.ConsoleIdleSeconds,
 			&i.ConsoleMaxAgeSeconds,
 			&i.AdminIdleSeconds,

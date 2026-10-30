@@ -1,0 +1,51 @@
+event: response.created
+data: {"response":{"created_at":1760000000,"error":null,"id":"gen-01","incomplete_details":null,"model":"claude-client-name","object":"response","output":[],"status":"in_progress","usage":null},"sequence_number":0,"type":"response.created"}
+
+event: response.output_item.added
+data: {"item":{"id":"gen-01_0","summary":[],"type":"reasoning"},"output_index":0,"sequence_number":1,"type":"response.output_item.added"}
+
+event: response.reasoning_summary_part.added
+data: {"item_id":"gen-01_0","output_index":0,"part":{"text":"","type":"summary_text"},"sequence_number":2,"summary_index":0,"type":"response.reasoning_summary_part.added"}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":3,"output_index":0,"item_id":"gen-01_0","summary_index":0,"delta":"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\n\n1071 = 2 × 462 + 147"}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":4,"output_index":0,"item_id":"gen-01_0","summary_index":0,"delta":"\n462 = 3 × 147 + 21"}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":5,"output_index":0,"item_id":"gen-01_0","summary_index":0,"delta":"\n147 = 7 × 21 + 0"}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":6,"output_index":0,"item_id":"gen-01_0","summary_index":0,"delta":"\nThe remainder is 0, so GCD(1071, 462) = 21."}
+
+event: response.output_item.added
+data: {"item":{"content":[],"id":"gen-01_1","role":"assistant","status":"in_progress","type":"message"},"output_index":1,"sequence_number":7,"type":"response.output_item.added"}
+
+event: response.content_part.added
+data: {"content_index":0,"item_id":"gen-01_1","output_index":1,"part":{"annotations":[],"text":"","type":"output_text"},"sequence_number":8,"type":"response.content_part.added"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":9,"output_index":1,"item_id":"gen-01_1","content_index":0,"delta":"The greatest common divisor of 1071 and 462 is **21**."}
+
+event: response.reasoning_summary_text.done
+data: {"item_id":"gen-01_0","output_index":0,"sequence_number":10,"summary_index":0,"text":"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\n\n1071 = 2 × 462 + 147\n462 = 3 × 147 + 21\n147 = 7 × 21 + 0\nThe remainder is 0, so GCD(1071, 462) = 21.","type":"response.reasoning_summary_text.done"}
+
+event: response.reasoning_summary_part.done
+data: {"item_id":"gen-01_0","output_index":0,"part":{"text":"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\n\n1071 = 2 × 462 + 147\n462 = 3 × 147 + 21\n147 = 7 × 21 + 0\nThe remainder is 0, so GCD(1071, 462) = 21.","type":"summary_text"},"sequence_number":11,"summary_index":0,"type":"response.reasoning_summary_part.done"}
+
+event: response.output_item.done
+data: {"item":{"id":"gen-01_0","summary":[{"text":"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\n\n1071 = 2 × 462 + 147\n462 = 3 × 147 + 21\n147 = 7 × 21 + 0\nThe remainder is 0, so GCD(1071, 462) = 21.","type":"summary_text"}],"type":"reasoning"},"output_index":0,"sequence_number":12,"type":"response.output_item.done"}
+
+event: response.output_text.done
+data: {"content_index":0,"item_id":"gen-01_1","output_index":1,"sequence_number":13,"text":"The greatest common divisor of 1071 and 462 is **21**.","type":"response.output_text.done"}
+
+event: response.content_part.done
+data: {"content_index":0,"item_id":"gen-01_1","output_index":1,"part":{"annotations":[],"text":"The greatest common divisor of 1071 and 462 is **21**.","type":"output_text"},"sequence_number":14,"type":"response.content_part.done"}
+
+event: response.output_item.done
+data: {"item":{"content":[{"annotations":[],"text":"The greatest common divisor of 1071 and 462 is **21**.","type":"output_text"}],"id":"gen-01_1","role":"assistant","status":"completed","type":"message"},"output_index":1,"sequence_number":15,"type":"response.output_item.done"}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":16,"response":{"created_at":1760000000,"error":null,"id":"gen-01","incomplete_details":null,"model":"claude-client-name","object":"response","output":[{"id":"gen-01_0","summary":[{"text":"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\n\n1071 = 2 × 462 + 147\n462 = 3 × 147 + 21\n147 = 7 × 21 + 0\nThe remainder is 0, so GCD(1071, 462) = 21.","type":"summary_text"}],"type":"reasoning"},{"content":[{"annotations":[],"text":"The greatest common divisor of 1071 and 462 is **21**.","type":"output_text"}],"id":"gen-01_1","role":"assistant","status":"completed","type":"message"}],"status":"completed","usage":{"cost":3.703701,"cost_currency":"USD","input_tokens":0,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"is_byok":false,"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":0}}}
+

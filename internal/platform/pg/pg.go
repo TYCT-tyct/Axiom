@@ -104,6 +104,18 @@ func (t Tx) SetRole(ctx context.Context, role string) error {
 	return nil
 }
 
+// MarkPasskeyProved records for the rest of the transaction that the caller proved user's passkey. accounts.users'
+// trigger reads it before it lets two-step verification on for a user holding a passkey, so a node that predates
+// passkeys, which never sets it, fails closed during a rolling deployment. It is here because only this package sets a
+// transaction setting (scripts/check_scope.py): a general setter would put the scope and role settings back in every
+// module's reach.
+func (t Tx) MarkPasskeyProved(ctx context.Context, user uuid.UUID) error {
+	if _, err := t.tx.Exec(ctx, "SELECT set_config('axiom.passkey_proved', $1, true)", user.String()); err != nil {
+		return fmt.Errorf("mark the passkey as proved: %w", err)
+	}
+	return nil
+}
+
 // hideFromRewriters wraps each QueryRewriter among the options pgx reads from the front of args so that it is given
 // no connection; pgx's own rewriters, such as NamedArgs, do not use it. The caller's slice is left alone.
 func hideFromRewriters(args []any) []any {

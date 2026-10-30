@@ -6,6 +6,6 @@ export { useErrors } from "./errors";
 export { readForm } from "./forms";
 export { LoadMore, Stat } from "./parts";
 export { AppProviders } from "./providers";
-export { accountKey, can, Gate, safeNext, useSession, useSignIn } from "./session";
+export { accountKey, can, Gate, safeNext, useSession, useSignIn, useStartSession } from "./session";
 export { Shell } from "./shell";
 export { RecoveryDialog, TotpSetupDialog, useBeginTotp } from "./totp-dialogs";

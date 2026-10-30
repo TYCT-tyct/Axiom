@@ -139,6 +139,12 @@ func (o *Operator) insertSite(ctx context.Context, tx pg.Tx, spec SiteSpec, site
 			return err
 		}
 	}
+	// The console domain is the login domain from the start: passkeys bind to it, and providers redirect back to it,
+	// so choosing it later would mean remembering which credentials predate the choice.
+	domain := spec.Hosts[Console]
+	if _, err := o.queries.SetLoginDomain(ctx, tx, SetLoginDomainParams{Domain: &domain, SiteID: site}); err != nil {
+		return err
+	}
 	return nil
 }
 
