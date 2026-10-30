@@ -21,6 +21,7 @@ import (
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/mail"
+	"axiom/internal/platform/objectstore"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
@@ -115,12 +116,16 @@ func readSettings(environ []string) (nodeSettings, error) {
 		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
 	}
 	smtp, mailErr := mail.ReadConfig(env)
+	// The bucket is optional and no feature writes through it yet (internal/platform/objectstore/README.md). Read it
+	// here so a node whose deployment sets it starts, and so half a configuration is a startup error rather than a
+	// surprise for the first archive job; `axiom objectstore` uses the same variables.
+	_, storeErr := objectstore.ReadConfig(env)
 	var exchangeErr error
 	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
 		exchangeErr = errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb")
 	}
 	s.smtp = smtp
-	if err := errors.Join(env.Err(), mailErr, s.valkey.Resolve(), healthErr, exchangeErr); err != nil {
+	if err := errors.Join(env.Err(), mailErr, storeErr, s.valkey.Resolve(), healthErr, exchangeErr); err != nil {
 		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
 	}
 	return s, nil
