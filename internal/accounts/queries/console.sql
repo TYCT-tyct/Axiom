@@ -51,6 +51,45 @@ UPDATE accounts.sessions SET last_seen_at = now() WHERE id = @id AND last_seen_a
 -- name: RevokeSession :execrows
 UPDATE accounts.sessions SET revoked_at = now() WHERE id = @id;
 
+-- name: ListSessions :many
+-- The user's live console sessions, newest first, as the device list shows them. A pending sign-in has not passed the
+-- second factor and is not a signed-in device; the same validity cuts as ValidSession keep a session the site has
+-- shortened, an idle one and one from before a factor change out of the list.
+SELECT s.id, s.created_at, s.last_seen_at, coalesce(host(s.ip), '')::text AS ip,
+    coalesce(s.user_agent, '') AS user_agent
+FROM accounts.sessions s
+JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
+WHERE s.user_id = @user_id AND s.site_id = @site_id AND s.surface = 'console'
+    AND s.level <> 'pending_mfa'
+    AND s.revoked_at IS NULL AND s.expires_at > now()
+    AND s.created_at + make_interval(secs => @max_age_seconds::bigint) > now()
+    AND s.last_seen_at + least(s.idle_timeout, make_interval(secs => @idle_seconds::bigint)) > now()
+    AND u.status = 'active' AND u.factor_version = s.factor_version
+ORDER BY s.created_at DESC, s.id DESC
+LIMIT 100;
+
+-- name: RevokeDeviceSession :execrows
+-- Only the user's own live console sessions other than the one asking: the account scope and this predicate both keep
+-- one member of a future shared account from ending another's sign-in, and another surface's session is out of reach.
+-- The cuts are ListSessions' and ValidSession's, so the endpoint finds exactly a session the list showed.
+UPDATE accounts.sessions SET revoked_at = now()
+WHERE id = @id AND site_id = @site_id AND user_id = @user_id AND surface = 'console'
+    AND level <> 'pending_mfa' AND id <> @current_id AND factor_version = @factor_version
+    AND revoked_at IS NULL AND expires_at > now()
+    AND created_at + make_interval(secs => @max_age_seconds::bigint) > now()
+    AND last_seen_at + least(idle_timeout, make_interval(secs => @idle_seconds::bigint)) > now();
+
+-- name: RevokeOtherSessions :execrows
+-- Every other live console session of the user, pending ones included: a sign-in that has the password but not the
+-- second factor must not outlive the user's choice to end the others. Factor-stale rows are already invalid and are
+-- not counted as devices the user ended.
+UPDATE accounts.sessions SET revoked_at = now()
+WHERE site_id = @site_id AND user_id = @user_id AND surface = 'console'
+    AND id <> @current_id AND factor_version = @factor_version
+    AND revoked_at IS NULL AND expires_at > now()
+    AND created_at + make_interval(secs => @max_age_seconds::bigint) > now()
+    AND last_seen_at + least(idle_timeout, make_interval(secs => @idle_seconds::bigint)) > now();
+
 -- name: PendingSession :many
 SELECT id, csrf_token, factor_version, mfa_attempts FROM accounts.sessions
 WHERE token_hash = @token_hash AND level = 'pending_mfa' AND revoked_at IS NULL AND expires_at > now();
@@ -70,6 +109,12 @@ WHERE user_id = @user_id AND code_hash = @code_hash AND factor_version = @factor
 -- name: EnableTOTP :exec
 UPDATE accounts.users SET totp_ciphertext = @ciphertext, totp_nonce = @nonce, totp_wrapped_dek = @wrapped_dek,
     totp_key_version = @key_version, totp_last_step = @step, mfa_enabled_at = now(), factor_version = factor_version + 1
+WHERE id = @id;
+
+-- name: ReplaceTOTP :exec
+-- The user keeps the date two-step verification was enabled; only the secret and its code step change.
+UPDATE accounts.users SET totp_ciphertext = @ciphertext, totp_nonce = @nonce, totp_wrapped_dek = @wrapped_dek,
+    totp_key_version = @key_version, totp_last_step = @step, factor_version = factor_version + 1
 WHERE id = @id;
 
 -- name: BumpFactorVersion :exec

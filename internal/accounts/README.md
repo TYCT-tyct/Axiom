@@ -19,7 +19,7 @@
 
 ### 表（schema `accounts`）
 
-迁移 `00009_scope_once.sql` 将全部范围策略改为 [pg 的 InitPlan 表达式](../platform/pg/README.md#决策与理由)，包括密码找回请求和令牌，保留终态与到期清理条件。
+迁移 `00009_scope_once.sql` 将全部范围策略改为 [pg 的 InitPlan 表达式](../platform/pg/README.md#决策与理由)，包括密码找回请求和令牌，保留终态与到期清理条件。迁移 `00020_session_devices.sql` 为 `sessions` 增加按用户、监听面和创建时间过滤有效行的并发索引 `sessions_live_of_user`，供设备列表和批量撤销使用。
 
 - 主键 `id uuid`，由 Go 生成 UUIDv7。金额是 `bigint`，单位同[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)。`status` 取 `active` / `disabled`。
 - 类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。站点数据的表用 `site_id`、账户数据的表用 `(site_id, account_id)` 与 [pg 的 InitPlan 范围参数](../platform/pg/README.md#决策与理由)比较；`sites` 自己用 `id` 当 `site_id`，`accounts` 用 `id` 当 `account_id`。
@@ -195,17 +195,23 @@
 | 登录 | 邮箱 + 密码，开了 TOTP 的再过 TOTP 或恢复码 | 第三方登录、通行密钥、邮箱验证码 |
 | 找回密码 | `axiom user set-password`（从标准输入读） | 控制台邮件链接（已实现） |
 | 第一个用户 | `axiom site init`、`axiom user create`、`axiom user grant-platform`（见下文「命令行」） | — |
-| 认证因素 | 开启 TOTP、重建恢复码 | 控制台改密码（已实现）；关闭或更换 TOTP 待实现，仍可经命令行 `reset-mfa` |
-| 会话管理 | 退出 | 设备列表、踢掉一台、退出全部 |
+| 认证因素 | 开启、更换 TOTP，重建恢复码；控制台改密码 | 关闭 TOTP（仍可经命令行 `reset-mfa`） |
+| 会话管理 | 退出、设备列表、踢掉一台、退出全部 | — |
 
 - **邀请码注册**：`invite_tenant` 在库里核对站点启用、策略为 invite、邀请码有效，得到邀请人和默认等级。服务端生成新账户、工作区、用户的 ID，在只覆盖这个新账户的范围里，一个事务插入账户、默认工作区、用户、成员（所有者）。邮箱重复由唯一索引拒绝，整个事务回滚；重试得到"已注册"。邮箱规范化（去空白、转小写）后须是 3 到 254 个可打印 ASCII 字符、`@` 两侧各有字符，且必须通过 `net/mail.ParseAddress`、解析地址等于输入，否则 `ErrBadEmail`：表的约束（`lower()`、`LIKE`）在各地区设置下对非 ASCII 的判断不一定与 Go 一致，放进库再被拒会变成 500；国际化邮箱地址 M1 不支持。不用站点或平台范围包住注册。
 - **开放注册**：`Register` 先用 `domain_site` 和 `registration_site` 在库里确认站点、默认等级和模式；open 时校验邮箱、站点域名名单和 `proofWorked`，再检查本节点能发信、按邮箱域名扣一次共享计数，在站点范围按 `(site_id, email_hash)` upsert `registration_requests` 并入队 `accounts.registration`。待验证行不保存口令：初次提交即使带了口令也不使用，点击链接时才提交、校验并算 argon2id。提交一律返回 202；已注册地址也走同一条路径，直到点击链接才由 `UserEmailTaken` 发现并返回 `ErrEmailTaken`。后台 `process` 用 `TenantTx` 锁待验证行，按请求记录的 `domain` 找仍启用的 HTTPS 控制台域名，生成 256 位令牌、只存 SHA-256、写 `token_hash` 并把邮件入 outbox，然后同事务提交；重投任务看到 `token_hash` 已写就不重复发。`SetSiteRegistration` 在同一事务写站点模式和设置并记 `site_registration.update`；审计只存域名名单的数量与 SHA-256，不复制整份名单，保证 100 项的合法配置也不会超过审计条目 8 KiB 上限。`VerifyEmail` 先花一次该 IP 的认证预算，再用 `registration_tenant` 定位并做未过期、域名名单的廉价检查，校验新口令并在锁外算 argon2id，再在站点范围锁行，核对未过期、令牌哈希和当前域名名单（不重查注册模式；站点停用后链接失效），创建用户、账户、默认工作区、余额行、所有者成员关系，写 `email_verified_at`、删行、记 `security.registration`，全部同事务；不签发会话。令牌未知、过期、已用或别站统一 `ErrInvalidVerification`；邮箱已被占用返回 `ErrEmailTaken` 并删行。
 - **认证因素的一条规则**：`users.factor_version` 是密码、TOTP、恢复码这一组的版本。签发会话、消费一次性因素、修改因素的事务，先锁用户行 `SELECT … FROM users WHERE id = $u FOR UPDATE`（邮件重置先锁请求行，再锁用户；所有涉及请求的路径同序），在锁内核对用户启用和版本；修改因素的事务在同一把锁内把版本加一。会话有效 = 未撤销、未过期、未超空闲、用户启用、版本等于用户当前版本，每个请求读会话时同一条查询一起核对；恢复码只在版本相等且未用过时可用。
 - **密码登录**：argon2id，参数写进 PHC 串（M1 取 OWASP 的基线：19 MiB、2 遍、1 线程；以后提高参数，旧哈希照样能验）；密码 12 到 256 个字符；邮箱不存在也算一次假哈希。先在事务外读出哈希和版本并计算，再开签发事务，锁内版本没变且用户启用才签发。
 - **两步验证**：开了 TOTP 的用户密码通过后先拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口）。验证事务：锁用户行 → 核对待验证会话未撤销、未过期、版本相等、尝试次数未满 → 验码（TOTP 做 `totp_last_step < $step` 的条件更新，恢复码做条件消费，影响行数都必须为 1）→ 码不对只把尝试次数加一并提交（每个待验证会话的次数是站点的 `challenge_code_attempts`） → 码对就条件撤销待验证会话，签发新令牌、新 CSRF 令牌的 `mfa` 会话。用户行锁让一个挑战只换出一个会话。
-- **修改认证因素**：开启 TOTP 要重新输入密码并用新密钥的一个码确认，只对还没开启的用户：已开启的在用户行锁内拒绝（`ErrTOTPOn`），版本、密钥、恢复码、会话都不变，更换和关闭是 M2 的事；重建恢复码要一个当前的 TOTP 码，错码计入每用户的失败次数。两者都加版本，为当前设备签发新的 `mfa` 会话，并在同一事务里记审计 `user.totp_enable`、`user.recovery_codes_regenerate`（操作者和对象都是这个用户，带站点和个人账户，不记密钥和恢复码）：审计写不进，因素、恢复码和新会话一起回滚。TOTP 密钥用 `secret.Keyring.Seal` 封装，`Location` 是 `{accounts.users, 用户 ID 的标准 UUID 写法, totp}`，`Sealed` 的四个字段存进 `users` 的四个 `totp_` 列；`BeginTOTP` 只生成密钥和 `otpauth` 链接，不存库，确认时客户端把密钥带回。TOTP 按 RFC 6238（HMAC-SHA1、30 秒、6 位），接受前后各一个步长，同一步长只用一次。恢复码 10 个、各 80 位，写成 `xxxx-xxxx-xxxx-xxxx`，不分大小写、忽略连字符，只存 SHA-256。
+- **修改认证因素**：开启 TOTP 要重新输入密码并用新密钥的一个码确认，只对还没开启的用户：已开启的在用户行锁内拒绝（`ErrTOTPOn`），版本、密钥、恢复码、会话都不变；重建恢复码要一个当前的 TOTP 码，错码计入每用户的失败次数；更换 TOTP 走 `ReplaceTOTP`，要求非待验证的控制台 `mfa` 会话、当前 TOTP 码或未用恢复码，还要新密钥的一个码，因素未开启返回 `ErrTOTPOff`。三者都加版本，为当前设备签发新的 `mfa` 会话，并在同一事务里记审计 `user.totp_enable`、`user.recovery_codes_regenerate`、`user.totp_replace`（操作者和对象都是这个用户，带站点和个人账户，不记密钥和恢复码）：审计写不进，因素、恢复码和新会话一起回滚。当前因素码在换密钥的同一事务里消费，失败时恢复码仍可用。TOTP 密钥用 `secret.Keyring.Seal` 封装，`Location` 是 `{accounts.users, 用户 ID 的标准 UUID 写法, totp}`，`Sealed` 的四个字段存进 `users` 的四个 `totp_` 列；`BeginTOTP` 只生成密钥和 `otpauth` 链接，不存库，确认和更换时客户端把密钥带回。TOTP 按 RFC 6238（HMAC-SHA1、30 秒、6 位），接受前后各一个步长，同一步长只用一次。恢复码 10 个、各 80 位，写成 `xxxx-xxxx-xxxx-xxxx`，不分大小写、忽略连字符，只存 SHA-256。
 - **Cookie 与 CSRF**：`__Host-axiom_session`（HttpOnly、Secure、SameSite=Lax、Path=/），库里只存令牌的 SHA-256。所有会改数据的请求，包括登录、注册、两步验证：`Origin` 必须完全等于该站点该监听面登记的 `origin`，缺失或 `null` 拒绝；`Content-Type: application/json`，接口不开放 CORS；有会话的再核对 `X-CSRF-Token`。登记的源是 `http://localhost` 时 Cookie 才不带 `__Host-` 和 `Secure`，由登记决定、不看请求头。认证相关的响应 `Cache-Control: no-store`。
 - **参数**：默认值只在代码里。按站点的（会话时长：控制台空闲 7 天、最长 30 天，管理后台 30 分钟、12 小时；下表的尝试上限；新 key 的每日上限）存在 `site_settings`，经 `GET/PUT /api/admin/v1/sites/{site_id}/settings` 读改，要敏感权限并记审计；按节点的资源上限用 `AXIOM_*` 环境变量。
+
+### 会话设备与撤销
+
+`Sessions` 读 p 的实时控制台会话，对应 `ListSessions` 和迁移 00020 的 `sessions_live_of_user` 索引：按创建时间倒序最多 100 条，套用与 `ValidSession` 相同的未撤销、未过期、未超空闲、用户启用和因素版本条件，并排除 `pending_mfa`（它还不是已登录设备）。返回 `SessionDevice`：`ID`、`Current`、`CreatedAt`、`LastSeenAt`、`IPGroup` 和 `Client`。`IPGroup` 用 `clientip.Group`，即 IPv4 原样、IPv6 取 /64，和登录预算同一分组；`Client` 由 `clientSummary` 只认固定记号，给出“Chrome on macOS”这类摘要，原始 User-Agent 不返回页面。
+
+`RevokeSession` 和 `RevokeOtherSessions` 只动 p 自己、同站点、控制台的会话，套用列表的有效性条件，并始终排除当前会话：单条不存在、已结束、别人的、别的监听面或当前会话都返回 `ErrNotFound`（HTTP 404），批量返回实际结束数。撤销只写 `revoked_at`，不改因素版本；批量把 `pending_mfa` 也一起结束，因为拿着密码但没过第二因素的登录不应在用户选择退出其他设备后继续。两者都在写 `revoked_at` 的同一事务里记审计：`session.revoke` 以会话为对象，`session.revoke_others` 以用户为对象并在 detail 里记 `revoked`；没有实际结束时批量不写审计。失败、越权和审计拒绝都整体回滚。测试见 `devices_test.go` 和控制台的 `console_session_test.go`。
 
 ### 邮件找回和改密码
 
@@ -229,7 +235,7 @@
 | 每 IP 的登录、注册、两步验证、找回密码 | 令牌桶，突发 20 次、每分钟 10 次，按（站点, IP）计 | `ip_attempt_burst`、`ip_attempts_per_minute` |
 | 每邮箱域名的开放注册 | 令牌桶，突发 5 次、每小时 30 次，按（站点, 小写域名）计；域名的子域名各自计数 | `registration_domain_burst`、`registration_domain_per_hour` |
 | 每邮箱的登录失败、找回请求（各自计数） | 每 15 分钟 10 次，按（站点, 规范化邮箱）计，不存在的邮箱也计；超出后等待，不锁账户 | `email_sign_in_failures` |
-| 每用户的 TOTP、恢复码失败 | 每小时 10 次，跨待验证会话累计，重建恢复码的错码也计 | `user_code_failures` |
+| 每用户的 TOTP、恢复码失败 | 每小时 10 次，跨待验证会话累计，重建恢复码和更换 TOTP 的错码也计 | `user_code_failures` |
 | 每个待验证会话 | 5 次，计在 `sessions.mfa_attempts` | `challenge_code_attempts` |
 | argon2id 并发 | `GOMAXPROCS` 个，排队超过 2 秒返回 `ErrBusy`（503）；请求在排队时结束就带它自己的错误返回 | 按节点：`Config.HashConcurrency`、`HashWait` |
 | key 未命中查库 | 每 IP 令牌桶加全局并发 32，超出返回 503 和 `Retry-After` | — |
