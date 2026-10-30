@@ -26,6 +26,8 @@ import (
 // on, a call names its attempts, so an interrupted drop leaves the call readable rather than the attempts orphaned.
 var archiveTables = []string{"call_attempt", "call_log"}
 
+const archiveFormat = "postgresql-copy-csv-gzip"
+
 var partitionName = regexp.MustCompile(`^(call_log|call_attempt)_([0-9]{4})_([0-9]{2})$`)
 
 // errNothingToArchive says a month has neither partition left and no manifest; the run logs it and moves on.
@@ -183,7 +185,7 @@ func (r *retainer) loadManifest(ctx context.Context, month time.Time) (archiveMa
 	if err := jsonx.Unmarshal(raw, &manifest); err != nil {
 		return archiveManifest{}, false, nil // rewrite it from the partition below
 	}
-	if manifest.Version != archiveManifestVersion || manifest.Month != monthKey(month) || len(manifest.Tables) == 0 {
+	if manifest.Version != archiveManifestVersion || manifest.Format != archiveFormat || manifest.Month != monthKey(month) || len(manifest.Tables) == 0 {
 		return archiveManifest{}, false, nil
 	}
 	return manifest, true, nil
@@ -234,7 +236,7 @@ func (r *retainer) writeArchive(ctx context.Context, month time.Time) (archiveMa
 		Version:   archiveManifestVersion,
 		Month:     monthKey(month),
 		CreatedAt: time.Now().UTC(),
-		Format:    "postgresql-copy-csv-gzip",
+		Format:    archiveFormat,
 	}
 	written := 0
 	for _, table := range archiveTables {
