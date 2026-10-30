@@ -48,15 +48,15 @@ type event struct {
 	// data is what the client gets in place of the event, but for edits, replacements in place ordered by position;
 	// for an ending, usageAt is where its usage object closes, or -1 without one. withheld, when set, is an event to
 	// withhold besides, such as the finish signals Chat splits from a chunk that also carries content.
-	data              []byte
-	edits             []edit
-	withheld          []byte
-	usageAt           int
-	content, searches int64
-	shape             textshape.Shape // the shape of the content's decoded strings
-	usage             bool            // it reported usage, which the meter has taken
-	final             bool            // it is the format's last usage event
-	ends              bool            // an ending that is also the normal end, as Responses' response.completed is
+	data                         []byte
+	edits                        []edit
+	withheld                     []byte
+	usageAt                      int
+	content, searches, toolCalls int64
+	shape                        textshape.Shape // the shape of the content's decoded strings
+	usage                        bool            // it reported usage, which the meter has taken
+	final                        bool            // it is the format's last usage event
+	ends                         bool            // an ending that is also the normal end, as Responses' response.completed is
 }
 
 // edit replaces data[from:to] with with, then echo: a value of the event itself, copied again.
