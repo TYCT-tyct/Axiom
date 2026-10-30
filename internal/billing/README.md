@@ -28,6 +28,9 @@ func (b *Billing) Reap(ctx context.Context) (int, error) // 已实现：回收�
 func (b *Billing) Alive() bool // 已实现：本地持有者检查，纯内存：最近一次心跳成功（`Start` 算第一次）加 TTL 减 5s 晚于现在；gateway 每次尝试前问一次
 func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor int64) error // 已实现：开户时建余额行；cmd/axiom 把它接成 accounts 的开户回调（底线 0）
 func ReadBalance(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []uuid.UUID) (BalanceView, error) // 已实现：控制台的余额
+func AdvanceCreditBatches(ctx context.Context, db *pg.DB, scope pg.Scope, account uuid.UUID, pages int) (bool, error) // 已实现：有界推进分配重放，最多 pages 页，返回是否追上
+func ReadCreditBatches(ctx context.Context, tx pg.Tx, account uuid.UUID, include bool) ([]CreditBatchView, bool, error) // 已实现：与余额同一快照读批次；include=false、或快照上界高于重放位置时 ready=false，调用方不返回 batches；只列仍有剩余或冻结的批次
+type CreditBatchView struct{ ID uuid.UUID; Source string; Amount, Remaining, Frozen int64; CreatedAt time.Time; ExpiresAt *time.Time } // 已实现；金额都是十亿分之一额度
 func KeysUsed(ctx context.Context, tx pg.Tx, keys []KeyWindow) (map[uuid.UUID]int64, error) // 已实现：控制台的 key 剩余额度
 func ListStatement(ctx context.Context, tx pg.Tx, q StatementQuery) ([]StatementRow, *StatementCursor, error) // 已实现：控制台的额度流水，一页最新在前
 type StatementRow struct{ ID uuid.UUID; At time.Time; Kind StatementKind; Amount int64; Balance *int64; FrozenChange, Frozen int64; Reference uuid.UUID } // 已实现：Amount 正数是余额增加，Balance 是这笔之后的余额（序号之前的记录为 nil，见下文），都是十亿分之一额度；Reference 扣费和冲回是调用编号，其余是额度批次（付费批次为订单编号或线下记录编号）

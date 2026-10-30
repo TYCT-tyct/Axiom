@@ -1,3 +1,4 @@
+export { type Attempt, failed, opened, type Sendable } from "./attempt";
 export { EnrollPage } from "./auth/enroll";
 export { AuthFrame } from "./auth/frame";
 export { MfaPage } from "./auth/mfa";
@@ -6,6 +7,7 @@ export { useErrors } from "./errors";
 export { readForm } from "./forms";
 export { LoadMore, Stat } from "./parts";
 export { AppProviders } from "./providers";
+export { QrCode } from "./qr";
 export { accountKey, can, Gate, safeNext, useSession, useSignIn, useStartSession } from "./session";
 export { Shell } from "./shell";
 export { RecoveryDialog, TotpSetupDialog, useBeginTotp } from "./totp-dialogs";

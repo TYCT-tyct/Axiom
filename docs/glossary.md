@@ -134,11 +134,11 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 范围 | scope | 配置和授权所在的层级：平台、站点、账户、工作区；配置还可以细到单个 API key |
 | 租户范围 | tenant scope（`pg.Scope`） | 一个数据库事务能读写的站点和账户集合，由行级安全执行，见[安全的「租户隔离」](security.md#租户隔离) |
 | 节点 | node | 运行 Axiom 的一台机器 |
-| 节点角色 | node_role | 节点承担的职责，一个节点可兼任多个，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
+| 节点角色 | node_role | 节点承担的职责：`core`、`ingress`、`ops`，一个节点可兼任多个（`core` 和 `ingress` 除外）；由 `AXIOM_NODE_ROLES` 配置，默认 `core`，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
 | 入口 | ingress | 节点角色之一 |
 | 核心 | core | 节点角色之一 |
 | 运维 | ops | 节点角色之一，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
-| 公网监听 / 管理监听 / 探针监听 | public / admin / probes | 节点上的三个 HTTP 监听：模型调用、官网、控制台和支付回调 / 管理后台和管理接口 / 健康检查和指标。各自提供什么、谁能访问，见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
+| 公网监听 / 管理监听 / 节点监听 / 探针监听 | public / admin / node / probes | 节点上的四个 HTTP 监听：模型调用、官网、控制台和支付回调 / 管理后台和管理接口 / 核心给入口转发和探活的调用面，走双向 TLS / 健康检查和指标。各自提供什么、谁能访问，见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
 | 审批策略 | approval_policy | 一类运营操作需要怎样的审批，是后台数据，见[运营](domains/operations.md) |
 | 受控导出 | data_export | 由负责人发起、经两步验证并留审计的数据导出，是取用对话内容的唯一方式，见[记录与告警](domains/observability.md) |
 | 收款渠道 | payment_channel（代码里 `payments.Kind`） | 一种收款协议的插件，如易支付、Stripe、支付宝官方；USDT 经易支付兼容的网关接入，见[支付的「收款渠道」](domains/payments.md#收款渠道) |
