@@ -45,6 +45,23 @@ class NeedsWeb(unittest.TestCase):
         self.assertFalse(ci_skips.needs_web(["internal/billing/ledger.go", "docs/a.md", "scripts/ci_skips.py", "scripts/ci/bench-compare.sh"]))
 
 
+class NeedsVitals(unittest.TestCase):
+    def test_page_inputs_run_the_timings(self):
+        for path in ("web/site/src/app.ts", "web/pnpm-lock.yaml", "web/theme.js", "web/playwright.vitals.config.ts",
+                     "web/packages/api/src/console.gen.ts", "web/packages/api/src/admin.gen.ts",
+                     "web/e2e/vitals.spec.ts", "api/console.yaml", "api/admin.yaml"):
+            with self.subTest(path=path):
+                self.assertTrue(ci_skips.needs_vitals(["docs/a.md", path]))
+        self.assertTrue(ci_skips.needs_vitals([]))
+
+    def test_everything_else_skips_them(self):
+        for path in ("internal/billing/ledger.go", "cmd/axiom/serve.go", "go.mod", "go.sum", "justfile",
+                     "scripts/web_cache.py", "scripts/ci/web-container.sh", ".github/workflows/ci.yml",
+                     "api/README.md", "website/src/app.ts", "web", "api"):
+            with self.subTest(path=path):
+                self.assertFalse(ci_skips.needs_vitals([path]))
+
+
 class NeedsDeployCheck(unittest.TestCase):
     def test_anything_the_container_is_built_from_runs_it(self):
         for path in ("deploy/compose.yaml", "deploy/postgres/roles.sh", "Dockerfile.dev", "go.mod", "go.sum",
@@ -88,11 +105,16 @@ class ExitCodes(unittest.TestCase):
                     self.assertEqual(ci_skips.main(["bench-needed", "base"]), 0)
                     self.assertEqual(ci_skips.main(["deploy-needed", "base"]), 0)
                     self.assertEqual(ci_skips.main(["web-needed", "base"]), 0)
+                    self.assertEqual(ci_skips.main(["vitals-needed", "base"]), 0)
                     self.assertEqual(ci_skips.main(["md-only", "base"]), 1)
 
     def test_web_needed_codes(self):
         self.assertEqual(self.main("web-needed", ["internal/x/x.go"]), ci_skips.NOT_NEEDED)
         self.assertEqual(self.main("web-needed", ["api/console.yaml"]), 0)
+
+    def test_vitals_needed_codes(self):
+        self.assertEqual(self.main("vitals-needed", ["internal/x/x.go"]), ci_skips.NOT_NEEDED)
+        self.assertEqual(self.main("vitals-needed", ["web/packages/api/src/console.gen.ts"]), 0)
 
     def test_md_only_codes(self):
         self.assertEqual(self.main("md-only", [".github/pull_request_template.md"]), 0)
