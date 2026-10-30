@@ -19,12 +19,12 @@ def job(name):
     return re.search(rf"^  {name}:\n(.*?)(?=^  [\w-]+:|\Z)", WORKFLOW, re.M | re.S).group(1)
 
 
-def enabled(name, event, stress=False, draft=False, docs=False):
+def enabled(name, event, stress=False, draft=False, docs=False, vitals=True):
     condition = re.search(r"^    if: (.+)$", job(name), re.M).group(1)
-    return expression(condition, event, stress, draft, docs)
+    return expression(condition, event, stress, draft, docs, vitals=vitals)
 
 
-def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base=""):
+def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True):
     results = results or {}
     values = {
         "always()": True,
@@ -35,6 +35,7 @@ def expression(condition, event="pull_request", stress=False, draft=False, docs=
         "needs.changes.result": results.get("changes", "success"),
         "needs.changes.outputs.docs_only": "true" if docs else "false",
         "needs.changes.outputs.web": "true",
+        "needs.changes.outputs.vitals": "true" if vitals else "false",
     }
     for name, result in results.items():
         values["needs." + name + ".result"] = result
@@ -71,7 +72,7 @@ class BuildChecks(unittest.TestCase):
     def test_web_and_shards_run_independently_on_all_build_events(self):
         needs = re.search(r"^    needs: \[(.+)\]$", job("build"), re.M).group(1).split(", ")
         self.assertEqual(set(needs), {"changes", "static", "go-test", "web", "e2e", "vitals", "journey", "bench", "deploy"})
-        for name in ("web", "e2e", "vitals"):
+        for name in ("web", "e2e"):
             self.assertRegex(job(name), r"(?m)^    needs: changes$")
             self.assertIn("bash scripts/ci/web-container.sh", job(name))
             self.assertRegex(job(name), r"- if: always\(\)\n        run: bash scripts/ci/web-container.sh cleanup")
@@ -81,6 +82,28 @@ class BuildChecks(unittest.TestCase):
                         # the tests run once, in the train and on main; a pull request runs only the cheap checks
                         want = not docs and (name == "web" or event != "pull_request")
                         self.assertEqual(enabled(name, event, docs=docs), want)
+
+    def test_vitals_run_on_main_and_by_page_inputs_on_prs_and_trains(self):
+        self.assertRegex(job("vitals"), r"(?m)^    needs: changes$")
+        self.assertIn("bash scripts/ci/web-container.sh", job("vitals"))
+        self.assertRegex(job("vitals"), r"- if: always\(\)\n        run: bash scripts/ci/web-container.sh cleanup")
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            for vitals in (False, True):
+                with self.subTest(event=event, vitals=vitals):
+                    # changes decides by path on PRs and trains and always says true on main; Markdown-only says false
+                    self.assertEqual(enabled("vitals", event, vitals=vitals), vitals)
+
+    def test_build_requires_vitals_exactly_when_they_are_scheduled(self):
+        # A skipped job counts as passed on GitHub, so the aggregator must require the timing job whenever changes said
+        # it was due, and only then.
+        check = re.search(r"- if: (needs.changes.outputs.vitals == 'true')\n        run: (.+)", job("build"))
+        self.assertIsNotNone(check)
+        self.assertTrue(expression(check[1], vitals=True))
+        self.assertFalse(expression(check[1], vitals=False))
+        for result in ("success", "failure", "cancelled", "skipped"):
+            with self.subTest(result=result):
+                command = check[2].replace("${{ needs.vitals.result }}", result)
+                self.assertEqual(subprocess.run(["bash", "-c", command]).returncode == 0, result == "success")
 
     def test_unrelated_pr_skips_web_and_build_passes(self):
         condition = re.search(r"^    if: (.+)$", job("web"), re.M).group(1)
@@ -108,6 +131,35 @@ class BuildChecks(unittest.TestCase):
                     subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, check=True)
                     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
                     self.assertEqual(values["web"], "false" if event == "pull_request" and status == 10 else "true")
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_vitals_selection_covers_prs_and_trains_and_never_skips_main(self):
+        decide = textwrap.dedent(re.search(
+            r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1])
+        stub = ("python3() { case \"$2\" in\n"
+                "  md-only) return \"$MD_STATUS\";;\n"
+                "  vitals-needed) return \"$VITALS_STATUS\";;\n"
+                "  *) return 0;;\n"
+                "esac; }\n")
+        cases = {
+            "main on a push": ("push", "", "1", "10", "true"),
+            "a PR touching the pages": ("pull_request", "base", "1", "0", "true"),
+            "a PR touching other files": ("pull_request", "base", "1", "10", "false"),
+            "a train touching the pages": ("workflow_dispatch", "base", "1", "0", "true"),
+            "a train touching other files": ("workflow_dispatch", "base", "1", "10", "false"),
+            "a failed diff runs them": ("workflow_dispatch", "base", "1", "37", "true"),
+            "Markdown-only": ("workflow_dispatch", "base", "0", "10", "false"),
+        }
+        for name, (event, base, md, vitals, expected) in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "output"
+                env = {**os.environ, "BASE": base, "MD_STATUS": md, "VITALS_STATUS": vitals,
+                       "GITHUB_OUTPUT": output.as_posix()}
+                script = stub + decide.replace("${{ github.event_name }}", event)
+                subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, check=True)
+                values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                self.assertEqual(values["vitals"], expected)
+                self.assertEqual(values["docs_only"], "true" if md == "0" else "false")
 
     def test_go_tests_run_in_trains_and_main_not_on_pull_requests(self):
         for event in ("pull_request", "push", "workflow_dispatch"):
