@@ -54,3 +54,18 @@ describe("moneyInput", () => {
     expect(parseMoney(moneyInput(amount))).toBe(amount);
   });
 });
+
+describe("pay", () => {
+  // A payment amount is in the currency's minor units, so the point moves by that currency's own digits.
+  it.each([
+    { currency: "USD", amount: "1030", en: "$10.30" },
+    { currency: "USD", amount: "1", en: "$0.01" },
+    { currency: "JPY", amount: "1000", en: "¥1,000" },
+    { currency: "KWD", amount: "1500", en: "KWD\u00a01.500" },
+  ])("formats $amount $currency as $en", ({ currency, amount, en }) => {
+    expect(formatters("en").pay({ amount, currency })).toBe(en);
+  });
+  it("formats in the page's language", () => {
+    expect(formatters("zh").pay({ amount: "1030", currency: "USD" })).toBe("US$10.30");
+  });
+});

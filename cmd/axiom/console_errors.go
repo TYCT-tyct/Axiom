@@ -15,6 +15,7 @@ import (
 	"axiom/internal/observability"
 	"axiom/internal/payments"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 )
 
@@ -102,7 +103,7 @@ func failure(err error) *apiError {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errDeadline
 	}
-	if errors.Is(err, observability.ErrBadCursor) || errors.Is(err, billing.ErrBadStatementCursor) {
+	if errors.Is(err, observability.ErrBadCursor) || errors.Is(err, billing.ErrBadStatementCursor) || errors.Is(err, page.ErrBadCursor) {
 		return invalidField("cursor", "not a cursor this API gave out")
 	}
 	if errors.Is(err, accounts.ErrBadSecret) {

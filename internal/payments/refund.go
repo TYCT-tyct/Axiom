@@ -3,11 +3,13 @@ package payments
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"uuid"
 
 	"axiom/internal/billing"
+	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 )
@@ -32,7 +34,8 @@ type RefundRequest struct {
 	User             uuid.UUID
 }
 
-// Refund is the durable state, including the actual frozen credits and original-payment cash quote.
+// Refund is the durable state, including the actual frozen credits and original-payment cash quote. Approved says
+// whether an administrator has released it to the channel, which the console shows as review versus processing.
 type Refund struct {
 	ID          RefundID
 	Order       OrderID
@@ -40,6 +43,9 @@ type Refund struct {
 	Credits     int64
 	Amount      Money
 	ProviderRef string
+	Approved    bool
+	CreatedAt   time.Time
+	FinishedAt  *time.Time
 }
 
 func (r RefundRequest) check() error {
@@ -111,13 +117,18 @@ func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Ref
 	if len(existing) > 0 {
 		return refundReplay(existing[0], r, o)
 	}
+	// Only a paid order has a paid-credit batch to freeze. checkRefundTerms rejects this too, but it runs after the
+	// freeze; answering here keeps a request that can never work out of the billing layer's internal errors.
+	if o.State != Paid && o.State != PartiallyRefunded {
+		return Refund{}, ErrRefundAmount
+	}
 	f := billing.Freeze{Account: o.AccountID, Batch: uuid.UUID(o.ID), Amount: r.Credits}
 	if err = billing.PrepareRefund(ctx, p.db, p.platform, f); err != nil {
 		return Refund{}, err
 	}
 
 	row, err := p.reserveRefund(ctx, o, r, f, isAdmin)
-	return refundOf(row, o), err
+	return refundOf(row, o.Total.Currency), err
 }
 
 func (p *Payments) reserveRefund(ctx context.Context, o Order, r RefundRequest, f billing.Freeze, isAdmin bool) (PaymentsRefund, error) {
@@ -153,7 +164,7 @@ func refundReplay(row PaymentsRefund, r RefundRequest, o Order) (Refund, error) 
 	if row.RequestedCredits != r.Credits || row.Via != r.Via || row.Reason != r.Reason || row.RequestedBy != r.User {
 		return Refund{}, ErrKeyReused
 	}
-	return refundOf(row, o), nil
+	return refundOf(row, o.Total.Currency), nil
 }
 
 func (p *Payments) freezeRefund(ctx context.Context, tx pg.Tx, o LockOrderRow, r RefundRequest, f billing.Freeze, isAdmin bool) (PaymentsRefund, error) {
@@ -231,17 +242,52 @@ func (p *Payments) refundCaps(ctx context.Context, tx pg.Tx, id MerchantID, via 
 	return caps, nil
 }
 
-func refundOf(row PaymentsRefund, o Order) Refund {
+func refundOf(row PaymentsRefund, currency platform.Currency) Refund {
+	var finished *time.Time
+	if row.FinishedAt.Valid {
+		at := row.FinishedAt.Time
+		finished = &at
+	}
 	return Refund{
 		ID: RefundID(row.ID), Order: OrderID(row.OrderID), State: row.State, Via: row.Via, Credits: row.Credits,
-		Amount: Money{Currency: o.Total.Currency, Minor: row.Amount}, ProviderRef: row.ProviderRef,
+		Amount: Money{Currency: currency, Minor: row.Amount}, ProviderRef: row.ProviderRef,
+		Approved: row.ApprovedBy != nil, CreatedAt: row.CreatedAt, FinishedAt: finished,
 	}
+}
+
+// ListRefunds reads the refunds of several orders in one statement, oldest first. The scope is the access control, as
+// for every read here: another account's rows are not visible.
+func (p *Payments) ListRefunds(ctx context.Context, s pg.Scope, orders []OrderID) (map[OrderID][]Refund, error) {
+	if len(orders) == 0 {
+		return map[OrderID][]Refund{}, nil
+	}
+	ids := make([]uuid.UUID, len(orders))
+	for i, id := range orders {
+		ids[i] = uuid.UUID(id)
+	}
+	refunds := make(map[OrderID][]Refund, len(orders))
+	err := p.db.ReadTx(ctx, s, func(tx pg.Tx) error {
+		rows, err := queries.ListRefunds(ctx, tx, ids)
+		if err != nil {
+			return fmt.Errorf("payments: list refunds: %w", err)
+		}
+		for _, r := range rows {
+			currency, err := platform.ParseCurrency(r.PayCurrency)
+			if err != nil {
+				return fmt.Errorf("payments: refund %s is paid in %q: %w", RefundID(r.PaymentsRefund.ID).TypeID(), r.PayCurrency, err)
+			}
+			order := OrderID(r.PaymentsRefund.OrderID)
+			refunds[order] = append(refunds[order], refundOf(r.PaymentsRefund, currency))
+		}
+		return nil
+	})
+	return refunds, err
 }
 
 // GetRefund reads a refund visible in s; another account's ID is indistinguishable from an absent ID.
 func (p *Payments) GetRefund(ctx context.Context, s pg.Scope, id RefundID) (Refund, error) {
 	row, o, err := p.refundAccess(ctx, s, id, false)
-	return refundOf(row, o), err
+	return refundOf(row, o.Total.Currency), err
 }
 
 func (p *Payments) refundAccess(ctx context.Context, s pg.Scope, id RefundID, admin bool) (PaymentsRefund, Order, error) {
