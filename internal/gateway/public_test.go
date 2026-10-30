@@ -5,12 +5,28 @@ import (
 	"testing"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 )
 
+// comparePrices lets a diff see through the unexported fields of a price and a currency.
+var comparePrices = cmp.Options{
+	cmp.Comparer(func(a, b platform.UnitPrice) bool { return a.Cmp(b) == 0 }),
+	cmp.Comparer(func(a, b platform.Currency) bool { return a.String() == b.String() }),
+}
+
 func TestPublicModelsAreTheServedCatalogAtTheAudiencePrice(t *testing.T) {
+	price := func(text string) platform.UnitPrice {
+		p, err := platform.ParseUnitPrice(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
 	r := newRig(t)
 	got := r.models.Public(billing.Audience{})
 	var ids []string
@@ -22,64 +38,65 @@ func TestPublicModelsAreTheServedCatalogAtTheAudiencePrice(t *testing.T) {
 	if want := []string{"acme/alpha", "acme/beta", "anthropic/claude-live"}; !slices.Equal(ids, want) {
 		t.Fatalf("models: %v, want %v", ids, want)
 	}
-	alpha := got[0]
-	if alpha.Name != "alpha" || alpha.Author != "acme" || alpha.ContextLength != 128000 || alpha.MaxOutput != 1000 || !alpha.Streams {
-		t.Errorf("alpha: %+v", alpha)
+	want := PublicModel{
+		ID: "acme/alpha", Name: "alpha", Author: "acme", ContextLength: 128000, MaxOutput: 1000, Streams: true,
+		Abilities: []string{},
+		Pricing: catalog.ScheduleView{Currency: exchangeCurrency(t, "USD"), Rates: []catalog.ScheduleRate{
+			{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemInput, Price: price("0.000001")},
+			{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemCacheWrite, Price: price("0.000001")},
+			{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemOutput, Price: price("0.000002")},
+		}},
 	}
-	if len(alpha.Abilities) != 0 {
-		t.Errorf("alpha abilities: %v", alpha.Abilities)
-	}
-	if alpha.Pricing.Currency.String() != "USD" || len(alpha.Pricing.Basis) != 0 {
-		t.Errorf("alpha pricing: %+v", alpha.Pricing)
-	}
-	rates := map[catalog.Item]string{}
-	for _, rate := range alpha.Pricing.Rates {
-		if rate.ServiceTier != catalog.ServiceTierStandard || !rate.Base || rate.Above != 0 {
-			t.Errorf("alpha rate at %v base %v above %d", rate.ServiceTier, rate.Base, rate.Above)
-		}
-		rates[rate.Item] = rate.Price.String()
-	}
-	if rates[catalog.ItemInput] != "0.000001" || rates[catalog.ItemOutput] != "0.000002" {
-		t.Errorf("alpha rates: %v", rates)
+	if diff := cmp.Diff(want, got[0], comparePrices); diff != "" {
+		t.Errorf("alpha (-want +got):\n%s", diff)
 	}
 }
 
 func TestPublicModelsSelectTheAccountThenTierThenDefaultPrice(t *testing.T) {
 	r := newRig(t)
 	account, tier := accounts.AccountID(uuid.NewV7()), accounts.TierID(uuid.NewV7())
-	layer := func(schedule string) billing.Sold {
-		return billing.Sold{Version: uuid.NewV7(), Schedule: mustPublicSchedule(t, schedule)}
-	}
 	r.sold[r.alpha] = billing.Sold{Version: uuid.NewV7(), Audiences: billing.CompilePrices([]billing.AudiencePrice{
-		{Audience: billing.Audience{}, Target: billing.Selector{Kind: "all"}, Sold: layer(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002"}}`)},
-		{Audience: billing.Audience{Tier: tier}, Target: billing.Selector{Kind: "all"}, Sold: layer(`{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000004"}}`)},
-		{Audience: billing.Audience{Account: account}, Target: billing.Selector{Kind: "all"}, Sold: layer(`{"v":1,"currency":"USD","rates":{"input":"0.000005","output":"0.000006"}}`)},
+		{Audience: billing.Audience{}, Target: billing.Selector{Kind: "all"}, Sold: publicLayer(t, "0.000001", "0.000002")},
+		{Audience: billing.Audience{Tier: tier}, Target: billing.Selector{Kind: "all"}, Sold: publicLayer(t, "0.000003", "0.000004")},
+		{Audience: billing.Audience{Account: account}, Target: billing.Selector{Kind: "all"}, Sold: publicLayer(t, "0.000005", "0.000006")},
 	})}
 	r.publish()
+	for _, tc := range []struct {
+		name     string
+		audience billing.Audience
+		want     string
+	}{
+		{"account before tier", billing.Audience{Account: account, Tier: tier}, "0.000005"},
+		{"tier before default", billing.Audience{Tier: tier}, "0.000003"},
+		{"default", billing.Audience{}, "0.000001"},
+	} {
+		if got := publicInput(t, r, tc.audience); got != tc.want {
+			t.Errorf("%s: input %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
 
-	input := func(a billing.Audience) string {
-		t.Helper()
-		for _, m := range r.models.Public(a) {
-			if m.ID == "acme/alpha" {
-				for _, rate := range m.Pricing.Rates {
-					if rate.Item == catalog.ItemInput && rate.Above == 0 {
-						return rate.Price.String()
-					}
-				}
+// publicInput is alpha's input price below the first context threshold, as the public projection gives it to a.
+func publicInput(t *testing.T, r *rig, a billing.Audience) string {
+	t.Helper()
+	for _, m := range r.models.Public(a) {
+		if m.ID != "acme/alpha" {
+			continue
+		}
+		for _, rate := range m.Pricing.Rates {
+			if rate.Item == catalog.ItemInput && rate.Above == 0 {
+				return rate.Price.String()
 			}
 		}
-		t.Fatalf("no alpha input price for %+v", a)
-		return ""
 	}
-	if got := input(billing.Audience{Account: account, Tier: tier}); got != "0.000005" {
-		t.Errorf("account price: %s", got)
-	}
-	if got := input(billing.Audience{Tier: tier}); got != "0.000003" {
-		t.Errorf("tier price: %s", got)
-	}
-	if got := input(billing.Audience{}); got != "0.000001" {
-		t.Errorf("default price: %s", got)
-	}
+	t.Fatalf("no alpha input price for %+v", a)
+	return ""
+}
+
+func publicLayer(t *testing.T, input, output string) billing.Sold {
+	t.Helper()
+	schedule := `{"v":1,"currency":"USD","rates":{"input":"` + input + `","output":"` + output + `"}}`
+	return billing.Sold{Version: uuid.NewV7(), Schedule: mustPublicSchedule(t, schedule)}
 }
 
 func mustPublicSchedule(t *testing.T, text string) catalog.Schedule {
