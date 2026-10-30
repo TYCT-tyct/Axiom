@@ -11,6 +11,8 @@ import (
 
 // Concurrent retries must return the same physical usage and charge the overlapped input and image output once.
 func TestConcurrentOverlapAndImageSettlements(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{})
 	q := metered(t)
 	q.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cache_read":"0.000000001","cache_write":"0.000000002","output":"0.000000001","image_out":"0.00000001"}}`)

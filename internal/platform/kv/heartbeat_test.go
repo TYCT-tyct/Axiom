@@ -363,3 +363,59 @@ func openNamed(t *testing.T, db *pg.DB, scope pg.Scope, name string) (*kv.Client
 	t.Cleanup(func() { closeQuietly(t, client) })
 	return client, nil
 }
+
+// TestHeartbeatReportsTheKeyRing: each beat carries the versions this node has loaded and the one it writes, and the
+// time the write version became current changes only when that version changes. The lifecycle reads those columns to
+// activate and retire without stopping writers; only identifiers are stored.
+func TestHeartbeatReportsTheKeyRing(t *testing.T) {
+	t.Parallel()
+	server := kvtest.New(t)
+	db := openDB(t)
+	scope := pg.PlatformScope()
+	var versions atomic.Value
+	var active atomic.Uint32
+	versions.Store([]uint32{1})
+	active.Store(1)
+	cfg := server.Config(kvtest.Namespace())
+	cfg.Nodes = 1
+	cfg.Keys = func() kv.KeyReport {
+		return kv.KeyReport{Versions: versions.Load().([]uint32), Active: active.Load()}
+	}
+	client, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{DB: db, Scope: scope}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeQuietly(t, client) })
+
+	read := func() ([]int64, int64, time.Time) {
+		t.Helper()
+		var got []int64
+		var version int64
+		var since time.Time
+		if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+			return tx.QueryRow(t.Context(),
+				"SELECT key_versions, key_active, key_active_since FROM platform.nodes").Scan(&got, &version, &since)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got, version, since
+	}
+	before, version, since := read()
+	if len(before) != 1 || before[0] != 1 || version != 1 {
+		t.Fatalf("the first report is %v/%d, want [1]/1", before, version)
+	}
+	// A reload adds versions; the write version has not moved, so the quiet window keeps its start.
+	versions.Store([]uint32{1, 2})
+	client.Beat(t.Context())
+	after, version, sameSince := read()
+	if len(after) != 2 || version != 1 || !sameSince.Equal(since) {
+		t.Fatalf("a report without an active change moved the quiet start: %v/%d since %v, before %v", after, version, sameSince, since)
+	}
+	// Activation moves the write version, which restarts the quiet window from this beat.
+	active.Store(2)
+	client.Beat(t.Context())
+	after, version, moved := read()
+	if len(after) != 2 || version != 2 || !moved.After(since) {
+		t.Fatalf("activation did not move the write version or its quiet start: %v/%d since %v", after, version, moved)
+	}
+}

@@ -23,6 +23,8 @@ func usageOf(t *testing.T, counts map[catalog.Item]int64) catalog.Usage {
 }
 
 func TestCorrectionRePricesAnEstimatedCharge(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
 	f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 0, 0, in, catalog.ItemOutput, webSearch)))
@@ -78,6 +80,8 @@ func assertCorrection(t *testing.T, b *bank, request uuid.UUID, charged int64) {
 // completion_tokens includes reasoning the log does not split). A settlement whose only charged item is the estimated
 // input is therefore the one a new-api record corrects, and it replaces the estimate exactly.
 func TestCorrectionFromANewAPIRecord(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
 	f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 0, 0, in)))
@@ -105,6 +109,8 @@ func TestCorrectionFromANewAPIRecord(t *testing.T) {
 // internal/suppliers/internal/sub2api/charges.go:191 and quirks.go:41). It declares every count field present, so a
 // record corrects an estimated input and output together.
 func TestCorrectionFromASub2APIRecord(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(metered(t), 100)
 	f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 20, 0, in, catalog.ItemOutput)))
@@ -131,6 +137,8 @@ func TestCorrectionFromASub2APIRecord(t *testing.T) {
 // past it; the rest is the platform's, recorded on the books and alerted, so a correction cannot push the balance under
 // its floor.
 func TestCorrectionIsBorneAtTheFloor(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 100, -50, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
 	if f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 0, 0, in))); !f.Estimated || f.Charged != platform.AmountExact(100) {
@@ -163,6 +171,8 @@ func TestCorrectionIsBorneAtTheFloor(t *testing.T) {
 // TestCorrectionRefusesAMissingItem: a supplier record that leaves out an item we had to estimate is not a complete
 // count. Pricing the missing item as zero would refund it instead of correcting it, so the estimate stays.
 func TestCorrectionRefusesAMissingItem(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
 	f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 20, 0, in, catalog.ItemOutput)))
@@ -182,6 +192,8 @@ func TestCorrectionRefusesAMissingItem(t *testing.T) {
 // TestCorrectionRefusesUnknownUsage: a charge with an item the upstream did not name cannot be replaced from a
 // supplier record that only names items; the old estimate stays.
 func TestCorrectionRefusesUnknownUsage(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
 	u, err := catalog.NewUsage(map[catalog.Item]int64{in: 100}, catalog.ServiceTierStandard,
@@ -205,6 +217,8 @@ func TestCorrectionRefusesUnknownUsage(t *testing.T) {
 // TestCorrectionWaitsForTheReservation: an event read before its settlement is committed is kept, not dropped, and is
 // corrected once the reservation is there.
 func TestCorrectionWaitsForTheReservation(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
 	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1, Usage: usageOf(t, map[catalog.Item]int64{in: 50}), Reported: 1 << in}
@@ -223,6 +237,8 @@ func TestCorrectionWaitsForTheReservation(t *testing.T) {
 // TestCorrectionRefusesAPartlyReportedCharge: a settlement with a reported item is already actual for it; correcting it
 // from the supplier's counts would charge that item twice, so it is left alone.
 func TestCorrectionRefusesAPartlyReportedCharge(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
 	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 100, 0, 0, catalog.ItemOutput, webSearch))); err != nil {
@@ -242,6 +258,8 @@ func TestCorrectionRefusesAPartlyReportedCharge(t *testing.T) {
 // covered its cost; it is no_usage when the stream broke before any usage was reported. The supplier's record can
 // still be complete, and then it is exactly the record that must replace the estimate.
 func TestCorrectionTrustsTheRecordNotTheAttemptsCostFlag(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	h := b.holdOn(b.exact, 100)
 	f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 0, 0, in)))
@@ -264,6 +282,8 @@ func TestCorrectionTrustsTheRecordNotTheAttemptsCostFlag(t *testing.T) {
 // TestTestEventDoesNotWaitForAReservation: a probe has no tenant reservation, and must be discarded before the
 // reservation lookup, not retained in the retry table forever.
 func TestTestEventDoesNotWaitForAReservation(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, fallbackBankConfig)
 	ev := suppliers.ChargeEvent{ID: uuid.NewV7(), Request: uuid.NewV7(), AttemptSeq: 1, Test: true, Revision: 1}
 	c := &corrector{db: b.app, scope: b.platform}

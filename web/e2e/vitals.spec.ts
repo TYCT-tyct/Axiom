@@ -8,7 +8,7 @@ import { adminUrl } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { consoleSuite } from "./console-scenes.ts";
 import { signedInAs } from "./mock-auth.ts";
-import type { Suite } from "./scene.ts";
+import type { Scene, Suite } from "./scene.ts";
 import { words } from "./words.ts";
 
 // The performance budgets of docs/frontend.md「前端性能指标」 as checks: LCP and CLS of the main pages on a phone over a
@@ -42,6 +42,12 @@ const budget = {
 const phone = { rtt: 150, down: 1.6 * 1024 * 0.9 * 128, up: 750 * 0.9 * 128, cpu: 4 };
 const desktop = { rtt: 40, down: 10 * 1024 * 0.9 * 128, up: 10 * 1024 * 0.9 * 128, cpu: 1 };
 type Profile = typeof phone;
+
+// Every number here is a timing of this host, so a busy runner stretches it: the same page measured 2.9 s on a
+// developer's host and 5.8 s on the CI runner. For every page but the overview itself, the console overview, the lightest page with the
+// same shell and a table of mocked data, is loaded three times under the same throttle first; its LCP says how this host is
+// doing, and the page's LCP is scaled to the overview's LCP on the 2026-10-30 run the ceiling was set on
+// (docs/frontend.md「实测」). The overview is measured in the same test, so a filtered single test needs no earlier run.
 
 // web-vitals' IIFE build, which a page gets before its own scripts so it sees the whole load.
 // The package does not export its IIFE file, so it is found beside the CommonJS one the package does.
@@ -85,11 +91,38 @@ async function vitals(page: Page): Promise<Vitals> {
 
 const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
 
+// loadsOf is one scene loaded three times, each in a fresh context with the profile's throttle.
+async function loadsOf(
+  browser: Browser,
+  profile: Profile,
+  device: Parameters<Browser["newContext"]>[0],
+  suite: Suite,
+  scene: Scene,
+): Promise<Vitals[]> {
+  const loads: Vitals[] = [];
+  for (let i = 0; i < 3; i++) {
+    const page = await measuredPage(browser, profile, device);
+    await suite.prepare(page, scene);
+    await scene.open(page);
+    loads.push(await vitals(page));
+    await page.context().close();
+  }
+  return loads;
+}
+
+const lcpOf = async (
+  browser: Browser,
+  profile: Profile,
+  device: Parameters<Browser["newContext"]>[0],
+  suite: Suite,
+  scene: Scene,
+) => median((await loadsOf(browser, profile, device, suite, scene)).map((l) => l.LCP ?? Number.POSITIVE_INFINITY));
+
 // A throttled page is slow by design: the 4x CPU and the slow network stretch a load and its waits well past the 30 s.
 test.describe.configure({ timeout: 120_000 });
 
-function record(name: string, value: number, { target, ceiling }: Limit) {
-  const line = `${value.toFixed(3)} (target ${target}${value > target ? ", over" : ""}, ceiling ${ceiling ?? "none"})`;
+function record(name: string, value: number, { target, ceiling }: Limit, note = "") {
+  const line = `${value.toFixed(3)}${note ? ` (${note})` : ""} (target ${target}${value > target ? ", over" : ""}, ceiling ${ceiling ?? "none"})`;
   console.log(`vitals ${name}: ${line}`);
   test.info().annotations.push({ type: name, description: line });
   if (ceiling !== undefined) {
@@ -105,13 +138,26 @@ function sceneOf(suite: Suite, name: string) {
   return scene;
 }
 
+// The console overview is the baseline: the lightest page with the same shell and mocked table, so a slow host or a busy
+// neighbour stretches it and the page under test alike. reference is its median LCP on the 2026-10-30 CI run that the
+// 6 s ceiling came from; scaling to it keeps the ceiling a page budget rather than a host budget.
+const baseline = {
+  scene: sceneOf(consoleSuite, "overview"),
+  reference: { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>,
+};
+
 // The pages a person lands on and works in, by their names in the suites' scene lists.
 const pages: [Suite, string][] = [
   ...["overview", "keys", "calls", "balance", "statement"].map((name): [Suite, string] => [consoleSuite, name]),
   ...["users", "suppliers", "models", "pricing", "settings"].map((name): [Suite, string] => [adminSuite, name]),
 ];
 
-const profiles = [
+const profiles: {
+  name: "phone" | "desktop";
+  profile: Profile;
+  device: Parameters<Browser["newContext"]>[0];
+  lcp: Limit;
+}[] = [
   { name: "phone", profile: phone, device: devices["Pixel 5"], lcp: budget.lcpPhone },
   { name: "desktop", profile: desktop, device: devices["Desktop Chrome"], lcp: budget.lcpDesktop },
 ];
@@ -121,16 +167,20 @@ test.describe("loading", () => {
     for (const [suite, sceneName] of pages) {
       test(`${suite.app} ${sceneName}: LCP and CLS on ${name}`, async ({ browser }) => {
         const scene = sceneOf(suite, sceneName);
-        const loads: Vitals[] = [];
-        for (let i = 0; i < 3; i++) {
-          const page = await measuredPage(browser, profile, device);
-          await suite.prepare(page, scene);
-          await scene.open(page);
-          loads.push(await vitals(page));
-          await page.context().close();
-        }
+        const isBaseline = scene === baseline.scene;
+        const base = isBaseline ? undefined : await lcpOf(browser, profile, device, consoleSuite, baseline.scene);
+        const loads = await loadsOf(browser, profile, device, suite, scene);
         const label = `${suite.app} ${sceneName} ${name}`;
-        record(`LCP ${label}`, median(loads.map((l) => l.LCP ?? Number.POSITIVE_INFINITY)), lcp);
+        const raw = median(loads.map((l) => l.LCP ?? Number.POSITIVE_INFINITY));
+        const reference = baseline.reference[name];
+        record(
+          `LCP ${label}`,
+          base === undefined ? raw : (raw * reference) / base,
+          lcp,
+          base === undefined
+            ? `raw ${raw.toFixed(0)} ms`
+            : `raw ${raw.toFixed(0)} ms, overview ${base.toFixed(0)} of ${reference} ms`,
+        );
         record(`CLS ${label}`, Math.max(...loads.map((l) => l.CLS ?? 0)), budget.cls);
       });
     }
@@ -264,6 +314,9 @@ test.describe("long list", () => {
   }
 
   test("console calls: 1000 rows scroll without dropped frames", async ({ browser }) => {
+    // The list has no ceiling: its frames and long tasks are reported. Loading 1000 rows through the infinite scroll can
+    // take more than the 120 s describe timeout on a loaded host, which would fail before it reports anything.
+    test.slow();
     const page = await measuredPage(browser, phone, devices["Desktop Chrome"]);
     const state = await mockConsole(page, "worst");
     signedInAs(state);
@@ -280,6 +333,7 @@ test.describe("long list", () => {
   });
 
   test("admin users: 1000 rows scroll without dropped frames", async ({ browser }) => {
+    test.slow();
     const page = await measuredPage(browser, phone, devices["Desktop Chrome"]);
     const state = await mockAdmin(page, "worst");
     signedInAs(state, "mfa");

@@ -144,6 +144,8 @@ func (b *bank) balanceOf(account uuid.UUID) int64 {
 // was spent from it after its expiry and before the run is use, not lapse (docs/domains/billing.md「额度批次」); of
 // two batches the one that expires is spent first, so a charge of 130 takes all of it and 30 of the other.
 func TestExpire(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name         string
 		charge, want int64
@@ -194,6 +196,8 @@ func (b *bank) wantExpired(charge, want int64, expiring, lasting uuid.UUID) {
 
 // TestExpireLeavesWhatIsNotDue: a batch that has not reached its expiry, or has none, is not touched.
 func TestExpireLeavesWhatIsNotDue(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, farAhead)
 	b.creditBatch(100, nil)
@@ -210,6 +214,8 @@ func TestExpireLeavesWhatIsNotDue(t *testing.T) {
 // run, once the reservation is settled. A floor below zero is an allowance for charges and the write-off does not use
 // it: the user is not put in debt for credit that lapsed.
 func TestExpireKeepsReservationsPayable(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name                  string
 		floor, settle         int64
@@ -245,6 +251,8 @@ func TestExpireKeepsReservationsPayable(t *testing.T) {
 // TestExpireReversesAReturn: a charge given back is allocated again (#277), so an account whose ledger holds one is
 // written off like any other: the return restores the batch, and the run expires what is left.
 func TestExpireReversesAReturn(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo)
 	b.charge(60)
@@ -284,6 +292,8 @@ func (b *bank) reverse(n int64) {
 // lock, both go through: the call is charged in full, nothing is borne, the floor holds, and the credit is gone in the
 // end, either spent or written off.
 func TestExpireRacesSettle(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	for round := range 15 {
 		b.creditBatch(300, longAgo)
@@ -309,6 +319,8 @@ func TestExpireRacesSettle(t *testing.T) {
 // TestChargesTakeEachUnitFromOneBatch: charges settled at once against several batches are allocated, by one replay,
 // to the batches in expiry order, every unit to exactly one of them; and two replays at once change nothing twice.
 func TestChargesTakeEachUnitFromOneBatch(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	soon, later, never := b.creditBatch(100, farAhead), b.creditBatch(100, muchLater), b.creditBatch(800, nil)
 	holds := make([]*Hold, 10)
@@ -348,6 +360,8 @@ func TestChargesTakeEachUnitFromOneBatch(t *testing.T) {
 // in the end is what a replay of the ledger from nothing gives: no movement is missed or replayed twice, whatever the
 // order the two interleave in.
 func TestReplayWhileCharging(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100_000, farAhead)
 	b.creditBatch(100_000, nil)
@@ -388,6 +402,8 @@ func TestReplayWhileCharging(t *testing.T) {
 // TestExpireRefusesAnAllocationThatDisagrees: a balance the batches do not fund, which no code here makes, is not
 // written off against: the run fails and writes nothing.
 func TestExpireRefusesAnAllocationThatDisagrees(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo)
 	b.sql("UPDATE billing.balances SET balance = balance + 1")

@@ -47,10 +47,29 @@ func (r Rotation) checkInventory(ctx context.Context, tx pg.Tx) error {
 	if rows.Err() != nil {
 		return fmt.Errorf("keyring: cannot read envelope inventory: %w", rows.Err())
 	}
+	// A registered store whose module migration forgot the fence would accept writes retirement cannot see. Fail at
+	// startup instead of relying on that migration being deployed correctly.
+	for _, store := range r.Stores {
+		var fenced bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT FROM pg_catalog.pg_trigger t
+			JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = $1 AND c.relname = $2
+			  AND t.tgname = 'fence_envelope_key_version'
+			  AND t.tgfoid = 'platform.fence_envelope_key_version()'::regprocedure
+			  AND t.tgenabled IN ('O', 'A'))`,
+			store.Schema, store.Table).Scan(&fenced); err != nil {
+			return fmt.Errorf("keyring: cannot inspect retirement fences: %w", err)
+		}
+		if !fenced {
+			return fmt.Errorf("keyring: envelope store %s has no retirement fence", store.table())
+		}
+	}
 	return nil
 }
 
-func (r Rotation) checkReferences(ctx context.Context, tx pg.Tx, ring *Keyring, status KeyStatus) error {
+func (r Rotation) checkReferences(ctx context.Context, tx pg.Tx, ring *keySnapshot, status KeyStatus) error {
 	if err := r.checkInventory(ctx, tx); err != nil {
 		return err
 	}
@@ -62,7 +81,7 @@ func (r Rotation) checkReferences(ctx context.Context, tx pg.Tx, ring *Keyring, 
 	return nil
 }
 
-func (s EnvelopeStore) checkReferences(ctx context.Context, tx pg.Tx, ring *Keyring, status KeyStatus) error {
+func (s EnvelopeStore) checkReferences(ctx context.Context, tx pg.Tx, ring *keySnapshot, status KeyStatus) error {
 	column := s.column("key_version")
 	rows, err := tx.Query(ctx, "SELECT DISTINCT "+column+" FROM "+s.table()+" WHERE "+column+" IS NOT NULL")
 	if err != nil {
@@ -93,8 +112,10 @@ func (r Rotation) unreferenced(ctx context.Context, tx pg.Tx, version uint32) er
 	if err := r.checkInventory(ctx, tx); err != nil {
 		return err
 	}
-	// M2 retirement requires stopped writers. The lifecycle lock serializes other rotation commands,
-	// but intentionally grants no broader table privilege to the application's column-limited role.
+	// Retirement holds the exclusive fence lock while it runs this check, and every envelope write holds that lock
+	// shared to commit, so no writer can appear between the check and the tombstone; one that arrives later is refused
+	// by the retirement marker. Retirement still grants no broader table privilege to the application's column-limited
+	// role.
 	for _, store := range r.Stores {
 		var exists bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM "+store.table()+" WHERE "+store.column("key_version")+" = $1)",
@@ -102,7 +123,7 @@ func (r Rotation) unreferenced(ctx context.Context, tx pg.Tx, version uint32) er
 			return fmt.Errorf("keyring: cannot read envelope references: %w", err)
 		}
 		if exists {
-			return fmt.Errorf("keyring: version %d is still referenced", version)
+			return fmt.Errorf("%w: version %d", ErrReferenced, version)
 		}
 	}
 	return nil
@@ -126,23 +147,23 @@ func (r Rotation) RewrapBatch(ctx context.Context, cursor RewrapCursor, limit in
 	var count int
 	var next RewrapCursor
 	err := r.transaction(ctx, func(ctx context.Context, tx pg.Tx) error {
-		ring, err := Load(r.Path)
+		snapshot, err := loadSnapshot(r.Path)
 		if err != nil {
 			return err
 		}
-		status, err := checkVersions(ctx, tx, ring, 0)
+		status, err := checkVersions(ctx, tx, snapshot, 0)
 		if err != nil {
 			return err
 		}
 		if err := r.checkInventory(ctx, tx); err != nil {
 			return err
 		}
-		ring.latest = status.Active
-		count, next, err = r.rewrapStores(ctx, tx, ring, cursor, limit)
+		snapshot = snapshot.withActive(status.Active)
+		count, next, err = r.rewrapStores(ctx, tx, snapshot, cursor, limit)
 		// Another run or activation can leave old rows behind the cursor. Confirm completion from the beginning
 		// under the lifecycle lock; the extra pass is linear, rather than a rescan on every batch.
 		if err == nil && count == 0 && cursor != (RewrapCursor{}) {
-			count, next, err = r.rewrapStores(ctx, tx, ring, RewrapCursor{}, limit)
+			count, next, err = r.rewrapStores(ctx, tx, snapshot, RewrapCursor{}, limit)
 		}
 		return err
 	})
@@ -154,7 +175,7 @@ func (r Rotation) RewrapBatch(ctx context.Context, cursor RewrapCursor, limit in
 
 // rewrapStores takes the first store that still has an old envelope, so one batch touches one table and its audit entry
 // names the store it came from. Stores before the cursor are exhausted; a store the cursor finished is passed over.
-func (r Rotation) rewrapStores(ctx context.Context, tx pg.Tx, ring *Keyring, cursor RewrapCursor, limit int) (int, RewrapCursor, error) {
+func (r Rotation) rewrapStores(ctx context.Context, tx pg.Tx, ring *keySnapshot, cursor RewrapCursor, limit int) (int, RewrapCursor, error) {
 	for i := cursor.store; i < len(r.Stores); i++ {
 		store := r.Stores[i]
 		after := ""
@@ -213,13 +234,13 @@ func (s EnvelopeStore) batch(ctx context.Context, tx pg.Tx, active uint32, after
 	return batch, nil
 }
 
-func (s EnvelopeStore) rewrap(ctx context.Context, tx pg.Tx, ring *Keyring, after string, limit int) (int, string, error) {
+func (s EnvelopeStore) rewrap(ctx context.Context, tx pg.Tx, ring *keySnapshot, after string, limit int) (int, string, error) {
 	batch, err := s.batch(ctx, tx, ring.latest, after, limit)
 	if err != nil {
 		return 0, "", err
 	}
 	for _, row := range batch {
-		sealed, err := ring.Rewrap(row.sealed, Location{Table: s.name(), RowID: row.id, Purpose: s.Purpose})
+		sealed, err := ring.rewrap(row.sealed, Location{Table: s.name(), RowID: row.id, Purpose: s.Purpose})
 		if err != nil {
 			return 0, "", fmt.Errorf("keyring: rewrap version %d: %w", row.sealed.KeyVersion, err)
 		}

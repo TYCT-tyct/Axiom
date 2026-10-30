@@ -14,6 +14,8 @@ import (
 )
 
 func TestRefundBooks(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name           string
 		cross, withFee bool
@@ -71,6 +73,8 @@ func (b *bank) checkRefundBooks(cross, withFee bool) {
 }
 
 func TestRefundAmountSplits(t *testing.T) {
+	t.Parallel()
+
 	for seed := range uint64(200) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			checkRefundSplit(t, seed)
@@ -114,6 +118,8 @@ func checkRefundSplit(t *testing.T, seed uint64) {
 }
 
 func TestRefundAmountLimits(t *testing.T) {
+	t.Parallel()
+
 	credit := CreditBatch{Amount: 1000, Payment: &Payment{Currency: currency(t, "USD"), Paid: 1030, Fee: 30}}
 	for _, tc := range []struct {
 		name    string
@@ -137,6 +143,8 @@ func TestRefundAmountLimits(t *testing.T) {
 }
 
 func TestRefundPolicyAndRemainder(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	p := b.paid(1000, Payment{Currency: currency(t, "USD"), Paid: 1031, Fee: 31}, uuid.UUID{})
 	if err := b.creditPaid(p); err != nil {
@@ -172,6 +180,8 @@ func TestRefundPolicyAndRemainder(t *testing.T) {
 }
 
 func TestConcurrentRefundAmounts(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	p := b.paid(1000, Payment{Currency: currency(t, "USD"), Paid: 1030, Fee: 30}, uuid.UUID{})
 	if err := b.creditPaid(p); err != nil {
