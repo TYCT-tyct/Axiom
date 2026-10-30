@@ -183,8 +183,8 @@ type session struct {
 	tries      []try                   // the same attempts as the call log needs them: their entry and when they began
 	currency   platform.Currency       // of the last attempt's price, the site's until one is made
 	skips      skips
-	last       *attempt        // the attempt in progress, or the last one made
-	textCounts [2]textEstimate // one count (or failure) per supported encoding for this session
+	last       *attempt                                // the attempt in progress, or the last one made
+	textCounts [billing.NumTokenizers - 1]textEstimate // one count (or failure) per family with a count, for this session
 
 	aggregate bool            // the client wants one body: its stream is aggregated, and nothing is written before it is whole
 	part      *protocol.Relay // the aggregate reply of an attempt that generated content, kept for the answer
