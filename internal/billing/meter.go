@@ -10,11 +10,13 @@ import (
 
 // Progress is what one attempt has shown so far; gateway copies it from protocol.Progress after every read.
 type Progress struct {
-	ContentBytes int64 // the decoded text, reasoning and tool arguments of complete events, in UTF-8 bytes
-	PartialBytes int64 // the raw bytes of the event still being read
-	Searches     int64 // the web search events seen
-	Reported     catalog.Usage
-	Final        catalog.ItemSet // the reported items whose counts are final
+	ContentBytes   int64 // the decoded text, reasoning and tool arguments of complete events, in UTF-8 bytes
+	PartialBytes   int64 // the raw bytes of the event still being read
+	Searches       int64 // the web search events seen
+	ToolCalls      int64 // the client tool calls seen, whose framework the output bound adds
+	ToolCallTokens int64 // the tokens each tool call's framework takes in the attempt's family
+	Reported       catalog.Usage
+	Final          catalog.ItemSet // the reported items whose counts are final
 }
 
 // MeterStep tells the meter's owner what to do before the next read: start Extend with Request, stop reading until
@@ -95,7 +97,8 @@ func (m *Meter) searchCost(excess int64) platform.Exact {
 // Observe meters the progress and returns what the owner must do. Input-side counts are exact once reported, but
 // they never move the meter: the quote holds every sampling's input at its bound, and a count below the bound frees
 // nothing, since a later sampling may still reread the whole context. Output is the larger of the reported count and
-// the byte bound until the count is final, and at most the output limit; searches are counted by event.
+// the byte bound plus each tool call's framework until the count is final, and at most the output limit; searches are
+// counted by event.
 func (m *Meter) Observe(p Progress) MeterStep {
 	if m.q.segment == 0 {
 		return MeterStep{Left: math.MaxInt64} // reserved in full: never extended, never truncated
@@ -126,7 +129,7 @@ func (m *Meter) Observe(p Progress) MeterStep {
 func (m *Meter) used(p Progress) (out, excess int64) {
 	out = p.Reported.OutputTotal()
 	if !p.Final.Has(catalog.ItemOutput) {
-		out = max(out, add(p.ContentBytes, p.PartialBytes))
+		out = max(out, add(add(p.ContentBytes, p.PartialBytes), mul(max(p.ToolCalls, 0), max(p.ToolCallTokens, 0))))
 	}
 	searches := max(p.Searches, p.Reported.Count(catalog.ItemWebSearch))
 	return min(out, m.q.outputCap), max(searches-m.q.searches, 0)

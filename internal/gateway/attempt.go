@@ -213,11 +213,16 @@ func (s *session) record(a *attempt, failed bool, scope routing.Scope, next rout
 
 // attempt is one try at an endpoint, from the moment its identity is fixed. The goroutine that runs the call owns it.
 type attempt struct {
-	s       *session
-	i       int // index in s.ends
-	entry   routing.Entry
-	conn    Conn
-	meter   *billing.Meter // bound to the entry that was priced
+	s     *session
+	i     int // index in s.ends
+	entry routing.Entry
+	conn  Conn
+	meter *billing.Meter // bound to the entry that was priced
+
+	// toolCallTokens is what each client tool call's framework adds to the output in this entry's family, the same
+	// figure settlement uses, so the meter's bound and the estimate agree.
+	toolCallTokens int64
+
 	cancel  context.CancelCauseFunc
 	release context.CancelFunc
 	unhook  func() bool // of the node's shutdown, which cancels the attempt
@@ -238,7 +243,10 @@ type attempt struct {
 // becomes of it.
 func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Conn) (*attempt, context.Context) {
 	kept := s.c.Hold.Kept[i]
-	a := &attempt{s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept)}
+	a := &attempt{
+		s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept),
+		toolCallTokens: billing.ToolCallTokens(billing.TokenizerOf(entry.Target.Model)),
+	}
 	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
 	a.obs.Source = uuid.UUID(s.c.Admission.OwnerID())
 	a.obs.BreakerFallback = entry.BreakerFallback
