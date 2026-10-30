@@ -2,9 +2,12 @@ package accounts_test
 
 import (
 	"errors"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/accounts"
@@ -80,6 +83,64 @@ func TestAccountTierChangeIsAuditedOnce(t *testing.T) {
 	})
 	if got.Tier.ID != accounts.TierID(pro) {
 		t.Fatal("a refused change moved the account")
+	}
+}
+
+// TestAccountTierChangeWaitsForTheAccountRow: one transaction holds the account row after moving it to Pro; a second
+// change to Pro starts before that commit and waits. It must see the committed Pro and succeed as a no-op, not read the
+// old tier through a join and report the account missing after the row lock is released.
+func TestAccountTierChangeWaitsForTheAccountRow(t *testing.T) {
+	t.Parallel()
+	db, _, a, _ := callSetup(t)
+	if _, err := exec(t, db, platform, member(":s1", ":a1", "personal", ":u1", ":a1")); err != nil {
+		t.Fatal(err)
+	}
+	pro := uuid.NewV7()
+	if _, err := exec(t, db, platform, `INSERT INTO accounts.tiers(id,site_id,name) VALUES ('`+uuid.UUID(pro).String()+`','`+uuid.UUID(s1).String()+`','Pro')`); err != nil {
+		t.Fatal(err)
+	}
+	locked, release := make(chan struct{}), make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), `UPDATE accounts.accounts SET tier_id=$2 WHERE id=$1`, uuid.UUID(a1), pro); err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+	second := make(chan error, 1)
+	go func() {
+		second <- db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+			return a.SetAccountTier(t.Context(), tx, system, accounts.AccountID(a1), accounts.TierID(pro), "same tier")
+		})
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		waiting, err := strconv.Atoi(texts(t, db, platform, `SELECT count(*)::text FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'
+			AND query LIKE '%accounts.accounts%' AND query LIKE '%FOR NO KEY UPDATE%'`)[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatal("the second change never waited on the account row")
+		}
+		runtime.Gosched()
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("the waiting change: %v", err)
 	}
 }
 
