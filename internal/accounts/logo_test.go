@@ -2,6 +2,7 @@ package accounts_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"image"
 	"image/color"
 	"image/png"
@@ -122,19 +123,67 @@ func TestParseLogoRasterImages(t *testing.T) {
 		t.Fatal("garbage was accepted as PNG")
 	}
 
-	webp := make([]byte, 30)
-	copy(webp[0:], "RIFF")
-	copy(webp[8:], "WEBP")
-	copy(webp[12:], "VP8X")
-	webp[16] = 10                                   // chunk size, little-endian
-	webp[24], webp[25], webp[26] = 0x1f, 0x03, 0x00 // 800 - 1
-	webp[27], webp[28], webp[29] = 0x2f, 0x01, 0x00 // 304 - 1
-	logo, err = accounts.ParseLogo(accounts.LogoWebP, webp)
-	if err != nil {
-		t.Fatalf("ParseLogo WebP: %v", err)
+	testWebPFixtures(t)
+}
+
+type webpImage struct {
+	name   string
+	hex    string
+	width  int
+	height int
+}
+
+type webpBroken struct {
+	name string
+	hex  string
+}
+
+func testWebPFixtures(t *testing.T) {
+	// Real files decoded by libwebp: the smallest lossless container, a lossless chunk whose size is odd and padded,
+	// and an extended container with alpha and a VP8 image.
+	testDecodableWebP(t, []webpImage{
+		{"smallest lossless", "5249464614000000574542505650384c080000002f00000000888808", 1, 1},
+		{"padded lossless", "5249464616000000574542505650384c090000002f00000000888808ff00", 1, 1},
+		{"extended lossy", "524946464000000057454250565038580a00000010000000000000000000414c504802000000000056503820180000003001009d012a0100010001402625a400037000fefd366800", 1, 1},
+	})
+
+	// The failures that a header-only parser missed: a VP8X canvas without image data, and valid files cut short.
+	testRejectedWebP(t, []webpBroken{
+		{"no image data", "524946461600000057454250565038580a000000000000001f03002f0100"},
+		{"truncated lossless", "5249464614000000574542505650384c080000002f000000008888"},
+		{"truncated extended", "524946464000000057454250565038580a00000010000000000000000000414c504802000000000056503820180000003001009d012a0100010001402625a400037000fefd3668"},
+	})
+}
+
+func testDecodableWebP(t *testing.T, tests []webpImage) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := hex.DecodeString(test.hex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logo, err := accounts.ParseLogo(accounts.LogoWebP, data)
+			if err != nil {
+				t.Fatalf("ParseLogo WebP: %v", err)
+			}
+			if logo.Width != test.width || logo.Height != test.height || !bytes.Equal(logo.Bytes, data) {
+				t.Fatalf("WebP logo = %dx%d, %d bytes", logo.Width, logo.Height, len(logo.Bytes))
+			}
+		})
 	}
-	if logo.Width != 800 || logo.Height != 304 {
-		t.Fatalf("WebP logo = %dx%d", logo.Width, logo.Height)
+}
+
+func testRejectedWebP(t *testing.T, tests []webpBroken) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := hex.DecodeString(test.hex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if logo, err := accounts.ParseLogo(accounts.LogoWebP, data); err == nil {
+				t.Fatalf("a WebP without a complete image was accepted: %dx%d", logo.Width, logo.Height)
+			}
+		})
 	}
 }
 

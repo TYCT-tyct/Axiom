@@ -283,7 +283,7 @@
 | 一个用户同一平台角色只有一条有效授予 | 部分唯一索引 `platform_grants_held` + `ON CONFLICT DO NOTHING`；测试：两条授予同时开始（授予表被锁住直到两条都在等待），只留一条授予、一条审计 |
 | 主站的币种是 `USD` | `InitSite` 写库前核对；测试：EUR 被拒，没有任何写入（核对在事务之前） |
 | 站点的币种不可改 | `axiom_app` 对 `sites.currency` 没有 `UPDATE` 权限；`Money` 的币种由它决定 |
-| 站点 logo 的类型、尺寸和字节数在入库前受约束 | `site_logos` 的 CHECK；解析器只接受 SVG、PNG、WebP，PNG/WebP 的宽高从文件头读出，SVG 重建后的字节不超过 256 KiB；测试覆盖脚本、事件属性、外部引用、DTD、超限尺寸和不可读文件 |
+| 站点 logo 的类型、尺寸和字节数在入库前受约束 | `site_logos` 的 CHECK；解析器只接受 SVG、PNG、WebP，PNG/WebP 先读头限制尺寸，再完整解码校验，SVG 重建后的字节不超过 256 KiB；测试覆盖脚本、事件属性、外部引用、DTD、超限尺寸和不可读文件 |
 | 当前 logo 一定属于本站点，且旧地址不变 | `(id, logo_hash) → site_logos(site_id, hash)` 复合外键；地址里的 SHA-256 就是内容的哈希，行只插入不更新；测试换图后旧 hash 仍读出原字节 |
 | 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，数据库拒绝审计时开启失败，因素、恢复码、会话都没有留下 |
 | 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
@@ -310,7 +310,7 @@
 | `Users` | 用户列表，新的在前，键集分页（上一页最后一个用户的 ID），可按站点、按邮箱前缀筛。前缀按字面匹配（`%`、`_` 不是通配符）、不分大小写，用 `users_email_prefix`（`text_pattern_ops`）的索引。创建时间取自 UUIDv7 的时间戳（ID 的顺序就是创建的顺序，没有 `created_at` 列） |
 | `Account` | 账户、等级、主人；账户没有成员时是 `ErrNotFound`（账户总有主人） |
 
-- **站点 logo 的解析与发送**：`logo.go` 的 `ParseLogo` 是唯一的解析入口，返回重建后的字节、类型、宽高和 SHA-256；`SetSiteLogo` 只存这个结果。PNG 用标准库的 `png.DecodeConfig` 读头，WebP 按 VP8X/VP8/VP8L 头读画布尺寸，SVG 用 `encoding/xml` 逐个 token 重建：允许的元素和属性各是一张表，值里的 `href` 只能是本文件的 `#id`，`fill`/`stroke` 等只接受颜色或本文件的 `url(#id)`，`style`、事件属性和外部命名空间全部丢弃，DTD 直接拒绝。HTTP 层只按 `ContentType` 选生成的响应类型，并设置 `Cache-Control: public, max-age=31536000, immutable`；`Content-Type` 和 `Content-Length` 由生成代码写，`X-Content-Type-Options: nosniff` 由前端中间件统一加。
+- **站点 logo 的解析与发送**：`logo.go` 的 `ParseLogo` 是唯一的解析入口，返回重建后的字节、类型、宽高和 SHA-256；`SetSiteLogo` 只存这个结果。PNG 用标准库的 `png.DecodeConfig` 读头；WebP 先用 `golang.org/x/image/webp` 的 `DecodeConfig` 限制画布尺寸，再完整解码，SVG 用 `encoding/xml` 逐个 token 重建：允许的元素和属性各是一张表，值里的 `href` 只能是本文件的 `#id`，`fill`/`stroke` 等只接受颜色或本文件的 `url(#id)`，`style`、事件属性和外部命名空间全部丢弃，DTD 直接拒绝。HTTP 层只按 `ContentType` 选生成的响应类型，并设置 `Cache-Control: public, max-age=31536000, immutable`；`Content-Type` 和 `Content-Length` 由生成代码写，`X-Content-Type-Options: nosniff` 由前端中间件统一加。
 - **权限**：管理接口权限（含 `calls.search`、`calls.inspect`、`audit.view`）（均在 `authorize.go` 声明，迁移 `00006` 给内置角色）：`users.view`、`suppliers.view`、`catalog.view`、`pricing.view`（非敏感）；`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage`（敏感，要做过两步验证的会话）。内置角色（迁移后）：
 
   | 角色 | 权限 |

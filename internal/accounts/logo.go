@@ -12,11 +12,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"golang.org/x/image/webp"
 )
 
 // A site's logo (docs/domains/accounts.md「站点」): an SVG sanitised to an allowlist, or a PNG or WebP checked for its
-// real dimensions. The limits bound both the bytes stored and the work a page does to draw them; the console shows the
-// logo at 20px, so 1024 is already far more than any use.
+// dimensions and, for WebP, its actual image data. The limits bound both the bytes stored and the work a page does
+// to draw them; the console shows the logo at 20px, so 1024 is already far more than any use.
 const (
 	maxLogoBytes     = 256 << 10
 	maxLogoDimension = 1024
@@ -58,9 +60,9 @@ func ParseLogo(contentType string, data []byte) (Logo, error) {
 	)
 	switch contentType {
 	case LogoPNG:
-		logo, err = rasterLogo(contentType, data, pngSize)
+		logo, err = rasterLogo(contentType, data, pngSize, nil)
 	case LogoWebP:
-		logo, err = rasterLogo(contentType, data, webpSize)
+		logo, err = rasterLogo(contentType, data, webpSize, webpValid)
 	case LogoSVG:
 		logo, err = svgLogo(data)
 	default:
@@ -75,13 +77,18 @@ func ParseLogo(contentType string, data []byte) (Logo, error) {
 
 func logoError(reason string) *SettingError { return &SettingError{Field: "logo", Reason: reason} }
 
-func rasterLogo(contentType string, data []byte, size func([]byte) (int, int, error)) (Logo, error) {
+func rasterLogo(contentType string, data []byte, size func([]byte) (int, int, error), validate func([]byte) error) (Logo, error) {
 	width, height, err := size(data)
 	if err != nil {
 		return Logo{}, logoError("the file is not a readable " + strings.TrimPrefix(contentType, "image/") + " image")
 	}
 	if width < 1 || height < 1 || width > maxLogoDimension || height > maxLogoDimension {
 		return Logo{}, logoError(fmt.Sprintf("the image is %dx%d; its sides must be from 1 to %d pixels", width, height, maxLogoDimension))
+	}
+	if validate != nil {
+		if err := validate(data); err != nil {
+			return Logo{}, logoError("the file is not a readable " + strings.TrimPrefix(contentType, "image/") + " image")
+		}
 	}
 	return Logo{ContentType: contentType, Width: width, Height: height, Bytes: data}, nil
 }
@@ -97,49 +104,21 @@ func pngSize(data []byte) (int, int, error) {
 }
 
 // webpSize reads the canvas size from the WebP header. The three chunk kinds carry it differently, and all of them are
-// little-endian; parsing the header keeps the standard library out of the module for one number pair.
+// little-endian. DecodeConfig is only the first step: it accepts a container whose image data is absent or truncated,
+// so rasterLogo bounds the dimensions first and webpValid then decodes the actual pixels.
 func webpSize(data []byte) (int, int, error) {
-	if len(data) < 30 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
-		return 0, 0, fmt.Errorf("not a WebP file")
+	cfg, err := webp.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, 0, err
 	}
-	chunk := string(data[12:16])
-	size := int(uint32(data[16]) | uint32(data[17])<<8 | uint32(data[18])<<16 | uint32(data[19])<<24)
-	if size < 10 || 20+size > len(data) {
-		return 0, 0, fmt.Errorf("the WebP chunk is truncated")
-	}
-	switch chunk {
-	case "VP8X": // extended: the canvas size, which may be larger than any one frame
-		return webpVP8X(data)
-	case "VP8 ": // lossy: the frame header after its 3-byte tag and the 3-byte start code
-		return webpVP8(data)
-	case "VP8L": // lossless: 14 bits of width-1 then 14 bits of height-1 from the first four bytes
-		return webpVP8L(data)
-	default:
-		return 0, 0, fmt.Errorf("the WebP chunk %q has no image size", chunk)
-	}
+	return cfg.Width, cfg.Height, nil
 }
 
-func webpVP8X(data []byte) (int, int, error) {
-	width := (int(data[24]) | int(data[25])<<8 | int(data[26])<<16) + 1
-	height := (int(data[27]) | int(data[28])<<8 | int(data[29])<<16) + 1
-	return width, height, nil
-}
-
-func webpVP8(data []byte) (int, int, error) {
-	if data[23] != 0x9d || data[24] != 0x01 || data[25] != 0x2a {
-		return 0, 0, fmt.Errorf("the WebP frame header is invalid")
-	}
-	width := int(data[26]) | int(data[27]&0x3f)<<8
-	height := int(data[28]) | int(data[29]&0x3f)<<8
-	return width, height, nil
-}
-
-func webpVP8L(data []byte) (int, int, error) {
-	if data[20] != 0x2f {
-		return 0, 0, fmt.Errorf("the WebP lossless header is invalid")
-	}
-	bits := uint32(data[21]) | uint32(data[22])<<8 | uint32(data[23])<<16 | uint32(data[24])<<24
-	return int(bits&0x3fff) + 1, int((bits>>14)&0x3fff) + 1, nil
+// webpValid decodes the whole image, not only its header, so a container that claims a size but carries no usable
+// VP8/VP8L data is refused before it is stored and later fails to draw in a page.
+func webpValid(data []byte) error {
+	_, err := webp.Decode(bytes.NewReader(data))
+	return err
 }
 
 // The SVG elements a logo may keep. Scripts, foreign content, images, links, animation and styles are absent: an SVG is
