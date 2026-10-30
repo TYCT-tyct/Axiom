@@ -206,30 +206,61 @@ test.describe("long list", () => {
     }
   }
 
+  // Loading a page scrolls its button into view, so the list is near its end; a measurement from there reaches the
+  // bottom in a few frames and then counts a still page as a smooth scroll. Start at the top, let the layout settle,
+  // and prove the page moved every frame for the whole five seconds.
   async function scroll(page: Page) {
-    return page.evaluate(
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.evaluate(
       () =>
-        new Promise<{ late: number; total: number; longTasks: number }>((done) => {
+        new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 100)))),
+    );
+    const outcome = await page.evaluate(
+      () =>
+        new Promise<{
+          late: number;
+          total: number;
+          longTasks: number;
+          moved: number;
+          startY: number;
+          endY: number;
+        }>((done) => {
           let longTasks = 0;
           new PerformanceObserver((list) => {
             longTasks += list.getEntries().length;
           }).observe({ type: "longtask", buffered: false });
           const gaps: number[] = [];
+          let moved = 0;
           let last = performance.now();
           const start = last;
+          const startY = window.scrollY;
           const step = (now: number) => {
             gaps.push(now - last);
             last = now;
-            window.scrollBy(0, 40);
+            const before = window.scrollY;
+            window.scrollBy(0, 20);
+            if (window.scrollY > before) {
+              moved++;
+            }
             if (now - start < 5000) {
               requestAnimationFrame(step);
             } else {
-              done({ late: gaps.filter((g) => g > 25).length, total: gaps.length, longTasks });
+              done({
+                late: gaps.filter((g) => g > 25).length,
+                total: gaps.length,
+                longTasks,
+                moved,
+                startY,
+                endY: window.scrollY,
+              });
             }
           };
           requestAnimationFrame(step);
         }),
     );
+    expect(outcome.endY).toBeGreaterThan(outcome.startY);
+    expect(outcome.moved).toBeGreaterThan(outcome.total * 0.9);
+    return outcome;
   }
 
   test("console calls: 1000 rows scroll without dropped frames", async ({ browser }) => {
@@ -244,7 +275,6 @@ test.describe("long list", () => {
     await loadRows(page, 1000);
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(10_000);
     const outcome = await scroll(page);
-    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
     record("late frames, console calls", outcome.late / outcome.total, budget.lateFrames);
     record("long tasks while scrolling, console calls", outcome.longTasks, budget.longTasks);
   });
@@ -263,7 +293,6 @@ test.describe("long list", () => {
     await loadRows(page, 1000);
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(10_000);
     const outcome = await scroll(page);
-    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
     record("late frames, admin users", outcome.late / outcome.total, budget.lateFrames);
     record("long tasks while scrolling, admin users", outcome.longTasks, budget.longTasks);
   });
