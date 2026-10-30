@@ -42,6 +42,7 @@ var orderRefusals = []refusal{
 	{payments.ErrQueryPaused, http.StatusServiceUnavailable, codeUnavailable, "the payment channel is busy; wait a moment before checking again"},
 	{payments.ErrUnconfirmed, http.StatusServiceUnavailable, codeUnavailable, "the payment channel did not answer; try again shortly, a payment already made is not lost"},
 	{payments.ErrRefundInFlight, http.StatusConflict, codeConflict, "a refund of this order is still in flight; wait for its outcome"},
+	{payments.ErrSecondPerson, http.StatusForbidden, codeForbidden, "a different person must approve this refund"},
 	{payments.ErrRefundForbidden, http.StatusForbidden, codeForbidden, "a refund of this order is not available: the channel or the merchant does not allow it"},
 	{payments.ErrRefundAmount, http.StatusUnprocessableEntity, codeUnprocessable, "there is nothing refundable left on this order, or the amount is more than that"},
 }

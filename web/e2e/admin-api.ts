@@ -5,7 +5,7 @@ import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { supplyHandlers } from "./admin-supply.ts";
 import { fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
-import { confirmTotp, regenerate, session, signIn, signOut, totpSetup, verifyMfa } from "./mock-auth.ts";
+import { confirmTotp, regenerate, session, signIn, signOut, totpSetup, userId, verifyMfa } from "./mock-auth.ts";
 
 // The admin API (api/admin.yaml), answered from memory (mock.ts) with the data of admin-data.ts. The Session tag, the
 // site's settings, and users and their credit are here; suppliers, the catalog and pricing are in the files beside.
@@ -167,6 +167,69 @@ function grantCredit({ body, params, state }: Ctx<"/api/admin/v1/accounts/{accou
   } as const;
 }
 
+function listPaymentOrders({ query, state }: Ctx<"/api/admin/v1/payments/orders", "get">) {
+  if (query.get("site_id") !== state.siteId) {
+    return fail(404, "not_found");
+  }
+  const account = query.get("account_id");
+  const user = query.get("user_id");
+  const merchant = query.get("merchant_id");
+  const wanted = query.get("state");
+  const since = query.get("since");
+  const until = query.get("until");
+  const orders = state.orders.filter(
+    (order) =>
+      (!account || order.account_id === account) &&
+      (!user || order.user_id === user) &&
+      (!merchant || order.merchant_id === merchant) &&
+      (!wanted || order.state === wanted) &&
+      (!since || (order.created_at ?? "") >= since) &&
+      (!until || (order.created_at ?? "") < until),
+  );
+  const page = paged(orders, query);
+  return page ? ok(page) : fail(400, "invalid_request");
+}
+
+function listPaymentRefunds({ query, state }: Ctx<"/api/admin/v1/payments/refunds", "get">) {
+  if (query.get("site_id") !== state.siteId) {
+    return fail(404, "not_found");
+  }
+  const wanted = query.get("state");
+  const page = paged(
+    state.refunds.filter((refund) => !wanted || refund.state === wanted),
+    query,
+  );
+  return page ? ok(page) : fail(400, "invalid_request");
+}
+
+// A decision changes the refund the page already has: a second person's approval, or a withdrawal that returns the
+// credits. The mock keeps the idempotency the real server has by refusing a refund that is no longer frozen.
+function decideRefund(
+  kind: "approve" | "reject",
+  { body, params, state }: { body: Schemas["ReasonRequest"]; params: { refund_id?: string }; state: AdminState },
+) {
+  const refund = state.refunds.find((candidate) => candidate.id === params.refund_id);
+  if (!refund) {
+    return fail(404, "not_found");
+  }
+  if (!body.reason?.trim()) {
+    return fail(422, "unprocessable", { "/reason": "a reason is required" });
+  }
+  if (refund.state !== "frozen" || refund.approved_by) {
+    return fail(409, "conflict");
+  }
+  if (kind === "approve" && refund.requested_by === userId(state.account)) {
+    return fail(403, "forbidden");
+  }
+  refund.approved_by = userId(state.account);
+  refund.state = kind === "approve" ? "succeeded" : "failed";
+  refund.finished_at = new Date().toISOString();
+  if (kind === "approve") {
+    refund.provider_ref = `refund-${refund.id?.slice(-8) ?? "0"}`;
+  }
+  return ok(refund);
+}
+
 function getSettings({ params, state }: Ctx<"/api/admin/v1/sites/{site_id}/settings", "get">) {
   return params.site_id === state.siteId ? ok(state.settings) : fail(404, "not_found");
 }
@@ -261,6 +324,17 @@ const handlers: Handler<AdminState>[] = [
   route("get", `${base}/sites/{site_id}/key-limits`, reads("sites.manage"), getSiteKeyLimits),
   route("put", `${base}/sites/{site_id}/key-limits`, changes("sites.manage"), putSiteKeyLimits),
   route("get", `${base}/tiers`, reads("users.view"), ({ state }) => ok({ data: state.tiers })),
+  route("get", `${base}/payments/merchants`, reads("sites.manage"), ({ query, state }) =>
+    query.get("site_id") === state.siteId ? ok({ data: state.merchants }) : fail(404, "not_found"),
+  ),
+  route("get", `${base}/payments/orders`, reads("sites.manage"), listPaymentOrders),
+  route("get", `${base}/payments/refunds`, reads("sites.manage"), listPaymentRefunds),
+  route("post", `${base}/payments/refunds/{refund_id}/approve`, changes("sites.manage"), (ctx) =>
+    decideRefund("approve", ctx),
+  ),
+  route("post", `${base}/payments/refunds/{refund_id}/reject`, changes("sites.manage"), (ctx) =>
+    decideRefund("reject", ctx),
+  ),
   route("get", `${base}/users`, reads("users.view"), listUsers),
   route("get", `${base}/accounts/{account_id}`, reads("users.view"), getAccount),
   route("put", `${base}/accounts/{account_id}/key-limits`, changes("sites.manage"), putAccountKeyLimits),

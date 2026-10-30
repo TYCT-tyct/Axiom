@@ -37,7 +37,7 @@ func testRefundCallerDeadline(t *testing.T, poll, rejected bool) {
 		w.exec(fmt.Sprintf("UPDATE payments.refunds SET approved_by='%s',next_query_at=clock_timestamp()-interval '1 second'", uuid.NewV7()))
 		err = w.p.pollRefunds(ctx)
 	} else {
-		_, err = w.p.ApproveRefund(ctx, siteScope(w.siteA), r.ID, uuid.NewV7())
+		_, err = w.p.ApproveRefund(ctx, siteScope(w.siteA), r.ID, uuid.NewV7(), "approved")
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatal(err)

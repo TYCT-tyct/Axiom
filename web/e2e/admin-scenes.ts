@@ -119,6 +119,7 @@ const grant = (state: string, reply: Answer["reply"]) => ({ path: "/credit-grant
 const scenes: Scene[] = [
   view("sign-in", "sign-in", false),
   view("users", "users"),
+  view("orders", "orders"),
   view("account", `accounts/${acct(1)}`),
   view("calls", "calls"),
   view("call", `calls/${uuid(11, 1)}`),
@@ -137,6 +138,8 @@ const scenes: Scene[] = [
   ...audienceScenes,
   view("settings", "settings"),
   dialog("credit", `accounts/${acct(1)}`, "users.credit.open"),
+  dialog("refund-approve", "orders", "orders.refund.approve"),
+  dialog("refund-reject", "orders", "orders.refund.reject"),
   dialog("account-suspend", `accounts/${acct(1)}`, "users.account.suspend"),
   dialog("account-sign-in", `accounts/${acct(1)}`, "users.account.disableSignIn"),
   dialog("account-tier", `accounts/${acct(1)}`, "users.account.changeTier"),

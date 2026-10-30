@@ -30,7 +30,7 @@ func TestRefundReviewDisabledCapabilityStaysUnsent(t *testing.T) {
 	r := w.mustRefund(o, o.Credits, "disabled")
 	plugin.caps = 0
 	w.swapRefundPlugin(plugin)
-	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7()); !errors.Is(err, ErrRefundForbidden) {
+	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7(), "approved"); !errors.Is(err, ErrRefundForbidden) {
 		t.Fatal(err)
 	}
 	if w.mustGetRefund(r.ID).State != "frozen" || sends.Load() != 0 {
@@ -77,7 +77,7 @@ func TestRefundReviewRejectedRequestCannotBeApproved(t *testing.T) {
 	if _, err := w.p.RejectRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7(), "declined"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7()); !errors.Is(err, ErrRefundForbidden) {
+	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7(), "approved"); !errors.Is(err, ErrRefundForbidden) {
 		t.Fatal(err)
 	}
 	if n := w.count(w.p.platform, "SELECT count(*) FROM payments.refunds WHERE approved_by IS NOT NULL"); n != 0 {

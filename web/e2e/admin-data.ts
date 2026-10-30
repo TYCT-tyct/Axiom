@@ -18,6 +18,9 @@ export type AdminState = AuthState & {
   accounts: Map<string, Schemas["AccountDetail"]>;
   calls: Schemas["AdminCallSummary"][];
   traces: Map<string, Schemas["AdminCallTrace"]>;
+  merchants: Schemas["Merchant"][];
+  orders: Schemas["PaymentOrder"][];
+  refunds: Schemas["PaymentRefund"][];
   audit: Schemas["AuditEntry"][];
   auditEntries: Map<string, Schemas["AuditEntry"]>;
   suppliers: Schemas["SupplierDetail"][];
@@ -359,6 +362,79 @@ function rules(): Schemas["PricingRule"][] {
   ];
 }
 
+const merchantId = uuid(8, 1) as Schemas["MerchantId"];
+const payAmount = (amount: string): Schemas["PayAmount"] => ({ amount, currency: "USD" });
+
+function aMerchant(): Schemas["Merchant"] {
+  return {
+    id: merchantId,
+    site_id: siteId,
+    kind: "easypay",
+    name: "Alipay",
+    enabled: true,
+    currency: "USD",
+    ttl_seconds: 1800,
+    refund_enabled: true,
+    user_refund: true,
+    sort: 1,
+  };
+}
+
+function anOrder(n: number, user: Schemas["UserSummary"], over: Partial<Schemas["PaymentOrder"]> = {}) {
+  const pending = n % 5 === 0;
+  const at = new Date(Date.UTC(2026, 9, 30, 12, 0, 0) - n * 60_000).toISOString();
+  return {
+    id: uuid(13, n),
+    account_id: user.account_id,
+    user_id: user.id,
+    merchant_id: merchantId,
+    merchant_name: "Alipay",
+    method: "alipay",
+    state: pending ? "pending" : "paid",
+    credits: usd("10"),
+    total: payAmount("1000"),
+    fee: payAmount("30"),
+    credited: pending ? undefined : usd("10"),
+    paid_total: pending ? undefined : payAmount("1000"),
+    paid_fee: pending ? undefined : payAmount("30"),
+    trade_no: `trade-${n}`,
+    created_at: at,
+    paid_at: pending ? undefined : at,
+    expires_at: at,
+    refund_allowed: true,
+    refunds: [],
+    ...over,
+  } satisfies Schemas["PaymentOrder"];
+}
+
+function aRefund(n: number, order: Schemas["PaymentOrder"], user: Schemas["UserSummary"], reason?: string) {
+  return {
+    id: uuid(14, n),
+    order_id: order.id,
+    account_id: order.account_id,
+    state: "frozen" as const,
+    via: "channel" as const,
+    credits: usd("5"),
+    amount: payAmount("500"),
+    reason: reason ?? "The credits were not used.",
+    requested_by: user.id,
+    created_at: order.created_at,
+  } satisfies Schemas["PaymentRefund"];
+}
+
+function paymentData(people: Schemas["UserSummary"][]) {
+  const fallback = people[0] ?? aUser(1);
+  const orders = range(60).map((n) => anOrder(n, people[(n - 1) % Math.max(people.length, 1)] ?? fallback));
+  const refunds = range(3).map((n) => aRefund(n, orders[n - 1] ?? orders[0] ?? anOrder(1, fallback), people[n] ?? fallback));
+  for (const refund of refunds) {
+    const order = orders.find((candidate) => candidate.id === refund.order_id);
+    if (order) {
+      order.refunds = [...(order.refunds ?? []), refund];
+    }
+  }
+  return { merchants: [aMerchant()], orders, refunds };
+}
+
 export function usualState(): AdminState {
   const users = range(60).map((n) => aUser(n));
   const own = aUser(0, { email: "admin@example.com", mfa_enabled: true, tier: tiers[0] });
@@ -385,6 +461,7 @@ export function usualState(): AdminState {
     accounts: new Map([own, ...users].map((user) => [user.account_id, anAccount(user)])),
     calls,
     traces: new Map(calls.map((call, i) => [call.id ?? uuid(11, i + 1), aTrace(call, i + 1)])),
+    ...paymentData(people),
     audit,
     auditEntries: new Map(audit.map((entry) => [entry.id ?? uuid(12, 1), entry])),
     suppliers: suppliers(),
@@ -405,6 +482,9 @@ export function emptyState(): AdminState {
     users: [],
     calls: [],
     traces: new Map(),
+    merchants: [],
+    orders: [],
+    refunds: [],
     audit: [],
     auditEntries: new Map(),
     suppliers: [],
@@ -438,6 +518,25 @@ export function worstState(): AdminState {
     );
   }
   const people = state.users;
+  state.orders = range(150).map((n) =>
+    anOrder(n + 100, people[(n - 1) % people.length] ?? aUser(0), {
+      merchant_name: long("Merchant ", 100),
+      trade_no: long("trade-", 200),
+    }),
+  );
+  state.refunds = range(20).map((n) => {
+    const order = state.orders[(n - 1) % state.orders.length];
+    if (!order) {
+      return aRefund(n + 100, anOrder(n + 100, aUser(1)), aUser(1), long("The credits were not used. ", 1000));
+    }
+    return aRefund(n + 100, order, people[n % people.length] ?? aUser(0), long("The credits were not used. ", 1000));
+  });
+  for (const refund of state.refunds) {
+    const order = state.orders.find((candidate) => candidate.id === refund.order_id);
+    if (order) {
+      order.refunds = [...(order.refunds ?? []), refund];
+    }
+  }
   state.calls = range(1_000).map((n) => aCall(n, people[(n - 1) % people.length] ?? aUser(0)));
   state.traces = new Map(state.calls.map((call, i) => [call.id ?? uuid(11, i + 1), aTrace(call, i + 1)]));
   state.audit = range(500).map((n) => anAuditEntry(n, people[(n - 1) % people.length] ?? aUser(0)));

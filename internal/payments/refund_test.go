@@ -38,7 +38,7 @@ func (w *world) mustRefund(o Order, amount int64, key string) Refund {
 
 func (w *world) approve(r Refund) Refund {
 	w.t.Helper()
-	result, err := w.p.ApproveRefund(w.t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7())
+	result, err := w.p.ApproveRefund(w.t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7(), "approved")
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -85,10 +85,10 @@ func TestRefundRequiresSeparateApprovalAndScopedAccess(t *testing.T) {
 	if _, err := w.p.GetRefund(t.Context(), w.accountB(), r.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
 	}
-	if _, err := w.p.ApproveRefund(t.Context(), w.accountA(), r.ID, uuid.NewV7()); !errors.Is(err, ErrRefundForbidden) {
+	if _, err := w.p.ApproveRefund(t.Context(), w.accountA(), r.ID, uuid.NewV7(), "approved"); !errors.Is(err, ErrRefundForbidden) {
 		t.Fatal(err)
 	}
-	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, w.user); !errors.Is(err, ErrSecondPerson) {
+	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, w.user, "approved"); !errors.Is(err, ErrSecondPerson) {
 		t.Fatal(err)
 	}
 	w.dueRefunds()

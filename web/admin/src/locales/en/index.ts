@@ -4,6 +4,7 @@ import audit from "./audit";
 import calls from "./calls";
 import mappings from "./mappings";
 import models from "./models";
+import orders from "./orders";
 import pricing from "./pricing";
 import settings from "./settings";
 import suppliers from "./suppliers";
@@ -14,6 +15,7 @@ export default {
   forbiddenHint: "Ask the site owner to grant the permission.",
   nav: {
     users: "Users",
+    orders: "Orders",
     calls: "Calls",
     audit: "Audit log",
     suppliers: "Suppliers",
@@ -52,6 +54,7 @@ export default {
       "This request’s key was already used for different content, so the first attempt may have been made; nothing more is sent from here. The data you see after closing may not include it yet, so it can’t tell you whether to do it again.",
   },
   users,
+  orders,
   suppliers,
   mappings,
   models,

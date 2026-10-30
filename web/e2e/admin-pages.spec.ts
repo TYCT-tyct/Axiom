@@ -3,7 +3,7 @@ import { mockAdmin } from "./admin-api.ts";
 import { uuid } from "./admin-data.ts";
 import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
-import { knownPassword, mfaEmail, signedInAs } from "./mock-auth.ts";
+import { knownPassword, mfaEmail, signedInAs, userId } from "./mock-auth.ts";
 import { words, zhText } from "./words.ts";
 
 // The admin's pages against the mocked API (admin-api.ts): the main flows of M1, each as an operator would walk it. The
@@ -560,5 +560,47 @@ test.describe("names waiting to be mapped", () => {
     expect(state.pending).toHaveLength(before - 1);
     await close(page);
     await expect(page.getByText("vendor-model-1-preview")).toHaveCount(0);
+  });
+});
+
+test.describe("orders and refunds", () => {
+  test("orders are filtered by state from the address, and the form writes the address", async ({ page }) => {
+    await open(page, "/orders");
+    const orders = page.getByRole("table", { name: zhText("nav.orders") });
+    await expect(orders.getByRole("row")).toHaveCount(51);
+    await page.getByLabel(zhText("orders.filters.state")).selectOption("pending");
+    await page.getByRole("button", { name: zhText("filter.apply") }).click();
+    expect(new URL(page.url()).searchParams.get("state")).toBe("pending");
+    // Twelve of the sixty usual orders wait for payment.
+    await expect(orders.getByRole("row")).toHaveCount(13);
+    await page.getByRole("button", { name: zhText("filter.reset") }).click();
+    await expect(orders.getByRole("row")).toHaveCount(51);
+  });
+
+  test("a refund is approved by another person with a reason and leaves the queue", async ({ page }) => {
+    const state = await open(page, "/orders");
+    const queue = page.getByRole("table", { name: zhText("orders.refund.title") });
+    await expect(queue.getByRole("row")).toHaveCount(4);
+    await queue.getByRole("button", { name: zhText("orders.refund.approve") }).first().click();
+    await dialog(page).locator("button[type=submit]").click();
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("change.reasonMissing"));
+    await send(page, "checked the receipt");
+    await expect(done(page)).toBeVisible();
+    expect(state.refunds[0]?.state).toBe("succeeded");
+    expect(state.refunds[0]?.approved_by).toBeDefined();
+    await close(page);
+    await expect(queue.getByRole("row")).toHaveCount(3);
+  });
+
+  test("a person who asked for a refund does not approve it themselves", async ({ page }) => {
+    const state = await open(page, "/orders");
+    if (state.refunds[0]) {
+      state.refunds[0].requested_by = userId(0);
+    }
+    await page.reload();
+    const queue = page.getByRole("table", { name: zhText("orders.refund.title") });
+    await expect(queue.getByText(zhText("orders.refund.secondPerson")).first()).toBeVisible();
+    // The other two refunds still offer an approval.
+    await expect(queue.getByRole("button", { name: zhText("orders.refund.approve") })).toHaveCount(2);
   });
 });

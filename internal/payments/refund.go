@@ -36,12 +36,19 @@ type RefundRequest struct {
 
 // Refund is the durable state, including the actual frozen credits and original-payment cash quote. Approved says
 // whether an administrator has released it to the channel, which the console shows as review versus processing.
+// RequestedBy and ApprovedBy are the people on its two sides: the requester never approves, and the operator's list
+// shows a frozen refund without an approver as the one waiting for review.
 type Refund struct {
 	ID          RefundID
 	Order       OrderID
+	SiteID      uuid.UUID
+	AccountID   uuid.UUID
 	State, Via  string
 	Credits     int64
 	Amount      Money
+	Reason      string
+	RequestedBy uuid.UUID
+	ApprovedBy  *uuid.UUID
 	ProviderRef string
 	Approved    bool
 	CreatedAt   time.Time
@@ -249,8 +256,9 @@ func refundOf(row PaymentsRefund, currency platform.Currency) Refund {
 		finished = &at
 	}
 	return Refund{
-		ID: RefundID(row.ID), Order: OrderID(row.OrderID), State: row.State, Via: row.Via, Credits: row.Credits,
-		Amount: Money{Currency: currency, Minor: row.Amount}, ProviderRef: row.ProviderRef,
+		ID: RefundID(row.ID), Order: OrderID(row.OrderID), SiteID: row.SiteID, AccountID: row.AccountID, State: row.State, Via: row.Via,
+		Credits: row.Credits, Amount: Money{Currency: currency, Minor: row.Amount}, Reason: row.Reason,
+		RequestedBy: row.RequestedBy, ApprovedBy: row.ApprovedBy, ProviderRef: row.ProviderRef,
 		Approved: row.ApprovedBy != nil, CreatedAt: row.CreatedAt, FinishedAt: finished,
 	}
 }
@@ -305,12 +313,15 @@ func (p *Payments) refundAccess(ctx context.Context, s pg.Scope, id RefundID, ad
 
 // ApproveRefund records an independent administrator and then starts the channel flow. Repeating approval never
 // causes another send. Offline refunds remain frozen until an evidenced, separately approved manual conclusion.
-func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID) (Refund, error) {
+func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) {
+	if user == (uuid.UUID{}) || !validReason(reason, 1000) {
+		return Refund{}, &FieldError{"/reason", "a reason of 1 to 1000 characters is required"}
+	}
 	row, _, err := p.refundAccess(ctx, s, id, true)
 	if err != nil {
 		return Refund{}, err
 	}
-	if user == (uuid.UUID{}) || user == row.RequestedBy {
+	if user == row.RequestedBy {
 		return Refund{}, ErrSecondPerson
 	}
 	err = p.changeRefund(ctx, OrderID(row.OrderID), row.ID, func(tx pg.Tx, _ LockOrderRow, locked PaymentsRefund) error {
@@ -323,7 +334,7 @@ func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, u
 		if err = queries.ApproveRefund(ctx, tx, ApproveRefundParams{ID: row.ID, ApprovedBy: &user}); err != nil {
 			return err
 		}
-		return refundAudit(ctx, tx, locked, user, "refund.approve", locked.Reason)
+		return refundAudit(ctx, tx, locked, user, "refund.approve", reason)
 	})
 	if err != nil {
 		return Refund{}, err
@@ -357,12 +368,23 @@ func refundFreeze(row PaymentsRefund) billing.Freeze {
 
 // RejectRefund declines a still unapproved, certainly unsent request. Unknown refunds must use Resolve instead.
 func (p *Payments) RejectRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) {
-	if user == (uuid.UUID{}) || !validReason(reason, 1000) {
+	if !validReason(reason, 1000) {
+		return Refund{}, &FieldError{"/reason", "a reason of 1 to 1000 characters is required"}
+	}
+	if user == (uuid.UUID{}) {
 		return Refund{}, ErrRefundForbidden
 	}
 	row, _, err := p.refundAccess(ctx, s, id, true)
 	if err != nil {
 		return Refund{}, err
+	}
+	// A decided refund is answered by the decision, before billing is asked to unfreeze credits that a channel refund
+	// already took. The state is read again under the lock, which is where a concurrent decision is settled.
+	if row.State == "failed" {
+		return p.GetRefund(ctx, s, id)
+	}
+	if row.State != "frozen" || row.ApprovedBy != nil {
+		return Refund{}, ErrRefundForbidden
 	}
 	if err = billing.PrepareRefund(ctx, p.db, p.platform, refundFreeze(row)); err != nil {
 		return Refund{}, err
