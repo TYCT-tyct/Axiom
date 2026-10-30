@@ -2855,7 +2855,7 @@ export interface components {
             model_id: components["schemas"]["Uuid"];
         };
         AuthorSlug: string;
-        /** @description `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it. */
+        /** @description `<author>/<model>`, with optional `:free` and `@<version>` when the vendor gives one; lower case, as the catalog stores it. */
         ModelSlug: string;
         Author: {
             slug: components["schemas"]["AuthorSlug"];

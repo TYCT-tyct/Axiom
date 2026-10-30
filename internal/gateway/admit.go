@@ -169,7 +169,7 @@ func (h *Handler) planAdmission(it *admissionItem) error {
 		return err
 	}
 	plan, wait, err := h.Models.plan(h.Router, routing.Input{
-		Admission: routingAdmission(it.admission, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,
+		Admission: routingAdmission(it.admission, c), Req: &c.Request, Models: c.models, Auto: c.auto, Override: c.over, Sticky: c.sticky,
 		// Compaction has no Chat counterpart; generation can use the protocol conversions.
 		NativeOnly: c.Compact,
 		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full.

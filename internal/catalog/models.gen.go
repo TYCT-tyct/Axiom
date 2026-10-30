@@ -10,6 +10,13 @@ import (
 	"uuid"
 )
 
+type CatalogAlias struct {
+	Name    string
+	Rev     int64
+	ModelID uuid.UUID
+	SetAt   time.Time
+}
+
 type CatalogAuthor struct {
 	Slug string
 	Name string

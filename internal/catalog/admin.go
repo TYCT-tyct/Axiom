@@ -260,6 +260,9 @@ func (c *Catalog) AddName(ctx context.Context, r AddNameRequest) (Result, error)
 			return outcome{}, ErrNameLength
 		}
 		norm := Normalize(r.Name)
+		if err := checkAddName(norm, row.Slug, r.Visibility); err != nil {
+			return outcome{}, err
+		}
 		if taken, err := New().GetNameByNorm(ctx, tx, norm); err == nil {
 			return outcome{}, fmt.Errorf("%w: %q is %q", ErrNameTaken, norm, taken.Name)
 		} else if !errors.Is(err, pg.ErrNoRows) {
@@ -273,6 +276,26 @@ func (c *Catalog) AddName(ctx context.Context, r AddNameRequest) (Result, error)
 			after: map[string]any{"name": r.Name, "norm": norm, "visibility": r.Visibility},
 		}, err
 	})
+}
+
+// checkAddName refuses a name the catalog cannot hold. A colon is only the one in a trailing :free, which names an entry
+// that is a model of its own; a public name must also be its model's standard ID, so a :free entry is named after itself
+// and a paid model never takes a free name.
+func checkAddName(norm, slug string, visibility Visibility) error {
+	standard := Normalize(strings.SplitN(slug, "@", 2)[0])
+	if strings.Contains(norm, ":") && !freeName(norm) {
+		return fmt.Errorf("%w: a name may end in :free, and has no other colon in it", ErrInvalid)
+	}
+	if visibility != VisibilityPublic {
+		return nil
+	}
+	switch {
+	case freeName(norm) && norm != standard:
+		return fmt.Errorf("%w: a :free name must be its model's standard ID %q", ErrInvalid, standard)
+	case !freeName(norm) && freeName(standard):
+		return fmt.Errorf("%w: a :free model's public names must end in :free", ErrInvalid)
+	}
+	return nil
 }
 
 // UpdateSpecRequest replaces a model's baseline.
@@ -386,7 +409,43 @@ func requireListable(ctx context.Context, tx pg.Tx, row CatalogModel) error {
 	if len(prices.priced()) == 0 {
 		return errors.New("it has no reference price")
 	}
+	if freeName(standard) {
+		if err := requireFreeBase(ctx, tx, standard, prices); err != nil {
+			return err
+		}
+	}
 	return prices.cover(spec.reportable)
+}
+
+// requireFreeBase holds a :free entry to the base it names and to a zero price in every currency: a paid price behind
+// a free name is the one thing the suffix promises not to do. The base must be public and listed, because the suffix
+// only means something if a client can call the model it belongs to.
+func requireFreeBase(ctx context.Context, tx pg.Tx, standard string, prices prices) error {
+	for _, currency := range prices.priced() {
+		if !prices[currency].schedule.IsZero() {
+			return fmt.Errorf("a :free entry must have a zero price in every currency, but %s is not zero", currency)
+		}
+	}
+	base := strings.TrimSuffix(standard, ":free")
+	name, err := New().GetNameByNorm(ctx, tx, base)
+	switch {
+	case errors.Is(err, pg.ErrNoRows):
+		return fmt.Errorf("its base model %q has no public name", base)
+	case err != nil:
+		return err
+	case Visibility(name.Visibility) != VisibilityPublic:
+		return fmt.Errorf("its base model %q has no public name", base)
+	}
+	model, err := New().GetModel(ctx, tx, name.ModelID)
+	switch {
+	case errors.Is(err, pg.ErrNoRows):
+		return fmt.Errorf("its base model %q does not exist", base)
+	case err != nil:
+		return err
+	case Status(model.Status) != StatusListed:
+		return fmt.Errorf("its base model %q is %s, not listed", base, model.Status)
+	}
+	return nil
 }
 
 // requireDeclared refuses a spec that leaves out what the upstream may report: absent or null reads as nothing

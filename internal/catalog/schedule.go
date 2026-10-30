@@ -25,6 +25,21 @@ type Schedule struct {
 // Currency is what the schedule's prices are in.
 func (s Schedule) Currency() platform.Currency { return s.currency }
 
+// IsZero reports whether every price in the schedule is zero, including prices for items the spec does not declare:
+// a :free entry must not charge for anything.
+func (s Schedule) IsZero() bool {
+	for st := range numServiceTiers {
+		for it := range NumItems {
+			for band := range len(s.above) + 1 {
+				if p, ok := s.price(st, band, it); ok && p.String() != "0" {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
 // ScheduleRate is one effective unit price of a schedule: what one unit of an item costs at a service tier above a
 // prompt length. Base is true for the base band that no threshold has to be exceeded for; Above is 0 there and is the
 // applied threshold otherwise, so an explicit threshold of 0 is not confused with the base band.
