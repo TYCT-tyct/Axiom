@@ -87,7 +87,7 @@ func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c
 		return err
 	}
 	plan, wait, err := h.Models.plan(h.Router, routing.Input{
-		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,
+		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Auto: c.auto, Override: c.over, Sticky: c.sticky,
 		// Compaction has no Chat counterpart; generation can use the protocol conversions.
 		NativeOnly: c.Compact,
 		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full.

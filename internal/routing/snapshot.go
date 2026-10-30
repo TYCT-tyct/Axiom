@@ -247,6 +247,7 @@ type Preset struct {
 type Snapshot struct {
 	built   time.Time
 	byModel map[catalog.ModelID][]*candidate
+	models  []catalog.ModelID // in id order, for openrouter/auto
 	presets map[PresetID]Preset
 }
 
@@ -312,6 +313,10 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 
 		s.byModel[e.Model] = append(s.byModel[e.Model], c)
 	}
+	for m := range s.byModel {
+		s.models = append(s.models, m)
+	}
+	slices.SortFunc(s.models, func(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) })
 	for _, p := range presets {
 		if _, dup := s.presets[p.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: preset %s twice", uuid.UUID(p.ID))

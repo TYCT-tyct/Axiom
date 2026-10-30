@@ -17,6 +17,7 @@ type need struct {
 	req    *protocol.Request
 	preset *Preset
 	over   *Override
+	auto   bool                   // rank across every model: the request named openrouter/auto
 	tokens int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
 	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
 	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
@@ -46,14 +47,18 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		return Plan{}, nil, ErrUnknownPreset
 	}
 	n := &need{
-		in: &in, req: in.Req, preset: &preset, over: &in.Override, now: now,
+		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, now: now,
 		tokens: in.Req.TextBytes / billing.InputBytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
 	var order []ranked
 	var seen []catalog.ModelID
-	for _, m := range in.Models {
+	models := in.Models
+	if in.Auto {
+		models = snap.models
+	}
+	for _, m := range models {
 		if slices.Contains(seen, m) { // a model named twice is one model: its endpoints are ranked once
 			continue
 		}
@@ -68,7 +73,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		}
 		order = append(order, r.rank(cands, n, &rec)...)
 	}
-	if in.Override.SortGlobal {
+	if in.Override.SortGlobal || in.Auto {
 		r.sort(order, n.strategy())
 	}
 	attempts := r.attempts(n)
@@ -396,7 +401,7 @@ func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
 		available = true
 	}
 	if !available {
-		orderLastResorts(order, n.over.SortGlobal)
+		orderLastResorts(order, n.over.SortGlobal || n.auto)
 		return order
 	}
 	owned, hasOwned := ownedFallback(order, n.now)

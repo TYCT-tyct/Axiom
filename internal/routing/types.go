@@ -58,6 +58,7 @@ type Input struct {
 	Admission  Admission
 	Req        *protocol.Request
 	Models     []catalog.ModelID
+	Auto       bool // rank every model in the snapshot: the request named openrouter/auto
 	Override   Override
 	Sticky     EndpointID
 	NativeOnly bool
