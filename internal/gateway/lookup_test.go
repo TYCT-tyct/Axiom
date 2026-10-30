@@ -91,11 +91,8 @@ func TestColdKeyFloodLeavesTheReservedConnections(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
-		release, err := r.limits.Funds.Complete(ctx, "settler")
-		if err != nil {
+		if err := submitCompletion(ctx, r.limits.Funds, "settler"); err != nil {
 			t.Errorf("a settlement was not given a connection: %v", err)
-		} else {
-			release()
 		}
 		if err := r.db.Tx(pg.CompletionContext(ctx), platformScope, func(tx pg.Tx) error { _, err := tx.Exec(ctx, "SELECT 1"); return err }); err != nil {
 			t.Errorf("a transaction found no free database connection: %v", err)

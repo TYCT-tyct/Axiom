@@ -2,7 +2,7 @@
 
 预留、计量、追加、结算与清理在代码层面的接口和规则。钱怎么算、收谁多少见[计费](../../docs/domains/billing.md)，一次调用的编排见 [gateway](../gateway/README.md)；这里只写调用路径上下游代码要依赖的部分，账本、额度批次的代码结构随实现补入本文。
 
-> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote`、计量 `Meter`、预留的表、持有者、`Reserve`、`Extend`、`SettleOrphan`，以及结算 `Settle`、清理 `Cleanup`、暂估校正 `RegisterCorrections`、账本、后台加额度 `AddCredit`、付费额度 `CreditPaid`、每日自平 `Reconcile` 和它在队列上的周期任务 `RegisterReconcile`、缺项的兜底价、规则算价 `Sell`、发布 `RefreshPrices` 和读取 `PublishedPrices`，和结算写回供应商（`Suppliers`，见下文「报价」「计量」「数据」「结算与账本」「兜底价」「定价规则」）；后台循环 `Run`（心跳、回收、清理）也已实现；额度批次的分配与到期 `RegisterExpire` 也已实现（见「额度批次的分配与到期」）；退款的冻结、解冻和落账已实现（`FreezeRefund`、`ReleaseRefund`、`SettleRefund`）；退款的渠道流程、拒付随支付实现。
+> 本文先于代码写成，是 [Issue #28](https://github.com/TYCT-tyct/Axiom/issues/28) 在调用路径上的设计（PR B1–B6，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）；代码与本文不一致时，在同一个 PR 里改本文。已实现的是报价 `Quote`、计量 `Meter`、预留的表、持有者、`Reserve`、`ReserveMany`、`Extend`、`ExtendIn`、`SettleOrphan`、`SettleOrphanIn`，以及结算 `Settle`、`SettleIn`、`RunBatch`、清理 `Cleanup`、暂估校正 `RegisterCorrections`、账本、后台加额度 `AddCredit`、付费额度 `CreditPaid`、每日自平 `Reconcile` 和它在队列上的周期任务 `RegisterReconcile`、缺项的兜底价、规则算价 `Sell`、发布 `RefreshPrices` 和读取 `PublishedPrices`，和结算写回供应商（`Suppliers`，见下文「报价」「计量」「数据」「结算与账本」「兜底价」「定价规则」）；后台循环 `Run`（心跳、回收、清理）也已实现；额度批次的分配与到期 `RegisterExpire` 也已实现（见「额度批次的分配与到期」）；退款的冻结、解冻和落账已实现（`FreezeRefund`、`ReleaseRefund`、`SettleRefund`）；退款的渠道流程、拒付随支付实现。
 
 ## 接口（草图）
 
@@ -41,13 +41,18 @@ func ReadBudgetUsage(ctx context.Context, tx pg.Tx, subject uuid.UUID, reset Res
 type Admitted struct{ Scope pg.Scope; Site, Account, Workspace, Key uuid.UUID; WorkspaceBudget, KeyLimit *Limit } // 已实现；gateway 把 accounts.Admission 转成它（`billingAdmitted`），这一层转换是设计，不是临时
 func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID,
 	d Demand, q []Quotable) (*Hold, []int, error) // 已实现；[]int：保留条目在 q（即原路线）里的下标；*Insufficient{Source, Transient}、ErrTerminated
+type ReserveRequest struct{ Admitted Admitted; ID uuid.UUID; Demand Demand; Quotables []Quotable } // 已实现：一批同一账户的预留
+func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveRequest) ([]*Hold, [][]int, []error, error) // 已实现：一个事务、一把余额行锁；业务拒绝按请求放在 []error，数据库错误整批回滚；见「同一账户的合并预留」
 func (h *Hold) Bind(entry int) *Meter // 已实现（经内嵌的 Reservation）；尝试序号随结算加入
 func (m *Meter) Observe(p Progress) MeterStep // 已实现，纯内存、不分配、只归所有者
 type MeterStep struct{ Extend bool; Request ExtendRequest; Exhausted bool; Left int64 } // 一次读可能同时越过追加点和当前段，两者都报；Left：已批准的段还能覆盖的输出 token，全额预留为 math.MaxInt64
 func (m *Meter) Extended(seq int, err error)  // 已实现；所有者取回追加结果后调用，成功才采用新段、解除"追加中"
 type ExtendRequest struct{ Seq int; Entry int; Target platform.Exact } // 已实现；值类型，即不可变快照；Target 是累计目标
 func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error // 已实现；ErrTerminated、*Insufficient；不读 Meter
+func (b *Billing) ExtendIn(ctx context.Context, tx pg.Tx, h *Hold, r ExtendRequest) error // 已实现：在调用方的事务里；Extend 是它的包装
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (Final, error) // 已实现；前提：无追加在途
+func (b *Billing) SettleIn(ctx context.Context, tx pg.Tx, h *Hold, o Outcome) (Final, func(), error) // 已实现：在调用方的事务里；告警与平台承担日志在返回的 after 里，提交后调用
+func (b *Billing) RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error // 已实现：同一账户的多个完成写入一个事务；失败的工作带索引返回（BatchWorkError），整批回滚后其余请求在新事务重试
 func (b *Billing) Cleanup(ctx context.Context, max int32) (int, error) // 已实现：截止时间、被回收的持有者
 func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error         // 已实现：赠送；tx 须是平台范围（审计日志要求）
 func CreditPaid(ctx context.Context, tx pg.Tx, p PaidCredit) error    // 已实现：付费额度，见「结算与账本」；tx 须是平台范围
@@ -142,11 +147,17 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 ## 准入里的预留
 
-`Reserve` 最后执行，`reserveSources` 通过 `pg.Tx.Batch` 一起发送三条独立语句：先 `SELECT … FOR UPDATE` 锁本模块的**余额行**（同时读出余额、底线、在途预留、冻结），再以 `FOR KEY SHARE` 核对持有者（见下文），最后读工作区与 key 在各自窗口的花费和占用。READ COMMITTED 下最后一条在锁取得后才开始、取新快照，所以看得到锁前事务提交的全部修改；一条语句锁读多表做不到，被等待的锁只刷新被锁的那一行。批量只省往返，不合并这些语句的快照；先检查、读完并关闭批量结果，再报价和写入。准入合计 7 次往返（开始、设范围、核对 key、读兜底价、锁／栅栏／读计数同批、写预留、提交；兜底价是平台数据，在锁之前读），追加仍为 9 次（开始、设范围、锁余额行、栅栏、读预留行、读计数、写预留行、写占用、提交），目标已覆盖时 6 次。然后在内存里给每个条目报价，删掉报价超过余量的条目，按剩余的最高报价预留，首选被删则 `*Insufficient`；一条语句插入预留行并更新三层占用。
+`Reserve` 最后执行，`reserveSources` 通过 `pg.Tx.Batch` 一起发送三条独立语句：先 `SELECT … FOR UPDATE` 锁本模块的**余额行**（同时读出余额、底线、在途预留、冻结），再以 `FOR KEY SHARE` 核对持有者（见下文），最后读工作区与 key 在各自窗口的花费和占用。READ COMMITTED 下最后一条在锁取得后才开始、取新快照，所以看得到锁前事务提交的全部修改；一条语句锁读多表做不到，被等待的锁只刷新被锁的那一行。批量只省往返，不合并这些语句的快照；先检查、读完并关闭批量结果，再报价和写入。单请求的 `Reserve` 仍是 7 次往返（开始、设范围、核对 key、读兜底价、锁／栅栏／读计数同批、写预留、提交；兜底价是平台数据，在锁之前读）；准入批的 `ReserveMany` 从开始到提交约 7 次（开始、设范围、`AdmitBatch` 的核对 key、兜底价／锁／栅栏／时钟同批、计数同批、写预留同批、提交），按批摊薄。追加仍为 9 次（开始、设范围、锁余额行、栅栏、读预留行、读计数、写预留行、写占用、提交），目标已覆盖时 6 次。然后在内存里给每个条目报价，删掉报价超过余量的条目，按剩余的最高报价预留，首选被删则 `*Insufficient`；一条语句插入预留行并更新三层占用。
 
 - 余额行是账户资金写入的唯一串行点（[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)），锁两个账户时的顺序也在那里。没有余额行的账户按余额 0 处理，行在开户时由本模块建。
 - 报价规则（每个条目自己报价、首段的组成、输入按采样次数的上界）同在那一节。采样次数和按次项目的最大次数在报价时逐条目算：请求没写某个服务端工具的最大次数，就取该条目模型在 catalog 里的默认值，所以跨模型路线的条目可以不同。报价的测试至少包括：请求没写工具的最大次数；路线里两个条目的模型默认次数不同；开启服务端压缩时采样次数乘 2。
 - 余额不足是正常结果（`*Insufficient`），不让事务出错。`TestReserveSeesCommitsBeforeItsLock`、`TestBatchedReserveFencesAfterTheBalanceLock` 分别守住计数快照和持有者检查在锁后；批量与逐条路径共用余额缺行、持有者失效的错误映射，以及计数窗口的参数生成；`TestFundsReadsShareRefusals` 核对缺行时返回相同业务错误。`TestBatchRowsMatchGeneratedQueries` 用不同的余额、底线、占用、冻结、窗口、限额重置周期和结算字段对照 sqlc 的逐条结果，防止批量参数或扫描顺序互换。
+
+## 同一账户的合并预留
+
+`ReserveMany` 与准入批一起用（[计费的「热点账户」](../../docs/domains/billing.md#预留与结算)）：一个事务、一把余额行锁，批内每个请求一次计数读取和一次预留写入，都以 `pg.Tx.Batch` 流水线发送；锁、栅栏、兜底价和数据库时钟各一次。窗口按批次开始时的那次数据库时钟统一截断到 UTC 日，所以跨午夜的批次也不会把同一个请求的检查和归账拆到两天。报价按请求顺序在内存里进行，后面的请求使用前面请求将要增加的占用（`reserved`、工作区与 key 的 `workspaceUsed`、`keyUsed`，都饱和相加），所以整批不会越过底线或限额。业务拒绝按请求放进 `[]error`，不写任何行；兜底价或报价的其他错误也只影响那个请求。数据库错误让整批回滚，调用方按请求 ID 重试每个请求；只有写完预留后提交失败或确认丢失，网关的孤儿结算才处理"可能已提交"。单请求的 `Reserve` 仍内联写预留行，只有 `ReserveMany` 用 `reservationParams`：`Reserve` 不为批次抽象多付分配，两条路径写出的行由 `TestReserveManyRowsMatchReserve` 对照。`TestReserveManyIsTheSerialOrder` 用同一批金额对照逐个 `Reserve` 的结果（允许与拒绝逐项相同），`TestReserveManyStorm` 让四个批次并发、核对总量不越底线，`TestReserveManyRowsMatchReserve` 对照批量与单条写入的行，`TestReserveManyRollsBackOnAWriteFailure` 核对插入失败后没有残留。
+
+完成批用 `RunBatch`：同一账户的多个 `SettleIn`、`ExtendIn` 或 `SettleOrphanIn` 写进一个事务，`SettleIn` 返回的 `after` 只在提交后执行，所以告警、平台承担日志和供应商结束都不会描述一个回滚了的交易。一个 work 的错误带索引返回（`BatchWorkError`），整批回滚后错误只还给这个请求；其余请求由网关在只含它们的新事务里、按各自期限重试，必要时继续拆批。事务开始、提交或连接错误没有失败的 work，才整批交给调用方按请求 ID 幂等重试。没有保存点，同一请求重试仍最多收一次。`TestRunBatchSettlesInOneTransaction` 对照单独结算的金额，`TestRunBatchRollsBackAndARetryChargesOnce` 核对回滚后没有终态、没有报告、失败 work 带索引，重试各收一次；`TestCompletionBatchKeepsOneWritesFailureOffTheRest` 从 gateway 的 `withFunds` 走一遍，核对失败只截断自己的流、另一个请求照常提交并执行报告。
 
 ## 数据
 
@@ -184,7 +195,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **每日自平**：`RegisterReconcile` 把 `Reconcile` 登记为队列上的周期任务 `billing.reconcile`（节点启动时先跑一次，之后每 24 小时；同一时刻只有一个在排队或在跑，多节点时只有队列的领导节点插入）。它只读账本，找出分录合计不为 0 的交易和与账本合计不符的余额；每个问题记一条 Error 日志（最多列 20 条，其余给总数）并计入 `axiom.billing.reconcile.problems`。队列先于 billing 启动，所以它不依赖 `*Billing`，只要数据库和平台范围。差异数量及正常时的恢复以 `billing.reconciliation_difference/ledger` 在本轮事务末尾持久发布。已提交结算的底线损失通过 Config.Alerts 立即上报 `billing.settlement_anomaly/platform_borne`；首次启动在接收调用前只登记已有正向 platform_borne 分录的结算交易身份；之后每日自平按结算交易身份修复缓冲满或节点故障丢掉的即时信号。即时写入器的 RaiseOnce 与补报在平台位置表认领同一身份，认领与信号同事务，故消费或人工关闭后同一损失不再重开，补报的 settlements 是本轮补齐的结算交易数，不增加正常调用路径的数据库往返。这是账本自己对平，与供应商逐条对账无关（[#227](https://github.com/TYCT-tyct/Axiom/issues/227)）。
 - **账本**：一笔交易的分录在每个币种里合计为 0（写入时 `post` 按币种断言，每日自平按 `(transaction_id, currency)` 分组；只看总和会让跨币种的充值把一边的错配平），用户余额是负债，`balances.balance` = −Σ user_balance 分录，与分录在同一条语句里更新；`spend.spent` 与收费在同一事务里更新。每条分录带产生它的租户，行级安全据此读；平台收入按 `book` 在平台范围汇总。按月分区随规模加入。
 - **按请求读账本**：`LedgerOf(ctx, tx, requestID)` 按 `transactions.request_id` 读一个请求的全部交易，每笔带自己的分录；交易按 `created_at, id`、分录按 `book, amount` 排序。`(request_id, attempt_seq, kind, revision)` 的唯一索引以请求 ID 开头，所以是一次范围扫描加按 `transaction_id` 的连接，与账本总量无关。它是运营和管理读的内部接口，不是用户的：分录里也有供应商成本。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己的这些分录。调用记录不复制交易或分录的 ID，调用、尝试和账本都只用请求 ID 关联（[observability 的「追溯」](../observability/README.md#追溯)）。
-- **`Settle`**：一个事务、账户范围。先锁余额行、读预留行，再在锁内写每次尝试的成本和 `Suppliers.RecordAttempts`，按预留状态分支（下文「预留的状态」）。收费 = min(应收, 余额 − 底线 − 其他预留占用 − 全部冻结)，按精确值算，超出部分记 `platform_borne`，事务提交后记一条 Error 日志（请求、应收、实收、承担）并计入 `axiom.billing.platform_borne` 和 `axiom.billing.platform_borne.amount`（重试时预留已是终态，不重复报）；其他预留仍被覆盖，所以并发的请求不会因为这一笔而越过底线。收费所按的尝试、免单与否、是否暂估和用量写进预留行，重试返回的就是这份 `Final`。没有尝试的结局（已预留、没发上游）只释放。`settlementRows` 把锁余额行与随后读预留行作为两条独立语句同批发送，后者仍取锁后的快照；每笔账本交易由 `PostLedger` 一条语句记交易、分录并移动余额，`EndReservation` 一条语句移动三层计数并写预留终态。一次尝试、成本非零、走免单检查并进入终态时 9 次往返（开始、设范围、锁余额／读预留同批、尝试成本、写尝试、记收费、移动计数并写预留、`EndRequest`、提交），每多一次尝试多 1 次；从锁余额行到提交持锁 6 次往返加提交。各段先按精确值求和再向上取整一次。纯成本事件也在余额锁内编号，但不改变余额。`TestBatchedSettleSeesTheTerminalStateAfterItsLock` 守住锁后终态读取，`TestPipelinedSettlementsIsolateFailures` 在成本写入后和终态写入后注入 SQL 错误，核对其他请求及重复重试精确扣费；`TestPostWaitsBeforeUpdatingBalanceAndNumbering` 核对等待锁期间的余额变化和序号。`BenchmarkReserveSettle` 覆盖一次完整预留与结算的数据库分配。
+- **`Settle` / `SettleIn` / `RunBatch`**：`Settle` 是一次事务的单请求路径（不构造批次的报告闭包，省一次分配）；`SettleIn` 在调用方的事务里做同样的写入，`RunBatch` 把同一账户的多个完成写入一个事务，详见「同一账户的合并预留」。实现时先锁余额行、读预留行，再在锁内写每次尝试的成本和 `Suppliers.RecordAttempts`，按预留状态分支（下文「预留的状态」）。收费 = min(应收, 余额 − 底线 − 其他预留占用 − 全部冻结)，按精确值算，超出部分记 `platform_borne`，事务提交后记一条 Error 日志（请求、应收、实收、承担）并计入 `axiom.billing.platform_borne` 和 `axiom.billing.platform_borne.amount`（重试时预留已是终态，不重复报）；其他预留仍被覆盖，所以并发的请求不会因为这一笔而越过底线。收费所按的尝试、免单与否、是否暂估和用量写进预留行，重试返回的就是这份 `Final`。没有尝试的结局（已预留、没发上游）只释放。`settlementRows` 把锁余额行与随后读预留行作为两条独立语句同批发送，后者仍取锁后的快照；每笔账本交易由 `PostLedger` 一条语句记交易、分录并移动余额，`EndReservation` 一条语句移动三层计数并写预留终态。单请求时一次尝试、成本非零、走免单检查并进入终态是 9 次往返（开始、设范围、锁余额／读预留同批、尝试成本、写尝试、记收费、移动计数并写预留、`EndRequest`、提交），每多一次尝试多 1 次；同一账户的并发完成合成一个事务后这些往返按批摊薄。从锁余额行到提交持锁 6 次往返加提交。各段先按精确值求和再向上取整一次。纯成本事件也在余额锁内编号，但不改变余额。`TestBatchedSettleSeesTheTerminalStateAfterItsLock` 守住锁后终态读取，`TestPipelinedSettlementsIsolateFailures` 在成本写入后和终态写入后注入 SQL 错误，核对其他请求及重复重试精确扣费；`TestPostWaitsBeforeUpdatingBalanceAndNumbering` 核对等待锁期间的余额变化和序号。`BenchmarkReserveSettle` 覆盖一次完整预留与结算的数据库分配。
 - **免单**：最后一次尝试 `NotExecuted` 不收；收费的那次尝试是因客户端离开而结束的（`Finish` 为 `FinishCancelled`）照收，客户端在一次失败的尝试之后才离开则按那次失败判断（`waivable` 只看收费的那次尝试，`Outcome` 里没有整个调用的"取消"）；内容没交到客户端（`FailedBeforeCommit`、`Unknown`），或交到了但每次采样都报告了输出、普通输出、推理、音频与图片的 token 合计为 0 且交付的图片张数与音频输出秒数为 0、结束原因为空或出错的，只收按次项目（仍按整次采样所在的档位计价）。按张、按秒、按字符的项不在按次项目里：它们是交付的产物，免单时一并免掉（`zeroOutput`、`deliveredOutputs`）。没有上限，也不数次数：同一个账户连续多少次零输出调用都全免（`settle_test.go` 的 `TestWaiversHaveNoCap`），`billing.waivers` 表已随迁移 `00006_drop_unused.sql` 删除。判定只看这三条，与金额无关（`waivable`、`zeroOutput`）。
 - **暂估**：收费的项里有上游没报告的、价目表缺价的，或有 protocol 映射不了的用量（`Usage.Unknown()`），收费标暂估，`Final.Estimated` 如实报出。缺价的都按「兜底价」收，结算和迟到的 `Settle` 都按它，所以从不免费：映射不了的用量由 `addFallbacks` 收，价目表给了项却给不了价的由 `addMissing` 收——上游按 `priority` 服务而锁定的售价只有标准档时 `Cost` 一项也价不了，token 按该价目表全部服务等级和档位里最高的 token 单价、按次项目按锁定的默认单价。已知的按次项目缺价时由准入补上的默认单价正常计价，不算暂估。上架门槛挡不住前一种：它查的是售价能不能给得出价（报价取请求等级与端点等级的交集再加标准档），不管上游回报什么。暂估不保留任何东西：预留里没用掉的部分在结算里一起释放；供应商记录到了以后由 `RegisterCorrections` 冲正并重新结算（下文「暂估校正」）。
 
@@ -317,6 +328,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 |---|---|---|
 | 充值缓冲默认 2%，按站点存差值，只作用于充值方向 | 人工参考汇率会滞后于市场，按参考价收会让平台在汇率波动时亏损；2% 约等于卡组织的换汇价差，用户可以接受；站点可在 0 到 10% 之间调 | 不加缓冲（sub2api、new-api 的固定汇率）：汇率一动平台就亏；全局一个值：二级站点的风险不同 |
 | 先锁余额行，计数用同批的下一条语句读 | READ COMMITTED 下新语句才看得到锁前的提交；同批发出不多一次往返 | 一条语句锁读多表：读到旧快照 |
+| 同一账户的并发准入和完成按批合并：一个事务、一把余额行锁；报价按顺序累加前项将占的额度，业务拒绝按请求、数据库错误整批回滚 | 每请求的 BEGIN、COMMIT、连接和锁等待是热点账户的主要成本（#296）；批内累加占用保证整批不越底线；请求 ID 幂等让整批回滚可安全重试，不需要保存点。保存点、全局写线程、只做请求内合并的比较见[计费的决策表](../../docs/domains/billing.md#决策与理由) | 每请求保存点：多一次往返和一套回滚状态；只靠行锁：等锁占连接；跨账户合并：失败与审计范围放大 |
 | 追加按累计目标，已覆盖即成功，写入以锁内读到的段号比较后再写；金额只增不减 | 重发和前一次尝试的追加都不会多扣，回退到便宜条目也不缩小预留 | 按增量追加：重发会多扣 |
 | 尝试成本与对账键在最后的结算事务里写，成本逐次尝试写 | 与收费同成同败：供应商那一行和账上的成本分录一起出现或都不出现；写入是 `unnest` 一条语句，往返与尝试次数无关。崩溃的请求没有尝试可写，由丢失的请求留下路线 | 每次尝试结束各写一次：成本与收费不在一个事务里，崩溃时两边不一致 |
 | 结算事务由 billing 打开 | M1 里只有 billing、suppliers 写 | gateway 打开、各模块传 `pg.Tx` |
