@@ -21,9 +21,12 @@ func TestRefundConcurrentApprovalSendsOnce(t *testing.T) {
 	}})
 	r := w.mustRefund(o, o.Credits, "concurrent")
 	done := make(chan error, 1)
-	go func() { _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7()); done <- err }()
+	go func() {
+		_, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7(), "approved")
+		done <- err
+	}()
 	<-entered
-	_, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7())
+	_, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7(), "approved")
 	close(release)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +87,7 @@ func testRefundOutcomeRollback(t *testing.T, fail bool) {
 	// Reject at COMMIT, after both ledger and refund state have been written.
 	w.exec(`CREATE FUNCTION payments.reject_refund_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected refund commit failure'; END $$`,
 		`CREATE CONSTRAINT TRIGGER reject_refund_commit AFTER UPDATE ON payments.refunds DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.state IN ('succeeded','failed')) EXECUTE FUNCTION payments.reject_refund_commit()`)
-	_, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7())
+	_, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7(), "approved")
 	if err == nil {
 		t.Fatal("commit did not fail")
 	}

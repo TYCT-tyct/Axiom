@@ -40,8 +40,12 @@ export function Time({ at }: { at: string | undefined }) {
 }
 
 // Code is an identifier or a name the system gives, in the monospaced face; it may be long, so it wraps anywhere.
-export function Code({ children }: { children: ReactNode }) {
-  return <span className="font-mono text-label [overflow-wrap:anywhere]">{children}</span>;
+export function Code({ children, title }: { children: ReactNode; title?: string }) {
+  return (
+    <span className="font-mono text-label [overflow-wrap:anywhere]" title={title}>
+      {children}
+    </span>
+  );
 }
 
 // Json keeps a record's shape: the route of a call and an audit entry's detail are nested and meant to be read as they

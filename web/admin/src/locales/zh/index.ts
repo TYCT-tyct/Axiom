@@ -2,6 +2,7 @@ import audit from "./audit";
 import calls from "./calls";
 import mappings from "./mappings";
 import models from "./models";
+import orders from "./orders";
 import pricing from "./pricing";
 import settings from "./settings";
 import suppliers from "./suppliers";
@@ -13,6 +14,7 @@ export default {
   forbiddenHint: "请联系站长授予权限。",
   nav: {
     users: "用户",
+    orders: "订单与退款",
     calls: "调用记录",
     audit: "审计日志",
     suppliers: "供应商",
@@ -48,6 +50,7 @@ export default {
       "这个请求的标识已经用于另一份内容，第一次提交可能已经生效，这里不会再发送。关闭后看到的数据可能还不包含它，不能据此判断要不要重做。",
   },
   users,
+  orders,
   suppliers,
   mappings,
   models,

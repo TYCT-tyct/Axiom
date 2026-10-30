@@ -322,3 +322,42 @@ export const merchantsQuery = (siteId: AdminSchemas["SiteId"]) =>
     queryFn: ({ signal }) =>
       unwrap(adminApi.GET(`${base}/payments/merchants`, { params: { query: { site_id: siteId } }, signal })),
   });
+
+export type PaymentOrderFilters = {
+  account_id?: string;
+  user_id?: string;
+  state?: AdminSchemas["PaymentOrderState"];
+  merchant_id?: string;
+  since?: string;
+  until?: string;
+};
+
+// A site's orders, newest first, each with its refunds. The filters are the address's, so a page and the query that
+// changes its data agree on the key; the queue below asks for the state it decides.
+export const paymentOrdersQuery = (siteId: AdminSchemas["SiteId"], filters: PaymentOrderFilters) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "payment-orders", siteId, filters],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/payments/orders`, {
+          params: { query: { site_id: siteId, ...filters, cursor: pageParam, limit: pageSize } },
+          signal,
+        }),
+      ),
+    initialPageParam: firstPage,
+    getNextPageParam: nextCursor,
+  });
+
+export const paymentRefundsQuery = (siteId: AdminSchemas["SiteId"], state?: AdminSchemas["PaymentRefundState"]) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "payment-refunds", siteId, state ?? ""],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/payments/refunds`, {
+          params: { query: { site_id: siteId, state, cursor: pageParam, limit: pageSize } },
+          signal,
+        }),
+      ),
+    initialPageParam: firstPage,
+    getNextPageParam: nextCursor,
+  });
