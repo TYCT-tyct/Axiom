@@ -8,6 +8,7 @@
     "typecheck": "tsc"
   },
   "dependencies": {
+    "@axiom/api": "workspace:*",
     "@axiom/ui": "workspace:*",
     "i18next": "26.5.2",
     "react": "19.3.1",

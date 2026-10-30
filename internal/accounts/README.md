@@ -27,8 +27,9 @@
 
 | 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
 |---|---|---|---|---|
-| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed / open；默认 invite，开放注册默认关闭）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变；`getSite` 也把它交给页面），`default_tier_id`（不为空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查 | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id` |
+| `sites` | `parent_site_id`、`owner_account_id`、`is_main`（`GENERATED ALWAYS AS (parent_site_id IS NULL) STORED`）、`parent_is_main`（恒为真的生成列）、`name`、`status`、`key_prefix`（`[a-z0-9-]{2,16}` 且以 `-` 结尾）、`registration`（invite / closed / open；默认 invite，开放注册默认关闭）、`currency`（站点的记账币种，三个大写字母，默认 `USD` 只补迁移前已有的站点，`axiom site init` 必须写明；创建后不可改，所以 `Money` 的 `currency` 一经发出不会变；`getSite` 也把它交给页面），`default_tier_id`（不为空）、`logo_hash`（当前 logo 的 SHA-256，可空） | `UNIQUE (id, is_main)`；部分唯一 `(is_main) WHERE is_main`；`(parent_site_id IS NULL) = (owner_account_id IS NULL)`；`(parent_site_id, parent_is_main) → sites(id, is_main)`：上级只能是主站，站点只有两层；`(parent_site_id, owner_account_id) → accounts(site_id, id)`；`(id, default_tier_id) → tiers(site_id, id)`，延迟到提交时检查；`(id, logo_hash) → site_logos(site_id, hash)` | 站点 | `name`、`status`、`key_prefix`、`registration`、`default_tier_id`、`logo_hash` |
 | `site_domains` | `domain`（小写，主键）、`site_id`、`surface`（console / api / admin）、`origin`（完整的源，生产是 `https://域名`，开发可以是 `http://localhost:端口`）、`disabled_at` | `origin` 是 `https://` 加 `domain`，或 `http://localhost[:端口]` | 站点 | `disabled_at` |
+| `site_logos` | `site_id`、`hash`（SHA-256，32 字节）、`content_type`（image/svg+xml / image/png / image/webp）、`width`、`height`（像素，SVG 没有固有尺寸时为 0）、`bytes`（1 到 256 KiB）、`created_at` | 主键 `(site_id, hash)`；`0 ≤ width, height ≤ 1024`；同类字节只有一行，地址与内容一一对应 | 站点 | 无（只插入；旧行保留，`sites.logo_hash` 选择当前行） |
 | `site_settings` | `site_id`（主键）；可空的 `console_idle_timeout`、`console_max_age`、`admin_idle_timeout`、`admin_max_age`、`new_key_daily_limit`，以及「注册、登录与会话」的尝试上限 `ip_attempt_burst`、`ip_attempts_per_minute`、`email_sign_in_failures`、`user_code_failures`、`challenge_code_attempts`；开放注册的 `registration_human_check`、`registration_human_check_bits`、`registration_domain_burst`、`registration_domain_per_hour`、`registration_domain_allow`、`registration_domain_deny` | 每列有上下界：时长最短 5 分钟，最长依次 30 天、90 天、12 小时、1 天；每日上限 0 到 100 万额度；尝试上限至少 1，最多依次 1 万、1 万、1000、1000、100；空表示用代码里的默认值。另有可空的 `max_keys_per_account`、`key_creations_per_hour`（站点的 key 限额，各 1 到 1 万，由 `/key-limits` 读改，不在站点设置的整体替换里） | 站点 | 全部参数列 |
 | `tiers` | `site_id`、`name`、`rate_requests` | `UNIQUE (site_id, id)` | 站点 | `name`、`rate_requests` |
 | `roles` | `name`、`permissions text[]`、`additional_permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`、`additional_permissions`（M1 只经迁移） |
@@ -180,6 +181,7 @@
 
 - 站点、域名、站点设置、角色各是一份不可变的值，用 `atomic.Pointer` 整体替换。只有一个后台循环重载：每 30 秒无条件重载一次（本进程写这些表的接口加入时，再加写后标记"需要重载"），覆盖别的节点和命令行的修改；循环串行，旧值不会覆盖新值。平台的变更通知（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）做好后也触发重载，30 秒的兜底仍保留：快照不决定能否访问，滞后只影响价格页和参数。
 - **快照不决定能否访问**：域名和站点的启用、注册策略在库里判定，平台授予每个请求读库。快照只用来预筛没登记的域名（快照里没有就直接拒，省一次查库）、匿名价格页和计价预览按站点默认等级（`Site.DefaultTier`）选规则、尝试上限等参数、角色的权限集合。
+- 站点快照带着当前 logo 的 hash（`Site.LogoHash`，没有时为空），不带宽高和字节：`getSite` 只拼公开地址，图片请求才按 hash 读库。旧 logo 的行不会因为换图而删除，所以已经发出的地址继续有效。
 - 站点快照还带着本站 API 域名的 origin（`Site.APIBase`，没有启用的 API 域名时为空；有多个时优先 HTTPS，同协议取 origin 最小的那个，快照每 30 秒重载，地址不能因此变来变去）：控制台用它告诉用户把客户端指向哪里（[API key](../../docs/domains/accounts.md#api-key)「接入地址」）。它只是给界面看的地址，和准入、计价无关。
 - 超过 90 秒（3 个周期）没有成功重载，所有请求返回 503，直到重载成功；启动时第一次加载失败就不启动。
 
@@ -287,6 +289,8 @@
 | 一个用户同一平台角色只有一条有效授予 | 部分唯一索引 `platform_grants_held` + `ON CONFLICT DO NOTHING`；测试：两条授予同时开始（授予表被锁住直到两条都在等待），只留一条授予、一条审计 |
 | 主站的币种是 `USD` | `InitSite` 写库前核对；测试：EUR 被拒，没有任何写入（核对在事务之前） |
 | 站点的币种不可改 | `axiom_app` 对 `sites.currency` 没有 `UPDATE` 权限；`Money` 的币种由它决定 |
+| 站点 logo 的类型、尺寸和字节数在入库前受约束 | `site_logos` 的 CHECK；解析器只接受 SVG、PNG、WebP，PNG 解码头部核对尺寸，WebP 先限制尺寸，再完整解码校验，SVG 重建后的字节不超过 256 KiB；测试覆盖脚本、事件属性、外部引用、DTD、超限尺寸和不可读文件 |
+| 当前 logo 一定属于本站点，且旧地址不变 | `(id, logo_hash) → site_logos(site_id, hash)` 复合外键；地址里的 SHA-256 就是内容的哈希，行只插入不更新；测试换图后旧 hash 仍读出原字节 |
 | 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，数据库拒绝审计时开启失败，因素、恢复码、会话都没有留下 |
 | 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
 | 快照不决定能否访问 | 站点、域名的状态和注册策略在库里判定；测试：只停用域名，另一个 `Service` 的准入、会话、登录、注册立即被拒；重载持续失败 90 秒后全部 503 |
@@ -302,6 +306,8 @@
 | `ReadSystemSettings`、`SetSystemSettings` | 站点名称与 invite/closed 注册策略，读写既有 sites 行；站点行锁内读前值、修改和审计，写后由组装层刷新快照。后台客服/运维的新增权限通过迁移 00017 的 additional_permissions 保持旧节点兼容 |
 | `SiteSettings`、`SetSiteSettings` | 读、整体替换站点自己的会话时长和新 key 的每日上限；没设的列是空，用代码里的默认（`DefaultSiteSettings`）。越界是 `*SettingError`（名字是接口里的字段名），站点不存在是 `ErrNotFound`。替换在站点行锁里做，审计条目 `site_settings.update` 记改前和改后的值，改前就是被替换的值 |
 | `SiteLoginLimits`、`SetSiteLoginLimits` | 独立 `/login-limits` 读写现有五项阈值，空值选择 `DefaultLoginLimits`；站点锁内读旧值、替换、审计，与其他站点设置互不覆盖；写后刷新，其余节点 30 秒内重载 |
+| `CurrentSiteLogo`、`SetSiteLogo` | 读当前 logo（没有时 nil）；`SetSiteLogo` 在站点行锁内解析并校验、插入 `site_logos`、更新 `sites.logo_hash`，`data` 为 nil 表示清除；`*SettingError` 是文件被拒，`ErrNotFound` 是站点不存在。审计 `site_logo.update` 只记 hash、类型、尺寸和字节数。写后由组装层刷新快照 |
+| `SiteLogoByHash` | 公开读：按站点和 hash 取一行，当前的和旧的都能取到；hash 已由 URL 校验为 32 字节，读在平台范围，不依赖快照的当前指针 |
 | `SetAccountSuspended`、`SetUserSignInDisabled` | 分开控制调用和登录，前者复用准入同一条查询里的账户状态，后者在用户锁内吊销全部会话，恢复均不修改因素 |
 | `UserPlatformGrants`、`SetPlatformGrantRevoked` | 列表各角色最后状态，撤销终态不回退；恢复要求历史授予且权限为操作者当前平台角色权限的子集，插入新行并记录 granted_by；按用户锁串行 |
 | `Refresh` | 立即重载快照。改了站点设置的节点调用它；别的节点在重载间隔内（30 秒）跟上 |
@@ -310,6 +316,7 @@
 | `Users` | 用户列表，新的在前，键集分页（上一页最后一个用户的 ID），可按站点、按邮箱前缀筛。前缀按字面匹配（`%`、`_` 不是通配符）、不分大小写，用 `users_email_prefix`（`text_pattern_ops`）的索引。创建时间取自 UUIDv7 的时间戳（ID 的顺序就是创建的顺序，没有 `created_at` 列） |
 | `Account` | 账户、等级、主人；账户没有成员时是 `ErrNotFound`（账户总有主人） |
 
+- **站点 logo 的解析与发送**：`logo.go` 的 `ParseLogo` 是唯一的解析入口，返回重建后的字节、类型、宽高和 SHA-256；`SetSiteLogo` 只存这个结果。PNG 用标准库的 `png.DecodeConfig` 读头；WebP 先用 `golang.org/x/image/webp` 的 `DecodeConfig` 限制画布尺寸，再完整解码，SVG 用 `encoding/xml` 逐个 token 重建：允许的元素和属性各是一张表，值里的 `href` 只能是本文件的 `#id`，`fill`/`stroke` 等只接受颜色或本文件的 `url(#id)`，`style`、事件属性和外部命名空间全部丢弃，DTD 直接拒绝。HTTP 层只按 `ContentType` 选生成的响应类型，并设置 `Cache-Control: public, max-age=31536000, immutable`；`Content-Type` 和 `Content-Length` 由生成代码写，`X-Content-Type-Options: nosniff` 由前端中间件统一加。
 - **权限**：管理接口权限（含 `calls.search`、`calls.inspect`、`audit.view`）（均在 `authorize.go` 声明，迁移 `00006` 给内置角色）：`users.view`、`suppliers.view`、`catalog.view`、`pricing.view`（非敏感）；`credits.grant`、`suppliers.manage`、`catalog.manage`、`pricing.manage`（敏感，要做过两步验证的会话）。内置角色（迁移后）：
 
   | 角色 | 权限 |
@@ -332,6 +339,7 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) // cfg: 平台范围、
 func (s *Service) Load(ctx context.Context, logger *slog.Logger) error // 站点、域名、设置、角色的快照；核对权限名；启动重载循环
 func (s *Service) SiteForHost(host string) (Site, Surface, error) // Host 原样（小写、非默认端口带端口）；ErrUnknownHost、ErrStale
 func (s *Service) Origin(host string) (string, error) // 该域名登记的 origin（含协议和端口），服务端拼链接时用，不用请求头里的 Origin；错误同上
+func (s *Service) SiteLogoByHash(ctx context.Context, site SiteID, hash [32]byte) (*Logo, error) // 公开读取，当前或旧的 hash；ErrNotFound
 func (s *Service) CreateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r KeyRequest) (CreatedKey, error)
 func (s *Service) DeleteKey(ctx context.Context, tx pg.Tx, actor audit.Actor, key KeyID) error
 func (s *Service) AuthenticateKey(ctx context.Context, site SiteID, raw string) (Caller, error) // 只认出，不判定能否使用

@@ -6,19 +6,20 @@ import { cn } from "../cn";
 // own name and logo (docs/domains/accounts.md「站点」); a logo that does not load shows the mark.
 export function Logo({ className, name, logoUrl }: { className?: string; name?: string; logoUrl?: string }) {
   const { t } = useTranslation("common");
-  const [broken, setBroken] = useState(false);
+  // The URL that failed, not a boolean: a new logo at a new URL is tried, not hidden behind the old failure.
+  const [failed, setFailed] = useState<string | null>(null);
   return (
     <span
       className={cn("inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-[-0.01em] text-t1", className)}
     >
-      {logoUrl && !broken ? (
+      {logoUrl && failed !== logoUrl ? (
         <img
           src={logoUrl}
           alt=""
           width="20"
           height="20"
-          onError={() => setBroken(true)}
-          className="size-5 shrink-0 rounded-[5.5px] object-cover"
+          onError={() => setFailed(logoUrl)}
+          className="size-5 shrink-0 rounded-[5.5px] object-contain"
         />
       ) : (
         <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" className="shrink-0">

@@ -189,6 +189,9 @@ importers:
 
   site:
     dependencies:
+      '@axiom/api':
+        specifier: workspace:*
+        version: link:../packages/api
       '@axiom/ui':
         specifier: workspace:*
         version: link:../packages/ui
