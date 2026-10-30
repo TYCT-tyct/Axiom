@@ -176,7 +176,12 @@ func MaintainUserNotices(ctx context.Context, tx pg.Tx) error {
 			}
 		}
 	}
-	_, err = tx.Exec(ctx, `DELETE FROM accounts.user_notices WHERE id IN (SELECT id FROM accounts.user_notices WHERE dispatched AND webhook_state<>'queued' AND at<statement_timestamp()-interval '30 days' ORDER BY at LIMIT 100)`)
+	if _, err = tx.Exec(ctx, `DELETE FROM accounts.user_notices WHERE id IN (SELECT id FROM accounts.user_notices WHERE dispatched AND webhook_state<>'queued' AND at<statement_timestamp()-interval '30 days' ORDER BY at LIMIT 100)`); err != nil {
+		return err
+	}
+	// Abandoned sign-in ceremonies expire in minutes; deleting them here keeps the flow tables small without a job of
+	// their own.
+	_, err = New().DeleteExpiredAuthFlows(ctx, tx)
 	return err
 }
 

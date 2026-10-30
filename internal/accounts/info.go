@@ -19,7 +19,8 @@ type SessionInfo struct {
 	Email       string
 	InviteCode  string
 	Level       string // pending_mfa, password or mfa
-	MFAEnabled  bool
+	MFAEnabled  bool   // two-step verification, and on the console a passkey too
+	Passkeys    int
 	CSRFToken   string
 	ExpiresAt   time.Time
 	Permissions []string // sorted; none while the session waits for its second factor
@@ -51,7 +52,10 @@ func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, er
 	}
 	r := rows[0]
 	return SessionInfo{
-		User: p.user, Account: p.account, Email: r.Email, InviteCode: r.InviteCode, Level: p.level, MFAEnabled: r.Mfa,
+		User: p.user, Account: p.account, Email: r.Email, InviteCode: r.InviteCode, Level: p.level,
+		// A passkey protects the console but not the admin listener, which cannot run WebAuthn; an admin session
+		// reports only TOTP as its second factor so the page does not claim a protection it cannot use.
+		MFAEnabled: r.Mfa || (r.Passkeys > 0 && p.surface == Console), Passkeys: int(r.Passkeys),
 		CSRFToken: r.CsrfToken, ExpiresAt: r.ExpiresAt.Time, Permissions: s.permissionsOf(p, roles),
 	}, nil
 }

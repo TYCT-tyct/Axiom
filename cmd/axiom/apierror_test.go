@@ -21,7 +21,8 @@ func TestErrorCodesAreTheContractsCodes(t *testing.T) {
 		codeOriginRejected, codeNotFound, codeConflict, codeEmailTaken, codeNameTaken, codeTooManyKeys, codeStaleRevision, codeIdempotencyReuse,
 		codeInvalidInvite, codeRegistrationClosed, codeHumanCheck, codeEmailDomain, codeInvalidVerification,
 		codeWeakPassword, codeNotReady, codeUnprocessable, codeRateLimited, codeInternal,
-		codeNotImplemented, codeUnavailable,
+		codeNotImplemented, codeUnavailable, codeLoginDomainLocked, codeLoginDomainRequired, codeIdentityTaken,
+		codeIdentityAlreadyLinked, codeAccountNotLinked,
 	} {
 		ours = append(ours, string(c))
 	}

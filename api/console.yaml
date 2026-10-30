@@ -664,6 +664,416 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/oauth/start:
+    post:
+      operationId: startOAuthSignIn
+      tags: [Session]
+      summary: Start signing in with a third-party provider
+      description: >-
+        Makes a single-use state and, where the provider supports it, a PKCE verifier, stores them with the site's
+        callback URI and a nonce cookie, and returns the provider's authorization URL. The callback must carry that
+        nonce or it signs no browser in: state alone would let a completed callback be used to sign another browser
+        in to the account that began it. The flow is for one site and expires in 10
+        minutes. Needs the `Origin` of the console and no session; a site that has not stored the provider's
+        application is a 404, and a request on a console domain that is not the site's login domain is refused because
+        the callback and its cookie belong to that domain. Limits: the sign-in per-IP bucket.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OAuthStartRequest"}
+      responses:
+        "200":
+          description: The URL to send the browser to, with the nonce cookie the callback must return.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OAuthStart"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/oauth/link/start:
+    post:
+      operationId: startOAuthLink
+      tags: [Session]
+      summary: Start linking a third-party provider to the signed-in user
+      description: >-
+        The same flow as `startOAuthSignIn`, bound to this user and session. It is a credential change: a user with a
+        second factor must be in an `mfa` session. The callback must return to this same browser and session, or it
+        links nothing. Limits: the sign-in per-IP bucket.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OAuthStartRequest"}
+      responses:
+        "200":
+          description: The URL to send the browser to.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OAuthStart"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/oauth/{provider}/callback:
+    get:
+      operationId: completeOAuth
+      tags: [Session]
+      summary: The provider's redirect back to the site
+      description: >-
+        Spends the state, exchanges the code for the stored callback URI, and reads the provider's subject. A sign-in
+        matches that subject against linked identities only: an unknown one is not registered and its email never
+        joins accounts (no automatic merge). A link attaches the subject to the session that began the flow, raises
+        the user's factor version and issues a new session. Answers 303 under the console mount: `/console/` after a
+        sign-in, `/console/security` after a link, and `/console/sign-in?oauth=failed` when the round trip fails, so a
+        browser never lands on JSON. The path's provider must be the one the state was made for.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/OAuthProvider"}
+        - name: code
+          in: query
+          required: false
+          schema: {type: string, maxLength: 2048}
+        - name: state
+          in: query
+          required: false
+          schema: {type: string, maxLength: 512}
+      responses:
+        "303":
+          description: The browser goes to the console page for the outcome; the cookie is set on success.
+          headers:
+            Location: {required: true, schema: {type: string}}
+            Set-Cookie:
+              description: The new session cookie, on success.
+              schema: {type: string}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/begin:
+    post:
+      operationId: beginPasskeySignIn
+      tags: [Session]
+      summary: Start signing in with a passkey
+      description: >-
+        A discoverable assertion: the browser offers every passkey for the site's login domain and the chosen one
+        carries its user, so nobody types an email first and an unknown caller learns nothing about who exists. The
+        ceremony requires user verification and expires in 5 minutes. Needs the `Origin` of the console and no session;
+        the site must have passkeys on and a login domain. Limits: the sign-in per-IP bucket.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: The assertion challenge.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PasskeyChallenge"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/finish:
+    post:
+      operationId: finishPasskeySignIn
+      tags: [Session]
+      summary: Finish signing in with a passkey
+      description: >-
+        Verifies the assertion against the stored public key and the counter, then issues an `mfa` session: the
+        authenticator verified the person and proved possession. A counter that goes backwards is refused; zero is
+        what synced passkeys report and stays accepted. The body is the browser's credential JSON; `flow_id` is the
+        one `beginPasskeySignIn` returned. Needs the `Origin` of the console and no session. Limits: the sign-in per-IP
+        bucket.
+      security: []
+      parameters:
+        - name: flow_id
+          in: query
+          required: true
+          schema: {type: string, maxLength: 64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WebAuthnCredential"}
+      responses:
+        "200":
+          description: Signed in with an `mfa` session.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionGrant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/mfa/begin:
+    post:
+      operationId: beginPasskeyMfa
+      tags: [Session]
+      summary: Start the passkey factor of a pending sign-in
+      description: >-
+        The pending session a password sign-in issued is the only credential needed. The challenge names the user's
+        credentials and requires user verification; it expires in 5 minutes.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: pending_mfa
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: The assertion challenge.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PasskeyChallenge"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/mfa/finish:
+    post:
+      operationId: finishPasskeyMfa
+      tags: [Session]
+      summary: Finish the passkey factor of a pending sign-in
+      description: >-
+        Verifies the assertion, ends the pending session and issues an `mfa` session. A failed ceremony counts one of
+        the pending session's five attempts, as a wrong code does. The body is the browser's credential JSON;
+        `flow_id` is the one `beginPasskeyMfa` returned.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: pending_mfa
+      x-axiom-permission: none
+      parameters:
+        - name: flow_id
+          in: query
+          required: true
+          schema: {type: string, maxLength: 64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WebAuthnCredential"}
+      responses:
+        "200":
+          description: Signed in with an `mfa` session.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionGrant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys:
+    get:
+      operationId: listPasskeys
+      tags: [Session]
+      summary: The signed-in user's passkeys
+      description: The credentials the account page offers to delete, newest last.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The passkeys.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Passkeys"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/register/begin:
+    post:
+      operationId: beginPasskeyRegistration
+      tags: [Session]
+      summary: Start adding a passkey
+      description: >-
+        The current password is required, and a user with a second factor must be in an `mfa` session: a passkey can
+        sign in on its own, so adding one from a password-only session would let a stolen password bypass the second
+        factor. The challenge excludes the user's credentials and requires user verification; it expires in 5 minutes.
+        At most 10 passkeys per user.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PasskeyRegistrationRequest"}
+      responses:
+        "200":
+          description: The creation challenge.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PasskeyChallenge"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/register/finish:
+    post:
+      operationId: finishPasskeyRegistration
+      tags: [Session]
+      summary: Finish adding a passkey
+      description: >-
+        Verifies the attestation, stores the credential with the name the begin stored, raises the user's factor
+        version, ends every other session and issues this browser an `mfa` session. The body is the browser's
+        credential JSON; `flow_id` is the one `beginPasskeyRegistration` returned.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - name: flow_id
+          in: query
+          required: true
+          schema: {type: string, maxLength: 64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WebAuthnCredential"}
+      responses:
+        "200":
+          description: The new passkey and the replacement session.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Passkey"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/{id}:
+    delete:
+      operationId: deletePasskey
+      tags: [Session]
+      summary: Remove a passkey
+      description: >-
+        Requires the current password, and an `mfa` session when the user has another second factor. Raises the factor
+        version, ends every other session and issues this browser a new session at the same level; audits the removal.
+        The password remains a way in.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/PasskeyId"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PasskeyDeleteRequest"}
+      responses:
+        "200":
+          description: The replacement session's CSRF token.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CredentialChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/identities:
+    get:
+      operationId: listIdentities
+      tags: [Session]
+      summary: The signed-in user's linked third-party accounts
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The linked identities.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Identities"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/identities/{provider}:
+    delete:
+      operationId: unlinkIdentity
+      tags: [Session]
+      summary: Unlink a third-party account
+      description: >-
+        Requires an `mfa` session when the user has a second factor. Raises the factor version, ends every other
+        session and issues this browser a new session at the same level; audits the removal. The password remains a
+        way in.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/OAuthProvider"}
+      responses:
+        "200":
+          description: The replacement session's CSRF token.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CredentialChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/site:
     get:
       operationId: getSite
@@ -1624,6 +2034,11 @@ components:
         - origin_rejected
         - not_found
         - conflict
+        - login_domain_locked
+        - login_domain_required
+        - identity_taken
+        - identity_already_linked
+        - account_not_linked
         - email_taken
         - name_taken
         - too_many_keys
@@ -1901,6 +2316,105 @@ components:
           type: string
           enum: [invite, closed, open]
           description: "`invite` needs an invite code; `closed` takes no one; `open` verifies the address by mail, with the site's human check, domain lists and limits."
+        login_domain:
+          type: string
+          description: >-
+            The console domain third-party sign-in returns to and passkeys bind to. Absent until an operator sets it;
+            the sign-in page sends visitors to `login_origin` when the Host is another console domain.
+        login_origin:
+          type: string
+          format: uri
+          description: "The registered origin of `login_domain`. Absent with it, or when that domain is disabled."
+        passkeys:
+          type: boolean
+          description: "Whether the site offers passkeys. False on an older node that does not know the field."
+        oauth_providers:
+          type: array
+          description: "The third-party providers the site configured, for the sign-in page's buttons."
+          items: {$ref: "#/components/schemas/OAuthProvider"}
+    OAuthProvider:
+      type: string
+      enum: [github, google, linuxdo]
+      description: "A third-party sign-in provider."
+    OAuthStartRequest:
+      type: object
+      additionalProperties: false
+      required: [provider]
+      properties:
+        provider: {$ref: "#/components/schemas/OAuthProvider"}
+    OAuthStart:
+      type: object
+      required: [authorize_url]
+      properties:
+        authorize_url:
+          type: string
+          format: uri
+          description: "The provider's authorization endpoint with this flow's client, state and, where supported, PKCE challenge."
+    WebAuthnCredential:
+      type: object
+      additionalProperties: true
+      x-go-type: jsonx.Raw
+      description: >-
+        The browser's `PublicKeyCredential` JSON, passed through to the WebAuthn verifier unchanged. Its shape is the
+        WebAuthn specification's, not this contract's.
+    PasskeyChallenge:
+      type: object
+      required: [flow_id, public_key]
+      properties:
+        flow_id: {type: string, maxLength: 64, description: "The ceremony to finish; single use, expires in 5 minutes."}
+        public_key:
+          $ref: "#/components/schemas/WebAuthnCredential"
+    PasskeyId: {type: string, pattern: '^pk_[0-9a-hjkmnp-tv-z]{26}$', description: "A passkey's ID (TypeID)."}
+    PasskeyRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        name: {type: string, maxLength: 100, description: "A label for the credential; absent means Passkey."}
+        password: {type: string, minLength: 1, maxLength: 256, description: "The current password, asked again."}
+    PasskeyDeleteRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password: {type: string, minLength: 1, maxLength: 256}
+    Passkey:
+      type: object
+      required: [id, name, created_at, backup_eligible]
+      properties:
+        id: {$ref: "#/components/schemas/PasskeyId"}
+        name: {type: string}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: string, format: date-time, nullable: true}
+        backup_eligible: {type: boolean, description: "Whether the credential can be synced or backed up between devices."}
+    Passkeys:
+      type: object
+      required: [passkeys]
+      properties:
+        passkeys:
+          type: array
+          items: {$ref: "#/components/schemas/Passkey"}
+    Identity:
+      type: object
+      required: [provider, display_name, created_at]
+      properties:
+        provider: {$ref: "#/components/schemas/OAuthProvider"}
+        display_name: {type: string}
+        created_at: {type: string, format: date-time}
+    Identities:
+      type: object
+      required: [identities]
+      properties:
+        identities:
+          type: array
+          items: {$ref: "#/components/schemas/Identity"}
+    CredentialChange:
+      type: object
+      required: [csrf_token]
+      description: >-
+        A credential was removed: every other session ended and the response's cookie replaces this browser's session.
+      properties:
+        csrf_token: {type: string}
     RegisterRequest:
       type: object
       required: [email]
