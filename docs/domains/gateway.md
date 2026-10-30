@@ -344,7 +344,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | 转换给 Responses 流时，new-api 省略 `output_tokens_details.reasoning_tokens`，Axiom 保留上游报告（推理样本为 30，其余样本为 0） | 推理 token 属于真实用量，转换不能丢失；与同格式 Chat 的计费项一致 |
 | 响应里的 `model`：Axiom 写目录里实际服务的模型（如 `anthropic/claude-opus-5-5`），new-api 回显请求里用的名字 | #319 P11：`models` 回退之后回显请求名会让客户端以为原模型回答；用量只暴露用户售价，见「决策与理由」 |
 | Chat、Responses 用量里的 `is_byok:false` 和为正的 `cache_discount` | OpenRouter 的用量字段：Axiom 没有用户 key，固定 `false`；缓存折扣按锁定的输入价算，见「用量与费用」 |
-| Responses 从 Messages 上游转换时，用量里的 `input_tokens`、`total_tokens` 是物理总量（含缓存读），`output_tokens` 用 Responses 的名字；new-api 写 Anthropic 的 `input_tokens`（不含缓存读）和 Chat 名字的输出 | Axiom 的用量口径：输入保留物理总量，缓存读写可重叠（[catalog 的「计费项与用量」](../catalog/README.md#计费项与用量)），见 protocol README 的「用量」 |
+| Responses 从 Messages 上游转换时，用量里的 `input_tokens`、`total_tokens` 是物理总量（含缓存读），`output_tokens` 用 Responses 的名字；new-api 写 Anthropic 的 `input_tokens`（不含缓存读）和 Chat 名字的输出 | Axiom 的用量口径：输入保留物理总量，缓存读写可重叠（[catalog 的「计费项与用量」](../../internal/catalog/README.md#计费项与用量)），见 protocol README 的「用量」 |
 | 从 Messages 上游转换的推理摘要文本不带 new-api 多加的结尾换行 | 摘要文本是上游的字节，转换不增删内容 |
 | 转换出的工具参数保留上游的 JSON 原文，new-api 重新编码 | 参数是客户端要交回去的字节，改动可能改变它的语义（数字精度、重复键） |
 | 上游没有报用量时（Messages 的思考样本），两边各自估算 token 数 | 估算口径不同，见[计费的「用量来源与暂估」](billing.md#用量来源与暂估) |
