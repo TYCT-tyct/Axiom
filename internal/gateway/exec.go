@@ -86,16 +86,14 @@ type ExecDeps struct {
 	// Records is the call log, where each call is written once its settlement is. It is optional because the record is
 	// observation and a call never depends on it; a node always gives it.
 	Records *observability.Recorder
+	// Outstanding counts the calls and the settlements they leave in the background, and is what the node drains: the
+	// node's Handler shares it, so a request is counted from the gate.
+	Outstanding *Outstanding
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.
 type Executor struct {
 	ExecDeps
-	bg       *background        // the calls running and the settlements that outlive them
-	shutdown context.Context    //nolint:containedctx // not a request's: the executor's own, which every attempt's context.AfterFunc watches; done once Drain gives up waiting
-	abort    context.CancelFunc // ends shutdown
-	end      context.Context    //nolint:containedctx // the node's final deadline, which every settlement's context watches
-	finish   context.CancelFunc // ends end: a settlement still writing at the deadline is cancelled
 }
 
 // minSecret is the shortest identity secret accepted.
@@ -104,15 +102,13 @@ const minSecret = 16
 // NewExecutor checks the dependencies.
 func NewExecutor(d ExecDeps) (*Executor, error) {
 	if d.Router == nil || d.Upstreams == nil || d.Limits == nil || d.Memory == nil || d.Logger == nil || d.Ledger == nil ||
-		d.Costs == nil || d.Alive == nil || d.Quality == nil {
+		d.Costs == nil || d.Alive == nil || d.Quality == nil || d.Outstanding == nil {
 		return nil, errors.New("gateway: the executor needs every dependency")
 	}
 	if len(d.IdentitySecret) < minSecret {
 		return nil, errors.New("gateway: the identity secret is too short")
 	}
-	shutdown, abort := context.WithCancel(context.Background())
-	end, finish := context.WithCancel(context.Background())
-	return &Executor{ExecDeps: d, bg: newBackground(), shutdown: shutdown, abort: abort, end: end, finish: finish}, nil
+	return &Executor{ExecDeps: d}, nil
 }
 
 // identity maps a value the client sent to the opaque one that goes upstream: the same value of the same account
@@ -143,7 +139,7 @@ type ended struct {
 // The call's slots go when its settlement is written, or once it is the cleanup's (README.md「结束与结算」), which may
 // be after Run returns.
 func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
-	defer x.bg.add()()
+	defer x.Outstanding.add()() // nested in the handler's count on a node; the count of a call run on its own
 	s := newSession(x, w, r, c)
 	defer func() {
 		if !s.handedOff {
@@ -155,127 +151,6 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 	ctx := r.Context()
 	defer s.settleOnPanic(ctx)
 	s.conclude(ctx, s.attempts(ctx))
-}
-
-// Drain lets the calls in flight and the settlements in the background end until abort, then cancels every attempt,
-// as a node that is going away must, and waits for what is left until ctx's deadline. abort is the deadline less
-// grace, so the grace is taken out of the node's deadline rather than added after the wait: a drain that is slow to
-// return cannot push the node past it. What still has not settled is the cleanup's (README.md「故障矩阵」). Drain is
-// for an executor with no handler to consult; a node calls DrainWith so a request still between the gate and Run is
-// not mistaken for an empty executor.
-func (x *Executor) Drain(ctx context.Context, grace time.Duration) {
-	x.drain(ctx, grace, nil)
-}
-
-// DrainGate reports whether the handler can still hand the executor a call: a request that has passed the gate but is
-// still reading its body, or is in admission. The handler keeps a request counted until its Run returns, so a call
-// that starts while the executor is momentarily empty is still seen by the drain.
-type DrainGate interface {
-	Pending() bool
-	Idle() <-chan struct{}
-}
-
-// DrainWith is Drain for a node whose handler may still hand it a call. While the executor itself has nothing running,
-// it waits for the handler to become idle or for abort, instead of treating the empty moment as the time to cancel:
-// a body that arrives in the meantime must be allowed to run until abort and settle until the deadline. After abort the
-// attempts are cancelled, but the handler is checked first and the settlements stay open until it is idle and the
-// executor is empty, or the deadline arrives.
-func (x *Executor) DrainWith(ctx context.Context, grace time.Duration, gate DrainGate) {
-	x.drain(ctx, grace, gate)
-}
-
-func (x *Executor) drain(ctx context.Context, grace time.Duration, gate DrainGate) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		if x.bg.wait(ctx) {
-			return
-		}
-		x.abort()
-		tail, cancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
-		defer cancel()
-		x.bg.drain(tail)
-		return
-	}
-	abort := deadline.Add(-grace)
-	if gate == nil {
-		x.bg.waitUntil(abort)
-		x.abort()
-		x.bg.stop()
-		x.bg.waitUntil(deadline)
-		x.finish()
-		return
-	}
-	x.waitForGate(abort, gate)
-	x.abort()
-	x.awaitAfterAbort(deadline, gate)
-}
-
-// awaitAfterAbort keeps the settlements open after the attempts are cancelled. It first waits for the handler, because
-// a request that is still running may hand a failed settlement to the executor's background as it returns; checking the
-// executor before the handler would see the empty moment just before that handoff. Once the handler is idle, no more
-// handoffs can come from it, so the executor's background is checked and waited for. The end context, which settles
-// the per-try contexts, is not finished until both are idle or the deadline arrives.
-func (x *Executor) awaitAfterAbort(deadline time.Time, gate DrainGate) {
-	for {
-		if gate.Pending() {
-			if !waitGateIdle(deadline, gate) {
-				break
-			}
-		}
-		if x.bg.pending() {
-			if !x.bg.waitUntil(deadline) {
-				break
-			}
-			continue
-		}
-		break
-	}
-	x.bg.stop()
-	x.finish()
-}
-
-// waitForGate waits until the executor has work to drain or the handler can no longer derive a call, whichever comes
-// first, and never past abort. A handler request already in Run has added itself to the executor's background, so the
-// loop moves to the ordinary wait as soon as that happens.
-func (x *Executor) waitForGate(abort time.Time, gate DrainGate) {
-	for {
-		switch {
-		case x.bg.pending():
-			if !x.bg.waitUntil(abort) {
-				return
-			}
-		case !gate.Pending():
-			return
-		case !waitGateIdle(abort, gate):
-			return
-		}
-	}
-}
-
-func waitGateIdle(abort time.Time, gate DrainGate) bool {
-	remaining := time.Until(abort)
-	if remaining <= 0 {
-		return false
-	}
-	timer := time.NewTimer(remaining)
-	defer timer.Stop()
-	select {
-	case <-gate.Idle():
-		return true
-	case <-timer.C:
-		return false
-	}
-}
-
-// settlementContext is SettleContext for one try, also ended when the node's deadline arrives: a write still in
-// progress then must not hold the process past the deadline the drain just waited for.
-func (x *Executor) settlementContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	ctx, cancel := SettleContext(ctx, timeout)
-	stop := context.AfterFunc(x.end, cancel)
-	return ctx, func() {
-		stop()
-		cancel()
-	}
 }
 
 // session is the run of one call. The goroutine that runs it owns it, but for the keep-alive timer and the cancelling

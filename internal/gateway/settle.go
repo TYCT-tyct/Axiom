@@ -21,8 +21,8 @@ const settleAttempt = 2 * time.Second
 // whose first try committed with its acknowledgement lost gets the Final billing stored, and charges nothing more.
 // Each try takes the account's gate, of the completion class.
 func (x *Executor) settle(ctx context.Context, c *Call, o billing.Outcome, until time.Time) (f billing.Final, err error) {
-	err = x.bg.retry(until, permanent, func() error {
-		ctx, cancel := x.settlementContext(ctx, settleAttempt)
+	err = x.Outstanding.retry(until, permanent, func() error {
+		ctx, cancel := x.Outstanding.settlementContext(ctx, settleAttempt)
 		defer cancel()
 		return x.withFunds(ctx, c, func(ctx context.Context) (err error) {
 			f, err = x.Ledger.Settle(ctx, c.Hold, o)
@@ -57,7 +57,7 @@ func (x *Executor) settled(ctx context.Context, s *session, o billing.Outcome, e
 		return false
 	}
 	logger.Warn("a settlement was not written; retrying in the background", "err", err)
-	x.bg.Go(func() {
+	x.Outstanding.Go(func() {
 		defer c.Done()
 		f, err := x.settle(ctx, c, o, time.Now().Add(x.Limits.cfg.SettleBackground))
 		if err != nil {

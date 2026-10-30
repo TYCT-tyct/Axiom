@@ -51,6 +51,9 @@ type Deps struct {
 	// KV is the shared cache the precheck counts in, and nil is single-core mode: the counts stay in this process, as
 	// they were before the cache (internal/platform/kv/README.md「配置与启动」).
 	KV *kv.Client
+	// Outstanding is the node's drain counter, the one its Executor counts on: a request is counted from the gate until
+	// ServeHTTP returns, and the settlement of a lost admission until it is written.
+	Outstanding *Outstanding
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
@@ -59,18 +62,15 @@ type Handler struct {
 	mux     *http.ServeMux
 	admitTx func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
 
-	charges    *billing.ChargeReader
-	background *background             // settlements of lost admissions
-	end        context.Context         //nolint:containedctx // the node's final deadline, which every lost admission's settlement watches
-	finish     context.CancelFunc      // ends end at the deadline
-	outage     *outage                 // the dependency outage being told, if any
-	listings   atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
+	charges  *billing.ChargeReader
+	outage   *outage                 // the dependency outage being told, if any
+	listings atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
 }
 
 // complete reports whether every dependency is there.
 func (d Deps) complete() bool {
 	return d.Accounts != nil && d.Catalog != nil && d.Router != nil && d.Billing != nil && d.Limits != nil && d.Memory != nil &&
-		d.Run != nil && d.Logger != nil && d.Models != nil
+		d.Run != nil && d.Logger != nil && d.Models != nil && d.Outstanding != nil
 }
 
 // NewHandler checks the dependencies and builds the routes.
@@ -81,8 +81,7 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	end, finish := context.WithCancel(context.Background())
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground(), end: end, finish: finish, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
+	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
@@ -98,19 +97,14 @@ func NewHandler(d Deps) (*Handler, error) {
 	return h, nil
 }
 
-// Pending reports whether a request or an orphan settlement is still in the handler's background.
-func (h *Handler) Pending() bool { return h.background.pending() }
-
-// Idle is the channel closed when the handler's background becomes idle.
-func (h *Handler) Idle() <-chan struct{} { return h.background.idleChan() }
-
 // ServeHTTP routes the request. It expects httpserver.Public around it, which gives every request its ID; the call
 // number is that ID, and every response carries it as X-Generation-Id beside Public's X-Request-ID, errors and the
 // routes that are not calls included.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The drain counts the request from the moment it passes the gate, not from Run: a request can still be reading
-	// its body when the drain begins, and starting a stream after it would otherwise escape the drain.
-	defer h.background.add()()
+	// its body when the drain begins, and starting a stream after it would otherwise escape the drain. What it hands
+	// to the background is counted before this is released (Outstanding).
+	defer h.Outstanding.add()()
 	w.Header().Set("X-Generation-Id", httpserver.RequestID(r.Context()))
 	if _, pattern := h.mux.Handler(r); pattern == "" { // no route took it: the mux's own answer is plain text
 		h.refuseUnrouted(w, r)

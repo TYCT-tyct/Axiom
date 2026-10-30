@@ -179,17 +179,17 @@ func trim(p routing.Plan, kept []int) routing.Plan {
 // pause until it is settled or the cleanup would have it anyway (SettleBackground). The call's slots stay held until
 // then, so the settlements waiting are bounded by the node's limit. Drain waits for it.
 func (h *Handler) settleOrphan(ctx context.Context, c *Call) {
-	h.background.Go(func() {
+	h.Outstanding.Go(func() {
 		defer c.Done()
 		never := func(error) bool { return false }
-		if err := h.background.retry(time.Now().Add(h.Limits.cfg.SettleBackground), never, func() error { return h.orphanOnce(ctx, c) }); err != nil {
+		if err := h.Outstanding.retry(time.Now().Add(h.Limits.cfg.SettleBackground), never, func() error { return h.orphanOnce(ctx, c) }); err != nil {
 			h.Logger.Error("a lost admission was not settled; the cleanup takes it", "request_id", c.ID.String(), "err", err)
 		}
 	})
 }
 
 func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
-	ctx, cancel := h.settlementContext(ctx, settleAttempt)
+	ctx, cancel := h.Outstanding.settlementContext(ctx, settleAttempt)
 	defer cancel()
 	release, err := h.Limits.Funds.Complete(ctx, accountKey(c.caller))
 	if err != nil {
@@ -197,28 +197,4 @@ func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
 	}
 	defer release()
 	return h.Billing.SettleOrphan(pg.CompletionContext(ctx), c.Admitted, c.ID)
-}
-
-// Drain waits for the requests and settlements still running in the background until abort, then stops their retries
-// and waits for them until ctx's deadline; what is left is the cleanup's. abort is the deadline less grace, so the
-// grace comes out of the node's deadline rather than being added after the wait. A request that has passed the gate
-// but has not reached Run yet is counted by ServeHTTP, so it cannot start a call after the drain has returned.
-func (h *Handler) Drain(ctx context.Context, grace time.Duration) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		h.background.drain(ctx)
-		return
-	}
-	h.background.drainUntil(deadline.Add(-grace), deadline)
-	h.finish()
-}
-
-// settlementContext is SettleContext for one orphan settlement, also ended at the node's deadline.
-func (h *Handler) settlementContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	ctx, cancel := SettleContext(ctx, timeout)
-	stop := context.AfterFunc(h.end, cancel)
-	return ctx, func() {
-		stop()
-		cancel()
-	}
 }

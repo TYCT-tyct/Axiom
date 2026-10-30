@@ -130,7 +130,7 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 		time.Sleep(time.Second) // the call is under way
 		stop, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		h.exec.Drain(stop, time.Second)
+		h.exec.Outstanding.Drain(stop, time.Second)
 		<-done
 		if h.elapsed() != 5*time.Second || !strings.Contains(h.w.body(), `"error_type":"timeout"`) {
 			t.Errorf("drained after %v:\n%s", h.elapsed(), h.w.body())
@@ -146,7 +146,7 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 		<-h.start()
 		stop, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
-		h.exec.Drain(stop, 30*time.Second)
+		h.exec.Outstanding.Drain(stop, 30*time.Second)
 		if h.elapsed() > h.cfg.SettleRetry+2*time.Second {
 			t.Errorf("drained after %v; the 30s grace must not be added after the deadline", h.elapsed())
 		}
@@ -154,11 +154,11 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 	})
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
-		h.exec.Drain(ctx, time.Second) // nothing in flight: at once, and nothing is cancelled
+		h.exec.Outstanding.Drain(ctx, time.Second) // nothing in flight: at once
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
-		h.run()
-		if h.elapsed() != 0 || h.ended().outcome.Attempts[0].Finish != billing.FinishStop {
-			t.Errorf("after %v, outcome %+v", h.elapsed(), h.ended().outcome)
+		h.run() // a call after the drain starts no attempt
+		if h.elapsed() != 0 || h.up.eps[uuidOf(ep(1))].sends != 0 || !strings.Contains(h.w.body(), `"timeout"`) {
+			t.Errorf("after %v, %d attempts:\n%s", h.elapsed(), h.up.eps[uuidOf(ep(1))].sends, h.w.body())
 		}
 	})
 }
@@ -548,7 +548,7 @@ func TestDrainDoesNotAddGracePastTheDeadline(t *testing.T) {
 		time.Sleep(time.Second) // the attempt is over; its settlement is blocked
 		stop, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		h.exec.Drain(stop, 5*time.Second)
+		h.exec.Outstanding.Drain(stop, 5*time.Second)
 		if h.elapsed() != 11*time.Second {
 			t.Errorf("drain returned after %v; want the deadline at 11s, not a grace after it", h.elapsed())
 		}

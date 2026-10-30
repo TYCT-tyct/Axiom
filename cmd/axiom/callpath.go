@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/netip"
-	"sync"
 	"sync/atomic"
 	"time"
 	"uuid"
@@ -73,8 +72,9 @@ type callDeps struct {
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
 // shutdown drains, the signal that routing can route, and the one loop whose end stops the node.
 type callNode struct {
-	handler  *gateway.Handler
-	executor *gateway.Executor
+	handler     *gateway.Handler
+	executor    *gateway.Executor
+	outstanding *gateway.Outstanding // what the handler and the executor count on, which Drain waits for
 	// upstreams is the path's suppliers, which the admin also tests an endpoint through: a test must go through the
 	// snapshot and the credentials the calls use, not a second view of the database.
 	upstreams *suppliers.Service
@@ -162,11 +162,11 @@ func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metr
 func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Service, ledger *billing.Billing, health *quality.Monitor,
 	models *gateway.ModelList,
 ) (callNode, error) {
-	memory := protocol.NewMemory(nodeMemory)
+	memory, outstanding := protocol.NewMemory(nodeMemory), gateway.NewOutstanding()
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
 		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
 		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
-		Records: d.records, Quality: health,
+		Records: d.records, Quality: health, Outstanding: outstanding,
 	})
 	if err != nil {
 		return callNode{}, err
@@ -174,8 +174,9 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
+		Outstanding: outstanding,
 	})
-	return callNode{handler: handler, executor: executor, upstreams: upstreams}, err
+	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams}, err
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and
@@ -255,29 +256,13 @@ func announceReady(ctx context.Context, ready func() bool, every time.Duration, 
 	return func() { cancel(); <-done }
 }
 
-// Drain gives the calls in flight and the settlements they left in the background until the shutdown deadline, after
-// the listeners have stopped admitting. Attempts are cancelled abortGrace before that deadline, and what is still not
-// settled when it ends is the cleanup's (internal/gateway/README.md「故障矩阵」).
-//
-// The two backgrounds drain side by side: the handler's covers a request from the moment it passes the gate (body
-// still being read, admission still running), the executor's covers the call and its settlements. Running them in
-// series let a slow orphan settlement eat the time the executor's abort needed. Both take the same absolute deadline
-// and take abortGrace out of it, so neither can add a grace after the deadline has passed.
+// Drain gives the requests in flight, the calls and the settlements they left in the background until the shutdown
+// deadline, after the listeners have stopped admitting. Attempts are cancelled abortGrace before that deadline, and
+// what is still not settled when it ends is the cleanup's (internal/gateway/README.md「故障矩阵」).
 func (c callNode) Drain(ctx context.Context) {
-	if c.handler == nil {
-		return
+	if c.outstanding != nil {
+		c.outstanding.Drain(ctx, abortGrace)
 	}
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		c.handler.Drain(ctx, abortGrace)
-	}()
-	go func() {
-		defer wg.Done()
-		c.executor.DrainWith(ctx, abortGrace, c.handler)
-	}()
-	wg.Wait()
 }
 
 // reloadEndpoints rebuilds the suppliers' snapshot every reloadEvery until ctx ends, so that a change made in the admin

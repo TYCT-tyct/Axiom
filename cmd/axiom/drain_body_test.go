@@ -31,59 +31,53 @@ func (b *blockingBody) Read(p []byte) (int, error) {
 
 func (*blockingBody) Close() error { return nil }
 
-// TestDrainKeepsACallThatWasStillReadingItsBody runs the real call node's handler and executor drains together. The
-// request has passed the gate but has not reached admission when the drain starts; it must still run and settle before
-// the shared deadline rather than being refused because the executor was momentarily empty.
+// TestDrainKeepsACallThatWasStillReadingItsBody runs the real call node behind the public listener's gate. A request
+// that passed the gate before the drain and has not reached admission when it starts must still run and settle before
+// the shared deadline, while a request that arrives once the drain began is refused at the gate with a retryable 503.
 func TestDrainKeepsACallThatWasStillReadingItsBody(t *testing.T) {
 	t.Parallel()
 	w := newCallWorld(t)
 	w.seedFailover()
 	w.price()
 	n, _, _ := w.controlledCallPath(&testClock{now: time.Now()})
+	var health httpserver.Health
+	public := httpserver.Public(health.Gate(n.handler), slog.New(slog.DiscardHandler), time.Minute)
+	call := func(body io.Reader) *http.Request {
+		req := httptest.NewRequestWithContext(w.t.Context(), http.MethodPost, "http://api.main.example/v1/messages", body)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+w.richKey)
+		return req
+	}
 
 	body := &blockingBody{started: make(chan struct{}), release: make(chan struct{}), body: strings.NewReader(messagesCall)}
-	req := httptest.NewRequestWithContext(w.t.Context(), http.MethodPost, "http://api.main.example/v1/messages", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+w.richKey)
 	rec := httptest.NewRecorder()
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
-		httpserver.Public(n.handler, slog.New(slog.DiscardHandler), time.Minute).ServeHTTP(rec, req)
+		public.ServeHTTP(rec, call(body))
 	}()
-	select {
-	case <-body.started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the request did not begin reading its body")
-	}
+	<-body.started
 
-	drainCtx, cancel := context.WithTimeout(w.t.Context(), 10*time.Second)
+	health.BeginDrain()
+	late := httptest.NewRecorder()
+	public.ServeHTTP(late, call(strings.NewReader(messagesCall)))
+	if late.Code != http.StatusServiceUnavailable || late.Header().Get("Retry-After") != "1" {
+		t.Errorf("a request after the drain began answered %d %v", late.Code, late.Header())
+	}
+	drainCtx, cancel := context.WithTimeout(w.t.Context(), time.Minute)
 	defer cancel()
 	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		n.Drain(drainCtx)
-		close(drained)
 	}()
-	select {
-	case <-drained:
-		t.Fatal("the drain returned while a request that had passed the gate was still reading its body")
-	case <-time.After(100 * time.Millisecond):
-	}
 	close(body.release)
-	select {
-	case <-drained:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the drain did not finish after the request sent its body")
-	}
-	select {
-	case <-served:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the request did not finish")
-	}
+	<-served
+	<-drained
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the request answered %d: %s", rec.Code, rec.Body.String())
 	}
 	if got := len(w.supplier.sent()); got != 1 {
-		t.Errorf("the upstream saw %d attempts, want 1", got)
+		t.Errorf("the upstream saw %d attempts, want the one call's", got)
 	}
 }

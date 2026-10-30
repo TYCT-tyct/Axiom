@@ -206,7 +206,7 @@ func TestLostCommit(t *testing.T) {
 			if code, _ := errorOf(t, body); resp.StatusCode != http.StatusServiceUnavailable || code != "overloaded" || len(r.calls()) != 0 {
 				t.Fatalf("%d %s, %d calls", resp.StatusCode, body, len(r.calls()))
 			}
-			r.handler.Drain(t.Context(), time.Minute)
+			r.handler.Outstanding.Drain(t.Context(), time.Minute)
 			if r.count(allRows) != 1 || r.count("SELECT count(*) FROM billing.reservations WHERE state = 'released' AND amount = $1", tc.amount) != 1 {
 				t.Errorf("%d reservation rows, want one released with %d", r.count(allRows), tc.amount)
 			}
