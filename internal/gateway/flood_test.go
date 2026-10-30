@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"errors"
-	"strconv"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -31,28 +30,41 @@ func TestColdKeyFloodAndHotAccountSettlement(t *testing.T) {
 			t.Fatalf("%d cold-key lookups got a connection, want 8", granted)
 		}
 
-		settling := mustAcquire(t, func() (func(), error) { return bp.Funds.Complete(ctx, "hot") })
+		settling := holdGate(t, ctx, bp.Funds, "hot", Completion)
 		var hotAdmissions []*pending
 		for range 20 {
-			hotAdmissions = append(hotAdmissions, start(admitFunds(ctx, bp.Funds, "hot")))
+			hotAdmissions = append(hotAdmissions, submitGate(ctx, bp.Funds, "hot", Admission, func(context.Context, []*gateItem) error { return nil }))
 		}
 		synctest.Wait()
 
 		// Waiting at the gate holds no connection: the 3 reserved ones the settlement has not taken are free.
-		for i := range 3 {
-			mustAcquire(t, func() (func(), error) { return bp.Funds.Complete(ctx, "cold"+strconv.Itoa(i)) })
+		for range 3 {
+			mustAcquire(t, acquire(ctx, bp.Pool, Completion))
 		}
 		// The hot account's next settlement goes ahead of its 20 waiting admissions, so the settlement of a
-		// request is never queued behind the admissions of the account's other requests.
-		nextHot := start(func() (func(), error) { return bp.Funds.Complete(ctx, "hot") })
-		nextHot.mustWait(t)
+		// request is never queued behind the admissions of the account's other requests. It blocks so the
+		// admissions stay behind it while their gate wait runs out.
+		nextStarted, nextRelease := make(chan struct{}), make(chan struct{})
+		nextHot := submitGate(ctx, bp.Funds, "hot", Completion, func(context.Context, []*gateItem) error {
+			close(nextStarted)
+			<-nextRelease
+			return nil
+		})
+		synctest.Wait() // the completion is queued before the holder goes
 		settling()
-		nextHot.mustGranted(t)
+		synctest.Wait()
+		select {
+		case <-nextStarted:
+		default:
+			t.Fatal("the next settlement did not start ahead of the admissions")
+		}
 
 		time.Sleep(cfg.AccountGateWait)
 		if refused := countRefused(hotAdmissions); refused != len(hotAdmissions) {
 			t.Fatalf("%d of %d hot admissions got errAccountGate", refused, len(hotAdmissions))
 		}
+		close(nextRelease)
+		nextHot.mustGranted(t)
 	})
 }
 
@@ -64,12 +76,25 @@ func TestFundsWaitsForTheGateWithoutAConnection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mustAcquire(t, func() (func(), error) { return bp.Funds.Complete(ctx, "hot") })
+		release := holdGate(t, ctx, bp.Funds, "hot", Completion)
+		var waiting []*pending
 		for range 10 {
-			start(admitFunds(ctx, bp.Funds, "hot")).mustWait(t)
+			waiting = append(waiting, submitGate(ctx, bp.Funds, "hot", Admission, func(context.Context, []*gateItem) error { return nil }))
 		}
+		for _, p := range waiting {
+			p.mustWait(t)
+		}
+		var held []func()
 		for range cfg.PoolSize - cfg.PoolReserve {
-			mustAcquire(t, acquire(ctx, bp.Pool, Admission))
+			held = append(held, mustAcquire(t, acquire(ctx, bp.Pool, Admission)))
+		}
+		release()
+		time.Sleep(admissionCollect) // the batch's bounded collection ends and it waits for a connection
+		for _, release := range held {
+			release()
+		}
+		for _, p := range waiting {
+			p.mustGranted(t)
 		}
 	})
 }
@@ -85,12 +110,12 @@ func TestFundsReleasesTheGateWhenTheConnectionWaitEnds(t *testing.T) {
 		for range cfg.PoolSize - cfg.PoolReserve {
 			mustAcquire(t, acquire(ctx, bp.Pool, Admission))
 		}
-		admission := start(admitFunds(ctx, bp.Funds, "a")) // the budget starts when the gate is held, which it is at once
+		admission := submitGate(ctx, bp.Funds, "a", Admission, func(context.Context, []*gateItem) error { return nil })
 		time.Sleep(cfg.AdmissionBudget + time.Millisecond)
 		if !admission.finished() || !errors.Is(admission.err, context.DeadlineExceeded) {
 			t.Fatalf("admission: finished=%v err=%v, want context.DeadlineExceeded", admission.finished(), admission.err)
 		}
-		mustAcquire(t, func() (func(), error) { return bp.Funds.Complete(ctx, "a") })
+		submitGate(ctx, bp.Funds, "a", Completion, func(context.Context, []*gateItem) error { return nil }).mustGranted(t)
 	})
 }
 
@@ -104,21 +129,19 @@ func TestAdmissionBudgetStartsAtTheGate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		holder := mustAcquire(t, func() (func(), error) { return bp.Funds.Complete(ctx, "a") })
-		var granted time.Time
-		var budget context.Context
-		admission := start(func() (func(), error) {
-			c, release, err := bp.Funds.Admit(ctx, "a")
-			granted, budget = time.Now(), c
-			return release, err
+		release := holdGate(t, ctx, bp.Funds, "a", Completion)
+		var granted, deadline time.Time
+		admission := submitGate(ctx, bp.Funds, "a", Admission, func(ctx context.Context, _ []*gateItem) error {
+			granted = time.Now()
+			deadline, _ = ctx.Deadline()
+			return nil
 		})
 		time.Sleep(2 * cfg.AdmissionBudget)
 		admission.mustWait(t)
-		holder()
+		release()
 		admission.mustGranted(t)
-		deadline, ok := budget.Deadline()
-		if !ok || deadline.Sub(granted) != cfg.AdmissionBudget {
-			t.Errorf("the budget ends %v after the gate was granted, want %v", deadline.Sub(granted), cfg.AdmissionBudget)
+		if got := deadline.Sub(granted); got != cfg.AdmissionBudget {
+			t.Errorf("the budget ends %v after the gate was granted, want %v", got, cfg.AdmissionBudget)
 		}
 	})
 }

@@ -31,9 +31,10 @@ var errAckLost = errors.New("the connection broke after the commit")
 // report a failure, as a commit whose acknowledgement is lost does.
 type flakyLedger struct {
 	*billing.Billing
-	mu     sync.Mutex
-	extend func() (write bool, err error)
-	settle func() (write bool, err error)
+	mu        sync.Mutex
+	extend    func() (write bool, err error)
+	settle    func() (write bool, err error)
+	commitErr error // a fault of a write that did commit, reported after the batch's commit
 }
 
 func (l *flakyLedger) fault(f func() (bool, error)) (bool, error) {
@@ -45,27 +46,52 @@ func (l *flakyLedger) fault(f func() (bool, error)) (bool, error) {
 	return f()
 }
 
-func (l *flakyLedger) Extend(ctx context.Context, h *billing.Hold, r billing.ExtendRequest) error {
+func (l *flakyLedger) ExtendIn(ctx context.Context, tx pg.Tx, h *billing.Hold, r billing.ExtendRequest) error {
 	write, fail := l.fault(l.extend)
 	if !write {
 		return fail
 	}
-	if err := l.Billing.Extend(ctx, h, r); err != nil {
+	if err := l.Billing.ExtendIn(ctx, tx, h, r); err != nil {
 		return err
 	}
-	return fail
+	l.lost(fail)
+	return nil
 }
 
-func (l *flakyLedger) Settle(ctx context.Context, h *billing.Hold, o billing.Outcome) (billing.Final, error) {
+func (l *flakyLedger) SettleIn(ctx context.Context, tx pg.Tx, h *billing.Hold, o billing.Outcome) (billing.Final, func(), error) {
 	write, fail := l.fault(l.settle)
 	if !write {
-		return billing.Final{}, fail
+		return billing.Final{}, nil, fail
 	}
-	f, err := l.Billing.Settle(ctx, h, o)
+	f, after, err := l.Billing.SettleIn(ctx, tx, h, o)
 	if err != nil {
-		return f, err
+		return f, nil, err
 	}
-	return f, fail
+	l.lost(fail)
+	return f, after, nil
+}
+
+// lost remembers a fault that happened after the write: it is reported when the batch's commit returns, as a commit
+// whose acknowledgement was lost is.
+func (l *flakyLedger) lost(err error) {
+	if err == nil {
+		return
+	}
+	l.mu.Lock()
+	l.commitErr = err
+	l.mu.Unlock()
+}
+
+func (l *flakyLedger) RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error {
+	l.mu.Lock()
+	l.commitErr = nil
+	l.mu.Unlock()
+	if err := l.Billing.RunBatch(ctx, scope, works); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.commitErr
 }
 
 // withExecutor gives the rig an executor on the ledger and fake upstreams for its endpoints, which are called in

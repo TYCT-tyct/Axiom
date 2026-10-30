@@ -19,6 +19,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
@@ -513,7 +514,7 @@ type fakeLedger struct {
 	o options
 }
 
-func (l *fakeLedger) Extend(ctx context.Context, _ *billing.Hold, r billing.ExtendRequest) error {
+func (l *fakeLedger) ExtendIn(ctx context.Context, _ pg.Tx, _ *billing.Hold, r billing.ExtendRequest) error {
 	l.h.mu.Lock()
 	l.h.extensions = append(l.h.extensions, r)
 	l.h.mu.Unlock()
@@ -523,7 +524,7 @@ func (l *fakeLedger) Extend(ctx context.Context, _ *billing.Hold, r billing.Exte
 	return l.o.extend(ctx, r)
 }
 
-func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outcome) (billing.Final, error) {
+func (l *fakeLedger) SettleIn(ctx context.Context, _ pg.Tx, _ *billing.Hold, o billing.Outcome) (billing.Final, func(), error) {
 	h := l.h
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -535,9 +536,19 @@ func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outc
 		outcome: o, body: h.w.body(), held: h.up.outstanding(), callerOK: ctx.Err() == nil, err: err, at: time.Now(),
 	})
 	if err != nil {
-		return billing.Final{}, err
+		return billing.Final{}, nil, err
 	}
-	return l.o.final, nil
+	return l.o.final, nil, nil
+}
+
+// RunBatch is the fake's one transaction: the works never touch the database, so a zero transaction is enough.
+func (l *fakeLedger) RunBatch(_ context.Context, _ pg.Scope, works []func(pg.Tx) error) error {
+	for _, work := range works {
+		if err := work(pg.Tx{}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // fakeCosts is what Costs answers the tests: a cost, whether that is all of it, and an error to fail with. The native

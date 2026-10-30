@@ -112,6 +112,9 @@ var ErrNoAttempt = errors.New("billing: the outcome names no attempt on a kept e
 // is terminal. A retry, or a Settle after cleanup took over, charges at most once: it returns the Final stored on the
 // reservation, or settles the difference by the late-settlement rules. An outcome with no attempt is a call that never
 // reached an upstream: its reservation is released.
+//
+// Settle is the single-request settlement. It keeps the reports here rather than going through SettleIn, whose
+// per-batch report closure would allocate on a path bench-compare measures.
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err error) {
 	a := h.admitted
 	var c *locked
@@ -130,6 +133,26 @@ func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err 
 		b.bear(ctx, c.settlement, c.owed, c.charged)
 	}
 	return f, err
+}
+
+// SettleIn settles h in tx, a transaction of the account's scope that may hold other settlements (internal/gateway's
+// completion batch). It returns the reports to run after that transaction commits; the caller must run them only then,
+// because they describe what the ledger now holds. A database error leaves the transaction to its caller, which rolls
+// the whole batch back.
+func (b *Billing) SettleIn(ctx context.Context, tx pg.Tx, h *Hold, o Outcome) (f Final, after func(), err error) {
+	c, err := b.lock(ctx, tx, h.id, h.admitted.Account)
+	if err != nil {
+		return Final{}, nil, err
+	}
+	c.quotes = h.quotes
+	f, err = c.settle(ctx, tx, o)
+	if err != nil {
+		return Final{}, nil, err
+	}
+	return f, func() {
+		b.alert(c.seen)
+		b.bear(ctx, c.settlement, c.owed, c.charged)
+	}, nil
 }
 
 // settle branches on what the reservation became (README.md「预留的状态」). A cleanup's states are not among the

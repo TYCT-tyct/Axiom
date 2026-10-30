@@ -57,37 +57,114 @@ func (h *Handler) admit(ctx context.Context, c *Call) error {
 // seconds rounds a wait up to whole seconds, at least one.
 func seconds(d time.Duration) int { return max(1, int((d+time.Second-1)/time.Second)) }
 
+// admissionItem is one request in an admission batch: what the check reads, what the route plan decides, and what
+// the reservation wrote. The batch's leader fills it; the request reads it after the gate wakes it.
+type admissionItem struct {
+	gate      gateItem
+	call      *Call
+	caller    accounts.Caller
+	request   accounts.AdmitRequest
+	admission accounts.Admission
+	admitted  billing.Admitted
+	plan      routing.Plan
+	hold      *billing.Hold
+	// reserved is set once ReserveMany has written the rows. Only the batch's COMMIT can still fail after
+	// that, and a failed or unacknowledged COMMIT may have landed, so the request settles an orphan rather
+	// than assuming nothing was written; an earlier failure rolled the transaction back.
+	reserved bool
+}
+
 func (h *Handler) admitOnce(ctx context.Context, c *Call) error {
-	ctx, release, err := h.Limits.Funds.Admit(ctx, accountKey(c.caller))
-	if err != nil {
-		return err
+	item := &admissionItem{call: c, caller: c.caller, request: accounts.AdmitRequest{Domain: c.host, ClientIP: c.ip}}
+	item.gate.done, item.gate.payload = make(chan struct{}), item
+	err := h.Limits.Funds.Admit(ctx, accountKey(c.caller), &item.gate, h.admitBatch)
+	if item.reserved {
+		c.Admitted = item.admitted
 	}
-	defer release()
-	reserved := false
-	err = h.admitDB(ctx, c.caller, accounts.AdmitRequest{Domain: c.host, ClientIP: c.ip}, func(tx pg.Tx, a accounts.Admission) error {
-		if err := h.reserve(ctx, tx, a, c); err != nil {
-			return err
-		}
-		reserved = true
-		return nil
-	})
-	if err != nil && reserved {
+	if err != nil && item.reserved {
 		h.Logger.Warn("an admission's commit was not acknowledged", "request_id", c.ID.String(), "err", err)
 		h.settleOrphan(ctx, c)
 		return fmt.Errorf("%w: %w", errCommitUnknown, err)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	c.Admission, c.Admitted, c.Hold, c.Plan = item.admission, item.admitted, item.hold, item.plan
+	return nil
 }
 
-// reserve is the admission's function: judge the rate, plan the route from memory, and reserve against the route in
-// the same transaction. The route is cut to the entries the reservation covers; its first entry is always among them,
-// or the request is refused 402.
-func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c *Call) error {
-	if err := h.judgeRate(a, c, callDimension); err != nil {
+// admitBatch is one account's admission transaction: the key checks pipelined, the route of every request planned
+// from memory, and every reservation written under one balance lock (README.md#账户闸). A request that the key
+// check, the rate or the route refuses carries its own error and writes nothing; the rest of the batch still goes on.
+func (h *Handler) admitBatch(ctx context.Context, batch []*gateItem) error {
+	items := make([]*admissionItem, len(batch))
+	for i, g := range batch {
+		items[i] = g.payload.(*admissionItem)
+	}
+	calls := make([]accounts.AdmitCall, 0, len(items))
+	live := make([]*admissionItem, 0, len(items))
+	for _, it := range items {
+		if err := it.gate.ctx.Err(); err != nil {
+			it.gate.err = err
+			continue
+		}
+		calls = append(calls, accounts.AdmitCall{Caller: it.caller, Request: it.request})
+		live = append(live, it)
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	return h.admitDBBatch(ctx, calls, func(tx pg.Tx, as []accounts.Admission, refusals []error) error {
+		reqs := make([]billing.ReserveRequest, 0, len(live))
+		quoted := make([]*admissionItem, 0, len(live))
+		for i, it := range live {
+			if refusals[i] != nil {
+				it.gate.err = refusals[i]
+				continue
+			}
+			it.admission = as[i]
+			if err := h.planAdmission(it); err != nil {
+				it.gate.err = err
+				continue
+			}
+			reqs = append(reqs, billing.ReserveRequest{
+				Admitted: it.admitted, ID: it.call.ID,
+				Demand: routing.DemandOf(&it.call.Request), Quotables: quotables(it.plan.Entries),
+			})
+			quoted = append(quoted, it)
+		}
+		if len(reqs) == 0 {
+			return nil
+		}
+		holds, kept, errs, err := h.Billing.ReserveMany(ctx, tx, reqs)
+		if err != nil {
+			// No COMMIT was sent: the transaction can only roll back, so no reservation of this batch can
+			// have been written, whatever the fallback read, the lock or an insert reported.
+			return err
+		}
+		for i, it := range quoted {
+			if errs[i] != nil {
+				it.gate.err = errs[i]
+				continue
+			}
+			// From here on the rows are written; the batch's COMMIT may still fail or lose its
+			// acknowledgement, so the request must settle an orphan rather than assume nothing was written.
+			it.reserved = true
+			it.hold, it.plan = holds[i], trim(it.plan, kept[i])
+		}
+		return nil
+	})
+}
+
+// planAdmission judges the rate and plans the route from the admission and the in-memory route data; the reservation
+// is written separately, after every request in the batch has a plan, so one request's refusal does not abort another.
+func (h *Handler) planAdmission(it *admissionItem) error {
+	c := it.call
+	if err := h.judgeRate(it.admission, c, callDimension); err != nil {
 		return err
 	}
 	plan, wait, err := h.Models.plan(h.Router, routing.Input{
-		Admission: routingAdmission(a, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,
+		Admission: routingAdmission(it.admission, c), Req: &c.Request, Models: c.models, Override: c.over, Sticky: c.sticky,
 		// Compaction has no Chat counterpart; generation can use the protocol conversions.
 		NativeOnly: c.Compact,
 		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full.
@@ -103,12 +180,7 @@ func (h *Handler) reserve(ctx context.Context, tx pg.Tx, a accounts.Admission, c
 		return err
 	}
 	h.outage.recovered(depRouting)
-	admitted := billingAdmitted(a, c)
-	hold, kept, err := h.Billing.Reserve(ctx, tx, admitted, c.ID, routing.DemandOf(&c.Request), quotables(plan.Entries))
-	if err != nil {
-		return err
-	}
-	c.Admission, c.Admitted, c.Hold, c.Plan = a, admitted, hold, trim(plan, kept)
+	it.plan, it.admitted = plan, billingAdmitted(it.admission, c)
 	return nil
 }
 
@@ -191,12 +263,19 @@ func (h *Handler) settleOrphan(ctx context.Context, c *Call) {
 func (h *Handler) orphanOnce(ctx context.Context, c *Call) error {
 	ctx, cancel := SettleContext(ctx, settleAttempt)
 	defer cancel()
-	release, err := h.Limits.Funds.Complete(ctx, accountKey(c.caller))
-	if err != nil {
+	item := &completionItem{scope: c.Admitted.Scope, work: func(ctx context.Context, tx pg.Tx) (func(), error) {
+		return nil, h.Billing.SettleOrphanIn(ctx, tx, c.Admitted, c.ID)
+	}}
+	item.gate.done, item.gate.payload = make(chan struct{}), item
+	if err := h.Limits.Funds.Complete(ctx, accountKey(c.caller), &item.gate, h.runOrphans); err != nil {
 		return err
 	}
-	defer release()
-	return h.Billing.SettleOrphan(pg.CompletionContext(ctx), c.Admitted, c.ID)
+	return item.gate.err
+}
+
+// runOrphans writes a batch of the account's orphan settlements in one transaction.
+func (h *Handler) runOrphans(ctx context.Context, batch []*gateItem) error {
+	return runCompletionBatch(pg.CompletionContext(ctx), batch, h.Billing.RunBatch)
 }
 
 // Drain waits for the settlements still running in the background, until ctx ends; then it stops them, and what is

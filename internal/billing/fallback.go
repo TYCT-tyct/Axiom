@@ -170,6 +170,45 @@ func withFallbacks(ctx context.Context, tx pg.Tx, q []Quotable) ([]Quotable, []s
 	return filled, locked, nil
 }
 
+// fallbackCurrencies is the currencies whose fallback prices the entries need, each once.
+func fallbackCurrencies(q []Quotable) []string {
+	currencies := make([]string, 0, 1)
+	for _, e := range q {
+		if c := e.Price.Currency().String(); !slices.Contains(currencies, c) {
+			currencies = append(currencies, c)
+		}
+	}
+	return currencies
+}
+
+func parseFallbackRows(rows []ReadFallbacksRow) (map[string]fallbacks, map[string]string, error) {
+	found := map[string]fallbacks{}
+	bodies := map[string]string{}
+	for _, r := range rows {
+		f, err := parseFallbacks(r.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+		found[r.Currency], bodies[r.Currency] = f, r.Body
+	}
+	return found, bodies, nil
+}
+
+// fillFallbacks fills every entry's missing per-use prices from its currency's fallbacks and returns the bodies it
+// locked beside the filled entries.
+func fillFallbacks(q []Quotable, found map[string]fallbacks, bodies map[string]string) ([]Quotable, []string, error) {
+	filled, locked := slices.Clone(q), make([]string, len(q))
+	for i, e := range filled {
+		c := e.Price.Currency().String()
+		f, ok := found[c]
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: no fallback prices in %s", ErrUnpriced, c)
+		}
+		filled[i].Price, locked[i] = e.Price.Fill(f.perUse), bodies[c]
+	}
+	return filled, locked, nil
+}
+
 // unknownCost is the fallback price of usage protocol could not map: like tokens, a whole count in a field the
 // upstream names *tokens, at the model's highest token price at any service tier and band, which a waiver leaves
 // out as model usage; anything else at the dearest per-use default for each use, a count rounded up, which a waiver
