@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"net/http"
-	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
@@ -36,7 +37,6 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 		}
 		return p
 	}
-	audience := billing.Audience{}
 	fake := &fakeModelProjection{models: []gateway.PublicModel{
 		{
 			ID: "acme/claude-sonnet", Name: "claude-sonnet", Author: "Acme", ContextLength: 200000, MaxOutput: 64000, Streams: true,
@@ -55,17 +55,6 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 	}}
 	api := consoleAPI{models: fake}
 	ctx := context.WithValue(context.Background(), callKey{}, call{site: accounts.Site{DefaultTier: tier}})
-	query := func(q, author string, ability *consoleapi.ModelAbility) consoleapi.ListPublicModelsParams {
-		p := consoleapi.ListPublicModelsParams{}
-		if q != "" {
-			p.Q = &q
-		}
-		if author != "" {
-			p.Author = &author
-		}
-		p.Ability = ability
-		return p
-	}
 	call := func(params consoleapi.ListPublicModelsParams) consoleapi.PublicModelList {
 		t.Helper()
 		response, err := api.ListPublicModels(ctx, consoleapi.ListPublicModelsRequestObject{Params: params})
@@ -75,39 +64,50 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 		return consoleapi.PublicModelList(response.(consoleapi.ListPublicModels200JSONResponse))
 	}
 
-	if got := call(query("", "", nil)); len(got.Data) != 2 || fake.audience != audience {
+	if got := call(consoleapi.ListPublicModelsParams{}); len(got.Data) != 2 || fake.audience != (billing.Audience{}) {
 		t.Fatalf("all models: %+v audience %+v", got, fake.audience)
 	}
-	if got := call(query("SONNET", "", nil)); len(got.Data) != 1 || got.Data[0].Id != "acme/claude-sonnet" {
-		t.Errorf("q by name: %+v", got.Data)
-	}
-	if got := call(query("other/", "", nil)); len(got.Data) != 1 || got.Data[0].Id != "other/haiku" {
-		t.Errorf("q by id: %+v", got.Data)
-	}
-	if got := call(query("", "ACME", nil)); len(got.Data) != 1 || got.Data[0].Author != "Acme" {
-		t.Errorf("author: %+v", got.Data)
-	}
-	ability := consoleapi.ModelAbilityReasoning
-	if got := call(query("", "", &ability)); len(got.Data) != 1 || got.Data[0].Id != "acme/claude-sonnet" {
-		t.Errorf("ability: %+v", got.Data)
-	}
-	ability = consoleapi.ModelAbilityImages
-	if got := call(query("", "", &ability)); len(got.Data) != 0 {
-		t.Errorf("no images: %+v", got.Data)
+	sonnet, other, acme := "SONNET", "other/", "ACME"
+	reasoning, images := consoleapi.ModelAbilityReasoning, consoleapi.ModelAbilityImages
+	for _, tc := range []struct {
+		name   string
+		params consoleapi.ListPublicModelsParams
+		want   []string
+	}{
+		{"q by name", consoleapi.ListPublicModelsParams{Q: &sonnet}, []string{"acme/claude-sonnet"}},
+		{"q by public id", consoleapi.ListPublicModelsParams{Q: &other}, []string{"other/haiku"}},
+		{"author, ignoring case", consoleapi.ListPublicModelsParams{Author: &acme}, []string{"acme/claude-sonnet"}},
+		{"ability", consoleapi.ListPublicModelsParams{Ability: &reasoning}, []string{"acme/claude-sonnet"}},
+		{"ability no model has", consoleapi.ListPublicModelsParams{Ability: &images}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var ids []string
+			for _, m := range call(tc.params).Data {
+				ids = append(ids, m.Id)
+			}
+			if diff := cmp.Diff(tc.want, ids); diff != "" {
+				t.Errorf("models (-want +got):\n%s", diff)
+			}
+		})
 	}
 
-	body := call(query("other/", "", nil)).Data[0]
-	if !slices.Equal(body.Abilities, []consoleapi.ModelAbility{"tools"}) ||
-		len(body.Pricing.Basis) != 0 || len(body.Pricing.Rates) != 3 {
-		t.Errorf("body: %+v", body)
+	body := call(consoleapi.ListPublicModelsParams{Q: &other}).Data[0]
+	zero, above := int64(0), int64(100000)
+	want := consoleapi.PublicModel{
+		Id: "other/haiku", Name: "haiku", Author: "other", ContextLength: 100000, MaxOutput: 8000,
+		Abilities: []consoleapi.ModelAbility{consoleapi.ModelAbilityTools},
+		Pricing: consoleapi.ModelPricing{
+			Currency: "XXX",
+			Basis:    []consoleapi.ModelItem{},
+			Rates: []consoleapi.ModelRate{
+				{ServiceTier: consoleapi.Standard, Item: consoleapi.ModelItemInput, Unit: consoleapi.ModelUnitToken, Amount: "0.000001"},
+				{ServiceTier: consoleapi.Standard, Item: consoleapi.ModelItemInput, Unit: consoleapi.ModelUnitToken, Amount: "0.000003", Above: &zero},
+				{ServiceTier: consoleapi.Priority, Item: consoleapi.ModelItemOutput, Unit: consoleapi.ModelUnitToken, Amount: "0.000002", Above: &above},
+			},
+		},
 	}
-	if body.Pricing.Rates[0].Above != nil ||
-		body.Pricing.Rates[1].Above == nil || *body.Pricing.Rates[1].Above != 0 ||
-		body.Pricing.Rates[2].Above == nil || *body.Pricing.Rates[2].Above != 100000 {
-		t.Errorf("bands: %+v", body.Pricing.Rates)
-	}
-	if body.Pricing.Rates[0].Unit != consoleapi.ModelUnitToken || body.Pricing.Rates[0].Amount != "0.000001" {
-		t.Errorf("rate: %+v", body.Pricing.Rates[0])
+	if diff := cmp.Diff(want, body); diff != "" {
+		t.Errorf("body (-want +got):\n%s", diff)
 	}
 }
 
