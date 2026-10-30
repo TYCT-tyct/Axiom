@@ -27,6 +27,64 @@ func multiplied(multiplier string) Method {
 
 func fixed() Method { return Method{Kind: "fixed", Schedule: jsonx.Raw(fixedUS)} }
 
+// TestFreeModelPublicationStaysZero: a fixed rule, like every other method, must not give a :free model a non-zero
+// sale price: the publication is left unpriced instead, and the default audience cannot undercut the promise.
+func TestFreeModelPublicationStaysZero(t *testing.T) {
+	t.Parallel()
+	m := catalog.Model{Slug: "acme/alpha:free"}
+	zero, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	costs := []PriceCost{{
+		Endpoint: uuid.NewV7(), Model: m.ID, Schedule: zero,
+		UnitValue: "1", UnitValueID: uuid.NewV7(), Currency: usd, CurrencyCode: "USD",
+	}}
+	for _, tc := range []struct {
+		name     string
+		schedule string
+		problem  bool
+	}{
+		{"a paid fixed rule", fixedUS, true},
+		{"a zero fixed rule", `{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`, false},
+	} {
+		rule := Rule{Enabled: true, Target: Selector{Kind: "all"}, Method: Method{Kind: "fixed", Schedule: jsonx.Raw(tc.schedule)}, ID: uuid.NewV7(), Rev: 1}
+		p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, m, nil, usd, costs, fallbacks{})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if tc.problem {
+			if p.Problem != ErrFreePrice.Error() || len(p.Schedule) != 0 {
+				t.Errorf("%s: problem %q, schedule %s; want the free-price refusal", tc.name, p.Problem, p.Schedule)
+			}
+			continue
+		}
+		if p.Problem != "" || len(p.Schedule) == 0 {
+			t.Errorf("%s: problem %q, schedule %s; want a published zero price", tc.name, p.Problem, p.Schedule)
+		}
+	}
+}
+
+// TestSoldZeroChecksEveryAudience: a :free model is safe only if no published layer, not just the default, has a
+// non-zero price.
+func TestSoldZeroChecksEveryAudience(t *testing.T) {
+	t.Parallel()
+	zero, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	paid, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Sold{Version: uuid.NewV7(), Schedule: zero, Audiences: CompilePrices([]AudiencePrice{{
+		Target: Selector{Kind: "all"}, Sold: Sold{Version: uuid.NewV7(), Schedule: paid},
+	}})}
+	if s.Zero() {
+		t.Error("Sold.Zero accepted a non-zero audience layer")
+	}
+}
+
 // TestSell: a sale price is the reference price times the rule's multiplier, or the rule's own price list, and nothing
 // else in M1 gives one. The rounding happens once, against the price the catalog holds, so the same inputs always give
 // the same schedule.

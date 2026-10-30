@@ -17,6 +17,7 @@ type need struct {
 	req    *protocol.Request
 	preset *Preset
 	over   *Override
+	auto   bool                   // rank across every model: the request named openrouter/auto
 	tokens int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
 	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
 	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
@@ -30,6 +31,37 @@ func (r *Router) attempts(n *need) int {
 		return 1
 	}
 	return orDefault(n.preset.MaxAttempts, r.cfg.MaxAttempts)
+}
+
+// rankAll reports whether one ranking spans every model rather than each model's endpoints first: a global sort, or
+// openrouter/auto, whose whole choice is a comparison between models.
+func (n *need) rankAll() bool { return n.over.SortGlobal || n.auto }
+
+// rankModels ranks the endpoints of every model the request may reach: the models it names, or every model in the
+// snapshot for openrouter/auto, which lets the ranking choose the model. It records why a model was left out.
+func (r *Router) rankModels(snap *Snapshot, n *need, rec *Record) []ranked {
+	models := n.in.Models
+	if n.in.Auto {
+		models = snap.models
+	}
+	var order []ranked
+	var seen []catalog.ModelID
+	for _, m := range models {
+		if slices.Contains(seen, m) { // a model named twice is one model: its endpoints are ranked once
+			continue
+		}
+		seen = append(seen, m)
+		if !n.in.Admission.allows(m) {
+			rec.Excluded = append(rec.Excluded, Excluded{Reason: NotAllowed})
+			continue
+		}
+		cands := snap.byModel[m]
+		if len(cands) == 0 {
+			rec.Excluded = append(rec.Excluded, Excluded{Reason: NoCandidates})
+		}
+		order = append(order, r.rank(cands, n, rec)...)
+	}
+	return order
 }
 
 // Plan makes the route of a request: the candidates of the first model that survive the filters, in order, then the
@@ -46,29 +78,13 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		return Plan{}, nil, ErrUnknownPreset
 	}
 	n := &need{
-		in: &in, req: in.Req, preset: &preset, over: &in.Override, now: now,
+		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, now: now,
 		tokens: in.Req.TextBytes / billing.InputBytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
-	var order []ranked
-	var seen []catalog.ModelID
-	for _, m := range in.Models {
-		if slices.Contains(seen, m) { // a model named twice is one model: its endpoints are ranked once
-			continue
-		}
-		seen = append(seen, m)
-		if !in.Admission.allows(m) {
-			rec.Excluded = append(rec.Excluded, Excluded{Reason: NotAllowed})
-			continue
-		}
-		cands := snap.byModel[m]
-		if len(cands) == 0 {
-			rec.Excluded = append(rec.Excluded, Excluded{Reason: NoCandidates})
-		}
-		order = append(order, r.rank(cands, n, &rec)...)
-	}
-	if in.Override.SortGlobal {
+	order := r.rankModels(snap, n, &rec)
+	if n.rankAll() {
 		r.sort(order, n.strategy())
 	}
 	attempts := r.attempts(n)
@@ -182,7 +198,7 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	limits.OpenAIUsage = format != protocol.Messages // the call format decides whose usage semantics the reply has
 	return Entry{
 		Exchange: c.Exchange,
-		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: limits, MaxOutput: out,
+		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Price: c.Price, Limits: limits, MaxOutput: out,
 		Segmentable: segmentable,
 	}
 }
@@ -386,17 +402,25 @@ func (n *need) withinLimit(limit PriceLimit, c *candidate, price *candidatePrice
 
 func listed(ids []SupplierID, id SupplierID) bool { return slices.Contains(ids, id) }
 
+// serveable reports whether some endpoint can serve now. When only slow-full windows keep every other endpoint from
+// serving, their marks are cleared first: a route that starts when a window recovers beats no route at all.
+func serveable(order []ranked) bool {
+	if slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() && !c.slowFull }) {
+		return true
+	}
+	if !slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() }) {
+		return false
+	}
+	for i := range order {
+		order[i].slowFull = false
+	}
+	return true
+}
+
 // healthOrder applies breakers after every request-specific filter, across primary and alternate models.
 func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
-	available := slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() && !c.slowFull })
-	if !available && slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() }) {
-		for i := range order {
-			order[i].slowFull = false
-		}
-		available = true
-	}
-	if !available {
-		orderLastResorts(order, n.over.SortGlobal)
+	if !serveable(order) {
+		orderLastResorts(order, n.rankAll())
 		return order
 	}
 	owned, hasOwned := ownedFallback(order, n.now)

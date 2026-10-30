@@ -112,6 +112,9 @@ var ErrNoAttempt = errors.New("billing: the outcome names no attempt on a kept e
 // is terminal. A retry, or a Settle after cleanup took over, charges at most once: it returns the Final stored on the
 // reservation, or settles the difference by the late-settlement rules. An outcome with no attempt is a call that never
 // reached an upstream: its reservation is released.
+//
+// Settle is the single-request settlement. It keeps the reports here rather than going through SettleIn, whose
+// per-batch report closure would allocate on a path bench-compare measures.
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err error) {
 	a := h.admitted
 	var c *locked

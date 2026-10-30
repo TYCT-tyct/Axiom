@@ -164,22 +164,35 @@ func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *tele
 	stopped := awaitEnd(ctx, served, routes.calls.reaped, cache.Lost())
 	cancelSync()
 	stopAnnouncing()
-	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
+	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String(), "edge_delay", drainDelay(cfg.shutdownTimeout).String())
 	err := stopNode(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers, routes.calls, queue, recorder)
 	return errors.Join(stopped, err)
 }
 
-// stopNode stops what serve started, in an order that loses nothing it need not: the listeners first (the probes keep
-// answering, not ready), then the calls and their settlements, then the loops that keep the holder alive for them, then
-// the queue and the recorder, which the calls may still have fed, the two together: a slow job then cannot use up the
-// recorder's time. Each stage has a deadline of its own, so a long stream that uses the listeners' up does not take the
-// recorder's with it. Health also finishes bounded paid probes and flushes their costs before the database closes;
-// deploy/compose.yaml's stop_grace_period covers every stage.
+// stopNode stops what serve started, in an order that loses nothing it need not: it reports not ready and refuses new
+// requests, waits for the edge to stop routing here, then stops the listeners and drains the calls and their settlements
+// together under one deadline, so a long stream gets the whole AXIOM_SHUTDOWN_TIMEOUT and the two stages cannot add up
+// to more. The calls are aborted and settled within the same deadline. Then the loops that keep the holder alive end,
+// and the queue and the recorder, which the calls may still have fed, drain together under a deadline of their own: a
+// slow job cannot use up the recorder's time, and a stream that used the drain's time does not take their deadline with
+// it. Health also finishes bounded paid probes and flushes their costs before the database closes;
+// deploy/compose.yaml's stop_grace_period covers every stage and the edge delay.
 func stopNode(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening,
 	calls callNode, queue *pg.Queue, recorder *observability.Recorder,
 ) error {
-	err := shutdown(ctx, timeout, health, servers)
-	calls.Drain(ctx)
+	beginDrain(health, timeout)
+	drainCtx, cancelDrain := context.WithTimeout(ctx, timeout)
+	defer cancelDrain()
+	// The listeners and the calls wait on the same deadline: a call in flight is also a request the listener waits for,
+	// so running the two side by side makes the deadline the whole answer instead of one stage's share of it. The
+	// calls abort early enough inside it to settle.
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		calls.Drain(drainCtx)
+	}()
+	err := shutdown(drainCtx, servers)
+	<-drained
 	calls.stop()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -255,7 +268,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 	if err != nil {
 		return consoleParts{}, err
 	}
-	frontend, err := webui.Embedded()
+	frontend, err := webui.Open(cfg.webAssetsDir)
 	if err != nil {
 		return consoleParts{}, err
 	}

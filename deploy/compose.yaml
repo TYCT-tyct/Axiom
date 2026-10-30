@@ -190,7 +190,9 @@ services:
     build: .
     image: ${DEPLOY_IMAGE:-axiom:local}
     restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
-    stop_grace_period: 170s # listeners 30s + calls 20s + health probes/cost flush 65s + queue/recorder 30s + cache 10s, with margin
+    # The edge delay (up to 10s) + the listeners and calls' one
+    # shutdown deadline (30s) + health probes and cost flush (65s) + queue/recorder (30s) + cache (10s), with margin.
+    stop_grace_period: 170s
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
       # The call-log retention job's own login; without it retention (partition pre-creation and the archive) is off.
@@ -222,10 +224,15 @@ services:
       AXIOM_OBJECTSTORE_ACCESS_KEY_ID: ${AXIOM_OBJECTSTORE_ACCESS_KEY_ID-}
       AXIOM_OBJECTSTORE_SECRET_ACCESS_KEY: ${AXIOM_OBJECTSTORE_SECRET_ACCESS_KEY-}
       AXIOM_OBJECTSTORE_PATH_STYLE: ${AXIOM_OBJECTSTORE_PATH_STYLE-}
+      # The content-hashed files of every build a rolling release overlaps: this release publishes its own there before
+      # any node starts, and each node serves another build's files from it while the old and new builds overlap
+      # (docs/ops/release.md「滚动发布」). Without it a node serves only its embedded build.
+      AXIOM_WEB_ASSETS_DIR: /assets
     volumes:
       # The ring is read and replaced atomically here. A multi-node deployment must give every node the same protected
       # file (one shared volume or a copy) and set AXIOM_KEYRING_GENERATE=false so a fresh node never makes its own.
       - keys:/keys:rw
+      - web_assets:/assets:rw
     ports:
       # An empty DEPLOY_PORT or DEPLOY_ADMIN_PORT publishes a port the kernel picks, so two jobs on one host cannot take
       # each other's; local `just up` sets neither and gets 8080 and 8082. Both bind this machine only.
@@ -279,4 +286,7 @@ volumes:
   keys:
   # The backup's lock file; it has to outlive the container that takes it.
   backup_state:
+  # The frontend files of every build a rolling release still overlaps. The release publishes into it from the image,
+  # as root because a fresh named volume belongs to root; the node only reads it, as 65532.
+  web_assets:
   cache:

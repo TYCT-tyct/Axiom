@@ -25,6 +25,21 @@ type Schedule struct {
 // Currency is what the schedule's prices are in.
 func (s Schedule) Currency() platform.Currency { return s.currency }
 
+// IsZero reports whether every price in the schedule is zero, including prices for items the spec does not declare:
+// a :free entry must not charge for anything.
+func (s Schedule) IsZero() bool {
+	for st := range numServiceTiers {
+		for it := range NumItems {
+			for band := range len(s.above) + 1 {
+				if p, ok := s.price(st, band, it); ok && p.String() != "0" {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
 // level is one service tier's prices: its base prices, and for each threshold in above, the base prices it replaces
 // when the basis adds up to more than the threshold, for the whole request; M1 supports no other method
 // (README.md「条件」).

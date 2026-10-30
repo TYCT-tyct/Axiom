@@ -48,7 +48,7 @@ func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catal
 		return p, err
 	}
 	if matched != nil && p.Problem == "" {
-		if err := p.protectPrice(input, envelope, costErr, policy, defaults); err != nil {
+		if err := p.protectPrice(input, envelope, costErr, policy, defaults, m.Free()); err != nil {
 			p.Problem = err.Error()
 			p.Schedule = nil
 			p.Floor = nil
@@ -139,8 +139,11 @@ func priceEvidence(policy PricePolicy, rule *Rule, reference uuid.UUID, costs []
 	}{policy, rule, reference, costs, exchange})
 }
 
-func (p *Publication) protectPrice(input, envelope catalog.Schedule, costErr error, policy PricePolicy, defaults fallbacks) error {
+func (p *Publication) protectPrice(input, envelope catalog.Schedule, costErr error, policy PricePolicy, defaults fallbacks, free bool) error {
 	input = input.Fill(defaults.perUse)
+	if free && !input.IsZero() {
+		return ErrFreePrice
+	}
 	var err error
 	p.Requested, err = input.MarshalJSON()
 	if err != nil {
@@ -164,6 +167,9 @@ func (p *Publication) protectPrice(input, envelope catalog.Schedule, costErr err
 	input, err = input.Aligned(floor, false)
 	if err != nil {
 		return err
+	}
+	if free && !input.IsZero() {
+		return ErrFreePrice
 	}
 	p.Schedule, err = input.MarshalJSON()
 	if err != nil {

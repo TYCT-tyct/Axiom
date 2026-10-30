@@ -182,12 +182,13 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
 		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Models: r.models, Proxies: o.proxies, KV: o.cache,
+		Outstanding: NewOutstanding(),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	r.server = httptest.NewServer(httpserver.Public(r.handler, slog.New(slog.NewTextHandler(logWriter{t}, nil)), cmp.Or(o.body, time.Minute)))
 	t.Cleanup(r.server.Close)
-	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context())) })
+	t.Cleanup(func() { r.handler.Outstanding.Drain(context.WithoutCancel(t.Context()), time.Minute) })
 	return r
 }
 
@@ -240,10 +241,9 @@ func (r *rig) run(w http.ResponseWriter, req *http.Request, c *Call) {
 	}
 	ctx, cancel := SettleContext(req.Context(), 30*time.Second)
 	defer cancel()
-	release, err := r.limits.Funds.Complete(ctx, accountKey(c.caller))
+	err := submitCompletion(ctx, r.limits.Funds, accountKey(c.caller))
 	if err == nil {
 		err = r.billing.SettleOrphan(ctx, c.Admitted, c.ID)
-		release()
 	}
 	if err != nil {
 		r.t.Errorf("release the reservation: %v", err)

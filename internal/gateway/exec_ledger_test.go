@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 	"uuid"
 
@@ -31,9 +32,10 @@ var errAckLost = errors.New("the connection broke after the commit")
 // report a failure, as a commit whose acknowledgement is lost does.
 type flakyLedger struct {
 	*billing.Billing
-	mu     sync.Mutex
-	extend func() (write bool, err error)
-	settle func() (write bool, err error)
+	mu        sync.Mutex
+	extend    func() (write bool, err error)
+	settle    func() (write bool, err error)
+	commitErr error // a fault of a write that did commit, reported after the batch's commit
 }
 
 func (l *flakyLedger) fault(f func() (bool, error)) (bool, error) {
@@ -45,27 +47,52 @@ func (l *flakyLedger) fault(f func() (bool, error)) (bool, error) {
 	return f()
 }
 
-func (l *flakyLedger) Extend(ctx context.Context, h *billing.Hold, r billing.ExtendRequest) error {
+func (l *flakyLedger) ExtendIn(ctx context.Context, tx pg.Tx, h *billing.Hold, r billing.ExtendRequest) error {
 	write, fail := l.fault(l.extend)
 	if !write {
 		return fail
 	}
-	if err := l.Billing.Extend(ctx, h, r); err != nil {
+	if err := l.Billing.ExtendIn(ctx, tx, h, r); err != nil {
 		return err
 	}
-	return fail
+	l.lost(fail)
+	return nil
 }
 
-func (l *flakyLedger) Settle(ctx context.Context, h *billing.Hold, o billing.Outcome) (billing.Final, error) {
+func (l *flakyLedger) SettleIn(ctx context.Context, tx pg.Tx, h *billing.Hold, o billing.Outcome) (billing.Final, func(), error) {
 	write, fail := l.fault(l.settle)
 	if !write {
-		return billing.Final{}, fail
+		return billing.Final{}, nil, fail
 	}
-	f, err := l.Billing.Settle(ctx, h, o)
+	f, after, err := l.Billing.SettleIn(ctx, tx, h, o)
 	if err != nil {
-		return f, err
+		return f, nil, err
 	}
-	return f, fail
+	l.lost(fail)
+	return f, after, nil
+}
+
+// lost remembers a fault that happened after the write: it is reported when the batch's commit returns, as a commit
+// whose acknowledgement was lost is.
+func (l *flakyLedger) lost(err error) {
+	if err == nil {
+		return
+	}
+	l.mu.Lock()
+	l.commitErr = err
+	l.mu.Unlock()
+}
+
+func (l *flakyLedger) RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error {
+	l.mu.Lock()
+	l.commitErr = nil
+	l.mu.Unlock()
+	if err := l.Billing.RunBatch(ctx, scope, works); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.commitErr
 }
 
 // withExecutor gives the rig an executor on the ledger and fake upstreams for its endpoints, which are called in
@@ -86,6 +113,7 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 	exec, err := NewExecutor(ExecDeps{
 		Router: r.router, Upstreams: up, Limits: r.limits, Memory: r.memory, Logger: slog.New(slog.NewTextHandler(logWriter{r.t}, nil)),
 		Ledger: ledger, Costs: costs, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
+		Outstanding: r.handler.Outstanding, // one node: the handler's requests and the executor's calls on one count
 	})
 	if err != nil {
 		r.t.Fatal(err)
@@ -93,7 +121,7 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 	r.mu.Lock()
 	r.exec = exec
 	r.mu.Unlock()
-	r.t.Cleanup(func() { exec.Drain(context.WithoutCancel(r.t.Context()), time.Minute) })
+	r.t.Cleanup(func() { exec.Outstanding.Drain(context.WithoutCancel(r.t.Context()), time.Minute) })
 	return up
 }
 
@@ -176,7 +204,7 @@ func TestAnEstimateIsNeverChargedBeyondTheReservation(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%d: %s", resp.StatusCode, body)
 	}
-	r.exec.Drain(t.Context(), time.Minute)
+	r.exec.Outstanding.Drain(t.Context(), time.Minute)
 	if n := r.count("SELECT count(*) FROM billing.reservations WHERE charged > 0"); n != 1 {
 		t.Fatalf("%d charges, want the one", n)
 	}
@@ -227,7 +255,7 @@ func TestTheLedgerBalancesWhateverHappens(t *testing.T) {
 			t.Errorf("%d:\n%s", resp.StatusCode, body)
 		}
 	}
-	r.exec.Drain(t.Context(), time.Minute) // the settlements still retrying in the background end
+	r.exec.Outstanding.Drain(t.Context(), time.Minute) // the settlements still retrying in the background end
 	r.ledgerBalanced()
 }
 
@@ -319,9 +347,72 @@ func TestAFailureIsNotChargedForModelUsageBecauseTheClientLeftAfterIt(t *testing
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	r.exec.Drain(t.Context(), time.Minute)
+	r.exec.Outstanding.Drain(t.Context(), time.Minute)
 	if n := r.count("SELECT count(*) FROM billing.reservations WHERE state = 'settled' AND waived AND charged = 0"); n != 1 {
 		t.Errorf("%d reservations settled as waived and charged nothing, want the one: the client left after the failure", n)
 	}
 	r.ledgerBalanced()
+}
+
+// TestCompletionBatchKeepsOneWritesFailureOffTheRest: one extension's key limit rolls the batch back, but only that
+// request gets the error; the other extension is retried in its own transaction, runs its report, and does not cut a
+// stream. The same withFunds path carries the settle and extend batches, so this covers the gateway's retry of the
+// members that did not fail, not a manual single-request retry.
+func TestCompletionBatchKeepsOneWritesFailureOffTheRest(t *testing.T) {
+	testOneCompletionFailure(t, &billing.Insufficient{Source: billing.SourceKey})
+}
+
+// TestCompletionBatchKeepsAMissingReservationOffTheRest is the settlement shape of the same bug: pg.ErrNoRows is
+// permanent, so when it was copied to a normal member, permanent() discarded that member's settlement and only the
+// cleanup released its reservation. Here the normal member still commits and charges.
+func TestCompletionBatchKeepsAMissingReservationOffTheRest(t *testing.T) {
+	testOneCompletionFailure(t, pg.ErrNoRows)
+}
+
+func testOneCompletionFailure(t *testing.T, fail error) {
+	t.Helper()
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{})
+		release := holdGate(t, ctx, h.exec.Limits.Funds, accountKey(h.call.caller))
+		first := &Call{ID: h.call.ID, Admitted: h.call.Admitted, caller: h.call.caller}
+		second := &Call{ID: uuid.New(), Admitted: h.call.Admitted, caller: h.call.caller}
+		var ran, reported bool
+		firstDone := make(chan error, 1)
+		secondStarted, releaseSecond := make(chan struct{}), make(chan struct{})
+		secondDone := make(chan error, 1)
+		go func() {
+			firstDone <- h.exec.withFunds(ctx, first, func(context.Context, pg.Tx) (func(), error) {
+				return nil, fail
+			})
+		}()
+		synctest.Wait()
+		go func() {
+			secondDone <- h.exec.withFunds(ctx, second, func(context.Context, pg.Tx) (func(), error) {
+				close(secondStarted)
+				<-releaseSecond
+				ran = true
+				return func() { reported = true }, nil
+			})
+		}()
+		synctest.Wait()
+		release()
+		<-secondStarted
+		synctest.Wait()
+		var firstErr error
+		select {
+		case firstErr = <-firstDone:
+		default:
+			close(releaseSecond)
+			t.Fatal("the failed request waited for the retry of the rest of the batch")
+		}
+		if !errors.Is(firstErr, fail) {
+			close(releaseSecond)
+			t.Fatalf("failed request got %v, want %v", firstErr, fail)
+		}
+		close(releaseSecond)
+		secondErr := <-secondDone
+		if secondErr != nil || !ran || !reported {
+			t.Fatalf("second request got %v, ran=%v reported=%v; want success and its report", secondErr, ran, reported)
+		}
+	})
 }

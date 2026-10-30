@@ -82,6 +82,9 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if names.auto {
+		return 0, invalid("openrouter/auto has no model to count tokens for: count with the concrete model.")
+	}
 	model, err := snap.ResolvePublic(names.primary)
 	if err != nil {
 		return 0, err

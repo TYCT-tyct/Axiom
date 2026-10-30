@@ -159,9 +159,9 @@ func TestParseOpenRouter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// :batch is a supplier's alias for the model, not another model.
+	// :batch is a supplier's alias for the model, not another model; :free is its own model.
 	for _, e := range entries {
-		if strings.Contains(e.Key, ":") {
+		if strings.Contains(e.Key, ":") && !strings.HasSuffix(e.Key, ":free") {
 			t.Errorf("entry %q is a variant", e.Key)
 		}
 	}
@@ -229,5 +229,25 @@ func TestPickEntry(t *testing.T) {
 	bad := floating("gpt-bad-negative", "gpt-4o-2024-08-06")
 	if _, err := pickEntry(index, bad); err == nil || !strings.Contains(err.Error(), "different prices") {
 		t.Errorf("an unusable entry beside a usable one: %v", err)
+	}
+}
+
+// TestParseOpenRouterFree: a :free offer is a model of its own with its own prices, not an alias of the paid one.
+func TestParseOpenRouterFree(t *testing.T) {
+	t.Parallel()
+	entries, err := ParseOpenRouter([]byte(`{"data":[{"id":"acme/model:free","canonical_slug":"acme/model-20261021",
+		"architecture":{"output_modalities":["text"]},"pricing":{"prompt":"0","completion":"0"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Key != "acme/model:free" || entries[0].Err != nil {
+		t.Fatalf("entries = %+v, want the :free model", entries)
+	}
+	// The canonical slug names the paid model; using it would let a sync match the free price to that model.
+	if !slices.Equal(entries[0].Names, []string{"acme/model:free"}) {
+		t.Errorf("names = %v, want only the :free name", entries[0].Names)
+	}
+	if got := scheduleOf(t, entries[0], nil); got != `{"currency":"USD","rates":{"input":"0","output":"0"},"v":1}` {
+		t.Errorf("schedule = %s", got)
 	}
 }
