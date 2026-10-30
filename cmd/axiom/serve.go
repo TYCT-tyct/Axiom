@@ -509,6 +509,10 @@ func openRetentionDB(ctx context.Context, url string, archive bool) (*pg.DB, err
 	if err != nil {
 		return nil, fmt.Errorf("retention database:\n%w", err)
 	}
+	if err := observability.CheckRetentionRole(ctx, db, pg.PlatformScope()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("retention database:\n%w", err)
+	}
 	return db, nil
 }
 

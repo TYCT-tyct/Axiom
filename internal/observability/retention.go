@@ -85,7 +85,36 @@ const (
 	archivePrefix          = "call-log/v1/"
 	archiveManifestVersion = 1
 	archiveMonthBudget     = 2 * time.Minute
+	// retentionRoleCheckTimeout bounds the startup check: a login that cannot set the job role must fail serve with a
+	// clear message, not hang on a lock or a slow database.
+	retentionRoleCheckTimeout = 10 * time.Second
 )
+
+// CheckRetentionRole verifies that the retention login can act as the job role and use the migration's schema grants.
+// It runs at startup when AXIOM_RETENTION_DATABASE_URL is set: a database migrated before the deployment created the
+// login has the job role but no membership, and the job would otherwise fail on every SET ROLE while the node served.
+func CheckRetentionRole(ctx context.Context, db *pg.DB, scope pg.Scope) error {
+	ctx, cancel := context.WithTimeout(ctx, retentionRoleCheckTimeout)
+	defer cancel()
+	var ok bool
+	err := db.ReadTx(ctx, scope, func(tx pg.Tx) error {
+		if err := tx.SetRole(ctx, retentionJobRole); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT CASE
+ WHEN to_regclass('observability.retention') IS NULL THEN false
+ ELSE has_schema_privilege(current_user, 'observability', 'CREATE')
+  AND has_table_privilege(current_user, 'observability.retention', 'SELECT')
+END`).Scan(&ok)
+	})
+	if err != nil {
+		return fmt.Errorf("retention login cannot act as %s; run deploy/postgres/roles.sh: %w", retentionJobRole, err)
+	}
+	if !ok {
+		return fmt.Errorf("retention login lacks the observability grants of %s: run migrations and deploy/postgres/roles.sh", retentionJobRole)
+	}
+	return nil
+}
 
 // ArchiveStore is the part of platform/objectstore the archive uses. A nil Store turns archiving off: partitions are
 // kept even past the window, because a drop without a confirmed archive loses records.

@@ -269,7 +269,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | `axiom_owner` | 否 | 拥有全部 schema 和对象，只在迁移时进入；没有 BYPASSRLS |
 | `axiom_lookup` | 否 | 只拥有登录前查找的定义者函数，见 [accounts 的「登录前的查找」](../accounts/README.md#登录前的查找)；`axiom_app` 能调用这些函数，不能成为这个角色 |
 | `axiom_retention_job` | 否 | observability 的后台任务角色：拥有 `call_log`、`call_attempt` 及它们的分区，才能建、删整月分区。迁移建好并授予 `axiom_owner`（继承并带 ADMIN）；部署建的 `axiom_retention` 是它的成员，`axiom_app` 不是。没有 BYPASSRLS，读分区仍过策略 |
-| `axiom_retention` | 是 | 调用记录保留任务的登录角色（`AXIOM_RETENTION_DATABASE_URL`）；由部署的 `roles.sh` 创建，迁移把它加入 `axiom_retention_job`。它不用于任何请求路径，应用角色不能切换成它 |
+| `axiom_retention` | 是 | 调用记录保留任务的登录角色（`AXIOM_RETENTION_DATABASE_URL`）；由部署的 `roles.sh` 创建，迁移或 `roles.sh` 的每次启动把它加入 `axiom_retention_job`（先迁移、后建角色的库也不会漏授权）。启动时实际 `SET ROLE` 并检查 schema/表权限，缺授权拒绝启动。它不用于任何请求路径，应用角色不能切换成它 |
 | `axiom_app` | 是 | 运行时唯一的登录角色，`AXIOM_DATABASE_URL`；由部署创建并设密码，密码不经过本程序 |
 | 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`，部署里叫 `axiom_migrator`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户；`axiom_owner`、`axiom_lookup` 由别的角色建好时，还要有它们的 ADMIN 权限。建好 `axiom_owner`、`axiom_lookup` 和各模块的 schema，再切成 `axiom_owner` 执行迁移 |
 

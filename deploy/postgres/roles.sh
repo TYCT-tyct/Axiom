@@ -16,6 +16,12 @@ SELECT format('CREATE ROLE axiom_migrator LOGIN CREATEROLE PASSWORD %L', :'migra
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_migrator') \gexec
 SELECT format('CREATE ROLE axiom_retention LOGIN PASSWORD %L', :'retention')
 WHERE :'retention' <> '' AND NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_retention') \gexec
+-- The migration grants the job role to the login when it already exists. A database migrated before the password was
+-- set has no login at that point and therefore no membership; grant it here on every start, so setting the password
+-- later enables retention without another migration.
+SELECT 'GRANT axiom_retention_job TO axiom_retention WITH INHERIT TRUE, SET TRUE'
+WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_retention')
+  AND EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_retention_job') \gexec
 GRANT CREATE ON DATABASE :"DBNAME" TO axiom_migrator;
 -- The migration bootstrap grants the roles it manages (to itself, and axiom_lookup to axiom_owner), which needs the
 -- admin option on them. A database migrated by the superuser, or by an earlier migrator that was dropped and created
