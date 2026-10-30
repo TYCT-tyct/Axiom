@@ -16,6 +16,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
 	"axiom/internal/platform"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
@@ -54,8 +55,10 @@ func (u serviceUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
 // Ledger is what a call writes of its money once admitted, *billing.Billing: the extensions of its reservation and
 // the settlement that ends it.
 type Ledger interface {
-	Extend(ctx context.Context, h *billing.Hold, r billing.ExtendRequest) error
-	Settle(ctx context.Context, h *billing.Hold, o billing.Outcome) (billing.Final, error)
+	ExtendIn(ctx context.Context, tx pg.Tx, h *billing.Hold, r billing.ExtendRequest) error
+	SettleIn(ctx context.Context, tx pg.Tx, h *billing.Hold, o billing.Outcome) (billing.Final, func(), error)
+	// RunBatch commits the works of one completion batch together: one begin, one commit, one connection.
+	RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error
 }
 
 // Costs prices an attempt's usage at what its supplier charges us, in billionths of a credit of currency, the one the

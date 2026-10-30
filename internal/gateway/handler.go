@@ -56,8 +56,9 @@ type Deps struct {
 // Handler serves the model API: the call paths in both prefixes, and the model list.
 type Handler struct {
 	Deps
-	mux     *http.ServeMux
-	admitTx func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
+	mux          *http.ServeMux
+	admitTx      func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
+	admitBatchTx func(context.Context, []accounts.AdmitCall, func(pg.Tx, []accounts.Admission, []error) error) error
 
 	charges    *billing.ChargeReader
 	background *background             // settlements of lost admissions
@@ -79,7 +80,7 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground(), outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
+	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, admitBatchTx: d.Accounts.AdmitBatch, background: newBackground(), outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
@@ -314,6 +315,15 @@ func (h *Handler) currentCatalog() (*catalog.Snapshot, error) {
 // admitDB runs an admission transaction; one that commits ends a database outage.
 func (h *Handler) admitDB(ctx context.Context, caller accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
 	err := h.admitTx(ctx, caller, req, fn)
+	if err == nil {
+		h.outage.recovered(depDatabase)
+	}
+	return err
+}
+
+// admitDBBatch runs an admission batch; one that commits ends a database outage.
+func (h *Handler) admitDBBatch(ctx context.Context, calls []accounts.AdmitCall, fn func(pg.Tx, []accounts.Admission, []error) error) error {
+	err := h.admitBatchTx(ctx, calls, fn)
 	if err == nil {
 		h.outage.recovered(depDatabase)
 	}

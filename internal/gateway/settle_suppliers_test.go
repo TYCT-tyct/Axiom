@@ -417,14 +417,14 @@ type recordingLedger struct {
 	recorded bool
 }
 
-func (l *recordingLedger) Settle(ctx context.Context, h *billing.Hold, o billing.Outcome) (billing.Final, error) {
+func (l *recordingLedger) SettleIn(ctx context.Context, tx pg.Tx, h *billing.Hold, o billing.Outcome) (billing.Final, func(), error) {
 	l.mu.Lock()
 	l.given, l.recorded = o, true
 	l.mu.Unlock()
 	if l.refuse != nil {
-		return billing.Final{}, l.refuse
+		return billing.Final{}, nil, l.refuse
 	}
-	return l.Billing.Settle(ctx, h, o)
+	return l.Billing.SettleIn(ctx, tx, h, o)
 }
 
 // outcome is the outcome the settlement was given, and whether there was one.

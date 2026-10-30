@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"axiom/internal/billing"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 )
 
@@ -65,7 +66,9 @@ func (a *attempt) extend(ctx context.Context, r billing.ExtendRequest) {
 	go func() {
 		ctx, cancel := SettleContext(ctx, s.x.Limits.cfg.ExtendWait)
 		defer cancel()
-		err := s.x.withFunds(ctx, s.c, func(ctx context.Context) error { return s.x.Ledger.Extend(ctx, s.c.Hold, r) })
+		err := s.x.withFunds(ctx, s.c, func(ctx context.Context, tx pg.Tx) (func(), error) {
+			return nil, s.x.Ledger.ExtendIn(ctx, tx, s.c.Hold, r)
+		})
 		landing <- err
 		if err != nil {
 			// The owner may be blocked in a read of an upstream that has gone quiet, which would not return before
