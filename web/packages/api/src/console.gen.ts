@@ -1464,6 +1464,24 @@ export interface components {
          * @enum {string}
          */
         KeyStatus: "active" | "disabled" | "expired";
+        /** @description The filters this node applied to the page. Absent on nodes that predate key filters: those nodes ignore the filter parameters and return every key, so a filtered page cannot show their rows. */
+        KeyFilterEcho: {
+            /** @description The applied name filter */
+            name?: string;
+            /** @description The applied prefix filter */
+            prefix?: string;
+            status?: components["schemas"]["KeyStatus"];
+            /**
+             * Format: date-time
+             * @description The applied inclusive lower bound.
+             */
+            created_after?: string;
+            /**
+             * Format: date-time
+             * @description The applied exclusive upper bound.
+             */
+            created_before?: string;
+        };
         /**
          * @description When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
          * @enum {string}
@@ -1500,6 +1518,7 @@ export interface components {
             secret: string;
         };
         KeyList: {
+            filters?: components["schemas"]["KeyFilterEcho"];
             data: components["schemas"]["Key"][];
             /** @description Null on the last page. */
             next_cursor: string | null;

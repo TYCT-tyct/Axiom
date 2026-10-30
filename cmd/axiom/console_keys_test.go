@@ -192,6 +192,37 @@ func TestKeyFilters(t *testing.T) {
 	}
 }
 
+// TestKeyFilterEcho: a filtered page says which filters its node applied, and an unfiltered one still carries the
+// object with no filter set, so a page can tell this node from one that ignores the parameters.
+func TestKeyFilterEcho(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	f.createKey(s, `{"name":"Alpha One"}`)
+	from := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	to := from.Add(2 * time.Hour)
+	var page consoleapi.KeyList
+	decode(t, f.do(http.MethodGet, "/keys?name=alpha&prefix=SK-AX&status=active"+
+		"&created_after="+url.QueryEscape(from.Format(time.RFC3339))+
+		"&created_before="+url.QueryEscape(to.Format(time.RFC3339)), "", as(s)), &page)
+	if page.Filters == nil {
+		t.Fatal("a filtered page has no filter echo")
+	}
+	if page.Filters.Name == nil || *page.Filters.Name != "alpha" ||
+		page.Filters.Prefix == nil || *page.Filters.Prefix != "SK-AX" ||
+		page.Filters.Status == nil || *page.Filters.Status != consoleapi.KeyStatusActive ||
+		page.Filters.CreatedAfter == nil || !page.Filters.CreatedAfter.Equal(from) ||
+		page.Filters.CreatedBefore == nil || !page.Filters.CreatedBefore.Equal(to) {
+		t.Errorf("the filter echo = %+v", page.Filters)
+	}
+	var all consoleapi.KeyList
+	decode(t, f.do(http.MethodGet, "/keys", "", as(s)), &all)
+	if all.Filters == nil || all.Filters.Name != nil || all.Filters.Prefix != nil ||
+		all.Filters.Status != nil || all.Filters.CreatedAfter != nil || all.Filters.CreatedBefore != nil {
+		t.Errorf("an unfiltered page's echo = %+v", all.Filters)
+	}
+}
+
 // TestKeyRetiredModelHint: a key whose model restrictions name a retired model says which ones, while a key with no
 // retired name omits the hint.
 func TestKeyRetiredModelHint(t *testing.T) {

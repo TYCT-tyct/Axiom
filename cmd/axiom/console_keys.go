@@ -121,6 +121,23 @@ func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int6
 	return body
 }
 
+// keyFilterEcho is the filters a page was read with, so a page can tell a node that applied them from an old node
+// that ignored the parameters and returned every key.
+func keyFilterEcho(q accounts.KeyQuery) *consoleapi.KeyFilterEcho {
+	echo := &consoleapi.KeyFilterEcho{CreatedAfter: q.CreatedAfter, CreatedBefore: q.CreatedBefore}
+	if q.Name != "" {
+		echo.Name = &q.Name
+	}
+	if q.Prefix != "" {
+		echo.Prefix = &q.Prefix
+	}
+	if q.Status != "" {
+		status := consoleapi.KeyStatus(q.Status)
+		echo.Status = &status
+	}
+	return echo
+}
+
 // ListKeys lists the account's keys, newest first, a page at a time, narrowed by the optional filters.
 func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysRequestObject) (consoleapi.ListKeysResponseObject, error) {
 	cl := callOf(ctx)
@@ -163,7 +180,7 @@ func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysReq
 		return nil, err
 	}
 	snap := c.snapshot()
-	list := consoleapi.KeyList{Data: make([]consoleapi.Key, len(keys))}
+	list := consoleapi.KeyList{Filters: keyFilterEcho(q), Data: make([]consoleapi.Key, len(keys))}
 	for i, k := range keys {
 		list.Data[i] = keyBody(k, cl.site.Currency, used, snap)
 	}

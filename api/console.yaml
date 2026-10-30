@@ -2514,6 +2514,17 @@ components:
       description: >-
         The state the key list shows: `active` is enabled and not expired, `disabled` is disabled and not expired,
         and `expired` is past its `expires_at` whether enabled or not.
+    KeyFilterEcho:
+      type: object
+      description: >-
+        The filters this node applied to the page. Absent on nodes that predate key filters: those nodes ignore the
+        filter parameters and return every key, so a filtered page cannot show their rows.
+      properties:
+        name: {type: string, description: The applied name filter, ignoring case in the match.}
+        prefix: {type: string, description: The applied prefix filter, ignoring case in the match.}
+        status: {$ref: "#/components/schemas/KeyStatus"}
+        created_after: {type: string, format: date-time, description: The applied inclusive lower bound.}
+        created_before: {type: string, format: date-time, description: The applied exclusive upper bound.}
     LimitReset:
       type: string
       enum: [daily, weekly, monthly]
@@ -2563,6 +2574,8 @@ components:
       type: object
       required: [data, next_cursor]
       properties:
+        filters:
+          $ref: "#/components/schemas/KeyFilterEcho"
         data:
           type: array
           items: {$ref: "#/components/schemas/Key"}

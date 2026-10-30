@@ -132,6 +132,10 @@ export default {
     retiredModels: "Retired models: {{models}}",
     noMatch: "No keys match",
     noMatchBody: "Clear a filter or search for another name.",
+    filtersUnavailable: {
+      title: "Filters are not available on this node yet",
+      body: "This node predates key filters and returned every key. Reload in a moment, or clear the filters to see the full list.",
+    },
     filter: {
       name: "Name contains",
       prefix: "Prefix starts with",

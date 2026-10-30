@@ -126,6 +126,10 @@ export default {
     retiredModels: "已下线的模型：{{models}}",
     noMatch: "没有符合条件的 key",
     noMatchBody: "清除一项筛选，或换一个名称搜索。",
+    filtersUnavailable: {
+      title: "这个节点还不支持筛选",
+      body: "该节点尚未更新到支持 key 筛选的版本，返回的是全部 key。请稍后刷新，或清除筛选查看完整列表。",
+    },
     filter: {
       name: "名称包含",
       prefix: "前缀开头",

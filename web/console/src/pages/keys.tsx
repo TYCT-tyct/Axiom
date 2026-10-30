@@ -17,9 +17,10 @@ import {
 } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CreateKeyDialog, DeleteKeyDialog, EditKeyDialog, SecretDialog } from "../key-dialogs";
+import { keyFiltersApplied } from "../key-filters";
 import { maskedKey, toInstant, toLocalInput } from "../parts";
 import { type KeyFilters, keysQuery } from "../queries";
 
@@ -36,6 +37,8 @@ export default function Keys() {
   const filters: KeyFilters = useSearch({ from: "/app/keys" });
   const keys = useInfiniteQuery(keysQuery(filters));
   const filtered = Object.values(filters).some(Boolean);
+  const pages = keys.data?.pages ?? [];
+  const filtersApplied = keyFiltersApplied(filters, pages);
   const rows = useMemo(() => keys.data?.pages.flatMap((page) => page.data) ?? [], [keys.data]);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const close = () => setDialog(null);
@@ -51,17 +54,25 @@ export default function Keys() {
         ) : null}
         <Filters filters={filters} />
         <Panel>
-          <DataState query={keys} isEmpty={() => rows.length === 0} empty={<NoKeys filtered={filtered} />}>
-            {() => (
-              <KeysTable
-                keys={rows}
-                manage={manage}
-                onEdit={(key) => setDialog({ kind: "edit", key })}
-                onDelete={(key) => setDialog({ kind: "delete", key })}
-              />
-            )}
+          <DataState
+            query={keys}
+            isEmpty={() => filtersApplied && rows.length === 0}
+            empty={<NoKeys filtered={filtered} />}
+          >
+            {() =>
+              filtersApplied ? (
+                <KeysTable
+                  keys={rows}
+                  manage={manage}
+                  onEdit={(key) => setDialog({ kind: "edit", key })}
+                  onDelete={(key) => setDialog({ kind: "delete", key })}
+                />
+              ) : (
+                <EmptyState title={t("keys.filtersUnavailable.title")}>{t("keys.filtersUnavailable.body")}</EmptyState>
+              )
+            }
           </DataState>
-          <LoadMore list={keys} />
+          {filtersApplied ? <LoadMore list={keys} /> : null}
         </Panel>
       </div>
       {dialog?.kind === "create" ? (
@@ -101,11 +112,12 @@ function statusOf(value: string | undefined): KeyFilters["status"] {
 // The filters live in the address, so a reload, the back button and a link keep them. The form is rebuilt when they
 // change from outside it.
 function Filters({ filters }: { filters: KeyFilters }) {
-  const { t } = useTranslation();
   const navigate = useNavigate();
+  const form = useRef<HTMLFormElement>(null);
   return (
     <Panel className="p-4">
       <form
+        ref={form}
         key={JSON.stringify(filters)}
         noValidate
         className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
@@ -114,60 +126,77 @@ function Filters({ filters }: { filters: KeyFilters }) {
           void navigate({ to: "/keys", search: filtersOf(event.currentTarget) });
         }}
       >
-        <TextField
-          label={t("keys.filter.name")}
-          name="name"
-          maxLength={100}
-          defaultValue={filters.name}
-          autoComplete="off"
-        />
-        <TextField
-          label={t("keys.filter.prefix")}
-          name="prefix"
-          maxLength={16}
-          defaultValue={filters.prefix}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <SelectField label={t("keys.filter.status")} name="status" defaultValue={filters.status ?? ""}>
-          <option value="">{t("keys.filter.anyStatus")}</option>
-          <option value="active">{t("keys.enabled")}</option>
-          <option value="disabled">{t("keys.disabled")}</option>
-          <option value="expired">{t("keys.expired")}</option>
-        </SelectField>
-        <TextField
-          label={t("keys.filter.createdAfter")}
-          name="created_after"
-          type="datetime-local"
-          defaultValue={toLocalInput(filters.created_after)}
-        />
-        <TextField
-          label={t("keys.filter.createdBefore")}
-          name="created_before"
-          type="datetime-local"
-          defaultValue={toLocalInput(filters.created_before)}
-        />
-        <div className="flex items-end gap-2">
-          <Button variant="primary" size="md" type="submit">
-            {t("keys.filter.apply")}
-          </Button>
-          <Button size="md" asChild>
-            <Link
-              to="/keys"
-              search={{
-                name: undefined,
-                prefix: undefined,
-                status: undefined,
-                created_after: undefined,
-                created_before: undefined,
-              }}
-            >
-              {t("keys.filter.reset")}
-            </Link>
-          </Button>
-        </div>
+        <KeyFilterFields filters={filters} />
+        <KeyFilterActions onClear={() => form.current?.reset()} />
       </form>
     </Panel>
+  );
+}
+
+function KeyFilterFields({ filters }: { filters: KeyFilters }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <TextField
+        label={t("keys.filter.name")}
+        name="name"
+        maxLength={100}
+        defaultValue={filters.name}
+        autoComplete="off"
+      />
+      <TextField
+        label={t("keys.filter.prefix")}
+        name="prefix"
+        maxLength={16}
+        defaultValue={filters.prefix}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <SelectField label={t("keys.filter.status")} name="status" defaultValue={filters.status ?? ""}>
+        <option value="">{t("keys.filter.anyStatus")}</option>
+        <option value="active">{t("keys.enabled")}</option>
+        <option value="disabled">{t("keys.disabled")}</option>
+        <option value="expired">{t("keys.expired")}</option>
+      </SelectField>
+      <TextField
+        label={t("keys.filter.createdAfter")}
+        name="created_after"
+        type="datetime-local"
+        defaultValue={toLocalInput(filters.created_after)}
+      />
+      <TextField
+        label={t("keys.filter.createdBefore")}
+        name="created_before"
+        type="datetime-local"
+        defaultValue={toLocalInput(filters.created_before)}
+      />
+    </>
+  );
+}
+
+function KeyFilterActions({ onClear }: { onClear: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-end gap-2">
+      <Button variant="primary" size="md" type="submit">
+        {t("keys.filter.apply")}
+      </Button>
+      <Button size="md" asChild>
+        <Link
+          to="/keys"
+          search={{
+            name: undefined,
+            prefix: undefined,
+            status: undefined,
+            created_after: undefined,
+            created_before: undefined,
+          }}
+          onClick={onClear}
+        >
+          {t("keys.filter.reset")}
+        </Link>
+      </Button>
+    </div>
   );
 }
 
