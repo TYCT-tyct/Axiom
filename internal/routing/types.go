@@ -93,6 +93,7 @@ type Entry struct {
 	Supplier        SupplierID
 	Target          protocol.Target
 	Model           catalog.ModelID
+	ModelSlug       string
 	Price           PriceRef
 	Limits          billing.Model
 	MaxOutput       int64

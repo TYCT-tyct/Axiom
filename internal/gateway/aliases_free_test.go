@@ -8,8 +8,19 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/audit"
+	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
+
+// TestServedModelComesFromTheRoute: the route snapshot can be newer than the catalog snapshot the request read. The
+// model name is frozen on the entry, so a model listed between the two is still named correctly in the response.
+func TestServedModelComesFromTheRoute(t *testing.T) {
+	t.Parallel()
+	s := &session{c: &Call{Request: protocol.Request{Model: "openrouter/auto"}}}
+	if got := s.servedModel(&attempt{entry: routing.Entry{ModelSlug: "acme/new@20260101"}}); got != "acme/new" {
+		t.Errorf("the response names %q, want acme/new", got)
+	}
+}
 
 // TestAliasAndFreeEntries: an alias resolves to its target for discovery and calls, a :free entry is a catalog model
 // of its own, and openrouter/auto picks one through routing and reports that model's public name.

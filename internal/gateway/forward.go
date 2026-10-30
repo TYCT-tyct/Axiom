@@ -17,8 +17,12 @@ import (
 )
 
 // servedModel is the public name of the model the attempt's endpoint serves, so a models fallback shows which model
-// answered. The snapshot lists it under this name; the internal @version suffix is never a public name.
+// answered. The route snapshot freezes it, so a snapshot newer than the one the request read cannot make the answer name
+// a different model; the internal @version suffix is never a public name.
 func (s *session) servedModel(a *attempt) string {
+	if a.entry.ModelSlug != "" {
+		return catalog.Normalize(strings.SplitN(a.entry.ModelSlug, "@", 2)[0])
+	}
 	if s.c.snap != nil {
 		if m, ok := s.c.snap.Model(a.entry.Model); ok {
 			return catalog.Normalize(strings.SplitN(m.Slug, "@", 2)[0])

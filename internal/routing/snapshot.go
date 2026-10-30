@@ -94,12 +94,13 @@ type Capacity interface{ Full() bool }
 // Endpoint is one supplier group serving one model, as the snapshot holds it: what routing filters and ranks by.
 // suppliers, quality and billing supply the values when the snapshot is built.
 type Endpoint struct {
-	Exchange platform.ExchangeRate
-	ID       EndpointID
-	Supplier SupplierID
-	Codename string // the supplier group's public codename; never its real name
-	Model    catalog.ModelID
-	Owner    Owner
+	Exchange  platform.ExchangeRate
+	ID        EndpointID
+	Supplier  SupplierID
+	Codename  string // the supplier group's public codename; never its real name
+	Model     catalog.ModelID
+	ModelSlug string // the model's catalog slug, frozen with the snapshot so a response names what the route chose
+	Owner     Owner
 
 	LiveHealth  *quality.State
 	Capacity    Capacity
