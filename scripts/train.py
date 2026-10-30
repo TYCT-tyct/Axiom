@@ -11,15 +11,16 @@ Invariants:
   (gh pr merge --match-head-commit).
 - Landing first tries to fast-forward the base to the tested tip: one ref update, so main holds the whole train or none
   of it. Each car is a merge of the PR's head carrying the PR's title (#N) and description, so main's first-parent
-  history keeps one commit per PR, and GitHub marks the PR merged because its head is now on main. The ruleset rejects
-  the push unless the train's token may bypass it; then the train squash-merges PR by PR as below.
+  history keeps one commit per PR, and GitHub marks the PR merged because its head is now on main. The push goes through
+  the deploy key main's ruleset lets through; its push event starts main's build, so landing starts none. A refused push
+  falls back to squash-merging PR by PR as below, which dispatches main's build itself.
 - Squash-merging PR by PR: before each merge, the base's tree equals the train's tree just before that PR. A PR that
   changes after landing began (a window of seconds), or a tree that does not match, leaves main on an untested state:
   the run stops with an alarm and no train runs on that base until the train-alarm/<base>/* branch it leaves is deleted.
 - Landing is resumable: the verified train is kept as the branch train/<base>/land, whose first-parent merges record
   each PR, its SHA and the train's base in a Train trailer, with the status train/verified on its tip. It is deleted
-  only after every PR landed and main's own build was dispatched, so a run that finds it lands what is not yet merged,
-  or only dispatches that build.
+  only after every PR landed and main's build was started (by the landing push, or dispatched after the fallback), so a
+  run that finds it lands what is not yet merged, or only forgets that record.
 - No PR code runs here: assembly only merges commits; the builds are separate ci.yml runs on the train branches,
   dispatched with inputs.base, so ci.yml's own md-only, deploy and bench rules see the train's whole change.
 
@@ -228,10 +229,13 @@ def log(message):
 
 
 class Train:
+    land_url = "origin"  # the fast-forward push's remote; train.yml sets it to the deploy key protect main lets through
+
     def __init__(self, repo, base, dry_run=False, lane=2, only=()):
         self.repo, self.base, self.dry_run, self.lane, self.only = repo, base, dry_run, lane, set(only)
         self.prefix = f"{'train-dry' if dry_run else 'train'}/{base}/"
         self.land_ref = f"train/{base}/land"
+        self.land_url = os.environ.get("TRAIN_LAND_URL") or self.land_url
         run_id = os.environ.get("GITHUB_RUN_ID", str(int(time.time())))
         self.run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{run_id}"
         self.ids = (f"{run_id}-{n}" for n in range(1, 10_000))
@@ -442,7 +446,7 @@ class Train:
         when nothing could land; raise Abort when it must stop, keeping the record unless main is now untested."""
         cars, trees = self.read_land_ref()
         tip = cars[-1].commit
-        if self.base_head() == tip:  # an earlier run fast-forwarded the base and stopped before dispatching its build
+        if self.base_head() == tip:  # an earlier run's push went through and started the base's build by itself
             log(f"{self.base} is already at the verified train {tip[:7]}")
         else:
             steps = [landing_step(car.entry, self.pr(car.entry.number), self.base) for car in cars]
@@ -459,18 +463,19 @@ class Train:
                 self.changed += len(cars)
             elif not self.squash_each(cars, trees, landed):
                 return None
-        if self.base == "main":
-            # merges made with GITHUB_TOKEN start no push workflows, so main's own full build is started here; the
-            # record goes only after this succeeds, so a run stopped in between dispatches it on resume
-            self.dispatch_main()
+            elif self.base == "main":
+                # the landing push triggers the base's push workflows itself; the fallback's API merges use
+                # GITHUB_TOKEN, which starts none, so only they need main's full build dispatched here. The record goes
+                # only after that succeeds, so a run stopped in between dispatches it on resume.
+                self.dispatch_main()
         self.drop_land_ref()
         return self.base_head()
 
     def fast_forward(self, tip):
         """Move the base to the tested tip in one ref update; return whether it got there. Judged by reading the base back,
-        so a push whose reply was lost counts by what it did. The ruleset rejects the push unless the token may bypass
-        it, and the train then squash-merges PR by PR."""
-        pushed = sh("git", "push", "-q", "origin", f"{tip}:refs/heads/{self.base}", check=False)
+        so a push whose reply was lost counts by what it did. It goes to land_url, the deploy key main's ruleset lets
+        through; a refused push falls back to squash-merging PR by PR."""
+        pushed = sh("git", "push", "-q", self.land_url, f"{tip}:refs/heads/{self.base}", check=False)
         if self.base_head() == tip:
             return True
         log(f"{self.base} cannot be fast-forwarded to {tip[:7]}, so the PRs are squash-merged one by one: "
