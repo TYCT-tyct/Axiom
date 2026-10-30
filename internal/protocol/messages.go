@@ -30,11 +30,12 @@ var messagesEvents = [...]struct {
 // messagesStream reads one Messages stream's events.
 type messagesStream struct {
 	eventReader
-	// The content block being read: whether its type holds text that may be empty, and whether it is a web search.
-	textBlock, serverTool, webSearch bool
-	failed                           bool // the event is the upstream's error
-	report                           *messagesUsage
-	reportErr                        error // the usage object is not one messagesUsage can hold
+	// The content block being read: whether its type holds text that may be empty, whether it is a web search, and
+	// whether it is a client tool call, whose framework the estimate adds.
+	textBlock, serverTool, webSearch, toolUse bool
+	failed                                    bool // the event is the upstream's error
+	report                                    *messagesUsage
+	reportErr                                 error // the usage object is not one messagesUsage can hold
 }
 
 func newMessagesStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
@@ -68,7 +69,8 @@ var (
 
 func (s *messagesStream) event(data []byte, m *meter) (event, error) {
 	s.start(data)
-	s.textBlock, s.serverTool, s.webSearch, s.failed, s.report, s.reportErr = false, false, false, false, nil, nil
+	s.textBlock, s.serverTool, s.webSearch, s.toolUse, s.failed, s.report, s.reportErr =
+		false, false, false, false, false, nil, nil
 	if err := walk(&s.reader, s, messagesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
@@ -100,6 +102,9 @@ func (s *messagesStream) settle() {
 	}
 	if s.serverTool && s.webSearch {
 		s.e.searches = 1
+	}
+	if s.e.name == "content_block_start" && s.toolUse {
+		s.e.toolCalls = 1
 	}
 }
 
@@ -138,6 +143,7 @@ func (s *messagesStream) blockType() error {
 	v, err := s.str()
 	s.textBlock = string(v) == "text" || string(v) == "thinking"
 	s.serverTool = string(v) == "server_tool_use"
+	s.toolUse = string(v) == "tool_use"
 	return err
 }
 

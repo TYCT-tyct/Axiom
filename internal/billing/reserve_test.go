@@ -392,16 +392,19 @@ func TestSettleOrphanStillOpen(t *testing.T) {
 }
 
 // TestReap: a holder reaped while a write it fenced is in flight waits for that write, which commits and stays for
-// cleanup; after the reap, its reservations and extensions are refused and its heartbeat reports ErrReaped.
+// cleanup; after the reap, its reservations and extensions are refused and its heartbeat reports ErrReaped. The holder
+// is expired by hand rather than by a short TTL: the TTL also sets the heartbeat, and the reap gets half a beat to wait
+// for the write, so a TTL short enough to expire quickly would leave too little of it to observe the wait. The update
+// touches no key column, so it does not conflict with the write's fence.
 func TestReap(t *testing.T) {
 	ctx := t.Context()
-	b := newBank(t, 1000, 0, Config{HolderTTL: time.Second, ReapGrace: time.Millisecond, Lifetime: time.Hour})
+	b := newBank(t, 1000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Millisecond, Lifetime: time.Hour})
 	h, err := b.reserve(b.admitted, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	release, written := b.holdOpen(b.admitted, uuid.NewV7(), 100)
-	b.waitFor("SELECT count(*) FROM billing.holders WHERE expires_at < clock_timestamp()", 1)
+	b.sql("UPDATE billing.holders SET expires_at = clock_timestamp() - interval '1 second' WHERE id = '" + b.billing.holder.String() + "'")
 	reaped := make(chan int, 1)
 	go func() {
 		n, err := b.billing.Reap(ctx)
