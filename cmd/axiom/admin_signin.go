@@ -26,15 +26,8 @@ func signInView(v accounts.SiteSignIn) adminapi.SiteSignIn {
 
 // GetSiteSignIn tells a site's login domain, passkey switch and provider applications.
 func (a adminAPI) GetSiteSignIn(ctx context.Context, request adminapi.GetSiteSignInRequestObject) (adminapi.GetSiteSignInResponseObject, error) {
-	id, _, err := a.siteOf(request.SiteId)
+	view, err := siteRead(ctx, a, request.SiteId, a.accounts.SiteSignIn)
 	if err != nil {
-		return nil, err
-	}
-	var view accounts.SiteSignIn
-	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		view, err = a.accounts.SiteSignIn(ctx, tx, id)
-		return err
-	}); err != nil {
 		return nil, err
 	}
 	return adminapi.GetSiteSignIn200JSONResponse(signInView(view)), nil

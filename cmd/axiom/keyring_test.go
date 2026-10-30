@@ -56,7 +56,16 @@ func (f rotationFixture) seed() []rotationEnvelope {
 		})
 		f.before = append(f.before, rotationEnvelope{store, id, sealed})
 	}
-	if err := f.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+	if err := f.seedRows(ctx, supplier, group, site); err != nil {
+		f.t.Fatal(err)
+	}
+	return f.before
+}
+
+// seedRows plants a row in every store's table: the supplier credential row also names its supplier and group, and the
+// site's provider row also names the site.
+func (f rotationFixture) seedRows(ctx context.Context, supplier, group uuid.UUID, site string) error {
+	return f.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO suppliers.suppliers
 			(id, owner_scope, name, kind, origin, upstream_account, native_unit, settlement_currency, mgmt_egress_id)
 			VALUES ($1, 'platform', 'rotation', 'newapi', 'https://rotation.example', 'account', 'usd', 'USD', 'direct')`, supplier); err != nil {
@@ -79,22 +88,25 @@ func (f rotationFixture) seed() []rotationEnvelope {
 				VALUES ($1, $2, $3, $4, $5, $6, $7, 'rotation', 'active', 1)`,
 		}
 		for i, row := range f.before {
-			args := []any{row.id, row.sealed.Ciphertext, row.sealed.Nonce, row.sealed.WrappedDEK, int64(row.sealed.KeyVersion)}
-			if i == 1 {
-				args = []any{row.id, site, row.sealed.Ciphertext, row.sealed.Nonce, row.sealed.WrappedDEK, int64(row.sealed.KeyVersion)}
-			}
-			if i == 3 {
-				args = append(args, supplier, group)
-			}
-			if _, err := tx.Exec(ctx, queries[i], args...); err != nil {
+			if _, err := tx.Exec(ctx, queries[i], envelopeArgs(row, i, site, supplier, group)...); err != nil {
 				return err
 			}
 		}
 		return nil
-	}); err != nil {
-		f.t.Fatal(err)
+	})
+}
+
+// envelopeArgs is the values one store's row takes; the site's provider row also names the site and the supplier
+// credential row its supplier and group.
+func envelopeArgs(row rotationEnvelope, index int, site string, supplier, group uuid.UUID) []any {
+	args := []any{row.id, row.sealed.Ciphertext, row.sealed.Nonce, row.sealed.WrappedDEK, int64(row.sealed.KeyVersion)}
+	switch index {
+	case 1:
+		return []any{row.id, site, row.sealed.Ciphertext, row.sealed.Nonce, row.sealed.WrappedDEK, int64(row.sealed.KeyVersion)}
+	case 3:
+		return append(args, supplier, group)
 	}
-	return f.before
+	return args
 }
 
 func (f rotationFixture) run(args ...string) string {

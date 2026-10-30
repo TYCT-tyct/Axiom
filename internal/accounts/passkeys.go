@@ -1,15 +1,12 @@
 package accounts
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
-	"strings"
 	"time"
-	"unicode"
 	"uuid"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -49,21 +46,6 @@ type PasskeyChallenge struct {
 	PublicKey *protocol.CredentialAssertion
 	FlowID    string
 }
-
-// passkeyUser is a user as WebAuthn sees one: the opaque handle is the user's UUID, and the credentials are the
-// public-key records stored for it.
-type passkeyUser struct {
-	user, account uuid.UUID
-	email         string
-	active        bool
-	version       int64
-	creds         []webauthn.Credential
-}
-
-func (u passkeyUser) WebAuthnID() []byte                         { id := u.user; return id[:] }
-func (u passkeyUser) WebAuthnName() string                       { return u.email }
-func (u passkeyUser) WebAuthnDisplayName() string                { return u.email }
-func (u passkeyUser) WebAuthnCredentials() []webauthn.Credential { return u.creds }
 
 // BeginPasskeyRegistration starts adding a credential. The current password is required, and a session that has not
 // passed the user's second factor is refused: a passkey can sign in on its own, so adding one must not be possible with
@@ -128,28 +110,37 @@ func (s *Service) FinishPasskeyRegistration(ctx context.Context, r *http.Request
 	if err != nil {
 		return Passkey{}, Issued{}, err
 	}
-	var user passkeyUser
-	if err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		var err error
-		user, err = s.passkeyUser(ctx, tx, uuid.UUID(p.user))
-		return err
-	}); err != nil {
-		return Passkey{}, Issued{}, err
-	}
-	name, err := passkeyName(flow.Name)
+	user, err := s.accountPasskeyUser(ctx, p.account, p.user)
 	if err != nil {
 		return Passkey{}, Issued{}, err
 	}
-	// Verify against the relying party the ceremony began with, not the snapshot that may have moved since.
+	passkey, credential, transports, err := s.verifyPasskeyRegistration(site, flow, user, r)
+	if err != nil {
+		return Passkey{}, Issued{}, err
+	}
+	issued, err := s.storePasskey(ctx, p, site, flow, passkey, credential, transports, ip, userAgent)
+	if err != nil {
+		return Passkey{}, Issued{}, err
+	}
+	return passkey, issued, nil
+}
+
+// verifyPasskeyRegistration checks the attestation against the relying party the ceremony began with, not the snapshot
+// that may have moved since.
+func (s *Service) verifyPasskeyRegistration(site Site, flow FindWebAuthnFlowRow, user passkeyUser, r *http.Request) (Passkey, *webauthn.Credential, []string, error) {
+	name, err := passkeyName(flow.Name)
+	if err != nil {
+		return Passkey{}, nil, nil, err
+	}
 	wa, err := webauthn.New(&webauthn.Config{
 		RPID: flow.RelyingPartyID, RPDisplayName: site.Name, RPOrigins: []string{flow.Origin},
 	})
 	if err != nil {
-		return Passkey{}, Issued{}, fmt.Errorf("build the passkey relying party: %w", err)
+		return Passkey{}, nil, nil, fmt.Errorf("build the passkey relying party: %w", err)
 	}
-	credential, err := wa.FinishRegistration(user, sessionData(flow, uuid.UUID(p.user)), r)
+	credential, err := wa.FinishRegistration(user, sessionData(flow, user.user), r)
 	if err != nil {
-		return Passkey{}, Issued{}, fmt.Errorf("%w: %w", ErrPasskeyFailed, err)
+		return Passkey{}, nil, nil, fmt.Errorf("%w: %w", ErrPasskeyFailed, err)
 	}
 	transports := make([]string, 0, len(credential.Transport))
 	for _, t := range credential.Transport {
@@ -159,67 +150,93 @@ func (s *Service) FinishPasskeyRegistration(ctx context.Context, r *http.Request
 		ID: PasskeyID(uuid.NewV7()), Name: name, CreatedAt: s.now(),
 		LastUsedAt: nil, BackupEligible: credential.Flags.BackupEligible,
 	}
+	return passkey, credential, transports, nil
+}
+
+// storePasskey rechecks the site under its lock, stores the credential and issues the verified session.
+func (s *Service) storePasskey(ctx context.Context, p Principal, site Site, flow FindWebAuthnFlowRow, passkey Passkey, credential *webauthn.Credential, transports []string, ip netip.Addr, userAgent string) (Issued, error) {
 	var issued Issued
-	err = s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
-		// The lock order is site then user, the same order SetSiteSignIn uses. A registration that began before an
-		// operator changed the switch or the login domain must not store a credential the new configuration cannot
-		// serve; the flow records the relying party it was begun for.
-		if rows, err := s.queries.LockSite(ctx, tx, uuid.UUID(site.ID)); err != nil {
+	err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
+		if err := s.passkeySiteHeld(ctx, tx, site, flow); err != nil {
 			return err
-		} else if len(rows) == 0 {
-			return ErrNotFound
-		}
-		current, err := s.queries.ReadPasskeySite(ctx, tx, uuid.UUID(site.ID))
-		if err != nil {
-			return err
-		}
-		if !current.Passkeys || current.LoginDomain != flow.RelyingPartyID || current.LoginOrigin != flow.Origin {
-			return ErrPasskeysOff
 		}
 		locked, err := s.lockUser(ctx, tx, uuid.UUID(p.user), p.factorVersion)
 		if err != nil {
 			return err
 		}
-		// The count at begin is a fast refusal; this one is under the user's lock, so two ceremonies that began
-		// together cannot leave the user with more than the bound.
-		count, err := s.queries.CountPasskeys(ctx, tx, uuid.UUID(p.user))
+		added, err := s.addPasskey(ctx, tx, p, site, passkey, credential, transports, locked, ip, userAgent)
 		if err != nil {
 			return err
 		}
-		if count >= maxPasskeysPerUser {
-			return ErrTooManyPasskeys
-		}
-		if err := s.queries.InsertPasskeyCredential(ctx, tx, InsertPasskeyCredentialParams{
-			ID: uuid.UUID(passkey.ID), SiteID: uuid.UUID(site.ID), AccountID: uuid.UUID(p.account), UserID: uuid.UUID(p.user),
-			CredentialID: credential.ID, PublicKey: credential.PublicKey, SignCount: int64(credential.Authenticator.SignCount),
-			Transports: transports, BackupEligible: credential.Flags.BackupEligible, BackupState: credential.Flags.BackupState,
-			Name: name,
-		}); err != nil {
-			if _, duplicate := pg.Duplicate(err); duplicate {
-				return ErrPasskeyFailed
-			}
-			return err
-		}
-		if err := s.queries.BumpFactorVersion(ctx, tx, uuid.UUID(p.user)); err != nil {
-			return err
-		}
-		issued, err = s.issue(ctx, tx, newSession{
-			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: site, surface: Console, level: levelMFA,
-			factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
-		})
-		if err != nil {
-			return err
-		}
-		return audit.Record(ctx, tx, audit.Event{
-			Actor: audit.User(uuid.UUID(p.user)), Action: "user.passkey_add",
-			Target: audit.Target{Module: "accounts", Kind: "user", ID: p.user.TypeID(), Site: uuid.UUID(site.ID), Account: uuid.UUID(p.account)},
-			Detail: map[string]any{"passkey_id": passkey.ID.TypeID()},
-		})
+		issued = added
+		return nil
 	})
 	if err != nil {
-		return Passkey{}, Issued{}, err
+		return Issued{}, err
 	}
-	return passkey, issued, nil
+	return issued, nil
+}
+
+// passkeySiteHeld refuses a credential when the site moved off the relying party the ceremony was begun for: a
+// registration that began before an operator changed the switch or the login domain must not store it.
+func (s *Service) passkeySiteHeld(ctx context.Context, tx pg.Tx, site Site, flow FindWebAuthnFlowRow) error {
+	rows, err := s.queries.LockSite(ctx, tx, uuid.UUID(site.ID))
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return ErrNotFound
+	}
+	current, err := s.queries.ReadPasskeySite(ctx, tx, uuid.UUID(site.ID))
+	if err != nil {
+		return err
+	}
+	if !current.Passkeys || current.LoginDomain != flow.RelyingPartyID || current.LoginOrigin != flow.Origin {
+		return ErrPasskeysOff
+	}
+	return nil
+}
+
+// addPasskey inserts the credential under the user's lock, raises the factor version and issues the verified session.
+func (s *Service) addPasskey(ctx context.Context, tx pg.Tx, p Principal, site Site, passkey Passkey, credential *webauthn.Credential, transports []string, locked LockUserRow, ip netip.Addr, userAgent string) (Issued, error) {
+	// The count at begin is a fast refusal; this one is under the user's lock, so two ceremonies that began together
+	// cannot leave the user with more than the bound.
+	count, err := s.queries.CountPasskeys(ctx, tx, uuid.UUID(p.user))
+	if err != nil {
+		return Issued{}, err
+	}
+	if count >= maxPasskeysPerUser {
+		return Issued{}, ErrTooManyPasskeys
+	}
+	if err := s.queries.InsertPasskeyCredential(ctx, tx, InsertPasskeyCredentialParams{
+		ID: uuid.UUID(passkey.ID), SiteID: uuid.UUID(site.ID), AccountID: uuid.UUID(p.account), UserID: uuid.UUID(p.user),
+		CredentialID: credential.ID, PublicKey: credential.PublicKey, SignCount: int64(credential.Authenticator.SignCount),
+		Transports: transports, BackupEligible: credential.Flags.BackupEligible, BackupState: credential.Flags.BackupState,
+		Name: passkey.Name,
+	}); err != nil {
+		if _, duplicate := pg.Duplicate(err); duplicate {
+			return Issued{}, ErrPasskeyFailed
+		}
+		return Issued{}, err
+	}
+	if err := s.queries.BumpFactorVersion(ctx, tx, uuid.UUID(p.user)); err != nil {
+		return Issued{}, err
+	}
+	issued, err := s.issue(ctx, tx, newSession{
+		user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: site, surface: Console, level: levelMFA,
+		factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
+	})
+	if err != nil {
+		return Issued{}, err
+	}
+	if err := audit.Record(ctx, tx, audit.Event{
+		Actor: audit.User(uuid.UUID(p.user)), Action: "user.passkey_add",
+		Target: audit.Target{Module: "accounts", Kind: "user", ID: p.user.TypeID(), Site: uuid.UUID(site.ID), Account: uuid.UUID(p.account)},
+		Detail: map[string]any{"passkey_id": passkey.ID.TypeID()},
+	}); err != nil {
+		return Issued{}, err
+	}
+	return issued, nil
 }
 
 // BeginPasskeySignIn starts a discoverable sign-in. The credential carries the user handle, so no email is asked for
@@ -257,60 +274,65 @@ func (s *Service) FinishPasskeySignIn(ctx context.Context, r *http.Request, flow
 	if err != nil {
 		return Issued{}, err
 	}
-	handler := func(rawID, userHandle []byte) (webauthn.User, error) {
-		if len(userHandle) != 16 {
-			return nil, ErrPasskeyFailed
-		}
-		userID := uuid.UUID(userHandle)
-		var tenant []PasskeyTenantRow
-		if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
-			var err error
-			tenant, err = s.queries.PasskeyTenant(ctx, tx, rawID)
-			return err
-		}); err != nil {
-			return nil, err
-		}
-		if len(tenant) == 0 || tenant[0].UserID != userID || tenant[0].SiteID != uuid.UUID(site.ID) {
-			return nil, ErrPasskeyFailed
-		}
-		var user passkeyUser
-		if err := s.db.Tx(ctx, pg.AccountScope(tenant[0].AccountID), func(tx pg.Tx) error {
-			var err error
-			user, err = s.passkeyUser(ctx, tx, userID)
-			return err
-		}); err != nil {
-			return nil, err
-		}
-		if !user.active {
-			return nil, ErrPasskeyFailed
-		}
-		return user, nil
-	}
-	user, credential, err := wa.FinishPasskeyLogin(handler, sessionData(flow, uuid.UUID{}), r)
+	user, credential, err := wa.FinishPasskeyLogin(func(rawID, userHandle []byte) (webauthn.User, error) {
+		return s.passkeyLoginUser(ctx, site, rawID, userHandle)
+	}, sessionData(flow, uuid.UUID{}), r)
 	if err != nil {
 		return Issued{}, fmt.Errorf("%w: %w", ErrPasskeyFailed, err)
 	}
-	u, ok := user.(passkeyUser)
+	won, ok := user.(passkeyUser)
 	if !ok {
 		return Issued{}, ErrPasskeyFailed
 	}
-	if err := s.usePasskey(ctx, u.account, u.user, credential); err != nil {
+	if err := s.usePasskey(ctx, won.account, won.user, credential); err != nil {
 		return Issued{}, err
 	}
+	return s.issuePasskeySession(ctx, site, won, ip, userAgent)
+}
+
+// passkeyLoginUser finds the user a discoverable assertion names, in the site the ceremony belongs to.
+func (s *Service) passkeyLoginUser(ctx context.Context, site Site, rawID, userHandle []byte) (webauthn.User, error) {
+	if len(userHandle) != 16 {
+		return nil, ErrPasskeyFailed
+	}
+	userID := uuid.UUID(userHandle)
+	var tenant []PasskeyTenantRow
+	if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
+		var err error
+		tenant, err = s.queries.PasskeyTenant(ctx, tx, rawID)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if len(tenant) == 0 || tenant[0].UserID != userID || tenant[0].SiteID != uuid.UUID(site.ID) {
+		return nil, ErrPasskeyFailed
+	}
+	user, err := s.accountPasskeyUser(ctx, AccountID(tenant[0].AccountID), UserID(userID))
+	if err != nil {
+		return nil, err
+	}
+	if !user.active {
+		return nil, ErrPasskeyFailed
+	}
+	return user, nil
+}
+
+// issuePasskeySession issues the session a discoverable sign-in earned, after the credential's counter was stored.
+func (s *Service) issuePasskeySession(ctx context.Context, site Site, user passkeyUser, ip netip.Addr, userAgent string) (Issued, error) {
 	var issued Issued
-	err = s.db.Tx(ctx, pg.AccountScope(u.account), func(tx pg.Tx) error {
-		locked, err := s.lockUser(ctx, tx, u.user, u.version)
+	err := s.db.Tx(ctx, pg.AccountScope(user.account), func(tx pg.Tx) error {
+		locked, err := s.lockUser(ctx, tx, user.user, user.version)
 		if err != nil {
 			return err
 		}
 		issued, err = s.issue(ctx, tx, newSession{
-			user: u.user, account: u.account, site: site, surface: Console, level: levelMFA,
+			user: user.user, account: user.account, site: site, surface: Console, level: levelMFA,
 			factorVersion: locked.FactorVersion, ip: ip, userAgent: userAgent,
 		})
 		if err != nil {
 			return err
 		}
-		return (securityAttempt{site: site.ID, user: u.user, account: u.account, session: issued.session, surface: Console}).record(ctx, tx, "security.sign_in")
+		return (securityAttempt{site: site.ID, user: user.user, account: user.account, session: issued.session, surface: Console}).record(ctx, tx, "security.sign_in")
 	})
 	if err != nil {
 		return Issued{}, err
@@ -328,12 +350,8 @@ func (s *Service) BeginPasskeyMFA(ctx context.Context, r *http.Request, p Princi
 	if err != nil {
 		return PasskeyChallenge{}, err
 	}
-	var user passkeyUser
-	if err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		var err error
-		user, err = s.passkeyUser(ctx, tx, uuid.UUID(p.user))
-		return err
-	}); err != nil {
+	user, err := s.accountPasskeyUser(ctx, p.account, p.user)
+	if err != nil {
 		return PasskeyChallenge{}, err
 	}
 	if len(user.creds) == 0 {
@@ -352,7 +370,7 @@ func (s *Service) BeginPasskeyMFA(ctx context.Context, r *http.Request, p Princi
 
 // FinishPasskeyMFA turns the pending session into a verified one after the assertion. A failed ceremony counts one of
 // the pending session's attempts, as a wrong code does, so one challenge cannot be retried without bound.
-func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Principal, flowID string, ip netip.Addr, userAgent string) (out Issued, err error) {
+func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Principal, flowID string, ip netip.Addr, userAgent string) (Issued, error) {
 	if !p.Pending() {
 		return Issued{}, ErrNoSession
 	}
@@ -369,26 +387,33 @@ func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Princ
 	if err != nil {
 		return Issued{}, err
 	}
-	var user passkeyUser
-	if err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		var err error
-		user, err = s.passkeyUser(ctx, tx, uuid.UUID(p.user))
-		return err
-	}); err != nil {
+	user, err := s.accountPasskeyUser(ctx, p.account, p.user)
+	if err != nil {
 		return Issued{}, err
 	}
 	credential, err := wa.FinishLogin(user, sessionData(flow, uuid.UUID(p.user)), r)
 	if err != nil {
-		// One challenge is one attempt: a failed assertion spends the same budget a wrong code does.
-		_ = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-			return s.queries.CountMFAAttempt(ctx, tx, uuid.UUID(p.session))
-		})
-		return Issued{}, fmt.Errorf("%w: %w", ErrPasskeyFailed, err)
+		// One challenge is one attempt: a failed assertion spends the same budget a wrong code does. The assertion's
+		// error is what the caller acts on; a failure to record the attempt is joined so it is not silently lost.
+		return Issued{}, errors.Join(fmt.Errorf("%w: %w", ErrPasskeyFailed, err), s.spendMFAAttempt(ctx, p))
 	}
 	if err := s.usePasskey(ctx, user.account, user.user, credential); err != nil {
 		return Issued{}, err
 	}
-	err = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+	return s.passkeyMFAVerified(ctx, p, site, tokenHash, ip, userAgent)
+}
+
+// spendMFAAttempt records the failed assertion against the pending session's budget.
+func (s *Service) spendMFAAttempt(ctx context.Context, p Principal) error {
+	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+		return s.queries.CountMFAAttempt(ctx, tx, uuid.UUID(p.session))
+	})
+}
+
+// passkeyMFAVerified replaces the pending session with a verified one after the assertion.
+func (s *Service) passkeyMFAVerified(ctx context.Context, p Principal, site Site, tokenHash []byte, ip netip.Addr, userAgent string) (Issued, error) {
+	var out Issued
+	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
 		pending, locked, err := s.lockPending(ctx, tx, uuid.UUID(p.user), tokenHash,
 			s.snapshot.Load().sites[p.site].limits.challengeAttempts)
 		if err != nil {
@@ -438,13 +463,9 @@ func (s *Service) DeletePasskey(ctx context.Context, p Principal, id PasskeyID, 
 		if err := s.queries.BumpFactorVersion(ctx, tx, uuid.UUID(p.user)); err != nil {
 			return err
 		}
-		level := levelPassword
-		if p.Verified() {
-			level = levelMFA
-		}
 		issued, err = s.issue(ctx, tx, newSession{
 			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: s.snapshot.Load().sites[p.site], surface: p.surface,
-			level: level, factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
+			level: resumedLevel(p), factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
 		})
 		if err != nil {
 			return err
@@ -489,170 +510,4 @@ func (s *Service) Passkeys(ctx context.Context, p Principal) ([]Passkey, error) 
 		})
 	}
 	return out, nil
-}
-
-// passkeySite is the console site of host when it is the login domain and turned passkeys on, with a relying party
-// built for that one origin.
-func (s *Service) passkeySite(host string) (Site, *webauthn.WebAuthn, error) {
-	site, err := s.loginDomainSite(host)
-	if err != nil {
-		return Site{}, nil, err
-	}
-	if !site.Passkeys {
-		return Site{}, nil, ErrPasskeysOff
-	}
-	wa, err := webauthn.New(&webauthn.Config{RPID: site.LoginDomain, RPDisplayName: site.Name, RPOrigins: []string{site.LoginOrigin}})
-	if err != nil {
-		return Site{}, nil, fmt.Errorf("build the passkey relying party: %w", err)
-	}
-	return site, wa, nil
-}
-
-// passkeyUser reads a user and its credentials in an account scope.
-func (s *Service) passkeyUser(ctx context.Context, tx pg.Tx, user uuid.UUID) (passkeyUser, error) {
-	rows, err := s.queries.UserForWebAuthn(ctx, tx, user)
-	if err != nil {
-		return passkeyUser{}, err
-	}
-	credentials, err := s.queries.ListUserCredentials(ctx, tx, user)
-	if err != nil {
-		return passkeyUser{}, err
-	}
-	creds := make([]webauthn.Credential, 0, len(credentials))
-	for _, c := range credentials {
-		transports := make([]protocol.AuthenticatorTransport, 0, len(c.Transports))
-		for _, t := range c.Transports {
-			transports = append(transports, protocol.AuthenticatorTransport(t))
-		}
-		creds = append(creds, webauthn.Credential{
-			ID: c.CredentialID, PublicKey: c.PublicKey,
-			Authenticator: webauthn.Authenticator{SignCount: uint32(c.SignCount)}, //nolint:gosec // the column is bounded to 2³²-1
-			Flags:         webauthn.CredentialFlags{BackupEligible: c.BackupEligible, BackupState: c.BackupState},
-			Transport:     transports,
-		})
-	}
-	return passkeyUser{
-		user: user, account: rows.AccountID, email: rows.Email, active: rows.Active,
-		version: rows.FactorVersion, creds: creds,
-	}, nil
-}
-
-// usePasskey records a successful assertion: a refused clone warning, the counter moved forward and the credential
-// marked used.
-func (s *Service) usePasskey(ctx context.Context, account, user uuid.UUID, credential *webauthn.Credential) error {
-	if credential.Authenticator.CloneWarning {
-		return fmt.Errorf("%w: the authenticator warned that it may be cloned", ErrPasskeyFailed)
-	}
-	signCount := int64(credential.Authenticator.SignCount)
-	return s.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
-		rows, err := s.queries.ListUserCredentials(ctx, tx, user)
-		if err != nil {
-			return err
-		}
-		for _, r := range rows {
-			if !bytes.Equal(r.CredentialID, credential.ID) {
-				continue
-			}
-			affected, err := s.queries.UsePasskey(ctx, tx, UsePasskeyParams{
-				SignCount: signCount, BackupState: credential.Flags.BackupState, ID: r.ID,
-			})
-			if err != nil {
-				return err
-			}
-			if affected != 1 {
-				return fmt.Errorf("%w: the credential was not updated", ErrPasskeyFailed)
-			}
-			return nil
-		}
-		return fmt.Errorf("%w: the asserted credential is not stored (%d bytes, %d rows)", ErrPasskeyFailed, len(credential.ID), len(rows))
-	})
-}
-
-func (s *Service) insertWebAuthnFlow(ctx context.Context, site Site, kind string, p Principal, session *webauthn.SessionData, sessionName string) (string, error) {
-	id := uuid.NewV7()
-	allowed := session.AllowedCredentialIDs
-	if allowed == nil {
-		allowed = [][]byte{}
-	}
-	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
-		return s.queries.InsertWebAuthnFlow(ctx, tx, InsertWebAuthnFlowParams{
-			ID: id, SiteID: uuid.UUID(site.ID), Kind: kind, AccountID: optionalUUID(p.account), UserID: optionalUUID(p.user),
-			SessionID: optionalUUID(p.session), Challenge: session.Challenge,
-			RelyingPartyID: site.LoginDomain, Origin: site.LoginOrigin, Name: sessionName, AllowedCredentialIds: allowed,
-		})
-	}); err != nil {
-		return "", fmt.Errorf("begin the passkey ceremony: %w", err)
-	}
-	return id.String(), nil
-}
-
-// consumeWebAuthnFlow reads a begin's row in the site's transaction, checks it belongs to this ceremony and this
-// session, then spends it: one begin is one finish attempt.
-func (s *Service) consumeWebAuthnFlow(ctx context.Context, site Site, flowID, kind string, p Principal) (FindWebAuthnFlowRow, error) {
-	id, err := uuid.Parse(flowID)
-	if err != nil {
-		return FindWebAuthnFlowRow{}, ErrPasskeyFailed
-	}
-	var rows []FindWebAuthnFlowRow
-	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
-		var err error
-		rows, err = s.queries.FindWebAuthnFlow(ctx, tx, FindWebAuthnFlowParams{ID: id, SiteID: uuid.UUID(site.ID)})
-		if err != nil {
-			return err
-		}
-		if len(rows) == 0 {
-			return ErrPasskeyFailed
-		}
-		// Check everything before spending the flow: a request with the wrong kind or session must not burn a
-		// ceremony that belongs to someone else.
-		if !rows[0].Unexpired || rows[0].Kind != kind {
-			return ErrPasskeyFailed
-		}
-		if kind != "sign_in" {
-			if rows[0].UserID == nil || rows[0].AccountID == nil || rows[0].SessionID == nil ||
-				*rows[0].UserID != uuid.UUID(p.user) || *rows[0].AccountID != uuid.UUID(p.account) ||
-				*rows[0].SessionID != uuid.UUID(p.session) {
-				return ErrPasskeyFailed
-			}
-		}
-		affected, err := s.queries.ConsumeWebAuthnFlow(ctx, tx, id)
-		if err == nil && affected != 1 {
-			return ErrPasskeyFailed
-		}
-		return err
-	}); err != nil {
-		return FindWebAuthnFlowRow{}, fmt.Errorf("consume the passkey ceremony: %w", err)
-	}
-	return rows[0], nil
-}
-
-// sessionData rebuilds the ceremony state go-webauthn verifies against from what the begin stored.
-func sessionData(flow FindWebAuthnFlowRow, user uuid.UUID) webauthn.SessionData {
-	var handle []byte
-	if user != (uuid.UUID{}) {
-		id := uuid.UUID(user)
-		handle = id[:]
-	}
-	return webauthn.SessionData{
-		Challenge: flow.Challenge, RelyingPartyID: flow.RelyingPartyID, Origin: flow.Origin,
-		UserID: handle, AllowedCredentialIDs: flow.AllowedCredentialIds, Expires: flow.ExpiresAt.Time,
-		CredParams: webauthn.CredentialParametersDefault(), UserVerification: protocol.VerificationRequired,
-	}
-}
-
-// passkeyName is the user's label for a credential, "Passkey" when they give none.
-func passkeyName(name string) (string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "Passkey", nil
-	}
-	if len([]rune(name)) > 100 {
-		return "", ErrPasskeyFailed
-	}
-	for _, r := range name {
-		if unicode.IsControl(r) {
-			return "", ErrPasskeyFailed
-		}
-	}
-	return name, nil
 }

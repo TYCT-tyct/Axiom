@@ -171,44 +171,9 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		return nil, err
 	}
 	for _, r := range sites {
-		site := Site{
-			ID: SiteID(r.ID), Main: r.IsMain, Name: r.Name, KeyPrefix: r.KeyPrefix, Registration: r.Registration,
-			DefaultTier: TierID(r.DefaultTierID), NewKeyDailyLimit: defaultNewKeyDailyLimit,
-			Passkeys: r.PasskeysEnabled, OAuth: map[string]string{},
-			sessions: map[Surface]lifetime{
-				Console: {seconds(r.ConsoleIdleSeconds, defaultLifetimes[Console].idle), seconds(r.ConsoleMaxAgeSeconds, defaultLifetimes[Console].max)},
-				Admin:   {seconds(r.AdminIdleSeconds, defaultLifetimes[Admin].idle), seconds(r.AdminMaxAgeSeconds, defaultLifetimes[Admin].max)},
-			},
-		}
-		currency, err := platform.ParseCurrency(r.Currency)
+		site, err := readSite(r)
 		if err != nil {
-			return nil, fmt.Errorf("site %s: %w", site.ID.TypeID(), err)
-		}
-		site.Currency = currency
-		if r.BrandColor != nil {
-			site.BrandColor = *r.BrandColor
-		}
-		if len(r.LogoHash) != 0 {
-			site.LogoHash = fmt.Sprintf("%x", r.LogoHash)
-		}
-		if r.NewKeyDailyLimit != nil {
-			site.NewKeyDailyLimit = *r.NewKeyDailyLimit
-		}
-		if r.LoginDomain != nil {
-			site.LoginDomain = *r.LoginDomain
-		}
-		site.MaxKeysPerAccount = setting(r.MaxKeysPerAccount, defaultMaxKeysPerAccount)
-		site.KeyCreationsPerHour = setting(r.KeyCreationsPerHour, defaultKeyCreationsPerHour)
-		site.RegistrationHumanCheck = boolSetting(r.RegistrationHumanCheck, defaultHumanCheck)
-		site.RegistrationHumanCheckBits = setting(r.RegistrationHumanCheckBits, defaultHumanCheckBits)
-		site.RegistrationDomainAllow = lowerDomains(r.RegistrationDomainAllow)
-		site.RegistrationDomainDeny = lowerDomains(r.RegistrationDomainDeny)
-		site.limits = limits{
-			ipBurst: setting(r.IpAttemptBurst, defaultLimits.ipBurst), ipPerMinute: setting(r.IpAttemptsPerMinute, defaultLimits.ipPerMinute),
-			emailFailures: setting(r.EmailSignInFailures, defaultLimits.emailFailures), codeFailures: setting(r.UserCodeFailures, defaultLimits.codeFailures),
-			challengeAttempts: setting(r.ChallengeCodeAttempts, defaultLimits.challengeAttempts),
-			domainBurst:       setting(r.RegistrationDomainBurst, defaultLimits.domainBurst),
-			domainPerHour:     setting(r.RegistrationDomainPerHour, defaultLimits.domainPerHour),
+			return nil, err
 		}
 		next.sites[site.ID] = site
 	}
@@ -221,12 +186,7 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range providers {
-		if site, ok := next.sites[SiteID(p.SiteID)]; ok {
-			site.OAuth[p.Provider] = p.ClientID
-			next.sites[site.ID] = site
-		}
-	}
+	readProviders(next, providers)
 	roles, err := s.queries.ListRoles(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -237,6 +197,60 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		return nil, err
 	}
 	return next, nil
+}
+
+// readSite builds one site's snapshot entry, with the defaults a null column leaves.
+func readSite(r ListSitesRow) (Site, error) {
+	site := Site{
+		ID: SiteID(r.ID), Main: r.IsMain, Name: r.Name, KeyPrefix: r.KeyPrefix, Registration: r.Registration,
+		DefaultTier: TierID(r.DefaultTierID), NewKeyDailyLimit: defaultNewKeyDailyLimit,
+		Passkeys: r.PasskeysEnabled, OAuth: map[string]string{},
+		sessions: map[Surface]lifetime{
+			Console: {seconds(r.ConsoleIdleSeconds, defaultLifetimes[Console].idle), seconds(r.ConsoleMaxAgeSeconds, defaultLifetimes[Console].max)},
+			Admin:   {seconds(r.AdminIdleSeconds, defaultLifetimes[Admin].idle), seconds(r.AdminMaxAgeSeconds, defaultLifetimes[Admin].max)},
+		},
+	}
+	currency, err := platform.ParseCurrency(r.Currency)
+	if err != nil {
+		return Site{}, fmt.Errorf("site %s: %w", site.ID.TypeID(), err)
+	}
+	site.Currency = currency
+	if r.BrandColor != nil {
+		site.BrandColor = *r.BrandColor
+	}
+	if len(r.LogoHash) != 0 {
+		site.LogoHash = fmt.Sprintf("%x", r.LogoHash)
+	}
+	if r.NewKeyDailyLimit != nil {
+		site.NewKeyDailyLimit = *r.NewKeyDailyLimit
+	}
+	if r.LoginDomain != nil {
+		site.LoginDomain = *r.LoginDomain
+	}
+	site.MaxKeysPerAccount = setting(r.MaxKeysPerAccount, defaultMaxKeysPerAccount)
+	site.KeyCreationsPerHour = setting(r.KeyCreationsPerHour, defaultKeyCreationsPerHour)
+	site.RegistrationHumanCheck = boolSetting(r.RegistrationHumanCheck, defaultHumanCheck)
+	site.RegistrationHumanCheckBits = setting(r.RegistrationHumanCheckBits, defaultHumanCheckBits)
+	site.RegistrationDomainAllow = lowerDomains(r.RegistrationDomainAllow)
+	site.RegistrationDomainDeny = lowerDomains(r.RegistrationDomainDeny)
+	site.limits = limits{
+		ipBurst: setting(r.IpAttemptBurst, defaultLimits.ipBurst), ipPerMinute: setting(r.IpAttemptsPerMinute, defaultLimits.ipPerMinute),
+		emailFailures: setting(r.EmailSignInFailures, defaultLimits.emailFailures), codeFailures: setting(r.UserCodeFailures, defaultLimits.codeFailures),
+		challengeAttempts: setting(r.ChallengeCodeAttempts, defaultLimits.challengeAttempts),
+		domainBurst:       setting(r.RegistrationDomainBurst, defaultLimits.domainBurst),
+		domainPerHour:     setting(r.RegistrationDomainPerHour, defaultLimits.domainPerHour),
+	}
+	return site, nil
+}
+
+// readProviders adds each site's provider applications, by provider name, to its entry.
+func readProviders(next *snapshot, providers []ListSiteOAuthProvidersRow) {
+	for _, p := range providers {
+		if site, ok := next.sites[SiteID(p.SiteID)]; ok {
+			site.OAuth[p.Provider] = p.ClientID
+			next.sites[site.ID] = site
+		}
+	}
 }
 
 // readRoles indexes the roles by name and by id, and drops a permission the code does not declare: a row written by a

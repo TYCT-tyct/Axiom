@@ -4,19 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"strings"
-	"time"
 	"uuid"
 
-	"axiom/internal/platform/audit"
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 )
@@ -51,40 +46,8 @@ var ErrOAuthFailed = errors.New("accounts: the provider did not complete the sig
 // counter went backwards.
 var ErrPasskeyFailed = errors.New("accounts: the passkey ceremony failed")
 
-// oauthProvider is one provider's fixed protocol endpoints. They are constants, never request input, and tests replace
-// the whole entry to point at a fake server.
-type oauthProvider struct {
-	authorize, token string
-	userinfo         string
-	scope            string
-	pkce             bool // whether the provider's authorization endpoint accepts PKCE
-}
-
-// oauthProviders are the three built-in providers. All three authorization endpoints take PKCE S256; GitHub's OAuth
-// apps gained it in July 2025.
-var oauthProviders = map[string]oauthProvider{
-	"github": {
-		authorize: "https://github.com/login/oauth/authorize",
-		token:     "https://github.com/login/oauth/access_token", userinfo: "https://api.github.com/user",
-		scope: "read:user", pkce: true,
-	},
-	"google": {
-		authorize: "https://accounts.google.com/o/oauth2/v2/auth",
-		token:     "https://oauth2.googleapis.com/token", userinfo: "https://openidconnect.googleapis.com/v1/userinfo",
-		scope: "openid email profile", pkce: true,
-	},
-	"linuxdo": {
-		authorize: "https://connect.linux.do/oauth2/authorize",
-		token:     "https://connect.linux.do/oauth2/token", userinfo: "https://connect.linux.do/api/user",
-		scope: "user", pkce: true,
-	},
-}
-
 // ProviderNames are the providers a site may configure, in the order its page lists them.
 var ProviderNames = []string{"github", "google", "linuxdo"}
-
-// oauthTimeout bounds one provider call; the two calls of a round trip share it.
-const oauthTimeout = 10 * time.Second
 
 // oauthIdentity is what a provider says about the signed-in account: its permanent subject, which is the only value
 // ever matched, and a display name for the account page.
@@ -199,6 +162,34 @@ func (s *Service) CompleteOAuth(ctx context.Context, r *http.Request, provider, 
 	if code == "" || state == "" {
 		return OAuthCallback{}, ErrOAuthFailed
 	}
+	flow, err := s.consumeOAuthState(ctx, r, site, provider, state)
+	if err != nil {
+		return OAuthCallback{}, err
+	}
+	var principal *Principal
+	if flow.Intent == "link" {
+		p, err := s.oauthLinkPrincipal(ctx, r, flow, ip)
+		if err != nil {
+			return OAuthCallback{}, err
+		}
+		principal = &p
+	}
+	identity, err := s.oauthIdentityFor(ctx, site, provider, code, flow)
+	if err != nil {
+		return OAuthCallback{}, err
+	}
+	if flow.Intent == "link" {
+		return s.finishOAuthLink(ctx, *principal, site, provider, identity, ip, userAgent)
+	}
+	issued, err := s.signInWithIdentity(ctx, site, provider, identity, ip, userAgent)
+	if err != nil {
+		return OAuthCallback{}, err
+	}
+	return OAuthCallback{Issued: &issued, Provider: provider}, nil
+}
+
+// consumeOAuthState finds the flow the state names, checks the browser binding of a sign-in, and spends the state.
+func (s *Service) consumeOAuthState(ctx context.Context, r *http.Request, site Site, provider, state string) (FindOAuthFlowRow, error) {
 	stateHash := sha256.Sum256([]byte(state))
 	var flows []FindOAuthFlowRow
 	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
@@ -206,19 +197,14 @@ func (s *Service) CompleteOAuth(ctx context.Context, r *http.Request, provider, 
 		flows, err = s.queries.FindOAuthFlow(ctx, tx, FindOAuthFlowParams{SiteID: uuid.UUID(site.ID), StateHash: stateHash[:]})
 		return err
 	}); err != nil {
-		return OAuthCallback{}, fmt.Errorf("find the sign-in flow: %w", err)
+		return FindOAuthFlowRow{}, fmt.Errorf("find the sign-in flow: %w", err)
 	}
 	if len(flows) == 0 || !flows[0].Unexpired || flows[0].Provider != provider {
-		return OAuthCallback{}, ErrOAuthFailed
+		return FindOAuthFlowRow{}, ErrOAuthFailed
 	}
 	flow := flows[0]
-	if flow.Intent == "sign_in" {
-		// The callback must arrive in the browser that began the sign-in: the nonce cookie, not the URL, proves it.
-		// Without this a completed callback could be handed to another browser and sign it in to the attacker.
-		cookie, err := r.Cookie(oauthNonceName(site.LoginOrigin))
-		if err != nil || len(flow.NonceHash) == 0 || subtle.ConstantTimeCompare(tokenHash(cookie.Value), flow.NonceHash) != 1 {
-			return OAuthCallback{}, ErrOAuthFailed
-		}
+	if !oauthNonceMatches(r, site, flow) {
+		return FindOAuthFlowRow{}, ErrOAuthFailed
 	}
 	var consumed int64
 	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
@@ -226,69 +212,77 @@ func (s *Service) CompleteOAuth(ctx context.Context, r *http.Request, provider, 
 		consumed, err = s.queries.ConsumeOAuthFlow(ctx, tx, flow.ID)
 		return err
 	}); err != nil || consumed != 1 {
-		return OAuthCallback{}, fmt.Errorf("consume the sign-in flow: %w", errors.Join(err, ErrOAuthFailed))
+		return FindOAuthFlowRow{}, fmt.Errorf("consume the sign-in flow: %w", errors.Join(err, ErrOAuthFailed))
 	}
-	var principal *Principal
-	if flow.Intent == "link" {
-		// The callback must arrive in the browser that began the link and from the same session. An identity cannot be
-		// attached to a user by whoever holds a leaked state.
-		p, err := s.AuthenticateAny(ctx, r, ip)
-		if err != nil {
-			return OAuthCallback{}, err
-		}
-		if p.Pending() {
-			return OAuthCallback{}, ErrMFARequired
-		}
-		if flow.UserID == nil || flow.SessionID == nil || uuid.UUID(p.user) != *flow.UserID ||
-			uuid.UUID(p.session) != *flow.SessionID {
-			return OAuthCallback{}, ErrOAuthFailed
-		}
-		principal = &p
+	return flow, nil
+}
+
+// oauthNonceMatches is the browser binding of a sign-in: the nonce cookie, not the URL, must be the one the flow was
+// begun with. Without it a completed callback handed to another browser could sign that browser in.
+func oauthNonceMatches(r *http.Request, site Site, flow FindOAuthFlowRow) bool {
+	if flow.Intent != "sign_in" {
+		return true
 	}
+	cookie, err := r.Cookie(oauthNonceName(site.LoginOrigin))
+	return err == nil && len(flow.NonceHash) > 0 && subtle.ConstantTimeCompare(tokenHash(cookie.Value), flow.NonceHash) == 1
+}
+
+// oauthLinkPrincipal is the session a link callback must arrive in: the same user and session that began it, past the
+// second factor the user has. An identity cannot be attached by whoever holds a leaked state.
+func (s *Service) oauthLinkPrincipal(ctx context.Context, r *http.Request, flow FindOAuthFlowRow, ip netip.Addr) (Principal, error) {
+	p, err := s.AuthenticateAny(ctx, r, ip)
+	if err != nil {
+		return Principal{}, err
+	}
+	if p.Pending() {
+		return Principal{}, ErrMFARequired
+	}
+	if flow.UserID == nil || flow.SessionID == nil || uuid.UUID(p.user) != *flow.UserID ||
+		uuid.UUID(p.session) != *flow.SessionID {
+		return Principal{}, ErrOAuthFailed
+	}
+	return p, nil
+}
+
+// oauthIdentityFor opens the site's application and exchanges the code for who signed in. The columns bound the subject
+// and the display name; a provider that answers outside them is not one this site can link. A provider without a
+// display name falls back to its own name rather than failing the link.
+func (s *Service) oauthIdentityFor(ctx context.Context, site Site, provider, code string, flow FindOAuthFlowRow) (oauthIdentity, error) {
 	clientID, secret, err := s.oauthSecret(ctx, site.ID, provider)
 	if err != nil {
-		return OAuthCallback{}, err
+		return oauthIdentity{}, err
 	}
 	identity, err := s.providerIdentity(ctx, provider, clientID, secret, code, flow.Verifier, flow.RedirectUri)
 	if err != nil {
-		return OAuthCallback{}, err
+		return oauthIdentity{}, err
 	}
-	// The columns bound the subject and the display name; a provider that answers outside them is not one this site
-	// can link. A provider without a display name falls back to its own name rather than failing the link.
 	if len(identity.subject) == 0 || len(identity.subject) > 255 {
-		return OAuthCallback{}, ErrOAuthFailed
+		return oauthIdentity{}, ErrOAuthFailed
 	}
 	if identity.display = strings.TrimSpace(identity.display); identity.display == "" {
 		identity.display = provider
 	}
-	if flow.Intent == "link" {
-		// A subject linked to another user is refused whatever its email says; a subject already linked to this user is
-		// a successful no-op, so a double callback does not raise the factor version twice.
-		var existing []FindIdentityRow
-		if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
-			var err error
-			existing, err = s.queries.FindIdentity(ctx, tx, FindIdentityParams{SiteID: uuid.UUID(site.ID), Provider: provider, Subject: identity.subject})
-			return err
-		}); err != nil {
-			return OAuthCallback{}, fmt.Errorf("find the linked identity: %w", err)
-		}
-		if len(existing) > 0 {
-			if existing[0].UserID != uuid.UUID(principal.user) {
-				return OAuthCallback{}, ErrIdentityLinked
-			}
-			return OAuthCallback{Provider: provider, Linked: true}, nil
-		}
-		issued, err := s.linkIdentity(ctx, *principal, site, provider, identity, ip, userAgent)
-		if err != nil {
-			return OAuthCallback{}, err
-		}
-		return OAuthCallback{Issued: &issued, Provider: provider, Linked: true}, nil
-	}
-	issued, err := s.signInWithIdentity(ctx, site, provider, identity, ip, userAgent)
+	return identity, nil
+}
+
+// finishOAuthLink attaches the identity. A subject linked to another user is refused whatever its email says; a subject
+// already linked to this user is a successful no-op, so a double callback does not raise the factor version twice.
+func (s *Service) finishOAuthLink(ctx context.Context, p Principal, site Site, provider string, identity oauthIdentity, ip netip.Addr, userAgent string) (OAuthCallback, error) {
+	existing, err := s.findIdentity(ctx, site, provider, identity.subject)
 	if err != nil {
 		return OAuthCallback{}, err
 	}
-	return OAuthCallback{Issued: &issued, Provider: provider}, nil
+	if len(existing) > 0 {
+		if existing[0].UserID != uuid.UUID(p.user) {
+			return OAuthCallback{}, ErrIdentityLinked
+		}
+		return OAuthCallback{Provider: provider, Linked: true}, nil
+	}
+	issued, err := s.linkIdentity(ctx, p, site, provider, identity, ip, userAgent)
+	if err != nil {
+		return OAuthCallback{}, err
+	}
+	return OAuthCallback{Issued: &issued, Provider: provider, Linked: true}, nil
 }
 
 // oauthSecret opens a site's provider application in the site's transaction.
@@ -318,287 +312,74 @@ func (s *Service) oauthSecret(ctx context.Context, site SiteID, provider string)
 	return row.ClientID, opened, nil
 }
 
-// providerIdentity exchanges the code and asks who signed in. Every request goes through the module's outbound client
-// with a deadline; the response body is bounded because it comes from a third party.
-func (s *Service) providerIdentity(ctx context.Context, provider, clientID string, clientSecret secret.Secret, code, verifier, redirect string) (oauthIdentity, error) {
-	p := s.providers[provider]
-	ctx, cancel := context.WithTimeout(ctx, oauthTimeout)
-	defer cancel()
-	form := url.Values{
-		"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect},
-		"client_id": {clientID}, "client_secret": {clientSecret.Reveal()},
-	}
-	if p.pkce {
-		form.Set("code_verifier", verifier)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.token, strings.NewReader(form.Encode()))
-	if err != nil {
-		return oauthIdentity{}, fmt.Errorf("exchange the authorization code: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	var token struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := s.oauthJSON(req, &token); err != nil {
-		return oauthIdentity{}, err
-	}
-	if token.AccessToken == "" {
-		return oauthIdentity{}, ErrOAuthFailed
-	}
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, p.userinfo, nil)
-	if err != nil {
-		return oauthIdentity{}, fmt.Errorf("read the provider account: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
-	req.Header.Set("Accept", "application/json")
-	switch provider {
-	case "github":
-		var user struct {
-			ID    int64  `json:"id"`
-			Login string `json:"login"`
-			Name  string `json:"name"`
-		}
-		if err := s.oauthJSON(req, &user); err != nil {
-			return oauthIdentity{}, err
-		}
-		if user.ID == 0 || user.Login == "" {
-			return oauthIdentity{}, ErrOAuthFailed
-		}
-		return oauthIdentity{subject: fmt.Sprint(user.ID), display: firstText(user.Name, user.Login)}, nil
-	case "google":
-		var user struct {
-			Subject string `json:"sub"`
-			Name    string `json:"name"`
-			Email   string `json:"email"`
-		}
-		if err := s.oauthJSON(req, &user); err != nil {
-			return oauthIdentity{}, err
-		}
-		if user.Subject == "" {
-			return oauthIdentity{}, ErrOAuthFailed
-		}
-		return oauthIdentity{subject: user.Subject, display: firstText(user.Name, user.Email)}, nil
-	case "linuxdo":
-		var user struct {
-			ID       int64  `json:"id"`
-			Username string `json:"username"`
-			Name     string `json:"name"`
-		}
-		if err := s.oauthJSON(req, &user); err != nil {
-			return oauthIdentity{}, err
-		}
-		if user.ID == 0 {
-			return oauthIdentity{}, ErrOAuthFailed
-		}
-		return oauthIdentity{subject: fmt.Sprint(user.ID), display: firstText(user.Name, user.Username)}, nil
-	default:
-		return oauthIdentity{}, ErrOAuthNotConfigured
-	}
-}
-
-// oauthJSON runs req and decodes a bounded JSON body. The provider's error text is not repeated: it can hold the code.
-func (s *Service) oauthJSON(req *http.Request, into any) error {
-	resp, err := s.exit.Do(req)
-	if err != nil {
-		return fmt.Errorf("call the provider: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: provider answered %d", ErrOAuthFailed, resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if err != nil {
-		return fmt.Errorf("read the provider response: %w", err)
-	}
-	if err := jsonx.Unmarshal(body, into); err != nil {
-		return fmt.Errorf("%w: %w", ErrOAuthFailed, err)
-	}
-	return nil
-}
-
 // signInWithIdentity issues a session for the user a linked identity names. A user with a second factor gets a pending
 // session: a third-party sign-in is one factor, however strongly the provider authenticated it.
 func (s *Service) signInWithIdentity(ctx context.Context, site Site, provider string, identity oauthIdentity, ip netip.Addr, userAgent string) (Issued, error) {
-	var found []FindIdentityRow
-	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
-		var err error
-		found, err = s.queries.FindIdentity(ctx, tx, FindIdentityParams{SiteID: uuid.UUID(site.ID), Provider: provider, Subject: identity.subject})
-		return err
-	}); err != nil {
-		return Issued{}, fmt.Errorf("find the linked identity: %w", err)
+	found, err := s.findIdentity(ctx, site, provider, identity.subject)
+	if err != nil {
+		return Issued{}, err
 	}
 	if len(found) == 0 {
 		return Issued{}, ErrAccountNotLinked
 	}
-	user, account := found[0].UserID, found[0].AccountID
 	var issued Issued
-	err := s.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
-		rows, err := s.queries.UserForWebAuthn(ctx, tx, user)
-		if err != nil {
-			return err
-		}
-		if !rows.Active {
-			return ErrBadCredentials
-		}
-		locked, err := s.lockUser(ctx, tx, user, rows.FactorVersion)
-		if err != nil {
-			return err
-		}
-		// The subject was read before this transaction. Unlinking locks the user and raises the factor version; this
-		// lock waited for it, so look again: the identity must still be this user's when the session is issued.
-		var still []FindIdentityRow
-		still, err = s.queries.FindIdentity(ctx, tx, FindIdentityParams{
-			SiteID: uuid.UUID(site.ID), Provider: provider, Subject: identity.subject,
-		})
-		if err != nil {
-			return err
-		}
-		if len(still) == 0 || still[0].UserID != user || still[0].AccountID != account {
-			return ErrAccountNotLinked
-		}
-		level := levelPassword
-		if locked.secondFactor() {
-			level = levelPending
-		}
-		issued, err = s.issue(ctx, tx, newSession{
-			user: user, account: account, site: site, surface: Console, level: level,
-			factorVersion: locked.FactorVersion, ip: ip, userAgent: userAgent,
-		})
-		if err != nil {
-			return err
-		}
-		return (securityAttempt{site: site.ID, user: user, account: account, session: issued.session, surface: Console}).record(ctx, tx, "security.sign_in")
-	})
-	if err != nil {
-		return Issued{}, err
-	}
-	return issued, nil
-}
-
-// linkIdentity attaches the provider account to the signed-in user and raises the factor version, which signs every
-// other session out; this browser gets a new session with the same level so the person stays signed in.
-func (s *Service) linkIdentity(ctx context.Context, p Principal, site Site, provider string, identity oauthIdentity, ip netip.Addr, userAgent string) (Issued, error) {
-	var issued Issued
-	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		locked, err := s.lockUser(ctx, tx, uuid.UUID(p.user), p.factorVersion)
-		if err != nil {
-			return err
-		}
-		if (locked.Mfa || (locked.Passkeys && p.passkeyFactor())) && !p.Verified() {
-			return ErrMFARequired
-		}
-		if err := s.queries.InsertIdentity(ctx, tx, InsertIdentityParams{
-			ID: uuid.NewV7(), SiteID: uuid.UUID(site.ID), AccountID: uuid.UUID(p.account), UserID: uuid.UUID(p.user),
-			Provider: provider, Subject: identity.subject, DisplayName: truncate(identity.display, 100),
-		}); err != nil {
-			if constraint, duplicate := pg.Duplicate(err); duplicate {
-				if constraint == "user_identities_user_id_provider_key" {
-					return ErrIdentityAlreadyLinked
-				}
-				return ErrIdentityLinked
-			}
-			return err
-		}
-		if err := s.queries.BumpFactorVersion(ctx, tx, uuid.UUID(p.user)); err != nil {
-			return err
-		}
-		level := levelPassword
-		if p.Verified() {
-			level = levelMFA
-		}
-		issued, err = s.issue(ctx, tx, newSession{
-			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: site, surface: Console, level: level,
-			factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
-		})
-		if err != nil {
-			return err
-		}
-		return audit.Record(ctx, tx, audit.Event{
-			Actor: audit.User(uuid.UUID(p.user)), Action: "user.identity_link",
-			Target: audit.Target{Module: "accounts", Kind: "user", ID: p.user.TypeID(), Site: uuid.UUID(site.ID), Account: uuid.UUID(p.account)},
-			Detail: map[string]any{"provider": provider, "subject": identity.subject},
-		})
-	})
-	if err != nil {
-		return Issued{}, err
-	}
-	return issued, nil
-}
-
-// UnlinkIdentity detaches a provider account from the signed-in user. It is a credential change: the user's factor
-// version rises, every other session ends, and this browser gets a new session with the same level.
-func (s *Service) UnlinkIdentity(ctx context.Context, p Principal, provider string, ip netip.Addr, userAgent string) (Issued, error) {
-	if _, ok := s.providers[provider]; !ok {
-		return Issued{}, ErrNotFound
-	}
-	if p.Pending() {
-		return Issued{}, ErrMFARequired
-	}
-	if err := s.requireVerifiedForChange(ctx, p); err != nil {
-		return Issued{}, err
-	}
-	var issued Issued
-	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		locked, err := s.lockUser(ctx, tx, uuid.UUID(p.user), p.factorVersion)
-		if err != nil {
-			return err
-		}
-		changed, err := s.queries.DeleteIdentity(ctx, tx, DeleteIdentityParams{UserID: uuid.UUID(p.user), Provider: provider})
-		if err != nil {
-			return err
-		}
-		if changed != 1 {
-			return ErrNotFound
-		}
-		if err := s.queries.BumpFactorVersion(ctx, tx, uuid.UUID(p.user)); err != nil {
-			return err
-		}
-		level := levelPassword
-		if p.Verified() {
-			level = levelMFA
-		}
-		issued, err = s.issue(ctx, tx, newSession{
-			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: s.snapshot.Load().sites[p.site], surface: p.surface,
-			level: level, factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
-		})
-		if err != nil {
-			return err
-		}
-		return audit.Record(ctx, tx, audit.Event{
-			Actor: audit.User(uuid.UUID(p.user)), Action: "user.identity_unlink",
-			Target: audit.Target{Module: "accounts", Kind: "user", ID: p.user.TypeID(), Site: uuid.UUID(p.site), Account: uuid.UUID(p.account)},
-			Detail: map[string]any{"provider": provider},
-		})
-	})
-	if err != nil {
-		return Issued{}, err
-	}
-	return issued, nil
-}
-
-// Identity is one provider account linked to a user, as the account page lists it.
-type Identity struct {
-	Provider    string
-	DisplayName string
-	CreatedAt   time.Time
-}
-
-// Identities lists a user's linked provider accounts.
-func (s *Service) Identities(ctx context.Context, p Principal) ([]Identity, error) {
-	var rows []ListIdentitiesRow
-	if err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		var err error
-		rows, err = s.queries.ListIdentities(ctx, tx, uuid.UUID(p.user))
+	err = s.db.Tx(ctx, pg.AccountScope(found[0].AccountID), func(tx pg.Tx) error {
+		issued, err = s.identitySession(ctx, tx, site, provider, identity.subject, found[0], ip, userAgent)
 		return err
-	}); err != nil {
-		return nil, fmt.Errorf("list linked identities: %w", err)
+	})
+	if err != nil {
+		return Issued{}, err
 	}
-	out := make([]Identity, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, Identity{Provider: r.Provider, DisplayName: r.DisplayName, CreatedAt: r.CreatedAt.Time})
+	return issued, nil
+}
+
+// identitySession issues the session for a linked identity under the user's lock. The subject was read before this
+// transaction; unlinking locks the user and raises the factor version, so this lock waited for it and the identity must
+// still be this user's when the session is issued.
+func (s *Service) identitySession(ctx context.Context, tx pg.Tx, site Site, provider, subject string, linked FindIdentityRow, ip netip.Addr, userAgent string) (Issued, error) {
+	rows, err := s.queries.UserForWebAuthn(ctx, tx, linked.UserID)
+	if err != nil {
+		return Issued{}, err
 	}
-	return out, nil
+	if !rows.Active {
+		return Issued{}, ErrBadCredentials
+	}
+	locked, err := s.lockUser(ctx, tx, linked.UserID, rows.FactorVersion)
+	if err != nil {
+		return Issued{}, err
+	}
+	held, err := s.identityHeld(ctx, tx, site, provider, subject, linked.UserID, linked.AccountID)
+	if err != nil {
+		return Issued{}, err
+	}
+	if !held {
+		return Issued{}, ErrAccountNotLinked
+	}
+	level := levelPassword
+	if locked.secondFactor() {
+		level = levelPending
+	}
+	issued, err := s.issue(ctx, tx, newSession{
+		user: linked.UserID, account: linked.AccountID, site: site, surface: Console, level: level,
+		factorVersion: locked.FactorVersion, ip: ip, userAgent: userAgent,
+	})
+	if err != nil {
+		return Issued{}, err
+	}
+	if err := (securityAttempt{site: site.ID, user: linked.UserID, account: linked.AccountID, session: issued.session, surface: Console}).record(ctx, tx, "security.sign_in"); err != nil {
+		return Issued{}, err
+	}
+	return issued, nil
+}
+
+// identityHeld reports whether the identity still names user and account: an unlink that committed between the first
+// read and the user lock must not leave a session behind.
+func (s *Service) identityHeld(ctx context.Context, tx pg.Tx, site Site, provider, subject string, user, account uuid.UUID) (bool, error) {
+	rows, err := s.queries.FindIdentity(ctx, tx, FindIdentityParams{SiteID: uuid.UUID(site.ID), Provider: provider, Subject: subject})
+	if err != nil {
+		return false, err
+	}
+	return len(rows) > 0 && rows[0].UserID == user && rows[0].AccountID == account, nil
 }
 
 // OAuthNonceCookie is the browser binding of a sign-in a page started: HttpOnly, Lax (the provider's redirect is a
@@ -663,15 +444,10 @@ func (s *Service) requireVerifiedForChange(ctx context.Context, p Principal) err
 	}); err != nil {
 		return err
 	}
-	if (locked.Mfa || (locked.Passkeys && p.passkeyFactor())) && !p.Verified() {
+	if secondFactorUnproved(locked, p) {
 		return ErrMFARequired
 	}
 	return nil
-}
-
-func pkceChallenge(verifier string) string {
-	sum := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func optionalUUID[T ~[16]byte](id T) *uuid.UUID {
@@ -680,13 +456,4 @@ func optionalUUID[T ~[16]byte](id T) *uuid.UUID {
 	}
 	u := uuid.UUID(id)
 	return &u
-}
-
-func firstText(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
 }

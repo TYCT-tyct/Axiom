@@ -184,7 +184,7 @@ func (s *Service) replacePassword(ctx context.Context, p Principal, c PasswordCh
 		if err != nil {
 			return err
 		}
-		if (locked.Mfa || (locked.Passkeys && p.passkeyFactor())) && !p.Verified() {
+		if secondFactorUnproved(locked, p) {
 			return ErrForbidden
 		}
 		if err := s.setPassword(ctx, tx, uuid.UUID(p.user), uuid.UUID(p.account), uuid.UUID(p.site), hash, c.Language); err != nil {

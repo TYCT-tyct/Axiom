@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -19,13 +18,15 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 
 	"axiom/internal/accounts"
-	"axiom/internal/platform/egress"
-	"axiom/internal/platform/egresstest"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
 
 var b64 = base64.RawURLEncoding
+
+// credentialIDLength is the length of the test authenticator's random credential IDs.
+const credentialIDLength = 16
 
 // softAuthenticator is a WebAuthn authenticator in the test: it makes a P-256 credential and signs assertions for the
 // RP ID and origin it is told, which is enough to exercise the relying party's verification.
@@ -44,7 +45,7 @@ func newSoftAuthenticator(t *testing.T) *softAuthenticator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credID := make([]byte, 16)
+	credID := make([]byte, credentialIDLength)
 	if _, err := rand.Read(credID); err != nil {
 		t.Fatal(err)
 	}
@@ -53,9 +54,17 @@ func newSoftAuthenticator(t *testing.T) *softAuthenticator {
 
 func (a *softAuthenticator) coseKey(t *testing.T) []byte {
 	t.Helper()
+	// The uncompressed SEC 1 point is 0x04, then the 32-byte X and Y coordinates.
+	point, err := a.key.PublicKey.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(point) != 65 {
+		t.Fatalf("the P-256 public key encodes to %d bytes, want 65", len(point))
+	}
 	encoded, err := cbor.Marshal(map[int64]any{
 		1: int64(2), 3: int64(-7), -1: int64(1),
-		-2: a.key.PublicKey.X.FillBytes(make([]byte, 32)), -3: a.key.PublicKey.Y.FillBytes(make([]byte, 32)),
+		-2: point[1:33], -3: point[33:65],
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +74,7 @@ func (a *softAuthenticator) coseKey(t *testing.T) []byte {
 
 func (a *softAuthenticator) clientData(t *testing.T, kind, challenge string) []byte {
 	t.Helper()
-	encoded, err := json.Marshal(map[string]any{"type": kind, "challenge": challenge, "origin": a.origin, "crossOrigin": false})
+	encoded, err := jsonx.MarshalCanonical(map[string]any{"type": kind, "challenge": challenge, "origin": a.origin, "crossOrigin": false})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,13 +92,13 @@ func (a *softAuthenticator) authData(t *testing.T, flags byte, attested bool) []
 		return out
 	}
 	out = append(out, make([]byte, 16)...) // AAGUID
-	out = binary.BigEndian.AppendUint16(out, uint16(len(a.credID)))
+	out = binary.BigEndian.AppendUint16(out, credentialIDLength)
 	out = append(out, a.credID...)
 	return append(out, a.coseKey(t)...)
 }
 
 // register answers a creation challenge with a none-attestation.
-func (a *softAuthenticator) register(t *testing.T, options any) json.RawMessage {
+func (a *softAuthenticator) register(t *testing.T, options any) []byte {
 	t.Helper()
 	var creation struct {
 		PublicKey struct {
@@ -102,15 +111,17 @@ func (a *softAuthenticator) register(t *testing.T, options any) json.RawMessage 
 			} `json:"user"`
 		} `json:"publicKey"`
 	}
-	raw, err := json.Marshal(options)
+	raw, err := jsonx.MarshalCanonical(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(raw, &creation); err != nil {
+	if err := jsonx.Unmarshal(raw, &creation); err != nil {
 		t.Fatal(err)
 	}
 	a.rpID = creation.PublicKey.RP.ID
-	a.userID, _ = b64.DecodeString(creation.PublicKey.User.ID)
+	if a.userID, err = b64.DecodeString(creation.PublicKey.User.ID); err != nil {
+		t.Fatal(err)
+	}
 	clientData := a.clientData(t, "webauthn.create", creation.PublicKey.Challenge)
 	attestation, err := cbor.Marshal(map[string]any{
 		"fmt": "none", "attStmt": map[string]any{}, "authData": a.authData(t, 0x45, true), // UP | UV | AT
@@ -118,7 +129,7 @@ func (a *softAuthenticator) register(t *testing.T, options any) json.RawMessage 
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := json.Marshal(map[string]any{
+	response, err := jsonx.MarshalCanonical(map[string]any{
 		"id": b64.EncodeToString(a.credID), "rawId": b64.EncodeToString(a.credID), "type": "public-key",
 		"response": map[string]any{
 			"clientDataJSON": b64.EncodeToString(clientData), "attestationObject": b64.EncodeToString(attestation),
@@ -133,18 +144,18 @@ func (a *softAuthenticator) register(t *testing.T, options any) json.RawMessage 
 }
 
 // assert answers an assertion challenge, signing client data and authenticator data with the credential's key.
-func (a *softAuthenticator) assert(t *testing.T, options any) json.RawMessage {
+func (a *softAuthenticator) assert(t *testing.T, options any) []byte {
 	t.Helper()
 	var assertion struct {
 		PublicKey struct {
 			Challenge string `json:"challenge"`
 		} `json:"publicKey"`
 	}
-	raw, err := json.Marshal(options)
+	raw, err := jsonx.MarshalCanonical(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(raw, &assertion); err != nil {
+	if err := jsonx.Unmarshal(raw, &assertion); err != nil {
 		t.Fatal(err)
 	}
 	a.counter++
@@ -156,7 +167,7 @@ func (a *softAuthenticator) assert(t *testing.T, options any) json.RawMessage {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := json.Marshal(map[string]any{
+	response, err := jsonx.MarshalCanonical(map[string]any{
 		"id": b64.EncodeToString(a.credID), "rawId": b64.EncodeToString(a.credID), "type": "public-key",
 		"response": map[string]any{
 			"clientDataJSON": b64.EncodeToString(clientData), "authenticatorData": b64.EncodeToString(authData),
@@ -170,6 +181,38 @@ func (a *softAuthenticator) assert(t *testing.T, options any) json.RawMessage {
 	return response
 }
 
+// reSign rewrites an assertion's signature with mutate's answer, for the refusal cases that need a well-formed body.
+func reSign(t *testing.T, evidence []byte, mutate func([]byte) []byte) []byte {
+	t.Helper()
+	var parsed map[string]any
+	if err := jsonx.Unmarshal(evidence, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	response, ok := parsed["response"].(map[string]any)
+	if !ok {
+		t.Fatal("the assertion has no response")
+	}
+	signature, err := b64.DecodeString(response["signature"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response["signature"] = b64.EncodeToString(mutate(signature))
+	out, err := jsonx.MarshalCanonical(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// fatalPasskey reports a WebAuthn error with the relying party's details, which its message leaves out.
+func fatalPasskey(t *testing.T, err error) {
+	t.Helper()
+	if pe, ok := errors.AsType[*protocol.Error](err); ok {
+		t.Fatalf("the ceremony: %s: %s %s", pe.Details, pe.DevInfo, pe.Type)
+	}
+	t.Fatal(err)
+}
+
 // passkeyRequest is the ceremony request the module takes its Host and body from.
 func passkeyRequest(t *testing.T, body []byte) *http.Request {
 	t.Helper()
@@ -179,28 +222,14 @@ func passkeyRequest(t *testing.T, body []byte) *http.Request {
 	return r
 }
 
-func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
-	t.Parallel()
-	x := newTestSite(t)
-	s := oauthService(t, x.db, egress.NewForTesting(egresstest.Loopback(t)))
-	x.s = s
-	if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		domain := console
-		return s.SetSiteSignIn(t.Context(), tx, system, accounts.SiteID(s1), accounts.SiteSignInUpdate{
-			LoginDomain: &domain, Passkeys: true,
-		}, "test")
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+// registerPasskeyForTest adds the first credential and returns it, with the spent-flow refusals checked.
+func registerPasskeyForTest(t *testing.T, x site, s *accounts.Service, auth *softAuthenticator) accounts.Passkey {
+	t.Helper()
 	session := x.signIn(t, console)
 	p, err := s.Authenticate(t.Context(), x.request(t, console, "https://"+console, session), client)
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth := newSoftAuthenticator(t)
 	registration, err := s.BeginPasskeyRegistration(t.Context(), passkeyRequest(t, nil), p, "Laptop", password)
 	if err != nil {
 		t.Fatal(err)
@@ -211,11 +240,7 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	evidence := auth.register(t, registration.PublicKey)
 	passkey, issued, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test")
 	if err != nil {
-		var pe *protocol.Error
-		if errors.As(err, &pe) {
-			t.Fatalf("registration: %s: %s %s", pe.Details, pe.DevInfo, pe.Type)
-		}
-		t.Fatal(err)
+		fatalPasskey(t, err)
 	}
 	if issued.Pending || passkey.Name != "Laptop" {
 		t.Fatalf("registration: %+v %+v", passkey, issued)
@@ -230,7 +255,12 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	if _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("registration with a spent flow: %v", err)
 	}
+	return passkey
+}
 
+// assertPasskeysStayOn checks that a site cannot turn passkeys off while a user holds one.
+func assertPasskeysStayOn(t *testing.T, x site, s *accounts.Service) {
+	t.Helper()
 	// Turning passkeys off while a user holds one would leave that credential on a second factor path the sign-in page
 	// cannot offer, so it is refused until the users remove them.
 	if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
@@ -241,8 +271,11 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	}); !errors.Is(err, accounts.ErrPasskeysInUse) {
 		t.Fatalf("turning passkeys off with a credential: %v", err)
 	}
+}
 
-	// The user now has a second factor: the password alone gets a pending session, and a passkey assertion completes it.
+// pendingPasskeySignIn is the pending session a password sign-in now gets, and its cookie.
+func pendingPasskeySignIn(t *testing.T, x site, s *accounts.Service) (accounts.Principal, *http.Cookie) {
+	t.Helper()
 	pending := x.signIn(t, console)
 	if !pending.Pending {
 		t.Fatal("a password sign-in skipped the passkey factor")
@@ -252,65 +285,67 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	if onAdmin := x.signIn(t, admin); onAdmin.Pending {
 		t.Error("the admin sign-in waited for a passkey")
 	}
-	pendingPrincipal, err := s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending), client)
+	p, err := s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending), client)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pendingCookie, err := s.Cookie(console, pending)
+	cookie, err := s.Cookie(console, pending)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return p, cookie
+}
 
-	// A failed assertion spends one of the pending session's attempts, like a wrong code does.
-	badFlow, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), pendingPrincipal)
+// assertWrongAssertionSpendsAttempt checks that a failed assertion spends one of the pending session's attempts, like a
+// wrong code does.
+func assertWrongAssertionSpendsAttempt(t *testing.T, x site, s *accounts.Service, auth *softAuthenticator, p accounts.Principal, cookie *http.Cookie) {
+	t.Helper()
+	flow, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var badEvidence map[string]any
-	if err := json.Unmarshal(auth.assert(t, badFlow.PublicKey), &badEvidence); err != nil {
-		t.Fatal(err)
-	}
-	badResponse := badEvidence["response"].(map[string]any)
-	signature, err := b64.DecodeString(badResponse["signature"].(string))
-	if err != nil {
-		t.Fatal(err)
-	}
-	signature[len(signature)-1] ^= 0xff
-	badResponse["signature"] = b64.EncodeToString(signature)
-	badAssertion, err := json.Marshal(badEvidence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	badRequest := passkeyRequest(t, badAssertion)
-	badRequest.AddCookie(pendingCookie)
-	if _, err := s.FinishPasskeyMFA(t.Context(), badRequest, pendingPrincipal, badFlow.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+	bad := reSign(t, auth.assert(t, flow.PublicKey), func(signature []byte) []byte {
+		signature[len(signature)-1] ^= 0xff
+		return signature
+	})
+	r := passkeyRequest(t, bad)
+	r.AddCookie(cookie)
+	if _, err := s.FinishPasskeyMFA(t.Context(), r, p, flow.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Fatalf("a wrong assertion: %v", err)
 	}
 	if got := texts(t, x.db, platform, "SELECT mfa_attempts::text FROM accounts.sessions WHERE user_id = (SELECT id FROM accounts.users WHERE email = 'someone@example.com') AND level = 'pending_mfa' ORDER BY created_at DESC LIMIT 1"); got[0] != "1" {
 		t.Errorf("attempts after a wrong assertion: %v", got)
 	}
+}
 
-	mfa, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), pendingPrincipal)
+// completePasskeyMFA finishes the pending sign-in with a passkey and returns the verified session.
+func completePasskeyMFA(t *testing.T, s *accounts.Service, auth *softAuthenticator, p accounts.Principal, cookie *http.Cookie) accounts.Issued {
+	t.Helper()
+	flow, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mfaRequest := passkeyRequest(t, auth.assert(t, mfa.PublicKey))
-	mfaRequest.AddCookie(pendingCookie)
-	verified, err := s.FinishPasskeyMFA(t.Context(), mfaRequest, pendingPrincipal, mfa.FlowID, client, "test")
+	r := passkeyRequest(t, auth.assert(t, flow.PublicKey))
+	r.AddCookie(cookie)
+	verified, err := s.FinishPasskeyMFA(t.Context(), r, p, flow.FlowID, client, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if verified.Pending {
 		t.Error("the passkey factor left a pending session")
 	}
-	if _, err := s.FinishPasskeyMFA(t.Context(), mfaRequest, pendingPrincipal, mfa.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+	if _, err := s.FinishPasskeyMFA(t.Context(), r, p, flow.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("MFA with a spent flow: %v", err)
 	}
-	if _, err := s.FinishPasskeyMFA(t.Context(), mfaRequest, pendingPrincipal, uuid.NewV7().String(), client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+	if _, err := s.FinishPasskeyMFA(t.Context(), r, p, uuid.NewV7().String(), client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("MFA with an unknown flow: %v", err)
 	}
+	return verified
+}
 
-	// A discoverable sign-in names no email: the credential's user handle finds the user.
+// assertDiscoverableSignIn checks the sign-in that names no email: the credential's user handle finds the user.
+func assertDiscoverableSignIn(t *testing.T, x site, s *accounts.Service, auth *softAuthenticator) {
+	t.Helper()
 	challenge, err := s.BeginPasskeySignIn(t.Context(), console, client)
 	if err != nil {
 		t.Fatal(err)
@@ -319,13 +354,8 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	if err != nil || signedIn.Pending {
 		t.Fatalf("discoverable sign-in: %+v %v", signedIn, err)
 	}
-	if p, err := s.Authenticate(t.Context(), func() *http.Request {
-		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+console+"/", nil)
-		cookie, _ := s.Cookie(console, signedIn)
-		r.AddCookie(cookie)
-		return r
-	}(), client); err != nil || p.UserID() != x.user {
-		t.Errorf("the session is the passkey's user: %v %v", p.UserID(), err)
+	if p, err := s.Authenticate(t.Context(), cookieRequest(t, s, console, signedIn), client); err != nil || p.UserID() != x.user {
+		t.Errorf("the session is the passkey's user: %v %v", p, err)
 	}
 	if _, err := s.FinishPasskeySignIn(t.Context(), passkeyRequest(t, auth.assert(t, challenge.PublicKey)), challenge.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("sign-in with a spent flow: %v", err)
@@ -333,7 +363,11 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	if _, err := s.FinishPasskeySignIn(t.Context(), passkeyRequest(t, nil), uuid.NewV7().String(), client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("sign-in with an unknown flow: %v", err)
 	}
+}
 
+// assertCounterRefusals checks the authenticator's clone warning and that a zero counter never lowers a stored one.
+func assertCounterRefusals(t *testing.T, x site, s *accounts.Service, auth *softAuthenticator) {
+	t.Helper()
 	// A counter that goes backwards is the authenticator's clone warning: the assertion is refused before the session.
 	auth.counter = 0
 	backwards, err := s.BeginPasskeySignIn(t.Context(), console, client)
@@ -360,26 +394,24 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	if got := texts(t, x.db, platform, "SELECT sign_count::text FROM accounts.passkey_credentials"); got[0] != "1" {
 		t.Errorf("the counter was lowered: %v", got)
 	}
+}
 
-	// A signature over other bytes is refused.
+// assertTamperedAssertion checks that a signature over other bytes is refused.
+func assertTamperedAssertion(t *testing.T, s *accounts.Service, auth *softAuthenticator) {
+	t.Helper()
 	replay, err := s.BeginPasskeySignIn(t.Context(), console, client)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bad := auth.assert(t, replay.PublicKey)
-	var parsed map[string]any
-	if err := json.Unmarshal(bad, &parsed); err != nil {
-		t.Fatal(err)
-	}
-	response := parsed["response"].(map[string]any)
-	response["signature"] = b64.EncodeToString([]byte("not a signature"))
-	tampered, _ := json.Marshal(parsed)
+	tampered := reSign(t, auth.assert(t, replay.PublicKey), func([]byte) []byte { return []byte("not a signature") })
 	if _, err := s.FinishPasskeySignIn(t.Context(), passkeyRequest(t, tampered), replay.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("a tampered assertion: %v", err)
 	}
+}
 
-	// Removing the credential is a credential change: it needs the password and the current session, and it ends every
-	// other session.
+// removePasskey checks that removing a credential needs the password, ends other sessions, and is audited.
+func removePasskey(t *testing.T, x site, s *accounts.Service, verified accounts.Issued, passkey accounts.Passkey) {
+	t.Helper()
 	verifiedPrincipal, err := s.Authenticate(t.Context(), x.request(t, console, "https://"+console, verified), client)
 	if err != nil {
 		t.Fatal(err)
@@ -395,22 +427,25 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	}
 }
 
+func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
+	t.Parallel()
+	x, s := passkeySite(t)
+	auth := newSoftAuthenticator(t)
+	passkey := registerPasskeyForTest(t, x, s, auth)
+	assertPasskeysStayOn(t, x, s)
+	pendingPrincipal, pendingCookie := pendingPasskeySignIn(t, x, s)
+	assertWrongAssertionSpendsAttempt(t, x, s, auth, pendingPrincipal, pendingCookie)
+	verified := completePasskeyMFA(t, s, auth, pendingPrincipal, pendingCookie)
+	assertDiscoverableSignIn(t, x, s, auth)
+	assertCounterRefusals(t, x, s, auth)
+	assertTamperedAssertion(t, s, auth)
+	removePasskey(t, x, s, verified, passkey)
+}
+
 // TestPasskeyRegistrationNeedsThePassword: a passkey cannot be added with a session alone.
 func TestPasskeyRegistrationNeedsThePassword(t *testing.T) {
 	t.Parallel()
-	x := newTestSite(t)
-	s := oauthService(t, x.db, egress.NewForTesting(egresstest.Loopback(t)))
-	if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		domain := console
-		return s.SetSiteSignIn(t.Context(), tx, system, accounts.SiteID(s1), accounts.SiteSignInUpdate{
-			LoginDomain: &domain, Passkeys: true,
-		}, "test")
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	x, s := passkeySite(t)
 	session := x.signIn(t, console)
 	p, err := s.Authenticate(t.Context(), x.request(t, console, "https://"+console, session), client)
 	if err != nil {
@@ -430,19 +465,10 @@ func TestPasskeyRegistrationNeedsThePassword(t *testing.T) {
 // TestPasskeySignInNeedsTheLoginDomain keeps passkey ceremonies off a console domain that is not the relying party.
 func TestPasskeySignInNeedsTheLoginDomain(t *testing.T) {
 	t.Parallel()
-	x := newTestSite(t)
+	x, s := passkeySite(t)
 	const secondConsole = "login4.main.example"
 	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace(
 		`INSERT INTO accounts.site_domains VALUES ('`+secondConsole+`', :s1, 'console', 'https://`+secondConsole+`', NULL)`)); err != nil {
-		t.Fatal(err)
-	}
-	s := oauthService(t, x.db, egress.NewForTesting(egresstest.Loopback(t)))
-	if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		domain := console
-		return s.SetSiteSignIn(t.Context(), tx, system, accounts.SiteID(s1), accounts.SiteSignInUpdate{
-			LoginDomain: &domain, Passkeys: true,
-		}, "test")
-	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace(

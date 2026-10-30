@@ -219,7 +219,7 @@ func (s *Service) confirmTOTP(ctx context.Context, p Principal, c FactorChange) 
 			}
 			// The database trigger is the same boundary an older node cannot bypass: only this transaction, after the
 			// passkey check above, may mark the enrollment as having proved the passkey.
-			if _, err := tx.Exec(ctx, "SELECT set_config('axiom.passkey_proved', $1, true)", user.String()); err != nil {
+			if err := tx.MarkPasskeyProved(ctx, user); err != nil {
 				return err
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"uuid"
@@ -86,52 +87,15 @@ func (s *Service) SetSiteSignIn(ctx context.Context, tx pg.Tx, actor audit.Actor
 	if err != nil {
 		return err
 	}
-	domain := before.LoginDomain
-	if update.LoginDomain != nil {
-		domain = strings.ToLower(strings.TrimSpace(*update.LoginDomain))
+	domain, err := s.loginDomainFor(ctx, tx, site, before.LoginDomain, update.LoginDomain)
+	if err != nil {
+		return err
 	}
-	if domain != "" {
-		domains, err := s.queries.ListSiteConsoleDomains(ctx, tx, uuid.UUID(site))
-		if err != nil {
-			return fmt.Errorf("read the site's console domains: %w", err)
-		}
-		if !slices.ContainsFunc(domains, func(d ListSiteConsoleDomainsRow) bool { return d.Domain == domain }) {
-			return &SettingError{Field: "login_domain", Reason: "must be one of the site's enabled console domains"}
-		}
+	if err := s.checkSignInChange(ctx, tx, site, before, domain, update.Passkeys); err != nil {
+		return err
 	}
-	// Setting the first domain is not a change: a provider application may already be stored while the site has no
-	// domain yet, and it only becomes reachable once one is chosen. Moving a domain that exists is what would strand
-	// passkeys, callbacks and linked identities.
-	if before.LoginDomain != "" && domain != before.LoginDomain {
-		assets, err := s.queries.CountSiteSignInAssets(ctx, tx, uuid.UUID(site))
-		if err != nil {
-			return fmt.Errorf("count the site's sign-in assets: %w", err)
-		}
-		if assets.Passkeys > 0 || assets.Identities > 0 || assets.Providers > 0 {
-			return ErrLoginDomainLocked
-		}
-	}
-	if !update.Passkeys && before.Passkeys {
-		assets, err := s.queries.CountSiteSignInAssets(ctx, tx, uuid.UUID(site))
-		if err != nil {
-			return fmt.Errorf("count the site's sign-in assets: %w", err)
-		}
-		if assets.Passkeys > 0 {
-			return ErrPasskeysInUse
-		}
-	}
-	if update.Passkeys && domain == "" {
-		return ErrLoginDomainRequired
-	}
-	var value *string
-	if domain != "" {
-		value = &domain
-	}
-	if _, err := s.queries.SetLoginDomain(ctx, tx, SetLoginDomainParams{Domain: value, SiteID: uuid.UUID(site)}); err != nil {
-		return fmt.Errorf("write the site's login domain: %w", err)
-	}
-	if err := s.queries.WriteSitePasskeys(ctx, tx, WriteSitePasskeysParams{SiteID: uuid.UUID(site), Enabled: &update.Passkeys}); err != nil {
-		return fmt.Errorf("write the site's passkey switch: %w", err)
+	if err := s.writeSiteSignIn(ctx, tx, site, domain, update.Passkeys); err != nil {
+		return err
 	}
 	after := SiteSignIn{LoginDomain: domain, Passkeys: update.Passkeys}
 	return audit.Record(ctx, tx, audit.Event{
@@ -142,6 +106,96 @@ func (s *Service) SetSiteSignIn(ctx context.Context, tx pg.Tx, actor audit.Actor
 			"after":  map[string]any{"login_domain": after.LoginDomain, "passkeys": after.Passkeys},
 		},
 	})
+}
+
+// loginDomainFor resolves the update's login domain and checks it is one of the site's enabled console domains.
+func (s *Service) loginDomainFor(ctx context.Context, tx pg.Tx, site SiteID, current string, update *string) (string, error) {
+	domain := current
+	if update != nil {
+		domain = strings.ToLower(strings.TrimSpace(*update))
+	}
+	if domain == "" {
+		return "", nil
+	}
+	domains, err := s.queries.ListSiteConsoleDomains(ctx, tx, uuid.UUID(site))
+	if err != nil {
+		return "", fmt.Errorf("read the site's console domains: %w", err)
+	}
+	if !slices.ContainsFunc(domains, func(d ListSiteConsoleDomainsRow) bool { return d.Domain == domain }) {
+		return "", &SettingError{Field: "login_domain", Reason: "must be one of the site's enabled console domains"}
+	}
+	return domain, nil
+}
+
+// checkSignInChange refuses a domain move that would strand sign-in assets, turning passkeys off while users hold one,
+// and passkeys without a login domain to bind them to.
+func (s *Service) checkSignInChange(ctx context.Context, tx pg.Tx, site SiteID, before SiteSignIn, domain string, passkeys bool) error {
+	stranded, err := s.domainMoveStrands(ctx, tx, site, before, domain)
+	if err != nil {
+		return err
+	}
+	if stranded {
+		return ErrLoginDomainLocked
+	}
+	if !passkeys && before.Passkeys {
+		held, err := s.passkeysHeld(ctx, tx, site)
+		if err != nil {
+			return err
+		}
+		if held {
+			return ErrPasskeysInUse
+		}
+	}
+	if passkeys && domain == "" {
+		return ErrLoginDomainRequired
+	}
+	return nil
+}
+
+// domainMoveStrands reports whether moving the login domain would strand passkeys, callbacks or linked identities.
+// Setting the first domain is not a move: an application may already be stored while the site has no domain yet, and
+// it only becomes reachable once one is chosen.
+func (s *Service) domainMoveStrands(ctx context.Context, tx pg.Tx, site SiteID, before SiteSignIn, domain string) (bool, error) {
+	if before.LoginDomain == "" || domain == before.LoginDomain {
+		return false, nil
+	}
+	assets, err := s.signedInAssets(ctx, tx, site)
+	if err != nil {
+		return false, err
+	}
+	return assets.Passkeys > 0 || assets.Identities > 0 || assets.Providers > 0, nil
+}
+
+// passkeysHeld reports whether a user of the site still holds a credential.
+func (s *Service) passkeysHeld(ctx context.Context, tx pg.Tx, site SiteID) (bool, error) {
+	assets, err := s.signedInAssets(ctx, tx, site)
+	if err != nil {
+		return false, err
+	}
+	return assets.Passkeys > 0, nil
+}
+
+func (s *Service) signedInAssets(ctx context.Context, tx pg.Tx, site SiteID) (CountSiteSignInAssetsRow, error) {
+	assets, err := s.queries.CountSiteSignInAssets(ctx, tx, uuid.UUID(site))
+	if err != nil {
+		return CountSiteSignInAssetsRow{}, fmt.Errorf("count the site's sign-in assets: %w", err)
+	}
+	return assets, nil
+}
+
+// writeSiteSignIn stores the resolved domain and the passkey switch.
+func (s *Service) writeSiteSignIn(ctx context.Context, tx pg.Tx, site SiteID, domain string, passkeys bool) error {
+	var value *string
+	if domain != "" {
+		value = &domain
+	}
+	if _, err := s.queries.SetLoginDomain(ctx, tx, SetLoginDomainParams{Domain: value, SiteID: uuid.UUID(site)}); err != nil {
+		return fmt.Errorf("write the site's login domain: %w", err)
+	}
+	if err := s.queries.WriteSitePasskeys(ctx, tx, WriteSitePasskeysParams{SiteID: uuid.UUID(site), Enabled: &passkeys}); err != nil {
+		return fmt.Errorf("write the site's passkey switch: %w", err)
+	}
+	return nil
 }
 
 // SetSiteOAuthProvider stores a site's application for one provider, sealed like any other secret. The caller passes
@@ -173,6 +227,9 @@ func (s *Service) SetSiteOAuthProvider(ctx context.Context, tx pg.Tx, actor audi
 		return fmt.Errorf("read the provider application: %w", err)
 	}
 	sealed := s.keyring.Seal(secret.New(clientSecret), oauthSecretLocation(id))
+	if sealed.KeyVersion > math.MaxInt32 {
+		return fmt.Errorf("the keyring's key version %d does not fit the column", sealed.KeyVersion)
+	}
 	version := int32(sealed.KeyVersion)
 	if err := s.queries.UpsertSiteOAuthProvider(ctx, tx, UpsertSiteOAuthProviderParams{
 		ID: id, SiteID: uuid.UUID(site), Provider: provider, ClientID: clientID,
