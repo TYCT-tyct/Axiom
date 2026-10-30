@@ -47,7 +47,7 @@ func TestAccountTierChangeIsAuditedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	pro := uuid.NewV7()
-	if _, err := exec(t, db, platform, `INSERT INTO accounts.tiers(id,site_id,name) VALUES ('`+uuid.UUID(pro).String()+`','`+uuid.UUID(s1).String()+`','Pro')`); err != nil {
+	if _, err := exec(t, db, platform, `INSERT INTO accounts.tiers(id,site_id,name) VALUES ('`+pro.String()+`','`+s1.String()+`','Pro')`); err != nil {
 		t.Fatal(err)
 	}
 	inPlatform(t, db, func(tx pg.Tx) error {
@@ -96,14 +96,14 @@ func TestAccountTierChangeWaitsForTheAccountRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	pro := uuid.NewV7()
-	if _, err := exec(t, db, platform, `INSERT INTO accounts.tiers(id,site_id,name) VALUES ('`+uuid.UUID(pro).String()+`','`+uuid.UUID(s1).String()+`','Pro')`); err != nil {
+	if _, err := exec(t, db, platform, `INSERT INTO accounts.tiers(id,site_id,name) VALUES ('`+pro.String()+`','`+s1.String()+`','Pro')`); err != nil {
 		t.Fatal(err)
 	}
 	locked, release := make(chan struct{}), make(chan struct{})
 	first := make(chan error, 1)
 	go func() {
 		first <- db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-			if _, err := tx.Exec(t.Context(), `UPDATE accounts.accounts SET tier_id=$2 WHERE id=$1`, uuid.UUID(a1), pro); err != nil {
+			if _, err := tx.Exec(t.Context(), `UPDATE accounts.accounts SET tier_id=$2 WHERE id=$1`, a1, pro); err != nil {
 				return err
 			}
 			close(locked)
