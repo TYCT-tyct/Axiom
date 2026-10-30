@@ -22,11 +22,15 @@ SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detec
 FROM suppliers.suppliers s WHERE s.id = @id;
 
 -- name: ListGroupsOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+    pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
+    pool_observed_at
 FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id ORDER BY name, id;
 
 -- name: GetGroupOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+    pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
+    pool_observed_at
 FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: ListCredentialsOf :many
