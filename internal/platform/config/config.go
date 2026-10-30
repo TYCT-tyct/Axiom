@@ -46,6 +46,14 @@ func (e *Env) String(name, def string) string {
 	return def
 }
 
+// Set reports whether the variable is set, without reading its value. A command whose roles make a variable
+// meaningless uses it to name the contradiction instead of leaving the variable to Err's "unknown" list.
+func (e *Env) Set(name string) bool {
+	e.read[name] = true
+	_, ok := e.values[name]
+	return ok
+}
+
 // Required returns the variable's value; unset is a problem.
 func (e *Env) Required(name string) string {
 	value := e.String(name, "")
