@@ -16,6 +16,7 @@ it("shows the paid amount and marks a different quote", () => {
   expect(amounts.credited).toEqual({ amount: "8000000000", currency: "USD" });
   expect(amounts.quotedCredits).toEqual({ amount: "10000000000", currency: "USD" });
   expect(amounts.paidMissing).toBe(false);
+  expect(amounts.creditedMissing).toBe(false);
 });
 
 it("does not call a quote a payment", () => {
@@ -24,6 +25,7 @@ it("does not call a quote a payment", () => {
   expect(amounts.paidFee).toBeUndefined();
   expect(amounts.quote).toEqual({ amount: "1000", currency: "USD" });
   expect(amounts.paidMissing).toBe(false);
+  expect(amounts.creditedMissing).toBe(false);
 });
 
 it("marks a paid state with no paid record instead of showing its quote as paid", () => {
@@ -31,4 +33,17 @@ it("marks a paid state with no paid record instead of showing its quote as paid"
   expect(amounts.paid).toBeUndefined();
   expect(amounts.paidMissing).toBe(true);
   expect(amounts.quote).toEqual({ amount: "1000", currency: "USD" });
+});
+
+it("marks a paid, refunded or review state without credited as missing, not as no credit", () => {
+  for (const state of ["paid", "refunded", "review"] as const) {
+    const amounts = orderAmounts({
+      state,
+      credits: { amount: "10000000000", currency: "USD" },
+      total: { amount: "1000", currency: "USD" },
+    });
+    expect(amounts.credited).toBeUndefined();
+    expect(amounts.creditedMissing).toBe(true);
+    expect(amounts.quotedCredits).toEqual({ amount: "10000000000", currency: "USD" });
+  }
 });

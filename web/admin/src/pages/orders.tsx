@@ -416,7 +416,9 @@ function OrdersTable({ rows }: { rows: Order[] }) {
                 {amounts.credited ? (
                   format.money(amounts.credited!)
                 ) : (
-                  <span className="text-label text-t3">{t("orders.notCredited")}</span>
+                  <span className="text-label text-t3">
+                    {t(amounts.creditedMissing ? "orders.creditedUnavailable" : "orders.notCredited")}
+                  </span>
                 )}
                 {amounts.quotedCredits ? (
                   <span className="block text-label text-t3">

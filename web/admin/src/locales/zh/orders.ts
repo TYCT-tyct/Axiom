@@ -37,6 +37,7 @@ export default {
   notPaid: "未支付",
   paidUnavailable: "未记录",
   notCredited: "未入账",
+  creditedUnavailable: "未记录",
   empty: { title: "还没有订单", body: "没有订单符合这个筛选，本站也还没有可显示的订单。" },
   noMatch: { title: "没有符合条件的订单", body: "清除一个筛选条件或放宽日期，可以看到更多。" },
   noRefunds: "没有退款",

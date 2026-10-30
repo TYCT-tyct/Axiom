@@ -8,12 +8,26 @@ import (
 	"sync/atomic"
 	"testing"
 	"uuid"
+
+	"axiom/internal/platform/pg"
 )
 
 func refundWorld(t *testing.T, plugin fakePlugin) (*world, Order) {
 	t.Helper()
 	plugin.create = goodCheckout
-	w := newTestWorld(t, plugin)
+	return refundWorldOn(t, newTestWorld(t, plugin))
+}
+
+// refundWorldWithPool is refundWorld on a world built with a particular pool and suffix.
+func refundWorldWithPool(t *testing.T, plugin fakePlugin, suffix string, opts ...pg.Option) (*world, Order) {
+	t.Helper()
+	plugin.create = goodCheckout
+	return refundWorldOn(t, newTestWorldWithPool(t, plugin, suffix, opts...))
+}
+
+// refundWorldOn prepares a paid order in a world the caller built with a particular pool.
+func refundWorldOn(t *testing.T, w *world) (*world, Order) {
+	t.Helper()
 	m := w.waiting()
 	w.exec(fmt.Sprintf("UPDATE payments.merchants SET refund_enabled = true, user_refund = true WHERE id = '%s'", m.ID))
 	o := w.mustPlace(10*yuan, "paid")

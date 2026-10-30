@@ -37,6 +37,7 @@ export default {
   notPaid: "Not paid",
   paidUnavailable: "Not recorded",
   notCredited: "Not credited",
+  creditedUnavailable: "Not recorded",
   empty: { title: "No order yet", body: "No order matches this filter, and this site has none to show." },
   noMatch: { title: "No order matches", body: "Clear a filter or widen the dates to see more." },
   noRefunds: "No refund",

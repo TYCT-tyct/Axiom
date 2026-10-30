@@ -12,7 +12,7 @@ const unpaid = (state: Order["state"]) =>
 
 // orderAmounts separates what was quoted from what the channel actually took. paid_total and paid_fee are the paid
 // side; total and fee are the quote and only shown beside it when they differ. A state known to be unpaid says so; any
-// other missing paid_total is a record this node does not have, not a claim that nothing was paid.
+// other missing paid_total or credited is a record this node does not have, not a claim that nothing moved.
 export function orderAmounts(order: Order): {
   paid?: PayAmount;
   paidFee?: PayAmount;
@@ -20,6 +20,7 @@ export function orderAmounts(order: Order): {
   credited?: Money;
   quotedCredits?: Money;
   paidMissing: boolean;
+  creditedMissing: boolean;
 } {
   const paid = order.paid_total;
   const credited = order.credited;
@@ -30,5 +31,6 @@ export function orderAmounts(order: Order): {
     credited,
     quotedCredits: order.credits && !same(credited, order.credits) ? order.credits : undefined,
     paidMissing: paid === undefined && !unpaid(order.state),
+    creditedMissing: credited === undefined && !unpaid(order.state),
   };
 }

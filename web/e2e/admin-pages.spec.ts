@@ -596,7 +596,8 @@ test.describe("orders and refunds", () => {
     const state = await open(page, "/orders");
     const paid = state.orders[0];
     const unpaid = state.orders[1];
-    if (!paid || !unpaid) throw new Error("the usual orders are missing");
+    const missing = state.orders[2];
+    if (!paid || !unpaid || !missing) throw new Error("the usual orders are missing");
     paid.state = "paid";
     paid.total = { amount: "1000", currency: "USD" };
     paid.paid_total = { amount: "800", currency: "USD" };
@@ -609,6 +610,11 @@ test.describe("orders and refunds", () => {
     delete unpaid.credited;
     unpaid.total = { amount: "1000", currency: "USD" };
     unpaid.credits = { amount: "7000000000", currency: "USD" };
+    missing.state = "paid";
+    missing.total = { amount: "1000", currency: "USD" };
+    missing.paid_total = { amount: "1000", currency: "USD" };
+    delete missing.credited;
+    missing.credits = { amount: "7000000000", currency: "USD" };
     await page.reload();
 
     const orders = page.getByRole("table", { name: zhText("nav.orders") });
@@ -619,6 +625,9 @@ test.describe("orders and refunds", () => {
     const unpaidRow = orders.getByRole("row").filter({ hasText: unpaid.id?.slice(-8) ?? "" });
     await expect(unpaidRow.getByText(zhText("orders.notPaid"))).toBeVisible();
     await expect(unpaidRow.getByText("US$10.00")).toBeVisible();
+    const missingRow = orders.getByRole("row").filter({ hasText: missing.id?.slice(-8) ?? "" });
+    await expect(missingRow.getByText(zhText("orders.creditedUnavailable"))).toBeVisible();
+    await expect(missingRow.getByText(zhText("orders.notCredited"))).toHaveCount(0);
   });
 
   test("the narrow-screen confirmation shows the refund facts", async ({ page }) => {

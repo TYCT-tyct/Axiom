@@ -422,6 +422,15 @@ func refundFreeze(row PaymentsRefund) billing.Freeze {
 
 // RejectRefund declines a still unapproved, certainly unsent request. Unknown refunds must use Resolve instead.
 func (p *Payments) RejectRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) {
+	if !validReason(reason, 1000) {
+		return Refund{}, &FieldError{"/reason", "a reason of 1 to 1000 characters is required"}
+	}
+	if user == (uuid.UUID{}) {
+		return Refund{}, ErrRefundForbidden
+	}
+	if err := p.PrepareRejectRefund(ctx, s, id); err != nil {
+		return Refund{}, err
+	}
 	var refund Refund
 	err := p.db.Tx(ctx, s, func(tx pg.Tx) (err error) {
 		refund, err = p.RejectRefundTx(ctx, tx, id, user, reason)
@@ -430,9 +439,23 @@ func (p *Payments) RejectRefund(ctx context.Context, s pg.Scope, id RefundID, us
 	return refund, err
 }
 
-// RejectRefundTx returns the frozen credits and records the audit entry in tx, without committing it. A decision that
-// already failed is answered as it is; an approved or terminal one is refused before billing unfreezes credits that a
-// channel refund may already have taken.
+// PrepareRejectRefund advances the ledger before the decision transaction opens. It must run outside that transaction:
+// a pool with one ordinary connection would otherwise wait on the connection the decision holds. It makes no decision;
+// the refund lock in RejectRefundTx still checks the state before unfreezing.
+func (p *Payments) PrepareRejectRefund(ctx context.Context, s pg.Scope, id RefundID) error {
+	row, _, err := p.refundAccess(ctx, s, id, true)
+	if err != nil {
+		return err
+	}
+	if row.State != "frozen" || row.ApprovedBy != nil {
+		return nil
+	}
+	return billing.PrepareRefund(ctx, p.db, p.platform, refundFreeze(row))
+}
+
+// RejectRefundTx returns the frozen credits and records the audit entry in tx, without committing it. The caller has
+// prepared the ledger outside tx. A decision that already failed is answered as it is; an approved or terminal one is
+// refused before billing unfreezes credits that a channel refund may already have taken.
 func (p *Payments) RejectRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, reason string) (Refund, error) {
 	if !validReason(reason, 1000) {
 		return Refund{}, &FieldError{"/reason", "a reason of 1 to 1000 characters is required"}
@@ -456,10 +479,6 @@ func (p *Payments) RejectRefundTx(ctx context.Context, tx pg.Tx, id RefundID, us
 		}
 		if locked.State != "frozen" || locked.ApprovedBy != nil {
 			return ErrRefundForbidden
-		}
-		// The refund lock keeps a concurrent approval from taking the credits between this check and the unfreeze.
-		if err := billing.PrepareRefund(ctx, p.db, p.platform, refundFreeze(locked)); err != nil {
-			return err
 		}
 		if err := finishRefundTx(ctx, tx, o, locked, "failed", "", "admin"); err != nil {
 			return err
