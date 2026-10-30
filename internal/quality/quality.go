@@ -263,6 +263,11 @@ func (m *Monitor) Measured(id suppliers.EndpointID, now time.Time) Measures {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.measures(now)
+}
+
+// measures is what the endpoint's numbers are now; the caller holds e.mu.
+func (e *State) measures(now time.Time) Measures {
 	out := Measures{Health: 1 - e.errorRate}
 	out.Quality, out.Confidence = e.quality(now)
 	if v, ok := e.latency.measured(now); ok {
@@ -281,22 +286,24 @@ func (m *Monitor) Measured(id suppliers.EndpointID, now time.Time) Measures {
 
 // MeasuredFor is Measured for a routable endpoint: a pass counts only for the configuration it checked, so an
 // endpoint whose model, upstream name or format changed since the check is not verified even before the loop clears
-// the state (docs/domains/quality.md「真伪检测」).
+// the state (docs/domains/quality.md「真伪检测」). The evidence and its claim are read in one critical section: a
+// claim switched between two reads must not be paired with the previous claim's pass.
 func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
-	out := m.Measured(ep.ID, now)
-	if !out.Verified || len(ep.Formats) == 0 {
-		return out
-	}
 	m.mu.RLock()
 	e := m.endpoints[ep.ID]
 	m.mu.RUnlock()
 	if e == nil {
-		return out
+		return Measures{Health: 1, Quality: 1}
+	}
+	has := len(ep.Formats) > 0
+	want := claim{}
+	if has {
+		want = claimOf(ep)
 	}
 	e.mu.Lock()
-	same := e.verify.claim == claimOf(ep)
-	e.mu.Unlock()
-	if !same {
+	defer e.mu.Unlock()
+	out := e.measures(now)
+	if out.Verified && (!has || e.verify.claim != want) {
 		out.Verified, out.VerifyConfidence, out.VerifiedAt = false, 0, time.Time{}
 	}
 	return out

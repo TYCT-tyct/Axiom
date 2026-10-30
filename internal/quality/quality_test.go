@@ -278,3 +278,44 @@ func TestMeasuredForAnotherClaim(t *testing.T) {
 		t.Fatal("Measured stays claim-blind for callers that have no configuration")
 	}
 }
+
+// TestMeasuredForNeverPairsAnotherClaimsPass: routing builds on one goroutine while the loop resets evidence on
+// another. A pass of the old claim must never be returned for the new one, however the two interleave: only the claim
+// that was current with the pass, read under one lock, may count.
+func TestMeasuredForNeverPairsAnotherClaimsPass(t *testing.T) {
+	m := New(nil)
+	a := suppliers.Routable{ID: suppliers.EndpointID{12}, Model: uuid.NewV7(), Upstream: "a", Formats: []protocol.Format{protocol.Chat}}
+	b := a
+	b.Upstream = "b"
+	e := m.Live(a.ID, 1)
+	e.mu.Lock()
+	e.verify = verification{claim: claimOf(a), passed: true, checked: t0}
+	e.mu.Unlock()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			e.mu.Lock()
+			e.verify = verification{claim: claimOf(b)} // the loop resets to the new configuration
+			e.mu.Unlock()
+			e.mu.Lock()
+			e.verify = verification{claim: claimOf(a), passed: true, checked: t0}
+			e.mu.Unlock()
+		}
+	})
+	for range 20000 {
+		if got := m.MeasuredFor(b, t0); got.Verified {
+			close(stop)
+			wg.Wait()
+			t.Fatalf("the pass of configuration a was returned for b: %+v", got)
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
