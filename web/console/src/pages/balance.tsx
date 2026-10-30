@@ -31,25 +31,7 @@ export default function Balance() {
                   note={t("balance.monthNote")}
                 />
               </div>
-              <Panel title={t("balance.breakdown")}>
-                <dl className="divide-y divide-b1">
-                  {(
-                    [
-                      ["balance", data.balance],
-                      ["reserved", data.reserved],
-                      ["floor", data.floor],
-                    ] as const
-                  ).map(([name, money]) => (
-                    <div key={name} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-4 py-3">
-                      <dt className="text-t1">{t(`balance.${name}`)}</dt>
-                      <dd className="col-start-2 row-span-2 row-start-1 text-right text-t1 tabular-nums [overflow-wrap:anywhere]">
-                        {format.money(money)}
-                      </dd>
-                      <dd className="max-w-prose text-label text-t3">{t(`balance.${name}Note`)}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </Panel>
+              <Breakdown data={data} />
               <Panel title={t("balance.batches")}>
                 {data.batches === undefined ? (
                   <p className="px-4 py-3 text-t3">{t("balance.batchesUnavailable")}</p>
@@ -68,6 +50,33 @@ export default function Balance() {
         </DataState>
       </div>
     </>
+  );
+}
+
+// Breakdown is the balance and what is held back from it, each line saying what the figure is.
+function Breakdown({ data }: { data: Schemas["Balance"] }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Panel title={t("balance.breakdown")}>
+      <dl className="divide-y divide-b1">
+        {(
+          [
+            ["balance", data.balance],
+            ["reserved", data.reserved],
+            ["floor", data.floor],
+          ] as const
+        ).map(([name, money]) => (
+          <div key={name} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-4 py-3">
+            <dt className="text-t1">{t(`balance.${name}`)}</dt>
+            <dd className="col-start-2 row-span-2 row-start-1 text-right text-t1 tabular-nums [overflow-wrap:anywhere]">
+              {format.money(money)}
+            </dd>
+            <dd className="max-w-prose text-label text-t3">{t(`balance.${name}Note`)}</dd>
+          </div>
+        ))}
+      </dl>
+    </Panel>
   );
 }
 

@@ -40,6 +40,30 @@ export default function Notifications() {
   );
 }
 
+// Settings is the form's state while it is being edited, one field for each preference.
+type Settings = {
+  lowBalance: boolean;
+  threshold: string;
+  topUp: boolean;
+  factorChanged: boolean;
+  webhook: string;
+  language: "en" | "zh";
+};
+
+type SetSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => void;
+
+// initialSettings is what the form starts from: the stored preference, or the default the site sends when it is absent.
+function initialSettings(preferences: Schemas["NotificationPreferences"]): Settings {
+  return {
+    lowBalance: preferences.low_balance ?? true,
+    threshold: moneyInput(preferences.threshold ?? "0"),
+    topUp: preferences.top_up ?? true,
+    factorChanged: preferences.factor_changed ?? true,
+    webhook: preferences.webhook_url ?? "",
+    language: preferences.language ?? "en",
+  };
+}
+
 function PreferencesForm({
   preferences,
   currency,
@@ -50,27 +74,22 @@ function PreferencesForm({
   const { t } = useTranslation();
   const errors = useErrors();
   const client = useQueryClient();
-  const [lowBalance, setLowBalance] = useState(preferences.low_balance ?? true);
-  const [topUp, setTopUp] = useState(preferences.top_up ?? true);
-  const [factorChanged, setFactorChanged] = useState(preferences.factor_changed ?? true);
-  const [threshold, setThreshold] = useState(moneyInput(preferences.threshold ?? "0"));
-  const [webhook, setWebhook] = useState(preferences.webhook_url ?? "");
-  const [language, setLanguage] = useState(preferences.language ?? "en");
+  const [settings, setSettings] = useState<Settings>(() => initialSettings(preferences));
   const [saved, setSaved] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
-  const amount = parseMoney(threshold);
-  const valid = amount !== null;
+  const amount = parseMoney(settings.threshold);
+  const set: SetSetting = (key, value) => setSettings((held) => ({ ...held, [key]: value }));
   const save = useMutation({
     mutationFn: () =>
       unwrap(
         consoleApi.PUT("/api/console/v1/notification-preferences", {
           body: {
-            low_balance: lowBalance,
-            top_up: topUp,
-            factor_changed: factorChanged,
+            low_balance: settings.lowBalance,
+            top_up: settings.topUp,
+            factor_changed: settings.factorChanged,
             threshold: amount ?? "0",
-            webhook_url: webhook.trim(),
-            language,
+            webhook_url: settings.webhook.trim(),
+            language: settings.language,
           },
         }),
       ),
@@ -89,7 +108,7 @@ function PreferencesForm({
       className="space-y-5 p-4"
       onSubmit={(event) => {
         event.preventDefault();
-        if (valid) {
+        if (amount !== null) {
           save.mutate();
         }
       }}
@@ -99,63 +118,97 @@ function PreferencesForm({
           {t("notifications.saved")}
         </Notice>
       ) : null}
-      <fieldset className="space-y-3">
-        <legend className="text-ui font-medium text-t1">{t("notifications.balance.title")}</legend>
-        <p className="max-w-prose text-ui text-t3">{t("notifications.balance.body")}</p>
-        <CheckField
-          label={t("notifications.lowBalance")}
-          hint={t("notifications.lowBalanceHint")}
-          checked={lowBalance}
-          onChange={(event) => setLowBalance(event.target.checked)}
-        />
-        <TextField
-          label={t("notifications.threshold")}
-          hint={t("notifications.thresholdHint", { currency: currency ?? t("notifications.siteCurrency") })}
-          inputMode="decimal"
-          value={threshold}
-          onChange={(event) => setThreshold(event.target.value)}
-          error={valid ? undefined : t("notifications.thresholdInvalid")}
-        />
-      </fieldset>
-      <fieldset className="space-y-3">
-        <legend className="text-ui font-medium text-t1">{t("notifications.events.title")}</legend>
-        <CheckField
-          label={t("notifications.topUp")}
-          hint={t("notifications.topUpHint")}
-          checked={topUp}
-          onChange={(event) => setTopUp(event.target.checked)}
-        />
-        <CheckField
-          label={t("notifications.factorChanged")}
-          hint={t("notifications.factorChangedHint")}
-          checked={factorChanged}
-          onChange={(event) => setFactorChanged(event.target.checked)}
-        />
-      </fieldset>
-      <fieldset className="space-y-3">
-        <legend className="text-ui font-medium text-t1">{t("notifications.delivery.title")}</legend>
-        <TextField
-          label={t("notifications.webhook")}
-          hint={t("notifications.webhookHint")}
-          type="url"
-          maxLength={2048}
-          autoComplete="off"
-          placeholder="https://"
-          value={webhook}
-          onChange={(event) => setWebhook(event.target.value)}
-        />
-        <SelectField
-          label={t("notifications.language")}
-          hint={t("notifications.languageHint")}
-          value={language}
-          onChange={(event) => setLanguage(event.target.value as "en" | "zh")}
-        >
-          <option value="en">{t("notifications.languageEn")}</option>
-          <option value="zh">{t("notifications.languageZh")}</option>
-        </SelectField>
-      </fieldset>
+      <BalanceAlerts currency={currency} settings={settings} set={set} invalid={amount === null} />
+      <EventAlerts settings={settings} set={set} />
+      <Delivery settings={settings} set={set} />
       {failure ? <FormError>{errors.message(failure)}</FormError> : null}
       <SubmitButton pending={save.isPending}>{t("notifications.save")}</SubmitButton>
     </form>
+  );
+}
+
+// BalanceAlerts is when a balance that is running out is worth a message, and below what amount.
+function BalanceAlerts({
+  currency,
+  settings,
+  set,
+  invalid,
+}: {
+  currency: string | undefined;
+  settings: Settings;
+  set: SetSetting;
+  invalid: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <fieldset className="space-y-3">
+      <legend className="text-ui font-medium text-t1">{t("notifications.balance.title")}</legend>
+      <p className="max-w-prose text-ui text-t3">{t("notifications.balance.body")}</p>
+      <CheckField
+        label={t("notifications.lowBalance")}
+        hint={t("notifications.lowBalanceHint")}
+        checked={settings.lowBalance}
+        onChange={(event) => set("lowBalance", event.target.checked)}
+      />
+      <TextField
+        label={t("notifications.threshold")}
+        hint={t("notifications.thresholdHint", { currency: currency ?? t("notifications.siteCurrency") })}
+        inputMode="decimal"
+        value={settings.threshold}
+        onChange={(event) => set("threshold", event.target.value)}
+        error={invalid ? t("notifications.thresholdInvalid") : undefined}
+      />
+    </fieldset>
+  );
+}
+
+// EventAlerts is which events of the account are worth a message besides the balance.
+function EventAlerts({ settings, set }: { settings: Settings; set: SetSetting }) {
+  const { t } = useTranslation();
+  return (
+    <fieldset className="space-y-3">
+      <legend className="text-ui font-medium text-t1">{t("notifications.events.title")}</legend>
+      <CheckField
+        label={t("notifications.topUp")}
+        hint={t("notifications.topUpHint")}
+        checked={settings.topUp}
+        onChange={(event) => set("topUp", event.target.checked)}
+      />
+      <CheckField
+        label={t("notifications.factorChanged")}
+        hint={t("notifications.factorChangedHint")}
+        checked={settings.factorChanged}
+        onChange={(event) => set("factorChanged", event.target.checked)}
+      />
+    </fieldset>
+  );
+}
+
+// Delivery is where the messages go and in which language: the person's webhook, or the account's email.
+function Delivery({ settings, set }: { settings: Settings; set: SetSetting }) {
+  const { t } = useTranslation();
+  return (
+    <fieldset className="space-y-3">
+      <legend className="text-ui font-medium text-t1">{t("notifications.delivery.title")}</legend>
+      <TextField
+        label={t("notifications.webhook")}
+        hint={t("notifications.webhookHint")}
+        type="url"
+        maxLength={2048}
+        autoComplete="off"
+        placeholder="https://"
+        value={settings.webhook}
+        onChange={(event) => set("webhook", event.target.value)}
+      />
+      <SelectField
+        label={t("notifications.language")}
+        hint={t("notifications.languageHint")}
+        value={settings.language}
+        onChange={(event) => set("language", event.target.value as "en" | "zh")}
+      >
+        <option value="en">{t("notifications.languageEn")}</option>
+        <option value="zh">{t("notifications.languageZh")}</option>
+      </SelectField>
+    </fieldset>
   );
 }

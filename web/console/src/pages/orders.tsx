@@ -34,6 +34,7 @@ import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { clearAttempt, readAttempt, unanswered, writeAttempt } from "../attempt-store";
 import { useOrderActions } from "../order-actions";
 import { balanceQuery, ordersQuery } from "../queries";
 
@@ -51,48 +52,33 @@ function isRefundRequest(value: unknown): value is RefundRequest {
   return typeof credits === "string" && typeof reason === "string";
 }
 
-function readRefundAttempt(scope: string, order: string): Attempt<RefundRequest> | null {
-  try {
-    const raw = sessionStorage.getItem(refundKey(scope, order));
-    if (!raw) {
-      return null;
+// useRefunding is the refund dialog's state: which order it is for and the attempt it resumes. An attempt whose answer
+// is unknown is kept when the dialog closes, so reopening it sends the same request again; one nothing was sent with
+// is not, because the person closed it without asking.
+function useRefunding(scope: string, onSent: () => void) {
+  const [refunding, setRefunding] = useState<{ order: Schemas["Order"]; attempt: Attempt<RefundRequest> } | null>(null);
+  const kept = (order: string) => readAttempt(refundKey(scope, order), isRefundRequest);
+  const open = (order: Schemas["Order"]) =>
+    setRefunding({ order, attempt: kept(order.id) ?? opened(crypto.randomUUID()) });
+  const close = () => {
+    if (refunding && kept(refunding.order.id)?.state === "editing") {
+      clearAttempt(refundKey(scope, refunding.order.id));
     }
-    const value: unknown = JSON.parse(raw);
-    if (typeof value !== "object" || value === null) {
-      return null;
+    setRefunding(null);
+  };
+  const keep = (next: Attempt<RefundRequest>) => {
+    if (refunding) {
+      writeAttempt(refundKey(scope, refunding.order.id), next);
     }
-    if ((value as { state?: unknown }).state === "reused") {
-      return { state: "reused" };
+  };
+  const sent = () => {
+    if (refunding) {
+      clearAttempt(refundKey(scope, refunding.order.id));
     }
-    const key = (value as { key?: unknown }).key;
-    const request = (value as { request?: unknown }).request;
-    if ((value as { state?: unknown }).state === "unknown" && typeof key === "string" && isRefundRequest(request)) {
-      return { state: "unknown", key, request };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function writeRefundAttempt(scope: string, order: string, attempt: Attempt<RefundRequest>) {
-  try {
-    if (attempt.state === "editing" || attempt.state === "stale") {
-      sessionStorage.removeItem(refundKey(scope, order));
-      return;
-    }
-    sessionStorage.setItem(refundKey(scope, order), JSON.stringify(attempt));
-  } catch {
-    // The dialog still locks this attempt; only a reload loses it.
-  }
-}
-
-function clearRefundAttempt(scope: string, order: string) {
-  try {
-    sessionStorage.removeItem(refundKey(scope, order));
-  } catch {
-    // nothing to clear
-  }
+    setRefunding(null);
+    onSent();
+  };
+  return { refunding, open, close, keep, sent };
 }
 
 // Orders is the account's top-ups, newest first, with where each payment stands and what a refund of it is doing.
@@ -101,19 +87,10 @@ export default function Orders() {
   const session = useSession();
   const list = useInfiniteQuery(ordersQuery);
   const orders = useMemo(() => list.data?.pages.flatMap((page) => page.data) ?? [], [list.data]);
-  const [refunding, setRefunding] = useState<{ order: Schemas["Order"]; attempt: Attempt<RefundRequest> } | null>(null);
   const [noticed, setNoticed] = useState(false);
-  const scope = `${session.user.id}/${session.account}/refund`;
   const allowed = can(session, "balance.top_up");
   const refundsKnown = orders.every((order) => order.refund_allowed !== undefined);
-  const openRefund = (order: Schemas["Order"]) =>
-    setRefunding({ order, attempt: readRefundAttempt(scope, order.id) ?? opened(crypto.randomUUID()) });
-  const closeRefund = () => {
-    if (refunding && readRefundAttempt(scope, refunding.order.id)?.state === "editing") {
-      clearRefundAttempt(scope, refunding.order.id);
-    }
-    setRefunding(null);
-  };
+  const refund = useRefunding(`${session.user.id}/${session.account}/refund`, () => setNoticed(true));
   return (
     <>
       <PageHeader title={t("nav.orders")} description={t("orders.description")} />
@@ -139,41 +116,60 @@ export default function Orders() {
             }
           >
             {() => (
-              <Table label={t("nav.orders")}>
-                <thead>
-                  <tr>
-                    <Th>{t("orders.col.order")}</Th>
-                    <Th>{t("orders.col.state")}</Th>
-                    <Th className="text-right">{t("orders.col.credits")}</Th>
-                    <Th className="text-right">{t("orders.col.total")}</Th>
-                    <Th>{t("orders.col.refunds")}</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {orders.map((order) => (
-                    <OrderRow key={order.id} order={order} allowed={allowed} onRefund={() => openRefund(order)} />
-                  ))}
-                </tbody>
-              </Table>
+              <>
+                <OrdersTable orders={orders} allowed={allowed} refundsKnown={refundsKnown} onRefund={refund.open} />
+                <LoadMore list={list} />
+              </>
             )}
           </DataState>
-          {!refundsKnown ? <p className="px-4 py-3 text-label text-t3">{t("orders.refundsUnavailable")}</p> : null}
-          <LoadMore list={list} />
         </Panel>
       </div>
-      {refunding ? (
+      {refund.refunding ? (
         <RefundDialog
-          order={refunding.order}
-          initial={refunding.attempt}
-          onAttempt={(next) => writeRefundAttempt(scope, refunding.order.id, next)}
-          onClose={closeRefund}
-          onDone={() => {
-            clearRefundAttempt(scope, refunding.order.id);
-            setRefunding(null);
-            setNoticed(true);
-          }}
+          order={refund.refunding.order}
+          initial={refund.refunding.attempt}
+          onAttempt={refund.keep}
+          onClose={refund.close}
+          onDone={refund.sent}
         />
       ) : null}
+    </>
+  );
+}
+
+// OrdersTable is one page of the account's orders: where each payment stands, what a refund of it is doing, and the
+// note that older nodes do not yet say whether a refund may be asked for.
+function OrdersTable({
+  orders,
+  allowed,
+  refundsKnown,
+  onRefund,
+}: {
+  orders: Schemas["Order"][];
+  allowed: boolean;
+  refundsKnown: boolean;
+  onRefund: (order: Schemas["Order"]) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <Table label={t("nav.orders")}>
+        <thead>
+          <tr>
+            <Th>{t("orders.col.order")}</Th>
+            <Th>{t("orders.col.state")}</Th>
+            <Th className="text-right">{t("orders.col.credits")}</Th>
+            <Th className="text-right">{t("orders.col.total")}</Th>
+            <Th>{t("orders.col.refunds")}</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {orders.map((order) => (
+            <OrderRow key={order.id} order={order} allowed={allowed} onRefund={() => onRefund(order)} />
+          ))}
+        </tbody>
+      </Table>
+      {refundsKnown ? null : <p className="px-4 py-3 text-label text-t3">{t("orders.refundsUnavailable")}</p>}
     </>
   );
 }
@@ -261,13 +257,10 @@ function RefundDialog({
   onDone: () => void;
 }) {
   const { t } = useTranslation();
-  const errors = useErrors();
-  const client = useQueryClient();
   const carried = initial.state === "unknown" ? initial.request : undefined;
   const [attempt, setAttempt] = useState(initial);
   const [credits, setCredits] = useState(carried ? moneyInput(carried.credits) : moneyInput(order.credits.amount));
   const [reason, setReason] = useState(carried?.reason ?? "");
-  const [failure, setFailure] = useState<unknown>(null);
   const parsed = parseMoney(credits);
   const editing = attempt.state === "editing";
   const valid = editing && parsed !== null && parsed !== "0" && reason.trim() !== "";
@@ -275,7 +268,47 @@ function RefundDialog({
     setAttempt(next);
     onAttempt(next);
   };
+  const refund = useRefundRequest(order, change, onDone);
+  return (
+    <Dialog title={t("orders.refundTitle")} onClose={onClose}>
+      <form
+        className="space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (attempt.state === "unknown") {
+            refund.mutate({ from: attempt, request: attempt.request });
+          } else if (valid && parsed) {
+            refund.mutate({ from: attempt, request: { credits: parsed, reason } });
+          }
+        }}
+      >
+        <p className="max-w-prose text-ui text-t2">{t("orders.refundBody")}</p>
+        <RefundFields
+          order={order}
+          credits={credits}
+          reason={reason}
+          editing={editing}
+          failure={refund.failure}
+          onCredits={setCredits}
+          onReason={setReason}
+        />
+        {attempt.state === "unknown" ? <p className="text-label text-t3">{t("orders.refundUnknown")}</p> : null}
+        {attempt.state === "reused" ? <p className="text-label text-t3">{t("orders.refundReused")}</p> : null}
+        <RefundActions attempt={attempt} editing={editing} pending={refund.pending} onClose={onClose} />
+      </form>
+    </Dialog>
+  );
+}
+
+// useRefundRequest sends one refund request and settles the order list and the balance when the platform took it. The
+// dialog shows a failure and keeps the request, so only that request can go out again, under the same key.
+function useRefundRequest(order: Schemas["Order"], change: (next: Attempt<RefundRequest>) => void, onDone: () => void) {
+  const client = useQueryClient();
+  const [failure, setFailure] = useState<unknown>(null);
   const refund = useMutation({
+    // Recorded before it is sent: if no answer comes back, reopening the dialog sends this request again, never another.
+    onMutate: ({ from, request }: { from: Sendable<RefundRequest>; request: RefundRequest }) =>
+      change(unanswered(from, request)),
     mutationFn: ({ from, request }: { from: Sendable<RefundRequest>; request: RefundRequest }) =>
       unwrap(
         consoleApi.POST("/api/console/v1/orders/{order_id}/refunds", {
@@ -293,58 +326,80 @@ function RefundDialog({
       change(failed(sent.from, sent.request, error, () => crypto.randomUUID()));
     },
   });
-  const send = (from: Sendable<RefundRequest>, request: RefundRequest) => {
-    change({ state: "unknown", key: from.key, request });
-    refund.mutate({ from, request });
-  };
+  return { failure, pending: refund.isPending, mutate: refund.mutate };
+}
+
+// RefundFields is the amount to refund and why; both are locked while an answer is unknown.
+function RefundFields({
+  order,
+  credits,
+  reason,
+  editing,
+  failure,
+  onCredits,
+  onReason,
+}: {
+  order: Schemas["Order"];
+  credits: string;
+  reason: string;
+  editing: boolean;
+  failure: unknown;
+  onCredits: (credits: string) => void;
+  onReason: (reason: string) => void;
+}) {
+  const { t } = useTranslation();
+  const errors = useErrors();
   return (
-    <Dialog title={t("orders.refundTitle")} onClose={onClose}>
-      <form
-        className="space-y-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (attempt.state === "unknown") {
-            send(attempt, attempt.request);
-          } else if (valid && parsed) {
-            send(attempt, { credits: parsed, reason });
-          }
-        }}
-      >
-        <p className="max-w-prose text-ui text-t2">{t("orders.refundBody")}</p>
-        <TextField
-          label={t("orders.refundCredits")}
-          hint={t("orders.refundCreditsHint", { currency: order.credits.currency })}
-          inputMode="decimal"
-          required
-          disabled={!editing}
-          value={credits}
-          onChange={(event) => setCredits(event.target.value)}
-          error={errors.field(failure, "credits")}
-        />
-        <TextAreaField
-          label={t("orders.refundReason")}
-          hint={t("orders.refundReasonHint")}
-          maxLength={1000}
-          required
-          disabled={!editing}
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-        />
-        {failure ? <FormError>{errors.message(failure)}</FormError> : null}
-        {attempt.state === "unknown" ? <p className="text-label text-t3">{t("orders.refundUnknown")}</p> : null}
-        {attempt.state === "reused" ? <p className="text-label text-t3">{t("orders.refundReused")}</p> : null}
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
-            {t("orders.close")}
-          </Button>
-          {editing || attempt.state === "unknown" ? (
-            <SubmitButton pending={refund.isPending}>
-              {attempt.state === "unknown" ? t("orders.refundRetry") : t("orders.refundSubmit")}
-            </SubmitButton>
-          ) : null}
-        </div>
-      </form>
-    </Dialog>
+    <>
+      <TextField
+        label={t("orders.refundCredits")}
+        hint={t("orders.refundCreditsHint", { currency: order.credits.currency })}
+        inputMode="decimal"
+        required
+        disabled={!editing}
+        value={credits}
+        onChange={(event) => onCredits(event.target.value)}
+        error={errors.field(failure, "credits")}
+      />
+      <TextAreaField
+        label={t("orders.refundReason")}
+        hint={t("orders.refundReasonHint")}
+        maxLength={1000}
+        required
+        disabled={!editing}
+        value={reason}
+        onChange={(event) => onReason(event.target.value)}
+      />
+      {failure ? <FormError>{errors.message(failure)}</FormError> : null}
+    </>
+  );
+}
+
+// RefundActions closes the dialog or sends the request; one that was refused can be edited and sent again, but one
+// whose answer is unknown only goes out as it was.
+function RefundActions({
+  attempt,
+  editing,
+  pending,
+  onClose,
+}: {
+  attempt: Attempt<RefundRequest>;
+  editing: boolean;
+  pending: boolean;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-wrap justify-end gap-2">
+      <Button variant="ghost" onClick={onClose}>
+        {t("orders.close")}
+      </Button>
+      {editing || attempt.state === "unknown" ? (
+        <SubmitButton pending={pending}>
+          {attempt.state === "unknown" ? t("orders.refundRetry") : t("orders.refundSubmit")}
+        </SubmitButton>
+      ) : null}
+    </div>
   );
 }
 
