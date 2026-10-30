@@ -10,6 +10,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/webui"
 )
 
 // StartOAuthSignIn begins a third-party sign-in and returns the provider's authorization URL.
@@ -62,21 +63,21 @@ func (c consoleAPI) CompleteOAuth(ctx context.Context, request consoleapi.Comple
 		// distinguished (this account already has the provider vs. another account owns the subject).
 		if errors.Is(err, accounts.ErrIdentityAlreadyLinked) {
 			return consoleapi.CompleteOAuth303Response{Headers: consoleapi.CompleteOAuth303ResponseHeaders{
-				Location: "/security?oauth=identity_already_linked",
+				Location: webui.ConsoleMount + "/security?oauth=identity_already_linked",
 			}}, nil
 		}
 		if errors.Is(err, accounts.ErrIdentityLinked) {
 			return consoleapi.CompleteOAuth303Response{Headers: consoleapi.CompleteOAuth303ResponseHeaders{
-				Location: "/security?oauth=identity_linked",
+				Location: webui.ConsoleMount + "/security?oauth=identity_linked",
 			}}, nil
 		}
 		return consoleapi.CompleteOAuth303Response{Headers: consoleapi.CompleteOAuth303ResponseHeaders{
-			Location: "/sign-in?oauth=failed",
+			Location: webui.ConsoleMount + "/sign-in?oauth=failed",
 		}}, nil
 	}
-	headers := consoleapi.CompleteOAuth303ResponseHeaders{Location: "/"}
+	headers := consoleapi.CompleteOAuth303ResponseHeaders{Location: webui.ConsoleMount + "/"}
 	if out.Linked {
-		headers.Location = "/security"
+		headers.Location = webui.ConsoleMount + "/security"
 	}
 	if out.Issued != nil {
 		cookie, err := c.sessions().cookie(cl.r.Host, *out.Issued)

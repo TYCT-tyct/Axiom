@@ -445,6 +445,18 @@ func (s *Service) signInWithIdentity(ctx context.Context, site Site, provider st
 		if err != nil {
 			return err
 		}
+		// The subject was read before this transaction. Unlinking locks the user and raises the factor version; this
+		// lock waited for it, so look again: the identity must still be this user's when the session is issued.
+		var still []FindIdentityRow
+		still, err = s.queries.FindIdentity(ctx, tx, FindIdentityParams{
+			SiteID: uuid.UUID(site.ID), Provider: provider, Subject: identity.subject,
+		})
+		if err != nil {
+			return err
+		}
+		if len(still) == 0 || still[0].UserID != user || still[0].AccountID != account {
+			return ErrAccountNotLinked
+		}
 		level := levelPassword
 		if locked.secondFactor() {
 			level = levelPending

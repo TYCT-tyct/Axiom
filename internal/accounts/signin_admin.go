@@ -123,10 +123,6 @@ func (s *Service) SetSiteSignIn(ctx context.Context, tx pg.Tx, actor audit.Actor
 	if update.Passkeys && domain == "" {
 		return ErrLoginDomainRequired
 	}
-	if !update.Passkeys && domain == "" && before.Passkeys {
-		// Turning passkeys off and clearing the domain together is allowed; clearing it while they stay on is not.
-		return ErrLoginDomainRequired
-	}
 	var value *string
 	if domain != "" {
 		value = &domain

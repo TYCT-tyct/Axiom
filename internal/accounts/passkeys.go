@@ -73,7 +73,7 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, r *http.Request,
 	if err != nil {
 		return PasskeyRegistration{}, err
 	}
-	if err := s.checkPassword(ctx, p, password); err != nil {
+	if err := s.checkPasswordForChange(ctx, p, password); err != nil {
 		return PasskeyRegistration{}, err
 	}
 	if err := s.requireVerifiedForChange(ctx, p); err != nil {
@@ -98,7 +98,7 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, r *http.Request,
 		return PasskeyRegistration{}, ErrTooManyPasskeys
 	}
 	selection := protocol.AuthenticatorSelection{
-		ResidentKey:      protocol.ResidentKeyRequirementPreferred,
+		ResidentKey:      protocol.ResidentKeyRequirementRequired,
 		UserVerification: protocol.VerificationRequired,
 	}
 	var exclusions []protocol.CredentialDescriptor
@@ -120,7 +120,7 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, r *http.Request,
 // FinishPasskeyRegistration verifies the attested credential, stores it, raises the factor version (every other
 // session ends) and issues this browser a session that has passed the second factor.
 func (s *Service) FinishPasskeyRegistration(ctx context.Context, r *http.Request, p Principal, flowID string, ip netip.Addr, userAgent string) (Passkey, Issued, error) {
-	site, wa, err := s.passkeySite(r.Host)
+	site, _, err := s.passkeySite(r.Host)
 	if err != nil {
 		return Passkey{}, Issued{}, err
 	}
@@ -140,7 +140,14 @@ func (s *Service) FinishPasskeyRegistration(ctx context.Context, r *http.Request
 	if err != nil {
 		return Passkey{}, Issued{}, err
 	}
-	credential, err := wa.FinishRegistration(user, sessionData(site, flow, uuid.UUID(p.user)), r)
+	// Verify against the relying party the ceremony began with, not the snapshot that may have moved since.
+	wa, err := webauthn.New(&webauthn.Config{
+		RPID: flow.RelyingPartyID, RPDisplayName: site.Name, RPOrigins: []string{flow.Origin},
+	})
+	if err != nil {
+		return Passkey{}, Issued{}, fmt.Errorf("build the passkey relying party: %w", err)
+	}
+	credential, err := wa.FinishRegistration(user, sessionData(flow, uuid.UUID(p.user)), r)
 	if err != nil {
 		return Passkey{}, Issued{}, fmt.Errorf("%w: %w", ErrPasskeyFailed, err)
 	}
@@ -153,7 +160,22 @@ func (s *Service) FinishPasskeyRegistration(ctx context.Context, r *http.Request
 		LastUsedAt: nil, BackupEligible: credential.Flags.BackupEligible,
 	}
 	var issued Issued
-	err = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+	err = s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
+		// The lock order is site then user, the same order SetSiteSignIn uses. A registration that began before an
+		// operator changed the switch or the login domain must not store a credential the new configuration cannot
+		// serve; the flow records the relying party it was begun for.
+		if rows, err := s.queries.LockSite(ctx, tx, uuid.UUID(site.ID)); err != nil {
+			return err
+		} else if len(rows) == 0 {
+			return ErrNotFound
+		}
+		current, err := s.queries.ReadPasskeySite(ctx, tx, uuid.UUID(site.ID))
+		if err != nil {
+			return err
+		}
+		if !current.Passkeys || current.LoginDomain != flow.RelyingPartyID || current.LoginOrigin != flow.Origin {
+			return ErrPasskeysOff
+		}
 		locked, err := s.lockUser(ctx, tx, uuid.UUID(p.user), p.factorVersion)
 		if err != nil {
 			return err
@@ -264,7 +286,7 @@ func (s *Service) FinishPasskeySignIn(ctx context.Context, r *http.Request, flow
 		}
 		return user, nil
 	}
-	user, credential, err := wa.FinishPasskeyLogin(handler, sessionData(site, flow, uuid.UUID{}), r)
+	user, credential, err := wa.FinishPasskeyLogin(handler, sessionData(flow, uuid.UUID{}), r)
 	if err != nil {
 		return Issued{}, fmt.Errorf("%w: %w", ErrPasskeyFailed, err)
 	}
@@ -355,7 +377,7 @@ func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Princ
 	}); err != nil {
 		return Issued{}, err
 	}
-	credential, err := wa.FinishLogin(user, sessionData(site, flow, uuid.UUID(p.user)), r)
+	credential, err := wa.FinishLogin(user, sessionData(flow, uuid.UUID(p.user)), r)
 	if err != nil {
 		// One challenge is one attempt: a failed assertion spends the same budget a wrong code does.
 		_ = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
@@ -394,7 +416,7 @@ func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Princ
 // DeletePasskey removes a credential. The current password is required; the factor version rises, every other session
 // ends, and this browser gets a new session with the level it had.
 func (s *Service) DeletePasskey(ctx context.Context, p Principal, id PasskeyID, password string, ip netip.Addr, userAgent string) (Issued, error) {
-	if err := s.checkPassword(ctx, p, password); err != nil {
+	if err := s.checkPasswordForChange(ctx, p, password); err != nil {
 		return Issued{}, err
 	}
 	if err := s.requireVerifiedForChange(ctx, p); err != nil {
@@ -437,6 +459,16 @@ func (s *Service) DeletePasskey(ctx context.Context, p Principal, id PasskeyID, 
 		return Issued{}, err
 	}
 	return issued, nil
+}
+
+// checkPasswordForChange spends the same per-user failure budget as password changes and TOTP: a signed-in page must
+// not become an unbounded password oracle through the passkey endpoints.
+func (s *Service) checkPasswordForChange(ctx context.Context, p Principal, password string) (err error) {
+	defer func() { s.failed(ctx, p.securityAttempt(), "security.factor_failed", &err) }()
+	l := s.snapshot.Load().sites[p.site].limits
+	return failing(s, ctx, s.userLimit(p.site, uuid.UUID(p.user), l), func() error {
+		return s.checkPassword(ctx, p, password)
+	})
 }
 
 // Passkeys lists a user's credentials, oldest first.
@@ -545,8 +577,8 @@ func (s *Service) insertWebAuthnFlow(ctx context.Context, site Site, kind string
 	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
 		return s.queries.InsertWebAuthnFlow(ctx, tx, InsertWebAuthnFlowParams{
 			ID: id, SiteID: uuid.UUID(site.ID), Kind: kind, AccountID: optionalUUID(p.account), UserID: optionalUUID(p.user),
-			SessionID: optionalUUID(p.session), Challenge: session.Challenge, Name: sessionName,
-			AllowedCredentialIds: allowed,
+			SessionID: optionalUUID(p.session), Challenge: session.Challenge,
+			RelyingPartyID: site.LoginDomain, Origin: site.LoginOrigin, Name: sessionName, AllowedCredentialIds: allowed,
 		})
 	}); err != nil {
 		return "", fmt.Errorf("begin the passkey ceremony: %w", err)
@@ -565,8 +597,11 @@ func (s *Service) consumeWebAuthnFlow(ctx context.Context, site Site, flowID, ki
 	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
 		var err error
 		rows, err = s.queries.FindWebAuthnFlow(ctx, tx, FindWebAuthnFlowParams{ID: id, SiteID: uuid.UUID(site.ID)})
-		if err != nil || len(rows) == 0 {
+		if err != nil {
 			return err
+		}
+		if len(rows) == 0 {
+			return ErrPasskeyFailed
 		}
 		// Check everything before spending the flow: a request with the wrong kind or session must not burn a
 		// ceremony that belongs to someone else.
@@ -592,14 +627,14 @@ func (s *Service) consumeWebAuthnFlow(ctx context.Context, site Site, flowID, ki
 }
 
 // sessionData rebuilds the ceremony state go-webauthn verifies against from what the begin stored.
-func sessionData(site Site, flow FindWebAuthnFlowRow, user uuid.UUID) webauthn.SessionData {
+func sessionData(flow FindWebAuthnFlowRow, user uuid.UUID) webauthn.SessionData {
 	var handle []byte
 	if user != (uuid.UUID{}) {
 		id := uuid.UUID(user)
 		handle = id[:]
 	}
 	return webauthn.SessionData{
-		Challenge: flow.Challenge, RelyingPartyID: site.LoginDomain, Origin: site.LoginOrigin,
+		Challenge: flow.Challenge, RelyingPartyID: flow.RelyingPartyID, Origin: flow.Origin,
 		UserID: handle, AllowedCredentialIDs: flow.AllowedCredentialIds, Expires: flow.ExpiresAt.Time,
 		CredParams: webauthn.CredentialParametersDefault(), UserVerification: protocol.VerificationRequired,
 	}

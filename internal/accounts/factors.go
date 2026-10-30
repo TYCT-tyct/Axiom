@@ -209,6 +209,11 @@ func (s *Service) confirmTOTP(ctx context.Context, p Principal, c FactorChange) 
 		if locked.Mfa {
 			return ErrTOTPOn
 		}
+		// A passkey is already a second factor: adding TOTP must not be a way to replace it with a factor the
+		// admin listener can set up from a password session, so this ceremony needs the passkey proved first.
+		if locked.Passkeys && !p.Verified() {
+			return ErrMFARequired
+		}
 		return s.queries.EnableTOTP(ctx, tx, EnableTOTPParams{
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,
 			Step: step, ID: user,

@@ -55,7 +55,8 @@ func (q *Queries) DeletePasskey(ctx context.Context, db DBTX, arg DeletePasskeyP
 }
 
 const findWebAuthnFlow = `-- name: FindWebAuthnFlow :many
-SELECT id, kind, account_id, user_id, session_id, challenge, name, allowed_credential_ids, expires_at, expires_at > now() AS unexpired
+SELECT id, kind, account_id, user_id, session_id, challenge, relying_party_id, origin, name, allowed_credential_ids,
+    expires_at, expires_at > now() AS unexpired
 FROM accounts.webauthn_flows WHERE id = $1 AND site_id = $2 AND consumed_at IS NULL
 `
 
@@ -71,6 +72,8 @@ type FindWebAuthnFlowRow struct {
 	UserID               *uuid.UUID
 	SessionID            *uuid.UUID
 	Challenge            string
+	RelyingPartyID       string
+	Origin               string
 	Name                 string
 	AllowedCredentialIds [][]byte
 	ExpiresAt            pgtype.Timestamptz
@@ -93,6 +96,8 @@ func (q *Queries) FindWebAuthnFlow(ctx context.Context, db DBTX, arg FindWebAuth
 			&i.UserID,
 			&i.SessionID,
 			&i.Challenge,
+			&i.RelyingPartyID,
+			&i.Origin,
 			&i.Name,
 			&i.AllowedCredentialIds,
 			&i.ExpiresAt,
@@ -147,10 +152,10 @@ func (q *Queries) InsertPasskeyCredential(ctx context.Context, db DBTX, arg Inse
 }
 
 const insertWebAuthnFlow = `-- name: InsertWebAuthnFlow :exec
-INSERT INTO accounts.webauthn_flows (id, site_id, kind, account_id, user_id, session_id, challenge, name,
-    allowed_credential_ids, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-    now() + interval '5 minutes')
+INSERT INTO accounts.webauthn_flows (id, site_id, kind, account_id, user_id, session_id, challenge,
+    relying_party_id, origin, name, allowed_credential_ids, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+    $11, now() + interval '5 minutes')
 `
 
 type InsertWebAuthnFlowParams struct {
@@ -161,6 +166,8 @@ type InsertWebAuthnFlowParams struct {
 	UserID               *uuid.UUID
 	SessionID            *uuid.UUID
 	Challenge            string
+	RelyingPartyID       string
+	Origin               string
 	Name                 string
 	AllowedCredentialIds [][]byte
 }
@@ -174,6 +181,8 @@ func (q *Queries) InsertWebAuthnFlow(ctx context.Context, db DBTX, arg InsertWeb
 		arg.UserID,
 		arg.SessionID,
 		arg.Challenge,
+		arg.RelyingPartyID,
+		arg.Origin,
 		arg.Name,
 		arg.AllowedCredentialIds,
 	)
@@ -299,10 +308,35 @@ func (q *Queries) PasskeyTenant(ctx context.Context, db DBTX, credentialID []byt
 	return items, nil
 }
 
+const readPasskeySite = `-- name: ReadPasskeySite :one
+SELECT coalesce(t.passkeys_enabled, false)::boolean AS passkeys,
+    coalesce(s.login_domain, '')::text AS login_domain,
+    coalesce(d.origin, '')::text AS login_origin
+FROM accounts.sites s
+LEFT JOIN accounts.site_settings t ON t.site_id = s.id
+LEFT JOIN accounts.site_domains d ON d.site_id = s.id AND d.domain = s.login_domain AND d.surface = 'console'
+WHERE s.id = $1
+`
+
+type ReadPasskeySiteRow struct {
+	Passkeys    bool
+	LoginDomain string
+	LoginOrigin string
+}
+
+// The current switch and login domain, read in the transaction that stores a credential: a stale page or snapshot
+// cannot add one after an operator turned passkeys off or moved the relying party.
+func (q *Queries) ReadPasskeySite(ctx context.Context, db DBTX, siteID uuid.UUID) (ReadPasskeySiteRow, error) {
+	row := db.QueryRow(ctx, readPasskeySite, siteID)
+	var i ReadPasskeySiteRow
+	err := row.Scan(&i.Passkeys, &i.LoginDomain, &i.LoginOrigin)
+	return i, err
+}
+
 const usePasskey = `-- name: UsePasskey :execrows
 UPDATE accounts.passkey_credentials SET sign_count = $1, last_used_at = now(),
     backup_state = $2
-WHERE id = $3 AND (sign_count < $1 OR $1 = 0)
+WHERE id = $3 AND (sign_count < $1 OR (sign_count = 0 AND $1 = 0))
 `
 
 type UsePasskeyParams struct {

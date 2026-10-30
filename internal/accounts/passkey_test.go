@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"uuid"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/go-webauthn/webauthn/protocol"
@@ -204,6 +205,9 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := registration.PublicKey.Response.AuthenticatorSelection.ResidentKey; got != protocol.ResidentKeyRequirementRequired {
+		t.Fatalf("registration resident key = %q, want required", got)
+	}
 	evidence := auth.register(t, registration.PublicKey)
 	passkey, issued, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test")
 	if err != nil {
@@ -218,6 +222,13 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	}
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM accounts.passkey_credentials"); got[0] != "1" {
 		t.Errorf("passkeys: %v", got)
+	}
+	// An unknown or already spent flow is a refused ceremony, not a panic or a second grant.
+	if _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, uuid.NewV7().String(), client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+		t.Errorf("registration with an unknown flow: %v", err)
+	}
+	if _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+		t.Errorf("registration with a spent flow: %v", err)
 	}
 
 	// Turning passkeys off while a user holds one would leave that credential on a second factor path the sign-in page
@@ -292,6 +303,12 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	if verified.Pending {
 		t.Error("the passkey factor left a pending session")
 	}
+	if _, err := s.FinishPasskeyMFA(t.Context(), mfaRequest, pendingPrincipal, mfa.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+		t.Errorf("MFA with a spent flow: %v", err)
+	}
+	if _, err := s.FinishPasskeyMFA(t.Context(), mfaRequest, pendingPrincipal, uuid.NewV7().String(), client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+		t.Errorf("MFA with an unknown flow: %v", err)
+	}
 
 	// A discoverable sign-in names no email: the credential's user handle finds the user.
 	challenge, err := s.BeginPasskeySignIn(t.Context(), console, client)
@@ -310,6 +327,12 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	}(), client); err != nil || p.UserID() != x.user {
 		t.Errorf("the session is the passkey's user: %v %v", p.UserID(), err)
 	}
+	if _, err := s.FinishPasskeySignIn(t.Context(), passkeyRequest(t, auth.assert(t, challenge.PublicKey)), challenge.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+		t.Errorf("sign-in with a spent flow: %v", err)
+	}
+	if _, err := s.FinishPasskeySignIn(t.Context(), passkeyRequest(t, nil), uuid.NewV7().String(), client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+		t.Errorf("sign-in with an unknown flow: %v", err)
+	}
 
 	// A counter that goes backwards is the authenticator's clone warning: the assertion is refused before the session.
 	auth.counter = 0
@@ -319,6 +342,23 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	}
 	if _, err := s.FinishPasskeySignIn(t.Context(), passkeyRequest(t, auth.assert(t, backwards.PublicKey)), backwards.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("a counter that went backwards: %v", err)
+	}
+
+	// A zero counter is accepted only while the stored counter is also zero. Simulate the interleaving where a 1
+	// landed first, then a stale assertion carrying 0: the conditional update must not lower it.
+	if err := pgtest.Run(t.Context(), x.database.Superuser, "UPDATE accounts.passkey_credentials SET sign_count = 1"); err != nil {
+		t.Fatal(err)
+	}
+	auth.counter = ^uint32(0) // the next assert increments to zero
+	zero, err := s.BeginPasskeySignIn(t.Context(), console, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FinishPasskeySignIn(t.Context(), passkeyRequest(t, auth.assert(t, zero.PublicKey)), zero.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+		t.Errorf("a zero counter over a non-zero stored count: %v", err)
+	}
+	if got := texts(t, x.db, platform, "SELECT sign_count::text FROM accounts.passkey_credentials"); got[0] != "1" {
+		t.Errorf("the counter was lowered: %v", got)
 	}
 
 	// A signature over other bytes is refused.
@@ -376,8 +416,14 @@ func TestPasskeyRegistrationNeedsThePassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.BeginPasskeyRegistration(t.Context(), passkeyRequest(t, nil), p, "Laptop", "wrong password"); !errors.Is(err, accounts.ErrBadCredentials) {
-		t.Errorf("a wrong password: %v", err)
+	for i := range 11 {
+		_, err := s.BeginPasskeyRegistration(t.Context(), passkeyRequest(t, nil), p, "Laptop", "wrong password")
+		if i < 10 && !errors.Is(err, accounts.ErrBadCredentials) {
+			t.Errorf("wrong password %d: %v", i, err)
+		}
+		if i == 10 && !errors.Is(err, accounts.ErrTooManyAttempts) {
+			t.Errorf("the eleventh wrong password did not spend the user's budget: %v", err)
+		}
 	}
 }
 

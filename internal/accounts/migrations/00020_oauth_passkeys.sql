@@ -159,6 +159,32 @@ GRANT SELECT, INSERT, DELETE ON accounts.passkey_credentials TO axiom_app;
 -- user's label. The public key and the credential ID never change.
 GRANT UPDATE (sign_count, last_used_at, backup_state, name) ON accounts.passkey_credentials TO axiom_app;
 
+-- A console password session for a user with a passkey would skip the factor, and an older node does not know about
+-- passkeys at all. A database trigger is the one check both versions run: no console password session can be stored
+-- for such a user, whichever node tries. The admin listener is exempt because it cannot run WebAuthn.
+-- +goose StatementBegin
+CREATE FUNCTION accounts.refuse_console_password_with_passkey() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF NEW.surface = 'console' AND NEW.level = 'password' AND EXISTS (
+        SELECT 1 FROM accounts.passkey_credentials p
+        WHERE p.site_id = NEW.site_id AND p.account_id = NEW.account_id AND p.user_id = NEW.user_id
+    ) THEN
+        RAISE EXCEPTION 'a console password session cannot skip a passkey' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER refuse_console_password_with_passkey
+    BEFORE INSERT ON accounts.sessions
+    FOR EACH ROW EXECUTE FUNCTION accounts.refuse_console_password_with_passkey();
+-- Sessions an older node issued before this migration cannot be left valid for the same reason.
+UPDATE accounts.sessions s SET revoked_at = now()
+WHERE s.surface = 'console' AND s.level = 'password' AND s.revoked_at IS NULL
+    AND EXISTS (SELECT 1 FROM accounts.passkey_credentials p
+        WHERE p.site_id = s.site_id AND p.account_id = s.account_id AND p.user_id = s.user_id);
+
 -- A sign-in or link round trip through a provider. The state is kept hashed and single use; the verifier is the PKCE
 -- secret and never leaves the database before the code exchange. A link flow is bound to the signed-in session that
 -- began it, so a state leaked into another browser cannot attach a provider identity to that user.
@@ -215,6 +241,8 @@ CREATE TABLE accounts.webauthn_flows (
     user_id uuid,
     session_id uuid,
     challenge text NOT NULL CHECK (char_length(challenge) BETWEEN 16 AND 256),
+    relying_party_id text NOT NULL CHECK (char_length(relying_party_id) BETWEEN 1 AND 253),
+    origin text NOT NULL CHECK (char_length(origin) BETWEEN 1 AND 512),
     name text NOT NULL DEFAULT '' CHECK (char_length(name) <= 100),
     allowed_credential_ids bytea[] NOT NULL DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -271,6 +299,8 @@ CREATE POLICY lookup ON accounts.passkey_credentials FOR SELECT TO axiom_lookup 
 DROP FUNCTION accounts.passkey_tenant(bytea);
 DROP TABLE accounts.webauthn_flows;
 DROP TABLE accounts.oauth_flows;
+DROP TRIGGER refuse_console_password_with_passkey ON accounts.sessions;
+DROP FUNCTION accounts.refuse_console_password_with_passkey();
 DROP TABLE accounts.passkey_credentials;
 DROP TABLE accounts.user_identities;
 DROP TABLE accounts.site_oauth_providers;

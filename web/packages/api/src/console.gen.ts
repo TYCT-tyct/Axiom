@@ -355,7 +355,7 @@ export interface paths {
         };
         /**
          * The provider's redirect back to the site
-         * @description Spends the state, exchanges the code for the stored callback URI, and reads the provider's subject. A sign-in matches that subject against linked identities only: an unknown one is not registered and its email never joins accounts (no automatic merge). A link attaches the subject to the session that began the flow, raises the user's factor version and issues a new session. Answers 303 to `/` after a sign-in, `/security` after a link, and `/sign-in?oauth=failed` when the round trip fails, so a browser never lands on JSON. The path's provider must be the one the state was made for.
+         * @description Spends the state, exchanges the code for the stored callback URI, and reads the provider's subject. A sign-in matches that subject against linked identities only: an unknown one is not registered and its email never joins accounts (no automatic merge). A link attaches the subject to the session that began the flow, raises the user's factor version and issues a new session. Answers 303 under the console mount: `/console/` after a sign-in, `/console/security` after a link, and `/console/sign-in?oauth=failed` when the round trip fails, so a browser never lands on JSON. The path's provider must be the one the state was made for.
          */
         get: operations["completeOAuth"];
         put?: never;
