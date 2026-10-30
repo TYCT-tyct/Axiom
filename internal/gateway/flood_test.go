@@ -30,7 +30,7 @@ func TestColdKeyFloodAndHotAccountSettlement(t *testing.T) {
 			t.Fatalf("%d cold-key lookups got a connection, want 8", granted)
 		}
 
-		settling := holdGate(t, ctx, bp.Funds, "hot", Completion)
+		settling := holdGate(t, ctx, bp.Funds, "hot")
 		var hotAdmissions []*pending
 		for range 20 {
 			hotAdmissions = append(hotAdmissions, submitGate(ctx, bp.Funds, "hot", Admission, func(context.Context, []*gateItem) error { return nil }))
@@ -76,7 +76,7 @@ func TestFundsWaitsForTheGateWithoutAConnection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		release := holdGate(t, ctx, bp.Funds, "hot", Completion)
+		release := holdGate(t, ctx, bp.Funds, "hot")
 		var waiting []*pending
 		for range 10 {
 			waiting = append(waiting, submitGate(ctx, bp.Funds, "hot", Admission, func(context.Context, []*gateItem) error { return nil }))
@@ -129,7 +129,7 @@ func TestAdmissionBudgetStartsAtTheGate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		release := holdGate(t, ctx, bp.Funds, "a", Completion)
+		release := holdGate(t, ctx, bp.Funds, "a")
 		var granted, deadline time.Time
 		admission := submitGate(ctx, bp.Funds, "a", Admission, func(ctx context.Context, _ []*gateItem) error {
 			granted = time.Now()

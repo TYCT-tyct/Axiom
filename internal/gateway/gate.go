@@ -23,7 +23,7 @@ const (
 // which is the caller's own item; a batch holds one class only.
 type gateItem struct {
 	class    Class
-	ctx      context.Context
+	ctx      context.Context //nolint:containedctx // the caller's, which the leader goroutine reads for the batch's values, deadline and cancellation
 	run      batchRun
 	payload  any
 	done     chan struct{}
@@ -116,7 +116,7 @@ func (f *Funds) submit(ctx context.Context, account string, item *gateItem, run 
 	g.mu.Unlock()
 
 	if leader {
-		go f.lead(account, q)
+		go f.lead(account, q) //nolint:contextcheck // the leader serves every waiter of the account, so no one caller's context bounds it; each batch takes its items' contexts
 	}
 	return f.await(item)
 }
@@ -280,7 +280,7 @@ func (f *Funds) runBatch(class Class, batch []*gateItem) {
 	defer cancel()
 	release, err := f.pool.Acquire(ctx, class)
 	if err != nil {
-		f.finish(batch, err)
+		finish(batch, err)
 		return
 	}
 	var panicked any
@@ -295,10 +295,10 @@ func (f *Funds) runBatch(class Class, batch []*gateItem) {
 		for _, item := range batch {
 			item.panicked = panicked
 		}
-		f.finish(batch, nil)
+		finish(batch, nil)
 		return
 	}
-	f.finish(batch, err)
+	finish(batch, err)
 }
 
 // batchContext is one context for the batch: its first item's values, the admission budget or the earliest
@@ -308,7 +308,11 @@ func batchContext(batch []*gateItem, class Class, budget time.Duration) (context
 	if class == Admission {
 		return context.WithTimeout(ctx, budget)
 	}
-	ctx = pg.CompletionContext(ctx)
+	return earliestDeadline(pg.CompletionContext(ctx), batch)
+}
+
+// earliestDeadline bounds ctx by the earliest deadline of the batch's own contexts, if any has one.
+func earliestDeadline(ctx context.Context, batch []*gateItem) (context.Context, context.CancelFunc) {
 	var earliest time.Time
 	for _, item := range batch {
 		if d, ok := item.ctx.Deadline(); ok && (earliest.IsZero() || d.Before(earliest)) {
@@ -323,7 +327,7 @@ func batchContext(batch []*gateItem, class Class, budget time.Duration) (context
 
 // finish gives every item its result and wakes its waiter. An item whose run wrote its own error keeps it; the
 // batch's error covers the rest, so a failure before a request's work never leaves that request waiting.
-func (f *Funds) finish(batch []*gateItem, err error) {
+func finish(batch []*gateItem, err error) {
 	for _, item := range batch {
 		if item.closed {
 			continue

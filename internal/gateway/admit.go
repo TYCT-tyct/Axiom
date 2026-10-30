@@ -115,45 +115,50 @@ func (h *Handler) admitBatch(ctx context.Context, batch []*gateItem) error {
 		return nil
 	}
 	return h.admitDBBatch(ctx, calls, func(tx pg.Tx, as []accounts.Admission, refusals []error) error {
-		reqs := make([]billing.ReserveRequest, 0, len(live))
-		quoted := make([]*admissionItem, 0, len(live))
-		for i, it := range live {
-			if refusals[i] != nil {
-				it.gate.err = refusals[i]
-				continue
-			}
-			it.admission = as[i]
-			if err := h.planAdmission(it); err != nil {
-				it.gate.err = err
-				continue
-			}
-			reqs = append(reqs, billing.ReserveRequest{
-				Admitted: it.admitted, ID: it.call.ID,
-				Demand: routing.DemandOf(&it.call.Request), Quotables: quotables(it.plan.Entries),
-			})
-			quoted = append(quoted, it)
-		}
-		if len(reqs) == 0 {
-			return nil
-		}
-		holds, kept, errs, err := h.Billing.ReserveMany(ctx, tx, reqs)
-		if err != nil {
-			// No COMMIT was sent: the transaction can only roll back, so no reservation of this batch can
-			// have been written, whatever the fallback read, the lock or an insert reported.
-			return err
-		}
-		for i, it := range quoted {
-			if errs[i] != nil {
-				it.gate.err = errs[i]
-				continue
-			}
-			// From here on the rows are written; the batch's COMMIT may still fail or lose its
-			// acknowledgement, so the request must settle an orphan rather than assume nothing was written.
-			it.reserved = true
-			it.hold, it.plan = holds[i], trim(it.plan, kept[i])
-		}
-		return nil
+		return h.reserveBatch(ctx, tx, live, as, refusals)
 	})
+}
+
+// reserveBatch plans every admitted request and writes the reservations of the planned ones under one balance lock.
+func (h *Handler) reserveBatch(ctx context.Context, tx pg.Tx, live []*admissionItem, as []accounts.Admission, refusals []error) error {
+	reqs := make([]billing.ReserveRequest, 0, len(live))
+	quoted := make([]*admissionItem, 0, len(live))
+	for i, it := range live {
+		if refusals[i] != nil {
+			it.gate.err = refusals[i]
+			continue
+		}
+		it.admission = as[i]
+		if err := h.planAdmission(it); err != nil {
+			it.gate.err = err
+			continue
+		}
+		reqs = append(reqs, billing.ReserveRequest{
+			Admitted: it.admitted, ID: it.call.ID,
+			Demand: routing.DemandOf(&it.call.Request), Quotables: quotables(it.plan.Entries),
+		})
+		quoted = append(quoted, it)
+	}
+	if len(reqs) == 0 {
+		return nil
+	}
+	holds, kept, errs, err := h.Billing.ReserveMany(ctx, tx, reqs)
+	if err != nil {
+		// No COMMIT was sent: the transaction can only roll back, so no reservation of this batch can have been
+		// written, whatever the fallback read, the lock or an insert reported.
+		return err
+	}
+	for i, it := range quoted {
+		if errs[i] != nil {
+			it.gate.err = errs[i]
+			continue
+		}
+		// From here on the rows are written; the batch's COMMIT may still fail or lose its acknowledgement, so the
+		// request must settle an orphan rather than assume nothing was written.
+		it.reserved = true
+		it.hold, it.plan = holds[i], trim(it.plan, kept[i])
+	}
+	return nil
 }
 
 // planAdmission judges the rate and plans the route from the admission and the in-memory route data; the reservation

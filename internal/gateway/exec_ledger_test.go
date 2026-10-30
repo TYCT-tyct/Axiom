@@ -372,7 +372,7 @@ func testOneCompletionFailure(t *testing.T, fail error) {
 	t.Helper()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
-		release := holdGate(t, ctx, h.exec.Limits.Funds, accountKey(h.call.caller), Completion)
+		release := holdGate(t, ctx, h.exec.Limits.Funds, accountKey(h.call.caller))
 		first := &Call{ID: h.call.ID, Admitted: h.call.Admitted, caller: h.call.caller}
 		second := &Call{ID: uuid.New(), Admitted: h.call.Admitted, caller: h.call.caller}
 		var ran, reported bool

@@ -86,7 +86,8 @@ func TestEachRateLimitIsCountedByItsReason(t *testing.T) {
 			defer close(release)
 			go func() {
 				item := &gateItem{done: make(chan struct{})}
-				_ = bp.Funds.Complete(ctx, "a", item, func(context.Context, []*gateItem) error {
+				//nolint:errcheck,gosec // the holder only keeps the gate busy; the admission behind it is what is counted
+				bp.Funds.Complete(ctx, "a", item, func(context.Context, []*gateItem) error {
 					close(started)
 					<-release
 					return nil

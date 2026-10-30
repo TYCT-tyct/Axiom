@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"axiom/internal/billing"
@@ -67,71 +68,58 @@ func (x *Executor) runCompletions(ctx context.Context, batch []*gateItem) error 
 // in a new transaction under their own deadlines. A transaction or commit error has no work to name, so it still
 // applies to every item and the caller retries them. Reports run only after their transaction commits.
 func runCompletionBatch(ctx context.Context, batch []*gateItem, run func(context.Context, pg.Scope, []func(pg.Tx) error) error) error {
+	failed, err := writeCompletions(ctx, batch, run)
+	if failed < 0 {
+		return err
+	}
+	item := batch[failed]
+	item.err = err
+	if !item.closed {
+		// Return the failed request before retrying the others: an extension's landing and cancel must not wait for a
+		// slow settlement or extension in the rest of the batch. This runs after the rollback, so the failed request
+		// has no committed write.
+		item.closed = true
+		close(item.done)
+	}
+	rest := slices.Delete(slices.Clone(batch), failed, failed+1) // the caller's batch still gives every item its result
+	if len(rest) == 0 {
+		return nil
+	}
+	// The next transaction keeps ctx's values but only the remaining requests' deadlines; the failed one's may already
+	// have passed.
+	retry, cancel := earliestDeadline(context.WithoutCancel(ctx), rest)
+	defer cancel()
+	return runCompletionBatch(retry, rest, run)
+}
+
+// writeCompletions runs the batch's works in one transaction and, once it commits, their reports. When a work's error
+// rolled the transaction back it returns that work's index and error; otherwise -1 and the transaction's own error.
+func writeCompletions(ctx context.Context, batch []*gateItem, run func(context.Context, pg.Scope, []func(pg.Tx) error) error) (int, error) {
 	items := make([]*completionItem, len(batch))
+	works := make([]func(pg.Tx) error, len(batch))
 	for i, g := range batch {
-		items[i] = g.payload.(*completionItem)
-	}
-	pending := make([]int, len(items))
-	for i := range items {
-		pending[i] = i
-	}
-	var retryCancel context.CancelFunc
-	defer func() {
-		if retryCancel != nil {
-			retryCancel()
-		}
-	}()
-	for len(pending) > 0 {
-		works := make([]func(pg.Tx) error, len(pending))
-		for j, index := range pending {
-			item := items[index]
-			item.after = nil
-			works[j] = func(tx pg.Tx) error {
-				after, err := item.work(ctx, tx)
-				if err == nil {
-					item.after = after
-				}
-				return err
+		item := g.payload.(*completionItem)
+		item.after, items[i] = nil, item
+		works[i] = func(tx pg.Tx) error {
+			after, err := item.work(ctx, tx)
+			if err == nil {
+				item.after = after
 			}
-		}
-		err := run(ctx, items[pending[0]].scope, works)
-		if err == nil {
-			for _, index := range pending {
-				if items[index].after != nil {
-					items[index].after()
-				}
-			}
-			return nil
-		}
-		var failed *billing.BatchWorkError
-		if !errors.As(err, &failed) || failed.Index < 0 || failed.Index >= len(pending) {
 			return err
 		}
-		failedItem := &items[pending[failed.Index]].gate
-		failedItem.err = failed.Err
-		if !failedItem.closed {
-			// Return the failed request before retrying the others: an extension's landing and cancel must not wait
-			// for a slow settlement or extension in the rest of the batch. This runs after the rollback, so the
-			// failed request has no committed write.
-			failedItem.closed = true
-			close(failedItem.done)
-		}
-		pending = append(pending[:failed.Index], pending[failed.Index+1:]...)
-		if len(pending) == 0 {
-			return nil
-		}
-		// The next transaction uses only the remaining requests' own deadlines; the failed one's may already
-		// have passed.
-		if retryCancel != nil {
-			retryCancel()
-		}
-		remaining := make([]*gateItem, len(pending))
-		for j, index := range pending {
-			remaining[j] = &items[index].gate
-		}
-		ctx, retryCancel = batchContext(remaining, Completion, 0)
 	}
-	return nil
+	err := run(ctx, items[0].scope, works)
+	if failed, ok := errors.AsType[*billing.BatchWorkError](err); ok && failed.Index >= 0 && failed.Index < len(batch) {
+		return failed.Index, failed.Err
+	}
+	if err == nil {
+		for _, item := range items {
+			if item.after != nil {
+				item.after()
+			}
+		}
+	}
+	return -1, err
 }
 
 // settled follows the settlement up, and reports whether the call's slots are now the background's to give back. One

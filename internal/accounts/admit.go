@@ -128,47 +128,49 @@ func (s *Service) AdmitBatch(ctx context.Context, calls []AdmitCall, fn func(tx 
 		}
 	}
 	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(account)), func(tx pg.Tx) error {
-		admissions, refusals := make([]Admission, len(calls)), make([]error, len(calls))
-		statements := make([]pg.Statement, 0, len(calls))
-		queued := make([]int, 0, len(calls))
-		for i, c := range calls {
-			if c.Caller == (Caller{}) {
-				refusals[i] = ErrUnknownKey
-				continue
-			}
-			statements = append(statements, pg.Statement{SQL: admitKey, Args: []any{
-				uuid.UUID(c.Caller.key), strings.ToLower(c.Request.Domain), c.Request.ClientIP,
-			}})
-			queued = append(queued, i)
-		}
-		if len(statements) > 0 {
-			err := tx.Batch(ctx, statements, func(batch pg.BatchResults) error {
-				for _, i := range queued {
-					var row AdmitKeyRow
-					err := batch.QueryRow().Scan(&row.PresetID, &row.Models, &row.SpendLimit, &row.LimitReset,
-						&row.Budget, &row.BudgetReset, &row.AdmissionIds, &row.AccountActive)
-					switch {
-					case errors.Is(err, pg.ErrNoRows):
-						refusals[i] = ErrUnknownKey
-						continue
-					case err != nil:
-						return fmt.Errorf("accounts: check the key: %w", err)
-					}
-					a, err := admitRow(calls[i].Caller, row)
-					if err != nil {
-						refusals[i] = err
-						continue
-					}
-					admissions[i] = a
-				}
-				return nil
-			})
-			if err != nil {
-				return err
-			}
+		admissions, refusals, err := checkKeys(ctx, tx, calls)
+		if err != nil {
+			return err
 		}
 		return fn(tx, admissions, refusals)
 	})
+}
+
+// checkKeys checks the key of every call that has one, in one pipelined round trip.
+func checkKeys(ctx context.Context, tx pg.Tx, calls []AdmitCall) ([]Admission, []error, error) {
+	admissions, refusals := make([]Admission, len(calls)), make([]error, len(calls))
+	statements := make([]pg.Statement, 0, len(calls))
+	queued := make([]int, 0, len(calls))
+	for i, c := range calls {
+		if c.Caller == (Caller{}) {
+			refusals[i] = ErrUnknownKey
+			continue
+		}
+		statements = append(statements, pg.Statement{SQL: admitKey, Args: []any{
+			uuid.UUID(c.Caller.key), strings.ToLower(c.Request.Domain), c.Request.ClientIP,
+		}})
+		queued = append(queued, i)
+	}
+	if len(statements) == 0 {
+		return admissions, refusals, nil
+	}
+	err := tx.Batch(ctx, statements, func(batch pg.BatchResults) error {
+		for _, i := range queued {
+			var row AdmitKeyRow
+			err := batch.QueryRow().Scan(&row.PresetID, &row.Models, &row.SpendLimit, &row.LimitReset,
+				&row.Budget, &row.BudgetReset, &row.AdmissionIds, &row.AccountActive)
+			switch {
+			case errors.Is(err, pg.ErrNoRows):
+				refusals[i] = ErrUnknownKey
+			case err != nil:
+				return fmt.Errorf("accounts: check the key: %w", err)
+			default:
+				admissions[i], refusals[i] = admitRow(calls[i].Caller, row)
+			}
+		}
+		return nil
+	})
+	return admissions, refusals, err
 }
 
 // admitRow turns the row an admission check read into what a call may do.

@@ -60,11 +60,11 @@ func submitGate(ctx context.Context, f *Funds, account string, class Class, run 
 	})
 }
 
-// holdGate starts a request whose batch blocks until the returned function is called.
-func holdGate(t *testing.T, ctx context.Context, f *Funds, account string, class Class) func() {
+// holdGate starts a completion whose batch blocks until the returned function is called.
+func holdGate(t *testing.T, ctx context.Context, f *Funds, account string) func() {
 	t.Helper()
 	started, release := make(chan struct{}), make(chan struct{})
-	submitGate(ctx, f, account, class, func(context.Context, []*gateItem) error {
+	submitGate(ctx, f, account, Completion, func(context.Context, []*gateItem) error {
 		close(started)
 		<-release
 		return nil
@@ -82,7 +82,7 @@ func holdGate(t *testing.T, ctx context.Context, f *Funds, account string, class
 func TestGateCompletionOvertakesWaitingAdmissions(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
-		release := holdGate(t, ctx, f, "a", Completion)
+		release := holdGate(t, ctx, f, "a")
 
 		var order []string
 		admission := submitGate(ctx, f, "a", Admission, func(context.Context, []*gateItem) error {
@@ -114,7 +114,7 @@ func TestGateCompletionOvertakesWaitingAdmissions(t *testing.T) {
 func TestGateAdmissionGivesUpAfterTheWait(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
-		release := holdGate(t, ctx, f, "a", Completion)
+		release := holdGate(t, ctx, f, "a")
 		admission := submitGate(ctx, f, "a", Admission, func(context.Context, []*gateItem) error { return nil })
 		time.Sleep(199 * time.Millisecond)
 		admission.mustWait(t)
@@ -140,7 +140,7 @@ func TestGateAdmissionGivesUpAfterTheWait(t *testing.T) {
 func TestGateCompletionKeepsWaitingAndClientCancelIsNotARefusal(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
-		release := holdGate(t, ctx, f, "a", Completion)
+		release := holdGate(t, ctx, f, "a")
 		completion := submitGate(ctx, f, "a", Completion, func(context.Context, []*gateItem) error { return nil })
 		clientCtx, cancel := context.WithCancel(ctx)
 		admission := submitGate(clientCtx, f, "a", Admission, func(context.Context, []*gateItem) error { return nil })
@@ -166,7 +166,7 @@ func TestGateCompletionKeepsWaitingAndClientCancelIsNotARefusal(t *testing.T) {
 func TestGateAccountsAreIndependent(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
-		release := holdGate(t, ctx, f, "hot", Completion)
+		release := holdGate(t, ctx, f, "hot")
 		submitGate(ctx, f, "hot", Admission, func(context.Context, []*gateItem) error { return nil }).mustWait(t)
 		submitGate(ctx, f, "other", Completion, func(context.Context, []*gateItem) error { return nil }).mustGranted(t)
 		submitGate(ctx, f, "other", Admission, func(context.Context, []*gateItem) error { return nil }).mustGranted(t)
@@ -179,7 +179,7 @@ func TestGateAccountsAreIndependent(t *testing.T) {
 func TestGateBatchesWaitingAdmissions(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
-		release := holdGate(t, ctx, f, "a", Completion)
+		release := holdGate(t, ctx, f, "a")
 		var sizes []int
 		var waiting []*pending
 		for range 10 {
@@ -316,35 +316,35 @@ func TestGateSurvivesCancellationsRacingBatches(t *testing.T) {
 }
 
 // raceRound queues 100 requests behind a holder, cancels half of them while the holder lets go, and returns when all
-// have left.
+// have left. Every request is granted or cancelled: the admission wait is longer than the test.
 func raceRound(t *testing.T, f *Funds, round int) {
 	ctx := context.Background()
 	started, release := make(chan struct{}), make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		item := &gateItem{done: make(chan struct{})}
-		_ = f.Complete(ctx, "a", item, func(context.Context, []*gateItem) error {
+		if err := f.Complete(ctx, "a", item, func(context.Context, []*gateItem) error {
 			close(started)
 			<-release
 			return nil
-		})
+		}); err != nil {
+			t.Errorf("round %d: the holder: %v", round, err)
+		}
 	})
 	<-started
 	cancels := make([]context.CancelFunc, 100)
 	for i := range cancels {
 		ctx, cancel := context.WithCancel(ctx)
 		cancels[i] = cancel
-		class := Admission
+		submit := f.Admit
 		if i%3 == round%3 {
-			class = Completion
+			submit = f.Complete
 		}
 		wg.Go(func() {
 			item := &gateItem{done: make(chan struct{})}
-			run := func(context.Context, []*gateItem) error { return nil }
-			if class == Completion {
-				_ = f.Complete(ctx, "a", item, run)
-			} else {
-				_ = f.Admit(ctx, "a", item, run)
+			err := submit(ctx, "a", item, func(context.Context, []*gateItem) error { return nil })
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("round %d: %v, want granted or cancelled", round, err)
 			}
 		})
 	}

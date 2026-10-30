@@ -43,7 +43,82 @@ func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveReque
 			return nil, nil, nil, fmt.Errorf("billing: a reservation batch mixes accounts %s and %s", account, r.Admitted.Account)
 		}
 	}
+	src, err := b.lockBatch(ctx, tx, account, reqs)
+	var refused error
+	switch {
+	case errors.Is(err, errNoBalance):
+		refused = &Insufficient{Source: SourceBalance}
+	case errors.Is(err, ErrTerminated):
+		refused = ErrTerminated
+	case err != nil:
+		return nil, nil, nil, err
+	}
+	if refused != nil {
+		for i := range errs {
+			errs[i] = refused
+		}
+		return holds, kept, errs, nil
+	}
+	usage, err := readBatchUsage(ctx, tx, reqs, src.day)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	quoted := b.quoteBatch(reqs, src, usage, errs)
+	if err := insertBatch(ctx, tx, quoted); err != nil {
+		return nil, nil, nil, err
+	}
+	for _, p := range quoted {
+		holds[p.at] = &Hold{Reservation: p.quote, id: reqs[p.at].ID, admitted: reqs[p.at].Admitted, workspaceWindow: src.day, keyWindow: src.day}
+		kept[p.at] = p.quote.Kept
+	}
+	return holds, kept, errs, nil
+}
 
+// batchSources is what a batch reads under its account's lock, once for every request in it.
+type batchSources struct {
+	balance LockBalanceRow
+	day     time.Time
+	found   map[string]fallbacks
+	bodies  map[string]string
+}
+
+// lockBatch reads the fallbacks every request needs, then locks the balance, checks the fence and reads the clock.
+// The fallbacks are platform data. The lock, the fence and the clock follow them in the same pipeline: the usage
+// statements after it start after the lock, so their snapshot sees every change committed before it.
+func (b *Billing) lockBatch(ctx context.Context, tx pg.Tx, account uuid.UUID, reqs []ReserveRequest) (batchSources, error) {
+	src := batchSources{found: map[string]fallbacks{}, bodies: map[string]string{}}
+	err := tx.Batch(ctx, []pg.Statement{
+		{SQL: readFallbacks, Args: []any{batchCurrencies(reqs)}},
+		{SQL: lockBalance, Args: []any{account}},
+		{SQL: fenceHolder, Args: []any{b.holder}},
+		{SQL: now, Args: nil},
+	}, func(batch pg.BatchResults) error {
+		read, err := scanFallbacks(batch)
+		if err != nil {
+			return err
+		}
+		if err := parseFallbackRows(read, src.found, src.bodies); err != nil {
+			return err
+		}
+		bal := &src.balance
+		if err := batch.QueryRow().Scan(&bal.Balance, &bal.Floor, &bal.Reserved, &bal.Frozen); err != nil {
+			return balanceErr(err)
+		}
+		var holder uuid.UUID
+		if err := batch.QueryRow().Scan(&holder); err != nil {
+			return fenceErr(err)
+		}
+		if err := batch.QueryRow().Scan(&src.day); err != nil {
+			return fmt.Errorf("billing: read the clock: %w", err)
+		}
+		src.day = src.day.UTC().Truncate(24 * time.Hour) // the windows are UTC days, as ReadUsage makes them
+		return nil
+	})
+	return src, err
+}
+
+// batchCurrencies is the currencies whose fallback prices any request of the batch needs, each once.
+func batchCurrencies(reqs []ReserveRequest) []string {
 	currencies := []string{}
 	for _, r := range reqs {
 		for _, c := range fallbackCurrencies(r.Quotables) {
@@ -52,150 +127,123 @@ func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveReque
 			}
 		}
 	}
-	// The fallbacks are platform data. The lock, the fence and the clock follow them in the same pipeline: the usage
-	// statements below start after the lock, so their snapshot sees every change committed before it.
-	var (
-		balance LockBalanceRow
-		day     time.Time
-		found   map[string]fallbacks
-		bodies  map[string]string
-	)
-	err := tx.Batch(ctx, []pg.Statement{
-		{SQL: readFallbacks, Args: []any{currencies}},
-		{SQL: lockBalance, Args: []any{account}},
-		{SQL: fenceHolder, Args: []any{b.holder}},
-		{SQL: now, Args: nil},
-	}, func(batch pg.BatchResults) error {
-		rows, err := batch.Query()
-		if err != nil {
-			return fmt.Errorf("billing: read the fallback prices: %w", err)
-		}
-		var read []ReadFallbacksRow
-		for rows.Next() {
-			var r ReadFallbacksRow
-			if err := rows.Scan(&r.Currency, &r.Body); err != nil {
-				rows.Close()
-				return fmt.Errorf("billing: read the fallback prices: %w", err)
-			}
-			read = append(read, r)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("billing: read the fallback prices: %w", err)
-		}
-		found, bodies = map[string]fallbacks{}, map[string]string{}
-		if err := parseFallbackRows(read, found, bodies); err != nil {
-			return err
-		}
-		if err := batch.QueryRow().Scan(&balance.Balance, &balance.Floor, &balance.Reserved, &balance.Frozen); err != nil {
-			return balanceErr(err)
-		}
-		var holder uuid.UUID
-		if err := batch.QueryRow().Scan(&holder); err != nil {
-			return fenceErr(err)
-		}
-		if err := batch.QueryRow().Scan(&day); err != nil {
-			return fmt.Errorf("billing: read the clock: %w", err)
-		}
-		day = day.UTC().Truncate(24 * time.Hour) // the windows are UTC days, as ReadUsage makes them
-		return nil
-	})
-	switch {
-	case errors.Is(err, errNoBalance):
-		for i := range errs {
-			errs[i] = &Insufficient{Source: SourceBalance}
-		}
-		return holds, kept, errs, nil
-	case errors.Is(err, ErrTerminated):
-		for i := range errs {
-			errs[i] = ErrTerminated
-		}
-		return holds, kept, errs, nil
-	case err != nil:
-		return nil, nil, nil, err
-	}
+	return currencies
+}
 
-	// The usage reads are separate statements after the lock, in one pipeline. They all use day, so a batch that
-	// crosses midnight still checks and books every request in one window.
+func scanFallbacks(batch pg.BatchResults) ([]ReadFallbacksRow, error) {
+	rows, err := batch.Query()
+	if err != nil {
+		return nil, fmt.Errorf("billing: read the fallback prices: %w", err)
+	}
+	defer rows.Close()
+	var read []ReadFallbacksRow
+	for rows.Next() {
+		var r ReadFallbacksRow
+		if err := rows.Scan(&r.Currency, &r.Body); err != nil {
+			return nil, fmt.Errorf("billing: read the fallback prices: %w", err)
+		}
+		read = append(read, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("billing: read the fallback prices: %w", err)
+	}
+	return read, nil
+}
+
+// readBatchUsage reads every request's counters in separate statements after the lock, in one pipeline. They all use
+// day, so a batch that crosses midnight still checks and books every request in one window.
+func readBatchUsage(ctx context.Context, tx pg.Tx, reqs []ReserveRequest, day time.Time) ([]ReadUsageRow, error) {
 	usages := make([]pg.Statement, len(reqs))
 	for i, r := range reqs {
 		p := r.Admitted.usageParams(&day)
 		usages[i] = pg.Statement{SQL: readUsage, Args: []any{p.WorkspaceID, p.WorkspaceReset, p.KeyID, p.KeyReset, p.Day}}
 	}
 	usage := make([]ReadUsageRow, len(reqs))
-	if err := tx.Batch(ctx, usages, func(batch pg.BatchResults) error {
+	err := tx.Batch(ctx, usages, func(batch pg.BatchResults) error {
 		for i := range usage {
 			if err := batch.QueryRow().Scan(&usage[i].Day, &usage[i].WorkspaceUsed, &usage[i].KeyUsed); err != nil {
 				return fmt.Errorf("billing: read the counters: %w", err)
 			}
 		}
 		return nil
-	}); err != nil {
-		return nil, nil, nil, err
+	})
+	if err != nil {
+		return nil, err
 	}
+	return usage, nil
+}
 
-	type pending struct {
-		at     int
-		params InsertReservationParams
-		quote  Reservation
-	}
-	reserved := balance.Reserved
+// quotedReservation is a request of the batch whose quote passed, with the row its reservation writes.
+type quotedReservation struct {
+	at     int
+	params InsertReservationParams
+	quote  Reservation
+}
+
+// quoteBatch quotes the requests in order. Each quote sees the amounts the earlier quoted requests add to the balance's
+// reserved total and to their workspace's and key's counters, so the batch cannot reserve more than the account may
+// hold. A refused request gets its error in errs and adds nothing.
+func (b *Billing) quoteBatch(reqs []ReserveRequest, src batchSources, usage []ReadUsageRow, errs []error) []quotedReservation {
+	reserved := src.balance.Reserved
 	workspaceUsed, keyUsed := map[uuid.UUID]int64{}, map[uuid.UUID]int64{}
-	quoted := make([]pending, 0, len(reqs))
+	quoted := make([]quotedReservation, 0, len(reqs))
 	for i, r := range reqs {
 		a := r.Admitted
-		q, locked, err := fillFallbacks(r.Quotables, found, bodies)
-		if err != nil {
-			errs[i] = err
-			continue
-		}
-		bal := balance
+		bal := src.balance
 		bal.Reserved = reserved
 		avail := a.available(bal,
 			addClamp(usage[i].WorkspaceUsed, workspaceUsed[a.Workspace]),
 			addClamp(usage[i].KeyUsed, keyUsed[a.Key]))
-		quote, err := Quote(r.Demand, q, b.config.Segments, avail)
-		if insufficient, ok := errors.AsType[*Insufficient](err); ok {
-			errs[i] = a.transient(insufficient)
-			continue
-		} else if err != nil {
-			errs[i] = err
-			continue
-		}
-		p, err := b.reservationParams(a, r.ID, q, quote, locked, day)
+		q, err := b.quoteOne(r, src, avail)
 		if err != nil {
 			errs[i] = err
 			continue
 		}
-		amount := quote.Amount.CeilAmount()
+		q.at = i
+		amount := q.quote.Amount.CeilAmount()
 		reserved = addClamp(reserved, amount)
 		workspaceUsed[a.Workspace] = addClamp(workspaceUsed[a.Workspace], amount)
 		keyUsed[a.Key] = addClamp(keyUsed[a.Key], amount)
-		quoted = append(quoted, pending{at: i, params: p, quote: quote})
+		quoted = append(quoted, q)
 	}
+	return quoted
+}
 
-	if len(quoted) > 0 {
-		statements := make([]pg.Statement, len(quoted))
-		for i, p := range quoted {
-			statements[i] = pg.Statement{SQL: insertReservation, Args: insertReservationArgs(p.params)}
-		}
-		if err := tx.Batch(ctx, statements, func(batch pg.BatchResults) error {
-			for range statements {
-				if _, err := batch.Exec(); err != nil {
-					return fmt.Errorf("billing: write the reservation: %w", err)
-				}
-			}
-			return nil
-		}); err != nil {
-			return nil, nil, nil, err
-		}
-		for _, p := range quoted {
-			a := reqs[p.at].Admitted
-			holds[p.at] = &Hold{Reservation: p.quote, id: reqs[p.at].ID, admitted: a, workspaceWindow: day, keyWindow: day}
-			kept[p.at] = p.quote.Kept
-		}
+func (b *Billing) quoteOne(r ReserveRequest, src batchSources, avail []Available) (quotedReservation, error) {
+	q, locked, err := fillFallbacks(r.Quotables, src.found, src.bodies)
+	if err != nil {
+		return quotedReservation{}, err
 	}
-	return holds, kept, errs, nil
+	quote, err := Quote(r.Demand, q, b.config.Segments, avail)
+	if insufficient, ok := errors.AsType[*Insufficient](err); ok {
+		return quotedReservation{}, r.Admitted.transient(insufficient)
+	} else if err != nil {
+		return quotedReservation{}, err
+	}
+	p, err := b.reservationParams(r.Admitted, r.ID, q, quote, locked, src.day)
+	if err != nil {
+		return quotedReservation{}, err
+	}
+	return quotedReservation{params: p, quote: quote}, nil
+}
+
+// insertBatch writes every quoted reservation in one pipelined round trip.
+func insertBatch(ctx context.Context, tx pg.Tx, quoted []quotedReservation) error {
+	if len(quoted) == 0 {
+		return nil
+	}
+	statements := make([]pg.Statement, len(quoted))
+	for i, p := range quoted {
+		statements[i] = pg.Statement{SQL: insertReservation, Args: insertReservationArgs(p.params)}
+	}
+	return tx.Batch(ctx, statements, func(batch pg.BatchResults) error {
+		for range statements {
+			if _, err := batch.Exec(); err != nil {
+				return fmt.Errorf("billing: write the reservation: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // insertReservationArgs passes InsertReservation's parameters in the order its generated function does. The insert is

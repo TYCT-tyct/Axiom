@@ -543,7 +543,7 @@ func (l *fakeLedger) SettleIn(ctx context.Context, _ pg.Tx, _ *billing.Hold, o b
 
 // RunBatch is the fake's one transaction: the works never touch the database, so a zero transaction is enough. A
 // work's error carries its index as the real batch's does, so the caller can retry the other works.
-func (l *fakeLedger) RunBatch(_ context.Context, _ pg.Scope, works []func(pg.Tx) error) error {
+func (*fakeLedger) RunBatch(_ context.Context, _ pg.Scope, works []func(pg.Tx) error) error {
 	for i, work := range works {
 		if err := work(pg.Tx{}); err != nil {
 			return &billing.BatchWorkError{Index: i, Err: err}

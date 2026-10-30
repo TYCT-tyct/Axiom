@@ -2,6 +2,7 @@ package billing
 
 import (
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"slices"
 	"sync"
@@ -27,16 +28,22 @@ func (b *bank) reserveMany(a Admitted, amounts []int64) ([]*Hold, []error, error
 	return holds, errs, err
 }
 
+// randomAmounts is n reservation amounts from 1 to 100.
+func randomAmounts(r *rand.Rand, n int) []int64 {
+	amounts := make([]int64, n)
+	for i := range amounts {
+		amounts[i] = r.Int64N(100) + 1
+	}
+	return amounts
+}
+
 // TestReserveManyIsTheSerialOrder: a batch admits exactly what the same requests would one at a time in the same
 // order, refusal for refusal, because each quote sees the amounts the earlier ones would reserve.
 func TestReserveManyIsTheSerialOrder(t *testing.T) {
 	t.Parallel()
-	r := rand.New(rand.NewPCG(1, 2))
+	r := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // G404: test data
 	for trial := range 3 {
-		amounts := make([]int64, 20)
-		for i := range amounts {
-			amounts[i] = r.Int64N(100) + 1
-		}
+		amounts := randomAmounts(r, 20)
 		batch := newBank(t, 1000, -200, Config{})
 		holds, errs, err := batch.reserveMany(batch.admitted, amounts)
 		if err != nil {
@@ -45,25 +52,30 @@ func TestReserveManyIsTheSerialOrder(t *testing.T) {
 		serial := newBank(t, 1000, -200, Config{})
 		for i, amount := range amounts {
 			h, err := serial.reserve(serial.admitted, amount)
-			switch {
-			case err != nil && errs[i] == nil:
-				t.Fatalf("trial %d request %d: the batch admitted %d, the serial order refused it: %v", trial, i, amount, err)
-			case err == nil && errs[i] != nil:
-				t.Fatalf("trial %d request %d: the batch refused %d (%v), the serial order admitted it", trial, i, amount, errs[i])
-			case err != nil:
-				var batched, single *Insufficient
-				if !errors.As(errs[i], &batched) || !errors.As(err, &single) || batched.Source != single.Source {
-					t.Fatalf("trial %d request %d: batch refused %v, serial refused %v", trial, i, errs[i], err)
-				}
-			default:
-				if holds[i] == nil || holds[i].Reservation.Amount.CeilAmount() != h.Reservation.Amount.CeilAmount() ||
-					!slices.Equal(holds[i].Reservation.Kept, h.Reservation.Kept) {
-					t.Fatalf("trial %d request %d: batch %+v, serial %+v", trial, i, holds[i], h)
-				}
+			if msg := sameOutcome(holds[i], errs[i], h, err); msg != "" {
+				t.Fatalf("trial %d request %d (%d): %s", trial, i, amount, msg)
 			}
 		}
 		batch.consistent()
 	}
+}
+
+// sameOutcome says how a batch's outcome for one request differs from the serial order's, or "" if it does not.
+func sameOutcome(batched *Hold, batchErr error, serial *Hold, serialErr error) string {
+	switch {
+	case serialErr != nil && batchErr == nil:
+		return "the batch admitted it, the serial order refused it: " + serialErr.Error()
+	case serialErr == nil && batchErr != nil:
+		return "the batch refused it (" + batchErr.Error() + "), the serial order admitted it"
+	case serialErr != nil:
+		var b, s *Insufficient
+		if !errors.As(batchErr, &b) || !errors.As(serialErr, &s) || b.Source != s.Source {
+			return "batch refused " + batchErr.Error() + ", serial refused " + serialErr.Error()
+		}
+	case batched == nil || batched.Amount.CeilAmount() != serial.Amount.CeilAmount() || !slices.Equal(batched.Kept, serial.Kept):
+		return fmt.Sprintf("batch %+v, serial %+v", batched, serial)
+	}
+	return ""
 }
 
 // TestReserveManyStorm: several batches reserve at once; the account never passes its floor, and every refusal was for
@@ -72,15 +84,13 @@ func TestReserveManyStorm(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 1000, -200, Config{})
 	const capacity = 1200
+	r := rand.New(rand.NewPCG(3, 4)) //nolint:gosec // G404: test data
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var total int64
 	var refused []int64
 	for range 4 {
-		amounts := make([]int64, 10)
-		for i := range amounts {
-			amounts[i] = rand.Int64N(100) + 1 //nolint:gosec // test data
-		}
+		amounts := randomAmounts(r, 10)
 		wg.Go(func() {
 			holds, errs, err := b.reserveMany(b.admitted, amounts)
 			if err != nil {
@@ -94,7 +104,7 @@ func TestReserveManyStorm(t *testing.T) {
 					refused = append(refused, n)
 					continue
 				}
-				total += holds[i].Reservation.Amount.CeilAmount()
+				total += holds[i].Amount.CeilAmount()
 			}
 		})
 	}
