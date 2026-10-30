@@ -73,7 +73,7 @@ OpenRouter 的页面构成（openrouter.ai 页脚与 llms.txt，OpenRouter 文�
 | 财务 | 账本查询；余额对账；供应商成本对账差额 | 第一版 | [账本](domains/billing.md#账本) |
 | 路由 | 平台预设；路由参数（粘性有效期、重试预算、排队等待） | 第一版 | [路由](domains/routing.md) |
 | 运营 | 审批中心；可回放的审计日志（精确筛选、详情与调用关联）；agent 状态；控制面（需两步验证）：审批策略与额度、审批 AI、agent 令牌的权限范围、模型来源与预算、通知接收人、紧急停止与恢复 | M1（审计日志；其余第一版） | [控制面](domains/operations.md#控制面只有负责人能改的设置)；[紧急停止](domains/operations.md#紧急停止) |
-| 监控 | 全平台调用记录（含成本，按尝试展示路由）；告警规则与历史；通知渠道与测试；对话内容的分类器（规则、在控制面登记的模型、预算与抽样、重新打标签） | M1（调用记录与 trace；其余第一版） | [监控与告警](domains/observability.md#监控与告警)；[分类：两层标签](domains/observability.md#分类两层标签) |
+| 监控 | 全平台调用记录（含请求 ID 与成本，按尝试展示路由）；告警规则与历史；通知渠道与测试；对话内容的分类器（规则、在控制面登记的模型、预算与抽样、重新打标签） | M1（调用记录与 trace；其余第一版） | [监控与告警](domains/observability.md#监控与告警)；[分类：两层标签](domains/observability.md#分类两层标签) |
 | 系统 | 站点配置（名称、品牌与主题、域名、登录方式与第三方应用、注册策略、key 前缀；SMTP 邮件与测试；计费政策：额度的默认有效期、退款政策、余额底线的默认值）；节点与出口；存储与数据留存；受控导出；安全策略（限流、注册防刷、赠送条件、盗用检测、泄露的 key）；管理员授权 | 第一版 | [站点](domains/accounts.md#站点)；[额度批次](domains/billing.md#额度批次)；[免单规则](domains/billing.md#免单规则)；[存储](domains/observability.md#存储)；[防滥用](security.md#防滥用) |
 
 **OpenRouter 有、第一版不做**
