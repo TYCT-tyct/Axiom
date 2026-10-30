@@ -30,7 +30,9 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 	})
 	var health httpserver.Health
 	health.SetReady(true)
-	servers := node("127.0.0.1:0", slow, "127.0.0.1:0", slow, "127.0.0.1:0", &health, logger, httpserver.Telemetry{})
+	servers := node(nodeSettings{
+		roles: nodeRoles{roleCore}, publicAddr: "127.0.0.1:0", adminAddr: "127.0.0.1:0", probesAddr: "127.0.0.1:0",
+	}, slow, slow, &health, logger, httpserver.Telemetry{})
 	if err := listen(t.Context(), servers); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +96,7 @@ func TestShutdownEndsRequestsPastTheLimit(t *testing.T) {
 		})
 	})
 	var health httpserver.Health
-	servers := []*listening{{"AXIOM_PUBLIC_ADDR", "127.0.0.1:0", httpserver.New(stuck, slog.New(slog.DiscardHandler)), nil}}
+	servers := []*listening{{"AXIOM_PUBLIC_ADDR", "127.0.0.1:0", httpserver.New(stuck, slog.New(slog.DiscardHandler)), nil, false}}
 	if err := listen(t.Context(), servers); err != nil {
 		t.Fatal(err)
 	}
@@ -144,8 +146,8 @@ func TestListenReleasesWhatItBound(t *testing.T) {
 	})
 	free, logger := freePort(t), slog.New(slog.DiscardHandler)
 	servers := []*listening{
-		{"AXIOM_PUBLIC_ADDR", free, httpserver.New(http.NotFoundHandler(), logger), nil},
-		{"AXIOM_PROBES_ADDR", taken.Addr().String(), httpserver.New(http.NotFoundHandler(), logger), nil},
+		{"AXIOM_PUBLIC_ADDR", free, httpserver.New(http.NotFoundHandler(), logger), nil, false},
+		{"AXIOM_PROBES_ADDR", taken.Addr().String(), httpserver.New(http.NotFoundHandler(), logger), nil, false},
 	}
 	if err := listen(t.Context(), servers); err == nil {
 		t.Fatal("listen succeeded on a taken address")

@@ -192,7 +192,15 @@ services:
     stop_grace_period: 170s # listeners 30s + calls 20s + health probes/cost flush 65s + queue/recorder 30s + cache 10s, with margin
     environment:
       AXIOM_DATABASE_URL: postgres://axiom_app:${AXIOM_APP_PASSWORD}@postgres/axiom?sslmode=disable
+      AXIOM_NODE_ROLES: ${AXIOM_NODE_ROLES:-core}
       AXIOM_ADMIN_ADDR: ":8082" # the admin app; the program's own default is loopback inside the container, unreachable
+      # This file publishes the admin port on the host's loopback only, so the socket bind is the boundary here. The
+      # program's own default is loopback sources; a listener on every address needs an explicit list (it fails at start
+      # otherwise), and the edge deployment replaces this with the operator's ranges.
+      AXIOM_ADMIN_SOURCES: ${AXIOM_ADMIN_SOURCES:-0.0.0.0/0,::/0}
+      AXIOM_NODE_ADDR: ${AXIOM_NODE_ADDR-}
+      AXIOM_CORE_URL: ${AXIOM_CORE_URL-}
+      AXIOM_NODE_TLS_DIR: ${AXIOM_NODE_TLS_DIR-}
       AXIOM_MASTER_KEY_FILE: /keys/master
       AXIOM_KEY_HASH_FILE: /keys/hash
       AXIOM_IDENTITY_KEY_FILE: /keys/identity
