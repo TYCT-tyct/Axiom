@@ -182,12 +182,13 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
 		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Models: r.models, Proxies: o.proxies, KV: o.cache,
+		Outstanding: NewOutstanding(),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	r.server = httptest.NewServer(httpserver.Public(r.handler, slog.New(slog.NewTextHandler(logWriter{t}, nil)), cmp.Or(o.body, time.Minute)))
 	t.Cleanup(r.server.Close)
-	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context())) })
+	t.Cleanup(func() { r.handler.Outstanding.Drain(context.WithoutCancel(t.Context()), time.Minute) })
 	return r
 }
 
