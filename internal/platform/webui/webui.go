@@ -52,7 +52,7 @@ func New(root fs.FS) (*Frontend, error) {
 		if err != nil {
 			return nil, err
 		}
-		if *a.into, err = loadApp(sub, a.mount); err != nil {
+		if *a.into, err = loadApp(sub, a.dir, a.mount); err != nil {
 			return nil, fmt.Errorf("%s: %w", a.dir, err)
 		}
 	}
@@ -92,8 +92,10 @@ func (f *Frontend) Secured(next http.Handler) http.Handler {
 
 // app is one app's files, read into memory once: a few MB, against a map lookup per request.
 type app struct {
-	mount string // where the app is mounted, without the trailing slash; empty for the root
-	files map[string]*file
+	dir, mount string // dir is the app's name in the build; mount is where it is served, empty for the root
+	files      map[string]*file
+	overlay    string      // the directory other builds' content-hashed files are kept in; empty when there is none
+	other      *assetCache // files read from the overlay, once each
 }
 
 // apiPrefixes are the path prefixes of the programs' APIs. What reaches an app under them is a request no API route
@@ -119,6 +121,13 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		name = entry
 	}
 	f, found := a.files[name]
+	if !found {
+		var err error
+		if f, found, err = a.otherBuild(name); err != nil {
+			reject(w, http.StatusInternalServerError)
+			return
+		}
+	}
 	if !found && wantsPage(r, name) {
 		f, found = a.files[entry]
 	}
@@ -153,7 +162,7 @@ const (
 	cacheNever   = "no-store"
 )
 
-func loadApp(files fs.FS, mount string) (*app, error) {
+func loadApp(files fs.FS, dir, mount string) (*app, error) {
 	contents := map[string][]byte{}
 	err := fs.WalkDir(files, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -168,7 +177,7 @@ func loadApp(files fs.FS, mount string) (*app, error) {
 	if _, ok := contents[entry]; !ok {
 		return nil, fmt.Errorf("no %s: run `just web-embed`", entry)
 	}
-	a := &app{mount: mount, files: map[string]*file{}}
+	a := &app{dir: dir, mount: mount, files: map[string]*file{}}
 	for name, body := range contents {
 		if isVariant(name, contents) {
 			continue
@@ -245,6 +254,6 @@ func (f *file) serve(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
-		_, _ = w.Write(body) //nolint:errcheck // the client went away; nothing is left to tell it
+		_, _ = w.Write(body) //nolint:errcheck,gosec // the client went away, and the body is a build file, never a page built from a request
 	}
 }

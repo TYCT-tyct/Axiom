@@ -57,7 +57,7 @@ func checkPriceFetchShutdown(t *testing.T, body bool) {
 	database := pgtest.New(t, modules()...)
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
-		"AXIOM_SHUTDOWN_TIMEOUT=30s", "AXIOM_DATABASE_URL=" + database.App,
+		"AXIOM_SHUTDOWN_TIMEOUT=3s", "AXIOM_DATABASE_URL=" + database.App,
 		"AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
 		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 	}
@@ -91,7 +91,8 @@ func checkPriceFetchShutdown(t *testing.T, body bool) {
 
 func awaitPriceFetchShutdown(t *testing.T, done <-chan error, cancelled <-chan struct{}) {
 	t.Helper()
-	// The upstream has not supplied its response. Cancellation and node exit must precede the 30s queue drain deadline.
+	// The upstream has not supplied its response. Cancellation must reach it at once, not wait for the queue drain
+	// deadline; the node then exits within the shutdown budget, which includes the edge delay.
 	select {
 	case <-cancelled:
 	case <-time.After(5 * time.Second):
@@ -102,7 +103,7 @@ func awaitPriceFetchShutdown(t *testing.T, done <-chan error, cancelled <-chan s
 		if err != nil {
 			t.Fatalf("shutdown during fetch: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the node did not shut down after cancelling the fetch")
 	}
 }

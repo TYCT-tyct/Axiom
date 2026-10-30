@@ -113,6 +113,7 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 	exec, err := NewExecutor(ExecDeps{
 		Router: r.router, Upstreams: up, Limits: r.limits, Memory: r.memory, Logger: slog.New(slog.NewTextHandler(logWriter{r.t}, nil)),
 		Ledger: ledger, Costs: costs, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
+		Outstanding: r.handler.Outstanding, // one node: the handler's requests and the executor's calls on one count
 	})
 	if err != nil {
 		r.t.Fatal(err)
@@ -120,7 +121,7 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 	r.mu.Lock()
 	r.exec = exec
 	r.mu.Unlock()
-	r.t.Cleanup(func() { exec.Drain(context.WithoutCancel(r.t.Context()), time.Minute) })
+	r.t.Cleanup(func() { exec.Outstanding.Drain(context.WithoutCancel(r.t.Context()), time.Minute) })
 	return up
 }
 
@@ -203,7 +204,7 @@ func TestAnEstimateIsNeverChargedBeyondTheReservation(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%d: %s", resp.StatusCode, body)
 	}
-	r.exec.Drain(t.Context(), time.Minute)
+	r.exec.Outstanding.Drain(t.Context(), time.Minute)
 	if n := r.count("SELECT count(*) FROM billing.reservations WHERE charged > 0"); n != 1 {
 		t.Fatalf("%d charges, want the one", n)
 	}
@@ -254,7 +255,7 @@ func TestTheLedgerBalancesWhateverHappens(t *testing.T) {
 			t.Errorf("%d:\n%s", resp.StatusCode, body)
 		}
 	}
-	r.exec.Drain(t.Context(), time.Minute) // the settlements still retrying in the background end
+	r.exec.Outstanding.Drain(t.Context(), time.Minute) // the settlements still retrying in the background end
 	r.ledgerBalanced()
 }
 
@@ -346,7 +347,7 @@ func TestAFailureIsNotChargedForModelUsageBecauseTheClientLeftAfterIt(t *testing
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	r.exec.Drain(t.Context(), time.Minute)
+	r.exec.Outstanding.Drain(t.Context(), time.Minute)
 	if n := r.count("SELECT count(*) FROM billing.reservations WHERE state = 'settled' AND waived AND charged = 0"); n != 1 {
 		t.Errorf("%d reservations settled as waived and charged nothing, want the one: the client left after the failure", n)
 	}

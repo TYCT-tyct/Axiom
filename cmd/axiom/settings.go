@@ -41,6 +41,7 @@ type nodeSettings struct {
 	completionReserve                 int
 	masterKeyFile, keyHashFile        string
 	identityKeyFile                   string
+	webAssetsDir                      string
 	hashConcurrency                   int
 	hashWait                          time.Duration
 	trustedProxies                    []netip.Prefix
@@ -102,6 +103,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	// The identity key stands in for the client's session and end-user identifiers upstream, so rotating the key
 	// hashes must not rotate it: the upstream's prompt caches are keyed by them (#205).
 	s.identityKeyFile = env.Required(identityKeyFileVar)
+	s.webAssetsDir = env.String(webAssetsDirVar, "")
 	// The node's argon2id computations at once, and how long a sign-in waits for a turn (0: the module's defaults,
 	// GOMAXPROCS and 2 seconds).
 	s.hashConcurrency = env.Int(hashConcurrencyVar, 0, 1)

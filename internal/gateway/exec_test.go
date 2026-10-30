@@ -380,7 +380,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	full := ExecDeps{
 		Router: router, Upstreams: &fakeUpstreams{}, Limits: limits, Memory: protocol.NewMemory(1), Logger: slog.New(slog.DiscardHandler),
 		Ledger: &fakeLedger{}, Costs: fakeCosts{known: true}, Alive: func() bool { return true },
-		IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
+		IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil), Outstanding: NewOutstanding(),
 	}
 	if _, err := NewExecutor(full); err != nil {
 		t.Fatal(err)
@@ -391,7 +391,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 		"logger": func(d *ExecDeps) { d.Logger = nil }, "ledger": func(d *ExecDeps) { d.Ledger = nil },
 		"costs": func(d *ExecDeps) { d.Costs = nil },
 		"alive": func(d *ExecDeps) { d.Alive = nil }, "secret": func(d *ExecDeps) { d.IdentitySecret = []byte("short") },
-		"quality": func(d *ExecDeps) { d.Quality = nil },
+		"quality": func(d *ExecDeps) { d.Quality = nil }, "outstanding": func(d *ExecDeps) { d.Outstanding = nil },
 	} {
 		d := full
 		missing(&d)
