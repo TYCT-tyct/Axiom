@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { catalogHandlers } from "./admin-catalog.ts";
-import { type AdminState, emptyState, usualState, worstState } from "./admin-data.ts";
+import { type AdminState, emptyState, type Schemas, usualState, worstState } from "./admin-data.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { supplyHandlers } from "./admin-supply.ts";
@@ -74,6 +74,35 @@ function putSettings({ body, params, state }: Ctx<"/api/admin/v1/sites/{site_id}
   return ok(state.settings);
 }
 
+function getSiteLogo({ params, state }: Ctx<"/api/admin/v1/sites/{site_id}/logo", "get">) {
+  return params.site_id === state.siteId ? ok(state.logo) : fail(404, "not_found");
+}
+
+function putSiteLogo({ body, params, state }: Ctx<"/api/admin/v1/sites/{site_id}/logo", "put">) {
+  if (params.site_id !== state.siteId) {
+    return fail(404, "not_found");
+  }
+  if (!body.logo) {
+    state.logo = {};
+    return ok(state.logo);
+  }
+  const size = Buffer.from(body.logo.data_base64, "base64").length;
+  if (size === 0 || size > 256 * 1024) {
+    return fail(400, "invalid_request");
+  }
+  const logo: Schemas["SiteLogo"] = {
+    content_type: body.logo.content_type,
+    hash: "0".repeat(64),
+    size,
+    width: 20,
+    height: 20,
+    data_url: `data:${body.logo.content_type};base64,${body.logo.data_base64}`,
+  };
+  state.logo = { logo };
+  const { data_url: _, ...shown } = logo;
+  return ok({ logo: shown });
+}
+
 function getSiteKeyLimits({ params, state }: Ctx<"/api/admin/v1/sites/{site_id}/key-limits", "get">) {
   return params.site_id === state.siteId ? ok(state.keyLimits) : fail(404, "not_found");
 }
@@ -110,6 +139,9 @@ function putAccountKeyLimits({ body, params, state }: Ctx<"/api/admin/v1/account
 
 const handlers: Handler<AdminState>[] = [
   route("get", `${base}/version`, none, ({ state }) => ok({ version: state.version })),
+  route("get", `${base}/site`, none, ({ state }) =>
+    ok({ name: "Axiom", ...(state.logo.logo?.data_url ? { logo_url: state.logo.logo.data_url } : {}) }),
+  ),
   route("post", `${base}/auth/sign-in`, none, signIn),
   route("post", `${base}/auth/mfa`, { level: "pending_mfa" }, verifyMfa),
   route("post", `${base}/auth/sign-out`, { level: "any" }, signOut),
@@ -119,6 +151,8 @@ const handlers: Handler<AdminState>[] = [
   route("post", `${base}/auth/recovery-codes`, { level: "mfa" }, regenerate),
   route("get", `${base}/sites/{site_id}/settings`, reads("sites.manage"), getSettings),
   route("put", `${base}/sites/{site_id}/settings`, changes("sites.manage"), putSettings),
+  route("get", `${base}/sites/{site_id}/logo`, reads("sites.manage"), getSiteLogo),
+  route("put", `${base}/sites/{site_id}/logo`, changes("sites.manage"), putSiteLogo),
   route("get", `${base}/sites/{site_id}/key-limits`, reads("sites.manage"), getSiteKeyLimits),
   route("put", `${base}/sites/{site_id}/key-limits`, changes("sites.manage"), putSiteKeyLimits),
   route("get", `${base}/tiers`, reads("users.view"), ({ state }) => ok({ data: state.tiers })),

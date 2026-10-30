@@ -16,6 +16,14 @@ function nextCursor(page: { next_cursor: string | null }) {
 
 const firstPage = undefined as string | undefined;
 
+// The site's public brand, for the sign-in pages and the shell. It is under accountKey so an admin change refreshes it:
+// setting the logo updates the shell without a reload.
+export const adminSiteQuery = queryOptions({
+  queryKey: [accountKey, "admin-site"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/site`, { signal })),
+  staleTime: 30_000,
+});
+
 export const tiersQuery = queryOptions({
   queryKey: [accountKey, "tiers"],
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/tiers`, { signal })),
@@ -159,6 +167,13 @@ export const siteRegistrationQuery = (siteId: AdminSchemas["SiteId"]) =>
     queryKey: [accountKey, "site-registration", siteId],
     queryFn: ({ signal }) =>
       unwrap(adminApi.GET(`${base}/sites/{site_id}/registration`, { params: { path: { site_id: siteId } }, signal })),
+  });
+
+export const siteLogoQuery = (siteId: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-logo", siteId],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/logo`, { params: { path: { site_id: siteId } }, signal })),
   });
 
 export const siteSettingsQuery = (siteId: AdminSchemas["SiteId"]) =>

@@ -114,6 +114,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/site": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site the admin host belongs to
+         * @description The name and logo of the site whose admin domain this request reached, so the admin app shows the site's brand before it has a session. The logo's URL is on this admin host and carries the bytes' SHA-256; it stays available for a year and an older logo keeps working under its own hash. No session: these are the same public facts the console's `getSite` gives, and the admin host already names the site.
+         */
+        get: operations["getAdminSite"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/site/logo/{hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site's logo for the admin app
+         * @description The bytes at `getAdminSite.logo_url`. The hash names the content, so the URL never changes meaning and the answer is immutable; a hash this site never served is a 404. A page opened before the logo changed keeps its image under the old hash.
+         */
+        get: operations["getAdminSiteLogo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's logo
+         * @description The logo the site currently serves and what it is, or no logo. `data_url` carries the bytes as a data URL so the settings page can preview them under the content security policy (`img-src 'self' data:`); the pages fetch the logo from `getSite` on the console domain or `getAdminSite` on the admin domain, not from this operation.
+         */
+        get: operations["getSiteLogoAdmin"];
+        /**
+         * Replace or clear a site's logo
+         * @description Replaces the site's logo with `logo`, or clears it when `logo` is left out. An SVG is sanitised before it is stored: scripts, event handlers, styles, images, links and external references are dropped, and the result must still be one well-formed SVG. A PNG or WebP must be 1 to 1024 pixels on each side, and every format is at most 256 KiB. The response describes the new logo; the change is audited, and this node serves it at once while the others follow within their site reload interval.
+         */
+        put: operations["updateSiteLogo"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/sites/{site_id}/system-settings/payments": {
         parameters: {
             query?: never;
@@ -1878,6 +1944,11 @@ export interface components {
         };
         /** @description An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text. */
         Uuid: string;
+        AdminSite: {
+            name: string;
+            /** @description Path on this admin host to the site's logo; absent when there is none. A node of the release before this field leaves it out, and the app falls back to the name. */
+            logo_url?: string;
+        };
         /** @description A site's ID (TypeID). */
         SiteId: string;
         /** @description A tier's ID (TypeID). */
@@ -1905,6 +1976,37 @@ export interface components {
             admin_idle_timeout_seconds?: number;
             admin_max_age_seconds?: number;
             new_key_daily_limit?: components["schemas"]["Money"];
+        };
+        SiteLogoView: {
+            /** @description The logo in force; absent when the site has none. */
+            logo?: components["schemas"]["SiteLogo"];
+        };
+        SiteLogo: {
+            /** @enum {string} */
+            content_type: "image/svg+xml" | "image/png" | "image/webp";
+            /** @description SHA-256 of the bytes served, which the logo's public URL carries. */
+            hash: string;
+            /** @description Bytes served. */
+            size: number;
+            /** @description Pixels; 0 for an SVG with no intrinsic size. */
+            width: number;
+            height: number;
+            /** @description The bytes as a data URL, for the settings page's preview only; the change response leaves it out. Absent on a node of the release before this field. */
+            data_url?: string;
+        };
+        SiteLogoUpdate: {
+            reason: string;
+            /** @description The new logo; left out clears the site's logo. */
+            logo?: components["schemas"]["SiteLogoUpload"];
+        };
+        SiteLogoUpload: {
+            /** @enum {string} */
+            content_type: "image/svg+xml" | "image/png" | "image/webp";
+            /**
+             * Format: byte
+             * @description The file, at most 256 KiB before base64.
+             */
+            data_base64: string;
         };
         SiteSettingsView: {
             settings: components["schemas"]["SiteSettings"];
@@ -2912,6 +3014,117 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getAdminSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's brand. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSite"];
+                };
+            };
+            default: components["responses"]["Failure"];
+        };
+    };
+    getAdminSiteLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The logo. */
+            200: {
+                headers: {
+                    /** @description Long-lived and immutable, because the hash in the URL names the bytes. */
+                    "Cache-Control": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/svg+xml": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSiteLogoAdmin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's current logo, or none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteLogoView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteLogo: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiteLogoUpdate"];
+            };
+        };
+        responses: {
+            /** @description The logo now in force. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteLogoView"];
                 };
             };
             400: components["responses"]["BadRequest"];

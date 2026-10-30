@@ -4,8 +4,8 @@ import { useTranslation } from "react-i18next";
 import { SignOutError } from "../parts";
 import { useSignOut } from "../session";
 
-// What names the site on a page of the app: its name and logo, which the app's site settings give (none yet: the
-// default). The admin is the platform's and has no site to name.
+// What names the site on a page of the app: its name and logo, which the app's site settings give (none: the default).
+// The console reads them from getSite and the admin from its public getAdminSite, both before a session exists.
 export type Brand = { name?: string; logo_url?: string } | undefined;
 
 // AuthFrame is the page around a sign-in, two-step or registration form: the site's name and logo above, one form

@@ -572,6 +572,39 @@ paths:
               schema: {$ref: "#/components/schemas/Site"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/site/logo/{hash}:
+    get:
+      operationId: getSiteLogo
+      tags: [Session]
+      summary: The site's logo
+      description: >-
+        The logo the site configures, at the URL `getSite` gives while the site has one. The URL carries the SHA-256 of
+        the bytes served, so a logo never changes under its URL and a browser may keep it for a year. A hash the site
+        never served is a 404; an earlier logo stays available under its own hash, so a page opened before the logo
+        changed keeps its image.
+      security: []
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[0-9a-f]{64}$'}
+      responses:
+        "200":
+          description: The logo.
+          headers:
+            Cache-Control:
+              required: true
+              description: Long-lived and immutable, because the hash in the URL names the bytes.
+              schema: {type: string}
+          content:
+            image/svg+xml:
+              schema: {type: string, format: binary}
+            image/png:
+              schema: {type: string, format: binary}
+            image/webp:
+              schema: {type: string, format: binary}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/register:
     post:
       operationId: register
@@ -1678,7 +1711,11 @@ components:
         id: {$ref: "#/components/schemas/SiteId"}
         name: {type: string}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD, description: "The site's accounting currency, the one of every `Money` its API shows. It never changes."}
-        logo_url: {type: string, description: "Absent when the site has no logo."}
+        logo_url:
+          type: string
+          description: >-
+            The path of the site's logo on this host. Absent when the site has no logo. It is long-cached, because its
+            hash names the bytes; a page shows the site's name when the image does not load.
         key_prefix: {type: string, example: sk-ax-v1-, description: "What the site's API keys start with."}
         email_verification:
           type: boolean

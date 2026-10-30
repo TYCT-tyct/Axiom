@@ -78,7 +78,7 @@ func (q *Queries) ListSiteDomains(ctx context.Context, db DBTX) ([]ListSiteDomai
 }
 
 const listSites = `-- name: ListSites :many
-SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.currency, s.default_tier_id, t.new_key_daily_limit,
+SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.currency, s.default_tier_id, s.logo_hash, t.new_key_daily_limit,
     coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint AS console_idle_seconds,
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
@@ -99,6 +99,7 @@ type ListSitesRow struct {
 	Registration               string
 	Currency                   string
 	DefaultTierID              uuid.UUID
+	LogoHash                   []byte
 	NewKeyDailyLimit           *int64
 	ConsoleIdleSeconds         int64
 	ConsoleMaxAgeSeconds       int64
@@ -139,6 +140,7 @@ func (q *Queries) ListSites(ctx context.Context, db DBTX) ([]ListSitesRow, error
 			&i.Registration,
 			&i.Currency,
 			&i.DefaultTierID,
+			&i.LogoHash,
 			&i.NewKeyDailyLimit,
 			&i.ConsoleIdleSeconds,
 			&i.ConsoleMaxAgeSeconds,
