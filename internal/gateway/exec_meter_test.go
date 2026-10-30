@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -354,6 +355,48 @@ func TestATruncatedStreamConsumesNoMoreThanItsAllowance(t *testing.T) {
 		}
 		if a := h.ended().outcome.Attempts; len(a) != 1 || a[0].Result != billing.Committed || a[0].Finish != billing.FinishTruncated {
 			t.Errorf("attempts %+v", a)
+		}
+	})
+}
+
+// toolStart is a Messages event that begins a tool call with no arguments, the shortest a call can be.
+func toolStart(id string) string {
+	return `event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"` + id + `","name":"f","input":{}}}
+
+`
+}
+
+// TestToolCallsExtendTheReservation: the protocol counts 30 tool calls the upstream reported no output for, and the
+// meter must see them before the segment runs out; the settlement then charges the framework within an approved
+// segment instead of leaving the difference to the platform. Empty arguments keep the byte bound at zero, so only the
+// count can ask for the extension.
+func TestToolCallsExtendTheReservation(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, segmented(options{mutate: func(c *Call) {
+			c.Plan.Entries[0].Target.Model = "claude-sonnet-4-5"
+		}}))
+		beats := []beat{h.feed(evStart)}
+		for i := range 30 {
+			beats = append(beats, beat{data: toolStart(fmt.Sprintf("toolu_%d", i))})
+		}
+		beats = append(beats, beat{hangup: true})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(beats...)}
+		h.run()
+		h.mu.Lock()
+		asked := len(h.extensions)
+		first := h.extensions[0]
+		h.mu.Unlock()
+		if asked == 0 {
+			t.Fatal("no extension: the tool-call framework was not metered")
+		}
+		if first.Target.Cmp(h.call.Hold.Amount) <= 0 {
+			t.Errorf("the extension target %v does not pass the reservation %v; a balance with nothing to spare would refuse it",
+				first.Target, h.call.Hold.Amount)
+		}
+		a := h.ended().outcome.Attempts[0]
+		if len(a.Segments) == 0 || a.Segments[0].Usage.OutputTotal() != 1000 {
+			t.Fatalf("the settlement charged %+v, want the output cap 1000", a.Segments)
 		}
 	})
 }

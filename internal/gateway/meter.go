@@ -31,6 +31,7 @@ func (a *attempt) metered(ctx context.Context, p protocol.Progress, done bool, i
 		}
 		step := a.meter.Observe(billing.Progress{
 			ContentBytes: p.ContentBytes, PartialBytes: p.PartialBytes, Searches: p.Searches,
+			ToolCalls: p.ToolCalls, ToolCallTokens: a.toolCallTokens,
 			Reported: p.Reported.Usage, Final: p.Final,
 		})
 		if step.Extend {
