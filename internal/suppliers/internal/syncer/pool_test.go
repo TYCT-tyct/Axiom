@@ -110,6 +110,21 @@ func TestATruncatedDirectoryKeepsThePreviousReading(t *testing.T) {
 	}
 }
 
+// TestAFailedOnlyGroupIsLowWithoutAWindow: the adapter reports a group whose only account failed with no headroom; the
+// engine still calls it low, and leaves its capacity unknown. That is the shape the projection stores.
+func TestAFailedOnlyGroupIsLowWithoutAWindow(t *testing.T) {
+	t.Parallel()
+	m := &poolSupplier{supplier: healthy(), pool: func(context.Context) (adapter.PoolReading, error) {
+		return adapter.PoolReading{Groups: []adapter.GroupCapacity{{GroupRef: "1", Accounts: 1, Failed: 1}}, Complete: true}, nil
+	}}
+	e, st, _ := engine(m)
+	round(t, e)
+	p := st.state.Pool
+	if len(p) != 1 || p[0].Capacity != nil || p[0].Headroom != nil || !p[0].Low {
+		t.Fatalf("pool state %+v, want one low group with no capacity", p)
+	}
+}
+
 // TestPoolReadFailureIsTheTaskFailure: a pool that cannot be read fails the catalog task, with the round's usual backoff,
 // rather than leaving a stale reading looking current.
 func TestPoolReadFailureIsTheTaskFailure(t *testing.T) {
