@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -50,5 +51,25 @@ func waitForRefundHistory(w *world) {
 	for w.count(w.p.platform, `SELECT count(*) FROM pg_locks WHERE NOT granted AND relation='billing.entries'::regclass
         AND database=(SELECT oid FROM pg_database WHERE datname=current_database())`) == 0 {
 		runtime.Gosched()
+	}
+}
+
+// A reject prepares the ledger before opening the decision transaction. If it instead prepared while holding the
+// transaction's only ordinary connection, the prepare would wait for that connection until the request deadline.
+func TestRejectRefundOnOneOrdinaryConnection(t *testing.T) {
+	w, o := refundWorldWithPool(t, fakePlugin{caps: CapRefund}, "&pool_max_conns=4", pg.WithCompletionReserve(3))
+	r := w.mustRefund(o, o.Credits, "reject-one-connection")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	got, err := w.p.RejectRefund(ctx, siteScope(w.siteA), r.ID, uuid.NewV7(), "declined")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "failed" {
+		t.Fatalf("rejected refund is %q, want failed", got.State)
+	}
+	if frozen := w.count(w.p.platform, "SELECT frozen FROM billing.balances WHERE account_id=$1", w.account); frozen != 0 {
+		t.Fatalf("rejected refund left %d credits frozen", frozen)
 	}
 }

@@ -8,12 +8,26 @@ import (
 	"sync/atomic"
 	"testing"
 	"uuid"
+
+	"axiom/internal/platform/pg"
 )
 
 func refundWorld(t *testing.T, plugin fakePlugin) (*world, Order) {
 	t.Helper()
 	plugin.create = goodCheckout
-	w := newTestWorld(t, plugin)
+	return refundWorldOn(t, newTestWorld(t, plugin))
+}
+
+// refundWorldWithPool is refundWorld on a world built with a particular pool and suffix.
+func refundWorldWithPool(t *testing.T, plugin fakePlugin, suffix string, opts ...pg.Option) (*world, Order) {
+	t.Helper()
+	plugin.create = goodCheckout
+	return refundWorldOn(t, newTestWorldWithPool(t, plugin, suffix, opts...))
+}
+
+// refundWorldOn prepares a paid order in a world the caller built with a particular pool.
+func refundWorldOn(t *testing.T, w *world) (*world, Order) {
+	t.Helper()
 	m := w.waiting()
 	w.exec(fmt.Sprintf("UPDATE payments.merchants SET refund_enabled = true, user_refund = true WHERE id = '%s'", m.ID))
 	o := w.mustPlace(10*yuan, "paid")
@@ -38,7 +52,7 @@ func (w *world) mustRefund(o Order, amount int64, key string) Refund {
 
 func (w *world) approve(r Refund) Refund {
 	w.t.Helper()
-	result, err := w.p.ApproveRefund(w.t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7())
+	result, err := w.p.ApproveRefund(w.t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7(), "approved")
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -85,10 +99,10 @@ func TestRefundRequiresSeparateApprovalAndScopedAccess(t *testing.T) {
 	if _, err := w.p.GetRefund(t.Context(), w.accountB(), r.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
 	}
-	if _, err := w.p.ApproveRefund(t.Context(), w.accountA(), r.ID, uuid.NewV7()); !errors.Is(err, ErrRefundForbidden) {
+	if _, err := w.p.ApproveRefund(t.Context(), w.accountA(), r.ID, uuid.NewV7(), "approved"); !errors.Is(err, ErrRefundForbidden) {
 		t.Fatal(err)
 	}
-	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, w.user); !errors.Is(err, ErrSecondPerson) {
+	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, w.user, "approved"); !errors.Is(err, ErrSecondPerson) {
 		t.Fatal(err)
 	}
 	w.dueRefunds()

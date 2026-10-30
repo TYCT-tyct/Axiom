@@ -44,8 +44,14 @@ func newWorld(t *testing.T) *world {
 // asked or to have it answer in a way of their choosing.
 func newTestWorld(t *testing.T, plugin Plugin) *world {
 	t.Helper()
+	return newTestWorldWithPool(t, plugin, "")
+}
+
+// newTestWorldWithPool is newTestWorld with pool settings, for the tests that need to exhaust the ordinary pool.
+func newTestWorldWithPool(t *testing.T, plugin Plugin, suffix string, opts ...pg.Option) *world {
+	t.Helper()
 	d := pgtest.New(t, billing.Migrations(), Migrations())
-	db, err := pg.Open(t.Context(), d.App)
+	db, err := pg.Open(t.Context(), d.App+suffix, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

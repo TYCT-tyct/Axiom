@@ -290,6 +290,82 @@ func (q *Queries) ListRefunds(ctx context.Context, db DBTX, orderIds []uuid.UUID
 	return items, nil
 }
 
+const listSiteRefunds = `-- name: ListSiteRefunds :many
+SELECT r.id, r.order_id, r.site_id, r.account_id, r.state, r.via, r.credits, r.requested_credits, r.amount, r.with_fee, r.refund_key, r.manual_only, r.provider_ref, r.reason, r.requested_by, r.approved_by, r.idem_key, r.attempts, r.sent_at, r.next_query_at, r.created_at, r.finished_at, o.pay_currency AS pay_currency
+FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
+WHERE r.site_id = $1
+    AND ($2::text IS NULL OR r.state = $2::text)
+    AND (r.created_at, r.id) < ($3::timestamptz, $4::uuid)
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT $5
+`
+
+type ListSiteRefundsParams struct {
+	SiteID  uuid.UUID
+	State   *string
+	AfterAt time.Time
+	AfterID uuid.UUID
+	Max     int32
+}
+
+type ListSiteRefundsRow struct {
+	PaymentsRefund PaymentsRefund
+	PayCurrency    string
+}
+
+// One site's refunds for its operator, newest first. A state left out does not narrow; the cursor is
+// (created_at, id). Whether a frozen refund was approved is in approved_by, which the page reads as a second person's
+// signature.
+func (q *Queries) ListSiteRefunds(ctx context.Context, db DBTX, arg ListSiteRefundsParams) ([]ListSiteRefundsRow, error) {
+	rows, err := db.Query(ctx, listSiteRefunds,
+		arg.SiteID,
+		arg.State,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSiteRefundsRow
+	for rows.Next() {
+		var i ListSiteRefundsRow
+		if err := rows.Scan(
+			&i.PaymentsRefund.ID,
+			&i.PaymentsRefund.OrderID,
+			&i.PaymentsRefund.SiteID,
+			&i.PaymentsRefund.AccountID,
+			&i.PaymentsRefund.State,
+			&i.PaymentsRefund.Via,
+			&i.PaymentsRefund.Credits,
+			&i.PaymentsRefund.RequestedCredits,
+			&i.PaymentsRefund.Amount,
+			&i.PaymentsRefund.WithFee,
+			&i.PaymentsRefund.RefundKey,
+			&i.PaymentsRefund.ManualOnly,
+			&i.PaymentsRefund.ProviderRef,
+			&i.PaymentsRefund.Reason,
+			&i.PaymentsRefund.RequestedBy,
+			&i.PaymentsRefund.ApprovedBy,
+			&i.PaymentsRefund.IdemKey,
+			&i.PaymentsRefund.Attempts,
+			&i.PaymentsRefund.SentAt,
+			&i.PaymentsRefund.NextQueryAt,
+			&i.PaymentsRefund.CreatedAt,
+			&i.PaymentsRefund.FinishedAt,
+			&i.PayCurrency,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockRefund = `-- name: LockRefund :one
 SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at FROM payments.refunds WHERE id = $1 AND order_id = $2 FOR UPDATE
 `
