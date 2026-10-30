@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"time"
 )
 
@@ -31,12 +30,9 @@ const (
 // Server is the configuration a node accepts its peers with: this node's certificate, and a client certificate signed
 // by the same authority required from every peer.
 func Server(dir string) (*tls.Config, error) {
-	cert, pool, err := load(dir)
+	cert, pool, err := load(dir, x509.ExtKeyUsageServerAuth)
 	if err != nil {
 		return nil, err
-	}
-	if !allows(cert.Leaf, x509.ExtKeyUsageServerAuth) {
-		return nil, fmt.Errorf("%s: %s is not a server certificate", Variable, CertFile)
 	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
@@ -49,12 +45,9 @@ func Server(dir string) (*tls.Config, error) {
 // Client is the configuration a node calls a peer with: this node's certificate, the authority that signed the peer's
 // certificate, and the name the peer's certificate must carry.
 func Client(dir, serverName string) (*tls.Config, error) {
-	cert, pool, err := load(dir)
+	cert, pool, err := load(dir, x509.ExtKeyUsageClientAuth)
 	if err != nil {
 		return nil, err
-	}
-	if !allows(cert.Leaf, x509.ExtKeyUsageClientAuth) {
-		return nil, fmt.Errorf("%s: %s is not a client certificate", Variable, CertFile)
 	}
 	if serverName == "" {
 		return nil, fmt.Errorf("the core URL names no host to verify")
@@ -70,12 +63,12 @@ func Client(dir, serverName string) (*tls.Config, error) {
 // load reads one node's certificate, key and authority. Every error names the variable and the file's role, never the
 // directory, a path or a byte of the material; the key file must be private like the key ring, because it is what lets
 // a process act as this node.
-func load(dir string) (tls.Certificate, *x509.CertPool, error) {
+func load(dir string, usage x509.ExtKeyUsage) (tls.Certificate, *x509.CertPool, error) {
 	certPEM, keyPEM, caPEM, err := readNodeFiles(dir)
 	if err != nil {
 		return tls.Certificate{}, nil, err
 	}
-	return parseNodeFiles(certPEM, keyPEM, caPEM)
+	return parseNodeFiles(certPEM, keyPEM, caPEM, usage)
 }
 
 func readNodeFiles(dir string) (certPEM, keyPEM, caPEM []byte, err error) {
@@ -100,7 +93,7 @@ func readNodeFiles(dir string) (certPEM, keyPEM, caPEM []byte, err error) {
 	return certPEM, keyPEM, caPEM, nil
 }
 
-func parseNodeFiles(certPEM, keyPEM, caPEM []byte) (tls.Certificate, *x509.CertPool, error) {
+func parseNodeFiles(certPEM, keyPEM, caPEM []byte, usage x509.ExtKeyUsage) (tls.Certificate, *x509.CertPool, error) {
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("%s: %s and %s are not a matching certificate and key", Variable, CertFile, KeyFile)
@@ -118,15 +111,34 @@ func parseNodeFiles(certPEM, keyPEM, caPEM []byte) (tls.Certificate, *x509.CertP
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return tls.Certificate{}, nil, fmt.Errorf("%s: %s holds no certificate", Variable, CAFile)
 	}
-	if err := verifyNodeCertificate(cert, leaf, pool); err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("%s: %s is not signed by %s", Variable, CertFile, CAFile)
+	if err := verifyNodeCertificate(cert, leaf, pool, usage); err != nil {
+		return tls.Certificate{}, nil, unusable(usage, err)
 	}
 	return cert, pool, nil
 }
 
+// unusable says why the pair cannot serve its purpose without printing a path or certificate detail. A chain whose
+// extended key usage does not allow this purpose (a CA signed only for serverAuth, for example) is a wrong-purpose
+// error, not an unknown authority; the full verification, not a separate check of the leaf, is what finds it.
+func unusable(usage x509.ExtKeyUsage, err error) error {
+	if invalid, ok := errors.AsType[x509.CertificateInvalidError](err); ok {
+		if invalid.Reason == x509.IncompatibleUsage {
+			kind := "server"
+			if usage == x509.ExtKeyUsageClientAuth {
+				kind = "client"
+			}
+			return fmt.Errorf("%s: %s is not a %s certificate", Variable, CertFile, kind)
+		}
+		if invalid.Reason == x509.Expired {
+			return fmt.Errorf("%s: a certificate in the chain is not valid now", Variable)
+		}
+	}
+	return fmt.Errorf("%s: %s is not signed by %s", Variable, CertFile, CAFile)
+}
+
 // verifyNodeCertificate checks that this node's certificate belongs to the configured authority, so a node cannot start
 // with a pair its peers will refuse. The certificate may include its intermediates; the authority is the root.
-func verifyNodeCertificate(cert tls.Certificate, leaf *x509.Certificate, pool *x509.CertPool) error {
+func verifyNodeCertificate(cert tls.Certificate, leaf *x509.Certificate, pool *x509.CertPool, usage x509.ExtKeyUsage) error {
 	intermediates := x509.NewCertPool()
 	for _, der := range cert.Certificate[1:] {
 		if parsed, err := x509.ParseCertificate(der); err == nil {
@@ -134,15 +146,9 @@ func verifyNodeCertificate(cert tls.Certificate, leaf *x509.Certificate, pool *x
 		}
 	}
 	_, err := leaf.Verify(x509.VerifyOptions{
-		Roots: pool, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		Roots: pool, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{usage},
 	})
 	return err
-}
-
-// allows reports whether a leaf may be used for the given purpose. A certificate without an extended key usage is
-// valid for every purpose, as X.509 says; one that names usages must name this one.
-func allows(leaf *x509.Certificate, usage x509.ExtKeyUsage) bool {
-	return len(leaf.ExtKeyUsage) == 0 || slices.Contains(leaf.ExtKeyUsage, usage)
 }
 
 // protectedDir refuses a directory group or others can write: whoever can write it can replace the key this node

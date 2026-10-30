@@ -280,7 +280,7 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
   长时间没有新 token 的流掐掉）；不设总写超时——长回答不是故障，单次调用由程序自己限时。
 - **来源限制**：`/api/admin/v1/*` 在控制台域名和 API 域名上都一律 404；管理应用只在 `AXIOM_EDGE_ADMIN_HOST` 上回答，来源由程序的
   管理监听按 `AXIOM_ADMIN_SOURCES`（逗号分隔，默认只有本机，忘了配就是把入口关掉）判断。Caddy 只做 TLS 和转发，不重复判一次；
-  地址从 Caddy 重写的 `X-Forwarded-For` 读，因为 `AXIOM_TRUSTED_PROXIES` 已把入口地址设为可信代理。`/console/*` 与
+  地址从 Caddy 重写的 `X-Forwarded-For` 读，因为 `AXIOM_TRUSTED_PROXIES` 已把入口地址设为可信代理。以前配 `AXIOM_EDGE_ADMIN_ALLOW_CIDRS`（空格分隔，Caddy 读）的部署要把同一组来源改配成 `AXIOM_ADMIN_SOURCES`（逗号分隔，程序读）；旧变量不再生效，留空则只有本机能进管理后台。`/console/*` 与
   `/api/console/v1/*` 对 `AXIOM_EDGE_CONSOLE_ALLOW_CIDRS`（空格分隔，Caddy 读）开放，默认所有人：它是用户的控制台，私有部署
   可以把它关进内网。API 域名不设来源限制：它的调用方本来就是任意的机器。
 - 三个域名都要有指向这台机器的 DNS。

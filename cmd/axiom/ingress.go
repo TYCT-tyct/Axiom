@@ -10,10 +10,24 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sync"
 	"time"
 
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/telemetry"
+)
+
+const (
+	// ingressHeaderLimit bounds the wait for the core's response headers. The core's own gateway allows 10 minutes
+	// for a compact response's headers (CompactHeaderWait) and 60 seconds otherwise (HeaderWait); 15 minutes leaves
+	// room for admission and the request's trip without letting a stopped core hold the ingress forever.
+	ingressHeaderLimit = 15 * time.Minute
+	// ingressIdleLimit bounds a silence in the response body. The core's gateway cuts an idle upstream at 3 minutes
+	// (IdleTimeout); 5 minutes lets a live core make that decision first while a stopped one cannot hang the ingress.
+	ingressIdleLimit = 5 * time.Minute
+	// ingressRequestLimit bounds the whole forwarded request. The core's longest call is 60 minutes (MaxCall); 65
+	// minutes lets it finish and settle while a slow client or a wedged stream still ends.
+	ingressRequestLimit = 65 * time.Minute
 )
 
 // serveWithoutCore runs a node whose roles need no state: an ingress forwards every request to a core over mutual TLS,
@@ -70,8 +84,8 @@ func nonCoreServers(cfg nodeSettings, transport http.RoundTripper, health *https
 }
 
 // ingressTransport is the ingress's one connection pool to its core: HTTP/2 over mutual TLS, no proxy from the
-// environment (node-to-node traffic is never routed through a third party), and no response-header timeout, because a
-// model's first token can take as long as the core allows and the core enforces its own deadlines.
+// environment (node-to-node traffic is never routed through a third party), and a finite wait for response headers, so
+// a core that stops answering costs this request its answer instead of holding the client forever.
 func ingressTransport(tlsConfig *tls.Config) *http.Transport {
 	return &http.Transport{
 		Proxy:                 nil,
@@ -79,6 +93,7 @@ func ingressTransport(tlsConfig *tls.Config) *http.Transport {
 		ForceAttemptHTTP2:     true,
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: ingressHeaderLimit,
 		IdleConnTimeout:       2 * time.Minute,
 		ExpectContinueTimeout: time.Second,
 		MaxIdleConnsPerHost:   64,
@@ -91,9 +106,20 @@ func ingressTransport(tlsConfig *tls.Config) *http.Transport {
 // it; X-Forwarded-For is appended by the reverse proxy, so the core can still read the client's address when it trusts
 // this node.
 func ingressHandler(core *url.URL, transport http.RoundTripper, logger *slog.Logger) http.Handler {
+	return ingressHandlerWith(core, transport, logger, ingressIdleLimit, ingressRequestLimit)
+}
+
+// ingressHandlerWith is ingressHandler with the two streaming limits a test can shorten. The header limit lives on the
+// transport, and the whole-request limit covers a client that stops reading as well as a core that keeps sending.
+func ingressHandlerWith(core *url.URL, transport http.RoundTripper, logger *slog.Logger, idle, request time.Duration) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(core)
-	proxy.Transport = transport
+	if idle > 0 {
+		proxy.Transport = idleTransport{next: transport, idle: idle}
+	} else {
+		proxy.Transport = transport
+	}
 	proxy.FlushInterval = -1
+	proxy.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		logger.Warn("forwarding to the core node", "request_id", httpserver.RequestID(r.Context()), "err", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -103,7 +129,80 @@ func ingressHandler(core *url.URL, transport http.RoundTripper, logger *slog.Log
 			logger.Warn("writing the forward error", "request_id", httpserver.RequestID(r.Context()), "err", err)
 		}
 	}
-	return proxy
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), request)
+		defer cancel()
+		proxy.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// idleTransport fails a response body that sends nothing for idle. A core that is stopped (SIGSTOP) keeps its sockets
+// open, and neither ResponseHeaderTimeout nor the connection's idle timeout covers a body already being read.
+type idleTransport struct {
+	next http.RoundTripper
+	idle time.Duration
+}
+
+func (t idleTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := t.next.RoundTrip(r)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = newIdleBody(resp.Body, t.idle)
+	return resp, nil
+}
+
+// idleBody closes the response body when a Read waits longer than idle. Closing it wakes the blocked Read; the reverse
+// proxy then stops copying and closes the client's side rather than waiting for a byte the core will never send.
+type idleBody struct {
+	body   io.ReadCloser
+	idle   time.Duration
+	timer  *time.Timer
+	mu     sync.Mutex
+	closed bool
+}
+
+func newIdleBody(body io.ReadCloser, idle time.Duration) io.ReadCloser {
+	b := &idleBody{body: body, idle: idle}
+	b.timer = time.AfterFunc(idle, b.expire)
+	return b
+}
+
+func (b *idleBody) expire() {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.closed = true
+	b.mu.Unlock()
+	// The read this close wakes already fails; there is no second error to report.
+	_ = b.body.Close() //nolint:errcheck // see above
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	if !b.closed {
+		b.timer.Reset(b.idle)
+	}
+	b.mu.Unlock()
+	n, err := b.body.Read(p)
+	if err != nil {
+		b.timer.Stop()
+	}
+	return n, err
+}
+
+func (b *idleBody) Close() error {
+	b.timer.Stop()
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return nil
+	}
+	b.closed = true
+	b.mu.Unlock()
+	return b.body.Close()
 }
 
 // ingressClient checks the core's readiness. It never follows a redirect: only the configured address may answer for

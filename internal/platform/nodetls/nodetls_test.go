@@ -53,6 +53,35 @@ func newAuthority(t *testing.T) *authority {
 	return &authority{cert: cert, key: key, pem: pemBlock("CERTIFICATE", der), pool: pool}
 }
 
+// intermediate makes a CA below a that names only the given purposes, so a leaf's chain can conflict with the leaf
+// itself.
+func (a *authority) intermediate(t *testing.T, usage ...x509.ExtKeyUsage) *authority {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: "test intermediate authority"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		ExtKeyUsage:           usage,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, a.cert, &key.PublicKey, a.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &authority{cert: cert, key: key, pem: pemBlock("CERTIFICATE", der)}
+}
+
 // issue signs a leaf valid for the given names and purposes.
 func (a *authority) issue(t *testing.T, dns []string, ips []net.IP, usage ...x509.ExtKeyUsage) (certPEM, keyPEM []byte) {
 	t.Helper()
@@ -224,6 +253,38 @@ func serveHandshake(t *testing.T, listener net.Listener, config *tls.Config) <-c
 		done <- err
 	}()
 	return done
+}
+
+// TestCertificatePurposeCoversTheWholeChain: verification at startup asks for the purpose the handshake will ask for,
+// so a CA that allows only serverAuth cannot hide a client certificate that the core will refuse, and an explicit
+// ExtKeyUsageAny is accepted for either side.
+func TestCertificatePurposeCoversTheWholeChain(t *testing.T) {
+	t.Parallel()
+	root := newAuthority(t)
+	serverOnly := root.intermediate(t, x509.ExtKeyUsageServerAuth)
+	clientCert, clientKey := serverOnly.issue(t, []string{"node.test"}, nil, x509.ExtKeyUsageClientAuth)
+	clientChain := append(append([]byte{}, clientCert...), serverOnly.pem...)
+	clientDir := writeNode(t, t.TempDir(), clientChain, clientKey, root.pem)
+	if _, err := Client(clientDir, "node.test"); err == nil || !strings.Contains(err.Error(), "not a client certificate") {
+		t.Fatalf("Client accepted a client leaf under a server-only CA: %v", err)
+	}
+
+	clientOnly := root.intermediate(t, x509.ExtKeyUsageClientAuth)
+	serverCert, serverKey := clientOnly.issue(t, []string{"node.test"}, []net.IP{net.ParseIP("127.0.0.1")}, x509.ExtKeyUsageServerAuth)
+	serverChain := append(append([]byte{}, serverCert...), clientOnly.pem...)
+	serverDir := writeNode(t, t.TempDir(), serverChain, serverKey, root.pem)
+	if _, err := Server(serverDir); err == nil || !strings.Contains(err.Error(), "not a server certificate") {
+		t.Fatalf("Server accepted a server leaf under a client-only CA: %v", err)
+	}
+
+	anyCert, anyKey := root.issue(t, []string{"node.test"}, []net.IP{net.ParseIP("127.0.0.1")}, x509.ExtKeyUsageAny)
+	anyDir := writeNode(t, t.TempDir(), anyCert, anyKey, root.pem)
+	if _, err := Server(anyDir); err != nil {
+		t.Fatalf("Server refused a certificate that is good for any purpose: %v", err)
+	}
+	if _, err := Client(anyDir, "node.test"); err != nil {
+		t.Fatalf("Client refused a certificate that is good for any purpose: %v", err)
+	}
 }
 
 func TestRefusesUnusableMaterial(t *testing.T) {
