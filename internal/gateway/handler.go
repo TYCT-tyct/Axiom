@@ -98,6 +98,12 @@ func NewHandler(d Deps) (*Handler, error) {
 	return h, nil
 }
 
+// Pending reports whether a request or an orphan settlement is still in the handler's background.
+func (h *Handler) Pending() bool { return h.background.pending() }
+
+// Idle is the channel closed when the handler's background becomes idle.
+func (h *Handler) Idle() <-chan struct{} { return h.background.idleChan() }
+
 // ServeHTTP routes the request. It expects httpserver.Public around it, which gives every request its ID; the call
 // number is that ID, and every response carries it as X-Generation-Id beside Public's X-Request-ID, errors and the
 // routes that are not calls included.

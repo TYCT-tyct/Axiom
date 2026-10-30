@@ -160,11 +160,29 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 // Drain lets the calls in flight and the settlements in the background end until abort, then cancels every attempt,
 // as a node that is going away must, and waits for what is left until ctx's deadline. abort is the deadline less
 // grace, so the grace is taken out of the node's deadline rather than added after the wait: a drain that is slow to
-// return cannot push the node past it. What still has not settled is the cleanup's (README.md「故障矩阵」). A call
-// that begins meanwhile is waited for too, and the shutdown is ended even when nothing was running when Drain began,
-// so a request that has passed the gate but is still reading its body cannot start a new stream after the call drain
-// has returned.
+// return cannot push the node past it. What still has not settled is the cleanup's (README.md「故障矩阵」). Drain is
+// for an executor with no handler to consult; a node calls DrainWith so a request still between the gate and Run is
+// not mistaken for an empty executor.
 func (x *Executor) Drain(ctx context.Context, grace time.Duration) {
+	x.drain(ctx, grace, nil)
+}
+
+// DrainGate reports whether the handler can still hand the executor a call: a request that has passed the gate but is
+// still reading its body, or is in admission. The handler keeps a request counted until its Run returns, so a call
+// that starts while the executor is momentarily empty is still seen by the drain.
+type DrainGate interface {
+	Pending() bool
+	Idle() <-chan struct{}
+}
+
+// DrainWith is Drain for a node whose handler may still hand it a call. While the executor itself has nothing running,
+// it waits for the handler to become idle or for abort, instead of treating the empty moment as the time to cancel:
+// a body that arrives in the meantime must be allowed to run until abort and settle until the deadline.
+func (x *Executor) DrainWith(ctx context.Context, grace time.Duration, gate DrainGate) {
+	x.drain(ctx, grace, gate)
+}
+
+func (x *Executor) drain(ctx context.Context, grace time.Duration, gate DrainGate) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		if x.bg.wait(ctx) {
@@ -176,11 +194,49 @@ func (x *Executor) Drain(ctx context.Context, grace time.Duration) {
 		x.bg.drain(tail)
 		return
 	}
-	x.bg.waitUntil(deadline.Add(-grace))
+	abort := deadline.Add(-grace)
+	if gate == nil {
+		x.bg.waitUntil(abort)
+	} else {
+		x.waitForGate(abort, gate)
+	}
 	x.abort()
 	x.bg.stop()
 	x.bg.waitUntil(deadline)
 	x.finish()
+}
+
+// waitForGate waits until the executor has work to drain or the handler can no longer derive a call, whichever comes
+// first, and never past abort. A handler request already in Run has added itself to the executor's background, so the
+// loop moves to the ordinary wait as soon as that happens.
+func (x *Executor) waitForGate(abort time.Time, gate DrainGate) {
+	for {
+		switch {
+		case x.bg.pending():
+			if !x.bg.waitUntil(abort) {
+				return
+			}
+		case !gate.Pending():
+			return
+		case !waitGateIdle(abort, gate):
+			return
+		}
+	}
+}
+
+func waitGateIdle(abort time.Time, gate DrainGate) bool {
+	remaining := time.Until(abort)
+	if remaining <= 0 {
+		return false
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-gate.Idle():
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // settlementContext is SettleContext for one try, also ended when the node's deadline arrives: a write still in

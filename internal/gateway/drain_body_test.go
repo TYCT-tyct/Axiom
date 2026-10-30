@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -79,4 +80,47 @@ func TestDrainWaitsForARequestStillReadingItsBody(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("the request answered %d: %s", rec.Code, rec.Body.String())
 	}
+}
+
+// pendingGate stands in for the handler's gate: Pending says a request may still hand the executor a call, and Idle is
+// closed when that is no longer so.
+type pendingGate struct {
+	pending atomic.Bool
+	idle    chan struct{}
+}
+
+func (g *pendingGate) Pending() bool         { return g.pending.Load() }
+func (g *pendingGate) Idle() <-chan struct{} { return g.idle }
+
+// TestDrainWithWaitsForARequestThatCanStillReachTheExecutor: the executor must not treat its own momentary emptiness
+// as the moment to cancel. The gate holds a request between the handler and the executor; when that request is released
+// after the drain began, it must still get its attempt and settlement, up to abort and the shared deadline.
+func TestDrainWithWaitsForARequestThatCanStillReachTheExecutor(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{})
+		gate := &pendingGate{idle: make(chan struct{})}
+		gate.pending.Store(true)
+		stop, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		drained := make(chan struct{})
+		go func() {
+			h.exec.DrainWith(stop, 5*time.Second, gate)
+			close(drained)
+		}()
+		time.Sleep(time.Second) // the drain is waiting on the gate, with the executor empty
+		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
+		done := h.start() // the held request reaches the executor, before abort
+		<-done
+		gate.pending.Store(false)
+		close(gate.idle)
+		select {
+		case <-drained:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the drain did not finish after the gate became idle")
+		}
+		if n := h.up.eps[uuidOf(ep(1))].sends; n != 1 {
+			t.Errorf("the call made %d attempts; the drain cancelled the executor before the request arrived", n)
+		}
+		h.check()
+	})
 }

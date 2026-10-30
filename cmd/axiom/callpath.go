@@ -275,7 +275,7 @@ func (c callNode) Drain(ctx context.Context) {
 	}()
 	go func() {
 		defer wg.Done()
-		c.executor.Drain(ctx, abortGrace)
+		c.executor.DrainWith(ctx, abortGrace, c.handler)
 	}()
 	wg.Wait()
 }

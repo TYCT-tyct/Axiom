@@ -54,6 +54,21 @@ func (b *background) Go(f func()) {
 	}()
 }
 
+// pending reports whether anything is running.
+func (b *background) pending() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.running > 0
+}
+
+// idleChan is the channel closed when the background becomes idle; a caller that saw pending true can wait on it and
+// look again, as a task that started in between makes a new one.
+func (b *background) idleChan() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.idle
+}
+
 func (b *background) isStopped() bool {
 	select {
 	case <-b.stopped:
@@ -82,19 +97,19 @@ func (b *background) wait(ctx context.Context) bool {
 	}
 }
 
-// waitUntil is wait with an absolute deadline, for a drain that has one: it returns when nothing is running or the
-// deadline has passed.
-func (b *background) waitUntil(deadline time.Time) {
+// waitUntil is wait with an absolute deadline, for a drain that has one: it reports whether nothing is running before
+// the deadline passed.
+func (b *background) waitUntil(deadline time.Time) bool {
 	for {
 		b.mu.Lock()
 		idle, running := b.idle, b.running
 		b.mu.Unlock()
 		if running == 0 {
-			return
+			return true
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return
+			return false
 		}
 		timer := time.NewTimer(remaining)
 		select {
@@ -106,7 +121,7 @@ func (b *background) waitUntil(deadline time.Time) {
 				}
 			}
 		case <-timer.C:
-			return
+			return false
 		}
 	}
 }
