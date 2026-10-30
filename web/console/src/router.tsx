@@ -1,5 +1,5 @@
 import { safeNext } from "@axiom/app";
-import { focusPage, NotFoundState, routerDefaults } from "@axiom/ui";
+import { focusPage, modelAbilities, NotFoundState, routerDefaults } from "@axiom/ui";
 import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
 import { Layout } from "./layout";
 
@@ -133,15 +133,8 @@ function callGroupBy(value: unknown) {
 
 // An ability from the address is one the contract names; anything else is no filter, not a request it would refuse.
 function modelAbility(value: unknown) {
-  return value === "tools" ||
-    value === "images" ||
-    value === "documents" ||
-    value === "reasoning" ||
-    value === "prompt_cache" ||
-    value === "structured_output" ||
-    value === "web_search" ||
-    value === "code_execution"
-    ? value
+  return typeof value === "string" && (modelAbilities as readonly string[]).includes(value)
+    ? (value as (typeof modelAbilities)[number])
     : undefined;
 }
 
