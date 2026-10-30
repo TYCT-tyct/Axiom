@@ -55,6 +55,7 @@ test("a site logo is uploaded, previewed, and cleared", async ({ page }) => {
     .last()
     .click();
   await expect(page.locator("#main img[src^='data:image/svg+xml']")).toBeVisible();
+  await expect(page.locator("nav img[src^='data:image/svg+xml']")).toBeVisible();
 
   await page.getByRole("button", { name: words("settings.logo.clear") }).click();
   await dialog.getByLabel(words("change.reason")).fill("remove the brand");
@@ -66,4 +67,5 @@ test("a site logo is uploaded, previewed, and cleared", async ({ page }) => {
     .last()
     .click();
   await expect(page.getByText(words("settings.logo.none"))).toBeVisible();
+  await expect(page.locator("nav img")).toHaveCount(0);
 });

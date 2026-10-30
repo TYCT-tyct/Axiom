@@ -1,12 +1,12 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
 import { Button, DataState, Icon, TextField, useFormat } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "./change";
 import { Facts } from "./parts";
-import { siteLogoQuery } from "./queries";
+import { adminSiteQuery, siteLogoQuery } from "./queries";
 
 type Logo = AdminSchemas["SiteLogo"];
 type Upload = AdminSchemas["SiteLogoUpload"];
@@ -176,6 +176,7 @@ function useLogoFile() {
 function SetLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClose: () => void }) {
   const { t } = useTranslation();
   const errors = useErrors();
+  const queryClient = useQueryClient();
   const { chosen, problem, choose } = useLogoFile();
   return (
     <ChangeDialog
@@ -203,14 +204,16 @@ function SetLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClose:
         </div>
       )}
       read={() => (chosen ? chosen.upload : { problem: t("settings.logo.choose") })}
-      send={(logo, { reason, key }) =>
-        unwrapChange(
+      send={async (logo, { reason, key }) => {
+        const sent = await unwrapChange(
           adminApi.PUT("/api/admin/v1/sites/{site_id}/logo", {
             params: { path: { site_id: siteId }, header: { "Idempotency-Key": key } },
             body: { logo, reason },
           }),
-        )
-      }
+        );
+        await queryClient.invalidateQueries({ queryKey: adminSiteQuery.queryKey });
+        return sent;
+      }}
       done={() => <p>{t("settings.logo.saved")}</p>}
       onClose={onClose}
     />
@@ -219,6 +222,7 @@ function SetLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClose:
 
 function ClearLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClose: () => void }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   return (
     <ChangeDialog
       operation={`site-logo-clear:${siteId}`}
@@ -228,14 +232,16 @@ function ClearLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClos
       danger
       fields={() => <p className="text-t2">{t("settings.logo.clearHint")}</p>}
       read={() => ({})}
-      send={(_, { reason, key }) =>
-        unwrapChange(
+      send={async (_, { reason, key }) => {
+        const sent = await unwrapChange(
           adminApi.PUT("/api/admin/v1/sites/{site_id}/logo", {
             params: { path: { site_id: siteId }, header: { "Idempotency-Key": key } },
             body: { reason },
           }),
-        )
-      }
+        );
+        await queryClient.invalidateQueries({ queryKey: adminSiteQuery.queryKey });
+        return sent;
+      }}
       done={() => <p>{t("settings.logo.cleared")}</p>}
       onClose={onClose}
     />
