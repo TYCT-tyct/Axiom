@@ -34,7 +34,9 @@ func TestUserNoticeCrossingsPreferencesAndDedupe(t *testing.T) {
 		t.Fatalf("defaults: %+v", prefs)
 	}
 	prefs.Threshold = 100
-	noticeTx(t, db, func(tx pg.Tx) error { return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs) })
+	noticeTx(t, db, func(tx pg.Tx) error {
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs, &prefs.SpendAnomaly)
+	})
 	same := uuid.NewV7()
 	for _, n := range []struct {
 		id            uuid.UUID
@@ -51,7 +53,9 @@ func TestUserNoticeCrossingsPreferencesAndDedupe(t *testing.T) {
 		t.Fatalf("crossings/dedupe: %v", got)
 	}
 	prefs.LowBalance, prefs.TopUp = false, false
-	noticeTx(t, db, func(tx pg.Tx) error { return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs) })
+	noticeTx(t, db, func(tx pg.Tx) error {
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs, &prefs.SpendAnomaly)
+	})
 	noticeTx(t, db, func(tx pg.Tx) error {
 		return accounts.RecordBalanceNotices(t.Context(), tx, []accounts.BalanceNotice{{ID: uuid.NewV7(), Site: s1, Account: a1, Previous: 200, Balance: 0, TopUp: 5}})
 	})
@@ -158,7 +162,9 @@ func TestNotificationPreferencesStayInTheirTenant(t *testing.T) {
 	t.Parallel()
 	db, _ := open(t)
 	p := accounts.NotificationPreferences{LowBalance: false, TopUp: false, FactorChanged: false, Threshold: 123, Language: "zh"}
-	noticeTx(t, db, func(tx pg.Tx) error { return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, p) })
+	noticeTx(t, db, func(tx pg.Tx) error {
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, p, &p.SpendAnomaly)
+	})
 	other := pg.NewScope(false, nil, []uuid.UUID{a2})
 	if err := db.ReadTx(t.Context(), other, func(tx pg.Tx) error {
 		got, err := accounts.GetNotificationPreferences(t.Context(), tx, u1)
@@ -169,7 +175,9 @@ func TestNotificationPreferencesStayInTheirTenant(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	err := db.Tx(t.Context(), other, func(tx pg.Tx) error { return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, p) })
+	err := db.Tx(t.Context(), other, func(tx pg.Tx) error {
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, p, &p.SpendAnomaly)
+	})
 	if state(err) != "42501" {
 		t.Fatalf("other tenant wrote preferences: %v", err)
 	}
@@ -204,7 +212,7 @@ func TestPasswordSecurityMailCannotBeDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}); err != nil {
+	if _, err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err = x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword}); err != nil {
@@ -222,7 +230,7 @@ func TestPasswordResetSecurityMailCannotBeDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}); err != nil {
+	if _, err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err = x.reset(t, console, x.token(t), changedPassword); err != nil {
@@ -283,7 +291,7 @@ func TestBalanceNoticeBatchResolvesEachTenantAndDefaults(t *testing.T) {
 	t.Parallel()
 	db, _ := open(t)
 	noticeTx(t, db, func(tx pg.Tx) error {
-		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, accounts.NotificationPreferences{Language: "zh"})
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, accounts.NotificationPreferences{Language: "zh"}, nil)
 	})
 	var notices []accounts.BalanceNotice
 	for range 1200 {
@@ -308,12 +316,134 @@ func TestNotificationPreferencesCannotStoreNullValues(t *testing.T) {
 	t.Parallel()
 	db, _ := open(t)
 	noticeTx(t, db, func(tx pg.Tx) error {
-		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, accounts.NotificationPreferences{Language: "en"})
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, accounts.NotificationPreferences{Language: "en"}, nil)
 	})
-	for _, column := range []string{"low_balance", "top_up", "factor_changed", "threshold"} {
+	for _, column := range []string{"low_balance", "top_up", "factor_changed", "spend_anomaly", "threshold"} {
 		_, err := exec(t, db, platform, "UPDATE accounts.notification_preferences SET "+column+"=NULL")
 		if state(err) != "23502" {
 			t.Fatalf("%s accepted NULL: %v", column, err)
 		}
+	}
+}
+
+// TestOmittedSpendPreferenceDoesNotUndoAConcurrentChange: request A read true, request B turned the reminder off,
+// and A's later save omits the field. A must not write its stale true back; the stored false survives because the
+// decision happens in the upsert, not in a separate read.
+func TestOmittedSpendPreferenceDoesNotUndoAConcurrentChange(t *testing.T) {
+	db, _ := open(t)
+	var stale accounts.NotificationPreferences
+	noticeTx(t, db, func(tx pg.Tx) (err error) {
+		stale, err = accounts.GetNotificationPreferences(t.Context(), tx, u1)
+		return err
+	})
+	if !stale.SpendAnomaly {
+		t.Fatal("the reminder is not on by default")
+	}
+	off := stale
+	off.SpendAnomaly = false
+	noticeTx(t, db, func(tx pg.Tx) error {
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, off, &off.SpendAnomaly)
+	})
+
+	stale.Threshold = 1
+	noticeTx(t, db, func(tx pg.Tx) error {
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, stale, nil)
+	})
+	var kept accounts.NotificationPreferences
+	noticeTx(t, db, func(tx pg.Tx) (err error) {
+		kept, err = accounts.GetNotificationPreferences(t.Context(), tx, u1)
+		return err
+	})
+	if kept.SpendAnomaly {
+		t.Fatal("a request that omitted spend_anomaly re-enabled it")
+	}
+	if kept.Threshold != 1 {
+		t.Fatalf("the omitted field's own update was lost too: %+v", kept)
+	}
+}
+
+// TestDispatchLeavesAKindItDoesNotKnow: a notice kind this node cannot render waits for a node that can, instead of
+// being marked dispatched without sending anything. A known kind is still dispatched in the same pass.
+func TestDispatchLeavesAKindItDoesNotKnow(t *testing.T) {
+	db, database := open(t)
+	// A later migration adds the kind to this check constraint before any node knows how to render it; dropping the
+	// constraint in the test stands in for that schema.
+	if err := pgtest.Run(t.Context(), database.Superuser, `ALTER TABLE accounts.user_notices DROP CONSTRAINT user_notices_kind_check`); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.DiscardHandler)
+	q := db.NewQueue(logger, platform, nil)
+	m, err := axmail.Register(t.Context(), db, q, axmail.Config{Host: "localhost", Port: 1, From: mail.Address{Address: "notices@example.com"}}, nil, nil, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prefs accounts.NotificationPreferences
+	noticeTx(t, db, func(tx pg.Tx) (err error) {
+		prefs, err = accounts.GetNotificationPreferences(t.Context(), tx, u1)
+		return err
+	})
+	prefs.SpendAnomaly = false
+	noticeTx(t, db, func(tx pg.Tx) error {
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs, &prefs.SpendAnomaly)
+	})
+	known, unknown := uuid.NewV7(), uuid.NewV7()
+	noticeTx(t, db, func(tx pg.Tx) error {
+		for _, n := range []struct {
+			id   uuid.UUID
+			kind string
+		}{{known, "spend_anomaly"}, {unknown, "future_kind"}} {
+			if _, err := tx.Exec(t.Context(), `INSERT INTO accounts.user_notices(id,site_id,account_id,user_id,source,kind,value) VALUES($1,$2,$3,$4,$5,$6,'0')`, n.id, s1, a1, u1, n.id.String(), n.kind); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	noticeTx(t, db, func(tx pg.Tx) error { _, err := accounts.DispatchUserNotices(t.Context(), tx, q, m); return err })
+	var knownDone, unknownDone bool
+	noticeTx(t, db, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT (SELECT dispatched FROM accounts.user_notices WHERE id=$1),(SELECT dispatched FROM accounts.user_notices WHERE id=$2)`, known, unknown).Scan(&knownDone, &unknownDone)
+	})
+	if !knownDone || unknownDone {
+		t.Fatalf("known dispatched=%v, unknown dispatched=%v; want true and false", knownDone, unknownDone)
+	}
+}
+
+// TestSpendAnomalyNoticeHonoursPreferenceAndDeduplicates: the reminder is on by default, one incident produces one row
+// per user, and turning the preference off suppresses later incidents.
+func TestSpendAnomalyNoticeHonoursPreferenceAndDeduplicates(t *testing.T) {
+	db, _ := open(t)
+	record := func(source string) {
+		noticeTx(t, db, func(tx pg.Tx) error {
+			return accounts.RecordSpendAnomalyNotices(t.Context(), tx, []accounts.SpendAnomalyNotice{{Account: a1, Source: source, Value: 5_000_000_000}})
+		})
+	}
+	record("incident-1")
+	record("incident-1")
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM accounts.user_notices WHERE kind='spend_anomaly'`); got[0] != "1" {
+		t.Fatalf("default or dedupe: %v", got)
+	}
+	var prefs accounts.NotificationPreferences
+	noticeTx(t, db, func(tx pg.Tx) (err error) {
+		prefs, err = accounts.GetNotificationPreferences(t.Context(), tx, u1)
+		return err
+	})
+	if !prefs.SpendAnomaly {
+		t.Fatal("spend anomaly reminder is not on by default")
+	}
+	prefs.SpendAnomaly = false
+	noticeTx(t, db, func(tx pg.Tx) error {
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs, &prefs.SpendAnomaly)
+	})
+	record("incident-2")
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM accounts.user_notices WHERE kind='spend_anomaly'`); got[0] != "1" {
+		t.Fatalf("disabled reminder wrote a notice: %v", got)
+	}
+	prefs.SpendAnomaly = true
+	noticeTx(t, db, func(tx pg.Tx) error {
+		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs, &prefs.SpendAnomaly)
+	})
+	record("incident-3")
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM accounts.user_notices WHERE kind='spend_anomaly'`); got[0] != "2" {
+		t.Fatalf("enabled reminder: %v", got)
 	}
 }
