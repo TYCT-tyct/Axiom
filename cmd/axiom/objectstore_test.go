@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"axiom/internal/platform/objectstore"
@@ -25,7 +26,6 @@ type commandStore struct {
 	objects map[string][]byte
 	bucket  bool
 	created int
-	delay   time.Duration
 }
 
 // writeTest is a test handler's write: the client on the other end failing is the test's own failure to report.
@@ -42,9 +42,6 @@ func (s *commandStore) createdCount() int {
 func (s *commandStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.delay > 0 {
-		time.Sleep(s.delay)
-	}
 	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/axiom"), "/")
 	if r.Method == http.MethodHead && key == "" {
 		if !s.bucket {
@@ -106,45 +103,73 @@ func commandEnv(server string) []string {
 	}
 }
 
-func TestObjectstoreCommandTransferTimeoutReachesTheTransfer(t *testing.T) {
-	store := &commandStore{objects: map[string][]byte{"g": []byte("x")}, bucket: true, delay: 150 * time.Millisecond}
+type recordingPutter struct {
+	deadline time.Time
+	has      bool
+}
+
+func (p *recordingPutter) Put(ctx context.Context, upload objectstore.Upload) (objectstore.ObjectInfo, error) {
+	p.deadline, p.has = ctx.Deadline()
+	return objectstore.ObjectInfo{Key: upload.Key, Size: upload.Size, ETag: `"e"`}, nil
+}
+
+type recordingGetter struct {
+	deadline time.Time
+	has      bool
+}
+
+func (g *recordingGetter) Get(ctx context.Context, key string) (*objectstore.Object, error) {
+	g.deadline, g.has = ctx.Deadline()
+	return &objectstore.Object{
+		ObjectInfo: objectstore.ObjectInfo{Key: key, Size: 1, ETag: `"e"`},
+		Body:       io.NopCloser(strings.NewReader("x")),
+	}, nil
+}
+
+func TestObjectstoreTransfersUseTheTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		upload := filepath.Join(dir, "upload.bin")
+		if err := os.WriteFile(upload, []byte("payload"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		putter := &recordingPutter{}
+		if err := putObject(t.Context(), putter, "p", upload, "", 2*time.Hour, io.Discard); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+		if !putter.has || putter.deadline.Sub(time.Now()) != 2*time.Hour {
+			t.Fatalf("put deadline = %v, want 2h from now", putter.deadline)
+		}
+		getter := &recordingGetter{}
+		dest := filepath.Join(dir, "downloaded")
+		if err := getObject(t.Context(), getter, "g", dest, 2*time.Hour, io.Discard); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if !getter.has || getter.deadline.Sub(time.Now()) != 2*time.Hour {
+			t.Fatalf("get deadline = %v, want 2h from now", getter.deadline)
+		}
+		if got, err := os.ReadFile(dest); err != nil || string(got) != "x" {
+			t.Fatalf("downloaded %q, %v", got, err)
+		}
+		ctx, cancel := transferContext(t.Context(), time.Hour)
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("transferContext made no deadline")
+		}
+		cancel()
+		<-ctx.Done()
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Fatalf("canceled context error = %v", ctx.Err())
+		}
+	})
+}
+
+func TestObjectstoreCommandRejectsNonPositiveTransferTimeout(t *testing.T) {
+	store := &commandStore{bucket: true}
 	server := httptest.NewServer(store)
 	defer server.Close()
-	environ := commandEnv(server.URL)
-	dir := t.TempDir()
-	upload := filepath.Join(dir, "upload.bin")
-	if err := os.WriteFile(upload, []byte("payload"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name string
-		args []string
-	}{
-		{"put too short", []string{"put", "--timeout", "20ms", "--key", "p", "--file", upload}},
-		{"get too short", []string{"get", "--timeout", "20ms", "--key", "g", "--file", filepath.Join(dir, "short")}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := objectstoreCommand(t.Context(), environ, tc.args, io.Discard); err == nil {
-				t.Fatal("the transfer outlived its deadline")
-			}
-		})
-	}
-	for _, tc := range []struct {
-		name string
-		args []string
-	}{
-		{"put with enough time", []string{"put", "--timeout", "2s", "--key", "p", "--file", upload}},
-		{"get with enough time", []string{"get", "--timeout", "2s", "--key", "g", "--file", filepath.Join(dir, "long")}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var out bytes.Buffer
-			if err := objectstoreCommand(t.Context(), environ, tc.args, &out); err != nil {
-				t.Fatalf("objectstore %v: %v", tc.args, err)
-			}
-		})
-	}
-	if got, err := os.ReadFile(filepath.Join(dir, "long")); err != nil || string(got) != "x" {
-		t.Fatalf("downloaded %q, %v", got, err)
+	err := objectstoreCommand(t.Context(), commandEnv(server.URL), []string{"put", "--timeout", "0"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "positive") {
+		t.Fatalf("--timeout 0 = %v, want a refusal", err)
 	}
 }
 

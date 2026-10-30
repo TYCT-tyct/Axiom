@@ -158,6 +158,16 @@ chmod 0755 deploy/bin/axiom
 # The ops image copies /axiom out of the program image, so that image has to exist before the ops build resolves its FROM.
 compose build axiom
 compose --profile ops build
+# The transfer limit is shared by the backup and restore jobs; a non-default value has to reach both, not only the
+# service that happened to gain the override.
+config=$(AXIOM_BACKUP_TRANSFER_TIMEOUT=24h compose --profile ops config)
+for service in backup restore; do
+  got=$(printf '%s\n' "$config" | awk -v service="$service" '
+    $0 == "  " service ":" { inside = 1; next }
+    inside && /^  [a-z]/ { inside = 0 }
+    inside && /AXIOM_BACKUP_TRANSFER_TIMEOUT:/ { print $2; exit }')
+  [ "$got" = 24h ] || die "$service did not get AXIOM_BACKUP_TRANSFER_TIMEOUT=24h (got ${got:-nothing})"
+done
 
 echo "== 3/10 generate the two identities, and put their recipients in the environment file"
 mkdir -p "$work/identities" "$work/before" "$work/after" "$work/set"

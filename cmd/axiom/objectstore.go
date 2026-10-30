@@ -24,6 +24,22 @@ const (
 	objectstoreTransferTimeout = 30 * time.Minute
 )
 
+// transferContext bounds one transfer. It is separate so the deadline can be tested with a controlled clock, without
+// making the operation wait on a real network or a wall clock.
+func transferContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, timeout)
+}
+
+// objectPutter and objectGetter are the narrow parts of objectstore.Client a transfer uses, so a test can substitute a
+// controlled transfer and observe the context handed to it.
+type objectPutter interface {
+	Put(context.Context, objectstore.Upload) (objectstore.ObjectInfo, error)
+}
+
+type objectGetter interface {
+	Get(context.Context, string) (*objectstore.Object, error)
+}
+
 // objectstoreCommand runs the operator's object-store verbs against AXIOM_OBJECTSTORE_*. It is how a deployment checks
 // a new bucket, creates one, and moves a backup copy or an archive in and out; the backup job calls the same verbs with
 // its own bucket, and the program's own archive features will call the same client.
@@ -198,7 +214,7 @@ func listObjects(ctx context.Context, client *objectstore.Client, prefix string,
 	}
 }
 
-func putObject(ctx context.Context, client *objectstore.Client, key, path, contentType string, timeout time.Duration, out io.Writer) error {
+func putObject(ctx context.Context, client objectPutter, key, path, contentType string, timeout time.Duration, out io.Writer) error {
 	if key == "" || path == "" {
 		return errors.New("objectstore put: --key and --file are required\n" + objectstoreUsage)
 	}
@@ -211,7 +227,7 @@ func putObject(ctx context.Context, client *objectstore.Client, key, path, conte
 	if err != nil {
 		return fmt.Errorf("objectstore put: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := transferContext(ctx, timeout)
 	defer cancel()
 	stored, err := client.Put(ctx, objectstore.Upload{Key: key, Body: file, Size: info.Size(), ContentType: contentType})
 	if err != nil {
@@ -222,11 +238,11 @@ func putObject(ctx context.Context, client *objectstore.Client, key, path, conte
 
 // getObject writes through a temporary file in the destination's directory and renames it when complete, so a failed
 // download leaves no partial object at the path a caller was told to use.
-func getObject(ctx context.Context, client *objectstore.Client, key, path string, timeout time.Duration, out io.Writer) error {
+func getObject(ctx context.Context, client objectGetter, key, path string, timeout time.Duration, out io.Writer) error {
 	if key == "" || path == "" {
 		return errors.New("objectstore get: --key and --file are required\n" + objectstoreUsage)
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := transferContext(ctx, timeout)
 	defer cancel()
 	object, err := client.Get(ctx, key)
 	if err != nil {
