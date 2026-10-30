@@ -211,8 +211,15 @@ func (s *Service) confirmTOTP(ctx context.Context, p Principal, c FactorChange) 
 		}
 		// A passkey is already a second factor: adding TOTP must not be a way to replace it with a factor the
 		// admin listener can set up from a password session, so this ceremony needs the passkey proved first.
-		if locked.Passkeys && !p.Verified() {
-			return ErrMFARequired
+		if locked.Passkeys {
+			if !p.Verified() {
+				return ErrMFARequired
+			}
+			// The database trigger is the same boundary an older node cannot bypass: only this transaction, after the
+			// passkey check above, may mark the enrollment as having proved the passkey.
+			if _, err := tx.Exec(ctx, "SELECT set_config('axiom.passkey_proved', $1, true)", user.String()); err != nil {
+				return err
+			}
 		}
 		return s.queries.EnableTOTP(ctx, tx, EnableTOTPParams{
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,

@@ -185,6 +185,29 @@ WHERE s.surface = 'console' AND s.level = 'password' AND s.revoked_at IS NULL
     AND EXISTS (SELECT 1 FROM accounts.passkey_credentials p
         WHERE p.site_id = s.site_id AND p.account_id = s.account_id AND p.user_id = s.user_id);
 
+-- The same rolling deployment can reach TOTP enrollment through an old node's admin listener: the old code only checks
+-- that TOTP is not enabled yet, not that the user has a passkey. A user update that newly turns TOTP on must therefore
+-- carry proof that this transaction proved the passkey. The new node sets a transaction-local marker after its
+-- changeFactors check; an old node never sets it, so its enrollment fails closed. Without a passkey the marker is not
+-- needed and existing behavior is unchanged.
+-- +goose StatementBegin
+CREATE FUNCTION accounts.refuse_totp_with_unproved_passkey() RETURNS trigger
+    LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF OLD.mfa_enabled_at IS NULL AND NEW.mfa_enabled_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM accounts.passkey_credentials p WHERE p.user_id = NEW.id)
+        AND coalesce(current_setting('axiom.passkey_proved', true), '') <> NEW.id::text THEN
+        RAISE EXCEPTION 'TOTP cannot be enabled for a passkey user without proving the passkey'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER refuse_totp_with_unproved_passkey
+    BEFORE UPDATE ON accounts.users
+    FOR EACH ROW EXECUTE FUNCTION accounts.refuse_totp_with_unproved_passkey();
+
 -- A sign-in or link round trip through a provider. The state is kept hashed and single use; the verifier is the PKCE
 -- secret and never leaves the database before the code exchange. A link flow is bound to the signed-in session that
 -- began it, so a state leaked into another browser cannot attach a provider identity to that user.
@@ -301,6 +324,8 @@ DROP TABLE accounts.webauthn_flows;
 DROP TABLE accounts.oauth_flows;
 DROP TRIGGER refuse_console_password_with_passkey ON accounts.sessions;
 DROP FUNCTION accounts.refuse_console_password_with_passkey();
+DROP TRIGGER refuse_totp_with_unproved_passkey ON accounts.users;
+DROP FUNCTION accounts.refuse_totp_with_unproved_passkey();
 DROP TABLE accounts.passkey_credentials;
 DROP TABLE accounts.user_identities;
 DROP TABLE accounts.site_oauth_providers;

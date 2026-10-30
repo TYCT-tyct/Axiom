@@ -163,3 +163,73 @@ func TestPasskeyRegistrationRechecksTheLoginDomain(t *testing.T) {
 		t.Errorf("a disabled login domain stored a passkey: %v", got)
 	}
 }
+
+// TestOldNodeCannotEnableTOTPForPasskey: a node that predates the passkey check only verifies that TOTP is off before
+// running the old EnableTOTP update. The users trigger must refuse that update while the user holds a passkey, even
+// when the session came from the admin listener, so the old node cannot install a factor it can complete.
+func TestOldNodeCannotEnableTOTPForPasskey(t *testing.T) {
+	t.Parallel()
+	x, s := passkeySite(t)
+	storePasskey(t, x)
+	if err := s.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	account := uuid.MustParse(texts(t, x.db, platform, "SELECT account_id::text FROM accounts.users WHERE email = 'someone@example.com'")[0])
+	err := x.db.Tx(t.Context(), pg.AccountScope(account), func(tx pg.Tx) error {
+		// An old node gets its admin password session first; the previous trigger permits that surface. The TOTP
+		// update below is what must now fail.
+		if _, err := tx.Exec(t.Context(), `INSERT INTO accounts.sessions
+			(id, site_id, account_id, user_id, surface, token_hash, csrf_token, level, factor_version, expires_at, idle_timeout)
+			SELECT '0198c0a8-0000-7000-8000-000000000099', u.site_id, u.account_id, u.id, 'admin',
+			decode(repeat('22', 32), 'hex'), repeat('b', 32), 'password', u.factor_version,
+			now() + interval '1 hour', interval '1 hour'
+			FROM accounts.users u WHERE u.email = 'someone@example.com'`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(t.Context(), `UPDATE accounts.users SET
+			totp_ciphertext = '\x00', totp_nonce = decode(repeat('00', 12), 'hex'),
+			totp_wrapped_dek = decode(repeat('00', 60), 'hex'), totp_key_version = 1,
+			totp_last_step = 0, mfa_enabled_at = now(), factor_version = factor_version + 1
+			WHERE id = $1`, uuid.UUID(x.user))
+		return err
+	})
+	if state(err) != "23514" {
+		t.Fatalf("the old-node TOTP update for a passkey user: %v", err)
+	}
+	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM accounts.users WHERE mfa_enabled_at IS NOT NULL"); got[0] != "0" {
+		t.Errorf("the old node enabled TOTP: %v", got)
+	}
+}
+
+// TestPasskeyProofAllowsTOTP: the new path still enrolls TOTP after the passkey ceremony proved the factor; the marker
+// is set only inside that checked transaction.
+func TestPasskeyProofAllowsTOTP(t *testing.T) {
+	t.Parallel()
+	x, s := passkeySite(t)
+	session := x.signIn(t, console)
+	p, err := s.Authenticate(t.Context(), x.request(t, console, "https://"+console, session), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := newSoftAuthenticator(t)
+	registration, err := s.BeginPasskeyRegistration(t.Context(), passkeyRequest(t, nil), p, "Laptop", password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := auth.register(t, registration.PublicKey)
+	_, issued, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proved, err := s.Authenticate(t.Context(), x.request(t, console, "https://"+console, issued), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := s.BeginTOTP(proved)
+	_, codes, err := s.ConfirmTOTP(t.Context(), proved, accounts.FactorChange{
+		Secret: key, Password: password, Code: accounts.TOTPCode(key, x.clock.Now()),
+	})
+	if err != nil || len(codes) == 0 {
+		t.Fatalf("TOTP after the passkey ceremony: %v (codes %d)", err, len(codes))
+	}
+}
