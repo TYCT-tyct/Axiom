@@ -57,9 +57,9 @@ type Usage struct {
 // Progress is what the relay has seen so far, for billing's meter after every step. ContentBytes are the text,
 // reasoning and tool input of the events read, unquoted, and Text the shape of the strings among them, whose tokens
 // per byte estimate the output a reply did not report; PartialBytes are the raw bytes read but not yet returned as
-// an event. Reported has the reply's counts reported so far, and Final those that are final: the input side once
-// reported, the rest from the format's last usage event on; until then an output count only bounds the output from
-// below (README.md「转发（草图）」).
+// an event; ToolCalls are the client tool calls begun, whose framing the estimate adds. Reported has the reply's
+// counts reported so far, and Final those that are final: the input side once reported, the rest from the format's
+// last usage event on; until then an output count only bounds the output from below (README.md「转发（草图）」).
 type Progress struct {
 	ContentBytes, PartialBytes, Searches, ToolCalls int64
 	Text                                            textshape.Shape

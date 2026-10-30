@@ -211,7 +211,7 @@ type UsageContext struct{ CacheTTL1h bool; Tier catalog.ServiceTier } // 实际�
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay
 func (r *Relay) Next() (Step, error) // 阻塞读；取消 attemptCtx 关闭 body 即返回
 type Step struct{ Out []byte; Kind StepKind } // StepBuffered | StepCommit（Out 含暂存的开头）| StepData | StepProgress（未成事件，Out 为空）| StepHeartbeat | StepUpstreamDone
-func (r *Relay) Progress() Progress // 值类型、不分配：ContentBytes、PartialBytes、Searches、已报告的数，以及其中哪些已是最终值（Final）；Text 是内容里解码后字符串的形状（textshape.Shape），上游没报输出时 gateway 按它估 token
+func (r *Relay) Progress() Progress // 值类型、不分配：ContentBytes、PartialBytes、Searches、ToolCalls、已报告的数，以及其中哪些已是最终值（Final）；Text 是内容里解码后字符串的形状（textshape.Shape），上游没报输出时 gateway 按它估 token，ToolCalls 让暂估加上每次客户端工具调用的框架
 func (r *Relay) Usage() Usage       // Segments []Segment{Usage catalog.Usage; Reported catalog.ItemSet}，每段各自已是最终值的报告项；Invalid
 func (r *Relay) Finish(f Final) []byte
 func (r *Relay) Fail(e Error, f *Final) []byte // f 为 nil：结算没提交，结尾不带费用
