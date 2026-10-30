@@ -28,6 +28,42 @@ export default {
     kind: { personal: "Personal", organization: "Organization" },
     kindLabel: "Type",
     tier: "Tier",
+    calls: "Calls",
+    callsActive: "Allowed",
+    callsSuspended: "Paused",
+    signIn: "Sign-in",
+    signInActive: "Allowed",
+    signInDisabled: "Disabled",
+    unavailable: "Not available on this node",
+    suspend: "Pause calls",
+    resume: "Resume calls",
+    disableSignIn: "Disable sign-in",
+    enableSignIn: "Enable sign-in",
+    changeTier: "Change tier",
+    suspension: {
+      title: "Pause calls for {{email}}",
+      resumeTitle: "Resume calls for {{email}}",
+      intro:
+        "Pausing stops new model calls for this account. The owner can still sign in, and calls already running finish. Every other condition is checked again on the next call.",
+      resumeIntro:
+        "Resuming lets the account’s keys make model calls again, if every other condition holds. Keys that are revoked, or over a limit, stay refused.",
+    },
+    signInChange: {
+      title: "Disable sign-in for {{email}}",
+      enableTitle: "Enable sign-in for {{email}}",
+      intro:
+        "Disabling signs the owner out everywhere and refuses new sign-ins. API keys keep working unless calls are also paused.",
+      enableIntro: "Enabling lets the owner sign in again. Sessions revoked while it was disabled stay revoked.",
+    },
+    tierChange: {
+      title: "Change the tier of {{email}}",
+      intro:
+        "The new tier applies from the next call: its rate limit, available models, and pricing audience. The account’s current tier is kept if you choose it.",
+      field: "Tier",
+      choose: "Choose a tier other than the account’s current one.",
+      loading: "Reading the site’s tiers…",
+      unavailable: "The tiers could not be read. Close this and try again.",
+    },
     siteId: "Site ID",
     notFound: "Account not found",
     notFoundBody: "The ID may be wrong, or the account is outside what you can see.",
