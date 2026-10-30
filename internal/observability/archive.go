@@ -132,7 +132,9 @@ func (r *retainer) archiveMonth(ctx context.Context, month time.Time) error {
 	if !ok {
 		return errors.New("observability: the archive does not match what was uploaded")
 	}
-	r.partitions.Add(ctx, 1, metric.WithAttributes(attribute.String("action", "archived")))
+	for _, entry := range manifest.Tables {
+		r.partitions.Add(ctx, 1, metric.WithAttributes(attribute.String("action", "archived"), attribute.String("table", entry.Table)))
+	}
 	return r.dropMonth(ctx, month, manifest)
 }
 
@@ -172,7 +174,7 @@ func (r *retainer) loadManifest(ctx context.Context, month time.Time) (archiveMa
 	if err != nil {
 		return archiveManifest{}, false, err
 	}
-	defer func() { _ = object.Body.Close() }() //nolint:errcheck // the body is fully read above
+	defer func() { _ = object.Body.Close() }() //nolint:errcheck // the body is read below
 	raw, err := io.ReadAll(io.LimitReader(object.Body, 1<<20))
 	if err != nil {
 		return archiveManifest{}, false, err
@@ -420,8 +422,8 @@ func (r *retainer) dropMonth(ctx context.Context, month time.Time, manifest arch
 	if err != nil {
 		return err
 	}
-	for _, table := range archiveTables {
-		r.partitions.Add(ctx, 1, metric.WithAttributes(attribute.String("action", "dropped"), attribute.String("table", table)))
+	for _, entry := range manifest.Tables {
+		r.partitions.Add(ctx, 1, metric.WithAttributes(attribute.String("action", "dropped"), attribute.String("table", entry.Table)))
 	}
 	r.logger.InfoContext(ctx, "observability: dropped archived call-log partitions", "month", monthKey(month))
 	return nil
