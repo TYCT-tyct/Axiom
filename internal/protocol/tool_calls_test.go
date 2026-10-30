@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -26,6 +27,24 @@ func TestRelayCountsToolCalls(t *testing.T) {
 		`data: {"id":"c2","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
 		`data: {"id":"c2","object":"chat.completion.chunk","created":1,"model":"m","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}` + "\n\n" +
 		"data: [DONE]\n\n"
+	chatTwoChoices := `data: {"id":"c3","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"a","arguments":""}}]}},{"index":1,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_2","type":"function","function":{"name":"b","arguments":""}}]}}]}` + "\n\n" +
+		`data: {"id":"c3","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"},{"index":1,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	chatIndexAfterDelta := `data: {"id":"c4","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"a","arguments":""}},{"index":1,"id":"call_2","type":"function","function":{"name":"b","arguments":""}}]},"index":0}]}` + "\n\n" +
+		`data: {"id":"c4","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	var many strings.Builder
+	many.WriteString(`data: {"id":"c5","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[`)
+	for i := range 65 {
+		if i > 0 {
+			many.WriteByte(',')
+		}
+		fmt.Fprintf(&many, `{"index":%d,"id":"call_%d","type":"function","function":{"name":"f","arguments":""}}`, i, i)
+	}
+	many.WriteString(`]}}]}` + "\n\n" +
+		`data: {"id":"c5","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+		"data: [DONE]\n\n")
+	chatManyTools := many.String()
 	responsesTool := `event: response.created` + "\n" +
 		`data: {"type":"response.created","response":{"id":"resp_1","object":"response","model":"m","status":"in_progress"}}` + "\n\n" +
 		`event: response.output_item.added` + "\n" +
@@ -46,6 +65,9 @@ func TestRelayCountsToolCalls(t *testing.T) {
 		{"a Messages server tool", protocol.Messages, messagesServerTool, 0},
 		{"a Chat tool across deltas", protocol.Chat, chatTool, 1},
 		{"two Chat tools in one delta", protocol.Chat, chatTwoTools, 2},
+		{"two Chat choices sharing a tool index", protocol.Chat, chatTwoChoices, 2},
+		{"a Chat choice index after the delta", protocol.Chat, chatIndexAfterDelta, 2},
+		{"65 Chat tools in one choice", protocol.Chat, chatManyTools, 65},
 		{"a Responses function call", protocol.Responses, responsesTool, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
