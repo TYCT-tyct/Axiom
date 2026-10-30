@@ -15,6 +15,8 @@ import (
 // fixed before the batches keeps both out of it (#361). An account whose only transaction is from before the sequence
 // has a bound of 0, which has to hold as well.
 func TestAdvanceRacesACredit(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name   string
 		legacy bool
@@ -102,6 +104,8 @@ func (b *bank) advanceRacedByACredit() {
 // batches, and every page of the replay keeps that bound, so the credit stays out along with the batch it opened; the
 // write-off that follows, under the lock, takes both up, and then the expiry transaction it writes itself.
 func TestReplayBoundAcrossPages(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 100, 0, Config{})
 	b.creditBatch(20, longAgo)
 	through, a := b.replayAcrossPages()

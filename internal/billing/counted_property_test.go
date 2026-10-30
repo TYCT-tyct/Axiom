@@ -14,6 +14,8 @@ import (
 // never passes the sum of what was reserved, the ledger balances after every step, and the statement's running balance
 // adds up to the account's balance.
 func TestCountedLedgerProperty(t *testing.T) {
+	t.Parallel()
+
 	const seeds = 3
 	for seed := range uint64(seeds) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {

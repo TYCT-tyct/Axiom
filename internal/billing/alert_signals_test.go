@@ -26,6 +26,8 @@ func (s *settlementSignals) Resolve(kind, key string) error {
 }
 
 func TestPlatformBorneSignalsRepairFromTheLedger(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 2000, -100, Config{})
 	_, h := b.hold(500), b.hold(1000)
 	b.settleWith(h, outcome(Committed, FinishStop, used(t, 5000, 0, 0)))
@@ -72,6 +74,8 @@ func repairBillingSignals(t *testing.T, b *bank) {
 }
 
 func TestPlatformBorneBootstrapSkipsHistory(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 2000, -100, Config{})
 	_, h := b.hold(500), b.hold(1000)
 	b.settleWith(h, outcome(Committed, FinishStop, used(t, 5000, 0, 0)))
@@ -91,6 +95,8 @@ func TestPlatformBorneBootstrapSkipsHistory(t *testing.T) {
 }
 
 func TestPlatformBorneImmediateAndRepairShareAnIdentity(t *testing.T) {
+	t.Parallel()
+
 	for _, repairFirst := range []bool{false, true} {
 		t.Run(map[bool]string{false: "immediate first", true: "repair first"}[repairFirst], func(t *testing.T) {
 			checkPlatformBorneIdentityOrder(t, repairFirst)
@@ -130,6 +136,8 @@ func checkPlatformBorneIdentityOrder(t *testing.T, repairFirst bool) {
 }
 
 func TestPlatformBorneLateRevisionHasItsOwnIdentity(t *testing.T) {
+	t.Parallel()
+
 	var immediate settlementSignals
 	cfg := fallbackBankConfig
 	cfg.Alerts = &immediate

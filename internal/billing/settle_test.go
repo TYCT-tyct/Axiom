@@ -152,6 +152,8 @@ func outcome(result Result, finish FinishReason, segments ...Segment) Outcome {
 // TestSettleWaivers pins the table of docs/domains/billing.md「免单规则」 at 50 input, 20 output and one search (80):
 // what is charged. Only the three rules decide, with no limit on how many calls an account has waived.
 func TestSettleWaivers(t *testing.T) {
+	t.Parallel()
+
 	full, zero := used(t, 50, 20, 1), used(t, 50, 0, 1)
 	for _, tc := range []struct {
 		name string
@@ -187,6 +189,8 @@ func TestSettleWaivers(t *testing.T) {
 // TestWaiversHaveNoCap: a hundred zero-output calls in a row are all free, and nothing counts them: the daily cap is
 // gone, so nothing is kept of them but the books' own entries (docs/domains/billing.md「免单规则」).
 func TestWaiversHaveNoCap(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	for i := range 100 {
 		f, err := b.billing.Settle(t.Context(), b.hold(1000), outcome(Committed, FinishNone, used(t, 50, 0, 0)))
@@ -203,6 +207,8 @@ func TestWaiversHaveNoCap(t *testing.T) {
 // TestACancelledCallStillLeavesTheSuppliersRow: cancelling is not free for the platform, so a cancelled call's attempt is
 // written to suppliers with the cost billing booked for it, whatever the user is charged (docs/domains/billing.md「客户端断开」).
 func TestACancelledCallStillLeavesTheSuppliersRow(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	h := b.hold(1000)
 	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishCancelled, used(t, 50, 20, 0))); err != nil {
@@ -233,6 +239,8 @@ func (b *bank) balanced() {
 
 // TestSettleOnce: a retried Settle returns what the first stored and charges nothing more; the counters move once.
 func TestSettleOnce(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{})
 	h := b.hold(1000)
 	o := outcome(Committed, FinishStop, used(t, 50, 20, 1))
@@ -253,6 +261,8 @@ func TestSettleOnce(t *testing.T) {
 // TestSettleFloor: usage past what was reserved, as when the model outran its fastest speed, is charged down to the
 // floor and no further, other reservations kept covered; the platform bears the rest, on the books.
 func TestSettleFloor(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 2000, -100, Config{})
 	other, h := b.hold(500), b.hold(1000) // 600 and 1100 reserved; 2100 may be spent
 	f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 5000, 0, 0)))
@@ -272,6 +282,8 @@ func TestSettleFloor(t *testing.T) {
 // back uncharged: nothing can bring its usage afterwards. A late Settle then charges by the full outcome against what
 // cleanup did, and resolves the lost request.
 func TestCleanup(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name    string
 		late    int64 // the late Settle's usage
@@ -306,6 +318,8 @@ func TestCleanup(t *testing.T) {
 // the zero id, and no charge can come from the endpoint of an entry that was never to be called, so the route suppliers
 // is given has only the kept ones, in order.
 func TestALostRequestsRouteLeavesOutTheEntriesAdmissionDropped(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	first, dropped, last := metered(t), metered(t), metered(t)
 	dropped.MaxOutput = 1e9 // a quote far beyond the balance
@@ -370,6 +384,8 @@ func (b *bank) state() string {
 // TestCreditOnce: a credit retried with its ID is posted once; outside the platform scope it is refused whole,
 // because its audit entry is.
 func TestCreditOnce(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	c := Credit{
 		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Amount: 500,
