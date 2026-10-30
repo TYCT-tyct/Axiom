@@ -87,6 +87,21 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 	return r, nil
 }
 
+// meterUsage maps a usage report just read onto billing items. final is set for the usage of the event that ended the
+// stream: what it states is charged as it is rather than estimated (meter.take).
+func meterUsage(m *meter, report *openAIUsage, reportErr error, tier *string, final bool) {
+	if reportErr != nil {
+		m.invalid = fmt.Errorf("usage: %w", reportErr)
+		return
+	}
+	r, err := report.items(tier)
+	if err != nil {
+		m.invalid = err
+		return
+	}
+	m.take(r, nil, final)
+}
+
 // mapInput maps the input side as the reply reports it. Chat and Responses name the same counts differently, and those
 // names go into the unknown usage, so each side reads its own. A report without the side says nothing about its split,
 // so the meter takes none and keeps an earlier one.
