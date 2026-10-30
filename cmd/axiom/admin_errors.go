@@ -17,6 +17,8 @@ import (
 var adminRefusals = []refusal{
 	{observability.ErrAlertRotationWindow, http.StatusConflict, codeConflict, "the preceding signing secret is still valid; wait until the one-hour overlap ends before rotating again"},
 	{payments.ErrInvestigated, http.StatusConflict, codeConflict, "this record was already investigated; read its saved note"},
+	{payments.ErrStale, http.StatusConflict, codeStaleRevision, "the merchant account changed since it was read"},
+	{payments.ErrTampered, http.StatusConflict, codeConflict, "the merchant account's settings do not match its sealed secrets; enter the secrets again"},
 	{observability.ErrAlertConfiguration, http.StatusUnprocessableEntity, codeUnprocessable, "the alert configuration is invalid"},
 	{observability.ErrAlertRevision, http.StatusConflict, codeStaleRevision, "the alert configuration changed since it was read"},
 	{idem.ErrReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another request"},

@@ -7,6 +7,7 @@ import (
 	"uuid"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
 	"axiom/internal/payments"
 	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
@@ -34,12 +35,19 @@ func (a adminAPI) SetSystemSettings(ctx context.Context, r adminapi.SetSystemSet
 	if err != nil {
 		return nil, err
 	}
-	v := accounts.SystemSettings{Name: r.Body.Settings.Name, Registration: string(r.Body.Settings.Registration)}
+	v := accounts.SystemSettings{Name: r.Body.Settings.Name}
+	if r.Body.Settings.Registration != nil {
+		v.Registration = string(*r.Body.Settings.Registration)
+	}
 	body, replayed, err := idempotently(ctx, a.db, "setSystemSettings", r.Params.IdempotencyKey, []any{r.SiteId, r.Body}, func(tx pg.Tx) (adminapi.SystemSettings, error) {
 		if err := accounts.SetSystemSettings(ctx, tx, actor(ctx), id, v, r.Body.Reason); err != nil {
 			return adminapi.SystemSettings{}, settingProblem(err)
 		}
-		return adminJSON[adminapi.SystemSettings](v)
+		saved, err := accounts.ReadSystemSettings(ctx, tx, id)
+		if err != nil {
+			return adminapi.SystemSettings{}, err
+		}
+		return adminJSON[adminapi.SystemSettings](saved)
 	})
 	if err != nil {
 		return nil, err
@@ -52,7 +60,7 @@ func (a adminAPI) SetSystemSettings(ctx context.Context, r adminapi.SetSystemSet
 	return adminapi.SetSystemSettings200JSONResponse{Body: body, Headers: adminapi.SetSystemSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-func paymentSettingsBody(v payments.SiteSettings, c platform.Currency) adminapi.PaymentSettings {
+func paymentSettingsBody(v payments.SiteSettings, c platform.Currency, buffer int32) adminapi.PaymentSettings {
 	body := adminapi.PaymentSettings{Open: &v.Open}
 	if v.Min != nil {
 		m := adminMoney(*v.Min, c)
@@ -62,6 +70,8 @@ func paymentSettingsBody(v payments.SiteSettings, c platform.Currency) adminapi.
 		m := adminMoney(*v.Max, c)
 		body.CreditsMax = &m
 	}
+	ppm := int(buffer)
+	body.TopUpBufferPpm = &ppm
 	return body
 }
 
@@ -71,11 +81,37 @@ func (a adminAPI) GetPaymentSettings(ctx context.Context, r adminapi.GetPaymentS
 		return nil, err
 	}
 	var v payments.SiteSettings
-	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) { v, err = payments.ReadSiteSettings(ctx, tx, uuid.UUID(id)); return err })
+	var buffer int32
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		if v, err = payments.ReadSiteSettings(ctx, tx, uuid.UUID(id)); err != nil {
+			return err
+		}
+		buffer, err = billing.TopUpBufferPPM(ctx, tx, uuid.UUID(id))
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.GetPaymentSettings200JSONResponse(paymentSettingsBody(v, site.Currency)), nil
+	return adminapi.GetPaymentSettings200JSONResponse(paymentSettingsBody(v, site.Currency, buffer)), nil
+}
+
+// paymentSettingsInput reads the collection controls, answering every field that is wrong at once.
+func paymentSettingsInput(body adminapi.PaymentSettingsUpdate, currency platform.Currency) (payments.SiteSettings, error) {
+	v := payments.SiteSettings{Open: body.Settings.Open}
+	var p problems
+	for _, f := range []struct {
+		name string
+		in   *adminapi.Money
+		out  **int64
+	}{{"credits_min", body.Settings.CreditsMin, &v.Min}, {"credits_max", body.Settings.CreditsMax, &v.Max}} {
+		if f.in != nil {
+			n, ok := moneyIn(*f.in, currency, "/settings/"+f.name, &p)
+			if ok {
+				*f.out = &n
+			}
+		}
+	}
+	return v, p.err()
 }
 
 func (a adminAPI) SetPaymentSettings(ctx context.Context, r adminapi.SetPaymentSettingsRequestObject) (adminapi.SetPaymentSettingsResponseObject, error) {
@@ -83,29 +119,28 @@ func (a adminAPI) SetPaymentSettings(ctx context.Context, r adminapi.SetPaymentS
 	if err != nil {
 		return nil, err
 	}
-	v := payments.SiteSettings{Open: r.Body.Settings.Open}
-	var p problems
-	for _, f := range []struct {
-		name string
-		in   *adminapi.Money
-		out  **int64
-	}{{"credits_min", r.Body.Settings.CreditsMin, &v.Min}, {"credits_max", r.Body.Settings.CreditsMax, &v.Max}} {
-		if f.in != nil {
-			n, ok := moneyIn(*f.in, site.Currency, "/settings/"+f.name, &p)
-			if ok {
-				*f.out = &n
-			}
-		}
-	}
-	if err = p.err(); err != nil {
+	v, err := paymentSettingsInput(*r.Body, site.Currency)
+	if err != nil {
 		return nil, err
 	}
 	body, replayed, err := idempotently(ctx, a.db, "setPaymentSettings", r.Params.IdempotencyKey, []any{r.SiteId, r.Body}, func(tx pg.Tx) (adminapi.PaymentSettings, error) {
-		err := payments.SetSiteSettings(ctx, tx, actor(ctx), uuid.UUID(id), v, r.Body.Reason)
-		if e, ok := errors.AsType[*payments.FieldError](err); ok {
-			return adminapi.PaymentSettings{}, invalidField("/settings"+e.Field, e.Reason)
+		if err := payments.SetSiteSettings(ctx, tx, actor(ctx), uuid.UUID(id), v, r.Body.Reason); err != nil {
+			if e, ok := errors.AsType[*payments.FieldError](err); ok {
+				return adminapi.PaymentSettings{}, invalidField("/settings"+e.Field, e.Reason)
+			}
+			return adminapi.PaymentSettings{}, err
 		}
-		return paymentSettingsBody(v, site.Currency), err
+		if r.Body.Settings.TopUpBufferPpm != nil {
+			ppm := int32(*r.Body.Settings.TopUpBufferPpm) //nolint:gosec // the contract bounds it to 100000
+			if err := billing.SetTopUpBuffer(ctx, tx, actor(ctx), uuid.UUID(id), ppm, r.Body.Reason); err != nil {
+				return adminapi.PaymentSettings{}, err
+			}
+		}
+		buffer, err := billing.TopUpBufferPPM(ctx, tx, uuid.UUID(id))
+		if err != nil {
+			return adminapi.PaymentSettings{}, err
+		}
+		return paymentSettingsBody(v, site.Currency, buffer), nil
 	})
 	if err != nil {
 		return nil, err
@@ -207,7 +242,7 @@ func (a adminAPI) TestMerchantSettings(ctx context.Context, r adminapi.TestMerch
 	if err != nil {
 		return nil, pg.ErrNoRows
 	}
-	p, err := payments.Open(payments.Config{DB: a.db, Platform: callOf(ctx).scope, Keyring: a.keys, Client: a.exit, Logger: a.logger, Plugins: paymentPlugins})
+	p, err := a.paymentsService(ctx)
 	if err != nil {
 		return nil, err
 	}

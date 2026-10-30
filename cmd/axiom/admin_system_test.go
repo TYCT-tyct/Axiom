@@ -39,7 +39,23 @@ func TestAdminSystemSettings(t *testing.T) {
 		t.Fatal("replay duplicated audit")
 	}
 	expectAdmin(t, "bad registration", f.change(s, http.MethodPut, path, strings.Replace(body, "closed", "open", 1), newKey()), 400, "")
-	payments := path + "/payments"
+
+	// Changing only the name keeps the registration mode, including open, which this operation cannot set itself.
+	f.run(`UPDATE accounts.sites SET registration = 'open' WHERE is_main`)
+	rec = f.change(s, http.MethodPut, path, `{"settings":{"name":"Still open"},"reason":"rename"}`, newKey())
+	expectAdmin(t, "name only", rec, 200, "")
+	var system adminapi.SystemSettings
+	decode(t, rec, &system)
+	if system.Name == nil || *system.Name != "Still open" || system.Registration == nil || *system.Registration != "open" {
+		t.Fatalf("system settings %s", rec.Body)
+	}
+}
+
+func TestAdminPaymentSettings(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	payments := "/sites/" + f.siteID() + "/system-settings/payments"
 	for _, tc := range []struct {
 		body string
 		code int
@@ -52,7 +68,7 @@ func TestAdminSystemSettings(t *testing.T) {
 		expectAdmin(t, "payment settings", f.change(s, http.MethodPut, payments, tc.body, newKey()), tc.code, "")
 	}
 	checkExactPaymentAudit(t, f, s)
-	rec = f.do(http.MethodGet, payments, "", as(s))
+	rec := f.do(http.MethodGet, payments, "", as(s))
 	expectAdmin(t, "payment read", rec, 200, "")
 	var p adminapi.PaymentSettings
 	decode(t, rec, &p)

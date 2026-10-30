@@ -133,30 +133,13 @@ func (m MethodInput) checkLimits() *FieldError {
 
 // SaveMerchant probes the candidate outside database transactions, then commits the configuration and audit together.
 func (p *Payments) SaveMerchant(ctx context.Context, scope pg.Scope, actor audit.Actor, in MerchantInput) (Merchant, error) {
-	if err := in.check(); err != nil {
-		return Merchant{}, err
-	}
-	plugin, ok := p.plugins[in.Kind]
-	if !ok {
-		return Merchant{}, &FieldError{"/kind", "is not a channel this program has"}
-	}
-	settings, err := merchantSettings(plugin, in.Settings)
+	change, err := p.PrepareMerchant(ctx, scope, in)
 	if err != nil {
-		return Merchant{}, &FieldError{"/settings", err.Error()}
-	}
-	created := in.ID == MerchantID{}
-	if created {
-		in.ID = MerchantID(uuid.NewV7())
-		if in.Secrets == nil {
-			return Merchant{}, &FieldError{"/secrets", "are required"}
-		}
-	}
-	if err := p.probeMerchant(ctx, scope, plugin, in, settings, created); err != nil {
 		return Merchant{}, err
 	}
 	var saved Merchant
 	err = p.db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
-		saved, err = p.saveMerchant(ctx, tx, actor, in, settings, created)
+		saved, err = p.WriteMerchant(ctx, tx, actor, change)
 		return err
 	})
 	return saved, err

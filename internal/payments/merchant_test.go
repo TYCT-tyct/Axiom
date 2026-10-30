@@ -229,3 +229,89 @@ func TestEditedGatewayMakesTheMerchantUnusable(t *testing.T) {
 		t.Fatalf("channel after saving again: %v", err)
 	}
 }
+
+func TestListMerchantsReadsSettingsAndMethods(t *testing.T) {
+	w := newWorld(t)
+	site := siteScope(w.siteA)
+	first := w.mustSave(site, w.input(w.siteA))
+	second := w.input(w.siteA)
+	second.Name, second.Sort = "Second", 2
+	second.Methods = []MethodInput{{Method: "wxpay", Upstream: "wxpay", Enabled: false}}
+	saved := w.mustSave(site, second)
+	var rows []Merchant
+	err := w.tx(site, func(tx pg.Tx) (err error) { rows, err = ListMerchants(w.t.Context(), tx, w.siteA); return err })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].ID != first.ID || rows[1].ID != saved.ID {
+		t.Fatalf("merchants = %+v", rows)
+	}
+	if rows[0].Settings != `{"gateway":"https://pay.example.com","methods":["alipay","wxpay"]}` ||
+		len(rows[0].Methods) != 1 || rows[0].Methods[0].Method != "alipay" {
+		t.Fatalf("first merchant = %+v", rows[0])
+	}
+	if len(rows[1].Methods) != 1 || rows[1].Methods[0].Method != "wxpay" || rows[1].Methods[0].Enabled {
+		t.Fatalf("second merchant = %+v", rows[1])
+	}
+}
+
+func TestDisableMerchantKeepsItsConfiguration(t *testing.T) {
+	w := newWorld(t)
+	site := siteScope(w.siteA)
+	m := w.mustSave(site, w.input(w.siteA))
+	disable := func(reason string) Merchant {
+		t.Helper()
+		var disabled Merchant
+		if err := w.tx(site, func(tx pg.Tx) (err error) {
+			disabled, err = DisableMerchant(w.t.Context(), tx, admin, MerchantID(m.ID), reason)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return disabled
+	}
+	disabled := disable("stop new orders")
+	if disabled.Enabled || disabled.Rev != 2 || disabled.Settings != m.Settings || len(disabled.Methods) != 1 {
+		t.Fatalf("disabled %+v; saved %+v", disabled, m)
+	}
+	// Its configuration still opens, so callbacks, queries and refunds of its orders keep the key they need.
+	ch, err := w.channel(MerchantID(m.ID))
+	if err != nil || ch.(fakeChannel).key != theKey {
+		t.Fatalf("channel = %+v, %v; want the sealed key", ch, err)
+	}
+	var audits string
+	err = w.tx(pg.NewScope(true, nil, nil), func(tx pg.Tx) error {
+		return tx.QueryRow(w.t.Context(), `SELECT count(*)::text FROM platform.audit_log WHERE action = 'merchant.disable'`).Scan(&audits)
+	})
+	if err != nil || audits != "1" {
+		t.Fatalf("disable audit entries %q, %v", audits, err)
+	}
+	// Disabling it again changes nothing and writes no second entry, so a page opened on the old revision still works.
+	if again := disable("again"); again.Enabled || again.Rev != 2 {
+		t.Fatalf("second disable = %+v", again)
+	}
+}
+
+func TestPrepareMerchantCommitsWithTheCallersTransaction(t *testing.T) {
+	w := newWorld(t)
+	site := siteScope(w.siteA)
+	change, err := w.p.PrepareMerchant(w.t.Context(), site, w.input(w.siteA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := errors.New("the idempotency claim was rolled back")
+	err = w.tx(site, func(tx pg.Tx) error {
+		if _, err := w.p.WriteMerchant(w.t.Context(), tx, admin, change); err != nil {
+			return err
+		}
+		return refused
+	})
+	if !errors.Is(err, refused) {
+		t.Fatalf("write = %v", err)
+	}
+	var rows []Merchant
+	err = w.tx(site, func(tx pg.Tx) (err error) { rows, err = ListMerchants(w.t.Context(), tx, w.siteA); return err })
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("merchants after rollback = %+v, %v", rows, err)
+	}
+}
