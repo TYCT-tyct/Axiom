@@ -1,5 +1,7 @@
 import type { Messages } from "@axiom/ui";
 import type zh from "../zh";
+import audit from "./audit";
+import calls from "./calls";
 import mappings from "./mappings";
 import models from "./models";
 import pricing from "./pricing";
@@ -12,12 +14,16 @@ export default {
   forbiddenHint: "Ask the site owner to grant the permission.",
   nav: {
     users: "Users",
+    calls: "Calls",
+    audit: "Audit log",
     suppliers: "Suppliers",
     mappings: "Unmapped models",
     models: "Model catalog",
     pricing: "Pricing",
     settings: "Site settings",
   },
+  calls,
+  audit,
   signIn: { description: "The admin is for operators. After signing in you also complete two-step verification." },
   home: {
     noAccessTitle: "No page is available to you",

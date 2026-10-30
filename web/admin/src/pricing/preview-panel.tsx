@@ -61,7 +61,7 @@ function requestOf(values: Record<string, string>, models: Model[]): PreviewRequ
 export function PreviewPanel() {
   const { t } = useTranslation();
   const models = useQuery(listedModelsQuery);
-  const tiers = useQuery(tiersQuery);
+  const tiers = useQuery(tiersQuery());
   const [request, setRequest] = useState<PreviewRequest | null>(null);
   const [none, setNone] = useState(false);
   return (

@@ -1,0 +1,27 @@
+export default {
+  description:
+    "Immutable records of changes, newest first. Exact filters; the last 24 hours by default, at most 31 days.",
+  filters: {
+    since: "From",
+    until: "Until",
+    action: "Action",
+    module: "Module",
+    actorKind: "Actor kind",
+    actor: "Actor ID",
+    targetKind: "Target kind",
+    target: "Target ID",
+    account: "Account ID",
+    site: "Site ID",
+    request: "Request ID",
+  },
+  col: { at: "Time", action: "Action", actor: "Actor", target: "Target", request: "Request" },
+  empty: { title: "No audit entries in this window", body: "Try a wider time range, or another filter." },
+  noMatch: { title: "No audit entry matches", body: "Exact filters only: check the value, or widen the time range." },
+  detailTitle: "Audit entry",
+  detailDescription: "Who changed what, for what reason, and the detail recorded with it.",
+  back: "Audit log",
+  reason: "Reason",
+  detail: "Detail",
+  detailUnavailable: "This node did not return the detail.",
+  openCalls: "Open the call",
+};

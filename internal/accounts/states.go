@@ -33,6 +33,42 @@ func (*Service) SetAccountSuspended(ctx context.Context, tx pg.Tx, actor audit.A
 	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: "account.status_change", Reason: reason, Target: audit.Target{Module: "accounts", Kind: "account", ID: id.TypeID(), Site: site, Account: uuid.UUID(id)}, Detail: map[string]any{"before": before, "after": after}})
 }
 
+// SetAccountTier moves an account to another tier of its site. The account row is locked, so two changes to one account
+// queue; the same tier changes nothing and writes no audit entry, and a tier of another site is a *SettingError.
+func (*Service) SetAccountTier(ctx context.Context, tx pg.Tx, actor audit.Actor, id AccountID, tier TierID, reason string) error {
+	// Lock the account on its own before reading the tier names. Locking through a join can pair the account row a
+	// waiter rechecks after another transaction commits with the tier row it read before waiting; the join then finds
+	// no row and an account that exists looks missing.
+	var site, beforeID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT site_id,tier_id FROM accounts.accounts WHERE id=$1 FOR NO KEY UPDATE`,
+		uuid.UUID(id)).Scan(&site, &beforeID); err != nil {
+		if errors.Is(err, pg.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lock account tier: %w", err)
+	}
+	if TierID(beforeID) == tier {
+		return nil
+	}
+	var after string
+	if err := tx.QueryRow(ctx, `SELECT name FROM accounts.tiers WHERE site_id=$1 AND id=$2`,
+		site, uuid.UUID(tier)).Scan(&after); err != nil {
+		if errors.Is(err, pg.ErrNoRows) {
+			return &SettingError{"tier_id", "must be one of the account's site's tiers"}
+		}
+		return fmt.Errorf("read the tier: %w", err)
+	}
+	var before string
+	if err := tx.QueryRow(ctx, `SELECT name FROM accounts.tiers WHERE site_id=$1 AND id=$2`,
+		site, beforeID).Scan(&before); err != nil {
+		return fmt.Errorf("read the current tier: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE accounts.accounts SET tier_id=$2 WHERE id=$1`, uuid.UUID(id), uuid.UUID(tier)); err != nil {
+		return fmt.Errorf("set account tier: %w", err)
+	}
+	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: "account.tier_change", Reason: reason, Target: audit.Target{Module: "accounts", Kind: "account", ID: id.TypeID(), Site: site, Account: uuid.UUID(id)}, Detail: map[string]any{"before": before, "after": after}})
+}
+
 // SetUserSignInDisabled revokes all sessions under the same user lock as session issuance.
 // Restoring sign-in preserves factors and never restores a revoked session.
 func (*Service) SetUserSignInDisabled(ctx context.Context, tx pg.Tx, actor audit.Actor, id UserID, disabled bool, reason string) error {
