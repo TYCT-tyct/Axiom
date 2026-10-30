@@ -59,7 +59,8 @@ SELECT id FROM accounts.workspaces WHERE account_id = @account_id AND is_default
 -- name: ListKeys :many
 -- An account's keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making. The
 -- optional filters are applied while the keys are read in index order, so a later page starts after the last key
--- read and costs the same whatever the history holds.
+-- read. With no filter, or a dense one, a page costs only the rows it reads; a sparse filter reads on through its
+-- range, and no filter changes the order.
 SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
 FROM accounts.api_keys
 WHERE account_id = @account_id AND deleted_at IS NULL AND id < @before

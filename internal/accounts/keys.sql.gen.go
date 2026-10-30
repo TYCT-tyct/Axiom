@@ -390,7 +390,8 @@ type ListKeysRow struct {
 
 // An account's keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making. The
 // optional filters are applied while the keys are read in index order, so a later page starts after the last key
-// read and costs the same whatever the history holds.
+// read. With no filter, or a dense one, a page costs only the rows it reads; a sparse filter reads on through its
+// range, and no filter changes the order.
 func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]ListKeysRow, error) {
 	rows, err := db.Query(ctx, listKeys,
 		arg.AccountID,

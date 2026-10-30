@@ -229,8 +229,9 @@ type KeyQuery struct {
 
 // ListKeys is up to q.Limit of account's keys that are not deleted and match q's filters, disabled ones included,
 // newest first, starting after q.After (the zero KeyID for the first page); more tells whether keys remain beyond
-// them. The page is read in index order, so a later page costs the rows it reads and not the account's history
-// (Issue #408).
+// them. The page is read in index order: with no filter, or a dense one, a later page costs the rows it reads and
+// not the account's history (Issue #408); a sparse filter reads on until the page is full or its range is exhausted,
+// but still never sorts.
 func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, q KeyQuery) (keys []Key, more bool, err error) {
 	// The scope's row estimate is below LIMIT when RLS is on, so PostgreSQL would otherwise prefer a bitmap scan of
 	// every matching key and a sort; force the custom plan and keep the ordered index the page reads through.

@@ -29,8 +29,8 @@ const (
 // TestKeyPagePlansFollowTheIndex explains the key list for a heavy account and a light one: the first page, a page
 // deep in the same account, a dense name filter and one that matches nothing. Every plan is an ordered index scan
 // under the limit and never sorts; the first page reads api_keys_live_of_account rather than every newer key of other
-// accounts. A page costs about a page whatever its depth, because the cursor is a condition on the index rather than
-// an offset (Issue #408).
+// accounts. An unfiltered page costs about a page whatever its depth, because the cursor is a condition on the index
+// rather than an offset (Issue #408).
 func TestKeyPagePlansFollowTheIndex(t *testing.T) {
 	t.Parallel()
 	database := pgtest.New(t, Module())
