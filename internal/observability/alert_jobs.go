@@ -20,16 +20,26 @@ import (
 
 type alertArgs struct{}
 
+type spendArgs struct{}
+
 type receiptArgs struct {
 	Receipt uuid.UUID `json:"receipt"`
 }
 
+// Each InsertOpts is written out rather than shared: TestEveryJobKindNamesOneOfTheQueues reads the queue from the
+// method's own literal, and a job kind it cannot read fails the table.
 func (alertArgs) Kind() string { return "observability.alerts" }
+
 func (alertArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{Queue: pg.QueueNotifications, MaxAttempts: 5, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled, rivertype.JobStatePending}}}
 }
 
-// RegisterAlerts registers the persistent signal consumer before the queue starts.
+func (spendArgs) Kind() string { return "observability.spend" }
+func (spendArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: pg.QueueNotifications, MaxAttempts: 5, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled, rivertype.JobStatePending}}}
+}
+
+// RegisterAlerts registers the persistent signal consumer and the spend detector before the queue starts.
 func RegisterAlerts(db *pg.DB, scope pg.Scope, q *pg.Queue, m *mail.Mailer, keys *secret.Keyring, exit *egress.Client) error {
 	a := &alertWorker{db: db, scope: scope, queue: q, mail: m, now: time.Now}
 	m.Receipt = a.deliveryReceipt
@@ -41,8 +51,28 @@ func RegisterAlerts(db *pg.DB, scope pg.Scope, q *pg.Queue, m *mail.Mailer, keys
 	if err := river.AddWorkerSafely(q.Workers(), river.WorkFunc(w.work)); err != nil {
 		return err
 	}
+	s := &spendWorker{db: db, scope: scope, now: time.Now}
+	if err := river.AddWorkerSafely(q.Workers(), river.WorkFunc(s.work)); err != nil {
+		return err
+	}
 	q.Every(time.Minute, func() river.JobArgs { return alertArgs{} })
+	q.Every(15*time.Minute, func() river.JobArgs { return spendArgs{} })
 	return nil
+}
+
+type spendWorker struct {
+	db    *pg.DB
+	scope pg.Scope
+	now   func() time.Time
+}
+
+func (s *spendWorker) work(ctx context.Context, _ *river.Job[spendArgs]) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return s.db.Tx(ctx, s.scope, func(tx pg.Tx) error {
+		_, _, err := detectSpendAnomalies(ctx, tx, s.now())
+		return err
+	})
 }
 
 type alertWorker struct {

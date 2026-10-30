@@ -3957,6 +3957,20 @@ components:
         rev: {type: integer, format: int64, minimum: 1}
         rules: {type: array, maxItems: 32, items: {$ref: "#/components/schemas/AlertRule"}}
         channels: {type: array, maxItems: 32, items: {$ref: "#/components/schemas/AlertChannel"}}
+        spend_detection: {$ref: "#/components/schemas/SpendDetection"}
+    SpendDetection:
+      type: object
+      description: "Offline account spend-anomaly thresholds. The object is optional so an older node's configuration replacement leaves the saved thresholds unchanged."
+      required: [enabled, window_seconds, baseline_seconds, min_spend_nano, spend_ratio, min_new_region_calls, min_new_model_calls]
+      additionalProperties: false
+      properties:
+        enabled: {type: boolean}
+        window_seconds: {type: integer, minimum: 300, maximum: 86400, description: "Recent window compared with the baseline."}
+        baseline_seconds: {type: integer, minimum: 300, maximum: 604800, description: "The account's own history immediately before the recent window; at least window_seconds."}
+        min_spend_nano: {type: integer, format: int64, minimum: 0, maximum: 1000000000000000000, description: "Absolute floor for a spend spike, in billionths of a credit."}
+        spend_ratio: {type: number, format: double, minimum: 1, maximum: 1000, description: "Recent spend divided by the baseline's expected spend for the same window."}
+        min_new_region_calls: {type: integer, minimum: 1, maximum: 1000000}
+        min_new_model_calls: {type: integer, minimum: 1, maximum: 1000000}
     AlertRule:
       type: object
       properties:
@@ -3989,6 +4003,7 @@ components:
         rev: {type: integer, format: int64, minimum: 1}
         rules: {type: array, maxItems: 32, items: {allOf: [{$ref: "#/components/schemas/AlertRule"}], required: [id, kind, minimum_severity, threshold, duration_seconds, channel, quiet_start, quiet_end, repeat_seconds]}}
         channels: {type: array, maxItems: 32, items: {allOf: [{$ref: "#/components/schemas/AlertChannel"}], required: [id]}}
+        spend_detection: {$ref: "#/components/schemas/SpendDetection"}
         reason: {$ref: "#/components/schemas/Reason"}
     AlertTestRequest:
       type: object

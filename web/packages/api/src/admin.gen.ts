@@ -1974,6 +1974,27 @@ export interface components {
             rev?: number;
             rules?: components["schemas"]["AlertRule"][];
             channels?: components["schemas"]["AlertChannel"][];
+            spend_detection?: components["schemas"]["SpendDetection"];
+        };
+        /** @description Offline account spend-anomaly thresholds. The object is optional so an older node's configuration replacement leaves the saved thresholds unchanged. */
+        SpendDetection: {
+            enabled: boolean;
+            /** @description Recent window compared with the baseline. */
+            window_seconds: number;
+            /** @description The account's own history immediately before the recent window; at least window_seconds. */
+            baseline_seconds: number;
+            /**
+             * Format: int64
+             * @description Absolute floor for a spend spike, in billionths of a credit.
+             */
+            min_spend_nano: number;
+            /**
+             * Format: double
+             * @description Recent spend divided by the baseline's expected spend for the same window.
+             */
+            spend_ratio: number;
+            min_new_region_calls: number;
+            min_new_model_calls: number;
         };
         AlertRule: {
             id?: string;
@@ -2015,6 +2036,7 @@ export interface components {
             rev: number;
             rules: WithRequired<components["schemas"]["AlertRule"], "id" | "kind" | "minimum_severity" | "threshold" | "duration_seconds" | "channel" | "quiet_start" | "quiet_end" | "repeat_seconds">[];
             channels: WithRequired<components["schemas"]["AlertChannel"], "id">[];
+            spend_detection?: components["schemas"]["SpendDetection"];
             reason: components["schemas"]["Reason"];
         };
         AlertTestRequest: {

@@ -42,6 +42,10 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 - **结果**：`outcome`（`committed`：内容已交给客户端；`failed`：没有；`unknown`：上游可能已执行）、`error_kind`、`started_at`、`finished_at`、`first_token_ms`。成本、用量和供应商的对账键不在这里重复：suppliers 的 `attempt_costs` 按 `(request_id, attempt_seq)` 保存，与计费同成同败；崩溃或超过截止时间的请求记在 `suppliers.lost_requests` 里。
 - **没有 NULL，文字有界**：与 `call_log` 相同；没有正文、密钥或凭证列。
 
+`spend_anomalies`：检测器每个正在发生的异常一行，主键 `(account_id, kind)`；`kind` 是 `spend/<币种>`、`region` 或 `model`。同样是平台范围表：账户范围读不到，只有检测器和启动检查碰它。
+
+`spend_detection`：单行 `jsonb`，保存管理员设置的检测开关、窗口、基线、金额下限、倍数和两类次数下限。和 `alert_configuration` 分开，旧节点整体替换规则/渠道时不会把这个不认识的对象丢掉；默认值在代码里，第一次保存前读代码默认值。
+
 ## 不变量
 
 | 不变量 | 靠什么保证 |
@@ -57,6 +61,8 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 | 写入从不因没有分区而失败 | 两张表都有默认分区兜底；测试写入 2001 年和 2090 年的调用和尝试 |
 | 队列满不阻塞调用 | `Enqueue` 只做非阻塞发送；满了就丢掉这条调用和它的尝试，计入 `records.lost` / `attempts.lost`（reason `queue_full`）并返回 `ErrQueueFull`。测试：写协程卡住、队列满时第四次 `Enqueue` 立即返回，之前入队的照常写入 |
 | 所有表和分区都过启动检查 | 每个分区各自强制行级安全并有策略（分区不继承）；测试 `DB.Check` 通过 |
+| 一次异常只通知一次 | `spend_anomalies` 的 `(account_id, kind)` 主键让重复检测 `ON CONFLICT DO NOTHING`，只有首次插入才持久化信号和用户提醒；异常消失后删除状态并只发一次恢复。测试：连续两轮同一异常只有一条 raise，窗口移走后一条 resolve |
+| 阈值不随旧节点替换丢失 | `spend_detection` 独立于 `alert_configuration.body`；管理 PUT 省略 `spend_detection` 时保留已存值，管理 GET 合并返回默认值或已存值。测试：保存后模拟旧节点替换，阈值不变 |
 
 ## 写入
 
@@ -118,13 +124,13 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 ## 索引
 
-`call_log` 在每个分区上有八个索引：主键 `(id, at)`；不筛选的 `(account_id, at DESC, id DESC)`；模型和应用筛选（迁移 `00002`），以及 key、工作区与报错布尔表达式筛选（迁移 `00009`）各一个 `(account_id, 筛选值, at DESC, id DESC)`。迁移 `00011` 另加全局后台检索的 `call_log_admin_time`（UTC 时间表达式与 id）。这四个新增索引每次写入各增加一条索引项，不在 gateway 的同步调用路径里；持续写入吞吐与索引总体体积仍待压测。
+`call_log` 在每个分区上有九个索引：主键 `(id, at)`；不筛选的 `(account_id, at DESC, id DESC)`；模型和应用筛选（迁移 `00002`），以及 key、工作区与报错布尔表达式筛选（迁移 `00009`）各一个 `(account_id, 筛选值, at DESC, id DESC)`；迁移 `00011` 的全局后台检索 `call_log_admin_time`（UTC 时间表达式与 id）；迁移 `00014` 检测器专用的 `(at, account_id)` 部分索引，谓词 `price_nano >= 0` 让按账户的控制台查询不会选中它。这些新增索引每次写入各增加一条索引项，不在 gateway 的同步调用路径里；持续写入吞吐与索引总体体积仍待压测。
 
 `call_attempt` 只有主键索引 `(request_id, at, attempt_seq)`：按请求查它的尝试走这个前缀，保留任务按分区整块处理；没有按尝试的列表查询，所以暂不加别的索引。它的写入量是调用行乘以每次尝试，见下文的写入放大。
 
 - **选择**：比较了四种做法，量的是 36 万条（表 83 MB，原有索引 50 MB）。(a) 不加：稀疏和零命中读整个分区（7,059 缓冲，随表增长）。(b) 在账户索引上加 `INCLUDE (model, client_app)`：计划不变，仍然读整个分区，没有用。(c) 只加模型索引：模型筛选解决，应用筛选仍读整个分区。(d) 模型和应用各一个：两种筛选都读命中的行（见上表）。取 (d)，是让两个筛选都有界的最小做法。
 - **写入放大**：每个索引每行多一条索引项，36 万条各多约 41 MB（表加索引合计 133 MB 到 174 MB 到 215 MB，每个约 +31%）；批量写入 12 万条的最快一次是 4.6 s、3.9 s、7.9 s（无、一个、两个；机器噪声约三成，体积是确定的）。调用记录由后台按批写（满 500 条立即写，否则最多攒 200 ms），不在请求路径上；持续吞吐取决于调用到达的速率和数据库，没有固定上限。队列满时 `Enqueue` 丢掉新记录并计数，所以写入持续跟不上时只会少记录，不会拖慢调用；代价是 `call_attempt` 的每个尝试一行和它的主键索引，筛选索引在持续满批写入下的吞吐**待验证**，随[性能](../../docs/performance.md#怎么验证)的压测一起量。如果运营中发现应用筛选很少用，删掉 `call_log_account_app_at` 是一条只减不增的迁移。
-- **迁移方式**：加索引兼容旧程序（旧程序的查询没有它也对），按平时的顺序先迁移再发新程序。分区表的 `CREATE INDEX` 在每个分区上建一个，建的时候对该分区加 SHARE 锁，挡住写入器的插入，时长随该分区的行数增长（12 万条约 1.7 秒）；分区表的父表不支持 `CONCURRENTLY`。`00002`、`00009` 与 `00011` 用普通的 `CREATE INDEX`，只适合表还小的时候，也就是 `call_log` 第一次部署时。**已经有大量数据的调用记录再加索引**，迁移要这样写：标 `-- +goose NO TRANSACTION`；`CREATE INDEX 名 ON ONLY observability.call_log (...)`（建出无效的父索引，不锁写）；对每个分区 `CREATE INDEX CONCURRENTLY 分区索引名 ON 分区 (...)`（不挡写；`migrate` 的 5 秒 `lock_timeout` 对它等老事务也生效，超时就失败，留下无效索引，要先删掉再重跑）；再 `ALTER INDEX 父索引 ATTACH PARTITION 分区索引`，全部挂上后父索引才生效。新建的月分区自动带上父索引。
+- **迁移方式**：加索引兼容旧程序（旧程序的查询没有它也对），按平时的顺序先迁移再发新程序。分区表的 `CREATE INDEX` 在每个分区上建一个，建的时候对该分区加 SHARE 锁，挡住写入器的插入，时长随该分区的行数增长（12 万条约 1.7 秒）；分区表的父表不支持 `CONCURRENTLY`。`00002`、`00009`、`00011` 与 `00014` 用普通的 `CREATE INDEX`，只适合表还小的时候，也就是 `call_log` 第一次部署时。**已经有大量数据的调用记录再加索引**，迁移要这样写：标 `-- +goose NO TRANSACTION`；`CREATE INDEX 名 ON ONLY observability.call_log (...)`（建出无效的父索引，不锁写）；对每个分区 `CREATE INDEX CONCURRENTLY 分区索引名 ON 分区 (...)`（不挡写；`migrate` 的 5 秒 `lock_timeout` 对它等老事务也生效，超时就失败，留下无效索引，要先删掉再重跑）；再 `ALTER INDEX 父索引 ATTACH PARTITION 分区索引`，全部挂上后父索引才生效。新建的月分区自动带上父索引。
 
 ## 决策与理由
 
@@ -139,12 +145,19 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 | 默认分区加预建月分区 | 记录不能丢，写入不能因缺分区失败；预建的月数让保留任务有时间落地 | 调用路径上建分区：`axiom_app` 没有权限，也会在热路径上拿锁；没有默认分区：缺分区时写入失败，该批被当成坏行丢掉 |
 | 终端用户标识用 HMAC，类型上只能由 `HashEndUser` 生成 | 无密钥的哈希能被穷举还原；类型让原始标识符无法误入 | 在调用方各自哈希 |
 | 重试到成功，只对数据错误跳过 | 数据库短暂不可用不应丢记录；数据错误重试没有意义，不跳过会堵死 | 有限次重试后丢弃：数据库的短暂故障也会丢 |
+| 异常状态和阈值各用一张平台表 | 状态必须跨节点、重启和告警配置替换保持“一次异常只通知一次”，所以不能放 `alert_windows`（替换配置会清空）；阈值是管理员数据，独立于规则 body，旧节点整体替换时不丢。两者都只有平台范围能读写。 | 把状态放 `alert_windows`：配置变更丢状态；把阈值放进规则：旧节点替换会丢；只在内存去重：多节点和重启会重复通知 |
+
+## 账户花费异常检测
+
+`spendWorker` 由 `RegisterAlerts` 注册为 `observability.spend`，每 15 分钟在 `notifications` 队列执行一次，单个事务完成检测、状态、信号和用户提醒。检测以传入的 `now`（生产为 `time.Now`，测试为受控时钟）切出最近窗口 `[now-W, now)` 和基线 `[now-W-B, now-W)`；窗口和基线秒数来自 `spend_detection`。只取最近窗口里有调用的账户，再按账户聚合，查询不会扫全部分区。花费按币种分别比较；来源网段用 `set_masklen(ip,16)`（IPv4）和 `set_masklen(ip,32)`（IPv6）近似，不引入 GeoIP 依赖；模型按 `model` 分组。三种异常共用 `observability.spend_anomaly`，严重度 warning，键为 `<account UUID>/<kind>`，这样同一账户的三种信号各有独立事件，用户提醒按账户合并为一封。
+
+阈值和检测开关是后台数据：默认开启、1 小时窗口、24 小时基线、5 额度下限、3 倍、陌生网段/模型各 5 次；管理 API 的 `spend_detection` 整体读写，校验范围和交叉约束。检测对象为空时不改已存值，关闭检测时恢复所有现存状态，避免留下没人处理的事件。用户提醒走 accounts 的 `RecordSpendAnomalyNotices`，偏好 `spend_anomaly` 默认开启，同一异常期间同一账户只写一条；`source` 是每次异常生成的随机值，`user_notices` 的唯一键让重试和并发不重复。自动暂停 key 不在这里，key 状态归 accounts，检测不碰调用路径。
 
 ## 告警接口与不变量
 
 账户的 `accounts.authentication_failures` 是账户后台按站点每分钟至多上报一次的完整分钟峰值，只有达到已配置规则阈值才创建事件。消费每条样本时立即评估该事件并持久安排符合规则的首通知，再处理后续低值或恢复；因此消费积压不会把已完成的攻击窗口覆盖掉。低于所有阈值的样本或零窗口结束事件，实际通知派发仍在消费事务之后。账户负责限速、计数和脱敏，本模块沿用持续时间、静默、重复和通知机制。
 
-`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执，`00008` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置；platform `00015` 保存来源消费位置。
+`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者（告警、Webhook 和 `observability.spend`）；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执，`00008` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置，`00014` 保存检测状态、阈值和按时间取账户的索引；platform `00015` 保存来源消费位置。
 
 比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁覆盖信号转事件的有界数据库批次及完整安全样本的即时评估；常规周期评估、派发和保留清理另开事务，待发回执用 FOR UPDATE SKIP LOCKED 认领，邮件和 Webhook 网络请求在事务之外。Webhook 的 10 秒期限只包出站请求，回执读写使用外层作业期限。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。
 
@@ -154,6 +167,6 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 每分钟在消费者阶段读取最新周期测试的终态回执，以渠道测试行的锁和 reported_state 去重发布健康信号，删除渠道时同阶段发恢复并删除探测位置，再消费信号；发送回调只写回执，不在持有事件锁时获取信号锁。评估阶段先独占配置，再安排到期的小时探测、评估并派发；这避免并发节点同时排探测以及回执/消费锁反序。探测失败和恢复也走普通规则，但不发送到自身故障渠道。超过 24 小时、已没有存活 River 任务的 queued 回执会转 failed；用尽重试且被 River 救援直接丢弃的作业由既有丢弃扫描完成回执。事务执行测试使用 `pgtest.WorkJob` 包装 River 官方测试执行器，真实提交重试状态并注入时钟，不依赖后台调度轮询；端到端供应商测试另运行真实队列。测试覆盖重试后一次接受、错误密钥与正文篡改、轮换到期、私有地址/重定向拒绝、并发探测和晚到结果；测试按明确数据库状态和受控时钟推进，无固定睡眠。
 
-支付通知没有预置规则。启用时在现有配置中追加 `payments.discrepancy` 与 `payments.query_paused` 两条规则，各用唯一 id，最低严重度 warning、threshold=1、duration_seconds=0、repeat_seconds=0，channel 指向已测试的邮件渠道；使用当前 rev 保存并保留其余配置。仅绑定四条默认规则不会发送支付通知。事件持久化与渠道启用是两步，未配置不丢事件。
+支付通知没有预置规则。启用时在现有配置中追加 `payments.discrepancy` 与 `payments.query_paused` 两条规则，各用唯一 id，最低严重度 warning、threshold=1、duration_seconds=0、repeat_seconds=0，channel 指向已测试的邮件渠道；使用当前 rev 保存并保留其余配置。仅绑定五条默认规则不会发送支付通知。事件持久化与渠道启用是两步，未配置不丢事件。
 
 `pending_recovery` 表示恢复及其投递尚未收尾；部分索引 `(checked_at,id)` 只含未恢复或待收尾事件。收尾后进入按 `(resolved_at,id)` 排序的清理索引，30 天后由周期任务每批删 100 个，外键级联删除回执和窗口。回执按页内事件 ID 一次查询，每个事件沿索引最多取最近 100 条。

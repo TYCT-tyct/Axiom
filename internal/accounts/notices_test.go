@@ -317,3 +317,39 @@ func TestNotificationPreferencesCannotStoreNullValues(t *testing.T) {
 		}
 	}
 }
+
+// TestSpendAnomalyNoticeHonoursPreferenceAndDeduplicates: the reminder is on by default, one incident produces one row
+// per user, and turning the preference off suppresses later incidents.
+func TestSpendAnomalyNoticeHonoursPreferenceAndDeduplicates(t *testing.T) {
+	db, _ := open(t)
+	record := func(source string) {
+		noticeTx(t, db, func(tx pg.Tx) error {
+			return accounts.RecordSpendAnomalyNotices(t.Context(), tx, []accounts.SpendAnomalyNotice{{Account: a1, Source: source, Value: 5_000_000_000}})
+		})
+	}
+	record("incident-1")
+	record("incident-1")
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM accounts.user_notices WHERE kind='spend_anomaly'`); got[0] != "1" {
+		t.Fatalf("default or dedupe: %v", got)
+	}
+	var prefs accounts.NotificationPreferences
+	noticeTx(t, db, func(tx pg.Tx) (err error) {
+		prefs, err = accounts.GetNotificationPreferences(t.Context(), tx, u1)
+		return err
+	})
+	if !prefs.SpendAnomaly {
+		t.Fatal("spend anomaly reminder is not on by default")
+	}
+	prefs.SpendAnomaly = false
+	noticeTx(t, db, func(tx pg.Tx) error { return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs) })
+	record("incident-2")
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM accounts.user_notices WHERE kind='spend_anomaly'`); got[0] != "1" {
+		t.Fatalf("disabled reminder wrote a notice: %v", got)
+	}
+	prefs.SpendAnomaly = true
+	noticeTx(t, db, func(tx pg.Tx) error { return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs) })
+	record("incident-3")
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM accounts.user_notices WHERE kind='spend_anomaly'`); got[0] != "2" {
+		t.Fatalf("enabled reminder: %v", got)
+	}
+}

@@ -14,7 +14,7 @@ import (
 )
 
 func preferencesJSON(p accounts.NotificationPreferences) consoleapi.NotificationPreferences {
-	return consoleapi.NotificationPreferences{LowBalance: new(p.LowBalance), TopUp: new(p.TopUp), FactorChanged: new(p.FactorChanged), Threshold: new(strconv.FormatInt(p.Threshold, 10)), WebhookUrl: new(p.WebhookURL), Language: new(consoleapi.NotificationPreferencesLanguage(p.Language))}
+	return consoleapi.NotificationPreferences{LowBalance: new(p.LowBalance), TopUp: new(p.TopUp), FactorChanged: new(p.FactorChanged), SpendAnomaly: new(p.SpendAnomaly), Threshold: new(strconv.FormatInt(p.Threshold, 10)), WebhookUrl: new(p.WebhookURL), Language: new(consoleapi.NotificationPreferencesLanguage(p.Language))}
 }
 
 func (c consoleAPI) GetNotificationPreferences(ctx context.Context, _ consoleapi.GetNotificationPreferencesRequestObject) (consoleapi.GetNotificationPreferencesResponseObject, error) {
@@ -30,7 +30,17 @@ func (c consoleAPI) SetNotificationPreferences(ctx context.Context, r consoleapi
 	if err != nil {
 		return nil, accounts.ErrNotificationPreferences
 	}
-	p := accounts.NotificationPreferences{LowBalance: r.Body.LowBalance, TopUp: r.Body.TopUp, FactorChanged: r.Body.FactorChanged, Threshold: threshold, WebhookURL: r.Body.WebhookUrl, Language: string(r.Body.Language)}
+	p := accounts.NotificationPreferences{LowBalance: r.Body.LowBalance, TopUp: r.Body.TopUp, FactorChanged: r.Body.FactorChanged, SpendAnomaly: true, Threshold: threshold, WebhookURL: r.Body.WebhookUrl, Language: string(r.Body.Language)}
+	if r.Body.SpendAnomaly != nil {
+		p.SpendAnomaly = *r.Body.SpendAnomaly
+	} else {
+		// A client that predates the field must not silently re-enable a reminder the user turned off.
+		current, err := c.accounts.NotificationPreferences(ctx, callOf(ctx).principal)
+		if err != nil {
+			return nil, err
+		}
+		p.SpendAnomaly = current.SpendAnomaly
+	}
 	if p.WebhookURL != "" {
 		host, err := accounts.ValidateNotificationWebhookURL(p.WebhookURL)
 		if err != nil {

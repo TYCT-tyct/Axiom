@@ -2005,6 +2005,7 @@ components:
         low_balance: {type: boolean}
         top_up: {type: boolean}
         factor_changed: {type: boolean, description: "Controls background factor-change email and webhooks. Password-change security email is always sent."}
+        spend_anomaly: {type: boolean, description: "Controls account spend-anomaly email and webhooks."}
         threshold: {type: string, pattern: '^[0-9]+$', maxLength: 19, description: "Billionths of site credits."}
         webhook_url: {type: string, maxLength: 2048}
         language: {type: string, enum: [en, zh]}
@@ -2016,6 +2017,7 @@ components:
         low_balance: {type: boolean}
         top_up: {type: boolean}
         factor_changed: {type: boolean, description: "Controls background factor-change email and webhooks. Password-change security email is always sent."}
+        spend_anomaly: {type: boolean, description: "Controls account spend-anomaly email and webhooks. Omit to keep the stored value."}
         threshold: {type: string, pattern: '^[0-9]+$', maxLength: 19, description: "Billionths of site credits."}
         webhook_url: {type: string, maxLength: 2048}
         language: {type: string, enum: [en, zh]}
