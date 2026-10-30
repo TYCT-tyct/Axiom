@@ -196,6 +196,14 @@ services:
       # 「配置与启动」). The password is the file, never this environment.
       AXIOM_VALKEY_URL: valkey://axiom@valkey:6379
       AXIOM_VALKEY_PASSWORD_FILE: /keys/valkey-password
+      # Optional object storage (internal/platform/objectstore/README.md). Empty means off; a partly set group is a
+      # startup error naming the missing variable, never a silently disabled archive.
+      AXIOM_OBJECTSTORE_ENDPOINT: ${AXIOM_OBJECTSTORE_ENDPOINT-}
+      AXIOM_OBJECTSTORE_BUCKET: ${AXIOM_OBJECTSTORE_BUCKET-}
+      AXIOM_OBJECTSTORE_REGION: ${AXIOM_OBJECTSTORE_REGION-}
+      AXIOM_OBJECTSTORE_ACCESS_KEY_ID: ${AXIOM_OBJECTSTORE_ACCESS_KEY_ID-}
+      AXIOM_OBJECTSTORE_SECRET_ACCESS_KEY: ${AXIOM_OBJECTSTORE_SECRET_ACCESS_KEY-}
+      AXIOM_OBJECTSTORE_PATH_STYLE: ${AXIOM_OBJECTSTORE_PATH_STYLE-}
     volumes:
       # The ring is read and replaced atomically here. A multi-node deployment must give every node the same protected
       # file (one shared volume or a copy) and set AXIOM_KEYRING_GENERATE=false so a fresh node never makes its own.

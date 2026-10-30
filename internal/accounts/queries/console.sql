@@ -21,8 +21,9 @@ SELECT password_hash, factor_version FROM accounts.users WHERE id = @id;
 -- The first statement of every transaction that issues a session, spends a one-time factor or changes one: the lock
 -- keeps a factor change from slipping in between the check and the write.
 SELECT site_id, factor_version, status = 'active' AS active, totp_ciphertext, totp_nonce, totp_wrapped_dek,
-    totp_key_version, totp_last_step, (mfa_enabled_at IS NOT NULL)::boolean AS mfa
-FROM accounts.users WHERE id = @id FOR UPDATE;
+    totp_key_version, totp_last_step, (mfa_enabled_at IS NOT NULL)::boolean AS mfa,
+    EXISTS (SELECT 1 FROM accounts.passkey_credentials p WHERE p.user_id = u.id)::boolean AS passkeys
+FROM accounts.users u WHERE u.id = @id FOR UPDATE;
 
 -- name: InsertSession :exec
 INSERT INTO accounts.sessions (id, site_id, account_id, user_id, surface, token_hash, csrf_token, level, factor_version,
@@ -151,7 +152,8 @@ SELECT role_id FROM accounts.platform_grants WHERE user_id = @user_id AND revoke
 -- name: SessionInfo :many
 -- What a page shows of the session it is in; the session ends at its absolute end or after the idle time from now,
 -- whichever comes first, both cut by the site's lifetimes now (ValidSession).
-SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa, s.csrf_token,
+SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa,
+    (SELECT count(*) FROM accounts.passkey_credentials p WHERE p.user_id = u.id)::bigint AS passkeys, s.csrf_token,
     least(s.expires_at, s.created_at + make_interval(secs => @max_age_seconds::bigint),
     now() + least(s.idle_timeout, make_interval(secs => @idle_seconds::bigint)))::timestamptz AS expires_at
 FROM accounts.sessions s

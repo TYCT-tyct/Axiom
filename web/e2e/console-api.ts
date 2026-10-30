@@ -125,6 +125,8 @@ const handlers: Handler<MockState>[] = [
   route("post", `${base}/auth/totp/setup`, signedIn, totpSetup),
   route("post", `${base}/auth/totp/confirm`, signedIn, confirmTotp),
   route("post", `${base}/auth/recovery-codes`, { level: "mfa" }, regenerate),
+  route("get", `${base}/auth/passkeys`, signedIn, () => ok({ passkeys: [] })),
+  route("get", `${base}/auth/identities`, signedIn, () => ok({ identities: [] })),
   route("get", `${base}/keys`, { ...signedIn, permission: "api_keys.view" }, listKeys),
   route("post", `${base}/keys`, { ...signedIn, permission: "api_keys.manage" }, createKey),
   route("put", `${base}/keys/{key_id}`, { ...signedIn, permission: "api_keys.manage" }, updateKey),

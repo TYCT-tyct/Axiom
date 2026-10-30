@@ -29,6 +29,7 @@
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
 | `kv` | Valkey 的访问层：每次访问的期限、熔断、与 Valkey 的时钟修正、节点心跳（`platform.nodes`；迁移 `00013` 增加凭证份额的进程启动身份、成员确认列表和离开节点的 RPM 分区保留表 `credential_share_departures`）和指标；限流计数（K1）和登录前的尝试次数（K2）已经在用，登录脚本由 accounts 持有，通过 `Login` 用途标签和 `LoginSpace` 键空间复用访问层；登录键的隐私、到期及按节点等分的故障兜底见 [kv 的每种用途](kv/README.md#每种用途)，会话粘性（K3）同批读取、经有界后台队列写回（后台最多占 32 个在途位置、不排在前台之前、不驱动熔断）；邮件收件人冷却（#399）用 `Mail` 用途标签和 `MailSpace`，由 mail 的脚本原子准入；缓存四类状态已共享，供应商并发与有限 RPM 通过注册表的完整成员确认按节点静态分份额，生产支持 N > 1（[状态核对](kv/README.md#多节点状态核对)）；`kvtest` 给测试一个按部署方式配好的真实 Valkey，见 [kv 的 README](kv/README.md) |
 | `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，`notifications` 队列）和按收件人的限流（Valkey 共享，故障退回各节点的进程内桶），见 [mail/README.md](mail/README.md) |
+| `objectstore` | S3 兼容对象存储：SigV4 签名、`Check`/`Put`/`Get`/`Head`/`Delete`/`List`、每次操作的期限与只对可恢复失败的重试；配置全空即关闭，设了一个就要设全。用自己的传输（自托管桶在私网，`egress` 的地址策略不适用），见 [objectstore/README.md](objectstore/README.md) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。`AXIOM_HEALTH_MODE` 控制端点健康闭环，非法值在启动时报错；模式、试探和持久化由 [quality](../quality/README.md) 负责。
 
@@ -52,6 +53,7 @@
 | 范围只在本事务内有效 | 用 `set_config(…, true)` 设定；测试在同一条连接上让事务分别提交、出错、panic，之后检查连接本身不带范围 |
 | 范围和角色只由 `pg` 设定 | 行级安全防的是漏写的条件，不防我们自己代码里有意放宽范围的 SQL：自定义参数任何角色都能设，事务里一句 `set_config` 或 `SET LOCAL` 就能扩大范围，数据库拦不住；会话级切换的角色还会留在池里的连接上。所以 `just scope`（规则和理由写在 `scripts/check_scope.py`，用例在 `scripts/test_scope.py`）在 `internal/platform/pg` 之外见到 `set_config`、范围参数名（`scope_platform`、`scope_sites`、`scope_accounts`）或 `SET`/`RESET ROLE` 语句就失败，不分大小写，测试和迁移也不例外；只认参数名本身、不认 `axiom.` 前缀，点号两侧的空格、引号、转义和换行都藏不住它；角色语句按数据库读到的样子匹配（`.sql` 文件和 Go 字符串，先解开 Go 转义，原始字符串丢掉回车），先认字符串再认注释（引号、转义字符串 `E'..'`、美元引号 `$$..$$`/`$tag$..$tag$` 里的注释标记是普通文字，美元引号正文里的注释照样抹掉，DO 块会执行它），`SET` 与 `ROLE` 之间的空白、换行和 `--`、`/* */`（可嵌套）注释都藏不住它，注释里的语句不会执行，不算；运行时拼出的 SQL、相邻字符串字面量拼成的 SQL 和 `pg` 里面靠评审 |
 | 切换的角色只在本事务内有效 | `pg.Tx.SetRole` 用 `set_config('role', …, true)`，等于 `SET LOCAL ROLE`；普通的 `SET ROLE` 会留在池里的连接上。测试在同一条连接上让切换过角色的事务分别提交、出错，下一个事务仍以 `axiom_app` 执行；切换后范围照样生效；切到登录角色不是其成员的角色失败 |
+| 通行密钥证明也只由 `pg` 设定，且只在本事务内有效 | TOTP 触发器要判断调用者是否刚在本次事务里通过通行密钥：`pg.Tx.MarkPasskeyProved` 用 `set_config('axiom.passkey_proved', 用户 UUID, true)` 记录，触发器核对当前用户；旧节点从不写它，滚动发布时已有通行密钥的用户因此不能经旧节点开启 TOTP。提供具名方法而不是通用设置入口，`just scope` 继续只放行 `internal/platform/pg` 一处；账户测试 `TestPasskeyProofAllowsTOTP` 和 `TestOldNodeCannotEnableTOTPForPasskey` 覆盖放行与拒绝 |
 | 没有范围就什么都查不到、写不进 | [范围读取函数](pg/README.md#决策与理由)把未设定或空的参数当作空集合；测试覆盖读、插入、修改、删除。格式不合法时查询报错，不会放宽 |
 | 范围是集合 | 平台 ∪ 站点集合 ∪ 账户集合；测试覆盖"整站 S1 加 S2 的账户 A3"不会扩大到 S2 的其他账户 |
 | 策略读取范围与行数无关，缓存计划不保留旧范围 | 策略级无关联子查询生成 InitPlan；`TestScopeSettingsAreStatementInitPlans` 在 200 万行的命中和拒绝扫描上检查每个读取至多执行一次；缓存隔离测试交替平台、站点、账户和空范围，见 [pg 的实测与决策](pg/README.md#决策与理由) |
@@ -116,6 +118,16 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 部署前提：出站网络不能有转换到私网、回环或元数据地址的网络自选 NAT64 前缀。哪个部署需要这种网络，再由可信的部署配置给出前缀，整段拒绝或还原出 IPv4 后再校验，并补 URL 字面量和 AAAA 两条路径的测试。
 
 测试使用 `egress.NewForTesting(egresstest.Loopback(t))` 请求本机服务器；TLS 假网关使用 `egresstest.Loopback(t, server.Certificate())` 额外信任该测试证书，仍校验主机名和证书链。信任根只能由测试进程构造，生产的 `egress.New` 不提供注入入口；不能借此放行 RFC 1918、ULA 或云元数据地址。
+
+## 对象存储
+
+`objectstore` 是程序里唯一的 S3 客户端，只依赖 S3 接口：云厂商的对象存储或自托管的 SeaweedFS（[技术选型](../../docs/architecture.md#技术选型)）。它只负责签名、读写和列举，桶由负责人建、保留策略由使用它的功能定；单个 PUT 上限 5 GiB，更大的归档要等分片上传。
+
+`ReadConfig` 把 `AXIOM_OBJECTSTORE_*` 读成一份配置：六个变量全空是关闭（零值），设了任何一个就要求整组，错误只报变量名和形状，不报值；`serve` 启动时读一次，半个配置是启动错误而不是第一次归档时才失败。`Open` 不联系桶，`Check` 用一次 HEAD 核对桶和凭证，`axiom objectstore check|list|put|get|delete` 是运维验证和搬归档的入口。
+
+每次操作必须在 `ctx` 上带期限，否则返回 `ErrDeadlineRequired`；只重试连接失败、408、429 和 5xx，共四次尝试，200ms 起翻倍、最多 5s 的退避加抖动，`Retry-After` 最多等 30s 且不越过期限。PUT 的请求体可寻址，重试从头发同一份字节；GET 的正文读失败不重试；不跟随重定向，101 也拒绝。账本和对话正文都不经过它：备份用 `deploy/ops` 自己的桶和凭证，正文保存的平台开关仍然关着。
+
+测试对真实的 SeaweedFS 容器跑一遍，签名的固定向量来自 botocore；命令、重试、期限、分页和配置错误的测试在包内和 `cmd/axiom`。
 
 ## 监听
 

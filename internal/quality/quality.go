@@ -27,6 +27,16 @@ const (
 	slowMaxInput    = 32 << 10         // a timeout is a failure, an auxiliary one, only for an input up to this
 )
 
+// The quality score's defaults (docs/domains/quality.md「质量分、吞吐与延迟」). They are what a good interactive answer is
+// taken to mean, not what a model can do at best: the score separates endpoints of one model, so absolute references keep
+// it comparable across models and across nodes. An administrator's setting of them comes with the console (H3).
+const (
+	scoreLatency = time.Second   // at or under it a time to first token scores 1
+	scoreSpeed   = 50.0          // at or above it an output speed in tokens a second scores 1
+	scoreSamples = 10            // the counted outcomes that make the confidence 1
+	scoreMaxAge  = 4 * time.Hour // and the age at which it reaches 0: old evidence no longer ranks an endpoint
+)
+
 // Cut is why the gateway cancelled an attempt, when it did.
 type Cut uint8
 
@@ -68,12 +78,17 @@ type Observation struct {
 
 func (o *Observation) content() bool { return !o.FirstToken.IsZero() }
 
-// Measures are what routing ranks an endpoint by: its health, 1 when nothing was counted, and its time to first token
-// and output speed, 0 while they are not measured (fewer than minSamples samples, or none for maxAge).
+// Measures are what routing ranks an endpoint by: its health and quality score, the confidence in that score, and its
+// time to first token and output speed, 0 while the latter are not measured (fewer than minSamples samples, or none for
+// maxAge). Quality combines all of them into the score routing orders by, and Confidence says how much and how recent
+// the evidence is: an unknown endpoint has the neutral quality 1 and the confidence 0, never the low quality of a
+// measured bad one.
 type Measures struct {
 	Health     float64
 	Latency    time.Duration
 	Throughput float64 // output tokens per second
+	Quality    float64 // 0 to 1: reliability and the measured time to first token and speed
+	Confidence float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
 }
 
 // Monitor keeps local endpoint evidence and live breaker state. Observe never accesses the database or allocates
@@ -108,6 +123,8 @@ type State struct {
 	errorRate   float64 // the moving average of failures (1) and successes (0); 0 before any
 	latency     average // seconds to the first token
 	speed       average // output tokens per second
+	samples     int     // counted outcomes, capped at scoreSamples: the confidence's evidence
+	sampled     time.Time
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -170,7 +187,7 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	e := m.of(o.Endpoint)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.count(v)
+	e.count(v, o.Ended)
 	m.health(e, v, &o)
 	if latency {
 		e.latency.add(o.FirstToken.Sub(o.Sent).Seconds(), o.Ended)
@@ -180,28 +197,65 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	}
 }
 
-// count moves the error rate by a counted outcome. e.mu is held.
-func (e *State) count(v verdict) {
+// count moves the error rate by a counted outcome, and records it as quality evidence. A probe's result comes through
+// here too; it is not an independent source, so it never enters the breaker window (health). e.mu is held.
+func (e *State) count(v verdict, at time.Time) {
 	switch v {
 	case success:
 		e.errorRate -= alpha * e.errorRate
 	case failure, auxiliary:
 		e.errorRate += alpha * (1 - e.errorRate)
 	case uncounted:
+		return
 	}
+	if e.samples < scoreSamples {
+		e.samples++
+	}
+	e.sampled = at
 }
 
-// Measured is what the endpoint's numbers are now. An endpoint never observed is healthy and unmeasured.
+// quality composes the score from the moving averages: reliability (1 minus the error rate) times the mean of the
+// performance factors that are measured. An unmeasured factor is left out, never counted as a bad one; with neither
+// measured the performance is neutral 1. Nothing counted is the unknown: the neutral score 1 and confidence 0, even
+// when independent latency or speed samples are already measured—those stay in Measures but do not make the quality
+// score non-neutral before reliability has any evidence. The confidence is full at scoreSamples outcomes and linear to
+// 0 after scoreMaxAge without one. e.mu is held.
+func (e *State) quality(now time.Time) (score, confidence float64) {
+	if e.samples == 0 {
+		return 1, 0
+	}
+	perf, measured := 0.0, 0
+	if v, ok := e.latency.measured(now); ok {
+		perf += min(1, max(0, scoreLatency.Seconds()/v)) // a zero or negative sample scores 1
+		measured++
+	}
+	if v, ok := e.speed.measured(now); ok {
+		perf += min(1, max(0, v/scoreSpeed))
+		measured++
+	}
+	if measured == 0 {
+		perf = 1
+	} else {
+		perf /= float64(measured)
+	}
+	score = max(0, 1-e.errorRate) * perf
+	age := max(0, now.Sub(e.sampled))
+	return score, min(1, float64(e.samples)/scoreSamples) * max(0, 1-float64(age)/float64(scoreMaxAge))
+}
+
+// Measured is what the endpoint's numbers are now. An endpoint never observed is healthy and unmeasured, with the
+// neutral quality and no confidence.
 func (m *Monitor) Measured(id suppliers.EndpointID, now time.Time) Measures {
 	m.mu.RLock()
 	e := m.endpoints[id]
 	m.mu.RUnlock()
 	if e == nil {
-		return Measures{Health: 1}
+		return Measures{Health: 1, Quality: 1}
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := Measures{Health: 1 - e.errorRate}
+	out.Quality, out.Confidence = e.quality(now)
 	if v, ok := e.latency.measured(now); ok {
 		out.Latency = time.Duration(v * float64(time.Second))
 	}

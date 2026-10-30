@@ -11,6 +11,16 @@ export const siteQuery = queryOptions({
   staleTime: 5 * 60_000,
 });
 
+export const passkeysQuery = queryOptions({
+  queryKey: [accountKey, "passkeys"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/auth/passkeys", { signal })),
+});
+
+export const identitiesQuery = queryOptions({
+  queryKey: [accountKey, "identities"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/auth/identities", { signal })),
+});
+
 export const balanceQuery = queryOptions({
   queryKey: [accountKey, "balance"],
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/balance", { signal })),

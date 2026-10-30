@@ -19,6 +19,7 @@ var (
 	userPrefix         = typeid.MustPrefix("user")
 	keyPrefix          = typeid.MustPrefix("key")
 	sessionPrefix      = typeid.MustPrefix("sess")
+	passkeyPrefix      = typeid.MustPrefix("pk")
 )
 
 // SiteID is a site's ID.
@@ -103,6 +104,18 @@ func (id SessionID) TypeID() string { return sessionPrefix.Encode(uuid.UUID(id))
 func ParseSessionID(s string) (SessionID, error) {
 	id, err := sessionPrefix.Decode(s)
 	return SessionID(id), err
+}
+
+// PasskeyID is a passkey's ID.
+type PasskeyID uuid.UUID
+
+// TypeID writes the ID as the API shows it.
+func (id PasskeyID) TypeID() string { return passkeyPrefix.Encode(uuid.UUID(id)) }
+
+// ParsePasskeyID reads only passkey TypeIDs.
+func ParsePasskeyID(s string) (PasskeyID, error) {
+	id, err := passkeyPrefix.Decode(s)
+	return PasskeyID(id), err
 }
 
 // AnnouncementID is a site announcement's ID.

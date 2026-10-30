@@ -339,8 +339,9 @@ func (q *Queries) ListSessions(ctx context.Context, db DBTX, arg ListSessionsPar
 
 const lockUser = `-- name: LockUser :many
 SELECT site_id, factor_version, status = 'active' AS active, totp_ciphertext, totp_nonce, totp_wrapped_dek,
-    totp_key_version, totp_last_step, (mfa_enabled_at IS NOT NULL)::boolean AS mfa
-FROM accounts.users WHERE id = $1 FOR UPDATE
+    totp_key_version, totp_last_step, (mfa_enabled_at IS NOT NULL)::boolean AS mfa,
+    EXISTS (SELECT 1 FROM accounts.passkey_credentials p WHERE p.user_id = u.id)::boolean AS passkeys
+FROM accounts.users u WHERE u.id = $1 FOR UPDATE
 `
 
 type LockUserRow struct {
@@ -353,6 +354,7 @@ type LockUserRow struct {
 	TotpKeyVersion *int64
 	TotpLastStep   int64
 	Mfa            bool
+	Passkeys       bool
 }
 
 // The first statement of every transaction that issues a session, spends a one-time factor or changes one: the lock
@@ -376,6 +378,7 @@ func (q *Queries) LockUser(ctx context.Context, db DBTX, id uuid.UUID) ([]LockUs
 			&i.TotpKeyVersion,
 			&i.TotpLastStep,
 			&i.Mfa,
+			&i.Passkeys,
 		); err != nil {
 			return nil, err
 		}
@@ -630,7 +633,8 @@ func (q *Queries) RevokeSession(ctx context.Context, db DBTX, id uuid.UUID) (int
 }
 
 const sessionInfo = `-- name: SessionInfo :many
-SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa, s.csrf_token,
+SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa,
+    (SELECT count(*) FROM accounts.passkey_credentials p WHERE p.user_id = u.id)::bigint AS passkeys, s.csrf_token,
     least(s.expires_at, s.created_at + make_interval(secs => $1::bigint),
     now() + least(s.idle_timeout, make_interval(secs => $2::bigint)))::timestamptz AS expires_at
 FROM accounts.sessions s
@@ -648,6 +652,7 @@ type SessionInfoRow struct {
 	Email      string
 	InviteCode string
 	Mfa        bool
+	Passkeys   int64
 	CsrfToken  string
 	ExpiresAt  pgtype.Timestamptz
 }
@@ -667,6 +672,7 @@ func (q *Queries) SessionInfo(ctx context.Context, db DBTX, arg SessionInfoParam
 			&i.Email,
 			&i.InviteCode,
 			&i.Mfa,
+			&i.Passkeys,
 			&i.CsrfToken,
 			&i.ExpiresAt,
 		); err != nil {
