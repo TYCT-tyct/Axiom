@@ -36,7 +36,7 @@ type ScheduleRate struct {
 	Price       platform.UnitPrice
 }
 
-// ScheduleView is each item's effective price at each band, in enumeration order of service tier, band and item. It is
+// ScheduleView is each priced item's effective price at each band, in enumeration order of service tier, band and item. It is
 // the read model a public price page shows: the schedule keeps its prices unexported, and the view copies them for a
 // caller that must not reach into the schedule. A band that leaves an item out inherits the base price, so the view
 // includes that inherited price; an empty band therefore shows the base prices it restores, not nothing.
