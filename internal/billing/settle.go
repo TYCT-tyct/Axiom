@@ -432,45 +432,6 @@ func addMissing(s catalog.Schedule, f fallbacks, cost platform.Exact, u catalog.
 	return cost, nil
 }
 
-// missingRate is the rate an item without a price is charged at. A per-use item takes its configured default. An item
-// counted per piece, second or character takes the dearest price the schedule has for the same unit over every tier and
-// band, so a piece is never priced as a token; a unit the schedule prices nowhere falls back to the token price, as
-// every unpriced item did before, and the charge is estimated.
-func missingRate(s catalog.Schedule, f fallbacks, it catalog.Item) platform.UnitPrice {
-	if perUseItems.Has(it) {
-		return f.perUse[it]
-	}
-	if unit := it.Unit(); unit != catalog.UnitToken {
-		if highest, priced := unitPrice(s, unit); priced {
-			return highest
-		}
-	}
-	return tokenPrice(s)
-}
-
-// unitPrice is the dearest price the schedule has for a unit, over every tier and band, and whether it prices the unit
-// at all. Any price counts, including an explicit zero: a unit priced nowhere is the only reason to charge it as tokens,
-// so existence is Priced's question, not Highest's missing, which only says every tier and band has a price.
-func unitPrice(s catalog.Schedule, unit catalog.Unit) (platform.UnitPrice, bool) {
-	items := itemsOfUnit(unit)
-	if !s.Priced(items) {
-		return platform.UnitPrice{}, false
-	}
-	highest, _ := s.Highest(items, ^catalog.ServiceTierSet(0), math.MaxInt64)
-	return highest, true
-}
-
-// itemsOfUnit are the items billed in unit, for pricing one the schedule leaves out at the dearest price of its own
-// unit.
-func itemsOfUnit(unit catalog.Unit) (items catalog.ItemSet) {
-	for it := range catalog.NumItems {
-		if catalog.Item(it).Unit() == unit {
-			items.Add(catalog.Item(it))
-		}
-	}
-	return items
-}
-
 // segmentCost is one sampling's cost, of its per-use items alone when perUseOnly, and the items without a price.
 func segmentCost(s catalog.Schedule, u catalog.Usage, perUseOnly bool) (platform.Exact, catalog.ItemSet, error) {
 	cost, missing, err := s.Cost(u)

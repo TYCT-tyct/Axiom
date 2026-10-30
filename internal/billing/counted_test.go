@@ -66,6 +66,41 @@ func (b *bank) charges(id uuid.UUID) ChargeDetails {
 	return details
 }
 
+// chargeOf is the named item of the call's charge details.
+func (b *bank) chargeOf(id uuid.UUID, item string) (ChargeItem, bool) {
+	b.t.Helper()
+	for _, it := range b.charges(id).Items {
+		if it.Item == item {
+			return it, true
+		}
+	}
+	return ChargeItem{}, false
+}
+
+// wantCharge is what one item of a call's charge details must hold: its count, the unit it is billed in and its unit
+// price.
+type wantCharge struct {
+	count       int64
+	unit, price string
+}
+
+// checkCharges checks the items are exactly want: each count, unit and price, and none estimated.
+func checkCharges(t *testing.T, items []ChargeItem, want map[string]wantCharge) {
+	t.Helper()
+	got := make(map[string]ChargeItem, len(items))
+	for _, item := range items {
+		got[item.Item] = item
+	}
+	if len(got) != len(want) {
+		t.Fatalf("charge items %+v, want %v", items, want)
+	}
+	for name, w := range want {
+		if g := got[name]; g.Quantity != w.count || g.Unit != w.unit || g.UnitPrice != w.price || g.Estimated {
+			t.Errorf("charge item %s = %+v, want %+v", name, g, w)
+		}
+	}
+}
+
 // TestCountedQuote: every piece, second and character the request states is reserved at its price on top of the token
 // bounds, a count of a token item is left to those bounds, and a counted item the schedule does not price refuses the
 // entry before the upstream is called.
@@ -91,8 +126,8 @@ func TestCountedQuote(t *testing.T) {
 	}
 }
 
-// TestCountedSettlement: a settled call charges each piece, second and character at the locked price, its charge details
-// name the unit and add up to the charge, and a call that fails before commit releases the whole reservation.
+// TestCountedSettlement: a settled call charges each piece, second and character at the locked price, and its charge
+// details name the unit and add up to the charge.
 func TestCountedSettlement(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 10_000_000_000, 0, Config{})
@@ -111,42 +146,29 @@ func TestCountedSettlement(t *testing.T) {
 		t.Fatalf("Settle = %+v, want %v, not estimated, not waived", f, want)
 	}
 	details := b.charges(h.id)
-	want := map[string]struct {
-		count int64
-		unit  string
-		price string
-	}{
+	checkCharges(t, details.Items, map[string]wantCharge{
 		"input": {1000, "token", "0.000000001"}, "output": {10, "token", "0.000000001"},
 		"image_out_piece": {2, "piece", "0.5"}, "audio_in_second": {30, "second", "0.002"},
 		"character_in": {500, "character", "0.0001"},
-	}
-	if len(details.Items) != len(want) {
-		t.Fatalf("charge items %+v, want %d", details.Items, len(want))
-	}
-	for _, item := range details.Items {
-		w, ok := want[item.Item]
-		if !ok || item.Quantity != w.count || item.Unit != w.unit || item.UnitPrice != w.price || item.Estimated {
-			t.Errorf("charge item %+v, want %+v", item, w)
-			continue
-		}
-		delete(want, item.Item)
-	}
-	if len(want) != 0 {
-		t.Errorf("missing charge items %v", want)
-	}
+	})
 	if details.Subtotal != "1.11000101" || details.Charged != "1.11000101" || details.Rounding != "0" {
 		t.Errorf("details subtotal %q rounding %q charged %q", details.Subtotal, details.Rounding, details.Charged)
 	}
 	b.balanced()
+}
 
-	// Nothing reached the client: the reservation is released, pieces and all.
-	failed, err := b.tryCountedHold(counted(t), 1000, countedDemand().Counts)
+// TestCountedRelease: a call that fails before commit releases the whole reservation, pieces and all.
+func TestCountedRelease(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 10_000_000_000, 0, Config{})
+	h, err := b.tryCountedHold(counted(t), 1000, countedDemand().Counts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f := b.settleWith(failed, outcome(FailedBeforeCommit, FinishError, reported(t, map[catalog.Item]int64{
+	f := b.settleWith(h, outcome(FailedBeforeCommit, FinishError, reported(t, map[catalog.Item]int64{
 		catalog.ItemImageOutPiece: 2, catalog.ItemAudioInSecond: 30, catalog.ItemCharacterIn: 500,
-	}))); f.Charged != (platform.Exact{}) || !f.Waived {
+	})))
+	if f.Charged != (platform.Exact{}) || !f.Waived {
 		t.Errorf("a failed call = %+v, want nothing charged and waived", f)
 	}
 	b.balanced()
@@ -201,15 +223,9 @@ func TestCountedMissingPrice(t *testing.T) {
 	if want := platform.AmountExact(120_001_000); f.Charged != want || !f.Estimated {
 		t.Errorf("Settle = %+v, want %v estimated", f, want)
 	}
-	var second *ChargeItem
-	details := b.charges(h.id)
-	for i := range details.Items {
-		if details.Items[i].Item == "audio_in_second" {
-			second = &details.Items[i]
-		}
-	}
-	if second == nil || second.Quantity != 30 || second.Unit != "second" || second.UnitPrice != "0.004" || !second.Estimated {
-		t.Errorf("charge items %+v, want 30 seconds at 0.004 estimated", details.Items)
+	if second, ok := b.chargeOf(h.id, "audio_in_second"); !ok || second.Quantity != 30 || second.Unit != "second" ||
+		second.UnitPrice != "0.004" || !second.Estimated {
+		t.Errorf("the audio charge = %+v, %v; want 30 seconds at 0.004 estimated", second, ok)
 	}
 	b.balanced()
 }
@@ -225,90 +241,119 @@ func TestCountedExplicitZeroPrice(t *testing.T) {
 		usage          map[catalog.Item]int64
 		want           platform.Exact
 	}{
-		{"a zero in the base prices", `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001",
-			"audio_out_second":"0"}}`, 10, map[catalog.Item]int64{catalog.ItemOutput: 10, catalog.ItemAudioInSecond: 30}, platform.AmountExact(10)},
-		{"a zero only in a later band", `{"v":1,"currency":"USD","rates":{"input":"0.001","output":"0.001"},
-			"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":1000,"rates":{"audio_in_second":"0"}}]}}`,
-			10, map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemAudioInSecond: 30}, platform.AmountExact(10_000_000)},
+		{
+			"a zero in the base prices",
+			`{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001","audio_out_second":"0"}}`,
+			10,
+			map[catalog.Item]int64{catalog.ItemOutput: 10, catalog.ItemAudioInSecond: 30},
+			platform.AmountExact(10),
+		},
+		{
+			"a zero only in a later band",
+			`{"v":1,"currency":"USD","rates":{"input":"0.001","output":"0.001"},"context_tiers":{"basis":["input"],
+				"method":"whole","tiers":[{"above":1000,"rates":{"audio_in_second":"0"}}]}}`,
+			10,
+			map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemAudioInSecond: 30},
+			platform.AmountExact(10_000_000),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b := newBank(t, 10_000_000_000, 0, Config{})
-			q := Quotable{Price: mustSchedule(t, tc.schedule), Model: Model{ContextLength: 4096}, MaxOutput: 100, Endpoint: uuid.NewV7()}
-			h, err := b.tryCountedHold(q, tc.text, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			f := b.settleWith(h, outcome(Committed, FinishNone, reported(t, tc.usage)))
-			if f.Charged != tc.want || !f.Estimated {
-				t.Fatalf("Settle = %+v, want %v estimated", f, tc.want)
-			}
-			var second *ChargeItem
-			details := b.charges(h.id)
-			for i := range details.Items {
-				if details.Items[i].Item == "audio_in_second" {
-					second = &details.Items[i]
-				}
-			}
-			if second == nil || second.Quantity != 30 || second.Unit != "second" || second.UnitPrice != "0" ||
-				second.Amount != "0" || !second.Estimated {
-				t.Errorf("charge items %+v, want 30 seconds at 0 estimated", details.Items)
-			}
-			b.balanced()
+			settleZeroPricedUnit(t, tc.schedule, tc.text, tc.usage, tc.want)
 		})
 	}
 }
 
+// settleZeroPricedUnit settles one call whose schedule prices a unit at zero, and checks the unpriced item of that unit
+// is charged at that zero and estimated.
+func settleZeroPricedUnit(t *testing.T, schedule string, text int64, usage map[catalog.Item]int64, want platform.Exact) {
+	t.Helper()
+	b := newBank(t, 10_000_000_000, 0, Config{})
+	q := Quotable{Price: mustSchedule(t, schedule), Model: Model{ContextLength: 4096}, MaxOutput: 100, Endpoint: uuid.NewV7()}
+	h, err := b.tryCountedHold(q, text, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := b.settleWith(h, outcome(Committed, FinishNone, reported(t, usage)))
+	if f.Charged != want || !f.Estimated {
+		t.Fatalf("Settle = %+v, want %v estimated", f, want)
+	}
+	if second, ok := b.chargeOf(h.id, "audio_in_second"); !ok || second.Quantity != 30 || second.Unit != "second" ||
+		second.UnitPrice != "0" || second.Amount != "0" || !second.Estimated {
+		t.Errorf("the audio charge = %+v, %v; want 30 seconds at 0 estimated", second, ok)
+	}
+	b.balanced()
+}
+
+// countedOnly is one rate a speech or transcription model charges for: its schedule as the dataset parser writes it, the
+// items it may report, and what a request stating a count of the priced item reserves, settles and shows.
+type countedOnly struct {
+	name, schedule, unit string
+	reports              catalog.ItemSet
+	key                  catalog.Item
+	count                int64
+	want                 platform.Exact
+	subtotal             string
+}
+
 // TestCountedOnlyQuote: the schedules the dataset parser gives speech and transcription models price a counted unit and
 // no tokens (catalog.TestParseLiteLLM pins their exact text). A request that declares only that unit quotes and settles
-// without token prices; a model that may report tokens still needs them.
+// without token prices.
 func TestCountedOnlyQuote(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name, schedule, unit string
-		reports              catalog.ItemSet
-		key                  catalog.Item
-		count                int64
-		want                 platform.Exact
-		subtotal             string
-	}{
-		{"a character read aloud", `{"currency":"USD","rates":{"character_in":"0.000015"},"v":1}`, "character",
-			1 << catalog.ItemCharacterIn, catalog.ItemCharacterIn, 500, platform.AmountExact(7_500_000), "0.0075"},
-		{"a second transcribed", `{"currency":"USD","rates":{"audio_in_second":"0.0001"},"v":1}`, "second",
-			1 << catalog.ItemAudioInSecond, catalog.ItemAudioInSecond, 30, platform.AmountExact(3_000_000), "0.003"},
+	for _, tc := range []countedOnly{
+		{
+			"a character read aloud", `{"currency":"USD","rates":{"character_in":"0.000015"},"v":1}`, "character",
+			1 << catalog.ItemCharacterIn, catalog.ItemCharacterIn, 500, platform.AmountExact(7_500_000), "0.0075",
+		},
+		{
+			"a second transcribed", `{"currency":"USD","rates":{"audio_in_second":"0.0001"},"v":1}`, "second",
+			1 << catalog.ItemAudioInSecond, catalog.ItemAudioInSecond, 30, platform.AmountExact(3_000_000), "0.003",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			q := Quotable{Price: mustSchedule(t, tc.schedule), Model: Model{ContextLength: 4096, Reports: tc.reports}, Endpoint: uuid.NewV7()}
-			counts := map[catalog.Item]int64{tc.key: tc.count}
-			d := Demand{Counts: counts}
-			res, err := Quote(d, []Quotable{q}, Segments{}, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if res.Amount != tc.want {
-				t.Errorf("reserved %v, want %v", res.Amount, tc.want)
-			}
-			b := newBank(t, 10_000_000_000, 0, Config{})
-			h, err := b.tryCountedHold(q, 0, counts)
-			if err != nil {
-				t.Fatal(err)
-			}
-			f := b.settleWith(h, outcome(Committed, FinishNone, reported(t, counts)))
-			if f.Charged != tc.want || f.Estimated || f.Waived {
-				t.Fatalf("Settle = %+v, want %v not estimated, not waived", f, tc.want)
-			}
-			details := b.charges(h.id)
-			if len(details.Items) != 1 || details.Subtotal != tc.subtotal {
-				t.Fatalf("charge details %+v, subtotal %q, want one item and %s", details.Items, details.Subtotal, tc.subtotal)
-			}
-			if item := details.Items[0]; item.Quantity != tc.count || item.Unit != tc.unit || item.Estimated {
-				t.Errorf("charge item %+v, want unit %s and not estimated", item, tc.unit)
-			}
-			b.balanced()
+			quoteAndSettleCountedOnly(t, tc)
 		})
 	}
-	// A model that may report tokens is still refused when its token price is missing.
+}
+
+// quoteAndSettleCountedOnly quotes and settles a request stating the rate's count on a model that may report only that
+// item, and checks the reservation, the charge and its one item.
+func quoteAndSettleCountedOnly(t *testing.T, tc countedOnly) {
+	t.Helper()
+	q := Quotable{Price: mustSchedule(t, tc.schedule), Model: Model{ContextLength: 4096, Reports: tc.reports}, Endpoint: uuid.NewV7()}
+	counts := map[catalog.Item]int64{tc.key: tc.count}
+	res, err := Quote(Demand{Counts: counts}, []Quotable{q}, Segments{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Amount != tc.want {
+		t.Errorf("reserved %v, want %v", res.Amount, tc.want)
+	}
+	b := newBank(t, 10_000_000_000, 0, Config{})
+	h, err := b.tryCountedHold(q, 0, counts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := b.settleWith(h, outcome(Committed, FinishNone, reported(t, counts))); f.Charged != tc.want ||
+		f.Estimated || f.Waived {
+		t.Fatalf("Settle = %+v, want %v not estimated, not waived", f, tc.want)
+	}
+	details := b.charges(h.id)
+	if len(details.Items) != 1 || details.Subtotal != tc.subtotal {
+		t.Fatalf("charge details %+v, subtotal %q, want one item and %s", details.Items, details.Subtotal, tc.subtotal)
+	}
+	if item := details.Items[0]; item.Quantity != tc.count || item.Unit != tc.unit || item.Estimated {
+		t.Errorf("charge item %+v, want unit %s and not estimated", item, tc.unit)
+	}
+	b.balanced()
+}
+
+// TestCountedOnlyNeedsTokenPrices: a model that may report any token item is refused without its token prices, however
+// its counted units are priced.
+func TestCountedOnlyNeedsTokenPrices(t *testing.T) {
+	t.Parallel()
 	text := Quotable{
 		Price:    mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.001"}}`),
 		Model:    Model{ContextLength: 4096, Reports: 1<<catalog.ItemInput | 1<<catalog.ItemOutput},

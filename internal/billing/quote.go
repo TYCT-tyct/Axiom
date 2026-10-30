@@ -244,41 +244,53 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	if max(samplings, rest, q.outputCap, add(output, allowance), overshoot) == math.MaxInt64 {
 		return q, errOverflow
 	}
-	// Token prices are required for a model that may report any token item, as every model did before. A counted-only
-	// model (a speech or transcription endpoint that reports characters or seconds rather than tokens) has no token
-	// charge to bound, so its schedule must be quotable without token prices. An empty Reports is unknown, not none.
-	tokens := e.Model.Reports == 0 || e.Model.Reports&catalog.TokenItems != 0
-	var firstPrice, restPrice inputPrice
-	var outPrice platform.UnitPrice
-	if tokens {
-		in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
-		in.Add(catalog.ItemInput)
-		if e.Model.OpenAIUsage {
-			// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
-			in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
-		}
-		var ok1, ok2 bool
-		firstPrice, ok1 = prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
-		restPrice, ok2 = prices.inputCeiling(in, tiers, window, e.Model.OpenAIUsage)
-		outItems := catalog.ItemSet(1<<catalog.ItemOutput|1<<catalog.ItemReasoning|1<<catalog.ItemImageOut) |
-			e.Model.Reports&(1<<catalog.ItemAudioOut)
-		var ok3 bool
-		outPrice, ok3 = prices.ceiling(outItems, tiers, longest)
-		if !ok1 || !ok2 || !ok3 {
-			return q, ErrUnpriced
-		}
+	resample, err := q.priceTokens(d, e, &prices, tiers, first, rest, longest)
+	if err != nil {
+		return q, err
 	}
-	q.output = outPrice
-	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
-	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, restPrice); err != nil {
+	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, resample); err != nil {
 		return q, err
 	}
 	if err := q.priceCounted(d, &prices, tiers, longest, samplings); err != nil {
 		return q, err
 	}
-	q.allowance = outPrice.Mul(allowance)
-	q.amount = sum(q.fixed, q.allowance, outPrice.Mul(output))
+	q.allowance = q.output.Mul(allowance)
+	q.amount = sum(q.fixed, q.allowance, q.output.Mul(output))
 	return q, nil
+}
+
+// priceTokens adds every sampling's input and the whole output at their dearest token prices, and returns the input price
+// of the samplings after the first, which a search beyond the tool's uses pays too. Token prices are required for a model
+// that may report any token item, as every model did before. A counted-only model (a speech or transcription endpoint
+// that reports characters or seconds rather than tokens) has no token charge to bound, so its schedule must be quotable
+// without token prices; an empty Reports is unknown, not none.
+func (q *quote) priceTokens(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, first, rest, longest int64) (inputPrice, error) {
+	if e.Model.Reports != 0 && e.Model.Reports&catalog.TokenItems == 0 {
+		return inputPrice{}, nil
+	}
+	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
+	in.Add(catalog.ItemInput)
+	if e.Model.OpenAIUsage {
+		// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
+		in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
+	}
+	firstPrice, ok := prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
+	if !ok {
+		return inputPrice{}, ErrUnpriced
+	}
+	restPrice, ok := prices.inputCeiling(in, tiers, e.Model.ContextLength, e.Model.OpenAIUsage)
+	if !ok {
+		return inputPrice{}, ErrUnpriced
+	}
+	outItems := catalog.ItemSet(1<<catalog.ItemOutput|1<<catalog.ItemReasoning|1<<catalog.ItemImageOut) |
+		e.Model.Reports&(1<<catalog.ItemAudioOut)
+	outPrice, ok := prices.ceiling(outItems, tiers, longest)
+	if !ok {
+		return inputPrice{}, ErrUnpriced
+	}
+	q.output = outPrice
+	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
+	return restPrice, nil
 }
 
 // priceCounted adds every piece, second and character the request states at the dearest price it can have: the count

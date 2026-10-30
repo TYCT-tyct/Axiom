@@ -19,6 +19,11 @@ func TestCountedLedgerProperty(t *testing.T) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
 			b := newBank(t, 100_000_000_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
+			results := []Result{Committed, Aggregated, FailedBeforeCommit, NotExecuted}
+			finishes := []FinishReason{
+				FinishNone, FinishStop, FinishLength, FinishToolUse, FinishRefusal, FinishError,
+				FinishTruncated, FinishTimeout, FinishCancelled,
+			}
 			var reserved, settled int64
 			for range 30 {
 				d := countedDemand()
@@ -40,8 +45,7 @@ func TestCountedLedgerProperty(t *testing.T) {
 					catalog.ItemAudioInSecond: r.Int64N(d.Counts[catalog.ItemAudioInSecond] + 1),
 					catalog.ItemCharacterIn:   r.Int64N(d.Counts[catalog.ItemCharacterIn] + 1),
 				}
-				results := []Result{Committed, Aggregated, FailedBeforeCommit, NotExecuted}
-				f := b.settleWith(h, outcome(results[r.IntN(len(results))], FinishReason(r.IntN(9)), reported(t, usage)))
+				f := b.settleWith(h, outcome(results[r.IntN(len(results))], finishes[r.IntN(len(finishes))], reported(t, usage)))
 				settled += f.Charged.CeilAmount()
 				if f.Charged.Cmp(h.Amount) > 0 {
 					t.Fatalf("charged %d, reserved %d: %v", f.Charged.CeilAmount(), h.Amount.CeilAmount(), f)
@@ -56,32 +60,22 @@ func TestCountedLedgerProperty(t *testing.T) {
 	}
 }
 
-// statements reads the account's whole statement, a page at a time, and checks that each movement's balance is the one
-// before it plus the amount, from the first credit to the newest spend, which is the balance the account has.
+// statements reads the account's whole statement, a page at a time, checks the chain of balances reconciles, and checks
+// the newest row's balance is the one the account holds.
 func (b *bank) statements() {
 	b.t.Helper()
-	var pages []StatementRow
+	var rows []StatementRow
 	var after *StatementCursor
 	for {
-		rows, next := b.statement(b.admitted, 7, after)
-		pages = append(pages, rows...)
+		page, next := b.statement(b.admitted, 7, after)
+		rows = append(rows, page...)
 		if next == nil {
 			break
 		}
 		after = next
 	}
-	if len(pages) == 0 {
-		b.t.Fatal("no statement")
-	}
-	var balance int64
-	for i := len(pages) - 1; i >= 0; i-- {
-		row := pages[i]
-		balance += row.Amount
-		if row.Balance == nil || *row.Balance != balance {
-			b.t.Fatalf("%s of %d leaves %v, want %d", row.Kind, row.Amount, row.Balance, balance)
-		}
-	}
-	if newest := *pages[0].Balance; newest != b.count("SELECT balance FROM billing.balances") {
+	checkStatementChain(b.t, rows)
+	if newest := *rows[0].Balance; newest != b.count("SELECT balance FROM billing.balances") {
 		b.t.Errorf("the statement ends at %d, the balance is %d", newest, b.count("SELECT balance FROM billing.balances"))
 	}
 }

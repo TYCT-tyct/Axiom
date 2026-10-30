@@ -47,6 +47,7 @@ func (it Item) String() string { return itemNames[it] }
 // per token and per piece has an item for each; an item's count is in whole units.
 type Unit uint8
 
+// The units an item is billed in: tokens, uses, whole pieces, whole seconds and whole characters.
 const (
 	UnitToken Unit = iota
 	UnitUse
@@ -61,7 +62,8 @@ var unitNames = [numUnits]string{"token", "use", "piece", "second", "character"}
 
 func (u Unit) String() string { return unitNames[u] }
 
-// Unit is the quantity it is billed in: tokens unless it is a per-use, per-piece, per-second or per-character item.
+// Unit is the quantity it is billed in: tokens unless it is a per-use, per-piece, per-second or per-character item. Every
+// item has a case, so a new one must state its unit here, and the return after the switch is only for the compiler.
 func (it Item) Unit() Unit {
 	switch it {
 	case ItemWebSearch, ItemCodeExecution:
@@ -72,6 +74,9 @@ func (it Item) Unit() Unit {
 		return UnitSecond
 	case ItemCharacterIn:
 		return UnitCharacter
+	case ItemInput, ItemCacheRead, ItemCacheWrite, ItemCacheWrite1h, ItemAudioIn, ItemImageIn, ItemOutput, ItemReasoning,
+		ItemAudioOut, ItemImageOut, NumItems:
+		return UnitToken
 	}
 	return UnitToken
 }
