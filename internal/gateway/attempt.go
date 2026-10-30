@@ -122,26 +122,34 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 	}
 	up, held, err := s.prepare(entry)
 	if errors.Is(err, ErrOverloaded) {
-		conn.Done()
+		s.done(conn)
 		return over, ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}
 	}
 	if unsupported, ok := errors.AsType[*protocol.NotSupported](err); ok {
-		conn.Done()
+		s.done(conn)
 		s.skipUnsupported(entry, unsupported)
 		return nextEntry, ended{}
 	} else if err != nil {
-		conn.Done()
+		s.done(conn)
 		return over, s.unprepared(err)
 	}
 	if len(s.ends) == 0 {
 		s.x.Router.Sent(entry.Supplier)
 	} else if !s.x.Router.TakeRetry(entry.Supplier) {
-		conn.Done()
+		s.done(conn)
 		s.x.Memory.Refund(held)
 		s.exclude(entry, routing.RetryBudget)
 		return nextEntry, ended{}
 	}
 	return s.attempt(ctx, i, entry, conn, up, held)
+}
+
+// done gives an acquired credential slot back and wakes the oldest queued call: a released slot is what the queue waits
+// for, and no other event tells it that capacity returned. The order matters: the slot is free before the waiter looks.
+func (s *session) done(conn Conn) suppliers.AttemptReceipt {
+	receipt := conn.Done()
+	s.x.Limits.Queue.Wake()
+	return receipt
 }
 
 // skipUnsupported passes over an endpoint that cannot express the request. The first reason is what the client is told
@@ -257,8 +265,8 @@ func (a *attempt) close(ctx context.Context) {
 	a.unhook()
 	a.cancel(nil)
 	a.release()
-	receipt := a.conn.Done()
-	a.s.x.Router.End(a.entry.Endpoint)
+	a.s.x.Router.End(a.entry.Endpoint) // before the wake: a waiter must find both the endpoint's count and the slot free
+	receipt := a.s.done(a.conn)
 	a.obs.Credential = receipt.CredentialID()
 	a.result(receipt)
 	a.observe(ctx)

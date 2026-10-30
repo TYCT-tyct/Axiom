@@ -12,7 +12,7 @@ import { words, zhText } from "./words.ts";
 
 test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 
-async function open(page: Page, path: string, data: "usual" | "empty" = "usual") {
+async function open(page: Page, path: string, data: "usual" | "empty" | "worst" = "usual") {
   const state = await mockAdmin(page, data);
   signedInAs(state, "mfa");
   await page.goto(path);
@@ -242,6 +242,20 @@ test.describe("site settings", () => {
 });
 
 test.describe("suppliers", () => {
+  test("the longest status reason the contract allows takes two lines in the list and is whole on the title", async ({
+    page,
+  }) => {
+    await open(page, "/suppliers", "worst");
+    const reason = page.locator("p[title]").filter({ hasText: "The supplier rejected the login." }).first();
+    await expect(reason).toBeVisible();
+    const title = (await reason.getAttribute("title")) ?? "";
+    expect(title).toHaveLength(200);
+    const lines = await reason.evaluate(
+      (p) => p.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(p).lineHeight),
+    );
+    expect(lines).toBeLessThanOrEqual(2);
+  });
+
   test("a supplier is connected in two steps and settles into the setup checklist", async ({ page }) => {
     const state = await open(page, "/suppliers");
     await press(page, "suppliers.connect.open").click();

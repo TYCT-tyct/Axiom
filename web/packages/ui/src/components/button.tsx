@@ -11,7 +11,7 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: "bg-btn text-btn-ink hover:opacity-90",
+        primary: "border border-btn-line bg-btn text-btn-ink hover:opacity-90",
         secondary: "border border-b2 bg-s2 text-t1 shadow-panel hover:border-b3",
         ghost: "text-t2 hover:bg-s2 hover:text-t1",
         danger: "bg-bad text-bad-ink hover:opacity-90",

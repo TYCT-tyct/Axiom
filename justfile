@@ -280,5 +280,9 @@ web-e2e shard="1/1": web-embed
 web-journey: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster {{ web }} journey
 
+# The web vitals of the console and admin (web/README.md「测试」), alone on the machine: they are timings.
+web-vitals: web-embed
+    {{ web }} vitals
+
 # The local entry point retains every check; the workflow schedules the two parts independently.
-web: web-checks web-e2e
+web: web-checks web-e2e web-vitals

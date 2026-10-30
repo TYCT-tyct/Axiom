@@ -194,6 +194,7 @@ test.describe("signing in", () => {
     state.permissions = state.permissions.filter((permission) => permission !== "balance.view");
     await returnToWindow(page);
     await expect(page.getByRole("heading", { name: "没有权限" })).toBeVisible();
+    await expect(page.getByText("请联系工作区的管理员。")).toBeVisible();
     await expect(page.getByText("US$12.00", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "余额" })).toHaveCount(0);
   });

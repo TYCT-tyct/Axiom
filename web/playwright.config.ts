@@ -25,6 +25,7 @@ const workers = Math.min(8, Math.max(1, Math.floor(availableParallelism() / 2)))
 
 export default defineConfig({
   testDir: "e2e",
+  testIgnore: "vitals.spec.ts", // timed, so it runs alone (playwright.vitals.config.ts)
   workers,
   forbidOnly: Boolean(process.env.CI),
   reporter: process.env.CI ? "github" : "list",
