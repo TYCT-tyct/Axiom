@@ -48,9 +48,12 @@ type Site struct {
 	RegistrationDomainDeny     []string
 	// APIBase is the origin a key's calls go to, where the site registers an API domain: the console tells the user
 	// where to point a client rather than trusting the Host of the request (README.md「快照」).
-	APIBase  string
-	sessions map[Surface]lifetime
-	limits   limits
+	APIBase string
+	// BrandColor is the site's #rrggbb colour; empty means the default palette. The console derives both schemes from
+	// it (docs/frontend.md「主题与自由度」).
+	BrandColor string
+	sessions   map[Surface]lifetime
+	limits     limits
 }
 
 // lifetime is how long a session lasts: idle since its last request, and at most from its start.
@@ -171,6 +174,9 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 			return nil, fmt.Errorf("site %s: %w", site.ID.TypeID(), err)
 		}
 		site.Currency = currency
+		if r.BrandColor != nil {
+			site.BrandColor = *r.BrandColor
+		}
 		if r.NewKeyDailyLimit != nil {
 			site.NewKeyDailyLimit = *r.NewKeyDailyLimit
 		}

@@ -114,6 +114,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/sites/{site_id}/brand": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's brand colour.
+         * @description The #rrggbb colour the console derives both colour schemes from (docs/frontend.md「主题与自由度」); absent when the site uses the default palette. Contrast is not a reason to refuse a colour: the console corrects it.
+         */
+        get: operations["getSiteBrand"];
+        /**
+         * Set or clear a site's brand colour.
+         * @description Sets the site's brand colour, or clears it to the default palette when `brand_color` is empty. A value that is not #rrggbb is a 400. The change is audited; this node serves it at once and the others follow within their site reload interval.
+         */
+        put: operations["updateSiteBrand"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/sites/{site_id}/system-settings/payments": {
         parameters: {
             query?: never;
@@ -1538,6 +1564,15 @@ export interface components {
             /** @enum {string} */
             registration?: "invite" | "closed";
         };
+        SiteBrand: {
+            /** @description The site's brand colour, lower case. Absent when the site uses the default palette; a node of the previous release has no brand colour and leaves it out. */
+            brand_color?: string;
+        };
+        SiteBrandUpdate: {
+            /** @description The new brand colour as #rrggbb, or empty to return to the default palette. A value the console corrects for contrast is accepted: it picks the accent and the button's ink, not the site owner. */
+            brand_color: string;
+            reason: components["schemas"]["Reason"];
+        };
         SystemSettingsUpdate: {
             settings: {
                 name: string;
@@ -2912,6 +2947,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSiteBrand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's brand colour. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteBrand"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteBrand: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiteBrandUpdate"];
+            };
+        };
+        responses: {
+            /** @description The brand colour now in force. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteBrand"];
                 };
             };
             400: components["responses"]["BadRequest"];

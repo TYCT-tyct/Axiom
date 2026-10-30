@@ -1834,6 +1834,13 @@ components:
         id: {$ref: "#/components/schemas/SiteId"}
         name: {type: string}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD, description: "The site's accounting currency, the one of every `Money` its API shows. It never changes."}
+        brand_color:
+          type: string
+          pattern: '^#[0-9a-f]{6}$'
+          description: >-
+            The site's brand colour, lower case, from which the console derives both colour schemes' accent and primary
+            button (docs/frontend.md「主题与自由度」). Absent when the site uses the default palette or the node predates
+            the field.
         logo_url: {type: string, description: "Absent when the site has no logo."}
         key_prefix: {type: string, example: sk-ax-v1-, description: "What the site's API keys start with."}
         email_verification:

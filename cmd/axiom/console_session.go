@@ -29,6 +29,9 @@ func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject
 	if site.APIBase != "" {
 		response.ApiBaseUrl = &site.APIBase
 	}
+	if site.BrandColor != "" {
+		response.BrandColor = &site.BrandColor
+	}
 	if site.Registration == "open" {
 		verified := true
 		response.EmailVerification = &verified

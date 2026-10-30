@@ -32,7 +32,7 @@ export function Shell({
   forbiddenHint,
   children,
 }: {
-  brand: { name?: string; logo_url?: string } | undefined;
+  brand: { name?: string; logo_url?: string; brand_color?: string } | undefined;
   nav: NavItem[];
   forbiddenHint: string;
   children: ReactNode;
@@ -42,6 +42,7 @@ export function Shell({
       <AppShell
         banner={<NewVersionNotice />}
         forbiddenHint={forbiddenHint}
+        brandColor={brand?.brand_color}
         sidebar={
           <>
             <Logo className="mb-4 px-2 py-1" name={brand?.name} logoUrl={brand?.logo_url} />

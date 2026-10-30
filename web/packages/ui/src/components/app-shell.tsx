@@ -1,6 +1,7 @@
 import { Slot } from "radix-ui";
-import { type ComponentProps, type ReactNode, type RefObject, useEffect, useRef } from "react";
+import { type ComponentProps, type CSSProperties, type ReactNode, type RefObject, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { brandStyle } from "../brand";
 import { cn } from "../cn";
 import { Button } from "./button";
 import { Icon } from "./icon";
@@ -13,24 +14,31 @@ import { ForbiddenHint, LoadingState, NotFoundState, PageFailedState } from "./s
 // moves into a drawer, a native modal <dialog>: it traps focus and closes on Escape by itself, with no
 // script that injects styles, which the content security policy would block (docs/security.md「网页与域名」). banner
 // holds a notice for the whole app above the top bar; it takes room from the page, never from the sidebar. forbiddenHint
-// is the app's sentence for a person who lacks a permission, shown after the shared "no permission" text.
+// is the app's sentence for a person who lacks a permission, shown after the shared "no permission" text. brandColor
+// is the site's #rrggbb, from which brandStyle derives both schemes' tokens (docs/frontend.md「主题与自由度」); without
+// one the default palette applies.
 export function AppShell({
   sidebar,
   header,
   banner,
   forbiddenHint,
+  brandColor,
   children,
 }: {
   sidebar: ReactNode;
   header?: ReactNode;
   banner?: ReactNode;
   forbiddenHint?: string;
+  brandColor?: string;
   children: ReactNode;
 }) {
   const { t } = useTranslation("common");
   const drawer = useRef<HTMLDialogElement>(null);
   return (
-    <div className="min-h-dvh text-ui lg:grid lg:grid-cols-[216px_minmax(0,1fr)]">
+    <div
+      className="min-h-dvh text-ui lg:grid lg:grid-cols-[216px_minmax(0,1fr)]"
+      style={brandColor ? (brandStyle(brandColor) as CSSProperties) : undefined}
+    >
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-btn focus:bg-s2 focus:px-3 focus:py-2"

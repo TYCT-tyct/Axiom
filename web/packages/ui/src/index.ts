@@ -1,3 +1,4 @@
+export { brandStyle } from "./brand";
 export { AppShell, focusPage, PageHeader, routerDefaults, SideNavItem } from "./components/app-shell";
 export { Button, SubmitButton } from "./components/button";
 export { CopyButton } from "./components/copy-button";
