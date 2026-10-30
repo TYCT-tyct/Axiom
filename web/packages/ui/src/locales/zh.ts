@@ -8,6 +8,7 @@ const codes = {
   invalid_code: "验证码不对，或这条恢复码已经用过。",
   forbidden: "你的账户没有做这件事的权限。",
   mfa_required: "这个操作需要先完成两步验证。",
+  consent_required: "服务条款或隐私政策有更新，请先阅读并同意。",
   login_domain_locked: "已有通行密钥或第三方登录绑定，登录域名不能改。先移除它们。",
   login_domain_required: "请选择第三方登录和通行密钥使用的控制台域名。",
   identity_taken: "这个第三方账户已经绑定到别的用户。",
