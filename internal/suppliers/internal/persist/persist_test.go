@@ -14,6 +14,8 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
@@ -293,6 +295,42 @@ func (c *cluster) stored() (state, listing string) {
 		c.t.Fatal(err)
 	}
 	return state, listing
+}
+
+// TestPoolCapacityIsStoredBesideTheListing: the pool's reading comes back with the state it belongs to, in the groups'
+// own columns rather than the strictly decoded state, and a reading the pool no longer reports is cleared.
+func TestPoolCapacityIsStoredBesideTheListing(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	s := c.acquire(c.node("a"))
+	head, capacity := 40, 32
+	st := stateAt(1)
+	st.Tasks[syncer.TaskCatalog].LastOK = t0
+	st.Groups = []syncer.GroupSnap{{Ref: "1", Name: "g", Ratio: "1", Facts: `{}`}}
+	st.Pool = []syncer.PoolCapacity{{GroupRef: "1", Accounts: 10, Failed: 2, Usable: 8, Headroom: &head, Capacity: &capacity}}
+	if err := s.Store().Commit(t.Context(), 0, syncer.Commit{State: st}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.Store().Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(st.Pool, loaded.Pool); diff != "" {
+		t.Fatalf("loaded pool differs (-want +got):\n%s", diff)
+	}
+	next := loaded
+	next.Version = 2
+	next.Pool = nil
+	if err = s.Store().Commit(t.Context(), 1, syncer.Commit{State: next}); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := s.Store().Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared.Pool) != 0 {
+		t.Errorf("pool %+v after the pool stopped reporting the group, want none", cleared.Pool)
+	}
 }
 
 // TestACommitKeepsTheLeaseAndAReleaseGivesItUp: every commit lengthens the lease by its time, so a round longer than the

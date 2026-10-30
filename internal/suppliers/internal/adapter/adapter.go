@@ -58,7 +58,31 @@ var (
 	// ErrUnrecognised: the supplier answered in a form this adapter does not know, as after an upgrade there. Only the
 	// task that read it stops, and nothing it read is written.
 	ErrUnrecognised = errors.New("adapter: the response is not in a form this adapter knows")
+	// ErrNotPool: the login does not administer the supplier's accounts, so the supplier is a relay and has no pool to
+	// read. It is not a failure: a relay's capacity is its own, and its weight is not Axiom's to lower.
+	ErrNotPool = errors.New("adapter: the supplier is not a pool this login administers")
 )
+
+// Pool is the optional half of a management side whose supplier is a pool of upstream accounts: a self-hosted system
+// (sub2api, CPA, ...) whose administrator interface lists the accounts and how much of their quota windows is left. A
+// relay does not implement it; a pool whose login is not an administrator answers ErrNotPool.
+type Pool interface {
+	// Pool reads the pool's capacity per group. GroupRef is the supplier's own group ID, the one its offer lists. It
+	// reports a group only when at least one account is assigned to it: a group absent from the answer is not known,
+	// which is not the same as empty.
+	Pool(ctx context.Context) ([]GroupCapacity, error)
+}
+
+// GroupCapacity is what one group of a pool has: its accounts and the room left in their quota windows. The counts are
+// exact; Headroom is the mean over a sample of the accounts that can serve now, of the percent of the tighter of the
+// supplier's quota windows (its five-hour and weekly windows) that is still unused. nil means no account reported a
+// window, which is not the same as empty.
+type GroupCapacity struct {
+	GroupRef         string
+	Accounts, Failed int // Failed: accounts the pool marks failed, which cannot serve
+	Usable           int // Usable: accounts it may schedule now, whether a window was reported or not
+	Headroom         *int
+}
 
 // Amount is a quantity in the supplier's native unit, as decimal text at the supplier's own precision. Upstream
 // amounts never pass through float64: a rounded cost would show up as a difference at reconciliation.

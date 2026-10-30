@@ -49,6 +49,37 @@ func TestRoutableIsWhatListRoutableHolds(t *testing.T) {
 	}
 }
 
+// TestAPoolLowGroupIsPoolLowInTheSnapshot: routing halves the weight of a group whose pool has little capacity left, and
+// stops when the pool recovers.
+func TestAPoolLowGroupIsPoolLowInTheSnapshot(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE suppliers.supplier_groups
+SET pool_accounts = 10, pool_failed = 1, pool_usable = 9, pool_headroom = 15, pool_capacity = 13, pool_low = true,
+    pool_observed_at = now() WHERE id = $1`, w.group)
+		return err
+	})
+	if err := w.svc.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.routable(); len(got) != 1 || !got[0].PoolLow {
+		t.Fatalf("snapshot %+v, want one pool-low endpoint", got)
+	}
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE suppliers.supplier_groups
+SET pool_accounts = 10, pool_failed = 0, pool_usable = 10, pool_headroom = 90, pool_capacity = 90, pool_low = false,
+    pool_observed_at = now() WHERE id = $1`, w.group)
+		return err
+	})
+	if err := w.svc.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.routable(); len(got) != 1 || got[0].PoolLow {
+		t.Fatalf("snapshot %+v, want one endpoint that is not pool-low", got)
+	}
+}
+
 // TestOnlyAFundedSupplierIsRoutable: a supplier whose balance was never read, or is zero or overdrawn, is out of the
 // routing snapshot; one above zero is in.
 func TestOnlyAFundedSupplierIsRoutable(t *testing.T) {

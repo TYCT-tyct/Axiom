@@ -107,6 +107,7 @@ type Endpoint struct {
 	BreakerOpen bool // quality has taken it out for now
 	BalanceOK   bool // the supplier has a synced positive balance
 	BalanceLow  bool // it can, but is below the warning line: its weight is halved
+	PoolLow     bool // its group's pool has little capacity left: its weight is halved
 	Egresses    int  // how many egresses can reach it
 
 	Class         Class

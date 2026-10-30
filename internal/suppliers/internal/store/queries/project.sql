@@ -3,7 +3,10 @@
 -- production applies only the collected differences through ProjectionWrites, so replay changes nothing.
 
 -- name: ListProjectedGroups :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts::text AS facts, present
+-- The pool columns are what the last read of the pool reported: the projection compares them so that a listing read
+-- twice writes no row, and a pool whose numbers did not change writes none either.
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts::text AS facts, present,
+    pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low, pool_observed_at
 FROM suppliers.supplier_groups
 WHERE supplier_id = @supplier_id
 ORDER BY upstream_ref;
@@ -20,6 +23,26 @@ WHERE id = @id;
 
 -- name: SetProjectedGroupAbsent :exec
 UPDATE suppliers.supplier_groups SET present = false WHERE id = @id AND present;
+
+-- name: SetProjectedGroupPool :exec
+-- What the pool's management API last reported of the group. NULL where a read has not reported it, which is how a
+-- group that left the pool's answer is cleared.
+UPDATE suppliers.supplier_groups
+SET pool_accounts = @accounts, pool_failed = @failed, pool_usable = @usable, pool_headroom = @headroom,
+    pool_capacity = @capacity, pool_low = @low::boolean, pool_observed_at = @observed_at
+WHERE id = @id;
+
+-- name: ClearProjectedGroupPool :exec
+UPDATE suppliers.supplier_groups
+SET pool_accounts = NULL, pool_failed = NULL, pool_usable = NULL, pool_headroom = NULL, pool_capacity = NULL,
+    pool_low = NULL, pool_observed_at = NULL
+WHERE id = @id;
+
+-- name: ListGroupPoolCapacities :many
+SELECT upstream_ref, pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low
+FROM suppliers.supplier_groups
+WHERE supplier_id = @supplier_id AND pool_accounts IS NOT NULL
+ORDER BY upstream_ref;
 
 -- name: ListProjectedModels :many
 SELECT supplier_group_id, upstream_name, model_id, formats, present

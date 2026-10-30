@@ -283,3 +283,109 @@ func TestAttentionReasonChangesKeepBothRecoveryBaselines(t *testing.T) {
 		t.Fatalf("replayed recovery: %+v", got)
 	}
 }
+
+// poolNumbers is the reading a pool left on the world's group.
+const poolNumbers = `SET pool_accounts = 10, pool_failed = 3, pool_usable = 7, pool_headroom = 20, pool_capacity = 14,
+	pool_low = true, pool_observed_at = now() WHERE id = $1`
+
+func lowPoolGroup(w *world) {
+	w.t.Helper()
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE suppliers.supplier_groups `+poolNumbers, w.group)
+		return err
+	})
+}
+
+func forwardPoolAlerts(w *world) {
+	w.t.Helper()
+	w.tx(func(ctx context.Context, tx pg.Tx) error { return forwardSyncAlerts(ctx, tx, w.supplier) })
+}
+
+// clearPoolGroup erases the reading, as the projection does when the group leaves the pool's answer.
+func clearPoolGroup(w *world) {
+	w.t.Helper()
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE suppliers.supplier_groups
+SET pool_accounts = NULL, pool_failed = NULL, pool_usable = NULL, pool_headroom = NULL, pool_capacity = NULL,
+    pool_low = NULL, pool_observed_at = NULL WHERE id = $1`, w.group)
+		return err
+	})
+}
+
+// dropPoolPosition erases the set of groups the bridge last reported, as a node of the previous version rewriting the
+// position would.
+func dropPoolPosition(w *world) {
+	w.t.Helper()
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE platform.alert_positions SET position = position - 'PoolLow' WHERE source = $1`,
+			"suppliers.sync/"+w.supplier.String())
+		return err
+	})
+}
+
+// TestPoolCapacityAlertCarriesItsNumbers: a group the pool reports low raises one signal, keyed by the group and
+// carrying the counts an operator needs; the first bridge run reports a low group that already exists.
+func TestPoolCapacityAlertCarriesItsNumbers(t *testing.T) {
+	w := newWorld(t, 2)
+	lowPoolGroup(w)
+	setSyncAlertState(w, 0, syncer.State{})
+	forwardPoolAlerts(w)
+	signals := consumeSupplierSignals(w)
+	if len(signals) != 1 {
+		t.Fatalf("the first bridge run: %+v, want the current low group", signals)
+	}
+	s := signals[0]
+	if s.Kind != "suppliers.pool_capacity" || s.Resolved || s.Key != w.supplier.String()+"/g" {
+		t.Fatalf("signal %+v, want an unresolved pool capacity of the group", s)
+	}
+	if s.Fields["accounts"] != "10" || s.Fields["failed"] != "3" || s.Fields["usable"] != "7" ||
+		s.Fields["headroom"] != "20" || s.Fields["capacity"] != "14" {
+		t.Errorf("fields %v, want the pool's numbers", s.Fields)
+	}
+}
+
+// TestPoolCapacityAlertResolvesWhenTheGroupRecovers: the bridge compares the rows each run, so a recovery needs no event,
+// and a lost set of reported groups (a position written by the previous version) re-raises a low that is still there and
+// resolves one that is not.
+func TestPoolCapacityAlertResolvesWhenTheGroupRecovers(t *testing.T) {
+	w := newWorld(t, 2)
+	lowPoolGroup(w)
+	setSyncAlertState(w, 0, syncer.State{})
+	forwardPoolAlerts(w)
+	consumeSupplierSignals(w)
+
+	dropPoolPosition(w)
+	forwardPoolAlerts(w)
+	signals := consumeSupplierSignals(w)
+	if len(signals) != 1 || signals[0].Resolved {
+		t.Fatalf("a low group after the position lost its set: %+v, want one firing signal", signals)
+	}
+
+	clearPoolGroup(w)
+	forwardPoolAlerts(w)
+	signals = consumeSupplierSignals(w)
+	if len(signals) != 1 || !signals[0].Resolved || signals[0].Key != w.supplier.String()+"/g" {
+		t.Fatalf("recovery: %+v, want one resolved pool capacity", signals)
+	}
+	forwardPoolAlerts(w)
+	if got := consumeSupplierSignals(w); len(got) != 0 {
+		t.Fatalf("a steady reading raised %+v, want nothing", got)
+	}
+}
+
+// TestPoolCapacityAlertRecoversWhenThePositionPredatesTheSet: an older node consuming events skipped the pool ones and
+// rewrote the position without the set; the run that sees the row already cleared resolves the alert all the same.
+func TestPoolCapacityAlertRecoversWhenThePositionPredatesTheSet(t *testing.T) {
+	w := newWorld(t, 2)
+	lowPoolGroup(w)
+	setSyncAlertState(w, 0, syncer.State{})
+	forwardPoolAlerts(w)
+	consumeSupplierSignals(w)
+	dropPoolPosition(w)
+	clearPoolGroup(w)
+	forwardPoolAlerts(w)
+	signals := consumeSupplierSignals(w)
+	if len(signals) != 1 || !signals[0].Resolved || signals[0].Key != w.supplier.String()+"/g" {
+		t.Fatalf("recovery with no remembered set: %+v, want one resolved pool capacity", signals)
+	}
+}
