@@ -92,3 +92,41 @@ func TestOutputTotal(t *testing.T) {
 		}
 	}
 }
+
+// TestUnits: every item is billed in the unit its price is for, and the counted set holds exactly the items counted per
+// piece, second or character rather than per token or use. A new item without a unit fails here.
+func TestUnits(t *testing.T) {
+	want := map[catalog.Item]catalog.Unit{
+		catalog.ItemInput: catalog.UnitToken, catalog.ItemCacheRead: catalog.UnitToken,
+		catalog.ItemCacheWrite: catalog.UnitToken, catalog.ItemCacheWrite1h: catalog.UnitToken,
+		catalog.ItemAudioIn: catalog.UnitToken, catalog.ItemImageIn: catalog.UnitToken,
+		catalog.ItemOutput: catalog.UnitToken, catalog.ItemReasoning: catalog.UnitToken,
+		catalog.ItemAudioOut: catalog.UnitToken, catalog.ItemImageOut: catalog.UnitToken,
+		catalog.ItemWebSearch: catalog.UnitUse, catalog.ItemCodeExecution: catalog.UnitUse,
+		catalog.ItemImageInPiece: catalog.UnitPiece, catalog.ItemImageOutPiece: catalog.UnitPiece,
+		catalog.ItemAudioInSecond: catalog.UnitSecond, catalog.ItemAudioOutSecond: catalog.UnitSecond,
+		catalog.ItemCharacterIn: catalog.UnitCharacter,
+	}
+	if len(want) != int(catalog.NumItems) {
+		t.Fatalf("the table names %d items, want %d", len(want), catalog.NumItems)
+	}
+	for item := range catalog.NumItems {
+		if got := item.Unit(); got != want[item] {
+			t.Errorf("%s is billed per %v, want %v", item, got, want[item])
+		}
+		if counted := want[item] != catalog.UnitToken && want[item] != catalog.UnitUse; catalog.CountedItems.Has(item) != counted {
+			t.Errorf("%s: counted %v, want %v", item, catalog.CountedItems.Has(item), counted)
+		}
+		if token := want[item] == catalog.UnitToken; catalog.TokenItems.Has(item) != token {
+			t.Errorf("%s: a token item %v, want %v", item, catalog.TokenItems.Has(item), token)
+		}
+	}
+	for unit, name := range map[catalog.Unit]string{
+		catalog.UnitToken: "token", catalog.UnitUse: "use", catalog.UnitPiece: "piece",
+		catalog.UnitSecond: "second", catalog.UnitCharacter: "character",
+	} {
+		if got := unit.String(); got != name {
+			t.Errorf("unit %d is %q, want %q", unit, got, name)
+		}
+	}
+}

@@ -71,10 +71,12 @@ func TestParseLiteLLM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Only the vendors' own text models: not sample_spec, a cloud's copy of a model (vertex_ai), or an image model.
+	// Only the vendors' own models: not sample_spec or a cloud's copy of a model (vertex_ai); the image and audio modes
+	// are taken too, for the items counted per piece, second and character.
 	want := []string{
 		"claude-haiku-5-5", "claude-sonnet-4-5", "claude-sonnet-4-5-20250929", "deepseek-chat", "deepseek/deepseek-chat",
-		"gemini/gemini-2.5-pro", "gpt-4o", "gpt-4o-2024-08-06", "gpt-bad-decimals", "gpt-bad-exponent", "gpt-bad-negative",
+		"gemini/gemini-2.5-pro", "gemini/gemini-3-pro-image-preview", "gpt-4o", "gpt-4o-2024-08-06", "gpt-4o-mini-tts",
+		"gpt-bad-decimals", "gpt-bad-exponent", "gpt-bad-negative", "tts-1", "whisper-1",
 	}
 	if got := keysOf(entries); !slices.Equal(got, want) {
 		t.Fatalf("entries = %v, want %v", got, want)
@@ -88,6 +90,17 @@ func TestParseLiteLLM(t *testing.T) {
 			`"input":"0.000003","output":"0.000015","web_search":"0.01"},"v":1}`,
 		// 2.8e-08 is read from its digits; the duplicate spelling input_cost_per_token_cache_hit is not a second price
 		"deepseek/deepseek-chat": `{"currency":"USD","rates":{"cache_read":"0.000000028","cache_write":"0","input":"0.00000028","output":"0.00000042"},"v":1}`,
+		// A generated image is one piece, its tokens another item; input_cost_per_image is not read (gpt-4o above carries
+		// output_cost_per_image as the price of an image token, which is why chat rows do not price a piece).
+		"gemini/gemini-3-pro-image-preview": `{"currency":"USD","rates":{"image_out":"0.00012","image_out_piece":"0.134",` +
+			`"input":"0.000002","output":"0.000012"},"v":1}`,
+		// TTS: a second of output audio beside the audio token price
+		"gpt-4o-mini-tts": `{"currency":"USD","rates":{"audio_out":"0.000012","audio_out_second":"0.00025",` +
+			`"input":"0.0000006","output":"0.00001"},"v":1}`,
+		// A character read aloud, the only item tts-1 prices
+		"tts-1": `{"currency":"USD","rates":{"character_in":"0.000015"},"v":1}`,
+		// A second of transcribed audio; output_cost_per_second is the same price and is not a second item
+		"whisper-1": `{"currency":"USD","rates":{"audio_in_second":"0.0001"},"v":1}`,
 	} {
 		if got := scheduleOf(t, entryOf(t, entries, key), nil); got != want {
 			t.Errorf("%s:\n got %s\nwant %s", key, got, want)
@@ -100,6 +113,11 @@ func TestParseLiteLLM(t *testing.T) {
 	}
 	if e := entryOf(t, entries, "gemini/gemini-2.5-pro"); !slices.Equal(e.Names, []string{"gemini-2.5-pro"}) || !e.Text {
 		t.Errorf("gemini names %v text %v", e.Names, e.Text)
+	}
+	for _, key := range []string{"gemini/gemini-3-pro-image-preview", "gpt-4o-mini-tts", "tts-1", "whisper-1"} {
+		if e := entryOf(t, entries, key); e.Text {
+			t.Errorf("%s: text %v, want an image or audio model", key, e.Text)
+		}
 	}
 }
 

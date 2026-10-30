@@ -25,7 +25,9 @@ const (
 
 func (r *rig) seedCatalog() {
 	var err error
-	if r.catalog, err = catalog.Open(r.db, platformScope, catalog.Config{MaxStale: time.Hour}); err != nil {
+	// The rig serves the state after the release that opens the image and audio endpoints: CountedItems is on, so the
+	// golden price can carry per-piece prices (internal/catalog/README.md「新增计费项与滚动升级」).
+	if r.catalog, err = catalog.Open(r.db, platformScope, catalog.Config{MaxStale: time.Hour, CountedItems: true}); err != nil {
 		r.t.Fatal(err)
 	}
 	r.alpha = r.model("acme/alpha")

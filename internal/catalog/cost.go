@@ -123,6 +123,24 @@ func (s Schedule) Highest(items ItemSet, tiers ServiceTierSet, length int64) (hi
 	return highest, missing
 }
 
+// Priced reports whether any item in items has a price at any service tier and band. It asks whether a price exists, not
+// whether every position has one as Highest's missing does: an explicit zero is a price, and one band or tier is enough.
+func (s Schedule) Priced(items ItemSet) bool {
+	for st := range numServiceTiers {
+		for it := range NumItems {
+			if !items.Has(it) {
+				continue
+			}
+			for band := range len(s.above) + 1 {
+				if _, ok := s.price(st, band, it); ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // highest is the higher of floor and the item's prices at the service tier in bands 0 to last, and whether every band has
 // a price.
 func (s Schedule) highest(st ServiceTier, it Item, last int, floor platform.UnitPrice) (platform.UnitPrice, bool) {

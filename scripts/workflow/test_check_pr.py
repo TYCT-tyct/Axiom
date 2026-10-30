@@ -20,8 +20,8 @@ def comment(first_line, association="OWNER"):
     return {"body": f"{first_line}\n\ndetails", "author_association": association}
 
 
-def reviewed(blocking=0, should=0, sha=HEAD[:7]):
-    return comment(f"独立评审 · 提交 {sha} · Sonnet 5.5 · 只读 · 阻断 {blocking} · 应修 {should} · 细节 1")
+def reviewed(blocking=0, should=0, sha=HEAD[:7], model="Sonnet 5.5"):
+    return comment(f"独立评审 · 提交 {sha} · {model} · 只读 · 阻断 {blocking} · 应修 {should} · 细节 1")
 
 
 class DescribeTest(unittest.TestCase):
@@ -252,6 +252,14 @@ class ReviewTest(unittest.TestCase):
             "clean review, full hash": ([reviewed(sha=HEAD)], True),
             "outsider's review": ([{**reviewed(), "author_association": "NONE"}], False),
             "re-review clears the findings": ([reviewed(should=2), reviewed()], True),
+            # #67: each reviewer's latest review of the commit stands
+            "another reviewer's clean review after a blocking one": ([reviewed(blocking=1), reviewed(model="Codex gpt-6-astra")], False),
+            "two reviewers, both clean": ([reviewed(), reviewed(model="Codex gpt-6-astra")], True),
+            "two reviewers, the second unanswered": ([reviewed(), reviewed(should=1, model="Codex gpt-6-astra")], False),
+            "a reviewer re-posts at another effort": ([reviewed(blocking=1, model="Codex gpt-6.1-sol（medium）"),
+                                                       reviewed(model="Codex gpt-6.1-sol (low)")], True),
+            "two models named in brackets stay apart": ([reviewed(blocking=1, model="Codex (gpt-6-astra)"),
+                                                         reviewed(model="Codex (gpt-6.1-sol)")], False),
         }
         for name, (comments, ok) in cases.items():
             with self.subTest(name):
@@ -265,6 +273,15 @@ class ReviewTest(unittest.TestCase):
         self.assertNotEqual(review(HEAD, BODY, "someone", [reviewed(blocking=1, sha="fedcba9")], same_change=same), [])
         self.assertNotEqual(review(HEAD, BODY, "someone", [reviewed(sha="1234567")], same_change=same), [])  # another change
         self.assertEqual(review(HEAD, BODY, "someone", [*older[:1], comment(f"作者回应 · 提交 {HEAD[:7]}")], same_change=same), [])
+        # another reviewer passing the head does not drop a blocking review of the same change before a base merge
+        self.assertNotEqual(review(HEAD, BODY, "someone", [reviewed(blocking=1, sha="fedcba9"), reviewed(model="Codex")],
+                                   same_change=same), [])
+
+    def test_a_first_line_the_old_check_read_still_counts(self):
+        # before reviewers were told apart, any text sat between the commit and 阻断; a blocking review written that way
+        # must still block, not vanish and let a waiver through
+        loose = comment(f"独立评审 · 提交 {HEAD[:7]} · Codex · 只读，阻断 1 · 应修 0 · 细节 0")
+        self.assertNotEqual(review(HEAD, BODY + "免评审：只改文档\n", "someone", [loose]), [])
 
     def test_the_authors_answer_covers_commits_after_a_review_without_blocking_findings(self):
         same = lambda commit: commit == "fedcba9"
@@ -285,6 +302,10 @@ class ReviewTest(unittest.TestCase):
             "a review of another PR's commit": ([reviewed(sha="7654321"), answer(HEAD[:7])], False),
             "a blocking review of the head comes first": ([reviewed(blocking=1), reviewed(sha="1234567"), answer(HEAD[:7])], False),
             "outsider's answer": ([reviewed(sha="1234567"), {**answer(HEAD[:7]), "author_association": "NONE"}], False),
+            "another reviewer's clean review does not let an answer pass a blocking one": (
+                [reviewed(blocking=1, sha="1234567"), reviewed(sha="1234567", model="Codex"), answer(HEAD[:7])], False),
+            "each reviewer clean on the newest commit": (
+                [reviewed(sha="1234567"), reviewed(sha="fedcba9", model="Codex"), answer(HEAD[:7])], True),
         }
         for name, (comments, ok) in cases.items():
             with self.subTest(name):

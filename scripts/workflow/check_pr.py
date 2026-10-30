@@ -36,12 +36,13 @@ SECTION = re.compile(r"^## (.+?)\s*$", re.MULTILINE)
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / ".github" / "pull_request_template.md"
 CONFIG = ".github/project-workflow.toml"
-REVIEW = re.compile(r"^独立评审 · 提交 ([0-9a-f]{7,40}) · .*阻断 ([0-9]+) · 应修 ([0-9]+)")
+REVIEW = re.compile(r"^独立评审 · 提交 ([0-9a-f]{7,40}) · (.*)阻断 ([0-9]+) · 应修 ([0-9]+)")  # (.*) names the reviewer
+EFFORT = re.compile(r"\s*[（(](?:minimal|low|medium|high|xhigh|max)[）)]$", re.IGNORECASE)
 RESPONSE = re.compile(r"^作者回应 · 提交 ([0-9a-f]{7,40})")
 WAIVER = re.compile(r"^免评审[：:][ \t]*\S", re.MULTILINE)
 # The issues GitHub closes when the PR merges, by any keyword form it honours or by a link set in the PR's sidebar. After an
 # edit GitHub updated them within about a second (measured 2026-10-17); a job reading them starts later than that. Linking an
-# issue in the sidebar triggers no workflow, so the check is rerun by hand after that (engineering reference, pr). GitHub
+# issue in the sidebar triggers no workflow, so the check is rerun by hand after that (toolbox reference, pr). GitHub
 # leaves out the issues the token may not read (cli/cli#11841), such as those in other private repositories.
 CLOSES = ("query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) "
           "{ closingIssuesReferences(first: 100) { pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } } }")
@@ -169,18 +170,23 @@ def review(head, body, author, comments, allow_waiver=True, same_change=lambda c
     if author in EXEMPT:
         return []
     first = [(comment["body"].strip().splitlines() or [""])[0] for comment in comments if comment.get("author_association") in TRUSTED]
-    reviews = [(index, match) for index, line in enumerate(first) if (match := REVIEW.match(line)) and head.startswith(match.group(1))]
-    if not reviews:  # later commits that only merged the base branch in keep the latest review of the same change
-        reviews = next(([(index, match)] for index, line in reversed(list(enumerate(first)))
-                        if (match := REVIEW.match(line)) and same_change(match.group(1))), [])
+    # reviews of the head, and of earlier commits whose change it carries: later commits that only merged the base branch
+    # in keep them, so a blocking review of such a commit still counts after another reviewer passes the head
+    reviews = [(index, match) for index, line in enumerate(first)
+               if (match := REVIEW.match(line)) and (head.startswith(match.group(1)) or same_change(match.group(1)))]
     if not reviews:
         # After a review without blocking findings, the author's answer naming the head records the commits pushed since,
         # such as fixes for its should-fix findings or a merge of the base with conflicts: only blocking ones need another look
-        last = None  # the review of the newest commit in head's history, of one commit the latest posted: never a review
-        for index, line in enumerate(first):  # of another PR's commit, nor of an older commit posted after a blocking one
-            if (match := REVIEW.match(line)) and ancestor(match.group(1), head) and (last is None or ancestor(last[1].group(1), match.group(1))):
-                last = (index, match)
-        clean = last is not None and not int(last[1].group(2))
+        # each reviewer's review of the newest commit in head's history, of one commit the latest posted: never a review of
+        # another PR's commit, nor of an older commit posted after a blocking one; last is the newest of them
+        last, own = None, {}
+        for index, line in enumerate(first):
+            if (match := REVIEW.match(line)) and ancestor(match.group(1), head):
+                if last is None or ancestor(last[1].group(1), match.group(1)):
+                    last = (index, match)
+                if (mine := own.get(reviewer(match))) is None or ancestor(mine[1].group(1), match.group(1)):
+                    own[reviewer(match)] = (index, match)
+        clean = last is not None and not any(int(match.group(3)) for _, match in own.values())
         if clean and any((match := RESPONSE.match(line)) and (head.startswith(match.group(1)) or same_change(match.group(1)))
                          for line in first[last[0] + 1:]):
             return []
@@ -192,17 +198,28 @@ def review(head, body, author, comments, allow_waiver=True, same_change=lambda c
                   f"review in a comment whose first line is 作者回应 · 提交 {head[:7]}") if clean else ""
         return [f"no independent review of {head[:7]}: a reviewer other than the author, on a different model, posts the full "
                 f"review in a comment whose first line is 独立评审 · 提交 {head[:7]} · <model> · 只读 · 阻断 <n> · 应修 <n> · 细节 <n> "
-                f"(open findings by grade){answer}; then rerun this check"]
-    index, latest = reviews[-1]
-    reviewed = latest.group(1)
-    if int(latest.group(2)):
-        return [f"the review of {reviewed[:7]} has {latest.group(2)} blocking findings: fix them, then have the new commit reviewed"]
-    answered = any((match := RESPONSE.match(line)) and (reviewed.startswith(match.group(1)) or match.group(1).startswith(reviewed)
-                                                         or head.startswith(match.group(1)))
-                   for line in first[index + 1:])
-    if int(latest.group(3)) and not answered:
-        return [f"answer the review of {reviewed[:7]} in a comment whose first line is 作者回应 · 提交 {reviewed[:7]}"]
+                f"(open findings by grade){answer}; then rerun this check (on an organization's repository, a member's comments count only "
+                f"while the membership is public)"]
+    # Each reviewer's latest review stands: a later clean review by another reviewer does not clear an earlier blocking one
+    # (#67), while a reviewer re-posting its own review of the commit, as when the owner accepts a finding, replaces it
+    latest = {reviewer(match): (index, match) for index, match in reviews}
+    for index, match in latest.values():
+        reviewed = match.group(1)
+        if int(match.group(3)):
+            return [f"the review of {reviewed[:7]} has {match.group(3)} blocking findings: fix them, then have the new commit reviewed"]
+        answered = any((answer := RESPONSE.match(line)) and (reviewed.startswith(answer.group(1)) or answer.group(1).startswith(reviewed)
+                                                             or head.startswith(answer.group(1)))
+                       for line in first[index + 1:])
+        if int(match.group(4)) and not answered:
+            return [f"answer the review of {reviewed[:7]} in a comment whose first line is 作者回应 · 提交 {reviewed[:7]}"]
     return []
+
+
+def reviewer(match):
+    """The reviewer as named on the first line: its model, without 只读 and a trailing effort level in brackets, so one
+    reviewer's re-review at another effort still replaces its own review while two models stay apart."""
+    name = re.sub(r"[\s·，,]*(只读)?[\s·，,]*$", "", match.group(2))
+    return EFFORT.sub("", name).strip()
 
 
 def main():

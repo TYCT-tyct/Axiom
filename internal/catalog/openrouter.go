@@ -11,8 +11,10 @@ import (
 )
 
 // openrouterItems are the pricing fields whose unit is known: tokens, or searches for web_search (Anthropic's $0.01 a
-// search is "0.01" there). Per-image, per-request and audio fields are not read, so a model that reports them is held
-// as missing their price.
+// search is "0.01" there). The per-image fields are not read: their published definition is per input or output image,
+// but the list prices Gemini's prompt and image the same and a generated image at 0.00003, which is the price of one
+// image token, so a per-piece price taken from it would be a fraction of the cost. Per-request fields are another unit
+// again and are not read here.
 var openrouterItems = map[string]Item{
 	"prompt":               ItemInput,
 	"completion":           ItemOutput,
