@@ -4,6 +4,13 @@ SELECT EXISTS (SELECT 1 WHERE (SELECT platform.in_platform_scope()) OR @site_id:
 -- name: ReadRefund :many
 SELECT * FROM payments.refunds WHERE id = @id;
 
+-- name: ListRefunds :many
+-- A page's orders' refunds, oldest first, with the currency each returns cash in. One statement for the page instead of
+-- one per order; the account scope already limits it to the account's own rows.
+SELECT sqlc.embed(r), o.pay_currency FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
+WHERE r.order_id = ANY (@order_ids::uuid[])
+ORDER BY r.created_at, r.id;
+
 -- name: RefundByKey :many
 SELECT * FROM payments.refunds WHERE order_id = @order_id AND idem_key = @idem_key;
 

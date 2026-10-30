@@ -11,6 +11,7 @@ import (
 	"axiom/internal/payments"
 	"axiom/internal/platform"
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/webui"
 )
 
@@ -33,13 +34,16 @@ var orderRefusals = []refusal{
 	{payments.ErrFirstLimit, http.StatusUnprocessableEntity, codeUnprocessable, "a first top-up is limited; try a smaller amount"},
 	{payments.ErrTooManyOrders, http.StatusConflict, codeConflict, "too many orders wait for payment; pay or cancel one first"},
 	{payments.ErrNotWaiting, http.StatusConflict, codeConflict, "the order is not waiting for payment"},
-	{payments.ErrKeyReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another top-up"},
+	{payments.ErrKeyReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another request"},
 	{payments.ErrTooManyCancels, http.StatusTooManyRequests, codeRateLimited, "too many cancellations lately; try again later"},
 	{payments.ErrTooManyIPOrders, http.StatusTooManyRequests, codeRateLimited, "too many top-ups were started from this network lately; try again later"},
 	{payments.ErrTooManyIPFailures, http.StatusTooManyRequests, codeRateLimited, "too many top-ups from this network failed lately; try again later"},
 	{payments.ErrVerifyLimited, http.StatusTooManyRequests, codeRateLimited, "this order was checked a moment ago; wait a minute before checking it again"},
 	{payments.ErrQueryPaused, http.StatusServiceUnavailable, codeUnavailable, "the payment channel is busy; wait a moment before checking again"},
 	{payments.ErrUnconfirmed, http.StatusServiceUnavailable, codeUnavailable, "the payment channel did not answer; try again shortly, a payment already made is not lost"},
+	{payments.ErrRefundInFlight, http.StatusConflict, codeConflict, "a refund of this order is still in flight; wait for its outcome"},
+	{payments.ErrRefundForbidden, http.StatusForbidden, codeForbidden, "a refund of this order is not available: the channel or the merchant does not allow it"},
+	{payments.ErrRefundAmount, http.StatusUnprocessableEntity, codeUnprocessable, "there is nothing refundable left on this order, or the amount is more than that"},
 }
 
 func payAmount(m payments.Money) consoleapi.PayAmount {
@@ -75,11 +79,49 @@ func orderBody(o payments.Order, site platform.Currency, checkout payments.Check
 	body := consoleapi.Order{
 		Id: o.ID.TypeID(), State: consoleapi.OrderState(o.State), Method: string(o.Method), Credits: moneyOf(o.Credits, site),
 		Total: payAmount(o.Total), Fee: payAmount(payments.Money{Currency: o.Total.Currency, Minor: o.Fee}),
-		CreatedAt: o.CreatedAt, ExpiresAt: o.ExpiresAt,
+		CreatedAt: o.CreatedAt, ExpiresAt: o.ExpiresAt, RefundAllowed: &o.RefundAllowed,
 	}
 	if o.State == payments.Pending && hasCheckout(checkout) {
 		body.Checkout = checkoutBody(checkout)
 	}
+	return body
+}
+
+// refundState is the refund as the console shows it: whether it still waits for an administrator, is with the channel,
+// or is final. A frozen refund that an administrator has released is already processing.
+func refundState(r payments.Refund) consoleapi.RefundState {
+	switch r.State {
+	case "frozen":
+		if r.Approved {
+			return consoleapi.RefundProcessing
+		}
+		return consoleapi.RefundPendingReview
+	case "sending", "pending":
+		return consoleapi.RefundProcessing
+	case "succeeded":
+		return consoleapi.RefundSucceeded
+	default: // "failed"; the module has no other state, and a new one must be taught here.
+		return consoleapi.RefundDeclined
+	}
+}
+
+// refundBody is a refund as the contract shows it. Credits are the site's accounting currency; the cash quote is the
+// currency the order was paid in, which is not always the same.
+func refundBody(r payments.Refund, site platform.Currency) consoleapi.OrderRefund {
+	return consoleapi.OrderRefund{
+		Id: r.ID.TypeID(), State: refundState(r), Credits: moneyOf(r.Credits, site), Amount: payAmount(r.Amount),
+		CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt,
+	}
+}
+
+// withRefunds attaches what a page read knows about an order's refunds; an empty list means none, which is different
+// from the field being absent on a node that did not read them.
+func withRefunds(body consoleapi.Order, refunds []payments.Refund, site platform.Currency) consoleapi.Order {
+	list := make([]consoleapi.OrderRefund, len(refunds))
+	for i, r := range refunds {
+		list[i] = refundBody(r, site)
+	}
+	body.Refunds = &list
 	return body
 }
 
@@ -175,7 +217,45 @@ func placed(o payments.Order, site platform.Currency, checkout payments.Checkout
 	return consoleapi.CreateOrder201JSONResponse(orderBody(o, site, checkout)), nil
 }
 
-// GetOrder reads one of the account's orders; another account's is not found.
+// ListOrders lists the account's orders, newest first, a page at a time, with each order's refunds.
+func (c consoleAPI) ListOrders(ctx context.Context, request consoleapi.ListOrdersRequestObject) (consoleapi.ListOrdersResponseObject, error) {
+	cl := callOf(ctx)
+	var after *page.Cursor
+	if request.Params.Cursor != nil && *request.Params.Cursor != "" {
+		cursor, err := page.ParseCursor(*request.Params.Cursor)
+		if err != nil {
+			return nil, err
+		}
+		after = &cursor
+	}
+	orders, next, err := c.payments.ListOrders(ctx, cl.scope, uuid.UUID(cl.principal.AccountID()), after, pageSize(request.Params.Limit))
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]payments.OrderID, len(orders))
+	for i, o := range orders {
+		ids[i] = o.ID
+	}
+	refunds, err := c.payments.ListRefunds(ctx, cl.scope, ids)
+	if err != nil {
+		return nil, err
+	}
+	list := consoleapi.OrderList{Data: make([]consoleapi.Order, len(orders))}
+	for i, o := range orders {
+		// The channel's client secret is shown once, in the answer that made the order; a page read leaves it out and
+		// carries only the link or code that is still safe to show.
+		checkout := o.Checkout
+		checkout.ClientSecret = ""
+		list.Data[i] = withRefunds(orderBody(o, cl.site.Currency, checkout), refunds[o.ID], cl.site.Currency)
+	}
+	if next != nil {
+		cursor := next.String()
+		list.NextCursor = &cursor
+	}
+	return consoleapi.ListOrders200JSONResponse(list), nil
+}
+
+// GetOrder reads one of the account's orders, with its refunds; another account's is not found.
 func (c consoleAPI) GetOrder(ctx context.Context, request consoleapi.GetOrderRequestObject) (consoleapi.GetOrderResponseObject, error) {
 	cl := callOf(ctx)
 	id, err := payments.ParseOrderID(request.OrderId)
@@ -186,7 +266,11 @@ func (c consoleAPI) GetOrder(ctx context.Context, request consoleapi.GetOrderReq
 	if err != nil {
 		return nil, err
 	}
-	return consoleapi.GetOrder200JSONResponse(orderBody(o, cl.site.Currency, o.Checkout)), nil
+	refunds, err := c.payments.ListRefunds(ctx, cl.scope, []payments.OrderID{id})
+	if err != nil {
+		return nil, err
+	}
+	return consoleapi.GetOrder200JSONResponse(withRefunds(orderBody(o, cl.site.Currency, o.Checkout), refunds[id], cl.site.Currency)), nil
 }
 
 // CancelOrder cancels a waiting order of the account.
@@ -215,4 +299,25 @@ func (c consoleAPI) VerifyOrder(ctx context.Context, request consoleapi.VerifyOr
 		return nil, err
 	}
 	return consoleapi.VerifyOrder200JSONResponse(orderBody(o, cl.site.Currency, o.Checkout)), nil
+}
+
+// RequestRefund freezes the unused part of an order's paid credits and asks for an administrator's approval.
+func (c consoleAPI) RequestRefund(ctx context.Context, request consoleapi.RequestRefundRequestObject) (consoleapi.RequestRefundResponseObject, error) {
+	cl := callOf(ctx)
+	id, err := payments.ParseOrderID(request.OrderId)
+	if err != nil {
+		return nil, err
+	}
+	credits, err := creditsIn(request.Body.Credits, cl.site.Currency)
+	if err != nil {
+		return nil, err
+	}
+	r, err := c.payments.Refund(ctx, cl.scope, payments.RefundRequest{
+		Order: id, Credits: credits, Key: request.Params.IdempotencyKey, Reason: request.Body.Reason,
+		Via: "channel", User: uuid.UUID(cl.principal.UserID()),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return consoleapi.RequestRefund201JSONResponse(refundBody(r, cl.site.Currency)), nil
 }

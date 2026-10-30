@@ -101,6 +101,9 @@ type Order struct {
 	ExpiresAt  time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// RefundAllowed is the merchant account's policy for user refund requests. The request itself still checks the
+	// channel's current capability; this only says whether the page should offer it.
+	RefundAllowed bool
 }
 
 var (
@@ -322,13 +325,6 @@ func readPlacedOrder(ctx context.Context, tx pg.Tx, r CreateOrder) (Order, bool,
 	return order, true, nil
 }
 
-// GetOrder reads an order the scope sees: the account's own on the console, so another account's is ErrNotFound.
-func (p *Payments) GetOrder(ctx context.Context, s pg.Scope, id OrderID) (Order, error) {
-	var o Order
-	err := p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) { o, err = loadOrder(ctx, tx, id); return err })
-	return o, err
-}
-
 // readOrder reads one order of the transaction's scope.
 func loadOrder(ctx context.Context, tx pg.Tx, id OrderID) (Order, error) {
 	rows, err := queries.ReadOrder(ctx, tx, uuid.UUID(id))
@@ -357,6 +353,7 @@ func orderOf(r ReadOrderRow) (Order, error) {
 		ID: OrderID(r.ID), SiteID: r.SiteID, AccountID: r.AccountID, UserID: r.UserID, MerchantID: MerchantID(r.MerchantID),
 		Method: Method(r.Method), State: State(r.State), Credits: r.Credits, Total: Money{pay, r.Total}, Fee: r.Fee,
 		TradeNo: r.TradeNo, Checkout: c, ExpiresAt: r.ExpiresAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		RefundAllowed: r.RefundAllowed,
 	}, nil
 }
 
