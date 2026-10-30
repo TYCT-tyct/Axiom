@@ -2,7 +2,7 @@
 
 模型、名字、官方规格和参考价，以及目录、成本计划、售价共用的价目表结构。要求和业务设计见[模型目录](../../docs/domains/catalog.md)，这里写代码结构、数据、不变量和接口。
 
-> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`、`ServiceTier`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`、`Lost`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式；以及存储、快照与管理操作：表 `author`、`model`、`name`、`reference_price`、`revision`、`change`，行级安全与授权，`Normalize`，内存快照与名字解析，管理操作和 `axiom catalog` 命令；以及 LiteLLM、OpenRouter 两个数据集的取数、解析、自动发布、改选到数据集和第一版验收的只读检查（#24，见「参考价的录入」），以及数据集同步的定时调度、它留在 `catalog.sync_state` 的记录和失败过久的告警（#319 E7-4、#281）。页面监测、页面审核项和当前快照证据校验已实现；数据集核对、数据集审核项、后台任务角色和 `lock_models` 仍是设计。
+> 本文先于代码写成，是目录模块的完整设计；各部分随实现的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。已实现的是价目表结构与计价（#70、#71）：计费项和服务等级及其集合，`Usage`（`NewUsage`、`Unknown`、`OutputTotal`、`Count`、`ServiceTier`），`Schedule`（`ParseSchedule`、`MarshalJSON`、`Cost`、`Ceiling`、`Missing`、`Lost`）和 `Reportable`，以及「数值域」「存储」两节规定的数值和存储格式；以及存储、快照与管理操作：表 `author`、`model`、`name`、`alias`、`reference_price`、`revision`、`change`，行级安全与授权，`Normalize`，内存快照与名字解析，管理操作和 `axiom catalog` 命令；以及 LiteLLM、OpenRouter 两个数据集的取数、解析、自动发布、改选到数据集和第一版验收的只读检查（#24，见「参考价的录入」），以及数据集同步的定时调度、它留在 `catalog.sync_state` 的记录和失败过久的告警（#319 E7-4、#281）。页面监测、页面审核项和当前快照证据校验已实现；数据集核对、数据集审核项、后台任务角色和 `lock_models` 仍是设计。
 
 ## 包
 
@@ -24,7 +24,8 @@
 |---|---|---|---|---|
 | `author` | `slug`、`name` | PK `slug` | 公开 | 增、改名 |
 | `model` | `id`、`author`、`slug`、`status`（draft / listed / retired）、`version_basis`（dated / floating）、`price_source`（litellm / openrouter / official / manual）、`spec` jsonb、`rev` | PK `id`；UNIQUE `slug`；`split_part(slug, '/', 1) = author` | 公开，draft 行只有平台可见 | 列级授权只许改 `status`、`price_source`、`spec`、`rev` |
-| `name` | `name`（原样）、`norm`、`visibility`（public / internal）、`model_id` | PK `name`；UNIQUE `norm`；public 时 `norm !~ '-latest$' AND norm !~ '[:~@]'`；所有名字 `norm !~ '[:~]'` | 公开，只含 listed 模型的名字，其余只有平台可见 | 只追加 |
+| `name` | `name`（原样）、`norm`、`visibility`（public / internal）、`model_id` | PK `name`；UNIQUE `norm`；public 时 `norm !~ '-latest$' AND norm !~ '[~@]'`，且只允许 `:free` 一个冒号；所有名字 `norm !~ '~'`，`:` 只能是结尾的 `:free` | 公开，只含 listed 模型的名字，其余只有平台可见 | 只追加 |
+| `alias` | `name`（归一化）、`rev`、`model_id`、`set_at` | PK `(name, rev)`；`name ~ '^~…-latest$'`；只追加 | 公开 | 只追加 |
 | `reference_price` | `id`、`model_id`、`currency`、`source`、`schedule` jsonb（撤下时为空）、`schedule_sha256`、`published_at`、`supersedes` | PK `id`；UNIQUE `supersedes`；部分唯一索引 `(model_id, currency) WHERE supersedes IS NULL`；UNIQUE `(id, model_id, currency)`，外键 `(supersedes, model_id, currency)` 引用它，只能替代同一条时间线上的行；`supersedes <> id`；`currency ~ '^[A-Z]{3}$'`，`schedule` 与 `schedule_sha256` 同时为空或同时非空，非空时币种等于 `schedule` 里的币种 | 公开，只含 listed 模型的参考价，其余只有平台可见 | 只追加 |
 | `revision` | 单行 `n` | 只有影响快照的写入才加一 | 公开 | 改 |
 | `change` | `id`、`op_key` uuid、`at`、`actor`、`reason`、`kind`、`subject`、`before`、`after`、`evidence` jsonb | PK `id`；UNIQUE `op_key` | 平台 | 只追加 |
@@ -37,8 +38,8 @@
 | `review` | `id`、`page_id`、`kind`（仅 page_changed）、`snapshot_id`、`previous_snapshot_id`、`removed`、`added`、`content_seq`、`status`、`resolution` | PK `id`；部分唯一索引 `page_id WHERE status = 'open'`；dismissed 的 `(page_id, snapshot_id)` 不重开 | 平台 | 改差异、版本与处理状态 |
 
 - `model.id` 是 UUIDv7，Go 类型 `catalog.ModelID`。
-- `model.slug` 是后台和日志用的唯一标识：`<厂商>/<模型>`，厂商给出版本标识时加 `@<版本>`；厂商部分 `^[a-z0-9][a-z0-9-]{0,39}$`。它不是名字，不进 `name` 表。
-- 标准 ID 是用户调用的 `<厂商>/<模型>`，存成一个 public 的 `name`，格式 `^<厂商>/[a-z0-9][a-z0-9._-]{0,99}$`，不含 `@`。
+- `model.slug` 是后台和日志用的唯一标识：`<厂商>/<模型>`，厂商给出版本标识时加 `@<版本>`；厂商部分 `^[a-z0-9][a-z0-9-]{0,39}$`。它不是名字，不进 `name` 表。`:free` 条目在模型部分后加 `:free`，它的标准 ID 就是去掉 `@版本` 的 slug（如 `acme/alpha:free`）。
+- 标准 ID 是用户调用的 `<厂商>/<模型>`，存成一个 public 的 `name`，格式 `^<厂商>/[a-z0-9][a-z0-9._-]{0,99}(:free)?$`，不含 `@`。`:free` 是独立条目：自己的规格、参考价、端点，精确匹配，永远不会落到基础模型。
 - `name` 上的 CHECK 只是兜底，上架审核时逐个确认可见性。改 `Normalize` 的规则要随迁移重算 `norm` 并重新检查唯一性。
 - 参考价的历史以 `supersedes` 串起；当前价是没有被替代的那一行，它是撤下行（`schedule` 为空）时这个币种没有当前价。更正也是发布新的一行。`source` 记下这一行来自哪个价格来源，证据在对应的 `change` 里。
 - `spec` 原地更新，旧值在 `change` 里。它包括目录基线的全部规格和计费要用的模型数据，其中 `items`、`tiers` 是上游可能报告的计费项和服务等级（见「上架门槛与缺项」）。
@@ -207,7 +208,7 @@
 - **陈旧上限**：快照记下 `confirmed_at`，即最后一次确认"数据库的 `revision` 就是本快照的版本"的时刻，取那次读取开始的时间。读到相同的 revision 才续期；读到更高的版本不续期，必须成功加载并发布它，新快照以加载事务开始的时刻作为 `confirmed_at`；加载失败不续期旧快照。超过最大陈旧时间（默认 30 秒，启动配置，必须大于轮询周期）后 `Current()` 返回 `ErrStale`，gateway 对需要解析模型的新请求返回 503，节点不就绪，直到确认或发布了当前版本。首次加载成功前同样不就绪。
 - **新增计费项与滚动升级**：旧版本的 `parseRates` 用旧的封闭枚举，读到不认识的计费项名字就拒绝整张价目表；加载失败不续期旧快照，超过陈旧上限后节点对所有模型都不就绪，回滚旧二进制同样加载不了目录。所以新增计费项分两步。本版本先能读：`Config.CountedItems` 关闭（`cmd/axiom` 现在传的就是关闭）时，`PublishPrice`、改选价格来源和数据集同步都拒绝含按张、按秒、按字符价格的价目表，同步把 `ErrCountedItems` 当 held 写进报告，所以 listed 模型的价目表不会带旧节点读不了的名字，草稿上的这类价格也不进快照。打开它的发布必须已经让全部节点跑能读这些项的版本：那时正在被替换的旧节点是本版本的读取方，写入才安全；`Config.CountedItems` 的注释写明这一步，打开它的发布只需在 `cmd/axiom` 传 `true`，不需要改解析或发布逻辑。回滚边界：一旦 listed 模型的价目表含这些项，回滚到本版本之前的二进制无法加载目录快照，只能先撤下这些价格；还没写过这类价格时回滚安全。供应商成本计划是管理员直接写进 billing 的另一处价目表，打开图片、音频接口的发布要按同样的顺序写它。验证：`TestAllowCounted` 覆盖开关与拒绝，`TestSyncHoldsCountedPrices` 覆盖同步 held、不写价格和打开后发布；用量 JSON 末尾零值的兼容另见[计费的「分项计价」](../../docs/domains/billing.md)。
 - **影响有界**：快照里的参考价用于展示，也是售价的输入：路由快照每次重建时，按站点的定价规则对它现算售价（见[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)），所以参考价的改动在两个 5 秒的周期内进入售价。下线的模型最多在陈旧上限内还能被新请求调用。
-- **解析**：`ResolvePublic` 遇到含 `:` 的名字一律返回"模型不存在"，不切后缀，所以带后缀的写法永远落不到基础模型；目录没有变体，`:free`、`:batch` 是供应商别名；`:nitro`、`:floor` 等路由变体由 gateway 在调用目录之前读掉（`gateway/variant.go`），目录收到的名字不带后缀，所以这条不变量不变。其余名字 `Normalize` 后查预建的 map。`Recognize` 公开和内部名字都查，带日期的名字和移动名字的模型的名字返回 `Exact=true`，绑定到固定版本模型的不带日期名字返回 `Exact=false`。
+- **解析**：`ResolvePublic` 对名字做精确匹配，不切后缀；`:free` 只命中目录里同名条目，基础模型不会替它被调用。`:batch` 等仍不存在，`:nitro`、`:floor` 由 gateway 在调用目录之前读掉（`gateway/variant.go`）。别名 `~作者/系列-latest` 查 `alias` 的最新 `rev`，返回它指向的已上架模型；目标下线时返回 `ErrRetired`。其余名字 `Normalize` 后查预建的 map。`Recognize` 公开和内部名字都查，带日期的名字和移动名字的模型的名字返回 `Exact=true`，绑定到固定版本模型的不带日期名字返回 `Exact=false`；别名不是供应商名字，不参与 `Recognize`。
 - **billing 跟上改价**：售价在路由快照重建时现算，版本号里含所用参考价的行（`reference_price.id`），所以参考价变了售价随之变，不需要通知。按站点币种重新选参考价的后台任务（`CurrentPrices`）和发布动作随 M2，见 [#234](https://github.com/TYCT-tyct/Axiom/issues/234)（选用规则见[计费的「定价」](../../docs/domains/billing.md#定价)）。
 
 ## 参考价的录入
@@ -224,7 +225,7 @@
 - **同步状态与告警**（已实现，`sync_metrics.go`）：登记任务时同时登记无标签 gauge `axiom_catalog_sync_last_success_age_seconds` 和 `axiom_catalog_sync_consecutive_failures`。每次采集都以平台范围读持久化状态和数据库时钟（最多 2 秒），距最后成功的秒数即使没有新任务执行也继续增长；从未成功时从 `failing_since` 起算，尚未执行过为 0，时钟倒退时不报负数。连续失败直接取 `failures`。读库失败返回采集错误、不伪报 0；运维节点需同时监测指标缺失。运维节点按后台数据配置时间和连续失败阈值、严重程度及通知渠道（[记录与告警的「监控与告警」](../../docs/domains/observability.md#监控与告警)）。节点仍在执行失败轮次时提供 `catalog.sync.overdue` 日志和 `axiom_catalog_sync_overdue_total` 计数作为兜底；`SyncJobConfig.AlertAfter` 的 48 小时是代码默认值，没有后台配置入口，显式启动配置可覆盖，不能把它当作后台规则。单次取数错误仍由 `SyncAll` 记录，但不走队列丢弃告警。
 - **数据集**：provider 名由代码里的一张小对照表映射到厂商（如 LiteLLM 的 `gemini`、models.dev 的 `google`）。数字从 JSON 原文取，十进制系数加指数（如 `3e-06`）精确展开后再转 `UnitPrice`；指数限制在 ±30，展开后超过 15 位小数的条目拒绝，全程不经 float64。只和 `Recognize` 返回 `Exact=true` 的模型对应，其余开审核项。已实现的读法：
   - LiteLLM 只读厂商自己的 provider（`openai`、`anthropic`、`gemini`→google、`deepseek`）下 `mode` 为 `chat`、`responses`、`image_generation`、`audio_speech`、`audio_transcription` 的条目，不读 `vertex_ai`、`bedrock`、`azure` 这类转售方按自己的价格表的条目；条目名去掉 `<provider>/` 前缀。字段先去服务等级后缀（`_priority`、`_flex`），再去 `_above_<N>k_tokens`（N 千 token），再按字段表认计费项；字段表按 `mode` 收窄，同一个字段在不同 mode 下含义不同的不读：`output_cost_per_image` 只在 `image_generation` 里是每张图的价（chat 行里它是每 image token 的价），`output_cost_per_second` 只认 `audio_speech`，`input_cost_per_second` 只认 `audio_transcription`，`input_cost_per_character` 只认 `audio_speech`；`input_cost_per_image` 整个不读（`high/1024-x-1024/gpt-image-1` 这类带尺寸前缀的图片键里它是生成一张的价，chat 行里是 image token 的价，含义不唯一）。`_batches` 等不对应计费项的字段不读。联网搜索取 `search_context_cost_per_query`，三种上下文大小同价才取。
-  - OpenRouter 取 `pricing` 里单位明确的字段（`prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`internal_reasoning`、`web_search`）；`image`、`image_output` 不读：文档说按张，但 2026-10-29 的真实数据里 Gemini 的这两个值等于它的 image token 价（`image` 与 `prompt` 同价），取它就是一个 token 的价当一张图的价；条目以 `id` 和带日期的 `canonical_slug` 为名；带 `:` 的变体（`:batch`、`:free`）是供应商别名，不当模型。带 `overrides` 的条目不可用：它写了 `min_prompt_tokens` 却没说按什么用量求和、门槛本身算不算进该档，有的还按时段（`utc_start`），所以 OpenRouter 现在只表达无分档的价格。
+  - OpenRouter 取 `pricing` 里单位明确的字段（`prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`internal_reasoning`、`web_search`）；`image`、`image_output` 不读：文档说按张，但 2026-10-29 的真实数据里 Gemini 的这两个值等于它的 image token 价（`image` 与 `prompt` 同价），取它就是一个 token 的价当一张图的价；条目以 `id` 和带日期的 `canonical_slug` 为名；`:free` 是独立模型，保留；其他带 `:` 的变体（如 `:batch`）是供应商别名，不当模型。带 `overrides` 的条目不可用：它写了 `min_prompt_tokens` 却没说按什么用量求和、门槛本身算不算进该档，有的还按时段（`utc_start`），所以 OpenRouter 现在只表达无分档的价格。
   - 币种固定 USD。条目有错（负数、指数越界、超过 15 位小数、字段不是数）时整条不可用，原因随结果报出，不取其余字段。
   - **分档的口径来自当前参考价**：数据集只说门槛在哪，不说哪些用量相加，而 `ParseSchedule` 要口径。条目的门槛与当前参考价的门槛逐个相同时，沿用当前的 `TierBasis`；没有当前价、门槛不同、条目没有分档而当前价有，都不发布（`ErrDatasetTiers` 或「分档结构不同」），由人发布后同步才接手。
   - **对应**：模型的名字（公开和内部，经 `ListNamesOfModel`）归一化后查条目。只有「名字本身是版本证据」的名字才算：移动名字的模型的任何名字，或带日期的名字（与 `Recognize` 的 `Exact` 同一规则）；只靠不带日期的名字找到条目的，结果是 held，因为数据集可能已把它换到新版本。同一模型对应到几个条目时，若有一个条目说出了其余所有条目说的（同一位置同一价格，如 LiteLLM 的 `deepseek-chat` 与 `deepseek/deepseek-chat` 后者多一个 0 的缓存写），取它；否则有歧义，held。不会从不同条目各取一个字段。
@@ -235,7 +236,7 @@
 
 ## 管理操作
 
-> 已实现，平台范围。管理接口（`cmd/axiom/admin_catalog.go`）和 `axiom catalog` 命令调用同样的方法；operations 的审批中间层随 operations。
+> 已实现，平台范围。管理接口（`cmd/axiom/admin_catalog.go`）和 `axiom catalog` 命令调用同样的方法；operations 的审批中间层随 operations。别名目前只有命令入口（`axiom catalog save-alias`），HTTP 管理接口还没有它的路径。
 
 每个操作是 `Catalog` 的一个方法，带 `Op{Actor, Key, Reason}`，在一个事务里依次：
 
@@ -250,7 +251,8 @@
 |---|---|---|
 | `SaveAuthor` | 建厂商或改显示名 | 理由必填 |
 | `CreateModel` | 建草稿模型，厂商取自 `slug` 的前半 | 厂商存在；`spec` 是对象，`items`、`tiers` 若有则是已知的计费项和服务等级 |
-| `AddName` | 给模型加名字，归一化后全局唯一；名字长度 1 到 200 字节（入口、数据库 `octet_length`、解析器同一规则） | 模型未下线；`norm` 未被占用（`ErrNameTaken`）；公开名字的约束由数据库兜底 |
+| `AddName` | 给模型加名字，归一化后全局唯一；名字长度 1 到 200 字节（入口、数据库 `octet_length`、解析器同一规则）；`:` 只允许结尾的 `:free` | 模型未下线；`norm` 未被占用（`ErrNameTaken`）；公开名字的约束由数据库兜底 |
+| `SaveAlias` | 给 `~作者/系列-latest` 追加一个目标模型版本（命令入口；HTTP 管理接口暂缺） | 名字符合别名格式；目标是已上架模型；目标作者与别名作者相同；目标不是 `:free` 条目；`change` 与审计同事务，`revision` 加一 |
 | `UpdateSpec` | 原地改规格（带 `rev`） | 模型未下线；已上架的，新规格仍要声明 `items` 和 `tiers`（缺省或 null 不算，显式空列表算），且声明的东西每个当前参考价都定了价 |
 | `ListModel` | 草稿 → 上架（带 `rev`） | 上架门槛，见下 |
 | `Retire` | 上架 → 下线（带 `rev`） | 必须是上架状态 |
@@ -258,11 +260,11 @@
 | `SelectDatasetSource` | 改选到 `litellm` 或 `openrouter`，美元价目表取自数据集里模型的条目，请求只带模型、来源和是否确认口径变化 | 条目按「数据集」的对应规则找到且可用、过合理性检查；其余同 `SelectPriceSource`，`rev` 与 `bases` 由命令读取、在模型锁内复核 |
 | `SelectPriceSource` | 改选来源（带 `rev`），同一个事务里为新来源的每个币种发布一行、撤下它没有的币种 | 请求带审核时每个币种的当前行（`bases`），在模型锁内与现在的逐一核对，多或少都是 `ErrPriceChanged`；每张新价目表对每个现有价格的币种（不只是同币种）都过 `Lost`，被撤下的币种的价格也不能丢；同 `PublishPrice` 的其余检查；至少一个币种；只能选 `official` 和 `manual`；数据集来源经 `SelectDatasetSource` |
 
-- **上架门槛**：规格声明了 `items` 和 `tiers`（可以为空，但要写，免得漏写让门槛形同虚设）；标准 ID（`slug` 去掉 `@版本`）是它的一个公开名字；至少有一个币种的当前参考价；每个当前参考价对 `Model.Reportable()` 的 `Missing` 为空。这是目录自己的门槛，保证上架的模型的参考价覆盖它声明的一切；计费对售价的上架门槛另算。
+- **上架门槛**：规格声明了 `items` 和 `tiers`（可以为空，但要写，免得漏写让门槛形同虚设）；标准 ID（`slug` 去掉 `@版本`）是它的一个公开名字；至少有一个币种的当前参考价；每个当前参考价对 `Model.Reportable()` 的 `Missing` 为空。`:free` 条目还要求基础模型有公开名字且已上架，并且每个币种的每个价都是 0。这是目录自己的门槛，保证上架的模型的参考价覆盖它声明的一切；计费对售价的上架门槛另算。
 - **证据**：现在只检查是非空的 JSON 对象，原样记进 `change`；引用页面快照、摘录逐字出现在正文里的检查随页面监测。
 - **`change` 之外是否另调 `audit.Record`**：调。`change` 是目录自己读回的领域数据（核对证据、靠 `op_key` 幂等），审计日志是所有模块共用的、运营检索与回放的一条线；改参考价和模型状态属于[审计日志](../platform/README.md#审计日志)要求留审计的后台数据改动，且两者在同一个事务里，不会一边有一边没有。`detail` 只放 `change_id`，改前改后在 `change` 里，所以不受 8 KiB 的限制。
-- **读取**（`read.go`，只读、平台范围、各一个一致的读，草稿也读）：`Authors`、`GetAuthor`、`Models`（按状态、厂商、`slug` 前缀筛选，前缀按字面匹配，`slug` 键集分页，迁移 `00002_slug_prefix.sql` 的索引服务前缀）、`Model`（带名字和各币种当前参考价）。管理接口的 `Idempotency-Key` 就是 `Op.Key`，处理器在占键的事务里带着 `Op.Tx` 调用操作（`ModelIn` 在同一事务里读回模型），由平台的 `idem` 绑定操作者、操作、目标和内容，重发得到第一次的响应；键用在另一种操作上、或不经管理接口（命令行）已用过，报 `ErrOpKeyReused`。
-- **命令**：`axiom catalog <操作> <文件>`，文件是该操作的请求 JSON（多出的成员报错），操作名是 `save-author`、`create-model`、`add-name`、`update-spec`、`list-model`、`retire`、`publish-price`、`select-price-source`、`select-dataset-source`（命令取数）；以平台范围和 `audit.System("catalog.cli")` 执行，输出一行结果 JSON。另有两个不带文件的命令：`axiom catalog sync` 对两个数据集各跑一轮并发布（`audit.System("catalog.sync")`），每个模型一行；`axiom catalog check` 只读，见「第一版验收的检查」；`axiom catalog apply-dialect [--apply] <文件>` 把数据文件里的请求写法的键写进同 slug 的模型（见「请求写法的键」）。操作者的身份随 #23。
+- **读取**（`read.go`，只读、平台范围、各一个一致的读，草稿也读）：`Authors`、`GetAuthor`、`Models`（按状态、厂商、`slug` 前缀筛选，前缀按字面匹配，`slug` 键集分页，迁移 `00002_slug_prefix.sql` 的索引服务前缀）、`Model`（带名字和各币种当前参考价）、`Aliases`（当前别名及目标）。管理接口的 `Idempotency-Key` 就是 `Op.Key`，处理器在占键的事务里带着 `Op.Tx` 调用操作（`ModelIn` 在同一事务里读回模型），由平台的 `idem` 绑定操作者、操作、目标和内容，重发得到第一次的响应；键用在另一种操作上、或不经管理接口（命令行）已用过，报 `ErrOpKeyReused`。
+- **命令**：`axiom catalog <操作> <文件>`，文件是该操作的请求 JSON（多出的成员报错），操作名是 `save-author`、`create-model`、`add-name`、`save-alias`、`update-spec`、`list-model`、`retire`、`publish-price`、`select-price-source`、`select-dataset-source`（命令取数）；以平台范围和 `audit.System("catalog.cli")` 执行，输出一行结果 JSON。另有两个不带文件的命令：`axiom catalog sync` 对两个数据集各跑一轮并发布（`audit.System("catalog.sync")`），每个模型一行；`axiom catalog check` 只读，见「第一版验收的检查」；`axiom catalog apply-dialect [--apply] <文件>` 把数据文件里的请求写法的键写进同 slug 的模型（见「请求写法的键」）。操作者的身份随 #23。
 
 ### 第一版验收的检查
 
@@ -278,7 +280,7 @@
 |---|---|
 | 名字归一化后全局唯一 | `name.norm` UNIQUE；测试：只差大小写或 `.`、`-` 的第二个名字被拒 |
 | 名字上架后不改指向（切换与迁移在 M1 之后）；带日期的名字不会被合并到别的模型 | `name` 只追加；`Normalize` 不增删数字，所以保留日期。模糊测试：输入和输出各自只留 ASCII 数字后完全相同 |
-| 用户只能调用公开名字 | `ResolvePublic` 只查 public；CHECK 拒绝 `-latest` 结尾、含 `:` `~` `@` 的 public 名字；调用、模型列表、回退列表三处入口用同一个函数，测试覆盖 |
+| 用户只能调用公开名字 | `ResolvePublic` 只查 public 和别名；CHECK 拒绝 `-latest` 结尾、含 `~` `@` 的 public 名字，`:` 只允许 `:free`；调用、模型列表、回退列表三处入口用同一个函数，测试覆盖 |
 | 快照是数据库某一时刻的一致状态，新快照不会被旧快照覆盖 | 只读 Repeatable Read 加载、比较后替换；测试：两表读取之间插入并发提交，结果仍属同一时刻；两次构建逆序完成，留下的是新的 |
 | 快照陈旧超过上限就不再解析 | 见「快照」的陈旧上限；测试：revision 查询一直成功、全量加载一直失败，超过上限后返回 `ErrStale`、不就绪，成功发布后恢复 |
 | 参考价的历史不分叉，发布基于审核时看到的当前价 | 发布带 `base`，先锁模型行再比较；`supersedes` UNIQUE、起点的部分唯一索引、同一时间线的复合外键兜底；测试：基于同一 `base` 的两个发布只成功一个；替代另一个模型或币种的行、替代自己，都被数据库拒绝 |
@@ -340,7 +342,7 @@ func Normalize(name string) string
 
 type Snapshot struct{ /* 不可变 */ }
 func (s *Snapshot) Revision() int64
-func (s *Snapshot) ResolvePublic(name string) (Resolution, error) // 用户请求、模型列表、回退列表
+func (s *Snapshot) ResolvePublic(name string) (Resolution, error) // 用户请求、模型列表、回退列表；名字和别名
 func (s *Snapshot) Recognize(name string) (Recognition, bool)    // 给 suppliers 和数据集核对
 func (s *Snapshot) Model(id ModelID) (Model, bool)                // Model.Reportable() 给上架门槛
 func (s *Snapshot) ReferencePrice(id ModelID, currency string) (ReferencePrice, bool)
@@ -357,8 +359,8 @@ func (c *Catalog) Ready() bool
 func (c *Catalog) Refresh(ctx context.Context) error        // 读 revision，变了才全量加载
 func (c *Catalog) Run(ctx context.Context) error            // 每 PollEvery 刷新快照；数据集同步由 RegisterSync 登记到队列，页面监测由 RegisterPages 登记，数据集核对仍是设计
 func (c *Catalog) CurrentPrices(ctx context.Context) ([]ReferencePrice, error) // 从数据库一致读取，给 billing 比对；设计，尚未实现
-// 读取（「管理操作」一节），平台范围：Authors、GetAuthor、Models(ModelQuery)、Model(ModelID)，返回 Author、ModelSummary、ModelView。
-// 管理操作（「管理操作」一节），平台范围：SaveAuthor、CreateModel、AddName、UpdateSpec、ListModel、Retire、PublishPrice、
+// 读取（「管理操作」一节），平台范围：Authors、GetAuthor、Models(ModelQuery)、Model(ModelID)、Aliases，返回 Author、ModelSummary、ModelView、Alias。
+// 管理操作（「管理操作」一节），平台范围：SaveAuthor、CreateModel、AddName、SaveAlias、UpdateSpec、ListModel、Retire、PublishPrice、
 // SelectPriceSource、SelectDatasetSource、WatchPage、UnwatchPage、ReviewPage，请求类型带 Op{Actor, Key, Reason}，返回 Result。通用 ListReviews、ResolveReview 随数据集审核项（设计，尚未实现）。
 
 type Fetched struct{ Source PriceSource; Body []byte; At time.Time } // 一份取回的数据集
@@ -384,7 +386,7 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 - 数据库测试用 `pgtest`，与 platform 相同：每个测试一份模板副本，可以并行。
 - 计价对照 `math/big` 做性质测试：随机的价目表（零到三档、随机口径、每个服务等级随机有无价格、0 到 1000 的单价）、随机的服务等级和 0 到 10¹⁰ 的用量，与独立的模型比较选等级、选档、沿用该等级的基础价、推理按输出价、缺价的项和已定价部分的总额，并检查 `Missing` 覆盖 `Cost` 报告的每个缺价项：通过上架门槛的价目表，调用时不会缺价。`ParseSchedule` 做模糊测试：能解析的输入，规范形式再解析一次写出的字节不变。`Normalize` 做黄金表，覆盖 `-YYYYMMDD`、`-YYYY-MM-DD`、`-MMDD`、`-MM-DD` 四种日期写法，加上数字序列不变的模糊测试。
 - `ResolvePublic`（包括需要归一化的名字，如 `claude-sonnet-4.5`）和 `Cost` 有零分配的基准测试：归一化写进栈上的缓冲区，用 `m[string(buf)]` 查 map，Go 对这种写法不分配。
-- 名字解析的用例：含 `:` 的名字（包括 `:free`）返回"模型不存在"，不落到基础模型；下线模型的公开名字返回 `ErrRetired`，它也不出现在 `Models()` 里；绑定到固定版本模型的不带日期名字，`Recognize` 得到 `Exact=false`，`ResolvePublic` 仍得到原来的版本。
+- 名字解析的用例：没有 `:free` 条目时 `:free` 返回"模型不存在"，不落到基础模型；有 `:free` 条目时精确命中它；别名读最新 `rev`，目标下线返回 `ErrRetired`；下线模型的公开名字返回 `ErrRetired`，它也不出现在 `Models()` 里；绑定到固定版本模型的不带日期名字，`Recognize` 得到 `Exact=false`，`ResolvePublic` 仍得到原来的版本。
 - 数据集数字的用例（已有，`TestPlainDecimal`、`FuzzPlainDecimal`、`TestParseLiteLLM`）：`3e-06` 与 `0.000003` 得到同一个 `UnitPrice`，全程不经 float64；指数超出 ±30、展开后超过 15 位小数的条目被拒。
 - 每家的计价示例（缓存读 99,999 加输入 1 不换档、再加 1 换档；Gemini 缓存 200,000 加新输入 1 换档；Gemini 文本 190,000 加单独计价的图片 20,000 换档）写成用例。
 - 用量折算与缺价的用例：Anthropic 只有顶层 `cache_creation_input_tokens` 时按请求的缓存断点归类，有 `cache_creation` 而两者之和不等时报错；Gemini 超过 200k 且有思考 token 时，思考按高档的输出价计；Gemini 的音频输入折成 `audio_in`；`Missing` 对缺音频价、缺 priority 价的价目表返回 `audio_in` 和 priority；有档位却没有 `TierBasis` 的价目表被拒。
@@ -401,6 +403,9 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 | 决策 | 理由 | 不选 |
 |---|---|---|
 | 公开和内部名字同表，`visibility` 区分，`norm` 唯一 | 唯一性对两类一起成立，内部名字不会和公开名字撞 | 两张表：唯一性要跨表检查 |
+| `:free` 是独立的 `model` 行（slug 和公开名字都带 `:free`），不是基础模型的变体列 | 它有自己的规格、上下限、参考价和端点，OpenRouter 也把它当独立条目；复用现有名字、上架门槛和路由，`:free` 精确命中，不会落到基础模型 | 在 `model` 上加 `free_of` 或在解析时切后缀：发现、价格和路由要另写一套，且容易把付费模型的价带进免费名字 |
+| 别名指向一个具体模型，不按作者/系列前缀或日期推导 | 前缀推导会把 `acme/gpt-5` 和 `acme/gpt-50` 串成一个系列，也会在新成员出现时悄悄换掉发现和计费用的模型；显式目标让运营决定何时切换，`change` 留下审计 | 解析时按前缀挑最新：无法表达系列边界，新的上架会改变已发布名字的含义 |
+| `alias` 只追加 `(name, rev)`，快照读最高 `rev` | 切换别名也是一次有审计的目录改动，旧快照仍能读到它当时的映射；写时用事务级 advisory 锁，避免两个首个版本竞争 | 原地更新一行：要 UPDATE 权限，旧快照与 `change` 对不上 |
 | 价目表存规范 jsonb，结构和校验在 Go | 三个模块共用；规范编码让比较和幂等变成字节比较 | 拆成计费项、条件、档位三张表：每个模块都要三张表和重组代码 |
 | 单价是 int64 的 10⁻¹⁵ 定点，`Cost` 返回 128 位精确值；汇率和倍率在 billing 用分数 | 域有界时 128 位整数不会溢出、不分配内存，调用路径上快；10/71 这样的值有限小数表示不了，换算必须用分数 | 全程 `math/big`：每次都分配；全程十进制：汇率不精确 |
 | `Cost` 返回缺价的项，不返回错误 | 计费的红线是不会算不出钱：缺项要按已定价部分加兜底价收，返回错误就丢了已定价部分 | 缺价就返回错误，或调用前按请求特征拒绝：负责人否决了后者（Issue #24），计费的上架门槛按模型检查 |
