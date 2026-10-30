@@ -345,11 +345,13 @@ func (l *Loop) finish(ctx context.Context, end probeEnd) {
 	kind := ""
 	switch outcome {
 	case suppliers.TestPassed:
+		e.count(success, now) // evidence for the quality score; the window stays for independent sources
 		r.Opened = 0
 		r.Restored = now.UnixNano()
 		r.Next = 0
 		kind = "restored"
 	case suppliers.TestFailed:
+		e.count(failure, now)
 		r.Backoff = min(r.Backoff+1, 5)
 	case suppliers.TestInconclusive:
 	}
