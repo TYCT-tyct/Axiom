@@ -43,6 +43,16 @@ const phone = { rtt: 150, down: 1.6 * 1024 * 0.9 * 128, up: 750 * 0.9 * 128, cpu
 const desktop = { rtt: 40, down: 10 * 1024 * 0.9 * 128, up: 10 * 1024 * 0.9 * 128, cpu: 1 };
 type Profile = typeof phone;
 
+// Every number here is a timing of this host, and the 4x CPU throttle multiplies the renderer's own CPU time: the same
+// page measured 2.9 s on a developer's host and 5.8 s on the CI runner. Before the loads, a fixed CPU loop runs in a page
+// under the same throttle; its time is how fast this host is, and the LCP is scaled back to the runner the ceiling was set
+// on (docs/frontend.md「实测」). The loop mixes 40M integers and the minimum of three runs is taken, so JIT warm-up and a
+// single scheduler stall do not decide it. reference is milliseconds on the 2026-10-30 CI runner.
+const calibration = {
+  iterations: 40_000_000,
+  reference: { phone: 280, desktop: 70 } as Record<"phone" | "desktop", number>,
+};
+
 // web-vitals' IIFE build, which a page gets before its own scripts so it sees the whole load.
 // The package does not export its IIFE file, so it is found beside the CommonJS one the package does.
 const library = readFileSync(
@@ -85,11 +95,40 @@ async function vitals(page: Page): Promise<Vitals> {
 
 const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
 
+// calibrationOf is how fast this host runs a fixed CPU loop under the profile's throttle: a page created the same way
+// as a measured load, the minimum of three runs. The loop's result is compared so the engine cannot drop the work.
+async function calibrationOf(browser: Browser, profile: Profile, device: Parameters<Browser["newContext"]>[0]) {
+  const page = await measuredPage(browser, profile, device);
+  try {
+    const elapsed = await page.evaluate((iterations) => {
+      const run = () => {
+        const started = performance.now();
+        let value = 0x12345678;
+        for (let i = 0; i < iterations; i++) {
+          value = (Math.imul(value ^ i, 2654435761) + 0x9e3779b9) | 0;
+        }
+        return { ms: performance.now() - started, value };
+      };
+      const runs = [run(), run(), run()];
+      if (runs.some((entry) => entry.value !== runs[0]?.value)) {
+        throw new Error("calibration is not deterministic");
+      }
+      return Math.min(...runs.map((entry) => entry.ms));
+    }, calibration.iterations);
+    if (!(elapsed > 0)) {
+      throw new Error(`calibration took ${elapsed} ms`);
+    }
+    return elapsed;
+  } finally {
+    await page.context().close();
+  }
+}
+
 // A throttled page is slow by design: the 4x CPU and the slow network stretch a load and its waits well past the 30 s.
 test.describe.configure({ timeout: 120_000 });
 
-function record(name: string, value: number, { target, ceiling }: Limit) {
-  const line = `${value.toFixed(3)} (target ${target}${value > target ? ", over" : ""}, ceiling ${ceiling ?? "none"})`;
+function record(name: string, value: number, { target, ceiling }: Limit, note = "") {
+  const line = `${value.toFixed(3)}${note ? ` (${note})` : ""} (target ${target}${value > target ? ", over" : ""}, ceiling ${ceiling ?? "none"})`;
   console.log(`vitals ${name}: ${line}`);
   test.info().annotations.push({ type: name, description: line });
   if (ceiling !== undefined) {
@@ -111,7 +150,12 @@ const pages: [Suite, string][] = [
   ...["users", "suppliers", "models", "pricing", "settings"].map((name): [Suite, string] => [adminSuite, name]),
 ];
 
-const profiles = [
+const profiles: {
+  name: "phone" | "desktop";
+  profile: Profile;
+  device: Parameters<Browser["newContext"]>[0];
+  lcp: Limit;
+}[] = [
   { name: "phone", profile: phone, device: devices["Pixel 5"], lcp: budget.lcpPhone },
   { name: "desktop", profile: desktop, device: devices["Desktop Chrome"], lcp: budget.lcpDesktop },
 ];
@@ -121,6 +165,7 @@ test.describe("loading", () => {
     for (const [suite, sceneName] of pages) {
       test(`${suite.app} ${sceneName}: LCP and CLS on ${name}`, async ({ browser }) => {
         const scene = sceneOf(suite, sceneName);
+        const measured = await calibrationOf(browser, profile, device);
         const loads: Vitals[] = [];
         for (let i = 0; i < 3; i++) {
           const page = await measuredPage(browser, profile, device);
@@ -130,7 +175,14 @@ test.describe("loading", () => {
           await page.context().close();
         }
         const label = `${suite.app} ${sceneName} ${name}`;
-        record(`LCP ${label}`, median(loads.map((l) => l.LCP ?? Number.POSITIVE_INFINITY)), lcp);
+        const raw = median(loads.map((l) => l.LCP ?? Number.POSITIVE_INFINITY));
+        const reference = calibration.reference[name];
+        record(
+          `LCP ${label}`,
+          (raw * reference) / measured,
+          lcp,
+          `raw ${raw.toFixed(0)} ms, calibration ${measured.toFixed(0)} of ${reference} ms`,
+        );
         record(`CLS ${label}`, Math.max(...loads.map((l) => l.CLS ?? 0)), budget.cls);
       });
     }
