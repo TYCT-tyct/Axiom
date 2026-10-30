@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json/jsontext" //nolint:depguard // control values are compared after unquoting
 	"fmt"
+	"slices"
 	"strconv"
 
 	"axiom/internal/catalog"
@@ -310,16 +311,11 @@ func (s *chatStream) countTools() error {
 
 // counted reports whether the pair was already counted for this stream.
 func (s *chatStream) counted(key chatToolKey) bool {
-	for _, seen := range s.seen[:s.nSeen] {
-		if seen == key {
-			return true
-		}
+	if slices.Contains(s.seen[:s.nSeen], key) {
+		return true
 	}
-	if s.extra != nil {
-		_, seen := s.extra[key]
-		return seen
-	}
-	return false
+	_, seen := s.extra[key]
+	return seen
 }
 
 func (s *chatStream) toolCallIndex() error {

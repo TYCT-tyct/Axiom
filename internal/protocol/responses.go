@@ -126,24 +126,31 @@ func (s *responsesStream) settle() error {
 			s.items[s.index] += s.e.content
 		}
 	case s.e.name == "response.output_item.added":
-		if s.index == int64(len(s.items)) { // an index out of turn is not tracked: its item counts in full when done
-			var err error
-			if s.items, err = sse.Grow(s.items, 1, s.charge); err != nil {
-				return err
-			}
-			s.items = append(s.items, 0)
-		}
-		if s.webSearch {
-			s.e.searches = 1
-		}
-		if s.functionCall {
-			s.e.toolCalls = 1
-		}
+		return s.itemAdded()
 	case s.e.name == "response.output_item.done":
 		s.e.role, s.e.content = content, s.itemBytes
 		if 0 <= s.index && s.index < int64(len(s.items)) {
 			s.e.content = max(0, s.itemBytes-s.items[s.index])
 		}
+	}
+	return nil
+}
+
+// itemAdded gives an item that starts in turn its slot for the deltas that follow, so the item when done counts only
+// what it adds to them, and marks a search or a function call as the client tool call the estimate counts.
+func (s *responsesStream) itemAdded() error {
+	if s.index == int64(len(s.items)) { // an index out of turn is not tracked: its item counts in full when done
+		var err error
+		if s.items, err = sse.Grow(s.items, 1, s.charge); err != nil {
+			return err
+		}
+		s.items = append(s.items, 0)
+	}
+	if s.webSearch {
+		s.e.searches = 1
+	}
+	if s.functionCall {
+		s.e.toolCalls = 1
 	}
 	return nil
 }
