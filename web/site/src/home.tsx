@@ -1,15 +1,38 @@
+import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { Button, Logo, PreferenceSwitches } from "@axiom/ui";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 // The console lives on the same listener under /console/ (console/vite.config.ts).
 const consoleHref = "/console/";
 
+type Brand = Pick<Schemas["Site"], "logo_url"> & { name?: string };
+
+// The site's name and logo, from the same public call the console's sign-in page uses. A host the API does not know, or
+// a failed request, leaves the default mark and name: the page is still the product's.
+function useSiteBrand(): Brand | undefined {
+  const [brand, setBrand] = useState<Brand>();
+  useEffect(() => {
+    const call = new AbortController();
+    unwrap(consoleApi.GET("/api/console/v1/site", { signal: call.signal }))
+      .then((site) => {
+        if (!call.signal.aborted) {
+          setBrand({ name: site.name || undefined, logo_url: site.logo_url });
+        }
+      })
+      .catch(() => {});
+    return () => call.abort();
+  }, []);
+  return brand;
+}
+
 export function Home() {
   const { t } = useTranslation();
+  const brand = useSiteBrand();
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="mx-auto flex h-16 w-full max-w-[1248px] items-center gap-4 px-4 sm:px-6">
-        <Logo />
+        <Logo name={brand?.name} logoUrl={brand?.logo_url} />
         <PreferenceSwitches className="ml-auto hidden gap-2 sm:flex" />
         <Button asChild size="sm" className="ml-auto sm:ml-0">
           <a href={consoleHref}>{t("signIn")}</a>

@@ -61,6 +61,8 @@ var adminOperations = []adminOperation{
 	{"exchangeRateHistory", http.MethodGet, "/pricing/exchange-rates/USD/CNY", "", "pricing.view", false},
 	{"getSiteSettings", http.MethodGet, someSite, "", "sites.manage", false},
 	{"updateSiteSettings", http.MethodPut, someSite, `{"settings":{},"reason":"r"}`, "sites.manage", true},
+	{"getSiteLogoAdmin", http.MethodGet, strings.Replace(someSite, "/settings", "/logo", 1), "", "sites.manage", false},
+	{"updateSiteLogo", http.MethodPut, strings.Replace(someSite, "/settings", "/logo", 1), `{"reason":"r"}`, "sites.manage", true},
 	{"getSiteKeyLimits", http.MethodGet, strings.Replace(someSite, "/settings", "/key-limits", 1), "", "sites.manage", false},
 	{"updateSiteKeyLimits", http.MethodPut, strings.Replace(someSite, "/settings", "/key-limits", 1), `{"limits":{},"reason":"r"}`, "sites.manage", true},
 	{"getSiteLoginLimits", http.MethodGet, strings.Replace(someSite, "/settings", "/login-limits", 1), "", "sites.manage", false},
@@ -168,7 +170,9 @@ func TestAdminOperationsAreTheContracts(t *testing.T) {
 // tables above.
 func TestAdminTestsCoverTheContract(t *testing.T) {
 	t.Parallel()
-	covered := map[string]bool{"getversion": true, "signin": true} // public: they need no session to refuse
+	covered := map[string]bool{ // public: they need no session to refuse
+		"getversion": true, "signin": true, "getadminsite": true, "getadminsitelogo": true,
+	}
 	for _, op := range slices.Concat(adminOperations, adminSessionOperations) {
 		covered[strings.ToLower(op.name)] = true
 	}

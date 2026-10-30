@@ -21,6 +21,7 @@ export function AppShell({
   sidebar,
   header,
   banner,
+  logo,
   forbiddenHint,
   brandColor,
   children,
@@ -28,6 +29,8 @@ export function AppShell({
   sidebar: ReactNode;
   header?: ReactNode;
   banner?: ReactNode;
+  // What the compact top bar names the site with; the sidebar carries the same above the links.
+  logo?: { name?: string; logo_url?: string };
   forbiddenHint?: string;
   brandColor?: string;
   children: ReactNode;
@@ -67,7 +70,7 @@ export function AppShell({
           >
             <Icon name="menu" />
           </Button>
-          <Logo className="lg:hidden" />
+          <Logo className="lg:hidden" name={logo?.name} logoUrl={logo?.logo_url} />
           {header}
         </header>
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 outline-none">

@@ -52,8 +52,11 @@ type Site struct {
 	// BrandColor is the site's #rrggbb colour; empty means the default palette. The console derives both schemes from
 	// it (docs/frontend.md「主题与自由度」).
 	BrandColor string
-	sessions   map[Surface]lifetime
-	limits     limits
+	// LogoHash is the SHA-256 of the logo the site currently serves, as its URL writes it; empty when it has none. The
+	// bytes are not in the snapshot: a logo page reads them by this hash, and only a cold fetch reaches the database.
+	LogoHash string
+	sessions map[Surface]lifetime
+	limits   limits
 }
 
 // lifetime is how long a session lasts: idle since its last request, and at most from its start.
@@ -176,6 +179,9 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		site.Currency = currency
 		if r.BrandColor != nil {
 			site.BrandColor = *r.BrandColor
+		}
+		if len(r.LogoHash) != 0 {
+			site.LogoHash = fmt.Sprintf("%x", r.LogoHash)
 		}
 		if r.NewKeyDailyLimit != nil {
 			site.NewKeyDailyLimit = *r.NewKeyDailyLimit
