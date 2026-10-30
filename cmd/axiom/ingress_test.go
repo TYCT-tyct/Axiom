@@ -10,11 +10,13 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"axiom/internal/gateway"
+	"axiom/internal/platform/httpserver"
 )
 
 // TestIngressLimitsAreCompatibleWithTheCore: the ingress waits longer than the core's own limits, so a normal call is
@@ -37,6 +39,41 @@ func TestIngressLimitsAreCompatibleWithTheCore(t *testing.T) {
 		t.Fatalf("transport header limit = %v, want %v", got, ingressHeaderLimit)
 	}
 }
+
+// TestIngressStopsReportingReadyWhenTheCoreDrains: the edge forwards to the core only while the core says it takes new
+// work; when the core reports not ready, the ingress reports not ready too, and the load balancer in front stops
+// sending it traffic.
+func TestIngressStopsReportingReadyWhenTheCoreDrains(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var coreUp atomic.Bool
+		coreUp.Store(true)
+		client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			status := http.StatusOK
+			if !coreUp.Load() {
+				status = http.StatusServiceUnavailable
+			}
+			return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+		})}
+		var health httpserver.Health
+		stop := watchCore(t.Context(), testCoreURL(t, "https://core.internal"), client, time.Second, &health,
+			slog.New(slog.DiscardHandler))
+		synctest.Wait()
+		if !health.Ready() {
+			t.Fatal("the ingress is not ready while its core is")
+		}
+		coreUp.Store(false)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if health.Ready() {
+			t.Fatal("the ingress still reports ready after its core started draining")
+		}
+		stop()
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // TestIngressWriteDeadlineEndsAStoppedClient: a client that stops reading blocks Write, which the request context
 // cannot interrupt; the write deadline makes the handler return, and the handler clears the deadline afterwards.

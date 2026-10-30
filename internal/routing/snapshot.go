@@ -94,12 +94,13 @@ type Capacity interface{ Full() bool }
 // Endpoint is one supplier group serving one model, as the snapshot holds it: what routing filters and ranks by.
 // suppliers, quality and billing supply the values when the snapshot is built.
 type Endpoint struct {
-	Exchange platform.ExchangeRate
-	ID       EndpointID
-	Supplier SupplierID
-	Codename string // the supplier group's public codename; never its real name
-	Model    catalog.ModelID
-	Owner    Owner
+	Exchange  platform.ExchangeRate
+	ID        EndpointID
+	Supplier  SupplierID
+	Codename  string // the supplier group's public codename; never its real name
+	Model     catalog.ModelID
+	ModelSlug string // the model's catalog slug, frozen with the snapshot so a response names what the route chose
+	Owner     Owner
 
 	LiveHealth  *quality.State
 	Capacity    Capacity
@@ -247,6 +248,7 @@ type Preset struct {
 type Snapshot struct {
 	built   time.Time
 	byModel map[catalog.ModelID][]*candidate
+	models  []catalog.ModelID // in id order, for openrouter/auto
 	presets map[PresetID]Preset
 }
 
@@ -312,6 +314,10 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 
 		s.byModel[e.Model] = append(s.byModel[e.Model], c)
 	}
+	for m := range s.byModel {
+		s.models = append(s.models, m)
+	}
+	slices.SortFunc(s.models, func(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) })
 	for _, p := range presets {
 		if _, dup := s.presets[p.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: preset %s twice", uuid.UUID(p.ID))

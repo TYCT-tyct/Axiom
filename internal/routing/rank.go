@@ -64,7 +64,7 @@ func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 			out = append(out, s)
 		}
 	}
-	if !n.over.SortGlobal {
+	if !n.rankAll() {
 		r.sort(out, strategy)
 	}
 	return out
