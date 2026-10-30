@@ -6,13 +6,26 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 )
+
+// servedModel is the public name of the model the attempt's endpoint serves, so a models fallback shows which model
+// answered. The snapshot lists it under this name; the internal @version suffix is never a public name.
+func (s *session) servedModel(a *attempt) string {
+	if s.c.snap != nil {
+		if m, ok := s.c.snap.Model(a.entry.Model); ok {
+			return catalog.Normalize(strings.SplitN(m.Slug, "@", 2)[0])
+		}
+	}
+	return s.c.Request.Model
+}
 
 // stream relays the answer of an attempt whose response headers came: the relay holds the upstream's first events until
 // the first content, the commit point (I4), and from there each step is written to the client as it comes. The
@@ -21,7 +34,8 @@ import (
 func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageContext) (step, ended) {
 	s := a.s
 	relay := protocol.NewRelay(s.c.Format, a.entry.Target.Format, body, uc, protocol.RelayOptions{
-		ID: s.c.ID.String(), Model: s.c.Request.Model, Created: s.start.Unix(), Memory: s.x.Memory, Aggregate: s.aggregate,
+		ID: s.c.ID.String(), Model: s.c.Request.Model, ActualModel: s.servedModel(a), Created: s.start.Unix(),
+		Memory: s.x.Memory, Aggregate: s.aggregate,
 	})
 	s.live = relay
 	idleFor := s.x.Limits.cfg.IdleTimeout

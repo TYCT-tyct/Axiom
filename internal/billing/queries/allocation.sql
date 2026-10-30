@@ -13,14 +13,16 @@ SELECT allocated_seq, allocated_at, allocated_id, unfunded FROM billing.balances
 SELECT coalesce(max(seq), 0)::bigint FROM billing.transactions WHERE account_id = @account_id;
 
 -- name: LiveBatches :many
--- The batches that hold something, each with the key of the credit transaction that opened it (seq 0 for one from
--- before the sequence). Consumption, expiry and freeze totals are the replay cache: they trail the ledger until the
--- account is replayed. Served by credit_batches_by_account.
+-- The batches that hold something or were consumed, each with the key of the credit transaction that opened it (seq 0
+-- for one from before the sequence). A fully spent batch stays here because a correction can give its credit back
+-- (#277); consumption, expiry and freeze totals are the replay cache, and trail the ledger until the account is
+-- replayed. Served by credit_batches_by_account.
 SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded,
     coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
 FROM billing.credit_batches b
 JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
-WHERE b.account_id = @account_id AND b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired;
+WHERE b.account_id = @account_id
+    AND (b.consumed > 0 OR (b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired));
 
 -- name: LegacyMovements :many
 -- A page of the account's transactions from before the sequence (seq NULL), in the order of their time and ID, after the

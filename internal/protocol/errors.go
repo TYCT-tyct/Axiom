@@ -119,7 +119,7 @@ func RenderError(f Format, e Error, fin *Final) (status int, body []byte) {
 	if fin == nil {
 		return renderError(f, e, nil)
 	}
-	return renderError(f, e, &charges{reply(fin.Usage), cost(fin), fin.Pending})
+	return renderError(f, e, &charges{reply(fin.Usage), cost(fin, f), fin.Pending})
 }
 
 // charges is what an error answer reports of the call: the usage of the reply, its cost, which is empty or a list of

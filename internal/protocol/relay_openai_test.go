@@ -184,8 +184,8 @@ func checkChunk(t *testing.T, block string, e map[string]any) {
 	if e["id"] != options.ID || e["model"] != options.Model || e["provider"] != nil {
 		t.Errorf("chunk %s: id, model or provider not ours", block)
 	}
-	if u, ok := e["usage"].(map[string]any); ok && (u["cost"] != 3.703701 || u["is_byok"] != nil) {
-		t.Errorf("usage %v: not our cost alone", u)
+	if u, ok := e["usage"].(map[string]any); ok && (u["cost"] != 3.703701 || u["is_byok"] != false) {
+		t.Errorf("usage %v: not our cost and is_byok", u)
 	}
 }
 
@@ -248,6 +248,28 @@ func TestRelayResponses(t *testing.T) {
 
 // TestRelayResponsesKeepsANullUsage: the events before the response ends carry usage: null, as OpenAI writes them, and
 // the ending carries the usage object.
+// TestRelayResponsesPendingKeepsIsByok: an unsettled Responses call still describes this site's key use. The cost is
+// absent because the settlement is pending, but is_byok is a usage member and stays.
+func TestRelayResponsesPendingKeepsIsByok(t *testing.T) {
+	got := relay(t, protocol.Responses, bytes.NewReader(sample(t, "responses/text/upstream.sse")), protocol.UsageContext{},
+		protocol.NewMemory(0), func(protocol.Usage) protocol.Final { return protocol.Final{Pending: true} })
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	es := events(t, got.out)
+	last := es[len(es)-1]
+	if last["type"] != "response.completed" || last["axiom"].(map[string]any)["billing_pending"] != true {
+		t.Fatalf("last event %v", last)
+	}
+	usage := obj(obj(last["response"])["usage"])
+	if usage["is_byok"] != false {
+		t.Errorf("pending usage %v: missing is_byok=false", usage)
+	}
+	if _, ok := usage["cost"]; ok {
+		t.Errorf("pending usage %v: has a cost", usage)
+	}
+}
+
 func TestRelayResponsesKeepsANullUsage(t *testing.T) {
 	created := responsesEvent("response.created", 0, responsesObject)
 	progress := responsesEvent("response.in_progress", 1, responsesObject)
@@ -261,6 +283,11 @@ func TestRelayResponsesKeepsANullUsage(t *testing.T) {
 		usage, has := response["usage"]
 		if wantNull := i < 2; wantNull && (!has || usage != nil) || !wantNull && usage == nil {
 			t.Errorf("%v: usage %v (present %t)", e["type"], usage, has)
+		}
+		if i == 2 {
+			if u, ok := usage.(map[string]any); !ok || u["is_byok"] != false {
+				t.Errorf("end usage %v: missing is_byok=false", usage)
+			}
 		}
 	}
 	if n := strings.Count(string(got.out), `"usage"`); n != 3 {
@@ -298,29 +325,32 @@ func TestRelayResponsesContent(t *testing.T) {
 	}
 }
 
+// openAIUsageCase is a reply's usage object and what protocol maps it to.
+type openAIUsageCase struct {
+	name, usage string
+	tier        string // the reply's service_tier member, if any
+	want        map[catalog.Item]int64
+	st          catalog.ServiceTier
+	unknown     []catalog.UnknownUsage
+	native      *catalog.NativeTokens
+	invalid     bool
+}
+
 // TestRelayOpenAIUsage maps both OpenAI formats' usage as catalog README.md「计费项与用量」 tabulates: the input total
 // less its cached, cache-written and audio parts is input; the output total less reasoning and audio is output.
 func TestRelayOpenAIUsage(t *testing.T) {
-	type counts = map[catalog.Item]int64
-	for _, c := range []struct {
-		name, usage string
-		tier        string // the reply's service_tier member, if any
-		want        counts
-		st          catalog.ServiceTier
-		unknown     []catalog.UnknownUsage
-		invalid     bool
-	}{
+	for _, c := range []openAIUsageCase{
 		{
 			name: "parts", usage: `{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":20,"audio_tokens":10},` +
 				`"completion_tokens":50,"completion_tokens_details":{"reasoning_tokens":15,"audio_tokens":5},"total_tokens":150}`,
-			want: counts{
+			want: map[catalog.Item]int64{
 				catalog.ItemInput: 40, catalog.ItemCacheRead: 30, catalog.ItemCacheWrite: 20, catalog.ItemAudioIn: 10,
 				catalog.ItemOutput: 30, catalog.ItemReasoning: 15, catalog.ItemAudioOut: 5,
 			},
 		},
 		{
 			name: "no details", usage: `{"prompt_tokens":9,"completion_tokens":2,"cost":0.5,"is_byok":false,"cost_details":{}}`,
-			want: counts{catalog.ItemInput: 9, catalog.ItemCacheRead: 0, catalog.ItemCacheWrite: 0, catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
+			want: map[catalog.Item]int64{catalog.ItemInput: 9, catalog.ItemCacheRead: 0, catalog.ItemCacheWrite: 0, catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
 		},
 		{name: "parts above the total", usage: `{"prompt_tokens":9,"prompt_tokens_details":{"cached_tokens":10}}`, invalid: true},
 		{name: "a negative part", usage: `{"prompt_tokens":9,"prompt_tokens_details":{"audio_tokens":-1}}`, invalid: true},
@@ -328,32 +358,41 @@ func TestRelayOpenAIUsage(t *testing.T) {
 		{name: "parts that overflow", usage: `{"prompt_tokens":9,"prompt_tokens_details":{"cached_tokens":9223372036854775807,"cache_write_tokens":9223372036854775807}}`, invalid: true},
 		{
 			name: "unknown counts", usage: `{"completion_tokens":2,"image_tokens":4,"completion_tokens_details":{"accepted_prediction_tokens":1,"x_tokens":3}}`,
-			want:    counts{catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
+			want:    map[catalog.Item]int64{catalog.ItemOutput: 2, catalog.ItemReasoning: 0},
 			unknown: []catalog.UnknownUsage{{Field: "usage.completion_tokens_details.x_tokens", Value: "3"}, {Field: "usage.image_tokens", Value: "4"}},
+			native:  &catalog.NativeTokens{AcceptedPrediction: 1},
 		},
-		{name: "flex", usage: `{}`, tier: "flex", want: counts{}, st: catalog.ServiceTierFlex},
-		{name: "priority", usage: `{}`, tier: "priority", want: counts{}, st: catalog.ServiceTierPriority},
-		{name: "default", usage: `{}`, tier: "default", want: counts{}},
-		{name: "unknown tier", usage: `{}`, tier: "scale", want: counts{}, unknown: []catalog.UnknownUsage{{Field: "service_tier", Value: "scale"}}},
+		{name: "flex", usage: `{}`, tier: "flex", want: map[catalog.Item]int64{}, st: catalog.ServiceTierFlex},
+		{name: "priority", usage: `{}`, tier: "priority", want: map[catalog.Item]int64{}, st: catalog.ServiceTierPriority},
+		{name: "default", usage: `{}`, tier: "default", want: map[catalog.Item]int64{}},
+		{name: "unknown tier", usage: `{}`, tier: "scale", want: map[catalog.Item]int64{}, unknown: []catalog.UnknownUsage{{Field: "service_tier", Value: "scale"}}},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			tier := ""
-			if c.tier != "" {
-				tier = `"service_tier":"` + c.tier + `",`
-			}
-			stream := chatRole + chatHi + chatStop + strings.Replace(chatUsage(c.usage), `"choices"`, tier+`"choices"`, 1) + chatDone
-			got := relay(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-			u := got.r.Usage()
-			if got.err != nil || (u.Invalid != nil) != c.invalid {
-				t.Fatalf("error %v, invalid %v", got.err, u.Invalid)
-			}
-			if c.invalid {
-				return
-			}
-			if diff := cmp.Diff([]protocol.Segment{wantWithPrompt(t, c.usage, segment(t, c.want, c.st, c.unknown))}, u.Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" {
-				t.Errorf("segments (-want +got):\n%s", diff)
-			}
-		})
+		t.Run(c.name, func(t *testing.T) { assertOpenAIUsage(t, c) })
+	}
+}
+
+// assertOpenAIUsage checks one case's mapped segments, or that the reply is invalid.
+func assertOpenAIUsage(t *testing.T, c openAIUsageCase) {
+	t.Helper()
+	tier := ""
+	if c.tier != "" {
+		tier = `"service_tier":"` + c.tier + `",`
+	}
+	stream := chatRole + chatHi + chatStop + strings.Replace(chatUsage(c.usage), `"choices"`, tier+`"choices"`, 1) + chatDone
+	got := relay(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+	u := got.r.Usage()
+	if got.err != nil || (u.Invalid != nil) != c.invalid {
+		t.Fatalf("error %v, invalid %v", got.err, u.Invalid)
+	}
+	if c.invalid {
+		return
+	}
+	want := wantWithPrompt(t, c.usage, segment(t, c.want, c.st, c.unknown))
+	if c.native != nil {
+		want.Usage = must(want.Usage.WithNativeTokens(*c.native))
+	}
+	if diff := cmp.Diff([]protocol.Segment{want}, u.Segments, cmp.AllowUnexported(catalog.Usage{})); diff != "" {
+		t.Errorf("segments (-want +got):\n%s", diff)
 	}
 }
 

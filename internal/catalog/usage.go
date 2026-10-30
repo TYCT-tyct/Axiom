@@ -100,6 +100,17 @@ type Usage struct {
 	unknown          []UnknownUsage
 	physicalInput    int64
 	hasPhysicalInput bool
+	native           NativeTokens
+	hasNative        bool
+}
+
+// NativeTokens are the token splits an upstream reports that have no billing item of their own: video input billed
+// with images, and prediction tokens already inside the output total. They are echoed to the client and never priced
+// again.
+type NativeTokens struct {
+	VideoInput         int64 `json:"video_input,omitzero"`
+	AcceptedPrediction int64 `json:"accepted_prediction,omitzero"`
+	RejectedPrediction int64 `json:"rejected_prediction,omitzero"`
 }
 
 // UnknownUsage is a non-zero usage field the item table does not map, or a service tier value protocol does not
@@ -144,6 +155,23 @@ func (u Usage) OutputTotal() int64 {
 // PhysicalInput returns the upstream prompt total and its presence; an explicit zero is not an absent total.
 func (u Usage) PhysicalInput() (int64, bool) { return u.physicalInput, u.hasPhysicalInput }
 
+// NativeTokens returns the provider-reported splits with no billing item of their own.
+func (u Usage) NativeTokens() NativeTokens { return u.native }
+
+// HasNativeTokens reports whether the upstream reported any of them, so an absent split is not shown as a zero.
+func (u Usage) HasNativeTokens() bool { return u.hasNative }
+
+// WithNativeTokens keeps provider-reported splits for the client echo, checked like every other count.
+func (u Usage) WithNativeTokens(n NativeTokens) (Usage, error) {
+	for _, c := range [...]int64{n.VideoInput, n.AcceptedPrediction, n.RejectedPrediction} {
+		if c < 0 || c > maxCount {
+			return Usage{}, fmt.Errorf("usage: native token count %d, want 0 to 10¹⁰", c)
+		}
+	}
+	u.native, u.hasNative = n, true
+	return u, nil
+}
+
 // WithPhysicalInput keeps the physical prompt length independently of potentially overlapping billing quantities.
 func (u Usage) WithPhysicalInput(n int64) (Usage, error) {
 	if n < 0 || n > maxCount {
@@ -157,6 +185,7 @@ func (u Usage) WithPhysicalInput(n int64) (Usage, error) {
 func (u Usage) Recount(counts map[Item]int64, unknown []UnknownUsage) (Usage, error) {
 	v, err := NewUsage(counts, u.serviceTier, unknown)
 	v.physicalInput, v.hasPhysicalInput = u.physicalInput, u.hasPhysicalInput
+	v.native, v.hasNative = u.native, u.hasNative
 	return v, err
 }
 

@@ -149,3 +149,31 @@ WHERE e.enabled AND e.cost_state='known' AND s.status IN ('active','low_balance'
 AND EXISTS (SELECT 1 FROM suppliers.credentials c WHERE c.supplier_group_id=e.supplier_group_id AND c.status='active' AND c.ciphertext IS NOT NULL
     AND (c.allowed_models IS NULL OR e.upstream_name = ANY(c.allowed_models)))
 ORDER BY e.id;
+
+-- name: ChargeEvents :many
+-- The events billing has not consumed yet, with the charge's stored usage and the event's attribution. A record that
+-- is not attributed to an attempt has nothing for billing to correct, and the join drops charges that were reattributed
+-- away. The cursor is (created_at, id), so an event is never read twice and a late one is still read.
+SELECT e.id, e.charge_record_id, e.revision, e.created_at, e.payload, cr.usage,
+    cr.attempt_request_id, coalesce(cr.attempt_seq, 0)::smallint AS attempt_seq
+FROM suppliers.charge_events e
+JOIN suppliers.charge_records cr ON cr.id = e.charge_record_id
+WHERE (e.created_at, e.id) > (@after_at::timestamptz, @after_id::uuid)
+    AND cr.attribution = 'attempt' AND cr.attempt_request_id IS NOT NULL
+ORDER BY e.created_at, e.id
+LIMIT @max;
+
+-- name: GetChargeEvent :one
+-- One event by id, for a correction that was not ready when it was first read. The same attribution rule applies.
+SELECT e.id, e.charge_record_id, e.revision, e.created_at, e.payload, cr.usage,
+    cr.attempt_request_id, coalesce(cr.attempt_seq, 0)::smallint AS attempt_seq
+FROM suppliers.charge_events e
+JOIN suppliers.charge_records cr ON cr.id = e.charge_record_id
+WHERE e.id = @id AND cr.attribution = 'attempt' AND cr.attempt_request_id IS NOT NULL;
+
+-- name: LockChargeEvents :exec
+-- Charge events and their consumer share this transaction lock. A producer keeps it from before inserting the event
+-- until commit, and the consumer takes it before reading its cursor, so an event cannot commit behind a cursor it
+-- would be older than. The event's timestamp is the insertion's clock_timestamp, after the lock, not now(), the
+-- transaction's start. A test holds one transaction's lock while another tries to write.
+SELECT pg_advisory_xact_lock(hashtext('axiom charge events'));

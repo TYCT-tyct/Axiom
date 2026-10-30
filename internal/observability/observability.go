@@ -106,6 +106,8 @@ type CallRecord struct {
 	FinishReason, ErrorKind          string
 	ConsentVersion                   string
 	TrainingAllowed                  bool
+	Streamed                         bool
+	PhysicalInput                    *int64 // the upstream's prompt total, nil when it reported none
 }
 
 // row is a CallRecord as the insert statement reads it: its members are the table's column names.
@@ -148,6 +150,8 @@ type row struct {
 	ErrorKind       string           `json:"error_kind"`
 	ConsentVersion  string           `json:"consent_version"`
 	TrainingAllowed bool             `json:"training_allowed"`
+	Streamed        bool             `json:"streamed"`
+	PhysicalInput   int64            `json:"physical_input"`
 }
 
 // attemptRow is an AttemptRecord as the insert statement reads it: the call's ID, start and tenant, then its own
@@ -239,8 +243,17 @@ func newCallRow(r CallRecord) (row, error) {
 		PriceVersion: r.PriceVersion, Usage: usage, ServiceTier: r.ServiceTier.String(), PriceNano: r.PriceNano,
 		CostNano: r.CostNano, Currency: r.Currency.String(), FreeOfCharge: r.Free, LatencyMs: r.Latency.Milliseconds(),
 		FirstTokenMs: r.FirstToken.Milliseconds(), FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
-		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed,
+		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed, Streamed: r.Streamed,
+		PhysicalInput: physicalInput(r.PhysicalInput),
 	}, nil
+}
+
+// physicalInput is the stored prompt total, -1 when the upstream reported none.
+func physicalInput(n *int64) int64 {
+	if n == nil {
+		return -1
+	}
+	return *n
 }
 
 // newAttemptRow converts one attempt, taking the request ID, start and tenant from the call it belongs to.

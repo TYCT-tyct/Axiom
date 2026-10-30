@@ -24,7 +24,9 @@ type ChargeDetails struct {
 	Rounding          string       `json:"rounding"`
 	BalanceAdjustment string       `json:"balance_adjustment"`
 	Charged           string       `json:"charged"`
-	Estimated         bool         `json:"estimated"`
+	// CacheDiscount is what cache reads saved against the input price, empty when nothing was saved.
+	CacheDiscount string `json:"cache_discount,omitzero"`
+	Estimated     bool   `json:"estimated"`
 }
 
 // ChargeItem is one sampling's billed quantity at its effective sale price; it contains no supplier identity or cost.
@@ -94,8 +96,16 @@ func chargeDetails(r ReadChargesRow) (ChargeDetails, error) {
 	}
 	d := ChargeDetails{Currency: s.Currency().String(), Items: []ChargeItem{}, Estimated: r.Estimated}
 	if r.Tiers != -1 {
+		tiers := catalog.ServiceTierSet(r.Tiers) //nolint:gosec // stored CHECK bounds tiers
+		p, err := priceSegments(s, f, segments, r.Waived, tiers)
+		if err != nil {
+			return ChargeDetails{}, err
+		}
+		if p.cacheDiscount.Cmp(platform.Exact{}) > 0 {
+			d.CacheDiscount = chargeDecimal(p.cacheDiscount)
+		}
 		for i, seg := range segments {
-			items := chargeItems(s, f, seg, r.Waived, catalog.ServiceTierSet(r.Tiers)) //nolint:gosec // stored CHECK bounds tiers
+			items := chargeItems(s, f, seg, r.Waived, tiers)
 			for j := range items {
 				items[j].Sampling, items[j].PriceVersion = i+1, r.PriceVersion
 			}
@@ -154,11 +164,9 @@ func chargeItems(s catalog.Schedule, f fallbacks, seg Segment, waived bool, tier
 }
 
 func knownChargeItem(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, it catalog.Item) ChargeItem {
-	rate, band, ok := s.Rate(seg.Usage, it)
+	_, band, ok := s.Rate(seg.Usage, it)
 	ok = ok && !undeclaredTier(tiers, seg.Usage.ServiceTier())
-	if !ok {
-		rate = missingRate(s, f, it)
-	}
+	rate := itemRate(s, f, seg, tiers, it)
 	unit := "token"
 	if perUseItems.Has(it) {
 		unit = "use"
@@ -183,4 +191,21 @@ func unknownChargeItem(tier catalog.ServiceTier, rate platform.UnitPrice, count 
 
 func chargeDecimal(e platform.Exact) string {
 	return strings.TrimRight(strings.TrimRight(e.Rat().FloatString(15), "0"), ".")
+}
+
+// ChargedCalls returns the current user charge of the named settled calls, after corrections, keyed by request. A
+// request the scope cannot see, or one not settled, is absent and the caller keeps its recorded snapshot.
+func ChargedCalls(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]int64, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID]int64{}, nil
+	}
+	rows, err := queries.ChargedCalls(ctx, tx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("billing: read current charges: %w", err)
+	}
+	out := make(map[uuid.UUID]int64, len(rows))
+	for _, r := range rows {
+		out[r.RequestID] = r.Charged
+	}
+	return out, nil
 }

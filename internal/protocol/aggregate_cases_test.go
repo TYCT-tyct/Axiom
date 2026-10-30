@@ -99,30 +99,41 @@ func TestAggregateMessagesFraming(t *testing.T) {
 	}
 }
 
+// pendingCase is a sample and the aggregatePaths entry it is replayed through.
+type pendingCase struct {
+	sample string
+	path   int // in aggregatePaths
+}
+
 // TestAggregatePending: a reply whose settlement was not written is a 200 without a cost and with the flag in axiom,
 // in each format, as the stream's ending has it.
 func TestAggregatePending(t *testing.T) {
-	for _, c := range []struct {
-		sample string
-		path   int // in aggregatePaths
-	}{
+	for _, c := range []pendingCase{
 		{"messages/text", 0}, {"responses/text", 1}, {"chat/text", 2}, {"messages/text", 3}, {"responses/text", 4},
 	} {
-		p := aggregatePaths[c.path]
-		t.Run(p.name, func(t *testing.T) {
-			o := options
-			o.Memory, o.Aggregate = protocol.NewMemory(0), true
-			r := protocol.NewRelay(p.client, p.upstream, bytes.NewReader(sample(t, c.sample+"/upstream.sse")), protocol.UsageContext{}, o)
-			for step, err := r.Next(); step.Kind != protocol.StepUpstreamDone; step, err = r.Next() {
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			body := decode(t, r.Finish(protocol.Final{Pending: true}))
-			if obj(body["axiom"])["billing_pending"] != true || obj(body["usage"])["cost"] != nil || r.Status() != http.StatusOK {
-				t.Errorf("body %v, status %d", body, r.Status())
-			}
-		})
+		t.Run(aggregatePaths[c.path].name, func(t *testing.T) { assertPending(t, c) })
+	}
+}
+
+// assertPending checks one pending ending: no cost, the flag, and Responses' is_byok that describes the account.
+func assertPending(t *testing.T, c pendingCase) {
+	t.Helper()
+	p := aggregatePaths[c.path]
+	o := options
+	o.Memory, o.Aggregate = protocol.NewMemory(0), true
+	r := protocol.NewRelay(p.client, p.upstream, bytes.NewReader(sample(t, c.sample+"/upstream.sse")), protocol.UsageContext{}, o)
+	for step, err := r.Next(); step.Kind != protocol.StepUpstreamDone; step, err = r.Next() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	body := decode(t, r.Finish(protocol.Final{Pending: true}))
+	usage := obj(body["usage"])
+	if obj(body["axiom"])["billing_pending"] != true || usage["cost"] != nil || r.Status() != http.StatusOK {
+		t.Errorf("body %v, status %d", body, r.Status())
+	}
+	if p.client == protocol.Responses && usage["is_byok"] != false {
+		t.Errorf("pending Responses usage %v: missing is_byok=false", usage)
 	}
 }
 
