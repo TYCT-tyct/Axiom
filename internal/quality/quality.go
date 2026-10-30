@@ -217,9 +217,9 @@ func (e *State) count(v verdict, at time.Time) {
 // quality composes the score from the moving averages: reliability (1 minus the error rate) times the mean of the
 // performance factors that are measured. An unmeasured factor is left out, never counted as a bad one; with neither
 // measured the performance is neutral 1. Nothing counted is the unknown: the neutral score 1 and confidence 0, even
-// when independent latency or speed samples are already measured—those stay in Measures but cannot rank the endpoint
-// before its reliability has any evidence. The confidence is full at scoreSamples outcomes and linear to 0 after
-// scoreMaxAge without one. e.mu is held.
+// when independent latency or speed samples are already measured—those stay in Measures but do not make the quality
+// score non-neutral before reliability has any evidence. The confidence is full at scoreSamples outcomes and linear to
+// 0 after scoreMaxAge without one. e.mu is held.
 func (e *State) quality(now time.Time) (score, confidence float64) {
 	if e.samples == 0 {
 		return 1, 0
