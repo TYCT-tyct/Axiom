@@ -280,11 +280,12 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	tiers := reportable.ServiceTiers
 	tiers.Add(catalog.ServiceTierStandard) // every endpoint is called at the standard tier unless it says otherwise
 	native := routing.Of(r.Formats...)
-	// Every pair of the three formats converts (protocol README.md「跨格式转换」), so an endpoint that speaks one serves
-	// all; Native keeps the one it is called in, which is what a request only its own format can express needs.
+	// Every pair of the three chat formats converts (protocol README.md「跨格式转换」), so an endpoint that speaks one
+	// serves all three; Native keeps the one it is called in, which is what a request only its own format can express
+	// needs. Legacy completions and the direct formats do not convert, so an endpoint serves one only where it lists it.
 	served := native
-	if native != 0 {
-		served = routing.Of(protocol.Messages, protocol.Responses, protocol.Chat)
+	if chat := routing.Of(protocol.Messages, protocol.Responses, protocol.Chat); native&chat != 0 {
+		served |= chat
 	}
 	_, blockedItem := blocked[catalog.ModelID(r.Model)]
 	// The model streams only if its spec says the vendor does and the supplier's own policy says it can pass a stream:

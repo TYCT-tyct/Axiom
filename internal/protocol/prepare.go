@@ -126,8 +126,15 @@ func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {
-		u.Body, err = rewrite(r, body, t, w)
+		if r.Format == Completions || r.Format.Direct() {
+			u.Body, err = rewriteDirect(r, body, t, w)
+		} else {
+			u.Body, err = rewrite(r, body, t, w)
+		}
 		return u, err
+	}
+	if r.Format == Completions || r.Format.Direct() || t.Format == Completions || t.Format.Direct() {
+		return u, &NotSupported{Reason: fmt.Sprintf("format %d is not converted to format %d", r.Format, t.Format)}
 	}
 	if t.Compact { // the compact request is not a generation, and only a Responses client makes one
 		return u, &NotSupported{Reason: fmt.Sprintf("format %d is not converted to a compaction request", r.Format)}
@@ -229,6 +236,9 @@ var (
 func rulesFor(f Format, t Target) formatRules {
 	if t.Compact {
 		return compactRules[f]
+	}
+	if f > Chat { // the formats that rewrite in place, never converted: direct.go
+		return directRewriteRules[f]
 	}
 	return rewriteRules[f]
 }

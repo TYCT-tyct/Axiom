@@ -16,8 +16,10 @@ import (
 // larger body would only be passed on for the client to store, and the node's budget is what reading it would spend.
 const compactLimit = 16 << 20
 
-// pass reads the whole reply of an endpoint that does not stream and makes it the call's answer: the body goes to the
-// client as it came, after the settlement, and its usage is what the call is charged by. Nothing of it reaches the
+// pass reads the whole reply of an endpoint that does not stream — the compact endpoint and the direct formats — and
+// makes it the call's answer: the body goes to the client as it came, after the settlement, and its usage is what the
+// call is charged by. A direct format's body is checked and its usage read before the settlement; the gateway rewrites
+// it afterwards (conclude). Nothing of it reaches the
 // client before it is whole, so an attempt that fails here is still one the call may give up on for another entry.
 func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 	s := a.s
@@ -30,7 +32,20 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 		s.dropReply()
 		return s.failedReply(a, ctx, err)
 	}
-	a.usage = protocol.UsageOf(body)
+	if s.c.Format.Direct() {
+		if err := protocol.ValidateDirectReply(s.c.Format, body); err != nil {
+			s.dropReply()
+			return s.failedReply(a, ctx, err)
+		}
+		u, err := protocol.DirectUsage(s.c.Format, body)
+		if err != nil {
+			s.dropReply()
+			return s.failedReply(a, ctx, err)
+		}
+		a.usage = u
+	} else {
+		a.usage = protocol.UsageOf(body)
+	}
 	a.obs.Done, a.obs.Empty = true, len(body) == 0
 	rec := &s.ends[a.i]
 	if s.isGone() { // the reply was read to the end for what it says it used, but nothing of it reaches the client

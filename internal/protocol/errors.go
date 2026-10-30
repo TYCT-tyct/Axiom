@@ -153,13 +153,33 @@ func appendCharged(dst []byte, f Format, c *charges) []byte {
 		dst = appendMessagesUsage(dst, c.usage, c.cost)
 	case Responses:
 		dst = appendOpenAIUsage(dst, responsesNames, c.usage, c.cost)
-	case Chat:
+	case Chat, Completions:
 		dst = appendOpenAIUsage(dst, chatNames, c.usage, c.cost)
+	case Embeddings:
+		dst = appendEmbeddingUsage(dst, c.usage, c.cost)
+	case Rerank:
+		dst = appendRerankUsage(dst, c.usage, c.cost)
 	}
 	if c.pending {
 		dst = append(dst, `,"billing_pending":true`...)
 	}
 	return dst
+}
+
+// appendEmbeddingUsage appends u in OpenAI's embeddings usage fields, the ones OpenRouter documents for the format.
+func appendEmbeddingUsage(dst []byte, u catalog.Usage, cost string) []byte {
+	dst = appendIntMember(dst, "prompt_tokens", u.Count(catalog.ItemInput))
+	dst = appendIntMember(append(dst, ','), "total_tokens", u.InputTotal())
+	return append(append(dst, cost...), `,"is_byok":false}`...)
+}
+
+// appendRerankUsage appends u in the usage fields OpenRouter documents for rerank.
+func appendRerankUsage(dst []byte, u catalog.Usage, cost string) []byte {
+	dst = appendIntMember(dst, "total_tokens", u.InputTotal())
+	if n := u.Count(catalog.ItemWebSearch); n > 0 {
+		dst = appendIntMember(append(dst, ','), "search_units", n)
+	}
+	return append(append(dst, cost...), `,"is_byok":false}`...)
 }
 
 // appendMessagesUsage appends u in Messages' usage fields, with cost, which is empty or members each led by a comma.

@@ -11,6 +11,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/pg"
+	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
 
@@ -170,10 +171,12 @@ func (h *Handler) planAdmission(it *admissionItem) error {
 	}
 	plan, wait, err := h.Models.plan(h.Router, routing.Input{
 		Admission: routingAdmission(it.admission, c), Req: &c.Request, Models: c.models, Auto: c.auto, Override: c.over, Sticky: c.sticky,
-		// Compaction has no Chat counterpart; generation can use the protocol conversions.
-		NativeOnly: c.Compact,
-		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full.
-		NoSegments: c.Compact,
+		// Compaction has no Chat counterpart; generation can use the protocol conversions. Direct formats and legacy
+		// completions have none either.
+		NativeOnly: c.Compact || c.Request.Format.Direct() || c.Request.Format == protocol.Completions,
+		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full, and so is
+		// a direct call's, which answers one body (docs/domains/gateway.md「转发规则」).
+		NoSegments: c.Compact || c.Request.Format.Direct(),
 		// A file id is the supplier account's resource: one attempt, to the provider the client pinned, so it can only
 		// reach the account that can hold the file (protocol README.md「跨格式转换」).
 		FileRef: c.Request.FileRefs > 0,

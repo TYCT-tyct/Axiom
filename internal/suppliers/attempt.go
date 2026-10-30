@@ -78,9 +78,12 @@ var wire = map[protocol.Format]struct {
 	path    string
 	version string
 }{
-	protocol.Chat:      {path: "/v1/chat/completions"},
-	protocol.Responses: {path: "/v1/responses"},
-	protocol.Messages:  {path: "/v1/messages", version: "2023-06-01"},
+	protocol.Chat:        {path: "/v1/chat/completions"},
+	protocol.Responses:   {path: "/v1/responses"},
+	protocol.Messages:    {path: "/v1/messages", version: "2023-06-01"},
+	protocol.Completions: {path: "/v1/completions"},
+	protocol.Embeddings:  {path: "/v1/embeddings"},
+	protocol.Rerank:      {path: "/v1/rerank"},
 }
 
 // compactPaths are the formats' compaction endpoints: the one call the supplier answers whole, whose path is not the

@@ -325,7 +325,7 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 	}
 	defer resp.Body.Close() //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
 	a.state = strings.TrimSpace(resp.Header.Get(stateHeader))
-	if s.c.Compact {
+	if s.c.Compact || s.c.Format.Direct() {
 		return a.pass(ctx, resp)
 	}
 	return a.stream(ctx, resp.Body, up.Usage)

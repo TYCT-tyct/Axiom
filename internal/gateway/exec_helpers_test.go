@@ -345,6 +345,7 @@ type options struct {
 	cost         int64            // of every attempt
 	costNotKnown bool             // whether Costs says the cost leaves something out
 	costErr      error            // the error Costs fails with
+	request      []byte           // the client's body, instead of its format's sample
 	stream       *bool            // the request's stream member; true when nil
 	supplier     func(n int) int
 	alive        func() bool
@@ -392,8 +393,14 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if o.upstream != nil {
 		upstream = *o.upstream
 	}
-	all, _ := sample(t, upstream)
-	_, request := sample(t, client)
+	var all []string
+	var request []byte
+	if o.request != nil {
+		request = o.request
+	} else {
+		all, request = sample(t, upstream)
+		_, request = sample(t, client)
+	}
 	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{}), health: o.health}
 	if h.health == nil {
 		h.health = quality.New(nil)

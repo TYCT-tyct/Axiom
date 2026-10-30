@@ -48,7 +48,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 
 ## 入口与准入
 
-G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不启动）是 `http.Handler`，外面要套 `httpserver.Public`，请求 ID 由它生成，`Call.ID` 就是它（UUIDv7），每个响应（含错误）带同值的 `X-Request-ID` 和 `X-Generation-Id`：后者由 `Handler.ServeHTTP` 统一设置，所以模型列表、拒绝升级、405 和 404 也有。`/v1` 和 `/api/v1` 两套前缀的路由相同：`POST /chat/completions`、`/responses`、`/responses/compact`、`/messages`，`GET /models`、`GET /models/{model}`；四个调用路径上的 GET 只用来拒绝 WebSocket 握手（带 `Upgrade` 回 400，否则 405）。没有路由接的路径和方法也由错误出口按协议的外壳作答（404 `not_found`、405 `method_not_allowed`，保留 `Allow`）。`count_tokens` 和只读的账户接口见「辅助接口」。
+G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不启动）是 `http.Handler`，外面要套 `httpserver.Public`，请求 ID 由它生成，`Call.ID` 就是它（UUIDv7），每个响应（含错误）带同值的 `X-Request-ID` 和 `X-Generation-Id`：后者由 `Handler.ServeHTTP` 统一设置，所以模型列表、拒绝升级、405 和 404 也有。`/v1` 和 `/api/v1` 两套前缀的路由相同：`POST /chat/completions`、`/responses`、`/responses/compact`、`/messages`、`/completions`、`/embeddings`、`/rerank`，`GET /models`、`GET /models/{model}`；每个调用路径上的 GET 只用来拒绝 WebSocket 握手（带 `Upgrade` 回 400，否则 405）。没有路由接的路径和方法也由错误出口按协议的外壳作答（404 `not_found`、405 `method_not_allowed`，保留 `Allow`）。`count_tokens` 和只读的账户接口见「辅助接口」。
 
 **一次请求的顺序**（任何一步失败都由错误出口作答，已取的名额和内存经 `Call.Done` 归还）：
 
@@ -152,6 +152,8 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 
 没有任何条目可试时（`exhausted`）：有过尝试是 502 `upstream_error`；否则有凭证名额被占的是 429（`Retry-After: 1`），有条目不在 suppliers 里的是 503，其余是 400 附 `NotSupported` 的原因。原因里「规格没说」的情形（`NotSupported.Detail` 非空）对客户端只说「模型暂不支持 X」，缺哪个键写进日志（warn，带供应商和端点），不出节点。
 
+**直接格式**（`Call.Format.Direct()`：embeddings、rerank）不走 `attempt.stream`，走 `attempt.pass`：上游不流式，`readWhole` 一次读完（上限与 compact 相同的 16 MiB），校验 `data`/`results` 存在后按 `protocol.DirectUsage` 读用量；通过则记 `Aggregated`，`conclude` 结算后经 `protocol.RewriteDirectReply` 写出上游的 `data`/`results` 加本站的 `id`、`model`、`usage`、`cost`。读取或校验失败时什么都没写，`failedReply` 仍可换条目。准入对直接格式设 `NativeOnly`（不转换）和 `NoSegments`（一次预留足），因为答复只有一份；`completions` 是生成格式，仍走 `attempt.stream`，只是客户端格式的读取器和聚合器按 `text_completion` 的形状写。
+
 **转发**（`attempt.stream`，所有者 goroutine 的读循环）：每次 `Relay.Next` 之后，按步的种类写：`StepCommit` 是提交点（写 200、`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`X-Accel-Buffering: no`、上游这次响应带的 `X-Codex-Turn-State` 和暂存的开头，起保活计时器），`StepData`、`StepHeartbeat` 照写，`StepUpstreamDone` 结束。空闲计时从响应头到达起，遇到“新数据”就重置：提交点、`StepData`、正文字节或搜索数变化、一个事件的字节在到（`PartialBytes` 增长）；心跳、注释、没有内容的完整事件都不算（`TestAnUpstreamThatSaysNothingNewBeforeTheCommitPointIsTriedElsewhere`）。只有作答的那次尝试的上游能写这个状态头：它随尝试记下，换端点时跟着有内容的那一次走，客户端自己发的值从不回显（`TestTheTurnStateComesBackFromTheUpstream`）。
 
 读结束的各种情况（`broke`、`complete`）：
@@ -250,13 +252,15 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 
 G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggregate`；compact 的回复在 `conclude` 里直接 `respond`）、`pass.go`（compact）。不要流的客户端仍以流调用上游、由网关聚合，compact 则上游不流式（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)），区别在答案怎么得到。
 
-**不要流的客户端**（`stream` 不为 true）：`session.aggregate` 为真，`RelayOptions.Aggregate` 让 `Next` 不交出 `Out`，读、计量、追加、截断、结算都与流式相同（同一个 `Meter`/`Extend`/`Settle` 路径，客户端断开四种情况不变）。提交点仍由 `Relay` 在第一个内容事件上给出，但客户端什么都还没收到，所以 `commit` 只记下这次尝试有内容（`attempt.content`）和它上游的状态头，不写响应头。
+**不要流的客户端**（`stream` 不为 true）：`session.aggregate` 为真（`Completions` 也一样，它的 `text_completion` 由 `completionsAggregate` 聚合），`RelayOptions.Aggregate` 让 `Next` 不交出 `Out`，读、计量、追加、截断、结算都与流式相同（同一个 `Meter`/`Extend`/`Settle` 路径，客户端断开四种情况不变）。提交点仍由 `Relay` 在第一个内容事件上给出，但客户端什么都还没收到，所以 `commit` 只记下这次尝试有内容（`attempt.content`）和它上游的状态头，不写响应头。
 
 - **可以换端点**：读到内容之后断流、空闲超时，把这次尝试的 `Relay` 留下来（`session.part`），按 `routing.Decide` 的 `NextEntry` 换下一条，下一次尝试开始时把上一条放掉，所以各次尝试的内容从不混在一起。没有条目可试、或 `mayStart` 不再放行时，`left` 把留下的那一个交回，由它作答：Chat、Responses 以 200 带上已生成的内容和错误，Messages 以 502 只带错误（`Relay.Fail` 按格式决定），尝试的结局记 `Aggregated`（内容随回复交到客户端）或 `FailedBeforeCommit`（Messages 的 502）。保留的那次尝试在 `Run` 退出时也一定放掉（`defer s.release()`，经 `let` 调 `drop`，即 `Fail` 再 `Release`），容量与节点预算随之归还；`left` 交回作答的那一个由 `session.live` 接着管（见「Relay 的所有权」）。
 - **请求本身的失败**：上游在流里拒绝请求时，不再换条目。没有内容时按 400 作答；已有内容时由 `brokeAggregate` 交给 `left` 立即生成失败回复，内容与结局按上一条的格式规则保留。
 - **本地原因不换端点的失败**：截断（预留追加不到）、节点内存不够（`ErrMemory`）、单次调用最长、客户端已走：没有内容交给客户端，`conclude` 直接以错误作答（402 / 503 / 408 / 不写），这次尝试记 `FailedBeforeCommit`，不再换条目——分别因为钱、本地容量和期限。
 - **写出**：`answerAggregate` 在 `Settle` 之后调 `Finish` 或 `Fail`，拿到整个响应体和 `Status()`；答 200 时用 `respond` 按 64 KiB 一块写出，整个响应体就是 `Relay` 的缓冲，所以它占的节点预算在写完（或客户端已走、写不下去）之前不归还，`Run` 退出时经 `session.live` 的 `Relay.Release` 归还，`replyHeld` 归还 compact 回复的 `held` 与之一样（每块重设写期限，整份另有总期限，见「超时与限额」；`Content-Type: application/json`，状态码取自 `Status()`；上游那次响应的 `X-Codex-Turn-State` 也由 `respond` 写，compact 的回复走的正是它）。结算写不进时照 `Final{Pending: true}` 走，响应体带 `axiom.billing_pending`、不带费用，与流式相同；失败且费用为零时与 `answer` 一样不带 `axiom` 对象。
 - **16 MiB**：每个聚合的回复最多持有 `aggregateLimit`（protocol 的「非流式聚合」），超出或节点预算不够都以 `ErrMemory` 结束，不换端点。
+
+**直接格式的整份回复**（embeddings、rerank）：`attempt.pass` 读完整份回复后按 `protocol.DirectUsage` 读用量，`conclude` 用 `protocol.RewriteDirectReply` 把上游的 `data`/`results` 与本站的 `id`/`model`/`usage`/`cost` 合成答复。它不经过 `Relay` 的聚合器，也不需要 `stream` 的提交点：读失败时没向客户端写任何字节，所以仍能换端点；结算写不进时按 `Final{Pending}` 加 `axiom.billing_pending`，不带费用。上限是 `compactLimit`（16 MiB，与聚合相同），准入时 `NoSegments` 让预留一次报足，`NativeOnly` 让路由只保留原生条目。
 
 **`/responses/compact`**（`Call.Compact`）：上游不流式、回复原样透传、请求只做最小的同格式改写、一次预留足（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。
 

@@ -121,7 +121,7 @@ func DemandOf(req *protocol.Request) billing.Demand {
 		TextBytes: req.TextBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
 		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
 	}
-	if req.Needs.Has(protocol.WebSearch) {
+	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.WebSearches})
 	}
 	if req.Needs.Has(protocol.CodeExecution) {
@@ -210,6 +210,10 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	f := n.req.Format
 	if n.in.NativeOnly {
+		return f, c.Native.Has(f)
+	}
+	if f == protocol.Completions || f.Direct() {
+		// A direct call and legacy completions have no conversion: the endpoint must speak the client's format.
 		return f, c.Native.Has(f)
 	}
 	if c.Native.Has(f) {
@@ -328,9 +332,18 @@ func (c *candidate) unfit(n *need) Reason {
 	return 0
 }
 
-// streamsFor says the endpoint can answer as the gateway reads the answer: every call but the compact one is read as a
-// stream, which an endpoint that does not stream cannot give it (docs/domains/gateway.md「转发规则」).
-func (c *candidate) streamsFor(n *need) bool { return c.Streams || n.in.NoSegments }
+// streamsFor says the endpoint can answer as the gateway reads the answer: every generation but the compact one is read
+// as a stream, which an endpoint that does not stream cannot give it; a direct call is read whole and needs no stream
+// (docs/domains/gateway.md「转发规则」).
+func (c *candidate) streamsFor(n *need) bool {
+	if n.req.Format.Direct() {
+		return true
+	}
+	if n.req.Format == protocol.Completions {
+		return c.Streams
+	}
+	return c.Streams || n.in.NoSegments
+}
 
 // outputLimit is the one rule for how much output an entry at c may produce and whether the request fits c's context,
 // used both to filter and to build the entry, so the two never disagree. The limit is the request's own, if it sets one,

@@ -238,6 +238,18 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	switch {
 	case e.reply != nil:
+		if s.c.Format.Direct() {
+			var seen protocol.Usage
+			if s.last != nil {
+				seen = s.last.usage
+			}
+			body, rerr := protocol.RewriteDirectReply(s.c.Format, e.reply, s.c.ID.String(), s.c.Request.Model, seen, fin)
+			if rerr != nil {
+				s.answer(ctx, ended{err: protocol.Error{Type: protocol.UpstreamFailed}}, fin)
+				break
+			}
+			e.reply = body
+		}
 		s.respond(e.status, e.reply) // as it came, after the settlement (docs/domains/gateway.md「转发规则」)
 	case e.relay == nil:
 		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
