@@ -12,8 +12,8 @@ type Settings = AdminSchemas["SystemSettingsUpdate"]["settings"];
 
 // siteSettingsInput is only the name: the operation keeps whatever registration mode is current when it writes, under
 // the site row lock, so a mode another administrator changed while this form was open is not put back. Sending the mode
-// read with the form would overwrite that change; an older node therefore refuses a name-only save rather than risking
-// it, and the dialog says so.
+// read with the form would overwrite that change; a node of the previous release requires the mode, so the page keeps
+// the name read-only there instead.
 export function siteSettingsInput(name: string): Settings {
   return { name };
 }

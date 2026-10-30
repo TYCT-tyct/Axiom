@@ -4,8 +4,8 @@ import { bufferRefused, withoutBuffer } from "./payment-read";
 type Update = AdminSchemas["PaymentSettingsUpdate"]["settings"];
 type Saved = { data: AdminSchemas["PaymentSettings"]; replayed: boolean };
 
-// PaymentAttempt is the request body a key has actually sent. A downgraded body is kept under the same key, so a resend
-// after a lost answer never goes back to the buffered form and is not refused as a reused key.
+// PaymentAttempt is the body a key must resend. A downgraded body is kept under the same key, so a resend after a lost
+// answer never goes back to the buffered form and is not refused as a reused key.
 export type PaymentAttempt = { settings: Update; skipped: boolean };
 
 export type PaymentPut = (settings: Update, reason: string, key: string) => Promise<Saved>;
