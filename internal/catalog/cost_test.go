@@ -197,6 +197,37 @@ func TestCeiling(t *testing.T) {
 	}
 }
 
+// TestPriced: an explicit zero is a price and one band or tier is enough. Highest's missing answers a different
+// question, whether every tier and band has a price, so it cannot stand in for existence.
+func TestPriced(t *testing.T) {
+	t.Parallel()
+	// The standard tier only, with a second of output audio priced at zero and no input audio price.
+	standardOnly := `{"v":1,"currency":"USD","rates":{"input":"0.001","output":"0.001","audio_out_second":"0"}}`
+	// A zero that only the band above ten input tokens prices.
+	laterBand := `{"v":1,"currency":"USD","rates":{"input":"0.001"},
+		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":10,"rates":{"audio_in_second":"0"}}]}}`
+	for _, tc := range []struct {
+		name, schedule string
+		items          catalog.ItemSet
+		want           bool
+	}{
+		{"an explicit zero in the base prices", standardOnly, 1 << catalog.ItemAudioOutSecond, true},
+		{"the other side of the unit", standardOnly, 1 << catalog.ItemAudioInSecond, false},
+		{"either side of the unit", standardOnly, catalog.CountedItems, true},
+		{"a zero only in a later band", laterBand, 1 << catalog.ItemAudioInSecond, true},
+		{"an item priced in no band", laterBand, 1 << catalog.ItemAudioOutSecond, false},
+		{"an image token at its side's price", standardOnly, 1 << catalog.ItemImageIn, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := mustParse(t, tc.schedule)
+			if got := s.Priced(tc.items); got != tc.want {
+				t.Errorf("Priced(%v) = %v, want %v", members(tc.items), got, tc.want)
+			}
+		})
+	}
+}
+
 func members(s catalog.ItemSet) []catalog.Item {
 	var items []catalog.Item
 	for it := range catalog.NumItems {
