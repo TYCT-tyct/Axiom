@@ -394,7 +394,7 @@ func TestCreditOnce(t *testing.T) {
 // segmentTokens is the output tokens a segment of the property bank's reservations covers.
 const segmentTokens = 50
 
-// correctionStats counts the corrections a property run applied and how their price moved.
+// correctionStats counts the corrections a property run applied and how their charged amount moved.
 type correctionStats struct {
 	applied, refunds, extras int
 }
@@ -407,9 +407,13 @@ type correctionStats struct {
 // counters equal the pending holds, the floor holds, and the credit batches fund exactly the balance without any being
 // over-spent.
 func TestLedgerProperty(t *testing.T) {
+	const seeds = 3
 	var corrected correctionStats
-	for seed := range uint64(3) {
+	var ran int
+	for seed := range uint64(seeds) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+			// Counted here, not from t.Run's result: a filtered subtest returns success without calling this function.
+			ran++
 			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
 			b := fallbackBank(t, 5000, -500, Config{
 				HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: 20 * time.Millisecond,
@@ -427,9 +431,10 @@ func TestLedgerProperty(t *testing.T) {
 			corrected.extras += b.corrected.extras
 		})
 	}
-	// A run that corrected nothing, or only one way, has not shown that a correction's refund and its extra charge both
-	// leave the books and the batches as they were.
-	if corrected.refunds == 0 || corrected.extras == 0 {
+	// The cross-seed check only means something when every seed ran; a single filtered seed must still be runnable on its
+	// own to reproduce a ledger failure. A run that corrected nothing, or only one way, has not shown that a
+	// correction's refund and its extra charge both leave the books and the batches as they were.
+	if ran == seeds && (corrected.refunds == 0 || corrected.extras == 0) {
 		t.Errorf("corrections %+v, want applied corrections with at least one refund and one extra charge", corrected)
 	}
 }
@@ -507,7 +512,7 @@ func (b *bank) correctRandom(r *rand.Rand, h *Hold, o Outcome) {
 		ID: uuid.NewV7(), Request: h.id, AttemptSeq: 1, CostFlag: suppliers.CostComplete.String(), Revision: 1,
 		Usage: u, Reported: 1<<in | 1<<catalog.ItemOutput | 1<<webSearch,
 	}
-	before := b.owedOf(h.id)
+	before := b.chargedOf(h.id)
 	c := &corrector{db: b.app, scope: b.platform}
 	if _, err := c.correct(b.t.Context(), ev); err != nil {
 		if !errors.Is(err, errNoCorrection) {
@@ -516,7 +521,7 @@ func (b *bank) correctRandom(r *rand.Rand, h *Hold, o Outcome) {
 		return
 	}
 	b.corrected.applied++
-	switch after := b.owedOf(h.id); {
+	switch after := b.chargedOf(h.id); {
 	case after < before:
 		b.corrected.refunds++
 	case after > before:
@@ -524,10 +529,11 @@ func (b *bank) correctRandom(r *rand.Rand, h *Hold, o Outcome) {
 	}
 }
 
-// owedOf is the price the reservation's current settlement charged, before or after a correction.
-func (b *bank) owedOf(request uuid.UUID) int64 {
+// chargedOf is what the reservation's current settlement actually charged, before or after a correction. The price is
+// not enough: the floor can leave the charge unchanged while the price rises.
+func (b *bank) chargedOf(request uuid.UUID) int64 {
 	b.t.Helper()
-	return b.count("SELECT price FROM billing.reservations WHERE request_id = '" + request.String() + "'")
+	return b.count("SELECT charged FROM billing.reservations WHERE request_id = '" + request.String() + "'")
 }
 
 // concurrent reserves and settles four calls of the account at once: each is a transaction of its own on the one
