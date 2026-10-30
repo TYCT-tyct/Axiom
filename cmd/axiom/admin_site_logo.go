@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
-	"fmt"
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform/adminapi"
@@ -104,29 +101,6 @@ func (adminAPI) GetAdminSite(ctx context.Context, _ adminapi.GetAdminSiteRequest
 
 // GetAdminSiteLogo serves a logo by its content hash on the admin host, with the same immutable caching as the console's
 // copy. The admin app shows the same brand before sign-in, and its host is already the site's admin domain.
-//
-//nolint:dupl // the console and admin contracts generate separate response types for the same bytes
 func (a adminAPI) GetAdminSiteLogo(ctx context.Context, request adminapi.GetAdminSiteLogoRequestObject) (adminapi.GetAdminSiteLogoResponseObject, error) {
-	raw, err := hex.DecodeString(request.Hash)
-	if err != nil || len(raw) != sha256.Size {
-		return nil, invalidField("hash", "not a logo hash")
-	}
-	var hash [sha256.Size]byte
-	copy(hash[:], raw)
-	logo, err := a.accounts.SiteLogoByHash(ctx, callOf(ctx).site.ID, hash)
-	if err != nil {
-		return nil, err
-	}
-	headers := adminapi.GetAdminSiteLogo200ResponseHeaders{CacheControl: logoServedFor}
-	body, length := logoBody(logo)
-	switch logo.ContentType {
-	case accounts.LogoSVG:
-		return adminapi.GetAdminSiteLogo200ImagesvgXmlResponse{Body: body, Headers: headers, ContentLength: length}, nil
-	case accounts.LogoPNG:
-		return adminapi.GetAdminSiteLogo200ImagepngResponse{Body: body, Headers: headers, ContentLength: length}, nil
-	case accounts.LogoWebP:
-		return adminapi.GetAdminSiteLogo200ImagewebpResponse{Body: body, Headers: headers, ContentLength: length}, nil
-	default:
-		return nil, fmt.Errorf("a stored logo has the content type %q", logo.ContentType)
-	}
+	return siteLogoResponse(ctx, a.accounts, callOf(ctx).site.ID, request.Hash, adminLogos)
 }

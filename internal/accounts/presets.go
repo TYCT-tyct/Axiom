@@ -151,6 +151,14 @@ func ListPresets(ctx context.Context, tx pg.Tx, account AccountID, limit, offset
 	return out, total, err
 }
 
+// LockPresetAccount holds the account's row until tx ends, so a preset read and the write that follows it are not
+// interleaved with another writer's: SavePreset takes the same row before it writes. The account of a caller accounts
+// recognized is there, and a missing one is pg.ErrNoRows.
+func LockPresetAccount(ctx context.Context, tx pg.Tx, account AccountID) error {
+	var id uuid.UUID
+	return tx.QueryRow(ctx, `SELECT id FROM accounts.accounts WHERE id=$1 FOR UPDATE`, uuid.UUID(account)).Scan(&id)
+}
+
 // GetPreset never resolves a slug outside the explicit account, even under a broader transaction scope.
 func GetPreset(ctx context.Context, tx pg.Tx, account AccountID, slug string) (p Preset, err error) {
 	err = tx.QueryRow(ctx, `SELECT id,slug,name,config,created_at,updated_at FROM accounts.presets WHERE account_id=$1 AND slug=$2 AND deleted_at IS NULL`, uuid.UUID(account), slug).Scan(&p.ID, &p.Slug, &p.Name, &p.Config, &p.CreatedAt, &p.UpdatedAt)
