@@ -11,6 +11,38 @@ import (
 	"uuid"
 )
 
+const chargedCalls = `-- name: ChargedCalls :many
+SELECT request_id, charged FROM billing.reservations
+WHERE request_id = ANY($1::uuid[]) AND state IN ('settled', 'cleanup_settled')
+`
+
+type ChargedCallsRow struct {
+	RequestID uuid.UUID
+	Charged   int64
+}
+
+// The current charge of settled calls, after any correction. Activity reads this instead of its immutable call-log
+// snapshot: a corrected reservation's charged amount moved, and the ledger is the authority.
+func (q *Queries) ChargedCalls(ctx context.Context, db DBTX, ids []uuid.UUID) ([]ChargedCallsRow, error) {
+	rows, err := db.Query(ctx, chargedCalls, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChargedCallsRow
+	for rows.Next() {
+		var i ChargedCallsRow
+		if err := rows.Scan(&i.RequestID, &i.Charged); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const readCharges = `-- name: ReadCharges :many
 SELECT request_id, prices[entry + 1]::text AS schedule, fallbacks[entry + 1]::text AS fallback,
     coalesce(nullif(price_versions[entry + 1], '00000000-0000-0000-0000-000000000000'::uuid)::text, '')::text AS price_version,

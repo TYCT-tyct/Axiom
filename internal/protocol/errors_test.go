@@ -82,11 +82,13 @@ func chargedUsage(f protocol.Format) map[string]any {
 		u = map[string]any{
 			"input_tokens": 7.0, "input_tokens_details": map[string]any{"cached_tokens": 0.0, "cache_write_tokens": 0.0},
 			"output_tokens": 2.0, "output_tokens_details": map[string]any{"reasoning_tokens": 0.0}, "total_tokens": 9.0,
+			"is_byok": false,
 		}
 	case protocol.Chat:
 		u = map[string]any{
 			"prompt_tokens": 7.0, "prompt_tokens_details": map[string]any{"cached_tokens": 0.0, "cache_write_tokens": 0.0},
 			"completion_tokens": 2.0, "completion_tokens_details": map[string]any{"reasoning_tokens": 0.0}, "total_tokens": 9.0,
+			"is_byok": false,
 		}
 	}
 	maps.Copy(u, cost)

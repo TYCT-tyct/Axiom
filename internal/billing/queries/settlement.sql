@@ -87,3 +87,31 @@ SELECT p.problem::text FROM (
     WHERE b.balance <> -coalesce(k.amount, 0)
 ) p
 ORDER BY 1;
+
+-- name: CorrectionCursor :one
+SELECT after_at, after_id FROM billing.charge_correction_cursor WHERE singleton;
+
+-- name: AdvanceCorrectionCursor :execrows
+-- Only forward: a second worker's older page may not move the cursor back over events it has not read.
+UPDATE billing.charge_correction_cursor SET after_at = @after_at, after_id = @after_id
+WHERE singleton AND (after_at, after_id) < (@after_at, @after_id);
+
+-- name: DueCorrections :many
+SELECT event_id, revision, request_id, attempts, next_at FROM billing.charge_corrections
+WHERE next_at <= clock_timestamp()
+ORDER BY next_at, event_id
+LIMIT @max;
+
+-- name: UpsertCorrection :exec
+INSERT INTO billing.charge_corrections (event_id, revision, request_id, next_at, attempts, last_error)
+VALUES (@event_id, @revision, @request_id, @next_at, 1, @last_error)
+ON CONFLICT (event_id) DO UPDATE SET revision = excluded.revision, request_id = excluded.request_id,
+    next_at = excluded.next_at, attempts = billing.charge_corrections.attempts + 1, last_error = excluded.last_error;
+
+-- name: DeleteCorrection :exec
+DELETE FROM billing.charge_corrections WHERE event_id = @event_id;
+
+-- name: LockChargeEvents :exec
+-- The consumer side of the shared charge-event commit order (suppliers' LockChargeEvents): read the cursor and the
+-- events only after every producer that inserted one has committed.
+SELECT pg_advisory_xact_lock(hashtext('axiom charge events'));

@@ -242,24 +242,26 @@ func TestExpireKeepsReservationsPayable(t *testing.T) {
 	}
 }
 
-// TestExpireStopsAtAReturn: a charge given back is not allocated yet (#277), so the account whose ledger holds one is not
-// written off against: the run counts it as failed, loudly, writes nothing, and the other accounts are written off as
-// usual.
-func TestExpireStopsAtAReturn(t *testing.T) {
+// TestExpireReversesAReturn: a charge given back is allocated again (#277), so an account whose ledger holds one is
+// written off like any other: the return restores the batch, and the run expires what is left.
+func TestExpireReversesAReturn(t *testing.T) {
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo)
 	b.charge(60)
 	b.reverse(20)
 	other := b.accountWithCredit()
 	changed, failed, err := b.expirer().run(t.Context())
-	if err != nil || changed != 1 || failed != 1 {
-		t.Fatalf("run = %d changed, %d failed, %v; want the other account changed and this one failed", changed, failed, err)
+	if err != nil || changed != 2 || failed != 0 {
+		t.Fatalf("run = %d changed, %d failed, %v; want both accounts changed", changed, failed, err)
 	}
-	if n := b.count("SELECT count(*) FROM billing.transactions WHERE kind = 'expire' AND account_id = '" + b.admitted.Account.String() + "'"); n != 0 {
-		t.Errorf("%d expiry transactions written for the account with a return", n)
+	if n := b.count("SELECT count(*) FROM billing.transactions WHERE kind = 'expire' AND account_id = '" + b.admitted.Account.String() + "'"); n != 1 {
+		t.Errorf("%d expiry transactions written for the account with a return, want 1", n)
+	}
+	if n := b.balanceOf(b.admitted.Account); n != 0 {
+		t.Errorf("the account holds %d after its credit expired, want 0", n)
 	}
 	if n := b.balanceOf(other.Account); n != 1 {
-		t.Errorf("the other account holds %d, want the 1 that does not expire", n)
+		t.Errorf("the other account holds %d, want its opening 1", n)
 	}
 }
 

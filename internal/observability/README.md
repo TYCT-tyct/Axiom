@@ -22,7 +22,7 @@ func HashEndUser(key []byte, id string) EndUserHash       // 带密钥的哈希�
 var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close 之后、或在队列满时给出的错误
 ```
 
-`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`）；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 3，写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn` 和 `GetOwn`；尝试不向用户开放（用户看不到端点、成本和路由）。
+`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`）；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 3，写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn`、`GetOwn` 和按日/模型/工作区的 `ActivityOwn`；尝试不向用户开放（用户看不到端点、成本和路由）。
 
 ## 表（schema `observability`）
 
@@ -31,7 +31,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 - **没有 NULL**：可选的文字是 `''`，没有产出首字时 `first_token_ms` 是 0，没有尝试时 `endpoint_id` 是全零 UUID。生成的代码因此不需要可空类型。
 - **谁**：`site_id`、`account_id`（行级安全看这两列）、`workspace_id`、`key_id`、`end_user_hash`（HMAC-SHA256 的十六进制）、`ip`。
 - **走了哪**：`model`（客户端要的公开名字）；`endpoint_id`、`source_class`、`egress`、`attempt_count` 都取自最后一个 `AttemptRecord`（没有尝试时分别是全零 UUID、`''`、`''`、0）；`route`（路由过程，≤ 8 KiB 的 JSON 对象，结构由 routing 定）。**每次尝试在 `call_attempt`**，供应商的成本和对账键仍在 suppliers，按同一个请求 ID 和尝试序号关联；账本交易不抄在这里，按请求 ID 从 billing 读（见「追溯」）。
-- **结果**：`usage`（计费项名字到数量的 JSON）、`service_tier`、`price_nano`、`cost_nano`（计费的最小单位）、`currency`、`free_of_charge`、`latency_ms`、`first_token_ms`、`finish_reason`、`error_kind`。
+- **结果**：`usage`（计费项名字到数量的 JSON，含原生 token）、`service_tier`、`price_nano`、`cost_nano`（计费的最小单位）、`currency`、`free_of_charge`、`streamed`、`physical_input`（写入时能确定的物理输入；未知为 −1 的库内哨兵，读取时转成可空）、`latency_ms`、`first_token_ms`、`finish_reason`、`error_kind`。
 - **权利**：`consent_version`、`training_allowed`，只能在写入时记下。
 - **写入标签**：`client_app`、`session_id`、`subagent_id`、`request_class`、`language`、`used_tools`、`has_image`、`has_file`；应用自己报的名字在 `app_referer`（URL，≤2048，只留 scheme、host 和 path）、`app_title`（≤200）、`app_categories`（最多两个小写连字符类别，≤64），由 gateway 从 `HTTP-Referer`、`X-OpenRouter-Title`（或旧的 `X-Title`）、`X-OpenRouter-Categories` 取出、去控制字符并截断后写入。分析标签随后台分类器加入，另表保存。
 

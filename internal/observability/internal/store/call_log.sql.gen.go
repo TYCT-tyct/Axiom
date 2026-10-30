@@ -8,7 +8,100 @@ package store
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const activityOwn = `-- name: ActivityOwn :many
+SELECT to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date, model,
+    count(*)::bigint AS requests,
+    coalesce(sum(
+        CASE WHEN physical_input >= 0 THEN physical_input ELSE
+            coalesce((usage ->> 'input')::bigint, 0) + coalesce((usage ->> 'cache_read')::bigint, 0) +
+            coalesce((usage ->> 'cache_write')::bigint, 0) + coalesce((usage ->> 'cache_write_1h')::bigint, 0) +
+            coalesce((usage ->> 'audio_in')::bigint, 0) + coalesce((usage ->> 'image_in')::bigint, 0)
+        END), 0)::bigint AS prompt_tokens,
+    coalesce(sum(
+        coalesce((usage ->> 'output')::bigint, 0) + coalesce((usage ->> 'reasoning')::bigint, 0) +
+        coalesce((usage ->> 'audio_out')::bigint, 0) + coalesce((usage ->> 'image_out')::bigint, 0)), 0)::bigint AS completion_tokens,
+    coalesce(sum(coalesce((usage ->> 'reasoning')::bigint, 0)), 0)::bigint AS reasoning_tokens,
+    coalesce(sum(coalesce((usage ->> 'cache_read')::bigint, 0)), 0)::bigint AS cached_tokens,
+    coalesce(sum(price_nano), 0)::bigint AS usage_nano,
+    array_agg(id ORDER BY id)::uuid[] AS request_ids,
+    array_agg(price_nano ORDER BY id)::bigint[] AS request_prices,
+    CASE WHEN $1::boolean THEN workspace_id::text ELSE '' END AS workspace_id
+FROM observability.call_log
+WHERE account_id = ($2::text)::uuid
+    AND at >= $3 AND at < $4
+    AND ($5::text = '' OR workspace_id = nullif($5, '')::uuid)
+    AND ($6::text = '' OR key_id = nullif($6, '')::uuid)
+GROUP BY date, model, CASE WHEN $1::boolean THEN workspace_id::text ELSE '' END
+ORDER BY date, model, workspace_id
+`
+
+type ActivityOwnParams struct {
+	GroupWorkspace bool
+	AccountID      string
+	Since          time.Time
+	Until          time.Time
+	WorkspaceID    string
+	KeyID          string
+}
+
+type ActivityOwnRow struct {
+	Date             string
+	Model            string
+	Requests         int64
+	PromptTokens     int64
+	CompletionTokens int64
+	ReasoningTokens  int64
+	CachedTokens     int64
+	UsageNano        int64
+	RequestIds       []pgtype.UUID
+	RequestPrices    []int64
+	WorkspaceID      string
+}
+
+// One row per UTC day, model and, when asked, workspace: the sums OpenRouter's /activity reports. The price is the
+// user's sale charge; the upstream's cost is not in this table's scope. A legacy row without a count contributes 0.
+func (q *Queries) ActivityOwn(ctx context.Context, db DBTX, arg ActivityOwnParams) ([]ActivityOwnRow, error) {
+	rows, err := db.Query(ctx, activityOwn,
+		arg.GroupWorkspace,
+		arg.AccountID,
+		arg.Since,
+		arg.Until,
+		arg.WorkspaceID,
+		arg.KeyID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ActivityOwnRow
+	for rows.Next() {
+		var i ActivityOwnRow
+		if err := rows.Scan(
+			&i.Date,
+			&i.Model,
+			&i.Requests,
+			&i.PromptTokens,
+			&i.CompletionTokens,
+			&i.ReasoningTokens,
+			&i.CachedTokens,
+			&i.UsageNano,
+			&i.RequestIds,
+			&i.RequestPrices,
+			&i.WorkspaceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 const aggregateOwnCalls = `-- name: AggregateOwnCalls :many
 SELECT CASE $1::text
@@ -239,7 +332,7 @@ const getOwnCall = `-- name: GetOwnCall :one
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, physical_input
 FROM observability.call_log
 WHERE id = ($1::text)::uuid
 `
@@ -268,6 +361,8 @@ type GetOwnCallRow struct {
 	FirstTokenMs  int32
 	FinishReason  string
 	ErrorKind     string
+	Streamed      bool
+	PhysicalInput int64
 }
 
 func (q *Queries) GetOwnCall(ctx context.Context, db DBTX, id string) (GetOwnCallRow, error) {
@@ -297,6 +392,8 @@ func (q *Queries) GetOwnCall(ctx context.Context, db DBTX, id string) (GetOwnCal
 		&i.FirstTokenMs,
 		&i.FinishReason,
 		&i.ErrorKind,
+		&i.Streamed,
+		&i.PhysicalInput,
 	)
 	return i, err
 }
@@ -306,7 +403,7 @@ INSERT INTO observability.call_log (id, at, site_id, account_id, workspace_id, k
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, language, used_tools, has_image,
     has_file, model, endpoint_id, source_class, egress, attempt_count, route, usage, service_tier, price_version, price_nano,
     cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, consent_version,
-    training_allowed)
+    training_allowed, streamed, physical_input)
 SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (r ->> 'account_id')::uuid,
     (r ->> 'workspace_id')::uuid, (r ->> 'key_id')::uuid, r ->> 'end_user_hash', (r ->> 'ip')::inet,
     r ->> 'client_app', r ->> 'session_id', r ->> 'subagent_id', r ->> 'app_referer', r ->> 'app_title',
@@ -316,7 +413,8 @@ SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (
     (r ->> 'route')::jsonb, r -> 'usage', r ->> 'service_tier',
     nullif(r ->> 'price_version', '')::uuid, (r ->> 'price_nano')::bigint, (r ->> 'cost_nano')::bigint, r ->> 'currency', (r ->> 'free_of_charge')::boolean,
     (r ->> 'latency_ms')::integer, (r ->> 'first_token_ms')::integer, r ->> 'finish_reason', r ->> 'error_kind',
-    r ->> 'consent_version', (r ->> 'training_allowed')::boolean
+    r ->> 'consent_version', (r ->> 'training_allowed')::boolean, (r ->> 'streamed')::boolean,
+    (r ->> 'physical_input')::bigint
 FROM jsonb_array_elements($1::jsonb) AS r
 ON CONFLICT (id, at) DO NOTHING
 `
@@ -336,7 +434,7 @@ const listOwnCalls = `-- name: ListOwnCalls :many
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, physical_input
 FROM observability.call_log
 WHERE account_id = ($1::text)::uuid
     AND (at, id) < ($2::timestamptz, ($3::text)::uuid)
@@ -390,6 +488,8 @@ type ListOwnCallsRow struct {
 	FirstTokenMs  int32
 	FinishReason  string
 	ErrorKind     string
+	Streamed      bool
+	PhysicalInput int64
 }
 
 // Custom plans fold absent filters away and select an ordered index for the remaining filters.
@@ -442,6 +542,8 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 			&i.FirstTokenMs,
 			&i.FinishReason,
 			&i.ErrorKind,
+			&i.Streamed,
+			&i.PhysicalInput,
 		); err != nil {
 			return nil, err
 		}
