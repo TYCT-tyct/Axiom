@@ -1,0 +1,25 @@
+# The docs module of project-workflow: links, the docs map, lessons and the size of what every session reads.
+# Managed: changed only by upgrades, except Dependabot's action-version bumps. The job's name is the check the ruleset
+# protecting main requires (set by the skill's manage.py protect); keep it.
+name: check-docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to a PR cancels its older run, which would only hold a runner; pushes to main never cancel each other
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.RUNS_ON || '"ubuntu-latest"') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 -m unittest discover -s scripts/workflow
+      - run: python3 scripts/workflow/check_docs.py

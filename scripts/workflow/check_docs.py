@@ -116,9 +116,13 @@ def limits(root):
         config = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         return dict(LIMITS), [f"{CONFIG}: not valid UTF-8 TOML: {error}"]
-    result, errors = dict(LIMITS), [f"{CONFIG}: unknown key {key}; known: lanes, limits, merge, review, source" for key in config if key not in ("lanes", "limits", "merge", "review", "source")]
+    result, errors = dict(LIMITS), [f"{CONFIG}: unknown key {key}; known: lanes, limits, merge, modules, review, source" for key in config
+                                    if key not in ("lanes", "limits", "merge", "modules", "review", "source")]
     if "source" in config and not (isinstance(config["source"], str) and SOURCE.fullmatch(config["source"])):
         errors.append(f"{CONFIG}: source must be a full 40-character commit hash")
+    modules = config.get("modules", [])  # read by manage.py, which knows the module names; the shape is checked here too
+    if not (isinstance(modules, list) and all(isinstance(name, str) and name for name in modules) and len(set(modules)) == len(modules)):
+        errors.append(f"{CONFIG}: modules must be a list of distinct module names")
     review = config.get("review", {})  # read by check_pr.py; validated here, where every config mistake is reported
     if not isinstance(review, dict) or set(review) - {"waiver"} or not isinstance(review.get("waiver", True), bool):
         errors.append(f"{CONFIG}: [review] takes only waiver = true or false")

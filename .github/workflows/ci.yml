@@ -1,4 +1,4 @@
-# Project checks; the base checks are in workflow.yml. The ruleset protecting main requires the `build` job below, the
+# Project checks; the managed checks are in check-*.yml. The ruleset protecting main requires the `build` job below, the
 # aggregator of the parts that do the work; the parts themselves are not required checks. Keep that name. Note that
 # manage.py protect reads this file and requires every job in it, so it is not run while the ruleset is hand-edited (like
 # `merge-train`, see .github/project-workflow.toml).
@@ -95,7 +95,7 @@ jobs:
           printf 'docs_only=%s\ndeploy=%s\nbench=%s\nweb=%s\n' "$docs_only" "$deploy" "$bench" "$web" >> "$GITHUB_OUTPUT"
 
   # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
-  # `just check` adds over `check-ci` (`docs`, `secrets`): workflow.yml does not run for the commits a train merges, and
+  # `just check` adds over `check-ci` (`docs`, `secrets`): the check-*.yml workflows do not run for the commits a train merges, and
   # two PRs whose docs pass alone can break a link together.
   static:
     needs: changes
@@ -115,7 +115,7 @@ jobs:
       - run: python3 scripts/train.py flaky-check
         env:
           GH_TOKEN: ${{ github.token }}
-      # A train adds `secrets`, which workflow.yml runs for a PR but nothing dispatches for a train.
+      # A train adds `secrets`, which check-secrets.yml runs for a PR but nothing dispatches for a train.
       - if: needs.changes.outputs.docs_only == 'true'
         run: just md-checks ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name == 'pull_request'
