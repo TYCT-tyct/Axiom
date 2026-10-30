@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 	"uuid"
@@ -62,16 +63,16 @@ func (f adminFixture) userUUID(email string) string {
 
 // seedRefund freezes an offline refund, which needs no billing batch to list or approve: approval records the second
 // person and waits for a manual conclusion, so the test never calls a channel.
-func (f adminFixture) seedRefund(order uuid.UUID, requester, stateName string) uuid.UUID {
+func (f adminFixture) seedRefund(order uuid.UUID, requester string) uuid.UUID {
 	f.t.Helper()
 	id := uuid.NewV7()
 	f.run(fmt.Sprintf(`INSERT INTO payments.refunds
 		(id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, reason,
 		 requested_by, idem_key, created_at)
 		VALUES ('%s', '%s', (SELECT site_id FROM payments.orders WHERE id = '%s'),
-		 (SELECT account_id FROM payments.orders WHERE id = '%s'), '%s', 'offline', 5000000000, 5000000000, 500, false,
+		 (SELECT account_id FROM payments.orders WHERE id = '%s'), 'frozen', 'offline', 5000000000, 5000000000, 500, false,
 		 true, 'The credits were not used.', '%s', 'refund-%s', now())`,
-		id, order, order, order, stateName, f.userUUID(requester), id))
+		id, order, order, order, f.userUUID(requester), id))
 	return id
 }
 
@@ -85,77 +86,129 @@ func (f adminFixture) orders(t *testing.T, s session, query url.Values) adminapi
 	return list
 }
 
-func TestAdminListsPaymentOrders(t *testing.T) {
+// orderListFixture is one site with two orders by the owner and one by another user, all of one merchant, at fixed
+// moments so the date filters and the cursor are independent of how fast the test runs.
+type orderListFixture struct {
+	f                adminFixture
+	s                session
+	merchant         uuid.UUID
+	base             time.Time
+	old, mid, newest uuid.UUID
+}
+
+func newOrderListFixture(t *testing.T) orderListFixture {
+	t.Helper()
 	f := newAdminFixture(t)
 	f.addUser("other@example.com", "")
-	s := f.owner()
 	merchant := f.seedMerchant()
 	base := time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
-	old := f.seedOrder(merchant, ownerEmail, "paid", base)
-	mid := f.seedOrder(merchant, ownerEmail, "pending", base.Add(time.Hour))
-	newest := f.seedOrder(merchant, "other@example.com", "paid", base.Add(2*time.Hour))
+	return orderListFixture{
+		f: f, s: f.owner(), merchant: merchant, base: base,
+		old:    f.seedOrder(merchant, ownerEmail, "paid", base),
+		mid:    f.seedOrder(merchant, ownerEmail, "pending", base.Add(time.Hour)),
+		newest: f.seedOrder(merchant, "other@example.com", "paid", base.Add(2*time.Hour)),
+	}
+}
 
-	list := f.orders(t, s, url.Values{})
+func TestAdminListsPaymentOrders(t *testing.T) {
+	o := newOrderListFixture(t)
+	list := o.f.orders(t, o.s, url.Values{})
 	if list.Data == nil || len(list.Data) != 3 {
 		t.Fatalf("orders: %+v", list.Data)
 	}
-	first := list.Data[0]
-	if first.Id == nil || *first.Id != payments.OrderID(newest).TypeID() {
-		t.Errorf("the newest order is %v, want %s", first.Id, payments.OrderID(newest).TypeID())
-	}
-	if first.Credits == nil || first.Credits.Amount != "10000000000" {
-		t.Errorf("credits: %+v", first.Credits)
-	}
-	if first.Total == nil || first.Total.Amount != "1000" || first.Total.Currency != "USD" {
-		t.Errorf("total: %+v", first.Total)
-	}
-	if first.PaidTotal == nil || first.PaidTotal.Amount != "1000" {
-		t.Errorf("paid total: %+v", first.PaidTotal)
-	}
-	if first.MerchantName == nil || *first.MerchantName != "Alipay" {
-		t.Errorf("merchant: %v", first.MerchantName)
-	}
-	if first.Refunds == nil || len(*first.Refunds) != 0 {
-		t.Errorf("an order without refunds has %v", first.Refunds)
-	}
+	assertOrderShown(t, list.Data[0], o.newest)
+}
 
-	owner := url.Values{"account_id": {f.accountOf(ownerEmail)}}
-	if data := mustData(t, f.orders(t, s, owner)); len(data) != 2 || *data[0].Id != payments.OrderID(mid).TypeID() {
-		t.Fatalf("the owner's orders: %+v", data)
+func assertOrderShown(t *testing.T, order adminapi.PaymentOrder, id uuid.UUID) {
+	t.Helper()
+	if valueOf(order.Id) != payments.OrderID(id).TypeID() {
+		t.Errorf("the newest order is %v, want %s", order.Id, payments.OrderID(id).TypeID())
 	}
-	if data := mustData(t, f.orders(t, s, url.Values{"state": {"pending"}})); len(data) != 1 || *data[0].Id != payments.OrderID(mid).TypeID() {
-		t.Fatalf("pending orders: %+v", data)
+	if got := valueOf(order.Credits); got.Amount != "10000000000" {
+		t.Errorf("credits: %+v", order.Credits)
 	}
-	if data := mustData(t, f.orders(t, s, url.Values{"user_id": {f.userOf(ownerEmail)}})); len(data) != 2 {
-		t.Fatalf("the owner's user orders: %+v", data)
+	if got := valueOf(order.Total); got.Amount != "1000" || got.Currency != "USD" {
+		t.Errorf("total: %+v", order.Total)
 	}
-	if data := mustData(t, f.orders(t, s, url.Values{"since": {base.Add(90 * time.Minute).Format(time.RFC3339)}})); len(data) != 1 || *data[0].Id != payments.OrderID(newest).TypeID() {
-		t.Fatalf("orders since: %+v", data)
+	if valueOf(order.PaidTotal).Amount != "1000" {
+		t.Errorf("paid total: %+v", order.PaidTotal)
 	}
-	if data := mustData(t, f.orders(t, s, url.Values{"until": {base.Add(90 * time.Minute).Format(time.RFC3339)}})); len(data) != 2 {
-		t.Fatalf("orders until: %+v", data)
+	if valueOf(order.MerchantName) != "Alipay" {
+		t.Errorf("merchant: %v", order.MerchantName)
 	}
-	if data := mustData(t, f.orders(t, s, url.Values{"merchant_id": {payments.MerchantID(merchant).TypeID()}})); len(data) != 3 {
-		t.Fatalf("orders of the merchant: %+v", data)
+	if order.Refunds == nil || len(*order.Refunds) != 0 {
+		t.Errorf("an order without refunds has %v", order.Refunds)
 	}
-	if data := mustData(t, f.orders(t, s, url.Values{"merchant_id": {payments.MerchantID(uuid.NewV7()).TypeID()}})); len(data) != 0 {
-		t.Fatalf("orders of another merchant: %+v", data)
-	}
+}
 
-	firstPage := f.orders(t, s, url.Values{"limit": {"2"}})
+// valueOf reads an optional field so a test can compare it with what a page must show; nil reads as the zero value.
+func valueOf[T any](p *T) (v T) {
+	if p != nil {
+		v = *p
+	}
+	return v
+}
+
+func TestAdminFiltersPaymentOrders(t *testing.T) {
+	o := newOrderListFixture(t)
+	at := func(offset time.Duration) string { return o.base.Add(offset).Format(time.RFC3339) }
+	cases := map[string]struct {
+		query url.Values
+		want  []string
+	}{
+		"account": {
+			url.Values{"account_id": {o.f.accountOf(ownerEmail)}},
+			[]string{payments.OrderID(o.mid).TypeID(), payments.OrderID(o.old).TypeID()},
+		},
+		"user": {
+			url.Values{"user_id": {o.f.userOf(ownerEmail)}},
+			[]string{payments.OrderID(o.mid).TypeID(), payments.OrderID(o.old).TypeID()},
+		},
+		"state": {url.Values{"state": {"pending"}}, []string{payments.OrderID(o.mid).TypeID()}},
+		"since": {url.Values{"since": {at(90 * time.Minute)}}, []string{payments.OrderID(o.newest).TypeID()}},
+		"until": {
+			url.Values{"until": {at(90 * time.Minute)}},
+			[]string{payments.OrderID(o.mid).TypeID(), payments.OrderID(o.old).TypeID()},
+		},
+		"merchant": {
+			url.Values{"merchant_id": {payments.MerchantID(o.merchant).TypeID()}},
+			[]string{payments.OrderID(o.newest).TypeID(), payments.OrderID(o.mid).TypeID(), payments.OrderID(o.old).TypeID()},
+		},
+		"another merchant": {url.Values{"merchant_id": {payments.MerchantID(uuid.NewV7()).TypeID()}}, nil},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := orderIDs(mustData(t, o.f.orders(t, o.s, tc.query))); !slices.Equal(got, tc.want) {
+				t.Fatalf("%s: orders %v, want %v", name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdminPagesPaymentOrders(t *testing.T) {
+	o := newOrderListFixture(t)
+	firstPage := o.f.orders(t, o.s, url.Values{"limit": {"2"}})
 	if firstPage.NextCursor == nil || len(firstPage.Data) != 2 {
 		t.Fatalf("the first page: %+v, next %v", firstPage.Data, firstPage.NextCursor)
 	}
-	secondPage := f.orders(t, s, url.Values{"limit": {"2"}, "cursor": {*firstPage.NextCursor}})
-	if len(secondPage.Data) != 1 || *secondPage.Data[0].Id != payments.OrderID(old).TypeID() || secondPage.NextCursor != nil {
+	secondPage := o.f.orders(t, o.s, url.Values{"limit": {"2"}, "cursor": {*firstPage.NextCursor}})
+	if len(secondPage.Data) != 1 || *secondPage.Data[0].Id != payments.OrderID(o.old).TypeID() || secondPage.NextCursor != nil {
 		t.Fatalf("the second page: %+v, next %v", secondPage.Data, secondPage.NextCursor)
 	}
+}
 
-	expectAdmin(t, "until before since", f.do(http.MethodGet,
-		"/payments/orders?site_id="+f.siteID()+"&since=2026-10-02T00:00:00Z&until=2026-10-01T00:00:00Z", "", as(s)),
-		http.StatusBadRequest, "")
-	expectAdmin(t, "a bad cursor", f.do(http.MethodGet,
-		"/payments/orders?site_id="+f.siteID()+"&cursor=nonsense", "", as(s)), http.StatusBadRequest, "")
+func TestAdminRejectsInvalidOrderQueries(t *testing.T) {
+	o := newOrderListFixture(t)
+	for name, query := range map[string]string{
+		"until before since": "since=2026-10-02T00:00:00Z&until=2026-10-01T00:00:00Z",
+		"a bad cursor":       "cursor=nonsense",
+		"a bad account":      "account_id=nonsense",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := o.f.do(http.MethodGet, "/payments/orders?site_id="+o.f.siteID()+"&"+query, "", as(o.s))
+			expectAdmin(t, name, rec, http.StatusBadRequest, "")
+		})
+	}
 }
 
 func mustData(t *testing.T, list adminapi.PaymentOrderList) []adminapi.PaymentOrder {
@@ -166,14 +219,35 @@ func mustData(t *testing.T, list adminapi.PaymentOrderList) []adminapi.PaymentOr
 	return list.Data
 }
 
-func TestAdminDecidesRefunds(t *testing.T) {
+// orderIDs is the IDs of a page in the order it lists them, for comparing a filtered page with what it must hold.
+func orderIDs(orders []adminapi.PaymentOrder) []string {
+	ids := make([]string, len(orders))
+	for i, order := range orders {
+		if order.Id != nil {
+			ids[i] = *order.Id
+		}
+	}
+	return ids
+}
+
+func TestAdminApprovesRefund(t *testing.T) {
+	f, s, refund := newFrozenRefund(t)
+	assertRefundQueue(t, f, s, refund)
+	assertRefundApproval(t, f, s, refund)
+}
+
+// newFrozenRefund is an offline refund frozen for review, requested by someone other than the operator on duty.
+func newFrozenRefund(t *testing.T) (adminFixture, session, uuid.UUID) {
+	t.Helper()
 	f := newAdminFixture(t)
 	f.addUser("other@example.com", "")
-	s := f.owner()
 	merchant := f.seedMerchant()
 	order := f.seedOrder(merchant, ownerEmail, "paid", time.Now().UTC())
-	refund := f.seedRefund(order, "other@example.com", "frozen")
+	return f, f.owner(), f.seedRefund(order, "other@example.com")
+}
 
+func assertRefundQueue(t *testing.T, f adminFixture, s session, refund uuid.UUID) {
+	t.Helper()
 	rec := f.do(http.MethodGet, "/payments/refunds?site_id="+f.siteID()+"&state=frozen", "", as(s))
 	expectAdmin(t, "listPaymentRefunds", rec, http.StatusOK, "")
 	var list adminapi.PaymentRefundList
@@ -181,20 +255,35 @@ func TestAdminDecidesRefunds(t *testing.T) {
 	if list.Data == nil || len(list.Data) != 1 {
 		t.Fatalf("frozen refunds: %+v", list.Data)
 	}
-	shown := list.Data[0]
-	if shown.Id == nil || *shown.Id != payments.RefundID(refund).TypeID() ||
-		shown.AccountId == nil || *shown.AccountId != f.accountOf(ownerEmail) ||
-		shown.Credits == nil || shown.Credits.Amount != "5000000000" ||
-		shown.Amount == nil || shown.Amount.Amount != "500" ||
-		shown.Reason == nil || *shown.Reason != "The credits were not used." {
-		t.Fatalf("the frozen refund: %+v", shown)
-	}
+	assertFrozenRefundShown(t, list.Data[0], f, refund)
+}
 
+func assertFrozenRefundShown(t *testing.T, shown adminapi.PaymentRefund, f adminFixture, refund uuid.UUID) {
+	t.Helper()
+	if valueOf(shown.Id) != payments.RefundID(refund).TypeID() {
+		t.Errorf("the refund is %v, want %s", shown.Id, payments.RefundID(refund).TypeID())
+	}
+	if valueOf(shown.AccountId) != f.accountOf(ownerEmail) {
+		t.Errorf("the refund's account: %v", shown.AccountId)
+	}
+	if got := valueOf(shown.Credits); got.Amount != "5000000000" {
+		t.Errorf("credits: %+v", shown.Credits)
+	}
+	if valueOf(shown.Amount).Amount != "500" {
+		t.Errorf("amount: %+v", shown.Amount)
+	}
+	if valueOf(shown.Reason) != "The credits were not used." {
+		t.Errorf("reason: %v", shown.Reason)
+	}
+}
+
+func assertRefundApproval(t *testing.T, f adminFixture, s session, refund uuid.UUID) {
+	t.Helper()
 	path := "/payments/refunds/" + payments.RefundID(refund).TypeID() + "/approve"
 	expectAdmin(t, "an empty reason", f.change(s, http.MethodPost, path, `{"reason":"  "}`, newKey()),
 		http.StatusUnprocessableEntity, "")
 	key := newKey()
-	rec = f.change(s, http.MethodPost, path, `{"reason":"checked the receipt"}`, key)
+	rec := f.change(s, http.MethodPost, path, `{"reason":"checked the receipt"}`, key)
 	expectAdmin(t, "approvePaymentRefund", rec, http.StatusOK, "")
 	if got := rec.Header().Get("Idempotency-Replayed"); got != "" {
 		t.Errorf("the first approval says it was replayed: %q", got)
@@ -222,12 +311,23 @@ func TestAdminDecidesRefunds(t *testing.T) {
 	if n := f.auditCount("refund.approve"); n != "1" {
 		t.Errorf("a second approval was audited: %s", n)
 	}
-	expectAdmin(t, "rejecting an approved refund", f.change(s, http.MethodPost,
-		"/payments/refunds/"+payments.RefundID(refund).TypeID()+"/reject", `{"reason":"too late"}`, newKey()),
-		http.StatusConflict, codeConflict)
+}
+
+func TestAdminRefusesRefundPastReviewOrByRequester(t *testing.T) {
+	f := newAdminFixture(t)
+	f.addUser("other@example.com", "")
+	s := f.owner()
+	merchant := f.seedMerchant()
+	order := f.seedOrder(merchant, ownerEmail, "paid", time.Now().UTC())
+	refund := f.seedRefund(order, "other@example.com")
+	path := "/payments/refunds/" + payments.RefundID(refund).TypeID()
+	expectAdmin(t, "approvePaymentRefund", f.change(s, http.MethodPost, path+"/approve",
+		`{"reason":"checked the receipt"}`, newKey()), http.StatusOK, "")
+	expectAdmin(t, "rejecting an approved refund", f.change(s, http.MethodPost, path+"/reject",
+		`{"reason":"too late"}`, newKey()), http.StatusConflict, codeConflict)
 
 	ownOrder := f.seedOrder(merchant, ownerEmail, "paid", time.Now().UTC().Add(time.Second))
-	ownRefund := f.seedRefund(ownOrder, ownerEmail, "frozen")
+	ownRefund := f.seedRefund(ownOrder, ownerEmail)
 	expectAdmin(t, "approving one's own refund", f.change(s, http.MethodPost,
 		"/payments/refunds/"+payments.RefundID(ownRefund).TypeID()+"/approve", `{"reason":"mine"}`, newKey()),
 		http.StatusForbidden, codeForbidden)
@@ -242,13 +342,12 @@ func TestRefundDecisionKeyCoversOneRefund(t *testing.T) {
 	at := time.Now().UTC()
 	firstOrder := f.seedOrder(merchant, "other@example.com", "paid", at)
 	secondOrder := f.seedOrder(merchant, "other@example.com", "paid", at.Add(time.Second))
-	first := f.seedRefund(firstOrder, "other@example.com", "frozen")
-	second := f.seedRefund(secondOrder, "other@example.com", "frozen")
+	first := f.seedRefund(firstOrder, "other@example.com")
+	second := f.seedRefund(secondOrder, "other@example.com")
 
 	key := newKey()
 	responses := make(chan *httptest.ResponseRecorder, 2)
 	for _, id := range []uuid.UUID{first, second} {
-		id := id
 		go func() {
 			path := "/payments/refunds/" + payments.RefundID(id).TypeID() + "/approve"
 			responses <- f.change(s, http.MethodPost, path, `{"reason":"checked the receipt"}`, key)
@@ -280,7 +379,7 @@ func TestRefundDecisionAndItsKeyCommitTogether(t *testing.T) {
 	s := f.owner()
 	merchant := f.seedMerchant()
 	order := f.seedOrder(merchant, "other@example.com", "paid", time.Now().UTC())
-	refund := f.seedRefund(order, "other@example.com", "frozen")
+	refund := f.seedRefund(order, "other@example.com")
 	path := "/payments/refunds/" + payments.RefundID(refund).TypeID() + "/approve"
 	key := newKey()
 

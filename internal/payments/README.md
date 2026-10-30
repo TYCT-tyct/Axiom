@@ -31,11 +31,11 @@ func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 func (p *Payments) Notify() http.Handler                                               // GET/POST /api/payments/v1/notify/{merchant}
 func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Refund, error)              // 冻结并等待审批；r.Key 幂等
 func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) // 独立管理员批准后发送；线下退款继续等待凭证；理由进审计
-func (p *Payments) ApproveRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, reason string) (Refund, error) // 在调用方事务里记录批准与审计；提交后再 SendRefund
+func ApproveRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, reason string) (Refund, error) // 在调用方事务里记录批准与审计；提交后再 SendRefund
 func (p *Payments) SendRefund(ctx context.Context, s pg.Scope, id RefundID, initial bool) error // 提交后发送或续发；失败由退款轮询接续
 func (p *Payments) RejectRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) // 拒绝尚未审批、确定未发送的申请
 func (p *Payments) PrepareRejectRefund(ctx context.Context, s pg.Scope, id RefundID) error // 在决策事务前推进账本；单连接池不能在事务内再取连接
-func (p *Payments) RejectRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, reason string) (Refund, error) // 调用方已 PrepareRejectRefund；在调用方事务里解冻并审计
+func RejectRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, reason string) (Refund, error) // 调用方已 PrepareRejectRefund；在调用方事务里解冻并审计
 func (p *Payments) ListRefunds(ctx context.Context, s pg.Scope, orders []OrderID) (map[OrderID][]Refund, error) // 一页订单的退款，按退款创建顺序，一次查询
 func (p *Payments) ListSiteOrders(ctx context.Context, s pg.Scope, q OrderQuery, after *page.Cursor, size int) ([]SiteOrder, *page.Cursor, error) // 管理端的站点订单列表；按用户、账户、商户、状态、时间筛选
 func (p *Payments) ListSiteRefunds(ctx context.Context, s pg.Scope, q RefundQuery, after *page.Cursor, size int) ([]Refund, *page.Cursor, error) // 管理端的站点退款列表，可按状态筛选

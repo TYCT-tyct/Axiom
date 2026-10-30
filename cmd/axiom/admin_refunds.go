@@ -89,38 +89,19 @@ func paymentOrderBody(o payments.SiteOrder, site platform.Currency, refunds []pa
 	return body
 }
 
-// ListPaymentOrders lists one site's orders, newest first, with the refunds of each. The admin's site is the one named
-// in the query, and the scope is the guard's: a site outside it reads as absent.
-func (a adminAPI) ListPaymentOrders(ctx context.Context, r adminapi.ListPaymentOrdersRequestObject) (adminapi.ListPaymentOrdersResponseObject, error) {
-	p := r.Params
-	siteID, site, err := a.siteOf(p.SiteId)
-	if err != nil {
-		return nil, err
+// orderQueryOf validates the order list's filters into the module's query. A filter the address leaves out does not
+// narrow.
+func orderQueryOf(site accounts.SiteID, p adminapi.ListPaymentOrdersParams) (payments.OrderQuery, error) {
+	q := payments.OrderQuery{Site: uuid.UUID(site)}
+	var err error
+	if q.Account, err = parseFilterID(p.AccountId, accounts.ParseAccountID, "account_id", "not an account ID"); err != nil {
+		return payments.OrderQuery{}, err
 	}
-	q := payments.OrderQuery{Site: uuid.UUID(siteID)}
-	if p.AccountId != nil {
-		id, err := accounts.ParseAccountID(*p.AccountId)
-		if err != nil {
-			return nil, invalidField("account_id", "not an account ID")
-		}
-		account := uuid.UUID(id)
-		q.Account = &account
+	if q.User, err = parseFilterID(p.UserId, accounts.ParseUserID, "user_id", "not a user ID"); err != nil {
+		return payments.OrderQuery{}, err
 	}
-	if p.UserId != nil {
-		id, err := accounts.ParseUserID(*p.UserId)
-		if err != nil {
-			return nil, invalidField("user_id", "not a user ID")
-		}
-		user := uuid.UUID(id)
-		q.User = &user
-	}
-	if p.MerchantId != nil {
-		id, err := payments.ParseMerchantID(*p.MerchantId)
-		if err != nil {
-			return nil, invalidField("merchant_id", "not a merchant account ID")
-		}
-		merchant := uuid.UUID(id)
-		q.Merchant = &merchant
+	if q.Merchant, err = parseFilterID(p.MerchantId, payments.ParseMerchantID, "merchant_id", "not a merchant account ID"); err != nil {
+		return payments.OrderQuery{}, err
 	}
 	if p.State != nil {
 		q.State = payments.State(*p.State)
@@ -132,15 +113,52 @@ func (a adminAPI) ListPaymentOrders(ctx context.Context, r adminapi.ListPaymentO
 		q.Until = *p.Until
 	}
 	if !q.Since.IsZero() && !q.Until.IsZero() && !q.Until.After(q.Since) {
-		return nil, invalidField("until", "must be after since")
+		return payments.OrderQuery{}, invalidField("until", "must be after since")
 	}
-	var after *page.Cursor
-	if p.Cursor != nil {
-		cursor, err := page.ParseCursor(*p.Cursor)
-		if err != nil {
-			return nil, invalidField("cursor", "not a cursor this API gave out")
-		}
-		after = &cursor
+	return q, nil
+}
+
+// parseFilterID turns one optional ID filter from the address, refusing a malformed one as the query field that named
+// it. An absent filter returns nil, which narrows nothing.
+func parseFilterID[T ~[16]byte](raw *string, parse func(string) (T, error), field, message string) (*uuid.UUID, error) {
+	if raw == nil {
+		return nil, nil //nolint:nilnil // an absent filter is not an error
+	}
+	id, err := parse(*raw)
+	if err != nil {
+		return nil, invalidField(field, message)
+	}
+	value := uuid.UUID(id)
+	return &value, nil
+}
+
+// pageCursorOf parses a keyset page cursor; an absent one starts at the newest row.
+func pageCursorOf(raw *string) (*page.Cursor, error) {
+	if raw == nil {
+		return nil, nil //nolint:nilnil // an absent cursor starts at the newest row
+	}
+	cursor, err := page.ParseCursor(*raw)
+	if err != nil {
+		return nil, invalidField("cursor", "not a cursor this API gave out")
+	}
+	return &cursor, nil
+}
+
+// ListPaymentOrders lists one site's orders, newest first, with the refunds of each. The admin's site is the one named
+// in the query, and the scope is the guard's: a site outside it reads as absent.
+func (a adminAPI) ListPaymentOrders(ctx context.Context, r adminapi.ListPaymentOrdersRequestObject) (adminapi.ListPaymentOrdersResponseObject, error) {
+	p := r.Params
+	siteID, site, err := a.siteOf(p.SiteId)
+	if err != nil {
+		return nil, err
+	}
+	q, err := orderQueryOf(siteID, p)
+	if err != nil {
+		return nil, err
+	}
+	after, err := pageCursorOf(p.Cursor)
+	if err != nil {
+		return nil, err
 	}
 	service, err := a.paymentsService(ctx)
 	if err != nil {
@@ -181,13 +199,9 @@ func (a adminAPI) ListPaymentRefunds(ctx context.Context, r adminapi.ListPayment
 	if p.State != nil {
 		q.State = string(*p.State)
 	}
-	var after *page.Cursor
-	if p.Cursor != nil {
-		cursor, err := page.ParseCursor(*p.Cursor)
-		if err != nil {
-			return nil, invalidField("cursor", "not a cursor this API gave out")
-		}
-		after = &cursor
+	after, err := pageCursorOf(p.Cursor)
+	if err != nil {
+		return nil, err
 	}
 	service, err := a.paymentsService(ctx)
 	if err != nil {
@@ -225,7 +239,7 @@ func refundDecisionProblem(err error) error {
 // Idempotency-Key in one transaction. The channel call, when there is one, happens after that commit: the decision is
 // then durable and the refund poller can finish a send this node did not. A key used by another refund or request is
 // refused before the decision runs, so two funds changes cannot share a key.
-func (a adminAPI) decideRefund(ctx context.Context, operation, refundID, key string, body adminapi.ReasonRequest, send bool, prepare func(*payments.Payments, pg.Scope, payments.RefundID) error, decide func(*payments.Payments, pg.Tx, payments.RefundID, uuid.UUID, string) (payments.Refund, error)) (adminapi.PaymentRefund, bool, error) {
+func (a adminAPI) decideRefund(ctx context.Context, operation, refundID, key string, body adminapi.ReasonRequest, send bool, prepare func(*payments.Payments, pg.Scope, payments.RefundID) error, decide func(pg.Tx, payments.RefundID, uuid.UUID, string) (payments.Refund, error)) (adminapi.PaymentRefund, bool, error) {
 	id, err := refundIDOf(refundID)
 	if err != nil {
 		return adminapi.PaymentRefund{}, false, err
@@ -248,32 +262,45 @@ func (a adminAPI) decideRefund(ctx context.Context, operation, refundID, key str
 	}
 	var decided payments.Refund
 	stored, replayed, err := idempotentlyClaimed(ctx, a.db, claim, func(tx pg.Tx) (adminapi.PaymentRefund, error) {
-		refund, err := decide(service, tx, id, uuid.UUID(callOf(ctx).principal.UserID()), body.Reason)
-		if err != nil {
-			return adminapi.PaymentRefund{}, refundDecisionProblem(err)
-		}
-		decided = refund
-		_, site, err := a.siteOf(accounts.SiteID(refund.SiteID).TypeID())
-		if err != nil {
-			return adminapi.PaymentRefund{}, err
-		}
-		return paymentRefundBody(refund, site.Currency), nil
+		return a.storeRefundDecision(ctx, tx, id, body.Reason, &decided, decide)
 	})
 	if err != nil {
 		return adminapi.PaymentRefund{}, false, err
 	}
-	if !replayed && send && decided.Via == "channel" {
-		if err = service.SendRefund(ctx, callOf(ctx).scope, decided.ID, true); err != nil {
-			a.logger.WarnContext(ctx, "refund decided but this node did not start its channel flow", "refund", decided.ID.TypeID(), "err", err)
-		}
-	}
+	a.startRefundSend(ctx, service, replayed, send, decided)
 	return stored, replayed, nil
+}
+
+// startRefundSend begins the channel flow after the decision committed, unless the answer is a replay or the refund is
+// offline. A failure here is left to the refund poller.
+func (a adminAPI) startRefundSend(ctx context.Context, service *payments.Payments, replayed, send bool, refund payments.Refund) {
+	if replayed || !send || refund.Via != "channel" {
+		return
+	}
+	if err := service.SendRefund(ctx, callOf(ctx).scope, refund.ID, true); err != nil {
+		a.logger.WarnContext(ctx, "refund decided but this node did not start its channel flow", "refund", refund.ID.TypeID(), "err", err)
+	}
+}
+
+// storeRefundDecision runs one decision in the caller's transaction and renders the refund it decided for the stored
+// idempotency answer.
+func (a adminAPI) storeRefundDecision(ctx context.Context, tx pg.Tx, id payments.RefundID, reason string, decided *payments.Refund, decide func(pg.Tx, payments.RefundID, uuid.UUID, string) (payments.Refund, error)) (adminapi.PaymentRefund, error) {
+	refund, err := decide(tx, id, uuid.UUID(callOf(ctx).principal.UserID()), reason)
+	if err != nil {
+		return adminapi.PaymentRefund{}, refundDecisionProblem(err)
+	}
+	*decided = refund
+	_, site, err := a.siteOf(accounts.SiteID(refund.SiteID).TypeID())
+	if err != nil {
+		return adminapi.PaymentRefund{}, err
+	}
+	return paymentRefundBody(refund, site.Currency), nil
 }
 
 // ApprovePaymentRefund releases a refund as a second person and lets the channel flow start.
 func (a adminAPI) ApprovePaymentRefund(ctx context.Context, r adminapi.ApprovePaymentRefundRequestObject) (adminapi.ApprovePaymentRefundResponseObject, error) {
-	f := func(p *payments.Payments, tx pg.Tx, id payments.RefundID, user uuid.UUID, reason string) (payments.Refund, error) {
-		return p.ApproveRefundTx(ctx, tx, id, user, reason)
+	f := func(tx pg.Tx, id payments.RefundID, user uuid.UUID, reason string) (payments.Refund, error) {
+		return payments.ApproveRefundTx(ctx, tx, id, user, reason)
 	}
 	body, replayed, err := a.decideRefund(ctx, "approvePaymentRefund", r.RefundId, r.Params.IdempotencyKey, *r.Body, true, nil, f)
 	if err != nil {
@@ -286,8 +313,8 @@ func (a adminAPI) ApprovePaymentRefund(ctx context.Context, r adminapi.ApprovePa
 
 // RejectPaymentRefund declines a refund that nobody approved and no channel saw, returning its frozen credits.
 func (a adminAPI) RejectPaymentRefund(ctx context.Context, r adminapi.RejectPaymentRefundRequestObject) (adminapi.RejectPaymentRefundResponseObject, error) {
-	f := func(p *payments.Payments, tx pg.Tx, id payments.RefundID, user uuid.UUID, reason string) (payments.Refund, error) {
-		return p.RejectRefundTx(ctx, tx, id, user, reason)
+	f := func(tx pg.Tx, id payments.RefundID, user uuid.UUID, reason string) (payments.Refund, error) {
+		return payments.RejectRefundTx(ctx, tx, id, user, reason)
 	}
 	prepare := func(p *payments.Payments, scope pg.Scope, id payments.RefundID) error {
 		return p.PrepareRejectRefund(ctx, scope, id)

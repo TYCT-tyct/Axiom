@@ -23,54 +23,62 @@ func TestListSiteOrdersFiltersAndPages(t *testing.T) {
 	w.exec(`UPDATE payments.orders SET created_at = '`+older.Format(time.RFC3339)+`' WHERE id = '`+uuid.UUID(paid.ID).String()+`'`,
 		`UPDATE payments.orders SET created_at = '`+newer.Format(time.RFC3339)+`' WHERE id = '`+uuid.UUID(pending.ID).String()+`'`)
 
-	site := uuid.UUID(w.siteA)
-	first, next, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteA), OrderQuery{Site: site}, nil, 1)
+	testOrderPages(t, w, paid.ID, pending.ID, newer)
+	testOrderFilters(t, w, newer)
+}
+
+func testOrderPages(t *testing.T, w *world, paid, pending OrderID, newer time.Time) {
+	t.Helper()
+	first, next, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteA), OrderQuery{Site: w.siteA}, nil, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first) != 1 || first[0].ID != pending.ID || next == nil || !next.At.Equal(newer) {
+	if len(first) != 1 || first[0].ID != pending || next == nil || !next.At.Equal(newer) {
 		t.Fatalf("first page: %+v, next %+v", first, next)
-	}
-	second, last, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteA), OrderQuery{Site: site}, next, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(second) != 1 || second[0].ID != paid.ID || last != nil {
-		t.Fatalf("second page: %+v, next %+v", second, last)
 	}
 	if first[0].MerchantName == "" {
 		t.Fatal("the merchant account's name is missing")
 	}
+	second, last, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteA), OrderQuery{Site: w.siteA}, next, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 1 || second[0].ID != paid || last != nil {
+		t.Fatalf("second page: %+v, next %+v", second, last)
+	}
+}
 
-	for name, query := range map[string]OrderQuery{
-		"state":    {Site: site, State: Paid},
-		"since":    {Site: site, Since: newer},
-		"until":    {Site: site, Until: newer},
-		"account":  {Site: site, Account: new(uuid.UUID(w.acctB))},
-		"merchant": {Site: site, Merchant: new(uuid.NewV7())},
-	} {
+func testOrderFilters(t *testing.T, w *world, newer time.Time) {
+	t.Helper()
+	cases := map[string]struct {
+		query OrderQuery
+		want  int
+	}{
+		"state":    {OrderQuery{Site: w.siteA, State: Paid}, 1},
+		"since":    {OrderQuery{Site: w.siteA, Since: newer}, 1},
+		"until":    {OrderQuery{Site: w.siteA, Until: newer}, 1},
+		"account":  {OrderQuery{Site: w.siteA, Account: new(w.acctB)}, 0},
+		"merchant": {OrderQuery{Site: w.siteA, Merchant: new(uuid.NewV7())}, 0},
+	}
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			orders, _, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteA), query, nil, 10)
+			orders, _, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteA), tc.query, nil, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := 1
-			if name == "account" || name == "merchant" {
-				want = 0
-			}
-			if len(orders) != want {
-				t.Fatalf("%s: %d orders, want %d", name, len(orders), want)
+			if len(orders) != tc.want {
+				t.Fatalf("%s: %d orders, want %d", name, len(orders), tc.want)
 			}
 		})
 	}
-	mine, _, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteA), OrderQuery{Site: site, User: &w.user}, nil, 10)
+	mine, _, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteA), OrderQuery{Site: w.siteA, User: &w.user}, nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(mine) != 2 {
 		t.Fatalf("the user's orders: %+v", mine)
 	}
-	other, _, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteB), OrderQuery{Site: uuid.UUID(w.siteB)}, nil, 10)
+	other, _, err := w.p.ListSiteOrders(t.Context(), siteScope(w.siteB), OrderQuery{Site: w.siteB}, nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,56 +90,69 @@ func TestListSiteOrdersFiltersAndPages(t *testing.T) {
 func TestListSiteRefundsFiltersAndDecisionState(t *testing.T) {
 	w, o := refundWorld(t, fakePlugin{caps: CapRefund, refund: refundSucceeds})
 	r := w.mustRefund(o, o.Credits, "admin-refund")
-	site := uuid.UUID(w.siteA)
-	refunds, next, err := w.p.ListSiteRefunds(t.Context(), siteScope(w.siteA), RefundQuery{Site: site, State: "frozen"}, nil, 10)
+	assertFrozenRefund(t, w, r)
+	approved := w.approve(r)
+	if approved.State != "succeeded" {
+		t.Fatalf("approved refund: %+v", approved)
+	}
+	assertDecidedRefund(t, w)
+}
+
+func assertFrozenRefund(t *testing.T, w *world, r Refund) {
+	t.Helper()
+	refunds, next, err := w.p.ListSiteRefunds(t.Context(), siteScope(w.siteA), RefundQuery{Site: w.siteA, State: "frozen"}, nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(refunds) != 1 || next != nil {
 		t.Fatalf("frozen refunds: %+v, next %+v", refunds, next)
 	}
-	got := refunds[0]
-	if got.ID != r.ID || got.SiteID != site || got.Reason != "unused credits" || got.RequestedBy != w.user ||
-		got.ApprovedBy != nil || got.Approved || got.Amount.Currency.String() != "CNY" {
-		t.Fatalf("the frozen refund: %+v", got)
-	}
+	assertRefundRow(t, refunds[0], w, r)
 	for _, state := range []string{"sending", "pending", "succeeded", "failed"} {
-		list, _, err := w.p.ListSiteRefunds(t.Context(), siteScope(w.siteA), RefundQuery{Site: site, State: state}, nil, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(list) != 0 {
+		if list := siteRefunds(t, w, state); len(list) != 0 {
 			t.Fatalf("%s: %+v", state, list)
 		}
 	}
+}
 
-	approved := w.approve(r)
-	if approved.State != "succeeded" {
-		t.Fatalf("approved refund: %+v", approved)
+func assertRefundRow(t *testing.T, got Refund, w *world, r Refund) {
+	t.Helper()
+	if got.ID != r.ID || got.SiteID != w.siteA || got.Reason != "unused credits" || got.RequestedBy != w.user ||
+		got.ApprovedBy != nil || got.Approved || got.Amount.Currency.String() != "CNY" {
+		t.Fatalf("the frozen refund: %+v", got)
 	}
-	succeeded, _, err := w.p.ListSiteRefunds(t.Context(), siteScope(w.siteA), RefundQuery{Site: site, State: "succeeded"}, nil, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
+}
+
+func assertDecidedRefund(t *testing.T, w *world) {
+	t.Helper()
+	succeeded := siteRefunds(t, w, "succeeded")
 	if len(succeeded) != 1 || succeeded[0].ApprovedBy == nil || !succeeded[0].Approved {
 		t.Fatalf("succeeded refunds: %+v", succeeded)
 	}
-	frozen, _, err := w.p.ListSiteRefunds(t.Context(), siteScope(w.siteA), RefundQuery{Site: site, State: "frozen"}, nil, 10)
+	if frozen := siteRefunds(t, w, "frozen"); len(frozen) != 0 {
+		t.Fatalf("a decided refund stayed frozen: %+v", frozen)
+	}
+}
+
+// siteRefunds lists one site's refunds in a state, for the queue the page reads.
+func siteRefunds(t *testing.T, w *world, state string) []Refund {
+	t.Helper()
+	refunds, _, err := w.p.ListSiteRefunds(t.Context(), siteScope(w.siteA), RefundQuery{Site: w.siteA, State: state}, nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(frozen) != 0 {
-		t.Fatalf("a decided refund stayed frozen: %+v", frozen)
-	}
+	return refunds
 }
 
 func TestApproveRefundRequiresAndAuditsAReason(t *testing.T) {
 	w, o := refundWorld(t, fakePlugin{caps: CapRefund, refund: refundSucceeds})
 	r := w.mustRefund(o, o.Credits, "audit-reason")
 	approver := uuid.NewV7()
-	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, approver, "  "); err == nil {
+	_, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, approver, "  ")
+	if err == nil {
 		t.Fatal("a blank approval reason was accepted")
-	} else if _, ok := errors.AsType[*FieldError](err); !ok {
+	}
+	if field, ok := errors.AsType[*FieldError](err); !ok || field == nil {
 		t.Fatalf("blank reason: %v", err)
 	}
 	if _, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, approver, "checked the receipt"); err != nil {
