@@ -62,11 +62,11 @@ func legalHistoryCursor(raw *adminapi.Cursor) (accounts.DocumentVersion, bool, e
 	if !ok || (kind != accounts.LegalTerms && kind != accounts.LegalPrivacy) {
 		return accounts.DocumentVersion{}, false, invalidField("/cursor", "is not a legal document cursor")
 	}
-	version, err := strconv.Atoi(versionText)
+	version, err := strconv.ParseInt(versionText, 10, 32)
 	if err != nil || version < 1 {
 		return accounts.DocumentVersion{}, false, invalidField("/cursor", "is not a legal document cursor")
 	}
-	return accounts.DocumentVersion{Kind: kind, Version: version}, true, nil
+	return accounts.DocumentVersion{Kind: kind, Version: int(version)}, true, nil
 }
 
 // PublishLegalDocument adds a version of a kind. The text is the owner's, so it is stored as given; the audit entry

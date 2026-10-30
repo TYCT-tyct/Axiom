@@ -40,6 +40,8 @@ func TestLegalDocumentHistoryPages(t *testing.T) {
 	base := "/sites/" + site + "/legal-documents"
 	rec := admin.do(http.MethodGet, base+"?cursor=not-a-cursor", "", as(operator))
 	expectAdmin(t, "a malformed legal document cursor", rec, http.StatusBadRequest, "")
+	rec = admin.do(http.MethodGet, base+"?cursor=privacy:2147483648", "", as(operator))
+	expectAdmin(t, "a legal document cursor beyond int32", rec, http.StatusBadRequest, "")
 	seen := map[string]bool{}
 	cursor := ""
 	pages := 0
