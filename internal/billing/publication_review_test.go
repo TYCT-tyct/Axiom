@@ -10,6 +10,8 @@ import (
 )
 
 func TestPublicationPreviewIsReadOnly(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	site := uuid.NewV7()
 	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
@@ -34,6 +36,8 @@ func TestPublicationPreviewIsReadOnly(t *testing.T) {
 }
 
 func TestFloorCapIgnoresDecreases(t *testing.T) {
+	t.Parallel()
+
 	previous := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.00001"}}`)
 	next := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.0000011","output":"0.000004"}}`)
 	if got := automaticPriceStatus(PricePolicy{ChangeRatio: "0.1", MaxIncreaseRatio: "0.5"}, previous, next, next, true); got != "published" {
@@ -42,6 +46,8 @@ func TestFloorCapIgnoresDecreases(t *testing.T) {
 }
 
 func TestCostPlusIgnoresReferenceRevision(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	model, _ := f.catalog.snapshot().Model(f.model)
 	rules := []Rule{f.rule}
@@ -71,6 +77,8 @@ func TestCostPlusIgnoresReferenceRevision(t *testing.T) {
 }
 
 func TestPublicationSignalsOnlyOperationalDegradation(t *testing.T) {
+	t.Parallel()
+
 	for _, c := range []struct {
 		name     string
 		critical int
@@ -120,6 +128,8 @@ func signalFixture(t *testing.T, kind string) *priceFixture {
 }
 
 func TestPublishedOverrideOnlyAllowsAuditedLocalCosts(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	f.refresh()
 	f.costs[0] = priceCost(t, f.model, "0.0001")
@@ -142,6 +152,8 @@ func TestPublishedOverrideOnlyAllowsAuditedLocalCosts(t *testing.T) {
 }
 
 func TestPublishedPricesExpireWhenPublisherStops(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	f.refresh()
 	if err := f.tx(func(tx pg.Tx) error {

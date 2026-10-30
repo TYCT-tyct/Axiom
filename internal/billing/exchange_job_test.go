@@ -61,6 +61,8 @@ func (f *exchangeFixture) count(query string) int {
 }
 
 func TestExchangeSyncDailyAtomicAndManual(t *testing.T) {
+	t.Parallel()
+
 	f := newExchangeJob(t)
 	if err := f.tx(func(tx pg.Tx) error {
 		_, err := SetExchangeRate(t.Context(), tx, system, fxInput("71", "10", "initial", 0))
@@ -114,6 +116,8 @@ func TestExchangeSyncDailyAtomicAndManual(t *testing.T) {
 }
 
 func TestExchangeSyncStaleAndRecovery(t *testing.T) {
+	t.Parallel()
+
 	f := newExchangeJob(t)
 	f.run()
 	f.at = time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)
@@ -141,6 +145,8 @@ func TestExchangeSyncStaleAndRecovery(t *testing.T) {
 }
 
 func TestExchangeSyncNeverSucceeded(t *testing.T) {
+	t.Parallel()
+
 	f := newExchangeJob(t)
 	f.body.Store("broken XML")
 	f.run()
@@ -155,6 +161,8 @@ func TestExchangeSyncNeverSucceeded(t *testing.T) {
 }
 
 func TestExchangeSyncConcurrentClaims(t *testing.T) {
+	t.Parallel()
+
 	f := newExchangeJob(t)
 	start := make(chan struct{})
 	errs := make(chan error, 2)
@@ -176,6 +184,8 @@ func TestExchangeSyncConcurrentClaims(t *testing.T) {
 }
 
 func TestExchangeFetchBoundaries(t *testing.T) {
+	t.Parallel()
+
 	client := egress.NewForTesting(egresstest.Loopback(t))
 	defer client.CloseIdleConnections()
 	for _, tc := range []struct {
@@ -210,6 +220,8 @@ func TestExchangeFetchBoundaries(t *testing.T) {
 }
 
 func TestExchangeSyncStateScope(t *testing.T) {
+	t.Parallel()
+
 	f := newRules(t)
 	for _, scope := range []pg.Scope{pg.NewScope(false, nil, nil), pg.NewScope(false, nil, []uuid.UUID{uuid.NewV7()})} {
 		err := f.db.Tx(t.Context(), scope, func(tx pg.Tx) error { return checkExchangeStateHidden(t, tx) })
@@ -242,6 +254,8 @@ func checkExchangeStateHidden(t *testing.T, tx pg.Tx) error {
 }
 
 func TestExchangeSyncAfterDowntimeChecksFreshDownloadBeforeAlerting(t *testing.T) {
+	t.Parallel()
+
 	f := newExchangeJob(t)
 	f.run()
 	f.at = f.at.Add(exchangeMaxAge + time.Hour)
@@ -253,6 +267,8 @@ func TestExchangeSyncAfterDowntimeChecksFreshDownloadBeforeAlerting(t *testing.T
 }
 
 func TestExchangeSyncFailedCompletionAlertsOnNextCheck(t *testing.T) {
+	t.Parallel()
+
 	f := newExchangeJob(t)
 	f.run()
 	f.at = f.at.Add(exchangeMaxAge + time.Hour)

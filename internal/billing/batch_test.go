@@ -17,6 +17,8 @@ import (
 
 // A statement sent while the balance lock is blocked must not turn the holder check into an earlier snapshot.
 func TestBatchedReserveFencesAfterTheBalanceLock(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{})
 	release, first := b.holdOpen(b.admitted, uuid.NewV7(), 100)
 	second := make(chan error, 1)
@@ -37,6 +39,8 @@ func TestBatchedReserveFencesAfterTheBalanceLock(t *testing.T) {
 }
 
 func TestBatchedSettleSeesTheTerminalStateAfterItsLock(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{})
 	h := b.hold(100)
 	held, release, first := make(chan struct{}), make(chan struct{}), make(chan error, 1)
@@ -99,6 +103,8 @@ func (s failingWrite) EndRequest(ctx context.Context, tx pg.Tx, id, site, accoun
 // Independent transactions isolate a failing call even when it fails after its cost or all its settlement writes.
 // Retrying both the failed member and its successful peers must charge exactly once per request.
 func TestPipelinedSettlementsIsolateFailures(t *testing.T) {
+	t.Parallel()
+
 	t.Run("attempts", func(t *testing.T) { checkPipelinedSettlementFailure(t, false) })
 	t.Run("end", func(t *testing.T) { checkPipelinedSettlementFailure(t, true) })
 }
@@ -158,6 +164,8 @@ func checkSettlementRetries(b *bank, holds []*Hold, o Outcome) {
 
 // Admission, extension and settlement must agree on refusals when their source rows are missing.
 func TestFundsReadsShareRefusals(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{})
 	missing := b.admitted
 	missing.Account = uuid.NewV7()
@@ -197,6 +205,8 @@ func TestFundsReadsShareRefusals(t *testing.T) {
 
 // Distinct money, counter, window and result values catch positional mistakes that Go's identical scalar types cannot.
 func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, -29, Config{})
 	h := b.hold(100)
 	b.sql(
@@ -244,6 +254,8 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 }
 
 func TestPostWaitsBeforeUpdatingBalanceAndNumbering(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	firstID, secondID := uuid.NewV7(), uuid.NewV7()
 	entered, release := make(chan struct{}), make(chan struct{})

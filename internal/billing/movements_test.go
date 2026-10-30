@@ -18,6 +18,8 @@ import (
 // statement that makes it, so its seq is taken under the lock even when the caller took none; a repeated event is not
 // an error, and an account with no balance row is.
 func TestPostLocksTheBalanceRow(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	e := event{site: b.admitted.Site, account: b.admitted.Account, kind: "credit", request: uuid.NewV7()}
 	posted, release, done := make(chan error, 1), make(chan struct{}), make(chan error, 1)
@@ -97,7 +99,7 @@ func (b *bank) plan(scope pg.Scope, setup func(pg.Tx) error, query string, args 
 func seedLedger(site, account uuid.UUID, n int, legacy bool) []string {
 	statements := []string{
 		fmt.Sprintf(`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
-			SELECT gen_random_uuid(), '%s', '%s', 'settle', gen_random_uuid() FROM generate_series(1, %d)`, site, account, n),
+			SELECT uuidv7(), '%s', '%s', 'settle', uuidv7() FROM generate_series(1, %d)`, site, account, n),
 		fmt.Sprintf(`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
 			SELECT t.id, t.site_id, t.account_id, v.book, v.amount FROM billing.transactions t,
 			(VALUES ('user_balance', 5), ('revenue', -5)) AS v(book, amount) WHERE t.account_id = '%s'`, account),
@@ -106,6 +108,45 @@ func seedLedger(site, account uuid.UUID, n int, legacy bool) []string {
 		statements = append(statements, fmt.Sprintf("UPDATE billing.transactions SET seq = NULL WHERE account_id = '%s'", account))
 	}
 	return statements
+}
+
+// ledgerWithoutReadIndexes loads the fixture with the ledger's read indexes dropped and rebuilds them from their
+// definitions afterwards. Maintaining four indexes on every one of 2M inserts costs more than building them once on the
+// finished table; the definitions come from the catalog, so a migration that changes an index is what the test rebuilds.
+func ledgerWithoutReadIndexes(t *testing.T, b *bank, load []string) {
+	t.Helper()
+	var defs []string
+	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), `SELECT pg_get_indexdef(i.indexrelid)
+			FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+			WHERE i.indrelid IN ('billing.transactions'::regclass, 'billing.entries'::regclass)
+				AND c.relname IN ('transactions_by_account_seq', 'transactions_legacy_by_account',
+					'entries_by_transaction', 'entries_user_balance')
+			ORDER BY c.relname`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var def string
+			if err := rows.Scan(&def); err != nil {
+				return err
+			}
+			defs = append(defs, def)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(defs) != 4 {
+		t.Fatalf("found %d ledger read indexes, want 4", len(defs))
+	}
+	b.sql(`DROP INDEX billing.transactions_by_account_seq`,
+		`DROP INDEX billing.transactions_legacy_by_account`,
+		`DROP INDEX billing.entries_by_transaction`,
+		`DROP INDEX billing.entries_user_balance`)
+	b.sql(load...)
+	b.sql(append(defs, "ANALYZE billing.transactions", "ANALYZE billing.entries")...)
 }
 
 // TestLedgerReadsGrowWithThePage: a page of the ledger far into a long history reads about what the first page
@@ -119,16 +160,17 @@ func seedLedger(site, account uuid.UUID, n int, legacy bool) []string {
 // pass over the account's own entries from before the release, which the release froze, rather than over a history that
 // grows, so it is bounded by a budget instead of by the short account's reading.
 func TestLedgerReadsGrowWithThePage(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	legacy, noise, short := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	statements := slices.Concat(seedLedger(b.admitted.Site, b.admitted.Account, 30000, false), seedLedger(b.admitted.Site, noise, 30000, false),
 		seedLedger(b.admitted.Site, legacy, 12000, true), seedLedger(b.admitted.Site, short, 3, false),
 		[]string{`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id)
-			SELECT gen_random_uuid(), '` + b.admitted.Site.String() + `', a.id, 'settle', gen_random_uuid()
-			FROM (SELECT gen_random_uuid() AS id FROM generate_series(1, 2000)) a, generate_series(1, 1000)`})
-	b.sql(append(statements, fmt.Sprintf(`INSERT INTO billing.balances(site_id, account_id)
-		SELECT '%s', unnest(ARRAY['%s'::uuid, '%s'::uuid, '%s'::uuid])`, b.admitted.Site, legacy, noise, short),
-		"ANALYZE billing.transactions", "ANALYZE billing.entries")...)
+			SELECT uuidv7(), '` + b.admitted.Site.String() + `', a.id, 'settle', uuidv7()
+			FROM (SELECT uuidv7() AS id FROM generate_series(1, 2000)) a, generate_series(1, 1000)`})
+	ledgerWithoutReadIndexes(t, b, append(statements, fmt.Sprintf(`INSERT INTO billing.balances(site_id, account_id)
+		SELECT '%s', unnest(ARRAY['%s'::uuid, '%s'::uuid, '%s'::uuid])`, b.admitted.Site, legacy, noise, short)))
 	var farSeq, middleSeq int64
 	var farAt time.Time
 	var farID uuid.UUID
@@ -225,6 +267,8 @@ func (tc movementPlanCase) check(t *testing.T, b *bank, scope pg.Scope) {
 // do on the day the migration runs, is replayed with those first, by their time, and then the numbered ones, whatever
 // the size of a page, so a page may hold the last of the old and the first of the new.
 func TestTransactionsFromBeforeTheSequenceReplayFirst(t *testing.T) {
+	t.Parallel()
+
 	for _, page := range []int32{1, 2, 5, 50} {
 		t.Run(fmt.Sprint(page), func(t *testing.T) {
 			b := newBank(t, 0, 0, Config{})

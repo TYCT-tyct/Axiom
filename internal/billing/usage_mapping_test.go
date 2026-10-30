@@ -9,6 +9,8 @@ import (
 )
 
 func TestImageSaleReservationAndCostAgree(t *testing.T) {
+	t.Parallel()
+
 	reports := catalog.ItemSet(1<<in | 1<<catalog.ItemImageIn | 1<<catalog.ItemOutput | 1<<catalog.ItemImageOut)
 	for _, own := range []string{"", `,"image_in":"0","image_out":"0"`, `,"image_in":"9","image_out":"10"`} {
 		s := soldImageSchedule(t, own)
@@ -69,6 +71,8 @@ func checkImageCall(t *testing.T, s catalog.Schedule, reports catalog.ItemSet, t
 // read + write per token; a Messages call bills the items apart, so only the dearest price bounds it, and the cache
 // write the request does not ask for is not reserved at all.
 func TestOverlapReservationCounterexampleAndMaximumPrices(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name        string
 		openAI      bool
@@ -101,6 +105,8 @@ func TestOverlapReservationCounterexampleAndMaximumPrices(t *testing.T) {
 // OpenAI reports image tokens whether or not the model's spec lists the item, so they are reserved at their own price
 // even when Reports names only input and output: 100 prompt tokens that are all images settle at 100 × 10.
 func TestImageInputIsReservedWithoutReportsAndFallsBack(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name   string
 		prices string
@@ -128,6 +134,8 @@ func TestImageInputIsReservedWithoutReportsAndFallsBack(t *testing.T) {
 }
 
 func TestExtraSearchCoversOverlappingRereads(t *testing.T) {
+	t.Parallel()
+
 	e := entry(t, true, 1)
 	e.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","cache_read":"0.1","cache_write":"1.25","output":"1","web_search":"2"}}`)
 	e.Model.Reports, e.Model.OpenAIUsage = 1<<catalog.ItemCacheRead|1<<cacheWrite, true
@@ -140,6 +148,8 @@ func TestExtraSearchCoversOverlappingRereads(t *testing.T) {
 }
 
 func TestImageOutputIsDeliveredAndMetered(t *testing.T) {
+	t.Parallel()
+
 	u := usage(t, map[catalog.Item]int64{catalog.ItemImageOut: 20})
 	seg := Segment{Usage: u, Reported: 1<<catalog.ItemOutput | 1<<catalog.ItemImageOut}
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"output":"1","image_out":"10"}}`)
@@ -166,6 +176,8 @@ func TestImageOutputIsDeliveredAndMetered(t *testing.T) {
 // charged like any other delivered output; a reply that delivered no audio and no text with an error finish is still
 // waived.
 func TestAudioOutputIsOutput(t *testing.T) {
+	t.Parallel()
+
 	audio := usage(t, map[catalog.Item]int64{catalog.ItemAudioOut: 20})
 	at := AttemptResult{Result: Committed, Finish: FinishError, Segments: []Segment{{
 		Usage: audio, Reported: 1<<catalog.ItemOutput | 1<<catalog.ItemAudioOut,
@@ -185,6 +197,8 @@ func TestAudioOutputIsOutput(t *testing.T) {
 }
 
 func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
+	t.Parallel()
+
 	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, cacheWrite: 80, webSearch: 1}, catalog.ServiceTierStandard, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +233,8 @@ func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
 }
 
 func TestStoredPhysicalInputPreservesPresence(t *testing.T) {
+	t.Parallel()
+
 	for _, n := range []int64{-1, 0, 100} {
 		u := usage(t, nil)
 		if n >= 0 {

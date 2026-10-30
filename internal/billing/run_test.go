@@ -16,6 +16,8 @@ import (
 // the default period is a third of the 15s TTL, so every beat has 5s to spare: a loop that beat less often, or stopped,
 // is seen inside the 12s the test watches, which is two periods and more than the window.
 func TestRunKeepsTheHolderAlive(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
 	beats := b.billing.beat.Load()
 	stop := runInBackground(t, b)
@@ -34,6 +36,8 @@ func TestRunKeepsTheHolderAlive(t *testing.T) {
 // fenced in any more, so the loop ends with ErrReaped and the node starts over with a new holder rather than running on
 // and failing every reservation.
 func TestRunStopsWhenTheHolderIsReaped(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{HolderTTL: 300 * time.Millisecond, ReapGrace: time.Hour, Lifetime: time.Hour})
 	done := make(chan error, 1)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -53,6 +57,8 @@ func TestRunStopsWhenTheHolderIsReaped(t *testing.T) {
 // TestRunCleansUpAtOnce: the first sweep is not a period away, so what a node that died left behind is taken over as soon
 // as its successor starts instead of up to 30 seconds later, all of which the account's balance stays reserved for.
 func TestRunCleansUpAtOnce(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1_000_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	h := b.hold(1000)
 	b.pastDeadline()
@@ -103,6 +109,8 @@ func runInBackground(t *testing.T, b *bank) (stop func()) {
 // return) does not stop the heartbeat, which is what keeps the node answering: the holder stays alive for longer than
 // its TTL less the margin, which a loop that beat between sweeps could not do.
 func TestRunBeatsWhileTheCleanupIsStuck(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1_000_000, 0, Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Millisecond})
 	b.hold(1000)
 	b.pastDeadline()
@@ -124,6 +132,8 @@ func TestRunBeatsWhileTheCleanupIsStuck(t *testing.T) {
 // connection until its deadline, which is how a pool exhausted by calls delays a beat past the holder's TTL less the
 // margin, turns Alive false and answers 503 on the whole node (#217).
 func TestHeartbeatBeatsWhileThePoolIsExhausted(t *testing.T) {
+	t.Parallel()
+
 	database := pgtest.New(t, Migrations())
 	// One ordinary connection and one for the completion class, so the one can be held without the pool opening more.
 	app, err := pg.Open(t.Context(), database.App+"&pool_max_conns=2", pg.WithCompletionReserve(1))
@@ -184,6 +194,8 @@ func TestHeartbeatBeatsWhileThePoolIsExhausted(t *testing.T) {
 // holder another node's write transaction still fences gives up after half a beat period; the beat that was waiting for
 // the connection lands inside its own period, and it is the beat, not the crossing of a deadline, that keeps Alive true.
 func TestTheReapDoesNotTakeABeat(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{HolderTTL: 6 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
 	// A holder of another node that is past its TTL and a reap's grace, and a transaction that fences it the way a write
 	// in flight on that node does: FOR UPDATE, which the reap takes, waits for FOR KEY SHARE.

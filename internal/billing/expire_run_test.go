@@ -24,6 +24,8 @@ func (b *bank) accountWithCredit() Admitted {
 // TestExpireRun: a run goes through every account with credit due, in pages, and writes each off; a second run finds
 // nothing, and a batch not due is left.
 func TestExpireRun(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo)
 	var accounts []Admitted
@@ -80,6 +82,8 @@ func (b *bank) holdLock(account uuid.UUID) (release func()) {
 // batch it did not load (#357). The other replay holds the batches' table locked from before it saves until it
 // commits, so the first one reads the place, waits on the batches and reads them after the commit, whatever the timing.
 func TestAdvanceRacesAReplayThatSpendsABatch(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, farAhead)
 	b.charge(100) // spends the batch in the ledger; only a replay writes it to the batch
@@ -131,6 +135,8 @@ func TestAdvanceRacesAReplayThatSpendsABatch(t *testing.T) {
 // lock, by terminating its backend; a short budget would end it by the clock, but then the next account would share
 // that clock, and on a loaded machine its write-off could outlast it too (TestExpireAccountBudget has the budget).
 func TestExpireGoesPastABlockedAccount(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo) // the first account, the first in the scan
 	other := b.accountWithCredit()
@@ -164,6 +170,8 @@ func TestExpireGoesPastABlockedAccount(t *testing.T) {
 // nothing of it is written; a run with its budget writes it off. The budget is already past, not short, so that no
 // clock decides the outcome.
 func TestExpireAccountBudget(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo)
 	e := b.expirer()
@@ -184,6 +192,8 @@ func TestExpireAccountBudget(t *testing.T) {
 // account that fails every time, first in the scan, does not keep the ones after it from being reached; at the end the
 // scan wraps.
 func TestExpireScanGoesOn(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	b.creditBatch(100, longAgo)
 	second, third := b.accountWithCredit(), b.accountWithCredit()
@@ -207,6 +217,8 @@ func TestExpireScanGoesOn(t *testing.T) {
 // TestReplayPagesCrossTheirBoundary: whatever the size of a page of the ledger, a history that fills pages exactly or
 // leaves the last one short is replayed whole, once, in short transactions without the lock and then under it.
 func TestReplayPagesCrossTheirBoundary(t *testing.T) {
+	t.Parallel()
+
 	for _, page := range []int32{1, 4, 13, 14} {
 		t.Run(fmt.Sprint(page), func(t *testing.T) {
 			b := newBank(t, 0, 0, Config{})
@@ -234,6 +246,8 @@ func TestReplayPagesCrossTheirBoundary(t *testing.T) {
 // is counted with what it left behind and how many batches it left; the next run, after the reservation settled, writes
 // that rest off and counts no deferral, so the counters read as postponed credit and not as a backlog that grew (#308).
 func TestTheWriteOffHeldBackIsCounted(t *testing.T) {
+	t.Parallel()
+
 	tel, err := telemetry.New()
 	if err != nil {
 		t.Fatal(err)
@@ -271,6 +285,8 @@ func TestTheWriteOffHeldBackIsCounted(t *testing.T) {
 // next run writes the rest off and the counters stay, so they read as postponed credit and not as a backlog that grew
 // (#308).
 func TestTheWriteOffFrozenAtExpiryIsCounted(t *testing.T) {
+	t.Parallel()
+
 	for _, frozen := range []int64{150, 200} {
 		t.Run(fmt.Sprint(frozen), func(t *testing.T) {
 			tel, err := telemetry.New()

@@ -13,6 +13,8 @@ import (
 )
 
 func TestItemizedSalePrices(t *testing.T) {
+	t.Parallel()
+
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.0000000001","output":"0.0000000002","cache_read":"0.00000000003","cache_write":"0.0000000004","cache_write_1h":"0.0000000005","web_search":"0.01","code_execution":"0.02"},"context_tiers":{"basis":["input","cache_read","cache_write","cache_write_1h"],"method":"whole","tiers":[{"above":100,"rates":{"output":"0.0000000007"}}]},"service_tiers":{"priority":{"rates":{"input":"0.0000000008","output":"0.0000000009"},"context_tiers":[{"above":100,"rates":{"output":"0.000000001"}}]}}}`)
 	f := fallbacks{perUse: map[catalog.Item]platform.UnitPrice{catalog.ItemWebSearch: mustUnitPrice("0.01"), catalog.ItemCodeExecution: mustUnitPrice("0.02")}}
 	for _, tc := range []struct {
@@ -55,6 +57,8 @@ func TestItemizedSalePrices(t *testing.T) {
 }
 
 func TestReadChargesLocksSaleAndReconcilesDebit(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10000, 0, Config{})
 	q := metered(t)
 	q.Version = uuid.NewV7()
@@ -83,6 +87,8 @@ func TestReadChargesLocksSaleAndReconcilesDebit(t *testing.T) {
 }
 
 func TestReadChargesExecutionAndScope(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10000, 0, Config{})
 	other := pg.NewScope(false, nil, []uuid.UUID{uuid.NewV7()})
 	for _, tc := range []struct {
@@ -187,6 +193,8 @@ func assertChargeVersion(t *testing.T, b *bank, id, version uuid.UUID) {
 }
 
 func TestChargeDetailsAtAmountLimit(t *testing.T) {
+	t.Parallel()
+
 	d, err := reconcileCharges(ChargeDetails{Items: []ChargeItem{{Item: "input", Quantity: 1e10, UnitPrice: "1000", Amount: "10000000000000"}}}, math.MaxInt64, 7)
 	if err != nil {
 		t.Fatal(err)
