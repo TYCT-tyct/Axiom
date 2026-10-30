@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"bytes"
-	"encoding/json/jsontext" //nolint:depguard // as in upstream.go: an answer's string is unescaped in place, not decoded and encoded again
 	"unicode/utf8"
 )
 
@@ -17,7 +16,7 @@ type Capture struct {
 
 // add appends the text of v, a JSON string or nil, up to Max: the runs between escapes as they are, each escape as the
 // character it stands for, as addShape tallies them.
-func (c *Capture) add(v jsontext.Value) {
+func (c *Capture) add(v []byte) {
 	if c.Max <= 0 || len(v) < 2 || len(c.Text) >= c.Max {
 		return
 	}
