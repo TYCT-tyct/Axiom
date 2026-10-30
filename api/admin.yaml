@@ -1916,6 +1916,43 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/tier:
+    parameters:
+      - name: account_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/AccountId"}
+    put:
+      operationId: setAccountTier
+      tags: [Users]
+      summary: Move an account to another tier
+      description: >-
+        Idempotent state change with reason and transactional audit. The tier must be one of the account's site; a tier
+        of another site is a 422, and the account's current tier changes nothing and writes no audit entry.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AccountTierChange"}
+      responses:
+        "204":
+          description: Tier stored; a repeated tier changes nothing
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/users/{user_id}/sign-in:
     parameters:
       - name: user_id
@@ -4464,6 +4501,12 @@ components:
       properties:
         suspended: {type: boolean}
         reason: {$ref: "#/components/schemas/Reason"}
+    AccountTierChange:
+      type: object
+      required: [tier_id, reason]
+      properties:
+        tier_id: {$ref: "#/components/schemas/TierId"}
+        reason: {$ref: "#/components/schemas/Reason"}
     UserSignIn:
       type: object
       required: [disabled, reason]
@@ -4544,6 +4587,11 @@ components:
       required: [id, site_id, name, kind, status, tier, owner, balance, key_limits, created_at]
       properties:
         calls_suspended: {type: boolean}
+        sign_in_disabled:
+          type: boolean
+          description: >-
+            Whether the owner cannot sign in. Absent on a node of the previous release, whose page then shows the
+            sign-in part as unavailable.
         id: {$ref: "#/components/schemas/AccountId"}
         site_id: {$ref: "#/components/schemas/SiteId"}
         name: {type: string}

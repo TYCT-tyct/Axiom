@@ -257,8 +257,9 @@ type AccountDetail struct {
 	Status     string
 	Tier       Tier
 	Owner      struct {
-		ID    UserID
-		Email string
+		ID             UserID
+		Email          string
+		SignInDisabled bool
 	}
 	CreatedAt time.Time
 }
@@ -277,7 +278,7 @@ func (s *Service) Account(ctx context.Context, tx pg.Tx, id AccountID) (AccountD
 		ID: AccountID(r.ID), Site: SiteID(r.SiteID), Name: r.Name, Kind: r.Kind, Status: r.Status,
 		Tier: Tier{TierID(r.TierID), r.TierName}, CreatedAt: r.CreatedAt.Time,
 	}
-	a.Owner.ID, a.Owner.Email = UserID(r.OwnerID), r.OwnerEmail
+	a.Owner.ID, a.Owner.Email, a.Owner.SignInDisabled = UserID(r.OwnerID), r.OwnerEmail, r.OwnerStatus == "disabled"
 	return a, nil
 }
 

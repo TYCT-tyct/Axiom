@@ -37,6 +37,52 @@ func TestAccountSuspensionAdmission(t *testing.T) {
 	}
 }
 
+func TestAccountTierChangeIsAuditedOnce(t *testing.T) {
+	t.Parallel()
+	db, _, a, _ := callSetup(t)
+	if _, err := exec(t, db, platform, member(":s1", ":a1", "personal", ":u1", ":a1")); err != nil {
+		t.Fatal(err)
+	}
+	pro := uuid.NewV7()
+	if _, err := exec(t, db, platform, `INSERT INTO accounts.tiers(id,site_id,name) VALUES ('`+uuid.UUID(pro).String()+`','`+uuid.UUID(s1).String()+`','Pro')`); err != nil {
+		t.Fatal(err)
+	}
+	inPlatform(t, db, func(tx pg.Tx) error {
+		return a.SetAccountTier(t.Context(), tx, system, accounts.AccountID(a1), accounts.TierID(pro), "upgrade")
+	})
+	inPlatform(t, db, func(tx pg.Tx) error {
+		return a.SetAccountTier(t.Context(), tx, system, accounts.AccountID(a1), accounts.TierID(pro), "same again")
+	})
+	var got accounts.AccountDetail
+	inPlatform(t, db, func(tx pg.Tx) (err error) {
+		got, err = a.Account(t.Context(), tx, accounts.AccountID(a1))
+		return err
+	})
+	if got.Tier.ID != accounts.TierID(pro) || got.Tier.Name != "Pro" {
+		t.Fatalf("tier is %+v", got.Tier)
+	}
+	if n := texts(t, db, platform, `SELECT count(*)::text FROM platform.audit_log WHERE action='account.tier_change'`)[0]; n != "1" {
+		t.Fatalf("%s audit entries, want 1", n)
+	}
+	if detail := texts(t, db, platform, `SELECT (detail->>'before') || ' ' || (detail->>'after') FROM platform.audit_log WHERE action='account.tier_change'`)[0]; detail != "Standard Pro" {
+		t.Fatalf("audit detail %q", detail)
+	}
+	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		return a.SetAccountTier(t.Context(), tx, system, accounts.AccountID(a1), accounts.TierID(t2), "another site")
+	})
+	var setting *accounts.SettingError
+	if !errors.As(err, &setting) || setting.Field != "tier_id" {
+		t.Fatalf("foreign tier: %v", err)
+	}
+	inPlatform(t, db, func(tx pg.Tx) (err error) {
+		got, err = a.Account(t.Context(), tx, accounts.AccountID(a1))
+		return err
+	})
+	if got.Tier.ID != accounts.TierID(pro) {
+		t.Fatal("a refused change moved the account")
+	}
+}
+
 func TestStatusAuditRollbackAndCallBoundary(t *testing.T) {
 	t.Parallel()
 	db, _, a, key := callSetup(t)
