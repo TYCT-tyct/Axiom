@@ -37,6 +37,9 @@ import { useTranslation } from "react-i18next";
 import { useOrderActions } from "../order-actions";
 import { balanceQuery, ordersQuery } from "../queries";
 
+// RefundRequest is what a refund asks for; the key and this body are sent together every time.
+type RefundRequest = { credits: string; reason: string };
+
 const refundStore = "axiom.console.refund.attempt";
 const refundKey = (scope: string, order: string) => `${scope}/${order}/${refundStore}`;
 
@@ -241,12 +244,9 @@ function OrderRow({ order, allowed, onRefund }: { order: Schemas["Order"]; allow
   );
 }
 
-// RefundRequest is what a refund asks for; the key and this body are sent together every time.
-type RefundRequest = { credits: string; reason: string };
-
 // RefundDialog freezes unused credits and sends the request for an administrator's review. The request that went out is
 // fixed: while its answer is unknown the fields are locked and only that request goes out again, also after the dialog
-// was closed and opened again (Orders keeps it). A refusal is the only answer that allows a different request.
+// was closed and opened again, or the page was reloaded. A refusal is the only answer that allows a different request.
 function RefundDialog({
   order,
   initial,
