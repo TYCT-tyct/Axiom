@@ -7,150 +7,126 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"axiom/internal/gateway"
 )
 
-// TestIngressBoundsAStoppedCore: once a request reaches a core that then stops answering, the ingress ends it on a
-// finite limit instead of holding the client until the core comes back.
-func TestIngressBoundsAStoppedCore(t *testing.T) {
-	t.Parallel()
-	t.Run("response headers", testIngressHeaderWait)
-	t.Run("response body", testIngressBodyIdle)
-	t.Run("whole request", testIngressWholeRequest)
+// TestIngressLimitsAreCompatibleWithTheCore: the ingress waits longer than the core's own limits, so a normal call is
+// never cut by the proxy, while a stopped one still ends. The write limit is the core's own per-write limit.
+func TestIngressLimitsAreCompatibleWithTheCore(t *testing.T) {
+	gate := gateway.DefaultConfig()
+	if ingressHeaderLimit <= gate.CompactHeaderWait {
+		t.Fatalf("ingress header limit %v does not cover the core's %v", ingressHeaderLimit, gate.CompactHeaderWait)
+	}
+	if ingressIdleLimit <= gate.IdleTimeout {
+		t.Fatalf("ingress idle limit %v does not cover the core's %v", ingressIdleLimit, gate.IdleTimeout)
+	}
+	if ingressRequestLimit <= gate.MaxCall {
+		t.Fatalf("ingress request limit %v does not cover the core's %v", ingressRequestLimit, gate.MaxCall)
+	}
+	if ingressWriteLimit != gate.WriteTimeout {
+		t.Fatalf("ingress write limit %v differs from the core's %v", ingressWriteLimit, gate.WriteTimeout)
+	}
+	if got := ingressTransport(nil).ResponseHeaderTimeout; got != ingressHeaderLimit {
+		t.Fatalf("transport header limit = %v, want %v", got, ingressHeaderLimit)
+	}
 }
 
-func testIngressHeaderWait(t *testing.T) {
-	t.Parallel()
-	release := make(chan struct{})
-	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// TestIngressWriteDeadlineEndsAStoppedClient: a client that stops reading blocks Write, which the request context
+// cannot interrupt; the write deadline makes the handler return, and the handler clears the deadline afterwards.
+func TestIngressWriteDeadlineEndsAStoppedClient(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		writer := newStalledWriter()
+		handler := ingressHandlerWith(testCoreURL(t, "http://core.example"),
+			staticTransport{body: io.NopCloser(strings.NewReader("payload"))}, slog.New(slog.DiscardHandler), 0, ingressRequestLimit, 0)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			handler.ServeHTTP(writer, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+		}()
+		synctest.Wait()
 		select {
-		case <-release:
-		case <-r.Context().Done():
+		case <-done:
+			t.Fatal("the handler returned before the write deadline")
+		default:
 		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer core.Close()
-	defer close(release)
-
-	transport := &http.Transport{ResponseHeaderTimeout: 50 * time.Millisecond}
-	defer transport.CloseIdleConnections()
-	front := httptest.NewServer(ingressHandlerWith(testCoreURL(t, core.URL), transport,
-		slog.New(slog.DiscardHandler), 0, 2*time.Second))
-	defer front.Close()
-
-	start := time.Now()
-	resp := getIngress(t, front.URL)
-	defer closeBody(t, resp)
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", resp.StatusCode)
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("the ingress waited %v for a core that sent no headers", elapsed)
-	}
-}
-
-func testIngressBodyIdle(t *testing.T) {
-	t.Parallel()
-	release := make(chan struct{})
-	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		if _, err := io.WriteString(w, "data: one\n\n"); err != nil {
-			return
-		}
-		w.(http.Flusher).Flush()
+		time.Sleep(ingressWriteLimit)
+		synctest.Wait()
 		select {
-		case <-release:
-		case <-r.Context().Done():
+		case <-done:
+		default:
+			t.Fatal("the handler is still blocked in a write after its deadline")
 		}
-	}))
-	defer core.Close()
-	defer close(release)
-
-	transport := &http.Transport{}
-	defer transport.CloseIdleConnections()
-	front := httptest.NewServer(ingressHandlerWith(testCoreURL(t, core.URL), transport,
-		slog.New(slog.DiscardHandler), 50*time.Millisecond, 2*time.Second))
-	defer front.Close()
-
-	start := time.Now()
-	resp := getIngress(t, front.URL)
-	if resp.StatusCode != http.StatusOK {
-		closeBody(t, resp)
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		t.Logf("the stream ended with %v", err)
-	}
-	closeBody(t, resp)
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("the ingress read for %v after the core went silent", elapsed)
-	}
-}
-
-func testIngressWholeRequest(t *testing.T) {
-	t.Parallel()
-	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.(http.Flusher).Flush()
-		ticker := time.NewTicker(20 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case <-ticker.C:
-				if _, err := io.WriteString(w, "."); err != nil {
-					return
-				}
-				w.(http.Flusher).Flush()
-			}
+		select {
+		case <-writer.cleared:
+		default:
+			t.Fatal("the handler did not clear the write deadline")
 		}
-	}))
-	defer core.Close()
-
-	transport := &http.Transport{}
-	defer transport.CloseIdleConnections()
-	front := httptest.NewServer(ingressHandlerWith(testCoreURL(t, core.URL), transport,
-		slog.New(slog.DiscardHandler), 500*time.Millisecond, 150*time.Millisecond))
-	defer front.Close()
-
-	start := time.Now()
-	resp := getIngress(t, front.URL)
-	defer closeBody(t, resp)
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		t.Logf("the stream ended with %v", err)
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("the ingress streamed for %v despite a 150ms request limit", elapsed)
-	}
+	})
 }
 
-// getIngress makes a request with its own deadline, so a missing timeout fails the test instead of hanging it.
-func getIngress(t *testing.T, raw string) *http.Response {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-	t.Cleanup(cancel)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resp
+// TestIngressIdleBodyEndsAStalledCore: a core that sends headers and then nothing keeps its body open; the idle body
+// timer closes it, and the handler returns without a client-side timeout.
+func TestIngressIdleBodyEndsAStalledCore(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		body := &closeBlockingBody{closed: make(chan struct{})}
+		handler := ingressHandlerWith(testCoreURL(t, "http://core.example"), staticTransport{body: body},
+			slog.New(slog.DiscardHandler), time.Minute, time.Hour, 0)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("the handler returned before the idle deadline")
+		default:
+		}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("the handler is still reading an idle body")
+		}
+	})
 }
 
-func closeBody(t *testing.T, resp *http.Response) {
-	t.Helper()
-	if err := resp.Body.Close(); err != nil {
-		t.Error(err)
-	}
+// TestIngressRequestDeadlineEndsAStream: a core that keeps its response open is ended by the whole-request deadline,
+// even when it never sends a byte; no client timeout is involved.
+func TestIngressRequestDeadlineEndsAStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		handler := ingressHandlerWith(testCoreURL(t, "http://core.example"), contextTransport{},
+			slog.New(slog.DiscardHandler), time.Hour, time.Minute, 0)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("the handler returned before the request deadline")
+		default:
+		}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("the handler is still forwarding after the request deadline")
+		}
+	})
 }
 
-// testCoreURL parses the httptest server's URL for the ingress handler.
+// testCoreURL parses the target URL for the ingress handler.
 func testCoreURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	core, err := url.Parse(raw)
@@ -158,4 +134,98 @@ func testCoreURL(t *testing.T, raw string) *url.URL {
 		t.Fatal(err)
 	}
 	return core
+}
+
+// staticTransport answers with one fixed body, without a network.
+type staticTransport struct {
+	body io.ReadCloser
+}
+
+func (t staticTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK, Header: make(http.Header), Body: t.body, Request: r, ContentLength: 7,
+	}, nil
+}
+
+// contextTransport answers with a body that ends only when the forwarded request does.
+type contextTransport struct{}
+
+func (contextTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK, Header: make(http.Header), Body: &contextBody{done: r.Context().Done()}, Request: r,
+		ContentLength: 7,
+	}, nil
+}
+
+type contextBody struct {
+	done <-chan struct{}
+}
+
+func (b *contextBody) Read([]byte) (int, error) {
+	<-b.done
+	return 0, context.Canceled
+}
+
+func (*contextBody) Close() error { return nil }
+
+// closeBlockingBody blocks in Read until the idle timer closes it.
+type closeBlockingBody struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (b *closeBlockingBody) Read([]byte) (int, error) {
+	<-b.closed
+	return 0, io.EOF
+}
+
+func (b *closeBlockingBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+// stalledWriter models a client that accepts headers but never reads the body: Write waits for the deadline the
+// handler sets, then fails as a socket write would. A missing deadline blocks forever, which synctest reports.
+type stalledWriter struct {
+	header   http.Header
+	cleared  chan struct{}
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+func newStalledWriter() *stalledWriter {
+	return &stalledWriter{header: make(http.Header), cleared: make(chan struct{})}
+}
+
+func (w *stalledWriter) Header() http.Header { return w.header }
+
+func (*stalledWriter) WriteHeader(int) {}
+
+func (w *stalledWriter) Write([]byte) (int, error) {
+	w.mu.Lock()
+	deadline := w.deadline
+	w.mu.Unlock()
+	if deadline.IsZero() {
+		select {} // no deadline: only a deadlock, which synctest turns into a failure
+	}
+	if wait := time.Until(deadline); wait > 0 {
+		time.Sleep(wait)
+	}
+	return 0, os.ErrDeadlineExceeded
+}
+
+func (*stalledWriter) FlushError() error { return nil }
+
+func (w *stalledWriter) SetWriteDeadline(deadline time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if deadline.IsZero() {
+		select {
+		case <-w.cleared:
+		default:
+			close(w.cleared)
+		}
+	}
+	w.deadline = deadline
+	return nil
 }

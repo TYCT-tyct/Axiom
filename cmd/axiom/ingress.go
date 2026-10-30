@@ -28,6 +28,10 @@ const (
 	// ingressRequestLimit bounds the whole forwarded request. The core's longest call is 60 minutes (MaxCall); 65
 	// minutes lets it finish and settle while a slow client or a wedged stream still ends.
 	ingressRequestLimit = 65 * time.Minute
+	// ingressWriteLimit bounds one write or flush to a client that has stopped reading. The request's context does not
+	// interrupt a blocked socket write, and httpserver.New sets no write timeout because streams may be long; a write
+	// deadline is what releases the handler. It matches the core's WriteTimeout (10 seconds).
+	ingressWriteLimit = 10 * time.Second
 )
 
 // serveWithoutCore runs a node whose roles need no state: an ingress forwards every request to a core over mutual TLS,
@@ -106,19 +110,21 @@ func ingressTransport(tlsConfig *tls.Config) *http.Transport {
 // it; X-Forwarded-For is appended by the reverse proxy, so the core can still read the client's address when it trusts
 // this node.
 func ingressHandler(core *url.URL, transport http.RoundTripper, logger *slog.Logger) http.Handler {
-	return ingressHandlerWith(core, transport, logger, ingressIdleLimit, ingressRequestLimit)
+	return ingressHandlerWith(core, transport, logger, ingressIdleLimit, ingressRequestLimit, -1)
 }
 
-// ingressHandlerWith is ingressHandler with the two streaming limits a test can shorten. The header limit lives on the
-// transport, and the whole-request limit covers a client that stops reading as well as a core that keeps sending.
-func ingressHandlerWith(core *url.URL, transport http.RoundTripper, logger *slog.Logger, idle, request time.Duration) http.Handler {
+// ingressHandlerWith is ingressHandler with the streaming limits and flush interval a test can shorten or remove. The
+// header limit lives on the transport, and the whole-request limit covers a client that stops reading as well as a core
+// that keeps sending. A test uses a zero flush interval so ReverseProxy's flush timer cannot contend with a writer the
+// test deliberately blocks.
+func ingressHandlerWith(core *url.URL, transport http.RoundTripper, logger *slog.Logger, idle, request, flush time.Duration) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(core)
 	if idle > 0 {
 		proxy.Transport = idleTransport{next: transport, idle: idle}
 	} else {
 		proxy.Transport = transport
 	}
-	proxy.FlushInterval = -1
+	proxy.FlushInterval = flush
 	proxy.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		logger.Warn("forwarding to the core node", "request_id", httpserver.RequestID(r.Context()), "err", err)
@@ -132,8 +138,41 @@ func ingressHandlerWith(core *url.URL, transport http.RoundTripper, logger *slog
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), request)
 		defer cancel()
-		proxy.ServeHTTP(w, r.WithContext(ctx))
+		out := &clientWriteDeadline{ResponseWriter: w, timeout: ingressWriteLimit}
+		defer out.clear()
+		proxy.ServeHTTP(out, r.WithContext(ctx))
 	})
+}
+
+// clientWriteDeadline arms a downstream write deadline before each write and flush, and clears it when the request
+// ends. A client that stops reading blocks net/http inside Write, where the request's context cannot reach it; the
+// deadline turns that into an error the handler can return from. It unwraps so ResponseController can still find the
+// server's writer.
+type clientWriteDeadline struct {
+	http.ResponseWriter
+	timeout time.Duration
+}
+
+func (w *clientWriteDeadline) Write(p []byte) (int, error) {
+	w.arm()
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *clientWriteDeadline) FlushError() error {
+	w.arm()
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func (w *clientWriteDeadline) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *clientWriteDeadline) arm() {
+	// A writer without deadline support (an in-process recorder, for example) still has the whole-request limit; not
+	// supporting a write deadline must not turn every write into an error.
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(w.timeout)) //nolint:errcheck // see above
+}
+
+func (w *clientWriteDeadline) clear() {
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Time{}) //nolint:errcheck // the response is already written; there is no error to report
 }
 
 // idleTransport fails a response body that sends nothing for idle. A core that is stopped (SIGSTOP) keeps its sockets
