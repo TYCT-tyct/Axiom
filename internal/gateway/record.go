@@ -208,9 +208,11 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		// paid it. Free is the waiver rules' verdict and nothing else: a model priced at zero, or a charge the balance's
 		// floor cut to nothing, is not a free call.
 		PriceNano: f.Charged.CeilAmount(), CostNano: costOf(o), Currency: t.currency,
-		Free:    f.Waived,
-		Latency: end.Sub(t.start),
-		Route:   route,
+		Free:          f.Waived,
+		Latency:       end.Sub(t.start),
+		Route:         route,
+		Streamed:      c.Request.Stream,
+		PhysicalInput: physicalInputOf(f),
 	}
 	if f.PriceVersion != nil {
 		rec.PriceVersion = f.PriceVersion.String()
@@ -220,6 +222,23 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		rec.FinishReason = finishOf(o.Attempts[n-1])
 	}
 	return rec
+}
+
+// physicalInputOf is the prompt total the upstream reported, added over the billed samplings; nil when none reported
+// one. It is not the sum of input items, which cache reads and writes may overlap.
+func physicalInputOf(f billing.Final) *int64 {
+	if len(f.Segments) == 0 {
+		return nil
+	}
+	var total int64
+	for _, seg := range f.Segments {
+		n, ok := seg.Usage.PhysicalInput()
+		if !ok {
+			return nil // one sampling's total is unknown, so their sum is not the prompt total
+		}
+		total += n
+	}
+	return &total
 }
 
 // usageOf is the usage the settlement charged: the samplings of the attempt that was billed, added up.

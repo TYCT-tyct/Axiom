@@ -29,6 +29,8 @@ type OwnCall struct {
 	Free                                bool
 	Latency, FirstToken                 time.Duration
 	FinishReason, ErrorKind             string
+	Streamed                            bool
+	PhysicalInput                       *int64 // the upstream's prompt total, nil when it reported none
 }
 
 // OwnQuery selects the calls of one account, newest first, from those the transaction's scope can see. Account is
@@ -146,6 +148,10 @@ func ownCall(r store.ListOwnCallsRow) (OwnCall, error) {
 		PriceVersion: r.PriceVersion, Class: r.RequestClass, Model: r.Model, ServiceTier: r.ServiceTier, PriceNano: r.PriceNano,
 		Currency: r.Currency, Free: r.FreeOfCharge, Latency: time.Duration(r.LatencyMs) * time.Millisecond,
 		FirstToken: time.Duration(r.FirstTokenMs) * time.Millisecond, FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
+		Streamed: r.Streamed,
+	}
+	if r.PhysicalInput >= 0 {
+		c.PhysicalInput = &r.PhysicalInput
 	}
 	var err error
 	for _, p := range []struct {
@@ -157,4 +163,51 @@ func ownCall(r store.ListOwnCallsRow) (OwnCall, error) {
 		}
 	}
 	return c, jsonx.Unmarshal([]byte(r.Usage), &c.Usage)
+}
+
+// ActivityQuery selects the account's calls in a UTC window, optionally of one workspace and one key, aggregated by
+// day and model and, when GroupByWorkspace, by workspace too.
+type ActivityQuery struct {
+	Account          uuid.UUID
+	Since, Until     time.Time
+	Key, Workspace   *uuid.UUID
+	GroupByWorkspace bool
+}
+
+// ActivityItem is one row of OpenRouter's /activity: what the account used and paid in a day on a model.
+type ActivityItem struct {
+	Date, Model, Workspace         string
+	Requests                       int64
+	PromptTokens, CompletionTokens int64
+	ReasoningTokens, CachedTokens  int64
+	UsageNano                      int64
+	RequestIDs                     []uuid.UUID
+	RequestPrices                  []int64
+}
+
+// ActivityOwn returns the account's activity, oldest first, as OpenRouter's /activity groups it. The scope is the
+// whole of the access control, as for ListOwn.
+func ActivityOwn(ctx context.Context, tx pg.Tx, q ActivityQuery) ([]ActivityItem, error) {
+	rows, err := store.New().ActivityOwn(ctx, tx, store.ActivityOwnParams{
+		AccountID: q.Account.String(), Since: q.Since, Until: q.Until, WorkspaceID: uuidFilter(q.Workspace),
+		KeyID: uuidFilter(q.Key), GroupWorkspace: q.GroupByWorkspace,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read activity: %w", err)
+	}
+	items := make([]ActivityItem, len(rows))
+	for i, r := range rows {
+		ids := make([]uuid.UUID, 0, len(r.RequestIds))
+		for _, id := range r.RequestIds {
+			if id.Valid {
+				ids = append(ids, uuid.UUID(id.Bytes))
+			}
+		}
+		items[i] = ActivityItem{
+			Date: r.Date, Model: r.Model, Workspace: r.WorkspaceID, Requests: r.Requests,
+			PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens, ReasoningTokens: r.ReasoningTokens,
+			CachedTokens: r.CachedTokens, UsageNano: r.UsageNano, RequestIDs: ids, RequestPrices: r.RequestPrices,
+		}
+	}
+	return items, nil
 }

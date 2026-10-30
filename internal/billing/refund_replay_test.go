@@ -61,9 +61,9 @@ func TestRefundReplayHistory(t *testing.T) {
 	paid, gift := batchRow(1, 100, "paid", nil), batchRow(2, 100, "gift", nil)
 	log := []movement{
 		creditOf(paid), creditOf(gift),
-		settled(3, "settle", 30),
+		settled(3, 30),
 		{key: keyAt(4), kind: "freeze", request: paid.ID, revision: 80},
-		settled(5, "settle", 100),
+		settled(5, 100),
 		{key: keyAt(6), kind: "unfreeze", request: paid.ID, revision: 30},
 		{key: keyAt(7), kind: "freeze", request: paid.ID, revision: 100},
 		{key: keyAt(8), kind: "refund", request: paid.ID, revision: 70, debit: 70},

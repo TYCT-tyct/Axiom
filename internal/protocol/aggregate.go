@@ -324,7 +324,7 @@ func (r *Relay) finishAggregate(out []byte, f Final) []byte {
 // 200 with what was generated and the error in it, and Messages, which has no stop reason for an error, answers
 // 502 with the error alone (docs/domains/gateway.md「错误」); either way the usage and cost are in the body.
 func (r *Relay) failAggregate(e Error, f *Final, u Usage) []byte {
-	pay := charges{usage: reply(u), cost: cost(f), pending: f != nil && f.Pending}
+	pay := charges{usage: reply(u), cost: cost(f, r.client), pending: f != nil && f.Pending}
 	status, body := renderError(r.client, e, &pay)
 	r.status = status
 	if !r.committed {

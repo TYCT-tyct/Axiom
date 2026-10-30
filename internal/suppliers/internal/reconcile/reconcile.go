@@ -130,7 +130,11 @@ func usageDoc(u catalog.Usage, reported catalog.ItemSet) map[string]any {
 	for _, k := range u.Unknown() {
 		unknown = append(unknown, map[string]string{"field": k.Field, "value": k.Value})
 	}
-	return map[string]any{"items": items, "reported": states, "unknown": unknown, "tier": u.ServiceTier().String()}
+	doc := map[string]any{"items": items, "reported": states, "unknown": unknown, "tier": u.ServiceTier().String()}
+	if n, ok := u.PhysicalInput(); ok {
+		doc["physical_input"] = n
+	}
+	return doc
 }
 
 // Run makes one pass: matches what can be matched, holds the charges that waited past the grace, and lists the attempts
@@ -259,6 +263,11 @@ func judge(cfg Config, m store.MatchChargesRow) (string, error) {
 }
 
 func event(ctx context.Context, tx store.DBTX, q *store.Queries, charge uuid.UUID, revision int32, payload map[string]any) error {
+	// Hold the event-order lock until this transaction commits. Without it a producer that began earlier could commit
+	// after the consumer's cursor and leave an event with an older created_at permanently unseen (#319 review).
+	if err := q.LockChargeEvents(ctx, tx); err != nil {
+		return fmt.Errorf("lock charge events: %w", err)
+	}
 	b, err := jsonx.MarshalCanonical(payload)
 	if err != nil {
 		return err

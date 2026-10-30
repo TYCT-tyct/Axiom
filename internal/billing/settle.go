@@ -10,7 +10,6 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers"
 )
@@ -92,11 +91,16 @@ const (
 type Final struct {
 	PriceVersion *uuid.UUID
 	// Profit is nil if any attempt's converted cost is unknown, or the difference cannot fit an amount.
-	Profit    *int64
-	Segments  []Segment
-	Charged   platform.Exact
-	Estimated bool
-	Waived    bool // the waiver rules made the call free of its model usage; per-use items may still be charged
+	Profit   *int64
+	Segments []Segment
+	Charged  platform.Exact
+	// ServerToolCost is the sale price of the per-use items the call ran, nil when none ran. It is a price, not our
+	// cost: usage.cost_details.server_tool_cost is what the client paid for tools.
+	ServerToolCost *platform.Exact
+	// CacheDiscount is what cache reads saved against the input price, never negative.
+	CacheDiscount platform.Exact
+	Estimated     bool
+	Waived        bool // the waiver rules made the call free of its model usage; per-use items may still be charged
 }
 
 // ErrNoAttempt is an outcome whose last attempt names no kept entry: nothing can price it.
@@ -171,7 +175,11 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	} else { // cleanup_settled or cleanup_released: replace what cleanup charged, at revision -1
 		err = c.late(ctx, tx, p, last)
 	}
-	return Final{PriceVersion: lockedVersion(c.row.PriceVersions, last.Entry), Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated, Waived: p.waived, Profit: c.profit()}, err
+	return Final{
+		PriceVersion: lockedVersion(c.row.PriceVersions, last.Entry), Segments: last.Segments,
+		Charged: platform.AmountExact(c.charged), ServerToolCost: p.serverToolPtr(), CacheDiscount: p.cacheDiscount,
+		Estimated: p.estimated, Waived: p.waived, Profit: c.profit(),
+	}, err
 }
 
 // recordAttempts books each attempt's cost and writes the attempts to suppliers, in this transaction: the row of an
@@ -218,6 +226,9 @@ func attemptEntries(attempts []AttemptResult) []int32 {
 // price covers, and whether only the per-use items were charged.
 type priced struct {
 	price             int64
+	serverTool        platform.Exact
+	cacheDiscount     platform.Exact
+	hasServerTool     bool
 	estimated, waived bool
 	tiers             int16
 }
@@ -299,6 +310,9 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 			p.estimated = true
 		}
 		if err == nil {
+			err = p.addExtras(s, f, seg, tiers, perUseOnly)
+		}
+		if err == nil {
 			cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), charged)
 		}
 		if err == nil {
@@ -314,6 +328,47 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 	}
 	p.price = ceilAmount(total)
 	return p, nil
+}
+
+// addExtras computes the two amounts the client's usage shows beyond its token counts: the sale price of the per-use
+// items and what cache reads saved against the input price. Both use the same rate a charge item would, including the
+// fallback rate of a tier the schedule does not declare.
+func (p *priced) addExtras(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, waived bool) error {
+	var err error
+	for it := range catalog.NumItems {
+		if !perUseItems.Has(it) {
+			continue
+		}
+		n := seg.Usage.Count(it)
+		if n == 0 {
+			continue
+		}
+		p.hasServerTool = true
+		if p.serverTool, err = p.serverTool.Add(itemRate(s, f, seg, tiers, it).Mul(n)); err != nil {
+			return err
+		}
+	}
+	cached := seg.Usage.Count(catalog.ItemCacheRead)
+	if cached == 0 || waived {
+		return nil
+	}
+	input := itemRate(s, f, seg, tiers, catalog.ItemInput)
+	cache := itemRate(s, f, seg, tiers, catalog.ItemCacheRead)
+	saved, err := input.Mul(cached).Add(cache.Mul(cached).Neg())
+	if err != nil || saved.Cmp(platform.Exact{}) <= 0 {
+		return err
+	}
+	p.cacheDiscount, err = p.cacheDiscount.Add(saved)
+	return err
+}
+
+// itemRate is the rate a charge item uses: the schedule's rate when the tier is declared and priced, else the fallback.
+func itemRate(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, it catalog.Item) platform.UnitPrice {
+	rate, _, ok := s.Rate(seg.Usage, it)
+	if !ok || undeclaredTier(tiers, seg.Usage.ServiceTier()) {
+		rate = missingRate(s, f, it)
+	}
+	return rate
 }
 
 // guessed: the sampling's charge rests on usage the upstream did not report, an item without a price, or usage
@@ -427,67 +482,6 @@ func int32p(n int) *int32 {
 	return &i
 }
 
-func usages(segments []Segment) []catalog.Usage {
-	u := make([]catalog.Usage, len(segments))
-	for i, s := range segments {
-		u[i] = s.Usage
-	}
-	return u
-}
-
-// storedSegment is a segment as final_usage stores it: each item's count in item order, the service tier, the
-// reported items and the usage protocol could not map.
-type storedSegment struct {
-	Counts        []int64                `json:"counts"`
-	Tier          catalog.ServiceTier    `json:"tier"`
-	Reported      catalog.ItemSet        `json:"reported"`
-	Unknown       []catalog.UnknownUsage `json:"unknown,omitzero"`
-	PhysicalInput *int64                 `json:"physical_input,omitzero"`
-}
-
-// encodeUsage is the segments as final_usage stores them, so a retried Settle returns the Final the first one gave.
-func encodeUsage(segments []Segment) ([]byte, error) {
-	stored := make([]storedSegment, len(segments))
-	for i, s := range segments {
-		counts := make([]int64, catalog.NumItems)
-		for it := range catalog.NumItems {
-			counts[it] = s.Usage.Count(it)
-		}
-		stored[i] = storedSegment{Counts: counts, Tier: s.Usage.ServiceTier(), Reported: s.Reported, Unknown: s.Usage.Unknown()}
-		if n, ok := s.Usage.PhysicalInput(); ok {
-			stored[i].PhysicalInput = &n
-		}
-	}
-	b, err := jsonx.MarshalCanonical(stored)
-	if err != nil {
-		return nil, fmt.Errorf("billing: write the usage: %w", err)
-	}
-	return b, nil
-}
-
-func decodeUsage(b []byte) ([]Segment, error) {
-	var stored []storedSegment
-	if err := jsonx.UnmarshalKnown(b, &stored); err != nil {
-		return nil, fmt.Errorf("billing: read the stored usage: %w", err)
-	}
-	segments := make([]Segment, len(stored))
-	for i, s := range stored {
-		counts := map[catalog.Item]int64{}
-		for it, n := range s.Counts {
-			counts[catalog.Item(it)] = n
-		}
-		u, err := catalog.NewUsage(counts, s.Tier, s.Unknown)
-		if err == nil && s.PhysicalInput != nil {
-			u, err = u.WithPhysicalInput(*s.PhysicalInput)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("billing: read the stored usage: %w", err)
-		}
-		segments[i] = Segment{Usage: u, Reported: s.Reported}
-	}
-	return segments, nil
-}
-
 // locked is one reservation under its balance row lock, with what is charged once a branch has run.
 type locked struct {
 	quotes     []quote // only Settle brings usage, always with the original Hold, including after cleanup
@@ -507,7 +501,23 @@ type locked struct {
 // stored is the Final the reservation holds.
 func (c *locked) stored() (Final, error) {
 	segments, err := decodeUsage(c.row.FinalUsage)
-	return Final{PriceVersion: settledVersion(c.row.PriceVersions, c.row.Entry), Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived, Profit: c.row.Profit}, err
+	f := Final{
+		PriceVersion: settledVersion(c.row.PriceVersions, c.row.Entry), Segments: segments,
+		Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived, Profit: c.row.Profit,
+	}
+	if err != nil || c.row.State != "settled" || c.row.Entry == nil || c.row.PricingTiers < 0 {
+		return f, err
+	}
+	s, fbs, err := c.pricing(int(*c.row.Entry))
+	if err != nil {
+		return f, err
+	}
+	p, err := priceSegments(s, fbs, segments, c.row.Waived, catalog.ServiceTierSet(c.row.PricingTiers)) // stored CHECK bounds tiers
+	if err != nil {
+		return f, err
+	}
+	f.ServerToolCost, f.CacheDiscount = p.serverToolPtr(), p.cacheDiscount
+	return f, nil
 }
 
 func (c *locked) profit() *int64 {
