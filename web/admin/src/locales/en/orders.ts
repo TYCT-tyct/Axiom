@@ -70,8 +70,7 @@ export default {
     viaOffline: "Offline",
     state: {
       pendingReview: "Waiting for review",
-      approvedOffline: "Approved. The offline refund waits for its transfer to be concluded.",
-    approved: "Approved, not sent",
+      approved: "Approved, not sent",
       sending: "Sending",
       pending: "Awaiting the channel",
       succeeded: "Refunded",

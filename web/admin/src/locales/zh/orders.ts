@@ -68,8 +68,7 @@ export default {
     viaOffline: "线下",
     state: {
       pendingReview: "等待审核",
-      approvedOffline: "已批准。线下退款还要等转账凭证才能落定。",
-    approved: "已批准，未发出",
+      approved: "已批准，未发出",
       sending: "正在发出",
       pending: "等待渠道结果",
       succeeded: "已退款",
