@@ -346,6 +346,32 @@ func (s *Snapshot) lookupAlias(name string) (ModelID, bool) {
 	return id, ok
 }
 
+// addNames indexes every name of the models this snapshot holds: a public one is callable and an internal one is only
+// recognized, and each carries its model's status and version basis for resolution.
+func (s *Snapshot) addNames(rows []CatalogName) {
+	for _, n := range rows {
+		m := s.models[ModelID(n.ModelID)]
+		s.names[n.Norm] = nameEntry{
+			model:    m.ID,
+			public:   Visibility(n.Visibility) == VisibilityPublic,
+			retired:  m.Status == StatusRetired,
+			floating: m.VersionBasis == VersionFloating,
+			exact:    m.VersionBasis == VersionFloating || hasDate(n.Norm),
+		}
+	}
+}
+
+// addAliases records the current alias revisions whose target this snapshot holds, so an alias never resolves to a model
+// the snapshot cannot route.
+func (s *Snapshot) addAliases(rows []ListAliasesForSnapshotRow) {
+	for _, a := range rows {
+		id := ModelID(a.ModelID)
+		if _, ok := s.models[id]; ok {
+			s.aliases[a.Name] = id
+		}
+	}
+}
+
 // Model returns a listed or retired model.
 func (s *Snapshot) Model(id ModelID) (Model, bool) {
 	m, ok := s.models[id]

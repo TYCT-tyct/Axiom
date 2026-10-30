@@ -39,16 +39,8 @@ func (c *Catalog) SaveAlias(ctx context.Context, r SaveAliasRequest) (Result, er
 		if err != nil {
 			return outcome{}, err
 		}
-		if Status(row.Status) != StatusListed {
-			return outcome{}, fmt.Errorf("%w: it is %s, not listed", ErrWrongStatus, row.Status)
-		}
-		author, _, _ := strings.Cut(strings.TrimPrefix(norm, "~"), "/")
-		if row.Author != author {
-			return outcome{}, fmt.Errorf("%w: alias %q belongs to %q, but the model belongs to %q", ErrInvalid, norm, author, row.Author)
-		}
-		standard := Normalize(strings.SplitN(row.Slug, "@", 2)[0])
-		if freeName(standard) {
-			return outcome{}, fmt.Errorf("%w: a :free entry is a concrete model, not a family's latest", ErrInvalid)
+		if err := checkAliasTarget(norm, row); err != nil {
+			return outcome{}, err
 		}
 		o := outcome{targetKind: "alias", subject: norm, changesSnapshot: true}
 		prev, err := New().GetAlias(ctx, tx, norm)
@@ -66,6 +58,22 @@ func (c *Catalog) SaveAlias(ctx context.Context, r SaveAliasRequest) (Result, er
 		o.after = map[string]any{"model": r.Model, "rev": rev}
 		return o, nil
 	})
+}
+
+// checkAliasTarget holds an alias's target to the alias's author: a listed concrete model of that author, never another
+// vendor's family and never a :free entry, which is a model of its own rather than a family's latest.
+func checkAliasTarget(norm string, row CatalogModel) error {
+	if Status(row.Status) != StatusListed {
+		return fmt.Errorf("%w: it is %s, not listed", ErrWrongStatus, row.Status)
+	}
+	author, _, _ := strings.Cut(strings.TrimPrefix(norm, "~"), "/")
+	if row.Author != author {
+		return fmt.Errorf("%w: alias %q belongs to %q, but the model belongs to %q", ErrInvalid, norm, author, row.Author)
+	}
+	if freeName(Normalize(strings.SplitN(row.Slug, "@", 2)[0])) {
+		return fmt.Errorf("%w: a :free entry is a concrete model, not a family's latest", ErrInvalid)
+	}
+	return nil
 }
 
 // Alias is the current revision of one alias: the model a client's ~author/family-latest call reaches.

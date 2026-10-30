@@ -195,3 +195,15 @@ func resolve(snap *catalog.Snapshot, v variantNames) ([]catalog.ModelID, error) 
 	}
 	return models, nil
 }
+
+// resolveModels names the catalog models a request may call: the ones it names, or none for openrouter/auto, whose model
+// routing ranks. Compression needs one model's context window, which auto names only after it routes.
+func resolveModels(snap *catalog.Snapshot, v variantNames, req *protocol.Request) ([]catalog.ModelID, error) {
+	if !v.auto {
+		return resolve(snap, v)
+	}
+	if req.Compression == protocol.CompressionEnabled {
+		return nil, invalid("openrouter/auto chooses a model while routing, so context-compression cannot know its context window. Name the model or leave the plugin out.")
+	}
+	return nil, nil
+}

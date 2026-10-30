@@ -205,26 +205,12 @@ func ReadSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, n := range names {
-		m := snap.models[ModelID(n.ModelID)]
-		snap.names[n.Norm] = nameEntry{
-			model:    m.ID,
-			public:   Visibility(n.Visibility) == VisibilityPublic,
-			retired:  m.Status == StatusRetired,
-			floating: m.VersionBasis == VersionFloating,
-			exact:    m.VersionBasis == VersionFloating || hasDate(n.Norm),
-		}
-	}
+	snap.addNames(names)
 	aliases, err := q.ListAliasesForSnapshot(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	for _, a := range aliases {
-		id := ModelID(a.ModelID)
-		if _, ok := snap.models[id]; ok {
-			snap.aliases[a.Name] = id
-		}
-	}
+	snap.addAliases(aliases)
 	prices, err := q.ListCurrentPricesForSnapshot(ctx, tx)
 	if err != nil {
 		return nil, err

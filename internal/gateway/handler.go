@@ -382,15 +382,9 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	var models []catalog.ModelID
-	if names.auto {
-		if req.Compression == protocol.CompressionEnabled {
-			return invalid("openrouter/auto chooses a model while routing, so context-compression cannot know its context window. Name the model or leave the plugin out.")
-		}
-	} else {
-		if models, err = resolve(snap, names); err != nil {
-			return err
-		}
+	models, err := resolveModels(snap, names, &req)
+	if err != nil {
+		return err
 	}
 	body, req, err = h.compress(c, body, req, snap, models)
 	if err != nil {

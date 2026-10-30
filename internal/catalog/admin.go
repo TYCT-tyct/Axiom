@@ -260,17 +260,8 @@ func (c *Catalog) AddName(ctx context.Context, r AddNameRequest) (Result, error)
 			return outcome{}, ErrNameLength
 		}
 		norm := Normalize(r.Name)
-		if strings.Contains(norm, ":") && !freeName(norm) {
-			return outcome{}, fmt.Errorf("%w: a name may end in :free, and has no other colon in it", ErrInvalid)
-		}
-		standard := Normalize(strings.SplitN(row.Slug, "@", 2)[0])
-		if r.Visibility == VisibilityPublic {
-			switch {
-			case freeName(norm) && norm != standard:
-				return outcome{}, fmt.Errorf("%w: a :free name must be its model's standard ID %q", ErrInvalid, standard)
-			case !freeName(norm) && freeName(standard):
-				return outcome{}, fmt.Errorf("%w: a :free model's public names must end in :free", ErrInvalid)
-			}
+		if err := checkAddName(norm, row.Slug, r.Visibility); err != nil {
+			return outcome{}, err
 		}
 		if taken, err := New().GetNameByNorm(ctx, tx, norm); err == nil {
 			return outcome{}, fmt.Errorf("%w: %q is %q", ErrNameTaken, norm, taken.Name)
@@ -285,6 +276,26 @@ func (c *Catalog) AddName(ctx context.Context, r AddNameRequest) (Result, error)
 			after: map[string]any{"name": r.Name, "norm": norm, "visibility": r.Visibility},
 		}, err
 	})
+}
+
+// checkAddName refuses a name the catalog cannot hold. A colon is only the one in a trailing :free, which names an entry
+// that is a model of its own; a public name must also be its model's standard ID, so a :free entry is named after itself
+// and a paid model never takes a free name.
+func checkAddName(norm, slug string, visibility Visibility) error {
+	standard := Normalize(strings.SplitN(slug, "@", 2)[0])
+	if strings.Contains(norm, ":") && !freeName(norm) {
+		return fmt.Errorf("%w: a name may end in :free, and has no other colon in it", ErrInvalid)
+	}
+	if visibility != VisibilityPublic {
+		return nil
+	}
+	switch {
+	case freeName(norm) && norm != standard:
+		return fmt.Errorf("%w: a :free name must be its model's standard ID %q", ErrInvalid, standard)
+	case !freeName(norm) && freeName(standard):
+		return fmt.Errorf("%w: a :free model's public names must end in :free", ErrInvalid)
+	}
+	return nil
 }
 
 // UpdateSpecRequest replaces a model's baseline.
