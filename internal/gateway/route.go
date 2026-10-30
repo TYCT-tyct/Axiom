@@ -298,10 +298,12 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		// one does with the data it is sent, so an endpoint is taken to be the worst case rather than the best: a preset
 		// that requires no retention must not route to it on the strength of a value nobody set.
 		Class: routing.ClassRelay, Policy: routing.PolicyMayTrain,
-		// Health, time to first token and speed are what real traffic measured, as of this build: the snapshot is at most
-		// one rebuild behind the attempts (docs/domains/quality.md「质量分、吞吐与延迟」). Nothing scores quality yet;
-		// one is the neutral value that neither favours nor penalizes an endpoint, assigned in this one place.
-		Quality: 1, Confidence: 1, Health: measured.Health, Throughput: measured.Throughput, Latency: measured.Latency,
+		// Health, the quality score, its confidence, and the time to first token and speed are what real traffic and the
+		// probes measured, as of this build: the snapshot is at most one rebuild behind the attempts
+		// (docs/domains/quality.md「质量分、吞吐与延迟」). An endpoint nothing counted has the neutral quality 1 and the
+		// confidence 0, which routing keeps apart from a measured bad one.
+		Quality: measured.Quality, Confidence: measured.Confidence, Health: measured.Health,
+		Throughput: measured.Throughput, Latency: measured.Latency,
 		ServiceTiers: tiers,
 		Native:       native, Served: served,
 		Caps:       capabilities(serving.Abilities),
