@@ -178,6 +178,7 @@ type Call struct {
 	ip          netip.Addr
 	snap        *catalog.Snapshot
 	models      []catalog.ModelID
+	auto        bool // the request named openrouter/auto: routing ranks every model the key may call
 	sticky      routing.EndpointID
 	stickyCache *kv.Client
 	stickyKey   string
@@ -391,7 +392,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	models, err := resolve(snap, names)
+	models, err := resolveModels(snap, names, &req)
 	if err != nil {
 		return err
 	}
@@ -399,7 +400,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
+	c.Body, c.Request, c.snap, c.models, c.auto, c.over = body, req, snap, models, names.auto, over
 	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
 	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {
 		return invalid("x-session-id must be valid UTF-8 with at most 256 characters.")

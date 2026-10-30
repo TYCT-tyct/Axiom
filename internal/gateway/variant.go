@@ -12,23 +12,26 @@ import (
 )
 
 // modelName is a model name from a client read apart: the name the catalog is asked for and what its variants ask of
-// the route. A variant is a routing switch written after the model (author/model:nitro), never a model of its own, so
-// the catalog is only ever asked for base and still finds no name with a ':' (docs/domains/gateway.md「模型名变体」).
-// The client's own spelling stays in the request, which is what the response and the call record echo.
+// the route. A variant is a routing switch written after the model (author/model:nitro), never a model of its own; the
+// one catalog suffix is :free, which names its own entry and stays on the base (docs/domains/gateway.md「模型名变体」).
+// The client's own spelling stays in the request and the call record; a successful response names the model that
+// actually served it.
 type modelName struct {
 	base     string
 	sort     *routing.Strategy // the ranking the last sorting variant asks for, or nil
 	exacto   bool              // the last sorting variant is :exacto, which the operational quality score does not satisfy
 	thinking bool              // the deprecated :thinking, which only a request that asks for reasoning itself honours
+	auto     bool              // openrouter/auto: the routing ranking chooses the model
 }
 
 // variant is what one documented suffix asks of the request (OpenRouter《Model Variants》, read 2026-10-29). A suffix
-// is never a model of its own, so the catalog is only asked for the base name; what Axiom does with each is in
-// docs/domains/gateway.md「模型名变体」.
+// is never a model of its own; :free is the one suffix that names a catalog entry and remains part of the base. What
+// Axiom does with each is in docs/domains/gateway.md「模型名变体」.
 type variant struct {
 	sort     string // the provider.sort it stands for, "" for none
 	exacto   bool   // the Exacto ranking, which needs tool-calling and benchmark quality, not measured here
 	thinking bool   // reasoning on, which the request must already ask for
+	free     bool   // the catalog's own :free entry, which stays on the base
 	refusal  string // what every request with this suffix gets, "" when it can be honoured
 }
 
@@ -37,21 +40,19 @@ const (
 		"Use :nitro, :floor or provider.sort."
 	errOnline   = "The :online variant is the deprecated web plugin, and web search is not supported here: " + protocol.NoWebSearch + ". Use a model's native web search tool."
 	errThinking = "The :thinking variant is deprecated by OpenRouter: ask for reasoning with the reasoning parameter, which also enables it. A request that already asks for reasoning may keep the suffix."
-	errFree     = "The :free variant is a separate free catalog entry on OpenRouter, and this catalog has none: the paid base model is never served in its place."
 	errBatch    = "The :batch variant is a separate batch-priced catalog entry on OpenRouter, and this catalog has none."
 	errExtended = "The :extended variant is deprecated by OpenRouter and no model offers it any more; this catalog has none."
-	errAlias    = "Model aliases such as ~author/family-latest are not supported: this catalog has no model-family mappings; use a concrete model name."
 )
 
 // variants are the suffixes OpenRouter documents: :nitro and :floor rank endpoints, :exacto needs tool-calling and
 // benchmark quality signals nothing measures, :thinking is the deprecated way to ask for reasoning, :online is the
-// deprecated web plugin, and :free, :batch and :extended are catalog entries this catalog cannot hold. One table, so
-// what a suffix does and why it is refused are read together.
+// deprecated web plugin, :free names the catalog's own free entry, and :batch and :extended are catalog entries this
+// catalog does not hold. One table, so what a suffix does and why it is refused are read together.
 var variants = map[string]variant{
 	"nitro": {sort: "throughput"}, "floor": {sort: "price"},
 	"exacto": {exacto: true}, "thinking": {thinking: true},
-	"online": {refusal: errOnline},
-	"free":   {refusal: errFree}, "batch": {refusal: errBatch}, "extended": {refusal: errExtended},
+	"online": {refusal: errOnline}, "free": {free: true},
+	"batch": {refusal: errBatch}, "extended": {refusal: errExtended},
 }
 
 // maxModelName bounds the whole name a client writes, variants included, in bytes. The call record keeps that name and
@@ -66,18 +67,17 @@ func noVariant(message string) *Refusal {
 
 // parseModelName reads the variants after the model. They may come in any order, the last sorting one deciding the
 // ranking. A variant this service cannot honor is a 400, as an unsupported provider member is: a request is never
-// served without what it asked for. A known catalog variant cannot be represented here and is a 400; an unknown suffix
-// is a 404, whether or not the base exists. :exacto is left to rank, because an explicit provider.sort replaces it
-// (OpenRouter《Exacto》, 2026-10-29). :thinking is left to the caller, which alone knows whether the request asks for
-// reasoning already: discovery answers the base model, a call refuses a suffix nothing there enables.
+// served without what it asked for. :free stays in the base name, because it is the catalog's own entry, and a base
+// without that entry is a 404 like any other unknown model. An unknown suffix is a 404, whether or not the base
+// exists. :exacto is left to rank, because an explicit provider.sort replaces it (OpenRouter《Exacto》, 2026-10-29).
+// :thinking is left to the caller, which alone knows whether the request asks for reasoning already: discovery answers
+// the base model, a call refuses a suffix nothing there enables. ~author/family-latest is a catalog alias, so it is
+// left whole for the catalog to resolve.
 func parseModelName(name string) (modelName, *Refusal) {
 	if len(name) > maxModelName {
 		return modelName{}, noVariant("The model name is longer than the " + strconv.Itoa(maxModelName) + " bytes a model name may have.")
 	}
 	base, rest, more := strings.Cut(name, ":")
-	if strings.HasPrefix(strings.TrimSpace(base), "~") {
-		return modelName{}, invalid(errAlias)
-	}
 	m := modelName{base: base}
 	for more {
 		var suffix string
@@ -88,6 +88,8 @@ func parseModelName(name string) (modelName, *Refusal) {
 			return modelName{}, noVariant("The model name has a suffix after ':' that is not a model variant.")
 		case v.refusal != "":
 			return modelName{}, invalid(v.refusal)
+		case v.free:
+			m.base += ":free"
 		case v.sort != "":
 			s := strategies[v.sort]
 			m.sort, m.exacto = &s, false
@@ -97,6 +99,7 @@ func parseModelName(name string) (modelName, *Refusal) {
 			m.thinking = true
 		}
 	}
+	m.auto = strings.EqualFold(m.base, "openrouter/auto")
 	return m, nil
 }
 
@@ -104,6 +107,7 @@ func parseModelName(name string) (modelName, *Refusal) {
 type variantNames struct {
 	primary    string   // the base name of the model the request names
 	alternates []string // the base names of the models it lists that could be tried
+	auto       bool     // the request named openrouter/auto, which the routing ranking expands
 }
 
 // readRouting reads what a request's provider object and model names ask of the route, for a call and for a count alike,
@@ -140,7 +144,7 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 		return over, variantNames{}, invalid(errThinking)
 	}
 	over.Sort = cmp.Or(over.Sort, primary.sort)
-	v := variantNames{primary: primary.base}
+	v := variantNames{primary: primary.base, auto: primary.auto}
 	for _, name := range req.Models {
 		base, ok, err := alternate(name, explicit, over.Sort, reasoning)
 		if err != nil {
@@ -163,6 +167,9 @@ func alternate(name string, explicit bool, ranking *routing.Strategy, reasoning 
 		return "", false, nil
 	case ref != nil:
 		return "", false, ref
+	case alt.auto:
+		// auto already considers every model the key may call; a second auto adds nothing to try.
+		return "", false, nil
 	case alt.exacto && !explicit:
 		return "", false, invalid(errExacto)
 	case alt.thinking && !reasoning:
@@ -187,4 +194,16 @@ func resolve(snap *catalog.Snapshot, v variantNames) ([]catalog.ModelID, error) 
 		}
 	}
 	return models, nil
+}
+
+// resolveModels names the catalog models a request may call: the ones it names, or none for openrouter/auto, whose model
+// routing ranks. Compression needs one model's context window, which auto names only after it routes.
+func resolveModels(snap *catalog.Snapshot, v variantNames, req *protocol.Request) ([]catalog.ModelID, error) {
+	if !v.auto {
+		return resolve(snap, v)
+	}
+	if req.Compression == protocol.CompressionEnabled {
+		return nil, invalid("openrouter/auto chooses a model while routing, so context-compression cannot know its context window. Name the model or leave the plugin out.")
+	}
+	return nil, nil
 }

@@ -30,6 +30,10 @@ type Sold struct {
 // the model to the next rule.
 var ErrRuleRefuses = errors.New("billing: the rule's constraints are not enforced in this release, so it prices nothing")
 
+// ErrFreePrice is a sale price the rule produced for a :free model that is not zero. The suffix promises no charge, so
+// the model is left unpriced instead of being sold at a paid price.
+var ErrFreePrice = errors.New("billing: a :free model's sale price must be zero")
+
 // RuleRefusal is a rule that matched a model and ended its pricing: the model has no sale price, and the later rules are
 // not tried. It names the rule and the model, so the reason is auditable wherever the pricing result is reported.
 type RuleRefusal struct {

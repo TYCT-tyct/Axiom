@@ -23,7 +23,7 @@ func TestModelDetailVariants(t *testing.T) {
 			{":nitro", 200},
 			{":floor:nitro", 200},
 			{":exacto", 200},
-			{":free", 400},
+			{":free", 404},
 			{":thinking", 200},
 			{":online", 400},
 			{":unknown", 404},
@@ -52,7 +52,7 @@ func TestModelEndpointVariantsAndVisibility(t *testing.T) {
 		name   string
 		status int
 	}{
-		{"acme/alpha:nitro", 200}, {"acme/alpha:free", 400}, {"~acme/alpha-latest", 400},
+		{"acme/alpha:nitro", 200}, {"acme/alpha:free", 404}, {"~acme/alpha-latest", 404},
 	} {
 		resp, body := r.do(http.MethodGet, "/api/v1/models/"+tc.name+"/endpoints", a.key, nil)
 		if resp.StatusCode != tc.status {
