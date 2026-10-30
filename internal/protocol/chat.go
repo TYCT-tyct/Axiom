@@ -38,6 +38,9 @@ type chatStream struct {
 	reportErr                         error
 	// The reasoning members of the delta being read, to be written under both names.
 	reasoning, reasoningContent reasoningMember
+	// toolSeen marks the tool-call indices counted so far: a call's deltas repeat its index, and the first one counts it.
+	toolSeen  uint64
+	toolIndex int64
 }
 
 func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
@@ -78,11 +81,10 @@ var (
 		"reasoning":         func(s *chatStream) error { return s.reasoningOf(&s.reasoning) },
 		"reasoning_content": func(s *chatStream) error { return s.reasoningOf(&s.reasoningContent) },
 		"reasoning_details": (*chatStream).rawContent,
-		"tool_calls": func(s *chatStream) error {
-			return s.eachElement(func() error { return walk(&s.reader, s, toolCallFields) })
-		},
+		"tool_calls":        func(s *chatStream) error { return s.eachElement(s.toolCall) },
 	}
 	toolCallFields = map[string]func(*chatStream) error{
+		"index":    (*chatStream).toolCallIndex,
 		"function": func(s *chatStream) error { return walk(&s.reader, s, functionFields) },
 	}
 	functionFields = map[string]func(*chatStream) error{"name": (*chatStream).visibleText, "arguments": (*chatStream).visibleText}
@@ -250,6 +252,27 @@ func (s *chatStream) finishReason() error {
 	return s.edit(len(v), "null")
 }
 
+// toolCall counts a tool call the first time its element carries an index. Every delta of a call repeats the index,
+// so the bit marks it without an allocation; an index past the bit's range is left out rather than counted per delta.
+func (s *chatStream) toolCall() error {
+	s.toolIndex = -1
+	if err := walk(&s.reader, s, toolCallFields); err != nil {
+		return err
+	}
+	if s.toolIndex < 0 || s.toolIndex >= 64 || s.toolSeen&(1<<s.toolIndex) != 0 {
+		return nil
+	}
+	s.toolSeen |= 1 << s.toolIndex
+	s.e.toolCalls++
+	return nil
+}
+
+func (s *chatStream) toolCallIndex() error {
+	n, err := s.count()
+	s.toolIndex = n
+	return err
+}
+
 func (s *chatStream) upstreamError() error {
 	s.failed = s.dec.PeekKind() != 'n'
 	return errorObject(&s.reader, &s.eventReader, errorFields)
@@ -295,6 +318,7 @@ func (s *chatStream) meter(m *meter, final bool) {
 func (s *chatStream) dropBuffers() {
 	s.eventReader.dropBuffers()
 	s.choices, s.held, s.finish, s.first, s.report, s.reportErr = nil, nil, nil, "", nil, nil
+	s.toolSeen, s.toolIndex = 0, 0
 	s.reasoning, s.reasoningContent = reasoningMember{}, reasoningMember{}
 }
 

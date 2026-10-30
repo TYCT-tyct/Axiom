@@ -18,12 +18,12 @@ type responsesStream struct {
 	seq     int64 // the last sequence_number, which the failure we write follows
 	created bool  // response.created came, so the failure is response.failed
 	// The event being read.
-	index                  int64 // its output_index, or -1
-	itemBytes              int64 // the raw bytes of its item
-	webSearch, hasResponse bool
-	report                 *openAIUsage
-	reportErr              error
-	topReport              []byte // borrowed from this event; only failures may use it when response.usage is absent
+	index                                int64 // its output_index, or -1
+	itemBytes                            int64 // the raw bytes of its item
+	webSearch, functionCall, hasResponse bool
+	report                               *openAIUsage
+	reportErr                            error
+	topReport                            []byte // borrowed from this event; only failures may use it when response.usage is absent
 	// items is, for each output item added so far, the content its deltas carried: an item that completes counts only
 	// what it adds to them, so the bound never counts the same text twice.
 	items []int64
@@ -73,7 +73,8 @@ var (
 
 func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	s.start(data)
-	s.index, s.itemBytes, s.webSearch, s.hasResponse, s.report, s.reportErr = -1, 0, false, false, nil, nil
+	s.index, s.itemBytes, s.webSearch, s.functionCall, s.hasResponse, s.report, s.reportErr =
+		-1, 0, false, false, false, nil, nil
 	s.topReport = nil
 	if err := walk(&s.reader, s, responsesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
@@ -134,6 +135,9 @@ func (s *responsesStream) settle() error {
 		}
 		if s.webSearch {
 			s.e.searches = 1
+		}
+		if s.functionCall {
+			s.e.toolCalls = 1
 		}
 	case s.e.name == "response.output_item.done":
 		s.e.role, s.e.content = content, s.itemBytes
@@ -207,9 +211,13 @@ func (s *responsesStream) item() error {
 }
 
 func (s *responsesStream) itemType() error {
-	is, err := s.is("web_search_call")
-	s.webSearch = is
-	return err
+	v, err := s.str()
+	if err != nil {
+		return err
+	}
+	s.webSearch = string(v) == "web_search_call"
+	s.functionCall = string(v) == "function_call"
+	return nil
 }
 
 func (s *responsesStream) usage() error {

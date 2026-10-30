@@ -513,6 +513,10 @@ func TestOutputEstimateByShape(t *testing.T) {
 		{"the earlier Claude's", billing.TokenizerClaude, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 1000, 262},
 		{"raw input beside the text", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 1800, Text: shape}, protocol.Usage{}, 1000, 660},
 		{"held to the limit", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 100, 100},
+		{"two tool calls on Claude 4.7", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900, Text: shape, ToolCalls: 2}, protocol.Usage{}, 1000, 420},
+		{"a tool call on the earlier Claude", billing.TokenizerClaude, protocol.Progress{ContentBytes: 900, Text: shape, ToolCalls: 1}, protocol.Usage{}, 1000, 307},
+		{"a tool call held to the limit", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900, Text: shape, ToolCalls: 2}, protocol.Usage{}, 100, 100},
+		{"a tool call on o200k adds nothing", billing.TokenizerO200k, protocol.Progress{ContentBytes: 900, ToolCalls: 2}, protocol.Usage{}, 1000, 300},
 		{"a family without weights", billing.TokenizerNone, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 1000, 300},
 		{"no text tallied", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900}, protocol.Usage{}, 1000, 300},
 		{
