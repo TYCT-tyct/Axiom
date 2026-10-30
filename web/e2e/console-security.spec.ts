@@ -11,6 +11,23 @@ const returnToWindow = (page: Page) =>
   page.evaluate(() => document.dispatchEvent(new Event("visibilitychange", { bubbles: true })));
 
 test.describe("two-step verification settings", () => {
+  test("the recovery codes dialog uses the site's brand colour", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.mfaEnabled = true;
+    state.site = { ...state.site, brand_color: "#ff0000" };
+    signedInAs(state, "mfa");
+    await page.goto("/console/security");
+    await page.getByRole("button", { name: "重新生成恢复码" }).click();
+    const dialog = page.getByRole("dialog", { name: "重新生成恢复码" });
+    await dialog.getByLabel("验证器里的 6 位验证码").fill("123456");
+    await dialog.getByRole("button", { name: "重新生成" }).click();
+    const codes = page.getByRole("dialog", { name: "保存你的恢复码" });
+    await expect(codes.getByRole("listitem")).toHaveCount(10);
+    const button = codes.getByRole("button", { name: "我已保存" });
+    await expect(button).toBeVisible();
+    expect(await button.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 0, 0)");
+  });
+
   test("turning it on shows a QR code and the recovery codes once, and later changes use the new session", async ({
     page,
   }) => {

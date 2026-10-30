@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+
 // The theme a site's brand colour makes (docs/frontend.md「主题与自由度」): the accent and the primary button, derived so
 // that whatever the colour, text stays at 4.5:1 or more in both colour schemes (WCAG 2.2 AA) and a button never loses its
 // edge. Only a colour that is not #rrggbb is refused; one that would fail is corrected, because the site owner picks a
@@ -78,6 +80,27 @@ function tokensFor(brand: Rgb, scheme: Scheme) {
     "--btn-ink": hex(inkOn(brand)),
     "--btn-line": scheme.surfaces.every((s) => contrast(brand, s) >= edge) ? "transparent" : scheme.line,
   };
+}
+
+// useBrandStyle puts the brand's custom properties on the document root, the one ancestor of both the page and the
+// dialogs the app renders beside it (RecoveryCodesHost). A page-level wrapper would leave those dialogs on the default
+// palette. Removing the properties restores styles.css when the colour goes away.
+export function useBrandStyle(color: string | undefined) {
+  useEffect(() => {
+    const tokens = color ? brandStyle(color) : undefined;
+    if (!tokens) {
+      return;
+    }
+    const root = document.documentElement;
+    for (const [name, value] of Object.entries(tokens)) {
+      root.style.setProperty(name, value);
+    }
+    return () => {
+      for (const name of Object.keys(tokens)) {
+        root.style.removeProperty(name);
+      }
+    };
+  }, [color]);
 }
 
 // brandStyle is the custom properties to set on the root for a brand colour written #rrggbb, each as the light value

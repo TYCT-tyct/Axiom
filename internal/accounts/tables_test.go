@@ -409,7 +409,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"notification_preferences": {"low_balance", "top_up", "factor_changed", "threshold", "webhook_url", "language"},
 		"user_notices":             {"email_done", "email_failed", "dispatched", "webhook_url", "webhook_state"},
 		"announcements":            {"withdrawn_at"},
-		"sites":                    {"name", "status", "key_prefix", "registration", "default_tier_id", "logo_hash"},
+		"sites":                    {"name", "status", "key_prefix", "registration", "brand_color", "default_tier_id", "logo_hash"},
 		"site_domains":             {"disabled_at"},
 		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour", "registration_human_check", "registration_human_check_bits", "registration_domain_burst", "registration_domain_per_hour", "registration_domain_allow", "registration_domain_deny"},
 		"tiers":                    {"name", "rate_requests"},

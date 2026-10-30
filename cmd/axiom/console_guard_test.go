@@ -238,8 +238,14 @@ func TestHostsOfNoConsole(t *testing.T) {
 	}
 	var site consoleapi.Site
 	decode(t, f.do(http.MethodGet, "/site", ""), &site)
-	if site.Name != "Main" || site.Currency != "USD" || site.KeyPrefix != "sk-ax-v1-" || site.Registration != consoleapi.SiteRegistration("invite") || site.LogoUrl != nil {
+	if site.Name != "Main" || site.Currency != "USD" || site.KeyPrefix != "sk-ax-v1-" || site.Registration != consoleapi.SiteRegistration("invite") || site.LogoUrl != nil || site.BrandColor != nil {
 		t.Errorf("the site: %+v", site)
+	}
+	f.run(`UPDATE accounts.sites SET brand_color = '#335ddf' WHERE is_main`)
+	f = f.restarted()
+	decode(t, f.do(http.MethodGet, "/site", ""), &site)
+	if site.BrandColor == nil || *site.BrandColor != "#335ddf" {
+		t.Errorf("the site's brand colour: %+v", site)
 	}
 	f.run(`UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = '` + consoleHost + `'`)
 	f = f.restarted()

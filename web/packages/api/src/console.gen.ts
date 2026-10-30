@@ -1046,6 +1046,8 @@ export interface components {
              * @example USD
              */
             currency: string;
+            /** @description The site's brand colour, lower case, from which the console derives both colour schemes' accent and primary button (docs/frontend.md「主题与自由度」). Absent when the site uses the default palette or the node predates the field. */
+            brand_color?: string;
             /** @description The path of the site's logo on this host. Absent when the site has no logo. It is long-cached, because its hash names the bytes; a page shows the site's name when the image does not load. */
             logo_url?: string;
             /**

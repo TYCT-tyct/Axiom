@@ -30,7 +30,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 
 | 表 | 内容 | 键与约束 |
 |---|---|---|
-| `suppliers` | 归属（`owner_scope` 与 `site_id`、`account_id` 由 CHECK 保持一致）、`kind`、`origin`（`https://host[:port]`，小写）、`upstream_account`、原生单位与结算币种、管理出口、状态、`config_gen`、带符号的有限余额（`numeric` 的 NaN 和无穷被 CHECK 排除，倍率、阈值同样） | `UNIQUE (origin, upstream_account)` |
+| `suppliers` | 归属（`owner_scope` 与 `site_id`、`account_id` 由 CHECK 保持一致）、`kind`、`origin`（`https://host[:port]`，小写）、`upstream_account`、原生单位与结算币种、管理出口、状态、`status_reason`（可空；非空时至多 200 字符，与后台契约一致）、`config_gen`、带符号的有限余额（`numeric` 的 NaN 和无穷被 CHECK 排除，倍率、阈值同样） | `UNIQUE (origin, upstream_account)` |
 | `supplier_logins` | 账号凭证：`kind` 加一份加密值（密文、nonce、包裹的数据密钥、主密钥版本），`version` 供比较后再写 | PK `supplier_id` |
 | `supplier_groups` | 上游的分组：`upstream_ref`、倍率、原始事实（jsonb）、是否选中、代号、是否仍存在 | `UNIQUE (supplier_id, upstream_ref)`、`UNIQUE (id, supplier_id)`、代号全局唯一且设定后不变 |
 | `credentials` | 调用凭证：对方的 key ID、加密的 key、状态、冷却、到期、上游模型允许清单（NULL 不限、空数组全拒）、并发上限、每分钟请求上限（1 到 100,000，可空）、出口；状态为"绑定中"时还没读到 key，"已清除"（`erased`）时 key 已在移除时清空，行保留，因为用它做过的尝试指向这一行 | `UNIQUE (supplier_id, upstream_key_ref)` |

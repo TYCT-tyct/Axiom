@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { type Browser, devices, expect, type Page, test } from "@playwright/test";
+import { mockAdmin } from "./admin-api.ts";
 import { adminSuite } from "./admin-scenes.ts";
+import { adminUrl } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { consoleSuite } from "./console-scenes.ts";
 import { signedInAs } from "./mock-auth.ts";
@@ -195,7 +197,72 @@ test.describe("interaction", () => {
 test.describe("long list", () => {
   // The list pages by cursor, 50 rows a time, so the longest it gets is the pages a person has asked for: this loads
   // 1000 rows, then scrolls 5 seconds at 4x CPU (docs/frontend.md「前端性能指标」), counting the frames drawn late and the
-  // tasks that held the main thread for 50 ms or more.
+  // tasks that held the main thread for 50 ms or more. The calls and the users are the two long lists the budget names.
+  async function loadRows(page: Page, rows: number) {
+    const more = page.getByRole("button", { name: "加载更多" });
+    for (let loaded = 50; loaded < rows; loaded += 50) {
+      await more.click();
+      await expect(page.getByRole("row")).toHaveCount(Math.min(loaded + 50, rows) + 1);
+    }
+  }
+
+  // Loading a page scrolls its button into view, so the list is near its end; a measurement from there reaches the
+  // bottom in a few frames and then counts a still page as a smooth scroll. Start at the top, let the layout settle,
+  // and prove the page moved every frame for the whole five seconds.
+  async function scroll(page: Page) {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.evaluate(
+      () =>
+        new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 100)))),
+    );
+    const outcome = await page.evaluate(
+      () =>
+        new Promise<{
+          late: number;
+          total: number;
+          longTasks: number;
+          moved: number;
+          startY: number;
+          endY: number;
+        }>((done) => {
+          let longTasks = 0;
+          new PerformanceObserver((list) => {
+            longTasks += list.getEntries().length;
+          }).observe({ type: "longtask", buffered: false });
+          const gaps: number[] = [];
+          let moved = 0;
+          let last = performance.now();
+          const start = last;
+          const startY = window.scrollY;
+          const step = (now: number) => {
+            gaps.push(now - last);
+            last = now;
+            const before = window.scrollY;
+            window.scrollBy(0, 20);
+            if (window.scrollY > before) {
+              moved++;
+            }
+            if (now - start < 5000) {
+              requestAnimationFrame(step);
+            } else {
+              done({
+                late: gaps.filter((g) => g > 25).length,
+                total: gaps.length,
+                longTasks,
+                moved,
+                startY,
+                endY: window.scrollY,
+              });
+            }
+          };
+          requestAnimationFrame(step);
+        }),
+    );
+    expect(outcome.endY).toBeGreaterThan(outcome.startY);
+    expect(outcome.moved).toBeGreaterThan(outcome.total * 0.9);
+    return outcome;
+  }
+
   test("console calls: 1000 rows scroll without dropped frames", async ({ browser }) => {
     const page = await measuredPage(browser, phone, devices["Desktop Chrome"]);
     const state = await mockConsole(page, "worst");
@@ -205,36 +272,28 @@ test.describe("long list", () => {
       id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
     }));
     await page.goto("/console/calls");
-    const more = page.getByRole("button", { name: "加载更多" });
-    for (let rows = 51; rows < 1001; rows += 50) {
-      await more.click();
-      await expect(page.getByRole("row")).toHaveCount(Math.min(rows + 50, 1001));
-    }
+    await loadRows(page, 1000);
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(10_000);
-    const outcome = await page.evaluate(
-      () =>
-        new Promise<{ late: number; total: number; longTasks: number }>((done) => {
-          let longTasks = 0;
-          new PerformanceObserver((list) => {
-            longTasks += list.getEntries().length;
-          }).observe({ type: "longtask", buffered: false });
-          const gaps: number[] = [];
-          let last = performance.now();
-          const start = last;
-          const step = (now: number) => {
-            gaps.push(now - last);
-            last = now;
-            window.scrollBy(0, 40);
-            if (now - start < 5000) {
-              requestAnimationFrame(step);
-            } else {
-              done({ late: gaps.filter((g) => g > 25).length, total: gaps.length, longTasks });
-            }
-          };
-          requestAnimationFrame(step);
-        }),
-    );
+    const outcome = await scroll(page);
     record("late frames, console calls", outcome.late / outcome.total, budget.lateFrames);
     record("long tasks while scrolling, console calls", outcome.longTasks, budget.longTasks);
+  });
+
+  test("admin users: 1000 rows scroll without dropped frames", async ({ browser }) => {
+    const page = await measuredPage(browser, phone, devices["Desktop Chrome"]);
+    const state = await mockAdmin(page, "worst");
+    signedInAs(state, "mfa");
+    state.users = Array.from({ length: 1000 }, (_, n) => {
+      const user = state.users[n % state.users.length] as (typeof state.users)[number];
+      const digits = String(n).padStart(26, "0");
+      return { ...user, id: `user_${digits}`, account_id: `acct_${digits}`, email: `user${n}@example.com` };
+    });
+    await page.goto(adminUrl("users"));
+    await page.getByRole("heading", { level: 1 }).waitFor();
+    await loadRows(page, 1000);
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(10_000);
+    const outcome = await scroll(page);
+    record("late frames, admin users", outcome.late / outcome.total, budget.lateFrames);
+    record("long tasks while scrolling, admin users", outcome.longTasks, budget.longTasks);
   });
 });

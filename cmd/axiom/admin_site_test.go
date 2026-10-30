@@ -275,3 +275,61 @@ func checkRegistrationRefusals(t *testing.T, f adminFixture, s session, site str
 		expectAdmin(t, "getSiteRegistration of "+id, f.do(http.MethodGet, "/sites/"+id+"/registration", "", as(s)), http.StatusNotFound, codeNotFound)
 	}
 }
+
+// TestSiteBrand: a site with none reads as the default palette; a PUT stores a colour lower case and audits it, an empty
+// colour clears it, a value of another form names its field, and a repeated key replays the stored result.
+func TestSiteBrand(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	site := f.siteID()
+
+	rec := f.do(http.MethodGet, "/sites/"+site+"/brand", "", as(s))
+	expectAdmin(t, "getSiteBrand", rec, http.StatusOK, "")
+	var got adminapi.SiteBrand
+	decode(t, rec, &got)
+	if got.BrandColor != nil {
+		t.Errorf("a site with no brand colour: %+v", got)
+	}
+
+	body := `{"brand_color":"#335DDF","reason":"the site's colour"}`
+	key := newKey()
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/brand", body, key)
+	expectAdmin(t, "updateSiteBrand", rec, http.StatusOK, "")
+	var updated adminapi.SiteBrand
+	decode(t, rec, &updated)
+	if updated.BrandColor == nil || *updated.BrandColor != "#335ddf" {
+		t.Errorf("the stored colour: %+v", updated)
+	}
+	if f.auditCount("site_brand.update") != "1" {
+		t.Fatalf("%s audit entries, want 1", f.auditCount("site_brand.update"))
+	}
+	f.expectAudit("site_brand.update", map[string]string{
+		"reason": "the site's colour",
+		"coalesce(detail->'after'->>'brand_color', 'none')": "#335ddf",
+	})
+
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/brand", body, key)
+	expectAdmin(t, "the same brand request again", rec, http.StatusOK, "")
+	if rec.Header().Get("Idempotency-Replayed") != "true" || f.auditCount("site_brand.update") != "1" {
+		t.Errorf("replay header %q, audits %s", rec.Header().Get("Idempotency-Replayed"), f.auditCount("site_brand.update"))
+	}
+
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/brand", `{"brand_color":"","reason":"back to the default"}`, newKey())
+	expectAdmin(t, "clearing the brand colour", rec, http.StatusOK, "")
+	var cleared adminapi.SiteBrand
+	decode(t, rec, &cleared)
+	if cleared.BrandColor != nil {
+		t.Errorf("the colour after clearing: %+v", cleared)
+	}
+
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/brand", `{"brand_color":"blue","reason":"r"}`, newKey())
+	expectAdmin(t, "a colour of another form", rec, http.StatusBadRequest, codeInvalidRequest)
+	fields := errorDetailOf(t, rec).Fields
+	if fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != "/brand_color" {
+		t.Errorf("fields %v, want /brand_color", fields)
+	}
+	for _, id := range []string{"site_00000000000000000000000000", "acct_00000000000000000000000000"} {
+		expectAdmin(t, "getSiteBrand of "+id, f.do(http.MethodGet, "/sites/"+id+"/brand", "", as(s)), http.StatusNotFound, codeNotFound)
+	}
+}

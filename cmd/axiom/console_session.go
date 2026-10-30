@@ -32,6 +32,9 @@ func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject
 	if site.APIBase != "" {
 		response.ApiBaseUrl = &site.APIBase
 	}
+	if site.BrandColor != "" {
+		response.BrandColor = &site.BrandColor
+	}
 	if site.LogoHash != "" {
 		path := "/api/console/v1/site/logo/" + site.LogoHash
 		response.LogoUrl = &path

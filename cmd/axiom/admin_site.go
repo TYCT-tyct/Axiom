@@ -239,3 +239,67 @@ func (a adminAPI) UpdateSiteRegistration(ctx context.Context, request adminapi.U
 	}
 	return adminapi.UpdateSiteRegistration200JSONResponse{Body: view, Headers: adminapi.UpdateSiteRegistration200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
+
+// siteBrandBody is a site's brand colour as the contract writes it; the default palette leaves the field out.
+func siteBrandBody(b accounts.SiteBrand) adminapi.SiteBrand {
+	out := adminapi.SiteBrand{}
+	if b.Color != "" {
+		out.BrandColor = &b.Color
+	}
+	return out
+}
+
+// brandRefusal names the contract's field for a colour the module refused.
+func brandRefusal(err error) error {
+	e, ok := errors.AsType[*accounts.SettingError](err)
+	if !ok {
+		return err
+	}
+	return invalidField("/"+e.Field, e.Reason)
+}
+
+// GetSiteBrand tells a site's brand colour, absent when it uses the default palette.
+func (a adminAPI) GetSiteBrand(ctx context.Context, request adminapi.GetSiteBrandRequestObject) (adminapi.GetSiteBrandResponseObject, error) {
+	id, _, err := a.siteOf(request.SiteId)
+	if err != nil {
+		return nil, err
+	}
+	var brand accounts.SiteBrand
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		brand, err = accounts.ReadSiteBrand(ctx, tx, id)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return adminapi.GetSiteBrand200JSONResponse(siteBrandBody(brand)), nil
+}
+
+// UpdateSiteBrand sets or clears a site's brand colour. This node reloads the sites at once; the others follow within
+// their reload interval.
+func (a adminAPI) UpdateSiteBrand(ctx context.Context, request adminapi.UpdateSiteBrandRequestObject) (adminapi.UpdateSiteBrandResponseObject, error) {
+	id, _, err := a.siteOf(request.SiteId)
+	if err != nil {
+		return nil, err
+	}
+	set := accounts.SiteBrand{Color: request.Body.BrandColor}
+	view, replayed, err := idempotently(ctx, a.db, "updateSiteBrand", request.Params.IdempotencyKey, []any{request.SiteId, request.Body},
+		func(tx pg.Tx) (adminapi.SiteBrand, error) {
+			if err := a.accounts.SetSiteBrand(ctx, tx, actor(ctx), id, set, request.Body.Reason); err != nil {
+				return adminapi.SiteBrand{}, brandRefusal(err)
+			}
+			saved, err := accounts.ReadSiteBrand(ctx, tx, id)
+			if err != nil {
+				return adminapi.SiteBrand{}, err
+			}
+			return siteBrandBody(saved), nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	if !replayed {
+		if err := a.accounts.Refresh(context.WithoutCancel(ctx)); err != nil {
+			a.logger.WarnContext(ctx, "site brand colour saved but this node did not reload it", "site", request.SiteId, "err", err)
+		}
+	}
+	return adminapi.UpdateSiteBrand200JSONResponse{Body: view, Headers: adminapi.UpdateSiteBrand200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}

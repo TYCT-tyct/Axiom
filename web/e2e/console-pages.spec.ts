@@ -534,3 +534,12 @@ test.describe("calls", () => {
     await expect(page.getByText("upstream_timeout").first()).toBeVisible();
   });
 });
+
+test("the site's brand colour is applied to the page", async ({ page }) => {
+  const state = await mockConsole(page);
+  state.site = { ...state.site, brand_color: "#335ddf" };
+  await page.goto("/console/sign-in");
+  await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+  const button = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--btn").trim());
+  expect(button).toBe("light-dark(#335ddf, #335ddf)");
+});

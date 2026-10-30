@@ -364,6 +364,84 @@ paths:
               schema: {type: string, format: binary}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/brand:
+    parameters:
+    - name: site_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/SiteId'
+    get:
+      operationId: getSiteBrand
+      tags:
+      - Site
+      summary: A site's brand colour.
+      description: >-
+        The #rrggbb colour the console derives both colour schemes from (docs/frontend.md「主题与自由度」); absent when
+        the site uses the default palette. Contrast is not a reason to refuse a colour: the console corrects it.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        '200':
+          description: The site's brand colour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteBrand'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+    put:
+      operationId: updateSiteBrand
+      tags:
+      - Site
+      summary: Set or clear a site's brand colour.
+      description: >-
+        Sets the site's brand colour, or clears it to the default palette when `brand_color` is empty. A value that is
+        not #rrggbb is a 400. The change is audited; this node serves it at once and the others follow within their site
+        reload interval.
+      security:
+      - session: []
+        csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteBrandUpdate'
+      responses:
+        '200':
+          description: The brand colour now in force.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteBrand'
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Failure'
   /api/admin/v1/sites/{site_id}/logo:
     parameters:
       - name: site_id
@@ -3245,6 +3323,31 @@ components:
           enum:
           - invite
           - closed
+    SiteBrand:
+      type: object
+      additionalProperties: false
+      properties:
+        brand_color:
+          type: string
+          pattern: '^#[0-9a-f]{6}$'
+          description: >-
+            The site's brand colour, lower case. Absent when the site uses the default palette; a node of the previous
+            release has no brand colour and leaves it out.
+    SiteBrandUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - brand_color
+      - reason
+      properties:
+        brand_color:
+          type: string
+          pattern: '^(#[0-9a-fA-F]{6})?$'
+          description: >-
+            The new brand colour as #rrggbb, or empty to return to the default palette. A value the console corrects for
+            contrast is accepted: it picks the accent and the button's ink, not the site owner.
+        reason:
+          $ref: '#/components/schemas/Reason'
     SystemSettingsUpdate:
       type: object
       additionalProperties: false
