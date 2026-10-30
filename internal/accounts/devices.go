@@ -85,6 +85,11 @@ func (s *Service) RevokeOtherSessions(ctx context.Context, p Principal) (int, er
 	maxAge, idle := s.snapshot.Load().sites[p.site].sessions[Console].seconds()
 	var revoked int64
 	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+		// Lock the user first, as VerifyMFA does, so a second-factor sign-in that commits after this statement began
+		// cannot insert a new session the UPDATE's snapshot misses.
+		if _, err := s.lockUser(ctx, tx, uuid.UUID(p.user), p.factorVersion); err != nil {
+			return err
+		}
 		var err error
 		revoked, err = s.queries.RevokeOtherSessions(ctx, tx, RevokeOtherSessionsParams{
 			SiteID: uuid.UUID(p.site), UserID: uuid.UUID(p.user), CurrentID: uuid.UUID(p.session),
