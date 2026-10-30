@@ -140,6 +140,7 @@ export default {
     save: "保存名称",
     saved: "站点名称已保存。",
     invalidName: "名称要填 1 到 100 个字符。",
+    oldNode: "这台节点还不能只改名称。等它升级后再改。",
   },
   mail: {
     title: "邮件",

@@ -6,7 +6,8 @@ import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "./change";
 import { Facts, State } from "./parts";
-import { bufferRefused, formatPercent, readPayments, withoutBuffer } from "./payment-read";
+import { formatPercent, readPayments } from "./payment-read";
+import { type PaymentAttempt, savePaymentSettings } from "./payment-save";
 import { paymentSettingsQuery } from "./queries";
 
 type Settings = AdminSchemas["PaymentSettings"];
@@ -131,6 +132,7 @@ function PaymentDialog({
   const { t } = useTranslation();
   const bufferKnown = view.top_up_buffer_ppm !== undefined;
   const skipped = useRef(false);
+  const attempted = useRef(new Map<string, PaymentAttempt>());
   const put = (settings: Update, reason: string, key: string) =>
     unwrapChange(
       adminApi.PUT("/api/admin/v1/sites/{site_id}/system-settings/payments", {
@@ -139,17 +141,13 @@ function PaymentDialog({
       }),
     );
   // A page loaded from a new node can still reach an old node for the write during a rolling release. The old contract
-  // refuses the whole settings object when it carries top_up_buffer_ppm, so the same save is retried without it.
+  // refuses the whole settings object when it carries top_up_buffer_ppm; the same key then sends the body without it, and
+  // every later resend of that key uses the stored body. A carried resend after the dialog was closed still runs this
+  // send function and keeps its ref, so the downgrade survives the dialog.
   const send = async (settings: Update, { reason, key }: { reason: string; key: string }) => {
-    try {
-      return await put(settings, reason, key);
-    } catch (error) {
-      if (!("top_up_buffer_ppm" in settings) || !bufferRefused(error)) {
-        throw error;
-      }
-      skipped.current = true;
-      return put(withoutBuffer(settings), reason, key);
-    }
+    const saved = await savePaymentSettings(attempted.current, key, settings, reason, put);
+    skipped.current = saved.skipped;
+    return saved;
   };
   return (
     <ChangeDialog

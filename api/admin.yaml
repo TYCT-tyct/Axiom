@@ -3611,6 +3611,12 @@ components:
           - invite
           - closed
           - open
+        name_editable:
+          type: boolean
+          description: >-
+            Whether this node accepts a name-only update of the system settings. Absent on a node of the previous release,
+            whose contract requires the registration mode with the name; the settings page then keeps the name read-only
+            until the node is upgraded.
     SiteBrand:
       type: object
       additionalProperties: false

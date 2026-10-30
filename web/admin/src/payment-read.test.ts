@@ -11,7 +11,7 @@ import {
   readPayments,
   withoutBuffer,
 } from "./payment-read";
-import { siteSettingsInput } from "./site-info";
+import { nameEditable, siteSettingsInput } from "./site-info";
 
 const paymentWords = { amount: "amount", range: "range", buffer: "buffer" };
 const merchantWords = {
@@ -155,10 +155,13 @@ it("drops only the buffer for a node whose contract refuses it", () => {
   );
 });
 
-it("keeps a name edit acceptable to an old node that requires the stored registration mode", () => {
-  expect(siteSettingsInput("Main", "closed")).toEqual({ name: "Main", registration: "closed" });
-  expect(siteSettingsInput("Main", "invite")).toEqual({ name: "Main", registration: "invite" });
-  expect(siteSettingsInput("Main", "open")).toEqual({ name: "Main" });
+it("sends only the name so a registration change made meanwhile survives", () => {
+  expect(siteSettingsInput("Main")).toEqual({ name: "Main" });
+});
+
+it("leaves the name read-only on a node that does not report the name-only save", () => {
+  expect(nameEditable({ name: "Main", registration: "invite" })).toBe(false);
+  expect(nameEditable({ name: "Main", registration: "invite", name_editable: true })).toBe(true);
 });
 
 it("shows the restart a database mail save needs", () => {

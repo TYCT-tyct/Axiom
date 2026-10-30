@@ -1756,6 +1756,8 @@ export interface components {
             name?: string;
             /** @enum {string} */
             registration?: "invite" | "closed" | "open";
+            /** @description Whether this node accepts a name-only update of the system settings. Absent on a node of the previous release, whose contract requires the registration mode with the name; the settings page then keeps the name read-only until the node is upgraded. */
+            name_editable?: boolean;
         };
         SiteBrand: {
             /** @description The site's brand colour, lower case. Absent when the site uses the default palette; a node of the previous release has no brand colour and leaves it out. */

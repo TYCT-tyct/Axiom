@@ -27,7 +27,16 @@ func (a adminAPI) GetSystemSettings(ctx context.Context, r adminapi.GetSystemSet
 	if err != nil {
 		return nil, err
 	}
-	return adminJSON[adminapi.GetSystemSettings200JSONResponse](v)
+	return adminJSON[adminapi.GetSystemSettings200JSONResponse](adminSystemSettings(v))
+}
+
+// adminSystemSettings adds the capability that lets the settings page save a name without the registration mode. A node
+// of the previous release does not send it, so the page keeps the name read-only rather than overwriting a mode another
+// administrator changed with the one its form read.
+func adminSystemSettings(v accounts.SystemSettings) adminapi.SystemSettings {
+	editable := true
+	registration := adminapi.SystemSettingsRegistration(v.Registration)
+	return adminapi.SystemSettings{Name: &v.Name, Registration: &registration, NameEditable: &editable}
 }
 
 func (a adminAPI) SetSystemSettings(ctx context.Context, r adminapi.SetSystemSettingsRequestObject) (adminapi.SetSystemSettingsResponseObject, error) {
@@ -47,7 +56,7 @@ func (a adminAPI) SetSystemSettings(ctx context.Context, r adminapi.SetSystemSet
 		if err != nil {
 			return adminapi.SystemSettings{}, err
 		}
-		return adminJSON[adminapi.SystemSettings](saved)
+		return adminJSON[adminapi.SystemSettings](adminSystemSettings(saved))
 	})
 	if err != nil {
 		return nil, err

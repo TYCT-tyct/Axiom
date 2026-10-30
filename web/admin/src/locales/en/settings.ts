@@ -148,6 +148,7 @@ export default {
     save: "Save name",
     saved: "The site name is saved.",
     invalidName: "Enter a name of 1 to 100 characters.",
+    oldNode: "This node cannot save a name on its own yet. Rename after it is upgraded.",
   },
   mail: {
     title: "Mail",

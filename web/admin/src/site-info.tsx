@@ -10,17 +10,21 @@ import { systemSettingsQuery } from "./queries";
 
 type Settings = AdminSchemas["SystemSettingsUpdate"]["settings"];
 
-// siteSettingsInput carries the stored registration mode for the values an older node's contract requires. New nodes
-// accept an omitted mode, which is how an open site stays open: open cannot be sent to the system-settings operation.
-export function siteSettingsInput(
-  name: string,
-  registration: AdminSchemas["SystemSettings"]["registration"],
-): Settings {
-  return registration === "invite" || registration === "closed" ? { name, registration } : { name };
+// siteSettingsInput is only the name: the operation keeps whatever registration mode is current when it writes, under
+// the site row lock, so a mode another administrator changed while this form was open is not put back. Sending the mode
+// read with the form would overwrite that change; an older node therefore refuses a name-only save rather than risking
+// it, and the dialog says so.
+export function siteSettingsInput(name: string): Settings {
+  return { name };
 }
 
-// The site's name. The registration mode is edited on the registration card, which knows all three values; when the
-// stored mode is invite or closed it is sent back because an older node requires it, and open is left out.
+// nameEditable is the capability a node of this release reports; an older node omits it, and the page then leaves the
+// name read-only rather than sending a registration mode it read earlier.
+export function nameEditable(view: AdminSchemas["SystemSettings"]): boolean {
+  return view.name_editable === true;
+}
+
+// The site's name. The registration mode is edited on the registration card, which knows all three values.
 export function SiteInformation({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const settings = useQuery(systemSettingsQuery(siteId));
   return <DataState query={settings}>{(view) => <Card siteId={siteId} view={view} />}</DataState>;
@@ -29,19 +33,23 @@ export function SiteInformation({ siteId }: { siteId: AdminSchemas["SiteId"] }) 
 function Card({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: AdminSchemas["SystemSettings"] }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const editable = nameEditable(view);
   return (
     <>
       <Facts
         title={t("settings.site.title")}
         rows={[[t("settings.site.name"), view.name ?? "—"]]}
         action={
-          <Button size="md" onClick={() => setOpen(true)}>
-            <Icon name="pencil" />
-            {t("settings.site.edit")}
-          </Button>
+          editable ? (
+            <Button size="md" onClick={() => setOpen(true)}>
+              <Icon name="pencil" />
+              {t("settings.site.edit")}
+            </Button>
+          ) : undefined
         }
       />
-      {open ? <EditDialog siteId={siteId} view={view} onClose={() => setOpen(false)} /> : null}
+      {editable ? null : <p className="text-t2">{t("settings.site.oldNode")}</p>}
+      {editable && open ? <EditDialog siteId={siteId} view={view} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }
@@ -79,7 +87,7 @@ function EditDialog({
           return { problem: t("settings.site.invalidName") };
         }
         // The operation keeps the registration mode when it is omitted, so open sites keep open registration.
-        return siteSettingsInput(name, view.registration);
+        return siteSettingsInput(name);
       }}
       send={(settings, { reason, key }) =>
         unwrapChange(
