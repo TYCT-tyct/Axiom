@@ -10,17 +10,74 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 const keyFileVariable = "AXIOM_MASTER_KEY_FILE"
 
-// Keyring is immutable after Load so encryption and decryption can share it across goroutines.
-type Keyring struct {
+// keySnapshot is one immutable file read. The maps are read-only after construction, so a snapshot can be shared with
+// concurrent seals and opens while a later read replaces it.
+type keySnapshot struct {
 	keys         map[uint32]cipher.AEAD
 	latest       uint32
 	fingerprints map[uint32][32]byte
+	// confirmed is the non-retired version set the database has checked against this snapshot's fingerprints. A failed
+	// add can leave a version in the file that the database never registered, and another node may later register the
+	// same number with different material; the file still holds the orphan, but it must not be reported to the cluster
+	// as a version this node can read.
+	confirmed []uint32
+}
+
+// Keyring is a handle to an immutable snapshot. A running node replaces the snapshot after it reloads the distribution
+// file, so every seal, open, rewrap and heartbeat report sees one whole ring and never a half-applied version set; callers
+// keep this handle for the life of the process.
+type Keyring struct {
+	state atomic.Pointer[keySnapshot]
+}
+
+func (k *Keyring) snapshot() *keySnapshot {
+	s := k.state.Load()
+	if s == nil {
+		// No caller may use a ring it did not load; a panic here names that bug instead of a nil dereference deeper in.
+		panic("secret: a key ring must be loaded before use")
+	}
+	return s
+}
+
+// install replaces the ring atomically. A call already using the old snapshot keeps reading it until it returns.
+func (k *Keyring) install(s *keySnapshot) { k.state.Store(s) }
+
+// Report is the heartbeat's view of the ring from one snapshot: the versions the database confirmed this node holds,
+// oldest first, and the one it writes. Both fields come from the same install, so a reload between them cannot report a
+// version set that never existed. A version left in the file by a failed add, or one whose fingerprint does not match
+// the registration, is not reportable: activation must wait until this node can actually read the registered version.
+// A ring that has not completed Check or Refresh reports nothing, because the file alone does not prove the database
+// accepted it. It carries identifiers only, never material.
+func (k *Keyring) Report() (versions []uint32, active uint32) {
+	s := k.snapshot()
+	if s.confirmed == nil {
+		return nil, 0
+	}
+	return slices.Clone(s.confirmed), s.latest
+}
+
+// withActive copies the snapshot with another write version. The maps are shared, so the copy costs no key material.
+func (s *keySnapshot) withActive(active uint32) *keySnapshot {
+	copied := *s
+	copied.latest = active
+	return &copied
+}
+
+// withConfirmed copies the snapshot with the versions the database checked against its fingerprints. The write version
+// is installed separately by the caller, from the same check, so Report never pairs them across checks.
+func (s *keySnapshot) withConfirmed(versions []uint32) *keySnapshot {
+	copied := *s
+	copied.confirmed = slices.Clone(versions)
+	slices.Sort(copied.confirmed)
+	return &copied
 }
 
 // MasterKeys is one read of the master key file. The ring a node checks and seals with and the login and mail keys
@@ -43,22 +100,43 @@ func LoadMaster(path string) (*MasterKeys, error) {
 // Keyring is the ring these keys make, with the file's highest version as the legacy write version. A database-backed
 // node must use Rotation.CheckRing before sealing: the database's active version overrides this legacy default.
 func (m *MasterKeys) Keyring() *Keyring {
-	ring := &Keyring{keys: make(map[uint32]cipher.AEAD, len(m.keys)), latest: m.latest, fingerprints: make(map[uint32][32]byte, len(m.keys))}
-	for version, key := range m.keys {
-		ring.keys[version] = newGCM(key[:])
-		ring.fingerprints[version] = sha256.Sum256(key[:])
-	}
+	ring := &Keyring{}
+	ring.state.Store(newSnapshot(m.keys, m.latest))
 	return ring
 }
 
 // Load validates the entire file and uses its legacy highest write version. A database-backed node must use
 // Rotation.Check before sealing: the database's active version overrides this legacy default.
 func Load(path string) (*Keyring, error) {
-	keys, err := LoadMaster(path)
+	snapshot, err := loadSnapshot(path)
 	if err != nil {
 		return nil, err
 	}
-	return keys.Keyring(), nil
+	ring := &Keyring{}
+	ring.state.Store(snapshot)
+	return ring, nil
+}
+
+// loadSnapshot reads and parses the file without a ring handle, for callers that replace a live ring.
+func loadSnapshot(path string) (*keySnapshot, error) {
+	keys, latest, err := readKeyFile(keyFileVariable, path)
+	if err != nil {
+		return nil, err
+	}
+	return newSnapshot(keys, latest), nil
+}
+
+func newSnapshot(keys map[uint32][32]byte, latest uint32) *keySnapshot {
+	snapshot := &keySnapshot{
+		keys:         make(map[uint32]cipher.AEAD, len(keys)),
+		latest:       latest,
+		fingerprints: make(map[uint32][32]byte, len(keys)),
+	}
+	for version, key := range keys {
+		snapshot.keys[version] = newGCM(key[:])
+		snapshot.fingerprints[version] = sha256.Sum256(key[:])
+	}
+	return snapshot
 }
 
 // LoadSecret reads the file variable names, in the keyring's format and with its protection, and returns the newest

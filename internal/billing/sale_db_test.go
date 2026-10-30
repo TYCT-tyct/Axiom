@@ -99,6 +99,8 @@ func (f *snapshotter) snapshot() *catalog.Snapshot {
 
 // TestProposalsSelectRules exercises the production proposal path, including cost-plus and refusals.
 func TestProposalsSelectRules(t *testing.T) {
+	t.Parallel()
+
 	f := newSnapshotter(t)
 	id := f.model("acme/priced")
 	snap := f.snapshot()

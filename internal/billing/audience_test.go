@@ -22,6 +22,8 @@ func (f *priceFixture) published() Sold {
 }
 
 func TestAudiencePricesAndRetirement(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	account := accounts.AccountID(uuid.UUID{15: 1})
 	tier := accounts.TierID(uuid.UUID{15: 1})
@@ -83,6 +85,8 @@ func TestAudiencePricesAndRetirement(t *testing.T) {
 }
 
 func TestAudienceFloorAndConfirmation(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	account := accounts.AccountID(uuid.UUID{15: 1})
 	a := Audience{Account: account}
@@ -132,6 +136,8 @@ func TestAudienceFloorAndConfirmation(t *testing.T) {
 }
 
 func TestLegacyRulesCanAlwaysBeRetired(t *testing.T) {
+	t.Parallel()
+
 	for _, change := range []func(*RuleInput){
 		func(in *RuleInput) { in.Target = Selector{Kind: "endpoint", ID: model} },
 		func(in *RuleInput) { v := "0.2"; in.Constraints.MinMarginRatio = &v },
@@ -168,6 +174,8 @@ func TestLegacyRulesCanAlwaysBeRetired(t *testing.T) {
 }
 
 func TestAudienceSelectorEditRetiresOldPublication(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	f.catalog.model("acme/other-audience")
 	oldTier := accounts.TierID(uuid.UUID{15: 1})
@@ -200,6 +208,8 @@ func TestAudienceSelectorEditRetiresOldPublication(t *testing.T) {
 }
 
 func TestLegacyRetirementIgnoresJSONFormatting(t *testing.T) {
+	t.Parallel()
+
 	before := Rule{RuleInput: rule(Selector{Kind: "endpoint", ID: model}, Method{Kind: "fixed", Schedule: jsonx.Raw(`{ "v": 1, "currency": "USD", "rates": { "output": "0.000004", "input": "0.000002" } }`)})}
 	in := before.RuleInput
 	in.Enabled = false
@@ -210,6 +220,8 @@ func TestLegacyRetirementIgnoresJSONFormatting(t *testing.T) {
 }
 
 func TestPendingAudienceTargetKeepsPublishedPrecedence(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	account := accounts.AccountID(uuid.UUID{15: 1})
 	in := rule(Selector{Kind: "all"}, faced("3"))
@@ -230,6 +242,8 @@ func TestPendingAudienceTargetKeepsPublishedPrecedence(t *testing.T) {
 }
 
 func TestAudienceLocalCostGuardDoesNotFallBack(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	f.multiplier("3")
 	account := accounts.AccountID(uuid.UUID{15: 1})
@@ -255,6 +269,8 @@ func TestAudienceLocalCostGuardDoesNotFallBack(t *testing.T) {
 }
 
 func TestDefaultAudiencePreservesLegacyCandidate(t *testing.T) {
+	t.Parallel()
+
 	model := catalog.Model{ID: catalog.ModelID(uuid.NewV7()), Slug: "acme/legacy", Author: "acme"}
 	rules := []Rule{{ID: uuid.NewV7(), RuleInput: rule(Selector{Kind: "all"}, Method{Kind: "fixed", Schedule: jsonx.Raw(fixedUS)})}}
 	costs := []PriceCost{priceCost(t, model.ID, "0.0000005")}
@@ -273,6 +289,8 @@ func TestDefaultAudiencePreservesLegacyCandidate(t *testing.T) {
 }
 
 func TestAudienceAvailabilityRequiresASelectablePrice(t *testing.T) {
+	t.Parallel()
+
 	safe := Sold{Version: uuid.NewV7()}
 	table := Sold{Audiences: CompilePrices([]AudiencePrice{
 		{Target: Selector{Kind: "model"}},

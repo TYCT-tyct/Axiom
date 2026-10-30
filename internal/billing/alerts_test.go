@@ -20,6 +20,8 @@ import (
 // TestSettleFloor) is logged at error with the request, the price, what was charged and what the platform bore, and
 // counted with the amount; a settlement the account paid in full is neither.
 func TestThePlatformBearingASettlementIsReported(t *testing.T) {
+	t.Parallel()
+
 	tel, err := telemetry.New()
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +62,8 @@ func TestThePlatformBearingASettlementIsReported(t *testing.T) {
 // so the ones after it must still be taken over, the failure reported with the request; a sweep that can clean nothing
 // more ends rather than trying the same again.
 func TestCleanupGoesPastAReservationThatFails(t *testing.T) {
+	t.Parallel()
+
 	logs := &telemetrytest.Buffer{}
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, Logger: logs.Logger()})
 	holds := []*Hold{b.hold(1000), b.hold(1000)}
@@ -109,6 +113,8 @@ func failingBacklog(b *bank, n int) (healthy *Hold) {
 // past them, so a healthy reservation behind a backlog larger than the budget is reached within ceil(rank/budget)
 // calls (here 4 failing + 1 healthy, budget 2: the third call), and a call after the scan's end starts over.
 func TestCleanupReachesPastABacklogOfFailures(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 20_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	healthy := failingBacklog(b, 4)
 	var after uuid.UUID
@@ -134,6 +140,8 @@ func TestCleanupReachesPastABacklogOfFailures(t *testing.T) {
 
 // TestCleanupCapsItsFailureReport: the error of a call keeps the first failures and counts the rest.
 func TestCleanupCapsItsFailureReport(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 20_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	failingBacklog(b, reportedFailures+2)
 	_, err := b.billing.Cleanup(t.Context(), reportedFailures+2)
@@ -145,6 +153,8 @@ func TestCleanupCapsItsFailureReport(t *testing.T) {
 // TestCleanupSaysWhenItWasCut: a call whose ctx ended returns the cause, wrapped, and the count so far, whether the ctx
 // ended before the call or while a reservation was being taken over.
 func TestCleanupSaysWhenItWasCut(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 20_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	b.hold(1000)
 	b.hold(1000)
@@ -166,6 +176,8 @@ func TestCleanupSaysWhenItWasCut(t *testing.T) {
 // TestCleanupReportsWhatItReleases: a reservation cleanup gives back without a settlement is logged with its amount,
 // because any usage of the call is the platform's.
 func TestCleanupReportsWhatItReleases(t *testing.T) {
+	t.Parallel()
+
 	logs := &telemetrytest.Buffer{}
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond, Logger: logs.Logger()})
 	h := b.hold(1000)
@@ -181,6 +193,8 @@ func TestCleanupReportsWhatItReleases(t *testing.T) {
 // as a call whose client went before any upstream was called does: it never reached one, so nothing can be charged to it
 // and the request is no longer lost, though the reservation stays as cleanup left it.
 func TestALateSettlementWithoutAttemptsAnswersTheLostRequest(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	h := b.hold(1000)
 	b.takenOver(h)
@@ -207,6 +221,8 @@ func (b *bank) unbalance() uuid.UUID {
 // TestTheReconciliationReportsWhatItRefuses: a ledger that balances is silent and counts nothing; a transaction whose
 // entries do not balance is an error in the log naming it, and counted.
 func TestTheReconciliationReportsWhatItRefuses(t *testing.T) {
+	t.Parallel()
+
 	tel, err := telemetry.New()
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +255,8 @@ func TestTheReconciliationReportsWhatItRefuses(t *testing.T) {
 // TestTheReconciliationRunsOnTheQueue: registered on a queue, it runs when the queue starts, without anyone asking, and
 // reports from the worker the queue gives it.
 func TestTheReconciliationRunsOnTheQueue(t *testing.T) {
+	t.Parallel()
+
 	logs := &telemetrytest.Buffer{}
 	b := newBank(t, 10_000, 0, Config{})
 	id := b.unbalance()
