@@ -14,6 +14,9 @@ type Record struct {
 	Excluded        []Excluded
 	Route           []EndpointID
 	Attempts        []Attempt
+	// Unmeasured: the request asked for the fastest endpoint first and none of its candidates is measured, so the route
+	// is in Balanced's price-weighted order and says nothing about speed (docs/domains/routing.md「排序的先后」).
+	Unmeasured bool
 }
 
 // Attempt is one try at an endpoint.
@@ -28,6 +31,7 @@ type Attempt struct {
 // recorded, JSON-ready: the identifiers as text, the reasons by name.
 type recordJSON struct {
 	BreakerFallback []string       `json:"breaker_open_fallback,omitzero"`
+	Unmeasured      bool           `json:"fastest_unmeasured,omitzero"`
 	Excluded        []excludedJSON `json:"excluded"`
 	Route           []string       `json:"route"`
 	Attempts        []attemptJSON  `json:"attempts"`
@@ -48,7 +52,7 @@ type attemptJSON struct {
 
 // JSON writes the record in its stored form.
 func (r Record) JSON() ([]byte, error) {
-	w := recordJSON{Excluded: []excludedJSON{}, Route: []string{}, Attempts: []attemptJSON{}}
+	w := recordJSON{Unmeasured: r.Unmeasured, Excluded: []excludedJSON{}, Route: []string{}, Attempts: []attemptJSON{}}
 	for _, e := range r.Excluded {
 		x := excludedJSON{Reason: e.Reason.String()}
 		if e.Endpoint != (EndpointID{}) {

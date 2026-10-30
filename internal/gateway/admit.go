@@ -29,9 +29,13 @@ var errCommitUnknown = errors.New("gateway: the admission's commit was not ackno
 // redoes only this step: the body was read once and the rate counted once.
 func (h *Handler) admit(ctx context.Context, c *Call) error {
 	var deadline time.Time // fixed when the call first queues: the limit is on all its waits together
+	var woken relay
 	for {
 		epoch := h.Limits.Queue.Epoch() // before the load is looked at, so a slot freed meanwhile is not missed
 		err := h.admitOnce(ctx, c)
+		if err != nil {
+			h.Limits.Queue.Pass(woken) // not admitted: the slot it was woken for is the next waiter's to try
+		}
 		wait, ok := errors.AsType[*errWait](err)
 		if !ok {
 			return err
@@ -39,7 +43,7 @@ func (h *Handler) admit(ctx context.Context, c *Call) error {
 		if deadline.IsZero() {
 			deadline = time.Now().Add(h.Limits.cfg.QueueWait)
 		}
-		if err := h.Limits.Queue.Wait(ctx, keyKey(c.caller), epoch, deadline); err != nil {
+		if woken, err = h.Limits.Queue.Wait(ctx, keyKey(c.caller), epoch, deadline); err != nil {
 			if limit, ok := errors.AsType[*Refusal](err); ok {
 				full := *limit
 				full.RetryAfter = seconds(wait.after)

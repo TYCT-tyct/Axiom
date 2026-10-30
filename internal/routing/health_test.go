@@ -2,6 +2,7 @@ package routing_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 	"uuid"
@@ -139,5 +140,26 @@ func TestLastResortPreservesRequestPriorities(t *testing.T) {
 				t.Fatalf("%s priority: %+v", tc, plan.Entries)
 			}
 		})
+	}
+}
+
+// TestFastestUnmeasuredAfterTheBreakers: when the only measured endpoint's breaker is open and unmeasured ones remain,
+// the route is ranked without any measurement, and the record says so.
+func TestFastestUnmeasuredAfterTheBreakers(t *testing.T) {
+	h := newHarness(t, routing.Config{MaxStale: time.Hour}, fastestPreset())
+	m := routingHealth(t, h)
+	a, b := endpoint(t, 1, speed(100, time.Second)), endpoint(t, 2, unmeasured)
+	a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
+	h.replace(fastestPreset(), a, b)
+	if h.plan(input()).Record.Unmeasured {
+		t.Fatal("marked unmeasured while a measured endpoint is in the route")
+	}
+	trip(t, m, 1, h.now)
+	p := h.plan(input())
+	if got := endpoints(p); !slices.Equal(got, []routing.EndpointID{ep(2)}) {
+		t.Fatalf("route %v, want only the unmeasured endpoint", got)
+	}
+	if !p.Record.Unmeasured {
+		t.Error("the route left with only unmeasured endpoints is not marked")
 	}
 }
