@@ -85,10 +85,13 @@ rm -f "$work/keys.tar"
 } >"$work/manifest.txt"
 
 root="$(object_prefix "$set_name")"
+# A 5 GiB dump over a 2 MiB/s link needs about 43 minutes; the CLI default is 30 minutes for interactive use, so the
+# unattended job gets a larger, still finite limit. The value is validated by the command.
+transfer_timeout=${AXIOM_BACKUP_TRANSFER_TIMEOUT:-12h}
 for file in db.dump.age deploy.env.age keys.tar.age manifest.txt; do
   content_type=application/octet-stream
   [ "$file" != manifest.txt ] || content_type=text/plain
-  axiom objectstore put --key "$root$file" --file "$work/$file" --content-type "$content_type" >/dev/null ||
+  axiom objectstore put --timeout "$transfer_timeout" --key "$root$file" --file "$work/$file" --content-type "$content_type" >/dev/null ||
     die "cannot upload $root$file"
 done
 log "uploaded $root"

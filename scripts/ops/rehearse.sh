@@ -190,10 +190,15 @@ compose run --rm --no-deps axiom site init --name Rehearsal --currency USD \
   --console console.rehearsal.example --api api.rehearsal.example --admin admin.rehearsal.example
 printf '%s\n' "$(openssl rand -hex 16)" | compose run --rm --no-deps -T axiom user create --email owner@rehearsal.example
 # A non-default policy, so the comparison has business content to preserve rather than an empty table that the program
-# fills with its default on the first start after the restore.
+# fills with its default on the first start after the restore. The startup's pricing job may have inserted the default
+# already, so replace its values instead of racing it with a second row.
 compose exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres -d axiom <<'SQL'
 INSERT INTO billing.price_policies(site_id, floor_multiplier, change_ratio, max_increase_ratio)
-SELECT id, '1.25', '0.10', '0.50' FROM accounts.sites;
+SELECT id, '1.25', '0.10', '0.50' FROM accounts.sites
+ON CONFLICT (site_id) DO UPDATE SET
+  floor_multiplier = EXCLUDED.floor_multiplier,
+  change_ratio = EXCLUDED.change_ratio,
+  max_increase_ratio = EXCLUDED.max_increase_ratio;
 SQL
 
 # The fingerprint reader also returns each table's row count, which is the evidence that the seed went in and came back;

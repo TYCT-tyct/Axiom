@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"axiom/internal/platform/objectstore"
 )
@@ -24,6 +25,7 @@ type commandStore struct {
 	objects map[string][]byte
 	bucket  bool
 	created int
+	delay   time.Duration
 }
 
 // writeTest is a test handler's write: the client on the other end failing is the test's own failure to report.
@@ -31,9 +33,18 @@ func writeTest(w io.Writer, value string) {
 	_, _ = io.WriteString(w, value) //nolint:errcheck // a test handler's write
 }
 
+func (s *commandStore) createdCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.created
+}
+
 func (s *commandStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
 	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/axiom"), "/")
 	if r.Method == http.MethodHead && key == "" {
 		if !s.bucket {
@@ -92,6 +103,48 @@ func commandEnv(server string) []string {
 		"AXIOM_OBJECTSTORE_BUCKET=axiom",
 		"AXIOM_OBJECTSTORE_ACCESS_KEY_ID=AKIAEXAMPLE",
 		"AXIOM_OBJECTSTORE_SECRET_ACCESS_KEY=secret",
+	}
+}
+
+func TestObjectstoreCommandTransferTimeoutReachesTheTransfer(t *testing.T) {
+	store := &commandStore{objects: map[string][]byte{"g": []byte("x")}, bucket: true, delay: 150 * time.Millisecond}
+	server := httptest.NewServer(store)
+	defer server.Close()
+	environ := commandEnv(server.URL)
+	dir := t.TempDir()
+	upload := filepath.Join(dir, "upload.bin")
+	if err := os.WriteFile(upload, []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"put too short", []string{"put", "--timeout", "20ms", "--key", "p", "--file", upload}},
+		{"get too short", []string{"get", "--timeout", "20ms", "--key", "g", "--file", filepath.Join(dir, "short")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := objectstoreCommand(t.Context(), environ, tc.args, io.Discard); err == nil {
+				t.Fatal("the transfer outlived its deadline")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"put with enough time", []string{"put", "--timeout", "2s", "--key", "p", "--file", upload}},
+		{"get with enough time", []string{"get", "--timeout", "2s", "--key", "g", "--file", filepath.Join(dir, "long")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := objectstoreCommand(t.Context(), environ, tc.args, &out); err != nil {
+				t.Fatalf("objectstore %v: %v", tc.args, err)
+			}
+		})
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "long")); err != nil || string(got) != "x" {
+		t.Fatalf("downloaded %q, %v", got, err)
 	}
 }
 
@@ -154,8 +207,8 @@ func TestObjectstoreCommandCreatesListsNamesAndDeletesAPrefix(t *testing.T) {
 	if got := run("create"); !strings.Contains(got, `"created":true`) {
 		t.Fatalf("create printed %q", got)
 	}
-	if store.created != 1 {
-		t.Fatalf("the server saw %d bucket creations, want 1", store.created)
+	if got := store.createdCount(); got != 1 {
+		t.Fatalf("the server saw %d bucket creations, want 1", got)
 	}
 	if err := objectstoreCommand(t.Context(), environ, []string{"create"}, io.Discard); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("create on an existing bucket = %v, want a refusal", err)

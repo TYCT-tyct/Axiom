@@ -65,6 +65,35 @@ require_objectstore_env() {
   fi
 }
 
+# validate_keys_archive PATH: the key ring archive is fetched from the bucket, so a writer there can substitute a tar
+# encrypted to the public recipient. Accept exactly the three regular files the backup writes, with no link or special
+# member, before tar is allowed to extract as root.
+validate_keys_archive() {
+  local archive=$1 name type line count=0 seen=" "
+  local -a listing
+  mapfile -t listing < <(tar -tvf "$archive")
+  for line in "${listing[@]}"; do
+    # BusyBox tar prints a hard link as a regular mode followed by " -> target", so the type character alone would
+    # let one through; GNU tar prints a link with type h or l. Both forms are refusals here.
+    case $line in
+    *" -> "*) die "keys.tar contains a link, not a regular file" ;;
+    esac
+    type=${line:0:1}
+    name=${line##* }
+    [ "$type" = "-" ] || die "keys.tar contains $name of type $type, not a regular file"
+    case $name in
+    master | hash | identity) ;;
+    *) die "keys.tar contains $name, not just the key ring" ;;
+    esac
+    case " $seen " in
+    *" $name "*) die "keys.tar contains $name twice" ;;
+    esac
+    seen="$seen$name "
+    count=$((count + 1))
+  done
+  [ "$count" -eq 3 ] || die "keys.tar has $count entries, want master, hash and identity"
+}
+
 # require_prefix: every key the backup writes starts with AXIOM_BACKUP_PREFIX, and an empty or absolute key would put
 # the sets somewhere else than the operator named.
 require_prefix() {

@@ -62,6 +62,36 @@ func (f *fakeS3) body(key string) string {
 	return string(f.objects[key])
 }
 
+func (f *fakeS3) createdCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.created
+}
+
+func (f *fakeS3) creationBody() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.createBody
+}
+
+func (f *fakeS3) abortCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.aborted)
+}
+
+func (f *fakeS3) aborts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.aborted...)
+}
+
+func (f *fakeS3) uploadCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.uploads)
+}
+
 //nolint:cyclop // a tiny S3 double: one branch per method and failure switch
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
@@ -554,8 +584,8 @@ func TestPutAboveTheThresholdUsesParts(t *testing.T) {
 	if got := fake.body("archive.bin"); got != "abcdefghij" {
 		t.Fatalf("stored %q, want abcdefghij", got)
 	}
-	if len(fake.uploads) != 0 {
-		t.Fatalf("the upload survived completion: %v", fake.uploads)
+	if fake.uploadCount() != 0 {
+		t.Fatalf("the upload survived completion")
 	}
 	paths := strings.Join(fake.seen(), "\n")
 	for _, want := range []string{"?uploads=", "partNumber=1&uploadId=upload-1", "partNumber=3&uploadId=upload-1", "uploadId=upload-1"} {
@@ -584,11 +614,11 @@ func TestMultipartAbortsWhenAPartKeepsFailing(t *testing.T) {
 	if err == nil {
 		t.Fatal("a failing part was accepted")
 	}
-	if len(fake.aborted) != 1 || fake.aborted[0] != "upload-1" {
-		t.Fatalf("aborted = %v, want upload-1", fake.aborted)
+	if got := fake.aborts(); len(got) != 1 || got[0] != "upload-1" {
+		t.Fatalf("aborted = %v, want upload-1", got)
 	}
-	if len(fake.uploads) != 0 {
-		t.Fatalf("the failed upload survived: %v", fake.uploads)
+	if fake.uploadCount() != 0 {
+		t.Fatalf("the failed upload survived")
 	}
 	partAttempts := 0
 	for _, path := range fake.seen() {
@@ -608,8 +638,8 @@ func TestMultipartAbortsWhenCompletionFails(t *testing.T) {
 	if _, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefghij"), Size: 10}); err == nil {
 		t.Fatal("a failing completion was accepted")
 	}
-	if len(fake.aborted) != 1 {
-		t.Fatalf("aborted = %v, want one abort", fake.aborted)
+	if got := fake.aborts(); len(got) != 1 {
+		t.Fatalf("aborted = %v, want one abort", got)
 	}
 }
 
@@ -622,8 +652,8 @@ func TestMultipartRejectsATwoHundredErrorDocument(t *testing.T) {
 	if !errors.As(err, &remote) || remote.Code != "InternalError" {
 		t.Fatalf("err = %v, want the 200 Error document", err)
 	}
-	if len(fake.aborted) != 1 {
-		t.Fatalf("aborted = %v, want one abort", fake.aborted)
+	if got := fake.aborts(); len(got) != 1 {
+		t.Fatalf("aborted = %v, want one abort", got)
 	}
 }
 
@@ -638,8 +668,8 @@ func TestMultipartRetriesA200ErrorDocument(t *testing.T) {
 	if info.ETag != `"complete"` || fake.body("k") != "abcdefghij" {
 		t.Fatalf("completed %+v with %q", info, fake.body("k"))
 	}
-	if len(fake.aborted) != 0 {
-		t.Fatalf("aborted a retry that succeeded: %v", fake.aborted)
+	if fake.abortCount() != 0 {
+		t.Fatalf("aborted a retry that succeeded")
 	}
 }
 
@@ -650,7 +680,7 @@ func TestMultipartRejectsACompletionWithoutAnETag(t *testing.T) {
 	if _, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefghij"), Size: 10}); err == nil {
 		t.Fatal("a completion without an ETag was accepted")
 	}
-	if len(fake.aborted) == 0 {
+	if fake.abortCount() == 0 {
 		t.Fatal("the failed upload was not aborted")
 	}
 }
@@ -680,8 +710,8 @@ func TestCreateBucketIsIdempotent(t *testing.T) {
 	if err != nil || created {
 		t.Fatalf("Create on an existing bucket = %v, %v; want false, nil", created, err)
 	}
-	if fake.created != 1 {
-		t.Fatalf("created %d times, want one PUT and a HEAD on the second call", fake.created)
+	if got := fake.createdCount(); got != 1 {
+		t.Fatalf("created %d times, want one PUT and a HEAD on the second call", got)
 	}
 }
 
@@ -694,8 +724,8 @@ func TestCreateAcceptsAnOwnedBucketFromTheConflictCode(t *testing.T) {
 	if err != nil || created {
 		t.Fatalf("Create on a bucket owned by these credentials = %v, %v; want false, nil", created, err)
 	}
-	if fake.created != 1 {
-		t.Fatalf("created %d times, want one PUT", fake.created)
+	if got := fake.createdCount(); got != 1 {
+		t.Fatalf("created %d times, want one PUT", got)
 	}
 }
 
@@ -719,11 +749,12 @@ func TestCreateSendsTheRegionOutsideUsEast(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("Create = %v, %v; want a new bucket", created, err)
 	}
-	if !strings.Contains(fake.createBody, "<LocationConstraint>eu-west-1</LocationConstraint>") {
-		t.Fatalf("create body = %q, want the region's LocationConstraint", fake.createBody)
+	body := fake.creationBody()
+	if !strings.Contains(body, "<LocationConstraint>eu-west-1</LocationConstraint>") {
+		t.Fatalf("create body = %q, want the region's LocationConstraint", body)
 	}
-	if !strings.Contains(fake.createBody, `xmlns="http://s3.amazonaws.com/doc/2006-03-01/"`) {
-		t.Fatalf("create body = %q, want the S3 namespace", fake.createBody)
+	if !strings.Contains(body, `xmlns="http://s3.amazonaws.com/doc/2006-03-01/"`) {
+		t.Fatalf("create body = %q, want the S3 namespace", body)
 	}
 }
 

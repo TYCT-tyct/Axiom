@@ -14,13 +14,14 @@ import (
 	"axiom/internal/platform/objectstore"
 )
 
-const objectstoreUsage = "usage: axiom objectstore create [--allow-existing] | check | list [--prefix P] [--names] | put --key K --file F [--content-type T] | get --key K --file F | delete (--key K | --prefix P)"
+const objectstoreUsage = "usage: axiom objectstore create [--allow-existing] | check | list [--prefix P] [--names] | put --key K --file F [--content-type T] [--timeout D] | get --key K --file F [--timeout D] | delete (--key K | --prefix P)"
 
 // The command's deadlines: a check or one metadata call may wait out a slow bucket; a transfer may take as long as a
 // large archive needs, bounded so a stuck upload cannot live until the process is killed.
 const (
-	objectstoreMetaTimeout = 30 * time.Second
-	objectstoreMoveTimeout = 30 * time.Minute
+	objectstoreMetaTimeout     = 30 * time.Second
+	objectstoreMoveTimeout     = 30 * time.Minute
+	objectstoreTransferTimeout = 30 * time.Minute
 )
 
 // objectstoreCommand runs the operator's object-store verbs against AXIOM_OBJECTSTORE_*. It is how a deployment checks
@@ -59,6 +60,7 @@ func objectstoreCommand(ctx context.Context, environ, args []string, out io.Writ
 func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket, verb string, args []string, out io.Writer) error {
 	var key, file, prefix, contentType string
 	var names, allowExisting bool
+	timeout := objectstoreTransferTimeout
 	err := flags("objectstore "+verb, objectstoreUsage, args, func(set *flag.FlagSet) {
 		switch verb {
 		case "create":
@@ -67,9 +69,11 @@ func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket,
 			set.StringVar(&key, "key", "", "the object key to write")
 			set.StringVar(&file, "file", "", "the file to upload")
 			set.StringVar(&contentType, "content-type", "", "the object's content type; default application/octet-stream")
+			set.DurationVar(&timeout, "timeout", objectstoreTransferTimeout, "how long the whole transfer may take; e.g. 12h")
 		case "get":
 			set.StringVar(&key, "key", "", "the object key")
 			set.StringVar(&file, "file", "", "where to write the object")
+			set.DurationVar(&timeout, "timeout", objectstoreTransferTimeout, "how long the whole transfer may take; e.g. 12h")
 		case "delete":
 			set.StringVar(&key, "key", "", "the object key")
 			set.StringVar(&prefix, "prefix", "", "every object under this prefix")
@@ -105,9 +109,15 @@ func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket,
 		defer cancel()
 		return listObjects(ctx, client, prefix, names, out)
 	case "put":
-		return putObject(ctx, client, key, file, contentType, out)
+		if timeout <= 0 {
+			return errors.New("objectstore put: --timeout must be positive")
+		}
+		return putObject(ctx, client, key, file, contentType, timeout, out)
 	case "get":
-		return getObject(ctx, client, key, file, out)
+		if timeout <= 0 {
+			return errors.New("objectstore get: --timeout must be positive")
+		}
+		return getObject(ctx, client, key, file, timeout, out)
 	default:
 		switch {
 		case key != "" && prefix != "":
@@ -188,7 +198,7 @@ func listObjects(ctx context.Context, client *objectstore.Client, prefix string,
 	}
 }
 
-func putObject(ctx context.Context, client *objectstore.Client, key, path, contentType string, out io.Writer) error {
+func putObject(ctx context.Context, client *objectstore.Client, key, path, contentType string, timeout time.Duration, out io.Writer) error {
 	if key == "" || path == "" {
 		return errors.New("objectstore put: --key and --file are required\n" + objectstoreUsage)
 	}
@@ -201,7 +211,7 @@ func putObject(ctx context.Context, client *objectstore.Client, key, path, conte
 	if err != nil {
 		return fmt.Errorf("objectstore put: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, objectstoreMoveTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	stored, err := client.Put(ctx, objectstore.Upload{Key: key, Body: file, Size: info.Size(), ContentType: contentType})
 	if err != nil {
@@ -212,11 +222,11 @@ func putObject(ctx context.Context, client *objectstore.Client, key, path, conte
 
 // getObject writes through a temporary file in the destination's directory and renames it when complete, so a failed
 // download leaves no partial object at the path a caller was told to use.
-func getObject(ctx context.Context, client *objectstore.Client, key, path string, out io.Writer) error {
+func getObject(ctx context.Context, client *objectstore.Client, key, path string, timeout time.Duration, out io.Writer) error {
 	if key == "" || path == "" {
 		return errors.New("objectstore get: --key and --file are required\n" + objectstoreUsage)
 	}
-	ctx, cancel := context.WithTimeout(ctx, objectstoreMoveTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	object, err := client.Get(ctx, key)
 	if err != nil {
