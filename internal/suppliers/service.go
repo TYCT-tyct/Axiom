@@ -35,8 +35,12 @@ type EndpointID = uuid.UUID
 // upstream, the formats it speaks, the cost schedule it is priced by — already scaled by its group's ratio — and what
 // its supplier does with a stream (internal/suppliers/README.md「调用面」).
 type Routable struct {
-	Site, Account       uuid.UUID
-	Credentials         int
+	Site, Account uuid.UUID
+	Credentials   int
+	// Capacity reads the endpoint's live credential capacity where a route is planned: whether any credential can take
+	// another call now. A routing snapshot holds it, so a plan sees the slots as they are then and not as they were
+	// when the snapshot was built.
+	Capacity            *Capacity
 	Funds               *Funds
 	UnitValue           platform.UnitPrice
 	UnitValueID         uuid.UUID
@@ -402,8 +406,8 @@ func (s *Service) Routable() ([]Routable, error) {
 		policy := s.policy(ep)
 		out = append(out, Routable{
 			Site: ep.ownerSite, Account: ep.ownerAccount,
-			Credentials: s.availableCredentials(ep),
-			Funds:       ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
+			Credentials: s.availableCredentials(ep), Capacity: &Capacity{s: s, id: ep.id},
+			Funds: ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Codename: ep.codename, Formats: slices.Clone(ep.formats),
 			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
 		})

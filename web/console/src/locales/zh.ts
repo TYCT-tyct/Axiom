@@ -9,6 +9,8 @@ export default {
     empty: "暂无有效公告。",
   },
 
+  forbiddenHint: "请联系工作区的管理员。",
+
   nav: {
     overview: "概览",
     keys: "API key",

@@ -106,7 +106,7 @@ export default {
     failedAt: "Failed at {{time}}",
     retry: "Try again",
     forbiddenTitle: "No access",
-    forbiddenBody: "Your account can’t view this. Ask an admin of the workspace if you need it.",
+    forbiddenBody: "Your account can’t view this.",
     pageFailed: "This page didn’t load",
     pageFailedBody: "The network may have dropped, or Axiom was just updated. Reload the page to try again.",
     reload: "Reload page",

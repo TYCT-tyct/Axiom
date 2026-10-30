@@ -9,12 +9,17 @@ Invariants:
   later PR can fix what earlier ones broke together), so every PR of it is checked (open, queued, on the base, at the
   recorded head SHA) before the first merge, and if any fails nothing lands. Each PR merges only at that SHA
   (gh pr merge --match-head-commit).
-- Before each merge, the base's tree equals the train's tree just before that PR. A PR that changes after landing
-  began (a window of seconds), or a tree that does not match, leaves main on an untested state: the run stops with an
-  alarm and no train runs on that base until the train-alarm/<base>/* branch it leaves is deleted.
+- Landing first tries to fast-forward the base to the tested tip: one ref update, so main holds the whole train or none
+  of it. Each car is a merge of the PR's head carrying the PR's title (#N) and description, so main's first-parent
+  history keeps one commit per PR, and GitHub marks the PR merged because its head is now on main. The ruleset rejects
+  the push unless the train's token may bypass it; then the train squash-merges PR by PR as below.
+- Squash-merging PR by PR: before each merge, the base's tree equals the train's tree just before that PR. A PR that
+  changes after landing began (a window of seconds), or a tree that does not match, leaves main on an untested state:
+  the run stops with an alarm and no train runs on that base until the train-alarm/<base>/* branch it leaves is deleted.
 - Landing is resumable: the verified train is kept as the branch train/<base>/land, whose first-parent merges record
-  each PR and its SHA, with the status train/verified on its tip. It is deleted only after every PR landed and main's
-  own build was dispatched, so a run that finds it lands what is not yet merged, or only dispatches that build.
+  each PR, its SHA and the train's base in a Train trailer, with the status train/verified on its tip. It is deleted
+  only after every PR landed and main's own build was dispatched, so a run that finds it lands what is not yet merged,
+  or only dispatches that build.
 - No PR code runs here: assembly only merges commits; the builds are separate ci.yml runs on the train branches,
   dispatched with inputs.base, so ci.yml's own md-only, deploy and bench rules see the train's whole change.
 
@@ -44,7 +49,8 @@ BUILD_JOB = "build"  # ci.yml's aggregator job, the required check; a failing pa
 TEST_JOB = "go-test"  # ci.yml's job for `just test`, the only one whose log names a flaky Go test
 VERIFIED = "train/verified"  # on train/<base>/land: the prefix passed and may be landed
 FLAKY = ".github/flaky.toml"
-SUBJECT = re.compile(r"train: #(\d+) ([0-9a-f]{40})$")
+TRAILER = re.compile(r"#(\d+) ([0-9a-f]{40}) on ([0-9a-f]{40})$")  # the Train trailer of each car of a train
+RECORD = "--format=%H %(trailers:key=Train,valueonly,separator=%x20)"  # the git log format train_record parses
 STAMP = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")  # the timestamp on every line of an Actions job log
 GREEN = {"success", "skipped", "neutral"}  # a skipped required check counts as passed on GitHub too
 SESSION_LINK = "https://claude.ai/code/session_"
@@ -58,6 +64,7 @@ class Entry:
     number: int
     sha: str
     title: str = ""
+    body: str = ""
 
 
 @dataclass(frozen=True)
@@ -179,16 +186,24 @@ def squash_body(body):
     return "\n".join(line for line in (body or "").splitlines() if not line.startswith(SESSION_LINK))
 
 
+def car_message(entry, base):
+    """A car's commit message: the PR's squash message, then the trailer the landing record is read back from."""
+    return f"{entry.title} (#{entry.number})\n\n{squash_body(entry.body)}\n\nTrain: #{entry.number} {entry.sha} on {base}"
+
+
 def train_record(log):
-    """Parse `git log --first-parent --format=%H %s` of a train tip into (cars in order, base)."""
+    """Parse `git log --first-parent RECORD` of a train tip into (cars in order, base). The walk stops at the base its
+    cars name, not at the first commit without a trailer: a fast-forwarded train leaves cars with trailers on main."""
     cars, base = [], None
     for line in log.splitlines():
-        commit, _, subject = line.partition(" ")
-        if match := SUBJECT.match(subject):
-            cars.append(Car(Entry(int(match[1]), match[2]), commit))
-        else:
-            base = commit
+        commit, _, trailer = line.partition(" ")
+        if commit == base:
             break
+        match = TRAILER.match(trailer)
+        if not match:
+            raise Abort(f"{commit[:7]} on the landing record carries no Train trailer")
+        base = match[3]
+        cars.append(Car(Entry(int(match[1]), match[2]), commit))
     return list(reversed(cars)), base
 
 
@@ -241,7 +256,7 @@ class Train:
     def queued(self):
         """Open PRs on the base with the queue label, in queue order."""
         prs = json.loads(sh("gh", "pr", "list", "-R", self.repo, "--state", "open", "--base", self.base, "--label", QUEUE,
-                            "--limit", "200", "--json", "number,headRefOid,labels,title,isDraft,isCrossRepository").stdout)
+                            "--limit", "200", "--json", "number,headRefOid,labels,title,body,isDraft,isCrossRepository").stdout)
         for pr in prs:
             pr["labels"] = [label["name"] for label in pr["labels"]]
             events = sh("gh", "api", "--paginate", f"repos/{self.repo}/issues/{pr['number']}/events?per_page=100", "--jq",
@@ -266,7 +281,7 @@ class Train:
                 continue
             if waiting:
                 log(f"#{pr['number']} would wait ({', '.join(waiting)}); a dry run takes it anyway")
-            entries.append(Entry(pr["number"], sha, pr["title"]))
+            entries.append(Entry(pr["number"], sha, pr["title"], pr["body"]))
         return entries
 
     def eject(self, entry, label, reason):
@@ -318,7 +333,7 @@ class Train:
                 log(f"#{entry.number} moved to {fetched[:7]} while the train was assembled; it waits for the next one")
                 continue
             before = git("rev-parse", "HEAD")
-            if conflicts := self.try_merge(entry.sha, f"train: #{entry.number} {entry.sha}\n\n{entry.title}"):
+            if conflicts := self.try_merge(entry.sha, car_message(entry, base)):
                 self.eject(entry, CONFLICT, "It conflicts with main or a PR ahead of it in the train:\n\n" + "\n".join(f"- `{f}`" for f in conflicts))
                 continue
             # Checked before migrations: a PR the train just squash-merged still lists its migrations as added
@@ -426,15 +441,45 @@ class Train:
         """Land train/<base>/land whole, skipping what an earlier run already merged. Return the new base commit, or None
         when nothing could land; raise Abort when it must stop, keeping the record unless main is now untested."""
         cars, trees = self.read_land_ref()
-        steps = [landing_step(car.entry, self.pr(car.entry.number), self.base) for car in cars]
-        landed, problem = landing_plan(steps)
-        if problem and not landed:
-            log(f"nothing lands: #{cars[steps.index(problem)].entry.number} {problem}; the train's PRs wait for the next one")
-            self.drop_land_ref()
-            return None
-        if problem:  # an earlier run stopped part-way and a PR changed since: main holds a prefix no build tested
-            raise self.alarm(cars[:landed], f"#{cars[steps.index(problem, landed)].entry.number} {problem} after "
-                                            f"{landed} of the verified train's {len(cars)} PRs landed")
+        tip = cars[-1].commit
+        if self.base_head() == tip:  # an earlier run fast-forwarded the base and stopped before dispatching its build
+            log(f"{self.base} is already at the verified train {tip[:7]}")
+        else:
+            steps = [landing_step(car.entry, self.pr(car.entry.number), self.base) for car in cars]
+            landed, problem = landing_plan(steps)
+            if problem and not landed:
+                log(f"nothing lands: #{cars[steps.index(problem)].entry.number} {problem}; the train's PRs wait for the next one")
+                self.drop_land_ref()
+                return None
+            if problem:  # an earlier run stopped part-way and a PR changed since: main holds a prefix no build tested
+                raise self.alarm(cars[:landed], f"#{cars[steps.index(problem, landed)].entry.number} {problem} after "
+                                                f"{landed} of the verified train's {len(cars)} PRs landed")
+            if landed == 0 and self.fast_forward(tip):
+                log(f"landed {', '.join(f'#{car.entry.number}' for car in cars)} by fast-forwarding {self.base} to {tip[:7]}")
+                self.changed += len(cars)
+            elif not self.squash_each(cars, trees, landed):
+                return None
+        if self.base == "main":
+            # merges made with GITHUB_TOKEN start no push workflows, so main's own full build is started here; the
+            # record goes only after this succeeds, so a run stopped in between dispatches it on resume
+            self.dispatch_main()
+        self.drop_land_ref()
+        return self.base_head()
+
+    def fast_forward(self, tip):
+        """Move the base to the tested tip in one ref update; return whether it got there. Judged by reading the base back,
+        so a push whose reply was lost counts by what it did. The ruleset rejects the push unless the token may bypass
+        it, and the train then squash-merges PR by PR."""
+        pushed = sh("git", "push", "-q", "origin", f"{tip}:refs/heads/{self.base}", check=False)
+        if self.base_head() == tip:
+            return True
+        log(f"{self.base} cannot be fast-forwarded to {tip[:7]}, so the PRs are squash-merged one by one: "
+            f"{(pushed.stderr.strip() or 'the push was refused').splitlines()[-1]}")
+        return False
+
+    def squash_each(self, cars, trees, landed):
+        """Squash-merge the cars after the first `landed`, checking the base's tree before each merge and after the
+        last. Return False when the first one could not land, so nothing did."""
         for index in range(landed, len(cars)):
             car = cars[index]
             if self.base_tree() != trees[index]:
@@ -444,7 +489,7 @@ class Train:
                 if index == 0:
                     log(f"nothing lands: #{car.entry.number} {step}")
                     self.drop_land_ref()
-                    return None
+                    return False
                 raise self.alarm(cars[:index], f"#{car.entry.number} {step} while its train was landing")
             self.status(car.entry.sha, STATUS, "success", "landed by the merge train")
             if error := self.merge(car.entry, pr):
@@ -453,12 +498,7 @@ class Train:
             self.changed += 1
         if self.base_tree() != trees[-1]:
             raise self.alarm(cars, f"{self.base} does not match the tested train after its {len(cars)} PRs landed")
-        if self.base == "main":
-            # merges made with GITHUB_TOKEN start no push workflows, so main's own full build is started here; the
-            # record goes only after this succeeds, so a run stopped in between dispatches it on resume
-            self.dispatch_main()
-        self.drop_land_ref()
-        return self.base_head()
+        return True
 
     def dispatch_main(self):
         sh("gh", "workflow", "run", "ci.yml", "-R", self.repo, "--ref", self.base)
@@ -466,7 +506,7 @@ class Train:
     def read_land_ref(self):
         """The cars of train/<base>/land and the trees before and after each: trees[i] is the base after i of them."""
         git("fetch", "-q", "origin", self.base, f"+refs/heads/{self.land_ref}:refs/remotes/origin/{self.land_ref}")
-        cars, start = train_record(git("log", "--first-parent", "--format=%H %s", f"origin/{self.land_ref}"))
+        cars, start = train_record(git("log", "--first-parent", RECORD, f"origin/{self.land_ref}"))
         return cars, [git("rev-parse", f"{commit}^{{tree}}") for commit in [start] + [car.commit for car in cars]]
 
     def merge(self, entry, pr):

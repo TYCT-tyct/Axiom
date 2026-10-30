@@ -11,6 +11,8 @@ export default {
     empty: "No active announcements.",
   },
 
+  forbiddenHint: "Ask an admin of the workspace if you need it.",
+
   nav: {
     overview: "Overview",
     keys: "API keys",

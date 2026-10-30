@@ -5,8 +5,9 @@ import { nav } from "./nav";
 
 export function Layout() {
   const { t } = useTranslation();
+  const items = nav.map((item) => ({ ...item, label: t(item.label) }));
   return (
-    <Shell brand={{ name: t("brandName") }} nav={nav.map((item) => ({ ...item, label: t(item.label) }))}>
+    <Shell brand={{ name: t("brandName") }} nav={items} forbiddenHint={t("forbiddenHint")}>
       <Outlet />
     </Shell>
   );

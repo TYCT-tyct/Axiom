@@ -110,7 +110,7 @@ export default {
     failedAt: "发生于 {{time}}",
     retry: "重试",
     forbiddenTitle: "没有权限",
-    forbiddenBody: "你的账户没有查看这里的权限。需要的话，请联系工作区的管理员。",
+    forbiddenBody: "你的账户没有查看这里的权限。",
     pageFailed: "页面没能加载",
     pageFailedBody: "可能是网络中断，或 Axiom 刚刚更新。刷新页面再试一次。",
     reload: "刷新页面",

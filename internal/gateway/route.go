@@ -326,6 +326,9 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		Price:            routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule},
 		Target:           targetOf(r.Upstream, streams, dialect),
 	}
+	if r.Capacity != nil { // a nil *suppliers.Capacity in the interface would read as an endpoint with no capacity
+		e.Capacity = r.Capacity
+	}
 	return e, ""
 }
 

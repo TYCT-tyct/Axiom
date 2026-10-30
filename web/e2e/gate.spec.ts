@@ -1,5 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { applyBrand, brands } from "./brand.ts";
 import { suites } from "./suites.ts";
 
 // The acceptance gate of docs/frontend.md「验收门槛」 as checks, for the console and the admin: WCAG 2.2 AA in both
@@ -38,6 +39,22 @@ for (const suite of suites) {
             result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(" | ")}`),
           ).toEqual([]);
         });
+      }
+    }
+
+    if (suite.brands.includes(scene.name)) {
+      for (const [brand, color] of Object.entries(brands)) {
+        for (const scheme of schemes) {
+          test(`${name} has no contrast violation with the ${brand} brand colour (${scheme})`, async ({ page }) => {
+            await setup(page, scheme, "en");
+            await suite.prepare(page, scene);
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await scene.open(page);
+            await applyBrand(page, color);
+            const result = await new AxeBuilder({ page }).withRules(["color-contrast"]).analyze();
+            expect(result.violations.map((v) => v.nodes.map((n) => n.target.join(" ")).join(" | "))).toEqual([]);
+          });
+        }
       }
     }
 

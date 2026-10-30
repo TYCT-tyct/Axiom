@@ -61,6 +61,7 @@
 | 只显示一次的内容（key 明文、恢复码）放在不能用 Esc 或点背景关掉的对话框里，用户确认后才关；生成恢复码的请求还没回来时，发起请求的对话框也不能关；确认时读新会话失败，恢复码仍留在屏幕上并说明原因，可以重试 | `Dialog` 的 `dismissible`、`packages/app/src/totp-dialogs.tsx`；端到端测试覆盖 |
 | 两步验证的二维码在本地用 `qrcode-generator` 画成 SVG 的 `<path>`，不拼 HTML 字符串，也不把密钥交给外部服务 | `packages/app/src/qr.tsx` |
 | 验收门槛的无障碍和不破版：控制台和后台的每个页面、每个对话框在深浅色、中英文下没有 WCAG 2.2 AA 的违规，用最坏数据在 360 到 2560px 宽下页面不出现横向滚动，表格行内的按钮和链接不跑出表格自己的滚动框 | `e2e/gate.spec.ts`（axe-core 与溢出检查），页面列表在 `e2e/console-scenes.ts` 和 `e2e/admin-scenes.ts` |
+| 站点的品牌色自动配出深浅两套强调色和主按钮，对比度不低于 4.5:1，主按钮与页面、面板、对话框任一底色对比不到 3:1 时加边线（`--btn-line`）；不是 `#rrggbb` 的写法被拒绝。站点契约还没有品牌色字段，所以只有测试用它 | `packages/ui/src/brand.ts` 的 `brandStyle`，单元测试 `brand.test.ts`（极端色与色彩网格）；`e2e/gate.spec.ts` 对 5 种极端品牌色做 axe 对比度检查，`e2e/shots.spec.ts` 截图 |
 | 后台的每个改数据的操作都填理由、有确认（高风险的要输入对象的名字）、防重复提交；一个操作一个 Idempotency-Key，对话框打开时生成，发出后锁定表单，结果未知时原样重发，只有服务端明确拒绝后才换新；按修订号改的对话框收到 `stale_revision` 要重新载入才能再保存；结果标明是不是之前已完成的那次 | `admin/src/change.tsx` 的 `ChangeDialog`，状态转换在 `admin/src/attempt.ts`（规则见[前端](../docs/frontend.md)「决策与理由」）；端到端的模拟按契约要求 Idempotency-Key 和理由，同一个键带同样的请求再来就返回存下的结果并带 `Idempotency-Replayed`，换了请求就拒绝（`idempotency_key_reused`）；「同样」按服务端的指纹判断：整数按原样比较，供应商的登录只比成员名、不比密钥，地址先规范化，与 Go 共用 `internal/platform/idem/testdata/same-request.json` 里的样例 |
 | 改数据的对话框在结果未知时，请求（含幂等键）留在内存里，关闭后重开、会话过期重新登录后，该改动的对话框只提示“上次的改动结果未知”，可原样重发或放弃，不给新表单 | `admin/src/unsettled.ts`、`admin/src/change.tsx` 的 `UnsettledChange`；`e2e/admin-change.spec.ts` |
 | 后台的所有操作要求通过两步验证的会话：没有第二因素的账户只能到开启两步验证的页面，恢复码对话框在页面之上，换了会话也不会丢 | `packages/app` 的 `Gate` 的 `enroll` 阶段与 `RecoveryCodesHost`；`e2e/admin-access.spec.ts` |
@@ -70,6 +71,7 @@
 | 没有没人用的文件、导出和依赖 | knip（`knip.jsonc`）；包只给本仓库的应用用，入口文件的导出也要有应用引用 |
 | 没有重复代码 | jscpd（`.jscpd.json`），50 个词法单元以上算重复；测试和端到端的模拟（`e2e/`）不查 |
 | 首屏脚本、每多开一页增加的脚本、西文字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按程序发送时的压缩（`scripts/compress.ts`，brotli q11）后的大小计脚本，字体取 woff2 文件本身的大小；首屏算入口页加载的每个脚本和它们的静态依赖，再加入口地址打开的页面（控制台的概览、后台的首页） |
+| 主要页面的 LCP、CLS，常用操作的 INP，长列表滚动的掉帧和长任务不超过[前端性能指标](../docs/frontend.md#前端性能指标)：只有 LCP 超出上限才失败，CLS、INP、长列表滚动只报告（INP 和掉帧随共享 CI 机器的负载摆动，CLS 同一页在两次测量之间差别很大），数字写进测试的注解；它是计时，单独在 CI 的 `vitals` 任务里用 `just web-vitals` 一次一个测试地跑，普通分片排除它（`playwright.vitals.config.ts`） | `e2e/vitals.spec.ts`：web-vitals 的 IIFE 构建在页面脚本之前注入；手机档（Pixel 5、慢速 4G、CPU 降速 4 倍）和电脑档（10 Mbps）取三次加载的中位数；INP 在 CPU 降速 4 倍下取该操作的最差值 |
 
 ## 测试
 
