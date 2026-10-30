@@ -4,6 +4,6 @@
 -- retirement can wait for every live node instead of stopping every writer. The columns hold version identifiers only;
 -- key material stays in protected files (internal/platform/README.md「凭证加密」).
 ALTER TABLE platform.nodes
-    ADD COLUMN key_versions bigint[] NOT NULL DEFAULT '{}',
-    ADD COLUMN key_active bigint NOT NULL DEFAULT 0,
-    ADD COLUMN key_active_since timestamptz NOT NULL DEFAULT now();
+    ADD COLUMN IF NOT EXISTS key_versions bigint[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS key_active bigint NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS key_active_since timestamptz NOT NULL DEFAULT now();

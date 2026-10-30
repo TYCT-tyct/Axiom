@@ -71,14 +71,16 @@ func TestKeyringLifecycleRotatesWhileNodesRun(t *testing.T) {
 		t.Fatalf("initial check: %v", err)
 	}
 	wantKeyStatus(t, status, 1, 1, 0)
-	material, err := os.ReadFile(f.path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	logs := &bytes.Buffer{}
 	lifecycle := &keyringLifecycle{rotation: f.r, ring: ring, logger: slog.New(slog.NewTextHandler(logs, nil))}
 
 	f.run("add", "--version", "2")
+	// Read the file after the add: the scan below must cover the generated version too, not only the one that existed at
+	// startup.
+	material, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The other live node has reloaded the distribution file but is still writing version 1.
 	f.execSQL(t, "INSERT INTO platform.nodes (id, seen_at, key_versions, key_active, key_active_since) VALUES ('other', now(), '{1,2}', 1, now())")
 	mustLifecycleStep(t, lifecycle, "activation")

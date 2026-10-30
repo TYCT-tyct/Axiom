@@ -116,7 +116,7 @@ func (f rotationFixture) read(row rotationEnvelope) secret.Sealed {
 func TestKeyringRotationEndToEnd(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
-	f.addAndActivate("2")
+	f.addAndActivate()
 	// A rotated read is only useful once the data written before the switch is readable under the new version.
 	if out := f.run("rewrap", "--batch-size", "1", "--max-batches", "1"); !strings.Contains(out, `"paused"`) {
 		t.Fatalf("bounded run did not pause: %s", out)
@@ -164,9 +164,9 @@ func (f rotationFixture) verifyRetired() {
 
 // addAndActivate runs the two lifecycle commands of a rotation and checks what adding alone must not do: change the
 // write version, or leave the new key unusable for later reads.
-func (f rotationFixture) addAndActivate(version string) {
+func (f rotationFixture) addAndActivate() {
 	f.t.Helper()
-	f.run("add", "--version", version)
+	f.run("add", "--version", "2")
 	ring, status, err := f.r.Check(f.t.Context())
 	if err != nil || status.Active != 1 || len(status.Readable) != 2 {
 		f.t.Fatalf("adding activated a write key or lost a readable key: %+v, %v", status, err)
@@ -174,7 +174,7 @@ func (f rotationFixture) addAndActivate(version string) {
 	if ring.Seal(secret.New("new data"), secret.Location{Table: "test", RowID: "1", Purpose: "test"}).KeyVersion != 1 {
 		f.t.Fatal("a newly added readable key was used for writes")
 	}
-	f.run("activate", "--version", version)
+	f.run("activate", "--version", "2")
 	if err := f.r.Retire(f.t.Context(), 1); err == nil || !strings.Contains(err.Error(), "still referenced") {
 		f.t.Fatalf("retired a referenced key: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestKeyringRewrapIncludesWebhookSigningKeys(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	f.addAndActivate("2")
+	f.addAndActivate()
 	f.run("rewrap")
 	ring, _, err := f.r.Check(t.Context())
 	if err != nil {

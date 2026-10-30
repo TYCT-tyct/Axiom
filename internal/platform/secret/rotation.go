@@ -77,9 +77,10 @@ func ensureReaders(ctx context.Context, tx pg.Tx, version uint32) error {
 }
 
 // ensureQuiet refuses retirement until every live node has written the active version for kv's heartbeat window. A
-// process that loaded the old version can still commit a seal it started before noticing the switch, so retirement waits
-// one window first; the request paths that seal write in the same call, and a transaction blocked for the whole window
-// is outside that bound.
+// process that loaded the old version can still commit a seal it started before noticing the switch; waiting one window
+// keeps that ordinary case from failing. The database fence, not this window, is what makes a late write safe: an
+// envelope write takes the fence lock shared and a retirement takes it exclusively, so a write either commits before
+// the tombstone (and the reference check sees it) or waits and is refused by the marker.
 func ensureQuiet(ctx context.Context, tx pg.Tx, active uint32) error {
 	var unready int
 	err := tx.QueryRow(ctx, `SELECT count(*) FROM platform.nodes
@@ -131,7 +132,7 @@ func (r Rotation) check(ctx context.Context, ring *Keyring) (*Keyring, KeyStatus
 		if err := r.checkReferences(ctx, tx, snapshot, status); err != nil {
 			return err
 		}
-		ring.install(snapshot.withActive(status.Active))
+		ring.install(snapshot.withActive(status.Active).withConfirmed(status.Readable))
 		return nil
 	})
 	if err != nil {
@@ -179,7 +180,7 @@ func (r Rotation) Refresh(ctx context.Context, ring *Keyring) (KeyStatus, error)
 		if snapshot, status, err = r.reconcile(ctx, tx, snapshot); err != nil {
 			return err
 		}
-		ring.install(snapshot.withActive(status.Active))
+		ring.install(snapshot.withActive(status.Active).withConfirmed(status.Readable))
 		return nil
 	})
 	if err != nil {
@@ -410,6 +411,17 @@ func (r Rotation) pruneRetired(ctx context.Context, tx pg.Tx) error {
 		if err := r.unreferenced(ctx, tx, version); err != nil {
 			return fmt.Errorf("keyring: refusing to prune version %d: %w", version, err)
 		}
+		// A retired version always has a marker: the tombstone and the marker commit together, and migration
+		// 00020 backfilled the rows from before the fence. A missing marker means this state was edited by hand; deleting
+		// the key could then race a writer the fence never saw, so leave it in place.
+		var fenced bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM platform.key_retirements WHERE version = $1)",
+			int64(version)).Scan(&fenced); err != nil {
+			return fmt.Errorf("keyring: cannot read retirement fence: %w", err)
+		}
+		if !fenced {
+			return fmt.Errorf("keyring: refusing to prune version %d: no retirement fence", version)
+		}
 		if err := removeKey(r.Path, version); err != nil {
 			return err
 		}
@@ -432,6 +444,12 @@ func (r Rotation) Retire(ctx context.Context, version uint32) error {
 
 // tombstone records the retirement, or finds it already recorded by a run that stopped before pruning its file.
 func (r Rotation) tombstone(ctx context.Context, tx pg.Tx, version uint32) error {
+	// Every envelope write takes this lock shared in its row trigger and holds it to commit. Holding it exclusively
+	// makes the reference check, the marker and the tombstone one decision with respect to those writers: a writer that
+	// acquired the lock first commits before the check sees the row; one that arrives later is refused by the marker.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(321, 9)"); err != nil {
+		return fmt.Errorf("keyring: cannot acquire retirement fence: %w", err)
+	}
 	snapshot, err := loadSnapshot(r.Path)
 	if err != nil {
 		return err
@@ -440,8 +458,8 @@ func (r Rotation) tombstone(ctx context.Context, tx pg.Tx, version uint32) error
 	if err != nil {
 		return err
 	}
-	// The write version has to be this old one's successor on every live node for long enough that no seal started
-	// under the old version can still commit.
+	// The write version has to be this old one's successor on every live node for long enough that a seal started under
+	// the old version is usually gone before retirement; a remaining one is caught by the fence below.
 	if err := ensureQuiet(ctx, tx, status.Active); err != nil {
 		return err
 	}
@@ -454,6 +472,10 @@ func (r Rotation) tombstone(ctx context.Context, tx pg.Tx, version uint32) error
 	}
 	if err := r.unreferenced(ctx, tx, version); err != nil {
 		return err
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO platform.key_retirements (version) VALUES ($1) ON CONFLICT DO NOTHING",
+		int64(version)); err != nil {
+		return fmt.Errorf("keyring: cannot fence retired version: %w", err)
 	}
 	if state == "retired" {
 		return nil

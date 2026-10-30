@@ -127,9 +127,12 @@ services:
         fi
         chown 65532:65532 /keys/master /keys/hash /keys/identity /keys/valkey-password
         # The directory stays traversable for root (its group, without the capability to read the files) and writable for
-        # the program, which replaces the master file atomically when a rotation distributes or retires a version.
-        chown 65532:0 /keys
+        # the program, which replaces the master file atomically when a rotation distributes or retires a version. Root
+        # owns it while its mode is set: this container has CHOWN but not FOWNER, so `chmod` after handing it to 65532
+        # would fail and stop the stack, on a fresh volume as well as on a restart.
+        chown 0:0 /keys
         chmod 770 /keys
+        chown 65532:0 /keys
         chown 999:1000 /cache/password /cache/users.acl
         chmod 755 /cache
     environment:

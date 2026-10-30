@@ -24,6 +24,11 @@ type keySnapshot struct {
 	keys         map[uint32]cipher.AEAD
 	latest       uint32
 	fingerprints map[uint32][32]byte
+	// confirmed is the non-retired version set the database has checked against this snapshot's fingerprints. A failed
+	// add can leave a version in the file that the database never registered, and another node may later register the
+	// same number with different material; the file still holds the orphan, but it must not be reported to the cluster
+	// as a version this node can read.
+	confirmed []uint32
 }
 
 // Keyring is a handle to an immutable snapshot. A running node replaces the snapshot after it reloads the distribution
@@ -45,23 +50,33 @@ func (k *Keyring) snapshot() *keySnapshot {
 // install replaces the ring atomically. A call already using the old snapshot keeps reading it until it returns.
 func (k *Keyring) install(s *keySnapshot) { k.state.Store(s) }
 
-// Report is the heartbeat's view of the ring from one snapshot: the versions this node holds, oldest first, and the one
-// it writes. Both fields come from the same install, so a reload between them cannot report a version set that never
-// existed. It carries identifiers only, never material.
+// Report is the heartbeat's view of the ring from one snapshot: the versions the database confirmed this node holds,
+// oldest first, and the one it writes. Both fields come from the same install, so a reload between them cannot report a
+// version set that never existed. A version left in the file by a failed add, or one whose fingerprint does not match
+// the registration, is not reportable: activation must wait until this node can actually read the registered version.
+// A ring that has not completed Check or Refresh reports nothing, because the file alone does not prove the database
+// accepted it. It carries identifiers only, never material.
 func (k *Keyring) Report() (versions []uint32, active uint32) {
 	s := k.snapshot()
-	versions = make([]uint32, 0, len(s.fingerprints))
-	for version := range s.fingerprints {
-		versions = append(versions, version)
+	if s.confirmed == nil {
+		return nil, 0
 	}
-	slices.Sort(versions)
-	return versions, s.latest
+	return slices.Clone(s.confirmed), s.latest
 }
 
 // withActive copies the snapshot with another write version. The maps are shared, so the copy costs no key material.
 func (s *keySnapshot) withActive(active uint32) *keySnapshot {
 	copied := *s
 	copied.latest = active
+	return &copied
+}
+
+// withConfirmed copies the snapshot with the versions the database checked against its fingerprints. The write version
+// is installed separately by the caller, from the same check, so Report never pairs them across checks.
+func (s *keySnapshot) withConfirmed(versions []uint32) *keySnapshot {
+	copied := *s
+	copied.confirmed = slices.Clone(versions)
+	slices.Sort(copied.confirmed)
 	return &copied
 }
 

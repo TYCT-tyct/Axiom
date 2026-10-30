@@ -47,6 +47,25 @@ func (r Rotation) checkInventory(ctx context.Context, tx pg.Tx) error {
 	if rows.Err() != nil {
 		return fmt.Errorf("keyring: cannot read envelope inventory: %w", rows.Err())
 	}
+	// A registered store whose module migration forgot the fence would accept writes retirement cannot see. Fail at
+	// startup instead of relying on that migration being deployed correctly.
+	for _, store := range r.Stores {
+		var fenced bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT FROM pg_catalog.pg_trigger t
+			JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = $1 AND c.relname = $2
+			  AND t.tgname = 'fence_envelope_key_version'
+			  AND t.tgfoid = 'platform.fence_envelope_key_version()'::regprocedure
+			  AND t.tgenabled IN ('O', 'A'))`,
+			store.Schema, store.Table).Scan(&fenced); err != nil {
+			return fmt.Errorf("keyring: cannot inspect retirement fences: %w", err)
+		}
+		if !fenced {
+			return fmt.Errorf("keyring: envelope store %s has no retirement fence", store.table())
+		}
+	}
 	return nil
 }
 
@@ -93,8 +112,10 @@ func (r Rotation) unreferenced(ctx context.Context, tx pg.Tx, version uint32) er
 	if err := r.checkInventory(ctx, tx); err != nil {
 		return err
 	}
-	// The quiet check and the lifecycle lock bound the writers; retirement still grants no broader table privilege to
-	// the application's column-limited role.
+	// Retirement holds the exclusive fence lock while it runs this check, and every envelope write holds that lock
+	// shared to commit, so no writer can appear between the check and the tombstone; one that arrives later is refused
+	// by the retirement marker. Retirement still grants no broader table privilege to the application's column-limited
+	// role.
 	for _, store := range r.Stores {
 		var exists bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM "+store.table()+" WHERE "+store.column("key_version")+" = $1)",

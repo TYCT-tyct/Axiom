@@ -50,13 +50,17 @@ trap 'rm -rf "$work"' EXIT
 set_name="$(sql "SELECT to_char(now() at time zone 'utc', 'YYYYMMDDHH24MISS') || '-' || substr(md5(random()::text), 1, 6)")"
 log "backing up into $set_name"
 
-# The versions the database can reference right now. Automatic retirement can remove one from the key ring between this
-# query, the dump and the archive; the archive must cover both ends of that window, or the set is unrestorable.
-versions_before="$(sql "SELECT version FROM platform.key_versions WHERE state <> 'retired' ORDER BY 1")"
-
 # The database, as the superuser: every table forces row security, and a dump that obeyed it would silently lose rows.
 # Owners and grants stay in the archive because the restore puts them back as they were.
 pg_dump --no-password --format=custom --compress=zstd:9 --lock-wait-timeout=30s --file="$work/db.dump"
+
+# The versions the dumped snapshot can reference, read from the dump itself. A second live query cannot share the
+# dump's snapshot: a version added or retired between the query and the dump would make the two disagree with what the
+# dump actually contains. pg_restore reads only this table from the custom-format archive, so its rows are exactly the
+# snapshot's, and the key archive must cover every non-retired one. A version retired after the dump is still required:
+# restore would see it as readable even though the live database no longer does.
+dump_versions="$(pg_restore --data-only --schema=platform --table=key_versions --file=- "$work/db.dump" |
+  awk -F '\t' 'NF >= 3 && $3 != "retired" {print $1}')"
 age --encrypt --recipient "$AXIOM_BACKUP_DB_RECIPIENT" --output "$work/db.dump.age" "$work/db.dump"
 rm -f "$work/db.dump"
 
@@ -66,14 +70,12 @@ age --encrypt --recipient "$AXIOM_BACKUP_DB_RECIPIENT" --output "$work/deploy.en
 
 # The key ring with its modes and owner, which the program checks before it serves anything.
 tar -C "$AXIOM_KEYS_DIR" -cf "$work/keys.tar" master hash identity
-# The dump's snapshot lies between the two queries. Requiring the archive to hold every version either saw means a
-# version retired while the dump ran cannot make the set incomplete: retirement only happens after rewrap, and this
-# check fails the run (nothing is uploaded) if it raced the archive.
-versions_after="$(sql "SELECT version FROM platform.key_versions WHERE state <> 'retired' ORDER BY 1")"
+# The archive must hold every version the dumped snapshot calls readable or active. Its rows came from the same dump,
+# so a retirement racing the archive cannot hide a version the restored database will require.
 held="$(tar -xOf "$work/keys.tar" master | cut -d: -f1)"
-for version in $versions_before $versions_after; do
+for version in $dump_versions; do
   printf '%s\n' "$held" | grep -qx "$version" ||
-    die "the key ring archive lacks version $version, which the database could reference; retry outside a rotation"
+    die "the key ring archive lacks version $version, which the dumped database requires; retry outside a rotation"
 done
 age --encrypt --recipient "$AXIOM_BACKUP_SECRETS_RECIPIENT" --output "$work/keys.tar.age" "$work/keys.tar"
 rm -f "$work/keys.tar"
