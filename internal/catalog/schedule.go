@@ -25,6 +25,48 @@ type Schedule struct {
 // Currency is what the schedule's prices are in.
 func (s Schedule) Currency() platform.Currency { return s.currency }
 
+// ScheduleRate is one unit price of a schedule: what one unit of an item costs at a service tier above a prompt length,
+// where 0 is the base band that no threshold has to be exceeded for.
+type ScheduleRate struct {
+	ServiceTier ServiceTier
+	Above       int64
+	Item        Item
+	Price       platform.UnitPrice
+}
+
+// ScheduleView is every price a schedule sets, in enumeration order of service tier, band and item. It is the read model
+// a public price page shows: the schedule keeps its prices unexported, and the view copies them for a caller that must
+// not reach into the schedule.
+type ScheduleView struct {
+	Currency platform.Currency
+	Basis    []Item // the items whose counts add up to the context band; empty without context tiers
+	Rates    []ScheduleRate
+}
+
+// View returns the schedule's prices. The order is stable, so a page can show the same schedule the same way.
+func (s Schedule) View() ScheduleView {
+	v := ScheduleView{Currency: s.currency, Basis: s.basis.members()}
+	for st := range numServiceTiers {
+		if !s.offered.Has(st) {
+			continue
+		}
+		l := s.levels[st]
+		v.appendRates(st, 0, l.base)
+		for i, r := range l.tiers {
+			v.appendRates(st, s.above[i], r)
+		}
+	}
+	return v
+}
+
+func (v *ScheduleView) appendRates(st ServiceTier, above int64, r rates) {
+	for it := range NumItems {
+		if r.priced.Has(Item(it)) {
+			v.Rates = append(v.Rates, ScheduleRate{ServiceTier: st, Above: above, Item: Item(it), Price: r.price[it]})
+		}
+	}
+}
+
 // level is one service tier's prices: its base prices, and for each threshold in above, the base prices it replaces
 // when the basis adds up to more than the threshold, for the whole request; M1 supports no other method
 // (README.md「条件」).

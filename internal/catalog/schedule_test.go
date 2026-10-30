@@ -1,6 +1,7 @@
 package catalog_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -166,6 +167,43 @@ func TestParseScheduleRejects(t *testing.T) {
 // TestScheduleScaled: every price, in every tier and service tier, is multiplied; the currency becomes the one asked for;
 // an item without a price stays without one; and a price that does not divide at the finest price a schedule holds is
 // rounded up by less than one place.
+func TestScheduleView(t *testing.T) {
+	// Every price once, in service tier, band and item order; a tier with no price at a band adds nothing there.
+	got := mustParse(t, serviceTiers).View()
+	if got.Currency != mustCurrency(t, "USD") {
+		t.Errorf("currency: %v", got.Currency)
+	}
+	if want := []catalog.Item{catalog.ItemInput, catalog.ItemCacheRead}; !slices.Equal(got.Basis, want) {
+		t.Errorf("basis: %v, want %v", got.Basis, want)
+	}
+	type rate struct {
+		tier  catalog.ServiceTier
+		above int64
+		item  catalog.Item
+		price string
+	}
+	want := []rate{
+		{catalog.ServiceTierStandard, 0, catalog.ItemInput, "1"},
+		{catalog.ServiceTierStandard, 0, catalog.ItemCacheRead, "1"},
+		{catalog.ServiceTierStandard, 0, catalog.ItemOutput, "2"},
+		{catalog.ServiceTierStandard, 10, catalog.ItemOutput, "4"},
+		{catalog.ServiceTierPriority, 0, catalog.ItemInput, "1"},
+		{catalog.ServiceTierPriority, 0, catalog.ItemOutput, "3"},
+		{catalog.ServiceTierPriority, 10, catalog.ItemOutput, "5"},
+		{catalog.ServiceTierFast, 0, catalog.ItemInput, "6"},
+		{catalog.ServiceTierFast, 0, catalog.ItemOutput, "12"},
+	}
+	if len(got.Rates) != len(want) {
+		t.Fatalf("rates: %d, want %d: %+v", len(got.Rates), len(want), got.Rates)
+	}
+	for i, w := range want {
+		g := got.Rates[i]
+		if g.ServiceTier != w.tier || g.Above != w.above || g.Item != w.item || g.Price.String() != w.price {
+			t.Errorf("rate %d: %+v, want %+v", i, g, w)
+		}
+	}
+}
+
 func TestScheduleScaled(t *testing.T) {
 	t.Parallel()
 	cny, usd := mustCurrency(t, "CNY"), mustCurrency(t, "USD")
