@@ -88,7 +88,9 @@ class Parser {
 
   private object(): Record<string, JSONValue> {
     this.at++;
-    const out: Record<string, JSONValue> = {};
+    // A normal object runs the __proto__ setter, which would turn a real "__proto__" member into the object's
+    // prototype and make Object.entries drop it. A null-prototype object keeps every key as data.
+    const out: Record<string, JSONValue> = Object.create(null) as Record<string, JSONValue>;
     this.space();
     if (this.text[this.at] === "}") {
       this.at++;

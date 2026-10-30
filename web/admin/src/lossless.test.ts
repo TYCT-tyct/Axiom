@@ -19,3 +19,14 @@ it("keeps strings, booleans, null and ordinary integers as they were", () => {
     '{\n  "name": "a\\"b",\n  "ok": true,\n  "none": null,\n  "count": 42,\n  "items": []\n}',
   );
 });
+
+it("keeps a __proto__ member as data, object or scalar", () => {
+  const object = parseJSONLossless('{"__proto__":{"before":9007199254740993},"after":1}');
+  expect(Object.keys(object as object)).toEqual(["__proto__", "after"]);
+  const shown = formatJSON(object);
+  expect(shown).toContain('"__proto__"');
+  expect(shown).toContain('"before": 9007199254740993');
+
+  const scalar = parseJSONLossless('{"__proto__":"kept","next":2}');
+  expect(formatJSON(scalar)).toContain('"__proto__": "kept"');
+});
