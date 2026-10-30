@@ -1074,6 +1074,51 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/legal:
+    get:
+      operationId: getLegalDocuments
+      tags: [Session]
+      summary: The site's current legal documents
+      description: >-
+        The terms of service and the privacy policy the site has published, at their current versions, as plain text.
+        The registration page shows them and sends their versions back with the registration or with
+        `acceptLegalDocuments`. A site that publishes none answers an empty list and requires no acceptance. The text
+        is public: no session is needed.
+      security: []
+      responses:
+        "200":
+          description: The current documents, one per kind, oldest kind first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LegalDocuments"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/legal/accept:
+    post:
+      operationId: acceptLegalDocuments
+      tags: [Session]
+      summary: Accept the current legal documents
+      description: >-
+        Records the signed-in user's acceptance of every current document at the version the request names, with the
+        time. A missing, stale or extra version is `consent_required`: the page must send exactly what
+        `getLegalDocuments` returned. Accepting the same version again changes nothing. A session may call this while
+        the rest of the console is refused for want of acceptance.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LegalAcceptance"}
+      responses:
+        "204": {description: Accepted.}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/site:
     get:
       operationId: getSite
@@ -1875,7 +1920,8 @@ components:
     Forbidden:
       description: >-
         The session may not do this: the permission is missing, the session has not passed two-step verification
-        (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`).
+        (`mfa_required`), the Origin, content type or CSRF token is wrong (`origin_rejected`), or the current legal
+        documents have not been accepted (`consent_required`).
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -2066,6 +2112,7 @@ components:
         - invalid_code
         - forbidden
         - mfa_required
+        - consent_required
         - origin_rejected
         - not_found
         - conflict
@@ -2149,6 +2196,51 @@ components:
       description: >-
         What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a
         sign-in that waits for its second factor.
+    LegalDocumentKind:
+      type: string
+      enum: [terms, privacy]
+    LegalDocument:
+      type: object
+      description: One version of one of the site's legal documents; the text is plain text, never HTML.
+      required: [kind, version, body, published_at]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        version: {type: integer, minimum: 1}
+        body: {type: string}
+        published_at: {type: string, format: date-time}
+    LegalDocumentVersion:
+      type: object
+      required: [kind, version]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        version: {type: integer, minimum: 1}
+    LegalDocuments:
+      type: object
+      required: [documents]
+      properties:
+        documents:
+          type: array
+          description: The current version of each kind, at most one per kind.
+          items: {$ref: "#/components/schemas/LegalDocument"}
+    LegalAcceptance:
+      type: object
+      required: [consent]
+      properties:
+        consent:
+          type: array
+          description: Every current document at its current version, as getLegalDocuments returned it.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
+    SessionConsent:
+      type: object
+      description: >-
+        The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the
+        server refuses its requests with `consent_required` instead.
+      required: [required]
+      properties:
+        required:
+          type: array
+          description: Current documents this user has not accepted; empty when every one is accepted.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
     Session:
       type: object
       required: [user, account, level, mfa_enabled, csrf_token, expires_at, permissions]
@@ -2171,6 +2263,11 @@ components:
             The permission names the session holds on its own scope (the user's account on the console, the platform
             on the admin), for showing or hiding what the user cannot do. The server decides again on every request.
           items: {type: string}
+        consent:
+          allOf: [{$ref: "#/components/schemas/SessionConsent"}]
+          description: >-
+            What the page must show before the session may do anything else. Optional so a page built before this field
+            reads an older node that does not send it.
     SessionList:
       type: object
       properties:
@@ -2459,6 +2556,13 @@ components:
         password: {type: string, minLength: 12, maxLength: 256, description: "Required on an invite-only site. Open registration does not keep it: the page chooses the password on the verification page, so an unauthenticated caller cannot choose the password of an address it does not own."}
         human_check: {type: string, pattern: '^[0-9]{1,20}$', description: "The decimal nonce that solves the site's proof of work. Required where `human_check` is present."}
         language: {type: string, enum: [zh, en], description: "The language of the verification mail; absent means en. The page sends its own."}
+        consent:
+          type: array
+          description: >-
+            The current legal documents the person accepted. Required on a site that publishes any, where a missing or
+            stale version is `consent_required`; open registration checks it at verify-email instead, because no user
+            exists yet.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
     Registered:
       type: object
       required: [user_id]
@@ -2475,6 +2579,12 @@ components:
       properties:
         token: {type: string, minLength: 20, maxLength: 100}
         password: {type: string, minLength: 12, maxLength: 256, description: "The password chosen by the mailbox owner when the link is clicked."}
+        consent:
+          type: array
+          description: >-
+            The current legal documents the person accepted, shown on the verification page. Required on a site that
+            publishes any; a missing or stale version is `consent_required`.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
     Key:
       type: object
       required: [id, name, prefix, last4, workspace_id, created_at, disabled]

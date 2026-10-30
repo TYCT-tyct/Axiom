@@ -119,7 +119,7 @@ func (r *Registration) issue(ctx context.Context, tx pg.Tx, id uuid.UUID, reques
 // supplied here, not at the unauthenticated request, so a caller cannot choose the password of an address it does not
 // own. A token that is unknown, expired, already used or from another site is one ErrInvalidVerification, and a taken
 // email is ErrEmailTaken once the pending request is gone.
-func (s *Service) VerifyEmail(ctx context.Context, host, token, password string, ip netip.Addr) (out UserID, err error) {
+func (s *Service) VerifyEmail(ctx context.Context, host, token, password string, consent []DocumentVersion, ip netip.Addr) (out UserID, err error) {
 	d, snap, err := s.domain(host)
 	if err != nil {
 		return UserID{}, err
@@ -156,7 +156,7 @@ func (s *Service) VerifyEmail(ctx context.Context, host, token, password string,
 	if err := s.hash(ctx, func() { passwordHash = hashPassword(password) }); err != nil {
 		return UserID{}, err
 	}
-	user, err := s.verifyRequest(ctx, d, snap, request, hash[:], passwordHash)
+	user, err := s.verifyRequest(ctx, d, snap, request, hash[:], passwordHash, consent)
 	if err != nil {
 		return UserID{}, err
 	}
@@ -181,12 +181,12 @@ func (s *Service) verificationRequest(ctx context.Context, host string, hash []b
 }
 
 // verifyRequest creates the user the pending request names, in the request's site scope.
-func (s *Service) verifyRequest(ctx context.Context, d domain, snap *snapshot, request RegistrationTenantRow, hash []byte, passwordHash string) (UserID, error) {
+func (s *Service) verifyRequest(ctx context.Context, d domain, snap *snapshot, request RegistrationTenantRow, hash []byte, passwordHash string, consent []DocumentVersion) (UserID, error) {
 	var user UserID
 	var taken bool
 	found, err := s.db.TenantTx(ctx, "accounts.registration_request_tenant", request.ID, func(tx pg.Tx) error {
 		var err error
-		user, taken, err = s.verifyInTx(ctx, tx, d, snap, request.ID, hash, passwordHash)
+		user, taken, err = s.verifyInTx(ctx, tx, d, snap, request.ID, hash, passwordHash, consent)
 		return err
 	})
 	if constraint, ok := pg.Duplicate(err); ok && constraint == "users_site_id_email_key" {
@@ -207,7 +207,7 @@ func (s *Service) verifyRequest(ctx context.Context, d domain, snap *snapshot, r
 // verifyInTx locks the request, matches the token once more, and spends the request on one user, account and
 // workspace. taken reports an address registered while the link was pending: the request is deleted and the
 // transaction commits, so the next attempt is refused for the same reason instead of finding the request again.
-func (s *Service) verifyInTx(ctx context.Context, tx pg.Tx, d domain, snap *snapshot, requestID uuid.UUID, hash []byte, passwordHash string) (user UserID, taken bool, err error) {
+func (s *Service) verifyInTx(ctx context.Context, tx pg.Tx, d domain, snap *snapshot, requestID uuid.UUID, hash []byte, passwordHash string, accepted []DocumentVersion) (user UserID, taken bool, err error) {
 	pending, err := s.lockRegistrationRequest(ctx, tx, requestID, hash)
 	if err != nil {
 		return UserID{}, false, err
@@ -222,11 +222,15 @@ func (s *Service) verifyInTx(ctx context.Context, tx pg.Tx, d domain, snap *snap
 	if !domainPermitted(site, domainOf(pending.Email)) {
 		return UserID{}, false, ErrEmailDomainNotAllowed
 	}
+	consent, err := s.currentVersionsAccepted(ctx, tx, SiteID(pending.SiteID), accepted)
+	if err != nil {
+		return UserID{}, false, err
+	}
 	id, account := uuid.NewV7(), uuid.NewV7()
 	now := s.now()
 	if err := createUser(ctx, tx, s.queries, s.opened, newUser{
 		id: id, account: account, site: pending.SiteID, tier: pending.TierID, role: snap.roleIDs["owner"],
-		email: pending.Email, passwordHash: passwordHash, verified: &now,
+		email: pending.Email, passwordHash: passwordHash, verified: &now, consent: consent,
 	}); err != nil {
 		return UserID{}, false, err
 	}
