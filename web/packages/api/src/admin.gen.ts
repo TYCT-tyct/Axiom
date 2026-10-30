@@ -937,6 +937,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/accounts/{account_id}/tier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Move an account to another tier
+         * @description Idempotent state change with reason and transactional audit. The tier must be one of the account's site; a tier of another site is a 422, and the account's current tier changes nothing and writes no audit entry.
+         */
+        put: operations["setAccountTier"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/users/{user_id}/sign-in": {
         parameters: {
             query?: never;
@@ -2450,6 +2472,10 @@ export interface components {
             suspended: boolean;
             reason: components["schemas"]["Reason"];
         };
+        AccountTierChange: {
+            tier_id: components["schemas"]["TierId"];
+            reason: components["schemas"]["Reason"];
+        };
         UserSignIn: {
             disabled: boolean;
             reason: components["schemas"]["Reason"];
@@ -2504,6 +2530,8 @@ export interface components {
         };
         AccountDetail: {
             calls_suspended?: boolean;
+            /** @description Whether the owner cannot sign in. Absent on a node of the previous release, whose page then shows the sign-in part as unavailable. */
+            sign_in_disabled?: boolean;
             id: components["schemas"]["AccountId"];
             site_id: components["schemas"]["SiteId"];
             name: string;
@@ -5097,6 +5125,41 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setAccountTier: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountTierChange"];
+            };
+        };
+        responses: {
+            /** @description Tier stored; a repeated tier changes nothing */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };
     };
