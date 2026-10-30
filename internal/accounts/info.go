@@ -19,7 +19,7 @@ type SessionInfo struct {
 	Email       string
 	InviteCode  string
 	Level       string // pending_mfa, password or mfa
-	MFAEnabled  bool   // either two-step verification or a passkey
+	MFAEnabled  bool   // two-step verification, and on the console a passkey too
 	Passkeys    int
 	CSRFToken   string
 	ExpiresAt   time.Time
