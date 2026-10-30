@@ -75,8 +75,16 @@ data)
   # The program checks these before it serves anything: three regular files, owned by the user it runs as, with no access
   # for anyone else. The archive carries them, but a restore next to a different uid would fail that check, so set them
   # here as well (deploy/Dockerfile runs as 65532).
-  chown 65532:65532 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
+  # Set the modes while root still owns the entries, then hand them to the program: the restore image has the
+  # capabilities to do either order, but the keys service only has CHOWN, so this keeps one ordering rule in both.
+  chown 0:0 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
   chmod 0400 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
+  chown 65532:65532 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
+  # The program replaces the master file atomically when a rotation distributes or retires a version, so its directory
+  # must be writable by it; root's group keeps the directory traversable for the backup and restore containers.
+  chown 0:0 "$AXIOM_KEYS_DIR"
+  chmod 770 "$AXIOM_KEYS_DIR"
+  chown 65532:0 "$AXIOM_KEYS_DIR"
   for name in master hash identity; do
     [ -f "$AXIOM_KEYS_DIR/$name" ] || die "$AXIOM_KEYS_DIR/$name is not a regular file"
   done

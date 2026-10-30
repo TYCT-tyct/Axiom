@@ -33,12 +33,22 @@ const maxNodeID = 128
 // maxPassword bounds the password file: a password longer than this is a file chosen wrong.
 const maxPassword = 128
 
+// KeyReport is what the node's heartbeat says about the master key ring: the versions it has loaded and the one it
+// writes. It carries identifiers only, never material; the protected key file is the distribution channel.
+type KeyReport struct {
+	Versions []uint32
+	Active   uint32
+}
+
 // Config is the node's Valkey settings, read from the environment by serve.
 type Config struct {
 	URL          string // URLVar
 	PasswordFile string // PasswordFileVar
 	Nodes        int    // NodesVar: how many core nodes the deployment has, at least 1
 	NodeID       string // NodeIDVar; empty makes a new identity at every start, which tests want
+	// Keys reports the live ring, so the key ring's lifecycle can wait for every live node instead of stopping every
+	// writer. Nil reports no versions, as a node without a key ring in a test does.
+	Keys func() KeyReport
 	// Namespace is the key format version, "v1" in production and one random per test case, so cases that share a
 	// Valkey do not see each other's keys (README「键」). Empty is "v1".
 	Namespace string
