@@ -16,6 +16,8 @@
 | `db.dump.age` | 全库的逻辑转储，`pg_dump --format=custom`，带属主与授权 | `AXIOM_BACKUP_DB_RECIPIENT` |
 | `deploy.env.age` | 部署的 `deploy/.env`，即库的三个口令和桶的凭证 | `AXIOM_BACKUP_DB_RECIPIENT` |
 | `keys.tar.age` | 密钥环 `master`、`hash`、`identity`，带权限与属主 | `AXIOM_BACKUP_SECRETS_RECIPIENT` |
+
+节点证书（`node.crt`、`node.key`、`ca.crt`）不在 set 里：它们由部署的内部证书机构签发，丢了可以重新签发，不该跟主密钥一起复制到备份桶。每个节点只保存自己的私钥，入口不拿核心的证书。
 | `manifest.txt` | 时间、`pg_dump` 与服务器版本、镜像引用（生产为 digest）、各文件大小、两个收件人 | — |
 
 - set 名是 UTC 的 `YYYYMMDDHH24MISS` 加三个随机字节，按名字排序即按时间排序。
@@ -276,10 +278,11 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
   响应头，不是路径。
 - **超时**：`read_header 10s`、`read_body 2m`（与程序自己 2 分钟的请求体上限一致）、`write_idle 1h`（默认 1 分钟会把
   长时间没有新 token 的流掐掉）；不设总写超时——长回答不是故障，单次调用由程序自己限时。
-- **来源限制**：`/api/admin/v1/*` 在控制台域名和 API 域名上都一律 404；管理应用只在 `AXIOM_EDGE_ADMIN_HOST` 上回答，且只对
-  `AXIOM_EDGE_ADMIN_ALLOW_CIDRS`（默认只有本机，忘了配就是把入口关掉）。`/console/*` 与 `/api/console/v1/*` 对
-  `AXIOM_EDGE_CONSOLE_ALLOW_CIDRS` 开放，默认所有人：它是用户的控制台，私有部署可以把它关进内网。API 域名不设来源限制：
-  它的调用方本来就是任意的机器。
+- **来源限制**：`/api/admin/v1/*` 在控制台域名和 API 域名上都一律 404；管理应用只在 `AXIOM_EDGE_ADMIN_HOST` 上回答，来源由程序的
+  管理监听按 `AXIOM_ADMIN_SOURCES`（逗号分隔，默认只有本机，忘了配就是把入口关掉）判断。Caddy 只做 TLS 和转发，不重复判一次；
+  地址从 Caddy 重写的 `X-Forwarded-For` 读，因为 `AXIOM_TRUSTED_PROXIES` 已把入口地址设为可信代理。`/console/*` 与
+  `/api/console/v1/*` 对 `AXIOM_EDGE_CONSOLE_ALLOW_CIDRS`（空格分隔，Caddy 读）开放，默认所有人：它是用户的控制台，私有部署
+  可以把它关进内网。API 域名不设来源限制：它的调用方本来就是任意的机器。
 - 三个域名都要有指向这台机器的 DNS。
 - 前面再放 CDN 的话，给 `servers > trusted_proxies` 加 CDN 的网段、开 `trusted_proxies_strict`，并把 443 只对 CDN 开放，
   否则客户端可以自带 `X-Forwarded-For`。

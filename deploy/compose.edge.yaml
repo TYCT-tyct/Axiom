@@ -31,7 +31,10 @@ services:
       # deployment with no public DNS. Named here rather than left empty, because the Caddyfile reads it with a default and
       # an empty value would override that default with nothing.
       AXIOM_EDGE_TLS_ISSUER: ${AXIOM_EDGE_TLS_ISSUER:-acme}
-      AXIOM_EDGE_ADMIN_ALLOW_CIDRS: ${AXIOM_EDGE_ADMIN_ALLOW_CIDRS:-127.0.0.1/32 ::1/128}
+      # The admin listener's source restriction is the program's (deploy/ingress/Caddyfile forwards every admin request).
+      # The program reads a comma-separated list; the default is this machine alone, so a forgotten value closes the
+      # admin site instead of publishing it.
+      AXIOM_ADMIN_SOURCES: ${AXIOM_ADMIN_SOURCES:-127.0.0.1/32,::1/128}
       AXIOM_EDGE_CONSOLE_ALLOW_CIDRS: ${AXIOM_EDGE_CONSOLE_ALLOW_CIDRS:-0.0.0.0/0 ::/0}
     ports:
       # The ACME HTTP challenge and the redirect to https, then https itself. TCP only: the Caddyfile serves HTTP/1.1 and

@@ -8,6 +8,7 @@
 |---|---|
 | `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`（`ParseExact` 读取有符号十进制、最多 15 位小数，拒绝 128 位越界；只用于后台快照解析原生余额）、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）、可复制的汇率依据 `ExchangeRate`（行 ID、版本、规范化币种对与整数分子/分母，`Between` 只取精确分数或倒数）。只有类型和运算；支持币种、数值范围、冻结与取整规则由 [billing](../../docs/domains/billing.md#汇率) 校验和决定 |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
+| `nodetls` | 节点间双向 TLS：从 `AXIOM_NODE_TLS_DIR` 读 `node.crt`、`node.key`、`ca.crt`，检查配对、有效期、扩展密钥用途和私钥权限，最低 TLS 1.3，见 [nodetls/README.md](nodetls/README.md) |
 | `secret` | 从受保护文件加载主密钥和 HMAC 密钥；主密钥文件的一次读取同时给出信封密钥环、登录键和邮件键（`LoadMaster`），供应商凭证的信封加密与明文脱敏 |
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；`Compress`（只压缩较大的 JSON 响应，见下文「前端文件」）；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
 | `clientip` | 客户端地址的唯一一份读法：连接对端的地址，或 `AXIOM_TRUSTED_PROXIES` 里的代理给的最右一个不受信地址（变量见下文「监听」）；控制台守卫和网关都用它，读不出的头一律不信；`Group` 是来源分组的唯一一份实现（映射 IPv4 还原、去 IPv6 zone、IPv6 /64），支付回调、登录尝试和网关的按 IP 限流都用它 |
@@ -134,12 +135,15 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 | 监听 | 提供什么 |
 |---|---|
 | 公网 `AXIOM_PUBLIC_ADDR` | 官网（`/`）、控制台页面（`/console/`）、控制台接口（`/api/console/v1/…`，43 个操作都有处理器，见「接口约定」的守卫）；模型调用接口（`/v1/`、`/api/v1/`，`cmd/axiom` 的 `withModelCalls`）；程序化 key 管理（`/api/v1/keys`，管理 key 鉴权，[accounts](../accounts/README.md#程序化-key-管理)）；支付回调（GET/POST `/api/payments/v1/notify/{merchant}`，渠道签名鉴权，独立于控制台会话） |
-| 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 84 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。部署要让它只对管理域名和受限来源开放（总体架构），监听本身不做来源限制 |
-| 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics` |
+| 管理 `AXIOM_ADMIN_ADDR` | 管理后台页面和管理接口（`/api/admin/v1/…`，守卫只放行管理域名）；默认只听本机（`127.0.0.1:8082`），容器里由 compose 改成 `:8082` 并只映射到本机。管理接口的 84 个操作都有处理器（见「接口约定」）；定价试算（`previewPricing`）在 M1 只给售价，利润要每端点的成本，随它一起加入。只在核心节点上开，按 `AXIOM_ADMIN_SOURCES` 限制来源：不是回环地址又没配来源就拒绝启动；回环地址默认只放行本机 |
+| 节点 `AXIOM_NODE_ADDR` | 核心的节点调用面：与公网监听相同的路由，外加 `/livez`、`/readyz`，给入口转发和探活；只接受 `ca.crt` 签发、带客户端证书的连接（最低 TLS 1.3，证书用途要匹配）。只在核心且设置了地址时开；公网监听不经过它 |
+| 探针 `AXIOM_PROBES_ADDR` | 健康检查；`/metrics`；每个节点都开，入口的 `/readyz` 由它对核心的探活决定 |
 
-`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_DB_COMPLETION_RESERVE`（完成类预留的连接数，默认 16，见「连接池」）、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_EXCHANGE_SOURCE`（缺省 `manual`；`ecb` 启用[参考汇率任务](../billing/README.md#汇率与成本依据)，按货币对保留人工值，其他值启动失败）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）、`AXIOM_VALKEY_URL`（不设就是单核心模式，共享状态都在进程内）、`AXIOM_VALKEY_PASSWORD_FILE`（受保护文件，权限要求同主密钥文件）、`AXIOM_CORE_NODES`（核心节点数，默认 1；大于 1 必须配置 Valkey）、`AXIOM_NODE_ID`（本节点的名字，默认主机名，心跳行用它，重启的同一节点替换自己的行），见 [kv 的「配置与启动」](kv/README.md#配置与启动)。命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+`serve` 读的变量（未知的 `AXIOM_*` 变量算错，值不进错误）：`AXIOM_PUBLIC_ADDR`、`AXIOM_ADMIN_ADDR`、`AXIOM_PROBES_ADDR`、`AXIOM_STARTUP_TIMEOUT`、`AXIOM_SHUTDOWN_TIMEOUT`、`AXIOM_DATABASE_URL`、`AXIOM_DB_COMPLETION_RESERVE`（完成类预留的连接数，默认 16，见「连接池」）、`AXIOM_MASTER_KEY_FILE`、`AXIOM_KEY_HASH_FILE`、`AXIOM_IDENTITY_KEY_FILE`（见「凭证加密」），以及：`AXIOM_TRUSTED_PROXIES`（逗号分隔的代理地址或网段，只有来自它们的连接才读 `X-Forwarded-For`，从右往左取第一个不受信的地址；默认不信任任何代理。地址比较前已 `Unmap`，所以 v4-mapped 写法 `::ffff:10.0.0.0/104` 按它的 IPv4 网段 `10.0.0.0/8` 读，短于 /96 的 v4-mapped 网段还覆盖没映射的部分，启动时报错）、`AXIOM_EXCHANGE_SOURCE`（缺省 `manual`；`ecb` 启用[参考汇率任务](../billing/README.md#汇率与成本依据)，按货币对保留人工值，其他值启动失败）、`AXIOM_HASH_CONCURRENCY`（同时算几个 argon2id，默认 `GOMAXPROCS`）、`AXIOM_HASH_WAIT`（排队多久返回忙，默认 2 秒）、`AXIOM_VALKEY_URL`（不设就是单核心模式，共享状态都在进程内）、`AXIOM_VALKEY_PASSWORD_FILE`（受保护文件，权限要求同主密钥文件）、`AXIOM_CORE_NODES`（核心节点数，默认 1；大于 1 必须配置 Valkey）、`AXIOM_NODE_ID`（本节点的名字，默认主机名，心跳行用它，重启的同一节点替换自己的行），见 [kv 的「配置与启动」](kv/README.md#配置与启动)；`AXIOM_NODE_ROLES`（逗号分隔的 `core`、`ingress`、`ops`，默认 `core`；`core` 和 `ingress` 不能在同一节点）、`AXIOM_ADMIN_SOURCES`（逗号分隔的地址或网段，管理监听的来源；不是回环地址又没配就启动失败，回环地址默认 `127.0.0.1/32,::1/128`）、`AXIOM_NODE_ADDR`（核心接受节点调用的地址，只在核心且设置时开节点监听）、`AXIOM_CORE_URL`（入口转发到的 `https` 地址，不能带路径、查询或用户信息）、`AXIOM_NODE_TLS_DIR`（节点证书目录；核心不设时默认与主密钥同目录，入口必须显式给；文件为 `node.crt`、`node.key`、`ca.crt`）。节点角色决定开哪些监听和读哪些变量：`core` 之外的角色不读数据库、密钥环、Valkey、邮件、对象存储和管理监听的配置，设了就算错；`ingress` 必须给 `AXIOM_CORE_URL` 和证书，`ops` 不读公网监听也不读核心的变量。入口的转发在 `cmd/axiom`，用 `httputil.ReverseProxy` 和 HTTP/2 的 `http.Transport`，流式响应逐块下发，客户端断开就取消核心上的请求；它对核心的 `/readyz` 每秒探一次，核心不能路由时入口报告未就绪。核心要把入口节点的地址写进 `AXIOM_TRUSTED_PROXIES`，才会采信入口转来的 `X-Forwarded-For` 和协议头。节点证书的签发、注册和轮换由部署负责，程序只读取并检查。
 
-公网和管理监听的每个请求都经过 `httpserver.Public`：
+命令（`catalog`、`site`、`user`）在节点自己的容器里运行时环境里有这些变量，所以它们只核对自己读的变量的值（`Env.Problems`），不把别的变量报成未知。
+
+公网、管理和节点监听的每个请求都经过 `httpserver.Public`：
 - **请求 ID**：自己生成 UUIDv7，放在 `X-Request-ID` 响应头和请求的 context 里（`httpserver.RequestID`）；不采用客户端传来的，免得伪造或冲突。
 - **请求与尝试的编号**：`platform.RequestID` 是请求 ID 的类型，各模块的表都用它记同一个调用；`platform.AttemptSeq` 从 1 起给一个请求的尝试编号，上限 `MaxAttempts`（3，含结果未知的尝试）。放在平台是因为 billing、suppliers、observability 都要用，而它们之间不互相依赖。
 - **访问日志**：每个请求一行，记方法、路由模式、状态、字节数、耗时和请求 ID；记路由模式而不是路径，路径里可能有 ID 或密钥。
@@ -395,6 +399,8 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 任务队列用 River，放在 `pg` 里，用应用自己的连接池，表在自己的 schema | 任务和业务写入在同一个事务里入队，事件不会丢也不会早发（[总体架构的「技术选型」](../../docs/architecture.md#技术选型)）；`pg.Tx` 有意不暴露 `pgx.Tx`，入队只能由 `pg` 提供；队列的表不存租户的行，不进行级安全审计，和模块的表分开；要带租户数据的任务把数据放模块自己的表、参数只放 id，`pg.TenantTx` 用模块的查找函数换到那个租户的作用域；worker 返回给 River 的错误同样只写分类，`errors` 列也属于没有策略的表 | River 的迁移手抄进 goose 文件：升级 River 时要同步，且 River 启动时核对自己的迁移版本；让模块自己建连接池：绕过范围；把租户数据放进任务参数或错误：任务行和 `errors` 列都没有策略，谁也管不住它们 |
 | River 的迁移跟在建 schema 的连接上做，不另开连接 | 每多一个连接，负载高的机器多一次连不上的机会；两者都在迁移管理员的权限下，顺序无关 | 在 goose 之后另开连接：多一个连接 |
 | 配置只来自环境变量 | 架构规定不用反射加载配置；容器和 Compose 原生支持；只有一个来源，不用判断优先级 | 配置文件加环境变量覆盖：两个来源，要定优先级 |
+| 节点角色从 `AXIOM_NODE_ROLES` 读，默认 `core`；非核心节点设了核心的变量就拒绝启动 | 默认值让现有部署原样启动，也避免 `Env` 把新变量报成未知；按角色拒绝而不是忽略，部署拿错环境变量时在启动就看见，不会让入口悄悄连上数据库 | 每个角色一个二进制：同一份代码要构建多次，节点之间仍有同一套接口；只警告不拒绝：错误配置能跑到线上 |
+| 节点证书和主密钥分成同目录里的 PEM 文件，不塞进密钥环 | 主密钥只有 32 字节，证书和私钥是 PEM，生命周期也不同；同目录让权限和备份只有一处，密钥环的轮换代码不用认识证书 | 把证书编码进密钥环：改轮换格式，证书到期会牵动主密钥；放到任意路径：多一个要配的变量，权限检查也多一处 |
 | 未知的 `AXIOM_*` 变量算错 | 拼错的名字会悄悄落回默认值，到运行时才发现 | 忽略未知变量 |
 | 运行时只有一个登录角色，没有任何角色有 BYPASSRLS | 迁移和回填也受行级安全约束，需要时显式设定平台范围；"能看全部数据"是看得见、能审计的设定，不是某个角色的隐藏能力 | 迁移角色带 BYPASSRLS：多一个能绕过的身份 |
 | 范围读取放在策略级 InitPlan，列比较留在子查询外 | 消除逐行解析，并让平台分支按未知布尔参数估计；200 万行的比较、限制和迁移方式见 [pg](pg/README.md#决策与理由) | 把子查询放进逐行函数：阻止内联；`IMMUTABLE`：复用计划会保留旧范围；只改规划器开关：不能解决逐行解析 |

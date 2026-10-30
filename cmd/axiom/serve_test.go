@@ -260,8 +260,8 @@ func checkGuard(t *testing.T, url string) {
 
 // addresses are where a node listens, as it logs them.
 type addresses struct {
-	Msg                string `json:"msg"`
-	Public, Admin, Ops string `json:",case:ignore"`
+	Msg                      string `json:"msg"`
+	Public, Admin, Node, Ops string `json:",case:ignore"`
 }
 
 // servingAddrs reads log records until the node reports the addresses it listens on.
