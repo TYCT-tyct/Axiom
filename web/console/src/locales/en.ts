@@ -86,7 +86,7 @@ export default {
     floorNote: "The lowest the available balance may go. 0 means no overdraft.",
     batches: "Credit batches",
     batchesNote: "Spending takes the earliest expiry first; credit without an expiry is used last.",
-    batchesUnavailable: "This server doesn’t report credit batches yet.",
+    batchesUnavailable: "Credit batches are unavailable right now. Reload to try again.",
     noBatches: "No credit is left in any batch.",
     col: { batch: "Batch", source: "Source", amount: "Added", remaining: "Left", expires: "Expires" },
     source: { gift: "Gift", paid: "Top-up" },
@@ -111,6 +111,10 @@ export default {
     submit: "Continue to payment",
     unknown:
       "The answer did not arrive. Try again without changing the amount; if an order was made, the same request returns it.",
+    retry: "Retry the same request",
+    retrySummary: "Retrying {{credits}} with {{method}}.",
+    reused:
+      "This request key was already used. Check your orders before starting another top-up; nothing new was sent.",
     summary: "{{credits}} for {{total}}",
     waiting: "Finish the payment on the channel’s page. You’ll come back here, and this page updates by itself.",
     unconfirmed: "The channel didn’t confirm this order.",
@@ -177,6 +181,10 @@ export default {
     refundReason: "Reason",
     refundReasonHint: "What should the administrator know?",
     refundSubmit: "Send request",
+    refundRetry: "Retry the same request",
+    refundUnknown: "The answer did not arrive. Retrying sends the same request again; closing this dialog keeps it.",
+    refundReused:
+      "This request key was already used. Check the refunds below before sending another; nothing new was sent.",
     close: "Cancel",
   },
   notifications: {
