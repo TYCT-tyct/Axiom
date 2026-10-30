@@ -1,4 +1,4 @@
-import { ApiError, consoleApi, isTransient, type Schemas, unwrapWithStatus } from "@axiom/api";
+import { ApiError, consoleApi, type Schemas, unwrapWithStatus } from "@axiom/api";
 import { can, useErrors, useSession } from "@axiom/app";
 import {
   Badge,
@@ -185,7 +185,9 @@ function NewTopUp({ currency, onCreated }: { currency: string; onCreated: (order
     },
     onError: (error) => {
       setFailure(error);
-      if (!isTransient(error)) {
+      // Only the server's own refusal proves no order was made. No answer, a server failure or an answer that did not
+      // parse may have made one, so the key stays and a retry asks for that order instead of making a second.
+      if (refused(error)) {
         key.current = crypto.randomUUID();
       }
     },
@@ -223,6 +225,7 @@ function NewTopUp({ currency, onCreated }: { currency: string; onCreated: (order
         </Button>
       </form>
       {error ? <FormError>{errors.message(error)}</FormError> : null}
+      {error && !refused(error) ? <p className="text-label text-t3">{t("topup.unknown")}</p> : null}
       {asked && credits ? (
         <Quotes
           credits={credits}
@@ -238,6 +241,11 @@ function NewTopUp({ currency, onCreated }: { currency: string; onCreated: (order
       ) : null}
     </>
   );
+}
+
+// refused is a 4xx with the server's own error body: the only answer that proves the order was not made.
+function refused(error: unknown) {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.code !== undefined;
 }
 
 // Quotes lists what the amount costs through each method; only the method the user picks is sent.

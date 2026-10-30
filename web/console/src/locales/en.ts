@@ -109,6 +109,8 @@ export default {
     youPay: "You pay {{total}}.",
     feeIncluded: "Fee {{fee}} included.",
     submit: "Continue to payment",
+    unknown:
+      "The answer did not arrive. Try again without changing the amount; if an order was made, the same request returns it.",
     summary: "{{credits}} for {{total}}",
     waiting: "Finish the payment on the channel’s page. You’ll come back here, and this page updates by itself.",
     unconfirmed: "The channel didn’t confirm this order.",

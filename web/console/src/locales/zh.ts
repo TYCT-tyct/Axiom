@@ -106,6 +106,7 @@ export default {
     youPay: "需支付 {{total}}。",
     feeIncluded: "含手续费 {{fee}}。",
     submit: "去支付",
+    unknown: "没有收到应答。请不要再改金额，直接重试；如果订单已经创建，同一个请求会把它取回来。",
     summary: "{{credits}}，支付 {{total}}",
     waiting: "请在支付渠道的页面完成付款。你会回到这里，页面会自动刷新状态。",
     unconfirmed: "渠道没有确认这笔订单。",
