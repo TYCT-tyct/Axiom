@@ -12,6 +12,7 @@ import (
 	"axiom/internal/platform/pg"
 )
 
+//nolint:cyclop // one configuration through read, write, replay, stale revision and detection round-trip.
 func TestAdminAlertConfigurationTestAndResolve(t *testing.T) {
 	f := newAdminFixture(t)
 	s := f.owner()
@@ -19,18 +20,35 @@ func TestAdminAlertConfigurationTestAndResolve(t *testing.T) {
 	expectAdmin(t, "getAlertConfiguration", rec, http.StatusOK, "")
 	var config adminapi.AlertConfiguration
 	decode(t, rec, &config)
-	if config.Rev == nil || *config.Rev != 1 || config.Rules == nil || len(*config.Rules) != 4 {
+	if config.Rev == nil || *config.Rev != 2 || config.Rules == nil || len(*config.Rules) != 5 || (*config.Rules)[4].Kind == nil || *(*config.Rules)[4].Kind != "observability.spend_anomaly" {
 		t.Fatalf("defaults: %s", rec.Body)
 	}
+	if config.SpendDetection == nil || config.SpendDetection.WindowSeconds != 3600 {
+		t.Fatalf("spend detection defaults: %s", rec.Body)
+	}
 	key := newKey()
-	body := `{"rev":1,"rules":[],"channels":[{"id":"ops","email":"ops@example.com"}],"reason":"enable alerts"}`
+	body := `{"rev":2,"rules":[],"channels":[{"id":"ops","email":"ops@example.com"}],"spend_detection":{"enabled":true,"window_seconds":900,"baseline_seconds":86400,"min_spend_nano":1000000000,"spend_ratio":4,"min_new_region_calls":3,"min_new_model_calls":3},"reason":"enable alerts"}`
 	expectAdmin(t, "setAlertConfiguration", f.change(s, http.MethodPut, "/alerts/configuration", body, key), http.StatusCreated, "")
 	rec = f.change(s, http.MethodPut, "/alerts/configuration", body, key)
 	if rec.Header().Get("Idempotency-Replayed") != "true" {
 		t.Fatal("configuration did not replay")
 	}
-	expectAdmin(t, "stale configuration", f.change(s, http.MethodPut, "/alerts/configuration", body, newKey()), http.StatusConflict, codeStaleRevision)
+	rec = f.do(http.MethodGet, "/alerts/configuration", "", as(s))
+	decode(t, rec, &config)
+	if config.SpendDetection == nil || config.SpendDetection.WindowSeconds != 900 || config.SpendDetection.SpendRatio != 4 {
+		t.Fatalf("spend detection was not saved: %s", rec.Body)
+	}
+	// The first save is the only configuration audit entry checked here; the replacement below adds its own.
 	f.expectAudit("alert_configuration.update", map[string]string{"reason": "enable alerts"})
+	// A node that predates the field replaces rules and channels without it; the saved thresholds must survive.
+	old := `{"rev":3,"rules":[],"channels":[{"id":"ops","email":"ops@example.com"}],"reason":"older node"}`
+	expectAdmin(t, "older node replacement", f.change(s, http.MethodPut, "/alerts/configuration", old, newKey()), http.StatusCreated, "")
+	rec = f.do(http.MethodGet, "/alerts/configuration", "", as(s))
+	decode(t, rec, &config)
+	if config.SpendDetection == nil || config.SpendDetection.WindowSeconds != 900 || config.SpendDetection.SpendRatio != 4 {
+		t.Fatalf("older node dropped spend detection: %s", rec.Body)
+	}
+	expectAdmin(t, "stale configuration", f.change(s, http.MethodPut, "/alerts/configuration", body, newKey()), http.StatusConflict, codeStaleRevision)
 	expectAdmin(t, "sendAlertTest", f.change(s, http.MethodPost, "/alerts/tests", `{"channel":"ops","reason":"check delivery"}`, newKey()), http.StatusCreated, "")
 	rec = f.do(http.MethodGet, "/alerts/events", "", as(s))
 	expectAdmin(t, "listAlertEvents", rec, http.StatusOK, "")
@@ -66,7 +84,7 @@ func TestAdminWebhookSecretIsSealedAuditedAndIdempotent(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"rev":2,"secret":"` + strings.Repeat("s", 32) + `","reason":"rotate receiver secret"}`
+	body := `{"rev":3,"secret":"` + strings.Repeat("s", 32) + `","reason":"rotate receiver secret"}`
 	key := newKey()
 	path := "/alerts/channels/hook/secret"
 	rec := f.change(s, http.MethodPut, path, body, key)

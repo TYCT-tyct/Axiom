@@ -35,11 +35,13 @@ type AlertChannel struct {
 	WebhookURL string `json:"webhook_url,omitempty"`
 }
 
-// AlertConfiguration is replaced atomically with optimistic concurrency.
+// AlertConfiguration is replaced atomically with optimistic concurrency. SpendDetection is optional so an older node's
+// replacement leaves it untouched.
 type AlertConfiguration struct {
-	Rev      int64          `json:"rev"`
-	Rules    []AlertRule    `json:"rules"`
-	Channels []AlertChannel `json:"channels"`
+	Rev            int64           `json:"rev"`
+	Rules          []AlertRule     `json:"rules"`
+	Channels       []AlertChannel  `json:"channels"`
+	SpendDetection *SpendDetection `json:"spend_detection,omitempty"`
 }
 
 // AlertEvent is an incident, with independent receipts for each destination.
@@ -77,7 +79,13 @@ var (
 
 // GetAlertConfiguration reads the platform's rules and channels in the caller's authorized scope.
 func GetAlertConfiguration(ctx context.Context, tx pg.Tx) (AlertConfiguration, error) {
-	return readAlertConfiguration(ctx, tx, false)
+	c, err := readAlertConfiguration(ctx, tx, false)
+	if err != nil {
+		return c, err
+	}
+	d, err := getSpendDetection(ctx, tx)
+	c.SpendDetection = &d
+	return c, err
 }
 
 func readAlertConfiguration(ctx context.Context, tx pg.Tx, lock bool) (AlertConfiguration, error) {
@@ -101,7 +109,17 @@ func SetAlertConfiguration(ctx context.Context, tx pg.Tx, c AlertConfiguration) 
 	if err := validateAlertConfiguration(c); err != nil {
 		return err
 	}
-	body, err := jsonx.MarshalCanonical(c)
+	if c.SpendDetection != nil {
+		if err := c.SpendDetection.validate(); err != nil {
+			return ErrAlertConfiguration
+		}
+	}
+	// Detection is stored apart from the rules so a node that predates it cannot drop it while replacing the body.
+	stored := struct {
+		Rules    []AlertRule    `json:"rules"`
+		Channels []AlertChannel `json:"channels"`
+	}{Rules: c.Rules, Channels: c.Channels}
+	body, err := jsonx.MarshalCanonical(stored)
 	if err != nil {
 		return err
 	}
@@ -112,7 +130,18 @@ func SetAlertConfiguration(ctx context.Context, tx pg.Tx, c AlertConfiguration) 
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `DELETE FROM observability.alert_windows`)
+	if _, err = tx.Exec(ctx, `DELETE FROM observability.alert_windows`); err != nil {
+		return err
+	}
+	if c.SpendDetection == nil {
+		return nil
+	}
+	raw, err := jsonx.MarshalCanonical(*c.SpendDetection)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO observability.spend_detection(singleton,body) VALUES(true,$1)
+ ON CONFLICT(singleton) DO UPDATE SET body=$1`, raw)
 	return err
 }
 
@@ -229,7 +258,7 @@ func applyAlert(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) er
 func evaluateSecuritySample(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) error {
 	// Completed security samples must be evaluated before a later sample replaces
 	// their value or resolves the incident, even when the consumer is catching up.
-	c, err := GetAlertConfiguration(ctx, tx)
+	c, err := readAlertConfiguration(ctx, tx, false)
 	if err != nil {
 		return err
 	}
@@ -336,7 +365,7 @@ func alertQuiet(now time.Time, start, end int) time.Duration {
 
 // SendAlertTest persists a test incident and receipt; the normal dispatcher sends it with the same retries.
 func SendAlertTest(ctx context.Context, tx pg.Tx, channel string, now time.Time) (uuid.UUID, error) {
-	c, err := GetAlertConfiguration(ctx, tx)
+	c, err := readAlertConfiguration(ctx, tx, false)
 	if err != nil {
 		return uuid.Nil(), err
 	}
