@@ -360,7 +360,9 @@ func (p *Payments) ListOrders(ctx context.Context, s pg.Scope, account uuid.UUID
 		}
 		orders = make([]Order, len(rows))
 		for i, r := range rows {
-			orders[i], err = orderOfListed(r)
+			// ListOrders selects the same columns as ReadOrder, so the generated row types are the same and one
+			// conversion keeps the two reads from drifting apart.
+			orders[i], err = orderOf(ReadOrderRow(r))
 			if err != nil {
 				return err
 			}
@@ -372,27 +374,6 @@ func (p *Payments) ListOrders(ctx context.Context, s pg.Scope, account uuid.UUID
 
 // endOfOrders is the upper bound of the first page: later than any order.
 var endOfOrders = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
-
-// orderOfListed is orderOf for a page row. The two generated row types carry the same fields, and this is the only
-// difference between the two reads.
-func orderOfListed(r ListOrdersRow) (Order, error) {
-	pay, err := platform.ParseCurrency(r.PayCurrency)
-	if err != nil {
-		return Order{}, fmt.Errorf("payments: order %s is paid in %q: %w", OrderID(r.ID).TypeID(), r.PayCurrency, err)
-	}
-	var c Checkout
-	if len(r.Checkout) > 0 {
-		if err = jsonx.UnmarshalKnown(r.Checkout, &c); err != nil {
-			return Order{}, fmt.Errorf("payments: order %s has a checkout that does not parse: %w", OrderID(r.ID).TypeID(), err)
-		}
-	}
-	return Order{
-		ID: OrderID(r.ID), SiteID: r.SiteID, AccountID: r.AccountID, UserID: r.UserID, MerchantID: MerchantID(r.MerchantID),
-		Method: Method(r.Method), State: State(r.State), Credits: r.Credits, Total: Money{pay, r.Total}, Fee: r.Fee,
-		TradeNo: r.TradeNo, Checkout: c, ExpiresAt: r.ExpiresAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
-		RefundAllowed: r.RefundAllowed,
-	}, nil
-}
 
 // readOrder reads one order of the transaction's scope.
 func loadOrder(ctx context.Context, tx pg.Tx, id OrderID) (Order, error) {

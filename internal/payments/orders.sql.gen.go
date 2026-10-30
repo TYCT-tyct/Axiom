@@ -179,8 +179,8 @@ func (q *Queries) InsertOrder(ctx context.Context, db DBTX, arg InsertOrderParam
 }
 
 const listOrders = `-- name: ListOrders :many
-SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.credits, o.site_currency,
-    o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
+SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.fingerprint, o.credits,
+    o.site_currency, o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
     (m.user_refund AND m.refund_enabled)::boolean AS refund_allowed
 FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id
 WHERE o.account_id = $1 AND (o.created_at, o.id) < ($2::timestamptz, $3::uuid)
@@ -203,6 +203,7 @@ type ListOrdersRow struct {
 	MerchantID    uuid.UUID
 	Method        string
 	State         string
+	Fingerprint   []byte
 	Credits       int64
 	SiteCurrency  string
 	PayCurrency   string
@@ -240,6 +241,7 @@ func (q *Queries) ListOrders(ctx context.Context, db DBTX, arg ListOrdersParams)
 			&i.MerchantID,
 			&i.Method,
 			&i.State,
+			&i.Fingerprint,
 			&i.Credits,
 			&i.SiteCurrency,
 			&i.PayCurrency,

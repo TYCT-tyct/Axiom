@@ -11,8 +11,8 @@ FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id WHERE o
 -- name: ListOrders :many
 -- The account's orders, newest first. The (created_at, id) bound is the page cursor; the index is (account_id, created_at
 -- DESC), which this reads in order and then filters by the cursor's id within the same microsecond.
-SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.credits, o.site_currency,
-    o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
+SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.fingerprint, o.credits,
+    o.site_currency, o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
     (m.user_refund AND m.refund_enabled)::boolean AS refund_allowed
 FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id
 WHERE o.account_id = @account_id AND (o.created_at, o.id) < (@after_at::timestamptz, @after_id::uuid)
