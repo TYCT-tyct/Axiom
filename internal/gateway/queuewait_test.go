@@ -16,7 +16,7 @@ import (
 // the instant the call ended.
 func queuedCall(t *testing.T, ctx context.Context, bp *Backpressure, tx func() error, each func(second int)) (time.Time, error) {
 	t.Helper()
-	h := &Handler{admitTx: func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error {
+	h := &Handler{admitBatchTx: func(context.Context, []accounts.AdmitCall, func(pg.Tx, []accounts.Admission, []error) error) error {
 		return tx()
 	}}
 	h.Limits = bp

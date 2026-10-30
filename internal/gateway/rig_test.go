@@ -241,10 +241,9 @@ func (r *rig) run(w http.ResponseWriter, req *http.Request, c *Call) {
 	}
 	ctx, cancel := SettleContext(req.Context(), 30*time.Second)
 	defer cancel()
-	release, err := r.limits.Funds.Complete(ctx, accountKey(c.caller))
+	err := submitCompletion(ctx, r.limits.Funds, accountKey(c.caller))
 	if err == nil {
 		err = r.billing.SettleOrphan(ctx, c.Admitted, c.ID)
-		release()
 	}
 	if err != nil {
 		r.t.Errorf("release the reservation: %v", err)

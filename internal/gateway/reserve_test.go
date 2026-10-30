@@ -79,9 +79,9 @@ func TestBackgroundAndConsoleCannotTakeTheSettlementReserve(t *testing.T) {
 	x.Limits, x.Ledger = r.limits, r.billing
 	settle, stop := context.WithTimeout(ctx, settleAttempt)
 	defer stop()
-	if err := x.withFunds(settle, c, func(ctx context.Context) error {
-		_, err := r.billing.Settle(ctx, c.Hold, billing.Outcome{})
-		return err
+	if err := x.withFunds(settle, c, func(ctx context.Context, tx pg.Tx) (func(), error) {
+		_, after, err := r.billing.SettleIn(ctx, tx, c.Hold, billing.Outcome{})
+		return after, err
 	}); err != nil {
 		t.Fatalf("settlement while ordinary work holds every connection: %v", err)
 	}

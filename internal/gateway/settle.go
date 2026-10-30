@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"axiom/internal/billing"
@@ -24,22 +25,101 @@ func (x *Executor) settle(ctx context.Context, c *Call, o billing.Outcome, until
 	err = x.Outstanding.retry(until, permanent, func() error {
 		ctx, cancel := x.Outstanding.settlementContext(ctx, settleAttempt)
 		defer cancel()
-		return x.withFunds(ctx, c, func(ctx context.Context) (err error) {
-			f, err = x.Ledger.Settle(ctx, c.Hold, o)
-			return err
+		return x.withFunds(ctx, c, func(ctx context.Context, tx pg.Tx) (func(), error) {
+			var after func()
+			var err error
+			f, after, err = x.Ledger.SettleIn(ctx, tx, c.Hold, o)
+			return after, err
 		})
 	})
 	return f, err
 }
 
-// withFunds runs one of the call's money writes behind its account's gate, of the completion class.
-func (x *Executor) withFunds(ctx context.Context, c *Call, write func(context.Context) error) error {
-	release, err := x.Limits.Funds.Complete(ctx, accountKey(c.caller))
-	if err != nil {
+// completionItem is one money write in a completion batch. work writes it on the batch's transaction and returns the
+// reports to run after the commit; after holds them until then.
+type completionItem struct {
+	gate  gateItem
+	scope pg.Scope
+	work  func(context.Context, pg.Tx) (func(), error)
+	after func()
+}
+
+// withFunds runs one of the call's money writes behind its account's gate, of the completion class. The write joins
+// the account's completions in one transaction (README.md#账户闸): one begin, one commit and one connection for the
+// batch, with the reservation and ledger rows still making every retry charge at most once.
+func (x *Executor) withFunds(ctx context.Context, c *Call, write func(context.Context, pg.Tx) (func(), error)) error {
+	item := &completionItem{scope: c.Admitted.Scope, work: write}
+	item.gate.done, item.gate.payload = make(chan struct{}), item
+	if err := x.Limits.Funds.Complete(ctx, accountKey(c.caller), &item.gate, x.runCompletions); err != nil {
 		return err
 	}
-	defer release()
-	return write(pg.CompletionContext(ctx))
+	return item.gate.err
+}
+
+// runCompletions writes a batch of the account's completions in one transaction, then runs their reports. One write's
+// error rolls the transaction back, so none commits; the gateway retries every request in the batch, and the rows make
+// the retry idempotent. A report is run only after the commit, because it describes what the ledger now holds.
+func (x *Executor) runCompletions(ctx context.Context, batch []*gateItem) error {
+	return runCompletionBatch(pg.CompletionContext(ctx), batch, x.Ledger.RunBatch)
+}
+
+// runCompletionBatch writes the batch's works in one transaction of their account's scope, then runs each item's
+// reports. A work that fails rolls the transaction back; its error goes only to that item, and the others are retried
+// in a new transaction under their own deadlines. A transaction or commit error has no work to name, so it still
+// applies to every item and the caller retries them. Reports run only after their transaction commits.
+func runCompletionBatch(ctx context.Context, batch []*gateItem, run func(context.Context, pg.Scope, []func(pg.Tx) error) error) error {
+	failed, err := writeCompletions(ctx, batch, run)
+	if failed < 0 {
+		return err
+	}
+	item := batch[failed]
+	item.err = err
+	if !item.closed {
+		// Return the failed request before retrying the others: an extension's landing and cancel must not wait for a
+		// slow settlement or extension in the rest of the batch. This runs after the rollback, so the failed request
+		// has no committed write.
+		item.closed = true
+		close(item.done)
+	}
+	rest := slices.Delete(slices.Clone(batch), failed, failed+1) // the caller's batch still gives every item its result
+	if len(rest) == 0 {
+		return nil
+	}
+	// The next transaction keeps ctx's values but only the remaining requests' deadlines; the failed one's may already
+	// have passed.
+	retry, cancel := earliestDeadline(context.WithoutCancel(ctx), rest)
+	defer cancel()
+	return runCompletionBatch(retry, rest, run)
+}
+
+// writeCompletions runs the batch's works in one transaction and, once it commits, their reports. When a work's error
+// rolled the transaction back it returns that work's index and error; otherwise -1 and the transaction's own error.
+func writeCompletions(ctx context.Context, batch []*gateItem, run func(context.Context, pg.Scope, []func(pg.Tx) error) error) (int, error) {
+	items := make([]*completionItem, len(batch))
+	works := make([]func(pg.Tx) error, len(batch))
+	for i, g := range batch {
+		item := g.payload.(*completionItem)
+		item.after, items[i] = nil, item
+		works[i] = func(tx pg.Tx) error {
+			after, err := item.work(ctx, tx)
+			if err == nil {
+				item.after = after
+			}
+			return err
+		}
+	}
+	err := run(ctx, items[0].scope, works)
+	if failed, ok := errors.AsType[*billing.BatchWorkError](err); ok && failed.Index >= 0 && failed.Index < len(batch) {
+		return failed.Index, failed.Err
+	}
+	if err == nil {
+		for _, item := range items {
+			if item.after != nil {
+				item.after()
+			}
+		}
+	}
+	return -1, err
 }
 
 // settled follows the settlement up, and reports whether the call's slots are now the background's to give back. One

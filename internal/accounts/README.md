@@ -48,7 +48,7 @@
 | `password_reset_requests` | `site_id`、`email_hash`、`id`、可空 `email`、`domain`、`language`、`expires_at` | 主键 `(site_id, email_hash)`；唯一 `id`；摘要 32 字节；语言 zh/en | 站点 | `id`、`email`、`domain`、`language`、`expires_at`（重发替换，处理后清除邮箱） |
 | `password_reset_tokens` | `id`、`site_id`、`account_id`、`user_id`、`token_hash`、`factor_version`、`expires_at`、`used_at` | `token_hash` 唯一、32 字节；`(site_id, account_id, user_id) → users` | 账户 | `used_at`（终态） |
 | `registration_requests` | `id`、`site_id`、`email_hash`、`email`、`password_hash`、`tier_id`、`domain`、`language`、可空 `token_hash`、`expires_at` | 主键 `id`；`(site_id, email_hash)` 唯一，重复请求替换；`(site_id, tier_id) → tiers`；`token_hash` 唯一、32 字节；语言 zh/en；默认 24 小时到期 | 站点 | `password_hash`、`tier_id`、`domain`、`language`、`expires_at`、`token_hash`；可删除 |
-| `notification_preferences` | `site_id`、`account_id`、`user_id`；可空的 `low_balance`、`top_up`、`factor_changed`、`threshold`；`webhook_url`、`language` | 主键 `user_id`；复合用户外键；阈值非负、语言 zh/en | 账户 | 六项偏好列 |
+| `notification_preferences` | `site_id`、`account_id`、`user_id`；可空的 `low_balance`、`top_up`、`factor_changed`、`spend_anomaly`、`threshold`；`webhook_url`、`language` | 主键 `user_id`；复合用户外键；阈值非负、语言 zh/en | 账户 | 七项偏好列 |
 | `user_notices` | 来源、种类、数值、时间、`email_done`、`dispatched`、冻结的 Webhook URL 与状态 | 主键 UUID；唯一 `(user_id,kind,source)`；复合用户外键；排队与终态分开索引 | 账户 | `email_done`、`email_failed`、`dispatched`、`webhook_url`、`webhook_state`；平台仅可删除已派发、非排队、超过 30 天的行 |
 | `announcements` | `site_id`、纯文本标题和正文、`starts_at`、`ends_at`、`withdrawn_at` | 站点外键、结束晚于开始；撤下为终态 | 站点公开配置 | 平台只能改 `withdrawn_at` |
 
@@ -137,8 +137,10 @@
 **缓存只存不会变的东西；能被改的（停用、删除、过期、IP 白名单、可用模型、预设、上限、等级）每次调用都在准入事务里读库，判定能否使用、定规则和路由都只用读出的值。** 所以缓存陈旧、并发的缓存填充交出旧结果、提交确认丢失、多个核心节点，都不会让停用后的 key 通过，也不会按旧预设路由，不需要失效协议。
 
 1. **认出**（`AuthenticateKey`，内存）：解析并核对校验位，用 `(site_id, 当前版本的哈希)` 查缓存。条目里只有 `key_id`、`account_id`、`workspace_id`、`site_id`，建后永不改变。未命中时按 `(site, 哈希)` 合并并发的查找：配了 `Config.LookupSlot` 时，这次共享的查找先取一个名额、查完才还（发起它的请求走了也不提前还，等它的请求不另取），名额取不到就按查找失败处理、不写负缓存；无范围调用 `key_tenant`，无结果写负缓存、返回 401；有结果写入缓存。
-2. **准入**（`Admit`，数据库）：gateway 调用 `accounts.Admit(ctx, caller, req, fn)`，`req` 带请求的域名、可信解析的客户端 IP。本模块用 key 所属账户的范围打开事务，执行一条查询：key ⨝ 工作区 ⨝ 账户，条件为 `domain_site(请求的域名, 'api') = key.site_id`，key、工作区、账户都启用，key 与工作区未删除，未过期，`kind = call`，`ip_allow` 为空或包含客户端 IP。其他条件有效而账户停用时回滚并返回 `ErrAccountSuspended`（403）；其余条件不满足返回与"key 不存在"相同的 `ErrUnknownKey`（401）。满足就把当前的 `preset_id`、`models`、`tier_id`、`spend_limit`、`limit_reset`、工作区预算放进 `Admission` 交给 `fn`。`fn` 由 gateway 组装：用 `Admission` 定规则、路由（认模型里名字解析在准入之前做，key 的可用模型这一半在 `fn` 里按 `Admission.models` 约束，不允许返回 403），再调 billing 的准入在同一个事务里预留。`fn` 里只有对内存快照的有界计算和预留的数据库语句，不访问缓存、不等待：限流计数和会话粘性在 `Admit` 之前取好，端点负载在进程内，都作为路由的输入（见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)）；候选都满载时 `fn` 返回"需要等待"，`Admit` 回滚（这时还没有预留），gateway 在事务之外等，醒来后只重新调 `Admit`，不再访问缓存、不重复计限流；权限、预设、可用模型、等级都重新读库，路线也重新计算。
+2. **准入**（`Admit`，数据库）：gateway 的单请求路径调用 `accounts.Admit(ctx, caller, req, fn)`（并发路径是下面的 `AdmitBatch`），`req` 带请求的域名、可信解析的客户端 IP。本模块用 key 所属账户的范围打开事务，执行一条查询：key ⨝ 工作区 ⨝ 账户，条件为 `domain_site(请求的域名, 'api') = key.site_id`，key、工作区、账户都启用，key 与工作区未删除，未过期，`kind = call`，`ip_allow` 为空或包含客户端 IP。其他条件有效而账户停用时回滚并返回 `ErrAccountSuspended`（403）；其余条件不满足返回与"key 不存在"相同的 `ErrUnknownKey`（401）。满足就把当前的 `preset_id`、`models`、`tier_id`、`spend_limit`、`limit_reset`、工作区预算放进 `Admission` 交给 `fn`。`fn` 由 gateway 组装：用 `Admission` 定规则、路由（认模型里名字解析在准入之前做，key 的可用模型这一半在 `fn` 里按 `Admission.models` 约束，不允许返回 403），再调 billing 的准入在同一个事务里预留（批量路径是 `ReserveMany`）。`fn` 里只有对内存快照的有界计算和预留的数据库语句，不访问缓存、不等待：限流计数和会话粘性在 `Admit` 之前取好，端点负载在进程内，都作为路由的输入（见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)）；候选都满载时 `fn` 返回"需要等待"，`Admit` 回滚（这时还没有预留），gateway 在事务之外等，醒来后只重新调 `Admit`，不再访问缓存、不重复计限流；权限、预设、可用模型、等级都重新读库，路线也重新计算。
 3. 不预留的 key 接口（`GET /api/v1/key`、`/credits`）同样经 `Admit` 打开事务，`fn` 只读。
+
+**批量准入**（`AdmitBatch`，数据库）：同一账户的并发调用合并成一个事务。`tx.Batch` 一次发出每个调用的准入查询，每个调用各自成功、得到 `ErrAccountSuspended` 或 `ErrUnknownKey`；成功的调用连同 `Admission` 按原顺序交给 `fn`，`fn` 的错误回滚整批。调用方保证批内是同一个账户、调用者非零；混合账户是程序错误，直接报错而不是跨租户开事务。`TestAdmitBatchChecksEveryCallAndKeepsTheRest` 守住一个被拒的调用不影响同批其他调用。
 
 - **为什么停用立即生效**：停用的提交被确认之后开始的调用，其准入查询都在提交之后执行，读到的就是停用（Read Committed 每条语句取新快照），与缓存内容、节点数、提交确认是否送达都无关。改预设、可用模型、等级同理：下一次调用就按新值路由和计价，最高价也按新等级的售价比较。
 - **路由在准入事务里，不在它之前**：路由要的预设、可用模型、等级都会被改，在准入之前路由就只能用缓存里的旧值，收紧的预设会被绕过，放宽的会被旧值一直拒在准入之前。事务里的路由只读内存快照和事务外取好的缓存结果，不加锁、不查库、不访问缓存，所以不增加[总体架构](../../docs/architecture.md#模块边界规则)调用路径上的查库例外，只让事务多开着路由计算那一段时间。
@@ -289,6 +291,7 @@
 | key 能否使用每次调用以库为准 | `Admit` 在准入事务里读库；缓存只存不变的标识。测试：两个 `Service` 共用一个库，一个停用，另一个下一次 `Admit` 被拒；客户端先超时、服务端随后提交停用，之后的 `Admit` 被拒；禁止的 IP 先请求，允许的紧接着成功 |
 | 定规则和路由只用库里的当前值 | `Admission` 带当前的 `preset_id`、`models`、`tier_id`，缓存条目里没有这几项；测试：两个 `Service` 共用一个库，各认出同一把 key 并预热缓存后，一个改预设、可用模型（从 A 改成 A+B）、等级，另一个下一次 `Admit` 交给 `fn` 的是新值；`fn` 里的路由与最高价检查用 `Admission` 的值，接线的证明在 #27 |
 | 准入事务里不等待，满载排队不占数据库连接 | `fn` 只做内存计算和预留，满载时返回"需要等待"、在事务外等；本模块测试：`fn` 返回"需要等待"后事务已回滚、连接已归还池子。接线的验收在 #27：连接池设为 N，模型 A 只有一个并发名额且有多于 N 个请求在排队，期间模型 B 的准入和另一个调用的结算照常完成、在预算之内，排队中的 A 请求占用的连接数为 0 |
+| 同一账户的并发准入合并为一个事务，逐调用返回拒绝 | 每个调用仍各自判定 key、工作区、账户和域名，`Admission` 不变；省掉每个调用的 BEGIN/COMMIT，并把准入查询流水线化。业务拒绝不写行，所以不中止同批其他调用；数据库错误让整批回滚，网关按请求 ID 重试。校验拒绝混合账户或零调用者，避免一个批次跨租户 | 每调用一个事务：热点账户的提交和锁等待按调用累加；在 `fn` 里逐个 `Admit`：多一次往返和连接占用 |
 | 缓存命中时不查库 | 预热后关闭 `pg.DB`，`AuthenticateKey` 仍成功；指标 `axiom_accounts_key_cache_misses_total`（OpenTelemetry 的 `axiom.accounts.key_cache.misses`，每次真去问数据库的查找加一，命中和负缓存都不加） |
 | 登录前拿不到租户数据 | 无范围的事务 + 「登录前的查找」的函数和启动检查 |
 | 范围和认证结果不可伪造 | 生产代码只有本模块能构造账户和站点范围（forbidigo）；`Caller`、`Principal`、`Admission` 的字段不导出 |
@@ -437,7 +440,7 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 
 ## 用户提醒与站内公告
 
-`notification_preferences` 是用户的账户数据，没有行时使用代码默认值，保存后各列均非 NULL；`user_notices` 用 `(user_id,kind,source)` 唯一键去重。因素版本改变的 invoker trigger 与用户变更同事务，覆盖控制台、CLI 和旧节点。密码变更沿用同步入 outbox 的模板，不受因素开关影响，并把对应事件的 email_done 置真，后台只补 Webhook，不再排第二封邮件。其他因素变化由后台拼站点品牌的 zh/en 邮件。Webhook 发送不引用运维配置或运维密钥，URL 只在租户表，任务只有通知 ID；正文包括稳定 ID、kind、字符串 value（金额为十亿分之一站点额度；因素为版本）、currency 和 at。此用户 Webhook 没有签名，接收方只能按通知 ID 去重，不能据此执行敏感操作。
+`notification_preferences` 是用户的账户数据，没有行时使用代码默认值，保存后各列均非 NULL；账户异常花费由 observability 的检测事务调用 `RecordSpendAnomalyNotices`，按 `spend_anomaly` 开关写入，同一账户一轮检测只写一条；省略 `spend_anomaly` 的偏好保存由 upsert 保留已存值（首次插入取默认），不会用先前读到的值覆盖并发修改；派发器只领取 `noticeKinds` 里的种类，不认识的提醒留给认识它的节点，不会被标记成已派发；`user_notices` 用 `(user_id,kind,source)` 唯一键去重。因素版本改变的 invoker trigger 与用户变更同事务，覆盖控制台、CLI 和旧节点。密码变更沿用同步入 outbox 的模板，不受因素开关影响，并把对应事件的 email_done 置真，后台只补 Webhook，不再排第二封邮件。其他因素变化由后台拼站点品牌的 zh/en 邮件。Webhook 发送不引用运维配置或运维密钥，URL 只在租户表，任务只有通知 ID；正文包括稳定 ID、kind、字符串 value（金额为十亿分之一站点额度；因素为版本）、currency 和 at。此用户 Webhook 没有签名，接收方只能按通知 ID 去重，不能据此执行敏感操作。
 
 组装层的周期任务按活跃状态去重，避免重试占满通知队列；每分钟先调用一次 `MaintainUserNotices`，再在每批平台事务内调用 billing 的集合 journal 消费（最多 1000 行）与 `RecordBalanceNotices`，再调用 `DispatchUserNotices`（最多 100 条）；即使 journal 为空也继续派发积压，直到没有进展或 30 秒预算不足以开始下一批，预算耗尽正常完成；多个节点使用 `FOR UPDATE SKIP LOCKED`，事件/派发标记、outbox、River 任务全成全败。邮件未配置的节点保留待派发，不影响原账本或因素写入；密码修改原有的 SMTP 就绪要求保持。邮件与 Webhook 最多五次持久尝试，Webhook 最后一次失败记 failed 后完成，异常丢弃/取消由下一轮检查持久任务收尾；通知 30 天后分批清理，排队 Webhook 受保护。SMTP 结果仍查 mail outbox、River 与日志；不能入 outbox 的历史非法邮箱记 email_failed，不悄悄略过，也不堵住整个批次。低余额是已过账钱包余额穿越，不是可用余额，也不是盗刷检测。
 
