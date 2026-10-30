@@ -98,13 +98,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Site name and invite or closed registration policy.
-         * @description Site name and invite or closed registration policy.
+         * Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
+         * @description Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
          */
         get: operations["getSystemSettings"];
         /**
-         * Site name and invite or closed registration policy.
-         * @description Site name and invite or closed registration policy.
+         * Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
+         * @description Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
          */
         put: operations["setSystemSettings"];
         post?: never;
@@ -270,6 +270,61 @@ export interface paths {
          * @description Send one fixed test mail using the saved transport. Accepted means SMTP acceptance; failed may be an unknown result. No automatic resend. Ten tests per session per minute.
          */
         post: operations["testMailSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/merchants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The merchant accounts of a site and their payment methods, without their secrets. */
+        get: operations["listMerchants"];
+        put?: never;
+        /** Create a merchant account. Secrets are write-only and never returned. */
+        post: operations["createMerchant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/merchants/{merchant_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                merchant_id: components["schemas"]["MerchantId"];
+            };
+            cookie?: never;
+        };
+        /** One merchant account and its payment methods, without its secrets. */
+        get: operations["getMerchant"];
+        /** Replace a merchant account's configuration. Omit secrets to keep the sealed ones. */
+        put: operations["updateMerchant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/merchants/{merchant_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop new orders from choosing a merchant account, keeping its configuration and sealed secrets. */
+        post: operations["disableMerchant"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1700,7 +1755,9 @@ export interface components {
         SystemSettings: {
             name?: string;
             /** @enum {string} */
-            registration?: "invite" | "closed";
+            registration?: "invite" | "closed" | "open";
+            /** @description Whether this node accepts a name-only update of the system settings. Absent on a node of the previous release, whose contract requires the registration mode with the name; the settings page then keeps the name read-only until the node is upgraded. */
+            name_editable?: boolean;
         };
         SiteBrand: {
             /** @description The site's brand colour, lower case. Absent when the site uses the default palette; a node of the previous release has no brand colour and leaves it out. */
@@ -1715,7 +1772,7 @@ export interface components {
             settings: {
                 name: string;
                 /** @enum {string} */
-                registration: "invite" | "closed";
+                registration?: "invite" | "closed";
             };
             reason: components["schemas"]["Reason"];
         };
@@ -1723,12 +1780,16 @@ export interface components {
             open?: boolean;
             credits_min?: components["schemas"]["Money"];
             credits_max?: components["schemas"]["Money"];
+            /** @description The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A node of the previous release does not return it. */
+            top_up_buffer_ppm?: number;
         };
         PaymentSettingsUpdate: {
             settings: {
                 open: boolean;
                 credits_min?: components["schemas"]["Money"];
                 credits_max?: components["schemas"]["Money"];
+                /** @description The buffer in millionths, 0 to 10%. Omit to keep the current one. */
+                top_up_buffer_ppm?: number;
             };
             reason: components["schemas"]["Reason"];
         };
@@ -1794,6 +1855,95 @@ export interface components {
         };
         /** @description A top-up order's ID (TypeID), also the order number the payment channel sees. */
         OrderId: string;
+        /** @description A merchant account of a payment channel, without its secrets. Every field is optional during rolling deployment. */
+        Merchant: {
+            id?: components["schemas"]["MerchantId"];
+            site_id?: components["schemas"]["SiteId"];
+            /** @description The compiled-in channel plugin, such as easypay. */
+            kind?: string;
+            name?: string;
+            enabled?: boolean;
+            /** @description The currency users pay this account in; the callback carries no currency. */
+            currency?: string;
+            /** @description How long an order of this account stays payable. */
+            ttl_seconds?: number;
+            /** @description Whether refunds of its orders may be sent automatically. */
+            refund_enabled?: boolean;
+            /** @description Whether users may ask for a refund against this account. */
+            user_refund?: boolean;
+            /** @description Tie-break order among the site's accounts: lower first. */
+            sort?: number;
+            /**
+             * Format: int64
+             * @description The revision a change must be decided against.
+             */
+            rev?: number;
+            /** @description The plugin's non-secret configuration, canonical JSON. */
+            settings?: {
+                [key: string]: unknown;
+            };
+            methods?: components["schemas"]["MerchantMethod"][];
+        };
+        /** @description One payment method a merchant account offers. Every field is optional during rolling deployment. */
+        MerchantMethod: {
+            /** @description The site's method code, such as alipay or usdt.tron. */
+            method?: string;
+            /** @description The gateway's own code for the method. */
+            upstream?: string;
+            /** @description The channel's proportional fee in millionths; 30000 is 3%. */
+            fee_ppm?: number;
+            fee_fixed?: components["schemas"]["Money"];
+            single_min?: components["schemas"]["Money"];
+            single_max?: components["schemas"]["Money"];
+            daily_limit?: components["schemas"]["Money"];
+            enabled?: boolean;
+        };
+        MerchantList: {
+            data?: components["schemas"]["Merchant"][];
+        };
+        MerchantCreate: {
+            site_id: components["schemas"]["SiteId"];
+            merchant: components["schemas"]["MerchantInput"];
+            reason: components["schemas"]["Reason"];
+        };
+        MerchantUpdate: {
+            merchant: components["schemas"]["MerchantInput"];
+            reason: components["schemas"]["Reason"];
+        };
+        MerchantInput: {
+            /**
+             * Format: int64
+             * @description The revision the change was decided against; required when updating, ignored when creating.
+             */
+            rev?: number;
+            kind: string;
+            name: string;
+            enabled: boolean;
+            currency: string;
+            ttl_seconds: number;
+            refund_enabled: boolean;
+            user_refund: boolean;
+            sort: number;
+            /** @description The plugin's non-secret configuration as a JSON object; the plugin validates its members strictly. */
+            settings: {
+                [key: string]: unknown;
+            };
+            /** @description The channel's secrets, such as key, sealed on arrival and never returned. Required when creating; omit on update to keep the sealed ones. */
+            secrets?: {
+                [key: string]: string;
+            };
+            methods: components["schemas"]["MerchantMethodInput"][];
+        };
+        MerchantMethodInput: {
+            method: string;
+            upstream: string;
+            fee_ppm: number;
+            fee_fixed: components["schemas"]["Money"];
+            single_min?: components["schemas"]["Money"];
+            single_max?: components["schemas"]["Money"];
+            daily_limit?: components["schemas"]["Money"];
+            enabled: boolean;
+        };
         /** @description A merchant account's ID (TypeID). */
         MerchantId: string;
         /** @description All fields optional during rolling deployment. Resolved records contain an investigation note, not a financial resolution. */
@@ -3500,6 +3650,168 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listMerchants: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest revision of each merchant account, without secrets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MerchantList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createMerchant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MerchantCreate"];
+            };
+        };
+        responses: {
+            /** @description The saved merchant account, without secrets. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Merchant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getMerchant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                merchant_id: components["schemas"]["MerchantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The merchant account, without secrets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Merchant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateMerchant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                merchant_id: components["schemas"]["MerchantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MerchantUpdate"];
+            };
+        };
+        responses: {
+            /** @description The saved merchant account, without secrets. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Merchant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    disableMerchant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                merchant_id: components["schemas"]["MerchantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The disabled merchant account, without secrets. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Merchant"];
                 };
             };
             400: components["responses"]["BadRequest"];

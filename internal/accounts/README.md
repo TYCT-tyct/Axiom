@@ -311,7 +311,7 @@
 
 | 函数 | 做什么 |
 |---|---|
-| `ReadSystemSettings`、`SetSystemSettings` | 站点名称与 invite/closed 注册策略，读写既有 sites 行；站点行锁内读前值、修改和审计，写后由组装层刷新快照。后台客服/运维的新增权限通过迁移 00017 的 additional_permissions 保持旧节点兼容 |
+| `ReadSystemSettings`、`SetSystemSettings` | 站点名称与注册方式；`SetSystemSettings` 在请求省略注册方式时保留站点当前值（含 open），给出时只接受 invite/closed。站点行锁内读前值、修改和审计，写后由组装层刷新快照；管理接口响应带 `name_editable`，页面据此决定能否只改名称。后台客服/运维的新增权限通过迁移 00017 的 additional_permissions 保持旧节点兼容 |
 | `ReadSiteBrand`、`SetSiteBrand` | 站点品牌色，空表示默认配色；只接受 `#rrggbb`（大写转小写），否则 `*SettingError{brand_color}`，站点不存在是 `ErrNotFound`。写入在站点行锁内读旧值、更新 sites.brand_color、审计 `site_brand.update`；写后由组装层刷新快照 |
 | `SiteSettings`、`SetSiteSettings` | 读、整体替换站点自己的会话时长和新 key 的每日上限；没设的列是空，用代码里的默认（`DefaultSiteSettings`）。越界是 `*SettingError`（名字是接口里的字段名），站点不存在是 `ErrNotFound`。替换在站点行锁里做，审计条目 `site_settings.update` 记改前和改后的值，改前就是被替换的值 |
 | `SiteLoginLimits`、`SetSiteLoginLimits` | 独立 `/login-limits` 读写现有五项阈值，空值选择 `DefaultLoginLimits`；站点锁内读旧值、替换、审计，与其他站点设置互不覆盖；写后刷新，其余节点 30 秒内重载 |

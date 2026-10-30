@@ -49,6 +49,26 @@ func newAdminFixture(t *testing.T) adminFixture {
 	return f
 }
 
+// newAdminFixtureWithPool is newAdminFixture on a node whose ordinary pool has one connection: an update's preflight
+// read and its write transaction must not need two at once.
+func newAdminFixtureWithPool(t *testing.T, exit *egress.Client) adminFixture {
+	t.Helper()
+	c, _ := ownerFixture.get(t, buildOwnerDatabase)
+	url := c.database.App + "&pool_max_conns=4"
+	db, err := pg.Open(t.Context(), url, pg.WithCompletionReserve(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	c.db = db
+	c.environ = []string{"AXIOM_DATABASE_URL=" + url, "AXIOM_DB_COMPLETION_RESERVE=3"}
+	f := startAdminNodeVia(c, &testClock{now: time.Now()}, exit)
+	if _, err := f.user("", "grant-platform", "--email", ownerEmail, "--role", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
 // startAdminNode starts a node of the program on the command line's database that serves the admin listener.
 func startAdminNode(c commandLine, clock *testClock) adminFixture {
 	c.t.Helper()

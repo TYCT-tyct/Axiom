@@ -33,21 +33,47 @@ func keyOf(key string) (uuid.UUID, error) {
 // and another request with the key is idempotency_key_reused. request is what the response depends on, the path
 // parameters and the body: it is compared, not stored. do's error rolls back the transaction, the claim included.
 func idempotently[T any](ctx context.Context, db *pg.DB, operation, key string, request any, do func(tx pg.Tx) (T, error)) (response T, replayed bool, err error) {
-	id, err := keyOf(key)
+	claim, err := idempotencyClaim(ctx, operation, key, request)
 	if err != nil {
 		return response, false, err
+	}
+	return idempotentlyClaimed(ctx, db, claim, do)
+}
+
+// idempotencyClaim is the claim of a request under an Idempotency-Key before its change runs: the same actor, operation
+// and request content that Once compares when the key is claimed.
+func idempotencyClaim(ctx context.Context, operation, key string, request any) (idem.Claim, error) {
+	id, err := keyOf(key)
+	if err != nil {
+		return idem.Claim{}, err
 	}
 	fingerprint, err := idem.Fingerprint(request)
 	if err != nil {
-		return response, false, err
+		return idem.Claim{}, err
 	}
-	claim := idem.Claim{Key: id, Actor: actor(ctx), Operation: operation, Fingerprint: fingerprint}
+	return idem.Claim{Key: id, Actor: actor(ctx), Operation: operation, Fingerprint: fingerprint}, nil
+}
+
+// idempotentlyClaimed runs the change under a claim made by idempotencyClaim and commits the claim with it.
+func idempotentlyClaimed[T any](ctx context.Context, db *pg.DB, claim idem.Claim, do func(tx pg.Tx) (T, error)) (response T, replayed bool, err error) {
 	err = db.Tx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
 		var err error
 		response, replayed, err = idem.Once(ctx, tx, claim, func() (T, error) { return do(tx) })
 		return err
 	})
 	return response, replayed, err
+}
+
+// replayed reads a claim's stored response without claiming it, so a replayed request can skip preparation and probing.
+// A key whose first request is still running has no response yet: found is false, and the caller prepares and lets Once
+// wait for the first request.
+func replayed[T any](ctx context.Context, db *pg.DB, claim idem.Claim) (response T, found bool, err error) {
+	err = db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
+		var err error
+		response, found, err = idem.Lookup[T](ctx, tx, claim)
+		return err
+	})
+	return response, found, err
 }
 
 // replayedHeader is the value of the Idempotency-Replayed header: sent as true when the response is a replay, and
