@@ -73,6 +73,16 @@ data)
 
   fetch keys.tar.age
   age --decrypt --identity "$AXIOM_RESTORE_SECRETS_IDENTITY_FILE" --output "$work/keys.tar" "$work/keys.tar.age"
+  # The archive comes from the bucket, so even though age authenticates the ciphertext, someone who can write the bucket
+  # can put any tar under the public recipient. Extract only the three names the backup writes; never let ../ or an
+  # absolute path reach tar's own extraction as root.
+  mapfile -t members < <(tar -tf "$work/keys.tar")
+  for name in "${members[@]}"; do
+    case $name in
+    master | hash | identity) ;;
+    *) die "keys.tar contains $name, not just the key ring" ;;
+    esac
+  done
   tar -C "$AXIOM_KEYS_DIR" -xpf "$work/keys.tar"
   # The program checks these before it serves anything: three regular files, owned by the user it runs as, with no access
   # for anyone else. The archive carries them, but a restore next to a different uid would fail that check, so set them

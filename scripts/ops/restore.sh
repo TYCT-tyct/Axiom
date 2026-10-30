@@ -144,12 +144,11 @@ if docker volume ls --quiet --filter "name=^${project}_postgres$" | grep -q .; t
   docker volume rm "${project}_postgres" "${project}_keys" > /dev/null
 fi
 
-# Valkey's password and ACL file live in the cache volume, and the keys service makes a new pair when it starts. A cache
-# from an earlier run would leave the running Valkey on the old ACL while the program reads the new password, which is
-# WRONGPASS at startup; the cache holds no durable data (`--save ''`, `--appendonly no`), so it is safe to drop every
-# time. The container goes too, or Docker keeps the old volume mounted until it is recreated.
-compose rm --stop --force valkey keys > /dev/null 2>&1 || true
-docker volume rm "${project}_cache" > /dev/null 2>&1 || true
+# keys is a one-shot service: the restored /keys has no valkey-password, so a fresh run generates one and replaces the
+# stale users.acl in the cache. If the exited keys container is reused, it does neither, and Valkey comes up with the old
+# ACL while the program reads the new password: WRONGPASS at startup. Remove both containers; the cache volume itself
+# holds only rate-limit and session state, which is safe to lose and is not touched here.
+compose rm --stop --force valkey keys > /dev/null || die "cannot remove the Valkey and keys containers: stop them and run the restore again"
 
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT

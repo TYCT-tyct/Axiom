@@ -21,20 +21,23 @@ import (
 // fakeS3 is the smallest S3 the client's tests need: one bucket, PUT/GET/HEAD/DELETE, a two-page listing, multipart
 // uploads, and switches for the failures a test wants the client to meet.
 type fakeS3 struct {
-	mu           sync.Mutex
-	objects      map[string][]byte
-	uploads      map[string]map[int][]byte
-	aborted      []string
-	paths        []string
-	created      int
-	bucket       bool // the bucket exists; a second Create answers 409
-	takenByOther bool // the bucket belongs to another owner, so the HEAD after the 409 is 403
-	failures     int  // answer 503 this many times, then behave
-	failPartAt   int  // answer 500 for this part number, forever
-	failDone     bool // answer 500 to every completion
-	errorDone    bool // answer 200 with an Error document to every completion
-	forbidden    bool // answer 403
-	redirect     bool // answer 307
+	mu             sync.Mutex
+	objects        map[string][]byte
+	uploads        map[string]map[int][]byte
+	aborted        []string
+	paths          []string
+	created        int
+	bucket         bool   // the bucket exists
+	headMissing    bool   // the bucket exists but HEAD says 404, as an eventual-consistency race
+	bucketConflict string // the code a 409 PUT carries; empty means BucketAlreadyOwnedByYou
+	createBody     string // the body of the last successful PUT
+	failures       int    // answer 503 this many times, then behave
+	failPartAt     int    // answer 500 for this part number, forever
+	failDone       bool   // answer 500 to every completion
+	errorDoneLeft  int    // answer 200 with an Error document this many times
+	noETag         bool   // answer 200 with a completion result that has no ETag
+	forbidden      bool   // answer 403
+	redirect       bool   // answer 307
 }
 
 // writeTest is a test handler's write: the client on the other end failing is the test's own failure to report.
@@ -83,17 +86,24 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	if key == "" && r.Method == http.MethodPut {
 		f.created++
-		if f.bucket {
+		if f.bucket || f.headMissing {
+			code := f.bucketConflict
+			if code == "" {
+				code = "BucketAlreadyOwnedByYou"
+			}
 			w.WriteHeader(http.StatusConflict)
+			writeTest(w, "<Error><Code>"+code+"</Code></Error>")
 			return
 		}
+		body, _ := io.ReadAll(r.Body) //nolint:errcheck // a test double reading its own request
+		f.createBody = string(body)
 		f.bucket = true
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if key == "" && r.Method == http.MethodHead {
-		if f.takenByOther {
-			w.WriteHeader(http.StatusForbidden)
+		if !f.bucket || f.headMissing {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -180,8 +190,13 @@ func (f *fakeS3) multipart(w http.ResponseWriter, r *http.Request, uploadID stri
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		if f.errorDone {
+		if f.errorDoneLeft > 0 {
+			f.errorDoneLeft--
 			writeTest(w, `<Error><Code>InternalError</Code><Message>completion failed</Message><RequestId>r1</RequestId></Error>`)
+			return
+		}
+		if f.noETag {
+			writeTest(w, `<CompleteMultipartUploadResult><ETag></ETag></CompleteMultipartUploadResult>`)
 			return
 		}
 		body, err := io.ReadAll(r.Body)
@@ -311,6 +326,7 @@ func TestEveryOperationNeedsADeadline(t *testing.T) {
 //nolint:cyclop // one object through every verb is the point of the test
 func TestRoundTrip(t *testing.T) {
 	fake := newFakeS3()
+	fake.bucket = true
 	client := newTestClient(t, fake)
 	ctx := deadline(t)
 
@@ -599,7 +615,7 @@ func TestMultipartAbortsWhenCompletionFails(t *testing.T) {
 
 func TestMultipartRejectsATwoHundredErrorDocument(t *testing.T) {
 	fake := newFakeS3()
-	fake.errorDone = true
+	fake.errorDoneLeft = 10 // more than the client attempts
 	client := multipartClient(t, fake)
 	_, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefghij"), Size: 10})
 	var remote *Error
@@ -608,6 +624,34 @@ func TestMultipartRejectsATwoHundredErrorDocument(t *testing.T) {
 	}
 	if len(fake.aborted) != 1 {
 		t.Fatalf("aborted = %v, want one abort", fake.aborted)
+	}
+}
+
+func TestMultipartRetriesA200ErrorDocument(t *testing.T) {
+	fake := newFakeS3()
+	fake.errorDoneLeft = 1
+	client := multipartClient(t, fake)
+	info, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefghij"), Size: 10})
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if info.ETag != `"complete"` || fake.body("k") != "abcdefghij" {
+		t.Fatalf("completed %+v with %q", info, fake.body("k"))
+	}
+	if len(fake.aborted) != 0 {
+		t.Fatalf("aborted a retry that succeeded: %v", fake.aborted)
+	}
+}
+
+func TestMultipartRejectsACompletionWithoutAnETag(t *testing.T) {
+	fake := newFakeS3()
+	fake.noETag = true
+	client := multipartClient(t, fake)
+	if _, err := client.Put(deadline(t), Upload{Key: "k", Body: strings.NewReader("abcdefghij"), Size: 10}); err == nil {
+		t.Fatal("a completion without an ETag was accepted")
+	}
+	if len(fake.aborted) == 0 {
+		t.Fatal("the failed upload was not aborted")
 	}
 }
 
@@ -625,25 +669,61 @@ func TestMultipartRefusesASizeThatDoesNotMatchBeforeUploading(t *testing.T) {
 func TestCreateBucketIsIdempotent(t *testing.T) {
 	fake := newFakeS3()
 	client := newTestClient(t, fake)
-	if err := client.Create(deadline(t)); err != nil {
-		t.Fatalf("Create: %v", err)
+	created, err := client.Create(deadline(t), false)
+	if err != nil || !created {
+		t.Fatalf("Create = %v, %v; want a new bucket", created, err)
 	}
-	if err := client.Create(deadline(t)); err != nil {
-		t.Fatalf("Create on an existing bucket: %v", err)
+	if _, err := client.Create(deadline(t), false); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("Create on an existing bucket without consent = %v, want a refusal", err)
 	}
-	if fake.created != 2 {
-		t.Fatalf("created %d times, want two requests", fake.created)
+	created, err = client.Create(deadline(t), true)
+	if err != nil || created {
+		t.Fatalf("Create on an existing bucket = %v, %v; want false, nil", created, err)
+	}
+	if fake.created != 1 {
+		t.Fatalf("created %d times, want one PUT and a HEAD on the second call", fake.created)
+	}
+}
+
+func TestCreateAcceptsAnOwnedBucketFromTheConflictCode(t *testing.T) {
+	fake := newFakeS3()
+	fake.bucket = true
+	fake.headMissing = true // HEAD lost a race with the bucket's creation; the PUT sees it
+	client := newTestClient(t, fake)
+	created, err := client.Create(deadline(t), true)
+	if err != nil || created {
+		t.Fatalf("Create on a bucket owned by these credentials = %v, %v; want false, nil", created, err)
+	}
+	if fake.created != 1 {
+		t.Fatalf("created %d times, want one PUT", fake.created)
 	}
 }
 
 func TestCreateRejectsABucketAnotherOwnerHas(t *testing.T) {
 	fake := newFakeS3()
 	fake.bucket = true
-	fake.takenByOther = true
+	fake.headMissing = true // the PUT is the only place the conflict code is visible
+	fake.bucketConflict = "BucketAlreadyExists"
 	client := newTestClient(t, fake)
-	err := client.Create(deadline(t))
-	if err == nil || !strings.Contains(err.Error(), "cannot address") {
-		t.Fatalf("Create on another owner's bucket = %v, want a refusal", err)
+	_, err := client.Create(deadline(t), false)
+	if err == nil || !strings.Contains(err.Error(), "BucketAlreadyExists") {
+		t.Fatalf("Create on another owner's bucket = %v, want the conflict refused", err)
+	}
+}
+
+func TestCreateSendsTheRegionOutsideUsEast(t *testing.T) {
+	fake := newFakeS3()
+	client := newTestClient(t, fake)
+	client.region = "eu-west-1"
+	created, err := client.Create(deadline(t), false)
+	if err != nil || !created {
+		t.Fatalf("Create = %v, %v; want a new bucket", created, err)
+	}
+	if !strings.Contains(fake.createBody, "<LocationConstraint>eu-west-1</LocationConstraint>") {
+		t.Fatalf("create body = %q, want the region's LocationConstraint", fake.createBody)
+	}
+	if !strings.Contains(fake.createBody, `xmlns="http://s3.amazonaws.com/doc/2006-03-01/"`) {
+		t.Fatalf("create body = %q, want the S3 namespace", fake.createBody)
 	}
 }
 

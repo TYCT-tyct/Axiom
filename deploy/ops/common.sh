@@ -54,8 +54,8 @@ sql() {
 require_objectstore_env() {
   require_env AXIOM_OBJECTSTORE_BUCKET AXIOM_OBJECTSTORE_ACCESS_KEY_ID AXIOM_OBJECTSTORE_SECRET_ACCESS_KEY
   if [ -z "${AXIOM_OBJECTSTORE_ENDPOINT-}" ]; then
-    # An empty AXIOM_BACKUP_S3_ENDPOINT means AWS itself, as rclone's default provider did. The program's own
-    # configuration still requires the endpoint: this derivation belongs to the backup adapter.
+    # An empty AXIOM_BACKUP_S3_ENDPOINT means AWS itself. The program's own configuration still requires the
+    # endpoint: this derivation belongs to the backup adapter.
     local region domain
     region=${AXIOM_OBJECTSTORE_REGION:-us-east-1}
     domain=amazonaws.com

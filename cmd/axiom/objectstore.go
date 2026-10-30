@@ -14,7 +14,7 @@ import (
 	"axiom/internal/platform/objectstore"
 )
 
-const objectstoreUsage = "usage: axiom objectstore create | check | list [--prefix P] [--names] | put --key K --file F [--content-type T] | get --key K --file F | delete (--key K | --prefix P)"
+const objectstoreUsage = "usage: axiom objectstore create [--allow-existing] | check | list [--prefix P] [--names] | put --key K --file F [--content-type T] | get --key K --file F | delete (--key K | --prefix P)"
 
 // The command's deadlines: a check or one metadata call may wait out a slow bucket; a transfer may take as long as a
 // large archive needs, bounded so a stuck upload cannot live until the process is killed.
@@ -58,9 +58,11 @@ func objectstoreCommand(ctx context.Context, environ, args []string, out io.Writ
 //nolint:cyclop // one branch per verb: this is the command's whole surface
 func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket, verb string, args []string, out io.Writer) error {
 	var key, file, prefix, contentType string
-	var names bool
+	var names, allowExisting bool
 	err := flags("objectstore "+verb, objectstoreUsage, args, func(set *flag.FlagSet) {
 		switch verb {
+		case "create":
+			set.BoolVar(&allowExisting, "allow-existing", false, "succeed when the bucket already exists")
 		case "put":
 			set.StringVar(&key, "key", "", "the object key to write")
 			set.StringVar(&file, "file", "", "the file to upload")
@@ -83,10 +85,14 @@ func runObjectstoreVerb(ctx context.Context, client *objectstore.Client, bucket,
 	case "create":
 		ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
 		defer cancel()
-		if err := client.Create(ctx); err != nil {
+		created, err := client.Create(ctx, allowExisting)
+		if err != nil {
 			return err
 		}
-		return writeLine(out, map[string]any{"kind": "objectstore", "bucket": bucket, "created": true})
+		if !created && !allowExisting {
+			return fmt.Errorf("objectstore: bucket %q already exists; run check, or create --allow-existing if you own it", bucket)
+		}
+		return writeLine(out, map[string]any{"kind": "objectstore", "bucket": bucket, "created": created})
 	case "check":
 		ctx, cancel := context.WithTimeout(ctx, objectstoreMetaTimeout)
 		defer cancel()

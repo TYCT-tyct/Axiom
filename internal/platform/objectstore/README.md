@@ -15,7 +15,7 @@ type Config struct { Endpoint, Bucket, Region, AccessKeyID string; SecretAccessK
 func ReadConfig(env *config.Env) (Config, error)   // 一个变量都没设时返回零值，表示关闭
 func Open(cfg Config) (*Client, error)
 
-func (c *Client) Create(ctx) error                 // PUT 桶；409 后再 HEAD，只有这些凭证能访问才算成功
+func (c *Client) Create(ctx, allowExisting bool) (bool, error) // 先 HEAD；404 才 PUT，返回是否新建；已存在需显式同意
 func (c *Client) Check(ctx) error                  // HEAD 桶：核对桶存在、凭证可用，不读不写
 func (c *Client) Put(ctx, Upload) (ObjectInfo, error)
 func (c *Client) Get(ctx, key) (*Object, error)    // 调用方关闭 Body
@@ -23,6 +23,9 @@ func (c *Client) Head(ctx, key) (ObjectInfo, error)
 func (c *Client) Delete(ctx, key) error            // 已经不存在的键也算成功
 func (c *Client) List(ctx, ListOptions) (ListPage, error)
 ```
+
+`Create`/`Check` 的 HEAD 只证明这些凭证能访问桶，不能证明桶归调用方所有：只对自有的桶运行，桶策略要限制到这些凭证。
+`axiom objectstore create` 对已存在的桶默认报错，确认自有后加 `--allow-existing`；它不会因此写入或改 ACL。
 
 `List` 一次返回一页和下一页的令牌；要整个前缀的调用方顺着 `NextToken` 循环。`Upload.Size` 在调用方知道字节数时给出
 （文件 `Stat` 一般知道），`-1` 表示由客户端边算哈希边数；给了但对不上是错误，不发请求。知道大小且超过 16 MiB 时走
@@ -87,8 +90,9 @@ multipart，`-1` 仍是单次 PUT（最多 5 GiB）。
 单元测试用 `httptest` 的假 S3 覆盖期限、重试、不重试的 4xx、分页、重定向、multipart 的分片与 abort；签名另有
 botocore 生成的固定向量，固定日期、区域、路径和查询，签名逐字节对得上。
 
-`container_test.go` 启动真实的 SeaweedFS（`chrislusf/seaweedfs:3.80`，只用于测试，不是部署依赖），用它的 shell 建桶，
-再走一遍 `Check`、1 MiB 带二进制字节的 PUT、GET、HEAD、LIST 和 DELETE，以及 20 MiB 的 multipart PUT 与逐字节比对。
+`container_test.go` 启动真实的 SeaweedFS（`chrislusf/seaweedfs:3.80`，只用于测试，不是部署依赖），用它的 shell 建主桶，
+再走一遍 `Create`、`Check`、1.25 MiB 带二进制字节的 PUT、GET、HEAD、LIST 和 DELETE，以及 25 MiB 的 multipart PUT 与逐字节
+比对；另有一个桶只由 `Create` 建两次（第二次返回 false），证明真实服务器上的 HEAD/PUT 路径。
 手写的签名器很容易在自己的假服务器上通过，只有真实实现能证明转义、头和分页是对的。这个测试启动容器，机器上要排在
 重型测试锁后面：
 

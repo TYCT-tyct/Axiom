@@ -8,6 +8,7 @@
 package objectstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -148,25 +149,83 @@ func (c *Client) Check(ctx context.Context) error {
 	return nil
 }
 
-// Create makes the bucket. An existing bucket is success only if Check can address it: S3 answers 409 both for a name
-// these credentials already own and for another owner's, and the HEAD that follows tells them apart.
-func (c *Client) Create(ctx context.Context) error {
-	resp, err := c.do(ctx, request{method: http.MethodPut, payloadHash: emptySHA256})
+// Create makes the bucket when it is absent, reporting whether this call created it. An existing bucket that these
+// credentials can address is used without a second PUT only when allowExisting is set, because S3 resets an existing
+// bucket's ACL on CreateBucket and a HEAD cannot prove ownership: a public ListBucket policy on another owner's bucket
+// also answers 200. The PUT is only sent after a HEAD says 404. A conflict from that PUT must name
+// BucketAlreadyOwnedByYou; BucketAlreadyExists means another account owns the name.
+func (c *Client) Create(ctx context.Context, allowExisting bool) (bool, error) {
+	if err := c.Check(ctx); err == nil {
+		if !allowExisting {
+			return false, fmt.Errorf("objectstore: create bucket %q: the bucket already exists; pass allowExisting only if you own it", c.bucket)
+		}
+		return false, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+	}
+	body, contentType, err := createBucketBody(c.region)
 	if err != nil {
-		return fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+	}
+	var reader *bytes.Reader
+	payloadHash, size := emptySHA256, int64(0)
+	if len(body) > 0 {
+		reader = bytes.NewReader(body)
+		hash, n, err := hashBody(ctx, reader, int64(len(body)))
+		if err != nil {
+			return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+		}
+		payloadHash, size = hash, n
+	}
+	var bodyReader io.ReadSeeker
+	if reader != nil {
+		bodyReader = reader
+	}
+	resp, err := c.do(ctx, request{
+		method: http.MethodPut, body: bodyReader, size: size, contentType: contentType, payloadHash: payloadHash,
+	})
+	if err != nil {
+		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
 	}
 	if resp.StatusCode/100 == 2 {
 		_ = resp.Body.Close() //nolint:errcheck // no body carries a result here
-		return nil
+		return true, nil
 	}
 	if resp.StatusCode == http.StatusConflict {
-		_ = resp.Body.Close() //nolint:errcheck // the conflict body says which owner; the HEAD that follows is authoritative
-		if err := c.Check(ctx); err != nil {
-			return fmt.Errorf("objectstore: create bucket %q: the name is taken and these credentials cannot address it: %w", c.bucket, err)
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		_ = resp.Body.Close() //nolint:errcheck // the body is already read; a close failure adds nothing
+		var remote struct {
+			Code      string `xml:"Code"`
+			Message   string `xml:"Message"`
+			RequestID string `xml:"RequestId"`
 		}
-		return nil
+		if xml.Unmarshal(data, &remote) == nil && remote.Code == "BucketAlreadyOwnedByYou" {
+			if !allowExisting {
+				return false, fmt.Errorf("objectstore: create bucket %q: the bucket already exists; pass allowExisting only if you own it", c.bucket)
+			}
+			return false, nil
+		}
+		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, &Error{
+			Status: resp.StatusCode, Code: remote.Code, Message: remote.Message, RequestID: remote.RequestID, cause: readErr,
+		})
 	}
-	return fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, remoteError(resp))
+	return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, remoteError(resp))
+}
+
+// createBucketBody is empty for us-east-1, where S3 rejects a LocationConstraint naming it; other regions need one.
+func createBucketBody(region string) ([]byte, string, error) {
+	if region == "" || region == "us-east-1" {
+		return nil, "", nil
+	}
+	body, err := xml.Marshal(struct {
+		XMLName  xml.Name `xml:"CreateBucketConfiguration"`
+		Xmlns    string   `xml:"xmlns,attr"`
+		Location string   `xml:"LocationConstraint"`
+	}{Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/", Location: region})
+	if err != nil {
+		return nil, "", err
+	}
+	return body, "application/xml", nil
 }
 
 // Put writes one object. A failed attempt re-sends the body from its start, so the body must be seekable; the same

@@ -22,6 +22,7 @@ import (
 type commandStore struct {
 	mu      sync.Mutex
 	objects map[string][]byte
+	bucket  bool
 	created int
 }
 
@@ -35,11 +36,16 @@ func (s *commandStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/axiom"), "/")
 	if r.Method == http.MethodHead && key == "" {
+		if !s.bucket {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if r.Method == http.MethodPut && key == "" {
 		s.created++
+		s.bucket = true
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -90,7 +96,7 @@ func commandEnv(server string) []string {
 }
 
 func TestObjectstoreCommandMovesAnObject(t *testing.T) {
-	store := &commandStore{objects: map[string][]byte{}}
+	store := &commandStore{objects: map[string][]byte{}, bucket: true}
 	server := httptest.NewServer(store)
 	defer server.Close()
 	environ := commandEnv(server.URL)
@@ -150,6 +156,12 @@ func TestObjectstoreCommandCreatesListsNamesAndDeletesAPrefix(t *testing.T) {
 	}
 	if store.created != 1 {
 		t.Fatalf("the server saw %d bucket creations, want 1", store.created)
+	}
+	if err := objectstoreCommand(t.Context(), environ, []string{"create"}, io.Discard); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("create on an existing bucket = %v, want a refusal", err)
+	}
+	if got := run("create", "--allow-existing"); !strings.Contains(got, `"created":false`) {
+		t.Fatalf("create --allow-existing printed %q", got)
 	}
 	dir := t.TempDir()
 	file := filepath.Join(dir, "a")

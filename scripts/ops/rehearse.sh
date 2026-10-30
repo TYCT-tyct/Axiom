@@ -182,13 +182,19 @@ compose up --detach --wait --wait-timeout 60 postgres
 compose exec -T postgres sh < deploy/postgres/roles.sh
 compose up --detach --build --wait --wait-timeout 240
 for _ in $(seq 1 60); do
-  ops axiom objectstore create > /dev/null 2>&1 && break
+  write axiom objectstore create > /dev/null 2>&1 && break
   sleep 1
 done
 ops axiom objectstore check > /dev/null || die "the S3 server never answered"
 compose run --rm --no-deps axiom site init --name Rehearsal --currency USD \
   --console console.rehearsal.example --api api.rehearsal.example --admin admin.rehearsal.example
 printf '%s\n' "$(openssl rand -hex 16)" | compose run --rm --no-deps -T axiom user create --email owner@rehearsal.example
+# A non-default policy, so the comparison has business content to preserve rather than an empty table that the program
+# fills with its default on the first start after the restore.
+compose exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres -d axiom <<'SQL'
+INSERT INTO billing.price_policies(site_id, floor_multiplier, change_ratio, max_increase_ratio)
+SELECT id, '1.25', '0.10', '0.50' FROM accounts.sites;
+SQL
 
 # The fingerprint reader also returns each table's row count, which is the evidence that the seed went in and came back;
 # the roles and the key ring are the other two.
@@ -320,9 +326,10 @@ diff -u "$work/before/tables.txt" "$work/after/tables.txt" || die "the restored 
 # library's, whose version the startup check verifies), billing.holders (one row per start of a core process, so the
 # restored database has the set's row and the new process' too), billing.expiry_cursor (where the expiry job's scan of
 # accounts stopped, written every minute), platform.alert_signals (the startup's own signals are added after the set),
-# platform.credential_share_departures (the new process garbage-collects the set's stale node row), and the rows the
-# catalog and pricing jobs rewrite when they first run (catalog.sync_state, billing.price_policies).
-skip() { grep -v -e '^river\.' -e '^billing\.holders|' -e '^billing\.expiry_cursor|' -e '^platform\.alert_signals|' -e '^platform\.credential_share_departures|' -e '^catalog\.sync_state|' -e '^billing\.price_policies|'; }
+# platform.credential_share_departures (the new process garbage-collects the set's stale node row) and catalog.sync_state
+# (the catalog job's progress). billing.price_policies stays in the comparison: fingerprint.sql leaves out only its
+# confirmed_at timestamp, so its rev and multipliers are checked.
+skip() { grep -v -e '^river\.' -e '^billing\.holders|' -e '^billing\.expiry_cursor|' -e '^platform\.alert_signals|' -e '^platform\.credential_share_departures|' -e '^catalog\.sync_state|'; }
 skip < "$work/before/fingerprint.txt" > "$work/before/state.txt"
 skip < "$work/after/fingerprint.txt" > "$work/after/state.txt"
 diff -u "$work/before/state.txt" "$work/after/state.txt" || die "the restored database differs from the backup"

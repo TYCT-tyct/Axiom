@@ -75,10 +75,24 @@ func TestSeaweedFS(t *testing.T) {
 
 	opCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
+	creating, err := objectstore.Open(objectstore.Config{
+		Endpoint: "http://" + net.JoinHostPort(host, port.Port()), Bucket: "axiom-created", Region: "us-east-1",
+		AccessKeyID: "AKIAOBJECTSTORETEST", SecretAccessKey: secret.New("objectstore-test-secret"), PathStyle: true,
+	})
+	if err != nil {
+		t.Fatalf("open the creating client: %v", err)
+	}
+	defer creating.Close()
+	if created, err := creating.Create(opCtx, false); err != nil || !created {
+		t.Fatalf("create the bucket = %v, %v; want true, nil", created, err)
+	}
+	if created, err := creating.Create(opCtx, true); err != nil || created {
+		t.Fatalf("create the existing bucket = %v, %v; want false, nil", created, err)
+	}
 	if err := client.Check(opCtx); err != nil {
 		t.Fatalf("check the bucket: %v", err)
 	}
-	// One mebibyte with bytes that are not XML or UTF-8 friendly, a key with a space and a slash, and a content type.
+	// A mebibyte and a quarter with bytes that are not XML or UTF-8 friendly, a key with a space and a slash, and a content type.
 	body := bytes.Repeat([]byte{0x00, 0xff, 0x80, 'a', '\n'}, 1<<18)
 	key := "archive/2026/a b.txt"
 	info, err := client.Put(opCtx, objectstore.Upload{Key: key, Body: bytes.NewReader(body), Size: int64(len(body)), ContentType: "text/plain"})

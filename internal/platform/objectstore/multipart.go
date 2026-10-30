@@ -158,28 +158,32 @@ func (c *Client) completeMultipart(ctx context.Context, key, uploadID string, pa
 	if err != nil {
 		return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, err)
 	}
-	resp, err := c.do(ctx, request{
-		method:      http.MethodPost,
-		key:         key,
-		query:       url.Values{"uploadId": {uploadID}},
-		body:        bytes.NewReader(payload),
-		size:        int64(len(payload)),
-		contentType: "application/xml",
-		payloadHash: sumHex(payload),
-	})
-	if err != nil {
-		return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, err)
-	}
-	if resp.StatusCode/100 != 2 {
-		return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, remoteError(resp))
-	}
-	data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxListBody))
-	closeErr := resp.Body.Close()
-	if err := errors.Join(readErr, closeErr); err != nil {
-		return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, err)
-	}
-	var result completedMultipart
-	if err := xml.Unmarshal(data, &result); err != nil || result.XMLName.Local != "CompleteMultipartUploadResult" || result.ETag == "" {
+	for attempt := 1; ; attempt++ {
+		resp, err := c.do(ctx, request{
+			method:      http.MethodPost,
+			key:         key,
+			query:       url.Values{"uploadId": {uploadID}},
+			body:        bytes.NewReader(payload),
+			size:        int64(len(payload)),
+			contentType: "application/xml",
+			payloadHash: sumHex(payload),
+		})
+		if err != nil {
+			return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, err)
+		}
+		if resp.StatusCode/100 != 2 {
+			return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, remoteError(resp))
+		}
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxListBody))
+		closeErr := resp.Body.Close()
+		if err := errors.Join(readErr, closeErr); err != nil {
+			return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, err)
+		}
+		var result completedMultipart
+		parseErr := xml.Unmarshal(data, &result)
+		if parseErr == nil && result.XMLName.Local == "CompleteMultipartUploadResult" && result.ETag != "" {
+			return ObjectInfo{Key: key, Size: size, ETag: result.ETag}, nil
+		}
 		// S3 may answer 200 with an Error document instead of a result; the status alone would call that a success.
 		var remote struct {
 			Code      string `xml:"Code"`
@@ -187,16 +191,31 @@ func (c *Client) completeMultipart(ctx context.Context, key, uploadID string, pa
 			RequestID string `xml:"RequestId"`
 		}
 		if xml.Unmarshal(data, &remote) == nil && remote.Code != "" {
-			return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, &Error{
-				Status: resp.StatusCode, Code: remote.Code, Message: remote.Message, RequestID: remote.RequestID,
-			})
+			remoteErr := &Error{Status: resp.StatusCode, Code: remote.Code, Message: remote.Message, RequestID: remote.RequestID}
+			if attempt < c.attempts && retryableCompleteCode(remote.Code) {
+				if err := pause(ctx, c.backoff(attempt, 0)); err != nil {
+					return ObjectInfo{}, errors.Join(remoteErr, err)
+				}
+				continue
+			}
+			return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, remoteErr)
 		}
-		if err == nil {
-			err = errors.New("the answer is not a completion result with an ETag")
+		if parseErr == nil {
+			parseErr = errors.New("the answer is not a completion result with an ETag")
 		}
-		return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, err)
+		return ObjectInfo{}, fmt.Errorf("objectstore: complete %q: %w", key, parseErr)
 	}
-	return ObjectInfo{Key: key, Size: size, ETag: result.ETag}, nil
+}
+
+// retryableCompleteCode is the subset of S3 error codes that a CompleteMultipartUpload may answer with 200 and that can
+// pass on a later attempt. Anything else (InvalidPart, NoSuchUpload) is final and the upload is aborted.
+func retryableCompleteCode(code string) bool {
+	switch code {
+	case "InternalError", "ServiceUnavailable", "SlowDown", "RequestTimeout", "RequestTimeoutException", "OperationAborted":
+		return true
+	default:
+		return false
+	}
 }
 
 // abortMultipart drops the parts a failed upload left. It runs on its own short deadline: the caller's context is
