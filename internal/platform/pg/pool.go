@@ -17,6 +17,14 @@ type DB struct {
 	completion *pgxpool.Pool
 	reserve    int
 	tracer     trace.Tracer
+	// nodes is the deployment's node count when WithNodes set it; nodesSet distinguishes zero from no option.
+	nodes    int
+	nodesSet bool
+	// operations marks a command's pool, which does not keep the connection string's eagerly opened minimums beyond
+	// the slots the budget reserves for such commands.
+	operations bool
+	// budget is how Open divided the database's connections when it had nodes; nil otherwise.
+	budget *Budget
 	// config is how a connection of its own outside both pools logs in: the same URL, session settings and role.
 	config *pgx.ConnConfig
 }
@@ -38,15 +46,51 @@ const (
 	MigrateDatabaseURLVar = "AXIOM_MIGRATE_DATABASE_URL"
 )
 
-// PoolSize is the combined ceiling of the ordinary and completion pools (platform README「连接池」).
+// PoolSize is the ceiling of each node's two pools together when the database has room for it (platform README「连接池」);
+// a connection string may set another ceiling within the node's share.
 const PoolSize = 64
 
-// CompletionReserve is the part of PoolSize ordinary work cannot borrow.
+// CompletionReserve is the part of the pool ordinary work cannot borrow.
 const CompletionReserve = 16
 
-// WithCompletionReserve sets the completion share of pool_max_conns. Open validates both before opening either pool.
+// OutsidePoolConns is what a serve node holds outside its two pools: the session that holds its name, River's LISTEN
+// listener and the billing holder's heartbeat and reap (platform README「连接池」).
+const OutsidePoolConns = 3
+
+// OperationsReserve is the slot headroom the budget keeps for work that is not a node's pools, beyond the server's own
+// reserved slots: a migration, an operator command, a backup and one spare.
+const OperationsReserve = 4
+
+// WithCompletionReserve sets the completion reserve of the node's pool. Open validates it against the pool size before
+// opening either pool.
 func WithCompletionReserve(n int) Option {
 	return func(db *DB) { db.reserve = n }
+}
+
+// WithNodes sizes the pools from the database's max_connections and the deployment's node count, so that the nodes that
+// may be online at once together fit the server. Without it the connection string's pool_max_conns, or PoolSize, sizes
+// the pools. A zero or negative count is refused before connecting.
+func WithNodes(nodes int) Option {
+	return func(db *DB) { db.nodes, db.nodesSet = nodes, true }
+}
+
+// WithOperationsPool marks a command's pool, which is not a node's: its ceiling stays the deployment's, but it does not
+// keep the connection string's pool_min_conns or pool_min_idle_conns above the slots the budget reserves for commands
+// outside a node (OperationsReserve). A command is run by one operator and takes the few connections it needs.
+func WithOperationsPool() Option {
+	return func(db *DB) { db.operations = true }
+}
+
+// Budget is how Open divided the database's connections between the deployment's nodes. Open reports it when it was
+// given the node count; serve logs it at startup.
+type Budget struct {
+	MaxConnections int // the server's max_connections
+	Reserved       int // slots no node may pool: the server's reserved slots and OperationsReserve
+	Nodes          int // the nodes that may be online at once, as the deployment configured them
+	Allowance      int // this node's share of what is left, before OutsidePoolConns
+	Share          int // the most this node's two pools may hold: Allowance - OutsidePoolConns
+	Pool           int // the combined ceiling of the two pools: min(Share, PoolSize), or pool_max_conns when set
+	Completion     int // the part of Pool reserved for completions
 }
 
 // errNotDatabaseURL is what both parse failures report: pgxpool parses the string again and then checks the pool_*
@@ -56,13 +100,31 @@ var errNotDatabaseURL = errors.New(DatabaseURLVar + ": not a PostgreSQL connecti
 
 // Open connects to url, AXIOM_DATABASE_URL. Errors name the variable but not its value, which holds a password.
 func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
-	config, err := poolConfig(url)
+	config, sized, err := poolConfig(url)
 	if err != nil {
 		return nil, err
 	}
 	db := &DB{reserve: CompletionReserve, tracer: noop.NewTracerProvider().Tracer("axiom/pg")}
 	for _, opt := range opts {
 		opt(db)
+	}
+	if db.nodesSet && db.operations {
+		return nil, errors.New("pg: WithOperationsPool sizes a command's pool, not a node's")
+	}
+	if db.nodesSet {
+		if db.nodes < 1 {
+			return nil, fmt.Errorf("a node count of %d cannot share the database's connections", db.nodes)
+		}
+		budget, err := readBudget(ctx, config, sized, db.nodes, db.reserve)
+		if err != nil {
+			return nil, err
+		}
+		db.budget = &budget
+		config.MaxConns = int32(budget.Pool) //nolint:gosec // G115: the budget is at most pool_max_conns or PoolSize
+	}
+	if db.operations {
+		config.MinConns = min(config.MinConns, int32(OperationsReserve))
+		config.MinIdleConns = min(config.MinIdleConns, int32(OperationsReserve))
 	}
 	ordinary, completion, err := splitPoolConfig(config, db.reserve)
 	if err != nil {
@@ -83,21 +145,75 @@ func Open(ctx context.Context, url string, opts ...Option) (*DB, error) {
 	return db, nil
 }
 
-func poolConfig(url string) (*pgxpool.Config, error) {
+func poolConfig(url string) (config *pgxpool.Config, sized bool, err error) {
 	// pgxpool removes pool_max_conns from the config it parses, so ask pgx, which keeps the parameter, whether the
 	// connection string sizes the pool itself: a deployment that says so owns the number.
 	conn, err := pgx.ParseConfig(url)
 	if err != nil {
-		return nil, errNotDatabaseURL
+		return nil, false, errNotDatabaseURL
 	}
-	config, err := pgxpool.ParseConfig(url)
+	config, err = pgxpool.ParseConfig(url)
 	if err != nil {
-		return nil, errNotDatabaseURL
+		return nil, false, errNotDatabaseURL
 	}
 	if _, set := conn.RuntimeParams["pool_max_conns"]; !set {
 		config.MaxConns = PoolSize
+	} else {
+		sized = true
 	}
-	return config, nil
+	return config, sized, nil
+}
+
+// readBudget reads the server's connection limits and divides what is left between the deployment's nodes. A pool
+// sized by the connection string must fit this node's share instead of replacing it: the deployment says how much of
+// the share to use, not how much the node may take from the other nodes.
+func readBudget(ctx context.Context, config *pgxpool.Config, sized bool, nodes, completion int) (Budget, error) {
+	conn, err := pgx.ConnectConfig(ctx, config.ConnConfig.Copy())
+	if err != nil {
+		return Budget{}, redactConnect(DatabaseURLVar, err)
+	}
+	defer func() {
+		_ = conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // the budget's error is the one to report
+	}()
+	var maxConnections, superuserReserved, reserved int
+	err = conn.QueryRow(ctx, `SELECT current_setting('max_connections')::int,
+		current_setting('superuser_reserved_connections')::int,
+		coalesce(current_setting('reserved_connections', true), '0')::int`).Scan(&maxConnections, &superuserReserved, &reserved)
+	if err != nil {
+		return Budget{}, fmt.Errorf("%s: read the server's connection limits: %w", DatabaseURLVar, err)
+	}
+	budget, err := sizePool(maxConnections, superuserReserved+reserved+OperationsReserve, nodes, completion)
+	if err != nil {
+		return Budget{}, err
+	}
+	if sized {
+		if requested := int(config.MaxConns); requested > budget.Share {
+			return Budget{}, fmt.Errorf("%s: pool_max_conns %d exceeds the %d connections one of %d nodes may pool: "+
+				"max_connections %d, %d reserved slots, %d connections outside each node's pools",
+				DatabaseURLVar, requested, budget.Share, nodes, maxConnections, budget.Reserved, OutsidePoolConns)
+		}
+		budget.Pool = int(config.MaxConns)
+	}
+	return budget, nil
+}
+
+// sizePool is the arithmetic of the connection budget, separate from the server that supplies its inputs. It refuses a
+// deployment in which every node's share, less the connections outside its pools, cannot hold the completion reserve
+// and an ordinary connection.
+func sizePool(maxConnections, reserved, nodes, completion int) (Budget, error) {
+	if nodes <= 0 {
+		return Budget{}, fmt.Errorf("a node count of %d cannot share the database's connections", nodes)
+	}
+	budget := Budget{MaxConnections: maxConnections, Reserved: reserved, Nodes: nodes, Completion: completion}
+	budget.Allowance = (maxConnections - reserved) / nodes
+	budget.Share = budget.Allowance - OutsidePoolConns
+	if budget.Share <= completion {
+		return Budget{}, fmt.Errorf("%s: the connection budget cannot fit %d nodes: max_connections %d, %d reserved slots, "+
+			"%d connections per node, %d outside the pools and %d for completions",
+			DatabaseURLVar, nodes, maxConnections, reserved, budget.Allowance, OutsidePoolConns, completion)
+	}
+	budget.Pool = min(budget.Share, PoolSize)
+	return budget, nil
 }
 
 func splitPoolConfig(config *pgxpool.Config, reserve int) (*pgxpool.Config, *pgxpool.Config, error) {
@@ -133,6 +249,15 @@ func (db *DB) MaxConns() int32 { return db.pool.Stat().MaxConns() + db.completio
 
 // CompletionConns is the part of MaxConns reserved for completions.
 func (db *DB) CompletionConns() int { return db.reserve }
+
+// Budget is how Open divided the database's connections when the deployment gave its node count; ok is false when the
+// connection string or PoolSize sized the pools instead.
+func (db *DB) Budget() (Budget, bool) {
+	if db.budget == nil {
+		return Budget{}, false
+	}
+	return *db.budget, true
+}
 
 type completionKey struct{}
 
