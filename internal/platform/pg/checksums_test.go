@@ -449,6 +449,34 @@ func TestChangedMigrationStopsTheRunAndTheNode(t *testing.T) {
 	}
 }
 
+// TestARemovedMigrationStopsTheRunAndTheNode: a program that no longer carries an applied migration at or below its
+// newest is refused by both `axiom migrate`, before its pending migration runs, and every node's start; versions above
+// its newest stay a later release's (TestAChecksumRecordOfANewerMigrationIsIgnored).
+func TestARemovedMigrationStopsTheRunAndTheNode(t *testing.T) {
+	database := pgtest.New(t)
+	ctx := t.Context()
+	if err := pg.Migrate(ctx, database.Migrator, qualityMigrations("SELECT 1;")); err != nil {
+		t.Fatal(err)
+	}
+	withoutFirst := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00002_second.sql": {Data: []byte(up + "SELECT 2;")},
+	}}
+	want := "quality migration 1 was applied but this program does not carry it"
+	if err := open(t, database.App).Check(ctx, withoutFirst); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Check without an applied migration's file: %v, want %q", err, want)
+	}
+	withPending := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00002_second.sql": {Data: []byte(up + "SELECT 2;")},
+		"00003_third.sql":  {Data: []byte(up + "CREATE TABLE quality.third (id int);")},
+	}}
+	if err := pg.Migrate(ctx, database.Migrator, withPending); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("Migrate without an applied migration's file: %v, want %q", err, want)
+	}
+	if relationExists(t, database, "quality.third") {
+		t.Error("the pending migration ran before the missing file was reported")
+	}
+}
+
 // TestMigrateRecordsWhatWasAppliedBeforeTheRecordExisted: a database migrated before the checksum record existed has
 // no row for its applied migrations. A node refuses to start until migrate records them, and then they are recorded as
 // they are, the first-run baseline that later changes are compared with.

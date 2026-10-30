@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/pressly/goose/v3"
@@ -142,10 +144,27 @@ func preflightModule(ctx context.Context, db execer, m Module) ([]string, error)
 			baseline = append(baseline, file)
 		}
 	}
+	problems = append(problems, missingFiles(m.Name, files, applied)...)
 	if err := insertChecksums(ctx, db, m.Name, baseline); err != nil {
 		return nil, err
 	}
 	return problems, nil
+}
+
+// missingFiles reports the applied versions up to this program's newest that it carries no file of: a merged migration
+// is never removed, so the history would otherwise pass unchecked. Versions above the newest belong to a later release.
+func missingFiles(module string, files []migrationChecksum, applied map[int64]bool) []string {
+	if len(files) == 0 {
+		return nil // ordered modules carry files; migrate reports an empty one by name
+	}
+	var problems []string
+	for _, version := range slices.Sorted(maps.Keys(applied)) {
+		carried := slices.ContainsFunc(files, func(f migrationChecksum) bool { return f.version == version })
+		if version > 0 && version <= files[len(files)-1].version && !carried {
+			problems = append(problems, checksumProblem(module, version, "", "", "", ""))
+		}
+	}
+	return problems
 }
 
 // appliedVersions is the versions of m the database has applied; a database without the module's version table has
@@ -241,15 +260,22 @@ func recordChecksums(ctx context.Context, db execer, m Module) error {
 }
 
 // checksumDiffQuery lists the migrations this program carries that the database applied and whose recorded file is not
-// the one the program has now. Migrations newer than this program's are not among its parameters, so a database from a
-// later release does not fail it.
+// the one the program has now, and, with an empty file name, the applied versions up to this program's newest that it
+// carries no file of. Versions above its newest are a later release's, so a database from a later release does not fail
+// it; version 0 is the row goose creates its table with.
 func checksumDiffQuery(module string) string {
 	return `SELECT f.version_id, f.filename, f.checksum, coalesce(c.filename, ''), coalesce(c.checksum, '')
 		FROM unnest($2::bigint[], $3::text[], $4::text[]) AS f(version_id, filename, checksum)
 		JOIN ` + versionTable(module) + ` g ON g.version_id = f.version_id AND g.is_applied
 		LEFT JOIN ` + checksumTable + ` c ON c.module = $1 AND c.version_id = f.version_id
 		WHERE c.version_id IS NULL OR c.filename <> f.filename OR c.checksum <> f.checksum
-		ORDER BY f.version_id`
+		UNION ALL
+		SELECT g.version_id, '', '', coalesce(c.filename, ''), coalesce(c.checksum, '')
+		FROM ` + versionTable(module) + ` g
+		LEFT JOIN ` + checksumTable + ` c ON c.module = $1 AND c.version_id = g.version_id
+		WHERE g.is_applied AND g.version_id > 0 AND g.version_id <> ALL ($2::bigint[])
+			AND g.version_id <= (SELECT max(v) FROM unnest($2::bigint[]) AS v)
+		ORDER BY 1`
 }
 
 // checksumRows is what reading the recorded checksums needs of a result set; *sql.Rows and pgx.Rows both have it.
@@ -262,6 +288,9 @@ type checksumRows interface {
 // checksumProblem says how a carried migration's file is not the one the database recorded, or "" when they agree.
 func checksumProblem(module string, version int64, filename, sum, recordedName, recordedSum string) string {
 	switch {
+	case filename == "":
+		return fmt.Sprintf("%s migration %d was applied but this program does not carry it: "+
+			"merged migrations are never removed; restore the file", module, version)
 	case recordedSum == "":
 		return fmt.Sprintf("%s migration %s has no recorded checksum: run axiom migrate", module, filename)
 	case recordedName != filename:
@@ -346,22 +375,6 @@ func (s *checksumStore) Insert(ctx context.Context, db database.DBTxConn, req da
 		return err
 	}
 	return insertChecksums(ctx, db, s.module, []migrationChecksum{file})
-}
-
-// Delete removes the version and the record of its file, so a later up records the file it then applies.
-func (s *checksumStore) Delete(ctx context.Context, db database.DBTxConn, version int64) error {
-	if err := s.Store.Delete(ctx, db, version); err != nil {
-		return err
-	}
-	ready, err := s.ready(ctx, db)
-	if err != nil || !ready {
-		return err
-	}
-	deleteRecord := `DELETE FROM ` + checksumTable + ` WHERE module = $1 AND version_id = $2`
-	if _, err := db.ExecContext(ctx, deleteRecord, s.module, version); err != nil {
-		return fmt.Errorf("delete the recorded checksum of %s migration %d: %w", s.module, version, err)
-	}
-	return nil
 }
 
 // ready reports whether the record table exists. It is looked for before each insert until found: the migration that
