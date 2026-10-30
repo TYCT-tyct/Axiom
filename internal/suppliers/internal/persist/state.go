@@ -72,6 +72,11 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 			return err
 		}
 		out.OfferAt, out.KeysAt = decodeListings(row.Listing, st.s.Supplier.ConfigGen, row.Version)
+		rows, err := store.New().ListGroupPoolCapacities(ctx, tx, st.s.Supplier.ID)
+		if err != nil {
+			return err
+		}
+		out.Pool = loadedPool(rows)
 		return nil
 	})
 	if err != nil {
@@ -92,6 +97,27 @@ func decode(version int64, storedFormat int16, raw []byte) (syncer.State, error)
 	}
 	out.Version = version
 	return out, nil
+}
+
+// loadedPool turns the stored capacity of the groups back into the engine's view of it.
+func loadedPool(rows []store.ListGroupPoolCapacitiesRow) []syncer.PoolCapacity {
+	out := make([]syncer.PoolCapacity, 0, len(rows))
+	for _, r := range rows {
+		p := syncer.PoolCapacity{
+			GroupRef: r.UpstreamRef, Accounts: int(*r.PoolAccounts), Failed: int(*r.PoolFailed),
+			Usable: int(*r.PoolUsable), Low: r.PoolLow,
+		}
+		if r.PoolHeadroom != nil {
+			headroom := int(*r.PoolHeadroom)
+			p.Headroom = &headroom
+		}
+		if r.PoolCapacity != nil {
+			capacity := int(*r.PoolCapacity)
+			p.Capacity = &capacity
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // Wake resumes polling in the transaction that replaces the login, fencing out the old lease holder. It keeps the

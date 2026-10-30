@@ -51,6 +51,9 @@ type Routable struct {
 	Formats             []protocol.Format
 	Schedule            catalog.Schedule
 	Streams, Cancels    bool
+	// PoolLow says the group's pool has little capacity left: routing halves this endpoint's weight. Only a pool whose
+	// management API reported a low reading sets it; a relay's endpoints keep false.
+	PoolLow bool
 }
 
 // Platform reports whether the endpoint belongs to the platform rather than a tenant.
@@ -305,6 +308,7 @@ type endpoint struct {
 	nativeUnit              string
 	ownerScope              string
 	ownerSite, ownerAccount uuid.UUID
+	poolLow                 bool
 }
 
 type credential struct {
@@ -409,7 +413,7 @@ func (s *Service) Routable() ([]Routable, error) {
 			Credentials: s.availableCredentials(ep), Capacity: &Capacity{s: s, id: ep.id},
 			Funds: ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Codename: ep.codename, Formats: slices.Clone(ep.formats),
-			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
+			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels, PoolLow: ep.poolLow,
 		})
 	}
 	slices.SortFunc(out, func(a, b Routable) int { return a.ID.Compare(b.ID) })
@@ -451,6 +455,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
 		formats: formats, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt),
+		poolLow: r.PoolLow.Bool,
 	}
 	if r.SiteID != nil {
 		ep.ownerSite = *r.SiteID

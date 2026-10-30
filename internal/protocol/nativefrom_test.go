@@ -12,8 +12,9 @@ import (
 
 // TestConvertStreamsBetweenNativeFormats converts every Messages sample for a Responses client and every Responses
 // sample for a Messages client, whole and byte by byte, and compares the client's stream with its golden copy,
-// to-responses.sse or to-messages.sse, which go test -update rewrites. Every client stream passes its format's stream
-// check (README.md「跨格式的流」).
+// to-responses.sse or to-messages.sse, which go test -update rewrites. The assembled Responses stream with reasoning
+// and a function call, which official docs do not give whole, is converted for a Messages client too. Every client
+// stream passes its format's stream check (README.md「跨格式的流」).
 func TestConvertStreamsBetweenNativeFormats(t *testing.T) {
 	for _, c := range nativeStreamCases(t) {
 		t.Run(c.name, func(t *testing.T) { checkNativeStream(t, c) })
@@ -43,6 +44,10 @@ func nativeStreamCases(t *testing.T) []nativeStream {
 			streams = append(streams, nativeStream{dir + "/upstream.sse", dir + "/to-" + ext + ".sse", client, up.f})
 		}
 	}
+	streams = append(streams, nativeStream{
+		"assembled/responses-reasoning-tool.sse", "assembled/responses-reasoning-tool.to-messages.sse",
+		protocol.Messages, protocol.Responses,
+	})
 	return streams
 }
 

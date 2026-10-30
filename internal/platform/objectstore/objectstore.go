@@ -1,13 +1,14 @@
 // Package objectstore reads and writes objects through the S3 API. It is the platform's only client for object
-// storage: backups keep their own bucket and credentials in the ops image, and archive and content features take this
-// client when they land. Conversation bodies are not written through it: the product switch that would save them is
-// still off (docs/domains/observability.md「保留与开关」).
+// storage: backups use it with their own bucket and credentials in the ops job, and archive and content features take
+// this client when they land. Conversation bodies are not written through it: the product switch that would save them
+// is still off (docs/domains/observability.md「保留与开关」).
 //
 // Every operation requires a context deadline, retries only failures that may pass, and never follows a redirect.
 // The rules and the choices behind them are in this directory's README.
 package objectstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"errors"
@@ -94,6 +95,10 @@ type Client struct {
 	attempts    int
 	retryBase   time.Duration
 	retryMax    time.Duration
+	// partSize and threshold are fields so the tests can exercise several parts without moving sixteen mebibytes;
+	// production keeps the constants.
+	partSize  int64
+	threshold int64
 }
 
 // Open checks the configuration and builds the client. It does not contact the bucket: a deployment may start while
@@ -122,6 +127,8 @@ func Open(cfg Config) (*Client, error) {
 		attempts:    maxAttempts,
 		retryBase:   retryBase,
 		retryMax:    retryMax,
+		partSize:    defaultPartSize,
+		threshold:   multipartThreshold,
 	}, nil
 }
 
@@ -142,8 +149,100 @@ func (c *Client) Check(ctx context.Context) error {
 	return nil
 }
 
+// Create makes the bucket when it is absent, reporting whether this call created it. An existing bucket that these
+// credentials can address is used without a second PUT only when allowExisting is set, because S3 resets an existing
+// bucket's ACL on CreateBucket and a HEAD cannot prove ownership: a public ListBucket policy on another owner's bucket
+// also answers 200. The PUT is only sent after a HEAD says 404. A conflict from that PUT must name
+// BucketAlreadyOwnedByYou; BucketAlreadyExists means another account owns the name.
+func (c *Client) Create(ctx context.Context, allowExisting bool) (bool, error) {
+	if err := c.Check(ctx); err == nil {
+		if !allowExisting {
+			return false, c.bucketExists()
+		}
+		return false, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+	}
+	put, err := c.createBucketPut(ctx)
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.do(ctx, put)
+	if err != nil {
+		return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+	}
+	if resp.StatusCode/100 == 2 {
+		_ = resp.Body.Close() //nolint:errcheck // no body carries a result here
+		return true, nil
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return c.bucketConflict(resp, allowExisting)
+	}
+	return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, remoteError(resp))
+}
+
+// createBucketPut is the CreateBucket request: us-east-1 sends no body, every other region names itself in one.
+func (c *Client) createBucketPut(ctx context.Context) (request, error) {
+	body, contentType, err := createBucketBody(c.region)
+	if err != nil {
+		return request{}, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+	}
+	put := request{method: http.MethodPut, contentType: contentType, payloadHash: emptySHA256}
+	if len(body) == 0 {
+		return put, nil
+	}
+	reader := bytes.NewReader(body)
+	hash, size, err := hashBody(ctx, reader, int64(len(body)))
+	if err != nil {
+		return request{}, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
+	}
+	put.body, put.size, put.payloadHash = reader, size, hash
+	return put, nil
+}
+
+// bucketConflict answers a 409 CreateBucket: S3 reports a bucket this account owns as BucketAlreadyOwnedByYou and
+// another account's as BucketAlreadyExists. The code decides, because a public list policy on another owner's bucket
+// also answers HEAD 200.
+func (c *Client) bucketConflict(resp *http.Response, allowExisting bool) (bool, error) {
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	_ = resp.Body.Close() //nolint:errcheck // the body is already read; a close failure adds nothing
+	remote := errorDocument(resp.StatusCode, data)
+	if remote != nil && remote.Code == "BucketAlreadyOwnedByYou" {
+		if !allowExisting {
+			return false, c.bucketExists()
+		}
+		return false, nil
+	}
+	if remote == nil {
+		remote = &Error{Status: resp.StatusCode}
+	}
+	remote.cause = readErr
+	return false, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, remote)
+}
+
+func (c *Client) bucketExists() error {
+	return fmt.Errorf("objectstore: create bucket %q: the bucket already exists; pass allowExisting only if you own it", c.bucket)
+}
+
+// createBucketBody is empty for us-east-1, where S3 rejects a LocationConstraint naming it; other regions need one.
+func createBucketBody(region string) ([]byte, string, error) {
+	if region == "" || region == "us-east-1" {
+		return nil, "", nil
+	}
+	body, err := xml.Marshal(struct {
+		XMLName  xml.Name `xml:"CreateBucketConfiguration"`
+		Xmlns    string   `xml:"xmlns,attr"`
+		Location string   `xml:"LocationConstraint"`
+	}{Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/", Location: region})
+	if err != nil {
+		return nil, "", err
+	}
+	return body, "application/xml", nil
+}
+
 // Put writes one object. A failed attempt re-sends the body from its start, so the body must be seekable; the same
-// key is overwritten, as S3 defines PUT.
+// key is overwritten, as S3 defines PUT. A known size over the multipart threshold goes up in parts, so an archive is
+// not bounded by the single PUT limit; an unknown size is counted while hashing and stays a single PUT.
 func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 	if err := checkKey(up.Key); err != nil {
 		return ObjectInfo{}, err
@@ -152,11 +251,14 @@ func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 		return ObjectInfo{}, err
 	}
 	if up.Size > maxObjectSize {
-		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte single PUT limit: %w", up.Key, maxObjectSize, ErrTooLarge)
+		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte object limit: %w", up.Key, int64(maxObjectSize), ErrTooLarge)
 	}
-	hash, size, err := hashBody(ctx, up.Body, maxObjectSize)
+	if up.Size > c.threshold {
+		return c.putMultipart(ctx, up, up.Size)
+	}
+	hash, size, err := hashBody(ctx, up.Body, maxSinglePut)
 	if errors.Is(err, ErrTooLarge) {
-		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte single PUT limit: %w", up.Key, maxObjectSize, ErrTooLarge)
+		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte single PUT limit: %w", up.Key, int64(maxSinglePut), ErrTooLarge)
 	}
 	if err != nil {
 		return ObjectInfo{}, fmt.Errorf("objectstore: read %q: %w", up.Key, err)

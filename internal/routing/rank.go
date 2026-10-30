@@ -140,10 +140,11 @@ func slow(c *candidate, o *Override) bool {
 }
 
 // weight is the chance a candidate is given: cheaper is more likely, scaled by the quality score—which already includes
-// the endpoint's health—halved when its supplier's balance is low, and cut for a while after a 429.
+// the endpoint's health—halved when its supplier's balance is low or its group's pool nearly used up, and cut for a
+// while after a 429.
 func (r *Router) weight(c *candidate, now time.Time, price *candidatePrice) float64 {
 	w := math.Max(c.Quality, 0.01) * c.state.damping(now, r.cfg.Recovery, r.cfg.ThrottleFloor) / math.Max(price.blend, 1e-18)
-	if c.BalanceLow {
+	if c.BalanceLow || c.PoolLow {
 		w /= 2
 	}
 	return w
