@@ -7,6 +7,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/jackc/pgx/v5"
+
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -52,6 +54,23 @@ func qualityMigrations(first string) pg.Module {
 	}}
 }
 
+// appliedVersion is the highest version of a module the database applied. It reads as the superuser: a run that failed
+// before its module finished has not granted the application the version table yet.
+func appliedVersion(t *testing.T, database pgtest.Database, module string) int64 {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context()) //nolint:errcheck // the test is over when it closes
+	var version int64
+	if err := conn.QueryRow(t.Context(),
+		"SELECT coalesce(max(version_id), 0) FROM platform.goose_"+module+" WHERE is_applied").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	return version
+}
+
 // TestMigrateRecordsEachAppliedMigrationsChecksum: every migration this program applies is recorded with the SHA-256 of
 // its file, once; a later run adds nothing and overwrites nothing. The platform migrations of the test template are
 // recorded too, so a database this program finds already migrated has its history from the start.
@@ -79,6 +98,109 @@ func TestMigrateRecordsEachAppliedMigrationsChecksum(t *testing.T) {
 	}
 	if got := migrationChecksums(t, db, "quality"); len(got) != len(want) || got[1] != want[1] || got[2] != want[2] {
 		t.Errorf("a later run changed the record to %v, want %v", got, want)
+	}
+}
+
+// TestAChangedHistoryStopsBeforeAnyPendingMigrationRuns: every module's history is checked before any pending migration
+// runs. routing's pending migration would run first, but operations' applied file changed, so it must not run.
+func TestAChangedHistoryStopsBeforeAnyPendingMigrationRuns(t *testing.T) {
+	database := pgtest.New(t,
+		pg.Module{Name: "routing", Migrations: fstest.MapFS{
+			"00001_first.sql": {Data: []byte(up + "CREATE TABLE routing.one (id int);")},
+		}},
+		pg.Module{Name: "operations", Migrations: fstest.MapFS{
+			"00001_first.sql": {Data: []byte(up + "CREATE TABLE operations.one (id int);")},
+		}},
+	)
+	routing := pg.Module{Name: "routing", Migrations: fstest.MapFS{
+		"00001_first.sql":  {Data: []byte(up + "CREATE TABLE routing.one (id int);")},
+		"00002_second.sql": {Data: []byte(up + "CREATE TABLE routing.two (id int);")},
+	}}
+	operations := pg.Module{Name: "operations", Migrations: fstest.MapFS{
+		"00001_first.sql": {Data: []byte(up + "CREATE TABLE operations.one (id int, changed int);")},
+	}}
+	err := pg.Migrate(t.Context(), database.Migrator, routing, operations)
+	want := "operations migration 00001_first.sql changed after it was applied"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Migrate with a later module's changed history: %v, want %q", err, want)
+	}
+	if got := appliedVersion(t, database, "routing"); got != 1 {
+		t.Errorf("routing migration 2 ran before the changed history was reported (version %d)", got)
+	}
+}
+
+// TestAFailedRunRecordsTheMigrationItApplied: a migration that commits before a later one fails is recorded in the same
+// transaction as its version, so a retry cannot mistake a changed file for the file that ran. The failed migration
+// itself is transactional: its file may still be fixed, and the fixed file runs on the retry.
+func TestAFailedRunRecordsTheMigrationItApplied(t *testing.T) {
+	database := pgtest.New(t)
+	ctx := t.Context()
+	first := up + "CREATE TABLE quality.one (id int);"
+	failing := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_first.sql":  {Data: []byte(first)},
+		"00002_second.sql": {Data: []byte(up + "SELECT * FROM quality.no_such_table;")},
+	}}
+	if err := pg.Migrate(ctx, database.Migrator, failing); err == nil {
+		t.Fatal("Migrate with a failing second migration: want an error")
+	}
+	db := open(t, database.App)
+	if got := migrationChecksums(t, db, "quality")[1]; got != [2]string{"00001_first.sql", sum([]byte(first))} {
+		t.Errorf("the file of the committed migration is not recorded: %v", got)
+	}
+	if _, ok := migrationChecksums(t, db, "quality")[2]; ok {
+		t.Error("the failed migration was recorded")
+	}
+	changed := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_first.sql":  {Data: []byte(up + "CREATE TABLE quality.one (id int, changed int);")},
+		"00002_second.sql": {Data: []byte(up + "SELECT 2;")},
+	}}
+	if err := pg.Migrate(ctx, database.Migrator, changed); err == nil ||
+		!strings.Contains(err.Error(), "00001_first.sql changed after it was applied") {
+		t.Errorf("Migrate after changing the applied file: %v", err)
+	}
+	if got := appliedVersion(t, database, "quality"); got != 1 {
+		t.Errorf("the pending migration ran before the changed history was reported (version %d)", got)
+	}
+	restored := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_first.sql":  {Data: []byte(first)},
+		"00002_second.sql": {Data: []byte(up + "SELECT 2;")},
+	}}
+	if err := pg.Migrate(ctx, database.Migrator, restored); err != nil {
+		t.Fatalf("Migrate after restoring the applied file and fixing the failed one: %v", err)
+	}
+	if got := appliedVersion(t, database, "quality"); got != 2 {
+		t.Errorf("the fixed migration did not run (version %d)", got)
+	}
+}
+
+// TestAFailedNonTransactionalMigrationIsFrozenBeforeItRuns: a migration that opts out of a transaction commits its
+// earlier statements even when a later one fails, so its file is recorded before it runs and a retry with a changed
+// file is refused before it executes anything.
+func TestAFailedNonTransactionalMigrationIsFrozenBeforeItRuns(t *testing.T) {
+	database := pgtest.New(t)
+	ctx := t.Context()
+	broken := "-- +goose NO TRANSACTION\n" + up +
+		"CREATE TABLE quality.partial (id int);\nSELECT * FROM quality.no_such_table;"
+	module := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_partial.sql": {Data: []byte(broken)},
+	}}
+	if err := pg.Migrate(ctx, database.Migrator, module); err == nil {
+		t.Fatal("Migrate with a failing migration: want an error")
+	}
+	db := open(t, database.App)
+	if got := migrationChecksums(t, db, "quality")[1]; got != [2]string{"00001_partial.sql", sum([]byte(broken))} {
+		t.Errorf("the file was not recorded before it ran: %v", got)
+	}
+	changed := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_partial.sql": {Data: []byte("-- +goose NO TRANSACTION\n" + up +
+			"CREATE TABLE quality.changed (id int);\nSELECT 1;")},
+	}}
+	if err := pg.Migrate(ctx, database.Migrator, changed); err == nil ||
+		!strings.Contains(err.Error(), "00001_partial.sql changed after it was applied") {
+		t.Errorf("Migrate with the changed non-transactional file: %v", err)
+	}
+	if got := appliedVersion(t, database, "quality"); got != 0 {
+		t.Errorf("the changed non-transactional migration ran (version %d)", got)
 	}
 }
 

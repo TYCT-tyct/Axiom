@@ -216,9 +216,22 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 	if err != nil {
 		return err
 	}
-	for _, m := range modules {
+	// Check every module's recorded history before any pending migration runs: a changed merged migration stops the run
+	// while the database is still at the versions the previous release left, not after a later migration committed.
+	checked, err := preflight(ctx, db, modules)
+	if err != nil {
+		return err
+	}
+	for i, m := range modules {
 		if err := up(ctx, db, locker, m); err != nil {
 			return fmt.Errorf("migrate %s: %w", m.Name, err)
+		}
+		// Platform's migrations include the one that creates the record table. Until it exists there is nothing to
+		// compare, so the modules after platform are checked now, before any of them applies a migration.
+		if i == 0 && !checked && len(modules) > 1 {
+			if checked, err = preflight(ctx, db, modules[1:]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -277,23 +290,40 @@ func closeAdmin(ctx context.Context, conn *pgx.Conn) {
 
 // up applies one module's pending migrations, holding goose's session lock.
 func up(ctx context.Context, db *sql.DB, locker lock.SessionLocker, m Module) error {
+	files, err := migrationChecksums(m)
+	if err != nil {
+		return err
+	}
+	byVersion := make(map[int64]migrationChecksum, len(files))
+	for _, file := range files {
+		byVersion[file.version] = file
+	}
 	store, err := database.NewStore(database.DialectPostgres, versionTable(m.Name))
 	if err != nil {
 		return err
 	}
+	records, err := tableExists(ctx, db, checksumTable)
+	if err != nil {
+		return fmt.Errorf("read the record of applied migrations: %w", err)
+	}
 	provider, err := goose.NewProvider("", db, m.Migrations,
-		goose.WithStore(store), goose.WithSessionLocker(locker), goose.WithDisableGlobalRegistry(true))
+		goose.WithStore(&checksumStore{Store: store, module: m.Name, files: byVersion}),
+		goose.WithSessionLocker(locker), goose.WithDisableGlobalRegistry(true))
 	if err != nil {
 		return err
 	}
 	if _, err := provider.Up(ctx); err != nil {
 		return err
 	}
-	// Record what this run applied and refuse a merged migration that changed since the database recorded it: the run
-	// stops before a node starts against a schema that its recorded history no longer explains.
-	if err := recordChecksums(ctx, db, m); err != nil {
-		return err
+	// Migrations this run applied while the record table did not exist yet (a fresh database, or one migrated by a
+	// release before it) are baselined once. From then on a version is recorded in the same transaction as its row.
+	if !records {
+		if err := recordChecksums(ctx, db, m); err != nil {
+			return err
+		}
 	}
+	// Refuse a merged migration that changed since the database recorded it: the run stops before a node starts
+	// against a schema that its recorded history no longer explains.
 	if err := verifyChecksums(ctx, db, m); err != nil {
 		return err
 	}
