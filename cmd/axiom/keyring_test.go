@@ -203,6 +203,18 @@ func (f rotationFixture) addAndActivate() {
 	}
 }
 
+// seeded is the planted envelope of one table; the inventory order is not part of the tests' contract.
+func (f rotationFixture) seeded(table string) rotationEnvelope {
+	f.t.Helper()
+	for _, row := range f.before {
+		if row.store.Table == table {
+			return row
+		}
+	}
+	f.t.Fatalf("no envelope seeded in %s", table)
+	return rotationEnvelope{}
+}
+
 // rewrapped is the number of envelopes the rewrap audit entries report, which is also the number of committed batches.
 func (f rotationFixture) rewrapped() string {
 	f.t.Helper()

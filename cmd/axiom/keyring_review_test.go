@@ -142,12 +142,7 @@ func TestKeyringRemovesLeftoverReplacements(t *testing.T) {
 func (f rotationFixture) makeCredentialRoutable() {
 	f.t.Helper()
 	ctx := f.t.Context()
-	credential := ""
-	for _, row := range f.before {
-		if row.store.Table == "credentials" {
-			credential = row.id
-		}
-	}
+	credential := f.seeded("credentials").id
 	if err := f.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 		var supplier, group uuid.UUID
 		if err := tx.QueryRow(ctx, "SELECT supplier_id, supplier_group_id FROM suppliers.credentials WHERE id=$1",
@@ -303,25 +298,26 @@ func TestKeyringReportsOnlyFingerprintConfirmedVersions(t *testing.T) {
 func TestKeyringRetirementRefusesStaleWrites(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
-	stale := f.before[1].sealed
+	login := f.seeded("supplier_logins")
+	stale := login.sealed
 	f.addAndActivate()
 	f.run("rewrap")
 	f.run("retire", "--version", "1")
 	err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 		_, err := tx.Exec(t.Context(), `UPDATE suppliers.supplier_logins
 			SET ciphertext=$1, nonce=$2, wrapped_dek=$3, key_version=$4 WHERE supplier_id=$5`,
-			stale.Ciphertext, stale.Nonce, stale.WrappedDEK, int64(stale.KeyVersion), f.before[1].id)
+			stale.Ciphertext, stale.Nonce, stale.WrappedDEK, int64(stale.KeyVersion), login.id)
 		return err
 	})
 	if err == nil || !strings.Contains(err.Error(), "is retired") {
 		t.Fatalf("a stale version 1 write after retirement: %v", err)
 	}
-	if got := f.read(f.before[1]); got.KeyVersion != 2 {
+	if got := f.read(login); got.KeyVersion != 2 {
 		t.Fatalf("the refused write changed the stored version to %d", got.KeyVersion)
 	}
 	// The same fence must see the marker under a tenant scope, not only the platform scope a maintenance command uses.
 	// The scope carries the billing account, not the user id, so read the pair the policy compares.
-	account := f.before[0]
+	account := f.seeded("users")
 	owner := f.text("SELECT site_id::text || '|' || account_id::text FROM accounts.users WHERE id = '" + account.id + "'")
 	site, billing, _ := strings.Cut(owner, "|")
 	err = f.db.Tx(t.Context(), pg.AccountScopeIn(uuid.MustParse(site), uuid.MustParse(billing)), func(tx pg.Tx) error {
@@ -341,7 +337,8 @@ func TestKeyringRetirementRefusesStaleWrites(t *testing.T) {
 func TestKeyringRetirementWaitsForAnOpenEnvelopeWrite(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
-	stale := f.before[1].sealed
+	login := f.seeded("supplier_logins")
+	stale := login.sealed
 	f.addAndActivate()
 	f.run("rewrap")
 
@@ -352,7 +349,7 @@ func TestKeyringRetirementWaitsForAnOpenEnvelopeWrite(t *testing.T) {
 		written <- f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 			if _, err := tx.Exec(t.Context(), `UPDATE suppliers.supplier_logins
 				SET ciphertext=$1, nonce=$2, wrapped_dek=$3, key_version=$4 WHERE supplier_id=$5`,
-				stale.Ciphertext, stale.Nonce, stale.WrappedDEK, int64(stale.KeyVersion), f.before[1].id); err != nil {
+				stale.Ciphertext, stale.Nonce, stale.WrappedDEK, int64(stale.KeyVersion), login.id); err != nil {
 				setup <- err
 				return err
 			}
@@ -382,7 +379,7 @@ func TestKeyringRetirementWaitsForAnOpenEnvelopeWrite(t *testing.T) {
 	if err := f.r.Retire(t.Context(), 1); !errors.Is(err, secret.ErrReferenced) {
 		t.Fatalf("retirement after the writer committed: %v, want a reference", err)
 	}
-	if got := f.read(f.before[1]); got.KeyVersion != 1 {
+	if got := f.read(login); got.KeyVersion != 1 {
 		t.Fatalf("the committed writer's version is %d, want 1", got.KeyVersion)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -86,11 +87,11 @@ func TestKeyringLifecycleRotatesWhileNodesRun(t *testing.T) {
 	mustLifecycleStep(t, lifecycle, "activation")
 	wantKeyStatus(t, mustRefreshStatus(t, f, ring), 2, 2, 0)
 	// Each step rewraps a bounded batch; the loop runs until a pass finds no old envelope.
-	for range 3 {
+	for range f.before {
 		mustLifecycleStep(t, lifecycle, "rewrap")
 	}
-	if got := f.rewrapped(); got != "3" {
-		t.Fatalf("rewrapped %s envelopes, want 3", got)
+	if got, want := f.rewrapped(), strconv.Itoa(len(f.before)); got != want {
+		t.Fatalf("rewrapped %s envelopes, want %s", got, want)
 	}
 	// The other node has now written version 2 for longer than the quiet window.
 	f.execSQL(t, "UPDATE platform.nodes SET key_active=2, key_active_since=now() - make_interval(secs => 31)")
