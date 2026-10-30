@@ -171,23 +171,33 @@ function listPaymentOrders({ query, state }: Ctx<"/api/admin/v1/payments/orders"
   if (query.get("site_id") !== state.siteId) {
     return fail(404, "not_found");
   }
-  const account = query.get("account_id");
-  const user = query.get("user_id");
-  const merchant = query.get("merchant_id");
-  const wanted = query.get("state");
-  const since = query.get("since");
-  const until = query.get("until");
-  const orders = state.orders.filter(
-    (order) =>
-      (!account || order.account_id === account) &&
-      (!user || order.user_id === user) &&
-      (!merchant || order.merchant_id === merchant) &&
-      (!wanted || order.state === wanted) &&
-      (!since || (order.created_at ?? "") >= since) &&
-      (!until || (order.created_at ?? "") < until),
-  );
+  const filters = {
+    account: query.get("account_id") ?? "",
+    user: query.get("user_id") ?? "",
+    merchant: query.get("merchant_id") ?? "",
+    state: query.get("state") ?? "",
+    since: query.get("since") ?? "",
+    until: query.get("until") ?? "",
+  };
+  const orders = state.orders.filter((order) => orderMatches(order, filters));
   const page = paged(orders, query);
   return page ? ok(page) : fail(400, "invalid_request");
+}
+
+// orderMatches is the order list's filters as the server applies them: an empty filter does not narrow, and the date
+// window is half-open at the end as the contract writes it.
+function orderMatches(
+  order: Schemas["PaymentOrder"],
+  filters: { account: string; user: string; merchant: string; state: string; since: string; until: string },
+) {
+  return [
+    !filters.account || order.account_id === filters.account,
+    !filters.user || order.user_id === filters.user,
+    !filters.merchant || order.merchant_id === filters.merchant,
+    !filters.state || order.state === filters.state,
+    !filters.since || (order.created_at ?? "") >= filters.since,
+    !filters.until || (order.created_at ?? "") < filters.until,
+  ].every(Boolean);
 }
 
 function listPaymentRefunds({ query, state }: Ctx<"/api/admin/v1/payments/refunds", "get">) {

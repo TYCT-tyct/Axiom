@@ -348,10 +348,7 @@ export const paymentOrdersQuery = (siteId: AdminSchemas["SiteId"], filters: Paym
     getNextPageParam: nextCursor,
   });
 
-export const paymentRefundsQuery = (
-  siteId: AdminSchemas["SiteId"],
-  state?: AdminSchemas["PaymentRefundState"],
-) =>
+export const paymentRefundsQuery = (siteId: AdminSchemas["SiteId"], state?: AdminSchemas["PaymentRefundState"]) =>
   infiniteQueryOptions({
     queryKey: [accountKey, "payment-refunds", siteId, state ?? ""],
     queryFn: ({ pageParam, signal }) =>

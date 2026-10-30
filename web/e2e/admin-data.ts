@@ -1,4 +1,5 @@
-import type { components } from "../packages/api/src/admin.gen.ts";
+import { long, nano, pad, range, type Schemas, siteId, tierId, usd, uuid } from "./admin-fixtures.ts";
+import { aMerchant, anOrder, aRefund } from "./admin-payments-data.ts";
 import type { AuthState } from "./mock.ts";
 import { accountId, authState, userId } from "./mock-auth.ts";
 
@@ -6,7 +7,8 @@ import { accountId, authState, userId } from "./mock-auth.ts";
 // this file compiling. Three sets: a usual platform, an empty one, and the worst realistic one (the longest values the
 // contract allows, the biggest amounts, the most rows), which the screenshots of the acceptance gate use.
 
-export type Schemas = components["schemas"];
+export type { Schemas } from "./admin-fixtures.ts";
+export { uuid } from "./admin-fixtures.ts";
 
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
@@ -47,15 +49,6 @@ const allPermissions = [
   "pricing.manage",
   "sites.manage",
 ];
-
-const pad = (n: number, width = 26) => String(n).padStart(width, "0");
-export const uuid = (kind: number, n: number) => `${pad(kind, 8)}-0000-4000-8000-${pad(n, 12)}`;
-const tierId = (n: number) => `tier_${pad(n)}` as Schemas["TierId"];
-const siteId = `site_${pad(1)}` as Schemas["SiteId"];
-const usd = (units: string): Schemas["Money"] => ({ amount: `${units}000000000`, currency: "USD" });
-const nano = (amount: string): Schemas["Money"] => ({ amount, currency: "USD" });
-const range = (count: number) => Array.from({ length: count }, (_, i) => i + 1);
-const long = (text: string, length: number) => text.repeat(Math.ceil(length / text.length)).slice(0, length);
 
 const tiers: Schemas["TierRef"][] = [
   { id: tierId(1), name: "Standard" },
@@ -362,70 +355,12 @@ function rules(): Schemas["PricingRule"][] {
   ];
 }
 
-const merchantId = uuid(8, 1) as Schemas["MerchantId"];
-const payAmount = (amount: string): Schemas["PayAmount"] => ({ amount, currency: "USD" });
-
-function aMerchant(): Schemas["Merchant"] {
-  return {
-    id: merchantId,
-    site_id: siteId,
-    kind: "easypay",
-    name: "Alipay",
-    enabled: true,
-    currency: "USD",
-    ttl_seconds: 1800,
-    refund_enabled: true,
-    user_refund: true,
-    sort: 1,
-  };
-}
-
-function anOrder(n: number, user: Schemas["UserSummary"], over: Partial<Schemas["PaymentOrder"]> = {}) {
-  const pending = n % 5 === 0;
-  const at = new Date(Date.UTC(2026, 9, 30, 12, 0, 0) - n * 60_000).toISOString();
-  return {
-    id: uuid(13, n),
-    account_id: user.account_id,
-    user_id: user.id,
-    merchant_id: merchantId,
-    merchant_name: "Alipay",
-    method: "alipay",
-    state: pending ? "pending" : "paid",
-    credits: usd("10"),
-    total: payAmount("1000"),
-    fee: payAmount("30"),
-    credited: pending ? undefined : usd("10"),
-    paid_total: pending ? undefined : payAmount("1000"),
-    paid_fee: pending ? undefined : payAmount("30"),
-    trade_no: `trade-${n}`,
-    created_at: at,
-    paid_at: pending ? undefined : at,
-    expires_at: at,
-    refund_allowed: true,
-    refunds: [],
-    ...over,
-  } satisfies Schemas["PaymentOrder"];
-}
-
-function aRefund(n: number, order: Schemas["PaymentOrder"], user: Schemas["UserSummary"], reason?: string) {
-  return {
-    id: uuid(14, n),
-    order_id: order.id,
-    account_id: order.account_id,
-    state: "frozen" as const,
-    via: "channel" as const,
-    credits: usd("5"),
-    amount: payAmount("500"),
-    reason: reason ?? "The credits were not used.",
-    requested_by: user.id,
-    created_at: order.created_at,
-  } satisfies Schemas["PaymentRefund"];
-}
-
 function paymentData(people: Schemas["UserSummary"][]) {
   const fallback = people[0] ?? aUser(1);
   const orders = range(60).map((n) => anOrder(n, people[(n - 1) % Math.max(people.length, 1)] ?? fallback));
-  const refunds = range(3).map((n) => aRefund(n, orders[n - 1] ?? orders[0] ?? anOrder(1, fallback), people[n] ?? fallback));
+  const refunds = range(3).map((n) =>
+    aRefund(n, orders[n - 1] ?? orders[0] ?? anOrder(1, fallback), people[n] ?? fallback),
+  );
   for (const refund of refunds) {
     const order = orders.find((candidate) => candidate.id === refund.order_id);
     if (order) {
@@ -499,6 +434,15 @@ export function emptyState(): AdminState {
 // 182-character model slugs, the biggest amounts, and a lot of rows.
 export function worstState(): AdminState {
   const state = usualState();
+  worstUsers(state);
+  worstPayments(state);
+  worstCalls(state);
+  worstSuppliers(state);
+  worstCatalog(state);
+  return state;
+}
+
+function worstUsers(state: AdminState) {
   const email = `${long("bartholomew.fitzgerald-", 200)}@northwind-industries-holdings.example.com`;
   state.users = [aUser(1, { email }), aUser(2, { email: "J@x.io" }), ...range(150).map((n) => aUser(n + 2))];
   for (const user of state.users) {
@@ -517,6 +461,9 @@ export function worstState(): AdminState {
       }),
     );
   }
+}
+
+function worstPayments(state: AdminState) {
   const people = state.users;
   state.orders = range(150).map((n) =>
     anOrder(n + 100, people[(n - 1) % people.length] ?? aUser(0), {
@@ -537,10 +484,17 @@ export function worstState(): AdminState {
       order.refunds = [...(order.refunds ?? []), refund];
     }
   }
+}
+
+function worstCalls(state: AdminState) {
+  const people = state.users;
   state.calls = range(1_000).map((n) => aCall(n, people[(n - 1) % people.length] ?? aUser(0)));
   state.traces = new Map(state.calls.map((call, i) => [call.id ?? uuid(11, i + 1), aTrace(call, i + 1)]));
   state.audit = range(500).map((n) => anAuditEntry(n, people[(n - 1) % people.length] ?? aUser(0)));
   state.auditEntries = new Map(state.audit.map((entry) => [entry.id ?? uuid(12, 1), entry]));
+}
+
+function worstSuppliers(state: AdminState) {
   state.suppliers = [
     aDetail(1, {
       name: long("Supplier with a name of the longest length ", 200),
@@ -569,11 +523,13 @@ export function worstState(): AdminState {
       })),
     ];
   }
+}
+
+function worstCatalog(state: AdminState) {
   const slug = `${long("a-vendor-with-a-long-name", 40).replace(/-$/, "a")}/${long("model-name-", 99)}@${long("v", 39)}`;
   state.models = [
     aModel(1, { slug: slug as Schemas["ModelSlug"], names: [{ name: long("alias-", 200), visibility: "internal" }] }),
     ...range(150).map((n) => (n === 2 ? aDraft(3) : aModel(n + 1))),
   ];
   state.pending = pending(150).map((row, i) => (i === 0 ? { ...row, upstream_name: long("up-", 200) } : row));
-  return state;
 }

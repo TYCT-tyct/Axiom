@@ -67,7 +67,8 @@ export default {
       "This releases the frozen credits to the payment channel. The approval is audited with your reason, and a refund already approved is not sent twice.",
     rejectIntro:
       "This returns the frozen credits to the account and moves no cash. It only works while nobody has approved the refund and no channel has seen it.",
-    approveIntroOffline: "This records your approval and audits it with your reason. An offline refund moves no money by itself: the transfer is concluded separately with its receipt.",
+    approveIntroOffline:
+      "This records your approval and audits it with your reason. An offline refund moves no money by itself: the transfer is concluded separately with its receipt.",
     approveAction: "Approve refund",
     rejectAction: "Reject refund",
     approvedOffline: "Approved. The offline refund waits for its transfer to be concluded.",

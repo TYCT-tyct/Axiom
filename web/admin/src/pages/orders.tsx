@@ -1,16 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { LoadMore, useSession } from "@axiom/app";
-import {
-  Button,
-  DataState,
-  EmptyState,
-  PageHeader,
-  Panel,
-  Table,
-  Td,
-  TextField,
-  useFormat,
-} from "@axiom/ui";
+import { Button, DataState, EmptyState, PageHeader, Panel, Table, Td, TextField, useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
@@ -18,8 +8,19 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import { orderAmounts } from "../orders/amounts";
-import { orderTone, paymentOrderStates, refundTone, shortId } from "../orders/states";
-import { ChoiceFilter, Code, FilterBar, Head, mainCell, PageBody, State, text, toInstant, toLocalInput } from "../parts";
+import { orderTone, paymentOrderState, paymentOrderStates, refundTone, shortId } from "../orders/states";
+import {
+  ChoiceFilter,
+  Code,
+  FilterBar,
+  Head,
+  mainCell,
+  PageBody,
+  State,
+  text,
+  toInstant,
+  toLocalInput,
+} from "../parts";
 import { accountQuery, merchantsQuery, paymentOrdersQuery, paymentRefundsQuery } from "../queries";
 
 type Order = AdminSchemas["PaymentOrder"];
@@ -64,9 +65,7 @@ function RefundQueue({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
       <DataState
         query={refunds}
         isEmpty={() => rows.length === 0}
-        empty={
-          <EmptyState title={t("orders.refund.emptyTitle")}>{t("orders.refund.emptyBody")}</EmptyState>
-        }
+        empty={<EmptyState title={t("orders.refund.emptyTitle")}>{t("orders.refund.emptyBody")}</EmptyState>}
       >
         {() => (
           <Table label={t("orders.refund.title")}>
@@ -223,7 +222,11 @@ function RefundDecision({ kind, refund, onClose }: Decision & { onClose: () => v
         )
       }
       done={() => (
-        <p>{t(approve ? (offline ? "orders.refund.approvedOffline" : "orders.refund.approved") : "orders.refund.rejected")}</p>
+        <p>
+          {t(
+            approve ? (offline ? "orders.refund.approvedOffline" : "orders.refund.approved") : "orders.refund.rejected",
+          )}
+        </p>
       )}
       onClose={onClose}
     />
@@ -298,7 +301,6 @@ function OrdersList({ siteId, filters }: { siteId: AdminSchemas["SiteId"]; filte
 }
 
 function Filters({ siteId, filters }: { siteId: AdminSchemas["SiteId"]; filters: FiltersValue }) {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const merchants = useQuery(merchantsQuery(siteId));
   const channels = (merchants.data?.data ?? []).flatMap((merchant) =>
@@ -313,7 +315,7 @@ function Filters({ siteId, filters }: { siteId: AdminSchemas["SiteId"]; filters:
           search: {
             account_id: text(values.account_id),
             user_id: text(values.user_id),
-            state: paymentOrderStates.find((state) => state === values.state),
+            state: paymentOrderState(values.state),
             merchant_id: text(values.merchant_id),
             since: toInstant(values.since),
             until: toInstant(values.until),
@@ -321,6 +323,15 @@ function Filters({ siteId, filters }: { siteId: AdminSchemas["SiteId"]; filters:
         })
       }
     >
+      <FilterFields filters={filters} channels={channels} />
+    </FilterBar>
+  );
+}
+
+function FilterFields({ filters, channels }: { filters: FiltersValue; channels: { value: string; label: string }[] }) {
+  const { t } = useTranslation();
+  return (
+    <>
       <TextField
         label={t("orders.filters.account")}
         hint={t("orders.filters.accountHint")}
@@ -365,13 +376,12 @@ function Filters({ siteId, filters }: { siteId: AdminSchemas["SiteId"]; filters:
         type="datetime-local"
         defaultValue={toLocalInput(filters.until)}
       />
-    </FilterBar>
+    </>
   );
 }
 
 function OrdersTable({ rows }: { rows: Order[] }) {
   const { t } = useTranslation();
-  const format = useFormat();
   return (
     <Table label={t("nav.orders")}>
       <Head
@@ -385,74 +395,74 @@ function OrdersTable({ rows }: { rows: Order[] }) {
         ]}
       />
       <tbody>
-        {rows.map((order, index) => {
-          const amounts = orderAmounts(order);
-          return (
-            <tr key={order.id ?? index} className="align-top hover:bg-s2">
-              <Td className={mainCell}>
-                <Code title={order.id}>{shortId(order.id)}</Code>
-                <span className="block text-label text-t3" title={order.created_at}>
-                  {order.created_at ? format.dateTime(new Date(order.created_at)) : "—"}
-                </span>
-                <span className="block text-label text-t3">
-                  {[order.merchant_name, order.method].filter(Boolean).join(" · ")}
-                </span>
-              </Td>
-              <Td className="hidden md:table-cell">
-                <Code title={order.account_id}>{shortId(order.account_id)}</Code>
-                <span className="block text-label text-t3" title={order.user_id}>
-                  {shortId(order.user_id)}
-                </span>
-              </Td>
-              <Td>
-                {order.state ? (
-                  <State tone={orderTone(order.state)}>{t(`orders.state.${order.state}`)}</State>
-                ) : (
-                  "—"
-                )}
-                {order.trade_no ? <span className="mt-1 block text-label text-t3">{order.trade_no}</span> : null}
-              </Td>
-              <Td className="whitespace-nowrap text-right tabular-nums">
-                {amounts.credited ? (
-                  format.money(amounts.credited!)
-                ) : (
-                  <span className="text-label text-t3">
-                    {t(amounts.creditedMissing ? "orders.creditedUnavailable" : "orders.notCredited")}
-                  </span>
-                )}
-                {amounts.quotedCredits ? (
-                  <span className="block text-label text-t3">
-                    {t("orders.quote")} {format.money(amounts.quotedCredits!)}
-                  </span>
-                ) : null}
-              </Td>
-              <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">
-                {amounts.paid ? (
-                  format.pay(amounts.paid!)
-                ) : (
-                  <span className="text-label text-t3">
-                    {t(amounts.paidMissing ? "orders.paidUnavailable" : "orders.notPaid")}
-                  </span>
-                )}
-                {amounts.quote ? (
-                  <span className="block text-label text-t3">
-                    {t("orders.quote")} {format.pay(amounts.quote!)}
-                  </span>
-                ) : null}
-                {amounts.paidFee ? (
-                  <span className="block text-label text-t3">
-                    {t("orders.fee")} {format.pay(amounts.paidFee!)}
-                  </span>
-                ) : null}
-              </Td>
-              <Td className="hidden max-w-72 lg:table-cell">
-                <Refunds refunds={order.refunds} />
-              </Td>
-            </tr>
-          );
-        })}
+        {rows.map((order, index) => (
+          <OrderRow key={order.id ?? index} order={order} />
+        ))}
       </tbody>
     </Table>
+  );
+}
+
+function OrderRow({ order }: { order: Order }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const { paid, paidFee, quote, credited, quotedCredits, paidMissing, creditedMissing } = orderAmounts(order);
+  return (
+    <tr className="align-top hover:bg-s2">
+      <Td className={mainCell}>
+        <Code title={order.id}>{shortId(order.id)}</Code>
+        <span className="block text-label text-t3" title={order.created_at}>
+          {order.created_at ? format.dateTime(new Date(order.created_at)) : "—"}
+        </span>
+        <span className="block text-label text-t3">
+          {[order.merchant_name, order.method].filter(Boolean).join(" · ")}
+        </span>
+      </Td>
+      <Td className="hidden md:table-cell">
+        <Code title={order.account_id}>{shortId(order.account_id)}</Code>
+        <span className="block text-label text-t3" title={order.user_id}>
+          {shortId(order.user_id)}
+        </span>
+      </Td>
+      <Td>
+        {order.state ? <State tone={orderTone(order.state)}>{t(`orders.state.${order.state}`)}</State> : "—"}
+        {order.trade_no ? <span className="mt-1 block text-label text-t3">{order.trade_no}</span> : null}
+      </Td>
+      <Td className="whitespace-nowrap text-right tabular-nums">
+        {credited ? (
+          format.money(credited)
+        ) : (
+          <span className="text-label text-t3">
+            {t(creditedMissing ? "orders.creditedUnavailable" : "orders.notCredited")}
+          </span>
+        )}
+        {quotedCredits ? (
+          <span className="block text-label text-t3">
+            {t("orders.quote")} {format.money(quotedCredits)}
+          </span>
+        ) : null}
+      </Td>
+      <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">
+        {paid ? (
+          format.pay(paid)
+        ) : (
+          <span className="text-label text-t3">{t(paidMissing ? "orders.paidUnavailable" : "orders.notPaid")}</span>
+        )}
+        {quote ? (
+          <span className="block text-label text-t3">
+            {t("orders.quote")} {format.pay(quote)}
+          </span>
+        ) : null}
+        {paidFee ? (
+          <span className="block text-label text-t3">
+            {t("orders.fee")} {format.pay(paidFee)}
+          </span>
+        ) : null}
+      </Td>
+      <Td className="hidden max-w-72 lg:table-cell">
+        <Refunds refunds={order.refunds} />
+      </Td>
+    </tr>
   );
 }
 

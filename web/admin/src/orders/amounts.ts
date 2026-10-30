@@ -4,8 +4,10 @@ type Order = AdminSchemas["PaymentOrder"];
 type PayAmount = AdminSchemas["PayAmount"];
 type Money = AdminSchemas["Money"];
 
-const same = (a: { amount: string; currency: string } | undefined, b: { amount: string; currency: string } | undefined) =>
-  a !== undefined && b !== undefined && a.amount === b.amount && a.currency === b.currency;
+const same = (
+  a: { amount: string; currency: string } | undefined,
+  b: { amount: string; currency: string } | undefined,
+) => a !== undefined && b !== undefined && a.amount === b.amount && a.currency === b.currency;
 
 const unpaid = (state: Order["state"]) =>
   state === "pending" || state === "expired" || state === "cancelled" || state === "failed";
