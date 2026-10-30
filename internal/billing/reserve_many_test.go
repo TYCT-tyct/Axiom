@@ -257,6 +257,10 @@ func TestRunBatchRollsBackAndARetryChargesOnce(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("RunBatch = %v, want the failing work's error", err)
 	}
+	var failed *BatchWorkError
+	if !errors.As(err, &failed) || failed.Index != 1 {
+		t.Fatalf("RunBatch = %v (%T), want work 1 named", err, err)
+	}
 	if n := b.count("SELECT count(*) FROM billing.reservations WHERE state <> 'pending'"); n != 0 {
 		t.Errorf("%d reservations ended by the rolled-back batch", n)
 	}

@@ -63,29 +63,65 @@ func (x *Executor) runCompletions(ctx context.Context, batch []*gateItem) error 
 }
 
 // runCompletionBatch writes the batch's works in one transaction of their account's scope, then runs each item's
-// reports. A failure means nothing committed, so no report runs.
+// reports. A work that fails rolls the transaction back; its error goes only to that item, and the others are retried
+// in a new transaction under their own deadlines. A transaction or commit error has no work to name, so it still
+// applies to every item and the caller retries them. Reports run only after their transaction commits.
 func runCompletionBatch(ctx context.Context, batch []*gateItem, run func(context.Context, pg.Scope, []func(pg.Tx) error) error) error {
 	items := make([]*completionItem, len(batch))
 	for i, g := range batch {
 		items[i] = g.payload.(*completionItem)
 	}
-	works := make([]func(pg.Tx) error, len(items))
-	for i, item := range items {
-		works[i] = func(tx pg.Tx) error {
-			after, err := item.work(ctx, tx)
-			if err == nil {
-				item.after = after
+	pending := make([]int, len(items))
+	for i := range items {
+		pending[i] = i
+	}
+	var retryCancel context.CancelFunc
+	defer func() {
+		if retryCancel != nil {
+			retryCancel()
+		}
+	}()
+	for len(pending) > 0 {
+		works := make([]func(pg.Tx) error, len(pending))
+		for j, index := range pending {
+			item := items[index]
+			item.after = nil
+			works[j] = func(tx pg.Tx) error {
+				after, err := item.work(ctx, tx)
+				if err == nil {
+					item.after = after
+				}
+				return err
 			}
+		}
+		err := run(ctx, items[pending[0]].scope, works)
+		if err == nil {
+			for _, index := range pending {
+				if items[index].after != nil {
+					items[index].after()
+				}
+			}
+			return nil
+		}
+		var failed *billing.BatchWorkError
+		if !errors.As(err, &failed) || failed.Index < 0 || failed.Index >= len(pending) {
 			return err
 		}
-	}
-	if err := run(ctx, items[0].scope, works); err != nil {
-		return err
-	}
-	for _, item := range items {
-		if item.after != nil {
-			item.after()
+		items[pending[failed.Index]].gate.err = failed.Err
+		pending = append(pending[:failed.Index], pending[failed.Index+1:]...)
+		if len(pending) == 0 {
+			return nil
 		}
+		// The next transaction uses only the remaining requests' own deadlines; the failed one's may already
+		// have passed.
+		if retryCancel != nil {
+			retryCancel()
+		}
+		remaining := make([]*gateItem, len(pending))
+		for j, index := range pending {
+			remaining[j] = &items[index].gate
+		}
+		ctx, retryCancel = batchContext(remaining, Completion, 0)
 	}
 	return nil
 }

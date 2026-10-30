@@ -22,15 +22,16 @@ const (
 // gateItem is one request's place in the account's queue and its result. The run function of its class reads payload,
 // which is the caller's own item; a batch holds one class only.
 type gateItem struct {
-	class   Class
-	ctx     context.Context
-	run     batchRun
-	payload any
-	done    chan struct{}
-	err     error
-	taken   bool
-	elem    *list.Element
-	queue   *accountQueue
+	class    Class
+	ctx      context.Context
+	run      batchRun
+	payload  any
+	done     chan struct{}
+	err      error
+	panicked any
+	taken    bool
+	elem     *list.Element
+	queue    *accountQueue
 }
 
 // batchRun writes one batch. Items whose work failed carry their errors; an error returned for the batch itself is
@@ -93,8 +94,9 @@ func (f *Funds) Complete(ctx context.Context, account string, item *gateItem, ru
 	return f.submit(ctx, account, item, run)
 }
 
-// submit queues item and returns its result. The first request of an idle account serves the queue as its leader
-// until no waiter is left; every later request waits for the batch that takes it.
+// submit queues item and returns its result. The first request of an idle account starts a leader goroutine that
+// serves the queue until no waiter is left; every request, the leader's included, waits only for the batch that takes
+// it, so a busy account cannot hold its first request past the end of its own batch.
 func (f *Funds) submit(ctx context.Context, account string, item *gateItem, run batchRun) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -112,11 +114,10 @@ func (f *Funds) submit(ctx context.Context, account string, item *gateItem, run 
 	q.leader = true
 	g.mu.Unlock()
 
-	if !leader {
-		return f.await(item)
+	if leader {
+		go f.lead(account, q)
 	}
-	f.lead(account, q)
-	return item.err
+	return f.await(item)
 }
 
 // await waits for the batch that takes item. An admission waits at most admissionWait to be taken and then gets
@@ -132,20 +133,21 @@ func (f *Funds) await(item *gateItem) error {
 	}
 	select {
 	case <-item.done:
-		return item.err
 	case <-expiredAt:
 		if f.gate.withdraw(item) {
 			return expired(item.ctx, errAccountGate)
 		}
 		<-item.done
-		return item.err
 	case <-item.ctx.Done():
 		if f.gate.withdraw(item) {
 			return item.ctx.Err()
 		}
 		<-item.done
-		return item.err
 	}
+	if item.panicked != nil {
+		panic(item.panicked)
+	}
+	return item.err
 }
 
 // withdraw removes an item that no batch has taken, and reports whether it did. An item a batch took stays until
@@ -163,8 +165,9 @@ func (g *batchGate) withdraw(item *gateItem) bool {
 	return true
 }
 
-// lead serves q until it is empty: take a batch, give it a bounded time to collect peers, run it, repeat. The
-// leader never abandons the queue because its own request was cancelled; the others are still waiting.
+// lead serves q until it is empty: take a batch, give it a bounded time to collect peers, run it, repeat. It runs in
+// its own goroutine, so a request returns when its batch ends even if the account has more waiters; the leader never
+// abandons the queue because its own request was cancelled, since the others are still waiting.
 func (f *Funds) lead(account string, q *accountQueue) {
 	for {
 		batch, class := f.take(q)
@@ -279,8 +282,21 @@ func (f *Funds) runBatch(class Class, batch []*gateItem) {
 		f.finish(batch, err)
 		return
 	}
-	err = batch[0].run(ctx, batch)
-	release()
+	var panicked any
+	func() {
+		defer release()
+		defer func() { panicked = recover() }()
+		err = batch[0].run(ctx, batch)
+	}()
+	if panicked != nil {
+		// A panic is the leader's caller's to observe, as it was when the caller served the queue itself; every
+		// waiter in the batch sees it in its own goroutine. The connection is released above either way.
+		for _, item := range batch {
+			item.panicked = panicked
+		}
+		f.finish(batch, nil)
+		return
+	}
 	f.finish(batch, err)
 }
 

@@ -203,6 +203,97 @@ func TestGateBatchesWaitingAdmissions(t *testing.T) {
 	})
 }
 
+// TestGateLeaderReturnsWithItsBatch: the first request of an idle account starts the leader but does not stay in it.
+// Once its own batch ends it returns, even when the next batch is already running and blocked; otherwise a busy
+// account could hold an admission before its upstream call, an extension's landing, or its cancel for as long as the
+// queue keeps arriving.
+func TestGateLeaderReturnsWithItsBatch(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		f := testFunds(time.Second)
+		firstStarted, firstRelease := make(chan struct{}), make(chan struct{})
+		first := submitGate(ctx, f, "a", Admission, func(context.Context, []*gateItem) error {
+			close(firstStarted)
+			<-firstRelease
+			return nil
+		})
+		synctest.Wait()
+		select {
+		case <-firstStarted:
+		default:
+			t.Fatal("the first batch did not start")
+		}
+		secondStarted, secondRelease := make(chan struct{}), make(chan struct{})
+		second := submitGate(ctx, f, "a", Admission, func(context.Context, []*gateItem) error {
+			close(secondStarted)
+			<-secondRelease
+			return nil
+		})
+		synctest.Wait()
+		if first.finished() {
+			t.Fatal("the first batch ended before its release")
+		}
+		close(firstRelease)
+		synctest.Wait()
+		select {
+		case <-secondStarted:
+		default:
+			t.Fatal("the second batch did not start")
+		}
+		if !first.finished() {
+			t.Fatal("the leader is still serving the next batch instead of returning its own result")
+		}
+		if second.finished() {
+			t.Fatal("the second batch ended before its release")
+		}
+		close(secondRelease)
+		second.mustGranted(t)
+	})
+}
+
+// TestGateFailedCompletionReturnsWhileTheNextBatchRuns: the completion that carries a failed extension returns with
+// its error as soon as its own batch ends, even while the next batch is blocked. The caller then sends the error to
+// the meter's landing channel and cancels the upstream, so the wait for later work cannot stretch ExtendWait.
+func TestGateFailedCompletionReturnsWhileTheNextBatchRuns(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		f := testFunds(time.Second)
+		boom := errors.New("extension refused")
+		firstStarted, firstRelease := make(chan struct{}), make(chan struct{})
+		first := submitGate(ctx, f, "a", Completion, func(context.Context, []*gateItem) error {
+			close(firstStarted)
+			<-firstRelease
+			return boom
+		})
+		synctest.Wait()
+		select {
+		case <-firstStarted:
+		default:
+			t.Fatal("the failed completion's batch did not start")
+		}
+		secondStarted, secondRelease := make(chan struct{}), make(chan struct{})
+		second := submitGate(ctx, f, "a", Admission, func(context.Context, []*gateItem) error {
+			close(secondStarted)
+			<-secondRelease
+			return nil
+		})
+		synctest.Wait()
+		close(firstRelease)
+		synctest.Wait()
+		select {
+		case <-secondStarted:
+		default:
+			t.Fatal("the next batch did not start")
+		}
+		if !first.finished() || !errors.Is(first.err, boom) {
+			t.Fatalf("the failed completion has not returned: finished=%v err=%v", first.finished(), first.err)
+		}
+		if second.finished() {
+			t.Fatal("the next batch ended before its release")
+		}
+		close(secondRelease)
+		second.mustGranted(t)
+	})
+}
+
 // Waiters that give up while the gate is being handed on must neither keep a batch nor lose one: whatever happens, the
 // gate ends free. (The interleaving is the scheduler's, so this is a stress test of an invariant, not of one ordering.)
 func TestGateSurvivesCancellationsRacingBatches(t *testing.T) {

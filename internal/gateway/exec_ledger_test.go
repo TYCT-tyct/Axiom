@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 	"uuid"
 
@@ -350,4 +351,56 @@ func TestAFailureIsNotChargedForModelUsageBecauseTheClientLeftAfterIt(t *testing
 		t.Errorf("%d reservations settled as waived and charged nothing, want the one: the client left after the failure", n)
 	}
 	r.ledgerBalanced()
+}
+
+// TestCompletionBatchKeepsOneWritesFailureOffTheRest: one extension's key limit rolls the batch back, but only that
+// request gets the error; the other extension is retried in its own transaction, runs its report, and does not cut a
+// stream. The same withFunds path carries the settle and extend batches, so this covers the gateway's retry of the
+// members that did not fail, not a manual single-request retry.
+func TestCompletionBatchKeepsOneWritesFailureOffTheRest(t *testing.T) {
+	testOneCompletionFailure(t, &billing.Insufficient{Source: billing.SourceKey})
+}
+
+// TestCompletionBatchKeepsAMissingReservationOffTheRest is the settlement shape of the same bug: pg.ErrNoRows is
+// permanent, so when it was copied to a normal member, permanent() discarded that member's settlement and only the
+// cleanup released its reservation. Here the normal member still commits and charges.
+func TestCompletionBatchKeepsAMissingReservationOffTheRest(t *testing.T) {
+	testOneCompletionFailure(t, pg.ErrNoRows)
+}
+
+func testOneCompletionFailure(t *testing.T, fail error) {
+	t.Helper()
+	run(t, func(t *testing.T, ctx context.Context) {
+		h := newHarness(t, ctx, options{})
+		release := holdGate(t, ctx, h.exec.Limits.Funds, accountKey(h.call.caller), Completion)
+		first := &Call{ID: h.call.ID, Admitted: h.call.Admitted, caller: h.call.caller}
+		second := &Call{ID: uuid.New(), Admitted: h.call.Admitted, caller: h.call.caller}
+		var ran, reported bool
+		done := make(chan error, 2)
+		go func() {
+			done <- h.exec.withFunds(ctx, first, func(context.Context, pg.Tx) (func(), error) {
+				return nil, fail
+			})
+		}()
+		go func() {
+			done <- h.exec.withFunds(ctx, second, func(context.Context, pg.Tx) (func(), error) {
+				ran = true
+				return func() { reported = true }, nil
+			})
+		}()
+		synctest.Wait()
+		release()
+		errs := []error{<-done, <-done}
+		failed, granted := 0, 0
+		for _, err := range errs {
+			if errors.Is(err, fail) {
+				failed++
+			} else if err == nil {
+				granted++
+			}
+		}
+		if failed != 1 || granted != 1 || !ran || !reported {
+			t.Fatalf("errors %v, ran=%v reported=%v; want one failure, one success and its report", errs, ran, reported)
+		}
+	})
 }

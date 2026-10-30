@@ -74,15 +74,28 @@ func settlementRows(ctx context.Context, tx pg.Tx, id, account uuid.UUID) (balan
 	return balance, r, err
 }
 
+// BatchWorkError names the work of a RunBatch that failed. The transaction rolled back, so no work's writes
+// committed; the gateway gives the error only to that work's request and retries the others in a new transaction.
+// An error without this type came from the transaction itself (begin, commit or the connection), so it applies to
+// every work.
+type BatchWorkError struct {
+	Index int
+	Err   error
+}
+
+func (e *BatchWorkError) Error() string { return e.Err.Error() }
+func (e *BatchWorkError) Unwrap() error { return e.Err }
+
 // RunBatch runs works, in order, in one transaction of scope, and commits after the last one. It is the gateway's
 // completion batch: a settlement or an extension writes its statements on the transaction it is given, and the batch
 // pays one begin and one commit for all of them. One work's error rolls the whole transaction back, so no work's writes
-// commit; the gateway retries each request, and the reservation and ledger rows make a retry charge at most once.
+// commit; it comes back as a BatchWorkError with the work's index, so the caller can retry the other works and give the
+// error only to the work that failed. The reservation and ledger rows make a retry charge at most once.
 func (b *Billing) RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error {
 	return b.db.Tx(ctx, scope, func(tx pg.Tx) error {
-		for _, work := range works {
+		for i, work := range works {
 			if err := work(tx); err != nil {
-				return err
+				return &BatchWorkError{Index: i, Err: err}
 			}
 		}
 		return nil

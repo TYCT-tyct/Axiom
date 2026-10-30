@@ -140,34 +140,15 @@ func CheckFallbacks(ctx context.Context, tx pg.Tx) error {
 // quote and every later charge price with, and the row's text to lock. A currency without a row has nothing to price
 // an unknown item with, so its entries are unpriced, as a missing price is: the request is not quoted.
 func withFallbacks(ctx context.Context, tx pg.Tx, q []Quotable) ([]Quotable, []string, error) {
-	currencies := make([]string, 0, 1)
-	for _, e := range q {
-		if c := e.Price.Currency().String(); !slices.Contains(currencies, c) {
-			currencies = append(currencies, c)
-		}
-	}
-	rows, err := queries.ReadFallbacks(ctx, tx, currencies)
+	rows, err := queries.ReadFallbacks(ctx, tx, fallbackCurrencies(q))
 	if err != nil {
 		return nil, nil, fmt.Errorf("billing: read the fallback prices: %w", err)
 	}
-	found := map[string]fallbacks{}
-	bodies := map[string]string{}
-	for _, r := range rows {
-		if found[r.Currency], err = parseFallbacks(r.Body); err != nil {
-			return nil, nil, err
-		}
-		bodies[r.Currency] = r.Body
+	found, bodies := map[string]fallbacks{}, map[string]string{}
+	if err := parseFallbackRows(rows, found, bodies); err != nil {
+		return nil, nil, err
 	}
-	filled, locked := slices.Clone(q), make([]string, len(q))
-	for i, e := range filled {
-		c := e.Price.Currency().String()
-		f, ok := found[c]
-		if !ok {
-			return nil, nil, fmt.Errorf("%w: no fallback prices in %s", ErrUnpriced, c)
-		}
-		filled[i].Price, locked[i] = e.Price.Fill(f.perUse), bodies[c]
-	}
-	return filled, locked, nil
+	return fillFallbacks(q, found, bodies)
 }
 
 // fallbackCurrencies is the currencies whose fallback prices the entries need, each once.
@@ -181,17 +162,15 @@ func fallbackCurrencies(q []Quotable) []string {
 	return currencies
 }
 
-func parseFallbackRows(rows []ReadFallbacksRow) (map[string]fallbacks, map[string]string, error) {
-	found := map[string]fallbacks{}
-	bodies := map[string]string{}
+func parseFallbackRows(rows []ReadFallbacksRow, found map[string]fallbacks, bodies map[string]string) error {
 	for _, r := range rows {
 		f, err := parseFallbacks(r.Body)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 		found[r.Currency], bodies[r.Currency] = f, r.Body
 	}
-	return found, bodies, nil
+	return nil
 }
 
 // fillFallbacks fills every entry's missing per-use prices from its currency's fallbacks and returns the bodies it

@@ -83,7 +83,8 @@ func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveReque
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("billing: read the fallback prices: %w", err)
 		}
-		if found, bodies, err = parseFallbackRows(read); err != nil {
+		found, bodies = map[string]fallbacks{}, map[string]string{}
+		if err := parseFallbackRows(read, found, bodies); err != nil {
 			return err
 		}
 		if err := batch.QueryRow().Scan(&balance.Balance, &balance.Floor, &balance.Reserved, &balance.Frozen); err != nil {

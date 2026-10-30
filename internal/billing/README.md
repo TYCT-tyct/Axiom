@@ -49,7 +49,7 @@ func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error //
 func (b *Billing) ExtendIn(ctx context.Context, tx pg.Tx, h *Hold, r ExtendRequest) error // 已实现：在调用方的事务里；Extend 是它的包装
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (Final, error) // 已实现；前提：无追加在途
 func (b *Billing) SettleIn(ctx context.Context, tx pg.Tx, h *Hold, o Outcome) (Final, func(), error) // 已实现：在调用方的事务里；告警与平台承担日志在返回的 after 里，提交后调用
-func (b *Billing) RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error // 已实现：同一账户的多个完成写入一个事务；一个错误整批回滚
+func (b *Billing) RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error // 已实现：同一账户的多个完成写入一个事务；失败的工作带索引返回（BatchWorkError），整批回滚后其余请求在新事务重试
 func (b *Billing) Cleanup(ctx context.Context, max int32) (int, error) // 已实现：截止时间、被回收的持有者
 func AddCredit(ctx context.Context, tx pg.Tx, c Credit) error         // 已实现：赠送；tx 须是平台范围（审计日志要求）
 func CreditPaid(ctx context.Context, tx pg.Tx, p PaidCredit) error    // 已实现：付费额度，见「结算与账本」；tx 须是平台范围
@@ -154,7 +154,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 `ReserveMany` 与准入批一起用（[计费的「热点账户」](../../docs/domains/billing.md#预留与结算)）：一个事务、一把余额行锁，批内每个请求一次计数读取和一次预留写入，都以 `pg.Tx.Batch` 流水线发送；锁、栅栏、兜底价和数据库时钟各一次。窗口按批次开始时的那次数据库时钟统一截断到 UTC 日，所以跨午夜的批次也不会把同一个请求的检查和归账拆到两天。报价按请求顺序在内存里进行，后面的请求使用前面请求将要增加的占用（`reserved`、工作区与 key 的 `workspaceUsed`、`keyUsed`，都饱和相加），所以整批不会越过底线或限额。业务拒绝按请求放进 `[]error`，不写任何行；兜底价或报价的其他错误也只影响那个请求。数据库错误让整批回滚，调用方按请求 ID 重试每个请求；只有写完预留后提交失败或确认丢失，网关的孤儿结算才处理"可能已提交"。单请求的 `Reserve` 仍内联写预留行，只有 `ReserveMany` 用 `reservationParams`：`Reserve` 不为批次抽象多付分配，两条路径写出的行由 `TestReserveManyRowsMatchReserve` 对照。`TestReserveManyIsTheSerialOrder` 用同一批金额对照逐个 `Reserve` 的结果（允许与拒绝逐项相同），`TestReserveManyStorm` 让四个批次并发、核对总量不越底线，`TestReserveManyRowsMatchReserve` 对照批量与单条写入的行，`TestReserveManyRollsBackOnAWriteFailure` 核对插入失败后没有残留。
 
-完成批用 `RunBatch`：同一账户的多个 `SettleIn`、`ExtendIn` 或 `SettleOrphanIn` 写进一个事务，`SettleIn` 返回的 `after` 只在提交后执行，所以告警、平台承担日志和供应商结束都不会描述一个回滚了的交易。一个错误整批回滚，没有保存点；重试按请求 ID 幂等，因此一个请求的失败不会丢掉同批其他请求的钱，只是让它们一起重试。`TestRunBatchSettlesInOneTransaction` 对照单独结算的金额，`TestRunBatchRollsBackAndARetryChargesOnce` 核对回滚后没有终态、没有报告，重试各收一次。
+完成批用 `RunBatch`：同一账户的多个 `SettleIn`、`ExtendIn` 或 `SettleOrphanIn` 写进一个事务，`SettleIn` 返回的 `after` 只在提交后执行，所以告警、平台承担日志和供应商结束都不会描述一个回滚了的交易。一个 work 的错误带索引返回（`BatchWorkError`），整批回滚后错误只还给这个请求；其余请求由网关在只含它们的新事务里、按各自期限重试，必要时继续拆批。事务开始、提交或连接错误没有失败的 work，才整批交给调用方按请求 ID 幂等重试。没有保存点，同一请求重试仍最多收一次。`TestRunBatchSettlesInOneTransaction` 对照单独结算的金额，`TestRunBatchRollsBackAndARetryChargesOnce` 核对回滚后没有终态、没有报告、失败 work 带索引，重试各收一次；`TestCompletionBatchKeepsOneWritesFailureOffTheRest` 从 gateway 的 `withFunds` 走一遍，核对失败只截断自己的流、另一个请求照常提交并执行报告。
 
 ## 数据
 
