@@ -87,8 +87,9 @@ var schemaAudits = []audit{
 }
 
 // Check refuses a database the node must not run against: one that lacks migrations this program carries, of
-// platform or of the modules given, or one that row-level security does not hold (the audits). A database newer than
-// the program is fine: migrations only expand until every running version stops using what a later one removes.
+// platform or of the modules given, one whose applied migrations are not the files this program carries, or one that
+// row-level security does not hold (the audits). A database newer than the program is fine: migrations only expand
+// until every running version stops using what a later one removes.
 func (db *DB) Check(ctx context.Context, modules ...Module) error {
 	all, err := ordered(modules)
 	if err != nil {
@@ -99,7 +100,7 @@ func (db *DB) Check(ctx context.Context, modules ...Module) error {
 			return err
 		}
 		for _, m := range all {
-			if err := checkVersion(ctx, tx, m); err != nil {
+			if err := checkHistory(ctx, tx, m); err != nil {
 				return err
 			}
 		}
@@ -113,6 +114,35 @@ func (db *DB) Check(ctx context.Context, modules ...Module) error {
 		}
 		return nil
 	}))
+}
+
+// checkHistory refuses a module the database has fewer migrations of than this program carries, or whose applied
+// migrations are not the files this program carries: a merged migration that changed would leave a schema its recorded
+// history no longer explains.
+func checkHistory(ctx context.Context, tx Tx, m Module) error {
+	want, err := latestVersion(m)
+	if err != nil {
+		return err
+	}
+	var have int64
+	applied := "SELECT coalesce(max(version_id), 0) FROM " + versionTable(m.Name) + " WHERE is_applied"
+	if err := tx.QueryRow(ctx, applied).Scan(&have); err != nil {
+		return fmt.Errorf("read the version of %s (run axiom migrate first): %w", m.Name, err)
+	}
+	if have < want {
+		return fmt.Errorf("the database has %s migration %d, this program needs %d: run axiom migrate", m.Name, have, want)
+	}
+	files, err := migrationChecksums(m)
+	if err != nil {
+		return err
+	}
+	versions, names, sums := checksumArrays(files)
+	rows, err := tx.Query(ctx, checksumDiffQuery(m.Name), m.Name, versions, names, sums)
+	if err != nil {
+		return fmt.Errorf("read the recorded checksums of %s (run axiom migrate first): %w", m.Name, err)
+	}
+	defer rows.Close()
+	return compareChecksums(rows, m.Name)
 }
 
 // checkQueue refuses a database whose queue tables lack a migration of the River this program carries.
@@ -138,23 +168,6 @@ func (a audit) run(ctx context.Context, tx Tx) error {
 	}
 	if offenders != "" {
 		return errors.New(a.problem + ": " + offenders)
-	}
-	return nil
-}
-
-// checkVersion refuses a database that lacks a migration of m.
-func checkVersion(ctx context.Context, tx Tx, m Module) error {
-	want, err := latestVersion(m)
-	if err != nil {
-		return err
-	}
-	var have int64
-	applied := "SELECT coalesce(max(version_id), 0) FROM " + versionTable(m.Name) + " WHERE is_applied"
-	if err := tx.QueryRow(ctx, applied).Scan(&have); err != nil {
-		return fmt.Errorf("read the version of %s (run axiom migrate first): %w", m.Name, err)
-	}
-	if have < want {
-		return fmt.Errorf("the database has %s migration %d, this program needs %d: run axiom migrate", m.Name, have, want)
 	}
 	return nil
 }

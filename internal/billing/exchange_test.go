@@ -49,6 +49,8 @@ func race(t *testing.T, r rules, ins ...ExchangeInput) []error {
 }
 
 func TestExchangeValidation(t *testing.T) {
+	t.Parallel()
+
 	for name, edit := range map[string]func(*ExchangeInput){
 		"zero":                    func(in *ExchangeInput) { in.Numerator = "0" },
 		"negative":                func(in *ExchangeInput) { in.Denominator = "-1" },
@@ -83,6 +85,8 @@ func TestExchangeValidation(t *testing.T) {
 }
 
 func TestExchangeChangeBounds(t *testing.T) {
+	t.Parallel()
+
 	previous := []BillingExchangeRate{{Version: 1, Numerator: 10, Denominator: 71}}
 	for _, tc := range []struct {
 		n, d, kind string
@@ -108,6 +112,8 @@ func TestExchangeChangeBounds(t *testing.T) {
 }
 
 func TestExchangeWritesAreSerializedAndAudited(t *testing.T) {
+	t.Parallel()
+
 	r := newRules(t)
 	write := func(in ExchangeInput) (row BillingExchangeRate, err error) {
 		err = r.tx(func(tx pg.Tx) error {
@@ -147,6 +153,8 @@ func TestExchangeWritesAreSerializedAndAudited(t *testing.T) {
 }
 
 func TestExchangeFirstDirectionsAndIdempotency(t *testing.T) {
+	t.Parallel()
+
 	r := newRules(t)
 	// Each pair races once, as the overlap of two short transactions is not certain; CNY last, which the rest uses.
 	for _, quote := range []string{"EUR", "GBP", "JPY", "HKD", "SGD", "AUD", "CAD", "CHF", "CNY"} {
@@ -191,6 +199,8 @@ func TestExchangeFirstDirectionsAndIdempotency(t *testing.T) {
 }
 
 func TestExchangePlatformOnlyAndAppendOnly(t *testing.T) {
+	t.Parallel()
+
 	r := newRules(t)
 	if err := r.tx(func(tx pg.Tx) error {
 		_, err := SetExchangeRate(t.Context(), tx, system, fxInput("71", "10", "initial", 0))
@@ -223,6 +233,8 @@ func TestExchangePlatformOnlyAndAppendOnly(t *testing.T) {
 }
 
 func TestFrozenRatesAndUnknownProfit(t *testing.T) {
+	t.Parallel()
+
 	old := platform.ExchangeRate{ID: uuid.NewV7(), Base: "CNY", Quote: "USD", Numerator: 10, Denominator: 71, Version: 1}
 	missing := platform.ExchangeRate{Base: "JPY", Quote: "USD"}
 	q := []Quotable{{Exchange: old}, {Exchange: old}, {Exchange: missing}, {}}
@@ -242,6 +254,8 @@ func TestFrozenRatesAndUnknownProfit(t *testing.T) {
 }
 
 func TestExchangeVersionWinsOverTimestamp(t *testing.T) {
+	t.Parallel()
+
 	r := newRules(t)
 	if err := r.tx(func(tx pg.Tx) error {
 		for version := int64(1); version <= 2; version++ {

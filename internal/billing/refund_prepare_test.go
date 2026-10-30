@@ -8,6 +8,8 @@ import (
 )
 
 func TestPrepareRefundPagesWithoutExpiry(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(1000)
 	b.sql(fmt.Sprintf(`INSERT INTO billing.transactions (id,site_id,account_id,kind,request_id)
@@ -28,6 +30,8 @@ func TestPrepareRefundPagesWithoutExpiry(t *testing.T) {
 }
 
 func TestPrepareRefundLeavesBalanceUnlocked(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(1000)
 	super, err := pg.Open(t.Context(), b.db.Superuser)
@@ -56,6 +60,8 @@ func TestPrepareRefundLeavesBalanceUnlocked(t *testing.T) {
 }
 
 func TestRefundRejectsInvalidBatchBeforeLock(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(1000)
 	f.Batch = b.creditBatch(100, nil)

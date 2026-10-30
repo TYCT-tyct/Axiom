@@ -30,7 +30,7 @@ func newRegistryWorld(t *testing.T) registryWorld {
 
 func (w registryWorld) start(t *testing.T, id string) *Client {
 	t.Helper()
-	c := &Client{hear: newHeartbeat(w.db, w.scope, id)}
+	c := &Client{hear: newHeartbeat(w.db, w.scope, id, nil)}
 	if err := c.hear.start(t.Context(), 3, &atomic.Int64{}, newMetrics(noop.NewMeterProvider().Meter("test"))); err != nil {
 		t.Fatal(err)
 	}

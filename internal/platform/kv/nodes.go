@@ -19,11 +19,13 @@ const holdEvery = 5 * time.Second
 const defaultHeartbeatTimeout = 5 * time.Second
 
 const (
-	// beatEvery is how often a node writes its row. 30 seconds without one is stale, so a node that misses two in a row
-	// is gone, which a slow database answers before it happens.
-	beatEvery = 10 * time.Second
+	// BeatEvery is how often a node writes its row. 30 seconds without one is stale, so a node that misses two in a row
+	// is gone, which a slow database answers before it happens. The key ring's lifecycle refreshes the distribution file
+	// on the same period, so a version an operator writes reaches every node's report within one period.
+	BeatEvery = 10 * time.Second
 	// AliveFor is how recently a row must have been written to count a node alive: three missed beats. The key ring's
-	// lifecycle commands use it too: a node that may still be writing is a node that has to be stopped first.
+	// lifecycle also uses it: a report older than this no longer counts as a running node, and retirement waits this long
+	// after every live node starts writing the active version.
 	AliveFor = 30 * time.Second
 	// forgetAfter is when a stale row is deleted. Longer than AliveFor, so two nodes never disagree about a row that is
 	// about to expire; the table holds a handful of rows either way.
@@ -37,10 +39,25 @@ type heartbeat struct {
 	scope   pg.Scope
 	session uuid.UUID
 	id      string // the node's identity, which a restarted node keeps: its old row is its own, and is replaced
+	keys    func() KeyReport
 }
 
-func newHeartbeat(db *pg.DB, scope pg.Scope, id string) *heartbeat {
-	return &heartbeat{db: db, scope: scope, id: id, session: uuid.NewV7()}
+func newHeartbeat(db *pg.DB, scope pg.Scope, id string, keys func() KeyReport) *heartbeat {
+	return &heartbeat{db: db, scope: scope, id: id, session: uuid.NewV7(), keys: keys}
+}
+
+// report is what this beat says about the ring. It runs on every write, so a reload that installs a new version is
+// visible to the lifecycle on the next beat without a restart.
+func (h *heartbeat) report() (versions []int64, active int64) {
+	versions = []int64{}
+	if h.keys == nil {
+		return versions, 0
+	}
+	report := h.keys()
+	for _, version := range report.Versions {
+		versions = append(versions, int64(version))
+	}
+	return versions, int64(report.Active)
 }
 
 // startLock is the advisory lock that one node at a time holds while it counts the others and writes its own row. Without
@@ -75,8 +92,13 @@ func (h *heartbeat) start(ctx context.Context, nodes int, live *atomic.Int64, m 
 		if err := retireShares(ctx, tx, h.id, ""); err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view) VALUES ($1, $2, '{}')
-   ON CONFLICT (id) DO UPDATE SET seen_at = now(), share_session = excluded.share_session, share_view = '{}', share_joining = true`, h.id, h.session)
+		versions, active := h.report()
+		_, err = tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active)
+   VALUES ($1, $2, '{}', $3, $4)
+   ON CONFLICT (id) DO UPDATE SET seen_at = now(), share_session = excluded.share_session, share_view = '{}', share_joining = true,
+    key_versions = excluded.key_versions, key_active = excluded.key_active,
+    key_active_since = CASE WHEN platform.nodes.key_active IS DISTINCT FROM excluded.key_active
+     THEN now() ELSE platform.nodes.key_active_since END`, h.id, h.session, versions, active)
 		return err
 	})
 	if errors.Is(err, errTooMany) {
@@ -114,11 +136,16 @@ func (h *heartbeat) beat(ctx context.Context) (int, error) {
 // write is this node's row, made or refreshed. now() is the database's clock, so every node's row is aged by one clock
 // and a node's own clock being wrong cannot make it look alive or gone.
 func (h *heartbeat) write(ctx context.Context, tx pg.Tx) error {
-	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view) VALUES ($1, $2, '{}')
+	versions, active := h.report()
+	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active)
+  VALUES ($1, $2, '{}', $3, $4)
   ON CONFLICT (id) DO UPDATE SET seen_at = now(),
-   share_joining = platform.nodes.share_joining OR platform.nodes.seen_at <= now() - make_interval(secs => $3)
- WHERE platform.nodes.share_session = excluded.share_session`,
-		h.id, h.session, AliveFor.Seconds())
+   share_joining = platform.nodes.share_joining OR platform.nodes.seen_at <= now() - make_interval(secs => $5),
+   key_versions = excluded.key_versions, key_active = excluded.key_active,
+   key_active_since = CASE WHEN platform.nodes.key_active IS DISTINCT FROM excluded.key_active
+    THEN now() ELSE platform.nodes.key_active_since END
+  WHERE platform.nodes.share_session = excluded.share_session`,
+		h.id, h.session, versions, active, AliveFor.Seconds())
 	return err
 }
 
@@ -143,7 +170,7 @@ func forget(ctx context.Context, tx pg.Tx) error {
 
 // stop deletes this node's row, so that a restart of a single node is not refused for a row only a crash would leave.
 func (h *heartbeat) stop(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, beatEvery)
+	ctx, cancel := context.WithTimeout(ctx, BeatEvery)
 	defer cancel()
 	err := h.db.Tx(ctx, h.scope, func(tx pg.Tx) error {
 		if err := retireShares(ctx, tx, h.id, h.session.String()); err != nil {

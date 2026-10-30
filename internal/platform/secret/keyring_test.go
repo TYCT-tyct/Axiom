@@ -95,6 +95,18 @@ func TestKeyFileLineEndings(t *testing.T) {
 	}
 }
 
+// TestReportWaitsForCheck: a ring read from a file alone has checked no fingerprint, so it must not let a heartbeat
+// claim its versions are distributed; only Check or Refresh, which compares them with the database, may do that.
+func TestReportWaitsForCheck(t *testing.T) {
+	ring, err := secret.Load(keyFile(t, keyLine(1, 1)+keyLine(2, 2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versions, active := ring.Report(); versions != nil || active != 0 {
+		t.Fatalf("an unchecked ring reports %v active %d, want nothing", versions, active)
+	}
+}
+
 // TestLoadSecretIsTheNewestKey: the secret a node derives identifiers from is the newest key of its file, whatever order
 // the lines are in, and a file that is no key file names the variable that chose it.
 func TestLoadSecretIsTheNewestKey(t *testing.T) {
