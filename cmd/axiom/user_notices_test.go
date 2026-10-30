@@ -18,6 +18,7 @@ import (
 	"axiom/internal/platform/consoleapi"
 )
 
+//nolint:cyclop // one preferences round trip plus isolation and invalid bodies.
 func TestNotificationPreferencesAPIIsolationAndValidation(t *testing.T) {
 	f := newConsoleFixture(t)
 	s := f.owner()
@@ -26,15 +27,23 @@ func TestNotificationPreferencesAPIIsolationAndValidation(t *testing.T) {
 	expect(t, "defaults", r, http.StatusOK, "")
 	var p consoleapi.NotificationPreferences
 	decode(t, r, &p)
-	if p.Threshold == nil || *p.Threshold != "5000000000" {
+	if p.Threshold == nil || *p.Threshold != "5000000000" || p.SpendAnomaly == nil || !*p.SpendAnomaly {
 		t.Fatalf("defaults: %s", r.Body)
 	}
-	body := `{"low_balance":false,"top_up":false,"factor_changed":false,"threshold":"0","webhook_url":"","language":"zh"}`
+	body := `{"low_balance":false,"top_up":false,"factor_changed":false,"spend_anomaly":false,"threshold":"0","webhook_url":"","language":"zh"}`
 	expect(t, "replace", f.do(http.MethodPut, "/notification-preferences", body, as(s)), http.StatusOK, "")
 	r = f.do(http.MethodGet, "/notification-preferences", "", as(s))
 	decode(t, r, &p)
-	if p.FactorChanged == nil || *p.FactorChanged || p.Threshold == nil || *p.Threshold != "0" {
+	if p.FactorChanged == nil || *p.FactorChanged || p.SpendAnomaly == nil || *p.SpendAnomaly || p.Threshold == nil || *p.Threshold != "0" {
 		t.Fatalf("saved: %s", r.Body)
+	}
+	// A client that predates the field must not turn the reminder back on.
+	body = `{"low_balance":false,"top_up":false,"factor_changed":false,"threshold":"0","webhook_url":"","language":"zh"}`
+	expect(t, "older client", f.do(http.MethodPut, "/notification-preferences", body, as(s)), http.StatusOK, "")
+	r = f.do(http.MethodGet, "/notification-preferences", "", as(s))
+	decode(t, r, &p)
+	if p.SpendAnomaly == nil || *p.SpendAnomaly {
+		t.Fatalf("older client re-enabled the reminder: %s", r.Body)
 	}
 	for _, url := range []string{"http://example.com/", "https://127.0.0.1/", "https://user:password@example.com/"} {
 		input := fmt.Sprintf(`{"low_balance":true,"top_up":true,"factor_changed":true,"threshold":"0","webhook_url":%q,"language":"en"}`, url)

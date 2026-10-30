@@ -14,7 +14,7 @@ import (
 )
 
 func preferencesJSON(p accounts.NotificationPreferences) consoleapi.NotificationPreferences {
-	return consoleapi.NotificationPreferences{LowBalance: new(p.LowBalance), TopUp: new(p.TopUp), FactorChanged: new(p.FactorChanged), Threshold: new(strconv.FormatInt(p.Threshold, 10)), WebhookUrl: new(p.WebhookURL), Language: new(consoleapi.NotificationPreferencesLanguage(p.Language))}
+	return consoleapi.NotificationPreferences{LowBalance: new(p.LowBalance), TopUp: new(p.TopUp), FactorChanged: new(p.FactorChanged), SpendAnomaly: new(p.SpendAnomaly), Threshold: new(strconv.FormatInt(p.Threshold, 10)), WebhookUrl: new(p.WebhookURL), Language: new(consoleapi.NotificationPreferencesLanguage(p.Language))}
 }
 
 func (c consoleAPI) GetNotificationPreferences(ctx context.Context, _ consoleapi.GetNotificationPreferencesRequestObject) (consoleapi.GetNotificationPreferencesResponseObject, error) {
@@ -40,7 +40,9 @@ func (c consoleAPI) SetNotificationPreferences(ctx context.Context, r consoleapi
 			return nil, accounts.ErrNotificationPreferences
 		}
 	}
-	if err = c.accounts.UpdateNotificationPreferences(ctx, callOf(ctx).principal, p); err != nil {
+	// A client that omits spend_anomaly leaves whatever is stored; the update decides that in the same statement rather
+	// than writing a value read in an earlier transaction.
+	if p, err = c.accounts.UpdateNotificationPreferences(ctx, callOf(ctx).principal, p, r.Body.SpendAnomaly); err != nil {
 		return nil, err
 	}
 	return consoleapi.SetNotificationPreferences200JSONResponse(preferencesJSON(p)), nil
