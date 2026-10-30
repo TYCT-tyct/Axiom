@@ -359,6 +359,8 @@ export default {
       statusSuccess: "Succeeded",
       statusError: "Failed",
       request: "Request ID",
+      unavailable: "Filter unavailable",
+      unavailableBody: "This server doesn’t support these call filters yet. Clear them to see the call log.",
     },
     summary: {
       title: "Summary",

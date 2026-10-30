@@ -347,6 +347,8 @@ export default {
       statusSuccess: "成功",
       statusError: "失败",
       request: "请求 ID",
+      unavailable: "筛选暂不可用",
+      unavailableBody: "这台服务器还不支持这些调用筛选条件，清空条件后可查看调用记录。",
     },
     summary: {
       title: "汇总",

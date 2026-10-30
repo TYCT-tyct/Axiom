@@ -19,7 +19,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { memo, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { callsCsv, callsName } from "../calls";
+import { callsCsv, callsName, filtersUnsupported } from "../calls";
 import { CallStatus, toInstant, toLocalInput } from "../parts";
 import { type CallFilters, type CallGroupBy, callAggregateQuery, callsQuery } from "../queries";
 import { save } from "../statement";
@@ -37,6 +37,7 @@ export default function Calls() {
   const reportsUnavailable = report.error instanceof ApiError && report.error.status === 404;
   const filtered = Object.values(filters).some(Boolean);
   const rows = useMemo(() => calls.data?.pages.flatMap((page) => page.data) ?? [], [calls.data]);
+  const unsupported = filtersUnsupported(filters, calls.data?.pages ?? []);
   return (
     <>
       <PageHeader title={t("nav.calls")} description={t("calls.description")} />
@@ -47,12 +48,21 @@ export default function Calls() {
           groupBy={groupBy}
           onGroupBy={(next) => void navigate({ to: "/calls", search: { ...filters, group_by: next } })}
           unavailable={reportsUnavailable}
+          blocked={unsupported}
         />
         <Panel>
-          <DataState query={calls} isEmpty={() => rows.length === 0} empty={<NoCalls filtered={filtered} />}>
-            {() => <CallsTable rows={rows} />}
-          </DataState>
-          <LoadMore list={calls} />
+          {unsupported ? (
+            <EmptyState compact title={t("calls.filter.unavailable")}>
+              {t("calls.filter.unavailableBody")}
+            </EmptyState>
+          ) : (
+            <>
+              <DataState query={calls} isEmpty={() => rows.length === 0} empty={<NoCalls filtered={filtered} />}>
+                {() => <CallsTable rows={rows} />}
+              </DataState>
+              <LoadMore list={calls} />
+            </>
+          )}
         </Panel>
       </div>
     </>
@@ -226,11 +236,13 @@ function Summary({
   groupBy,
   onGroupBy,
   unavailable,
+  blocked,
 }: {
   filters: CallFilters;
   groupBy: CallGroupBy;
   onGroupBy: (groupBy: CallGroupBy) => void;
   unavailable: boolean;
+  blocked: boolean;
 }) {
   const { t } = useTranslation();
   const format = useFormat();
@@ -244,13 +256,17 @@ function Summary({
         <SummaryActions
           groupBy={groupBy}
           onGroupBy={onGroupBy}
-          unavailable={unavailable}
+          unavailable={unavailable || blocked}
           busy={exported.busy}
           onExport={exported.start}
         />
       }
     >
-      {unavailable ? (
+      {blocked ? (
+        <EmptyState compact title={t("calls.filter.unavailable")}>
+          {t("calls.filter.unavailableBody")}
+        </EmptyState>
+      ) : unavailable ? (
         <EmptyState compact title={t("calls.summary.unavailable")}>
           {t("calls.summary.unavailableBody")}
         </EmptyState>
