@@ -1,5 +1,5 @@
 import { ApiError, consoleApi, type Schemas, unwrapWithStatus } from "@axiom/api";
-import { can, useErrors, useSession } from "@axiom/app";
+import { type Attempt, can, failed, opened, QrCode, type Sendable, useErrors, useSession } from "@axiom/app";
 import {
   Badge,
   Button,
@@ -7,6 +7,7 @@ import {
   DataState,
   FormError,
   Icon,
+  moneyInput,
   Panel,
   parseMoney,
   SelectField,
@@ -19,7 +20,8 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOrderActions } from "./order-actions";
-import { balanceQuery, orderQuery, paymentMethodsQuery } from "./queries";
+import { mergeOrder } from "./order-merge";
+import { balanceQuery, orderQuery, ordersQuery, paymentMethodsQuery } from "./queries";
 
 // The address the order is kept at across the channel's return page. It names the order, not its checkout: the channel's
 // client secret is never stored and is shown only in the answer that made the order.
@@ -63,6 +65,15 @@ export function TopUp({ currency }: { currency: string }) {
   return <TopUpFlow currency={currency} />;
 }
 
+// balanceMoved says whether a state the poll just saw means the balance or the order list may have changed since they
+// were read. A first read of a paid or refunded order counts: that payment may have landed after the balance query.
+export function balanceMoved(previous: Schemas["OrderState"] | undefined, state: Schemas["OrderState"]) {
+  if (previous === state) {
+    return false;
+  }
+  return previous !== undefined || state === "paid" || state === "refunded" || state === "partially_refunded";
+}
+
 // TopUpFlow keeps the order across the channel's return page and polls it while it waits: a payment often arrives
 // without the browser coming back through that page.
 function TopUpFlow({ currency }: { currency: string }) {
@@ -72,8 +83,26 @@ function TopUpFlow({ currency }: { currency: string }) {
   const [created, setCreated] = useState<Schemas["Order"] | null>(null);
   const live = useQuery({ ...orderQuery(orderId ?? ""), enabled: orderId !== null });
   const actions = useOrderActions(orderId ?? "");
+  const client = useQueryClient();
 
   const order = mergeOrder(created, live.data);
+
+  // The poll confirms a payment made in another tab or on another device. The balance and the order list were read
+  // before it, so they are refreshed as soon as the state moves; a first read of a paid order does the same because
+  // that payment may have landed after the balance query.
+  const lastState = useRef<Schemas["OrderState"] | undefined>(undefined);
+  useEffect(() => {
+    const state = live.data?.state;
+    if (!state || state === lastState.current) {
+      return;
+    }
+    const previous = lastState.current;
+    lastState.current = state;
+    if (balanceMoved(previous, state)) {
+      void client.invalidateQueries({ queryKey: balanceQuery.queryKey });
+      void client.invalidateQueries({ queryKey: ordersQuery.queryKey });
+    }
+  }, [live.data?.state, client]);
 
   // A remembered order this site does not have starts the flow over instead of showing an error nobody can act on.
   useEffect(() => {
@@ -137,75 +166,154 @@ function TopUpFlow({ currency }: { currency: string }) {
   );
 }
 
-// mergeOrder keeps what the created answer alone has, the channel's client secret, and takes the state from the newer
-// read. A read of a different order is not merged.
-function mergeOrder(created: Schemas["Order"] | null, live: Schemas["Order"] | undefined) {
-  if (!created) {
-    return live;
+type OrderRequest = { method: string; credits: string };
+
+// The request whose answer was lost, kept for this tab and this person past a reload: the same key and body go out
+// again, so the server replays the order instead of making a second one. Nothing here is a secret.
+const attemptStore = "axiom.console.top-up.attempt";
+const attemptKey = (scope: string) => `${scope}/${attemptStore}`;
+
+function isOrderRequest(value: unknown): value is OrderRequest {
+  if (typeof value !== "object" || value === null) {
+    return false;
   }
-  if (!live || created.id !== live.id) {
-    return created;
-  }
-  return { ...created, ...live, checkout: { ...live.checkout, ...created.checkout } };
+  const { method, credits } = value as { method?: unknown; credits?: unknown };
+  return typeof method === "string" && typeof credits === "string";
 }
 
-// NewTopUp asks the amount, then the methods that can take it, and places one order. Each intended order has its own
-// key: a lost answer is retried under the same key so it cannot make two orders, and a changed or refused request gets
-// a new one.
+function readAttempt(scope: string): Attempt<OrderRequest> | null {
+  try {
+    const raw = sessionStorage.getItem(attemptKey(scope));
+    if (!raw) {
+      return null;
+    }
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== "object" || value === null) {
+      return null;
+    }
+    if ((value as { state?: unknown }).state === "reused") {
+      return { state: "reused" };
+    }
+    const key = (value as { key?: unknown }).key;
+    if (typeof key !== "string") {
+      return null;
+    }
+    if ((value as { state?: unknown }).state === "editing") {
+      return { state: "editing", key };
+    }
+    const request = (value as { request?: unknown }).request;
+    if ((value as { state?: unknown }).state === "unknown" && isOrderRequest(request)) {
+      return { state: "unknown", key, request };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAttempt(scope: string, attempt: Attempt<OrderRequest>) {
+  try {
+    if (attempt.state === "editing" || attempt.state === "stale") {
+      sessionStorage.removeItem(attemptKey(scope));
+      return;
+    }
+    sessionStorage.setItem(attemptKey(scope), JSON.stringify(attempt));
+  } catch {
+    // The form still locks this attempt; only a reload loses it.
+  }
+}
+
+function clearAttempt(scope: string) {
+  try {
+    sessionStorage.removeItem(attemptKey(scope));
+  } catch {
+    // nothing to clear
+  }
+}
+
+// NewTopUp asks the amount, then the methods that can take it, and places one order. The request that was sent and its
+// key are fixed: while its answer is unknown the form is locked and only that request goes out again, also after a
+// reload. A refusal is the only answer that allows a different request, with a key of its own.
 function NewTopUp({ currency, onCreated }: { currency: string; onCreated: (order: Schemas["Order"]) => void }) {
   const { t } = useTranslation();
   const errors = useErrors();
+  const format = useFormat();
   const client = useQueryClient();
-  const [amount, setAmount] = useState("");
+  const { user, account } = useSession();
+  const scope = `${user.id}/${account}/top-up`;
+  const [initial] = useState(() => readAttempt(scope));
+  const [attempt, setAttempt] = useState<Attempt<OrderRequest>>(() => initial ?? opened(crypto.randomUUID()));
+  const [amount, setAmount] = useState(() => (initial?.state === "unknown" ? moneyInput(initial.request.credits) : ""));
+  const [method, setMethod] = useState(() => (initial?.state === "unknown" ? initial.request.method : ""));
   const [checked, setChecked] = useState<string | null>(null);
-  const [method, setMethod] = useState("");
   const [failure, setFailure] = useState<unknown>(null);
-  const key = useRef("");
-  if (key.current === "") {
-    key.current = crypto.randomUUID();
-  }
   const credits = parseMoney(amount);
   const askable = credits !== null && credits !== "0";
   const asked = askable && checked === credits;
+  const change = (next: Attempt<OrderRequest>) => {
+    setAttempt(next);
+    writeAttempt(scope, next);
+  };
+  type Sent = { from: Sendable<OrderRequest>; request: OrderRequest };
   const create = useMutation({
-    mutationFn: (order: { method: string; credits: string }) =>
+    mutationFn: ({ from, request }: Sent) =>
       unwrapWithStatus(
         consoleApi.POST("/api/console/v1/orders", {
-          params: { header: { "Idempotency-Key": key.current } },
-          body: { method: order.method, credits: { amount: order.credits, currency } },
+          params: { header: { "Idempotency-Key": from.key } },
+          body: { method: request.method, credits: { amount: request.credits, currency } },
         }),
       ),
     onSuccess: ({ data, status }) => {
       setFailure(null);
+      clearAttempt(scope);
       onCreated(data);
       // A replayed key can answer with an order that is already paid; the balance has then moved.
       if (status === 200) {
         void client.invalidateQueries({ queryKey: balanceQuery.queryKey });
       }
     },
-    onError: (error) => {
+    onError: (error, sent) => {
       setFailure(error);
-      // Only the server's own refusal proves no order was made. No answer, a server failure or an answer that did not
-      // parse may have made one, so the key stays and a retry asks for that order instead of making a second.
-      if (refused(error)) {
-        key.current = crypto.randomUUID();
-      }
+      change(failed(sent.from, sent.request, error, () => crypto.randomUUID()));
     },
   });
+  const send = (from: Sendable<OrderRequest>, request: OrderRequest) => {
+    change({ state: "unknown", key: from.key, request });
+    create.mutate({ from, request });
+  };
   const changeAmount = (value: string) => {
+    if (attempt.state !== "editing") {
+      return;
+    }
     setAmount(value);
     setChecked(null);
     setFailure(null);
-    key.current = crypto.randomUUID();
+    change(opened(crypto.randomUUID()));
   };
-  const error = failure;
+  if (attempt.state === "reused") {
+    return (
+      <div className="space-y-3">
+        {failure ? <FormError>{errors.message(failure)}</FormError> : null}
+        <p className="max-w-prose text-ui text-t2">{t("topup.reused")}</p>
+        <Button asChild variant="secondary" size="md">
+          <Link to="/orders">{t("topup.orders")}</Link>
+        </Button>
+      </div>
+    );
+  }
+  if (attempt.state === "stale") {
+    return <p className="max-w-prose text-ui text-t2">{t("topup.unknown")}</p>;
+  }
+  const retry = attempt.state === "unknown";
   return (
     <>
       <form
         className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
         onSubmit={(event) => {
           event.preventDefault();
-          if (askable) {
+          if (retry) {
+            send(attempt, attempt.request);
+          } else if (askable) {
             setChecked(credits);
           }
         }}
@@ -217,35 +325,53 @@ function NewTopUp({ currency, onCreated }: { currency: string; onCreated: (order
           autoComplete="off"
           placeholder="10"
           value={amount}
+          disabled={retry}
           onChange={(event) => changeAmount(event.target.value)}
-          error={errors.field(error, "credits")}
+          error={errors.field(failure, "credits")}
         />
-        <Button type="submit" size="md" disabled={!askable}>
-          {t("topup.check")}
-        </Button>
+        {retry ? null : (
+          <Button type="submit" size="md" disabled={!askable}>
+            {t("topup.check")}
+          </Button>
+        )}
       </form>
-      {error ? <FormError>{errors.message(error)}</FormError> : null}
-      {error && !refused(error) ? <p className="text-label text-t3">{t("topup.unknown")}</p> : null}
-      {asked && credits ? (
+      {failure ? <FormError>{errors.message(failure)}</FormError> : null}
+      {retry ? (
+        <div className="space-y-3">
+          <p className="text-ui text-t2">
+            {t("topup.retrySummary", {
+              credits: format.money({ amount: attempt.request.credits, currency }),
+              method: attempt.request.method,
+            })}
+          </p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              send(attempt, attempt.request);
+            }}
+          >
+            <SubmitButton pending={create.isPending}>{t("topup.retry")}</SubmitButton>
+          </form>
+          <p className="text-label text-t3">{t("topup.unknown")}</p>
+        </div>
+      ) : asked && credits ? (
         <Quotes
           credits={credits}
           method={method}
           onMethod={(value) => {
+            if (attempt.state !== "editing") {
+              return;
+            }
             setMethod(value);
             setFailure(null);
-            key.current = crypto.randomUUID();
+            change(opened(crypto.randomUUID()));
           }}
           pending={create.isPending}
-          onPay={(chosen) => create.mutate({ method: chosen, credits })}
+          onPay={(chosen) => send(attempt, { method: chosen, credits })}
         />
       ) : null}
     </>
   );
-}
-
-// refused is a 4xx with the server's own error body: the only answer that proves the order was not made.
-function refused(error: unknown) {
-  return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.code !== undefined;
 }
 
 // Quotes lists what the amount costs through each method; only the method the user picks is sent.
@@ -400,7 +526,7 @@ function PendingPayment({
 
 // Checkout is where to pay: a link, a code to show, or a secret the channel's own page needs, each only when the
 // channel gave it.
-function Checkout({ checkout }: { checkout: Schemas["Checkout"] }) {
+export function Checkout({ checkout }: { checkout: Schemas["Checkout"] }) {
   const { t } = useTranslation();
   return (
     <div className="space-y-3">
@@ -415,7 +541,12 @@ function Checkout({ checkout }: { checkout: Schemas["Checkout"] }) {
           <p className="text-ui text-t3">{t("topup.returnHint")}</p>
         </>
       ) : null}
-      {checkout.qr_code ? <CodeBlock title={t("topup.qr")} hint={t("topup.qrHint")} code={checkout.qr_code} /> : null}
+      {checkout.qr_code ? (
+        <div className="space-y-2">
+          <QrCode value={checkout.qr_code} label={t("topup.qr")} />
+          <CodeBlock title={t("topup.qr")} hint={t("topup.qrHint")} code={checkout.qr_code} />
+        </div>
+      ) : null}
       {checkout.client_secret ? (
         <CodeBlock title={t("topup.secret")} hint={t("topup.secretHint")} code={checkout.client_secret} />
       ) : null}
