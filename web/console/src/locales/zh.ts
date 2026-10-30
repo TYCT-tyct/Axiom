@@ -123,7 +123,7 @@ export default {
     paidBody: "额度已到账，现在可以用 {{credits}}。",
     seeStatement: "查看额度流水",
     reviewBody: "这笔付款在人工审核中，通常是金额不一致。会有管理员处理，你不需要操作。",
-    closedBody: "这笔订单已{{state}}。",
+    closedBody: "这笔订单状态：{{state}}。",
     new: "重新充值",
   },
   orders: {
