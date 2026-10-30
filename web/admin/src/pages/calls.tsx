@@ -103,7 +103,6 @@ function Filters({
 
 function CallsTable({ rows }: { rows: AdminSchemas["AdminCallSummary"][] }) {
   const { t } = useTranslation();
-  const format = useFormat();
   const inspect = can(useSession(), "calls.inspect");
   return (
     <Table label={t("nav.calls")}>
@@ -121,51 +120,57 @@ function CallsTable({ rows }: { rows: AdminSchemas["AdminCallSummary"][] }) {
       />
       <tbody>
         {rows.map((call) => (
-          <tr key={call.id}>
-            <Td>
-              {inspect ? (
-                <Link to="/calls/$callId" params={{ callId: call.id }} className="text-accent hover:underline">
-                  <Time at={call.at} />
-                </Link>
-              ) : (
-                <Time at={call.at} />
-              )}
-            </Td>
-            <Td>
-              <Code>{call.id ?? "—"}</Code>
-            </Td>
-            <Td className={mainCell}>
-              <span className="block truncate font-mono text-label text-t2" title={call.account_id}>
-                {call.account_id ?? "—"}
-              </span>
-            </Td>
-            <Td className="hidden max-w-44 md:table-cell">
-              <span className="block truncate" title={call.model}>
-                {call.model ?? "—"}
-              </span>
-            </Td>
-            <Td>
-              <State tone={call.error_kind ? "bad" : "good"}>
-                {call.error_kind ? t("calls.failed") : t("calls.ok")}
-              </State>
-            </Td>
-            <Td className="hidden tabular-nums lg:table-cell">
-              {call.latency_ms === undefined ? "—" : t("calls.ms", { ms: format.number(call.latency_ms) })}
-            </Td>
-            <Td className="hidden tabular-nums xl:table-cell">{call.price ? format.money(call.price) : "—"}</Td>
-            {inspect ? (
-              <Td className="w-0">
-                <Button asChild size="sm" variant="ghost">
-                  <Link to="/calls/$callId" params={{ callId: call.id }}>
-                    {t("calls.trace")}
-                    <Icon name="right" />
-                  </Link>
-                </Button>
-              </Td>
-            ) : null}
-          </tr>
+          <CallRow key={call.id} call={call} inspect={inspect} />
         ))}
       </tbody>
     </Table>
+  );
+}
+
+function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; inspect: boolean }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <tr>
+      <Td>
+        {inspect ? (
+          <Link to="/calls/$callId" params={{ callId: call.id }} className="text-accent hover:underline">
+            <Time at={call.at} />
+          </Link>
+        ) : (
+          <Time at={call.at} />
+        )}
+      </Td>
+      <Td>
+        <Code>{call.id ?? "—"}</Code>
+      </Td>
+      <Td className={mainCell}>
+        <span className="block truncate font-mono text-label text-t2" title={call.account_id}>
+          {call.account_id ?? "—"}
+        </span>
+      </Td>
+      <Td className="hidden max-w-44 md:table-cell">
+        <span className="block truncate" title={call.model}>
+          {call.model ?? "—"}
+        </span>
+      </Td>
+      <Td>
+        <State tone={call.error_kind ? "bad" : "good"}>{call.error_kind ? t("calls.failed") : t("calls.ok")}</State>
+      </Td>
+      <Td className="hidden tabular-nums lg:table-cell">
+        {call.latency_ms === undefined ? "—" : t("calls.ms", { ms: format.number(call.latency_ms) })}
+      </Td>
+      <Td className="hidden tabular-nums xl:table-cell">{call.price ? format.money(call.price) : "—"}</Td>
+      {inspect ? (
+        <Td className="w-0">
+          <Button asChild size="sm" variant="ghost">
+            <Link to="/calls/$callId" params={{ callId: call.id }}>
+              {t("calls.trace")}
+              <Icon name="right" />
+            </Link>
+          </Button>
+        </Td>
+      ) : null}
+    </tr>
   );
 }

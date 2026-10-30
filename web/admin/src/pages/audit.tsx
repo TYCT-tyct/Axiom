@@ -145,16 +145,16 @@ function AuditTable({ rows }: { rows: AdminSchemas["AuditEntry"][] }) {
               <span className="block text-label text-t3">{entry.module ?? ""}</span>
             </Td>
             <Td className="hidden max-w-64 lg:table-cell">
-              <span className="block truncate" title={`${entry.actor_kind ?? ""} ${entry.actor_id ?? ""}`}>
+              <span className="block truncate" title={[entry.actor_kind, entry.actor_id].filter(Boolean).join(" ")}>
                 {entry.actor_id ?? "—"}
               </span>
-              <span className="block text-label text-t3">{entry.actor_kind ?? ""}</span>
+              <span className="block text-label text-t3">{entry.actor_kind}</span>
             </Td>
             <Td className="hidden max-w-64 md:table-cell">
-              <span className="block truncate" title={`${entry.target_kind ?? ""} ${entry.target_id ?? ""}`}>
+              <span className="block truncate" title={[entry.target_kind, entry.target_id].filter(Boolean).join(" ")}>
                 {entry.target_id ?? "—"}
               </span>
-              <span className="block text-label text-t3">{entry.target_kind ?? ""}</span>
+              <span className="block text-label text-t3">{entry.target_kind}</span>
             </Td>
             <Td className="hidden max-w-48 xl:table-cell">
               <span className="block truncate font-mono text-label" title={entry.request_id}>

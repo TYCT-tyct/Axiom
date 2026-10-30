@@ -141,15 +141,25 @@ function Attempts({ attempts }: { attempts?: Attempt[] }) {
   );
 }
 
-function AttemptRow({ attempt, index }: { attempt: Attempt; index: number }) {
+// An outcome is the server's word, not an enum: a code a newer node adds is shown as it arrived.
+function Outcome({ outcome }: { outcome?: string }) {
   const { t } = useTranslation();
-  const format = useFormat();
+  const value = outcome ?? "unknown";
   const outcomes: Record<string, string> = {
     committed: t("calls.outcome.committed"),
     failed: t("calls.outcome.failed"),
     unknown: t("calls.outcome.unknown"),
   };
-  const outcome = attempt.outcome ?? "unknown";
+  return (
+    <State tone={value === "committed" ? "good" : value === "unknown" ? "warn" : "bad"}>
+      {outcomes[value] ?? value}
+    </State>
+  );
+}
+
+function AttemptRow({ attempt, index }: { attempt: Attempt; index: number }) {
+  const { t } = useTranslation();
+  const format = useFormat();
   return (
     <tr>
       <Td className="tabular-nums">{attempt.seq ?? index + 1}</Td>
@@ -167,9 +177,7 @@ function AttemptRow({ attempt, index }: { attempt: Attempt; index: number }) {
         {attempt.egress ? <span className="block text-label text-t3">{attempt.egress}</span> : null}
       </Td>
       <Td>
-        <State tone={outcome === "committed" ? "good" : outcome === "unknown" ? "warn" : "bad"}>
-          {outcomes[outcome] ?? outcome}
-        </State>
+        <Outcome outcome={attempt.outcome} />
       </Td>
       <Td className="hidden xl:table-cell">
         <Time at={attempt.started_at} />
