@@ -314,6 +314,121 @@ paths:
           $ref: '#/components/responses/Conflict'
         default:
           $ref: '#/components/responses/Failure'
+  /api/admin/v1/site:
+    get:
+      operationId: getAdminSite
+      tags: [Session]
+      summary: The site the admin host belongs to
+      description: >-
+        The name and logo of the site whose admin domain this request reached, so the admin app shows the site's brand
+        before it has a session. The logo's URL is on this admin host and carries the bytes' SHA-256; it stays available
+        for a year and an older logo keeps working under its own hash. No session: these are the same public facts the
+        console's `getSite` gives, and the admin host already names the site.
+      security: []
+      responses:
+        "200":
+          description: The site's brand.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminSite"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/site/logo/{hash}:
+    get:
+      operationId: getAdminSiteLogo
+      tags: [Session]
+      summary: The site's logo for the admin app
+      description: >-
+        The bytes at `getAdminSite.logo_url`. The hash names the content, so the URL never changes meaning and the
+        answer is immutable; a hash this site never served is a 404. A page opened before the logo changed keeps its
+        image under the old hash.
+      security: []
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[0-9a-f]{64}$'}
+      responses:
+        "200":
+          description: The logo.
+          headers:
+            Cache-Control:
+              required: true
+              description: Long-lived and immutable, because the hash in the URL names the bytes.
+              schema: {type: string}
+          content:
+            image/svg+xml:
+              schema: {type: string, format: binary}
+            image/png:
+              schema: {type: string, format: binary}
+            image/webp:
+              schema: {type: string, format: binary}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/logo:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteLogoAdmin
+      tags: [Site]
+      summary: A site's logo
+      description: >-
+        The logo the site currently serves and what it is, or no logo. `data_url` carries the bytes as a data URL so the
+        settings page can preview them under the content security policy (`img-src 'self' data:`); the pages fetch the
+        logo from `getSite` on the console domain or `getAdminSite` on the admin domain, not from this operation.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The site's current logo, or none.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteLogoView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateSiteLogo
+      tags: [Site]
+      summary: Replace or clear a site's logo
+      description: >-
+        Replaces the site's logo with `logo`, or clears it when `logo` is left out. An SVG is sanitised before it is
+        stored: scripts, event handlers, styles, images, links and external references are dropped, and the result must
+        still be one well-formed SVG. A PNG or WebP must be 1 to 1024 pixels on each side, and every format is at most
+        256 KiB. The response describes the new logo; the change is audited, and this node serves it at once while the
+        others follow within their site reload interval.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SiteLogoUpdate"}
+      responses:
+        "200":
+          description: The logo now in force.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteLogoView"}
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/sites/{site_id}/system-settings/payments:
     parameters:
     - name: site_id
@@ -3619,6 +3734,16 @@ components:
       type: string
       pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       description: An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+    AdminSite:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        logo_url:
+          type: string
+          description: >-
+            Path on this admin host to the site's logo; absent when there is none. A node of the release before this
+            field leaves it out, and the app falls back to the name.
     SiteId: {type: string, pattern: '^site_[0-9a-hjkmnp-tv-z]{26}$', description: "A site's ID (TypeID)."}
     TierId: {type: string, pattern: '^tier_[0-9a-hjkmnp-tv-z]{26}$', description: "A tier's ID (TypeID)."}
     Decimal:
@@ -3667,6 +3792,48 @@ components:
         admin_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 43200}
         admin_max_age_seconds: {type: integer, minimum: 300, maximum: 86400}
         new_key_daily_limit: {$ref: "#/components/schemas/Money"}
+    SiteLogoView:
+      type: object
+      properties:
+        logo:
+          allOf: [{$ref: "#/components/schemas/SiteLogo"}]
+          description: The logo in force; absent when the site has none.
+    SiteLogo:
+      type: object
+      required: [content_type, hash, size, width, height]
+      properties:
+        content_type: {type: string, enum: [image/svg+xml, image/png, image/webp]}
+        hash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: SHA-256 of the bytes served, which the logo's public URL carries.
+        size: {type: integer, minimum: 1, maximum: 262144, description: "Bytes served."}
+        width: {type: integer, minimum: 0, maximum: 1024, description: "Pixels; 0 for an SVG with no intrinsic size."}
+        height: {type: integer, minimum: 0, maximum: 1024}
+        data_url:
+          type: string
+          description: >-
+            The bytes as a data URL, for the settings page's preview only; the change response leaves it out. Absent on
+            a node of the release before this field.
+    SiteLogoUpdate:
+      type: object
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 500}
+        logo:
+          allOf: [{$ref: "#/components/schemas/SiteLogoUpload"}]
+          description: The new logo; left out clears the site's logo.
+    SiteLogoUpload:
+      type: object
+      required: [content_type, data_base64]
+      properties:
+        content_type: {type: string, enum: [image/svg+xml, image/png, image/webp]}
+        data_base64:
+          type: string
+          format: byte
+          minLength: 1
+          maxLength: 349528
+          description: The file, at most 256 KiB before base64.
     SiteSettingsView:
       type: object
       required: [settings, defaults]

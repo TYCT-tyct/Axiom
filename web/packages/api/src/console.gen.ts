@@ -394,6 +394,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/site/logo/{hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site's logo
+         * @description The logo the site configures, at the URL `getSite` gives while the site has one. The URL carries the SHA-256 of the bytes served, so a logo never changes under its URL and a browser may keep it for a year. A hash the site never served is a 404; an earlier logo stays available under its own hash, so a page opened before the logo changed keeps its image.
+         */
+        get: operations["getSiteLogo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/auth/register": {
         parameters: {
             query?: never;
@@ -1026,7 +1046,7 @@ export interface components {
              * @example USD
              */
             currency: string;
-            /** @description Absent when the site has no logo. */
+            /** @description The path of the site's logo on this host. Absent when the site has no logo. It is long-cached, because its hash names the bytes; a page shows the site's name when the image does not load. */
             logo_url?: string;
             /**
              * @description What the site's API keys start with.
@@ -2059,6 +2079,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Site"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSiteLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The logo. */
+            200: {
+                headers: {
+                    /** @description Long-lived and immutable, because the hash in the URL names the bytes. */
+                    "Cache-Control": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/svg+xml": string;
+                    "image/png": string;
+                    "image/webp": string;
                 };
             };
             404: components["responses"]["NotFound"];

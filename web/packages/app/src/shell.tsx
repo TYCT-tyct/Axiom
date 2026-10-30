@@ -41,6 +41,7 @@ export function Shell({
     <Gate stage="member">
       <AppShell
         banner={<NewVersionNotice />}
+        logo={brand}
         forbiddenHint={forbiddenHint}
         sidebar={
           <>
