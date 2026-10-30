@@ -134,6 +134,13 @@ services:
             "$$(printf '%s' "$$password" | sha256sum | cut -d' ' -f1)" > /cache/users.acl
         fi
         chown 65532:65532 /keys/master /keys/hash /keys/identity /keys/valkey-password
+        # The archive writes one compressed month here before uploading it. The program runs as 65532 and the root
+        # filesystem is read-only, so this volume must be handed over before the node starts. Root takes it back
+        # before the chmod: on a restart the volume already belongs to 65532, and this service has CHOWN but not
+        # FOWNER.
+        chown 0:0 /retention-tmp
+        chmod 700 /retention-tmp
+        chown 65532:65532 /retention-tmp
         # The directory stays traversable for root (its group, without the capability to read the files) and writable for
         # the program, which replaces the master file atomically when a rotation distributes or retires a version. Root
         # owns it while its mode is set: this container has CHOWN but not FOWNER, so `chmod` after handing it to 65532
@@ -148,6 +155,7 @@ services:
     volumes:
       - keys:/keys
       - cache:/cache
+      - retention_tmp:/retention-tmp
     <<: *hardened
     cap_add: [CHOWN]
 
@@ -228,11 +236,15 @@ services:
       # any node starts, and each node serves another build's files from it while the old and new builds overlap
       # (docs/ops/release.md「滚动发布」). Without it a node serves only its embedded build.
       AXIOM_WEB_ASSETS_DIR: /assets
+      # One compressed month is written here before the archive uploads it. The root filesystem is read-only, so Go's
+      # default /tmp is not available; keys chowns this volume to the program's user before the node starts.
+      TMPDIR: /retention-tmp
     volumes:
       # The ring is read and replaced atomically here. A multi-node deployment must give every node the same protected
       # file (one shared volume or a copy) and set AXIOM_KEYRING_GENERATE=false so a fresh node never makes its own.
       - keys:/keys:rw
       - web_assets:/assets:rw
+      - retention_tmp:/retention-tmp:rw
     ports:
       # An empty DEPLOY_PORT or DEPLOY_ADMIN_PORT publishes a port the kernel picks, so two jobs on one host cannot take
       # each other's; local `just up` sets neither and gets 8080 and 8082. Both bind this machine only.
@@ -289,4 +301,6 @@ volumes:
   # The frontend files of every build a rolling release still overlaps. The release publishes into it from the image,
   # as root because a fresh named volume belongs to root; the node only reads it, as 65532.
   web_assets:
+  # One archive month in flight. It needs room for the largest month's gzip; the data live only until the upload ends.
+  retention_tmp:
   cache:
