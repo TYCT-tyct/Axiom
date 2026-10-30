@@ -20,8 +20,8 @@ import { useTranslation } from "react-i18next";
 import { notificationPreferencesQuery, siteQuery } from "../queries";
 
 // Notifications is where the account says when it wants to hear from Axiom: a balance that is running out, a finished
-// top-up, and security changes, by email and to its own webhook. The language here is the messages' language, not the
-// console's.
+// top-up, security changes and unusual account activity, by email and to its own webhook. The language here is the
+// messages' language, not the console's.
 export default function Notifications() {
   const { t } = useTranslation();
   const preferences = useQuery(notificationPreferencesQuery);
@@ -46,6 +46,7 @@ type Settings = {
   threshold: string;
   topUp: boolean;
   factorChanged: boolean;
+  spendAnomaly: boolean;
   webhook: string;
   language: "en" | "zh";
 };
@@ -53,12 +54,13 @@ type Settings = {
 type SetSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => void;
 
 // initialSettings is what the form starts from: the stored preference, or the default the site sends when it is absent.
-function initialSettings(preferences: Schemas["NotificationPreferences"]): Settings {
+export function initialSettings(preferences: Schemas["NotificationPreferences"]): Settings {
   return {
     lowBalance: preferences.low_balance ?? true,
     threshold: moneyInput(preferences.threshold ?? "0"),
     topUp: preferences.top_up ?? true,
     factorChanged: preferences.factor_changed ?? true,
+    spendAnomaly: preferences.spend_anomaly ?? true,
     webhook: preferences.webhook_url ?? "",
     language: preferences.language ?? "en",
   };
@@ -87,6 +89,7 @@ function PreferencesForm({
             low_balance: settings.lowBalance,
             top_up: settings.topUp,
             factor_changed: settings.factorChanged,
+            spend_anomaly: settings.spendAnomaly,
             threshold: amount ?? "0",
             webhook_url: settings.webhook.trim(),
             language: settings.language,
@@ -179,6 +182,12 @@ function EventAlerts({ settings, set }: { settings: Settings; set: SetSetting })
         hint={t("notifications.factorChangedHint")}
         checked={settings.factorChanged}
         onChange={(event) => set("factorChanged", event.target.checked)}
+      />
+      <CheckField
+        label={t("notifications.spendAnomaly")}
+        hint={t("notifications.spendAnomalyHint")}
+        checked={settings.spendAnomaly}
+        onChange={(event) => set("spendAnomaly", event.target.checked)}
       />
     </fieldset>
   );

@@ -197,6 +197,8 @@ export default {
     topUpHint: "充值入账后发邮件确认。",
     factorChanged: "安全变更",
     factorChangedHint: "两步验证或通行密钥变更时通知我。密码修改始终会发邮件。",
+    spendAnomaly: "账户异常活动",
+    spendAnomalyHint: "这个账户的花费、来源地区或模型突然变化时通知我。如果不是您本人操作，请停用不认识的 API key。",
     delivery: { title: "发送方式" },
     webhook: "Webhook 地址",
     webhookHint: "仅支持 HTTPS，留空表示不调用 webhook。",

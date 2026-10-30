@@ -206,6 +206,9 @@ export default {
     topUpHint: "Confirm by email when a top-up is credited.",
     factorChanged: "Security changes",
     factorChangedHint: "Tell me when two-step verification or a passkey changes. Password changes are always emailed.",
+    spendAnomaly: "Unusual account activity",
+    spendAnomalyHint:
+      "Tell me when this account's spend, source regions or models change sharply. If it was not you, disable any API keys you do not recognize.",
     delivery: { title: "Delivery" },
     webhook: "Webhook URL",
     webhookHint: "HTTPS only. Leave empty to turn webhooks off.",
