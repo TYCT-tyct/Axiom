@@ -305,6 +305,9 @@ func (m *canonMessage) checkShape() error {
 			return shapeError("a text part without text or a refusal part without its refusal")
 		case p.Type == "refusal" && m.Role != "assistant":
 			return &NotSupported{Reason: "a refusal part in a " + m.Role + " message"}
+		case p.Type == "image_url" && p.ImageURL != nil && p.ImageURL.Detail != "" &&
+			p.ImageURL.Detail != "auto" && p.ImageURL.Detail != "low" && p.ImageURL.Detail != "high":
+			return shapeError("an image detail that is not auto, low or high")
 		}
 	}
 	return nil
