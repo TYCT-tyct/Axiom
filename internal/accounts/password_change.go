@@ -184,12 +184,13 @@ func (s *Service) replacePassword(ctx context.Context, p Principal, c PasswordCh
 		if err != nil {
 			return err
 		}
-		if locked.Mfa && !p.Verified() {
+		if secondFactorUnproved(locked, p) {
 			return ErrForbidden
 		}
 		if err := s.setPassword(ctx, tx, uuid.UUID(p.user), uuid.UUID(p.account), uuid.UUID(p.site), hash, c.Language); err != nil {
 			return err
 		}
+		// Recovery codes belong to TOTP; a user whose only second factor is a passkey gets none.
 		if locked.Mfa {
 			codes, err = s.insertRecoveryCodes(ctx, tx, uuid.UUID(p.user), uuid.UUID(p.account), uuid.UUID(p.site), locked.FactorVersion+1)
 			if err != nil {

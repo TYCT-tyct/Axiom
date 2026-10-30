@@ -194,8 +194,9 @@ type Relay struct {
 	endingName, stopName                          string
 	meter                                         meter
 	progress                                      Progress
-	// held is the capacity of the buffers the relay and its reader hold; charged is the part drawn on o.Memory.
-	held, charged int64
+	// held is the capacity of the buffers the relay and its reader hold; charged is the part drawn on o.Memory. free
+	// is what held may reach without drawing: baseMemory, and nativeConversionMemory for a native-to-native relay.
+	held, charged, free int64
 	// For a reply that is aggregated: its aggregator, the data of an event of several lines, joined, and the HTTP
 	// status of the body returned.
 	agg    aggregator
@@ -235,21 +236,19 @@ var fromChatConversions = [...]relayFormat{
 	Responses: {newChatToResponses, relayFormats[Chat].limit, true},
 }
 
-// NewRelay reads the upstream stream in its own format or converts between Chat and Messages/Responses.
+// NewRelay reads the upstream stream in its own format or converts between any two of the three formats.
 // Unsupported pairs fail on their first step.
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay {
 	o.legacyFunctions = client == Chat && u.LegacyFunctions
-	r := &Relay{o: o, client: client, held: meterMemory} // within the base allowance, so nothing is drawn yet
-	switch {
-	case client == upstream && int(upstream) < len(relayFormats):
-		r.format = &relayFormats[upstream]
-	case client == Chat && int(upstream) < len(chatConversions) && chatConversions[upstream].newUpstream != nil:
-		r.format = &chatConversions[upstream]
-	case upstream == Chat && int(client) < len(fromChatConversions) && fromChatConversions[client].newUpstream != nil:
-		r.format = &fromChatConversions[client]
-	default:
+	r := &Relay{o: o, client: client, held: meterMemory, free: baseMemory} // within the allowance, so nothing is drawn yet
+	var native bool
+	r.format, native = formatFor(client, upstream)
+	if r.format == nil {
 		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported", upstream, client)
 		return r
+	}
+	if native {
+		r.free += nativeConversionMemory
 	}
 	r.initReply(u, o)
 	r.meter.tier = u.Tier
@@ -501,7 +500,7 @@ func (r *Relay) grow(b []byte, n int) ([]byte, error) { return sse.Grow(b, n, r.
 
 // charge accounts for n more bytes held, drawing what passes the base allowance from the node's budget.
 func (r *Relay) charge(n int) error {
-	over := r.held + int64(n) - baseMemory - r.charged
+	over := r.held + int64(n) - r.free - r.charged
 	if over > 0 {
 		if !r.o.Memory.Charge(over) {
 			return ErrMemory
@@ -542,7 +541,7 @@ func (r *Relay) fail(err error) error {
 		r.agg.failed()
 		r.held += r.agg.taken()
 	}
-	keep := max(0, r.held-baseMemory)
+	keep := max(0, r.held-r.free)
 	r.o.Memory.left.Add(r.charged - keep)
 	r.charged = keep
 	return err

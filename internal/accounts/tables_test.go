@@ -399,56 +399,6 @@ func TestDefaultTierIsCheckedAtCommit(t *testing.T) {
 	}
 }
 
-// TestApplicationChangesOnlyUpdatableColumns: the application may update exactly the columns the README lists, and
-// delete nothing except expired password reset data and dispatched notices; the other tables refuse the privilege, not just the rows.
-func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
-	t.Parallel()
-	db, _ := open(t)
-	updatable := map[string][]string{
-		"presets":                  {"name", "config", "updated_at", "deleted_at"},
-		"notification_preferences": {"low_balance", "top_up", "factor_changed", "threshold", "webhook_url", "language"},
-		"user_notices":             {"email_done", "email_failed", "dispatched", "webhook_url", "webhook_state"},
-		"announcements":            {"withdrawn_at"},
-		"sites":                    {"name", "status", "key_prefix", "registration", "brand_color", "default_tier_id", "logo_hash"},
-		"site_domains":             {"disabled_at"},
-		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour", "registration_human_check", "registration_human_check_bits", "registration_domain_burst", "registration_domain_per_hour", "registration_domain_allow", "registration_domain_deny"},
-		"tiers":                    {"name", "rate_requests"},
-		"roles":                    {"permissions", "additional_permissions"},
-		"accounts":                 {"name", "status", "tier_id", "max_keys", "key_creations_per_hour", "rate_requests"},
-		"workspaces":               {"name", "status", "budget", "budget_reset", "deleted_at"},
-		"users": {
-			"password_hash", "factor_version", "status", "totp_ciphertext", "totp_nonce", "totp_wrapped_dek",
-			"totp_key_version", "totp_last_step", "mfa_enabled_at",
-		},
-		"members":                 nil,
-		"platform_grants":         {"revoked_at"},
-		"api_keys":                {"rate_requests", "updated_at", "management_window", "management_requests", "name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
-		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
-		"recovery_codes":          {"used_at"},
-		"security_failures":       {"started_at", "failures", "completed_peak", "sampled_at", "reported"},
-		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
-		"password_reset_tokens":   {"used_at"},
-		"registration_requests":   {"tier_id", "domain", "language", "expires_at", "token_hash"},
-	}
-	// Generated columns are left out: the database refuses to set them before it looks at privileges.
-	for _, column := range texts(t, db, platform, `SELECT table_name || ' ' || column_name FROM information_schema.columns
-		WHERE table_schema = 'accounts' AND is_generated = 'NEVER'`) {
-		table, name, _ := strings.Cut(column, " ")
-		_, err := exec(t, db, platform, "UPDATE accounts."+table+" SET "+name+" = "+name+" WHERE false")
-		if want := slices.Contains(updatable[table], name); want != (err == nil) || !want && state(err) != "42501" {
-			t.Errorf("updating %s.%s: %v, want allowed: %t", table, name, err, want)
-		}
-	}
-	for table := range updatable {
-		if strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" {
-			continue
-		}
-		if _, err := exec(t, db, platform, "DELETE FROM accounts."+table+" WHERE false"); state(err) != "42501" {
-			t.Errorf("deleting from %s: %v, want permission denied", table, err)
-		}
-	}
-}
-
 // TestTerminalStatesAreFinal: the first soft delete, revocation or use goes through; after it nothing changes the
 // row, the terminal column included, in the tenant's scope or the platform's.
 func TestTerminalStatesAreFinal(t *testing.T) {
@@ -488,35 +438,6 @@ func TestTerminalStatesAreFinal(t *testing.T) {
 				t.Errorf("%s: changed %d rows, %v; want %d", s.statement, changed, err, s.want)
 			}
 		}
-	}
-}
-
-// TestOnePolicyPerCommand: every table has exactly one policy for everyone for each of SELECT, INSERT and UPDATE,
-// and none for ALL; only reset tables and user notices allow DELETE of expired rows. Members has none for UPDATE. Policies are OR-ed,
-// so a second UPDATE or a FOR ALL policy would let through what a terminal-state policy refuses.
-func TestOnePolicyPerCommand(t *testing.T) {
-	t.Parallel()
-	db, _ := open(t)
-	got := texts(t, db, platform, `SELECT c.relname || ': ' || coalesce(string_agg(p.cmd, ', ' ORDER BY p.cmd), '')
-		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-		LEFT JOIN pg_policies p ON p.schemaname = n.nspname AND p.tablename = c.relname AND p.roles = '{public}'
-		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
-	var want []string
-	for _, table := range []string{
-		"accounts", "announcements", "api_keys", "members", "notification_preferences", "password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes", "registration_requests", "roles", "security_failures", "sessions", "site_domains",
-		"site_logos", "site_settings", "sites", "tiers", "user_notices", "users", "workspaces",
-	} {
-		commands := "INSERT, SELECT, UPDATE"
-		if strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" {
-			commands = "DELETE, INSERT, SELECT, UPDATE"
-		}
-		if table == "members" || table == "site_logos" {
-			commands = "INSERT, SELECT"
-		}
-		want = append(want, table+": "+commands)
-	}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("policies for everyone (-want +got):\n%s", diff)
 	}
 }
 

@@ -194,17 +194,27 @@ func registrationRefusal(err error) error {
 	return invalidField("/policy/"+strings.TrimPrefix(e.Field, "registration_"), e.Reason)
 }
 
-// GetSiteRegistration tells a site's open-registration policy and the defaults that apply where it sets none.
-func (a adminAPI) GetSiteRegistration(ctx context.Context, request adminapi.GetSiteRegistrationRequestObject) (adminapi.GetSiteRegistrationResponseObject, error) {
-	id, _, err := a.siteOf(request.SiteId)
+// siteRead runs a read-only site handler's skeleton: resolve the site the request names, then read it in the call's
+// scope.
+func siteRead[T any](ctx context.Context, a adminAPI, siteID string, read func(context.Context, pg.Tx, accounts.SiteID) (T, error)) (T, error) {
+	var out T
+	id, _, err := a.siteOf(siteID)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
-	var own accounts.RegistrationPolicy
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		own, err = a.accounts.SiteRegistration(ctx, tx, id)
+		out, err = read(ctx, tx, id)
 		return err
 	}); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// GetSiteRegistration tells a site's open-registration policy and the defaults that apply where it sets none.
+func (a adminAPI) GetSiteRegistration(ctx context.Context, request adminapi.GetSiteRegistrationRequestObject) (adminapi.GetSiteRegistrationResponseObject, error) {
+	own, err := siteRead(ctx, a, request.SiteId, a.accounts.SiteRegistration)
+	if err != nil {
 		return nil, err
 	}
 	return adminapi.GetSiteRegistration200JSONResponse(registrationPolicyView(own)), nil
