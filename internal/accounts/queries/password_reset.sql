@@ -11,8 +11,9 @@ FROM accounts.password_reset_requests WHERE id = @id FOR UPDATE;
 -- name: FinishPasswordResetRequest :exec
 UPDATE accounts.password_reset_requests SET email = NULL WHERE id = @id;
 
--- name: PasswordResetSite :many
--- Match the console order return URL: use an enabled HTTPS console domain owned by the site.
+-- name: ConsoleSite :many
+-- The link a mailed token points at: an enabled HTTPS console domain of the site, preferring the one the request used.
+-- Mail for resetting a password and mail for verifying a new address both take their origin here, never from Host.
 SELECT s.name, d.domain FROM accounts.sites s
 JOIN accounts.site_domains d ON d.site_id = s.id
 WHERE s.id = @site_id AND s.status = 'active' AND d.surface = 'console' AND d.disabled_at IS NULL

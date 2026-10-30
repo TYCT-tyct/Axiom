@@ -560,8 +560,9 @@ paths:
       summary: The site the request's domain belongs to
       description: >-
         What the sign-in and registration pages need before anyone is signed in: the site's name and logo for the
-        brand, and whether registration needs an invite. The site is found from the `Host`, which must be a domain
-        registered for the console; any other host gets a 404.
+        brand, whether registration needs an invite, and, on a site with open registration, the proof-of-work
+        difficulty the page must solve. The site is found from the `Host`, which must be a domain registered for the
+        console; any other host gets a 404.
       security: []
       responses:
         "200":
@@ -575,15 +576,24 @@ paths:
     post:
       operationId: register
       tags: [Session]
-      summary: Register with an invite code
+      summary: Register with an invite code or open registration
       description: >-
-        Makes the user, their personal account, its default workspace and balance, in the site's default tier. It
-        does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown,
-        its user disabled, or the site not registering by invitation) is one `invalid_invite`. A taken email is
-        `email_taken`, and the whole registration is undone. The email is not verified in M1.
+        On a site registering by invitation, makes the user, their personal account, its default workspace and
+        balance, in the site's default tier, and answers 201. It does not sign the user in: the page calls `signIn`
+        next with the same credentials. An unusable code (unknown, its user disabled, or the site not registering by
+        invitation) is one `invalid_invite`; a taken email is `email_taken`, and the whole registration is undone.
 
 
-        Limits: the per-IP bucket of `signIn`.
+        On a site with open registration, checks the address against the site's domain lists and the proof of work,
+        stores one pending registration without a password, and queues a single-use verification link; the answer is
+        always 202 for a well-formed address, whether or not it is registered already, so an anonymous caller cannot
+        learn which addresses exist. A password in this request is ignored: the verification page sets it after the
+        address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found
+        when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot
+        send mail answers `unavailable`, and a closed site `registration_closed`.
+
+
+        Limits: the per-IP bucket of `signIn`, and on open registration, the email domain's bucket.
       security: []
       requestBody:
         required: true
@@ -592,10 +602,42 @@ paths:
             schema: {$ref: "#/components/schemas/RegisterRequest"}
       responses:
         "201":
-          description: Registered.
+          description: Registered with an invite code.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Registered"}
+        "202":
+          description: Open registration accepted; a verification link is on its way.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RegistrationPending"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/verify-email:
+    post:
+      operationId: verifyEmail
+      tags: [Session]
+      summary: Verify an open registration's email
+      description: >-
+        Turns the single-use token from the verification mail and the password chosen by the mailbox owner into the
+        user, their personal account, its default workspace and balance. The password is validated and hashed only
+        after the token is found; no password is kept before this request. The token is bound to the console domain
+        and the pending registration; an unknown, expired or already used one is one `invalid_verification`, and an
+        address registered in the meantime is `email_taken`. The user is not signed in: the page sends them to sign in
+        with the password they chose. Limits: the per-IP bucket of `signIn`; an attempt spends one before the token is
+        looked up or the password is hashed.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/VerifyEmailRequest"}
+      responses:
+        "204": {description: Verified.}
         "400": {$ref: "#/components/responses/BadRequest"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
@@ -1444,6 +1486,10 @@ components:
         - stale_revision
         - idempotency_key_reused
         - invalid_invite
+        - registration_closed
+        - human_check_failed
+        - email_domain_not_allowed
+        - invalid_verification
         - weak_password
         - not_ready
         - unprocessable
@@ -1629,10 +1675,20 @@ components:
       type: object
       required: [name, key_prefix, registration, currency]
       properties:
+        id: {$ref: "#/components/schemas/SiteId"}
         name: {type: string}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD, description: "The site's accounting currency, the one of every `Money` its API shows. It never changes."}
         logo_url: {type: string, description: "Absent when the site has no logo."}
         key_prefix: {type: string, example: sk-ax-v1-, description: "What the site's API keys start with."}
+        email_verification:
+          type: boolean
+          description: "Whether open registration verifies the address by mail before the user exists. Absent on a node of the previous release."
+        human_check:
+          type: object
+          description: "The proof of work the open-registration page must solve. Absent when the site does not check, or when the node predates open registration."
+          required: [bits]
+          properties:
+            bits: {type: integer, minimum: 12, maximum: 24, description: "Leading zero bits the SHA-256 of `axiom-registration-v1`, the site id, the normalized email and the decimal nonce must have."}
         api_base_url:
           type: string
           format: uri
@@ -1644,19 +1700,32 @@ components:
         registration:
           type: string
           enum: [invite, closed, open]
-          description: "`invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1."
+          description: "`invite` needs an invite code; `closed` takes no one; `open` verifies the address by mail, with the site's human check, domain lists and limits."
     RegisterRequest:
       type: object
-      required: [invite_code, email, password]
+      required: [email]
       properties:
-        invite_code: {type: string, minLength: 1, maxLength: 64}
+        invite_code: {type: string, minLength: 1, maxLength: 64, description: "Required on an invite-only site; ignored where registration is open."}
         email: {type: string, minLength: 3, maxLength: 254}
-        password: {type: string, minLength: 12, maxLength: 256}
+        password: {type: string, minLength: 12, maxLength: 256, description: "Required on an invite-only site. Open registration does not keep it: the page chooses the password on the verification page, so an unauthenticated caller cannot choose the password of an address it does not own."}
+        human_check: {type: string, pattern: '^[0-9]{1,20}$', description: "The decimal nonce that solves the site's proof of work. Required where `human_check` is present."}
+        language: {type: string, enum: [zh, en], description: "The language of the verification mail; absent means en. The page sends its own."}
     Registered:
       type: object
       required: [user_id]
       properties:
         user_id: {$ref: "#/components/schemas/UserId"}
+    RegistrationPending:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [verification_sent]}
+    VerifyEmailRequest:
+      type: object
+      required: [token, password]
+      properties:
+        token: {type: string, minLength: 20, maxLength: 100}
+        password: {type: string, minLength: 12, maxLength: 256, description: "The password chosen by the mailbox owner when the link is clicked."}
     Key:
       type: object
       required: [id, name, prefix, last4, workspace_id, created_at, disabled]

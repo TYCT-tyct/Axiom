@@ -22,7 +22,7 @@ import (
 // Consumers and delivery-receipt callbacks must share the mailer and be registered before the queue starts.
 func registerNotifications(ctx context.Context, db *pg.DB, queue *pg.Queue, smtp mail.Config,
 	cache *kv.Client, master *secret.MasterKeys, keys *secret.Keyring, exit *egress.Client, logger *slog.Logger,
-) (*accounts.PasswordRecovery, error) {
+) (*accounts.PasswordRecovery, *accounts.Registration, error) {
 	if err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 		stored, found, err := mail.StoredConfig(ctx, tx, keys)
 		if found {
@@ -30,21 +30,25 @@ func registerNotifications(ctx context.Context, db *pg.DB, queue *pg.Queue, smtp
 		}
 		return err
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mailer, err := mail.Register(ctx, db, queue, smtp, cache, master, logger)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	recovery, err := accounts.RegisterPasswordRecovery(db, queue, mailer, pg.PlatformScope(), logger)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	registration, err := accounts.RegisterRegistration(db, queue, mailer, pg.PlatformScope(), logger)
+	if err != nil {
+		return nil, nil, err
 	}
 	if err := observability.RegisterAlerts(db, pg.PlatformScope(), queue, mailer, keys, exit); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := accounts.RegisterUserNotices(db, pg.PlatformScope(), queue, exit); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(func(ctx context.Context, _ *river.Job[userNoticeArgs]) error {
 		if err := runUserNotices(ctx, db, queue, mailer, 30*time.Second); err != nil {
@@ -53,10 +57,10 @@ func registerNotifications(ctx context.Context, db *pg.DB, queue *pg.Queue, smtp
 		}
 		return nil
 	})); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	queue.Every(time.Minute, func() river.JobArgs { return userNoticeArgs{} })
-	return recovery, nil
+	return recovery, registration, nil
 }
 
 type userNoticeArgs struct{}

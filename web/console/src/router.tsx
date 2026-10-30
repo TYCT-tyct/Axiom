@@ -35,6 +35,11 @@ const routeTree = root.addChildren([
     validateSearch: guestSearch,
     component: lazyRouteComponent(() => import("./auth/register")),
   }),
+  createRoute({
+    getParentRoute: () => root,
+    path: "/verify-email",
+    component: lazyRouteComponent(() => import("./auth/verify-email")),
+  }),
   app.addChildren([
     createRoute({
       getParentRoute: () => app,

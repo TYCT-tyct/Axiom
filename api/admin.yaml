@@ -1340,6 +1340,68 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/registration:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteRegistration
+      tags: [Site]
+      summary: A site's open-registration policy
+      description: >-
+        The registration mode and the anti-abuse values for open registration: the self-hosted proof of work, the
+        email domain allow and deny lists, and the per-domain limits. Values the site does not set are the defaults in
+        code, which `defaults` shows.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The policy
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RegistrationPolicyView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateSiteRegistration
+      tags: [Site]
+      summary: Set a site's open-registration policy
+      description: >-
+        Replaces the registration mode and every anti-abuse value. Domains are lower-cased, trimmed and de-duplicated;
+        an entry covers its subdomains, and the deny list wins. Open registration needs a node that can send mail: a
+        node without SMTP answers `unavailable` there until mail is configured. The change is audited.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RegistrationPolicyUpdate"}
+      responses:
+        "200":
+          description: The policy as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RegistrationPolicyView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/accounts/{account_id}/suspension:
     parameters:
       - name: account_id
@@ -3419,6 +3481,10 @@ components:
         - stale_revision
         - idempotency_key_reused
         - invalid_invite
+        - registration_closed
+        - human_check_failed
+        - email_domain_not_allowed
+        - invalid_verification
         - weak_password
         - not_ready
         - unprocessable
@@ -3634,6 +3700,41 @@ components:
       required: [limits, reason]
       properties:
         limits: {$ref: "#/components/schemas/LoginLimits"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    RegistrationPolicy:
+      type: object
+      required: [mode, human_check, human_check_bits, domain_burst, domain_per_hour, domain_allow, domain_deny]
+      description: >-
+        Open registration: `mode` is the site's registration mode; the proof of work the page solves; the domains
+        allowed and denied (an entry covers its subdomains, the deny list wins, and an empty allow list takes every
+        domain the syntax allows); and the per-domain burst and hourly limits.
+      properties:
+        mode: {type: string, enum: [invite, closed, open]}
+        human_check: {type: boolean}
+        human_check_bits: {type: integer, minimum: 12, maximum: 24}
+        domain_burst: {type: integer, minimum: 1, maximum: 10000}
+        domain_per_hour: {type: integer, minimum: 1, maximum: 100000}
+        domain_allow:
+          type: array
+          maxItems: 100
+          items: {type: string, minLength: 3, maxLength: 253, pattern: '^[A-Za-z0-9. -]+$'}
+        domain_deny:
+          type: array
+          maxItems: 100
+          items: {type: string, minLength: 3, maxLength: 253, pattern: '^[A-Za-z0-9. -]+$'}
+    RegistrationPolicyView:
+      type: object
+      required: [policy, defaults]
+      properties:
+        policy: {$ref: "#/components/schemas/RegistrationPolicy"}
+        defaults:
+          description: What applies where the site sets no value.
+          allOf: [{$ref: "#/components/schemas/RegistrationPolicy"}]
+    RegistrationPolicyUpdate:
+      type: object
+      required: [policy, reason]
+      properties:
+        policy: {$ref: "#/components/schemas/RegistrationPolicy"}
         reason: {$ref: "#/components/schemas/Reason"}
     AccountSuspension:
       type: object

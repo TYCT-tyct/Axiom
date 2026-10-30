@@ -19,7 +19,8 @@ func TestErrorCodesAreTheContractsCodes(t *testing.T) {
 	for _, c := range []errorCode{
 		codeInvalidRequest, codeUnauthenticated, codeWrongLogin, codeInvalidCode, codeForbidden, codeMfaRequired,
 		codeOriginRejected, codeNotFound, codeConflict, codeEmailTaken, codeNameTaken, codeTooManyKeys, codeStaleRevision, codeIdempotencyReuse,
-		codeInvalidInvite, codeWeakPassword, codeNotReady, codeUnprocessable, codeRateLimited, codeInternal,
+		codeInvalidInvite, codeRegistrationClosed, codeHumanCheck, codeEmailDomain, codeInvalidVerification,
+		codeWeakPassword, codeNotReady, codeUnprocessable, codeRateLimited, codeInternal,
 		codeNotImplemented, codeUnavailable,
 	} {
 		ours = append(ours, string(c))
