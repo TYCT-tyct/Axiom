@@ -29,6 +29,7 @@
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
 | `kv` | Valkey 的访问层：每次访问的期限、熔断、与 Valkey 的时钟修正、节点心跳（`platform.nodes`；迁移 `00013` 增加凭证份额的进程启动身份、成员确认列表和离开节点的 RPM 分区保留表 `credential_share_departures`）和指标；限流计数（K1）和登录前的尝试次数（K2）已经在用，登录脚本由 accounts 持有，通过 `Login` 用途标签和 `LoginSpace` 键空间复用访问层；登录键的隐私、到期及按节点等分的故障兜底见 [kv 的每种用途](kv/README.md#每种用途)，会话粘性（K3）同批读取、经有界后台队列写回（后台最多占 32 个在途位置、不排在前台之前、不驱动熔断）；邮件收件人冷却（#399）用 `Mail` 用途标签和 `MailSpace`，由 mail 的脚本原子准入；缓存四类状态已共享，供应商并发与有限 RPM 通过注册表的完整成员确认按节点静态分份额，生产支持 N > 1（[状态核对](kv/README.md#多节点状态核对)）；`kvtest` 给测试一个按部署方式配好的真实 Valkey，见 [kv 的 README](kv/README.md) |
 | `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，`notifications` 队列）和按收件人的限流（Valkey 共享，故障退回各节点的进程内桶），见 [mail/README.md](mail/README.md) |
+| `objectstore` | S3 兼容对象存储：SigV4 签名、`Check`/`Put`/`Get`/`Head`/`Delete`/`List`、每次操作的期限与只对可恢复失败的重试；配置全空即关闭，设了一个就要设全。用自己的传输（自托管桶在私网，`egress` 的地址策略不适用），见 [objectstore/README.md](objectstore/README.md) |
 
 配置项和默认值以 `cmd/axiom` 里的读取为准，不在文档里另列；下文只在说明行为时提到变量名。`AXIOM_HEALTH_MODE` 控制端点健康闭环，非法值在启动时报错；模式、试探和持久化由 [quality](../quality/README.md) 负责。
 
@@ -116,6 +117,16 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 部署前提：出站网络不能有转换到私网、回环或元数据地址的网络自选 NAT64 前缀。哪个部署需要这种网络，再由可信的部署配置给出前缀，整段拒绝或还原出 IPv4 后再校验，并补 URL 字面量和 AAAA 两条路径的测试。
 
 测试使用 `egress.NewForTesting(egresstest.Loopback(t))` 请求本机服务器；TLS 假网关使用 `egresstest.Loopback(t, server.Certificate())` 额外信任该测试证书，仍校验主机名和证书链。信任根只能由测试进程构造，生产的 `egress.New` 不提供注入入口；不能借此放行 RFC 1918、ULA 或云元数据地址。
+
+## 对象存储
+
+`objectstore` 是程序里唯一的 S3 客户端，只依赖 S3 接口：云厂商的对象存储或自托管的 SeaweedFS（[技术选型](../../docs/architecture.md#技术选型)）。它只负责签名、读写和列举，桶由负责人建、保留策略由使用它的功能定；单个 PUT 上限 5 GiB，更大的归档要等分片上传。
+
+`ReadConfig` 把 `AXIOM_OBJECTSTORE_*` 读成一份配置：六个变量全空是关闭（零值），设了任何一个就要求整组，错误只报变量名和形状，不报值；`serve` 启动时读一次，半个配置是启动错误而不是第一次归档时才失败。`Open` 不联系桶，`Check` 用一次 HEAD 核对桶和凭证，`axiom objectstore check|list|put|get|delete` 是运维验证和搬归档的入口。
+
+每次操作必须在 `ctx` 上带期限，否则返回 `ErrDeadlineRequired`；只重试连接失败、408、429 和 5xx，共四次尝试，200ms 起翻倍、最多 5s 的退避加抖动，`Retry-After` 最多等 30s 且不越过期限。PUT 的请求体可寻址，重试从头发同一份字节；GET 的正文读失败不重试；不跟随重定向，101 也拒绝。账本和对话正文都不经过它：备份用 `deploy/ops` 自己的桶和凭证，正文保存的平台开关仍然关着。
+
+测试对真实的 SeaweedFS 容器跑一遍，签名的固定向量来自 botocore；命令、重试、期限、分页和配置错误的测试在包内和 `cmd/axiom`。
 
 ## 监听
 
