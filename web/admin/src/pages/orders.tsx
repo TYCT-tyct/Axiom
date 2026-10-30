@@ -73,10 +73,10 @@ function RefundQueue({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
               cols={[
                 [t("orders.refund.col.refund")],
                 [t("orders.refund.col.account"), "hidden md:table-cell"],
-                [t("orders.refund.col.credits")],
+                [t("orders.refund.col.credits"), "hidden sm:table-cell"],
                 [t("orders.refund.col.amount"), "hidden sm:table-cell"],
                 [t("orders.refund.col.reason"), "hidden lg:table-cell"],
-                [t("orders.refund.col.state")],
+                [t("orders.refund.col.state"), "hidden sm:table-cell"],
               ]}
               action
             />
@@ -113,6 +113,7 @@ function RefundRow({
   const { t } = useTranslation();
   const format = useFormat();
   const waiting = refund.state === "frozen" && !refund.approved_by;
+  const credits = refund.credits ? format.money(refund.credits) : "—";
   return (
     <tr className="align-top hover:bg-s2">
       <Td>
@@ -126,13 +127,16 @@ function RefundRow({
         {refund.via === "offline" ? (
           <span className="block text-label text-t3">{t("orders.refund.viaOffline")}</span>
         ) : null}
+        <span className="mt-1 block text-label text-t3 sm:hidden">
+          {refundStateText(t, refund)}
+          {" · "}
+          {credits}
+        </span>
       </Td>
       <Td className="hidden md:table-cell">
         <Code title={refund.account_id}>{shortId(refund.account_id)}</Code>
       </Td>
-      <Td className="whitespace-nowrap text-right tabular-nums">
-        {refund.credits ? format.money(refund.credits) : "—"}
-      </Td>
+      <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">{credits}</Td>
       <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">
         {refund.amount ? format.pay(refund.amount) : "—"}
       </Td>
@@ -144,13 +148,13 @@ function RefundRow({
           {refund.requested_by ?? ""}
         </span>
       </Td>
-      <Td>
+      <Td className="hidden sm:table-cell">
         <State tone={refundTone(refund)}>{refundStateText(t, refund)}</State>
         {refund.provider_ref ? <span className="mt-1 block text-label text-t3">{refund.provider_ref}</span> : null}
       </Td>
-      <Td className="whitespace-nowrap">
+      <Td>
         {waiting ? (
-          <div className="flex flex-wrap justify-end gap-2">
+          <div className="flex flex-col items-end gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
             {self ? (
               <span className="text-label text-t3">{t("orders.refund.secondPerson")}</span>
             ) : (

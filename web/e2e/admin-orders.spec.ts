@@ -67,14 +67,18 @@ test.describe("orders and refunds", () => {
     await page.reload();
 
     const orders = page.getByRole("table", { name: zhText("nav.orders") });
-    const paidRow = orders.getByRole("row").filter({ hasText: paid.id?.slice(-8) ?? "" });
+    const rowOf = (id: string | undefined) => {
+      if (!id) throw new Error("the usual order is missing its ID");
+      return orders.getByRole("row").filter({ has: page.getByTitle(id) });
+    };
+    const paidRow = rowOf(paid.id);
     await expect(paidRow.getByText("US$8.00")).toBeVisible();
     await expect(paidRow.getByText("US$10.00")).toBeVisible();
     await expect(paidRow.getByText("US$0.24")).toBeVisible();
-    const unpaidRow = orders.getByRole("row").filter({ hasText: unpaid.id?.slice(-8) ?? "" });
+    const unpaidRow = rowOf(unpaid.id);
     await expect(unpaidRow.getByText(zhText("orders.notPaid"))).toBeVisible();
     await expect(unpaidRow.getByText("US$10.00")).toBeVisible();
-    const missingRow = orders.getByRole("row").filter({ hasText: missing.id?.slice(-8) ?? "" });
+    const missingRow = rowOf(missing.id);
     await expect(missingRow.getByText(zhText("orders.creditedUnavailable"))).toBeVisible();
     await expect(missingRow.getByText(zhText("orders.notCredited"))).toHaveCount(0);
   });
