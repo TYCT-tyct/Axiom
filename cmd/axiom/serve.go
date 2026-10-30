@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/netip"
-	"os"
 	"time"
 
 	"axiom/internal/accounts"
@@ -16,17 +14,14 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
 	"axiom/internal/platform/alert"
-	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/mail"
-	"axiom/internal/platform/objectstore"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/platform/webui"
-	"axiom/internal/quality"
 	"axiom/internal/suppliers"
 )
 
@@ -47,97 +42,12 @@ const bodyTimeout = 2 * time.Minute
 // defaultStartupTimeout bounds how long a command waits for the database before it starts.
 const defaultStartupTimeout = 30 * time.Second
 
-// probesListenAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
-func probesListenAddr(env *config.Env) string { return env.Addr(probesAddrVar, "127.0.0.1:8081") }
-
 // listening is one of the node's HTTP servers and the address variable it listens on.
 type listening struct {
 	variable, addr string
 	server         *http.Server
 	listener       net.Listener
-}
-
-// nodeSettings are the node's configuration, all read from the environment before anything starts.
-type nodeSettings struct {
-	healthMode                        quality.Mode
-	publicAddr, adminAddr, probesAddr string
-	startupTimeout, shutdownTimeout   time.Duration
-	databaseURL                       string
-	completionReserve                 int
-	masterKeyFile, keyHashFile        string
-	identityKeyFile                   string
-	hashConcurrency                   int
-	hashWait                          time.Duration
-	trustedProxies                    []netip.Prefix
-	valkey                            kv.Config
-	smtp                              mail.Config
-	exchangeSource                    string
-}
-
-// readSettings reads and checks every variable the node uses, so a node started wrong fails with the whole list.
-func readSettings(environ []string) (nodeSettings, error) {
-	env := config.New(environ)
-	s := nodeSettings{
-		exchangeSource:    env.String("AXIOM_EXCHANGE_SOURCE", "manual"),
-		healthMode:        quality.Mode(env.String("AXIOM_HEALTH_MODE", "")),
-		publicAddr:        env.Addr(publicAddrVar, ":8080"),         // model calls, the console, payment callbacks
-		adminAddr:         env.Addr(adminAddrVar, "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
-		probesAddr:        probesListenAddr(env),
-		startupTimeout:    env.Duration(startupTimeoutVar, defaultStartupTimeout),
-		shutdownTimeout:   env.Duration(shutdownTimeoutVar, 30*time.Second),
-		databaseURL:       env.Required(pg.DatabaseURLVar),
-		completionReserve: env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1),
-		masterKeyFile:     env.Required(masterKeyFileVar),
-		keyHashFile:       env.Required(keyHashFileVar),
-		// The identity key stands in for the client's session and end-user identifiers upstream, so rotating the key
-		// hashes must not rotate it: the upstream's prompt caches are keyed by them (#205).
-		identityKeyFile: env.Required(identityKeyFileVar),
-		// The node's argon2id computations at once, and how long a sign-in waits for a turn (0: the module's defaults,
-		// GOMAXPROCS and 2 seconds).
-		hashConcurrency: env.Int(hashConcurrencyVar, 0, 1),
-		hashWait:        env.Duration(hashWaitVar, 0),
-		trustedProxies:  env.Prefixes(trustedProxiesVar),
-		// The shared cache: without a URL the three uses stay in this process, as before the cache existed. The password
-		// is read from its file by kv, which reports on it (internal/platform/kv/README.md「配置与启动」).
-		valkey: kv.Config{
-			URL:          env.String(kv.URLVar, ""),
-			PasswordFile: env.String(kv.PasswordFileVar, ""),
-			Nodes:        env.Int(kv.NodesVar, 1, 1),
-			NodeID:       env.String(kv.NodeIDVar, hostName()),
-		},
-	}
-	// Email is optional: none of its variables set means the node starts with email disabled, and a partly set
-	// configuration joins the problems above, so the node still reports everything wrong at once. The cache's own settings
-	// are judged with the rest, so a node that is wrong about them does not touch the database.
-	var healthErr error
-	var modeErr error
-	s.healthMode, modeErr = quality.ParseMode(string(s.healthMode))
-	if modeErr != nil {
-		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
-	}
-	smtp, mailErr := mail.ReadConfig(env)
-	// The bucket is optional and no program feature writes through it yet (internal/platform/objectstore/README.md).
-	// Read it here so a node whose deployment sets it starts, and so half a configuration is a startup error rather than a
-	// surprise for the first archive job; `axiom objectstore` and the backup job use the same client, the latter with its
-	// own bucket.
-	_, storeErr := objectstore.ReadConfig(env)
-	var exchangeErr error
-	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
-		exchangeErr = errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb")
-	}
-	s.smtp = smtp
-	if err := errors.Join(env.Err(), mailErr, storeErr, s.valkey.Resolve(), healthErr, exchangeErr); err != nil {
-		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
-	}
-	return s, nil
-}
-
-// hostName is the node's identity unless AXIOM_NODE_ID names it: a container keeps its host name when it restarts, so a
-// restarted node finds its own heartbeat row and replaces it. A host that cannot say its name gets a new identity at every
-// start (kv.Config.NodeID), which is the cost of a restart being counted beside the old row for half a minute.
-func hostName() string {
-	name, _ := os.Hostname() //nolint:errcheck // the fallback is described above
-	return name
+	tls            bool // mutual TLS with the deployment's node certificates
 }
 
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
@@ -163,21 +73,20 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
+	if !cfg.roles.has(roleCore) {
+		return serveWithoutCore(ctx, cfg, logger)
+	}
 	console, err := loadConsole(cfg)
 	if err != nil {
 		return err
 	}
-	tel, err := telemetry.New()
+	tel, db, master, err := openCoreNode(ctx, cfg, console.master, logger)
 	if err != nil {
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
-	db, master, err := openCheckedDatabase(ctx, cfg, tel, console.master, logger)
-	if err != nil {
-		return err
-	}
-	defer db.Close()        // after the listeners and the recorder close: requests in flight may still need it
-	console.master = master // the same ring, with the check's write version
+	defer db.Close()                               // after the listeners and the recorder close: requests in flight may still need it
+	console.master = master                        // the same ring, with the check's write version
 
 	exit, err := outbound(tel)
 	if err != nil {
@@ -208,7 +117,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		cancelSync()
 		stopQueue(ctx, queue, cfg.shutdownTimeout, logger)
 	}()
-	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
+	requests, err := requestTelemetry(tel)
 	if err != nil {
 		return err
 	}
@@ -225,11 +134,11 @@ func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *tele
 	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder, cache *kv.Client, cancelSync context.CancelFunc,
 ) error {
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, routes.public, cfg.adminAddr, routes.admin, cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg, routes.public, routes.admin, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
-	served := startServing(servers, logger)
+	served := startServing(cfg.roles, servers, logger)
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
 	// rebuild.
 	stopAnnouncing := announceReady(ctx, routes.calls.ready, readinessEvery, &health, logger)
@@ -422,6 +331,22 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 	}
 }
 
+// openCoreNode opens the providers and the database a serving core needs, shutting the providers down if the database
+// refuses the start so a failed start does not leave them running.
+func openCoreNode(ctx context.Context, cfg nodeSettings, master *secret.Keyring,
+	logger *slog.Logger,
+) (*telemetry.Telemetry, *pg.DB, *secret.Keyring, error) {
+	tel, err := telemetry.New()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	db, ring, err := openCheckedDatabase(ctx, cfg, tel, master, logger)
+	if err != nil {
+		return nil, nil, nil, errors.Join(err, tel.Shutdown(context.WithoutCancel(ctx)))
+	}
+	return tel, db, ring, nil
+}
+
 // openCheckedDatabase opens the node's database and checks that the key ring it needs is complete and agrees with the
 // database, both under one AXIOM_STARTUP_TIMEOUT. The key ring check reads every envelope store, so a lock held on one of
 // them is the database not answering, like a lock held on the fallback prices. master is the ring loadConsole read
@@ -497,17 +422,6 @@ func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, maste
 	return queue, recorder, recovery, registration, nil
 }
 
-// startServing serves every listener. The channel carries the error of the first listener to stop. Readiness is not
-// reported here: it waits for the routing snapshot (announceReady), so a node that cannot route never says it can.
-func startServing(servers []*listening, logger *slog.Logger) <-chan error {
-	served := make(chan error, len(servers))
-	for _, s := range servers {
-		go func() { served <- s.server.Serve(s.listener) }()
-	}
-	logger.Info("serving", "public", servers[0].listener.Addr().String(), "admin", servers[1].listener.Addr().String(), "ops", servers[2].listener.Addr().String())
-	return served
-}
-
 // startRecorder starts the call-record writer, reporting to the node's metrics.
 func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) *observability.Recorder {
 	cfg := callRecords
@@ -553,17 +467,6 @@ func closeCache(ctx context.Context, cache *kv.Client, timeout time.Duration, lo
 	}
 }
 
-// node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
-// it drains while the probes still answer. The admin listener serves the admin app and the admin API (docs/architecture.md
-// 「前端交付」); the limit to restricted sources is not built (#171).
-func node(publicAddr string, routes http.Handler, adminAddr string, admin http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
-	return []*listening{
-		{publicAddrVar, publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{adminAddrVar, adminAddr, httpserver.New(httpserver.Public(admin, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{probesAddrVar, probesAddr, health.Server(logger), nil},
-	}
-}
-
 var errNoAnswer = errors.New("database: " + pg.DatabaseURLVar + ": no answer within AXIOM_STARTUP_TIMEOUT")
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
@@ -590,43 +493,6 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 		return nil, err
 	}
 	return db, nil
-}
-
-// shutdown reports not ready, then stops the servers in order, each finishing its requests in flight, all within
-// timeout. The public listener comes first, so the probes keep answering, not ready, while it drains. Past timeout
-// a server's remaining connections are closed, which ends their requests' contexts: Shutdown alone would return and
-// leave them running, and closing the database pool would then wait for every connection they hold.
-func shutdown(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening) error {
-	health.SetReady(false)
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	var errs []error
-	for _, s := range servers {
-		if err := s.server.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("shut down %s: %w", s.variable, err), s.server.Close())
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// listen binds every server before any serves, so a taken address fails startup with nothing half started. A
-// failure names the variable and the cause, such as "bind: address already in use", but not the address.
-func listen(ctx context.Context, servers []*listening) error {
-	for i, s := range servers {
-		listener, err := new(net.ListenConfig).Listen(ctx, "tcp", s.addr)
-		if err != nil {
-			if opErr := (*net.OpError)(nil); errors.As(err, &opErr) {
-				err = opErr.Err
-			}
-			errs := []error{fmt.Errorf("%s: %w", s.variable, err)}
-			for _, bound := range servers[:i] {
-				errs = append(errs, bound.listener.Close())
-			}
-			return errors.Join(errs...)
-		}
-		s.listener = listener
-	}
-	return nil
 }
 
 func registerExchangeSource(ctx context.Context, db *pg.DB, queue *pg.Queue, exit *egress.Client, logger *slog.Logger, source string) error {

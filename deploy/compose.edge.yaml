@@ -16,6 +16,11 @@ services:
       # arrives from an address listed here (internal/platform/README.md「监听」). Requests through the host's published
       # ports arrive from another network and are not trusted.
       AXIOM_TRUSTED_PROXIES: ${AXIOM_EDGE_PROXY_ADDRESS:-172.28.0.10}/32
+      # The admin listener's source restriction is the program's (deploy/ingress/Caddyfile forwards every admin request).
+      # This must sit on the axiom service, not on caddy: the base file's default is every source because Docker rewrites
+      # a published port's peer address, and this override is what closes the admin site to the edge's clients unless
+      # the operator names their ranges. The comma-separated syntax is the program's.
+      AXIOM_ADMIN_SOURCES: ${AXIOM_ADMIN_SOURCES:-127.0.0.1/32,::1/128}
 
   caddy:
     image: caddy:2.11.7-alpine
@@ -31,7 +36,6 @@ services:
       # deployment with no public DNS. Named here rather than left empty, because the Caddyfile reads it with a default and
       # an empty value would override that default with nothing.
       AXIOM_EDGE_TLS_ISSUER: ${AXIOM_EDGE_TLS_ISSUER:-acme}
-      AXIOM_EDGE_ADMIN_ALLOW_CIDRS: ${AXIOM_EDGE_ADMIN_ALLOW_CIDRS:-127.0.0.1/32 ::1/128}
       AXIOM_EDGE_CONSOLE_ALLOW_CIDRS: ${AXIOM_EDGE_CONSOLE_ALLOW_CIDRS:-0.0.0.0/0 ::/0}
     ports:
       # The ACME HTTP challenge and the redirect to https, then https itself. TCP only: the Caddyfile serves HTTP/1.1 and
