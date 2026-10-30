@@ -201,6 +201,21 @@ func ReadSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
 		}
 	}
 	sortModels(snap.listed)
+	authors, err := q.ListAuthors(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	authorNames := make(map[string]string, len(authors))
+	for _, a := range authors {
+		authorNames[a.Slug] = a.Name
+	}
+	for id, m := range snap.models {
+		m.AuthorName = authorNames[m.Author]
+		if m.AuthorName == "" {
+			m.AuthorName = m.Author
+		}
+		snap.models[id] = m
+	}
 	names, err := q.ListNamesForSnapshot(ctx, tx)
 	if err != nil {
 		return nil, err

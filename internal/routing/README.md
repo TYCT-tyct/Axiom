@@ -36,7 +36,7 @@ func Decide(f Failure) Action // NextEntry | OtherCredential | ReturnToClient
 
 `Endpoint.Codename` 由供应商分组不可变的公开代号传入，`Override.OrderNames`、`OnlyNames`、`ExcludeNames` 直接在该快照上精确匹配；请求只有这一套名称选择器。预设的供应商顺序仍独立使用 `Preset.Order`。不能先把代号转成供应商 ID：同一家多个组的货源与倍率不同，按 ID 会扩大请求的允许集合。私有端点先做归属过滤，不进入排除原因。
 
-`Override.SortGlobal` 对应 `sort.partition: none`，跨模型整体排序后再处理实时健康，所有熔断时的最后备选仍保留指定顺序和性能偏好的优先级。`NoFallbacks` 有非空请求顺序时限制命名集合；没有顺序时每个模型仅保留健康排序后的首条，跨模型备选仍保留，整体排序也按模型去重。为自带端点保留试探条目前先按模型去重，同模型已有健康首选时不加入试探，避免挤掉跨模型备选；`TestProviderModelFallbackSurvivesOwnedProbe` 覆盖这一边界。预设的关闭回退与请求限制各自检查，不可互相放宽。`Override.RequireParameters`/`RequiredParameters` 来自网关的 `protocol.RequestParameters`，只含采样、输出上限和停止；能力参数已由 `Needs` 先过滤。候选的 `Endpoint.Parameters` 是模型规格的能力和方言推出的参数集合（与发现接口的 `supported_parameters` 同一份），`HasAll` 不过就记 `OverrideFilter`。清单外的参数网关在预留前 400，不进入这里。`TestProviderGroupFilters`、`TestProviderSortPartition`、`TestProviderLowestLatency`、`TestProviderRequireParameters` 覆盖分组、权限、预设、跨模型、独立延迟排序和参数要求。
+`Override.SortGlobal` 对应 `sort.partition: none`，跨模型整体排序后再处理实时健康，所有熔断时的最后备选仍保留指定顺序和性能偏好的优先级。`NoFallbacks` 有非空请求顺序时限制命名集合；没有顺序时每个模型仅保留健康排序后的首条，跨模型备选仍保留，整体排序也按模型去重。为自带端点保留试探条目前先按模型去重，同模型已有健康首选时不加入试探，避免挤掉跨模型备选；`TestProviderModelFallbackSurvivesOwnedProbe` 覆盖这一边界。预设的关闭回退与请求限制各自检查，不可互相放宽。`Override.RequireParameters`/`RequiredParameters` 来自网关的 `protocol.RequestParameters`，只含采样、输出上限和停止；能力参数已由 `Needs` 先过滤。候选的 `Endpoint.Parameters` 是模型规格的能力和方言推出的参数集合（与发现接口的 `supported_parameters` 同一份），`HasAll` 不过就记 `OverrideFilter`。清单外的参数网关在预留前 400，不进入这里。`TestProviderGroupFilters`、`TestProviderSortPartition`、`TestProviderLowestLatency`、`TestProviderRequireParameters` 覆盖分组、权限、预设、跨模型、独立延迟排序和参数要求。`Override.VerifiedOnly`（`:exacto` 设它）只保留 `Endpoint.Verified` 的候选：它在预设过滤之后、请求覆盖过滤之前判定，落选的记 `NotVerified`，是暂时原因，下一次真伪检测通过就会重新进入路线。
 
 ## 现在的输入类型
 
@@ -46,7 +46,7 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 |---|---|---|
 | `EndpointID`、`SupplierID`、`PresetID`、`AccountID`、`SiteID` | suppliers、accounts | 都是 `uuid.UUID` 之上的定义类型 |
 | `Admission` | accounts 的 `Admission` | 只取账户、站点、预设 ID、key 可用的模型 |
-| `Endpoint` | suppliers（分组 × 模型、凭证余额、凭证容量、出口数）、quality（熔断、健康度、质量、置信度、吞吐、延迟、工具错误率、实测取消）、catalog（最快输出速度 `OutputSpeed`、可上报的计费项 `Reports`、参数清单 `Parameters`）、billing（价格版本；`UnknownItem` 来自 `billing.UnknownItems`） | 快照重建时从各处合并成一份 |
+| `Endpoint` | suppliers（分组 × 模型、凭证余额、凭证容量、出口数）、quality（熔断、健康度、质量、置信度、吞吐、延迟、工具错误率、实测取消、`Verified`）、catalog（最快输出速度 `OutputSpeed`、可上报的计费项 `Reports`、参数清单 `Parameters`）、billing（价格版本；`UnknownItem` 来自 `billing.UnknownItems`） | 快照重建时从各处合并成一份 |
 | `Capacity` | suppliers 的 `Capacity` | 只有 `Full()` 一个方法的窄接口：快照持有供应商的实时视图，`Plan` 用它判断端点有没有并发位 |
 | `Failure`、`Scope` | suppliers 的 `Failure`、`Scope`（在 `suppliers/internal/adapter`，顺序相同） | 调用处转换 |
 | `Endpoint.Funds`、`Endpoint.Cost` | suppliers 的 `Routable.Funds` 与 `Schedule` | 原生余额与成本随同一次供应商快照传入；自动暂停状态由供应商共享、跨快照保留 |

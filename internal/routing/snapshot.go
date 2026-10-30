@@ -160,11 +160,14 @@ type Override struct {
 	SortGlobal                          bool // sort.partition none: rank across models
 	NoFallbacks                         bool // with an order, restrict to it; without one, retain one supplier per model
 	Sort                                *Strategy
-	Classes                             ClassSet  // when not zero, only these classes
-	Policies                            PolicySet // when not zero, only these policies
-	MaxPrice                            PriceLimit
-	MinThroughput                       float64
-	MaxLatency                          time.Duration
+	// VerifiedOnly keeps only endpoints quality verified as the model they claim; a request's :exacto sets it, and
+	// only an explicit provider.sort replaces it (docs/domains/quality.md「真伪检测」).
+	VerifiedOnly  bool
+	Classes       ClassSet  // when not zero, only these classes
+	Policies      PolicySet // when not zero, only these policies
+	MaxPrice      PriceLimit
+	MinThroughput float64
+	MaxLatency    time.Duration
 	// RequireParameters is provider.require_parameters: every parameter in RequiredParameters must be declared by the
 	// endpoint. The gateway fills both only when the member is true.
 	RequireParameters  bool

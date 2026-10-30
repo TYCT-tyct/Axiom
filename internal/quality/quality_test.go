@@ -51,6 +51,30 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+// TestMeasuredVerification: routing sees a pass only while it is recent and uncontradicted, and still learns when the
+// last one was after it ages out, so a never-checked endpoint differs from one that passed before.
+func TestMeasuredVerification(t *testing.T) {
+	m := New(nil)
+	id := suppliers.EndpointID{7}
+	at := t0.Add(time.Hour)
+	e := m.Live(id, 1)
+	e.mu.Lock()
+	e.verify = verification{passed: true, checked: at}
+	e.mu.Unlock()
+	if got := m.Measured(id, at); !got.Verified || got.VerifyConfidence != 1 || !got.VerifiedAt.Equal(at) {
+		t.Fatalf("a fresh pass: %+v", got)
+	}
+	if got := m.Measured(id, at.Add(verifyMaxAge+time.Second)); got.Verified || got.VerifyConfidence != 0 || !got.VerifiedAt.Equal(at) {
+		t.Fatalf("an expired pass: %+v", got)
+	}
+	e.mu.Lock()
+	e.verify.passed, e.verify.failures = false, 1
+	e.mu.Unlock()
+	if got := m.Measured(id, at); got.Verified || !got.VerifiedAt.Equal(at) {
+		t.Fatalf("a contradicted pass: %+v", got)
+	}
+}
+
 // TestMeasured: time to first token is sampled only for a short input, speed only for an answer that ended normally
 // with at least 50 tokens; each is a moving average whose first sample seeds it, and counts as measured from the fifth
 // sample until 30 minutes pass without one.

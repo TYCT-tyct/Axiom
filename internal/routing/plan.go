@@ -232,6 +232,8 @@ func check(c *candidate, n *need, price *candidatePrice) (reason Reason, visible
 	switch {
 	case !n.presetAllows(c, price):
 		return PresetFilter, true
+	case n.over.VerifiedOnly && !c.Verified:
+		return NotVerified, true
 	case !n.overrideAllows(c, price):
 		return OverrideFilter, true
 	case price.none():

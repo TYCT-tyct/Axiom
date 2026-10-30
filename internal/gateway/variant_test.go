@@ -73,10 +73,10 @@ func TestModelVariantsRoute(t *testing.T) {
 	r := newRig(t, func(o *rigOptions) {
 		o.endpoints = func(name string, e *routing.Endpoint) {
 			if name == "alpha-1" {
-				e.Throughput, e.Latency = 50, 100*time.Millisecond
+				e.Throughput, e.Latency, e.Quality = 50, 100*time.Millisecond, .5
 			}
 			if name == "alpha-2" {
-				e.Throughput, e.Latency = 100, 5*time.Second
+				e.Throughput, e.Latency, e.Quality = 100, 5*time.Second, 1
 			}
 		}
 	})
@@ -94,8 +94,10 @@ func TestModelVariantsRoute(t *testing.T) {
 		"the explicit sort replaces nitro":           {"acme/alpha:nitro", `"provider":{"sort":"price"},`, []routing.EndpointID{one, two}},
 		"the explicit sort replaces floor":           {"acme/alpha:floor", `"provider":{"sort":"throughput"},`, []routing.EndpointID{two, one}},
 		"an explicit sort that agrees":               {"acme/alpha:nitro", `"provider":{"sort":"throughput"},`, []routing.EndpointID{two, one}},
+		"exacto, quality first":                      {"acme/alpha:exacto", "", []routing.EndpointID{two, one}},
 		"exacto, replaced by the sort":               {"acme/alpha:exacto", `"provider":{"sort":"price"},`, []routing.EndpointID{one, two}},
 		"exacto, replaced by a variant":              {"acme/alpha:exacto:nitro", "", []routing.EndpointID{two, one}},
+		"an alternate exacto that matches":           {"acme/alpha:exacto", `"models":["acme/beta:exacto"],`, []routing.EndpointID{two, one, three}},
 		"thinking, which the request asks for":       {"acme/alpha:thinking", `"output_config":{"effort":"high"},`, []routing.EndpointID{one, two}},
 		"an alternate that ranks the same":           {"acme/alpha:nitro", `"models":["acme/beta:nitro"],`, []routing.EndpointID{two, one, three}},
 		"an alternate that is not a model":           {"acme/alpha:nitro", `"models":["acme/none:turbo","acme/beta"],`, []routing.EndpointID{two, one, three}},
@@ -131,8 +133,6 @@ func TestModelVariantsAreRefused(t *testing.T) {
 		status         int
 		code, text     string
 	}{
-		"exacto":                   {"acme/alpha:exacto", "", 400, "invalid_request", ":exacto"},
-		"exacto after a sort":      {"acme/alpha:nitro:exacto", "", 400, "invalid_request", ":exacto"},
 		"online":                   {"acme/alpha:online", "", 400, "invalid_request", ":online"},
 		"online with a sort":       {"acme/alpha:online", `"provider":{"sort":"price"},`, 400, "invalid_request", ":online"},
 		"free":                     {"acme/alpha:free", "", 400, "invalid_request", ":free"},
@@ -143,7 +143,6 @@ func TestModelVariantsAreRefused(t *testing.T) {
 		"a suffix nobody knows":    {"acme/alpha:turbo", "", 404, "model_not_found", "not a model variant"},
 		"a variant of nothing":     {"acme/none:nitro", "", 404, "model_not_found", ""},
 		"an alias":                 {"~acme/alpha-latest", "", 400, "invalid_request", "aliases"},
-		"an alternate's exacto":    {"acme/alpha", `"models":["acme/beta:exacto"],`, 400, "invalid_request", ":exacto"},
 		"an alternate's free":      {"acme/alpha", `"models":["acme/beta:free"],`, 400, "invalid_request", ":free"},
 		"an alternate's thinking":  {"acme/alpha", `"models":["acme/beta:thinking"],`, 400, "invalid_request", "reasoning"},
 		"an alternate's online":    {"acme/alpha:nitro", `"models":["acme/beta:online"],`, 400, "invalid_request", ":online"},
@@ -151,8 +150,8 @@ func TestModelVariantsAreRefused(t *testing.T) {
 		"an alternate's sort":      {"acme/alpha", `"models":["acme/beta:nitro"],`, 400, "invalid_request", "alternate"},
 		"an alternate's other":     {"acme/alpha:floor", `"models":["acme/beta:nitro"],`, 400, "invalid_request", "alternate"},
 		"an alternate's other too": {"acme/alpha", `"provider":{"sort":"price"},"models":["acme/beta:nitro"],`, 400, "invalid_request", "alternate"},
-		"an alternate's exacto, whatever the first name ranks": {"acme/alpha:nitro", `"models":["acme/beta:exacto"],`, 400, "invalid_request", ":exacto"},
-		"an alternate's exacto after the first name's floor":   {"acme/alpha:floor", `"models":["acme/alpha:exacto"],`, 400, "invalid_request", ":exacto"},
+		"an alternate's exacto, whatever the first name ranks": {"acme/alpha:nitro", `"models":["acme/beta:exacto"],`, 400, "invalid_request", "alternate"},
+		"an alternate's exacto after the first name's floor":   {"acme/alpha:floor", `"models":["acme/alpha:exacto"],`, 400, "invalid_request", "alternate"},
 		"a name longer than a record holds":                    {"acme/alpha" + strings.Repeat(":nitro", 32), "", 404, "model_not_found", "longer than"},
 		"a long name of a base nothing has":                    {strings.Repeat("a", 201), "", 404, "model_not_found", "longer than"},
 	} {
@@ -182,7 +181,7 @@ func TestCountTokensReadsVariants(t *testing.T) {
 		"online":                          {"acme/alpha:online", "", 400},
 		"free":                            {"acme/alpha:free", "", 400},
 		"an alias":                        {"~acme/x-latest", "", 400},
-		"exacto":                          {"acme/alpha:exacto", "", 400},
+		"exacto":                          {"acme/alpha:exacto", "", 200},
 		"exacto, replaced by the sort":    {"acme/alpha:exacto", `"provider":{"sort":"price"},`, 200},
 		"exacto, replaced by a variant":   {"acme/alpha:exacto:nitro", "", 200},
 		"thinking":                        {"acme/alpha:thinking", "", 400},
@@ -273,4 +272,35 @@ func TestAnAlternateWithAVariantServesWhenTheFirstModelCannot(t *testing.T) {
 		}
 	}
 	r.idle(1 << 30)
+}
+
+// TestExactoRoutesOnlyVerifiedEndpoints: :exacto keeps only endpoints quality verified as the model they claim, and
+// refuses with the documented 503 when none is, naming the reason, instead of falling back to an unverified endpoint.
+func TestExactoRoutesOnlyVerifiedEndpoints(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) {
+		o.endpoints = func(name string, e *routing.Endpoint) {
+			e.Verified = name == "alpha-2" || name == "beta-1"
+		}
+	})
+	a := r.newAccount(1e9)
+	route, resp, body := r.sendNamed(a, "acme/alpha:exacto", `"models":["acme/beta:exacto"],`)
+	if want := []routing.EndpointID{r.endpoints["alpha-2"].ID, r.endpoints["beta-1"].ID}; resp.StatusCode != http.StatusOK || !cmp.Equal(route, want) {
+		t.Fatalf("%d %s, route %v, want %v", resp.StatusCode, body, route, want)
+	}
+
+	none := newRig(t, func(o *rigOptions) {
+		o.endpoints = func(name string, e *routing.Endpoint) { e.Verified = false }
+	})
+	b := none.newAccount(1e9)
+	route, resp, body = none.sendNamed(b, "acme/alpha:exacto", "")
+	if code, _ := errorOf(t, body); resp.StatusCode != http.StatusServiceUnavailable || code != "no_endpoint" ||
+		!strings.Contains(body, "not_verified") || len(route) != 0 {
+		t.Fatalf("%d %s, route %v; want a 503 no_endpoint naming not_verified", resp.StatusCode, body, route)
+	}
+	if none.count(allRows) != 0 || len(none.calls()) != 0 {
+		t.Fatal("an unverified :exacto reserved or called")
+	}
+	r.idle(1 << 30)
+	none.idle(1 << 30)
 }

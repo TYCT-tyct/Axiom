@@ -63,6 +63,9 @@ func TestSnapshot(t *testing.T) {
 	if got := [3]catalog.Status{status(listed), status(retired), status(draft)}; got != [3]catalog.Status{catalog.StatusListed, catalog.StatusRetired, ""} {
 		t.Errorf("statuses of the listed, retired and draft models in the snapshot: %q", got)
 	}
+	if m, _ := snap.Model(listed); m.AuthorName != "ACME" {
+		t.Errorf("the author's display name is %q, want ACME", m.AuthorName)
+	}
 	priced := func(id catalog.ModelID) uuid.UUID {
 		p, _ := snap.ReferencePrice(id, "USD") // the zero price, with no id, when absent
 		return p.ID

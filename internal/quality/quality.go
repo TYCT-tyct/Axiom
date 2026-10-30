@@ -89,6 +89,13 @@ type Measures struct {
 	Throughput float64 // output tokens per second
 	Quality    float64 // 0 to 1: reliability and the measured time to first token and speed
 	Confidence float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
+	// Verified is set when a fingerprint check passed and is still recent (verifyMaxAge), with no contradiction
+	// since. An endpoint never checked is not verified; neither is one concluded fake (docs/domains/quality.md
+	//「真伪检测」). VerifiedAt is when the last check passed, kept after it ages out or is contradicted, and
+	// VerifyConfidence how much the pass still counts: 1 then, 0 at verifyMaxAge, and 0 whenever Verified is false.
+	Verified         bool
+	VerifiedAt       time.Time
+	VerifyConfidence float64
 }
 
 // Monitor keeps local endpoint evidence and live breaker state. Observe never accesses the database or allocates
@@ -125,6 +132,8 @@ type State struct {
 	speed       average // output tokens per second
 	samples     int     // counted outcomes, capped at scoreSamples: the confidence's evidence
 	sampled     time.Time
+	verify      verification // the last fingerprint check and its schedule
+	verifying   bool         // a verification generation is in flight
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -261,6 +270,11 @@ func (m *Monitor) Measured(id suppliers.EndpointID, now time.Time) Measures {
 	}
 	if v, ok := e.speed.measured(now); ok {
 		out.Throughput = v
+	}
+	out.Verified = e.verify.verified(now)
+	out.VerifyConfidence = e.verify.confidence(now)
+	if !e.verify.checked.IsZero() {
+		out.VerifiedAt = e.verify.checked
 	}
 	return out
 }
