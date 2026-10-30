@@ -259,17 +259,17 @@ func waivable(last AttemptResult) bool {
 	return last.Finish != FinishCancelled && (!delivered || zeroOutput(last))
 }
 
-// zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning and images
-// adds up to zero, and the finish was empty or an error. An output count the upstream never reported is a default
-// zero, not a reported one, so it proves nothing.
+// zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning, audio
+// and images adds up to zero, and the finish was empty or an error. An output count the upstream never reported is a
+// default zero, not a reported one, so it proves nothing.
 func zeroOutput(last AttemptResult) bool {
 	var output int64
 	for _, s := range last.Segments {
 		if !s.Reported.Has(catalog.ItemOutput) {
 			return false
 		}
-		// Image delivery is output even if the text count is zero. Audio retains its existing waiver policy.
-		output += s.Usage.Count(catalog.ItemOutput) + s.Usage.Count(catalog.ItemReasoning) + s.Usage.Count(catalog.ItemImageOut)
+		output += s.Usage.Count(catalog.ItemOutput) + s.Usage.Count(catalog.ItemReasoning) +
+			s.Usage.Count(catalog.ItemAudioOut) + s.Usage.Count(catalog.ItemImageOut)
 	}
 	return len(last.Segments) > 0 && output == 0 && (last.Finish == FinishNone || last.Finish == FinishError)
 }
