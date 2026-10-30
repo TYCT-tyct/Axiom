@@ -975,7 +975,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * The account's top-up orders
+         * @description Newest first, `limit` per page, continued with `next_cursor`. Only the account's own orders; another account's never appear. Each order carries its refunds, oldest first, so the page can show where a request stands without a second call. A node of the previous release sends no `refunds` and no `refund_allowed`; the page then shows refunds as unavailable instead of guessing.
+         */
+        get: operations["listOrders"];
         put?: never;
         /**
          * Place a top-up order
@@ -1052,6 +1056,28 @@ export interface paths {
          * @description The page's "I have paid" button. Asks the payment channel once whether the order was paid and credits it if so; the answer is the order as it is afterwards, so a payment that has not arrived yet leaves it waiting. The page shows success only when `state` is `paid`. Each order may be asked about once a minute (`rate_limited`, `Retry-After` 60). A channel that does not answer is `unavailable`; the payment is not lost, the callback or the next query credits it.
          */
         post: operations["verifyOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/orders/{order_id}/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for a refund of unused credits from an order
+         * @description The order page's refund request. It only works for an order paid through a merchant account that lets users request refunds, and only for the part of that order's paid credits that is neither spent, expired nor already frozen: `credits` is what the user asks to give back, and the answer's `credits` is what was actually frozen, which can be less. The cash quote is computed from the batch's own payment and the site's refund policy, never from the order's quote at the time. The request waits for a different administrator to approve it, so the answer's `state` is `pending_review`; the order keeps its state meanwhile. A channel that cannot refund, or an order whose merchant does not allow user requests, is `forbidden`; a second request while one is in flight is `conflict`; an amount with nothing refundable left is `unprocessable`. `Idempotency-Key` makes the request happen once per order: the same key with the same credits and reason returns the stored refund, and another request under it is `idempotency_key_reused`.
+         */
+        post: operations["requestRefund"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1326,6 +1352,28 @@ export interface components {
             floor: components["schemas"]["Money"];
             available: components["schemas"]["Money"];
             spent_this_month: components["schemas"]["Money"];
+            /** @description The credit batches that still hold something, oldest credit first, with what is left in each and when it stops counting. An account with nothing is an empty array. Read in the same snapshot as the balance: absent on a node of the previous release, when the allocation could not be brought up to date in bounded time, or when a transaction committed after the last replay. The page then shows this part as unavailable rather than a number from a different moment. */
+            batches?: components["schemas"]["CreditBatch"][];
+        };
+        /** @description Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this batch, not what the next charge will take. */
+        CreditBatch: {
+            /** @description The batch's own identity; paid credit uses the order's ID as the batch ID. */
+            id: string;
+            /**
+             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment.
+             * @enum {string}
+             */
+            source: "gift" | "paid";
+            amount: components["schemas"]["Money"];
+            remaining: components["schemas"]["Money"];
+            frozen: components["schemas"]["Money"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When what is left of the batch stops counting. Absent when it never expires.
+             */
+            expires_at?: string;
         };
         /**
          * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
@@ -1733,6 +1781,40 @@ export interface components {
              */
             expires_at: string;
             checkout?: components["schemas"]["Checkout"];
+            /** @description Whether this order's merchant account lets the account request refunds. Absent on a node of the previous release; the page then shows no refund action. True does not promise the channel can refund: the request itself still answers with the current policy. */
+            refund_allowed?: boolean;
+            /** @description The order's refunds, oldest first. Absent on a node of the previous release, and on responses that do not read them (creating, cancelling and verifying an order); the page reads the order again for them. */
+            refunds?: components["schemas"]["OrderRefund"][];
+        };
+        OrderList: {
+            data: components["schemas"]["Order"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description A refund's ID (TypeID), the refund number of channels that take one. */
+        RefundId: string;
+        /**
+         * @description `pending_review` waits for an administrator's approval; `processing` is with the payment channel and its result is not final; `succeeded` returned the cash and took the credits from the balance; `declined` returned the frozen credits and moved no cash.
+         * @enum {string}
+         */
+        RefundState: "pending_review" | "processing" | "succeeded" | "declined";
+        OrderRefund: {
+            id: components["schemas"]["RefundId"];
+            state: components["schemas"]["RefundState"];
+            credits: components["schemas"]["Money"];
+            /** @description The cash due back, in the currency the order was paid in, quoted from the batch's payment and the site's refund policy. */
+            amount: components["schemas"]["PayAmount"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When the refund reached `succeeded` or `declined`; absent while it is not final.
+             */
+            finished_at?: string;
+        };
+        RefundRequest: {
+            credits: components["schemas"]["Money"];
+            reason: string;
         };
     };
     responses: {
@@ -3448,6 +3530,35 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    listOrders: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the account's orders */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
     createOrder: {
         parameters: {
             query?: never;
@@ -3577,6 +3688,42 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    requestRefund: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A key the caller chooses for one intended refund, 1 to 128 of letters, digits and `._:-` (a UUID is fine). */
+                "Idempotency-Key": string;
+            };
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundRequest"];
+            };
+        };
+        responses: {
+            /** @description The refund, frozen and waiting for approval. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderRefund"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };
     };
