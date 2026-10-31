@@ -323,6 +323,11 @@ jobs:
       needs.changes.result == 'success' &&
       needs.changes.outputs.deploy == 'true'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    # cosign obtains a short-lived Fulcio certificate for this workflow and ref from GitHub's OIDC token, so no signing
+    # key is stored. Only the release job needs the token; every other job keeps the workflow's read-only default.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -340,7 +345,7 @@ jobs:
         timeout-minutes: 40
         env:
           RELEASE_DIR: ${{ runner.temp }}/release-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Retain release image and provenance
+      - name: Retain release image, signature and provenance
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
@@ -350,13 +355,34 @@ jobs:
           retention-days: 30
           compression-level: 0
 
+  # Signs a throwaway image with the release's keyless flow and proves the verifier accepts that digest while refusing
+  # a tampered one. Trains and main run it for the same reason they build the release: a signing change that only main
+  # uses must fail in the train that causes it. It needs the workflow's OIDC identity and writes to the public
+  # transparency log, so a pull request does not run it.
+  signing:
+    needs: changes
+    if: >-
+      github.event_name != 'pull_request' &&
+      !inputs.gate_stress &&
+      needs.changes.result == 'success' &&
+      needs.changes.outputs.docs_only != 'true'
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Sign a throwaway image and verify it
+        run: bash scripts/ci/signing-check.sh
+
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
-  # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy and select
-  # web and the vitals by path. Intentional skips still produce this required check.
+  # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy/signing and
+  # select web and the vitals by path. Intentional skips still produce this required check.
   build:
     # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
     name: build
-    needs: [changes, static, go-test, web, e2e, vitals, journey, bench, deploy]
+    needs: [changes, static, go-test, web, e2e, vitals, journey, bench, deploy, signing]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
@@ -376,6 +402,8 @@ jobs:
         run: test '${{ needs.vitals.result }}' = success
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.journey.result }}' = success
+      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+        run: test '${{ needs.signing.result }}' = success
       - if: github.ref == 'refs/heads/main' && !inputs.gate_stress
         run: test '${{ needs.deploy.result }}' = success
       - run: echo "every required job passed; only optional jobs were skipped"
