@@ -54,31 +54,46 @@ func TestPageExtractionIgnoresLayoutAndRejectsAmbiguity(t *testing.T) {
 	}
 }
 
+func TestLegacyPageExtractionKeepsAdjacentCellBoundaries(t *testing.T) {
+	body := `<h2>Start</h2><table><tr><td>Model</td><td>Input</td><td>Output</td></tr><tr><td>alpha</td><td>12</td><td>3</td></tr></table><p>End</p>`
+	got, err := legacyExtractPriceSection([]byte(body), "Start", "End")
+	if err != nil || got != "Model Input Output alpha 12 3" {
+		t.Fatalf("got %q, %v; want the version-1 cell boundaries", got, err)
+	}
+}
+
 // TestRecordedPricePagesSeparateTextRuns: a vendor lays a table cell out with a flex column or a display:block span, so inline
 // tags the browser stacks must not merge into one word; and a heading's anchor zero-width space is not content. The
 // fixtures are trimmed from the pages the 2026-10-31 acceptance run fetched (docs/domains/catalog.md「官方页面监测的落地边界（#281）」).
 func TestRecordedPricePagesSeparateTextRuns(t *testing.T) {
-	for _, tc := range []struct{ name, file, start, end, want string }{
+	for _, tc := range []struct{ name, file, start, end, want, legacy string }{
 		{
 			name:  "anthropic",
 			file:  "pages/anthropic-pricing.html",
 			start: "Pricing", end: "Cloud platform pricing",
-			want: "Model Input Claude Fable 5.1 For demanding reasoning and long-horizon agentic work $10 / MTok $0.10 / MTok for prompts up to 100,000 tokens Claude Haiku 5.5 For high-volume, latency-sensitive tasks $0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok",
+			want:   "Model Input Claude Fable 5.1 For demanding reasoning and long-horizon agentic work $10 / MTok $0.10 / MTok for prompts up to 100,000 tokens Claude Haiku 5.5 For high-volume, latency-sensitive tasks $0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok",
+			legacy: "Model Input Claude Fable 5.1For demanding reasoning and long-horizon agentic work $10 / MTok $0.10 / MTokfor prompts up to 100,000 tokens Claude Haiku 5.5For high-volume, latency-sensitive tasks $0.50 / MTokfor prompts over 100,000 tokens $2.50 / MTok",
 		},
 		{
 			name:  "deepseek",
 			file:  "pages/deepseek-pricing.html",
 			start: "Model Details", end: "Search & Fetch Pricing",
-			want: "MODEL deepseek-flash deepseek-v4-pro MODEL VERSION DeepSeek-V4.1-Flash-1017 DeepSeek-V4-Pro-0813 1M OUTPUT TOKENS OFF-PEAK $0.6 PEAK $1.2 OFF-PEAK $1.98 PEAK $3.96",
+			want:   "MODEL deepseek-flash deepseek-v4-pro MODEL VERSION DeepSeek-V4.1-Flash-1017 DeepSeek-V4-Pro-0813 1M OUTPUT TOKENS OFF-PEAK $0.6 PEAK $1.2 OFF-PEAK $1.98 PEAK $3.96",
+			legacy: "\u200b MODEL deepseek-flash deepseek-v4-pro MODEL VERSION DeepSeek-V4.1-Flash-1017 DeepSeek-V4-Pro-0813 1M OUTPUT TOKENS OFF-PEAK $0.6 PEAK $1.2 OFF-PEAK $1.98 PEAK $3.96",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := extractPriceSection(sample(t, tc.file), tc.start, tc.end)
+			body := sample(t, tc.file)
+			got, err := extractPriceSection(body, tc.start, tc.end)
 			if err != nil || got != tc.want {
 				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
 			}
 			if strings.ContainsRune(got, '\u200b') {
 				t.Fatal("a zero-width space reached the evidence")
+			}
+			legacy, err := legacyExtractPriceSection(body, tc.start, tc.end)
+			if err != nil || legacy != tc.legacy {
+				t.Fatalf("legacy got %q, %v; want %q", legacy, err, tc.legacy)
 			}
 		})
 	}
@@ -159,8 +174,8 @@ func (tc pageFetchCase) run(t *testing.T) {
 	got, err := fetchPage(ctx, client, PageTarget{Author: "acme", URL: server.URL + "/price", Currency: "USD", SectionStart: "Start", SectionEnd: "End"}, reserve, pause)
 	good := tc.wantPage && tc.pageStatus == 0 && tc.page == ""
 	if good {
-		if err != nil || got.Text != "alpha $1" {
-			t.Fatalf("content %q, error %v", got.Text, err)
+		if err != nil || got.Text != "alpha $1" || !got.LegacyOK || got.LegacyText != "alpha $1" {
+			t.Fatalf("content %q legacy %q (%v), error %v", got.Text, got.LegacyText, got.LegacyOK, err)
 		}
 	} else if err == nil {
 		t.Fatal("expected failed inspection")

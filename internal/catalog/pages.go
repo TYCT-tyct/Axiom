@@ -247,7 +247,7 @@ func savePageContent(ctx context.Context, tx pg.Tx, current CatalogWatchedPage, 
 	// An upgrade that changes only layout normalization is not a page change. Keeping the current snapshot also keeps
 	// official evidence and any open review pointed at the text a reviewer already saw; the first real change stores
 	// the new version.
-	if current.CurrentSnapshotID != nil && pageExtractorVersion != prior.ExtractorVersion && samePageContent(prior.Text, content.Text) {
+	if current.CurrentSnapshotID != nil && pageExtractorVersion != prior.ExtractorVersion && samePageContent(prior.Text, content) {
 		return recordFetchedPage(ctx, tx, current.ID, *current.CurrentSnapshotID, seconds)
 	}
 	snapshot, err := q.InsertPageSnapshot(ctx, tx, InsertPageSnapshotParams{PageID: current.ID, ExtractorVersion: pageExtractorVersion, Text: content.Text, TextSha256: content.SHA256[:]})

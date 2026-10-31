@@ -47,6 +47,28 @@ func TestPageSnapshotVersionCannotGoBackwards(t *testing.T) {
 	}
 }
 
+func TestPageExtractorUpgradeDoesNotCollapseAdjacentCells(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	s.seed("acme/alpha", basicSpec, basic)
+	page := s.watch(t.Context(), "acme", "USD")
+	prior := s.installSnapshot(t.Context(), page, 1, "Model Input Output alpha 1 23")
+	changed := "Model Input Output alpha 12 3"
+
+	if err := s.observeLegacy(t.Context(), page, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+	if got := query[int](s, platformScope, "SELECT count(*) FROM catalog.page_snapshot WHERE page_id=$1", page); got != 2 {
+		t.Fatalf("changed cells stored %d snapshots, want 2", got)
+	}
+	if got := query[int](s, platformScope, "SELECT extractor_version FROM catalog.page_snapshot s JOIN catalog.watched_page p ON p.current_snapshot_id=s.id WHERE p.id=$1", page); got != 2 {
+		t.Fatalf("current extractor version %d, want 2", got)
+	}
+	if got := query[uuid.UUID](s, platformScope, "SELECT previous_snapshot_id FROM catalog.review WHERE page_id=$1 AND status='open'", page); got != prior {
+		t.Fatalf("review baseline %s, want %s", got, prior)
+	}
+}
+
 func TestPageExtractorUpgradeWithSameContentKeepsSnapshot(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
@@ -54,7 +76,7 @@ func TestPageExtractorUpgradeWithSameContentKeepsSnapshot(t *testing.T) {
 	page := s.watch(t.Context(), "acme", "USD")
 	old := s.installSnapshot(t.Context(), page, 1, "alpha $1  \u200b")
 
-	if err := s.observe(t.Context(), page, "alpha $1"); err != nil {
+	if err := s.observeLegacy(t.Context(), page, "alpha $1", "alpha $1  \u200b"); err != nil {
 		t.Fatal(err)
 	}
 	if got := query[int](s, platformScope, "SELECT count(*) FROM catalog.page_snapshot WHERE page_id=$1", page); got != 1 {
@@ -75,7 +97,7 @@ func TestPageExtractorUpgradeWithChangedContentReviewsAgainstPriorSnapshot(t *te
 	page := s.watch(t.Context(), "acme", "USD")
 	old := s.installSnapshot(t.Context(), page, 1, "alpha $1")
 
-	if err := s.observe(t.Context(), page, "alpha $2"); err != nil {
+	if err := s.observeLegacy(t.Context(), page, "alpha $2", "alpha $2"); err != nil {
 		t.Fatal(err)
 	}
 	if got := query[int](s, platformScope, "SELECT count(*) FROM catalog.page_snapshot WHERE page_id=$1", page); got != 2 {
@@ -127,7 +149,7 @@ func TestPageExtractorUpgradeKeepsAnOpenReview(t *testing.T) {
 	}
 
 	// The newer extractor sees the same content as the snapshot under review: the review and its baseline stay.
-	if err := s.observe(t.Context(), page, "alpha $2"); err != nil {
+	if err := s.observeLegacy(t.Context(), page, "alpha $2", "alpha $2"); err != nil {
 		t.Fatal(err)
 	}
 	if got := query[uuid.UUID](s, platformScope, "SELECT current_snapshot_id FROM catalog.watched_page WHERE id=$1", page); got != changed {
@@ -138,7 +160,7 @@ func TestPageExtractorUpgradeKeepsAnOpenReview(t *testing.T) {
 	}
 
 	// A later real change is still compared with the pre-change baseline, so the unreviewed change is not lost.
-	if err := s.observe(t.Context(), page, "alpha $3"); err != nil {
+	if err := s.observeLegacy(t.Context(), page, "alpha $3", "alpha $3"); err != nil {
 		t.Fatal(err)
 	}
 	if got := query[string](s, platformScope, "SELECT removed || '/' || added FROM catalog.review WHERE page_id=$1 AND status='open'", page); got != "1/3" {
