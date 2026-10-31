@@ -139,21 +139,20 @@ WHERE id = @id;
 UPDATE accounts.users SET factor_version = factor_version + 1 WHERE id = @id;
 
 -- name: SetSessionRecoveryCodes :exec
--- Sealed codes for the console to read once, when the answer that made them is a redirect (a provider link).
+-- Codes for the console to read once, encrypted under the session token, when the answer that made them is a redirect
+-- (a provider link).
 UPDATE accounts.sessions
-SET recovery_codes_ciphertext = @ciphertext, recovery_codes_nonce = @nonce,
-    recovery_codes_wrapped_dek = @wrapped_dek, recovery_codes_key_version = @key_version
+SET recovery_codes_ciphertext = @ciphertext, recovery_codes_nonce = @nonce
 WHERE id = @id;
 
 -- name: LockSessionRecoveryCodes :one
 -- The row lock is held until the clearing update in the same transaction, so two calls cannot both read the codes.
-SELECT recovery_codes_ciphertext, recovery_codes_nonce, recovery_codes_wrapped_dek, recovery_codes_key_version
+SELECT recovery_codes_ciphertext, recovery_codes_nonce
 FROM accounts.sessions WHERE id = @id AND recovery_codes_ciphertext IS NOT NULL FOR UPDATE;
 
 -- name: ClearSessionRecoveryCodes :exec
 UPDATE accounts.sessions
-SET recovery_codes_ciphertext = NULL, recovery_codes_nonce = NULL,
-    recovery_codes_wrapped_dek = NULL, recovery_codes_key_version = NULL
+SET recovery_codes_ciphertext = NULL, recovery_codes_nonce = NULL
 WHERE id = @id;
 
 -- name: InsertRecoveryCode :exec

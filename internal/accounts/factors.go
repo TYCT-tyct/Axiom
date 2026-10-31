@@ -2,6 +2,9 @@ package accounts
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
@@ -315,7 +318,7 @@ func (s *Service) regenerateRecoveryCodes(ctx context.Context, p Principal, c Fa
 		if changed, err := s.queries.AdvanceTOTP(ctx, tx, AdvanceTOTPParams{Step: step, ID: user}); err != nil || changed != 1 {
 			return errors.Join(err, ErrBadCode)
 		}
-		return s.queries.BumpFactorVersion(ctx, tx, user)
+		return nil
 	})
 }
 
@@ -362,8 +365,8 @@ type factorFinish struct {
 	// totpOn says the user has TOTP after the change, so new recovery codes are made. It is not locked.Mfa: enabling
 	// TOTP turns it on in this change.
 	totpOn bool
-	// sealOnSession seals the codes on the new session for the console to read once, for a change whose answer is a
-	// redirect (a provider link) and cannot carry them. Unread codes die with the session.
+	// sealOnSession keeps the codes on the new session, encrypted under its token, for the console to read once: a
+	// provider link answers with a redirect and cannot carry them. Unread codes die with the session.
 	sealOnSession bool
 }
 
@@ -390,11 +393,12 @@ func (s *Service) finishFactorChange(ctx context.Context, tx pg.Tx, locked LockU
 		return Issued{}, nil, err
 	}
 	if f.sealOnSession && len(codes) > 0 {
-		sealed := s.keyring.Seal(secret.New(strings.Join(codes, "\n")), recoveryCodesLocation(issued.session))
-		version := int64(sealed.KeyVersion)
+		ciphertext, nonce, err := sealRecoveryCodes(issued.Token, issued.session, codes)
+		if err != nil {
+			return Issued{}, nil, err
+		}
 		if err := s.queries.SetSessionRecoveryCodes(ctx, tx, SetSessionRecoveryCodesParams{
-			ID: issued.session, Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce,
-			WrappedDek: sealed.WrappedDEK, KeyVersion: &version,
+			ID: issued.session, Ciphertext: ciphertext, Nonce: nonce,
 		}); err != nil {
 			return Issued{}, nil, err
 		}
@@ -402,19 +406,65 @@ func (s *Service) finishFactorChange(ctx context.Context, tx pg.Tx, locked LockU
 	return issued, codes, nil
 }
 
-// recoveryCodesLocation seals the codes a redirect could not return to the session that will show them.
-func recoveryCodesLocation(session uuid.UUID) secret.Location {
-	return secret.Location{Table: "accounts.sessions", RowID: session.String(), Purpose: "recovery_codes_display"}
+// recoveryCodesKey derives the key the codes a redirect cannot return are encrypted under, from the session token the
+// browser holds: the row keeps ciphertext the database alone cannot open, and no key-ring key is referenced, so the
+// codes are nothing to rewrap or retire. The associated data binds them to the session row.
+func recoveryCodesKey(token string, session uuid.UUID) (cipher.AEAD, []byte, error) {
+	mac := hmac.New(sha256.New, []byte(token))
+	mac.Write([]byte("axiom/accounts/recovery-codes/v1"))
+	block, err := aes.NewCipher(mac.Sum(nil))
+	if err != nil {
+		return nil, nil, fmt.Errorf("derive the recovery-code key: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, nil, fmt.Errorf("make the recovery-code cipher: %w", err)
+	}
+	return aead, []byte("accounts.sessions/" + session.String() + "/recovery_codes"), nil
+}
+
+func sealRecoveryCodes(token string, session uuid.UUID, codes []string) (ciphertext, nonce []byte, err error) {
+	aead, aad, err := recoveryCodesKey(token, session)
+	if err != nil {
+		return nil, nil, err
+	}
+	nonce = make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, nil, fmt.Errorf("make a recovery-code nonce: %w", err)
+	}
+	return aead.Seal(nil, nonce, []byte(strings.Join(codes, "\n")), aad), nonce, nil
+}
+
+func openRecoveryCodes(token string, session uuid.UUID, ciphertext, nonce []byte) ([]string, error) {
+	aead, aad, err := recoveryCodesKey(token, session)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := aead.Open(nil, nonce, ciphertext, aad)
+	if err != nil {
+		return nil, fmt.Errorf("open the recovery codes left for the session: %w", err)
+	}
+	return strings.Split(string(opened), "\n"), nil
 }
 
 // TakePendingRecoveryCodes returns the new codes a link left on p's session and clears them in the same transaction,
 // so only the first call gets them. None when the session has none, including when another call already took them.
-func (s *Service) TakePendingRecoveryCodes(ctx context.Context, p Principal) ([]string, error) {
+// The request is what holds the session token the codes are encrypted under; a token that does not open them means
+// the row is not this session's and is refused, not shown.
+func (s *Service) TakePendingRecoveryCodes(ctx context.Context, r *http.Request, p Principal) ([]string, error) {
 	if p.user == (UserID{}) || p.session == (SessionID{}) || p.Pending() {
 		return nil, ErrNoSession
 	}
+	d, _, err := s.domain(r.Host)
+	if err != nil {
+		return nil, err
+	}
+	token, err := sessionToken(r, d)
+	if err != nil {
+		return nil, err
+	}
 	var codes []string
-	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+	err = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
 		row, err := s.queries.LockSessionRecoveryCodes(ctx, tx, uuid.UUID(p.session))
 		if errors.Is(err, pg.ErrNoRows) {
 			return nil
@@ -422,17 +472,9 @@ func (s *Service) TakePendingRecoveryCodes(ctx context.Context, p Principal) ([]
 		if err != nil {
 			return err
 		}
-		if row.RecoveryCodesKeyVersion == nil {
-			return nil
+		if codes, err = openRecoveryCodes(token, uuid.UUID(p.session), row.RecoveryCodesCiphertext, row.RecoveryCodesNonce); err != nil {
+			return err
 		}
-		opened, err := s.keyring.Open(secret.Sealed{
-			Ciphertext: row.RecoveryCodesCiphertext, Nonce: row.RecoveryCodesNonce,
-			WrappedDEK: row.RecoveryCodesWrappedDek, KeyVersion: uint32(*row.RecoveryCodesKeyVersion), // #nosec G115 -- the column holds a uint32
-		}, recoveryCodesLocation(uuid.UUID(p.session)))
-		if err != nil {
-			return fmt.Errorf("open the recovery codes left for the session: %w", err)
-		}
-		codes = strings.Split(opened.Reveal(), "\n")
 		return s.queries.ClearSessionRecoveryCodes(ctx, tx, uuid.UUID(p.session))
 	})
 	if err != nil {

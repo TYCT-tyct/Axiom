@@ -301,11 +301,11 @@ func (s *Service) sessionOf(ctx context.Context, r *http.Request) (SessionTenant
 	if err != nil {
 		return SessionTenantRow{}, nil, domain{}, err
 	}
-	cookie, err := r.Cookie(cookieName(d.origin))
+	token, err := sessionToken(r, d)
 	if err != nil {
-		return SessionTenantRow{}, nil, domain{}, ErrNoSession
+		return SessionTenantRow{}, nil, domain{}, err
 	}
-	hash := sha256.Sum256([]byte(cookie.Value))
+	hash := sha256.Sum256([]byte(token))
 	var found []SessionTenantRow
 	if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
 		found, err = s.queries.SessionTenant(ctx, tx, SessionTenantParams{
@@ -319,6 +319,15 @@ func (s *Service) sessionOf(ctx context.Context, r *http.Request) (SessionTenant
 		return SessionTenantRow{}, nil, d, ErrNoSession
 	}
 	return found[0], hash[:], d, nil
+}
+
+// sessionToken is the session cookie's value: the bearer secret the row itself keeps only as a hash.
+func sessionToken(r *http.Request, d domain) (string, error) {
+	cookie, err := r.Cookie(cookieName(d.origin))
+	if err != nil {
+		return "", ErrNoSession
+	}
+	return cookie.Value, nil
 }
 
 // SignOut revokes p's session.

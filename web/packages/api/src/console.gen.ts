@@ -385,7 +385,7 @@ export interface paths {
         put?: never;
         /**
          * Take the recovery codes a provider link left for this session
-         * @description A provider link answers with a redirect, so the new recovery codes it makes cannot come back in that response. They are sealed on the session the link issued, and this call reads them under the session row's lock and clears them in the same transaction: the first call returns them and later calls return none. Needs a signed-in console session; the codes belong to it.
+         * @description A provider link answers with a redirect, so the new recovery codes it makes cannot come back in that response. They are kept on the session the link issued, encrypted under its token, and this call reads them under the session row's lock and clears them in the same transaction: the first call returns them and later calls return none. Needs a signed-in console session; the codes belong to it.
          */
         post: operations["takeRecoveryCodes"];
         delete?: never;

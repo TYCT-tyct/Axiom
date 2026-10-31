@@ -185,7 +185,7 @@ func (c consoleAPI) RegenerateRecoveryCodes(ctx context.Context, request console
 // TakeRecoveryCodes reads and clears the codes a provider link left on this session: the link's answer was a redirect,
 // so this is where the console gets them, once.
 func (c consoleAPI) TakeRecoveryCodes(ctx context.Context, _ consoleapi.TakeRecoveryCodesRequestObject) (consoleapi.TakeRecoveryCodesResponseObject, error) {
-	codes, err := c.accounts.TakePendingRecoveryCodes(ctx, callOf(ctx).principal)
+	codes, err := c.accounts.TakePendingRecoveryCodes(ctx, callOf(ctx).r, callOf(ctx).principal)
 	if err != nil {
 		return nil, err
 	}

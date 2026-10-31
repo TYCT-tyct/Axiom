@@ -54,8 +54,7 @@ func (q *Queries) BumpFactorVersion(ctx context.Context, db DBTX, id uuid.UUID) 
 
 const clearSessionRecoveryCodes = `-- name: ClearSessionRecoveryCodes :exec
 UPDATE accounts.sessions
-SET recovery_codes_ciphertext = NULL, recovery_codes_nonce = NULL,
-    recovery_codes_wrapped_dek = NULL, recovery_codes_key_version = NULL
+SET recovery_codes_ciphertext = NULL, recovery_codes_nonce = NULL
 WHERE id = $1
 `
 
@@ -363,27 +362,20 @@ func (q *Queries) ListSessions(ctx context.Context, db DBTX, arg ListSessionsPar
 }
 
 const lockSessionRecoveryCodes = `-- name: LockSessionRecoveryCodes :one
-SELECT recovery_codes_ciphertext, recovery_codes_nonce, recovery_codes_wrapped_dek, recovery_codes_key_version
+SELECT recovery_codes_ciphertext, recovery_codes_nonce
 FROM accounts.sessions WHERE id = $1 AND recovery_codes_ciphertext IS NOT NULL FOR UPDATE
 `
 
 type LockSessionRecoveryCodesRow struct {
 	RecoveryCodesCiphertext []byte
 	RecoveryCodesNonce      []byte
-	RecoveryCodesWrappedDek []byte
-	RecoveryCodesKeyVersion *int64
 }
 
 // The row lock is held until the clearing update in the same transaction, so two calls cannot both read the codes.
 func (q *Queries) LockSessionRecoveryCodes(ctx context.Context, db DBTX, id uuid.UUID) (LockSessionRecoveryCodesRow, error) {
 	row := db.QueryRow(ctx, lockSessionRecoveryCodes, id)
 	var i LockSessionRecoveryCodesRow
-	err := row.Scan(
-		&i.RecoveryCodesCiphertext,
-		&i.RecoveryCodesNonce,
-		&i.RecoveryCodesWrappedDek,
-		&i.RecoveryCodesKeyVersion,
-	)
+	err := row.Scan(&i.RecoveryCodesCiphertext, &i.RecoveryCodesNonce)
 	return i, err
 }
 
@@ -775,28 +767,20 @@ func (q *Queries) SessionTenant(ctx context.Context, db DBTX, arg SessionTenantP
 
 const setSessionRecoveryCodes = `-- name: SetSessionRecoveryCodes :exec
 UPDATE accounts.sessions
-SET recovery_codes_ciphertext = $1, recovery_codes_nonce = $2,
-    recovery_codes_wrapped_dek = $3, recovery_codes_key_version = $4
-WHERE id = $5
+SET recovery_codes_ciphertext = $1, recovery_codes_nonce = $2
+WHERE id = $3
 `
 
 type SetSessionRecoveryCodesParams struct {
 	Ciphertext []byte
 	Nonce      []byte
-	WrappedDek []byte
-	KeyVersion *int64
 	ID         uuid.UUID
 }
 
-// Sealed codes for the console to read once, when the answer that made them is a redirect (a provider link).
+// Codes for the console to read once, encrypted under the session token, when the answer that made them is a redirect
+// (a provider link).
 func (q *Queries) SetSessionRecoveryCodes(ctx context.Context, db DBTX, arg SetSessionRecoveryCodesParams) error {
-	_, err := db.Exec(ctx, setSessionRecoveryCodes,
-		arg.Ciphertext,
-		arg.Nonce,
-		arg.WrappedDek,
-		arg.KeyVersion,
-		arg.ID,
-	)
+	_, err := db.Exec(ctx, setSessionRecoveryCodes, arg.Ciphertext, arg.Nonce, arg.ID)
 	return err
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"uuid"
 
 	"axiom/internal/accounts"
 )
@@ -64,17 +65,18 @@ func TestLinkAndUnlinkReplaceRecoveryCodes(t *testing.T) {
 	if !out.Linked || out.Issued == nil {
 		t.Fatalf("link: %+v", out)
 	}
-	linked, err := f.s.Authenticate(t.Context(), cookieRequest(t, f.s, *out.Issued), client)
+	request := cookieRequest(t, f.s, *out.Issued)
+	linked, err := f.s.Authenticate(t.Context(), request, client)
 	if err != nil {
 		t.Fatal(err)
 	}
-	taken, err := f.s.TakePendingRecoveryCodes(t.Context(), linked)
+	taken, err := f.s.TakePendingRecoveryCodes(t.Context(), request, linked)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.x.usesReplacementCodes(t, codes, taken)
 	// Reading clears: the codes exist in the browser exactly once.
-	if again, err := f.s.TakePendingRecoveryCodes(t.Context(), linked); err != nil || len(again) != 0 {
+	if again, err := f.s.TakePendingRecoveryCodes(t.Context(), request, linked); err != nil || len(again) != 0 {
 		t.Fatalf("a second take: %v, %d codes", err, len(again))
 	}
 
@@ -112,4 +114,30 @@ func TestPasskeyChangesReplaceRecoveryCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	x.usesReplacementCodes(t, added, removed)
+}
+
+// TestRevokedSessionDropsPendingCodes: codes left unread must not outlive their session. The clearing lives in the
+// database, so a revocation that names only revoked_at -- the one an older node sends -- drops them too.
+func TestRevokedSessionDropsPendingCodes(t *testing.T) {
+	t.Parallel()
+	f := newOAuthFixture(t, 42)
+	oauthSite(t, f.x, f.s, "github")
+	verified, session, _ := enableTOTPForTest(t, f.s, f.x, f.x.signIn(t, console))
+	state, _ := startURL(t, f.s, &verified)
+	out, err := f.s.CompleteOAuth(t.Context(), callback(t, f.s, state, "", &session), "github", "the-code", state, client, "test")
+	if err != nil || !out.Linked || out.Issued == nil {
+		t.Fatalf("link: %+v %v", out, err)
+	}
+	id := uuid.UUID(out.Issued.SessionID()).String()
+	left := "SELECT CASE WHEN recovery_codes_ciphertext IS NOT NULL THEN 'yes' ELSE 'no' END FROM accounts.sessions WHERE id='" + id + "'"
+	if got := texts(t, f.x.db, platform, left); len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("codes left on the session: %v", got)
+	}
+	if _, err := exec(t, f.x.db, platform, "UPDATE accounts.sessions SET revoked_at=now() WHERE id='"+id+"'"); err != nil {
+		t.Fatal(err)
+	}
+	clear := "SELECT CASE WHEN recovery_codes_ciphertext IS NULL AND recovery_codes_nonce IS NULL THEN 'yes' ELSE 'no' END FROM accounts.sessions WHERE id='" + id + "'"
+	if got := texts(t, f.x.db, platform, clear); len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("codes after revocation: %v", got)
+	}
 }
