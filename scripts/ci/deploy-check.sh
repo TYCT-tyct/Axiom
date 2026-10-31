@@ -68,6 +68,10 @@ clean_stale
 
 if [ -n "${CI_DEPLOY_IMAGE:-}" ]; then
   [[ "$CI_DEPLOY_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "::error::release deployment requires a digest"; exit 1; }
+  # The signature and its workflow identity are checked before anything pulls or starts the image; a tampered digest,
+  # an unsigned image, or a signature from another workflow or ref stops the deployment here.
+  RELEASE_ALLOW_INSECURE_REGISTRY=true \
+    bash "$(dirname "${BASH_SOURCE[0]}")/verify-release.sh" "$CI_DEPLOY_IMAGE" "${CI_DEPLOY_RELEASE:-}"
   built="${CI_DEPLOY_VERSION:?release version is required}"
 else
   just web-embed
