@@ -33,6 +33,22 @@ func TestClientAppOf(t *testing.T) {
 	}
 }
 
+// TestTrailUsesTheCallStart: the log's `at` is the call's arrival, not the later instant the session began executing, so
+// it is the same instant the reservation wrote.
+func TestTrailUsesTheCallStart(t *testing.T) {
+	t.Parallel()
+	before := time.Date(2026, 10, 31, 11, 59, 59, 990_000_000, time.UTC)
+	after := before.Add(20 * time.Millisecond)
+	s := &session{c: &Call{At: before}, req: &http.Request{Header: http.Header{}}, start: after}
+	tr := s.trail()
+	if !tr.at.Equal(before) {
+		t.Errorf("the log starts at %s, want the call's start %s", tr.at, before)
+	}
+	if !tr.start.Equal(after) {
+		t.Errorf("execution starts at %s, want %s", tr.start, after)
+	}
+}
+
 // TestAttributionOf: the three app-attribution headers are kept as the client's name for its application, cleaned and
 // bounded; a value that cannot be stored never reaches the column that way.
 func TestAttributionOf(t *testing.T) {

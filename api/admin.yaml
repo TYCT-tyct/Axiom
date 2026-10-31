@@ -23,6 +23,7 @@ info:
     `Cache-Control: no-store`.
 tags:
   - {name: Calls, description: "Support summaries and operator traces."}
+  - {name: Reports, description: "The operations dashboard: calls, revenue, cost and cash over a window."}
   - {name: Audit, description: "Immutable audit search."}
   - {name: Session, description: "Sign-in, two-step verification and the current session."}
   - {name: Site, description: "Site settings."}
@@ -73,6 +74,20 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: model
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      - name: status
+        in: query
+        schema:
+          $ref: '#/components/schemas/AdminCallStatus'
+      - name: site_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/SiteId'
       responses:
         '200':
           description: Result
@@ -114,6 +129,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminCallTrace'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/reports/overview:
+    get:
+      operationId: getOperationsOverview
+      tags:
+      - Reports
+      summary: The site's calls, errors, revenue, cost and cash over a window, with its busiest accounts and models.
+      description: >-
+        The operations dashboard of the site the request was made on (docs/domains/operations.md「运营看板」). Calls and
+        errors are the call log's, over the calls that started in the window. Revenue is what the window's settled calls
+        were charged and cost is what the supplier charged the platform where billing could convert it, both in the
+        site's accounting currency; `unknown_cost_calls` counts the calls whose cost is unknown, and their cost is not in `cost`. Cash is
+        the ledger's cash book — paid credit in and refunds out, in each payment currency — so it is neither revenue nor
+        the call log's charge. The window defaults to 24 hours and is at most 31 days.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - *admin_path_id001
+      - *admin_path_id002
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationsOverview'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1131,6 +1183,40 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PaymentOrderList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/cash:
+    get:
+      operationId: listCashMovements
+      tags: [Payments]
+      summary: The cash behind the dashboard, by ledger time
+      description: >-
+        One site's cash movements in a window, newest first: paid credits in and refunds out, with the batch, order or
+        offline channel they came from. The time is the ledger transaction's, not an order's creation time, so a
+        refund of an older order and an offline top-up are both in the window the dashboard counted. `since` is
+        inclusive and `until` exclusive; `account_id` narrows to one payer. Pages use `cursor` and `limit`; money is
+        exact text in the payment's currency, and the site's accounting currency where the ledger leaves it NULL.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: account_id, in: query, schema: {$ref: "#/components/schemas/AccountId"}}
+        - {name: since, in: query, schema: {type: string, format: date-time}, description: "Transactions at or after this time."}
+        - {name: until, in: query, schema: {type: string, format: date-time}, description: "Transactions before this time."}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of the site's cash movements, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CashMovementList"}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -3805,6 +3891,12 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    AdminCallStatus:
+      type: string
+      enum: [ok, error]
+      description: >-
+        The result of a call: `ok` when its error_kind is empty, `error` otherwise. An old node may leave the filter echo
+        out of a list.
     AdminCallSummary:
       type: object
       additionalProperties: false
@@ -3835,6 +3927,11 @@ components:
           items:
             $ref: '#/components/schemas/AdminCallSummary'
         next_cursor: *admin_schema_id001
+        model_filter: *admin_schema_id001
+        status_filter:
+          $ref: '#/components/schemas/AdminCallStatus'
+        site_filter:
+          $ref: '#/components/schemas/SiteId'
     AdminAttempt:
       type: object
       additionalProperties: false
@@ -4224,6 +4321,29 @@ components:
           type: array
           items: {$ref: "#/components/schemas/PaymentOrder"}
         next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    CashMovement:
+      type: object
+      description: >-
+        One cash entry of the ledger: a paid credit or a refund. Every field is optional during rolling deployment.
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        kind: {type: string, enum: [credit, refund]}
+        at: {type: string, format: date-time, description: "The transaction's time, which is what the dashboard's window counted."}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        batch_id: {$ref: "#/components/schemas/Uuid"}
+        amount: {$ref: "#/components/schemas/Money"}
+        order_id:
+          allOf: [{$ref: "#/components/schemas/OrderId"}]
+          description: "The order behind an online payment; absent for an offline channel."
+        offline_channel: {type: string, description: "Where an offline payment was received; absent for an online order."}
+    CashMovementList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/CashMovement"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     Merchant:
       type: object
       description: A merchant account of a payment channel, without its secrets. Every field is optional during rolling deployment.
@@ -4554,15 +4674,69 @@ components:
         - internal
         - not_implemented
         - unavailable
+    OperationsOverview:
+      type: object
+      additionalProperties: false
+      properties:
+        site_id:
+          $ref: '#/components/schemas/SiteId'
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+        revenue:
+          $ref: '#/components/schemas/Money'
+        cost:
+          $ref: '#/components/schemas/Money'
+        unknown_cost_calls: {type: integer, format: int64}
+        cash:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashAmount'
+        top_accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverviewAccount'
+        top_models:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverviewModel'
+    OverviewAccount:
+      type: object
+      additionalProperties: false
+      properties:
+        account_id:
+          $ref: '#/components/schemas/AccountId'
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+    OverviewModel:
+      type: object
+      additionalProperties: false
+      properties:
+        model: {type: string}
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+    CashAmount:
+      type: object
+      required: [amount, currency]
+      description: >-
+        An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one
+        unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the
+        same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it, and a report's sum can
+        be wider than 64 bits.
+      properties:
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]*)$', maxLength: 39, example: "1500000000"}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
     Money:
       type: object
       required: [amount, currency]
       description: >-
         An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of
         one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round
-        above 2^53 (about 9 million units) in the browser.
+        above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than
+        64 bits; an amount that is written to the ledger must still fit 64 bits.
       properties:
-        amount: {type: string, pattern: '^-?(0|[1-9][0-9]{0,18})$', example: "1500000000"}
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]*)$', maxLength: 39, example: "1500000000"}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
     Version:
       type: object

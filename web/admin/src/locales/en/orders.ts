@@ -85,4 +85,16 @@ export default {
       failed: "Declined",
     },
   },
+  cash: {
+    title: "Cash movements",
+    description:
+      "The ledger's cash in and out for the dashboard's window, by transaction time: a refund of an older order and an offline top-up both appear where the dashboard counted them.",
+    back: "Back to orders",
+    emptyTitle: "No cash in this window",
+    emptyBody: "A paid top-up or a refund appears here at the time the ledger recorded it.",
+    col: { at: "Time", kind: "Movement", account: "Account", amount: "Cash", source: "Source" },
+    kind: { credit: "Top-up", refund: "Refund" },
+    online: "Order {{order}}",
+    offline: "Offline: {{channel}}",
+  },
 } as const;

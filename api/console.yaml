@@ -2358,9 +2358,10 @@ components:
       description: >-
         An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of
         one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round
-        above 2^53 (about 9 million units) in the browser.
+        above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than
+        64 bits; an amount that is written to the ledger must still fit 64 bits.
       properties:
-        amount: {type: string, pattern: '^-?(0|[1-9][0-9]{0,18})$', example: "1500000000"}
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]*)$', maxLength: 39, example: "1500000000"}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
     Version:
       type: object

@@ -51,10 +51,28 @@ FROM d;
 -- name: InsertReservation :exec
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
-        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates, price_versions)
+        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates,
+        price_versions)
     VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
         @workspace_window, @key_window, 1, @amount, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @lifetime_seconds::float8),
         @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions)
+), balance AS (
+    UPDATE billing.balances b SET reserved = b.reserved + @amount WHERE b.account_id = @account_id
+)
+INSERT INTO billing.spend AS s (subject, window_start, site_id, account_id, reserved)
+VALUES (@workspace_id, @workspace_window, @site_id, @account_id, @amount),
+    (@key_id, @key_window, @site_id, @account_id, @amount)
+ON CONFLICT (subject, window_start) DO UPDATE SET reserved = s.reserved + excluded.reserved;
+
+-- name: InsertReservationAt :exec
+WITH reservation AS (
+    INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
+        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates,
+        price_versions, created_at)
+    VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
+        @workspace_window, @key_window, 1, @amount, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @lifetime_seconds::float8),
+        @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions,
+        to_timestamp(sqlc.arg(created_at_us)::bigint / 1000000.0))
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + @amount WHERE b.account_id = @account_id
 )
