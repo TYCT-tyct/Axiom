@@ -15,6 +15,9 @@ export type AdminState = AuthState & {
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
   logo: Schemas["SiteLogoView"];
+  // The public brand's name and logo address; the server gives the logo as a path, the settings preview as a data URL.
+  brandName?: string;
+  logoUrl?: string;
   tiers: Schemas["TierRef"][];
   users: Schemas["UserSummary"][];
   accounts: Map<string, Schemas["AccountDetail"]>;
