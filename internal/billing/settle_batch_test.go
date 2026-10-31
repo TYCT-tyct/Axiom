@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -52,6 +53,105 @@ func TestSettleBatchBasics(t *testing.T) {
 	b.balanced()
 }
 
+// TestSettleBatchIsolatesADataError: EndReservationBatch is one statement, so a data error in one item's spend window
+// has no index. The batch must fall back to the single path to name that item, commit the peers it can, and leave the
+// peer charged once.
+func TestSettleBatchIsolatesADataError(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 1000, 0, Config{})
+	failing := b.admitted
+	failing.Workspace, failing.Key = uuid.NewV7(), uuid.NewV7()
+	failed, err := b.reserve(failing, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := b.hold(1)
+	b.sql(fmt.Sprintf("UPDATE billing.spend SET spent = 9223372036854775807 WHERE subject IN ('%s', '%s')", failing.Workspace, failing.Key))
+	o := outcome(Committed, FinishStop, used(t, 1, 0, 0))
+
+	_, _, err = b.billing.SettleBatch(t.Context(), b.admitted.Scope, []Settlement{{Hold: failed, Outcome: o}, {Hold: peer, Outcome: o}})
+	var work *BatchWorkError
+	if !errors.As(err, &work) || work.Index != 0 {
+		t.Fatalf("SettleBatch error %v, want the first item's BatchWorkError", err)
+	}
+	if state := pg.SQLState(work.Err); state != "22003" {
+		t.Errorf("the first item's SQL state %q, want 22003", state)
+	}
+	// The peer was committed by the fallback; retrying it is the same stored Final and writes nothing more.
+	f, err := b.billing.Settle(t.Context(), peer, o)
+	if err != nil || f.Charged.CeilAmount() != 1 {
+		t.Fatalf("retrying the peer: %+v, %v", f, err)
+	}
+	if n := b.count(fmt.Sprintf("SELECT count(*) FROM billing.transactions WHERE request_id = '%s' AND kind = 'settle'", peer.id)); n != 1 {
+		t.Errorf("the peer has %d settle events, want 1", n)
+	}
+	if n := b.count(fmt.Sprintf("SELECT count(*) FROM billing.reservations WHERE request_id = '%s' AND state = 'settled'", peer.id)); n != 1 {
+		t.Errorf("the peer has %d settled reservations, want 1", n)
+	}
+	if n := b.count(fmt.Sprintf("SELECT count(*) FROM billing.reservations WHERE request_id = '%s' AND state = 'pending'", failed.id)); n != 1 {
+		t.Errorf("the failed item is not still pending")
+	}
+	if n := b.count(fmt.Sprintf("SELECT count(*) FROM billing.transactions WHERE request_id = '%s'", failed.id)); n != 0 {
+		t.Errorf("the failed item left %d ledger events", n)
+	}
+	if n := b.balanceOf(b.admitted.Account); n != 999 {
+		t.Errorf("balance %d, want 999 after the peer's one charge", n)
+	}
+}
+
+// TestSettleBatchWritesTheExactBalanceAcrossInt64: two late charges of 6e18 each fit int64, and so does their final
+// balance of -6e18, but their total does not. Summing the user debits in int64 would clamp the second charge and leave
+// the balance above the ledger; the exact final balance must be written instead.
+func TestSettleBatchWritesTheExactBalanceAcrossInt64(t *testing.T) {
+	t.Parallel()
+	const amount int64 = 6_000_000_000_000_000_000
+	b := newBank(t, amount, -amount, Config{})
+	// 10¹⁰ input tokens at 0.6 credits each price 6e9 credits, or 6e18 billionths: one item's charge and the
+	// balance, but not two items' total, fit int64.
+	q := Quotable{Price: mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.6","output":"0"}}`), Model: Model{ContextLength: 1e12}}
+	reserve := func(a Admitted) *Hold {
+		var h *Hold
+		if err := b.app.Tx(t.Context(), a.Scope, func(tx pg.Tx) (err error) {
+			h, _, err = b.billing.Reserve(t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: 1}, []Quotable{q})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	a1, a2 := b.admitted, b.admitted
+	a1.Workspace, a1.Key = uuid.NewV7(), uuid.NewV7()
+	a2.Workspace, a2.Key = uuid.NewV7(), uuid.NewV7()
+	h1, h2 := reserve(a1), reserve(a2)
+	b.sql(fmt.Sprintf("UPDATE billing.reservations SET deadline = clock_timestamp() - interval '1 hour' WHERE request_id IN ('%s', '%s')", h1.id, h2.id))
+	if _, err := b.billing.Cleanup(t.Context(), 10); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []*Hold{h1, h2} {
+		if n := b.count(fmt.Sprintf("SELECT count(*) FROM billing.reservations WHERE request_id = '%s' AND state = 'cleanup_released'", h.id)); n != 1 {
+			t.Fatalf("reservation %s is not cleanup_released", h.id)
+		}
+	}
+	o := outcome(Committed, FinishStop, used(t, 10_000_000_000, 0, 0))
+	finals, afters, err := b.billing.SettleBatch(t.Context(), b.admitted.Scope, []Settlement{{Hold: h1, Outcome: o}, {Hold: h2, Outcome: o}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range finals {
+		if got := finals[i].Charged.CeilAmount(); got != amount {
+			t.Errorf("item %d charged %d, want %d", i, got, amount)
+		}
+		afters[i]()
+	}
+	if got := b.balanceOf(b.admitted.Account); got != -amount {
+		t.Errorf("balance %d, want %d", got, -amount)
+	}
+	if got := b.count("SELECT coalesce(sum(amount), 0) FROM billing.entries WHERE book = 'user_balance'"); got != amount {
+		t.Errorf("user-balance entries sum to %d, want %d", got, amount)
+	}
+	b.balanced()
+}
+
 // TestSettleBatchAndSettleShareTheAccountLock: a single settlement and a batch overlap on one account. The batch's
 // balance lock is the single one, so whichever goes first writes, and the other sees its terminal reservation and writes
 // nothing. The test holds the row explicitly so both are waiting before either starts.
@@ -77,8 +177,9 @@ func TestSettleBatchAndSettleShareTheAccountLock(t *testing.T) {
 		defer wg.Done()
 		single, singleErr = b.billing.Settle(t.Context(), h2, o)
 	}()
-	b.waitFor(`SELECT count(*) FROM pg_stat_activity
-		WHERE wait_event_type = 'Lock' AND query LIKE '%FROM billing.balances%'`, 2)
+	b.waitFor(`SELECT count(DISTINCT pid) FROM pg_stat_activity
+		WHERE datname = current_database() AND pid <> pg_backend_pid()
+		AND wait_event_type = 'Lock' AND query LIKE '%FROM billing.balances%'`, 2)
 	release()
 	wg.Wait()
 	if batchErr != nil || singleErr != nil {

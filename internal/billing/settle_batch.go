@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 	"uuid"
 
@@ -25,9 +26,13 @@ type Settlement struct {
 // round trips of a settlement no longer multiply by the batch size; the balance row still serializes every money write of the account.
 //
 // Each item is planned in order with the balance the earlier items leave, so a charge is capped exactly as if the items
-// had been settled one by one. A plan's writes are all in this transaction: a work error rolls the whole batch back and
-// comes back as *BatchWorkError with the item's index, and the caller retries the items that are left. An error without
-// an index is the transaction's own; every item is retried.
+// had been settled one by one. A plan's write error rolls the whole batch back and comes back as *BatchWorkError with
+// the item's index, and the caller retries the items that are left.
+//
+// A set-based statement's SQL error cannot name an item: the transaction rolls back and the items are run through the
+// single path in order to find the one the database refused. The ones that succeed commit; the first failure comes back
+// as *BatchWorkError. An error with no SQL state (a connection, a cancelled context, the transaction's own) is returned
+// unchanged, so every item retries.
 func (b *Billing) SettleBatch(ctx context.Context, scope pg.Scope, items []Settlement) (finals []Final, afters []func(), err error) {
 	if len(items) == 0 {
 		return nil, nil, nil
@@ -72,7 +77,11 @@ func (b *Billing) SettleBatch(ctx context.Context, scope pg.Scope, items []Settl
 		return b.writeSettlements(ctx, tx, plans)
 	})
 	if err != nil {
-		return nil, nil, err
+		var work *BatchWorkError
+		if errors.As(err, &work) || pg.SQLState(err) == "" {
+			return nil, nil, err
+		}
+		return b.settleBatchOneByOne(ctx, items)
 	}
 	finals, afters = make([]Final, len(items)), make([]func(), len(items))
 	for i, p := range plans {
@@ -83,20 +92,37 @@ func (b *Billing) SettleBatch(ctx context.Context, scope pg.Scope, items []Settl
 	return finals, afters, nil
 }
 
+// settleBatchOneByOne names the item a set-based SQL error could not name. The failed batch has rolled back; each item
+// here is its own transaction, as the caller of RunBatch would retry them. A success commits and runs its report at
+// once, so the batch has no report left; the first failure is returned with its index, and the caller retries the rest
+// and the failed item alone.
+func (b *Billing) settleBatchOneByOne(ctx context.Context, items []Settlement) ([]Final, []func(), error) {
+	finals := make([]Final, len(items))
+	var failed *BatchWorkError
+	for i, it := range items {
+		f, err := b.Settle(ctx, it.Hold, it.Outcome)
+		if err != nil {
+			if failed == nil {
+				failed = &BatchWorkError{Index: i, Err: err}
+			}
+			continue
+		}
+		finals[i] = f
+	}
+	if failed != nil {
+		return nil, nil, failed
+	}
+	return finals, make([]func(), len(items)), nil
+}
+
 // settlementPlan is one reservation's settlement as its result and the writes that make it true, all planned under the
 // balance lock. A single settlement executes its plan at once; a batch writes the plans together.
 type settlementPlan struct {
 	c       *locked
 	final   Final
-	posts   []ledgerPost
+	posts   []PostLedgerParams
 	records []suppliers.AttemptRecord
 	end     *reservationEnd
-}
-
-// ledgerPost is one ledger event with the parameters that post it, kept so a batch can post every event in order.
-type ledgerPost struct {
-	event  event
-	params PostLedgerParams
 }
 
 // reservationEnd is the EndReservation of one plan, its counters in the plan's order for the next item's cap, and the
@@ -163,7 +189,7 @@ func (c *locked) planSettlement(ctx context.Context, tx pg.Tx, o Outcome) (settl
 			return p, err
 		}
 		p.end = end
-		p.posts = append(p.posts, ledgerPost{event: c.settlement, params: ledgerParams(c.settlement, charge(pr.price, c.charged))})
+		p.posts = append(p.posts, ledgerParams(c.settlement, charge(pr.price, c.charged)))
 	} else { // cleanup_settled or cleanup_released: replace what cleanup charged, at revision -1
 		end, posts, err := c.planLate(pr, last)
 		if err != nil {
@@ -183,10 +209,10 @@ func (c *locked) planSettlement(ctx context.Context, tx pg.Tx, o Outcome) (settl
 // attemptWrites books each attempt's cost and keeps the suppliers records, in this transaction: the row of an attempt
 // and the ledger's cost of it are both there or neither. The entries the attempts bound are kept on the reservation, for
 // the next settlement to restore.
-func (c *locked) attemptWrites(o Outcome) ([]ledgerPost, []suppliers.AttemptRecord) {
+func (c *locked) attemptWrites(o Outcome) ([]PostLedgerParams, []suppliers.AttemptRecord) {
 	c.costKnown = true
 	records := make([]suppliers.AttemptRecord, len(o.Attempts))
-	posts := make([]ledgerPost, 0, len(o.Attempts))
+	posts := make([]PostLedgerParams, 0, len(o.Attempts))
 	for i, at := range o.Attempts {
 		c.costKnown = c.costKnown && at.CostKnown
 		c.cost = sum(c.cost, platform.AmountExact(at.Cost))
@@ -197,7 +223,7 @@ func (c *locked) attemptWrites(o Outcome) ([]ledgerPost, []suppliers.AttemptReco
 		}
 		e := c.event("attempt_cost", 0)
 		e.seq = *int32p(at.Seq)
-		posts = append(posts, ledgerPost{event: e, params: ledgerParams(e, []line{{bookSupplierCost, at.Cost, siteCredits}, {bookSupplierPrepaid, -at.Cost, siteCredits}})})
+		posts = append(posts, ledgerParams(e, []line{{bookSupplierCost, at.Cost, siteCredits}, {bookSupplierPrepaid, -at.Cost, siteCredits}}))
 	}
 	c.entries = attemptEntries(o.Attempts)
 	return posts, records
@@ -221,7 +247,7 @@ func (c *locked) planEnd(p priced, last AttemptResult) (*reservationEnd, error) 
 }
 
 // planLate is late with its writes kept: the refund and the new charge, and the difference as the spent counter.
-func (c *locked) planLate(p priced, last AttemptResult) (*reservationEnd, []ledgerPost, error) {
+func (c *locked) planLate(p priced, last AttemptResult) (*reservationEnd, []PostLedgerParams, error) {
 	c.owed, c.charged = p.price, min(p.price, add(c.row.Charged, c.cap(0)))
 	reversalEvent := c.event("reverse", lateRevision)
 	c.settlement = c.event("settle", lateRevision)
@@ -229,16 +255,17 @@ func (c *locked) planLate(p priced, last AttemptResult) (*reservationEnd, []ledg
 	if err != nil {
 		return nil, nil, err
 	}
-	posts := []ledgerPost{
-		{event: reversalEvent, params: ledgerParams(reversalEvent, reversal(c.row.Price, c.row.Charged))},
-		{event: c.settlement, params: ledgerParams(c.settlement, charge(p.price, c.charged))},
+	posts := []PostLedgerParams{
+		ledgerParams(reversalEvent, reversal(c.row.Price, c.row.Charged)),
+		ledgerParams(c.settlement, charge(p.price, c.charged)),
 	}
 	return &reservationEnd{c: c, w: w, spent: c.charged - c.row.Charged}, posts, nil
 }
 
 // writeSettlements writes every plan of a batch: the ledger events in one statement, the suppliers attempts in one,
 // the reservation ends in one pipeline, and the ended requests after the times that pipeline returned. A failure that
-// names an item comes back as *BatchWorkError; the others are the transaction's, for every item.
+// names an item comes back as *BatchWorkError; the others are the transaction's, and SettleBatch falls back to the
+// single path when they carry a SQL state.
 func (b *Billing) writeSettlements(ctx context.Context, tx pg.Tx, plans []settlementPlan) error {
 	if err := b.postSettlementLedger(ctx, tx, plans); err != nil {
 		return err
@@ -270,44 +297,54 @@ func (b *Billing) writeSettlements(ctx context.Context, tx pg.Tx, plans []settle
 	return nil
 }
 
-// postSettlementLedger posts every event of the plans in three statements: the transactions, their entries, and one
-// balance move. The statements share the transaction and the connection, so the entries see their transactions and the
-// balance sees every entry. A duplicate event violates the transactions' unique key and rolls the batch back, which is
-// what the reservation state says cannot happen; the gateway then retries the items one at a time and stores the one
-// that had already committed.
+// postSettlementLedger posts every event of the plans in three statements: the transactions, their entries, and the
+// exact balance they leave. The statements share the transaction and the connection, so the entries see their
+// transactions and the balance sees every entry. The balance is summed in platform.Exact and written as its final value:
+// summing the user debits in int64 would clamp two individually legal charges once their total passes int64, leaving the
+// balance and the entries inconsistent forever. A final value outside int64 is an error, not a clamp. A duplicate event
+// violates the transactions' unique key and rolls the batch back, which is what the reservation state says cannot
+// happen; SettleBatch then retries the items one at a time and stores the one that had already committed.
 func (b *Billing) postSettlementLedger(ctx context.Context, tx pg.Tx, plans []settlementPlan) error {
-	var events []ledgerPost
+	var events []PostLedgerParams
 	for _, p := range plans {
 		events = append(events, p.posts...)
 	}
 	if len(events) == 0 {
 		return nil
 	}
-	first := plans[0].c.row
-	transactions := PostLedgerTransactionsParams{SiteID: first.SiteID, AccountID: first.AccountID}
-	entries := PostLedgerEntriesParams{SiteID: first.SiteID, AccountID: first.AccountID}
-	var total int64
+	first := plans[0].c
+	transactions := PostLedgerTransactionsParams{SiteID: first.row.SiteID, AccountID: first.row.AccountID}
+	entries := PostLedgerEntriesParams{SiteID: first.row.SiteID, AccountID: first.row.AccountID}
+	final := platform.AmountExact(first.balance.Balance)
 	for _, ev := range events {
-		transactions.Ids = append(transactions.Ids, ev.params.ID)
-		transactions.Kinds = append(transactions.Kinds, ev.params.Kind)
-		transactions.RequestIds = append(transactions.RequestIds, ev.params.RequestID)
-		transactions.AttemptSeqs = append(transactions.AttemptSeqs, ev.params.AttemptSeq)
-		transactions.Revisions = append(transactions.Revisions, ev.params.Revision)
-		total = addClamp(total, ev.params.UserDebit)
-		for j := range ev.params.Books {
-			entries.TransactionIds = append(entries.TransactionIds, ev.params.ID)
-			entries.Books = append(entries.Books, ev.params.Books[j])
-			entries.Amounts = append(entries.Amounts, ev.params.Amounts[j])
-			entries.Currencies = append(entries.Currencies, ev.params.Currencies[j])
+		transactions.Ids = append(transactions.Ids, ev.ID)
+		transactions.Kinds = append(transactions.Kinds, ev.Kind)
+		transactions.RequestIds = append(transactions.RequestIds, ev.RequestID)
+		transactions.AttemptSeqs = append(transactions.AttemptSeqs, ev.AttemptSeq)
+		transactions.Revisions = append(transactions.Revisions, ev.Revision)
+		var err error
+		final, err = final.Add(platform.AmountExact(ev.UserDebit).Neg())
+		if err != nil {
+			return fmt.Errorf("billing: sum the settlement balance: %w", err)
+		}
+		for j := range ev.Books {
+			entries.TransactionIds = append(entries.TransactionIds, ev.ID)
+			entries.Books = append(entries.Books, ev.Books[j])
+			entries.Amounts = append(entries.Amounts, ev.Amounts[j])
+			entries.Currencies = append(entries.Currencies, ev.Currencies[j])
 		}
 	}
+	if final.Cmp(platform.AmountExact(math.MaxInt64)) > 0 || final.Cmp(platform.AmountExact(math.MinInt64)) < 0 {
+		return fmt.Errorf("billing: the settlement balance %s is outside int64", final.AppendDecimal(nil))
+	}
+	balance := final.CeilAmount()
 	statements := []pg.Statement{
 		{SQL: postLedgerTransactions, Args: []any{transactions.Ids, transactions.SiteID, transactions.AccountID, transactions.Kinds, transactions.RequestIds, transactions.AttemptSeqs, transactions.Revisions}},
 		{SQL: postLedgerEntries, Args: []any{entries.TransactionIds, entries.SiteID, entries.AccountID, entries.Books, entries.Amounts, entries.Currencies}},
 	}
-	move := total != 0
+	move := balance != first.balance.Balance
 	if move {
-		statements = append(statements, pg.Statement{SQL: moveBalance, Args: []any{total, first.AccountID}})
+		statements = append(statements, pg.Statement{SQL: setBalance, Args: []any{balance, first.row.AccountID}})
 	}
 	return tx.Batch(ctx, statements, func(batch pg.BatchResults) error {
 		tag, err := batch.Exec()
@@ -329,10 +366,10 @@ func (b *Billing) postSettlementLedger(ctx context.Context, tx pg.Tx, plans []se
 		}
 		tag, err = batch.Exec()
 		if err != nil {
-			return fmt.Errorf("billing: move the settlement balance: %w", err)
+			return fmt.Errorf("billing: set the settlement balance: %w", err)
 		}
 		if tag.RowsAffected() != 1 {
-			return fmt.Errorf("billing: moved the balance of %d accounts", tag.RowsAffected())
+			return fmt.Errorf("billing: set the balance of %d accounts", tag.RowsAffected())
 		}
 		return nil
 	})

@@ -35,9 +35,10 @@ SELECT (@transaction_ids::uuid[])[i], @site_id, @account_id, (@books::text[])[i]
 FROM generate_subscripts(@transaction_ids::uuid[], 1) AS i
 ORDER BY i;
 
--- name: MoveBalance :execrows
--- The third: one balance move for the batch, by the sum of the user-balance entries, so the row changes once.
-UPDATE billing.balances SET balance = balance - @amount WHERE account_id = @account_id;
+-- name: SetBalance :execrows
+-- The third: set the balance to the exact value the batch's user-balance entries leave. The caller sums in platform.Exact,
+-- so a total past int64 does not clamp; a final value past int64 is an error and rolls the batch back.
+UPDATE billing.balances SET balance = @balance WHERE account_id = @account_id;
 
 -- name: ReservationAccount :one
 SELECT account_id FROM billing.reservations WHERE request_id = @request_id;

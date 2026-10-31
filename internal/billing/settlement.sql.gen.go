@@ -552,24 +552,6 @@ func (q *Queries) LockReservations(ctx context.Context, db DBTX, requestIds []uu
 	return items, nil
 }
 
-const moveBalance = `-- name: MoveBalance :execrows
-UPDATE billing.balances SET balance = balance - $1 WHERE account_id = $2
-`
-
-type MoveBalanceParams struct {
-	Amount    int64
-	AccountID uuid.UUID
-}
-
-// The third: one balance move for the batch, by the sum of the user-balance entries, so the row changes once.
-func (q *Queries) MoveBalance(ctx context.Context, db DBTX, arg MoveBalanceParams) (int64, error) {
-	result, err := db.Exec(ctx, moveBalance, arg.Amount, arg.AccountID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const postLedger = `-- name: PostLedger :execrows
 WITH locked AS MATERIALIZED (
     SELECT 1 FROM billing.balances b WHERE b.account_id = $1 FOR UPDATE
@@ -706,6 +688,25 @@ func (q *Queries) ReservationAccount(ctx context.Context, db DBTX, requestID uui
 	var account_id uuid.UUID
 	err := row.Scan(&account_id)
 	return account_id, err
+}
+
+const setBalance = `-- name: SetBalance :execrows
+UPDATE billing.balances SET balance = $1 WHERE account_id = $2
+`
+
+type SetBalanceParams struct {
+	Balance   int64
+	AccountID uuid.UUID
+}
+
+// The third: set the balance to the exact value the batch's user-balance entries leave. The caller sums in platform.Exact,
+// so a total past int64 does not clamp; a final value past int64 is an error and rolls the batch back.
+func (q *Queries) SetBalance(ctx context.Context, db DBTX, arg SetBalanceParams) (int64, error) {
+	result, err := db.Exec(ctx, setBalance, arg.Balance, arg.AccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const unbalanced = `-- name: Unbalanced :many

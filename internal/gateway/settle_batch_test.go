@@ -61,8 +61,9 @@ func TestRunSettlementBatchIsolatesAFailedItem(t *testing.T) {
 	}
 }
 
-// TestRunSettlementBatchRetriesEveryItemOnATransactionError: an error without an index reaches every item, none is
-// closed here, and no report runs.
+// TestRunSettlementBatchRetriesEveryItemOnATransactionError: an error with no item (a connection or commit failure)
+// reaches every item, and none is answered here. A set-based SQL data error is named by billing first; the real
+// 22003 case is TestSettleBatchIsolatesADataError.
 func TestRunSettlementBatchRetriesEveryItemOnATransactionError(t *testing.T) {
 	t.Parallel()
 	batch, _ := settlementItems(2)
