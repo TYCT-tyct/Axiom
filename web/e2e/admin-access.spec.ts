@@ -83,8 +83,9 @@ test.describe("signing in", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "保存你的恢复码" })).toBeVisible();
     await page.getByRole("button", { name: "我已保存" }).click();
-    await expect(h1(page, zhText("nav.overview"))).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe("/");
+    // The gate returns to the page the visitor asked for before enrolling, which was /users, not the dashboard.
+    await expect(h1(page, zhText("nav.users"))).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe("/users");
   });
 
   test("a session that ends while a page is open sends the user to sign in and back to that page", async ({ page }) => {
