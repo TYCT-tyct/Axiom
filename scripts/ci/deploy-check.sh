@@ -121,7 +121,7 @@ deployed="$(curl -fsS "http://127.0.0.1:$public/api/console/v1/version" | jq -r 
 # The archive writes one compressed month to TMPDIR before uploading it. The program image is scratch and the root
 # filesystem is read-only, so the node must have the dedicated volume, the environment must point at it, and the keys
 # init must have handed it to the program's UID (otherwise the first archive fails on CreateTemp and never drops).
-app_id="$(compose ps --quiet axiom)"
+app_id="$(compose ps --all --quiet axiom)"
 [ -n "$app_id" ] || { echo "::error::the axiom container is missing"; exit 1; }
 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$app_id" | grep -qx 'TMPDIR=/retention-tmp'   || { echo "::error::the node does not set TMPDIR=/retention-tmp"; exit 1; }
 mount="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/retention-tmp"}}{{.Type}} {{.RW}}{{end}}{{end}}' "$app_id")"
