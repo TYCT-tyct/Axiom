@@ -23,10 +23,10 @@ SELECT 'GRANT axiom_retention_job TO axiom_retention WITH INHERIT TRUE, SET TRUE
 WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_retention')
   AND EXISTS (SELECT FROM pg_roles WHERE rolname = 'axiom_retention_job') \gexec
 GRANT CREATE ON DATABASE :"DBNAME" TO axiom_migrator;
--- The migration bootstrap grants the roles it manages (to itself, and axiom_lookup to axiom_owner), which needs the
--- admin option on them. A database migrated by the superuser, or by an earlier migrator that was dropped and created
--- again, has those roles without the current migrator holding that option. This is the grant PostgreSQL 16+ gives a
--- role that creates another.
+-- The migration bootstrap grants the roles it manages (to itself, and axiom_lookup to axiom_owner), and prepareJobRole
+-- grants the job role to axiom_owner, which needs the admin option on them. A database migrated by the superuser, or by
+-- an earlier migrator that was dropped and created again, has those roles without the current migrator holding that
+-- option. This is the grant PostgreSQL 16+ gives a role that creates another.
 SELECT format('GRANT %I TO axiom_migrator WITH ADMIN TRUE, INHERIT FALSE, SET FALSE', rolname)
-FROM pg_roles WHERE rolname IN ('axiom_owner', 'axiom_lookup') \gexec
+FROM pg_roles WHERE rolname IN ('axiom_owner', 'axiom_lookup', 'axiom_retention_job') \gexec
 SQL
