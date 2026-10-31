@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"runtime"
 	"slices"
@@ -82,8 +83,16 @@ func (s *keySnapshot) withConfirmed(versions []uint32) *keySnapshot {
 
 // MasterKeys is one read of the master key file. The ring a node checks and seals with and the login and mail keys
 // derived from the file's highest version come from these bytes, so a file replaced during startup cannot mix two snapshots; the
-// plaintext stays here and callers receive only the ring and the derived keys.
-type MasterKeys struct {
+// plaintext stays here and callers receive only the ring and the derived keys. It sits behind a closure, as in Secret,
+// because fmt prints a struct's unexported fields by reflection and a bad-verb diagnostic (%w on a non-error) bypasses
+// Format: a map field would be printed by both, while a function value prints as an address.
+type MasterKeys struct { //nolint:recvcheck // the other methods read the snapshot; Format and LogValue take a value so a dereferenced copy redacts too
+	material func() masterKeyMaterial
+}
+
+// masterKeyMaterial is what the closure in MasterKeys hands its methods: reachable only through the closure, never as a
+// field fmt can walk.
+type masterKeyMaterial struct {
 	keys   map[uint32][32]byte
 	latest uint32
 }
@@ -94,16 +103,26 @@ func LoadMaster(path string) (*MasterKeys, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &MasterKeys{keys: keys, latest: latest}, nil
+	return &MasterKeys{material: func() masterKeyMaterial { return masterKeyMaterial{keys: keys, latest: latest} }}, nil
 }
 
 // Keyring is the ring these keys make, with the file's highest version as the legacy write version. A database-backed
 // node must use Rotation.CheckRing before sealing: the database's active version overrides this legacy default.
 func (m *MasterKeys) Keyring() *Keyring {
+	material := m.material()
 	ring := &Keyring{}
-	ring.state.Store(newSnapshot(m.keys, m.latest))
+	ring.state.Store(newSnapshot(material.keys, material.latest))
 	return ring
 }
+
+// Format redacts every verb, the invalid ones included: fmt prints a struct's fields by reflection when a verb does not
+// apply, so a String method alone would still let `%x` or a mistyped verb write the keys out.
+func (MasterKeys) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, redacted) //nolint:errcheck // fmt's output buffer cannot fail.
+}
+
+// LogValue keeps structured handlers from inspecting the keys behind the fields.
+func (MasterKeys) LogValue() slog.Value { return slog.StringValue(redacted) }
 
 // Load validates the entire file and uses its legacy highest write version. A database-backed node must use
 // Rotation.Check before sealing: the database's active version overrides this legacy default.
@@ -155,14 +174,23 @@ func LoadSecret(variable, path string) ([]byte, error) {
 // readKeyFile reads a protected file of version:base64 lines, each a 32-byte key, and returns the keys by version
 // and the highest version. Errors name variable, the setting that chose the file, and never its path or contents.
 func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {
+	return readKeyFileWith(variable, path, os.Open)
+}
+
+// readKeyFileWith is readKeyFile with the open as a parameter. A test uses it to put another file at the path at the one
+// moment that matters, between the checks and the read, instead of racing a goroutine against a sleep: the ordering that
+// keeps a replaced file from being read is then proven every run, and restoring the broken order fails every run.
+func readKeyFileWith(variable, path string, open func(string) (*os.File, error)) (map[uint32][32]byte, uint32, error) {
 	if path == "" {
 		return nil, 0, fmt.Errorf("%s: required", variable)
 	}
-	file, err := os.Open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
+	file, err := open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
 	if err != nil {
 		return nil, 0, fileError(variable, "open", err)
 	}
 	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
+	// The opened file is what gets read, so its own mode is what the rule checks: a path replaced between a check and
+	// the open must not decide which file's permissions were checked. Type and mode both come from the descriptor.
 	info, err := file.Stat()
 	if err != nil {
 		return nil, 0, fileError(variable, "stat", err)
@@ -173,6 +201,16 @@ func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {
 	// Windows mode bits cannot express NTFS ACLs; deployment must restrict the file's ACL instead.
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return nil, 0, fmt.Errorf("%s: permissions must deny all group and other access", variable)
+	}
+	// The path must still be that same file and not a link to one: whoever can point the variable at a link picks the
+	// key the node seals under, while the deployment keeps its own file private, and the writer refuses to replace a
+	// link for the same reason.
+	at, err := os.Lstat(path)
+	if err != nil {
+		return nil, 0, fileError(variable, "stat", err)
+	}
+	if !at.Mode().IsRegular() || !os.SameFile(info, at) {
+		return nil, 0, fmt.Errorf("%s: want a regular file", variable)
 	}
 	return readKeys(variable, file)
 }
