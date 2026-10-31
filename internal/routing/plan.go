@@ -364,8 +364,12 @@ func (c *candidate) streamsFor(n *need) bool {
 // outputLimit is the one rule for how much output an entry at c may produce and whether the request fits c's context,
 // used both to filter and to build the entry, so the two never disagree. The limit is the request's own, if it sets one,
 // held to the endpoint's, or else the endpoint's default. The context holds the input and the output together: a limit
-// the request set that does not fit leaves the endpoint out; a default is cut to what is left of the context.
+// the request set that does not fit leaves the endpoint out; a default is cut to what is left of the context. A direct
+// call generates nothing: its limit is 0, and an input as long as the context fits it.
 func (c *candidate) outputLimit(req *protocol.Request, tokens int64) (limit int64, fits bool) {
+	if req.Format.Direct() {
+		return 0, tokens <= c.Context
+	}
 	limit = c.MaxOutput
 	if req.MaxOutput > 0 && (limit == 0 || req.MaxOutput < limit) {
 		limit = req.MaxOutput
