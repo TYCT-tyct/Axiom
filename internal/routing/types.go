@@ -150,6 +150,7 @@ const (
 	ServiceTierNotServed // the request may only be served at tiers the endpoint does not offer
 	PresetFilter
 	OverrideFilter
+	NotVerified // the request wants only endpoints verified as the model they claim (:exacto)
 	NoPrice
 	NoEgress
 	RetryBudget    // a later entry at a supplier whose retry budget is used up
@@ -163,7 +164,8 @@ var reasonNames = [...]string{
 	NoCandidates: "no_candidates", NotAllowed: "model_not_allowed", Disabled: "disabled", BreakerOpen: "breaker_open",
 	SupplierBalance: "supplier_balance", MissingCapability: "missing_capability", ContextTooSmall: "context_too_small",
 	FormatNotServed: "format_not_served", ServiceTierNotServed: "service_tier_not_served", PresetFilter: "preset_filter", OverrideFilter: "override_filter",
-	NoPrice: "no_price", NoEgress: "no_egress", RetryBudget: "retry_budget", Full: "full",
+	NotVerified: "not_verified",
+	NoPrice:     "no_price", NoEgress: "no_egress", RetryBudget: "retry_budget", Full: "full",
 	UnknownItem: "unknown_item", CoolingDown: "cooling_down", UnquotableCost: "unquotable_cost",
 }
 
@@ -175,7 +177,7 @@ func (r Reason) Permanent() bool {
 	case NoCandidates, NotAllowed, Disabled, MissingCapability, ContextTooSmall, FormatNotServed, ServiceTierNotServed,
 		PresetFilter, OverrideFilter, NoPrice, UnknownItem, UnquotableCost:
 		return true
-	case BreakerOpen, SupplierBalance, NoEgress, RetryBudget, Full, CoolingDown:
+	case BreakerOpen, SupplierBalance, NoEgress, NotVerified, RetryBudget, Full, CoolingDown:
 		return false
 	}
 	return false

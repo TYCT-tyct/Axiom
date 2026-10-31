@@ -482,7 +482,7 @@ func TestProbeLeavesTimeToPersistCost(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), suppliers.TestDeadline)
 	defer cancel()
 	err := l.db.Tx(ctx, l.scope, func(tx pg.Tx) error {
-		_, err := l.generate(ctx, tx, suppliers.TestRequest{Endpoint: id, Format: protocol.Chat})
+		_, err := l.generate(ctx, tx, suppliers.TestRequest{Endpoint: id, Format: protocol.Chat}, "automatic health recovery")
 		return err
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {

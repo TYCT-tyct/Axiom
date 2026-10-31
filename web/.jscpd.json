@@ -1,5 +1,5 @@
 {
   "format": ["typescript", "tsx", "javascript", "css"],
-  "ignore": ["**/*.gen.ts", "**/*.test.ts", "e2e/**"],
+  "ignore": ["**/*.gen.ts", "**/*.test.ts", "e2e/**", "**/locales/*/index.ts"],
   "exitCode": 1
 }

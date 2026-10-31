@@ -202,7 +202,7 @@
 
 > 已实现：`Load`（`Refresh`）、发布、陈旧上限、`ResolvePublic`、`Recognize`、`Run` 的快照刷新。设计，尚未实现：`CurrentPrices`、LISTEN/NOTIFY。这里的「快照」是[术语表](../../docs/glossary.md#术语表)的快照；`page_snapshot` 是其中的页面快照，与它无关。
 
-- **加载**：`Load` 在一个只读的 Repeatable Read 事务里先读 `revision`，再读全部公开表。快照不可变，只含 listed 和 retired 模型、它们的名字和 listed 模型各币种的当前参考价；加载在平台范围执行，所以读得到 retired 模型的名字。retired 模型只用于两处：`ResolvePublic` 返回 `ErrRetired`，`Recognize` 仍认得出它的名字，供应商据此不把这个名字映射到别的模型。`Models()` 只给 listed 模型，`Model` 带 `Status`。快照大小随模型数增长，不随历史增长。
+- **加载**：`Load` 在一个只读的 Repeatable Read 事务里先读 `revision`，再读全部公开表。快照不可变，只含 listed 和 retired 模型、它们的名字和 listed 模型各币种的当前参考价；加载在平台范围执行，所以读得到 retired 模型的名字。retired 模型只用于两处：`ResolvePublic` 返回 `ErrRetired`，`Recognize` 仍认得出它的名字，供应商据此不把这个名字映射到别的模型。`Models()` 只给 listed 模型，`Model` 带 `Status`；`Model.Author` 是 `author.slug`，`Model.AuthorName` 是它的显示名（没有显示名时回落为 slug），真伪检测用后者核对模型的回答（[端点评估的「真伪检测」](../../docs/domains/quality.md#真伪检测)）。快照大小随模型数增长，不随历史增长。
 - **发布**：比较后替换，只接受更大的 `revision`。
 - **传播**：写入的节点立即重建；其他节点每 5 秒读一次 `revision`，变了才全量加载。以后有 LISTEN/NOTIFY 时加一个触发源，接口不变。
 - **陈旧上限**：快照记下 `confirmed_at`，即最后一次确认"数据库的 `revision` 就是本快照的版本"的时刻，取那次读取开始的时间。读到相同的 revision 才续期；读到更高的版本不续期，必须成功加载并发布它，新快照以加载事务开始的时刻作为 `confirmed_at`；加载失败不续期旧快照。超过最大陈旧时间（默认 30 秒，启动配置，必须大于轮询周期）后 `Current()` 返回 `ErrStale`，gateway 对需要解析模型的新请求返回 503，节点不就绪，直到确认或发布了当前版本。首次加载成功前同样不就绪。

@@ -260,17 +260,8 @@ func check(c *candidate, n *need, price *candidatePrice) (reason Reason, visible
 	if reason = c.unfit(n); reason != 0 {
 		return reason, true
 	}
-	switch {
-	case !n.presetAllows(c, price):
-		return PresetFilter, true
-	case !n.overrideAllows(c, price):
-		return OverrideFilter, true
-	case price.none():
-		return NoPrice, true
-	case c.UnknownItem:
-		return UnknownItem, true
-	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
-		return CoolingDown, true
+	if reason = c.filtered(n, price); reason != 0 {
+		return reason, true
 	}
 	if reason = c.funding(n); reason != 0 {
 		return reason, true
@@ -279,6 +270,26 @@ func check(c *candidate, n *need, price *candidatePrice) (reason Reason, visible
 		return Full, true
 	}
 	return 0, true
+}
+
+// filtered is what a preset or the request's override leaves out before its cost is known: the visible set it allows,
+// whether it is verified when the request asks only for that, its price, and whether it is cooling down.
+func (c *candidate) filtered(n *need, price *candidatePrice) Reason {
+	switch {
+	case !n.presetAllows(c, price):
+		return PresetFilter
+	case n.over.VerifiedOnly && !c.Verified:
+		return NotVerified
+	case !n.overrideAllows(c, price):
+		return OverrideFilter
+	case price.none():
+		return NoPrice
+	case c.UnknownItem:
+		return UnknownItem
+	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
+		return CoolingDown
+	}
+	return 0
 }
 
 // funding uses the same demand, output cap and call format as the reservation, but the supplier's native cost plan.

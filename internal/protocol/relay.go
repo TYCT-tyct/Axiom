@@ -93,7 +93,10 @@ type RelayOptions struct {
 	Memory *Memory
 	// Aggregate is set for a client that did not ask for a stream: nothing is written until the end, Next gives no
 	// Out, and Finish and Fail return the reply's body, whose HTTP status Status gives (README.md「非流式聚合」).
-	Aggregate       bool
+	Aggregate bool
+	// Capture keeps the answer's text for a caller that judges it, which is a verification probe and nothing else: a
+	// gateway call leaves it nil, so no call path allocates for it (docs/domains/quality.md「真伪检测」).
+	Capture         *Capture
 	legacyFunctions bool
 }
 
