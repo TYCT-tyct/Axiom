@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -43,6 +44,9 @@ const specSearch = `{"items":["input","output","web_search"],"tiers":["standard"
 
 // reference is a model's reference price in USD, prices as the catalog publishes them.
 const reference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","cache_read":"0.0000003","cache_write":"0.00000375"}}`
+
+// freeReference prices every item specAll reports at zero, as a :free entry's reference price must.
+const freeReference = `{"v":1,"currency":"USD","rates":{"input":"0","output":"0","cache_read":"0","cache_write":"0"}}`
 
 // searchReference prices specSearch's items too: the catalog lists no model whose reference price leaves one out.
 const searchReference = `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015","web_search":"0.01"}}`
@@ -393,6 +397,65 @@ func TestRouteBuildCountsWhatSuppliersOffer(t *testing.T) {
 	f.build([]suppliers.Routable{routable(f.served, protocol.Messages)})
 	if !f.count.Routable() {
 		t.Errorf("%+v: a node with a priced endpoint is routable", f.count)
+	}
+}
+
+// TestRouteBuildDropsARetiredFreeModel: a supplier maps a :free model and has a zero sale price for it, then the catalog
+// retires the model before the supplier's next sync. The rebuild must leave the endpoint out, so neither router can pick
+// a retired model, and the log must name the reason. Keeping the supplier endpoint and its sale price is what makes the
+// check the catalog's status rather than a missing mapping or price.
+func TestRouteBuildDropsARetiredFreeModel(t *testing.T) {
+	f := newRouteFixture(t)
+	f.seedPrice("acme/free", specAll, reference) // the :free entry needs a listed base model with a public name
+	free := f.seedPrice("acme/free:free", specAll, freeReference)
+	if err := f.cat.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	prices, err := f.fixturePrices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.prices = prices
+	r := routable(free, protocol.Messages)
+	f.build([]suppliers.Routable{r})
+	if want := (Count{Endpoints: 1, Offered: 1}); f.count != want {
+		t.Fatalf("the build made %+v, want %+v", f.count, want)
+	}
+	auto, freeIn := call(free), call(free)
+	auto.Auto, auto.Models = true, nil
+	freeIn.Free, freeIn.Models = true, nil
+	routers := []struct {
+		name string
+		in   routing.Input
+	}{{"auto", auto}, {"free", freeIn}}
+	for _, router := range routers {
+		plan, wait, err := f.router.Plan(router.in)
+		if err != nil || wait != nil || len(plan.Entries) != 1 || plan.Entries[0].Endpoint != routing.EndpointID(r.ID) {
+			t.Fatalf("%s before retirement: plan %+v, wait %v, err %v", router.name, plan, wait, err)
+		}
+	}
+
+	if _, err := f.cat.Retire(t.Context(), catalog.ModelRequest{
+		Op: catalog.Op{Actor: audit.System("gateway.test"), Key: uuid.NewV7(), Reason: "test"}, Model: free, Rev: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.cat.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	f.build([]suppliers.Routable{r})
+	if want := (Count{Endpoints: 0, Offered: 1}); f.count != want {
+		t.Errorf("the rebuild made %+v, want %+v", f.count, want)
+	}
+	for _, router := range routers {
+		plan, wait, err := f.router.Plan(router.in)
+		var none *routing.NoEndpoint
+		if wait != nil || !errors.As(err, &none) || len(plan.Entries) != 0 {
+			t.Errorf("%s after retirement: plan %+v, wait %v, err %v; want no endpoint", router.name, plan, wait, err)
+		}
+	}
+	if logs := f.logs.String(); !strings.Contains(logs, uuid.UUID(free).String()) || !strings.Contains(logs, "the catalog model is not listed") {
+		t.Errorf("the log does not say the retired model is left out:\n%s", logs)
 	}
 }
 

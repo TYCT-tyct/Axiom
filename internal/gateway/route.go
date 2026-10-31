@@ -286,6 +286,10 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	if !ok {
 		return routing.Endpoint{}, "the catalog has no such model"
 	}
+	if model.Status != catalog.StatusListed {
+		// Suppliers may keep a mapping until their next sync; the catalog is the authority on what may be served.
+		return routing.Endpoint{}, "the catalog model is not listed"
+	}
 	serving, ok := servingOf(model, r.Formats)
 	if !ok {
 		return routing.Endpoint{}, "its spec declares no context length, output limit, streaming or abilities"
