@@ -23,6 +23,7 @@ info:
     `Cache-Control: no-store`.
 tags:
   - {name: Calls, description: "Support summaries and operator traces."}
+  - {name: Reports, description: "The operations dashboard: calls, revenue, cost and cash over a window."}
   - {name: Audit, description: "Immutable audit search."}
   - {name: Session, description: "Sign-in, two-step verification and the current session."}
   - {name: Site, description: "Site settings."}
@@ -72,6 +73,16 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: model
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      - name: status
+        in: query
+        schema:
+          $ref: '#/components/schemas/AdminCallStatus'
       responses:
         '200':
           description: Result
@@ -113,6 +124,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminCallTrace'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/reports/overview:
+    get:
+      operationId: getOperationsOverview
+      tags:
+      - Reports
+      summary: The site's calls, errors, revenue, cost and cash over a window, with its busiest accounts and models.
+      description: >-
+        The operations dashboard of the site the request was made on (docs/domains/operations.md「运营看板」). Calls and
+        errors are the call log's, over the calls that started in the window. Revenue is what the window's settled calls
+        were charged and cost is what the supplier charged the platform where billing could convert it, both in the
+        site's accounting currency; `unknown_cost_calls` counts the calls whose cost is unknown, and their cost is not in `cost`. Cash is
+        the ledger's cash book — paid credit in and refunds out, in each payment currency — so it is neither revenue nor
+        the call log's charge. The window defaults to 24 hours and is at most 31 days.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - *admin_path_id001
+      - *admin_path_id002
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationsOverview'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -3748,6 +3796,12 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    AdminCallStatus:
+      type: string
+      enum: [ok, error]
+      description: >-
+        The result of a call: `ok` when its error_kind is empty, `error` otherwise. An old node may leave the filter echo
+        out of a list.
     AdminCallSummary:
       type: object
       additionalProperties: false
@@ -3778,6 +3832,9 @@ components:
           items:
             $ref: '#/components/schemas/AdminCallSummary'
         next_cursor: *admin_schema_id001
+        model_filter: *admin_schema_id001
+        status_filter:
+          $ref: '#/components/schemas/AdminCallStatus'
     AdminAttempt:
       type: object
       additionalProperties: false
@@ -4484,6 +4541,56 @@ components:
         - internal
         - not_implemented
         - unavailable
+    OperationsOverview:
+      type: object
+      additionalProperties: false
+      properties:
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+        revenue:
+          $ref: '#/components/schemas/Money'
+        cost:
+          $ref: '#/components/schemas/Money'
+        unknown_cost_calls: {type: integer, format: int64}
+        cash:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashAmount'
+        top_accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverviewAccount'
+        top_models:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverviewModel'
+    OverviewAccount:
+      type: object
+      additionalProperties: false
+      properties:
+        account_id:
+          $ref: '#/components/schemas/AccountId'
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+    OverviewModel:
+      type: object
+      additionalProperties: false
+      properties:
+        model: {type: string}
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+    CashAmount:
+      type: object
+      required: [amount, currency]
+      description: >-
+        An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one
+        unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the
+        same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it.
+      properties:
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]{0,18})$', example: "1500000000"}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
     Money:
       type: object
       required: [amount, currency]

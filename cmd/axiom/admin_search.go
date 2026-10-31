@@ -53,6 +53,12 @@ func (a adminAPI) ListAdminCalls(ctx context.Context, r adminapi.ListAdminCallsR
 		id := uuid.UUID(*r.Params.RequestId)
 		q.RequestID = &id
 	}
+	if r.Params.Model != nil {
+		q.Model = *r.Params.Model
+	}
+	if r.Params.Status != nil {
+		q.Status = string(*r.Params.Status)
+	}
 
 	var calls []observability.CallSummary
 	var next *observability.Cursor
@@ -67,7 +73,9 @@ func (a adminAPI) ListAdminCalls(ctx context.Context, r adminapi.ListAdminCallsR
 			return nil, err
 		}
 	}
-	result := adminapi.ListAdminCalls200JSONResponse{Data: &data, Since: &since, Until: &until}
+	result := adminapi.ListAdminCalls200JSONResponse{
+		Data: &data, Since: &since, Until: &until, ModelFilter: r.Params.Model, StatusFilter: r.Params.Status,
+	}
 	if next != nil {
 		v := next.String()
 		result.NextCursor = &v

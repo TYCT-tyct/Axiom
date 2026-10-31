@@ -34,6 +34,7 @@ func (o adminOperation) changes() bool { return o.method != http.MethodGet }
 var adminOperations = []adminOperation{
 	{"listAdminCalls", http.MethodGet, "/calls", "", "calls.search", false},
 	{"getAdminCallTrace", http.MethodGet, "/calls/0198c0a8-0000-7000-8000-000000000001/trace", "", "calls.inspect", false},
+	{"getOperationsOverview", http.MethodGet, "/reports/overview", "", "sites.manage", false},
 	{"listAuditEntries", http.MethodGet, "/audit", "", "audit.view", false},
 	{"getAuditEntry", http.MethodGet, "/audit/0198c0a8-0000-7000-8000-000000000001", "", "audit.view", false},
 	{"getSystemSettings", http.MethodGet, strings.Replace(someSite, "/settings", "/system-settings", 1), "", "sites.manage", false},

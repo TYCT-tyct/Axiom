@@ -46,6 +46,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/reports/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site's calls, errors, revenue, cost and cash over a window, with its busiest accounts and models.
+         * @description The operations dashboard of the site the request was made on (docs/domains/operations.md「运营看板」). Calls and errors are the call log's, over the calls that started in the window. Revenue is what the window's settled calls were charged and cost is what the supplier charged the platform where billing could convert it, both in the site's accounting currency; `unknown_cost_calls` counts the calls whose cost is unknown, and their cost is not in `cost`. Cash is the ledger's cash book — paid credit in and refunds out, in each payment currency — so it is neither revenue nor the call log's charge. The window defaults to 24 hours and is at most 31 days.
+         */
+        get: operations["getOperationsOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/audit": {
         parameters: {
             query?: never;
@@ -1813,6 +1833,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description The result of a call: `ok` when its error_kind is empty, `error` otherwise. An old node may leave the filter echo out of a list.
+         * @enum {string}
+         */
+        AdminCallStatus: "ok" | "error";
         AdminCallSummary: {
             id?: string;
             site_id?: components["schemas"]["SiteId"];
@@ -1831,6 +1856,8 @@ export interface components {
             until?: string;
             data?: components["schemas"]["AdminCallSummary"][];
             next_cursor?: string;
+            model_filter?: string;
+            status_filter?: components["schemas"]["AdminCallStatus"];
         };
         AdminAttempt: {
             seq?: number;
@@ -2347,6 +2374,44 @@ export interface components {
          * @enum {string}
          */
         ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        OperationsOverview: {
+            /** Format: date-time */
+            since?: string;
+            /** Format: date-time */
+            until?: string;
+            /** Format: int64 */
+            calls?: number;
+            /** Format: int64 */
+            errors?: number;
+            revenue?: components["schemas"]["Money"];
+            cost?: components["schemas"]["Money"];
+            /** Format: int64 */
+            unknown_cost_calls?: number;
+            cash?: components["schemas"]["CashAmount"][];
+            top_accounts?: components["schemas"]["OverviewAccount"][];
+            top_models?: components["schemas"]["OverviewModel"][];
+        };
+        OverviewAccount: {
+            account_id?: components["schemas"]["AccountId"];
+            /** Format: int64 */
+            calls?: number;
+            /** Format: int64 */
+            errors?: number;
+        };
+        OverviewModel: {
+            model?: string;
+            /** Format: int64 */
+            calls?: number;
+            /** Format: int64 */
+            errors?: number;
+        };
+        /** @description An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it. */
+        CashAmount: {
+            /** @example 1500000000 */
+            amount: string;
+            /** @example USD */
+            currency: string;
+        };
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
         Money: {
             /** @example 1500000000 */
@@ -3449,6 +3514,8 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 account_id?: components["schemas"]["AccountId"];
                 request_id?: string;
+                model?: string;
+                status?: components["schemas"]["AdminCallStatus"];
             };
             header?: never;
             path?: never;
@@ -3490,6 +3557,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCallTrace"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getOperationsOverview: {
+        parameters: {
+            query?: {
+                since?: string;
+                until?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsOverview"];
                 };
             };
             400: components["responses"]["BadRequest"];
