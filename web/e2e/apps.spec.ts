@@ -58,7 +58,7 @@ test("the website lists models and prices and filters them in the address", asyn
   const table = page.getByRole("table", { name: "模型与价格" });
   await expect(table.getByRole("row")).toHaveCount(5);
 
-  await page.getByLabel("模型").fill("openai/gpt-5");
+  await page.getByLabel("模型", { exact: true }).fill("openai/gpt-5");
   await page.getByRole("button", { name: "筛选" }).click();
   await expect(page).toHaveURL(/q=openai%2Fgpt-5/);
   await expect(table.getByRole("row")).toHaveCount(2);
