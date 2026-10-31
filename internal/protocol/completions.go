@@ -27,8 +27,12 @@ type completionsStream struct {
 	report                                      *openAIUsage
 	reportErr                                   error
 	failed, rewrites, noChoices, choiceFinished bool
-	index                                       int64
-	indexSet                                    bool
+	// delivered is whether the chunk carries text for the client, echo included: it alone decides the commit point,
+	// so an echo-only reply (echo with max_tokens 0) is an answer, not an empty response. The meter's content counts
+	// only the generated text after the echo.
+	delivered bool
+	index     int64
+	indexSet  bool
 	// pending holds text read before its choice's index; JSON members may come in any order. Only an upstream that
 	// puts text before index allocates it.
 	pending []jsontext.Value
@@ -80,7 +84,7 @@ func (s *completionsStream) event(data []byte, m *meter) (event, error) {
 	if string(data) == sse.Done {
 		return s.done()
 	}
-	s.failed, s.rewrites, s.noChoices = false, false, false
+	s.failed, s.rewrites, s.noChoices, s.delivered = false, false, false, false
 	if err := walk(&s.reader, s, completionsFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
@@ -99,12 +103,13 @@ func (s *completionsStream) event(data []byte, m *meter) (event, error) {
 	return s.e, nil
 }
 
-// settle marks the usage chunk as the ending, as Chat's does, and the first chunk with text as the commit point.
+// settle marks the usage chunk as the ending, as Chat's does, and the first chunk with text, echoed or generated, as the
+// commit point.
 func (s *completionsStream) settle() {
 	switch {
 	case s.report != nil && s.noChoices:
 		s.e.role = ending
-	case s.e.content > 0:
+	case s.delivered:
 		s.e.role = content
 	}
 }
@@ -182,7 +187,8 @@ func (s *completionsStream) applyPendingText() error {
 	return nil
 }
 
-// addChoiceText counts the text after the echo this choice has already received. The prompt is repeated at the start of
+// addChoiceText marks the chunk delivered when it has any text and meters the text after the echo this choice has
+// already received. The prompt is repeated at the start of
 // every choice, so each choice tracks its own prefix: a batch that ends before choice N returns must not deduct N's
 // echo from the text choice 0 generated. The echoed bytes are still forwarded; only the meter leaves them out.
 func (s *completionsStream) addChoiceText(v jsontext.Value) error {
@@ -193,6 +199,7 @@ func (s *completionsStream) addChoiceText(v jsontext.Value) error {
 	if s.capture != nil {
 		s.capture.add(v)
 	}
+	s.delivered = s.delivered || len(text) > 0
 	if s.index >= 0 && s.echo != nil {
 		if prompt := s.index / s.echoChoices; prompt < int64(len(s.echo.Bytes)) {
 			seen := s.echoSeen[s.index]
@@ -206,7 +213,6 @@ func (s *completionsStream) addChoiceText(v jsontext.Value) error {
 	}
 	s.e.content += int64(len(text))
 	s.e.shape.Add(text)
-	s.e.role = content
 	return nil
 }
 
