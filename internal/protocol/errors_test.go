@@ -67,6 +67,8 @@ func TestRenderError(t *testing.T) {
 
 // chargedUsage is the usage object the settlement of 7 input and 2 output tokens makes in format f: its own fields in
 // full, and no other format's.
+//
+//nolint:exhaustive // only charged formats add usage
 func chargedUsage(f protocol.Format) map[string]any {
 	cost := map[string]any{"cost": 3.703701, "cost_currency": "USD"}
 	var u map[string]any

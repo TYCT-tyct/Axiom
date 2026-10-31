@@ -78,6 +78,9 @@ type Request struct {
 	// TextBytes bounds the text input's tokens: the body's bytes less the image and document data that Images and
 	// Documents count instead.
 	TextBytes, Images, Documents int64
+	// MaxInputBytes is the largest single input of a batch, in bytes; 0 when the request has one input. A batch's
+	// context limit applies to each input, while TextBytes is what all of them are charged for.
+	MaxInputBytes int64
 	// FileRefs is how many files the request refers to by an id an upstream issued instead of carrying their data. A
 	// reference is the supplier account's resource: routing keeps such a request to the one provider the client names,
 	// so it can only reach the account that can hold the file (README.md「跨格式转换」).
@@ -132,6 +135,8 @@ func bodyFault(err error) string {
 // Inspect reads the request summary from body in one pass of the tokenizer, never decoding the body into a tree, so
 // its own allocations do not grow with the body; the tokenizer's grow only with the names of objects wider than 64
 // names, as in jsonx.Validate (README.md「请求摘要」). Members it does not read are only checked to be JSON.
+//
+//nolint:cyclop,gocognit // one dispatch over every format, each branch one reader
 func Inspect(f Format, body []byte) (Request, error) {
 	if f == Completions || f.Direct() {
 		return inspectNew(f, body)

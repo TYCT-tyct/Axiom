@@ -452,6 +452,8 @@ func TestPrepareCost(t *testing.T) {
 // TestPrepareCostBoundsTheAllocation: what Prepare allocates, for bodies of the worst shapes there are (nothing but empty
 // objects, the smallest messages, members it does not know, an identifier of escapes), stays within the cost. The
 // allocation counted is the total, garbage included, which bounds the peak.
+//
+//nolint:exhaustive // the formats with output are the ones bounded here
 func TestPrepareCostBoundsTheAllocation(t *testing.T) {
 	w := protocol.Rewrites{Identity: func(string) string { return "0123456789abcdef0123456789abcdef" }}
 	bs := "\\"

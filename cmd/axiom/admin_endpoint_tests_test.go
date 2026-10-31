@@ -49,10 +49,23 @@ func TestTheContractNamesEveryProblemATestCanHave(t *testing.T) {
 
 // TestAdminFormats: the contract's names of the call formats and protocol's formats are one table, in the same order,
 // so that neither what a request asks for nor what an answer names can be the wrong one.
+func TestModelFormatsNamesDirectFormats(t *testing.T) {
+	got := modelFormats([]string{"messages", "completions", "embeddings", "rerank"})
+	want := []adminapi.ModelFormat{"messages", "completions", "embeddings", "rerank"}
+	if len(got) != len(want) {
+		t.Fatalf("modelFormats = %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("modelFormats[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestAdminFormats(t *testing.T) {
 	t.Parallel()
-	for name, want := range map[adminapi.ModelFormat]protocol.Format{
-		adminapi.Messages: protocol.Messages, adminapi.Responses: protocol.Responses, adminapi.Chat: protocol.Chat,
+	for name, want := range map[adminapi.TestFormat]protocol.Format{
+		adminapi.TestFormat("messages"): protocol.Messages, adminapi.TestFormat("responses"): protocol.Responses, adminapi.TestFormat("chat"): protocol.Chat,
 	} {
 		if got, err := formatOf(name); err != nil || got != want {
 			t.Errorf("%s is %v, %v; want %v", name, got, err, want)

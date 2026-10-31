@@ -1,3 +1,4 @@
+//nolint:revive // the routing table and its helpers are one fixture; the file is the test
 package routing_test
 
 import (
@@ -586,7 +587,8 @@ func TestEntryDirectFormats(t *testing.T) {
 	})
 	in := input()
 	in.Req.Format, in.NativeOnly = protocol.Embeddings, true
-	if plan, _, _ := newHarness(t, routing.Config{}, openPreset(), e).r.Plan(in); len(plan.Entries) != 0 {
+	plan, _, _ := newHarness(t, routing.Config{}, openPreset(), e).r.Plan(in) //nolint:errcheck // no endpoint is the expected permanent result here
+	if len(plan.Entries) != 0 {
 		t.Errorf("embeddings on a chat endpoint: %d entries", len(plan.Entries))
 	}
 }

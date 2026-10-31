@@ -42,6 +42,8 @@ func TestNativeClientsUseNativeEndpoints(t *testing.T) {
 
 // checkNativeEndpointRequest holds the endpoint's request to its own format: the model it is called as, a stream when
 // asked for, and the members only that format has.
+//
+//nolint:exhaustive // the generation formats have their own expected members
 func checkNativeEndpointRequest(t *testing.T, h *harness, upstream protocol.Format, stream bool) {
 	t.Helper()
 	if h.w.status != http.StatusOK {
@@ -84,6 +86,8 @@ func checkNativeToNativeReply(t *testing.T, h *harness, text string) {
 }
 
 // formatName is a format as a test names it.
+//
+//nolint:exhaustive // only the generation formats have names here
 func formatName(f protocol.Format) string {
 	switch f {
 	case protocol.Messages:

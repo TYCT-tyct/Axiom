@@ -210,6 +210,7 @@ func checkFailedFrameUsage(t *testing.T, client, upstream protocol.Format) {
 	}
 }
 
+//nolint:exhaustive // only failed frame formats have usage in the frame
 func failedUsageFrame(f protocol.Format, output string) string {
 	switch f {
 	case protocol.Chat:

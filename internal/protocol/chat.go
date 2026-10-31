@@ -66,6 +66,7 @@ func newChatStreamReader(u UsageContext, o RelayOptions, charge func(int) error)
 }
 
 var (
+	//nolint:dupl // the chat reader mirrors completions' members but keeps its own types and rules
 	chatFields = map[string]func(*chatStream) error{
 		"id":      func(s *chatStream) error { return s.replace(s.eventReader.id) },
 		"model":   func(s *chatStream) error { return s.replace(s.eventReader.model) },

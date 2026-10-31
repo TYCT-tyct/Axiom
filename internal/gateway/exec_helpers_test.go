@@ -1,3 +1,4 @@
+//nolint:revive // the fixture helpers are one shared table; splitting them would move the harness, not shorten it
 package gateway
 
 import (
@@ -398,7 +399,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if o.request != nil {
 		request = o.request
 	} else {
-		all, request = sample(t, upstream)
+		all, _ = sample(t, upstream)
 		_, request = sample(t, client)
 	}
 	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{}), health: o.health}

@@ -48,7 +48,7 @@ func fixture(t *testing.T, name string) []byte {
 }
 
 // jsonReply is an endpoint answering one JSON body.
-func jsonReply(status int, body []byte) scripted {
+func jsonReply(status int, body []byte) scripted { //nolint:unparam // the helper mirrors the upstream API; tests currently only use 200
 	return func(context.Context) (*http.Response, *suppliers.Failure) {
 		return &http.Response{
 			StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}},
@@ -69,11 +69,15 @@ func usage(t *testing.T, counts map[catalog.Item]int64) catalog.Usage {
 
 // TestExecutorEmbeddings: an embeddings call is answered whole, after the settlement: the reply keeps the upstream's
 // data, and Axiom's model and usage, with the cost. The upstream is asked in its own format, with the model rewritten.
+//
+//nolint:cyclop // one fallback flow through two entries is the test
 func TestExecutorEmbeddings(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		request, response := fixture(t, "embeddings/text/request.json"), fixture(t, "embeddings/text/response.json")
 		h := newHarness(t, context.Background(), options{
 			client: protocol.Embeddings, request: request, entries: 1,
+			// An embeddings model has no output price; a direct quote must not demand one.
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001"}}`,
 			script: map[int][]scripted{1: {jsonReply(http.StatusOK, response)}},
 			final:  billing.Final{Segments: []billing.Segment{{Usage: usage(t, map[catalog.Item]int64{catalog.ItemInput: 8})}}},
 		})
@@ -109,7 +113,8 @@ func TestExecutorRerank(t *testing.T) {
 		u := usage(t, map[catalog.Item]int64{catalog.ItemInput: 150, catalog.ItemWebSearch: 1})
 		h := newHarness(t, context.Background(), options{
 			client: protocol.Rerank, request: request, entries: 1,
-			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","web_search":"0.002"}}`,
+			// A rerank model has no output price either; its search unit is a flat web_search charge.
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","web_search":"0.002"}}`,
 			script: map[int][]scripted{1: {jsonReply(http.StatusOK, response)}},
 			final:  billing.Final{Segments: []billing.Segment{{Usage: u}}},
 		})
@@ -173,8 +178,57 @@ func TestExecutorDirectFailure(t *testing.T) {
 		if h.w.status != http.StatusOK || len(h.up.endpoint(1).calls) != 1 || len(h.up.endpoint(2).calls) != 1 {
 			t.Errorf("status %d, calls %d and %d", h.w.status, len(h.up.endpoint(1).calls), len(h.up.endpoint(2).calls))
 		}
-		if !strings.Contains(string(h.w.body()), `"data"`) {
+		if !strings.Contains(h.w.body(), `"data"`) {
 			t.Errorf("the client did not get the second entry's reply:\n%s", h.w.body())
+		}
+	})
+}
+
+// TestExecutorDirectReportsServedModel: the reply's model is the one the attempt actually served, not the alias the
+// client asked for. A direct reply is rewritten after the settlement, so it must read the entry's model slug.
+func TestExecutorDirectReportsServedModel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		request, response := fixture(t, "embeddings/text/request.json"), fixture(t, "embeddings/text/response.json")
+		h := newHarness(t, context.Background(), options{
+			client: protocol.Embeddings, request: request, entries: 1,
+			script: map[int][]scripted{1: {jsonReply(http.StatusOK, response)}},
+			final:  billing.Final{Segments: []billing.Segment{{Usage: usage(t, map[catalog.Item]int64{catalog.ItemInput: 8})}}},
+			mutate: func(c *Call) {
+				c.Request.Model = "alias/text-embedding"
+				c.Plan.Entries[0].ModelSlug = "real/text-embedding"
+			},
+		})
+		h.run()
+		if got := bodyObject(t, h.w.body())["model"]; got != "real/text-embedding" {
+			t.Errorf("reply model = %v, want the served model", got)
+		}
+	})
+}
+
+// TestExecutorDirectRewriteRespectsMemory: the rewritten reply is a second copy while the upstream's body is still held.
+// The node's budget is asked before it is allocated; when it cannot hold both, the client gets 503 instead of the node
+// overcommitting.
+func TestExecutorDirectRewriteRespectsMemory(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		request := fixture(t, "embeddings/text/request.json")
+		var data strings.Builder
+		data.WriteString(`{"object":"list","data":[`)
+		for i := range 2000 {
+			if i > 0 {
+				data.WriteByte(',')
+			}
+			data.WriteString(`{"embedding":[0.1],"index":0}`)
+		}
+		data.WriteString(`],"model":"upstream","usage":{"prompt_tokens":8,"total_tokens":8}}`)
+		h := newHarness(t, context.Background(), options{
+			client: protocol.Embeddings, request: request, entries: 1, memory: 160 << 10,
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001"}}`,
+			script: map[int][]scripted{1: {jsonReply(http.StatusOK, []byte(data.String()))}},
+			final:  billing.Final{Segments: []billing.Segment{{Usage: usage(t, map[catalog.Item]int64{catalog.ItemInput: 8})}}},
+		})
+		h.run()
+		if h.w.status != http.StatusServiceUnavailable {
+			t.Errorf("status %d, want 503 when the rewritten copy does not fit: %s", h.w.status, h.w.body())
 		}
 	})
 }

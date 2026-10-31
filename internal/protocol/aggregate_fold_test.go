@@ -19,6 +19,8 @@ import (
 // foldStream is the reference for the aggregators, written apart from them: it folds the stream a client of format f
 // gets into the reply a client that did not ask for a stream gets, on decoded values and by the rules of
 // README.md「非流式聚合」, so the two agree only if both fold the same way.
+//
+//nolint:exhaustive // every format reaches its own fold
 func foldStream(t testing.TB, f protocol.Format, stream []byte) map[string]any {
 	t.Helper()
 	var events []map[string]any

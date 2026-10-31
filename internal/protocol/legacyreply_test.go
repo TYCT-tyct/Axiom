@@ -13,6 +13,7 @@ import (
 	"axiom/internal/protocol/internal/sse"
 )
 
+//nolint:exhaustive // the legacy formats are the ones with a conversion
 func legacyReplyStream(f protocol.Format) string {
 	switch f {
 	case protocol.Messages:
@@ -75,6 +76,7 @@ func TestLegacyRepliesFollowClient(t *testing.T) {
 	}
 }
 
+//nolint:exhaustive // the formats that can carry parallel calls are the ones tested
 func TestLegacyReplyRejectsParallelCalls(t *testing.T) {
 	for _, aggregate := range []bool{false, true} {
 		for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {

@@ -121,6 +121,8 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 // only the members README.md「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied
 // as it is. A compaction request (Target.Compact) is rewritten by a smaller set of members, and nothing is added to it.
 // The three formats convert in either direction (README.md「跨格式转换」).
+//
+//nolint:cyclop // the rewrite order is the contract; each branch is one format's rule
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
@@ -645,6 +647,18 @@ func (p *rewriter) forceUsage() error {
 		p.replace(len(v), "true")
 	}
 	return err
+}
+
+// addCompletions appends what a legacy completions request lacks: the output cap it was quoted at, the usage option
+// that makes the upstream report it, and the stream the gateway reads every answer as.
+func (p *rewriter) addCompletions() error {
+	if !p.capped && p.t.MaxOutput > 0 {
+		p.out = strconv.AppendInt(append(p.out, addCap...), p.t.MaxOutput, 10)
+	}
+	if p.t.Streams && !p.optioned {
+		p.out = append(p.out, addStreamOptions...)
+	}
+	return p.addStream()
 }
 
 // addChat appends the output cap in the member the endpoint reads, and what else a Chat request lacks. The cap is the

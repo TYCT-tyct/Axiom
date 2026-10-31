@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"cmp"
+	"encoding/json/jsontext" //nolint:depguard // chunks are stitched token by token
 	"fmt"
 	"slices"
 	"strconv"
@@ -18,11 +19,11 @@ import (
 type completionsStream struct {
 	eventReader
 	completionsWriter
-	choices                     map[int64]bool
-	report                      *openAIUsage
-	reportErr                   error
-	failed, rewrites, noChoices bool
-	index                       int64
+	choices                                     map[int64]bool
+	report                                      *openAIUsage
+	reportErr                                   error
+	failed, rewrites, noChoices, choiceFinished bool
+	index                                       int64
 }
 
 func newCompletionsStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
@@ -33,6 +34,7 @@ func newCompletionsStream(u UsageContext, o RelayOptions, charge func(int) error
 }
 
 var (
+	//nolint:dupl // the completions reader mirrors chat's members but keeps its own types and rules
 	completionsFields = map[string]func(*completionsStream) error{
 		"id":           func(s *completionsStream) error { return s.replace(s.eventReader.id) },
 		"model":        func(s *completionsStream) error { return s.replace(s.eventReader.model) },
@@ -103,8 +105,18 @@ func (s *completionsStream) done() (event, error) {
 }
 
 func (s *completionsStream) choice() error {
-	s.index = 0
-	return walk(&s.reader, s, completionsChoiceFields)
+	// The choices array decides whether the chunk is a pure usage ending; a chunk with a choice is not, even when the
+	// choice also carries usage. Reset before reading: noChoices is set once for the array, not once per element.
+	s.noChoices, s.index, s.choiceFinished = false, 0, false
+	if err := walk(&s.reader, s, completionsChoiceFields); err != nil {
+		return err
+	}
+	// finish_reason may come before index in the object; apply it only after the whole choice is read, so the state
+	// lands on the choice's own index.
+	if s.choiceFinished {
+		s.choices[s.index] = true
+	}
+	return nil
 }
 
 func (s *completionsStream) choiceIndex() error {
@@ -137,7 +149,7 @@ func (s *completionsStream) finishReason() error {
 	if err != nil || v == nil {
 		return err
 	}
-	s.choices[s.index] = true
+	s.choiceFinished = true
 	return nil
 }
 
@@ -232,6 +244,7 @@ type completionsChoiceAgg struct {
 }
 
 var (
+	//nolint:dupl // the completions aggregate mirrors chat's members but keeps its own types and rules
 	completionsAggFields = map[string]func(*completionsAggregate) error{
 		"id":      func(a *completionsAggregate) error { return a.capture(&a.ev.id) },
 		"created": func(a *completionsAggregate) error { return a.capture(&a.ev.created) },
@@ -276,6 +289,7 @@ func (a *completionsAggregate) event(data []byte) error {
 	return nil
 }
 
+//nolint:dupl // the aggregate mirrors chat's members but keeps its own types and rules
 func (a *completionsAggregate) keep() error {
 	e := &a.ev
 	for _, m := range [...]struct {
@@ -305,22 +319,36 @@ func (a *completionsAggregate) readChoice() error {
 	if err := walk(&a.reader, a, completionsAggChoiceFields); err != nil {
 		return err
 	}
-	a.pending = append(a.pending, a.ev.span)
+	pending, err := grow(&a.aggBase, a.pending, 1, 1)
+	if err != nil {
+		return err
+	}
+	a.pending = append(pending, a.ev.span)
 	return nil
 }
 
-func (a *completionsAggregate) choice(index int64) int {
+func (a *completionsAggregate) choice(index int64) (int, error) {
 	if i, ok := a.at[index]; ok {
-		return i
+		return i, nil
 	}
-	i := len(a.choices)
-	a.choices = append(a.choices, completionsChoiceAgg{index: index})
+	choices, err := grow(&a.aggBase, a.choices, 1, 1)
+	if err != nil {
+		return 0, err
+	}
+	if err := a.take(mapSlot, 1); err != nil {
+		return 0, err
+	}
+	i := len(choices)
+	a.choices = append(choices, completionsChoiceAgg{index: index})
 	a.at[index] = i
-	return i
+	return i, nil
 }
 
 func (a *completionsAggregate) apply(c completionsChoice) error {
-	i := a.choice(c.index)
+	i, err := a.choice(c.index)
+	if err != nil {
+		return err
+	}
 	ch := &a.choices[i]
 	if len(c.text) > 0 {
 		if err := a.add(&ch.text, c.text, 2); err != nil {
@@ -332,12 +360,141 @@ func (a *completionsAggregate) apply(c completionsChoice) error {
 			return err
 		}
 	}
-	if c.logprobs != nil {
-		if err := a.set(&ch.logprobs, c.logprobs, 1); err != nil {
+	if c.logprobs != nil && !bytes.Equal(c.logprobs, []byte("null")) {
+		merged, err := mergeLogprobs(ch.logprobs, c.logprobs)
+		if err != nil {
+			return err
+		}
+		if err := a.set(&ch.logprobs, merged, 1); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// mergeLogprobs joins the logprobs objects of two chunks of one choice: each array member's elements are appended, so
+// the probabilities stay aligned with the text aggregated across the chunks. A chunk without logprobs adds nothing;
+// members other than the four arrays keep the later value.
+func mergeLogprobs(old, add []byte) ([]byte, error) {
+	if old == nil || bytes.Equal(old, []byte("null")) {
+		return add, nil
+	}
+	if add == nil || bytes.Equal(add, []byte("null")) {
+		return old, nil
+	}
+	om, err := rawMembers(old)
+	if err != nil {
+		return nil, err
+	}
+	am, err := rawMembers(add)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]jsontext.Value, len(am))
+	for _, m := range am {
+		byName[m.name] = m.value
+	}
+	seen := make(map[string]bool, len(om))
+	out := []byte{'{'}
+	first := true
+	for _, m := range om {
+		seen[m.name] = true
+		out, err = mergeLogprobsMember(out, &first, m, byName[m.name])
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, m := range am {
+		if seen[m.name] {
+			continue
+		}
+		out = append(out, commaMember(&first, m.name)...)
+		out = append(out, m.value...)
+	}
+	return append(out, '}'), nil
+}
+
+// mergeLogprobsMember writes one member of the merged object: arrays from both chunks are joined, and any other
+// member keeps the later value.
+func mergeLogprobsMember(out []byte, first *bool, old rawMember, add jsontext.Value) ([]byte, error) {
+	out = append(out, commaMember(first, old.name)...)
+	if add == nil {
+		return append(out, old.value...), nil
+	}
+	if old.value.Kind() == '[' && add.Kind() == '[' {
+		return appendArrayJoin(out, old.value, add)
+	}
+	return append(out, add...), nil
+}
+
+type rawMember struct {
+	name  string
+	value jsontext.Value
+}
+
+func rawMembers(v []byte) ([]rawMember, error) {
+	dec := jsontext.NewDecoder(bytes.NewReader(v))
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, err
+	}
+	var out []rawMember
+	for dec.PeekKind() != '}' {
+		n, err := dec.ReadValue()
+		if err != nil {
+			return nil, err
+		}
+		name, err := jsontext.AppendUnquote(nil, n)
+		if err != nil {
+			return nil, err
+		}
+		value, err := dec.ReadValue()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rawMember{string(name), bytes.Clone(value)})
+	}
+	_, err := dec.ReadToken()
+	return out, err
+}
+
+func commaMember(first *bool, name string) []byte {
+	out := make([]byte, 0, len(name)+3)
+	if !*first {
+		out = append(out, ',')
+	}
+	*first = false
+	out = append(out, '"')
+	out = append(out, name...)
+	return append(out, '"', ':')
+}
+
+func appendArrayJoin(dst []byte, a, b jsontext.Value) ([]byte, error) {
+	da := jsontext.NewDecoder(bytes.NewReader(a))
+	db := jsontext.NewDecoder(bytes.NewReader(b))
+	for _, d := range [...]*jsontext.Decoder{da, db} {
+		if _, err := d.ReadToken(); err != nil {
+			return nil, err
+		}
+	}
+	dst = append(dst, '[')
+	first := true
+	for _, d := range [...]*jsontext.Decoder{da, db} {
+		for d.PeekKind() != ']' {
+			v, err := d.ReadValue()
+			if err != nil {
+				return nil, err
+			}
+			if !first {
+				dst = append(dst, ',')
+			}
+			first = false
+			dst = append(dst, v...)
+		}
+		if _, err := d.ReadToken(); err != nil {
+			return nil, err
+		}
+	}
+	return append(dst, ']'), nil
 }
 
 func (*completionsAggregate) failed() {}
@@ -348,6 +505,11 @@ func (a *completionsAggregate) body() ([]byte, error) {
 	for i := range a.choices {
 		size += 128 + len(a.choices[i].text) + len(a.choices[i].logprobs)
 	}
+	if err := a.draw(size); err != nil {
+		return nil, err
+	}
+	a.held += int64(size)
+	a.drawn += int64(size)
 	out := append(make([]byte, 0, size), `{"id":`...)
 	out = append(append(out, orNull(a.id)...), `,"object":"text_completion","created":`...)
 	out = append(append(out, orZero(a.created)...), `,"model":`...)

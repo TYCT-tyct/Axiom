@@ -5057,6 +5057,10 @@ components:
         reason: {$ref: "#/components/schemas/Reason"}
     ModelFormat:
       type: string
+      enum: [messages, responses, chat, completions, embeddings, rerank]
+    TestFormat:
+      type: string
+      description: The generation formats an endpoint test can exercise. Direct formats are listed on the endpoint but are not tested here yet.
       enum: [messages, responses, chat]
     EndpointTestRequest:
       type: object
@@ -5064,7 +5068,7 @@ components:
       properties:
         endpoint_id: {$ref: "#/components/schemas/Uuid"}
         format:
-          allOf: [{$ref: "#/components/schemas/ModelFormat"}]
+          allOf: [{$ref: "#/components/schemas/TestFormat"}]
           description: The format to test it in; it must be one the endpoint serves.
         reason: {$ref: "#/components/schemas/Reason"}
     EndpointTestOutcome:
@@ -5116,7 +5120,7 @@ components:
         endpoint_id: {$ref: "#/components/schemas/Uuid"}
         model_id: {$ref: "#/components/schemas/Uuid"}
         upstream_model: {type: string, description: "The model's name at the supplier, which the call sent."}
-        format: {$ref: "#/components/schemas/ModelFormat"}
+        format: {$ref: "#/components/schemas/TestFormat"}
         outcome: {$ref: "#/components/schemas/EndpointTestOutcome"}
         problem: {$ref: "#/components/schemas/EndpointTestProblem"}
         upstream_status: {type: integer, minimum: 0, description: "The supplier's HTTP status; 0 when it answered nothing."}

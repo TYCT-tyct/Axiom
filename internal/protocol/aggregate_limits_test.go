@@ -14,6 +14,8 @@ import (
 
 // aggregateDeltas is deltas with the events a reply that is aggregated needs to place them: the Messages block stays
 // open, and the Responses item and its part are added before their text.
+//
+//nolint:exhaustive // the formats without a special stream use deltas
 func aggregateDeltas(f protocol.Format, n, size int) []byte {
 	text := strings.Repeat("x", size)
 	switch f {

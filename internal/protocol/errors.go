@@ -168,6 +168,7 @@ func appendCharged(dst []byte, f Format, c *charges) []byte {
 
 // appendEmbeddingUsage appends u in OpenAI's embeddings usage fields, the ones OpenRouter documents for the format.
 func appendEmbeddingUsage(dst []byte, u catalog.Usage, cost string) []byte {
+	dst = append(dst, '{')
 	dst = appendIntMember(dst, "prompt_tokens", u.Count(catalog.ItemInput))
 	dst = appendIntMember(append(dst, ','), "total_tokens", u.InputTotal())
 	return append(append(dst, cost...), `,"is_byok":false}`...)
@@ -175,6 +176,7 @@ func appendEmbeddingUsage(dst []byte, u catalog.Usage, cost string) []byte {
 
 // appendRerankUsage appends u in the usage fields OpenRouter documents for rerank.
 func appendRerankUsage(dst []byte, u catalog.Usage, cost string) []byte {
+	dst = append(dst, '{')
 	dst = appendIntMember(dst, "total_tokens", u.InputTotal())
 	if n := u.Count(catalog.ItemWebSearch); n > 0 {
 		dst = appendIntMember(append(dst, ','), "search_units", n)

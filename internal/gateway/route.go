@@ -257,6 +257,28 @@ func (d *RouteDeps) report(left map[catalog.ModelID]*leftOut) {
 // chatFormats are the formats that convert into each other: an endpoint speaking any of them serves all three.
 var chatFormats = routing.Of(protocol.Messages, protocol.Responses, protocol.Chat)
 
+// servingOf is the spec an endpoint must meet: all of Serving for a generation format, and only the context for an
+// endpoint reached solely through embeddings or rerank, which generates nothing and needs no output limit.
+func servingOf(model catalog.Model, formats []protocol.Format) (catalog.Serving, bool) {
+	if serving, ok := model.Serving(); ok || !onlyDirectFormats(formats) {
+		return serving, ok
+	}
+	return model.ServingDirect()
+}
+
+// onlyDirectFormats reports whether every format is a direct one, in which case the model generates nothing.
+func onlyDirectFormats(formats []protocol.Format) bool {
+	if len(formats) == 0 {
+		return false
+	}
+	for _, f := range formats {
+		if !f.Direct() {
+			return false
+		}
+	}
+	return true
+}
+
 func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
 	measured quality.Measures,
 ) (routing.Endpoint, string) {
@@ -264,7 +286,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	if !ok {
 		return routing.Endpoint{}, "the catalog has no such model"
 	}
-	serving, ok := model.Serving()
+	serving, ok := servingOf(model, r.Formats)
 	if !ok {
 		return routing.Endpoint{}, "its spec declares no context length, output limit, streaming or abilities"
 	}

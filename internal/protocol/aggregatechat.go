@@ -76,6 +76,7 @@ type chatAggEvent struct {
 const mapSlot = 48
 
 var (
+	//nolint:dupl // the chat aggregate mirrors completions' members but keeps its own types and rules
 	chatAggFields = map[string]func(*chatAggregate) error{
 		"id":      func(a *chatAggregate) error { return a.capture(&a.ev.id) },
 		"created": func(a *chatAggregate) error { return a.capture(&a.ev.created) },
@@ -166,6 +167,8 @@ func (a *chatAggregate) event(data []byte) error {
 
 // keep takes the members of the chunk that are not choices: the first chunk's identity, and the last usage, error
 // and axiom.
+//
+//nolint:dupl // the chat aggregate mirrors completions' members but keeps its own types and rules
 func (a *chatAggregate) keep() error {
 	e := &a.ev
 	for _, m := range [...]struct {

@@ -22,9 +22,15 @@ type Demand struct {
 	TextBytes, Images, Choices int64
 	Documents                  int64        // files, whatever their pages: protocol does not parse them
 	ServerTools                []ServerTool // the server tools the request enables, such as web search
-	Compaction                 bool         // server-side compaction or context management is on
-	InputItems                 catalog.ItemSet
-	ServiceTiers               catalog.ServiceTierSet
+	// Direct is a call of a format that answers one object rather than generating output: embeddings and rerank. It
+	// has no output tokens to reserve, and its server-tool charges are flat per use, not a sampling of the model.
+	Direct bool
+	// InputBytes is the largest single input of a batch, in bytes, for the context limit and the price band that
+	// depend on one input's length rather than the batch's total. 0 means TextBytes is that length.
+	InputBytes   int64
+	Compaction   bool // server-side compaction or context management is on
+	InputItems   catalog.ItemSet
+	ServiceTiers catalog.ServiceTierSet
 	// TextTokens is the request's text counted in the tokens of the model family's own tokenizer, when the caller
 	// counted it (NewTextCount); 0 keeps the bytes-per-token rule of the estimate. It is an estimate, not a bound:
 	// InputBound goes by TextBytes alone.
@@ -234,8 +240,11 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
 	rest := mul(samplings-1, window)
 	q.outputCap = mul(e.MaxOutput, max(d.Choices, 1))
+	if d.Direct {
+		q.outputCap = 0 // a direct call generates nothing, whatever its batch or cap says
+	}
 	output, allowance, overshoot := q.outputCap, int64(0), int64(0) // overshoot in token-nanoseconds
-	if e.Segmentable {
+	if e.Segmentable && !d.Direct {
 		q.segment, output = s.Output, min(output, s.Output)
 		allowance, overshoot = s.Allowance(e.Model.OutputSpeed)
 	}
@@ -274,9 +283,19 @@ func (q *quote) priceTokens(d Demand, e Quotable, prices *quotePrices, tiers cat
 		// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
 		in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
 	}
-	firstPrice, ok := prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
+	// A direct call's batch is charged for every input, but its price band is the largest single input, not the sum:
+	// one 6k-token input beside another is two 6k contexts, not one 12k context.
+	band := first
+	if d.Direct {
+		band = longest
+	}
+	firstPrice, ok := prices.inputCeiling(in, tiers, band, e.Model.OpenAIUsage)
 	if !ok {
 		return inputPrice{}, ErrUnpriced
+	}
+	q.fixed = firstPrice.Mul(first)
+	if d.Direct {
+		return inputPrice{}, nil // no output, and nothing samples again
 	}
 	restPrice, ok := prices.inputCeiling(in, tiers, e.Model.ContextLength, e.Model.OpenAIUsage)
 	if !ok {
@@ -289,7 +308,7 @@ func (q *quote) priceTokens(d Demand, e Quotable, prices *quotePrices, tiers cat
 		return inputPrice{}, ErrUnpriced
 	}
 	q.output = outPrice
-	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
+	q.fixed = sum(q.fixed, restPrice.Mul(rest))
 	return restPrice, nil
 }
 
@@ -352,6 +371,10 @@ func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tier
 		return ErrUnpriced
 	}
 	q.searches, q.resample, q.rereads = uses[catalog.ItemWebSearch], resample, window
+	if d.Direct {
+		// A rerank's search unit is a flat charge per use, not a sampling of the model: only the item is reserved.
+		q.resample, q.rereads = inputPrice{}, 0
+	}
 	if d.Compaction {
 		q.rereads = mul(window, 2)
 	}
@@ -435,12 +458,25 @@ func InputEstimate(d Demand, m Model) int64 {
 	}
 	images := mul(d.Images, min(imageTokens(m), estimatedImageTokens))
 	files := mul(d.Documents, min(fileTokens(m), estimatedFileTokens))
+	if d.Direct {
+		return add(text, add(images, files)) // each input fits the context; the batch's total is what is charged
+	}
 	return min(m.ContextLength, add(text, add(images, files)))
 }
 
 func inputBound(d Demand, m Model, samplings int64) (first, longest int64) {
 	window := m.ContextLength
-	first = min(window, add(d.TextBytes, add(mul(d.Images, imageTokens(m)), mul(d.Documents, fileTokens(m)))))
+	total := add(d.TextBytes, add(mul(d.Images, imageTokens(m)), mul(d.Documents, fileTokens(m))))
+	first = min(window, total)
+	if d.Direct {
+		// A batch is one charge for every input, and its context is the largest input: neither is the sum.
+		first = total
+		one := d.InputBytes
+		if one <= 0 {
+			one = total
+		}
+		return first, min(window, one)
+	}
 	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
 	if samplings > 1 || searchable {
 		return first, window // every later sampling, and one a search beyond the quote adds, rereads the whole context
@@ -476,7 +512,10 @@ func serverToolUses(d Demand, m Model) (uses [catalog.NumItems]int64, samplings 
 		if n == 0 {
 			n = m.MaxUses[t.Item]
 		}
-		uses[t.Item], samplings = add(uses[t.Item], n), add(samplings, n)
+		uses[t.Item] = add(uses[t.Item], n)
+		if !d.Direct { // a direct call's tool charge is per use, without sampling the model again
+			samplings = add(samplings, n)
+		}
 	}
 	if d.Compaction {
 		samplings = mul(samplings, 2)

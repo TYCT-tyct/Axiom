@@ -79,7 +79,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	n := &need{
 		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, now: now,
-		tokens: in.Req.TextBytes / billing.InputBytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
+		tokens: inputTokens(in.Req), demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
@@ -114,11 +114,22 @@ func unmeasured(order []ranked, strategy Strategy) bool {
 	return strategy == Fastest && len(order) > 0 && !slices.ContainsFunc(order, func(c ranked) bool { return c.Throughput > 0 })
 }
 
+// inputTokens is the text a candidate's context must hold: one input's, not the sum of a batch's, which a direct
+// format's model takes one at a time.
+func inputTokens(req *protocol.Request) int64 {
+	text := req.TextBytes
+	if req.MaxInputBytes > 0 {
+		text = req.MaxInputBytes
+	}
+	return text / billing.InputBytesPerToken
+}
+
 // DemandOf is the request as billing's quote reads it, so the length that bounds the price limits is billing's own
 // (billing.InputBound), and the gateway reserves for the same demand it was routed by.
 func DemandOf(req *protocol.Request) billing.Demand {
 	d := billing.Demand{
 		TextBytes: req.TextBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
+		Direct: req.Format.Direct(), InputBytes: req.MaxInputBytes,
 		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
 	}
 	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {

@@ -1,9 +1,12 @@
+//nolint:revive // the direct-format request scanner and reply encoder share the format's rules and helpers
 package protocol
 
 import (
 	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: the body is read token by token
+	"errors"
 	"fmt"
+	"io"
 	"strconv"
 
 	"axiom/internal/catalog"
@@ -28,31 +31,40 @@ func inspectNew(f Format, body []byte) (Request, error) {
 	if d.r.Model == "" {
 		return Request{}, fmt.Errorf("%w: model is missing", ErrInvalid)
 	}
-	switch d.r.Format {
+	if err := d.validate(); err != nil {
+		return Request{}, err
+	}
+	return d.r, nil
+}
+
+// validate checks the members each direct format requires and fills the counts its request implies.
+func (d *directScanner) validate() error {
+	switch d.r.Format { //nolint:exhaustive // only the three formats inspected here can reach the scanner
 	case Embeddings:
 		if !d.hasInput {
-			return Request{}, fmt.Errorf("%w: input is missing", ErrInvalid)
+			return fmt.Errorf("%w: input is missing", ErrInvalid)
 		}
 	case Rerank:
 		if !d.hasQuery {
-			return Request{}, fmt.Errorf("%w: query is missing", ErrInvalid)
+			return fmt.Errorf("%w: query is missing", ErrInvalid)
 		}
 		if !d.hasDocs {
-			return Request{}, fmt.Errorf("%w: documents are missing", ErrInvalid)
+			return fmt.Errorf("%w: documents are missing", ErrInvalid)
 		}
 		// A rerank is one search: its usage reports search_units, which billing charges by the web_search item. The
 		// reservation covers one; the request does not need the model's web_search ability, which is for tools.
 		d.r.WebSearches = 1
+		d.r.MaxInputBytes = d.queryBytes + d.maxDoc
 	case Completions:
 		if !d.hasPrompt {
-			return Request{}, fmt.Errorf("%w: prompt is missing", ErrInvalid)
+			return fmt.Errorf("%w: prompt is missing", ErrInvalid)
 		}
 		if d.prompts > 1 && d.r.Choices > (1<<62)/d.prompts {
-			return Request{}, fmt.Errorf("%w: prompt and n ask for too many completions", ErrInvalid)
+			return fmt.Errorf("%w: prompt and n ask for too many completions", ErrInvalid)
 		}
 		d.r.Choices *= max(1, d.prompts)
 	}
-	return d.r, nil
+	return nil
 }
 
 // directScanner reads the top-level members of a request of a direct format. The whole body was validated first, so
@@ -61,6 +73,7 @@ type directScanner struct {
 	reader
 	r                                      Request
 	prompts                                int64 // legacy completions' prompts, which each generate Choices completions
+	queryBytes, maxDoc                     int64 // rerank: the query's bytes and the largest document's
 	hasInput, hasQuery, hasDocs, hasPrompt bool
 }
 
@@ -77,7 +90,7 @@ func (d *directScanner) top() error {
 			return err
 		}
 		var err error
-		switch d.r.Format {
+		switch d.r.Format { //nolint:exhaustive // only the three formats inspected here can reach the scanner
 		case Embeddings:
 			err = d.embeddingsMember()
 		case Rerank:
@@ -92,6 +105,7 @@ func (d *directScanner) top() error {
 	return d.token()
 }
 
+//nolint:cyclop // one member per key is the format's grammar; splitting it would hide the allowed set
 func (d *directScanner) embeddingsMember() error {
 	switch string(d.name) {
 	case "model":
@@ -133,6 +147,7 @@ func (d *directScanner) embeddingsMember() error {
 	}
 }
 
+//nolint:cyclop // one member per key is the format's grammar; splitting it would hide the allowed set
 func (d *directScanner) rerankMember() error {
 	switch string(d.name) {
 	case "model":
@@ -145,7 +160,12 @@ func (d *directScanner) rerankMember() error {
 		return d.skip()
 	case "query":
 		d.hasQuery = true
-		return d.textBytes()
+		v, err := d.str()
+		if err == nil {
+			d.queryBytes = int64(len(v))
+			d.r.TextBytes += d.queryBytes
+		}
+		return err
 	case "documents":
 		d.hasDocs = true
 		return d.documents()
@@ -230,127 +250,150 @@ func (d *directScanner) provider() error {
 	return nil
 }
 
-// textBytes adds a string value's length to the text the input may be billed for.
-func (d *directScanner) textBytes() error {
-	v, err := d.str()
-	d.r.TextBytes += int64(len(v))
-	return err
+// input records one input's text bytes: the batch's total for the charge and the largest input for the context.
+func (d *directScanner) input(n int64) {
+	d.r.TextBytes += n
+	if n > d.r.MaxInputBytes {
+		d.r.MaxInputBytes = n
+	}
 }
 
 // embeddingInput reads OpenAI's input: a string, an array of strings, a token array, an array of token arrays, or an
 // array of objects whose content holds text and media parts (OpenAI《Create embeddings》, OpenRouter《Embeddings》,
 // read 2026-10-30).
+//
+//nolint:exhaustive // the default rejects every other JSON kind with the client's error
 func (d *directScanner) embeddingInput() error {
-	v, err := d.dec.ReadValue()
-	if err != nil {
-		return err
-	}
-	switch v.Kind() {
+	switch d.dec.PeekKind() {
 	case '"':
-		d.r.TextBytes += int64(unquotedLen(v))
-		return nil
+		v, err := d.str()
+		if err == nil {
+			d.input(int64(len(v)))
+		}
+		return err
 	case '[':
+		v, err := d.dec.ReadValue()
+		if err != nil {
+			return err
+		}
 		return d.embeddingArray(v)
 	default:
-		return fmt.Errorf("input is %s, want a string or an array", kindName(v))
+		return fmt.Errorf("input is %s, want a string or an array", kindNameOf(d.dec.PeekKind()))
 	}
 }
 
+// embeddingArray reads the several forms an embedding input array takes. Each string, token array or object is one
+// input of its own: a batch is charged for all of them, while its context limit holds each one separately.
+//
+//nolint:cyclop,gocognit,exhaustive // the four input shapes are one dispatch; each branch is the shape's rule
 func (d *directScanner) embeddingArray(v jsontext.Value) error {
-	elems, err := elements(v)
+	var first jsontext.Kind
+	var tokens int64
+	seen := false
+	err := eachArray(v, func(kind jsontext.Kind, e jsontext.Value) error {
+		if !seen {
+			first, seen = kind, true
+		}
+		switch first {
+		case '0':
+			if kind != '0' {
+				return fmt.Errorf("input mixes tokens with other values")
+			}
+			tokens++
+		case '"':
+			if kind != '"' {
+				return fmt.Errorf("input mixes strings with other values")
+			}
+			d.input(unquotedLen(e))
+		case '[':
+			if kind != '[' {
+				return fmt.Errorf("input mixes token arrays with other values")
+			}
+			n, err := tokenCount(e)
+			if err != nil {
+				return err
+			}
+			d.input(n * 4)
+		case '{':
+			if kind != '{' {
+				return fmt.Errorf("input mixes objects with other values")
+			}
+			n, err := d.embeddingObject(e)
+			if err != nil {
+				return err
+			}
+			d.input(n)
+		default:
+			return fmt.Errorf("input has an element of the wrong type")
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	if len(elems) == 0 {
+	if !seen {
 		return fmt.Errorf("input is an empty array")
 	}
-	switch elems[0].Kind() {
-	case '0':
-		return d.tokens(elems)
-	case '"':
-		for _, e := range elems {
-			if e.Kind() != '"' {
-				return fmt.Errorf("input mixes strings with other values")
-			}
-			d.r.TextBytes += int64(unquotedLen(e))
-		}
-		return nil
-	case '[':
-		return d.tokenArrays(elems)
-	case '{':
-		for _, e := range elems {
-			if e.Kind() != '{' {
-				return fmt.Errorf("input mixes objects with other values")
-			}
-			if err := d.embeddingObject(e); err != nil {
-				return err
-			}
-		}
-		return nil
-	default:
-		return fmt.Errorf("input has an element of the wrong type")
+	if first == '0' {
+		d.input(tokens * 4)
 	}
+	return nil
 }
 
 // tokens counts a token array: its tokens are exact, so the reservation is the bytes a token takes at the estimate's
 // most (billing.InputBytesPerToken is 4), which never undercounts them.
-func (d *directScanner) tokens(elems []jsontext.Value) error {
-	for _, e := range elems {
-		if e.Kind() != '0' {
-			return fmt.Errorf("input mixes tokens with other values")
-		}
+func tokenCount(v jsontext.Value) (int64, error) {
+	dec := jsontext.NewDecoder(bytes.NewReader(v))
+	if _, err := dec.ReadToken(); err != nil {
+		return 0, err
 	}
-	d.r.TextBytes += int64(len(elems)) * 4
-	return nil
+	var n int64
+	for dec.PeekKind() != ']' {
+		if dec.PeekKind() != '0' {
+			return 0, fmt.Errorf("input mixes tokens with other values")
+		}
+		if err := dec.SkipValue(); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
-func (d *directScanner) tokenArrays(elems []jsontext.Value) error {
-	for _, e := range elems {
-		if e.Kind() != '[' {
-			return fmt.Errorf("input mixes token arrays with other values")
-		}
-		inner, err := elements(e)
-		if err != nil {
-			return err
-		}
-		if err := d.tokens(inner); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// embeddingObject reads one {content: [...]} input object and its parts.
-func (d *directScanner) embeddingObject(v jsontext.Value) error {
+// embeddingObject reads one {content: [...]} input object and its parts, returning the text bytes it holds. Its
+// content is read element by element: a batch of a million numbers must not become a million slice headers.
+//
+//nolint:cyclop,gocognit // one content part per type is the format's grammar
+func (d *directScanner) embeddingObject(v jsontext.Value) (int64, error) {
 	content, ok, err := member(v, "content")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if !ok || content.Kind() != '[' {
-		return fmt.Errorf("input object has no content array")
+		return 0, fmt.Errorf("input object has no content array")
 	}
-	parts, err := elements(content)
-	if err != nil {
-		return err
-	}
-	for _, part := range parts {
-		if part.Kind() != '{' {
+	var text int64
+	err = eachArray(content, func(kind jsontext.Kind, part jsontext.Value) error {
+		if kind != '{' {
 			return fmt.Errorf("content part is not an object")
 		}
-		kind, _, err := member(part, "type")
+		typ, _, err := member(part, "type")
 		if err != nil {
 			return err
 		}
-		switch string(kind) {
+		switch string(typ) {
 		case `"text"`:
-			text, ok, err := member(part, "text")
+			value, ok, err := member(part, "text")
 			if err != nil {
 				return err
 			}
-			if !ok || text.Kind() != '"' {
+			if !ok || value.Kind() != '"' {
 				return fmt.Errorf("text part has no text string")
 			}
-			d.r.TextBytes += int64(unquotedLen(text))
+			text += unquotedLen(value)
 		case `"image_url"`:
 			d.r.Images++
 			d.r.Needs |= Images
@@ -363,13 +406,17 @@ func (d *directScanner) embeddingObject(v jsontext.Value) error {
 			d.r.Documents++
 			d.r.Needs |= Documents
 		default:
-			return fmt.Errorf("content part type %s is not supported", kind)
+			return fmt.Errorf("content part type %s is not supported", typ)
 		}
-	}
-	return nil
+		return nil
+	})
+	return text, err
 }
 
-// documents reads rerank's documents: strings, or objects with text and/or image.
+// documents reads rerank's documents: strings, or objects with text and/or image. Each document is one input; the
+// context limit holds the query and one document, not the whole batch.
+//
+//nolint:cyclop,gocognit,exhaustive // one document shape per branch is the format's grammar
 func (d *directScanner) documents() error {
 	v, err := d.dec.ReadValue()
 	if err != nil {
@@ -378,17 +425,14 @@ func (d *directScanner) documents() error {
 	if v.Kind() != '[' {
 		return fmt.Errorf("documents is %s, want an array", kindName(v))
 	}
-	elems, err := elements(v)
-	if err != nil {
-		return err
-	}
-	if len(elems) == 0 {
-		return fmt.Errorf("documents is empty")
-	}
-	for _, e := range elems {
-		switch e.Kind() {
+	seen := false
+	err = eachArray(v, func(kind jsontext.Kind, e jsontext.Value) error {
+		seen = true
+		switch kind {
 		case '"':
-			d.r.TextBytes += int64(unquotedLen(e))
+			n := unquotedLen(e)
+			d.r.TextBytes += n
+			d.maxDoc = max(d.maxDoc, n)
 		case '{':
 			text, hasText, err := member(e, "text")
 			if err != nil {
@@ -401,11 +445,13 @@ func (d *directScanner) documents() error {
 			if !hasText && !hasImage {
 				return fmt.Errorf("a document has neither text nor image")
 			}
+			var n int64
 			if hasText {
 				if text.Kind() != '"' {
 					return fmt.Errorf("a document's text is not a string")
 				}
-				d.r.TextBytes += int64(unquotedLen(text))
+				n = unquotedLen(text)
+				d.r.TextBytes += n
 			}
 			if hasImage {
 				if image.Kind() != '"' {
@@ -414,73 +460,130 @@ func (d *directScanner) documents() error {
 				d.r.Images++
 				d.r.Needs |= Images
 			}
+			d.maxDoc = max(d.maxDoc, n)
 		default:
 			return fmt.Errorf("documents has an element of the wrong type")
 		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !seen {
+		return fmt.Errorf("documents is empty")
 	}
 	return nil
 }
 
-// prompt reads legacy completions' prompt: a string, an array of strings, a token array, an array of token arrays or an
-// array of mixed prompts, which generates one completion per prompt.
+// prompt reads legacy completions' prompt: a string, a token array, an array of strings, or an array of token arrays.
+// A token array is one prompt, not one prompt per token; each prompt's length is kept for the context check.
+//
+//nolint:exhaustive // the default rejects every other JSON kind with the client's error
 func (d *directScanner) prompt() error {
-	v, err := d.dec.ReadValue()
-	if err != nil {
-		return err
-	}
-	switch v.Kind() {
+	switch d.dec.PeekKind() {
 	case '"':
-		d.r.TextBytes += int64(unquotedLen(v))
-		return nil
+		v, err := d.str()
+		if err == nil {
+			d.input(int64(len(v)))
+			d.prompts = 1
+		}
+		return err
 	case '[':
-		elems, err := elements(v)
+		v, err := d.dec.ReadValue()
 		if err != nil {
 			return err
 		}
-		if len(elems) == 0 {
-			return fmt.Errorf("prompt is an empty array")
+		return d.promptArray(v)
+	default:
+		return fmt.Errorf("prompt is %s, want a string or an array", kindNameOf(d.dec.PeekKind()))
+	}
+}
+
+// promptArray distinguishes a token prompt, which is one prompt, from a list of prompts, each of which generates.
+//
+//nolint:cyclop,gocognit,exhaustive // token prompt, strings and token arrays are one dispatch
+func (d *directScanner) promptArray(v jsontext.Value) error {
+	var first jsontext.Kind
+	var tokens int64
+	seen := false
+	err := eachArray(v, func(kind jsontext.Kind, e jsontext.Value) error {
+		if !seen {
+			first, seen = kind, true
 		}
-		d.prompts = int64(len(elems))
-		for _, e := range elems {
-			switch e.Kind() {
-			case '"':
-				d.r.TextBytes += int64(unquotedLen(e))
-			case '0':
-				d.r.TextBytes += 4
-			case '[':
-				inner, err := elements(e)
-				if err != nil {
-					return err
-				}
-				d.r.TextBytes += int64(len(inner)) * 4
-			default:
-				return fmt.Errorf("prompt has an element of the wrong type")
+		switch first {
+		case '0':
+			if kind != '0' {
+				return fmt.Errorf("prompt mixes tokens with other values")
 			}
+			tokens++
+		case '"':
+			if kind != '"' {
+				return fmt.Errorf("prompt mixes strings with other values")
+			}
+			d.input(unquotedLen(e))
+			d.prompts++
+		case '[':
+			if kind != '[' {
+				return fmt.Errorf("prompt mixes token arrays with other values")
+			}
+			n, err := tokenCount(e)
+			if err != nil {
+				return err
+			}
+			d.input(n * 4)
+			d.prompts++
+		default:
+			return fmt.Errorf("prompt has an element of the wrong type")
 		}
 		return nil
-	default:
-		return fmt.Errorf("prompt is %s, want a string or an array", kindName(v))
+	})
+	if err != nil {
+		return err
 	}
+	if !seen {
+		return fmt.Errorf("prompt is an empty array")
+	}
+	if first == '0' {
+		d.input(tokens * 4)
+		d.prompts = 1
+	}
+	return nil
 }
 
-// elements reads the elements of a JSON array value.
-func elements(v jsontext.Value) ([]jsontext.Value, error) {
+// eachArray reads an array's elements in order, without keeping them: a large input must not allocate a slice header
+// per element.
+func eachArray(v jsontext.Value, read func(jsontext.Kind, jsontext.Value) error) error {
 	dec := jsontext.NewDecoder(bytes.NewReader(v))
 	if _, err := dec.ReadToken(); err != nil {
-		return nil, err
+		return err
 	}
-	var out []jsontext.Value
 	for dec.PeekKind() != ']' {
+		kind := dec.PeekKind()
+		if kind == '0' {
+			// A token array can hold a million numbers; skipping each one allocates nothing. A consumer that needs a
+			// value (a string, an object or a nested token array) gets it.
+			if err := read(kind, nil); err != nil {
+				return err
+			}
+			if err := dec.SkipValue(); err != nil {
+				return err
+			}
+			continue
+		}
 		e, err := dec.ReadValue()
 		if err != nil {
-			return nil, err
+			return err
 		}
-		out = append(out, bytes.Clone(e))
+		if err := read(kind, e); err != nil {
+			return err
+		}
 	}
-	return out, nil
+	_, err := dec.ReadToken()
+	return err
 }
 
-// member reads the member name of an object value.
+// member returns an object's named value, or false when it has none. The value aliases v: a caller uses it before
+// the body it came from is released.
 func member(v jsontext.Value, name string) (jsontext.Value, bool, error) {
 	dec := jsontext.NewDecoder(bytes.NewReader(v))
 	if _, err := dec.ReadToken(); err != nil {
@@ -500,14 +603,17 @@ func member(v jsontext.Value, name string) (jsontext.Value, bool, error) {
 			return nil, false, err
 		}
 		if string(key) == name {
-			return bytes.Clone(value), true, nil
+			return value, true, nil
 		}
 	}
 	return nil, false, nil
 }
 
-func kindName(v jsontext.Value) string {
-	switch v.Kind() {
+func kindName(v jsontext.Value) string { return kindNameOf(v.Kind()) }
+
+//nolint:exhaustive // every unlisted kind means "not a value"
+func kindNameOf(k jsontext.Kind) string {
+	switch k {
 	case '"':
 		return "a string"
 	case '0':
@@ -525,6 +631,8 @@ func kindName(v jsontext.Value) string {
 }
 
 // name is what a format is called in an error a client reads.
+//
+//nolint:exhaustive // every unlisted format falls back to "the request"
 func (f Format) name() string {
 	switch f {
 	case Completions:
@@ -557,9 +665,11 @@ var directRewriteRules = map[Format]formatRules{
 	Completions: {
 		members: withRouting(map[string]rule{
 			"model": (*rewriter).model, "user": (*rewriter).identity, "prompt_cache_key": (*rewriter).identity,
-			"safety_identifier": (*rewriter).identity, "stream": (*rewriter).stream,
+			"safety_identifier": (*rewriter).identity, "max_tokens": (*rewriter).outputCap,
+			"stream": (*rewriter).stream, "stream_options": (*rewriter).streamOptions,
 		}),
-		add: (*rewriter).addStream, identities: 3, room: len(addStream),
+		add: (*rewriter).addCompletions, identities: 3,
+		room: len(addCap) + len(maxInt64) + len(addStreamOptions) + len(addStream),
 	},
 }
 
@@ -588,25 +698,32 @@ func DirectUsage(f Format, body []byte) (Usage, error) {
 	if v == nil {
 		return Usage{}, nil
 	}
-	d := directScanner{dec: jsontext.NewDecoder(bytes.NewReader(v))}
-	d.r = Request{Format: f}
-	d.name = []byte("usage")
+	//nolint:modernize // the embedded reader's fields are clearer at this boundary
+	d := directScanner{
+		reader: reader{dec: jsontext.NewDecoder(bytes.NewReader(v)), name: []byte("usage")},
+		r:      Request{Format: f},
+	}
 	u, err := d.usageObject()
 	if err != nil {
-		return Usage{Invalid: err}, nil
+		return Usage{Invalid: err}, nil //nolint:nilerr // an invalid usage is reported in Usage.Invalid, not as a failed reply
 	}
 	return u, nil
 }
 
 // usageValue returns the reply's usage member, or nil when it has none.
 func usageValue(body []byte) (jsontext.Value, error) {
-	if len(body) == 0 || body[0] != '{' {
-		return nil, fmt.Errorf("%w: a direct reply is not a JSON object", ErrUpstream)
+	members, err := topReply(body, "usage")
+	if err != nil {
+		return nil, err
 	}
-	v, _, err := member(body, "usage")
-	return v, err
+	m, ok := members["usage"]
+	if !ok {
+		return nil, nil
+	}
+	return body[m.off : m.off+m.n], nil
 }
 
+//nolint:cyclop,gocognit // each usage member is one counter; the switch is the format's whole grammar
 func (d *directScanner) usageObject() (Usage, error) {
 	if d.dec.PeekKind() == 'n' {
 		return Usage{}, nil
@@ -683,6 +800,8 @@ func RewriteDirectReply(f Format, body []byte, id, model string, seen Usage, fin
 
 // rewriteReply writes the reply a direct call's client gets: the upstream's, with its identity and cost replaced by
 // Axiom's, in the shape OpenRouter documents for the format (OpenRouter《Embeddings》 and 《Rerank》, read 2026-10-30).
+//
+//nolint:exhaustive // only the two direct formats reach the encoder
 func rewriteReply(f Format, body []byte, id, model string, u catalog.Usage, cost, top string) ([]byte, error) {
 	members, err := replyMembers(f, body)
 	if err != nil {
@@ -693,30 +812,22 @@ func rewriteReply(f Format, body []byte, id, model string, u catalog.Usage, cost
 	switch f {
 	case Embeddings:
 		out = append(out, `{"object":`...)
-		out = append(out, members["object"]...)
+		out = append(out, memberBytes(body, members["object"])...)
 		out = append(out, `,"data":`...)
-		out = append(out, members["data"]...)
+		out = append(out, memberBytes(body, members["data"])...)
 		out = append(out, `,"model":`...)
 		out = appendQuoted(out, model)
-		out = append(out, `,"usage":{`...)
-		out = appendIntMember(out, "prompt_tokens", u.Count(catalog.ItemInput))
-		out = appendIntMember(append(out, ','), "total_tokens", u.InputTotal())
-		out = append(out, cost...)
-		out = append(out, `,"is_byok":false}`...)
+		out = append(out, `,"usage":`...)
+		out = appendEmbeddingUsage(out, u, cost)
 	case Rerank:
 		out = append(out, `{"id":`...)
 		out = appendQuoted(out, id)
 		out = append(out, `,"model":`...)
 		out = appendQuoted(out, model)
 		out = append(out, `,"results":`...)
-		out = append(out, members["results"]...)
-		out = append(out, `,"usage":{`...)
-		out = appendIntMember(out, "total_tokens", u.InputTotal())
-		if n := u.Count(catalog.ItemWebSearch); n > 0 {
-			out = appendIntMember(append(out, ','), "search_units", n)
-		}
-		out = append(out, cost...)
-		out = append(out, `,"is_byok":false}`...)
+		out = append(out, memberBytes(body, members["results"])...)
+		out = append(out, `,"usage":`...)
+		out = appendRerankUsage(out, u, cost)
 	default:
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not a direct reply", f)}
 	}
@@ -726,17 +837,20 @@ func rewriteReply(f Format, body []byte, id, model string, u catalog.Usage, cost
 	return append(out, '}'), nil
 }
 
-// replyMembers reads the members a direct reply keeps: its own object and data (embeddings) or results (rerank). A
-// reply without them is the upstream breaking its format.
-func replyMembers(f Format, body []byte) (map[string]jsontext.Value, error) {
-	if len(body) == 0 || body[0] != '{' {
-		return nil, fmt.Errorf("%w: a direct reply is not a JSON object", ErrUpstream)
-	}
-	members := make(map[string]jsontext.Value, 4)
+// topReply reads the named members of a reply object, accepting leading whitespace and refusing anything after the
+// object: the usage a call is charged by and the data a client reads must come from one complete JSON value.
+//
+//nolint:gocognit // the boundaries and offsets are the point; splitting hides their one order
+func topReply(body []byte, want ...string) (map[string]replyRef, error) {
 	dec := jsontext.NewDecoder(bytes.NewReader(body))
-	if _, err := dec.ReadToken(); err != nil {
+	k, err := dec.ReadToken()
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
+	if k.Kind() != '{' {
+		return nil, fmt.Errorf("%w: a direct reply is not a JSON object", ErrUpstream)
+	}
+	members := make(map[string]replyRef, len(want))
 	for dec.PeekKind() != '}' {
 		n, err := dec.ReadValue()
 		if err != nil {
@@ -750,25 +864,61 @@ func replyMembers(f Format, body []byte) (map[string]jsontext.Value, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrUpstream, err)
 		}
-		switch string(key) {
-		case "object", "data", "results":
-			members[string(key)] = bytes.Clone(v)
+		end := int(dec.InputOffset())
+		start := end - len(v)
+		for _, name := range want {
+			if string(key) == name {
+				members[name] = replyRef{off: start, n: len(v), kind: byte(v.Kind())}
+			}
 		}
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUpstream, err)
+	}
+	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%w: data after a direct reply", ErrUpstream)
+	}
+	return members, nil
+}
+
+// replyMembers reads the members a direct reply keeps: its own object and data (embeddings) or results (rerank). A
+// reply without them is the upstream breaking its format.
+//
+//nolint:exhaustive // only the two direct formats reach the reply reader
+func replyMembers(f Format, body []byte) (map[string]replyRef, error) {
+	members, err := topReply(body, "object", "data", "results")
+	if err != nil {
+		return nil, err
 	}
 	switch f {
 	case Embeddings:
-		if members["data"] == nil || members["data"].Kind() != '[' {
+		if m, ok := members["data"]; !ok || m.kind != '[' {
 			return nil, fmt.Errorf("%w: an embeddings reply has no data array", ErrUpstream)
 		}
-		if members["object"] == nil || members["object"].Kind() != '"' {
-			members["object"] = []byte(`"list"`)
+		if m, ok := members["object"]; !ok || m.kind != '"' {
+			members["object"] = replyRef{literal: `"list"`}
 		}
 	case Rerank:
-		if members["results"] == nil || members["results"].Kind() != '[' {
+		if m, ok := members["results"]; !ok || m.kind != '[' {
 			return nil, fmt.Errorf("%w: a rerank reply has no results array", ErrUpstream)
 		}
 	}
 	return members, nil
+}
+
+// replyRef points at a member's value in the reply body; literal stands for one Axiom supplies when the upstream did
+// not. No value is copied out of the body: a 16 MiB data or results array must not become a second 16 MiB slice.
+type replyRef struct {
+	off, n  int
+	kind    byte
+	literal string
+}
+
+func memberBytes(body []byte, m replyRef) []byte {
+	if m.off == 0 && m.n == 0 {
+		return []byte(m.literal)
+	}
+	return body[m.off : m.off+m.n]
 }
 
 // appendIntMember appends "name":n, without a leading comma.
