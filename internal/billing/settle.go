@@ -575,7 +575,7 @@ func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult
 	if _, err := post(ctx, tx, c.settlement, charge(p.price, c.charged)...); err != nil {
 		return err
 	}
-	w, err := result("settled", p, last)
+	w, err := result(p, last)
 	if err != nil {
 		return err
 	}
@@ -592,7 +592,7 @@ func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResul
 	if _, err := post(ctx, tx, c.settlement, charge(p.price, c.charged)...); err != nil {
 		return err
 	}
-	w, err := result("settled", p, last)
+	w, err := result(p, last)
 	if err != nil {
 		return err
 	}
@@ -614,11 +614,11 @@ type written struct {
 	tiers             int16
 }
 
-// result is what a charge for the last attempt writes.
-func result(state string, p priced, last AttemptResult) (written, error) {
+// result is what a charge for the last attempt writes: the reservation is settled.
+func result(p priced, last AttemptResult) (written, error) {
 	usage, err := encodeUsage(last.Segments)
 	return written{
-		state: state, seq: int32p(last.Seq), entry: int32p(last.Entry), price: p.price, waived: p.waived,
+		state: "settled", seq: int32p(last.Seq), entry: int32p(last.Entry), price: p.price, waived: p.waived,
 		estimated: p.estimated, usage: usage, tiers: p.tiers,
 	}, err
 }

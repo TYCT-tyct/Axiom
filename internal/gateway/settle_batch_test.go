@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"axiom/internal/billing"
@@ -22,17 +23,10 @@ func TestRunSettlementBatchIsolatesAFailedItem(t *testing.T) {
 		if calls == 1 {
 			return nil, nil, &billing.BatchWorkError{Index: 1, Err: errors.New("the second item")}
 		}
-		if len(items) != 2 || items[0].Outcome.Attempts[0].Seq != 1 || items[1].Outcome.Attempts[0].Seq != 3 {
-			t.Fatalf("retried %d items with seqs %v", len(items), seqs(items))
+		if got := seqs(items); !slices.Equal(got, []int{1, 3}) {
+			t.Fatalf("retried the items with seqs %v, want [1 3]", got)
 		}
-		out := make([]billing.Final, len(items))
-		after := make([]func(), len(items))
-		for i := range items {
-			out[i] = billing.Final{Charged: platform.AmountExact(int64(i + 1))}
-			at := itemSeq(items, i) - 1
-			after[i] = func() { reports[at]++ }
-		}
-		return out, after, nil
+		return settledInOrder(items, reports)
 	}
 	items, _ := settlementBatch(batch)
 	if err := runSettlementBatch(context.Background(), batch, items, run); err != nil {
@@ -41,24 +35,27 @@ func TestRunSettlementBatchIsolatesAFailedItem(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("run called %d times, want 2", calls)
 	}
-	if batch[1].err == nil || batch[1].err.Error() != "the second item" {
-		t.Errorf("the failed item's error is %v", batch[1].err)
+	if batch[1].err == nil || batch[1].err.Error() != "the second item" || !batch[1].closed {
+		t.Errorf("the failed item was not returned with its error: closed=%v err=%v", batch[1].closed, batch[1].err)
 	}
-	if !batch[1].closed {
-		t.Error("the failed item was not returned")
+	if !slices.Equal(reports, []int{1, 0, 1}) {
+		t.Errorf("reports ran %v, want the other two once and the failed item's never", reports)
 	}
-	if reports[1] != 0 {
-		t.Error("the failed item's report ran")
+	charged := []int64{finals[0].Charged.CeilAmount(), finals[1].Charged.CeilAmount(), finals[2].Charged.CeilAmount()}
+	if !slices.Equal(charged, []int64{1, 0, 2}) || len(finals[1].Segments) != 0 {
+		t.Errorf("finals charged %v, want [1 0 2] and the failed item's unset: %+v", charged, *finals[1])
 	}
-	if reports[0] != 1 || reports[2] != 1 {
-		t.Errorf("reports ran %v, want the other two once", reports)
+}
+
+// settledInOrder charges the i-th item i+1 and counts each report under its item's seq.
+func settledInOrder(items []billing.Settlement, reports []int) ([]billing.Final, []func(), error) {
+	out, after := make([]billing.Final, len(items)), make([]func(), len(items))
+	for i := range items {
+		out[i] = billing.Final{Charged: platform.AmountExact(int64(i + 1))}
+		at := items[i].Outcome.Attempts[0].Seq - 1
+		after[i] = func() { reports[at]++ }
 	}
-	if finals[1].Charged.CeilAmount() != 0 || len(finals[1].Segments) != 0 {
-		t.Errorf("the failed item's final was set: %+v", *finals[1])
-	}
-	if finals[0].Charged != platform.AmountExact(1) || finals[2].Charged != platform.AmountExact(2) {
-		t.Errorf("finals %v, %v", finals[0].Charged, finals[2].Charged)
-	}
+	return out, after, nil
 }
 
 // TestRunSettlementBatchRetriesEveryItemOnATransactionError: an error with no item (a connection or commit failure)
@@ -96,12 +93,24 @@ func settlementItems(n int) ([]*gateItem, []*billing.Final) {
 	return batch, finals
 }
 
-func itemSeq(items []billing.Settlement, i int) int { return items[i].Outcome.Attempts[0].Seq }
-
 func seqs(items []billing.Settlement) []int {
 	out := make([]int, len(items))
 	for i, item := range items {
 		out[i] = item.Outcome.Attempts[0].Seq
 	}
 	return out
+}
+
+// SettleBatch is the fake's batch path: each item goes through the fake's SettleIn, which records it, and a failure
+// names its item as the real batch's does.
+func (l *fakeLedger) SettleBatch(ctx context.Context, _ pg.Scope, items []billing.Settlement) ([]billing.Final, []func(), error) {
+	finals, afters := make([]billing.Final, len(items)), make([]func(), len(items))
+	for i, item := range items {
+		f, after, err := l.SettleIn(ctx, pg.Tx{}, item.Hold, item.Outcome)
+		if err != nil {
+			return nil, nil, &billing.BatchWorkError{Index: i, Err: err}
+		}
+		finals[i], afters[i] = f, after
+	}
+	return finals, afters, nil
 }

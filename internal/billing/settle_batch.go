@@ -2,10 +2,10 @@ package billing
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 	"uuid"
 
@@ -33,48 +33,21 @@ type Settlement struct {
 // single path in order to find the one the database refused. The ones that succeed commit; the first failure comes back
 // as *BatchWorkError. An error with no SQL state (a connection, a cancelled context, the transaction's own) is returned
 // unchanged, so every item retries.
-func (b *Billing) SettleBatch(ctx context.Context, scope pg.Scope, items []Settlement) (finals []Final, afters []func(), err error) {
+func (b *Billing) SettleBatch(ctx context.Context, scope pg.Scope, items []Settlement) ([]Final, []func(), error) {
 	if len(items) == 0 {
 		return nil, nil, nil
 	}
-	if items[0].Hold == nil {
-		return nil, nil, errors.New("billing: settle a batch without a hold")
+	if err := sameAccount(items); err != nil {
+		return nil, nil, err
 	}
-	account, site := items[0].Hold.admitted.Account, items[0].Hold.admitted.Site
-	for i, it := range items {
-		if it.Hold == nil || it.Hold.admitted.Account != account {
-			return nil, nil, fmt.Errorf("billing: settlement %d is not of the account's batch", i)
-		}
-	}
-
-	plans := make([]settlementPlan, len(items))
-	err = b.db.Tx(ctx, scope, func(tx pg.Tx) error {
-		balance, err := lockAccount(ctx, tx, account)
+	var plans []settlementPlan
+	err := b.db.Tx(ctx, scope, func(tx pg.Tx) error {
+		var err error
+		plans, err = b.planSettlements(ctx, tx, items)
 		if err != nil {
 			return err
 		}
-		rows, err := lockSettlements(ctx, tx, items)
-		if err != nil {
-			return err
-		}
-
-		for i, it := range items {
-			if rows[i].SiteID != site || rows[i].AccountID != account {
-				return &BatchWorkError{Index: i, Err: fmt.Errorf("billing: reservation %s is not of the account's batch", it.Hold.id)}
-			}
-			c := &locked{b: b, id: it.Hold.id, row: rows[i], balance: balance, quotes: it.Hold.quotes, charged: rows[i].Charged}
-			plan, err := c.planSettlement(ctx, tx, it.Outcome)
-			if err != nil {
-				return &BatchWorkError{Index: i, Err: err}
-			}
-			plan.c = c
-			plans[i] = plan
-			if plan.end != nil {
-				balance.Balance = addClamp(balance.Balance, -plan.end.spent)
-				balance.Reserved = addClamp(balance.Reserved, plan.end.reserved)
-			}
-		}
-		return b.writeSettlements(ctx, tx, plans)
+		return writeSettlements(ctx, tx, b.suppliers, plans)
 	})
 	if err != nil {
 		var work *BatchWorkError
@@ -83,13 +56,58 @@ func (b *Billing) SettleBatch(ctx context.Context, scope pg.Scope, items []Settl
 		}
 		return b.settleBatchOneByOne(ctx, items)
 	}
-	finals, afters = make([]Final, len(items)), make([]func(), len(items))
+	finals, afters := make([]Final, len(items)), make([]func(), len(items))
 	for i, p := range plans {
 		finals[i] = p.final
 		c := p.c
 		afters[i] = func() { b.alert(c.seen); b.bear(ctx, c.settlement, c.owed, c.charged) }
 	}
 	return finals, afters, nil
+}
+
+// sameAccount checks that every item has a hold of the first item's account.
+func sameAccount(items []Settlement) error {
+	if items[0].Hold == nil {
+		return errors.New("billing: settle a batch without a hold")
+	}
+	for i, it := range items {
+		if it.Hold == nil || it.Hold.admitted.Account != items[0].Hold.admitted.Account {
+			return fmt.Errorf("billing: settlement %d is not of the account's batch", i)
+		}
+	}
+	return nil
+}
+
+// planSettlements locks the account's balance row and the items' reservations and plans each item in order, with the
+// balance the earlier items leave.
+func (b *Billing) planSettlements(ctx context.Context, tx pg.Tx, items []Settlement) ([]settlementPlan, error) {
+	account, site := items[0].Hold.admitted.Account, items[0].Hold.admitted.Site
+	balance, err := lockAccount(ctx, tx, account)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := lockSettlements(ctx, tx, items)
+	if err != nil {
+		return nil, err
+	}
+	plans := make([]settlementPlan, len(items))
+	for i, it := range items {
+		if rows[i].SiteID != site || rows[i].AccountID != account {
+			return nil, &BatchWorkError{Index: i, Err: fmt.Errorf("billing: reservation %s is not of the account's batch", it.Hold.id)}
+		}
+		c := &locked{b: b, id: it.Hold.id, row: rows[i], balance: balance, quotes: it.Hold.quotes, charged: rows[i].Charged}
+		plan, err := c.planSettlement(ctx, tx, it.Outcome)
+		if err != nil {
+			return nil, &BatchWorkError{Index: i, Err: err}
+		}
+		plan.c = c
+		plans[i] = plan
+		if plan.end != nil {
+			balance.Balance = addClamp(balance.Balance, -plan.end.spent)
+			balance.Reserved = addClamp(balance.Reserved, plan.end.reserved)
+		}
+	}
+	return plans, nil
 }
 
 // settleBatchOneByOne names the item a set-based SQL error could not name. The failed batch has rolled back; each item
@@ -140,35 +158,40 @@ type reservationEnd struct {
 // separate from settle so that SettleBatch can write a batch's plans together while a single settlement keeps its
 // existing path and allocations.
 func (c *locked) planSettlement(ctx context.Context, tx pg.Tx, o Outcome) (settlementPlan, error) {
-	var p settlementPlan
+	switch {
+	case c.row.State == "settled" || c.row.State == "released":
+		return c.planStored()
+	case len(o.Attempts) == 0:
+		return c.planUnattempted(ctx, tx)
+	}
+	return c.planCharge(ctx, tx, o)
+}
+
+// planStored answers a reservation that is already settled with what it recorded.
+func (c *locked) planStored() (settlementPlan, error) {
+	f, err := c.stored()
+	return settlementPlan{final: f}, err
+}
+
+// planUnattempted settles a call that reached no upstream.
+func (c *locked) planUnattempted(ctx context.Context, tx pg.Tx) (settlementPlan, error) {
 	switch c.row.State {
-	case "settled", "released":
-		f, err := c.stored()
-		p.final = f
-		return p, err
-	}
-	if len(o.Attempts) == 0 {
-		switch c.row.State {
-		case "pending":
-			c.costKnown = true // nothing ran, so the cost is a known 0 and so is the profit
-			p.final = Final{Profit: c.profit()}
-			p.end = c.planRelease("released", c.row.Amount)
-		case "cleanup_released":
-			// The call never reached an upstream after all, so nothing can be charged to it: cleanup's record of it as
-			// lost is answered, and no charge a supplier reports later is looked for in it.
-			if err := c.b.suppliers.ResolveLostRequest(ctx, tx, c.id); err != nil {
-				return p, fmt.Errorf("billing: resolve the lost request: %w", err)
-			}
-			f, err := c.stored()
-			p.final = f
-			return p, err
-		default:
-			f, err := c.stored()
-			p.final = f
-			return p, err
+	case "pending":
+		c.costKnown = true // nothing ran, so the cost is a known 0 and so is the profit
+		return settlementPlan{final: Final{Profit: c.profit()}, end: c.planRelease("released", c.row.Amount)}, nil
+	case "cleanup_released":
+		// The call never reached an upstream after all, so nothing can be charged to it: cleanup's record of it as
+		// lost is answered, and no charge a supplier reports later is looked for in it.
+		if err := c.b.suppliers.ResolveLostRequest(ctx, tx, c.id); err != nil {
+			return settlementPlan{}, fmt.Errorf("billing: resolve the lost request: %w", err)
 		}
-		return p, nil
 	}
+	return c.planStored()
+}
+
+// planCharge books the attempts and charges the last one.
+func (c *locked) planCharge(ctx context.Context, tx pg.Tx, o Outcome) (settlementPlan, error) {
+	var p settlementPlan
 	p.posts, p.records = c.attemptWrites(o)
 	last := o.Attempts[len(o.Attempts)-1]
 	if c.row.State == "cleanup_released" { // the usage arrived after all: the request is no longer lost
@@ -183,21 +206,18 @@ func (c *locked) planSettlement(ctx context.Context, tx pg.Tx, o Outcome) (settl
 	if err := c.noteAttempts(ctx, tx, o); err != nil {
 		return p, err
 	}
-	if c.row.State == "pending" { // held: amount is still reserved
-		end, err := c.planEnd(pr, last)
-		if err != nil {
-			return p, err
-		}
-		p.end = end
-		p.posts = append(p.posts, ledgerParams(c.settlement, charge(pr.price, c.charged)))
-	} else { // cleanup_settled or cleanup_released: replace what cleanup charged, at revision -1
-		end, posts, err := c.planLate(pr, last)
-		if err != nil {
-			return p, err
-		}
-		p.end = end
-		p.posts = append(p.posts, posts...)
+	// A held reservation still reserves its amount; cleanup_settled and cleanup_released replace what cleanup
+	// charged, at revision -1.
+	plan := c.planLate
+	if c.row.State == "pending" {
+		plan = c.planEnd
 	}
+	end, posts, err := plan(pr, last)
+	if err != nil {
+		return p, err
+	}
+	p.end = end
+	p.posts = append(p.posts, posts...)
 	p.final = Final{
 		PriceVersion: lockedVersion(c.row.PriceVersions, last.Entry), Segments: last.Segments,
 		Charged: platform.AmountExact(c.charged), ServerToolCost: pr.serverToolPtr(), CacheDiscount: pr.cacheDiscount,
@@ -234,16 +254,17 @@ func (c *locked) planRelease(state string, held int64) *reservationEnd {
 	return &reservationEnd{c: c, w: c.kept(state), reserved: -max(held, 0)}
 }
 
-// planEnd is end with its write kept: the charge is capped by the balance the earlier items of the batch leave.
-func (c *locked) planEnd(p priced, last AttemptResult) (*reservationEnd, error) {
+// planEnd is end with its writes kept: the charge is capped by the balance the earlier items of the batch leave.
+func (c *locked) planEnd(p priced, last AttemptResult) (*reservationEnd, []PostLedgerParams, error) {
 	held := c.row.Amount - c.row.Charged
 	c.owed, c.charged = p.price, min(p.price, c.cap(held))
 	c.settlement = c.event("settle", 0)
-	w, err := result("settled", p, last)
+	w, err := result(p, last)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &reservationEnd{c: c, w: w, reserved: -held, spent: c.charged}, nil
+	posts := []PostLedgerParams{ledgerParams(c.settlement, charge(p.price, c.charged))}
+	return &reservationEnd{c: c, w: w, reserved: -held, spent: c.charged}, posts, nil
 }
 
 // planLate is late with its writes kept: the refund and the new charge, and the difference as the spent counter.
@@ -251,7 +272,7 @@ func (c *locked) planLate(p priced, last AttemptResult) (*reservationEnd, []Post
 	c.owed, c.charged = p.price, min(p.price, add(c.row.Charged, c.cap(0)))
 	reversalEvent := c.event("reverse", lateRevision)
 	c.settlement = c.event("settle", lateRevision)
-	w, err := result("settled", p, last)
+	w, err := result(p, last)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -262,12 +283,12 @@ func (c *locked) planLate(p priced, last AttemptResult) (*reservationEnd, []Post
 	return &reservationEnd{c: c, w: w, spent: c.charged - c.row.Charged}, posts, nil
 }
 
-// writeSettlements writes every plan of a batch: the ledger events in one statement, the suppliers attempts in one,
-// the reservation ends in one pipeline, and the ended requests after the times that pipeline returned. A failure that
-// names an item comes back as *BatchWorkError; the others are the transaction's, and SettleBatch falls back to the
+// writeSettlements writes every plan of a batch: the ledger events in one pipeline, the suppliers attempts in one
+// statement, the reservation ends in one, and the ended requests after the times that statement returned. A failure
+// that names an item comes back as *BatchWorkError; the others are the transaction's, and SettleBatch falls back to the
 // single path when they carry a SQL state.
-func (b *Billing) writeSettlements(ctx context.Context, tx pg.Tx, plans []settlementPlan) error {
-	if err := b.postSettlementLedger(ctx, tx, plans); err != nil {
+func writeSettlements(ctx context.Context, tx pg.Tx, s Suppliers, plans []settlementPlan) error {
+	if err := postSettlementLedger(ctx, tx, plans); err != nil {
 		return err
 	}
 	var records []suppliers.AttemptRecord
@@ -275,7 +296,7 @@ func (b *Billing) writeSettlements(ctx context.Context, tx pg.Tx, plans []settle
 		records = append(records, p.records...)
 	}
 	if len(records) > 0 {
-		if err := b.suppliers.RecordAttempts(ctx, tx, records); err != nil {
+		if err := s.RecordAttempts(ctx, tx, records); err != nil {
 			return fmt.Errorf("billing: record the attempts: %w", err)
 		}
 	}
@@ -290,7 +311,7 @@ func (b *Billing) writeSettlements(ctx context.Context, tx pg.Tx, plans []settle
 		}
 	}
 	if len(ending) > 0 {
-		if err := b.suppliers.EndRequests(ctx, tx, ending); err != nil {
+		if err := s.EndRequests(ctx, tx, ending); err != nil {
 			return fmt.Errorf("billing: end the requests: %w", err)
 		}
 	}
@@ -299,80 +320,89 @@ func (b *Billing) writeSettlements(ctx context.Context, tx pg.Tx, plans []settle
 
 // postSettlementLedger posts every event of the plans in three statements: the transactions, their entries, and the
 // exact balance they leave. The statements share the transaction and the connection, so the entries see their
-// transactions and the balance sees every entry. The balance is summed in platform.Exact and written as its final value:
-// summing the user debits in int64 would clamp two individually legal charges once their total passes int64, leaving the
-// balance and the entries inconsistent forever. A final value outside int64 is an error, not a clamp. A duplicate event
-// violates the transactions' unique key and rolls the batch back, which is what the reservation state says cannot
-// happen; SettleBatch then retries the items one at a time and stores the one that had already committed.
-func (b *Billing) postSettlementLedger(ctx context.Context, tx pg.Tx, plans []settlementPlan) error {
-	var events []PostLedgerParams
-	for _, p := range plans {
-		events = append(events, p.posts...)
-	}
-	if len(events) == 0 {
-		return nil
-	}
+// transactions and the balance sees every entry. A duplicate event violates the transactions' unique key and rolls the
+// batch back, which is what the reservation state says cannot happen; SettleBatch then retries the items one at a time
+// and stores the one that had already committed.
+func postSettlementLedger(ctx context.Context, tx pg.Tx, plans []settlementPlan) error {
 	first := plans[0].c
-	transactions := PostLedgerTransactionsParams{SiteID: first.row.SiteID, AccountID: first.row.AccountID}
-	entries := PostLedgerEntriesParams{SiteID: first.row.SiteID, AccountID: first.row.AccountID}
-	final := platform.AmountExact(first.balance.Balance)
-	for _, ev := range events {
-		transactions.Ids = append(transactions.Ids, ev.ID)
-		transactions.Kinds = append(transactions.Kinds, ev.Kind)
-		transactions.RequestIds = append(transactions.RequestIds, ev.RequestID)
-		transactions.AttemptSeqs = append(transactions.AttemptSeqs, ev.AttemptSeq)
-		transactions.Revisions = append(transactions.Revisions, ev.Revision)
-		var err error
-		final, err = final.Add(platform.AmountExact(ev.UserDebit).Neg())
-		if err != nil {
-			return fmt.Errorf("billing: sum the settlement balance: %w", err)
-		}
-		for j := range ev.Books {
-			entries.TransactionIds = append(entries.TransactionIds, ev.ID)
-			entries.Books = append(entries.Books, ev.Books[j])
-			entries.Amounts = append(entries.Amounts, ev.Amounts[j])
-			entries.Currencies = append(entries.Currencies, ev.Currencies[j])
-		}
+	l, err := settlementLedger(plans)
+	if err != nil || len(l.transactions.Ids) == 0 {
+		return err
 	}
-	if final.Cmp(platform.AmountExact(math.MaxInt64)) > 0 || final.Cmp(platform.AmountExact(math.MinInt64)) < 0 {
-		return fmt.Errorf("billing: the settlement balance %s is outside int64", final.AppendDecimal(nil))
-	}
-	balance := final.CeilAmount()
+	t, e := l.transactions, l.entries
 	statements := []pg.Statement{
-		{SQL: postLedgerTransactions, Args: []any{transactions.Ids, transactions.SiteID, transactions.AccountID, transactions.Kinds, transactions.RequestIds, transactions.AttemptSeqs, transactions.Revisions}},
-		{SQL: postLedgerEntries, Args: []any{entries.TransactionIds, entries.SiteID, entries.AccountID, entries.Books, entries.Amounts, entries.Currencies}},
+		{SQL: postLedgerTransactions, Args: []any{t.Ids, t.SiteID, t.AccountID, t.Kinds, t.RequestIds, t.AttemptSeqs, t.Revisions}},
+		{SQL: postLedgerEntries, Args: []any{e.TransactionIds, e.SiteID, e.AccountID, e.Books, e.Amounts, e.Currencies}},
 	}
-	move := balance != first.balance.Balance
+	move := l.balance != first.balance.Balance
 	if move {
-		statements = append(statements, pg.Statement{SQL: setBalance, Args: []any{balance, first.row.AccountID}})
+		statements = append(statements, pg.Statement{SQL: setBalance, Args: []any{l.balance, first.row.AccountID}})
 	}
 	return tx.Batch(ctx, statements, func(batch pg.BatchResults) error {
-		tag, err := batch.Exec()
-		if err != nil {
-			return fmt.Errorf("billing: post the settlement ledger: %w", err)
+		if err := execRows(batch, "post the settlement ledger", len(t.Ids)); err != nil {
+			return err
 		}
-		if got := int(tag.RowsAffected()); got != len(events) {
-			return fmt.Errorf("billing: posted %d of %d settlement ledger events", got, len(events))
-		}
-		tag, err = batch.Exec()
-		if err != nil {
-			return fmt.Errorf("billing: post the settlement entries: %w", err)
-		}
-		if got := int(tag.RowsAffected()); got != len(entries.Books) {
-			return fmt.Errorf("billing: posted %d of %d settlement ledger entries", got, len(entries.Books))
+		if err := execRows(batch, "post the settlement entries", len(e.Books)); err != nil {
+			return err
 		}
 		if !move {
 			return nil
 		}
-		tag, err = batch.Exec()
-		if err != nil {
-			return fmt.Errorf("billing: set the settlement balance: %w", err)
-		}
-		if tag.RowsAffected() != 1 {
-			return fmt.Errorf("billing: set the balance of %d accounts", tag.RowsAffected())
-		}
-		return nil
+		return execRows(batch, "set the settlement balance", 1)
 	})
+}
+
+// ledgerBatch is the parameters of a batch's ledger statements and the balance they leave.
+type ledgerBatch struct {
+	transactions PostLedgerTransactionsParams
+	entries      PostLedgerEntriesParams
+	balance      int64
+}
+
+// settlementLedger gathers the plans' events. The balance is summed in platform.Exact and written as its final value:
+// summing the user debits in int64 would clamp two individually legal charges once their total passes int64, leaving
+// the balance and the entries inconsistent forever. A final value outside int64 is an error, not a clamp.
+func settlementLedger(plans []settlementPlan) (ledgerBatch, error) {
+	first := plans[0].c
+	l := ledgerBatch{
+		transactions: PostLedgerTransactionsParams{SiteID: first.row.SiteID, AccountID: first.row.AccountID},
+		entries:      PostLedgerEntriesParams{SiteID: first.row.SiteID, AccountID: first.row.AccountID},
+	}
+	final := platform.AmountExact(first.balance.Balance)
+	for _, p := range plans {
+		for _, ev := range p.posts {
+			t := &l.transactions
+			t.Ids, t.Kinds = append(t.Ids, ev.ID), append(t.Kinds, ev.Kind)
+			t.RequestIds, t.AttemptSeqs = append(t.RequestIds, ev.RequestID), append(t.AttemptSeqs, ev.AttemptSeq)
+			t.Revisions = append(t.Revisions, ev.Revision)
+			e := &l.entries
+			for j := range ev.Books {
+				e.TransactionIds, e.Books = append(e.TransactionIds, ev.ID), append(e.Books, ev.Books[j])
+				e.Amounts, e.Currencies = append(e.Amounts, ev.Amounts[j]), append(e.Currencies, ev.Currencies[j])
+			}
+			var err error
+			if final, err = final.Add(platform.AmountExact(ev.UserDebit).Neg()); err != nil {
+				return l, fmt.Errorf("billing: sum the settlement balance: %w", err)
+			}
+		}
+	}
+	if final.Cmp(platform.AmountExact(math.MaxInt64)) > 0 || final.Cmp(platform.AmountExact(math.MinInt64)) < 0 {
+		return l, fmt.Errorf("billing: the settlement balance %s is outside int64", final.AppendDecimal(nil))
+	}
+	l.balance = final.CeilAmount()
+	return l, nil
+}
+
+// execRows reads the next statement of a batch and checks that it wrote want rows.
+func execRows(batch pg.BatchResults, what string, want int) error {
+	tag, err := batch.Exec()
+	if err != nil {
+		return fmt.Errorf("billing: %s: %w", what, err)
+	}
+	if got := int(tag.RowsAffected()); got != want {
+		return fmt.Errorf("billing: %s wrote %d of %d rows", what, got, want)
+	}
+	return nil
 }
 
 // endSettlementReservations ends every plan's reservation in one statement and reads the database time of each. The
@@ -381,62 +411,17 @@ func (b *Billing) postSettlementLedger(ctx context.Context, tx pg.Tx, plans []se
 func endSettlementReservations(ctx context.Context, tx pg.Tx, plans []settlementPlan) ([]*reservationEnd, error) {
 	var ends []*reservationEnd
 	for i, p := range plans {
-		if p.end == nil {
-			continue
+		if p.end != nil {
+			p.end.index = i
+			ends = append(ends, p.end)
 		}
-		p.end.index = i
-		ends = append(ends, p.end)
 	}
 	if len(ends) == 0 {
 		return nil, nil
 	}
 	params := EndReservationBatchParams{AccountID: ends[0].c.row.AccountID}
 	for _, e := range ends {
-		p := e.params()
-		chargedSeq, entry := int32(-1), int32(-1)
-		if p.ChargedSeq != nil {
-			chargedSeq = *p.ChargedSeq
-		}
-		if p.Entry != nil {
-			entry = *p.Entry
-		}
-		finalUsage, finalSet := "", p.FinalUsage != nil
-		if finalSet {
-			finalUsage = string(p.FinalUsage)
-		}
-		attemptEntries, attemptSet := "", p.AttemptEntries != nil
-		if attemptSet {
-			b, err := json.Marshal(p.AttemptEntries)
-			if err != nil {
-				return nil, &BatchWorkError{Index: e.index, Err: fmt.Errorf("billing: encode the attempts' entries: %w", err)}
-			}
-			attemptEntries = string(b)
-		}
-		profit, profitSet := int64(0), p.Profit != nil
-		if profitSet {
-			profit = *p.Profit
-		}
-		params.RequestIds = append(params.RequestIds, p.RequestID)
-		params.States = append(params.States, p.State)
-		params.ChargedSeqs = append(params.ChargedSeqs, chargedSeq)
-		params.Entries = append(params.Entries, entry)
-		params.Charged = append(params.Charged, p.Charged)
-		params.Prices = append(params.Prices, p.Price)
-		params.Waived = append(params.Waived, p.Waived)
-		params.Estimated = append(params.Estimated, p.Estimated)
-		params.FinalUsages = append(params.FinalUsages, finalUsage)
-		params.FinalUsageSet = append(params.FinalUsageSet, finalSet)
-		params.AttemptEntries = append(params.AttemptEntries, attemptEntries)
-		params.AttemptEntriesSet = append(params.AttemptEntriesSet, attemptSet)
-		params.Profits = append(params.Profits, profit)
-		params.ProfitSet = append(params.ProfitSet, profitSet)
-		params.PricingTiers = append(params.PricingTiers, p.PricingTiers)
-		params.Reserved = append(params.Reserved, p.Reserved)
-		params.Spent = append(params.Spent, p.Spent)
-		params.WorkspaceIds = append(params.WorkspaceIds, p.WorkspaceID)
-		params.WorkspaceWindows = append(params.WorkspaceWindows, p.WorkspaceWindow)
-		params.KeyIds = append(params.KeyIds, p.KeyID)
-		params.KeyWindows = append(params.KeyWindows, p.KeyWindow)
+		params.add(e.params())
 	}
 	rows, err := queries.EndReservationBatch(ctx, tx, params)
 	if err != nil {
@@ -454,6 +439,51 @@ func endSettlementReservations(ctx context.Context, tx pg.Tx, plans []settlement
 		e.at = t
 	}
 	return ends, nil
+}
+
+// add appends one EndReservation to the batch's arrays. A NULL of the single statement, which keeps what the row has,
+// is a -1 or a false set flag here: SQL arrays of the batch carry no NULLs.
+func (params *EndReservationBatchParams) add(p EndReservationParams) {
+	params.RequestIds = append(params.RequestIds, p.RequestID)
+	params.States = append(params.States, p.State)
+	params.ChargedSeqs = append(params.ChargedSeqs, orElse(p.ChargedSeq, -1))
+	params.Entries = append(params.Entries, orElse(p.Entry, -1))
+	params.Charged = append(params.Charged, p.Charged)
+	params.Prices = append(params.Prices, p.Price)
+	params.Waived = append(params.Waived, p.Waived)
+	params.Estimated = append(params.Estimated, p.Estimated)
+	params.FinalUsages = append(params.FinalUsages, string(p.FinalUsage))
+	params.FinalUsageSet = append(params.FinalUsageSet, p.FinalUsage != nil)
+	params.AttemptEntries = append(params.AttemptEntries, intsJSON(p.AttemptEntries))
+	params.AttemptEntriesSet = append(params.AttemptEntriesSet, p.AttemptEntries != nil)
+	params.Profits = append(params.Profits, orElse(p.Profit, 0))
+	params.ProfitSet = append(params.ProfitSet, p.Profit != nil)
+	params.PricingTiers = append(params.PricingTiers, p.PricingTiers)
+	params.Reserved = append(params.Reserved, p.Reserved)
+	params.Spent = append(params.Spent, p.Spent)
+	params.WorkspaceIds = append(params.WorkspaceIds, p.WorkspaceID)
+	params.WorkspaceWindows = append(params.WorkspaceWindows, p.WorkspaceWindow)
+	params.KeyIds = append(params.KeyIds, p.KeyID)
+	params.KeyWindows = append(params.KeyWindows, p.KeyWindow)
+}
+
+func orElse[T any](p *T, none T) T {
+	if p == nil {
+		return none
+	}
+	return *p
+}
+
+// intsJSON is xs as a JSON array of integers, the form the batch statement unpacks into attempt_entries.
+func intsJSON(xs []int32) string {
+	b := []byte{'['}
+	for i, x := range xs {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		b = strconv.AppendInt(b, int64(x), 10)
+	}
+	return string(append(b, ']'))
 }
 
 // params is the EndReservation of e, with the reservation's current charged amount and the plan's counters.

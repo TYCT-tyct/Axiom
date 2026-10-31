@@ -201,83 +201,84 @@ func TestSettleBatchAndSettleShareTheAccountLock(t *testing.T) {
 
 func TestSettleBatchMatchesSettle(t *testing.T) {
 	t.Parallel()
+	t.Run("the cap follows the balance the earlier items leave", batchCapsLikeOneByOne)
+	t.Run("a late settlement and a pending one in one batch", batchSettlesLateAndPending)
+	t.Run("a released reservation and a retried batch write nothing more", batchRetryWritesNothing)
+}
 
-	t.Run("the cap follows the balance the earlier items leave", func(t *testing.T) {
-		t.Parallel()
-		o := outcome(Committed, FinishStop, used(t, 100, 0, 0)) // price 100, holds 10 each
-		batch := newBank(t, 25, 0, Config{})
-		holds := []*Hold{batch.holdOn(batch.exact, 10), batch.holdOn(batch.exact, 10)}
-		got := settleBatch(t, batch, holds, []Outcome{o, o})
-		want := []int64{15, 10}
-		if !slices.Equal(got, want) {
-			t.Errorf("batch charged %v, want %v", got, want)
-		}
-		batch.balanced()
+func batchCapsLikeOneByOne(t *testing.T) {
+	t.Parallel()
+	o := outcome(Committed, FinishStop, used(t, 100, 0, 0)) // price 100, holds 10 each
+	batch := newBank(t, 25, 0, Config{})
+	holds := []*Hold{batch.holdOn(batch.exact, 10), batch.holdOn(batch.exact, 10)}
+	got := settleBatch(t, batch, holds, []Outcome{o, o})
+	if want := []int64{15, 10}; !slices.Equal(got, want) {
+		t.Errorf("batch charged %v, want %v", got, want)
+	}
+	batch.balanced()
 
-		single := newBank(t, 25, 0, Config{})
-		holds = []*Hold{single.holdOn(single.exact, 10), single.holdOn(single.exact, 10)}
-		one := settleOne(t, single, holds, []Outcome{o, o})
-		if !slices.Equal(got, one) {
-			t.Errorf("batch charged %v, one by one charged %v", got, one)
-		}
-		single.balanced()
-	})
+	single := newBank(t, 25, 0, Config{})
+	holds = []*Hold{single.holdOn(single.exact, 10), single.holdOn(single.exact, 10)}
+	if one := settleOne(t, single, holds, []Outcome{o, o}); !slices.Equal(got, one) {
+		t.Errorf("batch charged %v, one by one charged %v", got, one)
+	}
+	single.balanced()
+}
 
-	t.Run("a late settlement and a pending one in one batch", func(t *testing.T) {
-		t.Parallel()
-		b := newBank(t, 10_000, 0, Config{})
-		late, pending := b.hold(1000), b.hold(2000)
-		b.sql(fmt.Sprintf("UPDATE billing.reservations SET deadline = clock_timestamp() - interval '1 hour' WHERE request_id = '%s'", late.id))
-		if _, err := b.billing.Cleanup(t.Context(), 10); err != nil {
-			t.Fatal(err)
+func batchSettlesLateAndPending(t *testing.T) {
+	t.Parallel()
+	o := outcome(Committed, FinishStop, used(t, 300, 0, 0))
+	b := newBank(t, 10_000, 0, Config{})
+	holds := latePending(t, b)
+	got := settleBatch(t, b, holds, []Outcome{o, o})
+	if want := []int64{300, 300}; !slices.Equal(got, want) {
+		t.Errorf("batch charged %v, want %v", got, want)
+	}
+	for _, h := range holds {
+		if n := b.count(fmt.Sprintf("SELECT count(*) FROM billing.reservations WHERE request_id = '%s' AND state = 'settled'", h.id)); n != 1 {
+			t.Errorf("reservation %s is not settled", h.id)
 		}
-		if n := b.count(fmt.Sprintf("SELECT count(*) FROM billing.reservations WHERE request_id = '%s' AND state = 'cleanup_released'", late.id)); n != 1 {
-			t.Fatalf("the late reservation is not cleanup_released")
-		}
-		o := outcome(Committed, FinishStop, used(t, 300, 0, 0))
-		got := settleBatch(t, b, []*Hold{late, pending}, []Outcome{o, o})
-		if len(got) != 2 || got[0] != 300 || got[1] != 300 {
-			t.Errorf("batch charged %v, want [300 300]", got)
-		}
-		for _, h := range []*Hold{late, pending} {
-			if n := b.count(fmt.Sprintf("SELECT count(*) FROM billing.reservations WHERE request_id = '%s' AND state = 'settled'", h.id)); n != 1 {
-				t.Errorf("reservation %s is not settled", h.id)
-			}
-		}
-		b.balanced()
+	}
+	b.balanced()
 
-		one := newBank(t, 10_000, 0, Config{})
-		late2, pending2 := one.hold(1000), one.hold(2000)
-		one.sql(fmt.Sprintf("UPDATE billing.reservations SET deadline = clock_timestamp() - interval '1 hour' WHERE request_id = '%s'", late2.id))
-		if _, err := one.billing.Cleanup(t.Context(), 10); err != nil {
-			t.Fatal(err)
-		}
-		gotOne := settleOne(t, one, []*Hold{late2, pending2}, []Outcome{o, o})
-		if !slices.Equal(got, gotOne) {
-			t.Errorf("batch charged %v, one by one charged %v", got, gotOne)
-		}
-		one.balanced()
-	})
+	one := newBank(t, 10_000, 0, Config{})
+	if gotOne := settleOne(t, one, latePending(t, one), []Outcome{o, o}); !slices.Equal(got, gotOne) {
+		t.Errorf("batch charged %v, one by one charged %v", got, gotOne)
+	}
+	one.balanced()
+}
 
-	t.Run("a released reservation and a retried batch write nothing more", func(t *testing.T) {
-		t.Parallel()
-		b := newBank(t, 10_000, 0, Config{})
-		released, settled := b.hold(1000), b.hold(2000)
-		o := outcome(Committed, FinishStop, used(t, 50, 20, 1))
-		got := settleBatch(t, b, []*Hold{released, settled}, []Outcome{{}, o})
-		if got[0] != 0 {
-			t.Errorf("the released reservation charged %d", got[0])
-		}
-		before := b.count("SELECT count(*) FROM billing.transactions")
-		again := settleBatch(t, b, []*Hold{released, settled}, []Outcome{{}, o})
-		if !slices.Equal(got, again) {
-			t.Errorf("the retried batch charged %v, first %v", again, got)
-		}
-		if after := b.count("SELECT count(*) FROM billing.transactions"); after != before {
-			t.Errorf("the retried batch wrote %d transactions, want none", after-before)
-		}
-		b.balanced()
-	})
+// latePending holds 1000 and 2000 and lets cleanup release the first, so its settlement is a late one.
+func latePending(t *testing.T, b *bank) []*Hold {
+	t.Helper()
+	late, pending := b.hold(1000), b.hold(2000)
+	b.sql(fmt.Sprintf("UPDATE billing.reservations SET deadline = clock_timestamp() - interval '1 hour' WHERE request_id = '%s'", late.id))
+	if _, err := b.billing.Cleanup(t.Context(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if n := b.count(fmt.Sprintf("SELECT count(*) FROM billing.reservations WHERE request_id = '%s' AND state = 'cleanup_released'", late.id)); n != 1 {
+		t.Fatalf("the late reservation is not cleanup_released")
+	}
+	return []*Hold{late, pending}
+}
+
+func batchRetryWritesNothing(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 10_000, 0, Config{})
+	holds := []*Hold{b.hold(1000), b.hold(2000)}
+	outcomes := []Outcome{{}, outcome(Committed, FinishStop, used(t, 50, 20, 1))}
+	got := settleBatch(t, b, holds, outcomes)
+	if got[0] != 0 {
+		t.Errorf("the released reservation charged %d", got[0])
+	}
+	before := b.count("SELECT count(*) FROM billing.transactions")
+	if again := settleBatch(t, b, holds, outcomes); !slices.Equal(got, again) {
+		t.Errorf("the retried batch charged %v, first %v", again, got)
+	}
+	if after := b.count("SELECT count(*) FROM billing.transactions"); after != before {
+		t.Errorf("the retried batch wrote %d transactions, want none", after-before)
+	}
+	b.balanced()
 }
 
 // settleBatch settles holds in one batch and returns their charges.
