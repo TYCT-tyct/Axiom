@@ -349,6 +349,30 @@ func TestReservedCostEstimatesMissingPricesWithoutChangingAdmission(t *testing.T
 	}
 }
 
+// TestQuoteDirectBatchCrossesATier: the upstream reports one input total for a direct batch, which the settlement bands
+// as one prompt, so the quote bands the batch's total too: ten 40-byte inputs that report 101 tokens settle above the
+// 100-token threshold, and the reservation must cover that, not price each input at the base band.
+func TestQuoteDirectBatchCrossesATier(t *testing.T) {
+	t.Parallel()
+	schedule := mustSchedule(t, prices)
+	e := Quotable{Price: schedule, Model: Model{ContextLength: 1000}}
+	q, err := quoteEntry(Demand{Direct: true, TextBytes: 400, InputBytes: 40}, e, Segments{}, true)
+	if err != nil {
+		t.Fatalf("quoteEntry: %v", err)
+	}
+	reported, err := catalog.NewUsage(map[catalog.Item]int64{in: 101}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled, missing, err := schedule.Cost(reported)
+	if err != nil || missing != 0 {
+		t.Fatalf("Cost = %v, %v, %v", settled, missing, err)
+	}
+	if units(t, settled) != "404" || q.amount.Cmp(settled) < 0 {
+		t.Errorf("reserved %s for a batch that settles at %s; want 404 settled within the reservation", units(t, q.amount), units(t, settled))
+	}
+}
+
 // TestQuoteDirect: an embeddings or rerank call has no output to reserve and no second sampling, even at an endpoint
 // whose model also generates and so has an output limit. Its schedule needs only the input price, and rerank's search
 // unit is a flat fee, not a whole-context resample.

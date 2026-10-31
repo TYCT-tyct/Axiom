@@ -25,9 +25,9 @@ type Demand struct {
 	// Direct is a call of a format that answers one object rather than generating output: embeddings and rerank. It
 	// has no output tokens to reserve, and its server-tool charges are flat per use, not a sampling of the model.
 	Direct bool
-	// InputBytes is the largest single input of a direct batch, in bytes, for the context limit and the price band
-	// that depend on one input's length rather than the batch's total. 0 means TextBytes is that length. The batch is
-	// reserved and estimated at its total: every input is charged, while the context and the price band apply to each.
+	// InputBytes is the largest single input of a direct batch, in bytes, for the context limit, which holds each input
+	// rather than the batch. 0 means TextBytes is that length. The batch is reserved, estimated and priced at its total:
+	// the upstream reports one usage for it, and the settlement bands that total, so the quote bands the same length.
 	InputBytes   int64
 	Compaction   bool // server-side compaction or context management is on
 	InputItems   catalog.ItemSet
@@ -284,13 +284,7 @@ func (q *quote) priceTokens(d Demand, e Quotable, prices *quotePrices, tiers cat
 		// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
 		in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
 	}
-	// A batch is charged for every input, but its price band is the largest single input, not the sum: one 6k-token
-	// input beside another is two 6k contexts, not one 12k context.
-	band := first
-	if d.Direct {
-		band = longest
-	}
-	firstPrice, ok := prices.inputCeiling(in, tiers, band, e.Model.OpenAIUsage)
+	firstPrice, ok := prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
 	if !ok {
 		return inputPrice{}, ErrUnpriced
 	}
