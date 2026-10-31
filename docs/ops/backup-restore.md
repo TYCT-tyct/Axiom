@@ -261,6 +261,15 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 `deploy/compose.edge.yaml` 在程序前面加一个 Caddy 容器，配置是 `deploy/ingress/Caddyfile`。
 生产先按[发布的 digest 选择与核对](release.md#选择和核对)确定交付物，在 `deploy/.env` 写入
 `DEPLOY_IMAGE=<仓库>@sha256:<摘要>`；不使用 tag、不在部署机重建，也不运行开发用的 `just up`。
+pull 之前先按[发布的「镜像签名与验证」](release.md#镜像签名与验证)验一次签名、workflow 身份、digest 和 SBOM attestation，
+失败就不 pull：
+
+```bash
+tools="$(bash scripts/ci/install-release-tools.sh)"
+image="$(sed -n 's/^DEPLOY_IMAGE=//p' deploy/.env)"
+PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$image" tmp/release/release.json
+```
+
 负责人执行部署前确认三份数据库口令已配置；新数据库初始化角色，已有数据库也须重放幂等角色授权：
 
 ```bash

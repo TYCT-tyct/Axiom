@@ -20,7 +20,11 @@ def job(name):
 
 
 def enabled(name, event, stress=False, draft=False, docs=False, vitals=True):
-    condition = re.search(r"^    if: (.+)$", job(name), re.M).group(1)
+    folded = re.search(r"^    if: >-\n((?:      .+\n)+)", job(name), re.M)
+    if folded:
+        condition = " ".join(line.strip() for line in folded.group(1).splitlines())
+    else:
+        condition = re.search(r"^    if: (.+)$", job(name), re.M).group(1)
     return expression(condition, event, stress, draft, docs, vitals=vitals)
 
 
@@ -71,7 +75,7 @@ class BuildChecks(unittest.TestCase):
 
     def test_web_and_shards_run_independently_on_all_build_events(self):
         needs = re.search(r"^    needs: \[(.+)\]$", job("build"), re.M).group(1).split(", ")
-        self.assertEqual(set(needs), {"changes", "static", "go-test", "web", "e2e", "vitals", "journey", "bench", "deploy"})
+        self.assertEqual(set(needs), {"changes", "static", "go-test", "web", "e2e", "vitals", "journey", "bench", "deploy", "signing"})
         for name in ("web", "e2e"):
             self.assertRegex(job(name), r"(?m)^    needs: changes$")
             self.assertIn("bash scripts/ci/web-container.sh", job(name))
@@ -173,6 +177,20 @@ class BuildChecks(unittest.TestCase):
                 with self.subTest(event=event, docs=docs):
                     self.assertEqual(enabled("journey", event, docs=docs), not docs and event != "pull_request")
         self.assertIn("withcluster bash scripts/ci/web-container.sh pnpm --dir web journey", job("journey"))
+
+    def test_signing_runs_where_a_release_can_and_the_build_requires_it(self):
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            for docs in (False, True):
+                with self.subTest(event=event, docs=docs):
+                    self.assertEqual(enabled("signing", event, docs=docs), not docs and event != "pull_request")
+        self.assertIn("id-token: write", job("signing"))
+        self.assertIn("id-token: write", job("deploy")) # keyless signing needs the workflow's OIDC token
+        self.assertIn("bash scripts/ci/signing-check.sh", job("signing"))
+        check = re.search(r"- if: ([^\n]+)\n        run: test '\$\{\{ needs\.signing\.result \}\}' = success", job("build"))
+        self.assertIsNotNone(check)
+        self.assertTrue(expression(check[1], event="push", docs=False))
+        self.assertFalse(expression(check[1], event="pull_request", docs=False))
+        self.assertFalse(expression(check[1], event="push", docs=True))
 
     def test_matrix_and_command_keep_index_and_count(self):
         matrix = re.search(r"shard: \$\{\{ (.+) \}\}", job("e2e")).group(1)
@@ -325,7 +343,7 @@ class ReleaseChecks(unittest.TestCase):
             with self.subTest(ref=ref, base=base):
                 self.assertEqual(self.runs("Rehearse train deployment", ref, base), rehearsal == "deploy")
                 self.assertEqual(self.runs("Build and rehearse release by digest", ref, base), rehearsal == "release")
-                self.assertEqual(self.runs("Retain release image and provenance", ref, base), retains)
+                self.assertEqual(self.runs("Retain release image, signature and provenance", ref, base), retains)
         self.assertIn("if-no-files-found: error", deploy)
         self.assertIn("retention-days: 30", deploy)
         self.assertNotIn("secrets.", deploy)
@@ -338,3 +356,12 @@ class ReleaseChecks(unittest.TestCase):
         for result in ("success", "failure", "cancelled", "skipped"):
             command = check[2].replace("${{ needs.deploy.result }}", result)
             self.assertEqual(subprocess.run(["bash", "-c", command]).returncode == 0, result == "success")
+
+    def test_release_check_signs_and_verifies_the_digest_before_deploying(self):
+        script = (ROOT / "scripts" / "ci" / "release-check.sh").read_text()
+        for command in ("cosign sign", "cosign attest", "cosign save", "verify-release.sh"):
+            self.assertIn(command, script)
+        self.assertLess(script.index("cosign sign"), script.index("cosign attest"))
+        self.assertLess(script.index("cosign attest"), script.index("verify-release.sh"))
+        self.assertLess(script.index("verify-release.sh"), script.index("docker pull"))
+        self.assertIn("CI_DEPLOY_RELEASE", script)
