@@ -126,14 +126,14 @@ func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {
-		if r.Format.Direct() {
-			u.Body, err = rewriteDirect(r, body, t, w)
-		} else {
+		if r.Format.Convertible() {
 			u.Body, err = rewrite(r, body, t, w)
+		} else {
+			u.Body, err = rewriteDirect(r, body, t, w)
 		}
 		return u, err
 	}
-	if r.Format.Direct() || t.Format.Direct() {
+	if !r.Format.Convertible() || !t.Format.Convertible() {
 		return u, &NotSupported{Reason: fmt.Sprintf("format %d is not converted to format %d", r.Format, t.Format)}
 	}
 	if t.Compact { // the compact request is not a generation, and only a Responses client makes one
@@ -444,6 +444,19 @@ func (p *rewriter) outputCap() error {
 	return err
 }
 
+// completionsCap sends a legacy completion's max_tokens as the cap it was quoted at when it is null or above that cap,
+// which the endpoint's own limit held it to, so the upstream is never asked for more than was reserved; but it leaves
+// a client's 0: with echo and logprobs, 0 asks for the prompt's logprobs and no generated tokens, and replacing it
+// would generate text the client did not ask for.
+func (p *rewriter) completionsCap() error {
+	v, err := p.value()
+	if err == nil && p.t.MaxOutput > 0 && (v.Kind() == 'n' || v.Kind() == '0' && !numberAtMost(v, p.t.MaxOutput)) {
+		p.replace(len(v), strconv.FormatInt(p.t.MaxOutput, 10))
+	}
+	p.capped = true
+	return err
+}
+
 func (p *rewriter) include() error {
 	p.included = true
 	if p.t.EncryptedReasoning != catalog.ClaimYes {
@@ -649,6 +662,18 @@ func (p *rewriter) forceUsage() error {
 
 // addChat appends the output cap in the member the endpoint reads, and what else a Chat request lacks. The cap is the
 // client's, else the one the call was quoted at, so that what is sent is what was reserved (I1).
+// addCompletions appends what a legacy completion lacks: the output cap it was quoted at, when the request has none,
+// and the stream that reports usage. Its prompt is the client's and is left as it is.
+func (p *rewriter) addCompletions() error {
+	if !p.capped && p.t.MaxOutput > 0 {
+		p.out = strconv.AppendInt(append(p.out, addCap...), p.t.MaxOutput, 10)
+	}
+	if p.t.Streams && !p.optioned {
+		p.out = append(p.out, addStreamOptions...)
+	}
+	return p.addStream()
+}
+
 func (p *rewriter) addChat() error {
 	limit := cmp.Or(p.chatCap, p.t.MaxOutput)
 	if limit > 0 {

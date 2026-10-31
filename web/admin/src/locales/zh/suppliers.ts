@@ -193,6 +193,7 @@ export default {
     format_chat: "Chat Completions",
     format_embeddings: "Embeddings",
     format_rerank: "Rerank",
+    format_completions: "旧版补全",
     action: "开始测试",
     waiting: "正在测试，最长约 45 秒。关掉对话框不会中止，费用照付；结果记在审计日志里。",
     elapsed: "{{seconds}} 秒",

@@ -55,6 +55,31 @@ func units(tb testing.TB, e platform.Exact) string {
 }
 
 // TestQuoteEntry: each rule of docs/domains/billing.md「预留与结算」 moves the quote by the amount worked out beside it.
+// TestQuoteCompletionsReservesEveryChoice: a legacy completion's whole output bound is reserved at once — every prompt
+// and every n choice — and an explicit max_tokens 0 reserves no output at all. Routing marks such an entry
+// non-segmentable; these amounts are what that decision buys.
+func TestQuoteCompletionsReservesEveryChoice(t *testing.T) {
+	t.Parallel()
+	e := entry(t, false, 0)
+	e.MaxOutput, e.Model.ContextLength = 4096, 1<<20
+	d := Demand{TextBytes: 100, InputBytes: 100, Choices: 2}
+	q, err := Quote(d, []Quotable{e}, Segments{}, []Available{{SourceBalance, amount(t, 1e9)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := units(t, q.Amount), "82020"; got != want { // 100 input + 2×4096 output at 10
+		t.Errorf("two choices reserve %s, want %s", got, want)
+	}
+	e.MaxOutput = 0
+	q, err = Quote(Demand{TextBytes: 100, InputBytes: 100}, []Quotable{e}, Segments{}, []Available{{SourceBalance, amount(t, 1e9)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := units(t, q.Amount), "100"; got != want {
+		t.Errorf("an explicit zero cap reserves %s, want only the input %s", got, want)
+	}
+}
+
 func TestQuoteEntry(t *testing.T) {
 	t.Parallel()
 

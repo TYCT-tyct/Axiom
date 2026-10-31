@@ -41,7 +41,8 @@ type Settings struct {
 	MaxPages int
 	// LowBalance is the balance under which BalanceLow is sent.
 	LowBalance adapter.Amount
-	// DirectFormats lets the state keep embeddings and rerank. While it is false the state holds only the formats a
+	// DirectFormats lets the state keep embeddings, rerank and legacy completions. While it is false the state holds
+	// only the formats a
 	// pre-P18 node can name: such a node may load this state for any task and project it, and a name it does not know
 	// fails its whole step.
 	DirectFormats bool

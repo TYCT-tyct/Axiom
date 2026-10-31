@@ -130,7 +130,7 @@ func namesOf(names []PendingMapping) []string {
 
 func (a admins) mapIn(supplier uuid.UUID, group *uuid.UUID, name string, model uuid.UUID) (Mapping, error) {
 	return inTx(a, func(ctx context.Context, tx pg.Tx) (Mapping, error) {
-		return a.admin.MapModel(ctx, tx, a.actor, supplier, group, name, model, nil, "mapped")
+		return a.admin.MapModel(ctx, tx, a.actor, supplier, group, name, model, nil, nil, "mapped")
 	})
 }
 
@@ -201,6 +201,37 @@ func TestMapModel(t *testing.T) {
 	a.setStatus(id, "removing")
 	_, err = a.mapIn(id, nil, "gpt-6", model)
 	refuses(t, "an alias for a supplier being removed", err, ErrStatusLocked)
+}
+
+// TestDeclaredFormats: a mapping may declare the call formats its adapter cannot report. The declaration is canonical,
+// can be narrowed or cleared without a new revision, and an unknown format is refused rather than stored.
+func TestDeclaredFormats(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	id := a.connect("https://api.example.com", "ops@example.com").ID
+	group := a.group(id, "1", true)
+	model := uuid.NewV7()
+	declare := func(formats *[]string, rev *int64) (Mapping, error) {
+		return inTx(a, func(ctx context.Context, tx pg.Tx) (Mapping, error) {
+			return a.admin.MapModel(ctx, tx, a.actor, id, &group, "gpt-3.5-turbo-instruct", model, formats, rev, "declare")
+		})
+	}
+	got, err := declare(&[]string{"completions", "chat"}, nil)
+	refuses(t, "a declaration", err, nil)
+	same(t, "canonical formats", []string{"chat", "completions"}, got.Formats)
+	rev := int64(1)
+	got, err = declare(&[]string{"completions"}, &rev)
+	refuses(t, "narrowing", err, nil)
+	same(t, "narrowed formats", []string{"completions"}, got.Formats)
+	got, err = declare(nil, &rev)
+	refuses(t, "leaving the declaration alone", err, nil)
+	same(t, "kept formats", []string{"completions"}, got.Formats)
+	got, err = declare(&[]string{}, &rev)
+	refuses(t, "clearing", err, nil)
+	same(t, "cleared formats", []string(nil), got.Formats)
+	_, err = declare(&[]string{"bogus"}, &rev)
+	refuses(t, "an unknown format", err, ErrUnknownFormat)
+	same(t, "a refused declaration is not stored", "", a.text("SELECT coalesce(array_to_string(formats, ','), '') FROM suppliers.supplier_aliases WHERE supplier_id = $1", id))
 }
 
 // TestAChangeReadsOnlyWhatItAnswersWith: selecting a group and pausing a supplier answer from the supplier's row and the

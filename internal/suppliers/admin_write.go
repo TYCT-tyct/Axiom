@@ -466,60 +466,20 @@ type Mapping struct {
 	UpstreamName string
 	Model        uuid.UUID
 	Revision     int64
+	Formats      []string // the call formats the alias declares beyond the adapter's, canonical names
 }
 
-// MapModel creates an alias when rev is nil, or corrects a group alias at the revision the caller read.
-// The caller checks the catalog model; the supplier lock serializes revisions and their audit entries.
-func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, group *uuid.UUID, name string, model uuid.UUID, rev *int64, reason string) (Mapping, error) {
-	if _, err := a.locked(ctx, tx, supplier); err != nil {
-		return Mapping{}, err
-	}
-	if group != nil {
-		if _, err := a.group(ctx, tx, supplier, *group); err != nil {
-			return Mapping{}, err
-		}
-	}
-	q := store.New()
-	rows, err := q.CurrentAlias(ctx, tx, store.CurrentAliasParams{SupplierID: supplier, SupplierGroupID: group, UpstreamName: name})
-	if err != nil {
-		return Mapping{}, fmt.Errorf("read the alias: %w", err)
-	}
-	if err := checkMappingRevision(rows, group, rev); err != nil {
-		return Mapping{}, err
-	}
-	m := Mapping{Supplier: supplier, Group: group, UpstreamName: name, Model: model, Revision: 1}
-	detail := map[string]any{"upstream_name": name, "model": model.String()}
-	action := "supplier_alias.create"
-	if len(rows) != 0 {
-		current := rows[0]
-		m.ID, m.Revision = current.ID, current.Revision
-		if current.ModelID == model {
-			return m, nil
-		}
-		m.Revision++
-		err = q.InsertAliasRevision(ctx, tx, store.InsertAliasRevisionParams{
-			AliasID: m.ID, SupplierID: supplier, Revision: m.Revision,
-			PreviousModelID: current.ModelID, ModelID: model, Actor: actor.String(), Reason: reason,
-		})
-		detail["model_from"], detail["model_to"] = current.ModelID.String(), model.String()
-		action = "supplier_alias.revise"
-	} else {
-		m.ID, err = q.InsertAlias(ctx, tx, store.InsertAliasParams{SupplierID: supplier, SupplierGroupID: group, UpstreamName: name, ModelID: model})
-	}
-	if err != nil {
-		return Mapping{}, fmt.Errorf("write the alias: %w", err)
+// afterMapping raises the generation and records an alias change. The formats-only path joins here so it shares the
+// audit and idempotency with creates and revisions.
+func (a *Admin) afterMapping(ctx context.Context, tx pg.Tx, q *store.Queries, actor audit.Actor, supplier uuid.UUID, action, reason string, detail map[string]any, m Mapping) error {
+	if err := q.BumpConfigGen(ctx, tx, supplier); err != nil {
+		return err
 	}
 	detail["alias"], detail["revision"] = m.ID.String(), m.Revision
-	if group != nil {
-		detail["group"] = group.String()
-	}
-	if err := q.BumpConfigGen(ctx, tx, supplier); err != nil {
-		return Mapping{}, fmt.Errorf("raise the generation: %w", err)
-	}
 	if err := a.record(ctx, tx, actor, action, supplier, reason, detail); err != nil {
-		return Mapping{}, err
+		return err
 	}
-	return m, nil
+	return nil
 }
 
 // checkMappingRevision runs under the supplier lock, so two corrections of one revision cannot both commit.

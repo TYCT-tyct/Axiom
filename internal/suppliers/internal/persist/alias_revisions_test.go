@@ -36,7 +36,7 @@ func TestProjectionUsesCurrentGroupMappingRevision(t *testing.T) {
 	mapTo := func(model catalog.ModelID, rev *int64) {
 		t.Helper()
 		if err := c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
-			_, err := admin.MapModel(t.Context(), tx, audit.System("suppliers.test"), c.supplier, &group, "alias", uuid.UUID(model), rev, "correct the group model")
+			_, err := admin.MapModel(t.Context(), tx, audit.System("suppliers.test"), c.supplier, &group, "alias", uuid.UUID(model), nil, rev, "correct the group model")
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -74,6 +74,48 @@ func TestProjectionUsesCurrentGroupMappingRevision(t *testing.T) {
 	c.value(&unchanged, "SELECT id::text || ' ' || xmin::text FROM suppliers.cost_schedules WHERE endpoint_id = (SELECT id FROM suppliers.endpoints WHERE model_id = $1)", uuid.UUID(one))
 	if len(oldCosts) != 1 || unchanged != oldCosts[0] {
 		t.Fatalf("historical schedule changed: %v -> %s", oldCosts, unchanged)
+	}
+}
+
+// TestDeclaredFormatsSurviveSync: a mapping may declare a call format the adapter does not report (legacy completions
+// on an OpenAI-type new-api endpoint). The projection unions it with the adapter's formats, so the sync that rewrites a
+// supplier model's formats keeps the declaration instead of overwriting it.
+func TestDeclaredFormatsSurviveSync(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	model := c.model("model", catalog.StatusListed)
+	groups := []listedGroup{{ref: "g", name: "g", ratio: "1", facts: "{}", models: []listedModel{{name: "alias", formats: []protocol.Format{protocol.Chat}, plan: &unitPrice}}}}
+	node := c.node("one")
+	s := c.acquire(node)
+	c.commitListing(s, 1, groups)
+	if err := s.Release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var group uuid.UUID
+	c.value(&group, "SELECT id FROM suppliers.supplier_groups WHERE supplier_id = $1", c.supplier)
+	admin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: c.keys, Clock: c.clock.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := []string{"completions"}
+	if err := c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := admin.MapModel(t.Context(), tx, audit.System("suppliers.test"), c.supplier, &group, "alias", uuid.UUID(model), &declared, nil, "declare legacy completions")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 { // the second sync must find nothing to change, not drop the declaration
+		s = c.acquire(node)
+		c.commitListing(s, int64(i+2), groups)
+		if err := s.Release(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		var modelFormats, endpointFormats string
+		c.value(&modelFormats, "SELECT formats::text FROM suppliers.supplier_models WHERE supplier_id = $1", c.supplier)
+		c.value(&endpointFormats, "SELECT formats::text FROM suppliers.endpoints WHERE supplier_id = $1", c.supplier)
+		if modelFormats != "{chat,completions}" || endpointFormats != "{chat,completions}" {
+			t.Fatalf("sync %d: model formats %s, endpoint formats %s", i+1, modelFormats, endpointFormats)
+		}
 	}
 }
 

@@ -1,8 +1,8 @@
 # protocol
 
-三种生成格式（OpenAI Chat、OpenAI Responses、Anthropic Messages）的读和写，以及两种直接格式（OpenAI Embeddings、Rerank）。生成格式之间两两转换；直接格式只做同格式改写，不转换。OpenAI 旧版补全（`/completions`）暂不提供（[接入的「决策与理由」](../../docs/domains/gateway.md#决策与理由)）。总体规则见[总体架构的「协议转换」](../../docs/architecture.md#协议转换)，对外行为见[接入与对外接口](../../docs/domains/gateway.md)。
+四种生成格式（OpenAI Chat、OpenAI Responses、Anthropic Messages、OpenAI 旧版补全 `/completions`）的读和写，以及两种直接格式（OpenAI Embeddings、Rerank）。三种 Chat 形态的生成格式之间两两转换；旧版补全只做同格式改写，不转换；直接格式也只做同格式改写，不转换。总体规则见[总体架构的「协议转换」](../../docs/architecture.md#协议转换)，对外行为见[接入与对外接口](../../docs/domains/gateway.md)。
 
-目前有读请求摘要的 `Inspect`、按 `provider.require_parameters` 读已声明参数的 `RequestParameters(format, body)`、改写同格式请求并在三种生成格式之间双向转换的 `Prepare`、转发流的 `Relay`（同格式和三种生成格式之间的双向转换）、回答流开始前错误的 `RenderError`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；非流式聚合（`RelayOptions.Aggregate`）是同一个 `Relay` 的另一种输出，见「非流式聚合」。直接格式的回复由 `DirectUsage` 读用量、`ValidateDirectReply` 校验、`RewriteDirectReply` 改写；`UsageOf` 读一份完整答复（compact 端点透传的那种）里的用量。
+目前有读请求摘要的 `Inspect`、按 `provider.require_parameters` 读已声明参数的 `RequestParameters(format, body)`、改写同格式请求并在三种 Chat 形态的生成格式之间双向转换的 `Prepare`、转发流的 `Relay`（同格式和三种 Chat 形态生成格式之间的双向转换，旧版补全只同格式）、回答流开始前错误的 `RenderError`、读上游 SSE 的 `internal/sse`、检查流结构的 `internal/streamcheck` 和录制样本的命令 `internal/record`；非流式聚合（`RelayOptions.Aggregate`）是同一个 `Relay` 的另一种输出，见「非流式聚合」。直接格式的回复由 `DirectUsage` 读用量、`ValidateDirectReply` 校验、`RewriteDirectReply` 改写；`UsageOf` 读一份完整答复（compact 端点透传的那种）里的用量。
 
 ## 包
 
@@ -51,6 +51,8 @@
 `Inspect` 对 `Embeddings`、`Rerank` 走 `inspectNew`（`direct.go`），不套三种生成格式的摘要：只要求 `model`；embeddings 还要 `input`，rerank 要 `query` 和 `documents`。`input` 接受字符串、字符串数组、token 数组、token 数组的数组，以及 `{content:[...]}` 的多模态部件；文本按解码后的字节计入 `TextBytes`，图片、文件、音频/视频分别计入 `Images`、`Documents` 和对应的 `Needs`，token 按每个 4 字节估。`documents` 接受字符串或 `{text,image}`，不接受空数组。`stream:true` 返回 `ErrInvalid`（这两种格式没有流式回复）。`encoding_format` 只认 `float`、`base64`，`dimensions`、`top_n` 必须是正整数。`provider` 原样保留最多 4 KiB，`user` 在改写时换成派生值；`session_id` 等其他路由参数以及这两种格式没有意义的 `prompt_cache_key`、`safety_identifier` 由改写删除。
 
 `Prepare` 对这两种格式只做同格式改写（`directRewriteRules`）：`model` 换端点名，标识换派生值，路由参数和 `stream` 删除。不同格式之间没有转换，`Prepare` 返回 `*NotSupported`。`PrepareCost` 走同一张规则表，容量算法与生成格式相同。
+
+旧版补全（`Completions`）是第四种生成格式，但没有 Chat 对应物，和直接格式一样只做同格式改写、不转换（`Convertible()` 为假，`callFormat` 要求端点原生支持）。`Inspect` 也走 `inspectNew`：`prompt` 接受字符串、字符串数组、token 数组、token 数组的数组，文本按解码后的字节计入 `TextBytes`，token 按每个 4 字节估；`TextBytes` 是全部 prompt 的和（每个 prompt 加上 `suffix` 的字节），`MaxInputBytes` 是最长的一个加 `suffix`，上下文按后者检查、报价按前者（[计费的「决策与理由」](../../docs/domains/billing.md#决策与理由)）；`n` 与 prompt 数相乘进 `Choices`，输出预留是两者之积乘上限。`best_of > 1` 在 `Inspect` 里以 `ErrInvalid` 拒绝：OpenAI 不能流式返回它，而这里一律按流式调用；`best_of` 为 1 或缺省照常转发。`max_tokens` 缺省、为 `null` 或超过报价上限（`Target.MaxOutput`，路由已按端点上限压过）时按报价上限发送，上游不会被要求超过预留的输出；客户端的 `0` 用 `MaxOutputSet` 与缺省分开，路由和报价都按零输出处理（配合 `echo` 只取 prompt 的 logprobs），中继据 `RelayOptions.ZeroOutput` 把没有文字但已结束的 choice 当作回答提交。token 数组的 token 数记进 `TokenInputs`、第二份起重复读的 `suffix` 字节记进 `RepeatedTextBytes`，供缺输入用量时的暂估补上 `Text` 看不到的部分。`echo` 时每个 prompt 的文本字节由 `EchoOf` 再扫一遍正文得出（`Inspect` 不分配它），网关先按 `EchoSize`（每份 8 字节）向节点预算申请，整个调用持有；中继按 choice 跟踪已收到的回显前缀（每个 choice 多记一个 `choiceSize`），只把超出前缀的文本计入 `ContentBytes` 和文本形状（token 数组按 4 字节/token 估），文字仍原样返回；提交点看的是有没有可交付文字（回显也算），所以只回显的回复照常提交。`stream` 由 `Target.Streams` 决定，`stream_options.include_usage` 强制为 true，因为这些端点的用量块要靠它。回复的流是 `text_completion` 块，本站把 `id`、`model` 换掉、去掉 `provider` 和 `axiom`，用量块与 `[DONE]` 由本站写；聚合时每个选项的 `text` 拼接、`logprobs` 的四个数组按序追加，设计见[接入的「决策与理由」](../../docs/domains/gateway.md#决策与理由)。
 
 ### 预设与回退控制
 
@@ -302,12 +304,13 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 
 ## 非流式聚合
 
-客户端没要流时（`RelayOptions.Aggregate`），上游照样以流读（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）：读、计量、内存记账都与流式相同，不同的只有输出。`Relay` 把要写给客户端的、客户端格式的事件交给聚合器，`Next` 的 `Out` 恒为空（提交点照常是 `StepCommit`，心跳是 `StepHeartbeat` 但不写保活），`Finish`、`Fail` 返回整个响应体，`Status()` 给出它的 HTTP 状态（还没有结尾时为 0）。每种客户端格式一个聚合器（`aggregatemessages.go`、`aggregatechat.go`、`aggregateresponses.go`），七条路径共用这三个：Messages、Responses 的流转给 Chat 客户端时，聚合器看到的就是 Chat 的块，不知道上游是谁。聚合器收到的是 `Relay` 写出的事件字节（`Finish`、`Fail` 写的结尾也一样，所以带费用），按 `sse.AppendEvent` 的格式切开，多行 data 用换行连接。Chat 聚合器只跳过 `[DONE]` 和空的 data，其余都当 JSON 读（前导空白、制表符、多行都照常），不是对象就是上游的失败；Responses 聚合器收到的项和部件，`type` 不是字符串（或转义不合法）就在收到时以 `ErrUpstream` 失败，转义的类型按它拼出的名字算。字段取自 Anthropic《Messages API reference》、OpenAI《Create chat completion》《Responses API reference》、OpenRouter《Reasoning tokens》（均沿用上文已读的版本，本 PR 没有重读）。
+客户端没要流时（`RelayOptions.Aggregate`），上游照样以流读（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）：读、计量、内存记账都与流式相同，不同的只有输出。`Relay` 把要写给客户端的、客户端格式的事件交给聚合器，`Next` 的 `Out` 恒为空（提交点照常是 `StepCommit`，心跳是 `StepHeartbeat` 但不写保活），`Finish`、`Fail` 返回整个响应体，`Status()` 给出它的 HTTP 状态（还没有结尾时为 0）。每种客户端格式一个聚合器（`aggregatemessages.go`、`aggregatechat.go`、`aggregateresponses.go`、`aggregatecompletions.go`），各条路径共用这几个：Messages、Responses 的流转给 Chat 客户端时，聚合器看到的就是 Chat 的块，不知道上游是谁。聚合器收到的是 `Relay` 写出的事件字节（`Finish`、`Fail` 写的结尾也一样，所以带费用），按 `sse.AppendEvent` 的格式切开，多行 data 用换行连接。Chat 聚合器只跳过 `[DONE]` 和空的 data，其余都当 JSON 读（前导空白、制表符、多行都照常），不是对象就是上游的失败；Responses 聚合器收到的项和部件，`type` 不是字符串（或转义不合法）就在收到时以 `ErrUpstream` 失败，转义的类型按它拼出的名字算。字段取自 Anthropic《Messages API reference》、OpenAI《Create chat completion》《Responses API reference》、OpenRouter《Reasoning tokens》（均沿用上文已读的版本，本 PR 没有重读）。
 
 | 客户端格式 | 响应体 | 怎么聚合 |
 |---|---|---|
 | Messages | `message`：`message_start` 的成员（`content`、`stop_reason`、`stop_sequence`、`usage` 除外），`content`，结尾的 `stop_reason`、`stop_sequence`、`usage`，有 `axiom` 时再加 `axiom` | 块一个接一个，所以整个消息写在一个缓冲区里：文本和思考的增量原位写进块的字符串，字符串到块结束才闭合；`input_json_delta` 的片段反转义后接成 `input`，没有增量就是块开头给的 `input`，开头也没有就是 `{}`，有增量时块结束要检查它是 JSON；签名和 `citations_delta` 的引用攒到块结束再写；开头里文本、思考、签名、`input`、引用以外的成员原样，块的 `type` 按它拼出的名字算（转义和空白不改变含义），其他类型的块（服务端工具及其结果、`redacted_thinking`）整块原样。`usage` 是 `message_start` 和各个 `message_delta` 里的 `usage` 按成员合并，后来的覆盖，费用在最后一个里；`delta` 同样合并，所以较早的 `message_delta` 被最后一个覆盖。不认识的事件和增量类型忽略 |
 | Chat | `chat.completion`：第一块的 `id`、`created`、`model`，`choices`，最后的 `usage`（含费用），出错时顶层 `error`，有 `axiom`（`billing_pending`）时再加 `axiom` | 选项交错，所以每个选项各存各的片段：`content`、`refusal`、`reasoning`、`reasoning_content` 的字符串内容拼接（不解转义，转义不会跨片段），`tool_calls` 按 `index` 归到一个调用（`id`、`type` 取给出的，`name`、`arguments` 拼接），`reasoning_details` 的条目攒起来、结束时用请求一侧同一个 `mergeDetails` 按类型和 `index` 合并，`annotations` 和 `logprobs` 的 `content`、`refusal` 数组的元素按序拼接。`finish_reason` 取给出的最后一个；有工具调用而没有文本的消息 `content` 为 `null`，`refusal` 没有时为 `null`，`logprobs` 没有时为 `null`。出错结尾（`error` 块）把顶层 `error` 放进响应体，没有结束原因的选项以 `error` 结束。`audio` 和旧的 `function_call` 成员没有聚合 |
+| Completions | `text_completion`：第一块的 `id`、`created`、`model`，`choices`，最后的 `usage`（含费用），出错时顶层 `error`，有 `axiom`（`billing_pending`）时再加 `axiom` | 选项可以交错，所以每个选项各存各的：`text` 拼接，`finish_reason` 取给出的最后一个，`logprobs` 的 `tokens`、`token_logprobs`、`text_offset`、`top_logprobs` 四个数组按元素追加（每个元素只解一次、按原字节省下，封账时一次写出，见[接入的「决策与理由」](../../docs/domains/gateway.md#决策与理由)）；上游的 `logprobs` 不是对象就是上游的失败。出错结尾（`error` 块）把顶层 `error` 放进响应体，没有结束原因的选项以 `error` 结束 |
 | Responses | `response` | 成功：就是结尾快照（`response.completed`、`response.incomplete`）的 `response`，它已带最终的 `output`、`usage` 和费用，原样返回，事件顶层的 `axiom`（结算没写时的 `billing_pending`）加到响应体顶层。失败：`Fail` 写的 `response.failed` 里的 `response`，换上聚合器按事件记下的 `output`（见下） |
 
 - **Responses 成功取快照，不从增量重建**：官方的完整响应就是快照；而官方样本的中间事件被省成一行注释（`testdata/responses/text/meta.json`），增量拼不出最终文本，所以从增量重建的响应体与官方非流式响应对不上。代价是依赖上游的快照带全部输出项：官方如此，[检查流结构](#检查流结构)也要求 `response.completed` 的 `output` 条数等于流里加入的项数。
@@ -317,18 +320,18 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 | 失败时 | 状态 | 响应体 |
 |---|---|---|
 | 还没有内容（提交点之前） | `RenderError` 给的状态码，网关可以换端点重试 | `RenderError` 的外壳，带 `axiom.usage`；没写结算时只有用量，不带费用、不带 `billing_pending` |
-| 有内容，Chat | 200 | 已生成的内容，`finish_reason: "error"`，顶层 `error`，`usage` |
+| 有内容，Chat、Completions | 200 | 已生成的内容，`finish_reason: "error"`，顶层 `error`，`usage` |
 | 有内容，Responses | 200 | `status: "failed"`，已生成的 `output`，`usage` |
 | 有内容，Messages | 502（D16） | `RenderError` 的外壳，不带内容，用量和费用在 `axiom` 里 |
 
   聚合器可以拒绝 `streamcheck` 接受、却造不出回复的流（没有 `message` 的 `message_start`、顺序不对的块、不是 JSON 的工具输入、没有 `response` 的结尾），按上游的失败处理：在 `Next` 里是 `ErrUpstream`，在结尾里则 `Finish` 改以 `upstream_error` 失败，结算已写的费用照常在里面。
-- **容量**：每个流聚合的片段合计最多 `aggregateLimit` = 16 MiB，算的是缓冲的容量（含消息头、`usage` 这些小片段），翻倍的富余到上限为止，所以 15.5 MiB 的文本放得下（`TestAggregateBudget`）；超出以 `ErrMemory` 结束，是本地的容量错误，不是上游的（`errors.Is(err, ErrUpstream)` 为假），换端点重试不会让它变小。节点预算同样经 `Relay` 的记账申请：要拷成响应体的片段（Chat 的文本、推理、参数）记两倍，要解码合并再写出的 `reasoning_details` 记四倍，Messages 的消息记一倍；Responses 记下的项和部件记两倍（失败时要重建成响应体），成功的快照就是 `Relay` 扣住的结尾事件，不另占，它超过 16 MiB 时在扣住的时候就以 `ErrMemory` 失败。`Finish`、`Fail` 不申请（它们只用已记账的字节），所以 `Relay` 扣住到正常结束才交给聚合器的事件（Chat 的结束选项），在扣住的那一刻就让聚合器按它们要开的选项和结束原因记账（`aggregator.hold`），超限在 `Next` 里就以 `ErrMemory` 结束；结束时全部归还（聚合的 `Finish`、`Fail` 例外：返回的响应体就是这些缓冲，预算留到网关写完响应体后调 `Release` 归还，`Release` 幂等，非聚合的 `Finish`、`Fail` 仍自己归还，`TestAggregateHoldsItsBudgetUntilReleased`）；失败后聚合器的片段留到 `Fail`（Messages 例外，它不带内容，立即放掉），持有量算进失败后的 `held`。
+- **容量**：每个流聚合的片段合计最多 `aggregateLimit` = 16 MiB，算的是缓冲的容量（含消息头、`usage` 这些小片段），翻倍的富余到上限为止，所以 15.5 MiB 的文本放得下（`TestAggregateBudget`）；超出以 `ErrMemory` 结束，是本地的容量错误，不是上游的（`errors.Is(err, ErrUpstream)` 为假），换端点重试不会让它变小。节点预算同样经 `Relay` 的记账申请：要拷成响应体的片段（Chat 的文本、推理、参数，Completions 的文本和 `logprobs` 元素）记两倍，要解码合并再写出的 `reasoning_details` 记四倍，Messages 的消息记一倍；Responses 记下的项和部件记两倍（失败时要重建成响应体），成功的快照就是 `Relay` 扣住的结尾事件，不另占，它超过 16 MiB 时在扣住的时候就以 `ErrMemory` 失败。旧版补全另按每个选项 128 字节、每次回复 512 字节记固定成员（`completionsChoiceFixed`、`completionsBodyFixed`），封账时一次写出，不再申请。`Finish`、`Fail` 不申请（它们只用已记账的字节），所以 `Relay` 扣住到正常结束才交给聚合器的事件（Chat 的结束选项），在扣住的那一刻就让聚合器按它们要开的选项和结束原因记账（`aggregator.hold`），超限在 `Next` 里就以 `ErrMemory` 结束；结束时全部归还（聚合的 `Finish`、`Fail` 例外：返回的响应体就是这些缓冲，预算留到网关写完响应体后调 `Release` 归还，`Release` 幂等，非聚合的 `Finish`、`Fail` 仍自己归还，`TestAggregateHoldsItsBudgetUntilReleased`）；失败后聚合器的片段留到 `Fail`（Messages 例外，它不带内容，立即放掉），持有量算进失败后的 `held`。
 - **分配**：聚合器按位置读事件，不把事件解成树；每个事件的分配次数有常数上界，缓冲翻倍带来的分配随长度对数增长，与增量的大小无关（`TestAggregateAllocs`）。
 - **整份答复的用量**：`UsageOf(body)` 读一份完整的 Responses 回复（`/responses/compact` 的答案，gateway 把回复原样透传、只改写请求）顶层的 `usage` 与 `service_tier`，按与流的结尾相同的口径折算成计费项；没有 `usage` 是上游没报告用量（不是没用模型），由调用方按暂估收，读不出或折算不了判为 `Invalid`，同样按估算（[计费的「免单规则」](../../docs/domains/billing.md#免单规则)）。`TestUsageOf` 覆盖拆分、等级和两种无效。
 
 ## 录制样本
 
-协议的测试用固定样本回放（[总体架构的「协议转换」](../../docs/architecture.md#协议转换)）。样本放在 `testdata/<上游格式>/<场景>/`，上游格式是 `messages`、`responses`、`chat`，场景名用英文小写和连字符。每个场景三个文件，已实现的转发方向再加一个黄金输出：
+协议的测试用固定样本回放（[总体架构的「协议转换」](../../docs/architecture.md#协议转换)）。样本放在 `testdata/<上游格式>/<场景>/`，上游格式是 `messages`、`responses`、`chat`、`completions`，场景名用英文小写和连字符。每个场景三个文件，已实现的转发方向再加一个黄金输出：
 
 | 文件 | 内容 |
 |---|---|
@@ -342,6 +345,7 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 
 - `testdata/assembled` 里是按官方事件形状组装的流，不是样本，只给转换的黄金输出和往返测试用：`responses-reasoning-tool.sse` 是一个带摘要和密文的推理项、一个函数调用，官方没有带这两样的 Responses 完整流。它的非流式黄金输出是 `responses-reasoning-tool.aggregate-to-chat.json`、`responses-reasoning-tool.aggregate-to-messages.json` 和 `responses-reasoning-tool.aggregate-responses.json`，流式的 `responses-reasoning-tool.to-messages.sse` 是给 Messages 客户端的转换。`chat-tool-calls`、`chat-reasoning-cache`、`chat-image` 是 Chat 端点（DeepSeek、Qwen 一类）的三段对话：请求，按 DeepSeek《Create Chat Completion》、OpenAI《Create chat completion》和阿里云百炼 OpenAI 兼容接口（用量块没有选项，读取于 2026-10-19；`prompt_tokens_details` 的图片明细该页没有列，照 OpenAI 的用量口径写）的形状组装的流（含空 id 的工具碎片、`reasoning_content`、`prompt_cache_hit_tokens`、没有选项的用量块），以及黄金输出 `.to-chat.json`（请求改写给 Chat 端点）、`.client-chat.sse`、`.aggregate-chat.json`，`go test -update` 重写。它们不是录制的：没有那类上游的 key，有了之后用 `just record chat` 换成真实样本。
 - 直接格式（`embeddings`、`rerank`）的场景目录用 `request.json`、`response.json`、`meta.json`，没有 `upstream.sse`：它们不流式，`streamcheck.Sample` 的 SSE 检查不适用，由 `TestDirectSamples` 单独回放。
+- 旧版补全的样本还没有自己的 `streamcheck`：`TestSamples` 不遍历这个目录，`TestCompletionsSample` 用 `Relay` 的读取器（同一套严格校验）回放它，并核对改写、聚合和费用。
 - 只收两种来源：官方文档里的完整流，以及用合成提示词录制的真实上游。官方示例常把中间事件省略成一行注释（`:` 开头），读 SSE 时注释本来就跳过，所以原样保留，在 `note` 里写明省略了什么；网页渲染改动过的空白按接口的原样还原，同样写进 `note`。
 - 样本里不能有密钥、服务器地址、用户数据；`just secrets` 在推送前扫描。样本只存请求体和流，不存头；录制真实上游时，上游生成的标识换成占位值，在 `note` 里写明（规则见「录制」）。官方示例里的 ID 本来就是示例值，原样保留。
 - `streamcheck.Sample` 检查 `meta.json` 有来源和合法日期、`request.json` 是合规的 JSON，并用对应格式的检查通过 `upstream.sse`；`TestSamples` 对每个场景读齐三个文件后调用它，录制工具写盘前也调用它，所以写下的样本一定通过样本测试。官方文档没有给出完整流的情形（Chat 的工具调用和用量块、各格式的出错结尾），只在测试里构造，不放进样本目录。
@@ -439,6 +443,8 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 | 录制命令放在 protocol 的 `internal/record`，不放 `tools/` | 写盘前要用 `streamcheck` 检查，Go 只允许 `internal/protocol` 之下的包引用它；它只用标准库和本模块，`tools/` 单独成模块是为了锁定第三方工具的版本，这里用不上 | 放 `tools/`：只能另起进程跑测试来检查，或者为它把检查提前做成 protocol 的公开接口 |
 | 录制命令用自己的 HTTP 客户端，只加上不跟随重定向和空闲超时 | 地址是开发者自己填的，可能是本机或局域网里的中转站，也可能要经代理才连得上 | `platform/egress`：它拒绝回环和内网地址、不读代理环境变量，防的是站长配置的上游地址带来的 SSRF |
 | 录下的流按事件解析后重建，ID 只在各格式的 ID 位置上替换，key 在解码后的字符串上查 | 前两轮评审的阻断问题都出自同一个机制：在 SSE 文本上用手写的 JSON 字符串扫描器找 ID 和 key，单独 CR 的行尾、注释里的落单引号或行末反斜杠、像 `"input": {` 的注释行都能让它错位。改用已有的 `sse.Reader`（按 SSE 规则分行、跳过注释）和经 `jsonx.Validate` 的 JSON 后，这一类错位不再存在；找字符串的位置用 `jsontext`，因为 `jsonx` 不提供按 token 读的接口。按位置替换，漏列一个位置只会留下一个真实 ID，录制者提交前看得到；按成员名猜，会改掉工具参数这类调用方的数据，改错了没有检查能发现。数据的字节除 ID 外原样拼回，空白、键序、数字写法照旧可测；SSE 的分帧（注释、行尾、`id`、`retry`）不保留，读流的代码本来不看它们，要测分帧的用官方样本，它们仍是原样的字节 | 在原始字节上扫描（前一版）：两轮评审各找出新的错位反例，补一处又出一处；解码后重新编码整个 JSON：改变键序和数字写法；按 `id`、`*_id` 成员名猜 ID 再加一张跳过调用方数据的列表：列表外的工具参数照样被改；在没列出的位置发现像 ID 的值时提醒：现在三种格式的位置都已列出，等录到新形状的上游时再看是否需要 |
+| 旧版补全只同格式改写、不转 Chat | 请求没有 Chat 的对应写法（`prompt`、`logprobs`、`suffix`、`best_of` 各有语义；`best_of > 1` 另按 400 拒绝，因为不能流式返回），OpenRouter 也没有 `/completions`，官方 OpenAI 的接口是基线；转换要么丢信息、要么发明语义。代价是只有声明 `completions` 的端点能服务，没有就 404 `no_endpoint` | 与 Chat 互转 |
+| `logprobs` 的四个数组按元素追加，封账时一次写出 | 每块只解析一次、按原字节追加，不生成中间对象、不退账；分配只随缓冲翻倍对数增长，与块大小无关（`TestCompletionsLogprobsLongStream`、`TestCompletionsLogprobsBudget`）。完整比较和内存不变量见[接入的「决策与理由」](../../docs/domains/gateway.md#决策与理由) | 每块把整份 `logprobs` 合并成新对象：每块一次全量拷贝，长流平方增长 |
 | 直接格式只同格式改写、整份回复 | [OpenRouter 的 Embeddings](https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request)、[Rerank](https://openrouter.ai/docs/api/api-reference/rerank/submit-a-rerank-request)（2026-10-30 核对官方 OpenAPI）都回一份 JSON，没有流；转换要把 `input`/`documents` 的多模态和 token 形状映射到生成格式，收益为零、丢信息的风险实打实，所以不写转换。整份回复读取后先校验 `data`/`results`，失败时还没提交，仍可换端点 | 把直接格式硬转成 Chat |
 | rerank 的 `search_units` 计入 `web_search` | OpenRouter 的 rerank 用量示例是 `{"search_units":1,"total_tokens":150}`；本站按次计价的单位只有 `web_search`，语义都是“一次服务端调用”。复用现有单位让 rerank 立刻按已发布售价收费；新加 item 要改价目表、售价发布和所有格式的映射，收益只是名字更贴切。代价是调用记录里显示为 web search | 新增 `rerank` 计费项 |
 | `Prepare` 只在 `Target.Streams` 时把 `stream` 写成 true | gateway 总是以流读上游，非流式客户端拿聚合结果；端点能否流式是适配器的声明，不流式的端点保持客户端的写法 | 无条件改写：给不能流式的端点发它不支持的请求 |

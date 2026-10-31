@@ -501,44 +501,6 @@ func (a adminAPI) ListPendingMappings(ctx context.Context, request adminapi.List
 }
 
 // MapSupplierModel makes an alias: the supplier's name means this model, in one group or in the whole supplier.
-func (a adminAPI) MapSupplierModel(ctx context.Context, request adminapi.MapSupplierModelRequestObject) (adminapi.MapSupplierModelResponseObject, error) {
-	supplier, err := supplierIDOf(request.SupplierId)
-	if err != nil {
-		return nil, err
-	}
-	b := request.Body
-	model, err := idIn("/model_id", b.ModelId)
-	if err != nil {
-		return nil, err
-	}
-	var group *uuid.UUID
-	if b.GroupId != nil {
-		id, err := idIn("/group_id", *b.GroupId)
-		if err != nil {
-			return nil, err
-		}
-		group = &id
-	}
-	mapped, replayed, err := idempotently(ctx, a.db, "mapSupplierModel", request.Params.IdempotencyKey, []any{request.SupplierId, b},
-		func(tx pg.Tx) (adminapi.ModelMapping, error) {
-			// Checked by the request that makes the change only: a model retired since is no reason to refuse its retry.
-			if err := mappableModel(ctx, tx, model); err != nil {
-				return adminapi.ModelMapping{}, err
-			}
-			m, err := a.suppliers.MapModel(ctx, tx, actor(ctx), supplier, group, b.UpstreamName, model, b.Rev, b.Reason)
-			body := adminapi.ModelMapping{Id: m.ID.String(), SupplierId: m.Supplier.String(), UpstreamName: m.UpstreamName, ModelId: m.Model.String(), Revision: &m.Revision}
-			if m.Group != nil {
-				groupID := m.Group.String()
-				body.GroupId = &groupID
-			}
-			return body, bodyGroup(err)
-		})
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.MapSupplierModel201JSONResponse{Body: mapped, Headers: adminapi.MapSupplierModel201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
-}
-
 // mappableModel refuses a model the catalog lacks or has retired: an alias to it would send traffic nowhere.
 func mappableModel(ctx context.Context, tx pg.Tx, id uuid.UUID) error {
 	view, err := catalog.ModelIn(ctx, tx, catalog.ModelID(id))

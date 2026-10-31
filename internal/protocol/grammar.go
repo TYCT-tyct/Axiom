@@ -110,6 +110,9 @@ var grammars = [...]grammar{
 		tiers: openAITiers,
 		input: openAIInput,
 	},
+	// Legacy completions have no content parts or tools: their request is read by inspectNew, which shares the
+	// scanner of the direct formats (direct.go). The entry only keeps this array indexed by Format.
+	Completions: {},
 }
 
 var (

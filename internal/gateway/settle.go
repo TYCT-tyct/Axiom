@@ -354,7 +354,9 @@ func (a *attempt) demand() billing.Demand {
 	cached := &a.s.textCounts[int(tok)-1]
 	if !cached.counted {
 		var err error
-		cached.tokens, err = textTokens(a.s.c.Body, d, tok)
+		r := &a.s.c.Request
+		unseen := r.TokenInputs + tokensOf(r.RepeatedTextBytes, billing.InputBytesPerToken)
+		cached.tokens, err = textTokens(a.s.c.Body, d, tok, unseen)
 		cached.counted = true
 		if err != nil {
 			a.s.logger.Warn("input token count failed; using byte estimate", "err", err)
@@ -378,7 +380,9 @@ func inputReported(u protocol.Usage) bool {
 // can therefore serve another attempt of the same family with a different context limit.
 const maxCountBytes = 256 << 10
 
-func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer) (int64, error) {
+// textTokens counts the body's strings in tok's tokens and adds unseen, the input tokens those strings do not show
+// (protocol.Request.TokenInputs and RepeatedTextBytes).
+func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer, unseen int64) (int64, error) {
 	c := billing.NewTextCount(tok, d.TextBytes)
 	if c == nil {
 		return 0, nil
@@ -391,7 +395,7 @@ func textTokens(body []byte, d billing.Demand, tok billing.Tokenizer) (int64, er
 	if err != nil {
 		return 0, err
 	}
-	return min(d.TextBytes, count+tokensOf(remaining, billing.InputBytesPerToken)), nil
+	return min(d.TextBytes, count+tokensOf(remaining, billing.InputBytesPerToken)+unseen), nil
 }
 
 // estimated is an attempt's usage as billing charges it (docs/domains/billing.md「用量来源与暂估」): every item the
@@ -467,9 +471,10 @@ func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64,
 	if reply.Reported.Has(catalog.ItemOutput) {
 		return reply.Usage.Count(catalog.ItemOutput)
 	}
-	out, ok := billing.TextTokens(tok, p.Text, p.ContentBytes)
+	content := max(p.ContentBytes, 0)
+	out, ok := billing.TextTokens(tok, p.Text, content)
 	if !ok {
-		out = tokensOf(p.ContentBytes, outputBytesPerToken)
+		out = tokensOf(content, outputBytesPerToken)
 	}
 	out += min(max(p.ToolCalls, 0), maxCount) * billing.ToolCallTokens(tok)
 	out = min(out, outputCap)

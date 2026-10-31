@@ -164,7 +164,7 @@ func (q *Queries) ListGroupPoolCapacities(ctx context.Context, db DBTX, supplier
 }
 
 const listProjectedAliases = `-- name: ListProjectedAliases :many
-SELECT a.supplier_group_id, a.upstream_name, COALESCE(r.model_id, a.model_id) AS model_id
+SELECT a.supplier_group_id, a.upstream_name, COALESCE(r.model_id, a.model_id) AS model_id, a.formats
 FROM suppliers.supplier_aliases a
 LEFT JOIN LATERAL (SELECT model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY revision DESC LIMIT 1) r ON true
 WHERE a.supplier_id = $1
@@ -174,6 +174,7 @@ type ListProjectedAliasesRow struct {
 	SupplierGroupID *uuid.UUID
 	UpstreamName    string
 	ModelID         uuid.UUID
+	Formats         []string
 }
 
 func (q *Queries) ListProjectedAliases(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListProjectedAliasesRow, error) {
@@ -185,7 +186,12 @@ func (q *Queries) ListProjectedAliases(ctx context.Context, db DBTX, supplierID 
 	var items []ListProjectedAliasesRow
 	for rows.Next() {
 		var i ListProjectedAliasesRow
-		if err := rows.Scan(&i.SupplierGroupID, &i.UpstreamName, &i.ModelID); err != nil {
+		if err := rows.Scan(
+			&i.SupplierGroupID,
+			&i.UpstreamName,
+			&i.ModelID,
+			&i.Formats,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

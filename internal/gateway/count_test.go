@@ -70,8 +70,8 @@ func TestInputTextEstimateDecodedAndOpaque(t *testing.T) {
 		`{"input":"你好","encrypted_content":"` + strings.Repeat("YWJj", 10000) + `"}`,
 	} {
 		d := billing.Demand{TextBytes: int64(len(body))}
-		got, err := textTokens([]byte(body), d, billing.TokenizerO200k)
-		want, wantErr := textTokens([]byte(plain), d, billing.TokenizerO200k)
+		got, err := textTokens([]byte(body), d, billing.TokenizerO200k, 0)
+		want, wantErr := textTokens([]byte(plain), d, billing.TokenizerO200k, 0)
 		if err != nil || wantErr != nil || got != want || got == 0 {
 			t.Fatalf("decoded/opaque estimate %d (%v), want %d (%v)", got, err, want, wantErr)
 		}
@@ -88,7 +88,7 @@ func TestInputTextEstimateByteBudget(t *testing.T) {
 	}
 	for _, suffix := range []string{"", "x", "xyz12", strings.Repeat("x", 1<<20)} {
 		body := []byte(`{"input":"` + prefix + suffix + `"}`)
-		got, err := textTokens(body, billing.Demand{TextBytes: int64(len(body))}, billing.TokenizerO200k)
+		got, err := textTokens(body, billing.Demand{TextBytes: int64(len(body))}, billing.TokenizerO200k, 0)
 		if expected := want + tokensOf(int64(len(suffix)), 4); err != nil || got != expected {
 			t.Fatalf("suffix %d bytes: %d (%v), want %d", len(suffix), got, err, expected)
 		}
@@ -156,7 +156,7 @@ func BenchmarkInputTextEstimate(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(size))
 				for b.Loop() {
-					if _, err := textTokens(body, d, billing.TokenizerO200k); err != nil {
+					if _, err := textTokens(body, d, billing.TokenizerO200k, 0); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -175,4 +175,43 @@ func BenchmarkInputTextEstimate(b *testing.B) {
 			a.demand()
 		}
 	})
+}
+
+// TestAttemptCountsInputTheStringsDoNotShow: a missing input report is estimated from the body's strings, which leave out
+// a token-array input and the repeats of a completion's suffix. Token IDs count one each, exactly ("m" is one more), and
+// a suffix read again for each later prompt adds its bytes at 4 a token: three prompts with a 4000-byte suffix estimate
+// 2000 tokens more than one, plus the two "x" prompts.
+func TestAttemptCountsInputTheStringsDoNotShow(t *testing.T) {
+	ids := strings.TrimSuffix(strings.Repeat("7,", 1000), ",")
+	suffix := strings.Repeat("a", 4000)
+	estimate := func(f protocol.Format, body string) int64 {
+		t.Helper()
+		req, err := protocol.Inspect(f, []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := attempt{s: &session{c: &Call{Body: []byte(body), Request: req}, logger: slog.New(slog.DiscardHandler)}}
+		a.entry.Target.Model = "gpt-4o"
+		a.entry.Limits.ContextLength = 1 << 20
+		return billing.InputEstimate(a.demand(), a.entry.Limits)
+	}
+	for _, c := range []struct {
+		name string
+		f    protocol.Format
+		body string
+		want int64
+	}{
+		{"a token prompt", protocol.Completions, `{"model":"m","prompt":[` + ids + `]}`, 1001},
+		{"token prompts", protocol.Completions, `{"model":"m","prompt":[[` + ids + `],[7,7]]}`, 1003},
+		{"token inputs", protocol.Embeddings, `{"model":"m","input":[[` + ids + `],[7]]}`, 1002},
+	} {
+		if got := estimate(c.f, c.body); got != c.want {
+			t.Errorf("%s: input estimate %d, want %d", c.name, got, c.want)
+		}
+	}
+	one := estimate(protocol.Completions, `{"model":"m","prompt":["x"],"suffix":"`+suffix+`"}`)
+	three := estimate(protocol.Completions, `{"model":"m","prompt":["x","x","x"],"suffix":"`+suffix+`"}`)
+	if three-one != 2002 {
+		t.Errorf("three prompts estimate %d, one %d: want 2002 more", three, one)
+	}
 }

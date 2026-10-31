@@ -99,7 +99,13 @@ type RelayOptions struct {
 	Capture *Capture
 	// Citations are the web search results the gateway supplied, which an aggregated Chat reply cites in its
 	// annotations. A stream cannot know the whole message, so it carries none.
-	Citations       []Citation
+	Citations []Citation
+	// Echo, when set, is the prompt text a legacy completion repeats at the start of each choice. A pointer keeps the
+	// gateway's common options small; only an echo request allocates it.
+	Echo *EchoPrompts
+	// ZeroOutput is set when the request capped its output at 0, as legacy completions' max_tokens 0 does: a choice that
+	// finishes without text is then the whole answer, not an empty response.
+	ZeroOutput      bool
 	legacyFunctions bool
 }
 
@@ -225,9 +231,10 @@ type relayFormat struct {
 }
 
 var relayFormats = [...]relayFormat{
-	Messages:  {newMessagesStream, 1 << 20, false},
-	Responses: {newResponsesStream, 32 << 20, false},
-	Chat:      {newChatStream, 1 << 20, true},
+	Messages:    {newMessagesStream, 1 << 20, false},
+	Responses:   {newResponsesStream, 32 << 20, false},
+	Chat:        {newChatStream, 1 << 20, true},
+	Completions: {newCompletionsStream, 1 << 20, true},
 }
 
 // chatConversions are the formats a Chat client's stream is converted from (README.md「跨格式的流」): the upstream's
@@ -668,9 +675,10 @@ func (r *Relay) endOut() []byte {
 func KeepAlive(f Format) []byte { return keepAlives[f] }
 
 var keepAlives = [...][]byte{
-	Messages:  []byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"),
-	Responses: []byte(": keep-alive\n\n"),
-	Chat:      []byte(": keep-alive\n\n"),
+	Messages:    []byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"),
+	Responses:   []byte(": keep-alive\n\n"),
+	Chat:        []byte(": keep-alive\n\n"),
+	Completions: []byte(": keep-alive\n\n"),
 }
 
 // initReply keeps the response representation tied to the original client's request.

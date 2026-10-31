@@ -78,7 +78,7 @@ type chatAggEvent struct {
 const mapSlot = 48
 
 var (
-	chatAggFields = map[string]func(*chatAggregate) error{
+	chatAggFields = map[string]func(*chatAggregate) error{ //nolint:dupl // legacy completions' aggregate mirrors these members
 		"id":      func(a *chatAggregate) error { return a.capture(&a.ev.id) },
 		"created": func(a *chatAggregate) error { return a.capture(&a.ev.created) },
 		"model":   func(a *chatAggregate) error { return a.capture(&a.ev.model) },
@@ -168,6 +168,8 @@ func (a *chatAggregate) event(data []byte) error {
 
 // keep takes the members of the chunk that are not choices: the first chunk's identity, and the last usage, error
 // and axiom.
+//
+//nolint:dupl // legacy completions' aggregate mirrors this member list
 func (a *chatAggregate) keep() error {
 	e := &a.ev
 	for _, m := range [...]struct {
