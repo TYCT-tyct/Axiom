@@ -55,7 +55,7 @@ type Issue struct{}               // 站点、每码面额、数量、备注、�
 func IssueCodes(ctx context.Context, tx pg.Tx, g Issue) ([]RedeemCode, error) // 在调用方事务里生成一批并记审计；明文码只在这里返回
 func (p *Payments) Redeem(ctx context.Context, r Redeem) (Redemption, error)  // 限流、码、兑换记录、billing.CreditRedeem；r.Key 幂等，账户范围由调用方先确认
 func (p *Payments) ListCodes(ctx context.Context, s pg.Scope, site uuid.UUID, state RedeemState, note string, after *page.Cursor, size int) ([]RedeemCode, *page.Cursor, error) // 站点范围；不返回码
-func (p *Payments) DisableCode(ctx context.Context, tx pg.Tx, actor audit.Actor, by uuid.UUID, id CodeID, reason string) (RedeemCode, error) // 只停用未兑换的码；审计同事务
+func DisableCode(ctx context.Context, tx pg.Tx, actor audit.Actor, by uuid.UUID, id CodeID, reason string) (RedeemCode, error) // 只停用未兑换的码；审计同事务，写在调用方的事务里
 func (p *Payments) ListRedemptions(ctx context.Context, s pg.Scope, account uuid.UUID, after *page.Cursor, size int) ([]Redemption, *page.Cursor, error) // 账户范围；不返回码
 func ListMerchants(ctx context.Context, tx pg.Tx, site uuid.UUID) ([]Merchant, error)                             // 站点范围；没有密钥
 func DisableMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, id MerchantID, reason string) (Merchant, error) // 只改启用位，保留配置与密文；已停用时什么也不写
