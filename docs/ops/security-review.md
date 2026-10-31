@@ -38,7 +38,7 @@
 | 5 | 细节 | `internal/platform/nodetls/README.md`「部署」 | 主密钥目录不能对组可写（`nodetls` 的目录检查），而发货的 `deploy/compose.yaml` 特意把 `/keys` 设成 `0770`（程序要能原子替换主密钥文件），默认的证书目录又是主密钥文件所在目录：打开节点监听（`AXIOM_NODE_ADDR`）而没另设 `AXIOM_NODE_TLS_DIR` 时核心正好在这条自相矛盾的配置上拒绝启动 | 已改文档：证书目录必须另设一个组不可写的目录（如卷下的子目录），不要用密钥环的卷根本身 |
 | 6 | 细节 | `internal/accounts/passkeys.go` 的 `BeginPasskeyMFA` | 唯一没有来源 IP 限流的 begin 端点：拿到密码、停在 `pending_mfa` 的人可以反复调用，每次都插一行 `accounts.webauthn_flows`，清理每轮最多删 1000 行，进得比清得快。不是接管路径 | 未修：需要带容器的回归测试，本轮时间不够；记在这里待转 Issue。同级端点都走 `fromIP`，补上即可 |
 | 7 | 细节 | `internal/accounts/login.go` 的登录路径 | 邮箱不存在时一次事务加一次假哈希，存在时两次事务。响应体和状态码一致，数据库往返次数不同，理论上能按延迟排名哪些地址注册过；IP 桶每站点每分钟 10 次把可利用性压得很低。文档说的是"不存在也算一次哈希"，这句成立 | 未修：要相等就得在未命中时多发一次空事务，为计时加代码比这条信道更糟；记在这里 |
-| 8 | 细节 | `cmd/axiom/catalog.go` 的 `watch-page` | 价格页地址保存时只检查形状（https、无用户信息），不调用 `egress.Check`；其他后台可写的出站目标（SMTP、告警 Webhook、用户 Webhook、供应商、支付网关）都在保存时预检 | 未修：这是命令行运维操作，边界是操作员的 shell，拨号时仍会拒绝私网地址；为它在命令里接一个 egress 客户端不增加保护。要加时应在 `catalog` 的写入路径上接 |
+| 8 | 细节 | `cmd/axiom/catalog.go` 的 `watch-page` | 价格页地址保存时只检查形状（https、无用户信息），不调用 `egress.Check`；其他后台可写的目标（SMTP、告警 Webhook、用户 Webhook、供应商）都在保存时预检，支付网关保存时只检查 https 形状、拨号时才校验 | 未修：这是命令行运维操作，边界是操作员的 shell，拨号时仍会拒绝私网地址；为它在命令里接一个 egress 客户端不增加保护。要加时应在 `catalog` 的写入路径上接 |
 
 ### 逐项核对
 
@@ -57,7 +57,7 @@
 | CSRF | Origin 精确等于登记值、必须是 JSON、会话 CSRF 令牌常量时间比较 | `checkCSRF`（`internal/accounts/session.go:350`） | `TestRequestsMustComeFromTheSite`、`console_guard_test.go`、`admin_guard_test.go` | 成立 |
 | OAuth 状态与 nonce | state 与 nonce 一次性、只存哈希、绑定 `__Host-` Cookie、条件消耗 | `internal/accounts/oauth.go:103`、`:209`、`:222` | `assertSignsInBySubject`、`assertNoMergeByEmail`（`oauth_test.go`） | 成立 |
 | OAuth 跳转 | 回调只回到站点登记的控制台域名，跳转目标是字面量；不使用 `next`、Referer 或 Host | `internal/accounts/oauth.go:414`、`cmd/axiom/console_oauth.go` | `TestOAuthStartOnAnotherConsoleDomainIsRefused`、`web/e2e/console-pages.spec.ts` | 成立 |
-| 通行密钥 | RP ID 与 origin 来自登记的登录域名、要求用户在场、计数器只增不减、流程行一次性 | `internal/accounts/passkeys.go:82`、`:93`、`internal/accounts/webauthn.go:34` | `assertCounterRefusals`（`passkey_test.go`）、`TestPasskeySignInNeedsTheLoginDomain` | 成立 |
+| 通行密钥 | RP ID 与 origin 来自登记的登录域名、要求用户在场、计数器只增不减、流程行一次性 | `internal/accounts/passkeys.go:82`、`internal/accounts/webauthn.go:34`、`internal/accounts/webauthn.go:94`、`queries/passkeys.sql:48` | `assertCounterRefusals`（`passkey_test.go`）、`TestPasskeySignInNeedsTheLoginDomain` | 成立 |
 | 因素版本 | 每次改因素都加版本，会话每次请求重新核对 | `internal/accounts/factors.go`、`queries/console.sql` 的 `ValidSession` | `TestConsolePasswordSessionCannotSkipAPasskey`、`TestSessionDevicesLeaveOutInvalid` | 成立 |
 | 主密钥信封 | 每行独立数据密钥、AAD 绑定表/行/用途、nonce 随机、解不开就失败 | `internal/platform/secret/envelope.go`、`rewrap.go` | `TestOpenRejectsTampering`、`TestLocationsDoNotCollide`、`FuzzOpen` | 成立 |
 | 主密钥文件 | 普通文件、组和其他人不可读、重复版本和重复密钥拒绝、不打印路径和内容 | `readKeyFile`（本轮加 `Lstat`）、`internal/platform/secret/keyfile_write.go` | `TestKeyFilePermissions`、`TestKeyFilePaths`、`TestInvalidKeyFiles`、`TestKeyFileSymlinkRefused` | 本轮修复后成立 |
@@ -75,14 +75,14 @@
 
 | 调用方 | 位置 | 目的地由谁决定 |
 |---|---|---|
-| 告警 Webhook | `internal/observability/webhook.go:79` | 负责人；保存时 `egress.Check`（`cmd/axiom/admin_alerts.go:70`） |
-| 用户通知 Webhook | `internal/accounts/notice_jobs.go:260` | 账户自己；保存时 `egress.Check`（`cmd/axiom/user_notices.go:39`） |
+| 告警 Webhook | `internal/observability/webhook.go:91` | 负责人；保存时 `egress.Check`（`cmd/axiom/admin_alerts.go:70`） |
+| 用户通知 Webhook | `internal/accounts/notice_jobs.go:272` | 账户自己；保存时 `egress.Check`（`cmd/axiom/user_notices.go:39`） |
 | OAuth 提供方 | `internal/accounts/oauth_provider.go:160` | 程序里的常量 |
-| 数据集与价格页 | `internal/catalog/fetch.go:47`、`internal/catalog/page_fetch.go:176` | 数据集是常量；价格页是运维命令保存的 https 地址，拨号时校验（发现 8） |
-| 供应商接口 | `internal/suppliers/internal/client/client.go:66` | 管理员保存的 origin，保存时 `egress.Check`（`internal/suppliers/admin_write.go:63`），路径只来自适配器常量 |
-| 汇率 | `internal/billing/exchange_fetch.go:26` | 常量（欧洲央行） |
-| 支付网关 | `internal/payments/easypay_api.go:18` | 管理员保存的 https 网关 |
-| SMTP | `internal/platform/mail/smtp.go:160` | 部署配置或后台保存的地址，保存时 `egress.Check`（`cmd/axiom/admin_system.go:202`） |
+| 数据集与价格页 | `internal/catalog/fetch.go:51`、`internal/catalog/page_fetch.go:180` | 数据集是常量；价格页是运维命令保存的 https 地址，拨号时校验（发现 8） |
+| 供应商接口 | `internal/suppliers/internal/client/client.go:71` | 管理员保存的 origin，保存时 `egress.Check`（`internal/suppliers/admin_write.go:63`），路径只来自适配器常量 |
+| 汇率 | `internal/billing/exchange_fetch.go:20` | 常量（欧洲央行） |
+| 支付网关 | `internal/payments/easypay_api.go:30` | 管理员保存的 https 网关；保存时只检查形状，所有网关请求都经出站客户端拨号 |
+| SMTP | `internal/platform/mail/smtp.go:76` | 部署配置或后台保存的地址，保存时 `egress.Check`（`cmd/axiom/admin_system.go:202`） |
 | 对象存储 | `internal/platform/objectstore/request.go:323` | 只有部署环境变量；用它自己的 transport，不做公网地址校验（见下方决定） |
 
 ### 决定
