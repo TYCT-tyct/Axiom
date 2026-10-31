@@ -29,6 +29,8 @@ type chatAggregate struct {
 	hadError                                  bool
 	legacy                                    bool
 	healing                                   bool
+	cited                                     bool // the reply gets url_citation annotations at the end
+	citeCharged                               bool // its extra working set has been drawn
 }
 
 // The pieces of a choice that are strings.
@@ -288,6 +290,15 @@ func (a *chatAggregate) piece(i int) error {
 	if a.healing && i == pieceContent {
 		factor = healingMemoryFactor
 	}
+	if a.cited && i == pieceContent {
+		if !a.citeCharged {
+			if err := a.take(citationMemory, 1); err != nil {
+				return err
+			}
+			a.citeCharged = true
+		}
+		factor = max(factor, citationFactor)
+	}
 	return a.add(&a.cur().strings[i], v, factor)
 }
 
@@ -387,7 +398,7 @@ func (a *chatAggregate) body() ([]byte, error) {
 // size is about what the choice takes in a body, so that the body is allocated once: its pieces and a margin for the
 // members around them.
 func (c *chatChoice) size() int {
-	n := 256 + len(c.details) + len(c.finish)
+	n := 256 + len(c.details) + len(c.finish) + len(c.annotations)
 	for _, s := range c.strings {
 		n += len(s)
 	}

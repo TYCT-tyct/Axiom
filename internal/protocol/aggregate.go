@@ -312,6 +312,9 @@ func (r *Relay) unframe(b []byte) (data, rest []byte, err error) {
 // one, the upstream's failure.
 func (r *Relay) finishAggregate(out []byte, f Final) []byte {
 	r.agg.seal()
+	if a, ok := r.agg.(*chatAggregate); ok {
+		a.cite(r.o.Citations)
+	}
 	if err := r.feed(out); err == nil {
 		if body, err := r.agg.body(); err == nil {
 			r.status, r.state = http.StatusOK, ended
@@ -337,6 +340,9 @@ func (r *Relay) failAggregate(e Error, f *Final, u Usage) []byte {
 		return body
 	}
 	r.agg.seal()
+	if a, ok := r.agg.(*chatAggregate); ok {
+		a.cite(r.o.Citations)
+	}
 	if err := r.feed(r.up.failure(nil, e, pay.usage, pay.cost)); err != nil {
 		return body
 	}

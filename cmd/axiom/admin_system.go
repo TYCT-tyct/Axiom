@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strings"
 	"time"
 	"uuid"
 
@@ -15,6 +17,7 @@ import (
 	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/typeid"
+	"axiom/internal/websearch"
 )
 
 func (a adminAPI) GetSystemSettings(ctx context.Context, r adminapi.GetSystemSettingsRequestObject) (adminapi.GetSystemSettingsResponseObject, error) {
@@ -216,6 +219,106 @@ func (a adminAPI) SetMailSettings(ctx context.Context, r adminapi.SetMailSetting
 		return nil, err
 	}
 	return adminapi.SetMailSettings200JSONResponse{Body: body, Headers: adminapi.SetMailSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+func searchSettingsBody(cfg websearch.Config, source string, restart *bool) (adminapi.SearchSettings, error) {
+	return adminJSON[adminapi.SearchSettings](map[string]any{"url": cfg.URL, "has_key": cfg.Key.Reveal() != "", "source": source, "restart_required": restart})
+}
+
+func (a adminAPI) GetSearchSettings(ctx context.Context, _ adminapi.GetSearchSettingsRequestObject) (adminapi.GetSearchSettingsResponseObject, error) {
+	cfg, found, err := a.savedSearch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	source := "environment"
+	if found {
+		source = "database"
+	}
+	body, err := searchSettingsBody(cfg, source, nil)
+	return adminapi.GetSearchSettings200JSONResponse(body), err
+}
+
+func (a adminAPI) savedSearch(ctx context.Context) (cfg websearch.Config, found bool, err error) {
+	cfg = a.search
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
+		var stored websearch.Config
+		stored, found, err = websearch.StoredConfig(ctx, tx, a.keys)
+		if found {
+			cfg = stored
+		}
+		return err
+	})
+	return cfg, found, err
+}
+
+func (a adminAPI) SetSearchSettings(ctx context.Context, r adminapi.SetSearchSettingsRequestObject) (adminapi.SetSearchSettingsResponseObject, error) {
+	v := r.Body.Settings
+	s := websearch.Settings{URL: strings.TrimSpace(textValue(v.Url)), Key: v.Key}
+	// Credentials never enter the persisted, unkeyed idempotency fingerprint.
+	identity := []any{s.URL, r.Body.Reason, s.Key != nil}
+	body, replayed, err := idempotently(ctx, a.db, "setSearchSettings", r.Params.IdempotencyKey, identity, func(tx pg.Tx) (adminapi.SearchSettings, error) {
+		if s.URL != "" {
+			if err := a.checkSearchURL(ctx, s.URL); err != nil {
+				return adminapi.SearchSettings{}, err
+			}
+		}
+		cfg, err := websearch.SaveConfig(ctx, tx, a.keys, actor(ctx), s, a.search, r.Body.Reason)
+		if errors.Is(err, websearch.ErrInvalidConfig) {
+			return adminapi.SearchSettings{}, invalidField("/settings", "invalid search backend configuration; verify the URL and reenter the key after a URL change")
+		}
+		if err != nil {
+			return adminapi.SearchSettings{}, err
+		}
+		return searchSettingsBody(cfg, "database", new(true))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetSearchSettings200JSONResponse{Body: body, Headers: adminapi.SetSearchSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// checkSearchURL refuses a backend URL this node cannot use: not an http(s) base URL, or a host the egress rules keep
+// off the public internet.
+func (a adminAPI) checkSearchURL(ctx context.Context, raw string) error {
+	cfg, err := websearch.Parse(raw, "")
+	if err != nil {
+		return invalidField("/settings/url", "the search backend must be an http(s) base URL with a host and no credentials, query or fragment")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	host, err := url.Parse(cfg.URL)
+	if err != nil {
+		return invalidField("/settings/url", "the search backend must be an http(s) base URL with a host")
+	}
+	if err := a.exit.Check(checkCtx, host.Hostname()); err != nil {
+		return invalidField("/settings/url", "the search backend could not be validated as public")
+	}
+	return nil
+}
+
+func (a adminAPI) TestSearchSettings(ctx context.Context, r adminapi.TestSearchSettingsRequestObject) (adminapi.TestSearchSettingsResponseObject, error) {
+	if err := a.tests.allow(uuid.UUID(callOf(ctx).principal.SessionID())); err != nil {
+		return nil, err
+	}
+	cfg, _, err := a.savedSearch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	body, replayed, err := idempotently(ctx, a.db, "testSearchSettings", r.Params.IdempotencyKey, r.Body, func(tx pg.Tx) (adminapi.ConfigTestResult, error) {
+		result := websearch.TestConfig(ctx, cfg, a.exit, a.logger)
+		err := audit.Record(ctx, tx, audit.Event{Actor: actor(ctx), Action: "search_config.test", Reason: r.Body.Reason, Target: audit.Target{Module: "platform", Kind: "search_config", ID: uuid.Nil().String()}, Detail: map[string]any{"status": result}})
+		body, e := adminJSON[adminapi.ConfigTestResult](map[string]string{"status": result})
+		if err != nil {
+			return body, err
+		}
+		return body, e
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.TestSearchSettings200JSONResponse{Body: body, Headers: adminapi.TestSearchSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
 func (a adminAPI) TestMailSettings(ctx context.Context, r adminapi.TestMailSettingsRequestObject) (adminapi.TestMailSettingsResponseObject, error) {

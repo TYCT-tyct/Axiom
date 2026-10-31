@@ -20,6 +20,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/quality"
+	"axiom/internal/websearch"
 )
 
 // probesListenAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
@@ -48,6 +49,7 @@ type nodeSettings struct {
 	trustedProxies                    []netip.Prefix
 	valkey                            kv.Config
 	smtp                              mail.Config
+	search                            websearch.Config
 	objectstore                       objectstore.Config
 	retentionURL                      string
 	exchangeSource                    string
@@ -125,12 +127,11 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	// configuration joins the problems above, so the node still reports everything wrong at once. The cache's own settings
 	// are judged with the rest, so a node that is wrong about them does not touch the database.
 	var healthErr error
-	var modeErr error
-	s.healthMode, modeErr = quality.ParseMode(string(s.healthMode))
-	if modeErr != nil {
-		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
+	if s.healthMode, healthErr = quality.ParseMode(string(s.healthMode)); healthErr != nil {
+		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", healthErr)
 	}
 	smtp, mailErr := mail.ReadConfig(env)
+	searchErr := readSearchSettings(env, s)
 	archiveErr := readArchiveSettings(env, s)
 	var exchangeErr error
 	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
@@ -146,7 +147,15 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	if err := readNodeTLS(env, s); err != nil {
 		errs = append(errs, err)
 	}
-	return append(errs, mailErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
+	return append(errs, mailErr, searchErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
+}
+
+// readSearchSettings reads the web search backend. It is optional: with no URL the feature is off, and every web plugin
+// or :online request keeps the documented refusal.
+func readSearchSettings(env *config.Env, s *nodeSettings) error {
+	cfg, err := websearch.ReadConfig(env)
+	s.search = cfg
+	return err
 }
 
 // readArchiveSettings reads the retention login and the archive bucket. Both are optional: without the URL the job does

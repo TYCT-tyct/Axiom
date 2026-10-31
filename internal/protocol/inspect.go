@@ -64,6 +64,12 @@ type Request struct {
 	// Local OpenRouter plugins are validated before their control fields are removed.
 	Compression     Compression
 	ResponseHealing bool
+	// Web is the web plugin the request enabled, nil when it asked for no external search. The gateway runs it and
+	// injects the results; Online marks the :online variant, whose refusal differs while no backend is configured.
+	Web *WebPlugin
+	// SearchBytes is what the injected search results may add to TextBytes: the admission and the route reserve input
+	// for it before the search runs, because the results are not in the body they read.
+	SearchBytes int64
 	// MessageCount is Chat conversation length for the vendor message cap.
 	MessageCount int64
 	// Previous is Responses' previous_response_id. The stored history it names is input too.

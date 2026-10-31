@@ -56,13 +56,7 @@ func TestInspectRefusesOpenRouterServerTools(t *testing.T) {
 	}
 	for _, format := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
 		for _, name := range tools {
-			for _, limit := range []string{"", `,"max_tool_calls":2`} {
-				body := []byte(`{"model":"m","tools":[{"type":"` + name + `"}]` + limit + `}`)
-				_, err := protocol.Inspect(format, body)
-				if !errors.Is(err, protocol.ErrInvalid) || !strings.Contains(err.Error(), name+" server tool is not supported") {
-					t.Errorf("Inspect(%d, %s) = %v, want a refusal naming %s", format, name, err, name)
-				}
-			}
+			refusedTool(t, format, name)
 		}
 	}
 	_, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","tools":[{"type":"openrouter:web_search"}]}`))
@@ -73,10 +67,23 @@ func TestInspectRefusesOpenRouterServerTools(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not an OpenRouter server tool") {
 		t.Errorf("openrouter:teleport: %v, want an unknown-tool refusal", err)
 	}
-	// The web plugin and the server tool ask for the same thing and are refused with the same reason.
-	_, err = protocol.Inspect(protocol.Chat, []byte(`{"model":"m","plugins":[{"id":"web"}]}`))
-	if !strings.Contains(err.Error(), protocol.NoWebSearch) {
-		t.Errorf("the web plugin: %v does not say %q", err, protocol.NoWebSearch)
+	// The web plugin is read into the request; the gateway refuses it while no backend is configured.
+	req, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","plugins":[{"id":"web"}]}`))
+	if err != nil || req.Web == nil || req.Web.MaxResults != protocol.DefaultWebSearchResults {
+		t.Errorf("the web plugin: %+v, %v", req.Web, err)
+	}
+}
+
+// refusedTool reports whether Inspect refuses the named OpenRouter tool in format, with and without a cap on the
+// call's tool calls.
+func refusedTool(t *testing.T, format protocol.Format, name string) {
+	t.Helper()
+	for _, limit := range []string{"", `,"max_tool_calls":2`} {
+		body := []byte(`{"model":"m","tools":[{"type":"` + name + `"}]` + limit + `}`)
+		_, err := protocol.Inspect(format, body)
+		if !errors.Is(err, protocol.ErrInvalid) || !strings.Contains(err.Error(), name+" server tool is not supported") {
+			t.Errorf("Inspect(%d, %s) = %v, want a refusal naming %s", format, name, err, name)
+		}
 	}
 }
 

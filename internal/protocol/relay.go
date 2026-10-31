@@ -96,7 +96,10 @@ type RelayOptions struct {
 	Aggregate bool
 	// Capture keeps the answer's text for a caller that judges it, which is a verification probe and nothing else: a
 	// gateway call leaves it nil, so no call path allocates for it (docs/domains/quality.md「真伪检测」).
-	Capture         *Capture
+	Capture *Capture
+	// Citations are the web search results the gateway supplied, which an aggregated Chat reply cites in its
+	// annotations. A stream cannot know the whole message, so it carries none.
+	Citations       []Citation
 	legacyFunctions bool
 }
 
@@ -682,6 +685,7 @@ func (r *Relay) initReply(u UsageContext, o RelayOptions) {
 		if a, ok := r.agg.(*chatAggregate); ok {
 			a.legacy = o.legacyFunctions
 			a.healing = u.ResponseHealing
+			a.cited = len(o.Citations) > 0
 		}
 	}
 }

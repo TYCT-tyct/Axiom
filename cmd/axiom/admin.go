@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/webui"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // adminAPI implements the admin's API (api/admin.yaml). It stands behind the guard, which has found the admin domain,
@@ -23,6 +24,7 @@ import (
 // to the contract's schemas.
 type adminAPI struct {
 	smtp     mail.Config
+	search   websearch.Config
 	version  string
 	accounts *accounts.Service
 	catalog  *catalog.Catalog

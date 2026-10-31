@@ -41,10 +41,12 @@ type Demand struct {
 }
 
 // ServerTool is a server tool and the most uses the request allows it; 0 means the request set none, so the entry's
-// model default applies.
+// model default applies. Flat says the tool does not sample the model again: it runs once outside the completion, as
+// the gateway's web plugin does, so only its per-use fee is reserved, not a second sampling rereading the context.
 type ServerTool struct {
 	Item    catalog.Item
 	MaxUses int64
+	Flat    bool
 }
 
 // Model is the model data a quote needs, filled by the caller from the catalog snapshot.
@@ -229,12 +231,10 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 		tiers &= e.Model.ServiceTiers
 	}
 	tiers.Add(catalog.ServiceTierStandard)
-	uses, samplings := serverToolUses(d, e.Model)
-	for _, t := range d.ServerTools {
-		if uses[t.Item] == 0 {
-			return q, &UnboundedError{t.Item}
-		}
+	if err := boundedServerTools(d, e.Model); err != nil {
+		return q, err
 	}
+	uses, samplings := serverToolUses(d, e.Model)
 	first, longest := inputBound(d, e.Model, samplings)
 	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
 	rest := mul(samplings-1, window)
@@ -340,9 +340,8 @@ func checkEntry(e Quotable, s Segments) error {
 }
 
 // priceServerTools adds every server tool at its most uses to the fixed part and, when the request enables web
-// search, prices what a search beyond them costs the meter: its fee and the samplings it adds, rereading the whole
-// context at the input price of the later samplings, twice with compaction. A tool's price is the dearest up to the
-// context, which a later sampling can fill; a direct call samples nothing, so its band is its batch's length.
+// search, reserves what a search costs the meter (reserveSearch). A tool's price is the dearest up to the context,
+// which a later sampling can fill; a direct call samples nothing, so its band is its batch's length.
 func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
 	searchable bool, resample inputPrice, longest int64,
 ) error {
@@ -364,6 +363,15 @@ func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tier
 	if !searchable {
 		return nil
 	}
+	return q.reserveSearch(d, e, prices, tiers, uses, resample, band, window)
+}
+
+// reserveSearch reserves a search beyond the tools: its fee and the samplings it adds, rereading the whole context at
+// the input price of the later samplings, twice with compaction. band is the longest input whose price applies and
+// window the context every later sampling rereads.
+func (q *quote) reserveSearch(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
+	resample inputPrice, band, window int64,
+) error {
 	var ok bool
 	if q.search, ok = prices.ceiling(1<<catalog.ItemWebSearch, tiers, band); !ok {
 		return ErrUnpriced
@@ -376,7 +384,43 @@ func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tier
 	if d.Compaction {
 		q.rereads = mul(window, 2)
 	}
+	flatUses, flat, native := flatSearches(d, e.Model)
+	if !flat {
+		return nil
+	}
+	if native {
+		// A flat search adds no sampling, so when a native tool shares the item it must not stand in for that
+		// tool in q.searches: the meter counts only what the upstream reports, and a native search beyond its
+		// bound still has to extend for its sampling.
+		q.searches = max(0, q.searches-flatUses)
+		return nil
+	}
+	q.resample = inputPrice{}
+	if !d.Compaction {
+		q.rereads = 0
+	}
 	return nil
+}
+
+// flatSearches reports whether the request enables a flat web search, and how many of its uses the quote reserves:
+// the request's own or else the model's default. native says a native web search tool shares the item.
+func flatSearches(d Demand, m Model) (uses int64, flat, native bool) {
+	for _, t := range d.ServerTools {
+		if t.Item != catalog.ItemWebSearch {
+			continue
+		}
+		if !t.Flat {
+			native = true
+			continue
+		}
+		flat = true
+		n := t.MaxUses
+		if n == 0 {
+			n = m.MaxUses[catalog.ItemWebSearch]
+		}
+		uses += n
+	}
+	return uses, flat, native
 }
 
 // quotePrices keeps sale admission strict while native cost estimation can use an incomplete upstream schedule.
@@ -471,7 +515,7 @@ func inputBound(d Demand, m Model, samplings int64) (first, longest int64) {
 		// bands its reported total, which can pass any one input's context.
 		return total, total
 	}
-	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
+	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch && !t.Flat })
 	if samplings > 1 || searchable {
 		return first, window // every later sampling, and one a search beyond the quote adds, rereads the whole context
 	}
@@ -496,6 +540,24 @@ func fileTokens(m Model) int64 {
 	return mul(m.FilePages, m.PageTokens)
 }
 
+// boundedServerTools refuses a native tool with neither the request's limit nor a model default: its uses cannot be
+// bounded, and a flat tool of the same item must not hide that. A flat tool has one use by construction.
+func boundedServerTools(d Demand, m Model) error {
+	for _, t := range d.ServerTools {
+		if t.Flat {
+			continue
+		}
+		n := t.MaxUses
+		if n == 0 {
+			n = m.MaxUses[t.Item]
+		}
+		if n == 0 {
+			return &UnboundedError{t.Item}
+		}
+	}
+	return nil
+}
+
 // serverToolUses returns each server tool's most uses, the request's or else the model's default, totalled per item so
 // a quote adds at most NumItems products however many tools the request lists; and the samplings: one, plus
 // one per use, doubled when compaction may summarise and sample again.
@@ -507,7 +569,7 @@ func serverToolUses(d Demand, m Model) (uses [catalog.NumItems]int64, samplings 
 			n = m.MaxUses[t.Item]
 		}
 		uses[t.Item] = add(uses[t.Item], n)
-		if !d.Direct { // a direct call's tool charge is per use, without sampling the model again
+		if !d.Direct && !t.Flat { // a direct call's or a flat tool's charge is per use, without sampling the model again
 			samplings = add(samplings, n)
 		}
 	}

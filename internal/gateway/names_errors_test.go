@@ -25,7 +25,7 @@ func TestModelDetailVariants(t *testing.T) {
 			{":exacto", 200},
 			{":free", 404},
 			{":thinking", 200},
-			{":online", 400},
+			{":online", 200},
 			{":unknown", 404},
 		} {
 			path := prefix + "acme/alpha" + tc.suffix

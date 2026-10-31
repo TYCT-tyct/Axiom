@@ -25,6 +25,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
+	"axiom/internal/websearch"
 )
 
 // Run takes a call that has been admitted: it tries the route, relays the answer, meters and settles (the steps after
@@ -55,6 +56,9 @@ type Deps struct {
 	// Outstanding is the node's drain counter, the one its Executor counts on: a request is counted from the gate until
 	// ServeHTTP returns, and the settlement of a lost admission until it is written.
 	Outstanding *Outstanding
+	// Search runs the web plugin through the deployment's backend; nil means no backend is configured, and every
+	// request that asks for web search keeps its documented refusal.
+	Search websearch.Searcher
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
@@ -174,6 +178,7 @@ type Call struct {
 	Compact   bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
 	Request   protocol.Request
 	Body      []byte
+	search    string      // the web plugin's query, read before admission and never logged
 	Header    http.Header // the client's values of the headers that may go upstream, which headers.go derives per attempt
 	Session   routing.SessionKey
 	Admission accounts.Admission
@@ -395,6 +400,12 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
+	onlineWebPlugin(&req, names.online)
+	query, ref := h.checkWebSearch(&req, body)
+	if ref != nil {
+		return ref
+	}
+	c.search = query
 	if err := pinnedProvider(&req, over); err != nil {
 		return err
 	}
@@ -406,10 +417,12 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
+	web := req.Web
 	body, req, err = h.compress(c, body, req, snap, models)
 	if err != nil {
 		return err
 	}
+	restoreWeb(&req, web)
 	c.Body, c.Request, c.snap, c.models, c.auto, c.free, c.over = body, req, snap, models, names.auto, names.free, over
 	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
 	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {

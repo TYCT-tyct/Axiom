@@ -316,6 +316,11 @@ export const mailSettingsQuery = queryOptions({
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/mail`, { signal })),
 });
 
+export const searchSettingsQuery = queryOptions({
+  queryKey: [accountKey, "search-settings"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/search`, { signal })),
+});
+
 export const paymentSettingsQuery = (siteId: AdminSchemas["SiteId"]) =>
   queryOptions({
     queryKey: [accountKey, "payment-settings", siteId],

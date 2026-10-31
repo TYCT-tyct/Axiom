@@ -24,7 +24,7 @@ func (h *Handler) compress(c *Call, body []byte, req protocol.Request, snap *cat
 	if req.Compression == protocol.CompressionDefault {
 		inputLimit = serving.Context
 	}
-	if int64(len(body)) <= inputLimit && req.MessageCount <= protocol.CompressionMessageLimit {
+	if int64(len(body))+req.SearchBytes <= inputLimit && req.MessageCount <= protocol.CompressionMessageLimit {
 		return body, req, nil
 	}
 	compressed, inspected, err := h.compressBody(c, body, req, serving.Context, output)

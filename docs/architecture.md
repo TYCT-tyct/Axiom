@@ -76,6 +76,7 @@
 | 模块 | 可以引用 | 为什么 |
 |---|---|---|
 | `platform` | — | 基础设施和共用值类型，不引用任何模块 |
+| `websearch` | — | 自托管的 SearXNG 搜索适配器；只依赖 `platform` 的出口、配置和密钥设施 |
 | `catalog` | — | 模型和价目表结构是最底层的业务概念 |
 | `accounts` | — | 站点、账户、授权和配置链被所有面向租户的模块使用 |
 | `protocol` | `catalog` | `Request` 用目录的计费项集合和服务等级集合表达请求可能用到什么，累计的用量按目录的计费项表达 |
@@ -85,7 +86,7 @@
 | `routing` | `catalog`、`protocol`、`suppliers`、`quality`、`billing`、`accounts` | 路由快照由模型、端点、属性、价格、预设和配置组成；按请求的调用格式过滤 |
 | `observability` | `catalog`、`protocol`、`accounts` | 调用记录的用量按计费项保存、按租户查看；对话内容按消息去重，要懂调用格式 |
 | `payments` | `billing`、`accounts`、`observability` | 到账在同一个事务里生成付费额度批次；收款渠道是站点配置；拒付申诉要整理该账户的调用记录 |
-| `gateway` | `catalog`、`protocol`、`accounts`、`suppliers`、`quality`、`billing`、`routing`、`observability` | 编排一次调用：认 key、解析、路由、预留、调上游、观测、结算、记录 |
+| `gateway` | `catalog`、`protocol`、`accounts`、`suppliers`、`quality`、`billing`、`routing`、`observability`、`websearch` | 编排一次调用：认 key、解析、路由、预留、调上游、观测、结算、记录；`web` 插件经 `websearch` 搜索 |
 | `operations` | `accounts`、`observability`、`gateway` | 授权、通知渠道、节点管理；审批经管理接口的中间层，不引用被审批的模块 |
 
 ## 一次调用怎么走

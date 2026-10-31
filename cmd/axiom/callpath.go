@@ -27,6 +27,7 @@ import (
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 const (
@@ -59,6 +60,7 @@ type callDeps struct {
 	accounts   *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
 	catalog    *catalog.Catalog
 	egress     *egress.Client
+	search     websearch.Searcher
 	gate       gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
 	limits     *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
 	records    *observability.Recorder // the call log, which the settlements write to
@@ -173,7 +175,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
 		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
 		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
-		Records: d.records, Quality: health, Outstanding: outstanding,
+		Records: d.records, Quality: health, Outstanding: outstanding, Search: d.search,
 	})
 	if err != nil {
 		return callNode{}, err
@@ -181,7 +183,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
-		Outstanding: outstanding,
+		Outstanding: outstanding, Search: d.search,
 	})
 	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models}, err
 }

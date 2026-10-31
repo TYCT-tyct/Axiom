@@ -25,6 +25,7 @@ import (
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // The executor's tests run in a synctest bubble, with nothing real in the way: a supplier that is a script of answers
@@ -346,16 +347,18 @@ type options struct {
 	cost         int64            // of every attempt
 	costNotKnown bool             // whether Costs says the cost leaves something out
 	costErr      error            // the error Costs fails with
+	costs        Costs            // replaces the fake when set
 	request      []byte           // the client's body, instead of its format's sample
 	stream       *bool            // the request's stream member; true when nil
 	supplier     func(n int) int
 	alive        func() bool
 	mutate       func(*Call)
 	noSlot       []int
-	memory       int64            // the node's budget; memorySize when zero
-	price        string           // the entries' price schedule; cheap when empty
-	logs         *bytes.Buffer    // the node's log, discarded when nil
-	health       *quality.Monitor // what the attempts tell; a new one when nil
+	memory       int64              // the node's budget; memorySize when zero
+	price        string             // the entries' price schedule; cheap when empty
+	search       websearch.Searcher // the web plugin's backend; nil means the feature is off
+	logs         *bytes.Buffer      // the node's log, discarded when nil
+	health       *quality.Monitor   // what the attempts tell; a new one when nil
 }
 
 type harness struct {
@@ -436,10 +439,15 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if o.logs != nil {
 		logger = slog.New(slog.NewTextHandler(o.logs, nil))
 	}
+	var costs Costs = fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr}
+	if o.costs != nil {
+		costs = o.costs
+	}
 	h.exec, err = NewExecutor(ExecDeps{
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
-		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
+		Ledger: &fakeLedger{h: h, o: o}, Costs: costs,
 		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health, Outstanding: NewOutstanding(),
+		Search: o.search,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -463,12 +471,7 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		h.t.Fatal(err)
 	}
 	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
-	if o.stream != nil {
-		req.Stream = *o.stream
-		if !*o.stream { // the client's body says so too, and the endpoint still has to be asked for a stream
-			request = bytes.Replace(request, []byte(`"stream": true`), []byte(`"stream": false`), 1)
-		}
-	}
+	request = setStream(&req, request, o.stream)
 	var quotes []billing.Quotable
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}
 	for i := 1; i <= n; i++ {
@@ -491,6 +494,9 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		}
 		h.up.eps[uuid.UUID(ep(i))] = &fakeEndpoint{script: script, policy: o.policy, noSlot: slices.Contains(o.noSlot, i)}
 	}
+	if req.Web != nil {
+		req.SearchBytes = protocol.WebSearchMaxBytes
+	}
 	// The same segment settings the harness gave the executor (newHarness), from the one place they are chosen.
 	segments := cmpOr(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
 	r, err := billing.Quote(routing.DemandOf(&req), quotes, segments, nil)
@@ -501,11 +507,29 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		ID: uuid.NewV7(), Format: client, Request: req, Body: request,
 		Header: http.Header{"Anthropic-Beta": {"beta-1"}}, Hold: &billing.Hold{Reservation: r}, Plan: plan,
 	}
+	if req.Web != nil {
+		if c.search, err = protocol.ChatSearchQuery(request); err != nil {
+			h.t.Fatal(err)
+		}
+	}
 	c.hold(func() { close(h.released) })
 	if o.mutate != nil {
 		o.mutate(c)
 	}
 	return c
+}
+
+// setStream applies the harness's stream option to the client's body too: the endpoint still has to be asked for a
+// stream, so the body's own member has to agree with the request's.
+func setStream(req *protocol.Request, body []byte, stream *bool) []byte {
+	if stream == nil {
+		return body
+	}
+	req.Stream = *stream
+	if *stream {
+		return body
+	}
+	return bytes.Replace(body, []byte(`"stream": true`), []byte(`"stream": false`), 1)
 }
 
 func cmpOr[T comparable](v, fallback T) T {

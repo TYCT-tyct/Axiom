@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // nodeRoutes are what the node's listeners serve and the call path behind the public one.
@@ -64,8 +65,19 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if !p.cfg.modelVerification {
 		verify = nil
 	}
+	search, err := p.search(ctx, db)
+	if err != nil {
+		return nodeRoutes{}, err
+	}
+	var searcher websearch.Searcher
+	if search.Configured() {
+		if searcher, err = websearch.Open(search, exit); err != nil {
+			return nodeRoutes{}, err
+		}
+	}
 	calls, err := startCallPath(ctx, callDeps{
-		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, gate: gate, limits: limits,
+		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, search: searcher,
+		gate: gate, limits: limits,
 		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger, proxies: p.cfg.trustedProxies,
 		kv:     cache,
 		alerts: p.alerts, healthMode: p.cfg.healthMode, nodeID: p.cfg.valkey.NodeID, verify: verify,
@@ -73,6 +85,14 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if err != nil {
 		return nodeRoutes{}, err
 	}
+	return p.listen(calls, service, cat, supplierAdmin, exit, db, tel, logger)
+}
+
+// listen opens payments and puts the console, the model calls, the key and payment APIs in front of the call path on
+// the public listener, and the admin's API on its own.
+func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *catalog.Catalog, supplierAdmin *suppliers.Admin,
+	exit *egress.Client, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
+) (nodeRoutes, error) {
 	pay, err := payments.Open(payments.Config{
 		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins, Proxies: p.cfg.trustedProxies,
 	})
@@ -86,8 +106,22 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})
 	public = withPaymentCallbacks(public, pay.Notify())
 	adminAPI := newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger)
-	adminAPI.keys, adminAPI.exit, adminAPI.smtp = p.master, exit, p.cfg.smtp
+	adminAPI.keys, adminAPI.exit, adminAPI.smtp, adminAPI.search = p.master, exit, p.cfg.smtp, p.cfg.search
 	admin := adminRoutes(adminAPI,
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
+}
+
+// search reads the backend this node searches through: the admin's saved configuration when there is one, the
+// environment's otherwise.
+func (p consoleParts) search(ctx context.Context, db *pg.DB) (websearch.Config, error) {
+	cfg := p.cfg.search
+	err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		stored, found, err := websearch.StoredConfig(ctx, tx, p.master)
+		if found {
+			cfg = stored
+		}
+		return err
+	})
+	return cfg, err
 }

@@ -22,7 +22,6 @@ func TestPluginControls(t *testing.T) {
 		{`"transforms":["middle-out"],"plugins":[{"id":"context-compression","enabled":false}]`, CompressionDisabled, false, ""},
 		{`"plugins":[{"enabled":false,"id":"web"}]`, CompressionDefault, false, ""},
 		{`"plugins":[{"id":"file-parser"}]`, 0, false, "not supported"},
-		{`"plugins":[{"id":"web"}]`, 0, false, "not supported"},
 		{`"plugins":[{"id":"unknown","enabled":false}]`, 0, false, "not supported"},
 		{`"plugins":[{"id":"response-healing","oops":true}]`, 0, false, "not supported"},
 		{`"plugins":[null]`, 0, false, "plugin object"},

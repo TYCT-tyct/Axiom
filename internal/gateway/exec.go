@@ -21,6 +21,7 @@ import (
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // Conn is one attempt's connection to a credential of an endpoint, held from Acquire to Done. *suppliers.Attempt is one.
@@ -96,6 +97,8 @@ type ExecDeps struct {
 	// Outstanding counts the calls and the settlements they leave in the background, and is what the node drains: the
 	// node's Handler shares it, so a request is counted from the gate.
 	Outstanding *Outstanding
+	// Search runs the web plugin through the deployment's backend; nil means no backend is configured.
+	Search websearch.Searcher
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.
@@ -157,6 +160,10 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 	defer s.release()   // the relays no answer released, as a panic leaves them, are let go
 	ctx := r.Context()
 	defer s.settleOnPanic(ctx)
+	if e := s.webSearch(ctx); e != nil {
+		s.conclude(ctx, *e)
+		return
+	}
 	s.conclude(ctx, s.attempts(ctx))
 }
 
@@ -191,6 +198,13 @@ type session struct {
 	live      *protocol.Relay
 	replyHeld int64 // of the node's budget, held by the compact reply the call ends with, until Run returns
 
+	// searches is how many external web searches the call ran before its attempt, and citations are their results,
+	// which an aggregated Chat reply cites. Both are zero for a call without the web plugin. searchHeld is the part of
+	// the node's budget those results and the injected body hold until the call is over.
+	searches   int64
+	citations  []protocol.Citation
+	searchHeld int64
+
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back
 
@@ -223,6 +237,9 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
 	o := billing.Outcome{Attempts: s.ends}
+	if len(o.Attempts) > 0 {
+		addSearchUsage(&o.Attempts[len(o.Attempts)-1], s.searches)
+	}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
 	if err == nil && len(o.Attempts) > 0 {
@@ -346,6 +363,8 @@ func (s *session) release() {
 		s.live.Release()
 		s.live = nil
 	}
+	s.x.Memory.Refund(s.searchHeld)
+	s.searchHeld = 0
 }
 
 // dropReply gives back the budget of a compact reply that is not going to be written, or that the call is over with.

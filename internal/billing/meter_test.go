@@ -379,3 +379,17 @@ func BenchmarkObserve(b *testing.B) {
 		observe()
 	}
 }
+
+// A flat tool's first use is inside the quote, so the meter must not extend for it; a second one is an excess.
+func TestMeterFlatSearch(t *testing.T) {
+	t.Parallel()
+
+	d := Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: catalog.ItemWebSearch, MaxUses: 1, Flat: true}}}
+	m := meter(t, d, entry(t, true, 1))
+	if step := m.Observe(Progress{Searches: 1}); step.Extend || step.Exhausted {
+		t.Errorf("Observe(1 search) = %+v, want no extension", step)
+	}
+	if step := m.Observe(Progress{Searches: 2}); !step.Extend {
+		t.Errorf("Observe(2 searches) = %+v, want an extension", step)
+	}
+}
