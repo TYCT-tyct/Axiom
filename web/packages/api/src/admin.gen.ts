@@ -665,6 +665,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the call log's hot window */
+        get: operations["getRetention"];
+        /**
+         * Replace the call log's hot window
+         * @description A monthly partition whose whole month is older than hot_days is copied to the deployment's object store and dropped only after that copy is confirmed. Without an object store every partition stays, whatever the window.
+         */
+        put: operations["setRetention"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/version": {
         parameters: {
             query?: never;
@@ -2283,6 +2304,15 @@ export interface components {
             spend_ratio: number;
             min_new_region_calls: number;
             min_new_model_calls: number;
+        };
+        /** @description The call log's hot window. Every field is optional so an older node's response is read as the parts it has. */
+        Retention: {
+            /** @description Whole months older than this leave PostgreSQL for the object store. 0 keeps every partition. */
+            hot_days?: number;
+        };
+        RetentionRequest: {
+            hot_days: number;
+            reason: components["schemas"]["Reason"];
         };
         AlertRule: {
             id?: string;
@@ -4911,6 +4941,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlertTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getRetention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved window, or the code default before the first save. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Retention"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setRetention: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetentionRequest"];
+            };
+        };
+        responses: {
+            /** @description The saved window. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Retention"];
                 };
             };
             400: components["responses"]["BadRequest"];

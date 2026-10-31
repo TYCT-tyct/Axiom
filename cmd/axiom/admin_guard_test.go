@@ -62,6 +62,8 @@ var adminOperations = []adminOperation{
 	{"listPaymentDiscrepancies", http.MethodGet, "/payments/discrepancies", "", "sites.manage", false},
 	{"getPaymentDiscrepancy", http.MethodGet, "/payments/discrepancies/0198c0a8-0000-7000-8000-000000000001", "", "sites.manage", false},
 	{"investigatePaymentDiscrepancy", http.MethodPost, "/payments/discrepancies/0198c0a8-0000-7000-8000-000000000001/investigate", `{}`, "sites.manage", true},
+	{"getRetention", http.MethodGet, "/retention", "", "sites.manage", false},
+	{"setRetention", http.MethodPut, "/retention", `{"hot_days":30,"reason":"r"}`, "sites.manage", true},
 	{"getAlertConfiguration", http.MethodGet, "/alerts/configuration", "", "sites.manage", false},
 	{"setAlertConfiguration", http.MethodPut, "/alerts/configuration", `{}`, "sites.manage", true},
 	{"listAlertEvents", http.MethodGet, "/alerts/events", "", "sites.manage", false},

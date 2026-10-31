@@ -14,6 +14,9 @@ func (r *Recorder) Close(ctx context.Context) error       // 写完队列里的�
 func (r *Recorder) Done() <-chan struct{}                 // 写入协程退出时关闭；Close 返回前已等待它，测试据此断言没有写入协程留下
 func ListOwn(ctx, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error)
 func CheckOwnExportSize(ctx, tx pg.Tx, q OwnQuery) error // 同一 ReadTx 内、开始输出前检查最多 10001 个匹配键；超过 10000 返回 ErrExportSize
+func GetRetention(ctx, tx pg.Tx) (Retention, error)         // 调用记录的热窗口；第一次保存前是代码默认值
+func SetRetention(ctx, tx pg.Tx, r Retention) error        // 校验并保存；范围 0 到 3650 天，0 表示全部留在 PostgreSQL
+func RegisterRetention(cfg RetentionConfig) error          // 在 archive 队列登记每天的预建、归档与删除
 func AggregateOwn(ctx, tx pg.Tx, q OwnQuery, groupBy string) ([]OwnAggregate, error) // day/model/key，最多 1000 组，收费与次数为精确文本
 func GetOwn(ctx, tx pg.Tx, id uuid.UUID) (OwnCall, error)
 func GetTrace(ctx, tx pg.Tx, id uuid.UUID) (CallRecord, error) // 一条调用、它的尝试和 route，按请求 ID；只从运营或管理的处理器调用，事务须是平台范围
@@ -46,12 +49,18 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 `spend_detection`：单行 `jsonb`，保存管理员设置的检测开关、窗口、基线、金额下限、倍数和两类次数下限。和 `alert_configuration` 分开，旧节点整体替换规则/渠道时不会把这个不认识的对象丢掉；默认值在代码里，第一次保存前读代码默认值。
 
+`retention`：单行 `jsonb`，保存调用记录的热窗口（`hot_days`，默认 90）。和规则、阈值一样是管理员数据，管理接口读写并留审计；0 表示全部留在 PostgreSQL。桶没配置时这个值不起作用：没有确认的归档就不能删。
+
 ## 不变量
 
 | 不变量 | 靠什么保证 |
 |---|---|
 | 租户只读写自己账户的行 | 两张表和每个分区强制行级安全，策略比较本行站点/账户与 [pg 的 InitPlan 范围参数](../platform/pg/README.md#决策与理由)；写入者在平台范围里（`pg.PlatformScope()` 由 cmd 交给 `NewRecorder`）。测试：账户 A 读不到 B 的行也按 ID 取不到，A 的范围写不进 B 的调用或尝试 |
 | 记录不可改、不可删 | `axiom_app` 只有 SELECT 和 INSERT；到期按分区整块处理，由持有表的角色执行。测试：两张表的 UPDATE、DELETE、TRUNCATE 被拒 |
+| 归档确认后才删分区 | 清单最后上传，存在即表示两份对象都完整上传；删除前逐个 HEAD 核对清单里的字节数，核对失败不删，下次重写或重试。测试：上传失败、HEAD 失败、对象短于清单时分区都在；修复后才删 |
+| 归档之后的迟到写入不丢 | 调用记录只有 INSERT（应用没有 UPDATE/DELETE），删除事务先对现存分区加 `ACCESS EXCLUSIVE` 锁并精确 `count(*)`；行数与清单不符就回滚重写整月，锁一直持到 DROP 提交，所以计数和删除之间没有写入窗口。一次运行最多重写三次，仍变化就报错留给下一轮，绝不删未归档的行。测试：确认失败后补写旧月记录再重试，新行在清单和 CSV 里 |
+| 账本、汇总和审计不随调用日志删除 | 保留任务只拼 `observability.call_log_*` 与 `call_attempt_*` 的分区名，从不写 `billing` 的语句；测试在一个已归档月份旁边放另一 schema 的行，运行后仍在 |
+| 分区的建与删只由专用角色做 | 两张父表和全部分区归 `axiom_retention_job`（NOLOGIN）；`axiom_owner` 继承它，部署建的 `axiom_retention` 登录是它的成员，`axiom_app` 不是。应用仍只有 SELECT/INSERT，保留任务用 `AXIOM_RETENTION_DATABASE_URL` 独立连接，拿到分区 DDL 所需的所有权。测试：任务在独立登录下能建、删分区，应用不能改表 |
 | 用户看不到成本、端点和路由 | `OwnCall` 没有这些字段；尝试表不向用户开放，查询也不选尝试（[接入与对外接口的「用量与费用」](../../docs/domains/gateway.md#用量与费用)） |
 | 文字能存进库 | `Enqueue` 拒绝不合法的 UTF-8 和 NUL，包括每次尝试的文字；编码本身失败（`errEncoding`）和数据库的数据错误一样走坏行隔离。测试：非法 UTF-8 的行夹在好行之间，经真实的编码和库写入，好行落库、坏行被计数 |
 | 终端用户标识只以带密钥的哈希存放 | `EndUserHash` 是带私有数组的结构，包外无法构造非零值 |
@@ -72,7 +81,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 `Close` 先拒绝新的 `Enqueue`，关队列，让写入协程写完剩下的；ctx 到期就停止重试，报告丢了几条（包括队列满时丢的）。cmd 的退出顺序是：监听停止并排空，`Close`，最后关数据库；启动失败等其他返回路径也会关闭它，不留写入协程。进程崩溃丢的是最近一次成功写入之后的记录（[记录与告警的「写入路径」](../../docs/domains/observability.md#写入路径)）。
 
-指标：`axiom.observability.queue.depth`（排队的调用数）、`records.written`、`attempts.written`、`write.retries`、`records.lost`、`attempts.lost`；丢失的计数器带 `reason`（`queue_full`、`malformed`、`shutdown`），没有账户、key 或用户标签。
+指标：`axiom.observability.queue.depth`（排队的调用数）、`records.written`、`attempts.written`、`write.retries`、`records.lost`、`attempts.lost`；丢失的计数器带 `reason`（`queue_full`、`malformed`、`shutdown`），没有账户、key 或用户标签。保留任务另有 `axiom.observability.retention.partitions{action,table}`（`archived`、`dropped`）。
 
 ## 读
 
@@ -117,14 +126,28 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 - **谁能调用**：它是运营和管理读的链，不是用户的接口：它带成本、端点和路由。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己调用的这些字段（用户读 `ListOwn`/`GetOwn`，那两个没有这些字段）。
 - **路由过程**：调用行的 `route` 列，内容是 routing 的 `Record.JSON()`：被排除的候选和原因、选定的路线、每次尝试的结局。尝试不重复存路由。
 - **账本交易**：由 billing 的 `LedgerOf(ctx, tx, id)` 按同一个请求 ID 读，每笔交易带自己的分录。observability 不读 billing 的表，也不引用 billing（依赖表里 observability 在 billing 之上），所以「串起」由调用方把两个函数的结果合起来：三个查询、两个模块，各读自己的表（[总体架构的「模块边界规则」](../../docs/architecture.md#模块边界规则)）。
-- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，队列满时会丢而账本照记，校正还会在记录写好后再记交易，抄下来的链接会缺、会旧。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列留在表里（`NOT NULL DEFAULT '{}'`），新代码既不读也不写；按[平台的迁移规则](../platform/README.md#迁移)，等停止使用它的版本发布之后再删（#204）。
+- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，队列满时会丢而账本照记，校正还会在记录写好后再记交易，抄下来的链接会缺、会旧。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列留在表里（`NOT NULL DEFAULT '{}'`），新代码既不读也不写；按[平台的迁移规则](../platform/README.md#迁移)，等停止使用它的版本发布之后再删（#204）。本次发布仍不删：还需要一个已发布的版本先停止读写它，滚动发布期间旧节点可能仍在写。
 - **不变量**：尝试序号从 1 连续到 `len(Attempts)`，调用行的 `attempt_count` 等于它（写入时算好）；`route` 是 JSON 对象；`LedgerOf` 的每笔交易 `request_id` 等于调用 ID、`attempt_seq` 是 0（请求本身）或 1 到 3（某次尝试），每笔交易的分录合计为 0（billing 写入时断言）。测试：`TestTraceReadsTheWholeChain`（cmd/axiom，走一次真实结算）与 `TestCallAndAttemptsRoundTrip`。
 
 ## 分区
 
 列表保留标量时间窗供分区裁剪；游标行比较负责索引起点，两者的条件顺序见[读](#读)。新分区必须与父表采用相同的策略级 InitPlan 表达式；`pg.Check` 同时审计父表与分区，拒绝旧的逐行范围函数。
 
-迁移给 `call_log` 和 `call_attempt` 都建了 2026-10 到 2028-12 的月分区和一个默认分区，两表的月份一一对应，按调用开始的 `at` 分区。**此后的分区、到期分区的转出与删除是保留任务的事**（[记录与告警的「存储」](../../docs/domains/observability.md#存储)），它随温层存储一起做；在那之前，超出范围的调用和尝试进各自的默认分区，不丢，只是还没法整块转出。需要持有表的角色（`axiom_owner`）执行，不能由 `axiom_app` 做，所以不是调用路径上的事。保留任务按同一组月份处理两表，先删尝试再删调用，或在一个月的分区上一起操作。
+迁移给 `call_log` 和 `call_attempt` 都建了 2026-10 到 2028-12 的月分区和一个默认分区，两表的月份一一对应，按调用开始的 `at` 分区。父表和已有分区归 `axiom_retention_job`：PostgreSQL 只让表的属主建、删它的分区，`axiom_app` 不能是属主（启动检查会拒绝能成为属主的登录角色）。迁移的第一步建这个 NOLOGIN 角色并授予 `axiom_owner`（继承并带 ADMIN，后续迁移仍能 `ALTER TABLE` 父表），部署的 `roles.sh` 建 `axiom_retention` 登录角色、并在每次启动时补 `GRANT axiom_retention_job TO axiom_retention`（迁移时角色还不存在的库，之后启用也不会漏授权）；迁移在角色已存在时也做同样的授予。`axiom_app` 不是任务角色的成员：否则应用里的任意 SQL 都能 `SET ROLE` 过去，自己关掉行级安全或删掉分区。任务用 `AXIOM_RETENTION_DATABASE_URL` 开自己的连接池（`pool_max_conns=2`，串行），启动时在 10 秒内实际 `SET ROLE` 并检查 schema/表权限，缺授权就拒绝启动；`axiom_retention_job` 只多拿 schema 的 USAGE/CREATE、两张表的全部权限、`retention` 的 SELECT 和 `platform` 的 USAGE；没有 BYPASSRLS，读分区时照样过策略。
+
+没有 `AXIOM_RETENTION_DATABASE_URL` 时任务不登记：分区只到迁移预建的 2028-12，之后写默认分区；配了对象存储却没有这个变量则启动失败，免得“归档开着”其实没跑。
+
+`RegisterRetention` 在 `archive` 队列每天运行一次（唯一键让上一轮未结束时下一轮跳过），每次：
+
+1. **预建**当月和未来 12 个月的分区，两张表各一次。先查 `to_regclass`，已存在的不建、不加锁、不重写策略；新建的在同一事务里 `ENABLE/FORCE ROW LEVEL SECURITY` 并建与迁移 `00005` 相同的 InitPlan 策略。超出预建的调用仍进默认分区，不丢。
+2. **读窗口**：`hot_days` 为 0 时只预建；没有对象存储时同样只预建，并记一条日志说明为什么不删。都不会删任何东西。
+3. **列出整月**已经早于 `now - hot_days` 的叶子分区（`pg_partition_tree`，只认 `call_log_YYYY_MM` / `call_attempt_YYYY_MM`；默认分区不认）。按时间从旧到新处理，每月一次。
+4. **归档**：用 `COPY (SELECT * FROM 分区) TO STDOUT` 以 CSV（带表头）导出，gzip 后按 `call-log/v1/<YYYY-MM>/call_log.csv.gz`、`call_attempt.csv.gz` 上传，最后写 `manifest.json`：版本、月份、格式、每张表的行数、字节数、SHA-256 和列名/类型。清单最后写，存在即证明两份对象都已上传；`confirm` 再逐个 HEAD 核对清单里的字节数。
+5. **删除**：确认后在同一个事务里先对两张现存分区加 `ACCESS EXCLUSIVE` 锁、精确核对行数，再删 `call_attempt` 的分区、后删 `call_log` 的。行数比清单多说明快照后有迟到写入，事务回滚并重写整月；锁一直持到提交，计数和删除之间没有写入窗口。上传、核对、存储或锁失败都不删；一个月的失败不挡其他月份，错误交回 River 重试，最多重写三次后留给下一轮。
+
+`pg.Tx.CopyTo` 是 COPY 的出口：语句里的分区名只来自上面校验过的月份，数据本身从不拼进 SQL。归档文件先落到 `TMPDIR` 下的临时目录（`os.CreateTemp`），因为 `objectstore.Put` 的 body 必须可寻址；成功或失败都会删掉临时文件。程序镜像是 scratch、根文件系统只读，部署因此给 `TMPDIR=/retention-tmp` 一个由 `keys` 服务 chown 给 65532 的独立卷；没有这个卷时第一次归档会因建不了临时文件而失败，不会误删分区。归档对象没有到期删除：调用记录「全部保存，不能关闭」指的是不丢弃，热窗口只决定 PostgreSQL 里留多久，离开的月份仍在桶里。
+
+对象存储没配置（`objectstore.ReadConfig` 返回零值）时归档关闭，任务只预建分区。读取归档还不是产品接口：`GetTrace` 对已删除的月份返回 `pg.ErrNoRows`，控制台显示为空/404；清单和列类型足以离线恢复，按需再做导出或查询接口。
 
 ## 索引
 
@@ -149,6 +172,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 | 默认分区加预建月分区 | 记录不能丢，写入不能因缺分区失败；预建的月数让保留任务有时间落地 | 调用路径上建分区：`axiom_app` 没有权限，也会在热路径上拿锁；没有默认分区：缺分区时写入失败，该批被当成坏行丢掉 |
 | 终端用户标识用 HMAC，类型上只能由 `HashEndUser` 生成 | 无密钥的哈希能被穷举还原；类型让原始标识符无法误入 | 在调用方各自哈希 |
 | 重试到成功，只对数据错误跳过 | 数据库短暂不可用不应丢记录；数据错误重试没有意义，不跳过会堵死 | 有限次重试后丢弃：数据库的短暂故障也会丢 |
+| 调用记录按月归档到对象存储，确认后才删 PostgreSQL 分区，窗口是管理员数据 | 整月处理，不逐行；对象存储不可用或窗口为 0 时全留，宁可多占也不能在没有确认副本时删。归档对象不删，「全部保存」仍成立；账本、汇总、审计各按自己的规则保留，不跟着调用日志走。 | 按行 TTL/删除：与分区表的整块转出和主键、索引都不合，还会在热路径上增加判断；不归档直接删：丢失无法恢复；把归档放进 billing：违反模块边界，也会让账本依赖日志；按日分区：分区数是现在的三十倍，默认分区和索引维护都更碎 |
 | 异常状态和阈值各用一张平台表 | 状态必须跨节点、重启和告警配置替换保持“一次异常只通知一次”，所以不能放 `alert_windows`（替换配置会清空）；阈值是管理员数据，独立于规则 body，旧节点整体替换时不丢。两者都只有平台范围能读写。 | 把状态放 `alert_windows`：配置变更丢状态；把阈值放进规则：旧节点替换会丢；只在内存去重：多节点和重启会重复通知 |
 
 ## 账户花费异常检测
