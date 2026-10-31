@@ -100,6 +100,7 @@ type Endpoint struct {
 	Codename  string // the supplier group's public codename; never its real name
 	Model     catalog.ModelID
 	ModelSlug string // the model's catalog slug, frozen with the snapshot so a response names what the route chose
+	Free      bool   // the model is a :free catalog entry, the only kind openrouter/free may choose
 	Owner     Owner
 
 	LiveHealth  *quality.State
@@ -252,6 +253,7 @@ type Snapshot struct {
 	built   time.Time
 	byModel map[catalog.ModelID][]*candidate
 	models  []catalog.ModelID // in id order, for openrouter/auto
+	free    []catalog.ModelID // the free ones, in id order, for openrouter/free
 	presets map[PresetID]Preset
 }
 
@@ -307,12 +309,16 @@ func priceOf(p PriceRef, direct bool) (candidatePrice, error) {
 func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error) {
 	s := &Snapshot{built: built, byModel: map[catalog.ModelID][]*candidate{}, presets: make(map[PresetID]Preset, len(presets))}
 	seen := make(map[EndpointID]struct{}, len(endpoints))
+	free := make(map[catalog.ModelID]struct{}, len(endpoints))
 	prices := map[*billing.AudiencePrices][]candidatePrice{}
 	for _, e := range endpoints {
 		if _, dup := seen[e.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: endpoint %s twice", uuid.UUID(e.ID))
 		}
 		seen[e.ID] = struct{}{}
+		if e.Free {
+			free[e.Model] = struct{}{}
+		}
 		c, err := r.snapshotCandidate(e, prices)
 		if err != nil {
 			return nil, err
@@ -324,6 +330,11 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 		s.models = append(s.models, m)
 	}
 	slices.SortFunc(s.models, func(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) })
+	for _, m := range s.models {
+		if _, ok := free[m]; ok {
+			s.free = append(s.free, m)
+		}
+	}
 	for _, p := range presets {
 		if _, dup := s.presets[p.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: preset %s twice", uuid.UUID(p.ID))

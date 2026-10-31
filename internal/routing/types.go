@@ -59,6 +59,7 @@ type Input struct {
 	Req        *protocol.Request
 	Models     []catalog.ModelID
 	Auto       bool // rank every model in the snapshot: the request named openrouter/auto
+	Free       bool // rank only the free models in the snapshot: the request named openrouter/free
 	Override   Override
 	Sticky     EndpointID
 	NativeOnly bool

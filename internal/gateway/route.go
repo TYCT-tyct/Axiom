@@ -319,6 +319,8 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	dialect := model.Dialect()
 	e := routing.Endpoint{
 		ID: routing.EndpointID(r.ID), Supplier: routing.SupplierID(r.Supplier), Codename: r.Codename, Model: catalog.ModelID(r.Model), ModelSlug: model.Slug,
+		// openrouter/free chooses only these: the catalog's :free entry, whose sale price the check above pins at zero.
+		Free: model.Free(),
 		// The platform's own: M1's suppliers are the platform's (suppliers' owner scope is not part of Routable), and
 		// the node reaches every one of them from its own address.
 		Owner:   routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},
