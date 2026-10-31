@@ -126,7 +126,7 @@ expect_refusal "a release record with another digest" verify "$signed" "$tmp/wro
 # refuse the certificate. Omitting the record would also reach cosign, but then a broken metadata check could hide.
 refuse_identity() { # what identity issuer
   record "$digest" "$2" "$3" "$tmp/identity.json"
-  refuse_after_record "$1" "no valid keyless signature from" "none of the expected identities matched" \
+  refuse_after_record "$1" "no valid keyless signature from" "no matching CertificateIdentity found" \
     env RELEASE_SIGNING_IDENTITY="$2" RELEASE_SIGNING_ISSUER="$3" RELEASE_ALLOW_INSECURE_REGISTRY=true \
     bash scripts/ci/verify-release.sh "$signed" "$tmp/identity.json"
 }
