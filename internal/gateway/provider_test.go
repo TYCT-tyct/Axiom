@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -51,6 +52,7 @@ func TestOverride(t *testing.T) {
 		"fallbacks disabled":       {`{"allow_fallbacks":false}`, routing.Override{NoFallbacks: true}},
 		"every parameter required": {`{"require_parameters":true}`, routing.Override{RequireParameters: true}},
 		"empty quantizations":      {`{"quantizations":[]}`, routing.Override{}},
+		"null quantizations":       {`{"quantizations":null}`, routing.Override{}},
 		"data collection denied":   {`{"data_collection":"deny"}`, routing.Override{Policies: noRetention}},
 		"data collection allowed":  {`{"data_collection":"allow"}`, routing.Override{}},
 		"zero data retention":      {`{"zdr":true}`, routing.Override{Policies: noRetention}},
@@ -127,19 +129,36 @@ func TestOverrideRefuses(t *testing.T) {
 	}
 }
 
+// quantizationLevels are the values OpenRouter documents (OpenRouter《Provider Routing》「Quantization」, 2026-10-31).
+var quantizationLevels = []string{
+	"int4", "int8", "fp4", "mxfp4", "nvfp4", "fp6", "fp8", "mxfp8", "fp16", "bf16", "fp32", "unknown",
+}
+
 // TestProviderRefusalsNameTheMissingData: a constraint the snapshot cannot keep says what it lacks, not just which
 // member was refused: quantization levels, percentile windows and per-request/per-image price items are absent data,
 // not values to guess.
 func TestProviderRefusalsNameTheMissingData(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct{ provider, want string }{
-		"quantizations":         {`{"quantizations":["fp8"]}`, "no quantization level"},
-		"throughput percentile": {`{"preferred_min_throughput": { "p90": 10 }}`, "EWMA"},
-		"latency percentile":    {`{"preferred_max_latency":{"p99":1}}`, "EWMA"},
-		"sort percentile":       {`{"sort":{"by":"price","percentile":"p90"}}`, "no percentile measures"},
-		"request price":         {`{"max_price":{"request":1}}`, "no per-request or per-image item"},
-		"image price":           {`{"max_price":{"image":1}}`, "no per-request or per-image item"},
-	} {
+	type refusal struct{ provider, want string }
+	cases := map[string]refusal{
+		"sort percentile":    {`{"sort":{"by":"price","percentile":"p90"}}`, "a sort object takes by and partition"},
+		"request price":      {`{"max_price":{"request":1}}`, "no per-request item"},
+		"zero request price": {`{"max_price":{"request":0}}`, "no per-request item"},
+		"image price":        {`{"max_price":{"image":1}}`, "no per-image item"},
+		"zero image price":   {`{"max_price":{"image":0}}`, "no per-image item"},
+	}
+	for _, level := range quantizationLevels {
+		cases["quantization "+level] = refusal{fmt.Sprintf(`{"quantizations":[%q]}`, level), "no endpoint records a quantization level"}
+	}
+	for _, percentile := range []string{"p50", "p75", "p90", "p99"} {
+		cases["throughput "+percentile] = refusal{
+			fmt.Sprintf(`{"preferred_min_throughput":{%q:10}}`, percentile), "rolling five-minute p50/p75/p90/p99",
+		}
+		cases["latency "+percentile] = refusal{
+			fmt.Sprintf(`{"preferred_max_latency":{%q:1}}`, percentile), "rolling five-minute p50/p75/p90/p99",
+		}
+	}
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			_, err := override([]byte(tc.provider))
@@ -326,7 +345,11 @@ func TestProviderRefusedMembersReserveNothing(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
-	for _, provider := range []string{`{"quantizations":["fp8"]}`, `{"preferred_min_throughput":{"p90":10}}`, `{"max_price":{"request":1}}`, `{"max_price":{"image":1}}`} {
+	for _, provider := range []string{
+		`{"quantizations":["fp8"]}`, `{"quantizations":["unknown"]}`,
+		`{"preferred_min_throughput":{"p90":10}}`, `{"preferred_max_latency":{"p99":1}}`,
+		`{"max_price":{"request":0}}`, `{"max_price":{"image":0}}`,
+	} {
 		_, resp, body := r.sendWith(a, provider)
 		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
 			t.Errorf("%s: %d %s", provider, resp.StatusCode, body)
