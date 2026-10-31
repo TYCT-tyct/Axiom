@@ -72,3 +72,39 @@ export function callsCoverage(pages: readonly { incomplete?: boolean }[]): boole
   }
   return false;
 }
+
+// callsArchivedWhole reports whether every call the window could contain is before the oldest retained month. A node
+// with no monthly partition left reports no boundary and has archived everything; a missing boundary on an old node is
+// not that case, because callsCoverage already marks it unsure.
+export function callsArchivedWhole(
+  incomplete: boolean | undefined,
+  availableSince: string | undefined,
+  until: string | undefined,
+): boolean {
+  if (incomplete !== true) {
+    return false;
+  }
+  if (availableSince === undefined) {
+    return true;
+  }
+  if (until === undefined) {
+    return false;
+  }
+  return Date.parse(until) <= Date.parse(availableSince);
+}
+
+// callsEmptyKind picks the explanation under an empty call list. A list that reaches archived calls may be only partly
+// archived, so it must not say the whole window was archived; with a filter that matched nothing in the retained
+// months, it cannot claim the missing calls were filtered away either.
+export type CallsEmptyKind = "archived" | "retainedFiltered" | "retainedWindow" | "filtered" | "window";
+
+export function callsEmptyKind(
+  incomplete: boolean | undefined,
+  wholeArchived: boolean,
+  filtered: boolean,
+): CallsEmptyKind {
+  if (incomplete === true) {
+    return wholeArchived ? "archived" : filtered ? "retainedFiltered" : "retainedWindow";
+  }
+  return filtered ? "filtered" : "window";
+}

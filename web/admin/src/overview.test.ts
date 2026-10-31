@@ -1,5 +1,14 @@
 import { expect, it } from "vitest";
-import { callStatus, callsCoverage, callsDrill, ordersDrill, overviewRange, overviewWindow } from "./overview";
+import {
+  callStatus,
+  callsArchivedWhole,
+  callsCoverage,
+  callsDrill,
+  callsEmptyKind,
+  ordersDrill,
+  overviewRange,
+  overviewWindow,
+} from "./overview";
 
 it.each([
   { case: "24h", value: "24h", want: "24h" },
@@ -44,4 +53,22 @@ it("reads the call list's coverage across its pages", () => {
   // An older node does not answer the field, so a list it answered part of cannot be called complete.
   expect(callsCoverage([{ incomplete: false }, {}])).toBeUndefined();
   expect(callsCoverage([])).toBe(false);
+});
+
+it("calls a window wholly archived only when its end is at or before the boundary", () => {
+  expect(callsArchivedWhole(true, "2026-11-01T00:00:00.000Z", "2026-11-01T00:00:00.000Z")).toBe(true);
+  expect(callsArchivedWhole(true, "2026-11-01T00:00:00.000Z", "2026-10-31T00:00:00.000Z")).toBe(true);
+  expect(callsArchivedWhole(true, "2026-11-01T00:00:00.000Z", "2026-12-15T00:00:00.000Z")).toBe(false);
+  // No monthly partition left: the node has archived every call it could have answered.
+  expect(callsArchivedWhole(true, undefined, "2026-12-15T00:00:00.000Z")).toBe(true);
+  expect(callsArchivedWhole(false, "2026-11-01T00:00:00.000Z", "2026-12-15T00:00:00.000Z")).toBe(false);
+  expect(callsArchivedWhole(undefined, "2026-11-01T00:00:00.000Z", "2026-12-15T00:00:00.000Z")).toBe(false);
+});
+
+it("does not describe a partly archived empty list as archived", () => {
+  expect(callsEmptyKind(true, false, false)).toBe("retainedWindow");
+  expect(callsEmptyKind(true, false, true)).toBe("retainedFiltered");
+  expect(callsEmptyKind(true, true, true)).toBe("archived");
+  expect(callsEmptyKind(false, false, true)).toBe("filtered");
+  expect(callsEmptyKind(undefined, false, false)).toBe("window");
 });
