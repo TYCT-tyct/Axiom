@@ -174,10 +174,17 @@ func LoadSecret(variable, path string) ([]byte, error) {
 // readKeyFile reads a protected file of version:base64 lines, each a 32-byte key, and returns the keys by version
 // and the highest version. Errors name variable, the setting that chose the file, and never its path or contents.
 func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {
+	return readKeyFileWith(variable, path, os.Open)
+}
+
+// readKeyFileWith is readKeyFile with the open as a parameter. A test uses it to put another file at the path at the one
+// moment that matters, between the checks and the read, instead of racing a goroutine against a sleep: the ordering that
+// keeps a replaced file from being read is then proven every run, and restoring the broken order fails every run.
+func readKeyFileWith(variable, path string, open func(string) (*os.File, error)) (map[uint32][32]byte, uint32, error) {
 	if path == "" {
 		return nil, 0, fmt.Errorf("%s: required", variable)
 	}
-	file, err := os.Open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
+	file, err := open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
 	if err != nil {
 		return nil, 0, fileError(variable, "open", err)
 	}

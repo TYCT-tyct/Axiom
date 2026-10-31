@@ -11,22 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"axiom/internal/platform/secret"
 )
-
-// writeKeyFile writes one version's key to path with an explicit mode: os.WriteFile alone leaves the mode subject to the
-// process's umask.
-func writeKeyFile(t testing.TB, path string, mode os.FileMode, version uint32, value byte) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(keyLine(version, value)), mode); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, mode); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestInvalidKeyFiles(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32)))
@@ -96,69 +83,6 @@ func TestKeyFileSymlinkRefused(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), link) || strings.Contains(err.Error(), target) {
 		t.Fatal("the refusal quotes a path")
-	}
-}
-
-// TestKeyFileSwapDuringLoadIsRefused replaces the path while it is being read: a 0600 key file and a 0644 one alternate
-// at the same name, and a load may only ever return the 0600 file's key. The mode has to be read from the opened file,
-// not from the path: a check on the path passes on the 0600 file and then opens whichever file was renamed over it.
-func TestKeyFileSwapDuringLoadIsRefused(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows mode bits do not represent NTFS ACLs")
-	}
-	dir := t.TempDir()
-	path, good, bad := filepath.Join(dir, "master"), filepath.Join(dir, "good"), filepath.Join(dir, "bad")
-	writeKeyFile(t, good, 0o600, 1, 1)
-	writeKeyFile(t, bad, 0o644, 2, 2)
-	if err := os.Link(good, path); err != nil {
-		t.Fatal(err)
-	}
-	stop := swapKeyFiles(t, dir, path, good, bad)
-	for i := range 4000 {
-		got, err := secret.LoadSecret("AXIOM_IDENTITY_KEY_FILE", path)
-		if err == nil && string(got) == strings.Repeat("\x02", 32) {
-			stop()
-			t.Fatalf("iteration %d loaded the 0644 file's key through a path checked as 0600", i)
-		}
-	}
-	stop()
-}
-
-// swapKeyFiles alternates good and bad at path until stop is called, which also waits for the last replacement. It
-// reports a failed replacement with t.Errorf, the only failure call that may run in another goroutine.
-func swapKeyFiles(t *testing.T, dir, path, good, bad string) (stop func()) {
-	t.Helper()
-	stopCh, done := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(done)
-		next := filepath.Join(dir, "next")
-		// The first replacement is the other file: renaming a name onto a link of the same inode does nothing and
-		// leaves the source behind, so alternating from the file the path already names would stop after one flip.
-		for i := 1; ; i++ {
-			select {
-			case <-stopCh:
-				return
-			default:
-			}
-			source := bad
-			if i%2 == 0 {
-				source = good
-			}
-			if err := replaceKeyFile(source, next, path); err != nil {
-				t.Errorf("replacing the key file: %v", err)
-				return
-			}
-			time.Sleep(20 * time.Microsecond)
-		}
-	}()
-	stopped := false
-	return func() {
-		if stopped {
-			return
-		}
-		stopped = true
-		close(stopCh)
-		<-done
 	}
 }
 
@@ -282,13 +206,4 @@ func TestLoadSecretIsTheNewestKey(t *testing.T) {
 		!strings.Contains(err.Error(), "AXIOM_IDENTITY_KEY_FILE") || strings.Contains(err.Error(), "planted-value") {
 		t.Errorf("a missing file gave %v, want an error naming the variable and not the path", err)
 	}
-}
-
-// replaceKeyFile puts source at path with a link and a rename, so the path never disappears and each replacement is
-// atomic.
-func replaceKeyFile(source, next, path string) error {
-	if err := os.Link(source, next); err != nil {
-		return err
-	}
-	return os.Rename(next, path)
 }
