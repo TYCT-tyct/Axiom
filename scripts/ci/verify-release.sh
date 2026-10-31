@@ -88,7 +88,7 @@ jq -s -c --arg digest "${digest#sha256:}" '
 
 # Compare the retained SBOM with the signed predicate, not with the record: whoever swaps the file can update the record
 # in the same edit, but cannot make the signature cover the new bytes.
-if [ -n "$sbom" ]; then
+if [ -n "${sbom:-}" ]; then
   canonical_sbom=$(mktemp)
   temps+=("$canonical_sbom")
   jq -S . "$sbom" > "$canonical_sbom" || die "the SBOM $sbom is not valid JSON"

@@ -154,6 +154,12 @@ class VerifyRelease(unittest.TestCase):
             self.assertIn("--allow-insecure-registry", call)
             self.assertIn("--allow-http-registry", call)
 
+    def test_accepts_an_image_without_a_release_record(self):
+        result, calls = self.run_verify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("verified", result.stdout)
+        self.assertEqual(len(calls), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
