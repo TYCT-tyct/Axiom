@@ -155,6 +155,7 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		h.exec.Outstanding.Drain(ctx, time.Second) // nothing in flight: at once
+		h.drained = true
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
 		h.run() // a call after the drain starts no attempt
 		if h.elapsed() != 0 || h.up.eps[uuidOf(ep(1))].sends != 0 || !strings.Contains(h.w.body(), `"timeout"`) {
