@@ -272,7 +272,7 @@ func (a adminAPI) SetSearchSettings(ctx context.Context, r adminapi.SetSearchSet
 				return adminapi.SearchSettings{}, invalidField("/settings/url", "the search backend could not be validated as public")
 			}
 		}
-		cfg, err := websearch.SaveConfig(ctx, tx, a.keys, actor(ctx), s, r.Body.Reason)
+		cfg, err := websearch.SaveConfig(ctx, tx, a.keys, actor(ctx), s, a.search, r.Body.Reason)
 		if errors.Is(err, websearch.ErrInvalidConfig) {
 			return adminapi.SearchSettings{}, invalidField("/settings", "invalid search backend configuration; verify the URL and reenter the key after a URL change")
 		}

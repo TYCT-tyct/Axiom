@@ -45,13 +45,16 @@ func (h *Handler) checkWebSearch(req *protocol.Request, body []byte) (string, *R
 	return query, nil
 }
 
-// webSearch runs the request's one search and injects its results before the last user turn. It must run after
+// webSearch runs the request's one search and injects its results before the first user turn. It must run after
 // admission, so a call that cannot pay searches nothing, and before an attempt, so a failed search is an upstream
 // failure rather than a charge. The query is client content and is never logged.
 func (s *session) webSearch(ctx context.Context) *ended {
 	web := s.c.Request.Web
 	if web == nil || s.x.Search == nil {
 		return nil
+	}
+	if !s.reserveSearch(websearch.WorkingSet) {
+		return &ended{err: protocol.Error{Type: protocol.Overloaded}}
 	}
 	searchCtx, cancel := context.WithTimeout(ctx, websearch.Timeout)
 	defer cancel()
@@ -62,6 +65,9 @@ func (s *session) webSearch(ctx context.Context) *ended {
 	if err != nil {
 		s.logger.WarnContext(ctx, "the web search backend failed", "request_id", s.c.ID.String(), "err", err)
 		return &ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
+	}
+	if !s.reserveSearch(3*int64(len(s.c.Body)) + protocol.WebSearchMaxBytes) {
+		return &ended{err: protocol.Error{Type: protocol.Overloaded}}
 	}
 	body, err := protocol.InjectWebSearch(s.c.Body, webSearchMessage(web, results, s.start))
 	if err != nil {
@@ -86,6 +92,20 @@ func (s *session) webSearch(ctx context.Context) *ended {
 		s.citations[i] = protocol.Citation{URL: r.URL, Title: r.Title, Content: r.Content}
 	}
 	return nil
+}
+
+// reserveSearch draws from the node's budget for a search's working set and keeps it until the call is over, when
+// release gives it back. The results and the injected body are the call's to hold; the adapter's response buffer is
+// already gone by then, but the same reservation keeps the whole operation within the node's budget.
+func (s *session) reserveSearch(n int64) bool {
+	if n <= 0 {
+		return true
+	}
+	if !s.x.Memory.Charge(n) {
+		return false
+	}
+	s.searchHeld += n
+	return true
 }
 
 // webSearchMessage is the system message the results are injected in, worded as OpenRouter's web search announcement

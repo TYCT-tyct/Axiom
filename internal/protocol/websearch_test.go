@@ -2,6 +2,7 @@ package protocol_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -131,5 +132,28 @@ func TestValidSearchDomain(t *testing.T) {
 		if got := protocol.ValidSearchDomain(d); got != want {
 			t.Errorf("ValidSearchDomain(%q) = %v, want %v", d, got, want)
 		}
+	}
+}
+
+func TestChatSearchQueryScansLongHistoryAndBoundsTheQuery(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"model":"m","messages":[`)
+	for i := range 500 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"role":"assistant","content":"history %d"},{"role":"user","content":"old %d"}`, i, i)
+	}
+	b.WriteString(`,{"content":"last question","role":"user"}]}`)
+	got, err := protocol.ChatSearchQuery([]byte(b.String()))
+	if err != nil || got != "last question" {
+		t.Fatalf("ChatSearchQuery() = %q, %v", got, err)
+	}
+	if _, err := protocol.ChatSearchQuery([]byte(`{"messages":[{"role":"user","content":"` + strings.Repeat("x", protocol.MaxWebSearchQueryBytes+1) + `"}]}`)); err == nil {
+		t.Fatal("ChatSearchQuery() accepted a query over the bound")
+	}
+	got, err = protocol.ChatSearchQuery([]byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a"}},{"type":"text","text":"only text"}]}]}`))
+	if err != nil || got != "only text" {
+		t.Fatalf("non-text parts = %q, %v", got, err)
 	}
 }

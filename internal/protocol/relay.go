@@ -97,9 +97,6 @@ type RelayOptions struct {
 	// Capture keeps the answer's text for a caller that judges it, which is a verification probe and nothing else: a
 	// gateway call leaves it nil, so no call path allocates for it (docs/domains/quality.md「真伪检测」).
 	Capture *Capture
-	// Searches is how many external web searches the attempt ran before its first event. The relay counts them as
-	// already reported, so the meter sees the first search cover the reservation rather than an excess it must extend.
-	Searches int64
 	// Citations are the web search results the gateway supplied, which an aggregated Chat reply cites in its
 	// annotations. A stream cannot know the whole message, so it carries none.
 	Citations       []Citation
@@ -260,7 +257,6 @@ func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOp
 		r.free += nativeConversionMemory
 	}
 	r.initReply(u, o)
-	r.progress.Searches = o.Searches
 	r.meter.tier = u.Tier
 	r.events = sse.NewReader(body, r.format.limit)
 	r.events.ChargeGrowth(r.charge)
@@ -689,6 +685,7 @@ func (r *Relay) initReply(u UsageContext, o RelayOptions) {
 		if a, ok := r.agg.(*chatAggregate); ok {
 			a.legacy = o.legacyFunctions
 			a.healing = u.ResponseHealing
+			a.cited = len(o.Citations) > 0
 		}
 	}
 }

@@ -29,6 +29,8 @@ type chatAggregate struct {
 	hadError                                  bool
 	legacy                                    bool
 	healing                                   bool
+	cited                                     bool // the reply gets url_citation annotations at the end
+	citeCharged                               bool // its extra working set has been drawn
 }
 
 // The pieces of a choice that are strings.
@@ -278,6 +280,14 @@ func (a *chatAggregate) entry(dst *[]byte, factor int) error {
 	return nil
 }
 
+// citationMemory is what generating annotations may hold beyond the content it reads: the unescaped copy and the
+// appended annotation entries. The content itself is charged at citationFactor when the reply may be cited.
+const citationMemory = 64 << 10
+
+// citationFactor is how many copies of a cited content piece the aggregate keeps room for: its stored escaped form,
+// the unescaped copy cite builds and the annotations it appends.
+const citationFactor = 3
+
 // piece adds the string the delta has to the choice's piece i.
 func (a *chatAggregate) piece(i int) error {
 	var v []byte
@@ -287,6 +297,15 @@ func (a *chatAggregate) piece(i int) error {
 	factor := 2
 	if a.healing && i == pieceContent {
 		factor = healingMemoryFactor
+	}
+	if a.cited && i == pieceContent {
+		if !a.citeCharged {
+			if err := a.take(citationMemory, 1); err != nil {
+				return err
+			}
+			a.citeCharged = true
+		}
+		factor = max(factor, citationFactor)
 	}
 	return a.add(&a.cur().strings[i], v, factor)
 }

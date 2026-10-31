@@ -347,6 +347,7 @@ type options struct {
 	cost         int64            // of every attempt
 	costNotKnown bool             // whether Costs says the cost leaves something out
 	costErr      error            // the error Costs fails with
+	costs        Costs            // replaces the fake when set
 	request      []byte           // the client's body, instead of its format's sample
 	stream       *bool            // the request's stream member; true when nil
 	supplier     func(n int) int
@@ -438,9 +439,13 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if o.logs != nil {
 		logger = slog.New(slog.NewTextHandler(o.logs, nil))
 	}
+	var costs Costs = fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr}
+	if o.costs != nil {
+		costs = o.costs
+	}
 	h.exec, err = NewExecutor(ExecDeps{
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
-		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
+		Ledger: &fakeLedger{h: h, o: o}, Costs: costs,
 		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health, Outstanding: NewOutstanding(),
 		Search: o.search,
 	})

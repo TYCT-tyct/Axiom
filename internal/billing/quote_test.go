@@ -424,3 +424,46 @@ func TestQuoteDirect(t *testing.T) {
 		t.Errorf("InputEstimate = %d, want the batch total 3000 tokens", got)
 	}
 }
+
+// TestQuoteMixedSearchKinds: a request that enables both the gateway's flat web plugin and a native search tool
+// reserves a sampling for each native use, charges both fees, and does not let the flat search hide an unbounded
+// native tool. The flat fee alone does not stand in for a native search in the meter's reserved count.
+func TestQuoteMixedSearchKinds(t *testing.T) {
+	t.Parallel()
+
+	d := Demand{TextBytes: 80, ServerTools: []ServerTool{
+		{Item: webSearch, MaxUses: 1},
+		{Item: webSearch, MaxUses: 1, Flat: true},
+	}}
+	q, err := quoteEntry(d, entry(t, false, 3), Segments{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := units(t, q.amount), "14280"; got != want {
+		t.Errorf("mixed search quote = %s, want %s", got, want)
+	}
+	if q.searches != 1 {
+		t.Errorf("reserved native searches = %d, want 1 (the flat search is not a native use)", q.searches)
+	}
+	if q.resample == (inputPrice{}) || q.rereads != 1000 {
+		t.Errorf("native resampling was cleared by the flat search: resample %+v, rereads %d", q.resample, q.rereads)
+	}
+
+	unboundedDemand := Demand{TextBytes: 80, ServerTools: []ServerTool{
+		{Item: webSearch},
+		{Item: webSearch, MaxUses: 1, Flat: true},
+	}}
+	_, err = quoteEntry(unboundedDemand, entry(t, false, 0), Segments{}, false) // no default native limit
+	var unbounded *UnboundedError
+	if !errors.As(err, &unbounded) || !errors.Is(err, ErrUnbounded) {
+		t.Errorf("unbounded native search with a flat search: error = %v, want ErrUnbounded", err)
+	}
+
+	m := meter(t, d, entry(t, true, 3))
+	if step := m.Observe(Progress{Searches: 1}); step.Extend {
+		t.Errorf("one native search = %+v, want no extension", step)
+	}
+	if step := m.Observe(Progress{Searches: 2}); !step.Extend {
+		t.Errorf("a native search beyond its bound = %+v, want an extension", step)
+	}
+}

@@ -231,12 +231,10 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 		tiers &= e.Model.ServiceTiers
 	}
 	tiers.Add(catalog.ServiceTierStandard)
-	uses, samplings := serverToolUses(d, e.Model)
-	for _, t := range d.ServerTools {
-		if uses[t.Item] == 0 {
-			return q, &UnboundedError{t.Item}
-		}
+	if err := boundedServerTools(d, e.Model); err != nil {
+		return q, err
 	}
+	uses, samplings := serverToolUses(d, e.Model)
 	first, longest := inputBound(d, e.Model, samplings)
 	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
 	rest := mul(samplings-1, window)
@@ -378,16 +376,34 @@ func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tier
 	if d.Compaction {
 		q.rereads = mul(window, 2)
 	}
+	var flat, native bool
+	flatUses := int64(0)
 	for _, t := range d.ServerTools {
-		if t.Flat && t.Item == catalog.ItemWebSearch {
-			// The search runs before the completion and adds no sampling: only its fee is reserved, and q.searches
-			// still covers it, so the first search event is not an excess the meter must extend. Compaction still
-			// rereads the context, so its allowance stays.
+		if t.Item != catalog.ItemWebSearch {
+			continue
+		}
+		if t.Flat {
+			flat = true
+			n := t.MaxUses
+			if n == 0 {
+				n = e.Model.MaxUses[catalog.ItemWebSearch]
+			}
+			flatUses += n
+		} else {
+			native = true
+		}
+	}
+	if flat {
+		// A flat search runs before the completion and adds no sampling. Its fee is in the fixed part, so when a
+		// native tool shares the item it must not stand in for that tool in q.searches: the meter counts only what
+		// the upstream reports, and a native search beyond its bound still has to extend for its sampling.
+		if native {
+			q.searches = max(0, q.searches-flatUses)
+		} else {
 			q.resample = inputPrice{}
 			if !d.Compaction {
 				q.rereads = 0
 			}
-			break
 		}
 	}
 	return nil
@@ -508,6 +524,24 @@ func fileTokens(m Model) int64 {
 		return m.ContextLength
 	}
 	return mul(m.FilePages, m.PageTokens)
+}
+
+// boundedServerTools refuses a native tool with neither the request's limit nor a model default: its uses cannot be
+// bounded, and a flat tool of the same item must not hide that. A flat tool has one use by construction.
+func boundedServerTools(d Demand, m Model) error {
+	for _, t := range d.ServerTools {
+		if t.Flat {
+			continue
+		}
+		n := t.MaxUses
+		if n == 0 {
+			n = m.MaxUses[t.Item]
+		}
+		if n == 0 {
+			return &UnboundedError{t.Item}
+		}
+	}
+	return nil
 }
 
 // serverToolUses returns each server tool's most uses, the request's or else the model's default, totalled per item so

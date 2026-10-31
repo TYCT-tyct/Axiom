@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // the request's members are copied as written, never decoded and encoded again
 	"errors"
 	"fmt"
@@ -34,35 +35,210 @@ type WebPlugin struct {
 	Online         bool
 }
 
-// ChatSearchQuery returns the text of the last user message, the query a web search runs for. A Chat body without a
-// user message, or with non-text parts only, gives "".
+// ChatSearchQuery returns the text of the last user message, the query a web search runs for. It walks the body's
+// tokens instead of decoding the whole request: a long history is read once and only the last user message's text is
+// kept, bounded by MaxWebSearchQueryBytes. A Chat body without a user message, or with non-text parts only, gives "".
 func ChatSearchQuery(body []byte) (string, error) {
-	c, err := decodeCanon(body)
-	if err != nil {
-		return "", err
+	r := reader{dec: jsontext.NewDecoder(bytes.NewBuffer(body))}
+	if k := r.dec.PeekKind(); k != '{' {
+		return "", fmt.Errorf("%w: a Chat request is not an object", ErrInvalid)
 	}
-	for i := len(c.Messages) - 1; i >= 0; i-- {
-		m := &c.Messages[i]
-		if m.Role != "user" {
+	if err := r.token(); err != nil {
+		return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	var query string
+	for r.dec.PeekKind() != '}' {
+		if err := r.member(); err != nil {
+			return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		}
+		if string(r.name) != "messages" {
+			if err := r.skip(); err != nil {
+				return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+			}
 			continue
 		}
-		var b strings.Builder
-		for _, p := range m.Parts {
-			if p.Type != "text" {
+		q, err := r.searchMessages()
+		if err != nil {
+			return "", err
+		}
+		query = q
+	}
+	if err := r.token(); err != nil {
+		return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	return strings.TrimSpace(query), nil
+}
+
+// searchMessages reads messages and returns the last user message's text. The text of every earlier user message is
+// dropped as soon as the next message begins, so the scan's own working set is one message, not the history.
+func (r *reader) searchMessages() (string, error) {
+	ok, err := r.open('[', "messages")
+	if err != nil {
+		return "", fmt.Errorf("%w: messages is not an array", ErrInvalid)
+	}
+	if !ok {
+		return "", nil
+	}
+	var last string
+	for r.dec.PeekKind() != ']' {
+		q, role, err := r.searchMessage()
+		if err != nil {
+			return "", err
+		}
+		if role == "user" {
+			last = q
+		}
+	}
+	if err := r.token(); err != nil {
+		return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	return last, nil
+}
+
+// searchMessage reads one message's role and content text; every other member is skipped.
+func (r *reader) searchMessage() (text, role string, err error) {
+	if r.dec.PeekKind() != '{' {
+		return "", "", fmt.Errorf("%w: a message is not an object", ErrInvalid)
+	}
+	if err := r.token(); err != nil {
+		return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	for r.dec.PeekKind() != '}' {
+		if err := r.member(); err != nil {
+			return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		}
+		switch string(r.name) {
+		case "role":
+			v, err := r.str()
+			if err != nil {
+				return "", "", fmt.Errorf("%w: a message's role is not a string", ErrInvalid)
+			}
+			role = string(v)
+		case "content":
+			if role != "" && role != "user" {
+				if err := r.skip(); err != nil {
+					return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+				}
 				continue
 			}
-			var text string
-			if err := jsonx.Unmarshal(p.Text, &text); err != nil {
-				return "", fmt.Errorf("%w: a user message's text is not a string", ErrInvalid)
+			if text, err = r.searchContent(); err != nil {
+				return "", "", err
 			}
-			if b.Len() > 0 {
-				b.WriteByte('\n')
+		default:
+			if err := r.skip(); err != nil {
+				return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 			}
-			b.WriteString(text)
 		}
-		return strings.TrimSpace(b.String()), nil
 	}
-	return "", nil
+	if err := r.token(); err != nil {
+		return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	return text, role, nil
+}
+
+// searchContent reads a message's content as its text parts, or null. A string is one text part; an array's parts
+// contribute only when their type is text.
+func (r *reader) searchContent() (string, error) {
+	switch k := r.dec.PeekKind(); k {
+	case 'n':
+		return "", r.token()
+	case '"':
+		return r.searchString()
+	case '[':
+	default:
+		return "", fmt.Errorf("%w: a message's content is not a string or an array", ErrInvalid)
+	}
+	if err := r.token(); err != nil {
+		return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	var b strings.Builder
+	for r.dec.PeekKind() != ']' {
+		if r.dec.PeekKind() != '{' {
+			return "", fmt.Errorf("%w: a content part is not an object", ErrInvalid)
+		}
+		if err := r.token(); err != nil {
+			return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		}
+		var kind, text string
+		for r.dec.PeekKind() != '}' {
+			if err := r.member(); err != nil {
+				return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+			}
+			switch string(r.name) {
+			case "type":
+				v, err := r.str()
+				if err != nil {
+					return "", fmt.Errorf("%w: a content part's type is not a string", ErrInvalid)
+				}
+				kind = string(v)
+			case "text":
+				v, err := r.searchString()
+				if err != nil {
+					return "", err
+				}
+				text = v
+			default:
+				if err := r.skip(); err != nil {
+					return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+				}
+			}
+		}
+		if err := r.token(); err != nil {
+			return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		}
+		if kind == "text" {
+			if err := appendSearchText(&b, text); err != nil {
+				return "", err
+			}
+		}
+	}
+	if err := r.token(); err != nil {
+		return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+	}
+	return b.String(), nil
+}
+
+// searchString reads one string and bounds it before unquoting. The bound is a little over the query limit because
+// escapes may shrink a value; a part that is plainly too large is refused without building the unescaped copy.
+func (r *reader) searchString() (string, error) {
+	v, err := r.raw()
+	if err != nil {
+		return "", fmt.Errorf("%w: a message's text is not a string", ErrInvalid)
+	}
+	if v == nil {
+		return "", nil
+	}
+	if len(v) > 6*MaxWebSearchQueryBytes+2 {
+		return "", fmt.Errorf("%w: the search query is longer than %d bytes", ErrInvalid, MaxWebSearchQueryBytes)
+	}
+	b, err := r.unquote(v)
+	if err != nil {
+		return "", fmt.Errorf("%w: a message's text is not a string", ErrInvalid)
+	}
+	if len(b) > MaxWebSearchQueryBytes {
+		return "", fmt.Errorf("%w: the search query is longer than %d bytes", ErrInvalid, MaxWebSearchQueryBytes)
+	}
+	return string(b), nil
+}
+
+// appendSearchText adds a text part, separating parts by a newline as ChatSearchQuery always has, and stops before
+// the query bound. The newline is counted too, so the final query stays within the bound.
+func appendSearchText(b *strings.Builder, text string) error {
+	if text == "" {
+		return nil
+	}
+	need := len(text)
+	if b.Len() > 0 {
+		need++
+	}
+	if b.Len()+need > MaxWebSearchQueryBytes {
+		return fmt.Errorf("%w: the search query is longer than %d bytes", ErrInvalid, MaxWebSearchQueryBytes)
+	}
+	if b.Len() > 0 {
+		b.WriteByte('\n')
+	}
+	b.WriteString(text)
+	return nil
 }
 
 // InjectWebSearch puts text in a system message before the first user message of a Chat body: leading system messages

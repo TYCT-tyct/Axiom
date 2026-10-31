@@ -42,6 +42,10 @@ const (
 	maxContentBytes  = 1024
 )
 
+// WorkingSet is the most one Search may hold past the caller's query and request: the response body it reads and the
+// decoded results it builds from it. The gateway charges it to the node's budget before searching.
+const WorkingSet = 2 * maxResponseBytes
+
 // ErrUpstream is a search backend that did not answer with usable results: a status other than 200, a body over the
 // cap, malformed JSON, or a transport error. The gateway answers it as an upstream failure.
 var ErrUpstream = errors.New("websearch: the backend failed")
@@ -108,10 +112,10 @@ type SearXNG struct {
 	client *egress.Client
 }
 
-// Open validates the configuration and builds the adapter. With no URL it returns (nil, nil): the feature is off and
-// requests keep their refusal. The client must be the node's egress client, so the backend is subject to the same
+// Open validates the configuration and builds the adapter. With no URL it returns a nil interface: the feature is off,
+// and the gateway keeps its refusal in front of the reservation. The client must be the node's egress client, so the backend is subject to the same
 // address, redirect and timeout rules as every other outbound request.
-func Open(c Config, client *egress.Client) (*SearXNG, error) {
+func Open(c Config, client *egress.Client) (Searcher, error) {
 	if !c.Configured() {
 		return nil, nil
 	}

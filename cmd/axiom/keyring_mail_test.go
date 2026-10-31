@@ -55,7 +55,7 @@ func TestKeyringRewrapsSearchConfig(t *testing.T) {
 	f := newRotationFixture(t)
 	settings := websearch.Settings{URL: "https://search.example.com", Key: new("rotation search value")}
 	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		_, err := websearch.SaveConfig(t.Context(), tx, masterKeys(t), audit.System("platform.keyring.test"), settings, "save")
+		_, err := websearch.SaveConfig(t.Context(), tx, masterKeys(t), audit.System("platform.keyring.test"), settings, websearch.Config{}, "save")
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -83,6 +83,56 @@ func TestKeyringRewrapsSearchConfig(t *testing.T) {
 			t.Fatal("search config did not survive rotation")
 		}
 		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSearchConfigFirstSaveKeepsEnvironmentKey: before the first database row, the environment's configuration is
+// what an omitted key means. Keeping the URL and leaving the key out must carry that key into the row rather than
+// write an empty one; clearing the URL still disables the feature, and the empty row stays authoritative.
+func TestSearchConfigFirstSaveKeepsEnvironmentKey(t *testing.T) {
+	t.Parallel()
+	f := newRotationFixture(t)
+	environment := websearch.Config{URL: "https://search.example.com", Key: secret.New("environment search value")}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := websearch.SaveConfig(t.Context(), tx, masterKeys(t), audit.System("platform.keyring.test"),
+			websearch.Settings{URL: environment.URL}, environment, "first save")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		cfg, found, err := websearch.StoredConfig(t.Context(), tx, masterKeys(t))
+		if err != nil {
+			return err
+		}
+		if !found || cfg.URL != environment.URL || cfg.Key.Reveal() != environment.Key.Reveal() {
+			t.Fatalf("first saved config = %+v, found %v; want the environment key retained", cfg, found)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := websearch.SaveConfig(t.Context(), tx, masterKeys(t), audit.System("platform.keyring.test"),
+			websearch.Settings{}, environment, "disable")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		cfg, found, err := websearch.StoredConfig(t.Context(), tx, masterKeys(t))
+		if err != nil {
+			return err
+		}
+		if !found || cfg.Configured() {
+			t.Fatalf("after clearing, config = %+v, found %v; want an authoritative disabled row", cfg, found)
+		}
+		if searcher, err := websearch.Open(cfg, nil); err != nil || searcher != nil {
+			t.Fatalf("Open(disabled) = (%v, %v), want a nil searcher and no error", searcher, err)
+		}
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}

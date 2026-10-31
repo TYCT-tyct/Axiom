@@ -15,14 +15,15 @@
 | `AXIOM_SEARCH_URL` | — | SearXNG 的基地址，如 `https://search.example.com`；必须是 `http(s)`、有主机、不带账号、查询串和片段 |
 | `AXIOM_SEARCH_KEY` | — | 反向代理校验的 bearer token；SearXNG 自己不认证。可以只设 URL（不认证），但不能只设 key |
 
-数据库没有覆盖时环境变量生效。管理员在后台保存的覆盖存在 `platform.search_config`（迁移 `00025_search_config.sql`），与 SMTP 配置同样整包信封加密：AAD 是表名、全零单例 ID 和 `purpose=config`，纳入主密钥轮换清单。显式清空 URL 也会存一行，等价于管理员关掉联网搜索，不会回落到环境变量。保存后 API 返回 `restart_required`，节点重启时读取覆盖并重建后端；运行中的节点不换后端，和邮件配置一致。
+数据库没有覆盖时环境变量生效。管理员第一次保存覆盖时，环境里同 URL 的密钥就是「省略密钥」要保留的旧值；保存存在 `platform.search_config`（迁移 `00025_search_config.sql`），与 SMTP 配置同样整包信封加密：AAD 是表名、全零单例 ID 和 `purpose=config`，纳入主密钥轮换清单。显式清空 URL 也会存一行，等价于管理员关掉联网搜索，不会回落到环境变量。保存后 API 返回 `restart_required`，节点重启时读取覆盖并重建后端；运行中的节点不换后端，和邮件配置一致。
 
-保存时检查 URL 能否作为出网目标：全部 DNS 答案必须是公网地址，回环、私网、云元数据地址和混合答案拒绝。运行时的每次搜索再由节点共享的 `egress.Client` 重新解析并校验，走同一个出口。密钥只进加密行，不返回、不写审计、不进日志；省略密钥只在 URL 未变时保留，改 URL 必须重填，避免把旧凭证发给新主机。`ErrInvalidConfig` 是输入错误，数据库和解封错误原样上抛。
+保存时检查 URL 能否作为出网目标：全部 DNS 答案必须是公网地址，回环、私网、云元数据地址和混合答案拒绝。运行时的每次搜索再由节点共享的 `egress.Client` 重新解析并校验，走同一个出口。密钥只进加密行，不返回、不写审计、不进日志；省略密钥只在 URL 未变时保留（数据库还没有行时与环境的 URL 比较），改 URL 必须重填，避免把旧凭证发给新主机。`ErrInvalidConfig` 是输入错误，数据库和解封错误原样上抛。
 
 ## 查询与结果
 
-- 查询词是 `protocol.ChatSearchQuery` 取出的最后一条用户消息的文本部件；空查询在准入前就 400，超过 1024 字节也 400。
+- 查询词是 `protocol.ChatSearchQuery` 逐 token 扫出的最后一条用户消息的文本部件，不整份解码历史；空查询在准入前就 400，超过 1024 字节也 400。
 - `max_results` 默认 5，上限 10。`include_domains` / `exclude_domains` 在协议层已校验成纯主机名（小写、有点、不含前后连字符或连续点），这里只转成 `site:` 和 `-site:` 操作符，不拼接客户端原文。
+- 一次 `Search` 的工作集（响应正文和解码结果）由网关按 `WorkingSet`（8 MiB）在搜索前计入节点预算；注入的正文再按原正文三倍加 `WebSearchMaxBytes` 计入，调用结束才归还。
 - 请求是 `GET {base}/search?q=...&format=json`，`Accept: application/json`，配了 key 时带 `Authorization: Bearer`。响应必须是 200，正文最多 4 MiB；只收 `http`/`https` 且有 URL 的条目，按 URL 去重，标题截到 256 字节、摘要截到 1024 字节，按 UTF-8 边界截断。
 - 查询词、响应正文和密钥都不进错误和日志；错误只说明类别（`ErrUpstream`、`ErrNoQuery`、超时）。搜索失败在网关里是普通上游失败：没有模型调用、没有模型用量，也不收这次搜索。
 

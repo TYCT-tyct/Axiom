@@ -300,6 +300,22 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	rec.Cost, rec.Estimate = credits, c
 }
 
+// addSearchUsage adds the call's external searches to the user's side of the charged attempt after the supplier's
+// cost was computed from the supplier's own usage. The search is ours, not the supplier's: one explicit zero report
+// cannot hide it, and a retry does not put it in another attempt's supplier price. Only the last attempt is charged
+// (billing.Settle), so only that one carries the count.
+func addSearchUsage(rec *billing.AttemptResult, searches int64) {
+	if searches <= 0 || len(rec.Segments) == 0 {
+		return
+	}
+	counts := make(map[catalog.Item]int64, catalog.NumItems)
+	for it := range catalog.NumItems {
+		counts[it] = rec.Segments[0].Usage.Count(it)
+	}
+	counts[catalog.ItemWebSearch] += searches
+	rec.Segments[0].Usage = recountCapped(rec.Segments[0].Usage, counts)
+}
+
 // costFlag is what the supplier's row says of how far its estimate can be trusted, decided here, where the source of the
 // usage is known (suppliers' Cost sees counts only): reconciliation judges a price only against a complete estimate. An
 // attempt whose upstream reported no usage at all has none, whatever the estimates put in its place; one with some

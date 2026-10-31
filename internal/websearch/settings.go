@@ -57,9 +57,10 @@ func StoredConfig(ctx context.Context, tx pg.Tx, keys *secret.Keyring) (Config, 
 	return cfg, true, err
 }
 
-// SaveConfig serializes edits and their audit. A URL change cannot forward the previous key to it: the caller must
-// enter it again, so a saved credential never authenticates to a backend it was not entered for.
-func SaveConfig(ctx context.Context, tx pg.Tx, keys *secret.Keyring, actor audit.Actor, s Settings, reason string) (Config, error) {
+// SaveConfig serializes edits and their audit. Until the first row exists, environment is the previous configuration:
+// an omitted key keeps the one the environment configured, while a URL change still requires the caller to enter it
+// again, so a saved credential never authenticates to a backend it was not entered for.
+func SaveConfig(ctx context.Context, tx pg.Tx, keys *secret.Keyring, actor audit.Actor, s Settings, environment Config, reason string) (Config, error) {
 	s.URL = strings.TrimSpace(s.URL)
 	if s.Key != nil {
 		key := strings.TrimSpace(*s.Key)
@@ -68,9 +69,12 @@ func SaveConfig(ctx context.Context, tx pg.Tx, keys *secret.Keyring, actor audit
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('platform.search_config'))`); err != nil {
 		return Config{}, err
 	}
-	old, _, err := StoredConfig(ctx, tx, keys)
+	old, found, err := StoredConfig(ctx, tx, keys)
 	if err != nil {
 		return Config{}, err
+	}
+	if !found {
+		old = environment
 	}
 	key, err := s.keyFor(old)
 	if err != nil {

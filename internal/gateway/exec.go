@@ -199,9 +199,11 @@ type session struct {
 	replyHeld int64 // of the node's budget, held by the compact reply the call ends with, until Run returns
 
 	// searches is how many external web searches the call ran before its attempt, and citations are their results,
-	// which an aggregated Chat reply cites. Both are zero for a call without the web plugin.
-	searches  int64
-	citations []protocol.Citation
+	// which an aggregated Chat reply cites. Both are zero for a call without the web plugin. searchHeld is the part of
+	// the node's budget those results and the injected body hold until the call is over.
+	searches   int64
+	citations  []protocol.Citation
+	searchHeld int64
 
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back
@@ -235,6 +237,9 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
 	o := billing.Outcome{Attempts: s.ends}
+	if len(o.Attempts) > 0 {
+		addSearchUsage(&o.Attempts[len(o.Attempts)-1], s.searches)
+	}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
 	if err == nil && len(o.Attempts) > 0 {
@@ -358,6 +363,8 @@ func (s *session) release() {
 		s.live.Release()
 		s.live = nil
 	}
+	s.x.Memory.Refund(s.searchHeld)
+	s.searchHeld = 0
 }
 
 // dropReply gives back the budget of a compact reply that is not going to be written, or that the call is over with.
