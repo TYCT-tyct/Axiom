@@ -159,15 +159,17 @@ refuse_after_record "a signature moved from $digest to $moved_digest" "no valid 
   bash scripts/ci/verify-release.sh "$moved" "$tmp/moved.json"
 
 # A valid signature and attestation under the right identity, but the attestation's subject is A: add only A's SPDX
-# attestation descriptor to C's index, leaving C's own signature. cosign 3's bundle path verifies every bundle against
-# the target digest for both `verify` and `verify-attestation`, so A's statement fails the signature query first; the
-# positive case covers a matching attestation and the swapped-SBOM case covers the predicate comparison.
+# attestation descriptor to C's index, leaving C's own signature. cosign returns C's own bundle for the SPDX query and
+# not A's, so the verifier reports no SPDX attestation without a digest-mismatch message; the positive case covers a
+# matching attestation and the swapped-SBOM case covers the predicate comparison.
 add_attestation() { # from-digest to-digest
   local from=$1 to=$2
   curl -fsS -H 'Accept: application/vnd.oci.image.index.v1+json' \
     "http://${repo%/*}/v2/${repo##*/}/manifests/sha256-${from#sha256:}" > "$tmp/from-index.json"
   curl -fsS -H 'Accept: application/vnd.oci.image.index.v1+json' \
     "http://${repo%/*}/v2/${repo##*/}/manifests/sha256-${to#sha256:}" > "$tmp/to-index.json"
+  jq -e 'any(.manifests[]; .annotations["dev.sigstore.bundle.predicateType"] == "https://spdx.dev/Document")' \
+    "$tmp/from-index.json" > /dev/null || { echo "::error::A has no SPDX attestation to add"; exit 1; }
   jq --slurpfile from "$tmp/from-index.json" '
     .manifests += [
       $from[0].manifests[]
@@ -183,8 +185,8 @@ attested_digest=${attested##*@}
 cosign sign --yes --oidc-provider=github-actions "${cosign_args[@]}" "$attested"
 add_attestation "$digest" "$attested_digest"
 record "$attested_digest" "$identity" "$issuer" "$tmp/attested.json"
-refuse_after_record "an SBOM attestation whose subject is another digest" "no valid keyless signature from" \
-  "provided artifact digest does not match any digest in statement" \
+refuse_after_record "an SBOM attestation whose subject is another digest" "no valid SPDX attestation from" \
+  "none of the attestations matched the predicate type" \
   env RELEASE_SIGNING_IDENTITY="$identity" RELEASE_SIGNING_ISSUER="$issuer" RELEASE_ALLOW_INSECURE_REGISTRY=true \
   bash scripts/ci/verify-release.sh "$attested" "$tmp/attested.json"
 
