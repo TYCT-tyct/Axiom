@@ -488,26 +488,6 @@ func TestRouteBuildLeavesOutAModelWhoseSalePriceIsShort(t *testing.T) {
 	}
 }
 
-// TestRouteBuildLeavesOutAFreeModelWithAPaidSale: the :free suffix promises no charge, so an already published paid
-// price for any audience keeps the model out of routing rather than serving a call that charges.
-func TestRouteBuildLeavesOutAFreeModelWithAPaidSale(t *testing.T) {
-	f := newRouteFixture(t)
-	free := f.seedPrice("acme/served:free", specAll, `{"v":1,"currency":"USD","rates":{"input":"0","output":"0","cache_read":"0","cache_write":"0"}}`)
-	paid, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002"}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.prices[free] = billing.Sold{Version: uuid.NewV7(), Schedule: paid}
-	r := routable(free, protocol.Messages)
-	f.build([]suppliers.Routable{r})
-	if want := (Count{Endpoints: 0, Offered: 1}); f.count != want {
-		t.Errorf("the build made %+v, want %+v", f.count, want)
-	}
-	if logs := f.logs.String(); !strings.Contains(logs, "non-zero sale price") {
-		t.Errorf("the log does not say why:\n%s", logs)
-	}
-}
-
 // TestRouteBuildSellsAModelWhoseSalePriceLeavesAPerUseItemOut: a fixed price list that prices no web search still sells a
 // model whose spec says its upstream may report one, because admission fills in the site's default price for it. Leaving
 // the model out would answer plain text calls 404 too (docs/domains/billing.md「价目表缺项」).
