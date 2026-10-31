@@ -1934,6 +1934,82 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/redeem-codes:
+    get:
+      operationId: listRedemptions
+      tags: [Top-ups]
+      summary: The redeem codes this account redeemed, newest first
+      description: >-
+        One page of the credit this account got from redeem codes, newest first: each redemption's credit, when it was
+        redeemed, and when the credit expires. It never shows a code, only its last four characters, so the history is
+        not a way to recover one. Needs `balance.view`, like every read of the account's money.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the account's redemptions, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeHistory"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: redeemCode
+      tags: [Top-ups]
+      summary: Redeem a code into credit
+      description: >-
+        Turns a code the site issued into a credit batch of the account's currency, with the code's expiry, and records
+        it in the account's history. A code credits once, whichever account redeems it: `201` is the credit this
+        request made, `200` is the credit an earlier request with the same `Idempotency-Key` made (the answer was lost;
+        the key is reused, not the code), and a code already redeemed with another key is `conflict`. A code that is
+        unknown, expired or disabled is `unprocessable`; a code is never echoed in an answer or an error.
+
+
+        Attempts that fail are limited per account and per network, an hour at a time: past the limit the request is
+        `rate_limited` with `Retry-After` the seconds until the window is over, and the attempt is counted before the
+        code is looked at. A replay of the key is not an attempt. If the counting itself fails, the request is refused
+        (`internal`), never let through.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.top_up
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: "A key the caller chooses for one intended redemption, 1 to 128 of letters, digits and `._:-` (a UUID is fine)."
+          schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,128}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RedeemCodeRequest"}
+      responses:
+        "200":
+          description: The credit an earlier request with this key made.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeRedemption"}
+        "201":
+          description: The credit this code made.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeRedemption"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
 components:
   securitySchemes:
     session:
@@ -2348,6 +2424,10 @@ components:
         - weak_password
         - not_ready
         - unprocessable
+        - redeem_code_invalid
+        - redeem_code_expired
+        - redeem_code_disabled
+        - redeem_code_used
         - rate_limited
         - internal
         - not_implemented
@@ -2363,6 +2443,32 @@ components:
       properties:
         amount: {type: string, pattern: '^-?(0|[1-9][0-9]*)$', maxLength: 39, example: "1500000000"}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
+    RedeemCodeRequest:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: "The code as issued, with or without its dashes or spaces, in any case."
+    RedeemCodeRedemption:
+      type: object
+      additionalProperties: false
+      required: [id, amount, code_hint, redeemed_at]
+      properties:
+        id: {type: string, pattern: '^rdn_[0-9a-hjkmnp-tv-z]{26}$', description: "The redemption's ID (TypeID), also the credit batch's."}
+        amount: {$ref: "#/components/schemas/Money"}
+        code_hint: {type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{4}$', description: "The code's last four characters; never the code."}
+        expires_at: {type: string, format: date-time, description: "When the credit expires; absent: never."}
+        redeemed_at: {type: string, format: date-time}
+    RedeemCodeHistory:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/RedeemCodeRedemption"}}
+        next_cursor: {type: string, description: "Absent on the last page."}
     Version:
       type: object
       required: [version]
@@ -2593,9 +2699,9 @@ components:
           description: The batch's own identity; paid credit uses the order's ID as the batch ID.
         source:
           type: string
-          enum: [gift, paid]
-          x-enum-varnames: [CreditBatchGift, CreditBatchPaid]
-          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment."
+          enum: [gift, paid, redeem]
+          x-enum-varnames: [CreditBatchGift, CreditBatchPaid, CreditBatchRedeem]
+          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave."
         amount: {$ref: "#/components/schemas/Money"}
         remaining: {$ref: "#/components/schemas/Money"}
         frozen: {$ref: "#/components/schemas/Money"}
@@ -2606,10 +2712,11 @@ components:
           description: "When what is left of the batch stops counting. Absent when it never expires."
     StatementKind:
       type: string
-      enum: [top_up, gift, spend, expiry, refund, reversal, freeze, unfreeze]
+      enum: [top_up, gift, redeem, spend, expiry, refund, reversal, freeze, unfreeze]
       description: >-
         What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit
-        given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+        given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change),
+        freeze or unfreeze.
     StatementRow:
       type: object
       required: [id, at, kind, amount, balance_after, reference, frozen_change, frozen_after]
