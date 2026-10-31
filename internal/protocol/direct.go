@@ -23,8 +23,8 @@ func inspectNew(f Format, body []byte) (Request, error) {
 	if err := jsonx.Validate(body); err != nil {
 		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
-	d := directScanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body))}
-	d.r = Request{Format: f, Choices: 1, InputItems: 1 << catalog.ItemInput, ServiceTiers: 1 << catalog.ServiceTierStandard}
+	d := directScanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), trackEcho: f == Completions && echoRequested(body)}
+	d.r = Request{Format: f, Choices: 1, ChoiceCount: 1, InputItems: 1 << catalog.ItemInput, ServiceTiers: 1 << catalog.ServiceTierStandard}
 	if err := d.top(); err != nil {
 		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
@@ -59,11 +59,16 @@ func (d *directScanner) validate() error {
 		if !d.hasPrompt {
 			return fmt.Errorf("%w: prompt is missing", ErrInvalid)
 		}
-		choices := max(1, d.n, d.bestOf) // best_of generates candidates it does not all return, and each is charged
+		choices := max(1, d.n)
 		if d.prompts > 1 && choices > (1<<62)/d.prompts {
 			return fmt.Errorf("%w: prompt and n ask for too many completions", ErrInvalid)
 		}
 		d.r.Choices = choices * max(1, d.prompts)
+		d.r.ChoiceCount = choices
+		// The suffix is inserted after the completion but is part of what the model reads: count it once for every
+		// prompt, and keep the longest prompt's context check including it.
+		d.r.TextBytes += d.prompts * d.suffixBytes
+		d.r.MaxInputBytes += d.suffixBytes
 	}
 	return nil
 }
@@ -73,7 +78,8 @@ func (d *directScanner) validate() error {
 type directScanner struct {
 	reader
 	r                                      Request
-	prompts, n, bestOf                     int64 // legacy completions: prompts, the n each returns, the best_of generated
+	prompts, n, suffixBytes                int64 // legacy completions: prompts, the n each returns, the inserted suffix's bytes
+	trackEcho                              bool  // legacy completions with echo: keep each prompt's text bytes for metering
 	queryBytes, maxDoc                     int64 // rerank: the query's bytes and the largest document's
 	hasInput, hasQuery, hasDocs, hasPrompt bool
 }
@@ -197,8 +203,14 @@ func (d *directScanner) completionsMember() error {
 		d.hasPrompt = true
 		return d.prompt()
 	case "max_tokens":
+		kind := d.dec.PeekKind()
 		n, err := d.count()
-		d.r.MaxOutput = max(d.r.MaxOutput, n)
+		if err == nil {
+			// null is unset, as Prepare treats it: it takes the endpoint's cap. Only a number, including 0, is a cap
+			// the request set.
+			d.r.MaxOutput = max(d.r.MaxOutput, n)
+			d.r.MaxOutputSet = kind != 'n'
+		}
 		return err
 	case "n":
 		n, err := d.count()
@@ -206,7 +218,21 @@ func (d *directScanner) completionsMember() error {
 		return err
 	case "best_of":
 		n, err := d.count()
-		d.bestOf = n
+		// OpenAI's best_of says "Results cannot be streamed". Every call here is a stream, so forwarding the member
+		// would turn a legal request into one the upstream refuses.
+		if err == nil && n > 1 {
+			return fmt.Errorf("%w: best_of above 1 cannot be streamed, and completions are called as a stream; send 1 or omit it", ErrInvalid)
+		}
+		return err
+	case "echo":
+		// The echo itself is recorded by promptBytes while the prompt is read; the member only enables it, which
+		// echoRequested already saw before the scan.
+		return d.skip()
+	case "suffix":
+		v, err := d.str()
+		if err == nil && v != nil {
+			d.suffixBytes = int64(len(v))
+		}
 		return err
 	case "stream":
 		k, err := d.flag()
@@ -261,6 +287,22 @@ func (d *directScanner) input(n int64) {
 	if n > d.r.MaxInputBytes {
 		d.r.MaxInputBytes = n
 	}
+}
+
+// promptBytes records one prompt's text bytes for echo metering, in the order the prompts are read. A token prompt
+// has no text here; four bytes per token is the same bound the input uses, so the echo estimate never exceeds what the
+// input was charged for.
+func (d *directScanner) promptBytes(n int64) {
+	if d.trackEcho {
+		d.r.PromptBytes = append(d.r.PromptBytes, n)
+	}
+}
+
+// echoRequested reports whether the body's top-level echo member is true. It is read before the scan so the scanner
+// knows to record prompt sizes wherever prompt appears, in any member order.
+func echoRequested(body []byte) bool {
+	v, ok, err := member(body, "echo")
+	return err == nil && ok && v.Kind() == 't'
 }
 
 // embeddingInput reads OpenAI's input: a string, an array of strings, a token array, an array of token arrays, or an
@@ -490,6 +532,7 @@ func (d *directScanner) prompt() error {
 		v, err := d.str()
 		if err == nil {
 			d.input(int64(len(v)))
+			d.promptBytes(int64(len(v)))
 			d.prompts = 1
 		}
 		return err
@@ -526,6 +569,7 @@ func (d *directScanner) promptArray(v jsontext.Value) error {
 				return fmt.Errorf("prompt mixes strings with other values")
 			}
 			d.input(unquotedLen(e))
+			d.promptBytes(unquotedLen(e))
 			d.prompts++
 		case '[':
 			if kind != '[' {
@@ -536,6 +580,7 @@ func (d *directScanner) promptArray(v jsontext.Value) error {
 				return err
 			}
 			d.input(n * 4)
+			d.promptBytes(n * 4)
 			d.prompts++
 		default:
 			return fmt.Errorf("prompt has an element of the wrong type")
@@ -550,6 +595,7 @@ func (d *directScanner) promptArray(v jsontext.Value) error {
 	}
 	if first == '0' {
 		d.input(tokens * 4)
+		d.promptBytes(tokens * 4)
 		d.prompts = 1
 	}
 	return nil

@@ -3305,6 +3305,8 @@ export interface components {
             group_id?: components["schemas"]["Uuid"];
             upstream_name: string;
             model_id: components["schemas"]["Uuid"];
+            /** @description Call formats the name serves beyond the adapter's own, such as `completions` for an OpenAI-type new-api endpoint whose model accepts the legacy API. Omitted: leave an existing declaration as it is. An empty array clears it. The projection unions the declaration with the adapter's formats, so the next sync keeps it. */
+            formats?: components["schemas"]["ModelFormat"][];
             reason: components["schemas"]["Reason"];
         };
         ModelMapping: {
@@ -3318,6 +3320,8 @@ export interface components {
             group_id?: components["schemas"]["Uuid"];
             upstream_name: string;
             model_id: components["schemas"]["Uuid"];
+            /** @description The call formats this alias declares beyond the adapter's; absent when it declares none. */
+            formats?: components["schemas"]["ModelFormat"][];
         };
         AuthorSlug: string;
         /** @description `<author>/<model>`, with optional `:free` and `@<version>` when the vendor gives one; lower case, as the catalog stores it. */

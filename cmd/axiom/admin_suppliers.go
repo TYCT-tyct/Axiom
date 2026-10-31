@@ -519,14 +519,29 @@ func (a adminAPI) MapSupplierModel(ctx context.Context, request adminapi.MapSupp
 		}
 		group = &id
 	}
+	var formats *[]string
+	if b.Formats != nil {
+		declared := make([]string, len(*b.Formats))
+		for i, f := range *b.Formats {
+			declared[i] = string(f)
+		}
+		formats = &declared
+	}
 	mapped, replayed, err := idempotently(ctx, a.db, "mapSupplierModel", request.Params.IdempotencyKey, []any{request.SupplierId, b},
 		func(tx pg.Tx) (adminapi.ModelMapping, error) {
 			// Checked by the request that makes the change only: a model retired since is no reason to refuse its retry.
 			if err := mappableModel(ctx, tx, model); err != nil {
 				return adminapi.ModelMapping{}, err
 			}
-			m, err := a.suppliers.MapModel(ctx, tx, actor(ctx), supplier, group, b.UpstreamName, model, b.Rev, b.Reason)
+			m, err := a.suppliers.MapModel(ctx, tx, actor(ctx), supplier, group, b.UpstreamName, model, formats, b.Rev, b.Reason)
 			body := adminapi.ModelMapping{Id: m.ID.String(), SupplierId: m.Supplier.String(), UpstreamName: m.UpstreamName, ModelId: m.Model.String(), Revision: &m.Revision}
+			if len(m.Formats) > 0 {
+				declared := make([]adminapi.ModelFormat, len(m.Formats))
+				for i, f := range m.Formats {
+					declared[i] = adminapi.ModelFormat(f)
+				}
+				body.Formats = &declared
+			}
 			if m.Group != nil {
 				groupID := m.Group.String()
 				body.GroupId = &groupID

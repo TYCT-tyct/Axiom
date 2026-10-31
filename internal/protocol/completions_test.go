@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -50,7 +51,8 @@ func TestCompletionsInspect(t *testing.T) {
 		name                            string
 		body                            string
 		text, maxInput, choices, maxOut int64
-		stream                          bool
+		stream, capSet                  bool
+		promptBytes                     []int64
 		err                             string
 	}{
 		{name: "string", body: `{"model":"m","prompt":"Say hi"}`, text: 6, maxInput: 6, choices: 1},
@@ -58,10 +60,22 @@ func TestCompletionsInspect(t *testing.T) {
 		{name: "strings with n", body: `{"model":"m","prompt":["a","bc"],"n":3}`, text: 3, maxInput: 2, choices: 6},
 		{name: "tokens", body: `{"model":"m","prompt":[1,2,3]}`, text: 12, maxInput: 12, choices: 1},
 		{name: "token arrays", body: `{"model":"m","prompt":[[1,2],[3,4,5]],"n":2}`, text: 20, maxInput: 12, choices: 4},
-		{name: "best_of", body: `{"model":"m","prompt":["a","b"],"n":2,"best_of":5}`, text: 2, maxInput: 1, choices: 10},
+		{name: "best_of one", body: `{"model":"m","prompt":["a","b"],"n":2,"best_of":1}`, text: 2, maxInput: 1, choices: 4},
+		{name: "best_of", body: `{"model":"m","prompt":["a","b"],"n":2,"best_of":5}`, err: "best_of above 1 cannot be streamed"},
 		{name: "escapes", body: `{"model":"m","prompt":"a\nb"}`, text: 3, maxInput: 3, choices: 1},
 		{name: "stream", body: `{"model":"m","prompt":"x","stream":true}`, text: 1, maxInput: 1, choices: 1, stream: true},
-		{name: "max_tokens", body: `{"model":"m","prompt":"x","max_tokens":5}`, text: 1, maxInput: 1, choices: 1, maxOut: 5},
+		{name: "max_tokens", body: `{"model":"m","prompt":"x","max_tokens":5}`, text: 1, maxInput: 1, choices: 1, maxOut: 5, capSet: true},
+		{name: "max_tokens zero", body: `{"model":"m","prompt":"x","max_tokens":0}`, text: 1, maxInput: 1, choices: 1, capSet: true},
+		{name: "max_tokens null", body: `{"model":"m","prompt":"x","max_tokens":null}`, text: 1, maxInput: 1, choices: 1},
+		{name: "suffix", body: `{"model":"m","prompt":["a","bc"],"suffix":"XY"}`, text: 7, maxInput: 4, choices: 2},
+		{
+			name: "suffix on token arrays", body: `{"model":"m","prompt":[[1],[2,3]],"suffix":"XY"}`, text: 16,
+			maxInput: 10, choices: 2,
+		},
+		{
+			name: "echo", body: `{"model":"m","prompt":["a","bc"],"n":2,"echo":true}`, text: 3, maxInput: 2,
+			choices: 4, promptBytes: []int64{1, 2},
+		},
 		{name: "n zero", body: `{"model":"m","prompt":"x","n":0}`, text: 1, maxInput: 1, choices: 1},
 		{name: "model missing", body: `{"prompt":"x"}`, err: "model is missing"},
 		{name: "prompt missing", body: `{"model":"m"}`, err: "prompt is missing"},
@@ -88,9 +102,10 @@ func TestCompletionsInspect(t *testing.T) {
 				t.Fatal(err)
 			}
 			if r.Format != protocol.Completions || r.Model != "m" || r.TextBytes != c.text || r.MaxInputBytes != c.maxInput ||
-				r.Choices != c.choices || r.MaxOutput != c.maxOut || r.Stream != c.stream {
-				t.Errorf("request %+v, want text %d, largest %d, choices %d, cap %d, stream %v",
-					r, c.text, c.maxInput, c.choices, c.maxOut, c.stream)
+				r.Choices != c.choices || r.MaxOutput != c.maxOut || r.MaxOutputSet != c.capSet || r.Stream != c.stream ||
+				!slices.Equal(r.PromptBytes, c.promptBytes) {
+				t.Errorf("request %+v, want text %d, largest %d, choices %d, cap %d/%v, stream %v, echo %v",
+					r, c.text, c.maxInput, c.choices, c.maxOut, c.capSet, c.stream, c.promptBytes)
 			}
 			if r.InputItems != 1<<catalog.ItemInput || r.ServiceTiers != 1<<catalog.ServiceTierStandard {
 				t.Errorf("items %b, tiers %b", r.InputItems, r.ServiceTiers)
@@ -262,6 +277,55 @@ func completionChunks(t *testing.T, out []byte) []map[string]any {
 		chunks = append(chunks, m)
 	}
 	return chunks
+}
+
+// TestCompletionsEchoIsNotOutput: echo repeats the prompt at the start of every choice, and the output estimate counts
+// only what the model generated. The missing-usage and broken-stream cases matter most: there the estimate is all
+// billing has, so counting the echoed prompt would charge output that was never produced.
+func TestCompletionsEchoIsNotOutput(t *testing.T) {
+	chunk := func(index int, text, finish string) string {
+		return fmt.Sprintf(`data: {"id":"cmpl-1","object":"text_completion","created":1,"model":"m",`+
+			`"choices":[{"index":%d,"text":%q,"finish_reason":%s}]}`+"\n\n", index, text, finish)
+	}
+	stream := chunk(0, "echo", "null") + chunk(1, "abc", "null") + chunk(0, "gen", `"length"`) +
+		chunk(1, "xy", `"length"`) + "data: [DONE]\n\n"
+	o := options
+	o.Echo, o.EchoChoices = []int64{4, 3}, 1
+	got := relayWith(t, protocol.Completions, protocol.Completions, strings.NewReader(stream), protocol.UsageContext{},
+		protocol.NewMemory(0), o, completionSettled)
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if n := got.r.Progress().ContentBytes; n != 5 {
+		t.Errorf("content bytes %d, want the 5 generated (the echoed 7 are not output)", n)
+	}
+	if !bytes.Contains(got.out, []byte(`"text":"echo"`)) || !bytes.Contains(got.out, []byte(`"text":"abc"`)) {
+		t.Errorf("the echo was not passed on:\n%s", got.out)
+	}
+
+	// Two choices per prompt: a choice's index counts choices, so index 2 is the first choice of the second prompt.
+	pair := chunk(0, "ab", "null") + chunk(2, "c", "null") + chunk(0, "de", `"length"`) +
+		chunk(2, "f", `"length"`) + "data: [DONE]\n\n"
+	p := options
+	p.Echo, p.EchoChoices = []int64{2, 1}, 2
+	paired := relayWith(t, protocol.Completions, protocol.Completions, strings.NewReader(pair), protocol.UsageContext{},
+		protocol.NewMemory(0), p, completionSettled)
+	if paired.err != nil {
+		t.Fatal(paired.err)
+	}
+	if n := paired.r.Progress().ContentBytes; n != 3 {
+		t.Errorf("content bytes %d, want the 3 generated across two choices per prompt", n)
+	}
+
+	broken := chunk(0, "echo", "null") + `data: {"choices":[{"index":0,"text":"gen"`
+	broke := relayWith(t, protocol.Completions, protocol.Completions, strings.NewReader(broken), protocol.UsageContext{},
+		protocol.NewMemory(0), o, completionSettled)
+	if !errors.Is(broke.err, protocol.ErrUpstream) {
+		t.Fatalf("a broken stream: %v", broke.err)
+	}
+	if n := broke.r.Progress().ContentBytes; n != 0 {
+		t.Errorf("content bytes %d after a break that generated nothing, want 0", n)
+	}
 }
 
 // TestCompletionsUsageEnding: the upstream's usage is taken from the ending chunk and the client gets the relay's own

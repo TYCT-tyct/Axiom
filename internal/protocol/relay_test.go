@@ -73,7 +73,14 @@ func relayTo(t testing.TB, client, upstream protocol.Format, src io.Reader, ctx 
 	mem *protocol.Memory, settle func(protocol.Usage) protocol.Final,
 ) relayed {
 	t.Helper()
-	o := options
+	return relayWith(t, client, upstream, src, ctx, mem, options, settle)
+}
+
+// relayWith is relayTo with the caller's relay options, for a test of an option's metering.
+func relayWith(t testing.TB, client, upstream protocol.Format, src io.Reader, ctx protocol.UsageContext,
+	mem *protocol.Memory, o protocol.RelayOptions, settle func(protocol.Usage) protocol.Final,
+) relayed {
+	t.Helper()
 	o.Memory = mem
 	res := relayed{r: protocol.NewRelay(client, upstream, src, ctx, o)}
 	for {

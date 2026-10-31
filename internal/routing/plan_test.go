@@ -599,6 +599,61 @@ func TestEntryDirectFormats(t *testing.T) {
 	}
 }
 
+// TestCompletionsNeverSegment: a completion is reserved in full even when segmentation is configured and the call
+// would qualify: every prompt and every choice generate, and the batch's output bound is promised whole
+// (docs/domains/billing.md「决策与理由」).
+func TestCompletionsNeverSegment(t *testing.T) {
+	t.Parallel()
+	e := endpoint(t, 1, func(e *routing.Endpoint) {
+		e.Native, e.Served = routing.Of(protocol.Completions), routing.Of(protocol.Completions)
+	})
+	in := input()
+	in.Req = &protocol.Request{
+		Format: protocol.Completions, Model: "m", Choices: 2, TextBytes: 10, MaxInputBytes: 5,
+		MaxOutput: 4096, MaxOutputSet: true, Stream: true, ServiceTiers: 1 << catalog.ServiceTierStandard,
+	}
+	in.NativeOnly = true
+	h := newHarness(t, routing.Config{Segments: billing.Segments{Output: 512, Overshoot: time.Second}}, openPreset(), e)
+	entry := h.plan(in).Entries[0]
+	if entry.Segmentable {
+		t.Error("a completion entry is segmentable: its output would be reserved one segment at a time")
+	}
+	if entry.MaxOutput != 4096 {
+		t.Errorf("output cap %d, want the request's 4096 for all %d choices", entry.MaxOutput, in.Req.Choices)
+	}
+}
+
+// TestCompletionsExplicitZeroCap: legacy completions' max_tokens 0 is a request for no output (the prompt's logprobs
+// with echo), not a missing cap: routing must not replace it with the endpoint's default and reserve output that cannot
+// be generated. Omitting the member still takes the default.
+func TestCompletionsExplicitZeroCap(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		set     bool
+		wantCap int64
+	}{
+		{name: "explicit zero", set: true, wantCap: 0},
+		{name: "unset", set: false, wantCap: 8192},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := endpoint(t, 1, func(e *routing.Endpoint) {
+				e.Native, e.Served = routing.Of(protocol.Completions), routing.Of(protocol.Completions)
+			})
+			in := input()
+			in.Req = &protocol.Request{
+				Format: protocol.Completions, Model: "m", Choices: 1, TextBytes: 10, MaxInputBytes: 10,
+				MaxOutput: 0, MaxOutputSet: tc.set, Stream: true, ServiceTiers: 1 << catalog.ServiceTierStandard,
+			}
+			in.NativeOnly = true
+			entry := newHarness(t, routing.Config{}, openPreset(), e).plan(in).Entries[0]
+			if entry.MaxOutput != tc.wantCap || entry.Target.MaxOutput != tc.wantCap {
+				t.Errorf("entry cap %d, target cap %d, want %d", entry.MaxOutput, entry.Target.MaxOutput, tc.wantCap)
+			}
+		})
+	}
+}
+
 // TestCompletionsDemandIsABatch: the prompt array is one price banded at the total of its prompts, whose longest takes
 // the context check, so billing reads them apart.
 func TestCompletionsDemandIsABatch(t *testing.T) {

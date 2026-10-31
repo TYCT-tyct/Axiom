@@ -5963,6 +5963,13 @@ components:
           allOf: [{$ref: "#/components/schemas/Uuid"}]
         upstream_name: {type: string, minLength: 1, maxLength: 200}
         model_id: {$ref: "#/components/schemas/Uuid"}
+        formats:
+          type: array
+          items: {$ref: "#/components/schemas/ModelFormat"}
+          description: >-
+            Call formats the name serves beyond the adapter's own, such as `completions` for an OpenAI-type new-api
+            endpoint whose model accepts the legacy API. Omitted: leave an existing declaration as it is. An empty array
+            clears it. The projection unions the declaration with the adapter's formats, so the next sync keeps it.
         reason: {$ref: "#/components/schemas/Reason"}
     ModelMapping:
       type: object
@@ -5978,6 +5985,10 @@ components:
         group_id: {$ref: "#/components/schemas/Uuid"}
         upstream_name: {type: string}
         model_id: {$ref: "#/components/schemas/Uuid"}
+        formats:
+          type: array
+          items: {$ref: "#/components/schemas/ModelFormat"}
+          description: The call formats this alias declares beyond the adapter's; absent when it declares none.
     AuthorSlug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,39}$'}
     ModelSlug:
       type: string

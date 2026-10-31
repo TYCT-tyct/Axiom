@@ -466,11 +466,13 @@ type Mapping struct {
 	UpstreamName string
 	Model        uuid.UUID
 	Revision     int64
+	Formats      []string // the call formats the alias declares beyond the adapter's, canonical names
 }
 
-// MapModel creates an alias when rev is nil, or corrects a group alias at the revision the caller read.
-// The caller checks the catalog model; the supplier lock serializes revisions and their audit entries.
-func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, group *uuid.UUID, name string, model uuid.UUID, rev *int64, reason string) (Mapping, error) {
+// MapModel creates an alias when rev is nil, or corrects a group alias at the revision the caller read. formats declares
+// call formats beyond the adapter's; nil leaves an existing declaration alone, an empty list clears it. The caller
+// checks the catalog model; the supplier lock serializes revisions and their audit entries.
+func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, group *uuid.UUID, name string, model uuid.UUID, formats *[]string, rev *int64, reason string) (Mapping, error) {
 	if _, err := a.locked(ctx, tx, supplier); err != nil {
 		return Mapping{}, err
 	}
@@ -487,13 +489,55 @@ func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, suppl
 	if err := checkMappingRevision(rows, group, rev); err != nil {
 		return Mapping{}, err
 	}
+	// Names are canonical and validated here, whatever the caller sent: an unknown format is a fault of the request,
+	// not something to store and let every later node trip over. Absent formats (nil) leave an existing declaration
+	// alone; an empty non-nil list clears it.
+	var declared []string
+	if formats != nil {
+		parsed, err := store.ParseFormats(*formats)
+		if err != nil {
+			if errors.Is(err, store.ErrUnsupportedFormat) {
+				return Mapping{}, ErrUnknownFormat
+			}
+			return Mapping{}, err
+		}
+		declared, err = store.FormatNames(parsed)
+		if err != nil {
+			return Mapping{}, err
+		}
+		if len(declared) == 0 {
+			declared = nil // the column holds either no declaration or at least one format
+		}
+	}
 	m := Mapping{Supplier: supplier, Group: group, UpstreamName: name, Model: model, Revision: 1}
 	detail := map[string]any{"upstream_name": name, "model": model.String()}
+	if group != nil {
+		detail["group"] = group.String()
+	}
 	action := "supplier_alias.create"
 	if len(rows) != 0 {
 		current := rows[0]
-		m.ID, m.Revision = current.ID, current.Revision
+		m.ID, m.Revision, m.Formats = current.ID, current.Revision, current.Formats
+		changed := false
+		if !slices.Equal(current.Formats, declared) && formats != nil {
+			// A declaration is capability configuration, not the model mapping: it changes without a revision, but it
+			// is still audited like one and raises the generation so every node reprojects it.
+			if err := q.UpdateAliasFormats(ctx, tx, store.UpdateAliasFormatsParams{ID: m.ID, Formats: declared}); err != nil {
+				return Mapping{}, fmt.Errorf("write the alias formats: %w", err)
+			}
+			detail["formats_from"], detail["formats_to"] = current.Formats, declared
+			m.Formats, changed = declared, true
+			if current.ModelID == model {
+				action = "supplier_alias.formats"
+			}
+		}
 		if current.ModelID == model {
+			if !changed {
+				return m, nil
+			}
+			if err := a.afterMapping(ctx, tx, q, actor, supplier, action, reason, detail, m); err != nil {
+				return Mapping{}, err
+			}
 			return m, nil
 		}
 		m.Revision++
@@ -504,22 +548,37 @@ func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, suppl
 		detail["model_from"], detail["model_to"] = current.ModelID.String(), model.String()
 		action = "supplier_alias.revise"
 	} else {
-		m.ID, err = q.InsertAlias(ctx, tx, store.InsertAliasParams{SupplierID: supplier, SupplierGroupID: group, UpstreamName: name, ModelID: model})
+		var inserted []string
+		if formats != nil {
+			inserted = declared
+		}
+		m.ID, err = q.InsertAlias(ctx, tx, store.InsertAliasParams{SupplierID: supplier, SupplierGroupID: group, UpstreamName: name, ModelID: model, Formats: inserted})
+		m.Formats = inserted
 	}
 	if err != nil {
 		return Mapping{}, fmt.Errorf("write the alias: %w", err)
 	}
 	detail["alias"], detail["revision"] = m.ID.String(), m.Revision
-	if group != nil {
-		detail["group"] = group.String()
+	if formats != nil {
+		detail["formats"] = declared
 	}
-	if err := q.BumpConfigGen(ctx, tx, supplier); err != nil {
-		return Mapping{}, fmt.Errorf("raise the generation: %w", err)
-	}
-	if err := a.record(ctx, tx, actor, action, supplier, reason, detail); err != nil {
+	if err := a.afterMapping(ctx, tx, q, actor, supplier, action, reason, detail, m); err != nil {
 		return Mapping{}, err
 	}
 	return m, nil
+}
+
+// afterMapping raises the generation and records an alias change. The formats-only path joins here so it shares the
+// audit and idempotency with creates and revisions.
+func (a *Admin) afterMapping(ctx context.Context, tx pg.Tx, q *store.Queries, actor audit.Actor, supplier uuid.UUID, action, reason string, detail map[string]any, m Mapping) error {
+	if err := q.BumpConfigGen(ctx, tx, supplier); err != nil {
+		return err
+	}
+	detail["alias"], detail["revision"] = m.ID.String(), m.Revision
+	if err := a.record(ctx, tx, actor, action, supplier, reason, detail); err != nil {
+		return err
+	}
+	return nil
 }
 
 // checkMappingRevision runs under the supplier lock, so two corrections of one revision cannot both commit.

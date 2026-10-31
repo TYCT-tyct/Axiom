@@ -206,8 +206,11 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	// gateway reads: the format the endpoint is called in, not the client's, since a converted call is metered where it
 	// is made. A model without the ability has no reasoning to miss.
 	reasoning := c.Caps.Has(protocol.Reasoning)
-	segmentable := !n.in.NoSegments && c.Streams && c.Cancels && (!reasoning || c.ReasoningVisible.Has(format)) &&
-		!n.req.HidesReasoning && c.OutputSpeed > 0 && r.cfg.Segments.Output > 0 && out > r.cfg.Segments.Output+allowance
+	// A completion request is reserved in full: its n choices and every prompt generate at once, and a first segment
+	// would reserve a fraction of an amount the documentation promises whole (docs/domains/billing.md「决策与理由」).
+	segmentable := !n.in.NoSegments && n.req.Format != protocol.Completions && c.Streams && c.Cancels &&
+		(!reasoning || c.ReasoningVisible.Has(format)) && !n.req.HidesReasoning && c.OutputSpeed > 0 &&
+		r.cfg.Segments.Output > 0 && out > r.cfg.Segments.Output+allowance
 	target := c.Target
 	target.Format = format
 	target.Streams = c.Streams // the request sent asks for a stream, which the gateway relays or aggregates
@@ -380,16 +383,19 @@ func (c *candidate) outputLimit(req *protocol.Request, tokens int64) (limit int6
 		return 0, tokens <= c.Context
 	}
 	limit = c.MaxOutput
-	if req.MaxOutput > 0 && (limit == 0 || req.MaxOutput < limit) {
+	// A request that named its cap sets it even when it is 0: legacy completions' max_tokens 0 asks for the prompt's
+	// logprobs only, and replacing it with the endpoint's default would reserve output nobody can generate.
+	set := req.MaxOutputSet || req.MaxOutput > 0
+	if set && (limit == 0 || req.MaxOutput < limit) {
 		limit = req.MaxOutput
 	}
 	room := c.Context - tokens
 	switch {
 	case room <= 0:
 		return 0, false
-	case req.MaxOutput > 0 && limit > room:
+	case set && limit > room:
 		return 0, false
-	case limit == 0 || limit > room:
+	case !set && limit == 0, limit > room:
 		limit = room
 	}
 	return limit, true

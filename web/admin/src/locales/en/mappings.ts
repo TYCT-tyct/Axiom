@@ -13,8 +13,11 @@ export default {
     scope: "Scope",
     scopeGroup: "This group only ({{group}})",
     scopeSupplier: "The whole supplier",
+    completions: "This model also serves the legacy completions API",
+    completionsHint:
+      "Declares the completions format, which the supplier's adapter cannot report. Leave it off unless the model accepts /v1/completions.",
     modelMissing: "Choose a model that is in the catalog, from the suggestions.",
     done: "Mapped “{{name}}”.",
-    wait: "The endpoint it makes waits for the authenticity check before it takes traffic. A mapping is never changed; a wrong one is corrected by a new mapping in a narrower scope.",
+    wait: "The endpoint it makes waits for the authenticity check before it takes traffic. A mapping's model is never changed; a wrong one is corrected by a new mapping in a narrower scope. The formats declaration can be changed later through the API.",
   },
 };
