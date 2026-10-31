@@ -20,18 +20,24 @@ import (
 // Format is a call format.
 type Format uint8
 
-// The call formats.
+// The call formats. A format's number is stored in suppliers' state and in a routing bit set, so one is appended, never
+// inserted (docs/domains/gateway.md「决策与理由」).
 const (
-	Messages   Format = iota // Anthropic Messages
-	Responses                // OpenAI Responses
-	Chat                     // OpenAI Chat Completions
-	Embeddings               // OpenAI's embeddings
-	Rerank                   // OpenRouter's rerank
+	Messages    Format = iota // Anthropic Messages
+	Responses                 // OpenAI Responses
+	Chat                      // OpenAI Chat Completions
+	Embeddings                // OpenAI's embeddings
+	Rerank                    // OpenRouter's rerank
+	Completions               // OpenAI's legacy text completions
 )
 
 // Direct reports whether a format answers one whole JSON body that is not a generation, with no stream to relay and
 // no content to meter: embeddings and rerank.
 func (f Format) Direct() bool { return f == Embeddings || f == Rerank }
+
+// Convertible reports whether the format converts to or from another: the three chat formats. A direct call and a
+// legacy completion are native only.
+func (f Format) Convertible() bool { return f <= Chat }
 
 // Capabilities is a set of features a request uses that an endpoint may lack. Routing keeps only the endpoints that
 // have all of them (docs/domains/routing.md「一个请求的路由步骤」).
@@ -143,7 +149,7 @@ func bodyFault(err error) string {
 //
 //nolint:cyclop,gocognit // one dispatch over every format, each branch one reader
 func Inspect(f Format, body []byte) (Request, error) {
-	if f.Direct() {
+	if f == Completions || f.Direct() {
 		return inspectNew(f, body)
 	}
 	g := &grammars[f]

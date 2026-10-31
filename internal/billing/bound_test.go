@@ -8,7 +8,8 @@ import (
 )
 
 // TestInputBound: the longest prompt a quote prices is the text, the images and the files at their most, held to the
-// context; a request that can sample again, by tool use, can reread the whole context.
+// context; a request that can sample again, by tool use, can reread the whole context. A batch is priced at its total,
+// which may pass any one prompt's context (legacy completions).
 func TestInputBound(t *testing.T) {
 	t.Parallel()
 	model := Model{ContextLength: 100000, ImageTokens: 1000, PageTokens: 100, FilePages: 50, MaxUses: map[catalog.Item]int64{catalog.ItemWebSearch: 3}}
@@ -23,6 +24,8 @@ func TestInputBound(t *testing.T) {
 		{"held to the context", Demand{TextBytes: 90000, Images: 50}, 100000, 100000},
 		{"a search: later samplings reread the context", Demand{TextBytes: 4000, ServerTools: []ServerTool{{Item: catalog.ItemWebSearch, MaxUses: 2}}}, 4000, 100000},
 		{"a tool with the model's default uses", Demand{TextBytes: 4000, ServerTools: []ServerTool{{Item: catalog.ItemWebSearch}}}, 4000, 100000},
+		{"a batch of prompts", Demand{TextBytes: 7000, InputBytes: 4000}, 7000, 7000},
+		{"a batch past any one prompt's context, priced at its total", Demand{TextBytes: 150000, InputBytes: 60000}, 150000, 150000},
 	}
 	for _, c := range cases {
 		if first, longest := InputBound(c.demand, model); first != c.first || longest != c.longest {
@@ -33,7 +36,8 @@ func TestInputBound(t *testing.T) {
 
 // TestInputEstimate: what a charge takes as the input when the upstream reported none is the text at 4 bytes a token
 // and each image and file at 1600 and 4096 tokens, or at the model's bound when that is smaller, held to the context;
-// the reservation's bound stays the context for an image or a file of unknown size.
+// the reservation's bound stays the context for an image or a file of unknown size. A batch's estimate is its total:
+// each prompt is held to the context when it is routed, not here.
 func TestInputEstimate(t *testing.T) {
 	t.Parallel()
 	unknown := Model{ContextLength: 200000}
@@ -54,6 +58,7 @@ func TestInputEstimate(t *testing.T) {
 		{"an image bound above the estimate", Demand{Images: 2}, Model{ContextLength: 200000, ImageTokens: 5000}, 3200, 10000},
 		{"a file bound below the estimate", Demand{Documents: 1}, Model{ContextLength: 200000, PageTokens: 100, FilePages: 2}, 200, 200},
 		{"a file bound above the estimate", Demand{Documents: 1}, Model{ContextLength: 200000, PageTokens: 3000, FilePages: 100}, 4096, 200000},
+		{"a batch of prompts, held to no single context", Demand{TextBytes: 150000, InputBytes: 60000}, Model{ContextLength: 100000}, 37500, 150000},
 	}
 	for _, c := range cases {
 		first, _ := InputBound(c.demand, c.model)

@@ -169,7 +169,8 @@ func readArchiveSettings(env *config.Env, s *nodeSettings) error {
 	return err
 }
 
-// readDirectFormats reads the gate on writing direct formats. It is off until every node can read them.
+// readDirectFormats reads the gate on writing the formats added after P18: the direct formats and legacy completions.
+// It is off until every node can read them.
 func readDirectFormats(env *config.Env, s *nodeSettings) error {
 	switch direct := env.String("AXIOM_DIRECT_FORMATS", "off"); direct {
 	case "on":

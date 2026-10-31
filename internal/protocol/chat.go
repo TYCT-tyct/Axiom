@@ -66,7 +66,7 @@ func newChatStreamReader(u UsageContext, o RelayOptions, charge func(int) error)
 }
 
 var (
-	chatFields = map[string]func(*chatStream) error{
+	chatFields = map[string]func(*chatStream) error{ //nolint:dupl // legacy completions' reader mirrors these members
 		"id":      func(s *chatStream) error { return s.replace(s.eventReader.id) },
 		"model":   func(s *chatStream) error { return s.replace(s.eventReader.model) },
 		"created": (*chatStream).createdAt,

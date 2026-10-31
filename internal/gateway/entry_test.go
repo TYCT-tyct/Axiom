@@ -287,11 +287,12 @@ func TestRequestsThatAreNotServed(t *testing.T) {
 		header     [][2]string
 		named      string
 	}{
-		"a continued response": {"/v1/responses", `{"model":"acme/beta","input":"x","previous_response_id":"resp_1"}`, nil, "previous_response_id"},
-		"a protocol upgrade":   {"/v1/messages", messageBody("acme/beta"), [][2]string{{"Upgrade", "websocket"}}, "upgrade"},
-		"not JSON":             {"/v1/chat/completions", `{"model":`, nil, ""},
-		"no model":             {"/v1/messages", `{"max_tokens":1}`, nil, "model"},
-		"too many alternates":  {"/v1/chat/completions", `{"model":"acme/beta","models":["1","2","3","4","5","6","7","8","9"]}`, nil, "models"},
+		"a continued response":   {"/v1/responses", `{"model":"acme/beta","input":"x","previous_response_id":"resp_1"}`, nil, "previous_response_id"},
+		"a protocol upgrade":     {"/v1/messages", messageBody("acme/beta"), [][2]string{{"Upgrade", "websocket"}}, "upgrade"},
+		"not JSON":               {"/v1/chat/completions", `{"model":`, nil, ""},
+		"no model":               {"/v1/messages", `{"max_tokens":1}`, nil, "model"},
+		"no model, a completion": {"/v1/completions", `{"prompt":"x"}`, nil, "model"},
+		"too many alternates":    {"/v1/chat/completions", `{"model":"acme/beta","models":["1","2","3","4","5","6","7","8","9"]}`, nil, "models"},
 		"a file reference without a pin": {"/v1/responses", `{"model":"acme/beta","input":[{"type":"message","role":"user",` +
 			`"content":[{"type":"input_file","file_id":"file_1"}]}]}`, nil, "file_id"},
 	} {

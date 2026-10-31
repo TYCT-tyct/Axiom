@@ -250,6 +250,10 @@ func newAggregator(f Format, draw func(int) error) aggregator {
 		a.init(draw)
 		return a
 	case Chat:
+	case Completions:
+		a := &completionsAggregate{at: map[int64]int{}}
+		a.init(draw)
+		return a
 	}
 	a := &chatAggregate{at: map[int64]int{}}
 	a.init(draw)

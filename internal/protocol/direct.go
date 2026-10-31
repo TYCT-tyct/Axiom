@@ -15,9 +15,10 @@ import (
 
 // The direct formats answer one JSON body: embeddings and rerank. Their request is read and rewritten member by member,
 // without the grammar shared by the three chat formats, which describes content parts and tools that neither has
-// (README.md「直接调用的格式」).
+// (README.md「直接调用的格式」). Legacy completions generate text like Chat and are read by their own stream reader
+// (completions.go), but their request has no message parts either, so they share this reader.
 
-// inspectNew reads a request of a direct format.
+// inspectNew reads a request of a direct format, or of legacy completions.
 func inspectNew(f Format, body []byte) (Request, error) {
 	if err := jsonx.Validate(body); err != nil {
 		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
@@ -38,7 +39,7 @@ func inspectNew(f Format, body []byte) (Request, error) {
 
 // validate checks the members each direct format requires and fills the counts its request implies.
 func (d *directScanner) validate() error {
-	switch d.r.Format { //nolint:exhaustive // only the two direct formats reach the scanner
+	switch d.r.Format { //nolint:exhaustive // only the formats inspected here can reach the scanner
 	case Embeddings:
 		if !d.hasInput {
 			return fmt.Errorf("%w: input is missing", ErrInvalid)
@@ -54,6 +55,15 @@ func (d *directScanner) validate() error {
 		// reservation covers one; the request does not need the model's web_search ability, which is for tools.
 		d.r.WebSearches = 1
 		d.r.MaxInputBytes = d.queryBytes + d.maxDoc
+	case Completions:
+		if !d.hasPrompt {
+			return fmt.Errorf("%w: prompt is missing", ErrInvalid)
+		}
+		choices := max(1, d.n, d.bestOf) // best_of generates candidates it does not all return, and each is charged
+		if d.prompts > 1 && choices > (1<<62)/d.prompts {
+			return fmt.Errorf("%w: prompt and n ask for too many completions", ErrInvalid)
+		}
+		d.r.Choices = choices * max(1, d.prompts)
 	}
 	return nil
 }
@@ -62,9 +72,10 @@ func (d *directScanner) validate() error {
 // skipping a member only consumes it: its depth and syntax are already known to be jsonx's.
 type directScanner struct {
 	reader
-	r                           Request
-	queryBytes, maxDoc          int64 // rerank: the query's bytes and the largest document's
-	hasInput, hasQuery, hasDocs bool
+	r                                      Request
+	prompts, n, bestOf                     int64 // legacy completions: prompts, the n each returns, the best_of generated
+	queryBytes, maxDoc                     int64 // rerank: the query's bytes and the largest document's
+	hasInput, hasQuery, hasDocs, hasPrompt bool
 }
 
 func (d *directScanner) top() error {
@@ -80,11 +91,13 @@ func (d *directScanner) top() error {
 			return err
 		}
 		var err error
-		switch d.r.Format { //nolint:exhaustive // only the two direct formats reach the scanner
+		switch d.r.Format { //nolint:exhaustive // only the formats inspected here can reach the scanner
 		case Embeddings:
 			err = d.embeddingsMember()
 		case Rerank:
 			err = d.rerankMember()
+		case Completions:
+			err = d.completionsMember()
 		}
 		if err != nil {
 			return err
@@ -165,6 +178,42 @@ func (d *directScanner) rerankMember() error {
 		return err
 	case "stream":
 		return d.noStream()
+	default:
+		return d.skip()
+	}
+}
+
+func (d *directScanner) completionsMember() error {
+	switch string(d.name) {
+	case "model":
+		return d.model()
+	case "user":
+		return d.skip()
+	case "provider":
+		return d.provider()
+	case "session_id":
+		return d.skip()
+	case "prompt":
+		d.hasPrompt = true
+		return d.prompt()
+	case "max_tokens":
+		n, err := d.count()
+		d.r.MaxOutput = max(d.r.MaxOutput, n)
+		return err
+	case "n":
+		n, err := d.count()
+		d.n = n
+		return err
+	case "best_of":
+		n, err := d.count()
+		d.bestOf = n
+		return err
+	case "stream":
+		k, err := d.flag()
+		d.r.Stream = k == 't'
+		return err
+	case "prompt_cache_key", "safety_identifier":
+		return d.skip()
 	default:
 		return d.skip()
 	}
@@ -431,6 +480,81 @@ func (d *directScanner) documents() error {
 	return nil
 }
 
+// prompt reads legacy completions' prompt: a string, a token array, an array of strings, or an array of token arrays.
+// A token array is one prompt, not one prompt per token; each prompt's length is kept for the context check.
+//
+//nolint:exhaustive // the default rejects every other JSON kind with the client's error
+func (d *directScanner) prompt() error {
+	switch d.dec.PeekKind() {
+	case '"':
+		v, err := d.str()
+		if err == nil {
+			d.input(int64(len(v)))
+			d.prompts = 1
+		}
+		return err
+	case '[':
+		v, err := d.dec.ReadValue()
+		if err != nil {
+			return err
+		}
+		return d.promptArray(v)
+	default:
+		return fmt.Errorf("prompt is %s, want a string or an array", kindNameOf(d.dec.PeekKind()))
+	}
+}
+
+// promptArray distinguishes a token prompt, which is one prompt, from a list of prompts, each of which generates.
+//
+//nolint:cyclop,gocognit,exhaustive // token prompt, strings and token arrays are one dispatch
+func (d *directScanner) promptArray(v jsontext.Value) error {
+	var first jsontext.Kind
+	var tokens int64
+	seen := false
+	err := eachArray(v, func(kind jsontext.Kind, e jsontext.Value) error {
+		if !seen {
+			first, seen = kind, true
+		}
+		switch first {
+		case '0':
+			if kind != '0' {
+				return fmt.Errorf("prompt mixes tokens with other values")
+			}
+			tokens++
+		case '"':
+			if kind != '"' {
+				return fmt.Errorf("prompt mixes strings with other values")
+			}
+			d.input(unquotedLen(e))
+			d.prompts++
+		case '[':
+			if kind != '[' {
+				return fmt.Errorf("prompt mixes token arrays with other values")
+			}
+			n, err := tokenCount(e)
+			if err != nil {
+				return err
+			}
+			d.input(n * 4)
+			d.prompts++
+		default:
+			return fmt.Errorf("prompt has an element of the wrong type")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !seen {
+		return fmt.Errorf("prompt is an empty array")
+	}
+	if first == '0' {
+		d.input(tokens * 4)
+		d.prompts = 1
+	}
+	return nil
+}
+
 // eachArray reads an array's elements in order, without keeping them: a large input must not allocate a slice header
 // per element.
 func eachArray(v jsontext.Value, read func(jsontext.Kind, jsontext.Value) error) error {
@@ -516,6 +640,8 @@ func kindNameOf(k jsontext.Kind) string {
 //nolint:exhaustive // every unlisted format falls back to "the request"
 func (f Format) name() string {
 	switch f {
+	case Completions:
+		return "completions"
 	case Embeddings:
 		return "embeddings"
 	case Rerank:
@@ -525,7 +651,7 @@ func (f Format) name() string {
 }
 
 // directRewriteRules are the members a direct format's request rewrites: the model, the identifiers, and the members
-// that route rather than describe the call.
+// that route rather than describe the call. Legacy completions also ask for a stream, as Chat does.
 var directRewriteRules = map[Format]formatRules{
 	Embeddings: {
 		members: withRouting(map[string]rule{
@@ -540,6 +666,15 @@ var directRewriteRules = map[Format]formatRules{
 			"prompt_cache_key": (*rewriter).drop, "safety_identifier": (*rewriter).drop,
 		}),
 		identities: 1,
+	},
+	Completions: {
+		members: withRouting(map[string]rule{
+			"model": (*rewriter).model, "user": (*rewriter).identity, "prompt_cache_key": (*rewriter).identity,
+			"safety_identifier": (*rewriter).identity, "max_tokens": (*rewriter).completionsCap,
+			"stream": (*rewriter).stream, "stream_options": (*rewriter).streamOptions,
+		}),
+		add: (*rewriter).addCompletions, identities: 3,
+		room: len(addCap) + len(maxInt64) + len(addStreamOptions) + len(addStream),
 	},
 }
 

@@ -26,8 +26,12 @@ type Demand struct {
 	// has no output tokens to reserve, and its server-tool charges are flat per use, not a sampling of the model. Its
 	// batch is reserved, estimated and banded at its total, for every price alike: the upstream reports one usage for
 	// it, which the settlement bands as one prompt. The context holds each input instead, which routing checks.
-	Direct       bool
-	Compaction   bool // server-side compaction or context management is on
+	Direct     bool
+	Compaction bool // server-side compaction or context management is on
+	// InputBytes is the longest single input of a batch, and 0 for a request that is not one: legacy completions'
+	// prompt array is charged, estimated and banded at the sum of its inputs, but each prompt is held to the context
+	// on its own (docs/domains/gateway.md「决策与理由」).
+	InputBytes   int64
 	InputItems   catalog.ItemSet
 	ServiceTiers catalog.ServiceTierSet
 	// TextTokens is the request's text counted in the tokens of the model family's own tokenizer, when the caller
@@ -500,7 +504,7 @@ func InputEstimate(d Demand, m Model) int64 {
 	}
 	images := mul(d.Images, min(imageTokens(m), estimatedImageTokens))
 	files := mul(d.Documents, min(fileTokens(m), estimatedFileTokens))
-	if d.Direct {
+	if d.Direct || d.InputBytes > 0 {
 		return add(text, add(images, files)) // each input fits the context; the batch's total is what is charged
 	}
 	return min(m.ContextLength, add(text, add(images, files)))
@@ -510,7 +514,7 @@ func inputBound(d Demand, m Model, samplings int64) (first, longest int64) {
 	window := m.ContextLength
 	total := add(d.TextBytes, add(mul(d.Images, imageTokens(m)), mul(d.Documents, fileTokens(m))))
 	first = min(window, total)
-	if d.Direct {
+	if d.Direct || d.InputBytes > 0 {
 		// A batch is one charge for every input, and the one length every price of it is banded at: the settlement
 		// bands its reported total, which can pass any one input's context.
 		return total, total

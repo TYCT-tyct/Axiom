@@ -3227,9 +3227,9 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         /** @enum {string} */
-        ModelFormat: "messages" | "responses" | "chat" | "embeddings" | "rerank";
+        ModelFormat: "messages" | "responses" | "chat" | "embeddings" | "rerank" | "completions";
         /**
-         * @description The generation formats an endpoint test can exercise. Direct formats are listed on the endpoint but are not tested here yet.
+         * @description The generation formats an endpoint test can exercise. Direct formats and legacy completions are listed on the endpoint but are not tested here yet.
          * @enum {string}
          */
         TestFormat: "messages" | "responses" | "chat";

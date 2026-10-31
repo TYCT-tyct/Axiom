@@ -153,7 +153,7 @@ func appendCharged(dst []byte, f Format, c *charges) []byte {
 		dst = appendMessagesUsage(dst, c.usage, c.cost)
 	case Responses:
 		dst = appendOpenAIUsage(dst, responsesNames, c.usage, c.cost)
-	case Chat:
+	case Chat, Completions:
 		dst = appendOpenAIUsage(dst, chatNames, c.usage, c.cost)
 	case Embeddings:
 		dst = appendEmbeddingUsage(dst, c.usage, c.cost)

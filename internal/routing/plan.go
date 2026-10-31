@@ -134,7 +134,7 @@ func inputTokens(req *protocol.Request) int64 {
 func DemandOf(req *protocol.Request) billing.Demand {
 	d := billing.Demand{
 		TextBytes: req.TextBytes + req.SearchBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
-		Direct:     req.Format.Direct(),
+		Direct: req.Format.Direct(), InputBytes: req.MaxInputBytes,
 		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
 	}
 	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {
@@ -232,8 +232,8 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	if n.in.NativeOnly {
 		return f, c.Native.Has(f)
 	}
-	if f.Direct() {
-		// A direct call has no conversion: the endpoint must speak the client's format.
+	if !f.Convertible() {
+		// A direct call and a legacy completion have no conversion: the endpoint must speak the client's format.
 		return f, c.Native.Has(f)
 	}
 	if c.Native.Has(f) {

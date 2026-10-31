@@ -22,6 +22,7 @@ func TestStateKeepsFormatsByTheGate(t *testing.T) {
 				Models: []adapter.Model{
 					{UpstreamName: "embed", Formats: []protocol.Format{protocol.Embeddings}},
 					{UpstreamName: "mixed", Formats: []protocol.Format{protocol.Chat, protocol.Embeddings, protocol.Rerank}},
+					{UpstreamName: "legacy", Formats: []protocol.Format{protocol.Completions}},
 				},
 			}}}, nil
 		}
@@ -34,13 +35,16 @@ func TestStateKeepsFormatsByTheGate(t *testing.T) {
 		return out
 	}
 	chat, embeddings, rerank := int(protocol.Chat), int(protocol.Embeddings), int(protocol.Rerank)
+	completions := int(protocol.Completions)
 	m := healthy()
 	m.offer = listed(false)
 	st, clk := newStore(), &clock{t: t0}
 	open := Defaults()
 	open.DirectFormats = true
 	round(t, New(st, m, open, clk.now))
-	if got, want := formats(st.state.Groups[0]), map[string][]int{"embed": {embeddings}, "mixed": {chat, embeddings, rerank}}; !equalFormats(got, want) {
+	if got, want := formats(st.state.Groups[0]), map[string][]int{
+		"embed": {embeddings}, "mixed": {chat, embeddings, rerank}, "legacy": {completions},
+	}; !equalFormats(got, want) {
 		t.Fatalf("open gate keeps %v, want %v", got, want)
 	}
 	for _, unread := range []bool{true, false} {

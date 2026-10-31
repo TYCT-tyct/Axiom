@@ -134,27 +134,34 @@ func TestAggregateAllocs(t *testing.T) {
 			}
 		}
 	}
+	check := func(t *testing.T, name string, f protocol.Format, ten, twoHundred []byte) {
+		got := alloctest.Measure(t,
+			alloctest.Function{Name: "read/10", F: read(ten)},
+			alloctest.Function{Name: "aggregate/10", F: func() { drainAggregated(t, f, ten) }},
+			alloctest.Function{Name: "read/200", F: read(twoHundred)},
+			alloctest.Function{Name: "aggregate/200", F: func() { drainAggregated(t, f, twoHundred) }},
+		)
+		few := got["aggregate/10"].Count - got["read/10"].Count
+		more := got["aggregate/200"].Count - got["read/200"].Count
+		// 190 more events would add at least 190 allocations if each allocated. The pieces and the decoder's
+		// pooled buffers, made again after a collection, add a few.
+		if more-few > 30 {
+			t.Errorf("%s: aggregating allocates %v more than reading 10 events, %v more for 200", name, few, more)
+		}
+	}
 	for _, format := range formats {
 		for _, size := range []int{1 << 10, 16 << 10} {
 			t.Run(fmt.Sprintf("%s-%d", format.dir, size), func(t *testing.T) {
-				ten, twoHundred := aggregateDeltas(format.f, 10, size), aggregateDeltas(format.f, 200, size)
-				got := alloctest.Measure(t,
-					alloctest.Function{Name: "read/10", F: read(ten)},
-					alloctest.Function{Name: "aggregate/10", F: func() { drainAggregated(t, format.f, ten) }},
-					alloctest.Function{Name: "read/200", F: read(twoHundred)},
-					alloctest.Function{Name: "aggregate/200", F: func() { drainAggregated(t, format.f, twoHundred) }},
-				)
-				few := got["aggregate/10"].Count - got["read/10"].Count
-				more := got["aggregate/200"].Count - got["read/200"].Count
-				// 190 more events would add at least 190 allocations if each allocated. The pieces and the decoder's
-				// pooled buffers, made again after a collection, add a few.
-				if more-few > 30 {
-					t.Errorf("%s, %d-byte deltas: aggregating allocates %v more than reading 10 events, %v more for 200",
-						format.dir, size, few, more)
-				}
+				check(t, fmt.Sprintf("%s, %d-byte deltas", format.dir, size), format.f,
+					aggregateDeltas(format.f, 10, size), aggregateDeltas(format.f, 200, size))
 			})
 		}
 	}
+	// Legacy completions carry a logprobs token with every chunk, the member the aggregate appends rather than copies.
+	t.Run("completions", func(t *testing.T) {
+		check(t, "completions, 1 KiB tokens", protocol.Completions,
+			[]byte(completionsStreamOf(10, 1<<10)), []byte(completionsStreamOf(200, 1<<10)))
+	})
 }
 
 func BenchmarkAggregate(b *testing.B) {
@@ -170,6 +177,20 @@ func BenchmarkAggregate(b *testing.B) {
 					}
 				})
 			}
+		}
+	}
+	// Half the request's logprobs are tokens and half are top_logprobs keys of the same size, so a 128-chunk reply keeps
+	// its pieces under the 16 MiB cap.
+	for _, n := range []int{16, 128} {
+		for _, size := range []int{1 << 10, 16 << 10} {
+			stream := []byte(completionsStreamOf(n, size))
+			b.Run(fmt.Sprintf("completions/deltas=%d/size=%d", n, size), func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(len(stream)))
+				for b.Loop() {
+					drainAggregated(b, protocol.Completions, stream)
+				}
+			})
 		}
 	}
 }

@@ -170,9 +170,9 @@ func (h *Handler) planAdmission(it *admissionItem) error {
 	}
 	plan, wait, err := h.Models.plan(h.Router, routing.Input{
 		Admission: routingAdmission(it.admission, c), Req: &c.Request, Models: c.models, Auto: c.auto, Free: c.free, Override: c.over, Sticky: c.sticky,
-		// Compaction has no Chat counterpart; generation can use the protocol conversions. Direct formats have none
-		// either.
-		NativeOnly: c.Compact || c.Request.Format.Direct(),
+		// Compaction has no Chat counterpart; only the three chat formats convert. Direct formats and legacy
+		// completions have no counterpart either.
+		NativeOnly: c.Compact || !c.Request.Format.Convertible(),
 		// The compact call is answered whole, so nothing of it is metered: its reservation is made in full, and so is
 		// a direct call's, which answers one body (docs/domains/gateway.md「转发规则」).
 		NoSegments: c.Compact || c.Request.Format.Direct(),

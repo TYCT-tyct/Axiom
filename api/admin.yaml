@@ -5849,10 +5849,10 @@ components:
         reason: {$ref: "#/components/schemas/Reason"}
     ModelFormat:
       type: string
-      enum: [messages, responses, chat, embeddings, rerank]
+      enum: [messages, responses, chat, embeddings, rerank, completions]
     TestFormat:
       type: string
-      description: The generation formats an endpoint test can exercise. Direct formats are listed on the endpoint but are not tested here yet.
+      description: The generation formats an endpoint test can exercise. Direct formats and legacy completions are listed on the endpoint but are not tested here yet.
       enum: [messages, responses, chat]
     EndpointTestRequest:
       type: object

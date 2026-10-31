@@ -557,6 +557,8 @@ func TestEntryDirectFormats(t *testing.T) {
 	}{
 		{protocol.Embeddings, false, true},
 		{protocol.Rerank, false, true},
+		{protocol.Completions, true, true},
+		{protocol.Completions, false, false},
 		{protocol.Chat, true, true},
 		{protocol.Chat, false, false},
 	} {
@@ -582,15 +584,27 @@ func TestEntryDirectFormats(t *testing.T) {
 			t.Errorf("%v streaming %t: target %+v, segmentable %t", tc.format, tc.streams, entry.Target, entry.Segmentable)
 		}
 	}
-	// A chat endpoint does not serve a direct format: the client's format is not converted to it.
-	e := endpoint(t, 1, func(e *routing.Endpoint) {
-		e.Native, e.Served = routing.Of(protocol.Chat), routing.Of(protocol.Chat)
-	})
-	in := input()
-	in.Req.Format, in.NativeOnly = protocol.Embeddings, true
-	plan, _, _ := newHarness(t, routing.Config{}, openPreset(), e).r.Plan(in) //nolint:errcheck // no endpoint is the expected permanent result here
-	if len(plan.Entries) != 0 {
-		t.Errorf("embeddings on a chat endpoint: %d entries", len(plan.Entries))
+	// A chat endpoint does not serve a direct format or a legacy completion: neither is converted to it, whatever
+	// NativeOnly says.
+	for _, f := range []protocol.Format{protocol.Embeddings, protocol.Completions} {
+		e := endpoint(t, 1, func(e *routing.Endpoint) {
+			e.Native, e.Served = routing.Of(protocol.Chat), routing.Of(protocol.Chat)
+		})
+		in := input()
+		in.Req.Format, in.NativeOnly = f, f.Direct()
+		plan, _, _ := newHarness(t, routing.Config{}, openPreset(), e).r.Plan(in) //nolint:errcheck // no endpoint is the expected permanent result here
+		if len(plan.Entries) != 0 {
+			t.Errorf("%v on a chat endpoint: %d entries", f, len(plan.Entries))
+		}
+	}
+}
+
+// TestCompletionsDemandIsABatch: the prompt array is one price banded at the total of its prompts, whose longest takes
+// the context check, so billing reads them apart.
+func TestCompletionsDemandIsABatch(t *testing.T) {
+	d := routing.DemandOf(&protocol.Request{Format: protocol.Completions, TextBytes: 9000, MaxInputBytes: 4000, Choices: 6})
+	if d.TextBytes != 9000 || d.InputBytes != 4000 || d.Choices != 6 || d.Direct {
+		t.Errorf("demand %+v", d)
 	}
 }
 

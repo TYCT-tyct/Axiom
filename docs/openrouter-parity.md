@@ -23,7 +23,7 @@
 | `POST /api/v1/messages` | Anthropic Messages 格式 | api/anthropic-messages/create-a-message | 有：`gw/handler.go:66-68` | `na:router/relay-router.go:97` | `s2:internal/server/routes/gateway.go:192` | 无 |
 | Messages 的 `fallbacks` 参数（最多 3 项，只许 `model`，不能与非 null `models` 同用） | 映射到 `models` 路由 | docs/guides/routing/model-fallbacks | 有：`proto/presets.go` 读取到 `Request.Models`，由 gateway 交给同一冻结路线；Prepare 删除该成员 | 无 | 无 | 无 |
 | `POST /api/v1/messages/count_tokens` | OpenRouter 文档未列此路由 | （OpenAPI 路由表无） | 有：`gw/handler.go` 经 `gw/readonly.go:35` | `na:router/relay-router.go:96`（已注释掉） | `s2:internal/server/routes/gateway.go:203` | Axiom 比 OpenRouter 多，非缺口 |
-| `POST /api/v1/completions`（旧版补全） | OpenAPI 路由表没有该路径；Streaming 文档的措辞提到供应商设置“Serves `/completions`” | docs/api_reference/streaming；OpenAI《Create completion》 | 没有：P18 只上线 embeddings、rerank，`gw/handler.go` 不注册 `/completions` | `na:router/relay-router.go:102` | 无 | OpenRouter 不在 OpenAPI 列它，基线只能取 OpenAI 的旧接口；它是生成格式，要独立的流读取器、聚合器（含 `logprobs`）和内存预算，与直接格式不共用，单独设计后再做（`docs/domains/gateway.md` 决策与理由；未完成实现在分支 `wip/p18-legacy-completions`） |
+| `POST /api/v1/completions`（旧版补全） | OpenAPI 路由表没有该路径；Streaming 文档的措辞提到供应商设置“Serves `/completions`” | docs/api_reference/streaming；OpenAI《Create completion》 | 有：P18 按 OpenAI 旧接口原生提供，只路由到 `formats` 里写了 `completions` 的端点，不与 Chat 互转（`gw/handler.go`、`proto/completions.go`、`proto/aggregatecompletions.go`） | `na:router/relay-router.go:102` | 无 | OpenRouter 不在 OpenAPI 列它，基线只能取 OpenAI 的旧接口；OpenRouter 的 `prompt`-on-chat 变体不采用，它要改 Chat 的请求与回复形状。旧补全的 `logprobs`、`n`、`best_of` 没有 Chat 对应写法，所以不转格式（`docs/domains/gateway.md` 决策与理由） |
 | 流式 SSE，注释保活，`data: [DONE]` | 偶发 `: OPENROUTER PROCESSING` 注释；Chat 流最后带 usage 的一块 | docs/api_reference/streaming | 有：保活 `proto/relay.go:429,598`，Chat 最后一块带 usage（`docs/domains/gateway.md:73`） | 有（ping，见差分规则） | 有 | 无 |
 | 流式取消（断开连接即停止上游） | 断开连接立即停止模型处理和计费 | docs/api_reference/streaming | 有：`gw/forward.go:251,276` 用 `context.Cause` 区分客户端断开；测试 `gw/exec_disconnect_test.go` | 有（relay 取消） | 有（`gateway_handler_cancellation_test.go`） | 无 |
 | 响应头 `X-Generation-Id` | 所有端点都返回 | docs/api_reference/streaming | 有：`gw/handler.go:83`，同值也在 `X-Request-ID`（`platform/httpserver/public.go:27`） | 无 | 无 | 无 |
@@ -268,7 +268,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 地域路由（`eu.openrouter.ai`、`us.openrouter.ai`） | 企业功能 | docs/guides/features/in-region-routing | 没有 | 无 | 无 | 不跟 |
 | 批量 API `/api/v1/batches`（异步批量，`:batch` 价） | 异步批处理 | docs/batch-quickstart | 没有（范围「以后」） | 无 | `s2:internal/server/routes/gateway.go:258-267`（图片批量） | 低优先 |
 | Responses 的 `store`、`previous_response_id`、`background` | OpenRouter 的 Responses 是无状态的 | docs/api_reference/responses/overview | 不一致（有意）：Axiom 自己保存会话状态（`docs/domains/gateway.md:236`） | 无 | 部分 | Axiom 比 OpenRouter 多 |
-| 嵌入 `/api/v1/embeddings`、重排 `/rerank`、旧补全 `/completions`、审核 `/moderations` | 其他模态端点 | docs/api_reference/embeddings | 部分：`/embeddings`、`/rerank` 已在 P18 提供（原生格式，见 §1）；`/completions`、`/embeddings/models`、`/moderations` 没有 | `na:router/relay-router.go:102,135,151,164` | `s2:internal/server/routes/gateway.go:240` | 向量化和重排对 RAG 开发者是硬需求，现已可用；旧补全暂缓见 §1；嵌入模型列表要目录先有输出模态，审核没有模型与策略数据 |
+| 嵌入 `/api/v1/embeddings`、重排 `/rerank`、旧补全 `/completions`、审核 `/moderations` | 其他模态端点 | docs/api_reference/embeddings | 部分：`/embeddings`、`/rerank`、`/completions` 已在 P18 提供（原生格式，见 §1）；`/embeddings/models`、`/moderations` 没有 | `na:router/relay-router.go:102,135,151,164` | `s2:internal/server/routes/gateway.go:240` | 向量化、重排和旧补全对 RAG 与旧 SDK 开发者是硬需求，现已可用；嵌入模型列表要目录先有输出模态，审核没有模型与策略数据 |
 | Provider Monitor 数据集、`/benchmarks`、`/analytics/*`、`/datasets/*`、`/classifications/task`（公开排名数据） | 市场数据 | api/datasets、benchmarks | 没有 | 无 | 无 | 不跟 |
 | 客户端 SDK（TypeScript、Python、Go）、Agent SDK、MCP、Terraform provider、Ori | OpenRouter 自己的工具链 | docs/client-sdks/overview | 不适用（Axiom 说用 OpenRouter/OpenAI/Anthropic 官方 SDK 改地址即可）；Axiom 另有运营 MCP（`docs/domains/operations.md`） | 无 | 无 | 不跟 |
 
@@ -293,7 +293,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 15. 【响应缓存】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置没有；涉及内容保存政策，需要负责人定。→ 新建
 16. 【BYOK】用户自带供应商 key（`/byok`、优先/回退区、手续费）没有；范围里在「以后」。管理员侧号池已有。→ 新建
 17. 【路由器】`openrouter/auto`、`openrouter/free` 已实现（按现有路由排序选具体模型，free 只在 `:free` 目录条目里选）；`auto-beta`、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有。→ 新建
-18. 【产品线】P18 已补 `/embeddings`、`/rerank`（§1）；仍缺 `/completions`（暂缓，理由见 §1）、`/embeddings/models`、`/images`、`/videos`、`/audio/speech`、`/audio/transcriptions`、音频/视频输入输出、Files API、Batch API、`/moderations`。图片/视频/语音与按次/按时长/按字符计价相关，要先有 #320；`/embeddings/models` 要目录先有输出模态；`/moderations` 没有模型与策略数据。→ 批量/Files：#312 或新建；图片/视频/语音：#320
+18. 【产品线】P18 已补 `/embeddings`、`/rerank`、`/completions`（§1）；仍缺 `/embeddings/models`、`/images`、`/videos`、`/audio/speech`、`/audio/transcriptions`、音频/视频输入输出、Files API、Batch API、`/moderations`。图片/视频/语音与按次/按时长/按字符计价相关，要先有 #320；`/embeddings/models` 要目录先有输出模态；`/moderations` 没有模型与策略数据。→ 批量/Files：#312 或新建；图片/视频/语音：#320
 19. 【认证与企业】OAuth PKCE 换 key、Workload Identity、SSO/SCIM、私有端点、终端用户登记、Broadcast 可观测性集成、护栏内容策略：不影响基本迁移。→ #315 / #316 / 新建
 20. 【不跟】`alignment`/`armor` 插件、Jev/Fusion/Switchyard 路由器、`debug.echo_upstream_body`、`openrouter_metadata` 路由元数据、地域路由、公开排名数据集：与 Axiom「不暴露供应商身份」或产品定位冲突。除路由元数据外的五项已写进「P20 有意不做」，路由元数据仍未做。→ 无
 
