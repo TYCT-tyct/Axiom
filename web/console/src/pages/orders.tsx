@@ -204,6 +204,7 @@ function OrderRow({ order, allowed, onRefund }: { order: Schemas["Order"]; allow
         <span className="mt-1 block text-ui text-t1 tabular-nums [overflow-wrap:anywhere] sm:hidden">
           {format.money(order.credits)}
           <span className="block text-label text-t3">{format.pay(order.total)}</span>
+          <span className="block text-label text-t3">{t("orders.fee", { fee: format.pay(order.fee) })}</span>
         </span>
       </Td>
       <Td>
