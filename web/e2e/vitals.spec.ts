@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { type Browser, devices, expect, type Page, test } from "@playwright/test";
+import { type Browser, devices, expect, type Locator, type Page, test } from "@playwright/test";
 import { mockAdmin } from "./admin-api.ts";
 import { adminSuite } from "./admin-scenes.ts";
 import { adminUrl } from "./apps.ts";
@@ -219,11 +219,12 @@ test.describe("interaction", () => {
   test("console calls: INP of filtering, paging and opening a detail", async ({ browser }) => {
     const { page, scene } = await slowPage(browser, consoleSuite, "calls");
     await scene.open(page);
+    const rows = page.getByRole("table", { name: "调用记录" }).getByRole("row");
     await page.getByRole("button", { name: "加载更多" }).click();
     await page.getByLabel("模型").fill("openai/gpt-5");
     await page.getByRole("button", { name: "筛选" }).click();
     await expect(page).toHaveURL(/model=openai%2Fgpt-5/);
-    await page.getByRole("row").nth(1).getByRole("link").click();
+    await rows.nth(1).getByRole("link").click();
     await expect(page.getByRole("heading", { level: 1, name: "调用详情" })).toBeVisible();
     record("INP console calls", (await vitals(page)).INP ?? 0, budget.inp);
     await page.context().close();
@@ -248,11 +249,12 @@ test.describe("long list", () => {
   // The list pages by cursor, 50 rows a time, so the longest it gets is the pages a person has asked for: this loads
   // 1000 rows, then scrolls 5 seconds at 4x CPU (docs/frontend.md「前端性能指标」), counting the frames drawn late and the
   // tasks that held the main thread for 50 ms or more. The calls and the users are the two long lists the budget names.
-  async function loadRows(page: Page, rows: number) {
+  // rows scopes the count to the list, since the calls page also shows a summary table above it.
+  async function loadRows(page: Page, rows: Locator, count: number) {
     const more = page.getByRole("button", { name: "加载更多" });
-    for (let loaded = 50; loaded < rows; loaded += 50) {
+    for (let loaded = 50; loaded < count; loaded += 50) {
       await more.click();
-      await expect(page.getByRole("row")).toHaveCount(Math.min(loaded + 50, rows) + 1);
+      await expect(rows).toHaveCount(Math.min(loaded + 50, count) + 1);
     }
   }
 
@@ -325,7 +327,7 @@ test.describe("long list", () => {
       id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
     }));
     await page.goto("/console/calls");
-    await loadRows(page, 1000);
+    await loadRows(page, page.getByRole("table", { name: "调用记录" }).getByRole("row"), 1000);
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(10_000);
     const outcome = await scroll(page);
     record("late frames, console calls", outcome.late / outcome.total, budget.lateFrames);
@@ -344,7 +346,7 @@ test.describe("long list", () => {
     });
     await page.goto(adminUrl("users"));
     await page.getByRole("heading", { level: 1 }).waitFor();
-    await loadRows(page, 1000);
+    await loadRows(page, page.getByRole("row"), 1000);
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(10_000);
     const outcome = await scroll(page);
     record("late frames, admin users", outcome.late / outcome.total, budget.lateFrames);

@@ -40,6 +40,62 @@ func (s Schedule) IsZero() bool {
 	return true
 }
 
+// ScheduleRate is one effective unit price of a schedule: what one unit of an item costs at a service tier above a
+// prompt length. Base is true for the base band that no threshold has to be exceeded for; Above is 0 there and is the
+// applied threshold otherwise, so an explicit threshold of 0 is not confused with the base band.
+type ScheduleRate struct {
+	ServiceTier ServiceTier
+	Base        bool
+	Above       int64
+	Item        Item
+	Price       platform.UnitPrice
+}
+
+// ScheduleView is each priced item's effective price at each band, in enumeration order of service tier, band and item. It is
+// the read model a public price page shows: the schedule keeps its prices unexported, and the view copies them for a
+// caller that must not reach into the schedule. A band that leaves an item out inherits the base price, so the view
+// includes that inherited price; an empty band therefore shows the base prices it restores, not nothing.
+type ScheduleView struct {
+	Currency platform.Currency
+	Basis    []Item // the items whose counts add up to the context band; empty without context tiers
+	Rates    []ScheduleRate
+}
+
+// View returns the schedule's prices. The order is stable, so a page can show the same schedule the same way.
+func (s Schedule) View() ScheduleView {
+	v := ScheduleView{Currency: s.currency, Basis: s.basis.members()}
+	for st := range numServiceTiers {
+		if !s.offered.Has(st) {
+			continue
+		}
+		items := s.levels[st].pricedItems()
+		for band := range len(s.above) + 1 {
+			v.Rates = append(v.Rates, s.bandRates(st, band, items)...)
+		}
+	}
+	return v
+}
+
+// bandRates is the effective price of each of items at one band of a service tier.
+func (s Schedule) bandRates(st ServiceTier, band int, items ItemSet) []ScheduleRate {
+	above := int64(0)
+	if band > 0 {
+		above = s.above[band-1]
+	}
+	var rates []ScheduleRate
+	for it := range NumItems {
+		if !items.Has(it) {
+			continue
+		}
+		price, ok := s.price(st, band, it)
+		if !ok {
+			continue
+		}
+		rates = append(rates, ScheduleRate{ServiceTier: st, Base: band == 0, Above: above, Item: it, Price: price})
+	}
+	return rates
+}
+
 // level is one service tier's prices: its base prices, and for each threshold in above, the base prices it replaces
 // when the basis adds up to more than the threshold, for the whole request; M1 supports no other method
 // (README.md「条件」).
@@ -52,6 +108,16 @@ type level struct {
 type rates struct {
 	price  [NumItems]platform.UnitPrice
 	priced ItemSet
+}
+
+// pricedItems are the items the service tier prices: its base prices and every item a context tier adds. A context
+// tier that leaves one out inherits the base price, and one that only adds an item still prices it.
+func (l *level) pricedItems() ItemSet {
+	items := l.base.priced
+	for _, r := range l.tiers {
+		items |= r.priced
+	}
+	return items
 }
 
 // The stored form, README.md「存储」. The top level holds the standard tier's prices; every other service tier has its

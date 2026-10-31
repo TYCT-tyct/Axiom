@@ -103,6 +103,24 @@ func (x site) principal(t *testing.T, host string, issued accounts.Issued) (acco
 // TestRegisterSignInAndUse: a user registered with an invite code signs in, is recognised from the cookie, may make
 // a key in its own account, whose audit entry the registration's tenant record admits, may not touch another
 // account, and is no longer recognised once signed out.
+func TestAccountTierReadsTheAccount(t *testing.T) {
+	t.Parallel()
+	x := newTestSite(t)
+	p, err := x.principal(t, console, x.signIn(t, console))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tier, err := x.s.AccountTier(t.Context(), p)
+	if err != nil || tier != accounts.TierID(t1) {
+		t.Fatalf("tier: %v %v, want %v", tier, err, accounts.TierID(t1))
+	}
+	// The read is scoped to the account: another account's row is not visible, even with a valid principal.
+	other := accounts.PrincipalForTest(accounts.SiteID(s1), accounts.AccountID(uuid.NewV7()), p.UserID())
+	if _, err := x.s.AccountTier(t.Context(), other); err == nil {
+		t.Fatal("read another account's tier")
+	}
+}
+
 func TestRegisterSignInAndUse(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)

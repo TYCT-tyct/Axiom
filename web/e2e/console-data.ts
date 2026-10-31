@@ -13,6 +13,7 @@ export type MockState = AuthState & {
   balance: Schemas["Balance"];
   keys: Schemas["Key"][];
   calls: Schemas["Call"][];
+  models: Schemas["PublicModel"][];
   statement: Schemas["StatementRow"][];
 };
 
@@ -63,6 +64,28 @@ function aCall(n: number, over: Partial<Schemas["Call"]> = {}): Schemas["Call"] 
     first_token_ms: failed ? 0 : 240,
     finish_reason: failed ? "" : "stop",
     error_kind: failed ? "upstream_timeout" : "",
+    ...over,
+  };
+}
+
+function aModel(n: number, over: Partial<Schemas["PublicModel"]> = {}): Schemas["PublicModel"] {
+  return {
+    id: models[n % models.length] ?? "",
+    name: (models[n % models.length] ?? "").split("/")[1] ?? "",
+    author: (models[n % models.length] ?? "").split("/")[0] ?? "",
+    context_length: 200000,
+    max_output: 64000,
+    streams: true,
+    abilities: n % 2 === 0 ? ["tools", "reasoning"] : ["tools", "images"],
+    pricing: {
+      currency: "USD",
+      basis: ["input", "output"],
+      rates: [
+        { service_tier: "standard", item: "input", unit: "token", amount: `0.00000${1 + (n % 9)}` },
+        { service_tier: "standard", item: "output", unit: "token", amount: `0.00000${2 + (n % 9)}` },
+        { service_tier: "priority", above: 200000, item: "output", unit: "token", amount: "0.00002" },
+      ],
+    },
     ...over,
   };
 }
@@ -124,12 +147,13 @@ export function usualState(): MockState {
       aKey(1, { name: "Old key", expires_at: "2026-09-01T00:00:00Z" }),
     ],
     calls: range(120).map((n) => aCall(n)),
+    models: range(4).map((n) => aModel(n)),
     statement: range(120).map((n) => aMovement(n)),
   };
 }
 
 export function emptyState(): MockState {
-  return { ...usualState(), keys: [], calls: [], statement: [] };
+  return { ...usualState(), keys: [], calls: [], models: [], statement: [] };
 }
 
 const long = (text: string, length: number) => text.repeat(Math.ceil(length / text.length)).slice(0, length);
@@ -161,6 +185,23 @@ export function worstState(): MockState {
     aKey(3, { name: "ケイ \u{1F511} 本番用", disabled: true }),
     ...range(40).map((n) => aKey(n + 3)),
   ];
+  state.models = range(60).map((n) =>
+    aModel(n, {
+      id: `vendor-${n}/${"m".repeat(120)}-${n}`,
+      name: "m".repeat(160),
+      author: "a".repeat(120),
+      abilities: [
+        "tools",
+        "images",
+        "documents",
+        "reasoning",
+        "prompt_cache",
+        "structured_output",
+        "web_search",
+        "code_execution",
+      ],
+    }),
+  );
   state.calls = range(300).map((n) =>
     aCall(
       n,

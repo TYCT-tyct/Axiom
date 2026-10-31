@@ -27,6 +27,8 @@ type consoleAPI struct {
 	payments *payments.Payments
 	catalog  *catalog.Catalog
 	db       *pg.DB
+	// models is the public projection built with the last routing snapshot, so the page and a call charge one price.
+	models modelProjection
 }
 
 // GetVersion tells the console which build answers, uncached, so a page left open across a deployment notices it.

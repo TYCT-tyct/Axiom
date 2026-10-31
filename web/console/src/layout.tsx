@@ -9,6 +9,7 @@ const nav = [
   { to: "/", label: "nav.overview", icon: "grid" },
   { to: "/keys", label: "nav.keys", icon: "key", permission: "api_keys.view" },
   { to: "/calls", label: "nav.calls", icon: "list", permission: "calls.view" },
+  { to: "/models", label: "nav.models", icon: "cube" },
   { to: "/balance", label: "nav.balance", icon: "card", permission: "balance.view" },
   { to: "/orders", label: "nav.orders", icon: "list", permission: "balance.view" },
   { to: "/statement", label: "nav.statement", icon: "chart", permission: "balance.view" },

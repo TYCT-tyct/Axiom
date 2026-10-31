@@ -19,6 +19,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/gateway"
 	"axiom/internal/payments"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/egress"
@@ -78,7 +79,16 @@ func startNodeWithRegistration(c commandLine, clock *testClock) consoleFixture {
 }
 
 func startNodeWith(c commandLine, clock *testClock, deadline time.Duration, withRegistration bool) consoleFixture {
+	return startNodeWithModels(c, clock, deadline, withRegistration, nil)
+}
+
+// startNodeWithModels starts a node with the given public projection, or the empty list the program starts with. A
+// test that checks which audience a page asked as passes a fake; every other test gets an empty real list.
+func startNodeWithModels(c commandLine, clock *testClock, deadline time.Duration, withRegistration bool, models modelProjection) consoleFixture {
 	c.t.Helper()
+	if models == nil {
+		models = gateway.NewModelList()
+	}
 	logs := new(bytes.Buffer)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
 	config := accounts.Config{
@@ -125,7 +135,7 @@ func startNodeWith(c commandLine, clock *testClock, deadline time.Duration, with
 	if err := cat.Refresh(c.t.Context()); err != nil {
 		c.t.Fatal(err)
 	}
-	routes := publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, nil), exit: exit, version: "test", accounts: svc, payments: pay, catalog: cat, db: c.db}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
+	routes := publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, nil), exit: exit, version: "test", accounts: svc, payments: pay, catalog: cat, db: c.db, models: models}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger, timeout: deadline}, testFrontend(c.t), logger)
 	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, pay: pay, gateway: gateway, queue: queue}
 }
 

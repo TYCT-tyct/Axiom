@@ -398,6 +398,7 @@ func (s *Service) AuthenticateAny(ctx context.Context, r *http.Request) (Princip
 func (p Principal) Pending() bool; func (p Principal) Verified() bool; func (p Principal) ConsentPending() bool
 func (p Principal) SessionID() SessionID // 认出主体的会话，管理接口的探测限次按会话计
 func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, error)  // 邮箱、邀请码、级别、CSRF、到期、按级别过滤的权限名
+func (s *Service) AccountTier(ctx context.Context, p Principal) (TierID, error) // 本账户当前等级；行级安全按账户，读不到别人的行
 func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, q KeyQuery) ([]Key, bool, error) // 新的在前，按 ID 翻页；名字/前缀/状态/创建时间过滤，索引顺序读
 func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error)
 func (s *Service) UpdateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, id KeyID, k KeySettings) (Key, error) // 整体替换，含重新启用；先取旧值，审计记改了什么
