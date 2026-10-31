@@ -444,11 +444,13 @@ func (p *rewriter) outputCap() error {
 	return err
 }
 
-// completionsCap caps a legacy completion's max_tokens, but leaves a client's 0: with echo and logprobs, 0 asks for the
-// prompt's logprobs and no generated tokens, and replacing it would generate text the client did not ask for.
+// completionsCap sends a legacy completion's max_tokens as the cap it was quoted at when it is null or above that cap,
+// which the endpoint's own limit held it to, so the upstream is never asked for more than was reserved; but it leaves
+// a client's 0: with echo and logprobs, 0 asks for the prompt's logprobs and no generated tokens, and replacing it
+// would generate text the client did not ask for.
 func (p *rewriter) completionsCap() error {
 	v, err := p.value()
-	if err == nil && p.t.MaxOutput > 0 && v.Kind() == 'n' {
+	if err == nil && p.t.MaxOutput > 0 && (v.Kind() == 'n' || v.Kind() == '0' && !numberAtMost(v, p.t.MaxOutput)) {
 		p.replace(len(v), strconv.FormatInt(p.t.MaxOutput, 10))
 	}
 	p.capped = true

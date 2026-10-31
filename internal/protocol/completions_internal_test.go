@@ -78,3 +78,23 @@ func TestCompletionsLogprobsBudget(t *testing.T) {
 			got["large last chunk"], got["small last chunk"])
 	}
 }
+
+// TestCompletionsEchoChargesItsChoiceState: echo keeps how much of each choice's echo has arrived, a second map slot per
+// choice, which is charged beside the choice's own: three choices draw 3 × choiceSize more with echo than without.
+func TestCompletionsEchoChargesItsChoiceState(t *testing.T) {
+	chunk := []byte(`{"id":"x","object":"text_completion","created":1,"model":"m","choices":[` +
+		`{"index":0,"text":"a"},{"index":1,"text":"a"},{"index":2,"text":"a"}]}`)
+	drawn := func(echo *EchoPrompts) int {
+		total := 0
+		s := newCompletionsStream(UsageContext{}, RelayOptions{Echo: echo}, func(n int) error { total += n; return nil })
+		before := total
+		if _, err := s.event(chunk, &meter{}); err != nil {
+			t.Fatal(err)
+		}
+		return total - before
+	}
+	with, without := drawn(&EchoPrompts{Bytes: []int64{1, 1, 1}, Choices: 1}), drawn(nil)
+	if with-without != 3*choiceSize {
+		t.Errorf("drew %d with echo and %d without, want %d more", with, without, 3*choiceSize)
+	}
+}

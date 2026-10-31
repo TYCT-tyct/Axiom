@@ -27,12 +27,13 @@ type completionsStream struct {
 	report                                      *openAIUsage
 	reportErr                                   error
 	failed, rewrites, noChoices, choiceFinished bool
-	// delivered is whether the chunk carries text for the client, echo included: it alone decides the commit point,
-	// so an echo-only reply (echo with max_tokens 0) is an answer, not an empty response. The meter's content counts
-	// only the generated text after the echo.
-	delivered bool
-	index     int64
-	indexSet  bool
+	// delivered is whether the chunk carries an answer for the client: text, echo included, or, for a request that
+	// asked for no output, a finished choice. It alone decides the commit point, so an echo-only reply or an empty one
+	// to max_tokens 0 is an answer, not an empty response. The meter's content counts only the generated text after
+	// the echo.
+	delivered, zeroOutput bool
+	index                 int64
+	indexSet              bool
 	// pending holds text read before its choice's index; JSON members may come in any order. Only an upstream that
 	// puts text before index allocates it.
 	pending []jsontext.Value
@@ -44,7 +45,7 @@ type completionsStream struct {
 }
 
 func newCompletionsStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
-	s := &completionsStream{choices: map[int64]bool{}}
+	s := &completionsStream{choices: map[int64]bool{}, zeroOutput: o.ZeroOutput}
 	if o.Echo != nil && len(o.Echo.Bytes) > 0 {
 		s.echo, s.echoChoices, s.echoSeen = o.Echo, max(o.Echo.Choices, 1), map[int64]int64{}
 	}
@@ -140,6 +141,7 @@ func (s *completionsStream) choice() error {
 	// lands on the choice's own index.
 	if s.choiceFinished {
 		s.choices[s.index] = true
+		s.delivered = s.delivered || s.zeroOutput
 	}
 	return nil
 }
@@ -154,7 +156,12 @@ func (s *completionsStream) choiceIndex() error {
 		return err
 	}
 	if _, started := s.choices[s.index]; !started {
-		if err := s.charge(choiceSize); err != nil {
+		// echoSeen takes a slot for the choice too, of the same size as choices'.
+		size := choiceSize
+		if s.echo != nil {
+			size *= 2
+		}
+		if err := s.charge(size); err != nil {
 			return err
 		}
 		s.choices[s.index] = false

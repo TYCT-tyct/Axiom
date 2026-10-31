@@ -412,6 +412,12 @@ func numberIs(v jsontext.Value, want float64) bool {
 	return err == nil && f == want
 }
 
+// numberAtMost is whether v, a JSON number, is an integer no larger than limit.
+func numberAtMost(v jsontext.Value, limit int64) bool {
+	n, err := strconv.ParseInt(string(v), 10, 64)
+	return err == nil && n <= limit
+}
+
 // reasoningIndex gives equivalent integer spellings the same grouping key.
 func reasoningIndex(v jsontext.Value) (jsontext.Value, error) {
 	if isNull(v) {

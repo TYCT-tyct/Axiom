@@ -102,7 +102,10 @@ type RelayOptions struct {
 	Citations []Citation
 	// Echo, when set, is the prompt text a legacy completion repeats at the start of each choice. A pointer keeps the
 	// gateway's common options small; only an echo request allocates it.
-	Echo            *EchoPrompts
+	Echo *EchoPrompts
+	// ZeroOutput is set when the request capped its output at 0, as legacy completions' max_tokens 0 does: a choice that
+	// finishes without text is then the whole answer, not an empty response.
+	ZeroOutput      bool
 	legacyFunctions bool
 }
 

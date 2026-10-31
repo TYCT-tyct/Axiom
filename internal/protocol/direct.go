@@ -34,17 +34,32 @@ func inspectNew(f Format, body []byte) (Request, error) {
 	if err := d.validate(); err != nil {
 		return Request{}, err
 	}
-	if d.r.Echo {
-		// The prompt may come before echo, so the first scan cannot know to keep its sizes. Only a request that echoes is
-		// scanned a second time; those are rare, and a normal request pays just the bool.
-		sizes := directScanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), trackEcho: true}
-		sizes.r = Request{Format: f, Choices: 1, ChoiceCount: 1, InputItems: 1 << catalog.ItemInput, ServiceTiers: 1 << catalog.ServiceTierStandard}
-		if err := sizes.top(); err != nil {
-			return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
-		}
-		d.r.PromptBytes = sizes.r.PromptBytes
-	}
 	return d.r, nil
+}
+
+// EchoSize is the memory EchoOf allocates for r, which the caller charges to the node's budget first: a prompt's size
+// is 8 bytes, and a body of a million empty prompts is 3 MB. 0 when r does not echo.
+func EchoSize(r *Request) int64 {
+	if !r.Echo {
+		return 0
+	}
+	return 8 * (r.Choices / r.ChoiceCount)
+}
+
+// EchoOf reads the text bytes of each prompt of a legacy completion that echoes, in prompt order, for the relay to drop
+// from each choice's metered text; nil when r does not echo. The prompt may come before echo, so Inspect cannot know to
+// keep the sizes, and a request that echoes is scanned a second time. body must be the one Inspect read into r.
+func EchoOf(body []byte, r *Request) *EchoPrompts {
+	if !r.Echo {
+		return nil
+	}
+	d := directScanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), echo: make([]int64, 0, r.Choices/r.ChoiceCount)}
+	d.r = Request{Format: r.Format, Choices: 1, ChoiceCount: 1}
+	d.trackEcho = true
+	if err := d.top(); err != nil {
+		panic(fmt.Sprintf("protocol: EchoOf on a body Inspect did not accept: %v", err))
+	}
+	return &EchoPrompts{Bytes: d.echo, Choices: r.ChoiceCount}
 }
 
 // validate checks the members each direct format requires and fills the counts its request implies.
@@ -78,6 +93,7 @@ func (d *directScanner) validate() error {
 		// The suffix is inserted after the completion but is part of what the model reads: count it once for every
 		// prompt, and keep the longest prompt's context check including it.
 		d.r.TextBytes += d.prompts * d.suffixBytes
+		d.r.RepeatedTextBytes = max(d.prompts-1, 0) * d.suffixBytes
 		d.r.MaxInputBytes += d.suffixBytes
 	}
 	return nil
@@ -89,7 +105,8 @@ type directScanner struct {
 	reader
 	r                                      Request
 	prompts, n, suffixBytes                int64 // legacy completions: prompts, the n each returns, the inserted suffix's bytes
-	trackEcho                              bool  // the echo pass: record each prompt's text bytes for metering
+	trackEcho                              bool  // the echo pass (EchoOf): record each prompt's text bytes in echo
+	echo                                   []int64
 	queryBytes, maxDoc                     int64 // rerank: the query's bytes and the largest document's
 	hasInput, hasQuery, hasDocs, hasPrompt bool
 }
@@ -305,7 +322,7 @@ func (d *directScanner) input(n int64) {
 // input was charged for.
 func (d *directScanner) promptBytes(n int64) {
 	if d.trackEcho {
-		d.r.PromptBytes = append(d.r.PromptBytes, n)
+		d.echo = append(d.echo, n)
 	}
 }
 
@@ -365,6 +382,7 @@ func (d *directScanner) embeddingArray(v jsontext.Value) error {
 				return err
 			}
 			d.input(n * 4)
+			d.r.TokenInputs += n
 		case '{':
 			if kind != '{' {
 				return fmt.Errorf("input mixes objects with other values")
@@ -387,6 +405,7 @@ func (d *directScanner) embeddingArray(v jsontext.Value) error {
 	}
 	if first == '0' {
 		d.input(tokens * 4)
+		d.r.TokenInputs += tokens
 	}
 	return nil
 }
@@ -584,6 +603,7 @@ func (d *directScanner) promptArray(v jsontext.Value) error {
 				return err
 			}
 			d.input(n * 4)
+			d.r.TokenInputs += n
 			d.promptBytes(n * 4)
 			d.prompts++
 		default:
@@ -599,6 +619,7 @@ func (d *directScanner) promptArray(v jsontext.Value) error {
 	}
 	if first == '0' {
 		d.input(tokens * 4)
+		d.r.TokenInputs += tokens
 		d.promptBytes(tokens * 4)
 		d.prompts = 1
 	}

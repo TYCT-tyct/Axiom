@@ -89,16 +89,18 @@ type Request struct {
 	// MaxOutputSet is true when the request named its output cap, so an explicit 0 means no output rather than the
 	// endpoint's default. Legacy completions sets it; a format that leaves it false keeps the default rule.
 	MaxOutputSet bool
-	// Echo is legacy completions' echo: the prompt comes back as the first text of every choice. PromptBytes then
-	// holds the text bytes of each prompt in order, so the relay can drop that prefix per choice, and ChoiceCount is
-	// the choices each prompt generates (n), which maps a choice's index to its prompt. PromptBytes is nil when echo
-	// is off.
+	// Echo is legacy completions' echo: the prompt comes back as the first text of every choice (EchoOf reads each
+	// prompt's size). ChoiceCount is the choices each prompt generates (n), which maps a choice's index to its prompt;
+	// Choices / ChoiceCount is the number of prompts.
 	Echo        bool
-	PromptBytes []int64
 	ChoiceCount int64
 	// TextBytes bounds the text input's tokens: the body's bytes less the image and document data that Images and
 	// Documents count instead.
 	TextBytes, Images, Documents int64
+	// TokenInputs and RepeatedTextBytes are the input the body's strings do not show, which a count of those strings
+	// (Text) must add: the token IDs of a token-array input, exact, and the text the body holds once but the model reads
+	// again, a legacy completion's suffix for every prompt after the first. Both are already in TextBytes.
+	TokenInputs, RepeatedTextBytes int64
 	// MaxInputBytes is the largest single input of a batch, in bytes; 0 when the request has one input. A batch's
 	// context limit applies to each input, while TextBytes is what all of them are charged for.
 	MaxInputBytes int64
@@ -125,6 +127,10 @@ type Request struct {
 	positions           requestPositions
 	legacy, modernTools bool
 }
+
+// ZeroOutput is whether the request capped its output at 0, as legacy completions' max_tokens 0 does: it asks for no
+// generated text, so an answer without any is not an empty response.
+func (r *Request) ZeroOutput() bool { return r.MaxOutputSet && r.MaxOutput == 0 }
 
 // ErrInvalid reports a body Inspect cannot read: not strict JSON within jsonx's policy, or a member it reads with the
 // wrong type or value. The gateway answers it with 400.

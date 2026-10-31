@@ -164,6 +164,10 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 		s.conclude(ctx, *e)
 		return
 	}
+	if e := s.readEcho(); e != nil {
+		s.conclude(ctx, *e)
+		return
+	}
 	s.conclude(ctx, s.attempts(ctx))
 }
 
@@ -204,6 +208,10 @@ type session struct {
 	searches   int64
 	citations  []protocol.Citation
 	searchHeld int64
+	// echo is the prompt sizes a legacy completion that echoes repeats at the start of its choices, nil without echo;
+	// echoHeld is the part of the node's budget they hold until the call is over.
+	echo     *protocol.EchoPrompts
+	echoHeld int64
 
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back
@@ -365,6 +373,23 @@ func (s *session) release() {
 	}
 	s.x.Memory.Refund(s.searchHeld)
 	s.searchHeld = 0
+	s.x.Memory.Refund(s.echoHeld)
+	s.echoHeld = 0
+}
+
+// readEcho reads the prompt sizes of a completion that echoes, once for all its attempts, charged to the node's budget
+// before they are allocated: a batch of empty prompts holds more in sizes than its body.
+func (s *session) readEcho() *ended {
+	n := protocol.EchoSize(&s.c.Request)
+	if n == 0 {
+		return nil
+	}
+	if !s.x.Memory.Charge(n) {
+		return &ended{err: protocol.Error{Type: protocol.Overloaded}}
+	}
+	s.echoHeld = n
+	s.echo = protocol.EchoOf(s.c.Body, &s.c.Request)
+	return nil
 }
 
 // dropReply gives back the budget of a compact reply that is not going to be written, or that the call is over with.

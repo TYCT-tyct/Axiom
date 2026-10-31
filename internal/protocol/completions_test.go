@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -52,6 +51,7 @@ func TestCompletionsInspect(t *testing.T) {
 		name                            string
 		body                            string
 		text, maxInput, choices, maxOut int64
+		tokens, repeated                int64 // TokenInputs and RepeatedTextBytes
 		stream, capSet, echo            bool
 		promptBytes                     []int64
 		err                             string
@@ -59,8 +59,8 @@ func TestCompletionsInspect(t *testing.T) {
 		{name: "string", body: `{"model":"m","prompt":"Say hi"}`, text: 6, maxInput: 6, choices: 1},
 		{name: "strings", body: `{"model":"m","prompt":["a","bc"]}`, text: 3, maxInput: 2, choices: 2},
 		{name: "strings with n", body: `{"model":"m","prompt":["a","bc"],"n":3}`, text: 3, maxInput: 2, choices: 6},
-		{name: "tokens", body: `{"model":"m","prompt":[1,2,3]}`, text: 12, maxInput: 12, choices: 1},
-		{name: "token arrays", body: `{"model":"m","prompt":[[1,2],[3,4,5]],"n":2}`, text: 20, maxInput: 12, choices: 4},
+		{name: "tokens", body: `{"model":"m","prompt":[1,2,3]}`, text: 12, maxInput: 12, choices: 1, tokens: 3},
+		{name: "token arrays", body: `{"model":"m","prompt":[[1,2],[3,4,5]],"n":2}`, text: 20, maxInput: 12, choices: 4, tokens: 5},
 		{name: "best_of one", body: `{"model":"m","prompt":["a","b"],"n":2,"best_of":1}`, text: 2, maxInput: 1, choices: 4},
 		{name: "best_of", body: `{"model":"m","prompt":["a","b"],"n":2,"best_of":5}`, err: "best_of above 1 cannot be streamed"},
 		{name: "escapes", body: `{"model":"m","prompt":"a\nb"}`, text: 3, maxInput: 3, choices: 1},
@@ -68,14 +68,18 @@ func TestCompletionsInspect(t *testing.T) {
 		{name: "max_tokens", body: `{"model":"m","prompt":"x","max_tokens":5}`, text: 1, maxInput: 1, choices: 1, maxOut: 5, capSet: true},
 		{name: "max_tokens zero", body: `{"model":"m","prompt":"x","max_tokens":0}`, text: 1, maxInput: 1, choices: 1, capSet: true},
 		{name: "max_tokens null", body: `{"model":"m","prompt":"x","max_tokens":null}`, text: 1, maxInput: 1, choices: 1},
-		{name: "suffix", body: `{"model":"m","prompt":["a","bc"],"suffix":"XY"}`, text: 7, maxInput: 4, choices: 2},
+		{name: "suffix", body: `{"model":"m","prompt":["a","bc"],"suffix":"XY"}`, text: 7, maxInput: 4, choices: 2, repeated: 2},
 		{
 			name: "suffix on token arrays", body: `{"model":"m","prompt":[[1],[2,3]],"suffix":"XY"}`, text: 16,
-			maxInput: 10, choices: 2,
+			maxInput: 10, choices: 2, tokens: 3, repeated: 2,
 		},
 		{
 			name: "echo", body: `{"model":"m","prompt":["a","bc"],"n":2,"echo":true}`, text: 3, maxInput: 2,
 			choices: 4, echo: true, promptBytes: []int64{1, 2},
+		},
+		{
+			name: "echo token arrays", body: `{"model":"m","echo":true,"prompt":[[1],[2,3]]}`, text: 12, maxInput: 8,
+			choices: 2, tokens: 3, echo: true, promptBytes: []int64{4, 8},
 		},
 		{name: "n zero", body: `{"model":"m","prompt":"x","n":0}`, text: 1, maxInput: 1, choices: 1},
 		{name: "model missing", body: `{"prompt":"x"}`, err: "model is missing"},
@@ -104,9 +108,16 @@ func TestCompletionsInspect(t *testing.T) {
 			}
 			if r.Format != protocol.Completions || r.Model != "m" || r.TextBytes != c.text || r.MaxInputBytes != c.maxInput ||
 				r.Choices != c.choices || r.MaxOutput != c.maxOut || r.MaxOutputSet != c.capSet || r.Stream != c.stream ||
-				r.Echo != c.echo || !slices.Equal(r.PromptBytes, c.promptBytes) {
-				t.Errorf("request %+v, want text %d, largest %d, choices %d, cap %d/%v, stream %v, echo %v %v",
-					r, c.text, c.maxInput, c.choices, c.maxOut, c.capSet, c.stream, c.echo, c.promptBytes)
+				r.Echo != c.echo || r.TokenInputs != c.tokens || r.RepeatedTextBytes != c.repeated {
+				t.Errorf("request %+v, want text %d, largest %d, choices %d, cap %d/%v, stream %v, echo %v, unseen %d/%d",
+					r, c.text, c.maxInput, c.choices, c.maxOut, c.capSet, c.stream, c.echo, c.tokens, c.repeated)
+			}
+			var sizes []int64
+			if e := protocol.EchoOf([]byte(c.body), &r); e != nil {
+				sizes = e.Bytes
+			}
+			if !slices.Equal(sizes, c.promptBytes) || protocol.EchoSize(&r) != 8*int64(len(c.promptBytes)) {
+				t.Errorf("echo sizes %v (%d bytes), want %v", sizes, protocol.EchoSize(&r), c.promptBytes)
 			}
 			if r.InputItems != 1<<catalog.ItemInput || r.ServiceTiers != 1<<catalog.ServiceTierStandard {
 				t.Errorf("items %b, tiers %b", r.InputItems, r.ServiceTiers)
@@ -133,6 +144,14 @@ func TestCompletionsPrepare(t *testing.T) {
 		{
 			name: "client cap", body: `{"model":"m","prompt":["a","b"],"max_tokens":5}`, maxOutput: 16, wantCap: 5.0,
 			wantPrompt: []any{"a", "b"},
+		},
+		{
+			name: "client cap above the quoted one", body: `{"model":"m","prompt":"hi","max_tokens":4096}`, maxOutput: 1024,
+			wantCap: 1024.0, wantPrompt: "hi",
+		},
+		{
+			name: "client cap at the quoted one", body: `{"model":"m","prompt":"hi","max_tokens":1024}`, maxOutput: 1024,
+			wantCap: 1024.0, wantPrompt: "hi",
 		},
 		{
 			name: "null cap", body: `{"model":"m","prompt":"hi","max_tokens":null}`, maxOutput: 16, wantCap: 16.0,
@@ -252,122 +271,6 @@ func TestCompletionsSample(t *testing.T) {
 	}
 	if reply["id"] != "gen-01" || reply["model"] != "claude-client-name" || reply["object"] != "text_completion" {
 		t.Errorf("the reply's identity: %v", reply)
-	}
-}
-
-// firstText is a stream's first text member: what a client must get before anything else.
-var firstText = regexp.MustCompile(`"text":"[^"]+"`)
-
-// TestCompletionsEchoPerChoice: echo repeats the prompt at the start of every choice, and the two quantities read from
-// a choice's text are kept apart. Delivery is any text, echo included: it alone decides the commit point, so an echo-only
-// reply is an answer. Billed output is the generated text only: the meter drops the prefix each choice has received, so
-// a choice that never arrived does not deduct its echo from the text another choice generated.
-func TestCompletionsEchoPerChoice(t *testing.T) {
-	t.Parallel()
-	const prompt, generated = 300, 30
-	chunk := func(text string, index int, finish string) string {
-		return fmt.Sprintf(
-			"data: {\"id\":\"x\",\"object\":\"text_completion\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":%d,\"text\":%q,\"finish_reason\":%s}]}\n\n",
-			index, text, finish,
-		)
-	}
-	echo := func(text string, index int) string { return chunk(text, index, `"length"`) }
-	textFirst := func(text string, index int) string {
-		return fmt.Sprintf(
-			"data: {\"id\":\"x\",\"object\":\"text_completion\",\"created\":0,\"model\":\"m\",\"choices\":[{\"text\":%q,\"index\":%d,\"finish_reason\":\"length\"}]}\n\n",
-			text, index,
-		)
-	}
-	for _, c := range []struct {
-		name   string
-		echo   *protocol.EchoPrompts
-		stream string
-		broken bool
-		want   int64 // the billed output: generated bytes after the echo
-	}{
-		{
-			name:   "without echo every byte is generated",
-			stream: echo(strings.Repeat("b", generated), 0) + "data: [DONE]\n\n",
-			want:   generated,
-		},
-		{
-			name:   "echo only, as max_tokens 0 asks",
-			echo:   &protocol.EchoPrompts{Bytes: []int64{prompt}, Choices: 1},
-			stream: echo(strings.Repeat("a", prompt), 0) + "data: [DONE]\n\n",
-		},
-		{
-			name: "echo only with the prompt's logprobs",
-			echo: &protocol.EchoPrompts{Bytes: []int64{5}, Choices: 1},
-			stream: "data: {\"id\":\"x\",\"object\":\"text_completion\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0," +
-				"\"text\":\"hello\",\"logprobs\":{\"tokens\":[\"hello\"],\"token_logprobs\":[null],\"text_offset\":[0]}," +
-				"\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n",
-		},
-		{
-			name:   "echo only, the stream breaks after it",
-			echo:   &protocol.EchoPrompts{Bytes: []int64{prompt}, Choices: 1},
-			stream: chunk(strings.Repeat("a", prompt), 0, "null"),
-			broken: true,
-		},
-		{
-			name: "two prompts, the second arrives first, echo only",
-			echo: &protocol.EchoPrompts{Bytes: []int64{prompt, 100}, Choices: 1},
-			stream: echo(strings.Repeat("a", 100), 1) +
-				echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0) + "data: [DONE]\n\n",
-			want: generated,
-		},
-		{
-			name:   "two prompts, the stream breaks before the second",
-			echo:   &protocol.EchoPrompts{Bytes: []int64{prompt, prompt}, Choices: 1},
-			stream: echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0),
-			broken: true,
-			want:   generated,
-		},
-		{
-			name:   "one prompt, n=2, the stream breaks before the second",
-			echo:   &protocol.EchoPrompts{Bytes: []int64{prompt}, Choices: 2},
-			stream: echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0),
-			broken: true,
-			want:   generated,
-		},
-		{
-			name: "text before index",
-			echo: &protocol.EchoPrompts{Bytes: []int64{prompt, 100}, Choices: 1},
-			stream: echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0) +
-				textFirst(strings.Repeat("a", 100)+strings.Repeat("b", generated), 1) + "data: [DONE]\n\n",
-			want: 2 * generated,
-		},
-		{
-			name: "echo split across chunks",
-			echo: &protocol.EchoPrompts{Bytes: []int64{prompt}, Choices: 1},
-			stream: chunk(strings.Repeat("a", 200), 0, "null") +
-				chunk(strings.Repeat("a", 100)+strings.Repeat("b", generated), 0, `"length"`) + "data: [DONE]\n\n",
-			want: generated,
-		},
-		{
-			name: "one prompt, both choices",
-			echo: &protocol.EchoPrompts{Bytes: []int64{prompt}, Choices: 2},
-			stream: echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0) +
-				echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 1) + "data: [DONE]\n\n",
-			want: 2 * generated,
-		},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			o := options
-			o.Echo = c.echo
-			got := relayWith(t, protocol.Completions, protocol.Completions, strings.NewReader(c.stream),
-				protocol.UsageContext{}, protocol.NewMemory(0), o, completionSettled)
-			if (got.err != nil) != c.broken {
-				t.Fatalf("broken %v, read error %v", c.broken, got.err)
-			}
-			first := firstText.FindString(c.stream)
-			if !slices.Contains(got.kinds, protocol.StepCommit) || !strings.Contains(string(got.out), first) {
-				t.Errorf("%s was not delivered at a commit point: steps %v\n%s", first, got.kinds, got.out)
-			}
-			p := got.r.Progress()
-			if p.ContentBytes != c.want || p.Text.Bytes != c.want {
-				t.Errorf("content %d, text %d, want %d each", p.ContentBytes, p.Text.Bytes, c.want)
-			}
-		})
 	}
 }
 
