@@ -129,7 +129,7 @@ func inputTokens(req *protocol.Request) int64 {
 func DemandOf(req *protocol.Request) billing.Demand {
 	d := billing.Demand{
 		TextBytes: req.TextBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
-		Direct: req.Format.Direct(), InputBytes: req.MaxInputBytes,
+		Direct:     req.Format.Direct(),
 		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
 	}
 	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {

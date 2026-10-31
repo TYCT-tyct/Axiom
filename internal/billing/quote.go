@@ -23,12 +23,10 @@ type Demand struct {
 	Documents                  int64        // files, whatever their pages: protocol does not parse them
 	ServerTools                []ServerTool // the server tools the request enables, such as web search
 	// Direct is a call of a format that answers one object rather than generating output: embeddings and rerank. It
-	// has no output tokens to reserve, and its server-tool charges are flat per use, not a sampling of the model.
-	Direct bool
-	// InputBytes is the largest single input of a direct batch, in bytes, for the context limit, which holds each input
-	// rather than the batch. 0 means TextBytes is that length. The batch is reserved, estimated and priced at its total:
-	// the upstream reports one usage for it, and the settlement bands that total, so the quote bands the same length.
-	InputBytes   int64
+	// has no output tokens to reserve, and its server-tool charges are flat per use, not a sampling of the model. Its
+	// batch is reserved, estimated and banded at its total, for every price alike: the upstream reports one usage for
+	// it, which the settlement bands as one prompt. The context holds each input instead, which routing checks.
+	Direct       bool
 	Compaction   bool // server-side compaction or context management is on
 	InputItems   catalog.ItemSet
 	ServiceTiers catalog.ServiceTierSet
@@ -258,7 +256,7 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	if err != nil {
 		return q, err
 	}
-	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, resample); err != nil {
+	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, resample, longest); err != nil {
 		return q, err
 	}
 	if err := q.priceCounted(d, &prices, tiers, longest, samplings); err != nil {
@@ -343,16 +341,21 @@ func checkEntry(e Quotable, s Segments) error {
 
 // priceServerTools adds every server tool at its most uses to the fixed part and, when the request enables web
 // search, prices what a search beyond them costs the meter: its fee and the samplings it adds, rereading the whole
-// context at the input price of the later samplings, twice with compaction.
+// context at the input price of the later samplings, twice with compaction. A tool's price is the dearest up to the
+// context, which a later sampling can fill; a direct call samples nothing, so its band is its batch's length.
 func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
-	searchable bool, resample inputPrice,
+	searchable bool, resample inputPrice, longest int64,
 ) error {
 	window := e.Model.ContextLength
+	band := window
+	if d.Direct {
+		band = longest
+	}
 	for it, n := range uses {
 		if n == 0 {
 			continue
 		}
-		price, ok := prices.ceiling(1<<catalog.Item(it), tiers, window)
+		price, ok := prices.ceiling(1<<catalog.Item(it), tiers, band)
 		if !ok {
 			return ErrUnpriced
 		}
@@ -362,7 +365,7 @@ func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tier
 		return nil
 	}
 	var ok bool
-	if q.search, ok = prices.ceiling(1<<catalog.ItemWebSearch, tiers, window); !ok {
+	if q.search, ok = prices.ceiling(1<<catalog.ItemWebSearch, tiers, band); !ok {
 		return ErrUnpriced
 	}
 	q.searches, q.resample, q.rereads = uses[catalog.ItemWebSearch], resample, window
@@ -464,13 +467,9 @@ func inputBound(d Demand, m Model, samplings int64) (first, longest int64) {
 	total := add(d.TextBytes, add(mul(d.Images, imageTokens(m)), mul(d.Documents, fileTokens(m))))
 	first = min(window, total)
 	if d.Direct {
-		// A batch is one charge for every input, and its context is the largest input: neither is the sum.
-		first = total
-		one := d.InputBytes
-		if one <= 0 {
-			one = total
-		}
-		return first, min(window, one)
+		// A batch is one charge for every input, and the one length every price of it is banded at: the settlement
+		// bands its reported total, which can pass any one input's context.
+		return total, total
 	}
 	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
 	if samplings > 1 || searchable {

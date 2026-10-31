@@ -356,7 +356,7 @@ func TestQuoteDirectBatchCrossesATier(t *testing.T) {
 	t.Parallel()
 	schedule := mustSchedule(t, prices)
 	e := Quotable{Price: schedule, Model: Model{ContextLength: 1000}}
-	q, err := quoteEntry(Demand{Direct: true, TextBytes: 400, InputBytes: 40}, e, Segments{}, true)
+	q, err := quoteEntry(Demand{Direct: true, TextBytes: 400}, e, Segments{}, true)
 	if err != nil {
 		t.Fatalf("quoteEntry: %v", err)
 	}
@@ -373,6 +373,31 @@ func TestQuoteDirectBatchCrossesATier(t *testing.T) {
 	}
 }
 
+// TestQuoteRerankSearchCrossesATier: a rerank's search unit is priced at the band its batch's total reaches, not at
+// the context: each document fits a 4096-token context, the batch reports 8000 input tokens and one search unit, and the
+// settlement prices that unit at the tier above 5000 tokens, which the reservation must cover.
+func TestQuoteRerankSearchCrossesATier(t *testing.T) {
+	t.Parallel()
+	schedule := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0","web_search":"1"},
+		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":5000,"rates":{"input":"0","web_search":"10"}}]}}`)
+	e := Quotable{Price: schedule, Model: Model{ContextLength: 4096}}
+	q, err := quoteEntry(Demand{Direct: true, TextBytes: 32000, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}}, e, Segments{}, true)
+	if err != nil {
+		t.Fatalf("quoteEntry: %v", err)
+	}
+	reported, err := catalog.NewUsage(map[catalog.Item]int64{in: 8000, webSearch: 1}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled, missing, err := schedule.Cost(reported)
+	if err != nil || missing != 0 {
+		t.Fatalf("Cost = %v, %v, %v", settled, missing, err)
+	}
+	if units(t, settled) != "10" || q.amount.Cmp(settled) < 0 {
+		t.Errorf("reserved %s for a rerank that settles at %s; want 10 settled within the reservation", units(t, q.amount), units(t, settled))
+	}
+}
+
 // TestQuoteDirect: an embeddings or rerank call has no output to reserve and no second sampling, even at an endpoint
 // whose model also generates and so has an output limit. Its schedule needs only the input price, and rerank's search
 // unit is a flat fee, not a whole-context resample.
@@ -380,7 +405,7 @@ func TestQuoteDirect(t *testing.T) {
 	t.Parallel()
 	schedule := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","web_search":"1"}}`)
 	e := Quotable{Price: schedule, Model: Model{ContextLength: 1000}, MaxOutput: 100}
-	d := Demand{Direct: true, TextBytes: 2, InputBytes: 2, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}}
+	d := Demand{Direct: true, TextBytes: 2, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}}
 	q, err := quoteEntry(d, e, Segments{}, true)
 	if err != nil {
 		t.Fatalf("quoteEntry: %v", err)
@@ -389,10 +414,10 @@ func TestQuoteDirect(t *testing.T) {
 		t.Errorf("amount = %s, want 3 (2 input + 1 search), not a whole-context resample", got)
 	}
 
-	d = Demand{Direct: true, TextBytes: 12000, InputBytes: 6000}
+	d = Demand{Direct: true, TextBytes: 12000}
 	first, longest := InputBound(d, Model{ContextLength: 8192})
-	if first != 12000 || longest != 6000 {
-		t.Errorf("InputBound = %d, %d; want the batch total 12000 and the largest input 6000", first, longest)
+	if first != 12000 || longest != 12000 {
+		t.Errorf("InputBound = %d, %d; want the batch total 12000 for both, past the 8192-token context", first, longest)
 	}
 	if got := InputEstimate(d, Model{ContextLength: 8192}); got != 3000 {
 		t.Errorf("InputEstimate = %d, want the batch total 3000 tokens", got)

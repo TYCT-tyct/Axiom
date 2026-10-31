@@ -63,3 +63,33 @@ func TestDirectContextBoundary(t *testing.T) {
 		}
 	}
 }
+
+// TestDirectPriceLimitAtTheBatchTotal: the price limit holds the band a direct batch settles at, its total, not its
+// largest input: ten 4000-byte inputs each fit below a 5000-token tier whose price passes a 0.000002 limit, but the
+// batch's total reaches it, so the endpoint is left out; a limit above the tier's price keeps it.
+func TestDirectPriceLimitAtTheBatchTotal(t *testing.T) {
+	t.Parallel()
+	tiered, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001"},
+		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":5000,"rates":{"input":"0.00001"}}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := endpoint(t, 1, func(e *routing.Endpoint) {
+		e.Native, e.Served = routing.Of(protocol.Embeddings), routing.Of(protocol.Embeddings)
+		e.Context, e.MaxOutput, e.Streams = 8192, 0, false
+		e.Price = routing.PriceRef{Version: uuid.UUID(id(103)), Schedule: tiered}
+	})
+	for _, tc := range []struct {
+		limit  string
+		routed bool
+	}{{"0.000002", false}, {"0.00002", true}} {
+		in := input()
+		in.Req.Format, in.Req.TextBytes, in.Req.MaxInputBytes = protocol.Embeddings, 40000, 4000
+		in.NativeOnly, in.NoSegments = true, true
+		in.Override.MaxPrice = limitOn(t, catalog.ItemInput, tc.limit)
+		plan, _, err := newHarness(t, routing.Config{}, openPreset(), e).r.Plan(in)
+		if got := len(plan.Entries) == 1; got != tc.routed {
+			t.Errorf("limit %s on a batch that settles at the 0.00001 tier: routed %t (error %v), want %t", tc.limit, got, err, tc.routed)
+		}
+	}
+}
