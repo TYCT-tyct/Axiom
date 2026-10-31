@@ -164,6 +164,7 @@ func TestAggregateAllocs(t *testing.T) {
 	})
 }
 
+//nolint:gocognit // one pair of loops per format and size: the nesting is the benchmark's table
 func BenchmarkAggregate(b *testing.B) {
 	for _, format := range formats {
 		for _, n := range []int{16, 128} {
