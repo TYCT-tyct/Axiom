@@ -1,4 +1,4 @@
-export { type Attempt, failed, failedFrom, opened, type Sendable } from "./attempt";
+export { type Attempt, failed, failedFrom, opened, refused, type Sendable } from "./attempt";
 export { EnrollPage } from "./auth/enroll";
 export { AuthFrame } from "./auth/frame";
 export { MfaPage } from "./auth/mfa";

@@ -1,15 +1,5 @@
 import { consoleApi, type Schemas, unwrapWithStatus } from "@axiom/api";
-import {
-  type Attempt,
-  can,
-  failedFrom,
-  LoadMore,
-  opened,
-  readForm,
-  type Sendable,
-  useErrors,
-  useSession,
-} from "@axiom/app";
+import { can, LoadMore, readForm, useErrors, useSession } from "@axiom/app";
 import {
   Button,
   DataState,
@@ -27,9 +17,16 @@ import {
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { clearAttempt, readAttempt, unanswered, writeAttempt } from "../attempt-store";
 import { balanceQuery, redemptionsQuery } from "../queries";
-import { isRedeemRequest, type RedeemRequest, readCode } from "../redeem";
+import {
+  afterFailure,
+  type RedeemRequest,
+  type Redemption,
+  readCode,
+  readRedemption,
+  type Sendable,
+  writeRedemption,
+} from "../redeem";
 
 // The redeem page turns a code into credit and lists what this account redeemed before. A code is shown once by the
 // person who hands it out; the page never reads it back, and the history carries its last four characters only.
@@ -46,28 +43,26 @@ export default function Redeem() {
   );
 }
 
-// attemptStore keeps the key and the code across a reload while the answer is unknown, so a retry cannot redeem twice.
-const attemptStore = "axiom.console.redeem.attempt";
-const attemptKey = (scope: string) => `${scope}/${attemptStore}`;
-
-// useRedeemRequest is the redemption being made: the code, and the key that makes a retry the same redemption. The
-// code and its key are fixed while the answer is unknown, also after a reload; a refusal is the only answer that
-// allows a new code.
+// useRedeemRequest is the redemption being made: the code in this page's memory and the key that makes a retry the
+// same redemption. Only the key of an answer that did not arrive survives a reload, and the form asks for the code
+// again under it; a refusal is the only answer that allows a new key.
 function useRedeemRequest(onRedeemed: (redemption: Schemas["RedeemCodeRedemption"]) => void) {
   const client = useQueryClient();
   const { user, account } = useSession();
   const scope = `${user.id}/${account}/redeem`;
-  const [initial] = useState(() => readAttempt(attemptKey(scope), isRedeemRequest));
-  const [attempt, setAttempt] = useState<Attempt<RedeemRequest>>(() => initial ?? opened(crypto.randomUUID()));
+  const [initial] = useState(() => readRedemption(scope));
+  const [redemption, setRedemption] = useState<Redemption>(
+    () => initial ?? { state: "editing", key: crypto.randomUUID() },
+  );
   const [failure, setFailure] = useState<unknown>(null);
-  const change = (next: Attempt<RedeemRequest>) => {
-    setAttempt(next);
-    writeAttempt(attemptKey(scope), next);
+  const change = (next: Redemption) => {
+    setRedemption(next);
+    writeRedemption(scope, next);
   };
-  type Sent = { from: Sendable<RedeemRequest>; request: RedeemRequest };
+  type Sent = { from: Sendable; request: RedeemRequest };
   const redeem = useMutation({
-    // Recorded before it is sent: a lost answer leaves only this request under this key to send again.
-    onMutate: ({ from, request }: Sent) => change(unanswered(from, request)),
+    // Recorded before it is sent: a lost answer leaves this key to send the code again.
+    onMutate: ({ from, request }: Sent) => change({ state: "unknown", key: from.key, request }),
     mutationFn: ({ from, request }: Sent) =>
       unwrapWithStatus(
         consoleApi.POST("/api/console/v1/redeem-codes", {
@@ -76,31 +71,35 @@ function useRedeemRequest(onRedeemed: (redemption: Schemas["RedeemCodeRedemption
         }),
       ),
     onSuccess: ({ data }) => {
-      clearAttempt(attemptKey(scope));
       setFailure(null);
       onRedeemed(data);
-      change(opened(crypto.randomUUID()));
+      change({ state: "editing", key: crypto.randomUUID() });
       void client.invalidateQueries({ queryKey: balanceQuery.queryKey });
       void client.invalidateQueries({ queryKey: redemptionsQuery.queryKey });
     },
-    onError: failedFrom(change, setFailure),
+    onError: (error: unknown, sent: Sent) => {
+      setFailure(error);
+      change(afterFailure(sent.from, sent.request, error, () => crypto.randomUUID()));
+    },
   });
-  return { attempt, failure, setFailure, redeeming: redeem.isPending, redeem, change };
+  return { redemption, failure, setFailure, redeeming: redeem.isPending, redeem, change };
 }
 
 function RedeemPanel() {
   const { t } = useTranslation();
   const allowed = can(useSession(), "balance.top_up");
   const [done, setDone] = useState<Schemas["RedeemCodeRedemption"] | null>(null);
-  const { attempt, failure, setFailure, redeeming, redeem, change } = useRedeemRequest(setDone);
+  const { redemption, failure, setFailure, redeeming, redeem, change } = useRedeemRequest(setDone);
   const [problem, setProblem] = useState<"missing" | "long" | null>(null);
   const submit = (form: HTMLFormElement) => {
-    if (redeeming || attempt.state === "reused" || attempt.state === "stale") {
+    if (redeeming || redemption.state === "reused") {
       return;
     }
-    if (attempt.state === "unknown") {
+    // A code this page still holds goes out again as it was sent; after a reload it is asked for again, under the key
+    // that came back from storage.
+    if (redemption.state === "unknown" && redemption.request) {
       setProblem(null);
-      redeem.mutate({ from: attempt, request: attempt.request });
+      redeem.mutate({ from: redemption, request: redemption.request });
       return;
     }
     const read = readCode(readForm(form));
@@ -110,7 +109,7 @@ function RedeemPanel() {
       return;
     }
     setProblem(null);
-    redeem.mutate({ from: attempt, request: read });
+    redeem.mutate({ from: redemption, request: read });
   };
   if (!allowed) {
     return (
@@ -125,28 +124,28 @@ function RedeemPanel() {
   return (
     <Panel title={t("redeem.title")}>
       <CodeForm
-        attempt={attempt}
+        redemption={redemption}
         failure={failure}
         problem={problem}
         pending={redeeming}
         onSubmit={submit}
-        onRestart={() => change(opened(crypto.randomUUID()))}
+        onRestart={() => change({ state: "editing", key: crypto.randomUUID() })}
       />
     </Panel>
   );
 }
 
-// CodeForm asks for one code and says where the attempt stands. A code is shown once, by whoever hands it out, so the
-// field is never filled from what was sent.
+// CodeForm asks for one code and says where the redemption stands. A code is shown once, by whoever hands it out, so
+// the field is never filled from what was sent; after a reload of an unanswered attempt it is asked for again.
 function CodeForm({
-  attempt,
+  redemption,
   failure,
   problem,
   pending,
   onSubmit,
   onRestart,
 }: {
-  attempt: Attempt<RedeemRequest>;
+  redemption: Redemption;
   failure: unknown;
   problem: "missing" | "long" | null;
   pending: boolean;
@@ -155,7 +154,7 @@ function CodeForm({
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const editing = attempt.state === "editing";
+  const asking = redemption.state === "editing" || (redemption.state === "unknown" && !redemption.request);
   return (
     <form
       noValidate
@@ -173,26 +172,45 @@ function CodeForm({
         maxLength={64}
         autoComplete="off"
         spellCheck={false}
-        disabled={!editing}
+        disabled={!asking}
         error={problem === "long" ? t("redeem.tooLong") : errors.field(failure, "code")}
       />
       {problem === "missing" ? <FormError>{t("redeem.missing")}</FormError> : null}
       {failure ? <FormError>{errors.message(failure)}</FormError> : null}
-      {attempt.state === "unknown" ? <p className="text-label text-t3">{t("redeem.unknown")}</p> : null}
-      {attempt.state === "reused" ? <p className="text-label text-t3">{t("redeem.reused")}</p> : null}
-      <div className="flex justify-end gap-2">
-        {editing ? null : (
-          <Button size="md" onClick={onRestart} disabled={pending}>
-            {t("redeem.restart")}
-          </Button>
-        )}
-        {attempt.state === "editing" || attempt.state === "unknown" ? (
-          <SubmitButton pending={pending}>
-            {attempt.state === "unknown" ? t("redeem.resend") : t("redeem.submit")}
-          </SubmitButton>
-        ) : null}
-      </div>
+      {redemption.state === "unknown" ? (
+        <p className="text-label text-t3">{redemption.request ? t("redeem.unknown") : t("redeem.unknownAgain")}</p>
+      ) : null}
+      {redemption.state === "reused" ? <p className="text-label text-t3">{t("redeem.reused")}</p> : null}
+      <CodeActions redemption={redemption} pending={pending} onRestart={onRestart} />
     </form>
+  );
+}
+
+// CodeActions offers what the state allows: a new attempt once the old one is known to be over, and a send while the
+// code can still be typed.
+function CodeActions({
+  redemption,
+  pending,
+  onRestart,
+}: {
+  redemption: Redemption;
+  pending: boolean;
+  onRestart: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex justify-end gap-2">
+      {redemption.state === "editing" ? null : (
+        <Button size="md" onClick={onRestart} disabled={pending}>
+          {t("redeem.restart")}
+        </Button>
+      )}
+      {redemption.state === "editing" || redemption.state === "unknown" ? (
+        <SubmitButton pending={pending}>
+          {redemption.state === "unknown" ? t("redeem.resend") : t("redeem.submit")}
+        </SubmitButton>
+      ) : null}
+    </div>
   );
 }
 

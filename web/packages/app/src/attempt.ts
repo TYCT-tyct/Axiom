@@ -53,9 +53,10 @@ export function failedFrom<Request>(change: (attempt: Attempt<Request>) => void,
   };
 }
 
-// Only the server's own refusal, a 4xx with its error body, proves the change was not done. No answer, a server
-// failure, a response that could not be read (a proxy's page after the change was made) and a success without its
-// result all leave it possible that it was.
-function refused(error: unknown) {
+// refused is the only answer that proves a change was not done: the server's own refusal, a 4xx with its error body. No
+// answer, a server failure, a response that could not be read (a proxy's page after the change was made) and a success
+// without its result all leave it possible that it was. A form that keeps a secret out of its stored attempt applies the
+// same rule with it.
+export function refused(error: unknown) {
   return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.code !== undefined;
 }
