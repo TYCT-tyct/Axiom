@@ -23,7 +23,8 @@ type LoginKey [loginKeyLen]byte
 // DeriveKey derives a 32-byte HMAC key from the snapshot's highest version under label. Each caller keeps its own
 // label, so one snapshot can serve the login and mail keys without either following the other's rotation.
 func (m *MasterKeys) DeriveKey(label string) ([32]byte, error) {
-	master := m.keys[m.latest]
+	material := m.material()
+	master := material.keys[material.latest]
 	derived, err := hkdf.Key(sha256.New, master[:], nil, label, 32)
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("secret: derive a key: %w", err)

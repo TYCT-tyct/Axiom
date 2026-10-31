@@ -83,8 +83,16 @@ func (s *keySnapshot) withConfirmed(versions []uint32) *keySnapshot {
 
 // MasterKeys is one read of the master key file. The ring a node checks and seals with and the login and mail keys
 // derived from the file's highest version come from these bytes, so a file replaced during startup cannot mix two snapshots; the
-// plaintext stays here and callers receive only the ring and the derived keys.
+// plaintext stays here and callers receive only the ring and the derived keys. It sits behind a closure, as in Secret,
+// because fmt prints a struct's unexported fields by reflection and a bad-verb diagnostic (%w on a non-error) bypasses
+// Format: a map field would be printed by both, while a function value prints as an address.
 type MasterKeys struct { //nolint:recvcheck // the other methods read the snapshot; Format and LogValue take a value so a dereferenced copy redacts too
+	material func() masterKeyMaterial
+}
+
+// masterKeyMaterial is what the closure in MasterKeys hands its methods: reachable only through the closure, never as a
+// field fmt can walk.
+type masterKeyMaterial struct {
 	keys   map[uint32][32]byte
 	latest uint32
 }
@@ -95,14 +103,15 @@ func LoadMaster(path string) (*MasterKeys, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &MasterKeys{keys: keys, latest: latest}, nil
+	return &MasterKeys{material: func() masterKeyMaterial { return masterKeyMaterial{keys: keys, latest: latest} }}, nil
 }
 
 // Keyring is the ring these keys make, with the file's highest version as the legacy write version. A database-backed
 // node must use Rotation.CheckRing before sealing: the database's active version overrides this legacy default.
 func (m *MasterKeys) Keyring() *Keyring {
+	material := m.material()
 	ring := &Keyring{}
-	ring.state.Store(newSnapshot(m.keys, m.latest))
+	ring.state.Store(newSnapshot(material.keys, material.latest))
 	return ring
 }
 
@@ -168,12 +177,16 @@ func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {
 	if path == "" {
 		return nil, 0, fmt.Errorf("%s: required", variable)
 	}
-	// Lstat, not Stat: opening follows a link, and the writer refuses to replace one because rename replaces the
-	// directory entry, so a link would read one file's bytes and rotate another's. Whoever can point the variable at a
-	// link would otherwise choose the master key the node seals under while the deployment keeps its own file private.
-	info, err := os.Lstat(path)
+	file, err := os.Open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
 	if err != nil {
 		return nil, 0, fileError(variable, "open", err)
+	}
+	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
+	// The opened file is what gets read, so its own mode is what the rule checks: a path replaced between a check and
+	// the open must not decide which file's permissions were checked. Type and mode both come from the descriptor.
+	info, err := file.Stat()
+	if err != nil {
+		return nil, 0, fileError(variable, "stat", err)
 	}
 	if !info.Mode().IsRegular() {
 		return nil, 0, fmt.Errorf("%s: want a regular file", variable)
@@ -182,11 +195,16 @@ func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return nil, 0, fmt.Errorf("%s: permissions must deny all group and other access", variable)
 	}
-	file, err := os.Open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
+	// The path must still be that same file and not a link to one: whoever can point the variable at a link picks the
+	// key the node seals under, while the deployment keeps its own file private, and the writer refuses to replace a
+	// link for the same reason.
+	at, err := os.Lstat(path)
 	if err != nil {
-		return nil, 0, fileError(variable, "open", err)
+		return nil, 0, fileError(variable, "stat", err)
 	}
-	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
+	if !at.Mode().IsRegular() || !os.SameFile(info, at) {
+		return nil, 0, fmt.Errorf("%s: want a regular file", variable)
+	}
 	return readKeys(variable, file)
 }
 
