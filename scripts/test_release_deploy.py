@@ -22,6 +22,10 @@ docker() {
   case "$*" in
     'inspect --format {{.Config.Image}} axiom'|'inspect --format {{.Config.Image}} migrate') echo "${ACTUAL_IMAGE:-$CI_DEPLOY_IMAGE}" ;;
     'compose -f deploy/compose.yaml ps --all --quiet axiom') echo axiom ;;
+    'inspect --format {{range .Config.Env}}'*) echo 'TMPDIR=/retention-tmp' ;;
+    'inspect --format {{range .Mounts}}'*) echo 'volume true' ;;
+    'run --rm --network none --volumes-from axiom'*) echo '65532:65532:700' ;;
+    'run --rm --user 65532:65532 --network none --volumes-from axiom'*) : ;;
     'compose -f deploy/compose.yaml ps --all --quiet migrate') echo migrate ;;
     'compose -f deploy/compose.yaml port axiom 8080') echo 127.0.0.1:12345 ;;
     'compose -f deploy/compose.yaml port axiom 8082') echo 127.0.0.1:12346 ;;

@@ -85,6 +85,8 @@ type callNode struct {
 	stop      context.CancelFunc // ends the loops; the node calls it after Drain, so the holder beats while settlements land
 	ready     func() bool        // whether the node can route now: its latest snapshot can route and is fresh
 	reaped    <-chan error       // carries what billing.Run ended with, when it is not a shutdown
+	// models is the list the route builder publishes with each snapshot, also read by the public models and prices page.
+	models *gateway.ModelList
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -181,7 +183,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
 		Outstanding: outstanding,
 	})
-	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams}, err
+	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models}, err
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and

@@ -48,6 +48,8 @@ type nodeSettings struct {
 	trustedProxies                    []netip.Prefix
 	valkey                            kv.Config
 	smtp                              mail.Config
+	objectstore                       objectstore.Config
+	retentionURL                      string
 	exchangeSource                    string
 }
 
@@ -129,11 +131,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
 	}
 	smtp, mailErr := mail.ReadConfig(env)
-	// The bucket is optional and no program feature writes through it yet (internal/platform/objectstore/README.md).
-	// Read it here so a node whose deployment sets it starts, and so half a configuration is a startup error rather than a
-	// surprise for the first archive job; `axiom objectstore` and the backup job use the same client, the latter with its
-	// own bucket.
-	_, storeErr := objectstore.ReadConfig(env)
+	archiveErr := readArchiveSettings(env, s)
 	var exchangeErr error
 	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
 		exchangeErr = errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb")
@@ -148,7 +146,18 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	if err := readNodeTLS(env, s); err != nil {
 		errs = append(errs, err)
 	}
-	return append(errs, mailErr, storeErr, s.valkey.Resolve(), healthErr, exchangeErr)
+	return append(errs, mailErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
+}
+
+// readArchiveSettings reads the retention login and the archive bucket. Both are optional: without the URL the job does
+// not run, and without a bucket the call log keeps every partition. Half a bucket configuration is a startup error, not
+// a surprise for the first archive run; `axiom objectstore` and the backup job use the same client, the latter with its
+// own bucket. A configured bucket without the retention URL is a startup error in serveWith.
+func readArchiveSettings(env *config.Env, s *nodeSettings) error {
+	s.retentionURL = env.String(retentionDatabaseURLVar, "")
+	store, err := objectstore.ReadConfig(env)
+	s.objectstore = store
+	return err
 }
 
 // readDirectFormats reads the gate on writing direct formats. It is off until every node can read them.

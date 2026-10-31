@@ -480,7 +480,7 @@ test.describe("calls", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/calls");
-    const rows = page.getByRole("row");
+    const rows = page.getByRole("table", { name: "调用记录" }).getByRole("row");
     await expect(rows).toHaveCount(51);
     // Times show in the viewer's zone and say which it is.
     await expect(page.getByRole("link", { name: /16:29:00/ })).toBeVisible();
@@ -503,6 +503,22 @@ test.describe("calls", () => {
     await expect(page.getByRole("heading", { level: 1, name: "调用详情" })).toBeVisible();
     await expect(page.getByText("00000000-0000-4000-8000-000000000001")).toBeVisible();
     await expect(page.getByText("cache_read")).toBeVisible();
+  });
+
+  test("the summary groups the same calls and exports them", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/calls");
+    const summary = page.getByRole("table", { name: "汇总" });
+    // Every fixture call is on the same day, so one day group and its header.
+    await expect(summary.getByRole("row")).toHaveCount(2);
+    await page.getByLabel("分组").selectOption("model");
+    await expect(page).toHaveURL(/group_by=model/);
+    await expect(summary.getByRole("row")).toHaveCount(5);
+
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "导出 CSV" }).click();
+    expect((await download).suggestedFilename()).toMatch(/^calls-\d{4}-\d{2}-\d{2}\.csv$/);
   });
 
   test("a failed call says so, and a call that is not the account's is not found", async ({ page }) => {
@@ -528,7 +544,9 @@ test.describe("calls", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/calls");
-    await expect(page.getByRole("row", { name: /免单/ }).first()).toBeVisible();
+    await expect(
+      page.getByRole("table", { name: "调用记录" }).getByRole("row", { name: /免单/ }).first(),
+    ).toBeVisible();
     await page.getByRole("link", { name: "概览" }).click();
     await expect(page.getByRole("heading", { name: "最近的报错" })).toBeVisible();
     await expect(page.getByText("upstream_timeout").first()).toBeVisible();

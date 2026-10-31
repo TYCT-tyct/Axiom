@@ -31,7 +31,7 @@ func Module() pg.Module {
 	if err != nil {
 		panic(err) // the directory is embedded, so this cannot happen
 	}
-	return pg.Module{Name: "observability", Migrations: files}
+	return pg.Module{Name: "observability", Migrations: files, JobRole: retentionJobRole}
 }
 
 // EndUserHash is the keyed hash of an end user's identifier. Its array is private, so no code outside this package can

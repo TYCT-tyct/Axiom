@@ -80,6 +80,8 @@
 
 目录、售价、端点字段只从构建时发布的内存投影读取，没有逐请求目录、计费或供应商查询。**鉴权例外**：这些路径仍像既有模型列表一样要求调用 key，实时停用、过期、IP 和模型权限通过 `accounts.AdmitBatch`（单请求路径为 `Admit`）的数据库事务检查；不能用仅缓存身份的 AuthenticateKey 替代准入。因此不承诺“每请求零 DB”，承诺的是响应数据零 DB。完全零 DB 需要另定具有失效机制的权限快照，当前没有这份数据，不在本次虚构它。
 
+**网站和控制台的模型与价格**不复制这份 OpenRouter 投影，而是从同一次构建的 `ModelList` 取 `Public(billing.Audience)`：只含已发布、有可用售价的公共模型，字段是目录 ID、名字、厂商、上下文、最大输出、是否流式、能力和 `catalog.ScheduleView`（币种、分档口径、每个服务等级/档位/计费项的实际生效单价，含空档恢复的基础价）。`GET /api/console/v1/models` 匿名，按站点默认等级取价；`GET /api/console/v1/models/account` 要登录，按账户当前等级取价。两者都只读内存快照，与调用扣费同一次构建，所以页面的价就是下单的价；不返回供应商、端点、代号、成本或价格来源。旧节点没有这个操作时页面显示「价格暂不可用」，不把缺失当成免费。
+
 ### 转发规则
 
 依据 Claude Code 官方的网关兼容指南（Claude Code《Gateway compatibility guide》，2026-10）：
@@ -380,6 +382,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 
 | 决策 | 理由 |
 |---|---|
+| 模型与价格页复用路由构建的投影，按受众取售价，公开接口不含供应商与成本 | 依据 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地 #317。对比逐请求读目录与售价、构建时投影，选择后者：页面价格和调用扣费来自同一份 `ModelList` 发布，不会出现页面一个价、扣费另一个价；不选把 OpenRouter 发现字段整份复用，因为其中的端点、代号和供应商会泄露货源；价格用 `ScheduleView` 保留分档、服务等级和按张/按秒等单位，不选折成每百万 token 的近似值，否则页面会对按次或分档模型给出错误价格。官网按站点默认等级、控制台按账户当前等级取价，未登录看到的就是注册后付的价；旧节点没有这个操作时页面显示不可用 |
 | E4-2/P13 的速率与预算只投影已有策略和计数，不增加预算状态 | 依据 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地。对比复制 OpenRouter 的组织/护栏对象与复用本站工作区/key，选择后者：没有对应对象时不造 ID，不引入第二份资金事实。remaining 扣预留，effective 按整数比较后才转显示单位，保持与准入检查一致 |
 | 只给请求速率 429 发窗口额度头，Reset 给保守清空时刻，Retry-After 保留 60 秒上限 | 并发/排队不是请求窗口，不伪造 Limit；滑动近似没有固定桶的精确重置时刻，两个窗口的上界不冒充剩余精确秒数；沿用既有客户端兼容的 60 秒 Retry-After 上限，有意差异和基线见上文 |
 | 推理开关、展示和强度分开，隐藏在计量之后执行 | [OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)（2026-10-29）规定 exclude 不减费用、预算与 effort 可换算；隐藏明文仍保留工具续聊必需的签名/密文，不以显示要求推断启用模式；[Anthropic Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) 的 omitted 保留签名且收费，[OpenAI Reasoning models](https://developers.openai.com/api/docs/guides/reasoning) 当前包含 minimal/xhigh/max。复用规范请求、UsageContext 与现有流读取器，不另建协议树；相比只信上游隐藏，在本地计量后过滤能防忽略隐藏的端点漏出明文。无法精确表达预算时按公开比例取最近档，同距取低，不承诺近似是硬上限；不按模型名猜 supported_efforts/mandatory。换算表在 protocol README。依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，独立评审由流水线安排 |

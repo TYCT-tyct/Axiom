@@ -13,6 +13,18 @@ import (
 	"uuid"
 )
 
+const accountTier = `-- name: AccountTier :one
+SELECT tier_id FROM accounts.accounts WHERE id = $1
+`
+
+// The tier whose sale prices the account pays; the account row is the only row the console scope can read.
+func (q *Queries) AccountTier(ctx context.Context, db DBTX, accountID uuid.UUID) (uuid.UUID, error) {
+	row := db.QueryRow(ctx, accountTier, accountID)
+	var tier_id uuid.UUID
+	err := row.Scan(&tier_id)
+	return tier_id, err
+}
+
 const advanceTOTP = `-- name: AdvanceTOTP :execrows
 UPDATE accounts.users SET totp_last_step = $1 WHERE id = $2 AND totp_last_step < $1
 `

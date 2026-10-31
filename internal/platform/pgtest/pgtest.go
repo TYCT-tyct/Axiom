@@ -33,6 +33,7 @@ import (
 // Database is a fresh copy of the migrated template.
 type Database struct {
 	App       string // URL of the application's login role, axiom_app
+	Retention string // URL of the call-log retention job's login role, axiom_retention
 	Migrator  string // URL of the migration administrator, which may create schemas in this database
 	Superuser string // URL of the superuser, for seeding and inspecting from outside the application
 }
@@ -80,6 +81,7 @@ func New(t testing.TB, modules ...pg.Module) Database {
 	}
 	return Database{
 		App:       at("axiom_app", "app", name),
+		Retention: at("axiom_retention", "retention", name),
 		Migrator:  at("axiom_migrator", "axiom_migrator", name),
 		Superuser: at("postgres", "postgres", name),
 	}
@@ -259,6 +261,7 @@ func prepare(ctx context.Context, container *postgres.PostgresContainer) (string
 	}
 	if err := Run(ctx, at("postgres", "postgres", "postgres"),
 		`CREATE ROLE axiom_app LOGIN PASSWORD 'app'`,
+		`CREATE ROLE axiom_retention LOGIN PASSWORD 'retention'`,
 		`CREATE ROLE axiom_migrator LOGIN CREATEROLE PASSWORD 'axiom_migrator'`,
 		`CREATE DATABASE axiom_template`,
 		`GRANT CREATE ON DATABASE axiom_template TO axiom_migrator`); err != nil {

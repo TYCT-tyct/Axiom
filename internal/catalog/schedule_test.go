@@ -1,6 +1,7 @@
 package catalog_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -166,6 +167,96 @@ func TestParseScheduleRejects(t *testing.T) {
 // TestScheduleScaled: every price, in every tier and service tier, is multiplied; the currency becomes the one asked for;
 // an item without a price stays without one; and a price that does not divide at the finest price a schedule holds is
 // rounded up by less than one place.
+func TestScheduleView(t *testing.T) {
+	// Each item's effective price at each band, in service tier, band and item order. A band that leaves an item out
+	// inherits the base price; an empty band therefore restores the base prices rather than removing them.
+	got := mustParse(t, serviceTiers).View()
+	if got.Currency != mustCurrency(t, "USD") {
+		t.Errorf("currency: %v", got.Currency)
+	}
+	if want := []catalog.Item{catalog.ItemInput, catalog.ItemCacheRead}; !slices.Equal(got.Basis, want) {
+		t.Errorf("basis: %v, want %v", got.Basis, want)
+	}
+	type rate struct {
+		tier  catalog.ServiceTier
+		base  bool
+		above int64
+		item  catalog.Item
+		price string
+	}
+	want := []rate{
+		{catalog.ServiceTierStandard, true, 0, catalog.ItemInput, "1"},
+		{catalog.ServiceTierStandard, true, 0, catalog.ItemCacheRead, "1"},
+		{catalog.ServiceTierStandard, true, 0, catalog.ItemOutput, "2"},
+		{catalog.ServiceTierStandard, false, 10, catalog.ItemInput, "1"},
+		{catalog.ServiceTierStandard, false, 10, catalog.ItemCacheRead, "1"},
+		{catalog.ServiceTierStandard, false, 10, catalog.ItemOutput, "4"},
+		{catalog.ServiceTierPriority, true, 0, catalog.ItemInput, "1"},
+		{catalog.ServiceTierPriority, true, 0, catalog.ItemOutput, "3"},
+		{catalog.ServiceTierPriority, false, 10, catalog.ItemInput, "1"},
+		{catalog.ServiceTierPriority, false, 10, catalog.ItemOutput, "5"},
+		{catalog.ServiceTierFast, true, 0, catalog.ItemInput, "6"},
+		{catalog.ServiceTierFast, true, 0, catalog.ItemOutput, "12"},
+		{catalog.ServiceTierFast, false, 10, catalog.ItemInput, "6"},
+		{catalog.ServiceTierFast, false, 10, catalog.ItemOutput, "12"},
+	}
+	if len(got.Rates) != len(want) {
+		t.Fatalf("rates: %d, want %d: %+v", len(got.Rates), len(want), got.Rates)
+	}
+	for i, w := range want {
+		g := got.Rates[i]
+		if g.ServiceTier != w.tier || g.Base != w.base || g.Above != w.above || g.Item != w.item || g.Price.String() != w.price {
+			t.Errorf("rate %d: %+v, want %+v", i, g, w)
+		}
+	}
+}
+
+// TestScheduleViewKeepsBandsApart covers the two cases that a view of only the explicit prices gets wrong: a first
+// threshold of 0 is a band of its own, not the base; and an empty band restores the base prices instead of being
+// dropped, so "2 above 100" does not silently become "2 forever".
+func TestScheduleViewKeepsBandsApart(t *testing.T) {
+	for name, tc := range map[string]struct {
+		schedule string
+		want     []struct {
+			base  bool
+			above int64
+			price string
+		}
+	}{
+		"zero threshold": {
+			`{"v":1,"currency":"USD","rates":{"input":"0.000001"},"context_tiers":{"basis":["input"],"method":"whole",` +
+				`"tiers":[{"above":0,"rates":{"input":"0.000002"}}]}}`,
+			[]struct {
+				base  bool
+				above int64
+				price string
+			}{{true, 0, "0.000001"}, {false, 0, "0.000002"}},
+		},
+		"empty band restores base": {
+			`{"v":1,"currency":"USD","rates":{"input":"1"},"context_tiers":{"basis":["input"],"method":"whole",` +
+				`"tiers":[{"above":100,"rates":{"input":"2"}},{"above":200,"rates":{}}]}}`,
+			[]struct {
+				base  bool
+				above int64
+				price string
+			}{{true, 0, "1"}, {false, 100, "2"}, {false, 200, "1"}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := mustParse(t, tc.schedule).View().Rates
+			if len(got) != len(tc.want) {
+				t.Fatalf("rates: %+v, want %d", got, len(tc.want))
+			}
+			for i, w := range tc.want {
+				g := got[i]
+				if g.Base != w.base || g.Above != w.above || g.Price.String() != w.price {
+					t.Errorf("rate %d: %+v, want base %v above %d price %s", i, g, w.base, w.above, w.price)
+				}
+			}
+		})
+	}
+}
+
 func TestScheduleScaled(t *testing.T) {
 	t.Parallel()
 	cny, usd := mustCurrency(t, "CNY"), mustCurrency(t, "USD")

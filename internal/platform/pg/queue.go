@@ -70,7 +70,7 @@ const (
 	// QueueSyncs is the queue of the jobs that reach a supplier: a sweep, a round of one supplier, and the price syncs
 	// when they arrive. They are the long jobs, waiting on the network.
 	QueueSyncs = "syncs"
-	// QueueArchive is the queue of housekeeping: the scan of discarded jobs today, retention when it lands.
+	// QueueArchive is the queue of housekeeping: the scan of discarded jobs and the call-log retention run.
 	QueueArchive = "archive"
 )
 

@@ -31,6 +31,7 @@ tags:
   - {name: Catalog, description: "Authors, models, their names, specs and reference prices."}
   - {name: Pricing, description: "Pricing rules and their preview."}
   - {name: Alerts, description: "Platform operations alert rules, channels, incidents and receipts."}
+  - {name: Observability, description: "Call-log retention and platform observability settings."}
   - {name: Payments, description: "Payment discrepancies and investigation notes."}
 paths:
   /api/admin/v1/calls:
@@ -1413,6 +1414,62 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/AlertTestResult"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/retention:
+    get:
+      operationId: getRetention
+      tags: [Observability]
+      summary: Read the call log's hot window
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The saved window, or the code default before the first save.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Retention"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setRetention
+      tags: [Observability]
+      summary: Replace the call log's hot window
+      description: >-
+        A monthly partition whose whole month is older than hot_days is copied to the deployment's object store and
+        dropped only after that copy is confirmed. Without an object store every partition stays, whatever the window.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RetentionRequest"}
+      responses:
+        "201":
+          description: The saved window.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Retention"}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -4315,6 +4372,19 @@ components:
         spend_ratio: {type: number, format: double, minimum: 1, maximum: 1000, description: "Recent spend divided by the baseline's expected spend for the same window."}
         min_new_region_calls: {type: integer, minimum: 1, maximum: 1000000}
         min_new_model_calls: {type: integer, minimum: 1, maximum: 1000000}
+    Retention:
+      type: object
+      description: "The call log's hot window. Every field is optional so an older node's response is read as the parts it has."
+      additionalProperties: false
+      properties:
+        hot_days: {type: integer, minimum: 0, maximum: 3650, description: "Whole months older than this leave PostgreSQL for the object store. 0 keeps every partition."}
+    RetentionRequest:
+      type: object
+      required: [hot_days, reason]
+      additionalProperties: false
+      properties:
+        hot_days: {type: integer, minimum: 0, maximum: 3650}
+        reason: {$ref: "#/components/schemas/Reason"}
     AlertRule:
       type: object
       properties:

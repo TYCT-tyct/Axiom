@@ -6,6 +6,13 @@ export { Dialog } from "./components/dialog";
 export { CheckField, FormError, SelectField, TextAreaField, TextField } from "./components/form";
 export { Icon, type IconName } from "./components/icon";
 export { Logo } from "./components/logo";
+export {
+  ModelCatalog,
+  ModelFilterForm,
+  type ModelFilters,
+  modelAbilities,
+  type PublicModel,
+} from "./components/models";
 export { Notice } from "./components/notice";
 export { usePageTitle } from "./components/page-title";
 export { Badge, Panel, Table, Td, Th } from "./components/panel";
