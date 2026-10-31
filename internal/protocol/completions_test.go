@@ -294,11 +294,11 @@ func TestCompletionsEchoPerChoice(t *testing.T) {
 			want:   generated,
 		},
 		{
-			name:   "text before index",
-			echo:   &protocol.EchoPrompts{Bytes: []int64{prompt, prompt}, Choices: 1},
-			stream: textFirst(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0),
-			broken: true,
-			want:   generated,
+			name: "text before index",
+			echo: &protocol.EchoPrompts{Bytes: []int64{prompt, 100}, Choices: 1},
+			stream: echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0) +
+				textFirst(strings.Repeat("a", 100)+strings.Repeat("b", generated), 1) + "data: [DONE]\n\n",
+			want: 2 * generated,
 		},
 		{
 			name: "echo split across chunks",
