@@ -12,6 +12,87 @@ import (
 	"uuid"
 )
 
+const platformCallMoney = `-- name: PlatformCallMoney :one
+SELECT
+    coalesce(sum(charged), 0)::bigint AS revenue,
+    coalesce(sum(charged - profit) FILTER (WHERE profit IS NOT NULL), 0)::bigint AS cost,
+    count(*) FILTER (WHERE profit IS NULL)::bigint AS unknown_cost_calls
+FROM billing.reservations
+WHERE site_id = $1 AND created_at >= $2 AND created_at < $3
+    AND state IN ('settled', 'cleanup_settled')
+`
+
+type PlatformCallMoneyParams struct {
+	SiteID uuid.UUID
+	Since  time.Time
+	Until  time.Time
+}
+
+type PlatformCallMoneyRow struct {
+	Revenue          int64
+	Cost             int64
+	UnknownCostCalls int64
+}
+
+// One site's calls admitted in a window: what they were charged and, where it is known, what the supplier cost. The
+// amount is the reservation's, so a correction restates the call's own window rather than adding a second event; the
+// time axis is the call's, the same as the call log's (README.md「运营看板」).
+func (q *Queries) PlatformCallMoney(ctx context.Context, db DBTX, arg PlatformCallMoneyParams) (PlatformCallMoneyRow, error) {
+	row := db.QueryRow(ctx, platformCallMoney, arg.SiteID, arg.Since, arg.Until)
+	var i PlatformCallMoneyRow
+	err := row.Scan(&i.Revenue, &i.Cost, &i.UnknownCostCalls)
+	return i, err
+}
+
+const platformCash = `-- name: PlatformCash :many
+SELECT coalesce(e.currency, '')::text AS currency, sum(e.amount)::bigint AS amount
+FROM billing.transactions t
+CROSS JOIN LATERAL (
+    SELECT e.currency, e.amount FROM billing.entries e
+    WHERE e.transaction_id = t.id AND e.book = 'cash'
+    OFFSET 0
+) e
+WHERE t.site_id = $1 AND t.created_at >= $2 AND t.created_at < $3
+    AND t.kind IN ('credit', 'refund')
+GROUP BY e.currency
+ORDER BY e.currency NULLS FIRST
+`
+
+type PlatformCashParams struct {
+	SiteID uuid.UUID
+	Since  time.Time
+	Until  time.Time
+}
+
+type PlatformCashRow struct {
+	Currency string
+	Amount   int64
+}
+
+// The cash that moved for one site in a window, by payment currency: paid credits in, refunds out. The kinds keep the
+// scan to those few transactions; a NULL currency is the site's accounting currency.
+// OFFSET 0 keeps this a loop over the window's few cash transactions: without it the planner may hash away the
+// subquery and read every entry, which is the call volume.
+func (q *Queries) PlatformCash(ctx context.Context, db DBTX, arg PlatformCashParams) ([]PlatformCashRow, error) {
+	rows, err := db.Query(ctx, platformCash, arg.SiteID, arg.Since, arg.Until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PlatformCashRow
+	for rows.Next() {
+		var i PlatformCashRow
+		if err := rows.Scan(&i.Currency, &i.Amount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const readCreditBatch = `-- name: ReadCreditBatch :many
 
 SELECT id, site_id, account_id, source, amount, expires_at, created_at, coalesce(currency, '')::text AS currency, paid, fee,
