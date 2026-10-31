@@ -23,6 +23,7 @@ type modelName struct {
 	thinking bool              // the deprecated :thinking, which only a request that asks for reasoning itself honours
 	online   bool              // the deprecated :online web plugin
 	auto     bool              // openrouter/auto: the routing ranking chooses the model
+	free     bool              // openrouter/free: the routing ranking chooses among the free catalog entries
 }
 
 // variant is what one documented suffix asks of the request (OpenRouter《Model Variants》, read 2026-10-29). A suffix
@@ -104,6 +105,7 @@ func parseModelName(name string) (modelName, *Refusal) {
 		}
 	}
 	m.auto = strings.EqualFold(m.base, "openrouter/auto")
+	m.free = strings.EqualFold(m.base, "openrouter/free")
 	return m, nil
 }
 
@@ -113,6 +115,19 @@ type variantNames struct {
 	alternates []string // the base names of the models it lists that could be tried
 	auto       bool     // the request named openrouter/auto, which the routing ranking expands
 	online     bool     // the request asked for the deprecated :online web plugin on any of its models
+	free       bool     // the request named openrouter/free, which the routing ranking expands over the free entries
+}
+
+// routerName is the router the request named, "" when it named a model instead.
+func (v variantNames) routerName() string {
+	switch {
+	case v.auto:
+		return "openrouter/auto"
+	case v.free:
+		return "openrouter/free"
+	}
+	return ""
+
 }
 
 // readRouting reads what a request's provider object and model names ask of the route, for a call and for a count alike,
@@ -152,7 +167,7 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 		return over, variantNames{}, invalid(errThinking)
 	}
 	over.Sort = cmp.Or(over.Sort, primary.sort)
-	v := variantNames{primary: primary.base, auto: primary.auto, online: primary.online}
+	v := variantNames{primary: primary.base, auto: primary.auto, online: primary.online, free: primary.free}
 	for _, name := range req.Models {
 		base, online, ok, err := alternate(name, explicit, over.Sort, verified, reasoning)
 		if err != nil {
@@ -179,9 +194,11 @@ func alternate(name string, explicit bool, ranking *routing.Strategy, verified, 
 		}
 		return "", false, false, ref
 	}
-	if alt.auto {
-		// auto already considers every model the key may call; a second auto adds nothing to try.
+	if alt.auto || alt.free {
+		// auto already considers every model the key may call and free every free one; a second such name adds
+		// nothing to try.
 		return "", false, false, nil
+
 	}
 	if err := alternateRefusal(alt, explicit, ranking, verified, reasoning); err != nil {
 		return "", false, false, err
@@ -218,14 +235,14 @@ func resolve(snap *catalog.Snapshot, v variantNames) ([]catalog.ModelID, error) 
 	return models, nil
 }
 
-// resolveModels names the catalog models a request may call: the ones it names, or none for openrouter/auto, whose model
-// routing ranks. Compression needs one model's context window, which auto names only after it routes.
+// resolveModels names the catalog models a request may call: the ones it names, or none for a router, whose model
+// routing ranks. Compression needs one model's context window, which a router names only after it routes.
 func resolveModels(snap *catalog.Snapshot, v variantNames, req *protocol.Request) ([]catalog.ModelID, error) {
-	if !v.auto {
+	if v.routerName() == "" {
 		return resolve(snap, v)
 	}
 	if req.Compression == protocol.CompressionEnabled {
-		return nil, invalid("openrouter/auto chooses a model while routing, so context-compression cannot know its context window. Name the model or leave the plugin out.")
+		return nil, invalid(v.routerName() + " chooses a model while routing, so context-compression cannot know its context window. Name the model or leave the plugin out.")
 	}
 	return nil, nil
 }

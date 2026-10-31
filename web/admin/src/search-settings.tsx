@@ -70,6 +70,7 @@ function Card({ view }: { view: AdminSchemas["SearchSettings"] }) {
 function SearchFacts({ view, action }: { view: AdminSchemas["SearchSettings"]; action: ReactElement }) {
   const { t } = useTranslation();
   const configured = Boolean(view.url);
+  const source = view.source === "database" ? "database" : "environment";
   const rows: [string, ReactElement | string][] = [
     [
       t("settings.search.state"),
@@ -79,7 +80,7 @@ function SearchFacts({ view, action }: { view: AdminSchemas["SearchSettings"]; a
     ],
     [t("settings.search.url"), view.url || "—"],
     [t("settings.search.key"), t(view.has_key ? "settings.search.keySet" : "settings.search.keyMissing")],
-    [t("settings.search.source"), t(`settings.search.sources.${view.source ?? "environment"}`)],
+    [t("settings.search.source"), t(`settings.search.sources.${source}`)],
   ];
   if (view.restart_required) {
     rows.push([t("settings.search.restart"), t("settings.search.restartBody")]);

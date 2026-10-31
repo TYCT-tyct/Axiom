@@ -193,6 +193,7 @@ type Call struct {
 	snap        *catalog.Snapshot
 	models      []catalog.ModelID
 	auto        bool // the request named openrouter/auto: routing ranks every model the key may call
+	free        bool // the request named openrouter/free: routing ranks only the free models the key may call
 	sticky      routing.EndpointID
 	stickyCache *kv.Client
 	stickyKey   string
@@ -429,7 +430,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if web != nil {
 		req.SearchBytes = protocol.WebSearchMaxBytes
 	}
-	c.Body, c.Request, c.snap, c.models, c.auto, c.over = body, req, snap, models, names.auto, over
+	c.Body, c.Request, c.snap, c.models, c.auto, c.free, c.over = body, req, snap, models, names.auto, names.free, over
 	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
 	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {
 		return invalid("x-session-id must be valid UTF-8 with at most 256 characters.")
