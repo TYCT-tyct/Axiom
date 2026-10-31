@@ -44,7 +44,7 @@ type Module struct {
 // lists them, bottom up, which a test compares. Every module's policies call platform's functions, so platform comes
 // first; a fixed order brings every database to the same state the same way. Its names are Axiom's own schemas.
 var moduleOrder = []string{
-	"platform", "catalog", "accounts", "protocol", "suppliers", "quality",
+	"platform", "websearch", "catalog", "accounts", "protocol", "suppliers", "quality",
 	"billing", "routing", "observability", "payments", "gateway", "operations",
 }
 
