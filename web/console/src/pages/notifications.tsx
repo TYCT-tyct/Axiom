@@ -146,7 +146,7 @@ function PreferencesForm({
   });
   return (
     <form
-      className="space-y-5 p-4"
+      className="max-w-xl space-y-5 p-4"
       onSubmit={(event) => {
         event.preventDefault();
         if (amount !== null) {

@@ -158,9 +158,9 @@ function OrdersTable({
           <tr>
             <Th>{t("orders.col.order")}</Th>
             <Th>{t("orders.col.state")}</Th>
-            <Th className="text-right">{t("orders.col.credits")}</Th>
-            <Th className="text-right">{t("orders.col.total")}</Th>
-            <Th>{t("orders.col.refunds")}</Th>
+            <Th className="hidden text-right sm:table-cell">{t("orders.col.credits")}</Th>
+            <Th className="hidden text-right sm:table-cell">{t("orders.col.total")}</Th>
+            <Th className="hidden md:table-cell">{t("orders.col.refunds")}</Th>
           </tr>
         </thead>
         <tbody>
@@ -190,9 +190,6 @@ function refundable(order: Schemas["Order"]) {
 function OrderRow({ order, allowed, onRefund }: { order: Schemas["Order"]; allowed: boolean; onRefund: () => void }) {
   const { t } = useTranslation();
   const format = useFormat();
-  const actions = useOrderActions(order.id);
-  const failure = actions.verify.error ?? actions.cancel.error;
-  const errors = useErrors();
   return (
     <tr className="align-top hover:bg-s2">
       <Td>
@@ -200,43 +197,69 @@ function OrderRow({ order, allowed, onRefund }: { order: Schemas["Order"]; allow
           {order.id.slice(-8)}
         </span>
         <span className="block text-label text-t3">{format.dateTime(new Date(order.created_at))}</span>
-        <span className="block text-label text-t3">{t("orders.method", { method: order.method })}</span>
+        <span className="block max-w-48 text-label text-t3 [overflow-wrap:anywhere]">
+          {t("orders.method", { method: order.method })}
+        </span>
+        {/* Below sm the amount columns are hidden, so what was bought and paid reads under the order instead. */}
+        <span className="mt-1 block text-ui text-t1 tabular-nums [overflow-wrap:anywhere] sm:hidden">
+          {format.money(order.credits)}
+          <span className="block text-label text-t3">{format.pay(order.total)}</span>
+        </span>
       </Td>
       <Td>
-        <StateBadge state={order.state} />
-        {failure ? <p className="mt-1 text-label text-bad">{errors.message(failure)}</p> : null}
-        {order.state === "pending" ? (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {order.checkout?.pay_url ? (
-              <Button asChild>
-                <a href={order.checkout.pay_url} rel="noreferrer">
-                  {t("orders.pay")}
-                </a>
-              </Button>
-            ) : null}
-            <Button disabled={actions.verify.isPending} onClick={() => actions.verify.mutate()}>
-              {t("orders.verify")}
-            </Button>
-            <Button variant="ghost" disabled={actions.cancel.isPending} onClick={() => actions.cancel.mutate()}>
-              {t("orders.cancelOrder")}
-            </Button>
-          </div>
-        ) : null}
-        {allowed && refundable(order) ? (
-          <Button className="mt-2" onClick={onRefund}>
-            {t("orders.refund")}
-          </Button>
-        ) : null}
+        <OrderState order={order} allowed={allowed} onRefund={onRefund} />
       </Td>
-      <Td className="text-right whitespace-nowrap tabular-nums">{format.money(order.credits)}</Td>
-      <Td className="text-right whitespace-nowrap tabular-nums">
+      <Td className="hidden text-right whitespace-nowrap tabular-nums sm:table-cell">{format.money(order.credits)}</Td>
+      <Td className="hidden text-right whitespace-nowrap tabular-nums sm:table-cell">
         {format.pay(order.total)}
         <span className="block text-label text-t3">{t("orders.fee", { fee: format.pay(order.fee) })}</span>
       </Td>
-      <Td>
+      <Td className="hidden md:table-cell">
         <RefundList refunds={order.refunds} />
       </Td>
     </tr>
+  );
+}
+
+// OrderState is where the payment stands and what can be done about it; below md the refunds read here too, since
+// their column is hidden.
+function OrderState({ order, allowed, onRefund }: { order: Schemas["Order"]; allowed: boolean; onRefund: () => void }) {
+  const { t } = useTranslation();
+  const actions = useOrderActions(order.id);
+  const failure = actions.verify.error ?? actions.cancel.error;
+  const errors = useErrors();
+  return (
+    <>
+      <StateBadge state={order.state} />
+      {failure ? <p className="mt-1 text-label text-bad">{errors.message(failure)}</p> : null}
+      {order.state === "pending" ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {order.checkout?.pay_url ? (
+            <Button asChild>
+              <a href={order.checkout.pay_url} rel="noreferrer">
+                {t("orders.pay")}
+              </a>
+            </Button>
+          ) : null}
+          <Button disabled={actions.verify.isPending} onClick={() => actions.verify.mutate()}>
+            {t("orders.verify")}
+          </Button>
+          <Button variant="ghost" disabled={actions.cancel.isPending} onClick={() => actions.cancel.mutate()}>
+            {t("orders.cancelOrder")}
+          </Button>
+        </div>
+      ) : null}
+      {allowed && refundable(order) ? (
+        <div className="mt-2">
+          <Button onClick={onRefund}>{t("orders.refund")}</Button>
+        </div>
+      ) : null}
+      {order.refunds?.length ? (
+        <div className="mt-2 md:hidden">
+          <RefundList refunds={order.refunds} />
+        </div>
+      ) : null}
+    </>
   );
 }
 

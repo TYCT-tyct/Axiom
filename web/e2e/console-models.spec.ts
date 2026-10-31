@@ -20,7 +20,8 @@ test.describe("models and prices", () => {
     await expect(table.getByRole("row")).toHaveCount(2);
 
     await table.getByRole("button", { name: "详情" }).first().click();
-    await expect(page.getByRole("table", { name: /gpt-5/ })).toBeVisible();
-    await expect(page.getByText("每百万 token").first()).toBeVisible();
+    const rates = page.getByRole("table", { name: /gpt-5/ });
+    await expect(rates).toBeVisible();
+    await expect(rates.getByText("每百万 token").first()).toBeVisible();
   });
 });

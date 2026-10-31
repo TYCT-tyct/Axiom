@@ -15,9 +15,12 @@ export type MockState = AuthState & {
   calls: Schemas["Call"][];
   models: Schemas["PublicModel"][];
   statement: Schemas["StatementRow"][];
+  orders: Schemas["Order"][];
+  methods: Schemas["PaymentMethod"][];
+  notifications: Schemas["NotificationPreferences"];
 };
 
-const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "calls.view"];
+const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "balance.top_up", "calls.view"];
 export const goodInvite = "INVITE-OK";
 
 const usd = (units: string): Schemas["Money"] => ({ amount: `${units}000000000`, currency: "USD" });
@@ -124,6 +127,62 @@ function aMovement(n: number, over: Partial<Schemas["StatementRow"]> = {}): Sche
   };
 }
 
+const orderId = (n: number) => `ord_${String(n).padStart(26, "0")}` as Schemas["OrderId"];
+const refundId = (n: number) => `rfd_${String(n).padStart(26, "0")}` as Schemas["RefundId"];
+const cny = (fen: string): Schemas["PayAmount"] => ({ amount: fen, currency: "CNY" });
+const states = [
+  "pending",
+  "paid",
+  "partially_refunded",
+  "refunded",
+  "review",
+  "expired",
+  "cancelled",
+  "failed",
+] as const;
+
+// A top-up, newest first by n, cycling through the states a person sees; the paid ones carry their refunds.
+function anOrder(n: number, over: Partial<Schemas["Order"]> = {}): Schemas["Order"] {
+  const state = states[n % states.length] ?? "paid";
+  const at = Date.UTC(2026, 9, 14, 8, 30) - n * 3_600_000;
+  const refund = (m: number, refundState: Schemas["RefundState"]): Schemas["OrderRefund"] => ({
+    id: refundId(n * 10 + m),
+    state: refundState,
+    credits: usd("5"),
+    amount: cny("3650"),
+    created_at: new Date(at + m * 60_000).toISOString(),
+  });
+  const refunds: Record<string, Schemas["OrderRefund"][]> = {
+    paid: [],
+    partially_refunded: [refund(1, "succeeded"), refund(2, "pending_review")],
+    refunded: [refund(1, "succeeded")],
+  };
+  return {
+    id: orderId(n),
+    state,
+    method: n % 2 === 0 ? "alipay" : "wxpay",
+    credits: usd("10"),
+    total: cny("7373"),
+    fee: cny("73"),
+    created_at: new Date(at).toISOString(),
+    expires_at: new Date(at + 15 * 60_000).toISOString(),
+    checkout: state === "pending" ? { pay_url: "https://pay.example.com/checkout/1" } : undefined,
+    refund_allowed: true,
+    refunds: refunds[state] ?? [],
+    ...over,
+  };
+}
+
+const aBatch = (n: number, over: Partial<Schemas["CreditBatch"]> = {}): Schemas["CreditBatch"] => ({
+  id: `00000000-0000-4000-9000-${String(n).padStart(12, "0")}`,
+  source: n % 2 === 0 ? "gift" : "paid",
+  amount: usd("10"),
+  remaining: usd(String(10 - n)),
+  frozen: usd("0"),
+  created_at: new Date(Date.UTC(2026, 9, 1 + n)).toISOString(),
+  ...over,
+});
+
 export function usualState(): MockState {
   return {
     ...authState(allPermissions),
@@ -140,6 +199,11 @@ export function usualState(): MockState {
       floor: usd("0"),
       available: nano("11750000000"),
       spent_this_month: nano("3141592653"),
+      batches: [
+        aBatch(1, { frozen: usd("2"), expires_at: "2026-10-18T00:00:00Z" }),
+        aBatch(2, { expires_at: "2027-01-01T00:00:00Z" }),
+        aBatch(3),
+      ],
     },
     keys: [
       aKey(3, { name: "Laptop", spend_limit: usd("20"), limit_reset: "monthly", limit_remaining: usd("17") }),
@@ -149,11 +213,27 @@ export function usualState(): MockState {
     calls: range(120).map((n) => aCall(n)),
     models: range(4).map((n) => aModel(n)),
     statement: range(120).map((n) => aMovement(n)),
+    orders: range(12).map((n) => anOrder(n)),
+    methods: [
+      { method: "alipay", total: cny("7373"), fee: cny("73") },
+      { method: "wxpay", total: cny("7380"), fee: cny("80") },
+    ],
+    notifications: {
+      low_balance: true,
+      top_up: true,
+      factor_changed: true,
+      spend_anomaly: true,
+      threshold: "5000000000",
+      webhook_url: "",
+      language: "zh",
+    },
   };
 }
 
 export function emptyState(): MockState {
-  return { ...usualState(), keys: [], calls: [], models: [], statement: [] };
+  const state = { ...usualState(), keys: [], calls: [], models: [], statement: [], orders: [], methods: [] };
+  state.balance = { ...state.balance, batches: [] };
+  return state;
 }
 
 const long = (text: string, length: number) => text.repeat(Math.ceil(length / text.length)).slice(0, length);
@@ -217,5 +297,45 @@ export function worstState(): MockState {
   state.statement = range(300).map((n) =>
     aMovement(n, n === 1 ? { amount: nano("-9223372036854775807"), balance_after: nano("-9223372036854775807") } : {}),
   );
+  worstMoney(state, host);
   return state;
+}
+
+// The worst top-up data: int64 credits and payments, a 64-character method, six refunds on an order and many methods.
+function worstMoney(state: MockState, host: string) {
+  const huge = nano("9223372036854775807");
+  const most = cny("9223372036854775807");
+  state.balance.batches = range(40).map((n) =>
+    aBatch(n, n === 1 ? { amount: huge, remaining: huge, frozen: huge, expires_at: "2026-10-01T00:00:00Z" } : {}),
+  );
+  const method = long("unionpay-international-", 64);
+  state.orders = range(60).map((n) =>
+    anOrder(
+      n,
+      n <= 3
+        ? {
+            method,
+            credits: huge,
+            total: most,
+            fee: most,
+            refunds: range(6).map((m) => ({
+              id: refundId(n * 100 + m),
+              state: (["pending_review", "processing", "succeeded", "declined"] as const)[m % 4] ?? "succeeded",
+              credits: huge,
+              amount: most,
+              created_at: "2026-10-14T08:30:00Z",
+            })),
+          }
+        : {},
+    ),
+  );
+  state.methods = [
+    { method, total: most, fee: most },
+    ...range(8).map((n) => ({ method: `method-${n}`, total: cny(String(7000 + n)), fee: cny(String(n)) })),
+  ];
+  state.notifications = {
+    ...state.notifications,
+    threshold: "9223372036854775807",
+    webhook_url: `https://${host}.example.com/hooks/axiom`,
+  };
 }

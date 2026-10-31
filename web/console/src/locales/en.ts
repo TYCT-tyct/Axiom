@@ -168,7 +168,7 @@ export default {
     fee: "Fee {{fee}}",
     pay: "Pay",
     verify: "I have paid",
-    cancelOrder: "Cancel",
+    cancelOrder: "Cancel order",
     refund: "Request refund",
     refundsUnavailable: "This server doesn’t report refunds yet; reload after it is upgraded.",
     unavailable: "Unavailable",

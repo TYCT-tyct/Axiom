@@ -161,7 +161,7 @@ export default {
     fee: "手续费 {{fee}}",
     pay: "支付",
     verify: "我已付款",
-    cancelOrder: "取消",
+    cancelOrder: "取消订单",
     refund: "申请退款",
     refundsUnavailable: "当前服务节点暂不支持退款信息，升级后刷新即可。",
     unavailable: "不可用",

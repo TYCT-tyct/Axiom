@@ -238,7 +238,7 @@ function AmountForm({
   const { t } = useTranslation();
   return (
     <form
-      className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
+      className="max-w-md space-y-3"
       onSubmit={(event) => {
         event.preventDefault();
         onCheck();
@@ -296,7 +296,7 @@ function Quotes({
         const selected = data.data.find((m) => m.method === chosen) ?? first;
         return (
           <form
-            className="space-y-3"
+            className="max-w-md space-y-3"
             onSubmit={(event) => {
               event.preventDefault();
               onPay(chosen);

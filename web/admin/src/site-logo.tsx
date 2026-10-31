@@ -94,12 +94,12 @@ export function SiteLogo({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
               title={t("settings.logo.title")}
               action={
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button size="sm" onClick={() => setSetting(true)}>
+                  <Button size="md" onClick={() => setSetting(true)}>
                     <Icon name="pencil" />
                     {t("settings.logo.set")}
                   </Button>
                   {view.logo ? (
-                    <Button size="sm" variant="ghost" onClick={() => setClearing(true)}>
+                    <Button size="md" variant="ghost" onClick={() => setClearing(true)}>
                       {t("settings.logo.clear")}
                     </Button>
                   ) : null}
