@@ -84,6 +84,15 @@ func (s *supplies) EndRequest(_ context.Context, _ pg.Tx, id, _, _ uuid.UUID, at
 	return nil
 }
 
+func (s *supplies) EndRequests(ctx context.Context, tx pg.Tx, ends []suppliers.EndedRequest) error {
+	for _, e := range ends {
+		if err := s.EndRequest(ctx, tx, e.Request, e.Site, e.Account, e.At); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // lostNow is whether the request is recorded lost and no late settlement has resolved it.
 func (s *supplies) lostNow(id uuid.UUID) bool {
 	s.mu.Lock()

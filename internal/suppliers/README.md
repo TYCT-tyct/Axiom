@@ -250,6 +250,7 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, rows []AttemptRecord) error
 func RecordLostRequest(ctx, tx, request, site, account uuid.UUID, route []uuid.UUID) error // 清理：请求可能被上游收过钱，路线是它冻结的端点
 func ResolveLostRequest(ctx, tx, request uuid.UUID) error      // 迟到的结算带着真实尝试回来
 func EndRequest(ctx, tx, id, site, account, at) error          // billing 在终结请求的事务里调用
+func EndRequests(ctx, tx, []EndedRequest) error                // 同一事务里终结一批请求，一条语句
 type CallWrites struct{}                                       // 上面四个写入作为 billing.Suppliers：无状态，请求用 uuid.UUID，零值交给 billing
 func Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)       // 对账事务与人工归属，见下；Reconcile 由周期任务调用，归属接口供运营调用
 func RegisterReconcile(ReconcileJobConfig) error                            // 节点队列启动前注册逐条对账与告警
@@ -270,7 +271,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 - **换算依据**（迁移 `00007_exchange_basis.sql`，其检查约束先 `NOT VALID`，`00008_validate_exchange_basis.sql` 再 `VALIDATE`，不在大表上持排他锁扫描）：`attempt_costs` 保存 `unit_value_id`、`exchange_rate_id`、`conversion_from`/`conversion_to` 和 `conversion_state`（`Conversion` 枚举：same_currency、converted、missing_rate、overflow、unpriced、not_executed；SQL 的检查约束重复了这些名字，`TestConversionStatesAreStoredAndKeepTheRateOnlyWhenUsed` 逐个写入核对）。方向由源/目标币种与汇率行的规范化币种对确定；同币种、缺汇率和未执行的尝试没有用汇率，不写汇率 ID，只有 converted 和 overflow 写。旧节点/旧行的 NULL 是未知依据，绝不回填当前配置；字段随尝试只插入，不随重试变化，不建到 billing 的外键。测试在 `exchange_test.go`。
 - **缺汇率告警的数据**：`EnabledCurrencies` 在平台事务列出 active、low_balance 的供应商，包括暂时没有可路由端点的。组装层每轮路由构建与当前汇率一同读取，日志/指标只记录缺失及恢复状态变化，读取失败不能推进路由快照的新鲜时间。
 - **租户入参**：`AttemptRecord.Site/Account`、`EndRequest`、`RecordLostRequest` 及 `CallWrites` 一律接收 `uuid.UUID` 值。平台自己的尝试和终结请求用两个零值，由供应商侧的 `tenant` 在写入可空列时统一转为 NULL；失联请求只来自 billing 的租户预留，仍要求两个非零租户 ID，不新增平台失联请求的语义。
-- **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入。
+- **`RecordAttempts`** 在 billing 的结算事务里一次写入这个请求的全部尝试（`ON CONFLICT DO NOTHING`，用 `unnest` 一条语句），往返与尝试次数无关；已有的行不变。`RecordLostRequest`、`ResolveLostRequest` 同样只插入；`EndRequests` 是 `EndRequest` 的批量形式，用一条 `unnest` 插入整批，重复的请求保留第一次的时间；`EndedRequest` 是 `{Request, Site, Account, At}`，和 `AttemptRecord` 一样是公开形状。
 - **`CallPolicy.Cancels`**：适配器给默认值（new-api 传递，sub2api 不传递），quality 按端点实测的值覆盖它，规则见[计费的「客户端断开」](../../docs/domains/billing.md#客户端断开)。
 
 ## 用真实生成测试端点

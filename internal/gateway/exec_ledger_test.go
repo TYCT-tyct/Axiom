@@ -83,6 +83,31 @@ func (l *flakyLedger) lost(err error) {
 	l.mu.Unlock()
 }
 
+// SettleBatch applies the settlement faults item by item, then writes the batch through billing and reports a fault
+// that happened after a write as the batch's commit error, as RunBatch does.
+func (l *flakyLedger) SettleBatch(ctx context.Context, scope pg.Scope, items []billing.Settlement) ([]billing.Final, []func(), error) {
+	l.mu.Lock()
+	l.commitErr = nil
+	l.mu.Unlock()
+	for i := range items {
+		write, fail := l.fault(l.settle)
+		if !write {
+			return nil, nil, &billing.BatchWorkError{Index: i, Err: fail}
+		}
+		l.lost(fail)
+	}
+	finals, afters, err := l.Billing.SettleBatch(ctx, scope, items)
+	if err != nil {
+		return nil, nil, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.commitErr != nil {
+		return nil, nil, l.commitErr
+	}
+	return finals, afters, nil
+}
+
 func (l *flakyLedger) RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error {
 	l.mu.Lock()
 	l.commitErr = nil

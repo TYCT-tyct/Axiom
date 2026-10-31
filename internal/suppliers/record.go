@@ -293,6 +293,29 @@ func EndRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, site, acco
 	return nil
 }
 
+// EndedRequest is one request's end: the database time it ended at and the tenant that owns it.
+// EndedRequest is one request's terminal time for EndRequests, with the tenant that owns it.
+type EndedRequest struct {
+	Request, Site, Account uuid.UUID
+	At                     time.Time
+}
+
+// EndRequests notes a batch's requests ended for good at the times given, in one statement. A request already ended
+// keeps its first time, so a settlement repeated after a crash changes nothing.
+func EndRequests(ctx context.Context, tx pg.Tx, ends []EndedRequest) error {
+	if len(ends) == 0 {
+		return nil
+	}
+	rows := make([]store.EndedRequestRow, len(ends))
+	for i, e := range ends {
+		rows[i] = store.EndedRequestRow{RequestID: e.Request, SiteID: e.Site, AccountID: e.Account, EndedAt: e.At}
+	}
+	if err := store.InsertEndedRequests(ctx, tx, rows); err != nil {
+		return fmt.Errorf("end the requests: %w", err)
+	}
+	return nil
+}
+
 // CallWrites is the writes above as billing.Suppliers names them, with the request as a plain uuid: billing calls them
 // in the transaction of its own settlement and cleanup, which is how a call's supplier side commits exactly when the
 // ledger's cost does (docs/architecture.md 规则 5). It has no state: the zero value is the one to hand billing.
@@ -316,6 +339,11 @@ func (CallWrites) ResolveLostRequest(ctx context.Context, tx pg.Tx, request uuid
 // EndRequest is the package function of the name, with the request as a uuid.
 func (CallWrites) EndRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, at time.Time) error {
 	return EndRequest(ctx, tx, platform.RequestID(request), site, account, at)
+}
+
+// EndRequests is the package function of the name, with the requests as plain uuids.
+func (CallWrites) EndRequests(ctx context.Context, tx pg.Tx, ends []EndedRequest) error {
+	return EndRequests(ctx, tx, ends)
 }
 
 // tenant is a tenant column: NULL for the zero id, which says a request is the platform's own.

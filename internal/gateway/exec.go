@@ -57,6 +57,10 @@ func (u serviceUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
 type Ledger interface {
 	ExtendIn(ctx context.Context, tx pg.Tx, h *billing.Hold, r billing.ExtendRequest) error
 	SettleIn(ctx context.Context, tx pg.Tx, h *billing.Hold, o billing.Outcome) (billing.Final, func(), error)
+	// SettleBatch settles a completion batch's settlements in one transaction: one balance-row lock, one read of
+	// the reservations, the ledger in one pipeline, one set-based reservation end and one request-end insert, instead
+	// of those round trips per call.
+	SettleBatch(ctx context.Context, scope pg.Scope, items []billing.Settlement) ([]billing.Final, []func(), error)
 	// RunBatch commits the works of one completion batch together: one begin, one commit, one connection.
 	RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error
 }

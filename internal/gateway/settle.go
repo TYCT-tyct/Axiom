@@ -25,12 +25,7 @@ func (x *Executor) settle(ctx context.Context, c *Call, o billing.Outcome, until
 	err = x.Outstanding.retry(until, permanent, func() error {
 		ctx, cancel := x.Outstanding.settlementContext(ctx, settleAttempt)
 		defer cancel()
-		return x.withFunds(ctx, c, func(ctx context.Context, tx pg.Tx) (func(), error) {
-			var after func()
-			var err error
-			f, after, err = x.Ledger.SettleIn(ctx, tx, c.Hold, o)
-			return after, err
-		})
+		return x.withSettlement(ctx, c, o, &f)
 	})
 	return f, err
 }
@@ -38,10 +33,13 @@ func (x *Executor) settle(ctx context.Context, c *Call, o billing.Outcome, until
 // completionItem is one money write in a completion batch. work writes it on the batch's transaction and returns the
 // reports to run after the commit; after holds them until then.
 type completionItem struct {
-	gate  gateItem
-	scope pg.Scope
-	work  func(context.Context, pg.Tx) (func(), error)
-	after func()
+	gate         gateItem
+	scope        pg.Scope
+	work         func(context.Context, pg.Tx) (func(), error)
+	after        func()
+	settlement   billing.Settlement // valid when isSettlement
+	isSettlement bool
+	final        *billing.Final
 }
 
 // withFunds runs one of the call's money writes behind its account's gate, of the completion class. The write joins
@@ -60,7 +58,52 @@ func (x *Executor) withFunds(ctx context.Context, c *Call, write func(context.Co
 // error rolls the transaction back, so none commits; the gateway retries every request in the batch, and the rows make
 // the retry idempotent. A report is run only after the commit, because it describes what the ledger now holds.
 func (x *Executor) runCompletions(ctx context.Context, batch []*gateItem) error {
+	// One settlement uses the single path: its writes are already one order, and the batch's set-based statements
+	// cost more than the round trips they save at one item.
+	if len(batch) > 1 {
+		if items, ok := settlementBatch(batch); ok {
+			return runSettlementBatch(pg.CompletionContext(ctx), batch, items, x.Ledger.SettleBatch)
+		}
+	}
 	return runCompletionBatch(pg.CompletionContext(ctx), batch, x.Ledger.RunBatch)
+}
+
+// withSettlement queues a settlement behind the account's gate. Its work is the single-settlement path, which the
+// batch uses when it cannot take the whole batch through SettleBatch; the batch path itself writes every item at once
+// and leaves the Final in item.final. The result is returned only after the write commits.
+func (x *Executor) withSettlement(ctx context.Context, c *Call, o billing.Outcome, f *billing.Final) error {
+	item := &completionItem{
+		scope:        c.Admitted.Scope,
+		settlement:   billing.Settlement{Hold: c.Hold, Outcome: o},
+		isSettlement: true,
+		final:        f,
+	}
+	item.work = func(ctx context.Context, tx pg.Tx) (func(), error) {
+		final, after, err := x.Ledger.SettleIn(ctx, tx, c.Hold, o)
+		if err == nil {
+			*f = final
+		}
+		return after, err
+	}
+	item.gate.done, item.gate.payload = make(chan struct{}), item
+	if err := x.Limits.Funds.Complete(ctx, accountKey(c.caller), &item.gate, x.runCompletions); err != nil {
+		return err
+	}
+	return item.gate.err
+}
+
+// settlementBatch is the batch's settlements when every item is one: an extension or an orphan in the batch keeps the
+// single-transaction path, whose works each item already has.
+func settlementBatch(batch []*gateItem) ([]billing.Settlement, bool) {
+	items := make([]billing.Settlement, len(batch))
+	for i, g := range batch {
+		item := g.payload.(*completionItem)
+		if !item.isSettlement {
+			return nil, false
+		}
+		items[i] = item.settlement
+	}
+	return items, true
 }
 
 // runCompletionBatch writes the batch's works in one transaction of their account's scope, then runs each item's
@@ -120,6 +163,62 @@ func writeCompletions(ctx context.Context, batch []*gateItem, run func(context.C
 		}
 	}
 	return -1, err
+}
+
+// runSettlementBatch is runCompletionBatch for a batch of settlements written by SettleBatch. An error that names an
+// item fails only that item and retries the rest; the others come back to every item, which retries as its own
+// single settlement. Reports run only after SettleBatch commits.
+func runSettlementBatch(ctx context.Context, batch []*gateItem, items []billing.Settlement, run func(context.Context, pg.Scope, []billing.Settlement) ([]billing.Final, []func(), error)) error {
+	failed, err := writeSettlements(ctx, batch, items, run)
+	if failed < 0 {
+		return err
+	}
+	item := batch[failed]
+	item.err = err
+	if !item.closed {
+		item.closed = true
+		close(item.done)
+	}
+	rest := slices.Delete(slices.Clone(batch), failed, failed+1)
+	if len(rest) == 0 {
+		return nil
+	}
+	retry, cancel := earliestDeadline(context.WithoutCancel(ctx), rest)
+	defer cancel()
+	settlements, ok := settlementBatch(rest)
+	if !ok {
+		return errors.New("gateway: a settlement left the settlement batch")
+	}
+	return runSettlementBatch(retry, rest, settlements, run)
+}
+
+// writeSettlements runs the batch's settlements in one transaction and, after it commits, their reports. An error that
+// names an item rolls the transaction back and returns that item's index; otherwise the error is the transaction's.
+func writeSettlements(ctx context.Context, batch []*gateItem, items []billing.Settlement, run func(context.Context, pg.Scope, []billing.Settlement) ([]billing.Final, []func(), error)) (int, error) {
+	for i, g := range batch {
+		g.payload.(*completionItem).after = nil
+		if items[i].Hold == nil {
+			return i, errors.New("gateway: settlement without a hold")
+		}
+	}
+	finals, afters, err := run(ctx, batch[0].payload.(*completionItem).scope, items)
+	if failed, ok := errors.AsType[*billing.BatchWorkError](err); ok && failed.Index >= 0 && failed.Index < len(batch) {
+		return failed.Index, failed.Err
+	}
+	if err != nil {
+		return -1, err
+	}
+	if len(finals) != len(batch) || len(afters) != len(batch) {
+		return -1, fmt.Errorf("gateway: settled %d items with %d finals and %d reports", len(batch), len(finals), len(afters))
+	}
+	for i, item := range batch {
+		ci := item.payload.(*completionItem)
+		*ci.final = finals[i]
+		if afters[i] != nil {
+			afters[i]()
+		}
+	}
+	return -1, nil
 }
 
 // settled follows the settlement up, and reports whether the call's slots are now the background's to give back. One

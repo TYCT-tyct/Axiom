@@ -127,9 +127,15 @@ func (f *Outstanding) waitUntil(deadline time.Time) bool {
 }
 
 // settlementContext is SettleContext for one try of a settlement, also ended at the node's final deadline: a write
-// still in progress then must not hold the process past the deadline the drain waited for.
+// still in progress then must not hold the process past the deadline the drain waited for. One taken after that
+// deadline is ended before it returns: AfterFunc on an ended context cancels in its own goroutine, so the try would
+// otherwise race it to the account gate and sometimes write after the drain.
 func (f *Outstanding) settlementContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	ctx, cancel := SettleContext(ctx, timeout)
+	if f.end.Err() != nil {
+		cancel()
+		return ctx, cancel
+	}
 	stop := context.AfterFunc(f.end, cancel)
 	return ctx, func() {
 		stop()

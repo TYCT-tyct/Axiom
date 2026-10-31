@@ -437,3 +437,5 @@ func (noSuppliers) ResolveLostRequest(context.Context, pg.Tx, uuid.UUID) error {
 func (noSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error {
 	return nil
 }
+
+func (noSuppliers) EndRequests(context.Context, pg.Tx, []suppliers.EndedRequest) error { return nil }
