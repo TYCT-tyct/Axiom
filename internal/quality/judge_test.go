@@ -107,7 +107,7 @@ func TestUncountedChangesNothing(t *testing.T) {
 	} {
 		o.Endpoint, o.Ended = id, t0
 		m.Observe(t.Context(), o)
-		if got := m.Measured(id, t0).Health; got != 0.8 {
+		if got := measured(m, id, t0).Health; got != 0.8 {
 			t.Fatalf("after %+v health = %v, want 0.8", o, got)
 		}
 	}

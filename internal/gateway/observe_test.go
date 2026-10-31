@@ -82,7 +82,7 @@ func TestEveryAttemptIsObservedOnce(t *testing.T) {
 				want[2] = 1
 			}
 			for n, health := range want {
-				if got := h.health.Measured(uuidOf(ep(n)), time.Now()).Health; math.Abs(got-health) > 1e-9 {
+				if got := h.health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(n))}, time.Now()).Health; math.Abs(got-health) > 1e-9 {
 					t.Errorf("%s: endpoint %d's health %v, want %v", tc.name, n, got, health)
 				}
 			}
@@ -116,7 +116,7 @@ func TestTheTimeToTheFirstTokenIsMeasured(t *testing.T) {
 			now = time.Now()
 		})
 	}
-	if got := health.Measured(uuidOf(ep(1)), now); got.Latency != 2*time.Second || got.Throughput != 0 {
+	if got := health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(1))}, now); got.Latency != 2*time.Second || got.Throughput != 0 {
 		t.Errorf("measured %+v, want 2s to the first token and no speed (the answer is under 50 tokens)", got)
 	}
 }
@@ -146,7 +146,7 @@ func TestThroughputLeavesOutOurOwnWaits(t *testing.T) {
 			now = time.Now()
 		})
 	}
-	if got := health.Measured(uuidOf(ep(1)), now).Throughput; math.Abs(got-100) > 1e-9 {
+	if got := health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(1))}, now).Throughput; math.Abs(got-100) > 1e-9 {
 		t.Errorf("throughput %v, want 100 tokens a second", got)
 	}
 }
