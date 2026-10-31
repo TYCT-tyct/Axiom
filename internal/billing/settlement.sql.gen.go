@@ -371,8 +371,8 @@ type InsertCreditBatchParams struct {
 	RateID         *uuid.UUID
 }
 
-// A gift leaves what a payment has NULL (an empty currency or offline channel is NULL); a paid batch sets them as
-// credit_batches_source_check requires.
+// A gift or redeemed code leaves what a payment has NULL (an empty currency or offline channel is NULL); a paid batch
+// sets them as credit_batches_source_check requires.
 func (q *Queries) InsertCreditBatch(ctx context.Context, db DBTX, arg InsertCreditBatchParams) error {
 	_, err := db.Exec(ctx, insertCreditBatch,
 		arg.ID,

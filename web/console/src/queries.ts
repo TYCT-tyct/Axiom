@@ -71,6 +71,19 @@ export const keysQuery = (filters: KeyFilters = {}) =>
     getNextPageParam: nextCursor,
   });
 
+export const redemptionsQuery = infiniteQueryOptions({
+  queryKey: [accountKey, "redemptions"],
+  queryFn: ({ pageParam, signal }) =>
+    unwrap(
+      consoleApi.GET("/api/console/v1/redeem-codes", {
+        params: { query: { cursor: pageParam, limit: pageSize } },
+        signal,
+      }),
+    ),
+  initialPageParam: undefined as string | undefined,
+  getNextPageParam: (page) => page.next_cursor ?? undefined,
+});
+
 // The public models and prices page. The console asks the account-priced projection, so a user sees the price a call
 // would be charged at; the website asks the public one.
 export type { ModelFilters } from "@axiom/ui";
