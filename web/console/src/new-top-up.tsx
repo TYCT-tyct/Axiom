@@ -1,5 +1,5 @@
 import { consoleApi, type Schemas, unwrapWithStatus } from "@axiom/api";
-import { type Attempt, failed, opened, type Sendable, useErrors, useSession } from "@axiom/app";
+import { type Attempt, failedFrom, opened, type Sendable, useErrors, useSession } from "@axiom/app";
 import {
   Button,
   DataState,
@@ -74,10 +74,7 @@ function useTopUpRequest(currency: string, onCreated: (order: Schemas["Order"]) 
         void client.invalidateQueries({ queryKey: balanceQuery.queryKey });
       }
     },
-    onError: (error, sent) => {
-      setFailure(error);
-      change(failed(sent.from, sent.request, error, () => crypto.randomUUID()));
-    },
+    onError: failedFrom(change, setFailure),
   });
   // Editing either half starts a new request and its key; a new amount also drops the check made for the old one, and
   // while an answer is unknown nothing here is the person's to edit.

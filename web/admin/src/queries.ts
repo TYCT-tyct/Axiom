@@ -365,6 +365,27 @@ export const paymentOrdersQuery = (siteId: AdminSchemas["SiteId"], filters: Paym
     getNextPageParam: nextCursor,
   });
 
+export type RedeemCodeFilters = {
+  state?: AdminSchemas["RedeemCodeState"];
+  note?: string;
+};
+
+// The site's redeem codes, narrowed by what a page asks. An empty field does not narrow, and a cursor is only good for
+// the filters it was given with, so the filters are part of the key.
+export const redeemCodesQuery = (siteId: AdminSchemas["SiteId"], filters: RedeemCodeFilters) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "redeem-codes", siteId, filters],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/payments/redeem-codes`, {
+          params: { query: { site_id: siteId, ...filters, cursor: pageParam, limit: pageSize } },
+          signal,
+        }),
+      ),
+    initialPageParam: firstPage,
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+  });
+
 // The cash behind the dashboard figure: ledger time, not an order's, so a refund of an older order and an offline
 // top-up are both here.
 export const cashMovementsQuery = (siteId: AdminSchemas["SiteId"], window: { since?: string; until?: string }) =>
