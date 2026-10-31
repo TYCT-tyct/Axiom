@@ -27,16 +27,17 @@ import (
 
 // projector writes one supplier's listing onto its tables, in the transaction that stores the state it came from.
 type projector struct {
-	writes     store.ProjectionWrites
-	q          *store.Queries
-	tx         pg.Tx
-	id         uuid.UUID
-	st         syncer.State
-	snap       *catalog.Snapshot
-	nativeUnit string
-	now        time.Time
-	aliases    map[aliasKey]catalog.ModelID // the supplier's aliases, by the group they hold in
-	plans      map[string]store.PlanVersion
+	writes        store.ProjectionWrites
+	q             *store.Queries
+	tx            pg.Tx
+	id            uuid.UUID
+	st            syncer.State
+	snap          *catalog.Snapshot
+	nativeUnit    string
+	now           time.Time
+	directFormats bool                         // whether direct formats may be written; see Config.DirectFormats
+	aliases       map[aliasKey]catalog.ModelID // the supplier's aliases, by the group they hold in
+	plans         map[string]store.PlanVersion
 }
 
 // aliasKey is the scope of an alias: the group it holds in, or the zero id for the whole supplier.
@@ -76,8 +77,8 @@ type desiredEndpoint struct {
 
 // projectListing writes the groups, models, endpoints and cost schedules of a listing already read, and leaves every row
 // that the listing agrees with alone.
-func projectListing(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State, cur store.LockSupplierRow, snap *catalog.Snapshot, now time.Time) error {
-	p := &projector{q: store.New(), tx: tx, id: id, st: st, snap: snap, nativeUnit: cur.NativeUnit, now: now}
+func projectListing(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State, cur store.LockSupplierRow, snap *catalog.Snapshot, now time.Time, directFormats bool) error {
+	p := &projector{q: store.New(), tx: tx, id: id, st: st, snap: snap, nativeUnit: cur.NativeUnit, now: now, directFormats: directFormats}
 	if err := p.read(ctx); err != nil {
 		return err
 	}
@@ -287,12 +288,17 @@ func (p *projector) groupModels(g syncer.GroupSnap, id uuid.UUID, stored map[nam
 			continue
 		}
 		seen[key] = true
-		formats, err := store.FormatNames(formatsOf(m.Formats))
+		formats := writableFormats(formatsOf(m.Formats), p.directFormats)
+		if len(formats) == 0 {
+			states[key] = nameState{why: syncer.DirectFormatOff}
+			continue
+		}
+		names, err := store.FormatNames(formats)
 		if err != nil {
 			return fmt.Errorf("model %s/%s: %w", g.Ref, m.Name, err)
 		}
 		state := p.mapping(key)
-		state.formats = formats
+		state.formats = names
 		states[key] = state
 		if was, ok := stored[key]; ok && sameName(was, state) {
 			continue
@@ -303,7 +309,7 @@ func (p *projector) groupModels(g syncer.GroupSnap, id uuid.UUID, stored map[nam
 			model = &mapped
 		}
 		p.writes.Models = append(p.writes.Models, store.UpsertProjectedModelParams{
-			SupplierID: p.id, SupplierGroupID: id, UpstreamName: m.Name, ModelID: model, Formats: formats,
+			SupplierID: p.id, SupplierGroupID: id, UpstreamName: m.Name, ModelID: model, Formats: names,
 		})
 	}
 	return nil
@@ -504,6 +510,15 @@ func reason(why syncer.Reason) *string {
 	}
 	text := string(why)
 	return &text
+}
+
+// writableFormats drops the direct formats while the compatibility gate is closed, so this release cannot write a
+// name a node of the previous release would refuse to read.
+func writableFormats(formats []protocol.Format, direct bool) []protocol.Format {
+	if direct {
+		return formats
+	}
+	return slices.DeleteFunc(formats, func(f protocol.Format) bool { return f.Direct() })
 }
 
 // formatsOf reads the formats an engine snapshot stores, which protocol's are.

@@ -581,6 +581,24 @@ func TestCompletionsFinishBeforeIndex(t *testing.T) {
 	}
 }
 
+// TestCompletionsLogprobsBudget: a later chunk's logprobs are charged before their member lists and merged object are
+// allocated. A reply that fits one chunk but not the merge fails with ErrMemory and gives its budget back.
+func TestCompletionsLogprobsBudget(t *testing.T) {
+	token := strings.Repeat("x", 10<<10)
+	logprobs := `{"tokens":["` + token + `"],"token_logprobs":[-0.1],"top_logprobs":[{"` + token + `":-0.1}],"text_offset":[0]}`
+	stream := "data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"a\",\"logprobs\":" + logprobs + "}]}\n\n" +
+		"data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"b\",\"logprobs\":" + logprobs + "}]}\n\n" +
+		"data: [DONE]\n\n"
+	mem := protocol.NewMemory(0)
+	got := aggregate(t, protocol.Completions, protocol.Completions, strings.NewReader(stream), mem, unsettled)
+	if !errors.Is(got.err, protocol.ErrMemory) {
+		t.Fatalf("error %v, want ErrMemory", got.err)
+	}
+	if mem.Left() != 0 {
+		t.Errorf("the budget is %d after the release, want 0", mem.Left())
+	}
+}
+
 // TestCompletionsAggregateBodyBudget: the body assembled from the aggregated choices is allocated from the node's
 // budget, not beside it. A reply whose pieces fit but whose body does not fails with ErrMemory and gives back all it
 // drew.

@@ -114,8 +114,8 @@ func unmeasured(order []ranked, strategy Strategy) bool {
 	return strategy == Fastest && len(order) > 0 && !slices.ContainsFunc(order, func(c ranked) bool { return c.Throughput > 0 })
 }
 
-// inputTokens is the text a candidate's context must hold: one input's, not the sum of a batch's, which a direct
-// format's model takes one at a time.
+// inputTokens is the text a candidate's context must hold: one input's, not the sum of a batch's, which direct
+// formats and legacy completions take one at a time.
 func inputTokens(req *protocol.Request) int64 {
 	text := req.TextBytes
 	if req.MaxInputBytes > 0 {

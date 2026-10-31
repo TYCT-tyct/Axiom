@@ -233,7 +233,7 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		if changed == 0 {
 			return syncer.ErrFenced
 		}
-		if err := writeStep(ctx, tx, id, c, cur, snap, now); err != nil {
+		if err := writeStep(ctx, tx, id, c, cur, snap, now, cfg.DirectFormats); err != nil {
 			return err
 		}
 		return projectKeyPolicies(ctx, tx, id, c.KeyPolicies)
@@ -267,7 +267,7 @@ func (st stateStore) snapshot(ctx context.Context) (*catalog.Snapshot, error) {
 }
 
 // writeStep writes what a step produced next to its state.
-func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow, snap *catalog.Snapshot, now time.Time) error {
+func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow, snap *catalog.Snapshot, now time.Time, directFormats bool) error {
 	if len(c.Events) > 0 {
 		rows := make([]store.SyncEventRow, len(c.Events))
 		for i, e := range c.Events {
@@ -297,7 +297,7 @@ func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur
 		// left them.
 		return nil
 	}
-	return projectListing(ctx, tx, id, c.State, cur, snap, now)
+	return projectListing(ctx, tx, id, c.State, cur, snap, now, directFormats)
 }
 
 // nextDue is when the supplier next needs a round: the earliest time one of its tasks may run, or never while the

@@ -31,6 +31,7 @@ type nodeSettings struct {
 	roles                             nodeRoles
 	healthMode                        quality.Mode
 	modelVerification                 bool // whether the health loop verifies endpoints as the models they claim
+	directFormats                     bool // whether supplier syncing may write embeddings, rerank and legacy completions
 	publicAddr, adminAddr, probesAddr string
 	nodeAddr                          string
 	coreURL                           *url.URL
@@ -96,6 +97,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		errs = append(errs, fmt.Errorf("AXIOM_MODEL_VERIFICATION: want on or off, got %q", verify))
 	}
 	s.exchangeSource = env.String("AXIOM_EXCHANGE_SOURCE", "manual")
+	errs = append(errs, readDirectFormats(env, s))
 	s.databaseURL = env.Required(pg.DatabaseURLVar)
 	s.completionReserve = env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)
 	s.masterKeyFile = env.Required(masterKeyFileVar)
@@ -147,6 +149,18 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		errs = append(errs, err)
 	}
 	return append(errs, mailErr, storeErr, s.valkey.Resolve(), healthErr, exchangeErr)
+}
+
+// readDirectFormats reads the gate on writing direct formats. It is off until every node can read them.
+func readDirectFormats(env *config.Env, s *nodeSettings) error {
+	switch direct := env.String("AXIOM_DIRECT_FORMATS", "off"); direct {
+	case "on":
+		s.directFormats = true
+	case "off":
+	default:
+		return fmt.Errorf("AXIOM_DIRECT_FORMATS: want on or off, got %q", direct)
+	}
+	return nil
 }
 
 // readNonCoreSettings reads what a node that only forwards or only probes uses, and refuses the settings of the roles it

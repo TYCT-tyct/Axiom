@@ -361,13 +361,11 @@ func (a *completionsAggregate) apply(c completionsChoice) error {
 		}
 	}
 	if c.logprobs != nil && !bytes.Equal(c.logprobs, []byte("null")) {
-		merged, err := mergeLogprobs(ch.logprobs, c.logprobs)
+		merged, err := a.mergeLogprobs(ch.logprobs, c.logprobs)
 		if err != nil {
 			return err
 		}
-		if err := a.set(&ch.logprobs, merged, 1); err != nil {
-			return err
-		}
+		ch.logprobs = merged
 	}
 	return nil
 }
@@ -375,12 +373,24 @@ func (a *completionsAggregate) apply(c completionsChoice) error {
 // mergeLogprobs joins the logprobs objects of two chunks of one choice: each array member's elements are appended, so
 // the probabilities stay aligned with the text aggregated across the chunks. A chunk without logprobs adds nothing;
 // members other than the four arrays keep the later value.
-func mergeLogprobs(old, add []byte) ([]byte, error) {
-	if old == nil || bytes.Equal(old, []byte("null")) {
-		return add, nil
-	}
+//
+//nolint:cyclop // one branch per member shape, plus the two absences, is the merge
+func (a *completionsAggregate) mergeLogprobs(old, add []byte) ([]byte, error) {
 	if add == nil || bytes.Equal(add, []byte("null")) {
 		return old, nil
+	}
+	if old == nil || bytes.Equal(old, []byte("null")) {
+		return a.copyLogprobs(add)
+	}
+	// The two member lists are cloned from the decoder's input, and the merged object is built beside them: charge
+	// their whole peak before either allocation, so a merge that cannot fit never allocates it.
+	peak := len(old) + len(add)
+	hint := peak + 2 // one brace pair; joining arrays drops their two brackets and comma
+	if int64(peak+hint) > aggregateLimit-a.held {
+		return nil, fmt.Errorf("%w: logprobs pass the space left", ErrMemory)
+	}
+	if err := a.take(peak+hint, 1); err != nil {
+		return nil, err
 	}
 	om, err := rawMembers(old)
 	if err != nil {
@@ -395,7 +405,8 @@ func mergeLogprobs(old, add []byte) ([]byte, error) {
 		byName[m.name] = m.value
 	}
 	seen := make(map[string]bool, len(om))
-	out := []byte{'{'}
+	out := make([]byte, 0, hint) // allocated after the charge above
+	out = append(out, '{')
 	first := true
 	for _, m := range om {
 		seen[m.name] = true
@@ -412,6 +423,15 @@ func mergeLogprobs(old, add []byte) ([]byte, error) {
 		out = append(out, m.value...)
 	}
 	return append(out, '}'), nil
+}
+
+// copyLogprobs keeps the first chunk's logprobs in memory the aggregate has charged, not in the decoder's event data.
+func (a *completionsAggregate) copyLogprobs(v []byte) ([]byte, error) {
+	out, err := grow[byte](&a.aggBase, nil, len(v), 1)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, v...), nil
 }
 
 // mergeLogprobsMember writes one member of the merged object: arrays from both chunks are joined, and any other

@@ -56,8 +56,10 @@ type Config struct {
 	Holder string
 	// SweepEvery is how often suppliers that are due are looked for. Queue capacity decides when they start.
 	SweepEvery time.Duration
-	Now        func() time.Time
-	Logger     *slog.Logger
+	// DirectFormats writes completions, embeddings and rerank; false until every node reads them.
+	DirectFormats bool
+	Now           func() time.Time
+	Logger        *slog.Logger
 }
 
 // SyncArgs is the job of one round of one supplier. At most one is waiting or running per supplier, and a finished one
@@ -112,6 +114,7 @@ func New(cfg Config) (*Schedule, error) {
 	}
 	node, err := persist.New(persist.Config{
 		DB: cfg.DB, Scope: cfg.Scope, Keys: cfg.Keys, Holder: cfg.Holder, LeaseTTL: leaseTTL, Now: cfg.Now, Catalog: cat,
+		DirectFormats: cfg.DirectFormats,
 	})
 	if err != nil {
 		return nil, err

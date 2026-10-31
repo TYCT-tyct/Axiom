@@ -15,6 +15,7 @@ ALTER TABLE suppliers.endpoints ADD CONSTRAINT endpoints_formats_check
 
 -- +goose Down
 
+-- +goose StatementBegin
 -- Restoring the old CHECK while rows still name a P18 format would fail with a bare constraint error. Say what to do
 -- instead: a rollback must first delete the direct-format endpoints and supplier models, or rewrite their formats to
 -- the three a pre-P18 node knows.
@@ -28,6 +29,7 @@ BEGIN
     END IF;
 END
 $migration$;
+-- +goose StatementEnd
 
 ALTER TABLE suppliers.supplier_models DROP CONSTRAINT supplier_models_formats_check;
 ALTER TABLE suppliers.supplier_models ADD CONSTRAINT supplier_models_formats_check

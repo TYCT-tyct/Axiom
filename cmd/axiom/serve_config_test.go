@@ -278,3 +278,10 @@ func TestModelVerificationRejectsUnknownValues(t *testing.T) {
 		t.Fatalf("verification validation: %v", err)
 	}
 }
+
+func TestDirectFormatsRejectsUnknownValues(t *testing.T) {
+	_, err := readSettings([]string{"AXIOM_DIRECT_FORMATS=maybe"})
+	if err == nil || !strings.Contains(err.Error(), "AXIOM_DIRECT_FORMATS: want on or off") {
+		t.Fatalf("direct-format gate validation: %v", err)
+	}
+}
