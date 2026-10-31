@@ -64,6 +64,12 @@ function useShowCodes() {
   return show;
 }
 
+// useShowRecoveryCodes shows the codes a factor change made, above the page, until the person says they have kept them.
+// A page that caused the change calls it; the dialog adopts the new session when it closes.
+export function useShowRecoveryCodes() {
+  return useShowCodes();
+}
+
 // Starting to enable asks for a new secret and opens the dialog that proves it; nothing is stored until it is proved.
 export function useBeginTotp() {
   const { api } = useAuth();

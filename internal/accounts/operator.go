@@ -300,6 +300,9 @@ func (o *Operator) changeFactor(ctx context.Context, email, action string, chang
 		if err := change(tx, user.ID); err != nil {
 			return err
 		}
+		if err := o.queries.BumpFactorVersion(ctx, tx, user.ID); err != nil {
+			return err
+		}
 		return audit.Record(ctx, tx, audit.Event{Actor: operator, Action: action, Target: userTarget(site, user.AccountID, user.ID)})
 	})
 	if err != nil {

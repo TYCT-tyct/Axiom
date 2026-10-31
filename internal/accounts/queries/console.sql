@@ -124,18 +124,37 @@ UPDATE accounts.recovery_codes SET used_at = now()
 WHERE user_id = @user_id AND code_hash = @code_hash AND factor_version = @factor_version;
 
 -- name: EnableTOTP :exec
+-- The factor version is raised by finishFactorChange, after the change and before the new recovery codes.
 UPDATE accounts.users SET totp_ciphertext = @ciphertext, totp_nonce = @nonce, totp_wrapped_dek = @wrapped_dek,
-    totp_key_version = @key_version, totp_last_step = @step, mfa_enabled_at = now(), factor_version = factor_version + 1
+    totp_key_version = @key_version, totp_last_step = @step, mfa_enabled_at = now()
 WHERE id = @id;
 
 -- name: ReplaceTOTP :exec
 -- The user keeps the date two-step verification was enabled; only the secret and its code step change.
 UPDATE accounts.users SET totp_ciphertext = @ciphertext, totp_nonce = @nonce, totp_wrapped_dek = @wrapped_dek,
-    totp_key_version = @key_version, totp_last_step = @step, factor_version = factor_version + 1
+    totp_key_version = @key_version, totp_last_step = @step
 WHERE id = @id;
 
 -- name: BumpFactorVersion :exec
 UPDATE accounts.users SET factor_version = factor_version + 1 WHERE id = @id;
+
+-- name: SetSessionRecoveryCodes :exec
+-- Sealed codes for the console to read once, when the answer that made them is a redirect (a provider link).
+UPDATE accounts.sessions
+SET recovery_codes_ciphertext = @ciphertext, recovery_codes_nonce = @nonce,
+    recovery_codes_wrapped_dek = @wrapped_dek, recovery_codes_key_version = @key_version
+WHERE id = @id;
+
+-- name: LockSessionRecoveryCodes :one
+-- The row lock is held until the clearing update in the same transaction, so two calls cannot both read the codes.
+SELECT recovery_codes_ciphertext, recovery_codes_nonce, recovery_codes_wrapped_dek, recovery_codes_key_version
+FROM accounts.sessions WHERE id = @id AND recovery_codes_ciphertext IS NOT NULL FOR UPDATE;
+
+-- name: ClearSessionRecoveryCodes :exec
+UPDATE accounts.sessions
+SET recovery_codes_ciphertext = NULL, recovery_codes_nonce = NULL,
+    recovery_codes_wrapped_dek = NULL, recovery_codes_key_version = NULL
+WHERE id = @id;
 
 -- name: InsertRecoveryCode :exec
 INSERT INTO accounts.recovery_codes (id, site_id, account_id, user_id, factor_version, code_hash)

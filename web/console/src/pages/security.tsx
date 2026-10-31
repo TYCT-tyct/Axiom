@@ -1,5 +1,13 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { RecoveryDialog, TotpSetupDialog, useBeginTotp, useErrors, useSession, useStartSession } from "@axiom/app";
+import {
+  RecoveryDialog,
+  TotpSetupDialog,
+  useBeginTotp,
+  useErrors,
+  useSession,
+  useShowRecoveryCodes,
+  useStartSession,
+} from "@axiom/app";
 import {
   Badge,
   Button,
@@ -13,7 +21,7 @@ import {
   useFormat,
 } from "@axiom/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ChangeEvent, useState } from "react";
+import { type ChangeEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { identitiesQuery, passkeysQuery, siteQuery } from "../queries";
 import { registerPasskey } from "../webauthn";
@@ -21,6 +29,7 @@ import { registerPasskey } from "../webauthn";
 export default function Security() {
   const { t } = useTranslation();
   const oauth = new URLSearchParams(window.location.search).get("oauth");
+  usePendingRecoveryCodes();
   return (
     <>
       <PageHeader title={t("nav.security")} description={t("security.description")} />
@@ -35,6 +44,22 @@ export default function Security() {
       </div>
     </>
   );
+}
+
+// usePendingRecoveryCodes takes the codes a provider link left on this session. The link's answer is a redirect, so this
+// page is where they are shown; taking clears them, and a failed call leaves them sealed for the next visit.
+function usePendingRecoveryCodes() {
+  const session = useSession();
+  const show = useShowRecoveryCodes();
+  useEffect(() => {
+    void unwrap(consoleApi.POST("/api/console/v1/auth/recovery-codes/take"))
+      .then(({ recovery_codes }) => {
+        if (recovery_codes.length > 0) {
+          show({ csrf_token: session.csrf_token, recovery_codes });
+        }
+      })
+      .catch(() => undefined);
+  }, [session.csrf_token, show]);
 }
 
 // Starting to enable asks for a new secret and opens the dialog that proves it; nothing is stored until it is proved.
@@ -177,34 +202,23 @@ function AddPasskey({ actions }: { actions: PasskeyActions }) {
 
 type PasskeyActions = ReturnType<typeof usePasskeyActions>;
 
-// usePasskeyActions holds the password and name the ceremonies need, and replaces the page's session with the one the
-// server issues after a change so the next request carries its CSRF token.
-function usePasskeyActions() {
-  const errors = useErrors();
+// usePasskeyChange runs one passkey change: shared busy and failure state, the session the change issued, the recovery
+// codes it made (when TOTP is on) and the reloaded list.
+function usePasskeyChange() {
   const start = useStartSession();
+  const show = useShowRecoveryCodes();
   const client = useQueryClient();
-  const [name, setName] = useState("");
-  const [password, setPassword] = useState("");
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const supported = typeof window !== "undefined" && "PublicKeyCredential" in window;
-  async function add() {
+  async function run(change: () => Promise<{ token: string; codes?: string[] }>) {
     setBusy(true);
     setFailure(null);
     try {
-      const begin = await unwrap(
-        consoleApi.POST("/api/console/v1/auth/passkeys/register/begin", { body: { name, password } }),
-      );
-      const credential = await registerPasskey(begin.public_key);
-      await unwrap(
-        consoleApi.POST("/api/console/v1/auth/passkeys/register/finish", {
-          params: { query: { flow_id: begin.flow_id } },
-          body: credential,
-        }),
-      );
-      await start("");
-      setName("");
-      setPassword("");
+      const { token, codes } = await change();
+      const session = await start(token);
+      if (session && codes?.length) {
+        show({ csrf_token: session.csrf_token, recovery_codes: codes });
+      }
       await client.invalidateQueries({ queryKey: passkeysQuery.queryKey });
     } catch (error) {
       setFailure(error);
@@ -212,20 +226,41 @@ function usePasskeyActions() {
       setBusy(false);
     }
   }
+  return { failure, busy, run };
+}
+
+// usePasskeyActions holds the password and name the ceremonies need, and replaces the page's session with the one the
+// server issues after a change so the next request carries its CSRF token.
+function usePasskeyActions() {
+  const errors = useErrors();
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const { failure, busy, run } = usePasskeyChange();
+  const supported = typeof window !== "undefined" && "PublicKeyCredential" in window;
+  async function add() {
+    await run(async () => {
+      const begin = await unwrap(
+        consoleApi.POST("/api/console/v1/auth/passkeys/register/begin", { body: { name, password } }),
+      );
+      const credential = await registerPasskey(begin.public_key);
+      const added = await unwrap(
+        consoleApi.POST("/api/console/v1/auth/passkeys/register/finish", {
+          params: { query: { flow_id: begin.flow_id } },
+          body: credential,
+        }),
+      );
+      setName("");
+      setPassword("");
+      return { token: "", codes: added.recovery_codes };
+    });
+  }
   async function remove(id: string) {
-    setBusy(true);
-    setFailure(null);
-    try {
+    await run(async () => {
       const grant = await unwrap(
         consoleApi.DELETE("/api/console/v1/auth/passkeys/{id}", { params: { path: { id } }, body: { password } }),
       );
-      await start(grant.csrf_token);
-      await client.invalidateQueries({ queryKey: passkeysQuery.queryKey });
-    } catch (error) {
-      setFailure(error);
-    } finally {
-      setBusy(false);
-    }
+      return { token: grant.csrf_token, codes: grant.recovery_codes };
+    });
   }
   return {
     errors,
@@ -320,6 +355,7 @@ function IdentityRow({
 function useIdentityActions() {
   const errors = useErrors();
   const start = useStartSession();
+  const show = useShowRecoveryCodes();
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -344,6 +380,9 @@ function useIdentityActions() {
         consoleApi.DELETE("/api/console/v1/auth/identities/{provider}", { params: { path: { provider } } }),
       );
       await start(grant.csrf_token);
+      if (grant.recovery_codes?.length) {
+        show({ csrf_token: grant.csrf_token, recovery_codes: grant.recovery_codes });
+      }
       await queryClient.invalidateQueries({ queryKey: identitiesQuery.queryKey });
     } catch (error) {
       setFailure(error);

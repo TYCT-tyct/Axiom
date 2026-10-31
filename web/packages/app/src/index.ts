@@ -10,4 +10,4 @@ export { AppProviders } from "./providers";
 export { QrCode } from "./qr";
 export { accountKey, can, Gate, safeNext, useSession, useSignIn, useStartSession } from "./session";
 export { Shell } from "./shell";
-export { RecoveryDialog, TotpSetupDialog, useBeginTotp } from "./totp-dialogs";
+export { RecoveryDialog, TotpSetupDialog, useBeginTotp, useShowRecoveryCodes } from "./totp-dialogs";

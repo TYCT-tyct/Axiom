@@ -52,6 +52,18 @@ func (q *Queries) BumpFactorVersion(ctx context.Context, db DBTX, id uuid.UUID) 
 	return err
 }
 
+const clearSessionRecoveryCodes = `-- name: ClearSessionRecoveryCodes :exec
+UPDATE accounts.sessions
+SET recovery_codes_ciphertext = NULL, recovery_codes_nonce = NULL,
+    recovery_codes_wrapped_dek = NULL, recovery_codes_key_version = NULL
+WHERE id = $1
+`
+
+func (q *Queries) ClearSessionRecoveryCodes(ctx context.Context, db DBTX, id uuid.UUID) error {
+	_, err := db.Exec(ctx, clearSessionRecoveryCodes, id)
+	return err
+}
+
 const countMFAAttempt = `-- name: CountMFAAttempt :exec
 UPDATE accounts.sessions SET mfa_attempts = mfa_attempts + 1 WHERE id = $1
 `
@@ -63,7 +75,7 @@ func (q *Queries) CountMFAAttempt(ctx context.Context, db DBTX, id uuid.UUID) er
 
 const enableTOTP = `-- name: EnableTOTP :exec
 UPDATE accounts.users SET totp_ciphertext = $1, totp_nonce = $2, totp_wrapped_dek = $3,
-    totp_key_version = $4, totp_last_step = $5, mfa_enabled_at = now(), factor_version = factor_version + 1
+    totp_key_version = $4, totp_last_step = $5, mfa_enabled_at = now()
 WHERE id = $6
 `
 
@@ -76,6 +88,7 @@ type EnableTOTPParams struct {
 	ID         uuid.UUID
 }
 
+// The factor version is raised by finishFactorChange, after the change and before the new recovery codes.
 func (q *Queries) EnableTOTP(ctx context.Context, db DBTX, arg EnableTOTPParams) error {
 	_, err := db.Exec(ctx, enableTOTP,
 		arg.Ciphertext,
@@ -349,6 +362,31 @@ func (q *Queries) ListSessions(ctx context.Context, db DBTX, arg ListSessionsPar
 	return items, nil
 }
 
+const lockSessionRecoveryCodes = `-- name: LockSessionRecoveryCodes :one
+SELECT recovery_codes_ciphertext, recovery_codes_nonce, recovery_codes_wrapped_dek, recovery_codes_key_version
+FROM accounts.sessions WHERE id = $1 AND recovery_codes_ciphertext IS NOT NULL FOR UPDATE
+`
+
+type LockSessionRecoveryCodesRow struct {
+	RecoveryCodesCiphertext []byte
+	RecoveryCodesNonce      []byte
+	RecoveryCodesWrappedDek []byte
+	RecoveryCodesKeyVersion *int64
+}
+
+// The row lock is held until the clearing update in the same transaction, so two calls cannot both read the codes.
+func (q *Queries) LockSessionRecoveryCodes(ctx context.Context, db DBTX, id uuid.UUID) (LockSessionRecoveryCodesRow, error) {
+	row := db.QueryRow(ctx, lockSessionRecoveryCodes, id)
+	var i LockSessionRecoveryCodesRow
+	err := row.Scan(
+		&i.RecoveryCodesCiphertext,
+		&i.RecoveryCodesNonce,
+		&i.RecoveryCodesWrappedDek,
+		&i.RecoveryCodesKeyVersion,
+	)
+	return i, err
+}
+
 const lockUser = `-- name: LockUser :many
 SELECT site_id, factor_version, status = 'active' AS active, totp_ciphertext, totp_nonce, totp_wrapped_dek,
     totp_key_version, totp_last_step, (mfa_enabled_at IS NOT NULL)::boolean AS mfa,
@@ -532,7 +570,7 @@ func (q *Queries) PlatformRoles(ctx context.Context, db DBTX, userID uuid.UUID) 
 
 const replaceTOTP = `-- name: ReplaceTOTP :exec
 UPDATE accounts.users SET totp_ciphertext = $1, totp_nonce = $2, totp_wrapped_dek = $3,
-    totp_key_version = $4, totp_last_step = $5, factor_version = factor_version + 1
+    totp_key_version = $4, totp_last_step = $5
 WHERE id = $6
 `
 
@@ -733,6 +771,33 @@ func (q *Queries) SessionTenant(ctx context.Context, db DBTX, arg SessionTenantP
 		return nil, err
 	}
 	return items, nil
+}
+
+const setSessionRecoveryCodes = `-- name: SetSessionRecoveryCodes :exec
+UPDATE accounts.sessions
+SET recovery_codes_ciphertext = $1, recovery_codes_nonce = $2,
+    recovery_codes_wrapped_dek = $3, recovery_codes_key_version = $4
+WHERE id = $5
+`
+
+type SetSessionRecoveryCodesParams struct {
+	Ciphertext []byte
+	Nonce      []byte
+	WrappedDek []byte
+	KeyVersion *int64
+	ID         uuid.UUID
+}
+
+// Sealed codes for the console to read once, when the answer that made them is a redirect (a provider link).
+func (q *Queries) SetSessionRecoveryCodes(ctx context.Context, db DBTX, arg SetSessionRecoveryCodesParams) error {
+	_, err := db.Exec(ctx, setSessionRecoveryCodes,
+		arg.Ciphertext,
+		arg.Nonce,
+		arg.WrappedDek,
+		arg.KeyVersion,
+		arg.ID,
+	)
+	return err
 }
 
 const touchSession = `-- name: TouchSession :exec

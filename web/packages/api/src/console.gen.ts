@@ -374,6 +374,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/auth/recovery-codes/take": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take the recovery codes a provider link left for this session
+         * @description A provider link answers with a redirect, so the new recovery codes it makes cannot come back in that response. They are sealed on the session the link issued, and this call reads and clears them in one statement: the first call returns them and later calls return none. Needs a signed-in console session; the codes belong to it.
+         */
+        post: operations["takeRecoveryCodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/auth/oauth/start": {
         parameters: {
             query?: never;
@@ -1479,6 +1499,10 @@ export interface components {
             /** @description A current TOTP code. */
             code: string;
         };
+        /** @description The recovery codes a link round trip left for the session, read once. */
+        ShownRecoveryCodes: {
+            recovery_codes: string[];
+        };
         /** @description A changed factor ends every other session of the user and every unused recovery code, and issues this device a new `mfa` session: the cookie of the response replaces the old one. */
         FactorChange: {
             csrf_token: string;
@@ -1643,6 +1667,8 @@ export interface components {
             last_used_at?: string | null;
             /** @description Whether the credential can be synced or backed up between devices. */
             backup_eligible: boolean;
+            /** @description Replacement recovery codes, present only on the answer that adds the passkey and only when TOTP is on: raising the factor version stops the old ones. */
+            recovery_codes?: string[];
         };
         Passkeys: {
             passkeys: components["schemas"]["Passkey"][];
@@ -1659,6 +1685,8 @@ export interface components {
         /** @description A credential was removed: every other session ended and the response's cookie replaces this browser's session. */
         CredentialChange: {
             csrf_token: string;
+            /** @description Replacement recovery codes when TOTP is on; absent otherwise. */
+            recovery_codes?: string[];
         };
         RegisterRequest: {
             /** @description Required on an invite-only site; ignored where registration is open. */
@@ -2728,6 +2756,29 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    takeRecoveryCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The codes left for this session, or an empty list. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShownRecoveryCodes"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             default: components["responses"]["Failure"];
         };
     };

@@ -90,13 +90,14 @@ export function endSession(queryClient: QueryClient) {
   queryClient.removeQueries({ queryKey: [accountKey] });
 }
 
-// useStartSession adopts the CSRF token of a new session and loads it.
+// useStartSession adopts the CSRF token of a new session and loads it, returning what it loaded so a page that has just
+// shown something from the change (recovery codes) can use the new session's token.
 export function useStartSession() {
   const queryClient = useQueryClient();
   const { api } = useAuth();
   return async (csrfToken: string) => {
     setCsrfToken(csrfToken);
-    await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
+    return await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
   };
 }
 

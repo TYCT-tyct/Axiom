@@ -135,7 +135,7 @@ func (q *Queries) MainSite(ctx context.Context, db DBTX) ([]MainSiteRow, error) 
 
 const resetMFA = `-- name: ResetMFA :exec
 UPDATE accounts.users SET totp_ciphertext = NULL, totp_nonce = NULL, totp_wrapped_dek = NULL, totp_key_version = NULL,
-    totp_last_step = 0, mfa_enabled_at = NULL, factor_version = factor_version + 1
+    totp_last_step = 0, mfa_enabled_at = NULL
 WHERE id = $1
 `
 
@@ -169,7 +169,7 @@ func (q *Queries) RoleByName(ctx context.Context, db DBTX, name string) ([]uuid.
 }
 
 const setPassword = `-- name: SetPassword :exec
-UPDATE accounts.users SET password_hash = $1, factor_version = factor_version + 1 WHERE id = $2
+UPDATE accounts.users SET password_hash = $1 WHERE id = $2
 `
 
 type SetPasswordParams struct {
@@ -177,6 +177,7 @@ type SetPasswordParams struct {
 	ID           uuid.UUID
 }
 
+// The caller raises the factor version: a signed-in change through finishFactorChange, a reset with BumpFactorVersion.
 func (q *Queries) SetPassword(ctx context.Context, db DBTX, arg SetPasswordParams) error {
 	_, err := db.Exec(ctx, setPassword, arg.PasswordHash, arg.ID)
 	return err

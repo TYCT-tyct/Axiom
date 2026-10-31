@@ -36,7 +36,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"legal_acceptances":       nil,
 		"platform_grants":         {"revoked_at"},
 		"api_keys":                {"rate_requests", "updated_at", "management_window", "management_requests", "name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
-		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
+		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at", "recovery_codes_ciphertext", "recovery_codes_nonce", "recovery_codes_wrapped_dek", "recovery_codes_key_version"},
 		"site_oauth_providers":    {"client_id", "client_secret_ciphertext", "client_secret_nonce", "client_secret_wrapped_dek", "client_secret_key_version", "updated_at"},
 		"user_identities":         nil,
 		"passkey_credentials":     {"sign_count", "last_used_at", "backup_state", "name"},

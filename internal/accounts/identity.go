@@ -55,12 +55,15 @@ func (s *Service) attachIdentity(ctx context.Context, tx pg.Tx, p Principal, sit
 	}); err != nil {
 		return Issued{}, identityInsertError(err)
 	}
-	if err := s.queries.BumpFactorVersion(ctx, tx, uuid.UUID(p.user)); err != nil {
-		return Issued{}, err
-	}
-	issued, err := s.issue(ctx, tx, newSession{
-		user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: site, surface: Console, level: resumedLevel(p),
-		factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
+	// The callback answers with a redirect, so the codes the link makes are sealed on the new session for the console
+	// to read once (TakePendingRecoveryCodes).
+	issued, _, err := s.finishFactorChange(ctx, tx, locked, factorFinish{
+		session: newSession{
+			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: site, surface: Console, level: resumedLevel(p),
+			ip: ip, userAgent: userAgent,
+		},
+		totpOn:        locked.Mfa,
+		sealOnSession: true,
 	})
 	if err != nil {
 		return Issued{}, err
@@ -89,60 +92,62 @@ func identityInsertError(err error) error {
 }
 
 // UnlinkIdentity detaches a provider account from the signed-in user. It is a credential change: the user's factor
-// version rises, every other session ends, and this browser gets a new session with the same level.
-func (s *Service) UnlinkIdentity(ctx context.Context, p Principal, provider string, ip netip.Addr, userAgent string) (Issued, error) {
+// version rises, every other session ends, and this browser gets a new session with the same level and, with TOTP on,
+// new recovery codes.
+func (s *Service) UnlinkIdentity(ctx context.Context, p Principal, provider string, ip netip.Addr, userAgent string) (Issued, []string, error) {
 	if _, ok := s.providers[provider]; !ok {
-		return Issued{}, ErrNotFound
+		return Issued{}, nil, ErrNotFound
 	}
 	if p.Pending() {
-		return Issued{}, ErrMFARequired
+		return Issued{}, nil, ErrMFARequired
 	}
 	if err := s.requireVerifiedForChange(ctx, p); err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
 	var issued Issued
-	var err error
-	err = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		issued, err = s.detachIdentity(ctx, tx, p, provider, ip, userAgent)
+	var codes []string
+	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+		var err error
+		issued, codes, err = s.detachIdentity(ctx, tx, p, provider, ip, userAgent)
 		return err
 	})
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
-	return issued, nil
+	return issued, codes, nil
 }
 
-// detachIdentity deletes the identity under the user's lock and issues the replacement session.
-func (s *Service) detachIdentity(ctx context.Context, tx pg.Tx, p Principal, provider string, ip netip.Addr, userAgent string) (Issued, error) {
+// detachIdentity deletes the identity under the user's lock and finishes the change.
+func (s *Service) detachIdentity(ctx context.Context, tx pg.Tx, p Principal, provider string, ip netip.Addr, userAgent string) (Issued, []string, error) {
 	locked, err := s.lockUser(ctx, tx, uuid.UUID(p.user), p.factorVersion)
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
 	changed, err := s.queries.DeleteIdentity(ctx, tx, DeleteIdentityParams{UserID: uuid.UUID(p.user), Provider: provider})
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
 	if changed != 1 {
-		return Issued{}, ErrNotFound
+		return Issued{}, nil, ErrNotFound
 	}
-	if err := s.queries.BumpFactorVersion(ctx, tx, uuid.UUID(p.user)); err != nil {
-		return Issued{}, err
-	}
-	issued, err := s.issue(ctx, tx, newSession{
-		user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: s.snapshot.Load().sites[p.site], surface: p.surface,
-		level: resumedLevel(p), factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
+	issued, codes, err := s.finishFactorChange(ctx, tx, locked, factorFinish{
+		session: newSession{
+			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: s.snapshot.Load().sites[p.site],
+			surface: p.surface, level: resumedLevel(p), ip: ip, userAgent: userAgent,
+		},
+		totpOn: locked.Mfa,
 	})
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
 	if err := audit.Record(ctx, tx, audit.Event{
 		Actor: audit.User(uuid.UUID(p.user)), Action: "user.identity_unlink",
 		Target: audit.Target{Module: "accounts", Kind: "user", ID: p.user.TypeID(), Site: uuid.UUID(p.site), Account: uuid.UUID(p.account)},
 		Detail: map[string]any{"provider": provider},
 	}); err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
-	return issued, nil
+	return issued, codes, nil
 }
 
 // Identity is one provider account linked to a user, as the account page lists it.
