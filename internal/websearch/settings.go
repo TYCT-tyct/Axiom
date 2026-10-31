@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-
 	"uuid"
 
 	"axiom/internal/platform/audit"
@@ -124,13 +123,13 @@ func (s Settings) keyFor(old Config) (string, error) {
 // TestConfig runs one search against the backend and returns only a stable, non-sensitive outcome: the query is fixed,
 // and the error is logged without the backend's body.
 func TestConfig(ctx context.Context, cfg Config, client *egress.Client, logger *slog.Logger) string {
+	if !cfg.Configured() {
+		return "disabled"
+	}
 	s, err := Open(cfg, client)
 	if err != nil {
 		logger.WarnContext(ctx, "search configuration test failed", "request_id", httpserver.RequestID(ctx), "err", err)
 		return "failed"
-	}
-	if s == nil {
-		return "disabled"
 	}
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()

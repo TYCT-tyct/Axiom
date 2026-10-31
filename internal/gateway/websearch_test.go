@@ -2,14 +2,15 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -62,47 +63,64 @@ func TestWebPluginSearchesInjectsAndAnnotates(t *testing.T) {
 		if q := searcher.queries[0]; q.Text != "what is axiom" || q.MaxResults != 3 {
 			t.Fatalf("search query = %+v", q)
 		}
-		calls := h.up.endpoint(1).calls
-		if len(calls) != 1 {
-			t.Fatalf("the upstream got %d calls, want 1", len(calls))
-		}
-		sent := string(calls[0].Body)
-		for _, want := range []string{`"role":"system"`, "The first recorded result.", "https://example.com/one"} {
-			if !strings.Contains(sent, want) {
-				t.Errorf("the upstream body does not contain %q: %s", want, sent)
-			}
-		}
-		if strings.Contains(sent, `"plugins"`) {
-			t.Errorf("the upstream body still carries the plugin control field: %s", sent)
-		}
+		injectedBody(t, h, "The first recorded result.", "https://example.com/one")
 		if h.w.status != 200 {
 			t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
 		}
-		var reply struct {
-			Choices []struct {
-				Message struct {
-					Annotations []struct {
-						Type        string `json:"type"`
-						URLCitation struct {
-							URL string `json:"url"`
-						} `json:"url_citation"`
-					} `json:"annotations"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal([]byte(h.w.body()), &reply); err != nil {
-			t.Fatalf("the reply is not JSON: %v: %s", err, h.w.body())
-		}
-		if len(reply.Choices) != 1 || len(reply.Choices[0].Message.Annotations) != 1 ||
-			reply.Choices[0].Message.Annotations[0].Type != "url_citation" ||
-			reply.Choices[0].Message.Annotations[0].URLCitation.URL != "https://example.com/one" {
-			t.Fatalf("annotations = %+v, body = %s", reply.Choices, h.w.body())
+		if types, urls := replyCitations(t, h.w.body()); !slices.Equal(types, []string{"url_citation"}) ||
+			!slices.Equal(urls, []string{"https://example.com/one"}) {
+			t.Fatalf("annotations = %v / %v, want one url_citation of the result", types, urls)
 		}
 		usage := h.settlements[0].outcome.Attempts[0].Segments[0].Usage
 		if got := usage.Count(catalog.ItemWebSearch); got != 1 {
 			t.Fatalf("settled web searches = %d, want 1", got)
 		}
 	})
+}
+
+// injectedBody checks that the one upstream call carries the search's results in a system message and no longer
+// carries the plugin's control field.
+func injectedBody(t *testing.T, h *harness, want ...string) {
+	t.Helper()
+	calls := h.up.endpoint(1).calls
+	if len(calls) != 1 {
+		t.Fatalf("the upstream got %d calls, want 1", len(calls))
+	}
+	body := string(calls[0].Body)
+	carried := slices.ContainsFunc(want, func(s string) bool { return strings.Contains(body, s) })
+	if !strings.Contains(body, `"role":"system"`) || !carried {
+		t.Fatalf("the upstream body does not carry the result in a system message: %s", body)
+	}
+	if strings.Contains(body, `"plugins"`) {
+		t.Fatalf("the upstream body still carries the plugin control field: %s", body)
+	}
+}
+
+// replyCitations reads the type and URL of every annotation on the reply's first choice.
+func replyCitations(t *testing.T, body string) (types, urls []string) {
+	t.Helper()
+	var reply struct {
+		Choices []struct {
+			Message struct {
+				Annotations []struct {
+					Type        string `json:"type"`
+					URLCitation struct {
+						URL string `json:"url"`
+					} `json:"url_citation"`
+				} `json:"annotations"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := jsonx.Unmarshal([]byte(body), &reply); err != nil {
+		t.Fatalf("the reply is not JSON: %v: %s", err, body)
+	}
+	if len(reply.Choices) != 1 {
+		t.Fatalf("the reply has %d choices, want 1: %s", len(reply.Choices), body)
+	}
+	for _, a := range reply.Choices[0].Message.Annotations {
+		types, urls = append(types, a.Type), append(urls, a.URLCitation.URL)
+	}
+	return types, urls
 }
 
 func TestWebPluginSearchFailureSearchesNothingElse(t *testing.T) {

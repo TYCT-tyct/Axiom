@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -27,6 +28,8 @@ func env(t *testing.T, values map[string]string) *config.Env {
 }
 
 func TestReadConfig(t *testing.T) {
+	// A base URL that carries a user is refused: the key belongs in AXIOM_SEARCH_KEY, not in the URL.
+	withUser := (&url.URL{Scheme: "https", Host: "search.example.com", User: url.User("operator")}).String()
 	for _, tc := range []struct {
 		name    string
 		env     map[string]string
@@ -37,7 +40,7 @@ func TestReadConfig(t *testing.T) {
 		{name: "url only", env: map[string]string{"AXIOM_SEARCH_URL": "https://search.example.com/searxng/"}, want: websearch.Config{URL: "https://search.example.com/searxng"}},
 		{name: "key only", env: map[string]string{"AXIOM_SEARCH_KEY": "secret"}, wantErr: "AXIOM_SEARCH_URL is not"},
 		{name: "not a url", env: map[string]string{"AXIOM_SEARCH_URL": "search.example.com"}, wantErr: "must be an http(s) base URL"},
-		{name: "credentials", env: map[string]string{"AXIOM_SEARCH_URL": "https://user:pass@search.example.com"}, wantErr: "must be an http(s) base URL"},
+		{name: "credentials", env: map[string]string{"AXIOM_SEARCH_URL": withUser}, wantErr: "must be an http(s) base URL"},
 		{name: "query", env: map[string]string{"AXIOM_SEARCH_URL": "https://search.example.com/?a=b"}, wantErr: "must be an http(s) base URL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -58,11 +61,12 @@ func TestReadConfig(t *testing.T) {
 	}
 }
 
-func TestOpenUnconfiguredIsOff(t *testing.T) {
+// TestOpenRequiresAConfiguredBackend: the node checks Configured first, so a deployment with no backend never opens an
+// adapter and keeps the documented refusal.
+func TestOpenRequiresAConfiguredBackend(t *testing.T) {
 	client := egress.NewForTesting(egresstest.Loopback(t))
-	got, err := websearch.Open(websearch.Config{}, client)
-	if err != nil || got != nil {
-		t.Fatalf("Open(empty) = (%v, %v), want (nil, nil)", got, err)
+	if _, err := websearch.Open(websearch.Config{}, client); err == nil {
+		t.Fatal("Open() without a backend URL succeeded")
 	}
 }
 
@@ -71,22 +75,7 @@ func TestSearchParsesRecordedResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	authorized := false
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authorized = r.Header.Get("Authorization") == "Bearer search-key"
-		if r.URL.Path != "/searxng/search" {
-			t.Errorf("path = %q, want /searxng/search", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("format"); got != "json" {
-			t.Errorf("format = %q, want json", got)
-		}
-		if got, want := r.URL.Query().Get("q"), "axiom site:example.com -site:bad.example"; got != want {
-			t.Errorf("q = %q, want %q", got, want)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(fixture)
-	}))
-	defer server.Close()
+	server := recordedBackend(t, fixture)
 	client := egress.NewForTesting(egresstest.Loopback(t, server.Certificate()))
 	searcher, err := websearch.Open(websearch.Config{URL: server.URL + "/searxng", Key: secret.New("search-key")}, client)
 	if err != nil {
@@ -101,9 +90,6 @@ func TestSearchParsesRecordedResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if !authorized {
-		t.Fatal("the backend did not receive the configured bearer token")
-	}
 	if len(results) != 3 {
 		t.Fatalf("Search() returned %d results, want 3: %+v", len(results), results)
 	}
@@ -115,26 +101,43 @@ func TestSearchParsesRecordedResponse(t *testing.T) {
 	}
 }
 
+// recordedBackend serves the recorded SearXNG answer and checks the request the adapter sent for it.
+func recordedBackend(t *testing.T, fixture []byte) *httptest.Server {
+	t.Helper()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/searxng/search" {
+			t.Errorf("path = %q, want /searxng/search", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer search-key" {
+			t.Errorf("Authorization = %q, want the configured bearer token", got)
+		}
+		if got := r.URL.Query().Get("format"); got != "json" {
+			t.Errorf("format = %q, want json", got)
+		}
+		if got, want := r.URL.Query().Get("q"), "axiom site:example.com -site:bad.example"; got != want {
+			t.Errorf("q = %q, want %q", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write(fixture); err != nil {
+			t.Errorf("the backend could not write its body: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
 func TestSearchBackendFailures(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		status  int
-		body    string
-		headers map[string]string
+		name   string
+		status int
+		body   string
 	}{
 		{name: "status", status: http.StatusInternalServerError, body: `{"results":[]}`},
 		{name: "not json", status: http.StatusOK, body: `not json`},
 		{name: "too large", status: http.StatusOK, body: strings.Repeat("x", (4<<20)+1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				for k, v := range tc.headers {
-					w.Header().Set(k, v)
-				}
-				w.WriteHeader(tc.status)
-				_, _ = w.Write([]byte(tc.body))
-			}))
-			defer server.Close()
+			server := failingBackend(t, tc.status, tc.body)
 			client := egress.NewForTesting(egresstest.Loopback(t, server.Certificate()))
 			searcher, err := websearch.Open(websearch.Config{URL: server.URL}, client)
 			if err != nil {
@@ -146,11 +149,24 @@ func TestSearchBackendFailures(t *testing.T) {
 			if !errors.Is(err, websearch.ErrUpstream) {
 				t.Fatalf("Search() error = %v, want ErrUpstream", err)
 			}
-			if err != nil && (strings.Contains(err.Error(), "axiom") || strings.Contains(err.Error(), tc.body)) {
+			if strings.Contains(err.Error(), "axiom") || strings.Contains(err.Error(), tc.body) {
 				t.Fatalf("the error quotes the query or the backend body: %v", err)
 			}
 		})
 	}
+}
+
+// failingBackend answers every search with status and body.
+func failingBackend(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Errorf("the backend could not write its body: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
 }
 
 func TestSearchRequiresText(t *testing.T) {

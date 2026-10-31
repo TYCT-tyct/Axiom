@@ -258,18 +258,8 @@ func (a adminAPI) SetSearchSettings(ctx context.Context, r adminapi.SetSearchSet
 	identity := []any{s.URL, r.Body.Reason, s.Key != nil}
 	body, replayed, err := idempotently(ctx, a.db, "setSearchSettings", r.Params.IdempotencyKey, identity, func(tx pg.Tx) (adminapi.SearchSettings, error) {
 		if s.URL != "" {
-			cfg, err := websearch.Parse(s.URL, "")
-			if err != nil {
-				return adminapi.SearchSettings{}, invalidField("/settings/url", "the search backend must be an http(s) base URL with a host and no credentials, query or fragment")
-			}
-			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			host, err := url.Parse(cfg.URL)
-			if err != nil {
-				return adminapi.SearchSettings{}, invalidField("/settings/url", "the search backend must be an http(s) base URL with a host")
-			}
-			if err := a.exit.Check(checkCtx, host.Hostname()); err != nil {
-				return adminapi.SearchSettings{}, invalidField("/settings/url", "the search backend could not be validated as public")
+			if err := a.checkSearchURL(ctx, s.URL); err != nil {
+				return adminapi.SearchSettings{}, err
 			}
 		}
 		cfg, err := websearch.SaveConfig(ctx, tx, a.keys, actor(ctx), s, a.search, r.Body.Reason)
@@ -285,6 +275,25 @@ func (a adminAPI) SetSearchSettings(ctx context.Context, r adminapi.SetSearchSet
 		return nil, err
 	}
 	return adminapi.SetSearchSettings200JSONResponse{Body: body, Headers: adminapi.SetSearchSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// checkSearchURL refuses a backend URL this node cannot use: not an http(s) base URL, or a host the egress rules keep
+// off the public internet.
+func (a adminAPI) checkSearchURL(ctx context.Context, raw string) error {
+	cfg, err := websearch.Parse(raw, "")
+	if err != nil {
+		return invalidField("/settings/url", "the search backend must be an http(s) base URL with a host and no credentials, query or fragment")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	host, err := url.Parse(cfg.URL)
+	if err != nil {
+		return invalidField("/settings/url", "the search backend must be an http(s) base URL with a host")
+	}
+	if err := a.exit.Check(checkCtx, host.Hostname()); err != nil {
+		return invalidField("/settings/url", "the search backend could not be validated as public")
+	}
+	return nil
 }
 
 func (a adminAPI) TestSearchSettings(ctx context.Context, r adminapi.TestSearchSettingsRequestObject) (adminapi.TestSearchSettingsResponseObject, error) {

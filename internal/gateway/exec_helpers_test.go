@@ -471,12 +471,7 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		h.t.Fatal(err)
 	}
 	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
-	if o.stream != nil {
-		req.Stream = *o.stream
-		if !*o.stream { // the client's body says so too, and the endpoint still has to be asked for a stream
-			request = bytes.Replace(request, []byte(`"stream": true`), []byte(`"stream": false`), 1)
-		}
-	}
+	request = setStream(&req, request, o.stream)
 	var quotes []billing.Quotable
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}
 	for i := 1; i <= n; i++ {
@@ -522,6 +517,19 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		o.mutate(c)
 	}
 	return c
+}
+
+// setStream applies the harness's stream option to the client's body too: the endpoint still has to be asked for a
+// stream, so the body's own member has to agree with the request's.
+func setStream(req *protocol.Request, body []byte, stream *bool) []byte {
+	if stream == nil {
+		return body
+	}
+	req.Stream = *stream
+	if *stream {
+		return body
+	}
+	return bytes.Replace(body, []byte(`"stream": true`), []byte(`"stream": false`), 1)
 }
 
 func cmpOr[T comparable](v, fallback T) T {

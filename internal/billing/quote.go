@@ -340,9 +340,8 @@ func checkEntry(e Quotable, s Segments) error {
 }
 
 // priceServerTools adds every server tool at its most uses to the fixed part and, when the request enables web
-// search, prices what a search beyond them costs the meter: its fee and the samplings it adds, rereading the whole
-// context at the input price of the later samplings, twice with compaction. A tool's price is the dearest up to the
-// context, which a later sampling can fill; a direct call samples nothing, so its band is its batch's length.
+// search, reserves what a search costs the meter (reserveSearch). A tool's price is the dearest up to the context,
+// which a later sampling can fill; a direct call samples nothing, so its band is its batch's length.
 func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
 	searchable bool, resample inputPrice, longest int64,
 ) error {
@@ -364,6 +363,15 @@ func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tier
 	if !searchable {
 		return nil
 	}
+	return q.reserveSearch(d, e, prices, tiers, uses, resample, band, window)
+}
+
+// reserveSearch reserves a search beyond the tools: its fee and the samplings it adds, rereading the whole context at
+// the input price of the later samplings, twice with compaction. band is the longest input whose price applies and
+// window the context every later sampling rereads.
+func (q *quote) reserveSearch(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
+	resample inputPrice, band, window int64,
+) error {
 	var ok bool
 	if q.search, ok = prices.ceiling(1<<catalog.ItemWebSearch, tiers, band); !ok {
 		return ErrUnpriced
@@ -376,37 +384,43 @@ func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tier
 	if d.Compaction {
 		q.rereads = mul(window, 2)
 	}
-	var flat, native bool
-	flatUses := int64(0)
+	flatUses, flat, native := flatSearches(d, e.Model)
+	if !flat {
+		return nil
+	}
+	if native {
+		// A flat search adds no sampling, so when a native tool shares the item it must not stand in for that
+		// tool in q.searches: the meter counts only what the upstream reports, and a native search beyond its
+		// bound still has to extend for its sampling.
+		q.searches = max(0, q.searches-flatUses)
+		return nil
+	}
+	q.resample = inputPrice{}
+	if !d.Compaction {
+		q.rereads = 0
+	}
+	return nil
+}
+
+// flatSearches reports whether the request enables a flat web search, and how many of its uses the quote reserves:
+// the request's own or else the model's default. native says a native web search tool shares the item.
+func flatSearches(d Demand, m Model) (uses int64, flat, native bool) {
 	for _, t := range d.ServerTools {
 		if t.Item != catalog.ItemWebSearch {
 			continue
 		}
-		if t.Flat {
-			flat = true
-			n := t.MaxUses
-			if n == 0 {
-				n = e.Model.MaxUses[catalog.ItemWebSearch]
-			}
-			flatUses += n
-		} else {
+		if !t.Flat {
 			native = true
+			continue
 		}
-	}
-	if flat {
-		// A flat search runs before the completion and adds no sampling. Its fee is in the fixed part, so when a
-		// native tool shares the item it must not stand in for that tool in q.searches: the meter counts only what
-		// the upstream reports, and a native search beyond its bound still has to extend for its sampling.
-		if native {
-			q.searches = max(0, q.searches-flatUses)
-		} else {
-			q.resample = inputPrice{}
-			if !d.Compaction {
-				q.rereads = 0
-			}
+		flat = true
+		n := t.MaxUses
+		if n == 0 {
+			n = m.MaxUses[catalog.ItemWebSearch]
 		}
+		uses += n
 	}
-	return nil
+	return uses, flat, native
 }
 
 // quotePrices keeps sale admission strict while native cost estimation can use an incomplete upstream schedule.

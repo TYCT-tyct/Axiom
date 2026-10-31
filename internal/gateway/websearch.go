@@ -45,6 +45,23 @@ func (h *Handler) checkWebSearch(req *protocol.Request, body []byte) (string, *R
 	return query, nil
 }
 
+// onlineWebPlugin gives a request whose deprecated :online variant asked for web search the plugin it stands for: one
+// search, OpenRouter's default number of results.
+func onlineWebPlugin(req *protocol.Request, online bool) {
+	if online && req.Web == nil {
+		req.Web = &protocol.WebPlugin{MaxResults: protocol.DefaultWebSearchResults, Online: true}
+	}
+}
+
+// restoreWeb puts back what compression removed: the plugin is a routing setting, not a body one, and the input its
+// results may add is reserved for again here (docs/domains/billing.md「预留与结算」).
+func restoreWeb(req *protocol.Request, web *protocol.WebPlugin) {
+	req.Web = web
+	if web != nil {
+		req.SearchBytes = protocol.WebSearchMaxBytes
+	}
+}
+
 // webSearch runs the request's one search and injects its results before the first user turn. It must run after
 // admission, so a call that cannot pay searches nothing, and before an attempt, so a failed search is an upstream
 // failure rather than a charge. The query is client content and is never logged.

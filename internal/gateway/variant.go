@@ -127,7 +127,6 @@ func (v variantNames) routerName() string {
 		return "openrouter/free"
 	}
 	return ""
-
 }
 
 // readRouting reads what a request's provider object and model names ask of the route, for a call and for a count alike,
@@ -142,12 +141,8 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 	if err != nil {
 		return over, variantNames{}, err
 	}
-	if over.RequireParameters {
-		params, unknown, found := protocol.RequestParameters(req.Format, body)
-		if found {
-			return over, variantNames{}, invalid("provider.require_parameters cannot be kept: no endpoint parameter inventory records \"" + unknown + "\"; supplier model records and catalog specs carry no sampling or provider parameters.")
-		}
-		over.RequiredParameters = params
+	if err := requireParameters(req, body, &over); err != nil {
+		return over, variantNames{}, err
 	}
 	primary, ref := parseModelName(req.Model)
 	if ref != nil {
@@ -181,6 +176,20 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 	return over, v, nil
 }
 
+// requireParameters settles what provider.require_parameters asks for: the parameter inventory the request wrote
+// outside, and the parameters an endpoint must then report.
+func requireParameters(req *protocol.Request, body []byte, over *routing.Override) error {
+	if !over.RequireParameters {
+		return nil
+	}
+	params, unknown, found := protocol.RequestParameters(req.Format, body)
+	if found {
+		return invalid("provider.require_parameters cannot be kept: no endpoint parameter inventory records \"" + unknown + "\"; supplier model records and catalog specs carry no sampling or provider parameters.")
+	}
+	over.RequiredParameters = params
+	return nil
+}
+
 // alternate reads one name of the request's models under the ranking the request has. ok is false for a name that
 // could not be tried. explicit says the request wrote a provider.sort, the only thing that replaces an :exacto here;
 // verified says the ranking the request already has is quality-first among verified endpoints, which is what an
@@ -198,7 +207,6 @@ func alternate(name string, explicit bool, ranking *routing.Strategy, verified, 
 		// auto already considers every model the key may call and free every free one; a second such name adds
 		// nothing to try.
 		return "", false, false, nil
-
 	}
 	if err := alternateRefusal(alt, explicit, ranking, verified, reasoning); err != nil {
 		return "", false, false, err

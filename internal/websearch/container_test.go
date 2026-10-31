@@ -96,19 +96,8 @@ func TestSearXNGContainer(t *testing.T) {
 	}
 	t.Cleanup(func() { terminate(t, searxng) })
 
-	host, err := searxng.Host(ctx)
-	if err != nil {
-		t.Fatalf("find the SearXNG host: %v", err)
-	}
-	if host == "localhost" {
-		host = "127.0.0.1" // Docker Desktop's IPv6 forwarder stalls under load
-	}
-	port, err := searxng.MappedPort(ctx, "8080/tcp")
-	if err != nil {
-		t.Fatalf("find the SearXNG port: %v", err)
-	}
 	client := egress.NewForTesting(egresstest.Loopback(t))
-	searcher, err := websearch.Open(websearch.Config{URL: "http://" + net.JoinHostPort(host, port.Port())}, client)
+	searcher, err := websearch.Open(websearch.Config{URL: searchURL(t, ctx, searxng)}, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +115,23 @@ func TestSearXNGContainer(t *testing.T) {
 			t.Errorf("result %d URL = %q, want %q", i, results[i].URL, want)
 		}
 	}
+}
+
+// searchURL is the address the test reaches the SearXNG container on: its exposed port, on the host.
+func searchURL(t *testing.T, ctx context.Context, c testcontainers.Container) string {
+	t.Helper()
+	host, err := c.Host(ctx)
+	if err != nil {
+		t.Fatalf("find the SearXNG host: %v", err)
+	}
+	if host == "localhost" {
+		host = "127.0.0.1" // Docker Desktop's IPv6 forwarder stalls under load
+	}
+	port, err := c.MappedPort(ctx, "8080/tcp")
+	if err != nil {
+		t.Fatalf("find the SearXNG port: %v", err)
+	}
+	return "http://" + net.JoinHostPort(host, port.Port())
 }
 
 func terminate(t *testing.T, c testcontainers.Container) {

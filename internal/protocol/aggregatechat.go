@@ -280,14 +280,6 @@ func (a *chatAggregate) entry(dst *[]byte, factor int) error {
 	return nil
 }
 
-// citationMemory is what generating annotations may hold beyond the content it reads: the unescaped copy and the
-// appended annotation entries. The content itself is charged at citationFactor when the reply may be cited.
-const citationMemory = 64 << 10
-
-// citationFactor is how many copies of a cited content piece the aggregate keeps room for: its stored escaped form,
-// the unescaped copy cite builds and the annotations it appends.
-const citationFactor = 3
-
 // piece adds the string the delta has to the choice's piece i.
 func (a *chatAggregate) piece(i int) error {
 	var v []byte
@@ -414,34 +406,6 @@ func (c *chatChoice) size() int {
 		n += 128 + len(t.id) + len(t.name) + len(t.arguments)
 	}
 	return n
-}
-
-// cite adds the url_citation annotations of the links in the choice's content that match a supplied search result.
-// It runs once, when the reply is finished, because only then is the whole message known; a link the model wrote to a
-// page the search did not return is the model's own and gets no annotation. The content is kept escaped, so it is
-// unquoted here before indexes are counted in characters rather than bytes.
-func (a *chatAggregate) cite(citations []Citation) {
-	if len(citations) == 0 {
-		return
-	}
-	for i := range a.choices {
-		c := &a.choices[i]
-		if len(c.strings[pieceContent]) == 0 {
-			continue
-		}
-		var text string
-		if err := jsonx.Unmarshal([]byte(`"`+string(c.strings[pieceContent])+`"`), &text); err != nil {
-			continue
-		}
-		entries := CitationAnnotations(text, citations)
-		if len(entries) == 0 {
-			continue
-		}
-		if len(c.annotations) > 0 {
-			c.annotations = append(c.annotations, ',')
-		}
-		c.annotations = append(c.annotations, entries...)
-	}
 }
 
 func orNull(v []byte) []byte {

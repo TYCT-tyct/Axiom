@@ -1,26 +1,15 @@
-import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
+import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, CheckField, DataState, Icon, TextField } from "@axiom/ui";
+import { CheckField, TextField } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
-import { type ReactElement, useState } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "./change";
 import { Facts, State } from "./parts";
 import { mailSettingsQuery } from "./queries";
+import { SettingsPage } from "./settings-page";
 
 type Settings = AdminSchemas["MailSettingsUpdate"]["settings"];
-
-// MailUnavailable stands in for the card where a node of an older release has no mail settings: the rest of the
-// settings still work.
-function MailUnavailable() {
-  const { t } = useTranslation();
-  return (
-    <Facts
-      title={t("settings.mail.title")}
-      rows={[[t("settings.mail.unavailableLabel"), t("settings.mail.unavailable")]]}
-    />
-  );
-}
 
 // readMail turns the dialog's fields into the request. The port is a whole number; enabled mail needs a server and a
 // sender, while disabled mail may keep blanks so the card can still turn it off after an environment change.
@@ -54,43 +43,27 @@ function readMail(values: Record<string, string>, invalidPort: string, required:
 
 export function MailSettings() {
   const query = useQuery(mailSettingsQuery);
-  if (query.error instanceof ApiError && query.error.status === 404) {
-    return <MailUnavailable />;
-  }
-  return <DataState query={query}>{(view) => <Card view={view} />}</DataState>;
-}
-
-function Card({ view }: { view: AdminSchemas["MailSettings"] }) {
   const { t } = useTranslation();
-  const [edit, setEdit] = useState(false);
-  const [test, setTest] = useState(false);
   return (
-    <>
-      <MailFacts
-        view={view}
-        action={
-          <div className="flex gap-2">
-            <Button size="md" onClick={() => setTest(true)}>
-              <Icon name="check" />
-              {t("settings.mail.test")}
-            </Button>
-            <Button size="md" onClick={() => setEdit(true)}>
-              <Icon name="pencil" />
-              {t("settings.mail.edit")}
-            </Button>
-          </div>
-        }
-      />
-      {edit ? <EditDialog view={view} onClose={() => setEdit(false)} /> : null}
-      {test ? <TestDialog onClose={() => setTest(false)} /> : null}
-    </>
+    <SettingsPage
+      query={query}
+      labels={{
+        title: t("settings.mail.title"),
+        unavailableLabel: t("settings.mail.unavailableLabel"),
+        unavailable: t("settings.mail.unavailable"),
+        edit: t("settings.mail.edit"),
+        test: t("settings.mail.test"),
+      }}
+      facts={MailFacts}
+      dialogs={{ edit: MailEditDialog, test: MailTestDialog }}
+    />
   );
 }
 
-function MailFacts({ view, action }: { view: AdminSchemas["MailSettings"]; action: ReactElement }) {
+function MailFacts({ view, action }: { view: AdminSchemas["MailSettings"]; action: ReactNode }) {
   const { t } = useTranslation();
   const configured = view.enabled === true;
-  const rows: [string, ReactElement | string][] = [
+  const rows: [string, ReactNode][] = [
     [
       t("settings.mail.state"),
       <State key="state" tone={configured ? "good" : "neutral"}>
@@ -109,7 +82,7 @@ function MailFacts({ view, action }: { view: AdminSchemas["MailSettings"]; actio
   return <Facts title={t("settings.mail.title")} rows={rows} action={action} />;
 }
 
-function EditDialog({ view, onClose }: { view: AdminSchemas["MailSettings"]; onClose: () => void }) {
+function MailEditDialog({ view, onClose }: { view: AdminSchemas["MailSettings"]; onClose: () => void }) {
   const { t } = useTranslation();
   return (
     <ChangeDialog
@@ -203,7 +176,7 @@ function MailSaved({ saved }: { saved: AdminSchemas["MailSettings"] }) {
   );
 }
 
-function TestDialog({ onClose }: { onClose: () => void }) {
+function MailTestDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const errors = useErrors();
   return (

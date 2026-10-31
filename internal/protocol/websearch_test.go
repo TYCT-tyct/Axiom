@@ -1,11 +1,12 @@
 package protocol_test
 
 import (
-	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
 
@@ -19,12 +20,15 @@ func TestInspectWebPlugin(t *testing.T) {
 	if w == nil || w.MaxResults != 7 || w.SearchPrompt != "Use these." || w.Online {
 		t.Fatalf("web = %+v", w)
 	}
-	if len(w.IncludeDomains) != 1 || w.IncludeDomains[0] != "example.com" || len(w.ExcludeDomains) != 1 || w.ExcludeDomains[0] != "bad.example" {
+	if !slices.Equal(w.IncludeDomains, []string{"example.com"}) || !slices.Equal(w.ExcludeDomains, []string{"bad.example"}) {
 		t.Fatalf("domains = %+v / %+v", w.IncludeDomains, w.ExcludeDomains)
 	}
 	if req.SearchBytes != 0 {
 		t.Fatalf("SearchBytes = %d, want 0 from Inspect", req.SearchBytes)
 	}
+}
+
+func TestInspectRefusesBadWebPlugins(t *testing.T) {
 	for _, bad := range []struct{ name, plugin string }{
 		{"too many results", `{"id":"web","max_results":11}`},
 		{"wildcard", `{"id":"web","include_domains":["*.example.com"]}`},
@@ -41,7 +45,7 @@ func TestInspectWebPlugin(t *testing.T) {
 	if _, err := protocol.Inspect(protocol.Messages, []byte(`{"model":"m","plugins":[{"id":"web"}]}`)); err == nil {
 		t.Fatal("Inspect() accepted web outside Chat")
 	}
-	req, err = protocol.Inspect(protocol.Chat, []byte(`{"model":"m","plugins":[{"id":"web","enabled":false}]}`))
+	req, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","plugins":[{"id":"web","enabled":false}]}`))
 	if err != nil || req.Web != nil {
 		t.Fatalf("a disabled web plugin = %+v, %v", req.Web, err)
 	}
@@ -58,40 +62,53 @@ func TestChatSearchQuery(t *testing.T) {
 	}
 }
 
-func TestInjectWebSearch(t *testing.T) {
-	body := []byte(`{"model":"m","messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hello"}]}`)
-	out, err := protocol.InjectWebSearch(body, "A web search was conducted.")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc struct {
-		Messages []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(out, &doc); err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Messages) != 3 || doc.Messages[0].Role != "system" || doc.Messages[0].Content != "be brief" ||
-		doc.Messages[1].Role != "system" || doc.Messages[1].Content != "A web search was conducted." || doc.Messages[2].Content != "hello" {
-		t.Fatalf("injected messages = %+v", doc.Messages)
-	}
-	if !strings.Contains(string(out), `"model":"m"`) {
-		t.Fatalf("the injected body lost the model: %s", out)
-	}
+// message is a Chat message as the injected body carries it.
+type message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
 
-	turn := []byte(`{"model":"m","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"a"},{"role":"user","content":"second"}]}`)
-	out, err = protocol.InjectWebSearch(turn, "results")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(out, &doc); err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Messages) != 4 || doc.Messages[0].Role != "system" || doc.Messages[0].Content != "results" ||
-		doc.Messages[1].Content != "first" || doc.Messages[3].Content != "second" {
-		t.Fatalf("the results are not a leading system message: %+v", doc.Messages)
+// TestInjectWebSearch: the results become a system message before the first user turn, so a format that only takes
+// them at the front keeps them, and the search still answered the last user turn.
+func TestInjectWebSearch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		text string
+		want []message
+	}{
+		{
+			name: "after an existing system message",
+			body: `{"model":"m","messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hello"}]}`,
+			text: "A web search was conducted.",
+			want: []message{{"system", "be brief"}, {"system", "A web search was conducted."}, {"user", "hello"}},
+		},
+		{
+			name: "before a second turn",
+			body: `{"model":"m","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"a"},{"role":"user","content":"second"}]}`,
+			text: "results",
+			want: []message{{"system", "results"}, {"user", "first"}, {"assistant", "a"}, {"user", "second"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := protocol.InjectWebSearch([]byte(tc.body), tc.text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc struct {
+				Model    string    `json:"model"`
+				Messages []message `json:"messages"`
+			}
+			if err := jsonx.Unmarshal(out, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if doc.Model != "m" {
+				t.Fatalf("the injected body lost the model: %s", out)
+			}
+			if !slices.Equal(doc.Messages, tc.want) {
+				t.Fatalf("injected messages = %+v, want %+v", doc.Messages, tc.want)
+			}
+		})
 	}
 }
 
@@ -104,12 +121,14 @@ func TestCitationAnnotations(t *testing.T) {
 	var entries []struct {
 		Type        string `json:"type"`
 		URLCitation struct {
-			URL, Title, Content string
-			StartIndex          int `json:"start_index"`
-			EndIndex            int `json:"end_index"`
+			URL        string `json:"url"`
+			Title      string `json:"title"`
+			Content    string `json:"content"`
+			StartIndex int    `json:"start_index"`
+			EndIndex   int    `json:"end_index"`
 		} `json:"url_citation"`
 	}
-	if err := json.Unmarshal(append(append([]byte{'['}, got...), ']'), &entries); err != nil {
+	if err := jsonx.Unmarshal(append(append([]byte{'['}, got...), ']'), &entries); err != nil {
 		t.Fatalf("annotations are not an array: %v: %s", err, got)
 	}
 	if len(entries) != 2 || entries[0].Type != "url_citation" || entries[0].URLCitation.URL != "https://example.com/one" || entries[1].URLCitation.URL != "https://example.org/two" {

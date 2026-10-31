@@ -400,14 +400,12 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	if names.online && req.Web == nil {
-		req.Web = &protocol.WebPlugin{MaxResults: protocol.DefaultWebSearchResults, Online: true}
-	}
-	if query, ref := h.checkWebSearch(&req, body); ref != nil {
+	onlineWebPlugin(&req, names.online)
+	query, ref := h.checkWebSearch(&req, body)
+	if ref != nil {
 		return ref
-	} else {
-		c.search = query
 	}
+	c.search = query
 	if err := pinnedProvider(&req, over); err != nil {
 		return err
 	}
@@ -424,12 +422,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	// Compression reads the body without the injected results and re-inspects it; the plugin is a routing setting,
-	// not a body one, so it and the input it will add are restored here.
-	req.Web = web
-	if web != nil {
-		req.SearchBytes = protocol.WebSearchMaxBytes
-	}
+	restoreWeb(&req, web)
 	c.Body, c.Request, c.snap, c.models, c.auto, c.free, c.over = body, req, snap, models, names.auto, names.free, over
 	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
 	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {

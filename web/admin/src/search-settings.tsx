@@ -1,25 +1,15 @@
-import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
+import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, DataState, Icon, TextField } from "@axiom/ui";
+import { TextField } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
-import { type ReactElement, useState } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "./change";
 import { Facts, State } from "./parts";
 import { searchSettingsQuery } from "./queries";
+import { SettingsPage } from "./settings-page";
 
 type Settings = AdminSchemas["SearchSettingsUpdate"]["settings"];
-
-// SearchUnavailable stands in for the card where a node of an older release has no search settings.
-function SearchUnavailable() {
-  const { t } = useTranslation();
-  return (
-    <Facts
-      title={t("settings.search.title")}
-      rows={[[t("settings.search.unavailableLabel"), t("settings.search.unavailable")]]}
-    />
-  );
-}
 
 const optional = (text: string) => (text === "" ? undefined : text);
 
@@ -34,44 +24,28 @@ function readSearch(values: Record<string, string>, keyWithoutURL: string): Sett
 
 export function SearchSettings() {
   const query = useQuery(searchSettingsQuery);
-  if (query.error instanceof ApiError && query.error.status === 404) {
-    return <SearchUnavailable />;
-  }
-  return <DataState query={query}>{(view) => <Card view={view} />}</DataState>;
-}
-
-function Card({ view }: { view: AdminSchemas["SearchSettings"] }) {
   const { t } = useTranslation();
-  const [edit, setEdit] = useState(false);
-  const [test, setTest] = useState(false);
   return (
-    <>
-      <SearchFacts
-        view={view}
-        action={
-          <div className="flex gap-2">
-            <Button size="md" onClick={() => setTest(true)}>
-              <Icon name="check" />
-              {t("settings.search.test")}
-            </Button>
-            <Button size="md" onClick={() => setEdit(true)}>
-              <Icon name="pencil" />
-              {t("settings.search.edit")}
-            </Button>
-          </div>
-        }
-      />
-      {edit ? <EditDialog view={view} onClose={() => setEdit(false)} /> : null}
-      {test ? <TestDialog onClose={() => setTest(false)} /> : null}
-    </>
+    <SettingsPage
+      query={query}
+      labels={{
+        title: t("settings.search.title"),
+        unavailableLabel: t("settings.search.unavailableLabel"),
+        unavailable: t("settings.search.unavailable"),
+        edit: t("settings.search.edit"),
+        test: t("settings.search.test"),
+      }}
+      facts={SearchFacts}
+      dialogs={{ edit: SearchEditDialog, test: SearchTestDialog }}
+    />
   );
 }
 
-function SearchFacts({ view, action }: { view: AdminSchemas["SearchSettings"]; action: ReactElement }) {
+function SearchFacts({ view, action }: { view: AdminSchemas["SearchSettings"]; action: ReactNode }) {
   const { t } = useTranslation();
   const configured = Boolean(view.url);
   const source = view.source === "database" ? "database" : "environment";
-  const rows: [string, ReactElement | string][] = [
+  const rows: [string, ReactNode][] = [
     [
       t("settings.search.state"),
       <State key="state" tone={configured ? "good" : "neutral"}>
@@ -88,7 +62,7 @@ function SearchFacts({ view, action }: { view: AdminSchemas["SearchSettings"]; a
   return <Facts title={t("settings.search.title")} rows={rows} action={action} />;
 }
 
-function EditDialog({ view, onClose }: { view: AdminSchemas["SearchSettings"]; onClose: () => void }) {
+function SearchEditDialog({ view, onClose }: { view: AdminSchemas["SearchSettings"]; onClose: () => void }) {
   const { t } = useTranslation();
   return (
     <ChangeDialog
@@ -148,7 +122,7 @@ function SearchSaved({ saved }: { saved: AdminSchemas["SearchSettings"] }) {
   );
 }
 
-function TestDialog({ onClose }: { onClose: () => void }) {
+function SearchTestDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   return (
     <ChangeDialog

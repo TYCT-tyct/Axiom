@@ -26,7 +26,7 @@ import (
 // and .env.example spell them the same way.
 const (
 	urlVar = "AXIOM_SEARCH_URL"
-	keyVar = "AXIOM_SEARCH_KEY" //nolint:gosec // a variable name, not a credential
+	keyVar = "AXIOM_SEARCH_KEY"
 )
 
 const (
@@ -115,12 +115,13 @@ type SearXNG struct {
 	client *egress.Client
 }
 
-// Open validates the configuration and builds the adapter. With no URL it returns a nil interface: the feature is off,
-// and the gateway keeps its refusal in front of the reservation. The client must be the node's egress client, so the backend is subject to the same
-// address, redirect and timeout rules as every other outbound request.
+// Open validates the configuration and builds the adapter. The caller checks Configured first: a node with no backend
+// has no searcher, and the gateway keeps its documented refusal in front of the reservation. The client must be the
+// node's egress client, so the backend is subject to the same address, redirect and timeout rules as every other
+// outbound request.
 func Open(c Config, client *egress.Client) (Searcher, error) {
 	if !c.Configured() {
-		return nil, nil
+		return nil, errors.New("websearch: opened without a backend URL")
 	}
 	if client == nil {
 		return nil, errors.New("websearch: configured without an egress client")
@@ -172,13 +173,13 @@ func (s *SearXNG) Search(ctx context.Context, q Query) ([]Result, error) {
 		// no client content.
 		return nil, fmt.Errorf("%w: %s", ErrUpstream, transportFailure(err))
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // an error closing a response whose answer is already decided changes nothing
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: the backend answered %d", ErrUpstream, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("%w: read the response: %v", ErrUpstream, err)
+		return nil, fmt.Errorf("%w: read the response: %w", ErrUpstream, err)
 	}
 	if len(body) > maxResponseBytes {
 		return nil, fmt.Errorf("%w: the backend answered more than %d bytes", ErrUpstream, maxResponseBytes)

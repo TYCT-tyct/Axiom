@@ -45,14 +45,14 @@ func (s *scanner) plugin() error {
 		id      string
 		enabled = true
 		web     WebPlugin
-		option  string // the first option an id other than web cannot take
-		options bool   // a plugin option was written
+		option  string // the first option written, for the error an id other than web gets
 	)
 	if s.dec.PeekKind() != '{' {
 		return s.mismatch("a plugin object")
 	}
 	err := s.eachMember(func() error {
-		switch name := string(s.name); name {
+		name := string(s.name)
+		switch name {
 		case "id":
 			v, err := s.str()
 			if len(v) > 64 {
@@ -64,56 +64,48 @@ func (s *scanner) plugin() error {
 			k, err := s.flag()
 			enabled = k != 'f'
 			return err
-		case "max_results":
-			options = true
-			option = first(option, name)
-			n, err := s.count()
-			web.MaxResults = int(n)
-			return err
-		case "search_prompt":
-			options = true
-			option = first(option, name)
-			v, err := s.str()
-			if err == nil {
-				web.SearchPrompt = string(v)
-			}
-			return err
-		case "include_domains":
-			options = true
-			option = first(option, name)
-			return s.domains(&web.IncludeDomains)
-		case "exclude_domains":
-			options = true
-			option = first(option, name)
-			return s.domains(&web.ExcludeDomains)
-		case "engine", "mode":
-			options = true
-			option = first(option, name)
-			// A value here would pick among OpenRouter's engines; this deployment has one configured backend, so the
-			// option is refused rather than silently ignored.
-			if err := s.skip(); err != nil {
-				return err
-			}
-			return fmt.Errorf("plugin option %q is not supported: this deployment searches through its configured backend", name)
-		default:
-			return fmt.Errorf("plugin option %.64q is not supported", s.name)
 		}
+		if option == "" {
+			option = name
+		}
+		return s.webOption(&web, name)
 	})
 	if err != nil {
 		return err
 	}
-	if id != "web" && options {
+	if id != "web" && option != "" {
 		return fmt.Errorf("plugin option %q is not supported", option)
 	}
 	return s.applyPlugin(id, enabled, &web)
 }
 
-// first returns the first non-empty of a and b, for the error that names the option a plugin cannot take.
-func first(a, b string) string {
-	if a != "" {
-		return a
+// webOption reads one of the web plugin's options. It is apart from plugin so only a web plugin is read into WebPlugin.
+func (s *scanner) webOption(web *WebPlugin, name string) error {
+	switch name {
+	case "max_results":
+		n, err := s.count()
+		web.MaxResults = int(n)
+		return err
+	case "search_prompt":
+		v, err := s.str()
+		if err == nil {
+			web.SearchPrompt = string(v)
+		}
+		return err
+	case "include_domains":
+		return s.domains(&web.IncludeDomains)
+	case "exclude_domains":
+		return s.domains(&web.ExcludeDomains)
+	case "engine", "mode":
+		// A value here would pick among OpenRouter's engines; this deployment has one configured backend, so the
+		// option is refused rather than silently ignored.
+		if err := s.skip(); err != nil {
+			return err
+		}
+		return fmt.Errorf("plugin option %q is not supported: this deployment searches through its configured backend", name)
+	default:
+		return fmt.Errorf("plugin option %.64q is not supported", s.name)
 	}
-	return b
 }
 
 // domains reads an array of host names for include_domains or exclude_domains, in lower case so one domain has one
@@ -135,19 +127,20 @@ func (s *scanner) domains(dst *[]string) error {
 
 func (s *scanner) applyPlugin(id string, enabled bool, web *WebPlugin) error {
 	switch id {
+	case "web":
+		return s.applyWeb(id, enabled, web)
 	case "response-healing", "context-compression":
 		if enabled && s.r.Format != Chat {
 			return fmt.Errorf("plugin %q is not supported for this format", id)
 		}
-	case "web":
+		if id == "response-healing" {
+			s.r.ResponseHealing = enabled
+			return nil
+		}
+		s.compressionSet = true
+		s.r.Compression = CompressionDisabled
 		if enabled {
-			if s.r.Format != Chat {
-				return fmt.Errorf("plugin %q is not supported for this format", id)
-			}
-			if err := CheckWebSearch(web); err != nil {
-				return err
-			}
-			s.r.Web = web
+			s.r.Compression = CompressionEnabled
 		}
 	case "file-parser":
 		if enabled {
@@ -156,16 +149,22 @@ func (s *scanner) applyPlugin(id string, enabled bool, web *WebPlugin) error {
 	default:
 		return fmt.Errorf("plugin %q is not supported", id)
 	}
-	if id == "response-healing" {
-		s.r.ResponseHealing = enabled
+	return nil
+}
+
+// applyWeb records a web plugin, which only Chat can carry: its results are injected into the messages and its reply
+// carries the citations.
+func (s *scanner) applyWeb(id string, enabled bool, web *WebPlugin) error {
+	if !enabled {
+		return nil
 	}
-	if id == "context-compression" {
-		s.compressionSet = true
-		s.r.Compression = CompressionDisabled
-		if enabled {
-			s.r.Compression = CompressionEnabled
-		}
+	if s.r.Format != Chat {
+		return fmt.Errorf("plugin %q is not supported for this format", id)
 	}
+	if err := CheckWebSearch(web); err != nil {
+		return err
+	}
+	s.r.Web = web
 	return nil
 }
 
