@@ -32,6 +32,7 @@ type try struct {
 type trail struct {
 	call      *Call
 	tries     []try
+	at        time.Time // the call's single start, which the reservation also wrote
 	start     time.Time
 	currency  platform.Currency
 	clientApp string
@@ -39,8 +40,12 @@ type trail struct {
 }
 
 func (s *session) trail() trail {
+	at := s.c.At
+	if at.IsZero() {
+		at = s.start
+	}
 	return trail{
-		call: s.c, tries: s.tries, start: s.start, currency: s.currency,
+		call: s.c, tries: s.tries, at: at, start: s.start, currency: s.currency,
 		clientApp: clientAppOf(s.req.Header), app: attributionOf(s.req.Header),
 	}
 }
@@ -195,7 +200,7 @@ const noConsent = "none"
 func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end time.Time) observability.CallRecord {
 	c := t.call
 	rec := observability.CallRecord{
-		ID: c.ID, At: t.start,
+		ID: c.ID, At: t.at,
 		Site: uuid.UUID(c.site.ID), Account: uuid.UUID(c.caller.AccountID()),
 		Workspace: uuid.UUID(c.caller.WorkspaceID()), Key: uuid.UUID(c.caller.KeyID()), IP: c.ip,
 		UsedTools: c.Request.Needs.Has(protocol.Tools), HasImage: c.Request.Images > 0, HasFile: c.Request.Documents > 0,

@@ -67,6 +67,9 @@ export function nextWindow(page: { next_cursor?: string | null; since?: string; 
 export type AdminCallFilters = {
   account_id?: string;
   request_id?: string;
+  site_id?: string;
+  model?: string;
+  status?: "ok" | "error";
   since?: string;
   until?: string;
 };
@@ -93,6 +96,15 @@ export const adminCallsQuery = (filters: AdminCallFilters) =>
       ),
     initialPageParam: {} as PageWindow,
     getNextPageParam: nextWindow,
+  });
+
+// The operations dashboard: one request for the site's calls, revenue, cost, cash and busiest accounts and models. The
+// window is absolute, so the figures and the links they open keep describing the same calls.
+export const overviewQuery = (since: string, until: string) =>
+  queryOptions({
+    queryKey: [accountKey, "overview", since, until],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/reports/overview`, { params: { query: { since, until } }, signal })),
   });
 
 // The route and the attempts are shown as JSON and may hold integers beyond JavaScript's exact range, so the trace is
@@ -341,6 +353,24 @@ export const paymentOrdersQuery = (siteId: AdminSchemas["SiteId"], filters: Paym
       unwrap(
         adminApi.GET(`${base}/payments/orders`, {
           params: { query: { site_id: siteId, ...filters, cursor: pageParam, limit: pageSize } },
+          signal,
+        }),
+      ),
+    initialPageParam: firstPage,
+    getNextPageParam: nextCursor,
+  });
+
+// The cash behind the dashboard figure: ledger time, not an order's, so a refund of an older order and an offline
+// top-up are both here.
+export const cashMovementsQuery = (siteId: AdminSchemas["SiteId"], window: { since?: string; until?: string }) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "cash-movements", siteId, window],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/payments/cash`, {
+          params: {
+            query: { site_id: siteId, since: window.since, until: window.until, cursor: pageParam, limit: pageSize },
+          },
           signal,
         }),
       ),

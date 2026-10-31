@@ -22,7 +22,8 @@ var now = time.Now().UTC().Truncate(time.Millisecond)
 func keep(t *testing.T, db *pg.DB, records ...CallRecord) {
 	t.Helper()
 	r := NewRecorder(t.Context(), db, platformScope, Config{
-		QueueSize: 16, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+		// A fixture enqueues its rows in one burst; the queue holds the burst while the first batch waits on the database.
+		QueueSize: 64, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
 	}, quiet)
 	for _, rec := range records {

@@ -8,6 +8,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import { orderAmounts } from "../orders/amounts";
+import { CashMovements } from "../orders/cash";
 import { orderTone, paymentOrderState, paymentOrderStates, refundTone, shortId } from "../orders/states";
 import {
   ChoiceFilter,
@@ -43,6 +44,9 @@ export default function Orders() {
 
 function Current({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const filters = useSearch({ from: "/app/orders" });
+  if (filters.cash === "1") {
+    return <CashMovements siteId={siteId} since={filters.since} until={filters.until} />;
+  }
   return (
     <>
       <RefundQueue siteId={siteId} />

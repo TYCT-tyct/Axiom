@@ -82,4 +82,15 @@ export default {
       failed: "已拒绝",
     },
   },
+  cash: {
+    title: "现金流水",
+    description: "看板窗口内的账本现金收支，按交易时间排列：较早订单的退款和线下充值都会出现在看板统计的窗口里。",
+    back: "返回订单",
+    emptyTitle: "这个时间范围内没有现金流水",
+    emptyBody: "充值入账或退款时，会按账本记录的时间出现在这里。",
+    col: { at: "时间", kind: "类型", account: "账户", amount: "现金", source: "来源" },
+    kind: { credit: "充值", refund: "退款" },
+    online: "订单 {{order}}",
+    offline: "线下：{{channel}}",
+  },
 } as const;

@@ -153,7 +153,8 @@ func (q *Queries) InsertHolder(ctx context.Context, db DBTX, arg InsertHolderPar
 const insertReservation = `-- name: InsertReservation :exec
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
-        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates, price_versions)
+        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates,
+        price_versions)
     VALUES ($8, $3, $4, $1, $6, $9,
         $2, $7, 1, $5, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8),
         $11::text[], $12::text[], $13, $14, $15::jsonb, $16)
@@ -207,6 +208,67 @@ func (q *Queries) InsertReservation(ctx context.Context, db DBTX, arg InsertRese
 		arg.Endpoints,
 		arg.ExchangeRates,
 		arg.PriceVersions,
+	)
+	return err
+}
+
+const insertReservationAt = `-- name: InsertReservationAt :exec
+WITH reservation AS (
+    INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
+        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates,
+        price_versions, created_at)
+    VALUES ($8, $3, $4, $1, $6, $9,
+        $2, $7, 1, $5, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8),
+        $11::text[], $12::text[], $13, $14, $15::jsonb, $16,
+        to_timestamp($17::bigint / 1000000.0))
+), balance AS (
+    UPDATE billing.balances b SET reserved = b.reserved + $5 WHERE b.account_id = $4
+)
+INSERT INTO billing.spend AS s (subject, window_start, site_id, account_id, reserved)
+VALUES ($1, $2, $3, $4, $5),
+    ($6, $7, $3, $4, $5)
+ON CONFLICT (subject, window_start) DO UPDATE SET reserved = s.reserved + excluded.reserved
+`
+
+type InsertReservationAtParams struct {
+	WorkspaceID     uuid.UUID
+	WorkspaceWindow time.Time
+	SiteID          uuid.UUID
+	AccountID       uuid.UUID
+	Amount          int64
+	KeyID           uuid.UUID
+	KeyWindow       time.Time
+	RequestID       uuid.UUID
+	HolderID        uuid.UUID
+	LifetimeSeconds float64
+	Prices          []string
+	Fallbacks       []string
+	Models          pgtype.FlatArray[uuid.UUID]
+	Endpoints       pgtype.FlatArray[uuid.UUID]
+	ExchangeRates   []byte
+	PriceVersions   pgtype.FlatArray[uuid.UUID]
+	CreatedAtUs     int64
+}
+
+func (q *Queries) InsertReservationAt(ctx context.Context, db DBTX, arg InsertReservationAtParams) error {
+	_, err := db.Exec(ctx, insertReservationAt,
+		arg.WorkspaceID,
+		arg.WorkspaceWindow,
+		arg.SiteID,
+		arg.AccountID,
+		arg.Amount,
+		arg.KeyID,
+		arg.KeyWindow,
+		arg.RequestID,
+		arg.HolderID,
+		arg.LifetimeSeconds,
+		arg.Prices,
+		arg.Fallbacks,
+		arg.Models,
+		arg.Endpoints,
+		arg.ExchangeRates,
+		arg.PriceVersions,
+		arg.CreatedAtUs,
 	)
 	return err
 }
