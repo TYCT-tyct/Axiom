@@ -204,6 +204,9 @@ func TestCallCoverageChecksTheWindowForGaps(t *testing.T) {
 	if coverage.Covers(firstOfOctober, wide) {
 		t.Error("coverage claims a window that crosses the gap is complete")
 	}
+	if coverage.Covers(firstOfNovember, firstOfDecember) {
+		t.Error("coverage claims a window wholly inside the dropped November is complete")
+	}
 	if overview.Calls != 1 || overview.Errors != 1 {
 		t.Errorf("overview = %d calls, %d errors, want only December's one call and its error", overview.Calls, overview.Errors)
 	}
