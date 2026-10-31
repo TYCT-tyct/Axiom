@@ -57,6 +57,13 @@ func (s *store) observe(ctx context.Context, id uuid.UUID, text string) error {
 	return s.c.RecordPage(ctx, s.claimPage(ctx, id), catalog.PageContent{Text: text, SHA256: sha256.Sum256([]byte(text))}, nil)
 }
 
+func (s *store) observeLegacy(ctx context.Context, id uuid.UUID, text, legacy string) error {
+	s.t.Helper()
+	return s.c.RecordPage(ctx, s.claimPage(ctx, id), catalog.PageContent{
+		Text: text, SHA256: sha256.Sum256([]byte(text)), LegacyText: legacy, LegacyOK: true,
+	}, nil)
+}
+
 func (s *store) officialEvidence(ctx context.Context, author, currency string) jsonx.Raw {
 	s.t.Helper()
 	id := s.watch(ctx, author, currency)
