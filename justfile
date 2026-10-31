@@ -190,7 +190,7 @@ up: web-embed
     grep -q '^AXIOM_RETENTION_PASSWORD=' deploy/.env || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_RETENTION_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env
     grep -q '^AXIOM_RETENTION_DATABASE_URL=' deploy/.env || { password="$(sed -n 's/^AXIOM_RETENTION_PASSWORD=//p' deploy/.env)"; [ -z "$password" ] || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_RETENTION_DATABASE_URL=postgres://axiom_retention:%s@postgres/axiom?sslmode=disable&pool_max_conns=2\n' "$password"; } >> deploy/.env; }; chmod 600 deploy/.env
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
-    {{ compose }} up --detach --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
+    {{ compose }} up --detach --build --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 
 # Stop everything; `just down -v` also deletes the local database and the master key made for it. By project name — the
 # one COMPOSE_PROJECT_NAME names for a CI job, otherwise axiom — so it works without deploy/.env.

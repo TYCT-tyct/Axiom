@@ -158,6 +158,8 @@ chmod 0755 deploy/bin/axiom
 # The ops image copies /axiom out of the program image, so that image has to exist before the ops build resolves its FROM.
 compose build axiom
 compose --profile ops build
+# The database image is this tree's (pgBackRest on the pinned PostgreSQL tag); nothing else builds it before the first up.
+compose build postgres
 # The transfer limit is shared by the backup and restore jobs; a non-default value has to reach both, not only the
 # service that happened to gain the override.
 config=$(AXIOM_BACKUP_TRANSFER_TIMEOUT=24h compose --profile ops config)

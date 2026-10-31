@@ -1,12 +1,14 @@
 # 备份与恢复
 
-本文是异地加密备份、空白环境恢复、恢复演练和生产入口的 runbook 与理由。程序本身不导出数据：备份、加密和上传都在
-`deploy/ops` 的运维镜像里跑，从 `deploy/compose.yaml` 的 `ops` profile 启动；入口在 `deploy/compose.edge.yaml`，
-配置是 `deploy/ingress/Caddyfile`。两者都不随 `just up` 启动。
+本文是异地加密备份、空白环境恢复、恢复演练、WAL 连续归档与时间点恢复、生产入口的 runbook 与理由。逻辑 set（一次备份写进桶里的四个文件）在
+`deploy/ops` 的运维镜像里跑，从 `deploy/compose.yaml` 的 `ops` profile 启动；WAL 归档和基础备份在数据库镜像
+`deploy/postgres` 里跑，由数据库入口在配置了桶时打开。入口在 `deploy/compose.edge.yaml`，配置是
+`deploy/ingress/Caddyfile`。这些备份作业都不随 `just up` 启动；数据库本身会启动，并按配置决定是否归档。
 
 为什么是独立的运维镜像：`pg_dump` 的版本不能低于数据库（`deploy/compose.yaml` 把库钉在 `postgres:18.6-alpine`，运维镜像
 用同一个 tag），而 age、桶凭证和写桶的代码都没有理由进那个面向公网的 scratch 镜像。镜像里的 S3 客户端不是另装的工具，
-而是从发布镜像取出的 `axiom` 二进制（下一节）。
+而是从发布镜像取出的 `axiom` 二进制（下一节）。WAL 归档不走这个镜像：pgBackRest 必须和 PGDATA 在同一台机器上，装在数据库
+镜像里（「WAL 连续归档与时间点恢复」）。
 
 ## 备份
 
@@ -89,6 +91,110 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
 `run` 直接点名服务，不需要 `--profile ops`；`up` 会按 profile 跳过这两个服务，所以 `just up` 与 CI 的部署检查都不会备份
 或恢复任何东西。
 
+## WAL 连续归档与时间点恢复
+
+逻辑 set 回答「机器没了怎么重建」；这一节回答「库还在，但写错了怎么回到写错之前」。两者写同一个桶，但前缀不同：逻辑 set 在
+`<AXIOM_BACKUP_PREFIX>` 下，WAL 仓库在 `<AXIOM_BACKUP_WAL_PREFIX>` 下（默认 `<AXIOM_BACKUP_PREFIX>-pgbackrest`），两者平级；
+逻辑 set 的保留只列举和删除自己的前缀，删不到 WAL 仓库。`AXIOM_BACKUP_WAL_PREFIX` 不能设成 `<AXIOM_BACKUP_PREFIX>` 或它的
+子路径，否则逻辑 set 的保留会把归档一起删掉。
+
+数据库镜像 `deploy/postgres` 是钉住的 `postgres:18.6-alpine` 加 pgBackRest 2.58.0（Alpine 3.24 的
+`pgbackrest=2.58.0-r0`）。`AXIOM_BACKUP_BUCKET` 非空时，`entrypoint.sh` 给服务器加 `archive_mode=on`、
+`archive_command=pgbackrest --stanza=axiom archive-push %p`、`restore_command=pgbackrest --stanza=axiom archive-get %f %p`
+和 `archive_timeout=300`；为空时一个参数都不加，`archive_mode` 仍是 `off`。`archive_timeout` 让空闲库最多 5 分钟就封存当前
+WAL 段，时间点恢复最多丢这 5 分钟，而不是等段写满。这些是启动参数，不写进 PGDATA，所以同一个镜像开与不开归档的数据目录
+一样，恢复出来的库也不会自动往源仓库归档（`pitr.sh` 启动时没有这些参数）。
+
+仓库整体用 `AXIOM_BACKUP_CIPHER_PASS` 加密（AES-256-CBC，基础备份和 WAL 都加密）。它和 age 私钥一样要另存一份：丢了它，
+WAL 仓库读不出来；逻辑 set 仍能用 age 私钥恢复。仓库里已经有明文 pgBackRest 数据时不能直接改口令，要另建仓库。
+
+### 开启与日常
+
+1. `deploy/.env` 设 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_S3_*`、`AXIOM_BACKUP_CIPHER_PASS`（前缀不是 `axiom` 时还有
+   `AXIOM_BACKUP_PREFIX`；AWS S3 把 `AXIOM_BACKUP_S3_URI_STYLE` 改成 `host`）。只设桶不设口令时数据库拒绝启动并列出缺的变量。
+2. 数据库镜像从本仓库构建，不像程序镜像那样按 digest 拉取：
+
+   ```bash
+   docker compose -f deploy/compose.yaml --env-file deploy/.env build postgres
+   docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --wait postgres
+   ```
+
+3. 第一次启动后马上建 stanza。之前 archive-push 会失败（仓库里还没有 `archive.info`），这是预期的，不是数据损坏：
+
+   ```bash
+   docker compose -f deploy/compose.yaml --env-file deploy/.env exec -T postgres \
+     pgbackrest --stanza=axiom --log-level-console=info stanza-create
+   docker compose -f deploy/compose.yaml --env-file deploy/.env exec -T postgres \
+     pgbackrest --stanza=axiom check
+   ```
+
+4. 全量基础备份：`docker compose ... run --rm basebackup`。`basebackup.sh` 每次都做 `--type=full`：PITR 不依赖可能被一次失败
+   运行打断的增量链，代价是每次读全库、仓库里留 7 份全量。`repo1-retention-full=7` 是份数，`repo1-retention-archive` 没单独
+   设时按这 7 份全量保留 WAL（`pgbackrest help expire repo1-retention-archive`，2.58.0），PITR 窗口约等于 7 个基础备份的间隔。
+   调度归宿主；下面每天一次，大库改成每周一次，窗口就是 7 周：
+
+   ```bash
+   17 3 * * * cd /srv/axiom && docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm basebackup
+   ```
+
+5. 核对：`docker compose ... exec -T postgres pgbackrest --stanza=axiom info` 看 `wal archive min/max` 和备份；`check` 验证
+   仓库可读、WAL 可推。
+6. 不要在桶上给 `<prefix>-pgbackrest` 配生命周期删除规则：pgBackRest 的 `expire` 已经按备份保留清理，外部删除会让剩下的
+   基础备份缺 WAL。桶的版本控制、对象锁和第二个副本由部署方按需要开。
+
+### 时间点恢复
+
+目标时间必须晚于要用的基础备份的 stop time（pgBackRest 拒绝同一秒内的目标），先用 `pgbackrest info` 确认那个时间点有基础
+备份、WAL 覆盖到目标。恢复写进单独的卷 `postgres_pitr`，绝不覆盖正在运行的库；大库恢复前停掉源库的写入：恢复和源的
+`archive-push` 共用 `pgbackrest` 锁卷，恢复期间源库的归档会排队，WAL 在 `pg_wal` 里堆积。
+
+```bash
+# 目标时间用 UTC 带时区；例如误删发生在 2026-10-30 12:00，恢复到 11:59
+export AXIOM_PITR_TARGET='2026-10-30 11:59:00+00'
+docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm --service-ports --name axiom-pitr pitr
+```
+
+`pitr.sh` 要求 `postgres_pitr` 是空的，取满足目标时间的最新基础备份，用 `--type=time --target` 重放到目标、`--target-action=promote`
+提升，然后在 `127.0.0.1:${AXIOM_PITR_PORT:-5433}` 上启动。它在恢复实例上不打开归档：这个实例只用来核对，不能把 WAL 推回
+源仓库；确认接管时才停源库、换卷，正常入口会按配置重新打开归档。
+
+在另一个终端核对：
+
+```bash
+docker exec axiom-pitr psql -U postgres -d axiom -Atc \
+  "select pg_is_in_recovery(); select count(*) from <表>;"
+```
+
+`pg_is_in_recovery()` 必须是 `f`；行数和关键行与目标时刻一致。对不上就丢掉这个卷重来：先 Ctrl-C 停掉恢复实例（`--rm` 会删除
+容器，或者 `docker rm -f axiom-pitr`），再删掉 `postgres_pitr` 卷（默认项目名 `axiom`，按 `docker volume ls` 的实际名字替换；
+不要删 `postgres` 卷），然后从空的卷重新跑。不要在半恢复的卷上继续。
+
+确认正确后，先停掉恢复实例，再停源库，把恢复卷的内容换进 `postgres` 卷。旧卷先复制一份到 `axiom_postgres_before_pitr`，确认
+新库没问题再删；不要在没有任何副本的情况下直接覆盖旧卷：
+
+```bash
+# 先 Ctrl-C 停掉上一步的 pitr run，再：
+docker compose -f deploy/compose.yaml --env-file deploy/.env stop postgres
+# 名字已存在时先删掉旧的或换一个名字，不要往非空的副本卷里再 cp 一遍
+docker volume create axiom_postgres_before_pitr
+docker run --rm --entrypoint sh -v axiom_postgres:/from -v axiom_postgres_before_pitr:/to postgres:18.6-alpine \
+  -c 'cp -a /from/. /to/'
+docker run --rm --entrypoint sh -v axiom_postgres:/from -v axiom_postgres_pitr:/to postgres:18.6-alpine \
+  -c 'rm -rf /from/* /from/.[!.]*; cp -a /to/. /from/'
+docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --wait postgres
+```
+
+换卷后正常入口会以提升后的 timeline 继续写同一个 stanza（system identifier 没变）。核对程序能起来、`pgbackrest check` 通过后，
+再决定旧卷和旧 WAL 的去留。这个换卷动作是手工的，测试只执行到「恢复实例的行数核对」；第一次真正做 PITR 前，在演练环境按本节
+走一遍换卷。
+
+### 和逻辑 set 的关系
+
+逻辑恢复（`scripts/ops/restore.sh`）会 initdb 出一个新的 system identifier；旧的 WAL 仓库属于已经丢掉的集群，不能直接接上。
+恢复脚本启动恢复后的库时把 `AXIOM_BACKUP_BUCKET` 置空，让归档保持关闭；确认要长期保留旧仓库时，给新集群换一个新的
+`AXIOM_BACKUP_WAL_PREFIX`（例如 `<前缀>-pgbackrest-restored`）再 `stanza-create`，不要拿旧 stanza 名硬接新集群。演练（`just backup-rehearsal`）也把归档关掉，
+原因相同；WAL 这条路由 `deploy/postgres` 的容器测试守。
+
 ## 主密钥轮换
 
 命令使用 `AXIOM_DATABASE_URL`（应用角色）和 `AXIOM_MASTER_KEY_FILE`。数据库迁移须包含 platform `00022`。
@@ -151,17 +257,21 @@ API key 哈希用的 HMAC `hash` 和派生用的 `identity` 文件不在此命�
    自己也会补占位值好让 compose 能解析，但下面显式执行的运维镜像 `build` 不会，所以先填上更省事。
 2. 镜像要在这台机器上，并且与 set 的版本一致（第 1 步打印的 `manifest.txt` 里有 `app_image`）。比 set 新的镜像会先跑完自己
    的迁移，多出来的表、列和约束在 set 里没有，随后的恢复会失败（第 4 步先把迁移建的对象整体删掉，正是为了让它们不参与
-   冲突，但新迁移写进 `platform.goose_*` 的版本行也在转储之外）。升级放在恢复之后做。按发布记录选择 set 的 digest，配置 `DEPLOY_IMAGE` 后拉取，程序不重新构建；只构建独立的运维镜像：
+   冲突，但新迁移写进 `platform.goose_*` 的版本行也在转储之外）。升级放在恢复之后做。按发布记录选择 set 的 digest，配置 `DEPLOY_IMAGE` 后拉取，程序不重新构建；数据库镜像和独立的运维镜像从本仓库构建：
 
    ```bash
-   docker compose -f deploy/compose.yaml --env-file deploy/.env pull axiom migrate postgres keys valkey
+   docker compose -f deploy/compose.yaml --env-file deploy/.env pull axiom migrate keys valkey
+   # The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not pulled as a release
+   # artifact; the restore script's image check needs it before step 2.
+   docker compose -f deploy/compose.yaml --env-file deploy/.env build postgres
    docker compose -f deploy/compose.yaml --env-file deploy/.env --profile ops build backup restore
    ```
 
    运维镜像用程序镜像作构建阶段（`FROM ${PROGRAM_IMAGE} AS program`），最终镜像基于 `postgres:18.6-alpine`，只把
-   `/axiom` 取进 `/usr/local/bin`，所以上面的 `pull axiom` 必须在前。`just backup-rehearsal` 会先构建程序镜像和 ops 镜像；
-   `just up` 只构建程序，不构建 ops profile，恢复前按上面的 `--profile ops build` 构建。恢复脚本开头用
-   `docker image inspect` 逐个检查镜像在不在，不在就在第 1 步之前报错。
+   `/axiom` 取进 `/usr/local/bin`，所以上面的 `pull axiom` 必须在前。数据库镜像基于同一个 `postgres:18.6-alpine`，加
+   pgBackRest 和入口脚本，不含程序二进制。`just backup-rehearsal` 会先构建程序镜像、ops 镜像和数据库镜像；`just up` 构建
+   程序和数据库，不构建 ops profile，恢复前按上面的 `--profile ops build` 构建。恢复脚本开头用 `docker image inspect` 逐个
+   检查镜像在不在（包括数据库镜像），不在就在第 1 步之前报错。
 3. 两个 age 私钥文件（库的、密钥环的），路径给 `AXIOM_RESTORE_DB_IDENTITY` 和 `AXIOM_RESTORE_SECRETS_IDENTITY`。它们只
    在恢复时只读挂进容器，不属于部署配置，也不进 `deploy/.env`。
 
@@ -260,18 +370,22 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 
 `deploy/compose.edge.yaml` 在程序前面加一个 Caddy 容器，配置是 `deploy/ingress/Caddyfile`。
 生产先按[发布的 digest 选择与核对](release.md#选择和核对)确定交付物，在 `deploy/.env` 写入
-`DEPLOY_IMAGE=<仓库>@sha256:<摘要>`；不使用 tag、不在部署机重建，也不运行开发用的 `just up`。
-负责人执行部署前确认三份数据库口令已配置；新数据库初始化角色，已有数据库也须重放幂等角色授权：
+`DEPLOY_IMAGE=<仓库>@sha256:<摘要>`；程序镜像不使用 tag、不在部署机重建，也不运行开发用的 `just up`（数据库镜像从本仓库
+构建，见下）。负责人执行部署前确认三份数据库口令已配置；新数据库初始化角色，已有数据库也须重放幂等角色授权：
 
 ```bash
 docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env pull axiom migrate
+# The database image is this tree's (pgBackRest on postgres:18.6-alpine); build it before the no-build start.
+docker compose -f deploy/compose.yaml --env-file deploy/.env build postgres
 docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --no-build --wait postgres
 docker compose -f deploy/compose.yaml --env-file deploy/.env exec -T postgres sh < deploy/postgres/roles.sh
 docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env up --detach --no-build --wait
 ```
 
 迁移和程序使用同一 digest；备份 manifest 的镜像字段也因此记录这个引用。恢复和回滚沿用发布记录里的摘要，不能将
-本地开发的 `axiom:local` 当生产交付物。
+本地开发的 `axiom:local` 当生产交付物。数据库镜像不是发布产物：它的 Dockerfile 钉住 PostgreSQL 的基础 tag，pgBackRest 和
+三个入口脚本随本仓库走，所以发布部署先 `build postgres` 再 `--no-build` 启动；升级它的内容和升级程序是两件事，升级后跑一次
+`pgbackrest check` 和 `deploy/postgres` 的恢复测试。
 
 单独一个文件，是因为入口用的网络钉了子网（程序只认地址/CIDR，入口得有固定地址），而钉死的子网在跑多个项目的机器上可能
 撞车：没有入口的部署（`just up`、CI 的部署检查）不该带上它。
@@ -316,8 +430,20 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
 
 ## 决策与代价
 
-- **逻辑转储，不是 WAL 归档或基础备份**：单机、库在一个卷里；PITR 要多一套归档、恢复目标和操作练习，换来的是"误删后
-  回滚到某一秒"，而这里要的是"机器没了能重建"。代价：RTO 是一次全量恢复（演练记录里有实测值），不是秒级。
+- **逻辑 set 和 WAL 归档各管一件事**：逻辑 set 是跨机器的灾难恢复（角色、schema、密钥环、配置），WAL 归档加基础备份
+  是同一台机器上的时间点恢复，回到误删之前。不要拿 WAL 归档代替逻辑 set：它依赖同一个 PostgreSQL 大版本、同一份
+  pgBackRest 仓库和口令，仓库丢了就一起丢。代价是两套作业、一个额外口令和一次恢复演练；换机器仍走逻辑恢复，WAL 恢复的
+  RTO 取决于基础备份和要重放多少 WAL。
+- **pgBackRest 2.58.0，不是 wal-g 3.0.9**：一个程序做基础备份、WAL 归档、恢复、保留和 `check`，仓库整体加密
+  （AES-256-CBC，连 WAL 一起）、校验和、S3 兼容端点和 `bundle` 都是仓库配置的一部分；wal-g 也成熟，但加密和保留靠环境
+  变量与 `delete` 子命令另配，默认不加密整个仓库，而且 Alpine 3.24 没有 wal-g 包（pgBackRest 有
+  `pgbackrest=2.58.0-r0`，基础镜像直接 `apk add`；装 wal-g 要从 GitHub 取第二个二进制）。pgBackRest 2.58.0 是第一个支持
+  `http://` S3 端点的版本（本地 SeaweedFS/RustFS 需要；2026-01-19 发布），上游最新是 2.60.0（2026-10-18），Alpine 3.24
+  打包的是 2.58.0；wal-g 最新 v3.0.9（2026-08-20）。文档：pgBackRest 用户指南
+  https://pgbackrest.org/user-guide.html、版本记录 https://pgbackrest.org/release.html；wal-g
+  https://github.com/wal-g/wal-g/releases（均 2026-10-31 读取）。代价：数据库镜像从本仓库构建，不像程序镜像那样按
+  digest 拉取；升级 pgBackRest 要重建镜像并跑 `check` 和 `deploy/postgres` 的恢复测试。按[负责人授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)
+  「遇到问题自己解决问题和判断最优而不是问我。」落地，独立评审仍执行。
 - **用程序自己的对象存储客户端，不再装 rclone 或 aws-cli**：备份的上传、列举、删除和恢复的下载都调 `axiom objectstore`，
   与程序的归档共用一份 SigV4、期限、重试和 multipart；运维镜像从发布镜像取同一个二进制，不另装 S3 实现。代价：运维镜像
   因此多带一份发布二进制（几十 MB，也含 HTTP 服务面，但它不监听端口），且必须和程序镜像同版本构建或发布；桶要支持客户端
@@ -343,6 +469,14 @@ docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file dep
 
 - 定时归宿主（cron / systemd timer），镜像里没有调度器。要变成多机部署时，"同时只跑一个"得换成桶或数据库上的协调，锁的
   范围会失效。
+- 基础备份的间隔和 `repo1-retention-full=7` 是部署方的选择：测试库只有 30 MB，每天全量、留 7 份的代价要按真实库的大小和
+  写入量重算；改成每周全量，PITR 窗口就是 7 周。没有做增量/差异备份，先把全量的恢复路径走通。
+- `AXIOM_BACKUP_CIPHER_PASS` 没有自动托管：它要和 age 私钥一样离线保存，丢了 WAL 仓库读不出来。换口令要另建仓库，轮换
+  步骤还没有写；在写出来之前不要改一个已有仓库的口令。
+- PITR 和源库在同一台机器上：恢复期间源库的 `archive-push` 会在共享锁上排队，WAL 在 `pg_wal` 里堆积；大库先停写或换一台
+  机器恢复。没有自动切主，也没有热备；HA 和它的花费不在本任务里，负责人定。
+- 换卷和提升后的接管是手工步骤，测试只覆盖到恢复实例的行数核对；第一次真正做 PITR 前，在演练环境按「时间点恢复」走一遍，
+  把实测的 RTO 和问题记下来。
 - 演练还没有进 CI 常跑：要 Docker、要建镜像、约十五分钟，而且自带破坏性。要不要作为发布前的必跑项，等 CI 机器的余量定下来
   再定。
 - 公网证书这条路没有在任何地方验过：演练用 `.example` 域名和 Caddy 自己的 CA，没有公网 DNS 也就没有 ACME。第一次真实部署时

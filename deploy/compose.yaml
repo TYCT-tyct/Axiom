@@ -59,9 +59,30 @@ x-ops: &ops
     AXIOM_OBJECTSTORE_PATH_STYLE: ${AXIOM_BACKUP_S3_FORCE_PATH_STYLE:-true}
     AXIOM_BACKUP_TRANSFER_TIMEOUT: ${AXIOM_BACKUP_TRANSFER_TIMEOUT:-12h}
 
+# pgBackRest's configuration, shared by the database (the archive commands), the base-backup job and the PITR container
+# (docs/ops/backup-restore.md「WAL 连续归档与时间点恢复」). The repository lives under its own prefix: the logical sets'
+# retention lists and deletes everything under AXIOM_BACKUP_PREFIX, so the archive must not be inside it. The
+# passphrase is what makes the objects unreadable without the deployment; the bucket's credentials are the same as the
+# sets' because both are written by the one machine that owns the database.
+#
+# PGBACKREST_REPO1_S3_BUCKET is also the on/off switch of archiving: empty means archive_mode stays off and the server
+# starts exactly as before.
+x-pgbackrest-env: &pgbackrest-env
+  PGBACKREST_REPO1_PATH: /${AXIOM_BACKUP_WAL_PREFIX:-${AXIOM_BACKUP_PREFIX:-axiom}-pgbackrest}
+  PGBACKREST_REPO1_S3_BUCKET: ${AXIOM_BACKUP_BUCKET-}
+  PGBACKREST_REPO1_S3_KEY: ${AXIOM_BACKUP_S3_ACCESS_KEY_ID-}
+  PGBACKREST_REPO1_S3_KEY_SECRET: ${AXIOM_BACKUP_S3_SECRET_ACCESS_KEY-}
+  PGBACKREST_REPO1_S3_REGION: ${AXIOM_BACKUP_S3_REGION:-us-east-1}
+  PGBACKREST_REPO1_S3_ENDPOINT: ${AXIOM_BACKUP_S3_ENDPOINT-}
+  PGBACKREST_REPO1_S3_URI_STYLE: ${AXIOM_BACKUP_S3_URI_STYLE:-path}
+  PGBACKREST_REPO1_CIPHER_PASS: ${AXIOM_BACKUP_CIPHER_PASS-}
+
 services:
   postgres:
-    image: postgres:18.6-alpine
+    # The pinned PostgreSQL tag plus pgBackRest (deploy/postgres/Dockerfile). It is built from this tree, like the
+    # program image, because the archive tool has to run where PGDATA is; a release deployment builds it before starting.
+    build: ./postgres
+    image: ${DEPLOY_POSTGRES_IMAGE:-axiom-postgres:local}
     # A CI job sets DEPLOY_RESTART_POLICY=no, so containers a killed job leaves behind never start again; local
     # `just up` keeps the restart the machine wants.
     restart: ${DEPLOY_RESTART_POLICY:-unless-stopped}
@@ -69,6 +90,7 @@ services:
     user: postgres
     tmpfs: [/var/run/postgresql] # the server's socket and lock files; the data are on the volume
     environment:
+      <<: *pgbackrest-env
       POSTGRES_DB: axiom
       POSTGRES_PASSWORD: ${AXIOM_POSTGRES_PASSWORD:?set it in deploy/.env}
       # read by postgres/roles.sh
@@ -77,7 +99,12 @@ services:
       AXIOM_RETENTION_PASSWORD: ${AXIOM_RETENTION_PASSWORD-}
     volumes:
       - postgres:/var/lib/postgresql
-      - ./postgres:/docker-entrypoint-initdb.d:ro
+      # One file, not the directory: every *.sh in /docker-entrypoint-initdb.d runs during initdb, and the image's
+      # scripts next to roles.sh are not init scripts.
+      - ./postgres/roles.sh:/docker-entrypoint-initdb.d/roles.sh:ro
+      # pgBackRest's lock files; the root file system is read-only, and a shared lock keeps a base backup and the
+      # archive from racing on the same machine.
+      - pgbackrest:/var/lib/pgbackrest
     healthcheck:
       # Over TCP: while it runs the init scripts, the image's temporary server listens only on its Unix socket.
       test: [CMD, pg_isready, --host, 127.0.0.1, --username, postgres, --dbname, axiom]
@@ -293,11 +320,54 @@ services:
     volumes:
       - keys:/keys
 
+  # A base backup of the WAL repository (docs/ops/backup-restore.md「WAL 连续归档与时间点恢复」):
+  # `docker compose run --rm basebackup`. It reads the live cluster's data directory and connects to it; each run is a
+  # full backup, and the repository keeps seven. The host schedules it.
+  basebackup:
+    image: ${DEPLOY_POSTGRES_IMAGE:-axiom-postgres:local}
+    restart: "no"
+    profiles: [ops]
+    user: postgres
+    entrypoint: [/usr/local/bin/basebackup.sh]
+    environment:
+      <<: *pgbackrest-env
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${AXIOM_POSTGRES_PASSWORD-}
+    volumes:
+      - postgres:/var/lib/postgresql:ro
+      - pgbackrest:/var/lib/pgbackrest
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  # A point-in-time restore into a volume of its own, never into the running database: `docker compose run --rm
+  # --service-ports pitr`, with AXIOM_PITR_TARGET in the environment. The wrapper restores and starts the cluster, which
+  # stays up on the published port for verification; the operator then swaps the volume under the postgres service.
+  pitr:
+    image: ${DEPLOY_POSTGRES_IMAGE:-axiom-postgres:local}
+    restart: "no"
+    profiles: [ops]
+    user: postgres
+    entrypoint: [/usr/local/bin/pitr.sh]
+    environment:
+      <<: *pgbackrest-env
+      AXIOM_PITR_TARGET: ${AXIOM_PITR_TARGET-}
+    volumes:
+      - postgres_pitr:/var/lib/postgresql
+      - pgbackrest:/var/lib/pgbackrest
+    ports:
+      - 127.0.0.1:${AXIOM_PITR_PORT:-5433}:5432
+
 volumes:
   postgres:
+  # A restored cluster waits for verification here; it is separate from `postgres` so a failed restore never touches the
+  # running database, and removing it starts the next restore from empty.
+  postgres_pitr:
   keys:
   # The backup's lock file; it has to outlive the container that takes it.
   backup_state:
+  # pgBackRest's lock files, shared by the database, the base backup and the restore.
+  pgbackrest:
   # The frontend files of every build a rolling release still overlaps. The release publishes into it from the image,
   # as root because a fresh named volume belongs to root; the node only reads it, as 65532.
   web_assets:

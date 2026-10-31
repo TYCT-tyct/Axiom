@@ -164,7 +164,10 @@ cp "$out/deploy.env" "$env_file"
 chmod 600 "$env_file"
 
 echo "== 2/6 create the cluster from it, with the login roles the image's init scripts make"
-compose up --detach --wait --wait-timeout 120 postgres
+# The cluster this creates has a new system identifier, while the WAL repository in the bucket belongs to the one that was
+# lost: archive-push would fail against its stanza. Clear the bucket for this one command only (the restore jobs below
+# still need it to read the sets), and leave archiving off until a new repository is configured.
+AXIOM_BACKUP_BUCKET= compose up --detach --wait --wait-timeout 120 postgres
 
 # axiom_owner and axiom_lookup are NOLOGIN and belong to the migrations, so the program creates them: every object in the
 # dump belongs to one of them, and the restore cannot hand the objects over before they exist.

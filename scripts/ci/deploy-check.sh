@@ -87,6 +87,9 @@ start() {
     { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env
   fi
   chmod 600 deploy/.env
+  # The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not consumed as a digest like
+  # the program; it has to exist before the no-build starts below.
+  timeout 300 docker compose -f deploy/compose.yaml build postgres
   timeout 90 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60 postgres
   compose exec -T postgres sh < deploy/postgres/roles.sh
   timeout 180 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60
