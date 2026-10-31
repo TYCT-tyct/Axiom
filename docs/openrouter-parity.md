@@ -98,7 +98,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | `openrouter/auto`（按任务类型+市场花费份额选模型），插件 `auto-router`：`allowed_models`（通配）、`excluded_models`、`cost_tier`(low/medium/high/xhigh/max)；`openrouter/auto-beta` | 自动选模型，会话粘性 | docs/guides/routing/routers/auto-router | 部分：`openrouter/auto` 请求名已实现，按请求排序（`:nitro`、`:floor`、`provider.sort` 或预设策略）对全部可准入模型排序，取第一条并回显具体模型；`auto-beta`、插件成员 `allowed_models`、`excluded_models`、`cost_tier` 未实现 | 无 | 无 | 没有任务分类器和跨租户花费份额，用现有路由排序代替；取舍见 `docs/domains/gateway.md` 的 `openrouter/auto` 与决策与理由 |
-| `openrouter/free`（随机选支持所需能力的免费模型） | 零成本实验用 | docs/guides/routing/routers/free-router | 没有 | 无 | 无 | 依赖免费模型条目 |
+| `openrouter/free`（随机选支持所需能力的免费模型） | 零成本实验用 | docs/guides/routing/routers/free-router | 有：网关在查目录前认出 `openrouter/free`（`gw/variant.go`），对 key 可调用的全部 `:free` 目录条目按请求排序（`:nitro`、`:floor`、`provider.sort` 或预设策略）排序，取第一条并回显具体模型；没有免费条目时 404 `no_endpoint`（`no_candidates`）；`count_tokens`、`context-compression` 回 400 | 无 | 无 | 用现有路由排序代替随机选择，取舍见 `docs/domains/gateway.md` 的 `openrouter/free` 与决策与理由；回放测试 `internal/gateway/aliases_free_test.go`、`internal/routing/free_test.go` |
 | `openrouter/pareto-code`（`pareto-router` 插件的 `min_coding_score`） | 按编码分挑最便宜的模型 | docs/guides/routing/routers/pareto-router | 没有 | 无 | 无 | 低优先，依赖外部基准数据 |
 | `openrouter/bodybuilder`（自然语言生成并行请求） | 路由器模型 | docs/guides/routing/routers/body-builder | 没有 | 无 | 无 | 低优先 |
 | Fusion 路由器 / Fusion 服务端工具（多模型审议） | 路由器模型 | docs/guides/routing/routers/fusion-router | 没有 | 无 | 无 | 低优先 |
@@ -292,7 +292,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 14. 【管理 API】`/api/v1/keys` 系列已提供管理 key 认证的调用 key CRUD（E4-9/P14）；限制与 OpenRouter 的差异见[账户域](domains/accounts.md#api-key)；`/workspaces`、`/guardrails`、`/organization` 管理 API 没有。→ #315（key）、#317（工作区/护栏的界面）
 15. 【响应缓存】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置没有；涉及内容保存政策，需要负责人定。→ 新建
 16. 【BYOK】用户自带供应商 key（`/byok`、优先/回退区、手续费）没有；范围里在「以后」。管理员侧号池已有。→ 新建
-17. 【路由器】`openrouter/auto` 已实现（按现有路由排序选具体模型）；`auto-beta`、`free`（`/free` 路由）、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有；其中 `openrouter/free` 的路由依赖 `:free` 条目，条目已支持但路由未做。→ 新建
+17. 【路由器】`openrouter/auto`、`openrouter/free` 已实现（按现有路由排序选具体模型，free 只在 `:free` 目录条目里选）；`auto-beta`、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有。→ 新建
 18. 【产品线】P18 已补 `/embeddings`、`/rerank`（§1）；仍缺 `/completions`（暂缓，理由见 §1）、`/embeddings/models`、`/images`、`/videos`、`/audio/speech`、`/audio/transcriptions`、音频/视频输入输出、Files API、Batch API、`/moderations`。图片/视频/语音与按次/按时长/按字符计价相关，要先有 #320；`/embeddings/models` 要目录先有输出模态；`/moderations` 没有模型与策略数据。→ 批量/Files：#312 或新建；图片/视频/语音：#320
 19. 【认证与企业】OAuth PKCE 换 key、Workload Identity、SSO/SCIM、私有端点、终端用户登记、Broadcast 可观测性集成、护栏内容策略：不影响基本迁移。→ #315 / #316 / 新建
 20. 【不跟】`alignment`/`armor` 插件、Jev/Fusion/Switchyard 路由器、`debug.echo_upstream_body`、`openrouter_metadata` 路由元数据、地域路由、公开排名数据集：与 Axiom「不暴露供应商身份」或产品定位冲突。除路由元数据外的五项已写进「P20 有意不做」，路由元数据仍未做。→ 无

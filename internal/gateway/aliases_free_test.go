@@ -33,10 +33,10 @@ func saveAlias(t *testing.T, r *rig, name string, model catalog.ModelID) {
 }
 
 // freeEntry lists acme/alpha:free at a zero price and serves it from an endpoint priced at zero, so it is the cheapest
-// route in the rig.
-func (r *rig) freeEntry() (catalog.ModelID, routing.Endpoint) {
+// route in the rig. mods change the endpoint before the snapshot holds it.
+func (r *rig) freeEntry(mods ...func(*routing.Endpoint)) (catalog.ModelID, routing.Endpoint) {
 	r.t.Helper()
-	const zeroPrice = `{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`
+	const zeroPrice = `{"v":1,"currency":"USD","rates":{"input":"0","output":"0","cache_write":"0"},"service_tiers":{"priority":{"rates":{"input":"0","output":"0"}}}}`
 	free := r.listed("acme/alpha:free", basicSpec, zeroPrice)
 	zero, err := catalog.ParseSchedule([]byte(zeroPrice))
 	if err != nil {
@@ -44,7 +44,12 @@ func (r *rig) freeEntry() (catalog.ModelID, routing.Endpoint) {
 	}
 	e := r.endpoints["alpha-1"]
 	e.ID, e.Model, e.Codename = routing.EndpointID(uuid.NewV7()), free, "alpha-free"
+	e.Free = true
 	e.Price = routing.PriceRef{Version: uuid.NewV7(), Schedule: zero}
+	for _, m := range mods {
+		m(&e)
+	}
+	r.endpoints["alpha-free"] = e
 	r.install(routing.Preset{Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest}, append(r.routes, e)...)
 	return free, e
 }
@@ -116,5 +121,76 @@ func TestAutoPicksThroughRouting(t *testing.T) {
 	checkInvalid(t, r, a, "/v1/chat/completions",
 		`{"model":"openrouter/auto","max_tokens":100,"plugins":[{"id":"context-compression"}],"messages":[{"role":"user","content":"hello"}]}`,
 		"context window")
+	r.idle(1 << 30)
+}
+
+// TestFreePicksOnlyFreeThroughRouting: openrouter/free ranks only the free catalog entries of the key, under the
+// request's ranking or the preset's strategy, reports the model that served the call, and refuses a count or a
+// compression before routing because no concrete model exists yet.
+func TestFreePicksOnlyFreeThroughRouting(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	// The paid endpoints stream faster than the free one, so :nitro would choose one of them if free ranked every model.
+	free, endpoint := r.freeEntry(func(e *routing.Endpoint) { e.Throughput = 1 })
+
+	call := checkCall(t, r, a, "openrouter/free", endpoint.ID, free)
+	if got := (&session{c: call}).servedModel(&attempt{entry: call.Plan.Entries[0]}); got != "acme/alpha:free" {
+		t.Errorf("free reports model %q, want acme/alpha:free", got)
+	}
+	checkCall(t, r, a, "openrouter/free:nitro", endpoint.ID, free)
+
+	// The request's models list is ignored, as it is for openrouter/auto.
+	route, resp, body := r.sendNamed(a, "openrouter/free", `"models":["acme/beta"],`)
+	if resp.StatusCode != http.StatusOK || len(route) == 0 || route[0] != endpoint.ID {
+		t.Fatalf("free with a models list: %d route %v %s", resp.StatusCode, route, body)
+	}
+	checkInvalid(t, r, a, "/v1/messages/count_tokens", messageBody("openrouter/free"), "concrete model")
+	checkInvalid(t, r, a, "/v1/chat/completions",
+		`{"model":"openrouter/free","max_tokens":100,"plugins":[{"id":"context-compression"}],"messages":[{"role":"user","content":"hello"}]}`,
+		"context window")
+	r.idle(1 << 30)
+}
+
+// TestFreeRefusesWhenNothingIsFree: a site with no free entry is the permanent no-endpoint refusal the error table
+// documents, with no_candidates as its reason, never a model and never a wait.
+func TestFreeRefusesWhenNothingIsFree(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	resp, body := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(messageBody("openrouter/free")))
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, `"error_type":"no_endpoint"`) || !strings.Contains(body, "no_candidates") {
+		t.Fatalf("%d %s, want a 404 no_endpoint for no_candidates", resp.StatusCode, body)
+	}
+}
+
+// TestFreeRouterRelaysARecordedCall: the recorded Messages sample goes through openrouter/free to the free entry, the
+// upstream is asked for that endpoint's name for the model, and the reply names the model that served the call, not the
+// router, as openrouter/auto does.
+func TestFreeRouterRelaysARecordedCall(t *testing.T) {
+	t.Parallel()
+	r := ledgerRig(t)
+	_, endpoint := r.freeEntry(func(e *routing.Endpoint) { e.Target.Model = "up-free" })
+	up := withExecutor(r, &flakyLedger{})
+	events, recorded := sample(t, protocol.Messages)
+	for _, e := range up.eps {
+		if e.script == nil {
+			e.script = []scripted{failure(routing.ScopeEndpoint, false)}
+		}
+	}
+	up.eps[uuid.UUID(endpoint.ID)].script = []scripted{serve(beat{data: strings.Join(events, "")})}
+	a := r.funded(1e12)
+	request := strings.Replace(string(recorded), `"claude-opus-5-5"`, `"openrouter/free"`, 1)
+	resp, body := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(request))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "acme/alpha:free") || strings.Contains(body, "openrouter/free") {
+		t.Errorf("the reply must name acme/alpha:free, not the router:\n%s", body)
+	}
+	calls := up.eps[uuid.UUID(endpoint.ID)].calls
+	if len(calls) != 1 || !strings.Contains(string(calls[0].Body), `"model": "up-free"`) {
+		t.Errorf("the upstream was asked %d times, want one call for up-free", len(calls))
+	}
 	r.idle(1 << 30)
 }
