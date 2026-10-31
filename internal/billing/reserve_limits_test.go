@@ -24,7 +24,7 @@ func TestExtendAcrossAttempts(t *testing.T) {
 	segmented.MaxOutput, segmented.Segmentable = 1000, true
 	var h *Hold
 	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.reserveOne(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 10}, []Quotable{segmented})
+		h, err = b.billing.reserveOne(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 10}, []Quotable{segmented})
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestReserveNoBalanceRow(t *testing.T) {
 	free := b.exact
 	free.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`)
 	err := b.app.Tx(t.Context(), a.Scope, func(tx pg.Tx) error {
-		_, _, err := b.billing.reserveOne(t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: 10}, []Quotable{free})
+		_, err := b.billing.reserveOne(t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: 10}, []Quotable{free})
 		return err
 	})
 	if s, ok := errors.AsType[*Insufficient](err); !ok || s.Source != SourceBalance {

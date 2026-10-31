@@ -11,7 +11,7 @@ import (
 	"time"
 	"uuid"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgtype" //nolint:depguard // the baseline writes InsertReservationAtParams, whose UUID arrays are pgtype.FlatArray
 
 	"axiom/internal/platform/pg"
 )
@@ -19,12 +19,12 @@ import (
 // reserveOne admits one request through the batch path, in the caller's transaction: a batch of one is what production
 // does for a single admission. The per-request error is the batch's refusal for it; a database error takes the whole
 // batch down and comes back as err.
-func (b *Billing) reserveOne(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID, d Demand, q []Quotable) (*Hold, []int, error) {
-	holds, kept, errs, err := b.ReserveMany(ctx, tx, []ReserveRequest{{Admitted: a, ID: id, Demand: d, Quotables: q}})
+func (b *Billing) reserveOne(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID, d Demand, q []Quotable) (*Hold, error) {
+	holds, _, errs, err := b.ReserveMany(ctx, tx, []ReserveRequest{{Admitted: a, ID: id, Demand: d, Quotables: q}})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return holds[0], kept[0], errs[0]
+	return holds[0], errs[0]
 }
 
 // reserveMany reserves amounts for new requests in one transaction, in the order given.

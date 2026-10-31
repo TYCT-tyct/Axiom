@@ -112,7 +112,7 @@ func TestSettleBatchWritesTheExactBalanceAcrossInt64(t *testing.T) {
 	reserve := func(a Admitted) *Hold {
 		var h *Hold
 		if err := b.app.Tx(t.Context(), a.Scope, func(tx pg.Tx) (err error) {
-			h, _, err = b.billing.reserveOne(t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: 1}, []Quotable{q})
+			h, err = b.billing.reserveOne(t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: 1}, []Quotable{q})
 			return err
 		}); err != nil {
 			t.Fatal(err)

@@ -118,7 +118,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 `ReadAdminOverview` 在一个事务里用同一站点和 `[Since,Until)` 窗口读三组数：总调用数与错误数（`error_kind IS DISTINCT FROM ''`），以及调用最多的前 10 个账户和模型（按调用数排序，同数分别按账户 ID、模型名）。三条 SQL 共用谓词：站点、`at` 范围，以及 `(at AT TIME ZONE 'UTC')` 的同一范围，让分区裁剪和迁移 `00011` 的表达式索引都生效。`TestReadAdminOverviewCountsGroupsAndLimits` 覆盖过滤、分组、前 10 截断和排序；`TestAdminOverviewPlansReadTheWindow` 在 12 万行夹具上要求无 Seq Scan、使用索引、读取预算不超过 1500 块。汇总字段与两个列表在合同里都可选，旧节点没有时页面显示不可用而不是 0。
 
-`CallCoverage` 给看板和调用列表同一套判断：它读 `call_log` 的叶子分区名，记下还在的月份和最老的那个（`Since`）。`Covers(since, until)` 逐个检查窗口触及的整月，缺任何一个月就说不完整；所以较老月份归档失败、较新月份仍被删除时，最老分区还在，窗口也会因中间的空洞标为不完整。响应带 `calls_incomplete` / `calls_available_since`（调用列表为 `incomplete` / `available_since`），`available_since` 是最老的剩余月分区，它之前确定已归档；页面据此说明数字或列表不完整而不是把归档当成零；收入、成本和现金来自预留与账本，不受这个判断影响。一个命名月分区都不剩时 `Known` 为 false，任何窗口都不算完整。`TestCallCoverageStartsAtTheOldestPartition` 删掉 10 月分区后核对边界、看板和列表只统计 11 月，并核对删光月分区后的未知状态；`TestCallCoverageChecksTheWindowForGaps` 保留 10 月、删掉 11 月，核对最老分区仍是 10 月、只落在 10 月的窗口完整、跨过 11 月的窗口不完整。
+`CallCoverage` 给看板和调用列表同一套判断：它读 `call_log` 的叶子分区名，记下还在的月份和最老的那个（`Since`）。`Covers(since, until)` 逐个检查窗口触及的整月，缺任何一个月就说不完整；所以较老月份归档失败、较新月份仍被删除时，最老分区还在，窗口也会因中间的空洞标为不完整。响应带 `calls_incomplete` / `calls_available_since`（调用列表为 `incomplete` / `available_since`），`available_since` 是最老的剩余月分区，它之前确定已归档；页面据此说明数字或列表不完整而不是把归档当成零；收入、成本和现金来自预留与账本，不受这个判断影响。一个命名月分区都不剩时 `Known` 为 false，任何窗口都不算完整。`TestCallCoverageStartsAtTheOldestPartition` 删掉 10 月分区后核对边界、看板和列表都只统计 11 月并报不完整；`TestCallCoverageChecksTheWindowForGaps` 保留 10 月、删掉 11 月，核对最老分区仍是 10 月、只落在 10 月的窗口完整、跨过 11 月或整个落在 11 月的窗口不完整；`TestCallCoverageWithNoMonthLeft` 删光所有命名月分区，核对覆盖变为未知。
 
 ## 追溯
 

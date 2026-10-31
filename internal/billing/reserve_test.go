@@ -92,7 +92,7 @@ func (b *bank) count(query string) int64 {
 func (b *bank) reserve(a Admitted, amount int64) (*Hold, error) {
 	var h *Hold
 	err := b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.reserveOne(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: amount}, []Quotable{b.exact})
+		h, err = b.billing.reserveOne(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: amount}, []Quotable{b.exact})
 		return err
 	})
 	return h, err
@@ -220,7 +220,7 @@ func (b *bank) holdOpen(a Admitted, id uuid.UUID, amount int64) (release chan st
 	release, done, held := make(chan struct{}), make(chan error, 1), make(chan struct{})
 	go func() {
 		done <- b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) error {
-			_, _, err := b.billing.reserveOne(b.t.Context(), tx, a, id, Demand{TextBytes: amount}, []Quotable{b.exact})
+			_, err := b.billing.reserveOne(b.t.Context(), tx, a, id, Demand{TextBytes: amount}, []Quotable{b.exact})
 			close(held)
 			<-release
 			return err
@@ -374,7 +374,7 @@ func TestSettleOrphanRolledBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := b.app.Tx(ctx, b.admitted.Scope, func(tx pg.Tx) error {
-		_, _, err := b.billing.reserveOne(ctx, tx, b.admitted, id, Demand{TextBytes: 1}, []Quotable{b.exact})
+		_, err := b.billing.reserveOne(ctx, tx, b.admitted, id, Demand{TextBytes: 1}, []Quotable{b.exact})
 		return err
 	})
 	if err == nil || b.count("SELECT count(*) FROM billing.reservations WHERE state = 'released' AND segment = 0") != 1 {
