@@ -4,18 +4,20 @@ import { Icon, type IconName } from "./icon";
 
 // Panel is a titled block of a page: the card the design uses for the things the user looks at together.
 export function Panel({
+  id,
   title,
   action,
   children,
   className,
 }: {
+  id?: string;
   title?: string;
   action?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
   return (
-    <section className={cn("min-w-0 rounded-card border border-b1 bg-s1 shadow-panel", className)}>
+    <section id={id} className={cn("min-w-0 rounded-card border border-b1 bg-s1 shadow-panel", className)}>
       {title || action ? (
         <header className="flex items-center justify-between gap-3 border-b border-b1 px-4 py-3">
           {title ? <h2 className="min-w-0 text-ui font-medium text-t1">{title}</h2> : <span />}

@@ -187,6 +187,7 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 		if err != nil {
 			return nil, err
 		}
+		e.sold, e.serving = sold, serving
 		l.models = append(l.models, e)
 	}
 	return l, nil
@@ -216,6 +217,11 @@ type orModel struct {
 	prompt    platform.UnitPrice
 	output    platform.UnitPrice
 	average   platform.Exact // prompt + completion: the average the price orderings compare, undivided
+	// sold and serving are what the public models and prices page needs from the same build: the audience price layers
+	// and the limits and abilities the catalog declared. They are set on the base entry, before the variants split, so
+	// the page and the OpenRouter list describe one model with one price version.
+	sold    billing.Sold
+	serving catalog.Serving
 }
 
 // orModelResponse is OpenRouter's answer for one model (spec `ModelResponse`).

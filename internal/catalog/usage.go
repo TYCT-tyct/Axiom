@@ -125,6 +125,20 @@ func (s set[T]) Has(v T) bool { return s&(1<<v) != 0 }
 // Add puts v in the set.
 func (s *set[T]) Add(v T) { *s |= 1 << v }
 
+// List lists the set's values in enumeration order.
+func (s set[T]) List() []T { return s.members() }
+
+// members lists the set's values in order.
+func (s set[T]) members() []T {
+	var out []T
+	for v := T(0); v < 32; v++ {
+		if s.Has(v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // InputSide are the items a prompt is made of, the only ones a context tier's threshold may add up. They are also the
 // items an upstream reports before the reply starts.
 const InputSide ItemSet = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 1<<ItemCacheWrite1h | 1<<ItemAudioIn |

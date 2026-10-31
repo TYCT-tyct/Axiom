@@ -9,6 +9,10 @@ FROM accounts.login_tenant(@domain::text, @email::text) AS k (user_id, account_i
 SELECT k.site_id::uuid AS site_id, k.inviter_user_id::uuid AS inviter_user_id, k.default_tier_id::uuid AS default_tier_id
 FROM accounts.invite_tenant(@domain::text, @code::text) AS k (site_id, inviter_user_id, default_tier_id);
 
+-- name: AccountTier :one
+-- The tier whose sale prices the account pays; the account row is the only row the console scope can read.
+SELECT tier_id FROM accounts.accounts WHERE id = @account_id;
+
 -- name: SessionTenant :many
 SELECT k.session_id::uuid AS session_id, k.user_id::uuid AS user_id, k.account_id::uuid AS account_id
 FROM accounts.session_tenant(@domain::text, @surface::text, @token_hash::bytea) AS k (session_id, user_id, account_id);

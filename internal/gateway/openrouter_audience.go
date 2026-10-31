@@ -20,6 +20,9 @@ func newAudienceORModel(id string, m catalog.Model, serving catalog.Serving, sol
 		if ok {
 			variants[i] = e
 			base = orModel{model: e.model, author: e.author, search: e.search}
+			// The public page shows the model once, not once per audience layer: its name and limits do not change with
+			// the price, so the base entry carries them.
+			base.ID, base.Name = e.ID, e.Name
 		}
 	}
 	if base.search == "" {
