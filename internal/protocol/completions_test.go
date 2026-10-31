@@ -259,10 +259,17 @@ func TestCompletionsSample(t *testing.T) {
 func TestCompletionsEchoPerChoice(t *testing.T) {
 	t.Parallel()
 	const prompt, generated = 300, 30
-	echo := func(text string, index int) string {
+	chunk := func(text string, index int, finish string) string {
 		return fmt.Sprintf(
-			"data: {\"id\":\"x\",\"object\":\"text_completion\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":%d,\"text\":%q,\"finish_reason\":\"length\"}]}\n\n",
-			index, text,
+			"data: {\"id\":\"x\",\"object\":\"text_completion\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":%d,\"text\":%q,\"finish_reason\":%s}]}\n\n",
+			index, text, finish,
+		)
+	}
+	echo := func(text string, index int) string { return chunk(text, index, `"length"`) }
+	textFirst := func(text string, index int) string {
+		return fmt.Sprintf(
+			"data: {\"id\":\"x\",\"object\":\"text_completion\",\"created\":0,\"model\":\"m\",\"choices\":[{\"text\":%q,\"index\":%d,\"finish_reason\":\"length\"}]}\n\n",
+			text, index,
 		)
 	}
 	for _, c := range []struct {
@@ -285,6 +292,20 @@ func TestCompletionsEchoPerChoice(t *testing.T) {
 			stream: echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0),
 			broken: true,
 			want:   generated,
+		},
+		{
+			name:   "text before index",
+			echo:   &protocol.EchoPrompts{Bytes: []int64{prompt, prompt}, Choices: 1},
+			stream: textFirst(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0),
+			broken: true,
+			want:   generated,
+		},
+		{
+			name: "echo split across chunks",
+			echo: &protocol.EchoPrompts{Bytes: []int64{prompt}, Choices: 1},
+			stream: chunk(strings.Repeat("a", 200), 0, "null") +
+				chunk(strings.Repeat("a", 100)+strings.Repeat("b", generated), 0, `"length"`) + "data: [DONE]\n\n",
+			want: generated,
 		},
 		{
 			name: "one prompt, both choices",
