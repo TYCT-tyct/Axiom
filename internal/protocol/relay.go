@@ -680,7 +680,7 @@ func (r *Relay) initReply(u UsageContext, o RelayOptions) {
 	}
 	r.up = r.format.newUpstream(u, o, r.charge)
 	if o.Aggregate {
-		r.agg = newAggregator(r.client, r.charge)
+		r.agg = newAggregator(r.client, r.charge, r.refund)
 		if a, ok := r.agg.(*chatAggregate); ok {
 			a.legacy = o.legacyFunctions
 			a.healing = u.ResponseHealing

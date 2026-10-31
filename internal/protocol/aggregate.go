@@ -41,18 +41,35 @@ type aggBase struct {
 	// draw asks the relay to charge n bytes. held is the capacity of the pieces and bounded by aggregateLimit; drawn
 	// is what was charged for them, which is more for a piece that is copied once more to make the body.
 	draw        func(n int) error
+	refund      func(n int)
 	held, drawn int64
 	sealed      bool
 }
 
-func (a *aggBase) init(draw func(int) error) {
-	a.draw = draw
+func (a *aggBase) init(draw func(int) error, refund func(int)) {
+	a.draw, a.refund = draw, refund
 	a.charge = func(n int) error { return a.take(n, 1) }
 }
 
 func (a *aggBase) seal()           { a.sealed = true }
 func (*aggBase) hold([]byte) error { return nil }
 func (a *aggBase) taken() int64    { return a.drawn }
+
+// release gives back the accounting of pieces that were replaced or discarded. The relay's budget is released with
+// it: what a merge held for its peak is not part of the reply that remains.
+func (a *aggBase) release(n int) {
+	if a.sealed || n <= 0 {
+		return
+	}
+	if int64(n) > a.held {
+		n = int(a.held)
+	}
+	if a.refund != nil {
+		a.refund(n)
+	}
+	a.held -= int64(n)
+	a.drawn = max(0, a.drawn-int64(n))
+}
 
 // take accounts for n bytes of pieces, factor times over in the relay's budget.
 func (a *aggBase) take(n, factor int) error {
@@ -239,24 +256,24 @@ func mergeObjects(old, add []byte) ([]byte, error) {
 // newAggregator returns the aggregator for a client of format f.
 //
 //nolint:exhaustive // only the generation formats have an aggregator
-func newAggregator(f Format, draw func(int) error) aggregator {
+func newAggregator(f Format, draw func(int) error, refund func(int)) aggregator {
 	switch f {
 	case Messages:
 		a := &messagesAggregate{}
-		a.init(draw)
+		a.init(draw, refund)
 		return a
 	case Responses:
 		a := &responsesAggregate{}
-		a.init(draw)
+		a.init(draw, refund)
 		return a
 	case Chat:
 	case Completions:
 		a := &completionsAggregate{at: map[int64]int{}}
-		a.init(draw)
+		a.init(draw, refund)
 		return a
 	}
 	a := &chatAggregate{at: map[int64]int{}}
-	a.init(draw)
+	a.init(draw, refund)
 	return a
 }
 

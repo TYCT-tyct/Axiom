@@ -599,6 +599,31 @@ func TestCompletionsLogprobsBudget(t *testing.T) {
 	}
 }
 
+// TestCompletionsLogprobsLongStream: the peak a merge holds is given back after it, so a stream of many small chunks
+// completes while its final logprobs stay far below the aggregate limit.
+func TestCompletionsLogprobsLongStream(t *testing.T) {
+	token := strings.Repeat("x", 1024)
+	logprobs := `{"tokens":["` + token + `"],"token_logprobs":[-0.1],"top_logprobs":[{}],"text_offset":[0]}`
+	var stream strings.Builder
+	for range 130 {
+		stream.WriteString(`data: {"id":"x","object":"text_completion","choices":[{"index":0,"text":"a","logprobs":` + logprobs + "}]}\n\n")
+	}
+	stream.WriteString("data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"\",\"finish_reason\":\"stop\"}]}\n\n")
+	stream.WriteString("data: [DONE]\n\n")
+	const budget = 64 << 20
+	mem := protocol.NewMemory(budget)
+	got := aggregate(t, protocol.Completions, protocol.Completions, strings.NewReader(stream.String()), mem, unsettled)
+	if got.err != nil {
+		t.Fatalf("a long stream of small logprobs failed: %v", got.err)
+	}
+	if n := bytes.Count(got.body, []byte(token)); n != 130 {
+		t.Errorf("the body has %d tokens, want 130", n)
+	}
+	if mem.Left() != budget {
+		t.Errorf("the budget is %d after the release, was %d", mem.Left(), budget)
+	}
+}
+
 // TestCompletionsAggregateBodyBudget: the body assembled from the aggregated choices is allocated from the node's
 // budget, not beside it. A reply whose pieces fit but whose body does not fails with ErrMemory and gives back all it
 // drew.

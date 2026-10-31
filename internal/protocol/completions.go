@@ -383,7 +383,8 @@ func (a *completionsAggregate) mergeLogprobs(old, add []byte) ([]byte, error) {
 		return a.copyLogprobs(add)
 	}
 	// The two member lists are cloned from the decoder's input, and the merged object is built beside them: charge
-	// their whole peak before either allocation, so a merge that cannot fit never allocates it.
+	// their whole peak before either allocation, so a merge that cannot fit never allocates it. The clones and the
+	// object they replace are given back below; only the merged object stays.
 	peak := len(old) + len(add)
 	hint := peak + 2 // one brace pair; joining arrays drops their two brackets and comma
 	if int64(peak+hint) > aggregateLimit-a.held {
@@ -422,7 +423,9 @@ func (a *completionsAggregate) mergeLogprobs(old, add []byte) ([]byte, error) {
 		out = append(out, commaMember(&first, m.name)...)
 		out = append(out, m.value...)
 	}
-	return append(out, '}'), nil
+	out = append(out, '}')
+	a.release(peak + cap(old))
+	return out, nil
 }
 
 // copyLogprobs keeps the first chunk's logprobs in memory the aggregate has charged, not in the decoder's event data.

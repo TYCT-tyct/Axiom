@@ -512,13 +512,22 @@ func reason(why syncer.Reason) *string {
 	return &text
 }
 
-// writableFormats drops the direct formats while the compatibility gate is closed, so this release cannot write a
-// name a node of the previous release would refuse to read.
+// writableFormats drops the formats a pre-P18 node cannot read while the compatibility gate is closed, so this release
+// cannot write a name that node would refuse to read. The three generation formats are the ones it knows.
 func writableFormats(formats []protocol.Format, direct bool) []protocol.Format {
 	if direct {
 		return formats
 	}
-	return slices.DeleteFunc(formats, func(f protocol.Format) bool { return f.Direct() })
+	return slices.DeleteFunc(formats, func(f protocol.Format) bool {
+		switch f {
+		case protocol.Messages, protocol.Responses, protocol.Chat:
+			return false
+		case protocol.Completions, protocol.Embeddings, protocol.Rerank:
+			return true
+		default:
+			return false // not a format this release can name; FormatNames rejects it
+		}
+	})
 }
 
 // formatsOf reads the formats an engine snapshot stores, which protocol's are.
