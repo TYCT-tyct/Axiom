@@ -94,7 +94,7 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
      -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env tmp/release/release.json
    ```
 
-   入口从这次 `-f`/`--env-file` 解析出的实际 Compose 配置里读 `axiom` 和 `migrate` 会用的镜像（Shell 已经导出的 `DEPLOY_IMAGE` 优先于 `.env`，所以被验证的就是会被拉取的），要求二者是同一个 digest；`verify-release.sh` 通过后把该 digest 导出给后续命令，再拉取、把本构建的前端资源发布进共享卷、启动数据库、重放角色授权并以 `--no-build` 启动整套栈。任何一步失败即停，验签失败时没有 pull 或启动。不要先手工 `sed` 取 `.env` 里的值、验签，再分开执行 `pull`/`up`：那样验的是文件里的 A，Compose 可能拉环境变量里的 B，验签失败后命令也还会继续。启动任何节点前先按[滚动发布](#滚动发布)写下这个构建的前端文件，再逐个替换节点。用 `docker inspect` 核对迁移与服务的 `.Config.Image` 是该 digest 引用，版本 API 与 JSON 的 `frontend_version` 一致。
+   入口从这次 `-f`/`--env-file` 解析出的实际 Compose 配置里读 `axiom` 和 `migrate` 会用的镜像（Shell 已经导出的 `DEPLOY_IMAGE` 优先于 `.env`，所以被验证的就是会被拉取的），要求二者是同一个 digest；`verify-release.sh` 通过后把该 digest 导出给后续命令，再拉取、把本构建的前端资源发布进共享卷、从本仓库构建数据库镜像、启动数据库、重放角色授权并以 `--no-build` 启动整套栈。任何一步失败即停，验签失败时没有 pull 或启动。不要先手工 `sed` 取 `.env` 里的值、验签，再分开执行 `pull`/`up`：那样验的是文件里的 A，Compose 可能拉环境变量里的 B，验签失败后命令也还会继续。启动任何节点前先按[滚动发布](#滚动发布)写下这个构建的前端文件，再逐个替换节点。用 `docker inspect` 核对迁移与服务的 `.Config.Image` 是该 digest 引用，版本 API 与 JSON 的 `frontend_version` 一致。
    回滚选择上次成功发布记录里的 digest，重复核对和部署步骤；已经执行的迁移不会因此自动撤回，先确认旧程序仍兼容当前 schema。本版本之前的构建没有签名，`verify-release.sh` 会拒绝，回滚窗口从第一个按此流程发布的签名版本开始算。
    本版本起 `axiom migrate` 在 `platform.migration_checksums` 记下每个已应用迁移的文件名和 SHA-256，迁移和节点启动都核对：
    已合并的迁移被改过、改名或删掉时两者都停下并报出文件与摘要，改动要走新的迁移；回滚到不认识这张表的旧版本不受影响，它只多看到一张启用行级安全的表（[platform 的「迁移」](../../internal/platform/README.md#迁移)）。

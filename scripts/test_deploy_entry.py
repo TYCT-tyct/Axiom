@@ -105,9 +105,13 @@ class DeployEntry(unittest.TestCase):
         self.assertTrue(any(" up --detach --no-build --wait --wait-timeout 60 postgres " in call
                             and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
         self.assertTrue(any(" exec -T postgres " in call for call in compose), compose)
+        self.assertTrue(any(" build postgres " in call for call in compose), compose)
         self.assertLess(next(i for i, call in enumerate(calls) if call.startswith("verify ")),
                         next(i for i, call in enumerate(calls) if " pull " in call))
         self.assertLess(next(i for i, call in enumerate(calls) if " run " in call),
+                        next(i for i, call in enumerate(calls) if " up " in call))
+        # The database image is built from this tree; the no-build starts below would fail without it.
+        self.assertLess(next(i for i, call in enumerate(calls) if " build postgres " in call),
                         next(i for i, call in enumerate(calls) if " up " in call))
 
     def test_an_exported_image_is_the_one_verified_not_the_env_file(self):

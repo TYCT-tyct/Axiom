@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,6 +119,49 @@ func TestKeyringCheckPrunesAnInterruptedRetirement(t *testing.T) {
 		t.Fatalf("check after an interrupted retirement: %v", err)
 	}
 	wantHealedRetirement(t, f, ring, status)
+}
+
+// TestKeyringCheckPrunesOnlyTheCandidateCopy is the PITR runbook's copy step: the real check command repairs the file it
+// is pointed at, so an operator must point it at a working copy. The archived historical master has to stay byte-for-byte
+// unchanged, or a later restore target that still needs the retired version loses its only copy.
+func TestKeyringCheckPrunesOnlyTheCandidateCopy(t *testing.T) {
+	t.Parallel()
+	f := interruptedRetirement(t)
+	archived, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(t.TempDir(), "master")
+	if err := os.WriteFile(candidate, archived, 0o600); err != nil { //nolint:gosec // candidate is this test's temp file
+		t.Fatal(err)
+	}
+	for i, entry := range f.environ {
+		if strings.HasPrefix(entry, masterKeyFileVar+"=") {
+			f.environ[i] = masterKeyFileVar + "=" + candidate
+		}
+	}
+
+	f.run("check")
+
+	untouched, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(untouched, archived) {
+		t.Fatal("check modified the archived historical master")
+	}
+	checked, err := os.ReadFile(candidate) //nolint:gosec // candidate is this test's temp file
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(string(checked), "\n") {
+		if strings.HasPrefix(line, "1:") {
+			t.Fatal("check did not prune the retired, unreferenced version from the candidate")
+		}
+	}
+	if !strings.Contains(string(checked), "2:") {
+		t.Fatal("check removed the active version from the candidate")
+	}
 }
 
 // TestKeyringRefreshPrunesAnInterruptedRetirement: the running lifecycle heals the same state on a tick, and installs the
