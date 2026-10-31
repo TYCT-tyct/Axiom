@@ -87,3 +87,21 @@ it.each([
 ])("after a failure, $case", ({ from, error, want }) => {
   expect(afterFailure(from, { code: "first" }, error, newKey)).toEqual(want);
 });
+
+it("moves the key out of the pre-#530 store and drops the code it held", () => {
+  sessionStorage.setItem(
+    "user/account/axiom.console.redeem.attempt",
+    JSON.stringify({ state: "unknown", key: "key-1", request: { code: "secret-code" } }),
+  );
+  expect(readRedemption("user/account")).toEqual({ state: "unknown", key: "key-1" });
+  expect(sessionStorage.getItem("user/account/axiom.console.redeem.attempt")).toBeNull();
+  expect(storage.values().join("\n")).not.toContain("secret-code");
+  expect(sessionStorage.getItem("user/account/redeem")).toBe(JSON.stringify({ key: "key-1" }));
+});
+
+it("forgets a legacy record when the page writes its own", () => {
+  sessionStorage.setItem("user/account/axiom.console.redeem.attempt", JSON.stringify({ key: "key-1" }));
+  writeRedemption("user/account", { state: "editing", key: "key-2" });
+  expect(sessionStorage.getItem("user/account/axiom.console.redeem.attempt")).toBeNull();
+  expect(storage.values().join("\n")).not.toContain("key-1");
+});

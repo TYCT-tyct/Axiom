@@ -49,13 +49,37 @@ export function readCode(values: Record<string, string>): RedeemRequest | "missi
 // attempt it never made.
 const redemptionStore = (scope: string) => `${scope}/redeem`;
 
+// legacyRedemptionStore is where the page kept the whole attempt before #530: the request, the code included. Reading
+// moves the key to the new store and deletes that plaintext; writing deletes it too, so an upgrade leaves nothing of it.
+const legacyRedemptionStore = (scope: string) => `${scope}/axiom.console.redeem.attempt`;
+
+// readLegacyRedemption moves the key of an attempt the previous version stored with its request, and drops the request.
+function readLegacyRedemption(scope: string): Redemption | null {
+  const raw = sessionStorage.getItem(legacyRedemptionStore(scope));
+  if (!raw) {
+    return null;
+  }
+  sessionStorage.removeItem(legacyRedemptionStore(scope));
+  try {
+    const value: unknown = JSON.parse(raw);
+    const key = typeof value === "object" && value !== null ? (value as { key?: unknown }).key : undefined;
+    if (typeof key !== "string") {
+      return null;
+    }
+    sessionStorage.setItem(redemptionStore(scope), JSON.stringify({ key }));
+    return { state: "unknown", key };
+  } catch {
+    return null;
+  }
+}
+
 // readRedemption reads the key of an attempt whose answer did not arrive, or null when there is none. Only the key is
 // kept, so the code is not filled in from storage: it is asked for again.
 export function readRedemption(scope: string): Redemption | null {
   try {
     const raw = sessionStorage.getItem(redemptionStore(scope));
     if (!raw) {
-      return null;
+      return readLegacyRedemption(scope);
     }
     const value: unknown = JSON.parse(raw);
     const key = typeof value === "object" && value !== null ? (value as { key?: unknown }).key : undefined;
@@ -69,6 +93,7 @@ export function readRedemption(scope: string): Redemption | null {
 // written: a code that may still be valid must not outlive the page in readable form.
 export function writeRedemption(scope: string, redemption: Redemption) {
   try {
+    sessionStorage.removeItem(legacyRedemptionStore(scope));
     if (redemption.state !== "unknown") {
       sessionStorage.removeItem(redemptionStore(scope));
       return;
