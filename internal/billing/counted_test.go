@@ -45,7 +45,7 @@ func reported(tb testing.TB, counts map[catalog.Item]int64) Segment {
 // tryCountedHold reserves a call of q with the given counted demand in a transaction of its own.
 func (b *bank) tryCountedHold(q Quotable, text int64, counts map[catalog.Item]int64) (h *Hold, err error) {
 	err = b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: text, Counts: counts}, []Quotable{q})
+		h, err = b.billing.reserveOne(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: text, Counts: counts}, []Quotable{q})
 		return err
 	})
 	return h, err

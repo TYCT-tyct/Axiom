@@ -2,8 +2,10 @@ package billing
 
 import "testing"
 
-// BenchmarkReserveSettle covers the database work of a complete call, including the ledger and reserved counters.
-func BenchmarkReserveSettle(b *testing.B) {
+// BenchmarkReserveManySettle covers the database work of one complete call through the batch admission path, including
+// the ledger and reserved counters. It is renamed from the benchmark of the removed single-reservation path: a
+// one-element batch is what production runs, and its allocation profile is not comparable with the deleted path.
+func BenchmarkReserveManySettle(b *testing.B) {
 	bank := newBank(b, 1e12, 0, Config{})
 	o := outcome(Committed, FinishStop, used(b, 50, 20, 0))
 	b.ReportAllocs()

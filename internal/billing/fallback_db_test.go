@@ -371,7 +371,7 @@ func (b *bank) holdOnTwoModels() (*Hold, Quotable) {
 	first.Model.ID, second.Model.ID = catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7())
 	var h *Hold
 	if err := b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, []Quotable{first, second})
+		h, err = b.billing.reserveOne(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, []Quotable{first, second})
 		return err
 	}); err != nil {
 		b.t.Fatal(err)
@@ -383,7 +383,7 @@ func (b *bank) holdOnTwoModels() (*Hold, Quotable) {
 func (b *bank) holdFor(a Admitted, q Quotable, text int64) (h *Hold) {
 	b.t.Helper()
 	if err := b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{q})
+		h, err = b.billing.reserveOne(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{q})
 		return err
 	}); err != nil {
 		b.t.Fatal(err)

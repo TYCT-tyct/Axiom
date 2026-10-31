@@ -18,7 +18,7 @@ type Funds struct {
 // ReadFunds reads the account's balance row and its lifetime spend in tx, without locking, for an endpoint that only
 // shows them. workspaces are all of the account's workspaces, deleted ones included: the spend counters of a workspace
 // and of the keys in it each hold every charge, so the account's total is the workspaces' alone. An account with no
-// balance row has no money (Reserve treats it alike).
+// balance row has no money (ReserveMany treats it alike).
 func ReadFunds(ctx context.Context, tx pg.Tx, account uuid.UUID, workspaces []uuid.UUID) (Funds, error) {
 	row, err := queries.ReadFunds(ctx, tx, ReadFundsParams{AccountID: account, Workspaces: workspaces})
 	if errors.Is(err, pg.ErrNoRows) {

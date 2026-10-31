@@ -51,7 +51,7 @@ func TestRoutePublishesMeasuredQuality(t *testing.T) {
 // published is what the snapshot says of r, or a fatal error why it cannot be an endpoint.
 func published(t *testing.T, f *routeFixture, snap *catalog.Snapshot, r suppliers.Routable, now time.Time) routing.Endpoint {
 	t.Helper()
-	e, why := endpointOf(snap, f.prices, nil, r, f.health.Measured(r.ID, now))
+	e, why := endpointOf(snap, f.prices, nil, r, f.health.MeasuredFor(r, now))
 	if why != "" {
 		t.Fatalf("endpoint %s: %s", r.ID, why)
 	}

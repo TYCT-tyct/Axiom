@@ -21,6 +21,23 @@ export default {
   col: { at: "Time", account: "Account", model: "Model", result: "Result", latency: "Latency", price: "Price" },
   empty: { title: "No calls in this window", body: "Try a wider time range, or another filter." },
   noMatch: { title: "No call matches", body: "Check the ID, or widen the time range." },
+  archived: {
+    title: "This window was archived",
+    body: "These calls are older than this node's retained log. The dashboard's revenue, cost and cash still cover the window.",
+  },
+  retainedFiltered: {
+    title: "No retained call matches",
+    body: "No call still in this node's log matches this filter. Earlier calls were archived, so a match there cannot be ruled out.",
+  },
+  retainedWindow: {
+    title: "No call in the retained log",
+    body: "Earlier calls in this window were archived, so the log cannot confirm there were none.",
+  },
+  incomplete:
+    "Calls before {{since}} are archived, so this list is incomplete; an empty result does not mean the window had no calls.",
+  incompleteUnknown:
+    "Calls before this node's retained log are archived, so this list is incomplete; an empty result does not mean the window had no calls.",
+  coverageUnavailable: "This node cannot say whether older calls were archived, so this list may be incomplete.",
   failed: "Failed",
   ok: "OK",
   ms: "{{ms}} ms",

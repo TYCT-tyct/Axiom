@@ -24,12 +24,26 @@ func answered(id suppliers.EndpointID, sent time.Time, ttft, gen time.Duration, 
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
+// measured reads the numbers an endpoint recorded. Production reads through MeasuredFor, which also drops a pass whose
+// claim no longer matches; these tests assert the recorded state and its own timestamps.
+func measured(m *Monitor, id suppliers.EndpointID, now time.Time) Measures {
+	m.mu.RLock()
+	e := m.endpoints[id]
+	m.mu.RUnlock()
+	if e == nil {
+		return Measures{Health: 1, Quality: 1}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.measures(now)
+}
+
 // TestHealth: health is 1 minus the moving average of failures with α 0.2, 1 before anything is counted, as sub2api's
 // (openai_account_scheduler.go, report).
 func TestHealth(t *testing.T) {
 	m := New(nil)
 	id := suppliers.EndpointID{1}
-	if got := m.Measured(id, t0); got != (Measures{Health: 1, Quality: 1}) {
+	if got := measured(m, id, t0); got != (Measures{Health: 1, Quality: 1}) {
 		t.Fatalf("never observed: %+v", got)
 	}
 	want := 1.0
@@ -45,7 +59,7 @@ func TestHealth(t *testing.T) {
 		} else {
 			want = 1 - 0.8*errRate
 		}
-		if got := m.Measured(id, t0).Health; !near(got, want) {
+		if got := measured(m, id, t0).Health; !near(got, want) {
 			t.Fatalf("after %d outcomes health = %v, want %v", i+1, got, want)
 		}
 	}
@@ -61,16 +75,16 @@ func TestMeasuredVerification(t *testing.T) {
 	e.mu.Lock()
 	e.verify = verification{passed: true, checked: at}
 	e.mu.Unlock()
-	if got := m.Measured(id, at); !got.Verified || got.VerifyConfidence != 1 || !got.VerifiedAt.Equal(at) {
+	if got := measured(m, id, at); !got.Verified || got.VerifyConfidence != 1 || !got.VerifiedAt.Equal(at) {
 		t.Fatalf("a fresh pass: %+v", got)
 	}
-	if got := m.Measured(id, at.Add(verifyMaxAge+time.Second)); got.Verified || got.VerifyConfidence != 0 || !got.VerifiedAt.Equal(at) {
+	if got := measured(m, id, at.Add(verifyMaxAge+time.Second)); got.Verified || got.VerifyConfidence != 0 || !got.VerifiedAt.Equal(at) {
 		t.Fatalf("an expired pass: %+v", got)
 	}
 	e.mu.Lock()
 	e.verify.passed, e.verify.failures = false, 1
 	e.mu.Unlock()
-	if got := m.Measured(id, at); got.Verified || !got.VerifiedAt.Equal(at) {
+	if got := measured(m, id, at); got.Verified || !got.VerifiedAt.Equal(at) {
 		t.Fatalf("a contradicted pass: %+v", got)
 	}
 }
@@ -83,17 +97,17 @@ func TestMeasured(t *testing.T) {
 	id := suppliers.EndpointID{2}
 	for i := range 4 {
 		m.Observe(t.Context(), answered(id, t0, 2*time.Second, 2*time.Second, latencyMaxInput, 100)) // 2s, 50 tokens a second
-		if got := m.Measured(id, t0); got.Latency != 0 || got.Throughput != 0 {
+		if got := measured(m, id, t0); got.Latency != 0 || got.Throughput != 0 {
 			t.Fatalf("after %d samples: %+v, want unmeasured", i+1, got)
 		}
 	}
 	m.Observe(t.Context(), answered(id, t0, 7*time.Second, time.Second, latencyMaxInput+1, speedMinOutput-1)) // neither is sampled
 	m.Observe(t.Context(), answered(id, t0, 7*time.Second, time.Second, latencyMaxInput, 100))                // 7s, 100 a second
-	got := m.Measured(id, t0.Add(9*time.Second))
+	got := measured(m, id, t0.Add(9*time.Second))
 	if got.Latency != 3*time.Second || !near(got.Throughput, 60) { // 2 + 0.2·(7−2); 50 + 0.2·(100−50)
 		t.Fatalf("measured %+v, want 3s and 60 tokens a second", got)
 	}
-	if stale := m.Measured(id, t0.Add(8*time.Second+maxAge+time.Nanosecond)); stale.Latency != 0 || stale.Throughput != 0 {
+	if stale := measured(m, id, t0.Add(8*time.Second+maxAge+time.Nanosecond)); stale.Latency != 0 || stale.Throughput != 0 {
 		t.Fatalf("30 minutes after the last sample: %+v, want unmeasured", stale)
 	}
 	m.Observe(t.Context(), answered(id, t0, 7*time.Second, time.Second, 0, 0)) // a failure-free short answer: latency only
@@ -101,7 +115,7 @@ func TestMeasured(t *testing.T) {
 	broke.Done, broke.Failure = false, nil
 	broke.Fault = protocol.FaultBroken // a failure, so its speed is no sample
 	m.Observe(t.Context(), broke)
-	if got := m.Measured(id, t0.Add(9*time.Second)); !near(got.Throughput, 60) {
+	if got := measured(m, id, t0.Add(9*time.Second)); !near(got.Throughput, 60) {
 		t.Fatalf("an answer that did not end normally changed the speed: %+v", got)
 	}
 }
@@ -150,7 +164,7 @@ func TestQualityScore(t *testing.T) {
 		m := New(nil)
 		id := suppliers.EndpointID{1}
 		c.observe(m, id)
-		got := m.Measured(id, c.now)
+		got := measured(m, id, c.now)
 		if !near(got.Quality, c.quality) || !near(got.Confidence, c.confidence) {
 			t.Errorf("%s: quality %.3f confidence %.3f, want %.3f and %.3f",
 				c.name, got.Quality, got.Confidence, c.quality, c.confidence)
@@ -169,7 +183,7 @@ func TestQualityWithoutCountedOutcomesIsNeutral(t *testing.T) {
 		o.Done, o.Fault = false, protocol.FaultRateLimited
 		m.Observe(t.Context(), o)
 	}
-	got := m.Measured(id, t0.Add(11*time.Second))
+	got := measured(m, id, t0.Add(11*time.Second))
 	if got.Latency != 10*time.Second {
 		t.Fatalf("latency = %v, want the independent samples to stay measured", got.Latency)
 	}
@@ -200,7 +214,7 @@ func TestProbeResultsScoreTheEndpoint(t *testing.T) {
 			e.record = claim
 			e.mu.Unlock()
 			l.finish(t.Context(), probeEnd{claim: claim, result: c.result})
-			got := m.Measured(id, now)
+			got := measured(m, id, now)
 			if !near(got.Health, c.health) || !near(got.Quality, c.health) || !near(got.Confidence, 0.1) {
 				t.Errorf("probe %s: %+v, want health and quality %v and confidence 0.1", c.name, got, c.health)
 			}
@@ -223,12 +237,12 @@ func TestObserveConcurrently(t *testing.T) {
 		wg.Go(func() {
 			for range 100 {
 				m.Observe(t.Context(), Observation{Endpoint: ids[g%2], Failure: failed500, Ended: t0})
-				_ = m.Measured(ids[g%2], t0)
+				_ = measured(m, ids[g%2], t0)
 			}
 		})
 	}
 	wg.Wait()
-	if got := m.Measured(ids[0], t0).Health; got > 1e-9 {
+	if got := measured(m, ids[0], t0).Health; got > 1e-9 {
 		t.Fatalf("health after 400 failures = %v", got)
 	}
 }
@@ -274,7 +288,7 @@ func TestMeasuredForAnotherClaim(t *testing.T) {
 	if got := m.MeasuredFor(changed, at); got.Verified || got.VerifyConfidence != 0 || !got.VerifiedAt.IsZero() {
 		t.Fatalf("another upstream inherited the pass: %+v", got)
 	}
-	if got := m.Measured(ep.ID, at); !got.Verified {
+	if got := measured(m, ep.ID, at); !got.Verified {
 		t.Fatal("Measured stays claim-blind for callers that have no configuration")
 	}
 }

@@ -85,7 +85,7 @@ func verificationPassSetsVerified(t *testing.T) {
 	c := newChallenge(func() float64 { return .5 }, stated)
 	startVerification(t, l, f, verificationAnswer(c, "Anthropic"))
 	collectVerification(t, l, f)
-	got := m.Measured(id, *now)
+	got := measured(m, id, *now)
 	if !got.Verified {
 		t.Fatalf("after a pass: %+v, want verified", got)
 	}
@@ -113,7 +113,7 @@ func verificationContradictionFailsClosed(t *testing.T) {
 	passVerification(t, l, f, c)
 	*now = now.Add(verifyEvery)
 	contradictVerification(t, l, f, c)
-	got := m.Measured(id, *now)
+	got := measured(m, id, *now)
 	if got.Verified {
 		t.Fatalf("after a contradiction: %+v, want unverified", got)
 	}
@@ -145,7 +145,7 @@ func verificationFakeThenRestored(t *testing.T) {
 	}
 	*now = now.Add(backoff(verifyFailures))
 	passVerification(t, l, f, c)
-	if got := m.Measured(id, *now); !got.Verified {
+	if got := measured(m, id, *now); !got.Verified {
 		t.Fatalf("after a later pass: %+v", got)
 	}
 	v := verificationOf(m, id)
@@ -170,7 +170,7 @@ func TestInconclusiveVerificationKeepsThePass(t *testing.T) {
 	f.result = suppliers.TestResult{Streamed: true, Reply: "I cannot answer that."}
 	tick(t, l)
 	collectVerification(t, l, f)
-	got := m.Measured(id, *now)
+	got := measured(m, id, *now)
 	if !got.Verified || got.VerifyConfidence != .75 {
 		t.Fatalf("after an inconclusive check: %+v, want the pass still counting at 0.75", got)
 	}
@@ -220,14 +220,14 @@ func TestVerificationFollowsTheUpstreamName(t *testing.T) {
 	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
 	tick(t, l)
 	collectVerification(t, l, f)
-	if !m.Measured(id, *now).Verified {
+	if !measured(m, id, *now).Verified {
 		t.Fatal("the first check did not verify the endpoint")
 	}
 
 	want := setVerificationUpstream(f, "another-upstream-name")
 	*now = now.Add(time.Second)
 	tick(t, l)
-	if got := m.Measured(id, *now); got.Verified || !got.VerifiedAt.IsZero() {
+	if got := measured(m, id, *now); got.Verified || !got.VerifiedAt.IsZero() {
 		t.Fatalf("a renamed upstream kept the old pass: %+v", got)
 	}
 	if v := verificationOf(m, id); v.claim != want || v.checked != (time.Time{}) || v.passed || v.failures != 0 {
@@ -238,7 +238,7 @@ func TestVerificationFollowsTheUpstreamName(t *testing.T) {
 	}
 	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
 	collectVerification(t, l, f)
-	if !m.Measured(id, *now).Verified {
+	if !measured(m, id, *now).Verified {
 		t.Fatal("the new upstream did not verify")
 	}
 }
@@ -253,7 +253,7 @@ func TestVerificationDropsACheckOfAnotherClaim(t *testing.T) {
 
 	want := setVerificationUpstream(f, "another-upstream-name")
 	collectVerification(t, l, f) // its answer arrives after the change
-	if got := m.Measured(id, *now); got.Verified {
+	if got := measured(m, id, *now); got.Verified {
 		t.Fatalf("an answer about another configuration verified the endpoint: %+v", got)
 	}
 	if v := verificationOf(m, id); v.claim != want || v.passed || v.checked != (time.Time{}) {
@@ -267,7 +267,7 @@ func TestVerificationDropsACheckOfAnotherClaim(t *testing.T) {
 	}
 	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
 	collectVerification(t, l, f)
-	if !m.Measured(id, *now).Verified {
+	if !measured(m, id, *now).Verified {
 		t.Fatal("the check of the new claim did not verify")
 	}
 }
@@ -297,7 +297,7 @@ func TestVerificationAlertsAFakeOnce(t *testing.T) {
 		t.Fatalf("fake alerts resolved while still a fake: %d", resolved)
 	}
 	wantFakeAlert(t, rec, id)
-	if m.Measured(id, *now).Verified {
+	if measured(m, id, *now).Verified {
 		t.Fatal("a fake concluded endpoint is still verified")
 	}
 

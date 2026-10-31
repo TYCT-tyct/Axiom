@@ -71,59 +71,8 @@ func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor i
 	return nil
 }
 
-// Reserve reserves for request id in tx, the admission's transaction, which must hold the account's scope
-// (README.md「准入里的预留」). It locks the balance row, fences the holder, then reads the counters in a statement
-// that starts after the lock and so sees every change committed before it; quotes the route against what each
-// source allows, and writes the reservation and its three counters in one statement. It returns the kept entries'
-// indexes, or *Insufficient when the preferred entry is unaffordable.
-func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID, d Demand, q []Quotable) (*Hold, []int, error) {
-	q, fallbacks, err := withFallbacks(ctx, tx, q) // before the lock: it reads platform data only
-	if err != nil {
-		return nil, nil, err
-	}
-	balance, usage, err := b.reserveSources(ctx, tx, a)
-	if errors.Is(err, errNoBalance) {
-		return nil, nil, &Insufficient{Source: SourceBalance} // nothing to reserve against, not even a zero price
-	} else if err != nil {
-		return nil, nil, err
-	}
-	r, err := Quote(d, q, b.config.Segments, a.available(balance, usage.WorkspaceUsed, usage.KeyUsed))
-	if insufficient, ok := errors.AsType[*Insufficient](err); ok {
-		return nil, nil, a.transient(insufficient)
-	} else if err != nil {
-		return nil, nil, err
-	}
-	prices, locked, err := lockedPrices(q, r.Kept, fallbacks)
-	if err != nil {
-		return nil, nil, err
-	}
-	identifiers := make([]uuid.UUID, len(q)*3)
-	models, endpoints, versions := identifiers[:len(q)], identifiers[len(q):2*len(q)], identifiers[2*len(q):]
-	for _, i := range r.Kept {
-		versions[i] = q[i].Version
-		models[i], endpoints[i] = uuid.UUID(q[i].Model.ID), q[i].Endpoint
-	}
-	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
-	rates := frozenRates(q, r.Kept)
-	rateJSON, err := jsonx.MarshalCanonical(rates)
-	if err != nil {
-		return nil, nil, fmt.Errorf("billing: freeze exchange rates: %w", err)
-	}
-	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
-		ExchangeRates: rateJSON, PriceVersions: versions,
-		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
-		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
-		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
-		LifetimeSeconds: b.config.Lifetime.Seconds(),
-	}); err != nil {
-		return nil, nil, fmt.Errorf("billing: write the reservation: %w", err)
-	}
-	return h, r.Kept, nil
-}
-
-// reservationParams is the row a batch reservation writes: the prices it locked, the routes it kept, the counters'
-// windows, and the call's start. The gateway admits through this batch path; the single Reserve leaves created_at to
-// the insert's default and is not on the request path.
+// reservationParams is the row a reservation writes: the prices it locked, the routes it kept, the counters' windows,
+// and the call's start.
 func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Reservation, fallbacks []string, day, at time.Time) (InsertReservationAtParams, error) {
 	if at.IsZero() {
 		at = time.Now()

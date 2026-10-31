@@ -20,6 +20,21 @@ export default {
   col: { at: "时间", account: "账户", model: "模型", result: "结果", latency: "耗时", price: "价格" },
   empty: { title: "这个时间范围内没有调用", body: "放宽时间范围，或换一个筛选条件。" },
   noMatch: { title: "没有符合条件的调用", body: "检查编号，或放宽时间范围。" },
+  archived: {
+    title: "这个时段已归档",
+    body: "这些调用早于当前节点保留的记录。看板的收入、成本和现金仍覆盖这个时段。",
+  },
+  retainedFiltered: {
+    title: "保留的记录中没有匹配项",
+    body: "这个筛选在当前节点保留的调用里没有匹配；更早的调用已归档，无法确认那边是否有匹配。",
+  },
+  retainedWindow: {
+    title: "保留的记录中没有调用",
+    body: "这个时段较早的调用已归档，无法确认这段时间是否真的没有调用。",
+  },
+  incomplete: "{{since}} 之前的调用已归档，这份列表不完整；结果为空不代表这个时段没有调用。",
+  incompleteUnknown: "此节点保留的调用记录之前的调用已归档，这份列表不完整；结果为空不代表这个时段没有调用。",
+  coverageUnavailable: "此节点无法判断较早的调用是否已归档，这份列表可能不完整。",
   failed: "失败",
   ok: "成功",
   ms: "{{ms}} 毫秒",

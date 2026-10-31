@@ -48,6 +48,12 @@ export default {
     cost: "Supplier cost",
     costNote: "Cost booked where billing could convert it",
     unknownCost: "{{calls}} calls have no known cost and are not in the total",
+    callsIncomplete:
+      "Calls before {{since}} are archived: the call counts and rankings omit them. Revenue, cost and cash still cover the whole window.",
+    callsIncompleteUnknown:
+      "Calls before this node's retained log are archived: the call counts and rankings are incomplete. Revenue, cost and cash still cover the whole window.",
+    coverageUnavailable:
+      "This node cannot say whether older calls were archived, so the call counts and rankings may be incomplete.",
     cash: "Cash received",
     cashNote: "Paid credit less refunds; not call revenue",
     unavailable: "Not available on this node",
