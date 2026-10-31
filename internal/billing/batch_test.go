@@ -180,7 +180,7 @@ func TestFundsReadsShareRefusals(t *testing.T) {
 			return err
 		}, errNoBalance},
 		{"admission balance", func(tx pg.Tx) error {
-			_, _, err := b.billing.reserveSources(t.Context(), tx, missing)
+			_, err := b.billing.lockBatch(t.Context(), tx, missing.Account, nil)
 			return err
 		}, errNoBalance},
 		{"settlement balance", func(tx pg.Tx) error {
@@ -191,7 +191,7 @@ func TestFundsReadsShareRefusals(t *testing.T) {
 			return b.billing.fence(t.Context(), tx)
 		}, ErrTerminated},
 		{"admission holder", func(tx pg.Tx) error {
-			_, _, err := b.billing.reserveSources(t.Context(), tx, b.admitted)
+			_, err := b.billing.lockBatch(t.Context(), tx, b.admitted.Account, nil)
 			return err
 		}, ErrTerminated},
 	} {
@@ -219,8 +219,10 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 	a.WorkspaceBudget = &Limit{Amount: 1e5, Reset: ResetNever}
 	a.KeyLimit = &Limit{Amount: 9999, Reset: ResetDaily}
 	var wantBalance, reserveBalance, settleBalance LockBalanceRow
-	var wantUsage, usage ReadUsageRow
+	var wantUsage ReadUsageRow
+	var usage []ReadUsageRow
 	var wantRow, row LockReservationRow
+	reqs := []ReserveRequest{{Admitted: a, Quotables: []Quotable{b.exact}}}
 	err := b.app.Tx(t.Context(), a.Scope, func(tx pg.Tx) error {
 		var err error
 		wantBalance, err = queries.LockBalance(t.Context(), tx, a.Account)
@@ -235,8 +237,12 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		reserveBalance, usage, err = b.billing.reserveSources(t.Context(), tx, a)
+		src, err := b.billing.lockBatch(t.Context(), tx, a.Account, reqs)
 		if err != nil {
+			return err
+		}
+		reserveBalance = src.balance
+		if usage, err = readBatchUsage(t.Context(), tx, reqs, src.day); err != nil {
 			return err
 		}
 		settleBalance, row, err = settlementRows(t.Context(), tx, h.id, a.Account)
@@ -245,7 +251,7 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(reserveBalance, wantBalance) || !reflect.DeepEqual(usage, wantUsage) {
+	if !reflect.DeepEqual(reserveBalance, wantBalance) || !reflect.DeepEqual(usage, []ReadUsageRow{wantUsage}) {
 		t.Errorf("reservation batch differs: balance %+v / %+v; usage %+v / %+v", reserveBalance, wantBalance, usage, wantUsage)
 	}
 	if !reflect.DeepEqual(settleBalance, wantBalance) || !reflect.DeepEqual(row, wantRow) {

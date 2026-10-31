@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -10,8 +11,21 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"axiom/internal/platform/pg"
 )
+
+// reserveOne admits one request through the batch path, in the caller's transaction: a batch of one is what production
+// does for a single admission. The per-request error is the batch's refusal for it; a database error takes the whole
+// batch down and comes back as err.
+func (b *Billing) reserveOne(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID, d Demand, q []Quotable) (*Hold, []int, error) {
+	holds, kept, errs, err := b.ReserveMany(ctx, tx, []ReserveRequest{{Admitted: a, ID: id, Demand: d, Quotables: q}})
+	if err != nil {
+		return nil, nil, err
+	}
+	return holds[0], kept[0], errs[0]
+}
 
 // reserveMany reserves amounts for new requests in one transaction, in the order given.
 func (b *bank) reserveMany(a Admitted, amounts []int64) ([]*Hold, []error, error) {
@@ -143,18 +157,62 @@ func TestReserveManyKeepsRefusalsApart(t *testing.T) {
 	b.consistent()
 }
 
-// TestReserveManyRowsMatchReserve: a batch's insert writes the same row as Reserve, field for field; the insert is
-// pipelined and does not go through the generated function.
-func TestReserveManyRowsMatchReserve(t *testing.T) {
+// historicInsertReservation is the single reservation's insert, removed with Reserve (#530). It stays as the baseline
+// the batch's pipelined arguments are checked against, placeholders and order unchanged.
+const historicInsertReservation = `WITH reservation AS (
+    INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
+        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates,
+        price_versions)
+    VALUES ($8, $3, $4, $1, $6, $9,
+        $2, $7, 1, $5, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8),
+        $11::text[], $12::text[], $13, $14, $15::jsonb, $16)
+), balance AS (
+    UPDATE billing.balances b SET reserved = b.reserved + $5 WHERE b.account_id = $4
+)
+INSERT INTO billing.spend AS s (subject, window_start, site_id, account_id, reserved)
+VALUES ($1, $2, $3, $4, $5),
+    ($6, $7, $3, $4, $5)
+ON CONFLICT (subject, window_start) DO UPDATE SET reserved = s.reserved + excluded.reserved`
+
+// writeHistoricReservation writes a reservation through the removed single insert, in its generated argument order.
+func writeHistoricReservation(ctx context.Context, tx pg.Tx, p InsertReservationAtParams) error {
+	_, err := tx.Exec(ctx, historicInsertReservation,
+		p.WorkspaceID, p.WorkspaceWindow, p.SiteID, p.AccountID, p.Amount, p.KeyID, p.KeyWindow, p.RequestID,
+		p.HolderID, p.LifetimeSeconds, p.Prices, p.Fallbacks, p.Models, p.Endpoints, p.ExchangeRates, p.PriceVersions)
+	return err
+}
+
+// TestReserveManyRowsMatchTheHistoricInsert: the batch's pipelined insert writes the same row, field for field, as the
+// single reservation's insert did before #530 removed it. Every field has a distinct value, so a swapped argument in
+// insertReservationArgs still fails; created_at is the batch's addition and is not compared.
+func TestReserveManyRowsMatchTheHistoricInsert(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 1e6, 0, Config{})
-	single, err := b.reserve(b.admitted, 100)
-	if err != nil {
-		t.Fatal(err)
+	day := time.Now().UTC().Truncate(24 * time.Hour)
+	params := func(id uuid.UUID) InsertReservationAtParams {
+		return InsertReservationAtParams{
+			WorkspaceID: b.admitted.Workspace, WorkspaceWindow: day,
+			SiteID: b.admitted.Site, AccountID: b.admitted.Account, Amount: 100,
+			KeyID: b.admitted.Key, KeyWindow: day.Add(-24 * time.Hour),
+			RequestID: id, HolderID: b.billing.holder, LifetimeSeconds: 1733,
+			Prices: []string{`{"v":1,"currency":"USD"}`}, Fallbacks: []string{`{"per_use":{}}`},
+			Models:        pgtype.FlatArray[uuid.UUID]{uuid.NewV7()},
+			Endpoints:     pgtype.FlatArray[uuid.UUID]{uuid.NewV7()},
+			ExchangeRates: []byte(`[]`),
+			PriceVersions: pgtype.FlatArray[uuid.UUID]{uuid.NewV7()},
+			CreatedAtUs:   time.Now().UnixMicro(),
+		}
 	}
-	holds, errs, err := b.reserveMany(b.admitted, []int64{100})
-	if err != nil || errs[0] != nil {
-		t.Fatalf("batch: %v, %v", errs, err)
+	base := params(uuid.Nil())
+	batched, baseline := base, base
+	batched.RequestID, baseline.RequestID = uuid.NewV7(), uuid.NewV7()
+	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
+		if err := insertBatch(t.Context(), tx, []quotedReservation{{params: batched}}); err != nil {
+			return err
+		}
+		return writeHistoricReservation(t.Context(), tx, baseline)
+	}); err != nil {
+		t.Fatal(err)
 	}
 	const columns = `amount, prices, fallbacks, models, endpoints, exchange_rates, price_versions, workspace_window, key_window, state`
 	read := func(id uuid.UUID) string {
@@ -166,8 +224,8 @@ func TestReserveManyRowsMatchReserve(t *testing.T) {
 		}
 		return row
 	}
-	if got, want := read(holds[0].id), read(single.id); got != want {
-		t.Errorf("the batch wrote\n%s\nthe single reservation wrote\n%s", got, want)
+	if got, want := read(batched.RequestID), read(baseline.RequestID); got != want {
+		t.Errorf("the batch wrote\n%s\nthe historic insert wrote\n%s", got, want)
 	}
 	b.consistent()
 }

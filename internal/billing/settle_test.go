@@ -134,7 +134,7 @@ func (b *bank) holdOn(q Quotable, text int64) *Hold {
 
 func (b *bank) tryHoldOn(q Quotable, text int64) (h *Hold, err error) {
 	err = b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{q})
+		h, _, err = b.billing.reserveOne(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{q})
 		return err
 	})
 	return h, err
@@ -334,7 +334,7 @@ func TestALostRequestsRouteLeavesOutTheEntriesAdmissionDropped(t *testing.T) {
 	dropped.MaxOutput = 1e9 // a quote far beyond the balance
 	var h *Hold
 	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 1000}, []Quotable{first, dropped, last})
+		h, _, err = b.billing.reserveOne(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 1000}, []Quotable{first, dropped, last})
 		return err
 	}); err != nil {
 		t.Fatal(err)

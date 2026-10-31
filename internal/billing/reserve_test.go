@@ -92,7 +92,7 @@ func (b *bank) count(query string) int64 {
 func (b *bank) reserve(a Admitted, amount int64) (*Hold, error) {
 	var h *Hold
 	err := b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: amount}, []Quotable{b.exact})
+		h, _, err = b.billing.reserveOne(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: amount}, []Quotable{b.exact})
 		return err
 	})
 	return h, err
@@ -178,7 +178,7 @@ func (b *bank) storm(a Admitted, source Source) (total int64, refused []int64) {
 func refusedBy(t testing.TB, err error, source Source) bool {
 	var short *Insufficient
 	if err != nil && (!errors.As(err, &short) || short.Source != source) {
-		t.Errorf("Reserve: %v", err)
+		t.Errorf("reserveOne: %v", err)
 	}
 	return err != nil
 }
@@ -220,7 +220,7 @@ func (b *bank) holdOpen(a Admitted, id uuid.UUID, amount int64) (release chan st
 	release, done, held := make(chan struct{}), make(chan error, 1), make(chan struct{})
 	go func() {
 		done <- b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) error {
-			_, _, err := b.billing.Reserve(b.t.Context(), tx, a, id, Demand{TextBytes: amount}, []Quotable{b.exact})
+			_, _, err := b.billing.reserveOne(b.t.Context(), tx, a, id, Demand{TextBytes: amount}, []Quotable{b.exact})
 			close(held)
 			<-release
 			return err
@@ -374,7 +374,7 @@ func TestSettleOrphanRolledBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := b.app.Tx(ctx, b.admitted.Scope, func(tx pg.Tx) error {
-		_, _, err := b.billing.Reserve(ctx, tx, b.admitted, id, Demand{TextBytes: 1}, []Quotable{b.exact})
+		_, _, err := b.billing.reserveOne(ctx, tx, b.admitted, id, Demand{TextBytes: 1}, []Quotable{b.exact})
 		return err
 	})
 	if err == nil || b.count("SELECT count(*) FROM billing.reservations WHERE state = 'released' AND segment = 0") != 1 {
@@ -441,7 +441,7 @@ func TestReap(t *testing.T) {
 		t.Errorf("%d pending reservations left for cleanup, want 2", n)
 	}
 	if _, err := b.reserve(b.admitted, 1); !errors.Is(err, ErrTerminated) {
-		t.Errorf("Reserve after the reap: %v, want ErrTerminated", err)
+		t.Errorf("reserveOne after the reap: %v, want ErrTerminated", err)
 	}
 	if err := b.billing.Extend(ctx, h, ExtendRequest{Seq: 2, Target: platform.AmountExact(200)}); !errors.Is(err, ErrTerminated) {
 		t.Errorf("Extend after the reap: %v, want ErrTerminated", err)
@@ -452,7 +452,7 @@ func TestReap(t *testing.T) {
 	// A reaped holder stays fenced even if its expiry lies ahead again, as after the database's clock goes back.
 	b.sql("UPDATE billing.holders SET expires_at = clock_timestamp() + interval '1 hour'")
 	if _, err := b.reserve(b.admitted, 1); !errors.Is(err, ErrTerminated) {
-		t.Errorf("Reserve by a reaped holder unexpired: %v, want ErrTerminated", err)
+		t.Errorf("reserveOne by a reaped holder unexpired: %v, want ErrTerminated", err)
 	}
 }
 
@@ -464,13 +464,13 @@ func TestHeartbeat(t *testing.T) {
 	b := newBank(t, 1000, 0, Config{HolderTTL: time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
 	b.waitFor("SELECT count(*) FROM billing.holders WHERE expires_at < clock_timestamp()", 1)
 	if _, err := b.reserve(b.admitted, 1); !errors.Is(err, ErrTerminated) {
-		t.Fatalf("Reserve with the holder expired: %v, want ErrTerminated", err)
+		t.Fatalf("reserveOne with the holder expired: %v, want ErrTerminated", err)
 	}
 	if err := b.billing.Heartbeat(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.reserve(b.admitted, 1); err != nil {
-		t.Errorf("Reserve after the heartbeat: %v", err)
+		t.Errorf("reserveOne after the heartbeat: %v", err)
 	}
 }
 
