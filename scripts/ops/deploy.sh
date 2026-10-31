@@ -72,6 +72,9 @@ bash "$(dirname "${BASH_SOURCE[0]}")/../ci/verify-release.sh" "$image" "$record"
 # digest that was just verified even if the file changes during the run.
 export DEPLOY_IMAGE="$image"
 compose pull axiom migrate
+# The new build's content-hashed pages must be in the shared volume before the new binary serves them; the old build's
+# files stay, so a request that lands on an old node still finds its chunks.
+compose run --rm --no-deps --user 0:0 axiom web-assets /assets
 compose up --detach --no-build --wait --wait-timeout 60 postgres
 compose exec -T postgres sh < deploy/postgres/roles.sh
 compose up --detach --no-build --wait

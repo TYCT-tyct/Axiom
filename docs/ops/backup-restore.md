@@ -273,7 +273,7 @@ PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
   -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env tmp/release/release.json
 ```
 
-入口按顺序拉取该 digest、启动数据库、重放 `deploy/postgres/roles.sh` 的角色授权、再以 `--no-build` 启动整套栈。
+入口按顺序拉取该 digest、发布本构建的前端资源、启动数据库、重放 `deploy/postgres/roles.sh` 的角色授权、再以 `--no-build` 启动整套栈。
 任何一步失败即停：验签失败时没有 pull，也没有启动。不要把它拆成手工的 `sed`、验签、`pull`、`up`：只从
 `deploy/.env` 取镜像会验文件里的 A 而 Compose 拉环境变量里的 B，分成几段执行也没有失败控制。三份数据库口令须已在
 `deploy/.env` 中，否则启动数据库或重放角色授权会失败并停下。

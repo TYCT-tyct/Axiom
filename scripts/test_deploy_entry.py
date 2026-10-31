@@ -19,6 +19,7 @@ printf 'docker %s (DEPLOY_IMAGE=%s)\n' "$*" "${DEPLOY_IMAGE-}" >> "$CALLS"
 case "$*" in
   *" config --format json"*) printf '%s\n' "$COMPOSE_CONFIG" ;;
   *" pull "*) exit "${PULL_STATUS:-0}" ;;
+  *" run "*) exit "${RUN_STATUS:-0}" ;;
   *" up "*) exit "${UP_STATUS:-0}" ;;
 esac
 '''
@@ -46,7 +47,7 @@ esac
 @unittest.skipUnless(BASH, "Bash is unavailable")
 class DeployEntry(unittest.TestCase):
     def run_deploy(self, config, env_value="registry.example/from-file:latest", exported=None,
-                   verify_status=0, pull_status=0, up_status=0):
+                   verify_status=0, pull_status=0, run_status=0, up_status=0):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bindir = root / "bin"
@@ -69,7 +70,8 @@ class DeployEntry(unittest.TestCase):
             }))
             environment = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "CALLS": str(calls),
                            "COMPOSE_CONFIG": json.dumps(config), "VERIFY_STATUS": str(verify_status),
-                           "PULL_STATUS": str(pull_status), "UP_STATUS": str(up_status)}
+                           "PULL_STATUS": str(pull_status), "RUN_STATUS": str(run_status),
+                           "UP_STATUS": str(up_status)}
             for name in ("GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_REF", "RELEASE_SIGNING_IDENTITY",
                          "RELEASE_SIGNING_ISSUER", "RELEASE_ALLOW_INSECURE_REGISTRY", "DEPLOY_IMAGE"):
                 environment.pop(name, None)
@@ -98,11 +100,15 @@ class DeployEntry(unittest.TestCase):
             " --certificate-oidc-issuer https://token.actions.githubusercontent.com " + IMAGE])
         compose = self.compose_calls(calls)
         self.assertTrue(any(" pull axiom migrate " in call and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
+        self.assertTrue(any(" run --rm --no-deps --user 0:0 axiom web-assets /assets " in call
+                            and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
         self.assertTrue(any(" up --detach --no-build --wait --wait-timeout 60 postgres " in call
                             and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
         self.assertTrue(any(" exec -T postgres " in call for call in compose), compose)
         self.assertLess(next(i for i, call in enumerate(calls) if call.startswith("verify ")),
                         next(i for i, call in enumerate(calls) if " pull " in call))
+        self.assertLess(next(i for i, call in enumerate(calls) if " run " in call),
+                        next(i for i, call in enumerate(calls) if " up " in call))
 
     def test_an_exported_image_is_the_one_verified_not_the_env_file(self):
         # Compose interpolation prefers the shell over --env-file, so the exported digest is what pull and up would use.
@@ -134,6 +140,13 @@ class DeployEntry(unittest.TestCase):
         self.assertIn("different images", result.stderr)
         self.assertEqual(self.verified(calls), [])
         self.assertFalse(any(" pull " in call or " up " in call for call in self.compose_calls(calls)), calls)
+
+    def test_a_failed_web_assets_publish_stops_before_starting(self):
+        result, calls = self.run_deploy(self.config(), run_status=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(any(" run --rm --no-deps --user 0:0 axiom web-assets /assets " in call
+                            for call in self.compose_calls(calls)), calls)
+        self.assertFalse(any(" up " in call for call in self.compose_calls(calls)), calls)
 
     def test_a_failed_pull_stops_before_starting(self):
         result, calls = self.run_deploy(self.config(), pull_status=1)
