@@ -199,6 +199,7 @@ func (d *directScanner) rerankMember() error {
 	}
 }
 
+//nolint:cyclop,funlen // one member per key is the format's grammar; splitting it would hide the allowed set
 func (d *directScanner) completionsMember() error {
 	switch string(d.name) {
 	case "model":
