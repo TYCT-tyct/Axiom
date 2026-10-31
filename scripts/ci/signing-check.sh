@@ -138,26 +138,31 @@ refuse_identity "another workflow ref" \
   "https://github.com/$GITHUB_REPOSITORY/.github/workflows/ci.yml@refs/heads/not-this-ref" "$issuer"
 refuse_identity "a certificate from another issuer" "$identity" "https://issuer.example"
 
-# A's signature moved onto B: B's own reference is what the verifier asks cosign about, and the signed statement inside
-# the signature still names A, so cosign refuses it rather than merely finding no signature at all. The attach commands
-# are deprecated for cosign 4; the pinned 3.1.4 still ships them, and a tool upgrade has to replace this setup.
+# A's signature moved onto B: cosign 3 stores signatures and attestations in one OCI index under the image digest tag
+# (`sha256-<hex>`), so copying that tag attaches A's bundles to B without changing B's image. The signed payload still
+# names A, so cosign must refuse it rather than merely finding no signature at all.
+copy_bundles() { # from-digest to-digest
+  local from=$1 to=$2
+  curl -fsS -H 'Accept: application/vnd.oci.image.index.v1+json' \
+    "http://${repo%/*}/v2/${repo##*/}/manifests/sha256-${from#sha256:}" > "$tmp/bundle-index.json"
+  curl -fsS -X PUT -H 'Content-Type: application/vnd.oci.image.index.v1+json' \
+    --data-binary "@$tmp/bundle-index.json" \
+    "http://${repo%/*}/v2/${repo##*/}/manifests/sha256-${to#sha256:}" > /dev/null
+}
 moved="$(build moved)"
 moved_digest=${moved##*@}
-cosign download signature "${cosign_args[@]}" "$signed" > "$tmp/signature.json"
-cosign attach signature "${cosign_args[@]}" --bundle "$tmp/signature.json" "$moved" > /dev/null
+copy_bundles "$digest" "$moved_digest"
 record "$moved_digest" "$identity" "$issuer" "$tmp/moved.json"
 refuse_after_record "a signature moved from $digest to $moved_digest" "no valid keyless signature from" \
   "provided artifact digest does not match any digest in statement" \
   env RELEASE_SIGNING_IDENTITY="$identity" RELEASE_SIGNING_ISSUER="$issuer" RELEASE_ALLOW_INSECURE_REGISTRY=true \
   bash scripts/ci/verify-release.sh "$moved" "$tmp/moved.json"
 
-# A valid signature under the right identity but an SBOM attestation whose subject is A: the attestation must not be
-# accepted for another digest just because its signature and predicate are otherwise valid.
+# A valid attestation under the right identity whose subject is A: copying A's bundle index to C must not make the
+# verifier accept the attestation for C just because its signature and predicate are otherwise valid.
 attested="$(build attested)"
 attested_digest=${attested##*@}
-cosign sign --yes --oidc-provider=github-actions "${cosign_args[@]}" "$attested"
-cosign download attestation "${cosign_args[@]}" "$signed" > "$tmp/attestation.json"
-cosign attach attestation "${cosign_args[@]}" --attestation "$tmp/attestation.json" "$attested" > /dev/null
+copy_bundles "$digest" "$attested_digest"
 record "$attested_digest" "$identity" "$issuer" "$tmp/attested.json"
 refuse_after_record "an SBOM attestation whose subject is another digest" "no valid SPDX attestation from" \
   "provided artifact digest does not match any digest in statement" \
