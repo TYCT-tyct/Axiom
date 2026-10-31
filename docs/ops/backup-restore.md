@@ -180,10 +180,18 @@ docker exec axiom-pitr psql -U postgres -d axiom -Atc \
   "select version, state from platform.key_versions order by version"
 ```
 
-每次轮换前把当时的完整 `master` 文件另存一份（和 age 私钥分开，覆盖整个 PITR 窗口）。把包含这些版本的历史文件作为候选，用部署
-镜像、恢复库的应用角色连接串和 `AXIOM_MASTER_KEY_FILE` 指向该文件运行 `axiom keyring check`；通过后才继续换卷。检查失败就
-不要接管：换用含所需版本的历史文件，或放弃这个目标时间。`axiom keyring check` 只读数据库和候选文件，不替换正在用的 `keys`
-卷；确认后再把候选文件放进卷（0600，属主按部署的密钥服务要求）。
+每次轮换前把当时的完整 `master` 文件另存一份（和 age 私钥分开，覆盖整个 PITR 窗口）；这份归档保持不可变，不要直接拿它检查。
+`axiom keyring check` 不是只读的：数据库里已退役且没有任何信封引用的版本，会像节点启动时一样从它在 `AXIOM_MASTER_KEY_FILE`
+指向的文件里删掉（`internal/platform/secret/rotation.go` 的 `pruneRetired`）。所以先复制到独立、可写的候选目录，只对副本检查：
+
+```bash
+work=$(mktemp -d)
+install -m 600 /path/to/historical-master "$work/master"
+# 把 AXIOM_MASTER_KEY_FILE 指向 "$work/master"（容器挂载必须可写，不要 :ro），其余连接参数同恢复库。
+```
+
+通过后才把这份已检查的副本放进 `keys` 卷（0600，属主按部署的密钥服务要求），归档原件保持不动；恢复到更早目标时从归档重新复制，
+不要复用已被检查删减的副本。检查失败就不要接管：换用含所需版本的历史文件，或放弃这个目标时间。
 
 确认正确后，先停掉恢复实例，再停源库，把恢复卷的内容换进 `postgres` 卷。旧卷先复制一份到 `axiom_postgres_before_pitr`，确认
 新库没问题再删；不要在没有任何副本的情况下直接覆盖旧卷：
