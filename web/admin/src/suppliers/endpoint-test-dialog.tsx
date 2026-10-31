@@ -4,11 +4,11 @@ import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import { Code } from "../parts";
-import { duration } from "./endpoint-test";
+import { duration, testFormats } from "./endpoint-test";
 
 type Endpoint = AdminSchemas["SupplierEndpoint"];
 type Result = AdminSchemas["EndpointTest"];
-type Format = AdminSchemas["ModelFormat"];
+type Format = AdminSchemas["TestFormat"];
 
 // The server gives a test 45 seconds of generation and the whole operation a minute (api/admin.yaml); the call waits a
 // little longer than that, so the answer of a test that ran to its limit still arrives. The client's usual ten seconds
@@ -28,6 +28,7 @@ export function EndpointTestDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const formats = testFormats(endpoint.formats);
   return (
     <ChangeDialog
       operation={`endpoint-test:${endpoint.id}`}
@@ -35,8 +36,8 @@ export function EndpointTestDialog({
       intro={<p>{t("suppliers.test.body")}</p>}
       action={t("suppliers.test.action")}
       fields={() => (
-        <SelectField label={t("suppliers.test.format")} name="format" defaultValue={endpoint.formats[0]}>
-          {endpoint.formats.map((format) => (
+        <SelectField label={t("suppliers.test.format")} name="format" defaultValue={formats[0]}>
+          {formats.map((format) => (
             <option key={format} value={format}>
               {t(`suppliers.test.format_${format}`)}
             </option>
