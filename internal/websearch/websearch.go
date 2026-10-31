@@ -4,7 +4,9 @@
 package websearch
 
 import (
+	"bytes"
 	"context"
+	"encoding/json/jsontext" //nolint:depguard // read the backend's results token by token so their size is bounded
 	"errors"
 	"fmt"
 	"io"
@@ -38,13 +40,14 @@ const (
 
 	maxQueryBytes    = 8192
 	maxResponseBytes = 4 << 20
+	maxURLBytes      = 8 << 10
 	maxTitleBytes    = 256
 	maxContentBytes  = 1024
 )
 
-// WorkingSet is the most one Search may hold past the caller's query and request: the response body it reads and the
-// decoded results it builds from it. The gateway charges it to the node's budget before searching.
-const WorkingSet = 2 * maxResponseBytes
+// WorkingSet is the most one Search may hold past the caller's query and request: the response body, one value while
+// it is unquoted, and the bounded results. The gateway charges it to the node's budget before searching.
+const WorkingSet = 4 * maxResponseBytes
 
 // ErrUpstream is a search backend that did not answer with usable results: a status other than 200, a body over the
 // cap, malformed JSON, or a transport error. The gateway answers it as an upstream failure.
@@ -180,13 +183,11 @@ func (s *SearXNG) Search(ctx context.Context, q Query) ([]Result, error) {
 	if len(body) > maxResponseBytes {
 		return nil, fmt.Errorf("%w: the backend answered more than %d bytes", ErrUpstream, maxResponseBytes)
 	}
-	var wire struct {
-		Results []wireResult `json:"results"`
-	}
-	if err := jsonx.Unmarshal(body, &wire); err != nil {
+	results, err := parseResults(body, limit)
+	if err != nil {
 		return nil, fmt.Errorf("%w: the backend answered invalid JSON", ErrUpstream)
 	}
-	return collect(wire.Results, limit), nil
+	return results, nil
 }
 
 // transportFailure names what went wrong without the request's URL.
@@ -217,38 +218,215 @@ func queryText(text string, q Query) string {
 	return b.String()
 }
 
-// collect keeps the results a prompt can carry: an http(s) URL, no duplicate, and bounded text. SearXNG also returns
-// answers and key-value rows with no URL; those are not citations and are left out.
-func collect(wire []wireResult, limit int) []Result {
-	out := make([]Result, 0, min(limit, len(wire)))
-	seen := make(map[string]struct{}, len(wire))
-	for _, r := range wire {
-		if len(out) >= limit {
-			break
-		}
-		u, err := url.Parse(strings.TrimSpace(r.URL))
-		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" {
-			continue
-		}
-		key := u.String()
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, Result{
-			URL:     key,
-			Title:   truncate(strings.TrimSpace(r.Title), maxTitleBytes),
-			Content: truncate(strings.TrimSpace(r.Content), maxContentBytes),
-		})
+// results collects the results a prompt can carry: an http(s) URL, no duplicate, and bounded text. It never keeps
+// more than limit, so a response with many empty or invalid objects cannot grow the adapter's working set.
+type results struct {
+	limit int
+	out   []Result
+	seen  map[string]struct{}
+}
+
+func (c *results) add(r wireResult) {
+	if len(c.out) >= c.limit {
+		return
 	}
-	return out
+	key, ok := resultURL(r.URL)
+	if !ok {
+		return
+	}
+	if c.seen == nil {
+		c.seen = make(map[string]struct{}, c.limit)
+	}
+	if _, ok := c.seen[key]; ok {
+		return
+	}
+	c.seen[key] = struct{}{}
+	c.out = append(c.out, Result{
+		URL:     key,
+		Title:   truncate(strings.TrimSpace(r.Title), maxTitleBytes),
+		Content: truncate(strings.TrimSpace(r.Content), maxContentBytes),
+	})
+}
+
+// resultURL validates and normalizes one result's URL. SearXNG also returns answers and key-value rows with no URL;
+// those are not citations and are left out.
+func resultURL(raw string) (string, bool) {
+	if raw == "" {
+		return "", false
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" {
+		return "", false
+	}
+	return u.String(), true
+}
+
+// parseResults reads the results array one object at a time and keeps only its bounded, valid results. Decoding the
+// whole array first lets the number of empty objects decide the allocation, not the number of results; MaxResults
+// applies while reading, not after.
+func parseResults(body []byte, limit int) ([]Result, error) {
+	if err := jsonx.Validate(body); err != nil {
+		return nil, err
+	}
+	dec := jsontext.NewDecoder(bytes.NewReader(body))
+	if dec.PeekKind() != '{' {
+		return nil, errors.New("the backend response is not an object")
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, err
+	}
+	c := results{limit: limit, out: make([]Result, 0, limit)}
+	for dec.PeekKind() != '}' {
+		name, err := readMemberName(dec)
+		if err != nil {
+			return nil, err
+		}
+		if name != "results" {
+			if err := dec.SkipValue(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := readResultArray(dec, &c); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, err
+	}
+	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("the backend response has data after the object")
+	}
+	return c.out, nil
+}
+
+// readResultArray reads results one object at a time. A null array is the same as an absent one.
+func readResultArray(dec *jsontext.Decoder, c *results) error {
+	if dec.PeekKind() == 'n' {
+		_, err := dec.ReadToken()
+		return err
+	}
+	if dec.PeekKind() != '[' {
+		return errors.New("results is not an array")
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	for dec.PeekKind() != ']' {
+		if dec.PeekKind() == 'n' {
+			if _, err := dec.ReadToken(); err != nil {
+				return err
+			}
+			continue
+		}
+		if dec.PeekKind() != '{' {
+			return errors.New("a result is not an object")
+		}
+		r, ok, err := readResult(dec)
+		if err != nil {
+			return err
+		}
+		if ok {
+			c.add(r)
+		}
+	}
+	_, err := dec.ReadToken()
+	return err
+}
+
+// readResult reads one result's three fields, skipping the engine-specific ones. A field beyond its bound makes the
+// result unusable instead of being unquoted in full; the rest of the object is still skipped so the stream stays
+// aligned.
+func readResult(dec *jsontext.Decoder) (wireResult, bool, error) {
+	if _, err := dec.ReadToken(); err != nil {
+		return wireResult{}, false, err
+	}
+	var r wireResult
+	ok := true
+	for dec.PeekKind() != '}' {
+		name, err := readMemberName(dec)
+		if err != nil {
+			return wireResult{}, false, err
+		}
+		var field *string
+		max, shorten := 0, false
+		switch name {
+		case "url":
+			field, max = &r.URL, maxURLBytes
+		case "title":
+			field, max, shorten = &r.Title, maxTitleBytes, true
+		case "content":
+			field, max, shorten = &r.Content, maxContentBytes, true
+		default:
+			if err := dec.SkipValue(); err != nil {
+				return wireResult{}, false, err
+			}
+			continue
+		}
+		v, valid, err := readField(dec, max, shorten)
+		if err != nil {
+			return wireResult{}, false, err
+		}
+		if !valid {
+			ok = false
+			continue
+		}
+		*field = v
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return wireResult{}, false, err
+	}
+	return r, ok, nil
+}
+
+// readField reads a string field, or null, with a bound on both its encoded and decoded size. truncate lets a
+// title or snippet be shortened as before; a URL that is over the bound invalidates the result.
+func readField(dec *jsontext.Decoder, max int, shorten bool) (string, bool, error) {
+	if dec.PeekKind() == 'n' {
+		_, err := dec.ReadToken()
+		return "", err == nil, err
+	}
+	if dec.PeekKind() != '"' {
+		return "", false, errors.New("a result field is not a string")
+	}
+	raw, err := dec.ReadValue()
+	if err != nil {
+		return "", false, err
+	}
+	if len(raw) > 6*max+2 {
+		return "", false, nil
+	}
+	b, err := jsontext.AppendUnquote(nil, raw)
+	if err != nil {
+		return "", false, err
+	}
+	s := string(b)
+	if len(s) > max {
+		if !shorten {
+			return "", false, nil
+		}
+		s = truncate(s, max)
+	}
+	return s, true, nil
+}
+
+func readMemberName(dec *jsontext.Decoder) (string, error) {
+	raw, err := dec.ReadValue()
+	if err != nil {
+		return "", err
+	}
+	b, err := jsontext.AppendUnquote(nil, raw)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // wireResult is the part of a SearXNG result this adapter reads; the API's many engine-specific members are left out.
 type wireResult struct {
-	URL     string `json:"url"`
-	Title   string `json:"title"`
-	Content string `json:"content"`
+	URL     string
+	Title   string
+	Content string
 }
 
 // truncate cuts a UTF-8 string to at most n bytes without splitting a rune.

@@ -80,165 +80,176 @@ func (r *reader) searchMessages() (string, error) {
 		return "", nil
 	}
 	var last string
+	var tooLong bool
 	for r.dec.PeekKind() != ']' {
-		q, role, err := r.searchMessage()
+		q, over, role, err := r.searchMessage()
 		if err != nil {
 			return "", err
 		}
 		if role == "user" {
-			last = q
+			last, tooLong = q, over
 		}
 	}
 	if err := r.token(); err != nil {
 		return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
+	if tooLong {
+		return "", fmt.Errorf("%w: the search query is longer than %d bytes", ErrInvalid, MaxWebSearchQueryBytes)
+	}
 	return last, nil
 }
 
-// searchMessage reads one message's role and content text; every other member is skipped.
-func (r *reader) searchMessage() (text, role string, err error) {
+// searchMessage reads one message's role and content text; every other member is skipped. A too-long content is a
+// flag, not an error: only the last user message is the query, so an earlier long message and a non-user message
+// must not refuse the request, whatever order their members came in.
+func (r *reader) searchMessage() (text string, over bool, role string, err error) {
 	if r.dec.PeekKind() != '{' {
-		return "", "", fmt.Errorf("%w: a message is not an object", ErrInvalid)
+		return "", false, "", fmt.Errorf("%w: a message is not an object", ErrInvalid)
 	}
 	if err := r.token(); err != nil {
-		return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		return "", false, "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
 	for r.dec.PeekKind() != '}' {
 		if err := r.member(); err != nil {
-			return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+			return "", false, "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 		}
 		switch string(r.name) {
 		case "role":
 			v, err := r.str()
 			if err != nil {
-				return "", "", fmt.Errorf("%w: a message's role is not a string", ErrInvalid)
+				return "", false, "", fmt.Errorf("%w: a message's role is not a string", ErrInvalid)
 			}
 			role = string(v)
 		case "content":
 			if role != "" && role != "user" {
 				if err := r.skip(); err != nil {
-					return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+					return "", false, "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 				}
 				continue
 			}
-			if text, err = r.searchContent(); err != nil {
-				return "", "", err
+			if text, over, err = r.searchContent(); err != nil {
+				return "", false, "", err
 			}
 		default:
 			if err := r.skip(); err != nil {
-				return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+				return "", false, "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 			}
 		}
 	}
 	if err := r.token(); err != nil {
-		return "", "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		return "", false, "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
-	return text, role, nil
+	return text, over, role, nil
 }
 
 // searchContent reads a message's content as its text parts, or null. A string is one text part; an array's parts
-// contribute only when their type is text.
-func (r *reader) searchContent() (string, error) {
+// contribute only when their type is text. Content over the query bound is discarded and reported with over, so the
+// caller can decide after it knows the message's role.
+func (r *reader) searchContent() (string, bool, error) {
 	switch k := r.dec.PeekKind(); k {
 	case 'n':
-		return "", r.token()
+		return "", false, r.token()
 	case '"':
 		return r.searchString()
 	case '[':
 	default:
-		return "", fmt.Errorf("%w: a message's content is not a string or an array", ErrInvalid)
+		return "", false, fmt.Errorf("%w: a message's content is not a string or an array", ErrInvalid)
 	}
 	if err := r.token(); err != nil {
-		return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		return "", false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
 	var b strings.Builder
+	var over bool
 	for r.dec.PeekKind() != ']' {
 		if r.dec.PeekKind() != '{' {
-			return "", fmt.Errorf("%w: a content part is not an object", ErrInvalid)
+			return "", false, fmt.Errorf("%w: a content part is not an object", ErrInvalid)
 		}
 		if err := r.token(); err != nil {
-			return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+			return "", false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 		}
 		var kind, text string
+		var partOver bool
 		for r.dec.PeekKind() != '}' {
 			if err := r.member(); err != nil {
-				return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+				return "", false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 			}
 			switch string(r.name) {
 			case "type":
 				v, err := r.str()
 				if err != nil {
-					return "", fmt.Errorf("%w: a content part's type is not a string", ErrInvalid)
+					return "", false, fmt.Errorf("%w: a content part's type is not a string", ErrInvalid)
 				}
 				kind = string(v)
 			case "text":
-				v, err := r.searchString()
+				v, too, err := r.searchString()
 				if err != nil {
-					return "", err
+					return "", false, err
 				}
-				text = v
+				text, partOver = v, too
 			default:
 				if err := r.skip(); err != nil {
-					return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+					return "", false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 				}
 			}
 		}
 		if err := r.token(); err != nil {
-			return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+			return "", false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 		}
 		if kind == "text" {
-			if err := appendSearchText(&b, text); err != nil {
-				return "", err
+			if over || partOver {
+				over = true
+				continue
 			}
+			over = appendSearchText(&b, text)
 		}
 	}
 	if err := r.token(); err != nil {
-		return "", fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		return "", false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
-	return b.String(), nil
+	return b.String(), over, nil
 }
 
 // searchString reads one string and bounds it before unquoting. The bound is a little over the query limit because
-// escapes may shrink a value; a part that is plainly too large is refused without building the unescaped copy.
-func (r *reader) searchString() (string, error) {
+// escapes may shrink a value; a string that is plainly too large is reported without building the unescaped copy.
+func (r *reader) searchString() (string, bool, error) {
 	v, err := r.raw()
 	if err != nil {
-		return "", fmt.Errorf("%w: a message's text is not a string", ErrInvalid)
+		return "", false, fmt.Errorf("%w: a message's text is not a string", ErrInvalid)
 	}
 	if v == nil {
-		return "", nil
+		return "", false, nil
 	}
 	if len(v) > 6*MaxWebSearchQueryBytes+2 {
-		return "", fmt.Errorf("%w: the search query is longer than %d bytes", ErrInvalid, MaxWebSearchQueryBytes)
+		return "", true, nil
 	}
 	b, err := r.unquote(v)
 	if err != nil {
-		return "", fmt.Errorf("%w: a message's text is not a string", ErrInvalid)
+		return "", false, fmt.Errorf("%w: a message's text is not a string", ErrInvalid)
 	}
 	if len(b) > MaxWebSearchQueryBytes {
-		return "", fmt.Errorf("%w: the search query is longer than %d bytes", ErrInvalid, MaxWebSearchQueryBytes)
+		return "", true, nil
 	}
-	return string(b), nil
+	return string(b), false, nil
 }
 
-// appendSearchText adds a text part, separating parts by a newline as ChatSearchQuery always has, and stops before
-// the query bound. The newline is counted too, so the final query stays within the bound.
-func appendSearchText(b *strings.Builder, text string) error {
+// appendSearchText adds a text part, separating parts by a newline as ChatSearchQuery always has, and reports
+// whether the result crossed the query bound. The newline is counted too, so the final query stays within the bound.
+func appendSearchText(b *strings.Builder, text string) bool {
 	if text == "" {
-		return nil
+		return false
 	}
 	need := len(text)
 	if b.Len() > 0 {
 		need++
 	}
 	if b.Len()+need > MaxWebSearchQueryBytes {
-		return fmt.Errorf("%w: the search query is longer than %d bytes", ErrInvalid, MaxWebSearchQueryBytes)
+		return true
 	}
 	if b.Len() > 0 {
 		b.WriteByte('\n')
 	}
 	b.WriteString(text)
-	return nil
+	return false
 }
 
 // InjectWebSearch puts text in a system message before the first user message of a Chat body: leading system messages

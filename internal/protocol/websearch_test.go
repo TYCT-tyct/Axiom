@@ -157,3 +157,28 @@ func TestChatSearchQueryScansLongHistoryAndBoundsTheQuery(t *testing.T) {
 		t.Fatalf("non-text parts = %q, %v", got, err)
 	}
 }
+
+func TestChatSearchQueryIgnoresLongEarlierMessagesAndMemberOrder(t *testing.T) {
+	long := strings.Repeat("x", protocol.MaxWebSearchQueryBytes+1)
+	cases := map[string]string{
+		"long earlier user message":          `{"messages":[{"role":"user","content":"` + long + `"},{"role":"assistant","content":"ok"},{"role":"user","content":"hello"}]}`,
+		"long assistant content before role": `{"messages":[{"content":"` + long + `","role":"assistant"},{"role":"user","content":"hello"}]}`,
+		"long assistant content after role":  `{"messages":[{"role":"assistant","content":"` + long + `"},{"role":"user","content":"hello"}]}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := protocol.ChatSearchQuery([]byte(body))
+			if err != nil || got != "hello" {
+				t.Fatalf("ChatSearchQuery() = %q, %v; want hello", got, err)
+			}
+		})
+	}
+	longUser := `{"messages":[{"role":"assistant","content":"ok"},{"role":"user","content":"` + long + `"}]}`
+	if _, err := protocol.ChatSearchQuery([]byte(longUser)); err == nil {
+		t.Fatal("ChatSearchQuery() accepted a long final user message")
+	}
+	beforeRole := `{"messages":[{"content":"` + long + `","role":"user"}]}`
+	if _, err := protocol.ChatSearchQuery([]byte(beforeRole)); err == nil {
+		t.Fatal("ChatSearchQuery() accepted a long final user message written before its role")
+	}
+}

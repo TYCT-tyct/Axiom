@@ -23,8 +23,8 @@
 
 - 查询词是 `protocol.ChatSearchQuery` 逐 token 扫出的最后一条用户消息的文本部件，不整份解码历史；空查询在准入前就 400，超过 1024 字节也 400。
 - `max_results` 默认 5，上限 10。`include_domains` / `exclude_domains` 在协议层已校验成纯主机名（小写、有点、不含前后连字符或连续点），这里只转成 `site:` 和 `-site:` 操作符，不拼接客户端原文。
-- 一次 `Search` 的工作集（响应正文和解码结果）由网关按 `WorkingSet`（8 MiB）在搜索前计入节点预算；注入的正文再按原正文三倍加 `WebSearchMaxBytes` 计入，调用结束才归还。
-- 请求是 `GET {base}/search?q=...&format=json`，`Accept: application/json`，配了 key 时带 `Authorization: Bearer`。响应必须是 200，正文最多 4 MiB；只收 `http`/`https` 且有 URL 的条目，按 URL 去重，标题截到 256 字节、摘要截到 1024 字节，按 UTF-8 边界截断。
+- 一次 `Search` 的工作集（响应正文和解码结果）由网关按 `WorkingSet`（16 MiB）在搜索前计入节点预算；注入的正文再按原正文三倍加 `WebSearchMaxBytes` 计入，调用结束才归还。
+- 请求是 `GET {base}/search?q=...&format=json`，`Accept: application/json`，配了 key 时带 `Authorization: Bearer`。响应必须是 200，正文最多 4 MiB；只收 `http`/`https` 且有 URL 的条目，逐项读取结果，只保留最多 `max_results` 条有效结果；URL 最长 8 KiB，标题截到 256 字节、摘要截到 1024 字节，按 UTF-8 边界截断，重复 URL 用有界的结果数去重，空对象或无效结果不会按响应里的条数分配。
 - 查询词、响应正文和密钥都不进错误和日志；错误只说明类别（`ErrUpstream`、`ErrNoQuery`、超时）。搜索失败在网关里是普通上游失败：没有模型调用、没有模型用量，也不收这次搜索。
 
 ## 部署 SearXNG
