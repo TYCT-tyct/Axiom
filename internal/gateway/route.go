@@ -279,16 +279,25 @@ func onlyDirectFormats(formats []protocol.Format) bool {
 	return true
 }
 
+// listedModelOf is the catalog model an endpoint may serve, or why it cannot: the catalog is the authority on what may
+// be served, and suppliers may keep a mapping to a model retired since their last sync.
+func listedModelOf(snap *catalog.Snapshot, id catalog.ModelID) (catalog.Model, string) {
+	model, ok := snap.Model(id)
+	switch {
+	case !ok:
+		return catalog.Model{}, "the catalog has no such model"
+	case model.Status != catalog.StatusListed:
+		return catalog.Model{}, "the catalog model is not listed"
+	}
+	return model, ""
+}
+
 func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
 	measured quality.Measures,
 ) (routing.Endpoint, string) {
-	model, ok := snap.Model(catalog.ModelID(r.Model))
-	if !ok {
-		return routing.Endpoint{}, "the catalog has no such model"
-	}
-	if model.Status != catalog.StatusListed {
-		// Suppliers may keep a mapping until their next sync; the catalog is the authority on what may be served.
-		return routing.Endpoint{}, "the catalog model is not listed"
+	model, why := listedModelOf(snap, catalog.ModelID(r.Model))
+	if why != "" {
+		return routing.Endpoint{}, why
 	}
 	serving, ok := servingOf(model, r.Formats)
 	if !ok {

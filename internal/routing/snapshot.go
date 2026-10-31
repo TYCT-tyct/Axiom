@@ -309,16 +309,12 @@ func priceOf(p PriceRef, direct bool) (candidatePrice, error) {
 func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error) {
 	s := &Snapshot{built: built, byModel: map[catalog.ModelID][]*candidate{}, presets: make(map[PresetID]Preset, len(presets))}
 	seen := make(map[EndpointID]struct{}, len(endpoints))
-	free := make(map[catalog.ModelID]struct{}, len(endpoints))
 	prices := map[*billing.AudiencePrices][]candidatePrice{}
 	for _, e := range endpoints {
 		if _, dup := seen[e.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: endpoint %s twice", uuid.UUID(e.ID))
 		}
 		seen[e.ID] = struct{}{}
-		if e.Free {
-			free[e.Model] = struct{}{}
-		}
 		c, err := r.snapshotCandidate(e, prices)
 		if err != nil {
 			return nil, err
@@ -326,15 +322,7 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 
 		s.byModel[e.Model] = append(s.byModel[e.Model], c)
 	}
-	for m := range s.byModel {
-		s.models = append(s.models, m)
-	}
-	slices.SortFunc(s.models, func(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) })
-	for _, m := range s.models {
-		if _, ok := free[m]; ok {
-			s.free = append(s.free, m)
-		}
-	}
+	s.models, s.free = modelsOf(endpoints)
 	for _, p := range presets {
 		if _, dup := s.presets[p.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: preset %s twice", uuid.UUID(p.ID))
@@ -350,6 +338,27 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 	}
 	return s, nil
 }
+
+// modelsOf lists the models in id order, and the free ones among them in the same order: a model is free when its
+// endpoint serves the catalog's :free entry, and those are the only ones openrouter/free may choose.
+func modelsOf(endpoints []Endpoint) (models, free []catalog.ModelID) {
+	isFree := make(map[catalog.ModelID]bool, len(endpoints))
+	for _, e := range endpoints {
+		isFree[e.Model] = isFree[e.Model] || e.Free
+	}
+	for m, f := range isFree {
+		models = append(models, m)
+		if f {
+			free = append(free, m)
+		}
+	}
+	slices.SortFunc(models, compareModelID)
+	slices.SortFunc(free, compareModelID)
+	return models, free
+}
+
+// compareModelID orders models as bytes, the order of the database's uuids.
+func compareModelID(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) }
 
 func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrices][]candidatePrice) (*candidate, error) {
 	c, err := r.candidate(e)
