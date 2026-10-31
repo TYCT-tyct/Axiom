@@ -113,6 +113,7 @@ AXIOM_POSTGRES_PASSWORD=$(openssl rand -hex 24)
 AXIOM_APP_PASSWORD=$(openssl rand -hex 24)
 AXIOM_MIGRATOR_PASSWORD=$(openssl rand -hex 24)
 AXIOM_BACKUP_BUCKET=$bucket
+AXIOM_BACKUP_CIPHER_PASS=$(openssl rand -hex 24)
 AXIOM_BACKUP_PREFIX=$prefix
 AXIOM_BACKUP_S3_ENDPOINT=http://s3:9000
 AXIOM_BACKUP_S3_ACCESS_KEY_ID=rehearsal
@@ -129,6 +130,10 @@ AXIOM_EDGE_API_HOST=api.rehearsal.example
 AXIOM_EDGE_ADMIN_HOST=admin.rehearsal.example
 AXIOM_EDGE_TLS_ISSUER=internal
 EOF
+# The initial cluster has no pgBackRest stanza yet, so it must not archive: an archive-push with no repository can stall
+# the temporary server's shutdown. Keep the switch in the shell for this stack and leave the set's file without the line,
+# so the restore below still exercises adding it.
+export AXIOM_BACKUP_WAL_BUCKET=
 
 echo "== 2/10 build the images just up builds, plus the backup job's"
 # The Caddyfile names its issuer as a module, and Caddy substitutes the variable before parsing, so the shape of what it
@@ -158,6 +163,8 @@ chmod 0755 deploy/bin/axiom
 # The ops image copies /axiom out of the program image, so that image has to exist before the ops build resolves its FROM.
 compose build axiom
 compose --profile ops build
+# The database image is this tree's (pgBackRest on the pinned PostgreSQL tag); nothing else builds it before the first up.
+compose build postgres
 # The transfer limit is shared by the backup and restore jobs; a non-default value has to reach both, not only the
 # service that happened to gain the override.
 config=$(AXIOM_BACKUP_TRANSFER_TIMEOUT=24h compose --profile ops config)
@@ -350,7 +357,11 @@ skip < "$work/after/fingerprint.txt" > "$work/after/state.txt"
 diff -u "$work/before/state.txt" "$work/after/state.txt" || die "the restored database differs from the backup"
 diff -u "$work/before/roles.txt" "$work/after/roles.txt" || die "the restored roles differ from the backup"
 diff -u "$work/before/keys.txt" "$work/after/keys.txt" || die "the restored key ring differs from the backup"
-cmp "$work/before/deploy.env" "$env_file" || die "the restored environment file differs from the backup"
+# The restore adds AXIOM_BACKUP_WAL_BUCKET= so the new system identifier stays out of the old stanza; everything else in
+# the installed file must match the set's copy, and the switch must be there from this first restore onwards.
+cmp -s <(grep -v '^AXIOM_BACKUP_WAL_BUCKET=' "$work/before/deploy.env") \
+  <(grep -v '^AXIOM_BACKUP_WAL_BUCKET=' "$env_file") || die "the restored environment file differs from the backup"
+grep -qx 'AXIOM_BACKUP_WAL_BUCKET=' "$env_file" || die "the restore did not disable WAL archiving in the installed file"
 tables=$(grep -c . "$work/before/state.txt" || true)
 rows=$(awk -F'|' '{sum += $2} END {print sum}' "$work/before/state.txt")
 echo "   $tables tables and $rows rows, the roles, the key ring and the environment file came back identical"
@@ -399,8 +410,12 @@ AXIOM_RESTORE_DB_IDENTITY="$work/identities/db.key" AXIOM_RESTORE_SECRETS_IDENTI
   bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml -f deploy/compose.rehearsal.yaml \
   --env-file "$env_file" "$newest"
 # The installed file is the set's own, so it names the old location and the revoked credentials: that is the deployment's
-# configuration as of the backup, which is what a restore installs and what the next step of the runbook replaces.
-cmp -s "$work/before/deploy.env" "$env_file" || die "the second restore did not install the set's environment file"
+# configuration as of the backup, which is what a restore installs and what the next step of the runbook replaces. The
+# restore also adds AXIOM_BACKUP_WAL_BUCKET= (the restored cluster must not push into the old stanza); compare the rest and
+# require that line, so the permanent switch off is what the rehearsal exercises rather than a compose override.
+cmp -s <(grep -v '^AXIOM_BACKUP_WAL_BUCKET=' "$work/before/deploy.env") \
+  <(grep -v '^AXIOM_BACKUP_WAL_BUCKET=' "$env_file") || die "the second restore did not install the set's environment file"
+grep -qx 'AXIOM_BACKUP_WAL_BUCKET=' "$env_file" || die "the restore did not disable WAL archiving in the installed file"
 echo "   restored $newest from the new prefix with the rotated credentials"
 
 echo

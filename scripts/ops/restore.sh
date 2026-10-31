@@ -162,8 +162,22 @@ compose run --rm --user "$(id -u):$(id -g)" --env AXIOM_RESTORE_STEP=config --en
   --volume "$(docker_path "$out"):/out" restore
 cp "$out/deploy.env" "$env_file"
 chmod 600 "$env_file"
+# The cluster this creates has a new system identifier, while the WAL repository in the bucket belongs to the one that was
+# lost: archive-push would fail against its stanza, and an old set without the cipher passphrase would refuse to start.
+# Turn the WAL bucket off in the installed file itself, not just for one command, so every later start stays off until a
+# new repository is configured; AXIOM_BACKUP_BUCKET stays for the logical sets and the restore jobs below.
+if grep -q '^AXIOM_BACKUP_WAL_BUCKET=' "$env_file"; then
+  sed -i 's/^AXIOM_BACKUP_WAL_BUCKET=.*/AXIOM_BACKUP_WAL_BUCKET=/' "$env_file"
+else
+  [ -z "$(tail -c1 "$env_file")" ] || printf '\n' >>"$env_file"
+  printf 'AXIOM_BACKUP_WAL_BUCKET=\n' >>"$env_file"
+fi
+# Interpolation checks the environment before the file, so the shell must agree with the line just installed.
+export AXIOM_BACKUP_WAL_BUCKET=
 
 echo "== 2/6 create the cluster from it, with the login roles the image's init scripts make"
+# The installed file has the WAL bucket empty, so this start and every later one keep the new cluster out of the old
+# stanza; the logical set bucket remains for the restore jobs and for later backups.
 compose up --detach --wait --wait-timeout 120 postgres
 
 # axiom_owner and axiom_lookup are NOLOGIN and belong to the migrations, so the program creates them: every object in the
