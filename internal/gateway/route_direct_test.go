@@ -31,3 +31,24 @@ func TestRouteDirectOnlyModelNeedsNoGenerationSpec(t *testing.T) {
 		t.Fatalf("routing plans to %v, want the direct-only endpoint %s", got, r.ID)
 	}
 }
+
+// TestDirectRequireParameters: provider.require_parameters reads a direct request's own members as its structure, not
+// as parameters no endpoint declares, so a rerank or embeddings call that asks for it is routed rather than refused.
+func TestDirectRequireParameters(t *testing.T) {
+	for _, tc := range []struct {
+		format protocol.Format
+		body   string
+	}{
+		{protocol.Rerank, `{"model":"m","query":"q","documents":["d"],"provider":{"require_parameters":true}}`},
+		{protocol.Embeddings, `{"model":"m","input":["a","b"],"provider":{"require_parameters":true}}`},
+	} {
+		req, err := protocol.Inspect(tc.format, []byte(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		over, _, err := readRouting(&req, []byte(tc.body))
+		if err != nil || !over.RequireParameters || over.RequiredParameters != 0 {
+			t.Errorf("format %d: override %+v, error %v; want require_parameters kept with nothing to declare", tc.format, over, err)
+		}
+	}
+}
