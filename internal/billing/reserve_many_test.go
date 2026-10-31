@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -169,6 +170,31 @@ func TestReserveManyRowsMatchReserve(t *testing.T) {
 		t.Errorf("the batch wrote\n%s\nthe single reservation wrote\n%s", got, want)
 	}
 	b.consistent()
+}
+
+// TestReserveManyWritesTheCallStart: the caller's start, before admission and before the call log's write, is the
+// reservation's created_at, so a window cannot count the call and miss its money by the admission's latency.
+func TestReserveManyWritesTheCallStart(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 1e6, 0, Config{})
+	at := time.Date(2026, 10, 31, 11, 59, 59, 990_000_000, time.UTC)
+	id := uuid.NewV7()
+	reqs := []ReserveRequest{{Admitted: b.admitted, ID: id, At: at, Demand: Demand{TextBytes: 100}, Quotables: []Quotable{b.exact}}}
+	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
+		_, _, _, err = b.billing.ReserveMany(t.Context(), tx, reqs)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got time.Time
+	if err := b.app.ReadTx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT created_at FROM billing.reservations WHERE request_id = $1", id).Scan(&got)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(at) {
+		t.Errorf("created_at = %s, want the call's start %s", got, at)
+	}
 }
 
 // TestReserveManyRollsBackOnAWriteFailure: a database error in the insert pipeline takes the whole batch down; no

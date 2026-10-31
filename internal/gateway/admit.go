@@ -134,7 +134,7 @@ func (h *Handler) reserveBatch(ctx context.Context, tx pg.Tx, live []*admissionI
 			continue
 		}
 		reqs = append(reqs, billing.ReserveRequest{
-			Admitted: it.admitted, ID: it.call.ID,
+			Admitted: it.admitted, ID: it.call.ID, At: it.call.At,
 			Demand: routing.DemandOf(&it.call.Request), Quotables: quotables(it.plan.Entries),
 		})
 		quoted = append(quoted, it)

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 	"uuid"
 
@@ -168,6 +169,7 @@ func isMessagesPath(path string) bool {
 // reservation covers. Run gets it; nothing in it changes after that but what Run does through its methods.
 type Call struct {
 	ID        uuid.UUID // the request ID, which is also the call number
+	At        time.Time // one start for the call log and the reservation: the request's arrival, before admission
 	Format    protocol.Format
 	Compact   bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
 	Request   protocol.Request
@@ -287,7 +289,7 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol
 	if err != nil {
 		return nil, err
 	}
-	c := &Call{ID: id, Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: h.clientIP(r)}
+	c := &Call{ID: id, At: time.Now(), Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: h.clientIP(r)}
 	if err := h.take(w, r, c); err != nil {
 		if !errors.Is(err, errCommitUnknown) {
 			c.Done()

@@ -26,7 +26,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 
 | # | 做什么 | 模块 | 往返 | 期限 | 失败时 |
 |---|---|---|---|---|---|
-| 0 | 生成请求 ID（UUIDv7），即调用编号 | gateway | — | — | — |
+| 0 | 生成请求 ID（UUIDv7），即调用编号；在接收请求时记下到达时刻 `Call.At`，调用记录和预留都用这一个开始 | gateway | — | — | — |
 | 1 | 按 IP 的在途上限；只用 Host 和请求头：`SiteForHost`、`AuthenticateKey`（未命中查库、合并并发查找）。不读请求体 | gateway、accounts | 0；未命中 1 个事务 | 1s | 429；401 立即关闭；库不可用或站点快照过旧 503 |
 | 2 | 按账户在途上限，再取节点在途名额，每路记 64 KiB | gateway | — | — | 429 / 503 |
 | 3 | 有上限地读请求体，长度计入节点内存预算 | gateway | — | 2 分钟 | 413 / 408 / 503 |
@@ -37,6 +37,8 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 | 8 | 提交后边读边计量边转发，按段 `Extend` | gateway、protocol、billing | 每段 9 DB（已覆盖时 6） | 追加 1s | 截断 |
 | 9 | 上游正常结束：结算批提交 → `Relay.Finish` 写最后一个事件 | billing、suppliers、protocol | 单请求一次尝试 9 DB，批量摊薄 | 2s × 重试 | 「结束与结算」 |
 | 10 | 每条退出路径释放凭证、名额；异步写调用记录、quality 观测、粘性 | gateway、observability、quality | 0 | — | 「并发、背压与共享状态」 |
+
+`Call.At` 在 `accept` 里取一次，是请求到达的时刻，早于读体和准入；`reserveBatch` 把它交给 `billing.ReserveMany`（`created_at` 按微秒），`trail` 用它写调用记录的 `at`，所以一次调用和它的钱落在同一个窗口里，不会因为准入跨过窗口边界而分开。执行耗时仍从 `newSession` 的开始算，准入耗时不计入上游延迟。升级前写入的预留保留当时的 `created_at`，口径见[运营的「运营看板」](../../docs/domains/operations.md#运营看板)；`TestAdmissionReservesTheDearestKeptEntry` 读回预留的 `created_at` 与 `Call.At` 比较，`TestTrailUsesTheCallStart` 守住记录不退回执行开始。
 
 ## 准入
 

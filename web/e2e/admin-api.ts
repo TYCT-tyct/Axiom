@@ -73,8 +73,16 @@ function putTier({ body, params, state }: Ctx<"/api/admin/v1/accounts/{account_i
 function listCalls({ query, state }: Ctx<"/api/admin/v1/calls", "get">) {
   const account = query.get("account_id");
   const request = query.get("request_id");
+  const site = query.get("site_id");
+  const model = query.get("model");
+  const status = query.get("status");
   const calls = state.calls.filter(
-    (call) => (!account || call.account_id === account) && (!request || call.id === request),
+    (call) =>
+      (!account || call.account_id === account) &&
+      (!request || call.id === request) &&
+      (!site || site === state.siteId) &&
+      (!model || call.model === model) &&
+      (!status || (status === "error" ? Boolean(call.error_kind) : !call.error_kind)),
   );
   const page = paged(calls, query, ["since", "until"]);
   if (!page) {
@@ -84,8 +92,28 @@ function listCalls({ query, state }: Ctx<"/api/admin/v1/calls", "get">) {
   return ok({
     ...rest,
     ...(next_cursor ? { next_cursor } : {}),
+    ...(model ? { model_filter: model } : {}),
+    ...(status ? { status_filter: status as Schemas["AdminCallStatus"] } : {}),
+    ...(site ? { site_filter: site } : {}),
     since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
     until: query.get("until") ?? "2026-10-30T23:59:59.000Z",
+  });
+}
+
+function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "get">) {
+  const errors = state.calls.filter((call) => call.error_kind).length;
+  return ok({
+    site_id: state.siteId,
+    since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
+    until: query.get("until") ?? "2026-10-30T23:59:59.000Z",
+    calls: state.calls.length,
+    errors,
+    revenue: { amount: "2500", currency: "USD" },
+    cost: { amount: "1000", currency: "USD" },
+    unknown_cost_calls: 0,
+    cash: [{ amount: "1500", currency: "USD" }],
+    top_accounts: [],
+    top_models: [],
   });
 }
 
@@ -339,6 +367,9 @@ const handlers: Handler<AdminState>[] = [
   ),
   route("get", `${base}/payments/orders`, reads("sites.manage"), listPaymentOrders),
   route("get", `${base}/payments/refunds`, reads("sites.manage"), listPaymentRefunds),
+  route("get", `${base}/payments/cash`, reads("sites.manage"), ({ query, state }) =>
+    query.get("site_id") === state.siteId ? ok({ data: [], next_cursor: null }) : fail(404, "not_found"),
+  ),
   route("post", `${base}/payments/refunds/{refund_id}/approve`, changes("sites.manage"), (ctx) =>
     decideRefund("approve", ctx),
   ),
@@ -351,6 +382,7 @@ const handlers: Handler<AdminState>[] = [
   route("put", `${base}/accounts/{account_id}/suspension`, changes("users.manage"), putSuspension),
   route("put", `${base}/accounts/{account_id}/tier`, changes("users.manage"), putTier),
   route("put", `${base}/users/{user_id}/sign-in`, changes("users.manage"), putSignIn),
+  route("get", `${base}/reports/overview`, reads("sites.manage"), getOverview),
   route("get", `${base}/calls`, reads("calls.search"), listCalls),
   route("get", `${base}/calls/{call_id}/trace`, reads("calls.inspect"), getTrace),
   route("get", `${base}/audit`, reads("audit.view"), listAudit),

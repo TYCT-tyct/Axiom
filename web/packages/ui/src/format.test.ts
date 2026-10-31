@@ -10,6 +10,7 @@ describe("money", () => {
     { zh: "US$0.000031", en: "$0.000031", amount: "31000" },
     { zh: "-US$2.25", en: "-$2.25", amount: "-2250000000" },
     { zh: "US$9,223,372,036.854775807", en: "$9,223,372,036.854775807", amount: "9223372036854775807" },
+    { zh: "US$10,000,000,000.00", en: "$10,000,000,000.00", amount: "10000000000000000000" },
   ])("formats $amount exactly in both languages", ({ zh, en, amount }) => {
     const money = { amount, currency: "USD" };
     expect(formatters("zh").money(money)).toBe(zh);
