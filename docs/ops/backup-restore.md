@@ -398,31 +398,29 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 
 `deploy/compose.edge.yaml` 在程序前面加一个 Caddy 容器，配置是 `deploy/ingress/Caddyfile`。
 生产先按[发布的 digest 选择与核对](release.md#选择和核对)确定交付物，在 `deploy/.env` 写入
-`DEPLOY_IMAGE=<仓库>@sha256:<摘要>`；程序镜像不使用 tag、不在部署机重建，也不运行开发用的 `just up`（数据库镜像从本仓库
-构建，见下）。pull 之前先按[发布的「镜像签名与验证」](release.md#镜像签名与验证)验一次签名、workflow 身份、digest 和 SBOM
-attestation，失败就不 pull：
+`DEPLOY_IMAGE=<仓库>@sha256:<摘要>`；程序镜像不使用 tag、不在部署机重建，也不运行开发用的 `just up`。数据库镜像
+不是发布产物，由同一个入口从本仓库构建（见下）。
+
+部署只经一个失败即停的入口。它从这次 `-f`/`--env-file` 解析出的**实际** Compose 配置里读 `axiom` 和 `migrate`
+会用的镜像（Shell 已导出的 `DEPLOY_IMAGE` 优先于 `.env`，所以被验证的就是会被拉取的），要求两者是同一个 digest，
+用[发布的「镜像签名与验证」](release.md#镜像签名与验证)核对签名、workflow 身份、digest 和 SBOM，再把该 digest
+固定给同一个脚本里的 pull 和 up：
 
 ```bash
 tools="$(bash scripts/ci/install-release-tools.sh)"
-image="$(sed -n 's/^DEPLOY_IMAGE=//p' deploy/.env)"
-PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$image" tmp/release/release.json
+PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
+  -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env tmp/release/release.json
 ```
 
-负责人执行部署前确认三份数据库口令已配置；新数据库初始化角色，已有数据库也须重放幂等角色授权：
-
-```bash
-docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env pull axiom migrate
-# The database image is this tree's (pgBackRest on postgres:18.6-alpine); build it before the no-build start.
-docker compose -f deploy/compose.yaml --env-file deploy/.env build postgres
-docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --no-build --wait postgres
-docker compose -f deploy/compose.yaml --env-file deploy/.env exec -T postgres sh < deploy/postgres/roles.sh
-docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env up --detach --no-build --wait
-```
+入口按顺序拉取该 digest、发布本构建的前端资源、从本仓库构建数据库镜像、启动数据库、重放 `deploy/postgres/roles.sh`
+的角色授权、再以 `--no-build` 启动整套栈。任何一步失败即停：验签失败时没有 pull，也没有启动。不要把它拆成手工的
+`sed`、验签、`pull`、`up`：只从 `deploy/.env` 取镜像会验文件里的 A 而 Compose 拉环境变量里的 B，分成几段执行也没有
+失败控制。三份数据库口令须已在 `deploy/.env` 中，否则启动数据库或重放角色授权会失败并停下。
 
 迁移和程序使用同一 digest；备份 manifest 的镜像字段也因此记录这个引用。恢复和回滚沿用发布记录里的摘要，不能将
 本地开发的 `axiom:local` 当生产交付物。数据库镜像不是发布产物：它的 Dockerfile 钉住 PostgreSQL 的基础 tag，pgBackRest 和
-三个入口脚本随本仓库走，所以发布部署先 `build postgres` 再 `--no-build` 启动；升级它的内容和升级程序是两件事，升级后跑一次
-`pgbackrest check` 和 `deploy/postgres` 的恢复测试。
+三个入口脚本随本仓库走，所以 `scripts/ops/deploy.sh` 在启动数据库前先 `build postgres`，再用 `--no-build` 启动；升级它的
+内容和升级程序是两件事，升级后跑一次 `pgbackrest check` 和 `deploy/postgres` 的恢复测试。
 
 单独一个文件，是因为入口用的网络钉了子网（程序只认地址/CIDR，入口得有固定地址），而钉死的子网在跑多个项目的机器上可能
 撞车：没有入口的部署（`just up`、CI 的部署检查）不该带上它。

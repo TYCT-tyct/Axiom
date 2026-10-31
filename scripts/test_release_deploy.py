@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -76,9 +77,12 @@ curl() {
             env.pop("CI_DEPLOY_IMAGE", None)
             if image is not None:
                 env["CI_DEPLOY_IMAGE"] = image
+                sbom = json.dumps({"spdxVersion": "SPDX-2.3"})
+                (root / "sbom.spdx.json").write_text(sbom)
                 (root / "release.json").write_text(json.dumps({
                     "image_digest": image.rsplit("@", 1)[-1],
                     "signing_identity": "https://github.com/TYCT-tyct/Axiom/.github/workflows/ci.yml@refs/heads/main",
+                    "sbom_sha256": hashlib.sha256(sbom.encode()).hexdigest(),
                 }))
                 env["CI_DEPLOY_RELEASE"] = str(root / "release.json")
             # Source to preserve stub functions; the script's exit trap is exercised in the child shell.
