@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"strings"
 )
 
 // Compression is the request's context-compression policy. Default follows OpenRouter's small-context default.
@@ -19,9 +20,9 @@ func (r *Request) Compresses(context int64) bool {
 	return r.Format == Chat && (r.Compression == CompressionEnabled || r.Compression == CompressionDefault && context <= 8192)
 }
 
-// NoWebSearch says what is missing for OpenRouter-side web search. Every way a request asks for it — the deprecated
-// web plugin, the :online variant and the openrouter:web_search server tool — is refused with this one sentence, so
-// the three cannot drift apart while no service is configured (docs/domains/gateway.md「插件与提示词变换」).
+// NoWebSearch says what is missing for OpenRouter-side web search. It is the sentence an unconfigured web plugin or
+// :online variant is refused with, and the server tool's refusal even when a backend is configured: the tool needs the
+// model-side loop, which this gateway does not run (docs/domains/gateway.md「服务端工具」).
 const NoWebSearch = "no outside search service is configured"
 
 // ExtensionError is a rejected OpenRouter plugin or transform. It preserves the numeric OpenRouter error code.
@@ -40,13 +41,18 @@ func (s *scanner) plugins() (err error) {
 }
 
 func (s *scanner) plugin() error {
-	var id string
-	enabled := true
+	var (
+		id      string
+		enabled = true
+		web     WebPlugin
+		option  string // the first option an id other than web cannot take
+		options bool   // a plugin option was written
+	)
 	if s.dec.PeekKind() != '{' {
 		return s.mismatch("a plugin object")
 	}
 	err := s.eachMember(func() error {
-		switch string(s.name) {
+		switch name := string(s.name); name {
 		case "id":
 			v, err := s.str()
 			if len(v) > 64 {
@@ -58,6 +64,37 @@ func (s *scanner) plugin() error {
 			k, err := s.flag()
 			enabled = k != 'f'
 			return err
+		case "max_results":
+			options = true
+			option = first(option, name)
+			n, err := s.count()
+			web.MaxResults = int(n)
+			return err
+		case "search_prompt":
+			options = true
+			option = first(option, name)
+			v, err := s.str()
+			if err == nil {
+				web.SearchPrompt = string(v)
+			}
+			return err
+		case "include_domains":
+			options = true
+			option = first(option, name)
+			return s.domains(&web.IncludeDomains)
+		case "exclude_domains":
+			options = true
+			option = first(option, name)
+			return s.domains(&web.ExcludeDomains)
+		case "engine", "mode":
+			options = true
+			option = first(option, name)
+			// A value here would pick among OpenRouter's engines; this deployment has one configured backend, so the
+			// option is refused rather than silently ignored.
+			if err := s.skip(); err != nil {
+				return err
+			}
+			return fmt.Errorf("plugin option %q is not supported: this deployment searches through its configured backend", name)
 		default:
 			return fmt.Errorf("plugin option %.64q is not supported", s.name)
 		}
@@ -65,10 +102,38 @@ func (s *scanner) plugin() error {
 	if err != nil {
 		return err
 	}
-	return s.applyPlugin(id, enabled)
+	if id != "web" && options {
+		return fmt.Errorf("plugin option %q is not supported", option)
+	}
+	return s.applyPlugin(id, enabled, &web)
 }
 
-func (s *scanner) applyPlugin(id string, enabled bool) error {
+// first returns the first non-empty of a and b, for the error that names the option a plugin cannot take.
+func first(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// domains reads an array of host names for include_domains or exclude_domains, in lower case so one domain has one
+// spelling in the query. The shape is checked here, at the boundary: a client's value must not write search operators.
+func (s *scanner) domains(dst *[]string) error {
+	return s.array(func(s *scanner) error {
+		v, err := s.str()
+		if err != nil {
+			return err
+		}
+		d := strings.ToLower(string(v))
+		if !ValidSearchDomain(d) {
+			return fmt.Errorf("a domain in %s is not a plain host name", s.name)
+		}
+		*dst = append(*dst, d)
+		return nil
+	})
+}
+
+func (s *scanner) applyPlugin(id string, enabled bool, web *WebPlugin) error {
 	switch id {
 	case "response-healing", "context-compression":
 		if enabled && s.r.Format != Chat {
@@ -76,7 +141,13 @@ func (s *scanner) applyPlugin(id string, enabled bool) error {
 		}
 	case "web":
 		if enabled {
-			return fmt.Errorf("plugin %q is not supported: %s", id, NoWebSearch)
+			if s.r.Format != Chat {
+				return fmt.Errorf("plugin %q is not supported for this format", id)
+			}
+			if err := CheckWebSearch(web); err != nil {
+				return err
+			}
+			s.r.Web = web
 		}
 	case "file-parser":
 		if enabled {

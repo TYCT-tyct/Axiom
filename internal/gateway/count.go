@@ -85,6 +85,9 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if names.auto {
 		return 0, invalid("openrouter/auto has no model to count tokens for: count with the concrete model.")
 	}
+	if names.online || req.Web != nil {
+		return 0, invalid("count_tokens cannot count a request that runs a web search: the results are injected after counting.")
+	}
 	model, err := snap.ResolvePublic(names.primary)
 	if err != nil {
 		return 0, err

@@ -50,9 +50,9 @@ func TestUnpricedServerToolsNeverReachAdmission(t *testing.T) {
 	}
 }
 
-// TestWebSearchIsOneRefusal: the three ways a request asks for OpenRouter-side web search — the deprecated web plugin,
-// the deprecated :online variant and the openrouter:web_search server tool — get one 400 with one reason, before
-// anything is reserved. The search service a future provider plugs in is behind that one decision.
+// TestWebSearchIsOneRefusal: on a node without a search backend, the deprecated web plugin and :online variant get the
+// same 400 as the openrouter:web_search server tool, before anything is reserved. The first two run once a backend is
+// configured; the tool keeps this reason because it needs the model-side loop.
 func TestWebSearchIsOneRefusal(t *testing.T) {
 	r := newRig(t)
 	a := r.newAccount(1e9)

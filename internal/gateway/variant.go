@@ -21,6 +21,7 @@ type modelName struct {
 	sort     *routing.Strategy // the ranking the last sorting variant asks for, or nil
 	exacto   bool              // the last sorting variant is :exacto: quality first, among endpoints verified as the model
 	thinking bool              // the deprecated :thinking, which only a request that asks for reasoning itself honours
+	online   bool              // the deprecated :online web plugin
 	auto     bool              // openrouter/auto: the routing ranking chooses the model
 }
 
@@ -32,6 +33,7 @@ type variant struct {
 	exacto   bool   // the Exacto ranking: quality first, among endpoints verified as the model they claim
 	thinking bool   // reasoning on, which the request must already ask for
 	free     bool   // the catalog's own :free entry, which stays on the base
+	online   bool   // the deprecated :online web plugin
 	refusal  string // what every request with this suffix gets, "" when it can be honoured
 }
 
@@ -51,7 +53,7 @@ const (
 var variants = map[string]variant{
 	"nitro": {sort: "throughput"}, "floor": {sort: "price"},
 	"exacto": {exacto: true}, "thinking": {thinking: true},
-	"online": {refusal: errOnline}, "free": {free: true},
+	"online": {online: true}, "free": {free: true},
 	"batch": {refusal: errBatch}, "extended": {refusal: errExtended},
 }
 
@@ -97,6 +99,8 @@ func parseModelName(name string) (modelName, *Refusal) {
 			m.sort, m.exacto = nil, true
 		case v.thinking:
 			m.thinking = true
+		case v.online:
+			m.online = true
 		}
 	}
 	m.auto = strings.EqualFold(m.base, "openrouter/auto")
@@ -108,6 +112,7 @@ type variantNames struct {
 	primary    string   // the base name of the model the request names
 	alternates []string // the base names of the models it lists that could be tried
 	auto       bool     // the request named openrouter/auto, which the routing ranking expands
+	online     bool     // the request asked for the deprecated :online web plugin on any of its models
 }
 
 // readRouting reads what a request's provider object and model names ask of the route, for a call and for a count alike,
@@ -147,14 +152,15 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 		return over, variantNames{}, invalid(errThinking)
 	}
 	over.Sort = cmp.Or(over.Sort, primary.sort)
-	v := variantNames{primary: primary.base, auto: primary.auto}
+	v := variantNames{primary: primary.base, auto: primary.auto, online: primary.online}
 	for _, name := range req.Models {
-		base, ok, err := alternate(name, explicit, over.Sort, verified, reasoning)
+		base, online, ok, err := alternate(name, explicit, over.Sort, verified, reasoning)
 		if err != nil {
 			return over, variantNames{}, err
 		}
 		if ok {
 			v.alternates = append(v.alternates, base)
+			v.online = v.online || online
 		}
 	}
 	return over, v, nil
@@ -165,22 +171,22 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 // verified says the ranking the request already has is quality-first among verified endpoints, which is what an
 // alternate's :exacto stands for; reasoning says the request asks for reasoning, without which an alternate's :thinking
 // asks for nothing.
-func alternate(name string, explicit bool, ranking *routing.Strategy, verified, reasoning bool) (base string, ok bool, err error) {
+func alternate(name string, explicit bool, ranking *routing.Strategy, verified, reasoning bool) (base string, online, ok bool, err error) {
 	alt, ref := parseModelName(name)
 	if ref != nil {
 		if ref.Status == http.StatusNotFound {
-			return "", false, nil
+			return "", false, false, nil
 		}
-		return "", false, ref
+		return "", false, false, ref
 	}
 	if alt.auto {
 		// auto already considers every model the key may call; a second auto adds nothing to try.
-		return "", false, nil
+		return "", false, false, nil
 	}
 	if err := alternateRefusal(alt, explicit, ranking, verified, reasoning); err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
-	return alt.base, true, nil
+	return alt.base, alt.online, true, nil
 }
 
 // alternateRefusal is why an alternate's variants cannot be honoured under the request's ranking, or nil.

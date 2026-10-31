@@ -387,7 +387,7 @@ func (a *chatAggregate) body() ([]byte, error) {
 // size is about what the choice takes in a body, so that the body is allocated once: its pieces and a margin for the
 // members around them.
 func (c *chatChoice) size() int {
-	n := 256 + len(c.details) + len(c.finish)
+	n := 256 + len(c.details) + len(c.finish) + len(c.annotations)
 	for _, s := range c.strings {
 		n += len(s)
 	}
@@ -395,6 +395,34 @@ func (c *chatChoice) size() int {
 		n += 128 + len(t.id) + len(t.name) + len(t.arguments)
 	}
 	return n
+}
+
+// cite adds the url_citation annotations of the links in the choice's content that match a supplied search result.
+// It runs once, when the reply is finished, because only then is the whole message known; a link the model wrote to a
+// page the search did not return is the model's own and gets no annotation. The content is kept escaped, so it is
+// unquoted here before indexes are counted in characters rather than bytes.
+func (a *chatAggregate) cite(citations []Citation) {
+	if len(citations) == 0 {
+		return
+	}
+	for i := range a.choices {
+		c := &a.choices[i]
+		if len(c.strings[pieceContent]) == 0 {
+			continue
+		}
+		var text string
+		if err := jsonx.Unmarshal([]byte(`"`+string(c.strings[pieceContent])+`"`), &text); err != nil {
+			continue
+		}
+		entries := CitationAnnotations(text, citations)
+		if len(entries) == 0 {
+			continue
+		}
+		if len(c.annotations) > 0 {
+			c.annotations = append(c.annotations, ',')
+		}
+		c.annotations = append(c.annotations, entries...)
+	}
 }
 
 func orNull(v []byte) []byte {

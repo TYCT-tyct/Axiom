@@ -41,7 +41,7 @@ func (r *rig) seedCatalog() {
 
 // model lists a model with its slug as a public name, and the other names given, at the basic spec and the cheap price.
 func (r *rig) model(slug string, names ...string) catalog.ModelID {
-	return r.listed(slug, basicSpec, cheap, names...)
+	return r.listed(slug, basicSpec, r.price, names...)
 }
 
 // listed is model with its own spec and price schedule, which is also the sale price the OpenRouter list shows. The
@@ -109,7 +109,11 @@ func (r *rig) seedRouting(o rigOptions) {
 		model catalog.ModelID
 		price string
 	}{{"alpha-1", r.alpha, cheap}, {"alpha-2", r.alpha, dear}, {"beta-1", r.beta, cheap}, {"claude-1", r.claude, cheap}} {
-		schedule, err := catalog.ParseSchedule([]byte(s.price))
+		price := s.price
+		if o.price != "" {
+			price = o.price // a test that prices web search also needs it in the native schedule the quote reads
+		}
+		schedule, err := catalog.ParseSchedule([]byte(price))
 		if err != nil {
 			r.t.Fatal(err)
 		}

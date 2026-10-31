@@ -296,6 +296,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/settings/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saved web search backend override; the key is never returned. Environment remains authoritative when absent.
+         * @description Saved web search backend override; the key is never returned. Environment remains authoritative when absent.
+         */
+        get: operations["getSearchSettings"];
+        /**
+         * Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the saved key; a URL change requires reentry.
+         * @description Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the saved key; a URL change requires reentry.
+         */
+        put: operations["setSearchSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/settings/search/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run one fixed search using the saved backend. Accepted means the backend answered with usable results. Ten tests per session per minute.
+         * @description Run one fixed search using the saved backend. Accepted means the backend answered with usable results. Ten tests per session per minute.
+         */
+        post: operations["testSearchSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/payments/merchants": {
         parameters: {
             query?: never;
@@ -2016,6 +2060,22 @@ export interface components {
         ConfigTestResult: {
             /** @enum {string} */
             status?: "accepted" | "rejected" | "failed" | "disabled" | "unsupported";
+        };
+        SearchSettings: {
+            url?: string;
+            has_key?: boolean;
+            restart_required?: boolean;
+            source?: string;
+        };
+        SearchSettingsUpdate: {
+            settings: {
+                url?: string;
+                key?: string;
+            };
+            reason: components["schemas"]["Reason"];
+        };
+        SearchConfigTest: {
+            reason: components["schemas"]["Reason"];
         };
         MailConfigTest: {
             to: string;
@@ -4114,6 +4174,99 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["MailConfigTest"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSearchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSearchSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testSearchSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchConfigTest"];
             };
         };
         responses: {

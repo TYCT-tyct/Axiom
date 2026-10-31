@@ -41,10 +41,12 @@ type Demand struct {
 }
 
 // ServerTool is a server tool and the most uses the request allows it; 0 means the request set none, so the entry's
-// model default applies.
+// model default applies. Flat says the tool does not sample the model again: it runs once outside the completion, as
+// the gateway's web plugin does, so only its per-use fee is reserved, not a second sampling rereading the context.
 type ServerTool struct {
 	Item    catalog.Item
 	MaxUses int64
+	Flat    bool
 }
 
 // Model is the model data a quote needs, filled by the caller from the catalog snapshot.
@@ -376,6 +378,18 @@ func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tier
 	if d.Compaction {
 		q.rereads = mul(window, 2)
 	}
+	for _, t := range d.ServerTools {
+		if t.Flat && t.Item == catalog.ItemWebSearch {
+			// The search runs before the completion and adds no sampling: only its fee is reserved, and q.searches
+			// still covers it, so the first search event is not an excess the meter must extend. Compaction still
+			// rereads the context, so its allowance stays.
+			q.resample = inputPrice{}
+			if !d.Compaction {
+				q.rereads = 0
+			}
+			break
+		}
+	}
 	return nil
 }
 
@@ -471,7 +485,7 @@ func inputBound(d Demand, m Model, samplings int64) (first, longest int64) {
 		// bands its reported total, which can pass any one input's context.
 		return total, total
 	}
-	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
+	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch && !t.Flat })
 	if samplings > 1 || searchable {
 		return first, window // every later sampling, and one a search beyond the quote adds, rereads the whole context
 	}
@@ -507,7 +521,7 @@ func serverToolUses(d Demand, m Model) (uses [catalog.NumItems]int64, samplings 
 			n = m.MaxUses[t.Item]
 		}
 		uses[t.Item] = add(uses[t.Item], n)
-		if !d.Direct { // a direct call's tool charge is per use, without sampling the model again
+		if !d.Direct && !t.Flat { // a direct call's or a flat tool's charge is per use, without sampling the model again
 			samplings = add(samplings, n)
 		}
 	}

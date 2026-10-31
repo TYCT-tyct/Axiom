@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // nodeRoutes are what the node's listeners serve and the call path behind the public one.
@@ -64,8 +65,23 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if !p.cfg.modelVerification {
 		verify = nil
 	}
+	search := p.cfg.search
+	if err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		stored, found, err := websearch.StoredConfig(ctx, tx, p.master)
+		if found {
+			search = stored
+		}
+		return err
+	}); err != nil {
+		return nodeRoutes{}, err
+	}
+	searcher, err := websearch.Open(search, exit)
+	if err != nil {
+		return nodeRoutes{}, err
+	}
 	calls, err := startCallPath(ctx, callDeps{
-		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, gate: gate, limits: limits,
+		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, search: searcher,
+		gate: gate, limits: limits,
 		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger, proxies: p.cfg.trustedProxies,
 		kv:     cache,
 		alerts: p.alerts, healthMode: p.cfg.healthMode, nodeID: p.cfg.valkey.NodeID, verify: verify,
@@ -86,7 +102,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})
 	public = withPaymentCallbacks(public, pay.Notify())
 	adminAPI := newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger)
-	adminAPI.keys, adminAPI.exit, adminAPI.smtp = p.master, exit, p.cfg.smtp
+	adminAPI.keys, adminAPI.exit, adminAPI.smtp, adminAPI.search = p.master, exit, p.cfg.smtp, p.cfg.search
 	admin := adminRoutes(adminAPI,
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil

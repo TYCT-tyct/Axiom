@@ -20,6 +20,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/quality"
+	"axiom/internal/websearch"
 )
 
 // probesListenAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
@@ -48,6 +49,7 @@ type nodeSettings struct {
 	trustedProxies                    []netip.Prefix
 	valkey                            kv.Config
 	smtp                              mail.Config
+	search                            websearch.Config
 	objectstore                       objectstore.Config
 	retentionURL                      string
 	exchangeSource                    string
@@ -131,12 +133,14 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
 	}
 	smtp, mailErr := mail.ReadConfig(env)
+	search, searchErr := websearch.ReadConfig(env)
 	archiveErr := readArchiveSettings(env, s)
 	var exchangeErr error
 	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
 		exchangeErr = errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb")
 	}
 	s.smtp = smtp
+	s.search = search
 	sources, sourceErr := readAdminSources(env, s.adminAddr)
 	if sourceErr != nil {
 		errs = append(errs, sourceErr)
@@ -146,7 +150,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	if err := readNodeTLS(env, s); err != nil {
 		errs = append(errs, err)
 	}
-	return append(errs, mailErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
+	return append(errs, mailErr, searchErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
 }
 
 // readArchiveSettings reads the retention login and the archive bucket. Both are optional: without the URL the job does

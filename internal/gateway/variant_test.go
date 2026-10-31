@@ -33,8 +33,8 @@ func TestParseModelName(t *testing.T) {
 		"exacto":                              {base + ":exacto", modelName{base: base, exacto: true}, 0, ""},
 		"exacto replaced":                     {base + ":exacto:floor", modelName{base: base, sort: &cheapest}, 0, ""},
 		"exacto replacing":                    {base + ":floor:exacto", modelName{base: base, exacto: true}, 0, ""},
-		"online":                              {base + ":online", modelName{}, http.StatusBadRequest, ":online"},
-		"online after a sort":                 {base + ":nitro:online", modelName{}, http.StatusBadRequest, ":online"},
+		"online":                              {base + ":online", modelName{base: base, online: true}, 0, ""},
+		"online after a sort":                 {base + ":nitro:online", modelName{base: base, sort: &fastest, online: true}, 0, ""},
 		"free":                                {base + ":free", modelName{base: base + ":free"}, 0, ""},
 		"batch":                               {base + ":batch", modelName{}, http.StatusBadRequest, ":batch"},
 		"extended":                            {base + ":extended", modelName{}, http.StatusBadRequest, ":extended"},
@@ -137,7 +137,7 @@ func TestModelVariantsAreRefused(t *testing.T) {
 		status         int
 		code, text     string
 	}{
-		"online":                   {"acme/alpha:online", "", 400, "invalid_request", ":online"},
+		"online without a backend": {"acme/alpha:online", "", 400, "invalid_request", ":online"},
 		"online with a sort":       {"acme/alpha:online", `"provider":{"sort":"price"},`, 400, "invalid_request", ":online"},
 		"free":                     {"acme/alpha:free", "", 404, "model_not_found", ""},
 		"thinking":                 {"acme/alpha:thinking", "", 400, "invalid_request", "reasoning parameter"},

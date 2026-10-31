@@ -117,7 +117,7 @@ func unmeasured(order []ranked, strategy Strategy) bool {
 // inputTokens is the text a candidate's context must hold: one input's, not the sum of a batch's, which direct
 // formats take one at a time.
 func inputTokens(req *protocol.Request) int64 {
-	text := req.TextBytes
+	text := req.TextBytes + req.SearchBytes
 	if req.MaxInputBytes > 0 {
 		text = req.MaxInputBytes
 	}
@@ -128,12 +128,16 @@ func inputTokens(req *protocol.Request) int64 {
 // (billing.InputBound), and the gateway reserves for the same demand it was routed by.
 func DemandOf(req *protocol.Request) billing.Demand {
 	d := billing.Demand{
-		TextBytes: req.TextBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
+		TextBytes: req.TextBytes + req.SearchBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
 		Direct:     req.Format.Direct(),
 		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
 	}
 	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.WebSearches})
+	}
+	if req.Web != nil {
+		// The gateway's web plugin runs one external search before the completion; it is a flat per-use charge.
+		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: 1, Flat: true})
 	}
 	if req.Needs.Has(protocol.CodeExecution) {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemCodeExecution, MaxUses: req.CodeExecutions})

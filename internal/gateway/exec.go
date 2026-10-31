@@ -21,6 +21,7 @@ import (
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // Conn is one attempt's connection to a credential of an endpoint, held from Acquire to Done. *suppliers.Attempt is one.
@@ -96,6 +97,8 @@ type ExecDeps struct {
 	// Outstanding counts the calls and the settlements they leave in the background, and is what the node drains: the
 	// node's Handler shares it, so a request is counted from the gate.
 	Outstanding *Outstanding
+	// Search runs the web plugin through the deployment's backend; nil means no backend is configured.
+	Search websearch.Searcher
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.
@@ -157,6 +160,10 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 	defer s.release()   // the relays no answer released, as a panic leaves them, are let go
 	ctx := r.Context()
 	defer s.settleOnPanic(ctx)
+	if e := s.webSearch(ctx); e != nil {
+		s.conclude(ctx, *e)
+		return
+	}
 	s.conclude(ctx, s.attempts(ctx))
 }
 
@@ -190,6 +197,11 @@ type session struct {
 	// while the next attempt waits on its upstream. A kept part is always the live one too.
 	live      *protocol.Relay
 	replyHeld int64 // of the node's budget, held by the compact reply the call ends with, until Run returns
+
+	// searches is how many external web searches the call ran before its attempt, and citations are their results,
+	// which an aggregated Chat reply cites. Both are zero for a call without the web plugin.
+	searches  int64
+	citations []protocol.Citation
 
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back

@@ -25,6 +25,7 @@ import (
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // The executor's tests run in a synctest bubble, with nothing real in the way: a supplier that is a script of answers
@@ -352,10 +353,11 @@ type options struct {
 	alive        func() bool
 	mutate       func(*Call)
 	noSlot       []int
-	memory       int64            // the node's budget; memorySize when zero
-	price        string           // the entries' price schedule; cheap when empty
-	logs         *bytes.Buffer    // the node's log, discarded when nil
-	health       *quality.Monitor // what the attempts tell; a new one when nil
+	memory       int64              // the node's budget; memorySize when zero
+	price        string             // the entries' price schedule; cheap when empty
+	search       websearch.Searcher // the web plugin's backend; nil means the feature is off
+	logs         *bytes.Buffer      // the node's log, discarded when nil
+	health       *quality.Monitor   // what the attempts tell; a new one when nil
 }
 
 type harness struct {
@@ -440,6 +442,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
 		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
 		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health, Outstanding: NewOutstanding(),
+		Search: o.search,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -491,6 +494,9 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		}
 		h.up.eps[uuid.UUID(ep(i))] = &fakeEndpoint{script: script, policy: o.policy, noSlot: slices.Contains(o.noSlot, i)}
 	}
+	if req.Web != nil {
+		req.SearchBytes = protocol.WebSearchMaxBytes
+	}
 	// The same segment settings the harness gave the executor (newHarness), from the one place they are chosen.
 	segments := cmpOr(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
 	r, err := billing.Quote(routing.DemandOf(&req), quotes, segments, nil)
@@ -500,6 +506,11 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 	c := &Call{
 		ID: uuid.NewV7(), Format: client, Request: req, Body: request,
 		Header: http.Header{"Anthropic-Beta": {"beta-1"}}, Hold: &billing.Hold{Reservation: r}, Plan: plan,
+	}
+	if req.Web != nil {
+		if c.search, err = protocol.ChatSearchQuery(request); err != nil {
+			h.t.Fatal(err)
+		}
 	}
 	c.hold(func() { close(h.released) })
 	if o.mutate != nil {
