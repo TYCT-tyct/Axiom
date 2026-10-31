@@ -355,10 +355,11 @@ jobs:
           retention-days: 30
           compression-level: 0
 
-  # Signs a throwaway image with the release's keyless flow and proves the verifier accepts that digest while refusing
-  # a tampered one. Trains and main run it for the same reason they build the release: a signing change that only main
-  # uses must fail in the train that causes it. It needs the workflow's OIDC identity and writes to the public
-  # transparency log, so a pull request does not run it.
+  # Signs a throwaway image with the release's keyless flow and proves the verifier accepts that digest and its SBOM
+  # while refusing a moved signature, another identity/issuer/ref, a tag, a tampered digest, a wrong-subject attestation,
+  # and an SBOM swapped together with its recorded hash. Trains and main run it for the same reason they build the
+  # release: a signing change that only main uses must fail in the train that causes it. It needs the workflow's OIDC
+  # identity and writes to the public transparency log, so a pull request does not run it.
   signing:
     needs: changes
     if: >-

@@ -42,18 +42,18 @@ registry（仅绑定 `127.0.0.1`，不上传外部仓库）。它按归档的 ma
 
 ### 镜像签名与验证
 
-`scripts/ci/verify-release.sh` 是部署前的唯一验收入口，开发和发布使用同一份实现：
+`scripts/ci/verify-release.sh` 是唯一的验签实现，开发和发布使用同一份代码；生产由[部署入口](backup-restore.md#生产入口)调用它：
 
 ```bash
 tools="$(bash scripts/ci/install-release-tools.sh)"
 PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$digest" tmp/release/release.json
 ```
 
-它要求引用是 `repo@sha256:…`，`release.json` 的 `image_digest` 与它相同、`signing_identity` 与本次期望的身份相同；`cosign verify` 只接受该 workflow/ref 用 GitHub OIDC 签出的证书，`cosign verify-attestation --type spdxjson` 还要证明 attestation 的 subject 就是这个 digest。没有签名、签名来自别的 workflow 或 ref、digest 与记录不一致、或没有 SPDX attestation 时，命令退出 1，部署停下，不会 pull 或启动镜像。生产期望的身份固定为 `https://github.com/TYCT-tyct/Axiom/.github/workflows/ci.yml@refs/heads/main`；在 GitHub Actions 内运行时按 `GITHUB_REPOSITORY` 和 `GITHUB_REF` 取当前运行的身份，列车因此能验证自己签的演练镜像。
+它要求引用是 `repo@sha256:…`，`release.json` 的 `image_digest` 与它相同、`signing_identity` 与本次期望的身份相同；`cosign verify` 只接受该 workflow/ref 用 GitHub OIDC 签出的证书，`cosign verify-attestation --type spdxjson` 还要证明 attestation 的 subject 就是这个 digest。`release.json` 必须与 `sbom.spdx.json` 放在一起：脚本先核对文件哈希等于 `sbom_sha256`（只能发现拷贝损坏），再把本地 SBOM 规范化后与验证成功的 attestation 的 predicate 逐字段比较。记录和 SBOM 都没有签名，换掉文件再改哈希也能互相对上，只有这一步能把随交付物保存的 SBOM 绑到签名上。没有签名、签名来自别的 workflow 或 ref、digest 与记录不一致、没有 SPDX attestation 或 SBOM 不是该 predicate 时，命令退出 1，部署停下，不会 pull 或启动镜像。生产期望的身份固定为 `https://github.com/TYCT-tyct/Axiom/.github/workflows/ci.yml@refs/heads/main`；在 GitHub Actions 内运行时按 `GITHUB_REPOSITORY` 和 `GITHUB_REF` 取当前运行的身份，列车因此能验证自己签的演练镜像。
 
 `install-release-tools.sh` 把 cosign 和 syft 按版本与发布页 SHA-256 装进作业私有的 `RUNNER_TEMP` 目录，不写共享的 home。
 
-`ci.yml` 的 `signing` 作业在列车和 `main` 上签一个一次性镜像，再证明 `verify-release.sh` 接受这个 digest、拒绝未签名或篡改的 digest、别的身份、tag 和与记录不一致的 digest；它用与发布相同的脚本，所以签名流程坏了会在合并前失败，而不是等到发布。
+`ci.yml` 的 `signing` 作业在列车和 `main` 上签一个一次性镜像，再证明 `verify-release.sh` 接受这个 digest 和它的 SBOM、`cosign save`/`load` 之后仍接受，并拒绝未签名或与记录不一致的 digest、tag、把 A 的签名搬到 B、错误 issuer、别的仓库/workflow/ref（元数据与期望身份一致，由 cosign 拒绝）、subject 指向别的 digest 的 SBOM attestation，以及同时替换 SBOM 和 `sbom_sha256`。它用与发布相同的脚本，所以签名流程坏了会在合并前失败，而不是等到发布。
 
 ### 选择和核对
 
@@ -65,13 +65,15 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
    python3 scripts/release_image.py verify tmp/release/release.json tmp/release/image.oci.tar
    jq '{source_commit, go_toolchain, node_toolchain, frontend_version, migrations, platform, image_digest, signing_identity, sbom_sha256}' tmp/release/release.json
    test "$(jq -r .source_commit tmp/release/release.json)" = "$(git rev-parse HEAD)"
-   test "$(sha256sum tmp/release/sbom.spdx.json | cut -d ' ' -f1)" = "$(jq -r .sbom_sha256 tmp/release/release.json)"
+   test -f tmp/release/sbom.spdx.json
    test -d tmp/release/signed
    ```
 
    verifier 检查 manifest、config、每层的长度与 SHA-256，标签与 JSON 一致，平台是 Linux/amd64，输出的 manifest digest
    等于 JSON 的 `image_digest`。digest 是 OCI manifest 的哈希，不是镜像 config ID、tar 文件校验和或 tag。
    同时逐项核对工具链、前端版本和迁移是否符合本次发布与目标库；镜像 digest 不保证数据库回滚兼容。
+   `sbom_sha256` 只是交付物内部的损坏检查，和 SBOM 一起被替换仍会通过；上传后由 `verify-release.sh` 把本地 SBOM 与
+   已验证 attestation 的 predicate 比较，那才是绑定。
 3. **外部 registry 的选择、登录与上传由负责人执行**（花钱/对外动作，CI 不持有上传凭证）。负责人同意发布后，登录该 registry（cosign 读写 Docker 的凭证存储），用保留的签名布局上传同一个 digest；`cosign load` 同时带上镜像、签名和 SBOM attestation，不重建 manifest。registry 要支持 cosign 的签名存储（OCI 1.1 referrers）；不支持时上传或验证会失败，换仓库，不要改成只传镜像：
 
    ```bash
@@ -84,17 +86,15 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
 
    不允许通过重新构建或转换 manifest 来消除 digest 不一致。保留 release JSON、归档、签名、SBOM 及成功运行的引用到发布记录；30 天的
    Actions 保留期不能替代负责人维护的长期归档。provenance 和 digest 核对都不是签名证明；上面的 verify 才是。
-4. 在生产 `deploy/.env` 设置 `DEPLOY_IMAGE=<负责人选择的仓库>@sha256:<上一步的 digest>`；迁移和服务共用此值。
-   部署前在部署机再验一次，失败就不 pull：
+4. 在生产 `deploy/.env` 设置 `DEPLOY_IMAGE=<负责人选择的仓库>@sha256:<上一步的 digest>`；迁移和服务共用此值。部署走[生产入口](backup-restore.md#生产入口)的脚本，它在验签通过前不 pull、不启动：
 
    ```bash
    tools="$(bash scripts/ci/install-release-tools.sh)"
-   digest="$(jq -r .image_digest tmp/release/release.json)"
-   PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$digest" tmp/release/release.json
+   PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
+     -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env tmp/release/release.json
    ```
 
-   按[生产入口](backup-restore.md#生产入口)执行，必须带 `--no-build`，先 pull 这个 digest，不运行开发用的 `just up`；启动任何节点前先按[滚动发布](#滚动发布)写下这个构建的前端文件，再逐个替换节点。
-   用 `docker inspect` 核对迁移与服务的 `.Config.Image` 是该 digest 引用，版本 API 与 JSON 的 `frontend_version` 一致。
+   入口从这次 `-f`/`--env-file` 解析出的实际 Compose 配置里读 `axiom` 和 `migrate` 会用的镜像（Shell 已经导出的 `DEPLOY_IMAGE` 优先于 `.env`，所以被验证的就是会被拉取的），要求二者是同一个 digest；`verify-release.sh` 通过后把该 digest 导出给后续命令，再拉取、把本构建的前端资源发布进共享卷、启动数据库、重放角色授权并以 `--no-build` 启动整套栈。任何一步失败即停，验签失败时没有 pull 或启动。不要先手工 `sed` 取 `.env` 里的值、验签，再分开执行 `pull`/`up`：那样验的是文件里的 A，Compose 可能拉环境变量里的 B，验签失败后命令也还会继续。启动任何节点前先按[滚动发布](#滚动发布)写下这个构建的前端文件，再逐个替换节点。用 `docker inspect` 核对迁移与服务的 `.Config.Image` 是该 digest 引用，版本 API 与 JSON 的 `frontend_version` 一致。
    回滚选择上次成功发布记录里的 digest，重复核对和部署步骤；已经执行的迁移不会因此自动撤回，先确认旧程序仍兼容当前 schema。本版本之前的构建没有签名，`verify-release.sh` 会拒绝，回滚窗口从第一个按此流程发布的签名版本开始算。
    本版本起 `axiom migrate` 在 `platform.migration_checksums` 记下每个已应用迁移的文件名和 SHA-256，迁移和节点启动都核对：
    已合并的迁移被改过、改名或删掉时两者都停下并报出文件与摘要，改动要走新的迁移；回滚到不认识这张表的旧版本不受影响，它只多看到一张启用行级安全的表（[platform 的「迁移」](../../internal/platform/README.md#迁移)）。
@@ -107,7 +107,8 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
 以及负责人发布前的复制步骤；不新增常驻基础设施、不决定生产 registry。
 
 - **keyless，而不是负责人保管私钥**：签名身份由 GitHub OIDC 换成 Fulcio 短期证书，记录 workflow 和 ref；私钥不落地、不用轮换，公开 Rekor 留下可审计的时间点。验证因此依赖 Fulcio、Rekor 和公开日志的可用性，发布也只能由该 workflow/ref 产生。生产私钥或私有透明度日志不是本阶段需要的；以后要离线验证或不让 digest 进公开日志，才换成负责人保管的密钥或私有 Sigstore，届时 `verify-release.sh` 的信任根要一起改。按[负责人授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地，独立评审仍执行。
-- **SBOM 从交付的 OCI 归档生成，不另构建**：syft 扫描的就是 `release_image.py verify` 检查过的那份字节，SPDX JSON 由同一个 keyless 身份作为 `spdxjson` attestation 附加；验证时既查身份也查 attestation 的 subject digest。没有用 Builder 的 `--sbom`：它要额外的扫描器插件，报告会跟 builder 配置走；独立的 syft 由脚本按版本和 SHA-256 钉住。
+- **SBOM 从交付的 OCI 归档生成，不另构建**：syft 扫描的就是 `release_image.py verify` 检查过的那份字节，SPDX JSON 由同一个 keyless 身份作为 `spdxjson` attestation 附加；验证时既查身份、查 attestation 的 subject digest，还要求交付物里的 `sbom.spdx.json` 与已验证的 predicate 规范化后相同，`sbom_sha256` 只做损坏检查。没有用 Builder 的 `--sbom`：它要额外的扫描器插件，报告会跟 builder 配置走；独立的 syft 由脚本按版本和 SHA-256 钉住。
+- **生产部署只经一个入口，镜像从 Compose 解析结果里读**：`scripts/ops/deploy.sh` 用 `docker compose config --format json` 读 `axiom` 和 `migrate` 最终会用的镜像，要求同一个 digest，验签后把 `DEPLOY_IMAGE` 导出给同一脚本里的 pull/up。只从 `.env` 取值会验 A 而拉 B（环境变量优先）；把验签和 pull/up 分成几段命令，验签失败后仍会继续。一个 `set -euo pipefail` 的脚本同时关掉这两个缺口，代价是部署机要有 `jq` 和 `cosign`（后者由 `install-release-tools.sh` 安装）。
 - **签名用 `cosign save`/`cosign load` 跟镜像走**：签名和 attestation 是 registry 里的独立 artifact，不装进 `image.oci.tar`；只复制归档会让外部 registry 没有可验证的证明。`cosign save` 把镜像和证明存成一份 OCI layout，`cosign load` 按同一 digest 上传，代价是 artifact 里多一份镜像字节。未选「发布时在外部 registry 重新签一次」：那要在部署机上持有 OIDC，且签名时间点和 CI 记录的源码、工具链分开。
 - **生产只认 `refs/heads/main` 的身份**：列车签的是列车 ref，用于在同一流程里演练验证，永不保留；生产默认的 `--certificate-identity` 只有 main，替掉证书或换 ref 都验不过。
 
@@ -126,7 +127,7 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
 
 **新旧构建的页面文件**：每个构建在启动任何节点之前，把它带内容哈希的文件（`assets/` 下、名字带 8 位哈希的）写进共享目录，旧构建的文件保留。节点启动时 `AXIOM_WEB_ASSETS_DIR` 指向该目录：自己构建里有的文件优先，缺的才从目录读，所以旧页面请求的旧代码块落到新节点上也取得到。入口页和内容安全策略永远用节点自己嵌入的那份（`no-store`），共享目录里的同名入口页不会被读；不是带哈希的名字也不会从目录读。文件只增不改：同一个带哈希的名字出现不同内容时，命令失败，先查清谁写坏了，不要覆盖。发布用不覆盖的创建，两个进程同时写同一个名字也只有一个成功。
 
-发布新 digest 后、启动任何新节点之前，在仓库根目录运行（`-f` 指向实际的 Compose 文件；`--no-deps` 不启动数据库，卷第一次由 Docker 以 root 创建，所以这一步用 root；节点仍以 65532 只读）：
+生产入口在 pull 之后、启动服务之前已经执行这一步；卷不共享的多机部署仍要在每台机器上分别执行。手动补发或单独换一个节点时，在仓库根目录运行（`-f` 指向实际的 Compose 文件；`--no-deps` 不启动数据库，卷第一次由 Docker 以 root 创建，所以这一步用 root；节点仍以 65532 只读）：
 
 ```bash
 docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm --no-deps --user 0:0 axiom web-assets /assets
