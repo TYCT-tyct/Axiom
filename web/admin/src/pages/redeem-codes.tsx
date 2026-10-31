@@ -68,16 +68,24 @@ function Current({ siteId, currency }: { siteId: AdminSchemas["SiteId"]; currenc
   );
 }
 
+// redeemSearch is what the address keeps of the fields: anything not chosen does not narrow.
+function redeemSearch(values: Record<string, string>): FiltersValue {
+  return { state: redeemState(values.state), note: text(values.note) };
+}
+
 function Filters({ filters }: { filters: FiltersValue }) {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   return (
-    <FilterBar
-      values={filters}
-      onApply={(values) =>
-        navigate({ to: "/redeem-codes", search: { state: redeemState(values.state), note: text(values.note) } })
-      }
-    >
+    <FilterBar values={filters} onApply={(values) => navigate({ to: "/redeem-codes", search: redeemSearch(values) })}>
+      <RedeemFields filters={filters} />
+    </FilterBar>
+  );
+}
+
+function RedeemFields({ filters }: { filters: FiltersValue }) {
+  const { t } = useTranslation();
+  return (
+    <>
       <ChoiceFilter
         label={t("redeem.filters.state")}
         name="state"
@@ -93,7 +101,7 @@ function Filters({ filters }: { filters: FiltersValue }) {
         maxLength={200}
         autoComplete="off"
       />
-    </FilterBar>
+    </>
   );
 }
 

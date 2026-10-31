@@ -2,7 +2,7 @@ import { consoleApi, type Schemas, unwrapWithStatus } from "@axiom/api";
 import {
   type Attempt,
   can,
-  failed,
+  failedFrom,
   LoadMore,
   opened,
   readForm,
@@ -50,26 +50,25 @@ export default function Redeem() {
 const attemptStore = "axiom.console.redeem.attempt";
 const attemptKey = (scope: string) => `${scope}/${attemptStore}`;
 
-function RedeemPanel() {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  const session = useSession();
+// useRedeemRequest is the redemption being made: the code, and the key that makes a retry the same redemption. The
+// code and its key are fixed while the answer is unknown, also after a reload; a refusal is the only answer that
+// allows a new code.
+function useRedeemRequest(onRedeemed: (redemption: Schemas["RedeemCodeRedemption"]) => void) {
   const client = useQueryClient();
-  const allowed = can(session, "balance.top_up");
-  const scope = `${session.user.id}/${session.account}/redeem`;
+  const { user, account } = useSession();
+  const scope = `${user.id}/${account}/redeem`;
   const [initial] = useState(() => readAttempt(attemptKey(scope), isRedeemRequest));
   const [attempt, setAttempt] = useState<Attempt<RedeemRequest>>(() => initial ?? opened(crypto.randomUUID()));
-  const [done, setDone] = useState<Schemas["RedeemCodeRedemption"] | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
   const change = (next: Attempt<RedeemRequest>) => {
     setAttempt(next);
     writeAttempt(attemptKey(scope), next);
   };
+  type Sent = { from: Sendable<RedeemRequest>; request: RedeemRequest };
   const redeem = useMutation({
     // Recorded before it is sent: a lost answer leaves only this request under this key to send again.
-    onMutate: ({ from, request }: { from: Sendable<RedeemRequest>; request: RedeemRequest }) =>
-      change(unanswered(from, request)),
-    mutationFn: ({ from, request }: { from: Sendable<RedeemRequest>; request: RedeemRequest }) =>
+    onMutate: ({ from, request }: Sent) => change(unanswered(from, request)),
+    mutationFn: ({ from, request }: Sent) =>
       unwrapWithStatus(
         consoleApi.POST("/api/console/v1/redeem-codes", {
           params: { header: { "Idempotency-Key": from.key } },
@@ -79,19 +78,24 @@ function RedeemPanel() {
     onSuccess: ({ data }) => {
       clearAttempt(attemptKey(scope));
       setFailure(null);
-      setDone(data);
+      onRedeemed(data);
       change(opened(crypto.randomUUID()));
       void client.invalidateQueries({ queryKey: balanceQuery.queryKey });
       void client.invalidateQueries({ queryKey: redemptionsQuery.queryKey });
     },
-    onError: (error, sent) => {
-      setFailure(error);
-      change(failed(sent.from, sent.request, error, () => crypto.randomUUID()));
-    },
+    onError: failedFrom(change, setFailure),
   });
+  return { attempt, failure, setFailure, redeeming: redeem.isPending, redeem, change };
+}
+
+function RedeemPanel() {
+  const { t } = useTranslation();
+  const allowed = can(useSession(), "balance.top_up");
+  const [done, setDone] = useState<Schemas["RedeemCodeRedemption"] | null>(null);
+  const { attempt, failure, setFailure, redeeming, redeem, change } = useRedeemRequest(setDone);
   const [problem, setProblem] = useState<"missing" | "long" | null>(null);
   const submit = (form: HTMLFormElement) => {
-    if (redeem.isPending || attempt.state === "reused" || attempt.state === "stale") {
+    if (redeeming || attempt.state === "reused" || attempt.state === "stale") {
       return;
     }
     if (attempt.state === "unknown") {
@@ -118,46 +122,77 @@ function RedeemPanel() {
   if (done) {
     return <Redeemed redemption={done} onAgain={() => setDone(null)} />;
   }
-  const editing = attempt.state === "editing";
   return (
     <Panel title={t("redeem.title")}>
-      <form
-        noValidate
-        className="space-y-4 p-4"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit(event.currentTarget);
-        }}
-      >
-        <p className="max-w-prose text-ui text-t2">{t("redeem.intro")}</p>
-        <TextField
-          label={t("redeem.code")}
-          hint={t("redeem.codeHint")}
-          name="code"
-          maxLength={64}
-          autoComplete="off"
-          spellCheck={false}
-          disabled={!editing}
-          error={problem === "long" ? t("redeem.tooLong") : errors.field(failure, "code")}
-        />
-        {problem === "missing" ? <FormError>{t("redeem.missing")}</FormError> : null}
-        {failure ? <FormError>{errors.message(failure)}</FormError> : null}
-        {attempt.state === "unknown" ? <p className="text-label text-t3">{t("redeem.unknown")}</p> : null}
-        {attempt.state === "reused" ? <p className="text-label text-t3">{t("redeem.reused")}</p> : null}
-        <div className="flex justify-end gap-2">
-          {editing ? null : (
-            <Button size="md" onClick={() => change(opened(crypto.randomUUID()))} disabled={redeem.isPending}>
-              {t("redeem.restart")}
-            </Button>
-          )}
-          {attempt.state === "editing" || attempt.state === "unknown" ? (
-            <SubmitButton pending={redeem.isPending}>
-              {attempt.state === "unknown" ? t("redeem.resend") : t("redeem.submit")}
-            </SubmitButton>
-          ) : null}
-        </div>
-      </form>
+      <CodeForm
+        attempt={attempt}
+        failure={failure}
+        problem={problem}
+        pending={redeeming}
+        onSubmit={submit}
+        onRestart={() => change(opened(crypto.randomUUID()))}
+      />
     </Panel>
+  );
+}
+
+// CodeForm asks for one code and says where the attempt stands. A code is shown once, by whoever hands it out, so the
+// field is never filled from what was sent.
+function CodeForm({
+  attempt,
+  failure,
+  problem,
+  pending,
+  onSubmit,
+  onRestart,
+}: {
+  attempt: Attempt<RedeemRequest>;
+  failure: unknown;
+  problem: "missing" | "long" | null;
+  pending: boolean;
+  onSubmit: (form: HTMLFormElement) => void;
+  onRestart: () => void;
+}) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const editing = attempt.state === "editing";
+  return (
+    <form
+      noValidate
+      className="space-y-4 p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit(event.currentTarget);
+      }}
+    >
+      <p className="max-w-prose text-ui text-t2">{t("redeem.intro")}</p>
+      <TextField
+        label={t("redeem.code")}
+        hint={t("redeem.codeHint")}
+        name="code"
+        maxLength={64}
+        autoComplete="off"
+        spellCheck={false}
+        disabled={!editing}
+        error={problem === "long" ? t("redeem.tooLong") : errors.field(failure, "code")}
+      />
+      {problem === "missing" ? <FormError>{t("redeem.missing")}</FormError> : null}
+      {failure ? <FormError>{errors.message(failure)}</FormError> : null}
+      {attempt.state === "unknown" ? <p className="text-label text-t3">{t("redeem.unknown")}</p> : null}
+      {attempt.state === "reused" ? <p className="text-label text-t3">{t("redeem.reused")}</p> : null}
+      <div className="flex justify-end gap-2">
+        {editing ? null : (
+          <Button size="md" onClick={onRestart} disabled={pending}>
+            {t("redeem.restart")}
+          </Button>
+        )}
+        {attempt.state === "editing" || attempt.state === "unknown" ? (
+          <SubmitButton pending={pending}>
+            {attempt.state === "unknown" ? t("redeem.resend") : t("redeem.submit")}
+          </SubmitButton>
+        ) : null}
+      </div>
+    </form>
   );
 }
 

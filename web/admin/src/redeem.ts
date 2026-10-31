@@ -15,6 +15,19 @@ export type RedeemBatch = Omit<AdminSchemas["RedeemCodeBatchRequest"], "reason">
 
 type Words = { amountInvalid: string; countInvalid: string; noteInvalid: string; expiresInvalid: string };
 
+// readAmount is the amount typed as whole minor units: a positive value with at most nine decimals. The server checks
+// the same.
+function readAmount(text: string | undefined): string | null {
+  const amount = parseMoney(text ?? "");
+  return amount === null || /^0+$/.test(amount) ? null : amount;
+}
+
+// readCount is the number of codes asked for: a whole number from 1 to 100, the largest batch the server makes.
+function readCount(text: string | undefined): number | null {
+  const count = Number(text);
+  return /^\d+$/.test(text ?? "") && count >= 1 && count <= 100 ? count : null;
+}
+
 // readBatch makes a generation request from the dialog's fields. Whole minor units, the count's range and the note's
 // length are the server's to check too; the page says so before the request goes.
 export function readBatch(
@@ -23,12 +36,12 @@ export function readBatch(
   currency: string,
   words: Words,
 ): RedeemBatch | Problem {
-  const amount = parseMoney(values.amount ?? "");
-  if (amount === null || /^0+$/.test(amount)) {
+  const amount = readAmount(values.amount);
+  if (amount === null) {
     return { problem: words.amountInvalid };
   }
-  const count = Number(values.count);
-  if (!/^\d+$/.test(values.count ?? "") || !Number.isInteger(count) || count < 1 || count > 100) {
+  const count = readCount(values.count);
+  if (count === null) {
     return { problem: words.countInvalid };
   }
   const note = (values.note ?? "").trim();
