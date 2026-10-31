@@ -57,6 +57,18 @@ const lateRevision = -1
 // takes the balance row lock before numbering, then writes its entries and balance change in the same statement.
 // Both writes depend on the newly inserted event, so an idempotency conflict changes neither.
 func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error) {
+	params := ledgerParams(e, entries)
+	n, err := queries.PostLedger(ctx, tx, params)
+	if err == nil && n == 0 {
+		// No event means either a duplicate or an account without a balance row to lock.
+		_, err = lockAccount(ctx, tx, e.account)
+	}
+	return n > 0, wrapPost(e, err)
+}
+
+// ledgerParams validates one event's entries and builds the statement's parameters. It is apart from post so that a
+// batch can write a settlement batch's events together and still validate each event the same way.
+func ledgerParams(e event, entries []line) PostLedgerParams {
 	id := uuid.NewV7()
 	params := PostLedgerParams{ID: id, SiteID: e.site, AccountID: e.account, Kind: e.kind, RequestID: e.request, AttemptSeq: e.seq, Revision: e.revision}
 	for _, x := range entries {
@@ -77,12 +89,7 @@ func post(ctx context.Context, tx pg.Tx, e event, entries ...line) (bool, error)
 			panic(fmt.Sprintf("billing: the %s entries of %s sum to %d in %q", e.kind, e.request, sum, x.currency))
 		}
 	}
-	n, err := queries.PostLedger(ctx, tx, params)
-	if err == nil && n == 0 {
-		// No event means either a duplicate or an account without a balance row to lock.
-		_, err = lockAccount(ctx, tx, e.account)
-	}
-	return n > 0, wrapPost(e, err)
+	return params
 }
 
 // sumIn is the sum of the entries in currency.

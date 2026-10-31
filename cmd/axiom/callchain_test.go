@@ -39,6 +39,10 @@ func (silentSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, 
 	return nil
 }
 
+func (silentSuppliers) EndRequests(context.Context, pg.Tx, []suppliers.EndedRequest) error {
+	return nil
+}
+
 // chainFixture is a database with all modules, one funded account, and billing started under a live holder.
 type chainFixture struct {
 	app           *pg.DB

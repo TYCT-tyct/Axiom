@@ -38,6 +38,28 @@ SELECT * FROM unnest($1::uuid[], $2::smallint[], $3::uuid[], $4::uuid[], $5::uui
     $15::uuid[], $16::uuid[], $17::text[], $18::text[], $19::text[], $20::boolean[])
 ON CONFLICT (request_id, attempt_seq) DO NOTHING`
 
+// EndedRequestRow is one request's end: the database time it ended at and the tenant that owns it.
+type EndedRequestRow struct {
+	RequestID, SiteID, AccountID uuid.UUID
+	EndedAt                      time.Time
+}
+
+const insertEndedRequests = `
+INSERT INTO suppliers.ended_requests (request_id, site_id, account_id, ended_at)
+SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::timestamptz[])
+ON CONFLICT (request_id) DO NOTHING`
+
+// InsertEndedRequests writes a batch's request ends in one statement. A request already ended stays at its first time,
+// so a settlement repeated after a crash changes nothing.
+func InsertEndedRequests(ctx context.Context, db DBTX, rows []EndedRequestRow) error {
+	request, site, account, at := make([]uuid.UUID, len(rows)), make([]uuid.UUID, len(rows)), make([]uuid.UUID, len(rows)), make([]time.Time, len(rows))
+	for i, r := range rows {
+		request[i], site[i], account[i], at[i] = r.RequestID, r.SiteID, r.AccountID, r.EndedAt
+	}
+	_, err := db.Exec(ctx, insertEndedRequests, request, site, account, at)
+	return err
+}
+
 // InsertAttemptCosts writes the attempts of a request in one statement. A row already there stays as it was, so a
 // settlement repeated after a crash changes nothing.
 func InsertAttemptCosts(ctx context.Context, db DBTX, rows []AttemptCostRow) error {

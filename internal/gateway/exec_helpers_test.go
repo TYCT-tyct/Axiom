@@ -541,6 +541,20 @@ func (l *fakeLedger) SettleIn(ctx context.Context, _ pg.Tx, _ *billing.Hold, o b
 	return l.o.final, nil, nil
 }
 
+// SettleBatch is the fake's batch path: each item goes through the fake's SettleIn, which records it, and a failure
+// names its item as the real batch's does.
+func (l *fakeLedger) SettleBatch(ctx context.Context, _ pg.Scope, items []billing.Settlement) ([]billing.Final, []func(), error) {
+	finals, afters := make([]billing.Final, len(items)), make([]func(), len(items))
+	for i, item := range items {
+		f, after, err := l.SettleIn(ctx, pg.Tx{}, item.Hold, item.Outcome)
+		if err != nil {
+			return nil, nil, &billing.BatchWorkError{Index: i, Err: err}
+		}
+		finals[i], afters[i] = f, after
+	}
+	return finals, afters, nil
+}
+
 // RunBatch is the fake's one transaction: the works never touch the database, so a zero transaction is enough. A
 // work's error carries its index as the real batch's does, so the caller can retry the other works.
 func (*fakeLedger) RunBatch(_ context.Context, _ pg.Scope, works []func(pg.Tx) error) error {

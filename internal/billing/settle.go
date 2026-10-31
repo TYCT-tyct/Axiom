@@ -25,6 +25,8 @@ type Suppliers interface {
 	ResolveLostRequest(ctx context.Context, tx pg.Tx, request uuid.UUID) error
 	// EndRequest records that the request reached a terminal state at the database's time at.
 	EndRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, at time.Time) error
+	// EndRequests is EndRequest for a batch, in one statement.
+	EndRequests(ctx context.Context, tx pg.Tx, ends []suppliers.EndedRequest) error
 }
 
 // Outcome is how a call ended: its attempts in order, of which the last is charged. A call whose client left has the
