@@ -51,10 +51,11 @@ FROM d;
 -- name: InsertReservation :exec
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
-        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates, price_versions)
+        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates,
+        price_versions, created_at)
     VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
         @workspace_window, @key_window, 1, @amount, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @lifetime_seconds::float8),
-        @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions)
+        @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions, @created_at)
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + @amount WHERE b.account_id = @account_id
 )

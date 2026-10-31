@@ -31,7 +31,7 @@ export default {
   home: {
     title: "Operations",
     description:
-      "This site's calls, revenue, cost and cash in the chosen window. Every figure opens the calls or orders behind it.",
+      "This site's calls, revenue, cost and cash in the chosen window. Every figure opens the calls, orders or cash behind it.",
     noAccessTitle: "No page is available to you",
     noAccessBody: "Your account holds no admin permission. Ask the owner to grant one.",
   },

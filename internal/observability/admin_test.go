@@ -17,28 +17,32 @@ func TestAdminCallsFilterAndPage(t *testing.T) {
 	at := time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)
 	a, b, c := record(account, at), record(account, at), record(uuid.NewV7(), at.Add(time.Second))
 	b.Model, b.ErrorKind = "other", ""
+	site := uuid.NewV7()
+	a.Site, b.Site = site, site
 	keep(t, db, a, b, c)
 	for _, tc := range []struct {
 		name             string
 		account, request *uuid.UUID
+		site             *uuid.UUID
 		model, status    string
 		scope            pg.Scope
 		want             []uuid.UUID
 	}{
-		{"all", nil, nil, "", "", platformScope, []uuid.UUID{c.ID, b.ID, a.ID}},
-		{"account", &account, nil, "", "", platformScope, []uuid.UUID{b.ID, a.ID}},
-		{"request", nil, &b.ID, "", "", platformScope, []uuid.UUID{b.ID}},
-		{"mismatch", &account, &c.ID, "", "", platformScope, nil},
-		{"model", nil, nil, "other", "", platformScope, []uuid.UUID{b.ID}},
-		{"ok", nil, nil, "", "ok", platformScope, []uuid.UUID{b.ID}},
-		{"error", nil, nil, "", "error", platformScope, []uuid.UUID{c.ID, a.ID}},
-		{"model that did not call", nil, nil, "absent", "", platformScope, nil},
-		{"model and the other result", nil, nil, "other", "error", platformScope, nil},
-		{"RLS", nil, nil, "", "", accountScope(account), []uuid.UUID{b.ID, a.ID}},
+		{"all", nil, nil, nil, "", "", platformScope, []uuid.UUID{c.ID, b.ID, a.ID}},
+		{"account", &account, nil, nil, "", "", platformScope, []uuid.UUID{b.ID, a.ID}},
+		{"request", nil, &b.ID, nil, "", "", platformScope, []uuid.UUID{b.ID}},
+		{"mismatch", &account, &c.ID, nil, "", "", platformScope, nil},
+		{"model", nil, nil, nil, "other", "", platformScope, []uuid.UUID{b.ID}},
+		{"ok", nil, nil, nil, "", "ok", platformScope, []uuid.UUID{b.ID}},
+		{"error", nil, nil, nil, "", "error", platformScope, []uuid.UUID{c.ID, a.ID}},
+		{"model that did not call", nil, nil, nil, "absent", "", platformScope, nil},
+		{"model and the other result", nil, nil, nil, "other", "error", platformScope, nil},
+		{"one site", nil, nil, &site, "", "", platformScope, []uuid.UUID{b.ID, a.ID}},
+		{"RLS", nil, nil, nil, "", "", accountScope(account), []uuid.UUID{b.ID, a.ID}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q := AdminQuery{Since: at, Until: at.Add(2 * time.Second), Account: tc.account, RequestID: tc.request,
-				Model: tc.model, Status: tc.status, PageSize: 1}
+				Site: tc.site, Model: tc.model, Status: tc.status, PageSize: 1}
 			got := adminPageIDs(t, db, tc.scope, q)
 
 			if !slices.Equal(tc.want, got) {
@@ -95,7 +99,7 @@ func adminPlanLines(t *testing.T, db *pg.DB, since, until time.Time, account str
 		if err := planOwnPage(t.Context(), tx); err != nil {
 			return err
 		}
-		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+adminListSQL(account != ""), until, uuid.Nil().String(), since, until, account, "", "", "", 51)
+		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+adminListSQL(account != ""), until, uuid.Nil().String(), since, until, account, "", "", "", 51, "")
 		if err != nil {
 			return err
 		}

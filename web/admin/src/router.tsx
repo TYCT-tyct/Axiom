@@ -58,6 +58,7 @@ const routeTree = root.addChildren([
         user_id: text(search.user_id),
         state: paymentOrderState(search.state),
         merchant_id: text(search.merchant_id),
+        cash: text(search.cash),
         since: text(search.since),
         until: text(search.until),
       }),
@@ -68,6 +69,7 @@ const routeTree = root.addChildren([
       (search) => ({
         account_id: text(search.account_id),
         request_id: text(search.request_id),
+        site_id: text(search.site_id),
         model: text(search.model),
         status: callStatus(search.status),
         since: text(search.since),

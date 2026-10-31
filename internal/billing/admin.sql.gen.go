@@ -12,10 +12,91 @@ import (
 	"uuid"
 )
 
+const listCashMovements = `-- name: ListCashMovements :many
+SELECT t.id, t.created_at, t.account_id, t.request_id AS batch_id, t.kind,
+    coalesce(e.currency, b.currency, '')::text AS currency, e.amount::text AS amount,
+    coalesce(b.offline_channel, '')::text AS offline_channel, (b.merchant_id IS NOT NULL)::boolean AS online
+FROM billing.transactions t
+CROSS JOIN LATERAL (
+    SELECT e.currency, e.amount FROM billing.entries e
+    WHERE e.transaction_id = t.id AND e.book = 'cash'
+    OFFSET 0
+) e
+JOIN billing.credit_batches b ON b.id = t.request_id
+WHERE t.site_id = $1 AND t.created_at >= $2 AND t.created_at < $3
+    AND t.kind IN ('credit', 'refund')
+    AND ($4::uuid IS NULL OR t.account_id = $4)
+    AND (t.created_at, t.id) < ($5::timestamptz, $6::uuid)
+ORDER BY t.created_at DESC, t.id DESC
+LIMIT $7
+`
+
+type ListCashMovementsParams struct {
+	SiteID    uuid.UUID
+	Since     time.Time
+	Until     time.Time
+	AccountID *uuid.UUID
+	AfterAt   time.Time
+	AfterID   uuid.UUID
+	Max       int32
+}
+
+type ListCashMovementsRow struct {
+	ID             uuid.UUID
+	CreatedAt      time.Time
+	AccountID      uuid.UUID
+	BatchID        uuid.UUID
+	Kind           string
+	Currency       string
+	Amount         string
+	OfflineChannel string
+	Online         bool
+}
+
+// The cash behind the dashboard figure, by transaction time, with the batch that says whether it came through an order
+// or an offline channel. Refunds keep their own time, so a refund of an older order is in this window.
+func (q *Queries) ListCashMovements(ctx context.Context, db DBTX, arg ListCashMovementsParams) ([]ListCashMovementsRow, error) {
+	rows, err := db.Query(ctx, listCashMovements,
+		arg.SiteID,
+		arg.Since,
+		arg.Until,
+		arg.AccountID,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCashMovementsRow
+	for rows.Next() {
+		var i ListCashMovementsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.AccountID,
+			&i.BatchID,
+			&i.Kind,
+			&i.Currency,
+			&i.Amount,
+			&i.OfflineChannel,
+			&i.Online,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const platformCallMoney = `-- name: PlatformCallMoney :one
 SELECT
-    coalesce(sum(charged), 0)::bigint AS revenue,
-    coalesce(sum(charged - profit) FILTER (WHERE profit IS NOT NULL), 0)::bigint AS cost,
+    coalesce(sum(charged::numeric), 0)::text AS revenue,
+    coalesce(sum(charged::numeric - profit::numeric) FILTER (WHERE profit IS NOT NULL), 0)::text AS cost,
     count(*) FILTER (WHERE profit IS NULL)::bigint AS unknown_cost_calls
 FROM billing.reservations
 WHERE site_id = $1 AND created_at >= $2 AND created_at < $3
@@ -29,8 +110,8 @@ type PlatformCallMoneyParams struct {
 }
 
 type PlatformCallMoneyRow struct {
-	Revenue          int64
-	Cost             int64
+	Revenue          string
+	Cost             string
 	UnknownCostCalls int64
 }
 
@@ -45,7 +126,7 @@ func (q *Queries) PlatformCallMoney(ctx context.Context, db DBTX, arg PlatformCa
 }
 
 const platformCash = `-- name: PlatformCash :many
-SELECT coalesce(e.currency, '')::text AS currency, sum(e.amount)::bigint AS amount
+SELECT coalesce(e.currency, '')::text AS currency, coalesce(sum(e.amount::numeric), 0)::text AS amount
 FROM billing.transactions t
 CROSS JOIN LATERAL (
     SELECT e.currency, e.amount FROM billing.entries e
@@ -66,7 +147,7 @@ type PlatformCashParams struct {
 
 type PlatformCashRow struct {
 	Currency string
-	Amount   int64
+	Amount   string
 }
 
 // The cash that moved for one site in a window, by payment currency: paid credits in, refunds out. The kinds keep the

@@ -17,6 +17,7 @@ import (
 type ReserveRequest struct {
 	Admitted  Admitted
 	ID        uuid.UUID
+	At        time.Time // the call's start, also the call log's; zero means now
 	Demand    Demand
 	Quotables []Quotable
 }
@@ -220,7 +221,7 @@ func (b *Billing) quoteOne(r ReserveRequest, src batchSources, avail []Available
 	} else if err != nil {
 		return quotedReservation{}, err
 	}
-	p, err := b.reservationParams(r.Admitted, r.ID, q, quote, locked, src.day)
+	p, err := b.reservationParams(r.Admitted, r.ID, q, quote, locked, src.day, r.At)
 	if err != nil {
 		return quotedReservation{}, err
 	}
@@ -252,6 +253,7 @@ func insertReservationArgs(p InsertReservationParams) []any {
 	return []any{
 		p.WorkspaceID, p.WorkspaceWindow, p.SiteID, p.AccountID, p.Amount, p.KeyID, p.KeyWindow, p.RequestID,
 		p.HolderID, p.LifetimeSeconds, p.Prices, p.Fallbacks, p.Models, p.Endpoints, p.ExchangeRates, p.PriceVersions,
+		p.CreatedAt,
 	}
 }
 

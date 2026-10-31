@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"strconv"
 	"time"
 	"uuid"
 
@@ -49,12 +48,13 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 	}
 	cashBody := make([]map[string]string, len(money.Cash))
 	for i, cash := range money.Cash {
-		cashBody[i] = map[string]string{"amount": strconv.FormatInt(cash.Amount, 10), "currency": cash.Currency.String()}
+		cashBody[i] = map[string]string{"amount": cash.Amount, "currency": cash.Currency.String()}
 	}
 	return adminJSON[adminapi.GetOperationsOverview200JSONResponse](map[string]any{
-		"since": w.Since, "until": w.Until,
+		"site_id": call.site.ID.TypeID(), "since": w.Since, "until": w.Until,
 		"calls": overview.Calls, "errors": overview.Errors,
-		"revenue": adminMoney(money.Revenue, call.site.Currency), "cost": adminMoney(money.Cost, call.site.Currency),
+		"revenue":            adminapi.Money{Amount: money.Revenue, Currency: call.site.Currency.String()},
+		"cost":               adminapi.Money{Amount: money.Cost, Currency: call.site.Currency.String()},
 		"unknown_cost_calls": money.UnknownCost,
 		"cash":               cashBody, "top_accounts": accountsBody, "top_models": modelsBody,
 	})

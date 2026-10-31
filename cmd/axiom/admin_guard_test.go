@@ -51,6 +51,7 @@ var adminOperations = []adminOperation{
 	{"disableMerchant", http.MethodPost, someMerchant + "/disable", `{"reason":"r"}`, "sites.manage", true},
 	{"testMerchantSettings", http.MethodPost, someMerchant + "/tests", `{"reason":"r"}`, "sites.manage", true},
 	{"listPaymentOrders", http.MethodGet, "/payments/orders?site_id=site_00000000000000000000000000", "", "sites.manage", false},
+	{"listCashMovements", http.MethodGet, "/payments/cash?site_id=site_00000000000000000000000000", "", "sites.manage", false},
 	{"listPaymentRefunds", http.MethodGet, "/payments/refunds?site_id=site_00000000000000000000000000", "", "sites.manage", false},
 	{"approvePaymentRefund", http.MethodPost, "/payments/refunds/rfd_00000000000000000000000000/approve", `{"reason":"r"}`, "sites.manage", true},
 	{"rejectPaymentRefund", http.MethodPost, "/payments/refunds/rfd_00000000000000000000000000/reject", `{"reason":"r"}`, "sites.manage", true},

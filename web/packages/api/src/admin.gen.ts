@@ -499,6 +499,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/payments/cash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The cash behind the dashboard, by ledger time
+         * @description One site's cash movements in a window, newest first: paid credits in and refunds out, with the batch, order or offline channel they came from. The time is the ledger transaction's, not an order's creation time, so a refund of an older order and an offline top-up are both in the window the dashboard counted. `since` is inclusive and `until` exclusive; `account_id` narrows to one payer. Pages use `cursor` and `limit`; money is exact text in the payment's currency, and the site's accounting currency where the ledger leaves it NULL.
+         */
+        get: operations["listCashMovements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/payments/refunds": {
         parameters: {
             query?: never;
@@ -1858,6 +1878,7 @@ export interface components {
             next_cursor?: string;
             model_filter?: string;
             status_filter?: components["schemas"]["AdminCallStatus"];
+            site_filter?: components["schemas"]["SiteId"];
         };
         AdminAttempt: {
             seq?: number;
@@ -2091,6 +2112,29 @@ export interface components {
         };
         PaymentOrderList: {
             data: components["schemas"]["PaymentOrder"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One cash entry of the ledger: a paid credit or a refund. Every field is optional during rolling deployment. */
+        CashMovement: {
+            id?: components["schemas"]["Uuid"];
+            /** @enum {string} */
+            kind?: "credit" | "refund";
+            /**
+             * Format: date-time
+             * @description The transaction's time, which is what the dashboard's window counted.
+             */
+            at?: string;
+            account_id?: components["schemas"]["AccountId"];
+            batch_id?: components["schemas"]["Uuid"];
+            amount?: components["schemas"]["Money"];
+            /** @description The order behind an online payment; absent for an offline channel. */
+            order_id?: components["schemas"]["OrderId"];
+            /** @description Where an offline payment was received; absent for an online order. */
+            offline_channel?: string;
+        };
+        CashMovementList: {
+            data: components["schemas"]["CashMovement"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
@@ -2375,6 +2419,7 @@ export interface components {
          */
         ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         OperationsOverview: {
+            site_id?: components["schemas"]["SiteId"];
             /** Format: date-time */
             since?: string;
             /** Format: date-time */
@@ -2405,14 +2450,14 @@ export interface components {
             /** Format: int64 */
             errors?: number;
         };
-        /** @description An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it. */
+        /** @description An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it, and a report's sum can be wider than 64 bits. */
         CashAmount: {
             /** @example 1500000000 */
             amount: string;
             /** @example USD */
             currency: string;
         };
-        /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
+        /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits. */
         Money: {
             /** @example 1500000000 */
             amount: string;
@@ -3516,6 +3561,7 @@ export interface operations {
                 request_id?: string;
                 model?: string;
                 status?: components["schemas"]["AdminCallStatus"];
+                site_id?: components["schemas"]["SiteId"];
             };
             header?: never;
             path?: never;
@@ -4521,6 +4567,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaymentOrderList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listCashMovements: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                account_id?: components["schemas"]["AccountId"];
+                /** @description Transactions at or after this time. */
+                since?: string;
+                /** @description Transactions before this time. */
+                until?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the site's cash movements, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CashMovementList"];
                 };
             };
             400: components["responses"]["BadRequest"];

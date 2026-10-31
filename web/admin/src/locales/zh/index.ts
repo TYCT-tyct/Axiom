@@ -29,7 +29,7 @@ export default {
   signIn: { description: "管理后台只对运营人员开放，登录后还要完成两步验证。" },
   home: {
     title: "运营看板",
-    description: "所选时段内本站的调用、收入、成本与现金；每个数字都能下钻到对应的调用记录或订单。",
+    description: "所选时段内本站的调用、收入、成本与现金；每个数字都能下钻到对应的调用记录、订单或现金流水。",
     noAccessTitle: "还没有可用的页面",
     noAccessBody: "你的账户没有任何管理权限。请联系负责人授权。",
   },

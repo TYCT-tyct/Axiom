@@ -67,6 +67,7 @@ export function nextWindow(page: { next_cursor?: string | null; since?: string; 
 export type AdminCallFilters = {
   account_id?: string;
   request_id?: string;
+  site_id?: string;
   model?: string;
   status?: "ok" | "error";
   since?: string;
@@ -352,6 +353,24 @@ export const paymentOrdersQuery = (siteId: AdminSchemas["SiteId"], filters: Paym
       unwrap(
         adminApi.GET(`${base}/payments/orders`, {
           params: { query: { site_id: siteId, ...filters, cursor: pageParam, limit: pageSize } },
+          signal,
+        }),
+      ),
+    initialPageParam: firstPage,
+    getNextPageParam: nextCursor,
+  });
+
+// The cash behind the dashboard figure: ledger time, not an order's, so a refund of an older order and an offline
+// top-up are both here.
+export const cashMovementsQuery = (siteId: AdminSchemas["SiteId"], window: { since?: string; until?: string }) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "cash-movements", siteId, window],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/payments/cash`, {
+          params: {
+            query: { site_id: siteId, since: window.since, until: window.until, cursor: pageParam, limit: pageSize },
+          },
           signal,
         }),
       ),

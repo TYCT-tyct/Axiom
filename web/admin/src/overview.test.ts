@@ -21,13 +21,14 @@ it("ends the window at the visit and spans the chosen range", () => {
 it("drills into the call list with the window and only the filters that narrow", () => {
   const window = { since: "2026-10-29T12:00:00.000Z", until: "2026-10-30T12:00:00.000Z" };
   expect(callsDrill(window)).toEqual(window);
-  expect(callsDrill(window, { account: "acct_1", model: "m", status: "error" })).toEqual({
+  expect(callsDrill(window, { site: "site_1", account: "acct_1", model: "m", status: "error" })).toEqual({
     ...window,
+    site_id: "site_1",
     account_id: "acct_1",
     model: "m",
     status: "error",
   });
-  expect(ordersDrill(window)).toEqual(window);
+  expect(ordersDrill(window)).toEqual({ ...window, cash: "1" });
 });
 
 it("reads only the results the contract has", () => {

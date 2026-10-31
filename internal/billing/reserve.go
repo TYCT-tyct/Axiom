@@ -114,7 +114,7 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
-		LifetimeSeconds: b.config.Lifetime.Seconds(),
+		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAt: time.Now(),
 	}); err != nil {
 		return nil, nil, fmt.Errorf("billing: write the reservation: %w", err)
 	}
@@ -124,7 +124,10 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 // reservationParams is the row a batch reservation writes: the prices it locked, the routes it kept, and the
 // counters' windows. The insert's arguments keep the order Reserve's literal uses, so the batch path and the single
 // path write the same shape.
-func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Reservation, fallbacks []string, day time.Time) (InsertReservationParams, error) {
+func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Reservation, fallbacks []string, day, at time.Time) (InsertReservationParams, error) {
+	if at.IsZero() {
+		at = time.Now()
+	}
 	prices, locked, err := lockedPrices(q, r.Kept, fallbacks)
 	if err != nil {
 		return InsertReservationParams{}, err
@@ -145,7 +148,7 @@ func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Re
 		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: day, KeyWindow: day, Amount: r.Amount.CeilAmount(),
-		LifetimeSeconds: b.config.Lifetime.Seconds(),
+		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAt: at,
 	}, nil
 }
 

@@ -99,7 +99,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 ## 后台检索
 
-`ListAdmin` 使用 `AdminQuery` 的请求 ID、账户和 `[Since,Until)` 时间窗，按 `(at,id)` 倒序返回 `CallSummary` 和下一页 `Cursor`。`AdminQuery` 另可带精确模型名和结果（`ok`/`error`，错误即 `error_kind` 非空）；两个参数和列表的回显字段都可选，供看板下钻和旧节点滚动发布。HTTP 边界限制 31 天、200 条与 10 秒；SQL 仅选择客服可见字段，不读取成本、端点或 route。账户过滤复用既有账户有序索引；无账户且无请求 ID 过滤用迁移 00011 的 UTC 时间表达式索引；请求 ID 用主键。沿用列表的 custom plan、禁用排序和复合游标上界顺序，避免深页从窗口末端重扫。`TestAdminCallsFilterAndPage` 覆盖同时间 ID、账户/请求组合、分页和 RLS；`TestAdminCallsPlansUseIndexOrder` 在既有 12 万行夹具检查全局与账户页的有序计划和读取预算。
+`ListAdmin` 使用 `AdminQuery` 的请求 ID、账户、站点和 `[Since,Until)` 时间窗，按 `(at,id)` 倒序返回 `CallSummary` 和下一页 `Cursor`。`AdminQuery` 另可带精确模型名和结果（`ok`/`error`，错误即 `error_kind` 非空）；站点、模型、结果三个参数和列表的回显字段都可选，供看板下钻和旧节点滚动发布。HTTP 边界限制 31 天、200 条与 10 秒；SQL 仅选择客服可见字段，不读取成本、端点或 route。账户过滤复用既有账户有序索引；无账户且无请求 ID 过滤用迁移 00011 的 UTC 时间表达式索引；请求 ID 用主键。沿用列表的 custom plan、禁用排序和复合游标上界顺序，避免深页从窗口末端重扫。`TestAdminCallsFilterAndPage` 覆盖同时间 ID、账户/请求组合、站点、分页和 RLS；`TestAdminCallsPlansUseIndexOrder` 在既有 12 万行夹具检查全局与账户页的有序计划和读取预算。
 
 完整 `GetTrace` 仅由 MFA 加平台 `calls.inspect` 的管理接口返回；客服平台 `calls.search` 不授予该权限。全局索引使用 `(at AT TIME ZONE 'UTC',id)`，全局查询以同一表达式排序和设游标上界，仍保留 at 时间窗做分区裁剪；UTC 无夏令时，因此顺序与原始时间一致。否决普通 at 索引：它会与账户索引竞争，真实 12 万行稀疏成功夹具曾读 2217 块、导出探测扫描 120003 行。账户和请求 ID 筛选继续用原始 at 排序，表达式索引不参与这些有序计划；既有稀疏和深页测试守住回退。
 

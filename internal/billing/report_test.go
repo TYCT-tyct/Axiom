@@ -64,10 +64,10 @@ func TestPlatformReportReadsTheCallsOverTheWindow(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if report.Revenue != 1200 || report.Cost != 800 || report.UnknownCost != 1 {
+	if report.Revenue != "1200" || report.Cost != "800" || report.UnknownCost != 1 {
 		t.Errorf("report = %+v, want revenue 1200, cost 800 and 1 unknown cost", report)
 	}
-	if len(report.Cash) != 1 || report.Cash[0].Amount != 800 || report.Cash[0].Currency.String() != "USD" {
+	if len(report.Cash) != 1 || report.Cash[0].Amount != "800" || report.Cash[0].Currency.String() != "USD" {
 		t.Errorf("cash = %+v, want 800 USD", report.Cash)
 	}
 }
@@ -100,12 +100,57 @@ func TestPlatformReportNamesCashInItsCurrency(t *testing.T) {
 		return report
 	}
 	report := read(start, start.Add(24*time.Hour))
-	if len(report.Cash) != 1 || report.Cash[0].Amount != 700 || report.Cash[0].Currency.String() != "CNY" {
+	if len(report.Cash) != 1 || report.Cash[0].Amount != "700" || report.Cash[0].Currency.String() != "CNY" {
 		t.Errorf("cash = %+v, want 700 CNY", report.Cash)
 	}
 	empty := read(start.Add(-48*time.Hour), start.Add(-24*time.Hour))
-	if len(empty.Cash) != 1 || empty.Cash[0].Amount != 0 || empty.Cash[0].Currency.String() != "USD" {
+	if len(empty.Cash) != 1 || empty.Cash[0].Amount != "0" || empty.Cash[0].Currency.String() != "USD" {
 		t.Errorf("cash without movement = %+v, want a zero in USD", empty.Cash)
+	}
+}
+
+// TestPlatformReportSumsWiderThanInt64: two rows that each fit int64 sum to an amount that does not, and the report
+// keeps every digit rather than failing the page or wrapping.
+func TestPlatformReportSumsWiderThanInt64(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	site, account := b.admitted.Site, b.admitted.Account
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	holder := uuid.NewV7()
+	const half = int64(5_000_000_000_000_000_000)
+	row := func(id uuid.UUID, at time.Time) string {
+		return fmt.Sprintf(`('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', 1, %d, 'settled', '%s', %d, 0, '%s')`,
+			id, site, account, uuid.NewV7(), uuid.NewV7(), holder, start.Format(time.RFC3339), start.Format(time.RFC3339),
+			half, at.Add(time.Hour).Format(time.RFC3339), half, at.Format(time.RFC3339))
+	}
+	credit := func(id uuid.UUID, at time.Time) string {
+		return fmt.Sprintf(`('%s', '%s', '%s', 'credit', '%s', '%s')`,
+			id, site, account, uuid.NewV7(), at.Format(time.RFC3339))
+	}
+	b.sql(
+		fmt.Sprintf(`INSERT INTO billing.holders (id, expires_at) VALUES ('%s', '%s')`,
+			holder, start.Add(time.Hour).Format(time.RFC3339)),
+		`INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
+			workspace_window, key_window, segment, amount, state, deadline, charged, profit, created_at) VALUES `+
+			strings.Join([]string{row(uuid.NewV7(), start.Add(time.Hour)), row(uuid.NewV7(), start.Add(2*time.Hour))}, ", "),
+		`INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, created_at) VALUES `+
+			strings.Join([]string{credit(uuid.NewV7(), start.Add(3*time.Hour)), credit(uuid.NewV7(), start.Add(4*time.Hour))}, ", "),
+		fmt.Sprintf(`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
+			SELECT t.id, t.site_id, t.account_id, 'cash', %d FROM billing.transactions t WHERE t.site_id = '%s'`, half, site),
+	)
+	var report PlatformReport
+	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
+		report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t, "USD"), start, start.Add(24*time.Hour))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const sum = "10000000000000000000"
+	if report.Revenue != sum || report.Cost != sum {
+		t.Errorf("report = revenue %s, cost %s; want both sums wider than int64", report.Revenue, report.Cost)
+	}
+	if len(report.Cash) != 1 || report.Cash[0].Amount != sum {
+		t.Errorf("cash = %+v, want %s USD", report.Cash, sum)
 	}
 }
 

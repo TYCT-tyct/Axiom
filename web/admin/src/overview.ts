@@ -23,14 +23,18 @@ export function overviewWindow(range: OverviewRange, now: Date): Window {
   return { since: new Date(now.getTime() - span[range]).toISOString(), until: now.toISOString() };
 }
 
-// The call list takes a window and, since #318, the model and result filters the figures drill into.
-export type CallDrill = Window & { account_id?: string; model?: string; status?: "error" };
+// The call list takes a window and, since #318, the site, model and result filters the figures drill into. The site is
+// what keeps a site's dashboard from opening every site's calls on a platform-wide admin.
+export type CallDrill = Window & { site_id?: string; account_id?: string; model?: string; status?: "error" };
 
 export function callsDrill(
   window: Window,
-  filter: { account?: string; model?: string; status?: "error" } = {},
+  filter: { site?: string; account?: string; model?: string; status?: "error" } = {},
 ): CallDrill {
   const search: CallDrill = { ...window };
+  if (filter.site) {
+    search.site_id = filter.site;
+  }
   if (filter.account) {
     search.account_id = filter.account;
   }
@@ -43,9 +47,12 @@ export function callsDrill(
   return search;
 }
 
-// The order list takes the same window; cash is shown against the orders it came from.
-export function ordersDrill(window: Window): Window {
-  return { ...window };
+// The order page's cash view takes the same ledger window; it lists the transactions themselves, not orders filtered
+// by their creation time.
+export type OrderDrill = Window & { cash?: "1" };
+
+export function ordersDrill(window: Window): OrderDrill {
+  return { ...window, cash: "1" };
 }
 
 // A result filter in the address is one of the two the contract has; anything else narrows nothing.

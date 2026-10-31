@@ -23,6 +23,7 @@ func TestAdminOperationsOverview(t *testing.T) {
 		t.Fatal(err)
 	}
 	site := uuid.UUID(main.ID).String()
+	siteID := main.ID.TypeID()
 	account := f.text("SELECT id::text FROM accounts.accounts ORDER BY id LIMIT 1")
 	now := time.Now().UTC()
 	since, until := now.Add(-time.Hour).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339)
@@ -30,8 +31,8 @@ func TestAdminOperationsOverview(t *testing.T) {
 	f.run(
 		fmt.Sprintf(`INSERT INTO observability.call_log
  (id,at,site_id,account_id,workspace_id,key_id,ip,request_class,used_tools,has_image,has_file,model,endpoint_id,attempt_count,usage,service_tier,price_nano,cost_nano,currency,free_of_charge,latency_ms,first_token_ms,consent_version,training_allowed,error_kind)
- SELECT uuidv7(), v.at, '%s', '%s', uuidv7(), uuidv7(), '203.0.113.7', 'chat', false, false, false, v.model, uuidv7(), 1, '{}', 'standard', 1, 1, 'USD', false, 1, 0, 'v', false, v.error_kind
- FROM (VALUES ('model-a','upstream',now()), ('model-a','',now()), ('model-b','',now()), ('model-a','',now() - interval '2 hours')) v(model,error_kind,at)`, site, account),
+ SELECT uuidv7(), v.at, v.site::uuid, '%s', uuidv7(), uuidv7(), '203.0.113.7', 'chat', false, false, false, v.model, uuidv7(), 1, '{}', 'standard', 1, 1, 'USD', false, 1, 0, 'v', false, v.error_kind
+ FROM (VALUES ('model-a','upstream',now(),'%s'), ('model-a','',now(),'%s'), ('model-b','',now(),'%s'), ('model-a','',now() - interval '2 hours','%s'), ('model-a','',now(),'%s')) v(model,error_kind,at,site)`, account, site, site, site, site, uuid.NewV7().String()),
 		`INSERT INTO billing.holders (id, expires_at) VALUES (uuidv7(), now() + interval '1 hour')`,
 		fmt.Sprintf(`INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
  workspace_window, key_window, segment, amount, state, deadline, charged, profit, created_at)
@@ -52,6 +53,9 @@ func TestAdminOperationsOverview(t *testing.T) {
 	expectAdmin(t, "overview", rec, 200, "")
 	var overview adminapi.OperationsOverview
 	decode(t, rec, &overview)
+	if overview.SiteId == nil || *overview.SiteId != siteID {
+		t.Fatalf("site: %s", rec.Body.String())
+	}
 	if overview.Calls == nil || *overview.Calls != 3 || overview.Errors == nil || *overview.Errors != 1 {
 		t.Fatalf("calls and errors: %s", rec.Body.String())
 	}
@@ -80,7 +84,7 @@ func TestAdminOperationsOverview(t *testing.T) {
 		{"ok", "status=ok", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := f.do(http.MethodGet, "/calls?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until)+"&"+tc.query, "", as(owner))
+			rec := f.do(http.MethodGet, "/calls?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until)+"&site_id="+url.QueryEscape(siteID)+"&"+tc.query, "", as(owner))
 			expectAdmin(t, "filtered calls", rec, 200, "")
 			var list adminapi.AdminCallList
 			decode(t, rec, &list)
@@ -93,8 +97,55 @@ func TestAdminOperationsOverview(t *testing.T) {
 			if tc.name == "errors" && (list.StatusFilter == nil || *list.StatusFilter != adminapi.AdminCallStatusError) {
 				t.Fatalf("status filter echo: %s", rec.Body.String())
 			}
+			if list.SiteFilter == nil || *list.SiteFilter != siteID {
+				t.Fatalf("site filter echo: %s", rec.Body.String())
+			}
 		})
 	}
 
+	// A platform-wide search keeps the other site's call; the dashboard's own figure does not include it.
+	for query, want := range map[string]int{"": 4, "&site_id=" + url.QueryEscape(siteID): 3} {
+		rec := f.do(http.MethodGet, "/calls?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until)+query, "", as(owner))
+		expectAdmin(t, "site calls", rec, 200, "")
+		var list adminapi.AdminCallList
+		decode(t, rec, &list)
+		if list.Data == nil || len(*list.Data) != want {
+			t.Fatalf("calls with %q: %s", query, rec.Body.String())
+		}
+	}
+
 	expectAdmin(t, "overview window too wide", f.do(http.MethodGet, "/reports/overview?since=2020-01-01T00:00:00Z&until=2020-03-01T00:00:00Z", "", as(owner)), 400, "")
+}
+
+// TestAdminOperationsOverviewSumsWiderThanInt64: two settled calls that each fit int64 add up past it; the dashboard
+// keeps the digits in decimal text instead of failing the page or wrapping the number.
+func TestAdminOperationsOverviewSumsWiderThanInt64(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	main, _, err := f.svc.SiteForHost(adminHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := uuid.UUID(main.ID).String()
+	account := f.text("SELECT id::text FROM accounts.accounts ORDER BY id LIMIT 1")
+	now := time.Now().UTC()
+	since, until := now.Add(-time.Hour).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339)
+	const half = int64(5_000_000_000_000_000_000)
+	f.run(
+		`INSERT INTO billing.holders (id, expires_at) VALUES (uuidv7(), now() + interval '1 hour')`,
+		fmt.Sprintf(`INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
+ workspace_window, key_window, segment, amount, state, deadline, charged, profit, created_at)
+ SELECT uuidv7(), '%s', '%s', uuidv7(), uuidv7(), (SELECT id FROM billing.holders ORDER BY id LIMIT 1), now(), now(),
+  1, %d, 'settled', now() + interval '1 hour', %d, 0, now()
+ FROM generate_series(1, 2)`, site, account, half, half),
+	)
+	rec := f.do(http.MethodGet, "/reports/overview?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until), "", as(owner))
+	expectAdmin(t, "wide overview", rec, 200, "")
+	var overview adminapi.OperationsOverview
+	decode(t, rec, &overview)
+	const sum = "10000000000000000000"
+	if overview.Revenue == nil || overview.Revenue.Amount != sum || overview.Cost == nil || overview.Cost.Amount != sum {
+		t.Fatalf("wide revenue and cost: %s", rec.Body.String())
+	}
 }

@@ -83,6 +83,10 @@ paths:
         in: query
         schema:
           $ref: '#/components/schemas/AdminCallStatus'
+      - name: site_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/SiteId'
       responses:
         '200':
           description: Result
@@ -1178,6 +1182,40 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PaymentOrderList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/cash:
+    get:
+      operationId: listCashMovements
+      tags: [Payments]
+      summary: The cash behind the dashboard, by ledger time
+      description: >-
+        One site's cash movements in a window, newest first: paid credits in and refunds out, with the batch, order or
+        offline channel they came from. The time is the ledger transaction's, not an order's creation time, so a
+        refund of an older order and an offline top-up are both in the window the dashboard counted. `since` is
+        inclusive and `until` exclusive; `account_id` narrows to one payer. Pages use `cursor` and `limit`; money is
+        exact text in the payment's currency, and the site's accounting currency where the ledger leaves it NULL.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: account_id, in: query, schema: {$ref: "#/components/schemas/AccountId"}}
+        - {name: since, in: query, schema: {type: string, format: date-time}, description: "Transactions at or after this time."}
+        - {name: until, in: query, schema: {type: string, format: date-time}, description: "Transactions before this time."}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of the site's cash movements, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CashMovementList"}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -3835,6 +3873,8 @@ components:
         model_filter: *admin_schema_id001
         status_filter:
           $ref: '#/components/schemas/AdminCallStatus'
+        site_filter:
+          $ref: '#/components/schemas/SiteId'
     AdminAttempt:
       type: object
       additionalProperties: false
@@ -4224,6 +4264,29 @@ components:
           type: array
           items: {$ref: "#/components/schemas/PaymentOrder"}
         next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    CashMovement:
+      type: object
+      description: >-
+        One cash entry of the ledger: a paid credit or a refund. Every field is optional during rolling deployment.
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        kind: {type: string, enum: [credit, refund]}
+        at: {type: string, format: date-time, description: "The transaction's time, which is what the dashboard's window counted."}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        batch_id: {$ref: "#/components/schemas/Uuid"}
+        amount: {$ref: "#/components/schemas/Money"}
+        order_id:
+          allOf: [{$ref: "#/components/schemas/OrderId"}]
+          description: "The order behind an online payment; absent for an offline channel."
+        offline_channel: {type: string, description: "Where an offline payment was received; absent for an online order."}
+    CashMovementList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/CashMovement"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     Merchant:
       type: object
       description: A merchant account of a payment channel, without its secrets. Every field is optional during rolling deployment.
@@ -4545,6 +4608,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        site_id:
+          $ref: '#/components/schemas/SiteId'
         since: {type: string, format: date-time}
         until: {type: string, format: date-time}
         calls: {type: integer, format: int64}
@@ -4587,9 +4652,10 @@ components:
       description: >-
         An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one
         unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the
-        same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it.
+        same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it, and a report's sum can
+        be wider than 64 bits.
       properties:
-        amount: {type: string, pattern: '^-?(0|[1-9][0-9]{0,18})$', example: "1500000000"}
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]*)$', maxLength: 39, example: "1500000000"}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
     Money:
       type: object
@@ -4597,9 +4663,10 @@ components:
       description: >-
         An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of
         one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round
-        above 2^53 (about 9 million units) in the browser.
+        above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than
+        64 bits; an amount that is written to the ledger must still fit 64 bits.
       properties:
-        amount: {type: string, pattern: '^-?(0|[1-9][0-9]{0,18})$', example: "1500000000"}
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]*)$', maxLength: 39, example: "1500000000"}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
     Version:
       type: object

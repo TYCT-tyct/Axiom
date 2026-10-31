@@ -35,6 +35,7 @@ import { adminCallsQuery } from "../queries";
 type CallFilters = {
   account_id?: string;
   request_id?: string;
+  site_id?: string;
   model?: string;
   status?: "ok" | "error";
   since?: string;
@@ -43,29 +44,43 @@ type CallFilters = {
 
 function narrowed(filters: CallFilters): boolean {
   return Boolean(
-    filters.account_id || filters.request_id || filters.model || filters.status || filters.since || filters.until,
+    filters.account_id ||
+      filters.request_id ||
+      filters.site_id ||
+      filters.model ||
+      filters.status ||
+      filters.since ||
+      filters.until,
   );
 }
 
 // An older node does not know the model and result filters: it answers without echoing them, and its rows were not
 // narrowed, so the page says so instead of passing them off as the filtered result.
-function unfiltered(filters: CallFilters, page: AdminSchemas["AdminCallList"] | undefined): boolean {
+export function unfiltered(filters: CallFilters, page: AdminSchemas["AdminCallList"] | undefined): boolean {
   return (
+    (filters.site_id !== undefined && page?.site_filter === undefined) ||
     (filters.model !== undefined && page?.model_filter === undefined) ||
     (filters.status !== undefined && page?.status_filter === undefined)
   );
 }
 
 // What the filter form means in the address: text that is blank narrows nothing, and a time is the instant it names.
-function callSearch(values: Record<string, string>) {
+function callSearch(values: Record<string, string>, site?: string) {
   return {
     account_id: text(values.account_id),
     request_id: text(values.request_id),
+    site_id: site,
     model: text(values.model),
     status: callStatus(values.status),
     since: toInstant(values.since),
     until: toInstant(values.until),
   };
+}
+
+// Any loaded page without the echo means an older node answered part of this list: the model, result and site filters
+// did not narrow it, so the page says so for the whole list.
+export function anyUnfiltered(filters: CallFilters, pages: readonly AdminSchemas["AdminCallList"][]): boolean {
+  return pages.some((page) => unfiltered(filters, page));
 }
 
 // The support view of calls: what a person asks about a bill, without costs, endpoints or routes. The operator's trace
@@ -77,6 +92,7 @@ export default function Calls() {
     adminCallsQuery({
       account_id: filters.account_id,
       request_id: filters.request_id,
+      site_id: filters.site_id,
       model: filters.model,
       status: filters.status,
       since: filters.since,
@@ -84,13 +100,24 @@ export default function Calls() {
     }),
   );
   const rows = calls.data?.pages.flatMap((page) => page.data ?? []) ?? [];
-  const first = calls.data?.pages[0];
-  const unsupported = first !== undefined && unfiltered(filters, first);
+  const unsupported = calls.data ? anyUnfiltered(filters, calls.data.pages) : false;
   return (
     <>
       <PageHeader title={t("nav.calls")} description={t("calls.description")} />
       <PageBody>
         <Filters filters={filters} />
+        {filters.site_id ? (
+          <Notice>
+            {t("calls.filters.siteScoped")}{" "}
+            <Link
+              to="/calls"
+              search={{ ...filters, site_id: undefined }}
+              className="text-accent underline-offset-4 hover:underline"
+            >
+              {t("calls.filters.allSites")}
+            </Link>
+          </Notice>
+        ) : null}
         <Panel>
           {unsupported ? <Notice>{t("calls.filters.unsupported")}</Notice> : null}
           <DataState
@@ -115,7 +142,10 @@ function Filters({ filters }: { filters: CallFilters }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   return (
-    <FilterBar values={filters} onApply={(values) => navigate({ to: "/calls", search: callSearch(values) })}>
+    <FilterBar
+      values={filters}
+      onApply={(values) => navigate({ to: "/calls", search: callSearch(values, filters.site_id) })}
+    >
       <TextField
         label={t("calls.filters.account")}
         hint={t("calls.filters.accountHint")}
