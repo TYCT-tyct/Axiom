@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import tempfile
@@ -11,12 +12,30 @@ ROOT = Path(__file__).parents[1]
 
 @unittest.skipUnless(BASH, "Bash is unavailable")
 class ReuseRelease(unittest.TestCase):
-    def run_deploy(self, image, actual_image=None):
+    def run_deploy(self, image, actual_image=None, verify_status=0, attest_status=0):
         stubs = r'''
 python3() { echo fixture; }
 just() { [ "$1" != axiom-version ] || echo 'axiom fixture'; }
 go() { :; }
 timeout() { shift; "$@"; }
+cosign() {
+  printf 'cosign %s\n' "$*" >> "$CALLS"
+  case "$1" in
+    verify) return "${COSIGN_VERIFY_STATUS:-0}" ;;
+    verify-attestation)
+      [ "${COSIGN_ATTEST_STATUS:-0}" = 0 ] || return "$COSIGN_ATTEST_STATUS"
+      image="${!#}"
+      digest="${image##*@}"
+      payload="$(jq -nc --arg d "${digest#sha256:}" '
+        {_type: "https://in-toto.io/Statement/v0.1",
+         subject: [{name: "x", digest: {sha256: $d}}],
+         predicateType: "https://spdx.dev/Document",
+         predicate: {spdxVersion: "SPDX-2.3"}}' | base64 | tr -d '\n')"
+      printf '{"payload":"%s","payloadType":"application/vnd.in-toto+json","signatures":[]}\n' "$payload"
+      ;;
+  esac
+}
+export -f cosign
 docker() {
   printf '%s\n' "$*" >> "$CALLS"
   case "$*" in
@@ -47,12 +66,21 @@ curl() {
             (root / "deploy/postgres").mkdir(parents=True)
             (root / "deploy/postgres/roles.sh").touch()
             log = root / "docker.log"
-            env = {**os.environ, "CALLS": str(log), "CI_DEPLOY_VERSION": "axiom fixture", "AXIOM_TEST_CGROUP_PARENT": ""}
+            env = {**os.environ, "CALLS": str(log), "CI_DEPLOY_VERSION": "axiom fixture", "AXIOM_TEST_CGROUP_PARENT": "",
+                   "COSIGN_VERIFY_STATUS": str(verify_status), "COSIGN_ATTEST_STATUS": str(attest_status)}
+            for name in ("GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_REF", "RELEASE_SIGNING_IDENTITY",
+                         "CI_DEPLOY_RELEASE"):
+                env.pop(name, None)
             if actual_image:
                 env["ACTUAL_IMAGE"] = actual_image
             env.pop("CI_DEPLOY_IMAGE", None)
             if image is not None:
                 env["CI_DEPLOY_IMAGE"] = image
+                (root / "release.json").write_text(json.dumps({
+                    "image_digest": image.rsplit("@", 1)[-1],
+                    "signing_identity": "https://github.com/TYCT-tyct/Axiom/.github/workflows/ci.yml@refs/heads/main",
+                }))
+                env["CI_DEPLOY_RELEASE"] = str(root / "release.json")
             # Source to preserve stub functions; the script's exit trap is exercised in the child shell.
             result = subprocess.run([BASH, "-c", stubs + '\nsource "$1"', "test", str(ROOT / "scripts/ci/deploy-check.sh")],
                                     env=env, cwd=tmp, capture_output=True, text=True)
@@ -88,6 +116,28 @@ curl() {
         result, calls = self.run_deploy("axiom:mutable")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires a digest", result.stdout)
+        self.assertFalse(any(" up " in call or call.startswith("build ") for call in calls))
+
+    def test_the_signature_is_verified_before_the_release_is_pulled_or_started(self):
+        result, calls = self.run_deploy("127.0.0.1:1234/axiom@sha256:" + "a" * 64)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        verify = next(i for i, call in enumerate(calls) if call.startswith("cosign verify "))
+        self.assertLess(verify, next(i for i, call in enumerate(calls) if " up " in call))
+        self.assertIn("--certificate-identity https://github.com/TYCT-tyct/Axiom/.github/workflows/ci.yml@refs/heads/main",
+                      calls[verify])
+        self.assertIn("--allow-insecure-registry", calls[verify]) # the train's loopback registry
+        self.assertTrue(any(call.startswith("cosign verify-attestation ") for call in calls))
+
+    def test_an_unsigned_release_never_reaches_startup(self):
+        result, calls = self.run_deploy("127.0.0.1:1234/axiom@sha256:" + "a" * 64, verify_status=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no valid keyless signature", result.stderr)
+        self.assertFalse(any(" up " in call or call.startswith("build ") for call in calls))
+
+    def test_a_release_without_its_sbom_attestation_never_reaches_startup(self):
+        result, calls = self.run_deploy("127.0.0.1:1234/axiom@sha256:" + "a" * 64, attest_status=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no valid SPDX attestation", result.stderr)
         self.assertFalse(any(" up " in call or call.startswith("build ") for call in calls))
 
 
