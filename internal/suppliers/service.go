@@ -352,11 +352,18 @@ func (s *Service) Reload(ctx context.Context) error {
 	next := &snapshot{endpoints: map[EndpointID]*endpoint{}, confirmed: asked}
 	schedules := maps.Clone(*s.schedules.Load())
 	unloadable := map[uuid.UUID]error{}
+	unsupported := map[uuid.UUID]error{}
 	for _, r := range rows {
 		if _, left := unloadable[r.SupplierID]; left {
 			continue
 		}
 		if err := s.load(next, schedules, r); err != nil {
+			if errors.Is(err, store.ErrUnsupportedFormat) {
+				// A newer node wrote a format this one cannot serve. Leave that endpoint out, not its supplier: the
+				// supplier's other endpoints still serve, and a rolling back release must not lose the whole provider.
+				unsupported[r.EndpointID] = err
+				continue
+			}
 			unloadable[r.SupplierID] = err
 		}
 	}
@@ -369,6 +376,10 @@ func (s *Service) Reload(ctx context.Context) error {
 	s.applyShares(next)
 	s.snap.Store(next)
 	s.report(ctx, unloadable)
+	for id, cause := range unsupported {
+		s.cfg.Logger.Warn("suppliers: an endpoint with a format this node does not know is left out",
+			"event", unsupportedFormatEvent, "endpoint", id, "err", cause)
+	}
 	return nil
 }
 
@@ -539,8 +550,9 @@ var (
 const (
 	// unloadableEvent is the stable name of the error log for a supplier left out of the snapshot, as the queue's
 	// discarded jobs have theirs (internal/platform/pg/queue.go).
-	unloadableEvent  = "suppliers.unloadable"
-	unloadableMetric = "axiom.suppliers.unloadable"
+	unloadableEvent        = "suppliers.unloadable"
+	unsupportedFormatEvent = "suppliers.unsupported_format"
+	unloadableMetric       = "axiom.suppliers.unloadable"
 )
 
 // availableCredentials counts eligible keys without consuming a concurrency or RPM slot.

@@ -57,7 +57,7 @@ var parameterNames = map[string]Parameter{
 // service tiers). They ask nothing of the endpoint's parameter list.
 var requestControls = map[string]struct{}{
 	"model": {}, "models": {}, "fallbacks": {}, "messages": {}, "system": {}, "input": {}, "contents": {},
-	"instructions": {}, "conversation": {}, "prompt": {},
+	"instructions": {}, "conversation": {}, "prompt": {}, "query": {}, "documents": {},
 	"stream": {}, "stream_options": {}, "provider": {}, "preset": {}, "session_id": {}, "plugins": {}, "transforms": {},
 	"route": {}, "usage": {}, "axiom": {}, "prompt_cache_key": {}, "user": {}, "metadata": {}, "store": {},
 	"safety_identifier": {}, "cache_control": {}, "context_management": {}, "mcp_servers": {}, "speed": {},

@@ -103,6 +103,8 @@ type sampledPath struct {
 }
 
 // samplePaths are the streams to aggregate: each sample for each client it serves, and the assembled stream.
+//
+//nolint:exhaustive // the sample set names the formats it covers
 func samplePaths(t *testing.T) []sampledPath {
 	t.Helper()
 	paths := []sampledPath{

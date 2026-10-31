@@ -254,6 +254,31 @@ func (d *RouteDeps) report(left map[catalog.ModelID]*leftOut) {
 // endpointOf is one supplier endpoint as routing holds it, or the reason it cannot be one. The rules are the assembly
 // ones of docs/domains/routing.md「快照从哪来」: nothing is guessed — a model without a spec, or without a sale price,
 // has no routing entry at all.
+// chatFormats are the formats that convert into each other: an endpoint speaking any of them serves all three.
+var chatFormats = routing.Of(protocol.Messages, protocol.Responses, protocol.Chat)
+
+// servingOf is the spec an endpoint must meet: all of Serving for a generation format, and only the context for an
+// endpoint reached solely through embeddings or rerank, which generates nothing and needs no output limit.
+func servingOf(model catalog.Model, formats []protocol.Format) (catalog.Serving, bool) {
+	if serving, ok := model.Serving(); ok || !onlyDirectFormats(formats) {
+		return serving, ok
+	}
+	return model.ServingDirect()
+}
+
+// onlyDirectFormats reports whether every format is a direct one, in which case the model generates nothing.
+func onlyDirectFormats(formats []protocol.Format) bool {
+	if len(formats) == 0 {
+		return false
+	}
+	for _, f := range formats {
+		if !f.Direct() {
+			return false
+		}
+	}
+	return true
+}
+
 func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
 	measured quality.Measures,
 ) (routing.Endpoint, string) {
@@ -261,7 +286,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	if !ok {
 		return routing.Endpoint{}, "the catalog has no such model"
 	}
-	serving, ok := model.Serving()
+	serving, ok := servingOf(model, r.Formats)
 	if !ok {
 		return routing.Endpoint{}, "its spec declares no context length, output limit, streaming or abilities"
 	}
@@ -280,11 +305,12 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	tiers := reportable.ServiceTiers
 	tiers.Add(catalog.ServiceTierStandard) // every endpoint is called at the standard tier unless it says otherwise
 	native := routing.Of(r.Formats...)
-	// Every pair of the three formats converts (protocol README.md「跨格式转换」), so an endpoint that speaks one serves
-	// all; Native keeps the one it is called in, which is what a request only its own format can express needs.
+	// Every pair of the three chat formats converts (protocol README.md「跨格式转换」), so an endpoint that speaks one
+	// serves all three; Native keeps the one it is called in, which is what a request only its own format can express
+	// needs. The direct formats do not convert, so an endpoint serves one only where it lists it.
 	served := native
-	if native != 0 {
-		served = routing.Of(protocol.Messages, protocol.Responses, protocol.Chat)
+	if native&chatFormats != 0 {
+		served |= chatFormats
 	}
 	_, blockedItem := blocked[catalog.ModelID(r.Model)]
 	// The model streams only if its spec says the vendor does and the supplier's own policy says it can pass a stream:

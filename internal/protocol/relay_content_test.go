@@ -110,6 +110,8 @@ func decodes(stream []byte) bool {
 
 // endsNormally reports whether a stream its format's check accepts ends the way that format ends normally, not with
 // an error.
+//
+//nolint:exhaustive // a format without an end event is not normal
 func endsNormally(f protocol.Format, stream []byte) bool {
 	r := sse.NewReader(bytes.NewReader(stream), 32<<20)
 	var last []byte

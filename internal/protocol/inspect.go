@@ -22,10 +22,16 @@ type Format uint8
 
 // The call formats.
 const (
-	Messages  Format = iota // Anthropic Messages
-	Responses               // OpenAI Responses
-	Chat                    // OpenAI Chat Completions
+	Messages   Format = iota // Anthropic Messages
+	Responses                // OpenAI Responses
+	Chat                     // OpenAI Chat Completions
+	Embeddings               // OpenAI's embeddings
+	Rerank                   // OpenRouter's rerank
 )
+
+// Direct reports whether a format answers one whole JSON body that is not a generation, with no stream to relay and
+// no content to meter: embeddings and rerank.
+func (f Format) Direct() bool { return f == Embeddings || f == Rerank }
 
 // Capabilities is a set of features a request uses that an endpoint may lack. Routing keeps only the endpoints that
 // have all of them (docs/domains/routing.md「一个请求的路由步骤」).
@@ -71,6 +77,9 @@ type Request struct {
 	// TextBytes bounds the text input's tokens: the body's bytes less the image and document data that Images and
 	// Documents count instead.
 	TextBytes, Images, Documents int64
+	// MaxInputBytes is the largest single input of a batch, in bytes; 0 when the request has one input. A batch's
+	// context limit applies to each input, while TextBytes is what all of them are charged for.
+	MaxInputBytes int64
 	// FileRefs is how many files the request refers to by an id an upstream issued instead of carrying their data. A
 	// reference is the supplier account's resource: routing keeps such a request to the one provider the client names,
 	// so it can only reach the account that can hold the file (README.md「跨格式转换」).
@@ -81,7 +90,8 @@ type Request struct {
 	// ServiceTiers are the service tiers the request may be served at.
 	ServiceTiers catalog.ServiceTierSet
 	// WebSearches and CodeExecutions are the most calls the request allows of each such tool it enables, 0 when it
-	// sets no limit and the model's default applies.
+	// sets no limit and the model's default applies. A rerank request sets WebSearches to one: its search unit is
+	// priced as a web search, though the request does not ask for the model's web_search ability.
 	WebSearches, CodeExecutions int64
 	// HidesReasoning is set when the request asks for reasoning to be left out of the stream, whose progress then
 	// cannot be observed (docs/domains/billing.md「预留与结算」).
@@ -124,7 +134,12 @@ func bodyFault(err error) string {
 // Inspect reads the request summary from body in one pass of the tokenizer, never decoding the body into a tree, so
 // its own allocations do not grow with the body; the tokenizer's grow only with the names of objects wider than 64
 // names, as in jsonx.Validate (README.md「请求摘要」). Members it does not read are only checked to be JSON.
+//
+//nolint:cyclop,gocognit // one dispatch over every format, each branch one reader
 func Inspect(f Format, body []byte) (Request, error) {
+	if f.Direct() {
+		return inspectNew(f, body)
+	}
 	g := &grammars[f]
 	s := scanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), g: g}
 	s.r = Request{Format: f, Choices: 1, TextBytes: int64(len(body)), InputItems: g.input}

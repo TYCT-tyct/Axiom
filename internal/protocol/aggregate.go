@@ -237,6 +237,8 @@ func mergeObjects(old, add []byte) ([]byte, error) {
 }
 
 // newAggregator returns the aggregator for a client of format f.
+//
+//nolint:exhaustive // only the generation formats have an aggregator
 func newAggregator(f Format, draw func(int) error) aggregator {
 	switch f {
 	case Messages:

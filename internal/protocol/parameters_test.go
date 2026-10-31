@@ -45,6 +45,8 @@ func TestRequestParameters(t *testing.T) {
 		"responses text verbosity":      {protocol.Responses, `{"model":"m","input":"hi","text":{"verbosity":"high"}}`, 0, "verbosity", true},
 		"responses text verbosity null": {protocol.Responses, `{"model":"m","input":"hi","text":{"verbosity":null}}`, 0, "", false},
 		"responses text format":         {protocol.Responses, `{"model":"m","input":"hi","text":{"format":{"type":"json_object"}}}`, 0, "", false},
+		"embeddings structure":          {protocol.Embeddings, `{"model":"m","input":["a","b"],"provider":{"require_parameters":true}}`, 0, "", false},
+		"rerank structure":              {protocol.Rerank, `{"model":"m","query":"q","documents":["d"],"provider":{"require_parameters":true}}`, 0, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

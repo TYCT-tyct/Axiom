@@ -35,7 +35,7 @@ func audienceBenchmark(b *testing.B) (*Router, []*candidate, *need, *billing.Aud
 		if err != nil {
 			b.Fatal(err)
 		}
-		c.prices, err = compileAudiencePrices(compiled, priceCache)
+		c.prices, err = compileAudiencePrices(compiled, priceCache, false)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -61,7 +61,7 @@ func benchmarkAudienceMode(b *testing.B, mode string, r *Router, candidates []*c
 	for b.Loop() {
 		if mode == "admission" {
 			price := billing.Sold{Audiences: compiled}.For(billing.Audience{Tier: n.in.Admission.Tier})
-			derived, err := priceOf(PriceRef{Version: price.Version, Schedule: price.Schedule})
+			derived, err := priceOf(PriceRef{Version: price.Version, Schedule: price.Schedule}, false)
 			if err != nil {
 				b.Fatal(err)
 			}

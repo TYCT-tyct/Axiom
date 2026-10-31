@@ -362,6 +362,8 @@ func scopeName(s Scope) string { return ProblemScopes[s] }
 // max_tokens, so a model that refuses it in favour of max_completion_tokens answers 400 and the
 // test is inconclusive rather than a failure the endpoint did not commit (internal/suppliers/README.md「用真实生成测试
 // 端点」).
+//
+//nolint:exhaustive // endpoint tests cover the generation formats; direct formats return ErrNoFormat
 func testCall(f protocol.Format, model, prompt string, output int64) ([]byte, error) {
 	message := map[string]any{"role": "user", "content": prompt}
 	var body map[string]any

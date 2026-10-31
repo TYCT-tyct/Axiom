@@ -61,6 +61,7 @@ func (c streamFailureCase) run(t *testing.T) {
 	})
 }
 
+//nolint:exhaustive // only the generation formats have preludes
 func failurePrelude(h *harness, f protocol.Format) beat {
 	switch f {
 	case protocol.Messages:
@@ -72,6 +73,7 @@ func failurePrelude(h *harness, f protocol.Format) beat {
 	return h.feed(0, 1)
 }
 
+//nolint:exhaustive // only the generation formats have failure frames
 func streamFailure(f protocol.Format, fault string) string {
 	const usage = `{"input_tokens":900,"output_tokens":700}`
 	errorObject := `{"type":"` + fault + `","message":"upstream-vendor: bad parameter"}`

@@ -73,6 +73,7 @@ type Model struct {
 	reportable   Reportable
 	serving      Serving
 	serves       bool // the spec declares everything Serving reads
+	directServes bool // context is declared; a direct-only format needs neither an output limit nor streaming
 	toolUses     map[Item]int64
 	dialect      Dialect
 	speed        int64     // the fastest output, in tokens per second; 0 when the spec does not say
@@ -168,6 +169,16 @@ type Serving struct {
 // wrong limit. It is all of them or none, so a caller that ignores ok cannot act on half a reading.
 func (m Model) Serving() (Serving, bool) {
 	if !m.serves {
+		return Serving{}, false
+	}
+	return m.serving, true
+}
+
+// ServingDirect reads the spec key an endpoint of a direct-only format needs: its context length. It does not require
+// an output limit, streaming or abilities, none of which a model that generates nothing uses. A model that also serves
+// a generation format must satisfy Serving instead: its output limit and streaming are then not optional.
+func (m Model) ServingDirect() (Serving, bool) {
+	if !m.directServes {
 		return Serving{}, false
 	}
 	return m.serving, true

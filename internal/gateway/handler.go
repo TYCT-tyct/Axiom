@@ -87,6 +87,7 @@ func NewHandler(d Deps) (*Handler, error) {
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
+			"/embeddings": protocol.Embeddings, "/rerank": protocol.Rerank,
 		} {
 			h.mux.HandleFunc("POST "+prefix+path, h.call(format, false))
 			h.mux.HandleFunc("GET "+prefix+path, refuseUpgrade(format))

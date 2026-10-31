@@ -3071,11 +3071,16 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         /** @enum {string} */
-        ModelFormat: "messages" | "responses" | "chat";
+        ModelFormat: "messages" | "responses" | "chat" | "embeddings" | "rerank";
+        /**
+         * @description The generation formats an endpoint test can exercise. Direct formats are listed on the endpoint but are not tested here yet.
+         * @enum {string}
+         */
+        TestFormat: "messages" | "responses" | "chat";
         EndpointTestRequest: {
             endpoint_id: components["schemas"]["Uuid"];
             /** @description The format to test it in; it must be one the endpoint serves. */
-            format: components["schemas"]["ModelFormat"];
+            format: components["schemas"]["TestFormat"];
             reason: components["schemas"]["Reason"];
         };
         /**
@@ -3103,7 +3108,7 @@ export interface components {
             model_id: components["schemas"]["Uuid"];
             /** @description The model's name at the supplier, which the call sent. */
             upstream_model: string;
-            format: components["schemas"]["ModelFormat"];
+            format: components["schemas"]["TestFormat"];
             outcome: components["schemas"]["EndpointTestOutcome"];
             problem?: components["schemas"]["EndpointTestProblem"];
             /** @description The supplier's HTTP status; 0 when it answered nothing. */

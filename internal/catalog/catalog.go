@@ -259,7 +259,7 @@ func modelFromRow(row CatalogModel) (Model, error) {
 		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
 		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource),
 		spec: string(row.Spec), Rev: row.Rev, reportable: spec.reportable, serving: spec.serving, serves: spec.serves,
-		dialect: spec.dialect, toolUses: spec.toolUses, speed: spec.speed, reasoning: spec.reasoning,
+		directServes: spec.directServes, dialect: spec.dialect, toolUses: spec.toolUses, speed: spec.speed, reasoning: spec.reasoning,
 	}, nil
 }
 
@@ -305,15 +305,16 @@ type DialectKeys struct {
 }
 
 type spec struct {
-	toolUses   map[Item]int64
-	reportable Reportable
-	declared   bool // both lists are present, possibly empty
-	serving    Serving
-	serves     bool // every key Serving reads is present
-	abilities  bool // the abilities are listed, possibly empty
-	dialect    Dialect
-	speed      int64     // the fastest output, in tokens per second; 0 when the spec does not say
-	reasoning  FormatSet // the call formats in which the model's stream shows reasoning progress
+	toolUses     map[Item]int64
+	reportable   Reportable
+	declared     bool // both lists are present, possibly empty
+	serving      Serving
+	serves       bool // every key Serving reads is present
+	directServes bool // context is present; direct-only formats need neither an output limit nor streaming
+	abilities    bool // the abilities are listed, possibly empty
+	dialect      Dialect
+	speed        int64     // the fastest output, in tokens per second; 0 when the spec does not say
+	reasoning    FormatSet // the call formats in which the model's stream shows reasoning progress
 }
 
 // parseSpec checks a spec is a JSON object whose items, tiers and abilities, if present, name billing items, service
@@ -344,15 +345,16 @@ func parseSpec(raw []byte) (spec, error) {
 		return spec{}, err
 	}
 	return spec{
-		toolUses:   toolUses,
-		reportable: reportable,
-		serving:    serving,
-		dialect:    dialect,
-		declared:   w.Items != nil && w.Tiers != nil,
-		serves:     w.Context != nil && w.MaxOutput != nil && w.Streams != nil && w.Abilities != nil,
-		abilities:  w.Abilities != nil,
-		speed:      speed,
-		reasoning:  reasoning,
+		toolUses:     toolUses,
+		reportable:   reportable,
+		serving:      serving,
+		dialect:      dialect,
+		declared:     w.Items != nil && w.Tiers != nil,
+		serves:       w.Context != nil && w.MaxOutput != nil && w.Streams != nil && w.Abilities != nil,
+		abilities:    w.Abilities != nil,
+		speed:        speed,
+		reasoning:    reasoning,
+		directServes: w.Context != nil,
 	}, nil
 }
 

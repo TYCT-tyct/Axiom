@@ -168,3 +168,22 @@ func TestUnitPriceRoundsUp(t *testing.T) {
 		}
 	}
 }
+
+// TestFormatsOfDirectFormats: new-api's endpoint types name the direct formats, which do not convert, so a model that
+// names only one of them must not be recorded as a chat model.
+func TestFormatsOfDirectFormats(t *testing.T) {
+	for _, tc := range []struct {
+		endpoints []string
+		want      []protocol.Format
+	}{
+		{[]string{"embeddings"}, []protocol.Format{protocol.Embeddings}},
+		{[]string{"jina-rerank"}, []protocol.Format{protocol.Rerank}},
+		{[]string{"rerank"}, []protocol.Format{protocol.Rerank}},
+		{[]string{"openai", "embeddings"}, []protocol.Format{protocol.Chat, protocol.Embeddings}},
+		{[]string{"embeddings", "openai"}, []protocol.Format{protocol.Embeddings, protocol.Chat}},
+	} {
+		if diff := cmp.Diff(tc.want, formatsOf(tc.endpoints)); diff != "" {
+			t.Errorf("formats of %v (-want +got):\n%s", tc.endpoints, diff)
+		}
+	}
+}

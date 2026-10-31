@@ -1,3 +1,4 @@
+//nolint:revive // the routing table and its helpers are one fixture; the file is the test
 package routing_test
 
 import (
@@ -541,5 +542,67 @@ func TestOutputCapQuotedIsTheCapSent(t *testing.T) {
 		if sent != c.want || c.limit > 0 && sent != entry.MaxOutput {
 			t.Errorf("%s: the upstream is sent a cap of %d, the entry is quoted at %d, want %d\n%s", c.name, sent, entry.MaxOutput, c.want, u.Body)
 		}
+	}
+}
+
+// TestEntryDirectFormats: a direct call is read whole, so an endpoint need not stream it, and it is never converted:
+// a model that does not list the format has no entry. A generation is read as a stream, so an endpoint that cannot
+// stream it is left out (docs/domains/gateway.md「转发规则」).
+func TestEntryDirectFormats(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		format  protocol.Format
+		streams bool
+		want    bool
+	}{
+		{protocol.Embeddings, false, true},
+		{protocol.Rerank, false, true},
+		{protocol.Chat, true, true},
+		{protocol.Chat, false, false},
+	} {
+		e := endpoint(t, 1, func(e *routing.Endpoint) {
+			e.Native, e.Served, e.Streams = routing.Of(tc.format), routing.Of(tc.format), tc.streams
+			e.Target = protocol.Target{Model: "upstream-name"}
+		})
+		in := input()
+		in.Req.Format, in.NativeOnly, in.NoSegments = tc.format, true, tc.format.Direct()
+		plan, wait, err := newHarness(t, routing.Config{}, openPreset(), e).r.Plan(in)
+		if wait != nil {
+			t.Fatalf("%v streaming %t: wait %v", tc.format, tc.streams, wait)
+		}
+		if got := len(plan.Entries) == 1; got != tc.want {
+			t.Errorf("%v streaming %t: %d entries, error %v, want one: %t", tc.format, tc.streams, len(plan.Entries), err, tc.want)
+			continue
+		}
+		if !tc.want {
+			continue
+		}
+		entry := plan.Entries[0]
+		if entry.Target.Format != tc.format || entry.Target.Streams != tc.streams || entry.Segmentable {
+			t.Errorf("%v streaming %t: target %+v, segmentable %t", tc.format, tc.streams, entry.Target, entry.Segmentable)
+		}
+	}
+	// A chat endpoint does not serve a direct format: the client's format is not converted to it.
+	e := endpoint(t, 1, func(e *routing.Endpoint) {
+		e.Native, e.Served = routing.Of(protocol.Chat), routing.Of(protocol.Chat)
+	})
+	in := input()
+	in.Req.Format, in.NativeOnly = protocol.Embeddings, true
+	plan, _, _ := newHarness(t, routing.Config{}, openPreset(), e).r.Plan(in) //nolint:errcheck // no endpoint is the expected permanent result here
+	if len(plan.Entries) != 0 {
+		t.Errorf("embeddings on a chat endpoint: %d entries", len(plan.Entries))
+	}
+}
+
+// TestRerankDemandReservesItsSearchUnit: a rerank request does not ask for the model's web_search ability, but its
+// reported search_units are priced as web searches, so the reservation must include one (protocol 的「直接格式」).
+func TestRerankDemandReservesItsSearchUnit(t *testing.T) {
+	d := routing.DemandOf(&protocol.Request{Format: protocol.Rerank, WebSearches: 1})
+	if len(d.ServerTools) != 1 || d.ServerTools[0].Item != catalog.ItemWebSearch || d.ServerTools[0].MaxUses != 1 {
+		t.Fatalf("rerank demand server tools = %+v, want one web search", d.ServerTools)
+	}
+	chat := routing.DemandOf(&protocol.Request{Format: protocol.Chat})
+	if len(chat.ServerTools) != 0 {
+		t.Errorf("a chat request without web search demand got %+v", chat.ServerTools)
 	}
 }

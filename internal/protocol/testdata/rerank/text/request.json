@@ -1,0 +1,9 @@
+{
+  "model": "cohere/rerank-v3.5",
+  "query": "What is the capital of France?",
+  "documents": [
+    "Paris is the capital of France.",
+    "Berlin is the capital of Germany."
+  ],
+  "top_n": 3
+}

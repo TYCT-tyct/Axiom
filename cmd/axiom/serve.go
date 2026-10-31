@@ -121,7 +121,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer stopCache()
-	queue, recorder, recovery, registration, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, archiveStore, tel, logger, cfg.shutdownTimeout, record)
+	queue, recorder, recovery, registration, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, tel, logger, cfg.shutdownTimeout, record)
 	if err != nil {
 		return err
 	}
@@ -285,7 +285,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 //nolint:cyclop // every registration is checked in order; the order is the queue's startup contract.
 func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger,
+	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger,
 ) (*pg.Queue, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	recovery, registration, err := registerNotifications(ctx, db, queue, smtp, cache, master, keys, exit, logger)
@@ -294,6 +294,7 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
+		DirectFormats: directFormats,
 	}); err != nil {
 		return nil, nil, nil, err
 	}
@@ -450,11 +451,11 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // the recorder it had already started, since the caller has no defer of its own yet.
 func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
+	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	recorder := record(ctx, db, tel, logger)
-	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, archive, tel, logger)
+	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, directFormats, archive, tel, logger)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
 		return nil, nil, nil, nil, err

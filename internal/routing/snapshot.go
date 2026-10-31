@@ -283,17 +283,20 @@ type candidatePrice struct {
 	cacheCheaper bool
 }
 
-func priceOf(p PriceRef) (candidatePrice, error) {
+func priceOf(p PriceRef, direct bool) (candidatePrice, error) {
 	price := candidatePrice{PriceRef: p}
 	if p.none() {
 		return price, nil
 	}
 	in, hasIn := p.Schedule.BaseRate(catalog.ItemInput)
 	out, hasOut := p.Schedule.BaseRate(catalog.ItemOutput)
-	if !hasIn || !hasOut {
+	if !hasIn || (!direct && !hasOut) {
 		return price, errors.New("routing snapshot: an endpoint's price schedule lacks input or output")
 	}
-	price.blend = number(in) + number(out)
+	price.blend = number(in)
+	if hasOut {
+		price.blend += number(out)
+	}
 	read, hasRead := p.Schedule.BaseRate(catalog.ItemCacheRead)
 	price.cacheCheaper = hasRead && read.Cmp(in) < 0
 	return price, nil
@@ -343,7 +346,7 @@ func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrice
 		return nil, err
 	}
 	if e.AudiencePrices != nil {
-		c.prices, err = compileAudiencePrices(e.AudiencePrices, prices)
+		c.prices, err = compileAudiencePrices(e.AudiencePrices, prices, directOnly(e.Native))
 		if err != nil {
 			return nil, err
 		}
@@ -351,19 +354,23 @@ func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrice
 	return c, nil
 }
 
-func compileAudiencePrices(table *billing.AudiencePrices, cache map[*billing.AudiencePrices][]candidatePrice) ([]candidatePrice, error) {
-	if prices, ok := cache[table]; ok {
-		return prices, nil
+func compileAudiencePrices(table *billing.AudiencePrices, cache map[*billing.AudiencePrices][]candidatePrice, direct bool) ([]candidatePrice, error) {
+	if !direct {
+		if prices, ok := cache[table]; ok {
+			return prices, nil
+		}
 	}
 	compiled := make([]candidatePrice, len(table.Layers()))
 	for i, layer := range table.Layers() {
-		price, err := priceOf(PriceRef{Version: layer.Sold.Version, Schedule: layer.Sold.Schedule})
+		price, err := priceOf(PriceRef{Version: layer.Sold.Version, Schedule: layer.Sold.Schedule}, direct)
 		if err != nil {
 			return nil, err
 		}
 		compiled[i] = price
 	}
-	cache[table] = compiled
+	if !direct {
+		cache[table] = compiled
+	}
 	return compiled, nil
 }
 
@@ -383,8 +390,13 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports, ServiceTiers: e.ServiceTiers,
 	}}
 	var err error
-	c.price, err = priceOf(e.Price)
+	c.price, err = priceOf(e.Price, directOnly(e.Native))
 	return c, err
+}
+
+// directOnly reports whether every format is a direct one, which needs no output price.
+func directOnly(fs FormatSet) bool {
+	return fs != 0 && fs&^Of(protocol.Embeddings, protocol.Rerank) == 0
 }
 
 // number is a unit price as a float, for weighting only; money is never computed with it. It allocates, so it runs

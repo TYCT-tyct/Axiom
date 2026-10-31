@@ -217,6 +217,8 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 // right: the attempt is over (its upstream cancelled, its read returned) before Settle, and Settle is committed before
 // the ending that reports the cost is written (I3). A settlement not written in time goes on in the background once
 // the ending is out.
+//
+//nolint:cyclop // the settlement order is the invariant; each branch is one ending
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
@@ -228,6 +230,14 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	switch {
 	case e.reply != nil:
+		if s.c.Format.Direct() {
+			body, failure, failed := s.rewriteDirect(e.reply, fin)
+			if failed {
+				s.answer(ctx, ended{err: failure}, fin)
+				break
+			}
+			e.reply = body
+		}
 		s.respond(e.status, e.reply) // as it came, after the settlement (docs/domains/gateway.md「转发规则」)
 	case e.relay == nil:
 		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
@@ -256,6 +266,11 @@ func (s *session) conclude(ctx context.Context, e ended) {
 // nothing: the entry stays until its time is up or a later call succeeds elsewhere. It runs before the settlement and the
 // ending. The process table is updated immediately; the shared cache is offered a bounded background write, so the
 // next request may arrive before that binding is visible (README.md「并发、背压与共享状态」).
+// stick moves the session to the endpoint of the charged attempt when that attempt delivered content and the session
+// was not already there (docs/domains/routing.md「会话粘性」). A call that delivered nothing writes nothing and forgets
+// nothing: the entry stays until its time is up or a later call succeeds elsewhere. It runs before the settlement and the
+// ending. The process table is updated immediately; the shared cache is offered a bounded background write, so the
+// next request may arrive before that binding is visible (README.md「并发、背压与共享状态」).
 func (s *session) stick() {
 	if len(s.ends) == 0 {
 		return
@@ -271,6 +286,24 @@ func (s *session) stick() {
 			s.x.Router.Stick(s.c.Session, ep, s.c.Plan.StickyTTL)
 		}
 	}
+}
+
+// rewriteDirect rewrites a direct format's reply after settlement. Its copy was charged to the node's budget in pass,
+// and the body was validated there, so the settlement is never followed by a failure of the call's own making.
+func (s *session) rewriteDirect(reply []byte, fin *protocol.Final) ([]byte, protocol.Error, bool) {
+	var seen protocol.Usage
+	if s.last != nil {
+		seen = s.last.usage
+	}
+	model := s.c.Request.Model
+	if s.last != nil {
+		model = s.servedModel(s.last)
+	}
+	body, err := protocol.RewriteDirectReply(s.c.Format, reply, s.c.ID.String(), model, seen, fin)
+	if err != nil {
+		return nil, protocol.Error{Type: protocol.UpstreamFailed}, true
+	}
+	return body, protocol.Error{}, false
 }
 
 // answerAggregate writes the whole body of a call that did not stream, after its settlement (I3): the reply the relay

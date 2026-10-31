@@ -79,7 +79,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	n := &need{
 		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, now: now,
-		tokens: in.Req.TextBytes / billing.InputBytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
+		tokens: inputTokens(in.Req), demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
@@ -114,14 +114,25 @@ func unmeasured(order []ranked, strategy Strategy) bool {
 	return strategy == Fastest && len(order) > 0 && !slices.ContainsFunc(order, func(c ranked) bool { return c.Throughput > 0 })
 }
 
+// inputTokens is the text a candidate's context must hold: one input's, not the sum of a batch's, which direct
+// formats take one at a time.
+func inputTokens(req *protocol.Request) int64 {
+	text := req.TextBytes
+	if req.MaxInputBytes > 0 {
+		text = req.MaxInputBytes
+	}
+	return text / billing.InputBytesPerToken
+}
+
 // DemandOf is the request as billing's quote reads it, so the length that bounds the price limits is billing's own
 // (billing.InputBound), and the gateway reserves for the same demand it was routed by.
 func DemandOf(req *protocol.Request) billing.Demand {
 	d := billing.Demand{
 		TextBytes: req.TextBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
+		Direct:     req.Format.Direct(),
 		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
 	}
-	if req.Needs.Has(protocol.WebSearch) {
+	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.WebSearches})
 	}
 	if req.Needs.Has(protocol.CodeExecution) {
@@ -210,6 +221,10 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	f := n.req.Format
 	if n.in.NativeOnly {
+		return f, c.Native.Has(f)
+	}
+	if f.Direct() {
+		// A direct call has no conversion: the endpoint must speak the client's format.
 		return f, c.Native.Has(f)
 	}
 	if c.Native.Has(f) {
@@ -339,15 +354,22 @@ func (c *candidate) unfit(n *need) Reason {
 	return 0
 }
 
-// streamsFor says the endpoint can answer as the gateway reads the answer: every call but the compact one is read as a
-// stream, which an endpoint that does not stream cannot give it (docs/domains/gateway.md「转发规则」).
-func (c *candidate) streamsFor(n *need) bool { return c.Streams || n.in.NoSegments }
+// streamsFor says the endpoint can answer as the gateway reads the answer: every generation but the compact one is read
+// as a stream, which an endpoint that does not stream cannot give it; a direct call is read whole and needs no stream,
+// whatever the caller set (docs/domains/gateway.md「转发规则」).
+func (c *candidate) streamsFor(n *need) bool {
+	return c.Streams || n.in.NoSegments || n.req.Format.Direct()
+}
 
 // outputLimit is the one rule for how much output an entry at c may produce and whether the request fits c's context,
 // used both to filter and to build the entry, so the two never disagree. The limit is the request's own, if it sets one,
 // held to the endpoint's, or else the endpoint's default. The context holds the input and the output together: a limit
-// the request set that does not fit leaves the endpoint out; a default is cut to what is left of the context.
+// the request set that does not fit leaves the endpoint out; a default is cut to what is left of the context. A direct
+// call generates nothing: its limit is 0, and an input as long as the context fits it.
 func (c *candidate) outputLimit(req *protocol.Request, tokens int64) (limit int64, fits bool) {
+	if req.Format.Direct() {
+		return 0, tokens <= c.Context
+	}
 	limit = c.MaxOutput
 	if req.MaxOutput > 0 && (limit == 0 || req.MaxOutput < limit) {
 		limit = req.MaxOutput
