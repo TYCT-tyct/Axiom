@@ -67,6 +67,10 @@ type callDeps struct {
 	proxies    []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
 	kv         *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
 	alerts     alert.Sink
+	// verify answers what an endpoint claims to serve, for model verification. Production sets it unless
+	// AXIOM_MODEL_VERIFICATION=off; a test whose fake upstream counts every generation leaves it nil, and the
+	// endpoint then stays unverified.
+	verify func(catalog.ModelID) (quality.Claimed, bool)
 }
 
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
@@ -113,6 +117,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	health, healthLoop, err := quality.Start(ctx, quality.Config{
 		Node: d.nodeID, DB: d.db, Scope: pg.PlatformScope(), Mode: d.healthMode,
 		Source: upstreams, Pauses: router, Alerts: d.alerts, Logger: d.logger, Meter: d.meter,
+		Identity: d.verify,
 	})
 	if err != nil {
 		return callNode{}, err
@@ -371,4 +376,35 @@ func loadCallInputs(ctx context.Context, upstreams *suppliers.Service, cat *cata
 		return err
 	}
 	return cat.Refresh(ctx)
+}
+
+// claimedByCatalog answers what an endpoint claims to serve from the catalog's current snapshot: the author's display
+// name, which a verification answer must carry, and every other author's display name, which instead contradicts the
+// claim. The snapshot is read when a check is due, in the health loop, never on the call path
+// (docs/domains/quality.md「真伪检测」).
+func claimedByCatalog(cat *catalog.Catalog) func(catalog.ModelID) (quality.Claimed, bool) {
+	return func(id catalog.ModelID) (quality.Claimed, bool) {
+		snap, err := cat.Current()
+		if err != nil {
+			return quality.Claimed{}, false
+		}
+		m, ok := snap.Model(id)
+		if !ok || m.AuthorName == "" {
+			return quality.Claimed{}, false
+		}
+		others := make([]string, 0, 8)
+		seen := make(map[string]struct{}, 8)
+		for other := range snap.Models() {
+			name := other.AuthorName
+			if name == "" || name == m.AuthorName {
+				continue
+			}
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			others = append(others, name)
+		}
+		return quality.Claimed{Author: m.AuthorName, Others: others}, true
+	}
 }

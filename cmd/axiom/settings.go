@@ -30,6 +30,7 @@ func probesListenAddr(env *config.Env) string { return env.Addr(probesAddrVar, "
 type nodeSettings struct {
 	roles                             nodeRoles
 	healthMode                        quality.Mode
+	modelVerification                 bool // whether the health loop verifies endpoints as the models they claim
 	publicAddr, adminAddr, probesAddr string
 	nodeAddr                          string
 	coreURL                           *url.URL
@@ -87,6 +88,13 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		errs = append(errs, fmt.Errorf("%s: only an ingress forwards to a core", coreURLVar))
 	}
 	s.healthMode = quality.Mode(env.String("AXIOM_HEALTH_MODE", ""))
+	switch verify := env.String("AXIOM_MODEL_VERIFICATION", "on"); verify {
+	case "on":
+		s.modelVerification = true
+	case "off":
+	default:
+		errs = append(errs, fmt.Errorf("AXIOM_MODEL_VERIFICATION: want on or off, got %q", verify))
+	}
 	s.exchangeSource = env.String("AXIOM_EXCHANGE_SOURCE", "manual")
 	s.databaseURL = env.Required(pg.DatabaseURLVar)
 	s.completionReserve = env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)

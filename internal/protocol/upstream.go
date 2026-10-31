@@ -73,10 +73,12 @@ type eventReader struct {
 	reader
 	src bytes.Buffer
 	ctx UsageContext
-	rw  rewriter
-	e   event
-	buf []byte
-	pre []byte // the event with its edits applied, before a rewrite; reused and charged as buf is
+	// capture, when set, keeps the answer's text as it is read; a gateway call sets none.
+	capture *Capture
+	rw      rewriter
+	e       event
+	buf     []byte
+	pre     []byte // the event with its edits applied, before a rewrite; reused and charged as buf is
 	// id and model are the call ID and the client's model name as JSON strings, for edits.
 	id, model string
 	tier      *string // the service tier the OpenAI formats name outside usage, kept for every usage report
@@ -90,7 +92,7 @@ type eventReader struct {
 }
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
-	s.ctx, s.charge, s.rw.charge = u, charge, charge
+	s.ctx, s.charge, s.rw.charge, s.capture = u, charge, charge, o.Capture
 	s.rw.hidesReasoning = u.HidesReasoning
 	s.rw.w.Identity = func(string) string { return o.ID }
 	s.rw.t.Model = o.modelName()
@@ -145,6 +147,9 @@ func (s *eventReader) text() error {
 func (s *eventReader) addText(v jsontext.Value) {
 	s.e.content += unquotedLen(v)
 	addShape(&s.e.shape, v)
+	if s.capture != nil {
+		s.capture.add(v)
+	}
 }
 
 // rawContent counts a member as written, such as a tool's input or an output item, as content: its bytes bound

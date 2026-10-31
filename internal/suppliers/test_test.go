@@ -200,6 +200,29 @@ func (w *world) auditDetail(action string) (detail string) {
 	return detail
 }
 
+// TestATestKeepsTheAnswer: a test asked for a capture keeps the answer's text up to the bound and prices its own output
+// cap; a health probe's default keeps nothing.
+func TestATestKeepsTheAnswer(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	up := newTestUpstream(t, answersWhole)
+	w.pointAt(up.URL)
+	result, err := w.svc.TestEndpoint(t.Context(), TestRequest{Endpoint: w.endpoint, Format: protocol.Chat, Output: 32, Capture: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Reply != "hell" {
+		t.Errorf("the answer kept is %q, want hell", result.Reply)
+	}
+	if !strings.Contains(up.sent(), `"max_tokens":32`) {
+		t.Errorf("the call's body %s does not ask for 32 tokens", up.sent())
+	}
+	// 18 prompt tokens and the 32-token cap at their highest rates: 18×0.075 + 32×0.3.
+	if got := result.Estimate(); got != "10.95" {
+		t.Errorf("the estimate is %s, want 10.95", got)
+	}
+}
+
 // TestATestThatFailsIsBookedAndSaysWhy: an endpoint's own failure is a failed test that still books what it was
 // estimated at, because the platform may have been billed for the attempt.
 func TestATestThatFailsIsBookedAndSaysWhy(t *testing.T) {
