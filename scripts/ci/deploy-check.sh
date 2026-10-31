@@ -68,6 +68,10 @@ clean_stale
 
 if [ -n "${CI_DEPLOY_IMAGE:-}" ]; then
   [[ "$CI_DEPLOY_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo "::error::release deployment requires a digest"; exit 1; }
+  # The signature and its workflow identity are checked before anything pulls or starts the image; a tampered digest,
+  # an unsigned image, or a signature from another workflow or ref stops the deployment here.
+  RELEASE_ALLOW_INSECURE_REGISTRY=true \
+    bash "$(dirname "${BASH_SOURCE[0]}")/verify-release.sh" "$CI_DEPLOY_IMAGE" "${CI_DEPLOY_RELEASE:-}"
   built="${CI_DEPLOY_VERSION:?release version is required}"
 else
   just web-embed
@@ -87,6 +91,9 @@ start() {
     { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env
   fi
   chmod 600 deploy/.env
+  # The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not consumed as a digest like
+  # the program; it has to exist before the no-build starts below.
+  timeout 300 docker compose -f deploy/compose.yaml build postgres
   timeout 90 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60 postgres
   compose exec -T postgres sh < deploy/postgres/roles.sh
   timeout 180 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60
@@ -117,6 +124,22 @@ start
 # The node answering runs the program built from this tree, not a stale image; the passwords are its owner's only
 deployed="$(curl -fsS "http://127.0.0.1:$public/api/console/v1/version" | jq -r .version)"
 [ "$deployed" = "$built" ] || { echo "::error::the node runs $deployed, this tree builds $built"; exit 1; }
+
+# The archive writes one compressed month to TMPDIR before uploading it. The program image is scratch and the root
+# filesystem is read-only, so the node must have the dedicated volume, the environment must point at it, and the keys
+# init must have handed it to the program's UID (otherwise the first archive fails on CreateTemp and never drops).
+app_id="$(compose ps --all --quiet axiom)"
+[ -n "$app_id" ] || { echo "::error::the axiom container is missing"; exit 1; }
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$app_id" | grep -qx 'TMPDIR=/retention-tmp'   || { echo "::error::the node does not set TMPDIR=/retention-tmp"; exit 1; }
+mount="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/retention-tmp"}}{{.Type}} {{.RW}}{{end}}{{end}}' "$app_id")"
+[ "$mount" = "volume true" ] || { echo "::error::/retention-tmp is not a read-write volume: $mount"; exit 1; }
+# The volume's host path is root-only, so inspect it through a container that shares the node's mounts. The program
+# image is scratch and has no shell; the postgres image is already part of this stack and is only a probe here.
+ownership="$(docker run --rm --network none --volumes-from "$app_id" --entrypoint /bin/sh postgres:18.6-alpine -c 'stat -c "%u:%g:%a" /retention-tmp')"
+[ "$ownership" = 65532:65532:700 ] \
+  || { echo "::error::/retention-tmp is not owned by the program's UID: $ownership"; exit 1; }
+docker run --rm --user 65532:65532 --network none --volumes-from "$app_id" --entrypoint /bin/sh postgres:18.6-alpine -c 'touch /retention-tmp/.deploy-check && rm /retention-tmp/.deploy-check' \
+  || { echo "::error::/retention-tmp is not writable by the program's UID"; exit 1; }
 [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::deploy/.env is readable by others"; exit 1; }
 # The console's other operations are served by a node that read its key files and its contract: an address no site
 # registers is the contract's 404

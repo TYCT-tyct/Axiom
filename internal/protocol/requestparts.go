@@ -16,6 +16,7 @@ var (
 	responsesTextHead    = `{"type":"` + contentNames[Responses]["text"] + `","text":`
 	responsesImageHead   = `{"type":"` + contentNames[Responses]["image_url"] + `","image_url":`
 	responsesFileHead    = `{"type":"` + contentNames[Responses]["file"] + `","file_data":`
+	responsesFileIDHead  = `{"type":"` + contentNames[Responses]["file"] + `","file_id":`
 	responsesRefusalHead = `{"type":"` + contentNames[Responses]["refusal"] + `","refusal":`
 )
 
@@ -92,6 +93,11 @@ func nativePartKind(o requestObject, quotedKind string, f Format, role string) (
 		if annotations := o.take("annotations"); !isNull(annotations) && string(annotations) != "[]" {
 			return "", &NotSupported{Reason: "annotations have no Chat counterpart"}
 		}
+		// A replayed output item carries the logprobs the supplier returned; an empty list says nothing and is
+		// dropped, while values have no Messages counterpart.
+		if logprobs := o.take("logprobs"); !isNull(logprobs) && string(logprobs) != "[]" {
+			return "", &NotSupported{Reason: "logprobs have no Chat counterpart"}
+		}
 	}
 	if role == "tool" && chatKind != "text" {
 		return "", &NotSupported{Reason: "Chat tool results accept only text"}
@@ -102,10 +108,17 @@ func nativePartKind(o requestObject, quotedKind string, f Format, role string) (
 func nativeFile(o requestObject, f Format) (requestObject, error) {
 	file := requestObject{}
 	if f == Responses {
+		if err := fileDetail(o); err != nil {
+			return nil, err
+		}
 		o.move(file, "file_data", "file_data")
+		o.move(file, "file_id", "file_id")
 		o.move(file, "filename", "filename")
-		if isNull(file["file_data"]) {
-			return nil, &NotSupported{Reason: "a file without inline data cannot be replayed"}
+		switch {
+		case isNull(file["file_data"]) && isNull(file["file_id"]):
+			return nil, &NotSupported{Reason: "a file without data or an id cannot be replayed"}
+		case !isNull(file["file_data"]) && !isNull(file["file_id"]):
+			return nil, &NotSupported{Reason: "a file carrying both data and an id"}
 		}
 		return file, nil
 	}
@@ -121,7 +134,24 @@ func nativeFile(o requestObject, f Format) (requestObject, error) {
 		return nil, err
 	}
 	file["file_data"] = jsonValue("data:application/pdf;base64," + data)
+	// Anthropic's title is the document's name, which Chat calls the file's name.
+	o.move(file, "title", "filename")
 	return file, source.remaining()
+}
+
+// fileDetail consumes a Responses PDF's detail, which the Chat file has no member for: auto, the default, lets the
+// supplier choose, while low and high ask for a specific page-image size that the conversion cannot select.
+func fileDetail(o requestObject) error {
+	switch string(o.take("detail")) {
+	case "", "null", `"auto"`:
+		return nil
+	case `"low"`:
+		return &NotSupported{Reason: "file detail low is not converted"}
+	case `"high"`:
+		return &NotSupported{Reason: "file detail high is not converted"}
+	default:
+		return shapeError("a file detail that is not auto, low or high")
+	}
 }
 
 func nativeImage(o requestObject, f Format) (requestObject, error) {

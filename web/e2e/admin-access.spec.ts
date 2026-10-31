@@ -48,8 +48,8 @@ test.describe("signing in", () => {
     await page.getByLabel("验证码或恢复码").fill("123456");
     await page.getByRole("button", { name: "验证" }).click();
 
-    await expect(h1(page, zhText("nav.users"))).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe("/users");
+    await expect(h1(page, zhText("nav.overview"))).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe("/");
     expect(state.log.filter((line) => line === "POST /auth/sign-in")).toHaveLength(2);
     // the browser logs the 401s (no session yet, a wrong password, a wrong code) itself
     expect(errors.filter((line) => !line.startsWith("Failed to load resource"))).toEqual([]);
@@ -83,6 +83,7 @@ test.describe("signing in", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "保存你的恢复码" })).toBeVisible();
     await page.getByRole("button", { name: "我已保存" }).click();
+    // The gate returns to the page the visitor asked for before enrolling, which was /users, not the dashboard.
     await expect(h1(page, zhText("nav.users"))).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/users");
   });
@@ -126,6 +127,7 @@ test.describe("permissions", () => {
     await expect(h1(page, zhText("home.noAccessTitle"))).toBeVisible();
     await page.goto("/suppliers");
     await expect(page.getByRole("heading", { name: "没有权限" })).toBeVisible();
+    await expect(page.getByText("请联系站长授予权限。")).toBeVisible();
   });
 });
 

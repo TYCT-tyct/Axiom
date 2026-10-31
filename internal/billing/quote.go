@@ -22,20 +22,35 @@ type Demand struct {
 	TextBytes, Images, Choices int64
 	Documents                  int64        // files, whatever their pages: protocol does not parse them
 	ServerTools                []ServerTool // the server tools the request enables, such as web search
-	Compaction                 bool         // server-side compaction or context management is on
-	InputItems                 catalog.ItemSet
-	ServiceTiers               catalog.ServiceTierSet
+	// Direct is a call of a format that answers one object rather than generating output: embeddings and rerank. It
+	// has no output tokens to reserve, and its server-tool charges are flat per use, not a sampling of the model. Its
+	// batch is reserved, estimated and banded at its total, for every price alike: the upstream reports one usage for
+	// it, which the settlement bands as one prompt. The context holds each input instead, which routing checks.
+	Direct     bool
+	Compaction bool // server-side compaction or context management is on
+	// InputBytes is the longest single input of a batch, and 0 for a request that is not one: legacy completions'
+	// prompt array is charged, estimated and banded at the sum of its inputs, but each prompt is held to the context
+	// on its own (docs/domains/gateway.md「决策与理由」).
+	InputBytes   int64
+	InputItems   catalog.ItemSet
+	ServiceTiers catalog.ServiceTierSet
 	// TextTokens is the request's text counted in the tokens of the model family's own tokenizer, when the caller
 	// counted it (NewTextCount); 0 keeps the bytes-per-token rule of the estimate. It is an estimate, not a bound:
 	// InputBound goes by TextBytes alone.
 	TextTokens int64
+	// Counts are the request's quantities of the items billed per piece, per second or per character, in each item's
+	// own unit: the images to generate, the seconds of audio, the characters to read aloud. A count of a token or
+	// per-use item here is ignored, because those are bounded by TextBytes, the output limit and ServerTools.
+	Counts map[catalog.Item]int64
 }
 
 // ServerTool is a server tool and the most uses the request allows it; 0 means the request set none, so the entry's
-// model default applies.
+// model default applies. Flat says the tool does not sample the model again: it runs once outside the completion, as
+// the gateway's web plugin does, so only its per-use fee is reserved, not a second sampling rereading the context.
 type ServerTool struct {
 	Item    catalog.Item
 	MaxUses int64
+	Flat    bool
 }
 
 // Model is the model data a quote needs, filled by the caller from the catalog snapshot.
@@ -206,8 +221,8 @@ func shortSource(amount platform.Exact, avail []Available) int {
 }
 
 // quoteEntry follows docs/domains/billing.md「预留与结算」: the input of every sampling at its bound, every server tool
-// at its most uses, and the output, the first segment plus the overshoot allowance or else the whole limit, each at
-// the dearest price it can have.
+// at its most uses, every piece, second and character the request states at its count, and the output, the first
+// segment plus the overshoot allowance or else the whole limit, each at the dearest price it can have.
 func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, err error) {
 	if err := checkEntry(e, s); err != nil {
 		return q, err
@@ -220,18 +235,19 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 		tiers &= e.Model.ServiceTiers
 	}
 	tiers.Add(catalog.ServiceTierStandard)
-	uses, samplings := serverToolUses(d, e.Model)
-	for _, t := range d.ServerTools {
-		if uses[t.Item] == 0 {
-			return q, &UnboundedError{t.Item}
-		}
+	if err := boundedServerTools(d, e.Model); err != nil {
+		return q, err
 	}
+	uses, samplings := serverToolUses(d, e.Model)
 	first, longest := inputBound(d, e.Model, samplings)
 	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
 	rest := mul(samplings-1, window)
 	q.outputCap = mul(e.MaxOutput, max(d.Choices, 1))
+	if d.Direct {
+		q.outputCap = 0 // a direct call generates nothing, whatever its batch or cap says
+	}
 	output, allowance, overshoot := q.outputCap, int64(0), int64(0) // overshoot in token-nanoseconds
-	if e.Segmentable {
+	if e.Segmentable && !d.Direct {
 		q.segment, output = s.Output, min(output, s.Output)
 		allowance, overshoot = s.Allowance(e.Model.OutputSpeed)
 	}
@@ -240,28 +256,79 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	if max(samplings, rest, q.outputCap, add(output, allowance), overshoot) == math.MaxInt64 {
 		return q, errOverflow
 	}
+	resample, err := q.priceTokens(d, e, &prices, tiers, first, rest, longest)
+	if err != nil {
+		return q, err
+	}
+	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, resample, longest); err != nil {
+		return q, err
+	}
+	if err := q.priceCounted(d, &prices, tiers, longest, samplings); err != nil {
+		return q, err
+	}
+	q.allowance = q.output.Mul(allowance)
+	q.amount = sum(q.fixed, q.allowance, q.output.Mul(output))
+	return q, nil
+}
+
+// priceTokens adds every sampling's input and the whole output at their dearest token prices, and returns the input price
+// of the samplings after the first, which a search beyond the tool's uses pays too. Token prices are required for a model
+// that may report any token item, as every model did before. A counted-only model (a speech or transcription endpoint
+// that reports characters or seconds rather than tokens) has no token charge to bound, so its schedule must be quotable
+// without token prices; an empty Reports is unknown, not none.
+func (q *quote) priceTokens(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, first, rest, longest int64) (inputPrice, error) {
+	if e.Model.Reports != 0 && e.Model.Reports&catalog.TokenItems == 0 {
+		return inputPrice{}, nil
+	}
 	in := d.InputItems | e.Model.Reports&(1<<catalog.ItemCacheRead) // a cache hit is the upstream's, not the request's
 	in.Add(catalog.ItemInput)
 	if e.Model.OpenAIUsage {
 		// OpenAI reports image tokens whether or not the model's spec lists them, and cache writes it was not asked for.
 		in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
 	}
-	firstPrice, ok1 := prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
-	restPrice, ok2 := prices.inputCeiling(in, tiers, window, e.Model.OpenAIUsage)
+	firstPrice, ok := prices.inputCeiling(in, tiers, first, e.Model.OpenAIUsage)
+	if !ok {
+		return inputPrice{}, ErrUnpriced
+	}
+	q.fixed = firstPrice.Mul(first)
+	if d.Direct {
+		return inputPrice{}, nil // no output, and nothing samples again
+	}
+	restPrice, ok := prices.inputCeiling(in, tiers, e.Model.ContextLength, e.Model.OpenAIUsage)
+	if !ok {
+		return inputPrice{}, ErrUnpriced
+	}
 	outItems := catalog.ItemSet(1<<catalog.ItemOutput|1<<catalog.ItemReasoning|1<<catalog.ItemImageOut) |
 		e.Model.Reports&(1<<catalog.ItemAudioOut)
-	outPrice, ok3 := prices.ceiling(outItems, tiers, longest)
-	if !ok1 || !ok2 || !ok3 {
-		return q, ErrUnpriced
+	outPrice, ok := prices.ceiling(outItems, tiers, longest)
+	if !ok {
+		return inputPrice{}, ErrUnpriced
 	}
 	q.output = outPrice
-	q.fixed = sum(firstPrice.Mul(first), restPrice.Mul(rest))
-	if err := q.priceServerTools(d, e, &prices, tiers, uses, searchable, restPrice); err != nil {
-		return q, err
+	q.fixed = sum(q.fixed, restPrice.Mul(rest))
+	return restPrice, nil
+}
+
+// priceCounted adds every piece, second and character the request states at the dearest price it can have: the count
+// is the whole request's, so no band above the longest prompt applies, and every sampling may report it, so each is
+// covered.
+func (q *quote) priceCounted(d Demand, prices *quotePrices, tiers catalog.ServiceTierSet, longest, samplings int64) error {
+	for it := range catalog.NumItems {
+		n := d.Counts[it]
+		if n <= 0 || !catalog.CountedItems.Has(it) {
+			continue
+		}
+		price, ok := prices.ceiling(1<<it, tiers, longest)
+		if !ok {
+			return ErrUnpriced
+		}
+		bound := mul(n, samplings)
+		if bound == math.MaxInt64 {
+			return errOverflow
+		}
+		q.fixed = sum(q.fixed, price.Mul(bound))
 	}
-	q.allowance = outPrice.Mul(allowance)
-	q.amount = sum(q.fixed, q.allowance, outPrice.Mul(output))
-	return q, nil
+	return nil
 }
 
 // checkEntry refuses an entry that data, not the request, makes impossible to quote: a model with no context length, and
@@ -277,17 +344,21 @@ func checkEntry(e Quotable, s Segments) error {
 }
 
 // priceServerTools adds every server tool at its most uses to the fixed part and, when the request enables web
-// search, prices what a search beyond them costs the meter: its fee and the samplings it adds, rereading the whole
-// context at the input price of the later samplings, twice with compaction.
+// search, reserves what a search costs the meter (reserveSearch). A tool's price is the dearest up to the context,
+// which a later sampling can fill; a direct call samples nothing, so its band is its batch's length.
 func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
-	searchable bool, resample inputPrice,
+	searchable bool, resample inputPrice, longest int64,
 ) error {
 	window := e.Model.ContextLength
+	band := window
+	if d.Direct {
+		band = longest
+	}
 	for it, n := range uses {
 		if n == 0 {
 			continue
 		}
-		price, ok := prices.ceiling(1<<catalog.Item(it), tiers, window)
+		price, ok := prices.ceiling(1<<catalog.Item(it), tiers, band)
 		if !ok {
 			return ErrUnpriced
 		}
@@ -296,15 +367,64 @@ func (q *quote) priceServerTools(d Demand, e Quotable, prices *quotePrices, tier
 	if !searchable {
 		return nil
 	}
+	return q.reserveSearch(d, e, prices, tiers, uses, resample, band, window)
+}
+
+// reserveSearch reserves a search beyond the tools: its fee and the samplings it adds, rereading the whole context at
+// the input price of the later samplings, twice with compaction. band is the longest input whose price applies and
+// window the context every later sampling rereads.
+func (q *quote) reserveSearch(d Demand, e Quotable, prices *quotePrices, tiers catalog.ServiceTierSet, uses [catalog.NumItems]int64,
+	resample inputPrice, band, window int64,
+) error {
 	var ok bool
-	if q.search, ok = prices.ceiling(1<<catalog.ItemWebSearch, tiers, window); !ok {
+	if q.search, ok = prices.ceiling(1<<catalog.ItemWebSearch, tiers, band); !ok {
 		return ErrUnpriced
 	}
 	q.searches, q.resample, q.rereads = uses[catalog.ItemWebSearch], resample, window
+	if d.Direct {
+		// A rerank's search unit is a flat charge per use, not a sampling of the model: only the item is reserved.
+		q.resample, q.rereads = inputPrice{}, 0
+	}
 	if d.Compaction {
 		q.rereads = mul(window, 2)
 	}
+	flatUses, flat, native := flatSearches(d, e.Model)
+	if !flat {
+		return nil
+	}
+	if native {
+		// A flat search adds no sampling, so when a native tool shares the item it must not stand in for that
+		// tool in q.searches: the meter counts only what the upstream reports, and a native search beyond its
+		// bound still has to extend for its sampling.
+		q.searches = max(0, q.searches-flatUses)
+		return nil
+	}
+	q.resample = inputPrice{}
+	if !d.Compaction {
+		q.rereads = 0
+	}
 	return nil
+}
+
+// flatSearches reports whether the request enables a flat web search, and how many of its uses the quote reserves:
+// the request's own or else the model's default. native says a native web search tool shares the item.
+func flatSearches(d Demand, m Model) (uses int64, flat, native bool) {
+	for _, t := range d.ServerTools {
+		if t.Item != catalog.ItemWebSearch {
+			continue
+		}
+		if !t.Flat {
+			native = true
+			continue
+		}
+		flat = true
+		n := t.MaxUses
+		if n == 0 {
+			n = m.MaxUses[catalog.ItemWebSearch]
+		}
+		uses += n
+	}
+	return uses, flat, native
 }
 
 // quotePrices keeps sale admission strict while native cost estimation can use an incomplete upstream schedule.
@@ -321,7 +441,7 @@ func (prices *quotePrices) ceiling(items catalog.ItemSet, tiers catalog.ServiceT
 		return highest, !missing
 	}
 	if !prices.fallbackReady {
-		prices.fallback, _ = prices.schedule.Highest(tokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
+		prices.fallback, _ = prices.schedule.Highest(catalog.TokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
 		prices.fallbackReady = true
 	}
 	if highest.Cmp(prices.fallback) < 0 {
@@ -372,11 +492,11 @@ const (
 	estimatedFileTokens  = 4096
 )
 
-// InputEstimate is the input tokens of the request's first sampling as a charge takes them when the upstream reported
-// none: the text at its own count when the caller counted it and at InputBytesPerToken otherwise, each image and file at
-// the lesser of its bound and the estimate, held to the context. It never exceeds InputBound's first, which the
-// reservation covers: every part is the lesser of the part's bound and something, and a token covers a byte or more, so
-// the text's count never passes its bytes. d.TextBytes is bytes.
+// InputEstimate is the input tokens of the request as a charge takes them when the upstream reported none: the text at
+// its own count when the caller counted it and at InputBytesPerToken otherwise, each image and file at the lesser of
+// its bound and the estimate, held to the context except for a direct call, whose batch is charged for every input.
+// It never exceeds InputBound's first, which the reservation covers: every part is the lesser of the part's bound and
+// something, and a token covers a byte or more, so the text's count never passes its bytes. d.TextBytes is bytes.
 func InputEstimate(d Demand, m Model) int64 {
 	text := min(d.TextTokens, d.TextBytes) // a token covers a byte or more, and nothing counted keeps the rule below
 	if text <= 0 {
@@ -384,13 +504,22 @@ func InputEstimate(d Demand, m Model) int64 {
 	}
 	images := mul(d.Images, min(imageTokens(m), estimatedImageTokens))
 	files := mul(d.Documents, min(fileTokens(m), estimatedFileTokens))
+	if d.Direct || d.InputBytes > 0 {
+		return add(text, add(images, files)) // each input fits the context; the batch's total is what is charged
+	}
 	return min(m.ContextLength, add(text, add(images, files)))
 }
 
 func inputBound(d Demand, m Model, samplings int64) (first, longest int64) {
 	window := m.ContextLength
-	first = min(window, add(d.TextBytes, add(mul(d.Images, imageTokens(m)), mul(d.Documents, fileTokens(m)))))
-	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
+	total := add(d.TextBytes, add(mul(d.Images, imageTokens(m)), mul(d.Documents, fileTokens(m))))
+	first = min(window, total)
+	if d.Direct || d.InputBytes > 0 {
+		// A batch is one charge for every input, and the one length every price of it is banded at: the settlement
+		// bands its reported total, which can pass any one input's context.
+		return total, total
+	}
+	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch && !t.Flat })
 	if samplings > 1 || searchable {
 		return first, window // every later sampling, and one a search beyond the quote adds, rereads the whole context
 	}
@@ -415,6 +544,24 @@ func fileTokens(m Model) int64 {
 	return mul(m.FilePages, m.PageTokens)
 }
 
+// boundedServerTools refuses a native tool with neither the request's limit nor a model default: its uses cannot be
+// bounded, and a flat tool of the same item must not hide that. A flat tool has one use by construction.
+func boundedServerTools(d Demand, m Model) error {
+	for _, t := range d.ServerTools {
+		if t.Flat {
+			continue
+		}
+		n := t.MaxUses
+		if n == 0 {
+			n = m.MaxUses[t.Item]
+		}
+		if n == 0 {
+			return &UnboundedError{t.Item}
+		}
+	}
+	return nil
+}
+
 // serverToolUses returns each server tool's most uses, the request's or else the model's default, totalled per item so
 // a quote adds at most NumItems products however many tools the request lists; and the samplings: one, plus
 // one per use, doubled when compaction may summarise and sample again.
@@ -425,7 +572,10 @@ func serverToolUses(d Demand, m Model) (uses [catalog.NumItems]int64, samplings 
 		if n == 0 {
 			n = m.MaxUses[t.Item]
 		}
-		uses[t.Item], samplings = add(uses[t.Item], n), add(samplings, n)
+		uses[t.Item] = add(uses[t.Item], n)
+		if !d.Direct && !t.Flat { // a direct call's or a flat tool's charge is per use, without sampling the model again
+			samplings = add(samplings, n)
+		}
 	}
 	if d.Compaction {
 		samplings = mul(samplings, 2)

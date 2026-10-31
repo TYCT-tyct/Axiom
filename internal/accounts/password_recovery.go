@@ -27,17 +27,27 @@ type PasswordRecovery struct {
 // RegisterPasswordRecovery registers before the queue starts. A node without SMTP cannot take mail-dependent jobs.
 func RegisterPasswordRecovery(db *pg.DB, queue *pg.Queue, mailer *mail.Mailer, scope pg.Scope, logger *slog.Logger) (*PasswordRecovery, error) {
 	r := &PasswordRecovery{db: db, queue: queue, mailer: mailer, scope: scope, logger: logger}
-	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(r.cleanup)); err != nil {
-		return nil, err
-	}
-	queue.Every(time.Minute, func() river.JobArgs { return passwordResetCleanupArgs{} })
-	if !mailer.Configured() {
-		return r, nil
-	}
-	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(r.work)); err != nil {
+	tick := func() river.JobArgs { return passwordResetCleanupArgs{} }
+	if err := registerMailWorkers(queue, mailer, tick, r.cleanup, r.work); err != nil {
 		return nil, err
 	}
 	return r, nil
+}
+
+// registerMailWorkers adds the cleanup every node runs and, when SMTP is configured, the worker that sends the mail.
+// Recovery and open registration are wired alike: a node without SMTP still removes expired rows, so rows a node that
+// once sent mail leaves behind do not stay after SMTP is turned off.
+func registerMailWorkers[C, W river.JobArgs](queue *pg.Queue, mailer *mail.Mailer, tick func() river.JobArgs,
+	cleanup func(context.Context, *river.Job[C]) error, work func(context.Context, *river.Job[W]) error,
+) error {
+	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(cleanup)); err != nil {
+		return err
+	}
+	queue.Every(time.Minute, tick)
+	if !mailer.Configured() {
+		return nil
+	}
+	return river.AddWorkerSafely(queue.Workers(), river.WorkFunc(work))
 }
 
 type passwordResetArgs struct {
@@ -111,7 +121,7 @@ func (r *PasswordRecovery) issueReset(ctx context.Context, tx pg.Tx, args passwo
 	if !emailAllowed(*request.Email) {
 		return ErrBadEmail
 	}
-	sites, err := q.PasswordResetSite(ctx, tx, PasswordResetSiteParams{SiteID: request.SiteID, Domain: request.Domain})
+	sites, err := q.ConsoleSite(ctx, tx, ConsoleSiteParams{SiteID: request.SiteID, Domain: request.Domain})
 	if err != nil {
 		return err
 	}
@@ -140,7 +150,7 @@ func (r *PasswordRecovery) issueReset(ctx context.Context, tx pg.Tx, args passwo
 	}); err != nil {
 		return err
 	}
-	link := "https://" + sites[0].Domain + "/reset-password#token=" + token
+	link := "https://" + sites[0].Domain + "/console/reset-password#token=" + token
 	if err := r.mailer.Enqueue(ctx, tx, mail.Tenant{Site: request.SiteID, Account: user.AccountID},
 		passwordMail(*request.Email, sites[0].Name, request.Language, link)); err != nil {
 		return err

@@ -170,11 +170,12 @@ func (q *Queries) LockSite(ctx context.Context, db DBTX, id uuid.UUID) ([]uuid.U
 
 const readAccount = `-- name: ReadAccount :many
 SELECT a.id, a.site_id, a.name, a.kind, a.status, a.tier_id, t.name AS tier_name,
-    uuid_extract_timestamp(a.id)::timestamptz AS created_at, o.id AS owner_id, o.email AS owner_email
+    uuid_extract_timestamp(a.id)::timestamptz AS created_at, o.id AS owner_id, o.email AS owner_email,
+    o.status AS owner_status
 FROM accounts.accounts a
 JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
 JOIN LATERAL (
-    SELECT u.id, u.email FROM accounts.members m
+    SELECT u.id, u.email, u.status FROM accounts.members m
     JOIN accounts.users u ON u.site_id = m.site_id AND u.account_id = m.user_account_id AND u.id = m.user_id
     JOIN accounts.roles r ON r.id = m.role_id
     WHERE m.account_id = a.id
@@ -184,19 +185,21 @@ WHERE a.id = $1
 `
 
 type ReadAccountRow struct {
-	ID         uuid.UUID
-	SiteID     uuid.UUID
-	Name       string
-	Kind       string
-	Status     string
-	TierID     uuid.UUID
-	TierName   string
-	CreatedAt  pgtype.Timestamptz
-	OwnerID    uuid.UUID
-	OwnerEmail string
+	ID          uuid.UUID
+	SiteID      uuid.UUID
+	Name        string
+	Kind        string
+	Status      string
+	TierID      uuid.UUID
+	TierName    string
+	CreatedAt   pgtype.Timestamptz
+	OwnerID     uuid.UUID
+	OwnerEmail  string
+	OwnerStatus string
 }
 
-// The account with its tier and its owner: in M1 an account is a person's own, so the owner is its one member.
+// The account with its tier and its owner: in M1 an account is a person's own, so the owner is its one member. The
+// owner's status is the sign-in switch the admin's account page shows beside the account's call switch.
 func (q *Queries) ReadAccount(ctx context.Context, db DBTX, id uuid.UUID) ([]ReadAccountRow, error) {
 	rows, err := db.Query(ctx, readAccount, id)
 	if err != nil {
@@ -217,6 +220,7 @@ func (q *Queries) ReadAccount(ctx context.Context, db DBTX, id uuid.UUID) ([]Rea
 			&i.CreatedAt,
 			&i.OwnerID,
 			&i.OwnerEmail,
+			&i.OwnerStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -298,6 +302,52 @@ func (q *Queries) ReadSiteKeyLimits(ctx context.Context, db DBTX, siteID uuid.UU
 	var i ReadSiteKeyLimitsRow
 	err := row.Scan(&i.MaxKeysPerAccount, &i.KeyCreationsPerHour)
 	return i, err
+}
+
+const readSiteRegistration = `-- name: ReadSiteRegistration :many
+SELECT s.registration, t.registration_human_check, t.registration_human_check_bits,
+    t.registration_domain_burst, t.registration_domain_per_hour,
+    t.registration_domain_allow, t.registration_domain_deny
+FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = $1
+`
+
+type ReadSiteRegistrationRow struct {
+	Registration               string
+	RegistrationHumanCheck     *bool
+	RegistrationHumanCheckBits *int32
+	RegistrationDomainBurst    *int32
+	RegistrationDomainPerHour  *int32
+	RegistrationDomainAllow    []string
+	RegistrationDomainDeny     []string
+}
+
+// A site's registration mode from its row and its own anti-abuse values; a NULL value is the default in code.
+func (q *Queries) ReadSiteRegistration(ctx context.Context, db DBTX, siteID uuid.UUID) ([]ReadSiteRegistrationRow, error) {
+	rows, err := db.Query(ctx, readSiteRegistration, siteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadSiteRegistrationRow
+	for rows.Next() {
+		var i ReadSiteRegistrationRow
+		if err := rows.Scan(
+			&i.Registration,
+			&i.RegistrationHumanCheck,
+			&i.RegistrationHumanCheckBits,
+			&i.RegistrationDomainBurst,
+			&i.RegistrationDomainPerHour,
+			&i.RegistrationDomainAllow,
+			&i.RegistrationDomainDeny,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const readSiteSettings = `-- name: ReadSiteSettings :many
@@ -406,6 +456,58 @@ type WriteSiteKeyLimitsParams struct {
 // replaces whole cannot take these along.
 func (q *Queries) WriteSiteKeyLimits(ctx context.Context, db DBTX, arg WriteSiteKeyLimitsParams) error {
 	_, err := db.Exec(ctx, writeSiteKeyLimits, arg.SiteID, arg.MaxKeys, arg.CreationsPerHour)
+	return err
+}
+
+const writeSiteRegistrationMode = `-- name: WriteSiteRegistrationMode :exec
+UPDATE accounts.sites SET registration = $1 WHERE id = $2
+`
+
+type WriteSiteRegistrationModeParams struct {
+	Registration string
+	SiteID       uuid.UUID
+}
+
+func (q *Queries) WriteSiteRegistrationMode(ctx context.Context, db DBTX, arg WriteSiteRegistrationModeParams) error {
+	_, err := db.Exec(ctx, writeSiteRegistrationMode, arg.Registration, arg.SiteID)
+	return err
+}
+
+const writeSiteRegistrationSettings = `-- name: WriteSiteRegistrationSettings :exec
+INSERT INTO accounts.site_settings (site_id, registration_human_check, registration_human_check_bits,
+    registration_domain_burst, registration_domain_per_hour, registration_domain_allow, registration_domain_deny)
+VALUES ($1, $2, $3, $4, $5,
+    $6::text[], $7::text[])
+ON CONFLICT (site_id) DO UPDATE SET registration_human_check = excluded.registration_human_check,
+    registration_human_check_bits = excluded.registration_human_check_bits,
+    registration_domain_burst = excluded.registration_domain_burst,
+    registration_domain_per_hour = excluded.registration_domain_per_hour,
+    registration_domain_allow = excluded.registration_domain_allow,
+    registration_domain_deny = excluded.registration_domain_deny
+`
+
+type WriteSiteRegistrationSettingsParams struct {
+	SiteID         uuid.UUID
+	HumanCheck     *bool
+	HumanCheckBits *int32
+	DomainBurst    *int32
+	DomainPerHour  *int32
+	DomainAllow    []string
+	DomainDeny     []string
+}
+
+// Replaces only the open-registration values, so the settings and login limits the admin API replaces whole cannot
+// take them along.
+func (q *Queries) WriteSiteRegistrationSettings(ctx context.Context, db DBTX, arg WriteSiteRegistrationSettingsParams) error {
+	_, err := db.Exec(ctx, writeSiteRegistrationSettings,
+		arg.SiteID,
+		arg.HumanCheck,
+		arg.HumanCheckBits,
+		arg.DomainBurst,
+		arg.DomainPerHour,
+		arg.DomainAllow,
+		arg.DomainDeny,
+	)
 	return err
 }
 

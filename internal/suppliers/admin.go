@@ -48,6 +48,8 @@ var (
 	ErrKeyBound = errors.New("suppliers: that key is already bound")
 	// ErrAliasExists is an upstream name that already has an alias in the scope.
 	ErrAliasExists = errors.New("suppliers: that name already has an alias in that scope")
+	// ErrUnknownFormat is a formats declaration naming a call format this node does not know.
+	ErrUnknownFormat = errors.New("suppliers: unknown call format")
 	// ErrAliasRevision is a correction based on an alias revision that is no longer current.
 	ErrAliasRevision = errors.New("suppliers: the alias changed since it was read")
 	// ErrUnitValue is a value that is not above 0 and at most 1000 with at most 15 decimals.
@@ -199,6 +201,19 @@ type Group struct {
 	Selected, Present bool
 	Codename          string
 	Facts             map[string]any
+	// Pool is what the management API of a pool last said of the group's accounts; nil when this supplier is not one, or
+	// nothing has been read yet.
+	Pool *Pool
+}
+
+// Pool is one group's capacity as the pool's management API reported it. Accounts, Failed and Usable are exact counts;
+// Headroom and Capacity are percentages and nil when no account reported a quota window. Low is where routing halves
+// the group's weight.
+type Pool struct {
+	Accounts, Failed, Usable int
+	Headroom, Capacity       *int
+	Low                      bool
+	ObservedAt               time.Time
 }
 
 // Credential is a key bound to a group.
@@ -248,12 +263,33 @@ type Detail struct {
 	Endpoints   []Endpoint
 }
 
-func groupOf(id uuid.UUID, ref, name, ratio string, facts []byte, selected bool, codename *string, present bool) (Group, error) {
-	g := Group{ID: id, UpstreamRef: ref, Name: name, Ratio: ratio, Selected: selected, Codename: deref(codename), Present: present}
+func groupOf(id uuid.UUID, ref, name, ratio string, facts []byte, selected bool, codename *string, present bool, pool *Pool) (Group, error) {
+	g := Group{ID: id, UpstreamRef: ref, Name: name, Ratio: ratio, Selected: selected, Codename: deref(codename), Present: present, Pool: pool}
 	if err := jsonx.Unmarshal(facts, &g.Facts); err != nil {
 		return Group{}, fmt.Errorf("the facts of group %s: %w", id, err)
 	}
 	return g, nil
+}
+
+// poolOf reads the pool columns of a group. A group no pool read has reported has no row, which is nil and not a
+// zeroed capacity.
+func poolOf(accounts, failed, usable, headroom, capacity *int32, low bool, observed *time.Time) *Pool {
+	if accounts == nil {
+		return nil
+	}
+	p := &Pool{Accounts: int(*accounts), Failed: int(*failed), Usable: int(*usable), Low: low}
+	if headroom != nil {
+		v := int(*headroom)
+		p.Headroom = &v
+	}
+	if capacity != nil {
+		v := int(*capacity)
+		p.Capacity = &v
+	}
+	if observed != nil {
+		p.ObservedAt = *observed
+	}
+	return p
 }
 
 // Supplier is one supplier with its groups, credentials and endpoints; ErrNoSupplier when there is none.
@@ -269,7 +305,8 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, e
 		return Detail{}, fmt.Errorf("read the groups: %w", err)
 	}
 	for _, g := range groups {
-		group, err := groupOf(g.ID, g.UpstreamRef, g.Name, g.Ratio, g.Facts, g.Selected, g.Codename, g.Present)
+		group, err := groupOf(g.ID, g.UpstreamRef, g.Name, g.Ratio, g.Facts, g.Selected, g.Codename, g.Present,
+			poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt))
 		if err != nil {
 			return Detail{}, err
 		}

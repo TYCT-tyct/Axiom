@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"regexp"
 	"slices"
+	"sync/atomic"
 	"time"
 	"uuid"
 
@@ -30,13 +32,19 @@ var embedded embed.FS
 type Module struct {
 	Name       string
 	Migrations fs.FS // goose's SQL files, numbered with zero padding so that their names sort as their versions
+	// JobRole, when set, is a NOLOGIN role the bootstrap creates for the module's background jobs: it owns what those
+	// jobs must alter (a partition, for one) and everything else about it is a migration's. A job connects as its own
+	// login role, which the migration grants the job; the application may not set it, so SQL run as the application
+	// cannot own or drop tenant data. axiom_owner inherits it, so migrations keep altering the same objects. The name
+	// is Axiom's own.
+	JobRole string
 }
 
 // moduleOrder is the order migrations run in: the modules as the dependency table of docs/architecture.md「模块之间的依赖」
 // lists them, bottom up, which a test compares. Every module's policies call platform's functions, so platform comes
 // first; a fixed order brings every database to the same state the same way. Its names are Axiom's own schemas.
 var moduleOrder = []string{
-	"platform", "catalog", "accounts", "protocol", "suppliers", "quality",
+	"platform", "websearch", "catalog", "accounts", "protocol", "suppliers", "quality",
 	"billing", "routing", "observability", "payments", "gateway", "operations",
 }
 
@@ -47,7 +55,7 @@ func ordered(modules []Module) ([]Module, error) {
 	if err != nil {
 		panic(err) // the directory is embedded, so this cannot happen
 	}
-	all := append([]Module{{"platform", files}}, modules...)
+	all := append([]Module{{Name: "platform", Migrations: files}}, modules...)
 	for i, m := range all {
 		if !slices.Contains(moduleOrder, m.Name) {
 			return nil, fmt.Errorf("migrations of %q: not a module in docs/architecture.md", m.Name)
@@ -194,6 +202,20 @@ type timedConnector struct {
 	timeout time.Duration
 }
 
+// sessionConnector opens the one session a migration run may have and refuses to open another. The session holds the
+// migration lock, so a lost connection must fail the run instead of continuing on a new session without the lock.
+type sessionConnector struct {
+	driver.Connector
+	opened atomic.Bool
+}
+
+func (c *sessionConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	if c.opened.Swap(true) {
+		return nil, errors.New("the migration session was lost; the migration lock is no longer held")
+	}
+	return c.Connector.Connect(ctx)
+}
+
 func (c timedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -201,25 +223,69 @@ func (c timedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	return conn, redactConnect(MigrateDatabaseURLVar, err)
 }
 
-func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Duration, modules []Module) error {
+func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Duration, modules []Module) (err error) {
 	if err := prepare(ctx, config, connectTimeout, modules); err != nil {
 		return err
 	}
-	db := sql.OpenDB(timedConnector{stdlib.GetConnector(*config, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
-		// These connections serve only migrations and close with this run. Platform scope lets data migrations see
-		// every tenant while retaining forced RLS; modules never set their own scope.
+	db := sql.OpenDB(&sessionConnector{Connector: timedConnector{Connector: stdlib.GetConnector(*config, stdlib.OptionAfterConnect(func(ctx context.Context, conn *pgx.Conn) error {
+		// This session serves only migrations and closes with this run. Platform scope lets data migrations see every
+		// tenant while retaining forced RLS; modules never set their own scope.
 		_, err := conn.Exec(ctx, "SET ROLE axiom_owner; SET axiom.scope_platform = 'on'")
 		return err
-	})), connectTimeout})
-	defer db.Close()                                                         //nolint:errcheck // closing a pool whose work is done reports nothing worth acting on
-	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 5)) // goose retries every second, 5 times
+	})), timeout: connectTimeout}})
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	// Ending the run's only session is what releases the migration lock, so a failure to end it is the run's failure.
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("release the migration lock: %w", closeErr))
+		}
+	}()
+	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 5)) // retries every second, 5 times
 	if err != nil {
 		return err
 	}
-	for _, m := range modules {
-		if err := up(ctx, db, locker, m); err != nil {
+	// One session and one lock carry the whole run: the history check, each module's pending migrations and the record
+	// of what they applied. The lock is taken on the only session this run can open, so a second run cannot commit a
+	// migration between the check and the execution, and losing the session fails the run instead of continuing
+	// without the lock.
+	if err := holdLock(ctx, db, locker); err != nil {
+		return err
+	}
+	// Check every module's recorded history before any pending migration runs: a changed merged migration stops the run
+	// while the database is still at the versions the previous release left, not after a later migration committed.
+	checked, err := preflight(ctx, db, modules)
+	if err != nil {
+		return err
+	}
+	for i, m := range modules {
+		if err := up(ctx, db, m); err != nil {
 			return fmt.Errorf("migrate %s: %w", m.Name, err)
 		}
+		// Platform's migrations include the one that creates the record table. Until it exists there is nothing to
+		// compare, so the modules after platform are checked now, before any of them applies a migration.
+		if i == 0 && !checked && len(modules) > 1 {
+			if checked, err = preflight(ctx, db, modules[1:]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// holdLock takes goose's session lock on the run's only session. The lock lives on the session, so returning the handle
+// to the pool keeps it; every later query uses that session, and db.Close ends it after the run.
+func holdLock(ctx context.Context, db *sql.DB, locker lock.SessionLocker) error {
+	lockConn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("connect to hold the migration lock: %w", redactConnect(MigrateDatabaseURLVar, err))
+	}
+	if err := locker.SessionLock(ctx, lockConn); err != nil {
+		_ = lockConn.Close() //nolint:errcheck // the run is over
+		return fmt.Errorf("hold the migration lock: %w", err)
+	}
+	if err := lockConn.Close(); err != nil {
+		return fmt.Errorf("hold the migration lock: %w", err)
 	}
 	return nil
 }
@@ -275,18 +341,44 @@ func closeAdmin(ctx context.Context, conn *pgx.Conn) {
 	_ = conn.Close(closeCtx) //nolint:errcheck // the transaction already reported the outcome
 }
 
-// up applies one module's pending migrations, holding goose's session lock.
-func up(ctx context.Context, db *sql.DB, locker lock.SessionLocker, m Module) error {
+// up applies one module's pending migrations. The caller holds the migration lock for the whole run, so goose does not
+// take it again for each module.
+func up(ctx context.Context, db *sql.DB, m Module) error {
+	files, err := migrationChecksums(m)
+	if err != nil {
+		return err
+	}
+	byVersion := make(map[int64]migrationChecksum, len(files))
+	for _, file := range files {
+		byVersion[file.version] = file
+	}
 	store, err := database.NewStore(database.DialectPostgres, versionTable(m.Name))
 	if err != nil {
 		return err
 	}
+	records, err := tableExists(ctx, db, checksumTable)
+	if err != nil {
+		return fmt.Errorf("read the record of applied migrations: %w", err)
+	}
 	provider, err := goose.NewProvider("", db, m.Migrations,
-		goose.WithStore(store), goose.WithSessionLocker(locker), goose.WithDisableGlobalRegistry(true))
+		goose.WithStore(&checksumStore{Store: store, module: m.Name, files: byVersion}),
+		goose.WithDisableGlobalRegistry(true))
 	if err != nil {
 		return err
 	}
 	if _, err := provider.Up(ctx); err != nil {
+		return err
+	}
+	// Migrations this run applied while the record table did not exist yet (a fresh database, or one migrated by a
+	// release before it) are baselined once. From then on a version is recorded in the same transaction as its row.
+	if !records {
+		if err := recordChecksums(ctx, db, m); err != nil {
+			return err
+		}
+	}
+	// Refuse a merged migration that changed since the database recorded it: the run stops before a node starts
+	// against a schema that its recorded history no longer explains.
+	if err := verifyChecksums(ctx, db, m); err != nil {
 		return err
 	}
 	// The application reads the version to refuse a database this program is newer than.
@@ -304,21 +396,66 @@ func prepare(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 	}
 	defer closeAdmin(ctx, conn)
 	if err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, bootstrap); err != nil {
-			return err
-		}
-		for _, name := range append([]string{queueSchema}, moduleNames(modules)...) {
-			schema := pgx.Identifier{name}.Sanitize()
-			if _, err := tx.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schema+" AUTHORIZATION axiom_owner"); err != nil {
-				return err
-			}
-		}
-		return nil
+		return prepareRolesAndSchemas(ctx, tx, modules)
 	}); err != nil {
 		return fmt.Errorf("prepare roles and schemas: %w", err)
 	}
 	if err := migrateQueue(ctx, conn); err != nil {
 		return fmt.Errorf("migrate the queue: %w", err)
+	}
+	return nil
+}
+
+// prepareRolesAndSchemas runs the bootstrap, the modules' job roles and the schemas in one transaction, in that order:
+// bootstrap makes axiom_owner, the job roles are granted to it, and the schemas are authorized to it.
+func prepareRolesAndSchemas(ctx context.Context, tx pgx.Tx, modules []Module) error {
+	if _, err := tx.Exec(ctx, bootstrap); err != nil {
+		return err
+	}
+	for _, m := range modules {
+		if m.JobRole == "" {
+			continue
+		}
+		if err := prepareJobRole(ctx, tx, m.JobRole); err != nil {
+			return err
+		}
+	}
+	for _, name := range append([]string{queueSchema}, moduleNames(modules)...) {
+		schema := pgx.Identifier{name}.Sanitize()
+		if _, err := tx.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+schema+" AUTHORIZATION axiom_owner"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// jobRoleName is a job role's name as prepareJobRole accepts it: names are code, never a caller's input, and the
+// check is what keeps one from carrying SQL into the statements below.
+var jobRoleName = regexp.MustCompile(`^axiom_[a-z][a-z0-9_]*$`)
+
+// prepareJobRole creates a module's job role if it is missing, refuses an existing one that could read past row-level
+// security or log in, and grants it to the owner (inherited with admin, so migrations still alter the objects the role
+// owns and can grant it to the job's login role). It runs in the bootstrap transaction with the administrator's
+// CREATEROLE; the module's migration gives it the privileges its work needs and grants it to that login role, which
+// the deployment creates. The application is deliberately not a member: a role it could set would let SQL run as it
+// own and drop the tables the role owns.
+func prepareJobRole(ctx context.Context, tx pgx.Tx, role string) error {
+	if !jobRoleName.MatchString(role) || len(role) > 63 {
+		return fmt.Errorf("job role %q: want axiom_ followed by lowercase letters, digits and underscores", role)
+	}
+	if _, err := tx.Exec(ctx, `DO $$
+BEGIN
+	IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '`+role+`') THEN
+		CREATE ROLE `+role+` NOLOGIN;
+	ELSIF EXISTS (SELECT FROM pg_roles WHERE rolname = '`+role+`' AND (rolsuper OR rolbypassrls OR rolcanlogin)) THEN
+		RAISE EXCEPTION 'job role `+role+` must not be a superuser, bypass row-level security or log in';
+	END IF;
+END
+$$`); err != nil {
+		return fmt.Errorf("prepare job role %s: %w", role, err)
+	}
+	if _, err := tx.Exec(ctx, `GRANT `+role+` TO axiom_owner WITH ADMIN TRUE, INHERIT TRUE, SET TRUE`); err != nil {
+		return fmt.Errorf("grant job role %s to axiom_owner: %w", role, err)
 	}
 	return nil
 }

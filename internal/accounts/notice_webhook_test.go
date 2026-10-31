@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -165,4 +166,25 @@ func noticeWorkerDB(t *testing.T) *pg.DB {
 	}
 	t.Cleanup(db.Close)
 	return db
+}
+
+// TestSpendAnomalyNoticeMail: a region/model-only incident has no amount, a spend incident shows the exact amount,
+// and both tell the user what to do without leaking call content.
+func TestSpendAnomalyNoticeMail(t *testing.T) {
+	t.Parallel()
+	n := userNotice{Kind: "spend_anomaly", Value: "0", Currency: "USD", language: "en", brand: "Site", email: "user@example.com"}
+	m := noticeMail(n)
+	if m.Subject != "Site — Unusual account activity" || strings.Contains(m.Text, "USD") || !strings.Contains(m.Text, "disable any API keys") {
+		t.Fatalf("no amount: %q", m.Text)
+	}
+	n.Value = "5000000000"
+	m = noticeMail(n)
+	if !strings.Contains(m.Text, "5.000000000 USD") {
+		t.Fatalf("amount: %q", m.Text)
+	}
+	n.language = "zh"
+	m = noticeMail(n)
+	if !strings.Contains(m.Text, "账户异常活动") || !strings.Contains(m.Text, "5.000000000 USD") || !strings.Contains(m.Text, "停用可疑的 API key") {
+		t.Fatalf("Chinese: %q", m.Text)
+	}
 }

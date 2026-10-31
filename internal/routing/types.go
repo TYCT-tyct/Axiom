@@ -51,15 +51,20 @@ func (a Admission) allows(m catalog.ModelID) bool {
 // preset allows, in order. NativeOnly is set when the request uses something only its own format can express (an
 // Anthropic beta, a reasoning signature). NoSegments is set when the gateway reads the answer whole instead of as a
 // stream, as for a call the upstream answers whole: its reservation is made in full (gateway README.md「Relay 的所有权」)
-// and the endpoint need not stream one. Sticky is the endpoint the session stuck to, zero if none.
+// and the endpoint need not stream one. Sticky is the endpoint the session stuck to, zero if none. FileRef is set when
+// the request refers to a file by an id an upstream issued: such a request gets one attempt, to one endpoint, because
+// the id names a resource of that endpoint's supplier account and nowhere else (protocol README.md「跨格式转换」).
 type Input struct {
 	Admission  Admission
 	Req        *protocol.Request
 	Models     []catalog.ModelID
+	Auto       bool // rank every model in the snapshot: the request named openrouter/auto
+	Free       bool // rank only the free models in the snapshot: the request named openrouter/free
 	Override   Override
 	Sticky     EndpointID
 	NativeOnly bool
 	NoSegments bool
+	FileRef    bool
 }
 
 // Plan is the route of a request: at most MaxEntries entries in order, the most attempts to make (a credential or
@@ -89,6 +94,7 @@ type Entry struct {
 	Supplier        SupplierID
 	Target          protocol.Target
 	Model           catalog.ModelID
+	ModelSlug       string
 	Price           PriceRef
 	Limits          billing.Model
 	MaxOutput       int64
@@ -145,6 +151,7 @@ const (
 	ServiceTierNotServed // the request may only be served at tiers the endpoint does not offer
 	PresetFilter
 	OverrideFilter
+	NotVerified // the request wants only endpoints verified as the model they claim (:exacto)
 	NoPrice
 	NoEgress
 	RetryBudget    // a later entry at a supplier whose retry budget is used up
@@ -158,7 +165,8 @@ var reasonNames = [...]string{
 	NoCandidates: "no_candidates", NotAllowed: "model_not_allowed", Disabled: "disabled", BreakerOpen: "breaker_open",
 	SupplierBalance: "supplier_balance", MissingCapability: "missing_capability", ContextTooSmall: "context_too_small",
 	FormatNotServed: "format_not_served", ServiceTierNotServed: "service_tier_not_served", PresetFilter: "preset_filter", OverrideFilter: "override_filter",
-	NoPrice: "no_price", NoEgress: "no_egress", RetryBudget: "retry_budget", Full: "full",
+	NotVerified: "not_verified",
+	NoPrice:     "no_price", NoEgress: "no_egress", RetryBudget: "retry_budget", Full: "full",
 	UnknownItem: "unknown_item", CoolingDown: "cooling_down", UnquotableCost: "unquotable_cost",
 }
 
@@ -170,7 +178,7 @@ func (r Reason) Permanent() bool {
 	case NoCandidates, NotAllowed, Disabled, MissingCapability, ContextTooSmall, FormatNotServed, ServiceTierNotServed,
 		PresetFilter, OverrideFilter, NoPrice, UnknownItem, UnquotableCost:
 		return true
-	case BreakerOpen, SupplierBalance, NoEgress, RetryBudget, Full, CoolingDown:
+	case BreakerOpen, SupplierBalance, NoEgress, NotVerified, RetryBudget, Full, CoolingDown:
 		return false
 	}
 	return false

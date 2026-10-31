@@ -5,12 +5,15 @@ import { startApp } from "@axiom/ui";
 import { RouterProvider } from "@tanstack/react-router";
 import en from "./locales/en";
 import zh from "./locales/zh";
+import { PendingCodesProvider } from "./pending-codes";
 import { router } from "./router";
 
 startApp(
   "console",
   { zh, en },
   <AppProviders api={consoleAuth} requiresMfa={false}>
-    <RouterProvider router={router} />
+    <PendingCodesProvider>
+      <RouterProvider router={router} />
+    </PendingCodesProvider>
   </AppProviders>,
 );

@@ -100,3 +100,19 @@ func (s Sold) Available() bool {
 	}
 	return slices.ContainsFunc(s.Audiences.layers, func(p AudiencePrice) bool { return s.For(p.Audience).Version != uuid.Nil() })
 }
+
+// Zero reports whether every price this sale can serve is zero. A :free model must satisfy it for every audience, not
+// only the default layer: a fixed or multiplied rule can otherwise give one audience a paid price behind the free name.
+func (s Sold) Zero() bool {
+	if s.Version != uuid.Nil() && !s.Schedule.IsZero() {
+		return false
+	}
+	if s.Audiences != nil {
+		for _, layer := range s.Audiences.Layers() {
+			if layer.Sold.Version != uuid.Nil() && !layer.Sold.Schedule.IsZero() {
+				return false
+			}
+		}
+	}
+	return true
+}

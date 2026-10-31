@@ -28,9 +28,10 @@ VALUES (@id, @site_id, @account_id, @user_id, @role_id)
 ON CONFLICT (user_id, role_id) WHERE revoked_at IS NULL DO NOTHING;
 
 -- name: SetPassword :exec
-UPDATE accounts.users SET password_hash = @password_hash, factor_version = factor_version + 1 WHERE id = @id;
+-- The caller raises the factor version: a signed-in change through finishFactorChange, a reset with BumpFactorVersion.
+UPDATE accounts.users SET password_hash = @password_hash WHERE id = @id;
 
 -- name: ResetMFA :exec
 UPDATE accounts.users SET totp_ciphertext = NULL, totp_nonce = NULL, totp_wrapped_dek = NULL, totp_key_version = NULL,
-    totp_last_step = 0, mfa_enabled_at = NULL, factor_version = factor_version + 1
+    totp_last_step = 0, mfa_enabled_at = NULL
 WHERE id = @id;

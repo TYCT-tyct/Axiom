@@ -136,28 +136,31 @@ func CheckFallbacks(ctx context.Context, tx pg.Tx) error {
 	return nil
 }
 
-// withFallbacks gives every entry its currency's fallbacks: its schedule filled with the per-use defaults, which the
-// quote and every later charge price with, and the row's text to lock. A currency without a row has nothing to price
-// an unknown item with, so its entries are unpriced, as a missing price is: the request is not quoted.
-func withFallbacks(ctx context.Context, tx pg.Tx, q []Quotable) ([]Quotable, []string, error) {
+// fallbackCurrencies is the currencies whose fallback prices the entries need, each once.
+func fallbackCurrencies(q []Quotable) []string {
 	currencies := make([]string, 0, 1)
 	for _, e := range q {
 		if c := e.Price.Currency().String(); !slices.Contains(currencies, c) {
 			currencies = append(currencies, c)
 		}
 	}
-	rows, err := queries.ReadFallbacks(ctx, tx, currencies)
-	if err != nil {
-		return nil, nil, fmt.Errorf("billing: read the fallback prices: %w", err)
-	}
-	found := map[string]fallbacks{}
-	bodies := map[string]string{}
+	return currencies
+}
+
+func parseFallbackRows(rows []ReadFallbacksRow, found map[string]fallbacks, bodies map[string]string) error {
 	for _, r := range rows {
-		if found[r.Currency], err = parseFallbacks(r.Body); err != nil {
-			return nil, nil, err
+		f, err := parseFallbacks(r.Body)
+		if err != nil {
+			return err
 		}
-		bodies[r.Currency] = r.Body
+		found[r.Currency], bodies[r.Currency] = f, r.Body
 	}
+	return nil
+}
+
+// fillFallbacks fills every entry's missing per-use prices from its currency's fallbacks and returns the bodies it
+// locked beside the filled entries.
+func fillFallbacks(q []Quotable, found map[string]fallbacks, bodies map[string]string) ([]Quotable, []string, error) {
 	filled, locked := slices.Clone(q), make([]string, len(q))
 	for i, e := range filled {
 		c := e.Price.Currency().String()
@@ -199,8 +202,47 @@ const intersectionPath = ".cached_tokens_details."
 // tokenPrice is one token at the highest price of any token item at any service tier and band: what a schedule that
 // prices a token nowhere near the price of the tier a call was served at still charges, 0 if it prices no token at all.
 func tokenPrice(s catalog.Schedule) platform.UnitPrice {
-	price, _ := s.Highest(tokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
+	price, _ := s.Highest(catalog.TokenItems, ^catalog.ServiceTierSet(0), math.MaxInt64)
 	return price
+}
+
+// missingRate is the rate an item without a price is charged at. A per-use item takes its configured default. An item
+// counted per piece, second or character takes the dearest price the schedule has for the same unit over every tier and
+// band, so a piece is never priced as a token; a unit the schedule prices nowhere falls back to the token price, as
+// every unpriced item did before, and the charge is estimated.
+func missingRate(s catalog.Schedule, f fallbacks, it catalog.Item) platform.UnitPrice {
+	if perUseItems.Has(it) {
+		return f.perUse[it]
+	}
+	if unit := it.Unit(); unit != catalog.UnitToken {
+		if highest, priced := unitPrice(s, unit); priced {
+			return highest
+		}
+	}
+	return tokenPrice(s)
+}
+
+// unitPrice is the dearest price the schedule has for a unit, over every tier and band, and whether it prices the unit
+// at all. Any price counts, including an explicit zero: a unit priced nowhere is the only reason to charge it as tokens,
+// so existence is Priced's question, not Highest's missing, which only says every tier and band has a price.
+func unitPrice(s catalog.Schedule, unit catalog.Unit) (platform.UnitPrice, bool) {
+	items := itemsOfUnit(unit)
+	if !s.Priced(items) {
+		return platform.UnitPrice{}, false
+	}
+	highest, _ := s.Highest(items, ^catalog.ServiceTierSet(0), math.MaxInt64)
+	return highest, true
+}
+
+// itemsOfUnit are the items billed in unit, for pricing one the schedule leaves out at the dearest price of its own
+// unit.
+func itemsOfUnit(unit catalog.Unit) (items catalog.ItemSet) {
+	for it := range catalog.NumItems {
+		if it.Unit() == unit {
+			items.Add(it)
+		}
+	}
+	return items
 }
 
 // uses is a count of uses from an unknown value: a plain decimal rounded up, at most maxUnknownCount, or else 1.

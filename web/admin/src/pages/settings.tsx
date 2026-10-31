@@ -6,8 +6,15 @@ import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
-import { Actions, Facts, PageBody, State } from "../parts";
+import { MailSettings } from "../mail-settings";
+import { Facts, PageBody, State } from "../parts";
+import { PaymentsSettings } from "../payments-settings";
 import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
+import { SiteRegistration } from "../registration";
+import { SearchSettings } from "../search-settings";
+import { SiteSignIn } from "../sign-in";
+import { SiteInformation } from "../site-info";
+import { SiteLogo } from "../site-logo";
 
 type Settings = AdminSchemas["SiteSettings"];
 
@@ -31,8 +38,15 @@ export default function SettingsPage() {
         <DataState query={owner}>
           {(account) => (
             <>
+              <SiteInformation siteId={account.site_id} />
+              <SiteLogo siteId={account.site_id} />
               <SiteSettings siteId={account.site_id} />
               <SiteKeyLimits siteId={account.site_id} />
+              <SiteRegistration siteId={account.site_id} />
+              <SiteSignIn siteId={account.site_id} />
+              <MailSettings />
+              <SearchSettings />
+              <PaymentsSettings siteId={account.site_id} currency={account.balance.balance.currency} />
             </>
           )}
         </DataState>
@@ -127,13 +141,16 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
   ]);
   return (
     <>
-      <Actions>
-        <Button variant="primary" size="md" onClick={() => setOpen(true)}>
-          <Icon name="pencil" />
-          {t("settings.edit")}
-        </Button>
-      </Actions>
-      <Facts title={t("settings.title")} rows={rows} />
+      <Facts
+        title={t("settings.title")}
+        action={
+          <Button size="md" onClick={() => setOpen(true)}>
+            <Icon name="pencil" />
+            {t("settings.edit")}
+          </Button>
+        }
+        rows={rows}
+      />
       {open ? <EditDialog siteId={siteId} view={view} onClose={() => setOpen(false)} /> : null}
     </>
   );

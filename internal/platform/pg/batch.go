@@ -58,5 +58,15 @@ func (t Tx) Batch(ctx context.Context, statements []Statement, fn func(BatchResu
 // Exec consumes the next command result without exposing a connection.
 func (b BatchResults) Exec() (pgconn.CommandTag, error) { return b.results.Exec() }
 
+// Query consumes the next statement's rows with the same connection guards as Tx.Query. The rows must be closed
+// before the result of the statement that follows is read.
+func (b BatchResults) Query() (pgx.Rows, error) {
+	r, err := b.results.Query()
+	if err != nil {
+		return nil, err
+	}
+	return rows{r}, nil
+}
+
 // QueryRow consumes the next row with the same connection guards as Tx.QueryRow.
 func (b BatchResults) QueryRow() pgx.Row { return row{b.results.QueryRow()} }

@@ -5,7 +5,7 @@
 ## 要求
 
 - Claude Code、Codex、OpenRouter 的客户端只改地址和 key 就能接入。
-- 第一版支持三种调用格式：OpenAI Chat、OpenAI Responses、Anthropic Messages（见[产品需求的「范围」](../product.md#范围)）。
+- 第一版支持三种生成格式：OpenAI Chat、OpenAI Responses、Anthropic Messages（见[产品需求的「范围」](../product.md#范围)）；P18 另加两种直接格式（Embeddings、Rerank）和 OpenAI 旧版补全（`/completions`），后者只走原生端点、不与 Chat 互转（见「决策与理由」）。
 - 其他中转站可以把 Axiom 当上游，用它们习惯的方式查余额、判断错误。
 - 行为默认对齐 OpenRouter。
 
@@ -18,10 +18,16 @@
 | OpenAI Chat | `POST /v1/chat/completions` | 大多数 SDK、Cursor、OpenRouter 客户端 |
 | OpenAI Responses | `POST /v1/responses`、`POST /v1/responses/compact`；按 ID 删除随续接提供（见下文「Responses 的会话状态」） | Codex |
 | Anthropic Messages | `POST /v1/messages`、`POST /v1/messages/count_tokens` | Claude Code |
+| OpenAI Embeddings | `POST /v1/embeddings` | RAG 客户端、SDK |
+| Rerank | `POST /v1/rerank` | RAG 检索与重排 |
+| OpenAI 旧版补全 | `POST /v1/completions` | 旧版 SDK、按 `prompt` 调用的工具 |
 | 模型列表 | `GET /v1/models`、`GET /v1/models/{model}` | 所有客户端 |
 
 - WebSocket 的升级请求一律拒绝，回 400 `invalid_request`。
 
+- **直接格式**：`/v1/embeddings`、`/v1/rerank` 与其余调用路径一样，同时以 `/v1/...` 和 `/api/v1/...` 提供。embeddings、rerank 是“直接格式”：上游回一份 JSON，不流式，网关读完整份、结算后原样改写回复（见「转发规则」）。两者都只走原生端点，不做格式转换；一个供应商模型记录必须把 `embeddings` 或 `rerank` 写进 `formats` 才会被路由到，端点路径分别是 `/v1/embeddings`、`/v1/rerank`。同步写入 embeddings、rerank 由 `AXIOM_DIRECT_FORMATS` 控制（默认 `off`，关闭时同步状态和投影都只有 messages、responses、chat）：先把兼容读取的版本铺到所有节点并保持关闭，确认旧节点退出后再在全部节点开启，避免旧版本读到不认识的格式而摘掉整家供应商（[suppliers 的 README](../../internal/suppliers/README.md)）。
+- **旧版补全**：`/v1/completions` 也是生成格式，但和直接格式一样只走原生端点：`prompt`（字符串、字符串数组、token 数组或 token 数组的数组）与原样返回 `text` 的 choice 没有对应的 Chat 转换，请求里的 `n`、`best_of`、`echo`、`logprobs` 也不能在不改变语义的情况下改写成 `messages`。一个供应商模型记录必须把 `completions` 写进 `formats` 才会被路由到，端点路径是 `/v1/completions`；同步写入同样受 `AXIOM_DIRECT_FORMATS` 控制，适配器推不出的格式由管理接口的映射声明（见[决策与理由](#决策与理由)），格式名和迁移见同一节。上游一律按流式调用（`stream:true`，并强制 `stream_options.include_usage:true`），非流式客户端由网关把每个 choice 的 `text` 和四个 `logprobs` 数组聚合后一次返回；`prompt` 数组是一次请求里的多份补全，输入按整批预留（含 `suffix`）、上下文按最长的一份检查，输出按 `n × prompt 数` 一次预留（见[计费](billing.md#预留与结算)）。`best_of > 1` 在准入前以 400 拒绝（OpenAI 不能流式返回它）；超过报价上限的 `max_tokens` 按报价上限发送；`max_tokens: 0` 是明确的零输出，结束的空 choice 就是它的回答，`echo` 回显的 prompt 不计入输出。
+- **`/embeddings/models` 没有提供**：OpenRouter 另有这个列表，但本站在模型目录里还没有“输出模态”这一事实，嵌入模型没有输出价，默认也不会出现在 `/api/v1/models`，更没有单独列表。调用按请求里的 `model` 走，见「待定问题」。
 - **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 与 `GET /api/v1/models/{model}` 返回 OpenRouter 的模型对象（价格取准入账户及当前等级的主站发布售价，带 `context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`，外壳是 `data`/`links.next`/`total_count`），并读 OpenRouter 文档里的查询参数；`/v1/models` 仍是 OpenAI 与 Anthropic 的合并形，两种客户端各读各的。逐项的差距见 [OpenRouter 能力对照表](../openrouter-parity.md)。
 - **挂载**：`/v1/` 与 `/api/v1/` 只挂在节点的公开监听上，管理端监听不提供；它们在控制台的 API 和网站页面之前截走，不经过控制台那一层的响应压缩（网关自己写应答、自己决定何时 flush），也不会被控制台 API 的 404 回答。所以客户端只需要知道站点的 API 域名，认 key 的规则见下文「鉴权」。节点在路由快照可用之前不报告就绪（见[运维的「节点启动自检」](operations.md#部署与节点管理)）。
 - **`GET /v1/models` 与 `GET /v1/models/{model}`**：
@@ -33,7 +39,7 @@
   - 响应带 `Cache-Control: no-store`：列表是这把 key 的，不能进共享缓存；
   - Claude Code 启动时用它发现模型，超时只有 3 秒，任何跳转都算失败，所以必须在原地址直接、快速地返回（Claude Code《Gateway compatibility guide》，2026-10）。
 - **`GET /api/v1/models` 与 `GET /api/v1/models/{model}`**：
-  - 模型对象是 OpenRouter 的形状：`id`、`canonical_slug` 都是这个模型的公开标准 ID（`author/slug`，即目录名去掉内部版本后缀，`acme/claude@20250929` 按 `acme/claude` 列出），`name` 是去掉作者的部分，`created` 恒为 0；`pricing` 的每个成员都是字符串，取准入账户及当前等级发布售价的标准服务等级、第一档（美元 / token，`web_search` 每次），售价表没有的单位（`image`、`image_output` 按图，`request` 按次，`discount`、`overrides`）省略而不是写 0，`image_token`、`internal_reasoning` 只给能收图片、会推理的模型（价目表对这两项会用所在侧的原价兜底，纯文本模型不该出现）；`context_length` 与 `top_provider.*` 取规格，`architecture` 的模态取规格声明的能力，`supported_parameters`、`reasoning` 按能力与方言给出（未知 mandatory 不声称）；`default_parameters`、`per_request_limits`、`supported_voices` 是 null，`description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks` 不输出（目录没有这些数据）。`id` 只用能解析回这个模型的公开名字：标准 ID 解析不到它（目录不该出现）就整个不列，因为那个名字既取不到详情也调不通。只列 key 能调用、路由快照里有公共端点、有售价的模型；私有端点不进入这份共享投影。
+  - 模型对象是 OpenRouter 的形状：`id`、`canonical_slug` 都是这个模型的公开标准 ID（`author/slug`，即目录名去掉内部版本后缀，`acme/claude@20250929` 按 `acme/claude` 列出），`name` 是去掉作者的部分，`created` 恒为 0；`pricing` 的每个成员都是字符串，取准入账户及当前等级发布售价的标准服务等级、第一档（美元 / token，`web_search` 每次，`image`、`image_output` 每张），售价表没有的单位（价目表没有按张价时的 `image`、`image_output`，`request` 按次，`discount`、`overrides`）省略而不是写 0，`image_token`、`internal_reasoning` 只给能收图片、会推理的模型（价目表对这两项会用所在侧的原价兜底，纯文本模型不该出现）；`context_length` 与 `top_provider.*` 取规格，`architecture` 的模态取规格声明的能力，`supported_parameters`、`reasoning` 按能力与方言给出（未知 mandatory 不声称）；`default_parameters`、`per_request_limits`、`supported_voices` 是 null，`description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks` 不输出（目录没有这些数据）。`id` 只用能解析回这个模型的公开名字：标准 ID 解析不到它（目录不该出现）就整个不列，因为那个名字既取不到详情也调不通。只列 key 能调用、路由快照里有公共端点、有售价的模型；私有端点不进入这份共享投影。
   - 列表读 `offset`、`limit`、`q`、`context`、`min_price`/`max_price`、`min_output_price`/`max_output_price`、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`，`sort` 支持 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`；OpenRouter 文档里有而 Axiom 没有数据的参数按名字回 400 并说明缺什么，文档之外的参数（缓存参数、`utm_*`）忽略。查询串本身解不开（`%ZZ`、用 `;` 分隔）也回 400：标准库会静默丢掉解不开的那一项，过滤条件就这样变成「整个列表」。`links.next` 是同一个查询把 `offset` 往后挪一格，只在这页之后还有模型时给出。
   - 单模型按调用路径的方式解析别名（`claude-live` 与 `anthropic/claude-live` 是同一个模型），返回 `{data: 模型对象}`，`id` 是标准 ID 而不是请求里的名字：OpenRouter 的形状里一个模型只有一个 `id`。
   - 列表与路由快照是同一次构建的产物，一起发布；每个受众的模型与端点条目预先编码，价格过滤、排序、计数及分页使用同一受众选择器，没有可服务版本的受众不列出该模型：同一次读目录、同一次读售价，所以列表上的价格就是快照里那个售价版本的收费价格，两者不会各读各的（`RouteDeps.Build` 同时产出 `*routing.Snapshot` 与列表，`Publish` 在同一发布锁内一起换；取列表和调用规划持该锁的读锁，锁内只读内存，不包住鉴权事务、编码或网络写入；构建失败或迟到则两者都不换）。请求路径上没有读价：列表和它服务的模型集合都在构建时定下来，一次响应里的 `total_count`、这一页和它之后的链接因此都属于同一次构建，写响应时路由怎么变都不会让它们互相矛盾。
@@ -63,7 +69,7 @@
 | 字段或行为 | 官方基线（核对日期均为 2026-10-29） | Axiom 数据与偏离 |
 |---|---|---|
 | 模型 `id`、`canonical_slug`、`name`、`created`、`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date`、`alias_target`、`benchmarks`、`links.details` | [模型列表](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 标准公开 ID、名字尾段、创建时间 0；没有描述、日期、别名目标和评分数据则省略；详情链接指向本 API 的 endpoints 路径 |
-| `pricing.prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`internal_reasoning`、`image_token`、`audio`、`audio_output`、`web_search`；缺失的 `request`、`image`、`image_output`、`input_audio_cache`、`discount`、`overrides` | [模型列表 PublicPricing](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 该账户及当前等级的主站已发布售价，标准服务等级、第一档，精确十进制字符串；token 项为美元/token，web_search 为美元/次。没有对应单位的成员省略；不是免费，也不拼参考价。图片、推理价只给声明了相应能力的模型 |
+| `pricing.prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`internal_reasoning`、`image_token`、`audio`、`audio_output`、`web_search`，以及价目表有按张价时的 `image`、`image_output`；缺失的 `request`、`input_audio_cache`、`discount`、`overrides` | [模型列表 PublicPricing](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 该账户及当前等级的主站已发布售价，标准服务等级、第一档，精确十进制字符串；token 项为美元/token，web_search 为美元/次，image、image_output 为美元/张。没有对应单位的成员省略；不是免费，也不拼参考价。图片、推理价只给声明了相应能力的模型（image_output 不需要图片能力，只有按张价才出现） |
 | `context_length`、`top_provider.context_length`、`top_provider.max_completion_tokens`、`top_provider.is_moderated`、`per_request_limits` | [模型列表 TopProviderInfo](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 目录上下文和输出上限；本站网关不审查内容，is_moderated 为 false，不承诺上游的审查政策；per_request_limits 为 null |
 | `architecture.modality`、`input_modalities`、`output_modalities`、`tokenizer`、`instruct_type` | [模型列表 ModelArchitecture](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 能力位投影 text/image/file 输入、text 输出；目录没有分词器和指令模板，后两项省略 |
 | `supported_parameters`、`default_parameters`、`supported_voices`、`reasoning.mandatory`、`supported_efforts`、`default_effort`、`default_enabled`、`supports_max_tokens` | [模型列表 ModelReasoning / DefaultParameters](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 支持参数按规格能力及方言推导，未声明的不声称；默认采样值和声音为 null。手动思考预算时给 supports_max_tokens:true；目录没有 mandatory、默认推理和 effort 列表，省略。mandatory 在官方 reasoning 对象中必填，这是有意的契约偏离，不能把未知写成 false |
@@ -74,7 +80,9 @@
 | 端点 `status`、`supports_implicit_caching`、`supports_tool_choice`、`native_tools`、`supports_diarization`、`supports_image_reference`、`supports_multiple_audio_references`、`supports_voice_cloning`、`perf_last_30m_by_workload` | [模型端点 PublicEndpoint](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model) | 没有窗口统计、逐值测试、原生工具映射或相关能力数据，省略而非把未知写成 false 或空集合；前四项能力字段（supports_implicit_caching、supports_tool_choice、native_tools、supports_diarization）在官方为必填，这是有意的契约偏离。实时暂停、满载和熔断不改变发现列表 |
 | `GET /api/v1/providers` 的 `data[].name`、`slug`、`privacy_policy_url`、`terms_of_service_url`、`status_page_url`、`headquarters`、`datacenters` | [供应商列表](https://openrouter.ai/docs/api/api-reference/providers/list-all-providers) | 有可见端点时给公开聚合供应商 Axiom/axiom；没有则空数组。不暴露货源、凭证、上游名字和成本；没有登记的政策链接和地域均为 null |
 
-目录、售价、端点字段只从构建时发布的内存投影读取，没有逐请求目录、计费或供应商查询。**鉴权例外**：这些路径仍像既有模型列表一样要求调用 key，实时停用、过期、IP 和模型权限通过 `accounts.Admit` 的数据库事务检查；不能用仅缓存身份的 AuthenticateKey 替代准入。因此不承诺“每请求零 DB”，承诺的是响应数据零 DB。完全零 DB 需要另定具有失效机制的权限快照，当前没有这份数据，不在本次虚构它。
+目录、售价、端点字段只从构建时发布的内存投影读取，没有逐请求目录、计费或供应商查询。**鉴权例外**：这些路径仍像既有模型列表一样要求调用 key，实时停用、过期、IP 和模型权限通过 `accounts.AdmitBatch`（单请求路径为 `Admit`）的数据库事务检查；不能用仅缓存身份的 AuthenticateKey 替代准入。因此不承诺“每请求零 DB”，承诺的是响应数据零 DB。完全零 DB 需要另定具有失效机制的权限快照，当前没有这份数据，不在本次虚构它。
+
+**网站和控制台的模型与价格**不复制这份 OpenRouter 投影，而是从同一次构建的 `ModelList` 取 `Public(billing.Audience)`：只含已发布、有可用售价的公共模型，字段是目录 ID、名字、厂商、上下文、最大输出、是否流式、能力和 `catalog.ScheduleView`（币种、分档口径、每个服务等级/档位/计费项的实际生效单价，含空档恢复的基础价）。`GET /api/console/v1/models` 匿名，按站点默认等级取价；`GET /api/console/v1/models/account` 要登录，按账户当前等级取价。两者都只读内存快照，与调用扣费同一次构建，所以页面的价就是下单的价；不返回供应商、端点、代号、成本或价格来源。旧节点没有这个操作时页面显示「价格暂不可用」，不把缺失当成免费。
 
 ### 转发规则
 
@@ -85,7 +93,9 @@
   - 会话请求头（`session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`）发给 Responses 和 Chat 端点（两者都是 OpenAI 的方言，中转站按这些名字定账号），不发给 Messages 端点，值是下面那一条的派生值，中转站据此把两轮对话固定到同一个账号；客户端的 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-OpenRouter-Title`、`X-Title`、`X-OpenRouter-Categories`、`User-Agent` 一律不转发，其中应用归因的三个记入调用记录（[记录与告警的「写入时记全」](observability.md#写入时记全)）。
 - **会话和用户标识换成派生值**：`prompt_cache_key`、Anthropic 的 `metadata.user_id` 和上面的会话请求头，替换成用账户密钥派生的不透明标识再转发（见[路由的「会话粘性」](routing.md#会话粘性)），这样上游的缓存仍然有效。`metadata.user_id` 写成 JSON 字符串，内容是 `{"device_id":"…","account_uuid":"","session_id":"…"}`：`device_id` 每个账户固定，`session_id` 与同值的会话请求头是同一个派生，中转站从中取出会话固定账号（格式见 `internal/protocol/README.md` 的「同格式改写」）；`account_uuid` 留空，中转站接受空值，我们也不把账户标识交给上游。空串或纯空白的 `metadata.user_id`（含 Chat `user` 转换）写为空串，不生成会话结构，让中转站按内容回退。`user`、`safety_identifier` 换成哈希值，不把终端用户标识原样发往上游。`session_id` 作为路由参数用过之后与其他路由参数一样删除；请求头里的那个不是路由参数，它是客户端自己的会话名。
 - **上游一律流式调用**：生成请求都以流式调用上游，路由只保留能流式的端点；客户端要的是非流式也由网关聚合后一次返回，这样计费进度看得见（见[计费的「预留与结算」](billing.md#预留与结算)）。非流式的回答在返回之前没有"已转发内容"这一刻，所以中途失败仍可换端点，各次尝试的内容互不混入。`/responses/compact` 例外：上游不流式，回复原样透传，请求只改必须改的成员，一次预留足。
-- **跨格式**：Chat 客户端调用说 Chat 的端点（DeepSeek、Qwen 等 OpenAI 兼容的模型，同格式转发），也调用 Messages、Responses 端点（转换）；端点同时说客户端格式和别的格式时优先原格式。Messages、Responses 客户端也能调用只说 Chat 的端点：请求反向使用 protocol 的同一套映射，表达不了的成员拒绝，不靠删除约束凑请求。Chat 的文本、推理、工具参数增量转换成客户端的事件，非流式由这些事件聚合；Messages 的块必须顺序输出，交错的后续工具参数暂存到前块关闭；Responses 的完成事件包含完整输出快照。缓存、推理用量仍由 Chat 读取器计量，费用和错误按客户端格式写出。跨格式只是请求和流的转换不同，预留、尝试、结算与同格式相同。
+- **直接格式整份回复**：`/embeddings` 和 `/rerank` 的上游不流式，网关把整份回复读进内存（上限 16 MiB，超出按上游失败处理）并校验它恰好是一个 JSON 对象、有本格式的 `data` 或 `results`、对象后没有多余内容（前导空白允许）；读取时只保留 `data`/`results` 在原文里的位置，不复制整份数组，改写时才分配输出缓冲，并在分配前向节点内存预算记账；通过后结算，再把上游的 `data`/`results` 配上本站的 `id`（rerank）、`model`、`usage` 和 `cost` 写出。读取失败或回复不合格时，这一次尝试还没有向客户端提交任何内容，仍可换下一个端点。请求只改必须改的成员：`model` 换成端点的名字，`user` 换成派生值，路由参数（`provider`、`models`、`preset`、`session_id` 等）删除；这两种格式没有意义的 `prompt_cache_key`、`safety_identifier` 也删除，`encoding_format`、`dimensions`、`top_n`、`input`/`documents` 原样转发。`stream:true` 在 Inspect 阶段就以 400 拒绝，因为这两种格式没有流式回复。
+- **直接格式的错误**：外壳与 Chat 相同（OpenAI 的 `error` 对象），状态码沿用统一表；错误体里的 `axiom.usage` 按格式给出 embeddings 的 `prompt_tokens`/`total_tokens` 或 rerank 的 `total_tokens`/`search_units`。
+- **跨格式**：三种 Chat 形态的生成格式两两可以转换，端点同时说客户端格式和别的格式时优先原格式；直接格式和旧版补全不参与转换（P18）。Chat 客户端调用说 Chat 的端点（DeepSeek、Qwen 等 OpenAI 兼容的模型，同格式转发），也调用 Messages、Responses 端点（转换）；Messages、Responses 客户端能调用只说 Chat 的端点，也能调用说另一个原生格式的端点（Messages 与 Responses 互转）。转换都走 protocol 的同一套映射：原生两格式之间先把请求读成 Chat 形状、再按 Chat 到目标的映射写出（`convertNative`），流也一样（先把上游的流写成 Chat 的块，再写成客户端格式），所以两个方向只有一套映射。表达不了的成员拒绝，不靠删除约束凑请求。Chat 的文本、推理、工具参数增量转换成客户端的事件，非流式由这些事件聚合；Messages 的块必须顺序输出，交错的后续工具参数暂存到前块关闭；Responses 的完成事件包含完整输出快照。缓存、推理用量仍由读上游那一路的读取器计量，费用和错误按客户端格式写出。跨格式只是请求和流的转换不同，预留、尝试、结算与同格式相同。三处只在原生两格式之间出现的差别：Anthropic 的思考块（含签名和 `redacted_thinking`）只回放给 Messages，Responses 的 reasoning 项（摘要加密文）只回放给 Responses，别家模型的推理对当前模型没有意义；给 Messages 客户端的请求不要加密推理的 `include`，它收不回密文；`file_id` 只在 Chat 和 Responses 之间带回，到 Messages 返回 `*NotSupported`（Anthropic 的文件引用是本站不接的 beta）。
 - **请求内容不改**：同格式转发时，缓存标记、块状的 system 内容保持原样，否则每一轮都按无缓存计费。Chat 请求里模型方言的成员（`reasoning`、`reasoning_effort`、`cache_control`、助手消息里回传的 `reasoning_content`、图片部件）也照客户端写的发给端点，由端点按它自己的方言处理；按模型规格把推理参数换成端点认的写法，现在没有，待定。
 - **Chat 端点的请求改什么**：`model` 换成端点的名字，`user`、`safety_identifier`、`prompt_cache_key` 换成派生值，路由参数删除，一律要流，并且 `stream_options.include_usage` 一律为 `true`（客户端写了 `false` 或 `null` 也一样，`stream_options` 里的其他选项不动）：计量和非流式的聚合都读上游报告的用量，这和 new-api（`relay/compatible_handler.go` 的 `ForceStreamOption`）、sub2api（`openai_gateway_chat_completions_raw.go` 的 `ensureOpenAIChatStreamUsage`）一样。输出上限：客户端的 `max_tokens`、`max_completion_tokens` 两个成员都拿掉，把其中最小的正数（都没有就是报价用的上限）写进端点读的那一个成员：端点的上游模型名是 OpenAI 的 o1、o3、o4、GPT-5 或 GPT-6 的 Astra、Sol、Luna 时写 `max_completion_tokens`（它们拒绝 `max_tokens`），其余写 `max_tokens`（DeepSeek、Qwen 一类忽略 `max_completion_tokens`，留着它输出上限就没有了）；这是 new-api 的规则（`GetOpenAIChatCapabilities`）。`store` 等其余成员不动。
 - **发出的输出上限就是预留用的上限**：请求没写输出上限（或写 `null`）时，发给上游的是该条目报价用的上限，也就是模型的默认值，上下文装不下时则是裁短后的值（Messages 与 Responses 的数值 0（含 `-0`）也算没写；Messages 补 `max_tokens`，Responses 补 `max_output_tokens`，Chat 写在端点读的那个成员里，见上）；请求写了就照它发。模型的上限未知时不发，由上游自己的默认值管。否则上游可以生成比预留依据更多的输出。
@@ -98,12 +108,13 @@
 - **推理开关与展示分开**：缺省保留模型默认，显式关闭在转换时写成 Messages 的 thinking disabled 或 Responses 的 effort none；`reasoning.exclude:true` / Messages 的 thinking display omitted 只隐藏输出，推理仍计入用量和费用。本站在计量之后过滤，适用于同格式、跨格式、流式和非流式；Chat 不返回两个推理明文字段，details 只保留置空 text 的签名条目及密文，摘要不返回；三种格式均保留续聊状态。只给展示参数时不补写 thinking 模式，纯隐藏 Chat 块不在提交前积压。预算与 effort 的映射、近似和模型能力边界见 [protocol 换算表](../../internal/protocol/README.md#推理控制与换算)。
 - **Chat 回复的推理文本写两个字段，内容相同**：`reasoning`（OpenRouter 的名字）和 `reasoning_content`（new-api、DeepSeek 的名字，不少客户端读它），未要求隐藏时，流式的每一块、非流式的消息里都是；带签名和密文的 `reasoning_details` 照旧。客户端读哪个都行；代价是推理文本多发一份，只在模型推理时发生。依据见「决策与理由」。Chat 端点只写其中一个名字时（DeepSeek 写 `reasoning_content`，OpenRouter 写 `reasoning`），另一个由本站按同样的文本补上；两个都有文本的块不动。
 - **响应头按白名单放行**：只返回内容类型、我们自己的调用编号、我们计算的限流和重试信息。上游的 `x-request-id`、`openai-organization`、`cf-ray`、`server` 等会暴露上游身份的头一律删除；唯一的例外是上游铸造的 `x-codex-turn-state`，它只在作答的那次尝试的上游设了它时回传，客户端自己发的值不回显——那是厂商给下一轮的凭据，换一个出来没有意义。
-- **自己回显**：响应里的 `id` 用我们的调用编号，`model` 回显客户端请求的名字。
+- **自己回显**：响应里的 `id` 用我们的调用编号，`model` 写实际服务的模型（备选 `models` 或别名解析之后），不是客户端请求的原名；供应商仍然不暴露。
 
 ### 用量与费用
 
-- **每次调用都返回用量和费用**：输入、输出、缓存读、缓存写、推理 token 和费用，与 OpenRouter 的用量统计对齐（OpenRouter《Usage Accounting》，2026-10）。
-- **流式输出放在最后一个事件里**：Chat 格式的最后一块带一个空内容的选项，避免客户端崩溃（与 OpenRouter 一致）。费用在回答结束前结算好再发出，字段是 `usage.cost` 和 `usage.cost_currency`；用量来自估算的另带 `usage.cost_estimated: true`，标出这次收费建立在估算上；M1 不按供应商记录校正它（见[计费的「用量来源与暂估」](billing.md#用量来源与暂估)）。
+- **每次调用都返回用量和费用**：输入、输出、缓存读、缓存写、推理 token 和费用，与 OpenRouter 的用量统计对齐（OpenRouter《Usage Accounting》，2026-10）。Chat/Responses 的用量块另带 `prompt_tokens_details` 的音频/视频、`completion_tokens_details` 的音频/接受/拒绝预测 token、`server_tool_use_details` 和 `is_byok:false`；`usage.cost_details.server_tool_cost` 只写按次工具的用户售价，供应商成本不写。用量块里的 `cache_discount` 是缓存读相对输入价省下的用户售价，只在为正时出现。
+- **Embeddings 与 rerank 的用量**：embeddings 的 `prompt_tokens` 和 `total_tokens` 取上游报告的输入 token；rerank 的 `total_tokens` 取上游报告的输入 token，`search_units` 记作按次的 web search 单位，按现有的 `web_search` 售价计费，上游没报 `search_units` 时不写这个成员。因此 rerank 模型的规格 `items` 要写 `input` 和 `web_search`，售价表也要有 `web_search` 的按次价；缺了 `web_search` 的价，这个端点会按[路由的“价目表缺项”](routing.md#一个请求的路由步骤)排除，不会先接单再在结算时失败。两者都写 `usage.cost`、`cost_currency`，暂估时带 `cost_estimated:true`，并写 `is_byok:false`；不写 `prompt_tokens_details`，因为上游没有按模态拆分。
+- **流式输出放在最后一个事件里**：Chat 格式的最后一块带一个空内容的选项，避免客户端崩溃（与 OpenRouter 一致）。费用在回答结束前结算好再发出，字段是 `usage.cost` 和 `usage.cost_currency`；用量来自估算的另带 `usage.cost_estimated: true`，标出这次收费建立在估算上；供应商的完整记录到了以后由暂估校正冲正并重结，响应里已发出的数字不追改（见[计费的「用量来源与暂估」](billing.md#用量来源与暂估)）。
 - **Chat 端点报的用量**：按 OpenAI 的口径映射（`prompt_tokens` 含缓存的 token，`completion_tokens` 含推理的 token，缓存读写和图片的 token 只算一次，不在输入里再算一遍）。DeepSeek 把缓存命中写在 `prompt_cache_hit_tokens`（与 `prompt_cache_miss_tokens` 之和等于 `prompt_tokens`），`prompt_tokens_details.cached_tokens` 缺失或为 0、而命中数大于 0 时，命中数就是缓存读；两者都大于 0 时以 `cached_tokens` 为准，不比较是否相等。这和 new-api 一样（`relay/channel/openai/usage.go` 的 `applyUsagePostProcessing`）；两个名字都不当作额外的用量，否则会按未知 token 再收一遍。用量块可以在带内容的最后一块里（DeepSeek），也可以是没有选项的单独一块（OpenAI、Qwen）。
 - **结算写不进时**：上游已经正常结束、内容完整的，照常结束，但结尾不带费用，改带 `axiom.billing_pending: true`，非流式同样返回 200；费用由后台继续结算，在调用记录里查。只有被截断的流才以 `billing_unavailable` 报错结束。
 - **流开始前就出错也可能收费**（例如已执行的联网搜索，见[计费的「免单规则」](billing.md#免单规则)）：错误体的 `axiom` 对象里带用量和费用。
@@ -125,7 +136,7 @@
 
 ### 错误
 
-- **外壳与类型**：Messages 用 Anthropic 的外壳；Chat 和 Responses 用 new-api 与 OpenAI 的 `error` 对象：`message`、`type`、`param`、`code`，另带统一的错误类型字段 `error_type`，程序判断它就够了（与 OpenRouter 一致，见 OpenRouter《Errors and Debugging》，2026-10）。
+- **外壳与类型**：Messages 用 Anthropic 的外壳；Chat、Responses、Embeddings、Rerank 用 new-api 与 OpenAI 的 `error` 对象：`message`、`type`、`param`、`code`，另带统一的错误类型字段 `error_type`，程序判断它就够了（与 OpenRouter 一致，见 OpenRouter《Errors and Debugging》，2026-10）。
   - `type` 用状态码表里「Messages 的 `type`」那一列的词（`invalid_request_error`、`authentication_error` 等），`param` 没有时是空字符串，`code` 是字符串（上游未给出且无法分类时为 `null`）：我们自己的错误里就是统一的错误类型（`invalid_request`、`model_not_found`……），上游拒绝请求时是上游给的 `code`（没给时，已分类的错误用统一类型，其他为 `null`）；账户暂停调用也用字符串 `permission_denied`；
   - `error_type` 的位置：Chat 在 `error.metadata.error_type`，Messages 在 `error.error_type`，Responses 在 `response.failed` 的顶层；Responses 在流开始之前出错时用 Chat 的外壳；Chat 流中途的出错块里的 `error` 也是同一个对象；
   - 与 OpenRouter 的不同：它的 `error.code` 是与状态码相同的数字；我们的是字符串，状态码在响应的状态行里。读 OpenAI 或 new-api 的 `error.code`、`error.type` 的客户端能读到，读 OpenRouter 数字 `code` 的要改读状态行或 `error_type`。偏离的理由见「决策与理由」。
@@ -153,13 +164,14 @@
 | 节点满载、准入超时、路由快照过旧、数据库不可用、本节点的持有者失效 | 503 `overloaded`，`Retry-After: 1` | `overloaded_error` | — |
 | 模型不存在；key 不允许用这个模型 | 404 `model_not_found`，不返回 403 | `not_found_error` | — |
 | 没有可用端点，永久性的：能力、上下文、格式、预设或请求覆盖过滤掉了全部端点，或没有售价 | 404 `no_endpoint`，附过滤原因 | `not_found_error` | — |
-| 没有可用端点，暂时性的：全部熔断、供应商余额不足、重试预算用完 | 503 `no_endpoint`，附原因和 `Retry-After` | `overloaded_error` | — |
+| 没有可用端点，暂时性的：全部熔断、供应商余额不足、重试预算用完，或 `:exacto` 没有已验证的端点 | 503 `no_endpoint`，附原因和 `Retry-After` | `overloaded_error` | — |
 | 每个端点都不支持这个请求的写法 | 400 `invalid_request`，附原因 | `invalid_request_error` | — |
 | 开启了联网搜索或代码执行，却没写最多用几次，而模型也没有默认次数（费用没有上界，预留不了） | 400 `invalid_request`，说明要写 `max_uses`（Messages 联网搜索）或 `max_tool_calls`（Responses）；没有上限字段的（Chat 的工具、Messages 的代码执行）说明该格式暂不支持，不调用上游 | `invalid_request_error` | — |
 | 上游拒绝上下文过长（HTTP 或流内错误） | 400 `context_length_exceeded`，保留脱敏原话、`param` 和上游字符串 `code`；不重试 | `invalid_request_error` | 同一 `error_type`，保留已转发内容 |
 | 上游内容策略拒绝请求（HTTP 或流内错误） | 403 `content_policy_violation`，保留脱敏原话；不重试 | `permission_error` | 同一 `error_type`，保留已转发内容 |
 | 请求权限拒绝；上游已明确分类的请求体超限 | 403 `permission_denied`；413 `payload_too_large` | `permission_error`；`request_too_large` | 同一 `error_type`；供应商凭证权限失败仍只用来换凭证或端点 |
 | 上游因其他请求问题拒绝（HTTP 或流内错误） | 400 `invalid_request`，带上游的原话、`type`、`param`、`code`（上文），没有原话时用统一的说法；不再换端点 | `invalid_request_error` | 错误事件里保留原话和 `code`，`error_type` 是 `invalid_request`，已转发的内容保留 |
+| `web` 插件的搜索失败、超时或结果无法注入（在第一次尝试之前） | 502 `upstream_error` | `api_error` | 上游中途出错，`upstream_error` |
 | 所有尝试都失败，含各自超时 | 502 `upstream_error` | `api_error` | 上游中途出错，`upstream_error` |
 | 单次调用最长、不再发起尝试的期限到了，节点退出；读请求体超时 | 408 `timeout` | `timeout_error` | `timeout` |
 | 格式错误、带 `previous_response_id`（M1）；请求过大 | 400 `invalid_request`；413 `payload_too_large` | `invalid_request_error`；`request_too_large` | — |
@@ -198,7 +210,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 - **接受 OpenRouter 的参数**：
   - `provider` 对象：只走、排除、指定顺序、是否允许回退、要求支持全部参数、数据政策、排序、最高价、性能条件；
   - `models` 备选模型；Messages 也支持 `fallbacks: [{model: "…"}]`，限制与映射见[路由的「命名预设」](routing.md#命名预设)和「失败怎么办」；
-  - 模型名变体 `:nitro`、`:floor`：等同 `provider.sort` 的 `throughput`、`price`；`:exacto`、`:online`、`:free`、`:batch`、`:extended`、`~…-latest` 别名返回 400，`:thinking` 只在请求已要求推理时接受，见下文「模型名变体」；
+  - 模型名变体 `:nitro`、`:floor`：等同 `provider.sort` 的 `throughput`、`price`；`:free` 查目录里的独立条目，没有就是 404；`~…-latest` 解析目录别名；`:exacto` 只在质量验证过的端点上按质量优先，没有时 503 `no_endpoint`（原因 `not_verified`）；`:online` 未配置搜索后端时 400、配置后等同 `web` 插件，`:batch`、`:extended` 返回 400，`:thinking` 只在请求已要求推理时接受，见下文「模型名变体」；`openrouter/auto`、`openrouter/free` 按路由排序选具体模型，见下文；
   - `@preset/名称`、`model@preset/名称`、`preset` 字段：使用当前账户的命名配置，覆盖与管理接口见[路由的「命名预设」](routing.md#命名预设)；
   - `session_id`、`x-session-id` 请求头、`prompt_cache_key`；请求体 session_id 优先于请求头，二者最多 256 字符；
   - `user`：终端用户标识，用于防滥用和归因。
@@ -215,8 +227,8 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
   | 非空 `quantizations` | 400；快照没有逐端点的量化等级：目录规格不带这个字段，供应商同步的模型记录也只存上游名、格式和能力，请求的级别因此无从匹配；缺记录不能当作 fp16，也不能当作已验证的 `unknown`。空列表和 `null` 不增加限制 | 供应商同步为每个端点读出量化等级，目录规格能声明该等级，并让路由快照携带它 |
   | `preferred_min_throughput` / `preferred_max_latency` 的百分位对象 | 400；quality 每个端点只保存一个 EWMA 首字延迟和吞吐（至少 5 个样本、30 分钟内），没有滚动五分钟窗口的样本或 p50/p75/p90/p99 分位数，无法比较对象里的截断值。数字形式继续按 EWMA 软偏好，不声称是 p50 | quality 保留五分钟窗口的延迟与吞吐样本并计算四个分位数，再把它们带进路由快照 |
   | `sort` 对象的 `percentile` 与其他未知成员 | 400；OpenRouter 的排序对象只有 `by` 和 `partition`（2026-10-31 核对），`percentile` 不是排序成员；百分位截断属于 `preferred_min_throughput` / `preferred_max_latency`，而它们缺的同样是上面那组五分钟窗口分位数。其他未知成员也按名字拒绝，不静默忽略 | 同上；若 OpenRouter 将来把分位数加进排序对象，还要定义它和 `by` 的组合语义 |
-  | `max_price.request` | 400；已发布售价只有按 token 和按次服务端工具（`web_search`、`code_execution`）的计费项，没有按生成请求计数的 `request` 项；OpenRouter 的 `pricing.request` 也没有读入 | 价目表和已发布售价增加按生成请求计数的 `request` 项，并导入来源的按请求价 |
-  | `max_price.image` | 400；价目表没有按图片张数计数的 `image` 项；`image_in`、`image_out` 是按 token 的图片价，不能当成按张价，OpenRouter 的 `pricing.image` 也没有读入；本站当前也没有图片生成输出 | 价目表增加按张计数的 `image` 项，导入来源的按张价，并支持按张计费与结算 |
+  | `max_price.request` | 400；已发布售价只有按 token、按次服务端工具（`web_search`、`code_execution`）和按张的图片项，没有按生成请求计数的 `request` 项；OpenRouter 的 `pricing.request` 也没有读入 | 价目表和已发布售价增加按生成请求计数的 `request` 项，并导入来源的按请求价 |
+  | `max_price.image` | 400；价目表已有按张的图片项（`image_in_piece`、`image_out_piece`，#320，模型列表的 `pricing.image` 也从前者发布），但 OpenRouter 的单个 `image` 上限没有说管输入图、生成图还是按 token 计价的图；没有端点报告按张的图片用量，本站也不输出生成的图，该比哪一项未定，所以不拿 `image_in`/`image_out` 的 token 价冒充 | 先定 `max_price.image` 管输入、生成还是两者，并让端点报告按张的图片用量；在那之前保持 400 |
   | `max_price.prompt` / `completion` | 本站记账货币每百万 token，比较实际受众售价的适用服务等级与上下文档位最高价；只接收可精确表示的十进制数，不四舍五入。非美元站点不声称美元上限 | 无；已实现 |
   | `max_price` 的其他成员 | 400；不认识就不静默忽略 | 对应的计费单位与来源价 |
 
@@ -233,49 +245,70 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | `plugins:[{id:"context-compression"}]`、`transforms:["middle-out"]` | 执行：Chat 在准入之前从中间删除完整对话轮次，保留首尾；仍超长时从纯文本消息中间截短；按 [Anthropic 消息上限](https://platform.claude.com/docs/en/api/messages/create)（2026-10-29）裁到最多 100000 条，跨消息的未完成工具调用不拆组。系统指令、工具调用及结果、签名和多模态部件不截短；剩余固定内容放不下则 400，不把不完整的工具对发给上游 |
 | `plugins:[{id:"context-compression",enabled:false}]`、`transforms:[]` | 执行关闭；显式插件策略优先于旧 `transforms`，没有显式策略时，Chat 上下文不超过 8192 token 默认尝试：正文超过整个上下文的字节上界（不扣默认输出上限），或超过消息条数上限才启动；压缩失败或临时内存不足时原样转发，不新增拒绝 |
 | 已知插件的 `enabled:false`、空数组、null | 忽略（等价于关闭或未指定）；未知 id 即使关闭仍拒绝 |
-| `web` | 启用时 400，消息含 `not supported` 与「没有配置外部搜索服务」：联网搜索需要外部服务，执行与计量见「服务端工具」；显式关闭可接受。`:online` 变体和 `openrouter:web_search` 工具是同一件事，共用这句话 |
+| `plugins:[{id:"web"}]` | 执行联网搜索：后台配置了搜索服务时，准入前取最后一条用户文本为查询，按 `max_results`（默认 5，最多 10）、`include_domains` / `exclude_domains`（转成 `site:` / `-site:`）和可选的 `search_prompt`（≤512 字节）调用部署配置的 SearXNG；查询经出网规则并限时 15 秒，结果作为 system 消息注入第一条用户消息之前（与其他前置 system 消息一起，转成只接受前置 system 的格式时也成立；查询仍取最后一条用户文本），按 `web_search` 售价计一次。未配置时 400，消息含 `not supported` 与「没有配置外部搜索服务」；`:online` 等同插件。写入超过 1024 字节或查询为空时 400；`engine` / `mode` 400，因为本站只有一个部署侧后端。非流式 Chat 把正文里与结果 URL 对应的 markdown 链接补成 `url_citation` 注解，流式回复不补（整条消息要到结束才知道）。搜索前按 `websearch.WorkingSet` 把适配器的响应与解码工作集计入节点内存预算，注入正文按原正文三倍加 `WebSearchMaxBytes` 再计一次，引用注解的额外工作集在聚合内容时预留，调用结束才归还；预算不够 503，不搜索、不调用上游。搜索失败或超时是普通上游失败，回 502 且不调用模型、不计模型用量 |
 | `file-parser` | 启用时 400，消息含 `not supported`：PDF/OCR 解析需要外部服务，目前没有对应执行、计量和故障边界；显式关闭可接受 |
 | 未知插件 id、未知 transform、未支持的插件选项；非 Chat 格式启用本地插件 | 400，消息含 `not supported`，不静默删除 |
 
-**有意偏离**：压缩使用目录主模型的上下文和输出上限，在路由与预留之前完成；不实现 OpenRouter 跨模型的「半个所需上下文」候选扩展，也不对每个回退端点重新压缩。仍按正常路由过滤装不下的备选模型。输入使用 JSON 正文字节上界（包含工具定义及控制字段）而非调用外部分词服务，因此仍可能更早压缩，显式开启时保护内容装不下会拒绝；默认策略只在超过整个上下文的字节上界或消息上限后尝试，失败时保留原文和原摘要。默认输出上限等于上下文也不会因此拒绝请求，实际输出上限仍由正常路由裁到剩余窗口。同一份摘要、预留与转发正文一致。只提供 Chat 插件接口，其他格式显式拒绝启用；不增加账户级默认插件设置。`web` 和 `file-parser` 暂不接入外部服务。
+**有意偏离**：压缩使用目录主模型的上下文和输出上限，在路由与预留之前完成；不实现 OpenRouter 跨模型的「半个所需上下文」候选扩展，也不对每个回退端点重新压缩。仍按正常路由过滤装不下的备选模型。输入使用 JSON 正文字节上界（包含工具定义及控制字段）而非调用外部分词服务，因此仍可能更早压缩，显式开启时保护内容装不下会拒绝；默认策略只在超过整个上下文的字节上界或消息上限后尝试，失败时保留原文和原摘要。默认输出上限等于上下文也不会因此拒绝请求，实际输出上限仍由正常路由裁到剩余窗口。同一份摘要、预留与转发正文一致。只提供 Chat 插件接口，其他格式显式拒绝启用；不增加账户级默认插件设置。`file-parser` 暂不接入外部服务。联网搜索的注入文本是本站自己的偏离：OpenRouter 的插件文档只写结果以注解返回，没有写注入格式（OpenRouter《Web Search》，2026-10-31 核对的页面没有该细节），这里照它官方博客的 system 消息措辞（《Introducing web search via the API》，2026-10-31），把标题、URL 和摘要编号列出，并允许 `search_prompt` 替换指令；结果逐项读取，只保留最多 `max_results` 条有效结果，URL 最长 8 KiB，标题 256 字节、摘要 1024 字节、响应 4 MiB 截断，空对象或无效结果不按响应条数分配，注入正文不超过 40 KiB，所以客户端内容不会被搜索结果无限放大。
 
 ### 服务端工具
 
-2026-10-29 核对 [Server Tools](https://openrouter.ai/docs/guides/features/server-tools) 及逐工具页面。服务端工具和客户端执行的 `function` 工具不是一回事：模型自己决定调用零到多次，OpenRouter 执行后把结果送回模型继续采样，步数和费用都由它管。Axiom 不跑这个循环，所以一个都不接受；但按名字认出来再拒绝，不把 `openrouter:*` 当普通函数转发给上游——上游会忽略它，客户端却以为能用。
+2026-10-29 核对 [Server Tools](https://openrouter.ai/docs/guides/features/server-tools) 及逐工具页面。服务端工具和客户端执行的 `function` 工具不是一回事：模型自己决定调用零到多次，OpenRouter 执行后把结果送回模型继续采样，步数和费用都由它管。Axiom 还没有实现这个模型侧循环，所以 `openrouter:*` 一个都不接受；但按名字认出来再拒绝，不把 `openrouter:*` 当普通函数转发给上游——上游会忽略它，客户端却以为能用。`web` 插件和 `:online` 不是服务端工具循环：它在模型采样之前跑一次，拿到的结果只作为这次采样的输入，`max_uses` 恒为 1，所以不依赖那个循环（见「插件与提示词变换」）。
 
 - **认哪些**：`openrouter:` 命名空间里 OpenRouter 文档列出的 13 种——`web_search`、`web_fetch`、`datetime`、`image_generation`、`apply_patch`、`shell`、`bash`、`fusion`、`advisor`、`subagent`、`experimental__search_models`、`tool_search`、`files`。三种调用格式的 `tools` 数组都认，表只在 `internal/protocol/grammar.go` 的 `openrouterTools` 一处；命名空间里没有的名字也拒绝，并说明它不是 OpenRouter 的服务端工具，因为 OpenRouter 会继续加工具。工具的 `parameters` 不解析：请求已经拒绝，不为一棵读不到的树写转换。
-- **怎么拒绝**：准入之前回 400 `invalid_request`，消息含 `not supported` 和工具名，走各格式自己的错误外壳（见「错误」）；不预留、不调用上游、不发送。`web_search` 的原因是没有配置外部搜索服务，与 `web` 插件、`:online` 变体共用 `protocol.NoWebSearch` 这一句话；其余工具的原因是没有 OpenRouter 的模型侧工具循环。
+- **怎么拒绝**：准入之前回 400 `invalid_request`，消息含 `not supported` 和工具名，走各格式自己的错误外壳（见「错误」）；不预留、不调用上游、不发送。`openrouter:web_search` 与未配置的 `web` 插件、`:online` 共用 `protocol.NoWebSearch` 这一句话，即使后台已经配置了搜索服务也仍然拒绝：它需要模型侧循环和每次调用后的继续采样，`web` 插件的单次执行不能代替；其余工具的原因是没有 OpenRouter 的模型侧工具循环。
 - **为什么不做一半**：这些工具共同的执行前提是模型侧循环——拦截调用、执行、把结果作为下一次采样的输入、限定步数并计费；搜索、抓取、图片和沙箱还各需要一个外部服务或执行环境。只接受声明而把工具定义转给上游，会让模型以为工具可用、客户端拿不到结果；只实现其中一个，又要把其余十二个继续拒绝，判断分散在两处。
-- **将来怎么接（一个接口）**：循环留在网关，外部服务只做一件事：收到一次带界的查询（查询词、结果条数上限、允许/排除的域名、请求指定的引擎），返回有界的条目列表（URL、标题、摘要）或一次错误。网关负责其余部分——步数上限（`max_uses`）、每次搜索计入现有的按次 `web_search` 计费项、结果大小与字符集上限、超时和失败按普通上游失败处理、密钥只留在出网的一侧、查询内容不写进日志。换服务只改这一个实现，拒绝、计费和协议外壳都不动。没有先加一个空的 Go 接口：现在没有实现者，仓库规则也不留只为将来的抽象；接口的职责边界写在这里，接第一个服务时再落成类型。
-- **要负责人决定的事**（决定前保持 400）：用哪个搜索服务（Exa、Firecrawl、Parallel、Perplexity、自建，或只允许模型厂商的原生搜索、不接外部服务）；该服务的数据保留与零保留（ZDR）条款能否接受，因为查询词会离开本站；按次成本多少、现有 `web_search` 售价是否覆盖，以及每个请求的搜索次数上限；密钥由谁持有、出网走哪个出口。这些是业务和外部约束，代码和文档不能代替。决定后在这里补选型与计费口径，再实现上面那个接口。
+- **接口落在哪**：`web` 插件用的 `websearch.Searcher`（`internal/websearch`）已经实现同一件事，只是调用者是网关的插件路径而不是模型侧循环：收到一次带界的查询（查询词、结果条数上限、允许/排除的域名），返回有界的条目列表（URL、标题、摘要）或一次错误。它经节点的出网客户端出网、限时 15 秒、密钥只在服务端、查询不写日志；计数走现有的按次 `web_search` 计费项，一次插件请求恰好一次、`max_uses` 恒为 1。换搜索服务只改这一个适配器，拒绝、计费和协议外壳不动。服务端工具循环以后接通时，复用这个接口，另加循环的步数上限和每次搜索后的继续采样。
+- **要负责人决定的事**（决定前 `openrouter:web_search` 保持 400）：是否要实现模型侧循环，以及循环的步数上限；是否只允许模型厂商的原生搜索而不接外部服务。`web` 插件的选型与边界已经定下：自建 SearXNG JSON API、后台配置 URL 与密钥、按次计费、密钥服务端持有、出网走节点出口，理由见「决策与理由」。
 
 `GET /api/v1/tools` 的目录也没有：清单不能先于执行公开。
 
 ### 模型名变体
 
-模型名后面可以跟 `:` 开头的变体，2026-10-29 核对 [OpenRouter Model Variants](https://openrouter.ai/docs/guides/routing/model-variants/overview)。网关在查目录之前读掉路由变体，目录只收到基础名字：目录里没有带 `:` 的名字（见[模型目录的「名字解析」](catalog.md#名字解析)）。读法只在 `internal/gateway/variant.go` 一处，调用、`models` 里的备选、`count_tokens`、两种模型详情和 OpenRouter endpoints 查询共用。调用响应和记录里的 `model` 仍是客户端写的整个名字；OpenRouter 模型发现响应仍报告基础标准 ID。认得出但本站不能兑现的请求回 400 `invalid_request` 并说明原因，不伪装成模型不存在，不调用基础模型。
+模型名后面可以跟 `:` 开头的变体，2026-10-29 核对 [OpenRouter Model Variants](https://openrouter.ai/docs/guides/routing/model-variants/overview)。网关在查目录之前读掉路由变体；`:free` 是唯一的目录后缀，作为独立条目原样交给目录（见[模型目录的「名字解析」](catalog.md#名字解析)），其余路由变体不会新建目录模型。读法只在 `internal/gateway/variant.go` 一处，调用、`models` 里的备选、`count_tokens`、两种模型详情和 OpenRouter endpoints 查询共用。调用响应和记录里的 `model` 在成功时是实际服务的具体模型（`RelayOptions.ActualModel`），调用记录仍保存客户端写的整个名字；OpenRouter 模型发现响应报告具体模型的标准 ID。认得出但本站不能兑现的请求回 400 `invalid_request` 并说明原因，不伪装成模型不存在，不调用基础模型。
 
 | 变体 | OpenRouter 的行为 | 这里 |
 |---|---|---|
 | `:nitro` | 按吞吐排序，并准入 priority 层的端点（[Nitro](https://openrouter.ai/docs/guides/routing/model-variants/nitro)） | 等同 `provider.sort: throughput`；层级准入见下 |
 | `:floor` | 按价格排序，并准入 flex 层的端点（[Floor](https://openrouter.ai/docs/guides/routing/model-variants/floor)） | 等同 `provider.sort: price`；层级准入见下 |
-| `:exacto` | 按质量信号排序：工具调用成功率、吞吐、延迟、基准结果（[Exacto](https://openrouter.ai/docs/guides/routing/model-variants/exacto)） | 400 暂不支持：现有健康度不包含 Exacto 的工具调用成功率和基准评分，不能声称按同样信号排序 |
-| `:online` | 已弃用，等于 `web` 插件（[Online](https://openrouter.ai/docs/guides/routing/model-variants/online)） | 400：没有联网搜索服务，与 `web` 插件、`openrouter:web_search` 共用一句话（见「服务端工具」） |
-| `:free` | [独立免费目录条目](https://openrouter.ai/docs/guides/routing/model-variants/free)，与付费条目的规格、价格和端点分开，OpenRouter 仍在提供 | 400：本目录没有免费条目，发布价必须为正，兑现不了免费；不按零价猜测，也不回落到付费基础模型 |
+| `:exacto` | 按质量信号排序：工具调用成功率、吞吐、延迟、基准结果（[Exacto](https://openrouter.ai/docs/guides/routing/model-variants/exacto)） | 质量优先排序（`routing.BestQuality`），并只保留质量验证过的端点；没有这样的端点时 503 `no_endpoint`，原因 `not_verified`。运营质量分只含可靠性、首字延迟和输出速度，没有 Exacto 的工具调用成功率和基准评分，所以不声称按同样信号排序 |
+| `:online` | 已弃用，等于 `web` 插件（[Online](https://openrouter.ai/docs/guides/routing/model-variants/online)） | 等同 `plugins:[{id:"web"}]`：配置了搜索服务时执行一次搜索并计一次费，未配置时 400，与 `web` 插件共用一句话；`openrouter:web_search` 仍 400（见「服务端工具」） |
+| `:free` | [独立免费目录条目](https://openrouter.ai/docs/guides/routing/model-variants/free)，与付费条目的规格、价格和端点分开，OpenRouter 仍在提供 | 目录里的独立模型：标准 ID 是 `基础标准 ID:free`，有自己的规格、上下限、零价和端点，精确查询；目录没有这个条目时 404 `model_not_found`，不回落到付费基础模型，也不按零价猜测。计费发布同样拒绝给它非零售价（`ErrFreePrice`），路由对已发布非零价的条目没有端点 |
 | `:thinking` | OpenRouter 已弃用，总览页让改用 `reasoning` 参数；原先是独立的思考目录条目 | 请求自己已经要求推理时**接受**：本目录没有独立条目，这个后缀唯一能兑现的含义就是开启推理，此时已经满足，按基础模型服务；没要求推理时 400，提示改用 `reasoning` 参数。发现接口按基础模型回 200 |
 | `:batch` | 独立批量计价条目 | 400：本目录没有批量条目与价格，不按普通价冒充批量价 |
 | `:extended` | 已弃用，且没有模型再提供（总览页） | 400：本目录没有这个条目 |
 | 别的后缀 | 总览页：只有列出的才是变体 | 404 `model_not_found` |
-| `~作者/系列-latest` | [Latest Model Resolution](https://openrouter.ai/docs/guides/routing/routers/latest-resolution)：按已登记的模型族映射选最新可见模型，响应 `model` 是具体模型 | 400：目录没有模型族与可切换的别名映射，不按字符串前缀或日期猜最新版本 |
+| `~作者/系列-latest` | [Latest Model Resolution](https://openrouter.ai/docs/guides/routing/routers/latest-resolution)：按已登记的模型族映射选最新可见模型，响应 `model` 是具体模型 | 目录别名表的最新目标：管理员把别名指向具体模型，切换追加版本并留审计；解析后按该模型的规格、价格和端点服务，响应 `model` 是具体标准 ID。没有别名时 404，不按前缀或日期猜最新版本 |
 
-- **一张表**：每个后缀做什么、拒绝时说什么，都在 `internal/gateway/variant.go` 的 `variants` 表里，三种格式、调用、备选、`count_tokens` 和发现共用。表外的后缀是 404。
+- **一张表**：每个后缀做什么、拒绝时说什么，都在 `internal/gateway/variant.go` 的 `variants` 表里，三种格式、调用、备选、`count_tokens` 和发现共用。表外的后缀是 404。`:free` 是例外的一条：它是目录数据，表里只把后缀留在名字上。
+- **`:free` 与 `:batch` 的区别**：OpenRouter 把免费版当独立模型，有独立的上下文、价格和端点，本站也建独立目录条目，所以 `:free` 能真正兑现，不是把付费请求改写成免费；`:batch` 还没有独立条目和价格，仍是 400。免费条目的上架门槛要求基础模型已上架、每个币种每个价都是 0，避免出现“免费名字按付费价收费”。
+- **别名**：`~作者/系列-latest` 走目录的 `alias` 表，表里只追加 `(名字, 目标模型)`，快照读最新版本；切换由 `axiom catalog save-alias` 完成，`change` 和审计记录改前改后。目标必须是同作者的已上架模型，避免跨厂商串族；目标下线时解析返回“已下线”。别名本身不按前缀或日期推导，所以 `acme/gpt-5` 与 `acme/gpt-50` 不会串族。
 - **`:thinking` 为什么只有一半接受**：它不是排序，而是「换成会思考的条目」。本目录一个模型只有一份规格和价格，没有思考条目；请求已经用 `thinking` / `reasoning` 参数要了推理时，后缀要的东西已经满足，再拒绝只会让照 OpenRouter 写的客户端多改一处。判断按整理后的能力标记：空的 `reasoning_effort`（或 `reasoning.effort` 的空值）不算开启推理，因为转换后的上游请求不会带任何推理设置；只有真正写出的 effort、`enabled: true` 或预算才算。反过来，请求没要推理时接受它，就会把「开启思考」悄悄降级成普通回答，所以仍是 400，并告诉客户端改成参数。发现接口不执行请求级判断，因此 `:thinking` 也像 `:exacto` 一样返回基础模型元数据。
-- **叠加**：变体可以任意顺序叠加，最后一个排序变体生效（总览页）：`:floor:nitro` 按吞吐，`:nitro:floor` 按价格。`:exacto` 之后又写了排序变体时，它已被替换，不报错；`:thinking` 与排序无关，叠加时保留。
+- **叠加**：变体可以任意顺序叠加，最后一个排序变体生效（总览页）：`:floor:nitro` 按吞吐，`:nitro:floor` 按价格。`:exacto` 之后又写了排序变体时，它已被替换，不报错，也不再要求端点已验证；`:thinking` 与排序无关，叠加时保留。
 - **与 `provider.sort` 同时写**：显式的 `provider.sort` 优先。依据是 exacto 页的一句话："An explicit sort by price, throughput, or latency overrides it"；nitro 和 floor 页没写这一点，按同样处理，所以 `:exacto` 加 `provider.sort` 也可用。
-- **发现与调用的区别**：两种模型详情及 OpenRouter endpoints 查询只解析基础模型、检查可见性，不执行调用的请求级校验；`:exacto` 和 `:thinking` 因此可以返回基础模型元数据（200），不代表相同名字在未指定 `provider.sort` 或未要求推理时可调用。调用和 `count_tokens` 仍按上表拒绝；模型发现的成功不承诺某个请求的路由要求能被兑现。
-- **备选 `models`**：排序是整个请求一个（路由没有按模型的排序）。备选名字按同样的规则读：不支持的变体回 400，不当作略去；不认识的后缀，备选按"不存在"略去；已知目录变体回 400；备选的排序变体与请求最终的排序不同回 400；备选的 `:exacto` 只有显式 `provider.sort`（或它自己名字里后面的排序变体）能替换，主模型名上的排序变体不算，因为它不会按质量排备选。`count_tokens` 读同样的名字和 `provider`，拒绝的与调用一致。
+- **发现与调用的区别**：两种模型详情及 OpenRouter endpoints 查询只解析基础模型、检查可见性，不执行调用的请求级校验；`:exacto` 和 `:thinking` 因此可以返回基础模型元数据（200），不代表相同名字在未指定 `provider.sort` 或未要求推理时可调用。调用和 `count_tokens` 按上表行事：`:exacto` 可以调用，但没有已验证端点时仍回 503；模型发现的成功不承诺某个请求的路由要求能被兑现。
+- **备选 `models`**：排序是整个请求一个（路由没有按模型的排序）。备选名字按同样的规则读：不支持的变体回 400，不当作略去；不认识的后缀，备选按"不存在"略去；没有 `:free` 条目或没有别名的备选也按"不存在"略去；备选的排序变体与请求最终的排序不同回 400；备选的 `:exacto` 只有请求本身已经是 `:exacto`（主模型名上）或有显式 `provider.sort` 时才成立，其余回 400，因为备选不单独按质量排。`count_tokens` 读同样的名字和 `provider`，拒绝的与调用一致。
 - **名字长度**：整个模型名（含变体）至多 200 字节，超过回 404 `model_not_found`，在准入之前。调用记录保存客户端写的整个名字，列最多 200 个字符；目录原来也不认更长的名字，不能让叠加的后缀绕过这个界限，被服务之后才丢了记录。
 - **层级准入没有做**：nitro 页说它同时准入 priority 层，floor 页说它同时准入 flex 层。这里只做排序一半。不写 `service_tier` 的请求本来就可以由 standard 和 priority 服务（协议 `anyTier`），flex 要客户端自己写 `service_tier`；为 `:floor` 改写发往上游的 `service_tier` 会改变预留和计费依据，另做。
+
+### `openrouter/auto`
+
+[Auto Router](https://openrouter.ai/docs/guides/routing/routers/auto-router) 让 OpenRouter 按任务分类、花费份额和成本档选一个模型。本站没有分类器和花费份额数据，用已有的路由排序代替：`openrouter/auto` 不是目录名字，网关在查目录之前认出它，把请求的排序（`:nitro`、`:floor`、`provider.sort` 或预设策略）作用到**这个 key 能调用的全部目录模型**上，取排序后的第一条，响应和记录里的 `model` 是它实际服务的具体模型。
+
+- **范围**：只考虑本次请求的准入能通过的模型（key 的模型权限、预设的类别和数据策略、上下文和输出上限、供应商余额和熔断等）；请求自己的 `models` 列表不再追加候选，因为 auto 已经覆盖全部模型。
+- **排序**：用请求的显式排序，没有就用预设的策略（默认均衡）；`openrouter/auto:nitro`、`:floor` 仍按变体规则改排序。随后的端点排序和回退照旧，所以一次 auto 调用失败后可以换到排名更后的模型，每次尝试的 `ActualModel` 都按该端点报告。
+- **不支持**：`count_tokens` 回 400，因为没有具体模型能算 token；`context-compression` 回 400，因为压缩需要知道所选模型的上下文窗口。
+- **发现**：`/models` 不列出 `openrouter/auto`，它不是可上架的模型。
+
+### `openrouter/free`
+
+[Free Models Router](https://openrouter.ai/docs/guides/routing/routers/free-router)（2026-10-31 核对）让 OpenRouter 从当前可用的免费模型里随机选一个，先按请求需要的能力（图片理解、工具调用、结构化输出）过滤，响应里的 `model` 是实际服务的免费模型。本站同样在查目录之前认出 `openrouter/free`，但用已有的路由排序代替随机：它把请求的排序（`:nitro`、`:floor`、`provider.sort` 或预设策略）作用到**这个 key 能调用的全部 `:free` 目录条目**上，取排序后的第一条；响应和记录里的 `model` 是实际服务的具体模型。
+
+- **范围**：只认目录里的 `:free` 条目（[模型目录的「模型与名字」](catalog.md#模型与名字)），没有硬编的列表：运营加、删、下线免费条目后，下一次路由快照重建（约 5 秒）就改变可选项。请求自己的 `models` 列表不再追加候选，因为 free 已经覆盖全部免费条目；付费条目永远不进入这次排序。路由的常规过滤照常执行（能力、上下文、格式、预设与覆盖），不满足请求要求的免费条目不会被选中。
+- **排序与回退**：和 `openrouter/auto` 共用同一套过滤、排序、熔断与跨模型回退；`openrouter/free:nitro`、`:floor` 仍按变体规则改排序。一次 free 调用失败后可以换到排名更后的免费模型，每次尝试的 `ActualModel` 都按该端点报告。
+- **没有免费条目时**：回「错误」表里永久性的没有可用端点，即 404 `no_endpoint`，`reasons` 至少含 `no_candidates`；有免费条目但被过滤掉时，照常带上各端点被排除的原因。key 的模型权限把全部免费条目都排除时，仍按同一条规则隐藏成 404 `model_not_found`，与 `openrouter/auto` 和普通模型一致。
+- **不支持**：`count_tokens` 回 400，因为路由前没有具体模型能算 token；`context-compression` 回 400，因为压缩需要知道所选模型的上下文窗口。
+- **发现**：`/models` 不列出 `openrouter/free`，它不是可上架的模型。
 
 ### 给其他中转站对接的接口
 
@@ -284,10 +317,12 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | `GET /v1/dashboard/billing/subscription`、`GET /v1/dashboard/billing/usage` | OpenAI 旧版的余额接口。new-api 用它查询 OpenAI 类型渠道的余额：余额 = `hard_limit_usd` 减去以 0.01 为单位的 `total_usage`；`usage` 的 `total_usage` 是累计消费，不看 `start_date`、`end_date`（new-api 源码，2026-10） |
 | `GET /api/v1/key` | key 的上限、剩余额度、各时间窗口的用量（OpenRouter 格式），供兼容 OpenRouter 的工具使用 |
 | `GET /api/v1/credits` | 账户余额（OpenRouter 格式），供兼容 OpenRouter 的工具使用 |
-| `GET /api/v1/generation?id=` | 按调用编号查询单次调用的详情 |
+| `GET /api/v1/generation?id=` | 按调用编号查询单次调用的详情（含 `native_tokens_*`、`streamed`、`cancelled`、`cache_discount`、`session_id`） |
+| `GET /api/v1/generation/content?id=` | OpenRouter 的内容接口；本站不保存对话内容，属于本账户的调用也返回 404 `content_not_available`，别人的调用按 `generation_not_found` 处理 |
+| `GET /api/v1/activity?date=&api_key_hash=&workspace_id=&group_by=workspace` | 最近 30 个完整 UTC 日的按日/模型用量，`api_key_hash` 用 key UUID，`user_id` 不支持；今天的调用不进结果，未完成的当天不算；金额读当前结算的实收（校正后），输入优先用写入的物理输入；官方要求管理 key，Axiom 的调用 key 可读本账户（同 `/credits` 的 M1 偏离，见[决策](#决策与理由)） |
 
 - **单位**：这些接口里的金额都以本站的记账货币计。二级站点用人民币记账时，对方会把数字当美元显示，这在站点的接入说明里写明。
-- **余额与用量**：`total_credits` 和旧版的 `hard_limit_usd` 是余额加累计消费，`total_usage` 是累计消费（旧版接口以 0.01 为单位，不看日期参数），所以额度减用量总是余额；在途预留不扣。`generation` 只读调用记录，行为见上文「用量与费用」的调用编号。
+- **余额与用量**：`total_credits` 和旧版的 `hard_limit_usd` 是余额加累计消费，`total_usage` 是累计消费（旧版接口以 0.01 为单位，不看日期参数），所以额度减用量总是余额；在途预留不扣。`generation` 只读调用记录，行为见上文「用量与费用」的调用编号；`activity` 从同一份调用记录按 UTC 日聚合，只覆盖最近 30 个完整日；金额再按请求编号读 billing 的当前实收，所以校正后的调用不会继续显示旧快照，输入统计优先用物理输入，历史缺失时才用计费项之和。
 - **`POST /v1/messages/count_tokens`** 返回估算的输入 token 数（`{"input_tokens": n}`），口径、前置检查和理由见[模块 README](../../internal/gateway/README.md#辅助接口)；它不收费、不记录。
 
 ### Responses 的会话状态
@@ -305,7 +340,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 
 对外行为要和 new-api 对得上，靠差分测试保证：`just diff`（在 CI 服务器上：`remote-check.sh <worktree> diff`）用 new-api 的官方镜像（按摘要固定，v1.0.0-rc.45，2026-10-17）和一个 Axiom 节点接同一个假上游，上游回放 `internal/protocol/testdata` 的录制样本；同一组请求分别发给两边，比状态码、响应头、JSON 体、SSE 事件。它要拉镜像、起容器，所以不在 `just check` 里，也不在每个 PR 的 CI 里；升级镜像是一个决定：读发布说明、跑一遍、逐条处理新出现的差异。
 
-- **比什么**：Messages 和 Responses 客户端调用同格式的模型（透传），Chat 客户端调用 Messages 和 Responses 的模型（两边都做转换）和调用说 Chat 的模型（DeepSeek 一类，透传）；Messages、Responses 客户端也调用该 Chat 模型（反向转换）；各自的文本、工具调用、推理、图片，流式和非流式，上游的 400、429、500，以及请求自己的错误（JSON 不合法、缺必填项、模型不存在、key 错）。每种格式让 new-api 的渠道和 Axiom 的端点说同一种格式，上游收到的是同样的路径，比的是怎么转发回复，不是谁选了哪种格式。
+- **比什么**：Messages 和 Responses 客户端调用同格式的模型（透传），Chat 客户端调用 Messages 和 Responses 的模型（两边都做转换）和调用说 Chat 的模型（DeepSeek 一类，透传）；Messages、Responses 客户端也调用该 Chat 模型（反向转换），以及互相调用对方的原生模型（Messages 客户端到 Responses 模型、Responses 客户端到 Messages 模型，两边都做原生两格式之间的转换）；各自的文本、工具调用、推理、图片，流式和非流式，上游的 400、429、500，以及请求自己的错误（JSON 不合法、缺必填项、模型不存在、key 错）。每种格式让 new-api 的渠道和 Axiom 的端点说同一种格式，上游收到的是同样的路径，比的是怎么转发回复，不是谁选了哪种格式。
 - **怎么比**：JSON 按成员比，不看顺序；数组按位置比；SSE 在 Messages 和 Responses 上按事件对齐后比，Chat 流按累加的结果比（文本、工具调用、结束原因、用量），因为切块是转换器自己的选择。非流式的上游回复是手写的、与录制流内容一致的官方形状（Responses 取流里 `response.completed` 的响应）；Responses 文本样本的增量被截短了，假上游把它补成与最终文本一致。
 - **规则**：每个差异要么被 `cmd/axiom/diff_rules_test.go` 里的一条规则解释（写明理由），要么用例失败；没有匹配任何差异的规则同样使测试失败，修好的差异必须从清单里删掉。规则不只看路径和用例名，还限定两边的值：状态码是具体的一对（new-api 429、Axiom 502），上游身份头必须在 Axiom 一侧缺失，调用编号必须是 UUID，工具参数按解码后的 JSON 比较，措辞必须是 Axiom 的统一说法；退化的值（429 变成 200、参数变成 `{}`、泄露上游头）不被放行，`TestDiffHarness*` 为此给每类规则配了反例。规则只有有意的差异（下表）；还没人拍板的差异不进清单，它让测试失败，直到对应的 Issue 裁定。
 - **Chat 流的结尾**：恰好一个 `[DONE]`，之后不能再有数据；提前的 `[DONE]`、重复的 `[DONE]`、`[DONE]` 之后的数据、其他非 JSON 的数据都是差异。工具参数的碎片先解码、再拼接、最后统一编码，所以切在转义字符中间的分块也算相同。
@@ -328,20 +363,25 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | Chat 回复里 Axiom 写 `logprobs: null`、`message.refusal: null`，只有工具调用的消息 `content` 是 `null`，new-api 写空字符串，`created` 取调用时间，工具参数是流里的原文，Responses 转换成 Chat 时带上推理 token 数 | 与 OpenAI 的回复形状一致；new-api 的转换丢了这些 |
 | Chat 流里 Claude 思考块的推理文本，new-api 在末尾多一个换行 | new-api 的转换自己加的；非流式没有这个差异 |
 | `reasoning_details`（带签名和加密内容） | OpenRouter 的格式，后续请求要把它们带回去 |
-| Chat 转成 Messages 时，thinking 块以空 signature 开始；不伪造思考签名，再次调用原生端点前删除无签名思考 | Chat 明文推理没有 Anthropic 签名，不能制造可回放的签名 |
-| Chat 转成 Messages 时，message_start 的用量从 0 开始，结算后的 message_delta 才携带输入、缓存、输出的完整计数 | Chat 上游通常在最后一块才报用量；不能把尚未收到的计数写成真实值。内部计费沿用 Chat 的原始报告 |
-| Chat 转成 Messages 时，new-api 在用量里附加 `billing_usage`、`claude_cache_creation_*` 等内部计费成员，Axiom 不写这些成员 | 客户端只接收 Messages 格式的用量，内部计费不改变协议外壳 |
-| Chat 转成 Messages 时，Axiom 在最终用量里补齐为 0 的 `cache_creation.ephemeral_*_input_tokens`、`server_tool_use.web_search_requests`，new-api 省略 | 与既有 Messages 结算用量形状一致，不把缺报解释为实际使用 |
-| Chat 转成 Messages 时，Axiom 写 `stop_sequence: null`，message_start 也写 `stop_reason: null`，new-api 省略 | 与 Anthropic 的消息生命周期一致，尚未结束或未匹配停止串时使用 null |
-| Chat 转成 Messages 时，并行工具块在下一个块开始前关闭，new-api 到回合末尾才统一关闭 | Messages 的内容块依次输出；工具参数保持各自归属 |
-| Chat 转成 Responses 时，输出项 ID 由调用编号和输出序号组成，created_at 为调用时间 | 不泄露上游身份；再次调用原生 Responses 端点时删除本站输出项 id |
-| Chat 转成 Responses 时，成功响应的 `error`、`incomplete_details` 为 null，new-api 省略 | 与 [OpenAI 的响应事件定义](https://developers.openai.com/api/reference/resources/responses/streaming-events)一致 |
-| Chat 转成 Responses 时，new-api 附加 null 的 `instructions`、`metadata`、`previous_response_id`、`reasoning`、`tool_choice`、`tools`、`truncation`、`user`，以及 0 的 `max_output_tokens`、`temperature`、`top_p`、false 的 `parallel_tool_calls`、`store`；Axiom 省略 | Chat 上游没有回报这些设置，转换器不凭空声称请求采用了这些值 |
-| Chat 转成 Responses 时，new-api 为非图片输出项附加空 `quality`、`size`，为非消息项附加空 `role` 和 null `content`，为推理项附加 `status`；Axiom 省略 | 按输出项自己的类型写成员，推理项的状态是可选的 |
-| Chat 转成 Responses 时，new-api 在 `output_item.added` 顶层另写工具的 `item_id`，Axiom 只在 `item.id` 标识输出项、`item.call_id` 标识调用 | 与 OpenAI 的输出项事件外壳一致，避免混淆输出项和工具调用 |
-| Chat 转成 Responses 时，Axiom 输出 `content_part.added/done` 并按输出项出现顺序结束各项，new-api 省略文本内容块事件且先结束文本再结束推理；事件序号因此不同 | 完整发送 OpenAI 的内容块生命周期；每边的序号必须恰好对应自己的事件位置，内容和工具参数仍逐字段比较 |
-| Chat 转成 Responses 时，new-api 的用量还带 Chat 名称、`billing_usage` 和 `claude_cache_creation_*`；Axiom 使用 Responses 名称，省略 null 的旧明细及为 0 的 `audio/image/text_tokens`，补齐为 0 的缓存写明细 | 复用既有 Responses 结算用量口径，不暴露内部计费外壳，不伪造媒体用量 |
-| Chat 转成 Responses 流时，new-api 省略 `output_tokens_details.reasoning_tokens`，Axiom 保留上游报告（推理样本为 30，其余样本为 0） | 推理 token 属于真实用量，转换不能丢失；与同格式 Chat 的计费项一致 |
+| 转换给 Messages 时，thinking 块以空 signature 开始；不伪造思考签名，再次调用原生端点前删除无签名思考 | Chat 明文推理没有 Anthropic 签名，不能制造可回放的签名 |
+| 转换给 Messages 时，message_start 的用量从 0 开始，结算后的 message_delta 才携带输入、缓存、输出的完整计数 | Chat 上游通常在最后一块才报用量；不能把尚未收到的计数写成真实值。内部计费沿用 Chat 的原始报告 |
+| 转换给 Messages 时，new-api 在用量里附加 `billing_usage`、`claude_cache_creation_*` 等内部计费成员，Axiom 不写这些成员 | 客户端只接收 Messages 格式的用量，内部计费不改变协议外壳 |
+| 转换给 Messages 时，Axiom 在最终用量里补齐为 0 的 `cache_creation.ephemeral_*_input_tokens`、`server_tool_use.web_search_requests`，new-api 省略 | 与既有 Messages 结算用量形状一致，不把缺报解释为实际使用 |
+| 转换给 Messages 时，Axiom 写 `stop_sequence: null`，message_start 也写 `stop_reason: null`，new-api 省略 | 与 Anthropic 的消息生命周期一致，尚未结束或未匹配停止串时使用 null |
+| 转换给 Messages 时，并行工具块在下一个块开始前关闭，new-api 到回合末尾才统一关闭 | Messages 的内容块依次输出；工具参数保持各自归属 |
+| 转换给 Responses 时，输出项 ID 由调用编号和输出序号组成，created_at 为调用时间 | 不泄露上游身份；再次调用原生 Responses 端点时删除本站输出项 id |
+| 转换给 Responses 时，成功响应的 `error`、`incomplete_details` 为 null，new-api 省略 | 与 [OpenAI 的响应事件定义](https://developers.openai.com/api/reference/resources/responses/streaming-events)一致 |
+| 转换给 Responses 时，new-api 附加 null 的 `instructions`、`metadata`、`previous_response_id`、`reasoning`、`tool_choice`、`tools`、`truncation`、`user`，以及 0 的 `max_output_tokens`、`temperature`、`top_p`、false 的 `parallel_tool_calls`、`store`；Axiom 省略 | Chat 上游没有回报这些设置，转换器不凭空声称请求采用了这些值 |
+| 转换给 Responses 时，new-api 为非图片输出项附加空 `quality`、`size`，为非消息项附加空 `role` 和 null `content`，为推理项附加 `status`；Axiom 省略 | 按输出项自己的类型写成员，推理项的状态是可选的 |
+| 转换给 Responses 时，new-api 在 `output_item.added` 顶层另写工具的 `item_id`，Axiom 只在 `item.id` 标识输出项、`item.call_id` 标识调用 | 与 OpenAI 的输出项事件外壳一致，避免混淆输出项和工具调用 |
+| 转换给 Responses 时，Axiom 输出 `content_part.added/done` 并按输出项出现顺序结束各项，new-api 省略文本内容块事件且先结束文本再结束推理；事件序号因此不同 | 完整发送 OpenAI 的内容块生命周期；每边的序号必须恰好对应自己的事件位置，内容和工具参数仍逐字段比较 |
+| 转换给 Responses 时，new-api 的用量还带 Chat 名称、`billing_usage` 和 `claude_cache_creation_*`；Axiom 使用 Responses 名称，省略 null 的旧明细及为 0 的 `audio/image/text_tokens`，补齐为 0 的缓存写明细 | 复用既有 Responses 结算用量口径，不暴露内部计费外壳，不伪造媒体用量 |
+| 转换给 Responses 流时，new-api 省略 `output_tokens_details.reasoning_tokens`，Axiom 保留上游报告（推理样本为 30，其余样本为 0） | 推理 token 属于真实用量，转换不能丢失；与同格式 Chat 的计费项一致 |
+| 响应里的 `model`：Axiom 写目录里实际服务的模型（如 `anthropic/claude-opus-5-5`），new-api 回显请求里用的名字 | #319 P11：`models` 回退之后回显请求名会让客户端以为原模型回答；用量只暴露用户售价，见「决策与理由」 |
+| Chat、Responses 用量里的 `is_byok:false` 和为正的 `cache_discount` | OpenRouter 的用量字段：Axiom 没有用户 key，固定 `false`；缓存折扣按锁定的输入价算，见「用量与费用」 |
+| Responses 从 Messages 上游转换时，用量里的 `input_tokens`、`total_tokens` 是物理总量（含缓存读），`output_tokens` 用 Responses 的名字；new-api 写 Anthropic 的 `input_tokens`（不含缓存读）和 Chat 名字的输出 | Axiom 的用量口径：输入保留物理总量，缓存读写可重叠（[catalog 的「计费项与用量」](../../internal/catalog/README.md#计费项与用量)），见 protocol README 的「用量」 |
+| 从 Messages 上游转换的推理摘要文本不带 new-api 多加的结尾换行 | 摘要文本是上游的字节，转换不增删内容 |
+| 转换出的工具参数保留上游的 JSON 原文，new-api 重新编码 | 参数是客户端要交回去的字节，改动可能改变它的语义（数字精度、重复键） |
 | 上游没有报用量时（Messages 的思考样本），两边各自估算 token 数 | 估算口径不同，见[计费的「用量来源与暂估」](billing.md#用量来源与暂估) |
 
 ### 版本与兼容
@@ -355,6 +395,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 
 | 决策 | 理由 |
 |---|---|
+| 模型与价格页复用路由构建的投影，按受众取售价，公开接口不含供应商与成本 | 依据 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地 #317。对比逐请求读目录与售价、构建时投影，选择后者：页面价格和调用扣费来自同一份 `ModelList` 发布，不会出现页面一个价、扣费另一个价；不选把 OpenRouter 发现字段整份复用，因为其中的端点、代号和供应商会泄露货源；价格用 `ScheduleView` 保留分档、服务等级和按张/按秒等单位，不选折成每百万 token 的近似值，否则页面会对按次或分档模型给出错误价格。官网按站点默认等级、控制台按账户当前等级取价，未登录看到的就是注册后付的价；旧节点没有这个操作时页面显示不可用 |
 | E4-2/P13 的速率与预算只投影已有策略和计数，不增加预算状态 | 依据 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地。对比复制 OpenRouter 的组织/护栏对象与复用本站工作区/key，选择后者：没有对应对象时不造 ID，不引入第二份资金事实。remaining 扣预留，effective 按整数比较后才转显示单位，保持与准入检查一致 |
 | 只给请求速率 429 发窗口额度头，Reset 给保守清空时刻，Retry-After 保留 60 秒上限 | 并发/排队不是请求窗口，不伪造 Limit；滑动近似没有固定桶的精确重置时刻，两个窗口的上界不冒充剩余精确秒数；沿用既有客户端兼容的 60 秒 Retry-After 上限，有意差异和基线见上文 |
 | 推理开关、展示和强度分开，隐藏在计量之后执行 | [OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)（2026-10-29）规定 exclude 不减费用、预算与 effort 可换算；隐藏明文仍保留工具续聊必需的签名/密文，不以显示要求推断启用模式；[Anthropic Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) 的 omitted 保留签名且收费，[OpenAI Reasoning models](https://developers.openai.com/api/docs/guides/reasoning) 当前包含 minimal/xhigh/max。复用规范请求、UsageContext 与现有流读取器，不另建协议树；相比只信上游隐藏，在本地计量后过滤能防忽略隐藏的端点漏出明文。无法精确表达预算时按公开比例取最近档，同距取低，不承诺近似是硬上限；不按模型名猜 supported_efforts/mandatory。换算表在 protocol README。依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，独立评审由流水线安排 |
@@ -367,15 +408,22 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | Chat 回复的推理文本同时写 `reasoning` 和 `reasoning_content` | 负责人 2026-10-18：照 new-api 写 `reasoning_content`。两个名字都有人用：`reasoning_content` 是 DeepSeek、new-api、LiteLLM 的（LiteLLM 文档《Reasoning Content》），`reasoning` 是 OpenRouter 和新版 vLLM 的（OpenRouter《Reasoning Tokens》，vLLM《Reasoning Outputs》，2026-10-19）；读一个的客户端对另一个当作未知字段忽略。同文并存，客户端读哪个都对；只留一个就会让另一半客户端读不到推理。已知风险：若有客户端把两个字段都显示，推理会出现两遍，没有实测过，发现再收回其中一个。代价是推理文本多发一份 |
 | 变体在网关里读，目录和路由都不认识后缀 | 变体是路由开关，不是模型：放进目录会让一个模型分裂成多个条目，也要放宽目录"带 `:` 的名字永远查不到"的不变量，那条不变量正是为了保证带后缀的写法落不到基础模型。读法集中在 `variant.go`，调用、备选和 `count_tokens` 共用，不会各自读出不同的结果 |
 | 已知且不能兑现的目录变体回 400，未知后缀仍 404 | 选择在网关解释并拒绝，而不放宽目录约束或将后缀剥掉调用基础模型；后者可能收费或丢失推理约束。OpenRouter 的缺失目录条目 404 是其具有变体目录时的行为，本站因功能不可用主动回 400，是本任务要求的有意偏离。错误要让客户端区分功能尚不可用与模型下线 |
+| `:exacto` 只路由到质量验证过的端点 | 目录里没有 Exacto 的工具调用成功率和基准评分，但真伪检测已经能给出「这个端点自称的模型是假的吗」；把「按未测量的 Exacto 信号排序」降级成「质量优先且只信验证过的端点」，比继续 400 更接近用户想要的，也不假装有基准分。没有已验证端点时失败关闭（503 `not_verified`），不回落到未验证端点。 |
 | 显式 `provider.sort` 压过变体 | exacto 页明说显式排序覆盖它；请求体里的字段比名字里的后缀更具体，nitro 和 floor 照此处理。代价：写了 `:nitro` 又写 `sort: price` 的客户端得到按价格排序，与 OpenRouter 的实际行为未核对（页面没写） |
-| 服务端工具按 OpenRouter 文档逐个认名拒绝，联网搜索的三种写法共用一句话，执行留一个接口 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P2。比较整段 `openrouter:` 前缀一条消息与逐类型识别：后者说得出哪个工具、缺什么，OpenRouter 以后新增的名字仍拒绝但说明不认识。比较现在就实现工具循环与只定接口：循环要外部搜索或抓取服务、沙箱和按步计费，负责人还没选服务，先做会把计费和数据政策锁死；因此 `web` 插件、`:online`、`openrouter:web_search` 共用一个原因，其余工具说没有模型侧循环，接口职责与待定事项写在「服务端工具」。不先加空的 Go 接口：没有实现者，仓库规则不留只为将来的抽象 |
-| 模型名变体逐项定行为：能兑现的兑现，不能的带原因拒绝 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P3。2026-10-29 核对官方页面：`:nitro`、`:floor` 排序，`:exacto` 质量信号，`:thinking` 已弃用，`:online` 等于 web 插件，`:free`、`:batch` 独立目录条目，`:extended` 已下线，`~…-latest` 要模型族映射。能在本站兑现的只有排序和「请求已要求推理时的 `:thinking`」：`:exacto` 缺工具成功率与基准，`:free` 与正价发布矛盾，其余条目不存在，别名缺映射，所以各自说明原因后拒绝，不静默剥掉后缀。`:thinking` 的接受条件放在 `readRouting`，发现接口不执行请求级判断；`:online` 改说搜索服务而不是「暂不支持」 |
-| `~…-latest` 认出后回 400，保留后续别名表方向 | 比较显式的模型族/别名映射与按名字、日期猜测最新：只有映射能保证不串模型族、发现与调用价格一致、切换有审计。现有名字只追加，规格没有族关系，不能兑现“最新”。本次保留结构化拒绝，不把内部 `-latest` 名字开放调用，不新增未经数据证据支撑的自动切换；后续映射应独立于不可改指向的公开名字。决定依据同上 #309 授权，不再以等待负责人拍板为由阻塞 |
+| 服务端工具按 OpenRouter 文档逐个认名拒绝，`web` 插件另走单次搜索 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P2。比较整段 `openrouter:` 前缀一条消息与逐类型识别：后者说得出哪个工具、缺什么，OpenRouter 以后新增的名字仍拒绝但说明不认识。服务端工具的模型侧循环要外部搜索或抓取服务、沙箱和按步计费，本轮不实现，所以 `openrouter:web_search` 即使后台配置了搜索服务也拒绝；`web` 插件和 `:online` 只在采样前跑一次、结果为这次采样输入，不依赖那个循环，单独按「`web` 插件」一行实现。接口职责与剩余待定事项写在「服务端工具」 |
+| 模型名变体逐项定行为：能兑现的兑现，不能的带原因拒绝 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P3。2026-10-29 核对官方页面：`:nitro`、`:floor` 排序，`:exacto` 质量信号，`:thinking` 已弃用，`:online` 等于 web 插件，`:free`、`:batch` 独立目录条目，`:extended` 已下线，`~…-latest` 要模型族映射。能在本站兑现的是排序、`:free` 的独立目录条目、别名表和「请求已要求推理时的 `:thinking`」；`:exacto` 缺工具成功率与基准，`:batch`、`:extended` 没有条目和价格，所以各自说明原因后拒绝，不静默剥掉后缀。`:thinking` 的接受条件放在 `readRouting`，发现接口不执行请求级判断；`:online` 改说搜索服务而不是「暂不支持」 |
+| `:free` 作为目录里的独立模型，不做名称改写 | OpenRouter 的免费版有自己的上下文、价格和端点，改写付费名字会把付费价带进免费请求或反过来；独立条目让发现、上架门槛、零价校验和路由都复用现有路径，没有条目时返回 404 而不是偷偷用付费模型 | 解析时去掉 `:free` 或加 `free_of` 列：要另写发现、价格和路由，且无法表达免费版更小的上下文 |
+| `~…-latest` 用目录别名表，显式目标、只追加 | 只有显式映射能保证不串模型族、发现与调用用同一个目标、切换有审计；按日期或前缀猜最新会在新模型上架时悄悄改掉用户实际调用和计费的模型。别名目标必须同作者且已上架，目标下线时解析为“已下线” | 按名字前缀挑最新；把别名做成 `name` 表的可变行：前者会串族，后者要 UPDATE 权限且旧快照与 `change` 对不上 |
+| `openrouter/auto` 用现有路由排序代替 OpenRouter 的分类器 | OpenRouter 按任务分类、花费份额和成本档选模型；本站没有分类器所需的标注数据和跨租户花费份额，硬编一个会把没有证据的偏好说成“智能”。把请求的排序作用到全部可准入模型上，选择可解释、可测试，也复用端点过滤、熔断和计价；选中后回显具体模型，客户端能知道实际用了谁 | 新写一个 auto 打分器或固定挑最便宜：前者没有数据支撑、还要新维护一套权重，后者忽略 `:nitro` 和用户排序；两者都绕开现有路由的准入与回退 |
+| `openrouter/free` 用现有路由排序在免费条目里选，不随机 | OpenRouter 从免费模型里随机选；随机结果不可解释，测试只能靠碰运气，`:nitro`、`:floor` 和预设策略也无从生效。免费条目本身已经是目录数据（`:free` 独立模型），把请求排序作用到它们上面复用 auto 的同一套过滤、熔断、回退和计价，选择确定、可测试，响应仍回显具体模型 | 新加一个随机策略或按模型 ID 轮询：前者让同一请求的结果不可复现、排除原因无法解释，后者忽略用户排序和端点质量，也绕开路由的重试预算 |
 | 会话、用户标识换成派生值，而不是删除 | 删除会让上游缓存失效；原样转发会串租户、泄露标识 |
 | 响应头按白名单放行 | 上游的请求 ID、组织名等头会暴露货源 |
 | 开始转发内容之前不发保活 | 此时还可能换端点；提前发出任何字节，状态码就无法再改 |
 | 402 区分上限来源，只有暂时性的带 `Retry-After` | 与 OpenRouter 一致；客户端据此判断该等待重试还是去充值 |
 | 计费类问题不返回 401，避开自动禁用措辞，并写成测试 | 把我们当上游的 new-api 收到 401 或特定措辞会自动禁用渠道，临时问题会被放大成停用 |
+| 生成查询补原生 token、流式/取消/会话，内容接口不保存内容；活动按日与模型汇总 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落实 #319 P10/P11。对照 [OpenRouter 生成查询](https://openrouter.ai/docs/api/api-reference/generations/get-request-&-usage-metadata-for-a-generation)、[内容](https://openrouter.ai/docs/api/api-reference/generations/get-stored-prompt-completion-and-error-content-for-a-generation)、[活动](https://openrouter.ai/docs/api/api-reference/analytics/get-user-activity-grouped-by-endpoint) 和[官方 OpenAPI](https://openrouter.ai/docs/openapi/openapi.yaml)（2026-10-30）。原生 prompt 取调用写入时已存的物理输入（迁移 `00012_streamed.sql`），不从缓存读写反推，避免把重叠的 token 相加；内容接口对已有调用也返回 404 `content_not_available`，因为 observability 有意不保存对话内容，新增留存面需要单独的产品决定；活动只算最近 30 个完整 UTC 日，`endpoint_id` 写零、`provider_name` 写 Axiom，避免暴露端点与货源，`api_key_hash` 暂按 key UUID 接受而官方是 SHA-256（keys API 未暴露该哈希），这是已记下的偏离。独立评审仍由流水线执行 |
+| 响应 `model` 写实际服务的模型，用量只暴露用户售价 | #319 P11 与 OpenRouter 的 [model fallbacks](https://openrouter.ai/docs/guides/routing/model-fallbacks) 和 [Usage Accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting)（2026-10-30）：`models` 回退后回显请求名会让客户端以为原模型回答，故 `RelayOptions.ActualModel` 由 routing 解析后的条目给出；`cost_details.server_tool_cost` 只写按次工具售价，`cache_discount` 按锁定输入价与缓存读价之差计算，均不含供应商成本。`is_byok` 固定 `false`，因为 Axiom 没有用户自带 key；字段为兼容保留。独立评审仍由流水线执行 |
+| `web` 插件走一个可配置的 SearXNG 后端，后台存 URL 与密钥，默认关闭 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地 #311 P1。负责人自己配付费服务，所以默认关闭、不假设任何外部服务存在；选择自建 SearXNG 的 JSON API 作为唯一适配器：它可自托管、无需付费密钥，JSON 结果是稳定的接口，接口 `websearch.Searcher` 让以后换服务只改一个实现。对比直接接 Exa/Firecrawl 等付费服务：那要负责人先选供应商、接受数据保留条款并持有密钥，代码不能代替这些决定。URL 和密钥存进 `platform.search_config`（信封加密，与 SMTP 同一套），改完要求重启，和邮件配置一致；环境变量仍可作初始值，数据库没有记录时由它决定。一次插件请求只搜索一次（`max_uses` 恒为 1），按 `web_search` 售价收一次，预留按 `WebSearchMaxBytes` 覆盖注入的输入上界，搜索失败在发起模型调用前结束、不收模型用量。注入格式照 OpenRouter 博客的 system 消息，非流式 Chat 才补 `url_citation`；流式拿不到整条消息，客户端应读正文里的链接。查询不写日志，结果有大小上限，`engine` / `mode` 明确拒绝而不是静默忽略。代价：只支持 Chat、只支持 SearXNG、`include_domains` 依赖引擎是否理解 `site:` 操作符 |
 | 本地插件在准入前压缩、在聚合后修复 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」实现 #311 P1/E2-7。比较在上游执行与本站执行，选择纯本地：避免上游静默忽略；比较按端点重复压缩与准入前按主模型压缩，选后者让路由、报价、用量暂估和发送正文一致，不改计费契约，不引入依赖或外部服务。默认压缩作为可选优化失败即保留原请求，显式开启才执行严格的字节预算，避免以预留上界缩小默认请求的可服务范围。代价和偏离见「插件与提示词变换」；独立评审由流水线安排 |
 | 扩展字段放在独立的 `axiom` 对象 | 不与 OpenRouter 的字段冲突 |
 | 提供 OpenAI 旧版和 OpenRouter 格式的余额接口 | 第一版范围要求支持其他中转站接入（见产品需求）。new-api 查询 OpenAI 类型渠道时用前者；查询 OpenRouter 渠道时写死访问 openrouter.ai，所以后者只服务兼容 OpenRouter 的工具 |
@@ -393,15 +441,28 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | Chat 端点只写一个推理名字时，本站补另一个 | 「转发规则」的 Chat 回复写两个名字是负责人 2026-10-18 的决定，对 Chat 上游同样适用，否则 DeepSeek 的客户端读得到、OpenRouter 的客户端读不到；补在流的每一块里，聚合的整份回复自然两个都有 |
 | 跨格式时缓存标记按 OpenRouter 转换，表达不了的丢掉，不拒绝请求 | 负责人在对话中授权开发者按推荐自行决定。CONTRIBUTING「产品设计」要求对齐 OpenRouter：它把文本块的 `cache_control` 转成 OpenAI 的 `prompt_cache_breakpoint`，TTL 不转（OpenRouter《Prompt caching》，2026-10-16）。拒绝会让带缓存标记的 Chat 请求到不了任何 Responses 端点；标记不改变模型读到的内容，收费按上游报告的实际缓存用量，丢掉只影响命中率，不会算错钱 |
 | 结算写不进时，内容完整的照常结束、不带费用、带 `billing_pending`；只有截断的才报 `billing_unavailable` | 不发出没入账的费用，也不让客户端把已完成的一轮当失败重发、付两次。没选一律报 `billing_unavailable`：主库切换时，整批在途的请求会被客户端重发、重复收费 |
-| `/responses/compact` 的回复原样透传、请求只做最小改写：请求带 `stream: true` 回 400，结算写不进时响应体里也不加 `axiom.billing_pending` | 回复是上游的整份回复，不是我们生成的流：加任何字段就不再是原样，客户端按上游的格式读它；这个端点只给整份回复。请求则不能原样：模型名要换成端点的名字（否则上游拒绝，或按别的模型计费），`user`、`safety_identifier`、`prompt_cache_key` 要换成派生值（上文「会话和用户标识换成派生值」），路由参数要删除；生成才用的成员（`store`、`include`、输出上限、`stream`）不加也不改，空闲超时与预算照旧。费用只在调用记录里查，M1 没有校正（上文「用量与费用」）。不选在透传的 JSON 里插字段或为压缩请求再拼一份生成请求的改写：前者改了上游的回复，后者要猜它接受哪些成员 |
+| 直接格式只走原生端点、整份回复 | [OpenRouter 的 Embeddings](https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request)、[Rerank](https://openrouter.ai/docs/api/api-reference/rerank/submit-a-rerank-request)（2026-10-30 核对官方 OpenAPI）都回一份 JSON，没有流；本站还没有跨格式转换这两者的映射，硬转会把表达不了的 `input`/`documents` 丢掉或猜错，所以 `NativeOnly`，没有原生端点时按「没有可用端点」报错。整份回复在读取阶段校验，失败还能换端点，不会把半份向量或半份排序当成功。此公开接口取舍依 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，仍需独立评审 |
+| rerank 的 `search_units` 计入 `web_search`，不新增计费项 | OpenRouter 的 rerank 用量示例是 `{"search_units":1,"total_tokens":150}`；本站按次计价的单位只有 `web_search`，它表示“一次服务端调用”，与重排的一次搜索单位语义相同。新加一个只服务 rerank 的 item 要改价目表、售价发布和所有格式的用量映射，收益只是名字更贴切；复用现有单位让 rerank 立刻能按已发布的 web search 售价收费。代价：调用记录里它显示为 web search，文档必须写明这个映射 |
+| `/completions` 只按 OpenAI 旧接口原生提供，不转成 Chat，也不把 Chat 的 `prompt` 变体加到 `/chat/completions` | [OpenAI《Create completion》](https://developers.openai.com/api/reference/resources/completions/methods/create)（2026-10-31）的 `prompt` 是字符串、字符串数组、token 数组或 token 数组的数组，回复每个 choice 是 `text` 而非 `delta`，流式与非流式同形，`stream_options.include_usage` 在流式时给最后一帧的 usage。OpenRouter 没有 `/completions` 路径：官方 [OpenAPI](https://openrouter.ai/openapi.json)（v1.0.0，2026-10-31）只有 `/chat/completions`，[API reference](https://openrouter.ai/docs/api_reference/overview.md)（同日）让客户端把 `prompt` 发到 `/chat/completions`、回 `NonChatChoice.text`。所以没有 OpenRouter 契约可对齐，基线只能是 OpenAI 的旧接口；但不采用 OpenRouter 的 `prompt` 变体，因为那要改 Chat 的请求与回复形状，而本站的 Chat 透传和转换已经稳定。也不把旧补全转成 Chat：一个 `prompt` 数组是一次请求里的多份补全，转成 `messages` 要么拆成多次上游调用（一次预留变成多次，重试与结算对不上），要么丢掉 `n`、`best_of`、`echo`、`logprobs` 的语义（`best_of > 1` 另按 400 拒绝，见下）。代价：只有 `formats` 里写了 `completions` 的端点能服务它，没有该格式的模型回 404 `no_endpoint`。此公开接口取舍依 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，仍需独立评审 |
+| 非流式旧补全的 `logprobs` 按四个数组分别追加，整份 body 在结束时编码一次 | 上游每一块的 `logprobs` 是 `tokens`、`token_logprobs`、`top_logprobs`、`text_offset` 四个数组的片段，必须按到达顺序拼起来。比较过三种做法。(1) 每块把旧对象和新对象解析成成员、克隆两个数组合并、再序列化成新对象（`wip/p18-legacy-completions` 的做法）：每块要分配约两份历史，n 块累计 O(n²)；临时副本若计入 16 MiB 上限就会永久占用（130 个 1 KiB 的块在历史只有 130 KiB 时被判超限），若合并后归还又得把已分配过的峰值从账上扣回，两次修改都没修干净（[#514 的评审](https://github.com/TYCT-tyct/Axiom/pull/514)）。(2) 把条目解码成 Go 结构再编码：每个 token 一个 string、一个 map，内存是原文的数倍，还要自己保证 JSON 转义和重复键。(3) 选：每块只解析一次，把四个数组的元素按原字节追加到每个 choice 自己的四个缓冲，结束时一次写出 `{"tokens":[...],...}`。不变量：聚合保留的每个字节在缓冲扩容之前已计入 `aggregateLimit` 和节点内存预算；内容字节按 2 倍记账（一份留在聚合里，一份给最后的 body），每个 choice 的固定语法另记 128 字节、整份另记 512 字节，没有第二份临时副本，也不会为被替换的旧对象重复计数；因此任何一块超出任一预算都在分配前以 `ErrMemory` 失败，长流只要最终体积在上限内就能完成。测试：130 个 1 KiB 的块最终 body 含 130 个 token（`TestCompletionsLogprobsLongStream`）；15 个 1 MiB 的块把 16 MiB 预算用满后，再一块 1 MiB 在分配前失败（不记预算，分配不超过随后成功的 64 字节块），64 字节的块仍能写入（`TestCompletionsLogprobsBudget`，`alloctest` 子进程） |
+| 旧补全的批量 `prompt` 按整批预留和暂估输入，上下文仍按最长的单个 prompt 检查 | OpenAI 的 `prompt` 数组是一次请求里的多份补全，`usage.prompt_tokens` 是整批的合计；`billing.Demand` 原来的 `min(context, total)` 会在两份各 6000 token、上下文 8192 时只预留 8192，执行 12000 的输入却没有对应的钱（[#514 的评审](https://github.com/TYCT-tyct/Axiom/pull/514)指出过）。`Demand.InputBytes` 记录最长的一份（`Inspect` 的 `MaxInputBytes`），路由和上下文检查用它；只要它非 0，`InputBound`/`InputEstimate` 就按整批总量，价格档也按整批总量取：结算按上游报告的物理输入分档，按单项分档会在批量跨档时少留一档的价差。输出按 `n × prompt 数 × MaxOutput` 一次预留，与 Chat 的 n 个 choice 同一种预留，且这类 entry 不做分段预留（`best_of > 1` 在准入前拒绝）。代价：批量跨档时预留比单份贵，结算仍按上游用量算，不会多收 |
+| `completions` 追加在 `protocol.Format` 的末尾（`Rerank` 之后），写入仍由 `AXIOM_DIRECT_FORMATS` 闸住 | 格式编号会进同步引擎的快照（`suppliers` 的 `formats` 列与状态用名字，但 routing 的位集和测试按编号），插在中间会改变已存的 `embeddings`、`rerank` 编号，旧节点按编号解释快照就会把向量端点当重排。追加在末尾让已有编号不变。旧节点的 `ParseFormats` 不认识 `completions`，会拒绝并摘掉整家供应商，所以闸关闭时同步投影只写 messages、responses、chat；全部节点升级后再开闸。迁移 `00021` 把名字加进两处 CHECK，Down 在有 `completions` 行时明确 `RAISE`，不给一个裸约束错误 |
+| `/responses/compact` 的回复原样透传、请求只做最小改写：请求带 `stream: true` 回 400，结算写不进时响应体里也不加 `axiom.billing_pending` | 回复是上游的整份回复，不是我们生成的流：加任何字段就不再是原样，客户端按上游的格式读它；这个端点只给整份回复。请求则不能原样：模型名要换成端点的名字（否则上游拒绝，或按别的模型计费），`user`、`safety_identifier`、`prompt_cache_key` 要换成派生值（上文「会话和用户标识换成派生值」），路由参数要删除；生成才用的成员（`store`、`include`、输出上限、`stream`）不加也不改，空闲超时与预算照旧。费用只在调用记录里查；它是暂估时同样由供应商记录校正（上文「用量与费用」）。不选在透传的 JSON 里插字段或为压缩请求再拼一份生成请求的改写：前者改了上游的回复，后者要猜它接受哪些成员 |
 
+| 旧补全调用一律流式，`best_of > 1` 在准入前以 400 拒绝 | OpenAI《Create completion》对 `best_of` 明说 “Results cannot be streamed”（本地存档 `/tmp/openai-completions.html`，2026-10-31 核对）：网关要读完整条流才能提交、计量和结算，非流式直达会绕过提交点与用量估算，另开一条非流式路径则要重做失败回退和结算。转发 `best_of > 1` 会让上游直接拒绝一个网关本可回答的请求，所以 `Inspect` 在分配前返回 `ErrInvalid`（400），`best_of` 为 1 或缺省照常通过。代价：依赖 `best_of` 服务端选优的客户端暂时用不了；要做时另开非流式调用路径，不在本 PR 里做半套 |
+| 旧补全的 `suffix` 计入输入上界和最长 prompt | `suffix` 是模型实际读到的插入文本，不计就是在长 prompt 上少留上下文、少收输入。`Inspect` 把每个 prompt 的 `suffix` 字节数加进 `TextBytes`（整批总量），最长的一份加进 `MaxInputBytes`，路由的上下文检查与报价的输入上界都包含它；token 数组 prompt 的 token 按既有规则每个 4 字节估。代价：带 `suffix` 的请求比不带时多预留一点输入，结算仍按上游报告 |
+| `max_tokens: 0` 保持“零输出”，不按缺省上限处理 | OpenAI 的旧补全允许 `max_tokens: 0`（配合 `echo` 和 `logprobs` 只取 prompt 的分数），它是请求明确设的上限，不是“没设”。`protocol.Request` 用 `MaxOutputSet` 把它与缺省分开，路由的 `outputLimit` 不再用端点默认值替换它，报价的 `Quotable.MaxOutput` 也为 0，预留只剩输入。零输出的正常回复是没有文字、但带结束原因的 choice：中继据 `RelayOptions.ZeroOutput` 把它当作提交点，否则网关会把这份合法回复判成空响应、换端点重试，全部端点都这样回时客户端反而拿到错误（`TestCompletionsZeroOutput`、`TestExecutorCompletionsEcho` 的空 prompt 与无 echo 两条）。代价：多一个字段穿过 routing 和 billing；其它格式不设这个字段，行为不变 |
+| `echo` 回显的 prompt 是交付的文字，不是生成输出 | 一个 choice 的 `text` 拆成两个量：**可交付文字**是客户端拿到的全部文字（回显加生成），只有它决定提交点、空响应和回退，所以只回显的回复（`echo` 配 `max_tokens: 0`）是正常回答，不判空、不换端点；**计费的生成输出**只算去掉回显前缀后的文字，只有它进 `ContentBytes`、文本形状和输出暂估。两者曾被当成一个量：回显算进生成会多收输出费，扣掉回显再判空又把只回显的回复当成空响应。`echo: true` 时每个 choice 的 `text` 以 prompt 原文开头，把它算进 `ContentBytes` 会在上游未报 usage 时按 prompt 长度收输出费（300 字节的 prompt 被估成 16 个输出 token），流中断时也会把回显当成已生成。网关在第一次尝试前用 `protocol.EchoOf` 读出每个 prompt 的文本字节（token 数组按 4 字节/token 估），读之前按每份 8 字节向节点预算申请、调用结束归还：一百万个空 prompt 的正文只有约 3 MB，尺寸数组却要 8 MB，不记账就能绕过节点预算（`TestMemoryHoldsEchoPromptSizes`）；中继按 choice 跟踪已经收到的回显前缀，只把超出前缀的部分计入 `ContentBytes` 和文本形状，因此批量里尚未返回的 choice 不会扣掉已收到的生成内容，文字仍原样转发，usage 存在时仍以 usage 为准。代价：token 数组的原文无法在读取前得知，回显按 4 字节/token 估，可能少扣或多扣；有 usage 时不受影响。测试：`TestCompletionsEchoPerChoice`（无回显、只回显、只回显带 logprobs、只回显后断流、双 prompt 乱序、双 prompt 只回一份、单 prompt n=2 只回一份、两份都回、回显跨块，每条分别断言交付与提交点和生成字节、文本形状）、`TestExecutorCompletionsEcho`（流式与非流式下只回显、有上限只回显、回显加生成：断言回复交付、只有一次尝试不回退、无 usage 时输出按生成字节估）、`TestEstimatedChargesPartialEchoContent`（30 字节生成按 3 字节/token 估 10 个输出 token）、`TestCompletionsInspect`（记录 prompt 大小） |
+| 旧补全的 entry 不做分段预留 | 旧补全的输出承诺是 `n × prompt 数 × MaxOutput` 一次预留（上文「决策与理由」）；按段预留只留 `min(output, segment)`，两份 prompt、n=1、`max_tokens 4096`、512 的分段只留 612 token 而不是 8192，结算时平台承担差额（评审指出）。`routing.entry` 对 `Completions` 直接令 `Segmentable=false`，仍要求端点能流式（`Streams`），结算走整份输出上限；`TestCompletionsNeverSegment` 用启用了分段的配置断言，`TestQuoteCompletionsReservesEveryChoice` 断言 2×4096 的整额 |
+| 适配器推不出的格式由模型映射的 `formats` 声明，投影取并集 | 生产代码里没有任何适配器会产出 `completions`：new-api 的 `/v1/completions` 路由存在，但它的端点类型没有旧补全类型（`relaykit/types/endpoint_type.go`），OpenAI 类型既可能是 gpt-4o 也可能是旧模型，按类型猜会把所有 OpenAI 模型都标成支持旧补全；sub2api 没有这条路径。另一个做法是直接改 `supplier_models.formats`，但同步每次都会按适配器重写，改动会被覆盖且没有审计。选：`POST /api/admin/v1/suppliers/{id}/model-mappings` 的 `formats` 字段（可省略=不改、`[]`=清除），存在 `supplier_aliases.formats`，投影把它与适配器的格式取并集，写入 `supplier_models` 和 `endpoints` 的 `formats`，因此下一次同步不会覆盖；未知格式在写之前以 422 拒绝。代价：声明要等下一次同步和快照重载才生效；`AXIOM_DIRECT_FORMATS` 未开时，旧节点读到这一行只会跳过这个端点（`suppliers.unsupported_format`），不会摘掉整家供应商，但该格式的端点对旧节点暂时不可用，所以仍要等全部节点都认识它再声明。测试：`TestDeclaredFormatsSurviveSync`（两次同步）与 `TestDeclaredFormats`（规范化、收窄、清除、未知格式） |
 ## 待定问题
 
 - 各字段的最终名称和结构写入接口契约时确定
-- 官方供应商名称的可信映射、逐端点的采样/提供商参数清单、量化事实、五分钟窗口性能分位数、按请求和按张计价仍缺数据；每项缺的具体字段和补上后能支持什么，见上文「路由参数」偏离表的第三列。`require_parameters` 目前用模型规格推出的公开参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定。
+- 官方供应商名称的可信映射、逐端点的采样/提供商参数清单、量化事实、五分钟窗口性能分位数、按请求计价仍缺数据；按张的图片价已有目录项，但 `max_price.image` 管输入还是生成、端点按张用量怎么报还没定。每项缺的具体字段和补上后能支持什么，见上文「路由参数」偏离表的第三列。`require_parameters` 目前用模型规格推出的公开参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定。
 - 402 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`workspace_budget`、`key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
-- `~作者/系列-latest` 别名的后续实现：目录需要独立的模型族与可切换别名映射，切换追加审计；发现和调用应使用同一次发布的目标、规格与价格，响应 `model` 按 OpenRouter 返回具体模型。现有名字仍只追加，不把内部名字开放调用。需要补齐模型族数据与版本选择依据后再实现，不按前缀或日期猜最新；价格与能力变化遵循[目录的切换与迁移](catalog.md#模型的生命周期)。当前请求仍为上文说明原因的 400。
-- 服务端工具的外部服务：选哪个搜索或抓取服务、数据保留与零保留条款、按次成本与售价、密钥保管和出网，由负责人决定；决定前 `web` 插件、`:online` 和 `openrouter:web_search` 都回 400。职责划分和要决定的事项见「服务端工具」。
+- `~作者/系列-latest` 的别名表已经落地；后续只缺后台界面：现在由 `axiom catalog save-alias` 写。发现和调用用同一次快照的目标、规格与价格，响应 `model` 是具体标准 ID。价格与能力变化仍遵循[目录的切换与迁移](catalog.md#模型的生命周期)。
+- `openrouter:web_search` 的模型侧循环：是否实现、步数上限，以及是否只允许模型厂商的原生搜索；决定前它保持 400。`web` 插件和 `:online` 已经走部署配置的 SearXNG（见「服务端工具」）。
 - `:nitro`、`:floor` 的层级准入：为 `:floor` 准入 flex 层要决定是否改写发给上游的 `service_tier`，及其对预留和计费的影响
 - Claude Code 的 Bedrock、Vertex 格式和 Gemini 原生格式的支持，以后再做
+- `/embeddings/models` 与嵌入模型在 `/api/v1/models` 里的出现：目录的 `Serving` 目前只有输入能力，没有“输出模态”，而模型列表要求 `pricing.completion`，嵌入模型没有输出价。要补齐得给规格加输出模态、让列表的 `architecture` 和价格按它投影，再给 `/embeddings/models` 一份过滤视图；这是目录形状的改动，影响 `supported_parameters`、路由能力和全部模型对象，留到有第二个直接格式（或管理员需要从列表发现嵌入模型）时做。现在调用按请求里的 `model` 走，供应商端点记录声明 `embeddings` 即可路由

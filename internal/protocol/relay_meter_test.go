@@ -439,6 +439,8 @@ func (r *onRead) Read(p []byte) (int, error) {
 }
 
 // deltas is a stream of format f with n text deltas of size bytes each.
+//
+//nolint:exhaustive // the formats not built above use plain deltas
 func deltas(f protocol.Format, n, size int) []byte {
 	text := strings.Repeat("x", size)
 	switch f {

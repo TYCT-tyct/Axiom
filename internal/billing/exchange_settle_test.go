@@ -10,6 +10,8 @@ import (
 )
 
 func TestExchangeReservationPersistsBeforeAnyAttempt(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10000, 0, Config{})
 	q := metered(t)
 	q.Exchange = platform.ExchangeRate{ID: uuid.NewV7(), Base: "CNY", Quote: "USD", Version: 1, Numerator: 10, Denominator: 71}
@@ -42,6 +44,8 @@ func TestExchangeReservationPersistsBeforeAnyAttempt(t *testing.T) {
 }
 
 func TestExchangeProfitUnknownAndSettlementReplay(t *testing.T) {
+	t.Parallel()
+
 	t.Run("one unknown attempt", func(t *testing.T) { checkProfitReplay(t, false) })
 	t.Run("all known", func(t *testing.T) { checkProfitReplay(t, true) })
 }

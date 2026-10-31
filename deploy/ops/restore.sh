@@ -10,6 +10,8 @@ PROGRAM=restore
 . /ops/common.sh
 
 require_env AXIOM_RESTORE_STEP AXIOM_RESTORE_SET AXIOM_BACKUP_BUCKET AXIOM_BACKUP_PREFIX
+require_objectstore_env
+require_prefix
 case $AXIOM_RESTORE_STEP in
 config) require_env AXIOM_RESTORE_OUT_DIR AXIOM_RESTORE_DB_IDENTITY_FILE ;;
 data) require_env AXIOM_KEYS_DIR AXIOM_RESTORE_DB_IDENTITY_FILE AXIOM_RESTORE_SECRETS_IDENTITY_FILE PGDATABASE PGPASSWORD ;;
@@ -19,10 +21,12 @@ esac
 export LC_ALL=C
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-root="$(bucket_path)/$AXIOM_RESTORE_SET"
+root="$(object_prefix "$AXIOM_RESTORE_SET")"
+# The same finite limit as the backup: a large dump over a slow link must not be cut at the CLI's 30-minute default.
+transfer_timeout=${AXIOM_BACKUP_TRANSFER_TIMEOUT:-12h}
 
 fetch() {
-  rclone --quiet copyto "$root/$1" "$work/$1" || die "cannot fetch $root/$1"
+  axiom objectstore get --timeout "$transfer_timeout" --key "$root$1" --file "$work/$1" >/dev/null || die "cannot fetch $root$1"
 }
 
 # The manifest is written last by the backup, so its presence is what makes a set restorable, and its contents are the
@@ -71,12 +75,23 @@ data)
 
   fetch keys.tar.age
   age --decrypt --identity "$AXIOM_RESTORE_SECRETS_IDENTITY_FILE" --output "$work/keys.tar" "$work/keys.tar.age"
+  # The archive comes from the bucket, so even though age authenticates the ciphertext, someone who can write the bucket
+  # can put any tar under the public recipient. Only the three regular files the backup writes may reach tar as root.
+  validate_keys_archive "$work/keys.tar"
   tar -C "$AXIOM_KEYS_DIR" -xpf "$work/keys.tar"
   # The program checks these before it serves anything: three regular files, owned by the user it runs as, with no access
   # for anyone else. The archive carries them, but a restore next to a different uid would fail that check, so set them
   # here as well (deploy/Dockerfile runs as 65532).
-  chown 65532:65532 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
+  # Set the modes while root still owns the entries, then hand them to the program: the restore image has the
+  # capabilities to do either order, but the keys service only has CHOWN, so this keeps one ordering rule in both.
+  chown 0:0 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
   chmod 0400 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
+  chown 65532:65532 "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
+  # The program replaces the master file atomically when a rotation distributes or retires a version, so its directory
+  # must be writable by it; root's group keeps the directory traversable for the backup and restore containers.
+  chown 0:0 "$AXIOM_KEYS_DIR"
+  chmod 770 "$AXIOM_KEYS_DIR"
+  chown 65532:0 "$AXIOM_KEYS_DIR"
   for name in master hash identity; do
     [ -f "$AXIOM_KEYS_DIR/$name" ] || die "$AXIOM_KEYS_DIR/$name is not a regular file"
   done

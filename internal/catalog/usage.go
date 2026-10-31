@@ -11,7 +11,8 @@ import (
 // protocol maps each upstream format's usage as README.md「计费项与用量」 tabulates.
 type Item uint8
 
-// The billing items, in the order stored lists name them: the input side, then the output side, then counts.
+// The billing items, in the order stored lists name them: the token items, the per-use items, then the items counted
+// per piece, second or character.
 const (
 	ItemInput Item = iota
 	ItemCacheRead
@@ -25,6 +26,11 @@ const (
 	ItemImageOut
 	ItemWebSearch     // counted in searches, not tokens
 	ItemCodeExecution // counted in calls, not tokens
+	ItemImageInPiece  // input images and video, when the vendor prices them per piece rather than per token
+	ItemImageOutPiece // generated images
+	ItemAudioInSecond // seconds of audio input
+	ItemAudioOutSecond
+	ItemCharacterIn // characters of text read aloud
 	NumItems
 )
 
@@ -32,9 +38,48 @@ const (
 var itemNames = [NumItems]string{
 	"input", "cache_read", "cache_write", "cache_write_1h", "audio_in", "image_in",
 	"output", "reasoning", "audio_out", "image_out", "web_search", "code_execution",
+	"image_in_piece", "image_out_piece", "audio_in_second", "audio_out_second", "character_in",
 }
 
 func (it Item) String() string { return itemNames[it] }
+
+// Unit is the quantity an item is billed in. A price schedule holds one price per item, so a side a vendor bills both
+// per token and per piece has an item for each; an item's count is in whole units.
+type Unit uint8
+
+// The units an item is billed in: tokens, uses, whole pieces, whole seconds and whole characters.
+const (
+	UnitToken Unit = iota
+	UnitUse
+	UnitPiece
+	UnitSecond
+	UnitCharacter
+	numUnits
+)
+
+// unitNames are the units' names in charge details, so they never change.
+var unitNames = [numUnits]string{"token", "use", "piece", "second", "character"}
+
+func (u Unit) String() string { return unitNames[u] }
+
+// Unit is the quantity it is billed in: tokens unless it is a per-use, per-piece, per-second or per-character item. Every
+// item has a case, so a new one must state its unit here, and the return after the switch is only for the compiler.
+func (it Item) Unit() Unit {
+	switch it {
+	case ItemWebSearch, ItemCodeExecution:
+		return UnitUse
+	case ItemImageInPiece, ItemImageOutPiece:
+		return UnitPiece
+	case ItemAudioInSecond, ItemAudioOutSecond:
+		return UnitSecond
+	case ItemCharacterIn:
+		return UnitCharacter
+	case ItemInput, ItemCacheRead, ItemCacheWrite, ItemCacheWrite1h, ItemAudioIn, ItemImageIn, ItemOutput, ItemReasoning,
+		ItemAudioOut, ItemImageOut, NumItems:
+		return UnitToken
+	}
+	return UnitToken
+}
 
 // ServiceTier is the service tier that served a request. It is not called Tier, which is an account's tier.
 type ServiceTier uint8
@@ -68,17 +113,31 @@ type ItemSet = set[Item]
 type ServiceTierSet = set[ServiceTier]
 
 // set holds values of a small enumeration, one bit each.
-type set[T ~uint8] uint16
+type set[T ~uint8] uint32
 
-// A seventeenth value would have no bit: Has would report it absent and Add would drop it. This fails to compile
+// A thirty-third value would have no bit: Has would report it absent and Add would drop it. This fails to compile
 // first.
-var _ [16 - NumItems]struct{}
+var _ [32 - NumItems]struct{}
 
 // Has reports whether v is in the set.
 func (s set[T]) Has(v T) bool { return s&(1<<v) != 0 }
 
 // Add puts v in the set.
 func (s *set[T]) Add(v T) { *s |= 1 << v }
+
+// List lists the set's values in enumeration order.
+func (s set[T]) List() []T { return s.members() }
+
+// members lists the set's values in order.
+func (s set[T]) members() []T {
+	var out []T
+	for v := T(0); v < 32; v++ {
+		if s.Has(v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
 
 // InputSide are the items a prompt is made of, the only ones a context tier's threshold may add up. They are also the
 // items an upstream reports before the reply starts.
@@ -87,6 +146,13 @@ const InputSide ItemSet = 1<<ItemInput | 1<<ItemCacheRead | 1<<ItemCacheWrite | 
 
 // OutputSide are the token items a reply is made of, which an upstream's output total adds up (Usage.OutputTotal).
 const OutputSide ItemSet = 1<<ItemOutput | 1<<ItemReasoning | 1<<ItemAudioOut | 1<<ItemImageOut
+
+// TokenItems are the items counted in tokens: the input side and the output side.
+const TokenItems ItemSet = InputSide | OutputSide
+
+// CountedItems are the items counted in whole pieces, seconds or characters rather than in tokens or uses.
+const CountedItems ItemSet = 1<<ItemImageInPiece | 1<<ItemImageOutPiece | 1<<ItemAudioInSecond |
+	1<<ItemAudioOutSecond | 1<<ItemCharacterIn
 
 // maxCount bounds every count, so a tier's sum of up to NumItems counts stays far inside int64.
 const maxCount = 1e10
@@ -100,6 +166,17 @@ type Usage struct {
 	unknown          []UnknownUsage
 	physicalInput    int64
 	hasPhysicalInput bool
+	native           NativeTokens
+	hasNative        bool
+}
+
+// NativeTokens are the token splits an upstream reports that have no billing item of their own: video input billed
+// with images, and prediction tokens already inside the output total. They are echoed to the client and never priced
+// again.
+type NativeTokens struct {
+	VideoInput         int64 `json:"video_input,omitzero"`
+	AcceptedPrediction int64 `json:"accepted_prediction,omitzero"`
+	RejectedPrediction int64 `json:"rejected_prediction,omitzero"`
 }
 
 // UnknownUsage is a non-zero usage field the item table does not map, or a service tier value protocol does not
@@ -144,6 +221,23 @@ func (u Usage) OutputTotal() int64 {
 // PhysicalInput returns the upstream prompt total and its presence; an explicit zero is not an absent total.
 func (u Usage) PhysicalInput() (int64, bool) { return u.physicalInput, u.hasPhysicalInput }
 
+// NativeTokens returns the provider-reported splits with no billing item of their own.
+func (u Usage) NativeTokens() NativeTokens { return u.native }
+
+// HasNativeTokens reports whether the upstream reported any of them, so an absent split is not shown as a zero.
+func (u Usage) HasNativeTokens() bool { return u.hasNative }
+
+// WithNativeTokens keeps provider-reported splits for the client echo, checked like every other count.
+func (u Usage) WithNativeTokens(n NativeTokens) (Usage, error) {
+	for _, c := range [...]int64{n.VideoInput, n.AcceptedPrediction, n.RejectedPrediction} {
+		if c < 0 || c > maxCount {
+			return Usage{}, fmt.Errorf("usage: native token count %d, want 0 to 10¹⁰", c)
+		}
+	}
+	u.native, u.hasNative = n, true
+	return u, nil
+}
+
 // WithPhysicalInput keeps the physical prompt length independently of potentially overlapping billing quantities.
 func (u Usage) WithPhysicalInput(n int64) (Usage, error) {
 	if n < 0 || n > maxCount {
@@ -157,6 +251,7 @@ func (u Usage) WithPhysicalInput(n int64) (Usage, error) {
 func (u Usage) Recount(counts map[Item]int64, unknown []UnknownUsage) (Usage, error) {
 	v, err := NewUsage(counts, u.serviceTier, unknown)
 	v.physicalInput, v.hasPhysicalInput = u.physicalInput, u.hasPhysicalInput
+	v.native, v.hasNative = u.native, u.hasNative
 	return v, err
 }
 

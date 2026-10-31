@@ -1,6 +1,8 @@
 // Package sub2api is the adapter for sub2api (Wei-Shaw/sub2api) as a supplier: it logs in as an ordinary user and reads
 // the account, the groups, our keys and the charge records, and knows how a sub2api relay answers and how it names a
-// request. It never writes at the supplier, except to log in and refresh (internal/suppliers/README.md 「sub2api」).
+// request. A login that administers the system also reads the pool's accounts and their quota windows, which decide a
+// group's weight (pool.go). It never writes at the supplier, except to log in and refresh
+// (internal/suppliers/README.md 「sub2api」).
 package sub2api
 
 import (
@@ -21,6 +23,7 @@ const (
 	bucketRefresh = "refresh"
 	bucketPanel   = "panel"
 	bucketUsage   = "usage"
+	bucketPool    = "pool"
 )
 
 // Adapter is the sub2api adapter.
@@ -42,6 +45,7 @@ func (*Adapter) Buckets() []adapter.BucketSpec {
 		{Name: bucketRefresh, Per: adapter.CountedByIP, Window: time.Minute, Limit: 7},
 		{Name: bucketPanel, Per: adapter.CountedByAccount, Window: time.Minute, Limit: 60},
 		{Name: bucketUsage, Per: adapter.CountedByAccount, Window: time.Minute, Limit: 15},
+		{Name: bucketPool, Per: adapter.CountedByAccount, Window: time.Minute, Limit: 30},
 	}
 }
 

@@ -9,7 +9,7 @@
 `TestFailedStartLeavesNoRecorderWriter` 用 `runtime.Stack(_, true)` 扫描全部 goroutine 找 `Recorder.writer`，判断依据是整个进程而不是这次 `serve` 调用自己的对象；#327 把测试并行后，它看到其他测试节点的写入器。该测试已改成断言本次调用创建的 `Recorder`（`Done()`，#338）。同类问题在 #313 的付得起分配测试中再次出现：`testing.AllocsPerRun` 也统计全进程，现已改为 `alloctest.Measure` 的隔离子进程。待加的检查：lint 禁止 `_test.go` 中出现 `runtime.Stack(…, true)`、`runtime.NumGoroutine`、`runtime.ReadMemStats`、`testing.AllocsPerRun`（`alloctest` 除外）。
 
 证据：合并车 train/main/39266027524-2 的 go-test 失败（`serve_test.go:390`）
-哪一层没拦住：CONTRIBUTING「时序」只写了「不用 `runtime.ReadMemStats` 之类的全进程计数」，没有 lint；#327 的评审没看出并行化影响了这个测试
+哪一层没拦住：CONTRIBUTING「测试与时序」只写了「不用 `runtime.ReadMemStats` 之类的全进程计数」，没有 lint；#327 的评审没看出并行化影响了这个测试
 出现：2026-10-19
 
 ## 真实依赖的内容断言与生产期限竞速
@@ -74,6 +74,16 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 证据：PR #461 的 a577486 独立评审第 1–3 条。原实现把待映射页的创建 POST 当作纠正，过期页面能无声覆盖他人的映射；版本 1 的 key 位置缺策略却继续被接受，旧页会投影为全拒；首版别名仍有列级 UPDATE 授权。`TestGroupMappingRevisionsAndIdempotentReplay`、`TestConcurrentMappingCorrectionsRequireCurrentRevision`、两个适配器的 `TestLegacyKeyListingRestartsBeforeProjectingPolicies` 和 `TestAliasRevisionsPreserveOwnershipAndHistory` 保留这些边界回归。
 哪一层没拦住：只验证追加历史和最终快照，没有回放既有前端的新建语义、升级前的分页位置及旧迁移留下的权限。后续供应商修订改动须同时核对创建冲突与显式版本前提、旧位置重读、原始行不可改写；不能仅凭新表只追加就称整条历史不可变。
 出现：2026-10-29
+
+## 按路径豁免把 CI 里的安全改动放过了评审
+
+#523（6f42a20）改的是发布镜像的签名和生产验签，文件全在 `.github/`、`scripts/ci/`、测试和文档里，流水线按路径标了「免评审」；PR 描述自己写着它改变部署门禁、不应免评审。合并后的独立深审发现阻断 1、应修 2：生产入口从 `.env` 取镜像而 Compose 拉的是环境变量覆盖的另一个；随交付物保存的 SBOM 没和已签名 attestation 的 predicate 绑定；签名负例在元数据比较处就退出，没到 cosign。
+
+证据：提交 6f42a20（PR #523）合并后的独立评审；修复在本 PR 的 `scripts/ops/deploy.sh`、`scripts/ci/verify-release.sh` 和 `scripts/ci/signing-check.sh`，规则修改待负责人同意后另起 PR。
+
+哪一层没拦住：免评审被当成路径判断。豁免的条件应是改动的影响；但改这条流程规则要负责人同意，这次没有取得，所以本分支撤回规则改动。现行 `CONTRIBUTING` 和流水线行为未变，这条错题保留到负责人批准规则修改、或流水线不再按路径自动标免评审。
+
+出现：2026-10-31
 
 ## 集成探测的时间锚点与重复账本夹具放大列车负载
 

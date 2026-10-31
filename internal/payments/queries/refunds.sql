@@ -4,6 +4,13 @@ SELECT EXISTS (SELECT 1 WHERE (SELECT platform.in_platform_scope()) OR @site_id:
 -- name: ReadRefund :many
 SELECT * FROM payments.refunds WHERE id = @id;
 
+-- name: ListRefunds :many
+-- A page's orders' refunds, oldest first, with the currency each returns cash in. One statement for the page instead of
+-- one per order; the account scope already limits it to the account's own rows.
+SELECT sqlc.embed(r), o.pay_currency FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
+WHERE r.order_id = ANY (@order_ids::uuid[])
+ORDER BY r.created_at, r.id;
+
 -- name: RefundByKey :many
 SELECT * FROM payments.refunds WHERE order_id = @order_id AND idem_key = @idem_key;
 
@@ -71,3 +78,15 @@ SELECT clock_timestamp()::timestamptz AS now;
 
 -- name: ParkRefund :exec
 UPDATE payments.refunds SET manual_only = true WHERE id = @id;
+
+-- name: ListSiteRefunds :many
+-- One site's refunds for its operator, newest first. A state left out does not narrow; the cursor is
+-- (created_at, id). Whether a frozen refund was approved is in approved_by, which the page reads as a second person's
+-- signature.
+SELECT sqlc.embed(r), o.pay_currency AS pay_currency
+FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
+WHERE r.site_id = @site_id
+    AND (sqlc.narg(state)::text IS NULL OR r.state = sqlc.narg(state)::text)
+    AND (r.created_at, r.id) < (@after_at::timestamptz, @after_id::uuid)
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT @max;

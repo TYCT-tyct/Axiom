@@ -58,13 +58,15 @@ ORDER BY u.id DESC
 LIMIT @page_size::int;
 
 -- name: ReadAccount :many
--- The account with its tier and its owner: in M1 an account is a person's own, so the owner is its one member.
+-- The account with its tier and its owner: in M1 an account is a person's own, so the owner is its one member. The
+-- owner's status is the sign-in switch the admin's account page shows beside the account's call switch.
 SELECT a.id, a.site_id, a.name, a.kind, a.status, a.tier_id, t.name AS tier_name,
-    uuid_extract_timestamp(a.id)::timestamptz AS created_at, o.id AS owner_id, o.email AS owner_email
+    uuid_extract_timestamp(a.id)::timestamptz AS created_at, o.id AS owner_id, o.email AS owner_email,
+    o.status AS owner_status
 FROM accounts.accounts a
 JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
 JOIN LATERAL (
-    SELECT u.id, u.email FROM accounts.members m
+    SELECT u.id, u.email, u.status FROM accounts.members m
     JOIN accounts.users u ON u.site_id = m.site_id AND u.account_id = m.user_account_id AND u.id = m.user_id
     JOIN accounts.roles r ON r.id = m.role_id
     WHERE m.account_id = a.id
@@ -104,3 +106,27 @@ INSERT INTO accounts.site_settings(site_id,ip_attempt_burst,ip_attempts_per_minu
 VALUES(@site_id,sqlc.narg(ip_attempt_burst),sqlc.narg(ip_attempts_per_minute),sqlc.narg(email_sign_in_failures),sqlc.narg(user_code_failures),sqlc.narg(challenge_code_attempts))
 ON CONFLICT(site_id) DO UPDATE SET ip_attempt_burst=excluded.ip_attempt_burst,ip_attempts_per_minute=excluded.ip_attempts_per_minute,
  email_sign_in_failures=excluded.email_sign_in_failures,user_code_failures=excluded.user_code_failures,challenge_code_attempts=excluded.challenge_code_attempts;
+
+-- name: ReadSiteRegistration :many
+-- A site's registration mode from its row and its own anti-abuse values; a NULL value is the default in code.
+SELECT s.registration, t.registration_human_check, t.registration_human_check_bits,
+    t.registration_domain_burst, t.registration_domain_per_hour,
+    t.registration_domain_allow, t.registration_domain_deny
+FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = @site_id;
+
+-- name: WriteSiteRegistrationMode :exec
+UPDATE accounts.sites SET registration = @registration WHERE id = @site_id;
+
+-- name: WriteSiteRegistrationSettings :exec
+-- Replaces only the open-registration values, so the settings and login limits the admin API replaces whole cannot
+-- take them along.
+INSERT INTO accounts.site_settings (site_id, registration_human_check, registration_human_check_bits,
+    registration_domain_burst, registration_domain_per_hour, registration_domain_allow, registration_domain_deny)
+VALUES (@site_id, @human_check, @human_check_bits, @domain_burst, @domain_per_hour,
+    @domain_allow::text[], @domain_deny::text[])
+ON CONFLICT (site_id) DO UPDATE SET registration_human_check = excluded.registration_human_check,
+    registration_human_check_bits = excluded.registration_human_check_bits,
+    registration_domain_burst = excluded.registration_domain_burst,
+    registration_domain_per_hour = excluded.registration_domain_per_hour,
+    registration_domain_allow = excluded.registration_domain_allow,
+    registration_domain_deny = excluded.registration_domain_deny;

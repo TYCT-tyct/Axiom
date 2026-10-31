@@ -67,7 +67,7 @@ func (s *session) mayStart(maxAttempts int) (ended, bool) {
 	switch {
 	case s.req.Context().Err() != nil:
 		return ended{}, true
-	case s.x.shutdown.Err() != nil:
+	case s.x.Outstanding.shutdown.Err() != nil:
 		return ended{err: protocol.Error{Type: protocol.Timeout}}, true
 	case !s.x.Alive():
 		return ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, true
@@ -122,26 +122,34 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 	}
 	up, held, err := s.prepare(entry)
 	if errors.Is(err, ErrOverloaded) {
-		conn.Done()
+		s.done(conn)
 		return over, ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}
 	}
 	if unsupported, ok := errors.AsType[*protocol.NotSupported](err); ok {
-		conn.Done()
+		s.done(conn)
 		s.skipUnsupported(entry, unsupported)
 		return nextEntry, ended{}
 	} else if err != nil {
-		conn.Done()
+		s.done(conn)
 		return over, s.unprepared(err)
 	}
 	if len(s.ends) == 0 {
 		s.x.Router.Sent(entry.Supplier)
 	} else if !s.x.Router.TakeRetry(entry.Supplier) {
-		conn.Done()
+		s.done(conn)
 		s.x.Memory.Refund(held)
 		s.exclude(entry, routing.RetryBudget)
 		return nextEntry, ended{}
 	}
 	return s.attempt(ctx, i, entry, conn, up, held)
+}
+
+// done gives an acquired credential slot back and wakes the oldest queued call: a released slot is what the queue waits
+// for, and no other event tells it that capacity returned. The order matters: the slot is free before the waiter looks.
+func (s *session) done(conn Conn) suppliers.AttemptReceipt {
+	receipt := conn.Done()
+	s.x.Limits.Queue.Wake()
+	return receipt
 }
 
 // skipUnsupported passes over an endpoint that cannot express the request. The first reason is what the client is told
@@ -205,11 +213,16 @@ func (s *session) record(a *attempt, failed bool, scope routing.Scope, next rout
 
 // attempt is one try at an endpoint, from the moment its identity is fixed. The goroutine that runs the call owns it.
 type attempt struct {
-	s       *session
-	i       int // index in s.ends
-	entry   routing.Entry
-	conn    Conn
-	meter   *billing.Meter // bound to the entry that was priced
+	s     *session
+	i     int // index in s.ends
+	entry routing.Entry
+	conn  Conn
+	meter *billing.Meter // bound to the entry that was priced
+
+	// toolCallTokens is what each client tool call's framework adds to the output in this entry's family, the same
+	// figure settlement uses, so the meter's bound and the estimate agree.
+	toolCallTokens int64
+
 	cancel  context.CancelCauseFunc
 	release context.CancelFunc
 	unhook  func() bool // of the node's shutdown, which cancels the attempt
@@ -230,7 +243,10 @@ type attempt struct {
 // becomes of it.
 func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Conn) (*attempt, context.Context) {
 	kept := s.c.Hold.Kept[i]
-	a := &attempt{s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept)}
+	a := &attempt{
+		s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept),
+		toolCallTokens: billing.ToolCallTokens(billing.TokenizerOf(entry.Target.Model)),
+	}
 	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
 	a.obs.Source = uuid.UUID(s.c.Admission.OwnerID())
 	a.obs.BreakerFallback = entry.BreakerFallback
@@ -243,7 +259,7 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	ctx, release := AttemptContext(ctx, s.deadline, policy.Cancels)
 	ctx, a.cancel = context.WithCancelCause(ctx)
 	a.release = release
-	a.unhook = context.AfterFunc(s.x.shutdown, func() { a.cancel(errShutdown) })
+	a.unhook = context.AfterFunc(s.x.Outstanding.shutdown, func() { a.cancel(errShutdown) })
 	s.x.Router.Begin(entry.Endpoint)
 	s.setCancel(a.cancel, policy.Cancels)
 	return a, ctx
@@ -257,8 +273,8 @@ func (a *attempt) close(ctx context.Context) {
 	a.unhook()
 	a.cancel(nil)
 	a.release()
-	receipt := a.conn.Done()
-	a.s.x.Router.End(a.entry.Endpoint)
+	a.s.x.Router.End(a.entry.Endpoint) // before the wake: a waiter must find both the endpoint's count and the slot free
+	receipt := a.s.done(a.conn)
 	a.obs.Credential = receipt.CredentialID()
 	a.result(receipt)
 	a.observe(ctx)
@@ -309,7 +325,7 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 	}
 	defer resp.Body.Close() //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
 	a.state = strings.TrimSpace(resp.Header.Get(stateHeader))
-	if s.c.Compact {
+	if s.c.Compact || s.c.Format.Direct() {
 		return a.pass(ctx, resp)
 	}
 	return a.stream(ctx, resp.Body, up.Usage)

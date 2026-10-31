@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -119,6 +120,47 @@ func TestMemoryHoldsConcurrentRequestsToTheBudget(t *testing.T) {
 		wg.Wait()
 		if rest := 3 * (cost - buffer); made.Load() != 3 || refused.Load() != 5 || left(h.memory) != rest {
 			t.Errorf("%d requests made, %d refused, %d bytes left of the budget, want %d", made.Load(), refused.Load(), left(h.memory), rest)
+		}
+	})
+}
+
+// TestMemoryHoldsEchoPromptSizes: a completion that echoes keeps each prompt's size for every attempt, 8 bytes a prompt,
+// which a batch of empty prompts makes larger than its body. While the upstream is asked, the call holds exactly that
+// much more than the same call without echo; a node short of it refuses, 503, without asking an upstream; and either
+// way the budget is whole again after the call.
+func TestMemoryHoldsEchoPromptSizes(t *testing.T) {
+	prompts := `"prompt":[""` + strings.Repeat(`,""`, 999) + `]}`
+	echoed := []byte(`{"model":"m","echo":true ,"max_tokens":0,` + prompts) // as long as the body without echo
+	req, err := protocol.Inspect(protocol.Completions, echoed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := protocol.EchoSize(&req)
+	if size != 8000 || size <= int64(len(echoed)) {
+		t.Fatalf("1000 prompts in %d bytes hold %d bytes of sizes", len(echoed), size)
+	}
+	reply := `data: {"id":"c","object":"text_completion","created":0,"model":"up-1","choices":[{"index":0,"text":"",` +
+		`"finish_reason":"length"}]}` + "\n\ndata: [DONE]\n\n"
+	call := func(ctx context.Context, body []byte, memory int64) (held int64, h *harness) {
+		h = newHarness(t, ctx, options{client: protocol.Completions, request: body, memory: memory})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{func(ctx context.Context) (*http.Response, *suppliers.Failure) {
+			held = h.budget - left(h.memory)
+			return serve(beat{data: reply})(ctx)
+		}}
+		h.run()
+		if after := left(h.memory); after != h.budget {
+			t.Errorf("%d bytes are left after the call, want %d", after, h.budget)
+		}
+		return held, h
+	}
+	run(t, func(t *testing.T, ctx context.Context) {
+		with, h := call(ctx, echoed, memorySize)
+		without, _ := call(ctx, []byte(`{"model":"m","echo":false,"max_tokens":0,`+prompts), memorySize)
+		if h.w.status != http.StatusOK || with-without != size {
+			t.Errorf("status %d; held %d with echo, %d without, want %d more", h.w.status, with, without, size)
+		}
+		if _, h := call(ctx, echoed, size-1); h.w.status != http.StatusServiceUnavailable || h.up.endpoint(1).sends != 0 {
+			t.Errorf("a byte short: status %d, %d sends", h.w.status, h.up.endpoint(1).sends)
 		}
 	})
 }

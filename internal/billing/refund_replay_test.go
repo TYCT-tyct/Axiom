@@ -37,6 +37,8 @@ func checkFrozenEvents(t *testing.T, a *allocation, log []movement) {
 }
 
 func TestFrozenRoomExtremes(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name string
 		row  LockBalanceRow
@@ -58,12 +60,14 @@ func TestFrozenRoomExtremes(t *testing.T) {
 
 // Earlier charges must see the freeze at their own position; refunds name their batch instead of spending by expiry.
 func TestRefundReplayHistory(t *testing.T) {
+	t.Parallel()
+
 	paid, gift := batchRow(1, 100, "paid", nil), batchRow(2, 100, "gift", nil)
 	log := []movement{
 		creditOf(paid), creditOf(gift),
-		settled(3, "settle", 30),
+		settled(3, 30),
 		{key: keyAt(4), kind: "freeze", request: paid.ID, revision: 80},
-		settled(5, "settle", 100),
+		settled(5, 100),
 		{key: keyAt(6), kind: "unfreeze", request: paid.ID, revision: 30},
 		{key: keyAt(7), kind: "freeze", request: paid.ID, revision: 100},
 		{key: keyAt(8), kind: "refund", request: paid.ID, revision: 70, debit: 70},
@@ -83,6 +87,8 @@ func TestRefundReplayHistory(t *testing.T) {
 }
 
 func TestRefundReplayUsesSequence(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	f := b.refundable(1000)
 	b.creditBatch(100, longAgo)
@@ -121,6 +127,8 @@ func TestRefundReplayUsesSequence(t *testing.T) {
 }
 
 func TestRefundReplayRejectsInvalidEvents(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, kind string
 		revision   int64
@@ -151,6 +159,8 @@ func TestRefundReplayRejectsInvalidEvents(t *testing.T) {
 
 // Repeated freeze/release cycles can reach the ledger limit even with a tiny batch. Refuse before issuing SQL.
 func TestFreezeCumulativeOverflow(t *testing.T) {
+	t.Parallel()
+
 	f := Freeze{Account: uuid.NewV7(), Batch: uuid.NewV7(), Amount: 1}
 	a := &allocation{batches: map[uuid.UUID]*batchState{f.Batch: {freezeTotal: math.MaxInt64}}}
 	if err := a.postRefund(context.Background(), pg.Tx{}, f, uuid.NewV7(), "freeze", nil); err == nil {
@@ -159,6 +169,8 @@ func TestFreezeCumulativeOverflow(t *testing.T) {
 }
 
 func TestFreezeEventsLockTheBalance(t *testing.T) {
+	t.Parallel()
+
 	for _, kind := range []string{"freeze", "unfreeze"} {
 		t.Run(kind, func(t *testing.T) {
 			b := newBank(t, 0, 0, Config{})

@@ -208,6 +208,9 @@ export default {
     format_messages: "Messages",
     format_responses: "Responses",
     format_chat: "Chat Completions",
+    format_embeddings: "Embeddings",
+    format_rerank: "Rerank",
+    format_completions: "Legacy completions",
     action: "Run test",
     waiting:
       "Testing — up to about 45 seconds. Closing this dialog doesn’t stop it and the call is still paid for; the result goes to the audit log.",

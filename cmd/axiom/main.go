@@ -13,7 +13,7 @@ import (
 	_ "golang.org/x/crypto/x509roots/fallback" // root certificates for the scratch image, which has none (deploy/Dockerfile)
 )
 
-const usage = "usage: axiom serve | migrate | healthcheck | version | site init | user <verb> | catalog sync | catalog check | catalog <operation> <file> | billing <listing> | billing <operation> <file> | keyring <verb>"
+const usage = "usage: axiom serve | migrate | healthcheck | version | web-assets <dir> | site init | user <verb> | catalog sync | catalog check | catalog <operation> <file> | billing <listing> | billing <operation> <file> | keyring <verb> | objectstore <verb>"
 
 func main() {
 	if !validArgs(os.Args) {
@@ -43,8 +43,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-	case "catalog", "site", "user", "billing", "keyring":
+	case "catalog", "site", "user", "billing", "keyring", "objectstore":
 		exitOn(operate(context.Background(), os.Environ(), os.Args[1:]))
+	case "web-assets":
+		exitOn(webAssets(os.Args[2:]))
 	case "healthcheck":
 		if err := healthcheck(context.Background(), os.Environ()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -60,7 +62,8 @@ func main() {
 
 // validArgs accepts a command, and for the commands that take arguments those arguments.
 func validArgs(args []string) bool {
-	return len(args) == 2 || len(args) > 2 && (args[1] == "catalog" || args[1] == "site" || args[1] == "user" || args[1] == "billing" || args[1] == "keyring")
+	return len(args) == 2 || len(args) > 2 && (args[1] == "catalog" || args[1] == "site" || args[1] == "user" ||
+		args[1] == "billing" || args[1] == "keyring" || args[1] == "objectstore" || args[1] == "web-assets")
 }
 
 // operate runs a command of the platform's operators, which takes arguments, against AXIOM_DATABASE_URL.
@@ -74,6 +77,8 @@ func operate(ctx context.Context, environ, args []string) error {
 		return billingCommand(ctx, environ, args[1:], os.Stdout)
 	case "keyring":
 		return keyringCommand(ctx, environ, args[1:], os.Stdout)
+	case "objectstore":
+		return objectstoreCommand(ctx, environ, args[1:], os.Stdout)
 	default:
 		return userCommand(ctx, environ, args[1:], os.Stdin, os.Stdout)
 	}

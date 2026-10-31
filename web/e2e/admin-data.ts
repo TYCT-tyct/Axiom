@@ -1,4 +1,5 @@
-import type { components } from "../packages/api/src/admin.gen.ts";
+import { long, nano, pad, range, type Schemas, siteId, tierId, usd, uuid } from "./admin-fixtures.ts";
+import { aMerchant, anOrder, aRefund } from "./admin-payments-data.ts";
 import type { AuthState } from "./mock.ts";
 import { accountId, authState, userId } from "./mock-auth.ts";
 
@@ -6,15 +7,24 @@ import { accountId, authState, userId } from "./mock-auth.ts";
 // this file compiling. Three sets: a usual platform, an empty one, and the worst realistic one (the longest values the
 // contract allows, the biggest amounts, the most rows), which the screenshots of the acceptance gate use.
 
-export type Schemas = components["schemas"];
+export type { Schemas } from "./admin-fixtures.ts";
+export { uuid } from "./admin-fixtures.ts";
 
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
+  logo: Schemas["SiteLogoView"];
   tiers: Schemas["TierRef"][];
   users: Schemas["UserSummary"][];
   accounts: Map<string, Schemas["AccountDetail"]>;
+  calls: Schemas["AdminCallSummary"][];
+  traces: Map<string, Schemas["AdminCallTrace"]>;
+  merchants: Schemas["Merchant"][];
+  orders: Schemas["PaymentOrder"][];
+  refunds: Schemas["PaymentRefund"][];
+  audit: Schemas["AuditEntry"][];
+  auditEntries: Map<string, Schemas["AuditEntry"]>;
   suppliers: Schemas["SupplierDetail"][];
   // how many times a supplier that is connecting has been read, to settle it after the first
   reads: Map<string, number>;
@@ -26,7 +36,11 @@ export type AdminState = AuthState & {
 
 const allPermissions = [
   "users.view",
+  "users.manage",
   "credits.grant",
+  "calls.search",
+  "calls.inspect",
+  "audit.view",
   "suppliers.view",
   "suppliers.manage",
   "catalog.view",
@@ -35,15 +49,6 @@ const allPermissions = [
   "pricing.manage",
   "sites.manage",
 ];
-
-const pad = (n: number, width = 26) => String(n).padStart(width, "0");
-export const uuid = (kind: number, n: number) => `${pad(kind, 8)}-0000-4000-8000-${pad(n, 12)}`;
-const tierId = (n: number) => `tier_${pad(n)}` as Schemas["TierId"];
-const siteId = `site_${pad(1)}` as Schemas["SiteId"];
-const usd = (units: string): Schemas["Money"] => ({ amount: `${units}000000000`, currency: "USD" });
-const nano = (amount: string): Schemas["Money"] => ({ amount, currency: "USD" });
-const range = (count: number) => Array.from({ length: count }, (_, i) => i + 1);
-const long = (text: string, length: number) => text.repeat(Math.ceil(length / text.length)).slice(0, length);
 
 const tiers: Schemas["TierRef"][] = [
   { id: tierId(1), name: "Standard" },
@@ -82,9 +87,87 @@ function anAccount(user: Schemas["UserSummary"], over: Partial<Schemas["AccountD
       spent_this_month: nano("3141592653"),
     },
     key_limits: { limits: {}, effective: { max_keys: 100, creations_per_hour: 50 } },
+    calls_suspended: user.status === "disabled",
+    sign_in_disabled: user.status === "disabled",
     created_at: user.created_at,
     ...over,
   } satisfies Schemas["AccountDetail"];
+}
+
+const callTime = (n: number) => new Date(Date.UTC(2026, 9, 30, 10, n % 60, n % 60)).toISOString();
+
+function aCall(n: number, user: Schemas["UserSummary"]): Schemas["AdminCallSummary"] {
+  const failed = n % 7 === 0;
+  return {
+    id: uuid(11, n),
+    site_id: siteId,
+    account_id: user.account_id,
+    at: callTime(n),
+    model: n % 5 === 0 ? "unmapped-model" : "claude-sonnet-4-5",
+    error_kind: failed ? "upstream_timeout" : "",
+    latency_ms: failed ? 30_000 : 1_200 + n,
+    price: nano(String(n * 1_500_000_000)),
+  };
+}
+
+function aTrace(call: Schemas["AdminCallSummary"], n: number): Schemas["AdminCallTrace"] {
+  const at = call.at ?? callTime(n);
+  const failed = Boolean(call.error_kind);
+  return {
+    summary: call,
+    cost: nano(String(n * 900_000_000)),
+    route: { requested_model: call.model, endpoint_id: uuid(6, 1), retries: 1, note: long("route ", 40) },
+    attempts: [
+      {
+        seq: 1,
+        endpoint_id: uuid(6, 1),
+        supplier_id: uuid(2, 1),
+        source_class: "primary",
+        egress: "direct",
+        outcome: failed ? "failed" : "committed",
+        error_kind: failed ? call.error_kind : "",
+        started_at: at,
+        finished_at: at,
+        first_token_ms: failed ? undefined : 420,
+      },
+      {
+        seq: 2,
+        endpoint_id: uuid(6, 2),
+        supplier_id: uuid(2, 2),
+        source_class: "fallback",
+        egress: "proxy",
+        outcome: "committed",
+        error_kind: "",
+        started_at: at,
+        finished_at: at,
+        first_token_ms: 610,
+      },
+    ],
+  };
+}
+
+function anAuditEntry(n: number, user: Schemas["UserSummary"]): Schemas["AuditEntry"] {
+  const rows = [
+    ["accounts", "account.tier_change", "account"],
+    ["billing", "credit.grant", "account"],
+    ["catalog", "model.update", "model"],
+  ] as const;
+  const [module, action, kind] = rows[n % rows.length] ?? rows[0];
+  return {
+    id: uuid(12, n),
+    actor_kind: "user",
+    actor_id: "admin@example.com",
+    request_id: uuid(11, n),
+    action,
+    module,
+    target_kind: kind,
+    target_id: kind === "model" ? `anthropic/model-${n}` : user.account_id,
+    reason: `Reviewed change ${n}`,
+    at: new Date(Date.UTC(2026, 9, 30, 11, n % 60, n % 60)).toISOString(),
+    site_id: siteId,
+    account_id: user.account_id,
+    detail: { before: "Standard", after: "Pro", amount: nano(String(n * 2_000_000_000)), attempt: n },
+  };
 }
 
 export function aSupplier(n: number, over: Partial<Schemas["Supplier"]> = {}): Schemas["Supplier"] {
@@ -272,9 +355,27 @@ function rules(): Schemas["PricingRule"][] {
   ];
 }
 
+function paymentData(people: Schemas["UserSummary"][]) {
+  const fallback = people[0] ?? aUser(1);
+  const orders = range(60).map((n) => anOrder(n, people[(n - 1) % Math.max(people.length, 1)] ?? fallback));
+  const refunds = range(3).map((n) =>
+    aRefund(n, orders[n - 1] ?? orders[0] ?? anOrder(1, fallback), people[n] ?? fallback),
+  );
+  for (const refund of refunds) {
+    const order = orders.find((candidate) => candidate.id === refund.order_id);
+    if (order) {
+      order.refunds = [...(order.refunds ?? []), refund];
+    }
+  }
+  return { merchants: [aMerchant()], orders, refunds };
+}
+
 export function usualState(): AdminState {
   const users = range(60).map((n) => aUser(n));
   const own = aUser(0, { email: "admin@example.com", mfa_enabled: true, tier: tiers[0] });
+  const people = [own, ...users];
+  const calls = range(60).map((n) => aCall(n, people[(n - 1) % people.length] ?? own));
+  const audit = range(60).map((n) => anAuditEntry(n, people[(n - 1) % people.length] ?? own));
   const state: AdminState = {
     ...authState(allPermissions),
     siteId,
@@ -289,9 +390,15 @@ export function usualState(): AdminState {
       },
     },
     keyLimits: { limits: { max_keys: 20 }, effective: { max_keys: 20, creations_per_hour: 50 } },
+    logo: {},
     tiers,
     users,
     accounts: new Map([own, ...users].map((user) => [user.account_id, anAccount(user)])),
+    calls,
+    traces: new Map(calls.map((call, i) => [call.id ?? uuid(11, i + 1), aTrace(call, i + 1)])),
+    ...paymentData(people),
+    audit,
+    auditEntries: new Map(audit.map((entry) => [entry.id ?? uuid(12, 1), entry])),
     suppliers: suppliers(),
     reads: new Map(),
     pending: pending(60),
@@ -305,13 +412,37 @@ export function usualState(): AdminState {
 }
 
 export function emptyState(): AdminState {
-  return { ...usualState(), users: [], suppliers: [], pending: [], authors: [], models: [], rules: [] };
+  return {
+    ...usualState(),
+    users: [],
+    calls: [],
+    traces: new Map(),
+    merchants: [],
+    orders: [],
+    refunds: [],
+    audit: [],
+    auditEntries: new Map(),
+    suppliers: [],
+    pending: [],
+    authors: [],
+    models: [],
+    rules: [],
+  };
 }
 
 // The longest values the contract allows, mixed over the rows: a 200-character supplier name, a 254-character email,
 // 182-character model slugs, the biggest amounts, and a lot of rows.
 export function worstState(): AdminState {
   const state = usualState();
+  worstUsers(state);
+  worstPayments(state);
+  worstCalls(state);
+  worstSuppliers(state);
+  worstCatalog(state);
+  return state;
+}
+
+function worstUsers(state: AdminState) {
   const email = `${long("bartholomew.fitzgerald-", 200)}@northwind-industries-holdings.example.com`;
   state.users = [aUser(1, { email }), aUser(2, { email: "J@x.io" }), ...range(150).map((n) => aUser(n + 2))];
   for (const user of state.users) {
@@ -330,6 +461,40 @@ export function worstState(): AdminState {
       }),
     );
   }
+}
+
+function worstPayments(state: AdminState) {
+  const people = state.users;
+  state.orders = range(150).map((n) =>
+    anOrder(n + 100, people[(n - 1) % people.length] ?? aUser(0), {
+      merchant_name: long("Merchant ", 100),
+      trade_no: long("trade-", 200),
+    }),
+  );
+  state.refunds = range(20).map((n) => {
+    const order = state.orders[(n - 1) % state.orders.length];
+    if (!order) {
+      return aRefund(n + 100, anOrder(n + 100, aUser(1)), aUser(1), long("The credits were not used. ", 1000));
+    }
+    return aRefund(n + 100, order, people[n % people.length] ?? aUser(0), long("The credits were not used. ", 1000));
+  });
+  for (const refund of state.refunds) {
+    const order = state.orders.find((candidate) => candidate.id === refund.order_id);
+    if (order) {
+      order.refunds = [...(order.refunds ?? []), refund];
+    }
+  }
+}
+
+function worstCalls(state: AdminState) {
+  const people = state.users;
+  state.calls = range(1_000).map((n) => aCall(n, people[(n - 1) % people.length] ?? aUser(0)));
+  state.traces = new Map(state.calls.map((call, i) => [call.id ?? uuid(11, i + 1), aTrace(call, i + 1)]));
+  state.audit = range(500).map((n) => anAuditEntry(n, people[(n - 1) % people.length] ?? aUser(0)));
+  state.auditEntries = new Map(state.audit.map((entry) => [entry.id ?? uuid(12, 1), entry]));
+}
+
+function worstSuppliers(state: AdminState) {
   state.suppliers = [
     aDetail(1, {
       name: long("Supplier with a name of the longest length ", 200),
@@ -337,7 +502,7 @@ export function worstState(): AdminState {
       upstream_account: long("ops-", 254),
       balance_native: "999999999999999999.999999999999999",
       status: "needs_attention",
-      status_reason: long("The supplier rejected the login. ", 600),
+      status_reason: long("The supplier rejected the login. ", 200),
     }),
     ...range(60).map((n) => aDetail(n + 1)),
   ];
@@ -358,11 +523,13 @@ export function worstState(): AdminState {
       })),
     ];
   }
+}
+
+function worstCatalog(state: AdminState) {
   const slug = `${long("a-vendor-with-a-long-name", 40).replace(/-$/, "a")}/${long("model-name-", 99)}@${long("v", 39)}`;
   state.models = [
     aModel(1, { slug: slug as Schemas["ModelSlug"], names: [{ name: long("alias-", 200), visibility: "internal" }] }),
     ...range(150).map((n) => (n === 2 ? aDraft(3) : aModel(n + 1))),
   ];
   state.pending = pending(150).map((row, i) => (i === 0 ? { ...row, upstream_name: long("up-", 200) } : row));
-  return state;
 }

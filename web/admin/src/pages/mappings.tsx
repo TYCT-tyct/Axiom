@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, LoadMore, useSession } from "@axiom/app";
-import { Button, DataState, EmptyState, PageHeader, Panel, SelectField, Table, Td, Th } from "@axiom/ui";
+import { Button, CheckField, DataState, EmptyState, PageHeader, Panel, SelectField, Table, Td, Th } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
@@ -122,6 +122,9 @@ function MapDialog({ pending, onClose }: { pending: Pending; onClose: () => void
       upstream_name: pending.upstream_name,
       model_id: values.model_id as AdminSchemas["Uuid"],
       group_id: values.scope === "supplier" ? undefined : pending.group_id,
+      // Only the format no adapter can report is offered here; the API takes the others. The projection unions the
+      // declaration with what the adapter finds, so a name that already serves chat does not lose it.
+      formats: values.completions ? ["completions"] : undefined,
     };
   };
   return (
@@ -141,6 +144,11 @@ function MapDialog({ pending, onClose }: { pending: Pending; onClose: () => void
             <option value="group">{t("mappings.dialog.scopeGroup", { group: pending.group_codename ?? "" })}</option>
             <option value="supplier">{t("mappings.dialog.scopeSupplier")}</option>
           </SelectField>
+          <CheckField
+            name="completions"
+            label={t("mappings.dialog.completions")}
+            hint={t("mappings.dialog.completionsHint")}
+          />
         </>
       )}
       read={read}

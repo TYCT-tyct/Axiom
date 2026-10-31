@@ -18,12 +18,12 @@ type responsesStream struct {
 	seq     int64 // the last sequence_number, which the failure we write follows
 	created bool  // response.created came, so the failure is response.failed
 	// The event being read.
-	index                  int64 // its output_index, or -1
-	itemBytes              int64 // the raw bytes of its item
-	webSearch, hasResponse bool
-	report                 *openAIUsage
-	reportErr              error
-	topReport              []byte // borrowed from this event; only failures may use it when response.usage is absent
+	index                                int64 // its output_index, or -1
+	itemBytes                            int64 // the raw bytes of its item
+	webSearch, functionCall, hasResponse bool
+	report                               *openAIUsage
+	reportErr                            error
+	topReport                            []byte // borrowed from this event; only failures may use it when response.usage is absent
 	// items is, for each output item added so far, the content its deltas carried: an item that completes counts only
 	// what it adds to them, so the bound never counts the same text twice.
 	items []int64
@@ -73,7 +73,8 @@ var (
 
 func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	s.start(data)
-	s.index, s.itemBytes, s.webSearch, s.hasResponse, s.report, s.reportErr = -1, 0, false, false, nil, nil
+	s.index, s.itemBytes, s.webSearch, s.functionCall, s.hasResponse, s.report, s.reportErr =
+		-1, 0, false, false, false, nil, nil
 	s.topReport = nil
 	if err := walk(&s.reader, s, responsesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
@@ -86,7 +87,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 		// an error event ends the stream, so a usage object it carries is the upstream's last word on the attempt: it
 		// is taken here, before the error ends the reading (docs/domains/billing.md「用量来源与暂估」)
 		if s.report != nil {
-			s.meter(m, true)
+			meterUsage(m, s.report, s.reportErr, s.tier, true)
 		}
 		return event{}, s.errorEvent(s.e.name)
 	case "response.created":
@@ -99,7 +100,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 		return event{}, err
 	}
 	if s.report != nil {
-		s.meter(m, false)
+		meterUsage(m, s.report, s.reportErr, s.tier, false)
 		s.report = nil
 	}
 	return s.clientEvent()
@@ -125,21 +126,31 @@ func (s *responsesStream) settle() error {
 			s.items[s.index] += s.e.content
 		}
 	case s.e.name == "response.output_item.added":
-		if s.index == int64(len(s.items)) { // an index out of turn is not tracked: its item counts in full when done
-			var err error
-			if s.items, err = sse.Grow(s.items, 1, s.charge); err != nil {
-				return err
-			}
-			s.items = append(s.items, 0)
-		}
-		if s.webSearch {
-			s.e.searches = 1
-		}
+		return s.itemAdded()
 	case s.e.name == "response.output_item.done":
 		s.e.role, s.e.content = content, s.itemBytes
 		if 0 <= s.index && s.index < int64(len(s.items)) {
 			s.e.content = max(0, s.itemBytes-s.items[s.index])
 		}
+	}
+	return nil
+}
+
+// itemAdded gives an item that starts in turn its slot for the deltas that follow, so the item when done counts only
+// what it adds to them, and marks a search or a function call as the client tool call the estimate counts.
+func (s *responsesStream) itemAdded() error {
+	if s.index == int64(len(s.items)) { // an index out of turn is not tracked: its item counts in full when done
+		var err error
+		if s.items, err = sse.Grow(s.items, 1, s.charge); err != nil {
+			return err
+		}
+		s.items = append(s.items, 0)
+	}
+	if s.webSearch {
+		s.e.searches = 1
+	}
+	if s.functionCall {
+		s.e.toolCalls = 1
 	}
 	return nil
 }
@@ -207,9 +218,13 @@ func (s *responsesStream) item() error {
 }
 
 func (s *responsesStream) itemType() error {
-	is, err := s.is("web_search_call")
-	s.webSearch = is
-	return err
+	v, err := s.str()
+	if err != nil {
+		return err
+	}
+	s.webSearch = string(v) == "web_search_call"
+	s.functionCall = string(v) == "function_call"
+	return nil
 }
 
 func (s *responsesStream) usage() error {
@@ -241,21 +256,6 @@ func (s *responsesStream) topUsage() error {
 		s.topReport = s.e.data[to-len(v) : to]
 	}
 	return nil
-}
-
-// meter maps the usage just read onto billing items. final is set for the usage of the event that ended the stream:
-// what it states is charged as it is rather than estimated (meter.take).
-func (s *responsesStream) meter(m *meter, final bool) {
-	if s.reportErr != nil {
-		m.invalid = fmt.Errorf("usage: %w", s.reportErr)
-		return
-	}
-	r, err := s.report.items(s.tier)
-	if err != nil {
-		m.invalid = err
-		return
-	}
-	m.take(r, nil, final)
 }
 
 // failure appends response.failed, with our error type at its top level (docs/domains/gateway.md「错误」), or, before

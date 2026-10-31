@@ -24,11 +24,11 @@ type memory struct {
 	policy    string
 }
 
-// watch is the client's own work: the heartbeat and the memory every beatEvery, and the clock when its turn comes.
+// watch is the client's own work: the heartbeat and the memory every BeatEvery, and the clock when its turn comes.
 // Nothing here stops the node, because the shared state is not a dependency: a failure is logged and retried, and the
 // breaker has already counted it (README「配置与启动」).
 func (c *Client) watch(ctx context.Context) {
-	ticker := time.NewTicker(beatEvery)
+	ticker := time.NewTicker(BeatEvery)
 	defer ticker.Stop()
 	var over since
 	// The cadence of the clock check is real elapsed time, not the node's clock, which is what is being checked (and a

@@ -417,14 +417,29 @@ type recordingLedger struct {
 	recorded bool
 }
 
-func (l *recordingLedger) Settle(ctx context.Context, h *billing.Hold, o billing.Outcome) (billing.Final, error) {
+func (l *recordingLedger) SettleIn(ctx context.Context, tx pg.Tx, h *billing.Hold, o billing.Outcome) (billing.Final, func(), error) {
 	l.mu.Lock()
 	l.given, l.recorded = o, true
 	l.mu.Unlock()
 	if l.refuse != nil {
-		return billing.Final{}, l.refuse
+		return billing.Final{}, nil, l.refuse
 	}
-	return l.Billing.Settle(ctx, h, o)
+	return l.Billing.SettleIn(ctx, tx, h, o)
+}
+
+// SettleBatch records the batch's first outcome and refuses it when the ledger was built to refuse, so the batch path
+// sees the same fault as SettleIn.
+func (l *recordingLedger) SettleBatch(ctx context.Context, scope pg.Scope, items []billing.Settlement) ([]billing.Final, []func(), error) {
+	l.mu.Lock()
+	if len(items) > 0 {
+		l.given, l.recorded = items[0].Outcome, true
+	}
+	refuse := l.refuse
+	l.mu.Unlock()
+	if refuse != nil {
+		return nil, nil, &billing.BatchWorkError{Index: 0, Err: refuse}
+	}
+	return l.Billing.SettleBatch(ctx, scope, items)
 }
 
 // outcome is the outcome the settlement was given, and whether there was one.

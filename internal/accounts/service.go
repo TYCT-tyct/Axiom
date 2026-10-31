@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync/atomic"
 	"time"
 	"uuid"
@@ -12,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	"golang.org/x/sync/singleflight"
 
+	"axiom/internal/platform/egress"
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -27,10 +29,12 @@ var ErrUnknownKey = errors.New("accounts: unknown API key")
 type Config struct {
 	// Recovery queues reset requests and credential-change notices; nil disables these flows.
 	Recovery *PasswordRecovery
-	Platform pg.Scope         // the platform scope, for the snapshot; only cmd/ can build it
-	Hashes   *secret.MACKeys  // keys API keys are hashed with: at most 2 versions, the newest current
-	Keyring  *secret.Keyring  // seals users' TOTP secrets
-	Now      func() time.Time // the clock; time.Now when nil
+	// Registration queues open-registration verification links; nil disables open registration.
+	Registration *Registration
+	Platform     pg.Scope         // the platform scope, for the snapshot; only cmd/ can build it
+	Hashes       *secret.MACKeys  // keys API keys are hashed with: at most 2 versions, the newest current
+	Keyring      *secret.Keyring  // seals users' TOTP secrets
+	Now          func() time.Time // the clock; time.Now when nil
 	// LookupSlot, when set, is asked for a slot before each key lookup or management request, and the slot is given back
 	// when that work ends. The lookup is shared by every request waiting for the key and outlives the one that started
 	// it, so it is the lookup that holds the slot, once. The gateway passes a connection of its admission class. Nil
@@ -51,21 +55,27 @@ type Config struct {
 	LoginKey secret.LoginKey
 	// OnAccountOpened runs in the transaction of every account a registration opens; nil does nothing.
 	OnAccountOpened OpenedFunc
+	// Egress makes the provider requests of third-party sign-in; nil uses the production exit. Tests pass a client
+	// that reaches their fake provider.
+	Egress *egress.Client
 }
 
 // Service is the module. One per node; several share a database.
 type Service struct {
-	db       *pg.DB
-	platform pg.Scope
-	hashes   *secret.MACKeys
-	keyring  *secret.Keyring
-	versions []uint32 // of hashes, newest first
-	now      func() time.Time
-	opened   OpenedFunc
-	recovery *PasswordRecovery
-	slot     func(ctx context.Context) (func(), error) // the lookups' slot; never nil
-	gated    bool                                      // whether Config.LookupSlot was set
-	misses   metric.Int64Counter                       // key lookups that had to ask the database
+	db           *pg.DB
+	platform     pg.Scope
+	hashes       *secret.MACKeys
+	keyring      *secret.Keyring
+	versions     []uint32 // of hashes, newest first
+	now          func() time.Time
+	opened       OpenedFunc
+	recovery     *PasswordRecovery
+	registration *Registration
+	exit         *egress.Client
+	providers    map[string]oauthProvider
+	slot         func(ctx context.Context) (func(), error) // the lookups' slot; never nil
+	gated        bool                                      // whether Config.LookupSlot was set
+	misses       metric.Int64Counter                       // key lookups that had to ask the database
 
 	snapshot atomic.Pointer[snapshot]
 	// Key identities never change once made, so a hit needs no database. A miss of a key that does not exist is
@@ -114,8 +124,13 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 	if err != nil {
 		panic(err) // the instrument name is a constant
 	}
+	exit := cfg.Egress
+	if exit == nil {
+		exit = egress.NewDirect()
+	}
 	return &Service{
-		recovery: cfg.Recovery, misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
+		recovery: cfg.Recovery, registration: cfg.Registration, misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
+		exit: exit, providers: maps.Clone(oauthProviders),
 		slot: slot, gated: cfg.LookupSlot != nil,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
 		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),

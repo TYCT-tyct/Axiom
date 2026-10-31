@@ -392,7 +392,9 @@ type runningNode struct {
 // follow the defaults and so win over them.
 func (w *callWorld) start(extra ...string) runningNode {
 	w.t.Helper()
-	environ := append(slices.Clone(w.environ), "AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
+	// The fake upstream numbers every generation it answers, so model verification, which would take numbers of its
+	// own, stays off here; its adapter and the loop have their own tests.
+	environ := append(slices.Clone(w.environ), "AXIOM_MODEL_VERIFICATION=off", "AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=10s", "AXIOM_MASTER_KEY_FILE="+keyFile(w.t, 'm'), "AXIOM_KEY_HASH_FILE="+keyFile(w.t, 'h'),
 		"AXIOM_IDENTITY_KEY_FILE="+keyFile(w.t, 'i'))
 	// The story has two nodes of one deployment (checkSecondNode), so this is one: N is 2, and the nodes share a Valkey
@@ -410,6 +412,10 @@ func (w *callWorld) start(extra ...string) runningNode {
 	go func() {
 		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback, startRecorder, nil)
 	}()
+	budget := awaitRecord(w.t, logs, done, "database connection budget")
+	if budget.Nodes != 2 {
+		w.t.Errorf("startup budget nodes = %d, want the deployment's 2", budget.Nodes)
+	}
 	n := runningNode{addresses: servingAddrs(w.t, logs, done), finished: make(chan struct{})}
 	var result error
 	go func() { result = <-done; close(n.finished) }()

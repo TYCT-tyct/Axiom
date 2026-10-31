@@ -17,14 +17,15 @@ import (
 // bank is a test database with one account whose balance and floor the test chooses, and a billing whose holder is
 // alive. Its quotes are made exact: input at one billionth a token, no output, so TextBytes is the amount in billionths.
 type bank struct {
-	t        testing.TB
-	db       pgtest.Database
-	app      *pg.DB
-	platform pg.Scope
-	billing  *Billing
-	admitted Admitted
-	supplies *supplies
-	exact    Quotable
+	t         testing.TB
+	db        pgtest.Database
+	app       *pg.DB
+	platform  pg.Scope
+	billing   *Billing
+	admitted  Admitted
+	supplies  *supplies
+	exact     Quotable
+	corrected correctionStats
 }
 
 // exactQuote is a route entry priced in billionths: a token of input 1, no output, so TextBytes is the amount in
@@ -91,7 +92,7 @@ func (b *bank) count(query string) int64 {
 func (b *bank) reserve(a Admitted, amount int64) (*Hold, error) {
 	var h *Hold
 	err := b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: amount}, []Quotable{b.exact})
+		h, err = b.billing.reserveOne(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: amount}, []Quotable{b.exact})
 		return err
 	})
 	return h, err
@@ -122,6 +123,8 @@ func (b *bank) consistent() {
 // TestReserveStorm: many reservations at once never take the account past its floor, and each refusal was for an
 // amount above what was left even after every reservation that succeeded.
 func TestReserveStorm(t *testing.T) {
+	t.Parallel()
+
 	daily := &Limit{Amount: 1500, Reset: ResetDaily}
 	for _, tc := range []struct {
 		name     string
@@ -175,7 +178,7 @@ func (b *bank) storm(a Admitted, source Source) (total int64, refused []int64) {
 func refusedBy(t testing.TB, err error, source Source) bool {
 	var short *Insufficient
 	if err != nil && (!errors.As(err, &short) || short.Source != source) {
-		t.Errorf("Reserve: %v", err)
+		t.Errorf("reserveOne: %v", err)
 	}
 	return err != nil
 }
@@ -190,6 +193,8 @@ func boolInt(b bool) int64 {
 // TestReserveSeesCommitsBeforeItsLock: B starts while A holds the account's lock; once A commits, B's counters
 // include A's reservation, read by a statement that starts after B's lock is granted, so the key limit holds.
 func TestReserveSeesCommitsBeforeItsLock(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{})
 	a := b.admitted
 	a.KeyLimit = &Limit{Amount: 1000, Reset: ResetNever}
@@ -215,7 +220,7 @@ func (b *bank) holdOpen(a Admitted, id uuid.UUID, amount int64) (release chan st
 	release, done, held := make(chan struct{}), make(chan error, 1), make(chan struct{})
 	go func() {
 		done <- b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) error {
-			_, _, err := b.billing.Reserve(b.t.Context(), tx, a, id, Demand{TextBytes: amount}, []Quotable{b.exact})
+			_, err := b.billing.reserveOne(b.t.Context(), tx, a, id, Demand{TextBytes: amount}, []Quotable{b.exact})
 			close(held)
 			<-release
 			return err
@@ -262,6 +267,8 @@ func (b *bank) superCount(query string) int64 {
 // number; a target below the amount keeps it; an unaffordable one is refused and changes nothing; and an extension of a
 // released reservation is terminated.
 func TestExtend(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, Config{})
 	ctx := t.Context()
 	h, err := b.reserve(b.admitted, 100)
@@ -305,6 +312,8 @@ func TestExtend(t *testing.T) {
 // TestExtendRace: extensions of several requests race for what is left, and the same segment is sent twice at once;
 // the account never passes its floor and each segment counts once.
 func TestExtendRace(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, Config{})
 	var holds []*Hold
 	for range 5 {
@@ -336,6 +345,8 @@ func TestExtendRace(t *testing.T) {
 // TestSettleOrphan*: whatever became of an admission whose COMMIT went unacknowledged, its reservation ends released:
 // committed, it is released; rolled back, a tombstone keeps the request ID; still open, the orphan waits for it.
 func TestSettleOrphanCommitted(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	b := newBank(t, 1000, 0, Config{})
 	h, err := b.reserve(b.admitted, 400)
@@ -354,6 +365,8 @@ func TestSettleOrphanCommitted(t *testing.T) {
 }
 
 func TestSettleOrphanRolledBack(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	b := newBank(t, 1000, 0, Config{})
 	id := uuid.NewV7()
@@ -361,7 +374,7 @@ func TestSettleOrphanRolledBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := b.app.Tx(ctx, b.admitted.Scope, func(tx pg.Tx) error {
-		_, _, err := b.billing.Reserve(ctx, tx, b.admitted, id, Demand{TextBytes: 1}, []Quotable{b.exact})
+		_, err := b.billing.reserveOne(ctx, tx, b.admitted, id, Demand{TextBytes: 1}, []Quotable{b.exact})
 		return err
 	})
 	if err == nil || b.count("SELECT count(*) FROM billing.reservations WHERE state = 'released' AND segment = 0") != 1 {
@@ -370,6 +383,8 @@ func TestSettleOrphanRolledBack(t *testing.T) {
 }
 
 func TestSettleOrphanStillOpen(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	b := newBank(t, 1000, 0, Config{})
 	id := uuid.NewV7()
@@ -391,16 +406,21 @@ func TestSettleOrphanStillOpen(t *testing.T) {
 }
 
 // TestReap: a holder reaped while a write it fenced is in flight waits for that write, which commits and stays for
-// cleanup; after the reap, its reservations and extensions are refused and its heartbeat reports ErrReaped.
+// cleanup; after the reap, its reservations and extensions are refused and its heartbeat reports ErrReaped. The holder
+// is expired by hand rather than by a short TTL: the TTL also sets the heartbeat, and the reap gets half a beat to wait
+// for the write, so a TTL short enough to expire quickly would leave too little of it to observe the wait. The update
+// touches no key column, so it does not conflict with the write's fence.
 func TestReap(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
-	b := newBank(t, 1000, 0, Config{HolderTTL: time.Second, ReapGrace: time.Millisecond, Lifetime: time.Hour})
+	b := newBank(t, 1000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Millisecond, Lifetime: time.Hour})
 	h, err := b.reserve(b.admitted, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	release, written := b.holdOpen(b.admitted, uuid.NewV7(), 100)
-	b.waitFor("SELECT count(*) FROM billing.holders WHERE expires_at < clock_timestamp()", 1)
+	b.sql("UPDATE billing.holders SET expires_at = clock_timestamp() - interval '1 second' WHERE id = '" + b.billing.holder.String() + "'")
 	reaped := make(chan int, 1)
 	go func() {
 		n, err := b.billing.Reap(ctx)
@@ -421,7 +441,7 @@ func TestReap(t *testing.T) {
 		t.Errorf("%d pending reservations left for cleanup, want 2", n)
 	}
 	if _, err := b.reserve(b.admitted, 1); !errors.Is(err, ErrTerminated) {
-		t.Errorf("Reserve after the reap: %v, want ErrTerminated", err)
+		t.Errorf("reserveOne after the reap: %v, want ErrTerminated", err)
 	}
 	if err := b.billing.Extend(ctx, h, ExtendRequest{Seq: 2, Target: platform.AmountExact(200)}); !errors.Is(err, ErrTerminated) {
 		t.Errorf("Extend after the reap: %v, want ErrTerminated", err)
@@ -432,28 +452,32 @@ func TestReap(t *testing.T) {
 	// A reaped holder stays fenced even if its expiry lies ahead again, as after the database's clock goes back.
 	b.sql("UPDATE billing.holders SET expires_at = clock_timestamp() + interval '1 hour'")
 	if _, err := b.reserve(b.admitted, 1); !errors.Is(err, ErrTerminated) {
-		t.Errorf("Reserve by a reaped holder unexpired: %v, want ErrTerminated", err)
+		t.Errorf("reserveOne by a reaped holder unexpired: %v, want ErrTerminated", err)
 	}
 }
 
 // TestHeartbeat: a heartbeat keeps a holder whose time ran out alive while it is not reaped, so a database outage
 // shorter than the grace costs nothing.
 func TestHeartbeat(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1000, 0, Config{HolderTTL: time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
 	b.waitFor("SELECT count(*) FROM billing.holders WHERE expires_at < clock_timestamp()", 1)
 	if _, err := b.reserve(b.admitted, 1); !errors.Is(err, ErrTerminated) {
-		t.Fatalf("Reserve with the holder expired: %v, want ErrTerminated", err)
+		t.Fatalf("reserveOne with the holder expired: %v, want ErrTerminated", err)
 	}
 	if err := b.billing.Heartbeat(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.reserve(b.admitted, 1); err != nil {
-		t.Errorf("Reserve after the heartbeat: %v", err)
+		t.Errorf("reserveOne after the heartbeat: %v", err)
 	}
 }
 
 // TestHolderPolicy: an account's transaction locks a holder row for its fence but cannot change it.
 func TestHolderPolicy(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
 		if err := b.billing.fence(t.Context(), tx); err != nil {

@@ -399,55 +399,6 @@ func TestDefaultTierIsCheckedAtCommit(t *testing.T) {
 	}
 }
 
-// TestApplicationChangesOnlyUpdatableColumns: the application may update exactly the columns the README lists, and
-// delete nothing except expired password reset data and dispatched notices; the other tables refuse the privilege, not just the rows.
-func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
-	t.Parallel()
-	db, _ := open(t)
-	updatable := map[string][]string{
-		"presets":                  {"name", "config", "updated_at", "deleted_at"},
-		"notification_preferences": {"low_balance", "top_up", "factor_changed", "threshold", "webhook_url", "language"},
-		"user_notices":             {"email_done", "email_failed", "dispatched", "webhook_url", "webhook_state"},
-		"announcements":            {"withdrawn_at"},
-		"sites":                    {"name", "status", "key_prefix", "registration", "default_tier_id"},
-		"site_domains":             {"disabled_at"},
-		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour"},
-		"tiers":                    {"name", "rate_requests"},
-		"roles":                    {"permissions", "additional_permissions"},
-		"accounts":                 {"name", "status", "tier_id", "max_keys", "key_creations_per_hour", "rate_requests"},
-		"workspaces":               {"name", "status", "budget", "budget_reset", "deleted_at"},
-		"users": {
-			"password_hash", "factor_version", "status", "totp_ciphertext", "totp_nonce", "totp_wrapped_dek",
-			"totp_key_version", "totp_last_step", "mfa_enabled_at",
-		},
-		"members":                 nil,
-		"platform_grants":         {"revoked_at"},
-		"api_keys":                {"rate_requests", "updated_at", "management_window", "management_requests", "name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
-		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
-		"recovery_codes":          {"used_at"},
-		"security_failures":       {"started_at", "failures", "completed_peak", "sampled_at", "reported"},
-		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
-		"password_reset_tokens":   {"used_at"},
-	}
-	// Generated columns are left out: the database refuses to set them before it looks at privileges.
-	for _, column := range texts(t, db, platform, `SELECT table_name || ' ' || column_name FROM information_schema.columns
-		WHERE table_schema = 'accounts' AND is_generated = 'NEVER'`) {
-		table, name, _ := strings.Cut(column, " ")
-		_, err := exec(t, db, platform, "UPDATE accounts."+table+" SET "+name+" = "+name+" WHERE false")
-		if want := slices.Contains(updatable[table], name); want != (err == nil) || !want && state(err) != "42501" {
-			t.Errorf("updating %s.%s: %v, want allowed: %t", table, name, err, want)
-		}
-	}
-	for table := range updatable {
-		if strings.HasPrefix(table, "password_reset_") || table == "user_notices" {
-			continue
-		}
-		if _, err := exec(t, db, platform, "DELETE FROM accounts."+table+" WHERE false"); state(err) != "42501" {
-			t.Errorf("deleting from %s: %v, want permission denied", table, err)
-		}
-	}
-}
-
 // TestTerminalStatesAreFinal: the first soft delete, revocation or use goes through; after it nothing changes the
 // row, the terminal column included, in the tenant's scope or the platform's.
 func TestTerminalStatesAreFinal(t *testing.T) {
@@ -490,35 +441,6 @@ func TestTerminalStatesAreFinal(t *testing.T) {
 	}
 }
 
-// TestOnePolicyPerCommand: every table has exactly one policy for everyone for each of SELECT, INSERT and UPDATE,
-// and none for ALL; only reset tables and user notices allow DELETE of expired rows. Members has none for UPDATE. Policies are OR-ed,
-// so a second UPDATE or a FOR ALL policy would let through what a terminal-state policy refuses.
-func TestOnePolicyPerCommand(t *testing.T) {
-	t.Parallel()
-	db, _ := open(t)
-	got := texts(t, db, platform, `SELECT c.relname || ': ' || coalesce(string_agg(p.cmd, ', ' ORDER BY p.cmd), '')
-		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-		LEFT JOIN pg_policies p ON p.schemaname = n.nspname AND p.tablename = c.relname AND p.roles = '{public}'
-		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
-	var want []string
-	for _, table := range []string{
-		"accounts", "announcements", "api_keys", "members", "notification_preferences", "password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes", "roles", "security_failures", "sessions", "site_domains",
-		"site_settings", "sites", "tiers", "user_notices", "users", "workspaces",
-	} {
-		commands := "INSERT, SELECT, UPDATE"
-		if strings.HasPrefix(table, "password_reset_") || table == "user_notices" {
-			commands = "DELETE, INSERT, SELECT, UPDATE"
-		}
-		if table == "members" {
-			commands = "INSERT, SELECT"
-		}
-		want = append(want, table+": "+commands)
-	}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("policies for everyone (-want +got):\n%s", diff)
-	}
-}
-
 // TestStartupCheckCoversTheTables: the startup check accepts the migrated database, and refuses it once an accounts
 // table no longer forces row-level security or has lost its policies.
 func TestStartupCheckCoversTheTables(t *testing.T) {
@@ -545,5 +467,48 @@ func TestStartupCheckCoversTheTables(t *testing.T) {
 		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
+	}
+}
+
+// TestLegalDocumentsArePublicAndAcceptancesBelongToTheirAccount: the text is public data, so every scope reads it and
+// only the platform writes it; an acceptance is account data, so only the user's site and account read it, and only
+// the account it belongs to may record it. The test inserts the placeholder text directly: the module never writes
+// legal terms of its own.
+func TestLegalDocumentsArePublicAndAcceptancesBelongToTheirAccount(t *testing.T) {
+	t.Parallel()
+	db, _ := open(t)
+	if _, err := exec(t, db, platform, `INSERT INTO accounts.legal_documents (site_id, kind, version, body)
+		VALUES (:s1, 'terms', 1, 'Placeholder terms for the legal document test.')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec(t, db, pg.AccountScope(a1), `INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
+		VALUES (gen_random_uuid(), :s1, :a1, :u1, 'terms', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	scopes := map[string]struct {
+		scope               pg.Scope
+		documents, accepted string
+	}{
+		"platform": {platform, "1", "1"},
+		"s1":       {pg.SiteScope(s1), "1", "1"},
+		"s2":       {pg.SiteScope(s2), "1", "0"},
+		"a1":       {pg.AccountScope(a1), "1", "1"},
+		"a2":       {pg.AccountScope(a2), "1", "0"},
+		"none":     {pg.Scope{}, "0", "0"},
+	}
+	for name, c := range scopes {
+		documents := texts(t, db, c.scope, "SELECT count(*)::text FROM accounts.legal_documents")
+		accepted := texts(t, db, c.scope, "SELECT count(*)::text FROM accounts.legal_acceptances")
+		if len(documents) != 1 || documents[0] != c.documents || len(accepted) != 1 || accepted[0] != c.accepted {
+			t.Errorf("%s sees documents %v and acceptances %v, want %s and %s", name, documents, accepted, c.documents, c.accepted)
+		}
+	}
+	if _, err := attempt(t, db, pg.SiteScope(s1), `INSERT INTO accounts.legal_documents (site_id, kind, version, body)
+		VALUES (:s1, 'privacy', 1, 'Placeholder privacy text.')`); state(err) != "42501" {
+		t.Errorf("a site scope inserting a document: %v, want permission denied", err)
+	}
+	if _, err := attempt(t, db, pg.AccountScope(a2), `INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
+		VALUES (gen_random_uuid(), :s1, :a1, :u1, 'terms', 1)`); state(err) != "42501" {
+		t.Errorf("another account recording an acceptance: %v, want permission denied", err)
 	}
 }

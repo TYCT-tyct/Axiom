@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,46 @@ func TestAdminSystemSettings(t *testing.T) {
 		t.Fatal("replay duplicated audit")
 	}
 	expectAdmin(t, "bad registration", f.change(s, http.MethodPut, path, strings.Replace(body, "closed", "open", 1), newKey()), 400, "")
-	payments := path + "/payments"
+
+	// Changing only the name keeps the registration mode, including open, which this operation cannot set itself.
+	f.run(`UPDATE accounts.sites SET registration = 'open' WHERE is_main`)
+	rec = f.change(s, http.MethodPut, path, `{"settings":{"name":"Still open"},"reason":"rename"}`, newKey())
+	expectAdmin(t, "name only", rec, 200, "")
+	checkSystemSettings(t, rec, "Still open", "open")
+}
+
+// checkSystemSettings reads a response and checks the name, the registration mode it kept and the name-only capability.
+func checkSystemSettings(t *testing.T, rec *httptest.ResponseRecorder, name, registration string) {
+	t.Helper()
+	var system adminapi.SystemSettings
+	decode(t, rec, &system)
+	if system.Name == nil || *system.Name != name || system.Registration == nil || string(*system.Registration) != registration {
+		t.Fatalf("system settings %s", rec.Body)
+	}
+	if system.NameEditable == nil || !*system.NameEditable {
+		t.Fatalf("a node that accepts name-only saves does not say so: %s", rec.Body)
+	}
+}
+
+// TestAdminSystemSettingsNameOnlyKeepsConcurrentRegistration: another administrator closes registration after this form
+// was filled. A name-only save must not put the mode read with that form back; the site row lock reads and writes the
+// current mode in one turn.
+func TestAdminSystemSettingsNameOnlyKeepsConcurrentRegistration(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	path := "/sites/" + f.siteID() + "/system-settings"
+	f.run(`UPDATE accounts.sites SET registration = 'closed' WHERE is_main`)
+	rec := f.change(s, http.MethodPut, path, `{"settings":{"name":"Closed meanwhile"},"reason":"rename"}`, newKey())
+	expectAdmin(t, "name after a concurrent close", rec, 200, "")
+	checkSystemSettings(t, rec, "Closed meanwhile", "closed")
+}
+
+func TestAdminPaymentSettings(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	payments := "/sites/" + f.siteID() + "/system-settings/payments"
 	for _, tc := range []struct {
 		body string
 		code int
@@ -52,7 +92,7 @@ func TestAdminSystemSettings(t *testing.T) {
 		expectAdmin(t, "payment settings", f.change(s, http.MethodPut, payments, tc.body, newKey()), tc.code, "")
 	}
 	checkExactPaymentAudit(t, f, s)
-	rec = f.do(http.MethodGet, payments, "", as(s))
+	rec := f.do(http.MethodGet, payments, "", as(s))
 	expectAdmin(t, "payment read", rec, 200, "")
 	var p adminapi.PaymentSettings
 	decode(t, rec, &p)
@@ -168,5 +208,41 @@ func TestSMTPDestinationBoundary(t *testing.T) {
 	requestID := rec.Header().Get("X-Request-ID")
 	if requestID == "" || !strings.Contains(logs, "destination denied") || !strings.Contains(logs, requestID) || strings.Contains(logs, "private-recipient@example.com") {
 		t.Fatal("missing or unsafe SMTP diagnostic")
+	}
+}
+
+func TestAdminSearchSettings(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	path := "/settings/search"
+	body := `{"settings":{"url":"https://8.8.8.8","key":"search-test-value"},"reason":"configure"}`
+	rec := f.change(s, http.MethodPut, path, body, newKey())
+	expectAdmin(t, "save search", rec, 200, "")
+	if strings.Contains(rec.Body.String(), "search-test-value") {
+		t.Fatal("key in response")
+	}
+	var got adminapi.SearchSettings
+	decode(t, rec, &got)
+	if got.HasKey == nil || !*got.HasKey || got.RestartRequired == nil || !*got.RestartRequired ||
+		got.Source == nil || *got.Source != "database" {
+		t.Fatalf("missing metadata: %+v", got)
+	}
+	body = strings.Replace(body, `,"key":"search-test-value"`, "", 1)
+	expectAdmin(t, "retain key", f.change(s, http.MethodPut, path, body, newKey()), 200, "")
+	expectAdmin(t, "destination change", f.change(s, http.MethodPut, path, strings.Replace(body, "8.8.8.8", "8.8.4.4", 1), newKey()), 400, "")
+	rec = f.do(http.MethodGet, path, "", as(s))
+	expectAdmin(t, "read search", rec, 200, "")
+	if !strings.Contains(rec.Body.String(), "8.8.8.8") || strings.Contains(rec.Body.String(), "search-test-value") {
+		t.Fatal(rec.Body.String())
+	}
+	if strings.Contains(f.text("SELECT detail::text FROM platform.audit_log WHERE action='search_config.update' LIMIT 1"), "search-test-value") {
+		t.Fatal("secret in audit")
+	}
+	expectAdmin(t, "disable", f.change(s, http.MethodPut, path, `{"settings":{"url":""},"reason":"disable"}`, newKey()), 200, "")
+	rec = f.change(s, http.MethodPost, path+"/tests", `{"reason":"probe"}`, newKey())
+	expectAdmin(t, "test disabled", rec, 200, "")
+	if !strings.Contains(rec.Body.String(), "disabled") {
+		t.Fatal(rec.Body.String())
 	}
 }

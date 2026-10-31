@@ -226,7 +226,7 @@ func TestMissingOwnerDoesNotSupplyBreakerEvidence(t *testing.T) {
 	if at, _ := e.Routing(t0); !at.IsZero() {
 		t.Fatal("missing source was treated as independent failure evidence")
 	}
-	if m.Measured(id, t0).Health > .1 {
+	if measured(m, id, t0).Health > .1 {
 		t.Fatal("missing source stopped health measurements")
 	}
 }

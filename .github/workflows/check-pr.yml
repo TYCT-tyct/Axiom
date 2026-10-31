@@ -1,0 +1,34 @@
+# The pr module of project-workflow: the PR's title, its description and the acceptance boxes of the issues it closes.
+# Managed: changed only by upgrades, except Dependabot's action-version bumps. The job's name is the check the ruleset
+# protecting main requires (set by the skill's manage.py protect); keep it.
+name: check-pr
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened] # edited: a changed title or description is checked again
+
+# A newer push or edit cancels the PR's older run: only the latest head and description count
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr:
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.RUNS_ON || '"ubuntu-latest"') }}
+    permissions:
+      contents: read
+      issues: read # the issues the PR closes, for their acceptance boxes
+      pull-requests: read # the PR's closing references, which GitHub resolves from its keywords and sidebar links
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 scripts/workflow/check_pr.py describe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}

@@ -241,8 +241,9 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 		{"all taken", options{entries: 2, noSlot: []int{1, 2}}, 429, "1", routing.Full, map[string]int64{"credentials_busy": 1}},
 		{"an endpoint the suppliers do not hold", options{entries: 1, mutate: func(c *Call) { c.Plan.Entries[0].Endpoint = ep(77) }}, 503, "1", routing.Full, nil},
 		{"no endpoint can express it", options{entries: 2, mutate: func(c *Call) {
+			c.Compact = true // the compact endpoint takes only the request's own format
 			for i := range c.Plan.Entries {
-				c.Plan.Entries[i].Target.Format = protocol.Responses // Messages is not converted to Responses
+				c.Plan.Entries[i].Target.Format = protocol.Responses
 			}
 		}}, 400, "", routing.FormatNotServed, nil},
 	}
@@ -288,7 +289,10 @@ func TestAnUnsetSpecKeyIsTheOperatorsToKnow(t *testing.T) {
 
 func TestAMixOfReasonsForPassingOverEntries(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) { c.Plan.Entries[1].Target.Format = protocol.Responses }})
+		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) {
+			c.Compact = true // the compact endpoint takes only the request's own format, so the second entry can never serve
+			c.Plan.Entries[1].Target.Format = protocol.Responses
+		}})
 		h.run()
 		if h.w.status != 429 { // a credential may be free in a second; the other entry will not ever do
 			t.Errorf("status %d\n%s", h.w.status, h.w.body())
@@ -376,7 +380,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 	full := ExecDeps{
 		Router: router, Upstreams: &fakeUpstreams{}, Limits: limits, Memory: protocol.NewMemory(1), Logger: slog.New(slog.DiscardHandler),
 		Ledger: &fakeLedger{}, Costs: fakeCosts{known: true}, Alive: func() bool { return true },
-		IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
+		IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil), Outstanding: NewOutstanding(),
 	}
 	if _, err := NewExecutor(full); err != nil {
 		t.Fatal(err)
@@ -387,7 +391,7 @@ func TestAnExecutorNeedsEveryDependency(t *testing.T) {
 		"logger": func(d *ExecDeps) { d.Logger = nil }, "ledger": func(d *ExecDeps) { d.Ledger = nil },
 		"costs": func(d *ExecDeps) { d.Costs = nil },
 		"alive": func(d *ExecDeps) { d.Alive = nil }, "secret": func(d *ExecDeps) { d.IdentitySecret = []byte("short") },
-		"quality": func(d *ExecDeps) { d.Quality = nil },
+		"quality": func(d *ExecDeps) { d.Quality = nil }, "outstanding": func(d *ExecDeps) { d.Outstanding = nil },
 	} {
 		d := full
 		missing(&d)

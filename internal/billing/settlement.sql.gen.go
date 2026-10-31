@@ -13,6 +13,25 @@ import (
 	"uuid"
 )
 
+const advanceCorrectionCursor = `-- name: AdvanceCorrectionCursor :execrows
+UPDATE billing.charge_correction_cursor SET after_at = $1, after_id = $2
+WHERE singleton AND (after_at, after_id) < ($1, $2)
+`
+
+type AdvanceCorrectionCursorParams struct {
+	AfterAt time.Time
+	AfterID uuid.UUID
+}
+
+// Only forward: a second worker's older page may not move the cursor back over events it has not read.
+func (q *Queries) AdvanceCorrectionCursor(ctx context.Context, db DBTX, arg AdvanceCorrectionCursorParams) (int64, error) {
+	result, err := db.Exec(ctx, advanceCorrectionCursor, arg.AfterAt, arg.AfterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const attemptCost = `-- name: AttemptCost :one
 SELECT coalesce(sum(e.amount), 0)::bigint FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id
 WHERE t.request_id = $1 AND t.attempt_seq = $2 AND e.book = 'supplier_cost'
@@ -28,6 +47,72 @@ func (q *Queries) AttemptCost(ctx context.Context, db DBTX, arg AttemptCostParam
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const correctionCursor = `-- name: CorrectionCursor :one
+SELECT after_at, after_id FROM billing.charge_correction_cursor WHERE singleton
+`
+
+type CorrectionCursorRow struct {
+	AfterAt time.Time
+	AfterID uuid.UUID
+}
+
+func (q *Queries) CorrectionCursor(ctx context.Context, db DBTX) (CorrectionCursorRow, error) {
+	row := db.QueryRow(ctx, correctionCursor)
+	var i CorrectionCursorRow
+	err := row.Scan(&i.AfterAt, &i.AfterID)
+	return i, err
+}
+
+const deleteCorrection = `-- name: DeleteCorrection :exec
+DELETE FROM billing.charge_corrections WHERE event_id = $1
+`
+
+func (q *Queries) DeleteCorrection(ctx context.Context, db DBTX, eventID uuid.UUID) error {
+	_, err := db.Exec(ctx, deleteCorrection, eventID)
+	return err
+}
+
+const dueCorrections = `-- name: DueCorrections :many
+SELECT event_id, revision, request_id, attempts, next_at FROM billing.charge_corrections
+WHERE next_at <= clock_timestamp()
+ORDER BY next_at, event_id
+LIMIT $1
+`
+
+type DueCorrectionsRow struct {
+	EventID   uuid.UUID
+	Revision  int32
+	RequestID uuid.UUID
+	Attempts  int32
+	NextAt    time.Time
+}
+
+func (q *Queries) DueCorrections(ctx context.Context, db DBTX, max int32) ([]DueCorrectionsRow, error) {
+	rows, err := db.Query(ctx, dueCorrections, max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueCorrectionsRow
+	for rows.Next() {
+		var i DueCorrectionsRow
+		if err := rows.Scan(
+			&i.EventID,
+			&i.Revision,
+			&i.RequestID,
+			&i.Attempts,
+			&i.NextAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const dueReservations = `-- name: DueReservations :many
@@ -138,6 +223,132 @@ func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservatio
 	return ended_at, err
 }
 
+const endReservationBatch = `-- name: EndReservationBatch :many
+WITH input AS (
+    SELECT i AS ord, ($1::uuid[])[i] AS request_id, ($2::text[])[i] AS state,
+        ($3::integer[])[i] AS charged_seq, ($4::integer[])[i] AS entry,
+        ($5::bigint[])[i] AS charged, ($6::bigint[])[i] AS price,
+        ($7::boolean[])[i] AS waived, ($8::boolean[])[i] AS estimated,
+        ($9::text[])[i] AS final_usage, ($10::boolean[])[i] AS final_usage_set,
+        ($11::text[])[i] AS attempt_entries, ($12::boolean[])[i] AS attempt_entries_set,
+        ($13::bigint[])[i] AS profit, ($14::boolean[])[i] AS profit_set,
+        ($15::smallint[])[i] AS pricing_tiers,
+        ($16::bigint[])[i] AS reserved, ($17::bigint[])[i] AS spent,
+        ($18::uuid[])[i] AS workspace_id, ($19::timestamptz[])[i] AS workspace_window,
+        ($20::uuid[])[i] AS key_id, ($21::timestamptz[])[i] AS key_window
+    FROM generate_subscripts($1::uuid[], 1) AS i
+),
+balance AS (
+    UPDATE billing.balances b SET reserved = b.reserved + (SELECT sum(reserved) FROM input)
+    WHERE b.account_id = $22
+),
+spend AS (
+    UPDATE billing.spend s SET reserved = s.reserved + v.reserved, spent = s.spent + v.spent
+    FROM (
+        SELECT subject, window_start, sum(reserved) AS reserved, sum(spent) AS spent
+        FROM (
+            SELECT workspace_id AS subject, workspace_window AS window_start, reserved, spent FROM input
+            UNION ALL
+            SELECT key_id, key_window, reserved, spent FROM input
+            WHERE NOT (key_id = workspace_id AND key_window = workspace_window)
+        ) windows
+        GROUP BY subject, window_start
+    ) v
+    WHERE s.subject = v.subject AND s.window_start = v.window_start
+),
+updated AS (
+    UPDATE billing.reservations r
+    SET state = i.state, charged_seq = coalesce(nullif(i.charged_seq, -1), r.charged_seq),
+        entry = coalesce(nullif(i.entry, -1), r.entry),
+        charged = i.charged, price = i.price, waived = i.waived, estimated = i.estimated,
+        final_usage = CASE WHEN i.final_usage_set THEN i.final_usage::jsonb ELSE r.final_usage END,
+        attempt_entries = CASE WHEN i.attempt_entries_set
+            THEN ARRAY(SELECT jsonb_array_elements_text(i.attempt_entries::jsonb)::integer) ELSE r.attempt_entries END,
+        profit = CASE WHEN i.profit_set THEN i.profit ELSE NULL END,
+        pricing_tiers = nullif(i.pricing_tiers::smallint, -2)
+    FROM input i
+    WHERE r.request_id = i.request_id
+    RETURNING r.request_id, clock_timestamp()::timestamptz AS ended_at
+)
+SELECT request_id, ended_at FROM updated
+`
+
+type EndReservationBatchParams struct {
+	RequestIds        []uuid.UUID
+	States            []string
+	ChargedSeqs       []int32
+	Entries           []int32
+	Charged           []int64
+	Prices            []int64
+	Waived            []bool
+	Estimated         []bool
+	FinalUsages       []string
+	FinalUsageSet     []bool
+	AttemptEntries    []string
+	AttemptEntriesSet []bool
+	Profits           []int64
+	ProfitSet         []bool
+	PricingTiers      []int16
+	Reserved          []int64
+	Spent             []int64
+	WorkspaceIds      []uuid.UUID
+	WorkspaceWindows  []time.Time
+	KeyIds            []uuid.UUID
+	KeyWindows        []time.Time
+	AccountID         uuid.UUID
+}
+
+type EndReservationBatchRow struct {
+	RequestID uuid.UUID
+	EndedAt   time.Time
+}
+
+// The batch form of EndReservation: every reservation of one completion batch ends in one statement. The balance gets
+// one sum and each spend window its own, so a batch's counters move exactly as its items' would one by one. final_usage
+// is the JSON text, NULL to keep what the row has; attempt_entries is a JSON array, NULL to keep the row's.
+func (q *Queries) EndReservationBatch(ctx context.Context, db DBTX, arg EndReservationBatchParams) ([]EndReservationBatchRow, error) {
+	rows, err := db.Query(ctx, endReservationBatch,
+		arg.RequestIds,
+		arg.States,
+		arg.ChargedSeqs,
+		arg.Entries,
+		arg.Charged,
+		arg.Prices,
+		arg.Waived,
+		arg.Estimated,
+		arg.FinalUsages,
+		arg.FinalUsageSet,
+		arg.AttemptEntries,
+		arg.AttemptEntriesSet,
+		arg.Profits,
+		arg.ProfitSet,
+		arg.PricingTiers,
+		arg.Reserved,
+		arg.Spent,
+		arg.WorkspaceIds,
+		arg.WorkspaceWindows,
+		arg.KeyIds,
+		arg.KeyWindows,
+		arg.AccountID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EndReservationBatchRow
+	for rows.Next() {
+		var i EndReservationBatchRow
+		if err := rows.Scan(&i.RequestID, &i.EndedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertCreditBatch = `-- name: InsertCreditBatch :exec
 INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, expires_at, currency, paid, fee, merchant_id,
     offline_channel, rate_id)
@@ -160,8 +371,8 @@ type InsertCreditBatchParams struct {
 	RateID         *uuid.UUID
 }
 
-// A gift leaves what a payment has NULL (an empty currency or offline channel is NULL); a paid batch sets them as
-// credit_batches_source_check requires.
+// A gift or redeemed code leaves what a payment has NULL (an empty currency or offline channel is NULL); a paid batch
+// sets them as credit_batches_source_check requires.
 func (q *Queries) InsertCreditBatch(ctx context.Context, db DBTX, arg InsertCreditBatchParams) error {
 	_, err := db.Exec(ctx, insertCreditBatch,
 		arg.ID,
@@ -177,6 +388,17 @@ func (q *Queries) InsertCreditBatch(ctx context.Context, db DBTX, arg InsertCred
 		arg.OfflineChannel,
 		arg.RateID,
 	)
+	return err
+}
+
+const lockChargeEvents = `-- name: LockChargeEvents :exec
+SELECT pg_advisory_xact_lock(hashtext('axiom charge events'))
+`
+
+// The consumer side of the shared charge-event commit order (suppliers' LockChargeEvents): read the cursor and the
+// events only after every producer that inserted one has committed.
+func (q *Queries) LockChargeEvents(ctx context.Context, db DBTX) error {
+	_, err := db.Exec(ctx, lockChargeEvents)
 	return err
 }
 
@@ -247,6 +469,89 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 	return i, err
 }
 
+const lockReservations = `-- name: LockReservations :many
+SELECT r.request_id, r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
+    r.prices, r.price_versions, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit,
+    coalesce(r.pricing_tiers, -2)::smallint AS pricing_tiers
+FROM billing.reservations r
+WHERE r.request_id = ANY($1::uuid[])
+`
+
+type LockReservationsRow struct {
+	RequestID       uuid.UUID
+	SiteID          uuid.UUID
+	AccountID       uuid.UUID
+	WorkspaceID     uuid.UUID
+	KeyID           uuid.UUID
+	WorkspaceWindow time.Time
+	KeyWindow       time.Time
+	Amount          int64
+	State           string
+	Prices          []string
+	PriceVersions   pgtype.FlatArray[uuid.UUID]
+	ChargedSeq      *int32
+	Entry           *int32
+	Charged         int64
+	Price           int64
+	Waived          bool
+	Estimated       bool
+	FinalUsage      []byte
+	Fallbacks       []string
+	Models          pgtype.FlatArray[uuid.UUID]
+	AttemptEntries  []int32
+	Endpoints       pgtype.FlatArray[uuid.UUID]
+	Profit          *int64
+	PricingTiers    int16
+}
+
+// The batch form of LockReservation, run after the account's balance row is locked. The rows come back in no order;
+// the caller keeps its items' order by request id.
+func (q *Queries) LockReservations(ctx context.Context, db DBTX, requestIds []uuid.UUID) ([]LockReservationsRow, error) {
+	rows, err := db.Query(ctx, lockReservations, requestIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockReservationsRow
+	for rows.Next() {
+		var i LockReservationsRow
+		if err := rows.Scan(
+			&i.RequestID,
+			&i.SiteID,
+			&i.AccountID,
+			&i.WorkspaceID,
+			&i.KeyID,
+			&i.WorkspaceWindow,
+			&i.KeyWindow,
+			&i.Amount,
+			&i.State,
+			&i.Prices,
+			&i.PriceVersions,
+			&i.ChargedSeq,
+			&i.Entry,
+			&i.Charged,
+			&i.Price,
+			&i.Waived,
+			&i.Estimated,
+			&i.FinalUsage,
+			&i.Fallbacks,
+			&i.Models,
+			&i.AttemptEntries,
+			&i.Endpoints,
+			&i.Profit,
+			&i.PricingTiers,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const postLedger = `-- name: PostLedger :execrows
 WITH locked AS MATERIALIZED (
     SELECT 1 FROM billing.balances b WHERE b.account_id = $1 FOR UPDATE
@@ -304,6 +609,76 @@ func (q *Queries) PostLedger(ctx context.Context, db DBTX, arg PostLedgerParams)
 	return result.RowsAffected(), nil
 }
 
+const postLedgerEntries = `-- name: PostLedgerEntries :execrows
+INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount, currency)
+SELECT ($1::uuid[])[i], $2, $3, ($4::text[])[i], ($5::bigint[])[i],
+    nullif(($6::text[])[i], '')
+FROM generate_subscripts($1::uuid[], 1) AS i
+ORDER BY i
+`
+
+type PostLedgerEntriesParams struct {
+	TransactionIds []uuid.UUID
+	SiteID         uuid.UUID
+	AccountID      uuid.UUID
+	Books          []string
+	Amounts        []int64
+	Currencies     []string
+}
+
+// The second: every entry of those events, each against the transaction id its event already inserted.
+func (q *Queries) PostLedgerEntries(ctx context.Context, db DBTX, arg PostLedgerEntriesParams) (int64, error) {
+	result, err := db.Exec(ctx, postLedgerEntries,
+		arg.TransactionIds,
+		arg.SiteID,
+		arg.AccountID,
+		arg.Books,
+		arg.Amounts,
+		arg.Currencies,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const postLedgerTransactions = `-- name: PostLedgerTransactions :execrows
+INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id, attempt_seq, revision)
+SELECT ($1::uuid[])[i], $2, $3, ($4::text[])[i], ($5::uuid[])[i],
+    ($6::integer[])[i], ($7::bigint[])[i]
+FROM generate_subscripts($1::uuid[], 1) AS i
+ORDER BY i
+`
+
+type PostLedgerTransactionsParams struct {
+	Ids         []uuid.UUID
+	SiteID      uuid.UUID
+	AccountID   uuid.UUID
+	Kinds       []string
+	RequestIds  []uuid.UUID
+	AttemptSeqs []int32
+	Revisions   []int64
+}
+
+// The first of the batch's three ledger statements: every event, in the batch's order so seq follows it. A duplicate
+// event is an error here, not a silent skip: the reservation state says it cannot happen, and the caller retries the
+// batch one item at a time if it does.
+func (q *Queries) PostLedgerTransactions(ctx context.Context, db DBTX, arg PostLedgerTransactionsParams) (int64, error) {
+	result, err := db.Exec(ctx, postLedgerTransactions,
+		arg.Ids,
+		arg.SiteID,
+		arg.AccountID,
+		arg.Kinds,
+		arg.RequestIds,
+		arg.AttemptSeqs,
+		arg.Revisions,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const reservationAccount = `-- name: ReservationAccount :one
 SELECT account_id FROM billing.reservations WHERE request_id = $1
 `
@@ -313,6 +688,25 @@ func (q *Queries) ReservationAccount(ctx context.Context, db DBTX, requestID uui
 	var account_id uuid.UUID
 	err := row.Scan(&account_id)
 	return account_id, err
+}
+
+const setBalance = `-- name: SetBalance :execrows
+UPDATE billing.balances SET balance = $1 WHERE account_id = $2
+`
+
+type SetBalanceParams struct {
+	Balance   int64
+	AccountID uuid.UUID
+}
+
+// The third: set the balance to the exact value the batch's user-balance entries leave. The caller sums in platform.Exact,
+// so a total past int64 does not clamp; a final value past int64 is an error and rolls the batch back.
+func (q *Queries) SetBalance(ctx context.Context, db DBTX, arg SetBalanceParams) (int64, error) {
+	result, err := db.Exec(ctx, setBalance, arg.Balance, arg.AccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const unbalanced = `-- name: Unbalanced :many
@@ -352,4 +746,30 @@ func (q *Queries) Unbalanced(ctx context.Context, db DBTX) ([]string, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const upsertCorrection = `-- name: UpsertCorrection :exec
+INSERT INTO billing.charge_corrections (event_id, revision, request_id, next_at, attempts, last_error)
+VALUES ($1, $2, $3, $4, 1, $5)
+ON CONFLICT (event_id) DO UPDATE SET revision = excluded.revision, request_id = excluded.request_id,
+    next_at = excluded.next_at, attempts = billing.charge_corrections.attempts + 1, last_error = excluded.last_error
+`
+
+type UpsertCorrectionParams struct {
+	EventID   uuid.UUID
+	Revision  int32
+	RequestID uuid.UUID
+	NextAt    time.Time
+	LastError string
+}
+
+func (q *Queries) UpsertCorrection(ctx context.Context, db DBTX, arg UpsertCorrectionParams) error {
+	_, err := db.Exec(ctx, upsertCorrection,
+		arg.EventID,
+		arg.Revision,
+		arg.RequestID,
+		arg.NextAt,
+		arg.LastError,
+	)
+	return err
 }

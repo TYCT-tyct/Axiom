@@ -32,6 +32,7 @@ type try struct {
 type trail struct {
 	call      *Call
 	tries     []try
+	at        time.Time // the call's single start, which the reservation also wrote
 	start     time.Time
 	currency  platform.Currency
 	clientApp string
@@ -39,8 +40,12 @@ type trail struct {
 }
 
 func (s *session) trail() trail {
+	at := s.c.At
+	if at.IsZero() {
+		at = s.start
+	}
 	return trail{
-		call: s.c, tries: s.tries, start: s.start, currency: s.currency,
+		call: s.c, tries: s.tries, at: at, start: s.start, currency: s.currency,
 		clientApp: clientAppOf(s.req.Header), app: attributionOf(s.req.Header),
 	}
 }
@@ -195,7 +200,7 @@ const noConsent = "none"
 func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end time.Time) observability.CallRecord {
 	c := t.call
 	rec := observability.CallRecord{
-		ID: c.ID, At: t.start,
+		ID: c.ID, At: t.at,
 		Site: uuid.UUID(c.site.ID), Account: uuid.UUID(c.caller.AccountID()),
 		Workspace: uuid.UUID(c.caller.WorkspaceID()), Key: uuid.UUID(c.caller.KeyID()), IP: c.ip,
 		UsedTools: c.Request.Needs.Has(protocol.Tools), HasImage: c.Request.Images > 0, HasFile: c.Request.Documents > 0,
@@ -208,9 +213,11 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		// paid it. Free is the waiver rules' verdict and nothing else: a model priced at zero, or a charge the balance's
 		// floor cut to nothing, is not a free call.
 		PriceNano: f.Charged.CeilAmount(), CostNano: costOf(o), Currency: t.currency,
-		Free:    f.Waived,
-		Latency: end.Sub(t.start),
-		Route:   route,
+		Free:          f.Waived,
+		Latency:       end.Sub(t.start),
+		Route:         route,
+		Streamed:      c.Request.Stream,
+		PhysicalInput: physicalInputOf(f),
 	}
 	if f.PriceVersion != nil {
 		rec.PriceVersion = f.PriceVersion.String()
@@ -220,6 +227,23 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		rec.FinishReason = finishOf(o.Attempts[n-1])
 	}
 	return rec
+}
+
+// physicalInputOf is the prompt total the upstream reported, added over the billed samplings; nil when none reported
+// one. It is not the sum of input items, which cache reads and writes may overlap.
+func physicalInputOf(f billing.Final) *int64 {
+	if len(f.Segments) == 0 {
+		return nil
+	}
+	var total int64
+	for _, seg := range f.Segments {
+		n, ok := seg.Usage.PhysicalInput()
+		if !ok {
+			return nil // one sampling's total is unknown, so their sum is not the prompt total
+		}
+		total += n
+	}
+	return &total
 }
 
 // usageOf is the usage the settlement charged: the samplings of the attempt that was billed, added up.

@@ -45,6 +45,11 @@ type TestRequest struct {
 	Format          protocol.Format
 	// Prompt is what the test asks for; empty is TestPrompt.
 	Prompt string
+	// Output is the most tokens the test asks the model to generate; 0 is testOutput. A verification probe asks for
+	// a few short lines and so needs more than a health probe (docs/domains/quality.md「真伪检测」).
+	Output int64
+	// Capture is the most bytes of the answer's text to keep in TestResult.Reply; 0 keeps none.
+	Capture int
 }
 
 // TestOutcome is what a test generation says about an endpoint, judged by the table of what counts as a failure
@@ -117,6 +122,8 @@ type TestResult struct {
 	Usage      []catalog.Usage
 	Cost       AttemptCost
 	FinishedAt time.Time
+	// Reply is the answer's text when the request captured it, up to TestRequest.Capture bytes; empty otherwise.
+	Reply string
 
 	// estimate is Cost's amount as the row and the contract write it; cause and scope are the problem in the
 	// contract's words, empty when nothing went wrong; failed is set when the stream's ending is the endpoint's own.
@@ -124,6 +131,7 @@ type TestResult struct {
 	cause, scope string
 	failed       bool
 	receipt      AttemptReceipt
+	capture      *protocol.Capture
 }
 
 // CredentialID identifies the key used by the generation.
@@ -207,25 +215,9 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	if !slices.Contains(ep.formats, req.Format) {
 		return TestResult{}, fmt.Errorf("%w: %d", ErrNoFormat, req.Format)
 	}
-	body, err := testCall(req.Format, ep.upstream, prompt)
+	result, body, err := s.prepareTest(req, ep, prompt)
 	if err != nil {
 		return TestResult{}, err
-	}
-	// Priced before the call, so that an answer that cannot be priced is known before the platform pays for it.
-	cost, err := s.testCost(ep.schedule, prompt)
-	if err != nil {
-		return TestResult{}, err
-	}
-	if cost.Flag != CostComplete {
-		return TestResult{}, ErrTestCost
-	}
-	estimate, err := decimal(cost.Native)
-	if err != nil {
-		return TestResult{}, err
-	}
-	result := TestResult{
-		Request: platform.RequestID(uuid.NewV7()), Endpoint: ep.id, Supplier: ep.supplier, Model: ep.model,
-		Upstream: ep.upstream, NativeUnit: ep.nativeUnit, Format: req.Format, Cost: cost, estimate: estimate,
 	}
 	// The caller's cancellation is not passed on: a request that goes away while the supplier generates still costs us
 	// the whole generation, and the row must say so.
@@ -246,6 +238,35 @@ func (s *Service) TestEndpoint(ctx context.Context, req TestRequest) (TestResult
 	attempt.readProbe(ctx, &result, resp.Body, sent)
 	result.Total, result.FinishedAt = time.Since(sent), s.now()
 	return result, nil
+}
+
+// prepareTest builds and prices a generation before it is sent: an answer that cannot be priced is known before the
+// platform pays for it, and a caller that never sends pays nothing.
+func (s *Service) prepareTest(req TestRequest, ep *endpoint, prompt string) (TestResult, []byte, error) {
+	output := orTestOutput(req.Output)
+	body, err := testCall(req.Format, ep.upstream, prompt, output)
+	if err != nil {
+		return TestResult{}, nil, err
+	}
+	cost, err := s.testCost(ep.schedule, prompt, output)
+	if err != nil {
+		return TestResult{}, nil, err
+	}
+	if cost.Flag != CostComplete {
+		return TestResult{}, nil, ErrTestCost
+	}
+	estimate, err := decimal(cost.Native)
+	if err != nil {
+		return TestResult{}, nil, err
+	}
+	result := TestResult{
+		Request: platform.RequestID(uuid.NewV7()), Endpoint: ep.id, Supplier: ep.supplier, Model: ep.model,
+		Upstream: ep.upstream, NativeUnit: ep.nativeUnit, Format: req.Format, Cost: cost, estimate: estimate,
+	}
+	if req.Capture > 0 {
+		result.capture = &protocol.Capture{Max: req.Capture}
+	}
+	return result, body, nil
 }
 
 func (a *Attempt) readProbe(ctx context.Context, result *TestResult, body io.Reader, sent time.Time) {
@@ -277,7 +298,7 @@ func (r *TestResult) fail(ctx context.Context, failure *Failure) {
 // events are dropped as they come. The caller's return releases what the relay held.
 func (r *TestResult) read(ctx context.Context, body io.Reader, sent time.Time) {
 	relay := protocol.NewRelay(r.Format, r.Format, body, protocol.UsageContext{Tier: catalog.ServiceTierStandard},
-		protocol.RelayOptions{ID: uuid.UUID(r.Request).String(), Model: r.Upstream, Created: sent.Unix(), Memory: protocol.NewMemory(testMemory)})
+		protocol.RelayOptions{ID: uuid.UUID(r.Request).String(), Model: r.Upstream, Created: sent.Unix(), Memory: protocol.NewMemory(testMemory), Capture: r.capture})
 	defer relay.Release()
 	for !r.Streamed {
 		step, err := relay.Next()
@@ -299,6 +320,9 @@ func (r *TestResult) read(ctx context.Context, body io.Reader, sent time.Time) {
 	}
 	for _, segment := range relay.Usage().Segments {
 		r.Usage = append(r.Usage, segment.Usage)
+	}
+	if r.capture != nil {
+		r.Reply = string(r.capture.Text)
 	}
 }
 
@@ -338,17 +362,19 @@ func scopeName(s Scope) string { return ProblemScopes[s] }
 // max_tokens, so a model that refuses it in favour of max_completion_tokens answers 400 and the
 // test is inconclusive rather than a failure the endpoint did not commit (internal/suppliers/README.md「用真实生成测试
 // 端点」).
-func testCall(f protocol.Format, model, prompt string) ([]byte, error) {
+//
+//nolint:exhaustive // endpoint tests cover the generation formats; direct formats return ErrNoFormat
+func testCall(f protocol.Format, model, prompt string, output int64) ([]byte, error) {
 	message := map[string]any{"role": "user", "content": prompt}
 	var body map[string]any
 	switch f {
 	case protocol.Messages:
-		body = map[string]any{"model": model, "stream": true, "max_tokens": testOutput, "messages": []any{message}}
+		body = map[string]any{"model": model, "stream": true, "max_tokens": output, "messages": []any{message}}
 	case protocol.Responses:
-		body = map[string]any{"model": model, "stream": true, "max_output_tokens": testOutput, "input": []any{message}}
+		body = map[string]any{"model": model, "stream": true, "max_output_tokens": output, "input": []any{message}}
 	case protocol.Chat:
 		body = map[string]any{
-			"model": model, "stream": true, "max_tokens": testOutput, "messages": []any{message},
+			"model": model, "stream": true, "max_tokens": output, "messages": []any{message},
 			"stream_options": map[string]any{"include_usage": true},
 		}
 	default:
@@ -357,11 +383,19 @@ func testCall(f protocol.Format, model, prompt string) ([]byte, error) {
 	return jsonx.MarshalCanonical(body)
 }
 
+// orTestOutput is the output cap a test runs under: the request's, or the smallest one when it sets none.
+func orTestOutput(n int64) int64 {
+	if n > 0 {
+		return n
+	}
+	return testOutput
+}
+
 // testCost is a test generation's estimate: the highest price of the prompt's tokens and of the capped output over every
 // band and the standard tier, in the supplier's own unit. It never reads what the supplier reported — a supplier that
 // reports nothing, or bills more than it was asked to, must still be covered — and it is a definite upper bound, so that
 // no charge for a probe can make the endpoint look underpriced (H-I9).
-func (s *Service) testCost(schedule uuid.UUID, prompt string) (AttemptCost, error) {
+func (s *Service) testCost(schedule uuid.UUID, prompt string, output int64) (AttemptCost, error) {
 	var cost AttemptCost
 	sched, ok := (*s.schedules.Load())[schedule]
 	if !ok {
@@ -378,7 +412,7 @@ func (s *Service) testCost(schedule uuid.UUID, prompt string) (AttemptCost, erro
 		count int64
 	}{
 		{1 << catalog.ItemInput, bound},
-		{1 << catalog.ItemOutput, testOutput},
+		{1 << catalog.ItemOutput, output},
 	} {
 		price, missing := sched.Highest(side.items, catalog.ServiceTierSet(1<<catalog.ServiceTierStandard), bound)
 		if missing {

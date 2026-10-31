@@ -1,26 +1,67 @@
 import type { Messages } from "@axiom/ui";
 import type zh from "../zh";
+import audit from "./audit";
+import calls from "./calls";
 import mappings from "./mappings";
 import models from "./models";
+import orders from "./orders";
 import pricing from "./pricing";
+import redeem from "./redeem";
 import settings from "./settings";
 import suppliers from "./suppliers";
 import users from "./users";
 
 export default {
   brandName: "Axiom Admin",
+  forbiddenHint: "Ask the site owner to grant the permission.",
   nav: {
+    overview: "Overview",
     users: "Users",
+    orders: "Orders",
+    redeemCodes: "Redeem codes",
+    calls: "Calls",
+    audit: "Audit log",
     suppliers: "Suppliers",
     mappings: "Unmapped models",
     models: "Model catalog",
     pricing: "Pricing",
     settings: "Site settings",
   },
+  calls,
+  audit,
   signIn: { description: "The admin is for operators. After signing in you also complete two-step verification." },
   home: {
+    title: "Operations",
+    description:
+      "This site's calls, revenue, cost and cash in the chosen window. Every figure opens the calls, orders or cash behind it.",
     noAccessTitle: "No page is available to you",
     noAccessBody: "Your account holds no admin permission. Ask the owner to grant one.",
+  },
+  overview: {
+    rangeLabel: "Time range",
+    range: { "24h": "24 hours", "7d": "7 days", "30d": "30 days" },
+    window: "{{since}} to {{until}}",
+    calls: "Calls",
+    errors: "Errors",
+    revenue: "Revenue",
+    revenueNote: "Charged to users, less what the platform bore",
+    cost: "Supplier cost",
+    costNote: "Cost booked where billing could convert it",
+    unknownCost: "{{calls}} calls have no known cost and are not in the total",
+    callsIncomplete:
+      "Calls before {{since}} are archived: the call counts and rankings omit them. Revenue, cost and cash still cover the whole window.",
+    callsIncompleteUnknown:
+      "Calls before this node's retained log are archived: the call counts and rankings are incomplete. Revenue, cost and cash still cover the whole window.",
+    coverageUnavailable:
+      "This node cannot say whether older calls were archived, so the call counts and rankings may be incomplete.",
+    cash: "Cash received",
+    cashNote: "Paid credit less refunds; not call revenue",
+    unavailable: "Not available on this node",
+    topAccounts: "Busiest accounts",
+    topModels: "Busiest models",
+    col: { account: "Account", model: "Model", calls: "Calls", errors: "Errors" },
+    noAccounts: { title: "No account called in this window", body: "Widen the time range." },
+    noModels: { title: "No model was called in this window", body: "Widen the time range." },
   },
   filter: { apply: "Filter", reset: "Clear" },
   change: {
@@ -45,9 +86,11 @@ export default {
       "This request’s key was already used for different content, so the first attempt may have been made; nothing more is sent from here. The data you see after closing may not include it yet, so it can’t tell you whether to do it again.",
   },
   users,
+  orders,
   suppliers,
   mappings,
   models,
   pricing,
+  redeem,
   settings,
 } satisfies Messages<typeof zh>;

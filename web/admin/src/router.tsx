@@ -4,6 +4,9 @@ import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet 
 import type { ReactNode } from "react";
 import { Layout } from "./layout";
 import { modelStatus } from "./models/catalog";
+import { paymentOrderState } from "./orders/states";
+import { callStatus, overviewRange } from "./overview";
+import { redeemState } from "./redeem";
 import { supplierStatus } from "./suppliers/statuses";
 
 const root = createRootRoute({ component: Outlet });
@@ -37,13 +40,67 @@ const routeTree = root.addChildren([
   guestPage("/mfa", () => import("./auth/mfa")),
   guestPage("/enroll", () => import("./auth/enroll")),
   app.addChildren([
-    shellPage("/", () => import("./pages/home")),
+    shellPage(
+      "/",
+      () => import("./pages/home"),
+      (search) => ({ range: overviewRange(search.range) }),
+    ),
     shellPage(
       "/users",
       () => import("./pages/users"),
       (search) => ({ q: text(search.q) }),
     ),
     shellPage("/accounts/$accountId", () => import("./pages/account")),
+    shellPage(
+      "/orders",
+      () => import("./pages/orders"),
+      (search) => ({
+        account_id: text(search.account_id),
+        user_id: text(search.user_id),
+        state: paymentOrderState(search.state),
+        merchant_id: text(search.merchant_id),
+        cash: text(search.cash),
+        since: text(search.since),
+        until: text(search.until),
+      }),
+    ),
+    shellPage(
+      "/redeem-codes",
+      () => import("./pages/redeem-codes"),
+      (search) => ({ state: redeemState(search.state), note: text(search.note) }),
+    ),
+    shellPage(
+      "/calls",
+      () => import("./pages/calls"),
+      (search) => ({
+        account_id: text(search.account_id),
+        request_id: text(search.request_id),
+        site_id: text(search.site_id),
+        model: text(search.model),
+        status: callStatus(search.status),
+        since: text(search.since),
+        until: text(search.until),
+      }),
+    ),
+    shellPage("/calls/$callId", () => import("./pages/call")),
+    shellPage(
+      "/audit",
+      () => import("./pages/audit"),
+      (search) => ({
+        since: text(search.since),
+        until: text(search.until),
+        action: text(search.action),
+        module: text(search.module),
+        actor_kind: text(search.actor_kind),
+        actor_id: text(search.actor_id),
+        target_kind: text(search.target_kind),
+        target_id: text(search.target_id),
+        account_id: text(search.account_id),
+        site_id: text(search.site_id),
+        request_id: text(search.request_id),
+      }),
+    ),
+    shellPage("/audit/$entryId", () => import("./pages/audit-entry")),
     shellPage(
       "/suppliers",
       () => import("./pages/suppliers"),

@@ -5,7 +5,6 @@ import (
 	"iter"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 	"uuid"
 )
@@ -65,6 +64,7 @@ type Model struct {
 	ID           ModelID
 	Slug         string
 	Author       string
+	AuthorName   string // the author's display name, for checks that ask a model who made it; the slug when it has none
 	Status       Status
 	VersionBasis VersionBasis
 	PriceSource  PriceSource
@@ -73,6 +73,7 @@ type Model struct {
 	reportable   Reportable
 	serving      Serving
 	serves       bool // the spec declares everything Serving reads
+	directServes bool // context is declared; a direct-only format needs neither an output limit nor streaming
 	toolUses     map[Item]int64
 	dialect      Dialect
 	speed        int64     // the fastest output, in tokens per second; 0 when the spec does not say
@@ -173,6 +174,16 @@ func (m Model) Serving() (Serving, bool) {
 	return m.serving, true
 }
 
+// ServingDirect reads the spec key an endpoint of a direct-only format needs: its context length. It does not require
+// an output limit, streaming or abilities, none of which a model that generates nothing uses. A model that also serves
+// a generation format must satisfy Serving instead: its output limit and streaming are then not optional.
+func (m Model) ServingDirect() (Serving, bool) {
+	if !m.directServes {
+		return Serving{}, false
+	}
+	return m.serving, true
+}
+
 // Claim is what a spec says of a yes-or-no matter: nothing, no, or yes. Absent and false are different claims, so the
 // zero value is that the spec says nothing, which a caller must not take for a no (nor a yes).
 type Claim uint8
@@ -260,21 +271,22 @@ type Recognition struct {
 	Exact bool
 }
 
-// ErrModelNotFound is what a name that no public name matches gets, the ones with a ':' suffix included; ErrRetired is
-// for the name of a retired model.
+// ErrModelNotFound is what a name that no public name or alias matches gets; ErrRetired is for the name of a retired
+// model.
 var (
 	ErrModelNotFound = errors.New("the model does not exist")
 	ErrRetired       = errors.New("the model is retired")
 )
 
 // Snapshot is the catalog as of one revision, built whole and never changed, so a request that holds one sees one
-// consistent state (docs/glossary.md「快照」). It holds listed and retired models, their names, and the current
-// reference prices of the listed ones.
+// consistent state (docs/glossary.md「快照」). It holds listed and retired models, their names and aliases, and the
+// current reference prices of the listed ones.
 type Snapshot struct {
 	revision int64
 	models   map[ModelID]Model
 	listed   []ModelID // in id order
 	names    map[string]nameEntry
+	aliases  map[string]ModelID
 	prices   map[priceKey]ReferencePrice
 }
 
@@ -294,34 +306,82 @@ type priceKey struct {
 // Revision is the database revision the snapshot was loaded at.
 func (s *Snapshot) Revision() int64 { return s.revision }
 
-// ResolvePublic finds the model a name from a user stands for. A name with a ':' is never found: a suffix such as
-// :free belongs to a supplier alias and must not land on the base model. A public name only, so the internal ones
-// are not callable. It does not allocate.
+// ResolvePublic finds the model a public name or alias from a user stands for. Names are exact: :free names its own
+// catalog entry and a suffix never lands on the base model. Aliases resolve to the concrete model their latest
+// revision names. Only public names are callable. It does not allocate.
 func (s *Snapshot) ResolvePublic(name string) (Resolution, error) {
-	e, ok := s.lookup(name)
-	switch {
-	case !ok || !e.public:
+	if e, ok := s.lookup(name); ok {
+		switch {
+		case !e.public:
+			return Resolution{}, ErrModelNotFound
+		case e.retired:
+			return Resolution{}, ErrRetired
+		}
+		return Resolution{Model: e.model, Floating: e.floating}, nil
+	}
+	id, ok := s.lookupAlias(name)
+	if !ok {
 		return Resolution{}, ErrModelNotFound
-	case e.retired:
+	}
+	m, ok := s.models[id]
+	switch {
+	case !ok || m.Status == StatusDraft:
+		return Resolution{}, ErrModelNotFound
+	case m.Status == StatusRetired:
 		return Resolution{}, ErrRetired
 	}
-	return Resolution{Model: e.model, Floating: e.floating}, nil
+	return Resolution{Model: id, Floating: m.VersionBasis == VersionFloating}, nil
 }
 
 // Recognize finds the model a name stands for among public and internal names, retired models' included, so that a
-// supplier does not map a retired model's name to another model.
+// supplier does not map a retired model's name to another model. Aliases are not supplier names and are not recognized.
 func (s *Snapshot) Recognize(name string) (Recognition, bool) {
 	e, ok := s.lookup(name)
 	return Recognition{Model: e.model, Exact: e.exact}, ok
 }
 
 func (s *Snapshot) lookup(name string) (nameEntry, bool) {
-	if len(name) > maxNameLen || strings.Contains(name, ":") {
+	if len(name) > maxNameLen {
 		return nameEntry{}, false
 	}
 	var buf [maxNameLen]byte
 	e, ok := s.names[string(appendNormalized(buf[:0], name))] // the compiler does not allocate for this lookup
 	return e, ok
+}
+
+func (s *Snapshot) lookupAlias(name string) (ModelID, bool) {
+	if len(name) > maxNameLen {
+		return ModelID{}, false
+	}
+	var buf [maxNameLen]byte
+	id, ok := s.aliases[string(appendNormalized(buf[:0], name))]
+	return id, ok
+}
+
+// addNames indexes every name of the models this snapshot holds: a public one is callable and an internal one is only
+// recognized, and each carries its model's status and version basis for resolution.
+func (s *Snapshot) addNames(rows []CatalogName) {
+	for _, n := range rows {
+		m := s.models[ModelID(n.ModelID)]
+		s.names[n.Norm] = nameEntry{
+			model:    m.ID,
+			public:   Visibility(n.Visibility) == VisibilityPublic,
+			retired:  m.Status == StatusRetired,
+			floating: m.VersionBasis == VersionFloating,
+			exact:    m.VersionBasis == VersionFloating || hasDate(n.Norm),
+		}
+	}
+}
+
+// addAliases records the current alias revisions whose target this snapshot holds, so an alias never resolves to a model
+// the snapshot cannot route.
+func (s *Snapshot) addAliases(rows []ListAliasesForSnapshotRow) {
+	for _, a := range rows {
+		id := ModelID(a.ModelID)
+		if _, ok := s.models[id]; ok {
+			s.aliases[a.Name] = id
+		}
+	}
 }
 
 // Model returns a listed or retired model.

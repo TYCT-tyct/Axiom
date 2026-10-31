@@ -42,6 +42,8 @@
   /* the primary button: black on light, white on dark */
   --btn: light-dark(#0d0e10, #f7f8f8);
   --btn-ink: light-dark(#ffffff, #08090a);
+  /* the button's edge: only a brand colour too close to the page needs one (brand.ts) */
+  --btn-line: transparent;
   /* a code a phone scans: dark on light whatever the theme */
   --paper: #ffffff;
   --ink: #000000;
@@ -94,6 +96,7 @@
   --color-ink: var(--ink);
   --color-btn: var(--btn);
   --color-btn-ink: var(--btn-ink);
+  --color-btn-line: var(--btn-line);
   --color-scrim: var(--scrim);
   --color-transparent: transparent;
   --color-current: currentColor;

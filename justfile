@@ -7,7 +7,7 @@ tool := "go tool -modfile=tools/go.mod"
 web := "pnpm --dir web"
 
 # Run every check CI runs, except one run of each benchmark and the deployment check: `check-all` adds the benchmarks.
-# This is the local pre-push gate, so it keeps `secrets` and `docs`, which a PR build leaves to workflow.yml (see
+# This is the local pre-push gate, so it keeps `secrets` and `docs`, which a PR build leaves to check-docs.yml and check-secrets.yml (see
 # `check-ci`)
 check: docs check-static test secrets web
 
@@ -134,9 +134,9 @@ load scale="1" only="": web-embed
 # Every check, including one run of each benchmark under the race detector
 check-all: check bench-once
 
-# What a pull request's build runs: `check` without `secrets` and the workflow half of `docs`, which workflow.yml's
+# What a pull request's build runs: `check` without `secrets` and the workflow half of `docs`, which check-docs.yml's
 # required `secrets` and `docs` jobs already run on it, so they would run twice per build. `script-tests` is the half of
-# `docs` workflow.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
+# `docs` check-docs.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
 check-ci: script-tests check-static test web
 
 # The checks a Markdown-only pull request runs instead of the full build: the docs tests (including the pull request
@@ -187,8 +187,10 @@ compose := "docker compose -f deploy/compose.yaml"
 up: web-embed
     umask 077; [ -f deploy/.env ] || { volumes="$(docker volume ls --quiet --filter name=^${COMPOSE_PROJECT_NAME:-axiom}_postgres$)" || exit 1; [ -z "$volumes" ] || { echo "deploy/.env is missing but the project's database volume exists: restore the file, or delete the database with: just down -v"; exit 1; }; printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env; }
     grep -q '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env; chmod 600 deploy/.env
+    grep -q '^AXIOM_RETENTION_PASSWORD=' deploy/.env || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_RETENTION_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env
+    grep -q '^AXIOM_RETENTION_DATABASE_URL=' deploy/.env || { password="$(sed -n 's/^AXIOM_RETENTION_PASSWORD=//p' deploy/.env)"; [ -z "$password" ] || { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_RETENTION_DATABASE_URL=postgres://axiom_retention:%s@postgres/axiom?sslmode=disable&pool_max_conns=2\n' "$password"; } >> deploy/.env; }; chmod 600 deploy/.env
     CGO_ENABLED=0 GOOS=linux go build -trimpath -o deploy/bin/axiom ./cmd/axiom
-    {{ compose }} up --detach --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
+    {{ compose }} up --detach --build --wait --wait-timeout 60 postgres && {{ compose }} exec -T postgres sh < deploy/postgres/roles.sh && {{ compose }} up --detach --build --wait --wait-timeout 60 || { {{ compose }} ps --all; docker inspect --format '{{{{.Name}}: {{{{json .State.Health}}' $({{ compose }} ps --all --quiet); {{ compose }} logs; exit 1; }
 
 # Stop everything; `just down -v` also deletes the local database and the master key made for it. By project name — the
 # one COMPOSE_PROJECT_NAME names for a CI job, otherwise axiom — so it works without deploy/.env.
@@ -215,7 +217,7 @@ vuln:
 
 # No secret in this branch's commits, checked before they are pushed: CI scans every commit of a pull request, and a
 # secret, or a test value that looks like one, stays in the history until the branch is replaced. The version
-# matches GITLEAKS_VERSION in .github/workflows/workflow.yml. Without origin/main, gitleaks would scan nothing and
+# matches GITLEAKS_VERSION in .github/workflows/check-secrets.yml. Without origin/main, gitleaks would scan nothing and
 # still pass, so a missing base fails instead.
 secrets:
     git rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' > /dev/null || { echo "origin/main is missing, so the branch cannot be scanned: run git fetch origin main"; exit 1; }
@@ -280,5 +282,9 @@ web-e2e shard="1/1": web-embed
 web-journey: web-embed
     go run ./internal/platform/pgtest/cmd/withcluster {{ web }} journey
 
+# The web vitals of the console and admin (web/README.md「测试」), alone on the machine: they are timings.
+web-vitals: web-embed
+    {{ web }} vitals
+
 # The local entry point retains every check; the workflow schedules the two parts independently.
-web: web-checks web-e2e
+web: web-checks web-e2e web-vitals

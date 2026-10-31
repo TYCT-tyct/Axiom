@@ -106,12 +106,13 @@ for image in $(compose --profile ops config --images); do
 done
 
 # The bucket as this run found it: the endpoint, the bucket, the prefix and the credentials, read from the container that
-# will use them, so that they are the values compose resolved and not a second reading of the file. They are exported by
-# their compose names, because interpolation reads the environment before it reads the file: that is what keeps the
-# location and the credentials of this run for the whole run, when step 1 installs the set's own copy of the
+# will use them, so that they are the values compose resolved and not a second reading of the file. They are exported as
+# AXIOM_BACKUP_* and AXIOM_BACKUP_S3_*, because interpolation reads the environment before it reads the file: that is what
+# keeps the location and the credentials of this run for the whole run, when step 1 installs the set's own copy of the
 # deployment's file — which carries the credentials of the day the set was written, revoked since if they were rotated,
-# and the location the sets were in before anyone moved them. As the environment rather than as options of the two
-# steps, because a credential in a process list is readable by every user on the machine.
+# and the location the sets were in before anyone moved them. The program's AXIOM_OBJECTSTORE_* is deliberately not
+# exported: step 6 would then run the program against the backup bucket. As the environment rather than as options of the
+# two steps, because a credential in a process list is readable by every user on the machine.
 resolved=$(compose run --rm -T --no-deps --entrypoint env restore | tr -d '\r')
 [ -n "$resolved" ] ||
   die "cannot read the bucket's settings out of $env_file: does it have AXIOM_BACKUP_BUCKET (deploy/.env.example)?"
@@ -122,11 +123,11 @@ pin() {
 }
 pin AXIOM_BACKUP_BUCKET AXIOM_BACKUP_BUCKET
 pin AXIOM_BACKUP_PREFIX AXIOM_BACKUP_PREFIX
-pin RCLONE_CONFIG_AXIOM_ENDPOINT AXIOM_BACKUP_S3_ENDPOINT
-pin RCLONE_CONFIG_AXIOM_ACCESS_KEY_ID AXIOM_BACKUP_S3_ACCESS_KEY_ID
-pin RCLONE_CONFIG_AXIOM_SECRET_ACCESS_KEY AXIOM_BACKUP_S3_SECRET_ACCESS_KEY
-pin RCLONE_CONFIG_AXIOM_REGION AXIOM_BACKUP_S3_REGION
-pin RCLONE_CONFIG_AXIOM_FORCE_PATH_STYLE AXIOM_BACKUP_S3_FORCE_PATH_STYLE
+pin AXIOM_OBJECTSTORE_ENDPOINT AXIOM_BACKUP_S3_ENDPOINT
+pin AXIOM_OBJECTSTORE_ACCESS_KEY_ID AXIOM_BACKUP_S3_ACCESS_KEY_ID
+pin AXIOM_OBJECTSTORE_SECRET_ACCESS_KEY AXIOM_BACKUP_S3_SECRET_ACCESS_KEY
+pin AXIOM_OBJECTSTORE_REGION AXIOM_BACKUP_S3_REGION
+pin AXIOM_OBJECTSTORE_PATH_STYLE AXIOM_BACKUP_S3_FORCE_PATH_STYLE
 [ -n "$AXIOM_BACKUP_BUCKET" ] || die "AXIOM_BACKUP_BUCKET is empty in $env_file: nothing says where the sets are"
 
 # Nothing may write to the database while it is replaced.
@@ -137,11 +138,17 @@ if docker volume ls --quiet --filter "name=^${project}_postgres$" | grep -q .; t
   [ -n "$overwrite" ] ||
     die "this project already has a database and a restore replaces it: rerun with --overwrite to delete it and start over"
   echo "== deleting this project's database and key ring"
-  # Only the containers that use those two volumes: `down` would also stop whatever else shares the project, such as the
+  # Only the containers that use those volumes: `down` would also stop whatever else shares the project, such as the
   # rehearsal's stand-in for the bucket, which the restore still has to read the set from.
   compose rm --stop --force axiom migrate postgres keys > /dev/null
   docker volume rm "${project}_postgres" "${project}_keys" > /dev/null
 fi
+
+# keys is a one-shot service: the restored /keys has no valkey-password, so a fresh run generates one and replaces the
+# stale users.acl in the cache. If the exited keys container is reused, it does neither, and Valkey comes up with the old
+# ACL while the program reads the new password: WRONGPASS at startup. Remove both containers; the cache volume itself
+# holds only rate-limit and session state, which is safe to lose and is not touched here.
+compose rm --stop --force valkey keys > /dev/null || die "cannot remove the Valkey and keys containers: stop them and run the restore again"
 
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
@@ -155,8 +162,22 @@ compose run --rm --user "$(id -u):$(id -g)" --env AXIOM_RESTORE_STEP=config --en
   --volume "$(docker_path "$out"):/out" restore
 cp "$out/deploy.env" "$env_file"
 chmod 600 "$env_file"
+# The cluster this creates has a new system identifier, while the WAL repository in the bucket belongs to the one that was
+# lost: archive-push would fail against its stanza, and an old set without the cipher passphrase would refuse to start.
+# Turn the WAL bucket off in the installed file itself, not just for one command, so every later start stays off until a
+# new repository is configured; AXIOM_BACKUP_BUCKET stays for the logical sets and the restore jobs below.
+if grep -q '^AXIOM_BACKUP_WAL_BUCKET=' "$env_file"; then
+  sed -i 's/^AXIOM_BACKUP_WAL_BUCKET=.*/AXIOM_BACKUP_WAL_BUCKET=/' "$env_file"
+else
+  [ -z "$(tail -c1 "$env_file")" ] || printf '\n' >>"$env_file"
+  printf 'AXIOM_BACKUP_WAL_BUCKET=\n' >>"$env_file"
+fi
+# Interpolation checks the environment before the file, so the shell must agree with the line just installed.
+export AXIOM_BACKUP_WAL_BUCKET=
 
 echo "== 2/6 create the cluster from it, with the login roles the image's init scripts make"
+# The installed file has the WAL bucket empty, so this start and every later one keep the new cluster out of the old
+# stanza; the logical set bucket remains for the restore jobs and for later backups.
 compose up --detach --wait --wait-timeout 120 postgres
 
 # axiom_owner and axiom_lookup are NOLOGIN and belong to the migrations, so the program creates them: every object in the
@@ -173,7 +194,12 @@ echo "== 5/6 apply the migrations the set predates, if any"
 compose run --rm migrate
 
 echo "== 6/6 start the program and wait for its own startup checks"
-compose up --detach --wait --wait-timeout 180
+# `up --wait` reports only that the program exited; its own log line is what says why, and the run is about to be
+# abandoned, so print it before the error.
+compose up --detach --wait --wait-timeout 180 || {
+  compose logs --no-color --tail=200 axiom
+  die "the program did not pass its startup checks"
+}
 
 # Each answer is checked before it is printed: a curl inside an echo would report the echo's status, so a 500 or a refused
 # connection would still end with "restored".

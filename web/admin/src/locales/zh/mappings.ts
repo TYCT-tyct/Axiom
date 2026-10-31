@@ -12,8 +12,10 @@ export default {
     scope: "作用范围",
     scopeGroup: "只在这个分组（{{group}}）",
     scopeSupplier: "整个供应商",
+    completions: "这个模型也提供旧版补全接口",
+    completionsHint: "声明 completions 格式；供应商的适配器报告不了它。模型不接受 /v1/completions 时不要勾选。",
     modelMissing: "请从建议里选一个目录里已有的模型。",
     done: "已映射“{{name}}”。",
-    wait: "它生成的端点要等真伪检测通过才接收流量。映射不会被改动，映射错了用更窄范围的新映射纠正。",
+    wait: "它生成的端点要等真伪检测通过才接收流量。映射的模型不会被改动，映射错了用更窄范围的新映射纠正；格式声明以后可以通过接口修改。",
   },
 };

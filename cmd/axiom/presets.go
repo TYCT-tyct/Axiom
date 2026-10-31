@@ -78,8 +78,7 @@ func patchPreset(r *http.Request, tx pg.Tx, c accounts.Caller, slug string, inpu
 		return accounts.Preset{}, accounts.ErrPreset
 	}
 	// The same account lock as replacement prevents a PATCH from losing a concurrent console write.
-	var id uuid.UUID
-	if err := tx.QueryRow(r.Context(), `SELECT id FROM accounts.accounts WHERE id=$1 FOR UPDATE`, uuid.UUID(c.AccountID())).Scan(&id); err != nil {
+	if err := accounts.LockPresetAccount(r.Context(), tx, c.AccountID()); err != nil {
 		return accounts.Preset{}, err
 	}
 	p, err := accounts.GetPreset(r.Context(), tx, c.AccountID(), slug)

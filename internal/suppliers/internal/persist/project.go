@@ -35,7 +35,7 @@ type projector struct {
 	snap       *catalog.Snapshot
 	nativeUnit string
 	now        time.Time
-	aliases    map[aliasKey]catalog.ModelID // the supplier's aliases, by the group they hold in
+	aliases    map[aliasKey]alias // the supplier's aliases, by the group they hold in
 	plans      map[string]store.PlanVersion
 }
 
@@ -61,8 +61,16 @@ type nameKey struct {
 type nameState struct {
 	model      catalog.ModelID
 	formats    []string
-	unverified bool // the name is only a candidate of the version it maps to
+	declared   []protocol.Format // formats the alias declares beyond the adapter's
+	unverified bool              // the name is only a candidate of the version it maps to
 	why        syncer.Reason
+}
+
+// alias is one mapping: what an upstream name means, and the call formats the operator declared for it beyond what the
+// adapter reports. The projection unions the two, so a declaration survives every sync.
+type alias struct {
+	model   catalog.ModelID
+	formats []protocol.Format
 }
 
 // desiredEndpoint is what the listing says an endpoint should be: the name a call sends upstream, the formats it speaks,
@@ -106,14 +114,29 @@ func (p *projector) read(ctx context.Context) (err error) {
 
 // readAliases reads the aliases of the supplier, which mapping an upstream name tries first. A group's alias is kept in
 // the group's scope, so the same name may stand for different models in different groups.
-func (p *projector) readAliases(ctx context.Context) (map[aliasKey]catalog.ModelID, error) {
+func (p *projector) readAliases(ctx context.Context) (map[aliasKey]alias, error) {
 	rows, err := p.q.ListProjectedAliases(ctx, p.tx, p.id)
 	if err != nil {
 		return nil, fmt.Errorf("read the aliases: %w", err)
 	}
-	out := make(map[aliasKey]catalog.ModelID, len(rows))
+	out := make(map[aliasKey]alias, len(rows))
 	for _, r := range rows {
-		out[aliasKey{group: derefUUID(r.SupplierGroupID), name: r.UpstreamName}] = catalog.ModelID(r.ModelID)
+		var declared []protocol.Format
+		if len(r.Formats) > 0 {
+			parsed, err := store.ParseFormats(r.Formats)
+			switch {
+			// A newer node may declare a format this one does not know: keep the mapping and ignore that name rather
+			// than refusing the supplier's whole listing.
+			case errors.Is(err, store.ErrUnsupportedFormat):
+			case err != nil:
+				return nil, fmt.Errorf("read the alias formats: %w", err)
+			default:
+				declared = parsed
+			}
+		}
+		out[aliasKey{group: derefUUID(r.SupplierGroupID), name: r.UpstreamName}] = alias{
+			model: catalog.ModelID(r.ModelID), formats: declared,
+		}
 	}
 	return out, nil
 }
@@ -153,6 +176,10 @@ func (p *projector) groups(ctx context.Context) (map[string]uuid.UUID, error) {
 	for _, r := range rows {
 		stored[r.UpstreamRef] = r
 	}
+	pool := make(map[string]syncer.PoolCapacity, len(p.st.Pool))
+	for _, g := range p.st.Pool {
+		pool[g.GroupRef] = g
+	}
 	for _, g := range p.st.Groups {
 		seen[g.Ref] = true
 		id, err := p.group(g, stored[g.Ref])
@@ -160,12 +187,17 @@ func (p *projector) groups(ctx context.Context) (map[string]uuid.UUID, error) {
 			return nil, err
 		}
 		ids[g.Ref] = id
+		capacity, ok := pool[g.Ref]
+		p.pool(id, stored[g.Ref], &capacity, ok)
 	}
 	// A group the listing no longer has is kept, with its endpoints and codename, and marked absent: nothing here is
-	// deleted, and the supplier may sell it again.
+	// deleted, and the supplier may sell it again. Its pool reading is cleared: it is not in the pool's answer any more.
 	for _, r := range rows {
-		if !seen[r.UpstreamRef] && r.Present {
-			p.writes.AbsentGroups = append(p.writes.AbsentGroups, r.ID)
+		if !seen[r.UpstreamRef] {
+			if r.Present {
+				p.writes.AbsentGroups = append(p.writes.AbsentGroups, r.ID)
+			}
+			p.pool(r.ID, r, nil, false)
 		}
 	}
 	return ids, nil
@@ -197,6 +229,45 @@ func (p *projector) group(g syncer.GroupSnap, found store.ListProjectedGroupsRow
 		ID: found.ID, Name: g.Name, Ratio: g.Ratio, Facts: facts, SeenAt: &p.now,
 	})
 	return found.ID, nil
+}
+
+// pool writes what the management API of a pool last said of a group, or clears it when the pool no longer reports the
+// group. now is the reading and ok whether there is one; the row and the reading are compared so a pool whose numbers
+// did not change writes nothing, like the listing it belongs to.
+func (p *projector) pool(id uuid.UUID, found store.ListProjectedGroupsRow, now *syncer.PoolCapacity, ok bool) {
+	if !ok {
+		if found.PoolAccounts != nil {
+			p.writes.ClearedPool = append(p.writes.ClearedPool, id)
+		}
+		return
+	}
+	if found.PoolAccounts != nil && int(*found.PoolAccounts) == now.Accounts && int(*found.PoolFailed) == now.Failed &&
+		int(*found.PoolUsable) == now.Usable && samePoolInt(found.PoolHeadroom, now.Headroom) &&
+		samePoolInt(found.PoolCapacity, now.Capacity) && found.PoolLow == now.Low {
+		return
+	}
+	params := store.SetProjectedGroupPoolParams{
+		ID: id, Accounts: poolInt(now.Accounts), Failed: poolInt(now.Failed), Usable: poolInt(now.Usable),
+		Headroom: poolIntPtr(now.Headroom), Capacity: poolIntPtr(now.Capacity),
+		Low: now.Low, ObservedAt: &p.now,
+	}
+	p.writes.Pool = append(p.writes.Pool, params)
+}
+
+func poolInt(v int) *int32 { n := int32(v); return &n } //nolint:gosec // G115: bounded by maxPoolPages*poolPageSize, far below 2³¹
+
+func poolIntPtr(v *int) *int32 {
+	if v == nil {
+		return nil
+	}
+	return poolInt(*v)
+}
+
+func samePoolInt(stored *int32, now *int) bool {
+	if stored == nil || now == nil {
+		return stored == nil && now == nil
+	}
+	return int(*stored) == *now
 }
 
 // models writes every name of the listing with the catalog model it stands for, and returns what the listing says of
@@ -239,11 +310,11 @@ func (p *projector) groupModels(g syncer.GroupSnap, id uuid.UUID, stored map[nam
 			continue
 		}
 		seen[key] = true
-		formats, err := store.FormatNames(formatsOf(m.Formats))
+		state := p.mapping(key)
+		formats, err := store.FormatNames(slices.Concat(formatsOf(m.Formats), state.declared))
 		if err != nil {
 			return fmt.Errorf("model %s/%s: %w", g.Ref, m.Name, err)
 		}
-		state := p.mapping(key)
 		state.formats = formats
 		states[key] = state
 		if was, ok := stored[key]; ok && sameName(was, state) {
@@ -269,17 +340,20 @@ func sameName(was store.ListProjectedModelsRow, state nameState) bool {
 // mapping is where an upstream name stands: the supplier's alias for it, else the catalog's own names, and only for a
 // model that is on sale (syncer.MapUpstream).
 func (p *projector) mapping(key nameKey) nameState {
-	var alias *catalog.ModelID
-	if id, ok := p.aliases[aliasKey(key)]; ok {
-		alias = &id
-	} else if id, ok := p.aliases[aliasKey{group: uuid.Nil(), name: key.name}]; ok {
-		alias = &id
+	var found alias
+	var mapped *catalog.ModelID
+	if a, ok := p.aliases[aliasKey(key)]; ok {
+		found = a
+		mapped = &a.model
+	} else if a, ok := p.aliases[aliasKey{group: uuid.Nil(), name: key.name}]; ok {
+		found = a
+		mapped = &a.model
 	}
-	m := syncer.MapUpstream(p.snap, alias, key.name)
+	m := syncer.MapUpstream(p.snap, mapped, key.name)
 	if !m.Mapped {
 		return nameState{why: m.Why}
 	}
-	return nameState{model: m.Model, unverified: m.Unverified}
+	return nameState{model: m.Model, declared: found.formats, unverified: m.Unverified}
 }
 
 // endpoints makes and changes the endpoints of the listing's models and the cost schedules they are routed by. An endpoint

@@ -13,7 +13,7 @@ type Method string   // 本站的付款方式代码："alipay"、"wxpay"、"usdt
 type MerchantID, OrderID, RefundID uuid.UUID // 对外写法 mch_、ord_、rfd_
 type Money struct{ Currency platform.Currency; Minor int64 } // 付款币种的最小单位；位数取 ISO 4217 表
 type State string    // 订单状态："pending"、"paid"……；转移表是 payments.transitions
-type Order struct{}  // ID、站点、账户、用户、商户账户、付款方式、状态、额度、总额、手续费、网关订单号、checkout、有效期、时间戳
+type Order struct{}  // ID、站点、账户、用户、商户账户、付款方式、状态、额度、总额、手续费、网关订单号、checkout、有效期、时间戳；RefundAllowed 是商户账户此刻是否允许用户申请退款
 type CreateOrder struct{} // Site、Account、User、Method、Credits、Key（幂等键）、ReturnURL、ClientIP、Mobile
 
 func Open(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client；告警经平台事务信号
@@ -21,6 +21,8 @@ func (p *Payments) Options(ctx context.Context, s pg.Scope, site accounts.Site, 
 func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (Order, Checkout, error)  // 账户范围；事务、渠道调用、事务
 func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, error)                     // 待支付 → 已取消，减回用量，之后请渠道关单
 func (p *Payments) GetOrder(ctx context.Context, s pg.Scope, id OrderID) (Order, error)                     // 账户范围读自己的订单；别的账户的是 ErrNotFound
+func (p *Payments) ListOrders(ctx context.Context, s pg.Scope, account uuid.UUID, after *page.Cursor, size int) ([]Order, *page.Cursor, error) // 控制台的订单列表，按 (created_at,id) 倒序，一页 1–200
+func ParseMerchantID(s string) (MerchantID, error)                                                        // 对外写法转 ID；格式不对与不存在同为 ErrNotFound
 func ParseOrderID(s string) (OrderID, error)                                                              // 对外写法转 ID；格式不对与不存在同为 ErrNotFound
 type Wait struct{ Err error; After time.Duration }                                                        // 等一等就能放行的拒绝（取消次数、每 IP 限额、核验），控制台据此写 Retry-After
 func RegisterPoll(c PollConfig) error                // payments.poll：查单、入账、过期、商户查询并发和熔断
@@ -28,13 +30,35 @@ func RegisterReconcile(c PollConfig) error           // payments.reconcile：每
 func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, error)   // "我已付款"：账户范围授权，先取商户查询名额再占每单每分钟核验次数，繁忙不扣次数
 func (p *Payments) Notify() http.Handler                                               // GET/POST /api/payments/v1/notify/{merchant}
 func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Refund, error)              // 冻结并等待审批；r.Key 幂等
-func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID) (Refund, error) // 独立管理员批准后发送；线下退款继续等待凭证
+func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) // 独立管理员批准后发送；线下退款继续等待凭证；理由进审计
+func ApproveRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, reason string) (Refund, error) // 在调用方事务里记录批准与审计；提交后再 SendRefund
+func (p *Payments) SendRefund(ctx context.Context, s pg.Scope, id RefundID, initial bool) error // 提交后发送或续发；失败由退款轮询接续
 func (p *Payments) RejectRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) // 拒绝尚未审批、确定未发送的申请
+func (p *Payments) PrepareRejectRefund(ctx context.Context, s pg.Scope, id RefundID) error // 在决策事务前推进账本；单连接池不能在事务内再取连接
+func RejectRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, reason string) (Refund, error) // 调用方已 PrepareRejectRefund；在调用方事务里解冻并审计
+func (p *Payments) ListRefunds(ctx context.Context, s pg.Scope, orders []OrderID) (map[OrderID][]Refund, error) // 一页订单的退款，按退款创建顺序，一次查询
+func (p *Payments) ListSiteOrders(ctx context.Context, s pg.Scope, q OrderQuery, after *page.Cursor, size int) ([]SiteOrder, *page.Cursor, error) // 管理端的站点订单列表；按用户、账户、商户、状态、时间筛选
+func (p *Payments) ListSiteRefunds(ctx context.Context, s pg.Scope, q RefundQuery, after *page.Cursor, size int) ([]Refund, *page.Cursor, error) // 管理端的站点退款列表，可按状态筛选
 func (p *Payments) GetRefund(ctx context.Context, s pg.Scope, id RefundID) (Refund, error)
 func (p *Payments) GetResolution(ctx context.Context, s pg.Scope, order OrderID, key string) (Resolution, error) // 审批前读取持久提案
 func (p *Payments) ApproveResolution(ctx context.Context, s pg.Scope, order OrderID, key string, user uuid.UUID) error
 func (p *Payments) Resolve(ctx context.Context, s pg.Scope, r Resolution) error                          // 保存人工提案与渠道凭证；另一个管理员审批后落定
-func (p *Payments) SaveMerchant(ctx context.Context, s pg.Scope, actor audit.Actor, m MerchantInput) (Merchant, error)        // 本地校验、事务外探测，再以独立事务复核修订号与身份并封装密钥
+func (p *Payments) SaveMerchant(ctx context.Context, s pg.Scope, actor audit.Actor, m MerchantInput, reason string) (Merchant, error) // 本地校验、事务外探测，再以独立事务复核修订号与身份并封装密钥
+func (p *Payments) PrepareMerchant(ctx context.Context, s pg.Scope, m MerchantInput) (MerchantChange, error)                 // 校验与探测在调用方的事务之外；写入另行
+func (p *Payments) WriteMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, change MerchantChange, reason string) (Merchant, error) // 写在调用方的事务里，通常是幂等声明的那个事务；reason 进保存审计
+type CodeID, RedemptionID uuid.UUID // 对外写法 rdm_、rdn_
+type RedeemState string           // enabled、used、disabled、expired（expired 是读时推导）
+type RedeemCode struct{}          // ID、站点、面额、备注、末四位提示、状态、有效期、生成人、生成与兑换时间；Code 只在生成应答里有
+type Redemption struct{}          // ID（= 额度批次 ID）、面额、提示、有效期、兑换时间、是否重放
+type Issue struct{}               // 站点、每码面额、数量、备注、有效期、操作者、理由
+
+func IssueCodes(ctx context.Context, tx pg.Tx, g Issue) ([]RedeemCode, error) // 在调用方事务里生成一批并记审计；明文码只在这里返回
+func (p *Payments) Redeem(ctx context.Context, r Redeem) (Redemption, error)  // 限流、码、兑换记录、billing.CreditRedeem；r.Key 幂等，账户范围由调用方先确认
+func (p *Payments) ListCodes(ctx context.Context, s pg.Scope, site uuid.UUID, state RedeemState, note string, after *page.Cursor, size int) ([]RedeemCode, *page.Cursor, error) // 站点范围；不返回码
+func DisableCode(ctx context.Context, tx pg.Tx, actor audit.Actor, by uuid.UUID, id CodeID, reason string) (RedeemCode, error) // 只停用未兑换的码；审计同事务，写在调用方的事务里
+func (p *Payments) ListRedemptions(ctx context.Context, s pg.Scope, account uuid.UUID, after *page.Cursor, size int) ([]Redemption, *page.Cursor, error) // 账户范围；不返回码
+func ListMerchants(ctx context.Context, tx pg.Tx, site uuid.UUID) ([]Merchant, error)                             // 站点范围；没有密钥
+func DisableMerchant(ctx context.Context, tx pg.Tx, actor audit.Actor, id MerchantID, reason string) (Merchant, error) // 只改启用位，保留配置与密文；已停用时什么也不写
 ```
 
 ### 渠道接口
@@ -160,6 +184,10 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 | 账户范围读不到商户配置和密文 | `merchant_configs` 只对站点和平台范围开放；行级安全测试：账户范围读得到付款方式与费率，读 `merchant_configs` 得 0 行 |
 | 支付链接只有白名单协议 | 核心统一检查 `Checkout`；表驱动测试：`//evil.com/x`、`javascript:`、`data:`、`http:` 被拒，`/pay?x` 补全后放行 |
 | 选不出商户账户就不下单 | 过滤后为空、查用量出错都返回错误，不退回全部候选；表驱动测试 |
+| 一个兑换码至多兑换一次，同一账户同一幂等键至多一笔兑换 | 码行 `SELECT … FOR UPDATE` 后按 `state = 'enabled'` 条件更新，`redeem_redemptions.code_id` 唯一：不同账户并发兑同一个码也只有一个事务能插入；账户事务级咨询锁（0x52）让同键重放和同账户并发兑换按顺序看到彼此，`(account_id, idem_key)` 唯一兜底；测试：两个账户同码并发、同账户同键并发，入账都是一次 |
+| 取得码行锁后才判断到期，条件更新再守一次 | 事务开始时间早于等锁；码可能在等待期间过期。锁后读 `clock_timestamp()`，更新条件再比较一次，跨过有效期的兑换失败且不改任何行；测试用账户锁制造跨过有效期的等待 |
+| 兑换限流不被并发、跨节点超过，计数出错时拒绝 | 名额在检查码之前由独立的已提交事务用 `INSERT … ON CONFLICT DO UPDATE … WHERE attempts + 1 <= 限额` 原子占用，行锁是本账户/本 IP 的串行点；数不了（写入出错）就不兑换；测试：30/31、100/101 的边界、同账户并发只放行限额、计数故障时兑换被拒 |
+| 码的明文不落库、不出现在列表和错误里 | 库里只有 SHA-256 和末四位；`RedeemCode.Code` 只在 `IssueCodes` 的返回值里填；测试扫描表和接口响应找不到完整码 |
 
 ## 数据
 
@@ -170,7 +198,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | 表 | 关键列 | 约束与索引 | 类别与策略 |
 |---|---|---|---|
 | `merchants` | `id`、`site_id`、`kind`、`name`、`enabled`、`currency`、`ttl_seconds`、`refund_enabled`、`user_refund`、`sort`、`rev` | `currency ~ '^[A-Z]{3}$'`；`ttl_seconds` 在 60 到 86400；唯一 `(id, site_id)` 供本模块的子表引用；`(site_id, sort)`；不删除，只停用 | 站点公开配置：平台范围和站点范围可读，普通账户范围只能读授权给出的所属站点。使用 [pg 的站点公开配置表达式](../platform/pg/README.md#决策与理由)，每个范围读取每条语句至多执行一次。所属站点由 `pg.AccountScopeIn(站点, 账户)` 携带，来自账户授权，不依据账户可以伪造的 `platform.tenants` 登记。写入由站点范围表达式限制；主站行另由管理接口的控制面守卫限制，只有平台范围可改 |
-| `merchant_configs` | `merchant_id` 主键、`site_id`、`settings`（非密配置，规范 JSON，供后台展示）、`ciphertext`/`nonce`/`wrapped_dek`/`key_version`（密钥、轮换中的旧密钥、`settings` 的 SHA-256）、`rev` | 改 `settings` 必须同时重新封装 | 站点数据：读写均由 [pg 的站点范围表达式](../platform/pg/README.md#决策与理由)限制；账户范围读不到 |
+| `merchant_configs` | `merchant_id` 主键、`site_id`、`settings`（非密配置，规范 JSON，供后台展示）、`ciphertext`/`nonce`/`wrapped_dek`/`key_version`（密钥、轮换中的旧密钥、`settings` 的 SHA-256）、`rev` | 改 `settings` 必须同时重新封装；触发器 `fence_envelope_key_version` 拒绝写入已退役的 `key_version`（[主密钥退役](../platform/README.md#凭证加密)） | 站点数据：读写均由 [pg 的站点范围表达式](../platform/pg/README.md#决策与理由)限制；账户范围读不到 |
 | `merchant_methods` | `merchant_id`、`site_id`、`method`、`upstream`、`fee_ppm`、`fee_fixed`、`single_min`、`single_max`、`daily_limit`、`enabled` | 主键 `(merchant_id, method)`；`fee_ppm` 0…500000；`fee_fixed ≥ 0`；`single_min ≤ single_max`（都设了时）；后三项是付款币种的总额（最小单位） | 同 `merchants` |
 | `merchant_usage` | `merchant_id`、`site_id`、`day`（UTC 日）、`used`（付款币种的最小单位） | 主键 `(merchant_id, day)`；`used ≥ 0` | 共享计数（[安全的「租户隔离」](../../docs/security.md#租户隔离)）：读、INSERT、UPDATE 的策略都是「范围的站点等于该行 `site_id`」（INSERT 用 `WITH CHECK`，`ON CONFLICT` 的 UPDATE 同受 `USING` 与 `WITH CHECK` 约束）；`axiom_app` 只有 SELECT、INSERT 和 `UPDATE (used)` 的列权限，没有 DELETE。账户范围的下单事务要锁它、加它，却读不到别的账户的订单，也碰不到别的站点的行 |
 | `ip_usage` | `site_id`、`ip`（`clientip.Group` 的结果：IPv4 地址，或 IPv6 的 /64 网络地址）、`window_start`、`orders`、`failures` | 主键 `(site_id, ip)`；计数 ≥ 0；窗口 1 小时，从窗口过后的第一次下单或失败起算，到期时下一次事件把行重置 | 共享计数，策略同 `merchant_usage`（读、INSERT、UPDATE 都是站点范围并上所属站点，`axiom_app` 只有 SELECT、INSERT 和三个计数列的 UPDATE，没有 DELETE）。行只在这个 IP 下过单或有订单失败后才出现，不会比订单多 |
@@ -181,6 +209,9 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | `refunds` | `id`、`order_id`、`site_id`、`account_id`、`state`（frozen、sending、pending、succeeded、failed）、`via`（channel、offline）、`credits`（实际冻结）、`requested_credits`（原请求，重放比较）、`amount`（报价）、`with_fee`、`refund_key`（冻结时的能力快照）、`manual_only`（差异已记录且只能人工落定）、`provider_ref`、`reason`、`requested_by`、`approved_by`、`idem_key`、`attempts`（尝试栅栏）、`sent_at`、`next_query_at`、`created_at`、`finished_at`（成功时取 billing 退款分录的时间） | `0 < credits ≤ requested_credits`；`amount > 0`；`state IN ('sending','pending') → sent_at` 非空；终态等价于有 `finished_at`；审批者不等于申请人；唯一 `(order_id, idem_key)`；部分唯一索引确保每单至多一笔在途，另有只含已批准且仍可自动处理的渠道退款的到期索引和成功现金日期索引 | 账户数据可读；只允许站点和平台范围写，用户申请经范围检查后由核心事务写入 |
 | `resolutions` | `id`、`order_id`、`site_id`、`account_id`、`refund_id`（退款结论时，与 `order_id` 共同引用退款）、`outcome`（succeeded、failed、credit）、`trade_no`、`amount`（人工入账时）、`evidence`、`reason`、`requested_by`、`approved_by`、`idem_key`、`created_at` | 唯一 `(order_id, idem_key)`；提案内容不可修改，应用只有 `approved_by` 的列更新权限；审批者不等于提出人；退款和入账目标互斥 | 站点数据，只允许站点和平台范围读写；审批前可经 `GetResolution` 检视原提案 |
 | `query_health` | `merchant_id`、`site_id`、`failures`（0…4）、`paused_until`、两组查询令牌及期限 | 商户主键与同站外键；单条条件 UPDATE 原子取两者之一；查询有 5 秒期限，租约 10 秒；连续 5 次网关未知暂停 5 分钟，旧令牌完成不改新令牌；暂停时钟在状态行锁取得后读取 | 站点数据，用策略级 InitPlan 读取范围，仅站点/平台范围可读写；用户核验经账户授权后用平台范围占名额 |
+| `redeem_codes` | `id`、`site_id`、`code_hash`（SHA-256，32 字节）、`code_hint`（末四位）、`amount`（十亿分之一）、`note`、`state`（enabled、used、disabled）、`expires_at`、`created_at`、`created_by`、`redeemed_at`、`disabled_at`、`disabled_by` | 唯一 `(site_id, code_hash)`；`amount > 0`；`code_hint ~ '^[0-9A-HJKMNP-TV-Z]{4}$'`；`note` 至多 200 字；状态与时间戳互相约束（used 有 `redeemed_at`、disabled 有 `disabled_at` 和 `disabled_by`，enabled 两者皆空）；`(site_id, created_at DESC, id DESC)`；不删除 | 站点数据：平台和站点范围读写，账户范围读不到（含哈希）；写入只允许站点范围 |
+| `redeem_redemptions` | `id`、`site_id`、`code_id`（唯一）、`account_id`、`user_id`、`amount`、`code_hint`、`expires_at`、`idem_key`、`created_at` | 唯一 `(code_id)`，一个码至多一条兑换记录；唯一 `(account_id, idem_key)`；`amount > 0`；`(account_id, created_at DESC, id DESC)` | 账户数据：读写由账户范围表达式限制；站点和平台范围可读 |
+| `redeem_attempts` | `site_id`、`kind`（account、ip）、`subject`（账户 UUID 文本或 IP 分组）、`window_start`、`attempts` | 主键 `(site_id, kind, subject)`；`attempts ≥ 0`；窗口一小时，从窗口过后的第一次尝试起算 | 共享计数（同 `ip_usage`）：读、INSERT、UPDATE 都是站点范围；应用只有 SELECT、INSERT 和 `UPDATE (attempts, window_start)`，没有 DELETE |
 | `discrepancies` | `id`、`site_id`、`account_id`（可空）、`order_id`（可空）、`merchant_id`、`kind`（amount_mismatch、multiple_payment、duplicate_payment、unmatched_payment、trade_no_conflict、statement、refund_unknown、ledger、usage）、`dedupe`（回调/查询付款事实用订单号和网关单号的指纹；退款 ID 或对账日期与规范化明细的指纹）、`detail`、`state`（open、resolved）、`created_at`；`investigated_by`、`investigated_at`、`note`；resolved 仅表示调查已记录，不表示已处理资金 | 唯一 `(merchant_id, kind, dedupe)`，同一事实重复上报只留一行；`(site_id, state, created_at)` | 站点数据，带账户时同账户数据 |
 
 - **对外 ID**：订单 ID 的对外写法就是发给渠道的商户订单号，`ord_` 加 26 个字符。
@@ -205,6 +236,15 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 - **管理调查**：`ListDiscrepancies`、`GetDiscrepancy`、`InvestigateDiscrepancy` 经调用方的范围事务读取；调查写入 `resolved`、操作者、时间和说明并记审计、清除平台告警，不触碰订单、余额和退款。管理 API 的三项操作都需 MFA 和平台 `sites.manage`；变更需 CSRF、理由和幂等键。响应的新字段全部可选；旧付款差异中的 JSON 整数金额读取时转成十进制文本，避免大于 2^53 的最小单位值被舍入。列表一页最多 100 行，以最后一行 UUID 的 `before` 继续；记录本身用 UUID，站点、账户、商户、订单引用沿用各自的 TypeID。资金结论需调用独立的提案与审批接口。
 - **范围**：回调和两个任务用 `cmd/axiom` 交来的平台范围；控制台用 accounts 交出的账户范围，站长后台用站点范围。
 
+### 兑换码
+
+- **生成**：`IssueCodes` 在调用方（管理后台的幂等声明）事务里校验面额 > 0、数量 1–100、备注至多 200 字、有效期在将来，用 `crypto/rand` 取 20 位 Crockford Base32，逐条插入 `redeem_codes`（只存 SHA-256 和末四位），写一条 `redeem_code.issue` 审计，返回带明文的码。同一批的码面额、备注、有效期相同；生成是全部成功或全部回滚。幂等声明里保存的应答已经把 `code` 去掉：同键重放回同一批的 ID、面额和提示，不再有明文，这样库里任何一处都没有可用的码。
+- **兑换**：`Redeem` 先在独立事务里占用账户和 IP 的名额（每账户每小时 30 次，每 IP 分组每站点每小时 100 次；超限返回 `*Wait`，控制台据此回 429 和 `Retry-After`），再在一个事务里取账户咨询锁（键用整个账户 ID 的散列，命名空间 0x52）→ 按 `(account_id, idem_key)` 重读兑换记录（有就直接返回）→ `RedeemCodeByHash … FOR UPDATE` → 读 `clock_timestamp()`，检查状态和有效期（`enabled`、未过期；不用事务开始时间，等锁可能跨过有效期）→ `UseRedeemCode` 条件更新为 `used`（条件里再查一次有效期） → 插入 `redeem_redemptions`（`code_id` 唯一）→ `billing.CreditRedeem`（批次 ID = 兑换记录 ID，来源 `redeem`，过期沿用码上的）。失败回滚整个事务，名额已在独立事务里提交，所以失败的尝试也计数。
+- **状态**：库里的 `state` 只有 `enabled`、`used`、`disabled`；`expired` 是读取时对「enabled 且 `expires_at` 已过」的推导，不写库，也不需要定时任务。停用只接受 enabled 且未过期的码，已兑换的返回 `ErrRedeemUsed`，不改变任何行。
+- **列表与读取**：管理端按站点列出，可用状态和备注前缀筛选（`starts_with(lower(note), lower(prefix))`，`_`、`%`、`\` 按字面），按 `(created_at, id)` 倒序翻页；控制台按账户列出兑换记录。两者都不返回码，只有末四位提示。错误信息只说明这次兑换被拒的原因（无效、已用、过期、已停用、太频繁），不回显码，也不确认某个码是否存在。
+- **管理操作**：生成、停用、列出都要 `sites.manage`；生成与停用还要 MFA、CSRF、`Idempotency-Key` 和理由。生成和停用各记一条审计，与数据同事务；停用只改 `state`、`disabled_at`、`disabled_by`。控制台兑换要 `balance.top_up`，历史要 `balance.view`。HTTP 契约见 `api/admin.yaml` 的 `/payments/redeem-codes` 和 `api/console.yaml` 的 `/redeem-codes`。
+- **测试**：`TestIssueWritesOnlyHashes`、`TestRedeemCreditsOnce`、`TestRedeemRefusesStates`、`TestRedeemConcurrentOneCode`（一个码两个账户、一个账户同键两次，核对双方余额、兑换记录和账本）、`TestRedeemExpiryAcrossTheLock`（等账户锁跨过有效期后拒绝，码、记录和余额不变）、`TestRedeemLimitsPerAccountAndIP`、`TestDisableIsIdempotentAndAudited`、`TestListCodesFiltersAndPages`、`TestListCodesNoteIsLiteral`、`TestRedeemIsTenantScoped`，以及 `cmd/axiom` 的管理与控制台处理器测试（兑换后读余额、流水和 CSV）和 billing 的 `TestCreditRedeem`、`statementKind` 的表驱动用例。
+
 ### 人工结论与验证
 
 `Resolve` 只持久保存同订单幂等键下的提案：目标退款与成功/失败，或待处理订单的付款事实；理由、渠道凭证和提出人必填。`GetResolution` 供另一个管理员检查，再由 `ApproveResolution` 按存储的内容执行，不能由调用者传两个 ID 就当作已有批准。当前没有运营累计资金上限服务，所有退款发起和所有资金人工结论都取保守的第二人审批；用户身份来自调用方已完成的 accounts 授权，不从请求体取。所有退款接口是模块 Go 接口，控制台和管理退款 HTTP 契约随对应页面接入。未知退款仅在待确认时接受人工结论，查询/发送在途时不能解冻；线下退款批准后保持冻结，转账凭证经同样的第二人批准才结算。待处理付款仅对同币种、无冲突的单笔付款入账；重复或无订单付款的另行入账不在本接口内。人工入账不受自动入账时间窗限制，但仍使用锁定/到账汇率、手续费和账本校验，失败时不记录批准。提案、批准、拒绝与资金变化都记同事务审计。
@@ -215,6 +255,11 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 
 | 决策 | 理由 | 否决的做法 |
 |---|---|---|
+| 兑换码只存 SHA-256 和末四位提示 | 码就是钱，库或备份泄露时明文可以直接兑成余额；哈希让读库的人拿不到能用的码。末四位够客服定位批次，拼不出完整的码。new-api 明文存 `key`（`model/redemption.go:16`），不采用 |
+| 一批码共用面额、备注和有效期；码是 20 位 Crockford Base32，按 5 位分组 | 运营一次发一批，字段跟着批次走；Base32 去掉 I/L/O/U，抄写和报码不容易错。new-api 每批另要一个 1–20 字的名称、码是 32 位 UUID 字符串（`controller/redemption.go:75-124`），名称表达不了批次用途，改成备注；有效期同时约束码和兑到的额度 |
+| 兑换记成 `redeem` 来源的批次，不写付费批次 | 付费批次有实付、手续费和退款折算；兑换码没收到钱，记成付费会在退款时凭空退出现金。单独来源让报表区分赠送与兑换，账本仍走同一套批次和分录。new-api 直接加额度（`creditTopUpQuota`），没有批次和来源 |
+| 兑换前先在独立事务里原子占名额，按账户 30 次/时、IP 分组 100 次/时，数不了就拒绝 | 码约有 100 位熵，盲猜不可行，限流挡的是自动化试错和盗码刷接口；失败尝试也计数才挡得住猜；数据库计数跨节点、重启后仍有效。sub2api 只数失败、按用户、Redis 出错时放行（`backend/internal/service/redeem_service.go:28`、`:336-352`），那正好在存储故障时放开猜码；new-api 没有兑换限流 |
+| 停用按单个码、已兑换的不能停用、过期是读时推导 | 兑换是用户已经拿到的钱，停用只拦还没兑换的码；把 `expired` 写成库里的状态要定时扫全表，读时推导没有延迟。码不删除，历史和审计留着。new-api 的管理页把删除和状态更新放在一起（`controller/redemption.go:206-231`），不采用删除 |
 | 订单、批次、分录一个事务，没有"充值中" | 入账与改状态同成同败，重复回调只是一次不改行的条件更新 | sub2api 的已支付 → 充值中 → 已完成加 5 分钟租约（`service/payment_fulfillment.go:314-363`）：只因它的加余额不在同一事务里才需要 |
 | 退款独立成表，先冻结、单独提交"发送中"、再调渠道；只对声明 `RefundKey` 的渠道重发 | 一笔订单多次部分退款；渠道失败只解冻；"发送中"让崩溃后知道哪些一定没发 | 退款状态挂在订单上（sub2api `payment/types.go:35-40`）：同时只能有一个退款；先扣余额再调渠道（`service/payment_refund.go:315-330`）：失败要回滚扣减，回滚还可能失败；对所有渠道按超时重发：易支付没有退款单号，会退两次 |
 | 退款金额按订单上的实付、手续费、入账额度之比算，最后一笔取余数 | 入账可能按实付或到账汇率折算，比例跟着实际入账走才不会多退；取余数让全额退款没有舍入误差 | 按订单报价的比例（sub2api `service/payment_amounts.go:35-48`）：换汇率入账后多退 |
@@ -239,14 +284,16 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | PR | 内容 | 验收测试 |
 |---|---|---|
 | E1-2a `feat(payments): configure merchant accounts and quote top-ups` | 表 `merchants`、`merchant_configs`、`merchant_methods`、`merchant_usage`、`settings` 和迁移；`Channel`、`Plugin`、`Caps`、登记、测试用的假渠道；商户账户的保存（校验、密钥与 `settings` 哈希的封装）；选商户账户与用量计数；手续费与汇率锁定（含 billing 的 `TopUpRate` 与充值缓冲）；`Options` | 总额复算与手续费反推的性质测试；比例超过 50%、额度乘汇率越界被拒；选商户账户的单笔、当天额度、全被过滤和查用量出错都拒绝；并发抢最后的当天额度只放行放得下的；直接改库里的网关地址后商户账户用不了；密钥不出现在日志和响应里；行级安全：账户范围读得到本站的付款方式和费率、读不到 `merchant_configs`，站长只看到本站的商户账户；站点 A 的账户范围读不到、改不了站点 B 的 `merchants` 与 `merchant_usage` 行（含 INSERT … ON CONFLICT 造行） |
-| E1-2a2 `feat(payments): manage merchant accounts in the admin API` | 管理接口的商户账户契约与处理器（列出、读取、创建、修改；密钥只写不读，响应只有非密配置），站点支付设置与充值缓冲的读写；从 E1-2a 拆出，它已接近 2000 行 | 契约测试；密钥不出现在响应和审计里；主站行只有平台范围能改；修订号过期 409、字段错误 422 带指针 |
+| E1-2a2 `feat(payments): manage merchant accounts in the admin API` | 管理接口的商户账户契约与处理器（列出、读取、创建、修改、停用；密钥只写不读，响应只有非密配置），站点支付设置与充值缓冲的读写；从 E1-2a 拆出，它已接近 2000 行 | 契约测试；密钥不出现在响应、审计和幂等指纹里；主站行只有平台范围能改；修订号过期 409、字段错误 422 带指针；停用保留配置与已封装密钥，重复停用不写第二次审计；充值缓冲默认 2%，0 与 10% 可用、越界被拒 |
 | E1-2b `feat(payments): take orders and cancel them before payment` | 表 `orders`、`order_events` 和 `settings` 的限额列与迁移；转移表；下单（账户咨询锁、待支付/取消/当天/首笔上限、链接检查、幂等键、校验服务端传入的 https 返回地址）、取消、不入账的过期（`payments.poll` 的第 2 步）与减回用量；有未完成订单时拒改商户身份字段 | 转移表的全部（从，到）组合；同键同请求返回同一订单（充值关闭后仍可重放）、同键异请求 409，同键并发只调用一次渠道；10 个并发下单只放行 3 个待支付，取消空出名额，取消 5 次后拒新单；当天上限与首笔上限，已付过的账户不再受首笔限制；`//`、`javascript:`、`data:`、相对链接被拒且订单失败、用量减回，NUL 被清掉；渠道答不上时订单留在待支付、用量不减、返回结果未知，写 checkout 的事务失败时不回成功（故障注入）；过期只发生一次、之后请渠道关单；取消与过期竞争只释放一次用量，跨 UTC 日释放创建日用量；有订单在途时改币种、身份设置、密钥被拒，改名和非身份设置可以；行级安全：账户只看到自己的订单与事件，也取消不了别人的 |
 | E1-2c `feat(payments): credit orders from callbacks and queries` | 表 `order_payments`、`discrepancies` 和迁移；回调处理器（限流、配置缓存、无锁预读、查单金额为准、找不到订单与网关订单号冲突记待处理、提交后才应答）和入账；"我已付款"；过期前的查单与过期后到账（宽限期、到账汇率、自动入账期限）；补查窗口内已过期、已取消及有网关单号的失败订单的商户身份保护（[#390](https://github.com/TYCT-tyct/Axiom/issues/390)，真实渠道启用前完成） | 身份保护的窗口边界、关单失败/不支持与晚付；性质测试：重复、乱序、并发、丢失回调下批次恰好一个、账本平衡；金额不符、多笔付款、折算为 0 进待处理，币种不符不入账；通知与查单金额不同进待处理；验签通过找不到订单、网关订单号冲突都有待处理记录且不回 500；坏签名不写库；查单失败返回 502；提交失败时应答不是成功（故障注入）；宽限期内按锁定汇率、之后按到账汇率、超过期限进待处理，锁定的汇率列不变 |
 | E1-2d `feat(payments): expose the console order contract` | 控制台订单契约与处理器：按站点域名生成 https 返回地址，不收浏览器传入的返回地址；每 IP 下单/失败限流，默认每小时 20/10 次，计数故障不放行；按订单 `State` 与 `Checkout` 映射重放应答（#389 评审第 10 项） | IP 限流边界（20/21、10/11 次，同 /64 与映射 IPv4 归并，窗口到期重置）、十个账户同 IP 并发只放行限额、计数故障（表上的触发器）下单被拒且渠道没被问、失败计数故障时订单仍是待支付；服务器生成返回地址（请求带 `return_url` 被契约拒绝，渠道收到的是登记 origin 加 `/console/balance`，且该路径在公共路由上命中控制台页面）；失败单重放回 422、无 checkout 的待支付单（结果未知）重放回 202 且不带支付链接、已取消的回 200；同键并发只问一次渠道；CSRF、会话、别的账户的订单读/取消/核验一律 404、渠道不被问；`Retry-After` |
+| E1-2e `feat(payments): list orders and decide refunds in the admin API` | 管理端订单列表（用户、用户账户、状态、渠道、日期筛选与游标）与退款队列/批准/驳回；站点范围、金额单位、审计与幂等；批准要求另一人；本地决策与幂等答案同事务 | 筛选与游标分页；站点隔离；退款只列本站；金额文本精确；批准与驳回写审计，重放只做一次；自批 403，终态 409，字段错误 422；同一键不能用于两笔退款；答案写入失败时批准与审计一起回滚 |
 | E1-3 `feat(payments): add the easypay protocol channel` | 易支付插件：配置项（[支付的「易支付协议插件」](../../docs/domains/payments.md#易支付协议插件)）、跳转与接口两种下单、验签、白名单、查单确认、关单、退款 | 按协议自写的签名向量；参数走私（下单参数里嵌 `trade_status`）被拒；多余参数、`pid` 不符被拒；GET 与 POST 回调；PHP 风格的字符串整数、明确失败码优先、回显订单号不符；相对支付链接补全、`//` 开头被拒；退款响应是 HTML、空、字符串 `code`；退款先按订单号、明确"订单不存在"才按网关订单号；全部经出站客户端，日志和链路里没有查询串；本机假网关的端到端 |
 | E1-4 `feat(payments): take USDT through an easypay-compatible gateway` | Epusdt 作为易支付商户账户的接入与预设：`usdt.tron` 映射、数字 `pid`、法币金额；退款只能线下；接入前实测它的查单接口 | 用 Epusdt 官方镜像在本地部署后的下单、GET 回调、查单确认、入账；`money=100.0000` 精确解析；查单不可用时这个商户账户不能保存为启用，停用不依赖网关 |
 | E1-5 `feat(payments): reconcile unfinished orders and daily channel statements` | `payments.poll` 的商户并发上限与熔断（每单退避和过期后补查由 E1-2c 提供）；`payments.reconcile`；待处理记录的管理页与告警 | 丢回调由补单入账；一笔订单在有效期内的查询次数符合退避；一个商户账户超时不挡其他账户，连续未知触发暂停和告警；不能关单的渠道过期后付款，在补查窗口内补到；现金分录与订单不符、用量计数与订单复算不符时出现待处理记录并告警；同一差额重复上报只留一行 |
 | E1-6a `feat(billing): freeze paid credit as replayed events` | billing：冻结、解冻、退款三种带序号的交易，批次的冻结状态，重放、准入、到期都按冻结额处理；`FreezeRefund`、`SettleRefund`、`ReleaseRefund`（[billing 的「额度批次的分配与到期」](../billing/README.md#额度批次的分配与到期)） | 随机冻结、解冻、退款、扣费、到期，从头重放等于现场，且从任意位置续放相同（扩展 `TestReplayProperty`）；冻结期间并发调用花不掉冻结的额度；到期不作废冻结的额度；冻结后余额底线以下的扣费不动冻结额度；billing 不变量①–⑦（⑦ 随本 PR 加入）在冻结后成立 |
 | E1-6b `feat(payments): refund through channels with a sending state` | 表 `refunds` 和迁移；发起、审批、发送中、查询、人工结论（凭证、第二人批准）与金额不符策略（默认人工，可选按实付折算）；`payments.poll` 的第 4、5 步；订单状态按成功退款合计 | 渠道超时 → 待确认 → 查询收敛到成功或失败；第一个事务后崩溃只发一次；发送中崩溃时不认单号的渠道不重发、进待处理，认单号的用同一单号重发；不认单号的渠道同一订单只有一笔在途；同一人不能把未知退款标为失败；同一幂等键只退一次；多次部分退款合计不超过入账额度；性质测试：任意汇率序列和拆分下 Σ退款 ≤ Σ实付，全退恰好等于净付款额；退不退手续费两种策略；失败在一个事务里解冻 |
+| E1-8 `feat(payments): redeem codes into credit` | 表 `redeem_codes`、`redeem_redemptions`、`redeem_attempts` 与迁移；`IssueCodes`、`Redeem`、`ListCodes`、`DisableCode`、`ListRedemptions`；billing 的 `CreditRedeem`（来源 `redeem`，迁移 billing 00033）；管理与控制台契约和页面 | 只存哈希、明文只在生成应答；一个码并发只兑一次（两个账户、一个账户两次）；同键重放回同一笔；已用、过期、已停用、无效各自被拒；账户 30/31、IP 100/101 的边界与计数故障拒绝；停用幂等且写审计；列表/历史不含码；站点与账户隔离 |
 
 **上线门槛**：主站打开"是否开放充值"之前，E1-3 在负责人提供的真实网关上做小额实测（下单、回调、查单确认、关单、退款、手续费的舍入、币种配置），结果记在 [#309](https://github.com/TYCT-tyct/Axiom/issues/309)；没有这份记录不打开。USDT 另需一个提供商户查单的易支付兼容网关，按 E1-4 跑通下单、GET 回调、查单确认、入账后才开放；Epusdt 已发布版本不满足（见上）。

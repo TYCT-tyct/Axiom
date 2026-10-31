@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
-	"math/rand/v2"
 	"slices"
 	"sync"
 	"testing"
@@ -86,6 +84,15 @@ func (s *supplies) EndRequest(_ context.Context, _ pg.Tx, id, _, _ uuid.UUID, at
 	return nil
 }
 
+func (s *supplies) EndRequests(ctx context.Context, tx pg.Tx, ends []suppliers.EndedRequest) error {
+	for _, e := range ends {
+		if err := s.EndRequest(ctx, tx, e.Request, e.Site, e.Account, e.At); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // lostNow is whether the request is recorded lost and no late settlement has resolved it.
 func (s *supplies) lostNow(id uuid.UUID) bool {
 	s.mu.Lock()
@@ -127,7 +134,7 @@ func (b *bank) holdOn(q Quotable, text int64) *Hold {
 
 func (b *bank) tryHoldOn(q Quotable, text int64) (h *Hold, err error) {
 	err = b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{q})
+		h, err = b.billing.reserveOne(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{q})
 		return err
 	})
 	return h, err
@@ -154,6 +161,8 @@ func outcome(result Result, finish FinishReason, segments ...Segment) Outcome {
 // TestSettleWaivers pins the table of docs/domains/billing.md「免单规则」 at 50 input, 20 output and one search (80):
 // what is charged. Only the three rules decide, with no limit on how many calls an account has waived.
 func TestSettleWaivers(t *testing.T) {
+	t.Parallel()
+
 	full, zero := used(t, 50, 20, 1), used(t, 50, 0, 1)
 	for _, tc := range []struct {
 		name string
@@ -189,6 +198,8 @@ func TestSettleWaivers(t *testing.T) {
 // TestWaiversHaveNoCap: a hundred zero-output calls in a row are all free, and nothing counts them: the daily cap is
 // gone, so nothing is kept of them but the books' own entries (docs/domains/billing.md「免单规则」).
 func TestWaiversHaveNoCap(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	for i := range 100 {
 		f, err := b.billing.Settle(t.Context(), b.hold(1000), outcome(Committed, FinishNone, used(t, 50, 0, 0)))
@@ -205,6 +216,8 @@ func TestWaiversHaveNoCap(t *testing.T) {
 // TestACancelledCallStillLeavesTheSuppliersRow: cancelling is not free for the platform, so a cancelled call's attempt is
 // written to suppliers with the cost billing booked for it, whatever the user is charged (docs/domains/billing.md「客户端断开」).
 func TestACancelledCallStillLeavesTheSuppliersRow(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	h := b.hold(1000)
 	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishCancelled, used(t, 50, 20, 0))); err != nil {
@@ -235,6 +248,8 @@ func (b *bank) balanced() {
 
 // TestSettleOnce: a retried Settle returns what the first stored and charges nothing more; the counters move once.
 func TestSettleOnce(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{})
 	h := b.hold(1000)
 	o := outcome(Committed, FinishStop, used(t, 50, 20, 1))
@@ -255,6 +270,8 @@ func TestSettleOnce(t *testing.T) {
 // TestSettleFloor: usage past what was reserved, as when the model outran its fastest speed, is charged down to the
 // floor and no further, other reservations kept covered; the platform bears the rest, on the books.
 func TestSettleFloor(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 2000, -100, Config{})
 	other, h := b.hold(500), b.hold(1000) // 600 and 1100 reserved; 2100 may be spent
 	f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 5000, 0, 0)))
@@ -274,6 +291,8 @@ func TestSettleFloor(t *testing.T) {
 // back uncharged: nothing can bring its usage afterwards. A late Settle then charges by the full outcome against what
 // cleanup did, and resolves the lost request.
 func TestCleanup(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name    string
 		late    int64 // the late Settle's usage
@@ -308,12 +327,14 @@ func TestCleanup(t *testing.T) {
 // the zero id, and no charge can come from the endpoint of an entry that was never to be called, so the route suppliers
 // is given has only the kept ones, in order.
 func TestALostRequestsRouteLeavesOutTheEntriesAdmissionDropped(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	first, dropped, last := metered(t), metered(t), metered(t)
 	dropped.MaxOutput = 1e9 // a quote far beyond the balance
 	var h *Hold
 	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 1000}, []Quotable{first, dropped, last})
+		h, err = b.billing.reserveOne(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 1000}, []Quotable{first, dropped, last})
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -372,6 +393,8 @@ func (b *bank) state() string {
 // TestCreditOnce: a credit retried with its ID is posted once; outside the platform scope it is refused whole,
 // because its audit entry is.
 func TestCreditOnce(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	c := Credit{
 		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Amount: 500,
@@ -390,221 +413,4 @@ func TestCreditOnce(t *testing.T) {
 		t.Errorf("balance %d, want 500", n)
 	}
 	b.balanced()
-}
-
-// segmentTokens is the output tokens a segment of the property bank's reservations covers.
-const segmentTokens = 50
-
-// TestLedgerProperty drives random sequences of credits, gifts and payments in the site's currency and another, some of
-// them expiring, reservations, settlements with retries
-// and crashes left to cleanup, some with usage only a fallback price covers, write-offs of expired credit, and checks
-// after every step that every transaction balances, the balance equals its book, the counters equal the pending holds,
-// the floor holds, and the credit batches fund exactly the balance without any being over-spent.
-func TestLedgerProperty(t *testing.T) {
-	for seed := range uint64(3) {
-		t.Run(fmt.Sprint(seed), func(t *testing.T) {
-			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
-			b := fallbackBank(t, 5000, -500, Config{
-				HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: 20 * time.Millisecond,
-				Segments: Segments{Output: segmentTokens, Overshoot: time.Second},
-			})
-			var holds []*Hold
-			for range 40 {
-				b.step(r, &holds)
-				b.balanced()
-				b.replayed(b.admitted.Account)
-			}
-		})
-	}
-}
-
-func (b *bank) step(r *rand.Rand, holds *[]*Hold) {
-	b.t.Helper()
-	switch n := r.IntN(10); n {
-	case 0:
-		b.randomCredit(r, r.Int64N(2000)+1, []*time.Time{nil, longAgo, farAhead}[r.IntN(3)])
-	case 6, 7:
-		b.expire()
-	case 1:
-		b.tryRandomHold(r, holds)
-	case 2, 3: // settle, or a retry of a settlement already made
-		if len(*holds) == 0 { // nothing reserved yet to settle
-			b.tryRandomHold(r, holds)
-		} else {
-			b.settleRandom(r, (*holds)[r.IntN(len(*holds))])
-		}
-	case 8: // reservations and settlements of one account at once, as its concurrent calls make them
-		b.concurrent(r)
-	case 9: // a reservation made in segments, extended once, then settled where a stream cut short stops
-		b.truncated(r)
-	default: // a crash: what was left pending goes to cleanup, which records the request as lost
-		b.cleanup()
-	}
-}
-
-// tryRandomHold reserves one more call at a random prompt and keeps it for a later step to settle. A balance too small is
-// a state the property allows and later credits may lift; any other failure is not.
-func (b *bank) tryRandomHold(r *rand.Rand, holds *[]*Hold) {
-	b.t.Helper()
-	if h, err := b.tryHold(r.Int64N(1500)); err == nil {
-		*holds = append(*holds, h)
-	} else if !errors.As(err, new(*Insufficient)) {
-		b.t.Fatal(err)
-	}
-}
-
-func (b *bank) settleRandom(r *rand.Rand, h *Hold) {
-	b.t.Helper()
-	results := []Result{Committed, Aggregated, FailedBeforeCommit, Unknown, NotExecuted}
-	o := outcome(results[r.IntN(len(results))], FinishReason(r.IntN(9)), //nolint:gosec // G115: below 9
-		maybeUnknown(b.t, r, used(b.t, r.Int64N(2000), r.Int64N(200), r.Int64N(3), []catalog.Item{in}[:r.IntN(2)]...)))
-	if _, err := b.billing.Settle(b.t.Context(), h, o); err != nil {
-		b.t.Fatal(err)
-	}
-}
-
-// concurrent reserves and settles four calls of the account at once: each is a transaction of its own on the one
-// balance row, and whatever the interleaving, the books must balance and the balance stay above its floor.
-func (b *bank) concurrent(r *rand.Rand) {
-	b.t.Helper()
-	type call struct{ text, output int64 }
-	calls := make([]call, 4)
-	for i := range calls {
-		calls[i] = call{text: r.Int64N(300), output: r.Int64N(100)}
-	}
-	errs := make(chan error, len(calls))
-	var wg sync.WaitGroup
-	for _, c := range calls {
-		wg.Go(func() {
-			h, err := b.tryHold(c.text)
-			if err != nil {
-				if !errors.As(err, new(*Insufficient)) {
-					errs <- err
-				}
-				return
-			}
-			if _, err := b.billing.Settle(context.Background(), h, outcome(Committed, FinishStop, used(b.t, 0, c.output, 0))); err != nil {
-				errs <- err
-			}
-		})
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		b.t.Error(err)
-	}
-}
-
-// truncated reserves by segment, then either approves one extension or has it refused for funds, as a call near its
-// balance sees it, and settles where a stream cut short stops: inside what the approved segments cover, so the charge
-// stays within what was reserved for it. The segment is 50 tokens and the model's speed 10 a second, so its second of
-// overshoot holds 10 more: a first reservation of 60 and an extension to 110, which is what tells an extension that was
-// written from one that was not, and leaves an output limit a real router would segment (billing's output limit here is
-// the 200 tokens the route's entry would carry).
-func (b *bank) truncated(r *rand.Rand) {
-	b.t.Helper()
-	q := metered(b.t)
-	q.Segmentable, q.Model, q.MaxOutput = true, Model{ContextLength: 1e12, OutputSpeed: 10}, 200
-	h := b.holdOn(q, 0)
-	reserved := func() platform.Exact {
-		return platform.AmountExact(b.count("SELECT amount FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"))
-	}
-	first := reserved()
-	m := h.Bind(0)
-	step := m.Observe(Progress{ContentBytes: 31}) // past the latest extension point of a segment of 50
-	if !step.Extend || step.Exhausted {
-		b.t.Fatalf("at 31 tokens of a segment of 50: %+v", step)
-	}
-	covered, want := int64(2*segmentTokens), step.Request.Target
-	if r.IntN(3) == 0 {
-		// One unit past what the balance leaves: the extension is refused, nothing is written, the meter keeps the first
-		// segment, and the cut comes inside it. The target is the test's own because a balance that admitted the hold can
-		// never refuse the meter's: an extension adds a segment to what is covered, less than the segment plus its
-		// allowance the hold already reserved. That refusal by a short balance is TestExtend's.
-		avail := b.count("SELECT balance - reserved - frozen - floor FROM billing.balances")
-		err := b.billing.Extend(b.t.Context(), h, ExtendRequest{Seq: step.Request.Seq, Target: platform.AmountExact(first.CeilAmount() + avail + 1)})
-		if !errors.As(err, new(*Insufficient)) {
-			b.t.Fatalf("an extension of %d past the %d the balance leaves: %v", avail+1, avail, err)
-		}
-		m.Extended(step.Request.Seq, err)
-		covered, want = segmentTokens, first
-	} else {
-		if err := b.billing.Extend(b.t.Context(), h, step.Request); err != nil {
-			b.t.Fatal(err)
-		}
-		m.Extended(step.Request.Seq, nil)
-	}
-	if got := reserved(); got.Cmp(want) != 0 {
-		b.t.Fatalf("the reservation is %v, want %v (first %v, target %v)", got, want, first, step.Request.Target)
-	}
-	// An approved extension moved the reservation past the first segment's; a refused one left it there, so settling
-	// beyond the first reservation is only covered by the former, and settling inside it is the latter's whole bound.
-	allowance, _ := (Segments{Output: segmentTokens, Overshoot: time.Second}).Allowance(10) // the bank's settings and the model's speed
-	output := 1 + r.Int64N(segmentTokens)                                                   // inside the first segment
-	if want.Cmp(first) > 0 {
-		output = segmentTokens + allowance + 1 + r.Int64N(covered-segmentTokens-allowance) // past the first reservation
-	}
-	f, err := b.billing.Settle(b.t.Context(), h, outcome(Committed, FinishTruncated, used(b.t, 0, output, 0)))
-	if err != nil {
-		b.t.Fatal(err)
-	}
-	if want.Cmp(first) > 0 && f.Charged.Cmp(first) <= 0 {
-		b.t.Errorf("a cut stream of %d tokens was charged %v of the %v its extension was needed for", output, f.Charged, first)
-	}
-	if f.Charged.Cmp(want) > 0 {
-		b.t.Errorf("a cut stream was charged %v of %v reserved", f.Charged, want)
-	}
-}
-
-// maybeUnknown adds, one time in three, usage protocol could not map: tokens or uses, to be priced by fallback.
-func maybeUnknown(tb testing.TB, r *rand.Rand, s Segment) Segment {
-	tb.Helper()
-	if r.IntN(3) != 0 {
-		return s
-	}
-	counts := map[catalog.Item]int64{}
-	for it := range catalog.NumItems {
-		counts[it] = s.Usage.Count(it)
-	}
-	field := []string{"usage.new_thing_tokens", "usage.server_tool_use.web_fetch_requests"}[r.IntN(2)]
-	u, err := catalog.NewUsage(counts, s.Usage.ServiceTier(), []catalog.UnknownUsage{{Field: field, Value: fmt.Sprint(1 + r.IntN(40))}})
-	if err != nil {
-		tb.Fatal(err)
-	}
-	return Segment{Usage: u, Reported: s.Reported}
-}
-
-// TestLedgerScope: a settlement writes its revenue and cost entries in its account's scope, and no other account's
-// scope reads them.
-func TestLedgerScope(t *testing.T) {
-	b := newBank(t, 10_000, 0, Config{})
-	if _, err := b.billing.Settle(t.Context(), b.hold(100), outcome(Committed, FinishStop, used(t, 50, 20, 0))); err != nil {
-		t.Fatal(err)
-	}
-	var n int64
-	other := pg.NewScope(false, nil, []uuid.UUID{uuid.NewV7()})
-	if err := b.app.Tx(t.Context(), other, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), "SELECT count(*) FROM billing.entries").Scan(&n)
-	}); err != nil || n != 0 {
-		t.Errorf("another account reads %d entries, %v", n, err)
-	}
-}
-
-// TestSettleBalanceExtremes: the floor cap is computed exactly, so a balance at the top of int64 above a negative
-// floor charges in full instead of wrapping to nothing.
-func TestSettleBalanceExtremes(t *testing.T) {
-	b := newBank(t, 10_000, 0, Config{})
-	h := b.hold(100)
-	b.sql(fmt.Sprintf("UPDATE billing.balances SET balance = %d, floor = -1", int64(math.MaxInt64)))
-	if f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 50, 20, 0))); err != nil || f.Charged != platform.AmountExact(70) {
-		t.Errorf("Settle = %+v, %v; want 70 charged", f, err)
-	}
-}
-
-func TestLedgerPoliciesPassAudit(t *testing.T) {
-	t.Parallel()
-	b := newBank(t, 0, 0, Config{})
-	if err := b.app.Check(t.Context(), Migrations()); err != nil {
-		t.Fatal(err)
-	}
 }

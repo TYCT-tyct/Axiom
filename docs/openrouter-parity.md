@@ -14,7 +14,7 @@
 
 命名预设已由 `gw/presets.go`、`proto/presets.go` 在目录认名前展开；key 的强制端点过滤预设仍独立执行，现有零号预设不代表没有命名配置。预设与会话/回退的 OpenRouter 来源于 2026-10-29 复核，规则与来源链接见[路由](domains/routing.md#命名预设)。
 
-## 1. 三种调用格式
+## 1. 调用格式
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
@@ -23,13 +23,14 @@
 | `POST /api/v1/messages` | Anthropic Messages 格式 | api/anthropic-messages/create-a-message | 有：`gw/handler.go:66-68` | `na:router/relay-router.go:97` | `s2:internal/server/routes/gateway.go:192` | 无 |
 | Messages 的 `fallbacks` 参数（最多 3 项，只许 `model`，不能与非 null `models` 同用） | 映射到 `models` 路由 | docs/guides/routing/model-fallbacks | 有：`proto/presets.go` 读取到 `Request.Models`，由 gateway 交给同一冻结路线；Prepare 删除该成员 | 无 | 无 | 无 |
 | `POST /api/v1/messages/count_tokens` | OpenRouter 文档未列此路由 | （OpenAPI 路由表无） | 有：`gw/handler.go` 经 `gw/readonly.go:35` | `na:router/relay-router.go:96`（已注释掉） | `s2:internal/server/routes/gateway.go:203` | Axiom 比 OpenRouter 多，非缺口 |
-| `POST /v1/completions`（旧版补全） | OpenAPI 路由表没有该路径；Streaming 文档的措辞提到 completions | docs/api_reference/streaming | 没有：只注册 chat/responses/messages（`gw/handler.go:66`） | `na:router/relay-router.go:102` | 无 | OpenRouter 自己现在也不列它，低优先 |
+| `POST /api/v1/completions`（旧版补全） | OpenAPI 路由表没有该路径；Streaming 文档的措辞提到供应商设置“Serves `/completions`” | docs/api_reference/streaming；OpenAI《Create completion》 | 有：P18 按 OpenAI 旧接口原生提供，只路由到 `formats` 里写了 `completions` 的端点，不与 Chat 互转（`gw/handler.go`、`proto/completions.go`、`proto/aggregatecompletions.go`） | `na:router/relay-router.go:102` | 无 | OpenRouter 不在 OpenAPI 列它，基线只能取 OpenAI 的旧接口；OpenRouter 的 `prompt`-on-chat 变体不采用，它要改 Chat 的请求与回复形状。旧补全的 `logprobs`、`n`、`best_of` 没有 Chat 对应写法（`best_of > 1` 按 400 拒绝，因为不能流式返回），所以不转格式（`docs/domains/gateway.md` 决策与理由） |
 | 流式 SSE，注释保活，`data: [DONE]` | 偶发 `: OPENROUTER PROCESSING` 注释；Chat 流最后带 usage 的一块 | docs/api_reference/streaming | 有：保活 `proto/relay.go:429,598`，Chat 最后一块带 usage（`docs/domains/gateway.md:73`） | 有（ping，见差分规则） | 有 | 无 |
 | 流式取消（断开连接即停止上游） | 断开连接立即停止模型处理和计费 | docs/api_reference/streaming | 有：`gw/forward.go:251,276` 用 `context.Cause` 区分客户端断开；测试 `gw/exec_disconnect_test.go` | 有（relay 取消） | 有（`gateway_handler_cancellation_test.go`） | 无 |
 | 响应头 `X-Generation-Id` | 所有端点都返回 | docs/api_reference/streaming | 有：`gw/handler.go:83`，同值也在 `X-Request-ID`（`platform/httpserver/public.go:27`） | 无 | 无 | 无 |
 | WebSocket 升级 | 未提及 | — | 不适用：一律 400（`gw/handler.go:69` `refuseUpgrade`） | `na:router/relay-router.go:78,85` 支持 | 有 `/live` | 非 OpenRouter 能力，不计缺口 |
-| `GET/POST /api/v1/embeddings`、`/embeddings/models` | 向量化，含批量 | docs/api_reference/embeddings | 没有（范围声明「以后」） | `na:router/relay-router.go:135` | `s2:internal/server/routes/gateway.go:240` | 见 §16 |
-| `POST /api/v1/rerank` | 重排 | api/rerank/submit-a-rerank-request | 没有（范围声明「以后」） | `na:router/relay-router.go:151` | 无 | 见 §16 |
+| `POST /api/v1/embeddings` | 向量化，`input` 支持字符串、字符串数组、token 数组、token 数组的数组和 `{content:[...]}` 多模态，回复 `data`/`usage` | docs/api_reference/embeddings；官方 OpenAPI `/embeddings`（2026-10-30 核对） | 有：`gw/handler.go` 注册 `/v1/embeddings` 与 `/api/v1/embeddings`；原生格式、整份回复，请求改写 `model`/身份、删路由参数，回复保留 `data` 并写本站的 `model`、`usage.prompt_tokens`/`total_tokens`、`cost`、`is_byok:false`；`stream:true` 回 400 | `na:router/relay-router.go:135` | `s2:internal/server/routes/gateway.go:240` | 录制样本回放见 `internal/protocol/testdata/embeddings`、`internal/protocol/direct_test.go`、`internal/gateway/exec_direct_test.go` |
+| `GET /api/v1/embeddings/models` | 嵌入模型列表与属性 | 官方 OpenAPI `/embeddings/models`（2026-10-30 核对） | 没有：目录的 `Serving` 还没有输出模态，嵌入模型没有输出价，默认不会进 `/api/v1/models`，也没有单独列表 | 无 | 无 | 留到目录补输出模态时做；调用按请求里的 `model` 走（`docs/domains/gateway.md` 待定问题） |
+| `POST /api/v1/rerank` | 重排：`query`、`documents`（字符串或 `{text,image}`）、`top_n`；回复 `id`/`model`/`results`/`usage{search_units,total_tokens}` | api/rerank/submit-a-rerank-request；官方 OpenAPI `/rerank`（2026-10-30 核对） | 有：`gw/handler.go` 注册 `/v1/rerank` 与 `/api/v1/rerank`；原生格式、整份回复，回复保留 `results` 并写本站的 `id`、`model`、`usage.total_tokens`/`search_units`、`cost`、`is_byok:false`；`search_units` 按 `web_search` 售价计费；`stream:true` 回 400 | `na:router/relay-router.go:151` | 无 | 录制样本回放见 `internal/protocol/testdata/rerank`、`internal/protocol/direct_test.go`、`internal/gateway/exec_direct_test.go` |
 
 ## 2. 模型列表与模型端点
 
@@ -40,7 +41,7 @@
 | `GET /api/v1/models` 基本列表 | 返回 `data[]` 模型目录 | api/models/list-all-models-and-their-properties | 有：`gw/openrouter.go` 的 `listOpenRouterModels`，外壳是 OpenRouter 的 `data`/`links.next`/`total_count`；按 key 过滤，只列这把 key 能调用、路由快照里有公共端点且有售价的模型 | `na:controller/model.go:218` | `s2:internal/server/routes/gateway.go:207` | 价格取主站售价（标准服务等级、第一档），与路由快照同一次构建、一起发布：列表上的价格就是调用收费的价格；`/v1/models` 保持 OpenAI+Anthropic 合并形，两种客户端各读各的 |
 | 模型字段 `id`、`canonical_slug`、`name`、`created`、`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date` | 模型身份与元信息 | spec `Model` | 部分：`id`、`canonical_slug` 都是这个模型的公开标准 ID（目录名去掉内部版本后缀：`acme/claude@20250929` 按 `acme/claude` 列出，并要解析回这个模型，否则整个不列），`name` 是标准 ID 去掉作者的部分，`created` 恒为 0；`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date` 不输出（目录没有这些数据） | 无（OpenAI 形） | 无 | 缺的是目录里没有的描述和日期；`created` 恒 0，按时间排序的选择器仍会失效（`sort=newest` 因此回 400）；内部 `@版本` 后缀不对客户端露出，它不是能调用的名字 |
 | `context_length`、`top_provider{context_length,max_completion_tokens,is_moderated}`、`per_request_limits` | 上下文与输出上限 | spec `Model`、`TopProviderInfo` | 有：`context_length` 与 `top_provider{context_length,max_completion_tokens}` 取规格的 `context_length`/`max_output_tokens`，`is_moderated` 恒 false；`per_request_limits` 是 null（Axiom 没有按请求的上限） | 无 | 无 | 规格没声明上限、或售价填不出 `prompt`/`completion` 的模型整个不列：OpenRouter 的对象里没有 null 的位置 |
-| `pricing{prompt,completion,request,image,image_output,image_token,audio,audio_output,input_audio_cache,input_cache_read,input_cache_write,input_cache_write_1h,internal_reasoning,web_search,discount,overrides}` | 每 token/每次的价格（字符串，美元） | spec `PublicPricing` | 部分：十个成员，都是字符串，取主站售价的标准服务等级、第一档——`prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`audio`、`audio_output`（美元 / token）和 `web_search`（每次），以及只给能收图片、会推理的模型的 `image_token`、`internal_reasoning`（价目表对这两项会用所在侧的原价兜底，纯文本模型不该出现）；`image`、`image_output`（按图）、`request`（按次）、`input_audio_cache`、`discount`、`overrides` 省略：售价表没有这些单位 | `na:controller/pricing.go:38`（`/api/pricing`，非 OpenAI 路径） | 无 | 按图、按次计价要等 #320；缺的成员省略而不是写 0（0 会被读成免费），按 `prompt`+`completion` 估算成本已经准确 |
+| `pricing{prompt,completion,request,image,image_output,image_token,audio,audio_output,input_audio_cache,input_cache_read,input_cache_write,input_cache_write_1h,internal_reasoning,web_search,discount,overrides}` | 每 token/每次的价格（字符串，美元） | spec `PublicPricing` | 部分：十二个成员，都是字符串，取主站售价的标准服务等级、第一档——`prompt`、`completion`、`input_cache_read`、`input_cache_write`、`input_cache_write_1h`、`audio`、`audio_output`（美元 / token）和 `web_search`（每次），只给能收图片、会推理的模型的 `image_token`、`internal_reasoning`（价目表对这两项会用所在侧的原价兜底，纯文本模型不该出现），以及价目表有按张价时的 `image`、`image_output`（美元 / 张，#320）；`request`（按次）、`input_audio_cache`、`discount`、`overrides` 省略：售价表没有这些单位 | `na:controller/pricing.go:38`（`/api/pricing`，非 OpenAI 路径） | 无 | 按图价来自目录的按张项，没有就省略而不是写 0（0 会被读成免费）；按请求计价仍缺 |
 | `architecture{modality,input_modalities,output_modalities,tokenizer,instruct_type}` | 模态 | spec `ModelArchitecture` | 部分：`modality`、`input_modalities`、`output_modalities` 取规格声明的能力（`text`；有 `images` 加 `image`，有 `documents` 加 `file`），输出恒 `text`；`tokenizer`、`instruct_type` 不输出 | 无 | 无 | 目录没有分词器和指令类型；音频、视频输入不是能力，不声称 |
 | `supported_parameters`、`default_parameters`、`reasoning{supported_efforts,default_effort,default_enabled,mandatory,supports_max_tokens}`、`supported_voices` | 支持的参数、默认采样值、推理选项 | spec `Model`、`ModelReasoning`、`DefaultParameters`；docs/guides/best-practices/reasoning-tokens | 部分：`supported_parameters` 按能力与方言推出（`temperature`、`top_p`，`default_sampling_only` 为 yes 时不给）、`max_tokens`、`max_completion_tokens`、`response_format`、`stop`、`tools`、`tool_choice`、`parallel_tool_calls`、`reasoning`、`reasoning_effort`；`reasoning` 在 `thinking:"manual"` 时给 `supports_max_tokens:true`，未知 `mandatory` 不输出（官方必填，有意偏离）；`default_parameters`、`supported_voices` 是 null | 无 | 无 | 规格没说的参数不声称（`seed`、`logprobs`、`verbosity`、`structured_outputs`、`web_search_options` 等）；`default_parameters` 与 `reasoning` 的其余成员没有数据 |
 | `alias_target`、`benchmarks`、`links.details` | 别名目标、基准分 | spec `Model` | 部分：`links.details` 指向本 API 的 `/api/v1/models/{id}/endpoints`；`alias_target`、`benchmarks` 不输出 | 无 | 无 | 别名见本表 `~author/family-latest` 一行；基准分 Axiom 不测 |
@@ -51,8 +52,8 @@
 | `GET /api/v1/models/user` | 按账户供应商偏好、隐私设置、护栏过滤后的模型 | api/models（OpenAPI `/models/user`） | 部分：复用列表的 key 可见性、过滤和分页，next 保留 user 路径 | `na:router/api-router.go:101`（`/user/self/models`） | 无 | 2026-10-29 核对官方用户模型文档；缺供应商偏好、隐私和护栏数据，不伪称这些过滤已生效 |
 | `GET /api/v1/providers` | 供应商列表及隐私政策链接 | api/providers/list-all-providers | 部分：有可见模型时列 Axiom/axiom，政策链接、总部和机房为 null，无可见模型时为空 | 无 | 无 | 2026-10-29 核对官方 providers 文档；聚合供应商不暴露真实货源，缺失政策和地域不虚构 |
 | `GET /api/v1/endpoints/zdr` | ZDR 过滤影响预览 | api/endpoints/preview-the-impact-of-zdr-on-the-available-endpoints | 没有 | 无 | 无 | 低优先 |
-| 模型变体后缀规则（目录变体 `:free/:batch/:thinking/:extended`，路由变体 `:nitro/:floor/:exacto/:online`；后缀可叠加） | 后缀是目录条目或路由开关 | docs/guides/routing/model-variants/overview | 部分：`internal/gateway/variant.go` 的 `variants` 表逐个定行为，`parseModelName` 在查目录之前读变体（调用、`models` 备选、`count_tokens`、模型详情与 endpoints 共用）；`:nitro/:floor` 生效，可叠加，最后一个排序变体生效；`:thinking` 只在请求已要求推理时接受，`:exacto`、`:online`、`:free`、`:batch`、`:extended` 各按原因回 400，不认识的后缀回 404（`internal/catalog/snapshot.go` 仍拒绝带 `:` 的名字，目录没有变体条目） | 无 | 无 | 逐项行为见接入域「模型名变体」；目录变体要有条目才能服务，见各行 |
-| `~author/family-latest` 别名 | 总是解析到该系列最新模型，推理参数自动降级映射 | docs/guides/routing/routers/latest-resolution | 没有：`gw/variant.go` 认出 `~` 开头并回 400「暂不支持」（原来是 404）；目录没有别名表（名字只追加，公开名字不许 `~`、`-latest`，`cat/snapshot.go:146-149` 的 `Floating` 是供应商挪动版本，与别名无关） | 无 | 无 | 缺少显式模型族和可切换别名映射，不按前缀或日期猜测；取舍写在 `docs/domains/gateway.md` 决策与理由，归 #311 |
+| 模型变体后缀规则（目录变体 `:free/:batch/:thinking/:extended`，路由变体 `:nitro/:floor/:exacto/:online`；后缀可叠加） | 后缀是目录条目或路由开关 | docs/guides/routing/model-variants/overview | 部分：`internal/gateway/variant.go` 的 `variants` 表逐个定行为，`parseModelName` 在读目录之前处理变体（调用、`models` 备选、`count_tokens`、模型详情与 endpoints 共用）；`:nitro/:floor` 生效，可叠加，最后一个排序变体生效；`:thinking` 只在请求已要求推理时接受；`:free` 作为目录里的独立条目精确查询，没有条目回 404；`:exacto`、`:batch`、`:extended` 各按原因回 400，`:online` 在配置搜索后端后等同 `web` 插件、否则 400，不认识的后缀回 404；`~author/family-latest` 查目录别名表 | 无 | 无 | 逐项行为见接入域「模型名变体」；目录变体要有条目才能服务，见各行 |
+| `~author/family-latest` 别名 | 总是解析到该系列最新模型，推理参数自动降级映射 | docs/guides/routing/routers/latest-resolution | 部分：`internal/gateway/variant.go` 把 `~` 开头原样交给 `catalog.ResolvePublic`，目录的 `catalog.alias` 表只追加 `(名字, 目标模型)`，快照读最新版本；目标由管理员显式指定，响应 `model` 是具体标准 ID，目标下线时 404。OpenRouter 的推理参数自动降级映射没有做，别名只换模型。没有别名时 404，不按前缀或日期猜 | 无 | 无 | 目标显式，切换有审计；取舍见 `docs/domains/catalog.md` 决策与理由，归 #311 |
 | 官方 `models` 列表里不含 `:nitro` 等路由变体，客户端自己派生 | 路由变体不在目录里 | docs/guides/routing/model-variants/overview | 不适用 | 无 | 无 | 随后缀支持一起做 |
 
 ## 3. 供应商路由参数 `provider`、模型备选 `models`、变体
@@ -72,7 +73,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | `provider.sort` 字符串：`price` / `throughput` / `latency` | 关闭负载均衡，按该维度排序 | 同上 | 有：三种维度分别排序（`gw/provider.go`、`rt/rank.go`） | 无 | 无 | 未测量的按价格加权排在测量值之后 |
 | `provider.sort` 对象 `{by, partition}`（`partition: model/none`） | 多模型备选时是否跨模型统一排序 | 同上 | 有：默认 model；none 跨主模型和备选排序 | 无 | 无 | `by`、`partition` 之外的成员明确 400；OpenRouter 文档没有 `sort.percentile`，百分位截断属于下面的性能偏好 |
 | `provider.preferred_min_throughput` / `preferred_max_latency`（数字或 p50/p75/p90/p99 对象） | 偏好而非硬过滤，不满足的排后面 | 同上 | 数字按 EWMA 软偏好；百分位对象明确 400 | 无 | 无 | quality 只有每个端点一个 EWMA，没有滚动五分钟窗口样本或 p50/p75/p90/p99，不以 EWMA 冒充 p50；需要 quality 保留窗口样本并计算分位数 |
-| `provider.max_price{prompt,completion,request,image}` | 价格上限，过滤端点 | 同上 | prompt/completion 精确比较受众售价；request/image 明确 400 | 无 | 无 | prompt/completion 已有；request 缺价目表的按请求项和 `pricing.request` 导入，image 缺按张项和 `pricing.image` 导入，`image_in`/`image_out` 是按 token 价；非美元站点以站点记账货币为单位，偏离见 gateway 领域文档 |
+| `provider.max_price{prompt,completion,request,image}` | 价格上限，过滤端点 | 同上 | prompt/completion 精确比较受众售价；request/image 明确 400 | 无 | 无 | request 缺价目表的按请求项和 `pricing.request` 导入；image 的按张项已有（`image_in_piece`、`image_out_piece`，#320），但上限管输入、生成还是按 token 计价的图未定，端点也不报按张用量；`image_in`/`image_out` 是按 token 价；非美元站点以站点记账货币为单位，偏离见 gateway 领域文档 |
 | `provider.options`（按供应商透传的选项，spec `ProviderOptions`） | 给特定供应商的原生参数 | spec `ProviderPreferences.options` | 没有：不在 `providerMembers`，会 400 | 无 | 无 | 低优先 |
 | 默认价格加权负载均衡（按价格平方倒数、近 30 秒无故障优先） | 默认策略 | docs/guides/routing/provider-selection | 部分：默认是价格加权随机（`docs/domains/routing.md` 决策与理由），加权公式未核对是否一致 | 无（渠道权重） | 无 | 行为相近，公式可能不同 |
 | 失败后换端点 | 按序回退直到成功 | docs/guides/routing/provider-selection | 有：`gw/attempt.go`、`rt/plan.go:60`（`MaxAttempts`） | `na:controller/relay.go:177`（`RetryTimes`） | `s2:internal/service/gateway_anthropic_passthrough.go:802`（failover） | 无 |
@@ -83,10 +84,10 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | `service_tier`（priority/flex/ultrafast 等）与端点分级计价 | 控制成本/延迟，按实际层级计费 | docs/guides/features/service-tiers | 部分：识别并按层级定价（`proto/grammar.go:57,76,363`，`proto/prepare.go:135-143`）；`:nitro/:floor` 只带来排序，没有它们说的层级准入（不写 `service_tier` 的请求本来可由 standard、priority 服务，`proto/inspect.go:141`；flex 要客户端自己写） | 无 | 无 | 层级定义见 `docs/domains/catalog.md`；为 `:floor` 准入 flex 要决定是否改写上游的 `service_tier`，见 `docs/domains/gateway.md` 待定问题 |
 | 变体 `:nitro`（按吞吐排序并准入 priority 层） | 路由变体 | docs/guides/routing/model-variants/nitro | 部分：等同 `provider.sort: throughput`（`gw/variant.go`，测试 `TestModelVariantsRoute`）；层级准入没有 | 无 | 无 | 排序一半做了；显式 `provider.sort` 优先于变体 |
 | 变体 `:floor`（按价格排序并准入 flex 层） | 路由变体 | docs/guides/routing/model-variants/floor | 部分：等同 `provider.sort: price`；层级准入没有 | 无 | 无 | 同上 |
-| 变体 `:exacto`（质量优先排序） | 路由变体 | docs/guides/routing/model-variants/exacto | 没有：回 400 说明暂不支持（端点质量分和工具调用错误率还没有测量，`gw/route.go:220` 质量固定为 1）；有显式 `provider.sort` 或后面的排序变体时被替换，不报错 | 无 | 无 | 等 G10 的质量数据，之后接 `routing.BestQuality` |
-| 变体 `:free`（免费版条目，独立限额） | 目录变体 | docs/guides/routing/model-variants/free | 没有：400 `invalid_request`，说明本目录没有免费条目、发布价必须为正，也不落到付费的基础模型；`internal/billing` 的免单规则是零输出不收费，与免费模型无关 | 无 | 无 | 产品是否要有「免费模型」待定，非阻断 |
+| 变体 `:exacto`（质量优先排序） | 路由变体 | docs/guides/routing/model-variants/exacto | 部分：`routing.BestQuality` 按运营质量分（可靠性、首字延迟、输出速度的 EWMA）排序，并只保留真伪检测验证过的端点；没有已验证端点时 503 `no_endpoint`，原因 `not_verified`（失败关闭）。Exacto 还要工具调用成功率与基准评分，这里没有，因此不声称按相同信号排序；有显式 `provider.sort` 或后面的排序变体时被替换，不报错 | 无 | 无 | 等 G10 的主动检测数据，再决定 `:exacto` 是否映射到 `routing.BestQuality` |
+| 变体 `:free`（免费版条目，独立限额） | 目录变体 | docs/guides/routing/model-variants/free | 部分：目录可以建 `acme/model:free` 独立条目，要求基础模型已上架、每个币种的价都为 0；名字精确查询，没有该条目就 404，不落到付费基础模型。OpenRouter 的数据集解析也保留 `:free` 条目。没有自动把每个付费模型复制出免费版，由运营决定是否录入 | 无 | 无 | 免费版有自己的上下文和限额，只能作为独立模型数据存在；取舍见 `docs/domains/catalog.md` 决策与理由 |
 | 变体 `:batch`（批量价条目） | 目录变体，配合 Batch API | docs/batch-quickstart | 没有：400，本目录没有批量条目与价格（批量调用在「以后」） | 无 | 无 | 见 §16 |
-| 变体 `:online`（已弃用，等价于 `web` 插件） | 路由变体 | docs/guides/routing/model-variants/online | 没有：400，与 `web` 插件、`openrouter:web_search` 同一句「没有配置外部搜索服务」 | 无 | 无 | 官方已弃用；`web` 插件本身见 §10 |
+| 变体 `:online`（已弃用，等价于 `web` 插件） | 路由变体 | docs/guides/routing/model-variants/online | 部分：配置搜索后端后等同 `web` 插件，执行一次并计一次费；未配置时 400「没有配置外部搜索服务」 | 无 | 无 | 官方已弃用；`web` 插件本身见 §10 与 `internal/websearch` |
 | 变体 `:thinking`（已弃用） | 目录变体 | docs/guides/routing/model-variants/thinking | 部分：请求自己已经要求推理时接受，按基础模型服务（本目录没有独立思考条目，后缀没有别的含义）；否则 400，提示改用 `reasoning` 参数 | 无 | 无 | 发现接口不执行请求级判断，按基础模型回 200 |
 | 变体 `:extended`（已弃用） | 目录变体 | docs/guides/routing/model-variants/extended | 没有：400，官方已下线且没有模型再提供 | 无 | 无 | 不补 |
 | 后缀叠加（任意顺序，最后一个排序变体生效） | 规则 | docs/guides/routing/model-variants/overview | 有：`gw/variant.go`（`TestParseModelName`） | 无 | 无 | 无 |
@@ -96,8 +97,8 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| `openrouter/auto`（按任务类型+市场花费份额选模型），插件 `auto-router`：`allowed_models`（通配）、`excluded_models`、`cost_tier`(low/medium/high/xhigh/max)；`openrouter/auto-beta` | 自动选模型，会话粘性 | docs/guides/routing/routers/auto-router | 没有（范围声明「以后」，`docs/product.md:92`） | 无 | 无 | 没有任务分类器和花费榜数据；可先做静态实现 |
-| `openrouter/free`（随机选支持所需能力的免费模型） | 零成本实验用 | docs/guides/routing/routers/free-router | 没有 | 无 | 无 | 依赖免费模型条目 |
+| `openrouter/auto`（按任务类型+市场花费份额选模型），插件 `auto-router`：`allowed_models`（通配）、`excluded_models`、`cost_tier`(low/medium/high/xhigh/max)；`openrouter/auto-beta` | 自动选模型，会话粘性 | docs/guides/routing/routers/auto-router | 部分：`openrouter/auto` 请求名已实现，按请求排序（`:nitro`、`:floor`、`provider.sort` 或预设策略）对全部可准入模型排序，取第一条并回显具体模型；`auto-beta`、插件成员 `allowed_models`、`excluded_models`、`cost_tier` 未实现 | 无 | 无 | 没有任务分类器和跨租户花费份额，用现有路由排序代替；取舍见 `docs/domains/gateway.md` 的 `openrouter/auto` 与决策与理由 |
+| `openrouter/free`（随机选支持所需能力的免费模型） | 零成本实验用 | docs/guides/routing/routers/free-router | 有：网关在查目录前认出 `openrouter/free`（`gw/variant.go`），对 key 可调用的全部 `:free` 目录条目按请求排序（`:nitro`、`:floor`、`provider.sort` 或预设策略）排序，取第一条并回显具体模型；没有免费条目时 404 `no_endpoint`（`no_candidates`）；`count_tokens`、`context-compression` 回 400 | 无 | 无 | 用现有路由排序代替随机选择，取舍见 `docs/domains/gateway.md` 的 `openrouter/free` 与决策与理由；回放测试 `internal/gateway/aliases_free_test.go`、`internal/routing/free_test.go` |
 | `openrouter/pareto-code`（`pareto-router` 插件的 `min_coding_score`） | 按编码分挑最便宜的模型 | docs/guides/routing/routers/pareto-router | 没有 | 无 | 无 | 低优先，依赖外部基准数据 |
 | `openrouter/bodybuilder`（自然语言生成并行请求） | 路由器模型 | docs/guides/routing/routers/body-builder | 没有 | 无 | 无 | 低优先 |
 | Fusion 路由器 / Fusion 服务端工具（多模型审议） | 路由器模型 | docs/guides/routing/routers/fusion-router | 没有 | 无 | 无 | 低优先 |
@@ -107,15 +108,17 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 
 ## 5. 调用记录查询 `GET /api/v1/generation`
 
+本节字段于 2026-10-30 对照[官方 OpenAPI](https://openrouter.ai/docs/openapi/openapi.yaml)、[生成查询](https://openrouter.ai/docs/api/api-reference/generations/get-request-&-usage-metadata-for-a-generation)、[生成内容](https://openrouter.ai/docs/api/api-reference/generations/get-stored-prompt-completion-and-error-content-for-a-generation)和[活动](https://openrouter.ai/docs/api/api-reference/analytics/get-user-activity-grouped-by-endpoint)文档；`/activity` 的日期、分组和字段以该页的 200 响应为准。
+
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| `GET /api/v1/generation?id=` | 按 `gen-…` ID 查调用详情 | api/generations/get-request-&-usage-metadata-for-a-generation | 部分：`gw/readonly.go:161-198`；ID 是 UUID 不是 `gen-` 前缀 | 无（用 `/api/log`） | `s2:internal/server/routes/gateway.go:210`（`/usage`，不同形） | 路径对，字段子集 |
-| 字段 `id`、`model`、`created_at`、`total_cost`、`latency`、`generation_time`、`finish_reason`、`tokens_prompt`、`tokens_completion` | 基本字段 | spec `GenerationResponse` | 有：`internal/gateway/readonly.go`；另有可选 `price_version`、`charge_details` 用户分项售价扩展，见[计费](domains/billing.md#用户看得到什么) | 无 | 无 | 缺 `streamed`、`cancelled` |
-| 字段 `native_tokens_prompt/completion/reasoning/cached/completion_images`、`num_media_prompt/completion`、`num_input_audio_prompt`、`num_search_results`、`num_fetches` | 原生 token 统计 | spec | 部分：有 `tokens_reasoning/tokens_cached` 和整个 `usage` 明细；`native_tokens_*` 名字没有 | 无 | 无 | 读 `native_tokens_*` 的工具会拿到空 |
-| 字段 `provider_name`、`upstream_id`、`upstream_inference_cost`、`provider_responses`、`router`、`is_byok`、`cache_discount`、`api_type`、`origin`、`user_agent`、`http_referer`、`app_id`、`external_user`、`session_id`、`preset_id`、`workspace_id`、`data_region`、`web_search_engine`、`moderation_latency` | 来源、归因、供应商信息 | spec | 部分：`HTTP-Referer`、`X-OpenRouter-Title`、`X-OpenRouter-Categories` 记成 `app_referer`、`app_title`、`app_categories`（`internal/gateway/record.go:78`），控制台调用接口返回；没有应用页、排名和 `app_id`；供应商和成本仍不暴露（`docs/domains/gateway.md:79,198,224`） | 无 | 无 | `provider_name` 等不暴露是有意；`cache_discount`、`session_id`、`external_user` 应补 |
-| `GET /api/v1/generation/content`（存储的提示词、补全、错误内容） | 查看已存内容 | api/generations/get-stored-prompt-completion-and-error-content-for-a-generation | 没有（内容会保存，`docs/product.md:82`，但没有这个接口） | 无 | 无 | 归 #317 控制台调用详情 |
+| `GET /api/v1/generation?id=` | 按 `gen-…` ID 查调用详情 | api/generations/get-request-&-usage-metadata-for-a-generation | 有：`internal/gateway/readonly.go`；ID 是 UUID 不是 `gen-` 前缀 | 无（用 `/api/log`） | `s2:internal/server/routes/gateway.go:210`（`/usage`，不同形） | 字段子集见下；`/generation/content`、`/activity` 也已提供 |
+| 字段 `id`、`model`、`created_at`、`total_cost`、`latency`、`generation_time`、`finish_reason`、`tokens_prompt`、`tokens_completion` | 基本字段 | spec `GenerationResponse` | 有：`internal/gateway/readonly.go`；另有可选 `price_version`、`charge_details` 用户分项售价扩展，见[计费](domains/billing.md#用户看得到什么)；`streamed`、`cancelled` 已补 | 无 | 无 | 无 |
+| 字段 `native_tokens_prompt/completion/reasoning/cached/completion_images`、`num_media_prompt/completion`、`num_input_audio_prompt`、`num_search_results`、`num_fetches` | 原生 token 统计 | spec | 部分：`native_tokens_prompt` 取写入时记下的物理输入（未知则省略），其余从 `usage` 明细求和；`num_media_*`、`num_input_audio_prompt`、`num_search_results`、`num_fetches` 没有 | 无 | 无 | 原生 token 名已可用；数量类字段仍是 `usage` 明细 |
+| 字段 `provider_name`、`upstream_id`、`upstream_inference_cost`、`provider_responses`、`router`、`is_byok`、`cache_discount`、`api_type`、`origin`、`user_agent`、`http_referer`、`app_id`、`external_user`、`session_id`、`preset_id`、`workspace_id`、`data_region`、`web_search_engine`、`moderation_latency` | 来源、归因、供应商信息 | spec | 部分：`cache_discount` 在费用明细有正折扣时返回，`session_id` 在记录有时返回；`HTTP-Referer`、`X-OpenRouter-Title`、`X-OpenRouter-Categories` 记成 `app_referer`、`app_title`、`app_categories`（`internal/gateway/record.go`），控制台调用接口返回；没有应用页、排名和 `app_id`；供应商和成本仍不暴露（[接入的「用量与费用」](domains/gateway.md#用量与费用)）；`app` 只能是 `claude-code`/`codex` | 无 | 无 | `provider_name` 等不暴露是有意；`external_user`、`workspace_id`、`data_region` 等仍缺 |
+| `GET /api/v1/generation/content`（存储的提示词、补全、错误内容） | 查看已存内容 | api/generations/get-stored-prompt-completion-and-error-content-for-a-generation | 有：`internal/gateway/readonly.go`；Axiom 不保存对话内容，存在且属于本账户的调用也返回 404 `content_not_available`，别人的调用与 unknown 同 `generation_not_found` | 无 | 无 | 行为是 404，但错误码说明了原因；保留政策见 [记录与告警](domains/observability.md#写入时记全) |
 | `POST /api/v1/generation/feedback` | 提交调用反馈 | api/generations/submit-feedback-for-a-generation | 没有 | 无 | 无 | 低优先 |
-| `GET /api/v1/activity`（按日、按端点聚合，近 30 天，可按 `api_key_hash`、`workspace_id` 过滤） | 用量活动 | spec `/activity` | 没有 OpenRouter 同形接口：控制台 `/api/console/v1/calls` 支持 key/工作区/状态/请求 ID 筛选，`/calls/aggregate` 按日/模型/key 汇总调用与用户收费，`/calls/export` 流式 CSV；形状不同、要会话登录，见[用户调用记录查询与导出](domains/observability.md#用户调用记录查询与导出) | `na:router/api-router.go:298`（`/usage`，不同形） | 无 | 开发者用它做账单对账 |
+| `GET /api/v1/activity`（按日、按端点聚合，近 30 天，可按 `api_key_hash`、`workspace_id` 过滤） | 用量活动 | spec `/activity` | 有：`internal/gateway/readonly.go` 只返回最近 30 个完整 UTC 日，按日/模型/工作区分组；金额按请求编号读取 billing 当前实收（校正后），输入优先用写入的物理输入；`api_key_hash` 按 key UUID 接受（官方是 key 的 SHA-256 十六进制；Axiom 的 keys API 不暴露这个哈希，只有 UUID），`user_id` 拒绝；只算完整 UTC 日，今天的调用不进结果；另有控制台 `/api/console/v1/calls`、`/calls/aggregate`、`/calls/export` | `na:router/api-router.go:298`（`/usage`，不同形） | 无 | 官方字段齐全；无组织账户和端点维度 |
 
 ## 6. 余额与 key 信息
 
@@ -165,10 +168,10 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 音频输入 `input_audio`（base64，wav/mp3/…） | 音频输入 | docs/guides/overview/multimodal/audio | 没有：语法表里无 `input_audio`（`proto/grammar.go:62-83`） | 部分 | 无 | 范围里只写图片和 PDF |
 | 音频输出：`modalities:["text","audio"]` + `audio{voice,format}`，必须流式，`delta.audio` | 音频输出 | 同上 | 没有：`modalities` 非 `["text"]` 在转换里被拒（`proto/canon.go:379`） | 无 | 无 | 同上 |
 | 视频输入 `video_url` | 视频输入 | docs/guides/overview/multimodal/videos | 没有 | 无 | 无 | 同上 |
-| 图片生成：Chat 里 `modalities:["image","text"]` + `image_config`，或 `POST /api/v1/images`、`/images/models` | 生图 | docs/guides/overview/multimodal/image-generation | 没有（范围「以后」） | `na:router/relay-router.go:127` | `s2:internal/server/routes/gateway.go:253` | 归 #320 多单位计价后再做 |
+| 图片生成：Chat 里 `modalities:["image","text"]` + `image_config`，或 `POST /api/v1/images`、`/images/models` | 生图 | docs/guides/overview/multimodal/image-generation | 没有（范围「以后」） | `na:router/relay-router.go:127` | `s2:internal/server/routes/gateway.go:253` | #320 已提供按张计价，端点仍属「以后」 |
 | 视频生成 `/api/v1/videos` 提交/轮询/下载 | 异步视频任务 | docs/guides/overview/multimodal/video-generation | 没有 | `na:router/main.go:20`（`SetVideoRouter`） | `s2:internal/server/routes/gateway.go:270-281` | 同上 |
 | TTS `POST /api/v1/audio/speech`、STT `POST /api/v1/audio/transcriptions` | 语音 | docs/guides/overview/multimodal/tts、stt | 没有 | `na:router/relay-router.go:140-146` | `s2:internal/server/routes/gateway.go:295-296` | 同上 |
-| Files API `/api/v1/files`（上传、下载、删除，请求里按文件 ID 引用） | 工作区文件 | docs/guides/features/files-api | 没有 | 返回未实现（`na:router/relay-router.go:170-174`） | 无 | 对应 #312「文件引用」 |
+| Files API `/api/v1/files`（上传、下载、删除，请求里按文件 ID 引用） | 工作区文件 | docs/guides/features/files-api | 部分：请求里按 `file_id` 引用时原样带回发它的那一家（Chat、Responses 的 `file_data`/`file_id`，要求 `provider.only` 指定唯一供应商，路由只安排一次尝试，#312 E2-17）；上传、下载、删除端点没有 | 返回未实现（`na:router/relay-router.go:170-174`） | 无 | `file_id` 是供应商账户的资源，本站不代管文件，也不转发上传/下载/删除；对应 #312「文件引用」 |
 
 ## 10. 插件、服务端工具、消息转换
 
@@ -177,8 +180,8 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | 插件机制：`plugins:[{id, enabled, …}]`，账户默认插件设置，`enabled:false` 关掉默认插件 | 请求/响应改写 | docs/guides/features/plugins | 请求级 id/选项校验已实现，未知项 400；没有账户默认设置 | 无 | `s2:internal/config/config.go:108`（另一种概念，与此无关） | 本地支持修复与压缩，其余启用项显式拒绝；详见接入域 |
-| `web` 插件（已弃用）：`engine`、`max_results`、`search_prompt`… | 联网搜索 | docs/guides/features/plugins/web-search | 启用返回 400，与 `:online`、`openrouter:web_search` 共用「没有配置外部搜索服务」；`file-parser` 另行拒绝 | 无 | 无 | 官方已转向服务端工具；执行设计见接入域「服务端工具」 |
-| 服务端工具 `{"type":"openrouter:web_search"}`，参数 `engine`(auto/native/exa/firecrawl/parallel/perplexity)、`max_results`、`max_uses`、`allowed_domains`… | 任何模型都能联网搜索 | docs/guides/features/server-tools/web-search | 部分：`internal/protocol/grammar.go` 的 `openrouterTools` 认出名字，准入前 400「没有配置外部搜索服务」；`parameters` 不解析 | 无 | 无 | 厂商原生联网（Anthropic `web_search_*`、OpenAI `web_search`）有，并按次计费；外部搜索服务选型待负责人决定，见接入域「服务端工具」 |
+| `web` 插件（已弃用）：`engine`、`max_results`、`search_prompt`… | 联网搜索 | docs/guides/features/plugins/web-search | 部分：后台配置 SearXNG 后，Chat 请求在准入前搜索一次、注入结果并按次计费；未配置时 400；`engine` / `mode` 明确 400，`max_results`、`search_prompt`、`include_domains`、`exclude_domains` 执行 | 无 | 无 | 只有 Chat；非流式回复补 `url_citation`，流式不补。官方已转向服务端工具；执行见 `internal/websearch` |
+| 服务端工具 `{"type":"openrouter:web_search"}`，参数 `engine`(auto/native/exa/firecrawl/parallel/perplexity)、`max_results`、`max_uses`、`allowed_domains`… | 任何模型都能联网搜索 | docs/guides/features/server-tools/web-search | 没有：`internal/protocol/grammar.go` 的 `openrouterTools` 认出名字，准入前 400；`parameters` 不解析。即使配置了 `web` 插件的后端也拒绝 | 无 | 无 | 厂商原生联网（Anthropic `web_search_*`、OpenAI `web_search`）有，并按次计费；它要模型侧循环，与插件的一次搜索不同，见接入域「服务端工具」 |
 | Chat 的 `web_search_options` | OpenAI 风格联网 | docs/api_reference/responses/web-search | 有：`proto/grammar.go:74,356-361` 作为能力要求 | 部分 | 部分 | 无 |
 | 服务端工具 `openrouter:web_fetch`、`datetime`、`image_generation`、`apply_patch`、`shell`、`bash`、`experimental__search_models`、`tool_search`、`fusion`、`advisor`、`subagent`、`files`，`GET /api/v1/tools` | OpenRouter 托管的工具 | docs/guides/features/server-tools | 部分：逐个认名，准入前 400「没有模型侧工具循环」；`/api/v1/tools` 目录没有 | 无 | 无 | 多数需要托管沙箱；清单不先于执行公开 |
 | `response-healing` 插件 | 修复非流式 JSON | [官方文档](https://openrouter.ai/docs/guides/features/plugins/response-healing)，2026-10-29 | 已实现非流式 Chat JSON 本地修复，语法缺陷失败保留原文 | 无 | 无 | 不作 schema 语义校验，边界见接入域 |
@@ -192,13 +195,13 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 |---|---|---|---|---|---|---|
 | `usage.prompt_tokens`、`completion_tokens`、`total_tokens`，每次响应都带，流式在最后一块 | 用量统计，无需参数 | docs/cookbook/administration/usage-accounting | 有：`proto/openai.go:27-40,137`；流式最后一块带用量（`docs/domains/gateway.md:73`） | 有 | 有 | 无 |
 | `usage.cost`（本次扣费） | 美元 | 同上 | 有：`proto/relay.go:586-596`；单位是站点记账货币，另有 `cost_currency`，估算时 `cost_estimated: true` | 无 | 无 | 二级站点用人民币时数字不是美元 |
-| `usage.cost_details{upstream_inference_cost,upstream_inference_prompt_cost,upstream_inference_completions_cost,server_tool_cost}` | 上游成本与服务端工具成本 | 同上；spec `CostDetails` | 没有（只解析，不输出：`proto/openai.go:28`）；上游成本有意不对用户暴露 | 无 | 无 | `server_tool_cost` 对联网搜索计费可见性有用 |
-| `usage.is_byok` | 是否用了自己的 key | 同上 | 没有 | 无 | 无 | 无 BYOK |
-| `usage.completion_tokens_details.{reasoning_tokens,audio_tokens,accepted/rejected_prediction_tokens}` | 明细 | spec `ChatUsage` | 部分：只有 `reasoning_tokens`（`proto/openai.go:137`） | 部分 | 部分 | 缺音频/预测 token |
-| `usage.prompt_tokens_details.{cached_tokens,cache_write_tokens,audio_tokens,video_tokens}` | 明细 | spec `ChatUsage` | 部分：上游报的 `cached_tokens`、`cache_write_tokens`、`audio_tokens`（`proto/openai.go:37`）、`video_tokens`（计入 `image_in`，`:39`）都解析并计费；返回给客户端的用量块（`appendOpenAIUsage`）只写缓存读写明细，不输出音频、视频明细；DeepSeek 的 `prompt_cache_hit_tokens` 按缓存读计（`proto/openai.go`） | 部分 | 部分 | 无 |
-| `usage.server_tool_use_details` | 服务端工具调用次数 | spec `ChatUsage` | 部分：Messages 用量里有 `server_tool_use.web_search_requests`（`proto/errors.go:158`）；Chat 里没有 | 无 | 无 | 小 |
-| 响应 `cache_discount`（缓存省了多少） | 缓存折扣 | docs/guides/best-practices/prompt-caching | 没有 | 无 | 无 | 小 |
-| 响应 `model` 为实际使用的模型（回退/路由器后） | 返回实际模型 | docs/guides/routing/model-fallbacks | 不一致：Axiom 回显客户端请求的名字（`docs/domains/gateway.md:68`，`proto/chat.go:81` `ourModel`） | 回显请求名 | 回显 | 用了 `models` 回退的客户端分不清实际用了哪个；这是有意的（隐藏供应商），但对跨模型回退不利 |
+| `usage.cost_details{upstream_inference_cost,upstream_inference_prompt_cost,upstream_inference_completions_cost,server_tool_cost}` | 上游成本与服务端工具成本 | 同上；spec `CostDetails` | 部分：`server_tool_cost` 已输出（按次工具售价之和）；上游成本有意不对用户暴露 | 无 | 无 | 只剩供应商成本三项 |
+| `usage.is_byok` | 是否用了自己的 key | 同上 | 有，固定 `false`（Axiom 没有用户 BYOK） | 无 | 无 | 无 BYOK，字段为兼容而写 |
+| `usage.completion_tokens_details.{reasoning_tokens,audio_tokens,accepted/rejected_prediction_tokens}` | 明细 | spec `ChatUsage` | 有：`reasoning_tokens`、音频和接受/拒绝的预测 token（只在上游给出且不超过输出总数时保留） | 部分 | 部分 | 无 |
+| `usage.prompt_tokens_details.{cached_tokens,cache_write_tokens,audio_tokens,video_tokens}` | 明细 | spec `ChatUsage` | 有：缓存读写、音频、视频都解析、计费并写进客户端的用量块；DeepSeek 的 `prompt_cache_hit_tokens` 按缓存读计 | 部分 | 部分 | 无 |
+| `usage.server_tool_use_details` | 服务端工具调用次数 | spec `ChatUsage` | 有：Chat 输出 `tool_calls_requested/executed` 和 `web_search_requests`；Messages 原有 `server_tool_use.web_search_requests` | 无 | 无 | 无 |
+| 用量块 `cache_discount`（缓存省了多少） | 缓存折扣 | docs/guides/best-practices/prompt-caching | 有：按锁定售价的输入价与缓存读价之差乘缓存读数量，精确计算；免单调用不产生折扣 | 无 | 无 | 无 |
+| 响应 `model` 为实际使用的模型（回退/路由器后） | 返回实际模型 | docs/guides/routing/model-fallbacks | 有：响应写实际服务的模型（`RelayOptions.ActualModel`，由 routing 解析后的条目给出），不再回显请求名 | 回显请求名 | 回显 | 与 OpenRouter 一致；只暴露模型，仍不暴露供应商 |
 | `stream_options.include_usage` | 开关 | spec `ChatStreamOptions` | 部分：总是返回用量（比 OpenRouter 多），参数被接受；发给 Chat 上游时强制为 true（`proto/prepare.go` 的 `streamOptions`），其他选项原样 | 有（强制，`na:relay/compatible_handler.go`） | 有（`s2:internal/service/openai_gateway_chat_completions_raw.go`） | 无 |
 | 请求 `usage:{include:true}`（旧参数） | 旧开关 | spec | 部分：被丢弃，用量总是有（`proto/prepare.go:281`） | 无 | 无 | 行为兼容 |
 | 零补全保险：零输出且无结束原因/错误结束时不收费 | 自动 | docs/guides/features/zero-completion-insurance | 有：`bill/settle.go:241` `zeroOutput` + 免单规则 | 无 | 无 | 无 |
@@ -265,7 +268,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 地域路由（`eu.openrouter.ai`、`us.openrouter.ai`） | 企业功能 | docs/guides/features/in-region-routing | 没有 | 无 | 无 | 不跟 |
 | 批量 API `/api/v1/batches`（异步批量，`:batch` 价） | 异步批处理 | docs/batch-quickstart | 没有（范围「以后」） | 无 | `s2:internal/server/routes/gateway.go:258-267`（图片批量） | 低优先 |
 | Responses 的 `store`、`previous_response_id`、`background` | OpenRouter 的 Responses 是无状态的 | docs/api_reference/responses/overview | 不一致（有意）：Axiom 自己保存会话状态（`docs/domains/gateway.md:236`） | 无 | 部分 | Axiom 比 OpenRouter 多 |
-| 嵌入 `/api/v1/embeddings`、`/embeddings/models`、重排 `/rerank`、旧补全 `/completions`、审核 `/moderations` | 其他模态端点 | docs/api_reference/embeddings | 没有 | `na:router/relay-router.go:102,135,151,164` | `s2:internal/server/routes/gateway.go:240` | 向量化和重排对 RAG 开发者是硬需求；范围里放在「以后」 |
+| 嵌入 `/api/v1/embeddings`、重排 `/rerank`、旧补全 `/completions`、审核 `/moderations` | 其他模态端点 | docs/api_reference/embeddings | 部分：`/embeddings`、`/rerank`、`/completions` 已在 P18 提供（原生格式，见 §1）；`/embeddings/models`、`/moderations` 没有 | `na:router/relay-router.go:102,135,151,164` | `s2:internal/server/routes/gateway.go:240` | 向量化、重排和旧补全对 RAG 与旧 SDK 开发者是硬需求，现已可用；嵌入模型列表要目录先有输出模态，审核没有模型与策略数据 |
 | Provider Monitor 数据集、`/benchmarks`、`/analytics/*`、`/datasets/*`、`/classifications/task`（公开排名数据） | 市场数据 | api/datasets、benchmarks | 没有 | 无 | 无 | 不跟 |
 | 客户端 SDK（TypeScript、Python、Go）、Agent SDK、MCP、Terraform provider、Ori | OpenRouter 自己的工具链 | docs/client-sdks/overview | 不适用（Axiom 说用 OpenRouter/OpenAI/Anthropic 官方 SDK 改地址即可）；Axiom 另有运营 MCP（`docs/domains/operations.md`） | 无 | 无 | 不跟 |
 
@@ -275,24 +278,24 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 
 1. 【插件已落实，独立参数仍有缺口】`plugins` / `transforms` 已执行本地修复/压缩或明确 400（§10），不再静默丢弃；`route`、`usage`、`auto-router` 尚无实现。→ #311
 2. 【静默失效】`openrouter:*` 服务端工具类型不被识别（`internal/protocol/grammar.go` 原只认厂商的 `web_search_*`/`web_search`）。已缓解：文档列出的 13 种在三种格式里逐个认名并准入前拒绝，带这类工具的请求不再行为未定；联网搜索仍只有厂商原生的，外部搜索服务待选型。→ #311
-3. 【硬失败，部分已补】模型名后缀：`:nitro`、`:floor` 已支持（排序一半，`internal/gateway/variant.go`）；`:exacto`、`:online`、`:free`、`:batch`、`:extended` 回 400 并说明原因，`:thinking` 只在请求已要求推理时接受；`~anthropic/claude-sonnet-latest` 这类别名回 400 暂不支持，需要显式模型族与可切换别名映射，不能猜最新版本；`@preset/…` 已在 catalog 认名前按账户快照展开。→ #311（别名解析、`:nitro/:floor` 的层级准入）；`@preset/` 前缀随预设一起归 #313
-4. 【明确偏离】`provider.order/only/ignore` 按公开分组代号生效，关闭回退、三种排序与对象分区已支持，`require_parameters` 按公开的端点参数清单过滤。非空 `quantizations`、`enforce_distillable_text`、百分位对象、`max_price.request/image` 缺必要事实或计费单位而明确 400：量化缺逐端点等级，百分位缺 quality 的滚动五分钟窗口分位数，按请求/按张缺价目表项和来源价；`require_parameters` 里清单外的参数同样 400。每项缺的数据见 `docs/domains/gateway.md` 路由参数偏离表的第三列。→ #313
-5. 【模型元数据】`GET /api/v1/models` 与 `/api/v1/models/{model}` 已是 OpenRouter 的模型对象：`pricing`（十个按 token / 按次计价的成员，取主站售价）、`context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`、`links.details`，外加查询参数过滤、排序和分页；`id` 是公开标准 ID，列表与路由快照同一次构建、一起发布，价格就是收费的价格。仍缺 `description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`（目录没有这些数据，整个不输出）、`alias_target`、`benchmarks`、按图与按请求计价（#320）；`created` 恒 0、`default_parameters`/`supported_voices`/`per_request_limits` 是 null（都是 Axiom 没有的数据，填位置而不编造）。SDK 的模型选择器、编码代理的上下文窗口探测、成本估算已经可用。→ #311
+3. 【已落地，层级准入仍缺】模型名后缀：`:nitro`、`:floor` 已支持（排序一半，`internal/gateway/variant.go`）；`:free` 作为目录独立条目精确查询，没有条目 404；`~anthropic/claude-sonnet-latest` 这类别名查目录别名表，目标由管理员显式指定，响应 `model` 是具体模型；`:exacto` 质量优先且只保留已验证端点，没有时 503 `not_verified`；`:online` 在配置搜索后端后等同 `web` 插件；`:batch`、`:extended` 回 400 并说明原因，`:thinking` 只在请求已要求推理时接受；`@preset/…` 已在 catalog 认名前按账户快照展开。→ #311（`:nitro/:floor` 的层级准入）；`@preset/` 前缀随预设一起归 #313
+4. 【明确偏离】`provider.order/only/ignore` 按公开分组代号生效，关闭回退、三种排序与对象分区已支持，`require_parameters` 按公开的端点参数清单过滤。非空 `quantizations`、`enforce_distillable_text`、百分位对象、`max_price.request/image` 缺必要事实（逐端点量化等级、滚动五分钟窗口分位数、按请求的单位、按张的语义）而明确 400；`require_parameters` 里清单外的参数同样 400。每项缺的数据见 `docs/domains/gateway.md` 路由参数偏离表的第三列。→ #313
+5. 【模型元数据】`GET /api/v1/models` 与 `/api/v1/models/{model}` 已是 OpenRouter 的模型对象：`pricing`（按 token、按次和按张计价的成员，取主站售价）、`context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`、`links.details`，外加查询参数过滤、排序和分页；`id` 是公开标准 ID，列表与路由快照同一次构建、一起发布，价格就是收费的价格。仍缺 `description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`（目录没有这些数据，整个不输出）、`alias_target`、`benchmarks`、按请求计价（按图已在 #320 补上）；`created` 恒 0、`default_parameters`/`supported_voices`/`per_request_limits` 是 null（都是 Axiom 没有的数据，填位置而不编造）。SDK 的模型选择器、编码代理的上下文窗口探测、成本估算已经可用。→ #311
 6. 【预设，已补】`@preset/…`、`preset` 字段与账户 CRUD 已实现（gateway/presets.go、accounts/presets.go、api/console.yaml）；版本 API 与响应缓存仍未实现。→ #313（预设属于路由配置）
 7. 【错误形态，部分已补】新增 `context_length_exceeded`、`permission_denied`、`content_policy_violation`、`payload_too_large` 与 403，HTTP/SSE 分类一致；`code` 保持字符串（含 403，有意差异，见 [gateway 决策](domains/gateway.md#决策与理由)）。图片类等细分仍缺；预算耗尽仍用 402 而不是 OpenRouter 的 403+`limit_source`。→ #311
 8. 【Chat 上游】Chat 客户端调用说 Chat 的端点是同格式转发（#301 A，`proto/prepare.go` 的 Chat 规则、`rt/plan.go` 的 `callFormat`）；Messages、Responses 到 Chat 的请求、流及聚合转换（#301 B）与三种原生格式一同纳入差分测试，不能表达的成员按跨格式策略拒绝。→ #311（#301）
 9. 【推理】`reasoning.max_tokens` 跨格式近似、`effort: xhigh/max/minimal`、关闭与隐藏已核实实现，映射及边界见 [protocol 换算表](../internal/protocol/README.md#推理控制与换算)。模型列表的 `reasoning` 仍只给 `supports_max_tokens`（按方言的手动预算判断）；未知 mandatory、模型支持的 effort 列表不声称。→ #311
-10. 【读取类】`GET /api/v1/models/{author}/{slug}/endpoints`、`/models/user`、`/models/count`、`/providers` 已提供内存快照投影（字段偏离和实时准入的 DB 例外见 gateway.md），`/endpoints/zdr` 没有；`/generation` 缺 `native_tokens_*`、`cache_discount`、`session_id`、`streamed/cancelled` 等，`/generation/content`、`/generation/feedback`、`/activity` 没有。→ `/endpoints` 等归 #311；`/generation`、`/activity` 归 #319
-11. 【用量字段】`usage.cost_details`（含 `server_tool_cost`）、`is_byok`、`completion_tokens_details` 的音频/预测项、返回给客户端的 `prompt_tokens_details` 音频/视频明细、`cache_discount`、Chat 里的 `server_tool_use_details` 没有；响应 `model` 回显请求名而不是实际使用的模型（用 `models` 回退时看不出换了谁）。→ #319
+10. 【读取类】`GET /api/v1/models/{author}/{slug}/endpoints`、`/models/user`、`/models/count`、`/providers` 已提供内存快照投影（字段偏离和实时准入的 DB 例外见 gateway.md），`/endpoints/zdr` 没有；`/generation` 已有 `native_tokens_*`、`cache_discount`、`session_id`、`streamed/cancelled`，`/generation/content`（不保存内容，固定 404 `content_not_available`）和 `/activity` 已有；`/generation/feedback` 没有。→ `/endpoints` 等归 #311；`/generation`、`/activity` 归 #319
+11. 【用量字段】`usage.cost_details` 的供应商成本三项仍不输出（有意）；`server_tool_cost`、`is_byok`、`completion_tokens_details` 的音频/预测项、`prompt_tokens_details` 的音频/视频明细、`cache_discount`、Chat 的 `server_tool_use_details` 已补，响应 `model` 是实际使用的模型。→ #319
 12. 【会话与归因】会话请求头（`x-session-id` 等）转发给 Responses、Chat 端点并换成分值（`gw/headers.go`），Axiom 自己的粘性已按 x-session-id 分组，请求体 session_id 优先；`X-OpenRouter-Title`/`HTTP-Referer`/`X-OpenRouter-Categories` 已记入调用记录并出现在控制台的调用列表与详情，但没有应用页和排名；Anthropic Messages 的 `fallbacks` 已映射到路由备选模型。→ #313（session 头、fallbacks）
 13. 【限流】E4-2/P13 已实现：共享账户/key 计数、等级默认与账户覆盖、请求速率 429 的 `X-RateLimit-*` 头、`GET /key` 的 `rate_limit`、`budgets`、`effective_budget`；付费模型平台限流等有意差异见[接入](domains/gateway.md#业务速率与-openrouter-的差异)。→ #315
 14. 【管理 API】`/api/v1/keys` 系列已提供管理 key 认证的调用 key CRUD（E4-9/P14）；限制与 OpenRouter 的差异见[账户域](domains/accounts.md#api-key)；`/workspaces`、`/guardrails`、`/organization` 管理 API 没有。→ #315（key）、#317（工作区/护栏的界面）
 15. 【响应缓存】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置没有；涉及内容保存政策，需要负责人定。→ 新建
 16. 【BYOK】用户自带供应商 key（`/byok`、优先/回退区、手续费）没有；范围里在「以后」。管理员侧号池已有。→ 新建
-17. 【路由器】`openrouter/auto`、`auto-beta`、`free`、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有；范围里 Auto Router 在「以后」。其中 `openrouter/free` 依赖 `:free` 条目。→ 新建
-18. 【产品线】`/embeddings`、`/rerank`、`/images`、`/videos`、`/audio/speech`、`/audio/transcriptions`、音频/视频输入输出、Files API、Batch API、`/completions`、`/moderations`。向量化和重排是 RAG 开发者的硬需求，其余可后置；单次/按时长/按字符计价要先有 #320。→ 向量化/重排/批量/Files：#312 或新建；图片/视频/语音：#320
+17. 【路由器】`openrouter/auto`、`openrouter/free` 已实现（按现有路由排序选具体模型，free 只在 `:free` 目录条目里选）；`auto-beta`、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有。→ 新建
+18. 【产品线】P18 已补 `/embeddings`、`/rerank`、`/completions`（§1）；仍缺 `/embeddings/models`、`/images`、`/videos`、`/audio/speech`、`/audio/transcriptions`、音频/视频输入输出、Files API、Batch API、`/moderations`。图片/视频/语音与按次/按时长/按字符计价相关，要先有 #320；`/embeddings/models` 要目录先有输出模态；`/moderations` 没有模型与策略数据。→ 批量/Files：#312 或新建；图片/视频/语音：#320
 19. 【认证与企业】OAuth PKCE 换 key、Workload Identity、SSO/SCIM、私有端点、终端用户登记、Broadcast 可观测性集成、护栏内容策略：不影响基本迁移。→ #315 / #316 / 新建
-20. 【不跟】`alignment`/`armor` 插件、Jev/Fusion/Switchyard 路由器、`debug.echo_upstream_body`、`openrouter_metadata` 路由元数据、地域路由、公开排名数据集：与 Axiom「不暴露供应商身份」或产品定位冲突，建议明确写成「有意不做」。→ 无
+20. 【不跟】`alignment`/`armor` 插件、Jev/Fusion/Switchyard 路由器、`debug.echo_upstream_body`、`openrouter_metadata` 路由元数据、地域路由、公开排名数据集：与 Axiom「不暴露供应商身份」或产品定位冲突。除路由元数据外的五项已写进「P20 有意不做」，路由元数据仍未做。→ 无
 
 ## Axiom 比 OpenRouter 多的（不算缺口，只是行为不一致，迁移时要说明）
 
@@ -300,4 +303,16 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 - `/key`、`/credits` 只接受调用 key，管理 key 均为 401。OpenRouter 的 /credits 要管理 key，/key 也接受管理 key；Axiom 本轮仅为 key CRUD 接入管理认证，余额和凭证自省接口未接入独立管理权限，决定见 [gateway](domains/gateway.md#决策与理由)。
 - 响应总是带 `usage.cost`/`cost_currency`/`cost_estimated`，不需要 `usage.include`。
 - 推理文本同时写 `reasoning` 与 `reasoning_content`。
-- 上游错误去掉供应商标识；响应头走白名单；`model` 回显请求名。
+- 上游错误去掉供应商标识；响应头走白名单；`model` 回显实际服务的模型。
+
+## P20 有意不做
+
+下面五项不会随 M3 上线，也不是“还没排期”：它们与 Axiom 的产品边界或现有事实冲突，先写下来，避免以后被当成遗漏或又被重新评估一遍。每一项都是对外行为，改动要按难逆转的决策重新批准。
+
+| 能力 | OpenRouter 的做法 | 为什么不做 |
+|---|---|---|
+| `alignment` / `armor` 插件 | 托管的内容审核与提示词加固，按插件配置改写或拦截请求 | 它会改写客户端发来的提示词并引入一套托管策略，和本站“请求内容不改、插件只做本地可解释变换”的边界冲突（「插件与提示词变换」）；本站也没有审核模型、策略库和误判申诉流程。安全需求应由客户自己的策略或独立审核服务承担，本站不假装提供 |
+| Jev / Fusion / Switchyard 路由器 | 多个模型并行/串联、分类器选模、投票或融合输出 | 计费单位、失败回退和“哪一次回答算数”都没有定义；并行调用会同时占用多个端点的名额与余额，融合输出也无法逐 token 计量。`openrouter/auto` 已用现有路由排序给出确定、可解释的选择，再引入这些会绕开准入与计价 |
+| `debug.echo_upstream_body` | 在响应或日志里回显上游原始请求/响应体 | 上游体的头、错误原文和供应商字段会暴露货源，违反“不暴露供应商身份”；回显还可能把客户内容写进日志，与内容保存政策冲突。排障用调用记录里的状态、用量和脱敏错误即可 |
+| 地域路由（`eu.openrouter.ai`、`us.openrouter.ai`） | 把请求固定到指定地域的推理资源 | 本站是单地域部署，没有跨地域的数据驻留承诺、机房和合规文本；写一个地域域名而不保证数据不出境是虚假承诺。真要做需要独立的部署与合规决定 |
+| 公开排名、基准分与 Provider Monitor 数据集 | 跨租户汇总用量、延迟、价格和基准，公开排行 | 数据来自别的租户的调用，公开即泄露用量与货源；本站的产品约束是不暴露供应商身份，也没有跨租户聚合的授权。`/api/v1/models/{author}/{slug}/endpoints` 只给本 key 可见的匿名端点 |

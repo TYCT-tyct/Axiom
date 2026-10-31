@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/alert"
 	"axiom/internal/platform/audit"
@@ -37,19 +38,21 @@ type ProbeSource interface {
 	TestEndpoint(context.Context, suppliers.TestRequest) (suppliers.TestResult, error)
 }
 
-// Config supplies the background loop; Node is the stable identity used for capacity alerts.
+// Config supplies the background loop; Node is the stable identity used for capacity alerts. Identity says what an
+// endpoint claims to serve, from the catalog, and is nil when nothing can answer it: verification then stays unknown.
 type Config struct {
-	Node   string
-	DB     *pg.DB
-	Scope  pg.Scope
-	Mode   Mode
-	Source ProbeSource
-	Pauses Pauses
-	Alerts alert.Sink
-	Logger *slog.Logger
-	Meter  metric.Meter
-	Now    func() time.Time
-	Rand   func() float64
+	Node     string
+	DB       *pg.DB
+	Scope    pg.Scope
+	Mode     Mode
+	Source   ProbeSource
+	Pauses   Pauses
+	Alerts   alert.Sink
+	Logger   *slog.Logger
+	Meter    metric.Meter
+	Now      func() time.Time
+	Rand     func() float64
+	Identity func(catalog.ModelID) (Claimed, bool)
 }
 
 // Loop persists transitions and schedules probes. Tick has one caller; workers only return results through done.
@@ -65,6 +68,7 @@ type Loop struct {
 	now                 func() time.Time
 	rand                func() float64
 	node                string
+	identity            func(catalog.ModelID) (Claimed, bool)
 	budgetState         uint8
 	owner               uuid.UUID
 	retry               *change
@@ -72,9 +76,11 @@ type Loop struct {
 	budget              [probeHourlyLimit]time.Time
 	used                int
 	done                chan probeEnd
+	verifyDone          chan verifyEnd
 	stale               bool
 	cleanup             time.Time
 	probes, transitions metric.Int64Counter
+	verification        metric.Int64Counter
 	duration            metric.Float64Histogram
 }
 
@@ -82,6 +88,16 @@ type probeEnd struct {
 	claim  healthRecord
 	result suppliers.TestResult
 	err    error
+}
+
+// verifyEnd is one verification generation's result: the outcome its answer was judged to have, and what it claimed.
+type verifyEnd struct {
+	endpoint suppliers.EndpointID
+	claim    claim
+	claimed  Claimed
+	outcome  verifyOutcome
+	result   suppliers.TestResult
+	err      error
 }
 
 // Start loads persisted state synchronously, before the node serves traffic.
@@ -104,7 +120,8 @@ func Start(ctx context.Context, c Config) (*Monitor, *Loop, error) {
 	m.mode = c.Mode
 	l := &Loop{
 		monitor: m, db: c.DB, scope: c.Scope, source: c.Source, pauses: c.Pauses, alerts: c.Alerts, logger: c.Logger,
-		node: c.Node, now: c.Now, rand: c.Rand, unavailable: map[uuid.UUID]bool{}, owner: uuid.NewV7(), done: make(chan probeEnd, probeConcurrency),
+		node: c.Node, now: c.Now, rand: c.Rand, identity: c.Identity, unavailable: map[uuid.UUID]bool{}, owner: uuid.NewV7(),
+		done: make(chan probeEnd, probeConcurrency), verifyDone: make(chan verifyEnd, probeConcurrency),
 	}
 	m.loop = l
 
@@ -148,6 +165,9 @@ func (l *Loop) Drain(ctx context.Context) error {
 		case end := <-l.done:
 			l.active--
 			l.finish(ctx, end)
+		case end := <-l.verifyDone:
+			l.active--
+			l.finishVerification(ctx, end)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -174,18 +194,25 @@ func (l *Loop) flush(ctx context.Context) error {
 	}
 }
 
-// Tick first commits evidence, then claims due probes in order. A stale source sends no traffic.
-func (l *Loop) Tick(ctx context.Context) error {
+// collectResults takes every finished generation without waiting; Drain waits for them instead.
+func (l *Loop) collectResults(ctx context.Context) {
 	for {
 		select {
 		case end := <-l.done:
 			l.active--
 			l.finish(ctx, end)
+		case end := <-l.verifyDone:
+			l.active--
+			l.finishVerification(ctx, end)
 		default:
-			goto collected
+			return
 		}
 	}
-collected:
+}
+
+// Tick first commits evidence, then claims due probes in order. A stale source sends no traffic.
+func (l *Loop) Tick(ctx context.Context) error {
+	l.collectResults(ctx)
 	if err := l.flush(ctx); err != nil {
 		return err
 	}
@@ -213,6 +240,9 @@ collected:
 	if err := l.schedule(ctx, due, endpoints, now); err != nil {
 		return err
 	}
+	if l.identity != nil {
+		l.scheduleVerification(ctx, l.verificationDue(endpoints, now), endpoints, now)
+	}
 	if err := l.checkModels(endpoints); err != nil {
 		return err
 	}
@@ -225,7 +255,7 @@ func (l *Loop) schedule(ctx context.Context, due []*State, endpoints []suppliers
 			l.probeMetric(ctx, "deferred")
 			return l.budgetSignal(true)
 		}
-		if !l.budget[l.used%len(l.budget)].IsZero() && now.Sub(l.budget[l.used%len(l.budget)]) < time.Hour {
+		if l.spent(now) {
 			l.probeMetric(ctx, "deferred")
 			return l.budgetSignal(true)
 		}
@@ -299,7 +329,7 @@ func (l *Loop) probe(ctx context.Context, claim healthRecord, ep suppliers.Routa
 	ctx, cancel := context.WithTimeout(ctx, suppliers.TestDeadline+2*probeCommitGrace)
 	defer cancel()
 	end.err = l.db.Tx(ctx, l.scope, func(tx pg.Tx) error {
-		result, err := l.generate(ctx, tx, suppliers.TestRequest{Endpoint: ep.ID, Format: ep.Formats[0], Prompt: prompt, AvoidCredential: claim.Credential})
+		result, err := l.generate(ctx, tx, suppliers.TestRequest{Endpoint: ep.ID, Format: ep.Formats[0], Prompt: prompt, AvoidCredential: claim.Credential}, "automatic health recovery")
 		end.result = result
 		return err
 	})
@@ -307,7 +337,7 @@ func (l *Loop) probe(ctx context.Context, claim healthRecord, ep suppliers.Routa
 }
 
 // TestEndpoint intentionally outlives caller cancellation, so a paid generation needs its full budget plus commit time.
-func (l *Loop) generate(ctx context.Context, tx pg.Tx, request suppliers.TestRequest) (suppliers.TestResult, error) {
+func (l *Loop) generate(ctx context.Context, tx pg.Tx, request suppliers.TestRequest, reason string) (suppliers.TestResult, error) {
 	deadline, _ := ctx.Deadline()
 	if time.Until(deadline) < suppliers.TestDeadline+probeCommitGrace {
 		return suppliers.TestResult{}, context.DeadlineExceeded
@@ -316,7 +346,7 @@ func (l *Loop) generate(ctx context.Context, tx pg.Tx, request suppliers.TestReq
 	if err != nil || uuid.UUID(result.Request) == (uuid.UUID{}) {
 		return result, err
 	}
-	return result, suppliers.RecordTest(ctx, tx, audit.System("quality.probe"), "automatic health recovery", result)
+	return result, suppliers.RecordTest(ctx, tx, audit.System("quality.probe"), reason, result)
 }
 
 func (l *Loop) finish(ctx context.Context, end probeEnd) {
@@ -345,11 +375,13 @@ func (l *Loop) finish(ctx context.Context, end probeEnd) {
 	kind := ""
 	switch outcome {
 	case suppliers.TestPassed:
+		e.count(success, now) // evidence for the quality score; the window stays for independent sources
 		r.Opened = 0
 		r.Restored = now.UnixNano()
 		r.Next = 0
 		kind = "restored"
 	case suppliers.TestFailed:
+		e.count(failure, now)
 		r.Backoff = min(r.Backoff+1, 5)
 	case suppliers.TestInconclusive:
 	}
@@ -362,6 +394,17 @@ func (l *Loop) finish(ctx context.Context, end probeEnd) {
 	if l.duration != nil && end.result.Request != (platform.RequestID{}) {
 		l.duration.Record(ctx, end.result.Total.Seconds())
 	}
+}
+
+// spent says this hour's probe budget is used up.
+func (l *Loop) spent(now time.Time) bool {
+	at := l.budget[l.used%len(l.budget)]
+	return !at.IsZero() && now.Sub(at) < time.Hour
+}
+
+// spread is d with up to a tenth of jitter either way, so checks due together do not all go at once.
+func (l *Loop) spread(d time.Duration) time.Duration {
+	return time.Duration(float64(d) * (.9 + .2*l.rand()))
 }
 
 func (l *Loop) reschedule(r *healthRecord, f *suppliers.Failure, now time.Time) {
@@ -417,6 +460,12 @@ func (l *Loop) probeMetric(ctx context.Context, result string) {
 	}
 }
 
+func (l *Loop) verifyMetric(ctx context.Context, result string) {
+	if l.verification != nil {
+		l.verification.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+	}
+}
+
 // The question and the number vary independently: 256 small, deterministic answers without a fixed probe phrase.
 func probePrompt(u float64) string {
 	questions := [4]string{"Write the integer after ", "Return one greater than ", "Add one to ", "What number follows "}
@@ -432,6 +481,8 @@ func (l *Loop) instrument(meter metric.Meter) {
 			panic(err)
 		}
 		l.probes = counter(meter, "axiom.quality.probes", "Health probe results.")
+		l.verification = counter(meter, "axiom.quality.verification",
+			"Model verification checks by result: passed, contradicted or inconclusive, and deferred when the budget or the concurrency is spent.")
 		l.transitions = counter(meter, "axiom.quality.health.transitions", "Health transitions.")
 	}
 }

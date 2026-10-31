@@ -1,6 +1,10 @@
+import audit from "./audit";
+import calls from "./calls";
 import mappings from "./mappings";
 import models from "./models";
+import orders from "./orders";
 import pricing from "./pricing";
+import redeem from "./redeem";
 import settings from "./settings";
 import suppliers from "./suppliers";
 import users from "./users";
@@ -8,16 +12,53 @@ import users from "./users";
 // The admin's messages in Chinese, the source every other language follows.
 export default {
   brandName: "Axiom 管理后台",
+  forbiddenHint: "请联系站长授予权限。",
   nav: {
+    overview: "运营看板",
     users: "用户",
+    orders: "订单与退款",
+    redeemCodes: "兑换码",
+    calls: "调用记录",
+    audit: "审计日志",
     suppliers: "供应商",
     mappings: "待映射模型",
     models: "模型目录",
     pricing: "定价",
     settings: "站点设置",
   },
+  calls,
+  audit,
   signIn: { description: "管理后台只对运营人员开放，登录后还要完成两步验证。" },
-  home: { noAccessTitle: "还没有可用的页面", noAccessBody: "你的账户没有任何管理权限。请联系负责人授权。" },
+  home: {
+    title: "运营看板",
+    description: "所选时段内本站的调用、收入、成本与现金；每个数字都能下钻到对应的调用记录、订单或现金流水。",
+    noAccessTitle: "还没有可用的页面",
+    noAccessBody: "你的账户没有任何管理权限。请联系负责人授权。",
+  },
+  overview: {
+    rangeLabel: "时间范围",
+    range: { "24h": "24 小时", "7d": "7 天", "30d": "30 天" },
+    window: "{{since}} 至 {{until}}",
+    calls: "调用量",
+    errors: "错误数",
+    revenue: "收入",
+    revenueNote: "用户实付，已扣除平台承担的部分",
+    cost: "供应商成本",
+    costNote: "已按汇率换算的成本",
+    unknownCost: "{{calls}} 次调用的成本未知，未计入合计",
+    callsIncomplete: "{{since}} 之前的调用已归档，调用量和排名不含它们；收入、成本和现金仍覆盖整个时段。",
+    callsIncompleteUnknown:
+      "此节点保留的调用记录之前的调用已归档，调用量和排名不完整；收入、成本和现金仍覆盖整个时段。",
+    coverageUnavailable: "此节点无法判断较早的调用是否已归档，调用量和排名可能不完整。",
+    cash: "现金净流入",
+    cashNote: "充值实付减退款，不是调用收入",
+    unavailable: "此节点不提供",
+    topAccounts: "调用最多的账户",
+    topModels: "调用最多的模型",
+    col: { account: "账户", model: "模型", calls: "调用", errors: "错误" },
+    noAccounts: { title: "该时段没有账户调用", body: "扩大时间范围试试。" },
+    noModels: { title: "该时段没有模型被调用", body: "扩大时间范围试试。" },
+  },
   filter: { apply: "筛选", reset: "清除" },
   change: {
     reason: "理由",
@@ -41,9 +82,11 @@ export default {
       "这个请求的标识已经用于另一份内容，第一次提交可能已经生效，这里不会再发送。关闭后看到的数据可能还不包含它，不能据此判断要不要重做。",
   },
   users,
+  orders,
   suppliers,
   mappings,
   models,
   pricing,
+  redeem,
   settings,
 };

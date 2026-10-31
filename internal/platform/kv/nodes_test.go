@@ -29,10 +29,10 @@ func TestMoreLiveNodesThanConfigured(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	node := &Client{
 		config: 1, beatTimeout: defaultHeartbeatTimeout, now: func() time.Time { return now }, logger: slog.New(slog.NewTextHandler(&logs, nil)),
-		m: newMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")), hear: newHeartbeat(db, scope, "this"),
+		m: newMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")), hear: newHeartbeat(db, scope, "this", nil),
 	}
 	node.live.Store(1)
-	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error { return newHeartbeat(db, scope, "other").write(t.Context(), tx) }); err != nil {
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error { return newHeartbeat(db, scope, "other", nil).write(t.Context(), tx) }); err != nil {
 		t.Fatalf("write the other node's row: %v", err)
 	}
 

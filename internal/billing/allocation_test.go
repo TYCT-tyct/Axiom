@@ -35,9 +35,9 @@ func creditOf(r LiveBatchesRow) movement {
 	return movement{key: orderKey{seq: r.OpenedSeq, at: r.OpenedAt, id: r.OpenedID}, kind: "credit", request: r.ID, debit: -r.Amount}
 }
 
-// settled is a movement of the given kind and net debit at seq.
-func settled(seq int64, kind string, debit int64) movement {
-	return movement{key: keyAt(seq), kind: kind, request: uuid.NewV7(), debit: debit}
+// settled is a settle movement of the given net debit at seq.
+func settled(seq, debit int64) movement {
+	return movement{key: keyAt(seq), kind: "settle", request: uuid.NewV7(), debit: debit}
 }
 
 // leftOf is what each batch has left, by position in rows.
@@ -61,6 +61,8 @@ func applyAll(t *testing.T, a *allocation, ms ...movement) {
 // TestSpendOrder: a charge takes the batch that expires first, a batch that does not expire last; of the same expiry a
 // gift before paid credit, then the older; what no batch holds is debt that the next credit pays off first.
 func TestSpendOrder(t *testing.T) {
+	t.Parallel()
+
 	rows := []LiveBatchesRow{
 		batchRow(1, 100, "gift", nil),
 		batchRow(2, 100, "paid", after(time.Hour)),
@@ -83,7 +85,7 @@ func TestSpendOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newAllocation(stateAt(5), rows)
 			for i, n := range tc.spend {
-				applyAll(t, a, settled(int64(6+i), "settle", n))
+				applyAll(t, a, settled(int64(6+i), n))
 			}
 			if diff := cmp.Diff(tc.left, leftOf(a, rows)); diff != "" || a.unfunded != tc.debt {
 				t.Errorf("left %v (-want +got):\n%s\nunfunded %d, want %d", leftOf(a, rows), diff, a.unfunded, tc.debt)
@@ -95,18 +97,21 @@ func TestSpendOrder(t *testing.T) {
 // TestDebtIsPaidByTheNextCredit: the balance counts a debt against the credit that follows, so the batch opens with
 // that much already consumed, and one the debt eats whole opens empty.
 func TestDebtIsPaidByTheNextCredit(t *testing.T) {
+	t.Parallel()
+
 	small, large := batchRow(2, 30, "gift", nil), batchRow(3, 100, "gift", nil)
 	a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{small, large})
-	applyAll(t, a, settled(1, "settle", 50), creditOf(small), creditOf(large))
+	applyAll(t, a, settled(1, 50), creditOf(small), creditOf(large))
 	if got := leftOf(a, []LiveBatchesRow{small, large}); !slices.Equal(got, []int64{0, 80}) || a.unfunded != 0 || a.funded() != 80 {
 		t.Errorf("left %v, unfunded %d, funded %d; want [0 80], 0, 80", got, a.unfunded, a.funded())
 	}
 }
 
 // TestApplyRefusesWhatTheLedgerCannotHold: a replay that meets a movement out of order, an expiry larger than what its
-// batch holds, a credit that is not its batch, or a return of what was charged, which is not allocated yet (#277), stops
-// instead of making up an allocation.
+// batch holds, or a credit that is not its batch stops instead of making up an allocation.
 func TestApplyRefusesWhatTheLedgerCannotHold(t *testing.T) {
+	t.Parallel()
+
 	gift := batchRow(1, 100, "gift", after(time.Hour))
 	for name, ms := range map[string][]movement{
 		"out of order":         {creditOf(gift), creditOf(gift)},
@@ -114,7 +119,6 @@ func TestApplyRefusesWhatTheLedgerCannotHold(t *testing.T) {
 		"a credit unknown":     {{key: keyAt(1), kind: "credit", request: uuid.NewV7(), debit: -100}},
 		"an expiry too large":  {creditOf(gift), {key: keyAt(2), kind: "expire", request: gift.ID, debit: 101}},
 		"an expiry of nothing": {creditOf(gift), {key: keyAt(2), kind: "expire", request: gift.ID, debit: 0}},
-		"a return":             {creditOf(gift), settled(2, "settle", 30), settled(3, "reverse", -10)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{gift})
@@ -134,6 +138,8 @@ func TestApplyRefusesWhatTheLedgerCannotHold(t *testing.T) {
 // TestLegacyTransactionsComeFirst: a transaction from before the sequence reads as seq 0 and is ordered by its time and
 // ID, ahead of every numbered one.
 func TestLegacyTransactionsComeFirst(t *testing.T) {
+	t.Parallel()
+
 	older, newer, numbered := orderKey{at: epoch, id: uuid.NewV7()}, orderKey{at: epoch.Add(time.Second)}, orderKey{seq: 1, at: epoch.Add(-time.Hour)}
 	if older.compare(newer) >= 0 || newer.compare(numbered) >= 0 || older.compare(older) != 0 {
 		t.Error("the replay order is not (seq, time, id)")
@@ -191,7 +197,7 @@ func randomMovement(r *rand.Rand, live *allocation, rows []LiveBatchesRow, next 
 		return creditOf(rows[*next-1])
 	}
 	if len(live.open) == 0 {
-		return settled(seq, "settle", 1+r.Int64N(120))
+		return settled(seq, 1+r.Int64N(120))
 	}
 	return randomBatchMovement(r, live.open[r.IntN(len(live.open))], n, seq)
 }
@@ -209,7 +215,7 @@ func randomBatchMovement(r *rand.Rand, b *batchState, n int, seq int64) movement
 		m.kind, m.debit = "refund", 1+r.Int64N(b.frozen())
 		m.revision = b.refunded + m.debit
 	default:
-		return settled(seq, "settle", 1+r.Int64N(120))
+		return settled(seq, 1+r.Int64N(120))
 	}
 	return m
 }
@@ -235,6 +241,8 @@ func checkInvariants(t testing.TB, live *allocation, balance int64, m movement) 
 // balance, never over-spends or spends frozen credit, and holds debt only without available credit. A replay
 // from nothing or from every possible stored position ends where the live replay did. Events are always replayed in their ledger sequence.
 func TestReplayProperty(t *testing.T) {
+	t.Parallel()
+
 	for seed := range uint64(200) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
@@ -287,4 +295,80 @@ func sameAllocation(t *testing.T, name string, got, live *allocation) {
 			t.Errorf("%s: batch %s got %+v, live %+v", name, id, *g, *b)
 		}
 	}
+}
+
+// TestReturnGivesBackTheCharge: a reversal is a return of what the charge took, not an allocation error (#277), and a
+// correction's reverse and re-settle move only their difference, at the settle's place, so a batch that arrived in
+// between is not used to refund the old charge.
+func TestReturnGivesBackTheCharge(t *testing.T) {
+	t.Parallel()
+
+	old := batchRow(1, 100, "gift", after(time.Hour))
+	a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{old})
+	request := uuid.NewV7()
+	if err := a.applyAll(uuid.UUID{}, []movement{
+		creditOf(old),
+		{key: keyAt(2), kind: "settle", request: request, debit: 80},
+		{key: keyAt(3), kind: "reverse", request: request, debit: -10, revision: 1},
+		{key: keyAt(4), kind: "settle", request: request, debit: 5, revision: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := leftOf(a, []LiveBatchesRow{old}); !slices.Equal(got, []int64{25}) || a.unfunded != 0 || a.funded() != 25 ||
+		a.batches[old.ID].consumed != 75 {
+		t.Fatalf("after the correction left %v, consumed %d, unfunded %d, funded %d; want [25], 75, 0, 25",
+			got, a.batches[old.ID].consumed, a.unfunded, a.funded())
+	}
+
+	// Two batches are spent, then a credit that expires sooner arrives. A correction that changes nothing must not
+	// refund the later batch and spend the new earlier one: the original allocation stays as it was.
+	later := batchRow(2, 100, "gift", after(2*time.Hour))
+	newer := batchRow(4, 100, "gift", after(30*time.Minute))
+	b := newAllocation(AllocationStateRow{}, []LiveBatchesRow{old, later, newer})
+	if err := b.applyAll(uuid.UUID{}, []movement{
+		creditOf(old), creditOf(later),
+		{key: keyAt(3), kind: "settle", request: request, debit: 200},
+		creditOf(newer),
+		{key: keyAt(5), kind: "reverse", request: request, debit: -10, revision: 1},
+		{key: keyAt(6), kind: "settle", request: request, debit: 10, revision: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := leftOf(b, []LiveBatchesRow{old, later, newer}); !slices.Equal(got, []int64{0, 0, 100}) {
+		t.Fatalf("after an equal correction left %v; want [0 0 100]: the new batch must stay unspent", got)
+	}
+}
+
+// TestReturnDoesNotOpenAFutureCredit: a full replay loads batches whose credit is later in the history too. A refund
+// from an earlier charge may only reopen batches that have already opened at the replay position; opening a future
+// one and then crediting it again counts its money twice (funded 240 for a balance of 140).
+func TestReturnDoesNotOpenAFutureCredit(t *testing.T) {
+	t.Parallel()
+
+	old := batchRow(1, 100, "gift", nil)
+	future := batchRow(4, 100, "gift", nil)
+	request := uuid.NewV7()
+	log := []movement{
+		creditOf(old),
+		{key: keyAt(2), kind: "settle", request: request, debit: 80},
+		{key: keyAt(3), kind: "reverse", request: request, debit: -80, revision: 1},
+		{key: keyAt(3), kind: "settle", request: request, debit: 60, revision: 1},
+		creditOf(future),
+	}
+	a := newAllocation(AllocationStateRow{}, []LiveBatchesRow{old, future})
+	applyAll(t, a, log...)
+	if got := leftOf(a, []LiveBatchesRow{old, future}); !slices.Equal(got, []int64{40, 100}) || a.funded() != 140 {
+		t.Fatalf("left %v, funded %d; want [40 100], 140", got, a.funded())
+	}
+	seen := map[*batchState]bool{}
+	for _, b := range a.open {
+		if seen[b] {
+			t.Fatalf("open batches %v contain a duplicate", a.open)
+		}
+		seen[b] = true
+	}
+	if len(a.open) != 2 {
+		t.Fatalf("open batches %v, want the two credited batches once each", a.open)
+	}
+	checkReplays(t, []LiveBatchesRow{old, future}, log, a)
 }

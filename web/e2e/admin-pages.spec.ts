@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { mockAdmin } from "./admin-api.ts";
 import { uuid } from "./admin-data.ts";
+import { close, dialog, done, open, send } from "./admin-page.ts";
 import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
 import { knownPassword, mfaEmail, signedInAs } from "./mock-auth.ts";
@@ -12,30 +13,8 @@ import { words, zhText } from "./words.ts";
 
 test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 
-async function open(page: Page, path: string, data: "usual" | "empty" = "usual") {
-  const state = await mockAdmin(page, data);
-  signedInAs(state, "mfa");
-  await page.goto(path);
-  return state;
-}
-
-const dialog = (page: Page) => page.getByRole("dialog");
 const h1 = (page: Page, name: string | RegExp) => page.getByRole("heading", { level: 1, name });
 const press = (page: Page, key: string, nth = 0) => page.getByRole("button", { name: words(key) }).nth(nth);
-
-// The reason every change asks for, and the button that sends it.
-async function send(page: Page, reason = "because the owner asked") {
-  await dialog(page).getByLabel(words("change.reason")).fill(reason);
-  await dialog(page).locator("button[type=submit]").click();
-}
-
-// The dialog has an icon button for closing and the result's own: the result's comes last.
-const close = (page: Page) =>
-  dialog(page)
-    .getByRole("button", { name: zhText("change.close") })
-    .last()
-    .click();
-const done = (page: Page) => dialog(page).getByText(zhText("change.done"));
 
 test.describe("users and credit", () => {
   test("an account from a server of the release before, without key limits, still shows with the card marked unavailable", async ({
@@ -242,6 +221,20 @@ test.describe("site settings", () => {
 });
 
 test.describe("suppliers", () => {
+  test("the longest status reason the contract allows takes two lines in the list and is whole on the title", async ({
+    page,
+  }) => {
+    await open(page, "/suppliers", "worst");
+    const reason = page.locator("p[title]").filter({ hasText: "The supplier rejected the login." }).first();
+    await expect(reason).toBeVisible();
+    const title = (await reason.getAttribute("title")) ?? "";
+    expect(title).toHaveLength(200);
+    const lines = await reason.evaluate(
+      (p) => p.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(p).lineHeight),
+    );
+    expect(lines).toBeLessThanOrEqual(2);
+  });
+
   test("a supplier is connected in two steps and settles into the setup checklist", async ({ page }) => {
     const state = await open(page, "/suppliers");
     await press(page, "suppliers.connect.open").click();

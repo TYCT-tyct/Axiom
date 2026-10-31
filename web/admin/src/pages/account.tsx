@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { AccountActions } from "../account-actions";
 import { CreditDialog } from "../credit-dialog";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { Actions, Facts, PageBody, State, Time } from "../parts";
@@ -30,6 +31,7 @@ export default function AccountPage() {
                 </Link>
               </Button>
               <GrantButton account={data} />
+              <AccountActions account={data} />
             </Actions>
             <Figures account={data} />
             <Details account={data} />
@@ -84,7 +86,7 @@ function Details({ account }: { account: Account }) {
   const format = useFormat();
   const { balance } = account;
   return (
-    <div className="grid gap-4 xl:grid-cols-2">
+    <div className="grid items-start gap-4 xl:grid-cols-2">
       <Facts
         title={t("users.account.balanceTitle")}
         rows={[
@@ -104,6 +106,26 @@ function Details({ account }: { account: Account }) {
             <State key="status" tone={account.status === "active" ? "good" : "warn"}>
               {account.status === "active" ? t("users.active") : t("users.disabled")}
             </State>,
+          ],
+          [
+            t("users.account.calls"),
+            account.calls_suspended === undefined ? (
+              t("users.account.unavailable")
+            ) : (
+              <State key="calls" tone={account.calls_suspended ? "warn" : "good"}>
+                {account.calls_suspended ? t("users.account.callsSuspended") : t("users.account.callsActive")}
+              </State>
+            ),
+          ],
+          [
+            t("users.account.signIn"),
+            account.sign_in_disabled === undefined ? (
+              t("users.account.unavailable")
+            ) : (
+              <State key="sign-in" tone={account.sign_in_disabled ? "warn" : "good"}>
+                {account.sign_in_disabled ? t("users.account.signInDisabled") : t("users.account.signInActive")}
+              </State>
+            ),
           ],
           [t("users.account.tier"), account.tier.name],
           [t("users.account.siteId"), account.site_id],

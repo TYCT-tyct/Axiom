@@ -17,7 +17,10 @@ import (
 var adminRefusals = []refusal{
 	{observability.ErrAlertRotationWindow, http.StatusConflict, codeConflict, "the preceding signing secret is still valid; wait until the one-hour overlap ends before rotating again"},
 	{payments.ErrInvestigated, http.StatusConflict, codeConflict, "this record was already investigated; read its saved note"},
+	{payments.ErrStale, http.StatusConflict, codeStaleRevision, "the merchant account changed since it was read"},
+	{payments.ErrTampered, http.StatusConflict, codeConflict, "the merchant account's settings do not match its sealed secrets; enter the secrets again"},
 	{observability.ErrAlertConfiguration, http.StatusUnprocessableEntity, codeUnprocessable, "the alert configuration is invalid"},
+	{observability.ErrRetention, http.StatusUnprocessableEntity, codeUnprocessable, "the hot window is 0 to 3650 days"},
 	{observability.ErrAlertRevision, http.StatusConflict, codeStaleRevision, "the alert configuration changed since it was read"},
 	{idem.ErrReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another request"},
 
@@ -53,6 +56,7 @@ var adminRefusals = []refusal{
 	{suppliers.ErrKeyBound, http.StatusConflict, codeConflict, "that key is already bound"},
 	{suppliers.ErrAliasRevision, http.StatusConflict, codeStaleRevision, "the alias changed since it was read"},
 	{suppliers.ErrAliasExists, http.StatusConflict, codeConflict, "that name already has an alias in that scope"},
+	{suppliers.ErrUnknownFormat, http.StatusUnprocessableEntity, codeUnprocessable, "a call format is not one this node knows"},
 	{suppliers.ErrNoAdapter, http.StatusUnprocessableEntity, codeUnprocessable, "no adapter of that kind that can be connected"},
 	{suppliers.ErrAddressRefused, http.StatusUnprocessableEntity, codeUnprocessable, "the outbound client refuses that address"},
 	{suppliers.ErrUnreachable, http.StatusUnprocessableEntity, codeUnprocessable, "the site did not answer"},

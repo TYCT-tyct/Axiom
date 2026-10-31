@@ -231,6 +231,7 @@ func formatsOf(endpoints []string) []protocol.Format {
 
 var endpointFormats = map[string]protocol.Format{
 	"openai": protocol.Chat, "openai-response": protocol.Responses, "anthropic": protocol.Messages,
+	"embeddings": protocol.Embeddings, "rerank": protocol.Rerank, "jina-rerank": protocol.Rerank,
 }
 
 // unsupported are the capabilities the price does not cover. An image ratio of its own other than 1 means images are

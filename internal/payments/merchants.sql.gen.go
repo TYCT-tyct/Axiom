@@ -68,6 +68,20 @@ func (q *Queries) DeleteOtherMethods(ctx context.Context, db DBTX, arg DeleteOth
 	return err
 }
 
+const disableMerchant = `-- name: DisableMerchant :execrows
+UPDATE payments.merchants SET enabled = false, rev = rev + 1, updated_at = clock_timestamp() WHERE id = $1
+`
+
+// Disabling keeps the configuration and its sealed secrets: callbacks, queries and refunds of its orders still use
+// them, and only the choice of it for new orders stops.
+func (q *Queries) DisableMerchant(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {
+	result, err := db.Exec(ctx, disableMerchant, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertMerchant = `-- name: InsertMerchant :exec
 INSERT INTO payments.merchants (id, site_id, kind, name, enabled, currency, ttl_seconds, refund_enabled, user_refund, sort, rev)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1)

@@ -48,13 +48,15 @@ FROM d;
 -- index, the zero UUID for a dropped entry: endpoints are what cleanup hands suppliers as the route of a request whose
 -- node was lost.
 -- Let the insert columns type the UUID parameters, so sqlc retains their typed array codec overrides.
--- name: InsertReservation :exec
+-- name: InsertReservationAt :exec
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
-        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates, price_versions)
+        workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates,
+        price_versions, created_at)
     VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
         @workspace_window, @key_window, 1, @amount, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @lifetime_seconds::float8),
-        @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions)
+        @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions,
+        to_timestamp(sqlc.arg(created_at_us)::bigint / 1000000.0))
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + @amount WHERE b.account_id = @account_id
 )
@@ -94,7 +96,7 @@ VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
 SELECT clock_timestamp()::timestamptz;
 
 -- The account's balance and what it has been charged in all, for the read-only endpoints: no lock, and no row means a
--- balance of 0, which is how Reserve treats it too. Spent is summed over the account's workspaces only; each charge is
+-- balance of 0, which is how ReserveMany treats it too. Spent is summed over the account's workspaces only; each charge is
 -- also counted under its key.
 -- name: ReadFunds :one
 SELECT b.balance,

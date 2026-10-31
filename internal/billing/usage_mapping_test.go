@@ -6,9 +6,12 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 )
 
 func TestImageSaleReservationAndCostAgree(t *testing.T) {
+	t.Parallel()
+
 	reports := catalog.ItemSet(1<<in | 1<<catalog.ItemImageIn | 1<<catalog.ItemOutput | 1<<catalog.ItemImageOut)
 	for _, own := range []string{"", `,"image_in":"0","image_out":"0"`, `,"image_in":"9","image_out":"10"`} {
 		s := soldImageSchedule(t, own)
@@ -69,6 +72,8 @@ func checkImageCall(t *testing.T, s catalog.Schedule, reports catalog.ItemSet, t
 // read + write per token; a Messages call bills the items apart, so only the dearest price bounds it, and the cache
 // write the request does not ask for is not reserved at all.
 func TestOverlapReservationCounterexampleAndMaximumPrices(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name        string
 		openAI      bool
@@ -101,6 +106,8 @@ func TestOverlapReservationCounterexampleAndMaximumPrices(t *testing.T) {
 // OpenAI reports image tokens whether or not the model's spec lists the item, so they are reserved at their own price
 // even when Reports names only input and output: 100 prompt tokens that are all images settle at 100 × 10.
 func TestImageInputIsReservedWithoutReportsAndFallsBack(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name   string
 		prices string
@@ -128,6 +135,8 @@ func TestImageInputIsReservedWithoutReportsAndFallsBack(t *testing.T) {
 }
 
 func TestExtraSearchCoversOverlappingRereads(t *testing.T) {
+	t.Parallel()
+
 	e := entry(t, true, 1)
 	e.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","cache_read":"0.1","cache_write":"1.25","output":"1","web_search":"2"}}`)
 	e.Model.Reports, e.Model.OpenAIUsage = 1<<catalog.ItemCacheRead|1<<cacheWrite, true
@@ -140,6 +149,8 @@ func TestExtraSearchCoversOverlappingRereads(t *testing.T) {
 }
 
 func TestImageOutputIsDeliveredAndMetered(t *testing.T) {
+	t.Parallel()
+
 	u := usage(t, map[catalog.Item]int64{catalog.ItemImageOut: 20})
 	seg := Segment{Usage: u, Reported: 1<<catalog.ItemOutput | 1<<catalog.ItemImageOut}
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"output":"1","image_out":"10"}}`)
@@ -162,12 +173,42 @@ func TestImageOutputIsDeliveredAndMetered(t *testing.T) {
 	}
 }
 
+// TestAudioOutputIsOutput: a reply that delivered audio is not a zero-output reply even when it wrote no text, so it is
+// charged like any other delivered output; a reply that delivered no audio and no text with an error finish is still
+// waived.
+func TestAudioOutputIsOutput(t *testing.T) {
+	t.Parallel()
+
+	audio := usage(t, map[catalog.Item]int64{catalog.ItemAudioOut: 20})
+	at := AttemptResult{Result: Committed, Finish: FinishError, Segments: []Segment{{
+		Usage: audio, Reported: 1<<catalog.ItemOutput | 1<<catalog.ItemAudioOut,
+	}}}
+	if waivable(at) {
+		t.Fatalf("audio-only reply waived: %+v", at)
+	}
+	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"output":"1","audio_out":"10"}}`)
+	p, err := priceSegments(s, fallbacks{}, at.Segments, waivable(at), 0)
+	if err != nil || p.price != 200_000_000_000 || p.estimated {
+		t.Fatalf("price: %+v, %v", p, err)
+	}
+	silent := used(t, 50, 0, 0)
+	if !waivable(outcome(Committed, FinishError, silent).Attempts[0]) {
+		t.Fatal("a silent error finish is not waived")
+	}
+}
+
 func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
+	t.Parallel()
+
 	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, cacheWrite: 80, webSearch: 1}, catalog.ServiceTierStandard, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u, err = u.WithPhysicalInput(100); err != nil {
+		t.Fatal(err)
+	}
+	native := catalog.NativeTokens{VideoInput: 10, AcceptedPrediction: 2, RejectedPrediction: 1}
+	if u, err = u.WithNativeTokens(native); err != nil {
 		t.Fatal(err)
 	}
 	seg := Segment{Usage: u}
@@ -183,6 +224,9 @@ func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
 	if n, ok := decoded[0].Usage.PhysicalInput(); !ok || n != 100 {
 		t.Fatalf("lost physical input: %+v", decoded)
 	}
+	if got := decoded[0].Usage.NativeTokens(); got != native {
+		t.Fatalf("native tokens = %+v after storing, want %+v", got, native)
+	}
 	cost, _, err := segmentCost(s, decoded[0].Usage, true)
 	if err != nil || cost.Rat().RatString() != "1" {
 		t.Fatalf("waived per-use cost = %v, %v", cost.Rat(), err)
@@ -190,6 +234,8 @@ func TestPhysicalInputSurvivesStoredUsageAndWaiverPricing(t *testing.T) {
 }
 
 func TestStoredPhysicalInputPreservesPresence(t *testing.T) {
+	t.Parallel()
+
 	for _, n := range []int64{-1, 0, 100} {
 		u := usage(t, nil)
 		if n >= 0 {
@@ -210,5 +256,36 @@ func TestStoredPhysicalInputPreservesPresence(t *testing.T) {
 		if total, ok := decoded[0].Usage.PhysicalInput(); ok != (n >= 0) || ok && total != n {
 			t.Fatalf("physical input %d/%t after storing %d", total, ok, n)
 		}
+	}
+}
+
+// TestStoredUsageOmitsTrailingZeros: a text-only charge stores no count for the items counted per piece, second or
+// character, so a node built before they existed still reads it (a count the list leaves out is zero); a counted charge
+// stores its count.
+func TestStoredUsageOmitsTrailingZeros(t *testing.T) {
+	t.Parallel()
+
+	b, err := encodeUsage([]Segment{{Usage: usage(t, map[catalog.Item]int64{in: 5, catalog.ItemOutput: 2})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored []struct {
+		Counts []int64 `json:"counts"`
+	}
+	if err := jsonx.Unmarshal(b, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stored[0].Counts), int(catalog.ItemOutput)+1; got != want {
+		t.Errorf("a text-only call stored %d counts, want the %d up to its last nonzero item", got, want)
+	}
+	b, err = encodeUsage([]Segment{{Usage: usage(t, map[catalog.Item]int64{in: 5, catalog.ItemCharacterIn: 7})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jsonx.Unmarshal(b, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(stored[0].Counts), int(catalog.ItemCharacterIn)+1; got != want || stored[0].Counts[want-1] != 7 {
+		t.Errorf("a counted call stored %v, want %d counts ending in 7", stored[0].Counts, want)
 	}
 }

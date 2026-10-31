@@ -187,6 +187,7 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 		if err != nil {
 			return nil, err
 		}
+		e.sold, e.serving = sold, serving
 		l.models = append(l.models, e)
 	}
 	return l, nil
@@ -216,6 +217,11 @@ type orModel struct {
 	prompt    platform.UnitPrice
 	output    platform.UnitPrice
 	average   platform.Exact // prompt + completion: the average the price orderings compare, undivided
+	// sold and serving are what the public models and prices page needs from the same build: the audience price layers
+	// and the limits and abilities the catalog declared. They are set on the base entry, before the variants split, so
+	// the page and the OpenRouter list describe one model with one price version.
+	sold    billing.Sold
+	serving catalog.Serving
 }
 
 // orModelResponse is OpenRouter's answer for one model (spec `ModelResponse`).
@@ -246,11 +252,12 @@ type orEntry struct {
 
 // orPricing is OpenRouter's price list (spec `PublicPricing`), one member per item whose unit one of its members has:
 // dollars per token in the site's currency, which for the main site is the dollar, except web_search, which is per
-// search. image and image_output are per image, request is per request, input_audio_cache is per cached audio token, and
-// discount and overrides have no counterpart in a sale schedule, so the members Axiom cannot fill are left out rather
-// than written as zero, which would read as free. image_token and internal_reasoning are shown for the models that take
-// images or reason (newORPricing). The prices are the standard service tier's below the first context threshold: the
-// price the shape means by a model's price under default conditions.
+// search, and image and image_output, which are per image. request is per request, input_audio_cache is per cached audio
+// token, and discount and overrides have no counterpart in a sale schedule, so the members Axiom cannot fill are left
+// out rather than written as zero, which would read as free. image is shown for the models that take images, image_token
+// and internal_reasoning for the models that take images or reason, and image_output whenever the sale price has one
+// (newORPricing). The prices are the standard service tier's below the first context
+// threshold: the price the shape means by a model's price under default conditions.
 type orPricing struct {
 	Prompt            string `json:"prompt"`
 	Completion        string `json:"completion"`
@@ -258,7 +265,9 @@ type orPricing struct {
 	InputCacheWrite   string `json:"input_cache_write,omitempty"`
 	InputCacheWrite1h string `json:"input_cache_write_1h,omitempty"`
 	InternalReasoning string `json:"internal_reasoning,omitempty"`
+	Image             string `json:"image,omitempty"`
 	ImageToken        string `json:"image_token,omitempty"`
+	ImageOutput       string `json:"image_output,omitempty"`
 	Audio             string `json:"audio,omitempty"`
 	AudioOutput       string `json:"audio_output,omitempty"`
 	WebSearch         string `json:"web_search,omitempty"`
@@ -370,8 +379,10 @@ func newORPricing(p catalog.Schedule, a catalog.AbilitySet) orPricing {
 		WebSearch:         orPrice(p, catalog.ItemWebSearch),
 	}
 	if a.Has(catalog.AbilityImages) {
+		price.Image = orPrice(p, catalog.ItemImageInPiece)
 		price.ImageToken = orPrice(p, catalog.ItemImageIn)
 	}
+	price.ImageOutput = orPrice(p, catalog.ItemImageOutPiece)
 	if a.Has(catalog.AbilityReasoning) {
 		price.InternalReasoning = orPrice(p, catalog.ItemReasoning)
 	}

@@ -1,16 +1,218 @@
-import { can, useSession } from "@axiom/app";
-import { PageHeader } from "@axiom/ui";
-import { Navigate } from "@tanstack/react-router";
+import type { AdminSchemas } from "@axiom/api";
+import { can, Stat, useSession } from "@axiom/app";
+import { DataState, EmptyState, Notice, PageHeader, Panel, Segmented, Table, Td, Th, useFormat } from "@axiom/ui";
+import { useQuery } from "@tanstack/react-query";
+import { Link, Navigate, useNavigate, useSearch } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { nav } from "../nav";
+import { callsDrill, type OverviewRange, ordersDrill, overviewRanges, overviewWindow, type Window } from "../overview";
+import { Code, PageBody } from "../parts";
+import { overviewQuery } from "../queries";
 
-// The admin has no overview page in M1: the entry address opens the first page the session may use.
+// The figures are links: each opens the call or order list narrowed to the same window, so a number is never a dead
+// end. The whole card is the target, and the keyboard sees one focus ring around it; the pointer sees its border lift.
+const figure =
+  "block h-full rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent [&>section]:h-full [&>section]:transition-colors [&>section]:duration-150 hover:[&>section]:border-b3";
+// The counts share the first row and the money the second: five cards in one row left about 190px at 1280px, too
+// little for an amount, which then broke in the middle of its digits.
+const count = `${figure} lg:col-span-3`;
+const amount = `${figure} lg:col-span-2`;
+
+// The admin's home is the operations dashboard: the site's calls, what they earned and cost, the cash that moved, and
+// the accounts and models behind them (docs/domains/operations.md「运营看板」). A session without sites.manage sees the
+// first page it may use instead, as before.
 export default function Home() {
   const { t } = useTranslation();
   const session = useSession();
-  const first = nav.find((item) => can(session, item.permission));
-  if (first) {
-    return <Navigate to={first.to} replace />;
+  if (!can(session, "sites.manage")) {
+    const first = nav.find((item) => item.to !== "/" && can(session, item.permission));
+    if (first) {
+      return <Navigate to={first.to} replace />;
+    }
+    return <PageHeader title={t("home.noAccessTitle")} description={t("home.noAccessBody")} />;
   }
-  return <PageHeader title={t("home.noAccessTitle")} description={t("home.noAccessBody")} />;
+  return <Dashboard />;
+}
+
+function Dashboard() {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const { range } = useSearch({ from: "/app/" });
+  const navigate = useNavigate();
+  // The visit's instant, not the render's: a refetch or a range change must not move the window under the figures.
+  const [anchor] = useState(() => new Date());
+  const window = useMemo(() => overviewWindow(range, anchor), [range, anchor]);
+  const overview = useQuery(overviewQuery(window.since, window.until));
+  return (
+    <>
+      <PageHeader title={t("home.title")} description={t("home.description")} />
+      <PageBody>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Segmented<OverviewRange>
+            label={t("overview.rangeLabel")}
+            value={range}
+            options={overviewRanges.map((value) => ({ value, label: t(`overview.range.${value}`) }))}
+            onChange={(value) => navigate({ to: "/", search: { range: value }, replace: true })}
+          />
+          <p className="text-label text-t3">
+            {t("overview.window", {
+              since: format.dateTime(new Date(window.since)),
+              until: format.dateTime(new Date(window.until)),
+            })}
+          </p>
+        </div>
+        <DataState query={overview}>{(data) => <Figures data={data} window={window} />}</DataState>
+      </PageBody>
+    </>
+  );
+}
+
+type Overview = AdminSchemas["OperationsOverview"];
+
+function Figures({ data, window }: { data: Overview; window: Window }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const number = (n?: number) => (n === undefined ? t("overview.unavailable") : format.number(n));
+  const money = (m?: AdminSchemas["Money"]) => (m ? format.money(m) : t("overview.unavailable"));
+  // One line per currency: joined on one line, a second amount broke in the middle of its digits.
+  const cash = data.cash?.length
+    ? data.cash.map((c) => (
+        <span key={c.currency} className="block">
+          {format.money(c)}
+        </span>
+      ))
+    : t("overview.unavailable");
+  const site = data.site_id;
+  // Calls, errors and the two rankings come from the call log, whose months leave PostgreSQL once archived. Revenue,
+  // cost and cash do not, so only the log's part is marked incomplete.
+  const coverage =
+    data.calls_incomplete === undefined
+      ? t("overview.coverageUnavailable")
+      : data.calls_incomplete
+        ? data.calls_available_since
+          ? t("overview.callsIncomplete", { since: format.dateTime(new Date(data.calls_available_since)) })
+          : t("overview.callsIncompleteUnknown")
+        : null;
+  return (
+    <>
+      {coverage ? <Notice>{coverage}</Notice> : null}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+        <Link to="/calls" search={callsDrill(window, { site })} className={count}>
+          <Stat label={t("overview.calls")} value={number(data.calls)} />
+        </Link>
+        <Link to="/calls" search={callsDrill(window, { site, status: "error" })} className={count}>
+          <Stat label={t("overview.errors")} value={number(data.errors)} />
+        </Link>
+        <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
+          <Stat label={t("overview.revenue")} value={money(data.revenue)} note={t("overview.revenueNote")} />
+        </Link>
+        <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
+          <Stat
+            label={t("overview.cost")}
+            value={money(data.cost)}
+            note={
+              data.unknown_cost_calls
+                ? t("overview.unknownCost", { calls: format.number(data.unknown_cost_calls) })
+                : t("overview.costNote")
+            }
+          />
+        </Link>
+        <Link to="/orders" search={ordersDrill(window)} className={amount}>
+          <Stat label={t("overview.cash")} value={cash} note={t("overview.cashNote")} />
+        </Link>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <TopAccounts data={data} window={window} site={site} />
+        <TopModels data={data} window={window} site={site} />
+      </div>
+    </>
+  );
+}
+
+function RankHead({ first }: { first: string }) {
+  const { t } = useTranslation();
+  return (
+    <thead>
+      <tr>
+        <Th>{first}</Th>
+        <Th className="text-right">{t("overview.col.calls")}</Th>
+        <Th className="text-right">{t("overview.col.errors")}</Th>
+      </tr>
+    </thead>
+  );
+}
+
+function TopAccounts({ data, window, site }: { data: Overview; window: Window; site?: string }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Panel title={t("overview.topAccounts")}>
+      {data.top_accounts === undefined ? (
+        <p className="p-4 text-t3">{t("overview.unavailable")}</p>
+      ) : data.top_accounts.length === 0 ? (
+        <EmptyState compact title={t("overview.noAccounts.title")}>
+          {t("overview.noAccounts.body")}
+        </EmptyState>
+      ) : (
+        <Table label={t("overview.topAccounts")}>
+          <RankHead first={t("overview.col.account")} />
+          <tbody>
+            {data.top_accounts.map((account) => (
+              <tr key={account.account_id}>
+                <Td>
+                  <Link
+                    to="/calls"
+                    search={callsDrill(window, { site, account: account.account_id })}
+                    className="text-accent underline-offset-4 hover:underline"
+                  >
+                    <Code>{account.account_id}</Code>
+                  </Link>
+                </Td>
+                <Td className="text-right tabular-nums">{format.number(account.calls ?? 0)}</Td>
+                <Td className="text-right tabular-nums">{format.number(account.errors ?? 0)}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Panel>
+  );
+}
+
+function TopModels({ data, window, site }: { data: Overview; window: Window; site?: string }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Panel title={t("overview.topModels")}>
+      {data.top_models === undefined ? (
+        <p className="p-4 text-t3">{t("overview.unavailable")}</p>
+      ) : data.top_models.length === 0 ? (
+        <EmptyState compact title={t("overview.noModels.title")}>
+          {t("overview.noModels.body")}
+        </EmptyState>
+      ) : (
+        <Table label={t("overview.topModels")}>
+          <RankHead first={t("overview.col.model")} />
+          <tbody>
+            {data.top_models.map((model) => (
+              <tr key={model.model}>
+                <Td>
+                  <Link
+                    to="/calls"
+                    search={callsDrill(window, { site, model: model.model })}
+                    className="text-accent underline-offset-4 hover:underline"
+                  >
+                    <Code>{model.model}</Code>
+                  </Link>
+                </Td>
+                <Td className="text-right tabular-nums">{format.number(model.calls ?? 0)}</Td>
+                <Td className="text-right tabular-nums">{format.number(model.errors ?? 0)}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Panel>
+  );
 }

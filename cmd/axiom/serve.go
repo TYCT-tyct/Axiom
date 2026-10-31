@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/netip"
-	"os"
 	"time"
 
 	"axiom/internal/accounts"
@@ -16,16 +14,15 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
 	"axiom/internal/platform/alert"
-	"axiom/internal/platform/config"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/mail"
+	"axiom/internal/platform/objectstore"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/platform/webui"
-	"axiom/internal/quality"
 	"axiom/internal/suppliers"
 )
 
@@ -46,92 +43,12 @@ const bodyTimeout = 2 * time.Minute
 // defaultStartupTimeout bounds how long a command waits for the database before it starts.
 const defaultStartupTimeout = 30 * time.Second
 
-// probesListenAddr is where the node serves its probes: loopback unless a deployment needs otherwise.
-func probesListenAddr(env *config.Env) string { return env.Addr(probesAddrVar, "127.0.0.1:8081") }
-
 // listening is one of the node's HTTP servers and the address variable it listens on.
 type listening struct {
 	variable, addr string
 	server         *http.Server
 	listener       net.Listener
-}
-
-// nodeSettings are the node's configuration, all read from the environment before anything starts.
-type nodeSettings struct {
-	healthMode                        quality.Mode
-	publicAddr, adminAddr, probesAddr string
-	startupTimeout, shutdownTimeout   time.Duration
-	databaseURL                       string
-	completionReserve                 int
-	masterKeyFile, keyHashFile        string
-	identityKeyFile                   string
-	hashConcurrency                   int
-	hashWait                          time.Duration
-	trustedProxies                    []netip.Prefix
-	valkey                            kv.Config
-	smtp                              mail.Config
-	exchangeSource                    string
-}
-
-// readSettings reads and checks every variable the node uses, so a node started wrong fails with the whole list.
-func readSettings(environ []string) (nodeSettings, error) {
-	env := config.New(environ)
-	s := nodeSettings{
-		exchangeSource:    env.String("AXIOM_EXCHANGE_SOURCE", "manual"),
-		healthMode:        quality.Mode(env.String("AXIOM_HEALTH_MODE", "")),
-		publicAddr:        env.Addr(publicAddrVar, ":8080"),         // model calls, the console, payment callbacks
-		adminAddr:         env.Addr(adminAddrVar, "127.0.0.1:8082"), // the admin app; loopback until a deployment opens it
-		probesAddr:        probesListenAddr(env),
-		startupTimeout:    env.Duration(startupTimeoutVar, defaultStartupTimeout),
-		shutdownTimeout:   env.Duration(shutdownTimeoutVar, 30*time.Second),
-		databaseURL:       env.Required(pg.DatabaseURLVar),
-		completionReserve: env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1),
-		masterKeyFile:     env.Required(masterKeyFileVar),
-		keyHashFile:       env.Required(keyHashFileVar),
-		// The identity key stands in for the client's session and end-user identifiers upstream, so rotating the key
-		// hashes must not rotate it: the upstream's prompt caches are keyed by them (#205).
-		identityKeyFile: env.Required(identityKeyFileVar),
-		// The node's argon2id computations at once, and how long a sign-in waits for a turn (0: the module's defaults,
-		// GOMAXPROCS and 2 seconds).
-		hashConcurrency: env.Int(hashConcurrencyVar, 0, 1),
-		hashWait:        env.Duration(hashWaitVar, 0),
-		trustedProxies:  env.Prefixes(trustedProxiesVar),
-		// The shared cache: without a URL the three uses stay in this process, as before the cache existed. The password
-		// is read from its file by kv, which reports on it (internal/platform/kv/README.md「配置与启动」).
-		valkey: kv.Config{
-			URL:          env.String(kv.URLVar, ""),
-			PasswordFile: env.String(kv.PasswordFileVar, ""),
-			Nodes:        env.Int(kv.NodesVar, 1, 1),
-			NodeID:       env.String(kv.NodeIDVar, hostName()),
-		},
-	}
-	// Email is optional: none of its variables set means the node starts with email disabled, and a partly set
-	// configuration joins the problems above, so the node still reports everything wrong at once. The cache's own settings
-	// are judged with the rest, so a node that is wrong about them does not touch the database.
-	var healthErr error
-	var modeErr error
-	s.healthMode, modeErr = quality.ParseMode(string(s.healthMode))
-	if modeErr != nil {
-		healthErr = fmt.Errorf("AXIOM_HEALTH_MODE: %w", modeErr)
-	}
-	smtp, mailErr := mail.ReadConfig(env)
-	var exchangeErr error
-	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
-		exchangeErr = errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb")
-	}
-	s.smtp = smtp
-	if err := errors.Join(env.Err(), mailErr, s.valkey.Resolve(), healthErr, exchangeErr); err != nil {
-		return nodeSettings{}, fmt.Errorf("configuration:\n%w", err)
-	}
-	return s, nil
-}
-
-// hostName is the node's identity unless AXIOM_NODE_ID names it: a container keeps its host name when it restarts, so a
-// restarted node finds its own heartbeat row and replaces it. A host that cannot say its name gets a new identity at every
-// start (kv.Config.NodeID), which is the cost of a restart being counted beside the old row for half a minute.
-func hostName() string {
-	name, _ := os.Hostname() //nolint:errcheck // the fallback is described above
-	return name
+	tls            bool // mutual TLS with the deployment's node certificates
 }
 
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
@@ -149,6 +66,8 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 
 // serveWith lets a test capture its recorder and opt into price syncing with local datasets. A nil prices constructor
 // disables the periodic price job, so tests of the listeners and call path never download the production datasets.
+//
+//nolint:funlen,cyclop // startup order is the contract: listeners drain before the recorder, the queue, the cache and the database.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
 	prices func(*egress.Client) *catalog.Fetcher,
@@ -157,20 +76,35 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
+	if !cfg.roles.has(roleCore) {
+		return serveWithoutCore(ctx, cfg, logger)
+	}
 	console, err := loadConsole(cfg)
 	if err != nil {
 		return err
 	}
-	tel, err := telemetry.New()
+	archive, err := openArchiveStore(cfg.objectstore)
+	if err != nil {
+		return err
+	}
+	var archiveStore observability.ArchiveStore
+	if archive != nil {
+		archiveStore = archive
+		defer archive.Close()
+	}
+	tel, db, master, err := openCoreNode(ctx, cfg, console.master, logger)
 	if err != nil {
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
-	db, master, err := openCheckedDatabase(ctx, cfg, tel, console.master)
+	defer db.Close()                               // after the listeners and the recorder close: requests in flight may still need it
+	retentionDB, err := openRetentionDB(ctx, cfg.retentionURL, archive != nil)
 	if err != nil {
 		return err
 	}
-	defer db.Close()        // after the listeners and the recorder close: requests in flight may still need it
+	if retentionDB != nil {
+		defer retentionDB.Close()
+	}
 	console.master = master // the same ring, with the check's write version
 
 	exit, err := outbound(tel)
@@ -182,12 +116,12 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	// The shared store opens before the queue: the mail worker's recipient throttles live in it. The heartbeat is deleted
 	// on every way out, so a restart is not refused for a row that only a crash would leave. It runs once the listeners
 	// have drained and nothing prechecks any more, and before the database closes.
-	cache, err := openCache(ctx, cfg.valkey, cfg.startupTimeout, db, tel, logger)
+	cache, stopCache, err := openNodeCache(ctx, syncCtx, cfg, console.master, db, tel, logger)
 	if err != nil {
 		return err
 	}
-	defer closeCache(ctx, cache, cfg.shutdownTimeout, logger)
-	queue, recorder, recovery, err := startBackground(syncCtx, db, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, tel, logger, cfg.shutdownTimeout, record)
+	defer stopCache()
+	queue, recorder, recovery, registration, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, tel, logger, cfg.shutdownTimeout, record)
 	if err != nil {
 		return err
 	}
@@ -202,11 +136,11 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		cancelSync()
 		stopQueue(ctx, queue, cfg.shutdownTimeout, logger)
 	}()
-	requests, err := httpserver.NewTelemetry(tel.Traces, tel.Metrics)
+	requests, err := requestTelemetry(tel)
 	if err != nil {
 		return err
 	}
-	routes, err := console.routes(ctx, db, tel, logger, recorder, exit, cache, recovery)
+	routes, err := console.routes(ctx, db, tel, logger, recorder, exit, cache, recovery, registration)
 	if err != nil {
 		return err
 	}
@@ -219,33 +153,46 @@ func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *tele
 	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder, cache *kv.Client, cancelSync context.CancelFunc,
 ) error {
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg.publicAddr, routes.public, cfg.adminAddr, routes.admin, cfg.probesAddr, &health, logger, requests)
+	servers := node(cfg, routes.public, routes.admin, &health, logger, requests)
 	if err := listen(ctx, servers); err != nil {
 		return err
 	}
-	served := startServing(servers, logger)
+	served := startServing(cfg.roles, servers, logger)
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
 	// rebuild.
 	stopAnnouncing := announceReady(ctx, routes.calls.ready, readinessEvery, &health, logger)
 	stopped := awaitEnd(ctx, served, routes.calls.reaped, cache.Lost())
 	cancelSync()
 	stopAnnouncing()
-	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String())
+	logger.Info("shutting down", "timeout", cfg.shutdownTimeout.String(), "edge_delay", drainDelay(cfg.shutdownTimeout).String())
 	err := stopNode(context.WithoutCancel(ctx), cfg.shutdownTimeout, &health, servers, routes.calls, queue, recorder)
 	return errors.Join(stopped, err)
 }
 
-// stopNode stops what serve started, in an order that loses nothing it need not: the listeners first (the probes keep
-// answering, not ready), then the calls and their settlements, then the loops that keep the holder alive for them, then
-// the queue and the recorder, which the calls may still have fed, the two together: a slow job then cannot use up the
-// recorder's time. Each stage has a deadline of its own, so a long stream that uses the listeners' up does not take the
-// recorder's with it. Health also finishes bounded paid probes and flushes their costs before the database closes;
-// deploy/compose.yaml's stop_grace_period covers every stage.
+// stopNode stops what serve started, in an order that loses nothing it need not: it reports not ready and refuses new
+// requests, waits for the edge to stop routing here, then stops the listeners and drains the calls and their settlements
+// together under one deadline, so a long stream gets the whole AXIOM_SHUTDOWN_TIMEOUT and the two stages cannot add up
+// to more. The calls are aborted and settled within the same deadline. Then the loops that keep the holder alive end,
+// and the queue and the recorder, which the calls may still have fed, drain together under a deadline of their own: a
+// slow job cannot use up the recorder's time, and a stream that used the drain's time does not take their deadline with
+// it. Health also finishes bounded paid probes and flushes their costs before the database closes;
+// deploy/compose.yaml's stop_grace_period covers every stage and the edge delay.
 func stopNode(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening,
 	calls callNode, queue *pg.Queue, recorder *observability.Recorder,
 ) error {
-	err := shutdown(ctx, timeout, health, servers)
-	calls.Drain(ctx)
+	beginDrain(health, timeout)
+	drainCtx, cancelDrain := context.WithTimeout(ctx, timeout)
+	defer cancelDrain()
+	// The listeners and the calls wait on the same deadline: a call in flight is also a request the listener waits for,
+	// so running the two side by side makes the deadline the whole answer instead of one stage's share of it. The
+	// calls abort early enough inside it to settle.
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		calls.Drain(drainCtx)
+	}()
+	err := shutdown(drainCtx, servers)
+	<-drained
 	calls.stop()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -321,7 +268,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 	if err != nil {
 		return consoleParts{}, err
 	}
-	frontend, err := webui.Embedded()
+	frontend, err := webui.Open(cfg.webAssetsDir)
 	if err != nil {
 		return consoleParts{}, err
 	}
@@ -334,28 +281,31 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 // reconciliation, the ledger's daily check and the expiry of credit on the money queue. Each queue has its own workers,
 // so a burst of syncs cannot hold a money job back (internal/platform/README.md「任务队列」). It reaches the suppliers and
 // the datasets through exit, the client the whole node shares.
-func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
+//
+//nolint:cyclop // every registration is checked in order; the order is the queue's startup contract.
+func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	tel *telemetry.Telemetry, logger *slog.Logger,
-) (*pg.Queue, *accounts.PasswordRecovery, error) {
+	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger,
+) (*pg.Queue, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
-	recovery, err := registerNotifications(ctx, db, queue, smtp, cache, master, keys, exit, logger)
+	recovery, registration, err := registerNotifications(ctx, db, queue, smtp, cache, master, keys, exit, logger)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
+		DirectFormats: directFormats,
 	}); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := registerCatalogJobs(ctx, db, queue, exit, prices, tel, logger); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := registerExchangeSource(ctx, db, queue, exit, logger, exchangeSource); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := registerSalePrices(db, queue); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// The ledger checks itself once a day, on whichever node leads the queue (the check needs only the database, so it
@@ -363,28 +313,41 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 	if err := billing.RegisterReconcile(billing.ReconcileConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Credit past its expiry is written off every minute by whichever node leads the queue (docs/domains/billing.md「额度批次」).
 	if err := billing.RegisterExpire(billing.ExpireConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+	// Estimated charges are corrected from the suppliers' records by whichever node leads the queue
+	// (docs/domains/billing.md「用量来源与暂估」).
+	if err := billing.RegisterCorrections(billing.CorrectConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
+	}); err != nil {
+		return nil, nil, nil, err
+	}
+	// The call log's partitions move to the object store and leave PostgreSQL on the archive queue; with no bucket
+	// they stay, because a drop without a confirmed archive loses records. It connects as its own login, so SQL run as
+	// the application cannot own or drop the log tables.
+	if err := registerRetention(retentionDB, archive, queue, tel, logger); err != nil {
+		return nil, nil, nil, err
 	}
 	if err := suppliers.RegisterReconcile(suppliers.ReconcileJobConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger,
 	}); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Orders past their deadline expire every minute, on whichever node leads the queue
 	// (docs/domains/payments.md「补单与过期」). Callbacks and polling register the same protocol plugins.
 	if err = registerPaymentJobs(db, keys, exit, logger, queue); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := queue.Start(ctx); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return queue, recovery, nil
+	return queue, recovery, registration, nil
 }
 
 // registerCatalogJobs keeps both catalog schedules on the node's shared queue and egress client.
@@ -409,20 +372,38 @@ func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logg
 	}
 }
 
+// openCoreNode opens the providers and the database a serving core needs, shutting the providers down if the database
+// refuses the start so a failed start does not leave them running.
+func openCoreNode(ctx context.Context, cfg nodeSettings, master *secret.Keyring,
+	logger *slog.Logger,
+) (*telemetry.Telemetry, *pg.DB, *secret.Keyring, error) {
+	tel, err := telemetry.New()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	db, ring, err := openCheckedDatabase(ctx, cfg, tel, master, logger)
+	if err != nil {
+		return nil, nil, nil, errors.Join(err, tel.Shutdown(context.WithoutCancel(ctx)))
+	}
+	return tel, db, ring, nil
+}
+
 // openCheckedDatabase opens the node's database and checks that the key ring it needs is complete and agrees with the
 // database, both under one AXIOM_STARTUP_TIMEOUT. The key ring check reads every envelope store, so a lock held on one of
 // them is the database not answering, like a lock held on the fallback prices. master is the ring loadConsole read
 // before the database, so a file the node cannot use is named as such instead of as a connection failure, and the
 // login key came from the same read; CheckRing checks this ring under the lock instead of reading the file again.
 func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.Telemetry,
-	master *secret.Keyring,
+	master *secret.Keyring, logger *slog.Logger,
 ) (*pg.DB, *secret.Keyring, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, cfg.startupTimeout, errNoAnswer)
 	defer cancel()
-	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel, pg.WithCompletionReserve(cfg.completionReserve))
+	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel,
+		pg.WithCompletionReserve(cfg.completionReserve), pg.WithNodes(cfg.valkey.Nodes))
 	if err != nil {
 		return nil, nil, err
 	}
+	logConnectionBudget(logger, db)
 	ring, _, err := keyRotation(db, cfg.masterKeyFile).CheckRing(ctx, master)
 	if err == nil {
 		return db, ring, nil
@@ -432,6 +413,15 @@ func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.T
 		return nil, nil, errNoAnswer
 	}
 	return nil, nil, err
+}
+
+// logConnectionBudget reports the numbers the startup check derived from the database's limits, so a deployment can
+// see what it will use before the listeners open.
+func logConnectionBudget(logger *slog.Logger, db *pg.DB) {
+	if budget, ok := db.Budget(); ok {
+		logger.Info("database connection budget", "max_connections", budget.MaxConnections, "reserved", budget.Reserved,
+			"nodes", budget.Nodes, "share", budget.Share, "pool", budget.Pool, "completion", budget.Completion)
+	}
 }
 
 // openNodeDatabase opens the database for serving, traced, and refuses it when its fallback prices fail billing's check
@@ -459,29 +449,18 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // startBackground starts what serves the call path and outlives it: the call-record writer and the job queue. Both are
 // closed on every way out (closeRecorder, stopQueue), before the database they use; a queue that fails to start closes
 // the recorder it had already started, since the caller has no defer of its own yet.
-func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
+func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
+	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
-) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, error) {
+) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	recorder := record(ctx, db, tel, logger)
-	queue, recovery, err := startSync(ctx, db, smtp, cache, master, keys, exit, prices, exchangeSource, tel, logger)
+	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, directFormats, archive, tel, logger)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return queue, recorder, recovery, nil
-}
-
-// startServing serves every listener. The channel carries the error of the first listener to stop. Readiness is not
-// reported here: it waits for the routing snapshot (announceReady), so a node that cannot route never says it can.
-func startServing(servers []*listening, logger *slog.Logger) <-chan error {
-	served := make(chan error, len(servers))
-	for _, s := range servers {
-		go func() { served <- s.server.Serve(s.listener) }()
-	}
-	logger.Info("serving", "public", servers[0].listener.Addr().String(), "admin", servers[1].listener.Addr().String(), "ops", servers[2].listener.Addr().String())
-	return served
+	return queue, recorder, recovery, registration, nil
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.
@@ -518,6 +497,51 @@ func openCache(ctx context.Context, cfg kv.Config, timeout time.Duration, db *pg
 	return cache, nil
 }
 
+// openRetentionDB opens the retention job's own login. Without the URL the job does not run; a configured archive bucket
+// without it is refused at startup, because "the archive is on" must not mean a job that never starts.
+func openRetentionDB(ctx context.Context, url string, archive bool) (*pg.DB, error) {
+	if url == "" {
+		if archive {
+			return nil, fmt.Errorf("%s is set but %s is not: the archive needs the retention job's own login", "AXIOM_OBJECTSTORE_ENDPOINT", retentionDatabaseURLVar)
+		}
+		return nil, nil //nolint:nilnil // no URL is a valid state: retention is off
+	}
+	db, err := pg.Open(ctx, url, pg.WithCompletionReserve(1))
+	if err != nil {
+		return nil, fmt.Errorf("retention database:\n%w", err)
+	}
+	if err := observability.CheckRetentionRole(ctx, db, pg.PlatformScope()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("retention database:\n%w", err)
+	}
+	return db, nil
+}
+
+// registerRetention adds the job when the node has its login, and says so once when it does not.
+func registerRetention(db *pg.DB, archive observability.ArchiveStore, queue *pg.Queue, tel *telemetry.Telemetry, logger *slog.Logger) error {
+	if db == nil {
+		logger.Info("call-log retention is off: " + retentionDatabaseURLVar + " is not set")
+		return nil
+	}
+	return observability.RegisterRetention(observability.RetentionConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Store: archive, Logger: logger,
+		Meter: tel.Metrics.Meter("axiom/observability"),
+	})
+}
+
+// openArchiveStore opens the deployment's object store, or none: a bucket that is not configured turns the call log's
+// archive off and leaves every partition in PostgreSQL.
+func openArchiveStore(cfg objectstore.Config) (*objectstore.Client, error) {
+	client, err := objectstore.Open(cfg)
+	if errors.Is(err, objectstore.ErrNotConfigured) {
+		return nil, nil //nolint:nilnil // no bucket is a valid state: the archive is off
+	}
+	if err != nil {
+		return nil, fmt.Errorf("object store:\n%w", err)
+	}
+	return client, nil
+}
+
 // closeCache ends the cache's loops and deletes the node's heartbeat within timeout, on a context that outlives the one
 // that ended the node. A second call finds nothing to do, so the shutdown and the defer below may both make it.
 func closeCache(ctx context.Context, cache *kv.Client, timeout time.Duration, logger *slog.Logger) {
@@ -526,17 +550,6 @@ func closeCache(ctx context.Context, cache *kv.Client, timeout time.Duration, lo
 	if err := cache.Close(ctx); err != nil {
 		// The row goes stale by itself, and a node that has emptied itself is not a failed shutdown for it.
 		logger.Error("closing the shared cache", "err", err)
-	}
-}
-
-// node returns the node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
-// it drains while the probes still answer. The admin listener serves the admin app and the admin API (docs/architecture.md
-// 「前端交付」); the limit to restricted sources is not built (#171).
-func node(publicAddr string, routes http.Handler, adminAddr string, admin http.Handler, probesAddr string, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
-	return []*listening{
-		{publicAddrVar, publicAddr, httpserver.New(httpserver.Public(routes, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{adminAddrVar, adminAddr, httpserver.New(httpserver.Public(admin, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil},
-		{probesAddrVar, probesAddr, health.Server(logger), nil},
 	}
 }
 
@@ -549,6 +562,9 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 	defer cancel()
 	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
+		if errors.Is(context.Cause(ctx), errNoAnswer) {
+			return nil, errNoAnswer // the budget read is part of opening, and pgx reports only that the context ended
+		}
 		return nil, err
 	}
 	if err := db.Check(ctx, modules()...); err != nil {
@@ -563,43 +579,6 @@ func openDatabase(ctx context.Context, url string, timeout time.Duration, opts .
 		return nil, err
 	}
 	return db, nil
-}
-
-// shutdown reports not ready, then stops the servers in order, each finishing its requests in flight, all within
-// timeout. The public listener comes first, so the probes keep answering, not ready, while it drains. Past timeout
-// a server's remaining connections are closed, which ends their requests' contexts: Shutdown alone would return and
-// leave them running, and closing the database pool would then wait for every connection they hold.
-func shutdown(ctx context.Context, timeout time.Duration, health *httpserver.Health, servers []*listening) error {
-	health.SetReady(false)
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	var errs []error
-	for _, s := range servers {
-		if err := s.server.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("shut down %s: %w", s.variable, err), s.server.Close())
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// listen binds every server before any serves, so a taken address fails startup with nothing half started. A
-// failure names the variable and the cause, such as "bind: address already in use", but not the address.
-func listen(ctx context.Context, servers []*listening) error {
-	for i, s := range servers {
-		listener, err := new(net.ListenConfig).Listen(ctx, "tcp", s.addr)
-		if err != nil {
-			if opErr := (*net.OpError)(nil); errors.As(err, &opErr) {
-				err = opErr.Err
-			}
-			errs := []error{fmt.Errorf("%s: %w", s.variable, err)}
-			for _, bound := range servers[:i] {
-				errs = append(errs, bound.listener.Close())
-			}
-			return errors.Join(errs...)
-		}
-		s.listener = listener
-	}
-	return nil
 }
 
 func registerExchangeSource(ctx context.Context, db *pg.DB, queue *pg.Queue, exit *egress.Client, logger *slog.Logger, source string) error {

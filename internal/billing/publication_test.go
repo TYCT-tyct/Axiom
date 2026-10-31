@@ -84,6 +84,8 @@ func (f *priceFixture) publish(p Publication, confirmed, override bool) error {
 }
 
 func TestPricePublicationHoldsLargeMoves(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	first := f.refresh()[f.model]
 	if first.Version == uuid.Nil() {
@@ -128,6 +130,8 @@ func TestPricePublicationHoldsLargeMoves(t *testing.T) {
 }
 
 func TestFloorPublicationAndScopedOverride(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	first := f.refresh()[f.model]
 	f.costs[0] = priceCost(t, f.model, "0.0000015")
@@ -162,6 +166,8 @@ func TestFloorPublicationAndScopedOverride(t *testing.T) {
 }
 
 func TestPublicationIsAtomicAndConcurrent(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	f.refresh()
 	f.multiplier("2")
@@ -202,6 +208,8 @@ func TestPublicationIsAtomicAndConcurrent(t *testing.T) {
 }
 
 func TestCostPlusAndUnknownCosts(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	in := f.rule.RuleInput
 	in.Method = plus("0.25")
@@ -224,6 +232,8 @@ func TestCostPlusAndUnknownCosts(t *testing.T) {
 }
 
 func TestNeverPublishBelowFloorProperty(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	if err := f.tx(func(tx pg.Tx) error {
 		return SetPricePolicy(t.Context(), tx, system, f.site, PricePolicy{FloorMultiplier: "1.2", ChangeRatio: "0.1", MaxIncreaseRatio: "1"}, "property floor")
@@ -258,6 +268,8 @@ func TestNeverPublishBelowFloorProperty(t *testing.T) {
 }
 
 func TestPricePolicyValidationAndRevision(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	for _, p := range []PricePolicy{{FloorMultiplier: "0.9", ChangeRatio: "0.1", MaxIncreaseRatio: "1"}, {FloorMultiplier: "1", ChangeRatio: "-1", MaxIncreaseRatio: "1"}} {
 		if err := f.tx(func(tx pg.Tx) error { return SetPricePolicy(t.Context(), tx, system, f.site, p, "invalid") }); err == nil {
@@ -280,6 +292,8 @@ func TestPricePolicyValidationAndRevision(t *testing.T) {
 }
 
 func TestReservationLocksPriceVersionsThroughRetry(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10000, 0, Config{})
 	first, second := uuid.NewV7(), uuid.NewV7()
 	q := []Quotable{b.exact, b.exact}
@@ -287,7 +301,7 @@ func TestReservationLocksPriceVersionsThroughRetry(t *testing.T) {
 	q[1].Version = second
 	var h *Hold
 	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, q)
+		h, err = b.billing.reserveOne(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, q)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -320,6 +334,8 @@ func TestReservationLocksPriceVersionsThroughRetry(t *testing.T) {
 }
 
 func TestCostEnvelopeKeepsExactExchange(t *testing.T) {
+	t.Parallel()
+
 	c := priceCost(t, catalog.ModelID(uuid.NewV7()), "0.000000075")
 	c.UnitValue = "0.123456789"
 	c.Currency = currencyOfPriceTest(t, "CNY")
@@ -363,6 +379,8 @@ func currencyOfPriceTest(t *testing.T, s string) platform.Currency {
 }
 
 func TestPricePolicyAuditIdentifiesSite(t *testing.T) {
+	t.Parallel()
+
 	f := newPrices(t)
 	if err := f.tx(func(tx pg.Tx) error {
 		p := PricePolicy{FloorMultiplier: "1.2", ChangeRatio: "0.1", MaxIncreaseRatio: "1"}
@@ -386,6 +404,8 @@ func TestPricePolicyAuditIdentifiesSite(t *testing.T) {
 }
 
 func TestCostPlusMarginAndMarkup(t *testing.T) {
+	t.Parallel()
+
 	cost := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002"},"service_tiers":{"flex":{"rates":{"input":"0.000002","output":"0.000004"}}}}`)
 	price, err := costPrice(Method{Kind: "cost_plus", MarginRatio: new("0.2"), FixedMarkup: jsonx.Raw(`{"output":"0.000001"}`)}, cost, usd)
 	if err != nil {

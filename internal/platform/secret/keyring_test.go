@@ -1,7 +1,11 @@
 package secret_test
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -64,6 +68,24 @@ func TestKeyFilePaths(t *testing.T) {
 	}
 }
 
+// TestKeyFileSymlinkRefused: the variable must name the file, not a link to one. The writer refuses to replace a link
+// because rename replaces the directory entry, so a link would read one file and rotate another; the reader refuses it
+// for the same reason: whoever can point the variable at a link chooses the key material.
+func TestKeyFileSymlinkRefused(t *testing.T) {
+	target := keyFile(t, keyLine(1, 1))
+	link := filepath.Join(t.TempDir(), "master-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	keys, err := secret.Load(link)
+	if keys != nil || err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("a symlink to a key file loaded as %v; want a regular-file refusal", err)
+	}
+	if strings.Contains(err.Error(), link) || strings.Contains(err.Error(), target) {
+		t.Fatal("the refusal quotes a path")
+	}
+}
+
 func TestKeyFilePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows mode bits do not represent NTFS ACLs")
@@ -92,6 +114,81 @@ func TestKeyFileLineEndings(t *testing.T) {
 		strings.ReplaceAll(keyLine(1, 1)+keyLine(2, 2), "\n", "\r\n"),
 	} {
 		loadKeys(t, content)
+	}
+}
+
+// TestKeyMaterialFormatting: the types that hold key bytes are printed into a log line or an error as easily as a
+// Secret is, so they redact every verb rather than the verbs their authors remembered. The verbs that bypass a method
+// are the point: fmt's bad-verb diagnostic for %w on a non-error, and its reflection over the fields of a struct, which
+// skips methods for an unexported field. Both used to print the map.
+func TestKeyMaterialFormatting(t *testing.T) {
+	path := keyFile(t, keyLine(1, 1))
+	master, err := secret.LoadMaster(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac, err := secret.LoadMAC(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct := []any{master, *master, mac, *mac}
+	wrapped := []any{
+		struct{ m secret.MasterKeys }{*master},
+		struct{ M secret.MasterKeys }{*master},
+		struct{ m secret.MACKeys }{*mac},
+		struct{ M secret.MACKeys }{*mac},
+		[]secret.MasterKeys{*master},
+		map[string]secret.MACKeys{"m": *mac},
+	}
+	formats := []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%b", "%o", "%U", "%t", "%f", "%e", "%g", "%20.3s", "%+020v", "%#q", "%Z", "%w", "%!w"}
+	key := bytes.Repeat([]byte{1}, 32) // keyLine(1, 1)'s bytes
+	for _, format := range formats {
+		// A bad-verb diagnostic does not call Format at all, so %w cannot show the marker; what it must not show is a key.
+		redacts := format != "%w"
+		for _, shape := range direct {
+			output := fmt.Sprintf(format, shape)
+			t.Run(fmt.Sprintf("%s/direct", format), func(t *testing.T) {
+				if redacts {
+					assertRedacted(t, output)
+				}
+				assertNoKeyBytes(t, output, key)
+			})
+		}
+		for _, shape := range wrapped {
+			output := fmt.Sprintf(format, shape)
+			t.Run(fmt.Sprintf("%s/wrapped", format), func(t *testing.T) { assertNoKeyBytes(t, output, key) })
+		}
+	}
+	var logs bytes.Buffer
+	for _, handler := range []slog.Handler{
+		slog.NewTextHandler(&logs, nil), slog.NewJSONHandler(&logs, nil),
+	} {
+		logs.Reset()
+		slog.New(handler).Info("keys", slog.Any("master", master), slog.Any("mac", mac), slog.Any("wrapped", struct{ m secret.MasterKeys }{*master}))
+		assertNoKeyBytes(t, logs.String(), key)
+	}
+}
+
+// assertNoKeyBytes fails when output carries any usual rendering of key: its bytes in decimal, hex or base64, or raw.
+func assertNoKeyBytes(t *testing.T, output string, key []byte) {
+	t.Helper()
+	forms := []string{fmt.Sprintf("%v", key), hex.EncodeToString(key), base64.StdEncoding.EncodeToString(key), string(key)}
+	for _, form := range forms {
+		if strings.Contains(output, form) {
+			t.Fatalf("output carries the key (%d-byte form): %s", len(form), output)
+		}
+	}
+}
+
+// TestReportWaitsForCheck: a ring read from a file alone has checked no fingerprint, so it must not let a heartbeat
+// claim its versions are distributed; only Check or Refresh, which compares them with the database, may do that.
+func TestReportWaitsForCheck(t *testing.T) {
+	ring, err := secret.Load(keyFile(t, keyLine(1, 1)+keyLine(2, 2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versions, active := ring.Report(); versions != nil || active != 0 {
+		t.Fatalf("an unchecked ring reports %v active %d, want nothing", versions, active)
 	}
 }
 

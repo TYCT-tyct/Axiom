@@ -4,6 +4,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go
 	"fmt"
 	"slices"
+	"strconv"
 
 	"axiom/internal/catalog"
 )
@@ -44,7 +45,7 @@ type openAIDetails struct {
 	CacheWrite    int64                     `json:"cache_write_tokens"`
 	Audio         int64                     `json:"audio_tokens"`
 	Image         int64                     `json:"image_tokens"`
-	Video         int64                     `json:"video_tokens"` // an input modality, charged as image_in: there is no output item
+	Video         *int64                    `json:"video_tokens"` // an input modality, charged as image_in: there is no output item
 	Text          int64                     `json:"text_tokens"`
 	CachedDetails *openAICachedDetails      `json:"cached_tokens_details"`
 	Reasoning     int64                     `json:"reasoning_tokens"`
@@ -86,6 +87,21 @@ func (u *openAIUsage) items(tier *string) (r usageReport, err error) {
 	return r, nil
 }
 
+// meterUsage maps a usage report just read onto billing items. final is set for the usage of the event that ended the
+// stream: what it states is charged as it is rather than estimated (meter.take).
+func meterUsage(m *meter, report *openAIUsage, reportErr error, tier *string, final bool) {
+	if reportErr != nil {
+		m.invalid = fmt.Errorf("usage: %w", reportErr)
+		return
+	}
+	r, err := report.items(tier)
+	if err != nil {
+		m.invalid = err
+		return
+	}
+	m.take(r, nil, final)
+}
+
 // mapInput maps the input side as the reply reports it. Chat and Responses name the same counts differently, and those
 // names go into the unknown usage, so each side reads its own. A report without the side says nothing about its split,
 // so the meter takes none and keeps an earlier one.
@@ -103,6 +119,15 @@ func (u *openAIUsage) mapInput(r *usageReport) error {
 	}
 	if err := r.openAIInput(*in, d); err != nil {
 		return err
+	}
+	// Video is an input-details member: a details object is a new input snapshot, so an omitted or explicit zero
+	// video count clears an earlier one. A report without the details object says nothing about video.
+	if detailed {
+		if d.Video != nil && *d.Video > 0 {
+			r.native.VideoInput, r.nativeSet = *d.Video, r.nativeSet|nativeVideo
+		} else {
+			r.nativeClear |= nativeVideo
+		}
 	}
 	r.inputDetailed = detailed
 	unknownCounts(r, "usage."+name, d.Unknown)
@@ -127,27 +152,66 @@ func (u *openAIUsage) mapOutput(r *usageReport) error {
 	}
 	// Video has no output item and no vendor reports it here, so, like text_tokens, a count is a detail inside the
 	// output total: checked, and billed with that total rather than again on its own.
-	if !countOK(d.Video) || d.Video > *out {
-		return fmt.Errorf("usage: invalid output video count")
+	if err := checkOutputVideo(d.Video, *out); err != nil {
+		return err
 	}
 	if err := r.split(*out, catalog.ItemOutput, []catalog.Item{catalog.ItemReasoning, catalog.ItemAudioOut, catalog.ItemImageOut},
 		[]int64{d.Reasoning, d.Audio, d.Image}); err != nil {
 		return err
 	}
+	mapPredictions(r, d, details != nil, *out)
 	r.outputTotal, r.outputDetailed = tokenTotal{*out, true}, details != nil
 	unknownCounts(r, "usage."+name, d.Unknown)
 	return nil
+}
+
+// checkOutputVideo is the output video count: a detail inside the output total, never a count of its own.
+func checkOutputVideo(video *int64, out int64) error {
+	n := int64(0)
+	if video != nil {
+		n = *video
+	}
+	if !countOK(n) || n > out {
+		return fmt.Errorf("usage: invalid output video count")
+	}
+	return nil
+}
+
+// mapPredictions keeps prediction tokens, which are part of the output total and billed with it. They have no item and
+// are only echoed, so a count that does not fit inside the total is left out rather than priced.
+func mapPredictions(r *usageReport, d openAIDetails, detailed bool, out int64) {
+	accepted, acceptedOK := nativeCount(d.Accepted)
+	rejected, rejectedOK := nativeCount(d.Rejected)
+	if !detailed || accepted+rejected > out {
+		return
+	}
+	// Prediction splits are output-details members: the details object is a new output snapshot, so a field it omits
+	// or reports as zero replaces the earlier value instead of keeping it.
+	if acceptedOK && accepted > 0 {
+		r.native.AcceptedPrediction, r.nativeSet = accepted, r.nativeSet|nativeAccepted
+	} else {
+		r.nativeClear |= nativeAccepted
+	}
+	if rejectedOK && rejected > 0 {
+		r.native.RejectedPrediction, r.nativeSet = rejected, r.nativeSet|nativeRejected
+	} else {
+		r.nativeClear |= nativeRejected
+	}
 }
 
 // openAIInput preserves the physical total even when cache prefixes overlap. Modalities are charged only from the
 // uncached remainder: absent intersection detail cannot justify charging a cached image a second time. Video has no item
 // of its own, so its input tokens are image_in with the images (catalog README.md「计费项与用量」).
 func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
-	if !countOK(total) || slices.ContainsFunc([]int64{d.Cached, d.CacheWrite, d.Audio, d.Image, d.Video, d.Text},
+	var video int64
+	if d.Video != nil {
+		video = *d.Video
+	}
+	if !countOK(total) || slices.ContainsFunc([]int64{d.Cached, d.CacheWrite, d.Audio, d.Image, video, d.Text},
 		func(n int64) bool { return !countOK(n) || n > total }) {
 		return fmt.Errorf("usage: input or a part of it is not a count within its total %d", total)
 	}
-	image, audio := d.Image+d.Video, d.Audio // no overflow: each count is at most 10¹⁰
+	image, audio := d.Image+video, d.Audio // no overflow: each count is at most 10¹⁰
 	if c := d.CachedDetails; c != nil {
 		if !c.within(d) {
 			return fmt.Errorf("usage: cached modality counts exceed their totals")
@@ -163,7 +227,7 @@ func (r *usageReport) openAIInput(total int64, d openAIDetails) error {
 	if d.Audio > 0 {
 		r.set(catalog.ItemAudioIn, audio)
 	}
-	if d.Image > 0 || d.Video > 0 {
+	if d.Image > 0 || video > 0 {
 		r.set(catalog.ItemImageIn, image)
 	}
 	r.physicalInput = tokenTotal{total, true}
@@ -191,6 +255,25 @@ func (r *usageReport) split(total int64, rest catalog.Item, parts []catalog.Item
 	}
 	r.set(rest, left)
 	return nil
+}
+
+// nativeCount reads a token count the upstream may report as null or leave out; anything but a non-negative decimal
+// integer within the bound is not a count and is left out of the echo.
+func nativeCount(v jsontext.Value) (int64, bool) {
+	if len(v) == 0 || string(v) == "null" {
+		return 0, false
+	}
+	var n int64
+	for _, c := range v {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int64(c-'0')
+		if n > maxCount {
+			return 0, false
+		}
+	}
+	return n, true
 }
 
 func (d *openAIDetails) orZero() openAIDetails {
@@ -224,14 +307,62 @@ var (
 )
 
 // appendOpenAIUsage appends a usage object with u's counts in the format's names and cost, members each led by a
-// comma.
+// comma. It writes the names and counts itself rather than formatting them: this object is built for every reply, and
+// the benchmark gate counts the allocations of each (docs/performance.md「怎么验证」).
 func appendOpenAIUsage(dst []byte, n openAINames, u catalog.Usage, cost string) []byte {
 	in := u.InputTotal()
 	out := u.OutputTotal() // the client total includes every output modality, independently of the waiver's policy
-	return fmt.Appendf(dst, `{%q:%d,%q:{"cached_tokens":%d,"cache_write_tokens":%d},%q:%d,%q:{"reasoning_tokens":%d},`+
-		`"total_tokens":%d%s}`, n.input, in, n.inputDetails, u.Count(catalog.ItemCacheRead),
-		u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h), n.output, out, n.outputDetails,
-		u.Count(catalog.ItemReasoning), in+out, cost)
+	native := u.NativeTokens()
+	dst = append(dst, '{')
+	dst = appendQuoted(dst, n.input)
+	dst = append(dst, ':')
+	dst = strconv.AppendInt(dst, in, 10)
+	dst = append(dst, ',')
+	dst = appendQuoted(dst, n.inputDetails)
+	dst = append(dst, `:{"cached_tokens":`...)
+	dst = strconv.AppendInt(dst, u.Count(catalog.ItemCacheRead), 10)
+	dst = append(dst, `,"cache_write_tokens":`...)
+	dst = strconv.AppendInt(dst, u.Count(catalog.ItemCacheWrite)+u.Count(catalog.ItemCacheWrite1h), 10)
+	dst = appendCount(dst, "audio_tokens", u.Count(catalog.ItemAudioIn))
+	dst = appendCount(dst, "video_tokens", native.VideoInput)
+	dst = append(dst, '}')
+	dst = append(dst, ',')
+	dst = appendQuoted(dst, n.output)
+	dst = append(dst, ':')
+	dst = strconv.AppendInt(dst, out, 10)
+	dst = append(dst, ',')
+	dst = appendQuoted(dst, n.outputDetails)
+	dst = append(dst, `:{"reasoning_tokens":`...)
+	dst = strconv.AppendInt(dst, u.Count(catalog.ItemReasoning), 10)
+	dst = appendCount(dst, "audio_tokens", u.Count(catalog.ItemAudioOut))
+	dst = appendCount(dst, "accepted_prediction_tokens", native.AcceptedPrediction)
+	dst = appendCount(dst, "rejected_prediction_tokens", native.RejectedPrediction)
+	dst = append(dst, `},"total_tokens":`...)
+	dst = strconv.AppendInt(dst, in+out, 10)
+	dst = append(dst, `,"is_byok":false`...)
+	if searches, calls := u.Count(catalog.ItemWebSearch), u.Count(catalog.ItemCodeExecution); searches > 0 || calls > 0 {
+		dst = append(dst, `,"server_tool_use_details":{"tool_calls_requested":`...)
+		dst = strconv.AppendInt(dst, searches+calls, 10)
+		dst = append(dst, `,"tool_calls_executed":`...)
+		dst = strconv.AppendInt(dst, searches+calls, 10)
+		dst = append(dst, `,"web_search_requests":`...)
+		dst = strconv.AppendInt(dst, searches, 10)
+		dst = append(dst, '}')
+	}
+	dst = append(dst, cost...)
+	return append(dst, '}')
+}
+
+// appendCount appends a count led by a comma, or nothing for a zero: the optional members of a details object are
+// the counts a reply has, and an absent one is not a zero.
+func appendCount(dst []byte, name string, n int64) []byte {
+	if n == 0 {
+		return dst
+	}
+	dst = append(dst, ',')
+	dst = appendQuoted(dst, name)
+	dst = append(dst, ':')
+	return strconv.AppendInt(dst, n, 10)
 }
 
 // appendQuoted appends s as a JSON string.

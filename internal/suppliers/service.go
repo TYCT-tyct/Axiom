@@ -35,8 +35,12 @@ type EndpointID = uuid.UUID
 // upstream, the formats it speaks, the cost schedule it is priced by — already scaled by its group's ratio — and what
 // its supplier does with a stream (internal/suppliers/README.md「调用面」).
 type Routable struct {
-	Site, Account       uuid.UUID
-	Credentials         int
+	Site, Account uuid.UUID
+	Credentials   int
+	// Capacity reads the endpoint's live credential capacity where a route is planned: whether any credential can take
+	// another call now. A routing snapshot holds it, so a plan sees the slots as they are then and not as they were
+	// when the snapshot was built.
+	Capacity            *Capacity
 	Funds               *Funds
 	UnitValue           platform.UnitPrice
 	UnitValueID         uuid.UUID
@@ -47,6 +51,9 @@ type Routable struct {
 	Formats             []protocol.Format
 	Schedule            catalog.Schedule
 	Streams, Cancels    bool
+	// PoolLow says the group's pool has little capacity left: routing halves this endpoint's weight. Only a pool whose
+	// management API reported a low reading sets it; a relay's endpoints keep false.
+	PoolLow bool
 }
 
 // Platform reports whether the endpoint belongs to the platform rather than a tenant.
@@ -301,6 +308,7 @@ type endpoint struct {
 	nativeUnit              string
 	ownerScope              string
 	ownerSite, ownerAccount uuid.UUID
+	poolLow                 bool
 }
 
 type credential struct {
@@ -344,11 +352,18 @@ func (s *Service) Reload(ctx context.Context) error {
 	next := &snapshot{endpoints: map[EndpointID]*endpoint{}, confirmed: asked}
 	schedules := maps.Clone(*s.schedules.Load())
 	unloadable := map[uuid.UUID]error{}
+	unsupported := map[uuid.UUID]error{}
 	for _, r := range rows {
 		if _, left := unloadable[r.SupplierID]; left {
 			continue
 		}
 		if err := s.load(next, schedules, r); err != nil {
+			if errors.Is(err, store.ErrUnsupportedFormat) {
+				// A newer node wrote a format this one cannot serve. Leave that endpoint out, not its supplier: the
+				// supplier's other endpoints still serve, and a rolling back release must not lose the whole provider.
+				unsupported[r.EndpointID] = err
+				continue
+			}
 			unloadable[r.SupplierID] = err
 		}
 	}
@@ -361,6 +376,10 @@ func (s *Service) Reload(ctx context.Context) error {
 	s.applyShares(next)
 	s.snap.Store(next)
 	s.report(ctx, unloadable)
+	for id, cause := range unsupported {
+		s.cfg.Logger.Warn("suppliers: an endpoint with a format this node does not know is left out",
+			"event", unsupportedFormatEvent, "endpoint", id, "err", cause)
+	}
 	return nil
 }
 
@@ -402,10 +421,10 @@ func (s *Service) Routable() ([]Routable, error) {
 		policy := s.policy(ep)
 		out = append(out, Routable{
 			Site: ep.ownerSite, Account: ep.ownerAccount,
-			Credentials: s.availableCredentials(ep),
-			Funds:       ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
+			Credentials: s.availableCredentials(ep), Capacity: &Capacity{s: s, id: ep.id},
+			Funds: ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Codename: ep.codename, Formats: slices.Clone(ep.formats),
-			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels,
+			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels, PoolLow: ep.poolLow,
 		})
 	}
 	slices.SortFunc(out, func(a, b Routable) int { return a.ID.Compare(b.ID) })
@@ -447,6 +466,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
 		formats: formats, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt),
+		poolLow: r.PoolLow.Bool,
 	}
 	if r.SiteID != nil {
 		ep.ownerSite = *r.SiteID
@@ -530,8 +550,9 @@ var (
 const (
 	// unloadableEvent is the stable name of the error log for a supplier left out of the snapshot, as the queue's
 	// discarded jobs have theirs (internal/platform/pg/queue.go).
-	unloadableEvent  = "suppliers.unloadable"
-	unloadableMetric = "axiom.suppliers.unloadable"
+	unloadableEvent        = "suppliers.unloadable"
+	unsupportedFormatEvent = "suppliers.unsupported_format"
+	unloadableMetric       = "axiom.suppliers.unloadable"
 )
 
 // availableCredentials counts eligible keys without consuming a concurrency or RPM slot.

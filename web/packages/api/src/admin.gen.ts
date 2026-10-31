@@ -46,6 +46,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/reports/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site's calls, errors, revenue, cost and cash over a window, with its busiest accounts and models.
+         * @description The operations dashboard of the site the request was made on (docs/domains/operations.md「运营看板」). Calls and errors are the call log's, over the calls that started in the window. Revenue is what the window's settled calls were charged and cost is what the supplier charged the platform where billing could convert it, both in the site's accounting currency; `unknown_cost_calls` counts the calls whose cost is unknown, and their cost is not in `cost`. Cash is the ledger's cash book — paid credit in and refunds out, in each payment currency — so it is neither revenue nor the call log's charge. The window defaults to 24 hours and is at most 31 days.
+         */
+        get: operations["getOperationsOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/audit": {
         parameters: {
             query?: never;
@@ -98,15 +118,107 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Site name and invite or closed registration policy.
-         * @description Site name and invite or closed registration policy.
+         * Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
+         * @description Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
          */
         get: operations["getSystemSettings"];
         /**
-         * Site name and invite or closed registration policy.
-         * @description Site name and invite or closed registration policy.
+         * Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
+         * @description Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
          */
         put: operations["setSystemSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/site": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site the admin host belongs to
+         * @description The name and logo of the site whose admin domain this request reached, so the admin app shows the site's brand before it has a session. The logo's URL is on this admin host and carries the bytes' SHA-256; it stays available for a year and an older logo keeps working under its own hash. No session: these are the same public facts the console's `getSite` gives, and the admin host already names the site.
+         */
+        get: operations["getAdminSite"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/site/logo/{hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site's logo for the admin app
+         * @description The bytes at `getAdminSite.logo_url`. The hash names the content, so the URL never changes meaning and the answer is immutable; a hash this site never served is a 404. A page opened before the logo changed keeps its image under the old hash.
+         */
+        get: operations["getAdminSiteLogo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/brand": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's brand colour.
+         * @description The #rrggbb colour the console derives both colour schemes from (docs/frontend.md「主题与自由度」); absent when the site uses the default palette. Contrast is not a reason to refuse a colour: the console corrects it.
+         */
+        get: operations["getSiteBrand"];
+        /**
+         * Set or clear a site's brand colour.
+         * @description Sets the site's brand colour, or clears it to the default palette when `brand_color` is empty. A value that is not #rrggbb is a 400. The change is audited; this node serves it at once and the others follow within their site reload interval.
+         */
+        put: operations["updateSiteBrand"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's logo
+         * @description The logo the site currently serves and what it is, or no logo. `data_url` carries the bytes as a data URL so the settings page can preview them under the content security policy (`img-src 'self' data:`); the pages fetch the logo from `getSite` on the console domain or `getAdminSite` on the admin domain, not from this operation.
+         */
+        get: operations["getSiteLogoAdmin"];
+        /**
+         * Replace or clear a site's logo
+         * @description Replaces the site's logo with `logo`, or clears it when `logo` is left out. An SVG is sanitised before it is stored: scripts, event handlers, styles, images, links and external references are dropped, and the result must still be one well-formed SVG. A PNG or WebP must be 1 to 1024 pixels on each side, and every format is at most 256 KiB. The response describes the new logo; the change is audited, and this node serves it at once while the others follow within their site reload interval.
+         */
+        put: operations["updateSiteLogo"];
         post?: never;
         delete?: never;
         options?: never;
@@ -184,6 +296,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/settings/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saved web search backend override; the key is never returned. Environment remains authoritative when absent.
+         * @description Saved web search backend override; the key is never returned. Environment remains authoritative when absent.
+         */
+        get: operations["getSearchSettings"];
+        /**
+         * Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the saved key; a URL change requires reentry.
+         * @description Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the saved key; a URL change requires reentry.
+         */
+        put: operations["setSearchSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/settings/search/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run one fixed search using the saved backend. Accepted means the backend answered with usable results. Ten tests per session per minute.
+         * @description Run one fixed search using the saved backend. Accepted means the backend answered with usable results. Ten tests per session per minute.
+         */
+        post: operations["testSearchSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/merchants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The merchant accounts of a site and their payment methods, without their secrets. */
+        get: operations["listMerchants"];
+        put?: never;
+        /** Create a merchant account. Secrets are write-only and never returned. */
+        post: operations["createMerchant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/merchants/{merchant_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                merchant_id: components["schemas"]["MerchantId"];
+            };
+            cookie?: never;
+        };
+        /** One merchant account and its payment methods, without its secrets. */
+        get: operations["getMerchant"];
+        /** Replace a merchant account's configuration. Omit secrets to keep the sealed ones. */
+        put: operations["updateMerchant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/merchants/{merchant_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop new orders from choosing a merchant account, keeping its configuration and sealed secrets. */
+        post: operations["disableMerchant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/payments/merchants/{merchant_id}/tests": {
         parameters: {
             query?: never;
@@ -200,6 +411,52 @@ export interface paths {
          * @description Query an existing merchant without creating an order or transferring funds. Ten tests per session per minute.
          */
         post: operations["testMerchantSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/redeem-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One site's redeem codes, newest first, without the codes themselves.
+         * @description Pages of a site's codes, filtered by the state a page shows and by a note prefix. `expired` is an enabled code past its expiry, which is how the page shows it; the stored state stays enabled. The rows carry the last four characters of each code for support, never the code: a code is written once and shown once, in the answer that made it (docs/domains/payments.md「兑换码」).
+         */
+        get: operations["listRedeemCodes"];
+        put?: never;
+        /**
+         * Make a batch of redeem codes. The codes are in this answer only.
+         * @description Makes `count` codes for the site, each worth `amount` of its currency, all expiring at `expires_at` (never, if absent), with an optional `note` and the `reason` of the audit entry. The answer is the only place the codes themselves are ever shown: only a hash is stored, so a lost answer cannot be recovered and the batch must be made again. A replay of `Idempotency-Key` answers the same batch (IDs, amounts and hints) but not the codes: the stored answer keeps no secret.
+         */
+        post: operations["createRedeemCodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/redeem-codes/{code_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code_id: components["schemas"]["RedeemCodeId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable an unused redeem code.
+         * @description Stops an enabled code from being redeemed, with the audit entry's reason. A disabled code answers as disabled, and a code already redeemed cannot be disabled: its credit is the account's.
+         */
+        post: operations["disableRedeemCode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -312,6 +569,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/payments/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A site's top-up orders, newest first, with their refunds
+         * @description The admin's order list: one site's orders with what was quoted, what the channel actually took and credited, and each order's refunds. Filters left out do not narrow. `account_id` is the paying account, `user_id` the user who ordered, `merchant_id` the merchant account (the channel), and `since`/`until` are the order's creation time, `since` inclusive and `until` exclusive. Pages use `cursor` and `limit`; the answer's `next_cursor` is null on the last page. Money is exact text: `credits` is in the site's accounting currency (billionths), while the amounts are in the currency the order was paid in (minor units).
+         */
+        get: operations["listPaymentOrders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/cash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The cash behind the dashboard, by ledger time
+         * @description One site's cash movements in a window, newest first: paid credits in and refunds out, with the batch, order or offline channel they came from. The time is the ledger transaction's, not an order's creation time, so a refund of an older order and an offline top-up are both in the window the dashboard counted. `since` is inclusive and `until` exclusive; `account_id` narrows to one payer. Pages use `cursor` and `limit`; money is exact text in the payment's currency, and the site's accounting currency where the ledger leaves it NULL.
+         */
+        get: operations["listCashMovements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A site's refunds, newest first, for review and follow-up
+         * @description The admin's refund list. `state` is the internal state: `frozen` is held after the request and waits for an administrator's approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash; `failed` returned the frozen credits. Filters left out do not narrow. The page asks with `state=frozen` for the review queue. Money is exact text: `credits` is in the site's accounting currency (billionths), `amount` in the currency the order was paid in (minor units).
+         */
+        get: operations["listPaymentRefunds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/refunds/{refund_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a refund as a second person and start its channel flow
+         * @description Releases a frozen refund. The approver must be a different person from the one who requested it, and the reason goes to the audit log. A channel refund is sent after the approval commits; an offline refund stays frozen for a separate manual conclusion. Repeating the approval with the same `Idempotency-Key` returns the stored answer and sends nothing again; a refund that is already approved is returned unchanged.
+         */
+        post: operations["approvePaymentRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/refunds/{refund_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decline a refund that no one approved and no channel saw
+         * @description Returns the frozen credits and moves no cash. Only a refund still waiting for review, with no approver and nothing sent to a channel, can be rejected (`conflict` means it is past that point; a definitive channel outcome is resolved instead). The reason goes to the audit log. Repeating the rejection with the same `Idempotency-Key` returns the stored answer and unfreezes nothing again; an already declined refund is returned unchanged.
+         */
+        post: operations["rejectPaymentRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/alerts/configuration": {
         parameters: {
             query?: never;
@@ -392,6 +749,27 @@ export interface paths {
         put?: never;
         /** Close an incident after operator investigation */
         post: operations["resolveAlertEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the call log's hot window */
+        get: operations["getRetention"];
+        /**
+         * Replace the call log's hot window
+         * @description A monthly partition whose whole month is older than hot_days is copied to the deployment's object store and dropped only after that copy is confirmed. Without an object store every partition stays, whatever the window.
+         */
+        put: operations["setRetention"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -592,6 +970,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/sites/{site_id}/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's sign-in settings
+         * @description The login domain, the passkey switch, and each provider's client ID and whether it is configured.
+         */
+        get: operations["getSiteSignIn"];
+        /**
+         * Set a site's login domain and passkey switch
+         * @description The login domain must be one of the site's enabled console domains; an empty string clears it. Passkeys need a login domain. A domain change after any passkey, linked identity or provider application exists is refused: passkeys bind to the domain and callbacks are registered under it. The change is audited.
+         */
+        put: operations["updateSiteSignIn"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/sign-in/providers/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+                provider: components["schemas"]["OAuthProvider"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Store a provider application for a site
+         * @description The client ID and secret are sealed like every other secret and never read back. Storing an application turns the provider on for the site; the callback URI is the site's login origin plus `/api/console/v1/auth/oauth/{provider}/callback`. The change is audited without the secret.
+         */
+        put: operations["setSiteOAuthProvider"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/sign-in/providers/{provider}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+                provider: components["schemas"]["OAuthProvider"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Turn a provider off for a site
+         * @description Deletes the application. Linked identities stay and work again if the application is stored again. The change is audited.
+         */
+        post: operations["deleteSiteOAuthProvider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/sites/{site_id}/key-limits": {
         parameters: {
             query?: never;
@@ -644,6 +1094,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/sites/{site_id}/registration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's open-registration policy
+         * @description The registration mode and the anti-abuse values for open registration: the self-hosted proof of work, the email domain allow and deny lists, and the per-domain limits. Values the site does not set are the defaults in code, which `defaults` shows.
+         */
+        get: operations["getSiteRegistration"];
+        /**
+         * Set a site's open-registration policy
+         * @description Replaces the registration mode and every anti-abuse value. Domains are lower-cased, trimmed and de-duplicated; an entry covers its subdomains, and the deny list wins. Open registration needs a node that can send mail: a node without SMTP answers `unavailable` there until mail is configured. The change is audited.
+         */
+        put: operations["updateSiteRegistration"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/legal-documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's legal document versions
+         * @description Every published version of the site's terms of service and privacy policy, newest first within a kind, with the text. The current version of each kind is the first one of that kind; the earlier ones are what earlier acceptances name. One page holds at most `limit` rows; `next_cursor` continues after the last row, so a kind with more than one page does not hide the other kind or its own older versions.
+         */
+        get: operations["listLegalDocuments"];
+        put?: never;
+        /**
+         * Publish a new version of a legal document
+         * @description Adds version 1 of the kind, or the next number after the current one. The version and its text never change: a correction is another publication, which every user must accept before the console lets them continue. The text is supplied by the site's operator, stored and returned as plain text; the request's reason and a digest, not the text, go to the audit log.
+         */
+        post: operations["publishLegalDocument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/accounts/{account_id}/suspension": {
         parameters: {
             query?: never;
@@ -659,6 +1161,28 @@ export interface paths {
          * @description Idempotent state change with reason and transactional audit. Restoring grants requires a historical grant and a subset of the operator's held permissions.
          */
         put: operations["setAccountSuspension"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/accounts/{account_id}/tier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Move an account to another tier
+         * @description Idempotent state change with reason and transactional audit. The tier must be one of the account's site; a tier of another site is a 422, and the account's current tier changes nothing and writes no audit entry.
+         */
+        put: operations["setAccountTier"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1440,6 +1964,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description The result of a call: `ok` when its error_kind is empty, `error` otherwise. An old node may leave the filter echo out of a list.
+         * @enum {string}
+         */
+        AdminCallStatus: "ok" | "error";
         AdminCallSummary: {
             id?: string;
             site_id?: components["schemas"]["SiteId"];
@@ -1458,6 +1987,16 @@ export interface components {
             until?: string;
             data?: components["schemas"]["AdminCallSummary"][];
             next_cursor?: string;
+            model_filter?: string;
+            status_filter?: components["schemas"]["AdminCallStatus"];
+            site_filter?: components["schemas"]["SiteId"];
+            /** @description True when the window crosses a month the call log no longer retains (archived and dropped): calls in that month are missing, so an empty page does not mean the window had no calls. Calls before `available_since` were archived. An old node leaves it out, which the page shows as unavailable rather than complete. */
+            incomplete?: boolean;
+            /**
+             * Format: date-time
+             * @description The first instant of the oldest monthly partition the log still has; calls before it were archived. Absent with `incomplete` true when no monthly partition remains, so no window can be answered from the log.
+             */
+            available_since?: string;
         };
         AdminAttempt: {
             seq?: number;
@@ -1510,13 +2049,24 @@ export interface components {
         SystemSettings: {
             name?: string;
             /** @enum {string} */
-            registration?: "invite" | "closed";
+            registration?: "invite" | "closed" | "open";
+            /** @description Whether this node accepts a name-only update of the system settings. Absent on a node of the previous release, whose contract requires the registration mode with the name; the settings page then keeps the name read-only until the node is upgraded. */
+            name_editable?: boolean;
+        };
+        SiteBrand: {
+            /** @description The site's brand colour, lower case. Absent when the site uses the default palette; a node of the previous release has no brand colour and leaves it out. */
+            brand_color?: string;
+        };
+        SiteBrandUpdate: {
+            /** @description The new brand colour as #rrggbb, or empty to return to the default palette. A value the console corrects for contrast is accepted: it picks the accent and the button's ink, not the site owner. */
+            brand_color: string;
+            reason: components["schemas"]["Reason"];
         };
         SystemSettingsUpdate: {
             settings: {
                 name: string;
                 /** @enum {string} */
-                registration: "invite" | "closed";
+                registration?: "invite" | "closed";
             };
             reason: components["schemas"]["Reason"];
         };
@@ -1524,12 +2074,16 @@ export interface components {
             open?: boolean;
             credits_min?: components["schemas"]["Money"];
             credits_max?: components["schemas"]["Money"];
+            /** @description The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A node of the previous release does not return it. */
+            top_up_buffer_ppm?: number;
         };
         PaymentSettingsUpdate: {
             settings: {
                 open: boolean;
                 credits_min?: components["schemas"]["Money"];
                 credits_max?: components["schemas"]["Money"];
+                /** @description The buffer in millionths, 0 to 10%. Omit to keep the current one. */
+                top_up_buffer_ppm?: number;
             };
             reason: components["schemas"]["Reason"];
         };
@@ -1559,6 +2113,22 @@ export interface components {
         ConfigTestResult: {
             /** @enum {string} */
             status?: "accepted" | "rejected" | "failed" | "disabled" | "unsupported";
+        };
+        SearchSettings: {
+            url?: string;
+            has_key?: boolean;
+            restart_required?: boolean;
+            source?: string;
+        };
+        SearchSettingsUpdate: {
+            settings: {
+                url?: string;
+                key?: string;
+            };
+            reason: components["schemas"]["Reason"];
+        };
+        SearchConfigTest: {
+            reason: components["schemas"]["Reason"];
         };
         MailConfigTest: {
             to: string;
@@ -1595,6 +2165,202 @@ export interface components {
         };
         /** @description A top-up order's ID (TypeID), also the order number the payment channel sees. */
         OrderId: string;
+        /** @description An amount in the currency a method is paid in, which is not always the site's. `amount` is a non-negative integer in decimal text, in the currency's minor units (cents for USD, fen for CNY, none for JPY). */
+        PayAmount: {
+            /** @example 7300 */
+            amount: string;
+            /** @example CNY */
+            currency: string;
+        };
+        /** @description A refund's ID (TypeID), the refund number of channels that take one. */
+        RefundId: string;
+        /**
+         * @description The order's state. `pending` waits for payment; `paid` is credited; `expired` and `cancelled` can still be credited if a payment arrives in time; `failed` was refused by the channel; `review` waits for a person; the rest follow refunds and chargebacks (docs/domains/payments.md「订单」).
+         * @enum {string}
+         */
+        PaymentOrderState: "pending" | "paid" | "expired" | "cancelled" | "failed" | "review" | "partially_refunded" | "refunded" | "charged_back";
+        /**
+         * @description The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
+         * @enum {string}
+         */
+        PaymentRefundState: "frozen" | "sending" | "pending" | "succeeded" | "failed";
+        /** @description A refund as the operator's list and decisions show it. Every field is optional during rolling deployment. */
+        PaymentRefund: {
+            id?: components["schemas"]["RefundId"];
+            order_id?: components["schemas"]["OrderId"];
+            account_id?: components["schemas"]["AccountId"];
+            state?: components["schemas"]["PaymentRefundState"];
+            /**
+             * @description channel sends the cash back; offline waits for a manual conclusion.
+             * @enum {string}
+             */
+            via?: "channel" | "offline";
+            credits?: components["schemas"]["Money"];
+            amount?: components["schemas"]["PayAmount"];
+            /** @description Why the user asked for the refund. */
+            reason?: string;
+            requested_by?: components["schemas"]["UserId"];
+            approved_by?: components["schemas"]["UserId"];
+            /** @description The channel's own refund number, once it has one. */
+            provider_ref?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            finished_at?: string;
+        };
+        PaymentRefundList: {
+            data: components["schemas"]["PaymentRefund"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description A top-up order as the operator's list shows it, with what was quoted, what the channel actually took and credited, and its refunds. Every field is optional during rolling deployment. */
+        PaymentOrder: {
+            id?: components["schemas"]["OrderId"];
+            account_id?: components["schemas"]["AccountId"];
+            user_id?: components["schemas"]["UserId"];
+            merchant_id?: components["schemas"]["MerchantId"];
+            /** @description The merchant account's name, the channel the order was paid through. */
+            merchant_name?: string;
+            method?: string;
+            state?: components["schemas"]["PaymentOrderState"];
+            credits?: components["schemas"]["Money"];
+            total?: components["schemas"]["PayAmount"];
+            fee?: components["schemas"]["PayAmount"];
+            /** @description The credits actually added, when the payment was credited; it can be less than `credits`. */
+            credited?: components["schemas"]["Money"];
+            /** @description What the channel actually took, when the payment was credited. */
+            paid_total?: components["schemas"]["PayAmount"];
+            /** @description The channel's fee on what it actually took. */
+            paid_fee?: components["schemas"]["PayAmount"];
+            /** @description The channel's own order number. */
+            trade_no?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            paid_at?: string;
+            /** Format: date-time */
+            expires_at?: string;
+            refund_allowed?: boolean;
+            /** @description The order's refunds, oldest first. */
+            refunds?: components["schemas"]["PaymentRefund"][];
+        };
+        PaymentOrderList: {
+            data: components["schemas"]["PaymentOrder"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description One cash entry of the ledger: a paid credit or a refund. Every field is optional during rolling deployment. */
+        CashMovement: {
+            id?: components["schemas"]["Uuid"];
+            /** @enum {string} */
+            kind?: "credit" | "refund";
+            /**
+             * Format: date-time
+             * @description The transaction's time, which is what the dashboard's window counted.
+             */
+            at?: string;
+            account_id?: components["schemas"]["AccountId"];
+            batch_id?: components["schemas"]["Uuid"];
+            amount?: components["schemas"]["Money"];
+            /** @description The order behind an online payment; absent for an offline channel. */
+            order_id?: components["schemas"]["OrderId"];
+            /** @description Where an offline payment was received; absent for an online order. */
+            offline_channel?: string;
+        };
+        CashMovementList: {
+            data: components["schemas"]["CashMovement"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description A merchant account of a payment channel, without its secrets. Every field is optional during rolling deployment. */
+        Merchant: {
+            id?: components["schemas"]["MerchantId"];
+            site_id?: components["schemas"]["SiteId"];
+            /** @description The compiled-in channel plugin, such as easypay. */
+            kind?: string;
+            name?: string;
+            enabled?: boolean;
+            /** @description The currency users pay this account in; the callback carries no currency. */
+            currency?: string;
+            /** @description How long an order of this account stays payable. */
+            ttl_seconds?: number;
+            /** @description Whether refunds of its orders may be sent automatically. */
+            refund_enabled?: boolean;
+            /** @description Whether users may ask for a refund against this account. */
+            user_refund?: boolean;
+            /** @description Tie-break order among the site's accounts: lower first. */
+            sort?: number;
+            /**
+             * Format: int64
+             * @description The revision a change must be decided against.
+             */
+            rev?: number;
+            /** @description The plugin's non-secret configuration, canonical JSON. */
+            settings?: {
+                [key: string]: unknown;
+            };
+            methods?: components["schemas"]["MerchantMethod"][];
+        };
+        /** @description One payment method a merchant account offers. Every field is optional during rolling deployment. */
+        MerchantMethod: {
+            /** @description The site's method code, such as alipay or usdt.tron. */
+            method?: string;
+            /** @description The gateway's own code for the method. */
+            upstream?: string;
+            /** @description The channel's proportional fee in millionths; 30000 is 3%. */
+            fee_ppm?: number;
+            fee_fixed?: components["schemas"]["Money"];
+            single_min?: components["schemas"]["Money"];
+            single_max?: components["schemas"]["Money"];
+            daily_limit?: components["schemas"]["Money"];
+            enabled?: boolean;
+        };
+        MerchantList: {
+            data?: components["schemas"]["Merchant"][];
+        };
+        MerchantCreate: {
+            site_id: components["schemas"]["SiteId"];
+            merchant: components["schemas"]["MerchantInput"];
+            reason: components["schemas"]["Reason"];
+        };
+        MerchantUpdate: {
+            merchant: components["schemas"]["MerchantInput"];
+            reason: components["schemas"]["Reason"];
+        };
+        MerchantInput: {
+            /**
+             * Format: int64
+             * @description The revision the change was decided against; required when updating, ignored when creating.
+             */
+            rev?: number;
+            kind: string;
+            name: string;
+            enabled: boolean;
+            currency: string;
+            ttl_seconds: number;
+            refund_enabled: boolean;
+            user_refund: boolean;
+            sort: number;
+            /** @description The plugin's non-secret configuration as a JSON object; the plugin validates its members strictly. */
+            settings: {
+                [key: string]: unknown;
+            };
+            /** @description The channel's secrets, such as key, sealed on arrival and never returned. Required when creating; omit on update to keep the sealed ones. */
+            secrets?: {
+                [key: string]: string;
+            };
+            methods: components["schemas"]["MerchantMethodInput"][];
+        };
+        MerchantMethodInput: {
+            method: string;
+            upstream: string;
+            fee_ppm: number;
+            fee_fixed: components["schemas"]["Money"];
+            single_min?: components["schemas"]["Money"];
+            single_max?: components["schemas"]["Money"];
+            daily_limit?: components["schemas"]["Money"];
+            enabled: boolean;
+        };
         /** @description A merchant account's ID (TypeID). */
         MerchantId: string;
         /** @description All fields optional during rolling deployment. Resolved records contain an investigation note, not a financial resolution. */
@@ -1625,6 +2391,41 @@ export interface components {
             rev?: number;
             rules?: components["schemas"]["AlertRule"][];
             channels?: components["schemas"]["AlertChannel"][];
+            spend_detection?: components["schemas"]["SpendDetection"];
+        };
+        /** @description Offline account spend-anomaly thresholds. The object is optional so an older node's configuration replacement leaves the saved thresholds unchanged. */
+        SpendDetection: {
+            enabled: boolean;
+            /**
+             * @description Create the account's user reminder for a detected anomaly. Leave off until every node can dispatch the spend_anomaly notice kind: an older dispatcher would mark it sent without sending it. Detection and alert channels do not depend on it.
+             * @default false
+             */
+            notify_users: boolean;
+            /** @description Recent window compared with the baseline. The detector runs every 10 minutes, so the window is at least 15 minutes and consecutive windows overlap. */
+            window_seconds: number;
+            /** @description The account's own history immediately before the recent window; at least window_seconds. */
+            baseline_seconds: number;
+            /**
+             * Format: int64
+             * @description Absolute floor for a spend spike, in billionths of a credit.
+             */
+            min_spend_nano: number;
+            /**
+             * Format: double
+             * @description Recent spend divided by the baseline's expected spend for the same window.
+             */
+            spend_ratio: number;
+            min_new_region_calls: number;
+            min_new_model_calls: number;
+        };
+        /** @description The call log's hot window. Every field is optional so an older node's response is read as the parts it has. */
+        Retention: {
+            /** @description Whole months older than this leave PostgreSQL for the object store. 0 keeps every partition. */
+            hot_days?: number;
+        };
+        RetentionRequest: {
+            hot_days: number;
+            reason: components["schemas"]["Reason"];
         };
         AlertRule: {
             id?: string;
@@ -1666,6 +2467,7 @@ export interface components {
             rev: number;
             rules: WithRequired<components["schemas"]["AlertRule"], "id" | "kind" | "minimum_severity" | "threshold" | "duration_seconds" | "channel" | "quiet_start" | "quiet_end" | "repeat_seconds">[];
             channels: WithRequired<components["schemas"]["AlertChannel"], "id">[];
+            spend_detection?: components["schemas"]["SpendDetection"];
             reason: components["schemas"]["Reason"];
         };
         AlertTestRequest: {
@@ -1758,8 +2560,54 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
-        /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        OperationsOverview: {
+            site_id?: components["schemas"]["SiteId"];
+            /** Format: date-time */
+            since?: string;
+            /** Format: date-time */
+            until?: string;
+            /** Format: int64 */
+            calls?: number;
+            /** Format: int64 */
+            errors?: number;
+            /** @description True when the window crosses a month the call log no longer retains, so calls, errors and the two rankings omit archived calls; revenue, cost and cash still cover the whole window. An old node leaves it out, which the page shows as unavailable rather than complete. */
+            calls_incomplete?: boolean;
+            /**
+             * Format: date-time
+             * @description The first instant of the oldest monthly partition the log still has; calls before it were archived. Absent with `calls_incomplete` true when no monthly partition remains, so no window can be answered from the log.
+             */
+            calls_available_since?: string;
+            revenue?: components["schemas"]["Money"];
+            cost?: components["schemas"]["Money"];
+            /** Format: int64 */
+            unknown_cost_calls?: number;
+            cash?: components["schemas"]["CashAmount"][];
+            top_accounts?: components["schemas"]["OverviewAccount"][];
+            top_models?: components["schemas"]["OverviewModel"][];
+        };
+        OverviewAccount: {
+            account_id?: components["schemas"]["AccountId"];
+            /** Format: int64 */
+            calls?: number;
+            /** Format: int64 */
+            errors?: number;
+        };
+        OverviewModel: {
+            model?: string;
+            /** Format: int64 */
+            calls?: number;
+            /** Format: int64 */
+            errors?: number;
+        };
+        /** @description An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it, and a report's sum can be wider than 64 bits. */
+        CashAmount: {
+            /** @example 1500000000 */
+            amount: string;
+            /** @example USD */
+            currency: string;
+        };
+        /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits. */
         Money: {
             /** @example 1500000000 */
             amount: string;
@@ -1818,6 +2666,17 @@ export interface components {
             expires_at: string;
             /** @description The permission names the session holds on its own scope (the user's account on the console, the platform on the admin), for showing or hiding what the user cannot do. The server decides again on every request. */
             permissions: string[];
+            /** @description What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it. */
+            consent?: components["schemas"]["SessionConsent"];
+        };
+        /** @description The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead. */
+        SessionConsent: {
+            /** @description Current documents this user has not accepted; empty when every one is accepted. */
+            required: components["schemas"]["LegalDocumentVersion"][];
+        };
+        LegalDocumentVersion: {
+            kind: components["schemas"]["LegalDocumentKind"];
+            version: number;
         };
         TotpSetup: {
             /** @description The new TOTP secret in base32. Nothing is stored yet; confirmTotp sends it back. */
@@ -1849,9 +2708,36 @@ export interface components {
             floor: components["schemas"]["Money"];
             available: components["schemas"]["Money"];
             spent_this_month: components["schemas"]["Money"];
+            /** @description The credit batches that still hold something, oldest credit first, with what is left in each and when it stops counting. An account with nothing is an empty array. Read in the same snapshot as the balance: absent on a node of the previous release, when the allocation could not be brought up to date in bounded time, or when a transaction committed after the last replay. The page then shows this part as unavailable rather than a number from a different moment. */
+            batches?: components["schemas"]["CreditBatch"][];
+        };
+        /** @description Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this batch, not what the next charge will take. */
+        CreditBatch: {
+            /** @description The batch's own identity; paid credit uses the order's ID as the batch ID. */
+            id: string;
+            /**
+             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave.
+             * @enum {string}
+             */
+            source: "gift" | "paid" | "redeem";
+            amount: components["schemas"]["Money"];
+            remaining: components["schemas"]["Money"];
+            frozen: components["schemas"]["Money"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When what is left of the batch stops counting. Absent when it never expires.
+             */
+            expires_at?: string;
         };
         /** @description An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text. */
         Uuid: string;
+        AdminSite: {
+            name: string;
+            /** @description Path on this admin host to the site's logo; absent when there is none. A node of the release before this field leaves it out, and the app falls back to the name. */
+            logo_url?: string;
+        };
         /** @description A site's ID (TypeID). */
         SiteId: string;
         /** @description A tier's ID (TypeID). */
@@ -1872,6 +2758,35 @@ export interface components {
         TierList: {
             data: components["schemas"]["TierRef"][];
         };
+        /**
+         * @description A third-party sign-in provider.
+         * @enum {string}
+         */
+        OAuthProvider: "github" | "google" | "linuxdo";
+        SiteOAuthProvider: {
+            provider: components["schemas"]["OAuthProvider"];
+            /** @description Absent until the application is stored. */
+            client_id?: string;
+            configured: boolean;
+        };
+        SiteSignIn: {
+            /** @description Absent when no login domain is set. */
+            login_domain?: string;
+            passkeys: boolean;
+            providers: components["schemas"]["SiteOAuthProvider"][];
+        };
+        SiteSignInUpdate: {
+            /** @description One of the site's enabled console domains; empty clears it. */
+            login_domain?: string;
+            passkeys: boolean;
+            reason: string;
+        };
+        SiteOAuthProviderUpdate: {
+            client_id: string;
+            /** @description Sealed at rest; never returned. */
+            client_secret: string;
+            reason: string;
+        };
         /** @description A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units. */
         SiteSettings: {
             console_idle_timeout_seconds?: number;
@@ -1879,6 +2794,58 @@ export interface components {
             admin_idle_timeout_seconds?: number;
             admin_max_age_seconds?: number;
             new_key_daily_limit?: components["schemas"]["Money"];
+        };
+        SiteLogoView: {
+            /** @description The logo in force; absent when the site has none. */
+            logo?: components["schemas"]["SiteLogo"];
+        };
+        SiteLogo: {
+            /** @enum {string} */
+            content_type: "image/svg+xml" | "image/png" | "image/webp";
+            /** @description SHA-256 of the bytes served, which the logo's public URL carries. */
+            hash: string;
+            /** @description Bytes served. */
+            size: number;
+            /** @description Pixels; 0 for an SVG with no intrinsic size. */
+            width: number;
+            height: number;
+            /** @description The bytes as a data URL, for the settings page's preview only; the change response leaves it out. Absent on a node of the release before this field. */
+            data_url?: string;
+        };
+        SiteLogoUpdate: {
+            reason: string;
+            /** @description The new logo; left out clears the site's logo. */
+            logo?: components["schemas"]["SiteLogoUpload"];
+        };
+        SiteLogoUpload: {
+            /** @enum {string} */
+            content_type: "image/svg+xml" | "image/png" | "image/webp";
+            /**
+             * Format: byte
+             * @description The file, at most 256 KiB before base64.
+             */
+            data_base64: string;
+        };
+        /** @enum {string} */
+        LegalDocumentKind: "terms" | "privacy";
+        /** @description One version of one of the site's legal documents; the text is plain text, never HTML. */
+        LegalDocument: {
+            kind: components["schemas"]["LegalDocumentKind"];
+            version: number;
+            body: string;
+            /** Format: date-time */
+            published_at: string;
+        };
+        LegalDocumentHistory: {
+            /** @description Newest first within a kind, at most `limit` rows. */
+            documents: components["schemas"]["LegalDocument"][];
+            /** @description Where the next page starts, or null on the last page. */
+            next_cursor: string | null;
+        };
+        LegalDocumentPublish: {
+            kind: components["schemas"]["LegalDocumentKind"];
+            body: string;
+            reason: components["schemas"]["Reason"];
         };
         SiteSettingsView: {
             settings: components["schemas"]["SiteSettings"];
@@ -1905,8 +2872,32 @@ export interface components {
             limits: components["schemas"]["LoginLimits"];
             reason: components["schemas"]["Reason"];
         };
+        /** @description Open registration: `mode` is the site's registration mode; the proof of work the page solves; the domains allowed and denied (an entry covers its subdomains, the deny list wins, and an empty allow list takes every domain the syntax allows); and the per-domain burst and hourly limits. */
+        RegistrationPolicy: {
+            /** @enum {string} */
+            mode: "invite" | "closed" | "open";
+            human_check: boolean;
+            human_check_bits: number;
+            domain_burst: number;
+            domain_per_hour: number;
+            domain_allow: string[];
+            domain_deny: string[];
+        };
+        RegistrationPolicyView: {
+            policy: components["schemas"]["RegistrationPolicy"];
+            /** @description What applies where the site sets no value. */
+            defaults: components["schemas"]["RegistrationPolicy"];
+        };
+        RegistrationPolicyUpdate: {
+            policy: components["schemas"]["RegistrationPolicy"];
+            reason: components["schemas"]["Reason"];
+        };
         AccountSuspension: {
             suspended: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        AccountTierChange: {
+            tier_id: components["schemas"]["TierId"];
             reason: components["schemas"]["Reason"];
         };
         UserSignIn: {
@@ -1963,6 +2954,8 @@ export interface components {
         };
         AccountDetail: {
             calls_suspended?: boolean;
+            /** @description Whether the owner cannot sign in. Absent on a node of the previous release, whose page then shows the sign-in part as unavailable. */
+            sign_in_disabled?: boolean;
             id: components["schemas"]["AccountId"];
             site_id: components["schemas"]["SiteId"];
             name: string;
@@ -2002,6 +2995,56 @@ export interface components {
             amount: components["schemas"]["Money"];
             /** @description Where it was received, such as a bank account. */
             channel: string;
+        };
+        /** @description A redeem code's ID (TypeID). */
+        RedeemCodeId: string;
+        /**
+         * @description A code's state as a page shows it: `expired` is an enabled code past its expiry, the stored state stays enabled.
+         * @enum {string}
+         */
+        RedeemCodeState: "enabled" | "used" | "disabled" | "expired";
+        /** @description One generation of codes: each worth `amount` of the site's currency, all with the same expiry and note. */
+        RedeemCodeBatchRequest: {
+            site_id: components["schemas"]["SiteId"];
+            amount: components["schemas"]["Money"];
+            /** @description How many codes the batch makes. */
+            count: number;
+            /** @description What the batch is for, shown beside each code. Absent: none. */
+            note?: string;
+            /**
+             * Format: date-time
+             * @description UTC, in the future. Absent: the codes never expire.
+             */
+            expires_at?: string;
+            reason: components["schemas"]["Reason"];
+        };
+        RedeemCode: {
+            id: components["schemas"]["RedeemCodeId"];
+            state: components["schemas"]["RedeemCodeState"];
+            amount: components["schemas"]["Money"];
+            note: string;
+            /** @description The code's last four characters; never the code. */
+            hint: string;
+            /** @description The code itself, shown only in the answer that made it, and never in a list or a read. Absent there. */
+            code?: string;
+            /**
+             * Format: date-time
+             * @description Absent: the code never expires.
+             */
+            expires_at?: string;
+            /** Format: date-time */
+            created_at: string;
+            created_by: components["schemas"]["UserId"];
+            /**
+             * Format: date-time
+             * @description When the code was redeemed; absent if it was not.
+             */
+            redeemed_at?: string;
+        };
+        RedeemCodeList: {
+            data: components["schemas"]["RedeemCode"][];
+            /** @description Absent on the last page. */
+            next_cursor?: string;
         };
         /** @description `amount` is the credit, in the site's currency. An offline payment has `payment`, and `exchange_rate` when it was converted from another currency. */
         CreditGrant: {
@@ -2118,6 +3161,27 @@ export interface components {
             facts?: {
                 [key: string]: unknown;
             };
+            pool?: components["schemas"]["SupplierPool"];
+        };
+        /** @description What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool, or a read has not reported it yet. */
+        SupplierPool: {
+            /** @description The accounts assigned to the group. */
+            accounts: number;
+            /** @description How many of them the pool marks failed: they cannot serve. */
+            failed: number;
+            /** @description How many of them the pool may schedule now. */
+            usable: number;
+            /** @description The mean room left in the tighter quota window of the accounts that can serve, in percent. Absent when no account reported a window. */
+            headroom?: number;
+            /** @description The effective capacity this leaves: headroom times the share of accounts that can serve, in percent. Absent when no account reported a window. */
+            capacity?: number;
+            /** @description Routing halves the group's weight while this is true. */
+            low: boolean;
+            /**
+             * Format: date-time
+             * @description When these numbers were recorded.
+             */
+            observed_at: string;
         };
         GroupSelection: {
             selected: boolean;
@@ -2177,11 +3241,16 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         /** @enum {string} */
-        ModelFormat: "messages" | "responses" | "chat";
+        ModelFormat: "messages" | "responses" | "chat" | "embeddings" | "rerank" | "completions";
+        /**
+         * @description The generation formats an endpoint test can exercise. Direct formats and legacy completions are listed on the endpoint but are not tested here yet.
+         * @enum {string}
+         */
+        TestFormat: "messages" | "responses" | "chat";
         EndpointTestRequest: {
             endpoint_id: components["schemas"]["Uuid"];
             /** @description The format to test it in; it must be one the endpoint serves. */
-            format: components["schemas"]["ModelFormat"];
+            format: components["schemas"]["TestFormat"];
             reason: components["schemas"]["Reason"];
         };
         /**
@@ -2209,7 +3278,7 @@ export interface components {
             model_id: components["schemas"]["Uuid"];
             /** @description The model's name at the supplier, which the call sent. */
             upstream_model: string;
-            format: components["schemas"]["ModelFormat"];
+            format: components["schemas"]["TestFormat"];
             outcome: components["schemas"]["EndpointTestOutcome"];
             problem?: components["schemas"]["EndpointTestProblem"];
             /** @description The supplier's HTTP status; 0 when it answered nothing. */
@@ -2250,6 +3319,8 @@ export interface components {
             group_id?: components["schemas"]["Uuid"];
             upstream_name: string;
             model_id: components["schemas"]["Uuid"];
+            /** @description Call formats the name serves beyond the adapter's own, such as `completions` for an OpenAI-type new-api endpoint whose model accepts the legacy API. Omitted: leave an existing declaration as it is. An empty array clears it. The projection unions the declaration with the adapter's formats, so the next sync keeps it. */
+            formats?: components["schemas"]["ModelFormat"][];
             reason: components["schemas"]["Reason"];
         };
         ModelMapping: {
@@ -2263,9 +3334,11 @@ export interface components {
             group_id?: components["schemas"]["Uuid"];
             upstream_name: string;
             model_id: components["schemas"]["Uuid"];
+            /** @description The call formats this alias declares beyond the adapter's; absent when it declares none. */
+            formats?: components["schemas"]["ModelFormat"][];
         };
         AuthorSlug: string;
-        /** @description `<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it. */
+        /** @description `<author>/<model>`, with optional `:free` and `@<version>` when the vendor gives one; lower case, as the catalog stores it. */
         ModelSlug: string;
         Author: {
             slug: components["schemas"]["AuthorSlug"];
@@ -2609,7 +3682,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The session may not do this: the permission is missing, the session has not passed two-step verification (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`). */
+        /** @description The session may not do this: the permission is missing, the session has not passed two-step verification (`mfa_required`), the Origin, content type or CSRF token is wrong (`origin_rejected`), or the current legal documents have not been accepted (`consent_required`). */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -2695,6 +3768,9 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 account_id?: components["schemas"]["AccountId"];
                 request_id?: string;
+                model?: string;
+                status?: components["schemas"]["AdminCallStatus"];
+                site_id?: components["schemas"]["SiteId"];
             };
             header?: never;
             path?: never;
@@ -2736,6 +3812,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCallTrace"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getOperationsOverview: {
+        parameters: {
+            query?: {
+                since?: string;
+                until?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsOverview"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -2866,6 +3970,179 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getAdminSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's brand. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSite"];
+                };
+            };
+            default: components["responses"]["Failure"];
+        };
+    };
+    getAdminSiteLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The logo. */
+            200: {
+                headers: {
+                    /** @description Long-lived and immutable, because the hash in the URL names the bytes. */
+                    "Cache-Control": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/svg+xml": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSiteBrand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's brand colour. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteBrand"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteBrand: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiteBrandUpdate"];
+            };
+        };
+        responses: {
+            /** @description The brand colour now in force. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteBrand"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSiteLogoAdmin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's current logo, or none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteLogoView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteLogo: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiteLogoUpdate"];
+            };
+        };
+        responses: {
+            /** @description The logo now in force. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteLogoView"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -3032,6 +4309,261 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    getSearchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSearchSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testSearchSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchConfigTest"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listMerchants: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest revision of each merchant account, without secrets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MerchantList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createMerchant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MerchantCreate"];
+            };
+        };
+        responses: {
+            /** @description The saved merchant account, without secrets. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Merchant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getMerchant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                merchant_id: components["schemas"]["MerchantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The merchant account, without secrets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Merchant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateMerchant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                merchant_id: components["schemas"]["MerchantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MerchantUpdate"];
+            };
+        };
+        responses: {
+            /** @description The saved merchant account, without secrets. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Merchant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    disableMerchant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                merchant_id: components["schemas"]["MerchantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The disabled merchant account, without secrets. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Merchant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     testMerchantSettings: {
         parameters: {
             query?: never;
@@ -3058,6 +4590,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listRedeemCodes: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                state?: components["schemas"]["RedeemCodeState"];
+                /** @description The beginning of a code batch's note, ignoring case. Omit for every note. */
+                note?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the site's codes, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createRedeemCodes: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemCodeBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description The codes made, with `code` in each; a replay of the key carries `code` in none of them. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    disableRedeemCode: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                code_id: components["schemas"]["RedeemCodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The code as it now is. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCode"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -3307,6 +4944,190 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    listPaymentOrders: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                account_id?: components["schemas"]["AccountId"];
+                user_id?: components["schemas"]["UserId"];
+                merchant_id?: components["schemas"]["MerchantId"];
+                state?: components["schemas"]["PaymentOrderState"];
+                /** @description Orders created at or after this time. */
+                since?: string;
+                /** @description Orders created before this time. */
+                until?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the site's orders, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentOrderList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listCashMovements: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                account_id?: components["schemas"]["AccountId"];
+                /** @description Transactions at or after this time. */
+                since?: string;
+                /** @description Transactions before this time. */
+                until?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the site's cash movements, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CashMovementList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPaymentRefunds: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                state?: components["schemas"]["PaymentRefundState"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the site's refunds, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentRefundList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    approvePaymentRefund: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                refund_id: components["schemas"]["RefundId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The refund as it stands after the approval. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentRefund"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    rejectPaymentRefund: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                refund_id: components["schemas"]["RefundId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The refund as it stands after the rejection. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentRefund"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getAlertConfiguration: {
         parameters: {
             query?: never;
@@ -3497,6 +5318,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlertTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getRetention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved window, or the code default before the first save. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Retention"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setRetention: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetentionRequest"];
+            };
+        };
+        responses: {
+            /** @description The saved window. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Retention"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -3780,6 +5663,142 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    getSiteSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteSignIn"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteSignIn: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiteSignInUpdate"];
+            };
+        };
+        responses: {
+            /** @description The settings as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteSignIn"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSiteOAuthProvider: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+                provider: components["schemas"]["OAuthProvider"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiteOAuthProviderUpdate"];
+            };
+        };
+        responses: {
+            /** @description The site's sign-in settings */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteSignIn"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    deleteSiteOAuthProvider: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+                provider: components["schemas"]["OAuthProvider"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The site's sign-in settings */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteSignIn"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getSiteKeyLimits: {
         parameters: {
             query?: never;
@@ -3904,6 +5923,135 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    getSiteRegistration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationPolicyView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteRegistration: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistrationPolicyUpdate"];
+            };
+        };
+        responses: {
+            /** @description The policy as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationPolicyView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listLegalDocuments: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The versions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalDocumentHistory"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    publishLegalDocument: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LegalDocumentPublish"];
+            };
+        };
+        responses: {
+            /** @description The published version */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalDocument"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     setAccountSuspension: {
         parameters: {
             query?: never;
@@ -3935,6 +6083,41 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setAccountTier: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountTierChange"];
+            };
+        };
+        responses: {
+            /** @description Tier stored; a repeated tier changes nothing */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };
     };

@@ -27,6 +27,7 @@ import (
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 const (
@@ -40,11 +41,12 @@ const (
 	// readinessEvery is how often readiness is compared with the snapshot's freshness: well inside routing's MaxStale,
 	// so a node is out of rotation within a second of its calls starting to fail.
 	readinessEvery = time.Second
-	// drainWait is how long the calls and the settlements they left in the background may take to end after the
-	// listeners stop, and abortGrace how long what is left has after its attempts are cancelled
-	// (internal/gateway/README.md「优雅退出」). What is still unsettled then is the cleanup's. deploy/compose.yaml's
-	// stop_grace_period covers AXIOM_SHUTDOWN_TIMEOUT, these two and the queue's and the recorder's own deadlines.
-	drainWait, abortGrace = 15 * time.Second, 5 * time.Second
+	// abortGrace is how long what the calls left in the background has after its attempts are cancelled
+	// (internal/gateway/README.md「优雅退出」); it comes out of the shutdown deadline the listeners drain under, so the
+	// calls and their settlements share that one deadline. What is still unsettled then is the cleanup's.
+	// deploy/compose.yaml's stop_grace_period covers the edge delay, AXIOM_SHUTDOWN_TIMEOUT and the queue's and the
+	// recorder's own deadlines.
+	abortGrace = 5 * time.Second
 )
 
 // callDeps is what a node's call path is built from: the modules it orchestrates, the secret it derives the
@@ -58,6 +60,7 @@ type callDeps struct {
 	accounts   *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
 	catalog    *catalog.Catalog
 	egress     *egress.Client
+	search     websearch.Searcher
 	gate       gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
 	limits     *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
 	records    *observability.Recorder // the call log, which the settlements write to
@@ -66,19 +69,26 @@ type callDeps struct {
 	proxies    []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
 	kv         *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
 	alerts     alert.Sink
+	// verify answers what an endpoint claims to serve, for model verification. Production sets it unless
+	// AXIOM_MODEL_VERIFICATION=off; a test whose fake upstream counts every generation leaves it nil, and the
+	// endpoint then stays unverified.
+	verify func(catalog.ModelID) (quality.Claimed, bool)
 }
 
 // callNode is a node's call path: the handler the public listener mounts and the executor, whose background work the
 // shutdown drains, the signal that routing can route, and the one loop whose end stops the node.
 type callNode struct {
-	handler  *gateway.Handler
-	executor *gateway.Executor
+	handler     *gateway.Handler
+	executor    *gateway.Executor
+	outstanding *gateway.Outstanding // what the handler and the executor count on, which Drain waits for
 	// upstreams is the path's suppliers, which the admin also tests an endpoint through: a test must go through the
 	// snapshot and the credentials the calls use, not a second view of the database.
 	upstreams *suppliers.Service
 	stop      context.CancelFunc // ends the loops; the node calls it after Drain, so the holder beats while settlements land
 	ready     func() bool        // whether the node can route now: its latest snapshot can route and is fresh
 	reaped    <-chan error       // carries what billing.Run ended with, when it is not a shutdown
+	// models is the list the route builder publishes with each snapshot, also read by the public models and prices page.
+	models *gateway.ModelList
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -111,6 +121,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	health, healthLoop, err := quality.Start(ctx, quality.Config{
 		Node: d.nodeID, DB: d.db, Scope: pg.PlatformScope(), Mode: d.healthMode,
 		Source: upstreams, Pauses: router, Alerts: d.alerts, Logger: d.logger, Meter: d.meter,
+		Identity: d.verify,
 	})
 	if err != nil {
 		return callNode{}, err
@@ -160,11 +171,11 @@ func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metr
 func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Service, ledger *billing.Billing, health *quality.Monitor,
 	models *gateway.ModelList,
 ) (callNode, error) {
-	memory := protocol.NewMemory(nodeMemory)
+	memory, outstanding := protocol.NewMemory(nodeMemory), gateway.NewOutstanding()
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
 		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
 		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
-		Records: d.records, Quality: health,
+		Records: d.records, Quality: health, Outstanding: outstanding, Search: d.search,
 	})
 	if err != nil {
 		return callNode{}, err
@@ -172,8 +183,9 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
+		Outstanding: outstanding, Search: d.search,
 	})
-	return callNode{handler: handler, executor: executor, upstreams: upstreams}, err
+	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models}, err
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and
@@ -253,14 +265,13 @@ func announceReady(ctx context.Context, ready func() bool, every time.Duration, 
 	return func() { cancel(); <-done }
 }
 
-// Drain gives the calls in flight and the settlements they left in the background up to drainWait to end, after the
-// listeners have stopped admitting, and abortGrace more once their attempts are cancelled: what still has not ended is
-// the cleanup's (internal/gateway/README.md「故障矩阵」).
+// Drain gives the requests in flight, the calls and the settlements they left in the background until the shutdown
+// deadline, after the listeners have stopped admitting. Attempts are cancelled abortGrace before that deadline, and
+// what is still not settled when it ends is the cleanup's (internal/gateway/README.md「故障矩阵」).
 func (c callNode) Drain(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, drainWait)
-	defer cancel()
-	c.handler.Drain(ctx) // the reservations of admissions that were lost
-	c.executor.Drain(ctx, abortGrace)
+	if c.outstanding != nil {
+		c.outstanding.Drain(ctx, abortGrace)
+	}
 }
 
 // reloadEndpoints rebuilds the suppliers' snapshot every reloadEvery until ctx ends, so that a change made in the admin
@@ -369,4 +380,35 @@ func loadCallInputs(ctx context.Context, upstreams *suppliers.Service, cat *cata
 		return err
 	}
 	return cat.Refresh(ctx)
+}
+
+// claimedByCatalog answers what an endpoint claims to serve from the catalog's current snapshot: the author's display
+// name, which a verification answer must carry, and every other author's display name, which instead contradicts the
+// claim. The snapshot is read when a check is due, in the health loop, never on the call path
+// (docs/domains/quality.md「真伪检测」).
+func claimedByCatalog(cat *catalog.Catalog) func(catalog.ModelID) (quality.Claimed, bool) {
+	return func(id catalog.ModelID) (quality.Claimed, bool) {
+		snap, err := cat.Current()
+		if err != nil {
+			return quality.Claimed{}, false
+		}
+		m, ok := snap.Model(id)
+		if !ok || m.AuthorName == "" {
+			return quality.Claimed{}, false
+		}
+		others := make([]string, 0, 8)
+		seen := make(map[string]struct{}, 8)
+		for other := range snap.Models() {
+			name := other.AuthorName
+			if name == "" || name == m.AuthorName {
+				continue
+			}
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			others = append(others, name)
+		}
+		return quality.Claimed{Author: m.AuthorName, Others: others}, true
+	}
 }

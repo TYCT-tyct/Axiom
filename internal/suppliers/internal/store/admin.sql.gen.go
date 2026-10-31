@@ -22,7 +22,7 @@ func (q *Queries) BumpConfigGen(ctx context.Context, db DBTX, id uuid.UUID) erro
 }
 
 const currentAlias = `-- name: CurrentAlias :many
-SELECT a.id, COALESCE(r.model_id, a.model_id) AS model_id, COALESCE(r.revision, 1)::bigint AS revision
+SELECT a.id, COALESCE(r.model_id, a.model_id) AS model_id, COALESCE(r.revision, 1)::bigint AS revision, a.formats
 FROM suppliers.supplier_aliases a
 LEFT JOIN LATERAL (SELECT model_id, revision FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY revision DESC LIMIT 1) r ON true
 WHERE a.supplier_id = $1 AND a.supplier_group_id IS NOT DISTINCT FROM $2::uuid
@@ -39,6 +39,7 @@ type CurrentAliasRow struct {
 	ID       uuid.UUID
 	ModelID  uuid.UUID
 	Revision int64
+	Formats  []string
 }
 
 func (q *Queries) CurrentAlias(ctx context.Context, db DBTX, arg CurrentAliasParams) ([]CurrentAliasRow, error) {
@@ -50,7 +51,12 @@ func (q *Queries) CurrentAlias(ctx context.Context, db DBTX, arg CurrentAliasPar
 	var items []CurrentAliasRow
 	for rows.Next() {
 		var i CurrentAliasRow
-		if err := rows.Scan(&i.ID, &i.ModelID, &i.Revision); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.ModelID,
+			&i.Revision,
+			&i.Formats,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -134,7 +140,9 @@ func (q *Queries) GetCredentialOf(ctx context.Context, db DBTX, arg GetCredentia
 }
 
 const getGroupOf = `-- name: GetGroupOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+    pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
+    pool_observed_at
 FROM suppliers.supplier_groups WHERE supplier_id = $1 AND id = $2
 `
 
@@ -144,14 +152,21 @@ type GetGroupOfParams struct {
 }
 
 type GetGroupOfRow struct {
-	ID          uuid.UUID
-	UpstreamRef string
-	Name        string
-	Ratio       string
-	Facts       []byte
-	Selected    bool
-	Codename    *string
-	Present     bool
+	ID             uuid.UUID
+	UpstreamRef    string
+	Name           string
+	Ratio          string
+	Facts          []byte
+	Selected       bool
+	Codename       *string
+	Present        bool
+	PoolAccounts   *int32
+	PoolFailed     *int32
+	PoolUsable     *int32
+	PoolHeadroom   *int32
+	PoolCapacity   *int32
+	PoolLow        bool
+	PoolObservedAt *time.Time
 }
 
 func (q *Queries) GetGroupOf(ctx context.Context, db DBTX, arg GetGroupOfParams) ([]GetGroupOfRow, error) {
@@ -172,6 +187,13 @@ func (q *Queries) GetGroupOf(ctx context.Context, db DBTX, arg GetGroupOfParams)
 			&i.Selected,
 			&i.Codename,
 			&i.Present,
+			&i.PoolAccounts,
+			&i.PoolFailed,
+			&i.PoolUsable,
+			&i.PoolHeadroom,
+			&i.PoolCapacity,
+			&i.PoolLow,
+			&i.PoolObservedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -246,8 +268,8 @@ func (q *Queries) GetSupplierView(ctx context.Context, db DBTX, id uuid.UUID) ([
 }
 
 const insertAlias = `-- name: InsertAlias :one
-INSERT INTO suppliers.supplier_aliases (supplier_id, supplier_group_id, upstream_name, model_id, set_by)
-VALUES ($1, $2, $3, $4, 'user')
+INSERT INTO suppliers.supplier_aliases (supplier_id, supplier_group_id, upstream_name, model_id, formats, set_by)
+VALUES ($1, $2, $3, $4, $5, 'user')
 RETURNING id
 `
 
@@ -256,6 +278,7 @@ type InsertAliasParams struct {
 	SupplierGroupID *uuid.UUID
 	UpstreamName    string
 	ModelID         uuid.UUID
+	Formats         []string
 }
 
 func (q *Queries) InsertAlias(ctx context.Context, db DBTX, arg InsertAliasParams) (uuid.UUID, error) {
@@ -264,6 +287,7 @@ func (q *Queries) InsertAlias(ctx context.Context, db DBTX, arg InsertAliasParam
 		arg.SupplierGroupID,
 		arg.UpstreamName,
 		arg.ModelID,
+		arg.Formats,
 	)
 	var id uuid.UUID
 	err := row.Scan(&id)
@@ -433,19 +457,28 @@ func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.
 }
 
 const listGroupsOf = `-- name: ListGroupsOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+    pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
+    pool_observed_at
 FROM suppliers.supplier_groups WHERE supplier_id = $1 ORDER BY name, id
 `
 
 type ListGroupsOfRow struct {
-	ID          uuid.UUID
-	UpstreamRef string
-	Name        string
-	Ratio       string
-	Facts       []byte
-	Selected    bool
-	Codename    *string
-	Present     bool
+	ID             uuid.UUID
+	UpstreamRef    string
+	Name           string
+	Ratio          string
+	Facts          []byte
+	Selected       bool
+	Codename       *string
+	Present        bool
+	PoolAccounts   *int32
+	PoolFailed     *int32
+	PoolUsable     *int32
+	PoolHeadroom   *int32
+	PoolCapacity   *int32
+	PoolLow        bool
+	PoolObservedAt *time.Time
 }
 
 func (q *Queries) ListGroupsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListGroupsOfRow, error) {
@@ -466,6 +499,13 @@ func (q *Queries) ListGroupsOf(ctx context.Context, db DBTX, supplierID uuid.UUI
 			&i.Selected,
 			&i.Codename,
 			&i.Present,
+			&i.PoolAccounts,
+			&i.PoolFailed,
+			&i.PoolUsable,
+			&i.PoolHeadroom,
+			&i.PoolCapacity,
+			&i.PoolLow,
+			&i.PoolObservedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -796,5 +836,19 @@ type SetSupplierStatusBumpingConfigGenParams struct {
 // A change of status raises the configuration generation, so a round of the sync that began before is discarded.
 func (q *Queries) SetSupplierStatusBumpingConfigGen(ctx context.Context, db DBTX, arg SetSupplierStatusBumpingConfigGenParams) error {
 	_, err := db.Exec(ctx, setSupplierStatusBumpingConfigGen, arg.Status, arg.StatusReason, arg.ID)
+	return err
+}
+
+const updateAliasFormats = `-- name: UpdateAliasFormats :exec
+UPDATE suppliers.supplier_aliases SET formats = $1 WHERE id = $2
+`
+
+type UpdateAliasFormatsParams struct {
+	Formats []string
+	ID      uuid.UUID
+}
+
+func (q *Queries) UpdateAliasFormats(ctx context.Context, db DBTX, arg UpdateAliasFormatsParams) error {
+	_, err := db.Exec(ctx, updateAliasFormats, arg.Formats, arg.ID)
 	return err
 }

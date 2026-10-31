@@ -11,6 +11,8 @@ import (
 )
 
 func TestExchangeCurrentReadIsBoundedByPairs(t *testing.T) {
+	t.Parallel()
+
 	f := newRules(t)
 	codes := slices.Sorted(maps.Keys(minorDigits))
 	pairs := len(codes) * (len(codes) - 1) / 2

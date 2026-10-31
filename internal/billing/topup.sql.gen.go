@@ -11,6 +11,21 @@ import (
 	"uuid"
 )
 
+const setTopUpBuffer = `-- name: SetTopUpBuffer :exec
+INSERT INTO billing.top_up_buffers (site_id, ppm) VALUES ($1, $2)
+ON CONFLICT (site_id) DO UPDATE SET ppm = excluded.ppm
+`
+
+type SetTopUpBufferParams struct {
+	SiteID uuid.UUID
+	Ppm    int32
+}
+
+func (q *Queries) SetTopUpBuffer(ctx context.Context, db DBTX, arg SetTopUpBufferParams) error {
+	_, err := db.Exec(ctx, setTopUpBuffer, arg.SiteID, arg.Ppm)
+	return err
+}
+
 const topUpBuffer = `-- name: TopUpBuffer :many
 SELECT ppm FROM billing.top_up_buffers WHERE site_id = $1
 `

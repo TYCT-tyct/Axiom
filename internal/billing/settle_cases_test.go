@@ -11,6 +11,8 @@ import (
 
 // TestWaiverPricesPerUseItemsAtTheBand: a waived call's search is priced at the band its whole prompt falls in.
 func TestWaiverPricesPerUseItemsAtTheBand(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 	banded := metered(t)
 	banded.Price = mustSchedule(t, `{"v":1,"currency":"USD",
@@ -25,6 +27,8 @@ func TestWaiverPricesPerUseItemsAtTheBand(t *testing.T) {
 // TestSettleReleasesWithoutAttempts: a call that never reached an upstream is released once, with a profit of 0 (no
 // attempt ran, so there is no cost to be unknown), and cleanup leaves it.
 func TestSettleReleasesWithoutAttempts(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	h := b.hold(1000)
 	for range 2 {
@@ -53,6 +57,8 @@ func unknown(t *testing.T, input int64, field, value string) Segment {
 // TestSettleReturnsTheStoredFinal: a retry returns what the first Settle stored, whatever outcome it carries, and an
 // estimated charge is settled like any other, so cleanup finds nothing to move on.
 func TestSettleReturnsTheStoredFinal(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	h := b.hold(1000)
 	first, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 300, 20, 0, in)))
@@ -73,6 +79,8 @@ func TestSettleReturnsTheStoredFinal(t *testing.T) {
 // TestEndRequest: suppliers learn of a request's end once it is terminal, in the same transaction, and not before:
 // a settled call ends at once, a pending one only when cleanup releases it.
 func TestEndRequest(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Millisecond})
 	settled, pending := b.hold(100), b.hold(100)
 	if _, err := b.billing.Settle(t.Context(), settled, outcome(Committed, FinishStop, used(t, 50, 20, 0))); err != nil {

@@ -139,6 +139,12 @@ func (o *Operator) insertSite(ctx context.Context, tx pg.Tx, spec SiteSpec, site
 			return err
 		}
 	}
+	// The console domain is the login domain from the start: passkeys bind to it, and providers redirect back to it,
+	// so choosing it later would mean remembering which credentials predate the choice.
+	domain := spec.Hosts[Console]
+	if _, err := o.queries.SetLoginDomain(ctx, tx, SetLoginDomainParams{Domain: &domain, SiteID: site}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -292,6 +298,9 @@ func (o *Operator) changeFactor(ctx context.Context, email, action string, chang
 			return err
 		}
 		if err := change(tx, user.ID); err != nil {
+			return err
+		}
+		if err := o.queries.BumpFactorVersion(ctx, tx, user.ID); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Actor: operator, Action: action, Target: userTarget(site, user.AccountID, user.ID)})

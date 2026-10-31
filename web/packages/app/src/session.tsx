@@ -38,7 +38,26 @@ export const accountKey = "account";
 
 // Whose session it is. The cookie is shared by every tab of the browser, so another tab can end one person's session and
 // start another's while this page is open; the session this page then reads is the other's.
-const identityOf = (session: Session | null) => (session ? `${session.user.id}/${session.account}` : "");
+export const identityOf = (session: Session | null) => (session ? `${session.user.id}/${session.account}` : "");
+
+// sessionBinding names the session itself, not just the person: the CSRF token is minted with the session, so an answer
+// that started under one session is not shown under the next one of the same person.
+export function sessionBinding(session: Session | null): string {
+  return session ? `${identityOf(session)}/${session.csrf_token}` : "";
+}
+
+// currentSession is the session the cache holds now, without fetching: work that started earlier reads it before showing
+// its answer, because the person or the session may have changed while the request was out.
+export function currentSession(client: QueryClient): Session | null {
+  return client.getQueryData<Session | null>(sessionKey) ?? null;
+}
+
+// useCachedSession is the same as currentSession for a component that must react to the change, such as the recovery
+// codes host: it does not fetch, only follows what the session query already holds.
+export function useCachedSession(): Session | null {
+  const { api } = useAuth();
+  return useQuery({ ...sessionQuery(api), enabled: false }).data ?? null;
+}
 
 // What the session may do. A change of it without a change of person keeps the pages (a dialog may hold what is shown
 // once) but not the data the lost permission read.
@@ -90,13 +109,14 @@ export function endSession(queryClient: QueryClient) {
   queryClient.removeQueries({ queryKey: [accountKey] });
 }
 
-// useStartSession adopts the CSRF token of a new session and loads it.
+// useStartSession adopts the CSRF token of a new session and loads it, returning what it loaded so a page that has just
+// shown something from the change (recovery codes) can use the new session's token.
 export function useStartSession() {
   const queryClient = useQueryClient();
   const { api } = useAuth();
   return async (csrfToken: string) => {
     setCsrfToken(csrfToken);
-    await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
+    return await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
   };
 }
 

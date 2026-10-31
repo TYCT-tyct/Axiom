@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -64,9 +65,8 @@ func TestKeyringRetireRecoversAfterMetadataCommitted(t *testing.T) {
 	f.run("retire", "--version", "1")
 	// Reproduce a crash after the retirement commit but before the file replacement.
 	restoreKeyFile(t, f.path, both)
-	if _, _, err := f.r.Check(t.Context()); err == nil || !strings.Contains(err.Error(), "still in the local file: [1]") {
-		t.Fatalf("a node still holding the retired version passed check: %v", err)
-	}
+	// An operator can clear the file left behind by rerunning retire; the tombstone is already committed, so this writes
+	// no second audit entry.
 	f.run("retire", "--version", "1")
 	if got := f.text("SELECT count(*)::text FROM platform.audit_log WHERE action='keyring.retire'"); got != "1" {
 		t.Fatalf("retry recorded %s retirements, want one", got)
@@ -76,6 +76,129 @@ func TestKeyringRetireRecoversAfterMetadataCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.verifyRotated(ring)
+}
+
+// interruptedRetirement leaves a ring in the state a crash between a retirement's commit and its file edit leaves it:
+// version 1 is tombstoned and unreferenced, but both versions are still in the file.
+func interruptedRetirement(t *testing.T) rotationFixture {
+	t.Helper()
+	f := newRotationFixture(t)
+	f.run("add", "--version", "2")
+	both, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.run("activate", "--version", "2")
+	f.run("rewrap")
+	f.run("retire", "--version", "1")
+	restoreKeyFile(t, f.path, both)
+	return f
+}
+
+// wantHealedRetirement is the state after pruning a version that no envelope references: the file and the ring lose it,
+// and the already-committed retirement is not recorded a second time.
+func wantHealedRetirement(t *testing.T, f rotationFixture, ring *secret.Keyring, status secret.KeyStatus) {
+	t.Helper()
+	if status.Active != 2 || len(status.Readable) != 1 || len(status.Retired) != 1 {
+		t.Fatalf("status after the recovery: %+v", status)
+	}
+	f.verifyRotated(ring)
+	if got := f.text("SELECT count(*)::text FROM platform.audit_log WHERE action='keyring.retire'"); got != "1" {
+		t.Fatalf("prune recorded %s retirements, want one", got)
+	}
+}
+
+// TestKeyringCheckPrunesAnInterruptedRetirement: a retirement commits its tombstone before it edits the file, so a crash
+// between the two leaves a node holding a retired version. Check clears it when no envelope references it, so the state
+// does not keep a restarting node down until an operator runs retire.
+func TestKeyringCheckPrunesAnInterruptedRetirement(t *testing.T) {
+	t.Parallel()
+	f := interruptedRetirement(t)
+	ring, status, err := f.r.Check(t.Context())
+	if err != nil {
+		t.Fatalf("check after an interrupted retirement: %v", err)
+	}
+	wantHealedRetirement(t, f, ring, status)
+}
+
+// TestKeyringCheckPrunesOnlyTheCandidateCopy is the PITR runbook's copy step: the real check command repairs the file it
+// is pointed at, so an operator must point it at a working copy. The archived historical master has to stay byte-for-byte
+// unchanged, or a later restore target that still needs the retired version loses its only copy.
+func TestKeyringCheckPrunesOnlyTheCandidateCopy(t *testing.T) {
+	t.Parallel()
+	f := interruptedRetirement(t)
+	archived, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(t.TempDir(), "master")
+	if err := os.WriteFile(candidate, archived, 0o600); err != nil { //nolint:gosec // candidate is this test's temp file
+		t.Fatal(err)
+	}
+	for i, entry := range f.environ {
+		if strings.HasPrefix(entry, masterKeyFileVar+"=") {
+			f.environ[i] = masterKeyFileVar + "=" + candidate
+		}
+	}
+
+	f.run("check")
+
+	untouched, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(untouched, archived) {
+		t.Fatal("check modified the archived historical master")
+	}
+	checked, err := os.ReadFile(candidate) //nolint:gosec // candidate is this test's temp file
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(string(checked), "\n") {
+		if strings.HasPrefix(line, "1:") {
+			t.Fatal("check did not prune the retired, unreferenced version from the candidate")
+		}
+	}
+	if !strings.Contains(string(checked), "2:") {
+		t.Fatal("check removed the active version from the candidate")
+	}
+}
+
+// TestKeyringRefreshPrunesAnInterruptedRetirement: the running lifecycle heals the same state on a tick, and installs the
+// ring it read, so a node that was offline during the retirement recovers without a restart.
+func TestKeyringRefreshPrunesAnInterruptedRetirement(t *testing.T) {
+	t.Parallel()
+	f := interruptedRetirement(t)
+	ring, err := secret.Load(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := f.r.Refresh(t.Context(), ring)
+	if err != nil {
+		t.Fatalf("refresh after an interrupted retirement: %v", err)
+	}
+	wantHealedRetirement(t, f, ring, status)
+}
+
+// TestKeyringCheckKeepsReferencedRetiredMaterial: a tombstone with a stored envelope still pointing at the version is not
+// a completed retirement. The check must refuse and leave the only key that can read that envelope in place rather than
+// clearing the file into unrecoverable data; only a damaged or hand-edited database reaches this state, which is exactly
+// when deleting the key would be worst.
+func TestKeyringCheckKeepsReferencedRetiredMaterial(t *testing.T) {
+	t.Parallel()
+	f := newRotationFixture(t)
+	f.run("add", "--version", "2")
+	f.run("activate", "--version", "2")
+	if err := pgtest.Run(t.Context(), f.database.Superuser,
+		"UPDATE platform.key_versions SET state='retired' WHERE version=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.r.Check(t.Context()); err == nil || !strings.Contains(err.Error(), "still referenced") {
+		t.Fatalf("check accepted a retired version that stored envelopes reference: %v", err)
+	}
+	if contents, err := os.ReadFile(f.path); err != nil || !bytes.Contains(contents, []byte("1:")) {
+		t.Fatal("the check deleted a key that stored envelopes still reference")
+	}
 }
 
 func TestKeyringInventoryFailsClosed(t *testing.T) {

@@ -1,3 +1,4 @@
+//nolint:revive // the fixture helpers are one shared table; splitting them would move the harness, not shorten it
 package gateway
 
 import (
@@ -19,10 +20,12 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // The executor's tests run in a synctest bubble, with nothing real in the way: a supplier that is a script of answers
@@ -344,15 +347,18 @@ type options struct {
 	cost         int64            // of every attempt
 	costNotKnown bool             // whether Costs says the cost leaves something out
 	costErr      error            // the error Costs fails with
+	costs        Costs            // replaces the fake when set
+	request      []byte           // the client's body, instead of its format's sample
 	stream       *bool            // the request's stream member; true when nil
 	supplier     func(n int) int
 	alive        func() bool
 	mutate       func(*Call)
 	noSlot       []int
-	memory       int64            // the node's budget; memorySize when zero
-	price        string           // the entries' price schedule; cheap when empty
-	logs         *bytes.Buffer    // the node's log, discarded when nil
-	health       *quality.Monitor // what the attempts tell; a new one when nil
+	memory       int64              // the node's budget; memorySize when zero
+	price        string             // the entries' price schedule; cheap when empty
+	search       websearch.Searcher // the web plugin's backend; nil means the feature is off
+	logs         *bytes.Buffer      // the node's log, discarded when nil
+	health       *quality.Monitor   // what the attempts tell; a new one when nil
 }
 
 type harness struct {
@@ -376,6 +382,7 @@ type harness struct {
 	settlements []settlement
 	extensions  []billing.ExtendRequest
 	released    chan struct{} // closed by the call's Done
+	drained     bool          // the call starts after the node drained, so it writes no settlement
 }
 
 const memorySize = 1 << 30
@@ -391,8 +398,14 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if o.upstream != nil {
 		upstream = *o.upstream
 	}
-	all, _ := sample(t, upstream)
-	_, request := sample(t, client)
+	var all []string
+	var request []byte
+	if o.request != nil {
+		request = o.request
+	} else {
+		all, _ = sample(t, upstream)
+		_, request = sample(t, client)
+	}
 	h := &harness{t: t, w: newClientWriter(), events: all, started: time.Now(), released: make(chan struct{}), health: o.health}
 	if h.health == nil {
 		h.health = quality.New(nil)
@@ -426,10 +439,15 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if o.logs != nil {
 		logger = slog.New(slog.NewTextHandler(o.logs, nil))
 	}
+	var costs Costs = fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr}
+	if o.costs != nil {
+		costs = o.costs
+	}
 	h.exec, err = NewExecutor(ExecDeps{
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
-		Ledger: &fakeLedger{h: h, o: o}, Costs: fakeCosts{cost: o.cost, known: !o.costNotKnown, err: o.costErr},
-		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health,
+		Ledger: &fakeLedger{h: h, o: o}, Costs: costs,
+		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health, Outstanding: NewOutstanding(),
+		Search: o.search,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -453,12 +471,7 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		h.t.Fatal(err)
 	}
 	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
-	if o.stream != nil {
-		req.Stream = *o.stream
-		if !*o.stream { // the client's body says so too, and the endpoint still has to be asked for a stream
-			request = bytes.Replace(request, []byte(`"stream": true`), []byte(`"stream": false`), 1)
-		}
-	}
+	request = setStream(&req, request, o.stream)
 	var quotes []billing.Quotable
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}
 	for i := 1; i <= n; i++ {
@@ -481,6 +494,9 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		}
 		h.up.eps[uuid.UUID(ep(i))] = &fakeEndpoint{script: script, policy: o.policy, noSlot: slices.Contains(o.noSlot, i)}
 	}
+	if req.Web != nil {
+		req.SearchBytes = protocol.WebSearchMaxBytes
+	}
 	// The same segment settings the harness gave the executor (newHarness), from the one place they are chosen.
 	segments := cmpOr(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
 	r, err := billing.Quote(routing.DemandOf(&req), quotes, segments, nil)
@@ -491,11 +507,29 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		ID: uuid.NewV7(), Format: client, Request: req, Body: request,
 		Header: http.Header{"Anthropic-Beta": {"beta-1"}}, Hold: &billing.Hold{Reservation: r}, Plan: plan,
 	}
+	if req.Web != nil {
+		if c.search, err = protocol.ChatSearchQuery(request); err != nil {
+			h.t.Fatal(err)
+		}
+	}
 	c.hold(func() { close(h.released) })
 	if o.mutate != nil {
 		o.mutate(c)
 	}
 	return c
+}
+
+// setStream applies the harness's stream option to the client's body too: the endpoint still has to be asked for a
+// stream, so the body's own member has to agree with the request's.
+func setStream(req *protocol.Request, body []byte, stream *bool) []byte {
+	if stream == nil {
+		return body
+	}
+	req.Stream = *stream
+	if *stream {
+		return body
+	}
+	return bytes.Replace(body, []byte(`"stream": true`), []byte(`"stream": false`), 1)
 }
 
 func cmpOr[T comparable](v, fallback T) T {
@@ -513,7 +547,7 @@ type fakeLedger struct {
 	o options
 }
 
-func (l *fakeLedger) Extend(ctx context.Context, _ *billing.Hold, r billing.ExtendRequest) error {
+func (l *fakeLedger) ExtendIn(ctx context.Context, _ pg.Tx, _ *billing.Hold, r billing.ExtendRequest) error {
 	l.h.mu.Lock()
 	l.h.extensions = append(l.h.extensions, r)
 	l.h.mu.Unlock()
@@ -523,7 +557,7 @@ func (l *fakeLedger) Extend(ctx context.Context, _ *billing.Hold, r billing.Exte
 	return l.o.extend(ctx, r)
 }
 
-func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outcome) (billing.Final, error) {
+func (l *fakeLedger) SettleIn(ctx context.Context, _ pg.Tx, _ *billing.Hold, o billing.Outcome) (billing.Final, func(), error) {
 	h := l.h
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -535,9 +569,20 @@ func (l *fakeLedger) Settle(ctx context.Context, _ *billing.Hold, o billing.Outc
 		outcome: o, body: h.w.body(), held: h.up.outstanding(), callerOK: ctx.Err() == nil, err: err, at: time.Now(),
 	})
 	if err != nil {
-		return billing.Final{}, err
+		return billing.Final{}, nil, err
 	}
-	return l.o.final, nil
+	return l.o.final, nil, nil
+}
+
+// RunBatch is the fake's one transaction: the works never touch the database, so a zero transaction is enough. A
+// work's error carries its index as the real batch's does, so the caller can retry the other works.
+func (*fakeLedger) RunBatch(_ context.Context, _ pg.Scope, works []func(pg.Tx) error) error {
+	for i, work := range works {
+		if err := work(pg.Tx{}); err != nil {
+			return &billing.BatchWorkError{Index: i, Err: err}
+		}
+	}
+	return nil
 }
 
 // fakeCosts is what Costs answers the tests: a cost, whether that is all of it, and an error to fail with. The native
@@ -581,8 +626,8 @@ func (h *harness) start() <-chan struct{} {
 }
 
 // check waits for the call to give its slots back, which may be after Run returns, and checks what holds however it
-// ended: every try of the settlement had the same outcome, at most one was written, nothing is held, and the node's
-// memory is back to the byte, neither left charged nor given back twice.
+// ended: every try of the settlement had the same outcome, at most one was written (none after a drain), nothing is
+// held, and the node's memory is back to the byte, neither left charged nor given back twice.
 func (h *harness) check() {
 	h.t.Helper()
 	<-h.released
@@ -598,7 +643,7 @@ func (h *harness) check() {
 			h.t.Errorf("a retry settled %+v, the first try %+v", s.outcome, all[0].outcome)
 		}
 	}
-	if len(all) == 0 || written > 1 {
+	if (len(all) == 0) != h.drained || written > 1 {
 		h.t.Errorf("%d tries of the settlement, %d written", len(all), written)
 	}
 	if held := h.up.outstanding(); held != 0 {

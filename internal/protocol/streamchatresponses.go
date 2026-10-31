@@ -143,7 +143,7 @@ func (s *chatToNative) response(status string, usage []byte) jsontext.Value {
 	}
 	response := requestObject{
 		"id": jsonValue(s.o.ID), "object": jsonValue("response"), "created_at": jsonValue(s.o.Created),
-		"model": jsonValue(s.o.Model), "status": jsonValue(status), "output": jsonValue(items),
+		"model": jsonValue(s.o.modelName()), "status": jsonValue(status), "output": jsonValue(items),
 		"error": jsontext.Value("null"), "incomplete_details": jsontext.Value("null"),
 		"usage": jsontext.Value("null"),
 	}

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"math"
 	"net/netip"
 	"strconv"
@@ -17,9 +18,10 @@ import (
 
 // The kinds of attempt before sign-in, as the shared store's keys name them (internal/platform/kv/README.md「键」).
 const (
-	ipKind    = "ip"
-	emailKind = "email"
-	userKind  = "user"
+	ipKind     = "ip"
+	emailKind  = "email"
+	userKind   = "user"
+	domainKind = "signup_domain"
 )
 
 // takeScript spends one of a bucket's attempts, and giveScript returns one it spent: the same GCRA as buckets.take and
@@ -227,6 +229,11 @@ func failing[K comparable](s *Service, ctx context.Context, l loginLimit[K], att
 		return &TooManyAttempts{RetryAfter: wait}
 	}
 	if err := attempt(); err != nil {
+		// A correct password sent to the wrong console domain is not a guess: do not let repeated attempts spend
+		// the email's failure budget and lock a user out of a sign-in they could have made elsewhere.
+		if errors.Is(err, ErrWrongLoginDomain) {
+			giveAttempt(s, ctx, l, at)
+		}
 		return err
 	}
 	giveAttempt(s, ctx, l, at)

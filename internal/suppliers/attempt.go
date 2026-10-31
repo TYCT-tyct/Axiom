@@ -78,9 +78,12 @@ var wire = map[protocol.Format]struct {
 	path    string
 	version string
 }{
-	protocol.Chat:      {path: "/v1/chat/completions"},
-	protocol.Responses: {path: "/v1/responses"},
-	protocol.Messages:  {path: "/v1/messages", version: "2023-06-01"},
+	protocol.Chat:        {path: "/v1/chat/completions"},
+	protocol.Responses:   {path: "/v1/responses"},
+	protocol.Messages:    {path: "/v1/messages", version: "2023-06-01"},
+	protocol.Embeddings:  {path: "/v1/embeddings"},
+	protocol.Rerank:      {path: "/v1/rerank"},
+	protocol.Completions: {path: "/v1/completions"},
 }
 
 // compactPaths are the formats' compaction endpoints: the one call the supplier answers whole, whose path is not the
@@ -142,6 +145,27 @@ func (s *Service) acquire(id EndpointID, probe bool, avoid uuid.UUID) (*Attempt,
 		return &Attempt{s: s, ep: ep, cred: best, priced: now, fundsRest: fundsRest}, nil
 	}
 	return nil, ErrNoSlot
+}
+
+// Capacity is one endpoint's live credential capacity: whether any of its credentials can take another call now. It
+// reads the state Acquire reads before it takes a slot — concurrency, the supplier account's rolling minute, rest and
+// expiry — so a plan that finds room can still lose the slot to a concurrent call: Acquire stays the hard bound, and a
+// call that loses the race moves on to its next entry (internal/suppliers/README.md「并发与速率」).
+type Capacity struct {
+	s  *Service
+	id EndpointID
+}
+
+// Full reports whether no credential of the endpoint can take a call now. The endpoint is read from the current
+// snapshot every time, so a Reload and the shares SyncShares applies are seen without rebuilding the routing snapshot;
+// an endpoint the snapshot no longer holds is not full, and Acquire answers for it.
+func (c *Capacity) Full() bool {
+	ep, ok := c.s.snap.Load().endpoints[c.id]
+	if !ok {
+		return false
+	}
+	best, _ := leastBusy(ep, c.s.now(), uuid.UUID{})
+	return best == nil
 }
 
 // leastBusy is the credential with the lowest share of its limit in use among those that may be picked now, with the

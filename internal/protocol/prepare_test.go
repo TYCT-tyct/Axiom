@@ -376,7 +376,7 @@ func TestPrepareUpstream(t *testing.T) {
 			true,
 		},
 		{"auto names two", `{"model":"m","service_tier":"auto"}`, protocol.Messages, protocol.UsageContext{}, true},
-		{"to another format", `{"model":"m"}`, protocol.Responses, protocol.UsageContext{}, false},
+		{"to another format", `{"model":"m"}`, protocol.Responses, protocol.UsageContext{}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r, err := protocol.Inspect(protocol.Messages, []byte(c.body))
@@ -442,15 +442,18 @@ func TestPrepareCost(t *testing.T) {
 			t.Errorf("format %d: a rewrite's buffer is %d bytes, its cost %d", f, cap(u.Body), cost)
 		}
 	}
-	m := inspected(t, protocol.Messages, []byte(`{"model":"m"}`))
-	if cost := protocol.PrepareCost(&m, make([]byte, 1<<20), protocol.Target{Format: protocol.Responses}, w); cost != 0 {
-		t.Errorf("a Messages request for a Responses endpoint costs %d", cost)
+	body := []byte(`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"Hi"}]}`)
+	m := inspected(t, protocol.Messages, body)
+	if cost := protocol.PrepareCost(&m, body, protocol.Target{Format: protocol.Responses}, w); cost == 0 {
+		t.Error("a Messages request for a Responses endpoint costs nothing")
 	}
 }
 
 // TestPrepareCostBoundsTheAllocation: what Prepare allocates, for bodies of the worst shapes there are (nothing but empty
 // objects, the smallest messages, members it does not know, an identifier of escapes), stays within the cost. The
 // allocation counted is the total, garbage included, which bounds the peak.
+//
+//nolint:exhaustive // the formats with output are the ones bounded here
 func TestPrepareCostBoundsTheAllocation(t *testing.T) {
 	w := protocol.Rewrites{Identity: func(string) string { return "0123456789abcdef0123456789abcdef" }}
 	bs := "\\"
@@ -474,11 +477,20 @@ func TestPrepareCostBoundsTheAllocation(t *testing.T) {
 		{"escapes in a text", protocol.Chat, chatBody(`"messages":[{"role":"user","content":"` + strings.Repeat(bs+`u0041`, 1<<18) + `"}]`)},
 		{"an identifier of escapes", protocol.Responses, `{"model":"m","input":"hi","user":"` + strings.Repeat(bs+`n`, 1<<19) + `"}`},
 		{"an identifier of plain bytes", protocol.Messages, `{"model":"m","max_tokens":5,"metadata":{"user_id":"` + strings.Repeat("a", 1<<20) + `"}}`},
+		{"empty messages", protocol.Messages, `{"model":"m","max_tokens":1,"messages":[` + strings.Repeat("{},", 20000) + `{}]}`},
+		{"members of a message it does not know", protocol.Messages, `{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"a",` + strings.Join(members, ",") + `}]}`},
+		{"empty items", protocol.Responses, `{"model":"m","input":[` + strings.Repeat("{},", 20000) + `{}]}`},
+		{"members of an item it does not know", protocol.Responses, `{"model":"m","input":[{"role":"user","content":"a",` + strings.Join(members, ",") + `}]}`},
 	} {
 		r := inspected(t, c.from, []byte(c.body))
 		targets := []protocol.Format{c.from}
-		if c.from == protocol.Chat {
+		switch c.from {
+		case protocol.Chat:
 			targets = []protocol.Format{protocol.Messages, protocol.Responses}
+		case protocol.Messages:
+			targets = []protocol.Format{protocol.Messages, protocol.Responses}
+		case protocol.Responses:
+			targets = []protocol.Format{protocol.Responses, protocol.Messages}
 		}
 		for _, f := range targets {
 			target := protocol.Target{Format: f, Model: "up", MaxOutput: 4096}

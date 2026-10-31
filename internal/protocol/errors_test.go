@@ -67,6 +67,8 @@ func TestRenderError(t *testing.T) {
 
 // chargedUsage is the usage object the settlement of 7 input and 2 output tokens makes in format f: its own fields in
 // full, and no other format's.
+//
+//nolint:exhaustive // only charged formats add usage
 func chargedUsage(f protocol.Format) map[string]any {
 	cost := map[string]any{"cost": 3.703701, "cost_currency": "USD"}
 	var u map[string]any
@@ -82,11 +84,13 @@ func chargedUsage(f protocol.Format) map[string]any {
 		u = map[string]any{
 			"input_tokens": 7.0, "input_tokens_details": map[string]any{"cached_tokens": 0.0, "cache_write_tokens": 0.0},
 			"output_tokens": 2.0, "output_tokens_details": map[string]any{"reasoning_tokens": 0.0}, "total_tokens": 9.0,
+			"is_byok": false,
 		}
 	case protocol.Chat:
 		u = map[string]any{
 			"prompt_tokens": 7.0, "prompt_tokens_details": map[string]any{"cached_tokens": 0.0, "cache_write_tokens": 0.0},
 			"completion_tokens": 2.0, "completion_tokens_details": map[string]any{"reasoning_tokens": 0.0}, "total_tokens": 9.0,
+			"is_byok": false,
 		}
 	}
 	maps.Copy(u, cost)

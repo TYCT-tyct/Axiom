@@ -15,6 +15,7 @@ const (
 	someSupplier = "/suppliers/0198c0a8-0000-7000-8000-000000000001"
 	someModel    = "/models/0198c0a8-0000-7000-8000-000000000002"
 	someRule     = "/pricing/rules/0198c0a8-0000-7000-8000-000000000003"
+	someMerchant = "/payments/merchants/mch_00000000000000000000000000"
 )
 
 // adminOperation is an operation of the admin's API as the tests state it, by hand and apart from the contract, which
@@ -33,6 +34,7 @@ func (o adminOperation) changes() bool { return o.method != http.MethodGet }
 var adminOperations = []adminOperation{
 	{"listAdminCalls", http.MethodGet, "/calls", "", "calls.search", false},
 	{"getAdminCallTrace", http.MethodGet, "/calls/0198c0a8-0000-7000-8000-000000000001/trace", "", "calls.inspect", false},
+	{"getOperationsOverview", http.MethodGet, "/reports/overview", "", "sites.manage", false},
 	{"listAuditEntries", http.MethodGet, "/audit", "", "audit.view", false},
 	{"getAuditEntry", http.MethodGet, "/audit/0198c0a8-0000-7000-8000-000000000001", "", "audit.view", false},
 	{"getSystemSettings", http.MethodGet, strings.Replace(someSite, "/settings", "/system-settings", 1), "", "sites.manage", false},
@@ -42,7 +44,23 @@ var adminOperations = []adminOperation{
 	{"getMailSettings", http.MethodGet, "/settings/mail", "", "sites.manage", false},
 	{"setMailSettings", http.MethodPut, "/settings/mail", `{"settings":{"enabled":false},"reason":"r"}`, "sites.manage", true},
 	{"testMailSettings", http.MethodPost, "/settings/mail/tests", `{"to":"test@example.com","reason":"r"}`, "sites.manage", true},
-	{"testMerchantSettings", http.MethodPost, "/payments/merchants/mch_00000000000000000000000000/tests", `{"reason":"r"}`, "sites.manage", true},
+	{"getSearchSettings", http.MethodGet, "/settings/search", "", "sites.manage", false},
+	{"setSearchSettings", http.MethodPut, "/settings/search", `{"settings":{"url":"https://search.example.com"},"reason":"r"}`, "sites.manage", true},
+	{"testSearchSettings", http.MethodPost, "/settings/search/tests", `{"reason":"r"}`, "sites.manage", true},
+	{"listMerchants", http.MethodGet, "/payments/merchants?site_id=site_00000000000000000000000000", "", "sites.manage", false},
+	{"getMerchant", http.MethodGet, someMerchant, "", "sites.manage", false},
+	{"createMerchant", http.MethodPost, "/payments/merchants", `{"site_id":"site_00000000000000000000000000","merchant":{},"reason":"r"}`, "sites.manage", true},
+	{"updateMerchant", http.MethodPut, someMerchant, `{"merchant":{},"reason":"r"}`, "sites.manage", true},
+	{"disableMerchant", http.MethodPost, someMerchant + "/disable", `{"reason":"r"}`, "sites.manage", true},
+	{"testMerchantSettings", http.MethodPost, someMerchant + "/tests", `{"reason":"r"}`, "sites.manage", true},
+	{"listRedeemCodes", http.MethodGet, "/payments/redeem-codes?site_id=site_00000000000000000000000000", "", "sites.manage", false},
+	{"createRedeemCodes", http.MethodPost, "/payments/redeem-codes", `{"site_id":"site_00000000000000000000000000","amount":{"amount":"1000000000","currency":"USD"},"count":1,"reason":"r"}`, "sites.manage", true},
+	{"disableRedeemCode", http.MethodPost, "/payments/redeem-codes/rdm_00000000000000000000000000/disable", `{"reason":"r"}`, "sites.manage", true},
+	{"listPaymentOrders", http.MethodGet, "/payments/orders?site_id=site_00000000000000000000000000", "", "sites.manage", false},
+	{"listCashMovements", http.MethodGet, "/payments/cash?site_id=site_00000000000000000000000000", "", "sites.manage", false},
+	{"listPaymentRefunds", http.MethodGet, "/payments/refunds?site_id=site_00000000000000000000000000", "", "sites.manage", false},
+	{"approvePaymentRefund", http.MethodPost, "/payments/refunds/rfd_00000000000000000000000000/approve", `{"reason":"r"}`, "sites.manage", true},
+	{"rejectPaymentRefund", http.MethodPost, "/payments/refunds/rfd_00000000000000000000000000/reject", `{"reason":"r"}`, "sites.manage", true},
 	{"getRateLimit", http.MethodGet, "/rate-limits/account/acct_00000000000000000000000000", "", "sites.manage", false},
 	{"setRateLimit", http.MethodPut, "/rate-limits/account/acct_00000000000000000000000000", `{"reason":"r"}`, "sites.manage", true},
 	{"publishAnnouncement", http.MethodPost, "/announcements", `{"site_id":"site_00000000000000000000000000","title":"Maintenance","body":"Notice","starts_at":"2026-10-29T00:00:00Z","ends_at":"2026-10-30T00:00:00Z","reason":"test"}`, "sites.manage", true},
@@ -50,6 +68,8 @@ var adminOperations = []adminOperation{
 	{"listPaymentDiscrepancies", http.MethodGet, "/payments/discrepancies", "", "sites.manage", false},
 	{"getPaymentDiscrepancy", http.MethodGet, "/payments/discrepancies/0198c0a8-0000-7000-8000-000000000001", "", "sites.manage", false},
 	{"investigatePaymentDiscrepancy", http.MethodPost, "/payments/discrepancies/0198c0a8-0000-7000-8000-000000000001/investigate", `{}`, "sites.manage", true},
+	{"getRetention", http.MethodGet, "/retention", "", "sites.manage", false},
+	{"setRetention", http.MethodPut, "/retention", `{"hot_days":30,"reason":"r"}`, "sites.manage", true},
 	{"getAlertConfiguration", http.MethodGet, "/alerts/configuration", "", "sites.manage", false},
 	{"setAlertConfiguration", http.MethodPut, "/alerts/configuration", `{}`, "sites.manage", true},
 	{"listAlertEvents", http.MethodGet, "/alerts/events", "", "sites.manage", false},
@@ -61,11 +81,24 @@ var adminOperations = []adminOperation{
 	{"exchangeRateHistory", http.MethodGet, "/pricing/exchange-rates/USD/CNY", "", "pricing.view", false},
 	{"getSiteSettings", http.MethodGet, someSite, "", "sites.manage", false},
 	{"updateSiteSettings", http.MethodPut, someSite, `{"settings":{},"reason":"r"}`, "sites.manage", true},
+	{"getSiteLogoAdmin", http.MethodGet, strings.Replace(someSite, "/settings", "/logo", 1), "", "sites.manage", false},
+	{"updateSiteLogo", http.MethodPut, strings.Replace(someSite, "/settings", "/logo", 1), `{"reason":"r"}`, "sites.manage", true},
 	{"getSiteKeyLimits", http.MethodGet, strings.Replace(someSite, "/settings", "/key-limits", 1), "", "sites.manage", false},
 	{"updateSiteKeyLimits", http.MethodPut, strings.Replace(someSite, "/settings", "/key-limits", 1), `{"limits":{},"reason":"r"}`, "sites.manage", true},
+	{"getSiteSignIn", http.MethodGet, strings.Replace(someSite, "/settings", "/sign-in", 1), "", "sites.manage", false},
+	{"updateSiteSignIn", http.MethodPut, strings.Replace(someSite, "/settings", "/sign-in", 1), `{"login_domain":"main.example","passkeys":false,"reason":"r"}`, "sites.manage", true},
+	{"setSiteOAuthProvider", http.MethodPut, strings.Replace(someSite, "/settings", "/sign-in/providers/github", 1), `{"client_id":"id","client_secret":"secret","reason":"r"}`, "sites.manage", true},
+	{"deleteSiteOAuthProvider", http.MethodPost, strings.Replace(someSite, "/settings", "/sign-in/providers/github/delete", 1), `{"reason":"r"}`, "sites.manage", true},
 	{"getSiteLoginLimits", http.MethodGet, strings.Replace(someSite, "/settings", "/login-limits", 1), "", "sites.manage", false},
 	{"updateSiteLoginLimits", http.MethodPut, strings.Replace(someSite, "/settings", "/login-limits", 1), `{"limits":{},"reason":"r"}`, "sites.manage", true},
+	{"getSiteRegistration", http.MethodGet, strings.Replace(someSite, "/settings", "/registration", 1), "", "sites.manage", false},
+	{"updateSiteRegistration", http.MethodPut, strings.Replace(someSite, "/settings", "/registration", 1), `{"policy":{"mode":"invite","human_check":true,"human_check_bits":18,"domain_burst":5,"domain_per_hour":30,"domain_allow":[],"domain_deny":[]},"reason":"r"}`, "sites.manage", true},
+	{"getSiteBrand", http.MethodGet, strings.Replace(someSite, "/settings", "/brand", 1), "", "sites.manage", false},
+	{"updateSiteBrand", http.MethodPut, strings.Replace(someSite, "/settings", "/brand", 1), `{"brand_color":"#335ddf","reason":"r"}`, "sites.manage", true},
+	{"listLegalDocuments", http.MethodGet, strings.Replace(someSite, "/settings", "/legal-documents", 1), "", "sites.manage", false},
+	{"publishLegalDocument", http.MethodPost, strings.Replace(someSite, "/settings", "/legal-documents", 1), `{"kind":"terms","body":"Text.","reason":"r"}`, "sites.manage", true},
 	{"setAccountSuspension", http.MethodPut, someAccount + "/suspension", `{"suspended":true,"reason":"r"}`, "users.manage", true},
+	{"setAccountTier", http.MethodPut, someAccount + "/tier", `{"tier_id":"tier_00000000000000000000000000","reason":"r"}`, "users.manage", true},
 	{"setUserSignIn", http.MethodPut, "/users/user_00000000000000000000000000/sign-in", `{"disabled":true,"reason":"r"}`, "users.manage", true},
 	{"setPlatformGrant", http.MethodPut, "/users/user_00000000000000000000000000/platform-grants/admin", `{"revoked":true,"reason":"r"}`, "platform_grants.manage", true},
 	{"listUserPlatformGrants", http.MethodGet, "/users/user_00000000000000000000000000/platform-grants", "", "platform_grants.manage", false},
@@ -164,7 +197,9 @@ func TestAdminOperationsAreTheContracts(t *testing.T) {
 // tables above.
 func TestAdminTestsCoverTheContract(t *testing.T) {
 	t.Parallel()
-	covered := map[string]bool{"getversion": true, "signin": true} // public: they need no session to refuse
+	covered := map[string]bool{ // public: they need no session to refuse
+		"getversion": true, "signin": true, "getadminsite": true, "getadminsitelogo": true,
+	}
 	for _, op := range slices.Concat(adminOperations, adminSessionOperations) {
 		covered[strings.ToLower(op.name)] = true
 	}

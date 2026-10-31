@@ -1,3 +1,4 @@
+//nolint:revive // the routing table and its helpers are one fixture; the file is the test
 package routing_test
 
 import (
@@ -57,7 +58,8 @@ func TestFilters(t *testing.T) {
 			func(in *routing.Input) { in.NativeOnly = true }, nil, routing.FormatNotServed, true,
 		},
 		{
-			"format nobody converts to", func(e *routing.Endpoint) { e.Served = routing.Of(protocol.Chat); e.Native = routing.Of(protocol.Chat) },
+			// Every pair of the three formats converts, so only an endpoint that serves none refuses a request's format.
+			"format no endpoint serves", func(e *routing.Endpoint) { e.Served = 0; e.Native = 0 },
 			nil, nil, routing.FormatNotServed, true,
 		},
 		{
@@ -88,6 +90,7 @@ func TestFilters(t *testing.T) {
 		{"override only another supplier", nil, func(in *routing.Input) { in.Override.OnlyNames = []string{"g99"} }, nil, routing.OverrideFilter, true},
 		{"override excludes the supplier", nil, func(in *routing.Input) { in.Override.ExcludeNames = []string{"g1"} }, nil, routing.OverrideFilter, true},
 		{"override class", nil, func(in *routing.Input) { in.Override.Classes = 1 << routing.ClassRelay }, nil, routing.OverrideFilter, true},
+		{"override verified only", func(e *routing.Endpoint) { e.Verified = false }, func(in *routing.Input) { in.Override.VerifiedOnly = true }, nil, routing.NotVerified, false},
 		{"override price limit", nil, func(in *routing.Input) {
 			in.Override.MaxPrice.Set.Add(catalog.ItemOutput)
 			in.Override.MaxPrice.Max[catalog.ItemOutput] = price(t, "0.000001")
@@ -539,5 +542,136 @@ func TestOutputCapQuotedIsTheCapSent(t *testing.T) {
 		if sent != c.want || c.limit > 0 && sent != entry.MaxOutput {
 			t.Errorf("%s: the upstream is sent a cap of %d, the entry is quoted at %d, want %d\n%s", c.name, sent, entry.MaxOutput, c.want, u.Body)
 		}
+	}
+}
+
+// TestEntryDirectFormats: a direct call is read whole, so an endpoint need not stream it, and it is never converted:
+// a model that does not list the format has no entry. A generation is read as a stream, so an endpoint that cannot
+// stream it is left out (docs/domains/gateway.md「转发规则」).
+func TestEntryDirectFormats(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		format  protocol.Format
+		streams bool
+		want    bool
+	}{
+		{protocol.Embeddings, false, true},
+		{protocol.Rerank, false, true},
+		{protocol.Completions, true, true},
+		{protocol.Completions, false, false},
+		{protocol.Chat, true, true},
+		{protocol.Chat, false, false},
+	} {
+		e := endpoint(t, 1, func(e *routing.Endpoint) {
+			e.Native, e.Served, e.Streams = routing.Of(tc.format), routing.Of(tc.format), tc.streams
+			e.Target = protocol.Target{Model: "upstream-name"}
+		})
+		in := input()
+		in.Req.Format, in.NativeOnly, in.NoSegments = tc.format, true, tc.format.Direct()
+		plan, wait, err := newHarness(t, routing.Config{}, openPreset(), e).r.Plan(in)
+		if wait != nil {
+			t.Fatalf("%v streaming %t: wait %v", tc.format, tc.streams, wait)
+		}
+		if got := len(plan.Entries) == 1; got != tc.want {
+			t.Errorf("%v streaming %t: %d entries, error %v, want one: %t", tc.format, tc.streams, len(plan.Entries), err, tc.want)
+			continue
+		}
+		if !tc.want {
+			continue
+		}
+		entry := plan.Entries[0]
+		if entry.Target.Format != tc.format || entry.Target.Streams != tc.streams || entry.Segmentable {
+			t.Errorf("%v streaming %t: target %+v, segmentable %t", tc.format, tc.streams, entry.Target, entry.Segmentable)
+		}
+	}
+	// A chat endpoint does not serve a direct format or a legacy completion: neither is converted to it, whatever
+	// NativeOnly says.
+	for _, f := range []protocol.Format{protocol.Embeddings, protocol.Completions} {
+		e := endpoint(t, 1, func(e *routing.Endpoint) {
+			e.Native, e.Served = routing.Of(protocol.Chat), routing.Of(protocol.Chat)
+		})
+		in := input()
+		in.Req.Format, in.NativeOnly = f, f.Direct()
+		plan, _, _ := newHarness(t, routing.Config{}, openPreset(), e).r.Plan(in) //nolint:errcheck // no endpoint is the expected permanent result here
+		if len(plan.Entries) != 0 {
+			t.Errorf("%v on a chat endpoint: %d entries", f, len(plan.Entries))
+		}
+	}
+}
+
+// TestCompletionsNeverSegment: a completion is reserved in full even when segmentation is configured and the call
+// would qualify: every prompt and every choice generate, and the batch's output bound is promised whole
+// (docs/domains/billing.md「决策与理由」).
+func TestCompletionsNeverSegment(t *testing.T) {
+	t.Parallel()
+	e := endpoint(t, 1, func(e *routing.Endpoint) {
+		e.Native, e.Served = routing.Of(protocol.Completions), routing.Of(protocol.Completions)
+	})
+	in := input()
+	in.Req = &protocol.Request{
+		Format: protocol.Completions, Model: "m", Choices: 2, TextBytes: 10, MaxInputBytes: 5,
+		MaxOutput: 4096, MaxOutputSet: true, Stream: true, ServiceTiers: 1 << catalog.ServiceTierStandard,
+	}
+	in.NativeOnly = true
+	h := newHarness(t, routing.Config{Segments: billing.Segments{Output: 512, Overshoot: time.Second}}, openPreset(), e)
+	entry := h.plan(in).Entries[0]
+	if entry.Segmentable {
+		t.Error("a completion entry is segmentable: its output would be reserved one segment at a time")
+	}
+	if entry.MaxOutput != 4096 {
+		t.Errorf("output cap %d, want the request's 4096 for all %d choices", entry.MaxOutput, in.Req.Choices)
+	}
+}
+
+// TestCompletionsExplicitZeroCap: legacy completions' max_tokens 0 is a request for no output (the prompt's logprobs
+// with echo), not a missing cap: routing must not replace it with the endpoint's default and reserve output that cannot
+// be generated. Omitting the member still takes the default.
+func TestCompletionsExplicitZeroCap(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		set     bool
+		wantCap int64
+	}{
+		{name: "explicit zero", set: true, wantCap: 0},
+		{name: "unset", set: false, wantCap: 8192},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := endpoint(t, 1, func(e *routing.Endpoint) {
+				e.Native, e.Served = routing.Of(protocol.Completions), routing.Of(protocol.Completions)
+			})
+			in := input()
+			in.Req = &protocol.Request{
+				Format: protocol.Completions, Model: "m", Choices: 1, TextBytes: 10, MaxInputBytes: 10,
+				MaxOutput: 0, MaxOutputSet: tc.set, Stream: true, ServiceTiers: 1 << catalog.ServiceTierStandard,
+			}
+			in.NativeOnly = true
+			entry := newHarness(t, routing.Config{}, openPreset(), e).plan(in).Entries[0]
+			if entry.MaxOutput != tc.wantCap || entry.Target.MaxOutput != tc.wantCap {
+				t.Errorf("entry cap %d, target cap %d, want %d", entry.MaxOutput, entry.Target.MaxOutput, tc.wantCap)
+			}
+		})
+	}
+}
+
+// TestCompletionsDemandIsABatch: the prompt array is one price banded at the total of its prompts, whose longest takes
+// the context check, so billing reads them apart.
+func TestCompletionsDemandIsABatch(t *testing.T) {
+	d := routing.DemandOf(&protocol.Request{Format: protocol.Completions, TextBytes: 9000, MaxInputBytes: 4000, Choices: 6})
+	if d.TextBytes != 9000 || d.InputBytes != 4000 || d.Choices != 6 || d.Direct {
+		t.Errorf("demand %+v", d)
+	}
+}
+
+// TestRerankDemandReservesItsSearchUnit: a rerank request does not ask for the model's web_search ability, but its
+// reported search_units are priced as web searches, so the reservation must include one (protocol 的「直接格式」).
+func TestRerankDemandReservesItsSearchUnit(t *testing.T) {
+	d := routing.DemandOf(&protocol.Request{Format: protocol.Rerank, WebSearches: 1})
+	if len(d.ServerTools) != 1 || d.ServerTools[0].Item != catalog.ItemWebSearch || d.ServerTools[0].MaxUses != 1 {
+		t.Fatalf("rerank demand server tools = %+v, want one web search", d.ServerTools)
+	}
+	chat := routing.DemandOf(&protocol.Request{Format: protocol.Chat})
+	if len(chat.ServerTools) != 0 {
+		t.Errorf("a chat request without web search demand got %+v", chat.ServerTools)
 	}
 }

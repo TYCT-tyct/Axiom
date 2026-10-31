@@ -23,6 +23,7 @@ info:
     `Cache-Control: no-store`.
 tags:
   - {name: Calls, description: "Support summaries and operator traces."}
+  - {name: Reports, description: "The operations dashboard: calls, revenue, cost and cash over a window."}
   - {name: Audit, description: "Immutable audit search."}
   - {name: Session, description: "Sign-in, two-step verification and the current session."}
   - {name: Site, description: "Site settings."}
@@ -31,6 +32,7 @@ tags:
   - {name: Catalog, description: "Authors, models, their names, specs and reference prices."}
   - {name: Pricing, description: "Pricing rules and their preview."}
   - {name: Alerts, description: "Platform operations alert rules, channels, incidents and receipts."}
+  - {name: Observability, description: "Call-log retention and platform observability settings."}
   - {name: Payments, description: "Payment discrepancies and investigation notes."}
 paths:
   /api/admin/v1/calls:
@@ -72,6 +74,20 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: model
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+      - name: status
+        in: query
+        schema:
+          $ref: '#/components/schemas/AdminCallStatus'
+      - name: site_id
+        in: query
+        schema:
+          $ref: '#/components/schemas/SiteId'
       responses:
         '200':
           description: Result
@@ -113,6 +129,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminCallTrace'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/reports/overview:
+    get:
+      operationId: getOperationsOverview
+      tags:
+      - Reports
+      summary: The site's calls, errors, revenue, cost and cash over a window, with its busiest accounts and models.
+      description: >-
+        The operations dashboard of the site the request was made on (docs/domains/operations.md「运营看板」). Calls and
+        errors are the call log's, over the calls that started in the window. Revenue is what the window's settled calls
+        were charged and cost is what the supplier charged the platform where billing could convert it, both in the
+        site's accounting currency; `unknown_cost_calls` counts the calls whose cost is unknown, and their cost is not in `cost`. Cash is
+        the ledger's cash book — paid credit in and refunds out, in each payment currency — so it is neither revenue nor
+        the call log's charge. The window defaults to 24 hours and is at most 31 days.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - *admin_path_id001
+      - *admin_path_id002
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationsOverview'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -250,8 +303,8 @@ paths:
       operationId: getSystemSettings
       tags:
       - Site
-      summary: Site name and invite or closed registration policy.
-      description: Site name and invite or closed registration policy.
+      summary: Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
+      description: Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
       security:
       - session: []
       x-axiom-level: mfa
@@ -277,8 +330,8 @@ paths:
       operationId: setSystemSettings
       tags:
       - Site
-      summary: Site name and invite or closed registration policy.
-      description: Site name and invite or closed registration policy.
+      summary: Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
+      description: Site name and invite or closed registration policy; omitting registration keeps the current mode, including open.
       security:
       - session: []
         csrf: []
@@ -314,6 +367,199 @@ paths:
           $ref: '#/components/responses/Conflict'
         default:
           $ref: '#/components/responses/Failure'
+  /api/admin/v1/site:
+    get:
+      operationId: getAdminSite
+      tags: [Session]
+      summary: The site the admin host belongs to
+      description: >-
+        The name and logo of the site whose admin domain this request reached, so the admin app shows the site's brand
+        before it has a session. The logo's URL is on this admin host and carries the bytes' SHA-256; it stays available
+        for a year and an older logo keeps working under its own hash. No session: these are the same public facts the
+        console's `getSite` gives, and the admin host already names the site.
+      security: []
+      responses:
+        "200":
+          description: The site's brand.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminSite"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/site/logo/{hash}:
+    get:
+      operationId: getAdminSiteLogo
+      tags: [Session]
+      summary: The site's logo for the admin app
+      description: >-
+        The bytes at `getAdminSite.logo_url`. The hash names the content, so the URL never changes meaning and the
+        answer is immutable; a hash this site never served is a 404. A page opened before the logo changed keeps its
+        image under the old hash.
+      security: []
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[0-9a-f]{64}$'}
+      responses:
+        "200":
+          description: The logo.
+          headers:
+            Cache-Control:
+              required: true
+              description: Long-lived and immutable, because the hash in the URL names the bytes.
+              schema: {type: string}
+          content:
+            image/svg+xml:
+              schema: {type: string, format: binary}
+            image/png:
+              schema: {type: string, format: binary}
+            image/webp:
+              schema: {type: string, format: binary}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/brand:
+    parameters:
+    - name: site_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/SiteId'
+    get:
+      operationId: getSiteBrand
+      tags:
+      - Site
+      summary: A site's brand colour.
+      description: >-
+        The #rrggbb colour the console derives both colour schemes from (docs/frontend.md「主题与自由度」); absent when
+        the site uses the default palette. Contrast is not a reason to refuse a colour: the console corrects it.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        '200':
+          description: The site's brand colour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteBrand'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+    put:
+      operationId: updateSiteBrand
+      tags:
+      - Site
+      summary: Set or clear a site's brand colour.
+      description: >-
+        Sets the site's brand colour, or clears it to the default palette when `brand_color` is empty. A value that is
+        not #rrggbb is a 400. The change is audited; this node serves it at once and the others follow within their site
+        reload interval.
+      security:
+      - session: []
+        csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteBrandUpdate'
+      responses:
+        '200':
+          description: The brand colour now in force.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteBrand'
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/sites/{site_id}/logo:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteLogoAdmin
+      tags: [Site]
+      summary: A site's logo
+      description: >-
+        The logo the site currently serves and what it is, or no logo. `data_url` carries the bytes as a data URL so the
+        settings page can preview them under the content security policy (`img-src 'self' data:`); the pages fetch the
+        logo from `getSite` on the console domain or `getAdminSite` on the admin domain, not from this operation.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The site's current logo, or none.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteLogoView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateSiteLogo
+      tags: [Site]
+      summary: Replace or clear a site's logo
+      description: >-
+        Replaces the site's logo with `logo`, or clears it when `logo` is left out. An SVG is sanitised before it is
+        stored: scripts, event handlers, styles, images, links and external references are dropped, and the result must
+        still be one well-formed SVG. A PNG or WebP must be 1 to 1024 pixels on each side, and every format is at most
+        256 KiB. The response describes the new logo; the change is audited, and this node serves it at once while the
+        others follow within their site reload interval.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SiteLogoUpdate"}
+      responses:
+        "200":
+          description: The logo now in force.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteLogoView"}
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/sites/{site_id}/system-settings/payments:
     parameters:
     - name: site_id
@@ -505,6 +751,264 @@ paths:
           $ref: '#/components/responses/Conflict'
         default:
           $ref: '#/components/responses/Failure'
+  /api/admin/v1/settings/search:
+    get:
+      operationId: getSearchSettings
+      tags:
+      - Site
+      summary: Saved web search backend override; the key is never returned. Environment remains authoritative when
+        absent.
+      description: Saved web search backend override; the key is never returned. Environment remains authoritative
+        when absent.
+      security:
+      - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/Failure'
+    put:
+      operationId: setSearchSettings
+      tags:
+      - Site
+      summary: Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the saved
+        key; a URL change requires reentry.
+      description: Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the
+        saved key; a URL change requires reentry.
+      security:
+      - session: []
+        csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchSettingsUpdate'
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchSettings'
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/settings/search/tests:
+    post:
+      operationId: testSearchSettings
+      tags:
+      - Site
+      summary: Run one fixed search using the saved backend. Accepted means the backend answered with usable results.
+        Ten tests per session per minute.
+      description: Run one fixed search using the saved backend. Accepted means the backend answered with usable
+        results. Ten tests per session per minute.
+      security:
+      - session: []
+        csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchConfigTest'
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigTestResult'
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Failure'
+  /api/admin/v1/payments/merchants:
+    get:
+      operationId: listMerchants
+      tags: [Payments]
+      summary: The merchant accounts of a site and their payment methods, without their secrets.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+      responses:
+        "200":
+          description: Newest revision of each merchant account, without secrets.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MerchantList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createMerchant
+      tags: [Payments]
+      summary: Create a merchant account. Secrets are write-only and never returned.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MerchantCreate"}
+      responses:
+        "201":
+          description: The saved merchant account, without secrets.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Merchant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/merchants/{merchant_id}:
+    parameters:
+      - {name: merchant_id, in: path, required: true, schema: {$ref: "#/components/schemas/MerchantId"}}
+    get:
+      operationId: getMerchant
+      tags: [Payments]
+      summary: One merchant account and its payment methods, without its secrets.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The merchant account, without secrets.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Merchant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateMerchant
+      tags: [Payments]
+      summary: Replace a merchant account's configuration. Omit secrets to keep the sealed ones.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MerchantUpdate"}
+      responses:
+        "200":
+          description: The saved merchant account, without secrets.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Merchant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/merchants/{merchant_id}/disable:
+    post:
+      operationId: disableMerchant
+      tags: [Payments]
+      summary: Stop new orders from choosing a merchant account, keeping its configuration and sealed secrets.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - name: merchant_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/MerchantId"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The disabled merchant account, without secrets.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Merchant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/payments/merchants/{merchant_id}/tests:
     parameters:
     - name: merchant_id
@@ -554,6 +1058,114 @@ paths:
           $ref: '#/components/responses/Conflict'
         default:
           $ref: '#/components/responses/Failure'
+  /api/admin/v1/payments/redeem-codes:
+    get:
+      operationId: listRedeemCodes
+      tags: [Payments]
+      summary: One site's redeem codes, newest first, without the codes themselves.
+      description: >-
+        Pages of a site's codes, filtered by the state a page shows and by a note prefix. `expired` is an enabled code
+        past its expiry, which is how the page shows it; the stored state stays enabled. The rows carry the last four
+        characters of each code for support, never the code: a code is written once and shown once, in the answer that
+        made it (docs/domains/payments.md「兑换码」).
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: state, in: query, required: false, schema: {$ref: "#/components/schemas/RedeemCodeState"}}
+        - name: note
+          in: query
+          required: false
+          description: The beginning of a code batch's note, ignoring case. Omit for every note.
+          schema: {type: string, maxLength: 200}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the site's codes, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createRedeemCodes
+      tags: [Payments]
+      summary: Make a batch of redeem codes. The codes are in this answer only.
+      description: >-
+        Makes `count` codes for the site, each worth `amount` of its currency, all expiring at `expires_at` (never, if
+        absent), with an optional `note` and the `reason` of the audit entry. The answer is the only place the codes
+        themselves are ever shown: only a hash is stored, so a lost answer cannot be recovered and the batch must be
+        made again. A replay of `Idempotency-Key` answers the same batch (IDs, amounts and hints) but not the codes: the
+        stored answer keeps no secret.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RedeemCodeBatchRequest"}
+      responses:
+        "201":
+          description: The codes made, with `code` in each; a replay of the key carries `code` in none of them.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/redeem-codes/{code_id}/disable:
+    parameters:
+      - {name: code_id, in: path, required: true, schema: {$ref: "#/components/schemas/RedeemCodeId"}}
+    post:
+      operationId: disableRedeemCode
+      tags: [Payments]
+      summary: Disable an unused redeem code.
+      description: >-
+        Stops an enabled code from being redeemed, with the audit entry's reason. A disabled code answers as disabled,
+        and a code already redeemed cannot be disabled: its credit is the account's.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The code as it now is.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCode"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/rate-limits/{target}/{id}:
     parameters:
       - {name: target, in: path, required: true, schema: {type: string, enum: [tier, account, key]}}
@@ -764,6 +1376,187 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/orders:
+    get:
+      operationId: listPaymentOrders
+      tags: [Payments]
+      summary: A site's top-up orders, newest first, with their refunds
+      description: >-
+        The admin's order list: one site's orders with what was quoted, what the channel actually took and credited,
+        and each order's refunds. Filters left out do not narrow. `account_id` is the paying account, `user_id` the user who ordered, `merchant_id`
+        the merchant account (the channel), and `since`/`until` are the order's creation time, `since` inclusive and
+        `until` exclusive. Pages use `cursor` and `limit`; the answer's `next_cursor` is null on the last page. Money
+        is exact text: `credits` is in the site's accounting currency (billionths), while the amounts are in the
+        currency the order was paid in (minor units).
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: account_id, in: query, schema: {$ref: "#/components/schemas/AccountId"}}
+        - {name: user_id, in: query, schema: {$ref: "#/components/schemas/UserId"}}
+        - {name: merchant_id, in: query, schema: {$ref: "#/components/schemas/MerchantId"}}
+        - {name: state, in: query, schema: {$ref: "#/components/schemas/PaymentOrderState"}}
+        - {name: since, in: query, schema: {type: string, format: date-time}, description: "Orders created at or after this time."}
+        - {name: until, in: query, schema: {type: string, format: date-time}, description: "Orders created before this time."}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of the site's orders, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentOrderList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/cash:
+    get:
+      operationId: listCashMovements
+      tags: [Payments]
+      summary: The cash behind the dashboard, by ledger time
+      description: >-
+        One site's cash movements in a window, newest first: paid credits in and refunds out, with the batch, order or
+        offline channel they came from. The time is the ledger transaction's, not an order's creation time, so a
+        refund of an older order and an offline top-up are both in the window the dashboard counted. `since` is
+        inclusive and `until` exclusive; `account_id` narrows to one payer. Pages use `cursor` and `limit`; money is
+        exact text in the payment's currency, and the site's accounting currency where the ledger leaves it NULL.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: account_id, in: query, schema: {$ref: "#/components/schemas/AccountId"}}
+        - {name: since, in: query, schema: {type: string, format: date-time}, description: "Transactions at or after this time."}
+        - {name: until, in: query, schema: {type: string, format: date-time}, description: "Transactions before this time."}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of the site's cash movements, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CashMovementList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/refunds:
+    get:
+      operationId: listPaymentRefunds
+      tags: [Payments]
+      summary: A site's refunds, newest first, for review and follow-up
+      description: >-
+        The admin's refund list. `state` is the internal state: `frozen` is held after the request and waits for an
+        administrator's approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel
+        and their result is not final; `succeeded` returned the cash; `failed` returned the frozen credits. Filters
+        left out do not narrow. The page asks with `state=frozen` for the review queue. Money is exact text: `credits`
+        is in the site's accounting currency (billionths), `amount` in the currency the order was paid in (minor units).
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: state, in: query, schema: {$ref: "#/components/schemas/PaymentRefundState"}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of the site's refunds, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentRefundList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/refunds/{refund_id}/approve:
+    post:
+      operationId: approvePaymentRefund
+      tags: [Payments]
+      summary: Approve a refund as a second person and start its channel flow
+      description: >-
+        Releases a frozen refund. The approver must be a different person from the one who requested it, and the
+        reason goes to the audit log. A channel refund is sent after the approval commits; an offline refund stays
+        frozen for a separate manual conclusion. Repeating the approval with the same `Idempotency-Key` returns the
+        stored answer and sends nothing again; a refund that is already approved is returned unchanged.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: refund_id, in: path, required: true, schema: {$ref: "#/components/schemas/RefundId"}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The refund as it stands after the approval.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentRefund"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/refunds/{refund_id}/reject:
+    post:
+      operationId: rejectPaymentRefund
+      tags: [Payments]
+      summary: Decline a refund that no one approved and no channel saw
+      description: >-
+        Returns the frozen credits and moves no cash. Only a refund still waiting for review, with no approver and
+        nothing sent to a channel, can be rejected (`conflict` means it is past that point; a definitive channel
+        outcome is resolved instead). The reason goes to the audit log. Repeating the rejection with the same
+        `Idempotency-Key` returns the stored answer and unfreezes nothing again; an already declined refund is
+        returned unchanged.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: refund_id, in: path, required: true, schema: {$ref: "#/components/schemas/RefundId"}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The refund as it stands after the rejection.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaymentRefund"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/alerts/configuration:
     get:
       operationId: getAlertConfiguration
@@ -932,6 +1725,62 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/AlertTestResult"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/retention:
+    get:
+      operationId: getRetention
+      tags: [Observability]
+      summary: Read the call log's hot window
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The saved window, or the code default before the first save.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Retention"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setRetention
+      tags: [Observability]
+      summary: Replace the call log's hot window
+      description: >-
+        A monthly partition whose whole month is older than hot_days is copied to the deployment's object store and
+        dropped only after that copy is confirmed. Without an object store every partition stays, whatever the window.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RetentionRequest"}
+      responses:
+        "201":
+          description: The saved window.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Retention"}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -1220,6 +2069,152 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/sign-in:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteSignIn
+      tags: [Site]
+      summary: A site's sign-in settings
+      description: The login domain, the passkey switch, and each provider's client ID and whether it is configured.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The settings
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteSignIn"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateSiteSignIn
+      tags: [Site]
+      summary: Set a site's login domain and passkey switch
+      description: >-
+        The login domain must be one of the site's enabled console domains; an empty string clears it. Passkeys need a
+        login domain. A domain change after any passkey, linked identity or provider application exists is refused:
+        passkeys bind to the domain and callbacks are registered under it. The change is audited.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SiteSignInUpdate"}
+      responses:
+        "200":
+          description: The settings as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteSignIn"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/sign-in/providers/{provider}:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+      - name: provider
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/OAuthProvider"}
+    put:
+      operationId: setSiteOAuthProvider
+      tags: [Site]
+      summary: Store a provider application for a site
+      description: >-
+        The client ID and secret are sealed like every other secret and never read back. Storing an application turns
+        the provider on for the site; the callback URI is the site's login origin plus
+        `/api/console/v1/auth/oauth/{provider}/callback`. The change is audited without the secret.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SiteOAuthProviderUpdate"}
+      responses:
+        "200":
+          description: The site's sign-in settings
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteSignIn"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/sign-in/providers/{provider}/delete:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+      - name: provider
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/OAuthProvider"}
+    post:
+      operationId: deleteSiteOAuthProvider
+      tags: [Site]
+      summary: Turn a provider off for a site
+      description: >-
+        Deletes the application. Linked identities stay and work again if the application is stored again. The change
+        is audited.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "201":
+          description: The site's sign-in settings
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SiteSignIn"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/sites/{site_id}/key-limits:
     parameters:
       - name: site_id
@@ -1340,6 +2335,135 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/registration:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteRegistration
+      tags: [Site]
+      summary: A site's open-registration policy
+      description: >-
+        The registration mode and the anti-abuse values for open registration: the self-hosted proof of work, the
+        email domain allow and deny lists, and the per-domain limits. Values the site does not set are the defaults in
+        code, which `defaults` shows.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The policy
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RegistrationPolicyView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateSiteRegistration
+      tags: [Site]
+      summary: Set a site's open-registration policy
+      description: >-
+        Replaces the registration mode and every anti-abuse value. Domains are lower-cased, trimmed and de-duplicated;
+        an entry covers its subdomains, and the deny list wins. Open registration needs a node that can send mail: a
+        node without SMTP answers `unavailable` there until mail is configured. The change is audited.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RegistrationPolicyUpdate"}
+      responses:
+        "200":
+          description: The policy as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RegistrationPolicyView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/legal-documents:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: listLegalDocuments
+      tags: [Site]
+      summary: A site's legal document versions
+      description: >-
+        Every published version of the site's terms of service and privacy policy, newest first within a kind, with the
+        text. The current version of each kind is the first one of that kind; the earlier ones are what earlier
+        acceptances name. One page holds at most `limit` rows; `next_cursor` continues after the last row, so a kind
+        with more than one page does not hide the other kind or its own older versions.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: The versions
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LegalDocumentHistory"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: publishLegalDocument
+      tags: [Site]
+      summary: Publish a new version of a legal document
+      description: >-
+        Adds version 1 of the kind, or the next number after the current one. The version and its text never change:
+        a correction is another publication, which every user must accept before the console lets them continue. The
+        text is supplied by the site's operator, stored and returned as plain text; the request's reason and a digest,
+        not the text, go to the audit log.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LegalDocumentPublish"}
+      responses:
+        "201":
+          description: The published version
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LegalDocument"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/accounts/{account_id}/suspension:
     parameters:
       - name: account_id
@@ -1373,6 +2497,43 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/tier:
+    parameters:
+      - name: account_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/AccountId"}
+    put:
+      operationId: setAccountTier
+      tags: [Users]
+      summary: Move an account to another tier
+      description: >-
+        Idempotent state change with reason and transactional audit. The tier must be one of the account's site; a tier
+        of another site is a 422, and the account's current tier changes nothing and writes no audit entry.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AccountTierChange"}
+      responses:
+        "204":
+          description: Tier stored; a repeated tier changes nothing
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/users/{user_id}/sign-in:
     parameters:
@@ -2912,7 +4073,8 @@ components:
     Forbidden:
       description: >-
         The session may not do this: the permission is missing, the session has not passed two-step verification
-        (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`).
+        (`mfa_required`), the Origin, content type or CSRF token is wrong (`origin_rejected`), or the current legal
+        documents have not been accepted (`consent_required`).
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -2954,6 +4116,12 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    AdminCallStatus:
+      type: string
+      enum: [ok, error]
+      description: >-
+        The result of a call: `ok` when its error_kind is empty, `error` otherwise. An old node may leave the filter echo
+        out of a list.
     AdminCallSummary:
       type: object
       additionalProperties: false
@@ -2984,6 +4152,24 @@ components:
           items:
             $ref: '#/components/schemas/AdminCallSummary'
         next_cursor: *admin_schema_id001
+        model_filter: *admin_schema_id001
+        status_filter:
+          $ref: '#/components/schemas/AdminCallStatus'
+        site_filter:
+          $ref: '#/components/schemas/SiteId'
+        incomplete:
+          type: boolean
+          description: >-
+            True when the window crosses a month the call log no longer retains (archived and dropped): calls in that
+            month are missing, so an empty page does not mean the window had no calls. Calls before `available_since`
+            were archived. An old node leaves it out, which the page shows as unavailable rather than complete.
+        available_since:
+          type: string
+          format: date-time
+          description: >-
+            The first instant of the oldest monthly partition the log still has; calls before it were archived.
+            Absent with `incomplete` true when no monthly partition remains, so no window can be answered from the
+            log.
     AdminAttempt:
       type: object
       additionalProperties: false
@@ -3068,6 +4254,38 @@ components:
           enum:
           - invite
           - closed
+          - open
+        name_editable:
+          type: boolean
+          description: >-
+            Whether this node accepts a name-only update of the system settings. Absent on a node of the previous release,
+            whose contract requires the registration mode with the name; the settings page then keeps the name read-only
+            until the node is upgraded.
+    SiteBrand:
+      type: object
+      additionalProperties: false
+      properties:
+        brand_color:
+          type: string
+          pattern: '^#[0-9a-f]{6}$'
+          description: >-
+            The site's brand colour, lower case. Absent when the site uses the default palette; a node of the previous
+            release has no brand colour and leaves it out.
+    SiteBrandUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - brand_color
+      - reason
+      properties:
+        brand_color:
+          type: string
+          pattern: '^(#[0-9a-fA-F]{6})?$'
+          description: >-
+            The new brand colour as #rrggbb, or empty to return to the default palette. A value the console corrects for
+            contrast is accepted: it picks the accent and the button's ink, not the site owner.
+        reason:
+          $ref: '#/components/schemas/Reason'
     SystemSettingsUpdate:
       type: object
       additionalProperties: false
@@ -3087,7 +4305,6 @@ components:
               - closed
           required:
           - name
-          - registration
         reason:
           $ref: '#/components/schemas/Reason'
       required:
@@ -3103,6 +4320,13 @@ components:
           $ref: '#/components/schemas/Money'
         credits_max:
           $ref: '#/components/schemas/Money'
+        top_up_buffer_ppm:
+          type: integer
+          minimum: 0
+          maximum: 100000
+          description: >-
+            The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A
+            node of the previous release does not return it.
     PaymentSettingsUpdate:
       type: object
       additionalProperties: false
@@ -3117,6 +4341,11 @@ components:
               $ref: '#/components/schemas/Money'
             credits_max:
               $ref: '#/components/schemas/Money'
+            top_up_buffer_ppm:
+              type: integer
+              minimum: 0
+              maximum: 100000
+              description: "The buffer in millionths, 0 to 10%. Omit to keep the current one."
           required:
           - open
         reason:
@@ -3192,6 +4421,45 @@ components:
           - failed
           - disabled
           - unsupported
+    SearchSettings:
+      type: object
+      additionalProperties: false
+      properties:
+        url:
+          type: string
+        has_key:
+          type: boolean
+        restart_required:
+          type: boolean
+        source:
+          type: string
+    SearchSettingsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        settings:
+          type: object
+          additionalProperties: false
+          properties:
+            url:
+              type: string
+              maxLength: 2048
+            key:
+              type: string
+              maxLength: 4096
+        reason:
+          $ref: '#/components/schemas/Reason'
+      required:
+      - settings
+      - reason
+    SearchConfigTest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          $ref: '#/components/schemas/Reason'
+      required:
+      - reason
     MailConfigTest:
       type: object
       additionalProperties: false
@@ -3239,6 +4507,224 @@ components:
       properties:
         id: {$ref: "#/components/schemas/AnnouncementId"}
     OrderId: {type: string, pattern: '^ord_[0-9a-hjkmnp-tv-z]{26}$', description: "A top-up order's ID (TypeID), also the order number the payment channel sees."}
+    PayAmount:
+      type: object
+      required: [amount, currency]
+      description: >-
+        An amount in the currency a method is paid in, which is not always the site's. `amount` is a non-negative integer
+        in decimal text, in the currency's minor units (cents for USD, fen for CNY, none for JPY).
+      properties:
+        amount: {type: string, pattern: '^(0|[1-9][0-9]{0,18})$', example: "7300"}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: CNY}
+    RefundId: {type: string, pattern: '^rfd_[0-9a-hjkmnp-tv-z]{26}$', description: "A refund's ID (TypeID), the refund number of channels that take one."}
+    PaymentOrderState:
+      type: string
+      enum: [pending, paid, expired, cancelled, failed, review, partially_refunded, refunded, charged_back]
+      description: >-
+        The order's state. `pending` waits for payment; `paid` is credited; `expired` and `cancelled` can still be
+        credited if a payment arrives in time; `failed` was refused by the channel; `review` waits for a person; the
+        rest follow refunds and chargebacks (docs/domains/payments.md「订单」).
+    PaymentRefundState:
+      type: string
+      enum: [frozen, sending, pending, succeeded, failed]
+      description: >-
+        The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for
+        sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the
+        cash and took the credits; `failed` returned the credits and moved no cash.
+    PaymentRefund:
+      type: object
+      description: A refund as the operator's list and decisions show it. Every field is optional during rolling deployment.
+      properties:
+        id: {$ref: "#/components/schemas/RefundId"}
+        order_id: {$ref: "#/components/schemas/OrderId"}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        state: {$ref: "#/components/schemas/PaymentRefundState"}
+        via: {type: string, enum: [channel, offline], description: "channel sends the cash back; offline waits for a manual conclusion."}
+        credits: {$ref: "#/components/schemas/Money"}
+        amount: {$ref: "#/components/schemas/PayAmount"}
+        reason: {type: string, description: "Why the user asked for the refund."}
+        requested_by: {$ref: "#/components/schemas/UserId"}
+        approved_by: {$ref: "#/components/schemas/UserId"}
+        provider_ref: {type: string, description: "The channel's own refund number, once it has one."}
+        created_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+    PaymentRefundList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PaymentRefund"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    PaymentOrder:
+      type: object
+      description: >-
+        A top-up order as the operator's list shows it, with what was quoted, what the channel actually took and
+        credited, and its refunds. Every field is optional during rolling deployment.
+      properties:
+        id: {$ref: "#/components/schemas/OrderId"}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        user_id: {$ref: "#/components/schemas/UserId"}
+        merchant_id: {$ref: "#/components/schemas/MerchantId"}
+        merchant_name: {type: string, description: "The merchant account's name, the channel the order was paid through."}
+        method: {type: string}
+        state: {$ref: "#/components/schemas/PaymentOrderState"}
+        credits: {$ref: "#/components/schemas/Money"}
+        total: {$ref: "#/components/schemas/PayAmount"}
+        fee: {$ref: "#/components/schemas/PayAmount"}
+        credited:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: "The credits actually added, when the payment was credited; it can be less than `credits`."
+        paid_total:
+          allOf: [{$ref: "#/components/schemas/PayAmount"}]
+          description: "What the channel actually took, when the payment was credited."
+        paid_fee:
+          allOf: [{$ref: "#/components/schemas/PayAmount"}]
+          description: "The channel's fee on what it actually took."
+        trade_no: {type: string, description: "The channel's own order number."}
+        created_at: {type: string, format: date-time}
+        paid_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        refund_allowed: {type: boolean}
+        refunds:
+          type: array
+          description: The order's refunds, oldest first.
+          items: {$ref: "#/components/schemas/PaymentRefund"}
+    PaymentOrderList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PaymentOrder"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    CashMovement:
+      type: object
+      description: >-
+        One cash entry of the ledger: a paid credit or a refund. Every field is optional during rolling deployment.
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        kind: {type: string, enum: [credit, refund]}
+        at: {type: string, format: date-time, description: "The transaction's time, which is what the dashboard's window counted."}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        batch_id: {$ref: "#/components/schemas/Uuid"}
+        amount: {$ref: "#/components/schemas/Money"}
+        order_id:
+          allOf: [{$ref: "#/components/schemas/OrderId"}]
+          description: "The order behind an online payment; absent for an offline channel."
+        offline_channel: {type: string, description: "Where an offline payment was received; absent for an online order."}
+    CashMovementList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/CashMovement"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    Merchant:
+      type: object
+      description: A merchant account of a payment channel, without its secrets. Every field is optional during rolling deployment.
+      properties:
+        id: {$ref: "#/components/schemas/MerchantId"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        kind: {type: string, description: "The compiled-in channel plugin, such as easypay."}
+        name: {type: string}
+        enabled: {type: boolean}
+        currency: {type: string, pattern: '^[A-Z]{3}$', description: "The currency users pay this account in; the callback carries no currency."}
+        ttl_seconds: {type: integer, description: "How long an order of this account stays payable."}
+        refund_enabled: {type: boolean, description: "Whether refunds of its orders may be sent automatically."}
+        user_refund: {type: boolean, description: "Whether users may ask for a refund against this account."}
+        sort: {type: integer, description: "Tie-break order among the site's accounts: lower first."}
+        rev: {type: integer, format: int64, description: "The revision a change must be decided against."}
+        settings:
+          x-go-type: jsonx.Raw
+          type: object
+          additionalProperties: true
+          description: "The plugin's non-secret configuration, canonical JSON."
+        methods:
+          type: array
+          items: {$ref: "#/components/schemas/MerchantMethod"}
+    MerchantMethod:
+      type: object
+      description: One payment method a merchant account offers. Every field is optional during rolling deployment.
+      properties:
+        method: {type: string, description: "The site's method code, such as alipay or usdt.tron."}
+        upstream: {type: string, description: "The gateway's own code for the method."}
+        fee_ppm: {type: integer, description: "The channel's proportional fee in millionths; 30000 is 3%."}
+        fee_fixed: {$ref: "#/components/schemas/Money"}
+        single_min: {$ref: "#/components/schemas/Money"}
+        single_max: {$ref: "#/components/schemas/Money"}
+        daily_limit: {$ref: "#/components/schemas/Money"}
+        enabled: {type: boolean}
+    MerchantList:
+      type: object
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Merchant"}
+    MerchantCreate:
+      type: object
+      additionalProperties: false
+      required: [site_id, merchant, reason]
+      properties:
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        merchant: {$ref: "#/components/schemas/MerchantInput"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    MerchantUpdate:
+      type: object
+      additionalProperties: false
+      required: [merchant, reason]
+      properties:
+        merchant: {$ref: "#/components/schemas/MerchantInput"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    MerchantInput:
+      type: object
+      additionalProperties: false
+      required: [kind, name, enabled, currency, ttl_seconds, refund_enabled, user_refund, sort, settings, methods]
+      properties:
+        rev:
+          type: integer
+          format: int64
+          minimum: 1
+          description: "The revision the change was decided against; required when updating, ignored when creating."
+        kind: {type: string, pattern: '^[a-z][a-z0-9_]{0,31}$'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        enabled: {type: boolean}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        ttl_seconds: {type: integer, minimum: 60, maximum: 86400}
+        refund_enabled: {type: boolean}
+        user_refund: {type: boolean}
+        sort: {type: integer, minimum: 0, maximum: 2147483647}
+        settings:
+          x-go-type: jsonx.Raw
+          type: object
+          additionalProperties: true
+          description: "The plugin's non-secret configuration as a JSON object; the plugin validates its members strictly."
+        secrets:
+          type: object
+          writeOnly: true
+          description: >-
+            The channel's secrets, such as key, sealed on arrival and never returned. Required when creating; omit on
+            update to keep the sealed ones.
+          additionalProperties: {type: string, maxLength: 4096}
+        methods:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: {$ref: "#/components/schemas/MerchantMethodInput"}
+    MerchantMethodInput:
+      type: object
+      additionalProperties: false
+      required: [method, upstream, fee_ppm, fee_fixed, enabled]
+      properties:
+        method: {type: string, pattern: '^[a-z][a-z0-9_.]{0,31}$'}
+        upstream: {type: string, minLength: 1, maxLength: 64}
+        fee_ppm: {type: integer, minimum: 0, maximum: 500000}
+        fee_fixed: {$ref: "#/components/schemas/Money"}
+        single_min: {$ref: "#/components/schemas/Money"}
+        single_max: {$ref: "#/components/schemas/Money"}
+        daily_limit: {$ref: "#/components/schemas/Money"}
+        enabled: {type: boolean}
     MerchantId: {type: string, pattern: '^mch_[0-9a-hjkmnp-tv-z]{26}$', description: "A merchant account's ID (TypeID)."}
     PaymentDiscrepancy:
       type: object
@@ -3268,6 +4754,34 @@ components:
         rev: {type: integer, format: int64, minimum: 1}
         rules: {type: array, maxItems: 32, items: {$ref: "#/components/schemas/AlertRule"}}
         channels: {type: array, maxItems: 32, items: {$ref: "#/components/schemas/AlertChannel"}}
+        spend_detection: {$ref: "#/components/schemas/SpendDetection"}
+    SpendDetection:
+      type: object
+      description: "Offline account spend-anomaly thresholds. The object is optional so an older node's configuration replacement leaves the saved thresholds unchanged."
+      required: [enabled, window_seconds, baseline_seconds, min_spend_nano, spend_ratio, min_new_region_calls, min_new_model_calls]
+      additionalProperties: false
+      properties:
+        enabled: {type: boolean}
+        notify_users: {type: boolean, default: false, description: "Create the account's user reminder for a detected anomaly. Leave off until every node can dispatch the spend_anomaly notice kind: an older dispatcher would mark it sent without sending it. Detection and alert channels do not depend on it."}
+        window_seconds: {type: integer, minimum: 900, maximum: 86400, description: "Recent window compared with the baseline. The detector runs every 10 minutes, so the window is at least 15 minutes and consecutive windows overlap."}
+        baseline_seconds: {type: integer, minimum: 900, maximum: 604800, description: "The account's own history immediately before the recent window; at least window_seconds."}
+        min_spend_nano: {type: integer, format: int64, minimum: 0, maximum: 1000000000000000000, description: "Absolute floor for a spend spike, in billionths of a credit."}
+        spend_ratio: {type: number, format: double, minimum: 1, maximum: 1000, description: "Recent spend divided by the baseline's expected spend for the same window."}
+        min_new_region_calls: {type: integer, minimum: 1, maximum: 1000000}
+        min_new_model_calls: {type: integer, minimum: 1, maximum: 1000000}
+    Retention:
+      type: object
+      description: "The call log's hot window. Every field is optional so an older node's response is read as the parts it has."
+      additionalProperties: false
+      properties:
+        hot_days: {type: integer, minimum: 0, maximum: 3650, description: "Whole months older than this leave PostgreSQL for the object store. 0 keeps every partition."}
+    RetentionRequest:
+      type: object
+      required: [hot_days, reason]
+      additionalProperties: false
+      properties:
+        hot_days: {type: integer, minimum: 0, maximum: 3650}
+        reason: {$ref: "#/components/schemas/Reason"}
     AlertRule:
       type: object
       properties:
@@ -3300,6 +4814,7 @@ components:
         rev: {type: integer, format: int64, minimum: 1}
         rules: {type: array, maxItems: 32, items: {allOf: [{$ref: "#/components/schemas/AlertRule"}], required: [id, kind, minimum_severity, threshold, duration_seconds, channel, quiet_start, quiet_end, repeat_seconds]}}
         channels: {type: array, maxItems: 32, items: {allOf: [{$ref: "#/components/schemas/AlertChannel"}], required: [id]}}
+        spend_detection: {$ref: "#/components/schemas/SpendDetection"}
         reason: {$ref: "#/components/schemas/Reason"}
     AlertTestRequest:
       type: object
@@ -3410,31 +4925,112 @@ components:
         - invalid_code
         - forbidden
         - mfa_required
+        - consent_required
         - origin_rejected
         - not_found
         - conflict
+        - login_domain_locked
+        - login_domain_required
+        - identity_taken
+        - identity_already_linked
+        - account_not_linked
         - email_taken
         - name_taken
         - too_many_keys
         - stale_revision
         - idempotency_key_reused
         - invalid_invite
+        - registration_closed
+        - human_check_failed
+        - email_domain_not_allowed
+        - invalid_verification
         - weak_password
         - not_ready
         - unprocessable
+        - redeem_code_invalid
+        - redeem_code_expired
+        - redeem_code_disabled
+        - redeem_code_used
         - rate_limited
         - internal
         - not_implemented
         - unavailable
+    OperationsOverview:
+      type: object
+      additionalProperties: false
+      properties:
+        site_id:
+          $ref: '#/components/schemas/SiteId'
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+        calls_incomplete:
+          type: boolean
+          description: >-
+            True when the window crosses a month the call log no longer retains, so calls, errors and the two rankings
+            omit archived calls; revenue, cost and cash still cover the whole window. An old node leaves it out, which
+            the page shows as unavailable rather than complete.
+        calls_available_since:
+          type: string
+          format: date-time
+          description: >-
+            The first instant of the oldest monthly partition the log still has; calls before it were archived.
+            Absent with `calls_incomplete` true when no monthly partition remains, so no window can be answered from
+            the log.
+        revenue:
+          $ref: '#/components/schemas/Money'
+        cost:
+          $ref: '#/components/schemas/Money'
+        unknown_cost_calls: {type: integer, format: int64}
+        cash:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashAmount'
+        top_accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverviewAccount'
+        top_models:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverviewModel'
+    OverviewAccount:
+      type: object
+      additionalProperties: false
+      properties:
+        account_id:
+          $ref: '#/components/schemas/AccountId'
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+    OverviewModel:
+      type: object
+      additionalProperties: false
+      properties:
+        model: {type: string}
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+    CashAmount:
+      type: object
+      required: [amount, currency]
+      description: >-
+        An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one
+        unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the
+        same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it, and a report's sum can
+        be wider than 64 bits.
+      properties:
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]*)$', maxLength: 39, example: "1500000000"}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
     Money:
       type: object
       required: [amount, currency]
       description: >-
         An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of
         one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round
-        above 2^53 (about 9 million units) in the browser.
+        above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than
+        64 bits; an amount that is written to the ledger must still fit 64 bits.
       properties:
-        amount: {type: string, pattern: '^-?(0|[1-9][0-9]{0,18})$', example: "1500000000"}
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]*)$', maxLength: 39, example: "1500000000"}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
     Version:
       type: object
@@ -3506,6 +5102,28 @@ components:
             The permission names the session holds on its own scope (the user's account on the console, the platform
             on the admin), for showing or hiding what the user cannot do. The server decides again on every request.
           items: {type: string}
+        consent:
+          allOf: [{$ref: "#/components/schemas/SessionConsent"}]
+          description: >-
+            What the page must show before the session may do anything else. Optional so a page built before this field
+            reads an older node that does not send it.
+    SessionConsent:
+      type: object
+      description: >-
+        The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the
+        server refuses its requests with `consent_required` instead.
+      required: [required]
+      properties:
+        required:
+          type: array
+          description: Current documents this user has not accepted; empty when every one is accepted.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
+    LegalDocumentVersion:
+      type: object
+      required: [kind, version]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        version: {type: integer, minimum: 1}
     TotpSetup:
       type: object
       required: [secret, uri]
@@ -3549,10 +5167,54 @@ components:
         floor: {$ref: "#/components/schemas/Money"}
         available: {$ref: "#/components/schemas/Money"}
         spent_this_month: {$ref: "#/components/schemas/Money"}
+        batches:
+          type: array
+          description: >-
+            The credit batches that still hold something, oldest credit first, with what is left in each and when it
+            stops counting. An account with nothing is an empty array. Read in the same snapshot as the balance:
+            absent on a node of the previous release, when the allocation could not be brought up to date in bounded
+            time, or when a transaction committed after the last replay. The page then shows this part as unavailable
+            rather than a number from a different moment.
+          items: {$ref: "#/components/schemas/CreditBatch"}
+    CreditBatch:
+      type: object
+      required: [id, source, amount, remaining, frozen, created_at]
+      description: >-
+        Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending
+        takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this
+        batch, not what the next charge will take.
+      properties:
+        id:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: The batch's own identity; paid credit uses the order's ID as the batch ID.
+        source:
+          type: string
+          enum: [gift, paid, redeem]
+          x-enum-varnames: [CreditBatchGift, CreditBatchPaid, CreditBatchRedeem]
+          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave."
+        amount: {$ref: "#/components/schemas/Money"}
+        remaining: {$ref: "#/components/schemas/Money"}
+        frozen: {$ref: "#/components/schemas/Money"}
+        created_at: {type: string, format: date-time}
+        expires_at:
+          type: string
+          format: date-time
+          description: "When what is left of the batch stops counting. Absent when it never expires."
     Uuid:
       type: string
       pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       description: An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+    AdminSite:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        logo_url:
+          type: string
+          description: >-
+            Path on this admin host to the site's logo; absent when there is none. A node of the release before this
+            field leaves it out, and the app falls back to the name.
     SiteId: {type: string, pattern: '^site_[0-9a-hjkmnp-tv-z]{26}$', description: "A site's ID (TypeID)."}
     TierId: {type: string, pattern: '^tier_[0-9a-hjkmnp-tv-z]{26}$', description: "A tier's ID (TypeID)."}
     Decimal:
@@ -3588,6 +5250,44 @@ components:
         data:
           type: array
           items: {$ref: "#/components/schemas/TierRef"}
+    OAuthProvider:
+      type: string
+      enum: [github, google, linuxdo]
+      description: "A third-party sign-in provider."
+    SiteOAuthProvider:
+      type: object
+      additionalProperties: false
+      required: [provider, configured]
+      properties:
+        provider: {$ref: "#/components/schemas/OAuthProvider"}
+        client_id: {type: string, description: "Absent until the application is stored."}
+        configured: {type: boolean}
+    SiteSignIn:
+      type: object
+      additionalProperties: false
+      required: [passkeys, providers]
+      properties:
+        login_domain: {type: string, description: "Absent when no login domain is set."}
+        passkeys: {type: boolean}
+        providers:
+          type: array
+          items: {$ref: "#/components/schemas/SiteOAuthProvider"}
+    SiteSignInUpdate:
+      type: object
+      additionalProperties: false
+      required: [passkeys, reason]
+      properties:
+        login_domain: {type: string, maxLength: 253, description: "One of the site's enabled console domains; empty clears it."}
+        passkeys: {type: boolean}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    SiteOAuthProviderUpdate:
+      type: object
+      additionalProperties: false
+      required: [client_id, client_secret, reason]
+      properties:
+        client_id: {type: string, minLength: 1, maxLength: 200}
+        client_secret: {type: string, minLength: 1, maxLength: 500, description: "Sealed at rest; never returned."}
+        reason: {type: string, minLength: 1, maxLength: 500}
     SiteSettings:
       type: object
       description: >-
@@ -3601,6 +5301,80 @@ components:
         admin_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 43200}
         admin_max_age_seconds: {type: integer, minimum: 300, maximum: 86400}
         new_key_daily_limit: {$ref: "#/components/schemas/Money"}
+    SiteLogoView:
+      type: object
+      properties:
+        logo:
+          allOf: [{$ref: "#/components/schemas/SiteLogo"}]
+          description: The logo in force; absent when the site has none.
+    SiteLogo:
+      type: object
+      required: [content_type, hash, size, width, height]
+      properties:
+        content_type: {type: string, enum: [image/svg+xml, image/png, image/webp]}
+        hash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: SHA-256 of the bytes served, which the logo's public URL carries.
+        size: {type: integer, minimum: 1, maximum: 262144, description: "Bytes served."}
+        width: {type: integer, minimum: 0, maximum: 1024, description: "Pixels; 0 for an SVG with no intrinsic size."}
+        height: {type: integer, minimum: 0, maximum: 1024}
+        data_url:
+          type: string
+          description: >-
+            The bytes as a data URL, for the settings page's preview only; the change response leaves it out. Absent on
+            a node of the release before this field.
+    SiteLogoUpdate:
+      type: object
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 500}
+        logo:
+          allOf: [{$ref: "#/components/schemas/SiteLogoUpload"}]
+          description: The new logo; left out clears the site's logo.
+    SiteLogoUpload:
+      type: object
+      required: [content_type, data_base64]
+      properties:
+        content_type: {type: string, enum: [image/svg+xml, image/png, image/webp]}
+        data_base64:
+          type: string
+          format: byte
+          minLength: 1
+          maxLength: 349528
+          description: The file, at most 256 KiB before base64.
+    LegalDocumentKind:
+      type: string
+      enum: [terms, privacy]
+    LegalDocument:
+      type: object
+      description: One version of one of the site's legal documents; the text is plain text, never HTML.
+      required: [kind, version, body, published_at]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        version: {type: integer, minimum: 1}
+        body: {type: string}
+        published_at: {type: string, format: date-time}
+    LegalDocumentHistory:
+      type: object
+      required: [documents, next_cursor]
+      properties:
+        documents:
+          type: array
+          description: Newest first within a kind, at most `limit` rows.
+          items: {$ref: "#/components/schemas/LegalDocument"}
+        next_cursor:
+          type: string
+          nullable: true
+          description: Where the next page starts, or null on the last page.
+
+    LegalDocumentPublish:
+      type: object
+      required: [kind, body, reason]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        body: {type: string, minLength: 1, maxLength: 65536}
+        reason: {$ref: "#/components/schemas/Reason"}
     SiteSettingsView:
       type: object
       required: [settings, defaults]
@@ -3635,11 +5409,52 @@ components:
       properties:
         limits: {$ref: "#/components/schemas/LoginLimits"}
         reason: {$ref: "#/components/schemas/Reason"}
+    RegistrationPolicy:
+      type: object
+      required: [mode, human_check, human_check_bits, domain_burst, domain_per_hour, domain_allow, domain_deny]
+      description: >-
+        Open registration: `mode` is the site's registration mode; the proof of work the page solves; the domains
+        allowed and denied (an entry covers its subdomains, the deny list wins, and an empty allow list takes every
+        domain the syntax allows); and the per-domain burst and hourly limits.
+      properties:
+        mode: {type: string, enum: [invite, closed, open]}
+        human_check: {type: boolean}
+        human_check_bits: {type: integer, minimum: 12, maximum: 24}
+        domain_burst: {type: integer, minimum: 1, maximum: 10000}
+        domain_per_hour: {type: integer, minimum: 1, maximum: 100000}
+        domain_allow:
+          type: array
+          maxItems: 100
+          items: {type: string, minLength: 3, maxLength: 253, pattern: '^[A-Za-z0-9. -]+$'}
+        domain_deny:
+          type: array
+          maxItems: 100
+          items: {type: string, minLength: 3, maxLength: 253, pattern: '^[A-Za-z0-9. -]+$'}
+    RegistrationPolicyView:
+      type: object
+      required: [policy, defaults]
+      properties:
+        policy: {$ref: "#/components/schemas/RegistrationPolicy"}
+        defaults:
+          description: What applies where the site sets no value.
+          allOf: [{$ref: "#/components/schemas/RegistrationPolicy"}]
+    RegistrationPolicyUpdate:
+      type: object
+      required: [policy, reason]
+      properties:
+        policy: {$ref: "#/components/schemas/RegistrationPolicy"}
+        reason: {$ref: "#/components/schemas/Reason"}
     AccountSuspension:
       type: object
       required: [suspended, reason]
       properties:
         suspended: {type: boolean}
+        reason: {$ref: "#/components/schemas/Reason"}
+    AccountTierChange:
+      type: object
+      required: [tier_id, reason]
+      properties:
+        tier_id: {$ref: "#/components/schemas/TierId"}
         reason: {$ref: "#/components/schemas/Reason"}
     UserSignIn:
       type: object
@@ -3721,6 +5536,11 @@ components:
       required: [id, site_id, name, kind, status, tier, owner, balance, key_limits, created_at]
       properties:
         calls_suspended: {type: boolean}
+        sign_in_disabled:
+          type: boolean
+          description: >-
+            Whether the owner cannot sign in. Absent on a node of the previous release, whose page then shows the
+            sign-in part as unavailable.
         id: {$ref: "#/components/schemas/AccountId"}
         site_id: {$ref: "#/components/schemas/SiteId"}
         name: {type: string}
@@ -3759,6 +5579,48 @@ components:
       properties:
         amount: {$ref: "#/components/schemas/Money"}
         channel: {type: string, minLength: 1, maxLength: 200, description: "Where it was received, such as a bank account."}
+    RedeemCodeId: {type: string, pattern: '^rdm_[0-9a-hjkmnp-tv-z]{26}$', description: "A redeem code's ID (TypeID)."}
+    RedeemCodeState:
+      type: string
+      enum: [enabled, used, disabled, expired]
+      description: >-
+        A code's state as a page shows it: `expired` is an enabled code past its expiry, the stored state stays enabled.
+    RedeemCodeBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [site_id, amount, count, reason]
+      properties:
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        amount: {$ref: "#/components/schemas/Money"}
+        count: {type: integer, minimum: 1, maximum: 100, description: "How many codes the batch makes."}
+        note: {type: string, maxLength: 200, description: "What the batch is for, shown beside each code. Absent: none."}
+        expires_at: {type: string, format: date-time, description: "UTC, in the future. Absent: the codes never expire."}
+        reason: {$ref: "#/components/schemas/Reason"}
+      description: "One generation of codes: each worth `amount` of the site's currency, all with the same expiry and note."
+    RedeemCode:
+      type: object
+      additionalProperties: false
+      required: [id, state, amount, note, hint, created_at, created_by]
+      properties:
+        id: {$ref: "#/components/schemas/RedeemCodeId"}
+        state: {$ref: "#/components/schemas/RedeemCodeState"}
+        amount: {$ref: "#/components/schemas/Money"}
+        note: {type: string}
+        hint: {type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{4}$', description: "The code's last four characters; never the code."}
+        code:
+          type: string
+          description: >-
+            The code itself, shown only in the answer that made it, and never in a list or a read. Absent there.
+        expires_at: {type: string, format: date-time, description: "Absent: the code never expires."}
+        created_at: {type: string, format: date-time}
+        created_by: {$ref: "#/components/schemas/UserId"}
+        redeemed_at: {type: string, format: date-time, description: "When the code was redeemed; absent if it was not."}
+    RedeemCodeList:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/RedeemCode"}}
+        next_cursor: {type: string, description: "Absent on the last page."}
     CreditGrant:
       type: object
       required: [id, account_id, source, amount, created_at, balance_after]
@@ -3797,7 +5659,7 @@ components:
         native_unit: {type: string, enum: [quota, usd], description: "The unit the supplier counts its balance in."}
         settlement_currency: {type: string, pattern: '^[A-Z]{3}$'}
         status: {$ref: "#/components/schemas/SupplierStatus"}
-        status_reason: {type: string}
+        status_reason: {type: string, minLength: 1, maxLength: 200}
         balance_native: {$ref: "#/components/schemas/Decimal"}
         balance_observed_at: {type: string, format: date-time}
         low_balance_threshold: {$ref: "#/components/schemas/Decimal"}
@@ -3901,6 +5763,27 @@ components:
           type: object
           description: What the supplier says about the group (platform, subscription type, peak pricing, long context).
           additionalProperties: true
+        pool: {$ref: "#/components/schemas/SupplierPool"}
+    SupplierPool:
+      type: object
+      description: What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool, or a read has not reported it yet.
+      required: [accounts, failed, usable, low, observed_at]
+      properties:
+        accounts: {type: integer, minimum: 1, description: "The accounts assigned to the group."}
+        failed: {type: integer, minimum: 0, description: "How many of them the pool marks failed: they cannot serve."}
+        usable: {type: integer, minimum: 0, description: "How many of them the pool may schedule now."}
+        headroom:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: "The mean room left in the tighter quota window of the accounts that can serve, in percent. Absent when no account reported a window."
+        capacity:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: "The effective capacity this leaves: headroom times the share of accounts that can serve, in percent. Absent when no account reported a window."
+        low: {type: boolean, description: "Routing halves the group's weight while this is true."}
+        observed_at: {type: string, format: date-time, description: "When these numbers were recorded."}
     GroupSelection:
       type: object
       required: [selected, reason]
@@ -3992,6 +5875,10 @@ components:
         reason: {$ref: "#/components/schemas/Reason"}
     ModelFormat:
       type: string
+      enum: [messages, responses, chat, embeddings, rerank, completions]
+    TestFormat:
+      type: string
+      description: The generation formats an endpoint test can exercise. Direct formats and legacy completions are listed on the endpoint but are not tested here yet.
       enum: [messages, responses, chat]
     EndpointTestRequest:
       type: object
@@ -3999,7 +5886,7 @@ components:
       properties:
         endpoint_id: {$ref: "#/components/schemas/Uuid"}
         format:
-          allOf: [{$ref: "#/components/schemas/ModelFormat"}]
+          allOf: [{$ref: "#/components/schemas/TestFormat"}]
           description: The format to test it in; it must be one the endpoint serves.
         reason: {$ref: "#/components/schemas/Reason"}
     EndpointTestOutcome:
@@ -4051,7 +5938,7 @@ components:
         endpoint_id: {$ref: "#/components/schemas/Uuid"}
         model_id: {$ref: "#/components/schemas/Uuid"}
         upstream_model: {type: string, description: "The model's name at the supplier, which the call sent."}
-        format: {$ref: "#/components/schemas/ModelFormat"}
+        format: {$ref: "#/components/schemas/TestFormat"}
         outcome: {$ref: "#/components/schemas/EndpointTestOutcome"}
         problem: {$ref: "#/components/schemas/EndpointTestProblem"}
         upstream_status: {type: integer, minimum: 0, description: "The supplier's HTTP status; 0 when it answered nothing."}
@@ -4102,6 +5989,13 @@ components:
           allOf: [{$ref: "#/components/schemas/Uuid"}]
         upstream_name: {type: string, minLength: 1, maxLength: 200}
         model_id: {$ref: "#/components/schemas/Uuid"}
+        formats:
+          type: array
+          items: {$ref: "#/components/schemas/ModelFormat"}
+          description: >-
+            Call formats the name serves beyond the adapter's own, such as `completions` for an OpenAI-type new-api
+            endpoint whose model accepts the legacy API. Omitted: leave an existing declaration as it is. An empty array
+            clears it. The projection unions the declaration with the adapter's formats, so the next sync keeps it.
         reason: {$ref: "#/components/schemas/Reason"}
     ModelMapping:
       type: object
@@ -4117,12 +6011,16 @@ components:
         group_id: {$ref: "#/components/schemas/Uuid"}
         upstream_name: {type: string}
         model_id: {$ref: "#/components/schemas/Uuid"}
+        formats:
+          type: array
+          items: {$ref: "#/components/schemas/ModelFormat"}
+          description: The call formats this alias declares beyond the adapter's; absent when it declares none.
     AuthorSlug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,39}$'}
     ModelSlug:
       type: string
-      maxLength: 182
-      pattern: '^[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9._-]{0,99}(@[a-z0-9][a-z0-9._-]{0,39})?$'
-      description: "`<author>/<model>`, with `@<version>` when the vendor gives one; lower case, as the catalog stores it."
+      maxLength: 187
+      pattern: '^[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9._-]{0,99}(:free)?(@[a-z0-9][a-z0-9._-]{0,39})?$'
+      description: "`<author>/<model>`, with optional `:free` and `@<version>` when the vendor gives one; lower case, as the catalog stores it."
     Author:
       type: object
       required: [slug, name]

@@ -21,11 +21,22 @@ type Config struct {
 	// sync holds it for a person; default 25. billing's reference-price safety valve (docs/domains/billing.md「定价」)
 	// is above the catalog and cannot be called from here, so the catalog keeps its own until that valve exists.
 	PriceChangeLimit int
+	// CountedItems allows publishing prices for the items counted per piece, second or character. An older release's
+	// parser rejects their names, and a node that cannot parse one price drops the whole snapshot and stops serving
+	// every model, so this stays off until every node runs a release that reads them: this release reads them; the
+	// release that opens the image, audio and speech endpoints, after the fleet runs this one, turns this on
+	// (README.md「新增计费项与滚动升级」).
+	CountedItems bool
 }
 
 // ErrStale is what Current returns when the snapshot is missing, or the database has not confirmed it for longer than
 // MaxStale: a model taken down elsewhere must not be called here for long.
 var ErrStale = errors.New("the catalog snapshot is missing or stale")
+
+// ErrCountedItems is what a publish or a source switch returns for a price on an item counted per piece, second or
+// character while Config.CountedItems is off: a node running an older release cannot parse that name and would drop the
+// whole snapshot.
+var ErrCountedItems = errors.New("catalog: prices for counted items wait until every node reads them")
 
 // Catalog holds the node's snapshot and runs the admin operations. The platform scope is given by cmd/axiom.
 type Catalog struct {
@@ -173,7 +184,7 @@ func ReadSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
 	}
 	snap := &Snapshot{
 		revision: revision, models: map[ModelID]Model{}, names: map[string]nameEntry{},
-		prices: map[priceKey]ReferencePrice{},
+		aliases: map[string]ModelID{}, prices: map[priceKey]ReferencePrice{},
 	}
 	models, err := q.ListModelsForSnapshot(ctx, tx)
 	if err != nil {
@@ -190,20 +201,19 @@ func ReadSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
 		}
 	}
 	sortModels(snap.listed)
+	if err := addAuthorNames(ctx, tx, snap.models); err != nil {
+		return nil, err
+	}
 	names, err := q.ListNamesForSnapshot(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	for _, n := range names {
-		m := snap.models[ModelID(n.ModelID)]
-		snap.names[n.Norm] = nameEntry{
-			model:    m.ID,
-			public:   Visibility(n.Visibility) == VisibilityPublic,
-			retired:  m.Status == StatusRetired,
-			floating: m.VersionBasis == VersionFloating,
-			exact:    m.VersionBasis == VersionFloating || hasDate(n.Norm),
-		}
+	snap.addNames(names)
+	aliases, err := q.ListAliasesForSnapshot(ctx, tx)
+	if err != nil {
+		return nil, err
 	}
+	snap.addAliases(aliases)
 	prices, err := q.ListCurrentPricesForSnapshot(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -218,6 +228,28 @@ func ReadSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
 	return snap, nil
 }
 
+// addAuthorNames resolves each model's author to its display name, which a verification answer must name: the slug is
+// the catalog's key, not what a model calls its maker (docs/domains/quality.md「真伪检测」). An author row without a
+// name falls back to its slug, so a check never compares an answer with an empty claim.
+func addAuthorNames(ctx context.Context, tx pg.Tx, models map[ModelID]Model) error {
+	authors, err := New().ListAuthors(ctx, tx)
+	if err != nil {
+		return err
+	}
+	names := make(map[string]string, len(authors))
+	for _, a := range authors {
+		names[a.Slug] = a.Name
+	}
+	for id, m := range models {
+		m.AuthorName = names[m.Author]
+		if m.AuthorName == "" {
+			m.AuthorName = m.Author
+		}
+		models[id] = m
+	}
+	return nil
+}
+
 func modelFromRow(row CatalogModel) (Model, error) {
 	spec, err := parseSpec(row.Spec)
 	if err != nil {
@@ -227,7 +259,7 @@ func modelFromRow(row CatalogModel) (Model, error) {
 		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
 		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource),
 		spec: string(row.Spec), Rev: row.Rev, reportable: spec.reportable, serving: spec.serving, serves: spec.serves,
-		dialect: spec.dialect, toolUses: spec.toolUses, speed: spec.speed, reasoning: spec.reasoning,
+		directServes: spec.directServes, dialect: spec.dialect, toolUses: spec.toolUses, speed: spec.speed, reasoning: spec.reasoning,
 	}, nil
 }
 
@@ -273,15 +305,16 @@ type DialectKeys struct {
 }
 
 type spec struct {
-	toolUses   map[Item]int64
-	reportable Reportable
-	declared   bool // both lists are present, possibly empty
-	serving    Serving
-	serves     bool // every key Serving reads is present
-	abilities  bool // the abilities are listed, possibly empty
-	dialect    Dialect
-	speed      int64     // the fastest output, in tokens per second; 0 when the spec does not say
-	reasoning  FormatSet // the call formats in which the model's stream shows reasoning progress
+	toolUses     map[Item]int64
+	reportable   Reportable
+	declared     bool // both lists are present, possibly empty
+	serving      Serving
+	serves       bool // every key Serving reads is present
+	directServes bool // context is present; direct-only formats need neither an output limit nor streaming
+	abilities    bool // the abilities are listed, possibly empty
+	dialect      Dialect
+	speed        int64     // the fastest output, in tokens per second; 0 when the spec does not say
+	reasoning    FormatSet // the call formats in which the model's stream shows reasoning progress
 }
 
 // parseSpec checks a spec is a JSON object whose items, tiers and abilities, if present, name billing items, service
@@ -312,15 +345,16 @@ func parseSpec(raw []byte) (spec, error) {
 		return spec{}, err
 	}
 	return spec{
-		toolUses:   toolUses,
-		reportable: reportable,
-		serving:    serving,
-		dialect:    dialect,
-		declared:   w.Items != nil && w.Tiers != nil,
-		serves:     w.Context != nil && w.MaxOutput != nil && w.Streams != nil && w.Abilities != nil,
-		abilities:  w.Abilities != nil,
-		speed:      speed,
-		reasoning:  reasoning,
+		toolUses:     toolUses,
+		reportable:   reportable,
+		serving:      serving,
+		dialect:      dialect,
+		declared:     w.Items != nil && w.Tiers != nil,
+		serves:       w.Context != nil && w.MaxOutput != nil && w.Streams != nil && w.Abilities != nil,
+		abilities:    w.Abilities != nil,
+		speed:        speed,
+		reasoning:    reasoning,
+		directServes: w.Context != nil,
 	}, nil
 }
 

@@ -242,6 +242,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The signed-in devices
+         * @description This user's live console sessions, newest first and at most 100, with when each was made and last used, the network it was signed in from and a short client description. `current` marks the session of this request. The network is the group the sign-in limits count (an IPv4 address as it is, an IPv6 allocation as its /64), and `client` is derived from the stored User-Agent, which is not returned. A sign-in that still waits for its second factor is not a signed-in device and is not listed; another surface's sessions (the admin's) and sessions ended by a factor change are not listed either.
+         */
+        get: operations["listSessions"];
+        put?: never;
+        post?: never;
+        /**
+         * End every other session
+         * @description Revokes all other console sessions of the user, pending sign-ins included, and leaves the session of this request signed in. Returns how many ended. Another surface's sessions are not touched; replacing a factor ends those. The change and its audit entry commit together.
+         */
+        delete: operations["revokeOtherSessions"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: components["schemas"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End one other session
+         * @description Revokes one console session of the user. The asking session is ended by `signOut`, not here, so it is not found; neither is another user's, another surface's or one already ended. The change and its audit entry commit together.
+         */
+        delete: operations["revokeSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/auth/totp/setup": {
         parameters: {
             query?: never;
@@ -284,6 +330,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/auth/totp/replace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace two-step verification's secret
+         * @description Needs a session that passed two-step verification and proof of the factor being replaced: a current TOTP code or an unused recovery code in `current_code`. It also needs a code from the new secret, taken from `beginTotpSetup`, which stores nothing until this call. The old secret and every unused recovery code stop working, the user's other sessions end, and this device gets a new `mfa` session as `FactorChange` describes, all in one transaction with the audit entry. A factor that is not on is a 409; a user who lost both the authenticator and the recovery codes is reset from the command line.
+         *
+         *     Limits: failed current or new codes count against the user's 10 an hour, like sign-in's second factor.
+         */
+        post: operations["replaceTotp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/auth/recovery-codes": {
         parameters: {
             query?: never;
@@ -306,6 +374,323 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/auth/recovery-codes/take": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take the recovery codes a provider link left for this session
+         * @description A provider link answers with a redirect, so the new recovery codes it makes cannot come back in that response. They are kept on the session the link issued, encrypted under its token, and this call reads them under the session row's lock and clears them in the same transaction: the first call returns them and later calls return none. Needs a signed-in console session; the codes belong to it.
+         */
+        post: operations["takeRecoveryCodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/oauth/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start signing in with a third-party provider
+         * @description Makes a single-use state and, where the provider supports it, a PKCE verifier, stores them with the site's callback URI and a nonce cookie, and returns the provider's authorization URL. The callback must carry that nonce or it signs no browser in: state alone would let a completed callback be used to sign another browser in to the account that began it. The flow is for one site and expires in 10 minutes. Needs the `Origin` of the console and no session; a site that has not stored the provider's application is a 404, and a request on a console domain that is not the site's login domain is refused because the callback and its cookie belong to that domain. Limits: the sign-in per-IP bucket.
+         */
+        post: operations["startOAuthSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/oauth/link/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start linking a third-party provider to the signed-in user
+         * @description The same flow as `startOAuthSignIn`, bound to this user and session. It is a credential change: a user with a second factor must be in an `mfa` session. The callback must return to this same browser and session, or it links nothing. Limits: the sign-in per-IP bucket.
+         */
+        post: operations["startOAuthLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/oauth/{provider}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The provider's redirect back to the site
+         * @description Spends the state, exchanges the code for the stored callback URI, and reads the provider's subject. A sign-in matches that subject against linked identities only: an unknown one is not registered and its email never joins accounts (no automatic merge). A link attaches the subject to the session that began the flow, raises the user's factor version and issues a new session. Answers 303 under the console mount: `/console/` after a sign-in, `/console/security` after a link, and `/console/sign-in?oauth=failed` when the round trip fails, so a browser never lands on JSON. The path's provider must be the one the state was made for.
+         */
+        get: operations["completeOAuth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/begin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start signing in with a passkey
+         * @description A discoverable assertion: the browser offers every passkey for the site's login domain and the chosen one carries its user, so nobody types an email first and an unknown caller learns nothing about who exists. The ceremony requires user verification and expires in 5 minutes. Needs the `Origin` of the console and no session; the site must have passkeys on and a login domain. Limits: the sign-in per-IP bucket.
+         */
+        post: operations["beginPasskeySignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish signing in with a passkey
+         * @description Verifies the assertion against the stored public key and the counter, then issues an `mfa` session: the authenticator verified the person and proved possession. A counter that goes backwards is refused; zero is what synced passkeys report and stays accepted. The body is the browser's credential JSON; `flow_id` is the one `beginPasskeySignIn` returned. Needs the `Origin` of the console and no session. Limits: the sign-in per-IP bucket.
+         */
+        post: operations["finishPasskeySignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/mfa/begin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start the passkey factor of a pending sign-in
+         * @description The pending session a password sign-in issued is the only credential needed. The challenge names the user's credentials and requires user verification; it expires in 5 minutes.
+         */
+        post: operations["beginPasskeyMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/mfa/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish the passkey factor of a pending sign-in
+         * @description Verifies the assertion, ends the pending session and issues an `mfa` session. A failed ceremony counts one of the pending session's five attempts, as a wrong code does. The body is the browser's credential JSON; `flow_id` is the one `beginPasskeyMfa` returned.
+         */
+        post: operations["finishPasskeyMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The signed-in user's passkeys
+         * @description The credentials the account page offers to delete, newest last.
+         */
+        get: operations["listPasskeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/register/begin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start adding a passkey
+         * @description The current password is required, and a user with a second factor must be in an `mfa` session: a passkey can sign in on its own, so adding one from a password-only session would let a stolen password bypass the second factor. The challenge excludes the user's credentials and requires user verification; it expires in 5 minutes. At most 10 passkeys per user.
+         */
+        post: operations["beginPasskeyRegistration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/register/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish adding a passkey
+         * @description Verifies the attestation, stores the credential with the name the begin stored, raises the user's factor version, ends every other session and issues this browser an `mfa` session. The body is the browser's credential JSON; `flow_id` is the one `beginPasskeyRegistration` returned.
+         */
+        post: operations["finishPasskeyRegistration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/passkeys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a passkey
+         * @description Requires the current password, and an `mfa` session when the user has another second factor. Raises the factor version, ends every other session and issues this browser a new session at the same level; audits the removal. The password remains a way in.
+         */
+        delete: operations["deletePasskey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/identities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in user's linked third-party accounts */
+        get: operations["listIdentities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/identities/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Unlink a third-party account
+         * @description Requires an `mfa` session when the user has a second factor. Raises the factor version, ends every other session and issues this browser a new session at the same level; audits the removal. The password remains a way in.
+         */
+        delete: operations["unlinkIdentity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/legal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site's current legal documents
+         * @description The terms of service and the privacy policy the site has published, at their current versions, as plain text. The registration page shows them and sends their versions back with the registration or with `acceptLegalDocuments`. A site that publishes none answers an empty list and requires no acceptance. The text is public: no session is needed.
+         */
+        get: operations["getLegalDocuments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/legal/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept the current legal documents
+         * @description Records the signed-in user's acceptance of every current document at the version the request names, with the time. A missing, stale or extra version is `consent_required`: the page must send exactly what `getLegalDocuments` returned. Accepting the same version again changes nothing. A session may call this while the rest of the console is refused for want of acceptance.
+         */
+        post: operations["acceptLegalDocuments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/site": {
         parameters: {
             query?: never;
@@ -315,9 +700,29 @@ export interface paths {
         };
         /**
          * The site the request's domain belongs to
-         * @description What the sign-in and registration pages need before anyone is signed in: the site's name and logo for the brand, and whether registration needs an invite. The site is found from the `Host`, which must be a domain registered for the console; any other host gets a 404.
+         * @description What the sign-in and registration pages need before anyone is signed in: the site's name and logo for the brand, whether registration needs an invite, and, on a site with open registration, the proof-of-work difficulty the page must solve. The site is found from the `Host`, which must be a domain registered for the console; any other host gets a 404.
          */
         get: operations["getSite"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/site/logo/{hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site's logo
+         * @description The logo the site configures, at the URL `getSite` gives while the site has one. The URL carries the SHA-256 of the bytes served, so a logo never changes under its URL and a browser may keep it for a year. A hash the site never served is a 404; an earlier logo stays available under its own hash, so a page opened before the logo changed keeps its image.
+         */
+        get: operations["getSiteLogo"];
         put?: never;
         post?: never;
         delete?: never;
@@ -336,12 +741,34 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Register with an invite code
-         * @description Makes the user, their personal account, its default workspace and balance, in the site's default tier. It does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown, its user disabled, or the site not registering by invitation) is one `invalid_invite`. A taken email is `email_taken`, and the whole registration is undone. The email is not verified in M1.
+         * Register with an invite code or open registration
+         * @description On a site registering by invitation, makes the user, their personal account, its default workspace and balance, in the site's default tier, and answers 201. It does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown, its user disabled, or the site not registering by invitation) is one `invalid_invite`; a taken email is `email_taken`, and the whole registration is undone.
          *
-         *     Limits: the per-IP bucket of `signIn`.
+         *     On a site with open registration, checks the address against the site's domain lists and the proof of work, stores one pending registration without a password, and queues a single-use verification link; the answer is always 202 for a well-formed address, whether or not it is registered already, so an anonymous caller cannot learn which addresses exist. A password in this request is ignored: the verification page sets it after the address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot send mail answers `unavailable`, and a closed site `registration_closed`.
+         *
+         *     Limits: the per-IP bucket of `signIn`, and on open registration, the email domain's bucket.
          */
         post: operations["register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/auth/verify-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify an open registration's email
+         * @description Turns the single-use token from the verification mail and the password chosen by the mailbox owner into the user, their personal account, its default workspace and balance. The password is validated and hashed only after the token is found; no password is kept before this request. The token is bound to the console domain and the pending registration; an unknown, expired or already used one is one `invalid_verification`, and an address registered in the meantime is `email_taken`. The user is not signed in: the page sends them to sign in with the password they chose. Limits: the per-IP bucket of `signIn`; an attempt spends one before the token is looked up or the password is hashed.
+         */
+        post: operations["verifyEmail"];
         delete?: never;
         options?: never;
         head?: never;
@@ -357,7 +784,7 @@ export interface paths {
         };
         /**
          * The account's API keys
-         * @description Every key of the session's account that is not deleted, disabled ones included, newest first. The text of a key is never returned again after `createKey`.
+         * @description Every key of the session's account that is not deleted, disabled and expired ones included, newest first by making. `name` and `prefix` search part of a key's name or prefix, ignoring case; `status` keeps active, disabled or expired keys; `created_after` and `created_before` keep the keys made in a range. A page reads the keys in the index's order and applies the filters as it goes, so a later page starts after the last key read, whatever the filters match. The text of a key is never returned again after `createKey`.
          */
         get: operations["listKeys"];
         put?: never;
@@ -539,6 +966,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/models/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the published models at the signed-in account's prices
+         * @description The same projection as `listPublicModels`, priced for the session's account and its current tier. A signed-in user sees the price a call would be charged at, so a tier change shows on the next request. The account is read in the same scope as the rest of the console; no supplier, endpoint, route or cost is ever part of the answer.
+         */
+        get: operations["listAccountModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the published models and the site's sale prices
+         * @description The public projection of the catalog: the models the node serves and prices, under their public names, with their limits, abilities and the sale prices of the site's default tier. It is the price a visitor pays after registering, and the same data the website's models and prices page shows. It carries no supplier, endpoint, route, cost, internal name, price source or evidence. An anonymous request is answered for the site of the `Host`, like `getSite`; any other host is a 404.
+         */
+        get: operations["listPublicModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/payment-methods": {
         parameters: {
             query?: never;
@@ -568,7 +1035,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * The account's top-up orders
+         * @description Newest first, `limit` per page, continued with `next_cursor`. Only the account's own orders; another account's never appear. Each order carries its refunds, oldest first, so the page can show where a request stands without a second call. A node of the previous release sends no `refunds` and no `refund_allowed`; the page then shows refunds as unavailable instead of guessing.
+         */
+        get: operations["listOrders"];
         put?: never;
         /**
          * Place a top-up order
@@ -651,6 +1122,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/orders/{order_id}/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for a refund of unused credits from an order
+         * @description The order page's refund request. It only works for an order paid through a merchant account that lets users request refunds, and only for the part of that order's paid credits that is neither spent, expired nor already frozen: `credits` is what the user asks to give back, and the answer's `credits` is what was actually frozen, which can be less. The cash quote is computed from the batch's own payment and the site's refund policy, never from the order's quote at the time. The request waits for a different administrator to approve it, so the answer's `state` is `pending_review`; the order keeps its state meanwhile. A channel that cannot refund, or an order whose merchant does not allow user requests, is `forbidden`; a second request while one is in flight is `conflict`; an amount with nothing refundable left is `unprocessable`. `Idempotency-Key` makes the request happen once per order: the same key with the same credits and reason returns the stored refund, and another request under it is `idempotency_key_reused`.
+         */
+        post: operations["requestRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/redeem-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The redeem codes this account redeemed, newest first
+         * @description One page of the credit this account got from redeem codes, newest first: each redemption's credit, when it was redeemed, and when the credit expires. It never shows a code, only its last four characters, so the history is not a way to recover one. Needs `balance.view`, like every read of the account's money.
+         */
+        get: operations["listRedemptions"];
+        put?: never;
+        /**
+         * Redeem a code into credit
+         * @description Turns a code the site issued into a credit batch of the account's currency, with the code's expiry, and records it in the account's history. A code credits once, whichever account redeems it: `201` is the credit this request made, `200` is the credit an earlier request with the same `Idempotency-Key` made (the answer was lost; the key is reused, not the code), and a code already redeemed with another key is `conflict`. A code that is unknown, expired or disabled is `unprocessable`; a code is never echoed in an answer or an error.
+         *
+         *     Attempts that fail are limited per account and per network, an hour at a time: past the limit the request is `rate_limited` with `Retry-After` the seconds until the window is over, and the attempt is counted before the code is looked at. A replay of the key is not an attempt. If the counting itself fails, the request is refused (`internal`), never let through.
+         */
+        post: operations["redeemCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -704,6 +1223,53 @@ export interface components {
             calls?: string;
             price?: components["schemas"]["CallAggregateMoney"];
         };
+        PublicModelList: {
+            data: components["schemas"]["PublicModel"][];
+        };
+        /** @description One published model as a visitor may see it: its public name and limits, the abilities its spec declares, and the sale prices of the audience that asked. No supplier, endpoint, route, cost or internal name. */
+        PublicModel: {
+            /** @description The public model ID, such as acme/claude-sonnet. */
+            id: string;
+            /** @description The vendor's name for the model, the part of the public ID after the author. */
+            name: string;
+            /** @description The author slug, the part of the public ID before the slash. */
+            author: string;
+            /** Format: int64 */
+            context_length: number;
+            /** Format: int64 */
+            max_output: number;
+            /** @description Whether the vendor streams the model's replies. */
+            streams: boolean;
+            abilities: components["schemas"]["ModelAbility"][];
+            pricing: components["schemas"]["ModelPricing"];
+        };
+        /** @enum {string} */
+        ModelAbility: "tools" | "images" | "documents" | "reasoning" | "prompt_cache" | "structured_output" | "web_search" | "code_execution";
+        /** @description Every unit price the model's sale schedule sets, for each service tier and context band. A price is decimal text in the pricing currency, per the item's unit; an item the schedule does not price is absent. */
+        ModelPricing: {
+            currency: string;
+            /** @description The items whose counts add up to the prompt length the context bands compare; empty when the schedule has no context tiers. */
+            basis: components["schemas"]["ModelItem"][];
+            rates: components["schemas"]["ModelRate"][];
+        };
+        ModelRate: {
+            service_tier: components["schemas"]["ModelServiceTier"];
+            /**
+             * Format: int64
+             * @description The prompt length above which this rate applies. Absent for the base band that applies below every threshold; 0 is an explicit first band above 0 and is not the base band.
+             */
+            above?: number;
+            item: components["schemas"]["ModelItem"];
+            unit: components["schemas"]["ModelUnit"];
+            /** @description Exact currency units per unit, decimal text with up to 15 fractional digits. */
+            amount: string;
+        };
+        /** @enum {string} */
+        ModelServiceTier: "standard" | "flex" | "priority" | "fast";
+        /** @enum {string} */
+        ModelItem: "input" | "cache_read" | "cache_write" | "cache_write_1h" | "audio_in" | "image_in" | "output" | "reasoning" | "audio_out" | "image_out" | "web_search" | "code_execution" | "image_in_piece" | "image_out_piece" | "audio_in_second" | "audio_out_second" | "character_in";
+        /** @enum {string} */
+        ModelUnit: "token" | "use" | "piece" | "second" | "character";
         /** @description A site's ID (TypeID). */
         SiteId: string;
         /** @description A site announcement's ID (TypeID). */
@@ -723,6 +1289,8 @@ export interface components {
             top_up?: boolean;
             /** @description Controls background factor-change email and webhooks. Password-change security email is always sent. */
             factor_changed?: boolean;
+            /** @description Controls account spend-anomaly email and webhooks. Absent from a node that predates the preference; a client must then neither show the switch nor send the field. */
+            spend_anomaly?: boolean;
             /** @description Billionths of site credits. */
             threshold?: string;
             webhook_url?: string;
@@ -734,6 +1302,8 @@ export interface components {
             top_up: boolean;
             /** @description Controls background factor-change email and webhooks. Password-change security email is always sent. */
             factor_changed: boolean;
+            /** @description Controls account spend-anomaly email and webhooks. Omit to keep the stored value. */
+            spend_anomaly?: boolean;
             /** @description Billionths of site credits. */
             threshold: string;
             webhook_url: string;
@@ -763,13 +1333,36 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "origin_rejected" | "not_found" | "conflict" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
-        /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. */
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits. */
         Money: {
             /** @example 1500000000 */
             amount: string;
             /** @example USD */
             currency: string;
+        };
+        RedeemCodeRequest: {
+            /** @description The code as issued, with or without its dashes or spaces, in any case. */
+            code: string;
+        };
+        RedeemCodeRedemption: {
+            /** @description The redemption's ID (TypeID), also the credit batch's. */
+            id: string;
+            amount: components["schemas"]["Money"];
+            /** @description The code's last four characters; never the code. */
+            code_hint: string;
+            /**
+             * Format: date-time
+             * @description When the credit expires; absent: never.
+             */
+            expires_at?: string;
+            /** Format: date-time */
+            redeemed_at: string;
+        };
+        RedeemCodeHistory: {
+            data: components["schemas"]["RedeemCodeRedemption"][];
+            /** @description Absent on the last page. */
+            next_cursor?: string;
         };
         Version: {
             /**
@@ -804,6 +1397,33 @@ export interface components {
          * @enum {string}
          */
         SessionLevel: "pending_mfa" | "password" | "mfa";
+        /** @enum {string} */
+        LegalDocumentKind: "terms" | "privacy";
+        /** @description One version of one of the site's legal documents; the text is plain text, never HTML. */
+        LegalDocument: {
+            kind: components["schemas"]["LegalDocumentKind"];
+            version: number;
+            body: string;
+            /** Format: date-time */
+            published_at: string;
+        };
+        LegalDocumentVersion: {
+            kind: components["schemas"]["LegalDocumentKind"];
+            version: number;
+        };
+        LegalDocuments: {
+            /** @description The current version of each kind, at most one per kind. */
+            documents: components["schemas"]["LegalDocument"][];
+        };
+        LegalAcceptance: {
+            /** @description Every current document at its current version, as getLegalDocuments returned it. */
+            consent: components["schemas"]["LegalDocumentVersion"][];
+        };
+        /** @description The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead. */
+        SessionConsent: {
+            /** @description Current documents this user has not accepted; empty when every one is accepted. */
+            required: components["schemas"]["LegalDocumentVersion"][];
+        };
         Session: {
             user: {
                 id: components["schemas"]["UserId"];
@@ -823,6 +1443,36 @@ export interface components {
             expires_at: string;
             /** @description The permission names the session holds on its own scope (the user's account on the console, the platform on the admin), for showing or hiding what the user cannot do. The server decides again on every request. */
             permissions: string[];
+            /** @description What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it. */
+            consent?: components["schemas"]["SessionConsent"];
+        };
+        SessionList: {
+            /** @description Newest first, at most 100. A page that gets no `sessions` shows the list as unavailable. */
+            sessions?: components["schemas"]["SessionDevice"][];
+        };
+        /** @description One signed-in console session. Every field is optional so a page built before it reads an older node that does not send it. */
+        SessionDevice: {
+            id?: components["schemas"]["SessionId"];
+            /** @description Whether this is the session of the request. */
+            current?: boolean;
+            /**
+             * Format: date-time
+             * @description When the session was signed in.
+             */
+            created_at?: string;
+            /**
+             * Format: date-time
+             * @description When a request was last charged to it, accurate to about a minute.
+             */
+            last_seen_at?: string;
+            /** @description The network the session was signed in from, grouped as the sign-in limits count it: an IPv4 address as it is, an IPv6 allocation as its /64. Empty when no address was recorded. */
+            ip_group?: string;
+            /** @description A short browser and platform summary derived from the User-Agent recorded at sign-in, such as `Chrome on macOS`, or `Unknown client`. The raw header is not returned. */
+            client?: string;
+        };
+        SessionRevocation: {
+            /** @description How many other sessions ended. */
+            revoked?: number;
         };
         TotpSetup: {
             /** @description The new TOTP secret in base32. Nothing is stored yet; confirmTotp sends it back. */
@@ -837,9 +1487,21 @@ export interface components {
             /** @description A code from the new secret. */
             code: string;
         };
+        TotpReplaceRequest: {
+            /** @description The new TOTP secret in base32, from `beginTotpSetup`. */
+            secret: string;
+            /** @description Proof of the factor being replaced: a current TOTP code (6 digits) or an unused recovery code (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server tells them apart by shape. */
+            current_code: string;
+            /** @description A code from the new secret. */
+            code: string;
+        };
         RecoveryCodesRequest: {
             /** @description A current TOTP code. */
             code: string;
+        };
+        /** @description The recovery codes a link round trip left for the session, read once. */
+        ShownRecoveryCodes: {
+            recovery_codes: string[];
         };
         /** @description A changed factor ends every other session of the user and every unused recovery code, and issues this device a new `mfa` session: the cookie of the response replaces the old one. */
         FactorChange: {
@@ -854,12 +1516,34 @@ export interface components {
             floor: components["schemas"]["Money"];
             available: components["schemas"]["Money"];
             spent_this_month: components["schemas"]["Money"];
+            /** @description The credit batches that still hold something, oldest credit first, with what is left in each and when it stops counting. An account with nothing is an empty array. Read in the same snapshot as the balance: absent on a node of the previous release, when the allocation could not be brought up to date in bounded time, or when a transaction committed after the last replay. The page then shows this part as unavailable rather than a number from a different moment. */
+            batches?: components["schemas"]["CreditBatch"][];
+        };
+        /** @description Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this batch, not what the next charge will take. */
+        CreditBatch: {
+            /** @description The batch's own identity; paid credit uses the order's ID as the batch ID. */
+            id: string;
+            /**
+             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave.
+             * @enum {string}
+             */
+            source: "gift" | "paid" | "redeem";
+            amount: components["schemas"]["Money"];
+            remaining: components["schemas"]["Money"];
+            frozen: components["schemas"]["Money"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When what is left of the batch stops counting. Absent when it never expires.
+             */
+            expires_at?: string;
         };
         /**
-         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
          * @enum {string}
          */
-        StatementKind: "top_up" | "gift" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
+        StatementKind: "top_up" | "gift" | "redeem" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
         /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in, so the balance between two of them is not known. */
         StatementRow: {
             /** @description The row's own identity, to tell two rows apart; it names no ledger entry. */
@@ -886,24 +1570,36 @@ export interface components {
         };
         /** @description An API key's ID (TypeID). */
         KeyId: string;
+        /** @description A session's ID (TypeID). */
+        SessionId: string;
         /** @description A workspace's ID (TypeID). */
         WorkspaceId: string;
         /** @description A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`. */
         CallId: string;
         Site: {
+            id?: components["schemas"]["SiteId"];
             name: string;
             /**
              * @description The site's accounting currency, the one of every `Money` its API shows. It never changes.
              * @example USD
              */
             currency: string;
-            /** @description Absent when the site has no logo. */
+            /** @description The site's brand colour, lower case, from which the console derives both colour schemes' accent and primary button (docs/frontend.md「主题与自由度」). Absent when the site uses the default palette or the node predates the field. */
+            brand_color?: string;
+            /** @description The path of the site's logo on this host. Absent when the site has no logo. It is long-cached, because its hash names the bytes; a page shows the site's name when the image does not load. */
             logo_url?: string;
             /**
              * @description What the site's API keys start with.
              * @example sk-ax-v1-
              */
             key_prefix: string;
+            /** @description Whether open registration verifies the address by mail before the user exists. Absent on a node of the previous release. */
+            email_verification?: boolean;
+            /** @description The proof of work the open-registration page must solve. Absent when the site does not check, or when the node predates open registration. */
+            human_check?: {
+                /** @description Leading zero bits the SHA-256 of `axiom-registration-v1`, the site id, the normalized email and the decimal nonce must have. */
+                bits: number;
+            };
             /**
              * Format: uri
              * @description Where a key's calls go: the origin of the site's API domain, which serves `/v1/...`. The console shows it to the user because the console's own host is a different one; it is never built from the request's Host. Absent when the site has no enabled API domain.
@@ -911,18 +1607,116 @@ export interface components {
              */
             api_base_url?: string;
             /**
-             * @description `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
+             * @description `invite` needs an invite code; `closed` takes no one; `open` verifies the address by mail, with the site's human check, domain lists and limits.
              * @enum {string}
              */
             registration: "invite" | "closed" | "open";
+            /** @description The console domain third-party sign-in returns to and passkeys bind to. Absent until an operator sets it; the sign-in page sends visitors to `login_origin` when the Host is another console domain. */
+            login_domain?: string;
+            /**
+             * Format: uri
+             * @description The registered origin of `login_domain`. Absent with it, or when that domain is disabled.
+             */
+            login_origin?: string;
+            /** @description Whether the site offers passkeys. False on an older node that does not know the field. */
+            passkeys?: boolean;
+            /** @description The third-party providers the site configured, for the sign-in page's buttons. */
+            oauth_providers?: components["schemas"]["OAuthProvider"][];
+        };
+        /**
+         * @description A third-party sign-in provider.
+         * @enum {string}
+         */
+        OAuthProvider: "github" | "google" | "linuxdo";
+        OAuthStartRequest: {
+            provider: components["schemas"]["OAuthProvider"];
+        };
+        OAuthStart: {
+            /**
+             * Format: uri
+             * @description The provider's authorization endpoint with this flow's client, state and, where supported, PKCE challenge.
+             */
+            authorize_url: string;
+        };
+        /** @description The browser's `PublicKeyCredential` JSON, passed through to the WebAuthn verifier unchanged. Its shape is the WebAuthn specification's, not this contract's. */
+        WebAuthnCredential: {
+            [key: string]: unknown;
+        };
+        PasskeyChallenge: {
+            /** @description The ceremony to finish; single use, expires in 5 minutes. */
+            flow_id: string;
+            public_key: components["schemas"]["WebAuthnCredential"];
+        };
+        /** @description A passkey's ID (TypeID). */
+        PasskeyId: string;
+        PasskeyRegistrationRequest: {
+            /** @description A label for the credential; absent means Passkey. */
+            name?: string;
+            /** @description The current password, asked again. */
+            password: string;
+        };
+        PasskeyDeleteRequest: {
+            password: string;
+        };
+        Passkey: {
+            id: components["schemas"]["PasskeyId"];
+            name: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_used_at?: string | null;
+            /** @description Whether the credential can be synced or backed up between devices. */
+            backup_eligible: boolean;
+            /** @description Replacement recovery codes, present only on the answer that adds the passkey and only when TOTP is on: raising the factor version stops the old ones. */
+            recovery_codes?: string[];
+        };
+        Passkeys: {
+            passkeys: components["schemas"]["Passkey"][];
+        };
+        Identity: {
+            provider: components["schemas"]["OAuthProvider"];
+            display_name: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        Identities: {
+            identities: components["schemas"]["Identity"][];
+        };
+        /** @description A credential was removed: every other session ended and the response's cookie replaces this browser's session. */
+        CredentialChange: {
+            csrf_token: string;
+            /** @description Replacement recovery codes when TOTP is on; absent otherwise. */
+            recovery_codes?: string[];
         };
         RegisterRequest: {
-            invite_code: string;
+            /** @description Required on an invite-only site; ignored where registration is open. */
+            invite_code?: string;
             email: string;
-            password: string;
+            /** @description Required on an invite-only site. Open registration does not keep it: the page chooses the password on the verification page, so an unauthenticated caller cannot choose the password of an address it does not own. */
+            password?: string;
+            /** @description The decimal nonce that solves the site's proof of work. Required where `human_check` is present. */
+            human_check?: string;
+            /**
+             * @description The language of the verification mail; absent means en. The page sends its own.
+             * @enum {string}
+             */
+            language?: "zh" | "en";
+            /** @description The current legal documents the person accepted. Required on a site that publishes any, where a missing or stale version is `consent_required`; open registration checks it at verify-email instead, because no user exists yet. */
+            consent?: components["schemas"]["LegalDocumentVersion"][];
         };
         Registered: {
             user_id: components["schemas"]["UserId"];
+        };
+        RegistrationPending: {
+            /** @enum {string} */
+            status: "verification_sent";
+        };
+        VerifyEmailRequest: {
+            token: string;
+            /** @description The password chosen by the mailbox owner when the link is clicked. */
+            password: string;
+            /** @description The current legal documents the person accepted, shown on the verification page. Required on a site that publishes any; a missing or stale version is `consent_required`. */
+            consent?: components["schemas"]["LegalDocumentVersion"][];
         };
         /** @description A call or management key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit. */
         Key: {
@@ -949,8 +1743,33 @@ export interface components {
             limit_remaining?: components["schemas"]["Money"];
             /** @description The model names the key may call; absent means any model. */
             models?: string[];
+            /** @description The names in `models` that the catalog has retired, so calls to them cannot succeed. Absent when none is retired or the reading node has no catalog snapshot; a page shows no hint then. */
+            retired_models?: string[];
             /** @description The client addresses (IP or CIDR) the key may be used from; absent means any. */
             ip_allow?: string[];
+        };
+        /**
+         * @description The state the key list shows: `active` is enabled and not expired, `disabled` is disabled and not expired, and `expired` is past its `expires_at` whether enabled or not.
+         * @enum {string}
+         */
+        KeyStatus: "active" | "disabled" | "expired";
+        /** @description The filters this node applied to the page. Absent on nodes that predate key filters: those nodes ignore the filter parameters and return every key, so a filtered page cannot show their rows. */
+        KeyFilterEcho: {
+            /** @description The applied name filter, ignoring case in the match. */
+            name?: string;
+            /** @description The applied prefix filter, ignoring case in the match. */
+            prefix?: string;
+            status?: components["schemas"]["KeyStatus"];
+            /**
+             * Format: date-time
+             * @description The applied inclusive lower bound.
+             */
+            created_after?: string;
+            /**
+             * Format: date-time
+             * @description The applied exclusive upper bound.
+             */
+            created_before?: string;
         };
         /**
          * @description When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
@@ -988,6 +1807,7 @@ export interface components {
             secret: string;
         };
         KeyList: {
+            filters?: components["schemas"]["KeyFilterEcho"];
             data: components["schemas"]["Key"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
@@ -1041,8 +1861,8 @@ export interface components {
             /** Format: int64 */
             quantity?: number;
             /** @enum {string} */
-            unit?: "token" | "use";
-            /** @description Exact currency units per token or use, decimal text with up to 15 fractional digits. */
+            unit?: "token" | "use" | "piece" | "second" | "character";
+            /** @description Exact currency units per billing unit (token, use, piece, second or character), decimal text with up to 15 fractional digits. */
             unit_price?: string;
             /** @description Exact quantity times unit_price, before call-level rounding and balance adjustment. */
             amount?: string;
@@ -1129,6 +1949,40 @@ export interface components {
              */
             expires_at: string;
             checkout?: components["schemas"]["Checkout"];
+            /** @description Whether this order's merchant account lets the account request refunds. Absent on a node of the previous release; the page then shows no refund action. True does not promise the channel can refund: the request itself still answers with the current policy. */
+            refund_allowed?: boolean;
+            /** @description The order's refunds, oldest first. Absent on a node of the previous release, and on responses that do not read them (creating, cancelling and verifying an order); the page reads the order again for them. */
+            refunds?: components["schemas"]["OrderRefund"][];
+        };
+        OrderList: {
+            data: components["schemas"]["Order"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description A refund's ID (TypeID), the refund number of channels that take one. */
+        RefundId: string;
+        /**
+         * @description `pending_review` waits for an administrator's approval; `processing` is with the payment channel and its result is not final; `succeeded` returned the cash and took the credits from the balance; `declined` returned the frozen credits and moved no cash.
+         * @enum {string}
+         */
+        RefundState: "pending_review" | "processing" | "succeeded" | "declined";
+        OrderRefund: {
+            id: components["schemas"]["RefundId"];
+            state: components["schemas"]["RefundState"];
+            credits: components["schemas"]["Money"];
+            /** @description The cash due back, in the currency the order was paid in, quoted from the batch's payment and the site's refund policy. */
+            amount: components["schemas"]["PayAmount"];
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When the refund reached `succeeded` or `declined`; absent while it is not final.
+             */
+            finished_at?: string;
+        };
+        RefundRequest: {
+            credits: components["schemas"]["Money"];
+            reason: string;
         };
     };
     responses: {
@@ -1150,7 +2004,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The session may not do this: the permission is missing, the session has not passed two-step verification (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`). */
+        /** @description The session may not do this: the permission is missing, the session has not passed two-step verification (`mfa_required`), the Origin, content type or CSRF token is wrong (`origin_rejected`), or the current legal documents have not been accepted (`consent_required`). */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -1212,11 +2066,27 @@ export interface components {
         /** @description Exactly the model name the client asked for. */
         CallModel: string;
         CallClientApp: string;
+        /** @description Part of a model's public ID or display name, ignoring case. Omit for every model. */
+        ModelQuery: string;
+        /** @description The exact author slug, ignoring case. Omit for every author. */
+        ModelAuthor: string;
+        /** @description Only models that declare this ability. Omit for every ability. */
+        ModelAbility: components["schemas"]["ModelAbility"];
         CallKey: components["schemas"]["KeyId"];
         CallWorkspace: components["schemas"]["WorkspaceId"];
         /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
         CallStatus: components["schemas"]["CallStatus"];
         CallRequestId: components["schemas"]["CallId"];
+        /** @description Part of a key's name, ignoring case. Omit for every name. */
+        KeyName: string;
+        /** @description The beginning of a key's prefix, ignoring case. Omit for every prefix. */
+        KeyPrefix: string;
+        /** @description A key's state as the list shows it. Omit for every state. */
+        KeyStatus: components["schemas"]["KeyStatus"];
+        /** @description Keys the database stamped at or after this instant. */
+        KeyCreatedAfter: string;
+        /** @description Keys the database stamped before this instant. */
+        KeyCreatedBefore: string;
         /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
         Cursor: string;
         /** @description How many items a page holds at most. */
@@ -1704,6 +2574,76 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    listSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signed-in devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    revokeOtherSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The other sessions ended. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionRevocation"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    revokeSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: components["schemas"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ended. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
     beginTotpSetup: {
         parameters: {
             query?: never;
@@ -1758,6 +2698,37 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    replaceTotp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Replaced. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FactorChange"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
     regenerateRecoveryCodes: {
         parameters: {
             query?: never;
@@ -1788,6 +2759,459 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    takeRecoveryCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The codes left for this session, or an empty list. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShownRecoveryCodes"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    startOAuthSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthStartRequest"];
+            };
+        };
+        responses: {
+            /** @description The URL to send the browser to, with the nonce cookie the callback must return. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthStart"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    startOAuthLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthStartRequest"];
+            };
+        };
+        responses: {
+            /** @description The URL to send the browser to. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthStart"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    completeOAuth: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+            };
+            header?: never;
+            path: {
+                provider: components["schemas"]["OAuthProvider"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The browser goes to the console page for the outcome; the cookie is set on success. */
+            303: {
+                headers: {
+                    Location: string;
+                    /** @description The new session cookie, on success. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    beginPasskeySignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description The assertion challenge. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeyChallenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    finishPasskeySignIn: {
+        parameters: {
+            query: {
+                flow_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebAuthnCredential"];
+            };
+        };
+        responses: {
+            /** @description Signed in with an `mfa` session. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    beginPasskeyMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description The assertion challenge. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeyChallenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    finishPasskeyMfa: {
+        parameters: {
+            query: {
+                flow_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebAuthnCredential"];
+            };
+        };
+        responses: {
+            /** @description Signed in with an `mfa` session. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPasskeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The passkeys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Passkeys"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    beginPasskeyRegistration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasskeyRegistrationRequest"];
+            };
+        };
+        responses: {
+            /** @description The creation challenge. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeyChallenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    finishPasskeyRegistration: {
+        parameters: {
+            query: {
+                flow_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebAuthnCredential"];
+            };
+        };
+        responses: {
+            /** @description The new passkey and the replacement session. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Passkey"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    deletePasskey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["PasskeyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasskeyDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description The replacement session's CSRF token. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialChange"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listIdentities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The linked identities. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Identities"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    unlinkIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: components["schemas"]["OAuthProvider"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The replacement session's CSRF token. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialChange"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getLegalDocuments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current documents, one per kind, oldest kind first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalDocuments"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    acceptLegalDocuments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LegalAcceptance"];
+            };
+        };
+        responses: {
+            /** @description Accepted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getSite: {
         parameters: {
             query?: never;
@@ -1810,6 +3234,34 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    getSiteLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The logo. */
+            200: {
+                headers: {
+                    /** @description Long-lived and immutable, because the hash in the URL names the bytes. */
+                    "Cache-Control": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/svg+xml": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
     register: {
         parameters: {
             query?: never;
@@ -1823,7 +3275,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Registered. */
+            /** @description Registered with an invite code. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -1831,6 +3283,43 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Registered"];
                 };
+            };
+            /** @description Open registration accepted; a verification link is on its way. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationPending"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    verifyEmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyEmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Verified. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
@@ -1843,6 +3332,16 @@ export interface operations {
     listKeys: {
         parameters: {
             query?: {
+                /** @description Part of a key's name, ignoring case. Omit for every name. */
+                name?: components["parameters"]["KeyName"];
+                /** @description The beginning of a key's prefix, ignoring case. Omit for every prefix. */
+                prefix?: components["parameters"]["KeyPrefix"];
+                /** @description A key's state as the list shows it. Omit for every state. */
+                status?: components["parameters"]["KeyStatus"];
+                /** @description Keys the database stamped at or after this instant. */
+                created_after?: components["parameters"]["KeyCreatedAfter"];
+                /** @description Keys the database stamped before this instant. */
+                created_before?: components["parameters"]["KeyCreatedBefore"];
                 /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description How many items a page holds at most. */
@@ -2200,6 +3699,66 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    listAccountModels: {
+        parameters: {
+            query?: {
+                /** @description Part of a model's public ID or display name, ignoring case. Omit for every model. */
+                q?: components["parameters"]["ModelQuery"];
+                /** @description The exact author slug, ignoring case. Omit for every author. */
+                author?: components["parameters"]["ModelAuthor"];
+                /** @description Only models that declare this ability. Omit for every ability. */
+                ability?: components["parameters"]["ModelAbility"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The published models at the account's prices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicModelList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPublicModels: {
+        parameters: {
+            query?: {
+                /** @description Part of a model's public ID or display name, ignoring case. Omit for every model. */
+                q?: components["parameters"]["ModelQuery"];
+                /** @description The exact author slug, ignoring case. Omit for every author. */
+                author?: components["parameters"]["ModelAuthor"];
+                /** @description Only models that declare this ability. Omit for every ability. */
+                ability?: components["parameters"]["ModelAbility"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The published models at the site's default-tier prices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicModelList"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listPaymentMethods: {
         parameters: {
             query: {
@@ -2225,6 +3784,35 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listOrders: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the account's orders */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             default: components["responses"]["Failure"];
         };
     };
@@ -2356,6 +3944,114 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    requestRefund: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A key the caller chooses for one intended refund, 1 to 128 of letters, digits and `._:-` (a UUID is fine). */
+                "Idempotency-Key": string;
+            };
+            path: {
+                order_id: components["schemas"]["OrderId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundRequest"];
+            };
+        };
+        responses: {
+            /** @description The refund, frozen and waiting for approval. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderRefund"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listRedemptions: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the account's redemptions, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeHistory"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    redeemCode: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A key the caller chooses for one intended redemption, 1 to 128 of letters, digits and `._:-` (a UUID is fine). */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description The credit an earlier request with this key made. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeRedemption"];
+                };
+            };
+            /** @description The credit this code made. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeRedemption"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];
         };

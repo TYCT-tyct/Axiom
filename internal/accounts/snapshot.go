@@ -30,7 +30,7 @@ type Site struct {
 	Main         bool
 	Name         string
 	KeyPrefix    string
-	Registration string // invite or closed
+	Registration string // invite, closed or open
 	// Currency is the site's accounting currency, which the amounts its API shows are in.
 	Currency platform.Currency
 	// DefaultTier is the tier the site puts a new account in, its first unless an operator changed it.
@@ -40,9 +40,28 @@ type Site struct {
 	// MaxKeysPerAccount and KeyCreationsPerHour bound an account's call keys: how many it may hold that are not
 	// deleted, and how many it may make in an hour.
 	MaxKeysPerAccount, KeyCreationsPerHour int
+	// Open registration's human check and email domain policy. The check is a proof of work the page solves; the
+	// lists are lower-case domains, and the deny list wins over the allow list.
+	RegistrationHumanCheck     bool
+	RegistrationHumanCheckBits int
+	RegistrationDomainAllow    []string
+	RegistrationDomainDeny     []string
 	// APIBase is the origin a key's calls go to, where the site registers an API domain: the console tells the user
 	// where to point a client rather than trusting the Host of the request (README.md「快照」).
-	APIBase  string
+	APIBase string
+	// LoginDomain is the one domain passkeys bind to and providers redirect back to. LoginOrigin is that domain's
+	// registered origin, empty when the domain is not enabled: no ceremony can run then.
+	LoginDomain, LoginOrigin string
+	// Passkeys is whether the site turned passkeys on. OAuth is the providers it configured, by name, with the public
+	// client ID; a provider absent from the map is off.
+	Passkeys bool
+	OAuth    map[string]string
+	// BrandColor is the site's #rrggbb colour; empty means the default palette. The console derives both schemes from
+	// it (docs/frontend.md「主题与自由度」).
+	BrandColor string
+	// LogoHash is the SHA-256 of the logo the site currently serves, as its URL writes it; empty when it has none. The
+	// bytes are not in the snapshot: a logo page reads them by this hash, and only a cold fetch reaches the database.
+	LogoHash string
 	sessions map[Surface]lifetime
 	limits   limits
 }
@@ -152,28 +171,9 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		return nil, err
 	}
 	for _, r := range sites {
-		site := Site{
-			ID: SiteID(r.ID), Main: r.IsMain, Name: r.Name, KeyPrefix: r.KeyPrefix, Registration: r.Registration,
-			DefaultTier: TierID(r.DefaultTierID), NewKeyDailyLimit: defaultNewKeyDailyLimit,
-			sessions: map[Surface]lifetime{
-				Console: {seconds(r.ConsoleIdleSeconds, defaultLifetimes[Console].idle), seconds(r.ConsoleMaxAgeSeconds, defaultLifetimes[Console].max)},
-				Admin:   {seconds(r.AdminIdleSeconds, defaultLifetimes[Admin].idle), seconds(r.AdminMaxAgeSeconds, defaultLifetimes[Admin].max)},
-			},
-		}
-		currency, err := platform.ParseCurrency(r.Currency)
+		site, err := readSite(r)
 		if err != nil {
-			return nil, fmt.Errorf("site %s: %w", site.ID.TypeID(), err)
-		}
-		site.Currency = currency
-		if r.NewKeyDailyLimit != nil {
-			site.NewKeyDailyLimit = *r.NewKeyDailyLimit
-		}
-		site.MaxKeysPerAccount = setting(r.MaxKeysPerAccount, defaultMaxKeysPerAccount)
-		site.KeyCreationsPerHour = setting(r.KeyCreationsPerHour, defaultKeyCreationsPerHour)
-		site.limits = limits{
-			ipBurst: setting(r.IpAttemptBurst, defaultLimits.ipBurst), ipPerMinute: setting(r.IpAttemptsPerMinute, defaultLimits.ipPerMinute),
-			emailFailures: setting(r.EmailSignInFailures, defaultLimits.emailFailures), codeFailures: setting(r.UserCodeFailures, defaultLimits.codeFailures),
-			challengeAttempts: setting(r.ChallengeCodeAttempts, defaultLimits.challengeAttempts),
+			return nil, err
 		}
 		next.sites[site.ID] = site
 	}
@@ -182,10 +182,80 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 		return nil, err
 	}
 	readDomains(next, domains)
+	providers, err := s.queries.ListSiteOAuthProviders(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	readProviders(next, providers)
 	roles, err := s.queries.ListRoles(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
+	readRoles(ctx, next, roles)
+	next.presets, err = readPresets(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+// readSite builds one site's snapshot entry, with the defaults a null column leaves.
+func readSite(r ListSitesRow) (Site, error) {
+	site := Site{
+		ID: SiteID(r.ID), Main: r.IsMain, Name: r.Name, KeyPrefix: r.KeyPrefix, Registration: r.Registration,
+		DefaultTier: TierID(r.DefaultTierID), NewKeyDailyLimit: defaultNewKeyDailyLimit,
+		Passkeys: r.PasskeysEnabled, OAuth: map[string]string{},
+		sessions: map[Surface]lifetime{
+			Console: {seconds(r.ConsoleIdleSeconds, defaultLifetimes[Console].idle), seconds(r.ConsoleMaxAgeSeconds, defaultLifetimes[Console].max)},
+			Admin:   {seconds(r.AdminIdleSeconds, defaultLifetimes[Admin].idle), seconds(r.AdminMaxAgeSeconds, defaultLifetimes[Admin].max)},
+		},
+	}
+	currency, err := platform.ParseCurrency(r.Currency)
+	if err != nil {
+		return Site{}, fmt.Errorf("site %s: %w", site.ID.TypeID(), err)
+	}
+	site.Currency = currency
+	if r.BrandColor != nil {
+		site.BrandColor = *r.BrandColor
+	}
+	if len(r.LogoHash) != 0 {
+		site.LogoHash = fmt.Sprintf("%x", r.LogoHash)
+	}
+	if r.NewKeyDailyLimit != nil {
+		site.NewKeyDailyLimit = *r.NewKeyDailyLimit
+	}
+	if r.LoginDomain != nil {
+		site.LoginDomain = *r.LoginDomain
+	}
+	site.MaxKeysPerAccount = setting(r.MaxKeysPerAccount, defaultMaxKeysPerAccount)
+	site.KeyCreationsPerHour = setting(r.KeyCreationsPerHour, defaultKeyCreationsPerHour)
+	site.RegistrationHumanCheck = boolSetting(r.RegistrationHumanCheck, defaultHumanCheck)
+	site.RegistrationHumanCheckBits = setting(r.RegistrationHumanCheckBits, defaultHumanCheckBits)
+	site.RegistrationDomainAllow = lowerDomains(r.RegistrationDomainAllow)
+	site.RegistrationDomainDeny = lowerDomains(r.RegistrationDomainDeny)
+	site.limits = limits{
+		ipBurst: setting(r.IpAttemptBurst, defaultLimits.ipBurst), ipPerMinute: setting(r.IpAttemptsPerMinute, defaultLimits.ipPerMinute),
+		emailFailures: setting(r.EmailSignInFailures, defaultLimits.emailFailures), codeFailures: setting(r.UserCodeFailures, defaultLimits.codeFailures),
+		challengeAttempts: setting(r.ChallengeCodeAttempts, defaultLimits.challengeAttempts),
+		domainBurst:       setting(r.RegistrationDomainBurst, defaultLimits.domainBurst),
+		domainPerHour:     setting(r.RegistrationDomainPerHour, defaultLimits.domainPerHour),
+	}
+	return site, nil
+}
+
+// readProviders adds each site's provider applications, by provider name, to its entry.
+func readProviders(next *snapshot, providers []ListSiteOAuthProvidersRow) {
+	for _, p := range providers {
+		if site, ok := next.sites[SiteID(p.SiteID)]; ok {
+			site.OAuth[p.Provider] = p.ClientID
+			next.sites[site.ID] = site
+		}
+	}
+}
+
+// readRoles indexes the roles by name and by id, and drops a permission the code does not declare: a row written by a
+// newer node must not widen what this node checks.
+func readRoles(ctx context.Context, next *snapshot, roles []ListRolesRow) {
 	for _, r := range roles {
 		next.roleIDs[r.Name] = r.ID
 		next.roles[r.ID] = map[string]bool{}
@@ -197,11 +267,6 @@ func (s *Service) read(ctx context.Context, tx pg.Tx) (*snapshot, error) {
 			next.roles[r.ID][p] = true
 		}
 	}
-	next.presets, err = readPresets(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	return next, nil
 }
 
 // readDomains indexes the site domains by host, and records each site's API base: the origin of its API domain, the
@@ -214,6 +279,11 @@ func readDomains(next *snapshot, domains []ListSiteDomainsRow) {
 		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == API &&
 			preferAPIOrigin(r.Origin, site.APIBase) {
 			site.APIBase = r.Origin
+			next.sites[site.ID] = site
+		}
+		if site, ok := next.sites[SiteID(r.SiteID)]; ok && Surface(r.Surface) == Console &&
+			r.Domain == site.LoginDomain {
+			site.LoginOrigin = r.Origin
 			next.sites[site.ID] = site
 		}
 	}
@@ -241,6 +311,14 @@ func setting(v *int32, fallback int) int {
 		return fallback
 	}
 	return int(*v)
+}
+
+// boolSetting is a site's switch, or fallback when it is unset.
+func boolSetting(v *bool, fallback bool) bool {
+	if v == nil {
+		return fallback
+	}
+	return *v
 }
 
 // SiteForHost is the site and surface of the request's Host, as written in the request: lower-cased here, with the

@@ -10,6 +10,12 @@ export function endpointState(endpoint: AdminSchemas["SupplierEndpoint"]) {
   return endpoint.cost_state === "known" ? "ready" : endpoint.cost_state;
 }
 
+// The formats of an endpoint a test can call: the generation formats (api/admin.yaml TestFormat). Embeddings and rerank
+// are listed on an endpoint but have no test yet, so an endpoint that serves only them offers none.
+export function testFormats(formats: AdminSchemas["ModelFormat"][]): AdminSchemas["TestFormat"][] {
+  return formats.filter((f): f is AdminSchemas["TestFormat"] => f === "messages" || f === "responses" || f === "chat");
+}
+
 // A duration as a person reads it: milliseconds below a second, seconds to a tenth above.
 export function duration(ms: number): { unit: "ms" | "s"; value: number } {
   return ms < 1000 ? { unit: "ms", value: ms } : { unit: "s", value: Math.round(ms / 100) / 10 };

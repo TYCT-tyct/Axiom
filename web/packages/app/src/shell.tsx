@@ -25,19 +25,25 @@ function NavLinks({ nav }: { nav: NavItem[] }) {
 
 // Shell is the frame of every page a member sees: the app's name and logo above the links the app offers, who is signed
 // in and the appearance switches below, the notice that a new version is out across the top, and the page beside.
+// forbiddenHint tells a person who lacks a permission whom to ask; it is the app's, since who grants it differs.
 export function Shell({
   brand,
   nav,
+  forbiddenHint,
   children,
 }: {
-  brand: { name?: string; logo_url?: string } | undefined;
+  brand: { name?: string; logo_url?: string; brand_color?: string } | undefined;
   nav: NavItem[];
+  forbiddenHint: string;
   children: ReactNode;
 }) {
   return (
     <Gate stage="member">
       <AppShell
         banner={<NewVersionNotice />}
+        logo={brand}
+        forbiddenHint={forbiddenHint}
+        brandColor={brand?.brand_color}
         sidebar={
           <>
             <Logo className="mb-4 px-2 py-1" name={brand?.name} logoUrl={brand?.logo_url} />

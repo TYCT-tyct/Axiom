@@ -82,6 +82,9 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := countable(names, &req); err != nil {
+		return 0, err
+	}
 	model, err := snap.ResolvePublic(names.primary)
 	if err != nil {
 		return 0, err
@@ -90,6 +93,18 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 		return h.countAdmission(a, c, snap, model.Model)
 	})
 	return countInput(req), err
+}
+
+// countable refuses what count_tokens cannot answer: a router that expands to a model, and a request that searches,
+// whose results are injected after its body was counted.
+func countable(names variantNames, req *protocol.Request) error {
+	if name := names.routerName(); name != "" {
+		return invalid(name + " has no model to count tokens for: count with the concrete model.")
+	}
+	if names.online || req.Web != nil {
+		return invalid("count_tokens cannot count a request that runs a web search: the results are injected after counting.")
+	}
+	return nil
 }
 
 // countAdmission checks the current business policy and model permission in the key's admission transaction.

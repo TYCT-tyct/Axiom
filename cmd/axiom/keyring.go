@@ -20,11 +20,13 @@ const keyringUsage = "usage: axiom keyring check | add|activate|retire --version
 func keyRotation(db *pg.DB, path string) secret.Rotation {
 	return secret.Rotation{DB: db, Scope: pg.PlatformScope(), Path: path, Stores: []secret.EnvelopeStore{
 		{Schema: "accounts", Table: "users", ID: "id", Prefix: "totp_", Purpose: "totp"},
+		{Schema: "accounts", Table: "site_oauth_providers", ID: "id", Prefix: "client_secret_", Purpose: "client_secret"},
 		{Schema: "suppliers", Table: "supplier_logins", ID: "supplier_id", Purpose: "login"},
 		{Schema: "suppliers", Table: "credentials", ID: "id", Purpose: "key"},
 		{Schema: "payments", Table: "merchant_configs", ID: "merchant_id", Purpose: "config"},
 		{Schema: "observability", Table: "webhook_keys", ID: "id", Purpose: "signing"},
 		{Schema: "platform", Table: "smtp_config", ID: "id", Purpose: "config"},
+		{Schema: "platform", Table: "search_config", ID: "id", Purpose: "config"},
 	}}
 }
 
@@ -99,7 +101,7 @@ func keyringCommand(ctx context.Context, environ, args []string, out io.Writer) 
 	if err := env.Problems(); err != nil {
 		return fmt.Errorf("configuration:\n%w", err)
 	}
-	db, err := openDatabase(ctx, databaseURL, timeout)
+	db, err := openDatabase(ctx, databaseURL, timeout, pg.WithOperationsPool())
 	if err != nil {
 		return err
 	}

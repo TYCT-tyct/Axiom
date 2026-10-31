@@ -20,12 +20,24 @@ import (
 // Format is a call format.
 type Format uint8
 
-// The call formats.
+// The call formats. A format's number is stored in suppliers' state and in a routing bit set, so one is appended, never
+// inserted (docs/domains/gateway.md「决策与理由」).
 const (
-	Messages  Format = iota // Anthropic Messages
-	Responses               // OpenAI Responses
-	Chat                    // OpenAI Chat Completions
+	Messages    Format = iota // Anthropic Messages
+	Responses                 // OpenAI Responses
+	Chat                      // OpenAI Chat Completions
+	Embeddings                // OpenAI's embeddings
+	Rerank                    // OpenRouter's rerank
+	Completions               // OpenAI's legacy text completions
 )
+
+// Direct reports whether a format answers one whole JSON body that is not a generation, with no stream to relay and
+// no content to meter: embeddings and rerank.
+func (f Format) Direct() bool { return f == Embeddings || f == Rerank }
+
+// Convertible reports whether the format converts to or from another: the three chat formats. A direct call and a
+// legacy completion are native only.
+func (f Format) Convertible() bool { return f <= Chat }
 
 // Capabilities is a set of features a request uses that an endpoint may lack. Routing keeps only the endpoints that
 // have all of them (docs/domains/routing.md「一个请求的路由步骤」).
@@ -58,6 +70,12 @@ type Request struct {
 	// Local OpenRouter plugins are validated before their control fields are removed.
 	Compression     Compression
 	ResponseHealing bool
+	// Web is the web plugin the request enabled, nil when it asked for no external search. The gateway runs it and
+	// injects the results; Online marks the :online variant, whose refusal differs while no backend is configured.
+	Web *WebPlugin
+	// SearchBytes is what the injected search results may add to TextBytes: the admission and the route reserve input
+	// for it before the search runs, because the results are not in the body they read.
+	SearchBytes int64
 	// MessageCount is Chat conversation length for the vendor message cap.
 	MessageCount int64
 	// Previous is Responses' previous_response_id. The stored history it names is input too.
@@ -68,16 +86,36 @@ type Request struct {
 	// MaxOutput is the output cap the request sets, 0 when it sets none and the model's default applies. Choices is
 	// how many replies are generated, each under that cap: Chat's n, 1 otherwise.
 	MaxOutput, Choices int64
+	// MaxOutputSet is true when the request named its output cap, so an explicit 0 means no output rather than the
+	// endpoint's default. Legacy completions sets it; a format that leaves it false keeps the default rule.
+	MaxOutputSet bool
+	// Echo is legacy completions' echo: the prompt comes back as the first text of every choice (EchoOf reads each
+	// prompt's size). ChoiceCount is the choices each prompt generates (n), which maps a choice's index to its prompt;
+	// Choices / ChoiceCount is the number of prompts.
+	Echo        bool
+	ChoiceCount int64
 	// TextBytes bounds the text input's tokens: the body's bytes less the image and document data that Images and
 	// Documents count instead.
 	TextBytes, Images, Documents int64
+	// TokenInputs and RepeatedTextBytes are the input the body's strings do not show, which a count of those strings
+	// (Text) must add: the token IDs of a token-array input, exact, and the text the body holds once but the model reads
+	// again, a legacy completion's suffix for every prompt after the first. Both are already in TextBytes.
+	TokenInputs, RepeatedTextBytes int64
+	// MaxInputBytes is the largest single input of a batch, in bytes; 0 when the request has one input. A batch's
+	// context limit applies to each input, while TextBytes is what all of them are charged for.
+	MaxInputBytes int64
+	// FileRefs is how many files the request refers to by an id an upstream issued instead of carrying their data. A
+	// reference is the supplier account's resource: routing keeps such a request to the one provider the client names,
+	// so it can only reach the account that can hold the file (README.md「跨格式转换」).
+	FileRefs int64
 	// InputItems are the billing items the input may be billed as: input, and the cache writes the request marks or
 	// its format makes by default.
 	InputItems catalog.ItemSet
 	// ServiceTiers are the service tiers the request may be served at.
 	ServiceTiers catalog.ServiceTierSet
 	// WebSearches and CodeExecutions are the most calls the request allows of each such tool it enables, 0 when it
-	// sets no limit and the model's default applies.
+	// sets no limit and the model's default applies. A rerank request sets WebSearches to one: its search unit is
+	// priced as a web search, though the request does not ask for the model's web_search ability.
 	WebSearches, CodeExecutions int64
 	// HidesReasoning is set when the request asks for reasoning to be left out of the stream, whose progress then
 	// cannot be observed (docs/domains/billing.md「预留与结算」).
@@ -89,6 +127,10 @@ type Request struct {
 	positions           requestPositions
 	legacy, modernTools bool
 }
+
+// ZeroOutput is whether the request capped its output at 0, as legacy completions' max_tokens 0 does: it asks for no
+// generated text, so an answer without any is not an empty response.
+func (r *Request) ZeroOutput() bool { return r.MaxOutputSet && r.MaxOutput == 0 }
 
 // ErrInvalid reports a body Inspect cannot read: not strict JSON within jsonx's policy, or a member it reads with the
 // wrong type or value. The gateway answers it with 400.
@@ -120,7 +162,12 @@ func bodyFault(err error) string {
 // Inspect reads the request summary from body in one pass of the tokenizer, never decoding the body into a tree, so
 // its own allocations do not grow with the body; the tokenizer's grow only with the names of objects wider than 64
 // names, as in jsonx.Validate (README.md「请求摘要」). Members it does not read are only checked to be JSON.
+//
+//nolint:cyclop,gocognit // one dispatch over every format, each branch one reader
 func Inspect(f Format, body []byte) (Request, error) {
+	if f == Completions || f.Direct() {
+		return inspectNew(f, body)
+	}
 	g := &grammars[f]
 	s := scanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), g: g}
 	s.r = Request{Format: f, Choices: 1, TextBytes: int64(len(body)), InputItems: g.input}
@@ -193,6 +240,7 @@ type part struct {
 	kind                     Capabilities
 	payload                  int64 // the raw bytes of the data the part carries
 	binary                   bool  // the payload is image or file data, not text
+	refs                     int64 // files the part refers to by an id
 	max                      int64 // a server tool's max_uses
 	off, hidden, on          bool  // reasoning turned off; reasoning left out of the stream
 }

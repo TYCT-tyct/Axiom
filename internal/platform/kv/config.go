@@ -6,9 +6,10 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
+
+	"axiom/internal/platform/privfile"
 )
 
 // The variables serve reads; kv reports on them, as pg reports on its own (cmd/axiom/variables.go).
@@ -33,12 +34,22 @@ const maxNodeID = 128
 // maxPassword bounds the password file: a password longer than this is a file chosen wrong.
 const maxPassword = 128
 
+// KeyReport is what the node's heartbeat says about the master key ring: the versions it has loaded and the one it
+// writes. It carries identifiers only, never material; the protected key file is the distribution channel.
+type KeyReport struct {
+	Versions []uint32
+	Active   uint32
+}
+
 // Config is the node's Valkey settings, read from the environment by serve.
 type Config struct {
 	URL          string // URLVar
 	PasswordFile string // PasswordFileVar
 	Nodes        int    // NodesVar: how many core nodes the deployment has, at least 1
 	NodeID       string // NodeIDVar; empty makes a new identity at every start, which tests want
+	// Keys reports the live ring, so the key ring's lifecycle can wait for every live node instead of stopping every
+	// writer. Nil reports no versions, as a node without a key ring in a test does.
+	Keys func() KeyReport
 	// Namespace is the key format version, "v1" in production and one random per test case, so cases that share a
 	// Valkey do not see each other's keys (README「键」). Empty is "v1".
 	Namespace string
@@ -124,27 +135,17 @@ func checkShape(u *url.URL) error {
 }
 
 // readPassword reads the ACL user's password, which the deployment writes as one line into a protected file, and holds
-// it to the same protection as the master key files: the group and others may not read it.
+// it to the same protection as the master key files: the group and others may not read it. The check and the read are
+// of one open file, so a path replaced after the check cannot become the password the node sends.
 func readPassword(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("%s: required when %s is set", PasswordFileVar, URLVar)
 	}
-	file, err := os.Open(path) // #nosec G304 -- the trusted startup configuration chooses the file
+	file, err := privfile.Open(path, os.Open)
 	if err != nil {
 		return "", passwordError("open", err)
 	}
 	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
-	info, err := file.Stat()
-	if err != nil {
-		return "", passwordError("stat", err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%s: want a regular file", PasswordFileVar)
-	}
-	// Windows mode bits cannot express NTFS ACLs; deployment must restrict the file's ACL instead.
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("%s: permissions must deny all group and other access", PasswordFileVar)
-	}
 	raw, err := io.ReadAll(io.LimitReader(file, maxPassword+2))
 	if err != nil {
 		return "", passwordError("read", err)
@@ -164,6 +165,9 @@ func readPassword(path string) (string, error) {
 // passwordError names the variable and the operation, never the path or the value: either may be a secret pasted
 // into the wrong setting.
 func passwordError(operation string, err error) error {
+	if errors.Is(err, privfile.ErrNotRegular) || errors.Is(err, privfile.ErrPermissions) {
+		return fmt.Errorf("%s: %w", PasswordFileVar, err)
+	}
 	reason := "failed"
 	switch {
 	case errors.Is(err, os.ErrNotExist):

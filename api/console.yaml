@@ -460,6 +460,78 @@ paths:
               schema: {$ref: "#/components/schemas/Session"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/sessions:
+    get:
+      operationId: listSessions
+      tags: [Session]
+      summary: The signed-in devices
+      description: >-
+        This user's live console sessions, newest first and at most 100, with when each was made and last used, the
+        network it was signed in from and a short client description. `current` marks the session of this request. The
+        network is the group the sign-in limits count (an IPv4 address as it is, an IPv6 allocation as its /64), and
+        `client` is derived from the stored User-Agent, which is not returned. A sign-in that still waits for its
+        second factor is not a signed-in device and is not listed; another surface's sessions (the admin's) and
+        sessions ended by a factor change are not listed either.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The signed-in devices.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    delete:
+      operationId: revokeOtherSessions
+      tags: [Session]
+      summary: End every other session
+      description: >-
+        Revokes all other console sessions of the user, pending sign-ins included, and leaves the session of this
+        request signed in. Returns how many ended. Another surface's sessions are not touched; replacing a factor
+        ends those. The change and its audit entry commit together.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The other sessions ended.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionRevocation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/sessions/{session_id}:
+    parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SessionId"}
+    delete:
+      operationId: revokeSession
+      tags: [Session]
+      summary: End one other session
+      description: >-
+        Revokes one console session of the user. The asking session is ended by `signOut`, not here, so it is not
+        found; neither is another user's, another surface's or one already ended. The change and its audit entry
+        commit together.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "204": {description: "Ended."}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/totp/setup:
     post:
       operationId: beginTotpSetup
@@ -519,6 +591,45 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/totp/replace:
+    post:
+      operationId: replaceTotp
+      tags: [Session]
+      summary: Replace two-step verification's secret
+      description: >-
+        Needs a session that passed two-step verification and proof of the factor being replaced: a current TOTP
+        code or an unused recovery code in `current_code`. It also needs a code from the new secret, taken from
+        `beginTotpSetup`, which stores nothing until this call. The old secret and every unused recovery code stop
+        working, the user's other sessions end, and this device gets a new `mfa` session as `FactorChange` describes,
+        all in one transaction with the audit entry. A factor that is not on is a 409; a user who lost both the
+        authenticator and the recovery codes is reset from the command line.
+
+
+        Limits: failed current or new codes count against the user's 10 an hour, like sign-in's second factor.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TotpReplaceRequest"}
+      responses:
+        "200":
+          description: Replaced.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FactorChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/recovery-codes:
     post:
       operationId: regenerateRecoveryCodes
@@ -553,6 +664,485 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/recovery-codes/take:
+    post:
+      operationId: takeRecoveryCodes
+      tags: [Session]
+      summary: Take the recovery codes a provider link left for this session
+      description: >-
+        A provider link answers with a redirect, so the new recovery codes it makes cannot come back in that response.
+        They are kept on the session the link issued, encrypted under its token, and this call reads them under the
+        session row's lock and clears them in the same transaction: the first call returns them and later calls return
+        none. Needs a signed-in console session; the codes belong to it.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The codes left for this session, or an empty list.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ShownRecoveryCodes"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/oauth/start:
+    post:
+      operationId: startOAuthSignIn
+      tags: [Session]
+      summary: Start signing in with a third-party provider
+      description: >-
+        Makes a single-use state and, where the provider supports it, a PKCE verifier, stores them with the site's
+        callback URI and a nonce cookie, and returns the provider's authorization URL. The callback must carry that
+        nonce or it signs no browser in: state alone would let a completed callback be used to sign another browser
+        in to the account that began it. The flow is for one site and expires in 10
+        minutes. Needs the `Origin` of the console and no session; a site that has not stored the provider's
+        application is a 404, and a request on a console domain that is not the site's login domain is refused because
+        the callback and its cookie belong to that domain. Limits: the sign-in per-IP bucket.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OAuthStartRequest"}
+      responses:
+        "200":
+          description: The URL to send the browser to, with the nonce cookie the callback must return.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OAuthStart"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/oauth/link/start:
+    post:
+      operationId: startOAuthLink
+      tags: [Session]
+      summary: Start linking a third-party provider to the signed-in user
+      description: >-
+        The same flow as `startOAuthSignIn`, bound to this user and session. It is a credential change: a user with a
+        second factor must be in an `mfa` session. The callback must return to this same browser and session, or it
+        links nothing. Limits: the sign-in per-IP bucket.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OAuthStartRequest"}
+      responses:
+        "200":
+          description: The URL to send the browser to.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OAuthStart"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/oauth/{provider}/callback:
+    get:
+      operationId: completeOAuth
+      tags: [Session]
+      summary: The provider's redirect back to the site
+      description: >-
+        Spends the state, exchanges the code for the stored callback URI, and reads the provider's subject. A sign-in
+        matches that subject against linked identities only: an unknown one is not registered and its email never
+        joins accounts (no automatic merge). A link attaches the subject to the session that began the flow, raises
+        the user's factor version and issues a new session. Answers 303 under the console mount: `/console/` after a
+        sign-in, `/console/security` after a link, and `/console/sign-in?oauth=failed` when the round trip fails, so a
+        browser never lands on JSON. The path's provider must be the one the state was made for.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/OAuthProvider"}
+        - name: code
+          in: query
+          required: false
+          schema: {type: string, maxLength: 2048}
+        - name: state
+          in: query
+          required: false
+          schema: {type: string, maxLength: 512}
+      responses:
+        "303":
+          description: The browser goes to the console page for the outcome; the cookie is set on success.
+          headers:
+            Location: {required: true, schema: {type: string}}
+            Set-Cookie:
+              description: The new session cookie, on success.
+              schema: {type: string}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/begin:
+    post:
+      operationId: beginPasskeySignIn
+      tags: [Session]
+      summary: Start signing in with a passkey
+      description: >-
+        A discoverable assertion: the browser offers every passkey for the site's login domain and the chosen one
+        carries its user, so nobody types an email first and an unknown caller learns nothing about who exists. The
+        ceremony requires user verification and expires in 5 minutes. Needs the `Origin` of the console and no session;
+        the site must have passkeys on and a login domain. Limits: the sign-in per-IP bucket.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: The assertion challenge.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PasskeyChallenge"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/finish:
+    post:
+      operationId: finishPasskeySignIn
+      tags: [Session]
+      summary: Finish signing in with a passkey
+      description: >-
+        Verifies the assertion against the stored public key and the counter, then issues an `mfa` session: the
+        authenticator verified the person and proved possession. A counter that goes backwards is refused; zero is
+        what synced passkeys report and stays accepted. The body is the browser's credential JSON; `flow_id` is the
+        one `beginPasskeySignIn` returned. Needs the `Origin` of the console and no session. Limits: the sign-in per-IP
+        bucket.
+      security: []
+      parameters:
+        - name: flow_id
+          in: query
+          required: true
+          schema: {type: string, maxLength: 64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WebAuthnCredential"}
+      responses:
+        "200":
+          description: Signed in with an `mfa` session.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionGrant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/mfa/begin:
+    post:
+      operationId: beginPasskeyMfa
+      tags: [Session]
+      summary: Start the passkey factor of a pending sign-in
+      description: >-
+        The pending session a password sign-in issued is the only credential needed. The challenge names the user's
+        credentials and requires user verification; it expires in 5 minutes.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: pending_mfa
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: The assertion challenge.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PasskeyChallenge"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/mfa/finish:
+    post:
+      operationId: finishPasskeyMfa
+      tags: [Session]
+      summary: Finish the passkey factor of a pending sign-in
+      description: >-
+        Verifies the assertion, ends the pending session and issues an `mfa` session. A failed ceremony counts one of
+        the pending session's five attempts, as a wrong code does. The body is the browser's credential JSON;
+        `flow_id` is the one `beginPasskeyMfa` returned.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: pending_mfa
+      x-axiom-permission: none
+      parameters:
+        - name: flow_id
+          in: query
+          required: true
+          schema: {type: string, maxLength: 64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WebAuthnCredential"}
+      responses:
+        "200":
+          description: Signed in with an `mfa` session.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SessionGrant"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys:
+    get:
+      operationId: listPasskeys
+      tags: [Session]
+      summary: The signed-in user's passkeys
+      description: The credentials the account page offers to delete, newest last.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The passkeys.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Passkeys"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/register/begin:
+    post:
+      operationId: beginPasskeyRegistration
+      tags: [Session]
+      summary: Start adding a passkey
+      description: >-
+        The current password is required, and a user with a second factor must be in an `mfa` session: a passkey can
+        sign in on its own, so adding one from a password-only session would let a stolen password bypass the second
+        factor. The challenge excludes the user's credentials and requires user verification; it expires in 5 minutes.
+        At most 10 passkeys per user.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PasskeyRegistrationRequest"}
+      responses:
+        "200":
+          description: The creation challenge.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PasskeyChallenge"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/register/finish:
+    post:
+      operationId: finishPasskeyRegistration
+      tags: [Session]
+      summary: Finish adding a passkey
+      description: >-
+        Verifies the attestation, stores the credential with the name the begin stored, raises the user's factor
+        version, ends every other session and issues this browser an `mfa` session. The body is the browser's
+        credential JSON; `flow_id` is the one `beginPasskeyRegistration` returned.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - name: flow_id
+          in: query
+          required: true
+          schema: {type: string, maxLength: 64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WebAuthnCredential"}
+      responses:
+        "200":
+          description: The new passkey and the replacement session.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Passkey"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/passkeys/{id}:
+    delete:
+      operationId: deletePasskey
+      tags: [Session]
+      summary: Remove a passkey
+      description: >-
+        Requires the current password, and an `mfa` session when the user has another second factor. Raises the factor
+        version, ends every other session and issues this browser a new session at the same level; audits the removal.
+        The password remains a way in.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/PasskeyId"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PasskeyDeleteRequest"}
+      responses:
+        "200":
+          description: The replacement session's CSRF token.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CredentialChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/identities:
+    get:
+      operationId: listIdentities
+      tags: [Session]
+      summary: The signed-in user's linked third-party accounts
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The linked identities.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Identities"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/identities/{provider}:
+    delete:
+      operationId: unlinkIdentity
+      tags: [Session]
+      summary: Unlink a third-party account
+      description: >-
+        Requires an `mfa` session when the user has a second factor. Raises the factor version, ends every other
+        session and issues this browser a new session at the same level; audits the removal. The password remains a
+        way in.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/OAuthProvider"}
+      responses:
+        "200":
+          description: The replacement session's CSRF token.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CredentialChange"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/legal:
+    get:
+      operationId: getLegalDocuments
+      tags: [Session]
+      summary: The site's current legal documents
+      description: >-
+        The terms of service and the privacy policy the site has published, at their current versions, as plain text.
+        The registration page shows them and sends their versions back with the registration or with
+        `acceptLegalDocuments`. A site that publishes none answers an empty list and requires no acceptance. The text
+        is public: no session is needed.
+      security: []
+      responses:
+        "200":
+          description: The current documents, one per kind, oldest kind first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LegalDocuments"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/legal/accept:
+    post:
+      operationId: acceptLegalDocuments
+      tags: [Session]
+      summary: Accept the current legal documents
+      description: >-
+        Records the signed-in user's acceptance of every current document at the version the request names, with the
+        time. A missing, stale or extra version is `consent_required`: the page must send exactly what
+        `getLegalDocuments` returned. Accepting the same version again changes nothing. A session may call this while
+        the rest of the console is refused for want of acceptance.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LegalAcceptance"}
+      responses:
+        "204": {description: Accepted.}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/site:
     get:
       operationId: getSite
@@ -560,8 +1150,9 @@ paths:
       summary: The site the request's domain belongs to
       description: >-
         What the sign-in and registration pages need before anyone is signed in: the site's name and logo for the
-        brand, and whether registration needs an invite. The site is found from the `Host`, which must be a domain
-        registered for the console; any other host gets a 404.
+        brand, whether registration needs an invite, and, on a site with open registration, the proof-of-work
+        difficulty the page must solve. The site is found from the `Host`, which must be a domain registered for the
+        console; any other host gets a 404.
       security: []
       responses:
         "200":
@@ -571,19 +1162,61 @@ paths:
               schema: {$ref: "#/components/schemas/Site"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/site/logo/{hash}:
+    get:
+      operationId: getSiteLogo
+      tags: [Session]
+      summary: The site's logo
+      description: >-
+        The logo the site configures, at the URL `getSite` gives while the site has one. The URL carries the SHA-256 of
+        the bytes served, so a logo never changes under its URL and a browser may keep it for a year. A hash the site
+        never served is a 404; an earlier logo stays available under its own hash, so a page opened before the logo
+        changed keeps its image.
+      security: []
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[0-9a-f]{64}$'}
+      responses:
+        "200":
+          description: The logo.
+          headers:
+            Cache-Control:
+              required: true
+              description: Long-lived and immutable, because the hash in the URL names the bytes.
+              schema: {type: string}
+          content:
+            image/svg+xml:
+              schema: {type: string, format: binary}
+            image/png:
+              schema: {type: string, format: binary}
+            image/webp:
+              schema: {type: string, format: binary}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/register:
     post:
       operationId: register
       tags: [Session]
-      summary: Register with an invite code
+      summary: Register with an invite code or open registration
       description: >-
-        Makes the user, their personal account, its default workspace and balance, in the site's default tier. It
-        does not sign the user in: the page calls `signIn` next with the same credentials. An unusable code (unknown,
-        its user disabled, or the site not registering by invitation) is one `invalid_invite`. A taken email is
-        `email_taken`, and the whole registration is undone. The email is not verified in M1.
+        On a site registering by invitation, makes the user, their personal account, its default workspace and
+        balance, in the site's default tier, and answers 201. It does not sign the user in: the page calls `signIn`
+        next with the same credentials. An unusable code (unknown, its user disabled, or the site not registering by
+        invitation) is one `invalid_invite`; a taken email is `email_taken`, and the whole registration is undone.
 
 
-        Limits: the per-IP bucket of `signIn`.
+        On a site with open registration, checks the address against the site's domain lists and the proof of work,
+        stores one pending registration without a password, and queues a single-use verification link; the answer is
+        always 202 for a well-formed address, whether or not it is registered already, so an anonymous caller cannot
+        learn which addresses exist. A password in this request is ignored: the verification page sets it after the
+        address is proved, so a caller cannot choose the password of an address it does not own. A duplicate is found
+        when the link is clicked and answered with `email_taken` there. A site that sets open registration but cannot
+        send mail answers `unavailable`, and a closed site `registration_closed`.
+
+
+        Limits: the per-IP bucket of `signIn`, and on open registration, the email domain's bucket.
       security: []
       requestBody:
         required: true
@@ -592,10 +1225,42 @@ paths:
             schema: {$ref: "#/components/schemas/RegisterRequest"}
       responses:
         "201":
-          description: Registered.
+          description: Registered with an invite code.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Registered"}
+        "202":
+          description: Open registration accepted; a verification link is on its way.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RegistrationPending"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/verify-email:
+    post:
+      operationId: verifyEmail
+      tags: [Session]
+      summary: Verify an open registration's email
+      description: >-
+        Turns the single-use token from the verification mail and the password chosen by the mailbox owner into the
+        user, their personal account, its default workspace and balance. The password is validated and hashed only
+        after the token is found; no password is kept before this request. The token is bound to the console domain
+        and the pending registration; an unknown, expired or already used one is one `invalid_verification`, and an
+        address registered in the meantime is `email_taken`. The user is not signed in: the page sends them to sign in
+        with the password they chose. Limits: the per-IP bucket of `signIn`; an attempt spends one before the token is
+        looked up or the password is hashed.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/VerifyEmailRequest"}
+      responses:
+        "204": {description: Verified.}
         "400": {$ref: "#/components/responses/BadRequest"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
@@ -608,13 +1273,21 @@ paths:
       tags: [Keys]
       summary: The account's API keys
       description: >-
-        Every key of the session's account that is not deleted, disabled ones included, newest first. The text of a
-        key is never returned again after `createKey`.
+        Every key of the session's account that is not deleted, disabled and expired ones included, newest first by
+        making. `name` and `prefix` search part of a key's name or prefix, ignoring case; `status` keeps active,
+        disabled or expired keys; `created_after` and `created_before` keep the keys made in a range. A page reads the
+        keys in the index's order and applies the filters as it goes, so a later page starts after the last key read,
+        whatever the filters match. The text of a key is never returned again after `createKey`.
       security:
         - session: []
       x-axiom-level: signed_in
       x-axiom-permission: api_keys.view
       parameters:
+        - $ref: "#/components/parameters/KeyName"
+        - $ref: "#/components/parameters/KeyPrefix"
+        - $ref: "#/components/parameters/KeyStatus"
+        - $ref: "#/components/parameters/KeyCreatedAfter"
+        - $ref: "#/components/parameters/KeyCreatedBefore"
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -964,6 +1637,57 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/models/account:
+    get:
+      operationId: listAccountModels
+      tags: [Models]
+      summary: List the published models at the signed-in account's prices
+      description: >-
+        The same projection as `listPublicModels`, priced for the session's account and its current tier. A signed-in user
+        sees the price a call would be charged at, so a tier change shows on the next request. The account is read in
+        the same scope as the rest of the console; no supplier, endpoint, route or cost is ever part of the answer.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - $ref: "#/components/parameters/ModelQuery"
+        - $ref: "#/components/parameters/ModelAuthor"
+        - $ref: "#/components/parameters/ModelAbility"
+      responses:
+        "200":
+          description: The published models at the account's prices
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PublicModelList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/models:
+    get:
+      operationId: listPublicModels
+      tags: [Models]
+      summary: List the published models and the site's sale prices
+      description: >-
+        The public projection of the catalog: the models the node serves and prices, under their public names, with
+        their limits, abilities and the sale prices of the site's default tier. It is the price a visitor pays after
+        registering, and the same data the website's models and prices page shows. It carries no supplier, endpoint,
+        route, cost, internal name, price source or evidence. An anonymous request is answered for the site of the
+        `Host`, like `getSite`; any other host is a 404.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/ModelQuery"
+        - $ref: "#/components/parameters/ModelAuthor"
+        - $ref: "#/components/parameters/ModelAbility"
+      responses:
+        "200":
+          description: The published models at the site's default-tier prices
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PublicModelList"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/payment-methods:
     get:
       operationId: listPaymentMethods
@@ -1001,6 +1725,32 @@ paths:
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/orders:
+    get:
+      operationId: listOrders
+      tags: [Top-ups]
+      summary: The account's top-up orders
+      description: >-
+        Newest first, `limit` per page, continued with `next_cursor`. Only the account's own orders; another account's
+        never appear. Each order carries its refunds, oldest first, so the page can show where a request stands without
+        a second call. A node of the previous release sends no `refunds` and no `refund_allowed`; the page then shows
+        refunds as unavailable instead of guessing.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the account's orders
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OrderList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
     post:
       operationId: createOrder
       tags: [Top-ups]
@@ -1158,6 +1908,132 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/orders/{order_id}/refunds:
+    parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/OrderId"}
+    post:
+      operationId: requestRefund
+      tags: [Top-ups]
+      summary: Ask for a refund of unused credits from an order
+      description: >-
+        The order page's refund request. It only works for an order paid through a merchant account that lets users
+        request refunds, and only for the part of that order's paid credits that is neither spent, expired nor already
+        frozen: `credits` is what the user asks to give back, and the answer's `credits` is what was actually frozen,
+        which can be less. The cash quote is computed from the batch's own payment and the site's refund policy, never
+        from the order's quote at the time. The request waits for a different administrator to approve it, so the
+        answer's `state` is `pending_review`; the order keeps its state meanwhile. A channel that cannot refund, or an order
+        whose merchant does not allow user requests, is `forbidden`; a second request while one is in flight is
+        `conflict`; an amount with nothing refundable left is `unprocessable`. `Idempotency-Key` makes the request
+        happen once per order: the same key with the same credits and reason returns the stored refund, and another
+        request under it is `idempotency_key_reused`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.top_up
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: "A key the caller chooses for one intended refund, 1 to 128 of letters, digits and `._:-` (a UUID is fine)."
+          schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,128}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RefundRequest"}
+      responses:
+        "201":
+          description: The refund, frozen and waiting for approval.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OrderRefund"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/redeem-codes:
+    get:
+      operationId: listRedemptions
+      tags: [Top-ups]
+      summary: The redeem codes this account redeemed, newest first
+      description: >-
+        One page of the credit this account got from redeem codes, newest first: each redemption's credit, when it was
+        redeemed, and when the credit expires. It never shows a code, only its last four characters, so the history is
+        not a way to recover one. Needs `balance.view`, like every read of the account's money.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the account's redemptions, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeHistory"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: redeemCode
+      tags: [Top-ups]
+      summary: Redeem a code into credit
+      description: >-
+        Turns a code the site issued into a credit batch of the account's currency, with the code's expiry, and records
+        it in the account's history. A code credits once, whichever account redeems it: `201` is the credit this
+        request made, `200` is the credit an earlier request with the same `Idempotency-Key` made (the answer was lost;
+        the key is reused, not the code), and a code already redeemed with another key is `conflict`. A code that is
+        unknown, expired or disabled is `unprocessable`; a code is never echoed in an answer or an error.
+
+
+        Attempts that fail are limited per account and per network, an hour at a time: past the limit the request is
+        `rate_limited` with `Retry-After` the seconds until the window is over, and the attempt is counted before the
+        code is looked at. A replay of the key is not an attempt. If the counting itself fails, the request is refused
+        (`internal`), never let through.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.top_up
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: "A key the caller chooses for one intended redemption, 1 to 128 of letters, digits and `._:-` (a UUID is fine)."
+          schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,128}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RedeemCodeRequest"}
+      responses:
+        "200":
+          description: The credit an earlier request with this key made.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeRedemption"}
+        "201":
+          description: The credit this code made.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeRedemption"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
 components:
   securitySchemes:
     session:
@@ -1199,6 +2075,21 @@ components:
       name: client_app
       in: query
       schema: {type: string, maxLength: 200}
+    ModelQuery:
+      name: q
+      in: query
+      description: Part of a model's public ID or display name, ignoring case. Omit for every model.
+      schema: {type: string, maxLength: 100}
+    ModelAuthor:
+      name: author
+      in: query
+      description: The exact author slug, ignoring case. Omit for every author.
+      schema: {type: string, maxLength: 100}
+    ModelAbility:
+      name: ability
+      in: query
+      description: Only models that declare this ability. Omit for every ability.
+      schema: {$ref: "#/components/schemas/ModelAbility"}
     CallKey:
       name: key_id
       in: query
@@ -1216,6 +2107,31 @@ components:
       name: request_id
       in: query
       schema: {$ref: "#/components/schemas/CallId"}
+    KeyName:
+      name: name
+      in: query
+      description: Part of a key's name, ignoring case. Omit for every name.
+      schema: {type: string, maxLength: 100}
+    KeyPrefix:
+      name: prefix
+      in: query
+      description: The beginning of a key's prefix, ignoring case. Omit for every prefix.
+      schema: {type: string, maxLength: 16}
+    KeyStatus:
+      name: status
+      in: query
+      description: A key's state as the list shows it. Omit for every state.
+      schema: {$ref: "#/components/schemas/KeyStatus"}
+    KeyCreatedAfter:
+      name: created_after
+      in: query
+      description: Keys the database stamped at or after this instant.
+      schema: {type: string, format: date-time}
+    KeyCreatedBefore:
+      name: created_before
+      in: query
+      description: Keys the database stamped before this instant.
+      schema: {type: string, format: date-time}
     Cursor:
       name: cursor
       in: query
@@ -1246,7 +2162,8 @@ components:
     Forbidden:
       description: >-
         The session may not do this: the permission is missing, the session has not passed two-step verification
-        (`mfa_required`), or the Origin, content type or CSRF token is wrong (`origin_rejected`).
+        (`mfa_required`), the Origin, content type or CSRF token is wrong (`origin_rejected`), or the current legal
+        documents have not been accepted (`consent_required`).
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -1357,6 +2274,78 @@ components:
           type: string
           pattern: '^[0-9]+$'
         price: {$ref: "#/components/schemas/CallAggregateMoney"}
+    PublicModelList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PublicModel"}
+    PublicModel:
+      type: object
+      additionalProperties: false
+      description: >-
+        One published model as a visitor may see it: its public name and limits, the abilities its spec declares, and
+        the sale prices of the audience that asked. No supplier, endpoint, route, cost or internal name.
+      required: [id, name, author, context_length, max_output, streams, abilities, pricing]
+      properties:
+        id: {type: string, description: "The public model ID, such as acme/claude-sonnet."}
+        name: {type: string, description: "The vendor's name for the model, the part of the public ID after the author."}
+        author: {type: string, description: "The author slug, the part of the public ID before the slash."}
+        context_length: {type: integer, format: int64, minimum: 1}
+        max_output: {type: integer, format: int64, minimum: 1}
+        streams: {type: boolean, description: Whether the vendor streams the model's replies.}
+        abilities:
+          type: array
+          items: {$ref: "#/components/schemas/ModelAbility"}
+        pricing: {$ref: "#/components/schemas/ModelPricing"}
+    ModelAbility:
+      type: string
+      enum: [tools, images, documents, reasoning, prompt_cache, structured_output, web_search, code_execution]
+    ModelPricing:
+      type: object
+      additionalProperties: false
+      description: >-
+        Every unit price the model's sale schedule sets, for each service tier and context band. A price is decimal
+        text in the pricing currency, per the item's unit; an item the schedule does not price is absent.
+      required: [currency, basis, rates]
+      properties:
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        basis:
+          type: array
+          description: >-
+            The items whose counts add up to the prompt length the context bands compare; empty when the schedule has
+            no context tiers.
+          items: {$ref: "#/components/schemas/ModelItem"}
+        rates:
+          type: array
+          items: {$ref: "#/components/schemas/ModelRate"}
+    ModelRate:
+      type: object
+      additionalProperties: false
+      required: [service_tier, item, unit, amount]
+      properties:
+        service_tier: {$ref: "#/components/schemas/ModelServiceTier"}
+        above:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            The prompt length above which this rate applies. Absent for the base band that applies below every
+            threshold; 0 is an explicit first band above 0 and is not the base band.
+        item: {$ref: "#/components/schemas/ModelItem"}
+        unit: {$ref: "#/components/schemas/ModelUnit"}
+        amount: {type: string, description: "Exact currency units per unit, decimal text with up to 15 fractional digits."}
+    ModelServiceTier:
+      type: string
+      enum: [standard, flex, priority, fast]
+    ModelItem:
+      type: string
+      enum: [input, cache_read, cache_write, cache_write_1h, audio_in, image_in, output, reasoning, audio_out, image_out, web_search, code_execution, image_in_piece, image_out_piece, audio_in_second, audio_out_second, character_in]
+    ModelUnit:
+      type: string
+      enum: [token, use, piece, second, character]
     SiteId: {type: string, pattern: '^site_[0-9a-hjkmnp-tv-z]{26}$', description: "A site's ID (TypeID)."}
     AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
     Announcement:
@@ -1376,6 +2365,7 @@ components:
         low_balance: {type: boolean}
         top_up: {type: boolean}
         factor_changed: {type: boolean, description: "Controls background factor-change email and webhooks. Password-change security email is always sent."}
+        spend_anomaly: {type: boolean, description: "Controls account spend-anomaly email and webhooks. Absent from a node that predates the preference; a client must then neither show the switch nor send the field."}
         threshold: {type: string, pattern: '^[0-9]+$', maxLength: 19, description: "Billionths of site credits."}
         webhook_url: {type: string, maxLength: 2048}
         language: {type: string, enum: [en, zh]}
@@ -1387,6 +2377,7 @@ components:
         low_balance: {type: boolean}
         top_up: {type: boolean}
         factor_changed: {type: boolean, description: "Controls background factor-change email and webhooks. Password-change security email is always sent."}
+        spend_anomaly: {type: boolean, description: "Controls account spend-anomaly email and webhooks. Omit to keep the stored value."}
         threshold: {type: string, pattern: '^[0-9]+$', maxLength: 19, description: "Billionths of site credits."}
         webhook_url: {type: string, maxLength: 2048}
         language: {type: string, enum: [en, zh]}
@@ -1435,18 +2426,32 @@ components:
         - invalid_code
         - forbidden
         - mfa_required
+        - consent_required
         - origin_rejected
         - not_found
         - conflict
+        - login_domain_locked
+        - login_domain_required
+        - identity_taken
+        - identity_already_linked
+        - account_not_linked
         - email_taken
         - name_taken
         - too_many_keys
         - stale_revision
         - idempotency_key_reused
         - invalid_invite
+        - registration_closed
+        - human_check_failed
+        - email_domain_not_allowed
+        - invalid_verification
         - weak_password
         - not_ready
         - unprocessable
+        - redeem_code_invalid
+        - redeem_code_expired
+        - redeem_code_disabled
+        - redeem_code_used
         - rate_limited
         - internal
         - not_implemented
@@ -1457,10 +2462,37 @@ components:
       description: >-
         An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of
         one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round
-        above 2^53 (about 9 million units) in the browser.
+        above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than
+        64 bits; an amount that is written to the ledger must still fit 64 bits.
       properties:
-        amount: {type: string, pattern: '^-?(0|[1-9][0-9]{0,18})$', example: "1500000000"}
+        amount: {type: string, pattern: '^-?(0|[1-9][0-9]*)$', maxLength: 39, example: "1500000000"}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD}
+    RedeemCodeRequest:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: "The code as issued, with or without its dashes or spaces, in any case."
+    RedeemCodeRedemption:
+      type: object
+      additionalProperties: false
+      required: [id, amount, code_hint, redeemed_at]
+      properties:
+        id: {type: string, pattern: '^rdn_[0-9a-hjkmnp-tv-z]{26}$', description: "The redemption's ID (TypeID), also the credit batch's."}
+        amount: {$ref: "#/components/schemas/Money"}
+        code_hint: {type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{4}$', description: "The code's last four characters; never the code."}
+        expires_at: {type: string, format: date-time, description: "When the credit expires; absent: never."}
+        redeemed_at: {type: string, format: date-time}
+    RedeemCodeHistory:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/RedeemCodeRedemption"}}
+        next_cursor: {type: string, description: "Absent on the last page."}
     Version:
       type: object
       required: [version]
@@ -1509,6 +2541,51 @@ components:
       description: >-
         What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a
         sign-in that waits for its second factor.
+    LegalDocumentKind:
+      type: string
+      enum: [terms, privacy]
+    LegalDocument:
+      type: object
+      description: One version of one of the site's legal documents; the text is plain text, never HTML.
+      required: [kind, version, body, published_at]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        version: {type: integer, minimum: 1}
+        body: {type: string}
+        published_at: {type: string, format: date-time}
+    LegalDocumentVersion:
+      type: object
+      required: [kind, version]
+      properties:
+        kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        version: {type: integer, minimum: 1}
+    LegalDocuments:
+      type: object
+      required: [documents]
+      properties:
+        documents:
+          type: array
+          description: The current version of each kind, at most one per kind.
+          items: {$ref: "#/components/schemas/LegalDocument"}
+    LegalAcceptance:
+      type: object
+      required: [consent]
+      properties:
+        consent:
+          type: array
+          description: Every current document at its current version, as getLegalDocuments returned it.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
+    SessionConsent:
+      type: object
+      description: >-
+        The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the
+        server refuses its requests with `consent_required` instead.
+      required: [required]
+      properties:
+        required:
+          type: array
+          description: Current documents this user has not accepted; empty when every one is accepted.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
     Session:
       type: object
       required: [user, account, level, mfa_enabled, csrf_token, expires_at, permissions]
@@ -1531,6 +2608,42 @@ components:
             The permission names the session holds on its own scope (the user's account on the console, the platform
             on the admin), for showing or hiding what the user cannot do. The server decides again on every request.
           items: {type: string}
+        consent:
+          allOf: [{$ref: "#/components/schemas/SessionConsent"}]
+          description: >-
+            What the page must show before the session may do anything else. Optional so a page built before this field
+            reads an older node that does not send it.
+    SessionList:
+      type: object
+      properties:
+        sessions:
+          type: array
+          description: Newest first, at most 100. A page that gets no `sessions` shows the list as unavailable.
+          items: {$ref: "#/components/schemas/SessionDevice"}
+    SessionDevice:
+      type: object
+      description: >-
+        One signed-in console session. Every field is optional so a page built before it reads an older node that does
+        not send it.
+      properties:
+        id: {$ref: "#/components/schemas/SessionId"}
+        current: {type: boolean, description: "Whether this is the session of the request."}
+        created_at: {type: string, format: date-time, description: "When the session was signed in."}
+        last_seen_at: {type: string, format: date-time, description: "When a request was last charged to it, accurate to about a minute."}
+        ip_group:
+          type: string
+          description: >-
+            The network the session was signed in from, grouped as the sign-in limits count it: an IPv4 address as it
+            is, an IPv6 allocation as its /64. Empty when no address was recorded.
+        client:
+          type: string
+          description: >-
+            A short browser and platform summary derived from the User-Agent recorded at sign-in, such as
+            `Chrome on macOS`, or `Unknown client`. The raw header is not returned.
+    SessionRevocation:
+      type: object
+      properties:
+        revoked: {type: integer, minimum: 0, description: "How many other sessions ended."}
     TotpSetup:
       type: object
       required: [secret, uri]
@@ -1544,11 +2657,32 @@ components:
         secret: {type: string, maxLength: 128}
         password: {type: string, maxLength: 256, description: "The user's password, asked again."}
         code: {type: string, pattern: '^[0-9]{6}$', description: "A code from the new secret."}
+    TotpReplaceRequest:
+      type: object
+      required: [secret, current_code, code]
+      properties:
+        secret: {type: string, maxLength: 128, description: "The new TOTP secret in base32, from `beginTotpSetup`."}
+        current_code:
+          type: string
+          minLength: 6
+          maxLength: 19
+          description: >-
+            Proof of the factor being replaced: a current TOTP code (6 digits) or an unused recovery code
+            (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server tells them apart by shape.
+        code: {type: string, pattern: '^[0-9]{6}$', description: "A code from the new secret."}
     RecoveryCodesRequest:
       type: object
       required: [code]
       properties:
         code: {type: string, pattern: '^[0-9]{6}$', description: "A current TOTP code."}
+    ShownRecoveryCodes:
+      type: object
+      required: [recovery_codes]
+      description: The recovery codes a link round trip left for the session, read once.
+      properties:
+        recovery_codes:
+          type: array
+          items: {type: string}
     FactorChange:
       type: object
       required: [csrf_token, recovery_codes]
@@ -1574,12 +2708,47 @@ components:
         floor: {$ref: "#/components/schemas/Money"}
         available: {$ref: "#/components/schemas/Money"}
         spent_this_month: {$ref: "#/components/schemas/Money"}
+        batches:
+          type: array
+          description: >-
+            The credit batches that still hold something, oldest credit first, with what is left in each and when it
+            stops counting. An account with nothing is an empty array. Read in the same snapshot as the balance:
+            absent on a node of the previous release, when the allocation could not be brought up to date in bounded
+            time, or when a transaction committed after the last replay. The page then shows this part as unavailable
+            rather than a number from a different moment.
+          items: {$ref: "#/components/schemas/CreditBatch"}
+    CreditBatch:
+      type: object
+      required: [id, source, amount, remaining, frozen, created_at]
+      description: >-
+        Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending
+        takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this
+        batch, not what the next charge will take.
+      properties:
+        id:
+          type: string
+          pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          description: The batch's own identity; paid credit uses the order's ID as the batch ID.
+        source:
+          type: string
+          enum: [gift, paid, redeem]
+          x-enum-varnames: [CreditBatchGift, CreditBatchPaid, CreditBatchRedeem]
+          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave."
+        amount: {$ref: "#/components/schemas/Money"}
+        remaining: {$ref: "#/components/schemas/Money"}
+        frozen: {$ref: "#/components/schemas/Money"}
+        created_at: {type: string, format: date-time}
+        expires_at:
+          type: string
+          format: date-time
+          description: "When what is left of the batch stops counting. Absent when it never expires."
     StatementKind:
       type: string
-      enum: [top_up, gift, spend, expiry, refund, reversal, freeze, unfreeze]
+      enum: [top_up, gift, redeem, spend, expiry, refund, reversal, freeze, unfreeze]
       description: >-
         What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit
-        given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+        given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change),
+        freeze or unfreeze.
     StatementRow:
       type: object
       required: [id, at, kind, amount, balance_after, reference, frozen_change, frozen_after]
@@ -1620,6 +2789,7 @@ components:
           items: {$ref: "#/components/schemas/StatementRow"}
         next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     KeyId: {type: string, pattern: '^key_[0-9a-hjkmnp-tv-z]{26}$', description: "An API key's ID (TypeID)."}
+    SessionId: {type: string, pattern: '^sess_[0-9a-hjkmnp-tv-z]{26}$', description: "A session's ID (TypeID)."}
     WorkspaceId: {type: string, pattern: '^ws_[0-9a-hjkmnp-tv-z]{26}$', description: "A workspace's ID (TypeID)."}
     CallId:
       type: string
@@ -1629,10 +2799,31 @@ components:
       type: object
       required: [name, key_prefix, registration, currency]
       properties:
+        id: {$ref: "#/components/schemas/SiteId"}
         name: {type: string}
         currency: {type: string, pattern: '^[A-Z]{3}$', example: USD, description: "The site's accounting currency, the one of every `Money` its API shows. It never changes."}
-        logo_url: {type: string, description: "Absent when the site has no logo."}
+        brand_color:
+          type: string
+          pattern: '^#[0-9a-f]{6}$'
+          description: >-
+            The site's brand colour, lower case, from which the console derives both colour schemes' accent and primary
+            button (docs/frontend.md「主题与自由度」). Absent when the site uses the default palette or the node predates
+            the field.
+        logo_url:
+          type: string
+          description: >-
+            The path of the site's logo on this host. Absent when the site has no logo. It is long-cached, because its
+            hash names the bytes; a page shows the site's name when the image does not load.
         key_prefix: {type: string, example: sk-ax-v1-, description: "What the site's API keys start with."}
+        email_verification:
+          type: boolean
+          description: "Whether open registration verifies the address by mail before the user exists. Absent on a node of the previous release."
+        human_check:
+          type: object
+          description: "The proof of work the open-registration page must solve. Absent when the site does not check, or when the node predates open registration."
+          required: [bits]
+          properties:
+            bits: {type: integer, minimum: 12, maximum: 24, description: "Leading zero bits the SHA-256 of `axiom-registration-v1`, the site id, the normalized email and the decimal nonce must have."}
         api_base_url:
           type: string
           format: uri
@@ -1644,19 +2835,154 @@ components:
         registration:
           type: string
           enum: [invite, closed, open]
-          description: "`invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1."
+          description: "`invite` needs an invite code; `closed` takes no one; `open` verifies the address by mail, with the site's human check, domain lists and limits."
+        login_domain:
+          type: string
+          description: >-
+            The console domain third-party sign-in returns to and passkeys bind to. Absent until an operator sets it;
+            the sign-in page sends visitors to `login_origin` when the Host is another console domain.
+        login_origin:
+          type: string
+          format: uri
+          description: "The registered origin of `login_domain`. Absent with it, or when that domain is disabled."
+        passkeys:
+          type: boolean
+          description: "Whether the site offers passkeys. False on an older node that does not know the field."
+        oauth_providers:
+          type: array
+          description: "The third-party providers the site configured, for the sign-in page's buttons."
+          items: {$ref: "#/components/schemas/OAuthProvider"}
+    OAuthProvider:
+      type: string
+      enum: [github, google, linuxdo]
+      description: "A third-party sign-in provider."
+    OAuthStartRequest:
+      type: object
+      additionalProperties: false
+      required: [provider]
+      properties:
+        provider: {$ref: "#/components/schemas/OAuthProvider"}
+    OAuthStart:
+      type: object
+      required: [authorize_url]
+      properties:
+        authorize_url:
+          type: string
+          format: uri
+          description: "The provider's authorization endpoint with this flow's client, state and, where supported, PKCE challenge."
+    WebAuthnCredential:
+      type: object
+      additionalProperties: true
+      x-go-type: jsonx.Raw
+      description: >-
+        The browser's `PublicKeyCredential` JSON, passed through to the WebAuthn verifier unchanged. Its shape is the
+        WebAuthn specification's, not this contract's.
+    PasskeyChallenge:
+      type: object
+      required: [flow_id, public_key]
+      properties:
+        flow_id: {type: string, maxLength: 64, description: "The ceremony to finish; single use, expires in 5 minutes."}
+        public_key:
+          $ref: "#/components/schemas/WebAuthnCredential"
+    PasskeyId: {type: string, pattern: '^pk_[0-9a-hjkmnp-tv-z]{26}$', description: "A passkey's ID (TypeID)."}
+    PasskeyRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        name: {type: string, maxLength: 100, description: "A label for the credential; absent means Passkey."}
+        password: {type: string, minLength: 1, maxLength: 256, description: "The current password, asked again."}
+    PasskeyDeleteRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password: {type: string, minLength: 1, maxLength: 256}
+    Passkey:
+      type: object
+      required: [id, name, created_at, backup_eligible]
+      properties:
+        id: {$ref: "#/components/schemas/PasskeyId"}
+        name: {type: string}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: string, format: date-time, nullable: true}
+        backup_eligible: {type: boolean, description: "Whether the credential can be synced or backed up between devices."}
+        recovery_codes:
+          type: array
+          items: {type: string}
+          description: >-
+            Replacement recovery codes, present only on the answer that adds the passkey and only when TOTP is on:
+            raising the factor version stops the old ones.
+    Passkeys:
+      type: object
+      required: [passkeys]
+      properties:
+        passkeys:
+          type: array
+          items: {$ref: "#/components/schemas/Passkey"}
+    Identity:
+      type: object
+      required: [provider, display_name, created_at]
+      properties:
+        provider: {$ref: "#/components/schemas/OAuthProvider"}
+        display_name: {type: string}
+        created_at: {type: string, format: date-time}
+    Identities:
+      type: object
+      required: [identities]
+      properties:
+        identities:
+          type: array
+          items: {$ref: "#/components/schemas/Identity"}
+    CredentialChange:
+      type: object
+      required: [csrf_token]
+      description: >-
+        A credential was removed: every other session ended and the response's cookie replaces this browser's session.
+      properties:
+        csrf_token: {type: string}
+        recovery_codes:
+          type: array
+          items: {type: string}
+          description: Replacement recovery codes when TOTP is on; absent otherwise.
     RegisterRequest:
       type: object
-      required: [invite_code, email, password]
+      required: [email]
       properties:
-        invite_code: {type: string, minLength: 1, maxLength: 64}
+        invite_code: {type: string, minLength: 1, maxLength: 64, description: "Required on an invite-only site; ignored where registration is open."}
         email: {type: string, minLength: 3, maxLength: 254}
-        password: {type: string, minLength: 12, maxLength: 256}
+        password: {type: string, minLength: 12, maxLength: 256, description: "Required on an invite-only site. Open registration does not keep it: the page chooses the password on the verification page, so an unauthenticated caller cannot choose the password of an address it does not own."}
+        human_check: {type: string, pattern: '^[0-9]{1,20}$', description: "The decimal nonce that solves the site's proof of work. Required where `human_check` is present."}
+        language: {type: string, enum: [zh, en], description: "The language of the verification mail; absent means en. The page sends its own."}
+        consent:
+          type: array
+          description: >-
+            The current legal documents the person accepted. Required on a site that publishes any, where a missing or
+            stale version is `consent_required`; open registration checks it at verify-email instead, because no user
+            exists yet.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
     Registered:
       type: object
       required: [user_id]
       properties:
         user_id: {$ref: "#/components/schemas/UserId"}
+    RegistrationPending:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [verification_sent]}
+    VerifyEmailRequest:
+      type: object
+      required: [token, password]
+      properties:
+        token: {type: string, minLength: 20, maxLength: 100}
+        password: {type: string, minLength: 12, maxLength: 256, description: "The password chosen by the mailbox owner when the link is clicked."}
+        consent:
+          type: array
+          description: >-
+            The current legal documents the person accepted, shown on the verification page. Required on a site that
+            publishes any; a missing or stale version is `consent_required`.
+          items: {$ref: "#/components/schemas/LegalDocumentVersion"}
     Key:
       type: object
       required: [id, name, prefix, last4, workspace_id, created_at, disabled]
@@ -1681,10 +3007,34 @@ components:
           type: array
           description: The model names the key may call; absent means any model.
           items: {type: string, maxLength: 200}
+        retired_models:
+          type: array
+          description: >-
+            The names in `models` that the catalog has retired, so calls to them cannot succeed. Absent when none is
+            retired or the reading node has no catalog snapshot; a page shows no hint then.
+          items: {type: string, maxLength: 200}
         ip_allow:
           type: array
           description: The client addresses (IP or CIDR) the key may be used from; absent means any.
           items: {type: string, maxLength: 64}
+    KeyStatus:
+      type: string
+      enum: [active, disabled, expired]
+      x-enum-varnames: [KeyStatusActive, KeyStatusDisabled, KeyStatusExpired]
+      description: >-
+        The state the key list shows: `active` is enabled and not expired, `disabled` is disabled and not expired,
+        and `expired` is past its `expires_at` whether enabled or not.
+    KeyFilterEcho:
+      type: object
+      description: >-
+        The filters this node applied to the page. Absent on nodes that predate key filters: those nodes ignore the
+        filter parameters and return every key, so a filtered page cannot show their rows.
+      properties:
+        name: {type: string, description: "The applied name filter, ignoring case in the match."}
+        prefix: {type: string, description: "The applied prefix filter, ignoring case in the match."}
+        status: {$ref: "#/components/schemas/KeyStatus"}
+        created_after: {type: string, format: date-time, description: The applied inclusive lower bound.}
+        created_before: {type: string, format: date-time, description: The applied exclusive upper bound.}
     LimitReset:
       type: string
       enum: [daily, weekly, monthly]
@@ -1734,6 +3084,8 @@ components:
       type: object
       required: [data, next_cursor]
       properties:
+        filters:
+          $ref: "#/components/schemas/KeyFilterEcho"
         data:
           type: array
           items: {$ref: "#/components/schemas/Key"}
@@ -1817,8 +3169,8 @@ components:
       properties:
         item: {type: string, description: "Billing item, or unknown_tokens / unknown_uses for unmapped usage."}
         quantity: {type: integer, format: int64, minimum: 0}
-        unit: {type: string, enum: [token, use]}
-        unit_price: {type: string, description: "Exact currency units per token or use, decimal text with up to 15 fractional digits."}
+        unit: {type: string, enum: [token, use, piece, second, character]}
+        unit_price: {type: string, description: "Exact currency units per billing unit (token, use, piece, second or character), decimal text with up to 15 fractional digits."}
         amount: {type: string, description: "Exact quantity times unit_price, before call-level rounding and balance adjustment."}
         sampling: {type: integer, minimum: 1}
         service_tier: {type: string}
@@ -1913,3 +3265,54 @@ components:
         created_at: {type: string, format: date-time}
         expires_at: {type: string, format: date-time, description: "When a waiting order stops being payable."}
         checkout: {$ref: "#/components/schemas/Checkout"}
+        refund_allowed:
+          type: boolean
+          description: >-
+            Whether this order's merchant account lets the account request refunds. Absent on a node of the previous
+            release; the page then shows no refund action. True does not promise the channel can refund: the request
+            itself still answers with the current policy.
+        refunds:
+          type: array
+          description: >-
+            The order's refunds, oldest first. Absent on a node of the previous release, and on responses that do not
+            read them (creating, cancelling and verifying an order); the page reads the order again for them.
+          items: {$ref: "#/components/schemas/OrderRefund"}
+    OrderList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Order"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    RefundId: {type: string, pattern: '^rfd_[0-9a-hjkmnp-tv-z]{26}$', description: "A refund's ID (TypeID), the refund number of channels that take one."}
+    RefundState:
+      type: string
+      enum: [pending_review, processing, succeeded, declined]
+      x-enum-varnames: [RefundPendingReview, RefundProcessing, RefundSucceeded, RefundDeclined]
+      description: >-
+        `pending_review` waits for an administrator's approval; `processing` is with the payment channel and its result
+        is not final; `succeeded` returned the cash and took the credits from the balance; `declined` returned the
+        frozen credits and moved no cash.
+    OrderRefund:
+      type: object
+      required: [id, state, credits, amount, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/RefundId"}
+        state: {$ref: "#/components/schemas/RefundState"}
+        credits: {$ref: "#/components/schemas/Money"}
+        amount:
+          allOf: [{$ref: "#/components/schemas/PayAmount"}]
+          description: The cash due back, in the currency the order was paid in, quoted from the batch's payment and the site's refund policy.
+        created_at: {type: string, format: date-time}
+        finished_at:
+          type: string
+          format: date-time
+          description: When the refund reached `succeeded` or `declined`; absent while it is not final.
+    RefundRequest:
+      type: object
+      additionalProperties: false
+      required: [credits, reason]
+      properties:
+        credits: {$ref: "#/components/schemas/Money"}
+        reason: {type: string, minLength: 1, maxLength: 1000}

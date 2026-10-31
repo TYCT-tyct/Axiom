@@ -10,7 +10,6 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers"
 )
@@ -26,6 +25,8 @@ type Suppliers interface {
 	ResolveLostRequest(ctx context.Context, tx pg.Tx, request uuid.UUID) error
 	// EndRequest records that the request reached a terminal state at the database's time at.
 	EndRequest(ctx context.Context, tx pg.Tx, request, site, account uuid.UUID, at time.Time) error
+	// EndRequests is EndRequest for a batch, in one statement.
+	EndRequests(ctx context.Context, tx pg.Tx, ends []suppliers.EndedRequest) error
 }
 
 // Outcome is how a call ended: its attempts in order, of which the last is charged. A call whose client left has the
@@ -92,11 +93,16 @@ const (
 type Final struct {
 	PriceVersion *uuid.UUID
 	// Profit is nil if any attempt's converted cost is unknown, or the difference cannot fit an amount.
-	Profit    *int64
-	Segments  []Segment
-	Charged   platform.Exact
-	Estimated bool
-	Waived    bool // the waiver rules made the call free of its model usage; per-use items may still be charged
+	Profit   *int64
+	Segments []Segment
+	Charged  platform.Exact
+	// ServerToolCost is the sale price of the per-use items the call ran, nil when none ran. It is a price, not our
+	// cost: usage.cost_details.server_tool_cost is what the client paid for tools.
+	ServerToolCost *platform.Exact
+	// CacheDiscount is what cache reads saved against the input price, never negative.
+	CacheDiscount platform.Exact
+	Estimated     bool
+	Waived        bool // the waiver rules made the call free of its model usage; per-use items may still be charged
 }
 
 // ErrNoAttempt is an outcome whose last attempt names no kept entry: nothing can price it.
@@ -108,6 +114,9 @@ var ErrNoAttempt = errors.New("billing: the outcome names no attempt on a kept e
 // is terminal. A retry, or a Settle after cleanup took over, charges at most once: it returns the Final stored on the
 // reservation, or settles the difference by the late-settlement rules. An outcome with no attempt is a call that never
 // reached an upstream: its reservation is released.
+//
+// Settle is the single-request settlement. It keeps the reports here rather than going through SettleIn, whose
+// per-batch report closure would allocate on a path bench-compare measures.
 func (b *Billing) Settle(ctx context.Context, h *Hold, o Outcome) (f Final, err error) {
 	a := h.admitted
 	var c *locked
@@ -171,7 +180,11 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	} else { // cleanup_settled or cleanup_released: replace what cleanup charged, at revision -1
 		err = c.late(ctx, tx, p, last)
 	}
-	return Final{PriceVersion: lockedVersion(c.row.PriceVersions, last.Entry), Segments: last.Segments, Charged: platform.AmountExact(c.charged), Estimated: p.estimated, Waived: p.waived, Profit: c.profit()}, err
+	return Final{
+		PriceVersion: lockedVersion(c.row.PriceVersions, last.Entry), Segments: last.Segments,
+		Charged: platform.AmountExact(c.charged), ServerToolCost: p.serverToolPtr(), CacheDiscount: p.cacheDiscount,
+		Estimated: p.estimated, Waived: p.waived, Profit: c.profit(),
+	}, err
 }
 
 // recordAttempts books each attempt's cost and writes the attempts to suppliers, in this transaction: the row of an
@@ -218,6 +231,9 @@ func attemptEntries(attempts []AttemptResult) []int32 {
 // price covers, and whether only the per-use items were charged.
 type priced struct {
 	price             int64
+	serverTool        platform.Exact
+	cacheDiscount     platform.Exact
+	hasServerTool     bool
 	estimated, waived bool
 	tiers             int16
 }
@@ -248,24 +264,32 @@ func waivable(last AttemptResult) bool {
 	return last.Finish != FinishCancelled && (!delivered || zeroOutput(last))
 }
 
-// zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning and images
-// adds up to zero, and the finish was empty or an error. An output count the upstream never reported is a default
-// zero, not a reported one, so it proves nothing.
+// deliveredOutputs are the items that show a reply reached the client as billable output: the token outputs and the
+// pieces and seconds an image or speech endpoint delivers instead of tokens.
+const deliveredOutputs = catalog.OutputSide | 1<<catalog.ItemImageOutPiece | 1<<catalog.ItemAudioOutSecond
+
+// zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning, audio
+// and images, in tokens and in pieces and seconds, adds up to zero, and the finish was empty or an error. An output
+// count the upstream never reported is a default zero, not a reported one, so it proves nothing.
 func zeroOutput(last AttemptResult) bool {
 	var output int64
 	for _, s := range last.Segments {
 		if !s.Reported.Has(catalog.ItemOutput) {
 			return false
 		}
-		// Image delivery is output even if the text count is zero. Audio retains its existing waiver policy.
-		output += s.Usage.Count(catalog.ItemOutput) + s.Usage.Count(catalog.ItemReasoning) + s.Usage.Count(catalog.ItemImageOut)
+		for it := range catalog.NumItems {
+			if deliveredOutputs.Has(it) {
+				output += s.Usage.Count(it)
+			}
+		}
 	}
 	return len(last.Segments) > 0 && output == 0 && (last.Finish == FinishNone || last.Finish == FinishError)
 }
 
 // perUseItems are the items charged even when a call is waived (「按次计费的项目照常收费」), the ones a fallback row must
 // price for every currency (parseFallbacks), and the ones the listing gate leaves out because admission fills them in
-// (Unpriced). Adding an item here adds it to all three.
+// (Unpriced). Adding an item here adds it to all three. A piece, second or character is not one: it is output the call
+// delivers, so a waived call does not charge it.
 const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution
 
 func chargedItems(perUseOnly bool) catalog.ItemSet {
@@ -277,7 +301,7 @@ func chargedItems(perUseOnly bool) catalog.ItemSet {
 
 func unknownCharged(tokens bool, charged catalog.ItemSet) bool {
 	if tokens {
-		return charged&tokenItems != 0
+		return charged&catalog.TokenItems != 0
 	}
 	return charged&perUseItems != 0
 }
@@ -299,6 +323,9 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 			p.estimated = true
 		}
 		if err == nil {
+			err = p.addExtras(s, f, seg, tiers, perUseOnly)
+		}
+		if err == nil {
 			cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), charged)
 		}
 		if err == nil {
@@ -314,6 +341,47 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 	}
 	p.price = ceilAmount(total)
 	return p, nil
+}
+
+// addExtras computes the two amounts the client's usage shows beyond its token counts: the sale price of the per-use
+// items and what cache reads saved against the input price. Both use the same rate a charge item would, including the
+// fallback rate of a tier the schedule does not declare.
+func (p *priced) addExtras(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, waived bool) error {
+	var err error
+	for it := range catalog.NumItems {
+		if !perUseItems.Has(it) {
+			continue
+		}
+		n := seg.Usage.Count(it)
+		if n == 0 {
+			continue
+		}
+		p.hasServerTool = true
+		if p.serverTool, err = p.serverTool.Add(itemRate(s, f, seg, tiers, it).Mul(n)); err != nil {
+			return err
+		}
+	}
+	cached := seg.Usage.Count(catalog.ItemCacheRead)
+	if cached == 0 || waived {
+		return nil
+	}
+	input := itemRate(s, f, seg, tiers, catalog.ItemInput)
+	cache := itemRate(s, f, seg, tiers, catalog.ItemCacheRead)
+	saved, err := input.Mul(cached).Add(cache.Mul(cached).Neg())
+	if err != nil || saved.Cmp(platform.Exact{}) <= 0 {
+		return err
+	}
+	p.cacheDiscount, err = p.cacheDiscount.Add(saved)
+	return err
+}
+
+// itemRate is the rate a charge item uses: the schedule's rate when the tier is declared and priced, else the fallback.
+func itemRate(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, it catalog.Item) platform.UnitPrice {
+	rate, _, ok := s.Rate(seg.Usage, it)
+	if !ok || undeclaredTier(tiers, seg.Usage.ServiceTier()) {
+		rate = missingRate(s, f, it)
+	}
+	return rate
 }
 
 // guessed: the sampling's charge rests on usage the upstream did not report, an item without a price, or usage
@@ -369,16 +437,6 @@ func addMissing(s catalog.Schedule, f fallbacks, cost platform.Exact, u catalog.
 	return cost, nil
 }
 
-func missingRate(s catalog.Schedule, f fallbacks, it catalog.Item) platform.UnitPrice {
-	if perUseItems.Has(it) {
-		return f.perUse[it]
-	}
-	return tokenPrice(s)
-}
-
-// tokenItems are the items counted in tokens.
-const tokenItems = ^perUseItems
-
 // segmentCost is one sampling's cost, of its per-use items alone when perUseOnly, and the items without a price.
 func segmentCost(s catalog.Schedule, u catalog.Usage, perUseOnly bool) (platform.Exact, catalog.ItemSet, error) {
 	cost, missing, err := s.Cost(u)
@@ -427,67 +485,6 @@ func int32p(n int) *int32 {
 	return &i
 }
 
-func usages(segments []Segment) []catalog.Usage {
-	u := make([]catalog.Usage, len(segments))
-	for i, s := range segments {
-		u[i] = s.Usage
-	}
-	return u
-}
-
-// storedSegment is a segment as final_usage stores it: each item's count in item order, the service tier, the
-// reported items and the usage protocol could not map.
-type storedSegment struct {
-	Counts        []int64                `json:"counts"`
-	Tier          catalog.ServiceTier    `json:"tier"`
-	Reported      catalog.ItemSet        `json:"reported"`
-	Unknown       []catalog.UnknownUsage `json:"unknown,omitzero"`
-	PhysicalInput *int64                 `json:"physical_input,omitzero"`
-}
-
-// encodeUsage is the segments as final_usage stores them, so a retried Settle returns the Final the first one gave.
-func encodeUsage(segments []Segment) ([]byte, error) {
-	stored := make([]storedSegment, len(segments))
-	for i, s := range segments {
-		counts := make([]int64, catalog.NumItems)
-		for it := range catalog.NumItems {
-			counts[it] = s.Usage.Count(it)
-		}
-		stored[i] = storedSegment{Counts: counts, Tier: s.Usage.ServiceTier(), Reported: s.Reported, Unknown: s.Usage.Unknown()}
-		if n, ok := s.Usage.PhysicalInput(); ok {
-			stored[i].PhysicalInput = &n
-		}
-	}
-	b, err := jsonx.MarshalCanonical(stored)
-	if err != nil {
-		return nil, fmt.Errorf("billing: write the usage: %w", err)
-	}
-	return b, nil
-}
-
-func decodeUsage(b []byte) ([]Segment, error) {
-	var stored []storedSegment
-	if err := jsonx.UnmarshalKnown(b, &stored); err != nil {
-		return nil, fmt.Errorf("billing: read the stored usage: %w", err)
-	}
-	segments := make([]Segment, len(stored))
-	for i, s := range stored {
-		counts := map[catalog.Item]int64{}
-		for it, n := range s.Counts {
-			counts[catalog.Item(it)] = n
-		}
-		u, err := catalog.NewUsage(counts, s.Tier, s.Unknown)
-		if err == nil && s.PhysicalInput != nil {
-			u, err = u.WithPhysicalInput(*s.PhysicalInput)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("billing: read the stored usage: %w", err)
-		}
-		segments[i] = Segment{Usage: u, Reported: s.Reported}
-	}
-	return segments, nil
-}
-
 // locked is one reservation under its balance row lock, with what is charged once a branch has run.
 type locked struct {
 	quotes     []quote // only Settle brings usage, always with the original Hold, including after cleanup
@@ -507,7 +504,23 @@ type locked struct {
 // stored is the Final the reservation holds.
 func (c *locked) stored() (Final, error) {
 	segments, err := decodeUsage(c.row.FinalUsage)
-	return Final{PriceVersion: settledVersion(c.row.PriceVersions, c.row.Entry), Segments: segments, Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived, Profit: c.row.Profit}, err
+	f := Final{
+		PriceVersion: settledVersion(c.row.PriceVersions, c.row.Entry), Segments: segments,
+		Charged: platform.AmountExact(c.row.Charged), Estimated: c.row.Estimated, Waived: c.row.Waived, Profit: c.row.Profit,
+	}
+	if err != nil || c.row.State != "settled" || c.row.Entry == nil || c.row.PricingTiers < 0 {
+		return f, err
+	}
+	s, fbs, err := c.pricing(int(*c.row.Entry))
+	if err != nil {
+		return f, err
+	}
+	p, err := priceSegments(s, fbs, segments, c.row.Waived, catalog.ServiceTierSet(c.row.PricingTiers)) // stored CHECK bounds tiers
+	if err != nil {
+		return f, err
+	}
+	f.ServerToolCost, f.CacheDiscount = p.serverToolPtr(), p.cacheDiscount
+	return f, nil
 }
 
 func (c *locked) profit() *int64 {
@@ -523,7 +536,7 @@ func (c *locked) profit() *int64 {
 }
 
 // cap is what may be charged without passing the floor, keeping every other reservation covered: the balance less
-// the floor and frozen credit, less what is reserved apart from what this reservation still holds. Like Reserve,
+// the floor and frozen credit, less what is reserved apart from what this reservation still holds. Like admission,
 // it computes headroom exactly and clamps it to what an amount can hold.
 func (c *locked) cap(held int64) int64 { return room(c.balance, held) }
 
@@ -562,7 +575,7 @@ func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult
 	if _, err := post(ctx, tx, c.settlement, charge(p.price, c.charged)...); err != nil {
 		return err
 	}
-	w, err := result("settled", p, last)
+	w, err := result(p, last)
 	if err != nil {
 		return err
 	}
@@ -579,7 +592,7 @@ func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResul
 	if _, err := post(ctx, tx, c.settlement, charge(p.price, c.charged)...); err != nil {
 		return err
 	}
-	w, err := result("settled", p, last)
+	w, err := result(p, last)
 	if err != nil {
 		return err
 	}
@@ -601,11 +614,11 @@ type written struct {
 	tiers             int16
 }
 
-// result is what a charge for the last attempt writes.
-func result(state string, p priced, last AttemptResult) (written, error) {
+// result is what a charge for the last attempt writes: the reservation is settled.
+func result(p priced, last AttemptResult) (written, error) {
 	usage, err := encodeUsage(last.Segments)
 	return written{
-		state: state, seq: int32p(last.Seq), entry: int32p(last.Entry), price: p.price, waived: p.waived,
+		state: "settled", seq: int32p(last.Seq), entry: int32p(last.Entry), price: p.price, waived: p.waived,
 		estimated: p.estimated, usage: usage, tiers: p.tiers,
 	}, err
 }

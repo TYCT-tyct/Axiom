@@ -17,6 +17,7 @@ import (
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
+	"axiom/internal/routing"
 )
 
 // countingBody is a request body that counts how often it was read.
@@ -47,6 +48,32 @@ func post(t *testing.T, host, path, key string, body io.Reader) *http.Request {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	return req
+}
+
+// TestCompletionsRoutesWhenTheEndpointDeclaresIt: the route table has /v1/completions, but a completion only has an
+// entry when the endpoint's formats include it (the projection writes that from the adapter's formats and the mapping's
+// declaration). This ties the two halves: the declaration survives the sync (persist's TestDeclaredFormatsSurviveSync),
+// and an endpoint carrying the format is admitted here instead of 404ing.
+func TestCompletionsRoutesWhenTheEndpointDeclaresIt(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) {
+		o.endpoints = func(name string, e *routing.Endpoint) {
+			if name == "alpha-1" {
+				e.Native, e.Served = routing.Of(protocol.Completions), routing.Of(protocol.Completions)
+			}
+		}
+	})
+	a := r.newAccount(1 << 50)
+	resp, body := r.do(http.MethodPost, "/v1/completions", a.key,
+		strings.NewReader(`{"model":"acme/alpha","prompt":"hi","max_tokens":16}`))
+	if resp.StatusCode == http.StatusNotFound {
+		t.Fatalf("a completion with an endpoint that declares it: %d %s", resp.StatusCode, body)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.admits) != 1 || r.admits[0].Request.Format != protocol.Completions {
+		t.Fatalf("admitted %d calls, none a completion: %+v", len(r.admits), r.admits)
+	}
 }
 
 // TestUnrecognisedKeyIsRefusedBeforeTheBodyIsRead: a request whose host or key is not recognised is answered 401, the
@@ -287,11 +314,14 @@ func TestRequestsThatAreNotServed(t *testing.T) {
 		header     [][2]string
 		named      string
 	}{
-		"a continued response": {"/v1/responses", `{"model":"acme/beta","input":"x","previous_response_id":"resp_1"}`, nil, "previous_response_id"},
-		"a protocol upgrade":   {"/v1/messages", messageBody("acme/beta"), [][2]string{{"Upgrade", "websocket"}}, "upgrade"},
-		"not JSON":             {"/v1/chat/completions", `{"model":`, nil, ""},
-		"no model":             {"/v1/messages", `{"max_tokens":1}`, nil, "model"},
-		"too many alternates":  {"/v1/chat/completions", `{"model":"acme/beta","models":["1","2","3","4","5","6","7","8","9"]}`, nil, "models"},
+		"a continued response":   {"/v1/responses", `{"model":"acme/beta","input":"x","previous_response_id":"resp_1"}`, nil, "previous_response_id"},
+		"a protocol upgrade":     {"/v1/messages", messageBody("acme/beta"), [][2]string{{"Upgrade", "websocket"}}, "upgrade"},
+		"not JSON":               {"/v1/chat/completions", `{"model":`, nil, ""},
+		"no model":               {"/v1/messages", `{"max_tokens":1}`, nil, "model"},
+		"no model, a completion": {"/v1/completions", `{"prompt":"x"}`, nil, "model"},
+		"too many alternates":    {"/v1/chat/completions", `{"model":"acme/beta","models":["1","2","3","4","5","6","7","8","9"]}`, nil, "models"},
+		"a file reference without a pin": {"/v1/responses", `{"model":"acme/beta","input":[{"type":"message","role":"user",` +
+			`"content":[{"type":"input_file","file_id":"file_1"}]}]}`, nil, "file_id"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			req := post(t, apiHost, tc.path, a.key, strings.NewReader(tc.body))

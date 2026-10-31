@@ -132,7 +132,9 @@ func (s *Service) consumeReset(ctx context.Context, site SiteID, target Password
 		if n != 1 {
 			return ErrInvalidReset
 		}
-		return s.setPassword(ctx, tx, target.UserID, target.AccountID, uuid.UUID(site), passwordHash, language)
+		// A reset has no session to sign in and no code to show: raising the version ends every session and every old
+		// recovery code, and the password mail stands in for the factor notice email.
+		return s.completeReset(ctx, tx, target, site, passwordHash, language)
 	})
 }
 
@@ -184,23 +186,23 @@ func (s *Service) replacePassword(ctx context.Context, p Principal, c PasswordCh
 		if err != nil {
 			return err
 		}
-		if locked.Mfa && !p.Verified() {
+		if secondFactorUnproved(locked, p) {
 			return ErrForbidden
 		}
 		if err := s.setPassword(ctx, tx, uuid.UUID(p.user), uuid.UUID(p.account), uuid.UUID(p.site), hash, c.Language); err != nil {
 			return err
 		}
-		if locked.Mfa {
-			codes, err = s.insertRecoveryCodes(ctx, tx, uuid.UUID(p.user), uuid.UUID(p.account), uuid.UUID(p.site), locked.FactorVersion+1)
-			if err != nil {
-				return err
-			}
-		}
-		issued, err = s.issue(ctx, tx, newSession{
-			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: s.snapshot.Load().sites[p.site], surface: Console,
-			level: p.level, factorVersion: locked.FactorVersion + 1, ip: c.ClientIP, userAgent: c.UserAgent,
+		issued, codes, err = s.finishFactorChange(ctx, tx, locked, factorFinish{
+			session: newSession{
+				user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: s.snapshot.Load().sites[p.site],
+				surface: Console, level: p.level, ip: c.ClientIP, userAgent: c.UserAgent,
+			},
+			totpOn: locked.Mfa,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		return markFactorNoticeEmailed(ctx, tx, uuid.UUID(p.user))
 	})
 	if err != nil {
 		return Issued{}, nil, err
@@ -208,6 +210,8 @@ func (s *Service) replacePassword(ctx context.Context, p Principal, c PasswordCh
 	return issued, codes, nil
 }
 
+// setPassword writes the hash, audits it and queues the password mail. The caller raises the factor version (through
+// finishFactorChange for a change, BumpFactorVersion for a reset) and then marks that version's factor notice emailed.
 func (s *Service) setPassword(ctx context.Context, tx pg.Tx, user, account, site uuid.UUID, hash, language string) error {
 	email, err := s.queries.PasswordRecipient(ctx, tx, user)
 	if err != nil {
@@ -222,10 +226,25 @@ func (s *Service) setPassword(ctx context.Context, tx pg.Tx, user, account, site
 	if err := audit.Record(ctx, tx, audit.Event{Actor: audit.User(user), Action: "user.password_set", Target: userTarget(site, account, user)}); err != nil {
 		return err
 	}
-	if err = s.recovery.mailer.Enqueue(ctx, tx, mail.Tenant{Site: site, Account: account},
-		passwordMail(email, s.snapshot.Load().sites[SiteID(site)].Name, passwordLanguage(language), "")); err != nil {
+	return s.recovery.mailer.Enqueue(ctx, tx, mail.Tenant{Site: site, Account: account},
+		passwordMail(email, s.snapshot.Load().sites[SiteID(site)].Name, passwordLanguage(language), ""))
+}
+
+// completeReset writes the reset's new password and finishes the change. It issues no session and no recovery code,
+// because a reset arrives with neither: the version bump alone ends the old ones.
+func (s *Service) completeReset(ctx context.Context, tx pg.Tx, target PasswordResetTenantRow, site SiteID, passwordHash, language string) error {
+	if err := s.setPassword(ctx, tx, target.UserID, target.AccountID, uuid.UUID(site), passwordHash, language); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE accounts.user_notices SET email_done=true WHERE user_id=$1 AND kind='factor_changed' AND source=(SELECT factor_version::text FROM accounts.users WHERE id=$1)`, user)
+	if err := s.queries.BumpFactorVersion(ctx, tx, target.UserID); err != nil {
+		return err
+	}
+	return markFactorNoticeEmailed(ctx, tx, target.UserID)
+}
+
+// markFactorNoticeEmailed marks the factor-change notice of the version just written as emailed. It runs after the
+// version bump, because the trigger that inserts the notice does so on the bump.
+func markFactorNoticeEmailed(ctx context.Context, tx pg.Tx, user uuid.UUID) error {
+	_, err := tx.Exec(ctx, `UPDATE accounts.user_notices SET email_done=true WHERE user_id=$1 AND kind='factor_changed' AND source=(SELECT factor_version::text FROM accounts.users WHERE id=$1)`, user)
 	return err
 }

@@ -1,0 +1,16 @@
+{
+  "query": "axiom site:example.com -site:bad.example",
+  "results": [
+    {"url": "https://example.com/one", "title": "Example One", "content": "The first recorded result.", "engine": "mock"},
+    {"url": "https://example.com/one", "title": "Example One again", "content": "A duplicate the adapter drops.", "engine": "mock"},
+    {"url": null, "title": "A key-value row", "content": "SearXNG's offline engines return rows without a URL.", "engine": "mock"},
+    {"url": "ftp://example.com/file", "title": "Not a web page", "content": "Only http(s) results are citations.", "engine": "mock"},
+    {"url": "https://example.org/two", "title": "Example Two", "content": "The second recorded result.", "engine": "mock"},
+    {"url": "https://example.net/three", "title": "Example Three", "content": "The third recorded result.", "engine": "mock"},
+    {"url": "https://example.edu/four", "title": "Example Four", "content": "The fourth recorded result.", "engine": "mock"}
+  ],
+  "answers": [],
+  "infoboxes": [],
+  "suggestions": [],
+  "unresponsive_engines": []
+}

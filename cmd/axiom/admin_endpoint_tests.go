@@ -12,10 +12,10 @@ import (
 )
 
 // adminFormats are the call formats as the contract names them, in protocol's enumeration order.
-var adminFormats = [...]adminapi.ModelFormat{adminapi.Messages, adminapi.Responses, adminapi.Chat}
+var adminFormats = [...]adminapi.TestFormat{adminapi.TestFormat("messages"), adminapi.TestFormat("responses"), adminapi.TestFormat("chat")}
 
 // formatOf is the call format a request names.
-func formatOf(f adminapi.ModelFormat) (protocol.Format, error) {
+func formatOf(f adminapi.TestFormat) (protocol.Format, error) {
 	for i, name := range adminFormats {
 		if f == name {
 			return protocol.Format(i), nil

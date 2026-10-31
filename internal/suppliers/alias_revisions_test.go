@@ -14,7 +14,7 @@ import (
 
 func (a admins) reviseIn(supplier, group uuid.UUID, name string, model uuid.UUID, rev int64) (Mapping, error) {
 	return inTx(a, func(ctx context.Context, tx pg.Tx) (Mapping, error) {
-		return a.admin.MapModel(ctx, tx, a.actor, supplier, &group, name, model, &rev, "mapped")
+		return a.admin.MapModel(ctx, tx, a.actor, supplier, &group, name, model, nil, &rev, "mapped")
 	})
 }
 
@@ -56,7 +56,7 @@ func TestMappingRevisionRollsBackWithoutAudit(t *testing.T) {
 	refuses(t, "create", err, nil)
 	rev := int64(1)
 	_, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Mapping, error) {
-		return a.admin.MapModel(ctx, tx, audit.Actor{}, id, &group, "alias", uuid.NewV7(), &rev, "must be audited")
+		return a.admin.MapModel(ctx, tx, audit.Actor{}, id, &group, "alias", uuid.NewV7(), nil, &rev, "must be audited")
 	})
 	if err == nil {
 		t.Fatal("revision succeeded without an actor")

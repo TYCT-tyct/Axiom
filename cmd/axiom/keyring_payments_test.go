@@ -29,7 +29,13 @@ func TestKeyringRewrapsMerchantConfig(t *testing.T) {
 	f.run("rewrap")
 	// Reproduce a restored merchant row: it alone references V1, while the other stores have already moved to V2.
 	made := f.saveRotationMerchant(masterKeys(t), in)
-	row := rotationEnvelope{store: f.r.Stores[3], id: made.ID.String()}
+	var merchant secret.EnvelopeStore
+	for _, store := range f.r.Stores {
+		if store.Table == "merchant_configs" {
+			merchant = store
+		}
+	}
+	row := rotationEnvelope{store: merchant, id: made.ID.String()}
 	before := f.read(row)
 	metadata := f.text("SELECT settings || ':' || rev::text FROM payments.merchant_configs")
 	if err := f.r.Retire(t.Context(), 1); err == nil {
@@ -69,7 +75,7 @@ func (f rotationFixture) saveRotationMerchant(keys *secret.Keyring, in payments.
 	}); err != nil {
 		f.t.Fatal(err)
 	}
-	made, err := p.SaveMerchant(f.t.Context(), pg.PlatformScope(), audit.System("platform.keyring.test"), in)
+	made, err := p.SaveMerchant(f.t.Context(), pg.PlatformScope(), audit.System("platform.keyring.test"), in, "test save")
 	if err != nil {
 		f.t.Fatal(err)
 	}

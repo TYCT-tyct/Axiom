@@ -6,6 +6,10 @@ import (
 )
 
 func (h *Handler) compress(c *Call, body []byte, req protocol.Request, snap *catalog.Snapshot, models []catalog.ModelID) ([]byte, protocol.Request, error) {
+	if len(models) == 0 {
+		// openrouter/auto has no model yet: the route picks one, so there is no context window to compress against.
+		return body, req, nil
+	}
 	model, _ := snap.Model(models[0])
 	serving, ok := model.Serving()
 	if !ok || !req.Compresses(serving.Context) {
@@ -20,7 +24,7 @@ func (h *Handler) compress(c *Call, body []byte, req protocol.Request, snap *cat
 	if req.Compression == protocol.CompressionDefault {
 		inputLimit = serving.Context
 	}
-	if int64(len(body)) <= inputLimit && req.MessageCount <= protocol.CompressionMessageLimit {
+	if int64(len(body))+req.SearchBytes <= inputLimit && req.MessageCount <= protocol.CompressionMessageLimit {
 		return body, req, nil
 	}
 	compressed, inspected, err := h.compressBody(c, body, req, serving.Context, output)

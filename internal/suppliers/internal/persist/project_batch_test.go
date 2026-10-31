@@ -27,6 +27,8 @@ func rowProjection(ctx context.Context, db store.DBTX, w store.ProjectionWrites)
 		func() error { return rowQueries(ctx, db, w.Groups, q.InsertProjectedGroup) },
 		func() error { return rowQueries(ctx, db, w.ChangedGroups, q.UpdateProjectedGroup) },
 		func() error { return rowQueries(ctx, db, w.AbsentGroups, q.SetProjectedGroupAbsent) },
+		func() error { return rowQueries(ctx, db, w.Pool, q.SetProjectedGroupPool) },
+		func() error { return rowQueries(ctx, db, w.ClearedPool, q.ClearProjectedGroupPool) },
 		func() error { return rowQueries(ctx, db, w.Models, q.UpsertProjectedModel) },
 		func() error { return rowQueries(ctx, db, w.AbsentModels, q.SetProjectedModelAbsent) },
 		func() error { return rowQueries(ctx, db, w.Endpoints, q.InsertProjectedEndpoint) },
@@ -120,6 +122,11 @@ func newProjection(supplier uuid.UUID, n int) store.ProjectionWrites {
 		ID:         group,
 		SupplierID: supplier, UpstreamRef: "default", Name: "Default", Ratio: "1.25", Facts: []byte(`{"platform":"openai"}`), SeenAt: &now,
 	})
+	accounts, failed, usable, headroom, capacity := int32(10), int32(2), int32(8), int32(80), int32(64)
+	w.Pool = append(w.Pool, store.SetProjectedGroupPoolParams{
+		ID: group, Accounts: &accounts, Failed: &failed, Usable: &usable, Headroom: &headroom, Capacity: &capacity,
+		Low: false, ObservedAt: &now,
+	})
 	for i := range n {
 		model, endpoint := uuid.NewV7(), uuid.NewV7()
 		name := fmt.Sprintf("model-%05d", i)
@@ -153,6 +160,9 @@ func TestProjectionPagesEqualRowWrites(t *testing.T) {
 		seed.Models = append(slices.Clone(initial.Models), duplicate)
 		if err := compareProjection(t.Context(), tx, seed); err != nil {
 			return err
+		}
+		if err := compareProjection(t.Context(), tx, store.ProjectionWrites{ClearedPool: []uuid.UUID{initial.Groups[0].ID}}); err != nil {
+			return fmt.Errorf("clearing the pool: %w", err)
 		}
 		for round := range 40 {
 			if err := compareProjection(t.Context(), tx, randomProjection(rng, initial, round)); err != nil {

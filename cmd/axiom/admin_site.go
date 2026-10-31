@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"axiom/internal/accounts"
@@ -159,4 +160,156 @@ func (a adminAPI) ListTiers(ctx context.Context, request adminapi.ListTiersReque
 
 func tierRef(t accounts.Tier) adminapi.TierRef {
 	return adminapi.TierRef{Id: t.ID.TypeID(), Name: t.Name}
+}
+
+// registrationPolicyBody is a site's registration policy as the contract writes it.
+func registrationPolicyBody(p accounts.RegistrationPolicy) adminapi.RegistrationPolicy {
+	return adminapi.RegistrationPolicy{
+		Mode: adminapi.RegistrationPolicyMode(p.Mode), HumanCheck: p.HumanCheck, HumanCheckBits: p.HumanCheckBits,
+		DomainBurst: p.DomainBurst, DomainPerHour: p.DomainPerHour, DomainAllow: p.DomainAllow, DomainDeny: p.DomainDeny,
+	}
+}
+
+func registrationPolicyView(own accounts.RegistrationPolicy) adminapi.RegistrationPolicyView {
+	return adminapi.RegistrationPolicyView{
+		Policy: registrationPolicyBody(own), Defaults: registrationPolicyBody(accounts.DefaultRegistrationPolicy()),
+	}
+}
+
+// registrationPolicyOf reads a policy a request gives. The bounds are the contract's and the module's; the module
+// normalizes the domain lists.
+func registrationPolicyOf(b adminapi.RegistrationPolicy) accounts.RegistrationPolicy {
+	return accounts.RegistrationPolicy{
+		Mode: string(b.Mode), HumanCheck: b.HumanCheck, HumanCheckBits: b.HumanCheckBits,
+		DomainBurst: b.DomainBurst, DomainPerHour: b.DomainPerHour, DomainAllow: b.DomainAllow, DomainDeny: b.DomainDeny,
+	}
+}
+
+// registrationRefusal names the contract's field for a setting the module refused.
+func registrationRefusal(err error) error {
+	e, ok := errors.AsType[*accounts.SettingError](err)
+	if !ok {
+		return err
+	}
+	return invalidField("/policy/"+strings.TrimPrefix(e.Field, "registration_"), e.Reason)
+}
+
+// siteRead runs a read-only site handler's skeleton: resolve the site the request names, then read it in the call's
+// scope.
+func siteRead[T any](ctx context.Context, a adminAPI, siteID string, read func(context.Context, pg.Tx, accounts.SiteID) (T, error)) (T, error) {
+	var out T
+	id, _, err := a.siteOf(siteID)
+	if err != nil {
+		return out, err
+	}
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		out, err = read(ctx, tx, id)
+		return err
+	}); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// GetSiteRegistration tells a site's open-registration policy and the defaults that apply where it sets none.
+func (a adminAPI) GetSiteRegistration(ctx context.Context, request adminapi.GetSiteRegistrationRequestObject) (adminapi.GetSiteRegistrationResponseObject, error) {
+	own, err := siteRead(ctx, a, request.SiteId, a.accounts.SiteRegistration)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.GetSiteRegistration200JSONResponse(registrationPolicyView(own)), nil
+}
+
+// UpdateSiteRegistration replaces a site's open-registration policy. This node reloads the sites at once; the others
+// follow within their reload interval.
+func (a adminAPI) UpdateSiteRegistration(ctx context.Context, request adminapi.UpdateSiteRegistrationRequestObject) (adminapi.UpdateSiteRegistrationResponseObject, error) {
+	id, _, err := a.siteOf(request.SiteId)
+	if err != nil {
+		return nil, err
+	}
+	set := registrationPolicyOf(request.Body.Policy)
+	view, replayed, err := idempotently(ctx, a.db, "updateSiteRegistration", request.Params.IdempotencyKey, []any{request.SiteId, request.Body},
+		func(tx pg.Tx) (adminapi.RegistrationPolicyView, error) {
+			if err := a.accounts.SetSiteRegistration(ctx, tx, actor(ctx), id, set, request.Body.Reason); err != nil {
+				return adminapi.RegistrationPolicyView{}, registrationRefusal(err)
+			}
+			saved, err := a.accounts.SiteRegistration(ctx, tx, id)
+			if err != nil {
+				return adminapi.RegistrationPolicyView{}, err
+			}
+			return registrationPolicyView(saved), nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	if !replayed {
+		if err := a.accounts.Refresh(context.WithoutCancel(ctx)); err != nil {
+			a.logger.WarnContext(ctx, "site registration policy saved but this node did not reload it", "site", request.SiteId, "err", err)
+		}
+	}
+	return adminapi.UpdateSiteRegistration200JSONResponse{Body: view, Headers: adminapi.UpdateSiteRegistration200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// siteBrandBody is a site's brand colour as the contract writes it; the default palette leaves the field out.
+func siteBrandBody(b accounts.SiteBrand) adminapi.SiteBrand {
+	out := adminapi.SiteBrand{}
+	if b.Color != "" {
+		out.BrandColor = &b.Color
+	}
+	return out
+}
+
+// brandRefusal names the contract's field for a colour the module refused.
+func brandRefusal(err error) error {
+	e, ok := errors.AsType[*accounts.SettingError](err)
+	if !ok {
+		return err
+	}
+	return invalidField("/"+e.Field, e.Reason)
+}
+
+// GetSiteBrand tells a site's brand colour, absent when it uses the default palette.
+func (a adminAPI) GetSiteBrand(ctx context.Context, request adminapi.GetSiteBrandRequestObject) (adminapi.GetSiteBrandResponseObject, error) {
+	id, _, err := a.siteOf(request.SiteId)
+	if err != nil {
+		return nil, err
+	}
+	var brand accounts.SiteBrand
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		brand, err = accounts.ReadSiteBrand(ctx, tx, id)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return adminapi.GetSiteBrand200JSONResponse(siteBrandBody(brand)), nil
+}
+
+// UpdateSiteBrand sets or clears a site's brand colour. This node reloads the sites at once; the others follow within
+// their reload interval.
+func (a adminAPI) UpdateSiteBrand(ctx context.Context, request adminapi.UpdateSiteBrandRequestObject) (adminapi.UpdateSiteBrandResponseObject, error) {
+	id, _, err := a.siteOf(request.SiteId)
+	if err != nil {
+		return nil, err
+	}
+	set := accounts.SiteBrand{Color: request.Body.BrandColor}
+	view, replayed, err := idempotently(ctx, a.db, "updateSiteBrand", request.Params.IdempotencyKey, []any{request.SiteId, request.Body},
+		func(tx pg.Tx) (adminapi.SiteBrand, error) {
+			if err := a.accounts.SetSiteBrand(ctx, tx, actor(ctx), id, set, request.Body.Reason); err != nil {
+				return adminapi.SiteBrand{}, brandRefusal(err)
+			}
+			saved, err := accounts.ReadSiteBrand(ctx, tx, id)
+			if err != nil {
+				return adminapi.SiteBrand{}, err
+			}
+			return siteBrandBody(saved), nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	if !replayed {
+		if err := a.accounts.Refresh(context.WithoutCancel(ctx)); err != nil {
+			a.logger.WarnContext(ctx, "site brand colour saved but this node did not reload it", "site", request.SiteId, "err", err)
+		}
+	}
+	return adminapi.UpdateSiteBrand200JSONResponse{Body: view, Headers: adminapi.UpdateSiteBrand200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }

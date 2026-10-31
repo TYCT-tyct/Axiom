@@ -15,6 +15,7 @@ import (
 	"axiom/internal/observability"
 	"axiom/internal/payments"
 	"axiom/internal/platform/httpserver"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 )
 
@@ -47,6 +48,20 @@ var refusals = []refusal{
 	{accounts.ErrNotificationPreferences, http.StatusUnprocessableEntity, codeUnprocessable, "invalid notification preferences"},
 	{accounts.ErrAnnouncement, http.StatusUnprocessableEntity, codeUnprocessable, "invalid announcement validity window"},
 	{accounts.ErrInvalidReset, http.StatusUnprocessableEntity, codeUnprocessable, "invalid or expired password reset link"},
+	{accounts.ErrOAuthNotConfigured, http.StatusNotFound, codeNotFound, "third-party sign-in is not configured"},
+	{accounts.ErrWrongLoginDomain, http.StatusForbidden, codeLoginDomainRequired, "use the site's login domain"},
+	{accounts.ErrAccountNotLinked, http.StatusForbidden, codeAccountNotLinked, "this provider account is not linked to a user"},
+	{accounts.ErrIdentityLinked, http.StatusConflict, codeIdentityTaken, "this provider account is linked to another user"},
+	{accounts.ErrIdentityAlreadyLinked, http.StatusConflict, codeIdentityAlreadyLinked, "unlink this provider before linking another account from it"},
+	{accounts.ErrMFARequired, http.StatusForbidden, codeMfaRequired, "this needs a session that passed two-step verification"},
+	{accounts.ErrConsentRequired, http.StatusForbidden, codeConsentRequired, "the current legal documents must be accepted first"},
+	{accounts.ErrOAuthFailed, http.StatusBadRequest, codeInvalidRequest, "the provider did not complete the sign-in"},
+	{accounts.ErrPasskeysOff, http.StatusNotFound, codeNotFound, "passkeys are not enabled"},
+	{accounts.ErrPasskeyFailed, http.StatusBadRequest, codeInvalidRequest, "the passkey ceremony failed"},
+	{accounts.ErrTooManyPasskeys, http.StatusConflict, codeConflict, "the user has the most passkeys a user may hold"},
+	{accounts.ErrLoginDomainLocked, http.StatusConflict, codeLoginDomainLocked, "the site's sign-in assets bind it to this login domain"},
+	{accounts.ErrLoginDomainRequired, http.StatusBadRequest, codeLoginDomainRequired, "passkeys need a login domain"},
+	{accounts.ErrPasskeysInUse, http.StatusConflict, codeConflict, "users of this site still hold passkeys; they must remove them before passkeys can be turned off"},
 	{accounts.ErrBadCredentials, http.StatusUnauthorized, codeWrongLogin, "wrong email or password"},
 	{accounts.ErrNoSession, http.StatusUnauthorized, codeUnauthenticated, "not signed in"},
 	{accounts.ErrBadCode, http.StatusUnauthorized, codeInvalidCode, "wrong code"},
@@ -57,10 +72,15 @@ var refusals = []refusal{
 	{accounts.ErrUnknownHost, http.StatusNotFound, codeNotFound, "no such resource"},
 	{pg.ErrNoRows, http.StatusNotFound, codeNotFound, "no such resource"},
 	{accounts.ErrInvalidInvite, http.StatusUnprocessableEntity, codeInvalidInvite, "the invite code is not usable"},
+	{accounts.ErrRegistrationClosed, http.StatusForbidden, codeRegistrationClosed, "registration is closed"},
+	{accounts.ErrHumanCheck, http.StatusUnprocessableEntity, codeHumanCheck, "the human check did not pass"},
+	{accounts.ErrEmailDomainNotAllowed, http.StatusUnprocessableEntity, codeEmailDomain, "the email domain is not allowed"},
+	{accounts.ErrInvalidVerification, http.StatusUnprocessableEntity, codeInvalidVerification, "invalid or expired verification link"},
 	{accounts.ErrWeakPassword, http.StatusUnprocessableEntity, codeWeakPassword, "the password must be 12 to 256 characters"},
 	{accounts.ErrBadEmail, http.StatusUnprocessableEntity, codeUnprocessable, "not an email address"},
 	{accounts.ErrEmailTaken, http.StatusConflict, codeEmailTaken, "the email is already registered"},
 	{accounts.ErrTOTPOn, http.StatusConflict, codeConflict, "two-step verification is already on"},
+	{accounts.ErrTOTPOff, http.StatusConflict, codeConflict, "two-step verification is not on"},
 	{accounts.ErrTooManyKeys, http.StatusConflict, codeTooManyKeys, "the account may not make another key"},
 	{accounts.ErrTooManyAttempts, http.StatusTooManyRequests, codeRateLimited, "too many attempts"},
 	{accounts.ErrBusy, http.StatusServiceUnavailable, codeUnavailable, "busy, try again shortly"},
@@ -83,7 +103,7 @@ func failure(err error) *apiError {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errDeadline
 	}
-	if errors.Is(err, observability.ErrBadCursor) || errors.Is(err, billing.ErrBadStatementCursor) {
+	if errors.Is(err, observability.ErrBadCursor) || errors.Is(err, billing.ErrBadStatementCursor) || errors.Is(err, page.ErrBadCursor) {
 		return invalidField("cursor", "not a cursor this API gave out")
 	}
 	if errors.Is(err, accounts.ErrBadSecret) {

@@ -11,6 +11,46 @@ import (
 	"uuid"
 )
 
+const consoleSite = `-- name: ConsoleSite :many
+SELECT s.name, d.domain FROM accounts.sites s
+JOIN accounts.site_domains d ON d.site_id = s.id
+WHERE s.id = $1 AND s.status = 'active' AND d.surface = 'console' AND d.disabled_at IS NULL
+    AND d.origin = 'https://' || d.domain
+ORDER BY (d.domain = $2::text) DESC, d.domain LIMIT 1
+`
+
+type ConsoleSiteParams struct {
+	SiteID uuid.UUID
+	Domain string
+}
+
+type ConsoleSiteRow struct {
+	Name   string
+	Domain string
+}
+
+// The link a mailed token points at: an enabled HTTPS console domain of the site, preferring the one the request used.
+// Mail for resetting a password and mail for verifying a new address both take their origin here, never from Host.
+func (q *Queries) ConsoleSite(ctx context.Context, db DBTX, arg ConsoleSiteParams) ([]ConsoleSiteRow, error) {
+	rows, err := db.Query(ctx, consoleSite, arg.SiteID, arg.Domain)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ConsoleSiteRow
+	for rows.Next() {
+		var i ConsoleSiteRow
+		if err := rows.Scan(&i.Name, &i.Domain); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const consumePasswordResetToken = `-- name: ConsumePasswordResetToken :execrows
 UPDATE accounts.password_reset_tokens SET used_at = clock_timestamp()
 WHERE id = $1 AND user_id = $2 AND token_hash = $3
@@ -121,45 +161,6 @@ func (q *Queries) PasswordRecipient(ctx context.Context, db DBTX, id uuid.UUID) 
 	var email string
 	err := row.Scan(&email)
 	return email, err
-}
-
-const passwordResetSite = `-- name: PasswordResetSite :many
-SELECT s.name, d.domain FROM accounts.sites s
-JOIN accounts.site_domains d ON d.site_id = s.id
-WHERE s.id = $1 AND s.status = 'active' AND d.surface = 'console' AND d.disabled_at IS NULL
-    AND d.origin = 'https://' || d.domain
-ORDER BY (d.domain = $2::text) DESC, d.domain LIMIT 1
-`
-
-type PasswordResetSiteParams struct {
-	SiteID uuid.UUID
-	Domain string
-}
-
-type PasswordResetSiteRow struct {
-	Name   string
-	Domain string
-}
-
-// Match the console order return URL: use an enabled HTTPS console domain owned by the site.
-func (q *Queries) PasswordResetSite(ctx context.Context, db DBTX, arg PasswordResetSiteParams) ([]PasswordResetSiteRow, error) {
-	rows, err := db.Query(ctx, passwordResetSite, arg.SiteID, arg.Domain)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PasswordResetSiteRow
-	for rows.Next() {
-		var i PasswordResetSiteRow
-		if err := rows.Scan(&i.Name, &i.Domain); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const passwordResetTenant = `-- name: PasswordResetTenant :many

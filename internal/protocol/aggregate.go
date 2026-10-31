@@ -237,6 +237,8 @@ func mergeObjects(old, add []byte) ([]byte, error) {
 }
 
 // newAggregator returns the aggregator for a client of format f.
+//
+//nolint:exhaustive // only the generation formats have an aggregator
 func newAggregator(f Format, draw func(int) error) aggregator {
 	switch f {
 	case Messages:
@@ -248,6 +250,10 @@ func newAggregator(f Format, draw func(int) error) aggregator {
 		a.init(draw)
 		return a
 	case Chat:
+	case Completions:
+		a := &completionsAggregate{at: map[int64]int{}}
+		a.init(draw)
+		return a
 	}
 	a := &chatAggregate{at: map[int64]int{}}
 	a.init(draw)
@@ -310,6 +316,9 @@ func (r *Relay) unframe(b []byte) (data, rest []byte, err error) {
 // one, the upstream's failure.
 func (r *Relay) finishAggregate(out []byte, f Final) []byte {
 	r.agg.seal()
+	if a, ok := r.agg.(*chatAggregate); ok {
+		a.cite(r.o.Citations)
+	}
 	if err := r.feed(out); err == nil {
 		if body, err := r.agg.body(); err == nil {
 			r.status, r.state = http.StatusOK, ended
@@ -324,7 +333,7 @@ func (r *Relay) finishAggregate(out []byte, f Final) []byte {
 // 200 with what was generated and the error in it, and Messages, which has no stop reason for an error, answers
 // 502 with the error alone (docs/domains/gateway.md「错误」); either way the usage and cost are in the body.
 func (r *Relay) failAggregate(e Error, f *Final, u Usage) []byte {
-	pay := charges{usage: reply(u), cost: cost(f), pending: f != nil && f.Pending}
+	pay := charges{usage: reply(u), cost: cost(f, r.client), pending: f != nil && f.Pending}
 	status, body := renderError(r.client, e, &pay)
 	r.status = status
 	if !r.committed {
@@ -335,6 +344,9 @@ func (r *Relay) failAggregate(e Error, f *Final, u Usage) []byte {
 		return body
 	}
 	r.agg.seal()
+	if a, ok := r.agg.(*chatAggregate); ok {
+		a.cite(r.o.Citations)
+	}
 	if err := r.feed(r.up.failure(nil, e, pay.usage, pay.cost)); err != nil {
 		return body
 	}

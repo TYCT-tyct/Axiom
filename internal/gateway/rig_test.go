@@ -32,6 +32,7 @@ import (
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 const (
@@ -65,6 +66,7 @@ type rig struct {
 	server   *httptest.Server
 
 	cfg       Config
+	price     string                           // every model's sale schedule, unless a test lists another
 	alpha     catalog.ModelID                  // acme/alpha, served by two endpoints
 	beta      catalog.ModelID                  // acme/beta, served by one
 	bare      catalog.ModelID                  // anthropic/claude-test, listed with its maker's name too, and no endpoint
@@ -107,12 +109,14 @@ type rigOptions struct {
 	routing   routing.Config
 	prefer    string // the endpoint the preset puts first; the cheapest comes first when empty
 	memory    int64
-	conns     int            // the most connections the database pool opens; the driver's own limit when zero
-	body      time.Duration  // how long Public gives a request to send its body; a minute when zero
-	suppliers bool           // the suppliers tables too, for a real suppliers service to price attempts
-	lifetime  time.Duration  // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
-	proxies   []netip.Prefix // the reverse proxies the handler believes, none when empty
-	cache     *kv.Client     // the shared cache the precheck counts in, none when nil
+	conns     int                // the most connections the database pool opens; the driver's own limit when zero
+	body      time.Duration      // how long Public gives a request to send its body; a minute when zero
+	search    websearch.Searcher // the web plugin's backend, nil when the node has none
+	price     string             // the model's sale schedule, the cheap one when empty
+	suppliers bool               // the suppliers tables too, for a real suppliers service to price attempts
+	lifetime  time.Duration      // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
+	proxies   []netip.Prefix     // the reverse proxies the handler believes, none when empty
+	cache     *kv.Client         // the shared cache the precheck counts in, none when nil
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -132,7 +136,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	}
 	r := &rig{
 		t: t, cfg: DefaultConfig(), endpoints: map[string]routing.Endpoint{}, sold: map[catalog.ModelID]billing.Sold{},
-		models: NewModelList(),
+		models: NewModelList(), price: cmpOr(o.price, cheap),
 	}
 	// The tests run many rigs at once on a machine that is busy with other things, where a second is not enough for a
 	// transaction or a key lookup; the tests of the budgets set their own.
@@ -182,12 +186,13 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
 		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Models: r.models, Proxies: o.proxies, KV: o.cache,
+		Outstanding: NewOutstanding(), Search: o.search,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	r.server = httptest.NewServer(httpserver.Public(r.handler, slog.New(slog.NewTextHandler(logWriter{t}, nil)), cmp.Or(o.body, time.Minute)))
 	t.Cleanup(r.server.Close)
-	t.Cleanup(func() { r.handler.Drain(context.WithoutCancel(t.Context())) })
+	t.Cleanup(func() { r.handler.Outstanding.Drain(context.WithoutCancel(t.Context()), time.Minute) })
 	return r
 }
 
@@ -240,10 +245,9 @@ func (r *rig) run(w http.ResponseWriter, req *http.Request, c *Call) {
 	}
 	ctx, cancel := SettleContext(req.Context(), 30*time.Second)
 	defer cancel()
-	release, err := r.limits.Funds.Complete(ctx, accountKey(c.caller))
+	err := submitCompletion(ctx, r.limits.Funds, accountKey(c.caller))
 	if err == nil {
 		err = r.billing.SettleOrphan(ctx, c.Admitted, c.ID)
-		release()
 	}
 	if err != nil {
 		r.t.Errorf("release the reservation: %v", err)
@@ -437,3 +441,5 @@ func (noSuppliers) ResolveLostRequest(context.Context, pg.Tx, uuid.UUID) error {
 func (noSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid.UUID, time.Time) error {
 	return nil
 }
+
+func (noSuppliers) EndRequests(context.Context, pg.Tx, []suppliers.EndedRequest) error { return nil }

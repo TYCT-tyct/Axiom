@@ -127,6 +127,8 @@ func exchangePriceAtoms(t *testing.T, s catalog.Schedule) *big.Int {
 }
 
 func TestExchangePublicationAndPreviewFreezeEvidence(t *testing.T) {
+	t.Parallel()
+
 	f := exchangePrices(t)
 	cny := currency(t, "CNY")
 	costs := []PriceCost{priceCost(t, f.model, "0.000000001")}
@@ -199,6 +201,8 @@ func checkExchangePublication(t *testing.T, f *priceFixture, tx pg.Tx, r Rule, c
 }
 
 func TestExchangeReferenceSelectionAndMissingRate(t *testing.T) {
+	t.Parallel()
+
 	f := newSnapshotter(t)
 	id := f.model("acme/exchange-selection")
 	cny := currency(t, "CNY")

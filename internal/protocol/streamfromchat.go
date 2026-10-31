@@ -31,6 +31,10 @@ type chatToNative struct {
 	reason            string
 	out               []byte
 	chunk             nativeChatChoice
+	// composed is set when the Chat chunks are what the conversion of an upstream of another format made of its
+	// events: the inner's event decides the roles and the counts, and carries the finish signal it held (README.md
+	// 「跨格式的流」).
+	composed bool
 }
 
 type chatOutput struct {
@@ -75,6 +79,12 @@ func newChatToResponses(u UsageContext, o RelayOptions, charge func(int) error) 
 func newChatToNative(f Format, u UsageContext, o RelayOptions, charge func(int) error) upstream {
 	inner := newChatStreamReader(u, o, charge)
 	inner.converting = true
+	return newChatToNativeWith(f, inner, u, o, charge)
+}
+
+// newChatToNativeWith is newChatToNative for a stream whose Chat chunks inner makes of another format's events: inner
+// owns the metering, the content bound and the upstream's errors, and the chunk is what this conversion reads.
+func newChatToNativeWith(f Format, inner upstream, u UsageContext, o RelayOptions, charge func(int) error) *chatToNative {
 	s := &chatToNative{
 		client: f, o: o, inner: inner, active: -1, hidesReasoning: u.HidesReasoning,
 		tools: map[int64]int{}, toolIDs: map[string]bool{},
@@ -83,12 +93,32 @@ func newChatToNative(f Format, u UsageContext, o RelayOptions, charge func(int) 
 	return s
 }
 
+// newResponsesToMessages converts a Responses stream for a Messages client through the Chat chunks the Responses
+// conversion writes (README.md「跨格式的流」): the two formats keep one mapping, so a field one of them converts is
+// converted the same way whichever other format asks for it.
+func newResponsesToMessages(u UsageContext, o RelayOptions, charge func(int) error) upstream {
+	s := newChatToNativeWith(Messages, newResponsesToChat(u, o, charge), u, o, charge)
+	s.composed = true
+	return s
+}
+
+// newMessagesToResponses converts a Messages stream for a Responses client, as newResponsesToMessages does for the
+// other direction.
+func newMessagesToResponses(u UsageContext, o RelayOptions, charge func(int) error) upstream {
+	s := newChatToNativeWith(Responses, newMessagesToChat(u, o, charge), u, o, charge)
+	s.composed = true
+	return s
+}
+
 func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 	e, err := s.inner.event(data, m)
 	if err != nil {
 		return event{}, err
 	}
-	out := event{role: skipped, usageAt: -1, content: e.content, searches: e.searches, usage: e.usage, final: e.final}
+	out := event{role: skipped, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, toolCalls: e.toolCalls, usage: e.usage, final: e.final}
+	if s.composed {
+		return s.composedEvent(e, out)
+	}
 	if string(data) == sse.Done {
 		if !s.started || !s.finished {
 			return event{}, fmt.Errorf("%w: Chat ended without a finished choice", ErrUpstream)
@@ -103,6 +133,55 @@ func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 	if err := s.readChunk(data); err != nil {
 		return event{}, upstreamFailure(err)
 	}
+	return s.publishOut(e, out), nil
+}
+
+// composedEvent is event's work for a stream another format's conversion wrote the chunks of: its role and counts are
+// the inner's, and the finish signal it held back is a chunk of its own.
+func (s *chatToNative) composedEvent(e, out event) (event, error) {
+	if e.role == heartbeat {
+		out.role = heartbeat
+		return out, nil
+	}
+	s.out = s.out[:0]
+	if e.role == end {
+		return s.composedEnd(e, out)
+	}
+	if err := s.readChunks(e.data, e.withheld); err != nil {
+		return event{}, upstreamFailure(err)
+	}
+	return s.publishOut(e, out), nil
+}
+
+// composedEnd closes a composed stream: the finish signal the conversion held to the end is read, then the items close.
+func (s *chatToNative) composedEnd(e, out event) (event, error) {
+	if err := s.readChunks(nil, e.withheld); err != nil {
+		return event{}, upstreamFailure(err)
+	}
+	if !s.started || !s.finished {
+		return event{}, fmt.Errorf("%w: the stream ended without a finished choice", ErrUpstream)
+	}
+	if err := s.completeItems(); err != nil {
+		return event{}, err
+	}
+	out.role = end
+	return out, nil
+}
+
+// readChunks reads the conversion's chunk, if any, then the finish signal it holds after the chunk that carried it.
+func (s *chatToNative) readChunks(data, withheld []byte) error {
+	for _, chunk := range [][]byte{data, withheld} {
+		if len(chunk) > 0 {
+			if err := s.readChunk(chunk); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// publishOut hands the data the chunks wrote to the client, counted as content when the upstream's event was.
+func (s *chatToNative) publishOut(e, out event) event {
 	if len(s.out) > 0 {
 		s.published = true
 		out.data, out.framed, out.role = s.out, true, passive
@@ -110,7 +189,7 @@ func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 			out.role = content
 		}
 	}
-	return out, nil
+	return out
 }
 
 func (s *chatToNative) choice(choice nativeChatChoice) error {
@@ -246,7 +325,7 @@ func (s *chatToNative) start() error {
 	s.started = true
 	if s.client == Messages {
 		return s.emit("message_start", requestObject{"message": jsonValue(requestObject{
-			"id": jsonValue(s.o.ID), "type": jsonValue("message"), "role": jsonValue("assistant"), "model": jsonValue(s.o.Model),
+			"id": jsonValue(s.o.ID), "type": jsonValue("message"), "role": jsonValue("assistant"), "model": jsonValue(s.o.modelName()),
 			"content": jsontext.Value("[]"), "stop_reason": jsontext.Value("null"), "stop_sequence": jsontext.Value("null"),
 			"usage": jsontext.Value(`{"input_tokens":0,"output_tokens":0}`),
 		})})
@@ -312,7 +391,7 @@ func (s *chatToNative) failure(dst []byte, e Error, u catalog.Usage, cost string
 		return (*messagesStream)(nil).failure(dst, e, u, cost)
 	}
 	writer := &responsesStream{seq: s.seq - 1, created: s.published}
-	writer.id, writer.model = strconv.Quote(s.o.ID), strconv.Quote(s.o.Model)
+	writer.id, writer.model = strconv.Quote(s.o.ID), strconv.Quote(s.o.modelName())
 	return writer.failure(dst, e, u, cost)
 }
 

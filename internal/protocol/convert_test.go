@@ -298,7 +298,10 @@ func TestConvertToResponses(t *testing.T) {
 				`{"type":"file","file":{"file_data":"data:application/pdf;base64,JVBE","filename":"a.pdf"}}]}]`), nil,
 			head + `{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://e/a.png","detail":"low"},{"type":"input_file","file_data":"data:application/pdf;base64,JVBE","filename":"a.pdf"}]}],"store":false}`,
 		},
-		{"a file by ID", chatBody(`"messages":[{"role":"user","content":[{"type":"file","file":{"file_id":"file_1"}}]}]`), nil, "unsupported"},
+		{
+			"a file by ID is sent back as it is", chatBody(`"messages":[{"role":"user","content":[{"type":"file","file":{"file_id":"file_1","filename":"a.pdf"}}]}]`), nil,
+			head + `{"type":"message","role":"user","content":[{"type":"input_file","file_id":"file_1","filename":"a.pdf"}]}],"store":false}`,
+		},
 		{
 			"calls and results", chatBody(`"messages":[` + userHi + `,` + callTurn + `]`), nil,
 			head + `{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]},{"type":"function_call","call_id":"call_1","name":"f","arguments":"{\"a\":1}"},` +

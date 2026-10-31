@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"sync/atomic"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
+	"axiom/internal/platform/textshape"
 	"axiom/internal/protocol/internal/sse"
 )
 
@@ -55,14 +55,16 @@ type Usage struct {
 }
 
 // Progress is what the relay has seen so far, for billing's meter after every step. ContentBytes are the text,
-// reasoning and tool input of the events read, unquoted; PartialBytes are the raw bytes read but not yet returned as
-// an event. Reported has the reply's counts reported so far, and Final those that are final: the input side once
-// reported, the rest from the format's last usage event on; until then an output count only bounds the output from
-// below (README.md「转发（草图）」).
+// reasoning and tool input of the events read, unquoted, and Text the shape of the strings among them, whose tokens
+// per byte estimate the output a reply did not report; PartialBytes are the raw bytes read but not yet returned as
+// an event; ToolCalls are the client tool calls begun, whose framing the estimate adds. Reported has the reply's
+// counts reported so far, and Final those that are final: the input side once reported, the rest from the format's
+// last usage event on; until then an output count only bounds the output from below (README.md「转发（草图）」).
 type Progress struct {
-	ContentBytes, PartialBytes, Searches int64
-	Reported                             Segment
-	Final                                catalog.ItemSet
+	ContentBytes, PartialBytes, Searches, ToolCalls int64
+	Text                                            textshape.Shape
+	Reported                                        Segment
+	Final                                           catalog.ItemSet
 }
 
 // UsageContext carries the upstream request's metering context and the original client's reply contract.
@@ -80,9 +82,10 @@ type UsageContext struct {
 
 // RelayOptions are the gateway's values for one attempt.
 type RelayOptions struct {
-	// ID is the call ID, written in place of the upstream's ID for the reply; Model is the model name the client
-	// asked for (docs/domains/gateway.md「转发规则」).
-	ID, Model string
+	// ID is the call ID, written in place of the upstream's ID for the reply. Model is the name the client asked
+	// for; ActualModel, when set, is the model that served the call, which the reply names so a models fallback is
+	// visible (docs/domains/gateway.md「转发规则」).
+	ID, Model, ActualModel string
 	// Created is when the call started, in Unix seconds: the created of every chunk a Chat client gets from an
 	// upstream of another format, which has none of its own to give.
 	Created int64
@@ -90,16 +93,42 @@ type RelayOptions struct {
 	Memory *Memory
 	// Aggregate is set for a client that did not ask for a stream: nothing is written until the end, Next gives no
 	// Out, and Finish and Fail return the reply's body, whose HTTP status Status gives (README.md「非流式聚合」).
-	Aggregate       bool
+	Aggregate bool
+	// Capture keeps the answer's text for a caller that judges it, which is a verification probe and nothing else: a
+	// gateway call leaves it nil, so no call path allocates for it (docs/domains/quality.md「真伪检测」).
+	Capture *Capture
+	// Citations are the web search results the gateway supplied, which an aggregated Chat reply cites in its
+	// annotations. A stream cannot know the whole message, so it carries none.
+	Citations []Citation
+	// Echo, when set, is the prompt text a legacy completion repeats at the start of each choice. A pointer keeps the
+	// gateway's common options small; only an echo request allocates it.
+	Echo *EchoPrompts
+	// ZeroOutput is set when the request capped its output at 0, as legacy completions' max_tokens 0 does: a choice that
+	// finishes without text is then the whole answer, not an empty response.
+	ZeroOutput      bool
 	legacyFunctions bool
+}
+
+// modelName is the name a reply puts in its model member: the model that served it, or the requested name when the
+// gateway did not say.
+func (o RelayOptions) modelName() string {
+	if o.ActualModel != "" {
+		return o.ActualModel
+	}
+	return o.Model
 }
 
 // Final is what the ending reports: the usage and cost settled and whether that usage was estimated, or, when the
 // settlement could not be written, Pending and no cost (docs/domains/gateway.md「用量与费用」).
 type Final struct {
-	Usage              Usage
-	Cost               platform.Exact
-	Currency           platform.Currency
+	Usage    Usage
+	Cost     platform.Exact
+	Currency platform.Currency
+	// ServerToolCost is the settled sale price of the server tools the call ran, nil when none ran. It is a price the
+	// client paid, not what the tools cost us.
+	ServerToolCost *platform.Exact
+	// CacheDiscount is what cache reads saved against the input price.
+	CacheDiscount      platform.Exact
 	Estimated, Pending bool
 }
 
@@ -177,8 +206,9 @@ type Relay struct {
 	endingName, stopName                          string
 	meter                                         meter
 	progress                                      Progress
-	// held is the capacity of the buffers the relay and its reader hold; charged is the part drawn on o.Memory.
-	held, charged int64
+	// held is the capacity of the buffers the relay and its reader hold; charged is the part drawn on o.Memory. free
+	// is what held may reach without drawing: baseMemory, and nativeConversionMemory for a native-to-native relay.
+	held, charged, free int64
 	// For a reply that is aggregated: its aggregator, the data of an event of several lines, joined, and the HTTP
 	// status of the body returned.
 	agg    aggregator
@@ -201,9 +231,10 @@ type relayFormat struct {
 }
 
 var relayFormats = [...]relayFormat{
-	Messages:  {newMessagesStream, 1 << 20, false},
-	Responses: {newResponsesStream, 32 << 20, false},
-	Chat:      {newChatStream, 1 << 20, true},
+	Messages:    {newMessagesStream, 1 << 20, false},
+	Responses:   {newResponsesStream, 32 << 20, false},
+	Chat:        {newChatStream, 1 << 20, true},
+	Completions: {newCompletionsStream, 1 << 20, true},
 }
 
 // chatConversions are the formats a Chat client's stream is converted from (README.md「跨格式的流」): the upstream's
@@ -218,21 +249,19 @@ var fromChatConversions = [...]relayFormat{
 	Responses: {newChatToResponses, relayFormats[Chat].limit, true},
 }
 
-// NewRelay reads the upstream stream in its own format or converts between Chat and Messages/Responses.
+// NewRelay reads the upstream stream in its own format or converts between any two of the three formats.
 // Unsupported pairs fail on their first step.
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay {
 	o.legacyFunctions = client == Chat && u.LegacyFunctions
-	r := &Relay{o: o, client: client, held: meterMemory} // within the base allowance, so nothing is drawn yet
-	switch {
-	case client == upstream && int(upstream) < len(relayFormats):
-		r.format = &relayFormats[upstream]
-	case client == Chat && int(upstream) < len(chatConversions) && chatConversions[upstream].newUpstream != nil:
-		r.format = &chatConversions[upstream]
-	case upstream == Chat && int(client) < len(fromChatConversions) && fromChatConversions[client].newUpstream != nil:
-		r.format = &fromChatConversions[client]
-	default:
+	r := &Relay{o: o, client: client, held: meterMemory, free: baseMemory} // within the allowance, so nothing is drawn yet
+	var native bool
+	r.format, native = formatFor(client, upstream)
+	if r.format == nil {
 		r.state, r.err = failed, fmt.Errorf("protocol: relaying format %d to format %d is not supported", upstream, client)
 		return r
+	}
+	if native {
+		r.free += nativeConversionMemory
 	}
 	r.initReply(u, o)
 	r.meter.tier = u.Tier
@@ -358,7 +387,9 @@ func (r *Relay) edit(e *event) ([]byte, error) {
 // observe adds what an event reports to the progress.
 func (r *Relay) observe(e event) {
 	r.progress.ContentBytes += e.content
+	r.progress.Text.Merge(e.shape)
 	r.progress.Searches += e.searches
+	r.progress.ToolCalls += e.toolCalls
 	if e.usage || e.final {
 		r.meter.final = r.meter.final || e.final
 		r.progress.Reported, r.progress.Final = r.meter.progress()
@@ -482,7 +513,7 @@ func (r *Relay) grow(b []byte, n int) ([]byte, error) { return sse.Grow(b, n, r.
 
 // charge accounts for n more bytes held, drawing what passes the base allowance from the node's budget.
 func (r *Relay) charge(n int) error {
-	over := r.held + int64(n) - baseMemory - r.charged
+	over := r.held + int64(n) - r.free - r.charged
 	if over > 0 {
 		if !r.o.Memory.Charge(over) {
 			return ErrMemory
@@ -523,7 +554,7 @@ func (r *Relay) fail(err error) error {
 		r.agg.failed()
 		r.held += r.agg.taken()
 	}
-	keep := max(0, r.held-baseMemory)
+	keep := max(0, r.held-r.free)
 	r.o.Memory.left.Add(r.charged - keep)
 	r.charged = keep
 	return err
@@ -544,7 +575,7 @@ func (r *Relay) Finish(f Final) []byte {
 	if r.state != upstreamDone {
 		return nil
 	}
-	usage, top := cost(&f), ""
+	usage, top := cost(&f, r.client), ""
 	if f.Pending {
 		top = `,"axiom":{"billing_pending":true}`
 	}
@@ -569,14 +600,32 @@ func (r *Relay) Finish(f Final) []byte {
 // costed is the held ending with the members usage added to its usage object and top to the event: an ending
 // without a usage object gets one.
 func (r *Relay) costed(usage, top string) []byte {
+	extra := ""
+	if r.client == Responses {
+		// Responses' usage object is written by the upstream, so it bypasses appendOpenAIUsage. Add the one member
+		// that is ours and that OpenRouter promises, as Chat's usage event already does. It describes the account,
+		// not the settlement, so pending usage carries it too even when there is no cost string.
+		extra = `,"is_byok":false`
+	}
 	at := r.usageAt
 	if at < 0 { // no usage object: the ending gets one
-		at, usage = bytes.LastIndexByte(r.ending, '}'), `,"usage":{`+strings.TrimPrefix(usage, ",")+"}"
+		at = bytes.LastIndexByte(r.ending, '}')
+		usage = `,"usage":{` + strings.TrimPrefix(usage, ",") + extra + "}"
+		extra = ""
 	} else if bytes.HasSuffix(bytes.TrimRight(r.ending[:at], " \t\r\n"), []byte("{")) {
-		usage = strings.TrimPrefix(usage, ",") // the usage object is empty
+		// The usage object is empty: no leading comma, and is_byok takes the one if no cost member does.
+		if usage = strings.TrimPrefix(usage, ","); usage == "" {
+			usage, extra = strings.TrimPrefix(extra, ","), ""
+		}
 	}
 	last := bytes.LastIndexByte(r.ending, '}') // the data is a JSON object, which ends with its brace
-	return slices.Concat(r.ending[:at], []byte(usage), r.ending[at:last], []byte(top), r.ending[last:])
+	out := make([]byte, 0, len(r.ending)+len(usage)+len(extra)+len(top))
+	out = append(out, r.ending[:at]...)
+	out = append(out, usage...)
+	out = append(out, extra...)
+	out = append(out, r.ending[at:last]...)
+	out = append(out, top...)
+	return append(out, r.ending[last:]...)
 }
 
 // reply is the reply's segment of u.
@@ -603,7 +652,7 @@ func (r *Relay) Fail(e Error, f *Final) []byte {
 	case r.agg != nil:
 		out = r.failAggregate(e, f, u)
 	case r.up != nil: // nil for a pair of formats not relayed
-		out = r.up.failure(r.endOut(), e, reply(u), cost(f))
+		out = r.up.failure(r.endOut(), e, reply(u), cost(f, r.client))
 	}
 	r.state = ended
 	if r.agg == nil {
@@ -620,28 +669,16 @@ func (r *Relay) endOut() []byte {
 	return r.out
 }
 
-// cost is the members an ending's usage gets for f, each led by a comma: none without a settled cost.
-func cost(f *Final) string {
-	if f == nil || f.Pending {
-		return ""
-	}
-	amount := strings.TrimRight(strings.TrimRight(f.Cost.Rat().FloatString(15), "0"), ".")
-	s := `,"cost":` + amount + `,"cost_currency":"` + f.Currency.String() + `"`
-	if f.Estimated {
-		s += `,"cost_estimated":true`
-	}
-	return s
-}
-
 // KeepAlive returns the bytes that keep a client's stream of format f alive while the upstream sends nothing new:
 // Messages' own ping event, and a comment for the others (docs/domains/gateway.md「保活」). They are made once and
 // shared, so the caller must not change them.
 func KeepAlive(f Format) []byte { return keepAlives[f] }
 
 var keepAlives = [...][]byte{
-	Messages:  []byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"),
-	Responses: []byte(": keep-alive\n\n"),
-	Chat:      []byte(": keep-alive\n\n"),
+	Messages:    []byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"),
+	Responses:   []byte(": keep-alive\n\n"),
+	Chat:        []byte(": keep-alive\n\n"),
+	Completions: []byte(": keep-alive\n\n"),
 }
 
 // initReply keeps the response representation tied to the original client's request.
@@ -656,6 +693,7 @@ func (r *Relay) initReply(u UsageContext, o RelayOptions) {
 		if a, ok := r.agg.(*chatAggregate); ok {
 			a.legacy = o.legacyFunctions
 			a.healing = u.ResponseHealing
+			a.cited = len(o.Citations) > 0
 		}
 	}
 }

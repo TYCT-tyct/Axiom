@@ -14,6 +14,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/textshape"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
@@ -129,9 +130,9 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 		time.Sleep(time.Second) // the call is under way
 		stop, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		h.exec.Drain(stop, 30*time.Second)
+		h.exec.Outstanding.Drain(stop, time.Second)
 		<-done
-		if h.elapsed() != 6*time.Second || !strings.Contains(h.w.body(), `"error_type":"timeout"`) {
+		if h.elapsed() != 5*time.Second || !strings.Contains(h.w.body(), `"error_type":"timeout"`) {
 			t.Errorf("drained after %v:\n%s", h.elapsed(), h.w.body())
 		}
 		if a := h.ended().outcome.Attempts[0]; a.Result != billing.Committed || a.Finish != billing.FinishTimeout {
@@ -145,19 +146,20 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 		<-h.start()
 		stop, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
-		h.exec.Drain(stop, 30*time.Second)
-		if !h.isReleased() || h.elapsed() != h.cfg.SettleRetry+31*time.Second {
-			t.Errorf("drained after %v, released %v", h.elapsed(), h.isReleased())
+		h.exec.Outstanding.Drain(stop, 30*time.Second)
+		if h.elapsed() > h.cfg.SettleRetry+2*time.Second {
+			t.Errorf("drained after %v; the 30s grace must not be added after the deadline", h.elapsed())
 		}
 		h.check()
 	})
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
-		h.exec.Drain(ctx, time.Second) // nothing in flight: at once, and nothing is cancelled
+		h.exec.Outstanding.Drain(ctx, time.Second) // nothing in flight: at once
+		h.drained = true
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
-		h.run()
-		if h.elapsed() != 0 || h.ended().outcome.Attempts[0].Finish != billing.FinishStop {
-			t.Errorf("after %v, outcome %+v", h.elapsed(), h.ended().outcome)
+		h.run() // a call after the drain starts no attempt
+		if h.elapsed() != 0 || h.up.eps[uuidOf(ep(1))].sends != 0 || !strings.Contains(h.w.body(), `"timeout"`) {
+			t.Errorf("after %v, %d attempts:\n%s", h.elapsed(), h.up.eps[uuidOf(ep(1))].sends, h.w.body())
 		}
 	})
 }
@@ -346,7 +348,7 @@ func TestEstimated(t *testing.T) {
 		},
 	} {
 		// 3600 bytes of text at 4 a token, inside the model's window: the first sampling's input is 900.
-		got := estimated(tc.usage, tc.progress, billing.Demand{TextBytes: 3600}, billing.Model{ContextLength: 1 << 20}, math.MaxInt64)
+		got := estimated(tc.usage, tc.progress, billing.Demand{TextBytes: 3600}, billing.Model{ContextLength: 1 << 20}, math.MaxInt64, billing.TokenizerNone)
 		for it := range catalog.NumItems {
 			if n := got[0].Usage.Count(it); n != tc.want[it] {
 				t.Errorf("%s: %s is %d, want %d", tc.name, it, n, tc.want[it])
@@ -383,7 +385,7 @@ func TestAnEstimateOfImagesAndFiles(t *testing.T) {
 		{"the input reported", reported(in, 12), billing.Model{ContextLength: 200000}, 12},
 		{"the cached part of the input reported", reported(cached, 12), billing.Model{ContextLength: 200000}, 0},
 	} {
-		got := estimated(tc.usage, protocol.Progress{}, demand, tc.model, math.MaxInt64)
+		got := estimated(tc.usage, protocol.Progress{}, demand, tc.model, math.MaxInt64, billing.TokenizerNone)
 		if n := got[0].Usage.Count(in); n != tc.want {
 			t.Errorf("%s: the input is %d, want %d", tc.name, n, tc.want)
 		}
@@ -405,7 +407,7 @@ func TestAnEstimateOfCountedText(t *testing.T) {
 	rule := (req.TextBytes + billing.InputBytesPerToken - 1) / billing.InputBytesPerToken
 	d := billing.Demand{TextBytes: req.TextBytes}
 	cl100k := billing.Model{ContextLength: 100000}
-	counted, err := textTokens(body, d, billing.TokenizerCl100k)
+	counted, err := textTokens(body, d, billing.TokenizerCl100k, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,14 +425,14 @@ func TestAnEstimateOfCountedText(t *testing.T) {
 		{"a family with no tokenizer", billing.Model{ContextLength: 100000}, billing.TokenizerNone, rule},
 	} {
 		d := d
-		d.TextTokens, err = textTokens(body, d, tc.tok)
+		d.TextTokens, err = textTokens(body, d, tc.tok, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if tc.tok == billing.TokenizerNone && d.TextTokens != 0 {
 			t.Errorf("%s: counted %d with no tokenizer", tc.name, d.TextTokens)
 		}
-		got := estimated(protocol.Usage{}, protocol.Progress{}, d, tc.model, math.MaxInt64)
+		got := estimated(protocol.Usage{}, protocol.Progress{}, d, tc.model, math.MaxInt64, billing.TokenizerNone)
 		if n := got[0].Usage.Count(in); n != tc.want {
 			t.Errorf("%s: the input is %d, want %d", tc.name, n, tc.want)
 		}
@@ -442,7 +444,7 @@ func TestAnEstimateOfCountedText(t *testing.T) {
 		t.Fatal(err)
 	}
 	reported := protocol.Usage{Segments: []protocol.Segment{{Usage: u, Reported: 1 << in}}}
-	if n := estimated(reported, protocol.Progress{}, d, cl100k, math.MaxInt64)[0].Usage.Count(in); n != 12 {
+	if n := estimated(reported, protocol.Progress{}, d, cl100k, math.MaxInt64, billing.TokenizerNone)[0].Usage.Count(in); n != 12 {
 		t.Errorf("the reported input of 12 was estimated over: %d", n)
 	}
 }
@@ -476,11 +478,83 @@ func TestAnEstimateStaysWithinTheOutputLimit(t *testing.T) {
 		{"reasoning is part of the limit", reported(map[catalog.Item]int64{reasoning: 300}), 4000, map[catalog.Item]int64{reasoning: 300, out: 700}},
 		{"a count above the limit stays", reported(map[catalog.Item]int64{reasoning: 1200}), 4000, map[catalog.Item]int64{reasoning: 1200}},
 	} {
-		got := estimated(tc.usage, protocol.Progress{ContentBytes: tc.bytes}, billing.Demand{}, billing.Model{}, 1000)
+		got := estimated(tc.usage, protocol.Progress{ContentBytes: tc.bytes}, billing.Demand{}, billing.Model{}, 1000, billing.TokenizerNone)
 		for _, it := range []catalog.Item{out, reasoning} {
 			if n := got[0].Usage.Count(it); n != tc.want[it] {
 				t.Errorf("%s: %s is %d, want %d", tc.name, it, n, tc.want[it])
 			}
 		}
 	}
+}
+
+// TestOutputEstimateByShape: an output the upstream did not report is the tokens its text's shape takes in the entry
+// family's weights, over every content byte, raw tool input beyond the tallied text included; a family without weights,
+// or a reply whose content held no text to tally, keeps 3 bytes a token; either is held to the output limit and never
+// below a count reported so far.
+func TestOutputEstimateByShape(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 20) // 900 bytes, 180 words, 180 spaces, 20 dots
+	var shape textshape.Shape
+	shape.Add([]byte(text))
+	lower, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemOutput: 500}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		tok   billing.Tokenizer
+		p     protocol.Progress
+		usage protocol.Usage
+		limit int64
+		want  int64
+	}{
+		// 180×1.52 + 20×0.89 + 180×0.21 = 329.2
+		{"Claude Opus 4.7's weights", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 1000, 330},
+		// 180×1.24 + 20×0.66 + 180×0.14 = 261.6
+		{"the earlier Claude's", billing.TokenizerClaude, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 1000, 262},
+		{"raw input beside the text", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 1800, Text: shape}, protocol.Usage{}, 1000, 660},
+		{"held to the limit", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 100, 100},
+		{"two tool calls on Claude 4.7", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900, Text: shape, ToolCalls: 2}, protocol.Usage{}, 1000, 420},
+		{"a tool call on the earlier Claude", billing.TokenizerClaude, protocol.Progress{ContentBytes: 900, Text: shape, ToolCalls: 1}, protocol.Usage{}, 1000, 307},
+		{"a tool call held to the limit", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900, Text: shape, ToolCalls: 2}, protocol.Usage{}, 100, 100},
+		{"a tool call on o200k adds nothing", billing.TokenizerO200k, protocol.Progress{ContentBytes: 900, ToolCalls: 2}, protocol.Usage{}, 1000, 300},
+		{"a family without weights", billing.TokenizerNone, protocol.Progress{ContentBytes: 900, Text: shape}, protocol.Usage{}, 1000, 300},
+		{"no text tallied", billing.TokenizerClaude47, protocol.Progress{ContentBytes: 900}, protocol.Usage{}, 1000, 300},
+		{
+			"a reported lower bound above it", billing.TokenizerClaude47,
+			protocol.Progress{ContentBytes: 900, Text: shape},
+			protocol.Usage{Segments: []protocol.Segment{{Usage: lower}}},
+			1000, 500,
+		},
+	} {
+		got := estimated(tc.usage, tc.p, billing.Demand{}, billing.Model{}, tc.limit, tc.tok)
+		if n := got[0].Usage.Count(catalog.ItemOutput); n != tc.want {
+			t.Errorf("%s: output %d, want %d", tc.name, n, tc.want)
+		}
+	}
+}
+
+// TestDrainDoesNotAddGracePastTheDeadline: the drain's grace is part of the node's deadline, not a new wait appended
+// after it. A settlement still blocked when the deadline arrives must make Drain return there, not five seconds later;
+// the controlled clock proves the whole path, not just the arithmetic.
+func TestDrainDoesNotAddGracePastTheDeadline(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		release := make(chan struct{})
+		h := newHarness(t, ctx, options{settle: func(int) error {
+			<-release
+			return nil
+		}})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
+		done := h.start()
+		time.Sleep(time.Second) // the attempt is over; its settlement is blocked
+		stop, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		h.exec.Outstanding.Drain(stop, 5*time.Second)
+		if h.elapsed() != 11*time.Second {
+			t.Errorf("drain returned after %v; want the deadline at 11s, not a grace after it", h.elapsed())
+		}
+		close(release)
+		<-done
+		h.check()
+	})
 }

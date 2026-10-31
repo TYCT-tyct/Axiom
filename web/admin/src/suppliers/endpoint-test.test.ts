@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { expect, it } from "vitest";
-import { duration, endpointState } from "./endpoint-test";
+import { duration, endpointState, testFormats } from "./endpoint-test";
 
 const endpoint = (over: Partial<AdminSchemas["SupplierEndpoint"]>): AdminSchemas["SupplierEndpoint"] => ({
   id: "e",
@@ -20,6 +20,14 @@ it.each([
   { case: "with conflicting costs", over: { cost_state: "conflict" as const }, want: "conflict" },
 ])("an endpoint $case is $want", ({ over, want }) => {
   expect(endpointState(endpoint(over))).toBe(want);
+});
+
+it.each([
+  { formats: ["chat", "embeddings"] as const, want: ["chat"] },
+  { formats: ["messages", "responses", "rerank"] as const, want: ["messages", "responses"] },
+  { formats: ["embeddings", "rerank"] as const, want: [] },
+])("an endpoint of $formats can be tested in $want", ({ formats, want }) => {
+  expect(testFormats([...formats])).toEqual(want);
 });
 
 it.each([

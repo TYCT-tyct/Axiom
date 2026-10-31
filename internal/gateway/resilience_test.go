@@ -145,14 +145,14 @@ func TestQueueLimits(t *testing.T) {
 	r.idle(1 << 30)
 }
 
-type admitFunc = func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
+type admitFunc = func(context.Context, []accounts.AdmitCall, func(pg.Tx, []accounts.Admission, []error) error) error
 
 var errDropped = errors.New("connection reset by peer")
 
 // lostAfterCommit is an admission that commits and then loses the connection before the acknowledgement.
 func (r *rig) lostAfterCommit() admitFunc {
-	return func(ctx context.Context, c accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
-		if err := r.accounts.Admit(ctx, c, req, fn); err != nil {
+	return func(ctx context.Context, calls []accounts.AdmitCall, fn func(pg.Tx, []accounts.Admission, []error) error) error {
+		if err := r.accounts.AdmitBatch(ctx, calls, fn); err != nil {
 			return err
 		}
 		return errDropped
@@ -161,9 +161,9 @@ func (r *rig) lostAfterCommit() admitFunc {
 
 // failedCommit is an admission whose commit fails: the transaction is rolled back after its reservation was written.
 func (r *rig) failedCommit() admitFunc {
-	return func(ctx context.Context, c accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
-		return r.accounts.Admit(ctx, c, req, func(tx pg.Tx, a accounts.Admission) error {
-			if err := fn(tx, a); err != nil {
+	return func(ctx context.Context, calls []accounts.AdmitCall, fn func(pg.Tx, []accounts.Admission, []error) error) error {
+		return r.accounts.AdmitBatch(ctx, calls, func(tx pg.Tx, as []accounts.Admission, refusals []error) error {
+			if err := fn(tx, as, refusals); err != nil {
 				return err
 			}
 			return errDropped
@@ -173,8 +173,8 @@ func (r *rig) failedCommit() admitFunc {
 
 // slowAfter locks the account's balance for d once admit has returned, so the settlement that follows has to wait.
 func (r *rig) slowAfter(admit admitFunc, a account, d time.Duration) admitFunc {
-	return func(ctx context.Context, c accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
-		err := admit(ctx, c, req, fn)
+	return func(ctx context.Context, calls []accounts.AdmitCall, fn func(pg.Tx, []accounts.Admission, []error) error) error {
+		err := admit(ctx, calls, fn)
 		time.AfterFunc(d, r.lockBalance(ctx, a)) // the settlement waits for this long, whatever the machine's pace
 		return err
 	}
@@ -201,12 +201,12 @@ func TestLostCommit(t *testing.T) {
 			t.Parallel()
 			r := newRig(t)
 			a := r.newAccount(1e9)
-			r.handler.admitTx = tc.lose(r, a)
+			r.handler.admitBatchTx = tc.lose(r, a)
 			resp, body := r.message(a, "acme/beta")
 			if code, _ := errorOf(t, body); resp.StatusCode != http.StatusServiceUnavailable || code != "overloaded" || len(r.calls()) != 0 {
 				t.Fatalf("%d %s, %d calls", resp.StatusCode, body, len(r.calls()))
 			}
-			r.handler.Drain(t.Context())
+			r.handler.Outstanding.Drain(t.Context(), time.Minute)
 			if r.count(allRows) != 1 || r.count("SELECT count(*) FROM billing.reservations WHERE state = 'released' AND amount = $1", tc.amount) != 1 {
 				t.Errorf("%d reservation rows, want one released with %d", r.count(allRows), tc.amount)
 			}

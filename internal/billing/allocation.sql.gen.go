@@ -159,7 +159,8 @@ SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired,
     coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
 FROM billing.credit_batches b
 JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
-WHERE b.account_id = $1 AND b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired
+WHERE b.account_id = $1
+    AND (b.consumed > 0 OR (b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired))
 `
 
 type LiveBatchesRow struct {
@@ -178,9 +179,10 @@ type LiveBatchesRow struct {
 	OpenedID      uuid.UUID
 }
 
-// The batches that hold something, each with the key of the credit transaction that opened it (seq 0 for one from
-// before the sequence). Consumption, expiry and freeze totals are the replay cache: they trail the ledger until the
-// account is replayed. Served by credit_batches_by_account.
+// The batches that hold something or were consumed, each with the key of the credit transaction that opened it (seq 0
+// for one from before the sequence). A fully spent batch stays here because a correction can give its credit back
+// (#277); consumption, expiry and freeze totals are the replay cache, and trail the ledger until the account is
+// replayed. Served by credit_batches_by_account.
 func (q *Queries) LiveBatches(ctx context.Context, db DBTX, accountID uuid.UUID) ([]LiveBatchesRow, error) {
 	rows, err := db.Query(ctx, liveBatches, accountID)
 	if err != nil {

@@ -16,10 +16,12 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
 	"axiom/internal/platform"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // Conn is one attempt's connection to a credential of an endpoint, held from Acquire to Done. *suppliers.Attempt is one.
@@ -54,8 +56,14 @@ func (u serviceUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
 // Ledger is what a call writes of its money once admitted, *billing.Billing: the extensions of its reservation and
 // the settlement that ends it.
 type Ledger interface {
-	Extend(ctx context.Context, h *billing.Hold, r billing.ExtendRequest) error
-	Settle(ctx context.Context, h *billing.Hold, o billing.Outcome) (billing.Final, error)
+	ExtendIn(ctx context.Context, tx pg.Tx, h *billing.Hold, r billing.ExtendRequest) error
+	SettleIn(ctx context.Context, tx pg.Tx, h *billing.Hold, o billing.Outcome) (billing.Final, func(), error)
+	// SettleBatch settles a completion batch's settlements in one transaction: one balance-row lock, one read of
+	// the reservations, the ledger in one pipeline, one set-based reservation end and one request-end insert, instead
+	// of those round trips per call.
+	SettleBatch(ctx context.Context, scope pg.Scope, items []billing.Settlement) ([]billing.Final, []func(), error)
+	// RunBatch commits the works of one completion batch together: one begin, one commit, one connection.
+	RunBatch(ctx context.Context, scope pg.Scope, works []func(pg.Tx) error) error
 }
 
 // Costs prices an attempt's usage at what its supplier charges us, in billionths of a credit of currency, the one the
@@ -86,14 +94,16 @@ type ExecDeps struct {
 	// Records is the call log, where each call is written once its settlement is. It is optional because the record is
 	// observation and a call never depends on it; a node always gives it.
 	Records *observability.Recorder
+	// Outstanding counts the calls and the settlements they leave in the background, and is what the node drains: the
+	// node's Handler shares it, so a request is counted from the gate.
+	Outstanding *Outstanding
+	// Search runs the web plugin through the deployment's backend; nil means no backend is configured.
+	Search websearch.Searcher
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.
 type Executor struct {
 	ExecDeps
-	bg       *background        // the calls running and the settlements that outlive them
-	shutdown context.Context    //nolint:containedctx // not a request's: the executor's own, which every attempt's context.AfterFunc watches; done once Drain gives up waiting
-	abort    context.CancelFunc // ends shutdown
 }
 
 // minSecret is the shortest identity secret accepted.
@@ -102,14 +112,13 @@ const minSecret = 16
 // NewExecutor checks the dependencies.
 func NewExecutor(d ExecDeps) (*Executor, error) {
 	if d.Router == nil || d.Upstreams == nil || d.Limits == nil || d.Memory == nil || d.Logger == nil || d.Ledger == nil ||
-		d.Costs == nil || d.Alive == nil || d.Quality == nil {
+		d.Costs == nil || d.Alive == nil || d.Quality == nil || d.Outstanding == nil {
 		return nil, errors.New("gateway: the executor needs every dependency")
 	}
 	if len(d.IdentitySecret) < minSecret {
 		return nil, errors.New("gateway: the identity secret is too short")
 	}
-	shutdown, abort := context.WithCancel(context.Background())
-	return &Executor{ExecDeps: d, bg: newBackground(), shutdown: shutdown, abort: abort}, nil
+	return &Executor{ExecDeps: d}, nil
 }
 
 // identity maps a value the client sent to the opaque one that goes upstream: the same value of the same account
@@ -140,7 +149,7 @@ type ended struct {
 // The call's slots go when its settlement is written, or once it is the cleanup's (README.md「结束与结算」), which may
 // be after Run returns.
 func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
-	defer x.bg.add()()
+	defer x.Outstanding.add()() // nested in the handler's count on a node; the count of a call run on its own
 	s := newSession(x, w, r, c)
 	defer func() {
 		if !s.handedOff {
@@ -151,20 +160,15 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 	defer s.release()   // the relays no answer released, as a panic leaves them, are let go
 	ctx := r.Context()
 	defer s.settleOnPanic(ctx)
-	s.conclude(ctx, s.attempts(ctx))
-}
-
-// Drain lets the calls in flight and the settlements in the background end, until ctx does; then it cancels every
-// attempt, as a node that is going away must, and gives what is left grace to settle. What still has not is the
-// cleanup's (README.md「故障矩阵」). A call that begins meanwhile is waited for too.
-func (x *Executor) Drain(ctx context.Context, grace time.Duration) {
-	if x.bg.wait(ctx) {
+	if e := s.webSearch(ctx); e != nil {
+		s.conclude(ctx, *e)
 		return
 	}
-	x.abort()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
-	defer cancel()
-	x.bg.drain(ctx)
+	if e := s.readEcho(); e != nil {
+		s.conclude(ctx, *e)
+		return
+	}
+	s.conclude(ctx, s.attempts(ctx))
 }
 
 // session is the run of one call. The goroutine that runs it owns it, but for the keep-alive timer and the cancelling
@@ -183,8 +187,8 @@ type session struct {
 	tries      []try                   // the same attempts as the call log needs them: their entry and when they began
 	currency   platform.Currency       // of the last attempt's price, the site's until one is made
 	skips      skips
-	last       *attempt        // the attempt in progress, or the last one made
-	textCounts [2]textEstimate // one count (or failure) per supported encoding for this session
+	last       *attempt                                // the attempt in progress, or the last one made
+	textCounts [billing.NumTokenizers - 1]textEstimate // one count (or failure) per family with a count, for this session
 
 	aggregate bool            // the client wants one body: its stream is aggregated, and nothing is written before it is whole
 	part      *protocol.Relay // the aggregate reply of an attempt that generated content, kept for the answer
@@ -197,6 +201,17 @@ type session struct {
 	// while the next attempt waits on its upstream. A kept part is always the live one too.
 	live      *protocol.Relay
 	replyHeld int64 // of the node's budget, held by the compact reply the call ends with, until Run returns
+
+	// searches is how many external web searches the call ran before its attempt, and citations are their results,
+	// which an aggregated Chat reply cites. Both are zero for a call without the web plugin. searchHeld is the part of
+	// the node's budget those results and the injected body hold until the call is over.
+	searches   int64
+	citations  []protocol.Citation
+	searchHeld int64
+	// echo is the prompt sizes a legacy completion that echoes repeats at the start of its choices, nil without echo;
+	// echoHeld is the part of the node's budget they hold until the call is over.
+	echo     *protocol.EchoPrompts
+	echoHeld int64
 
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back
@@ -224,10 +239,15 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 // right: the attempt is over (its upstream cancelled, its read returned) before Settle, and Settle is committed before
 // the ending that reports the cost is written (I3). A settlement not written in time goes on in the background once
 // the ending is out.
+//
+//nolint:cyclop // the settlement order is the invariant; each branch is one ending
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
 	o := billing.Outcome{Attempts: s.ends}
+	if len(o.Attempts) > 0 {
+		addSearchUsage(&o.Attempts[len(o.Attempts)-1], s.searches)
+	}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
 	if err == nil && len(o.Attempts) > 0 {
@@ -235,6 +255,14 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	switch {
 	case e.reply != nil:
+		if s.c.Format.Direct() {
+			body, failure, failed := s.rewriteDirect(e.reply, fin)
+			if failed {
+				s.answer(ctx, ended{err: failure}, fin)
+				break
+			}
+			e.reply = body
+		}
 		s.respond(e.status, e.reply) // as it came, after the settlement (docs/domains/gateway.md「转发规则」)
 	case e.relay == nil:
 		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
@@ -263,6 +291,11 @@ func (s *session) conclude(ctx context.Context, e ended) {
 // nothing: the entry stays until its time is up or a later call succeeds elsewhere. It runs before the settlement and the
 // ending. The process table is updated immediately; the shared cache is offered a bounded background write, so the
 // next request may arrive before that binding is visible (README.md「并发、背压与共享状态」).
+// stick moves the session to the endpoint of the charged attempt when that attempt delivered content and the session
+// was not already there (docs/domains/routing.md「会话粘性」). A call that delivered nothing writes nothing and forgets
+// nothing: the entry stays until its time is up or a later call succeeds elsewhere. It runs before the settlement and the
+// ending. The process table is updated immediately; the shared cache is offered a bounded background write, so the
+// next request may arrive before that binding is visible (README.md「并发、背压与共享状态」).
 func (s *session) stick() {
 	if len(s.ends) == 0 {
 		return
@@ -278,6 +311,24 @@ func (s *session) stick() {
 			s.x.Router.Stick(s.c.Session, ep, s.c.Plan.StickyTTL)
 		}
 	}
+}
+
+// rewriteDirect rewrites a direct format's reply after settlement. Its copy was charged to the node's budget in pass,
+// and the body was validated there, so the settlement is never followed by a failure of the call's own making.
+func (s *session) rewriteDirect(reply []byte, fin *protocol.Final) ([]byte, protocol.Error, bool) {
+	var seen protocol.Usage
+	if s.last != nil {
+		seen = s.last.usage
+	}
+	model := s.c.Request.Model
+	if s.last != nil {
+		model = s.servedModel(s.last)
+	}
+	body, err := protocol.RewriteDirectReply(s.c.Format, reply, s.c.ID.String(), model, seen, fin)
+	if err != nil {
+		return nil, protocol.Error{Type: protocol.UpstreamFailed}, true
+	}
+	return body, protocol.Error{}, false
 }
 
 // answerAggregate writes the whole body of a call that did not stream, after its settlement (I3): the reply the relay
@@ -320,6 +371,25 @@ func (s *session) release() {
 		s.live.Release()
 		s.live = nil
 	}
+	s.x.Memory.Refund(s.searchHeld)
+	s.searchHeld = 0
+	s.x.Memory.Refund(s.echoHeld)
+	s.echoHeld = 0
+}
+
+// readEcho reads the prompt sizes of a completion that echoes, once for all its attempts, charged to the node's budget
+// before they are allocated: a batch of empty prompts holds more in sizes than its body.
+func (s *session) readEcho() *ended {
+	n := protocol.EchoSize(&s.c.Request)
+	if n == 0 {
+		return nil
+	}
+	if !s.x.Memory.Charge(n) {
+		return &ended{err: protocol.Error{Type: protocol.Overloaded}}
+	}
+	s.echoHeld = n
+	s.echo = protocol.EchoOf(s.c.Body, &s.c.Request)
+	return nil
 }
 
 // dropReply gives back the budget of a compact reply that is not going to be written, or that the call is over with.
@@ -330,7 +400,10 @@ func (s *session) dropReply() {
 
 // final is what the ending reports of a settlement.
 func (s *session) final(f billing.Final) *protocol.Final {
-	fin := &protocol.Final{Cost: f.Charged, Currency: s.currency, Estimated: f.Estimated}
+	fin := &protocol.Final{
+		Cost: f.Charged, Currency: s.currency, Estimated: f.Estimated,
+		ServerToolCost: f.ServerToolCost, CacheDiscount: f.CacheDiscount,
+	}
 	for _, seg := range f.Segments {
 		fin.Usage.Segments = append(fin.Usage.Segments, protocol.Segment{Usage: seg.Usage, Reported: seg.Reported})
 	}

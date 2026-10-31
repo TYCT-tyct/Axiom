@@ -8,8 +8,8 @@ import (
 func TestPasswordMailLanguagesAndEscaping(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ language, link, want string }{
-		{"zh", "https://main.example/reset-password#token=example", "重置密码"},
-		{"en", "https://main.example/reset-password#token=example", "reset your password"},
+		{"zh", "https://main.example/console/reset-password#token=example", "重置密码"},
+		{"en", "https://main.example/console/reset-password#token=example", "reset your password"},
 		{"zh", "", "密码已变更"},
 		{"en", "", "password changed"},
 	} {

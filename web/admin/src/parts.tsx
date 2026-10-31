@@ -2,6 +2,9 @@ import { can, readForm, useSession } from "@axiom/app";
 import { Badge, Button, Icon, Panel, SelectField, Th, useFormat } from "@axiom/ui";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { formatJSON } from "./lossless";
+
+export { toInstant, toLocalInput } from "@axiom/app";
 
 // PageBody is the area under a page's header; the pages of the admin are all lists, cards and tables in a column.
 export function PageBody({ children }: { children: ReactNode }) {
@@ -37,8 +40,20 @@ export function Time({ at }: { at: string | undefined }) {
 }
 
 // Code is an identifier or a name the system gives, in the monospaced face; it may be long, so it wraps anywhere.
-export function Code({ children }: { children: ReactNode }) {
-  return <span className="font-mono text-label [overflow-wrap:anywhere]">{children}</span>;
+export function Code({ children, title }: { children: ReactNode; title?: string }) {
+  return (
+    <span className="font-mono text-label [overflow-wrap:anywhere]" title={title}>
+      {children}
+    </span>
+  );
+}
+
+// Json keeps a record's shape: the route of a call and an audit entry's detail are nested and meant to be read as they
+// were written, not flattened into one line.
+export function Json({ value }: { value: unknown }) {
+  return (
+    <pre className="max-h-96 overflow-auto rounded-md bg-s2 p-3 font-mono text-label text-t2">{formatJSON(value)}</pre>
+  );
 }
 
 // A state in words with an icon: the tone says how much attention it needs, never alone.
@@ -75,13 +90,15 @@ export function FilterBar({
       <form
         key={JSON.stringify(values)}
         noValidate
-        className="grid gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(3,minmax(0,1fr))_auto] xl:items-end"
+        className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           onApply(readForm(event.currentTarget));
         }}
       >
-        {children}
+        {/* Top-aligned, so a field's hint below it never pushes its neighbours' inputs out of line; the buttons get a
+            row of their own however many fields a page has. */}
+        <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">{children}</div>
         <div className="flex gap-2">
           <Button variant="primary" size="md" type="submit">
             {t("filter.apply")}

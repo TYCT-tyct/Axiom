@@ -183,3 +183,21 @@ func TestProblemsIgnoresVariablesNothingRead(t *testing.T) {
 		t.Errorf("Err = %v, want it to report AXIOM_OTHER too", err)
 	}
 }
+
+func TestSetReportsAndMarksRead(t *testing.T) {
+	env := New([]string{"AXIOM_A=1"})
+	if !env.Set("AXIOM_A") {
+		t.Error("Set did not see a variable that is set")
+	}
+	if env.Set("AXIOM_C") {
+		t.Error("Set saw a variable that is not set")
+	}
+	if err := env.Err(); err != nil {
+		t.Fatalf("a read variable was reported: %v", err)
+	}
+	env = New([]string{"AXIOM_A=1", "AXIOM_D=2"})
+	env.Set("AXIOM_A")
+	if err := env.Err(); err == nil || !strings.Contains(err.Error(), "AXIOM_D") {
+		t.Fatalf("an unread variable was not reported: %v", err)
+	}
+}

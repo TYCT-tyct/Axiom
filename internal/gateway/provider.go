@@ -251,7 +251,7 @@ func readMaxPrice(o *routing.Override, name string, value []byte) error {
 			case "request":
 				return invalid("provider." + name + ".request is not supported: the published price version has no per-request item; it prices tokens and per-use server tools only, and OpenRouter's pricing.request is not imported.")
 			case "image":
-				return invalid("provider." + name + ".image is not supported: the published price version has no per-image item; image_in and image_out are per-token prices, and OpenRouter's pricing.image is not imported.")
+				return invalid("provider." + name + ".image is not supported: the price version has per-piece image items, but OpenRouter's single image cap does not say whether it covers input images, generated images or token-priced images, and no endpoint reports image pieces; the item to compare is undecided.")
 			}
 			return unsupported(name + "." + member)
 		}

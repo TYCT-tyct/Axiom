@@ -25,7 +25,8 @@ func TestAttemptCountsOnlyMissingInput(t *testing.T) {
 		counted     bool
 	}{
 		{"endpoint model selects the tokenizer", "openai/gpt-4o", 0, false, true},
-		{"Anthropic fallback", "claude-sonnet-4-5", 0, false, false},
+		{"a Claude endpoint estimates from the shape", "claude-sonnet-4-5", 0, false, true},
+		{"a name of no family keeps the byte rule", "deployment-name", 0, false, false},
 		{"reported input", "gpt-4o", 1 << catalog.ItemInput, false, false},
 		{"reported cache", "gpt-4o", 1 << catalog.ItemCacheRead, false, false},
 		{"reported output only", "gpt-4o", 1 << catalog.ItemOutput, false, true},

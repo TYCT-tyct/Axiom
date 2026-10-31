@@ -48,6 +48,9 @@ type Principal struct {
 	session       SessionID
 	level         string
 	factorVersion int64
+	// consentPending is whether a current legal document is not accepted; the console guard refuses everything but
+	// reading the session, accepting, and signing out until it is false.
+	consentPending bool
 }
 
 // UserID is the signed-in user.
@@ -64,6 +67,10 @@ func (p Principal) Pending() bool { return p.level == levelPending }
 
 // Verified reports whether the session passed two-step verification.
 func (p Principal) Verified() bool { return p.level == levelMFA }
+
+// ConsentPending reports whether the user has not accepted a current legal document. It is computed with the rest of
+// the session so a new version takes effect on the next request, not when a snapshot reloads.
+func (p Principal) ConsentPending() bool { return p.consentPending }
 
 // SignInRequest is a sign-in with a password at the request's Host.
 type SignInRequest struct {
@@ -140,25 +147,62 @@ func (s *Service) signIn(ctx context.Context, r SignInRequest, d domain, snap *s
 	}
 	var issued Issued
 	err = s.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
-		locked, err := s.lockUser(ctx, tx, user, stored[0].FactorVersion)
-		if err != nil {
-			return err
-		}
-		level := levelPassword
-		if locked.Mfa {
-			level = levelPending
-		}
-		issued, err = s.issue(ctx, tx, newSession{
-			user: user, account: account, site: snap.sites[d.site], surface: d.surface, level: level,
-			factorVersion: locked.FactorVersion, ip: r.ClientIP, userAgent: r.UserAgent,
-		})
-		if err != nil {
-			return err
-		}
-		event.session = issued.session
-		return event.record(ctx, tx, "security.sign_in")
+		issued, err = s.passwordSession(ctx, tx, r, d, snap, user, account, stored[0].FactorVersion, event)
+		return err
 	})
 	return issued, err
+}
+
+// passwordSession decides the level a password sign-in gets and issues the session, under the user's lock.
+func (s *Service) passwordSession(ctx context.Context, tx pg.Tx, r SignInRequest, d domain, snap *snapshot, user, account uuid.UUID, factorVersion int64, event *securityAttempt) (Issued, error) {
+	locked, err := s.lockUser(ctx, tx, user, factorVersion)
+	if err != nil {
+		return Issued{}, err
+	}
+	// A passkey only works on the site's login domain. A user with no TOTP is sent there instead of getting a session
+	// that skips the passkey; a user who also has TOTP can finish that on any console domain, and the admin surface,
+	// which cannot run WebAuthn at all, keeps a usable password session.
+	if locked.Passkeys && !locked.Mfa && d.surface == Console && d.origin != snap.sites[d.site].LoginOrigin {
+		return Issued{}, ErrWrongLoginDomain
+	}
+	level := levelPassword
+	if locked.Mfa || (locked.Passkeys && d.surface == Console) {
+		level = levelPending
+	}
+	issued, err := s.issue(ctx, tx, newSession{
+		user: user, account: account, site: snap.sites[d.site], surface: d.surface, level: level,
+		factorVersion: locked.FactorVersion, ip: r.ClientIP, userAgent: r.UserAgent,
+	})
+	if err != nil {
+		return Issued{}, err
+	}
+	event.session = issued.session
+	if err := event.record(ctx, tx, "security.sign_in"); err != nil {
+		return Issued{}, err
+	}
+	return issued, nil
+}
+
+// secondFactor reports whether the user has a second factor to prove: two-step verification or a passkey. Either one
+// makes a password sign-in wait for it, and a sensitive change need an already verified session.
+func (r LockUserRow) secondFactor() bool { return r.Mfa || r.Passkeys }
+
+// passkeyFactor reports whether a passkey is a second factor on this principal's surface. The admin listener cannot run
+// a WebAuthn ceremony, so a passkey there would only leave a pending session no page can complete.
+func (p Principal) passkeyFactor() bool { return p.surface == Console }
+
+// secondFactorUnproved reports whether a change must refuse this session: the user has a second factor the session's
+// surface can prove and the session has not proved it.
+func secondFactorUnproved(locked LockUserRow, p Principal) bool {
+	return (locked.Mfa || (locked.Passkeys && p.passkeyFactor())) && !p.Verified()
+}
+
+// resumedLevel is the level a replacement session keeps after a credential change this session performed.
+func resumedLevel(p Principal) string {
+	if p.Verified() {
+		return levelMFA
+	}
+	return levelPassword
 }
 
 // lockUser is the first statement of a transaction that issues a session or spends or changes a factor: it locks the
@@ -246,6 +290,7 @@ func (s *Service) authenticate(ctx context.Context, r *http.Request, ip netip.Ad
 	return Principal{
 		user: UserID(found.UserID), account: AccountID(found.AccountID), site: d.site, surface: d.surface,
 		session: SessionID(found.SessionID), level: valid[0].Level, factorVersion: valid[0].FactorVersion,
+		consentPending: valid[0].ConsentPending,
 	}, nil
 }
 
@@ -256,11 +301,11 @@ func (s *Service) sessionOf(ctx context.Context, r *http.Request) (SessionTenant
 	if err != nil {
 		return SessionTenantRow{}, nil, domain{}, err
 	}
-	cookie, err := r.Cookie(cookieName(d.origin))
+	token, err := sessionToken(r, d)
 	if err != nil {
-		return SessionTenantRow{}, nil, domain{}, ErrNoSession
+		return SessionTenantRow{}, nil, domain{}, err
 	}
-	hash := sha256.Sum256([]byte(cookie.Value))
+	hash := sha256.Sum256([]byte(token))
 	var found []SessionTenantRow
 	if err := s.db.Tx(ctx, pg.Scope{}, func(tx pg.Tx) error {
 		found, err = s.queries.SessionTenant(ctx, tx, SessionTenantParams{
@@ -274,6 +319,15 @@ func (s *Service) sessionOf(ctx context.Context, r *http.Request) (SessionTenant
 		return SessionTenantRow{}, nil, d, ErrNoSession
 	}
 	return found[0], hash[:], d, nil
+}
+
+// sessionToken is the session cookie's value: the bearer secret the row itself keeps only as a hash.
+func sessionToken(r *http.Request, d domain) (string, error) {
+	cookie, err := r.Cookie(cookieName(d.origin))
+	if err != nil {
+		return "", ErrNoSession
+	}
+	return cookie.Value, nil
 }
 
 // SignOut revokes p's session.

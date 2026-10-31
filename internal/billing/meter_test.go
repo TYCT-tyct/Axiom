@@ -43,6 +43,8 @@ func target(tb testing.TB, tokens int64) string {
 // meters 5 by its bytes and passes the extension point (4 of the first 8 tokens); the final message_delta reports 15,
 // past the next point (12 of 16), and is metered as reported.
 func TestMeterSample(t *testing.T) {
+	t.Parallel()
+
 	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
 	f, err := os.ReadFile("../protocol/testdata/messages/text/upstream.sse")
 	if err != nil {
@@ -101,6 +103,8 @@ func TestMeterSample(t *testing.T) {
 // one, until the count is final; it never passes the output limit (500). Shown by where the first segment of 8
 // tokens runs out.
 func TestMeterOutput(t *testing.T) {
+	t.Parallel()
+
 	out := func(n int64) catalog.Usage { return usage(t, map[catalog.Item]int64{catalog.ItemOutput: n}) }
 	reasoned := usage(t, map[catalog.Item]int64{catalog.ItemOutput: 4, catalog.ItemReasoning: 5})
 	for _, tc := range []struct {
@@ -127,9 +131,35 @@ func TestMeterOutput(t *testing.T) {
 	}
 }
 
+// TestMeterToolCalls: the framework of a client tool call is output the upstream may omit from its report, so the
+// meter's byte bound adds it too. Thirty calls of 45 tokens pass a segment of 8 by far even though the arguments are
+// empty, and the extension they ask for covers the settlement's estimate rather than leaving the difference to the
+// platform.
+func TestMeterToolCalls(t *testing.T) {
+	t.Parallel()
+
+	e := entry(t, true, 3)
+	e.MaxOutput = 4000
+	m := meter(t, Demand{TextBytes: 80}, e)
+	step := m.Observe(Progress{ContentBytes: 60, ToolCalls: 30, ToolCallTokens: 45})
+	if !step.Extend || !step.Exhausted || step.Request.Seq != 2 || units(t, step.Request.Target) != target(t, 1418) {
+		t.Fatalf("Observe = %+v, want extension 2 to %s and exhausted", step, target(t, 1418))
+	}
+	m.Extended(2, nil)
+	if step := m.Observe(Progress{ContentBytes: 60, ToolCalls: 30, ToolCallTokens: 45}); step.Extend || step.Exhausted {
+		t.Errorf("after approval: Observe = %+v, want to continue", step)
+	}
+	plain := meter(t, Demand{TextBytes: 80}, e)
+	if step := plain.Observe(Progress{ContentBytes: 3}); step.Extend || step.Exhausted {
+		t.Errorf("without the calls: Observe = %+v, want no extension", step)
+	}
+}
+
 // TestMeterLeft: Left is what the approved segments still cover of the output, never below zero, and grows by the
 // segment an extension adds; once they cover the output limit nothing more can come.
 func TestMeterLeft(t *testing.T) {
+	t.Parallel()
+
 	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
 	for _, tc := range []struct {
 		bytes, left int64
@@ -152,6 +182,8 @@ func TestMeterLeft(t *testing.T) {
 // TestMeterLeftNeedsAnExtension: whenever Left is 0 an extension is in flight (it was asked for in that step or before),
 // whatever the read, so the owner that waits for one at Left 0 has one to wait for.
 func TestMeterLeftNeedsAnExtension(t *testing.T) {
+	t.Parallel()
+
 	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
 	for bytes := range int64(60) {
 		if step := m.Observe(Progress{ContentBytes: bytes}); step.Left == 0 && !m.flying {
@@ -164,6 +196,8 @@ func TestMeterLeftNeedsAnExtension(t *testing.T) {
 // no extension is due, and Left is unbounded. Left of 0 means an extension is due or in flight, which the owner waits
 // for; with nothing to ask for, it would wait on none, for ever.
 func TestMeterFreeOutput(t *testing.T) {
+	t.Parallel()
+
 	free := entry(t, true, 3)
 	free.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"0"}}`)
 	m := meter(t, Demand{TextBytes: 80}, free)
@@ -177,6 +211,8 @@ func TestMeterFreeOutput(t *testing.T) {
 // TestMeterLargeEvent: one read of 30 bytes passes the extension point and the whole segment at once, so the step
 // carries both; the request covers the 30 tokens already read plus a segment, so once approved the meter continues.
 func TestMeterLargeEvent(t *testing.T) {
+	t.Parallel()
+
 	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
 	step := m.Observe(Progress{PartialBytes: 30})
 	if !step.Extend || !step.Exhausted || step.Request.Seq != 2 || units(t, step.Request.Target) != target(t, 38) {
@@ -191,6 +227,8 @@ func TestMeterLargeEvent(t *testing.T) {
 // TestMeterOneExtensionInFlight: no second request while one is in flight, even as the segment runs out; a failed
 // extension leaves the approved segments alone and the next Observe asks for the same segment again.
 func TestMeterOneExtensionInFlight(t *testing.T) {
+	t.Parallel()
+
 	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
 	first := m.Observe(Progress{ContentBytes: 5})
 	if !first.Extend || first.Request.Seq != 2 || units(t, first.Request.Target) != target(t, 16) {
@@ -211,6 +249,8 @@ func TestMeterOneExtensionInFlight(t *testing.T) {
 // output grows past what it asked for. The resent request is the same, so Extend's "already segment 2" success
 // approves exactly what was committed; the further need goes to segment 3.
 func TestMeterLostAcknowledgement(t *testing.T) {
+	t.Parallel()
+
 	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
 	first := m.Observe(Progress{ContentBytes: 5})
 	m.Extended(2, errors.New("connection reset after commit"))
@@ -228,6 +268,8 @@ func TestMeterLostAcknowledgement(t *testing.T) {
 // TestMeterTriggerPoint: the drawn per mille maps to a point rounded down within the 8-token segment, so 40% (3.2)
 // extends past 3 tokens and 60% (4.8) past 4: early, never late.
 func TestMeterTriggerPoint(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ trigger, last, first int64 }{{400, 3, 4}, {600, 4, 5}} {
 		m := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
 		m.trigger = tc.trigger
@@ -244,6 +286,8 @@ func TestMeterTriggerPoint(t *testing.T) {
 // TestMeterSearches: searches up to the quote's most uses are reserved already; beyond them they are spent like
 // output, counted by event or by the reported count, whichever is higher.
 func TestMeterSearches(t *testing.T) {
+	t.Parallel()
+
 	d := Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}}
 	e := entry(t, true, 3)
 	m := meter(t, d, e)
@@ -282,12 +326,16 @@ func TestMeterSearches(t *testing.T) {
 
 // TestMeterFull: an entry reserved in full is never extended or truncated.
 func TestMeterFull(t *testing.T) {
+	t.Parallel()
+
 	if step := meter(t, Demand{TextBytes: 80}, entry(t, false, 3)).Observe(Progress{ContentBytes: 1e6, Searches: 50}); step != (MeterStep{Left: math.MaxInt64}) {
 		t.Errorf("Observe = %+v, want to continue", step)
 	}
 }
 
 func TestBindDroppedEntry(t *testing.T) {
+	t.Parallel()
+
 	r, err := Quote(Demand{TextBytes: 80}, []Quotable{entry(t, true, 3), entry(t, false, 3)}, segments,
 		[]Available{{SourceBalance, amount(t, 2000)}})
 	if err != nil || len(r.Kept) != 1 {
@@ -303,6 +351,8 @@ func TestBindDroppedEntry(t *testing.T) {
 
 // TestQuoteTrigger: the draw stays within 40% to 60% of a segment; where each value lands is TestMeterTriggerPoint's.
 func TestQuoteTrigger(t *testing.T) {
+	t.Parallel()
+
 	for range 1000 {
 		r, err := Quote(Demand{}, []Quotable{entry(t, true, 3)}, segments, nil)
 		if err != nil || r.trigger < 400 || r.trigger > 600 {
@@ -327,5 +377,19 @@ func BenchmarkObserve(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		observe()
+	}
+}
+
+// A flat tool's first use is inside the quote, so the meter must not extend for it; a second one is an excess.
+func TestMeterFlatSearch(t *testing.T) {
+	t.Parallel()
+
+	d := Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: catalog.ItemWebSearch, MaxUses: 1, Flat: true}}}
+	m := meter(t, d, entry(t, true, 1))
+	if step := m.Observe(Progress{Searches: 1}); step.Extend || step.Exhausted {
+		t.Errorf("Observe(1 search) = %+v, want no extension", step)
+	}
+	if step := m.Observe(Progress{Searches: 2}); !step.Extend {
+		t.Errorf("Observe(2 searches) = %+v, want an extension", step)
 	}
 }

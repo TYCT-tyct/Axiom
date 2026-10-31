@@ -73,7 +73,14 @@ func relayTo(t testing.TB, client, upstream protocol.Format, src io.Reader, ctx 
 	mem *protocol.Memory, settle func(protocol.Usage) protocol.Final,
 ) relayed {
 	t.Helper()
-	o := options
+	return relayWith(t, client, upstream, src, ctx, mem, options, settle)
+}
+
+// relayWith is relayTo with the caller's relay options, for a test of an option's metering.
+func relayWith(t testing.TB, client, upstream protocol.Format, src io.Reader, ctx protocol.UsageContext,
+	mem *protocol.Memory, o protocol.RelayOptions, settle func(protocol.Usage) protocol.Final,
+) relayed {
+	t.Helper()
 	o.Memory = mem
 	res := relayed{r: protocol.NewRelay(client, upstream, src, ctx, o)}
 	for {
@@ -381,12 +388,12 @@ func TestRelayFail(t *testing.T) {
 	}
 }
 
-func TestRelayUnsupported(t *testing.T) {
-	for _, pair := range [][2]protocol.Format{{protocol.Messages, protocol.Responses}, {protocol.Responses, protocol.Messages}} {
-		r := protocol.NewRelay(pair[0], pair[1], strings.NewReader(""), protocol.UsageContext{}, options)
-		if _, err := r.Next(); err == nil {
-			t.Errorf("relaying format %d to a client of format %d succeeded", pair[1], pair[0])
-		}
+// TestRelayUnknownFormat: every pair of the three formats is relayed (README.md「跨格式的流」); a format the relay does
+// not know fails at its first step, before reading anything.
+func TestRelayUnknownFormat(t *testing.T) {
+	r := protocol.NewRelay(protocol.Format(3), protocol.Messages, strings.NewReader(""), protocol.UsageContext{}, options)
+	if _, err := r.Next(); err == nil {
+		t.Error("relaying to a client of an unknown format succeeded")
 	}
 }
 

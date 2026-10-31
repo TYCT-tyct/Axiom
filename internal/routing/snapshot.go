@@ -85,21 +85,31 @@ func (o Owner) visibleTo(a Admission) bool {
 	return o.Platform() || o.Site == a.Site && o.Account == AccountID{} || o.Account == a.Account
 }
 
+// Capacity reports whether an endpoint's credentials can take another call now: any key with a free concurrency slot
+// and room in its supplier account's rolling minute. Plan reads it before freezing a route, so a request is not sent to
+// an endpoint that would refuse it; the slot itself is still taken atomically when the attempt begins. suppliers'
+// Capacity is the production one; nil means the capacity is not known, which is not full.
+type Capacity interface{ Full() bool }
+
 // Endpoint is one supplier group serving one model, as the snapshot holds it: what routing filters and ranks by.
 // suppliers, quality and billing supply the values when the snapshot is built.
 type Endpoint struct {
-	Exchange platform.ExchangeRate
-	ID       EndpointID
-	Supplier SupplierID
-	Codename string // the supplier group's public codename; never its real name
-	Model    catalog.ModelID
-	Owner    Owner
+	Exchange  platform.ExchangeRate
+	ID        EndpointID
+	Supplier  SupplierID
+	Codename  string // the supplier group's public codename; never its real name
+	Model     catalog.ModelID
+	ModelSlug string // the model's catalog slug, frozen with the snapshot so a response names what the route chose
+	Free      bool   // the model is a :free catalog entry, the only kind openrouter/free may choose
+	Owner     Owner
 
 	LiveHealth  *quality.State
+	Capacity    Capacity
 	Enabled     bool // switched on
 	BreakerOpen bool // quality has taken it out for now
 	BalanceOK   bool // the supplier has a synced positive balance
 	BalanceLow  bool // it can, but is below the warning line: its weight is halved
+	PoolLow     bool // its group's pool has little capacity left: its weight is halved
 	Egresses    int  // how many egresses can reach it
 
 	Class         Class
@@ -152,11 +162,14 @@ type Override struct {
 	SortGlobal                          bool // sort.partition none: rank across models
 	NoFallbacks                         bool // with an order, restrict to it; without one, retain one supplier per model
 	Sort                                *Strategy
-	Classes                             ClassSet  // when not zero, only these classes
-	Policies                            PolicySet // when not zero, only these policies
-	MaxPrice                            PriceLimit
-	MinThroughput                       float64
-	MaxLatency                          time.Duration
+	// VerifiedOnly keeps only endpoints quality verified as the model they claim; a request's :exacto sets it, and
+	// only an explicit provider.sort replaces it (docs/domains/quality.md「真伪检测」).
+	VerifiedOnly  bool
+	Classes       ClassSet  // when not zero, only these classes
+	Policies      PolicySet // when not zero, only these policies
+	MaxPrice      PriceLimit
+	MinThroughput float64
+	MaxLatency    time.Duration
 	// RequireParameters is provider.require_parameters: every parameter in RequiredParameters must be declared by the
 	// endpoint. The gateway fills both only when the member is true.
 	RequireParameters  bool
@@ -239,6 +252,8 @@ type Preset struct {
 type Snapshot struct {
 	built   time.Time
 	byModel map[catalog.ModelID][]*candidate
+	models  []catalog.ModelID // in id order, for openrouter/auto
+	free    []catalog.ModelID // the free ones, in id order, for openrouter/free
 	presets map[PresetID]Preset
 }
 
@@ -270,17 +285,20 @@ type candidatePrice struct {
 	cacheCheaper bool
 }
 
-func priceOf(p PriceRef) (candidatePrice, error) {
+func priceOf(p PriceRef, direct bool) (candidatePrice, error) {
 	price := candidatePrice{PriceRef: p}
 	if p.none() {
 		return price, nil
 	}
 	in, hasIn := p.Schedule.BaseRate(catalog.ItemInput)
 	out, hasOut := p.Schedule.BaseRate(catalog.ItemOutput)
-	if !hasIn || !hasOut {
+	if !hasIn || (!direct && !hasOut) {
 		return price, errors.New("routing snapshot: an endpoint's price schedule lacks input or output")
 	}
-	price.blend = number(in) + number(out)
+	price.blend = number(in)
+	if hasOut {
+		price.blend += number(out)
+	}
 	read, hasRead := p.Schedule.BaseRate(catalog.ItemCacheRead)
 	price.cacheCheaper = hasRead && read.Cmp(in) < 0
 	return price, nil
@@ -304,6 +322,7 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 
 		s.byModel[e.Model] = append(s.byModel[e.Model], c)
 	}
+	s.models, s.free = modelsOf(endpoints)
 	for _, p := range presets {
 		if _, dup := s.presets[p.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: preset %s twice", uuid.UUID(p.ID))
@@ -320,13 +339,34 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 	return s, nil
 }
 
+// modelsOf lists the models in id order, and the free ones among them in the same order: a model is free when its
+// endpoint serves the catalog's :free entry, and those are the only ones openrouter/free may choose.
+func modelsOf(endpoints []Endpoint) (models, free []catalog.ModelID) {
+	isFree := make(map[catalog.ModelID]bool, len(endpoints))
+	for _, e := range endpoints {
+		isFree[e.Model] = isFree[e.Model] || e.Free
+	}
+	for m, f := range isFree {
+		models = append(models, m)
+		if f {
+			free = append(free, m)
+		}
+	}
+	slices.SortFunc(models, compareModelID)
+	slices.SortFunc(free, compareModelID)
+	return models, free
+}
+
+// compareModelID orders models as bytes, the order of the database's uuids.
+func compareModelID(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) }
+
 func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrices][]candidatePrice) (*candidate, error) {
 	c, err := r.candidate(e)
 	if err != nil {
 		return nil, err
 	}
 	if e.AudiencePrices != nil {
-		c.prices, err = compileAudiencePrices(e.AudiencePrices, prices)
+		c.prices, err = compileAudiencePrices(e.AudiencePrices, prices, directOnly(e.Native))
 		if err != nil {
 			return nil, err
 		}
@@ -334,19 +374,23 @@ func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrice
 	return c, nil
 }
 
-func compileAudiencePrices(table *billing.AudiencePrices, cache map[*billing.AudiencePrices][]candidatePrice) ([]candidatePrice, error) {
-	if prices, ok := cache[table]; ok {
-		return prices, nil
+func compileAudiencePrices(table *billing.AudiencePrices, cache map[*billing.AudiencePrices][]candidatePrice, direct bool) ([]candidatePrice, error) {
+	if !direct {
+		if prices, ok := cache[table]; ok {
+			return prices, nil
+		}
 	}
 	compiled := make([]candidatePrice, len(table.Layers()))
 	for i, layer := range table.Layers() {
-		price, err := priceOf(PriceRef{Version: layer.Sold.Version, Schedule: layer.Sold.Schedule})
+		price, err := priceOf(PriceRef{Version: layer.Sold.Version, Schedule: layer.Sold.Schedule}, direct)
 		if err != nil {
 			return nil, err
 		}
 		compiled[i] = price
 	}
-	cache[table] = compiled
+	if !direct {
+		cache[table] = compiled
+	}
 	return compiled, nil
 }
 
@@ -366,8 +410,13 @@ func (r *Router) candidate(e Endpoint) (*candidate, error) {
 		OutputSpeed: e.OutputSpeed, MaxUses: e.ToolUses, Reports: e.Reports, ServiceTiers: e.ServiceTiers,
 	}}
 	var err error
-	c.price, err = priceOf(e.Price)
+	c.price, err = priceOf(e.Price, directOnly(e.Native))
 	return c, err
+}
+
+// directOnly reports whether every format is a direct one, which needs no output price.
+func directOnly(fs FormatSet) bool {
+	return fs != 0 && fs&^Of(protocol.Embeddings, protocol.Rerank) == 0
 }
 
 // number is a unit price as a float, for weighting only; money is never computed with it. It allocates, so it runs

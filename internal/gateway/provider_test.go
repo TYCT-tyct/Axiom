@@ -144,8 +144,8 @@ func TestProviderRefusalsNameTheMissingData(t *testing.T) {
 		"sort percentile":    {`{"sort":{"by":"price","percentile":"p90"}}`, "a sort object takes by and partition"},
 		"request price":      {`{"max_price":{"request":1}}`, "no per-request item"},
 		"zero request price": {`{"max_price":{"request":0}}`, "no per-request item"},
-		"image price":        {`{"max_price":{"image":1}}`, "no per-image item"},
-		"zero image price":   {`{"max_price":{"image":0}}`, "no per-image item"},
+		"image price":        {`{"max_price":{"image":1}}`, "item to compare is undecided"},
+		"zero image price":   {`{"max_price":{"image":0}}`, "item to compare is undecided"},
 	}
 	for _, level := range quantizationLevels {
 		cases["quantization "+level] = refusal{fmt.Sprintf(`{"quantizations":[%q]}`, level), "no endpoint records a quantization level"}

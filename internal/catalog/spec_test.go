@@ -263,3 +263,27 @@ func TestSavedSpecRefusesReasoningVisibleWithoutAbility(t *testing.T) {
 		t.Errorf("a spec that does not list its abilities was refused: %v", err)
 	}
 }
+
+// TestServingDirect: a direct-only model needs only a context length. It generates nothing, so an output limit, a
+// stream and abilities are not requirements; a model that also generates still needs the whole Serving.
+func TestServingDirect(t *testing.T) {
+	t.Parallel()
+	s, err := parseSpec([]byte(`{"items":[],"tiers":[],"context_length":1000}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := (Model{serving: s.serving, serves: s.serves}).Serving(); ok {
+		t.Fatal("Serving accepted a spec without max_output_tokens")
+	}
+	got, ok := (Model{serving: s.serving, directServes: s.directServes}).ServingDirect()
+	if !ok || got.Context != 1000 {
+		t.Errorf("ServingDirect = %+v, %t; want context 1000", got, ok)
+	}
+	s, err = parseSpec([]byte(`{"items":[],"tiers":[],"max_output_tokens":10}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := (Model{directServes: s.directServes}).ServingDirect(); ok {
+		t.Error("ServingDirect accepted a spec without context_length")
+	}
+}

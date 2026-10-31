@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"uuid"
@@ -93,6 +94,17 @@ func (t Tx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	return row{t.tx.QueryRow(ctx, sql, hideFromRewriters(args)...)}
 }
 
+// CopyTo runs a COPY … TO STDOUT statement and writes its output to w, returning the rows copied. Callers build the
+// statement themselves: PostgreSQL's COPY takes no parameters, and the only names Axiom copies are partition names it
+// validated. pgx hands out the connection to run it; nothing is handed back.
+func (t Tx) CopyTo(ctx context.Context, w io.Writer, sql string) (int64, error) {
+	tag, err := t.tx.Conn().PgConn().CopyTo(ctx, w, sql)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // SetRole runs the rest of the transaction as role, which the login role must be a member of, like SET LOCAL ROLE:
 // the transaction's end returns the connection to the login role, where a plain SET ROLE would stay on the pooled
 // connection. A background job uses it to act as a role granted only the tables it writes (docs/security.md「租户隔离」).
@@ -100,6 +112,18 @@ func (t Tx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 func (t Tx) SetRole(ctx context.Context, role string) error {
 	if _, err := t.tx.Exec(ctx, "SELECT set_config('role', $1, true)", role); err != nil {
 		return fmt.Errorf("set the role %s: %w", role, err)
+	}
+	return nil
+}
+
+// MarkPasskeyProved records for the rest of the transaction that the caller proved user's passkey. accounts.users'
+// trigger reads it before it lets two-step verification on for a user holding a passkey, so a node that predates
+// passkeys, which never sets it, fails closed during a rolling deployment. It is here because only this package sets a
+// transaction setting (scripts/check_scope.py): a general setter would put the scope and role settings back in every
+// module's reach.
+func (t Tx) MarkPasskeyProved(ctx context.Context, user uuid.UUID) error {
+	if _, err := t.tx.Exec(ctx, "SELECT set_config('axiom.passkey_proved', $1, true)", user.String()); err != nil {
+		return fmt.Errorf("mark the passkey as proved: %w", err)
 	}
 	return nil
 }

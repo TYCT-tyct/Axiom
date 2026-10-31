@@ -43,12 +43,13 @@ func TestWeightedChoice(t *testing.T) {
 	}
 }
 
-// TestWeightFactors: a halved weight for a low supplier balance, and the health and quality scores, scale the chance.
+// TestWeightFactors: a halved weight for a low supplier balance or pool, and the quality score, scale the chance. Health
+// is not a factor of its own: the score already contains it.
 func TestWeightFactors(t *testing.T) {
 	t.Parallel()
 	cases := map[string]func(*routing.Endpoint){
 		"low balance":  func(e *routing.Endpoint) { e.BalanceLow = true },
-		"poor health":  func(e *routing.Endpoint) { e.Health = 0.5 },
+		"low pool":     func(e *routing.Endpoint) { e.PoolLow = true },
 		"poor quality": func(e *routing.Endpoint) { e.Quality = 0.5 },
 	}
 	for name, mod := range cases {

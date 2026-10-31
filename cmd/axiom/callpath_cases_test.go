@@ -181,12 +181,13 @@ func deref(s *string) string {
 }
 
 // chatCase is a Chat call: to the model, whole or streamed, expected to reach the supplier as a call to its path and to
-// be answered with the text.
+// be answered with the text. served is the model the reply names: the catalog's name of the model that answered, which
+// is not the short name the client asked it by (docs/domains/gateway.md「转发规则」).
 type chatCase struct {
-	name, model, path string
-	streamed          bool
-	text              string
-	booked            booking
+	name, model, served, path string
+	streamed                  bool
+	text                      string
+	booked                    booking
 }
 
 // checkChat: /v1/chat/completions through the node, converted to the format the model's endpoint speaks: the supplier is
@@ -197,10 +198,10 @@ func (w *callWorld) checkChat(n runningNode) {
 	claude := booking{charge: messagesCharge, cost: messagesCost, upstream: "up-claude", input: 25, output: 15}
 	gpt := booking{charge: responsesCharge, cost: responsesCost, upstream: "up-gpt", input: 37, output: 11}
 	for _, tc := range []chatCase{
-		{"to Messages", "claude-opus-5-5", "/v1/messages", false, "Hello!", claude},
-		{"to Responses", "gpt-6-astra", "/v1/responses", false, "Hi there! How can I assist you today?", gpt},
-		{"streamed to Messages", "claude-opus-5-5", "/v1/messages", true, "Hello!", claude},
-		{"streamed to Responses", "gpt-6-astra", "/v1/responses", true, "Hi there! How can I assist you today?", gpt},
+		{"to Messages", "claude-opus-5-5", "anthropic/claude-opus-5-5", "/v1/messages", false, "Hello!", claude},
+		{"to Responses", "gpt-6-astra", "openai/gpt-6-astra", "/v1/responses", false, "Hi there! How can I assist you today?", gpt},
+		{"streamed to Messages", "claude-opus-5-5", "anthropic/claude-opus-5-5", "/v1/messages", true, "Hello!", claude},
+		{"streamed to Responses", "gpt-6-astra", "openai/gpt-6-astra", "/v1/responses", true, "Hi there! How can I assist you today?", gpt},
 	} {
 		w.checkChatCall(n, tc)
 	}
@@ -222,8 +223,8 @@ func (w *callWorld) checkChatCall(n runningNode, tc chatCase) {
 		t.Errorf("Chat %s: the supplier was sent %+v, want one %s call under its own key and the endpoint's model name", tc.name, sent[before:], tc.path)
 	}
 	got := w.chatReplyOf(r, tc.streamed)
-	if got.text != tc.text || got.finish != "stop" || got.model != tc.model {
-		t.Errorf("Chat %s: the answer is %+v, want %q ending the turn, from the model asked for", tc.name, got, tc.text)
+	if got.text != tc.text || got.finish != "stop" || got.model != tc.served {
+		t.Errorf("Chat %s: the answer is %+v, want %q ending the turn, from the model that served it", tc.name, got, tc.text)
 	}
 	w.checkChatUsage(got.usage, tc)
 	tc.booked.ref = w.lastRef()

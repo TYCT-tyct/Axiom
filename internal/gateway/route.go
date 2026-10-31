@@ -109,7 +109,7 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	built := make([]routing.Endpoint, 0, len(routable))
 	left := map[catalog.ModelID]*leftOut{}
 	for _, r := range routable {
-		e, why := endpointOf(catalogSnap, prices, blocked, r, d.Quality.Measured(r.ID, time.Now()))
+		e, why := endpointOf(catalogSnap, prices, blocked, r, d.Quality.MeasuredFor(r, time.Now()))
 		if why != "" {
 			note(left, catalog.ModelID(r.Model), why)
 			continue
@@ -254,20 +254,61 @@ func (d *RouteDeps) report(left map[catalog.ModelID]*leftOut) {
 // endpointOf is one supplier endpoint as routing holds it, or the reason it cannot be one. The rules are the assembly
 // ones of docs/domains/routing.md「快照从哪来」: nothing is guessed — a model without a spec, or without a sale price,
 // has no routing entry at all.
+// chatFormats are the formats that convert into each other: an endpoint speaking any of them serves all three.
+var chatFormats = routing.Of(protocol.Messages, protocol.Responses, protocol.Chat)
+
+// servingOf is the spec an endpoint must meet: all of Serving for a generation format, and only the context for an
+// endpoint reached solely through embeddings or rerank, which generates nothing and needs no output limit.
+func servingOf(model catalog.Model, formats []protocol.Format) (catalog.Serving, bool) {
+	if serving, ok := model.Serving(); ok || !onlyDirectFormats(formats) {
+		return serving, ok
+	}
+	return model.ServingDirect()
+}
+
+// onlyDirectFormats reports whether every format is a direct one, in which case the model generates nothing.
+func onlyDirectFormats(formats []protocol.Format) bool {
+	if len(formats) == 0 {
+		return false
+	}
+	for _, f := range formats {
+		if !f.Direct() {
+			return false
+		}
+	}
+	return true
+}
+
+// listedModelOf is the catalog model an endpoint may serve, or why it cannot: the catalog is the authority on what may
+// be served, and suppliers may keep a mapping to a model retired since their last sync.
+func listedModelOf(snap *catalog.Snapshot, id catalog.ModelID) (catalog.Model, string) {
+	model, ok := snap.Model(id)
+	switch {
+	case !ok:
+		return catalog.Model{}, "the catalog has no such model"
+	case model.Status != catalog.StatusListed:
+		return catalog.Model{}, "the catalog model is not listed"
+	}
+	return model, ""
+}
+
 func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
 	measured quality.Measures,
 ) (routing.Endpoint, string) {
-	model, ok := snap.Model(catalog.ModelID(r.Model))
-	if !ok {
-		return routing.Endpoint{}, "the catalog has no such model"
+	model, why := listedModelOf(snap, catalog.ModelID(r.Model))
+	if why != "" {
+		return routing.Endpoint{}, why
 	}
-	serving, ok := model.Serving()
+	serving, ok := servingOf(model, r.Formats)
 	if !ok {
 		return routing.Endpoint{}, "its spec declares no context length, output limit, streaming or abilities"
 	}
 	sold, ok := prices[catalog.ModelID(r.Model)]
 	if !ok || !sold.Available() {
 		return routing.Endpoint{}, "no published sale price is available for this node; check the price publication list and local costs"
+	}
+	if model.Free() && !sold.Zero() {
+		return routing.Endpoint{}, "a :free model has a non-zero sale price for some audience"
 	}
 	reportable := model.Reportable()
 	if sold.Audiences == nil && billing.Unpriced(sold.Schedule, reportable) != (catalog.Reportable{}) {
@@ -277,12 +318,12 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	tiers := reportable.ServiceTiers
 	tiers.Add(catalog.ServiceTierStandard) // every endpoint is called at the standard tier unless it says otherwise
 	native := routing.Of(r.Formats...)
+	// Every pair of the three chat formats converts (protocol README.md「跨格式转换」), so an endpoint that speaks one
+	// serves all three; Native keeps the one it is called in, which is what a request only its own format can express
+	// needs. The direct formats do not convert, so an endpoint serves one only where it lists it.
 	served := native
-	if native.Has(protocol.Messages) || native.Has(protocol.Responses) {
-		served |= routing.Of(protocol.Chat) // a Chat request is converted to the first of those the endpoint speaks
-	}
-	if native.Has(protocol.Chat) {
-		served |= routing.Of(protocol.Messages, protocol.Responses)
+	if native&chatFormats != 0 {
+		served |= chatFormats
 	}
 	_, blockedItem := blocked[catalog.ModelID(r.Model)]
 	// The model streams only if its spec says the vendor does and the supplier's own policy says it can pass a stream:
@@ -290,19 +331,24 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	streams := serving.Streams && r.Streams
 	dialect := model.Dialect()
 	e := routing.Endpoint{
-		ID: routing.EndpointID(r.ID), Supplier: routing.SupplierID(r.Supplier), Codename: r.Codename, Model: catalog.ModelID(r.Model),
+		ID: routing.EndpointID(r.ID), Supplier: routing.SupplierID(r.Supplier), Codename: r.Codename, Model: catalog.ModelID(r.Model), ModelSlug: model.Slug,
+		// openrouter/free chooses only these: the catalog's :free entry, whose sale price the check above pins at zero.
+		Free: model.Free(),
 		// The platform's own: M1's suppliers are the platform's (suppliers' owner scope is not part of Routable), and
 		// the node reaches every one of them from its own address.
 		Owner:   routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},
-		Enabled: true, BalanceOK: r.Funds != nil, Funds: r.Funds, Cost: r.Schedule, Egresses: 1,
+		Enabled: true, BalanceOK: r.Funds != nil, Funds: r.Funds, Cost: r.Schedule, Egresses: 1, PoolLow: r.PoolLow,
 		// Every supplier M1 buys from is a relay or reseller, which is what its adapter talks to; nothing records what
 		// one does with the data it is sent, so an endpoint is taken to be the worst case rather than the best: a preset
 		// that requires no retention must not route to it on the strength of a value nobody set.
 		Class: routing.ClassRelay, Policy: routing.PolicyMayTrain,
-		// Health, time to first token and speed are what real traffic measured, as of this build: the snapshot is at most
-		// one rebuild behind the attempts (docs/domains/quality.md「质量分、吞吐与延迟」). Nothing scores quality yet;
-		// one is the neutral value that neither favours nor penalizes an endpoint, assigned in this one place.
-		Quality: 1, Confidence: 1, Health: measured.Health, Throughput: measured.Throughput, Latency: measured.Latency,
+		// Health, the quality score, its confidence, and the time to first token and speed are what real traffic and the
+		// probes measured, as of this build: the snapshot is at most one rebuild behind the attempts
+		// (docs/domains/quality.md「质量分、吞吐与延迟」). An endpoint nothing counted has the neutral quality 1 and the
+		// confidence 0, which routing keeps apart from a measured bad one. Verified is the health loop's last
+		// fingerprint check, which real traffic does not count for (docs/domains/quality.md「真伪检测」).
+		Quality: measured.Quality, Confidence: measured.Confidence, Health: measured.Health,
+		Throughput: measured.Throughput, Latency: measured.Latency, Verified: measured.Verified,
 		ServiceTiers: tiers,
 		Native:       native, Served: served,
 		Caps:       capabilities(serving.Abilities),
@@ -325,6 +371,9 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		AudiencePrices:   sold.Audiences,
 		Price:            routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule},
 		Target:           targetOf(r.Upstream, streams, dialect),
+	}
+	if r.Capacity != nil { // a nil *suppliers.Capacity in the interface would read as an endpoint with no capacity
+		e.Capacity = r.Capacity
 	}
 	return e, ""
 }

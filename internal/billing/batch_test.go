@@ -17,6 +17,8 @@ import (
 
 // A statement sent while the balance lock is blocked must not turn the holder check into an earlier snapshot.
 func TestBatchedReserveFencesAfterTheBalanceLock(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{})
 	release, first := b.holdOpen(b.admitted, uuid.NewV7(), 100)
 	second := make(chan error, 1)
@@ -37,6 +39,8 @@ func TestBatchedReserveFencesAfterTheBalanceLock(t *testing.T) {
 }
 
 func TestBatchedSettleSeesTheTerminalStateAfterItsLock(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{})
 	h := b.hold(100)
 	held, release, first := make(chan struct{}), make(chan struct{}), make(chan error, 1)
@@ -99,6 +103,8 @@ func (s failingWrite) EndRequest(ctx context.Context, tx pg.Tx, id, site, accoun
 // Independent transactions isolate a failing call even when it fails after its cost or all its settlement writes.
 // Retrying both the failed member and its successful peers must charge exactly once per request.
 func TestPipelinedSettlementsIsolateFailures(t *testing.T) {
+	t.Parallel()
+
 	t.Run("attempts", func(t *testing.T) { checkPipelinedSettlementFailure(t, false) })
 	t.Run("end", func(t *testing.T) { checkPipelinedSettlementFailure(t, true) })
 }
@@ -158,6 +164,8 @@ func checkSettlementRetries(b *bank, holds []*Hold, o Outcome) {
 
 // Admission, extension and settlement must agree on refusals when their source rows are missing.
 func TestFundsReadsShareRefusals(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, 0, Config{})
 	missing := b.admitted
 	missing.Account = uuid.NewV7()
@@ -172,7 +180,7 @@ func TestFundsReadsShareRefusals(t *testing.T) {
 			return err
 		}, errNoBalance},
 		{"admission balance", func(tx pg.Tx) error {
-			_, _, err := b.billing.reserveSources(t.Context(), tx, missing)
+			_, err := b.billing.lockBatch(t.Context(), tx, missing.Account, nil)
 			return err
 		}, errNoBalance},
 		{"settlement balance", func(tx pg.Tx) error {
@@ -183,7 +191,7 @@ func TestFundsReadsShareRefusals(t *testing.T) {
 			return b.billing.fence(t.Context(), tx)
 		}, ErrTerminated},
 		{"admission holder", func(tx pg.Tx) error {
-			_, _, err := b.billing.reserveSources(t.Context(), tx, b.admitted)
+			_, err := b.billing.lockBatch(t.Context(), tx, b.admitted.Account, nil)
 			return err
 		}, ErrTerminated},
 	} {
@@ -197,6 +205,8 @@ func TestFundsReadsShareRefusals(t *testing.T) {
 
 // Distinct money, counter, window and result values catch positional mistakes that Go's identical scalar types cannot.
 func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 1e6, -29, Config{})
 	h := b.hold(100)
 	b.sql(
@@ -209,8 +219,10 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 	a.WorkspaceBudget = &Limit{Amount: 1e5, Reset: ResetNever}
 	a.KeyLimit = &Limit{Amount: 9999, Reset: ResetDaily}
 	var wantBalance, reserveBalance, settleBalance LockBalanceRow
-	var wantUsage, usage ReadUsageRow
+	var wantUsage ReadUsageRow
+	var usage []ReadUsageRow
 	var wantRow, row LockReservationRow
+	reqs := []ReserveRequest{{Admitted: a, Quotables: []Quotable{b.exact}}}
 	err := b.app.Tx(t.Context(), a.Scope, func(tx pg.Tx) error {
 		var err error
 		wantBalance, err = queries.LockBalance(t.Context(), tx, a.Account)
@@ -225,8 +237,12 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		reserveBalance, usage, err = b.billing.reserveSources(t.Context(), tx, a)
+		src, err := b.billing.lockBatch(t.Context(), tx, a.Account, reqs)
 		if err != nil {
+			return err
+		}
+		reserveBalance = src.balance
+		if usage, err = readBatchUsage(t.Context(), tx, reqs, src.day); err != nil {
 			return err
 		}
 		settleBalance, row, err = settlementRows(t.Context(), tx, h.id, a.Account)
@@ -235,7 +251,7 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(reserveBalance, wantBalance) || !reflect.DeepEqual(usage, wantUsage) {
+	if !reflect.DeepEqual(reserveBalance, wantBalance) || !reflect.DeepEqual(usage, []ReadUsageRow{wantUsage}) {
 		t.Errorf("reservation batch differs: balance %+v / %+v; usage %+v / %+v", reserveBalance, wantBalance, usage, wantUsage)
 	}
 	if !reflect.DeepEqual(settleBalance, wantBalance) || !reflect.DeepEqual(row, wantRow) {
@@ -244,6 +260,8 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 }
 
 func TestPostWaitsBeforeUpdatingBalanceAndNumbering(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 0, 0, Config{})
 	firstID, secondID := uuid.NewV7(), uuid.NewV7()
 	entered, release := make(chan struct{}), make(chan struct{})

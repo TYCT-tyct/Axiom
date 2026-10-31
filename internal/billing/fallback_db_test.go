@@ -100,6 +100,8 @@ var (
 // a token, a search 10; 1000 bytes reserve 1100) with testFallbacks: the charge, cleanup's release, a late Settle and
 // the floor, none of them free.
 func TestFallbackPrices(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name string
 		run  func(*testing.T)
@@ -292,6 +294,8 @@ func (b *bank) unknownItems() []UnknownItem {
 // TestUnknownItems: the first appearance of a field nothing prices, in a Settle, takes its model out of routing and
 // alerts once, whichever tenant sees it again; an administrator's clearing, audited, lets it back.
 func TestUnknownItems(t *testing.T) {
+	t.Parallel()
+
 	var logs bytes.Buffer
 	b := newBank(t, 10_000, 0, Config{
 		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour,
@@ -331,6 +335,8 @@ func TestUnknownItems(t *testing.T) {
 // out of routing, though the other entry's attempt is the one charged, and the charge follows the charged attempt
 // alone.
 func TestUnknownItemsOnEveryAttempt(t *testing.T) {
+	t.Parallel()
+
 	const newThing = "usage.new_thing_tokens"
 	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
 	h, first := b.holdOnTwoModels()
@@ -365,7 +371,7 @@ func (b *bank) holdOnTwoModels() (*Hold, Quotable) {
 	first.Model.ID, second.Model.ID = catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7())
 	var h *Hold
 	if err := b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, []Quotable{first, second})
+		h, err = b.billing.reserveOne(b.t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, []Quotable{first, second})
 		return err
 	}); err != nil {
 		b.t.Fatal(err)
@@ -377,7 +383,7 @@ func (b *bank) holdOnTwoModels() (*Hold, Quotable) {
 func (b *bank) holdFor(a Admitted, q Quotable, text int64) (h *Hold) {
 	b.t.Helper()
 	if err := b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{q})
+		h, err = b.billing.reserveOne(b.t.Context(), tx, a, uuid.NewV7(), Demand{TextBytes: text}, []Quotable{q})
 		return err
 	}); err != nil {
 		b.t.Fatal(err)
@@ -413,6 +419,8 @@ func (b *bank) checkClearing(model catalog.ModelID, field string) {
 // TestFallbackSettings: a row that fails the check is refused on saving and stops Start; a currency without a row
 // quotes nothing; a reservation keeps the fallbacks it locked when they change.
 func TestFallbackSettings(t *testing.T) {
+	t.Parallel()
+
 	b := newBank(t, 10_000, 0, Config{})
 	seeded := b.count("SELECT count(*) FROM billing.fallbacks WHERE currency = 'USD' AND body = " +
 		`'{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.05","web_search":"0.025"}}'`)
@@ -458,6 +466,8 @@ func TestFallbackSettings(t *testing.T) {
 
 // TestStartChecksFallbacks: Start refuses fallback rows that fail the check, or no USD row, before it registers.
 func TestStartChecksFallbacks(t *testing.T) {
+	t.Parallel()
+
 	for name, statement := range map[string]string{
 		"an invalid row":               `UPDATE billing.fallbacks SET body = replace(body, '"markup":"1.2"', '"markup":"0.5"')`,
 		"a row that is no JSON":        `UPDATE billing.fallbacks SET body = '{'`,
@@ -479,6 +489,8 @@ func TestStartChecksFallbacks(t *testing.T) {
 }
 
 func TestUnlistedModelTierBecomesAMissingItem(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name      string
 		declared  bool

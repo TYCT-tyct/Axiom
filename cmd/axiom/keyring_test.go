@@ -47,14 +47,25 @@ func (f rotationFixture) seed() []rotationEnvelope {
 	keys := masterKeys(f.t)
 	supplier, credential, group := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	user := f.text("SELECT id::text FROM accounts.users")
-	for i, id := range []string{user, supplier.String(), credential.String()} {
+	site := f.text("SELECT site_id::text FROM accounts.users")
+	provider := uuid.NewV7()
+	for i, id := range []string{user, provider.String(), supplier.String(), credential.String()} {
 		store := f.r.Stores[i]
 		sealed := keys.Seal(secret.New("planted rotation plaintext"), secret.Location{
 			Table: store.Schema + "." + store.Table, RowID: id, Purpose: store.Purpose,
 		})
 		f.before = append(f.before, rotationEnvelope{store, id, sealed})
 	}
-	if err := f.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+	if err := f.seedRows(ctx, supplier, group, site); err != nil {
+		f.t.Fatal(err)
+	}
+	return f.before
+}
+
+// seedRows plants a row in every store's table: the supplier credential row also names its supplier and group, and the
+// site's provider row also names the site.
+func (f rotationFixture) seedRows(ctx context.Context, supplier, group uuid.UUID, site string) error {
+	return f.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO suppliers.suppliers
 			(id, owner_scope, name, kind, origin, upstream_account, native_unit, settlement_currency, mgmt_egress_id)
 			VALUES ($1, 'platform', 'rotation', 'newapi', 'https://rotation.example', 'account', 'usd', 'USD', 'direct')`, supplier); err != nil {
@@ -67,6 +78,9 @@ func (f rotationFixture) seed() []rotationEnvelope {
 		}
 		queries := []string{
 			`UPDATE accounts.users SET totp_ciphertext=$2, totp_nonce=$3, totp_wrapped_dek=$4, totp_key_version=$5 WHERE id=$1`,
+			`INSERT INTO accounts.site_oauth_providers (id, site_id, provider, client_id, client_secret_ciphertext,
+				client_secret_nonce, client_secret_wrapped_dek, client_secret_key_version)
+				VALUES ($1, $2, 'github', 'rotation', $3, $4, $5, $6)`,
 			`INSERT INTO suppliers.supplier_logins (supplier_id, kind, ciphertext, nonce, wrapped_dek, key_version)
 				VALUES ($1, 'token', $2, $3, $4, $5)`,
 			`INSERT INTO suppliers.credentials
@@ -74,19 +88,25 @@ func (f rotationFixture) seed() []rotationEnvelope {
 				VALUES ($1, $2, $3, $4, $5, $6, $7, 'rotation', 'active', 1)`,
 		}
 		for i, row := range f.before {
-			args := []any{row.id, row.sealed.Ciphertext, row.sealed.Nonce, row.sealed.WrappedDEK, int64(row.sealed.KeyVersion)}
-			if i == 2 {
-				args = append(args, supplier, group)
-			}
-			if _, err := tx.Exec(ctx, queries[i], args...); err != nil {
+			if _, err := tx.Exec(ctx, queries[i], envelopeArgs(row, i, site, supplier, group)...); err != nil {
 				return err
 			}
 		}
 		return nil
-	}); err != nil {
-		f.t.Fatal(err)
+	})
+}
+
+// envelopeArgs is the values one store's row takes; the site's provider row also names the site and the supplier
+// credential row its supplier and group.
+func envelopeArgs(row rotationEnvelope, index int, site string, supplier, group uuid.UUID) []any {
+	args := []any{row.id, row.sealed.Ciphertext, row.sealed.Nonce, row.sealed.WrappedDEK, int64(row.sealed.KeyVersion)}
+	switch index {
+	case 1:
+		return []any{row.id, site, row.sealed.Ciphertext, row.sealed.Nonce, row.sealed.WrappedDEK, int64(row.sealed.KeyVersion)}
+	case 3:
+		return append(args, supplier, group)
 	}
-	return f.before
+	return args
 }
 
 func (f rotationFixture) run(args ...string) string {
@@ -116,7 +136,7 @@ func (f rotationFixture) read(row rotationEnvelope) secret.Sealed {
 func TestKeyringRotationEndToEnd(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
-	f.addAndActivate("2")
+	f.addAndActivate()
 	// A rotated read is only useful once the data written before the switch is readable under the new version.
 	if out := f.run("rewrap", "--batch-size", "1", "--max-batches", "1"); !strings.Contains(out, `"paused"`) {
 		t.Fatalf("bounded run did not pause: %s", out)
@@ -124,8 +144,8 @@ func TestKeyringRotationEndToEnd(t *testing.T) {
 	if out := f.run("rewrap", "--batch-size", "1"); !strings.Contains(out, `"done"`) {
 		t.Fatalf("resume did not finish: %s", out)
 	}
-	if got := f.rewrapped(); got != "3" {
-		t.Fatalf("rewrapped/audited %s rows, want 3", got)
+	if got := f.rewrapped(); got != "4" {
+		t.Fatalf("rewrapped/audited %s rows, want 4", got)
 	}
 	// Adding a version that exists, and activating the active one, must change nothing.
 	audits := f.text("SELECT count(*)::text FROM platform.audit_log WHERE action LIKE 'keyring.%'")
@@ -164,9 +184,9 @@ func (f rotationFixture) verifyRetired() {
 
 // addAndActivate runs the two lifecycle commands of a rotation and checks what adding alone must not do: change the
 // write version, or leave the new key unusable for later reads.
-func (f rotationFixture) addAndActivate(version string) {
+func (f rotationFixture) addAndActivate() {
 	f.t.Helper()
-	f.run("add", "--version", version)
+	f.run("add", "--version", "2")
 	ring, status, err := f.r.Check(f.t.Context())
 	if err != nil || status.Active != 1 || len(status.Readable) != 2 {
 		f.t.Fatalf("adding activated a write key or lost a readable key: %+v, %v", status, err)
@@ -174,13 +194,25 @@ func (f rotationFixture) addAndActivate(version string) {
 	if ring.Seal(secret.New("new data"), secret.Location{Table: "test", RowID: "1", Purpose: "test"}).KeyVersion != 1 {
 		f.t.Fatal("a newly added readable key was used for writes")
 	}
-	f.run("activate", "--version", version)
+	f.run("activate", "--version", "2")
 	if err := f.r.Retire(f.t.Context(), 1); err == nil || !strings.Contains(err.Error(), "still referenced") {
 		f.t.Fatalf("retired a referenced key: %v", err)
 	}
 	if err := f.r.Retire(f.t.Context(), 2); err == nil {
 		f.t.Fatal("retired the active key")
 	}
+}
+
+// seeded is the planted envelope of one table; the inventory order is not part of the tests' contract.
+func (f rotationFixture) seeded(table string) rotationEnvelope {
+	f.t.Helper()
+	for _, row := range f.before {
+		if row.store.Table == table {
+			return row
+		}
+	}
+	f.t.Fatalf("no envelope seeded in %s", table)
+	return rotationEnvelope{}
 }
 
 // rewrapped is the number of envelopes the rewrap audit entries report, which is also the number of committed batches.
@@ -231,7 +263,7 @@ func TestKeyringInterruptedRewrapResumes(t *testing.T) {
 		t.Fatalf("interruption committed %s envelopes, want one", got)
 	}
 	f.run("rewrap", "--batch-size", "1")
-	if got := f.text("SELECT sum((detail->>'count')::int)::text FROM platform.audit_log WHERE action='keyring.rewrap'"); got != "3" {
+	if got := f.text("SELECT sum((detail->>'count')::int)::text FROM platform.audit_log WHERE action='keyring.rewrap'"); got != "4" {
 		t.Fatalf("resume skipped or repeated envelopes: %s", got)
 	}
 }
@@ -363,7 +395,7 @@ func TestKeyringOutputFailureLeavesCommittedCheckpoint(t *testing.T) {
 		t.Fatalf("output failure: %v", err)
 	}
 	f.run("rewrap")
-	if got := f.text("SELECT sum((detail->>'count')::int)::text FROM platform.audit_log WHERE action='keyring.rewrap'"); got != "3" {
+	if got := f.text("SELECT sum((detail->>'count')::int)::text FROM platform.audit_log WHERE action='keyring.rewrap'"); got != "4" {
 		t.Fatalf("output failure lost checkpoint: %s", got)
 	}
 }
@@ -388,7 +420,7 @@ func TestKeyringRewrapIncludesWebhookSigningKeys(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	f.addAndActivate("2")
+	f.addAndActivate()
 	f.run("rewrap")
 	ring, _, err := f.r.Check(t.Context())
 	if err != nil {

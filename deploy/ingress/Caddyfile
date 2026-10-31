@@ -98,19 +98,15 @@
   }
 }
 
-# The admin hostname, answering 403 everywhere but the configured ranges. Their default is this machine alone, so a
-# forgotten variable closes the listener instead of publishing it.
+# The admin hostname. The program's admin listener enforces AXIOM_ADMIN_SOURCES, reading the client address from the
+# X-Forwarded-For that this proxy adds, so the allowed ranges live in one place and Caddy only terminates TLS. The default
+# there is this machine alone, so a forgotten value closes the admin site instead of publishing it.
 {$AXIOM_EDGE_ADMIN_HOST} {
   tls {
     issuer {$AXIOM_EDGE_TLS_ISSUER:acme}
   }
 
   header Strict-Transport-Security "max-age=31536000"
-
-  @offSite not remote_ip {$AXIOM_EDGE_ADMIN_ALLOW_CIDRS:127.0.0.1/32 ::1/128}
-  handle @offSite {
-    respond 403
-  }
 
   handle {
     reverse_proxy axiom:8082

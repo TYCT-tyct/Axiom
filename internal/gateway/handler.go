@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 	"uuid"
 
@@ -24,6 +25,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
+	"axiom/internal/websearch"
 )
 
 // Run takes a call that has been admitted: it tries the route, relays the answer, meters and settles (the steps after
@@ -51,24 +53,30 @@ type Deps struct {
 	// KV is the shared cache the precheck counts in, and nil is single-core mode: the counts stay in this process, as
 	// they were before the cache (internal/platform/kv/README.md「配置与启动」).
 	KV *kv.Client
+	// Outstanding is the node's drain counter, the one its Executor counts on: a request is counted from the gate until
+	// ServeHTTP returns, and the settlement of a lost admission until it is written.
+	Outstanding *Outstanding
+	// Search runs the web plugin through the deployment's backend; nil means no backend is configured, and every
+	// request that asks for web search keeps its documented refusal.
+	Search websearch.Searcher
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
 type Handler struct {
 	Deps
-	mux     *http.ServeMux
-	admitTx func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
+	mux          *http.ServeMux
+	admitTx      func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
+	admitBatchTx func(context.Context, []accounts.AdmitCall, func(pg.Tx, []accounts.Admission, []error) error) error
 
-	charges    *billing.ChargeReader
-	background *background             // settlements of lost admissions
-	outage     *outage                 // the dependency outage being told, if any
-	listings   atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
+	charges  *billing.ChargeReader
+	outage   *outage                 // the dependency outage being told, if any
+	listings atomic.Pointer[listing] // the model list, encoded for the catalog snapshot it was last asked for
 }
 
 // complete reports whether every dependency is there.
 func (d Deps) complete() bool {
 	return d.Accounts != nil && d.Catalog != nil && d.Router != nil && d.Billing != nil && d.Limits != nil && d.Memory != nil &&
-		d.Run != nil && d.Logger != nil && d.Models != nil
+		d.Run != nil && d.Logger != nil && d.Models != nil && d.Outstanding != nil
 }
 
 // NewHandler checks the dependencies and builds the routes.
@@ -79,10 +87,11 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, background: newBackground(), outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
+	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, admitBatchTx: d.Accounts.AdmitBatch, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
+			"/completions": protocol.Completions, "/embeddings": protocol.Embeddings, "/rerank": protocol.Rerank,
 		} {
 			h.mux.HandleFunc("POST "+prefix+path, h.call(format, false))
 			h.mux.HandleFunc("GET "+prefix+path, refuseUpgrade(format))
@@ -99,6 +108,10 @@ func NewHandler(d Deps) (*Handler, error) {
 // number is that ID, and every response carries it as X-Generation-Id beside Public's X-Request-ID, errors and the
 // routes that are not calls included.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The drain counts the request from the moment it passes the gate, not from Run: a request can still be reading
+	// its body when the drain begins, and starting a stream after it would otherwise escape the drain. What it hands
+	// to the background is counted before this is released (Outstanding).
+	defer h.Outstanding.add()()
 	w.Header().Set("X-Generation-Id", httpserver.RequestID(r.Context()))
 	if _, pattern := h.mux.Handler(r); pattern == "" { // no route took it: the mux's own answer is plain text
 		h.refuseUnrouted(w, r)
@@ -160,10 +173,12 @@ func isMessagesPath(path string) bool {
 // reservation covers. Run gets it; nothing in it changes after that but what Run does through its methods.
 type Call struct {
 	ID        uuid.UUID // the request ID, which is also the call number
+	At        time.Time // one start for the call log and the reservation: the request's arrival, before admission
 	Format    protocol.Format
 	Compact   bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
 	Request   protocol.Request
 	Body      []byte
+	search    string      // the web plugin's query, read before admission and never logged
 	Header    http.Header // the client's values of the headers that may go upstream, which headers.go derives per attempt
 	Session   routing.SessionKey
 	Admission accounts.Admission
@@ -177,6 +192,8 @@ type Call struct {
 	ip          netip.Addr
 	snap        *catalog.Snapshot
 	models      []catalog.ModelID
+	auto        bool // the request named openrouter/auto: routing ranks every model the key may call
+	free        bool // the request named openrouter/free: routing ranks only the free models the key may call
 	sticky      routing.EndpointID
 	stickyCache *kv.Client
 	stickyKey   string
@@ -278,7 +295,7 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol
 	if err != nil {
 		return nil, err
 	}
-	c := &Call{ID: id, Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: h.clientIP(r)}
+	c := &Call{ID: id, At: time.Now(), Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: h.clientIP(r)}
 	if err := h.take(w, r, c); err != nil {
 		if !errors.Is(err, errCommitUnknown) {
 			c.Done()
@@ -313,6 +330,15 @@ func (h *Handler) currentCatalog() (*catalog.Snapshot, error) {
 // admitDB runs an admission transaction; one that commits ends a database outage.
 func (h *Handler) admitDB(ctx context.Context, caller accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
 	err := h.admitTx(ctx, caller, req, fn)
+	if err == nil {
+		h.outage.recovered(depDatabase)
+	}
+	return err
+}
+
+// admitDBBatch runs an admission batch; one that commits ends a database outage.
+func (h *Handler) admitDBBatch(ctx context.Context, calls []accounts.AdmitCall, fn func(pg.Tx, []accounts.Admission, []error) error) error {
+	err := h.admitBatchTx(ctx, calls, fn)
 	if err == nil {
 		h.outage.recovered(depDatabase)
 	}
@@ -367,29 +393,37 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	if req.Previous != "" { // continuing a stored response is M2 (docs/domains/gateway.md「Responses 的会话状态」)
-		return invalid("previous_response_id is not supported yet.")
-	}
-	if c.Compact && req.Stream { // the compact endpoint answers a whole reply (docs/domains/gateway.md「转发规则」)
-		return invalid("The compact endpoint answers one reply, not a stream; leave stream out or set it to false.")
+	if err := unsupportedRequest(c, &req); err != nil {
+		return err
 	}
 	over, names, err := readRouting(&req, body)
 	if err != nil {
+		return err
+	}
+	onlineWebPlugin(&req, names.online)
+	query, ref := h.checkWebSearch(&req, body)
+	if ref != nil {
+		return ref
+	}
+	c.search = query
+	if err := pinnedProvider(&req, over); err != nil {
 		return err
 	}
 	snap, err := h.currentCatalog()
 	if err != nil {
 		return err
 	}
-	models, err := resolve(snap, names)
+	models, err := resolveModels(snap, names, &req)
 	if err != nil {
 		return err
 	}
+	web := req.Web
 	body, req, err = h.compress(c, body, req, snap, models)
 	if err != nil {
 		return err
 	}
-	c.Body, c.Request, c.snap, c.models, c.over = body, req, snap, models, over
+	restoreWeb(&req, web)
+	c.Body, c.Request, c.snap, c.models, c.auto, c.free, c.over = body, req, snap, models, names.auto, names.free, over
 	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
 	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {
 		return invalid("x-session-id must be valid UTF-8 with at most 256 characters.")
@@ -421,4 +455,26 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, format protocol.F
 		h.Logger.Warn("a request was turned away", "request_id", httpserver.RequestID(r.Context()), "status", ref.Status, "err", err)
 	}
 	writeRefusal(w, format, ref)
+}
+
+// pinnedProvider refuses a file reference the client did not pin to one provider: a file id is the supplier account's
+// resource, not content, and the plan is cut to a single attempt, so the id can only reach that provider (protocol
+// README.md「跨格式转换」).
+func pinnedProvider(req *protocol.Request, over routing.Override) error {
+	if req.FileRefs > 0 && len(over.OnlyNames) != 1 {
+		return invalid("A file reference (file_id) is only sent back to the provider that issued it: name that one provider in provider.only.")
+	}
+	return nil
+}
+
+// unsupportedRequest refuses what this gateway does not serve yet: continuing a stored response is M2, and the compact
+// endpoint answers one reply (docs/domains/gateway.md「Responses 的会话状态」「转发规则」).
+func unsupportedRequest(c *Call, req *protocol.Request) error {
+	if req.Previous != "" {
+		return invalid("previous_response_id is not supported yet.")
+	}
+	if c.Compact && req.Stream {
+		return invalid("The compact endpoint answers one reply, not a stream; leave stream out or set it to false.")
+	}
+	return nil
 }

@@ -17,10 +17,56 @@ type need struct {
 	req    *protocol.Request
 	preset *Preset
 	over   *Override
+	auto   bool                   // rank across every model: the request named openrouter/auto
+	free   bool                   // rank across the free models: the request named openrouter/free
 	tokens int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
 	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
 	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
 	now    time.Time
+}
+
+// attempts is how many endpoints a plan may try: the preset's or the router's default, and one for a file reference,
+// whose id is the supplier account's and can only reach the endpoint that holds it.
+func (r *Router) attempts(n *need) int {
+	if n.in.FileRef {
+		return 1
+	}
+	return orDefault(n.preset.MaxAttempts, r.cfg.MaxAttempts)
+}
+
+// rankAll reports whether one ranking spans every model rather than each model's endpoints first: a global sort, or
+// openrouter/auto or openrouter/free, whose whole choice is a comparison between models.
+func (n *need) rankAll() bool { return n.over.SortGlobal || n.auto || n.free }
+
+// rankModels ranks the endpoints of every model the request may reach: the models it names, every model in the snapshot
+// for openrouter/auto, or the free models for openrouter/free; both routers let the ranking choose the model. It records
+// why a model was left out.
+func (r *Router) rankModels(snap *Snapshot, n *need, rec *Record) []ranked {
+	models := n.in.Models
+	switch {
+	case n.in.Auto:
+		models = snap.models
+	case n.in.Free:
+		models = snap.free
+	}
+	var order []ranked
+	var seen []catalog.ModelID
+	for _, m := range models {
+		if slices.Contains(seen, m) { // a model named twice is one model: its endpoints are ranked once
+			continue
+		}
+		seen = append(seen, m)
+		if !n.in.Admission.allows(m) {
+			rec.Excluded = append(rec.Excluded, Excluded{Reason: NotAllowed})
+			continue
+		}
+		cands := snap.byModel[m]
+		if len(cands) == 0 {
+			rec.Excluded = append(rec.Excluded, Excluded{Reason: NoCandidates})
+		}
+		order = append(order, r.rank(cands, n, rec)...)
+	}
+	return order
 }
 
 // Plan makes the route of a request: the candidates of the first model that survive the filters, in order, then the
@@ -37,33 +83,18 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		return Plan{}, nil, ErrUnknownPreset
 	}
 	n := &need{
-		in: &in, req: in.Req, preset: &preset, over: &in.Override, now: now,
-		tokens: in.Req.TextBytes / billing.InputBytesPerToken, demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
+		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, free: in.Free, now: now,
+		tokens: inputTokens(in.Req), demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
-	var order []ranked
-	var seen []catalog.ModelID
-	for _, m := range in.Models {
-		if slices.Contains(seen, m) { // a model named twice is one model: its endpoints are ranked once
-			continue
-		}
-		seen = append(seen, m)
-		if !in.Admission.allows(m) {
-			rec.Excluded = append(rec.Excluded, Excluded{Reason: NotAllowed})
-			continue
-		}
-		cands := snap.byModel[m]
-		if len(cands) == 0 {
-			rec.Excluded = append(rec.Excluded, Excluded{Reason: NoCandidates})
-		}
-		order = append(order, r.rank(cands, n, &rec)...)
-	}
-	if in.Override.SortGlobal {
+	order := r.rankModels(snap, n, &rec)
+	if n.rankAll() {
 		r.sort(order, n.strategy())
 	}
-	attempts := orDefault(preset.MaxAttempts, r.cfg.MaxAttempts)
+	attempts := r.attempts(n)
 	order = healthOrder(order, n, &rec, min(attempts, MaxEntries))
+	rec.Unmeasured = unmeasured(order, n.strategy())
 	entries := r.entries(order, n, &rec)
 	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
 	if len(entries) == 0 {
@@ -82,15 +113,36 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}, nil, nil
 }
 
+// unmeasured reports whether a fastest-first order has nothing measured to rank by. It reads the order after the
+// breakers: a measured endpoint they take out of the route says nothing about this route's speed.
+func unmeasured(order []ranked, strategy Strategy) bool {
+	return strategy == Fastest && len(order) > 0 && !slices.ContainsFunc(order, func(c ranked) bool { return c.Throughput > 0 })
+}
+
+// inputTokens is the text a candidate's context must hold: one input's, not the sum of a batch's, which direct
+// formats take one at a time.
+func inputTokens(req *protocol.Request) int64 {
+	text := req.TextBytes + req.SearchBytes
+	if req.MaxInputBytes > 0 {
+		text = req.MaxInputBytes
+	}
+	return text / billing.InputBytesPerToken
+}
+
 // DemandOf is the request as billing's quote reads it, so the length that bounds the price limits is billing's own
 // (billing.InputBound), and the gateway reserves for the same demand it was routed by.
 func DemandOf(req *protocol.Request) billing.Demand {
 	d := billing.Demand{
-		TextBytes: req.TextBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
+		TextBytes: req.TextBytes + req.SearchBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
+		Direct: req.Format.Direct(), InputBytes: req.MaxInputBytes,
 		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
 	}
-	if req.Needs.Has(protocol.WebSearch) {
+	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.WebSearches})
+	}
+	if req.Web != nil {
+		// The gateway's web plugin runs one external search before the completion; it is a flat per-use charge.
+		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: 1, Flat: true})
 	}
 	if req.Needs.Has(protocol.CodeExecution) {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemCodeExecution, MaxUses: req.CodeExecutions})
@@ -154,8 +206,11 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	// gateway reads: the format the endpoint is called in, not the client's, since a converted call is metered where it
 	// is made. A model without the ability has no reasoning to miss.
 	reasoning := c.Caps.Has(protocol.Reasoning)
-	segmentable := !n.in.NoSegments && c.Streams && c.Cancels && (!reasoning || c.ReasoningVisible.Has(format)) &&
-		!n.req.HidesReasoning && c.OutputSpeed > 0 && r.cfg.Segments.Output > 0 && out > r.cfg.Segments.Output+allowance
+	// A completion request is reserved in full: its n choices and every prompt generate at once, and a first segment
+	// would reserve a fraction of an amount the documentation promises whole (docs/domains/billing.md「决策与理由」).
+	segmentable := !n.in.NoSegments && n.req.Format != protocol.Completions && c.Streams && c.Cancels &&
+		(!reasoning || c.ReasoningVisible.Has(format)) && !n.req.HidesReasoning && c.OutputSpeed > 0 &&
+		r.cfg.Segments.Output > 0 && out > r.cfg.Segments.Output+allowance
 	target := c.Target
 	target.Format = format
 	target.Streams = c.Streams // the request sent asks for a stream, which the gateway relays or aggregates
@@ -166,35 +221,43 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	limits.OpenAIUsage = format != protocol.Messages // the call format decides whose usage semantics the reply has
 	return Entry{
 		Exchange: c.Exchange,
-		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, Price: c.Price, Limits: limits, MaxOutput: out,
+		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Price: c.Price, Limits: limits, MaxOutput: out,
 		Segmentable: segmentable,
 	}
 }
 
 // callFormat is the format the endpoint is called in for the request, and whether it can serve it at all. A request of
-// the endpoint's own format is called in it. Otherwise Messages/Responses use Chat;
-// Chat uses Messages before Responses (docs/domains/gateway.md「转发规则」).
-// NativeOnly says only the request's own format will do.
+// the endpoint's own format is called in it. Otherwise Messages/Responses use Chat, then the other of the two; Chat uses
+// Messages before Responses (docs/domains/gateway.md「转发规则」). Every pair converts, so what is left is whether the
+// endpoint has a format to convert to at all. NativeOnly says only the request's own format will do.
 func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	f := n.req.Format
 	if n.in.NativeOnly {
 		return f, c.Native.Has(f)
 	}
-	if f != protocol.Chat {
-		if c.Native.Has(f) {
-			return f, true
-		}
-		if c.Served.Has(f) && c.Native.Has(protocol.Chat) {
-			return protocol.Chat, true
-		}
-		return f, c.Served.Has(f)
+	if !f.Convertible() {
+		// A direct call and a legacy completion have no conversion: the endpoint must speak the client's format.
+		return f, c.Native.Has(f)
 	}
-	for _, g := range [...]protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
-		if c.Native.Has(g) {
-			return g, true
-		}
+	if c.Native.Has(f) {
+		return f, true
 	}
-	return f, false
+	if f == protocol.Chat {
+		for _, g := range [...]protocol.Format{protocol.Messages, protocol.Responses} {
+			if c.Native.Has(g) {
+				return g, true
+			}
+		}
+		return f, false
+	}
+	if c.Native.Has(protocol.Chat) {
+		return protocol.Chat, true
+	}
+	g := protocol.Responses // the other native format of a Messages client, and the other way round
+	if f == protocol.Responses {
+		g = protocol.Messages
+	}
+	return g, c.Native.Has(g)
 }
 
 // check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint
@@ -209,17 +272,8 @@ func check(c *candidate, n *need, price *candidatePrice) (reason Reason, visible
 	if reason = c.unfit(n); reason != 0 {
 		return reason, true
 	}
-	switch {
-	case !n.presetAllows(c, price):
-		return PresetFilter, true
-	case !n.overrideAllows(c, price):
-		return OverrideFilter, true
-	case price.none():
-		return NoPrice, true
-	case c.UnknownItem:
-		return UnknownItem, true
-	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
-		return CoolingDown, true
+	if reason = c.filtered(n, price); reason != 0 {
+		return reason, true
 	}
 	if reason = c.funding(n); reason != 0 {
 		return reason, true
@@ -228,6 +282,26 @@ func check(c *candidate, n *need, price *candidatePrice) (reason Reason, visible
 		return Full, true
 	}
 	return 0, true
+}
+
+// filtered is what a preset or the request's override leaves out before its cost is known: the visible set it allows,
+// whether it is verified when the request asks only for that, its price, and whether it is cooling down.
+func (c *candidate) filtered(n *need, price *candidatePrice) Reason {
+	switch {
+	case !n.presetAllows(c, price):
+		return PresetFilter
+	case n.over.VerifiedOnly && !c.Verified:
+		return NotVerified
+	case !n.overrideAllows(c, price):
+		return OverrideFilter
+	case price.none():
+		return NoPrice
+	case c.UnknownItem:
+		return UnknownItem
+	case c.state.blocked.active(n.now) || c.supplierPause.active(n.now):
+		return CoolingDown
+	}
+	return 0
 }
 
 // funding uses the same demand, output cap and call format as the reservation, but the supplier's native cost plan.
@@ -292,26 +366,36 @@ func (c *candidate) unfit(n *need) Reason {
 	return 0
 }
 
-// streamsFor says the endpoint can answer as the gateway reads the answer: every call but the compact one is read as a
-// stream, which an endpoint that does not stream cannot give it (docs/domains/gateway.md「转发规则」).
-func (c *candidate) streamsFor(n *need) bool { return c.Streams || n.in.NoSegments }
+// streamsFor says the endpoint can answer as the gateway reads the answer: every generation but the compact one is read
+// as a stream, which an endpoint that does not stream cannot give it; a direct call is read whole and needs no stream,
+// whatever the caller set (docs/domains/gateway.md「转发规则」).
+func (c *candidate) streamsFor(n *need) bool {
+	return c.Streams || n.in.NoSegments || n.req.Format.Direct()
+}
 
 // outputLimit is the one rule for how much output an entry at c may produce and whether the request fits c's context,
 // used both to filter and to build the entry, so the two never disagree. The limit is the request's own, if it sets one,
 // held to the endpoint's, or else the endpoint's default. The context holds the input and the output together: a limit
-// the request set that does not fit leaves the endpoint out; a default is cut to what is left of the context.
+// the request set that does not fit leaves the endpoint out; a default is cut to what is left of the context. A direct
+// call generates nothing: its limit is 0, and an input as long as the context fits it.
 func (c *candidate) outputLimit(req *protocol.Request, tokens int64) (limit int64, fits bool) {
+	if req.Format.Direct() {
+		return 0, tokens <= c.Context
+	}
 	limit = c.MaxOutput
-	if req.MaxOutput > 0 && (limit == 0 || req.MaxOutput < limit) {
+	// A request that named its cap sets it even when it is 0: legacy completions' max_tokens 0 asks for the prompt's
+	// logprobs only, and replacing it with the endpoint's default would reserve output nobody can generate.
+	set := req.MaxOutputSet || req.MaxOutput > 0
+	if set && (limit == 0 || req.MaxOutput < limit) {
 		limit = req.MaxOutput
 	}
 	room := c.Context - tokens
 	switch {
 	case room <= 0:
 		return 0, false
-	case req.MaxOutput > 0 && limit > room:
+	case set && limit > room:
 		return 0, false
-	case limit == 0 || limit > room:
+	case !set && limit == 0, limit > room:
 		limit = room
 	}
 	return limit, true
@@ -322,7 +406,13 @@ func (c *candidate) servesFormat(n *need) bool {
 	return ok
 }
 
+// full reports whether the endpoint can take no more calls now: its credentials are all at their concurrency or minute
+// ceilings, or its own in-flight ceiling is reached. The credential view is read here, at the end of the filters, so a
+// route is not frozen to an endpoint that would refuse every attempt (docs/domains/routing.md「容量感知」).
 func (c *candidate) full() bool {
+	if c.Capacity != nil && c.Capacity.Full() {
+		return true
+	}
 	return c.MaxConcurrent > 0 && c.state.inflight.Load() >= c.MaxConcurrent
 }
 
@@ -360,17 +450,25 @@ func (n *need) withinLimit(limit PriceLimit, c *candidate, price *candidatePrice
 
 func listed(ids []SupplierID, id SupplierID) bool { return slices.Contains(ids, id) }
 
+// serveable reports whether some endpoint can serve now. When only slow-full windows keep every other endpoint from
+// serving, their marks are cleared first: a route that starts when a window recovers beats no route at all.
+func serveable(order []ranked) bool {
+	if slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() && !c.slowFull }) {
+		return true
+	}
+	if !slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() }) {
+		return false
+	}
+	for i := range order {
+		order[i].slowFull = false
+	}
+	return true
+}
+
 // healthOrder applies breakers after every request-specific filter, across primary and alternate models.
 func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
-	available := slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() && !c.slowFull })
-	if !available && slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() }) {
-		for i := range order {
-			order[i].slowFull = false
-		}
-		available = true
-	}
-	if !available {
-		orderLastResorts(order, n.over.SortGlobal)
+	if !serveable(order) {
+		orderLastResorts(order, n.rankAll())
 		return order
 	}
 	owned, hasOwned := ownedFallback(order, n.now)

@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
@@ -32,6 +33,7 @@ import (
 // Database is a fresh copy of the migrated template.
 type Database struct {
 	App       string // URL of the application's login role, axiom_app
+	Retention string // URL of the call-log retention job's login role, axiom_retention
 	Migrator  string // URL of the migration administrator, which may create schemas in this database
 	Superuser string // URL of the superuser, for seeding and inspecting from outside the application
 }
@@ -42,6 +44,11 @@ const ClusterEnv = "PGTEST_CLUSTER_URL"
 
 // templateLockKey is the advisory lock that serialises building module templates in a cluster.
 const templateLockKey = 1131
+
+// clusterShmSize is the shared memory of the test cluster's container. PostgreSQL puts a parallel query's segments in
+// /dev/shm; Docker's 64 MiB default ran out when four test packages ran at once, and every query then failed with
+// "could not resize shared memory segment". 512 MiB is a limit, not an allocation.
+const clusterShmSize = 512 << 20
 
 var (
 	once      sync.Once
@@ -74,6 +81,7 @@ func New(t testing.TB, modules ...pg.Module) Database {
 	}
 	return Database{
 		App:       at("axiom_app", "app", name),
+		Retention: at("axiom_retention", "retention", name),
 		Migrator:  at("axiom_migrator", "axiom_migrator", name),
 		Superuser: at("postgres", "postgres", name),
 	}
@@ -217,6 +225,7 @@ func StartCluster(ctx context.Context) (string, func(context.Context) error, err
 	}
 	container, err := postgres.Run(ctx, "postgres:18.6-alpine",
 		postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.BasicWaitStrategies(),
+		testcontainers.WithHostConfigModifier(func(host *container.HostConfig) { host.ShmSize = clusterShmSize }),
 		containertest.WithHostPolicy(),
 		testcontainers.WithCmdArgs("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off",
 			"-c", "max_connections=1000"))
@@ -252,6 +261,7 @@ func prepare(ctx context.Context, container *postgres.PostgresContainer) (string
 	}
 	if err := Run(ctx, at("postgres", "postgres", "postgres"),
 		`CREATE ROLE axiom_app LOGIN PASSWORD 'app'`,
+		`CREATE ROLE axiom_retention LOGIN PASSWORD 'retention'`,
 		`CREATE ROLE axiom_migrator LOGIN CREATEROLE PASSWORD 'axiom_migrator'`,
 		`CREATE DATABASE axiom_template`,
 		`GRANT CREATE ON DATABASE axiom_template TO axiom_migrator`); err != nil {

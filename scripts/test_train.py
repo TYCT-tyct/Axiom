@@ -76,8 +76,8 @@ def ready(number):
 class FakeLand(train.Train):
     """train/main/land holding PRs 1..n, landed by the real land_verified: main's tree is t<k> after k of them."""
 
-    def __init__(self, n, landed=0, changes=None, merge_error=None, dispatch_error=False, diverge=None):
-        self.base, self.dry_run, self.changed = "main", False, 0
+    def __init__(self, n, landed=0, changes=None, merge_error=None, dispatch_error=False, diverge=None, ff=False):
+        self.base, self.dry_run, self.changed, self.ff = "main", False, 0, ff  # ff: the ruleset lets the train push main
         self.cars = [Car(Entry(number, SHA), f"c{number}") for number in range(1, n + 1)]
         self.prs = {number: ready(number) | ({"state": "MERGED"} if number <= landed else {}) for number in range(1, n + 1)}
         self.on_main, self.actions = landed, []
@@ -94,10 +94,17 @@ class FakeLand(train.Train):
         return "elsewhere" if self.diverge == self.on_main else f"t{self.on_main}"
 
     def base_head(self):
-        return f"m{self.on_main}"
+        return self.cars[-1].commit if self.on_main == "tip" else f"m{self.on_main}"
 
     def status(self, *args):
         pass
+
+    def fast_forward(self, tip):
+        self.tried_ff = True
+        if self.ff:
+            self.actions.append("fast-forward")
+            self.on_main = "tip"
+        return self.ff
 
     def merge(self, entry, pr):
         if self.merge_error == entry.number:
@@ -128,27 +135,72 @@ class Landing(unittest.TestCase):
         self.assertEqual(fake.land_verified(), "m3")
         self.assertEqual(fake.actions, ["merge 1", "merge 2", "merge 3", "dispatch", "drop"])
 
+    def test_a_train_lands_in_one_fast_forward_when_the_ruleset_allows_it(self):
+        fake = FakeLand(3, ff=True)
+        self.assertEqual(fake.land_verified(), "c3")
+        # the landing push triggers main's push workflows by itself: landing dispatches no second build
+        self.assertEqual((fake.actions, fake.changed), (["fast-forward", "drop"], 3))
+
+    def test_a_refused_fast_forward_falls_back_to_merging_pr_by_pr(self):
+        fake = FakeLand(2)
+        self.assertEqual(fake.land_verified(), "m2")
+        self.assertEqual((fake.tried_ff, fake.actions), (True, ["merge 1", "merge 2", "dispatch", "drop"]))
+
     def test_nothing_lands_when_any_pr_changed_after_the_build(self):
         # C fixed what A and B broke together, so the train passed; C then left: A+B alone was never tested
         for change in ({"labels": []}, {"baseRefName": "release"}, {"headRefOid": "b" * 40}, {"state": "CLOSED"}):
-            with self.subTest(change=change):
-                fake = FakeLand(3)
-                fake.prs[3] |= change
-                self.assertIsNone(fake.land_verified())
-                self.assertEqual(fake.actions, ["drop"])
+            for ff in (False, True):
+                with self.subTest(change=change, ff=ff):
+                    fake = FakeLand(3, ff=ff)
+                    fake.prs[3] |= change
+                    self.assertIsNone(fake.land_verified())
+                    self.assertEqual(fake.actions, ["drop"])
 
     def test_resume_merges_the_rest_or_only_starts_mains_build(self):
+        # a partly squash-merged train goes on PR by PR even where a fast-forward is allowed: main is no longer its base
         for landed, merges in ((1, ["merge 2", "merge 3"]), (3, [])):  # 3: stopped after the last merge
-            with self.subTest(landed=landed):
-                fake = FakeLand(3, landed=landed)
-                fake.land_verified()
-                self.assertEqual(fake.actions, merges + ["dispatch", "drop"])
+            for ff in (False, True):
+                with self.subTest(landed=landed, ff=ff):
+                    fake = FakeLand(3, landed=landed, ff=ff)
+                    fake.land_verified()
+                    self.assertEqual(fake.actions, merges + ["dispatch", "drop"])
 
-    def test_the_record_stays_until_mains_build_is_dispatched(self):
+    def test_resume_after_a_fast_forward_only_forgets_the_record(self):
+        fake = FakeLand(3, ff=True)
+        fake.on_main = "tip"  # the run stopped after the push; GitHub may not have marked the PRs merged yet
+        fake.prs[2]["headRefOid"] = "b" * 40  # nor does a PR that moved since matter: main holds the tested tip
+        self.assertEqual(fake.land_verified(), "c3")
+        self.assertEqual(fake.actions, ["drop"])
+
+    def test_a_fast_forward_counts_by_where_the_base_is_after_the_push(self):
+        # a refused push (the ruleset) leaves the base; a push whose reply was lost may still have moved it
+        for returncode, base_after, landed in ((1, "m0", False), (1, "c3", True), (0, "c3", True)):
+            with self.subTest(returncode=returncode, base_after=base_after):
+                fake = FakeLand(3)
+                fake.land_url = "git@github.com:x/y.git"
+                fake.base_head = lambda: base_after
+                pushed = mock.Mock(returncode=returncode, stderr="remote: error: GH013: Repository rule violations found" if returncode else "")
+                with mock.patch.object(train, "sh", return_value=pushed) as sh:
+                    self.assertEqual(train.Train.fast_forward(fake, "c3"), landed)
+                sh.assert_called_once_with("git", "push", "-q", "git@github.com:x/y.git", "c3:refs/heads/main", check=False)
+
+    def test_the_landing_push_goes_to_the_configured_remote(self):
+        with mock.patch.object(train, "FLAKY", "/nonexistent/flaky.toml"), \
+                mock.patch.dict(os.environ, {"TRAIN_LAND_URL": "git@github.com:x/y.git"}):
+            self.assertEqual(train.Train("x/y", "main").land_url, "git@github.com:x/y.git")
+        with mock.patch.object(train, "FLAKY", "/nonexistent/flaky.toml"), mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(train.Train("x/y", "main").land_url, "origin")
+
+    def test_the_record_stays_until_the_fallbacks_dispatch_succeeds(self):
         fake = FakeLand(2, dispatch_error=True)
         with self.assertRaises(RuntimeError):
             fake.land_verified()
         self.assertEqual(fake.actions, ["merge 1", "merge 2"])
+
+    def test_a_fast_forward_dispatches_no_build(self):
+        fake = FakeLand(2, dispatch_error=True, ff=True)  # dispatch_main raises, so touching it would fail the landing
+        self.assertEqual(fake.land_verified(), "c2")
+        self.assertEqual(fake.actions, ["fast-forward", "drop"])
 
     def test_a_failed_merge_keeps_the_record_for_the_next_run(self):
         fake = FakeLand(3, merge_error=2)
@@ -289,6 +341,24 @@ class Assembly(unittest.TestCase):
                 self.assertEqual([number for number, _ in repo.ejected], [2])
                 self.assertIn("below an already-applied version", repo.ejected[0][1])
 
+    def test_cars_carry_the_squash_message_and_read_back_from_a_fast_forwarded_base(self):
+        first = self.commit({"a.txt": "a"}, self.start)
+        second = self.commit({"b.txt": "b"}, self.start)
+
+        class Repo(train.Train):
+            def fetch(self, entries):
+                for entry in entries:
+                    train.git("update-ref", f"refs/remotes/pr/{entry.number}", entry.sha)
+
+        repo = Repo("x/y", "main")
+        [landed] = repo.assemble(self.start, [Entry(1, first, "feat(a): add a", "## Background\n\nRefs #9")])
+        [car] = repo.assemble(landed.commit, [Entry(2, second, "fix(b): add b")])  # main fast-forwarded to #1
+        self.assertEqual(train.git("log", "-1", "--format=%B", landed.commit).split("\n\n")[:3],
+                         ["feat(a): add a (#1)", "## Background", "Refs #9"])
+        self.assertEqual(train.git("rev-parse", f"{car.commit}^2"), second)  # GitHub marks #2 merged once this is on main
+        cars, base = train.train_record(train.git("log", "--first-parent", train.RECORD, car.commit))
+        self.assertEqual((cars, base), ([Car(Entry(2, second), car.commit)], landed.commit))
+
 
 class Decisions(unittest.TestCase):
     def test_cut_points_cover_every_prefix_when_the_lane_allows(self):
@@ -361,10 +431,13 @@ class Decisions(unittest.TestCase):
                 self.assertEqual(train.landing_plan(steps), expected)
 
     def test_train_record_reads_the_entries_back_in_order(self):
-        log = f"c3 train: #12 {'c' * 40}\nc2 train: #9 {'b' * 40}\nc1 feat(x): something (#8)\nc0 older\n"
-        cars, base = train.train_record(log)
+        # c1 is a car of the train fast-forwarded before this one, so the walk stops at the base the cars name
+        base, older = "1" * 40, "0" * 40
+        log = (f"c3 #12 {'c' * 40} on {base}\nc2 #9 {'b' * 40} on {base}\n{base} #8 {'d' * 40} on {older}\n"
+               f"{older} \n")
+        cars, start = train.train_record(log)
         self.assertEqual(cars, [Car(Entry(9, "b" * 40), "c2"), Car(Entry(12, "c" * 40), "c3")])
-        self.assertEqual(base, "c1")
+        self.assertEqual(start, base)
 
     def test_squash_body_drops_session_links(self):
         self.assertEqual(train.squash_body("Why.\n\nhttps://claude.ai/code/session_x\nRefs #1"), "Why.\n\nRefs #1")

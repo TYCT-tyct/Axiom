@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // nodeRoutes are what the node's listeners serve and the call path behind the public one.
@@ -29,6 +30,7 @@ type nodeRoutes struct {
 // it, and the admin's API for the admin listener. Opening an account also opens its balance (openBalance).
 func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
 	recorder *observability.Recorder, exit *egress.Client, cache *kv.Client, recovery *accounts.PasswordRecovery,
+	registration *accounts.Registration,
 ) (nodeRoutes, error) {
 	// The accounts module and the call path take their in-process limits from one value: a key lookup that misses the
 	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
@@ -42,7 +44,8 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	service, err := accounts.NewService(db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: p.hashes, Keyring: p.master, HashConcurrency: p.cfg.hashConcurrency,
 		HashWait: p.cfg.hashWait, LookupSlot: limits.KeyLookupSlot, Meter: tel.Metrics.Meter("axiom/accounts"),
-		Recovery: recovery, OnAccountOpened: openBalance, Cache: cache, LoginKey: p.loginKey,
+		Recovery: recovery, Registration: registration, OnAccountOpened: openBalance, Cache: cache, LoginKey: p.loginKey,
+		Egress: exit,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
@@ -58,15 +61,38 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if err != nil {
 		return nodeRoutes{}, err
 	}
+	verify := claimedByCatalog(cat)
+	if !p.cfg.modelVerification {
+		verify = nil
+	}
+	search, err := p.search(ctx, db)
+	if err != nil {
+		return nodeRoutes{}, err
+	}
+	var searcher websearch.Searcher
+	if search.Configured() {
+		if searcher, err = websearch.Open(search, exit); err != nil {
+			return nodeRoutes{}, err
+		}
+	}
 	calls, err := startCallPath(ctx, callDeps{
-		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, gate: gate, limits: limits,
+		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, search: searcher,
+		gate: gate, limits: limits,
 		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger, proxies: p.cfg.trustedProxies,
 		kv:     cache,
-		alerts: p.alerts, healthMode: p.cfg.healthMode, nodeID: p.cfg.valkey.NodeID,
+		alerts: p.alerts, healthMode: p.cfg.healthMode, nodeID: p.cfg.valkey.NodeID, verify: verify,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
 	}
+	return p.listen(calls, service, cat, supplierAdmin, exit, db, tel, logger)
+}
+
+// listen opens payments and puts the console, the model calls, the key and payment APIs in front of the call path on
+// the public listener, and the admin's API on its own.
+func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *catalog.Catalog, supplierAdmin *suppliers.Admin,
+	exit *egress.Client, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
+) (nodeRoutes, error) {
 	pay, err := payments.Open(payments.Config{
 		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins, Proxies: p.cfg.trustedProxies,
 	})
@@ -74,14 +100,28 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		return nodeRoutes{}, err
 	}
 	public := withModelCalls(
-		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, db: db},
+		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})
 	public = withPaymentCallbacks(public, pay.Notify())
 	adminAPI := newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger)
-	adminAPI.keys, adminAPI.exit, adminAPI.smtp = p.master, exit, p.cfg.smtp
+	adminAPI.keys, adminAPI.exit, adminAPI.smtp, adminAPI.search = p.master, exit, p.cfg.smtp, p.cfg.search
 	admin := adminRoutes(adminAPI,
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
+}
+
+// search reads the backend this node searches through: the admin's saved configuration when there is one, the
+// environment's otherwise.
+func (p consoleParts) search(ctx context.Context, db *pg.DB) (websearch.Config, error) {
+	cfg := p.cfg.search
+	err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		stored, found, err := websearch.StoredConfig(ctx, tx, p.master)
+		if found {
+			cfg = stored
+		}
+		return err
+	})
+	return cfg, err
 }

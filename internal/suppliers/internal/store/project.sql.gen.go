@@ -12,6 +12,18 @@ import (
 	"uuid"
 )
 
+const clearProjectedGroupPool = `-- name: ClearProjectedGroupPool :exec
+UPDATE suppliers.supplier_groups
+SET pool_accounts = NULL, pool_failed = NULL, pool_usable = NULL, pool_headroom = NULL, pool_capacity = NULL,
+    pool_low = NULL, pool_observed_at = NULL
+WHERE id = $1
+`
+
+func (q *Queries) ClearProjectedGroupPool(ctx context.Context, db DBTX, id uuid.UUID) error {
+	_, err := db.Exec(ctx, clearProjectedGroupPool, id)
+	return err
+}
+
 const ensureCostSchedule = `-- name: EnsureCostSchedule :one
 WITH made AS (
     INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
@@ -106,8 +118,53 @@ func (q *Queries) InsertProjectedGroup(ctx context.Context, db DBTX, arg InsertP
 	return err
 }
 
+const listGroupPoolCapacities = `-- name: ListGroupPoolCapacities :many
+SELECT upstream_ref, pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low
+FROM suppliers.supplier_groups
+WHERE supplier_id = $1 AND pool_accounts IS NOT NULL
+ORDER BY upstream_ref
+`
+
+type ListGroupPoolCapacitiesRow struct {
+	UpstreamRef  string
+	PoolAccounts *int32
+	PoolFailed   *int32
+	PoolUsable   *int32
+	PoolHeadroom *int32
+	PoolCapacity *int32
+	PoolLow      bool
+}
+
+func (q *Queries) ListGroupPoolCapacities(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListGroupPoolCapacitiesRow, error) {
+	rows, err := db.Query(ctx, listGroupPoolCapacities, supplierID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGroupPoolCapacitiesRow
+	for rows.Next() {
+		var i ListGroupPoolCapacitiesRow
+		if err := rows.Scan(
+			&i.UpstreamRef,
+			&i.PoolAccounts,
+			&i.PoolFailed,
+			&i.PoolUsable,
+			&i.PoolHeadroom,
+			&i.PoolCapacity,
+			&i.PoolLow,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectedAliases = `-- name: ListProjectedAliases :many
-SELECT a.supplier_group_id, a.upstream_name, COALESCE(r.model_id, a.model_id) AS model_id
+SELECT a.supplier_group_id, a.upstream_name, COALESCE(r.model_id, a.model_id) AS model_id, a.formats
 FROM suppliers.supplier_aliases a
 LEFT JOIN LATERAL (SELECT model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY revision DESC LIMIT 1) r ON true
 WHERE a.supplier_id = $1
@@ -117,6 +174,7 @@ type ListProjectedAliasesRow struct {
 	SupplierGroupID *uuid.UUID
 	UpstreamName    string
 	ModelID         uuid.UUID
+	Formats         []string
 }
 
 func (q *Queries) ListProjectedAliases(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListProjectedAliasesRow, error) {
@@ -128,7 +186,12 @@ func (q *Queries) ListProjectedAliases(ctx context.Context, db DBTX, supplierID 
 	var items []ListProjectedAliasesRow
 	for rows.Next() {
 		var i ListProjectedAliasesRow
-		if err := rows.Scan(&i.SupplierGroupID, &i.UpstreamName, &i.ModelID); err != nil {
+		if err := rows.Scan(
+			&i.SupplierGroupID,
+			&i.UpstreamName,
+			&i.ModelID,
+			&i.Formats,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -191,24 +254,34 @@ func (q *Queries) ListProjectedEndpoints(ctx context.Context, db DBTX, supplierI
 
 const listProjectedGroups = `-- name: ListProjectedGroups :many
 
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts::text AS facts, present
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts::text AS facts, present,
+    pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low, pool_observed_at
 FROM suppliers.supplier_groups
 WHERE supplier_id = $1
 ORDER BY upstream_ref
 `
 
 type ListProjectedGroupsRow struct {
-	ID          uuid.UUID
-	UpstreamRef string
-	Name        string
-	Ratio       string
-	Facts       string
-	Present     bool
+	ID             uuid.UUID
+	UpstreamRef    string
+	Name           string
+	Ratio          string
+	Facts          string
+	Present        bool
+	PoolAccounts   *int32
+	PoolFailed     *int32
+	PoolUsable     *int32
+	PoolHeadroom   *int32
+	PoolCapacity   *int32
+	PoolLow        bool
+	PoolObservedAt *time.Time
 }
 
 // The projection of a sync's state onto the tables routing and the back office read (internal/suppliers/README.md「持久化」).
 // Reads feed the projection's difference decisions. The row writes are the regression oracle for batch.go;
 // production applies only the collected differences through ProjectionWrites, so replay changes nothing.
+// The pool columns are what the last read of the pool reported: the projection compares them so that a listing read
+// twice writes no row, and a pool whose numbers did not change writes none either.
 func (q *Queries) ListProjectedGroups(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListProjectedGroupsRow, error) {
 	rows, err := db.Query(ctx, listProjectedGroups, supplierID)
 	if err != nil {
@@ -225,6 +298,13 @@ func (q *Queries) ListProjectedGroups(ctx context.Context, db DBTX, supplierID u
 			&i.Ratio,
 			&i.Facts,
 			&i.Present,
+			&i.PoolAccounts,
+			&i.PoolFailed,
+			&i.PoolUsable,
+			&i.PoolHeadroom,
+			&i.PoolCapacity,
+			&i.PoolLow,
+			&i.PoolObservedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -301,6 +381,40 @@ UPDATE suppliers.supplier_groups SET present = false WHERE id = $1 AND present
 
 func (q *Queries) SetProjectedGroupAbsent(ctx context.Context, db DBTX, id uuid.UUID) error {
 	_, err := db.Exec(ctx, setProjectedGroupAbsent, id)
+	return err
+}
+
+const setProjectedGroupPool = `-- name: SetProjectedGroupPool :exec
+UPDATE suppliers.supplier_groups
+SET pool_accounts = $1, pool_failed = $2, pool_usable = $3, pool_headroom = $4,
+    pool_capacity = $5, pool_low = $6::boolean, pool_observed_at = $7
+WHERE id = $8
+`
+
+type SetProjectedGroupPoolParams struct {
+	Accounts   *int32
+	Failed     *int32
+	Usable     *int32
+	Headroom   *int32
+	Capacity   *int32
+	Low        bool
+	ObservedAt *time.Time
+	ID         uuid.UUID
+}
+
+// What the pool's management API last reported of the group. NULL where a read has not reported it, which is how a
+// group that left the pool's answer is cleared.
+func (q *Queries) SetProjectedGroupPool(ctx context.Context, db DBTX, arg SetProjectedGroupPoolParams) error {
+	_, err := db.Exec(ctx, setProjectedGroupPool,
+		arg.Accounts,
+		arg.Failed,
+		arg.Usable,
+		arg.Headroom,
+		arg.Capacity,
+		arg.Low,
+		arg.ObservedAt,
+		arg.ID,
+	)
 	return err
 }
 

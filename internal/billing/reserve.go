@@ -71,31 +71,15 @@ func OpenBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID, floor i
 	return nil
 }
 
-// Reserve reserves for request id in tx, the admission's transaction, which must hold the account's scope
-// (README.md「准入里的预留」). It locks the balance row, fences the holder, then reads the counters in a statement
-// that starts after the lock and so sees every change committed before it; quotes the route against what each
-// source allows, and writes the reservation and its three counters in one statement. It returns the kept entries'
-// indexes, or *Insufficient when the preferred entry is unaffordable.
-func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID, d Demand, q []Quotable) (*Hold, []int, error) {
-	q, fallbacks, err := withFallbacks(ctx, tx, q) // before the lock: it reads platform data only
-	if err != nil {
-		return nil, nil, err
-	}
-	balance, usage, err := b.reserveSources(ctx, tx, a)
-	if errors.Is(err, errNoBalance) {
-		return nil, nil, &Insufficient{Source: SourceBalance} // nothing to reserve against, not even a zero price
-	} else if err != nil {
-		return nil, nil, err
-	}
-	r, err := Quote(d, q, b.config.Segments, a.available(balance, usage.WorkspaceUsed, usage.KeyUsed))
-	if insufficient, ok := errors.AsType[*Insufficient](err); ok {
-		return nil, nil, a.transient(insufficient)
-	} else if err != nil {
-		return nil, nil, err
+// reservationParams is the row a reservation writes: the prices it locked, the routes it kept, the counters' windows,
+// and the call's start.
+func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Reservation, fallbacks []string, day, at time.Time) (InsertReservationAtParams, error) {
+	if at.IsZero() {
+		at = time.Now()
 	}
 	prices, locked, err := lockedPrices(q, r.Kept, fallbacks)
 	if err != nil {
-		return nil, nil, err
+		return InsertReservationAtParams{}, err
 	}
 	identifiers := make([]uuid.UUID, len(q)*3)
 	models, endpoints, versions := identifiers[:len(q)], identifiers[len(q):2*len(q)], identifiers[2*len(q):]
@@ -103,22 +87,18 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		versions[i] = q[i].Version
 		models[i], endpoints[i] = uuid.UUID(q[i].Model.ID), q[i].Endpoint
 	}
-	h := &Hold{Reservation: r, id: id, admitted: a, workspaceWindow: usage.Day, keyWindow: usage.Day}
 	rates := frozenRates(q, r.Kept)
 	rateJSON, err := jsonx.MarshalCanonical(rates)
 	if err != nil {
-		return nil, nil, fmt.Errorf("billing: freeze exchange rates: %w", err)
+		return InsertReservationAtParams{}, fmt.Errorf("billing: freeze exchange rates: %w", err)
 	}
-	if err := queries.InsertReservation(ctx, tx, InsertReservationParams{
+	return InsertReservationAtParams{
 		ExchangeRates: rateJSON, PriceVersions: versions,
 		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
-		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
-		LifetimeSeconds: b.config.Lifetime.Seconds(),
-	}); err != nil {
-		return nil, nil, fmt.Errorf("billing: write the reservation: %w", err)
-	}
-	return h, r.Kept, nil
+		WorkspaceWindow: day, KeyWindow: day, Amount: r.Amount.CeilAmount(),
+		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAtUs: at.UnixMicro(),
+	}, nil
 }
 
 // frozenRates keeps missing pairs too, so an absent rate cannot be filled with a later configuration.
@@ -143,10 +123,12 @@ func frozenRates(q []Quotable, kept []int) []platform.ExchangeRate {
 // lock. The amount only grows. A reservation that ended, or a holder that was reaped, gives ErrTerminated; an
 // increase a source cannot afford gives *Insufficient.
 func (b *Billing) Extend(ctx context.Context, h *Hold, r ExtendRequest) error {
-	return b.db.Tx(ctx, h.admitted.Scope, func(tx pg.Tx) error { return b.extend(ctx, tx, h, r) })
+	return b.db.Tx(ctx, h.admitted.Scope, func(tx pg.Tx) error { return b.ExtendIn(ctx, tx, h, r) })
 }
 
-func (b *Billing) extend(ctx context.Context, tx pg.Tx, h *Hold, r ExtendRequest) error {
+// ExtendIn extends h's reservation in tx, a transaction of the account's scope that may hold other money work (the
+// gateway's completion batch). The caller commits the transaction; until it does, the extension is not acknowledged.
+func (b *Billing) ExtendIn(ctx context.Context, tx pg.Tx, h *Hold, r ExtendRequest) error {
 	a := h.admitted
 	balance, err := lockAccount(ctx, tx, a.Account)
 	if err != nil {
@@ -192,32 +174,36 @@ func (b *Billing) extend(ctx context.Context, tx pg.Tx, h *Hold, r ExtendRequest
 // committed is released with no attempt made, and if it rolled back a released tombstone takes the request ID, so the
 // lost admission can never land later. The caller retries a database error; a dead process leaves it to cleanup.
 func (b *Billing) SettleOrphan(ctx context.Context, a Admitted, id uuid.UUID) error {
-	return b.db.Tx(ctx, a.Scope, func(tx pg.Tx) error {
-		if _, err := lockAccount(ctx, tx, a.Account); err != nil {
-			return err
+	return b.db.Tx(ctx, a.Scope, func(tx pg.Tx) error { return b.SettleOrphanIn(ctx, tx, a, id) })
+}
+
+// SettleOrphanIn settles the orphan in tx, a transaction of the account's scope that may hold other money work. The
+// caller commits the transaction.
+func (b *Billing) SettleOrphanIn(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID) error {
+	if _, err := lockAccount(ctx, tx, a.Account); err != nil {
+		return err
+	}
+	row, err := queries.GetReservation(ctx, tx, id)
+	switch {
+	case errors.Is(err, pg.ErrNoRows):
+		err = queries.InsertTombstone(ctx, tx, InsertTombstoneParams{
+			RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
+		})
+	case err == nil && row.State == "pending":
+		h := &Hold{id: id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow}
+		if _, err = queries.ReleaseReservation(ctx, tx, id); err == nil {
+			err = h.addReserved(ctx, tx, -row.Amount)
 		}
-		row, err := queries.GetReservation(ctx, tx, id)
-		switch {
-		case errors.Is(err, pg.ErrNoRows):
-			err = queries.InsertTombstone(ctx, tx, InsertTombstoneParams{
-				RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
-			})
-		case err == nil && row.State == "pending":
-			h := &Hold{id: id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow}
-			if _, err = queries.ReleaseReservation(ctx, tx, id); err == nil {
-				err = h.addReserved(ctx, tx, -row.Amount)
-			}
-		case err == nil: // ended already, and told suppliers so
-			return nil
-		}
-		if err == nil {
-			err = b.ended(ctx, tx, id, a.Site, a.Account)
-		}
-		if err != nil {
-			return fmt.Errorf("billing: settle the orphan %s: %w", id, err)
-		}
+	case err == nil: // ended already, and told suppliers so
 		return nil
-	})
+	}
+	if err == nil {
+		err = b.ended(ctx, tx, id, a.Site, a.Account)
+	}
+	if err != nil {
+		return fmt.Errorf("billing: settle the orphan %s: %w", id, err)
+	}
+	return nil
 }
 
 // ended tells suppliers the request ended, at the database's time.

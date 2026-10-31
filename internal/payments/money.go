@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"math/big"
 	"uuid"
 
 	"axiom/internal/platform"
@@ -20,6 +21,15 @@ type MerchantID uuid.UUID
 // TypeID writes the ID as the API shows it.
 func (id MerchantID) TypeID() string { return merchantPrefix.Encode(uuid.UUID(id)) }
 
+// ParseMerchantID reads a merchant account's ID as the API writes it; a malformed one is ErrNotFound, like an unknown one.
+func ParseMerchantID(s string) (MerchantID, error) {
+	id, err := merchantPrefix.Decode(s)
+	if err != nil {
+		return MerchantID{}, ErrNotFound
+	}
+	return MerchantID(id), nil
+}
+
 // OrderID is an order's ID; its TypeID is the merchant order number sent to the channel.
 type OrderID uuid.UUID
 
@@ -31,6 +41,15 @@ type RefundID uuid.UUID
 
 // TypeID writes the ID as the API and the channel see it.
 func (id RefundID) TypeID() string { return refundPrefix.Encode(uuid.UUID(id)) }
+
+// ParseRefundID reads a refund's ID as the API writes it; a malformed one is ErrNotFound, like an unknown one.
+func ParseRefundID(s string) (RefundID, error) {
+	id, err := refundPrefix.Decode(s)
+	if err != nil {
+		return RefundID{}, ErrNotFound
+	}
+	return RefundID(id), nil
+}
 
 // Money is an amount the user pays, in minor units of its currency: never a float, compared with ==.
 type Money struct {
@@ -53,6 +72,29 @@ func digits(currency platform.Currency) int {
 		return d
 	}
 	return 2
+}
+
+// AmountFromMinor writes minor units as the admin API's exact decimal amount, in billionths of one unit
+// (api/admin.yaml Money). It is text because a JSON number would round an amount above 2^53 in the browser.
+// AmountFromMinor writes minor units as the contract's amount: an integer count of billionths of one unit.
+func AmountFromMinor(currency platform.Currency, minor int64) string {
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(9-digits(currency))), nil)
+	return new(big.Int).Mul(big.NewInt(minor), scale).String()
+}
+
+// MinorFromAmount reads the contract's amount, an integer count of billionths, as minor units; false when it is not a
+// whole minor unit of the currency or does not fit int64.
+func MinorFromAmount(currency platform.Currency, amount string) (int64, bool) {
+	n, ok := new(big.Int).SetString(amount, 10)
+	if !ok || n.Sign() < 0 {
+		return 0, false
+	}
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(9-digits(currency))), nil)
+	q, r := new(big.Int).QuoRem(n, scale, new(big.Int))
+	if r.Sign() != 0 || !q.IsInt64() {
+		return 0, false
+	}
+	return q.Int64(), true
 }
 
 // ParseOrderID reads an order's ID as the API writes it; a malformed one is ErrNotFound, like an unknown one.

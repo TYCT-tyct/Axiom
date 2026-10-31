@@ -2,7 +2,7 @@ import type { AdminSchemas } from "@axiom/api";
 import { Button, EmptyState, Table, Td, useFormat } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { Code, Head, mainCell, State, Time } from "../parts";
-import { endpointState } from "./endpoint-test";
+import { endpointState, testFormats } from "./endpoint-test";
 import type { Open } from "./open";
 
 type OnOpen = ((open: Open) => void) | undefined;
@@ -195,7 +195,7 @@ const endpointTones = {
 } as const satisfies Record<ReturnType<typeof endpointState>, "neutral" | "good" | "warn" | "bad">;
 
 // The supplier's endpoints, one per model of a group, by upstream name: what a person tests. Only one that may be called
-// offers the test; the state says why another does not. Two groups can offer the same model at different costs, so the
+// in a format a test can use offers the test; the state says why another is not called. Two groups can offer the same model at different costs, so the
 // group is always shown with the name (under it where its column is hidden) and is part of the button's name. None from
 // the server is a node of an earlier release (SupplierView).
 export function Endpoints({
@@ -275,7 +275,7 @@ function EndpointRow({
       </Td>
       {onOpen ? (
         <Td className="whitespace-nowrap">
-          {state === "ready" ? (
+          {state === "ready" && testFormats(endpoint.formats).length > 0 ? (
             <Button
               size="sm"
               aria-label={t("suppliers.test.title", { name: endpoint.upstream_name, group })}

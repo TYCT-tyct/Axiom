@@ -10,6 +10,7 @@ describe("money", () => {
     { zh: "US$0.000031", en: "$0.000031", amount: "31000" },
     { zh: "-US$2.25", en: "-$2.25", amount: "-2250000000" },
     { zh: "US$9,223,372,036.854775807", en: "$9,223,372,036.854775807", amount: "9223372036854775807" },
+    { zh: "US$10,000,000,000.00", en: "$10,000,000,000.00", amount: "10000000000000000000" },
   ])("formats $amount exactly in both languages", ({ zh, en, amount }) => {
     const money = { amount, currency: "USD" };
     expect(formatters("zh").money(money)).toBe(zh);
@@ -52,5 +53,20 @@ describe("moneyInput", () => {
   // What a field is filled with must read back as the same amount.
   it.each(["0", "1", "1500000000", "100000000000", "9223372036854775807", "123456789"])("round-trips %s", (amount) => {
     expect(parseMoney(moneyInput(amount))).toBe(amount);
+  });
+});
+
+describe("pay", () => {
+  // A payment amount is in the currency's minor units, so the point moves by that currency's own digits.
+  it.each([
+    { currency: "USD", amount: "1030", en: "$10.30" },
+    { currency: "USD", amount: "1", en: "$0.01" },
+    { currency: "JPY", amount: "1000", en: "¥1,000" },
+    { currency: "KWD", amount: "1500", en: "KWD\u00a01.500" },
+  ])("formats $amount $currency as $en", ({ currency, amount, en }) => {
+    expect(formatters("en").pay({ amount, currency })).toBe(en);
+  });
+  it("formats in the page's language", () => {
+    expect(formatters("zh").pay({ amount: "1030", currency: "USD" })).toBe("US$10.30");
   });
 });

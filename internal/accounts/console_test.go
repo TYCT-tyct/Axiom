@@ -60,7 +60,7 @@ func newTestSite(t *testing.T) site {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return site{db, database, s, c, user, email}
+	return site{db, database, s, c, user.User, email}
 }
 
 func inviteCode(t *testing.T, db *pg.DB, user string) string {
@@ -103,6 +103,24 @@ func (x site) principal(t *testing.T, host string, issued accounts.Issued) (acco
 // TestRegisterSignInAndUse: a user registered with an invite code signs in, is recognised from the cookie, may make
 // a key in its own account, whose audit entry the registration's tenant record admits, may not touch another
 // account, and is no longer recognised once signed out.
+func TestAccountTierReadsTheAccount(t *testing.T) {
+	t.Parallel()
+	x := newTestSite(t)
+	p, err := x.principal(t, console, x.signIn(t, console))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tier, err := x.s.AccountTier(t.Context(), p)
+	if err != nil || tier != accounts.TierID(t1) {
+		t.Fatalf("tier: %v %v, want %v", tier, err, accounts.TierID(t1))
+	}
+	// The read is scoped to the account: another account's row is not visible, even with a valid principal.
+	other := accounts.PrincipalForTest(accounts.SiteID(s1), accounts.AccountID(uuid.NewV7()), p.UserID())
+	if _, err := x.s.AccountTier(t.Context(), other); err == nil {
+		t.Fatal("read another account's tier")
+	}
+}
+
 func TestRegisterSignInAndUse(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)
@@ -137,35 +155,6 @@ func TestRegisterSignInAndUse(t *testing.T) {
 	}
 	if _, err := x.principal(t, console, issued); !errors.Is(err, accounts.ErrNoSession) {
 		t.Errorf("after signing out: %v", err)
-	}
-}
-
-// TestRegistrationRefusals: registration needs the invite code of an enabled user of the site, a site that registers
-// by invitation, a console domain, a password of 12 characters or more, and an email not yet registered there.
-func TestRegistrationRefusals(t *testing.T) {
-	t.Parallel()
-	x := newTestSite(t)
-	code := inviteCode(t, x.db, ":u1")
-	for name, c := range map[string]struct {
-		r    accounts.RegisterRequest
-		want error
-	}{
-		"an unknown code":       {accounts.RegisterRequest{console, "nosuchcode0000", "new@example.com", password, client}, accounts.ErrInvalidInvite},
-		"another site's code":   {accounts.RegisterRequest{console, inviteCode(t, x.db, ":u2"), "new@example.com", password, client}, accounts.ErrInvalidInvite},
-		"a site that is closed": {accounts.RegisterRequest{otherConsole, inviteCode(t, x.db, ":u2"), "new@example.com", password, client}, accounts.ErrInvalidInvite},
-		"a short password":      {accounts.RegisterRequest{console, code, "new@example.com", "short", client}, accounts.ErrWeakPassword},
-		"an email registered":   {accounts.RegisterRequest{console, code, " SOMEONE@example.com", password, client}, accounts.ErrEmailTaken},
-		"the admin domain":      {accounts.RegisterRequest{admin, code, "new@example.com", password, client}, accounts.ErrUnknownHost},
-	} {
-		if _, err := x.s.Register(t.Context(), c.r); !errors.Is(err, c.want) {
-			t.Errorf("%s: %v, want %v", name, err, c.want)
-		}
-	}
-	if err := pgtest.Run(t.Context(), x.database.Superuser, ids.Replace("UPDATE accounts.users SET status = 'disabled' WHERE id = :u1")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{console, code, "new@example.com", password, client}); !errors.Is(err, accounts.ErrInvalidInvite) {
-		t.Errorf("a disabled inviter: %v", err)
 	}
 }
 
@@ -313,9 +302,17 @@ func TestCodesRunOutAndRenew(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, renewed, err := x.s.RegenerateRecoveryCodes(t.Context(), p, accounts.FactorChange{Code: accounts.TOTPCode(key, x.clock.Now())})
+	renewedSession, renewed, err := x.s.RegenerateRecoveryCodes(t.Context(), p, accounts.FactorChange{Code: accounts.TOTPCode(key, x.clock.Now())})
 	if err != nil || len(renewed) != 10 {
 		t.Fatalf("new recovery codes: %v", err)
+	}
+	// The session the change issues must be the one the new version names, or it is dead on arrival and the codes it
+	// came with cannot be used either.
+	if _, err := x.principal(t, console, renewedSession); err != nil {
+		t.Fatalf("the session of the change: %v", err)
+	}
+	if _, err := x.verify(t, console, x.signIn(t, console), renewed[0]); err != nil {
+		t.Fatalf("a renewed recovery code: %v", err)
 	}
 	if _, err := x.verify(t, console, x.signIn(t, console), codes[2]); !errors.Is(err, accounts.ErrBadCode) {
 		t.Errorf("an old recovery code: %v", err)

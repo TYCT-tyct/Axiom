@@ -164,7 +164,7 @@ test.describe("signing in", () => {
     await page.goto("/console/keys");
     await expect(page.getByText("Laptop")).toBeVisible();
     await page.getByRole("button", { name: "创建 key" }).click();
-    await page.getByLabel("名称").fill("Deploy bot");
+    await page.getByRole("dialog", { name: "创建 key" }).getByLabel("名称").fill("Deploy bot");
     await page.getByRole("button", { name: "创建", exact: true }).click();
     const secret = page.getByRole("dialog", { name: "复制你的 key" });
     await expect(secret).toBeVisible();
@@ -194,6 +194,7 @@ test.describe("signing in", () => {
     state.permissions = state.permissions.filter((permission) => permission !== "balance.view");
     await returnToWindow(page);
     await expect(page.getByRole("heading", { name: "没有权限" })).toBeVisible();
+    await expect(page.getByText("请联系工作区的管理员。")).toBeVisible();
     await expect(page.getByText("US$12.00", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "余额" })).toHaveCount(0);
   });
@@ -295,7 +296,7 @@ test.describe("API keys", () => {
     await expect(page.getByText("Laptop")).toBeVisible();
 
     await page.getByRole("button", { name: "创建 key" }).click();
-    await page.getByLabel("名称").fill("Deploy bot");
+    await page.getByRole("dialog", { name: "创建 key" }).getByLabel("名称").fill("Deploy bot");
     await page.getByLabel(/花费上限/).fill("2.5");
     await page.getByLabel("可用模型").fill("openai/gpt-5\nanthropic/claude-sonnet-4");
     await page.getByRole("button", { name: "创建", exact: true }).click();
@@ -479,7 +480,7 @@ test.describe("calls", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/calls");
-    const rows = page.getByRole("row");
+    const rows = page.getByRole("table", { name: "调用记录" }).getByRole("row");
     await expect(rows).toHaveCount(51);
     // Times show in the viewer's zone and say which it is.
     await expect(page.getByRole("link", { name: /16:29:00/ })).toBeVisible();
@@ -502,6 +503,22 @@ test.describe("calls", () => {
     await expect(page.getByRole("heading", { level: 1, name: "调用详情" })).toBeVisible();
     await expect(page.getByText("00000000-0000-4000-8000-000000000001")).toBeVisible();
     await expect(page.getByText("cache_read")).toBeVisible();
+  });
+
+  test("the summary groups the same calls and exports them", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/calls");
+    const summary = page.getByRole("table", { name: "汇总" });
+    // Every fixture call is on the same day, so one day group and its header.
+    await expect(summary.getByRole("row")).toHaveCount(2);
+    await page.getByLabel("分组").selectOption("model");
+    await expect(page).toHaveURL(/group_by=model/);
+    await expect(summary.getByRole("row")).toHaveCount(5);
+
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "导出 CSV" }).click();
+    expect((await download).suggestedFilename()).toMatch(/^calls-\d{4}-\d{2}-\d{2}\.csv$/);
   });
 
   test("a failed call says so, and a call that is not the account's is not found", async ({ page }) => {
@@ -527,9 +544,20 @@ test.describe("calls", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/calls");
-    await expect(page.getByRole("row", { name: /免单/ }).first()).toBeVisible();
+    await expect(
+      page.getByRole("table", { name: "调用记录" }).getByRole("row", { name: /免单/ }).first(),
+    ).toBeVisible();
     await page.getByRole("link", { name: "概览" }).click();
     await expect(page.getByRole("heading", { name: "最近的报错" })).toBeVisible();
     await expect(page.getByText("upstream_timeout").first()).toBeVisible();
   });
+});
+
+test("the site's brand colour is applied to the page", async ({ page }) => {
+  const state = await mockConsole(page);
+  state.site = { ...state.site, brand_color: "#335ddf" };
+  await page.goto("/console/sign-in");
+  await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+  const button = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--btn").trim());
+  expect(button).toBe("light-dark(#335ddf, #335ddf)");
 });

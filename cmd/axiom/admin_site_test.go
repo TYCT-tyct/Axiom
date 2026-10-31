@@ -1,13 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform/adminapi"
 )
 
@@ -182,6 +185,17 @@ func TestTiers(t *testing.T) {
 	if named.Body.String() != rec.Body.String() {
 		t.Errorf("the main site named: %s, want %s", named.Body, rec.Body)
 	}
+	child, childTier := uuid.NewV7(), uuid.NewV7()
+	f.run("BEGIN",
+		fmt.Sprintf(`INSERT INTO accounts.sites (id,parent_site_id,owner_account_id,name,status,key_prefix,registration,default_tier_id)
+			SELECT '%s',id,(SELECT a.id FROM accounts.accounts a WHERE a.site_id=s.id LIMIT 1),'Other','active','sk-other-','closed','%s' FROM accounts.sites s WHERE s.is_main`, child, childTier),
+		fmt.Sprintf(`INSERT INTO accounts.tiers(id,site_id,name) VALUES ('%s','%s','Other')`, childTier, child), "COMMIT")
+	rec = f.do(http.MethodGet, "/tiers?site_id="+accounts.SiteID(child).TypeID(), "", as(s))
+	expectAdmin(t, "a second site's tiers", rec, http.StatusOK, "")
+	decode(t, rec, &list)
+	if len(list.Data) != 1 || list.Data[0].Name != "Other" {
+		t.Errorf("the second site's tiers: %+v", list)
+	}
 	rec = f.do(http.MethodGet, "/tiers?site_id=site_00000000000000000000000000", "", as(s))
 	expectAdmin(t, "a site with no tiers", rec, http.StatusOK, "")
 	decode(t, rec, &list)
@@ -203,5 +217,133 @@ func TestSiteSettingsLogAFailedReload(t *testing.T) {
 	expectAdmin(t, "a change whose reload fails", rec, http.StatusOK, "")
 	if !strings.Contains(f.logs.String(), "did not reload") {
 		t.Errorf("the failed reload was not logged: %s", f.logs)
+	}
+}
+
+// TestSiteRegistration: the policy reads with the code defaults; a PUT replaces every value, normalizes domain lists
+// and audits the change; a value outside its bounds is refused by name, and a repeated key replays the stored result.
+func TestSiteRegistration(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	site := f.siteID()
+	checkRegistrationDefaults(t, f, s, site)
+	checkRegistrationWrite(t, f, s, site)
+	checkRegistrationRefusals(t, f, s, site)
+}
+
+// checkRegistrationDefaults reads the policy a site that never set one has.
+func checkRegistrationDefaults(t *testing.T, f adminFixture, s session, site string) {
+	t.Helper()
+	rec := f.do(http.MethodGet, "/sites/"+site+"/registration", "", as(s))
+	expectAdmin(t, "getSiteRegistration", rec, http.StatusOK, "")
+	var got adminapi.RegistrationPolicyView
+	decode(t, rec, &got)
+	if got.Policy.Mode != "invite" || !got.Policy.HumanCheck || got.Policy.HumanCheckBits != 18 || got.Policy.DomainBurst != 5 || got.Policy.DomainPerHour != 30 {
+		t.Errorf("the site's policy: %+v", got.Policy)
+	}
+}
+
+// checkRegistrationWrite replaces the policy, reads the normalized lists back, checks the audit entry, and replays the
+// same key.
+func checkRegistrationWrite(t *testing.T, f adminFixture, s session, site string) {
+	t.Helper()
+	body := `{"policy":{"mode":"open","human_check":true,"human_check_bits":20,"domain_burst":7,"domain_per_hour":70,"domain_allow":[" Example.COM ","example.com"],"domain_deny":["Bad.Example.COM"]},"reason":"open registration"}`
+	key := newKey()
+	rec := f.change(s, http.MethodPut, "/sites/"+site+"/registration", body, key)
+	expectAdmin(t, "updateSiteRegistration", rec, http.StatusOK, "")
+	var updated adminapi.RegistrationPolicyView
+	decode(t, rec, &updated)
+	if updated.Policy.Mode != "open" || updated.Policy.HumanCheckBits != 20 || updated.Policy.DomainBurst != 7 ||
+		updated.Policy.DomainPerHour != 70 || len(updated.Policy.DomainAllow) != 1 || updated.Policy.DomainAllow[0] != "example.com" ||
+		len(updated.Policy.DomainDeny) != 1 || updated.Policy.DomainDeny[0] != "bad.example.com" {
+		t.Errorf("the stored policy: %+v", updated.Policy)
+	}
+	if f.auditCount("site_registration.update") != "1" {
+		t.Fatalf("%s audit entries, want 1", f.auditCount("site_registration.update"))
+	}
+	f.expectAudit("site_registration.update", map[string]string{
+		"reason": "open registration",
+		"coalesce(detail->'after'->>'mode', 'none')":             "open",
+		"coalesce(detail->'after'->>'human_check_bits', 'none')": "20",
+	})
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/registration", body, key)
+	expectAdmin(t, "the same registration request again", rec, http.StatusOK, "")
+	if rec.Header().Get("Idempotency-Replayed") != "true" || f.auditCount("site_registration.update") != "1" {
+		t.Errorf("replay header %q, audits %s", rec.Header().Get("Idempotency-Replayed"), f.auditCount("site_registration.update"))
+	}
+}
+
+// checkRegistrationRefusals names the offending field of an out-of-bounds difficulty and reports a site or account
+// that is not there.
+func checkRegistrationRefusals(t *testing.T, f adminFixture, s session, site string) {
+	t.Helper()
+	rec := f.change(s, http.MethodPut, "/sites/"+site+"/registration",
+		`{"policy":{"mode":"open","human_check":true,"human_check_bits":11,"domain_burst":7,"domain_per_hour":70,"domain_allow":[],"domain_deny":[]},"reason":"r"}`, newKey())
+	expectAdmin(t, "a difficulty outside its bounds", rec, http.StatusBadRequest, codeInvalidRequest)
+	fields := errorDetailOf(t, rec).Fields
+	if fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != "/policy/human_check_bits" {
+		t.Errorf("fields %v, want /policy/human_check_bits", fields)
+	}
+	for _, id := range []string{"site_00000000000000000000000000", "acct_00000000000000000000000000"} {
+		expectAdmin(t, "getSiteRegistration of "+id, f.do(http.MethodGet, "/sites/"+id+"/registration", "", as(s)), http.StatusNotFound, codeNotFound)
+	}
+}
+
+// TestSiteBrand: a site with none reads as the default palette; a PUT stores a colour lower case and audits it, an empty
+// colour clears it, a value of another form names its field, and a repeated key replays the stored result.
+func TestSiteBrand(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	site := f.siteID()
+
+	rec := f.do(http.MethodGet, "/sites/"+site+"/brand", "", as(s))
+	expectAdmin(t, "getSiteBrand", rec, http.StatusOK, "")
+	var got adminapi.SiteBrand
+	decode(t, rec, &got)
+	if got.BrandColor != nil {
+		t.Errorf("a site with no brand colour: %+v", got)
+	}
+
+	body := `{"brand_color":"#335DDF","reason":"the site's colour"}`
+	key := newKey()
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/brand", body, key)
+	expectAdmin(t, "updateSiteBrand", rec, http.StatusOK, "")
+	var updated adminapi.SiteBrand
+	decode(t, rec, &updated)
+	if updated.BrandColor == nil || *updated.BrandColor != "#335ddf" {
+		t.Errorf("the stored colour: %+v", updated)
+	}
+	if f.auditCount("site_brand.update") != "1" {
+		t.Fatalf("%s audit entries, want 1", f.auditCount("site_brand.update"))
+	}
+	f.expectAudit("site_brand.update", map[string]string{
+		"reason": "the site's colour",
+		"coalesce(detail->'after'->>'brand_color', 'none')": "#335ddf",
+	})
+
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/brand", body, key)
+	expectAdmin(t, "the same brand request again", rec, http.StatusOK, "")
+	if rec.Header().Get("Idempotency-Replayed") != "true" || f.auditCount("site_brand.update") != "1" {
+		t.Errorf("replay header %q, audits %s", rec.Header().Get("Idempotency-Replayed"), f.auditCount("site_brand.update"))
+	}
+
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/brand", `{"brand_color":"","reason":"back to the default"}`, newKey())
+	expectAdmin(t, "clearing the brand colour", rec, http.StatusOK, "")
+	var cleared adminapi.SiteBrand
+	decode(t, rec, &cleared)
+	if cleared.BrandColor != nil {
+		t.Errorf("the colour after clearing: %+v", cleared)
+	}
+
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/brand", `{"brand_color":"blue","reason":"r"}`, newKey())
+	expectAdmin(t, "a colour of another form", rec, http.StatusBadRequest, codeInvalidRequest)
+	fields := errorDetailOf(t, rec).Fields
+	if fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != "/brand_color" {
+		t.Errorf("fields %v, want /brand_color", fields)
+	}
+	for _, id := range []string{"site_00000000000000000000000000", "acct_00000000000000000000000000"} {
+		expectAdmin(t, "getSiteBrand of "+id, f.do(http.MethodGet, "/sites/"+id+"/brand", "", as(s)), http.StatusNotFound, codeNotFound)
 	}
 }

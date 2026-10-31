@@ -160,7 +160,7 @@ func freshDatabase(t *testing.T) pgtest.Database {
 		u.Path = "/" + name
 		return u.String()
 	}
-	return pgtest.Database{App: at(template.App), Migrator: at(template.Migrator), Superuser: at(template.Superuser)}
+	return pgtest.Database{App: at(template.App), Retention: at(template.Retention), Migrator: at(template.Migrator), Superuser: at(template.Superuser)}
 }
 
 // TestCheckAllowsANewerDatabase: in a rolling deployment the nodes still on the old version run against a database

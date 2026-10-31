@@ -67,16 +67,46 @@ func (e CallStatus) Valid() bool {
 
 // Defines values for ChargeItemUnit.
 const (
-	Token ChargeItemUnit = "token"
-	Use   ChargeItemUnit = "use"
+	ChargeItemUnitCharacter ChargeItemUnit = "character"
+	ChargeItemUnitPiece     ChargeItemUnit = "piece"
+	ChargeItemUnitSecond    ChargeItemUnit = "second"
+	ChargeItemUnitToken     ChargeItemUnit = "token"
+	ChargeItemUnitUse       ChargeItemUnit = "use"
 )
 
 // Valid indicates whether the value is a known member of the ChargeItemUnit enum.
 func (e ChargeItemUnit) Valid() bool {
 	switch e {
-	case Token:
+	case ChargeItemUnitCharacter:
 		return true
-	case Use:
+	case ChargeItemUnitPiece:
+		return true
+	case ChargeItemUnitSecond:
+		return true
+	case ChargeItemUnitToken:
+		return true
+	case ChargeItemUnitUse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreditBatchSource.
+const (
+	CreditBatchGift   CreditBatchSource = "gift"
+	CreditBatchPaid   CreditBatchSource = "paid"
+	CreditBatchRedeem CreditBatchSource = "redeem"
+)
+
+// Valid indicates whether the value is a known member of the CreditBatchSource enum.
+func (e CreditBatchSource) Valid() bool {
+	switch e {
+	case CreditBatchGift:
+		return true
+	case CreditBatchPaid:
+		return true
+	case CreditBatchRedeem:
 		return true
 	default:
 		return false
@@ -85,40 +115,66 @@ func (e ChargeItemUnit) Valid() bool {
 
 // Defines values for ErrorCode.
 const (
-	ErrorCodeConflict             ErrorCode = "conflict"
-	ErrorCodeEmailTaken           ErrorCode = "email_taken"
-	ErrorCodeForbidden            ErrorCode = "forbidden"
-	ErrorCodeIdempotencyKeyReused ErrorCode = "idempotency_key_reused"
-	ErrorCodeInternal             ErrorCode = "internal"
-	ErrorCodeInvalidCode          ErrorCode = "invalid_code"
-	ErrorCodeInvalidCredentials   ErrorCode = "invalid_credentials"
-	ErrorCodeInvalidInvite        ErrorCode = "invalid_invite"
-	ErrorCodeInvalidRequest       ErrorCode = "invalid_request"
-	ErrorCodeMfaRequired          ErrorCode = "mfa_required"
-	ErrorCodeNameTaken            ErrorCode = "name_taken"
-	ErrorCodeNotFound             ErrorCode = "not_found"
-	ErrorCodeNotImplemented       ErrorCode = "not_implemented"
-	ErrorCodeNotReady             ErrorCode = "not_ready"
-	ErrorCodeOriginRejected       ErrorCode = "origin_rejected"
-	ErrorCodeRateLimited          ErrorCode = "rate_limited"
-	ErrorCodeStaleRevision        ErrorCode = "stale_revision"
-	ErrorCodeTooManyKeys          ErrorCode = "too_many_keys"
-	ErrorCodeUnauthenticated      ErrorCode = "unauthenticated"
-	ErrorCodeUnavailable          ErrorCode = "unavailable"
-	ErrorCodeUnprocessable        ErrorCode = "unprocessable"
-	ErrorCodeWeakPassword         ErrorCode = "weak_password"
+	ErrorCodeAccountNotLinked      ErrorCode = "account_not_linked"
+	ErrorCodeConflict              ErrorCode = "conflict"
+	ErrorCodeConsentRequired       ErrorCode = "consent_required"
+	ErrorCodeEmailDomainNotAllowed ErrorCode = "email_domain_not_allowed"
+	ErrorCodeEmailTaken            ErrorCode = "email_taken"
+	ErrorCodeForbidden             ErrorCode = "forbidden"
+	ErrorCodeHumanCheckFailed      ErrorCode = "human_check_failed"
+	ErrorCodeIdempotencyKeyReused  ErrorCode = "idempotency_key_reused"
+	ErrorCodeIdentityAlreadyLinked ErrorCode = "identity_already_linked"
+	ErrorCodeIdentityTaken         ErrorCode = "identity_taken"
+	ErrorCodeInternal              ErrorCode = "internal"
+	ErrorCodeInvalidCode           ErrorCode = "invalid_code"
+	ErrorCodeInvalidCredentials    ErrorCode = "invalid_credentials"
+	ErrorCodeInvalidInvite         ErrorCode = "invalid_invite"
+	ErrorCodeInvalidRequest        ErrorCode = "invalid_request"
+	ErrorCodeInvalidVerification   ErrorCode = "invalid_verification"
+	ErrorCodeLoginDomainLocked     ErrorCode = "login_domain_locked"
+	ErrorCodeLoginDomainRequired   ErrorCode = "login_domain_required"
+	ErrorCodeMfaRequired           ErrorCode = "mfa_required"
+	ErrorCodeNameTaken             ErrorCode = "name_taken"
+	ErrorCodeNotFound              ErrorCode = "not_found"
+	ErrorCodeNotImplemented        ErrorCode = "not_implemented"
+	ErrorCodeNotReady              ErrorCode = "not_ready"
+	ErrorCodeOriginRejected        ErrorCode = "origin_rejected"
+	ErrorCodeRateLimited           ErrorCode = "rate_limited"
+	ErrorCodeRedeemCodeDisabled    ErrorCode = "redeem_code_disabled"
+	ErrorCodeRedeemCodeExpired     ErrorCode = "redeem_code_expired"
+	ErrorCodeRedeemCodeInvalid     ErrorCode = "redeem_code_invalid"
+	ErrorCodeRedeemCodeUsed        ErrorCode = "redeem_code_used"
+	ErrorCodeRegistrationClosed    ErrorCode = "registration_closed"
+	ErrorCodeStaleRevision         ErrorCode = "stale_revision"
+	ErrorCodeTooManyKeys           ErrorCode = "too_many_keys"
+	ErrorCodeUnauthenticated       ErrorCode = "unauthenticated"
+	ErrorCodeUnavailable           ErrorCode = "unavailable"
+	ErrorCodeUnprocessable         ErrorCode = "unprocessable"
+	ErrorCodeWeakPassword          ErrorCode = "weak_password"
 )
 
 // Valid indicates whether the value is a known member of the ErrorCode enum.
 func (e ErrorCode) Valid() bool {
 	switch e {
+	case ErrorCodeAccountNotLinked:
+		return true
 	case ErrorCodeConflict:
+		return true
+	case ErrorCodeConsentRequired:
+		return true
+	case ErrorCodeEmailDomainNotAllowed:
 		return true
 	case ErrorCodeEmailTaken:
 		return true
 	case ErrorCodeForbidden:
 		return true
+	case ErrorCodeHumanCheckFailed:
+		return true
 	case ErrorCodeIdempotencyKeyReused:
+		return true
+	case ErrorCodeIdentityAlreadyLinked:
+		return true
+	case ErrorCodeIdentityTaken:
 		return true
 	case ErrorCodeInternal:
 		return true
@@ -129,6 +185,12 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeInvalidInvite:
 		return true
 	case ErrorCodeInvalidRequest:
+		return true
+	case ErrorCodeInvalidVerification:
+		return true
+	case ErrorCodeLoginDomainLocked:
+		return true
+	case ErrorCodeLoginDomainRequired:
 		return true
 	case ErrorCodeMfaRequired:
 		return true
@@ -143,6 +205,16 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeOriginRejected:
 		return true
 	case ErrorCodeRateLimited:
+		return true
+	case ErrorCodeRedeemCodeDisabled:
+		return true
+	case ErrorCodeRedeemCodeExpired:
+		return true
+	case ErrorCodeRedeemCodeInvalid:
+		return true
+	case ErrorCodeRedeemCodeUsed:
+		return true
+	case ErrorCodeRegistrationClosed:
 		return true
 	case ErrorCodeStaleRevision:
 		return true
@@ -197,6 +269,45 @@ func (e KeyCreateKind) Valid() bool {
 	}
 }
 
+// Defines values for KeyStatus.
+const (
+	KeyStatusActive   KeyStatus = "active"
+	KeyStatusDisabled KeyStatus = "disabled"
+	KeyStatusExpired  KeyStatus = "expired"
+)
+
+// Valid indicates whether the value is a known member of the KeyStatus enum.
+func (e KeyStatus) Valid() bool {
+	switch e {
+	case KeyStatusActive:
+		return true
+	case KeyStatusDisabled:
+		return true
+	case KeyStatusExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LegalDocumentKind.
+const (
+	Privacy LegalDocumentKind = "privacy"
+	Terms   LegalDocumentKind = "terms"
+)
+
+// Valid indicates whether the value is a known member of the LegalDocumentKind enum.
+func (e LegalDocumentKind) Valid() bool {
+	switch e {
+	case Privacy:
+		return true
+	case Terms:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LimitReset.
 const (
 	Daily   LimitReset = "daily"
@@ -212,6 +323,156 @@ func (e LimitReset) Valid() bool {
 	case Monthly:
 		return true
 	case Weekly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelAbility.
+const (
+	ModelAbilityCodeExecution    ModelAbility = "code_execution"
+	ModelAbilityDocuments        ModelAbility = "documents"
+	ModelAbilityImages           ModelAbility = "images"
+	ModelAbilityPromptCache      ModelAbility = "prompt_cache"
+	ModelAbilityReasoning        ModelAbility = "reasoning"
+	ModelAbilityStructuredOutput ModelAbility = "structured_output"
+	ModelAbilityTools            ModelAbility = "tools"
+	ModelAbilityWebSearch        ModelAbility = "web_search"
+)
+
+// Valid indicates whether the value is a known member of the ModelAbility enum.
+func (e ModelAbility) Valid() bool {
+	switch e {
+	case ModelAbilityCodeExecution:
+		return true
+	case ModelAbilityDocuments:
+		return true
+	case ModelAbilityImages:
+		return true
+	case ModelAbilityPromptCache:
+		return true
+	case ModelAbilityReasoning:
+		return true
+	case ModelAbilityStructuredOutput:
+		return true
+	case ModelAbilityTools:
+		return true
+	case ModelAbilityWebSearch:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelItem.
+const (
+	ModelItemAudioIn        ModelItem = "audio_in"
+	ModelItemAudioInSecond  ModelItem = "audio_in_second"
+	ModelItemAudioOut       ModelItem = "audio_out"
+	ModelItemAudioOutSecond ModelItem = "audio_out_second"
+	ModelItemCacheRead      ModelItem = "cache_read"
+	ModelItemCacheWrite     ModelItem = "cache_write"
+	ModelItemCacheWrite1h   ModelItem = "cache_write_1h"
+	ModelItemCharacterIn    ModelItem = "character_in"
+	ModelItemCodeExecution  ModelItem = "code_execution"
+	ModelItemImageIn        ModelItem = "image_in"
+	ModelItemImageInPiece   ModelItem = "image_in_piece"
+	ModelItemImageOut       ModelItem = "image_out"
+	ModelItemImageOutPiece  ModelItem = "image_out_piece"
+	ModelItemInput          ModelItem = "input"
+	ModelItemOutput         ModelItem = "output"
+	ModelItemReasoning      ModelItem = "reasoning"
+	ModelItemWebSearch      ModelItem = "web_search"
+)
+
+// Valid indicates whether the value is a known member of the ModelItem enum.
+func (e ModelItem) Valid() bool {
+	switch e {
+	case ModelItemAudioIn:
+		return true
+	case ModelItemAudioInSecond:
+		return true
+	case ModelItemAudioOut:
+		return true
+	case ModelItemAudioOutSecond:
+		return true
+	case ModelItemCacheRead:
+		return true
+	case ModelItemCacheWrite:
+		return true
+	case ModelItemCacheWrite1h:
+		return true
+	case ModelItemCharacterIn:
+		return true
+	case ModelItemCodeExecution:
+		return true
+	case ModelItemImageIn:
+		return true
+	case ModelItemImageInPiece:
+		return true
+	case ModelItemImageOut:
+		return true
+	case ModelItemImageOutPiece:
+		return true
+	case ModelItemInput:
+		return true
+	case ModelItemOutput:
+		return true
+	case ModelItemReasoning:
+		return true
+	case ModelItemWebSearch:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelServiceTier.
+const (
+	Fast     ModelServiceTier = "fast"
+	Flex     ModelServiceTier = "flex"
+	Priority ModelServiceTier = "priority"
+	Standard ModelServiceTier = "standard"
+)
+
+// Valid indicates whether the value is a known member of the ModelServiceTier enum.
+func (e ModelServiceTier) Valid() bool {
+	switch e {
+	case Fast:
+		return true
+	case Flex:
+		return true
+	case Priority:
+		return true
+	case Standard:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelUnit.
+const (
+	ModelUnitCharacter ModelUnit = "character"
+	ModelUnitPiece     ModelUnit = "piece"
+	ModelUnitSecond    ModelUnit = "second"
+	ModelUnitToken     ModelUnit = "token"
+	ModelUnitUse       ModelUnit = "use"
+)
+
+// Valid indicates whether the value is a known member of the ModelUnit enum.
+func (e ModelUnit) Valid() bool {
+	switch e {
+	case ModelUnitCharacter:
+		return true
+	case ModelUnitPiece:
+		return true
+	case ModelUnitSecond:
+		return true
+	case ModelUnitToken:
+		return true
+	case ModelUnitUse:
 		return true
 	default:
 		return false
@@ -254,6 +515,27 @@ func (e NotificationPreferencesRequestLanguage) Valid() bool {
 	}
 }
 
+// Defines values for OAuthProvider.
+const (
+	Github  OAuthProvider = "github"
+	Google  OAuthProvider = "google"
+	Linuxdo OAuthProvider = "linuxdo"
+)
+
+// Valid indicates whether the value is a known member of the OAuthProvider enum.
+func (e OAuthProvider) Valid() bool {
+	switch e {
+	case Github:
+		return true
+	case Google:
+		return true
+	case Linuxdo:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OrderState.
 const (
 	Cancelled         OrderState = "cancelled"
@@ -287,6 +569,63 @@ func (e OrderState) Valid() bool {
 	case Refunded:
 		return true
 	case Review:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RefundState.
+const (
+	RefundDeclined      RefundState = "declined"
+	RefundPendingReview RefundState = "pending_review"
+	RefundProcessing    RefundState = "processing"
+	RefundSucceeded     RefundState = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the RefundState enum.
+func (e RefundState) Valid() bool {
+	switch e {
+	case RefundDeclined:
+		return true
+	case RefundPendingReview:
+		return true
+	case RefundProcessing:
+		return true
+	case RefundSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RegisterRequestLanguage.
+const (
+	RegisterRequestLanguageEn RegisterRequestLanguage = "en"
+	RegisterRequestLanguageZh RegisterRequestLanguage = "zh"
+)
+
+// Valid indicates whether the value is a known member of the RegisterRequestLanguage enum.
+func (e RegisterRequestLanguage) Valid() bool {
+	switch e {
+	case RegisterRequestLanguageEn:
+		return true
+	case RegisterRequestLanguageZh:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RegistrationPendingStatus.
+const (
+	VerificationSent RegistrationPendingStatus = "verification_sent"
+)
+
+// Valid indicates whether the value is a known member of the RegistrationPendingStatus enum.
+func (e RegistrationPendingStatus) Valid() bool {
+	switch e {
+	case VerificationSent:
 		return true
 	default:
 		return false
@@ -358,6 +697,7 @@ const (
 	Expiry   StatementKind = "expiry"
 	Freeze   StatementKind = "freeze"
 	Gift     StatementKind = "gift"
+	Redeem   StatementKind = "redeem"
 	Refund   StatementKind = "refund"
 	Reversal StatementKind = "reversal"
 	Spend    StatementKind = "spend"
@@ -373,6 +713,8 @@ func (e StatementKind) Valid() bool {
 	case Freeze:
 		return true
 	case Gift:
+		return true
+	case Redeem:
 		return true
 	case Refund:
 		return true
@@ -491,19 +833,22 @@ type AnnouncementList struct {
 
 // Balance An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls settled for the current UTC calendar month.
 type Balance struct {
-	// Available An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// Available An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Available Money `json:"available"`
 
-	// Balance An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// Balance An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Balance Money `json:"balance"`
 
-	// Floor An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// Batches The credit batches that still hold something, oldest credit first, with what is left in each and when it stops counting. An account with nothing is an empty array. Read in the same snapshot as the balance: absent on a node of the previous release, when the allocation could not be brought up to date in bounded time, or when a transaction committed after the last replay. The page then shows this part as unavailable rather than a number from a different moment.
+	Batches *[]CreditBatch `json:"batches,omitempty"`
+
+	// Floor An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Floor Money `json:"floor"`
 
-	// Reserved An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// Reserved An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Reserved Money `json:"reserved"`
 
-	// SpentThisMonth An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// SpentThisMonth An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	SpentThisMonth Money `json:"spent_this_month"`
 }
 
@@ -548,7 +893,7 @@ type Call struct {
 	// Model The model name the client asked for.
 	Model string `json:"model"`
 
-	// Price An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// Price An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Price Money `json:"price"`
 
 	// PriceVersion Published sale version locked at admission; absent for legacy or uncharged calls.
@@ -647,7 +992,7 @@ type ChargeItem struct {
 	ServiceTier  *string         `json:"service_tier,omitempty"`
 	Unit         *ChargeItemUnit `json:"unit,omitempty"`
 
-	// UnitPrice Exact currency units per token or use, decimal text with up to 15 fractional digits.
+	// UnitPrice Exact currency units per billing unit (token, use, piece, second or character), decimal text with up to 15 fractional digits.
 	UnitPrice *string `json:"unit_price,omitempty"`
 }
 
@@ -669,6 +1014,39 @@ type CreatedKey struct {
 	// Secret The key's text, to copy now: it is never shown again.
 	Secret string `json:"secret"`
 }
+
+// CredentialChange A credential was removed: every other session ended and the response's cookie replaces this browser's session.
+type CredentialChange struct {
+	CsrfToken string `json:"csrf_token"`
+
+	// RecoveryCodes Replacement recovery codes when TOTP is on; absent otherwise.
+	RecoveryCodes *[]string `json:"recovery_codes,omitempty"`
+}
+
+// CreditBatch Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this batch, not what the next charge will take.
+type CreditBatch struct {
+	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Amount    Money     `json:"amount"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// ExpiresAt When what is left of the batch stops counting. Absent when it never expires.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// Frozen An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Frozen Money `json:"frozen"`
+
+	// Id The batch's own identity; paid credit uses the order's ID as the batch ID.
+	Id string `json:"id"`
+
+	// Remaining An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Remaining Money `json:"remaining"`
+
+	// Source `gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave.
+	Source CreditBatchSource `json:"source"`
+}
+
+// CreditBatchSource `gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave.
+type CreditBatchSource string
 
 // Error The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
 type Error struct {
@@ -705,6 +1083,20 @@ type FactorChange struct {
 	RecoveryCodes []string `json:"recovery_codes"`
 }
 
+// Identities defines model for Identities.
+type Identities struct {
+	Identities []Identity `json:"identities"`
+}
+
+// Identity defines model for Identity.
+type Identity struct {
+	CreatedAt   time.Time `json:"created_at"`
+	DisplayName string    `json:"display_name"`
+
+	// Provider A third-party sign-in provider.
+	Provider OAuthProvider `json:"provider"`
+}
+
 // Key A call or management key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit.
 type Key struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -723,7 +1115,7 @@ type Key struct {
 	Kind  *KeyKind `json:"kind,omitempty"`
 	Last4 string   `json:"last4"`
 
-	// LimitRemaining An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// LimitRemaining An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	LimitRemaining *Money `json:"limit_remaining,omitempty"`
 
 	// LimitReset When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
@@ -734,7 +1126,10 @@ type Key struct {
 	Name   string    `json:"name"`
 	Prefix string    `json:"prefix"`
 
-	// SpendLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// RetiredModels The names in `models` that the catalog has retired, so calls to them cannot succeed. Absent when none is retired or the reading node has no catalog snapshot; a page shows no hint then.
+	RetiredModels *[]string `json:"retired_models,omitempty"`
+
+	// SpendLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	SpendLimit *Money `json:"spend_limit,omitempty"`
 
 	// WorkspaceId A workspace's ID (TypeID).
@@ -758,12 +1153,30 @@ type KeyCreate struct {
 	Models     *[]string   `json:"models,omitempty"`
 	Name       string      `json:"name"`
 
-	// SpendLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// SpendLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	SpendLimit *Money `json:"spend_limit,omitempty"`
 }
 
 // KeyCreateKind Defaults to call. Management keys require expires_at and cannot call models.
 type KeyCreateKind string
+
+// KeyFilterEcho The filters this node applied to the page. Absent on nodes that predate key filters: those nodes ignore the filter parameters and return every key, so a filtered page cannot show their rows.
+type KeyFilterEcho struct {
+	// CreatedAfter The applied inclusive lower bound.
+	CreatedAfter *time.Time `json:"created_after,omitempty"`
+
+	// CreatedBefore The applied exclusive upper bound.
+	CreatedBefore *time.Time `json:"created_before,omitempty"`
+
+	// Name The applied name filter, ignoring case in the match.
+	Name *string `json:"name,omitempty"`
+
+	// Prefix The applied prefix filter, ignoring case in the match.
+	Prefix *string `json:"prefix,omitempty"`
+
+	// Status The state the key list shows: `active` is enabled and not expired, `disabled` is disabled and not expired, and `expired` is past its `expires_at` whether enabled or not.
+	Status *KeyStatus `json:"status,omitempty"`
+}
 
 // KeyId An API key's ID (TypeID).
 type KeyId = string
@@ -771,6 +1184,9 @@ type KeyId = string
 // KeyList defines model for KeyList.
 type KeyList struct {
 	Data []Key `json:"data"`
+
+	// Filters The filters this node applied to the page. Absent on nodes that predate key filters: those nodes ignore the filter parameters and return every key, so a filtered page cannot show their rows.
+	Filters *KeyFilterEcho `json:"filters,omitempty"`
 
 	// NextCursor Null on the last page.
 	NextCursor *string `json:"next_cursor"`
@@ -786,8 +1202,40 @@ type KeySettings struct {
 	Models     *[]string   `json:"models,omitempty"`
 	Name       string      `json:"name"`
 
-	// SpendLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// SpendLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	SpendLimit *Money `json:"spend_limit,omitempty"`
+}
+
+// KeyStatus The state the key list shows: `active` is enabled and not expired, `disabled` is disabled and not expired, and `expired` is past its `expires_at` whether enabled or not.
+type KeyStatus string
+
+// LegalAcceptance defines model for LegalAcceptance.
+type LegalAcceptance struct {
+	// Consent Every current document at its current version, as getLegalDocuments returned it.
+	Consent []LegalDocumentVersion `json:"consent"`
+}
+
+// LegalDocument One version of one of the site's legal documents; the text is plain text, never HTML.
+type LegalDocument struct {
+	Body        string            `json:"body"`
+	Kind        LegalDocumentKind `json:"kind"`
+	PublishedAt time.Time         `json:"published_at"`
+	Version     int               `json:"version"`
+}
+
+// LegalDocumentKind defines model for LegalDocumentKind.
+type LegalDocumentKind string
+
+// LegalDocumentVersion defines model for LegalDocumentVersion.
+type LegalDocumentVersion struct {
+	Kind    LegalDocumentKind `json:"kind"`
+	Version int               `json:"version"`
+}
+
+// LegalDocuments defines model for LegalDocuments.
+type LegalDocuments struct {
+	// Documents The current version of each kind, at most one per kind.
+	Documents []LegalDocument `json:"documents"`
 }
 
 // LimitReset When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
@@ -799,7 +1247,39 @@ type MfaRequest struct {
 	Code string `json:"code"`
 }
 
-// Money An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+// ModelAbility defines model for ModelAbility.
+type ModelAbility string
+
+// ModelItem defines model for ModelItem.
+type ModelItem string
+
+// ModelPricing Every unit price the model's sale schedule sets, for each service tier and context band. A price is decimal text in the pricing currency, per the item's unit; an item the schedule does not price is absent.
+type ModelPricing struct {
+	// Basis The items whose counts add up to the prompt length the context bands compare; empty when the schedule has no context tiers.
+	Basis    []ModelItem `json:"basis"`
+	Currency string      `json:"currency"`
+	Rates    []ModelRate `json:"rates"`
+}
+
+// ModelRate defines model for ModelRate.
+type ModelRate struct {
+	// Above The prompt length above which this rate applies. Absent for the base band that applies below every threshold; 0 is an explicit first band above 0 and is not the base band.
+	Above *int64 `json:"above,omitempty"`
+
+	// Amount Exact currency units per unit, decimal text with up to 15 fractional digits.
+	Amount      string           `json:"amount"`
+	Item        ModelItem        `json:"item"`
+	ServiceTier ModelServiceTier `json:"service_tier"`
+	Unit        ModelUnit        `json:"unit"`
+}
+
+// ModelServiceTier defines model for ModelServiceTier.
+type ModelServiceTier string
+
+// ModelUnit defines model for ModelUnit.
+type ModelUnit string
+
+// Money An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 type Money struct {
 	// Amount Example: 1500000000
 	Amount string `json:"amount"`
@@ -814,6 +1294,9 @@ type NotificationPreferences struct {
 	FactorChanged *bool                            `json:"factor_changed,omitempty"`
 	Language      *NotificationPreferencesLanguage `json:"language,omitempty"`
 	LowBalance    *bool                            `json:"low_balance,omitempty"`
+
+	// SpendAnomaly Controls account spend-anomaly email and webhooks. Absent from a node that predates the preference; a client must then neither show the switch nor send the field.
+	SpendAnomaly *bool `json:"spend_anomaly,omitempty"`
 
 	// Threshold Billionths of site credits.
 	Threshold  *string `json:"threshold,omitempty"`
@@ -831,6 +1314,9 @@ type NotificationPreferencesRequest struct {
 	Language      NotificationPreferencesRequestLanguage `json:"language"`
 	LowBalance    bool                                   `json:"low_balance"`
 
+	// SpendAnomaly Controls account spend-anomaly email and webhooks. Omit to keep the stored value.
+	SpendAnomaly *bool `json:"spend_anomaly,omitempty"`
+
 	// Threshold Billionths of site credits.
 	Threshold  string `json:"threshold"`
 	TopUp      bool   `json:"top_up"`
@@ -840,13 +1326,28 @@ type NotificationPreferencesRequest struct {
 // NotificationPreferencesRequestLanguage defines model for NotificationPreferencesRequest.Language.
 type NotificationPreferencesRequestLanguage string
 
+// OAuthProvider A third-party sign-in provider.
+type OAuthProvider string
+
+// OAuthStart defines model for OAuthStart.
+type OAuthStart struct {
+	// AuthorizeUrl The provider's authorization endpoint with this flow's client, state and, where supported, PKCE challenge.
+	AuthorizeUrl string `json:"authorize_url"`
+}
+
+// OAuthStartRequest defines model for OAuthStartRequest.
+type OAuthStartRequest struct {
+	// Provider A third-party sign-in provider.
+	Provider OAuthProvider `json:"provider"`
+}
+
 // Order defines model for Order.
 type Order struct {
 	// Checkout Where to send the user to pay: a link to open (`pay_url`), a code to show (`qr_code`), or what the channel's own page needs (`client_secret`, in the response that made the order only).
 	Checkout  *Checkout `json:"checkout,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 
-	// Credits An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// Credits An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Credits Money `json:"credits"`
 
 	// ExpiresAt When a waiting order stops being payable.
@@ -859,6 +1360,12 @@ type Order struct {
 	Id     OrderId `json:"id"`
 	Method string  `json:"method"`
 
+	// RefundAllowed Whether this order's merchant account lets the account request refunds. Absent on a node of the previous release; the page then shows no refund action. True does not promise the channel can refund: the request itself still answers with the current policy.
+	RefundAllowed *bool `json:"refund_allowed,omitempty"`
+
+	// Refunds The order's refunds, oldest first. Absent on a node of the previous release, and on responses that do not read them (creating, cancelling and verifying an order); the page reads the order again for them.
+	Refunds *[]OrderRefund `json:"refunds,omitempty"`
+
 	// State `pending` waits for payment; `paid` is credited; `expired` and `cancelled` can still be credited if a payment arrives in time; `failed` was refused by the channel; `review` waits for a person (the amount did not match, among others) and the user needs do nothing; the rest follow refunds and chargebacks (docs/domains/payments.md「订单」).
 	State OrderState `json:"state"`
 
@@ -868,7 +1375,7 @@ type Order struct {
 
 // OrderCreate defines model for OrderCreate.
 type OrderCreate struct {
-	// Credits An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// Credits An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Credits Money `json:"credits"`
 
 	// Method Example: alipay
@@ -878,8 +1385,81 @@ type OrderCreate struct {
 // OrderId A top-up order's ID (TypeID), also the order number the payment channel sees.
 type OrderId = string
 
+// OrderList defines model for OrderList.
+type OrderList struct {
+	Data []Order `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
+// OrderRefund defines model for OrderRefund.
+type OrderRefund struct {
+	// Amount The cash due back, in the currency the order was paid in, quoted from the batch's payment and the site's refund policy.
+	Amount    PayAmount `json:"amount"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Credits An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Credits Money `json:"credits"`
+
+	// FinishedAt When the refund reached `succeeded` or `declined`; absent while it is not final.
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+
+	// Id A refund's ID (TypeID), the refund number of channels that take one.
+	Id RefundId `json:"id"`
+
+	// State `pending_review` waits for an administrator's approval; `processing` is with the payment channel and its result is not final; `succeeded` returned the cash and took the credits from the balance; `declined` returned the frozen credits and moved no cash.
+	State RefundState `json:"state"`
+}
+
 // OrderState `pending` waits for payment; `paid` is credited; `expired` and `cancelled` can still be credited if a payment arrives in time; `failed` was refused by the channel; `review` waits for a person (the amount did not match, among others) and the user needs do nothing; the rest follow refunds and chargebacks (docs/domains/payments.md「订单」).
 type OrderState string
+
+// Passkey defines model for Passkey.
+type Passkey struct {
+	// BackupEligible Whether the credential can be synced or backed up between devices.
+	BackupEligible bool      `json:"backup_eligible"`
+	CreatedAt      time.Time `json:"created_at"`
+
+	// Id A passkey's ID (TypeID).
+	Id         PasskeyId  `json:"id"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Name       string     `json:"name"`
+
+	// RecoveryCodes Replacement recovery codes, present only on the answer that adds the passkey and only when TOTP is on: raising the factor version stops the old ones.
+	RecoveryCodes *[]string `json:"recovery_codes,omitempty"`
+}
+
+// PasskeyChallenge defines model for PasskeyChallenge.
+type PasskeyChallenge struct {
+	// FlowId The ceremony to finish; single use, expires in 5 minutes.
+	FlowId string `json:"flow_id"`
+
+	// PublicKey The browser's `PublicKeyCredential` JSON, passed through to the WebAuthn verifier unchanged. Its shape is the WebAuthn specification's, not this contract's.
+	PublicKey WebAuthnCredential `json:"public_key"`
+}
+
+// PasskeyDeleteRequest defines model for PasskeyDeleteRequest.
+type PasskeyDeleteRequest struct {
+	Password string `json:"password"`
+}
+
+// PasskeyId A passkey's ID (TypeID).
+type PasskeyId = string
+
+// PasskeyRegistrationRequest defines model for PasskeyRegistrationRequest.
+type PasskeyRegistrationRequest struct {
+	// Name A label for the credential; absent means Passkey.
+	Name *string `json:"name,omitempty"`
+
+	// Password The current password, asked again.
+	Password string `json:"password"`
+}
+
+// Passkeys defines model for Passkeys.
+type Passkeys struct {
+	Passkeys []Passkey `json:"passkeys"`
+}
 
 // PayAmount An amount in the currency a method is paid in, which is not always the site's. `amount` is a non-negative integer in decimal text, in the currency's minor units (cents for USD, fen for CNY, none for JPY).
 type PayAmount struct {
@@ -944,18 +1524,103 @@ type PresetRequest struct {
 	Slug   string       `json:"slug"`
 }
 
+// PublicModel One published model as a visitor may see it: its public name and limits, the abilities its spec declares, and the sale prices of the audience that asked. No supplier, endpoint, route, cost or internal name.
+type PublicModel struct {
+	Abilities []ModelAbility `json:"abilities"`
+
+	// Author The author slug, the part of the public ID before the slash.
+	Author        string `json:"author"`
+	ContextLength int64  `json:"context_length"`
+
+	// Id The public model ID, such as acme/claude-sonnet.
+	Id        string `json:"id"`
+	MaxOutput int64  `json:"max_output"`
+
+	// Name The vendor's name for the model, the part of the public ID after the author.
+	Name string `json:"name"`
+
+	// Pricing Every unit price the model's sale schedule sets, for each service tier and context band. A price is decimal text in the pricing currency, per the item's unit; an item the schedule does not price is absent.
+	Pricing ModelPricing `json:"pricing"`
+
+	// Streams Whether the vendor streams the model's replies.
+	Streams bool `json:"streams"`
+}
+
+// PublicModelList defines model for PublicModelList.
+type PublicModelList struct {
+	Data []PublicModel `json:"data"`
+}
+
 // RecoveryCodesRequest defines model for RecoveryCodesRequest.
 type RecoveryCodesRequest struct {
 	// Code A current TOTP code.
 	Code string `json:"code"`
 }
 
+// RedeemCodeHistory defines model for RedeemCodeHistory.
+type RedeemCodeHistory struct {
+	Data []RedeemCodeRedemption `json:"data"`
+
+	// NextCursor Absent on the last page.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// RedeemCodeRedemption defines model for RedeemCodeRedemption.
+type RedeemCodeRedemption struct {
+	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Amount Money `json:"amount"`
+
+	// CodeHint The code's last four characters; never the code.
+	CodeHint string `json:"code_hint"`
+
+	// ExpiresAt When the credit expires; absent: never.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// Id The redemption's ID (TypeID), also the credit batch's.
+	Id         string    `json:"id"`
+	RedeemedAt time.Time `json:"redeemed_at"`
+}
+
+// RedeemCodeRequest defines model for RedeemCodeRequest.
+type RedeemCodeRequest struct {
+	// Code The code as issued, with or without its dashes or spaces, in any case.
+	Code string `json:"code"`
+}
+
+// RefundId A refund's ID (TypeID), the refund number of channels that take one.
+type RefundId = string
+
+// RefundRequest defines model for RefundRequest.
+type RefundRequest struct {
+	// Credits An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Credits Money  `json:"credits"`
+	Reason  string `json:"reason"`
+}
+
+// RefundState `pending_review` waits for an administrator's approval; `processing` is with the payment channel and its result is not final; `succeeded` returned the cash and took the credits from the balance; `declined` returned the frozen credits and moved no cash.
+type RefundState string
+
 // RegisterRequest defines model for RegisterRequest.
 type RegisterRequest struct {
-	Email      string `json:"email"`
-	InviteCode string `json:"invite_code"`
-	Password   string `json:"password"`
+	// Consent The current legal documents the person accepted. Required on a site that publishes any, where a missing or stale version is `consent_required`; open registration checks it at verify-email instead, because no user exists yet.
+	Consent *[]LegalDocumentVersion `json:"consent,omitempty"`
+	Email   string                  `json:"email"`
+
+	// HumanCheck The decimal nonce that solves the site's proof of work. Required where `human_check` is present.
+	HumanCheck *string `json:"human_check,omitempty"`
+
+	// InviteCode Required on an invite-only site; ignored where registration is open.
+	InviteCode *string `json:"invite_code,omitempty"`
+
+	// Language The language of the verification mail; absent means en. The page sends its own.
+	Language *RegisterRequestLanguage `json:"language,omitempty"`
+
+	// Password Required on an invite-only site. Open registration does not keep it: the page chooses the password on the verification page, so an unauthenticated caller cannot choose the password of an address it does not own.
+	Password *string `json:"password,omitempty"`
 }
+
+// RegisterRequestLanguage The language of the verification mail; absent means en. The page sends its own.
+type RegisterRequestLanguage string
 
 // Registered defines model for Registered.
 type Registered struct {
@@ -963,11 +1628,22 @@ type Registered struct {
 	UserId UserId `json:"user_id"`
 }
 
+// RegistrationPending defines model for RegistrationPending.
+type RegistrationPending struct {
+	Status RegistrationPendingStatus `json:"status"`
+}
+
+// RegistrationPendingStatus defines model for RegistrationPending.Status.
+type RegistrationPendingStatus string
+
 // Session defines model for Session.
 type Session struct {
 	// Account An account's ID (TypeID).
-	Account   AccountId `json:"account"`
-	CsrfToken string    `json:"csrf_token"`
+	Account AccountId `json:"account"`
+
+	// Consent What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it.
+	Consent   *SessionConsent `json:"consent,omitempty"`
+	CsrfToken string          `json:"csrf_token"`
 
 	// ExpiresAt When the session ends if it is not used again; the idle timeout moves it.
 	ExpiresAt time.Time `json:"expires_at"`
@@ -991,6 +1667,33 @@ type Session struct {
 	} `json:"user"`
 }
 
+// SessionConsent The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead.
+type SessionConsent struct {
+	// Required Current documents this user has not accepted; empty when every one is accepted.
+	Required []LegalDocumentVersion `json:"required"`
+}
+
+// SessionDevice One signed-in console session. Every field is optional so a page built before it reads an older node that does not send it.
+type SessionDevice struct {
+	// Client A short browser and platform summary derived from the User-Agent recorded at sign-in, such as `Chrome on macOS`, or `Unknown client`. The raw header is not returned.
+	Client *string `json:"client,omitempty"`
+
+	// CreatedAt When the session was signed in.
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+
+	// Current Whether this is the session of the request.
+	Current *bool `json:"current,omitempty"`
+
+	// Id A session's ID (TypeID).
+	Id *SessionId `json:"id,omitempty"`
+
+	// IpGroup The network the session was signed in from, grouped as the sign-in limits count it: an IPv4 address as it is, an IPv6 allocation as its /64. Empty when no address was recorded.
+	IpGroup *string `json:"ip_group,omitempty"`
+
+	// LastSeenAt When a request was last charged to it, accurate to about a minute.
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+}
+
 // SessionGrant defines model for SessionGrant.
 type SessionGrant struct {
 	// CsrfToken Sent as X-CSRF-Token on the requests that change data.
@@ -1003,8 +1706,28 @@ type SessionGrant struct {
 // SessionGrantStatus `mfa_required`: the password was right and the user has two-step verification, so the cookie is a pending session that only `verifyMfa` accepts, for 5 minutes.
 type SessionGrantStatus string
 
+// SessionId A session's ID (TypeID).
+type SessionId = string
+
 // SessionLevel What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a sign-in that waits for its second factor.
 type SessionLevel string
+
+// SessionList defines model for SessionList.
+type SessionList struct {
+	// Sessions Newest first, at most 100. A page that gets no `sessions` shows the list as unavailable.
+	Sessions *[]SessionDevice `json:"sessions,omitempty"`
+}
+
+// SessionRevocation defines model for SessionRevocation.
+type SessionRevocation struct {
+	// Revoked How many other sessions ended.
+	Revoked *int `json:"revoked,omitempty"`
+}
+
+// ShownRecoveryCodes The recovery codes a link round trip left for the session, read once.
+type ShownRecoveryCodes struct {
+	RecoveryCodes []string `json:"recovery_codes"`
+}
 
 // SignInRequest defines model for SignInRequest.
 type SignInRequest struct {
@@ -1019,25 +1742,52 @@ type Site struct {
 	// Example: https://api.example.com
 	ApiBaseUrl *string `json:"api_base_url,omitempty"`
 
+	// BrandColor The site's brand colour, lower case, from which the console derives both colour schemes' accent and primary button (docs/frontend.md「主题与自由度」). Absent when the site uses the default palette or the node predates the field.
+	BrandColor *string `json:"brand_color,omitempty"`
+
 	// Currency The site's accounting currency, the one of every `Money` its API shows. It never changes.
 	//
 	// Example: USD
 	Currency string `json:"currency"`
+
+	// EmailVerification Whether open registration verifies the address by mail before the user exists. Absent on a node of the previous release.
+	EmailVerification *bool `json:"email_verification,omitempty"`
+
+	// HumanCheck The proof of work the open-registration page must solve. Absent when the site does not check, or when the node predates open registration.
+	HumanCheck *struct {
+		// Bits Leading zero bits the SHA-256 of `axiom-registration-v1`, the site id, the normalized email and the decimal nonce must have.
+		Bits int `json:"bits"`
+	} `json:"human_check,omitempty"`
+
+	// Id A site's ID (TypeID).
+	Id *SiteId `json:"id,omitempty"`
 
 	// KeyPrefix What the site's API keys start with.
 	//
 	// Example: sk-ax-v1-
 	KeyPrefix string `json:"key_prefix"`
 
-	// LogoUrl Absent when the site has no logo.
+	// LoginDomain The console domain third-party sign-in returns to and passkeys bind to. Absent until an operator sets it; the sign-in page sends visitors to `login_origin` when the Host is another console domain.
+	LoginDomain *string `json:"login_domain,omitempty"`
+
+	// LoginOrigin The registered origin of `login_domain`. Absent with it, or when that domain is disabled.
+	LoginOrigin *string `json:"login_origin,omitempty"`
+
+	// LogoUrl The path of the site's logo on this host. Absent when the site has no logo. It is long-cached, because its hash names the bytes; a page shows the site's name when the image does not load.
 	LogoUrl *string `json:"logo_url,omitempty"`
 	Name    string  `json:"name"`
 
-	// Registration `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
+	// OauthProviders The third-party providers the site configured, for the sign-in page's buttons.
+	OauthProviders *[]OAuthProvider `json:"oauth_providers,omitempty"`
+
+	// Passkeys Whether the site offers passkeys. False on an older node that does not know the field.
+	Passkeys *bool `json:"passkeys,omitempty"`
+
+	// Registration `invite` needs an invite code; `closed` takes no one; `open` verifies the address by mail, with the site's human check, domain lists and limits.
 	Registration SiteRegistration `json:"registration"`
 }
 
-// SiteRegistration `invite` needs an invite code; `closed` takes no one; `open` (with a human check) comes after M1.
+// SiteRegistration `invite` needs an invite code; `closed` takes no one; `open` verifies the address by mail, with the site's human check, domain lists and limits.
 type SiteRegistration string
 
 // SiteId A site's ID (TypeID).
@@ -1051,12 +1801,12 @@ type Statement struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
-// StatementKind What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+// StatementKind What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
 type StatementKind string
 
 // StatementRow One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in, so the balance between two of them is not known.
 type StatementRow struct {
-	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser.
+	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Amount Money `json:"amount"`
 
 	// At When the movement was recorded.
@@ -1072,7 +1822,7 @@ type StatementRow struct {
 	// Id The row's own identity, to tell two rows apart; it names no ledger entry.
 	Id string `json:"id"`
 
-	// Kind What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+	// Kind What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
 	Kind StatementKind `json:"kind"`
 
 	// Reference The call ID for charges and reversals; otherwise the credit batch ID (the order ID for paid credit, or the offline credit ID). No payment credentials or internal account IDs are included.
@@ -1089,6 +1839,18 @@ type TotpConfirmRequest struct {
 	Secret   string `json:"secret"`
 }
 
+// TotpReplaceRequest defines model for TotpReplaceRequest.
+type TotpReplaceRequest struct {
+	// Code A code from the new secret.
+	Code string `json:"code"`
+
+	// CurrentCode Proof of the factor being replaced: a current TOTP code (6 digits) or an unused recovery code (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server tells them apart by shape.
+	CurrentCode string `json:"current_code"`
+
+	// Secret The new TOTP secret in base32, from `beginTotpSetup`.
+	Secret string `json:"secret"`
+}
+
 // TotpSetup defines model for TotpSetup.
 type TotpSetup struct {
 	// Secret The new TOTP secret in base32. Nothing is stored yet; confirmTotp sends it back.
@@ -1101,6 +1863,16 @@ type TotpSetup struct {
 // UserId A user's ID (TypeID).
 type UserId = string
 
+// VerifyEmailRequest defines model for VerifyEmailRequest.
+type VerifyEmailRequest struct {
+	// Consent The current legal documents the person accepted, shown on the verification page. Required on a site that publishes any; a missing or stale version is `consent_required`.
+	Consent *[]LegalDocumentVersion `json:"consent,omitempty"`
+
+	// Password The password chosen by the mailbox owner when the link is clicked.
+	Password string `json:"password"`
+	Token    string `json:"token"`
+}
+
 // Version defines model for Version.
 type Version struct {
 	// Version The program's version line exactly as `axiom version` prints it: the main module's version, which the Go toolchain stamps from version control (such as a pseudo-version with the commit time and hash, +dirty for uncommitted changes). The console is stamped with the same line and only compares the two whole for equality.
@@ -1108,6 +1880,9 @@ type Version struct {
 	// Example: axiom v0.0.0-20261014044725-4daa4538fcac
 	Version string `json:"version"`
 }
+
+// WebAuthnCredential The browser's `PublicKeyCredential` JSON, passed through to the WebAuthn verifier unchanged. Its shape is the WebAuthn specification's, not this contract's.
+type WebAuthnCredential = jsonx.Raw
 
 // WorkspaceId A workspace's ID (TypeID).
 type WorkspaceId = string
@@ -1136,8 +1911,26 @@ type CallWorkspace = WorkspaceId
 // Cursor defines model for Cursor.
 type Cursor = string
 
+// KeyCreatedAfter defines model for KeyCreatedAfter.
+type KeyCreatedAfter = time.Time
+
+// KeyCreatedBefore defines model for KeyCreatedBefore.
+type KeyCreatedBefore = time.Time
+
+// KeyName defines model for KeyName.
+type KeyName = string
+
+// KeyPrefix defines model for KeyPrefix.
+type KeyPrefix = string
+
 // Limit defines model for Limit.
 type Limit = int
+
+// ModelAuthor defines model for ModelAuthor.
+type ModelAuthor = string
+
+// ModelQuery defines model for ModelQuery.
+type ModelQuery = string
 
 // BadRequest The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
 type BadRequest = Error
@@ -1162,6 +1955,33 @@ type Unauthenticated = Error
 
 // Unprocessable The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
 type Unprocessable = Error
+
+// CompleteOAuthParams defines parameters for CompleteOAuth.
+type CompleteOAuthParams struct {
+	Code  *string `form:"code,omitempty" json:"code,omitempty"`
+	State *string `form:"state,omitempty" json:"state,omitempty"`
+}
+
+// BeginPasskeySignInJSONBody defines parameters for BeginPasskeySignIn.
+type BeginPasskeySignInJSONBody = map[string]interface{}
+
+// FinishPasskeySignInParams defines parameters for FinishPasskeySignIn.
+type FinishPasskeySignInParams struct {
+	FlowId string `form:"flow_id" json:"flow_id"`
+}
+
+// BeginPasskeyMfaJSONBody defines parameters for BeginPasskeyMfa.
+type BeginPasskeyMfaJSONBody = map[string]interface{}
+
+// FinishPasskeyMfaParams defines parameters for FinishPasskeyMfa.
+type FinishPasskeyMfaParams struct {
+	FlowId string `form:"flow_id" json:"flow_id"`
+}
+
+// FinishPasskeyRegistrationParams defines parameters for FinishPasskeyRegistration.
+type FinishPasskeyRegistrationParams struct {
+	FlowId string `form:"flow_id" json:"flow_id"`
+}
 
 // RequestPasswordResetJSONBody defines parameters for RequestPasswordReset.
 type RequestPasswordResetJSONBody struct {
@@ -1245,6 +2065,54 @@ type ExportCallsParams struct {
 
 // ListKeysParams defines parameters for ListKeys.
 type ListKeysParams struct {
+	// Name Part of a key's name, ignoring case. Omit for every name.
+	Name *KeyName `form:"name,omitempty" json:"name,omitempty"`
+
+	// Prefix The beginning of a key's prefix, ignoring case. Omit for every prefix.
+	Prefix *KeyPrefix `form:"prefix,omitempty" json:"prefix,omitempty"`
+
+	// Status A key's state as the list shows it. Omit for every state.
+	Status *KeyStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// CreatedAfter Keys the database stamped at or after this instant.
+	CreatedAfter *KeyCreatedAfter `form:"created_after,omitempty" json:"created_after,omitempty"`
+
+	// CreatedBefore Keys the database stamped before this instant.
+	CreatedBefore *KeyCreatedBefore `form:"created_before,omitempty" json:"created_before,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListPublicModelsParams defines parameters for ListPublicModels.
+type ListPublicModelsParams struct {
+	// Q Part of a model's public ID or display name, ignoring case. Omit for every model.
+	Q *ModelQuery `form:"q,omitempty" json:"q,omitempty"`
+
+	// Author The exact author slug, ignoring case. Omit for every author.
+	Author *ModelAuthor `form:"author,omitempty" json:"author,omitempty"`
+
+	// Ability Only models that declare this ability. Omit for every ability.
+	Ability *ModelAbility `form:"ability,omitempty" json:"ability,omitempty"`
+}
+
+// ListAccountModelsParams defines parameters for ListAccountModels.
+type ListAccountModelsParams struct {
+	// Q Part of a model's public ID or display name, ignoring case. Omit for every model.
+	Q *ModelQuery `form:"q,omitempty" json:"q,omitempty"`
+
+	// Author The exact author slug, ignoring case. Omit for every author.
+	Author *ModelAuthor `form:"author,omitempty" json:"author,omitempty"`
+
+	// Ability Only models that declare this ability. Omit for every ability.
+	Ability *ModelAbility `form:"ability,omitempty" json:"ability,omitempty"`
+}
+
+// ListOrdersParams defines parameters for ListOrders.
+type ListOrdersParams struct {
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 
@@ -1255,6 +2123,12 @@ type ListKeysParams struct {
 // CreateOrderParams defines parameters for CreateOrder.
 type CreateOrderParams struct {
 	// IdempotencyKey A key the caller chooses for one intended top-up, 1 to 128 of letters, digits and `._:-` (a UUID is fine).
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
+// RequestRefundParams defines parameters for RequestRefund.
+type RequestRefundParams struct {
+	// IdempotencyKey A key the caller chooses for one intended refund, 1 to 128 of letters, digits and `._:-` (a UUID is fine).
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
@@ -1280,6 +2154,21 @@ type ListPresetsParams struct {
 	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// ListRedemptionsParams defines parameters for ListRedemptions.
+type ListRedemptionsParams struct {
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// RedeemCodeParams defines parameters for RedeemCode.
+type RedeemCodeParams struct {
+	// IdempotencyKey A key the caller chooses for one intended redemption, 1 to 128 of letters, digits and `._:-` (a UUID is fine).
+	IdempotencyKey string `json:"Idempotency-Key"`
+}
+
 // ListStatementParams defines parameters for ListStatement.
 type ListStatementParams struct {
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
@@ -1291,6 +2180,33 @@ type ListStatementParams struct {
 
 // VerifyMfaJSONRequestBody defines body for VerifyMfa for application/json ContentType.
 type VerifyMfaJSONRequestBody = MfaRequest
+
+// StartOAuthLinkJSONRequestBody defines body for StartOAuthLink for application/json ContentType.
+type StartOAuthLinkJSONRequestBody = OAuthStartRequest
+
+// StartOAuthSignInJSONRequestBody defines body for StartOAuthSignIn for application/json ContentType.
+type StartOAuthSignInJSONRequestBody = OAuthStartRequest
+
+// BeginPasskeySignInJSONRequestBody defines body for BeginPasskeySignIn for application/json ContentType.
+type BeginPasskeySignInJSONRequestBody = BeginPasskeySignInJSONBody
+
+// FinishPasskeySignInJSONRequestBody defines body for FinishPasskeySignIn for application/json ContentType.
+type FinishPasskeySignInJSONRequestBody = WebAuthnCredential
+
+// BeginPasskeyMfaJSONRequestBody defines body for BeginPasskeyMfa for application/json ContentType.
+type BeginPasskeyMfaJSONRequestBody = BeginPasskeyMfaJSONBody
+
+// FinishPasskeyMfaJSONRequestBody defines body for FinishPasskeyMfa for application/json ContentType.
+type FinishPasskeyMfaJSONRequestBody = WebAuthnCredential
+
+// BeginPasskeyRegistrationJSONRequestBody defines body for BeginPasskeyRegistration for application/json ContentType.
+type BeginPasskeyRegistrationJSONRequestBody = PasskeyRegistrationRequest
+
+// FinishPasskeyRegistrationJSONRequestBody defines body for FinishPasskeyRegistration for application/json ContentType.
+type FinishPasskeyRegistrationJSONRequestBody = WebAuthnCredential
+
+// DeletePasskeyJSONRequestBody defines body for DeletePasskey for application/json ContentType.
+type DeletePasskeyJSONRequestBody = PasskeyDeleteRequest
 
 // RequestPasswordResetJSONRequestBody defines body for RequestPasswordReset for application/json ContentType.
 type RequestPasswordResetJSONRequestBody RequestPasswordResetJSONBody
@@ -1310,17 +2226,29 @@ type SignInJSONRequestBody = SignInRequest
 // ConfirmTotpSetupJSONRequestBody defines body for ConfirmTotpSetup for application/json ContentType.
 type ConfirmTotpSetupJSONRequestBody = TotpConfirmRequest
 
+// ReplaceTotpJSONRequestBody defines body for ReplaceTotp for application/json ContentType.
+type ReplaceTotpJSONRequestBody = TotpReplaceRequest
+
+// VerifyEmailJSONRequestBody defines body for VerifyEmail for application/json ContentType.
+type VerifyEmailJSONRequestBody = VerifyEmailRequest
+
 // CreateKeyJSONRequestBody defines body for CreateKey for application/json ContentType.
 type CreateKeyJSONRequestBody = KeyCreate
 
 // UpdateKeyJSONRequestBody defines body for UpdateKey for application/json ContentType.
 type UpdateKeyJSONRequestBody = KeySettings
 
+// AcceptLegalDocumentsJSONRequestBody defines body for AcceptLegalDocuments for application/json ContentType.
+type AcceptLegalDocumentsJSONRequestBody = LegalAcceptance
+
 // SetNotificationPreferencesJSONRequestBody defines body for SetNotificationPreferences for application/json ContentType.
 type SetNotificationPreferencesJSONRequestBody = NotificationPreferencesRequest
 
 // CreateOrderJSONRequestBody defines body for CreateOrder for application/json ContentType.
 type CreateOrderJSONRequestBody = OrderCreate
+
+// RequestRefundJSONRequestBody defines body for RequestRefund for application/json ContentType.
+type RequestRefundJSONRequestBody = RefundRequest
 
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody ChangePasswordJSONBody
@@ -1331,14 +2259,56 @@ type CreatePresetJSONRequestBody = PresetRequest
 // UpdatePresetJSONRequestBody defines body for UpdatePreset for application/json ContentType.
 type UpdatePresetJSONRequestBody = PresetReplacement
 
+// RedeemCodeJSONRequestBody defines body for RedeemCode for application/json ContentType.
+type RedeemCodeJSONRequestBody = RedeemCodeRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListAnnouncements Read active announcements for this site
 	// (GET /api/console/v1/announcements)
 	ListAnnouncements(w http.ResponseWriter, r *http.Request)
+	// ListIdentities The signed-in user's linked third-party accounts
+	// (GET /api/console/v1/auth/identities)
+	ListIdentities(w http.ResponseWriter, r *http.Request)
+	// UnlinkIdentity Unlink a third-party account
+	// (DELETE /api/console/v1/auth/identities/{provider})
+	UnlinkIdentity(w http.ResponseWriter, r *http.Request, provider OAuthProvider)
 	// VerifyMfa Pass two-step verification
 	// (POST /api/console/v1/auth/mfa)
 	VerifyMfa(w http.ResponseWriter, r *http.Request)
+	// StartOAuthLink Start linking a third-party provider to the signed-in user
+	// (POST /api/console/v1/auth/oauth/link/start)
+	StartOAuthLink(w http.ResponseWriter, r *http.Request)
+	// StartOAuthSignIn Start signing in with a third-party provider
+	// (POST /api/console/v1/auth/oauth/start)
+	StartOAuthSignIn(w http.ResponseWriter, r *http.Request)
+	// CompleteOAuth The provider's redirect back to the site
+	// (GET /api/console/v1/auth/oauth/{provider}/callback)
+	CompleteOAuth(w http.ResponseWriter, r *http.Request, provider OAuthProvider, params CompleteOAuthParams)
+	// ListPasskeys The signed-in user's passkeys
+	// (GET /api/console/v1/auth/passkeys)
+	ListPasskeys(w http.ResponseWriter, r *http.Request)
+	// BeginPasskeySignIn Start signing in with a passkey
+	// (POST /api/console/v1/auth/passkeys/begin)
+	BeginPasskeySignIn(w http.ResponseWriter, r *http.Request)
+	// FinishPasskeySignIn Finish signing in with a passkey
+	// (POST /api/console/v1/auth/passkeys/finish)
+	FinishPasskeySignIn(w http.ResponseWriter, r *http.Request, params FinishPasskeySignInParams)
+	// BeginPasskeyMfa Start the passkey factor of a pending sign-in
+	// (POST /api/console/v1/auth/passkeys/mfa/begin)
+	BeginPasskeyMfa(w http.ResponseWriter, r *http.Request)
+	// FinishPasskeyMfa Finish the passkey factor of a pending sign-in
+	// (POST /api/console/v1/auth/passkeys/mfa/finish)
+	FinishPasskeyMfa(w http.ResponseWriter, r *http.Request, params FinishPasskeyMfaParams)
+	// BeginPasskeyRegistration Start adding a passkey
+	// (POST /api/console/v1/auth/passkeys/register/begin)
+	BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request)
+	// FinishPasskeyRegistration Finish adding a passkey
+	// (POST /api/console/v1/auth/passkeys/register/finish)
+	FinishPasskeyRegistration(w http.ResponseWriter, r *http.Request, params FinishPasskeyRegistrationParams)
+	// DeletePasskey Remove a passkey
+	// (DELETE /api/console/v1/auth/passkeys/{id})
+	DeletePasskey(w http.ResponseWriter, r *http.Request, id PasskeyId)
 	// RequestPasswordReset Request a password reset email
 	// (POST /api/console/v1/auth/password-reset)
 	RequestPasswordReset(w http.ResponseWriter, r *http.Request)
@@ -1348,7 +2318,10 @@ type ServerInterface interface {
 	// RegenerateRecoveryCodes Make new recovery codes
 	// (POST /api/console/v1/auth/recovery-codes)
 	RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request)
-	// Register Register with an invite code
+	// TakeRecoveryCodes Take the recovery codes a provider link left for this session
+	// (POST /api/console/v1/auth/recovery-codes/take)
+	TakeRecoveryCodes(w http.ResponseWriter, r *http.Request)
+	// Register Register with an invite code or open registration
 	// (POST /api/console/v1/auth/register)
 	Register(w http.ResponseWriter, r *http.Request)
 	// SignIn Sign in with email and password
@@ -1360,9 +2333,15 @@ type ServerInterface interface {
 	// ConfirmTotpSetup Finish enabling two-step verification
 	// (POST /api/console/v1/auth/totp/confirm)
 	ConfirmTotpSetup(w http.ResponseWriter, r *http.Request)
+	// ReplaceTotp Replace two-step verification's secret
+	// (POST /api/console/v1/auth/totp/replace)
+	ReplaceTotp(w http.ResponseWriter, r *http.Request)
 	// BeginTotpSetup Start enabling two-step verification
 	// (POST /api/console/v1/auth/totp/setup)
 	BeginTotpSetup(w http.ResponseWriter, r *http.Request)
+	// VerifyEmail Verify an open registration's email
+	// (POST /api/console/v1/auth/verify-email)
+	VerifyEmail(w http.ResponseWriter, r *http.Request)
 	// GetBalance The account's balance
 	// (GET /api/console/v1/balance)
 	GetBalance(w http.ResponseWriter, r *http.Request)
@@ -1393,12 +2372,27 @@ type ServerInterface interface {
 	// UpdateKey Change an API key's settings
 	// (PUT /api/console/v1/keys/{key_id})
 	UpdateKey(w http.ResponseWriter, r *http.Request, keyId KeyId)
+	// GetLegalDocuments The site's current legal documents
+	// (GET /api/console/v1/legal)
+	GetLegalDocuments(w http.ResponseWriter, r *http.Request)
+	// AcceptLegalDocuments Accept the current legal documents
+	// (POST /api/console/v1/legal/accept)
+	AcceptLegalDocuments(w http.ResponseWriter, r *http.Request)
+	// ListPublicModels List the published models and the site's sale prices
+	// (GET /api/console/v1/models)
+	ListPublicModels(w http.ResponseWriter, r *http.Request, params ListPublicModelsParams)
+	// ListAccountModels List the published models at the signed-in account's prices
+	// (GET /api/console/v1/models/account)
+	ListAccountModels(w http.ResponseWriter, r *http.Request, params ListAccountModelsParams)
 	// GetNotificationPreferences Read your notification preferences
 	// (GET /api/console/v1/notification-preferences)
 	GetNotificationPreferences(w http.ResponseWriter, r *http.Request)
 	// SetNotificationPreferences Replace your notification preferences
 	// (PUT /api/console/v1/notification-preferences)
 	SetNotificationPreferences(w http.ResponseWriter, r *http.Request)
+	// ListOrders The account's top-up orders
+	// (GET /api/console/v1/orders)
+	ListOrders(w http.ResponseWriter, r *http.Request, params ListOrdersParams)
 	// CreateOrder Place a top-up order
 	// (POST /api/console/v1/orders)
 	CreateOrder(w http.ResponseWriter, r *http.Request, params CreateOrderParams)
@@ -1408,6 +2402,9 @@ type ServerInterface interface {
 	// CancelOrder Cancel an order that waits for payment
 	// (POST /api/console/v1/orders/{order_id}/cancel)
 	CancelOrder(w http.ResponseWriter, r *http.Request, orderId OrderId)
+	// RequestRefund Ask for a refund of unused credits from an order
+	// (POST /api/console/v1/orders/{order_id}/refunds)
+	RequestRefund(w http.ResponseWriter, r *http.Request, orderId OrderId, params RequestRefundParams)
 	// VerifyOrder Ask the payment channel about an order now
 	// (POST /api/console/v1/orders/{order_id}/verify)
 	VerifyOrder(w http.ResponseWriter, r *http.Request, orderId OrderId)
@@ -1432,12 +2429,30 @@ type ServerInterface interface {
 	// UpdatePreset updatePreset
 	// (PUT /api/console/v1/presets/{slug})
 	UpdatePreset(w http.ResponseWriter, r *http.Request, slug string)
+	// ListRedemptions The redeem codes this account redeemed, newest first
+	// (GET /api/console/v1/redeem-codes)
+	ListRedemptions(w http.ResponseWriter, r *http.Request, params ListRedemptionsParams)
+	// RedeemCode Redeem a code into credit
+	// (POST /api/console/v1/redeem-codes)
+	RedeemCode(w http.ResponseWriter, r *http.Request, params RedeemCodeParams)
 	// GetSession The current session
 	// (GET /api/console/v1/session)
 	GetSession(w http.ResponseWriter, r *http.Request)
+	// RevokeOtherSessions End every other session
+	// (DELETE /api/console/v1/sessions)
+	RevokeOtherSessions(w http.ResponseWriter, r *http.Request)
+	// ListSessions The signed-in devices
+	// (GET /api/console/v1/sessions)
+	ListSessions(w http.ResponseWriter, r *http.Request)
+	// RevokeSession End one other session
+	// (DELETE /api/console/v1/sessions/{session_id})
+	RevokeSession(w http.ResponseWriter, r *http.Request, sessionId SessionId)
 	// GetSite The site the request's domain belongs to
 	// (GET /api/console/v1/site)
 	GetSite(w http.ResponseWriter, r *http.Request)
+	// GetSiteLogo The site's logo
+	// (GET /api/console/v1/site/logo/{hash})
+	GetSiteLogo(w http.ResponseWriter, r *http.Request, hash string)
 	// ListStatement The account's credit statement
 	// (GET /api/console/v1/statement)
 	ListStatement(w http.ResponseWriter, r *http.Request, params ListStatementParams)
@@ -1472,11 +2487,315 @@ func (siw *ServerInterfaceWrapper) ListAnnouncements(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
+// ListIdentities operation middleware
+func (siw *ServerInterfaceWrapper) ListIdentities(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListIdentities(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UnlinkIdentity operation middleware
+func (siw *ServerInterfaceWrapper) UnlinkIdentity(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "provider" -------------
+	var provider OAuthProvider
+
+	err = runtime.BindStyledParameterWithOptions("simple", "provider", r.PathValue("provider"), &provider, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "provider", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UnlinkIdentity(w, r, provider)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // VerifyMfa operation middleware
 func (siw *ServerInterfaceWrapper) VerifyMfa(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.VerifyMfa(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartOAuthLink operation middleware
+func (siw *ServerInterfaceWrapper) StartOAuthLink(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartOAuthLink(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartOAuthSignIn operation middleware
+func (siw *ServerInterfaceWrapper) StartOAuthSignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartOAuthSignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CompleteOAuth operation middleware
+func (siw *ServerInterfaceWrapper) CompleteOAuth(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "provider" -------------
+	var provider OAuthProvider
+
+	err = runtime.BindStyledParameterWithOptions("simple", "provider", r.PathValue("provider"), &provider, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "provider", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CompleteOAuthParams
+
+	// ------------- Optional query parameter "code" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "code", r.URL.Query(), &params.Code, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "code"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CompleteOAuth(w, r, provider, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListPasskeys operation middleware
+func (siw *ServerInterfaceWrapper) ListPasskeys(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListPasskeys(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BeginPasskeySignIn operation middleware
+func (siw *ServerInterfaceWrapper) BeginPasskeySignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginPasskeySignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishPasskeySignIn operation middleware
+func (siw *ServerInterfaceWrapper) FinishPasskeySignIn(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params FinishPasskeySignInParams
+
+	// ------------- Required query parameter "flow_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "flow_id", r.URL.Query(), &params.FlowId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "flow_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "flow_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishPasskeySignIn(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BeginPasskeyMfa operation middleware
+func (siw *ServerInterfaceWrapper) BeginPasskeyMfa(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginPasskeyMfa(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishPasskeyMfa operation middleware
+func (siw *ServerInterfaceWrapper) FinishPasskeyMfa(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params FinishPasskeyMfaParams
+
+	// ------------- Required query parameter "flow_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "flow_id", r.URL.Query(), &params.FlowId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "flow_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "flow_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishPasskeyMfa(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BeginPasskeyRegistration operation middleware
+func (siw *ServerInterfaceWrapper) BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BeginPasskeyRegistration(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishPasskeyRegistration operation middleware
+func (siw *ServerInterfaceWrapper) FinishPasskeyRegistration(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params FinishPasskeyRegistrationParams
+
+	// ------------- Required query parameter "flow_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "flow_id", r.URL.Query(), &params.FlowId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "flow_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "flow_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishPasskeyRegistration(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeletePasskey operation middleware
+func (siw *ServerInterfaceWrapper) DeletePasskey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id PasskeyId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeletePasskey(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1519,6 +2838,20 @@ func (siw *ServerInterfaceWrapper) RegenerateRecoveryCodes(w http.ResponseWriter
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RegenerateRecoveryCodes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// TakeRecoveryCodes operation middleware
+func (siw *ServerInterfaceWrapper) TakeRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.TakeRecoveryCodes(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1584,11 +2917,39 @@ func (siw *ServerInterfaceWrapper) ConfirmTotpSetup(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// ReplaceTotp operation middleware
+func (siw *ServerInterfaceWrapper) ReplaceTotp(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReplaceTotp(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // BeginTotpSetup operation middleware
 func (siw *ServerInterfaceWrapper) BeginTotpSetup(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.BeginTotpSetup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// VerifyEmail operation middleware
+func (siw *ServerInterfaceWrapper) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.VerifyEmail(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2071,6 +3432,71 @@ func (siw *ServerInterfaceWrapper) ListKeys(w http.ResponseWriter, r *http.Reque
 	// Parameter object where we will unmarshal all parameters from the context
 	var params ListKeysParams
 
+	// ------------- Optional query parameter "name" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "name", r.URL.Query(), &params.Name, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "name"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "prefix" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "prefix", r.URL.Query(), &params.Prefix, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "prefix"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "prefix", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "created_after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "created_after", r.URL.Query(), &params.CreatedAfter, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "created_after"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "created_after", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "created_before" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "created_before", r.URL.Query(), &params.CreatedBefore, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "created_before"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "created_before", Err: err})
+		}
+		return
+	}
+
 	// ------------- Optional query parameter "cursor" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
@@ -2200,6 +3626,152 @@ func (siw *ServerInterfaceWrapper) UpdateKey(w http.ResponseWriter, r *http.Requ
 	handler.ServeHTTP(w, r)
 }
 
+// GetLegalDocuments operation middleware
+func (siw *ServerInterfaceWrapper) GetLegalDocuments(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetLegalDocuments(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AcceptLegalDocuments operation middleware
+func (siw *ServerInterfaceWrapper) AcceptLegalDocuments(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AcceptLegalDocuments(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListPublicModels operation middleware
+func (siw *ServerInterfaceWrapper) ListPublicModels(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListPublicModelsParams
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "author" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "author", r.URL.Query(), &params.Author, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "author"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "author", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "ability" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "ability", r.URL.Query(), &params.Ability, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "ability"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "ability", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListPublicModels(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListAccountModels operation middleware
+func (siw *ServerInterfaceWrapper) ListAccountModels(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAccountModelsParams
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "author" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "author", r.URL.Query(), &params.Author, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "author"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "author", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "ability" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "ability", r.URL.Query(), &params.Ability, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "ability"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "ability", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListAccountModels(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetNotificationPreferences operation middleware
 func (siw *ServerInterfaceWrapper) GetNotificationPreferences(w http.ResponseWriter, r *http.Request) {
 
@@ -2219,6 +3791,52 @@ func (siw *ServerInterfaceWrapper) SetNotificationPreferences(w http.ResponseWri
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SetNotificationPreferences(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListOrders operation middleware
+func (siw *ServerInterfaceWrapper) ListOrders(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListOrdersParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListOrders(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2316,6 +3934,60 @@ func (siw *ServerInterfaceWrapper) CancelOrder(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CancelOrder(w, r, orderId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RequestRefund operation middleware
+func (siw *ServerInterfaceWrapper) RequestRefund(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "order_id" -------------
+	var orderId OrderId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "order_id", r.PathValue("order_id"), &orderId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "order_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RequestRefundParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestRefund(w, r, orderId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2536,6 +4208,97 @@ func (siw *ServerInterfaceWrapper) UpdatePreset(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// ListRedemptions operation middleware
+func (siw *ServerInterfaceWrapper) ListRedemptions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListRedemptionsParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListRedemptions(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RedeemCode operation middleware
+func (siw *ServerInterfaceWrapper) RedeemCode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RedeemCodeParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RedeemCode(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetSession operation middleware
 func (siw *ServerInterfaceWrapper) GetSession(w http.ResponseWriter, r *http.Request) {
 
@@ -2550,11 +4313,91 @@ func (siw *ServerInterfaceWrapper) GetSession(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// RevokeOtherSessions operation middleware
+func (siw *ServerInterfaceWrapper) RevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeOtherSessions(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSessions operation middleware
+func (siw *ServerInterfaceWrapper) ListSessions(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSessions(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeSession operation middleware
+func (siw *ServerInterfaceWrapper) RevokeSession(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "session_id" -------------
+	var sessionId SessionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "session_id", r.PathValue("session_id"), &sessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "session_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeSession(w, r, sessionId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetSite operation middleware
 func (siw *ServerInterfaceWrapper) GetSite(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetSite(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSiteLogo operation middleware
+func (siw *ServerInterfaceWrapper) GetSiteLogo(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "hash" -------------
+	var hash string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "hash", r.PathValue("hash"), &hash, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "hash", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSiteLogo(w, r, hash)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2774,11 +4617,33 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/mfa", wrapper.VerifyMfa)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/sign-out", wrapper.SignOut)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/session", wrapper.GetSession)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/console/v1/sessions", wrapper.RevokeOtherSessions)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/sessions", wrapper.ListSessions)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/console/v1/sessions/{session_id}", wrapper.RevokeSession)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/totp/setup", wrapper.BeginTotpSetup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/totp/confirm", wrapper.ConfirmTotpSetup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/totp/replace", wrapper.ReplaceTotp)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/recovery-codes", wrapper.RegenerateRecoveryCodes)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/recovery-codes/take", wrapper.TakeRecoveryCodes)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/oauth/start", wrapper.StartOAuthSignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/oauth/link/start", wrapper.StartOAuthLink)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/auth/oauth/{provider}/callback", wrapper.CompleteOAuth)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/passkeys/begin", wrapper.BeginPasskeySignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/passkeys/finish", wrapper.FinishPasskeySignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/passkeys/mfa/begin", wrapper.BeginPasskeyMfa)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/passkeys/mfa/finish", wrapper.FinishPasskeyMfa)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/auth/passkeys", wrapper.ListPasskeys)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/passkeys/register/begin", wrapper.BeginPasskeyRegistration)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/passkeys/register/finish", wrapper.FinishPasskeyRegistration)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/console/v1/auth/passkeys/{id}", wrapper.DeletePasskey)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/auth/identities", wrapper.ListIdentities)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/console/v1/auth/identities/{provider}", wrapper.UnlinkIdentity)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/legal", wrapper.GetLegalDocuments)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/legal/accept", wrapper.AcceptLegalDocuments)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/site", wrapper.GetSite)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/site/logo/{hash}", wrapper.GetSiteLogo)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/register", wrapper.Register)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/auth/verify-email", wrapper.VerifyEmail)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/keys", wrapper.ListKeys)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/keys", wrapper.CreateKey)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/console/v1/keys/{key_id}", wrapper.DeleteKey)
@@ -2791,11 +4656,17 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/calls/aggregate", wrapper.AggregateCalls)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/calls/export", wrapper.ExportCalls)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/calls/{call_id}", wrapper.GetCall)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/models/account", wrapper.ListAccountModels)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/models", wrapper.ListPublicModels)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/payment-methods", wrapper.ListPaymentMethods)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/orders", wrapper.ListOrders)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/orders", wrapper.CreateOrder)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/orders/{order_id}", wrapper.GetOrder)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/orders/{order_id}/cancel", wrapper.CancelOrder)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/orders/{order_id}/verify", wrapper.VerifyOrder)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/orders/{order_id}/refunds", wrapper.RequestRefund)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/redeem-codes", wrapper.ListRedemptions)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/redeem-codes", wrapper.RedeemCode)
 
 	return m
 }
@@ -2945,6 +4816,176 @@ func (response ListAnnouncementsdefaultJSONResponse) VisitListAnnouncementsRespo
 	return err
 }
 
+type ListIdentitiesRequestObject struct {
+}
+
+type ListIdentitiesResponseObject interface {
+	VisitListIdentitiesResponse(w http.ResponseWriter) error
+}
+
+type ListIdentities200JSONResponse Identities
+
+func (response ListIdentities200JSONResponse) VisitListIdentitiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListIdentities401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListIdentities401JSONResponse) VisitListIdentitiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListIdentitiesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListIdentitiesdefaultJSONResponse) VisitListIdentitiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UnlinkIdentityRequestObject struct {
+	Provider OAuthProvider `json:"provider"`
+}
+
+type UnlinkIdentityResponseObject interface {
+	VisitUnlinkIdentityResponse(w http.ResponseWriter) error
+}
+
+type UnlinkIdentity200ResponseHeaders struct {
+	SetCookie string
+}
+
+type UnlinkIdentity200JSONResponse struct {
+	Body    CredentialChange
+	Headers UnlinkIdentity200ResponseHeaders
+}
+
+func (response UnlinkIdentity200JSONResponse) VisitUnlinkIdentityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UnlinkIdentity400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UnlinkIdentity400JSONResponse) VisitUnlinkIdentityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UnlinkIdentity401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response UnlinkIdentity401JSONResponse) VisitUnlinkIdentityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UnlinkIdentity403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UnlinkIdentity403JSONResponse) VisitUnlinkIdentityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UnlinkIdentity404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UnlinkIdentity404JSONResponse) VisitUnlinkIdentityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UnlinkIdentity429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response UnlinkIdentity429JSONResponse) VisitUnlinkIdentityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UnlinkIdentitydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UnlinkIdentitydefaultJSONResponse) VisitUnlinkIdentityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type VerifyMfaRequestObject struct {
 	Body *VerifyMfaJSONRequestBody
 }
@@ -3038,6 +5079,1122 @@ type VerifyMfadefaultJSONResponse struct {
 }
 
 func (response VerifyMfadefaultJSONResponse) VisitVerifyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthLinkRequestObject struct {
+	Body *StartOAuthLinkJSONRequestBody
+}
+
+type StartOAuthLinkResponseObject interface {
+	VisitStartOAuthLinkResponse(w http.ResponseWriter) error
+}
+
+type StartOAuthLink200JSONResponse OAuthStart
+
+func (response StartOAuthLink200JSONResponse) VisitStartOAuthLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthLink400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response StartOAuthLink400JSONResponse) VisitStartOAuthLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthLink401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response StartOAuthLink401JSONResponse) VisitStartOAuthLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthLink403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response StartOAuthLink403JSONResponse) VisitStartOAuthLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthLink404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response StartOAuthLink404JSONResponse) VisitStartOAuthLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthLink429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response StartOAuthLink429JSONResponse) VisitStartOAuthLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthLinkdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response StartOAuthLinkdefaultJSONResponse) VisitStartOAuthLinkResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthSignInRequestObject struct {
+	Body *StartOAuthSignInJSONRequestBody
+}
+
+type StartOAuthSignInResponseObject interface {
+	VisitStartOAuthSignInResponse(w http.ResponseWriter) error
+}
+
+type StartOAuthSignIn200ResponseHeaders struct {
+	SetCookie string
+}
+
+type StartOAuthSignIn200JSONResponse struct {
+	Body    OAuthStart
+	Headers StartOAuthSignIn200ResponseHeaders
+}
+
+func (response StartOAuthSignIn200JSONResponse) VisitStartOAuthSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthSignIn400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response StartOAuthSignIn400JSONResponse) VisitStartOAuthSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthSignIn403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response StartOAuthSignIn403JSONResponse) VisitStartOAuthSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthSignIn404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response StartOAuthSignIn404JSONResponse) VisitStartOAuthSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthSignIn429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response StartOAuthSignIn429JSONResponse) VisitStartOAuthSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartOAuthSignIndefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response StartOAuthSignIndefaultJSONResponse) VisitStartOAuthSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteOAuthRequestObject struct {
+	Provider OAuthProvider `json:"provider"`
+	Params   CompleteOAuthParams
+}
+
+type CompleteOAuthResponseObject interface {
+	VisitCompleteOAuthResponse(w http.ResponseWriter) error
+}
+
+type CompleteOAuth303ResponseHeaders struct {
+	Location  string
+	SetCookie *string
+}
+
+type CompleteOAuth303Response struct {
+	Headers CompleteOAuth303ResponseHeaders
+}
+
+func (response CompleteOAuth303Response) VisitCompleteOAuthResponse(w http.ResponseWriter) error {
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
+	w.WriteHeader(303)
+	return nil
+}
+
+type CompleteOAuth400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CompleteOAuth400JSONResponse) VisitCompleteOAuthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteOAuth403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CompleteOAuth403JSONResponse) VisitCompleteOAuthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteOAuth404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CompleteOAuth404JSONResponse) VisitCompleteOAuthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CompleteOAuthdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CompleteOAuthdefaultJSONResponse) VisitCompleteOAuthResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPasskeysRequestObject struct {
+}
+
+type ListPasskeysResponseObject interface {
+	VisitListPasskeysResponse(w http.ResponseWriter) error
+}
+
+type ListPasskeys200JSONResponse Passkeys
+
+func (response ListPasskeys200JSONResponse) VisitListPasskeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPasskeys401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListPasskeys401JSONResponse) VisitListPasskeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPasskeysdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListPasskeysdefaultJSONResponse) VisitListPasskeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeySignInRequestObject struct {
+	Body *BeginPasskeySignInJSONRequestBody
+}
+
+type BeginPasskeySignInResponseObject interface {
+	VisitBeginPasskeySignInResponse(w http.ResponseWriter) error
+}
+
+type BeginPasskeySignIn200JSONResponse PasskeyChallenge
+
+func (response BeginPasskeySignIn200JSONResponse) VisitBeginPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeySignIn400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response BeginPasskeySignIn400JSONResponse) VisitBeginPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeySignIn403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response BeginPasskeySignIn403JSONResponse) VisitBeginPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeySignIn404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response BeginPasskeySignIn404JSONResponse) VisitBeginPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeySignIn429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response BeginPasskeySignIn429JSONResponse) VisitBeginPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeySignIndefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginPasskeySignIndefaultJSONResponse) VisitBeginPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeySignInRequestObject struct {
+	Params FinishPasskeySignInParams
+	Body   *FinishPasskeySignInJSONRequestBody
+}
+
+type FinishPasskeySignInResponseObject interface {
+	VisitFinishPasskeySignInResponse(w http.ResponseWriter) error
+}
+
+type FinishPasskeySignIn200ResponseHeaders struct {
+	SetCookie string
+}
+
+type FinishPasskeySignIn200JSONResponse struct {
+	Body    SessionGrant
+	Headers FinishPasskeySignIn200ResponseHeaders
+}
+
+func (response FinishPasskeySignIn200JSONResponse) VisitFinishPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeySignIn400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response FinishPasskeySignIn400JSONResponse) VisitFinishPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeySignIn403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response FinishPasskeySignIn403JSONResponse) VisitFinishPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeySignIn404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response FinishPasskeySignIn404JSONResponse) VisitFinishPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeySignIn429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response FinishPasskeySignIn429JSONResponse) VisitFinishPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeySignIndefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FinishPasskeySignIndefaultJSONResponse) VisitFinishPasskeySignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyMfaRequestObject struct {
+	Body *BeginPasskeyMfaJSONRequestBody
+}
+
+type BeginPasskeyMfaResponseObject interface {
+	VisitBeginPasskeyMfaResponse(w http.ResponseWriter) error
+}
+
+type BeginPasskeyMfa200JSONResponse PasskeyChallenge
+
+func (response BeginPasskeyMfa200JSONResponse) VisitBeginPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyMfa400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response BeginPasskeyMfa400JSONResponse) VisitBeginPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyMfa401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response BeginPasskeyMfa401JSONResponse) VisitBeginPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyMfa403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response BeginPasskeyMfa403JSONResponse) VisitBeginPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyMfa429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response BeginPasskeyMfa429JSONResponse) VisitBeginPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyMfadefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginPasskeyMfadefaultJSONResponse) VisitBeginPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyMfaRequestObject struct {
+	Params FinishPasskeyMfaParams
+	Body   *FinishPasskeyMfaJSONRequestBody
+}
+
+type FinishPasskeyMfaResponseObject interface {
+	VisitFinishPasskeyMfaResponse(w http.ResponseWriter) error
+}
+
+type FinishPasskeyMfa200ResponseHeaders struct {
+	SetCookie string
+}
+
+type FinishPasskeyMfa200JSONResponse struct {
+	Body    SessionGrant
+	Headers FinishPasskeyMfa200ResponseHeaders
+}
+
+func (response FinishPasskeyMfa200JSONResponse) VisitFinishPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyMfa400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response FinishPasskeyMfa400JSONResponse) VisitFinishPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyMfa401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response FinishPasskeyMfa401JSONResponse) VisitFinishPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyMfa403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response FinishPasskeyMfa403JSONResponse) VisitFinishPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyMfa429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response FinishPasskeyMfa429JSONResponse) VisitFinishPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyMfadefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FinishPasskeyMfadefaultJSONResponse) VisitFinishPasskeyMfaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistrationRequestObject struct {
+	Body *BeginPasskeyRegistrationJSONRequestBody
+}
+
+type BeginPasskeyRegistrationResponseObject interface {
+	VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error
+}
+
+type BeginPasskeyRegistration200JSONResponse PasskeyChallenge
+
+func (response BeginPasskeyRegistration200JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response BeginPasskeyRegistration400JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response BeginPasskeyRegistration401JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response BeginPasskeyRegistration403JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration409JSONResponse struct{ ConflictJSONResponse }
+
+func (response BeginPasskeyRegistration409JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response BeginPasskeyRegistration429JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistrationdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BeginPasskeyRegistrationdefaultJSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyRegistrationRequestObject struct {
+	Params FinishPasskeyRegistrationParams
+	Body   *FinishPasskeyRegistrationJSONRequestBody
+}
+
+type FinishPasskeyRegistrationResponseObject interface {
+	VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error
+}
+
+type FinishPasskeyRegistration200ResponseHeaders struct {
+	SetCookie string
+}
+
+type FinishPasskeyRegistration200JSONResponse struct {
+	Body    Passkey
+	Headers FinishPasskeyRegistration200ResponseHeaders
+}
+
+func (response FinishPasskeyRegistration200JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyRegistration400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response FinishPasskeyRegistration400JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyRegistration401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response FinishPasskeyRegistration401JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyRegistration403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response FinishPasskeyRegistration403JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyRegistration409JSONResponse struct{ ConflictJSONResponse }
+
+func (response FinishPasskeyRegistration409JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyRegistration422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response FinishPasskeyRegistration422JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyRegistration429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response FinishPasskeyRegistration429JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyRegistrationdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FinishPasskeyRegistrationdefaultJSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePasskeyRequestObject struct {
+	Id   PasskeyId `json:"id"`
+	Body *DeletePasskeyJSONRequestBody
+}
+
+type DeletePasskeyResponseObject interface {
+	VisitDeletePasskeyResponse(w http.ResponseWriter) error
+}
+
+type DeletePasskey200ResponseHeaders struct {
+	SetCookie string
+}
+
+type DeletePasskey200JSONResponse struct {
+	Body    CredentialChange
+	Headers DeletePasskey200ResponseHeaders
+}
+
+func (response DeletePasskey200JSONResponse) VisitDeletePasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePasskey400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DeletePasskey400JSONResponse) VisitDeletePasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePasskey401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response DeletePasskey401JSONResponse) VisitDeletePasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePasskey403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeletePasskey403JSONResponse) VisitDeletePasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePasskey404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeletePasskey404JSONResponse) VisitDeletePasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePasskey429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response DeletePasskey429JSONResponse) VisitDeletePasskeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePasskeydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeletePasskeydefaultJSONResponse) VisitDeletePasskeyResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -3333,6 +6490,72 @@ func (response RegenerateRecoveryCodesdefaultJSONResponse) VisitRegenerateRecove
 	return err
 }
 
+type TakeRecoveryCodesRequestObject struct {
+}
+
+type TakeRecoveryCodesResponseObject interface {
+	VisitTakeRecoveryCodesResponse(w http.ResponseWriter) error
+}
+
+type TakeRecoveryCodes200JSONResponse ShownRecoveryCodes
+
+func (response TakeRecoveryCodes200JSONResponse) VisitTakeRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TakeRecoveryCodes401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response TakeRecoveryCodes401JSONResponse) VisitTakeRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TakeRecoveryCodes403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response TakeRecoveryCodes403JSONResponse) VisitTakeRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TakeRecoveryCodesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response TakeRecoveryCodesdefaultJSONResponse) VisitTakeRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RegisterRequestObject struct {
 	Body *RegisterJSONRequestBody
 }
@@ -3351,6 +6574,20 @@ func (response Register201JSONResponse) VisitRegisterResponse(w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Register202JSONResponse RegistrationPending
+
+func (response Register202JSONResponse) VisitRegisterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3731,6 +6968,124 @@ func (response ConfirmTotpSetupdefaultJSONResponse) VisitConfirmTotpSetupRespons
 	return err
 }
 
+type ReplaceTotpRequestObject struct {
+	Body *ReplaceTotpJSONRequestBody
+}
+
+type ReplaceTotpResponseObject interface {
+	VisitReplaceTotpResponse(w http.ResponseWriter) error
+}
+
+type ReplaceTotp200ResponseHeaders struct {
+	SetCookie string
+}
+
+type ReplaceTotp200JSONResponse struct {
+	Body    FactorChange
+	Headers ReplaceTotp200ResponseHeaders
+}
+
+func (response ReplaceTotp200JSONResponse) VisitReplaceTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceTotp400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ReplaceTotp400JSONResponse) VisitReplaceTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceTotp401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ReplaceTotp401JSONResponse) VisitReplaceTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceTotp403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ReplaceTotp403JSONResponse) VisitReplaceTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceTotp409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ReplaceTotp409JSONResponse) VisitReplaceTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceTotp429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response ReplaceTotp429JSONResponse) VisitReplaceTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceTotpdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ReplaceTotpdefaultJSONResponse) VisitReplaceTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type BeginTotpSetupRequestObject struct {
 }
 
@@ -3786,6 +7141,110 @@ type BeginTotpSetupdefaultJSONResponse struct {
 }
 
 func (response BeginTotpSetupdefaultJSONResponse) VisitBeginTotpSetupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmailRequestObject struct {
+	Body *VerifyEmailJSONRequestBody
+}
+
+type VerifyEmailResponseObject interface {
+	VisitVerifyEmailResponse(w http.ResponseWriter) error
+}
+
+type VerifyEmail204Response struct {
+}
+
+func (response VerifyEmail204Response) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type VerifyEmail400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response VerifyEmail400JSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmail403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response VerifyEmail403JSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmail409JSONResponse struct{ ConflictJSONResponse }
+
+func (response VerifyEmail409JSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmail422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response VerifyEmail422JSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmail429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response VerifyEmail429JSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmaildefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response VerifyEmaildefaultJSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -4652,6 +8111,267 @@ func (response UpdateKeydefaultJSONResponse) VisitUpdateKeyResponse(w http.Respo
 	return err
 }
 
+type GetLegalDocumentsRequestObject struct {
+}
+
+type GetLegalDocumentsResponseObject interface {
+	VisitGetLegalDocumentsResponse(w http.ResponseWriter) error
+}
+
+type GetLegalDocuments200JSONResponse LegalDocuments
+
+func (response GetLegalDocuments200JSONResponse) VisitGetLegalDocumentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetLegalDocuments404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetLegalDocuments404JSONResponse) VisitGetLegalDocumentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetLegalDocumentsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetLegalDocumentsdefaultJSONResponse) VisitGetLegalDocumentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AcceptLegalDocumentsRequestObject struct {
+	Body *AcceptLegalDocumentsJSONRequestBody
+}
+
+type AcceptLegalDocumentsResponseObject interface {
+	VisitAcceptLegalDocumentsResponse(w http.ResponseWriter) error
+}
+
+type AcceptLegalDocuments204Response struct {
+}
+
+func (response AcceptLegalDocuments204Response) VisitAcceptLegalDocumentsResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type AcceptLegalDocuments400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response AcceptLegalDocuments400JSONResponse) VisitAcceptLegalDocumentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AcceptLegalDocuments401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response AcceptLegalDocuments401JSONResponse) VisitAcceptLegalDocumentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AcceptLegalDocuments403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AcceptLegalDocuments403JSONResponse) VisitAcceptLegalDocumentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AcceptLegalDocumentsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response AcceptLegalDocumentsdefaultJSONResponse) VisitAcceptLegalDocumentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPublicModelsRequestObject struct {
+	Params ListPublicModelsParams
+}
+
+type ListPublicModelsResponseObject interface {
+	VisitListPublicModelsResponse(w http.ResponseWriter) error
+}
+
+type ListPublicModels200JSONResponse PublicModelList
+
+func (response ListPublicModels200JSONResponse) VisitListPublicModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPublicModels404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListPublicModels404JSONResponse) VisitListPublicModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPublicModelsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListPublicModelsdefaultJSONResponse) VisitListPublicModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAccountModelsRequestObject struct {
+	Params ListAccountModelsParams
+}
+
+type ListAccountModelsResponseObject interface {
+	VisitListAccountModelsResponse(w http.ResponseWriter) error
+}
+
+type ListAccountModels200JSONResponse PublicModelList
+
+func (response ListAccountModels200JSONResponse) VisitListAccountModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAccountModels401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListAccountModels401JSONResponse) VisitListAccountModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAccountModels403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListAccountModels403JSONResponse) VisitListAccountModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAccountModels404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListAccountModels404JSONResponse) VisitListAccountModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAccountModelsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListAccountModelsdefaultJSONResponse) VisitListAccountModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetNotificationPreferencesRequestObject struct {
 }
 
@@ -4886,6 +8606,87 @@ type SetNotificationPreferencesdefaultJSONResponse struct {
 }
 
 func (response SetNotificationPreferencesdefaultJSONResponse) VisitSetNotificationPreferencesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOrdersRequestObject struct {
+	Params ListOrdersParams
+}
+
+type ListOrdersResponseObject interface {
+	VisitListOrdersResponse(w http.ResponseWriter) error
+}
+
+type ListOrders200JSONResponse OrderList
+
+func (response ListOrders200JSONResponse) VisitListOrdersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOrders400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListOrders400JSONResponse) VisitListOrdersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOrders401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListOrders401JSONResponse) VisitListOrdersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOrders403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListOrders403JSONResponse) VisitListOrdersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOrdersdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListOrdersdefaultJSONResponse) VisitListOrdersResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -5215,6 +9016,131 @@ type CancelOrderdefaultJSONResponse struct {
 }
 
 func (response CancelOrderdefaultJSONResponse) VisitCancelOrderResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestRefundRequestObject struct {
+	OrderId OrderId `json:"order_id"`
+	Params  RequestRefundParams
+	Body    *RequestRefundJSONRequestBody
+}
+
+type RequestRefundResponseObject interface {
+	VisitRequestRefundResponse(w http.ResponseWriter) error
+}
+
+type RequestRefund201JSONResponse OrderRefund
+
+func (response RequestRefund201JSONResponse) VisitRequestRefundResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestRefund400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RequestRefund400JSONResponse) VisitRequestRefundResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestRefund401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RequestRefund401JSONResponse) VisitRequestRefundResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestRefund403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RequestRefund403JSONResponse) VisitRequestRefundResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestRefund404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RequestRefund404JSONResponse) VisitRequestRefundResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestRefund409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RequestRefund409JSONResponse) VisitRequestRefundResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestRefund422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response RequestRefund422JSONResponse) VisitRequestRefundResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestRefunddefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RequestRefunddefaultJSONResponse) VisitRequestRefundResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -6150,6 +10076,226 @@ func (response UpdatePresetdefaultJSONResponse) VisitUpdatePresetResponse(w http
 	return err
 }
 
+type ListRedemptionsRequestObject struct {
+	Params ListRedemptionsParams
+}
+
+type ListRedemptionsResponseObject interface {
+	VisitListRedemptionsResponse(w http.ResponseWriter) error
+}
+
+type ListRedemptions200JSONResponse RedeemCodeHistory
+
+func (response ListRedemptions200JSONResponse) VisitListRedemptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListRedemptions400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListRedemptions400JSONResponse) VisitListRedemptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListRedemptions401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListRedemptions401JSONResponse) VisitListRedemptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListRedemptions403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListRedemptions403JSONResponse) VisitListRedemptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListRedemptionsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListRedemptionsdefaultJSONResponse) VisitListRedemptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RedeemCodeRequestObject struct {
+	Params RedeemCodeParams
+	Body   *RedeemCodeJSONRequestBody
+}
+
+type RedeemCodeResponseObject interface {
+	VisitRedeemCodeResponse(w http.ResponseWriter) error
+}
+
+type RedeemCode200JSONResponse RedeemCodeRedemption
+
+func (response RedeemCode200JSONResponse) VisitRedeemCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RedeemCode201JSONResponse RedeemCodeRedemption
+
+func (response RedeemCode201JSONResponse) VisitRedeemCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RedeemCode400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RedeemCode400JSONResponse) VisitRedeemCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RedeemCode401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RedeemCode401JSONResponse) VisitRedeemCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RedeemCode403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RedeemCode403JSONResponse) VisitRedeemCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RedeemCode409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RedeemCode409JSONResponse) VisitRedeemCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RedeemCode422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response RedeemCode422JSONResponse) VisitRedeemCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RedeemCode429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response RedeemCode429JSONResponse) VisitRedeemCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RedeemCodedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RedeemCodedefaultJSONResponse) VisitRedeemCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetSessionRequestObject struct {
 }
 
@@ -6202,6 +10348,213 @@ func (response GetSessiondefaultJSONResponse) VisitGetSessionResponse(w http.Res
 	return err
 }
 
+type RevokeOtherSessionsRequestObject struct {
+}
+
+type RevokeOtherSessionsResponseObject interface {
+	VisitRevokeOtherSessionsResponse(w http.ResponseWriter) error
+}
+
+type RevokeOtherSessions200JSONResponse SessionRevocation
+
+func (response RevokeOtherSessions200JSONResponse) VisitRevokeOtherSessionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeOtherSessions401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RevokeOtherSessions401JSONResponse) VisitRevokeOtherSessionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeOtherSessions403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RevokeOtherSessions403JSONResponse) VisitRevokeOtherSessionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeOtherSessionsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RevokeOtherSessionsdefaultJSONResponse) VisitRevokeOtherSessionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSessionsRequestObject struct {
+}
+
+type ListSessionsResponseObject interface {
+	VisitListSessionsResponse(w http.ResponseWriter) error
+}
+
+type ListSessions200JSONResponse SessionList
+
+func (response ListSessions200JSONResponse) VisitListSessionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSessions401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListSessions401JSONResponse) VisitListSessionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSessions403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListSessions403JSONResponse) VisitListSessionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSessionsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListSessionsdefaultJSONResponse) VisitListSessionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeSessionRequestObject struct {
+	SessionId SessionId `json:"session_id"`
+}
+
+type RevokeSessionResponseObject interface {
+	VisitRevokeSessionResponse(w http.ResponseWriter) error
+}
+
+type RevokeSession204Response struct {
+}
+
+func (response RevokeSession204Response) VisitRevokeSessionResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RevokeSession401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RevokeSession401JSONResponse) VisitRevokeSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeSession403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RevokeSession403JSONResponse) VisitRevokeSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeSession404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RevokeSession404JSONResponse) VisitRevokeSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeSessiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RevokeSessiondefaultJSONResponse) VisitRevokeSessionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetSiteRequestObject struct {
 }
 
@@ -6243,6 +10596,115 @@ type GetSitedefaultJSONResponse struct {
 }
 
 func (response GetSitedefaultJSONResponse) VisitGetSiteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteLogoRequestObject struct {
+	Hash string `json:"hash"`
+}
+
+type GetSiteLogoResponseObject interface {
+	VisitGetSiteLogoResponse(w http.ResponseWriter) error
+}
+
+type GetSiteLogo200ResponseHeaders struct {
+	CacheControl string
+}
+
+type GetSiteLogo200ImagepngResponse struct {
+	Body          io.Reader
+	Headers       GetSiteLogo200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetSiteLogo200ImagepngResponse) VisitGetSiteLogoResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/png")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.Header().Set("Cache-Control", fmt.Sprint(response.Headers.CacheControl))
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetSiteLogo200ImagesvgXmlResponse struct {
+	Body          io.Reader
+	Headers       GetSiteLogo200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetSiteLogo200ImagesvgXmlResponse) VisitGetSiteLogoResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/svg+xml")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.Header().Set("Cache-Control", fmt.Sprint(response.Headers.CacheControl))
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetSiteLogo200ImagewebpResponse struct {
+	Body          io.Reader
+	Headers       GetSiteLogo200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetSiteLogo200ImagewebpResponse) VisitGetSiteLogoResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/webp")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.Header().Set("Cache-Control", fmt.Sprint(response.Headers.CacheControl))
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetSiteLogo404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSiteLogo404JSONResponse) VisitGetSiteLogoResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteLogodefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSiteLogodefaultJSONResponse) VisitGetSiteLogoResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -6466,9 +10928,48 @@ type StrictServerInterface interface {
 	// ListAnnouncements Read active announcements for this site
 	// (GET /api/console/v1/announcements)
 	ListAnnouncements(ctx context.Context, request ListAnnouncementsRequestObject) (ListAnnouncementsResponseObject, error)
+	// ListIdentities The signed-in user's linked third-party accounts
+	// (GET /api/console/v1/auth/identities)
+	ListIdentities(ctx context.Context, request ListIdentitiesRequestObject) (ListIdentitiesResponseObject, error)
+	// UnlinkIdentity Unlink a third-party account
+	// (DELETE /api/console/v1/auth/identities/{provider})
+	UnlinkIdentity(ctx context.Context, request UnlinkIdentityRequestObject) (UnlinkIdentityResponseObject, error)
 	// VerifyMfa Pass two-step verification
 	// (POST /api/console/v1/auth/mfa)
 	VerifyMfa(ctx context.Context, request VerifyMfaRequestObject) (VerifyMfaResponseObject, error)
+	// StartOAuthLink Start linking a third-party provider to the signed-in user
+	// (POST /api/console/v1/auth/oauth/link/start)
+	StartOAuthLink(ctx context.Context, request StartOAuthLinkRequestObject) (StartOAuthLinkResponseObject, error)
+	// StartOAuthSignIn Start signing in with a third-party provider
+	// (POST /api/console/v1/auth/oauth/start)
+	StartOAuthSignIn(ctx context.Context, request StartOAuthSignInRequestObject) (StartOAuthSignInResponseObject, error)
+	// CompleteOAuth The provider's redirect back to the site
+	// (GET /api/console/v1/auth/oauth/{provider}/callback)
+	CompleteOAuth(ctx context.Context, request CompleteOAuthRequestObject) (CompleteOAuthResponseObject, error)
+	// ListPasskeys The signed-in user's passkeys
+	// (GET /api/console/v1/auth/passkeys)
+	ListPasskeys(ctx context.Context, request ListPasskeysRequestObject) (ListPasskeysResponseObject, error)
+	// BeginPasskeySignIn Start signing in with a passkey
+	// (POST /api/console/v1/auth/passkeys/begin)
+	BeginPasskeySignIn(ctx context.Context, request BeginPasskeySignInRequestObject) (BeginPasskeySignInResponseObject, error)
+	// FinishPasskeySignIn Finish signing in with a passkey
+	// (POST /api/console/v1/auth/passkeys/finish)
+	FinishPasskeySignIn(ctx context.Context, request FinishPasskeySignInRequestObject) (FinishPasskeySignInResponseObject, error)
+	// BeginPasskeyMfa Start the passkey factor of a pending sign-in
+	// (POST /api/console/v1/auth/passkeys/mfa/begin)
+	BeginPasskeyMfa(ctx context.Context, request BeginPasskeyMfaRequestObject) (BeginPasskeyMfaResponseObject, error)
+	// FinishPasskeyMfa Finish the passkey factor of a pending sign-in
+	// (POST /api/console/v1/auth/passkeys/mfa/finish)
+	FinishPasskeyMfa(ctx context.Context, request FinishPasskeyMfaRequestObject) (FinishPasskeyMfaResponseObject, error)
+	// BeginPasskeyRegistration Start adding a passkey
+	// (POST /api/console/v1/auth/passkeys/register/begin)
+	BeginPasskeyRegistration(ctx context.Context, request BeginPasskeyRegistrationRequestObject) (BeginPasskeyRegistrationResponseObject, error)
+	// FinishPasskeyRegistration Finish adding a passkey
+	// (POST /api/console/v1/auth/passkeys/register/finish)
+	FinishPasskeyRegistration(ctx context.Context, request FinishPasskeyRegistrationRequestObject) (FinishPasskeyRegistrationResponseObject, error)
+	// DeletePasskey Remove a passkey
+	// (DELETE /api/console/v1/auth/passkeys/{id})
+	DeletePasskey(ctx context.Context, request DeletePasskeyRequestObject) (DeletePasskeyResponseObject, error)
 	// RequestPasswordReset Request a password reset email
 	// (POST /api/console/v1/auth/password-reset)
 	RequestPasswordReset(ctx context.Context, request RequestPasswordResetRequestObject) (RequestPasswordResetResponseObject, error)
@@ -6478,7 +10979,10 @@ type StrictServerInterface interface {
 	// RegenerateRecoveryCodes Make new recovery codes
 	// (POST /api/console/v1/auth/recovery-codes)
 	RegenerateRecoveryCodes(ctx context.Context, request RegenerateRecoveryCodesRequestObject) (RegenerateRecoveryCodesResponseObject, error)
-	// Register Register with an invite code
+	// TakeRecoveryCodes Take the recovery codes a provider link left for this session
+	// (POST /api/console/v1/auth/recovery-codes/take)
+	TakeRecoveryCodes(ctx context.Context, request TakeRecoveryCodesRequestObject) (TakeRecoveryCodesResponseObject, error)
+	// Register Register with an invite code or open registration
 	// (POST /api/console/v1/auth/register)
 	Register(ctx context.Context, request RegisterRequestObject) (RegisterResponseObject, error)
 	// SignIn Sign in with email and password
@@ -6490,9 +10994,15 @@ type StrictServerInterface interface {
 	// ConfirmTotpSetup Finish enabling two-step verification
 	// (POST /api/console/v1/auth/totp/confirm)
 	ConfirmTotpSetup(ctx context.Context, request ConfirmTotpSetupRequestObject) (ConfirmTotpSetupResponseObject, error)
+	// ReplaceTotp Replace two-step verification's secret
+	// (POST /api/console/v1/auth/totp/replace)
+	ReplaceTotp(ctx context.Context, request ReplaceTotpRequestObject) (ReplaceTotpResponseObject, error)
 	// BeginTotpSetup Start enabling two-step verification
 	// (POST /api/console/v1/auth/totp/setup)
 	BeginTotpSetup(ctx context.Context, request BeginTotpSetupRequestObject) (BeginTotpSetupResponseObject, error)
+	// VerifyEmail Verify an open registration's email
+	// (POST /api/console/v1/auth/verify-email)
+	VerifyEmail(ctx context.Context, request VerifyEmailRequestObject) (VerifyEmailResponseObject, error)
 	// GetBalance The account's balance
 	// (GET /api/console/v1/balance)
 	GetBalance(ctx context.Context, request GetBalanceRequestObject) (GetBalanceResponseObject, error)
@@ -6523,12 +11033,27 @@ type StrictServerInterface interface {
 	// UpdateKey Change an API key's settings
 	// (PUT /api/console/v1/keys/{key_id})
 	UpdateKey(ctx context.Context, request UpdateKeyRequestObject) (UpdateKeyResponseObject, error)
+	// GetLegalDocuments The site's current legal documents
+	// (GET /api/console/v1/legal)
+	GetLegalDocuments(ctx context.Context, request GetLegalDocumentsRequestObject) (GetLegalDocumentsResponseObject, error)
+	// AcceptLegalDocuments Accept the current legal documents
+	// (POST /api/console/v1/legal/accept)
+	AcceptLegalDocuments(ctx context.Context, request AcceptLegalDocumentsRequestObject) (AcceptLegalDocumentsResponseObject, error)
+	// ListPublicModels List the published models and the site's sale prices
+	// (GET /api/console/v1/models)
+	ListPublicModels(ctx context.Context, request ListPublicModelsRequestObject) (ListPublicModelsResponseObject, error)
+	// ListAccountModels List the published models at the signed-in account's prices
+	// (GET /api/console/v1/models/account)
+	ListAccountModels(ctx context.Context, request ListAccountModelsRequestObject) (ListAccountModelsResponseObject, error)
 	// GetNotificationPreferences Read your notification preferences
 	// (GET /api/console/v1/notification-preferences)
 	GetNotificationPreferences(ctx context.Context, request GetNotificationPreferencesRequestObject) (GetNotificationPreferencesResponseObject, error)
 	// SetNotificationPreferences Replace your notification preferences
 	// (PUT /api/console/v1/notification-preferences)
 	SetNotificationPreferences(ctx context.Context, request SetNotificationPreferencesRequestObject) (SetNotificationPreferencesResponseObject, error)
+	// ListOrders The account's top-up orders
+	// (GET /api/console/v1/orders)
+	ListOrders(ctx context.Context, request ListOrdersRequestObject) (ListOrdersResponseObject, error)
 	// CreateOrder Place a top-up order
 	// (POST /api/console/v1/orders)
 	CreateOrder(ctx context.Context, request CreateOrderRequestObject) (CreateOrderResponseObject, error)
@@ -6538,6 +11063,9 @@ type StrictServerInterface interface {
 	// CancelOrder Cancel an order that waits for payment
 	// (POST /api/console/v1/orders/{order_id}/cancel)
 	CancelOrder(ctx context.Context, request CancelOrderRequestObject) (CancelOrderResponseObject, error)
+	// RequestRefund Ask for a refund of unused credits from an order
+	// (POST /api/console/v1/orders/{order_id}/refunds)
+	RequestRefund(ctx context.Context, request RequestRefundRequestObject) (RequestRefundResponseObject, error)
 	// VerifyOrder Ask the payment channel about an order now
 	// (POST /api/console/v1/orders/{order_id}/verify)
 	VerifyOrder(ctx context.Context, request VerifyOrderRequestObject) (VerifyOrderResponseObject, error)
@@ -6562,12 +11090,30 @@ type StrictServerInterface interface {
 	// UpdatePreset updatePreset
 	// (PUT /api/console/v1/presets/{slug})
 	UpdatePreset(ctx context.Context, request UpdatePresetRequestObject) (UpdatePresetResponseObject, error)
+	// ListRedemptions The redeem codes this account redeemed, newest first
+	// (GET /api/console/v1/redeem-codes)
+	ListRedemptions(ctx context.Context, request ListRedemptionsRequestObject) (ListRedemptionsResponseObject, error)
+	// RedeemCode Redeem a code into credit
+	// (POST /api/console/v1/redeem-codes)
+	RedeemCode(ctx context.Context, request RedeemCodeRequestObject) (RedeemCodeResponseObject, error)
 	// GetSession The current session
 	// (GET /api/console/v1/session)
 	GetSession(ctx context.Context, request GetSessionRequestObject) (GetSessionResponseObject, error)
+	// RevokeOtherSessions End every other session
+	// (DELETE /api/console/v1/sessions)
+	RevokeOtherSessions(ctx context.Context, request RevokeOtherSessionsRequestObject) (RevokeOtherSessionsResponseObject, error)
+	// ListSessions The signed-in devices
+	// (GET /api/console/v1/sessions)
+	ListSessions(ctx context.Context, request ListSessionsRequestObject) (ListSessionsResponseObject, error)
+	// RevokeSession End one other session
+	// (DELETE /api/console/v1/sessions/{session_id})
+	RevokeSession(ctx context.Context, request RevokeSessionRequestObject) (RevokeSessionResponseObject, error)
 	// GetSite The site the request's domain belongs to
 	// (GET /api/console/v1/site)
 	GetSite(ctx context.Context, request GetSiteRequestObject) (GetSiteResponseObject, error)
+	// GetSiteLogo The site's logo
+	// (GET /api/console/v1/site/logo/{hash})
+	GetSiteLogo(ctx context.Context, request GetSiteLogoRequestObject) (GetSiteLogoResponseObject, error)
 	// ListStatement The account's credit statement
 	// (GET /api/console/v1/statement)
 	ListStatement(ctx context.Context, request ListStatementRequestObject) (ListStatementResponseObject, error)
@@ -6642,6 +11188,56 @@ func (sh *strictHandler) ListAnnouncements(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// ListIdentities operation middleware
+func (sh *strictHandler) ListIdentities(w http.ResponseWriter, r *http.Request) {
+	var request ListIdentitiesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListIdentities(ctx, request.(ListIdentitiesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListIdentities")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListIdentitiesResponseObject); ok {
+		if err := validResponse.VisitListIdentitiesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UnlinkIdentity operation middleware
+func (sh *strictHandler) UnlinkIdentity(w http.ResponseWriter, r *http.Request, provider OAuthProvider) {
+	var request UnlinkIdentityRequestObject
+
+	request.Provider = provider
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UnlinkIdentity(ctx, request.(UnlinkIdentityRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UnlinkIdentity")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UnlinkIdentityResponseObject); ok {
+		if err := validResponse.VisitUnlinkIdentityResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // VerifyMfa operation middleware
 func (sh *strictHandler) VerifyMfa(w http.ResponseWriter, r *http.Request) {
 	var request VerifyMfaRequestObject
@@ -6666,6 +11262,344 @@ func (sh *strictHandler) VerifyMfa(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(VerifyMfaResponseObject); ok {
 		if err := validResponse.VisitVerifyMfaResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartOAuthLink operation middleware
+func (sh *strictHandler) StartOAuthLink(w http.ResponseWriter, r *http.Request) {
+	var request StartOAuthLinkRequestObject
+
+	var body StartOAuthLinkJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartOAuthLink(ctx, request.(StartOAuthLinkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartOAuthLink")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartOAuthLinkResponseObject); ok {
+		if err := validResponse.VisitStartOAuthLinkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartOAuthSignIn operation middleware
+func (sh *strictHandler) StartOAuthSignIn(w http.ResponseWriter, r *http.Request) {
+	var request StartOAuthSignInRequestObject
+
+	var body StartOAuthSignInJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartOAuthSignIn(ctx, request.(StartOAuthSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartOAuthSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartOAuthSignInResponseObject); ok {
+		if err := validResponse.VisitStartOAuthSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CompleteOAuth operation middleware
+func (sh *strictHandler) CompleteOAuth(w http.ResponseWriter, r *http.Request, provider OAuthProvider, params CompleteOAuthParams) {
+	var request CompleteOAuthRequestObject
+
+	request.Provider = provider
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CompleteOAuth(ctx, request.(CompleteOAuthRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CompleteOAuth")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CompleteOAuthResponseObject); ok {
+		if err := validResponse.VisitCompleteOAuthResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListPasskeys operation middleware
+func (sh *strictHandler) ListPasskeys(w http.ResponseWriter, r *http.Request) {
+	var request ListPasskeysRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListPasskeys(ctx, request.(ListPasskeysRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListPasskeys")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListPasskeysResponseObject); ok {
+		if err := validResponse.VisitListPasskeysResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BeginPasskeySignIn operation middleware
+func (sh *strictHandler) BeginPasskeySignIn(w http.ResponseWriter, r *http.Request) {
+	var request BeginPasskeySignInRequestObject
+
+	var body BeginPasskeySignInJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginPasskeySignIn(ctx, request.(BeginPasskeySignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginPasskeySignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginPasskeySignInResponseObject); ok {
+		if err := validResponse.VisitBeginPasskeySignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishPasskeySignIn operation middleware
+func (sh *strictHandler) FinishPasskeySignIn(w http.ResponseWriter, r *http.Request, params FinishPasskeySignInParams) {
+	var request FinishPasskeySignInRequestObject
+
+	request.Params = params
+
+	var body FinishPasskeySignInJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishPasskeySignIn(ctx, request.(FinishPasskeySignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishPasskeySignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishPasskeySignInResponseObject); ok {
+		if err := validResponse.VisitFinishPasskeySignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BeginPasskeyMfa operation middleware
+func (sh *strictHandler) BeginPasskeyMfa(w http.ResponseWriter, r *http.Request) {
+	var request BeginPasskeyMfaRequestObject
+
+	var body BeginPasskeyMfaJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginPasskeyMfa(ctx, request.(BeginPasskeyMfaRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginPasskeyMfa")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginPasskeyMfaResponseObject); ok {
+		if err := validResponse.VisitBeginPasskeyMfaResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishPasskeyMfa operation middleware
+func (sh *strictHandler) FinishPasskeyMfa(w http.ResponseWriter, r *http.Request, params FinishPasskeyMfaParams) {
+	var request FinishPasskeyMfaRequestObject
+
+	request.Params = params
+
+	var body FinishPasskeyMfaJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishPasskeyMfa(ctx, request.(FinishPasskeyMfaRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishPasskeyMfa")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishPasskeyMfaResponseObject); ok {
+		if err := validResponse.VisitFinishPasskeyMfaResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BeginPasskeyRegistration operation middleware
+func (sh *strictHandler) BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request) {
+	var request BeginPasskeyRegistrationRequestObject
+
+	var body BeginPasskeyRegistrationJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BeginPasskeyRegistration(ctx, request.(BeginPasskeyRegistrationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BeginPasskeyRegistration")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BeginPasskeyRegistrationResponseObject); ok {
+		if err := validResponse.VisitBeginPasskeyRegistrationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishPasskeyRegistration operation middleware
+func (sh *strictHandler) FinishPasskeyRegistration(w http.ResponseWriter, r *http.Request, params FinishPasskeyRegistrationParams) {
+	var request FinishPasskeyRegistrationRequestObject
+
+	request.Params = params
+
+	var body FinishPasskeyRegistrationJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishPasskeyRegistration(ctx, request.(FinishPasskeyRegistrationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishPasskeyRegistration")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishPasskeyRegistrationResponseObject); ok {
+		if err := validResponse.VisitFinishPasskeyRegistrationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeletePasskey operation middleware
+func (sh *strictHandler) DeletePasskey(w http.ResponseWriter, r *http.Request, id PasskeyId) {
+	var request DeletePasskeyRequestObject
+
+	request.Id = id
+
+	var body DeletePasskeyJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeletePasskey(ctx, request.(DeletePasskeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeletePasskey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeletePasskeyResponseObject); ok {
+		if err := validResponse.VisitDeletePasskeyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -6759,6 +11693,30 @@ func (sh *strictHandler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RegenerateRecoveryCodesResponseObject); ok {
 		if err := validResponse.VisitRegenerateRecoveryCodesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// TakeRecoveryCodes operation middleware
+func (sh *strictHandler) TakeRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	var request TakeRecoveryCodesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.TakeRecoveryCodes(ctx, request.(TakeRecoveryCodesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "TakeRecoveryCodes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(TakeRecoveryCodesResponseObject); ok {
+		if err := validResponse.VisitTakeRecoveryCodesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -6883,6 +11841,37 @@ func (sh *strictHandler) ConfirmTotpSetup(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// ReplaceTotp operation middleware
+func (sh *strictHandler) ReplaceTotp(w http.ResponseWriter, r *http.Request) {
+	var request ReplaceTotpRequestObject
+
+	var body ReplaceTotpJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReplaceTotp(ctx, request.(ReplaceTotpRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReplaceTotp")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReplaceTotpResponseObject); ok {
+		if err := validResponse.VisitReplaceTotpResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // BeginTotpSetup operation middleware
 func (sh *strictHandler) BeginTotpSetup(w http.ResponseWriter, r *http.Request) {
 	var request BeginTotpSetupRequestObject
@@ -6900,6 +11889,37 @@ func (sh *strictHandler) BeginTotpSetup(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(BeginTotpSetupResponseObject); ok {
 		if err := validResponse.VisitBeginTotpSetupResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// VerifyEmail operation middleware
+func (sh *strictHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	var request VerifyEmailRequestObject
+
+	var body VerifyEmailJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.VerifyEmail(ctx, request.(VerifyEmailRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "VerifyEmail")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(VerifyEmailResponseObject); ok {
+		if err := validResponse.VisitVerifyEmailResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -7177,6 +12197,113 @@ func (sh *strictHandler) UpdateKey(w http.ResponseWriter, r *http.Request, keyId
 	}
 }
 
+// GetLegalDocuments operation middleware
+func (sh *strictHandler) GetLegalDocuments(w http.ResponseWriter, r *http.Request) {
+	var request GetLegalDocumentsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetLegalDocuments(ctx, request.(GetLegalDocumentsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetLegalDocuments")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetLegalDocumentsResponseObject); ok {
+		if err := validResponse.VisitGetLegalDocumentsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AcceptLegalDocuments operation middleware
+func (sh *strictHandler) AcceptLegalDocuments(w http.ResponseWriter, r *http.Request) {
+	var request AcceptLegalDocumentsRequestObject
+
+	var body AcceptLegalDocumentsJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AcceptLegalDocuments(ctx, request.(AcceptLegalDocumentsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AcceptLegalDocuments")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AcceptLegalDocumentsResponseObject); ok {
+		if err := validResponse.VisitAcceptLegalDocumentsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListPublicModels operation middleware
+func (sh *strictHandler) ListPublicModels(w http.ResponseWriter, r *http.Request, params ListPublicModelsParams) {
+	var request ListPublicModelsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListPublicModels(ctx, request.(ListPublicModelsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListPublicModels")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListPublicModelsResponseObject); ok {
+		if err := validResponse.VisitListPublicModelsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListAccountModels operation middleware
+func (sh *strictHandler) ListAccountModels(w http.ResponseWriter, r *http.Request, params ListAccountModelsParams) {
+	var request ListAccountModelsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListAccountModels(ctx, request.(ListAccountModelsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListAccountModels")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListAccountModelsResponseObject); ok {
+		if err := validResponse.VisitListAccountModelsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetNotificationPreferences operation middleware
 func (sh *strictHandler) GetNotificationPreferences(w http.ResponseWriter, r *http.Request) {
 	var request GetNotificationPreferencesRequestObject
@@ -7225,6 +12352,32 @@ func (sh *strictHandler) SetNotificationPreferences(w http.ResponseWriter, r *ht
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetNotificationPreferencesResponseObject); ok {
 		if err := validResponse.VisitSetNotificationPreferencesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListOrders operation middleware
+func (sh *strictHandler) ListOrders(w http.ResponseWriter, r *http.Request, params ListOrdersParams) {
+	var request ListOrdersRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListOrders(ctx, request.(ListOrdersRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListOrders")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListOrdersResponseObject); ok {
+		if err := validResponse.VisitListOrdersResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -7310,6 +12463,40 @@ func (sh *strictHandler) CancelOrder(w http.ResponseWriter, r *http.Request, ord
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CancelOrderResponseObject); ok {
 		if err := validResponse.VisitCancelOrderResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RequestRefund operation middleware
+func (sh *strictHandler) RequestRefund(w http.ResponseWriter, r *http.Request, orderId OrderId, params RequestRefundParams) {
+	var request RequestRefundRequestObject
+
+	request.OrderId = orderId
+	request.Params = params
+
+	var body RequestRefundJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestRefund(ctx, request.(RequestRefundRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestRefund")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestRefundResponseObject); ok {
+		if err := validResponse.VisitRequestRefundResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -7542,6 +12729,65 @@ func (sh *strictHandler) UpdatePreset(w http.ResponseWriter, r *http.Request, sl
 	}
 }
 
+// ListRedemptions operation middleware
+func (sh *strictHandler) ListRedemptions(w http.ResponseWriter, r *http.Request, params ListRedemptionsParams) {
+	var request ListRedemptionsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListRedemptions(ctx, request.(ListRedemptionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListRedemptions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListRedemptionsResponseObject); ok {
+		if err := validResponse.VisitListRedemptionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RedeemCode operation middleware
+func (sh *strictHandler) RedeemCode(w http.ResponseWriter, r *http.Request, params RedeemCodeParams) {
+	var request RedeemCodeRequestObject
+
+	request.Params = params
+
+	var body RedeemCodeJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RedeemCode(ctx, request.(RedeemCodeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RedeemCode")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RedeemCodeResponseObject); ok {
+		if err := validResponse.VisitRedeemCodeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetSession operation middleware
 func (sh *strictHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 	var request GetSessionRequestObject
@@ -7566,6 +12812,80 @@ func (sh *strictHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// RevokeOtherSessions operation middleware
+func (sh *strictHandler) RevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
+	var request RevokeOtherSessionsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevokeOtherSessions(ctx, request.(RevokeOtherSessionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevokeOtherSessions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevokeOtherSessionsResponseObject); ok {
+		if err := validResponse.VisitRevokeOtherSessionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSessions operation middleware
+func (sh *strictHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
+	var request ListSessionsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSessions(ctx, request.(ListSessionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSessions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSessionsResponseObject); ok {
+		if err := validResponse.VisitListSessionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RevokeSession operation middleware
+func (sh *strictHandler) RevokeSession(w http.ResponseWriter, r *http.Request, sessionId SessionId) {
+	var request RevokeSessionRequestObject
+
+	request.SessionId = sessionId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevokeSession(ctx, request.(RevokeSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevokeSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevokeSessionResponseObject); ok {
+		if err := validResponse.VisitRevokeSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetSite operation middleware
 func (sh *strictHandler) GetSite(w http.ResponseWriter, r *http.Request) {
 	var request GetSiteRequestObject
@@ -7583,6 +12903,32 @@ func (sh *strictHandler) GetSite(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetSiteResponseObject); ok {
 		if err := validResponse.VisitGetSiteResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSiteLogo operation middleware
+func (sh *strictHandler) GetSiteLogo(w http.ResponseWriter, r *http.Request, hash string) {
+	var request GetSiteLogoRequestObject
+
+	request.Hash = hash
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSiteLogo(ctx, request.(GetSiteLogoRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSiteLogo")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSiteLogoResponseObject); ok {
+		if err := validResponse.VisitGetSiteLogoResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -7669,274 +13015,457 @@ func (sh *strictHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"/x8A",
+	"7P1bjyRJlh+GfxVDcIHK+o9HZlZ1dXM6Ewv+c7K6t4t9K9ZlZrk9xQyLcIsIm/QwizYzz6zoVgH7QEF6",
+	"0OpBEAFJbyIEStCDAL4R1LchudjltxDOxczNPTwumV1ZXd1T8zBdmelubtdj5/I7v/PjYGIXS2uUCX5w",
+	"8uNgrmSpHP7zuQrn1l5qBT+Uyk+cXgZtzeBk8GKuhFHXwivvtTVigs8VwjohjVCvl9qpUlijRJjLIJQp",
+	"vQhzFZ8/HBQDp76v4anBSXC1KgZ+MlcLCZ8Kq6UanAx8cNrMBm/evCkGS+nkQgXu2LmsqvNKKxPOlkv4",
+	"hYY+fV8rtxoUAyMX8PoEH7iQy+Ugb3whX3+lzCzMBycPj4+LtY8V2PqXarWp3Uu1utBlq82/cGo6OBn8",
+	"k6NmKo/or/7oS7V6UqZ2v7alqtan87PXchKqFU7RAh4R8DH8kYYhpL9UpZhaB1PX1y187RYjfaa+r5UP",
+	"T8pN43X0wE3GDO1mg36uzURtat7jH/OWp9YtZBicDEoZ1DDohRps6vzzIEPt1+fT15OJ8l4slDReqMUy",
+	"rIRyzrqLS23KU/o3/9VY033gUHy70AFmW4xtmG+ack9fv8mscIdj/1+aoKtNM1PjH285M3+w7tIv5eZ5",
+	"v44P3GRhU6txdWvnrVuf/z/MlaPta9TrIJZypoQP0gV/gr8dwa8vJvj2SNgp/nLp1JW2tcfHC1GbyVya",
+	"mSoPxZMgtBd2Kb+vQcaYaiWuZKXxPOCrHk7LVFdBOV8IaUohxUJWMF8shrQXUjw6Pt60ltSXTefn4wcP",
+	"i8FCm/jzg75p/1Ktzp2SQZVn06B6ZuVLtSIpWMogx9LjnCyWqhQyoOSE10SYay+08UGasLG39J0LfOM2",
+	"W6Tp6+/U1Dp1k86O8Y0b9ZNeuWVHv5GLnv49lS7AzpHiUq3ueRSYhdAzY+FdMZFeZcdYXSm3wmc2dRX/",
+	"s2H5H/SLzy/V6qlTU/26/34cq5k2BjqTdXOJL+zqKD21qav0142d/WRDXzcJyzPuGogzJSSteqV9EH5u",
+	"r73QYa1/+OhbEotNz6CfX+mFDut9/MJei4U0K6GDWsBRRpEyt1Xp4fAsrN+4BytsMe9NqaayrsLg5OPj",
+	"AmZOL+oF35ELbein5oRrE9RMOewdXt9nY13psFrv5LcgmPAe9qT2lGpSyXhUJL22Npfx9xu6z3/eezpb",
+	"XWz6XIe5df37VIHyISQ+IXxVz3btTnp0Y4fpUzc7StjJf4ENbTnpOLdwiOpxpSfiyWOQmqX2y0qu9hIA",
+	"2MCmjn9/oz6/KQZO+aU1XuGZ+p0sWZWCnybWBGXwn3K5rPREwmCO/uRhRD/uuZSfOWcdfWp91Vgtg4st",
+	"u+mcGDslL+GETKzxwUltQrxgoVMO1vpgpA1eoBfcyuj+4QCuc2umlZ684xFM+KteXOswp57WzikTWCQd",
+	"jOIjo0KM1ELq6iLIS2XgR1i85qdg7QXIiYtLtfLwCx9kpS5AswC7A36jS7VY2qDMBJ+6cKr2quQZ+Fzq",
+	"qnbq7ifgzKyEDXPlxJQ+eSJG2gTljKxG4uDj4+P7MDgbLvRiWamFMkGV+IcHBU6RXSqHPRJzCUqsmEtT",
+	"VsqJlQrwam3kldSVHFcKX/vo/qE4Ex8fHwsDZ0FMpHNakbCPHyYV+J4XQb0ONB/WjXVZKvNutkQ0Jxdw",
+	"nm0QpUXZSUrjUrmFpr/Dpod/mlmRm5U8FaBweq9KEa7t0Ae1FFfK6Sn3VxyMFlN5Ec3P0X1q4lunZ9oU",
+	"ggcp4LzDeTp//uxzEeylwq9eO2tm4mBk8ekLp/6kJoEasa61dSs1k5Uo7aSGtfNiLq8U9m2slBFyMlHL",
+	"oEra2x4M1aZDOPPf2PC5rU35TibeoYJsrPD1ZC6c8rZ2E5XGxNMLOsLELpWYSAMj8UqhcnCWSaAnj0n9",
+	"NqI2l8ZeG9S+pfHXyglZ6Us4zrCtpzA4HusLa7+WZsXy07+D0ydQKxDW0N3cHCbtBYgDUS/FwcjJoC7w",
+	"SViWU3EtdRCjZyq41RB1/JHwamJN6eFOyTwn2SPw42ZXx1Z9A/r90sB9qkyAGVDvYDd8Y9m2imeKbCzt",
+	"ha/dVGa7YuJUCR2Tlafr2euZGWojpFN0UApe8al1+Y5ACV4ISQ/hYb22rmS7rdQehFYJ6+DEwahuzwCK",
+	"cL69sh60fm1LxTvrpVk6O1Eem3znF/O1qirBB2NcByGFqyt4Ylp7BYp1dhNrc6WDgmFcK3l5ESdlxLeA",
+	"U7JcjVCuZyOCTTlawA8zNRJerry4nuvJ/BCVKu4ujOZsMrG1YS9P9yYSkv56z8PxPXixWqonj+/Dll7K",
+	"EJSDp/6VnEzCxXfHw0/lcP6ny4VZDsPV8IdXPz785M1frFtuxeDMGFubCd5cONtlqeGLsnrq4LgFrfzg",
+	"ZCorr4rBMvvVj4OxLVfrDqweJawYKFP6Cxn2NSiLgS53LW7ecXBzFAOvg7rY/eJzHRS/gK6OG/Ur6FCp",
+	"9UH36cr8GzuGu6c71b0rLGAEQmaPbV9qY2670l9pf9PVBv8C/Bctu5ssDnx7IV8/ofdyJV06J1f9c/U7",
+	"WUn2Rm45Bgtr1EpoI3TwOHn3fPwr2hZ4x09Wh2KUKVnai9GYmhdD4ZRX7kqVo1PQxWVVwd9ludAhqBJO",
+	"aaWyt8VQTCsLzrCJvVLO44epCRRQ5NQa8TM6Gb3i+FCM/BL0B5DRFwtrwhwfuAYDFL7rhVchVKrxlkUV",
+	"5eWLc3hCmVI6gW8eDrqrk3q42+40agUzPG5meM/nw2SufL9tChJeB8HPkFXtg64qtP2FtwsV5qgG2qpE",
+	"Y4JemGrnQ0EGBc6E9qJS0wBrquRkjtN5PVewwsIHu/Qiru6haLYCNWAsfgOn3bA3GbfYoXimZAltJiek",
+	"N3Lp5zZEPwrPxomQYw9zbo2QwthSrXk9naqU9KqgbsGfZFVZ1lkntq5KVh/F2Nl6Ng+gowQrQKxAF8ag",
+	"UKlSgITBOxrbkSI4abyccDML3oDR16hEJX0QToENfShgztG1Ajcu+3/w8l9Kh2PKzArhJBowYS5xUPVi",
+	"DOaMswu8xadThbtsYeGwotG9zwk/xwX8HSz44E33RBcDPAF77614CPd+oXuU9nzxTR7O+i4dgawDsedF",
+	"dqJ6PveqR2SBO7/P2aRIrEgSFvbaKCe8UuSwGy2dnqhGEsBKo0K1lLosxA/KWVLLxNQpaulQvABnfYiP",
+	"Y+ulpm2H5oumPU0ngC6AKJjgvF2gmXSx8PjZY9qAxrL1NEH/DPTWNM1XdkabTi6XQxmC0+Mad+pCwW7y",
+	"qEvy0UnngkNiYPlD50SmyDUbP33iWsLZmlhX5r5rtRLqtfZBlT0yb7m8mMigZtbpTYIp+ybcF9JdqrCs",
+	"5ESJ5s2CDsPor4ffLpV5Zuug3PA8/Xl0kqR4uLaistfKTaRXYr5azpUZegVRTzisMFJf4OmVza8Pxdn2",
+	"iTHoos0Uik8e9VzfMFqn4LC6fYb68tlXPK7mi/e8GH3x4sXT4TNqZyTIFjoRzcDR960X0q3W1lqjEj/V",
+	"yh2KF04vFqoskjiD7YVb1E7JgWUrMZlLJydBOX8q5A3n4OHxo99umIWkg+2ag7bLsWeRX0BLI3HAFy7c",
+	"TQ4eod/ffyfD7FOXZeiN1VGT0XBB7ZXOxX66K/Rzpi5KFaSudgt4fPoxPwyvN4H63rkP1lYklRayVOlg",
+	"F+SskF6cV7IulTi3pTrs618T2O0bvQzogoPFIMHWFh8YSlalKnubnmqj/RysMzYge57IJWPL5j9et/mL",
+	"AWyCnm5KfQUmsSn51obHhnY6pLknu/KgtBN/VNqF1MYfjXVVgTqzKP/z3/4Pf//f/t3f/92/+cf/81//",
+	"/X//v/7nv/27+9lgxtZWSpr9jKMY2S8GesNqRbxCWTrlfTOPEwzROrvonUcGVeyHpSgGlST/7T4TuuiH",
+	"XLzYD2qx1lO8V/fWJ/DpC9DotTXrnXgKgQw/V6XwslKCnxOVnVxSVBgMBnTDJAkAlzb4FicruOowSO5m",
+	"qiRVv2PIkRE3ffXjb98M078f7fHvBw/7Tb2IBZlU0vve7Q7qDgw5aOU2PIDj4dVe/3M9ljMQBxv+XoOr",
+	"Y7OFmZnb2oRPHg2KHbujJ8wIUsVOyUzgQ4Rhx2Yvo4cQXDfLGkMStg78r4mczBU6a0aF+E9/++/uF2JM",
+	"sB5ogcPUaGG0W4xqVu0JqoBrfTjo0QZbuI0bwjVyHRVRHzIMii4SJOGb9HJQdFBUzdq1V6q7M4oER6L1",
+	"6uyLeIpY2rXO85rE7ArZljzfpC+fzWZOzWRQN3U91ZNL1XNJgqkMd2DB0dJGcqDGyQHJS7USTx4XaD26",
+	"EvZNsGLmbL28GK96pQmeWvhc59S++s1f3Fr4tMbfGCjb54me2zVZa36legFHBQ0LEkS+QFsUjg0YNP5Q",
+	"vDToAwb3sJlVip8ryKycIFpwohRY0eGTR6gHPfhUlHqmg+9RzRdglncm7OD4v/nuwfDTVzhx/7/7vTMX",
+	"XTbduT4b/s2rHz/qk3Y7p8zfpaOr9aU+QzhuK2hIGZBv3w1KucqO3qVaDV6tDatgxN3ensk6YtT2ROz0",
+	"Tlq/WxJ2P3oiC3JbRwMzaqJPHjN8FIP3MdyeYQGiakGhTOlBx+Yo0vDJ49FdX4cwsujx/Ilr3bfEGUhu",
+	"ffa+qauK4lfswgG3DQzY1BU77CjYtL7+iLa5ILgc7uGq+nY6OPluf/jiq64o+GwytwrdY2gpqVLQVxiU",
+	"dyi+pnAt9NiiJ6tU/lQ4NVEmUNiZbP3cvxTmyhyuXVw4te3J2XQLNIineEIYGBovkd7z0TZQ1h0vSzrv",
+	"QpsrqyeqMYb1YlEH7HnLc5sPCbS3ufbBOj2RFVwdtiqH104H5ViFE2fg1EE5R1NCN06pJnohq+R7FrXR",
+	"wZ8IX4+DDbISvxEObEmY5N9Et+OFLP9U+7CASf5LlrzloWBrgo4QI6qcEpZ8g6docXnhIE5n+C3oPeot",
+	"tVGv1aQOrHJiyD15RWNb4Btdk93rferZ1dYMl9broK+UcKqsyW+pF0vrVRl1KW6JXOaHm03SPqEzCTXE",
+	"5dVYozO4PZ2FWIDjEeYQ9s8h3rfsK51YcwWDQW3Q51fcrvtm7Y/KB72I4dweMywKjf2kBw4VoiB9MiTu",
+	"iZ6ZaLZGY/FaAJsE1ewq7WlbUUjcwqwHK2Qz/FOhXgenFvD7AKFgL0PtEElIbkTayhRw752q+K0+6H/f",
+	"wW7G2+sUhZ6pkvRrCkvLxRKVeBlw5abO/qAMWVy4wKeEfEDB5eBMTqyHzUEXHqcrbNJDeoD84vtamqDD",
+	"Cn3xHrfWBX6piA5IODrDSl2pqjm1oPrEnd2ckf7dZU0A+TeWfT6Nv1HOxqsUkbvw2CmsqYe70QT8hRdT",
+	"W1X2mm4QsjhhT5V1BeGuMHfKI8DycKcRtWM/T2VVjeXksjfoFkEBtF4u4nqOasPoyVIEWBa0ubKuxkaz",
+	"ddzg1OjdKb/LDLuCLGnsB9kdXhylX2CofopPLORyicAEOcs/1tHPN5v7n9POW/Za/W0fn7Ehea17PxX3",
+	"2C1s3nggdgFQ9rDmYWvn9yvOHpp9Cs6MVpTbgSCZQTFIHs3ei7c5J5sOVltai6VyyUKH34gD/H4Bm6UQ",
+	"+PWCETp4rOPX7xfpOoVjRFE+iqY9+FhMHUXLZJWZIXsJJjW5tHXYmA5hhVembEIxwYqlXJ0IKSptLuFH",
+	"u1SAT1vK1UXtKkCVSTGxJb07t9fiYPS9Y3wLhzpisGYujUFwLBwmDOEZpUoPADMy4b2aOAVOCh3dvaxO",
+	"t12rsOMc5ljcXxd7raZ6NwR3vbUra6d7dzCNZF+xT6kEnJjV7talWu26Jb/k+F7q+bo3kFDwsCEKmO+J",
+	"Xa6EsdcnQmP4mGCTsApGyJnUpn9b5Koq9Ct981X/oBjAdI65Lr1GUnqGQ1kLe6XKEzaKCEMasVoqxRLy",
+	"Fb7nOT+PwrwTxTHdsbPXHiMzWVpeZ8G9m5JI7F1tkFDQDVzIHl35GX0PlYz4LG5oT1LuxbcvnsLcZtIP",
+	"B3StvWpFjNe+vIb0yOc96/WmWY8h5rUu0x/Bf40+CYQvzpw0mKGzlCsYS9HGFNip0IECofPMgRj4GdY3",
+	"4AoB5BegBcXzpaJLH5DLHFWVrtLKB8qeXBGEgTFxiH9AMWXrIEb4hAKA0Qhtv0J4K0akr2sza6K+2jNa",
+	"QjPQERsq8HZJogNTtDiOcA0PQ5+2qTx7eb5TitINQFDNuDaEqbrTThoOzM0ahiO7S3Xgw8vt7x/ZoqXb",
+	"e8y63JAJBF1k0UzBzrA6xUh8xKugkpHEL6GzpM/G9+Tx3fv2efvsPVxCCa8PeTTT0zA6iWOb6StlwHST",
+	"hoG21p2KEQy/eWhMkJYwR2yLkPGoncK+LpVaNI9KQb+hm3Emr3CzRg0Evo0zxW5peHJd2ygGr4fwxvBK",
+	"Ooyuw6uZXPgraiX7zVNqMPvNM26717POc1PEY5PPb9pXrVPSJ6kIaNq/p2y5giNA1wAnERCWInOf6QS3",
+	"aHvGmtufIvUIzLCm42lbFwIqdmgnPJb8J2uiuet26Yz1nBWCvrgiegAwL81O44DpMgEIOvyDIHYsuGWT",
+	"70KJpCglZYzyEczFSeMrGZTnkWMr0LYnFWCx1JUS6AIFMQIWgWeheS046h53XienZlAMOtDlQZGeyZDL",
+	"+W9h9CibOOmiGOSpCgM0/FrJAoNi0ElFGBSDBK+nFyilpxhUFp6j8PAFWVHd32bNRjlFuTX5L2SFYOQL",
+	"UFrxUQbLXcB30y+zNB1OsUo/tJJ0BsWgnaNDn+pJ0ckmisDSeKhm2gfC7l/QFhkUg3m9kOZiAvr4BcX2",
+	"U4d4oNBVgNddt5rN00QgMJYDsXlecei4tDmwPAoaXMELbq7zWyZF6Pw2ot07v+bx5gkI2E/K0+G+ZJlB",
+	"tNkSsqzPuspP5brIRpsi6Q3plIydNIi8tIbUynRgcuC59uIzMwObluwpjFHbmcdXSvBygAzpCedE/X+n",
+	"NEG5gGgKVZW+TzuA8MFSuuCjXhCl4NhZDD81+XAFdnAtB25viCL26HPoSZ/HjWel36xpaal02uPzG2Ui",
+	"fWnN6Nn8nWKwtLhV1ufpnz//9hvBfxXaBNueKluuUnoHHFlyoGGeJKm/YS4SFcdu+yd2Y/sgP5eTYN0W",
+	"Awj/Ah4feI64RPqMHzttTGvYePRMbdBz1LI+SFfX3tfRFCrVFXp6Ua5DftgoNnvCjlG0n9LW4sszs6cQ",
+	"5RWvhLdqRD04hmZRR6XrriBsAkQNgjLi9evXr4ft/0M9YIVOfTJYkTNhrtxbsqrWOt23rk/owuBJaE+J",
+	"bv1tr1PHza129jNre0u3etwItzFZGAp4YZikYP0oOnulS7VTafoWUrSfxofXTlL8Q+eLOzVI9pf0RV7R",
+	"2yqNnJF9DuAFNjmIryMl/yMID+Q6ZDgQ+cAIT9CjT8UCvdkJqFjAEaFYLm65EZinj/CGuFTLIMbK65LP",
+	"y1z6OepknU/yJ/7T3/47evlQjPAKvOg3cKMtiGkQJd2WowQy5lSHa21Ke32KdC45ppgg0DD0aFzLJlLx",
+	"VnYH3e69fvFt5u5Zt39EKGAVJbjSq/sbsjfA1uklaUb7wPuUFwdPnmKa7JPHz+7jlENnIX93rMhnD+HR",
+	"5N0hyh1pVi05tAui3L1i+6Gcj4nWgTR3xLN/3drdXvCJEs3E4zbmdFZ4h+kbcrUefo3Y2thWr3aFW7VX",
+	"AHT27t7WdXzPq51OFyTNeIZPRsCj34V49K3FgkGuL1LGl9CzVP0Q4+5aRcHY5VPYyqZTRI6T/vsygFi8",
+	"2DZOGqE2YkRPjfK0hiArO8PANTeFUohypUgjWqQUZ0L/tv1JhgmF+O2oMDkl0aWH2T2clB8/FtOCToXM",
+	"RZ2xYq5NYKTDT5nmTPjtvcPeKpSQr6PETUMHYg1dmEnRTDxuuLnI579+UW8TnC9fnKcQx7QO6BR5EuJ6",
+	"jpXwKohKsv66p/TMROLeQqtJTfzk0fp6vY8i7KcLnP33bzM7Dz/+5K1JjZufgs5Wxu9u2I2fI5QJkE79",
+	"Mof5x8igQCEQsVCh0XGSJLEGn+GcxqVTsANRHnM7YHhYr/gp5LWhCB39vbHDyMx2KtQuOvAu1Yq9XfSw",
+	"KvHjSarNKeyvnYAQ0BZdp5/ILGXEoKdtUtUe4DqYwEQJLTfIHWkzhG39lHodP1Uvlzf/lJGLHR8wDY1c",
+	"h0koShSEB20I/W9mAovt0zO3/YJPaLb96bT69vEGEoCzp084BLo5MxyccTfIDP9Srd4CPJJDt2uZoHRM",
+	"9ng7O7h3haq8HUYR1koFCFj1mMjbbYc7uJI+yP/vohazSzHZRKUHh504q6Jy3fDonYiRnACuEa1XZfAD",
+	"KLobg64sxCh+Gx+LP6w/B7/gQDA9uoTtqoNvh4ev5wqdZPF71kEzuXJAncoHHS3Tcs+4WZqQs9hU+s3j",
+	"ps30u89i40D3ByxJZ0iGFEkDuh5iDHj0AILIm8f2feRZihi/+HvGVmF4a6YCfu4xP+v5zkSw4N7O31YT",
+	"v6fmd7vOeBR926nVYD+kkUcBXg5rkheSeSk6RFOnImTummUltWFMC8XAv3jx9VeHg02UK+uJeayn7j0l",
+	"X8ILcB9GkNuNHCYZdG4HFWMLZ6Mx1hVfLmg4nT7snPsveajxYATlMP1o6fSVnPTnUvTuhnV80m0n8a1M",
+	"x86B910++Z96vEDt45XS5eDLRcpqh726VA5/e7vztfNgNf3sHWVzTW1Oe8Y7g5x+9xhBwlzFBPOi8ejS",
+	"aAAooHn5tTWlXHV+yV4Agu3wESVSFXGW+1XwGJ4SKEWVXsi25zIXzaXU1QoDkeqyotQeE+ZV/1b8eioz",
+	"Asr+OFvXDYz4K/ijOPiEwY73BbocW/EScdATYyhIbUXUExIWRCOlvE8uY2S+cCIo9KuAU0Uii8h4Jfxc",
+	"LrsZ6w8+bV3vnxT7hM/6Vr1L0tpgUy1F2xdypuAfzeYpBpRcSFfc0tnFMlxgLieGp109CTW4nCjRE1dk",
+	"fOGVdJM5xtgxvKsmSGfQvzjQp4hZbwAD1FiTNJp+wIyQ9k8XD+Bbsi61vdAmjoP+mfqVD4MetXVIz9qd",
+	"fW9avYjg3fRq+k3sw0XC9aZPXaxDfS/0lil56vSEnaI3SDz8jCN7OhDwu+HNv+cJUx2B7MKr4CneiwKK",
+	"Ac0EKUfHCSHpEREPMBJqT/s2QJhtsyX1NsGQCxRvWXYvdOlUyCy7N3Ukue7TF5ok326ejNcb5C7l11yj",
+	"X2DCGUJlydBl6iFsXVHhIUqkr3GAHhEt0qnTLtVB6mb0W/JbME9+b9nd7PIee+3mGZiEf9g/Qoiff9ab",
+	"L9mVHbEvBc92/NRGefLs5rnEcmyvNjgc2suED3LUDJ1HlD6DTgOfbo/I3pUyOshzxI+JsYJcDnL/pNyN",
+	"U3EcWateA4FJZMai9+m7xxwMx83Z+kDLtbJfasH2vJge+D786yej8Zskj713ZzezYeeLz+mFF5oGGhMf",
+	"dr73Eh7s7r9ONjz2nttMc7hxK+Y9yVMbgzSldEQ1pV6T4modcYdPpQ+bpfDLt5nFkTLJ1zxMTDSOw4uM",
+	"oduo9fBBYrtDblFKEoetBgI53zOdpPNoKOENEcmv497bwpLyX/+nf/8P/9u//sf//f/6h//jPyJLClee",
+	"IAGqJrL2SkiBIBqmO7tGYjbM4eLz9PBfffyROJBjCCZ/KhbUKdrx9+NFwsh7uHCcWloHgaaFJ4Z7H6xT",
+	"JU+TRzeuxviFGAM+u4yMa588EmMN9p40cU4j4jwiQ/hSqFQJc7aofSTPm+oQ398G9FavIVNIAQbl42P+",
+	"X1tp++jTln9w+M9umovffOLl88eDYs+boXOcEsY2tdx3eL6xIaH7nhLjlZncOIufUEgXDErqyR8g8iaA",
+	"2k8uZ7Qx6J0hvUP0t0RAqMZzay/9oXjKKMP4jFeTGo4uPwxHoLqWKy86vCCZR7CSZlYzICweZDzFP8z7",
+	"wz32+iLjalxvkKwSaexCVqstA+XTS4bUkJ/vHWW8yYgiEEMkefSDwSdpaU4bHCLuXeQkNEoT6otjGMJf",
+	"6zCZC2Ndk16FMMH+aUp344acwCRAQDYx5Nz3mCr7EXYEu7yol/3zy/MS06V2cZS92X9LZ3bgh539TnY2",
+	"1pkIVlwqtaRdSVL8Sla1+vVtxFz45rOdvlN0d1M+3vYXs/Xtk9ptXFyPDyPMtSuHS+nCKjGQR7hcOzEk",
+	"zOvxoBjMrJ0hZrvSpn5d2t49hJ99HqTr8aZQhRP9g4oz1qvgYwdAueGn8ZAKZUpExcZaF5AfVtnre54l",
+	"XRHL8JgSmWCdwsx064IqC/H0y/PPAG1XgeXQhn/1Jll278lWxzfONg77djLkLaMde7vouP32lydZ9u12",
+	"ugR+7pY5anwQ9wbZ7Mxpk1hWALlRYGScyTZWGqnxV0i8sX/CmtqJp38qV2ekL+2FC8TpJmTgQoW5LTdg",
+	"siCxMaVU9I2UuYK1TzluC+VAPIQkZysVSAeIv4jA9JQ3ebYni/JpAyrNmIyN5ZYE2ZTAw1m3XDN2oTEj",
+	"OiVUo+JNL520sPI6eFVNWZ+m+hY9BWyWttKTVf8FwIPqFyBxjvihxG+N5vv+80BxQmsSZD1WprI4YKdk",
+	"Sa7ZAzwLSOg7AVFOSfXwMibFrOgn6tb9bHahhSxzkVzm0Vex2NtzhLvsGY61F90W2P2ys43nIfp/IqXI",
+	"nmehN4kPG0sbvzn8sXk6cB1UW3biN8qvBtl2A+F6U9HTnNfGypKVXiJLWK42yOEPr+D/joefXhy++vG4",
+	"+OjBHlbX2qxsHG0/+1ewy2G9zDNeI+qkELJiXDj+NRrbtOswLzSdT69Ul/bSuvImKBXs4lvAqWA774zH",
+	"63aIk/ycres1yfDfjxEsOz2v+iqhTKSfi7JWaDAUbUj+ZJUtL/AaYDa0NoX4vraBYeNN/vM9nxY+shuw",
+	"74gFehS07+hWJ0rK9JGNjMrYNwehB1WKUeISHglIQCvVpNKGSkREeLGuVOSbsCDtjazeJsqflj5VKQlq",
+	"vxdYqm6TkY1obLwx21NTMnm9no/I/AgjVI6If6fJCMfUcZgj+ihQljVQGATG8B0GP8MFTrf0WKUXhJ42",
+	"OeZCOqevCC8OU3sqRpQ1OmLGjWmdkY+x4MHE9CutrvMuSrFUzkONsYz5KnK7Loh7QS4s6Hphrpy/n3Yz",
+	"Zq1RQJjuZiAhO43ZZiFyNbE6gK8RZQOcLd9xavK4PHk1//H/+bd//3f/JrI+R3OIJ7hJlW/yU9PkoRnH",
+	"6bM0WHzcQd5ytbqgzvBf0z+pW+UFdKzXtAKPwGUfjQu8US8vVKVnelypbVpkXn0q+kb9yky4BqJEiqh6",
+	"KcYqXCtlOL/P9ytitxEYu48aDzMSVvuASb3bPrKTuXFjktnteVgKsXSKdclqFS8irtdGAaayjFlhOCDW",
+	"KKtVl8LlRDipkeQRnuZszYgQIasmS5P0PyETMU84aKle3R3UJ3Z4Xc6jFb2+D8Egv9jE5TFRTi2sWYlg",
+	"Bd0Cp5HZFlmnWPsDWfKxWGhTB+X3KcNAFMIXe1AZ/UGNwXo2DXnQ2gTFEbSa3TIZj1WlgrqlyR8T5Duu",
+	"o48/aeE5HuxMFo7tbOlnvyLJG3Mrcnl5eROVkD/3LGMXuN3k9GPOz0Qlx6pqCjKllezkYHE/ul6/XkRt",
+	"vg6bEVvxqYJp7hOT1V0vXQ/IbJn9ZS8Nm5vaKR9Sw/39iVprbw0w/NOarioFWTtCZ5pq4iyG25292I1m",
+	"2o1gGmuGRs0kUptui2PmHwYviTbWccT8YALzgfvm5fPHhZgyr9T5N/+yEJiWBj/986f/8v5+Yb1/+tHx",
+	"cfuctOJ3Px4XD3775iZBvPNv/uXdBvGekmrzdTJtO6L7hv6vxkTuyZXEv93zTBlAqz2i+wZ11xGxdx0O",
+	"imwGkoHd44L/SR6JZG7nroedU/QW7Nr2lO9EZELTvd1KmQU3cXlYM9U7c2ap6XN69icpdPurXFAovfcP",
+	"9bK84cffbJyt8zT8/jkjPbG9dZ8YDgMKrnMP4SlQ10pV6bFCbBFNa+2YodpYInbBUCuiEtdLTwDyf2aH",
+	"/Euol/r68Jm8bvp616Uf6St9/hU8EBeTKN560NEbpjdTi9/JvrxVVkt/hgp34NWWsd1GX3mH42qO0PbX",
+	"Oo7Ks+HfgJty2Bvn7MwVfqDYZ8pQS/46Vgq6ARQV0jMaPl9Kr5dw3QOZVUCGjRUXyj7BzBR8eEKphjIC",
+	"zz3VIJcIWtaKKvr5pZoIJkH2ReP3SnzHieoI4Ld44slgA8XuUHzTcFoXKexYCGfroAqiuLauKf2OhWnW",
+	"lYbYo5uBMCP6uuewUgxyQ54k/k3AshVscroE4OKJe/I4K+InfCX9fCtFdsU7aRtLci/38SYDkPtBS/3k",
+	"cVOGTE4W6miCtciG3hqj+rm7F/J1xJHfvFObc1ivlCmxdj8lsbJlgb3cNpdNHVCa/I201ntRV2SIbnQw",
+	"OiUXfrsfh/ot+NkWktspQsD2OG22OAR4g63tgNbMN50rsj3ejHSHkLjzu6751O0Vrmfs6AHuNH/j1JBo",
+	"MKYUkR7+0Vc/frKHYr8xUYMINKF7X2BJjNVPVFSb9uBfCxrLTeMxTWR1LSKzRwRm+zCzbt0QSn5D7l1I",
+	"6phrs4HoGv58z9PYprZ2rUKTlCUY+LGeRT8bfvHPv/z6m6fDF78H0+5RvwdlJ+whNNWd+dno+zihPtw0",
+	"7LE+Tpeme2N4Ma8vfa8bR3TljeqgE3/jTTX/9ZpsyQ5Oq9hue9ceu53et5F3FYksPLHllVxS27rElwWa",
+	"Sik9ckQ6gUwvVANMmhVmiPU4P2+i726RHhzK6hFeFI7ornoWkuOAsp3GcA7jIsCgTyR+2U6Y3iiiTF27",
+	"5UrcMBLZlB5tq9E3NCua8B03uHnKd4TsLnrCYgYLWRpypqKWIpcA8gKH54iJVBOvW8TQdCP9mKZCZfHr",
+	"qh0iPW3FVlNad4hBaHg1WHuZnXmfR5gRvXiaRWTbbTCDe3wRWkMSfmJ48vOeuNpFEy9Lw8OiidzLQTGI",
+	"H9szy54m/yk1/yy2zr/Nv8GrlH2JfvM4fQ+XElzbymWbdM/E+9yb3Mk9p2WjCKjEpH4wRJ7xNiO0EqJZ",
+	"CfXNZhNM6CqCHWUsAIPSJORVUYF9sMt/PDqlmhk5D7BAKCDYUEIGhi8NGW1sfFCyLFIyh7EUecVa4F6s",
+	"1NsmAmDe4bXgSFsKftQjRDIS4/5FiI5jY5Pp5211pXIntFg6C8kwUwE8XNla0GyPso/g4eNgYK+u96B4",
+	"eNwv74iO+aL/EmktvxH07BADiNDH05g1zF1qrSTEFZfK3PQKaUPG12cu/jWaQznvs4Dl6oRhlKGMZmJu",
+	"QwJaLrmfn/wf5vhDb8x7c3Bmx/QcYgn19qwkvCKizXU4aeB4k7m1sZRA/GbUZVujhKeJIsqIDk05sogp",
+	"F8miqMlOi1OS6VTjWWfElPa6u1pr0aSHu+4iOjH9FxBJLdXj+odzvAeR3UtPcNbON+Pbm79Kk8/yd/3z",
+	"fq3WYD7fF76fda3TC26krxPPiY54/cOMld017jN6jOAImXDfD+rFXz/n99bxXn+I9Iq4DSnVDDJ0cl8N",
+	"tYEesRI23gpBLkJVHrc5Z3nCnqRWxrWuQtOC9pTXw5hTabiufpNHlHYhnFEkdXlT5LTFvbX49jFUsvo6",
+	"HqBDDUKr9jGISmAdXVYKQUSgG4OS4JlcZj9TBkvCDU72Woyv8Nk3VCOA+X22+1rwqsOCjWTWE0ajHxSz",
+	"VI5Lj29AKDcPZHyicaKwcBwIHpaTwk/sUomD2Ism6TNKJ9iStlLsq6pkgAmLf0Tt8T7l8cO2Yv1gruEs",
+	"NpVsat+IrdK2WCjgsiwVU3rklS5Q/bkJFgXTYnsSENI9fwusUBRKO67SF83swZzSs63wJBGY4zw4lpWk",
+	"UR/uZ3zSINrdWJdGPbKzKQMxiLu4vTGLNn94duzae22L7DvfppL2qaKUNAwJQWnnY6g+qaZn2wVNzBog",
+	"OZUc8LSjCBbo2STBbcTGy7qWGhXPdQd7M49rWWgdaismluwdSYvPgXY2c9Smsd4pv1X695bVe4wQvH6C",
+	"q2ahWAykimSCuD5oPVAd3H5N6HCT66G/vl2fR8HPrQsxbxu3QpJRvl4spFuJUjksq5vsSjjVw7OZMk0p",
+	"RyFDTFJrAgej87mzCyXwbpx8+3yEZEKjl1wZkzo1InHm5DWX7Ik3ULRUD7fRa+51uwHYNeXZ34DCkzbq",
+	"jqQf3b4g2kU6NlTuLPe8CRNxORZF75cPRgUwgTYPGNetoHL9sFCNCIF9SWE6pocClVsa8eTp1aOkBEtP",
+	"WkHBf/lEQDIUa9uSxMTRJ48OxWfNSTU2vU5A4y31PhFB6pUy2zLJeDqxNXghlnwWwVKJusmEavMGK4ih",
+	"QDJGcd/lfrP5gP+Vk6bPkdDSv9rdfo7oay/+enj+/NnnwxfwVLzzk0zFs8vZw+Bk30GO2vFK5QWURidt",
+	"MwYnHRm8WjBskK7h2g59UMuW1ZSqFXA5EMR1xUp+cVNhd6n4Ab67+hqqiZAcZiqiFjA08XfgRiQ+p7zT",
+	"e1sNxa66h81p6RNw9MetIEp45iZ+0Jai2rNnWW1LSqNEfwVWt8QJzBcLZWLvqohgrTjAoi33D0VyQ8LP",
+	"DXfIUPPKNF5J+C8Xh20U4a4bbzGVg8x8x6UZvNoy1l68FY+wZ39+o65TWl/DnPfg+DgpJ9jrmQqYvjiK",
+	"LY1YOcEglfZ4irIKUHtf9+3Lue+e37SNnqkrFm/r43Xqyl72KTVfQH1MiAy0Svd4Kly6q9B0b2egvE0r",
+	"0rkpFtSqPsold4nEIDi9pDIiMWzO/SooQdKaierT3LqY+1ui2fcopfNcz8wTs9FXe1sX49uCbkerYSsO",
+	"+Lnuo/KXS30xln5DKv0f2CdM6G6q0DCzJ5w6BnXvOmSoQGJNWTDRIkJt3YvR0dWDo8PDQ1ajkprJRW4i",
+	"VQ7K/+gczsxStrjmcDhRppR6ijA7EPXqtFUimPTRpAXyPXbPiy9slrrbUK/pkGjXIktvM4w2uHQewtKf",
+	"HB3JpT7k3x5O7GInD0AxGDtpoMBgtQl7wxOIzwl4rnYFU7pPMJEYBxRJypoZJK3XU2Udeg/Z5BbK38Nb",
+	"j1P2lk6jljyuQ7CGE5amzpqgTEmJSv/lP/y///Xf/i//5T/8j//43/3f//A///u//4//jkiYemcsVUxl",
+	"lKNYykqFoFL5MluqNrFMIoXJbrR/ksqibrjCcpjzxknr4a8iPwaz9ZJFNsKY3QjvHVhg3HtIMUX7hlSc",
+	"Dpz4JqxIscZhfjlu1srX4yb0Hs9WVEzHK/SI5468LGKyfyZ6v4q/M8jRil/QnC6VGbb6nbkcIf6xYcMk",
+	"6w+/xtXT+YH2ZlmbmR6ORt1HjfsVV4D5QTmL5FrY+PMvzoYPP/4Ea1TJ19ouWr0fXj0YFU0vdVlwj9xC",
+	"VvoHVWZ8M2Et6oOjnnMJ3IV8TXfnw0c5juzhTsLg8abs7T0sMB0UmV9QG2BTEYRG1WvENJYzQaLd5KBq",
+	"tr2/HMrXw6sHw15TKCtZugm0wMIJn+mliCGzGSutoHjilBEx1hgrTpuIar9mpYuRUlQAz2duH2ahIUZ+",
+	"YtMj6ivdVaNmw30RLxJDilC7w4ebR00tbdJxYnQkuxxH+WyNmrMBjiod8mOAHhKcr4x4/nCPu6WyM7uF",
+	"CkeGeZey3M4smXna4526/VaExyMVX2XNbIisuFkUF04aVJPLHNHjFdYobVVbynoADzYfQ4rbRkBUVvbb",
+	"4BuTASwE0C4ibc0GFTTfhenRZrARkw8DS3potrvueb479+dj7bDsrHuy8wyszWED7J4Ffcenc3IoPpeV",
+	"Vxy13OhpAw/WLka2XBr2GPDkih5FtuyW2/tUjKjoL6fiwG5BfWwEMny09UYrGqQJbwq8jOL1wEehQlxA",
+	"A9TuFHxmluZYeBi+utteZ6BqJjA7k7AjB4plbp8RTwPZYsGDV/8mFnyQIeVH/ARoZmrnmb1+zykyUle/",
+	"7C3R9Qeqj+zjU1BBCVP82YJgXfBeJCfw3RL3uOsa7gGCR9nptNImkQsUrdr5xebK94WQaBbd8+zqg/Yc",
+	"qJNeVpyMvCoIBMXQt4OUhMi4J1Y8IbzmlPoBm6gN/Tvf7onajUvsU18GTKcXYzqrxAaA/6CewCWC7SHL",
+	"Lf/z1bb99sxe94cKIKZKEzftn+923uXSeo2DTcI+jtpZn0rC09ShBUdzw/VV+FmqgzWKPuzmk7EtRuBo",
+	"33Qvd+jiLQublUki0kPxgVy7ZrZWQigSAG0Ra4FJR96exEahHQabfZCLpY8mL5M7oSstY1kJcyhzqpyC",
+	"SQmKcljZoRkHEvkSwrXlCV4I3Yhysy2tdC+44tZARO/k7R+IaK3W/tgG7turrjwBmhcE/t2+wU5ErwEe",
+	"Apwwpl5oLGcNxCZYS63ElRGtwRS5bw83EYR5PTspEebAXZ2kMto/ra/PKSxCzUF/Ju3OT62LZCSnZO/A",
+	"b6wrtUErvyVa/OFWmLa9ZvcKV24G49li3QjchxBzo9IRVDUDdTxj40FRJrhVD2ANrfrfvhmmfz/a498P",
+	"Hvbfg/tUcGlfHETwRpmYG4wUKNb45DFOHEmgWMmPhKY/JS/pdaKky8DqeMc3Z5ubwdR0eiwVJElXC70N",
+	"OgHkhiV0beIe8K18sAjPePLYo9iJe/NuZ7oXEB8GRaxpk8Dx7bOez3X3KHROcd+V/8KGJWYzusXN82Tg",
+	"Kk7OPjyWauJU2D9dZhd1AyM+9mZuWGueOtSFiD/cyezK77XCHxvh+DCHnE/7s8whR6E3IGeeRjdSRk1D",
+	"FJtcwr88AT2gm/PULYtjRG0Q8fUelsfJ17kv/H1Nw6KH6Ibx6qOH7NgdjdVMG1jE5yrUy1H36zfYLa2V",
+	"2LFj8GN98bJbjATEGiF1tI/8yysVTsmydgv4XkLvIkdUr5FfO93/YRuWYOafHB2Jl8+esCr3L56lPKk9",
+	"pwfa75sOxoD1HA8WAJutOnjgJlbd7zEu/RlYwXeO/y/Q+WI2gpD3zA84vXFmwFsH8m+X0vGvgJf2ykS2",
+	"OJjjsX0N6o3KHM4YfdRI+gxUZTeHTBeDBKnYkj7/8HjXtox4vK2hu42F7bL6dL2u+5mTUBYprhPqIVgF",
+	"pFoh8And4fHPI7F02qBv9STOnYFk4Brjb/xUkcWg/sqKYG01mcODZAORNIsfnBCTuzhIOdpi6VVd2mF8",
+	"omHstQvkcNeclw/+xEL8ptQurPCs14YeCUkt9vfbwUQUO3KxVGXTrJcLReNOtGlcg4lOCyi413PLWr36",
+	"vpaQON+hlKFZOj48PjwePjx++MmD4wePjh89+qcPPx4+KqV89PFHv51O5GSnDNpWEbCHVexGtCMvmrIm",
+	"97wYUQYz1XDn9kZYOKXAk4J2rQOHSPSbxO9Hnx1OOE5zCb5fT5diNMHT036pJkmg3PMFVzHSntZeTsI9",
+	"fyMyk7zQfY8sTuXstwrk6xvAZOjixpoIzyluGlFTG2KOCagDmCmBBzgFuyO0sB8ogz6NmQqM4IhZbhFk",
+	"GdFjGeDKI+KKS8w7pxE6wT1Id+lpixgbQ1KYYAtvrIQ0YvQtxz9wf8cV5xhFFrVo3N7EgC987aZyEr0x",
+	"5xgsDkOY8xMqfEUDO4IV5Mg+RlaxY8aK82+fPWe4JHnNYRLp50gYcDLIwWfN8sil5sLTvsm82LgaERF2",
+	"8EUIS2DbKcRzWFRViOdyocBj+5dfydf3aSsbFAopUWd0cQHxoOEoFgiP7IoxcSIy3XbDO3DvzUNYnhwd",
+	"AdSwglAKT0OMHFDUCjE2XgUCASL4FV6+kpUuW8SPPOGxkpCvm+K4MGIaZTN13HEUUBdxntam8A3i2qcb",
+	"yubDgrFiTvj9mAhQm1I5MQKwwxH/8ujqwSh2lTks0B1mqJYSvg8jR/pFVCc6kcBUdYrqd8Bh5va0QxcE",
+	"m72HfzR/NHQq0gz2nAuKSeAaxi3ejnSlwezavAVXfCDncMIfYdP5Bm0+QI+Igyg8IuoiYcQiFa53UwTG",
+	"vaZ1GiI6fyS8XPkmdSI2lwLKjMQTByNpViNIsI34ROhrlgoGhlQIUNIUIXinbQQeMdymbzdI/xGLrOY3",
+	"TUlU/HeTIXIwMtaoEfm9bPbGfSqgxZhXTkhv5BPHptrrF7/A6M1Hxw8K/Cm+HtqpLfDER42AJBL9JAtH",
+	"fz1kBXr45DHP9zkEJ4dcQ+ZEGBDE1inUR4MOeKOf4Y0e9+bZ0ydZud6TwdUDjCkulZFLPTgZfHR4fPgR",
+	"XTBzvBw6R+JIGmNrQ0RW+MCMjKc0dLjLBgBNPGs9WQziiPCth8fHrPmHmBzW2abwO1Kbd6abZR+CD5MU",
+	"6NymWC5ctHrfcGKyiYFJkDAfj46PN300jeLodzKl3eMrD3a/8rKd/UjvfbT7vc+tG+uyVIbeeLT7jW9s",
+	"+NxyhYNHx5/ufgF8UpUm/ezRw4f7jIWzzdGLjROO4Kg9RiN1VTvVUkfQeZxuv+9egZeYkx0wcVVSHY0N",
+	"SwjaMIVHg5xhBntMYXxVDKI84Hy3Fvh5XVYMTgbGGurc2t6vw/yIHcdabd/9T5rH7nDrZ1/p2fQv2PqD",
+	"izU9ePhTdusdrvGLtSSqez72PoczsKT273ixj36MOIo3pFtUKmzOQEfwAN5RTQJItMezzMg2JFw8kzrq",
+	"aW1K64KyQTnbKoczc0FVXyvO2UppQ+zb5KdCZiHC1JwikRu7UZxaAD9GTDzn29YpZHjHokErztJp7/OX",
+	"BtaH9yAV+nByoQLCUr77kfQ4uEkaLS5O4iC3FsnG22/Hd6s5vbrD09XYk+fk399wxlxGed5nMsHMsWUA",
+	"n3yuwvCctNsNHeCHj56rwA++efPru5Ye7nEtvbD2a2lWPCL/dmQQGbzfvSo2SyPa2kL2iZ53Inkg9wN8",
+	"YNb3+UURgETqYzsjCFB4HhH8pCJy9rV17TACKrOYjQQ/kXTpay6TLiRQ2jLtAH5FhlqBf272/H3wol47",
+	"rD9hVPRGURlxkEdBLZZBHHwslsp1P1uIB1ApWsxt7fDvIDLvFzyg1kCSXTVRh+IFRHBb6bGUgZFsfRB/",
+	"qaQdAl6wczEB9I/mj+YrhF6dRN18+OSpGNeTSxXyqV0Xhb+P6Vcs2JQPv7Pl6q2Joq+nMp3qN2+6wvPN",
+	"HQrBVsZdjwB8npIayaDs3Ht/HrLvfRZlwGTf76TbT5C109NuIcoQsXoE8vTIpyqX/XItHlIoKoFee3yB",
+	"KkXS0SsA22YYAhdz1NF/x/uNwbuyVbUFr+8TIenx5PnItC/yRowV0cl19rCIGAqI5NGT5M5M3cBe5ynb",
+	"SZRh9h8qsim9/1DkUiYBb3Npsy5hnqeZ+EqbyzsSM+s1Od+xtGk6sEnZevnsK5j1VH85Tnqwv0bT/X0W",
+	"LLhMuLORsqIXdB4d8G3L7p1oUCR2dkicr1GTklxWZ1h7tV4UN2RFdmOFXE/ubaqSG8NIBUEBGGLRhXwn",
+	"+QERfVJlKLEmKlDSlCxWfOuba4V9Xz77qk8kUQyEPI/YMIkeclIbm06KNidxkBW6I21dlaJSAX3YEAiM",
+	"zFzY9lgR8xAcOj0zKY+kaa6DR6YujNVMGnDoY09RoGtSxazJwi5ZDaMHxylXXXyz0dvNy4wvGxvl7Gkr",
+	"nB85SxiZ0Z3MRjpFx+yjRrkkD2+fQ58DFRz2yzNMtMnSWVINtzy1M05mJJakNRdjBUkmNH8pJ+YnXg90",
+	"UX64INYviCwNIz95IqwdJQ5W/py666/2bum5Q2CPI5gqGhG9d0nfrbFD+jdOu6O4wJnXtmPILJMZjNIR",
+	"UhpiBC5yVDemJEmWXKZHAR6LFGcSx9eIBQCrOx5nrNAYSyTz3wln6cO60xbt5xMCBRJTD0eViJUnBWuj",
+	"eKE8Tsr1/ZNFLx67TcWBsXCd2IUMeiIWys0UxrbI3xGC5G6p1Kt4heekIyTdA0v2Asvx8Wvsuu0U5Vvz",
+	"JCTd+owLWn90/BHHYXMxjyDcEzFKCzxiMLtsEAjNH+M2ax6CYXFMv3mKXvxnuEf+MtXfTKVUG6YG+Jvn",
+	"zI0oR2hWK2koeghAk+g5DfN7Pq17sihidnbaWZhzsJC0ndZF+TnfwSjqfh6vasGf+b5WbtV8h2GWTZs5",
+	"kOz4UR9us7+hWMm1t6WP+2g7u37ej44/Wj/CGTBIzKzycevGzYQJmvEI2zpM7ILLtzcsO17h7Y/syd53",
+	"roCvMhqSzTO9Ngmdq6MfaNqGdxSdTmxu/f29Yd7qTfGiLVKdKrVTEwLXNlZGfxBw4y2RJ6XONqGA87SF",
+	"XM1dylnKVQ1WUEgI/aAKZLj0PWoahAZTlcI7VJPSNzYoSSm39pcUDVw2E3f35mP82BGi1TdbkGei1B49",
+	"0pgwJb1XDv500lI+eZtQBI+bbmHQuoZE5GBgiK81DRIELniYEbyXjB3bciVAKKBnnW5+5HjCNjKVgbmW",
+	"KyWdyagmkZvtem4TzUar9KyLAU344jrEr7cE7S2stzgNOSiIF0Dwp2Rrgm5lJP0OlpKPxk82k7YWWuiy",
+	"mL5TG2mt7PAGIZD2ahMUORy8t7fJe22v8Ga91eVzRLWdN4uY37eoBdKiRWshs0cYqBhLZ9OJqw2mdYLw",
+	"Tip4x8N9kspysYC38ayrspVpYcoI1lta36jw8SvMIGeVx3v5WrrSZz4RTt/UDAbkKurpoDu1tI7Elg8A",
+	"GWzYc1GzA0GnfS5XORWb3fygikNBfapInXKorVGcc9Q6+k3hjZsLrFtJn89xmbvip0+772jLTYntzTrn",
+	"9prfpD6/fXdQb33wD+HJDyIzE5m07d+2zFxM5S7N7EUfoKHBN8VTG6HnUVgAUKGRKUapMgqgBjrQkP/U",
+	"XSkUE6s3qU2YWN6rNm1VV34atOCDrvIBF9AfvguNMRhddpi4kA4OnZJ3BBVoHe/bqUXFfmimtRD/mSBH",
+	"YGP6sMOUiRV7GgQvJ0KSCc3kC0r7I9QTuotLq/xbVl6Q4jknYt+iZHw9lR80jA8AqD9zQccKyHsq6WL0",
+	"Zh9tJiaqJB1G+6hplDGCfSuE00mjjomJNDgXnNfGVXUoCFLiTFnDFBqNNsVVxCLWPUMU+GArZZouj1dL",
+	"BKTNVbt7XRVLvUYSmLeuZYmzRHzeWJ4RZLpdB3vWJs67C3HX86WfKdC+r2KGZT9+aXrZzTOi3ntFjs/m",
+	"VrPq7pzkSYrdTGkLQfkQ610k7FSuFjWIDbmgECrKSXq63B14vk3qTC/8860pcPnZ3luT64ieDyrd25Bt",
+	"m0SaUdfpNoxu1J4cnz+TtJ53kjz6S1Agf14J+6Mu98s8DD2KYhFjgTtzEk2Ukb/ozMTHOElP0zrthtDs",
+	"kJR7SJMn5d2JTP4EDetnUgg/ZEP+2SL9n8ExVD+D5EPT0imvtkD4n2WQeRQjVJ/y4fFD4rlC0UT0MwiO",
+	"OBRcn1hU1l7WSxRU+BcUV0TYXEfOXApBSswvPBOVhN/xCRd6sVCllkGB6VsvlfOqVL4pR4JJPxAqhNwf",
+	"MkbFRwnknkh5m9KE4slUGMudAbTHlQKmZalDTA5wq0PxdazR0ZT7R99ljXnnlWKvbioikdiv5kp8X6ta",
+	"cfRSlWj30tdqbCbBMGJwhP7oVcCKMwe829B2Vk48SGb1/UJoU6qlMqUyIeZ6Rq8EE9TFRlOMtOiQl2Gx",
+	"BTFlUC3UL4Svx/oQwjrqf4uhWBPsxTnrcL2B6Zbp9/tiKnx2nvLmeoZ7644CK2+ncla7vjyf9oEyGV36",
+	"5nLwe5Y73+cmediDfUo1YfW0VfdA5xRSBeZVeBV4N13rKu5uYGQMbsXnSsPuN4r/5t8hFuUXpbN2RDM2",
+	"nAc2s7m+cWy1EbhHMRVos+Q9t8bXi27+FH0+xPqaqSp3zPhh/cC3Si4eiicGZTQXEoBdU3v4/yRYCd1O",
+	"6ueQSDnxIx6PfMzHjKLk0cOHh+IzU9JfU/E/6kBen++UGV4RcBKLosFjTXw4+VgPRZQbdKE0ODigcAQJ",
+	"ibD+dkEnQdO0JC9Hxt0JSlRB2m6qC4TzT38qhbFBTxq6SDvDOimHUOzXdwUqlgzpE3deJWH3buTcT5JX",
+	"xcCo64t9iwXuy1V64yqDkaq01Znbic1HPQzRrZN6mrztTLP9QertIfU8Bhem1s1sCFl84UYSL0qCYaqr",
+	"2S/oCB7WR9rNYZBWbkwkHe1LuSdL1lYlvu6FD3aJHBbazIpWaWCoU7BWuLRFURHj1dgQabQ5JJAbaag0",
+	"+qTDTBn4hWqXNb0bI7b1jZ/JiP0cr4/tBiyRmpTKfwjd/tyGJ6Rn43q07+z97M9bx2bbYuEoyEu1Df+f",
+	"Er4ohY7T2TgEG/NUUvmb9dEIHcQC89An0mDVSLtQlNcSs47jbKL4WGGRjEu1DIlKNYmfRPfta1CelJm4",
+	"1TKokjPr0K9GLL4kazTlpTdpi4ssBy82S1VTKsv5y5NKSccP60zlCk4aLydN8gNlIUwa9YxfgkZI459g",
+	"mV36I+r+EYors+yPVEA3TxagmWvyp/uUH6BJWhdsdwUTWa8OvSliil3PikBrH8dWcOkHcmFUGlKI3qk0",
+	"eCenGtaF/R6dStnto9Q7Re/E9xSN183H/ttUQCA+C+r/eEUlAzmkuUg8XZSvQ9y/hKVv6t4UeCx55hvW",
+	"b/KcUO2ZIh00ShWKDwdknSDfPomdh8cPkAInlUVE5TJ2AbkfyO6aKT59iS/MqNeh65BpABeQqIslSdDr",
+	"QrVIOLOoSClJyVeTSgLhFOVZymvTdF9oAtlB+UWwqi64DCNwOoDsNck7J0b4rwv87ajRl4jVvlWoV3sQ",
+	"ZCBRQGVqVgvHt1Z1t6BSjO3ija38Cp73bqXG0K0bnOLYMKIILWr1rCEPbkdn0LXVsaVb+VZwJkj40WLD",
+	"GGV1DXZrdHZKca2qagg1zFQZB4I8JlSH2eFSECN3njZegfxfEcYHGT7MamFrH1PG+F7CzDHmUk4uNkob",
+	"A+dog0ricqvJT5rq0Zz0F+aIdW4zl2jmSaKEk1g/r9WjydxapthIX7dTHEN8PzsKUFROnImyJhmviJCk",
+	"NuXGYhnZ0YqVFlpbEN5xivL6I/kIjmVth0FB1dhrr0wpuNIyndpR5tHkfS0Flfqklkd5Wxf0l9H+hHXU",
+	"pDV9Ox9epANGu/ue5wZ67QUSi3dlIFDzN7INHrz1z6uSvtwNM8S/JpxnVh0Wr2n2kb7FztDcPyUx0ter",
+	"b9f2mUw+WbkuPkjUori+lqt3mez3q0YRdHwTtFH6tglI4LUjeCOXRUSpblRMnqvgW9o78QmkmgV0wffW",
+	"7JjBq3INNn8AoIGm2NF9EnMI+BxdRd7LEW+8qCdQyjHJlYn11HAU0VhAO1ibjCK+0JKkxoKM11ldaGoo",
+	"ZihvTtdLVTxA3Gb5ermklOycZjG5hOuk0goKED4Vfi4dlTxN9CLt42U2eHbEwbh2PoiHx0RfypExpi1l",
+	"Xw236bPA28GDYyS/SqE0ztSUGPc7bTEOaB/ZRyzcTszbsqD7XIpHDz/lOwqjKsMzLCVLLqcrWaF24WKA",
+	"j0J6bKfyAUCobKwx1uGXuktWKWr8fSc4pQL2UgcMuEb9tgWU+eAweld52Owyx93L8fIshHJzkWrrrRCD",
+	"KxstuYxpuSGOKTChGY8m3K1ohRYtgoTm2f6z9W0dBvvEDng32jq8vc32q3IufMZW2Y3cBdKsbucoCDYs",
+	"j7jo4674QctKQeMyKvqbapKK5w0mmn6V+xQeHHcdKAex/mG1yowwmtX768FXjhA0wVEvqN9jugFHubd8",
+	"dCig2BSbmaRKzG2iWoyRUx1OqES5RbcAx1X54mT7Z5xAYmUzbJ5ZcfDo+NP7pznpAHzG1YzwKdWyslxO",
+	"WBoONuuQt7NYwLcqbVTr2v/p4ZLzprgnFRO9m9uwp0TwexYl+YwW+wMA+heXK8JQZjytCPi6PS/4T3Sx",
+	"ouRkMbA78rp3gDUC425VgnlL3WVtxCivNjxCLyvWHjTcx01ivGAvZm/x41ROkSR9ZGWqTdBVE59pwsbU",
+	"JI6SkI29vW2HlbeGlLNIUKmu9ERFM3C93AMQsreuhHRd+AJhNpqIqrJAUONPJpwLVdDHZOsJYRMbTt2G",
+	"jvfT0/yKqSzkLdrUTk5S06RntCNqnm+G/a8F3gzWNfHffW6JQlT6MiFx7vl1g6DrQsMNCBvgDq+PTnX0",
+	"9+z64N59uD9+efcHL12/7KXdT6XH7zI+j1eHT+XctxK7d0u4R4ERy6rr4FNh9fWi7uigAgGMv2VRIP5U",
+	"+xixz/JlHEC5RpOOjjjK8xojCyyKNgprbMg4buuYd3ROm4/0VUzMbrBfYQyakmbfAz2IPKjDhA7fkP3f",
+	"pDg00UFyY6YrLu+6SC6RsG/BeG2CTbvzJ8SqO8lasfYv7IcElVVcCriJ99FYYkDuFIuvZk0g2mWsphbr",
+	"MTSxRfpYejmrDaO69P1pMnqCsqcZT2ZCIKM6SJFRqoDAnNutWHU+6aOUZhejj1mMlQP4CyUNFn7vRrNp",
+	"JBSkbyL3+GIWsveR3GaR6jHoTMlKUxYAJoSr3aaq2xghPM3LcnmiQoeBpjnPZhnyZlQp6mUM8ucrRcu7",
+	"qULWZ4xKvwvFJ/vCjRSfRxuz1MsPEbK7cN7SQnHB5HYs7J6/WeICy5yN/M1/iEWn8WB5pcgXBQkmsmKK",
+	"XmqCqnSzOYLIo2DpIBwKiLI+s3VA3X/0V5+9ENiPqwdHE6dKHfyoAbjZICvBv8Y26Te1lzN1Kqgac17l",
+	"ZapnlLhFQDmwgMqFDgFdcClAxngdI7yEcu2r+Pi1TOSa60fur1T4Hc/PHWoR8RMb0G5xhX5hKsRWZmq+",
+	"DO/5NLpmu8bpuI2mEG/QK62uezUGWPMdZOXwRKdw+z3fXN/MTo7QTOQri8VPgF1ZXCq1xF8tToSxcINC",
+	"njfzu9BmKSIV6sRCC8qUS6vJcHZwRAq62a9bB28pdXkoSKXEj+EJhFu4wanN9TSkve7TzQv/D69OdRWU",
+	"A9VlYUtVCZuittnWTThWGfiFex4TE18zfMhJp7gBikrTiQ+xHkeBfUmd52kTc1uV/hAuSzNRSO2hzaSq",
+	"PRWkLgG/E3Q1ItIi+G0/8/s5Lt9aOnrfFm0eOYK3nms6Q3s9/BI6s+/DX8Nk7PvwOc742XK57wtfqtW+",
+	"j/4hKpP7vvA8yFD7fZ/m2+xJudcLtfPW7fMkKleDuy1DLKtqY137WIWADv57z7z0zgTzhI9aFMt09G4j",
+	"lLGlHSL5SM5mTs1k2KyJnFUVCRmQevhSNAmutSmhhk6WQA0LWmmPNSa04cyhxxGkwfZNJX2AfPKSMhfR",
+	"qDH2+lRIZjj76AH9DSTUg+PjYzFztl56SmR3M8xk92DHZVXL0JR4dHx8Kox0zl5nPQSRS0LVH4pz9JdO",
+	"NGNKsGVVCq/gbEBG/KE4n8NH6O/qtZwEoU1Q8NmgXsMPYqyrSlsT5iB31RWX16u0ciidwSGz4Q7qXjt4",
+	"lcggD8ULZYbsg43401LJEv2+a0L5LC7bB8n8vkjmPi4r3F0X41WrDk6TW1rKVZZcSj/hHT8oBsBW8Wp3",
+	"OaG3La/TxurNAokVnsg2yApUq0pNgir5wP05S3M8kCi5UIGcsCyJcma8Ei9fnIN4Kxp9sM1McscSX71e",
+	"Whc2ivvnWMaYpCUOgxTvIedEoX4hrCuVE9KjrMf+FuTOs0ahOBtLr4Q3cunnNux9AxTdGyAnvYR7IN1D",
+	"zl77QvjglFyQj4qUbzsVD4+PD8XvyPtz7Qj0dv7894WQ5GVD/1iJri3gSVs6S9SiKXckdpt1cpn14EHT",
+	"AyxCJL4mH5M0eQeVj/HA44RiOdlxLZ3FmlnTuoLu4o2BZFEULc1Hnnkf7ZKS23lhTjlFgu8kXRGnSXC1",
+	"wdOCF9MXL148FcFB+NDRJRe54v96+BlujiHeDbj66Vd4A+RsBWo6VZOgr+JwCjItcC35fPnITl07xZ2m",
+	"JYNnsMCthzI+LkSYmTFqwtnGm29D/o7yuLwYwiWIzkRVVbSmKiUT2UDahmcLLuSfLvZSTfRCVulip2jq",
+	"BKLTOtbiNxppYykuLCtR6pmGoZ0rOOnXc+tjxqCxZng9hz6hbxnOvpwEcoz+ZSF+U4ghYjH//9iDpVNT",
+	"/TqD5cul9cHZ5Vyd4hb4vra4e6naLdpuvp5O9UQrs03HyJKfirZi0mP2rusWtOAfFItfmMm3WzOATX40",
+	"8VdtjWCtLN/GSx/2pJ22L/wJCX8SOLKRNGIyr7HaexYnP6euDB9rv7Rex3qE2+oPtiXS+m31WRJCjV8D",
+	"BUsujQh+x5EflFXtwoSQdSZJHwtqGPQC3WKb+0J7dktfkjeFcCpvuSdv/oy1q+d4fYiwZjKLhQoSNA8h",
+	"gbPv9+9On/oR/nPBJJdb3Zsx3KW9ePJYHGAayF8PeYmGTx5jMghcOwn6Wgg95Su91y16j4s0eFLaVFX6",
+	"6BpFK3yKiZPXp4m0mKo9oOCnWxMhSk7Jy9JeG96fAUKw6J5BxivA5lJqv/RiWjvEDfDHUv7hwpZ1FcsC",
+	"gzeWYn3o+VfuitypvtfVD+uzF9UlT/St+S7hQw3Z5R0aURsT6PFv7zWd4x2e3W8Nz8A7OJpba6N+hho1",
+	"KP+bwg0teB8R15ZFw+fX5EdgbN1HjbRshynQ5y8ByngoRrCHR+RzJ8VvJLySbjIXS+kCVXS4VKt7ngjD",
+	"rWP9sKAUZHK+eXUqRh51iRHHPCReOUWLbDD2DWYBoD1OwQ66QA2c+xB/R2HyUTqy+A7VeNYG4w5AjC/Y",
+	"XdsUCcfH2GrCOMU9T2YVNo/HJ/LuRlsSc5pnVsW61MSkge1GWyDZNWggwgrBF7MklbxBNIkYR6FeN1PY",
+	"GECRozwmLWDzPPQv1WrUH+z4kiq13kzx/VKtvgEptYfC9qVaPcWl3fPh/XXHL9XqnNYVM+hu9gqZzL+4",
+	"IMOXarU7xkAVhT+EGEhfOnv6RHTKEeOev40clkt9ga4QEsXFDlQjqkHWiYU0ckZUy3hiTUelWwNq5Yyr",
+	"RGlB4hFreEKj0ExkqBgh/OECM0xHBAvPXiylrlbxC/B+pzOpOMuIc+AuZCCpiVjuNGJ6jeVdNgttGpPa",
+	"q9bHeWA+ormwkyfCMnSi3fWFksYzcq1SM7bzla4Y7Fkbp8AumGDe/GSuqzLNhhcs45N/IX6DM2/NXDnN",
+	"Vx23SdIUJoEcIn4tGwuD5Kf4/9gvzIhOsFN4X3uRZComEMA8CF2qxdIG9K1cqtVJJF5N7SI8y4ci3i6o",
+	"dqYrBrVZyhhos83x7QyTRJ2nYswSygFlF5o07ZB40ZBjPDr+VIyCtRcLaVa4ihlBC76caK60adDzzfu9",
+	"ycunDJrzXrbKLtLcQ/OgVcMn2/F62aMjn8cL647wZ+kOeNfEFXzzfLm5okWsZAFbDbbkhxI9PwOPnTTx",
+	"ynirNwbJz43q+9GPl2p1saN4xGM+/VFogME7s7ZER3ietRlh8XEzUSAbkjyjiCEsETKX9VdliAdwFwaT",
+	"ni4Pf/WW3h77h+birndQEe28Nd9C75q9VeVzi+T68zb172LBk5K501dEsuPWrqIvm7Ioy7qXWIHT0Sk6",
+	"F+sMJK0EFRDMIztpQHkxkFUpeaW8AE21o8OJA8PYXVIUQF4xbpD++eTpfbaeM1Q9Mm6iYj2NgvCe51BW",
+	"6BCmgOxTZVSWUMFdZYIyMng3ljgb1OAROBSP0cmAI0WFiGKAkc0TefhIwzc8McaW4LKIzgnIWqy8GnHW",
+	"fSO3mUG6K3hfLsu71nye8/S861zDXUqPj2sx+NWVjHknNw9lcWY3Dyb58Vq/IzUGTLZqa1ggKLdA1AI4",
+	"yTXH3ImbUV/JyUosbaUnq4aRci69WNbjSvs5qjOB853iaefyVlTSeVlJbUhvxuPeIoQiAYJGViK3TVk6",
+	"OhXKYvGSrO9WG5ZpuUbEofUVjPexndQLWMhRm14w9tpzrQxmEGyRxraLoxrbqmKTHH2ap2BykjFlCe0j",
+	"jqEvyNDu2l3qBJ0vbQoF8HqV8cGCiTeduNQQNLRVqcAHqk1J3uTDn+WsrbmR2I8R+49bvBnFvukv+NoR",
+	"re42+qKJdWVTMoJolTmVvdkacH7ouunOKp+PuJdbtzDa5JlbKegFOrrxiAP7AJXqQHd6cDK1AflvMBJl",
+	"QsMtl2W6YbViOEgEMYkpBaNZdxNmNTQFFaRJlYzkoukz+a7pMkg8C3i0eOOTs6Ni1oXrua4iSbEPDdsT",
+	"Tn0OmAVT6VoSZDc7ZutQ056jfUfXMX7kLPXl1llw1MRPyYL7VaUM03S06ivucWzfZsIwarDb839Iooul",
+	"s38iDFjaujLIys5OYphZVSQQjC0VxZY9c6foCRzoRAOvXWy0c9S1I+0aLsmxrnTQqiFF9nDoqa3Ygx7u",
+	"avTxclQeHwbSUu11sE4sEbo+pYJriTu6yL6wIJAk/nStxtw+j60ZS3ZF4/cm0jlN92JEdTWAriJmMRHO",
+	"S5ugnJEVjr3gPnpbuwmJNGArp9pwOW1yRnyc/JvTnBCbZ2T0hfVhxBQiINmeM++1icU059ZHcsfjR/1x",
+	"tqe4OF/T1rhpvA1f+xeItn5T7Pc01O61bv/HcWus7jZ6lc3BpihWOhyYfR43SejZmUPYmbx3fn5lAcYj",
+	"Qm/nTZn3PjtxmRziffFqszg5Yqf5VrGChy0TKkAFVHU234jPR7bX1wAByW/IApSEwFlHLaFE3VwoEO7H",
+	"1lXJ5rVD8zqwFY8rRnc76+K5Ld3iCsi4VJ2SZRuyPLFLFZE/Pff+6VaZgSmJfF4xbh4RCQ3Dbf8J5nqU",
+	"H47wTzjCTcwzP7h/jk7DLQIjdEyAtUlblxtvU30xNiSujOHSqalyykxUrtCsGZzfZO88zV65w5246ZMb",
+	"6x2jdOF6ffFFykb79Tmd3hFPxR2ej2cg9Ve2du31WrY219tT45Pnu8P5u31rv32jcMPXfiaKuA9n7Ndw",
+	"xm5AGPfuDlzPxYOIys128zctTowRg4aWjKosMCNImzpVgAGl8oIyxSIrclsFQRJm/OZpYohr/spJHsul",
+	"ku5QfCYnc3o4GaaEXZ/WpvTJgcmdW6ODAfjL9Vw5JWQyO32QpvRZoSHOACMm0TMy+VkvTcXKOdeLfdfG",
+	"ihF3YRQJP/gXF7Kq7LUqR6dNV+CMsOLNbwnp22W6jQ8geO1UzGoqWt6vDH9La3XjjKn3CUyJY9gNp+xs",
+	"Ghr4B3glz0ewy2G9jNPSSIgX+Hv/Fgh2NqEsn1JMWvIhRnM2MjotpcbsYykWKswtgtiLlhHJpxAiR5eR",
+	"9J0Jy+fSGFUl85iOjoW/i1gaFj1xTix1rEa2UA7eCy0TurLxz2wgsytAvWYj2Mmg0ndwFFDBUU8Vuedf",
+	"ZBW24IkxJAJjcuNCcaQqWCTUq3UVUv1+6luXsv1ei+fOYkGW01aMIFbrks7BSFOVx1G+HtEPRiGIBvu4",
+	"dlAW1qiG3z769/kxZyvlkeB39KTBSg4Bpp5R58eOzUEKGyKsXzZC+qRZzYiHXVvfFokX7RMEOJaqgCEY",
+	"RGbSVhXXyqmmnBfW82t5MdNH4mXBe8s6IRfRWzHKsJ8QMr1wqsYqYMyrxAgDojzFDkF1fVnmBXbGhDal",
+	"1IeYbjheiT8OjBXKOev+ODgRo4fHD0bUVix3QgOk6w9L5dk6jGCPYIQm4TWCFQfwgRFRM10QfeioaBKc",
+	"4hmY6SsqkldshMfSvYNdpBwKUCVW90+hfw97+5d/IBYmYEJWAIXkK8+0z9oQW7XGTF4E4EKulquNoeCV",
+	"zdYXIkRYgiha0jMZ1DVQEFAdB+pgBh9p6rthjzEEdf8E9gn1LpvLhqWbIl/QdZALOhQZjSfd+hNVIZrW",
+	"OlFx4TyCWOPUHNPUmDQnMQVHQK1U1ZSwOQBZVnCDWLMxld7XRoBeoK4LcXh4CFgZLCwhSTfB1Bk1Ej6S",
+	"yyTAeBrOqRg9eviw25NmdTh61rCfQ1N5SA23w6XqMODFBBfc43xB0MFJR+AA16J9jij7jw4713W8n5GA",
+	"iwMlJ3P+fEtAcLCDoEdWlBYdivdPEpuBFNN42nyrNlCU+ZlUEQejCSvtoxMS+o5nH4PWqOLdP22l4PtW",
+	"A0uMCNROHIycDIrg7VCS63QdmI9/a70dtxH9BdN88JNxIg9GdW4iQKvwCjTx5CkxbxRxqKknWXGr7p86",
+	"nSzayO4ULE5c94pe017YK+XuY0zlydOrT9JNNSHaARZiR588OhRPon8WGkGOZq+qKfbIF/lK5iHbg1EM",
+	"64zuRyFYKTjSztaz+SbkOGp164ppV7uDTRiBsMpxiUrieIFVhk8jewbNeiEewM568PC3sCKVCtBuweQI",
+	"lGN2eHEyHIkDKV6+fPIYxjHVRt2HXiJgjzLDG8he59rbit1bSvgetPKvvjsb/o0c/nA8/BS+9+rHB8WD",
+	"h7998xeDDdw5b99BgdN7EwD9W9bXN/ke+G7vlaDpUioyaysKQa4J+eDuu3nWd0/3aJhvu0jl3h3aejFj",
+	"UJZ+m+aOAkX0YLAQ80EKyV9j2sIvicZ3L5cPmk9CsoCjHfCW7bdglxf1couv5+hH/O9OPoEen03BKba4",
+	"+67Zv9PVNGG7ykzfwcuK/mSnSf3IYo0YwCcDh6oAyCy5jUoo9+Ht4p3zM4q+P2/4/R1u4v1R+HEv3xqH",
+	"j6tMSPx9jswRqaCkIbzLzm3yyDT3sA926bmY01Ku0LdI7k9QRJ1i9yk5neXCMhSwOeetc+xPW1cTIZEM",
+	"eG5QQSObHXMiz0kphzdlYzKlXH0y8zg1gGH4jUiINhgZXFl5ARQT19rD9eZD6htjI8lUSN9mg2C9KFEz",
+	"OFCgo+7fo8ZiO++BSMmMzl9bKObdgPLJaGzb+LB5fG57/ox37hFHAd5HCQI68b0Yp2iwQU+4pDWmyuM0",
+	"pulFny8bh0Kue2Rx+tETg+w8mYeQYzhUfJ+LZ5JeHpFBMiT3LH4m+pmT20ZpKjC0JN5blh0mq00ydfYH",
+	"ZU7EiN9Fr0ubf51c0Ra9bujebZxKJLvu+Z7XobiAnIRaVlX8SnTYTKQBpbxSnqmTJtLPkWkPwdGwRnXI",
+	"y3uOZZjMWc2KvpEOgI1XhFI1ol2eGoizRN+QIfkPYk4GzXlzCqQo9RQjjAFLKhjKt7DopZRLLL+E7jVv",
+	"OxPB7i2QwkwvcEHesNFp0xXmjYnuVKrsgqhx5FLgGwWXkd3fNL5C5FuLaA/TjkoaIcbYaO14ZB4dpaNp",
+	"FGej0yawlwYPnxeJ5VBMKz2bh/Z1QoVeyKuM91UsOUjdwwsVy1/AW22H0KG4jU8dB7rVo55Xy3BKemta",
+	"znXKOU7Tl/v34jcJrKy3+8l7avHh28+w4bfn2Ikd/eDYIelM83sjoMlb9pnwCm8El9B6kYQjh3bmySVR",
+	"IasPQJP3Gmhy5i9Z7PM9YqexNmqUL3iXRNH7c2pHVPPt/VKOWC364+CJmMsr8rf9cSDGdQgQmz7bFMxG",
+	"OX89VyiPm9sRdAdoAo9TXAAQ0FPh7Wkek9R5CDW5XjDx41q60qdEbfou3qjRh4hlZFQpViqlg+tkRsVC",
+	"dAkTztTQsUCNMu2rXupy1MLjQLxvrNgalGNbBxqtFAtt6qB2RTg+Ob6/pgs0N3wa/SjDySRQDQ2WPaAN",
+	"ow/cPRieZ0US8e3Ilp9N8qbiax+cSTsF4vvsVwUJ13cCaWcmldLY63cn22Llv23Jp5yGnOfNxdcOxR9A",
+	"E8QCrcRlUOaJIxQKZ3HkvSrF15+fgd4bWb/icxFgwsnqWftPvK+Vj8H5CdGTxddkaJRQnBXM6fBEAtGu",
+	"lI0mXFV2C00fkKKalRaHDzChKw5L+zgyoKE1sRZmLFCNRRV9QeWxffJGMSHa97Wi3ld2Iiv9QxcAK4Nd",
+	"aJAJq0Px0ivfTU2nWYgFOGN5dCAb02Z2Kq4d+Me6i+KZOiNZj5F6nqpG9viVsMNP+fWfgF+WZamJHf6p",
+	"g08ErfzgBLkuisEy+9WPg1iLPd+AC/n6K2VmYT44efjxJ8VgoU38+cGatlsMKmlmtZypdjERZbJaIj/M",
+	"8YeeCiLFwKjrvb/+sI8Iu7nOv1sfTqf9pgN2DDlYdxEhvcnseze9wK3bwzdeDOIhwUr5fiPtC57F9oEq",
+	"GrLR5pbunCM0kIJa+N5v8y+kc3I1eNP8Ip+3DtyvqY7LrC2mzGhfSFS4P6ua5b++oCTJqH4KhOzQ3SkM",
+	"nS/uIaGSNuPRP7exJjLGnkCDPWFYJDcRgU0poZh4hBJwiv07SVfucVrCqolg8U2hA9WNydBOUfhT0iUA",
+	"CKIHFHxmU6UytuZI/RarfuB3uYsc9oBnDjCanxx+qBzzU+QH475RZRG8hKkcApM4gTkH3UYXGkIC0xcT",
+	"+sJ0MLCxmCvgMcSLBJiFOSJX4klkMkbldZRBa/H96KNcmz+UTDoIJrBKJkybrSUaKnapTML8YF2bkbHh",
+	"Ah24LZecrYPXZYvrtCKQWo8/DiBsd4yk7U85p134Ne/jHZ4zdA9Ht7YV43pVtIu/wRetUVgspkMWEBcY",
+	"g/JSUL2LK5UqyWnTqj2TfGedAmL8+a02tHotF8sKnsYaRPS/QdFypT0Yfvrqu+Php69+PC4ebHGi3VWO",
+	"bD7v27JkWcKkk9mgcHBrVtqTrrkY/DqvojsEBWBFaW8ztzXmfEfhiEjStpR+h9YY2hSb82nx7PIz/biD",
+	"zrlB0dNfde/j4wJUXr0ATfnB8TEqvPxTOhV8TKGz/R+w06lXG76QN3nc0+SdnjScpY0pPBGPi09xFc0P",
+	"/uH38LRWrR1/dzTtfXhh+u4dpfNS4z9TUIVH9uFk/CoiJ5P2bn0nlI58Ux396Kt61qGm7iONzs7SHqxl",
+	"H7bgL2wLlu1FfpfU1pt21vEHaflBj0gbdKbCHezO/RHAICa3Wq+Z9zkq45nvO7dh5fCHs+HfHA8/vRi+",
+	"+s0GC7aXsoRYpN+JVpPcw+86E+jDWf01XSt1e8e+E83GqVKpxTBFPno9vJBZkLNAkCuBfbe80WY2EGKF",
+	"Wozxkbwy3ongxNVSLbDpe56bKpJ/EoAY1EKs29HkYtNXuTwTQmC54jXCJSR+smiKFGE1uamtXVOS2Sf4",
+	"5Fz7YN0qQhYgYWYlgo3xnT3T/h1zhPT4Kftdkc/S2H/hnCHPcI3Obam+oJm8CXdIswM6O+Twz51PJD88",
+	"7fPVHIp8wt4p0cgLxLjSOWu8s9r7GqkJghUyHlLET68vfOMfT5BaaOye55oUBYNqiQAcy5V1WuBzi0Al",
+	"6Eb0alqkqUC0N/EVtaYN2sqIIroyLOJyiQ4jkRJkj0kjlHRYUT0+3AYF90GNS0UkDoydAtFWWR9O8wob",
+	"hPYtRIw1waDuR4YG+CHh5uMGaFNvcDN5/s1ZXCDJlUYujb02rUSeVDZ0PUpzGr+b6mmqydziAmPch8ZC",
+	"oHDlnHUY1jnjKsP0VUBgYFCMoWZref3ws1EBkheKWFxNyIDUqAt1QulFTfJ/JzG+DWPrKcNGy4Jgc5/l",
+	"61Pt7Zixn+UUUOeF5mwlVQoqkJpWRGCdOovAOiweuM6dES8SE5t7V9n+jSR+m5jwKKA/4MLXb7yfiYQw",
+	"70Bcno2FJnaJLaIroQI/bzvx/xYdxQ7hSUs9+pA4/55jVGiZ03VhguXVfHcRxNS3DYbLH+ZIC0afohus",
+	"bAAjeSmN0qZy11QkUAdhjaisxMzaSklnGty4JSbDCM8BcA5xL0L7wYqZoi+cP3/2OWEmuaDHAV0IAKyC",
+	"jn0RwhIS9tu0QZSqFeaKXyWLxoiFWli3ut+beR8RQHcof+InNpzkuBY/4RzesXLdAcnth5+SZnVj5BR/",
+	"wG+rYflMXVmsjpzAu9xAA+K104RrKhoMMe23vPo8UuxROkG+rfH1TLtNpwCI1ihfLVWjxWsfUsCpK752",
+	"UzlBmv7YGekU05vUkznUHSaIIWWYT+UkWCe4jpT1nOWYQYNRW6jRfjcB4ZML1OzsDI9Un1oD8/Mt/PF5",
+	"nM6739zwVXp/0zbvAK1p4n6F5WM+M2VEZOUjfstk0xuYTrSPYMcK4FPdk9G2gclYYoYz8CZHXKAy5HAC",
+	"wwutMTwo0mN57rLgjBS0QqLrqbkpOPsKzDA/ty4I4ggUWVcPxYhFClh77nLr8aMTkT5HzyJLWesaYfQc",
+	"M7BJpBR7lCjFYr4RGk1ENlZVNqLrfSQaYwOSaQ3Rli0VpR6lBGVOU33plRuezTBbm3Kl2ZDJqlSlzqFx",
+	"R5SDTeIy/JcTe1kMJJ9aA10tVapzx3+ttMfy5XKzyCHjGXKh7/n7+G772BGxKX80yhqnsuaF0v3SBXxx",
+	"71CsbAO/dSfJH/6qPFprw7tr2HLcI0c/8r92VZOON7E1a5Imv4LpAEt/mWfy6GwrjqDP3yI5JuzAuXIK",
+	"9TqdEuOmELU4TSQJ2qfdT9Ku6DkNbJpHLxBf1G/ndt2oNPbgFD77GS6697PG6GdIj6Hu9F7cI8SaNvet",
+	"U225oxuJlrym47LBtMrqswzZtForNUrVOaM7TZoVsz2ke/Ykh0/D0OiStjOb2EfGDkmro/HV+obBCI00",
+	"kKqmAxlghYDLENskTcAulWm9VjAXtbXToZ0O8UYG9g09qauw6hZ1tNUV67Ps76Zz3FylsS4a3Z/4EuTh",
+	"itIupI5fblVVSwWaOqXTZipsLJ72V1Rv7U5vKx3JLPuuqaDen1qkuff0no8zPVbAeOlFsPtWJIW2jmC3",
+	"Hf0IaYbb2ffguSbugYSQs9opHwvyipfPvmrq4jFndFOZM1XyxdjiC34+VlGAJ55/cTZ8+PEn8dYZr4Ly",
+	"RGNeclo5doGcwrE2aCQT8dgcaayRIB08G+BNgDuI2AZWWMXhDPoxb3pFLdKXEv3fae4+xA8T73FTJaH5",
+	"tL022GReppyTSDJXOjYS09YaQhq9kDO1ccN/ZWd2sI9EhO/v7U0+Hn4qh9NXP37y6JZpEdjpo6WZtY/X",
+	"1LqFDOC90ka6VU/TBb/qr2a/eb2obvv6tRovb/pu78GGRemkCZ7LyVwNz60JzlbrZ+Era2bDCs0JVD4W",
+	"izpQotNYTWTtabFxh3H8DnYmrJJv9vXh1qVa6/n7VAW5srP9BUyQgaBBmyTLZ1cNHQJS8YeOeQtWoSpn",
+	"ykW1LlIUMSPzTE9DQSUHqdKgsE44ONFeVkWKrDLPyNQp9YOC7DT6l8AygJBKFBIZ0KE4t85R7USP5FkE",
+	"uhWLugp6WSnqZxM4olIto1QiZyR0qQxkfvOSY++mZKa5mfJHsX9NXUgOGSeKwYMmE+jJYyaKS4xj9w/F",
+	"59j9WDA/0uHQn6ESBFNssB81yEqwQ1nUht4pD8U3Ns4tKs6FGFuLbBXLSgY4UE3YEgvgeKRJxNEzWRYu",
+	"SS7mSe2RTjHtI2JEKixxI8eWO0TleHDsfq6ngcuj22neRAr8ypKJPuAPwk+k8cnhoZAzawx7XpWwViUm",
+	"7NN0Kn8qflDODtV0qiYhLht0zl/q5ZJ8flyKfVTKIEeJoN6aoamrql0/CGnDfCox1NDMxUa8mi1oC9sg",
+	"FPHaxJh9vxWeDsgvGg/TDGMnDqYRCR+K50RcCEk/n+2FKF1/R4f2LcBatknnw4m/2qr7OazSOqUysmmx",
+	"R21RjWmfIBHk0CvYf0GVmOjJmpIUdMlCaydiJMNIHDz7/Fx89NFHnxbi5Yvz+4UYQe1/4OahDFv4Fw/j",
+	"QhK44YBOGpXRotTX63s+STd8Cj0OdVXdL6KPcrIaFbmELsSIROYFCcPsF/SdQ3FWVZznSyIDK9vHBFZk",
+	"7CNFmETuoThjkUR+VZyWB8fi+Pi4JXeCU3JBPlaWgiTuag/SMgoyinUdis9wrCxvcrsS2gpOwi1CTspI",
+	"+0Hjt3VY1iFW4EBiXB9NL0M3m3CSWaCkiVcghTOCqw0eG3H+/PeH4tsK1ozH4BSaGhK5mfS4amRgZ2us",
+	"i7vPXi+tawm8HeIIts4R78wtulGvuRa/UqSbYn1ZFvYKn/Fd/Y+6MHysPaUwkyTsCDVEusjJHFpA7a5M",
+	"/mAew62UvF+9cKPc8PPnvxdTXal3Jeo4XX6rkOPH8TBIx+xkEebGDcRICZXakkw1BMylRFuEEfOI2V0x",
+	"qWluFhK/wVLBGXLWw1ulWlaWcpAT4RiaraA24pE04uzpE6FDVtViQQpOr934ex7sHV748RMbzh+XZIqz",
+	"tsO+aj4ZqXyMHWKEpofL582bt7B71/Zrl06B+790dubkot/ceZN+291Nz8kpWIhwDQNRS4EkgokIinX+",
+	"TkT+sDHmnyc0wZrcefpEIKq9eRgR8utPvuhHZfNL8bTteg9Nl8rOslfPASHS8+Lv6hXMWUOKTBdD5uHs",
+	"kKHlg4hQmTev3vx/AwA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

@@ -103,10 +103,13 @@ type sampledPath struct {
 }
 
 // samplePaths are the streams to aggregate: each sample for each client it serves, and the assembled stream.
+//
+//nolint:exhaustive // the sample set names the formats it covers
 func samplePaths(t *testing.T) []sampledPath {
 	t.Helper()
 	paths := []sampledPath{
 		{"assembled/responses-reasoning-tool.sse", "assembled/responses-reasoning-tool.aggregate-to-chat.json", protocol.Chat, protocol.Responses},
+		{"assembled/responses-reasoning-tool.sse", "assembled/responses-reasoning-tool.aggregate-to-messages.json", protocol.Messages, protocol.Responses},
 		{"assembled/responses-reasoning-tool.sse", "assembled/responses-reasoning-tool.aggregate-responses.json", protocol.Responses, protocol.Responses},
 	}
 	for _, format := range formats {
@@ -118,6 +121,13 @@ func samplePaths(t *testing.T) []sampledPath {
 			paths = append(paths, sampledPath{dir + "/upstream.sse", dir + "/aggregate-" + format.dir + ".json", format.f, format.f})
 			if format.f != protocol.Chat {
 				paths = append(paths, sampledPath{dir + "/upstream.sse", dir + "/aggregate-to-chat.json", protocol.Chat, format.f})
+			}
+			switch format.f {
+			case protocol.Messages:
+				paths = append(paths, sampledPath{dir + "/upstream.sse", dir + "/aggregate-to-responses.json", protocol.Responses, format.f})
+			case protocol.Responses:
+				paths = append(paths, sampledPath{dir + "/upstream.sse", dir + "/aggregate-to-messages.json", protocol.Messages, format.f})
+			case protocol.Chat:
 			}
 		}
 	}

@@ -1,31 +1,43 @@
 import { Slot } from "radix-ui";
 import { type ComponentProps, type ReactNode, type RefObject, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useBrandStyle } from "../brand";
 import { cn } from "../cn";
 import { Button } from "./button";
 import { Icon } from "./icon";
 import { Logo } from "./logo";
 import { usePageTitle } from "./page-title";
-import { LoadingState, NotFoundState, PageFailedState } from "./states";
+import { ForbiddenHint, LoadingState, NotFoundState, PageFailedState } from "./states";
 
 // AppShell is the frame of the console and the admin: a 216px sidebar beside the page, with a 48px top bar above the
 // page for what header holds. Below 1024px the top bar always shows, with the logo and a menu button, and the sidebar
 // moves into a drawer, a native modal <dialog>: it traps focus and closes on Escape by itself, with no
 // script that injects styles, which the content security policy would block (docs/security.md「网页与域名」). banner
-// holds a notice for the whole app above the top bar; it takes room from the page, never from the sidebar.
+// holds a notice for the whole app above the top bar; it takes room from the page, never from the sidebar. forbiddenHint
+// is the app's sentence for a person who lacks a permission, shown after the shared "no permission" text. brandColor
+// is the site's #rrggbb, from which brandStyle derives both schemes' tokens (docs/frontend.md「主题与自由度」); without
+// one the default palette applies.
 export function AppShell({
   sidebar,
   header,
   banner,
+  logo,
+  forbiddenHint,
+  brandColor,
   children,
 }: {
   sidebar: ReactNode;
   header?: ReactNode;
   banner?: ReactNode;
+  // What the compact top bar names the site with; the sidebar carries the same above the links.
+  logo?: { name?: string; logo_url?: string };
+  forbiddenHint?: string;
+  brandColor?: string;
   children: ReactNode;
 }) {
   const { t } = useTranslation("common");
   const drawer = useRef<HTMLDialogElement>(null);
+  useBrandStyle(brandColor);
   return (
     <div className="min-h-dvh text-ui lg:grid lg:grid-cols-[216px_minmax(0,1fr)]">
       <a
@@ -58,11 +70,11 @@ export function AppShell({
           >
             <Icon name="menu" />
           </Button>
-          <Logo className="lg:hidden" />
+          <Logo className="lg:hidden" name={logo?.name} logoUrl={logo?.logo_url} />
           {header}
         </header>
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 outline-none">
-          {children}
+          <ForbiddenHint value={forbiddenHint}>{children}</ForbiddenHint>
         </main>
       </div>
     </div>

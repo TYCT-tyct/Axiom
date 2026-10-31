@@ -1,4 +1,4 @@
-# Project checks; the base checks are in workflow.yml. The ruleset protecting main requires the `build` job below, the
+# Project checks; the managed checks are in check-*.yml. The ruleset protecting main requires the `build` job below, the
 # aggregator of the parts that do the work; the parts themselves are not required checks. Keep that name. Note that
 # manage.py protect reads this file and requires every job in it, so it is not run while the ruleset is hand-edited (like
 # `merge-train`, see .github/project-workflow.toml).
@@ -12,8 +12,9 @@ on:
   push:
     branches: [main]
   # The merge train (train.yml, scripts/train.py) builds each train branch here. GITHUB_TOKEN's pushes start no workflow,
-  # so it dispatches this one: with base, the train is checked like a pull request from base, its PRs' whole change
-  # deciding what runs; without base (after a train lands on main), like a push to main.
+  # so it dispatches this one with base: the train is checked like a pull request from base, its PRs' whole change
+  # deciding what runs. Without base it runs like a push to main; the train's landing push (its deploy key) starts that
+  # run itself.
   workflow_dispatch:
     inputs:
       base:
@@ -41,9 +42,10 @@ env:
 
 jobs:
   # One cheap job decides what the others skip, so a Markdown-only change starts no job that would only stop again, and
-  # the deploy and benchmark rules diff the base once. A Markdown-only PR or train runs `just md-checks` only; main, and
-  # other trains run the full checks below; PRs run static and select web by frontend/build inputs. Go tests, e2e,
-  # benchmark comparison and deployment checks run on trains or main alone.
+  # the rules that read paths diff the base once. A Markdown-only PR or train runs `just md-checks` only; main, and
+  # other trains run the full checks below; PRs run static and select web by frontend/build inputs, and PRs and trains
+  # run the vitals only when the pages' own inputs changed. Go tests, e2e, benchmark comparison and deployment checks
+  # run on trains or main alone.
   changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
@@ -52,6 +54,7 @@ jobs:
       deploy: ${{ steps.decide.outputs.deploy }}
       bench: ${{ steps.decide.outputs.bench }}
       web: ${{ steps.decide.outputs.web }}
+      vitals: ${{ steps.decide.outputs.vitals }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
@@ -60,10 +63,10 @@ jobs:
       # never hides a regression. Without a base (main) everything runs.
       - id: decide
         run: |
-          docs_only=false; deploy=true; bench=true; web=true
+          docs_only=false; deploy=true; bench=true; web=true; vitals=true
           if [ -n "$BASE" ]; then
             if python3 scripts/ci_skips.py md-only "$BASE"; then
-              docs_only=true; deploy=false; bench=false
+              docs_only=true; deploy=false; bench=false; vitals=false
             else
               status=0
               python3 scripts/ci_skips.py deploy-needed "$BASE" || status=$?
@@ -81,6 +84,14 @@ jobs:
               else
                 [ "$status" -eq 0 ] || echo "bench-needed check exited $status; running bench-compare"
               fi
+              status=0
+              python3 scripts/ci_skips.py vitals-needed "$BASE" || status=$?
+              if [ "$status" -eq 10 ]; then
+                echo "vitals skipped: nothing the pages are built from changed between $BASE and HEAD"
+                vitals=false
+              else
+                [ "$status" -eq 0 ] || echo "vitals-needed check exited $status; running vitals"
+              fi
             fi
           fi
           if [ "${{ github.event_name }}" = pull_request ] && [ -n "$BASE" ]; then
@@ -91,10 +102,10 @@ jobs:
               web=false
             fi
           fi
-          printf 'docs_only=%s\ndeploy=%s\nbench=%s\nweb=%s\n' "$docs_only" "$deploy" "$bench" "$web" >> "$GITHUB_OUTPUT"
+          printf 'docs_only=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\n' "$docs_only" "$deploy" "$bench" "$web" "$vitals" >> "$GITHUB_OUTPUT"
 
   # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
-  # `just check` adds over `check-ci` (`docs`, `secrets`): workflow.yml does not run for the commits a train merges, and
+  # `just check` adds over `check-ci` (`docs`, `secrets`): the check-*.yml workflows do not run for the commits a train merges, and
   # two PRs whose docs pass alone can break a link together.
   static:
     needs: changes
@@ -114,7 +125,7 @@ jobs:
       - run: python3 scripts/train.py flaky-check
         env:
           GH_TOKEN: ${{ github.token }}
-      # A train adds `secrets`, which workflow.yml runs for a PR but nothing dispatches for a train.
+      # A train adds `secrets`, which check-secrets.yml runs for a PR but nothing dispatches for a train.
       - if: needs.changes.outputs.docs_only == 'true'
         run: just md-checks ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name == 'pull_request'
@@ -166,6 +177,32 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Run web checks in their network namespace
         run: bash scripts/ci/web-container.sh just web-checks
+      - if: always()
+        run: bash scripts/ci/web-container.sh cleanup
+
+  # The web vitals are timings, so they run in a job of their own: one test at a time, with no other test on the
+  # container's cores. A build whose diff touches nothing the pages are built from ships the same pages, so its timing
+  # can only follow the runner (#503): PRs and trains run them only for those inputs, main runs them on every push, and
+  # a failure there is main-red.
+  vitals:
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.vitals == 'true' && !inputs.gate_stress
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the frontend's version stamp comes from this tree's history
+      - uses: ./.github/actions/setup
+      - name: Run the web vitals in their network namespace
+        run: bash scripts/ci/web-container.sh just web-vitals
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
+        with:
+          name: vitals-test-results
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
 
@@ -286,6 +323,11 @@ jobs:
       needs.changes.result == 'success' &&
       needs.changes.outputs.deploy == 'true'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    # cosign obtains a short-lived Fulcio certificate for this workflow and ref from GitHub's OIDC token, so no signing
+    # key is stored. Only the release job needs the token; every other job keeps the workflow's read-only default.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -303,7 +345,7 @@ jobs:
         timeout-minutes: 40
         env:
           RELEASE_DIR: ${{ runner.temp }}/release-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Retain release image and provenance
+      - name: Retain release image, signature and provenance
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
@@ -313,13 +355,35 @@ jobs:
           retention-days: 30
           compression-level: 0
 
+  # Signs a throwaway image with the release's keyless flow and proves the verifier accepts that digest and its SBOM
+  # while refusing a moved signature, another identity/issuer/ref, a tag, a tampered digest, a wrong-subject attestation,
+  # and an SBOM swapped together with its recorded hash. Trains and main run it for the same reason they build the
+  # release: a signing change that only main uses must fail in the train that causes it. It needs the workflow's OIDC
+  # identity and writes to the public transparency log, so a pull request does not run it.
+  signing:
+    needs: changes
+    if: >-
+      github.event_name != 'pull_request' &&
+      !inputs.gate_stress &&
+      needs.changes.result == 'success' &&
+      needs.changes.outputs.docs_only != 'true'
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Sign a throwaway image and verify it
+        run: bash scripts/ci/signing-check.sh
+
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
-  # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy and may
-  # skip web by path. Intentional skips still produce this required check.
+  # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy/signing and
+  # select web and the vitals by path. Intentional skips still produce this required check.
   build:
     # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
     name: build
-    needs: [changes, static, go-test, web, e2e, journey, bench, deploy]
+    needs: [changes, static, go-test, web, e2e, vitals, journey, bench, deploy, signing]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
@@ -335,8 +399,12 @@ jobs:
       # `needs.e2e.result` aggregates the whole matrix. Only Markdown-only builds and pull requests may skip its shards.
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.e2e.result }}' = success
+      - if: needs.changes.outputs.vitals == 'true'
+        run: test '${{ needs.vitals.result }}' = success
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.journey.result }}' = success
+      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+        run: test '${{ needs.signing.result }}' = success
       - if: github.ref == 'refs/heads/main' && !inputs.gate_stress
         run: test '${{ needs.deploy.result }}' = success
       - run: echo "every required job passed; only optional jobs were skipped"

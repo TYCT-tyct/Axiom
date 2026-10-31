@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/platform/pg"
 	"axiom/internal/routing"
 )
 
@@ -27,6 +28,15 @@ func TestAdmissionReservesTheDearestKeptEntry(t *testing.T) {
 		t.Fatalf("%d %s", resp.StatusCode, body)
 	}
 	call := r.calls()[0]
+	var createdAt time.Time
+	if err := r.db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT created_at FROM billing.reservations WHERE request_id = $1", call.ID).Scan(&createdAt)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !createdAt.Equal(call.At.Truncate(time.Microsecond)) {
+		t.Errorf("the reservation starts at %s, the call at %s; they must be one instant", createdAt, call.At)
+	}
 	if id := call.ID.String(); resp.Header.Get("X-Request-ID") != id || resp.Header.Get("X-Generation-Id") != id {
 		t.Errorf("headers %v do not carry the call number %s", resp.Header, id)
 	}

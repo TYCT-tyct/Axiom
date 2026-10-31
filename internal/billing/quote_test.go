@@ -55,7 +55,34 @@ func units(tb testing.TB, e platform.Exact) string {
 }
 
 // TestQuoteEntry: each rule of docs/domains/billing.md「预留与结算」 moves the quote by the amount worked out beside it.
+// TestQuoteCompletionsReservesEveryChoice: a legacy completion's whole output bound is reserved at once — every prompt
+// and every n choice — and an explicit max_tokens 0 reserves no output at all. Routing marks such an entry
+// non-segmentable; these amounts are what that decision buys.
+func TestQuoteCompletionsReservesEveryChoice(t *testing.T) {
+	t.Parallel()
+	e := entry(t, false, 0)
+	e.MaxOutput, e.Model.ContextLength = 4096, 1<<20
+	d := Demand{TextBytes: 100, InputBytes: 100, Choices: 2}
+	q, err := Quote(d, []Quotable{e}, Segments{}, []Available{{SourceBalance, amount(t, 1e9)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := units(t, q.Amount), "82020"; got != want { // 100 input + 2×4096 output at 10
+		t.Errorf("two choices reserve %s, want %s", got, want)
+	}
+	e.MaxOutput = 0
+	q, err = Quote(Demand{TextBytes: 100, InputBytes: 100}, []Quotable{e}, Segments{}, []Available{{SourceBalance, amount(t, 1e9)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := units(t, q.Amount), "100"; got != want {
+		t.Errorf("an explicit zero cap reserves %s, want only the input %s", got, want)
+	}
+}
+
 func TestQuoteEntry(t *testing.T) {
+	t.Parallel()
+
 	text := Demand{TextBytes: 80}
 	tools := func(d Demand, ts ...ServerTool) Demand { d.ServerTools = ts; return d }
 	for _, tc := range []struct {
@@ -74,6 +101,7 @@ func TestQuoteEntry(t *testing.T) {
 		{"two choices double the output: 80 + 1000 at 10", Demand{TextBytes: 80, Choices: 2}, false, "10080"},
 		{"model default of 3 searches: 80 + 3×1000 at 4 + 300 + 500 at 20", tools(text, ServerTool{Item: webSearch}), false, "22380"},
 		{"the request's 1 search: 80 + 1000 at 4 + 100 + 500 at 20", tools(text, ServerTool{Item: webSearch, MaxUses: 1}), false, "14180"},
+		{"a flat search adds only its fee: 80 + 100 + 500 at 10", tools(text, ServerTool{Item: webSearch, MaxUses: 1, Flat: true}), false, "5180"},
 		{"compaction doubles 1 sampling: 80 + 1000 at 4 + 500 at 20", Demand{TextBytes: 80, Compaction: true}, false, "14080"},
 		{
 			"compaction doubles 2 samplings: 80 + 3×1000 at 4 + 100 + 500 at 20",
@@ -104,6 +132,8 @@ func TestQuoteEntry(t *testing.T) {
 // counter-example prices a cache read above input, so 80 tokens read from the cache plus 1 output token cost 161,
 // which a quote at the input price (81) would not cover.
 func TestQuoteEntryModel(t *testing.T) {
+	t.Parallel()
+
 	noPageLimit := entry(t, false, 3)
 	noPageLimit.Model.FilePages = 0
 	dearCache := Quotable{
@@ -140,6 +170,8 @@ func TestQuoteEntryModel(t *testing.T) {
 }
 
 func TestQuoteEntryRefuses(t *testing.T) {
+	t.Parallel()
+
 	noContext := entry(t, false, 3)
 	noContext.Model.ContextLength = 0
 	noCodeDefault := entry(t, false, 3)
@@ -173,6 +205,8 @@ func TestQuoteEntryRefuses(t *testing.T) {
 // route order; a dropped preferred entry refuses the request, naming the first source short. Entries differ in their
 // model's default searches (3 and 1), so a route across models quotes each by its own.
 func TestQuote(t *testing.T) {
+	t.Parallel()
+
 	d := Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch}}}
 	threeSegmented, threeFull, oneFull := entry(t, true, 3), entry(t, false, 3), entry(t, false, 1) // 16180, 22380, 14180
 	balance := func(n int64) Available { return Available{SourceBalance, amount(t, n)} }
@@ -260,6 +294,8 @@ func BenchmarkQuote(b *testing.B) {
 // maximum, has no upper cost and so no reservation: Quote refuses it with ErrUnbounded, naming the tool, however the
 // route's other entries quote. The same request with a limit of its own, or on a model with a default, is quoted.
 func TestQuoteRefusesAToolWithNoBound(t *testing.T) {
+	t.Parallel()
+
 	d := func(max int64) Demand {
 		return Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch, MaxUses: max}}}
 	}
@@ -286,6 +322,8 @@ func TestQuoteRefusesAToolWithNoBound(t *testing.T) {
 // TestQuoteEntryNeedsSegments: a segmentable entry with no segment size or no overshoot configured is refused, not
 // quoted with a segment of 0 tokens, which reserves no output; the same entry whole needs neither.
 func TestQuoteEntryNeedsSegments(t *testing.T) {
+	t.Parallel()
+
 	d := Demand{TextBytes: 80}
 	for name, s := range map[string]Segments{
 		"no segment size": {Overshoot: time.Second},
@@ -334,5 +372,123 @@ func TestReservedCostEstimatesMissingPricesWithoutChangingAdmission(t *testing.T
 				t.Fatalf("sale admission changed its missing-price rule: %v", err)
 			}
 		})
+	}
+}
+
+// TestQuoteDirectBatchCrossesATier: the upstream reports one input total for a direct batch, which the settlement bands
+// as one prompt, so the quote bands the batch's total too: ten 40-byte inputs that report 101 tokens settle above the
+// 100-token threshold, and the reservation must cover that, not price each input at the base band.
+func TestQuoteDirectBatchCrossesATier(t *testing.T) {
+	t.Parallel()
+	schedule := mustSchedule(t, prices)
+	e := Quotable{Price: schedule, Model: Model{ContextLength: 1000}}
+	q, err := quoteEntry(Demand{Direct: true, TextBytes: 400}, e, Segments{}, true)
+	if err != nil {
+		t.Fatalf("quoteEntry: %v", err)
+	}
+	reported, err := catalog.NewUsage(map[catalog.Item]int64{in: 101}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled, missing, err := schedule.Cost(reported)
+	if err != nil || missing != 0 {
+		t.Fatalf("Cost = %v, %v, %v", settled, missing, err)
+	}
+	if units(t, settled) != "404" || q.amount.Cmp(settled) < 0 {
+		t.Errorf("reserved %s for a batch that settles at %s; want 404 settled within the reservation", units(t, q.amount), units(t, settled))
+	}
+}
+
+// TestQuoteRerankSearchCrossesATier: a rerank's search unit is priced at the band its batch's total reaches, not at
+// the context: each document fits a 4096-token context, the batch reports 8000 input tokens and one search unit, and the
+// settlement prices that unit at the tier above 5000 tokens, which the reservation must cover.
+func TestQuoteRerankSearchCrossesATier(t *testing.T) {
+	t.Parallel()
+	schedule := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0","web_search":"1"},
+		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":5000,"rates":{"input":"0","web_search":"10"}}]}}`)
+	e := Quotable{Price: schedule, Model: Model{ContextLength: 4096}}
+	q, err := quoteEntry(Demand{Direct: true, TextBytes: 32000, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}}, e, Segments{}, true)
+	if err != nil {
+		t.Fatalf("quoteEntry: %v", err)
+	}
+	reported, err := catalog.NewUsage(map[catalog.Item]int64{in: 8000, webSearch: 1}, catalog.ServiceTierStandard, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled, missing, err := schedule.Cost(reported)
+	if err != nil || missing != 0 {
+		t.Fatalf("Cost = %v, %v, %v", settled, missing, err)
+	}
+	if units(t, settled) != "10" || q.amount.Cmp(settled) < 0 {
+		t.Errorf("reserved %s for a rerank that settles at %s; want 10 settled within the reservation", units(t, q.amount), units(t, settled))
+	}
+}
+
+// TestQuoteDirect: an embeddings or rerank call has no output to reserve and no second sampling, even at an endpoint
+// whose model also generates and so has an output limit. Its schedule needs only the input price, and rerank's search
+// unit is a flat fee, not a whole-context resample.
+func TestQuoteDirect(t *testing.T) {
+	t.Parallel()
+	schedule := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","web_search":"1"}}`)
+	e := Quotable{Price: schedule, Model: Model{ContextLength: 1000}, MaxOutput: 100}
+	d := Demand{Direct: true, TextBytes: 2, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}}
+	q, err := quoteEntry(d, e, Segments{}, true)
+	if err != nil {
+		t.Fatalf("quoteEntry: %v", err)
+	}
+	if got := units(t, q.amount); got != "3" {
+		t.Errorf("amount = %s, want 3 (2 input + 1 search), not a whole-context resample", got)
+	}
+
+	d = Demand{Direct: true, TextBytes: 12000}
+	first, longest := InputBound(d, Model{ContextLength: 8192})
+	if first != 12000 || longest != 12000 {
+		t.Errorf("InputBound = %d, %d; want the batch total 12000 for both, past the 8192-token context", first, longest)
+	}
+	if got := InputEstimate(d, Model{ContextLength: 8192}); got != 3000 {
+		t.Errorf("InputEstimate = %d, want the batch total 3000 tokens", got)
+	}
+}
+
+// TestQuoteMixedSearchKinds: a request that enables both the gateway's flat web plugin and a native search tool
+// reserves a sampling for each native use, charges both fees, and does not let the flat search hide an unbounded
+// native tool. The flat fee alone does not stand in for a native search in the meter's reserved count.
+func TestQuoteMixedSearchKinds(t *testing.T) {
+	t.Parallel()
+
+	d := Demand{TextBytes: 80, ServerTools: []ServerTool{
+		{Item: webSearch, MaxUses: 1},
+		{Item: webSearch, MaxUses: 1, Flat: true},
+	}}
+	q, err := quoteEntry(d, entry(t, false, 3), Segments{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := units(t, q.amount), "14280"; got != want {
+		t.Errorf("mixed search quote = %s, want %s", got, want)
+	}
+	if q.searches != 1 {
+		t.Errorf("reserved native searches = %d, want 1 (the flat search is not a native use)", q.searches)
+	}
+	if q.resample == (inputPrice{}) || q.rereads != 1000 {
+		t.Errorf("native resampling was cleared by the flat search: resample %+v, rereads %d", q.resample, q.rereads)
+	}
+
+	unboundedDemand := Demand{TextBytes: 80, ServerTools: []ServerTool{
+		{Item: webSearch},
+		{Item: webSearch, MaxUses: 1, Flat: true},
+	}}
+	_, err = quoteEntry(unboundedDemand, entry(t, false, 0), Segments{}, false) // no default native limit
+	var unbounded *UnboundedError
+	if !errors.As(err, &unbounded) || !errors.Is(err, ErrUnbounded) {
+		t.Errorf("unbounded native search with a flat search: error = %v, want ErrUnbounded", err)
+	}
+
+	m := meter(t, d, entry(t, true, 3))
+	if step := m.Observe(Progress{Searches: 1}); step.Extend {
+		t.Errorf("one native search = %+v, want no extension", step)
+	}
+	if step := m.Observe(Progress{Searches: 2}); !step.Extend {
+		t.Errorf("a native search beyond its bound = %+v, want an extension", step)
 	}
 }

@@ -20,8 +20,9 @@ type endpoint struct {
 }
 
 const (
-	someKey  = "/keys/key_00000000000000000000000000"
-	someCall = "/calls/0198c0a8-0000-7000-8000-000000000001"
+	someKey     = "/keys/key_00000000000000000000000000"
+	someCall    = "/calls/0198c0a8-0000-7000-8000-000000000001"
+	someSession = "/sessions/sess_00000000000000000000000000"
 )
 
 // sessionOperations are every operation that needs a session, which a request without one must be refused.
@@ -35,16 +36,31 @@ var sessionOperations = []endpoint{
 	{http.MethodPost, "/auth/totp/setup", ""},
 	{http.MethodPost, "/auth/totp/confirm", `{"secret":"JBSWY3DPEHPK3PXP","password":"p","code":"123456"}`},
 	{http.MethodPost, "/auth/recovery-codes", `{"code":"123456"}`},
+	{http.MethodPost, "/auth/totp/replace", `{"secret":"JBSWY3DPEHPK3PXP","current_code":"123456","code":"123456"}`},
+	{http.MethodGet, "/sessions", ""},
+	{http.MethodDelete, "/sessions", ""},
+	{http.MethodDelete, someSession, ""},
 	{http.MethodGet, "/keys", ""},
 	{http.MethodPost, "/keys", `{"name":"k"}`},
 	{http.MethodGet, someKey, ""},
 	{http.MethodPut, someKey, `{"name":"k","disabled":false}`},
 	{http.MethodDelete, someKey, ""},
 	{http.MethodGet, "/balance", ""},
+	{http.MethodGet, "/redeem-codes", ""},
+	{http.MethodPost, "/redeem-codes", `{"code":"AAAAA-BBBBB-CCCCC-DDDDD"}`},
 	{http.MethodGet, "/statement", ""},
 	{http.MethodGet, "/statement.csv", ""},
 	{http.MethodGet, "/calls", ""},
 	{http.MethodGet, someCall, ""},
+	{http.MethodPost, "/auth/oauth/link/start", `{"provider":"github"}`},
+	{http.MethodGet, "/auth/passkeys", ""},
+	{http.MethodPost, "/auth/passkeys/register/begin", `{"name":"Laptop"}`},
+	{http.MethodPost, "/auth/passkeys/register/finish", `{"flow_id":"f","credential":{}}`},
+	{http.MethodPost, "/auth/passkeys/mfa/begin", ""},
+	{http.MethodPost, "/auth/passkeys/mfa/finish", `{"flow_id":"f","credential":{}}`},
+	{http.MethodDelete, "/auth/passkeys/pk_00000000000000000000000000", `{"password":"p"}`},
+	{http.MethodGet, "/auth/identities", ""},
+	{http.MethodDelete, "/auth/identities/github", `{"password":"p"}`},
 }
 
 // TestSessionOperationsNeedASession: every operation that names a session refuses a request without one, or with one
@@ -233,8 +249,14 @@ func TestHostsOfNoConsole(t *testing.T) {
 	}
 	var site consoleapi.Site
 	decode(t, f.do(http.MethodGet, "/site", ""), &site)
-	if site.Name != "Main" || site.Currency != "USD" || site.KeyPrefix != "sk-ax-v1-" || site.Registration != consoleapi.SiteRegistration("invite") || site.LogoUrl != nil {
+	if site.Name != "Main" || site.Currency != "USD" || site.KeyPrefix != "sk-ax-v1-" || site.Registration != consoleapi.SiteRegistration("invite") || site.LogoUrl != nil || site.BrandColor != nil {
 		t.Errorf("the site: %+v", site)
+	}
+	f.run(`UPDATE accounts.sites SET brand_color = '#335ddf' WHERE is_main`)
+	f = f.restarted()
+	decode(t, f.do(http.MethodGet, "/site", ""), &site)
+	if site.BrandColor == nil || *site.BrandColor != "#335ddf" {
+		t.Errorf("the site's brand colour: %+v", site)
 	}
 	f.run(`UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = '` + consoleHost + `'`)
 	f = f.restarted()

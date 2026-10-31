@@ -1,5 +1,5 @@
 import { safeNext } from "@axiom/app";
-import { focusPage, NotFoundState, routerDefaults } from "@axiom/ui";
+import { focusPage, modelAbilities, NotFoundState, routerDefaults } from "@axiom/ui";
 import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
 import { Layout } from "./layout";
 
@@ -35,6 +35,11 @@ const routeTree = root.addChildren([
     validateSearch: guestSearch,
     component: lazyRouteComponent(() => import("./auth/register")),
   }),
+  createRoute({
+    getParentRoute: () => root,
+    path: "/verify-email",
+    component: lazyRouteComponent(() => import("./auth/verify-email")),
+  }),
   app.addChildren([
     createRoute({
       getParentRoute: () => app,
@@ -44,7 +49,24 @@ const routeTree = root.addChildren([
     createRoute({
       getParentRoute: () => app,
       path: "/keys",
+      validateSearch: (search: Record<string, unknown>) => ({
+        name: text(search.name),
+        prefix: text(search.prefix),
+        status: keyStatus(search.status),
+        created_after: text(search.created_after),
+        created_before: text(search.created_before),
+      }),
       component: lazyRouteComponent(() => import("./pages/keys")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/models",
+      validateSearch: (search: Record<string, unknown>) => ({
+        q: text(search.q),
+        author: text(search.author),
+        ability: modelAbility(search.ability),
+      }),
+      component: lazyRouteComponent(() => import("./pages/models")),
     }),
     createRoute({
       getParentRoute: () => app,
@@ -54,6 +76,11 @@ const routeTree = root.addChildren([
         until: text(search.until),
         model: text(search.model),
         client_app: text(search.client_app),
+        key_id: text(search.key_id),
+        workspace_id: text(search.workspace_id),
+        status: callStatus(search.status),
+        request_id: text(search.request_id),
+        group_by: callGroupBy(search.group_by),
       }),
       component: lazyRouteComponent(() => import("./pages/calls")),
     }),
@@ -69,6 +96,16 @@ const routeTree = root.addChildren([
     }),
     createRoute({
       getParentRoute: () => app,
+      path: "/redeem",
+      component: lazyRouteComponent(() => import("./pages/redeem")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/orders",
+      component: lazyRouteComponent(() => import("./pages/orders")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
       path: "/statement",
       component: lazyRouteComponent(() => import("./pages/statement")),
     }),
@@ -77,12 +114,38 @@ const routeTree = root.addChildren([
       path: "/security",
       component: lazyRouteComponent(() => import("./pages/security")),
     }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/notifications",
+      component: lazyRouteComponent(() => import("./pages/notifications")),
+    }),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),
   ]),
 ]);
 
 function text(value: unknown) {
   return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+// A result or grouping from the address is one the API knows; anything else is no filter, not a request it would refuse.
+function callStatus(value: unknown) {
+  return value === "success" || value === "error" ? value : undefined;
+}
+
+function callGroupBy(value: unknown) {
+  return value === "day" || value === "model" || value === "key" ? value : undefined;
+}
+
+// An ability from the address is one the contract names; anything else is no filter, not a request it would refuse.
+function modelAbility(value: unknown) {
+  return typeof value === "string" && (modelAbilities as readonly string[]).includes(value)
+    ? (value as (typeof modelAbilities)[number])
+    : undefined;
+}
+
+// A status from the address is one the API knows; anything else is no filter, not a request it would refuse.
+function keyStatus(value: unknown) {
+  return value === "active" || value === "disabled" || value === "expired" ? value : undefined;
 }
 
 export const router = createRouter({ ...routerDefaults, routeTree, basepath: import.meta.env.BASE_URL });
