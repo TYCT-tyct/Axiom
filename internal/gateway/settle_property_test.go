@@ -31,9 +31,9 @@ func FuzzToolCallsAddToEstimate(f *testing.F) {
 			cap = -cap
 		}
 		cap++
-		base := estimateOutput(billing.Segment{}, p, cap, billing.TokenizerClaude47)
+		base := estimateOutput(billing.Segment{}, p, cap, billing.TokenizerClaude47, 0)
 		p.ToolCalls = 0
-		plain := estimateOutput(billing.Segment{}, p, cap, billing.TokenizerClaude47)
+		plain := estimateOutput(billing.Segment{}, p, cap, billing.TokenizerClaude47, 0)
 		if base < plain || base > cap {
 			t.Fatalf("calls %d, cap %d: estimate %d, without calls %d", calls, cap, base, plain)
 		}

@@ -279,55 +279,6 @@ func completionChunks(t *testing.T, out []byte) []map[string]any {
 	return chunks
 }
 
-// TestCompletionsEchoIsNotOutput: echo repeats the prompt at the start of every choice, and the output estimate counts
-// only what the model generated. The missing-usage and broken-stream cases matter most: there the estimate is all
-// billing has, so counting the echoed prompt would charge output that was never produced.
-func TestCompletionsEchoIsNotOutput(t *testing.T) {
-	chunk := func(index int, text, finish string) string {
-		return fmt.Sprintf(`data: {"id":"cmpl-1","object":"text_completion","created":1,"model":"m",`+
-			`"choices":[{"index":%d,"text":%q,"finish_reason":%s}]}`+"\n\n", index, text, finish)
-	}
-	stream := chunk(0, "echo", "null") + chunk(1, "abc", "null") + chunk(0, "gen", `"length"`) +
-		chunk(1, "xy", `"length"`) + "data: [DONE]\n\n"
-	o := options
-	o.Echo, o.EchoChoices = []int64{4, 3}, 1
-	got := relayWith(t, protocol.Completions, protocol.Completions, strings.NewReader(stream), protocol.UsageContext{},
-		protocol.NewMemory(0), o, completionSettled)
-	if got.err != nil {
-		t.Fatal(got.err)
-	}
-	if n := got.r.Progress().ContentBytes; n != 5 {
-		t.Errorf("content bytes %d, want the 5 generated (the echoed 7 are not output)", n)
-	}
-	if !bytes.Contains(got.out, []byte(`"text":"echo"`)) || !bytes.Contains(got.out, []byte(`"text":"abc"`)) {
-		t.Errorf("the echo was not passed on:\n%s", got.out)
-	}
-
-	// Two choices per prompt: a choice's index counts choices, so index 2 is the first choice of the second prompt.
-	pair := chunk(0, "ab", "null") + chunk(2, "c", "null") + chunk(0, "de", `"length"`) +
-		chunk(2, "f", `"length"`) + "data: [DONE]\n\n"
-	p := options
-	p.Echo, p.EchoChoices = []int64{2, 1}, 2
-	paired := relayWith(t, protocol.Completions, protocol.Completions, strings.NewReader(pair), protocol.UsageContext{},
-		protocol.NewMemory(0), p, completionSettled)
-	if paired.err != nil {
-		t.Fatal(paired.err)
-	}
-	if n := paired.r.Progress().ContentBytes; n != 3 {
-		t.Errorf("content bytes %d, want the 3 generated across two choices per prompt", n)
-	}
-
-	broken := chunk(0, "echo", "null") + `data: {"choices":[{"index":0,"text":"gen"`
-	broke := relayWith(t, protocol.Completions, protocol.Completions, strings.NewReader(broken), protocol.UsageContext{},
-		protocol.NewMemory(0), o, completionSettled)
-	if !errors.Is(broke.err, protocol.ErrUpstream) {
-		t.Fatalf("a broken stream: %v", broke.err)
-	}
-	if n := broke.r.Progress().ContentBytes; n != 0 {
-		t.Errorf("content bytes %d after a break that generated nothing, want 0", n)
-	}
-}
-
 // TestCompletionsUsageEnding: the upstream's usage is taken from the ending chunk and the client gets the relay's own
 // usage chunk, once, after the choices, with the cost; the aggregated body carries the same counts.
 func TestCompletionsUsageEnding(t *testing.T) {

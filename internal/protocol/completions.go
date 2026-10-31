@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"fmt"
-	"slices"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
@@ -19,16 +18,11 @@ type completionsStream struct {
 	report                                      *openAIUsage
 	reportErr                                   error
 	failed, rewrites, noChoices, choiceFinished bool
-	index, choiceText                           int64
-	echoRemaining                               []int64
-	echoChoices                                 int64
+	index                                       int64
 }
 
 func newCompletionsStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
-	s := &completionsStream{choices: map[int64]bool{}, echoChoices: max(o.EchoChoices, 1)}
-	if len(o.Echo) > 0 {
-		s.echoRemaining = slices.Clone(o.Echo)
-	}
+	s := &completionsStream{choices: map[int64]bool{}}
 	s.init(u, o, nil, charge)
 	s.completionsWriter = completionsWriter{id: s.eventReader.id, model: s.eventReader.model, created: "0"}
 	return s
@@ -108,21 +102,9 @@ func (s *completionsStream) done() (event, error) {
 func (s *completionsStream) choice() error {
 	// The choices array decides whether the chunk is a pure usage ending; a chunk with a choice is not, even when the
 	// choice also carries usage. Reset before reading: noChoices is set once for the array, not once per element.
-	s.noChoices, s.index, s.choiceFinished, s.choiceText = false, 0, false, 0
+	s.noChoices, s.index, s.choiceFinished = false, 0, false
 	if err := walk(&s.reader, s, completionsChoiceFields); err != nil {
 		return err
-	}
-	// The echoed prompt is not generated output: take it out of the content the meter reads, up to the prompt's own
-	// size. The choice's index is known only after the walk, since JSON members may come in any order.
-	if n := len(s.echoRemaining); n > 0 && s.choiceText > 0 && s.index >= 0 {
-		if prompt := s.index / s.echoChoices; prompt < int64(n) {
-			drop := min(s.choiceText, s.echoRemaining[prompt])
-			s.e.content -= drop
-			s.echoRemaining[prompt] -= drop
-			if s.e.content == 0 {
-				s.e.role = passive // the only text was the prompt's echo: not a commit point
-			}
-		}
 	}
 	// finish_reason may come before index in the object; apply it only after the whole choice is read, so the state
 	// lands on the choice's own index.
@@ -148,7 +130,6 @@ func (s *completionsStream) choiceIndex() error {
 func (s *completionsStream) textField() error {
 	before := s.e.content
 	err := s.text()
-	s.choiceText += s.e.content - before
 	if s.e.content > before {
 		s.e.role = content
 	}
@@ -203,7 +184,7 @@ func (s *completionsStream) rewritten() error {
 
 func (s *completionsStream) dropBuffers() {
 	s.eventReader.dropBuffers()
-	s.choices, s.report, s.echoRemaining = nil, nil, nil
+	s.choices, s.report = nil, nil
 }
 
 // completionsWriter writes the chunks of ours a completions client gets: the usage chunk and the error chunk.

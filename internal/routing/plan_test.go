@@ -675,3 +675,21 @@ func TestRerankDemandReservesItsSearchUnit(t *testing.T) {
 		t.Errorf("a chat request without web search demand got %+v", chat.ServerTools)
 	}
 }
+
+// TestDemandEchoBytes: a completion that echoes its prompt carries the echoed text as a billing quantity: every prompt
+// comes back at the start of each of its choices, so the demand holds the sum of the prompt sizes times n. A request
+// without echo carries none.
+func TestDemandEchoBytes(t *testing.T) {
+	t.Parallel()
+	r, err := protocol.Inspect(protocol.Completions, []byte(`{"model":"m","prompt":["a","bc"],"n":2,"echo":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := routing.DemandOf(&r); d.EchoBytes != 6 {
+		t.Errorf("echo bytes %d, want (1+2)*2 = 6", d.EchoBytes)
+	}
+	r.Echo = false
+	if d := routing.DemandOf(&r); d.EchoBytes != 0 {
+		t.Errorf("echo bytes %d without echo, want 0", d.EchoBytes)
+	}
+}
