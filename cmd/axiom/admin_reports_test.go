@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -43,63 +44,53 @@ func TestAdminOperationsOverview(t *testing.T) {
  ('0198c0a8-0000-7000-8000-0000000000c1', '%s', '%s', 'credit', '0198c0a8-0000-7000-8000-0000000000f1', now()),
  ('0198c0a8-0000-7000-8000-0000000000c2', '%s', '%s', 'refund', '0198c0a8-0000-7000-8000-0000000000f1', now()),
  ('0198c0a8-0000-7000-8000-0000000000c3', '%s', '%s', 'credit', '0198c0a8-0000-7000-8000-0000000000f2', now() - interval '2 hours')`, site, account, site, account, site, account),
-		fmt.Sprintf(`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
+		`INSERT INTO billing.entries (transaction_id, site_id, account_id, book, amount)
  SELECT id, site_id, account_id, 'cash', CASE id WHEN '0198c0a8-0000-7000-8000-0000000000c1' THEN 2000
   WHEN '0198c0a8-0000-7000-8000-0000000000c2' THEN -500 ELSE 999 END
- FROM billing.transactions WHERE request_id IN ('0198c0a8-0000-7000-8000-0000000000f1', '0198c0a8-0000-7000-8000-0000000000f2')`),
+ FROM billing.transactions WHERE request_id IN ('0198c0a8-0000-7000-8000-0000000000f1', '0198c0a8-0000-7000-8000-0000000000f2')`,
 	)
 
 	rec := f.do(http.MethodGet, "/reports/overview?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until), "", as(owner))
 	expectAdmin(t, "overview", rec, 200, "")
 	var overview adminapi.OperationsOverview
 	decode(t, rec, &overview)
-	if overview.SiteId == nil || *overview.SiteId != siteID {
-		t.Fatalf("site: %s", rec.Body.String())
-	}
-	if overview.Calls == nil || *overview.Calls != 3 || overview.Errors == nil || *overview.Errors != 1 {
-		t.Fatalf("calls and errors: %s", rec.Body.String())
-	}
-	if overview.Revenue == nil || overview.Revenue.Amount != "2500" || overview.Cost == nil || overview.Cost.Amount != "1000" {
-		t.Fatalf("revenue and cost: %s", rec.Body.String())
-	}
-	if overview.UnknownCostCalls == nil || *overview.UnknownCostCalls != 1 {
-		t.Fatalf("unknown cost calls: %s", rec.Body.String())
-	}
-	if overview.Cash == nil || len(*overview.Cash) != 1 || (*overview.Cash)[0].Amount != "1500" || (*overview.Cash)[0].Currency != "USD" {
-		t.Fatalf("cash: %s", rec.Body.String())
-	}
-	if overview.TopAccounts == nil || len(*overview.TopAccounts) != 1 || *(*overview.TopAccounts)[0].Calls != 3 {
-		t.Fatalf("top accounts: %s", rec.Body.String())
-	}
-	if overview.TopModels == nil || len(*overview.TopModels) != 2 || *(*overview.TopModels)[0].Model != "model-a" {
-		t.Fatalf("top models: %s", rec.Body.String())
-	}
+	wantPtr(t, rec, "site", overview.SiteId, siteID)
+	wantPtr(t, rec, "calls", overview.Calls, int64(3))
+	wantPtr(t, rec, "errors", overview.Errors, int64(1))
+	wantPtr(t, rec, "revenue", overview.Revenue, adminapi.Money{Amount: "2500", Currency: "USD"})
+	wantPtr(t, rec, "cost", overview.Cost, adminapi.Money{Amount: "1000", Currency: "USD"})
+	wantPtr(t, rec, "unknown cost calls", overview.UnknownCostCalls, int64(1))
+	cash := wantList(t, rec, "cash", overview.Cash, 1)
+	wantPtr(t, rec, "cash amount", &cash[0].Amount, "1500")
+	wantPtr(t, rec, "cash currency", &cash[0].Currency, "USD")
+	accounts := wantList(t, rec, "top accounts", overview.TopAccounts, 1)
+	wantPtr(t, rec, "top account calls", accounts[0].Calls, int64(3))
+	models := wantList(t, rec, "top models", overview.TopModels, 2)
+	wantPtr(t, rec, "top model", models[0].Model, "model-a")
 
 	for _, tc := range []struct {
 		name, query string
 		calls       int
+		model       string
+		status      adminapi.AdminCallStatus
 	}{
-		{"model", "model=model-a", 2},
-		{"errors", "status=error", 1},
-		{"ok", "status=ok", 2},
+		{"model", "model=model-a", 2, "model-a", ""},
+		{"errors", "status=error", 1, "", adminapi.AdminCallStatusError},
+		{"ok", "status=ok", 2, "", adminapi.AdminCallStatusOk},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := f.do(http.MethodGet, "/calls?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until)+"&site_id="+url.QueryEscape(siteID)+"&"+tc.query, "", as(owner))
 			expectAdmin(t, "filtered calls", rec, 200, "")
 			var list adminapi.AdminCallList
 			decode(t, rec, &list)
-			if list.Data == nil || len(*list.Data) != tc.calls {
-				t.Fatalf("%s: %s", tc.name, rec.Body.String())
+			wantList(t, rec, tc.name+" calls", list.Data, tc.calls)
+			if tc.model != "" {
+				wantPtr(t, rec, "model filter echo", list.ModelFilter, tc.model)
 			}
-			if tc.name == "model" && (list.ModelFilter == nil || *list.ModelFilter != "model-a") {
-				t.Fatalf("model filter echo: %s", rec.Body.String())
+			if tc.status != "" {
+				wantPtr(t, rec, "status filter echo", list.StatusFilter, tc.status)
 			}
-			if tc.name == "errors" && (list.StatusFilter == nil || *list.StatusFilter != adminapi.AdminCallStatusError) {
-				t.Fatalf("status filter echo: %s", rec.Body.String())
-			}
-			if list.SiteFilter == nil || *list.SiteFilter != siteID {
-				t.Fatalf("site filter echo: %s", rec.Body.String())
-			}
+			wantPtr(t, rec, "site filter echo", list.SiteFilter, siteID)
 		})
 	}
 
@@ -109,9 +100,7 @@ func TestAdminOperationsOverview(t *testing.T) {
 		expectAdmin(t, "site calls", rec, 200, "")
 		var list adminapi.AdminCallList
 		decode(t, rec, &list)
-		if list.Data == nil || len(*list.Data) != want {
-			t.Fatalf("calls with %q: %s", query, rec.Body.String())
-		}
+		wantList(t, rec, fmt.Sprintf("calls with %q", query), list.Data, want)
 	}
 
 	expectAdmin(t, "overview window too wide", f.do(http.MethodGet, "/reports/overview?since=2020-01-01T00:00:00Z&until=2020-03-01T00:00:00Z", "", as(owner)), 400, "")
@@ -148,4 +137,27 @@ func TestAdminOperationsOverviewSumsWiderThanInt64(t *testing.T) {
 	if overview.Revenue == nil || overview.Revenue.Amount != sum || overview.Cost == nil || overview.Cost.Amount != sum {
 		t.Fatalf("wide revenue and cost: %s", rec.Body.String())
 	}
+}
+
+// wantPtr checks an optional response field: a missing field is a read the page shows as unavailable, not a zero.
+func wantPtr[T comparable](t *testing.T, rec *httptest.ResponseRecorder, what string, got *T, want T) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s: missing: %s", what, rec.Body.String())
+	}
+	if *got != want {
+		t.Fatalf("%s: got %v, want %v: %s", what, *got, want, rec.Body.String())
+	}
+}
+
+// wantList checks an optional response list and returns it, so the caller can check its items.
+func wantList[T any](t *testing.T, rec *httptest.ResponseRecorder, what string, got *[]T, want int) []T {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s: missing: %s", what, rec.Body.String())
+	}
+	if len(*got) != want {
+		t.Fatalf("%s: got %d items, want %d: %s", what, len(*got), want, rec.Body.String())
+	}
+	return *got
 }

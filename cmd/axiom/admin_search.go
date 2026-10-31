@@ -33,6 +33,38 @@ func summaryBody(c observability.CallSummary) (adminapi.AdminCallSummary, error)
 	return adminJSON[adminapi.AdminCallSummary](map[string]any{"id": c.ID.String(), "site_id": accounts.SiteID(c.Site).TypeID(), "account_id": accounts.AccountID(c.Account).TypeID(), "at": c.At, "model": c.Model, "error_kind": c.ErrorKind, "latency_ms": c.LatencyMS, "price": map[string]string{"amount": strconv.FormatInt(c.PriceNano, 10), "currency": c.Currency}})
 }
 
+// adminCallFilters adds the call list's optional exact filters: the dashboard's drill-down links carry the same
+// account, request, model, result and site in their query string.
+func adminCallFilters(q *observability.AdminQuery, p adminapi.ListAdminCallsParams) error {
+	if p.AccountId != nil {
+		id, err := accounts.ParseAccountID(*p.AccountId)
+		if err != nil {
+			return invalidField("account_id", "not an account ID")
+		}
+		v := uuid.UUID(id)
+		q.Account = &v
+	}
+	if p.RequestId != nil {
+		id := uuid.UUID(*p.RequestId)
+		q.RequestID = &id
+	}
+	if p.Model != nil {
+		q.Model = *p.Model
+	}
+	if p.Status != nil {
+		q.Status = string(*p.Status)
+	}
+	if p.SiteId != nil {
+		id, err := accounts.ParseSiteID(*p.SiteId)
+		if err != nil {
+			return invalidField("site_id", "not a site ID")
+		}
+		v := uuid.UUID(id)
+		q.Site = &v
+	}
+	return nil
+}
+
 func (a adminAPI) ListAdminCalls(ctx context.Context, r adminapi.ListAdminCallsRequestObject) (adminapi.ListAdminCallsResponseObject, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -41,31 +73,8 @@ func (a adminAPI) ListAdminCalls(ctx context.Context, r adminapi.ListAdminCallsR
 		return nil, err
 	}
 	q := observability.AdminQuery{Since: since, Until: until, After: after, PageSize: pageSize(r.Params.Limit)}
-	if r.Params.AccountId != nil {
-		id, e := accounts.ParseAccountID(*r.Params.AccountId)
-		if e != nil {
-			return nil, invalidField("account_id", "not an account ID")
-		}
-		v := uuid.UUID(id)
-		q.Account = &v
-	}
-	if r.Params.RequestId != nil {
-		id := uuid.UUID(*r.Params.RequestId)
-		q.RequestID = &id
-	}
-	if r.Params.Model != nil {
-		q.Model = *r.Params.Model
-	}
-	if r.Params.Status != nil {
-		q.Status = string(*r.Params.Status)
-	}
-	if r.Params.SiteId != nil {
-		id, e := accounts.ParseSiteID(*r.Params.SiteId)
-		if e != nil {
-			return nil, invalidField("site_id", "not a site ID")
-		}
-		v := uuid.UUID(id)
-		q.Site = &v
+	if err := adminCallFilters(&q, r.Params); err != nil {
+		return nil, err
 	}
 
 	var calls []observability.CallSummary

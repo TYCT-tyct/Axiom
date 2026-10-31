@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,24 +46,25 @@ func TestReadAdminOverviewCountsGroupsAndLimits(t *testing.T) {
 	if overview.Calls != 16 || overview.Errors != 1 {
 		t.Errorf("totals = %d calls, %d errors; want 16 and 1", overview.Calls, overview.Errors)
 	}
-	if len(overview.Accounts) != adminTop {
-		t.Fatalf("accounts = %d, want %d", len(overview.Accounts), adminTop)
+	checkOverviewAccounts(t, overview.Accounts, a)
+	wantModels := []AdminModelCalls{{Model: "m1", Calls: 15}, {Model: "m2", Calls: 1, Errors: 1}}
+	if !slices.Equal(overview.Models, wantModels) {
+		t.Errorf("models = %+v, want %+v", overview.Models, wantModels)
 	}
-	if overview.Accounts[0].Account != a || overview.Accounts[0].Calls != 3 || overview.Accounts[0].Errors != 1 {
-		t.Errorf("first account = %+v, want %s with 3 calls and 1 error", overview.Accounts[0], a)
+}
+
+// checkOverviewAccounts: the busiest account comes first, the rest of the top ten each have one call and no error.
+func checkOverviewAccounts(t *testing.T, accounts []AdminAccountCalls, busiest uuid.UUID) {
+	t.Helper()
+	if len(accounts) != adminTop {
+		t.Fatalf("accounts = %d, want %d", len(accounts), adminTop)
 	}
-	for _, account := range overview.Accounts[1:] {
+	if got := accounts[0]; got.Account != busiest || got.Calls != 3 || got.Errors != 1 {
+		t.Errorf("first account = %+v, want %s with 3 calls and 1 error", got, busiest)
+	}
+	for _, account := range accounts[1:] {
 		if account.Calls != 1 || account.Errors != 0 {
 			t.Errorf("account %s = %+v, want one call and no error", account.Account, account)
-		}
-	}
-	wantModels := []AdminModelCalls{{Model: "m1", Calls: 15}, {Model: "m2", Calls: 1, Errors: 1}}
-	if len(overview.Models) != len(wantModels) {
-		t.Fatalf("models = %+v, want %+v", overview.Models, wantModels)
-	}
-	for i, want := range wantModels {
-		if overview.Models[i] != want {
-			t.Errorf("model %d = %+v, want %+v", i, overview.Models[i], want)
 		}
 	}
 }
@@ -79,37 +81,43 @@ func TestAdminOverviewPlansReadTheWindow(t *testing.T) {
 	for name, query := range map[string]string{
 		"counts": adminOverviewCountsSQL, "accounts": adminTopAccountsSQL, "models": adminTopModelsSQL,
 	} {
-		var lines []string
-		if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
-			if err := planOwnPage(t.Context(), tx); err != nil {
+		checkOverviewPlan(t, db, name, query, site, since, until)
+	}
+}
+
+// checkOverviewPlan runs one dashboard query with EXPLAIN and requires an index read of the window within its budget.
+func checkOverviewPlan(t *testing.T, db *pg.DB, name, query string, site uuid.UUID, since, until time.Time) {
+	t.Helper()
+	var lines []string
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		if err := planOwnPage(t.Context(), tx); err != nil {
+			return err
+		}
+		args := []any{site, since, until}
+		if name != "counts" {
+			args = append(args, adminTop)
+		}
+		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
 				return err
 			}
-			args := []any{site, since, until}
-			if name != "counts" {
-				args = append(args, adminTop)
-			}
-			rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+query, args...)
-			if err != nil {
-				return err
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var line string
-				if err := rows.Scan(&line); err != nil {
-					return err
-				}
-				lines = append(lines, line)
-			}
-			return rows.Err()
-		}); err != nil {
-			t.Fatal(err)
+			lines = append(lines, line)
 		}
-		plan := strings.Join(lines, "\n")
-		if strings.Contains(plan, "Seq Scan") || !strings.Contains(plan, "Index") {
-			t.Errorf("%s does not read the window through an index:\n%s", name, plan)
-		}
-		if n := buffers(t, plan); n > 1500 {
-			t.Errorf("%s touched %d blocks, want at most 1500:\n%s", name, n, plan)
-		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Join(lines, "\n")
+	if strings.Contains(plan, "Seq Scan") || !strings.Contains(plan, "Index") {
+		t.Errorf("%s does not read the window through an index:\n%s", name, plan)
+	}
+	if n := buffers(t, plan); n > 1500 {
+		t.Errorf("%s touched %d blocks, want at most 1500:\n%s", name, n, plan)
 	}
 }

@@ -47,18 +47,20 @@ func TestAdminCashMovements(t *testing.T) {
 	expectAdmin(t, "cash movements", rec, 200, "")
 	var list adminapi.CashMovementList
 	decode(t, rec, &list)
-	if len(list.Data) != 2 || list.NextCursor != nil {
+	if len(list.Data) != 2 {
 		t.Fatalf("cash: %s", rec.Body.String())
 	}
+	if list.NextCursor != nil {
+		t.Fatalf("cash cursor: %s", rec.Body.String())
+	}
 	first, second := list.Data[0], list.Data[1]
-	if first.Kind == nil || *first.Kind != adminapi.Credit || first.OfflineChannel == nil || *first.OfflineChannel != "bank" {
-		t.Fatalf("offline credit: %s", rec.Body.String())
-	}
-	if second.Kind == nil || *second.Kind != adminapi.Refund || second.OrderId == nil {
+	wantPtr(t, rec, "first kind", first.Kind, adminapi.Credit)
+	wantPtr(t, rec, "first amount", first.Amount, adminapi.Money{Amount: "2000", Currency: "USD"})
+	wantPtr(t, rec, "first offline channel", first.OfflineChannel, "bank")
+	wantPtr(t, rec, "second kind", second.Kind, adminapi.Refund)
+	wantPtr(t, rec, "second amount", second.Amount, adminapi.Money{Amount: "-500", Currency: "USD"})
+	if second.OrderId == nil {
 		t.Fatalf("refund of the older order: %s", rec.Body.String())
-	}
-	if first.Amount == nil || first.Amount.Amount != "2000" || second.Amount == nil || second.Amount.Amount != "-500" {
-		t.Fatalf("amounts: %s", rec.Body.String())
 	}
 
 	expectAdmin(t, "cash cursor", f.do(http.MethodGet, "/payments/cash?site_id="+url.QueryEscape(siteID)+"&cursor=not-a-cursor", "", as(owner)), 400, "")

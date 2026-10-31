@@ -41,8 +41,10 @@ func TestAdminCallsFilterAndPage(t *testing.T) {
 		{"RLS", nil, nil, nil, "", "", accountScope(account), []uuid.UUID{b.ID, a.ID}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			q := AdminQuery{Since: at, Until: at.Add(2 * time.Second), Account: tc.account, RequestID: tc.request,
-				Site: tc.site, Model: tc.model, Status: tc.status, PageSize: 1}
+			q := AdminQuery{
+				Since: at, Until: at.Add(2 * time.Second), Account: tc.account, RequestID: tc.request,
+				Site: tc.site, Model: tc.model, Status: tc.status, PageSize: 1,
+			}
 			got := adminPageIDs(t, db, tc.scope, q)
 
 			if !slices.Equal(tc.want, got) {

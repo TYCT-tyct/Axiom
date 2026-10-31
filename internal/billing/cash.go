@@ -69,7 +69,7 @@ type CashQuery struct {
 func ListCashMovements(ctx context.Context, tx pg.Tx, q CashQuery) ([]CashMovement, *CashCursor, error) {
 	rows, err := queries.ListCashMovements(ctx, tx, ListCashMovementsParams{
 		SiteID: q.Site, AccountID: q.Account, Since: q.Since, Until: q.Until, AfterAt: q.After.At, AfterID: q.After.ID,
-		Max: int32(q.Limit + 1),
+		Max: int32(q.Limit + 1), // #nosec G115 -- the admin contract bounds the page size at 200
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("billing: read cash movements: %w", err)

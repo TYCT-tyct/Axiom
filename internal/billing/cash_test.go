@@ -6,6 +6,8 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/platform/pg"
 )
 
@@ -49,18 +51,39 @@ func TestListCashMovements(t *testing.T) {
 		}
 		return rows, next
 	}
+	cashRows := func(movements []CashMovement) []cashRow {
+		out := make([]cashRow, len(movements))
+		for i, m := range movements {
+			out[i] = cashRow{Kind: m.Kind, Online: m.Online, Amount: m.Amount, Currency: m.Currency, Channel: m.OfflineChannel}
+		}
+		return out
+	}
 	first, next := read(CashCursor{At: start.Add(24 * time.Hour)}, 2)
-	if len(first) != 2 || first[0].Kind != "credit" || first[1].Kind != "refund" || !first[0].Online || first[1].Online {
-		t.Fatalf("first page = %+v, want the online credit then the online refund", first)
+	wantFirst := []cashRow{
+		{Kind: "credit", Online: true, Amount: "2000", Currency: "USD"},
+		{Kind: "refund", Amount: "-500", Currency: "USD", Channel: "bank"},
+	}
+	if diff := cmp.Diff(wantFirst, cashRows(first)); diff != "" {
+		t.Fatalf("first page (-want +got):\n%s", diff)
 	}
 	if next == nil {
 		t.Fatal("no cursor after a full page")
 	}
 	second, end := read(*next, 2)
-	if len(second) != 1 || second[0].OfflineChannel != "bank" || second[0].Amount != "2000" || second[0].Currency != "USD" {
-		t.Fatalf("second page = %+v, want the offline credit", second)
+	wantSecond := []cashRow{{Kind: "credit", Amount: "2000", Currency: "USD", Channel: "bank"}}
+	if diff := cmp.Diff(wantSecond, cashRows(second)); diff != "" {
+		t.Fatalf("second page (-want +got):\n%s", diff)
 	}
 	if end != nil {
 		t.Fatalf("cursor after the last page: %+v", end)
 	}
+}
+
+// cashRow is the part of a movement the test checks, without the IDs and times the cursor owns.
+type cashRow struct {
+	Kind     string
+	Online   bool
+	Amount   string
+	Currency string
+	Channel  string
 }

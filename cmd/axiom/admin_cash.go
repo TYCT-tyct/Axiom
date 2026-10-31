@@ -32,7 +32,7 @@ func (a adminAPI) ListCashMovements(ctx context.Context, r adminapi.ListCashMove
 	}
 	after := billing.CashCursor{At: w.Until}
 	if p.Cursor != nil {
-		after, err = billing.ParseCashCursor(string(*p.Cursor))
+		after, err = billing.ParseCashCursor(*p.Cursor)
 		if err != nil {
 			return nil, invalidField("cursor", "not a cursor this API gave out")
 		}
@@ -49,8 +49,8 @@ func (a adminAPI) ListCashMovements(ctx context.Context, r adminapi.ListCashMove
 	}
 	data := make([]adminapi.CashMovement, len(rows))
 	for i, m := range rows {
-		id, batch := adminapi.Uuid(m.ID.String()), adminapi.Uuid(m.Batch.String())
-		account := adminapi.AccountId(accounts.AccountID(m.Account).TypeID())
+		id, batch := m.ID.String(), m.Batch.String()
+		account := accounts.AccountID(m.Account).TypeID()
 		kind := adminapi.CashMovementKind(m.Kind)
 		at := m.At
 		currency := m.Currency
@@ -60,7 +60,7 @@ func (a adminAPI) ListCashMovements(ctx context.Context, r adminapi.ListCashMove
 		amount := adminapi.Money{Amount: m.Amount, Currency: currency}
 		body := adminapi.CashMovement{Id: &id, Kind: &kind, At: &at, AccountId: &account, BatchId: &batch, Amount: &amount}
 		if m.Online {
-			order := adminapi.OrderId(payments.OrderID(m.Batch).TypeID())
+			order := payments.OrderID(m.Batch).TypeID()
 			body.OrderId = &order
 		} else if m.OfflineChannel != "" {
 			body.OfflineChannel = &m.OfflineChannel
