@@ -261,23 +261,22 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 `deploy/compose.edge.yaml` 在程序前面加一个 Caddy 容器，配置是 `deploy/ingress/Caddyfile`。
 生产先按[发布的 digest 选择与核对](release.md#选择和核对)确定交付物，在 `deploy/.env` 写入
 `DEPLOY_IMAGE=<仓库>@sha256:<摘要>`；不使用 tag、不在部署机重建，也不运行开发用的 `just up`。
-pull 之前先按[发布的「镜像签名与验证」](release.md#镜像签名与验证)验一次签名、workflow 身份、digest 和 SBOM attestation，
-失败就不 pull：
+
+部署只经一个失败即停的入口。它从这次 `-f`/`--env-file` 解析出的**实际** Compose 配置里读 `axiom` 和 `migrate`
+会用的镜像（Shell 已导出的 `DEPLOY_IMAGE` 优先于 `.env`，所以被验证的就是会被拉取的），要求两者是同一个 digest，
+用[发布的「镜像签名与验证」](release.md#镜像签名与验证)核对签名、workflow 身份、digest 和 SBOM，再把该 digest
+固定给同一个脚本里的 pull 和 up：
 
 ```bash
 tools="$(bash scripts/ci/install-release-tools.sh)"
-image="$(sed -n 's/^DEPLOY_IMAGE=//p' deploy/.env)"
-PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$image" tmp/release/release.json
+PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
+  -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env tmp/release/release.json
 ```
 
-负责人执行部署前确认三份数据库口令已配置；新数据库初始化角色，已有数据库也须重放幂等角色授权：
-
-```bash
-docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env pull axiom migrate
-docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --no-build --wait postgres
-docker compose -f deploy/compose.yaml --env-file deploy/.env exec -T postgres sh < deploy/postgres/roles.sh
-docker compose -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env up --detach --no-build --wait
-```
+入口按顺序拉取该 digest、启动数据库、重放 `deploy/postgres/roles.sh` 的角色授权、再以 `--no-build` 启动整套栈。
+任何一步失败即停：验签失败时没有 pull，也没有启动。不要把它拆成手工的 `sed`、验签、`pull`、`up`：只从
+`deploy/.env` 取镜像会验文件里的 A 而 Compose 拉环境变量里的 B，分成几段执行也没有失败控制。三份数据库口令须已在
+`deploy/.env` 中，否则启动数据库或重放角色授权会失败并停下。
 
 迁移和程序使用同一 digest；备份 manifest 的镜像字段也因此记录这个引用。恢复和回滚沿用发布记录里的摘要，不能将
 本地开发的 `axiom:local` 当生产交付物。
