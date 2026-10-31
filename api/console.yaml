@@ -664,6 +664,30 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "429": {$ref: "#/components/responses/TooManyRequests"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/auth/recovery-codes/take:
+    post:
+      operationId: takeRecoveryCodes
+      tags: [Session]
+      summary: Take the recovery codes a provider link left for this session
+      description: >-
+        A provider link answers with a redirect, so the new recovery codes it makes cannot come back in that response.
+        They are kept on the session the link issued, encrypted under its token, and this call reads them under the
+        session row's lock and clears them in the same transaction: the first call returns them and later calls return
+        none. Needs a signed-in console session; the codes belong to it.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The codes left for this session, or an empty list.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ShownRecoveryCodes"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/auth/oauth/start:
     post:
       operationId: startOAuthSignIn
@@ -2651,6 +2675,14 @@ components:
       required: [code]
       properties:
         code: {type: string, pattern: '^[0-9]{6}$', description: "A current TOTP code."}
+    ShownRecoveryCodes:
+      type: object
+      required: [recovery_codes]
+      description: The recovery codes a link round trip left for the session, read once.
+      properties:
+        recovery_codes:
+          type: array
+          items: {type: string}
     FactorChange:
       type: object
       required: [csrf_token, recovery_codes]
@@ -2875,6 +2907,12 @@ components:
         created_at: {type: string, format: date-time}
         last_used_at: {type: string, format: date-time, nullable: true}
         backup_eligible: {type: boolean, description: "Whether the credential can be synced or backed up between devices."}
+        recovery_codes:
+          type: array
+          items: {type: string}
+          description: >-
+            Replacement recovery codes, present only on the answer that adds the passkey and only when TOTP is on:
+            raising the factor version stops the old ones.
     Passkeys:
       type: object
       required: [passkeys]
@@ -2903,6 +2941,10 @@ components:
         A credential was removed: every other session ended and the response's cookie replaces this browser's session.
       properties:
         csrf_token: {type: string}
+        recovery_codes:
+          type: array
+          items: {type: string}
+          description: Replacement recovery codes when TOTP is on; absent otherwise.
     RegisterRequest:
       type: object
       required: [email]

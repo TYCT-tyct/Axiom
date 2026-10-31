@@ -106,7 +106,7 @@ func TestPasskeyRegistrationRechecksTheSiteSetting(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeysOff) {
+	if _, _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeysOff) {
 		t.Fatalf("registration after passkeys were turned off: %v", err)
 	}
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM accounts.passkey_credentials"); got[0] != "0" {
@@ -156,7 +156,7 @@ func TestPasskeyRegistrationRechecksTheLoginDomain(t *testing.T) {
 	if err := pgtest.Run(t.Context(), x.database.Superuser, "UPDATE accounts.site_domains SET disabled_at = now() WHERE domain = '"+console+"'"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeysOff) {
+	if _, _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeysOff) {
 		t.Fatalf("registration after the login domain was disabled: %v", err)
 	}
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM accounts.passkey_credentials"); got[0] != "0" {
@@ -217,7 +217,7 @@ func TestPasskeyProofAllowsTOTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	evidence := auth.register(t, registration.PublicKey)
-	_, issued, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test")
+	_, issued, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

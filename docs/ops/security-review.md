@@ -50,6 +50,12 @@
 
 三条教训已经变成规则，写在[平台的「凭证加密」](../../internal/platform/README.md#凭证加密)：检查文件属性必须读打开后的描述符，密钥材料必须放在闭包后面、只加 `Format` 不算脱敏，并发和时序的测试要用显式同步，不靠睡眠和循环次数撞窗口。
 
+### 后续（#530）
+
+#529 合入后的质量审计发现同一类问题还在节点 mTLS 上：`nodetls` 先 `os.Stat` 路径检查 `node.key`，再由 `os.ReadFile` 按路径重新打开，两步之间换入一个内容合法、权限 `0644` 的文件，读取不会重新检查它的权限。下面「节点 mTLS」一行当时写"成立"，成立的是证书链与用途检查，私钥权限这一项只和主密钥文件同规则，没有同一描述符的保证。
+
+现在主密钥、Valkey 密码和 mTLS 私钥共用 `privfile.Open`：类型和权限从打开后的描述符读，调用方读的也是这个文件，格式、大小上限和是否拒绝符号链接仍由各自决定。`TestKeyReplacedAtOpenIsRefused`（`internal/platform/nodetls`）在打开的一刻把 `0644` 的合法私钥换到路径上，要求启动被拒；把这一处换回按路径检查再按路径读，测试每次失败。同一份规则在 `internal/platform/privfile` 有直接的描述符测试，主密钥一侧是已有的 `TestKeyFileReplacedAtOpenIsRefused`。
+
 ### 逐项核对
 
 每一行是"这条规则由哪行代码决定，哪条测试盯着它"。
@@ -74,7 +80,7 @@
 | 密钥不打印 | 持有密钥的类型都脱敏 | `Secret`、`MasterKeys`、`MACKeys` 的 `Format`/`LogValue` | `TestSecretFormatting`、`TestSecretSlog`、`TestKeyMaterialFormatting` | 本轮修复后成立 |
 | 分发与激活 | 每个在线节点都报告了版本才激活；节点读不到就阻塞而不是跳过 | `internal/platform/secret/rotation.go:347` | `TestKeyringWaitsForEveryLiveNode`、`TestKeyringReportsOnlyFingerprintConfirmedVersions` | 成立 |
 | 退役与迟到写 | 退役取排他 advisory 锁写墓碑；信封表的触发器取共享锁并检查标记 | `internal/platform/secret/rotation.go:445`、`pg/migrations/00023_envelope_key_fence.sql` | `TestKeyringRetirementRefusesStaleWrites`、`TestKeyringRetirementWaitsForAnOpenEnvelopeWrite`、`TestKeyringWillNotPruneAnUnfencedRetirement` | 成立 |
-| 节点 mTLS | 最低 TLS 1.3、要求并对端证书、按用途校验整条链、私钥权限、错误不打印路径 | `internal/platform/nodetls/nodetls.go:33`、`:69`、`:141` | `TestMutualTLSRequiresACertificateFromBothSides`、`TestCertificatePurposeCoversTheWholeChain`、`TestClientVerifiesTheServersName`、`TestRefusesUnusableMaterial` | 成立（部署文档见发现 5） |
+| 节点 mTLS | 最低 TLS 1.3、要求并对端证书、按用途校验整条链、私钥权限在打开的描述符上检查、错误不打印路径 | `internal/platform/nodetls/nodetls.go` 的 `load`、`readPrivate`、`protectedDir`，`internal/platform/privfile` | `TestMutualTLSRequiresACertificateFromBothSides`、`TestCertificatePurposeCoversTheWholeChain`、`TestClientVerifiesTheServersName`、`TestRefusesUnusableMaterial`、`TestKeyReplacedAtOpenIsRefused` | 本轮修复后成立（#530；部署文档见发现 5） |
 | SSRF：地址 | 拒绝私网、回环、链路本地、`0.0.0.0`、IPv4 映射、IPv6 特殊段、元数据地址和数字写法（`0x7f.1`、`2130706433`、结尾点） | `allowedAddress`、`numericHost`（`internal/platform/egress/address.go:46`、`:68`） | `TestAddressPolicy`、`TestHostParsing`、`TestCheckAppliesTheDialPolicy` | 成立 |
 | SSRF：DNS 重绑定 | 先解析并校验每个答案，再连接校验过的 IP，不把名字交给第二次解析 | `resolve`、`addresses`（`internal/platform/egress/dial.go:55`、`:73`） | `TestDNSMustValidateEveryAnswerBeforeDial`、`TestDialPinsAddressesAndBoundsResolution`、`TestTCPRevalidatesDNSAndPinsTheConnection` | 成立 |
 | SSRF：重定向与代理 | 不跟随重定向、不用代理、不改 Host、TLS 按主机名校验、101 拒绝 | `internal/platform/egress/client.go:121`、`:130`、`:143` | `TestLoopbackRedirectAndUserAgent`、`TestIgnoresProxyEnvironment`、`TestTLSKeepsHostnameAndVerifiesCertificate`、`TestRefusesProtocolSwitch` | 成立 |

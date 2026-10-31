@@ -160,7 +160,7 @@ func (c consoleAPI) BeginPasskeyRegistration(ctx context.Context, request consol
 // FinishPasskeyRegistration verifies the attestation and stores the credential.
 func (c consoleAPI) FinishPasskeyRegistration(ctx context.Context, request consoleapi.FinishPasskeyRegistrationRequestObject) (consoleapi.FinishPasskeyRegistrationResponseObject, error) {
 	cl := callOf(ctx)
-	passkey, issued, err := c.accounts.FinishPasskeyRegistration(ctx, credentialRequest(cl.r, *request.Body), cl.principal, request.Params.FlowId, cl.ip, cl.r.UserAgent())
+	passkey, issued, codes, err := c.accounts.FinishPasskeyRegistration(ctx, credentialRequest(cl.r, *request.Body), cl.principal, request.Params.FlowId, cl.ip, cl.r.UserAgent())
 	if err != nil {
 		return nil, err
 	}
@@ -168,8 +168,12 @@ func (c consoleAPI) FinishPasskeyRegistration(ctx context.Context, request conso
 	if err != nil {
 		return nil, err
 	}
+	body := passkeyBody(passkey)
+	if codes != nil {
+		body.RecoveryCodes = &codes
+	}
 	return consoleapi.FinishPasskeyRegistration200JSONResponse{
-		Body: passkeyBody(passkey), Headers: consoleapi.FinishPasskeyRegistration200ResponseHeaders{SetCookie: cookie},
+		Body: body, Headers: consoleapi.FinishPasskeyRegistration200ResponseHeaders{SetCookie: cookie},
 	}, nil
 }
 
@@ -193,7 +197,7 @@ func (c consoleAPI) DeletePasskey(ctx context.Context, request consoleapi.Delete
 	if err != nil {
 		return nil, accounts.ErrNotFound
 	}
-	issued, err := c.accounts.DeletePasskey(ctx, cl.principal, id, request.Body.Password, cl.ip, cl.r.UserAgent())
+	issued, codes, err := c.accounts.DeletePasskey(ctx, cl.principal, id, request.Body.Password, cl.ip, cl.r.UserAgent())
 	if err != nil {
 		return nil, err
 	}
@@ -201,8 +205,12 @@ func (c consoleAPI) DeletePasskey(ctx context.Context, request consoleapi.Delete
 	if err != nil {
 		return nil, err
 	}
+	body := consoleapi.CredentialChange{CsrfToken: issued.CSRFToken}
+	if codes != nil {
+		body.RecoveryCodes = &codes
+	}
 	return consoleapi.DeletePasskey200JSONResponse{
-		Body: consoleapi.CredentialChange{CsrfToken: issued.CSRFToken}, Headers: consoleapi.DeletePasskey200ResponseHeaders{SetCookie: cookie},
+		Body: body, Headers: consoleapi.DeletePasskey200ResponseHeaders{SetCookie: cookie},
 	}, nil
 }
 
@@ -224,7 +232,7 @@ func (c consoleAPI) ListIdentities(ctx context.Context, _ consoleapi.ListIdentit
 // UnlinkIdentity detaches a provider account and replaces the session.
 func (c consoleAPI) UnlinkIdentity(ctx context.Context, request consoleapi.UnlinkIdentityRequestObject) (consoleapi.UnlinkIdentityResponseObject, error) {
 	cl := callOf(ctx)
-	issued, err := c.accounts.UnlinkIdentity(ctx, cl.principal, string(request.Provider), cl.ip, cl.r.UserAgent())
+	issued, codes, err := c.accounts.UnlinkIdentity(ctx, cl.principal, string(request.Provider), cl.ip, cl.r.UserAgent())
 	if err != nil {
 		return nil, err
 	}
@@ -232,8 +240,12 @@ func (c consoleAPI) UnlinkIdentity(ctx context.Context, request consoleapi.Unlin
 	if err != nil {
 		return nil, err
 	}
+	body := consoleapi.CredentialChange{CsrfToken: issued.CSRFToken}
+	if codes != nil {
+		body.RecoveryCodes = &codes
+	}
 	return consoleapi.UnlinkIdentity200JSONResponse{
-		Body: consoleapi.CredentialChange{CsrfToken: issued.CSRFToken}, Headers: consoleapi.UnlinkIdentity200ResponseHeaders{SetCookie: cookie},
+		Body: body, Headers: consoleapi.UnlinkIdentity200ResponseHeaders{SetCookie: cookie},
 	}, nil
 }
 

@@ -182,6 +182,16 @@ func (c consoleAPI) RegenerateRecoveryCodes(ctx context.Context, request console
 	}, nil
 }
 
+// TakeRecoveryCodes reads and clears the codes a provider link left on this session: the link's answer was a redirect,
+// so this is where the console gets them, once.
+func (c consoleAPI) TakeRecoveryCodes(ctx context.Context, _ consoleapi.TakeRecoveryCodesRequestObject) (consoleapi.TakeRecoveryCodesResponseObject, error) {
+	codes, err := c.accounts.TakePendingRecoveryCodes(ctx, callOf(ctx).r, callOf(ctx).principal)
+	if err != nil {
+		return nil, err
+	}
+	return consoleapi.TakeRecoveryCodes200JSONResponse{RecoveryCodes: codes}, nil
+}
+
 // ReplaceTotp replaces the second factor with proof of the current one; the old secret, old recovery codes and the
 // user's other sessions end.
 func (c consoleAPI) ReplaceTotp(ctx context.Context, request consoleapi.ReplaceTotpRequestObject) (consoleapi.ReplaceTotpResponseObject, error) {

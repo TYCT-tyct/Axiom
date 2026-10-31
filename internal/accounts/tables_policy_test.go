@@ -36,7 +36,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"legal_acceptances":       nil,
 		"platform_grants":         {"revoked_at"},
 		"api_keys":                {"rate_requests", "updated_at", "management_window", "management_requests", "name", "status", "spend_limit", "limit_reset", "preset_id", "models", "ip_allow", "deleted_at"},
-		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at"},
+		"sessions":                {"last_seen_at", "mfa_attempts", "expires_at", "idle_timeout", "revoked_at", "recovery_codes_ciphertext", "recovery_codes_nonce"},
 		"site_oauth_providers":    {"client_id", "client_secret_ciphertext", "client_secret_nonce", "client_secret_wrapped_dek", "client_secret_key_version", "updated_at"},
 		"user_identities":         nil,
 		"passkey_credentials":     {"sign_count", "last_used_at", "backup_state", "name"},
@@ -123,5 +123,24 @@ func policyCommands(table string) string {
 		return "DELETE, INSERT, SELECT, UPDATE"
 	default:
 		return "INSERT, SELECT, UPDATE"
+	}
+}
+
+// TestSessionsHoldNoKeyRingEnvelope: the codes a link leaves for the console are encrypted under the session token, not
+// the key ring. An older node's startup inventory check scans for *_wrapped_dek and must find nothing here, or a
+// migration would keep that node from starting or rolling back (#530 finding 3).
+func TestSessionsHoldNoKeyRingEnvelope(t *testing.T) {
+	t.Parallel()
+	db, _ := open(t)
+	var found int
+	if err := db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT count(*) FROM information_schema.columns
+			WHERE table_schema = 'accounts' AND table_name = 'sessions'
+			  AND column_name LIKE '%\_wrapped_dek' ESCAPE '\'`).Scan(&found)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if found != 0 {
+		t.Fatalf("%d key-ring envelope columns on accounts.sessions: an older node's keyring check would refuse to start", found)
 	}
 }

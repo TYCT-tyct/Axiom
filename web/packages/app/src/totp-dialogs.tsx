@@ -1,12 +1,12 @@
 import type { Schemas } from "@axiom/api";
 import { Button, CopyButton, Dialog, FormError, SubmitButton, TextField } from "@axiom/ui";
-import { useMutation } from "@tanstack/react-query";
-import { createContext, type ReactNode, use, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { createContext, type ReactNode, use, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "./errors";
 import { readForm } from "./forms";
 import { QrCode } from "./qr";
-import { useAuth, useStartSession } from "./session";
+import { currentSession, identityOf, useAuth, useCachedSession, useStartSession } from "./session";
 
 type Change = Schemas["FactorChange"];
 
@@ -45,13 +45,26 @@ function RecoveryCodes({ change, onClose }: { change: Change; onClose: () => voi
 
 const ShowCodes = createContext<((change: Change) => void) | null>(null);
 
-// RecoveryCodesHost shows the recovery codes of a changed factor above everything in it.
+// RecoveryCodesHost shows the recovery codes of a changed factor above everything in it. The codes belong to the person
+// signed in: when the browser passes to another person (another tab signs out and someone else signs in), the dialog
+// closes and the codes leave memory, because this host outlives the pages. The session itself rotating is how these
+// codes were made, so the host follows the person, not the token.
 export function RecoveryCodesHost({ children }: { children: ReactNode }) {
-  const [change, setChange] = useState<Change | null>(null);
+  const client = useQueryClient();
+  const identity = identityOf(useCachedSession());
+  const [shown, setShown] = useState<{ change: Change; identity: string } | null>(null);
+  useEffect(() => {
+    setShown((held) => (held && held.identity !== identity ? null : held));
+  }, [identity]);
+  const show = useCallback(
+    (change: Change) => setShown({ change, identity: identityOf(currentSession(client)) }),
+    [client],
+  );
+  const visible = shown && shown.identity === identity ? shown.change : null;
   return (
-    <ShowCodes value={setChange}>
+    <ShowCodes value={show}>
       {children}
-      {change ? <RecoveryCodes change={change} onClose={() => setChange(null)} /> : null}
+      {visible ? <RecoveryCodes change={visible} onClose={() => setShown(null)} /> : null}
     </ShowCodes>
   );
 }
@@ -62,6 +75,12 @@ function useShowCodes() {
     throw new Error("useShowCodes is used outside a RecoveryCodesHost");
   }
   return show;
+}
+
+// useShowRecoveryCodes shows the codes a factor change made, above the page, until the person says they have kept them.
+// A page that caused the change calls it; the dialog adopts the new session when it closes.
+export function useShowRecoveryCodes() {
+  return useShowCodes();
 }
 
 // Starting to enable asks for a new secret and opens the dialog that proves it; nothing is stored until it is proved.

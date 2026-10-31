@@ -1,8 +1,10 @@
 import type { Attempt, Sendable } from "@axiom/app";
 
 // An attempt kept for a form survives a reload, or the channel's return page: the key and the request go out again
-// unchanged, so the server replays what was done instead of doing it twice. Nothing kept here is a secret, and a
-// browser that refuses sessionStorage only loses it.
+// unchanged, so the server replays what was done instead of doing it twice. This store writes the whole request, so it is
+// only for a form whose body holds no secret, such as a refund or a top-up: a form whose body is a credential keeps its
+// unanswered key alone and asks for the credential again (web/console/src/redeem.ts). Nothing kept here is a secret, and
+// a browser that refuses sessionStorage only loses it.
 
 // readAttempt reads the attempt stored under the key, or null when there is none or it is not one a person could have
 // sent: a form then starts over rather than retrying something it cannot describe.

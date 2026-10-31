@@ -100,29 +100,30 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, r *http.Request,
 }
 
 // FinishPasskeyRegistration verifies the attested credential, stores it, raises the factor version (every other
-// session ends) and issues this browser a session that has passed the second factor.
-func (s *Service) FinishPasskeyRegistration(ctx context.Context, r *http.Request, p Principal, flowID string, ip netip.Addr, userAgent string) (Passkey, Issued, error) {
+// session ends) and issues this browser a session that has passed the second factor, with new recovery codes when TOTP
+// is on.
+func (s *Service) FinishPasskeyRegistration(ctx context.Context, r *http.Request, p Principal, flowID string, ip netip.Addr, userAgent string) (Passkey, Issued, []string, error) {
 	site, _, err := s.passkeySite(r.Host)
 	if err != nil {
-		return Passkey{}, Issued{}, err
+		return Passkey{}, Issued{}, nil, err
 	}
 	flow, err := s.consumeWebAuthnFlow(ctx, site, flowID, "register", p)
 	if err != nil {
-		return Passkey{}, Issued{}, err
+		return Passkey{}, Issued{}, nil, err
 	}
 	user, err := s.accountPasskeyUser(ctx, p.account, p.user)
 	if err != nil {
-		return Passkey{}, Issued{}, err
+		return Passkey{}, Issued{}, nil, err
 	}
 	passkey, credential, transports, err := s.verifyPasskeyRegistration(site, flow, user, r)
 	if err != nil {
-		return Passkey{}, Issued{}, err
+		return Passkey{}, Issued{}, nil, err
 	}
-	issued, err := s.storePasskey(ctx, p, site, flow, passkey, credential, transports, ip, userAgent)
+	issued, codes, err := s.storePasskey(ctx, p, site, flow, passkey, credential, transports, ip, userAgent)
 	if err != nil {
-		return Passkey{}, Issued{}, err
+		return Passkey{}, Issued{}, nil, err
 	}
-	return passkey, issued, nil
+	return passkey, issued, codes, nil
 }
 
 // verifyPasskeyRegistration checks the attestation against the relying party the ceremony began with, not the snapshot
@@ -154,8 +155,9 @@ func (s *Service) verifyPasskeyRegistration(site Site, flow FindWebAuthnFlowRow,
 }
 
 // storePasskey rechecks the site under its lock, stores the credential and issues the verified session.
-func (s *Service) storePasskey(ctx context.Context, p Principal, site Site, flow FindWebAuthnFlowRow, passkey Passkey, credential *webauthn.Credential, transports []string, ip netip.Addr, userAgent string) (Issued, error) {
+func (s *Service) storePasskey(ctx context.Context, p Principal, site Site, flow FindWebAuthnFlowRow, passkey Passkey, credential *webauthn.Credential, transports []string, ip netip.Addr, userAgent string) (Issued, []string, error) {
 	var issued Issued
+	var codes []string
 	err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
 		if err := s.passkeySiteHeld(ctx, tx, site, flow); err != nil {
 			return err
@@ -164,17 +166,13 @@ func (s *Service) storePasskey(ctx context.Context, p Principal, site Site, flow
 		if err != nil {
 			return err
 		}
-		added, err := s.addPasskey(ctx, tx, p, site, passkey, credential, transports, locked, ip, userAgent)
-		if err != nil {
-			return err
-		}
-		issued = added
-		return nil
+		issued, codes, err = s.addPasskey(ctx, tx, p, site, passkey, credential, transports, locked, ip, userAgent)
+		return err
 	})
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
-	return issued, nil
+	return issued, codes, nil
 }
 
 // passkeySiteHeld refuses a credential when the site moved off the relying party the ceremony was begun for: a
@@ -197,16 +195,17 @@ func (s *Service) passkeySiteHeld(ctx context.Context, tx pg.Tx, site Site, flow
 	return nil
 }
 
-// addPasskey inserts the credential under the user's lock, raises the factor version and issues the verified session.
-func (s *Service) addPasskey(ctx context.Context, tx pg.Tx, p Principal, site Site, passkey Passkey, credential *webauthn.Credential, transports []string, locked LockUserRow, ip netip.Addr, userAgent string) (Issued, error) {
+// addPasskey inserts the credential under the user's lock and finishes the change: the factor version rises and the
+// verified session, with new recovery codes when TOTP is on, is issued.
+func (s *Service) addPasskey(ctx context.Context, tx pg.Tx, p Principal, site Site, passkey Passkey, credential *webauthn.Credential, transports []string, locked LockUserRow, ip netip.Addr, userAgent string) (Issued, []string, error) {
 	// The count at begin is a fast refusal; this one is under the user's lock, so two ceremonies that began together
 	// cannot leave the user with more than the bound.
 	count, err := s.queries.CountPasskeys(ctx, tx, uuid.UUID(p.user))
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
 	if count >= maxPasskeysPerUser {
-		return Issued{}, ErrTooManyPasskeys
+		return Issued{}, nil, ErrTooManyPasskeys
 	}
 	if err := s.queries.InsertPasskeyCredential(ctx, tx, InsertPasskeyCredentialParams{
 		ID: uuid.UUID(passkey.ID), SiteID: uuid.UUID(site.ID), AccountID: uuid.UUID(p.account), UserID: uuid.UUID(p.user),
@@ -215,28 +214,28 @@ func (s *Service) addPasskey(ctx context.Context, tx pg.Tx, p Principal, site Si
 		Name: passkey.Name,
 	}); err != nil {
 		if _, duplicate := pg.Duplicate(err); duplicate {
-			return Issued{}, ErrPasskeyFailed
+			return Issued{}, nil, ErrPasskeyFailed
 		}
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
-	if err := s.queries.BumpFactorVersion(ctx, tx, uuid.UUID(p.user)); err != nil {
-		return Issued{}, err
-	}
-	issued, err := s.issue(ctx, tx, newSession{
-		user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: site, surface: Console, level: levelMFA,
-		factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
+	issued, codes, err := s.finishFactorChange(ctx, tx, locked, factorFinish{
+		session: newSession{
+			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: site, surface: Console, level: levelMFA,
+			ip: ip, userAgent: userAgent,
+		},
+		totpOn: locked.Mfa,
 	})
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
 	if err := audit.Record(ctx, tx, audit.Event{
 		Actor: audit.User(uuid.UUID(p.user)), Action: "user.passkey_add",
 		Target: audit.Target{Module: "accounts", Kind: "user", ID: p.user.TypeID(), Site: uuid.UUID(site.ID), Account: uuid.UUID(p.account)},
 		Detail: map[string]any{"passkey_id": passkey.ID.TypeID()},
 	}); err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
-	return issued, nil
+	return issued, codes, nil
 }
 
 // BeginPasskeySignIn starts a discoverable sign-in. The credential carries the user handle, so no email is asked for
@@ -439,15 +438,16 @@ func (s *Service) passkeyMFAVerified(ctx context.Context, p Principal, site Site
 }
 
 // DeletePasskey removes a credential. The current password is required; the factor version rises, every other session
-// ends, and this browser gets a new session with the level it had.
-func (s *Service) DeletePasskey(ctx context.Context, p Principal, id PasskeyID, password string, ip netip.Addr, userAgent string) (Issued, error) {
+// ends, and this browser gets a new session with the level it had and, with TOTP on, new recovery codes.
+func (s *Service) DeletePasskey(ctx context.Context, p Principal, id PasskeyID, password string, ip netip.Addr, userAgent string) (Issued, []string, error) {
 	if err := s.checkPasswordForChange(ctx, p, password); err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
 	if err := s.requireVerifiedForChange(ctx, p); err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
 	var issued Issued
+	var codes []string
 	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
 		locked, err := s.lockUser(ctx, tx, uuid.UUID(p.user), p.factorVersion)
 		if err != nil {
@@ -460,12 +460,12 @@ func (s *Service) DeletePasskey(ctx context.Context, p Principal, id PasskeyID, 
 		if removed != 1 {
 			return ErrNotFound
 		}
-		if err := s.queries.BumpFactorVersion(ctx, tx, uuid.UUID(p.user)); err != nil {
-			return err
-		}
-		issued, err = s.issue(ctx, tx, newSession{
-			user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: s.snapshot.Load().sites[p.site], surface: p.surface,
-			level: resumedLevel(p), factorVersion: locked.FactorVersion + 1, ip: ip, userAgent: userAgent,
+		issued, codes, err = s.finishFactorChange(ctx, tx, locked, factorFinish{
+			session: newSession{
+				user: uuid.UUID(p.user), account: uuid.UUID(p.account), site: s.snapshot.Load().sites[p.site],
+				surface: p.surface, level: resumedLevel(p), ip: ip, userAgent: userAgent,
+			},
+			totpOn: locked.Mfa,
 		})
 		if err != nil {
 			return err
@@ -477,9 +477,9 @@ func (s *Service) DeletePasskey(ctx context.Context, p Principal, id PasskeyID, 
 		})
 	})
 	if err != nil {
-		return Issued{}, err
+		return Issued{}, nil, err
 	}
-	return issued, nil
+	return issued, codes, nil
 }
 
 // checkPasswordForChange spends the same per-user failure budget as password changes and TOTP: a signed-in page must

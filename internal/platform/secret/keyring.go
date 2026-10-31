@@ -10,11 +10,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	"axiom/internal/platform/privfile"
 )
 
 const keyFileVariable = "AXIOM_MASTER_KEY_FILE"
@@ -178,33 +179,29 @@ func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {
 }
 
 // readKeyFileWith is readKeyFile with the open as a parameter. A test uses it to put another file at the path at the one
-// moment that matters, between the checks and the read, instead of racing a goroutine against a sleep: the ordering that
-// keeps a replaced file from being read is then proven every run, and restoring the broken order fails every run.
-func readKeyFileWith(variable, path string, open func(string) (*os.File, error)) (map[uint32][32]byte, uint32, error) {
+// moment that matters, the open, instead of racing a goroutine against a sleep: the ordering that keeps a replaced file
+// from being read is then proven every run, and restoring the broken order fails every run.
+func readKeyFileWith(variable, path string, open privfile.Opener) (map[uint32][32]byte, uint32, error) {
 	if path == "" {
 		return nil, 0, fmt.Errorf("%s: required", variable)
 	}
-	file, err := open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
+	// Type and mode come from the open descriptor, which is also what gets read: a path replaced before the open must
+	// not let a file the checks never saw be the one that decides the keys.
+	file, err := privfile.Open(path, open)
 	if err != nil {
+		if errors.Is(err, privfile.ErrNotRegular) || errors.Is(err, privfile.ErrPermissions) {
+			return nil, 0, fmt.Errorf("%s: %w", variable, err)
+		}
 		return nil, 0, fileError(variable, "open", err)
 	}
 	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
-	// The opened file is what gets read, so its own mode is what the rule checks: a path replaced between a check and
-	// the open must not decide which file's permissions were checked. Type and mode both come from the descriptor.
+	// The path must still be that same file and not a link to one: whoever can point the variable at a link picks the
+	// key the node seals under, while the deployment keeps its own file private, and the writer refuses to replace a
+	// link for the same reason.
 	info, err := file.Stat()
 	if err != nil {
 		return nil, 0, fileError(variable, "stat", err)
 	}
-	if !info.Mode().IsRegular() {
-		return nil, 0, fmt.Errorf("%s: want a regular file", variable)
-	}
-	// Windows mode bits cannot express NTFS ACLs; deployment must restrict the file's ACL instead.
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return nil, 0, fmt.Errorf("%s: permissions must deny all group and other access", variable)
-	}
-	// The path must still be that same file and not a link to one: whoever can point the variable at a link picks the
-	// key the node seals under, while the deployment keeps its own file private, and the writer refuses to replace a
-	// link for the same reason.
 	at, err := os.Lstat(path)
 	if err != nil {
 		return nil, 0, fileError(variable, "stat", err)

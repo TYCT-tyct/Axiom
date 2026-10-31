@@ -238,7 +238,7 @@ func registerPasskeyForTest(t *testing.T, x site, s *accounts.Service, auth *sof
 		t.Fatalf("registration resident key = %q, want required", got)
 	}
 	evidence := auth.register(t, registration.PublicKey)
-	passkey, issued, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test")
+	passkey, issued, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test")
 	if err != nil {
 		fatalPasskey(t, err)
 	}
@@ -249,10 +249,10 @@ func registerPasskeyForTest(t *testing.T, x site, s *accounts.Service, auth *sof
 		t.Errorf("passkeys: %v", got)
 	}
 	// An unknown or already spent flow is a refused ceremony, not a panic or a second grant.
-	if _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, uuid.NewV7().String(), client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+	if _, _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, uuid.NewV7().String(), client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("registration with an unknown flow: %v", err)
 	}
-	if _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+	if _, _, _, err := s.FinishPasskeyRegistration(t.Context(), passkeyRequest(t, evidence), p, registration.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("registration with a spent flow: %v", err)
 	}
 	return passkey
@@ -354,7 +354,7 @@ func assertDiscoverableSignIn(t *testing.T, x site, s *accounts.Service, auth *s
 	if err != nil || signedIn.Pending {
 		t.Fatalf("discoverable sign-in: %+v %v", signedIn, err)
 	}
-	if p, err := s.Authenticate(t.Context(), cookieRequest(t, s, console, signedIn), client); err != nil || p.UserID() != x.user {
+	if p, err := s.Authenticate(t.Context(), cookieRequest(t, s, signedIn), client); err != nil || p.UserID() != x.user {
 		t.Errorf("the session is the passkey's user: %v %v", p, err)
 	}
 	if _, err := s.FinishPasskeySignIn(t.Context(), passkeyRequest(t, auth.assert(t, challenge.PublicKey)), challenge.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
@@ -416,7 +416,7 @@ func removePasskey(t *testing.T, x site, s *accounts.Service, verified accounts.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DeletePasskey(t.Context(), verifiedPrincipal, passkey.ID, password, client, "test"); err != nil {
+	if _, _, err := s.DeletePasskey(t.Context(), verifiedPrincipal, passkey.ID, password, client, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM accounts.passkey_credentials"); got[0] != "0" {

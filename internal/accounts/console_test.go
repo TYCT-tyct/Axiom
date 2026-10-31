@@ -302,9 +302,17 @@ func TestCodesRunOutAndRenew(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, renewed, err := x.s.RegenerateRecoveryCodes(t.Context(), p, accounts.FactorChange{Code: accounts.TOTPCode(key, x.clock.Now())})
+	renewedSession, renewed, err := x.s.RegenerateRecoveryCodes(t.Context(), p, accounts.FactorChange{Code: accounts.TOTPCode(key, x.clock.Now())})
 	if err != nil || len(renewed) != 10 {
 		t.Fatalf("new recovery codes: %v", err)
+	}
+	// The session the change issues must be the one the new version names, or it is dead on arrival and the codes it
+	// came with cannot be used either.
+	if _, err := x.principal(t, console, renewedSession); err != nil {
+		t.Fatalf("the session of the change: %v", err)
+	}
+	if _, err := x.verify(t, console, x.signIn(t, console), renewed[0]); err != nil {
+		t.Fatalf("a renewed recovery code: %v", err)
 	}
 	if _, err := x.verify(t, console, x.signIn(t, console), codes[2]); !errors.Is(err, accounts.ErrBadCode) {
 		t.Errorf("an old recovery code: %v", err)

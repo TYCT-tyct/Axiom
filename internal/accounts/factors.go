@@ -2,6 +2,9 @@ package accounts
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
@@ -315,14 +318,13 @@ func (s *Service) regenerateRecoveryCodes(ctx context.Context, p Principal, c Fa
 		if changed, err := s.queries.AdvanceTOTP(ctx, tx, AdvanceTOTPParams{Step: step, ID: user}); err != nil || changed != 1 {
 			return errors.Join(err, ErrBadCode)
 		}
-		return s.queries.BumpFactorVersion(ctx, tx, user)
+		return nil
 	})
 }
 
-// changeFactors locks p's user, refuses factors changed since p's session, runs change, which raises the factor
-// version, then stores new recovery codes, issues a two-step-verified session under the new version and records
-// action in the audit log, all in one transaction: no change without its entry. The entry names the user, never a
-// secret or a code.
+// changeFactors locks p's user, refuses factors changed since p's session, runs change and finishes the change with
+// a two-step-verified session and new recovery codes, all in one transaction. It records action in the audit log in the
+// same transaction: no change without its entry, and the entry names the user, never a secret or a code.
 func (s *Service) changeFactors(ctx context.Context, p Principal, c FactorChange, action string, change func(pg.Tx, LockUserRow) error) (Issued, []string, error) {
 	user, account := uuid.UUID(p.user), uuid.UUID(p.account)
 	var codes []string
@@ -335,14 +337,14 @@ func (s *Service) changeFactors(ctx context.Context, p Principal, c FactorChange
 		if err := change(tx, locked); err != nil {
 			return err
 		}
-		version := locked.FactorVersion + 1
-		codes, err = s.insertRecoveryCodes(ctx, tx, user, account, locked.SiteID, version)
-		if err != nil {
-			return err
-		}
-		if issued, err = s.issue(ctx, tx, newSession{
-			user: user, account: account, site: s.snapshot.Load().sites[p.site], surface: p.surface, level: levelMFA,
-			factorVersion: version, ip: c.ClientIP, userAgent: c.UserAgent,
+		// Every caller of changeFactors made two-step verification on: enabling makes it on, and replacing or
+		// regenerating needs it already on.
+		if issued, codes, err = s.finishFactorChange(ctx, tx, locked, factorFinish{
+			session: newSession{
+				user: user, account: account, site: s.snapshot.Load().sites[p.site], surface: p.surface,
+				level: levelMFA, ip: c.ClientIP, userAgent: c.UserAgent,
+			},
+			totpOn: true,
 		}); err != nil {
 			return err
 		}
@@ -354,6 +356,134 @@ func (s *Service) changeFactors(ctx context.Context, p Principal, c FactorChange
 		return Issued{}, nil, err
 	}
 	return issued, codes, nil
+}
+
+// factorFinish is how a factor change ends.
+type factorFinish struct {
+	// session is the replacement session to issue; its factor version is the one the change made.
+	session newSession
+	// totpOn says the user has TOTP after the change, so new recovery codes are made. It is not locked.Mfa: enabling
+	// TOTP turns it on in this change.
+	totpOn bool
+	// sealOnSession keeps the codes on the new session, encrypted under its token, for the console to read once: a
+	// provider link answers with a redirect and cannot carry them. Unread codes die with the session.
+	sealOnSession bool
+}
+
+// finishFactorChange ends a factor change under the user's lock: it raises the factor version, makes new recovery
+// codes when TOTP is on, and issues the replacement session with the new version. The version bump stops every other
+// session and every old recovery code, so the codes returned here are the only ones that work. Every path that ends
+// such a change goes through this function — TOTP enable, replace and regenerate, password change, provider link and
+// unlink, passkey add and remove — so none can leave the user with codes the bump stopped and no replacements.
+func (s *Service) finishFactorChange(ctx context.Context, tx pg.Tx, locked LockUserRow, f factorFinish) (Issued, []string, error) {
+	if err := s.queries.BumpFactorVersion(ctx, tx, f.session.user); err != nil {
+		return Issued{}, nil, err
+	}
+	f.session.factorVersion = locked.FactorVersion + 1
+	var codes []string
+	var err error
+	if f.totpOn {
+		codes, err = s.insertRecoveryCodes(ctx, tx, f.session.user, f.session.account, uuid.UUID(f.session.site.ID), f.session.factorVersion)
+		if err != nil {
+			return Issued{}, nil, err
+		}
+	}
+	issued, err := s.issue(ctx, tx, f.session)
+	if err != nil {
+		return Issued{}, nil, err
+	}
+	if f.sealOnSession && len(codes) > 0 {
+		ciphertext, nonce, err := sealRecoveryCodes(issued.Token, issued.session, codes)
+		if err != nil {
+			return Issued{}, nil, err
+		}
+		if err := s.queries.SetSessionRecoveryCodes(ctx, tx, SetSessionRecoveryCodesParams{
+			ID: issued.session, Ciphertext: ciphertext, Nonce: nonce,
+		}); err != nil {
+			return Issued{}, nil, err
+		}
+	}
+	return issued, codes, nil
+}
+
+// recoveryCodesKey derives the key the codes a redirect cannot return are encrypted under, from the session token the
+// browser holds: the row keeps ciphertext the database alone cannot open, and no key-ring key is referenced, so the
+// codes are nothing to rewrap or retire. The associated data binds them to the session row.
+func recoveryCodesKey(token string, session uuid.UUID) (cipher.AEAD, []byte, error) {
+	mac := hmac.New(sha256.New, []byte(token))
+	mac.Write([]byte("axiom/accounts/recovery-codes/v1"))
+	block, err := aes.NewCipher(mac.Sum(nil))
+	if err != nil {
+		return nil, nil, fmt.Errorf("derive the recovery-code key: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, nil, fmt.Errorf("make the recovery-code cipher: %w", err)
+	}
+	return aead, []byte("accounts.sessions/" + session.String() + "/recovery_codes"), nil
+}
+
+func sealRecoveryCodes(token string, session uuid.UUID, codes []string) (ciphertext, nonce []byte, err error) {
+	aead, aad, err := recoveryCodesKey(token, session)
+	if err != nil {
+		return nil, nil, err
+	}
+	nonce = make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, nil, fmt.Errorf("make a recovery-code nonce: %w", err)
+	}
+	return aead.Seal(nil, nonce, []byte(strings.Join(codes, "\n")), aad), nonce, nil
+}
+
+func openRecoveryCodes(token string, session uuid.UUID, ciphertext, nonce []byte) ([]string, error) {
+	aead, aad, err := recoveryCodesKey(token, session)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := aead.Open(nil, nonce, ciphertext, aad)
+	if err != nil {
+		return nil, fmt.Errorf("open the recovery codes left for the session: %w", err)
+	}
+	return strings.Split(string(opened), "\n"), nil
+}
+
+// TakePendingRecoveryCodes returns the new codes a link left on p's session and clears them in the same transaction,
+// so only the first call gets them. None when the session has none, including when another call already took them.
+// The request is what holds the session token the codes are encrypted under; a token that does not open them means
+// the row is not this session's and is refused, not shown.
+func (s *Service) TakePendingRecoveryCodes(ctx context.Context, r *http.Request, p Principal) ([]string, error) {
+	if p.user == (UserID{}) || p.session == (SessionID{}) || p.Pending() {
+		return nil, ErrNoSession
+	}
+	d, _, err := s.domain(r.Host)
+	if err != nil {
+		return nil, err
+	}
+	token, err := sessionToken(r, d)
+	if err != nil {
+		return nil, err
+	}
+	var codes []string
+	err = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+		row, err := s.queries.LockSessionRecoveryCodes(ctx, tx, uuid.UUID(p.session))
+		if errors.Is(err, pg.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if codes, err = openRecoveryCodes(token, uuid.UUID(p.session), row.RecoveryCodesCiphertext, row.RecoveryCodesNonce); err != nil {
+			return err
+		}
+		return s.queries.ClearSessionRecoveryCodes(ctx, tx, uuid.UUID(p.session))
+	})
+	if err != nil {
+		return nil, err
+	}
+	if codes == nil {
+		codes = []string{}
+	}
+	return codes, nil
 }
 
 // checkPassword checks password against p's user's, outside any transaction that holds a lock.

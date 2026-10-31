@@ -109,7 +109,10 @@ export default {
     resend: "Send again",
     restart: "Use another code",
     unknown: "The answer did not arrive. Send the same code again with this button; it cannot be redeemed twice.",
-    reused: "The server holds this request under another code. Enter the code again.",
+    unknownAgain:
+      "The answer to the earlier attempt did not arrive. Enter the same code again: it goes out under the same key, so it cannot be redeemed twice.",
+    reused:
+      "The server holds this attempt’s key for a different code, so nothing was sent. Start again with your code.",
     missing: "Enter a code.",
     tooLong: "A code is at most 64 characters.",
     forbidden: "Your role cannot redeem codes. Ask an admin of the workspace.",
@@ -485,6 +488,11 @@ export default {
       link: "Link",
       unlink: "Unlink",
       providers: { github: "GitHub", google: "Google", linuxdo: "LinuxDo" },
+    },
+    pendingCodes: {
+      failed: "The new recovery codes could not be fetched. If that keeps happening, make new ones below.",
+      retry: "Try again",
+      regenerate: "Make new codes",
     },
     oauth: {
       identity_linked: "That provider account is already linked to a different user.",

@@ -183,14 +183,14 @@ func callback(t *testing.T, s *accounts.Service, state, nonce string, issued *ac
 	return r
 }
 
-// cookieRequest is a GET carrying issued's session cookie, to authenticate what a callback issued.
-func cookieRequest(t *testing.T, s *accounts.Service, host string, issued accounts.Issued) *http.Request {
+// cookieRequest is a console GET carrying issued's session cookie, to authenticate what a callback issued.
+func cookieRequest(t *testing.T, s *accounts.Service, issued accounts.Issued) *http.Request {
 	t.Helper()
-	cookie, err := s.Cookie(host, issued)
+	cookie, err := s.Cookie(console, issued)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+host+"/", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+console+"/", nil)
 	r.AddCookie(cookie)
 	return r
 }
@@ -252,7 +252,7 @@ func linkFirstIdentity(t *testing.T, f oauthFixture) {
 	if got := texts(t, f.x.db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'user.identity_link'"); got[0] != "1" {
 		t.Errorf("link audits: %v", got)
 	}
-	if p, err := f.s.Authenticate(t.Context(), cookieRequest(t, f.s, console, *out.Issued), client); err != nil || p.UserID() != f.x.user {
+	if p, err := f.s.Authenticate(t.Context(), cookieRequest(t, f.s, *out.Issued), client); err != nil || p.UserID() != f.x.user {
 		t.Errorf("the session is the linked user's: %v %v", p, err)
 	}
 }
@@ -291,7 +291,7 @@ func assertSignsInBySubject(t *testing.T, f oauthFixture) {
 	if err != nil || out.Issued == nil || out.Issued.Pending {
 		t.Fatalf("sign-in: %+v %v", out, err)
 	}
-	if p, err := f.s.Authenticate(t.Context(), cookieRequest(t, f.s, console, *out.Issued), client); err != nil || p.UserID() != f.x.user {
+	if p, err := f.s.Authenticate(t.Context(), cookieRequest(t, f.s, *out.Issued), client); err != nil || p.UserID() != f.x.user {
 		t.Errorf("the session is the linked user's: %v %v", p, err)
 	}
 }
