@@ -8,9 +8,10 @@ import (
 	"testing"
 )
 
-// The samples in testdata are trimmed copies of LiteLLM's model_prices_and_context_window.json (BerriAI/litellm, main)
-// and OpenRouter's /api/v1/models, both fetched 2026-10-15, with the entries of a few models and some invented
-// entries (named *-bad-*) whose numbers a parser must refuse.
+// The dataset samples in testdata are trimmed copies of LiteLLM's model_prices_and_context_window.json (BerriAI/litellm,
+// main) and OpenRouter's /api/v1/models, both fetched 2026-10-15, with the entries of a few models and some invented
+// entries (named *-bad-*) whose numbers a parser must refuse. testdata/pages holds trimmed vendor price pages fetched
+// 2026-10-31 for the page-extraction tests.
 //
 //go:embed testdata
 var samples embed.FS

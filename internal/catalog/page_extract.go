@@ -8,7 +8,13 @@ import (
 	"golang.org/x/net/html"
 )
 
-const pageExtractorVersion = 1
+// The version keys stored snapshots: raising it keeps text extracted the old way from being compared with text extracted
+// the new way, which would look like every page changed at once.
+const pageExtractorVersion = 2
+
+// zeroWidth is what rendering engines hide inside a word: Docusaurus puts one after a heading to anchor a link, and it is
+// not content, so keeping it would change a page's hash when only the anchor moved.
+var zeroWidth = strings.NewReplacer("\u200b", "", "\u200c", "", "\u200d", "", "\ufeff", "")
 
 // Layout whitespace and scripts must not change price evidence; table cells still need a word boundary.
 func extractPriceSection(body []byte, start, end string) (string, error) {
@@ -78,7 +84,7 @@ func normalizedPriceDocument(body []byte) (string, error) {
 	}
 	var text strings.Builder
 	appendPriceText(&text, priceDocumentRoot(root))
-	return strings.Join(strings.Fields(text.String()), " "), nil
+	return strings.Join(strings.Fields(zeroWidth.Replace(text.String())), " "), nil
 }
 
 func skipPriceNode(n *html.Node) bool {
@@ -97,6 +103,12 @@ func skipPriceNode(n *html.Node) bool {
 	return false
 }
 
+func appendWordBoundary(text *strings.Builder) {
+	if s := text.String(); s != "" && s[len(s)-1] != ' ' {
+		text.WriteByte(' ')
+	}
+}
+
 func appendPriceText(text *strings.Builder, n *html.Node) {
 	if skipPriceNode(n) {
 		return
@@ -105,6 +117,12 @@ func appendPriceText(text *strings.Builder, n *html.Node) {
 		text.WriteString(n.Data)
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		// Adjacent elements are separate runs even when both tags are inline: a flex column stacks a model's name over
+		// its description, and a display:block span puts a price's qualifier on its own line. Merging them would turn
+		// "Claude Sonnet 5.5The best…" and "$0.10 / MTokfor prompts…" into evidence a reviewer has to guess at.
+		if c.Type == html.ElementNode && c.PrevSibling != nil && c.PrevSibling.Type == html.ElementNode {
+			appendWordBoundary(text)
+		}
 		appendPriceText(text, c)
 	}
 	if n.Type == html.ElementNode {

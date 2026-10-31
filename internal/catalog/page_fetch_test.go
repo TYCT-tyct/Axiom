@@ -45,6 +45,36 @@ func TestPageExtractionIgnoresLayoutAndRejectsAmbiguity(t *testing.T) {
 	}
 }
 
+// TestRecordedPricePagesSeparateTextRuns: a vendor lays a table cell out with a flex column or a display:block span, so inline
+// tags the browser stacks must not merge into one word; and a heading's anchor zero-width space is not content. The
+// fixtures are trimmed from the pages the 2026-10-31 acceptance run fetched (docs/domains/catalog.md「官方页面监测的落地边界（#281）」).
+func TestRecordedPricePagesSeparateTextRuns(t *testing.T) {
+	for _, tc := range []struct{ name, file, start, end, want string }{
+		{
+			name:  "anthropic",
+			file:  "pages/anthropic-pricing.html",
+			start: "Pricing", end: "Cloud platform pricing",
+			want: "Model Input Claude Fable 5.1 For demanding reasoning and long-horizon agentic work $10 / MTok $0.10 / MTok for prompts up to 100,000 tokens Claude Haiku 5.5 For high-volume, latency-sensitive tasks $0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok",
+		},
+		{
+			name:  "deepseek",
+			file:  "pages/deepseek-pricing.html",
+			start: "Model Details", end: "Search & Fetch Pricing",
+			want: "MODEL deepseek-flash deepseek-v4-pro MODEL VERSION DeepSeek-V4.1-Flash-1017 DeepSeek-V4-Pro-0813 1M OUTPUT TOKENS OFF-PEAK $0.6 PEAK $1.2 OFF-PEAK $1.98 PEAK $3.96",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := extractPriceSection(sample(t, tc.file), tc.start, tc.end)
+			if err != nil || got != tc.want {
+				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
+			}
+			if strings.ContainsRune(got, '\u200b') {
+				t.Fatal("a zero-width space reached the evidence")
+			}
+		})
+	}
+}
+
 func TestPageFetchRespectsRobotsLimitsAndRedirects(t *testing.T) {
 	for _, tc := range []pageFetchCase{
 		{name: "allow and crawl delay", robots: "User-agent: *\nDisallow: /private\nUser-agent: Axiom\nDisallow: /\nAllow: /price\nCrawl-delay: 12", wantPage: true},
