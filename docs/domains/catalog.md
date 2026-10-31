@@ -172,11 +172,11 @@
 |---|---|---|---|---|
 | OpenAI | `https://openai.com/api/pricing/` | 200，`Allow: /`（另禁 `/microsoft-for-startups/`） | **403**（拦截页 9,662 B） | 无 |
 | Anthropic | `https://platform.claude.com/docs/en/about-claude/pricing` | 200，`Disallow: /api/` | 200，1,307,125 B | 2,386 B，sha256 `5a3c20c9…` |
-| Google | `https://ai.google.dev/gemini-api/docs/pricing` | 200，`Disallow: /*?*authuser=` | 200，261,792 B | 57,614 B，sha256 `da30336e…` |
+| Google | `https://ai.google.dev/gemini-api/docs/pricing` | 200，`Disallow: /*?*authuser=` | 200，261,792 B | 57,627 B，sha256 `25100a50…` |
 | DeepSeek USD | `https://api-docs.deepseek.com/quick_start/pricing/` | 200，但返回文档首页 HTML（`text/html`，无 robots 指令） | 200，27,815 B | 1,636 B，sha256 `752d5c0c…` |
 | DeepSeek CNY | `https://api-docs.deepseek.com/zh-cn/quick_start/pricing/` | 同站，同上 | 200，27,987 B | 1,670 B，sha256 `7a04e595…` |
 
-运行时保存的原始响应 sha256：OpenAI `7fec3897…`、Anthropic `9de88a38…`、Google `41919361…`、DeepSeek USD `57941235…`、DeepSeek CNY `ed99e49b…`。抽取正文的 hash 是本 PR 修复抽取器后对同一份保存的响应重算的；修复前的运行 hash 见 PR。
+运行时保存的原始响应 sha256：OpenAI `7fec3897…`、Anthropic `9de88a38…`、Google `41919361…`、DeepSeek USD `57941235…`、DeepSeek CNY `ed99e49b…`。抽取正文的 hash 是最终抽取器对同一份保存的响应重算的；修复前的运行 hash 见 PR。
 
 USD 表用 USD / 百万 token，DeepSeek CNY 表用人民币 / 百万 token；“读”是缓存命中，“写 5m”“写 1h”是缓存写入的两种保留时间；“—”表示页面没有该项。
 
@@ -244,7 +244,7 @@ USD 表用 USD / 百万 token，DeepSeek CNY 表用人民币 / 百万 token；�
 | `anthropic/claude-haiku-5.5` | ≤100k 0.10 / 0.50 / 0.01；>100k 0.50 / 2.50 / 0.05 | 只有基础档 | 基础档 + `overrides`，数值与页面一致 | OpenRouter 能表达分档但按设计 held（数据集的阈值依据未写明）；LiteLLM 没有分档，当前价目表有分档时也不能跟随 |
 | 12 个 Google 条目（本页 7 个） | — | 没有 `cache_write` | `input_cache_write` 有 16 位小数，如 `0.0000000416666666666667` | 按[模块说明](../../internal/catalog/README.md#参考价的录入)拒绝整条，不能作为这些模型的来源 |
 
-运行暴露的抽取问题：Anthropic 把模型名和说明放在相邻的内联标签里，CSS 的 flex 列把它们排成两行；DeepSeek 的标题锚点带 U+200B。旧抽取把前者粘成 `Claude Fable 5.1For…`、`$0.10 / MTokfor…`，并把后者留在正文。本 PR 在相邻元素之间补词边界、归一化时去掉零宽字符，`pageExtractorVersion` 升到 2；`TestRecordedPricePagesSeparateTextRuns` 用两段裁剪过的页面复现，固定修复后的逐字正文。对同一份保存的响应，修复只多出这些空格和去掉的零宽字符（Anthropic 6 处、Google 2 处、DeepSeek USD 1 个），没有其他正文变化；CNY 页是在修复后取的，没有修复前的对照。
+运行暴露的抽取问题：Anthropic 把模型名和说明放在相邻的内联标签里，CSS 的 flex 列把它们排成两行；DeepSeek 的标题锚点带 U+200B。旧抽取把前者粘成 `Claude Fable 5.1For…`、`$0.10 / MTokfor…`，并把后者留在正文。最终抽取按布局补边界：表格单元格、块标签、flex 列/网格、`display:block` 和图标前后留边界；`$0` + `.10`、`Pri` + `cing` 这类连续内联文本保持粘连；隐藏节点不贡献边界。`pageExtractorVersion` 为 2，`TestRecordedPricePagesSeparateTextRuns` 用两段裁剪过的页面固定逐字正文，另有 `$0.10`、`Pricing`、隐藏节点、flex/block/icon 和版本升级的回归测试。对同一份保存的响应重算：Anthropic 6 处空格、DeepSeek USD 1 个零宽字符、Google 14 个图标后的空格并去掉 1 个脚注前的假空格（正文 57,614 → 57,627 B），没有其他正文变化；CNY 页是在修复后取的，没有修复前的对照。版本升级若新旧文本去掉空白和零宽后相同，不新建快照、不产生复核，保留当前证据和未处理复核；旧 worker 不能把当前指针移回，数据库触发器也拒绝当前指针回退到更低版本，真实内容变化仍按原基线复核。
 
 ## 待定问题
 

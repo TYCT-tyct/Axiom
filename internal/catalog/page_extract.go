@@ -8,13 +8,20 @@ import (
 	"golang.org/x/net/html"
 )
 
-// The version keys stored snapshots: raising it keeps text extracted the old way from being compared with text extracted
-// the new way, which would look like every page changed at once.
+// The version keys stored snapshots. An upgrade does not by itself create a change review: savePageContent keeps the
+// current snapshot when the new extractor sees the same words and numbers, and refuses writes from an older version.
 const pageExtractorVersion = 2
 
 // zeroWidth is what rendering engines hide inside a word: Docusaurus puts one after a heading to anchor a link, and it is
 // not content, so keeping it would change a page's hash when only the anchor moved.
 var zeroWidth = strings.NewReplacer("\u200b", "", "\u200c", "", "\u200d", "", "\ufeff", "")
+
+// samePageContent ignores layout whitespace and zero-width characters. The extractor upgrade changes only those, so an
+// upgrade that leaves the page's words and numbers unchanged is not a page change and keeps the current snapshot.
+func samePageContent(a, b string) bool {
+	fold := func(s string) string { return strings.Join(strings.Fields(zeroWidth.Replace(s)), "") }
+	return fold(a) == fold(b)
+}
 
 // Layout whitespace and scripts must not change price evidence; table cells still need a word boundary.
 func extractPriceSection(body []byte, start, end string) (string, error) {
@@ -109,6 +116,66 @@ func appendWordBoundary(text *strings.Builder) {
 	}
 }
 
+// separatesPriceText reports whether a node starts a new visual run. HTML block tags do; so do the layout classes these
+// price pages use for a block or a flex/grid container. Adjacent inline spans with no such marker stay one word:
+// "<span>$0</span><span>.10</span>" is "$0.10", and "<span>Pri</span><span>cing</span>" is "Pricing".
+func separatesPriceText(n *html.Node) bool {
+	if n.Type != html.ElementNode {
+		return false
+	}
+	switch n.Data {
+	case "address", "article", "aside", "blockquote", "br", "dd", "div", "dl", "dt", "fieldset", "figcaption",
+		"figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav",
+		"ol", "p", "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul":
+		return true
+	}
+	for _, a := range n.Attr {
+		switch a.Key {
+		case "class":
+			for _, class := range strings.Fields(a.Val) {
+				switch class {
+				case "block", "flex", "grid", "table", "list-item", "icon",
+					"material-icons", "material-icons-outlined", "material-symbols-outlined",
+					"material-symbols-rounded", "material-symbols-sharp":
+					return true
+				}
+			}
+		case "style":
+			style := strings.ToLower(strings.ReplaceAll(a.Val, " ", ""))
+			if strings.Contains(style, "display:block") || strings.Contains(style, "display:flex") ||
+				strings.Contains(style, "display:grid") || strings.Contains(style, "display:table") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stacksPriceChildren reports whether a node lays its children out on separate lines. A flex row does not; a flex
+// column and a grid do. The pages express this with utility classes or inline styles, so both are recognized.
+func stacksPriceChildren(n *html.Node) bool {
+	if n.Type != html.ElementNode {
+		return false
+	}
+	for _, a := range n.Attr {
+		switch a.Key {
+		case "class":
+			for _, class := range strings.Fields(a.Val) {
+				if class == "flex-col" || class == "flex-column" || class == "grid" {
+					return true
+				}
+			}
+		case "style":
+			style := strings.ToLower(strings.ReplaceAll(a.Val, " ", ""))
+			if strings.Contains(style, "display:grid") ||
+				strings.Contains(style, "display:flex") && strings.Contains(style, "flex-direction:column") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func appendPriceText(text *strings.Builder, n *html.Node) {
 	if skipPriceNode(n) {
 		return
@@ -116,19 +183,25 @@ func appendPriceText(text *strings.Builder, n *html.Node) {
 	if n.Type == html.TextNode {
 		text.WriteString(n.Data)
 	}
+	stacked := stacksPriceChildren(n)
+	seen := false
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		// Adjacent elements are separate runs even when both tags are inline: a flex column stacks a model's name over
-		// its description, and a display:block span puts a price's qualifier on its own line. Merging them would turn
-		// "Claude Sonnet 5.5The best…" and "$0.10 / MTokfor prompts…" into evidence a reviewer has to guess at.
-		if c.Type == html.ElementNode && c.PrevSibling != nil && c.PrevSibling.Type == html.ElementNode {
+		// A skipped node is invisible: it must not contribute a boundary between the text on either side of it.
+		if skipPriceNode(c) {
+			continue
+		}
+		if (stacked && seen) || (c.Type == html.ElementNode && separatesPriceText(c)) {
 			appendWordBoundary(text)
 		}
+		before := text.Len()
 		appendPriceText(text, c)
-	}
-	if n.Type == html.ElementNode {
-		switch n.Data {
-		case "td", "th", "tr", "table", "div", "p", "br", "li", "h1", "h2", "h3", "h4", "section", "article":
-			text.WriteByte(' ')
+		if c.Type == html.TextNode {
+			seen = seen || strings.TrimSpace(c.Data) != ""
+		} else {
+			seen = seen || text.Len() > before
 		}
+	}
+	if separatesPriceText(n) {
+		text.WriteByte(' ')
 	}
 }
