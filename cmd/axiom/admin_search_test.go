@@ -5,13 +5,14 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
 	"axiom/internal/observability"
 
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/jsonx"
 )
 
 func TestAdminSearchSeparatesSupportAndOperator(t *testing.T) {
@@ -28,11 +29,7 @@ func TestAdminSearchSeparatesSupportAndOperator(t *testing.T) {
  SELECT id,at,n,site_id,account_id,uuidv7(),uuidv7(),'official','direct','committed',at,at,0 FROM observability.call_log CROSS JOIN generate_series(1,2) n WHERE id='%s'`, request))
 	rec := f.do(http.MethodGet, "/calls?request_id="+request, "", as(support))
 	expectAdmin(t, "support search", rec, 200, "")
-	for _, hidden := range []string{"cost", "endpoint", "supplier", "route", "789"} {
-		if strings.Contains(rec.Body.String(), hidden) {
-			t.Fatalf("support leaked %s: %s", hidden, rec.Body.String())
-		}
-	}
+	checkSupportCall(t, rec.Body.Bytes())
 	var list adminapi.AdminCallList
 	decode(t, rec, &list)
 	if list.Data == nil || len(*list.Data) != 1 || (*list.Data)[0].Price.Amount != "9007199254740993" {
@@ -41,6 +38,70 @@ func TestAdminSearchSeparatesSupportAndOperator(t *testing.T) {
 	expectAdmin(t, "support cannot inspect", f.do(http.MethodGet, "/calls/"+request+"/trace", "", as(support)), 403, "")
 	expectAdmin(t, "support cannot read audit", f.do(http.MethodGet, "/audit", "", as(support)), 403, "")
 	checkOperatorSearch(t, f, owner, request)
+}
+
+// supportCallFields is what a support operator may see of one call: the summary's fields, never the operator's trace
+// with its cost, route, supplier and endpoint (api/admin.yaml「AdminCallSummary」).
+var supportCallFields = []string{"account_id", "at", "error_kind", "id", "latency_ms", "model", "price", "site_id"}
+
+// supportCallLeak returns the field of the support list's one call that support may not see, or "" when the call
+// carries only the summary's fields. It reads the decoded field names rather than the response text: a site or account
+// ID is random and can spell the digits of a cost, which once failed a build on an ID ending in 789.
+func supportCallLeak(body []byte) (string, error) {
+	var page struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := jsonx.Unmarshal(body, &page); err != nil {
+		return "", err
+	}
+	if len(page.Data) != 1 {
+		return "", fmt.Errorf("the list holds %d calls, want 1", len(page.Data))
+	}
+	for field := range page.Data[0] {
+		if !slices.Contains(supportCallFields, field) {
+			return field, nil
+		}
+	}
+	return "", nil
+}
+
+// checkSupportCall requires the support list's call to carry those fields and nothing else.
+func checkSupportCall(t *testing.T, body []byte) {
+	t.Helper()
+	leaked, err := supportCallLeak(body)
+	if err != nil {
+		t.Fatalf("support call list: %v: %s", err, body)
+	}
+	if leaked != "" {
+		t.Errorf("support call carries %q: %s", leaked, body)
+	}
+}
+
+// TestSupportCallLeak: the check reads field names, so a call whose IDs spell the cost's digits is still a summary,
+// while any field of the operator's trace is a leak. The text search this replaced failed a train on an ID ending in
+// 789, the cost's value.
+func TestSupportCallLeak(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body, leaked string
+	}{
+		{
+			"an ID spelling the cost",
+			`{"data":[{"id":"0198c0a8-0000-7000-8000-000000000789","site_id":"site_01m699415cevj8789n3wz58f60",` +
+				`"price":{"amount":"9007199254740993","currency":"USD"}}]}`, "",
+		},
+		{"the operator's cost", `{"data":[{"id":"x","cost":{"amount":"789","currency":"USD"}}]}`, "cost"},
+		{"the operator's route", `{"data":[{"id":"x","route":{"operator":"private-route"}}]}`, "route"},
+		{"the operator's attempt", `{"data":[{"id":"x","endpoint_id":"0198c0a8-0000-7000-8000-000000000002"}]}`, "endpoint_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			leaked, err := supportCallLeak([]byte(tc.body))
+			if err != nil || leaked != tc.leaked {
+				t.Errorf("supportCallLeak = %q, %v; want %q", leaked, err, tc.leaked)
+			}
+		})
+	}
 }
 
 func checkInvalidAdminSearch(t *testing.T, f adminFixture, owner session) {
