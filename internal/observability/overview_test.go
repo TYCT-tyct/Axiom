@@ -107,13 +107,13 @@ func TestCallCoverageStartsAtTheOldestPartition(t *testing.T) {
 	if !coverage.Known || !coverage.Since.Equal(firstOfNovember) {
 		t.Fatalf("coverage = %+v, want from %s", coverage, firstOfNovember)
 	}
-	if coverage.Covers(wide) || !coverage.Covers(firstOfNovember) {
-		t.Errorf("covers %s: %v; covers the boundary: %v", wide, coverage.Covers(wide), coverage.Covers(firstOfNovember))
+	if coverage.Covers(wide, until) || !coverage.Covers(firstOfNovember, until) {
+		t.Errorf("covers %s: %v; covers the boundary: %v", wide, coverage.Covers(wide, until), coverage.Covers(firstOfNovember, until))
 	}
 	if overview.Calls != 1 || overview.Errors != 1 {
 		t.Errorf("overview = %d calls, %d errors, want only November's one call and its error", overview.Calls, overview.Errors)
 	}
-	if overview.Coverage.Covers(wide) {
+	if overview.Coverage.Covers(wide, until) {
 		t.Errorf("the overview covers %s, before the oldest partition", wide)
 	}
 	if len(calls) != 1 || calls[0].ID != november.ID {
@@ -148,8 +148,70 @@ func TestCallCoverageStartsAtTheOldestPartition(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if coverage.Known || coverage.Covers(wide) {
+	if coverage.Known || coverage.Covers(wide, until) {
 		t.Errorf("with no monthly partition left, coverage = %+v and covers %s", coverage, wide)
+	}
+}
+
+// TestCallCoverageChecksTheWindowForGaps: retention records a failed month and still drops a newer one, so an older
+// partition can remain with a hole after it. Coverage must check every month the window touches, not just the oldest
+// partition, or a window that crosses the hole would be presented as complete.
+func TestCallCoverageChecksTheWindowForGaps(t *testing.T) {
+	t.Parallel()
+	db, database := openDBWithURL(t)
+	site, account := uuid.NewV7(), uuid.NewV7()
+	october := record(account, time.Date(2026, 10, 31, 23, 0, 0, 0, time.UTC))
+	november := record(account, time.Date(2026, 11, 2, 1, 0, 0, 0, time.UTC))
+	december := record(account, time.Date(2026, 12, 2, 1, 0, 0, 0, time.UTC))
+	october.Site, november.Site, december.Site = site, site, site
+	keep(t, db, october, november, december)
+	if err := pgtest.Run(t.Context(), database.Superuser,
+		"DROP TABLE observability.call_log_2026_11",
+		"DROP TABLE observability.call_attempt_2026_11"); err != nil {
+		t.Fatal(err)
+	}
+	wide := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 12, 15, 0, 0, 0, 0, time.UTC)
+	firstOfDecember := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	var coverage Coverage
+	var overview AdminOverview
+	var calls []CallSummary
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		if coverage, err = CallCoverage(t.Context(), tx); err != nil {
+			return err
+		}
+		if overview, err = ReadAdminOverview(t.Context(), tx, site, wide, until); err != nil {
+			return err
+		}
+		calls, _, _, err = ListAdmin(t.Context(), tx, AdminQuery{Since: wide, Until: until, PageSize: 10})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	firstOfOctober := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	firstOfNovember := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	if !coverage.Known || !coverage.Since.Equal(firstOfOctober) {
+		t.Fatalf("coverage = %+v, want from %s, the oldest partition still present", coverage, firstOfOctober)
+	}
+	if coverage.Covers(wide, until) || !coverage.Covers(firstOfDecember, until) {
+		t.Errorf("covers %s: %v; covers December: %v", wide, coverage.Covers(wide, until), coverage.Covers(firstOfDecember, until))
+	}
+	// October is still on disk and a window that stays inside it is complete; one that reaches the November gap is not,
+	// even though the oldest partition is still October.
+	if !coverage.Covers(firstOfOctober, firstOfNovember) {
+		t.Error("a window wholly inside October is not covered")
+	}
+	if coverage.Covers(firstOfOctober, wide) {
+		t.Error("coverage claims a window that crosses the gap is complete")
+	}
+	if overview.Calls != 1 || overview.Errors != 1 {
+		t.Errorf("overview = %d calls, %d errors, want only December's one call and its error", overview.Calls, overview.Errors)
+	}
+	if overview.Coverage.Covers(wide, until) {
+		t.Errorf("the overview covers %s, across the gap", wide)
+	}
+	if len(calls) != 1 || calls[0].ID != december.ID {
+		t.Errorf("call list = %+v, want only December's call", calls)
 	}
 }
 

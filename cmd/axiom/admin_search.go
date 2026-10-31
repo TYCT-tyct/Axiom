@@ -94,7 +94,7 @@ func (a adminAPI) ListAdminCalls(ctx context.Context, r adminapi.ListAdminCallsR
 			return nil, err
 		}
 	}
-	incomplete := !coverage.Covers(since)
+	incomplete := !coverage.Covers(since, until)
 	result := adminapi.ListAdminCalls200JSONResponse{
 		Data: &data, Since: &since, Until: &until, ModelFilter: r.Params.Model, StatusFilter: r.Params.Status,
 		SiteFilter: r.Params.SiteId, Incomplete: &incomplete,

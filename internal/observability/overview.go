@@ -33,21 +33,44 @@ type AdminModelCalls struct {
 // adminTop is how many accounts and models the dashboard lists; the page shows one screenful, not a ranking.
 const adminTop = 10
 
-// Coverage is how far back the call log still answers from PostgreSQL: Since is the start of its oldest remaining
-// monthly partition. A window that starts before Since reaches calls the archive removed (README.md「分区」); its call
-// counts and rankings are incomplete, while the ledger report over the same window still holds every settled call.
+// Coverage is how far back the call log still answers from PostgreSQL: Since is its oldest remaining monthly
+// partition, and months records the months that are still there. A window that crosses a month missing from months
+// reaches calls the archive removed (README.md「分区」); its call counts and rankings are incomplete, while the ledger
+// report over the same window still holds every settled call.
 type Coverage struct {
-	Since time.Time
-	Known bool
+	Since  time.Time
+	Known  bool
+	months map[time.Time]struct{}
 }
 
-// Covers reports whether a window starting at since is wholly inside the retained log. A log with no monthly partition
-// left covers no window: everything it held is archived.
-func (c Coverage) Covers(since time.Time) bool { return c.Known && !since.Before(c.Since) }
+// Covers reports whether every month the window touches is still retained. A gap in the middle matters: retention
+// records a failed month and continues with newer ones, so an older month can remain while a newer one is gone, and
+// the oldest partition alone would present the window as complete. A log with no monthly partition left covers no
+// window: everything it held is archived.
+func (c Coverage) Covers(since, until time.Time) bool {
+	if !c.Known {
+		return false
+	}
+	if !until.After(since) {
+		return true
+	}
+	for month := monthStart(since); month.Before(until); month = month.AddDate(0, 1, 0) {
+		if _, ok := c.months[month]; !ok {
+			return false
+		}
+	}
+	return true
+}
 
-// CallCoverage reads the log's coverage in tx. Retention drops a month only after a confirmed archive, so the oldest
-// remaining monthly partition is where the complete log begins. The migration pre-created every month from 2026-10, so
-// no call predates the first partition; the default partition holds only dates outside those months, later than them.
+// monthStart is the first instant of t's UTC month, the key the partitions use.
+func monthStart(t time.Time) time.Time {
+	year, month, _ := t.UTC().Date()
+	return time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+}
+
+// CallCoverage reads the log's coverage in tx. Every monthly partition the log still has is a month it can answer
+// from; the migration pre-created every month from 2026-10, so no call predates the oldest one; the default partition
+// holds only dates outside those months, later than them.
 func CallCoverage(ctx context.Context, tx pg.Tx) (Coverage, error) {
 	rows, err := tx.Query(ctx, `SELECT c.relname
  FROM pg_partition_tree('observability.call_log'::regclass) t
@@ -58,6 +81,7 @@ func CallCoverage(ctx context.Context, tx pg.Tx) (Coverage, error) {
 	}
 	defer rows.Close()
 	var coverage Coverage
+	months := make(map[time.Time]struct{})
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
@@ -67,11 +91,16 @@ func CallCoverage(ctx context.Context, tx pg.Tx) (Coverage, error) {
 		if !ok {
 			continue
 		}
+		months[month] = struct{}{}
 		if !coverage.Known || month.Before(coverage.Since) {
 			coverage = Coverage{Since: month, Known: true}
 		}
 	}
-	return coverage, rows.Err()
+	if err := rows.Err(); err != nil {
+		return Coverage{}, err
+	}
+	coverage.months = months
+	return coverage, nil
 }
 
 // The dashboard's queries read the site's window through the admin time index: the plain range prunes partitions, the
