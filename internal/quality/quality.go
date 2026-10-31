@@ -252,20 +252,6 @@ func (e *State) quality(now time.Time) (score, confidence float64) {
 	return score, min(1, float64(e.samples)/scoreSamples) * max(0, 1-float64(age)/float64(scoreMaxAge))
 }
 
-// Measured is what the endpoint's numbers are now. An endpoint never observed is healthy and unmeasured, with the
-// neutral quality and no confidence.
-func (m *Monitor) Measured(id suppliers.EndpointID, now time.Time) Measures {
-	m.mu.RLock()
-	e := m.endpoints[id]
-	m.mu.RUnlock()
-	if e == nil {
-		return Measures{Health: 1, Quality: 1}
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.measures(now)
-}
-
 // measures is what the endpoint's numbers are now; the caller holds e.mu.
 func (e *State) measures(now time.Time) Measures {
 	out := Measures{Health: 1 - e.errorRate}
@@ -284,10 +270,10 @@ func (e *State) measures(now time.Time) Measures {
 	return out
 }
 
-// MeasuredFor is Measured for a routable endpoint: a pass counts only for the configuration it checked, so an
-// endpoint whose model, upstream name or format changed since the check is not verified even before the loop clears
-// the state (docs/domains/quality.md「真伪检测」). The evidence and its claim are read in one critical section: a
-// claim switched between two reads must not be paired with the previous claim's pass.
+// MeasuredFor is what the endpoint's numbers are now for a routable endpoint: a pass counts only for the configuration
+// it checked, so an endpoint whose model, upstream name or format changed since the check is not verified even before
+// the loop clears the state (docs/domains/quality.md「真伪检测」). The evidence and its claim are read in one critical
+// section: a claim switched between two reads must not be paired with the previous claim's pass.
 func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	m.mu.RLock()
 	e := m.endpoints[ep.ID]

@@ -133,13 +133,19 @@ func makeChainWith(t *testing.T, f chainFixture, estimated bool) chain {
 	admitted := billing.Admitted{Scope: f.scope, Site: f.site, Account: f.account, Workspace: f.workspace, Key: f.key}
 	var hold *billing.Hold
 	if err := f.app.Tx(ctx, f.scope, func(tx pg.Tx) (err error) {
-		var kept []int
-		hold, kept, err = f.billing.Reserve(ctx, tx, admitted, c.request, billing.Demand{TextBytes: 1000},
-			[]billing.Quotable{{Price: f.schedule, Model: billing.Model{ContextLength: 1e12}, MaxOutput: 100}})
-		if err == nil && len(kept) != 1 {
-			t.Errorf("the reservation kept %v, want the one entry", kept)
+		reqs := []billing.ReserveRequest{{
+			Admitted: admitted, ID: c.request, Demand: billing.Demand{TextBytes: 1000},
+			Quotables: []billing.Quotable{{Price: f.schedule, Model: billing.Model{ContextLength: 1e12}, MaxOutput: 100}},
+		}}
+		holds, kept, errs, err := f.billing.ReserveMany(ctx, tx, reqs)
+		if err != nil {
+			return err
 		}
-		return err
+		hold = holds[0]
+		if len(kept[0]) != 1 {
+			t.Errorf("the reservation kept %v, want the one entry", kept[0])
+		}
+		return errs[0]
 	}); err != nil {
 		t.Fatal(err)
 	}

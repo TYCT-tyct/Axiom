@@ -16,7 +16,8 @@ import {
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { callStatus } from "../overview";
+import type { CallsEmptyKind } from "../overview";
+import { callStatus, callsArchivedWhole, callsCoverage, callsEmptyKind } from "../overview";
 import {
   ChoiceFilter,
   Code,
@@ -83,6 +84,49 @@ export function anyUnfiltered(filters: CallFilters, pages: readonly AdminSchemas
   return pages.some((page) => unfiltered(filters, page));
 }
 
+// CallEmpty explains an empty list without calling a partly archived window archived, or claiming a filter ruled out
+// calls that were archived. Its own switch keeps the page's render tree readable.
+function CallEmpty({ kind }: { kind: CallsEmptyKind }) {
+  const { t } = useTranslation();
+  switch (kind) {
+    case "archived":
+      return <EmptyState title={t("calls.archived.title")}>{t("calls.archived.body")}</EmptyState>;
+    case "retainedFiltered":
+      return <EmptyState title={t("calls.retainedFiltered.title")}>{t("calls.retainedFiltered.body")}</EmptyState>;
+    case "retainedWindow":
+      return <EmptyState title={t("calls.retainedWindow.title")}>{t("calls.retainedWindow.body")}</EmptyState>;
+    case "filtered":
+      return <EmptyState title={t("calls.noMatch.title")}>{t("calls.noMatch.body")}</EmptyState>;
+    case "window":
+      return <EmptyState title={t("calls.empty.title")}>{t("calls.empty.body")}</EmptyState>;
+  }
+}
+
+// CoverageNotice says how far back the log answers, and stays silent when every loaded page covers the window.
+function CoverageNotice({
+  coverage,
+  availableSince,
+}: {
+  coverage: boolean | undefined;
+  availableSince: string | undefined;
+}) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  if (coverage === undefined) {
+    return <Notice>{t("calls.coverageUnavailable")}</Notice>;
+  }
+  if (!coverage) {
+    return null;
+  }
+  return (
+    <Notice>
+      {availableSince
+        ? t("calls.incomplete", { since: format.dateTime(new Date(availableSince)) })
+        : t("calls.incompleteUnknown")}
+    </Notice>
+  );
+}
+
 // The support view of calls: what a person asks about a bill, without costs, endpoints or routes. The operator's trace
 // is a separate page and permission, so this one never shows a field the support role may not read.
 export default function Calls() {
@@ -101,6 +145,14 @@ export default function Calls() {
   );
   const rows = calls.data?.pages.flatMap((page) => page.data ?? []) ?? [];
   const unsupported = calls.data ? anyUnfiltered(filters, calls.data.pages) : false;
+  const page = calls.data?.pages[0];
+  const coverage = calls.data ? callsCoverage(calls.data.pages) : false;
+  const availableSince = page?.available_since;
+  const emptyKind = callsEmptyKind(
+    coverage,
+    callsArchivedWhole(coverage, availableSince, page?.until),
+    narrowed(filters),
+  );
   return (
     <>
       <PageHeader title={t("nav.calls")} description={t("calls.description")} />
@@ -120,15 +172,8 @@ export default function Calls() {
         ) : null}
         <Panel>
           {unsupported ? <Notice>{t("calls.filters.unsupported")}</Notice> : null}
-          <DataState
-            query={calls}
-            isEmpty={() => rows.length === 0}
-            empty={
-              <EmptyState title={narrowed(filters) ? t("calls.noMatch.title") : t("calls.empty.title")}>
-                {narrowed(filters) ? t("calls.noMatch.body") : t("calls.empty.body")}
-              </EmptyState>
-            }
-          >
+          <CoverageNotice coverage={coverage} availableSince={availableSince} />
+          <DataState query={calls} isEmpty={() => rows.length === 0} empty={<CallEmpty kind={emptyKind} />}>
             {() => <CallsTable rows={rows} />}
           </DataState>
           <LoadMore list={calls} />

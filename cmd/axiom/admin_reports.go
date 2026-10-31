@@ -50,12 +50,17 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 	for i, cash := range money.Cash {
 		cashBody[i] = map[string]string{"amount": cash.Amount, "currency": cash.Currency.String()}
 	}
-	return adminJSON[adminapi.GetOperationsOverview200JSONResponse](map[string]any{
+	body := map[string]any{
 		"site_id": call.site.ID.TypeID(), "since": w.Since, "until": w.Until,
 		"calls": overview.Calls, "errors": overview.Errors,
+		"calls_incomplete":   !overview.Coverage.Covers(w.Since, w.Until),
 		"revenue":            adminapi.Money{Amount: money.Revenue, Currency: call.site.Currency.String()},
 		"cost":               adminapi.Money{Amount: money.Cost, Currency: call.site.Currency.String()},
 		"unknown_cost_calls": money.UnknownCost,
 		"cash":               cashBody, "top_accounts": accountsBody, "top_models": modelsBody,
-	})
+	}
+	if overview.Coverage.Known {
+		body["calls_available_since"] = overview.Coverage.Since
+	}
+	return adminJSON[adminapi.GetOperationsOverview200JSONResponse](body)
 }

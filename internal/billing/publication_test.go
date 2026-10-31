@@ -301,7 +301,7 @@ func TestReservationLocksPriceVersionsThroughRetry(t *testing.T) {
 	q[1].Version = second
 	var h *Hold
 	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		h, _, err = b.billing.Reserve(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, q)
+		h, err = b.billing.reserveOne(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 100}, q)
 		return err
 	}); err != nil {
 		t.Fatal(err)

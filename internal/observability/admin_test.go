@@ -79,7 +79,7 @@ func adminPageIDs(t *testing.T, db *pg.DB, scope pg.Scope, q AdminQuery) []uuid.
 		var next *Cursor
 		if err := db.ReadTx(t.Context(), scope, func(tx pg.Tx) (err error) {
 			var rows []CallSummary
-			rows, next, err = ListAdmin(t.Context(), tx, q)
+			rows, next, _, err = ListAdmin(t.Context(), tx, q)
 			for _, r := range rows {
 				got = append(got, r.ID)
 			}

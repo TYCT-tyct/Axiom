@@ -60,6 +60,12 @@ func TestAdminOperationsOverview(t *testing.T) {
 	wantPtr(t, rec, "revenue", overview.Revenue, adminapi.Money{Amount: "2500", Currency: "USD"})
 	wantPtr(t, rec, "cost", overview.Cost, adminapi.Money{Amount: "1000", Currency: "USD"})
 	wantPtr(t, rec, "unknown cost calls", overview.UnknownCostCalls, int64(1))
+	if overview.CallsIncomplete == nil || *overview.CallsIncomplete {
+		t.Errorf("a window inside the retained log is complete: %s", rec.Body.String())
+	}
+	if overview.CallsAvailableSince == nil || overview.CallsAvailableSince.After(now.Add(-2*time.Hour)) {
+		t.Errorf("call coverage starts after the oldest call: %s", rec.Body.String())
+	}
 	cash := wantList(t, rec, "cash", overview.Cash, 1)
 	wantPtr(t, rec, "cash amount", &cash[0].Amount, "1500")
 	wantPtr(t, rec, "cash currency", &cash[0].Currency, "USD")
@@ -136,6 +142,58 @@ func TestAdminOperationsOverviewSumsWiderThanInt64(t *testing.T) {
 	const sum = "10000000000000000000"
 	if overview.Revenue == nil || overview.Revenue.Amount != sum || overview.Cost == nil || overview.Cost.Amount != sum {
 		t.Fatalf("wide revenue and cost: %s", rec.Body.String())
+	}
+}
+
+// TestAdminCoverageMarksAnArchivedWindowIncomplete: once October's partition is dropped, a window that starts in
+// October is incomplete on both the dashboard and the call list, and the boundary is November; only November's call is
+// counted, and a window wholly inside November is complete.
+func TestAdminCoverageMarksAnArchivedWindowIncomplete(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	main, _, err := f.svc.SiteForHost(adminHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := uuid.UUID(main.ID).String()
+	account := f.text("SELECT id::text FROM accounts.accounts ORDER BY id LIMIT 1")
+	f.run(
+		fmt.Sprintf(`INSERT INTO observability.call_log
+ (id,at,site_id,account_id,workspace_id,key_id,ip,request_class,used_tools,has_image,has_file,model,endpoint_id,attempt_count,usage,service_tier,price_nano,cost_nano,currency,free_of_charge,latency_ms,first_token_ms,consent_version,training_allowed,error_kind)
+ VALUES (uuidv7(),'2026-10-15T12:00:00Z','%s','%s',uuidv7(),uuidv7(),'203.0.113.7','chat',false,false,false,'model-a',uuidv7(),1,'{}','standard',1,1,'USD',false,1,0,'v',false,''),
+        (uuidv7(),'2026-11-02T12:00:00Z','%s','%s',uuidv7(),uuidv7(),'203.0.113.7','chat',false,false,false,'model-b',uuidv7(),1,'{}','standard',1,1,'USD',false,1,0,'v',false,'')`, site, account, site, account),
+		"DROP TABLE observability.call_log_2026_10",
+		"DROP TABLE observability.call_attempt_2026_10",
+	)
+	firstOfNovember := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	const since, until = "2026-10-15T00:00:00Z", "2026-11-15T00:00:00Z"
+	rec := f.do(http.MethodGet, "/reports/overview?since="+since+"&until="+until, "", as(owner))
+	expectAdmin(t, "archived overview", rec, 200, "")
+	var overview adminapi.OperationsOverview
+	decode(t, rec, &overview)
+	wantPtr(t, rec, "calls", overview.Calls, int64(1))
+	wantPtr(t, rec, "calls incomplete", overview.CallsIncomplete, true)
+	if overview.CallsAvailableSince == nil || !overview.CallsAvailableSince.Equal(firstOfNovember) {
+		t.Fatalf("call coverage boundary: %s", rec.Body.String())
+	}
+
+	rec = f.do(http.MethodGet, "/calls?since="+since+"&until="+until, "", as(owner))
+	expectAdmin(t, "archived calls", rec, 200, "")
+	var list adminapi.AdminCallList
+	decode(t, rec, &list)
+	wantList(t, rec, "archived calls", list.Data, 1)
+	wantPtr(t, rec, "list incomplete", list.Incomplete, true)
+	if list.AvailableSince == nil || !list.AvailableSince.Equal(firstOfNovember) {
+		t.Fatalf("call list coverage boundary: %s", rec.Body.String())
+	}
+
+	rec = f.do(http.MethodGet, "/reports/overview?since=2026-11-01T00:00:00Z&until=2026-11-15T00:00:00Z", "", as(owner))
+	expectAdmin(t, "complete overview", rec, 200, "")
+	overview = adminapi.OperationsOverview{}
+	decode(t, rec, &overview)
+	if overview.CallsIncomplete == nil || *overview.CallsIncomplete {
+		t.Fatalf("a window inside the retained month is complete: %s", rec.Body.String())
 	}
 }
 

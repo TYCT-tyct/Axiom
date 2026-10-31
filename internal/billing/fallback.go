@@ -136,21 +136,6 @@ func CheckFallbacks(ctx context.Context, tx pg.Tx) error {
 	return nil
 }
 
-// withFallbacks gives every entry its currency's fallbacks: its schedule filled with the per-use defaults, which the
-// quote and every later charge price with, and the row's text to lock. A currency without a row has nothing to price
-// an unknown item with, so its entries are unpriced, as a missing price is: the request is not quoted.
-func withFallbacks(ctx context.Context, tx pg.Tx, q []Quotable) ([]Quotable, []string, error) {
-	rows, err := queries.ReadFallbacks(ctx, tx, fallbackCurrencies(q))
-	if err != nil {
-		return nil, nil, fmt.Errorf("billing: read the fallback prices: %w", err)
-	}
-	found, bodies := map[string]fallbacks{}, map[string]string{}
-	if err := parseFallbackRows(rows, found, bodies); err != nil {
-		return nil, nil, err
-	}
-	return fillFallbacks(q, found, bodies)
-}
-
 // fallbackCurrencies is the currencies whose fallback prices the entries need, each once.
 func fallbackCurrencies(q []Quotable) []string {
 	currencies := make([]string, 0, 1)

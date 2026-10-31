@@ -536,7 +536,7 @@ func (c *locked) profit() *int64 {
 }
 
 // cap is what may be charged without passing the floor, keeping every other reservation covered: the balance less
-// the floor and frozen credit, less what is reserved apart from what this reservation still holds. Like Reserve,
+// the floor and frozen credit, less what is reserved apart from what this reservation still holds. Like admission,
 // it computes headroom exactly and clamps it to what an amount can hold.
 func (c *locked) cap(held int64) int64 { return room(c.balance, held) }
 

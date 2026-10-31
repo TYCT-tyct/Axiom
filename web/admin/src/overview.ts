@@ -59,3 +59,52 @@ export function ordersDrill(window: Window): OrderDrill {
 export function callStatus(value: unknown): "ok" | "error" | undefined {
   return value === "ok" || value === "error" ? value : undefined;
 }
+
+// The call list's coverage as its pages report it: false when every loaded page covers the window, true when one says
+// calls before its available_since were archived, and undefined when an older node did not say. An unsure list must say
+// it does not know rather than show an empty window as complete.
+export function callsCoverage(pages: readonly { incomplete?: boolean }[]): boolean | undefined {
+  if (pages.some((page) => page.incomplete === true)) {
+    return true;
+  }
+  if (pages.some((page) => page.incomplete === undefined)) {
+    return undefined;
+  }
+  return false;
+}
+
+// callsArchivedWhole reports whether every call the window could contain is before the oldest retained month. A node
+// with no monthly partition left reports no boundary and has archived everything; a missing boundary on an old node is
+// not that case, because callsCoverage already marks it unsure.
+export function callsArchivedWhole(
+  incomplete: boolean | undefined,
+  availableSince: string | undefined,
+  until: string | undefined,
+): boolean {
+  if (incomplete !== true) {
+    return false;
+  }
+  if (availableSince === undefined) {
+    return true;
+  }
+  if (until === undefined) {
+    return false;
+  }
+  return Date.parse(until) <= Date.parse(availableSince);
+}
+
+// callsEmptyKind picks the explanation under an empty call list. A list that reaches archived calls may be only partly
+// archived, so it must not say the whole window was archived; with a filter that matched nothing in the retained
+// months, it cannot claim the missing calls were filtered away either.
+export type CallsEmptyKind = "archived" | "retainedFiltered" | "retainedWindow" | "filtered" | "window";
+
+export function callsEmptyKind(
+  incomplete: boolean | undefined,
+  wholeArchived: boolean,
+  filtered: boolean,
+): CallsEmptyKind {
+  if (incomplete === true) {
+    return wholeArchived ? "archived" : filtered ? "retainedFiltered" : "retainedWindow";
+  }
+  return filtered ? "filtered" : "window";
+}

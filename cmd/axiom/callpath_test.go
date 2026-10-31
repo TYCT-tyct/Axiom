@@ -55,8 +55,12 @@ func TestTheCallPathIsWhatBillingWritesSuppliersThrough(t *testing.T) {
 	}
 	admitted := billing.Admitted{Scope: f.scope, Site: f.site, Account: f.account, Workspace: f.workspace, Key: f.key}
 	if err := f.app.Tx(ctx, f.scope, func(tx pg.Tx) error {
-		_, _, err := f.billing.Reserve(ctx, tx, admitted, request, billing.Demand{TextBytes: 1000}, route)
-		return err
+		reqs := []billing.ReserveRequest{{Admitted: admitted, ID: request, Demand: billing.Demand{TextBytes: 1000}, Quotables: route}}
+		_, _, errs, err := f.billing.ReserveMany(ctx, tx, reqs)
+		if err != nil {
+			return err
+		}
+		return errs[0]
 	}); err != nil {
 		t.Fatal(err)
 	}
