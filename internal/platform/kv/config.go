@@ -6,9 +6,10 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
+
+	"axiom/internal/platform/privfile"
 )
 
 // The variables serve reads; kv reports on them, as pg reports on its own (cmd/axiom/variables.go).
@@ -134,27 +135,17 @@ func checkShape(u *url.URL) error {
 }
 
 // readPassword reads the ACL user's password, which the deployment writes as one line into a protected file, and holds
-// it to the same protection as the master key files: the group and others may not read it.
+// it to the same protection as the master key files: the group and others may not read it. The check and the read are
+// of one open file, so a path replaced after the check cannot become the password the node sends.
 func readPassword(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("%s: required when %s is set", PasswordFileVar, URLVar)
 	}
-	file, err := os.Open(path) // #nosec G304 -- the trusted startup configuration chooses the file
+	file, err := privfile.Open(path, os.Open)
 	if err != nil {
 		return "", passwordError("open", err)
 	}
 	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
-	info, err := file.Stat()
-	if err != nil {
-		return "", passwordError("stat", err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%s: want a regular file", PasswordFileVar)
-	}
-	// Windows mode bits cannot express NTFS ACLs; deployment must restrict the file's ACL instead.
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("%s: permissions must deny all group and other access", PasswordFileVar)
-	}
 	raw, err := io.ReadAll(io.LimitReader(file, maxPassword+2))
 	if err != nil {
 		return "", passwordError("read", err)
@@ -174,6 +165,9 @@ func readPassword(path string) (string, error) {
 // passwordError names the variable and the operation, never the path or the value: either may be a secret pasted
 // into the wrong setting.
 func passwordError(operation string, err error) error {
+	if errors.Is(err, privfile.ErrNotRegular) || errors.Is(err, privfile.ErrPermissions) {
+		return fmt.Errorf("%s: %w", PasswordFileVar, err)
+	}
 	reason := "failed"
 	switch {
 	case errors.Is(err, os.ErrNotExist):

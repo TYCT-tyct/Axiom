@@ -8,6 +8,7 @@
 |---|---|
 | `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`（`ParseExact` 读取有符号十进制、最多 15 位小数，拒绝 128 位越界；只用于后台快照解析原生余额）、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）、可复制的汇率依据 `ExchangeRate`（行 ID、版本、规范化币种对与整数分子/分母，`Between` 只取精确分数或倒数）。只有类型和运算；支持币种、数值范围、冻结与取整规则由 [billing](../../docs/domains/billing.md#汇率) 校验和决定 |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
+| `privfile` | 打开节点自己保留的私密文件（主密钥、Valkey 密码、节点 mTLS 私钥）的唯一入口：类型和权限从被打开的那个描述符读，调用方读的也是它；格式、大小上限和是否拒绝符号链接仍由调用方决定 |
 | `nodetls` | 节点间双向 TLS：从 `AXIOM_NODE_TLS_DIR` 读 `node.crt`、`node.key`、`ca.crt`，检查配对、有效期、扩展密钥用途和私钥权限，最低 TLS 1.3，见 [nodetls/README.md](nodetls/README.md) |
 | `secret` | 从受保护文件加载主密钥和 HMAC 密钥；主密钥文件的一次读取同时给出信封密钥环、登录键和邮件键（`LoadMaster`），供应商凭证的信封加密与明文脱敏 |
 | `httpserver` | 所有监听共用的限制；公网监听的中间件；`Compress`（只压缩较大的 JSON 响应，见下文「前端文件」）；健康检查；`/metrics` 的挂载点；公网请求的跨度与指标 |
@@ -48,6 +49,7 @@
 | 设了却没有被读取的 `AXIOM_*` 变量算错 | 同上 |
 | 配置问题只报变量名和期望的格式，不报取值 | 密钥可能填错了变量或拼错了名字；监听失败只报原因，不报地址 |
 | 密钥不出现在日志里 | 凭证明文用 `secret.Secret` 保存，格式化、slog、JSON 和文本序列化统一脱敏；只有显式 `Reveal()` 取出明文。主密钥加载错误只含变量名、行号和原因，不含文件内容或路径；调用方不得记录 `Reveal()` 的结果 |
+| 私密文件的类型和权限检查的是随后被读的那个文件 | 主密钥、Valkey 密码和节点 mTLS 私钥都用 `privfile.Open` 打开：`Stat` 走返回的描述符，调用方只读这个文件，不再按路径打开。规则本身的回归测试在打开的一刻把路径换成内容合法、权限 `0644` 的文件，主密钥和节点 mTLS 私钥另各有一条从调用方进入的同类测试 |
 | JSON 只按一套策略读 | `jsonx` 用 v2 默认的严格模式（拒绝非法 UTF-8 和重复键：两个解析器各取一份时，我们计费的用量就不是客户端读到的用量），嵌套不超过 256 层；`jsontext` 自己的上限固定为 10000，所以逐个读记号时检查 `StackDepth`。模糊测试与 `jsontext` 自带的校验对照，只允许在超过 256 层时不同。未知成员默认跳过，因为上游和客户端会加字段；我们自己定义、要存下来的格式（如价目表）用 `UnmarshalKnown` 拒绝，读到不认识的条件就报错，不会忽略后按别的含义处理。存储并按字节比较的 JSON 用 `MarshalCanonical` 写，相同的值得到相同的字节；整数不按 RFC 8785 经过 float64，超过 2⁵³ 的门槛和计数才不会变。入口按行为命名，不给调用方传选项，宽严只在这里定。depguard 禁止 `jsonx` 之外引入 `encoding/json` 及其子包；生成代码本来不在 lint 范围内，其余例外在引用处用 nolint 写明理由。`jsonx` 的豁免是 `.golangci.yml` 里锚定在仓库根的路径规则（`^internal/platform/jsonx/`），不是 depguard 的 `files` 通配：后者匹配绝对路径，`**/internal/platform/**` 连 `internal/<模块>/internal/platform` 也放过 |
 | 空值等于未设定 | Docker Compose 把未设定的 `${VAR}` 传成空串，按未设定处理才不会把默认值意外覆盖成空 |
 | 模块只能经带范围的事务访问数据库 | `pg.DB.Tx` 和只读的 `pg.DB.ReadTx` 是仅有的入口，先设范围再执行；`pg.Tx` 不暴露连接：`Exec`、`Query`、`QueryRow` 的签名与 sqlc 生成的代码要的一致，`Query` 的结果逐个转发 `pgx.Rows` 的方法，唯独 `Conn` 返回空，pgx 给 `Rows` 加方法时编译失败，不会悄悄转发出去；pgx 另外两处交出连接的回调也拦下：作为唯一扫描目标的 `RowScanner` 拿到的是这种不带连接的结果，参数开头的 `QueryRewriter` 拿到的连接是空。测试检查结果，以及经 `Rows.Scan`、`Row.Scan`、`Exec`、`Query`、`QueryRow` 的回调，都交不出连接，结果也没有 `pgx.Rows`、`pgx.Row` 以外的方法。depguard 禁止 `internal/platform` 之外引用 pgx 和 `database/sql`，豁免同样是锚定在仓库根的路径规则（`^internal/platform/`） |
@@ -82,7 +84,7 @@
 
 `serve` 启动时读 `AXIOM_MASTER_KEY_FILE`（TOTP 密钥、供应商凭证、支付商户配置、共享 SMTP 与联网搜索配置和 Webhook 签名密钥的封装）、`AXIOM_KEY_HASH_FILE`（API key 的哈希）和 `AXIOM_IDENTITY_KEY_FILE`（发往上游的会话与用户标识的派生，见下），缺了或不合法就不启动；本地的 `deploy/compose.yaml` 由 `keys` 服务第一次启动时生成这三个文件，放在与数据库同寿命的卷里，权限只有程序的用户能读；多节点部署共享或复制同一份文件到每个节点并设 `AXIOM_KEYRING_GENERATE=false`，`keys` 服务在文件缺失时拒绝生成，避免第二台机器得到另一套密钥。选择路径参数而不是另建环境变量读取器，复用 `config.Env` 的必填和未知变量检查。
 
-文件为 UTF-8 文本，每行 `版本号:base64密钥`，允许 LF、CRLF 和末尾换行，不允许空行、注释、额外空白或 BOM（Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写入 BOM，错误会落在第 1 行的版本号上）。版本号是无前导零的十进制正 uint32；密钥是带填充的标准 base64，解码后恰好 32 字节。至少一行，版本不得重复，不同版本的密钥也不得相同。文件列出可读密钥；数据库 `platform.key_versions` 单独记录唯一的 `active` 写版本，其他版本为 `readable` 或 `retired`，并存 SHA-256 摘要以检查同版本不同材料，绝不存材料。首次启动或首次轮换命令把旧文件的最高版本登记为写版本，以后增加文件行不会激活它；读取按记录的 `KeyVersion` 选择。文件必须是普通文件，类型和权限都从打开后的那个文件读，而不是从路径读：检查和打开之间路径被原子换掉时，按路径检查就等于给被换上的文件放行；路径本身是符号链接也拒绝（写路径同样用 `Lstat` 拒绝替换链接，两处规则一致）；Unix 拒绝任何组或其他人权限（建议 0600 或 0400）。Docker 和 Kubernetes 的 secret 挂载点默认是链接，这类部署要把真实文件放进卷里再指变量：写路径本来就不替换链接，指向链接的变量现在启动就拒绝。Windows 的 Go 文件模式不能表达 NTFS ACL，因此不检查权限位，由部署使用 ACL 限制到服务账户和负责人。
+文件为 UTF-8 文本，每行 `版本号:base64密钥`，允许 LF、CRLF 和末尾换行，不允许空行、注释、额外空白或 BOM（Windows PowerShell 5 的 `Out-File -Encoding utf8` 会写入 BOM，错误会落在第 1 行的版本号上）。版本号是无前导零的十进制正 uint32；密钥是带填充的标准 base64，解码后恰好 32 字节。至少一行，版本不得重复，不同版本的密钥也不得相同。文件列出可读密钥；数据库 `platform.key_versions` 单独记录唯一的 `active` 写版本，其他版本为 `readable` 或 `retired`，并存 SHA-256 摘要以检查同版本不同材料，绝不存材料。首次启动或首次轮换命令把旧文件的最高版本登记为写版本，以后增加文件行不会激活它；读取按记录的 `KeyVersion` 选择。文件必须是普通文件，类型和权限都从打开后的那个文件读，而不是从路径读：检查和打开之间路径被原子换掉时，按路径检查就等于给被换上的文件放行。打开和检查由 `privfile.Open` 一处实现，Valkey 密码文件和节点 mTLS 私钥也走它，调用方读到的都是被检查的那个描述符；路径本身是符号链接也拒绝（写路径同样用 `Lstat` 拒绝替换链接，两处规则一致）；Unix 拒绝任何组或其他人权限（建议 0600 或 0400）。Docker 和 Kubernetes 的 secret 挂载点默认是链接，这类部署要把真实文件放进卷里再指变量：写路径本来就不替换链接，指向链接的变量现在启动就拒绝。Windows 的 Go 文件模式不能表达 NTFS ACL，因此不检查权限位，由部署使用 ACL 限制到服务账户和负责人。
 
 `secret.LoadMAC(path)` 读 `AXIOM_KEY_HASH_FILE` 指定的文件，格式、权限和报错方式同主密钥文件（共用一个解析器），用于按哈希存放和查找的秘密（如 API key）：`Versions()` 从新到旧列出版本，`Sum(版本, 数据)` 是该版本密钥的 HMAC-SHA256，传入不存在的版本是调用方的错误，panic。最多几个版本由使用方规定。
 

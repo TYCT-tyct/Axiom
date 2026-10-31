@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -346,6 +347,42 @@ func TestRefusesUnusableMaterial(t *testing.T) {
 	}
 	if _, err := Client(clientDir, ""); err == nil || !strings.Contains(err.Error(), "names no host") {
 		t.Fatalf("Client accepted an empty server name: %v", err)
+	}
+}
+
+// TestKeyReplacedAtOpenIsRefused replaces node.key with a 0644 file of valid key material at the moment the key is
+// opened, the same ordering the key ring's test proves (#529): the type and mode that decide come from the open
+// descriptor, so the file that passes the checks is the file that is read. Checking the path first and reading it again
+// would admit the 0644 key, whose contents are valid. The same material loaded through the production opener without a
+// replacement must succeed, so a refusal cannot come from the seam refusing everything.
+func TestKeyReplacedAtOpenIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows mode bits do not represent NTFS ACLs")
+	}
+	ca := newAuthority(t)
+	cert, key := ca.issue(t, []string{"node.test"}, []net.IP{net.ParseIP("127.0.0.1")}, x509.ExtKeyUsageServerAuth)
+	dir := writeNode(t, filepath.Join(t.TempDir(), "node"), cert, key, ca.pem)
+	readable := filepath.Join(t.TempDir(), "readable.key")
+	if err := os.WriteFile(readable, key, 0o644); err != nil { //nolint:gosec // made readable on purpose, to prove the loader refuses it
+		t.Fatal(err)
+	}
+	if err := os.Chmod(readable, 0o644); err != nil { //nolint:gosec // made readable on purpose, to prove the loader refuses it
+		t.Fatal(err)
+	}
+	swap := func(name string) (*os.File, error) {
+		if filepath.Base(name) == KeyFile {
+			if err := os.Rename(readable, name); err != nil {
+				return nil, err
+			}
+		}
+		return os.Open(name) // #nosec G304 -- the test builds both paths it uses.
+	}
+	if _, _, err := loadWith(dir, x509.ExtKeyUsageServerAuth, swap); err == nil || !strings.Contains(err.Error(), "permissions must deny all group and other access") {
+		t.Fatalf("a 0644 key put in place at the open: %v, want a permissions refusal", err)
+	}
+	unchanged := writeNode(t, filepath.Join(t.TempDir(), "unchanged"), cert, key, ca.pem)
+	if _, _, err := loadWith(unchanged, x509.ExtKeyUsageServerAuth, os.Open); err != nil {
+		t.Fatalf("the unchanged directory: %v", err)
 	}
 }
 

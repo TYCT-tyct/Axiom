@@ -11,11 +11,14 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"axiom/internal/platform/privfile"
 )
 
 // The variable that names the directory and the files it must hold. Their names are the contract with the deployment and
@@ -64,14 +67,20 @@ func Client(dir, serverName string) (*tls.Config, error) {
 // directory, a path or a byte of the material; the key file must be private like the key ring, because it is what lets
 // a process act as this node.
 func load(dir string, usage x509.ExtKeyUsage) (tls.Certificate, *x509.CertPool, error) {
-	certPEM, keyPEM, caPEM, err := readNodeFiles(dir)
+	return loadWith(dir, usage, os.Open)
+}
+
+// loadWith is load with the open as a parameter. A test uses it to put another key at the path as the open happens, so
+// the ordering that keeps a replaced key from being read is proven every run instead of raced against a writer.
+func loadWith(dir string, usage x509.ExtKeyUsage, open privfile.Opener) (tls.Certificate, *x509.CertPool, error) {
+	certPEM, keyPEM, caPEM, err := readNodeFiles(dir, open)
 	if err != nil {
 		return tls.Certificate{}, nil, err
 	}
 	return parseNodeFiles(certPEM, keyPEM, caPEM, usage)
 }
 
-func readNodeFiles(dir string) (certPEM, keyPEM, caPEM []byte, err error) {
+func readNodeFiles(dir string, open privfile.Opener) (certPEM, keyPEM, caPEM []byte, err error) {
 	if dir == "" {
 		return nil, nil, nil, fmt.Errorf("%s: required", Variable)
 	}
@@ -81,10 +90,7 @@ func readNodeFiles(dir string) (certPEM, keyPEM, caPEM []byte, err error) {
 	if certPEM, err = read(dir, CertFile); err != nil {
 		return nil, nil, nil, err
 	}
-	if err = private(dir, KeyFile); err != nil {
-		return nil, nil, nil, err
-	}
-	if keyPEM, err = read(dir, KeyFile); err != nil {
+	if keyPEM, err = readPrivate(dir, KeyFile, open); err != nil {
 		return nil, nil, nil, err
 	}
 	if caPEM, err = read(dir, CAFile); err != nil {
@@ -171,17 +177,23 @@ func protectedDir(dir string) error {
 	return nil
 }
 
-// private refuses a key file group or others can read, the same rule the key ring's files follow. Windows mode bits
-// cannot express NTFS ACLs, so there the deployment restricts the file instead.
-func private(dir, name string) error {
-	info, err := os.Stat(filepath.Join(dir, name))
+// readPrivate reads the key that lets this process act as the node. Its type and mode are checked on the open
+// descriptor that is then read, as the key ring's are, so a path replaced after the check cannot become the key the
+// node presents. Windows mode bits cannot express NTFS ACLs, so there the deployment restricts the file instead.
+func readPrivate(dir, name string, open privfile.Opener) ([]byte, error) {
+	file, err := privfile.Open(filepath.Join(dir, name), open)
 	if err != nil {
-		return fmt.Errorf("%s: %s: %s", Variable, name, reason(err))
+		if errors.Is(err, privfile.ErrNotRegular) || errors.Is(err, privfile.ErrPermissions) {
+			return nil, fmt.Errorf("%s: %s %w", Variable, name, err)
+		}
+		return nil, fmt.Errorf("%s: %s: %s", Variable, name, reason(err))
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%s: %s permissions must deny all group and other access", Variable, name)
+	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %s: %s", Variable, name, reason(err))
 	}
-	return nil
+	return data, nil
 }
 
 func read(dir, name string) ([]byte, error) {
