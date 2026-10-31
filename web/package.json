@@ -37,5 +37,11 @@
     "vite": "8.3.4",
     "vitest": "5.0.5",
     "web-vitals": "6.2.3"
+  },
+  "//": "zod 4.6.5 can exhaust memory on oversized constrained collections (GHSA-mrhx-c7xc-m3w5, Dependabot alert 11). knip's ^4.6.5 range allows the fixed release, so pin the transitive dependency to the newest patched version rather than depend on a stale lock.",
+  "pnpm": {
+    "overrides": {
+      "zod": "4.6.7"
+    }
   }
 }
