@@ -74,7 +74,7 @@ function Card({ view }: { view: AdminSchemas["MailSettings"] }) {
               <Icon name="check" />
               {t("settings.mail.test")}
             </Button>
-            <Button size="md" variant="primary" onClick={() => setEdit(true)}>
+            <Button size="md" onClick={() => setEdit(true)}>
               <Icon name="pencil" />
               {t("settings.mail.edit")}
             </Button>

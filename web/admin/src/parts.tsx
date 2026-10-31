@@ -90,13 +90,15 @@ export function FilterBar({
       <form
         key={JSON.stringify(values)}
         noValidate
-        className="grid gap-4 sm:grid-cols-2 xl:grid-cols-[repeat(3,minmax(0,1fr))_auto] xl:items-end"
+        className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           onApply(readForm(event.currentTarget));
         }}
       >
-        {children}
+        {/* Top-aligned, so a field's hint below it never pushes its neighbours' inputs out of line; the buttons get a
+            row of their own however many fields a page has. */}
+        <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">{children}</div>
         <div className="flex gap-2">
           <Button variant="primary" size="md" type="submit">
             {t("filter.apply")}

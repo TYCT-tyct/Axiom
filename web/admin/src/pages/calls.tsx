@@ -210,8 +210,8 @@ function CallsTable({ rows }: { rows: AdminSchemas["AdminCallSummary"][] }) {
           [t("calls.col.account")],
           [t("calls.col.model"), "hidden md:table-cell"],
           [t("calls.col.result")],
-          [t("calls.col.latency"), "hidden lg:table-cell"],
-          [t("calls.col.price"), "hidden xl:table-cell"],
+          [t("calls.col.latency"), "hidden text-right lg:table-cell"],
+          [t("calls.col.price"), "hidden text-right xl:table-cell"],
         ]}
         action={inspect}
       />
@@ -228,7 +228,7 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <tr>
+    <tr className="hover:bg-s2">
       <Td className="hidden sm:table-cell">
         {inspect ? (
           <Link to="/calls/$callId" params={{ callId: call.id }} className="text-accent hover:underline">
@@ -257,10 +257,12 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
       <Td>
         <State tone={call.error_kind ? "bad" : "good"}>{call.error_kind ? t("calls.failed") : t("calls.ok")}</State>
       </Td>
-      <Td className="hidden tabular-nums lg:table-cell">
+      <Td className="hidden whitespace-nowrap text-right tabular-nums lg:table-cell">
         {call.latency_ms === undefined ? "—" : t("calls.ms", { ms: format.number(call.latency_ms) })}
       </Td>
-      <Td className="hidden tabular-nums xl:table-cell">{call.price ? format.money(call.price) : "—"}</Td>
+      <Td className="hidden whitespace-nowrap text-right tabular-nums xl:table-cell">
+        {call.price ? format.money(call.price) : "—"}
+      </Td>
       {inspect ? (
         <Td className="w-0">
           <Button asChild size="sm" variant="ghost">

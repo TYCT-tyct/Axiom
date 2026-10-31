@@ -11,9 +11,13 @@ import { Code, PageBody } from "../parts";
 import { overviewQuery } from "../queries";
 
 // The figures are links: each opens the call or order list narrowed to the same window, so a number is never a dead
-// end. The whole card is the target, and the keyboard sees one focus ring around it.
+// end. The whole card is the target, and the keyboard sees one focus ring around it; the pointer sees its border lift.
 const figure =
-  "block h-full rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent [&>section]:h-full";
+  "block h-full rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent [&>section]:h-full [&>section]:transition-colors [&>section]:duration-150 hover:[&>section]:border-b3";
+// The counts share the first row and the money the second: five cards in one row left about 190px at 1280px, too
+// little for an amount, which then broke in the middle of its digits.
+const count = `${figure} lg:col-span-3`;
+const amount = `${figure} lg:col-span-2`;
 
 // The admin's home is the operations dashboard: the site's calls, what they earned and cost, the cash that moved, and
 // the accounts and models behind them (docs/domains/operations.md「运营看板」). A session without sites.manage sees the
@@ -69,23 +73,30 @@ type Overview = AdminSchemas["OperationsOverview"];
 function Figures({ data, window }: { data: Overview; window: Window }) {
   const { t } = useTranslation();
   const format = useFormat();
-  const count = (n?: number) => (n === undefined ? t("overview.unavailable") : format.number(n));
+  const number = (n?: number) => (n === undefined ? t("overview.unavailable") : format.number(n));
   const money = (m?: AdminSchemas["Money"]) => (m ? format.money(m) : t("overview.unavailable"));
-  const cash = data.cash?.length ? data.cash.map((c) => format.money(c)).join(" · ") : t("overview.unavailable");
+  // One line per currency: joined on one line, a second amount broke in the middle of its digits.
+  const cash = data.cash?.length
+    ? data.cash.map((c) => (
+        <span key={c.currency} className="block">
+          {format.money(c)}
+        </span>
+      ))
+    : t("overview.unavailable");
   const site = data.site_id;
   return (
     <>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <Link to="/calls" search={callsDrill(window, { site })} className={figure}>
-          <Stat label={t("overview.calls")} value={count(data.calls)} />
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+        <Link to="/calls" search={callsDrill(window, { site })} className={count}>
+          <Stat label={t("overview.calls")} value={number(data.calls)} />
         </Link>
-        <Link to="/calls" search={callsDrill(window, { site, status: "error" })} className={figure}>
-          <Stat label={t("overview.errors")} value={count(data.errors)} />
+        <Link to="/calls" search={callsDrill(window, { site, status: "error" })} className={count}>
+          <Stat label={t("overview.errors")} value={number(data.errors)} />
         </Link>
-        <Link to="/calls" search={callsDrill(window, { site })} className={figure}>
+        <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
           <Stat label={t("overview.revenue")} value={money(data.revenue)} note={t("overview.revenueNote")} />
         </Link>
-        <Link to="/calls" search={callsDrill(window, { site })} className={figure}>
+        <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
           <Stat
             label={t("overview.cost")}
             value={money(data.cost)}
@@ -96,7 +107,7 @@ function Figures({ data, window }: { data: Overview; window: Window }) {
             }
           />
         </Link>
-        <Link to="/orders" search={ordersDrill(window)} className={figure}>
+        <Link to="/orders" search={ordersDrill(window)} className={amount}>
           <Stat label={t("overview.cash")} value={cash} note={t("overview.cashNote")} />
         </Link>
       </div>
@@ -114,8 +125,8 @@ function RankHead({ first }: { first: string }) {
     <thead>
       <tr>
         <Th>{first}</Th>
-        <Th>{t("overview.col.calls")}</Th>
-        <Th>{t("overview.col.errors")}</Th>
+        <Th className="text-right">{t("overview.col.calls")}</Th>
+        <Th className="text-right">{t("overview.col.errors")}</Th>
       </tr>
     </thead>
   );
@@ -147,8 +158,8 @@ function TopAccounts({ data, window, site }: { data: Overview; window: Window; s
                     <Code>{account.account_id}</Code>
                   </Link>
                 </Td>
-                <Td className="tabular-nums">{format.number(account.calls ?? 0)}</Td>
-                <Td className="tabular-nums">{format.number(account.errors ?? 0)}</Td>
+                <Td className="text-right tabular-nums">{format.number(account.calls ?? 0)}</Td>
+                <Td className="text-right tabular-nums">{format.number(account.errors ?? 0)}</Td>
               </tr>
             ))}
           </tbody>
@@ -184,8 +195,8 @@ function TopModels({ data, window, site }: { data: Overview; window: Window; sit
                     <Code>{model.model}</Code>
                   </Link>
                 </Td>
-                <Td className="tabular-nums">{format.number(model.calls ?? 0)}</Td>
-                <Td className="tabular-nums">{format.number(model.errors ?? 0)}</Td>
+                <Td className="text-right tabular-nums">{format.number(model.calls ?? 0)}</Td>
+                <Td className="text-right tabular-nums">{format.number(model.errors ?? 0)}</Td>
               </tr>
             ))}
           </tbody>

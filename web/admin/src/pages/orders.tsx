@@ -77,8 +77,8 @@ function RefundQueue({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
               cols={[
                 [t("orders.refund.col.refund")],
                 [t("orders.refund.col.account"), "hidden md:table-cell"],
-                [t("orders.refund.col.credits"), "hidden sm:table-cell"],
-                [t("orders.refund.col.amount"), "hidden sm:table-cell"],
+                [t("orders.refund.col.credits"), "hidden text-right sm:table-cell"],
+                [t("orders.refund.col.amount"), "hidden text-right sm:table-cell"],
                 [t("orders.refund.col.reason"), "hidden lg:table-cell"],
                 [t("orders.refund.col.state"), "hidden sm:table-cell"],
               ]}
@@ -397,8 +397,8 @@ function OrdersTable({ rows }: { rows: Order[] }) {
           [t("orders.col.order")],
           [t("orders.col.account"), "hidden md:table-cell"],
           [t("orders.col.state")],
-          [t("orders.col.credits")],
-          [t("orders.col.total"), "hidden sm:table-cell"],
+          [t("orders.col.credits"), "text-right"],
+          [t("orders.col.total"), "hidden text-right sm:table-cell"],
           [t("orders.col.refunds"), "hidden lg:table-cell"],
         ]}
       />

@@ -18,7 +18,6 @@ export default function Balance() {
         <DataState query={balance}>
           {(data) => (
             <>
-              <TopUp currency={data.balance.currency} />
               <div className="grid gap-4 sm:grid-cols-2">
                 <Stat
                   label={t("balance.available")}
@@ -31,6 +30,7 @@ export default function Balance() {
                   note={t("balance.monthNote")}
                 />
               </div>
+              <TopUp currency={data.balance.currency} />
               <Breakdown data={data} />
               <Panel title={t("balance.batches")}>
                 {data.batches === undefined ? (

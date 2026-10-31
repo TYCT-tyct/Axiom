@@ -7,7 +7,7 @@ import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { MailSettings } from "../mail-settings";
-import { Actions, Facts, PageBody, State } from "../parts";
+import { Facts, PageBody, State } from "../parts";
 import { PaymentsSettings } from "../payments-settings";
 import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
 import { SiteRegistration } from "../registration";
@@ -139,13 +139,16 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
   ]);
   return (
     <>
-      <Actions>
-        <Button variant="primary" size="md" onClick={() => setOpen(true)}>
-          <Icon name="pencil" />
-          {t("settings.edit")}
-        </Button>
-      </Actions>
-      <Facts title={t("settings.title")} rows={rows} />
+      <Facts
+        title={t("settings.title")}
+        action={
+          <Button size="md" onClick={() => setOpen(true)}>
+            <Icon name="pencil" />
+            {t("settings.edit")}
+          </Button>
+        }
+        rows={rows}
+      />
       {open ? <EditDialog siteId={siteId} view={view} onClose={() => setOpen(false)} /> : null}
     </>
   );

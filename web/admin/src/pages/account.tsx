@@ -86,7 +86,7 @@ function Details({ account }: { account: Account }) {
   const format = useFormat();
   const { balance } = account;
   return (
-    <div className="grid gap-4 xl:grid-cols-2">
+    <div className="grid items-start gap-4 xl:grid-cols-2">
       <Facts
         title={t("users.account.balanceTitle")}
         rows={[

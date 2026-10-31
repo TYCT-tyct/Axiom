@@ -23,6 +23,19 @@ const scenes: Scene[] = [
   { name: "overview", signedIn: true, open: (page) => goto(page, "") },
   { name: "balance", signedIn: true, open: (page) => goto(page, "balance") },
   { name: "statement", signedIn: true, open: (page) => goto(page, "statement") },
+  { name: "orders", signedIn: true, open: (page) => goto(page, "orders") },
+  { name: "models", signedIn: true, open: (page) => goto(page, "models") },
+  { name: "notifications", signedIn: true, open: (page) => goto(page, "notifications") },
+  {
+    name: "top-up",
+    signedIn: true,
+    open: async (page) => {
+      await goto(page, "balance");
+      await page.locator("input[inputmode=decimal]").fill("10");
+      await page.getByRole("button", { name: /^(查看支付方式|See how to pay)$/ }).click();
+      await page.getByRole("combobox").waitFor();
+    },
+  },
   { name: "keys", signedIn: true, open: (page) => goto(page, "keys") },
   { name: "calls", signedIn: true, open: (page) => goto(page, "calls") },
   { name: "call", signedIn: true, open: (page) => goto(page, "calls/00000000-0000-4000-8000-000000000001") },
@@ -45,6 +58,24 @@ const scenes: Scene[] = [
     await page.getByRole("dialog").locator("input[name=name]").fill("Deploy bot");
     await page.getByRole("dialog").locator("button[type=submit]").click();
   }),
+  {
+    name: "model-details",
+    signedIn: true,
+    open: async (page) => {
+      await goto(page, "models");
+      await page
+        .getByRole("button", { name: /^(详情|Details)$/ })
+        .first()
+        .click();
+      await page.locator("[aria-expanded=true]").waitFor();
+    },
+  },
+  dialogScene("refund", "orders", (page) =>
+    page
+      .getByRole("button", { name: /^(申请退款|Request refund)$/ })
+      .first()
+      .click(),
+  ),
   dialogScene("totp-setup", "security", (page) =>
     page.getByRole("button", { name: /^(开启两步验证|Turn on two-step verification)$/ }).click(),
   ),

@@ -118,6 +118,7 @@ const grant = (state: string, reply: Answer["reply"]) => ({ path: "/credit-grant
 
 const scenes: Scene[] = [
   view("sign-in", "sign-in", false),
+  view("home", ""),
   view("users", "users"),
   view("orders", "orders"),
   view("account", `accounts/${acct(1)}`),

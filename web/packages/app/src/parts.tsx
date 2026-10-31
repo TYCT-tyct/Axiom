@@ -26,7 +26,7 @@ export function LoadMore({
 // Stat is one figure the user looks at first: what it is, then the number, large. The number may be as long as an
 // amount can be, so it wraps rather than pushing the page wider, filling each line: breaking only where a word may would
 // leave a minus sign alone on the first line.
-export function Stat({ label, value, note }: { label: string; value: string; note?: ReactNode }) {
+export function Stat({ label, value, note }: { label: string; value: ReactNode; note?: ReactNode }) {
   return (
     <Panel className="p-4">
       <p className="text-label text-t3">{label}</p>

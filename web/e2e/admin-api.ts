@@ -100,20 +100,56 @@ function listCalls({ query, state }: Ctx<"/api/admin/v1/calls", "get">) {
   });
 }
 
+// The site settings the settings page reads besides its own; another site's are not found, as on the server.
+function ofSite<T>(state: AdminState, siteId: string | undefined, body: T) {
+  return siteId === state.siteId ? ok(body) : fail(404, "not_found");
+}
+
+const registration: Schemas["RegistrationPolicy"] = {
+  mode: "invite",
+  human_check: true,
+  human_check_bits: 18,
+  domain_burst: 20,
+  domain_per_hour: 200,
+  domain_allow: [],
+  domain_deny: ["mailinator.com"],
+};
+
+// The overview sums the mocked calls, so the worst data's long slugs, many accounts and int64 prices reach the page; the
+// cash comes back in two currencies, one of them negative, as a site with refunds in another currency would see.
 function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "get">) {
-  const errors = state.calls.filter((call) => call.error_kind).length;
+  const revenue = state.calls.reduce((sum, call) => sum + BigInt(call.price?.amount ?? 0), 0n);
+  const rank = (key: (call: Schemas["AdminCallSummary"]) => string | undefined) =>
+    [
+      ...state.calls
+        .reduce((groups, call) => {
+          const name = key(call) ?? "";
+          const group = groups.get(name) ?? { calls: 0, errors: 0 };
+          groups.set(name, { calls: group.calls + 1, errors: group.errors + (call.error_kind ? 1 : 0) });
+          return groups;
+        }, new Map<string, { calls: number; errors: number }>())
+        .entries(),
+    ]
+      .sort((a, b) => b[1].calls - a[1].calls)
+      .slice(0, 10);
   return ok({
     site_id: state.siteId,
     since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
     until: query.get("until") ?? "2026-10-30T23:59:59.000Z",
     calls: state.calls.length,
-    errors,
-    revenue: { amount: "2500", currency: "USD" },
-    cost: { amount: "1000", currency: "USD" },
+    errors: state.calls.filter((call) => call.error_kind).length,
+    revenue: { amount: String(revenue), currency: "USD" },
+    cost: { amount: String((revenue * 6n) / 10n), currency: "USD" },
     unknown_cost_calls: 0,
-    cash: [{ amount: "1500", currency: "USD" }],
-    top_accounts: [],
-    top_models: [],
+    cash: [
+      { amount: String(revenue / 2n), currency: "USD" },
+      { amount: String(-revenue / 20n), currency: "CNY" },
+    ],
+    top_accounts: rank((call) => call.account_id).map(([account_id, n]) => ({
+      account_id: account_id as Schemas["AccountId"],
+      ...n,
+    })),
+    top_models: rank((call) => call.model).map(([model, n]) => ({ model, ...n })),
   });
 }
 
@@ -361,6 +397,43 @@ const handlers: Handler<AdminState>[] = [
   route("put", `${base}/sites/{site_id}/logo`, changes("sites.manage"), putSiteLogo),
   route("get", `${base}/sites/{site_id}/key-limits`, reads("sites.manage"), getSiteKeyLimits),
   route("put", `${base}/sites/{site_id}/key-limits`, changes("sites.manage"), putSiteKeyLimits),
+  route("get", `${base}/sites/{site_id}/system-settings`, reads("sites.manage"), ({ params, state }) =>
+    ofSite(state, params.site_id, { name: "Axiom", registration: "invite", name_editable: true }),
+  ),
+  route("get", `${base}/sites/{site_id}/system-settings/payments`, reads("sites.manage"), ({ params, state }) =>
+    ofSite(state, params.site_id, {
+      open: true,
+      credits_min: { amount: "1000000000", currency: "USD" },
+      credits_max: { amount: "10000000000000", currency: "USD" },
+      top_up_buffer_ppm: 20000,
+    }),
+  ),
+  route("get", `${base}/sites/{site_id}/registration`, reads("sites.manage"), ({ params, state }) =>
+    ofSite(state, params.site_id, { policy: registration, defaults: registration }),
+  ),
+  route("get", `${base}/sites/{site_id}/sign-in`, reads("sites.manage"), ({ params, state }) =>
+    ofSite(state, params.site_id, {
+      login_domain: "login.example.com",
+      passkeys: true,
+      providers: [
+        { provider: "github", client_id: "Iv1.0123456789abcdef", configured: true },
+        { provider: "google", configured: false },
+        { provider: "linuxdo", configured: false },
+      ],
+    }),
+  ),
+  route("get", `${base}/settings/mail`, reads("sites.manage"), () =>
+    ok({
+      enabled: true,
+      host: "smtp.example.com",
+      port: 465,
+      username: "mailer@example.com",
+      from: "Axiom <noreply@example.com>",
+      has_password: true,
+      restart_required: false,
+      source: "database",
+    }),
+  ),
   route("get", `${base}/tiers`, reads("users.view"), ({ state }) => ok({ data: state.tiers })),
   route("get", `${base}/payments/merchants`, reads("sites.manage"), ({ query, state }) =>
     query.get("site_id") === state.siteId ? ok({ data: state.merchants }) : fail(404, "not_found"),

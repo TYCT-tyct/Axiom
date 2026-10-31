@@ -202,6 +202,21 @@ function exportStatement({ state }: Ctx<"/api/console/v1/statement.csv", "get">)
   } as const;
 }
 
+function listOrders({ query, state }: Ctx<"/api/console/v1/orders", "get">) {
+  const page = paged(state.orders, query);
+  return page ? ok(page) : fail(400, "invalid_request");
+}
+
+function getOrder({ params, state }: Ctx<"/api/console/v1/orders/{order_id}", "get">) {
+  const order = state.orders.find((o) => o.id === params.order_id);
+  return order ? ok(order) : fail(404, "not_found");
+}
+
+function setNotifications({ body, state }: Ctx<"/api/console/v1/notification-preferences", "put">) {
+  state.notifications = { ...state.notifications, ...body };
+  return ok(state.notifications);
+}
+
 const handlers: Handler<MockState>[] = [
   route("get", `${base}/version`, none, ({ state }) => ok({ version: state.version })),
   route("get", `${base}/site`, none, ({ state }) => ok(state.site)),
@@ -227,6 +242,13 @@ const handlers: Handler<MockState>[] = [
   route("get", `${base}/calls/export`, { ...signedIn, permission: "calls.view" }, exportCalls),
   route("get", `${base}/calls/{call_id}`, { ...signedIn, permission: "calls.view" }, getCall),
   route("get", `${base}/statement`, { ...signedIn, permission: "balance.view" }, listStatement),
+  route("get", `${base}/orders`, { ...signedIn, permission: "balance.view" }, listOrders),
+  route("get", `${base}/orders/{order_id}`, { ...signedIn, permission: "balance.view" }, getOrder),
+  route("get", `${base}/payment-methods`, { ...signedIn, permission: "balance.top_up" }, ({ state }) =>
+    ok({ data: state.methods }),
+  ),
+  route("get", `${base}/notification-preferences`, signedIn, ({ state }) => ok(state.notifications)),
+  route("put", `${base}/notification-preferences`, signedIn, setNotifications),
   route("get", `${base}/statement.csv`, { ...signedIn, permission: "balance.view" }, exportStatement),
 ];
 
