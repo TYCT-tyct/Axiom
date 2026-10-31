@@ -222,10 +222,9 @@ type relayFormat struct {
 }
 
 var relayFormats = [...]relayFormat{
-	Messages:    {newMessagesStream, 1 << 20, false},
-	Responses:   {newResponsesStream, 32 << 20, false},
-	Chat:        {newChatStream, 1 << 20, true},
-	Completions: {newCompletionsStream, 1 << 20, true},
+	Messages:  {newMessagesStream, 1 << 20, false},
+	Responses: {newResponsesStream, 32 << 20, false},
+	Chat:      {newChatStream, 1 << 20, true},
 }
 
 // chatConversions are the formats a Chat client's stream is converted from (README.md「跨格式的流」): the upstream's
@@ -666,10 +665,9 @@ func (r *Relay) endOut() []byte {
 func KeepAlive(f Format) []byte { return keepAlives[f] }
 
 var keepAlives = [...][]byte{
-	Messages:    []byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"),
-	Responses:   []byte(": keep-alive\n\n"),
-	Chat:        []byte(": keep-alive\n\n"),
-	Completions: []byte(": keep-alive\n\n"),
+	Messages:  []byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"),
+	Responses: []byte(": keep-alive\n\n"),
+	Chat:      []byte(": keep-alive\n\n"),
 }
 
 // initReply keeps the response representation tied to the original client's request.
@@ -680,7 +678,7 @@ func (r *Relay) initReply(u UsageContext, o RelayOptions) {
 	}
 	r.up = r.format.newUpstream(u, o, r.charge)
 	if o.Aggregate {
-		r.agg = newAggregator(r.client, r.charge, r)
+		r.agg = newAggregator(r.client, r.charge)
 		if a, ok := r.agg.(*chatAggregate); ok {
 			a.legacy = o.legacyFunctions
 			a.healing = u.ResponseHealing

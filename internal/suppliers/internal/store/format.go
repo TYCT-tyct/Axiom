@@ -10,7 +10,7 @@ import (
 
 // formatNames are the call formats under the names the formats columns store, in protocol's enumeration order. The
 // columns' CHECK lists exactly these, so a name added here without a migration is refused by the database.
-var formatNames = [...]string{"messages", "responses", "chat", "completions", "embeddings", "rerank"}
+var formatNames = [...]string{"messages", "responses", "chat", "embeddings", "rerank"}
 
 // FormatNames writes call formats as the columns store them: no repeats, in enumeration order, so that the same set
 // written twice is the same array and a sync that reads what it wrote finds nothing to change. The columns hold at least

@@ -349,38 +349,13 @@ func TestReservedCostEstimatesMissingPricesWithoutChangingAdmission(t *testing.T
 	}
 }
 
-// TestQuoteBatchCompletions: legacy completions with several prompts is a batch for its input: every prompt is charged
-// and reserved, while the context and the price band look at the largest prompt, and its output is still reserved.
-func TestQuoteBatchCompletions(t *testing.T) {
-	t.Parallel()
-	schedule := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"2"}}`)
-	e := Quotable{
-		Price: schedule, MaxOutput: 1,
-		Model: Model{ContextLength: 8192, Reports: 1<<catalog.ItemInput | 1<<catalog.ItemOutput},
-	}
-	d := Demand{TextBytes: 48000, InputBytes: 24000, Choices: 2} // two 6000-token prompts, one token each
-	first, longest := InputBound(d, e.Model)
-	if first != 48000 || longest != 8192 {
-		t.Errorf("InputBound = %d, %d; want the batch total 48000 and the largest input 8192", first, longest)
-	}
-	if got := InputEstimate(d, e.Model); got != 12000 {
-		t.Errorf("InputEstimate = %d, want the batch total 12000 tokens", got)
-	}
-	q, err := quoteEntry(d, e, Segments{}, true)
-	if err != nil {
-		t.Fatalf("quoteEntry: %v", err)
-	}
-	if got := units(t, q.amount); got != "48004" {
-		t.Errorf("amount = %s, want 48004 (the batch's byte bound plus two output tokens at 2)", got)
-	}
-}
-
-// TestQuoteDirect: an embeddings or rerank call has no output to reserve and no second sampling. Its schedule needs
-// only the input price, and rerank's search unit is a flat fee, not a whole-context resample.
+// TestQuoteDirect: an embeddings or rerank call has no output to reserve and no second sampling, even at an endpoint
+// whose model also generates and so has an output limit. Its schedule needs only the input price, and rerank's search
+// unit is a flat fee, not a whole-context resample.
 func TestQuoteDirect(t *testing.T) {
 	t.Parallel()
 	schedule := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","web_search":"1"}}`)
-	e := Quotable{Price: schedule, Model: Model{ContextLength: 1000}, MaxOutput: 0}
+	e := Quotable{Price: schedule, Model: Model{ContextLength: 1000}, MaxOutput: 100}
 	d := Demand{Direct: true, TextBytes: 2, InputBytes: 2, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}}
 	q, err := quoteEntry(d, e, Segments{}, true)
 	if err != nil {

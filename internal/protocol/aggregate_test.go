@@ -196,12 +196,6 @@ var shapes = [...]func(map[string]any, func(map[string]any, string, ...string)){
 			}
 		}
 	},
-	protocol.Completions: func(m map[string]any, has func(map[string]any, string, ...string)) {
-		has(m, "the completion", "id", "object", "created", "model", "choices", "usage")
-		for _, choice := range objects(m["choices"]) {
-			has(choice, "a choice", "index", "text", "finish_reason")
-		}
-	},
 	protocol.Responses: func(m map[string]any, has func(map[string]any, string, ...string)) {
 		has(m, "the response", "id", "object", "created_at", "status", "model", "output", "usage")
 		for _, item := range objects(m["output"]) {

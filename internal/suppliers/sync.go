@@ -30,8 +30,8 @@ type SyncConfig struct {
 	Clock func() time.Time
 	// SweepEvery is how often the suppliers that are due are looked for; zero is 15 seconds.
 	SweepEvery time.Duration
-	// DirectFormats lets syncing write completions, embeddings and rerank. It stays false until every node that may
-	// read the tables is upgraded: an older node drops the whole supplier when it meets an unknown format.
+	// DirectFormats lets syncing write embeddings and rerank. It stays false until every node that may read the
+	// tables is upgraded: an older node drops the whole supplier when it meets an unknown format.
 	DirectFormats bool
 }
 

@@ -2931,7 +2931,7 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         /** @enum {string} */
-        ModelFormat: "messages" | "responses" | "chat" | "completions" | "embeddings" | "rerank";
+        ModelFormat: "messages" | "responses" | "chat" | "embeddings" | "rerank";
         /**
          * @description The generation formats an endpoint test can exercise. Direct formats are listed on the endpoint but are not tested here yet.
          * @enum {string}

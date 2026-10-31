@@ -546,8 +546,8 @@ func TestOutputCapQuotedIsTheCapSent(t *testing.T) {
 }
 
 // TestEntryDirectFormats: a direct call is read whole, so an endpoint need not stream it, and it is never converted:
-// a model that does not list the format has no entry. Legacy completions do stream, so an endpoint that cannot stream
-// it is left out (docs/domains/gateway.md「转发规则」).
+// a model that does not list the format has no entry. A generation is read as a stream, so an endpoint that cannot
+// stream it is left out (docs/domains/gateway.md「转发规则」).
 func TestEntryDirectFormats(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -557,8 +557,8 @@ func TestEntryDirectFormats(t *testing.T) {
 	}{
 		{protocol.Embeddings, false, true},
 		{protocol.Rerank, false, true},
-		{protocol.Completions, true, true},
-		{protocol.Completions, false, false},
+		{protocol.Chat, true, true},
+		{protocol.Chat, false, false},
 	} {
 		e := endpoint(t, 1, func(e *routing.Endpoint) {
 			e.Native, e.Served, e.Streams = routing.Of(tc.format), routing.Of(tc.format), tc.streams

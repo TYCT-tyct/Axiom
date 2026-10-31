@@ -22,12 +22,11 @@ import (
 // x-codex-turn-state is the vendor's own state, minted on an earlier turn and replayed by the client: on Responses it goes
 // as it came, since a derived one would be an invented one. No other format has one.
 var requestHeaders = [...][]headerRule{
-	protocol.Messages:    {{name: "Anthropic-Beta"}, {name: "Anthropic-Version"}},
-	protocol.Responses:   slices.Concat(openAISessionHeaders, []headerRule{{name: stateHeader}}),
-	protocol.Chat:        openAISessionHeaders,
-	protocol.Completions: openAISessionHeaders,
-	protocol.Embeddings:  nil,
-	protocol.Rerank:      nil,
+	protocol.Messages:   {{name: "Anthropic-Beta"}, {name: "Anthropic-Version"}},
+	protocol.Responses:  slices.Concat(openAISessionHeaders, []headerRule{{name: stateHeader}}),
+	protocol.Chat:       openAISessionHeaders,
+	protocol.Embeddings: nil,
+	protocol.Rerank:     nil,
 }
 
 // openAISessionHeaders are the names a client may name its conversation in for an endpoint of an OpenAI dialect, each

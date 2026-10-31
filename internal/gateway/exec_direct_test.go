@@ -133,33 +133,6 @@ func TestExecutorRerank(t *testing.T) {
 	})
 }
 
-// TestExecutorCompletions: a legacy completions call is a stream the client did not ask for, so it is aggregated into
-// one text completion, with the usage and cost of the settlement.
-func TestExecutorCompletions(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		request := []byte(`{"model":"gpt-3.5-turbo-instruct","prompt":"Say this is a test","max_tokens":7,"stream":false}`)
-		stream := string(fixture(t, "completions/text/upstream.sse"))
-		h := newHarness(t, context.Background(), options{
-			client: protocol.Completions, request: request, entries: 1,
-			script: map[int][]scripted{1: {serve(beat{data: stream})}},
-			final:  billing.Final{Segments: []billing.Segment{{Usage: usage(t, map[catalog.Item]int64{catalog.ItemInput: 4, catalog.ItemOutput: 7})}}},
-		})
-		h.run()
-		body := bodyObject(t, h.w.body())
-		choices := listOf(body["choices"])
-		if body["object"] != "text_completion" || len(choices) != 1 || objectOf(choices[0])["text"] != "Say this is" ||
-			objectOf(choices[0])["finish_reason"] != "length" {
-			t.Errorf("reply:\n%s", h.w.body())
-		}
-		if u := objectOf(body["usage"]); u["prompt_tokens"] != 4.0 || u["completion_tokens"] != 7.0 || u["cost"] == nil {
-			t.Errorf("usage %v:\n%s", u, h.w.body())
-		}
-		if call := h.up.endpoint(1).calls[0]; call.Format != protocol.Completions || !strings.Contains(string(call.Body), `"stream":true`) {
-			t.Errorf("upstream call %v:\n%s", call.Format, call.Body)
-		}
-	})
-}
-
 // TestExecutorDirectFailure: a reply without the member its format answers with is the upstream breaking the format
 // before the commit point, so the call retries the next entry; when none is left the client gets the documented
 // error, not half a reply.

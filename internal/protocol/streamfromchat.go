@@ -89,7 +89,7 @@ func newChatToNativeWith(f Format, inner upstream, u UsageContext, o RelayOption
 		client: f, o: o, inner: inner, active: -1, hidesReasoning: u.HidesReasoning,
 		tools: map[int64]int{}, toolIDs: map[string]bool{},
 	}
-	s.init(charge, nil)
+	s.init(charge)
 	return s
 }
 

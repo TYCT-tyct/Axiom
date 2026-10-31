@@ -56,7 +56,7 @@ type Config struct {
 	Holder string
 	// SweepEvery is how often suppliers that are due are looked for. Queue capacity decides when they start.
 	SweepEvery time.Duration
-	// DirectFormats writes completions, embeddings and rerank; false until every node reads them.
+	// DirectFormats writes embeddings and rerank; false until every node reads them.
 	DirectFormats bool
 	Now           func() time.Time
 	Logger        *slog.Logger

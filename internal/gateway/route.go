@@ -307,7 +307,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	native := routing.Of(r.Formats...)
 	// Every pair of the three chat formats converts (protocol README.md「跨格式转换」), so an endpoint that speaks one
 	// serves all three; Native keeps the one it is called in, which is what a request only its own format can express
-	// needs. Legacy completions and the direct formats do not convert, so an endpoint serves one only where it lists it.
+	// needs. The direct formats do not convert, so an endpoint serves one only where it lists it.
 	served := native
 	if native&chatFormats != 0 {
 		served |= chatFormats

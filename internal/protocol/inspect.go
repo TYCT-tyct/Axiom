@@ -22,12 +22,11 @@ type Format uint8
 
 // The call formats.
 const (
-	Messages    Format = iota // Anthropic Messages
-	Responses                 // OpenAI Responses
-	Chat                      // OpenAI Chat Completions
-	Completions               // OpenAI's legacy text completions
-	Embeddings                // OpenAI's embeddings
-	Rerank                    // OpenRouter's rerank
+	Messages   Format = iota // Anthropic Messages
+	Responses                // OpenAI Responses
+	Chat                     // OpenAI Chat Completions
+	Embeddings               // OpenAI's embeddings
+	Rerank                   // OpenRouter's rerank
 )
 
 // Direct reports whether a format answers one whole JSON body that is not a generation, with no stream to relay and
@@ -138,7 +137,7 @@ func bodyFault(err error) string {
 //
 //nolint:cyclop,gocognit // one dispatch over every format, each branch one reader
 func Inspect(f Format, body []byte) (Request, error) {
-	if f == Completions || f.Direct() {
+	if f.Direct() {
 		return inspectNew(f, body)
 	}
 	g := &grammars[f]

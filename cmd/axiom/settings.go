@@ -31,7 +31,7 @@ type nodeSettings struct {
 	roles                             nodeRoles
 	healthMode                        quality.Mode
 	modelVerification                 bool // whether the health loop verifies endpoints as the models they claim
-	directFormats                     bool // whether supplier syncing may write embeddings, rerank and legacy completions
+	directFormats                     bool // whether supplier syncing may write embeddings and rerank
 	publicAddr, adminAddr, probesAddr string
 	nodeAddr                          string
 	coreURL                           *url.URL

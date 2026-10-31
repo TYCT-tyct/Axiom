@@ -25,10 +25,9 @@ type Demand struct {
 	// Direct is a call of a format that answers one object rather than generating output: embeddings and rerank. It
 	// has no output tokens to reserve, and its server-tool charges are flat per use, not a sampling of the model.
 	Direct bool
-	// InputBytes is the largest single input of a batch, in bytes, for the context limit and the price band that
-	// depend on one input's length rather than the batch's total. 0 means TextBytes is that length. A batch is
-	// reserved and estimated at its total, whether or not it generates output: two prompts of one completion are
-	// charged for both, while the context and the price band still apply to each prompt.
+	// InputBytes is the largest single input of a direct batch, in bytes, for the context limit and the price band
+	// that depend on one input's length rather than the batch's total. 0 means TextBytes is that length. The batch is
+	// reserved and estimated at its total: every input is charged, while the context and the price band apply to each.
 	InputBytes   int64
 	Compaction   bool // server-side compaction or context management is on
 	InputItems   catalog.ItemSet
@@ -286,9 +285,9 @@ func (q *quote) priceTokens(d Demand, e Quotable, prices *quotePrices, tiers cat
 		in |= e.Model.Reports&(1<<catalog.ItemCacheWrite|1<<catalog.ItemAudioIn) | 1<<catalog.ItemImageIn
 	}
 	// A batch is charged for every input, but its price band is the largest single input, not the sum: one 6k-token
-	// input beside another is two 6k contexts, not one 12k context. This holds for a generation format's batch too.
+	// input beside another is two 6k contexts, not one 12k context.
 	band := first
-	if d.Direct || d.InputBytes > 0 {
+	if d.Direct {
 		band = longest
 	}
 	firstPrice, ok := prices.inputCeiling(in, tiers, band, e.Model.OpenAIUsage)
@@ -450,10 +449,9 @@ const (
 
 // InputEstimate is the input tokens of the request as a charge takes them when the upstream reported none: the text at
 // its own count when the caller counted it and at InputBytesPerToken otherwise, each image and file at the lesser of
-// its bound and the estimate. A batch is taken at its total, a single generation at its context, and a direct call at
-// its total too: both batch forms are charged for every input. It never exceeds InputBound's first, which the
-// reservation covers: every part is the lesser of the part's bound and something, and a token covers a byte or more, so
-// the text's count never passes its bytes. d.TextBytes is bytes.
+// its bound and the estimate, held to the context except for a direct call, whose batch is charged for every input.
+// It never exceeds InputBound's first, which the reservation covers: every part is the lesser of the part's bound and
+// something, and a token covers a byte or more, so the text's count never passes its bytes. d.TextBytes is bytes.
 func InputEstimate(d Demand, m Model) int64 {
 	text := min(d.TextTokens, d.TextBytes) // a token covers a byte or more, and nothing counted keeps the rule below
 	if text <= 0 {
@@ -461,7 +459,7 @@ func InputEstimate(d Demand, m Model) int64 {
 	}
 	images := mul(d.Images, min(imageTokens(m), estimatedImageTokens))
 	files := mul(d.Documents, min(fileTokens(m), estimatedFileTokens))
-	if d.Direct || d.InputBytes > 0 {
+	if d.Direct {
 		return add(text, add(images, files)) // each input fits the context; the batch's total is what is charged
 	}
 	return min(m.ContextLength, add(text, add(images, files)))
@@ -471,9 +469,8 @@ func inputBound(d Demand, m Model, samplings int64) (first, longest int64) {
 	window := m.ContextLength
 	total := add(d.TextBytes, add(mul(d.Images, imageTokens(m)), mul(d.Documents, fileTokens(m))))
 	first = min(window, total)
-	if d.Direct || d.InputBytes > 0 {
-		// A batch is one charge for every input, and its context is the largest input: neither is the sum. This is
-		// the direct formats' rule and the legacy completions' rule alike.
+	if d.Direct {
+		// A batch is one charge for every input, and its context is the largest input: neither is the sum.
 		first = total
 		one := d.InputBytes
 		if one <= 0 {

@@ -512,22 +512,17 @@ func reason(why syncer.Reason) *string {
 	return &text
 }
 
+// preP18Formats are the formats a node released before P18 can read: the closed gate writes no other.
+var preP18Formats = []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat}
+
 // writableFormats drops the formats a pre-P18 node cannot read while the compatibility gate is closed, so this release
-// cannot write a name that node would refuse to read. The three generation formats are the ones it knows.
+// cannot write a name that node would refuse to read. It names what that node knows rather than what is new, so a
+// format added later is held back too until the gate opens.
 func writableFormats(formats []protocol.Format, direct bool) []protocol.Format {
 	if direct {
 		return formats
 	}
-	return slices.DeleteFunc(formats, func(f protocol.Format) bool {
-		switch f {
-		case protocol.Messages, protocol.Responses, protocol.Chat:
-			return false
-		case protocol.Completions, protocol.Embeddings, protocol.Rerank:
-			return true
-		default:
-			return false // not a format this release can name; FormatNames rejects it
-		}
-	})
+	return slices.DeleteFunc(formats, func(f protocol.Format) bool { return !slices.Contains(preP18Formats, f) })
 }
 
 // formatsOf reads the formats an engine snapshot stores, which protocol's are.

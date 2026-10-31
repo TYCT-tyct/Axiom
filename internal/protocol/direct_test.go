@@ -1,10 +1,7 @@
-//nolint:revive // the direct-format test file covers its request, reply, stream and budget rules
 package protocol_test
 
 import (
 	"bytes"
-	"errors"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -173,29 +170,6 @@ func TestDirectInputs(t *testing.T) {
 			name: "rerank top_n", f: protocol.Rerank, body: `{"model":"m","query":"q","documents":["a"],"top_n":0}`,
 			wantErr: "top_n",
 		},
-		{
-			name: "completions string", f: protocol.Completions, body: `{"model":"m","prompt":"hello","max_tokens":4}`,
-			want: func(r protocol.Request) bool { return r.TextBytes == 5 && r.MaxOutput == 4 && r.Choices == 1 },
-		},
-		{
-			name: "completions prompts and n", f: protocol.Completions,
-			body: `{"model":"m","prompt":["a","b"],"n":3,"stream":true}`,
-			want: func(r protocol.Request) bool { return r.TextBytes == 2 && r.Choices == 6 && r.Stream },
-		},
-		{
-			name: "completions token prompt is one prompt", f: protocol.Completions,
-			body: `{"model":"m","prompt":[1,2,3],"n":2}`,
-			want: func(r protocol.Request) bool { return r.TextBytes == 12 && r.MaxInputBytes == 12 && r.Choices == 2 },
-		},
-		{
-			name: "completions prompt array of token arrays", f: protocol.Completions,
-			body: `{"model":"m","prompt":[[1,2],[3]],"n":2}`,
-			want: func(r protocol.Request) bool { return r.TextBytes == 12 && r.MaxInputBytes == 8 && r.Choices == 4 },
-		},
-		{
-			name: "completions prompt missing", f: protocol.Completions, body: `{"model":"m"}`,
-			wantErr: "prompt is missing",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, err := protocol.Inspect(tc.f, []byte(tc.body))
@@ -215,8 +189,8 @@ func TestDirectInputs(t *testing.T) {
 	}
 }
 
-// TestDirectPrepare: the rewrites drop the members that route, derive the identifiers, and legacy completions ask for a
-// stream. A direct format does not convert, and the request says so before any attempt.
+// TestDirectPrepare: the rewrites drop the members that route and derive the identifiers. A direct format does not
+// convert, and the request says so before any attempt.
 //
 //nolint:gocognit // the prepare table is the test
 func TestDirectPrepare(t *testing.T) {
@@ -232,11 +206,6 @@ func TestDirectPrepare(t *testing.T) {
 			body:   `{"model":"m","input":"x","user":"alice","provider":{"only":["a"]},"session_id":"s"}`,
 			want:   `{"model":"upstream","input":"x","user":"derived"}`,
 			absent: []string{"provider", "session_id"},
-		},
-		{
-			name: "completions", f: protocol.Completions,
-			body: `{"model":"m","prompt":"x","user":"alice","max_tokens":5}`,
-			want: `{"model":"upstream","prompt":"x","user":"derived","max_tokens":5,"stream_options":{"include_usage":true},"stream":true}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -303,92 +272,6 @@ func TestDirectErrors(t *testing.T) {
 	}
 }
 
-// TestCompletionsSample replays the recorded legacy completions stream: the aggregate is one text completion, its text
-// is the chunks' text in order, and the usage and cost are the settlement's.
-//
-//nolint:cyclop,gocognit // the sample and its checks are the test
-func TestCompletionsSample(t *testing.T) {
-	stream := sample(t, "completions/text/upstream.sse")
-	request := sample(t, "completions/text/request.json")
-	req, err := protocol.Inspect(protocol.Completions, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !req.Stream || req.MaxOutput != 7 {
-		t.Errorf("request %+v", req)
-	}
-	got := aggregate(t, protocol.Completions, protocol.Completions, bytes.NewReader(stream), protocol.NewMemory(0), func(protocol.Usage) *protocol.Final { return nil })
-	if got.err != nil || got.status != http.StatusOK {
-		t.Fatalf("error %v, status %d:\n%s", got.err, got.status, got.body)
-	}
-	body := decode(t, got.body)
-	if body["object"] != "text_completion" {
-		t.Errorf("object %v", body["object"])
-	}
-	choices := objects(body["choices"])
-	if len(choices) != 1 || choices[0]["text"] != "Say this is" || choices[0]["finish_reason"] != "length" {
-		t.Errorf("choices %v", body["choices"])
-	}
-	if usage := obj(body["usage"]); usage["cost"] == nil {
-		t.Errorf("no cost in the aggregate:\n%s", got.body)
-	}
-
-	// The streaming client gets the chunks in order, our identity, and a usage chunk of ours before [DONE].
-	relayed := relay(t, protocol.Completions, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-	if relayed.err != nil {
-		t.Fatal(relayed.err)
-	}
-	out := string(relayed.out)
-	if !strings.Contains(out, `"id":"gen-01"`) || strings.Contains(out, "cmpl-123") {
-		t.Errorf("the client's id is not ours:\n%s", out)
-	}
-	if !strings.Contains(out, `"usage":{`) || !strings.Contains(out, "data: [DONE]") {
-		t.Errorf("the stream has no usage before its end:\n%s", out)
-	}
-	var last map[string]any
-	for line := range strings.SplitSeq(out, "\n") {
-		data, ok := strings.CutPrefix(line, "data: ")
-		if !ok || data == "[DONE]" {
-			continue
-		}
-		var chunk map[string]any
-		if err := jsonx.Unmarshal([]byte(data), &chunk); err != nil {
-			t.Fatalf("%v: %s", err, data)
-		}
-		last = chunk
-	}
-	if obj(last["usage"])["cost"] == nil {
-		t.Errorf("the last chunk has no cost: %v", last)
-	}
-}
-
-// TestCompletionsStreamEvents: the reader ends only after every started choice finished, and an error chunk fails the
-// stream instead of reaching the client as content.
-func TestCompletionsStreamEvents(t *testing.T) {
-	for _, tc := range []struct {
-		name, stream, want string
-	}{
-		{
-			name:   "done before finish",
-			stream: "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"text\":\"a\"}]}\n\ndata: [DONE]\n\n",
-			want:   "[DONE] before choice 0 finished",
-		},
-		{
-			name: "error chunk",
-			stream: "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"text\":\"a\"}]}\n\n" +
-				"data: {\"error\":{\"message\":\"bad\",\"type\":\"invalid_request_error\"}}\n\n",
-			want: "upstream",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := relay(t, protocol.Completions, strings.NewReader(tc.stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-			if got.err == nil || !strings.Contains(got.err.Error(), tc.want) {
-				t.Fatalf("got %v, want an error saying %q", got.err, tc.want)
-			}
-		})
-	}
-}
-
 // TestDirectFormatNames keeps the formats' numbers, which suppliers store by name and routing keeps in a bit set, from
 // moving silently.
 func TestDirectFormatNames(t *testing.T) {
@@ -396,10 +279,10 @@ func TestDirectFormatNames(t *testing.T) {
 	for f := protocol.Messages; f <= protocol.Rerank; f++ {
 		b.WriteString(string(rune('0' + f)))
 	}
-	if b.String() != "012345" {
+	if b.String() != "01234" {
 		t.Errorf("formats %s", b.String())
 	}
-	if !protocol.Embeddings.Direct() || !protocol.Rerank.Direct() || protocol.Completions.Direct() {
+	if !protocol.Embeddings.Direct() || !protocol.Rerank.Direct() || protocol.Chat.Direct() {
 		t.Error("Direct is not embeddings and rerank")
 	}
 }
@@ -466,180 +349,6 @@ func TestDirectErrorBodies(t *testing.T) {
 				t.Errorf("%v usage %v:\n%s", f, usage, body)
 			}
 		}
-	}
-}
-
-// TestCompletionsAggregateLogprobsAndUsageChunk: a chunk that carries a choice and the usage is not mistaken for a
-// usage-only ending, and logprobs from successive chunks are joined rather than the last replacing the first.
-func TestCompletionsAggregateLogprobsAndUsageChunk(t *testing.T) {
-	stream := `data: {"id":"x","object":"text_completion","choices":[{"index":0,"text":"a","logprobs":{"tokens":["a"],"token_logprobs":[-0.1],"top_logprobs":[{"a":-0.1}],"text_offset":[0]},"finish_reason":null}]}
-
-data: {"id":"x","object":"text_completion","choices":[{"index":0,"text":"b","logprobs":{"tokens":["b"],"token_logprobs":[-0.2],"top_logprobs":[{"b":-0.2}],"text_offset":[1]},"finish_reason":"length"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}
-
-data: [DONE]
-
-`
-	got := aggregate(t, protocol.Completions, protocol.Completions, strings.NewReader(stream), protocol.NewMemory(0), func(protocol.Usage) *protocol.Final { return nil })
-	if got.err != nil {
-		t.Fatal(got.err)
-	}
-	body := decode(t, got.body)
-	choices := objects(body["choices"])
-	if len(choices) != 1 || choices[0]["text"] != "ab" {
-		t.Fatalf("choices %v", body["choices"])
-	}
-	lp := obj(choices[0]["logprobs"])
-	if len(listOf(lp["tokens"])) != 2 || len(listOf(lp["token_logprobs"])) != 2 || len(listOf(lp["text_offset"])) != 2 {
-		t.Errorf("logprobs %v:\n%s", lp, got.body)
-	}
-}
-
-// TestCompletionsPrepareAddsCap: legacy completions gets the output cap it was routed and quoted at, and asks for the
-// usage it is billed by, even when the client left both out. Its model is the upstream's, not the client's.
-func TestCompletionsPrepareAddsCap(t *testing.T) {
-	body := []byte(`{"model":"client","prompt":"x","stream":false}`)
-	req, err := protocol.Inspect(protocol.Completions, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	up, err := protocol.Prepare(&req, body, protocol.Target{
-		Format: protocol.Completions, Model: "upstream", Streams: true, MaxOutput: 7,
-	}, protocol.Rewrites{Identity: func(string) string { return "id" }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got map[string]any
-	if err := jsonx.Unmarshal(up.Body, &got); err != nil {
-		t.Fatalf("%v\n%s", err, up.Body)
-	}
-	if got["model"] != "upstream" || got["max_tokens"] != 7.0 || got["stream"] != true || obj(got["stream_options"])["include_usage"] != true {
-		t.Errorf("upstream body:\n%s", up.Body)
-	}
-}
-
-// TestCompletionsPrepareCapAndUsage: legacy completions always sends the cap the entry was quoted at when the client
-// did not write one (or wrote null), keeps a smaller client cap, and forces include_usage on however the client spelled
-// it, so the settlement can use the upstream's count.
-func TestCompletionsPrepareCapAndUsage(t *testing.T) {
-	for _, tc := range []struct {
-		name, body string
-		wantCap    int64
-	}{
-		{"absent cap", `{"model":"m","prompt":"x"}`, 4},
-		{"null cap", `{"model":"m","prompt":"x","max_tokens":null}`, 4},
-		{"smaller client cap", `{"model":"m","prompt":"x","max_tokens":3}`, 3},
-		{"closed usage", `{"model":"m","prompt":"x","stream_options":{"include_usage":false}}`, 4},
-		{"null usage", `{"model":"m","prompt":"x","stream_options":null}`, 4},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			body := []byte(tc.body)
-			req, err := protocol.Inspect(protocol.Completions, body)
-			if err != nil {
-				t.Fatal(err)
-			}
-			up, err := protocol.Prepare(&req, body, protocol.Target{
-				Format: protocol.Completions, Model: "upstream", Streams: true, MaxOutput: tc.wantCap,
-			}, protocol.Rewrites{Identity: func(string) string { return "id" }})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var got map[string]any
-			if err := jsonx.Unmarshal(up.Body, &got); err != nil {
-				t.Fatalf("%v\n%s", err, up.Body)
-			}
-			if got["max_tokens"] != float64(tc.wantCap) || got["stream"] != true || obj(got["stream_options"])["include_usage"] != true {
-				t.Errorf("upstream body:\n%s", up.Body)
-			}
-		})
-	}
-}
-
-// TestCompletionsChoiceWithUsageKeepsText: the last chunk of a choice can carry its text, finish_reason and usage
-// together. It is not a usage-only ending: the client gets the text, and the usage is billed from the same chunk.
-func TestCompletionsChoiceWithUsageKeepsText(t *testing.T) {
-	stream := "data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"A\",\"finish_reason\":null}]}\n\n" +
-		"data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"B\",\"finish_reason\":\"length\"}]," +
-		"\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n" +
-		"data: [DONE]\n\n"
-	got := relay(t, protocol.Completions, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-	if got.err != nil {
-		t.Fatal(got.err)
-	}
-	if !strings.Contains(string(got.out), `"text":"B"`) || !strings.Contains(string(got.out), `"completion_tokens":2`) {
-		t.Errorf("the choice's text or usage was lost:\n%s", got.out)
-	}
-}
-
-// TestCompletionsFinishBeforeIndex: finish_reason may precede index in the choice object; the ended choice is the one
-// with that final index, not index 0.
-func TestCompletionsFinishBeforeIndex(t *testing.T) {
-	stream := "data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":1,\"text\":\"\"}]}\n\n" +
-		"data: [DONE]\n\n"
-	got := relay(t, protocol.Completions, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-	if got.err != nil {
-		t.Fatalf("choice 1's ending was lost: %v\n%s", got.err, got.out)
-	}
-}
-
-// TestCompletionsLogprobsBudget: a later chunk's logprobs are charged before their member lists and merged object are
-// allocated. A reply that fits one chunk but not the merge fails with ErrMemory and gives its budget back.
-func TestCompletionsLogprobsBudget(t *testing.T) {
-	token := strings.Repeat("x", 10<<10)
-	logprobs := `{"tokens":["` + token + `"],"token_logprobs":[-0.1],"top_logprobs":[{"` + token + `":-0.1}],"text_offset":[0]}`
-	stream := "data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"a\",\"logprobs\":" + logprobs + "}]}\n\n" +
-		"data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"b\",\"logprobs\":" + logprobs + "}]}\n\n" +
-		"data: [DONE]\n\n"
-	mem := protocol.NewMemory(0)
-	got := aggregate(t, protocol.Completions, protocol.Completions, strings.NewReader(stream), mem, unsettled)
-	if !errors.Is(got.err, protocol.ErrMemory) {
-		t.Fatalf("error %v, want ErrMemory", got.err)
-	}
-	if mem.Left() != 0 {
-		t.Errorf("the budget is %d after the release, want 0", mem.Left())
-	}
-}
-
-// TestCompletionsLogprobsLongStream: the peak a merge holds is given back after it, so a stream of many small chunks
-// completes while its final logprobs stay far below the aggregate limit.
-func TestCompletionsLogprobsLongStream(t *testing.T) {
-	token := strings.Repeat("x", 1024)
-	logprobs := `{"tokens":["` + token + `"],"token_logprobs":[-0.1],"top_logprobs":[{}],"text_offset":[0]}`
-	var stream strings.Builder
-	for range 130 {
-		stream.WriteString(`data: {"id":"x","object":"text_completion","choices":[{"index":0,"text":"a","logprobs":` + logprobs + "}]}\n\n")
-	}
-	stream.WriteString("data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"\",\"finish_reason\":\"stop\"}]}\n\n")
-	stream.WriteString("data: [DONE]\n\n")
-	const budget = 64 << 20
-	mem := protocol.NewMemory(budget)
-	got := aggregate(t, protocol.Completions, protocol.Completions, strings.NewReader(stream.String()), mem, unsettled)
-	if got.err != nil {
-		t.Fatalf("a long stream of small logprobs failed: %v", got.err)
-	}
-	if n := bytes.Count(got.body, []byte(token)); n != 130 {
-		t.Errorf("the body has %d tokens, want 130", n)
-	}
-	if mem.Left() != budget {
-		t.Errorf("the budget is %d after the release, was %d", mem.Left(), budget)
-	}
-}
-
-// TestCompletionsAggregateBodyBudget: the body assembled from the aggregated choices is allocated from the node's
-// budget, not beside it. A reply whose pieces fit but whose body does not fails with ErrMemory and gives back all it
-// drew.
-func TestCompletionsAggregateBodyBudget(t *testing.T) {
-	text := strings.Repeat("x", 60<<10)
-	stream := "data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"" + text + "\"}]}\n\n" +
-		"data: {\"id\":\"x\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"\",\"finish_reason\":\"stop\"}]}\n\n" +
-		"data: [DONE]\n\n"
-	const budget = 64 << 10
-	mem := protocol.NewMemory(budget)
-	got := aggregate(t, protocol.Completions, protocol.Completions, strings.NewReader(stream), mem, unsettled)
-	if !errors.Is(got.err, protocol.ErrMemory) {
-		t.Fatalf("error %v, want ErrMemory", got.err)
-	}
-	if mem.Left() != budget {
-		t.Errorf("the budget is %d after the release, was %d", mem.Left(), budget)
 	}
 }
 

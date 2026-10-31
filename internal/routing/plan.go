@@ -115,7 +115,7 @@ func unmeasured(order []ranked, strategy Strategy) bool {
 }
 
 // inputTokens is the text a candidate's context must hold: one input's, not the sum of a batch's, which direct
-// formats and legacy completions take one at a time.
+// formats take one at a time.
 func inputTokens(req *protocol.Request) int64 {
 	text := req.TextBytes
 	if req.MaxInputBytes > 0 {
@@ -223,8 +223,8 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 	if n.in.NativeOnly {
 		return f, c.Native.Has(f)
 	}
-	if f == protocol.Completions || f.Direct() {
-		// A direct call and legacy completions have no conversion: the endpoint must speak the client's format.
+	if f.Direct() {
+		// A direct call has no conversion: the endpoint must speak the client's format.
 		return f, c.Native.Has(f)
 	}
 	if c.Native.Has(f) {
@@ -355,16 +355,10 @@ func (c *candidate) unfit(n *need) Reason {
 }
 
 // streamsFor says the endpoint can answer as the gateway reads the answer: every generation but the compact one is read
-// as a stream, which an endpoint that does not stream cannot give it; a direct call is read whole and needs no stream
-// (docs/domains/gateway.md「转发规则」).
+// as a stream, which an endpoint that does not stream cannot give it; a direct call is read whole and needs no stream,
+// whatever the caller set (docs/domains/gateway.md「转发规则」).
 func (c *candidate) streamsFor(n *need) bool {
-	if n.req.Format.Direct() {
-		return true
-	}
-	if n.req.Format == protocol.Completions {
-		return c.Streams
-	}
-	return c.Streams || n.in.NoSegments
+	return c.Streams || n.in.NoSegments || n.req.Format.Direct()
 }
 
 // outputLimit is the one rule for how much output an entry at c may produce and whether the request fits c's context,

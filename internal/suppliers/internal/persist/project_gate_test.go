@@ -15,8 +15,8 @@ func TestDirectFormatsWaitForTheGate(t *testing.T) {
 	c.model("direct-model", catalog.StatusListed)
 	c.model("mixed-model", catalog.StatusListed)
 	groups := []listedGroup{{ref: "default", name: "Default", ratio: "1", models: []listedModel{
-		{name: "direct-model", formats: []protocol.Format{protocol.Completions}, plan: &unitPrice},
-		{name: "mixed-model", formats: []protocol.Format{protocol.Chat, protocol.Completions, protocol.Embeddings}, plan: &unitPrice},
+		{name: "direct-model", formats: []protocol.Format{protocol.Rerank}, plan: &unitPrice},
+		{name: "mixed-model", formats: []protocol.Format{protocol.Chat, protocol.Rerank, protocol.Embeddings}, plan: &unitPrice},
 	}}}
 	closed := c.acquire(c.node("closed"))
 	c.commitListing(closed, 1, groups)
@@ -26,5 +26,5 @@ func TestDirectFormatsWaitForTheGate(t *testing.T) {
 	same(t, "supplier_models", c.column("supplier_models", "formats::text", "upstream_name"), []string{"{chat}"})
 	c.commitListing(c.acquire(c.nodeWith("open", true)), 2, groups)
 	same(t, "supplier_models", c.column("supplier_models", "formats::text", "upstream_name"),
-		[]string{"{completions}", "{chat,completions,embeddings}"})
+		[]string{"{rerank}", "{chat,embeddings,rerank}"})
 }
