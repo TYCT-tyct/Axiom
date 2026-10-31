@@ -407,8 +407,8 @@ func recoveryCodesLocation(session uuid.UUID) secret.Location {
 	return secret.Location{Table: "accounts.sessions", RowID: session.String(), Purpose: "recovery_codes_display"}
 }
 
-// TakePendingRecoveryCodes returns the new codes a link left on p's session and clears them in the same statement, so
-// only the first call gets them. None when the session has none, including when another call already took them.
+// TakePendingRecoveryCodes returns the new codes a link left on p's session and clears them in the same transaction,
+// so only the first call gets them. None when the session has none, including when another call already took them.
 func (s *Service) TakePendingRecoveryCodes(ctx context.Context, p Principal) ([]string, error) {
 	if p.user == (UserID{}) || p.session == (SessionID{}) || p.Pending() {
 		return nil, ErrNoSession
