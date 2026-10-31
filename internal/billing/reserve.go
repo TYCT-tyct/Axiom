@@ -114,23 +114,23 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
-		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAtUs: time.Now().UnixMicro(),
+		LifetimeSeconds: b.config.Lifetime.Seconds(),
 	}); err != nil {
 		return nil, nil, fmt.Errorf("billing: write the reservation: %w", err)
 	}
 	return h, r.Kept, nil
 }
 
-// reservationParams is the row a batch reservation writes: the prices it locked, the routes it kept, and the
-// counters' windows. The insert's arguments keep the order Reserve's literal uses, so the batch path and the single
-// path write the same shape.
-func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Reservation, fallbacks []string, day, at time.Time) (InsertReservationParams, error) {
+// reservationParams is the row a batch reservation writes: the prices it locked, the routes it kept, the counters'
+// windows, and the call's start. The gateway admits through this batch path; the single Reserve leaves created_at to
+// the insert's default and is not on the request path.
+func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Reservation, fallbacks []string, day, at time.Time) (InsertReservationAtParams, error) {
 	if at.IsZero() {
 		at = time.Now()
 	}
 	prices, locked, err := lockedPrices(q, r.Kept, fallbacks)
 	if err != nil {
-		return InsertReservationParams{}, err
+		return InsertReservationAtParams{}, err
 	}
 	identifiers := make([]uuid.UUID, len(q)*3)
 	models, endpoints, versions := identifiers[:len(q)], identifiers[len(q):2*len(q)], identifiers[2*len(q):]
@@ -141,9 +141,9 @@ func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Re
 	rates := frozenRates(q, r.Kept)
 	rateJSON, err := jsonx.MarshalCanonical(rates)
 	if err != nil {
-		return InsertReservationParams{}, fmt.Errorf("billing: freeze exchange rates: %w", err)
+		return InsertReservationAtParams{}, fmt.Errorf("billing: freeze exchange rates: %w", err)
 	}
-	return InsertReservationParams{
+	return InsertReservationAtParams{
 		ExchangeRates: rateJSON, PriceVersions: versions,
 		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,

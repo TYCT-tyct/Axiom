@@ -177,7 +177,7 @@ func readBatchUsage(ctx context.Context, tx pg.Tx, reqs []ReserveRequest, day ti
 // quotedReservation is a request of the batch whose quote passed, with the row its reservation writes.
 type quotedReservation struct {
 	at     int
-	params InsertReservationParams
+	params InsertReservationAtParams
 	quote  Reservation
 }
 
@@ -235,7 +235,7 @@ func insertBatch(ctx context.Context, tx pg.Tx, quoted []quotedReservation) erro
 	}
 	statements := make([]pg.Statement, len(quoted))
 	for i, p := range quoted {
-		statements[i] = pg.Statement{SQL: insertReservation, Args: insertReservationArgs(p.params)}
+		statements[i] = pg.Statement{SQL: insertReservationAt, Args: insertReservationArgs(p.params)}
 	}
 	return tx.Batch(ctx, statements, func(batch pg.BatchResults) error {
 		for range statements {
@@ -247,9 +247,9 @@ func insertBatch(ctx context.Context, tx pg.Tx, quoted []quotedReservation) erro
 	})
 }
 
-// insertReservationArgs passes InsertReservation's parameters in the order its generated function does. The insert is
-// pipelined, so it cannot go through that function; the batch reservation test compares both paths' rows.
-func insertReservationArgs(p InsertReservationParams) []any {
+// insertReservationArgs passes InsertReservationAt's parameters in the order its generated function does. The insert
+// is pipelined, so it cannot go through that function; the batch reservation test compares both paths' rows.
+func insertReservationArgs(p InsertReservationAtParams) []any {
 	return []any{
 		p.WorkspaceID, p.WorkspaceWindow, p.SiteID, p.AccountID, p.Amount, p.KeyID, p.KeyWindow, p.RequestID,
 		p.HolderID, p.LifetimeSeconds, p.Prices, p.Fallbacks, p.Models, p.Endpoints, p.ExchangeRates, p.PriceVersions,
