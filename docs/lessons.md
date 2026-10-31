@@ -9,7 +9,7 @@
 `TestFailedStartLeavesNoRecorderWriter` 用 `runtime.Stack(_, true)` 扫描全部 goroutine 找 `Recorder.writer`，判断依据是整个进程而不是这次 `serve` 调用自己的对象；#327 把测试并行后，它看到其他测试节点的写入器。该测试已改成断言本次调用创建的 `Recorder`（`Done()`，#338）。同类问题在 #313 的付得起分配测试中再次出现：`testing.AllocsPerRun` 也统计全进程，现已改为 `alloctest.Measure` 的隔离子进程。待加的检查：lint 禁止 `_test.go` 中出现 `runtime.Stack(…, true)`、`runtime.NumGoroutine`、`runtime.ReadMemStats`、`testing.AllocsPerRun`（`alloctest` 除外）。
 
 证据：合并车 train/main/39266027524-2 的 go-test 失败（`serve_test.go:390`）
-哪一层没拦住：CONTRIBUTING「时序」只写了「不用 `runtime.ReadMemStats` 之类的全进程计数」，没有 lint；#327 的评审没看出并行化影响了这个测试
+哪一层没拦住：CONTRIBUTING「测试与时序」只写了「不用 `runtime.ReadMemStats` 之类的全进程计数」，没有 lint；#327 的评审没看出并行化影响了这个测试
 出现：2026-10-19
 
 ## 真实依赖的内容断言与生产期限竞速

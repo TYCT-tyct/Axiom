@@ -19,7 +19,7 @@ import (
 type modelName struct {
 	base     string
 	sort     *routing.Strategy // the ranking the last sorting variant asks for, or nil
-	exacto   bool              // the last sorting variant is :exacto, which the operational quality score does not satisfy
+	exacto   bool              // the last sorting variant is :exacto: quality first, among endpoints verified as the model
 	thinking bool              // the deprecated :thinking, which only a request that asks for reasoning itself honours
 	auto     bool              // openrouter/auto: the routing ranking chooses the model
 }
@@ -29,25 +29,25 @@ type modelName struct {
 // Axiom does with each is in docs/domains/gateway.md「模型名变体」.
 type variant struct {
 	sort     string // the provider.sort it stands for, "" for none
-	exacto   bool   // the Exacto ranking, which needs tool-calling and benchmark quality, not measured here
+	exacto   bool   // the Exacto ranking: quality first, among endpoints verified as the model they claim
 	thinking bool   // reasoning on, which the request must already ask for
 	free     bool   // the catalog's own :free entry, which stays on the base
 	refusal  string // what every request with this suffix gets, "" when it can be honoured
 }
 
 const (
-	errExacto = "The :exacto variant is not supported yet: it ranks endpoints by measured tool-calling quality, which is not measured here. " +
-		"Use :nitro, :floor or provider.sort."
-	errOnline   = "The :online variant is the deprecated web plugin, and web search is not supported here: " + protocol.NoWebSearch + ". Use a model's native web search tool."
-	errThinking = "The :thinking variant is deprecated by OpenRouter: ask for reasoning with the reasoning parameter, which also enables it. A request that already asks for reasoning may keep the suffix."
-	errBatch    = "The :batch variant is a separate batch-priced catalog entry on OpenRouter, and this catalog has none."
-	errExtended = "The :extended variant is deprecated by OpenRouter and no model offers it any more; this catalog has none."
+	errExactoAlternate = "A sorting variant on an alternate model must match the request's ranking: the ranking is one for the whole request, and :exacto on an alternate needs the first model to rank the same way."
+	errAlternateSort   = "A sorting variant on an alternate model must match the request's ranking: the ranking is one for the whole request."
+	errOnline          = "The :online variant is the deprecated web plugin, and web search is not supported here: " + protocol.NoWebSearch + ". Use a model's native web search tool."
+	errThinking        = "The :thinking variant is deprecated by OpenRouter: ask for reasoning with the reasoning parameter, which also enables it. A request that already asks for reasoning may keep the suffix."
+	errBatch           = "The :batch variant is a separate batch-priced catalog entry on OpenRouter, and this catalog has none."
+	errExtended        = "The :extended variant is deprecated by OpenRouter and no model offers it any more; this catalog has none."
 )
 
-// variants are the suffixes OpenRouter documents: :nitro and :floor rank endpoints, :exacto needs tool-calling and
-// benchmark quality signals nothing measures, :thinking is the deprecated way to ask for reasoning, :online is the
-// deprecated web plugin, :free names the catalog's own free entry, and :batch and :extended are catalog entries this
-// catalog does not hold. One table, so what a suffix does and why it is refused are read together.
+// variants are the suffixes OpenRouter documents: :nitro and :floor rank endpoints, :exacto ranks verified endpoints by
+// quality, :thinking is the deprecated way to ask for reasoning, :online is the deprecated web plugin, :free names the
+// catalog's own free entry, and :batch and :extended are catalog entries this catalog does not hold. One table, so what
+// a suffix does and why it is refused are read together.
 var variants = map[string]variant{
 	"nitro": {sort: "throughput"}, "floor": {sort: "price"},
 	"exacto": {exacto: true}, "thinking": {thinking: true},
@@ -134,8 +134,11 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 		return over, variantNames{}, ref
 	}
 	explicit := over.Sort != nil
+	verified := false
 	if primary.exacto && !explicit {
-		return over, variantNames{}, invalid(errExacto)
+		quality := routing.BestQuality
+		over.Sort, over.VerifiedOnly = &quality, true
+		verified = true
 	}
 	// The deprecated :thinking only repeats what the request itself asks for; a suffix nothing enables would serve a
 	// model that does not think, unlike what the client asked for.
@@ -146,7 +149,7 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 	over.Sort = cmp.Or(over.Sort, primary.sort)
 	v := variantNames{primary: primary.base, auto: primary.auto}
 	for _, name := range req.Models {
-		base, ok, err := alternate(name, explicit, over.Sort, reasoning)
+		base, ok, err := alternate(name, explicit, over.Sort, verified, reasoning)
 		if err != nil {
 			return over, variantNames{}, err
 		}
@@ -159,25 +162,38 @@ func readRouting(req *protocol.Request, body []byte) (routing.Override, variantN
 
 // alternate reads one name of the request's models under the ranking the request has. ok is false for a name that
 // could not be tried. explicit says the request wrote a provider.sort, the only thing that replaces an :exacto here;
-// reasoning says the request asks for reasoning, without which an alternate's :thinking asks for nothing.
-func alternate(name string, explicit bool, ranking *routing.Strategy, reasoning bool) (base string, ok bool, err error) {
+// verified says the ranking the request already has is quality-first among verified endpoints, which is what an
+// alternate's :exacto stands for; reasoning says the request asks for reasoning, without which an alternate's :thinking
+// asks for nothing.
+func alternate(name string, explicit bool, ranking *routing.Strategy, verified, reasoning bool) (base string, ok bool, err error) {
 	alt, ref := parseModelName(name)
-	switch {
-	case ref != nil && ref.Status == http.StatusNotFound:
-		return "", false, nil
-	case ref != nil:
+	if ref != nil {
+		if ref.Status == http.StatusNotFound {
+			return "", false, nil
+		}
 		return "", false, ref
-	case alt.auto:
+	}
+	if alt.auto {
 		// auto already considers every model the key may call; a second auto adds nothing to try.
 		return "", false, nil
-	case alt.exacto && !explicit:
-		return "", false, invalid(errExacto)
-	case alt.thinking && !reasoning:
-		return "", false, invalid(errThinking)
-	case alt.sort != nil && (ranking == nil || *ranking != *alt.sort):
-		return "", false, invalid("A sorting variant on an alternate model must match the request's ranking: the ranking is one for the whole request.")
+	}
+	if err := alternateRefusal(alt, explicit, ranking, verified, reasoning); err != nil {
+		return "", false, err
 	}
 	return alt.base, true, nil
+}
+
+// alternateRefusal is why an alternate's variants cannot be honoured under the request's ranking, or nil.
+func alternateRefusal(alt modelName, explicit bool, ranking *routing.Strategy, verified, reasoning bool) error {
+	switch {
+	case alt.exacto && !explicit && !verified:
+		return invalid(errExactoAlternate)
+	case alt.thinking && !reasoning:
+		return invalid(errThinking)
+	case alt.sort != nil && (ranking == nil || *ranking != *alt.sort):
+		return invalid(errAlternateSort)
+	}
+	return nil
 }
 
 // resolve turns the model the request names, then the alternates it lists, into models. The first must exist; an
