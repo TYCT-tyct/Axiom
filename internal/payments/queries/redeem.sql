@@ -5,10 +5,16 @@
 INSERT INTO payments.redeem_codes (id, site_id, code_hash, code_hint, amount, note, expires_at, created_by)
 VALUES (@id, @site_id, @code_hash, @code_hint, @amount, @note, sqlc.narg(expires_at), @created_by);
 
--- The redemption locks the code row: concurrent redeems of one code wait here and the second finds it used.
+-- The redemption locks the code row: concurrent redeems of one code wait here and the second finds it used. It does not
+-- return a timestamp: transaction_timestamp() is the transaction's start, before this wait, so the decision reads the
+-- clock after the lock instead (RedeemClock).
 -- name: RedeemCodeByHash :one
-SELECT sqlc.embed(c), transaction_timestamp()::timestamptz AS now
-FROM payments.redeem_codes c WHERE c.site_id = @site_id AND c.code_hash = @code_hash FOR UPDATE;
+SELECT sqlc.embed(c) FROM payments.redeem_codes c WHERE c.site_id = @site_id AND c.code_hash = @code_hash FOR UPDATE;
+
+-- The time of the redemption decision, read after the code's row lock: the lock may have waited, and the code may have
+-- expired during it. clock_timestamp() is the statement's clock, not the transaction's start.
+-- name: RedeemClock :one
+SELECT clock_timestamp()::timestamptz AS now;
 
 -- A code by ID, locked: disabling and reading the answer happen under the same row lock.
 -- name: LockRedeemCode :one
@@ -27,15 +33,16 @@ WHERE c.site_id = @site_id
         OR (sqlc.narg(state)::text = 'enabled' AND c.state = 'enabled'
             AND (c.expires_at IS NULL OR c.expires_at > transaction_timestamp()))
         OR (sqlc.narg(state)::text IN ('used', 'disabled') AND c.state = sqlc.narg(state)::text))
-    AND (sqlc.narg(note)::text IS NULL OR c.note ILIKE sqlc.narg(note)::text || '%')
+    AND (sqlc.narg(note)::text IS NULL OR starts_with(lower(c.note), lower(sqlc.narg(note)::text)))
     AND (c.created_at, c.id) < (@after_at::timestamptz, @after_id::uuid)
 ORDER BY c.created_at DESC, c.id DESC
 LIMIT @max;
 
--- The serialization point of one code crediting once, even if the state check above ever raced.
+-- The serialization point of one code crediting once, even if the state check above ever raced, and the expiry check at
+-- the clock of this statement: a lock that waited past the expiry cannot credit.
 -- name: UseRedeemCode :execrows
-UPDATE payments.redeem_codes SET state = 'used', redeemed_at = transaction_timestamp()
-WHERE id = @id AND state = 'enabled';
+UPDATE payments.redeem_codes SET state = 'used', redeemed_at = clock_timestamp()
+WHERE id = @id AND state = 'enabled' AND (expires_at IS NULL OR expires_at > clock_timestamp());
 
 -- name: DisableRedeemCode :execrows
 UPDATE payments.redeem_codes SET state = 'disabled', disabled_at = transaction_timestamp(), disabled_by = @disabled_by

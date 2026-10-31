@@ -92,7 +92,7 @@ export default {
     batchesUnavailable: "Credit batches are unavailable right now. Reload to try again.",
     noBatches: "No credit is left in any batch.",
     col: { batch: "Batch", source: "Source", amount: "Added", remaining: "Left", expires: "Expires" },
-    source: { gift: "Gift", paid: "Top-up" },
+    source: { gift: "Gift", paid: "Top-up", redeem: "Redeem code" },
     frozen: "{{amount}} held",
     neverExpires: "Never",
     expiresSoon: "Expires soon",
@@ -270,6 +270,7 @@ export default {
     kind: {
       top_up: "Top-up",
       gift: "Gift",
+      redeem: "Redeem code",
       spend: "Call charge",
       expiry: "Expired",
       refund: "Refund paid",

@@ -14,8 +14,6 @@ import (
 	"unicode/utf8"
 	"uuid"
 
-	"github.com/jackc/pgx/v5/pgtype" //nolint:depguard // the generated parameters take an optional timestamp
-
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/platform/audit"
@@ -69,9 +67,10 @@ var (
 	redemptionPrefix = typeid.MustPrefix("rdn")
 )
 
-// CodeID is a redeem code's ID; RedemptionID is the credit a redeemed code made, which is also the credit batch's ID.
+// CodeID is a redeem code's ID.
 type CodeID uuid.UUID
 
+// TypeID writes the code's ID as the API does.
 func (id CodeID) TypeID() string { return codePrefix.Encode(uuid.UUID(id)) }
 
 // ParseCodeID reads a code's ID as the API writes it; a malformed one is ErrNotFound, like an unknown one.
@@ -83,18 +82,24 @@ func ParseCodeID(s string) (CodeID, error) {
 	return CodeID(id), nil
 }
 
+// RedemptionID is the credit a redeemed code made, which is also the credit batch's ID.
 type RedemptionID uuid.UUID
 
+// TypeID writes the redemption's ID as the API does.
 func (id RedemptionID) TypeID() string { return redemptionPrefix.Encode(uuid.UUID(id)) }
 
 // RedeemState is a code's state as a page shows it: an enabled code past its expiry reads expired.
 type RedeemState string
 
 const (
-	RedeemEnabled  RedeemState = "enabled"
-	RedeemUsed     RedeemState = "used"
+	// RedeemEnabled is a code that can still be redeemed.
+	RedeemEnabled RedeemState = "enabled"
+	// RedeemUsed is a code that credited its batch.
+	RedeemUsed RedeemState = "used"
+	// RedeemDisabled is a code an operator stopped.
 	RedeemDisabled RedeemState = "disabled"
-	RedeemExpired  RedeemState = "expired"
+	// RedeemExpired is an enabled code past its expiry; it is derived on read and never stored.
+	RedeemExpired RedeemState = "expired"
 )
 
 // RedeemCode is one code as the admin shows it. It holds no code: the text exists only in Issue's answer, at the moment
@@ -184,7 +189,7 @@ func normalizeCode(s string) (string, bool) {
 		if len(b) == redeemCodeLength {
 			return "", false
 		}
-		b = append(b, byte(r))
+		b = append(b, byte(r)) //nolint:gosec // r is one of the alphabet's ASCII characters
 	}
 	return string(b), len(b) == redeemCodeLength
 }
@@ -218,23 +223,12 @@ func hashOf(canonical string) []byte {
 	return sum[:]
 }
 
-// Issue makes Count codes for the site in the caller's transaction: each is written with only its hash, and the codes
-// themselves are in the answer and nowhere else. The generation, the audit entry and the caller's idempotency claim
-// commit together.
+// IssueCodes makes Count codes for the site in the caller's transaction: each is written with only its hash, and the
+// codes themselves are in the answer and nowhere else. The generation, the audit entry and the caller's idempotency
+// claim commit together.
 func IssueCodes(ctx context.Context, tx pg.Tx, g Issue) ([]RedeemCode, error) {
-	switch {
-	case g.Site == uuid.Nil():
-		return nil, errors.New("payments: issue codes: no site")
-	case g.CreatedBy == uuid.Nil():
-		return nil, errors.New("payments: issue codes: no operator")
-	case g.Amount <= 0:
-		return nil, &FieldError{"/amount", "must be more than 0"}
-	case g.Count < 1 || g.Count > redeemIssueMax:
-		return nil, &FieldError{"/count", fmt.Sprintf("must be between 1 and %d", redeemIssueMax)}
-	case utf8.RuneCountInString(g.Note) > redeemNoteMax:
-		return nil, &FieldError{"/note", fmt.Sprintf("must have at most %d characters", redeemNoteMax)}
-	case g.ExpiresAt != nil && !g.ExpiresAt.After(time.Now()):
-		return nil, &FieldError{"/expires_at", "must be in the future"}
+	if err := g.check(); err != nil {
+		return nil, err
 	}
 	codes := make([]RedeemCode, 0, g.Count)
 	for range g.Count {
@@ -270,6 +264,25 @@ func IssueCodes(ctx context.Context, tx pg.Tx, g Issue) ([]RedeemCode, error) {
 	return codes, nil
 }
 
+// check holds a generation to what a batch can hold.
+func (g Issue) check() error {
+	switch {
+	case g.Site == uuid.Nil():
+		return errors.New("payments: issue codes: no site")
+	case g.CreatedBy == uuid.Nil():
+		return errors.New("payments: issue codes: no operator")
+	case g.Amount <= 0:
+		return &FieldError{"/amount", "must be more than 0"}
+	case g.Count < 1 || g.Count > redeemIssueMax:
+		return &FieldError{"/count", fmt.Sprintf("must be between 1 and %d", redeemIssueMax)}
+	case utf8.RuneCountInString(g.Note) > redeemNoteMax:
+		return &FieldError{"/note", fmt.Sprintf("must have at most %d characters", redeemNoteMax)}
+	case g.ExpiresAt != nil && !g.ExpiresAt.After(time.Now()):
+		return &FieldError{"/expires_at", "must be in the future"}
+	}
+	return nil
+}
+
 // codeIDs is the IDs of a generation, for the audit log: IDs are not secrets.
 func codeIDs(codes []RedeemCode) []string {
 	ids := make([]string, len(codes))
@@ -279,7 +292,7 @@ func codeIDs(codes []RedeemCode) []string {
 	return ids
 }
 
-// RedeemCode turns r's code into a credit batch of the site's currency, booked as the credit billing's ledger records
+// Redeem turns r's code into a credit batch of the site's currency, booked as the credit billing's ledger records
 // (billing.CreditRedeem): one code credits once, and the claim, the code's state and the credit commit together.
 //
 // An attempt that fails takes one of the account's and its IP group's places in the hourly limits, committed before the
@@ -295,7 +308,26 @@ func (p *Payments) Redeem(ctx context.Context, r Redeem) (Redemption, error) {
 		return Redemption{}, ErrRedeemInvalid
 	}
 	hash := hashOf(canonical)
-	var replayed Redemption
+	if out, found, err := p.replay(ctx, r, hash); err != nil || found {
+		return out, err
+	}
+	if err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error { return spendRedeemAttempt(ctx, tx, r) }); err != nil {
+		return Redemption{}, err
+	}
+	var out Redemption
+	if err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error {
+		var err error
+		out, err = redeemIn(ctx, tx, r, hash)
+		return err
+	}); err != nil {
+		return Redemption{}, err
+	}
+	return out, nil
+}
+
+// replay answers a key this account already redeemed before any attempt is spent.
+func (p *Payments) replay(ctx context.Context, r Redeem, hash []byte) (Redemption, bool, error) {
+	var out Redemption
 	var found bool
 	if err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
 		row, err := queries.RedemptionByKey(ctx, tx, RedemptionByKeyParams{AccountID: r.Account, IdemKey: r.Key})
@@ -308,90 +340,100 @@ func (p *Payments) Redeem(ctx context.Context, r Redeem) (Redemption, error) {
 		if !bytes.Equal(row.CodeHash, hash) {
 			return ErrKeyReused
 		}
-		replayed, found = redemptionOf(row), true
-		replayed.Replayed = true
+		out, found = redemptionOf(row), true
+		out.Replayed = true
 		return nil
-	}); err != nil || found {
-		return replayed, err
+	}); err != nil {
+		return Redemption{}, false, err
 	}
-	if err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error { return p.spendRedeemAttempt(ctx, tx, r) }); err != nil {
-		return Redemption{}, err
+	return out, found, nil
+}
+
+// redeemIn is the redemption under the account's lock: another request with this key may have committed since replay.
+func redeemIn(ctx context.Context, tx pg.Tx, r Redeem, hash []byte) (Redemption, error) {
+	if err := queries.LockRedeemAccount(ctx, tx, advisoryKey(0x52, r.Account)); err != nil {
+		return Redemption{}, fmt.Errorf("payments: lock the redeeming account: %w", err)
 	}
-	var out Redemption
-	err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error {
-		if err := queries.LockRedeemAccount(ctx, tx, advisoryKey(0x52, r.Account)); err != nil {
-			return fmt.Errorf("payments: lock the redeeming account: %w", err)
+	existing, err := queries.RedemptionByKey(ctx, tx, RedemptionByKeyParams{AccountID: r.Account, IdemKey: r.Key})
+	switch {
+	case err == nil:
+		if !bytes.Equal(existing.CodeHash, hash) {
+			return Redemption{}, ErrKeyReused
 		}
-		// Another request with this key may have committed after the read above and before the lock.
-		existing, err := queries.RedemptionByKey(ctx, tx, RedemptionByKeyParams{AccountID: r.Account, IdemKey: r.Key})
-		switch {
-		case err == nil:
-			if !bytes.Equal(existing.CodeHash, hash) {
-				return ErrKeyReused
-			}
-			out = redemptionOf(existing)
-			out.Replayed = true
-			return nil
-		case !errors.Is(err, pg.ErrNoRows):
-			return fmt.Errorf("payments: read the redemption of the key: %w", err)
-		}
-		row, err := queries.RedeemCodeByHash(ctx, tx, RedeemCodeByHashParams{
-			SiteID: uuid.UUID(r.Site.ID), CodeHash: hash,
-		})
-		if errors.Is(err, pg.ErrNoRows) {
-			return ErrRedeemInvalid
-		}
-		if err != nil {
-			return fmt.Errorf("payments: read the redeem code: %w", err)
-		}
-		code := row.PaymentsRedeemCode
-		switch RedeemState(code.State) {
-		case RedeemUsed:
-			return ErrRedeemUsed
-		case RedeemDisabled:
-			return ErrRedeemDisabled
-		}
-		if code.ExpiresAt.Valid && !code.ExpiresAt.Time.After(row.Now) {
-			return ErrRedeemExpired
-		}
-		if used, err := queries.UseRedeemCode(ctx, tx, code.ID); err != nil {
-			return fmt.Errorf("payments: mark the redeem code used: %w", err)
-		} else if used == 0 {
-			return ErrRedeemUsed // its row is locked, so this is only a state that changed without the lock
-		}
-		id := uuid.NewV7()
-		expires := optionalTimestamp(code.ExpiresAt)
-		if err := queries.InsertRedemption(ctx, tx, InsertRedemptionParams{
-			ID: id, SiteID: uuid.UUID(r.Site.ID), CodeID: code.ID, AccountID: r.Account, UserID: r.User,
-			Amount: code.Amount, CodeHint: code.CodeHint, ExpiresAt: timestamp(expires), IdemKey: r.Key,
-		}); err != nil {
-			return fmt.Errorf("payments: write the redemption: %w", err)
-		}
-		if err := billing.CreditRedeem(ctx, tx, billing.RedeemCredit{
-			ID: id, Site: uuid.UUID(r.Site.ID), Account: r.Account, Amount: code.Amount, ExpiresAt: expires,
-			Actor: audit.User(r.User), Reason: "redeem code " + codeIDOf(code.ID),
-		}); err != nil {
-			return err
-		}
-		// Read the redemption back rather than build it from the arguments: the replay reads the same row, and the two
-		// answers must be the same.
-		written, err := queries.RedemptionByKey(ctx, tx, RedemptionByKeyParams{AccountID: r.Account, IdemKey: r.Key})
-		if err != nil {
-			return fmt.Errorf("payments: read the redemption: %w", err)
-		}
-		out = redemptionOf(written)
-		return nil
+		out := redemptionOf(existing)
+		out.Replayed = true
+		return out, nil
+	case !errors.Is(err, pg.ErrNoRows):
+		return Redemption{}, fmt.Errorf("payments: read the redemption of the key: %w", err)
+	}
+	return creditCode(ctx, tx, r, hash)
+}
+
+// creditCode locks the code, decides its expiry on the clock after the lock, and credits it once.
+func creditCode(ctx context.Context, tx pg.Tx, r Redeem, hash []byte) (Redemption, error) {
+	row, err := queries.RedeemCodeByHash(ctx, tx, RedeemCodeByHashParams{
+		SiteID: uuid.UUID(r.Site.ID), CodeHash: hash,
 	})
+	if errors.Is(err, pg.ErrNoRows) {
+		return Redemption{}, ErrRedeemInvalid
+	}
 	if err != nil {
+		return Redemption{}, fmt.Errorf("payments: read the redeem code: %w", err)
+	}
+	code := row.PaymentsRedeemCode
+	switch RedeemState(code.State) {
+	case RedeemEnabled, RedeemExpired:
+	case RedeemUsed:
+		return Redemption{}, ErrRedeemUsed
+	case RedeemDisabled:
+		return Redemption{}, ErrRedeemDisabled
+	}
+	// The row lock may have waited, and the code may have expired during it: the decision reads the clock now, and
+	// the update checks it again, rather than using the timestamp the transaction began with.
+	now, err := queries.RedeemClock(ctx, tx)
+	if err != nil {
+		return Redemption{}, fmt.Errorf("payments: read the redemption time: %w", err)
+	}
+	if code.ExpiresAt.Valid && !code.ExpiresAt.Time.After(now) {
+		return Redemption{}, ErrRedeemExpired
+	}
+	if used, err := queries.UseRedeemCode(ctx, tx, code.ID); err != nil {
+		return Redemption{}, fmt.Errorf("payments: mark the redeem code used: %w", err)
+	} else if used == 0 {
+		return Redemption{}, ErrRedeemExpired // the row is locked and was enabled, so only its expiry can have passed
+	}
+	return postCredit(ctx, tx, r, code)
+}
+
+// postCredit writes the redemption and the credit, then reads the redemption back for the answer.
+func postCredit(ctx context.Context, tx pg.Tx, r Redeem, code PaymentsRedeemCode) (Redemption, error) {
+	id := uuid.NewV7()
+	expires := optionalTimestamp(code.ExpiresAt)
+	if err := queries.InsertRedemption(ctx, tx, InsertRedemptionParams{
+		ID: id, SiteID: uuid.UUID(r.Site.ID), CodeID: code.ID, AccountID: r.Account, UserID: r.User,
+		Amount: code.Amount, CodeHint: code.CodeHint, ExpiresAt: timestamp(expires), IdemKey: r.Key,
+	}); err != nil {
+		return Redemption{}, fmt.Errorf("payments: write the redemption: %w", err)
+	}
+	if err := billing.CreditRedeem(ctx, tx, billing.RedeemCredit{
+		ID: id, Site: uuid.UUID(r.Site.ID), Account: r.Account, Amount: code.Amount, ExpiresAt: expires,
+		Actor: audit.User(r.User), Reason: "redeem code " + codeIDOf(code.ID),
+	}); err != nil {
 		return Redemption{}, err
 	}
-	return out, nil
+	// Read the redemption back rather than build it from the arguments: the replay reads the same row, and the two
+	// answers must be the same.
+	written, err := queries.RedemptionByKey(ctx, tx, RedemptionByKeyParams{AccountID: r.Account, IdemKey: r.Key})
+	if err != nil {
+		return Redemption{}, fmt.Errorf("payments: read the redemption: %w", err)
+	}
+	return redemptionOf(written), nil
 }
 
 // spendRedeemAttempt takes one of the account's and the IP group's places in their windows, committing even when the
 // code is then refused. A limit used up answers a *Wait whose time is the window's end, and gives the account's place
 // back with the transaction.
-func (p *Payments) spendRedeemAttempt(ctx context.Context, tx pg.Tx, r Redeem) error {
+func spendRedeemAttempt(ctx context.Context, tx pg.Tx, r Redeem) error {
 	window := int64(redeemWindow / time.Second)
 	if err := takeRedeemAttempt(ctx, tx, uuid.UUID(r.Site.ID), "account", r.Account.String(), window, redeemAccountAttempts); err != nil {
 		return err
@@ -489,6 +531,7 @@ func DisableCode(ctx context.Context, tx pg.Tx, actor audit.Actor, by uuid.UUID,
 	}
 	code := codeOf(row.PaymentsRedeemCode, row.Now)
 	switch code.State {
+	case RedeemEnabled, RedeemExpired:
 	case RedeemUsed:
 		return RedeemCode{}, ErrRedeemUsed
 	case RedeemDisabled:
@@ -514,80 +557,3 @@ func DisableCode(ctx context.Context, tx pg.Tx, actor audit.Actor, by uuid.UUID,
 	}
 	return codeOf(row.PaymentsRedeemCode, row.Now), nil
 }
-
-// ListRedemptions is one page of the account's redeemed codes, newest first. It reads no code, only the hint and the
-// credit's facts, so history never becomes a way to recover what was redeemed.
-func (p *Payments) ListRedemptions(ctx context.Context, s pg.Scope, account uuid.UUID, after *page.Cursor, size int) ([]Redemption, *page.Cursor, error) {
-	if account == uuid.Nil() {
-		return nil, nil, errors.New("payments: list redemptions: no account")
-	}
-	if size < 1 || size > 200 {
-		return nil, nil, fmt.Errorf("payments: list redemptions: page size %d, want 1 to 200", size)
-	}
-	at, id := endOfOrders, uuid.UUID{}
-	if after != nil {
-		at, id = after.At, after.ID
-	}
-	var rows []ListRedemptionsRow
-	if err := p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) {
-		rows, err = queries.ListRedemptions(ctx, tx, ListRedemptionsParams{
-			AccountID: account, AfterAt: at, AfterID: id, Max: int32(size + 1),
-		})
-		return err
-	}); err != nil {
-		return nil, nil, fmt.Errorf("payments: list redemptions: %w", err)
-	}
-	var next *page.Cursor
-	if len(rows) > size {
-		rows = rows[:size]
-		last := rows[len(rows)-1]
-		next = &page.Cursor{At: last.CreatedAt, ID: last.ID}
-	}
-	out := make([]Redemption, len(rows))
-	for i, row := range rows {
-		out[i] = Redemption{
-			ID: RedemptionID(row.ID), Amount: row.Amount, Hint: row.CodeHint,
-			ExpiresAt: optionalTimestamp(row.ExpiresAt), CreatedAt: row.CreatedAt,
-		}
-	}
-	return out, next, nil
-}
-
-// codeOf is a stored code as the page shows it: an enabled code past its expiry reads expired.
-func codeOf(row PaymentsRedeemCode, now time.Time) RedeemCode {
-	state := RedeemState(row.State)
-	if state == RedeemEnabled && row.ExpiresAt.Valid && !row.ExpiresAt.Time.After(now) {
-		state = RedeemExpired
-	}
-	return RedeemCode{
-		ID: CodeID(row.ID), Site: row.SiteID, State: state, Amount: row.Amount, Note: row.Note, Hint: row.CodeHint,
-		ExpiresAt: optionalTimestamp(row.ExpiresAt), CreatedAt: row.CreatedAt, CreatedBy: row.CreatedBy,
-		RedeemedAt: optionalTimestamp(row.RedeemedAt), DisabledAt: optionalTimestamp(row.DisabledAt),
-	}
-}
-
-// redemptionOf is a stored redemption, its answer to a replay.
-func redemptionOf(row RedemptionByKeyRow) Redemption {
-	return Redemption{
-		ID: RedemptionID(row.ID), Amount: row.Amount, Hint: row.CodeHint,
-		ExpiresAt: optionalTimestamp(row.ExpiresAt), CreatedAt: row.CreatedAt,
-	}
-}
-
-// timestamp is a Go expiry as the generated parameters take it.
-func timestamp(t *time.Time) pgtype.Timestamptz {
-	if t == nil {
-		return pgtype.Timestamptz{}
-	}
-	return pgtype.Timestamptz{Time: *t, Valid: true}
-}
-
-// optionalTimestamp is the reverse: no time, never the zero instant.
-func optionalTimestamp(t pgtype.Timestamptz) *time.Time {
-	if !t.Valid {
-		return nil
-	}
-	return timePtr(t.Time)
-}
-
-func timePtr(t time.Time) *time.Time { return &t }

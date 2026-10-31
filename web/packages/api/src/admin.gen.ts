@@ -2493,7 +2493,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         OperationsOverview: {
             site_id?: components["schemas"]["SiteId"];
             /** Format: date-time */
@@ -2642,10 +2642,10 @@ export interface components {
             /** @description The batch's own identity; paid credit uses the order's ID as the batch ID. */
             id: string;
             /**
-             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment.
+             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave.
              * @enum {string}
              */
-            source: "gift" | "paid";
+            source: "gift" | "paid" | "redeem";
             amount: components["schemas"]["Money"];
             remaining: components["schemas"]["Money"];
             frozen: components["schemas"]["Money"];

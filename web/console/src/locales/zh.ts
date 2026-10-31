@@ -89,7 +89,7 @@ export default {
     batchesUnavailable: "暂时无法显示额度批次，请刷新重试。",
     noBatches: "所有批次都已用完。",
     col: { batch: "批次", source: "来源", amount: "入账", remaining: "剩余", expires: "到期" },
-    source: { gift: "赠送", paid: "充值" },
+    source: { gift: "赠送", paid: "充值", redeem: "兑换码" },
     frozen: "其中 {{amount}} 已冻结",
     neverExpires: "永不过期",
     expiresSoon: "即将到期",
@@ -255,6 +255,7 @@ export default {
     kind: {
       top_up: "充值",
       gift: "赠送",
+      redeem: "兑换码",
       spend: "调用扣费",
       expiry: "到期",
       refund: "退款完成",

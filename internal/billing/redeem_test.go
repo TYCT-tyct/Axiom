@@ -18,6 +18,8 @@ func (b *bank) redeem(c RedeemCredit) error {
 
 // TestCreditRedeem: a redeemed code is a batch of its own source, booked as the gift expense every code is, with the
 // expiry the code carried; the same credit again changes nothing, and one of another amount is a conflict.
+//
+//nolint:cyclop // the credit, its replay and its conflict are one table.
 func TestCreditRedeem(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 0, 0, Config{})

@@ -1313,7 +1313,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits. */
         Money: {
             /** @example 1500000000 */
@@ -1500,10 +1500,10 @@ export interface components {
             /** @description The batch's own identity; paid credit uses the order's ID as the batch ID. */
             id: string;
             /**
-             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment.
+             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave.
              * @enum {string}
              */
-            source: "gift" | "paid";
+            source: "gift" | "paid" | "redeem";
             amount: components["schemas"]["Money"];
             remaining: components["schemas"]["Money"];
             frozen: components["schemas"]["Money"];
@@ -1516,10 +1516,10 @@ export interface components {
             expires_at?: string;
         };
         /**
-         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
          * @enum {string}
          */
-        StatementKind: "top_up" | "gift" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
+        StatementKind: "top_up" | "gift" | "redeem" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
         /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in, so the balance between two of them is not known. */
         StatementRow: {
             /** @description The row's own identity, to tell two rows apart; it names no ledger entry. */

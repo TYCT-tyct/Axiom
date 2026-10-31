@@ -45,10 +45,10 @@ var orderRefusals = []refusal{
 	{payments.ErrSecondPerson, http.StatusForbidden, codeForbidden, "a different person must approve this refund"},
 	{payments.ErrRefundForbidden, http.StatusForbidden, codeForbidden, "a refund of this order is not available: the channel or the merchant does not allow it"},
 	{payments.ErrRefundAmount, http.StatusUnprocessableEntity, codeUnprocessable, "there is nothing refundable left on this order, or the amount is more than that"},
-	{payments.ErrRedeemInvalid, http.StatusUnprocessableEntity, codeUnprocessable, "the redeem code is not one of this site's"},
-	{payments.ErrRedeemExpired, http.StatusUnprocessableEntity, codeUnprocessable, "the redeem code expired"},
-	{payments.ErrRedeemDisabled, http.StatusUnprocessableEntity, codeUnprocessable, "the redeem code was disabled"},
-	{payments.ErrRedeemUsed, http.StatusConflict, codeConflict, "the redeem code was redeemed already"},
+	{payments.ErrRedeemInvalid, http.StatusUnprocessableEntity, codeRedeemInvalid, "the redeem code is not one of this site's"},
+	{payments.ErrRedeemExpired, http.StatusUnprocessableEntity, codeRedeemExpired, "the redeem code expired"},
+	{payments.ErrRedeemDisabled, http.StatusUnprocessableEntity, codeRedeemDisabled, "the redeem code was disabled"},
+	{payments.ErrRedeemUsed, http.StatusConflict, codeRedeemUsed, "the redeem code was redeemed already"},
 	{payments.ErrRedeemLimited, http.StatusTooManyRequests, codeRateLimited, "too many redeem attempts lately; try again later"},
 }
 

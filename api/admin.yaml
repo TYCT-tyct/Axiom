@@ -4778,6 +4778,10 @@ components:
         - weak_password
         - not_ready
         - unprocessable
+        - redeem_code_invalid
+        - redeem_code_expired
+        - redeem_code_disabled
+        - redeem_code_used
         - rate_limited
         - internal
         - not_implemented
@@ -5004,9 +5008,9 @@ components:
           description: The batch's own identity; paid credit uses the order's ID as the batch ID.
         source:
           type: string
-          enum: [gift, paid]
-          x-enum-varnames: [CreditBatchGift, CreditBatchPaid]
-          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment."
+          enum: [gift, paid, redeem]
+          x-enum-varnames: [CreditBatchGift, CreditBatchPaid, CreditBatchRedeem]
+          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave."
         amount: {$ref: "#/components/schemas/Money"}
         remaining: {$ref: "#/components/schemas/Money"}
         frozen: {$ref: "#/components/schemas/Money"}

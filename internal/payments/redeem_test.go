@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -31,11 +32,33 @@ func (w *world) issue(amount int64, count int, expires *time.Time) []RedeemCode 
 	return codes
 }
 
+func (w *world) issueNote(note string) {
+	w.t.Helper()
+	if err := w.tx(siteScope(w.siteA), func(tx pg.Tx) error {
+		_, err := IssueCodes(w.t.Context(), tx, Issue{
+			Site: w.siteA, Amount: 100, Count: 1, Note: note,
+			Actor: admin, CreatedBy: w.user, Reason: "test note",
+		})
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
 func (w *world) redeem(code, key string) (Redemption, error) {
 	return w.p.Redeem(w.t.Context(), Redeem{
 		Site: w.site(w.siteA, "USD"), Account: w.account, User: w.user, Code: code, Key: key,
 		ClientIP: netip.MustParseAddr("203.0.113.7"),
 	})
+}
+
+// accountAt makes another account of a site, with an empty balance, for the tests that need two accounts of one site.
+func (w *world) accountAt(site uuid.UUID) uuid.UUID {
+	w.t.Helper()
+	account := uuid.NewV7()
+	w.exec("INSERT INTO platform.tenants VALUES ('" + site.String() + "', '" + account.String() + "')")
+	w.exec("INSERT INTO billing.balances (site_id, account_id) VALUES ('" + site.String() + "', '" + account.String() + "')")
+	return account
 }
 
 func (w *world) redeemAs(account uuid.UUID, code, key, ip string) (Redemption, error) {
@@ -51,6 +74,8 @@ func (w *world) attempts(kind, subject string) int {
 
 // TestIssueWritesOnlyHashes: a generation writes a hash and a four-character hint, never the code, and the code appears
 // once, in the answer; the list that reads it back has no code to show.
+//
+//nolint:cyclop,gocognit // one generation checked through hash, hint, list and audit.
 func TestIssueWritesOnlyHashes(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -120,6 +145,8 @@ func TestIssueRefusesWhatItCannotHold(t *testing.T) {
 
 // TestRedeemCreditsOnce: a code credits its amount into a redeem batch with the code's expiry, and does so once, however
 // the code is typed; the same key answers the redemption instead of crediting again, and the code alone cannot.
+//
+//nolint:cyclop // the credit, the batch, the ledger and the replay are the test.
 func TestRedeemCreditsOnce(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -266,53 +293,129 @@ func TestRedeemLimitsPerAccountAndIP(t *testing.T) {
 	}
 }
 
-// TestRedeemConcurrentOneCode: two requests for one code, and two with one key, each credit once: the code's row and the
-// account's lock serialize them, and the loser is told what happened rather than credited twice.
+// TestRedeemConcurrentOneCode: two requests for one code from two accounts, and two with one key from one account, each
+// credit once: the code's row and the account's lock serialize them, and the loser is told what happened rather than
+// credited twice.
+//
+//nolint:cyclop,gocognit // the two races and their balance, redemption and ledger checks are the test.
 func TestRedeemConcurrentOneCode(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
+	other := w.accountAt(w.siteA)
 	codes := w.issue(700, 2, nil)
-	race := func(code, key [2]string) ([]Redemption, []error) {
+	race := func(accounts [2]uuid.UUID, codes, keys, ips [2]string) ([]Redemption, []error) {
 		out, errs := make([]Redemption, 2), make([]error, 2)
 		start := make(chan struct{})
 		var wg sync.WaitGroup
 		for i := range 2 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
-				out[i], errs[i] = w.redeem(code[i], key[i])
-			}()
+				out[i], errs[i] = w.redeemAs(accounts[i], codes[i], keys[i], ips[i])
+			})
 		}
 		close(start)
 		wg.Wait()
 		return out, errs
 	}
-	// One code, two keys: one credit, the other told it is used.
-	out, errs := race([2]string{codes[0].Code, codes[0].Code}, [2]string{"one-a", "one-b"})
+	// One code, two keys, two accounts: one credit, the other told it is used. The account lock does not serialize these,
+	// only the code's row does.
+	accounts := [2]uuid.UUID{w.account, other}
+	out, errs := race(accounts, [2]string{codes[0].Code, codes[0].Code}, [2]string{"one-a", "one-b"}, [2]string{"203.0.113.11", "203.0.113.12"})
 	if (errs[0] == nil) == (errs[1] == nil) {
-		t.Fatalf("one code, two keys: %v, %v", errs[0], errs[1])
+		t.Fatalf("one code, two accounts: %v, %v", errs[0], errs[1])
 	}
 	winner := 0
 	if errs[0] != nil {
 		winner = 1
 	}
 	if !errors.Is(errs[1-winner], ErrRedeemUsed) || out[winner].Amount != 700 {
-		t.Fatalf("one code, two keys: %+v, %v", out, errs)
+		t.Fatalf("one code, two accounts: %+v, %v", out, errs)
 	}
-	// One key, one code: both requests answer, the same redemption, and one credit.
-	out, errs = race([2]string{codes[1].Code, codes[1].Code}, [2]string{"same", "same"})
+	if got := w.count(w.p.platform, "SELECT count(*) FROM payments.redeem_redemptions WHERE account_id = $1", accounts[winner]); got != 1 {
+		t.Fatalf("the winner has %d redemptions, want 1", got)
+	}
+	if got := w.count(w.p.platform, "SELECT count(*) FROM payments.redeem_redemptions WHERE account_id = $1", accounts[1-winner]); got != 0 {
+		t.Fatalf("the loser has %d redemptions, want 0", got)
+	}
+	if got := w.count(w.p.platform, "SELECT balance FROM billing.balances WHERE account_id = $1", accounts[winner]); got != 700 {
+		t.Fatalf("the winner's balance %d, want 700", got)
+	}
+	if got := w.count(w.p.platform, "SELECT balance FROM billing.balances WHERE account_id = $1", accounts[1-winner]); got != 0 {
+		t.Fatalf("the loser's balance %d, want 0", got)
+	}
+	if got := w.count(w.p.platform, "SELECT count(*) FROM billing.transactions WHERE kind = 'credit'"); got != 1 {
+		t.Fatalf("%d credit transactions, want 1", got)
+	}
+	if got := w.count(w.p.platform, "SELECT count(*) FROM billing.entries WHERE book = 'user_balance'"); got != 1 {
+		t.Fatalf("%d user_balance entries, want 1", got)
+	}
+	// One key, one code, one account: both requests answer, the same redemption, and one credit.
+	out, errs = race([2]uuid.UUID{w.account, w.account}, [2]string{codes[1].Code, codes[1].Code}, [2]string{"same", "same"}, [2]string{"203.0.113.13", "203.0.113.13"})
 	if errs[0] != nil || errs[1] != nil || out[0].ID != out[1].ID {
 		t.Fatalf("one key, two requests: %+v, %v", out, errs)
 	}
 	if out[0].Replayed == out[1].Replayed {
 		t.Fatalf("neither or both answered a replay: %+v", out)
 	}
-	if got := w.count(w.p.platform, "SELECT balance FROM billing.balances WHERE account_id = $1", w.account); got != 1400 {
-		t.Fatalf("balance %d, want 1400", got)
+	if got := w.count(w.p.platform, "SELECT coalesce(sum(balance), 0) FROM billing.balances WHERE site_id = $1", w.siteA); got != 1400 {
+		t.Fatalf("the site's balances total %d, want 1400", got)
 	}
 	if got := w.count(w.p.platform, "SELECT count(*) FROM payments.redeem_redemptions"); got != 2 {
 		t.Fatalf("%d redemptions, want 2", got)
+	}
+	if got := w.count(w.p.platform, "SELECT count(*) FROM billing.entries WHERE book = 'user_balance'"); got != 2 {
+		t.Fatalf("%d user_balance entries, want 2", got)
+	}
+}
+
+// TestRedeemExpiryAcrossTheLock: a redemption that waits for the account's lock past the code's expiry is refused, and
+// changes neither the code nor the balance. The decision reads the clock after the lock, not the transaction's start.
+func TestRedeemExpiryAcrossTheLock(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	expires := time.Now().Add(800 * time.Millisecond)
+	codes := w.issue(100, 1, &expires)
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	held := make(chan error, 1)
+	go func() {
+		held <- w.db.Tx(context.Background(), pg.PlatformScope(), func(tx pg.Tx) error {
+			if err := queries.LockRedeemAccount(context.Background(), tx, advisoryKey(0x52, w.account)); err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.redeem(codes[0].Code, "late")
+		done <- err
+	}()
+	// It is waiting for the lock while the code is still valid.
+	select {
+	case err := <-done:
+		t.Fatalf("the redemption did not wait for the lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	time.Sleep(time.Until(expires) + 50*time.Millisecond)
+	close(release)
+	if err := <-held; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, ErrRedeemExpired) {
+		t.Fatalf("a redemption that waited past the expiry: %v", err)
+	}
+	if got := w.count(w.p.platform, "SELECT count(*) FROM payments.redeem_codes WHERE id = $1 AND state = 'enabled'", uuid.UUID(codes[0].ID)); got != 1 {
+		t.Fatalf("the expired code's state changed")
+	}
+	if got := w.count(w.p.platform, "SELECT count(*) FROM payments.redeem_redemptions"); got != 0 {
+		t.Fatalf("%d redemptions after the refusal, want 0", got)
+	}
+	if got := w.count(w.p.platform, "SELECT balance FROM billing.balances WHERE account_id = $1", w.account); got != 0 {
+		t.Fatalf("the balance after the refusal: %d", got)
 	}
 }
 
@@ -343,8 +446,36 @@ func TestRedeemIsTenantScoped(t *testing.T) {
 	}
 }
 
+// TestListCodesNoteIsLiteral: the note filter is a prefix, not a LIKE pattern: `_`, `%` and `\` match themselves.
+func TestListCodesNoteIsLiteral(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	w.issueNote("A_2026")
+	w.issueNote("AB2026")
+	w.issueNote("_private")
+	w.issueNote("%off")
+	w.issueNote(`\path`)
+	for _, tc := range []struct {
+		note string
+		want string
+	}{
+		{"A_", "A_2026"},
+		{"_", "_private"},
+		{"%", "%off"},
+		{`\`, `\path`},
+		{"a_", "A_2026"},
+	} {
+		codes, _, err := w.p.ListCodes(w.t.Context(), siteScope(w.siteA), w.siteA, "", tc.note, nil, 50)
+		if err != nil || len(codes) != 1 || codes[0].Note != tc.want {
+			t.Fatalf("the note %q: %+v, %v", tc.note, codes, err)
+		}
+	}
+}
+
 // TestListCodesFiltersAndPages: the state a page shows filters, a note prefix filters, and a page ends at the cursor it
 // answers, never repeating or skipping a code.
+//
+//nolint:cyclop,gocognit // every filter and both page boundaries are the test.
 func TestListCodesFiltersAndPages(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

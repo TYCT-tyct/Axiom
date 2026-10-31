@@ -158,7 +158,7 @@ WHERE c.site_id = $1
         OR ($2::text = 'enabled' AND c.state = 'enabled'
             AND (c.expires_at IS NULL OR c.expires_at > transaction_timestamp()))
         OR ($2::text IN ('used', 'disabled') AND c.state = $2::text))
-    AND ($3::text IS NULL OR c.note ILIKE $3::text || '%')
+    AND ($3::text IS NULL OR starts_with(lower(c.note), lower($3::text)))
     AND (c.created_at, c.id) < ($4::timestamptz, $5::uuid)
 ORDER BY c.created_at DESC, c.id DESC
 LIMIT $6
@@ -348,9 +348,21 @@ func (q *Queries) RedeemAttemptWindow(ctx context.Context, db DBTX, arg RedeemAt
 	return wait_seconds, err
 }
 
+const redeemClock = `-- name: RedeemClock :one
+SELECT clock_timestamp()::timestamptz AS now
+`
+
+// The time of the redemption decision, read after the code's row lock: the lock may have waited, and the code may have
+// expired during it. clock_timestamp() is the statement's clock, not the transaction's start.
+func (q *Queries) RedeemClock(ctx context.Context, db DBTX) (time.Time, error) {
+	row := db.QueryRow(ctx, redeemClock)
+	var now time.Time
+	err := row.Scan(&now)
+	return now, err
+}
+
 const redeemCodeByHash = `-- name: RedeemCodeByHash :one
-SELECT c.id, c.site_id, c.code_hash, c.code_hint, c.amount, c.note, c.state, c.expires_at, c.created_at, c.created_by, c.redeemed_at, c.disabled_at, c.disabled_by, transaction_timestamp()::timestamptz AS now
-FROM payments.redeem_codes c WHERE c.site_id = $1 AND c.code_hash = $2 FOR UPDATE
+SELECT c.id, c.site_id, c.code_hash, c.code_hint, c.amount, c.note, c.state, c.expires_at, c.created_at, c.created_by, c.redeemed_at, c.disabled_at, c.disabled_by FROM payments.redeem_codes c WHERE c.site_id = $1 AND c.code_hash = $2 FOR UPDATE
 `
 
 type RedeemCodeByHashParams struct {
@@ -360,10 +372,11 @@ type RedeemCodeByHashParams struct {
 
 type RedeemCodeByHashRow struct {
 	PaymentsRedeemCode PaymentsRedeemCode
-	Now                time.Time
 }
 
-// The redemption locks the code row: concurrent redeems of one code wait here and the second finds it used.
+// The redemption locks the code row: concurrent redeems of one code wait here and the second finds it used. It does not
+// return a timestamp: transaction_timestamp() is the transaction's start, before this wait, so the decision reads the
+// clock after the lock instead (RedeemClock).
 func (q *Queries) RedeemCodeByHash(ctx context.Context, db DBTX, arg RedeemCodeByHashParams) (RedeemCodeByHashRow, error) {
 	row := db.QueryRow(ctx, redeemCodeByHash, arg.SiteID, arg.CodeHash)
 	var i RedeemCodeByHashRow
@@ -381,7 +394,6 @@ func (q *Queries) RedeemCodeByHash(ctx context.Context, db DBTX, arg RedeemCodeB
 		&i.PaymentsRedeemCode.RedeemedAt,
 		&i.PaymentsRedeemCode.DisabledAt,
 		&i.PaymentsRedeemCode.DisabledBy,
-		&i.Now,
 	)
 	return i, err
 }
@@ -429,11 +441,12 @@ func (q *Queries) RedemptionByKey(ctx context.Context, db DBTX, arg RedemptionBy
 }
 
 const useRedeemCode = `-- name: UseRedeemCode :execrows
-UPDATE payments.redeem_codes SET state = 'used', redeemed_at = transaction_timestamp()
-WHERE id = $1 AND state = 'enabled'
+UPDATE payments.redeem_codes SET state = 'used', redeemed_at = clock_timestamp()
+WHERE id = $1 AND state = 'enabled' AND (expires_at IS NULL OR expires_at > clock_timestamp())
 `
 
-// The serialization point of one code crediting once, even if the state check above ever raced.
+// The serialization point of one code crediting once, even if the state check above ever raced, and the expiry check at
+// the clock of this statement: a lock that waited past the expiry cannot credit.
 func (q *Queries) UseRedeemCode(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {
 	result, err := db.Exec(ctx, useRedeemCode, id)
 	if err != nil {

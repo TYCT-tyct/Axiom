@@ -2424,6 +2424,10 @@ components:
         - weak_password
         - not_ready
         - unprocessable
+        - redeem_code_invalid
+        - redeem_code_expired
+        - redeem_code_disabled
+        - redeem_code_used
         - rate_limited
         - internal
         - not_implemented
@@ -2695,9 +2699,9 @@ components:
           description: The batch's own identity; paid credit uses the order's ID as the batch ID.
         source:
           type: string
-          enum: [gift, paid]
-          x-enum-varnames: [CreditBatchGift, CreditBatchPaid]
-          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment."
+          enum: [gift, paid, redeem]
+          x-enum-varnames: [CreditBatchGift, CreditBatchPaid, CreditBatchRedeem]
+          description: "`gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave."
         amount: {$ref: "#/components/schemas/Money"}
         remaining: {$ref: "#/components/schemas/Money"}
         frozen: {$ref: "#/components/schemas/Money"}
@@ -2708,10 +2712,11 @@ components:
           description: "When what is left of the batch stops counting. Absent when it never expires."
     StatementKind:
       type: string
-      enum: [top_up, gift, spend, expiry, refund, reversal, freeze, unfreeze]
+      enum: [top_up, gift, redeem, spend, expiry, refund, reversal, freeze, unfreeze]
       description: >-
         What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit
-        given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+        given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change),
+        freeze or unfreeze.
     StatementRow:
       type: object
       required: [id, at, kind, amount, balance_after, reference, frozen_change, frozen_after]

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/payments"
@@ -15,12 +16,15 @@ import (
 
 // TestAdminRedeemCodes: a batch answers its codes once, the list and later reads carry only a hint, a disable sticks,
 // and a replay of the key answers the same batch instead of making another.
+//
+//nolint:cyclop,gocognit // the generation, the replay and the disable are one admin journey.
 func TestAdminRedeemCodes(t *testing.T) {
 	f := newAdminFixture(t)
 	s := f.owner()
 	site := f.siteID()
+	expires := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	body := `{"site_id":"` + site + `","amount":{"amount":"2500000000","currency":"USD"},"count":2,` +
-		`"note":"spring","expires_at":"2027-01-01T00:00:00Z","reason":"a spring promotion"}`
+		`"note":"spring","expires_at":"` + expires + `","reason":"a spring promotion"}`
 	key := newKey()
 	rec := f.change(s, http.MethodPost, "/payments/redeem-codes", body, key)
 	expectAdmin(t, "create redeem codes", rec, http.StatusCreated, "")
@@ -94,6 +98,8 @@ func TestAdminRedeemCodes(t *testing.T) {
 
 // TestConsoleRedeemCode: a code credits its amount once, the history shows the credit without the code, a replay with
 // the key answers the same credit, another key on the code is a conflict, and the account's limit answers 429.
+//
+//nolint:cyclop,gocognit // the credit, its replay, the read-back, the refusals and the limit are one journey.
 func TestConsoleRedeemCode(t *testing.T) {
 	f := newConsoleFixture(t)
 	s := f.owner()
@@ -106,7 +112,7 @@ func TestConsoleRedeemCode(t *testing.T) {
 	if err := f.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 		var err error
 		codes, err = payments.IssueCodes(f.t.Context(), tx, payments.Issue{
-			Site: uuid.UUID(f.siteID()), Amount: 2_500_000_000, Count: 1, Note: "seed", Actor: audit.System("test"),
+			Site: uuid.UUID(f.siteID()), Amount: 2_500_000_000, Count: 4, Note: "seed", Actor: audit.System("test"),
 			CreatedBy: createdBy, Reason: "seed a code",
 		})
 		return err
@@ -130,7 +136,7 @@ func TestConsoleRedeemCode(t *testing.T) {
 		t.Fatalf("the replay: %s", replay.Body)
 	}
 	rec = f.do(http.MethodPost, "/redeem-codes", body, as(s), idempotent("second"))
-	expect(t, "the code with another key", rec, http.StatusConflict, consoleapi.ErrorCodeConflict)
+	expect(t, "the code with another key", rec, http.StatusConflict, consoleapi.ErrorCodeRedeemCodeUsed)
 
 	rec = f.do(http.MethodGet, "/redeem-codes", "", as(s))
 	expect(t, "the history", rec, http.StatusOK, "")
@@ -142,6 +148,31 @@ func TestConsoleRedeemCode(t *testing.T) {
 	if len(history.Data) != 1 || history.Data[0].Id != got.Id || history.NextCursor != nil {
 		t.Fatalf("the history: %s", rec.Body)
 	}
+
+	// The credit reads back through the balance, the statement and its export: a source or kind the reader does not know
+	// would refuse the whole page, not just hide the row.
+	balance := f.balance(s)
+	if balance.Batches == nil || len(*balance.Batches) != 1 || (*balance.Batches)[0].Source != consoleapi.CreditBatchRedeem {
+		t.Fatalf("the balance after the redemption: %+v", balance)
+	}
+	statement := f.statementRows(s, "?limit=50")
+	if len(statement.Data) != 1 || statement.Data[0].Kind != consoleapi.Redeem || statement.Data[0].Amount.Amount != "2500000000" {
+		t.Fatalf("the statement after the redemption: %+v", statement)
+	}
+	export := f.do(http.MethodGet, "/statement.csv", "", as(s))
+	if export.Code != http.StatusOK || !strings.Contains(export.Body.String(), ",redeem,") {
+		t.Fatalf("the statement export after the redemption: %d %s", export.Code, export.Body)
+	}
+
+	// Expired, disabled, invalid and already used are different refusals, so the page can say what to do.
+	f.run("UPDATE payments.redeem_codes SET expires_at = now() - interval '1 minute' WHERE id = '" + uuid.UUID(codes[1].ID).String() + "'")
+	rec = f.do(http.MethodPost, "/redeem-codes", `{"code":"`+codes[1].Code+`"}`, as(s), idempotent("expired"))
+	expect(t, "an expired code", rec, http.StatusUnprocessableEntity, consoleapi.ErrorCodeRedeemCodeExpired)
+	f.run("UPDATE payments.redeem_codes SET state = 'disabled', disabled_at = now(), disabled_by = '" + createdBy.String() + "' WHERE id = '" + uuid.UUID(codes[2].ID).String() + "'")
+	rec = f.do(http.MethodPost, "/redeem-codes", `{"code":"`+codes[2].Code+`"}`, as(s), idempotent("disabled"))
+	expect(t, "a disabled code", rec, http.StatusUnprocessableEntity, consoleapi.ErrorCodeRedeemCodeDisabled)
+	rec = f.do(http.MethodPost, "/redeem-codes", `{"code":"AAAAA-BBBBB-CCCCC-DDDDD"}`, as(s), idempotent("invalid"))
+	expect(t, "an unknown code", rec, http.StatusUnprocessableEntity, consoleapi.ErrorCodeRedeemCodeInvalid)
 
 	account, _ := f.account(s)
 	f.run("UPDATE payments.redeem_attempts SET attempts = 30 WHERE kind = 'account' AND subject = '" + account.String() + "'")

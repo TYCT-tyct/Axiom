@@ -185,6 +185,7 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 | 支付链接只有白名单协议 | 核心统一检查 `Checkout`；表驱动测试：`//evil.com/x`、`javascript:`、`data:`、`http:` 被拒，`/pay?x` 补全后放行 |
 | 选不出商户账户就不下单 | 过滤后为空、查用量出错都返回错误，不退回全部候选；表驱动测试 |
 | 一个兑换码至多兑换一次，同一账户同一幂等键至多一笔兑换 | 码行 `SELECT … FOR UPDATE` 后按 `state = 'enabled'` 条件更新，`redeem_redemptions.code_id` 唯一：不同账户并发兑同一个码也只有一个事务能插入；账户事务级咨询锁（0x52）让同键重放和同账户并发兑换按顺序看到彼此，`(account_id, idem_key)` 唯一兜底；测试：两个账户同码并发、同账户同键并发，入账都是一次 |
+| 取得码行锁后才判断到期，条件更新再守一次 | 事务开始时间早于等锁；码可能在等待期间过期。锁后读 `clock_timestamp()`，更新条件再比较一次，跨过有效期的兑换失败且不改任何行；测试用账户锁制造跨过有效期的等待 |
 | 兑换限流不被并发、跨节点超过，计数出错时拒绝 | 名额在检查码之前由独立的已提交事务用 `INSERT … ON CONFLICT DO UPDATE … WHERE attempts + 1 <= 限额` 原子占用，行锁是本账户/本 IP 的串行点；数不了（写入出错）就不兑换；测试：30/31、100/101 的边界、同账户并发只放行限额、计数故障时兑换被拒 |
 | 码的明文不落库、不出现在列表和错误里 | 库里只有 SHA-256 和末四位；`RedeemCode.Code` 只在 `IssueCodes` 的返回值里填；测试扫描表和接口响应找不到完整码 |
 
@@ -238,11 +239,11 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 ### 兑换码
 
 - **生成**：`IssueCodes` 在调用方（管理后台的幂等声明）事务里校验面额 > 0、数量 1–100、备注至多 200 字、有效期在将来，用 `crypto/rand` 取 20 位 Crockford Base32，逐条插入 `redeem_codes`（只存 SHA-256 和末四位），写一条 `redeem_code.issue` 审计，返回带明文的码。同一批的码面额、备注、有效期相同；生成是全部成功或全部回滚。幂等声明里保存的应答已经把 `code` 去掉：同键重放回同一批的 ID、面额和提示，不再有明文，这样库里任何一处都没有可用的码。
-- **兑换**：`Redeem` 先在独立事务里占用账户和 IP 的名额（每账户每小时 30 次，每 IP 分组每站点每小时 100 次；超限返回 `*Wait`，控制台据此回 429 和 `Retry-After`），再在一个事务里取账户咨询锁（键用整个账户 ID 的散列，命名空间 0x52）→ 按 `(account_id, idem_key)` 重读兑换记录（有就直接返回）→ `RedeemCodeByHash … FOR UPDATE` → 检查状态和有效期（`enabled`、未过期）→ `UseRedeemCode` 条件更新为 `used` → 插入 `redeem_redemptions`（`code_id` 唯一）→ `billing.CreditRedeem`（批次 ID = 兑换记录 ID，来源 `redeem`，过期沿用码上的）。失败回滚整个事务，名额已在独立事务里提交，所以失败的尝试也计数。
+- **兑换**：`Redeem` 先在独立事务里占用账户和 IP 的名额（每账户每小时 30 次，每 IP 分组每站点每小时 100 次；超限返回 `*Wait`，控制台据此回 429 和 `Retry-After`），再在一个事务里取账户咨询锁（键用整个账户 ID 的散列，命名空间 0x52）→ 按 `(account_id, idem_key)` 重读兑换记录（有就直接返回）→ `RedeemCodeByHash … FOR UPDATE` → 读 `clock_timestamp()`，检查状态和有效期（`enabled`、未过期；不用事务开始时间，等锁可能跨过有效期）→ `UseRedeemCode` 条件更新为 `used`（条件里再查一次有效期） → 插入 `redeem_redemptions`（`code_id` 唯一）→ `billing.CreditRedeem`（批次 ID = 兑换记录 ID，来源 `redeem`，过期沿用码上的）。失败回滚整个事务，名额已在独立事务里提交，所以失败的尝试也计数。
 - **状态**：库里的 `state` 只有 `enabled`、`used`、`disabled`；`expired` 是读取时对「enabled 且 `expires_at` 已过」的推导，不写库，也不需要定时任务。停用只接受 enabled 且未过期的码，已兑换的返回 `ErrRedeemUsed`，不改变任何行。
-- **列表与读取**：管理端按站点列出，可用状态和备注前缀筛选，按 `(created_at, id)` 倒序翻页；控制台按账户列出兑换记录。两者都不返回码，只有末四位提示。错误信息只说明这次兑换被拒的原因（无效、已用、过期、已停用、太频繁），不回显码，也不确认某个码是否存在。
+- **列表与读取**：管理端按站点列出，可用状态和备注前缀筛选（`starts_with(lower(note), lower(prefix))`，`_`、`%`、`\` 按字面），按 `(created_at, id)` 倒序翻页；控制台按账户列出兑换记录。两者都不返回码，只有末四位提示。错误信息只说明这次兑换被拒的原因（无效、已用、过期、已停用、太频繁），不回显码，也不确认某个码是否存在。
 - **管理操作**：生成、停用、列出都要 `sites.manage`；生成与停用还要 MFA、CSRF、`Idempotency-Key` 和理由。生成和停用各记一条审计，与数据同事务；停用只改 `state`、`disabled_at`、`disabled_by`。控制台兑换要 `balance.top_up`，历史要 `balance.view`。HTTP 契约见 `api/admin.yaml` 的 `/payments/redeem-codes` 和 `api/console.yaml` 的 `/redeem-codes`。
-- **测试**：`TestIssueWritesOnlyHashes`、`TestRedeemCreditsOnce`、`TestRedeemRefusesStates`、`TestRedeemConcurrentOneCode`（一个码两个账户、一个账户同键两次）、`TestRedeemLimitsPerAccountAndIP`、`TestDisableIsIdempotentAndAudited`、`TestListCodesFiltersAndPages`、`TestRedeemIsTenantScoped`，以及 `cmd/axiom` 的管理与控制台处理器测试和 billing 的 `TestCreditRedeem`。
+- **测试**：`TestIssueWritesOnlyHashes`、`TestRedeemCreditsOnce`、`TestRedeemRefusesStates`、`TestRedeemConcurrentOneCode`（一个码两个账户、一个账户同键两次，核对双方余额、兑换记录和账本）、`TestRedeemExpiryAcrossTheLock`（等账户锁跨过有效期后拒绝，码、记录和余额不变）、`TestRedeemLimitsPerAccountAndIP`、`TestDisableIsIdempotentAndAudited`、`TestListCodesFiltersAndPages`、`TestListCodesNoteIsLiteral`、`TestRedeemIsTenantScoped`，以及 `cmd/axiom` 的管理与控制台处理器测试（兑换后读余额、流水和 CSV）和 billing 的 `TestCreditRedeem`、`statementKind` 的表驱动用例。
 
 ### 人工结论与验证
 

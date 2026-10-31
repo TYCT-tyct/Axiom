@@ -34,9 +34,9 @@ func redeemProblem(err error) error {
 // redeemCodeBody is a code as the contract shows it; only a generation carries Code.
 func redeemCodeBody(c payments.RedeemCode, currency platform.Currency) adminapi.RedeemCode {
 	body := adminapi.RedeemCode{
-		Id: adminapi.RedeemCodeId(c.ID.TypeID()), State: adminapi.RedeemCodeState(c.State),
+		Id: c.ID.TypeID(), State: adminapi.RedeemCodeState(c.State),
 		Amount: adminMoney(c.Amount, currency), Note: c.Note, Hint: c.Hint, CreatedAt: c.CreatedAt,
-		CreatedBy: adminapi.UserId(accounts.UserID(c.CreatedBy).TypeID()),
+		CreatedBy: accounts.UserID(c.CreatedBy).TypeID(),
 		ExpiresAt: c.ExpiresAt, RedeemedAt: c.RedeemedAt,
 	}
 	if c.Code != "" {
@@ -106,7 +106,7 @@ func (a adminAPI) CreateRedeemCodes(ctx context.Context, request adminapi.Create
 	if request.Body.Amount.Currency != snapshot.Currency.String() {
 		return nil, invalidField("/amount/currency", "must be the site's currency, "+snapshot.Currency.String())
 	}
-	var note string
+	note := ""
 	if request.Body.Note != nil {
 		note = *request.Body.Note
 	}
@@ -122,7 +122,7 @@ func (a adminAPI) CreateRedeemCodes(ctx context.Context, request adminapi.Create
 		codes, err := payments.IssueCodes(ctx, tx, payments.Issue{
 			Site: uuid.UUID(site), Amount: amount, Count: request.Body.Count, Note: note,
 			ExpiresAt: request.Body.ExpiresAt, Actor: actor(ctx),
-			CreatedBy: uuid.UUID(callOf(ctx).principal.UserID()), Reason: string(request.Body.Reason),
+			CreatedBy: uuid.UUID(callOf(ctx).principal.UserID()), Reason: request.Body.Reason,
 		})
 		if err != nil {
 			return adminapi.RedeemCodeList{}, redeemProblem(err)
@@ -137,21 +137,21 @@ func (a adminAPI) CreateRedeemCodes(ctx context.Context, request adminapi.Create
 	if err != nil {
 		return nil, err
 	}
-	if !replayed {
-		for i := range body.Data {
-			if i < len(issued) {
-				code := issued[i].Code
-				body.Data[i].Code = &code
-			}
-		}
-	} else {
-		for i := range body.Data {
-			body.Data[i].Code = nil
-		}
-	}
+	body = withIssuedCodes(body, issued, replayed)
 	return adminapi.CreateRedeemCodes201JSONResponse{
 		Body: body, Headers: adminapi.CreateRedeemCodes201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
 	}, nil
+}
+
+// withIssuedCodes puts the plaintext back on the answer that made the batch; a replay keeps the claim's redacted list.
+func withIssuedCodes(body adminapi.RedeemCodeList, issued []payments.RedeemCode, replayed bool) adminapi.RedeemCodeList {
+	for i := range body.Data {
+		body.Data[i].Code = nil
+		if !replayed && i < len(issued) {
+			body.Data[i].Code = new(issued[i].Code)
+		}
+	}
+	return body
 }
 
 // DisableRedeemCode stops an unused code from being redeemed, with the audit entry's reason.
