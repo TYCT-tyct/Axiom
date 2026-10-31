@@ -203,5 +203,9 @@ func TestExecutorDirectRewriteRespectsMemory(t *testing.T) {
 		if h.w.status != http.StatusServiceUnavailable {
 			t.Errorf("status %d, want 503 when the rewritten copy does not fit: %s", h.w.status, h.w.body())
 		}
+		// The copy is charged before the settlement: the attempt delivered nothing, so its model usage is not charged.
+		if a := h.ended().outcome.Attempts; len(a) != 1 || a[0].Result != billing.FailedBeforeCommit {
+			t.Errorf("outcome %+v, want the attempt settled as failed before commit", a)
+		}
 	})
 }

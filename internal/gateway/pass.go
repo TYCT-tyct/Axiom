@@ -18,9 +18,10 @@ const compactLimit = 16 << 20
 
 // pass reads the whole reply of an endpoint that does not stream — the compact endpoint and the direct formats — and
 // makes it the call's answer: the body goes to the client as it came, after the settlement, and its usage is what the
-// call is charged by. A direct format's body is checked and its usage read before the settlement; the gateway rewrites
-// it afterwards (conclude). Nothing of it reaches the
-// client before it is whole, so an attempt that fails here is still one the call may give up on for another entry.
+// call is charged by. A direct format's body is checked, its usage read and the memory of its rewritten copy charged
+// before the settlement, so that what can fail fails while the attempt still counts as delivering nothing; the gateway
+// rewrites it afterwards (conclude). Nothing of it reaches the client before it is whole, so an attempt that fails here
+// is still one the call may give up on for another entry.
 func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 	s := a.s
 	idleFor := s.x.Limits.cfg.IdleTimeout
@@ -43,6 +44,13 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 			return s.failedReply(a, ctx, err)
 		}
 		a.usage = u
+		// The rewrite holds a second copy beside the upstream's, with room for Axiom's members.
+		extra := int64(len(body)) + 64<<10
+		if !s.x.Memory.Charge(extra) {
+			s.dropReply()
+			return s.failedReply(a, ctx, protocol.ErrMemory)
+		}
+		s.replyHeld += extra
 	} else {
 		a.usage = protocol.UsageOf(body)
 	}

@@ -284,8 +284,8 @@ func (s *session) stick() {
 	}
 }
 
-// rewriteDirect rewrites a direct format's reply after settlement. The body is a second copy while the upstream's is
-// still held, so the node's budget covers both at the peak; a budget or rewrite failure is the error the client gets.
+// rewriteDirect rewrites a direct format's reply after settlement. Its copy was charged to the node's budget in pass,
+// and the body was validated there, so the settlement is never followed by a failure of the call's own making.
 func (s *session) rewriteDirect(reply []byte, fin *protocol.Final) ([]byte, protocol.Error, bool) {
 	var seen protocol.Usage
 	if s.last != nil {
@@ -295,17 +295,10 @@ func (s *session) rewriteDirect(reply []byte, fin *protocol.Final) ([]byte, prot
 	if s.last != nil {
 		model = s.servedModel(s.last)
 	}
-	held := int64(len(reply))*2 + 64<<10
-	if !s.x.Memory.Charge(held) {
-		return nil, protocol.Error{Type: protocol.Overloaded}, true
-	}
 	body, err := protocol.RewriteDirectReply(s.c.Format, reply, s.c.ID.String(), model, seen, fin)
 	if err != nil {
-		s.x.Memory.Refund(held)
 		return nil, protocol.Error{Type: protocol.UpstreamFailed}, true
 	}
-	s.x.Memory.Refund(s.replyHeld)
-	s.replyHeld = held
 	return body, protocol.Error{}, false
 }
 
