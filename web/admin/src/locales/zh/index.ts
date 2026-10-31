@@ -46,6 +46,10 @@ export default {
     cost: "供应商成本",
     costNote: "已按汇率换算的成本",
     unknownCost: "{{calls}} 次调用的成本未知，未计入合计",
+    callsIncomplete: "{{since}} 之前的调用已归档，调用量和排名不含它们；收入、成本和现金仍覆盖整个时段。",
+    callsIncompleteUnknown:
+      "此节点保留的调用记录之前的调用已归档，调用量和排名不完整；收入、成本和现金仍覆盖整个时段。",
+    coverageUnavailable: "此节点无法判断较早的调用是否已归档，调用量和排名可能不完整。",
     cash: "现金净流入",
     cashNote: "充值实付减退款，不是调用收入",
     unavailable: "此节点不提供",

@@ -79,7 +79,11 @@ func (a adminAPI) ListAdminCalls(ctx context.Context, r adminapi.ListAdminCallsR
 
 	var calls []observability.CallSummary
 	var next *observability.Cursor
-	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) { calls, next, err = observability.ListAdmin(ctx, tx, q); return err })
+	var coverage observability.Coverage
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		calls, next, coverage, err = observability.ListAdmin(ctx, tx, q)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -90,9 +94,14 @@ func (a adminAPI) ListAdminCalls(ctx context.Context, r adminapi.ListAdminCallsR
 			return nil, err
 		}
 	}
+	incomplete := !coverage.Covers(since)
 	result := adminapi.ListAdminCalls200JSONResponse{
 		Data: &data, Since: &since, Until: &until, ModelFilter: r.Params.Model, StatusFilter: r.Params.Status,
-		SiteFilter: r.Params.SiteId,
+		SiteFilter: r.Params.SiteId, Incomplete: &incomplete,
+	}
+	if coverage.Known {
+		available := coverage.Since
+		result.AvailableSince = &available
 	}
 	if next != nil {
 		v := next.String()

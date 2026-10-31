@@ -4157,6 +4157,18 @@ components:
           $ref: '#/components/schemas/AdminCallStatus'
         site_filter:
           $ref: '#/components/schemas/SiteId'
+        incomplete:
+          type: boolean
+          description: >-
+            True when the window starts before the call log's oldest retained month: calls before `available_since`
+            were archived and are not listed, so an empty page does not mean the window had no calls. An old node
+            leaves it out, which the page shows as unavailable rather than complete.
+        available_since:
+          type: string
+          format: date-time
+          description: >-
+            The first instant the call log still answers for. Absent with `incomplete` true when no monthly partition
+            remains, so no window can be answered from the log.
     AdminAttempt:
       type: object
       additionalProperties: false
@@ -4952,6 +4964,18 @@ components:
         until: {type: string, format: date-time}
         calls: {type: integer, format: int64}
         errors: {type: integer, format: int64}
+        calls_incomplete:
+          type: boolean
+          description: >-
+            True when the window starts before the call log's oldest retained month, so calls, errors and the two
+            rankings omit archived calls; revenue, cost and cash still cover the whole window. An old node leaves it
+            out, which the page shows as unavailable rather than complete.
+        calls_available_since:
+          type: string
+          format: date-time
+          description: >-
+            The first instant the call log still answers for. Absent with `calls_incomplete` true when no monthly
+            partition remains, so no window can be answered from the log.
         revenue:
           $ref: '#/components/schemas/Money'
         cost:

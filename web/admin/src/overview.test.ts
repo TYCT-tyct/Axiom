@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { callStatus, callsDrill, ordersDrill, overviewRange, overviewWindow } from "./overview";
+import { callStatus, callsCoverage, callsDrill, ordersDrill, overviewRange, overviewWindow } from "./overview";
 
 it.each([
   { case: "24h", value: "24h", want: "24h" },
@@ -36,4 +36,12 @@ it("reads only the results the contract has", () => {
   expect(callStatus("error")).toBe("error");
   expect(callStatus("cancelled")).toBeUndefined();
   expect(callStatus(undefined)).toBeUndefined();
+});
+
+it("reads the call list's coverage across its pages", () => {
+  expect(callsCoverage([{ incomplete: false }, { incomplete: false }])).toBe(false);
+  expect(callsCoverage([{ incomplete: false }, { incomplete: true }])).toBe(true);
+  // An older node does not answer the field, so a list it answered part of cannot be called complete.
+  expect(callsCoverage([{ incomplete: false }, {}])).toBeUndefined();
+  expect(callsCoverage([])).toBe(false);
 });

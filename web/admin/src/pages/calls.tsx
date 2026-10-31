@@ -16,7 +16,7 @@ import {
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { callStatus } from "../overview";
+import { callStatus, callsCoverage } from "../overview";
 import {
   ChoiceFilter,
   Code,
@@ -87,6 +87,7 @@ export function anyUnfiltered(filters: CallFilters, pages: readonly AdminSchemas
 // is a separate page and permission, so this one never shows a field the support role may not read.
 export default function Calls() {
   const { t } = useTranslation();
+  const format = useFormat();
   const filters = useSearch({ from: "/app/calls" });
   const calls = useInfiniteQuery(
     adminCallsQuery({
@@ -101,6 +102,16 @@ export default function Calls() {
   );
   const rows = calls.data?.pages.flatMap((page) => page.data ?? []) ?? [];
   const unsupported = calls.data ? anyUnfiltered(filters, calls.data.pages) : false;
+  const coverage = calls.data ? callsCoverage(calls.data.pages) : false;
+  const availableSince = calls.data?.pages[0]?.available_since;
+  const coverageNotice =
+    coverage === undefined
+      ? t("calls.coverageUnavailable")
+      : coverage
+        ? availableSince
+          ? t("calls.incomplete", { since: format.dateTime(new Date(availableSince)) })
+          : t("calls.incompleteUnknown")
+        : null;
   return (
     <>
       <PageHeader title={t("nav.calls")} description={t("calls.description")} />
@@ -120,13 +131,18 @@ export default function Calls() {
         ) : null}
         <Panel>
           {unsupported ? <Notice>{t("calls.filters.unsupported")}</Notice> : null}
+          {coverageNotice ? <Notice>{coverageNotice}</Notice> : null}
           <DataState
             query={calls}
             isEmpty={() => rows.length === 0}
             empty={
-              <EmptyState title={narrowed(filters) ? t("calls.noMatch.title") : t("calls.empty.title")}>
-                {narrowed(filters) ? t("calls.noMatch.body") : t("calls.empty.body")}
-              </EmptyState>
+              coverage ? (
+                <EmptyState title={t("calls.archived.title")}>{t("calls.archived.body")}</EmptyState>
+              ) : narrowed(filters) ? (
+                <EmptyState title={t("calls.noMatch.title")}>{t("calls.noMatch.body")}</EmptyState>
+              ) : (
+                <EmptyState title={t("calls.empty.title")}>{t("calls.empty.body")}</EmptyState>
+              )
             }
           >
             {() => <CallsTable rows={rows} />}

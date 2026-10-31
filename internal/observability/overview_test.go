@@ -8,6 +8,7 @@ import (
 	"uuid"
 
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 // TestReadAdminOverviewCountsGroupsAndLimits: the overview counts only the site's window, sums errors as any error
@@ -66,6 +67,89 @@ func checkOverviewAccounts(t *testing.T, accounts []AdminAccountCalls, busiest u
 		if account.Calls != 1 || account.Errors != 0 {
 			t.Errorf("account %s = %+v, want one call and no error", account.Account, account)
 		}
+	}
+}
+
+// TestCallCoverageStartsAtTheOldestPartition: after a month is archived and dropped, coverage begins at the next month;
+// a window that reaches the dropped month is incomplete, and the dashboard and call list count only what they still
+// have instead of presenting the archived calls as zero.
+func TestCallCoverageStartsAtTheOldestPartition(t *testing.T) {
+	t.Parallel()
+	db, database := openDBWithURL(t)
+	site, account := uuid.NewV7(), uuid.NewV7()
+	october := record(account, time.Date(2026, 10, 31, 23, 0, 0, 0, time.UTC))
+	november := record(account, time.Date(2026, 11, 2, 1, 0, 0, 0, time.UTC))
+	october.Site, november.Site = site, site
+	keep(t, db, october, november)
+	if err := pgtest.Run(t.Context(), database.Superuser,
+		"DROP TABLE observability.call_log_2026_10",
+		"DROP TABLE observability.call_attempt_2026_10"); err != nil {
+		t.Fatal(err)
+	}
+	wide := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
+	firstOfNovember := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	var coverage Coverage
+	var overview AdminOverview
+	var calls []CallSummary
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		if coverage, err = CallCoverage(t.Context(), tx); err != nil {
+			return err
+		}
+		if overview, err = ReadAdminOverview(t.Context(), tx, site, wide, until); err != nil {
+			return err
+		}
+		calls, _, _, err = ListAdmin(t.Context(), tx, AdminQuery{Since: wide, Until: until, PageSize: 10})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Known || !coverage.Since.Equal(firstOfNovember) {
+		t.Fatalf("coverage = %+v, want from %s", coverage, firstOfNovember)
+	}
+	if coverage.Covers(wide) || !coverage.Covers(firstOfNovember) {
+		t.Errorf("covers %s: %v; covers the boundary: %v", wide, coverage.Covers(wide), coverage.Covers(firstOfNovember))
+	}
+	if overview.Calls != 1 || overview.Errors != 1 {
+		t.Errorf("overview = %d calls, %d errors, want only November's one call and its error", overview.Calls, overview.Errors)
+	}
+	if overview.Coverage.Covers(wide) {
+		t.Errorf("the overview covers %s, before the oldest partition", wide)
+	}
+	if len(calls) != 1 || calls[0].ID != november.ID {
+		t.Errorf("call list = %+v, want only November's call", calls)
+	}
+
+	var names []string
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), `SELECT c.relname FROM pg_partition_tree('observability.call_log'::regclass) t
+ JOIN pg_class c ON c.oid = t.relid WHERE t.isleaf AND c.relname LIKE 'call_log_20%'`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return err
+			}
+			names = append(names, `DROP TABLE observability."`+name+`"`)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pgtest.Run(t.Context(), database.Superuser, names...); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		coverage, err = CallCoverage(t.Context(), tx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if coverage.Known || coverage.Covers(wide) {
+		t.Errorf("with no monthly partition left, coverage = %+v and covers %s", coverage, wide)
 	}
 }
 

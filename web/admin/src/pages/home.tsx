@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, Stat, useSession } from "@axiom/app";
-import { DataState, EmptyState, PageHeader, Panel, Segmented, Table, Td, Th, useFormat } from "@axiom/ui";
+import { DataState, EmptyState, Notice, PageHeader, Panel, Segmented, Table, Td, Th, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
@@ -84,8 +84,19 @@ function Figures({ data, window }: { data: Overview; window: Window }) {
       ))
     : t("overview.unavailable");
   const site = data.site_id;
+  // Calls, errors and the two rankings come from the call log, whose months leave PostgreSQL once archived. Revenue,
+  // cost and cash do not, so only the log's part is marked incomplete.
+  const coverage =
+    data.calls_incomplete === undefined
+      ? t("overview.coverageUnavailable")
+      : data.calls_incomplete
+        ? data.calls_available_since
+          ? t("overview.callsIncomplete", { since: format.dateTime(new Date(data.calls_available_since)) })
+          : t("overview.callsIncompleteUnknown")
+        : null;
   return (
     <>
+      {coverage ? <Notice>{coverage}</Notice> : null}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <Link to="/calls" search={callsDrill(window, { site })} className={count}>
           <Stat label={t("overview.calls")} value={number(data.calls)} />

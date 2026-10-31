@@ -49,27 +49,32 @@ func adminListSQL(filtered bool) string {
 	return fmt.Sprintf(adminCallsSQL, "(call_log.at AT TIME ZONE 'UTC')", "($1::timestamptz AT TIME ZONE 'UTC')")
 }
 
-// ListAdmin reads only the columns a support operator may see, in index order.
-func ListAdmin(ctx context.Context, tx pg.Tx, q AdminQuery) ([]CallSummary, *Cursor, error) {
+// ListAdmin reads only the columns a support operator may see, in index order, and the log's coverage: a window that
+// reaches archived months is incomplete, not empty.
+func ListAdmin(ctx context.Context, tx pg.Tx, q AdminQuery) ([]CallSummary, *Cursor, Coverage, error) {
+	coverage, err := CallCoverage(ctx, tx)
+	if err != nil {
+		return nil, nil, Coverage{}, err
+	}
 	if err := planOwnPage(ctx, tx); err != nil {
-		return nil, nil, err
+		return nil, nil, Coverage{}, err
 	}
 	at, id := cursorOf(OwnQuery{Until: q.Until, After: q.After})
 	rows, err := tx.Query(ctx, adminListSQL(q.Account != nil || q.RequestID != nil), at, id, q.Since, q.Until, uuidFilter(q.Account), uuidFilter(q.RequestID), q.Model, q.Status, q.PageSize+1, uuidFilter(q.Site))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, Coverage{}, err
 	}
 	defer rows.Close()
 	out := make([]CallSummary, 0, q.PageSize+1)
 	for rows.Next() {
 		var c CallSummary
 		if err := rows.Scan(&c.ID, &c.At, &c.Site, &c.Account, &c.Model, &c.ErrorKind, &c.LatencyMS, &c.PriceNano, &c.Currency); err != nil {
-			return nil, nil, err
+			return nil, nil, Coverage{}, err
 		}
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, Coverage{}, err
 	}
 	var next *Cursor
 	if len(out) > q.PageSize {
@@ -77,5 +82,5 @@ func ListAdmin(ctx context.Context, tx pg.Tx, q AdminQuery) ([]CallSummary, *Cur
 		c := out[len(out)-1]
 		next = &Cursor{At: c.At, ID: c.ID}
 	}
-	return out, next, nil
+	return out, next, coverage, nil
 }

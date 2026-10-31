@@ -59,3 +59,16 @@ export function ordersDrill(window: Window): OrderDrill {
 export function callStatus(value: unknown): "ok" | "error" | undefined {
   return value === "ok" || value === "error" ? value : undefined;
 }
+
+// The call list's coverage as its pages report it: false when every loaded page covers the window, true when one says
+// calls before its available_since were archived, and undefined when an older node did not say. An unsure list must say
+// it does not know rather than show an empty window as complete.
+export function callsCoverage(pages: readonly { incomplete?: boolean }[]): boolean | undefined {
+  if (pages.some((page) => page.incomplete === true)) {
+    return true;
+  }
+  if (pages.some((page) => page.incomplete === undefined)) {
+    return undefined;
+  }
+  return false;
+}

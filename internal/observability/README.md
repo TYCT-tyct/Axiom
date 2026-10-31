@@ -118,6 +118,8 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 `ReadAdminOverview` 在一个事务里用同一站点和 `[Since,Until)` 窗口读三组数：总调用数与错误数（`error_kind IS DISTINCT FROM ''`），以及调用最多的前 10 个账户和模型（按调用数排序，同数分别按账户 ID、模型名）。三条 SQL 共用谓词：站点、`at` 范围，以及 `(at AT TIME ZONE 'UTC')` 的同一范围，让分区裁剪和迁移 `00011` 的表达式索引都生效。`TestReadAdminOverviewCountsGroupsAndLimits` 覆盖过滤、分组、前 10 截断和排序；`TestAdminOverviewPlansReadTheWindow` 在 12 万行夹具上要求无 Seq Scan、使用索引、读取预算不超过 1500 块。汇总字段与两个列表在合同里都可选，旧节点没有时页面显示不可用而不是 0。
 
+`CallCoverage` 给看板和调用列表同一个覆盖边界：它读 `call_log` 的叶子分区名，取最老的整月起点。窗口起点早于它，说明这个窗口触到了已归档的月份，响应带 `calls_incomplete` / `calls_available_since`（调用列表为 `incomplete` / `available_since`），页面据此说明数字或列表不完整而不是把归档当成零；收入、成本和现金来自预留与账本，不受这个边界影响。一个命名月分区都不剩时 `Known` 为 false，任何窗口都不算完整。`TestCallCoverageStartsAtTheOldestPartition` 删掉 10 月分区后核对边界、看板和列表只统计 11 月，并核对删光月分区后的未知状态。
+
 ## 追溯
 
 一条调用、它的每次尝试和它的账本交易只靠一个键相连：请求 ID（调用编号）。它已经是 `call_log.id`、`call_attempt.request_id`、`billing.reservations.request_id` 和 `billing.transactions.request_id`，suppliers 的扣费也按请求 ID 加尝试序号关联（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）。
@@ -144,6 +146,8 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 3. **列出整月**已经早于 `now - hot_days` 的叶子分区（`pg_partition_tree`，只认 `call_log_YYYY_MM` / `call_attempt_YYYY_MM`；默认分区不认）。按时间从旧到新处理，每月一次。
 4. **归档**：用 `COPY (SELECT * FROM 分区) TO STDOUT` 以 CSV（带表头）导出，gzip 后按 `call-log/v1/<YYYY-MM>/call_log.csv.gz`、`call_attempt.csv.gz` 上传，最后写 `manifest.json`：版本、月份、格式、每张表的行数、字节数、SHA-256 和列名/类型。清单最后写，存在即证明两份对象都已上传；`confirm` 再逐个 HEAD 核对清单里的字节数。
 5. **删除**：确认后在同一个事务里先对两张现存分区加 `ACCESS EXCLUSIVE` 锁、精确核对行数，再删 `call_attempt` 的分区、后删 `call_log` 的。行数比清单多说明快照后有迟到写入，事务回滚并重写整月；锁一直持到提交，计数和删除之间没有写入窗口。上传、核对、存储或锁失败都不删；一个月的失败不挡其他月份，错误交回 River 重试，最多重写三次后留给下一轮。
+
+归档删除的是整月分区，所以 PostgreSQL 里 `call_log` 的完整范围从最老的月分区开始；`CallCoverage` 就取这个起点，下文的「运营看板」用它判断窗口是否触到已归档的月份。
 
 `pg.Tx.CopyTo` 是 COPY 的出口：语句里的分区名只来自上面校验过的月份，数据本身从不拼进 SQL。归档文件先落到 `TMPDIR` 下的临时目录（`os.CreateTemp`），因为 `objectstore.Put` 的 body 必须可寻址；成功或失败都会删掉临时文件。程序镜像是 scratch、根文件系统只读，部署因此给 `TMPDIR=/retention-tmp` 一个由 `keys` 服务 chown 给 65532 的独立卷；没有这个卷时第一次归档会因建不了临时文件而失败，不会误删分区。归档对象没有到期删除：调用记录「全部保存，不能关闭」指的是不丢弃，热窗口只决定 PostgreSQL 里留多久，离开的月份仍在桶里。
 

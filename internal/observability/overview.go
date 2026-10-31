@@ -15,6 +15,7 @@ type AdminOverview struct {
 	Calls, Errors int64
 	Accounts      []AdminAccountCalls
 	Models        []AdminModelCalls
+	Coverage      Coverage
 }
 
 // AdminAccountCalls is one account's calls and errors in the window.
@@ -31,6 +32,47 @@ type AdminModelCalls struct {
 
 // adminTop is how many accounts and models the dashboard lists; the page shows one screenful, not a ranking.
 const adminTop = 10
+
+// Coverage is how far back the call log still answers from PostgreSQL: Since is the start of its oldest remaining
+// monthly partition. A window that starts before Since reaches calls the archive removed (README.md「分区」); its call
+// counts and rankings are incomplete, while the ledger report over the same window still holds every settled call.
+type Coverage struct {
+	Since time.Time
+	Known bool
+}
+
+// Covers reports whether a window starting at since is wholly inside the retained log. A log with no monthly partition
+// left covers no window: everything it held is archived.
+func (c Coverage) Covers(since time.Time) bool { return c.Known && !since.Before(c.Since) }
+
+// CallCoverage reads the log's coverage in tx. Retention drops a month only after a confirmed archive, so the oldest
+// remaining monthly partition is where the complete log begins. The migration pre-created every month from 2026-10, so
+// no call predates the first partition; the default partition holds only dates outside those months, later than them.
+func CallCoverage(ctx context.Context, tx pg.Tx) (Coverage, error) {
+	rows, err := tx.Query(ctx, `SELECT c.relname
+ FROM pg_partition_tree('observability.call_log'::regclass) t
+ JOIN pg_class c ON c.oid = t.relid
+ WHERE t.isleaf`)
+	if err != nil {
+		return Coverage{}, fmt.Errorf("observability: read the call log's partitions: %w", err)
+	}
+	defer rows.Close()
+	var coverage Coverage
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return Coverage{}, err
+		}
+		month, ok := monthOf("call_log", name)
+		if !ok {
+			continue
+		}
+		if !coverage.Known || month.Before(coverage.Since) {
+			coverage = Coverage{Since: month, Known: true}
+		}
+	}
+	return coverage, rows.Err()
+}
 
 // The dashboard's queries read the site's window through the admin time index: the plain range prunes partitions, the
 // UTC expression is the index's, and an error is any error_kind but the empty string.
@@ -52,6 +94,10 @@ const adminTopModelsSQL = `SELECT model, count(*), count(*) FILTER (WHERE error_
 // revenue describe the same calls.
 func ReadAdminOverview(ctx context.Context, tx pg.Tx, site uuid.UUID, since, until time.Time) (AdminOverview, error) {
 	var overview AdminOverview
+	var err error
+	if overview.Coverage, err = CallCoverage(ctx, tx); err != nil {
+		return AdminOverview{}, err
+	}
 	if err := tx.QueryRow(ctx, adminOverviewCountsSQL, site, since, until).Scan(&overview.Calls, &overview.Errors); err != nil {
 		return AdminOverview{}, fmt.Errorf("observability: count the calls over the window: %w", err)
 	}
