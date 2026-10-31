@@ -379,8 +379,9 @@ func readResult(dec *jsontext.Decoder) (wireResult, bool, error) {
 	return r, ok, nil
 }
 
-// readField reads a string field, or null, with a bound on both its encoded and decoded size. truncate lets a
-// title or snippet be shortened as before; a URL that is over the bound invalidates the result.
+// readField reads a string field, or null, with a bound on both its encoded and decoded size. A title or snippet
+// over the bound is decoded and truncated, because the body itself is bounded; a URL over its bound invalidates the
+// result.
 func readField(dec *jsontext.Decoder, max int, shorten bool) (string, bool, error) {
 	if dec.PeekKind() == 'n' {
 		_, err := dec.ReadToken()
@@ -393,7 +394,7 @@ func readField(dec *jsontext.Decoder, max int, shorten bool) (string, bool, erro
 	if err != nil {
 		return "", false, err
 	}
-	if len(raw) > 6*max+2 {
+	if len(raw) > 6*max+2 && !shorten {
 		return "", false, nil
 	}
 	b, err := jsontext.AppendUnquote(nil, raw)

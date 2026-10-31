@@ -1,9 +1,10 @@
 package websearch
 
 import (
-	"runtime"
 	"strings"
 	"testing"
+
+	"axiom/internal/platform/alloctest"
 )
 
 // TestParseResultsDoesNotAllocatePerEmptyObject: the response body is bounded, but the number of result objects in it
@@ -23,25 +24,29 @@ func TestParseResultsDoesNotAllocatePerEmptyObject(t *testing.T) {
 	b.WriteString(`,{"url":"https://example.com/last","title":"last","content":"answer"}]}`)
 	body := []byte(b.String())
 
-	runtime.GC()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
 	got, err := parseResults(body, MaxResults)
 	if err != nil {
 		t.Fatalf("parseResults() error = %v", err)
 	}
-	runtime.ReadMemStats(&after)
 	if len(got) != 1 || got[0].URL != "https://example.com/last" {
 		t.Fatalf("parseResults() = %+v, want the one valid result", got)
 	}
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 24<<20 {
-		t.Fatalf("parseResults() allocated %d bytes for %d empty objects, want at most 24 MiB", allocated, n)
+	allocs := alloctest.Measure(t, alloctest.Function{
+		Name: "parseResults",
+		F: func() {
+			if _, err := parseResults(body, MaxResults); err != nil {
+				panic(err)
+			}
+		},
+	})
+	if allocated := allocs["parseResults"].Bytes; allocated > 24<<20 {
+		t.Fatalf("parseResults() allocated %.0f bytes for %d empty objects, want at most 24 MiB", allocated, n)
 	}
 }
 
-func TestParseResultsSkipsOverlongFields(t *testing.T) {
+func TestParseResultsRejectsOverlongURLsAndTruncatesText(t *testing.T) {
 	body := []byte(`{"results":[{"url":"https://example.com/` + strings.Repeat("x", maxURLBytes) + `"},` +
-		`{"url":"https://example.com/ok","title":"` + strings.Repeat("t", maxTitleBytes+1) + `","content":"` + strings.Repeat("c", maxContentBytes+1) + `"}]}`)
+		`{"url":"https://example.com/ok","title":"` + strings.Repeat("t", 6*maxTitleBytes+1) + `","content":"` + strings.Repeat("c", 6*maxContentBytes+1) + `"}]}`)
 	got, err := parseResults(body, MaxResults)
 	if err != nil {
 		t.Fatalf("parseResults() error = %v", err)
